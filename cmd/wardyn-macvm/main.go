@@ -33,8 +33,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
@@ -95,7 +97,7 @@ func mainDeps() deps {
 
 func run(ctx context.Context, args []string, d deps) int {
 	if len(args) == 0 {
-		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|update-tools|probe|ledger-setup|version [flags]")
+		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|update-tools|edit-base|probe|ledger-setup|version [flags]")
 		return 2
 	}
 	switch args[0] {
@@ -110,6 +112,8 @@ func run(ctx context.Context, args []string, d deps) int {
 		return cmdPrepare(ctx, args[1:], d)
 	case macvm.UpdateToolsCommand:
 		return cmdUpdateTools(ctx, args[1:], d)
+	case macvm.EditBaseCommand:
+		return cmdEditBase(ctx, args[1:], d)
 	case macvm.InstallCommand:
 		return cmdInstall(ctx, d)
 	case "probe":
@@ -285,6 +289,7 @@ type jobFlags struct {
 	root, runner, entry, ledgerDir, sockRoot *string
 	slot, cpus                               *int
 	memMiB                                   *uint64
+	baseFile                                 *string
 }
 
 func newJobFlags(fs *flag.FlagSet) jobFlags {
@@ -297,6 +302,7 @@ func newJobFlags(fs *flag.FlagSet) jobFlags {
 		entry:     fs.String(macvm.FlagLedgerEntry, "", "the admission entry runnerd took for this job"),
 		ledgerDir: fs.String(macvm.FlagLedgerDir, "", "the admission ledger directory (default: the package's)"),
 		sockRoot:  fs.String(macvm.FlagSockRoot, "", "the socket root (default: the package's)"),
+		baseFile:  fs.String(macvm.FlagBaseFile, "", "the install list stage 2 installs into the base as admin (the runner setting macos_vm_base_file)"),
 	}
 }
 
@@ -362,6 +368,12 @@ func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger, agent 
 	if err != nil {
 		return nil, err
 	}
+	var items macvm.BaseList
+	if *j.baseFile != "" {
+		if items, err = macvm.LoadBaseList(*j.baseFile); err != nil {
+			return nil, err
+		}
+	}
 	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat,
 		Leaked: j.leaked(d), Log: relayLog}
 	return &macvm.ToolsStage{Boot: boot.ToolsBoot(), ToolsOptions: macvm.ToolsOptions{
@@ -369,6 +381,7 @@ func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger, agent 
 		// Stage 2 replaces the guest agent where stage 1 installed it, with
 		// the build beside this helper (§3.4, guest agent drift).
 		Agent: &macvm.AgentPin{Version: version.String(), Path: agent, Dest: guestagent.MacAgentBinaryPath},
+		Items: items,
 	}}, nil
 }
 
@@ -378,13 +391,14 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 	j := newJobFlags(fs)
 	keep := fs.Bool(macvm.FlagKeepIPSW, false, "keep the downloaded restore image")
 	ipsw := fs.String(macvm.FlagIPSW, "", "build from this restore image (.ipsw) instead of downloading Apple's; needs --sha256. Ignored when a base is ready, unless --reprepare; with --reprepare it builds the new base from this file")
-	wantSHA := fs.String(macvm.FlagSHA256, "", "the SHA-256 (64 hex digits) the --ipsw file must have, from a source you trust; checked on a copy in the cache before anything uses it")
+	ipswURL := fs.String(macvm.FlagIPSWURL, "", "download the restore image from this HTTPS mirror (it must answer HTTP Range requests) instead of Apple's; needs --sha256, and Apple's image is never the fallback")
+	wantSHA := fs.String(macvm.FlagSHA256, "", "the SHA-256 (64 hex digits) the --ipsw file or the --ipsw-url image must have, from a source you trust; checked before anything uses it")
 	reprepare := fs.Bool(macvm.FlagReprepare, false, "build a new base even when one is ready (a newer restore image), and swap it in")
 	byHand := fs.Duration("setup-by-hand-wait", macvm.DefaultSetupByHandWait, "how long to wait for macOS's setup by hand (0: stop instead)")
 	if code := j.parse(fs, args, d); code != 0 {
 		return code
 	}
-	if _, err := macvm.CheckIPSWFlags(*ipsw, *wantSHA); err != nil {
+	if _, err := macvm.CheckImageFlags(*ipsw, *ipswURL, *wantSHA); err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 2
 	}
@@ -418,7 +432,7 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 	enc := json.NewEncoder(d.stdout)
 	o := macvm.PrepareOptions{
 		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, Power: d.power(),
-		CPUs: *j.cpus, MemoryMiB: *j.memMiB, KeepIPSW: *keep, IPSW: *ipsw, IPSWSHA256: *wantSHA, Reprepare: *reprepare, HelperVersion: version.String(),
+		CPUs: *j.cpus, MemoryMiB: *j.memMiB, KeepIPSW: *keep, IPSW: *ipsw, IPSWURL: *ipswURL, IPSWSHA256: *wantSHA, Reprepare: *reprepare, HelperVersion: version.String(),
 		SetupByHandWait: *byHand,
 		Progress:        func(ev macvm.PrepareEvent) { _ = enc.Encode(ev) },
 		Admit:           j.admit(macvm.PrepareCommand, d),
@@ -475,8 +489,13 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 	fs.SetOutput(d.stderr)
 	j := newJobFlags(fs)
 	force := fs.Bool(macvm.FlagForce, false, "update even when the base looks current, and retry every withheld harness")
+	variant := fs.String(macvm.FlagVariant, "", "derive this macOS base from Standard instead, with --"+macvm.FlagBaseFile+" its own install list")
 	if code := j.parse(fs, args, d); code != 0 {
 		return code
+	}
+	if *variant != "" && !macvm.ValidBaseName(*variant) {
+		fmt.Fprintf(d.stderr, "wardyn-macvm %s: --%s %q is not a macOS base name\n", fs.Name(), macvm.FlagVariant, *variant)
+		return 2
 	}
 	agent, err := j.stage2Agent()
 	if err != nil {
@@ -499,19 +518,125 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
 	}
+	// A derived base's list holds no profile item, as runnerd's LoadBaseVariants refuses: nothing would remove it.
+	if *variant != "" {
+		if i := slices.IndexFunc(st.Items.Items, func(it macvm.BaseItem) bool { return it.Kind == macvm.ItemKindProfile }); i >= 0 {
+			fmt.Fprintf(d.stderr, "wardyn-macvm %s: --%s %s: item %q is a profile, which only Standard's list can hold\n", fs.Name(), macvm.FlagVariant, *variant, st.Items.Items[i].Name)
+			return 2
+		}
+	}
 	enc := json.NewEncoder(d.stdout)
 	o := macvm.UpdateOptions{
 		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, Power: d.power(), Admit: j.admit(macvm.UpdateToolsCommand, d),
-		Stage: st, Tooling: st.Tooling, AgentVersion: version.String(), Force: *force, CPUs: *j.cpus, MemoryMiB: *j.memMiB, HelperVersion: version.String(),
+		Stage: st, Tooling: st.Tooling, AgentVersion: version.String(), ItemsDigest: st.Items.Digest(), Force: *force, CPUs: *j.cpus, MemoryMiB: *j.memMiB, HelperVersion: version.String(),
 		Progress: func(ev macvm.PrepareEvent) { _ = enc.Encode(ev) },
 		// The staging-cleanup warning goes to the job's log (runnerd's tools-update.log), not nowhere.
 		Log: slog.New(slog.NewTextHandler(d.stderr, nil)),
 	}
-	if _, _, err := macvm.UpdateTools(ctx, o); err != nil {
+	update := macvm.UpdateTools
+	if *variant != "" {
+		update = func(ctx context.Context, o macvm.UpdateOptions) (macvm.Manifest, bool, error) {
+			return macvm.DeriveBase(ctx, o, *variant)
+		}
+	}
+	if _, _, err := update(ctx, o); err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// cmdEditBase is `wardyn-macvm edit-base`, which `wardyn-runnerd macos-vm edit-base` starts under an
+// edit_base ledger entry: macvm.EditBase, its two guest-agent boots on stage-2 boots whose network this
+// helper hands them itself (silentNet), its window on prepare's prep network. The person's lines go to
+// stdout; an error, a refusal or a discard is the last stderr line.
+func cmdEditBase(ctx context.Context, args []string, d deps) int {
+	fs := flag.NewFlagSet(macvm.EditBaseCommand, flag.ContinueOnError)
+	fs.SetOutput(d.stderr)
+	j := newJobFlags(fs)
+	if code := j.parse(fs, args, d); code != 0 {
+		return code
+	}
+	if *j.entry == "" {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: edit-base needs --%s: runnerd takes the admission entry before it starts edit-base\n", macvm.FlagLedgerEntry)
+		return 2
+	}
+	relayLog, closeLog, err := openRelayLog(*j.root)
+	if err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
+	defer closeLog()
+	eng, err := d.engine()
+	if err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
+	fb := d.firstBoot
+	if fb == nil {
+		fb = macvm.NewProvisioner()
+	}
+	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat,
+		Leaked: j.leaked(d), Log: relayLog}
+	o := macvm.EditOptions{
+		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, Admit: j.admit(macvm.EditBaseCommand, d),
+		Guest:     silentNet(boot.ToolsBoot(), macvm.JobControlSock(*j.sockRoot, *j.entry)),
+		FirstBoot: fb, PrepNet: func() (macvm.PrepNetwork, error) { return newPrepNet(relayLog) }, Leaked: j.leaked(d),
+		CPUs: *j.cpus, MemoryMiB: *j.memMiB, Out: d.stdout, Log: slog.New(slog.NewTextHandler(d.stderr, nil)),
+	}
+	if *j.baseFile != "" {
+		// A list that cannot be read stages no profile again: the edit offers none, and they stay staged.
+		if o.Items, err = macvm.LoadBaseList(*j.baseFile); err != nil {
+			o.Log.Warn("wardyn-macvm: edit-base offers no staged profile: the install list could not be read", "err", err.Error())
+		}
+	}
+	if _, err := macvm.EditBase(ctx, o); err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// silentNet gives boot's stage-2 boots their network itself: one end of a stream socket pair that carries
+// nothing, sent to the boot's ctl.sock as net_fd, as runnerd sends a prepare's. Nothing in an edit
+// downloads, so its guest-agent boots reach nothing, and edit-base needs no runnerd network for them.
+func silentNet(boot macvm.ToolsBoot, sock string) macvm.ToolsBoot {
+	return func(ctx context.Context, spec macvm.MachineSpec) (macvm.ToolsGuest, func(context.Context) error, error) {
+		fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+		if err != nil {
+			return nil, nil, fmt.Errorf("wardyn-macvm: socketpair: %w", err)
+		}
+		unix.CloseOnExec(fds[0])
+		unix.CloseOnExec(fds[1])
+		attach, peer := os.NewFile(uintptr(fds[0]), "edit-net"), os.NewFile(uintptr(fds[1]), "edit-net-peer")
+		sctx, cancel := context.WithCancel(ctx)
+		sent := make(chan struct{})
+		go func() { defer close(sent); defer attach.Close(); sendNet(sctx, sock, attach) }()
+		g, stop, err := boot(ctx, spec)
+		cancel()
+		<-sent
+		if err != nil {
+			_ = peer.Close()
+			return nil, nil, err
+		}
+		return g, func(c context.Context) error { defer peer.Close(); return stop(c) }, nil
+	}
+}
+
+// sendNet sends f to the stage-2 boot listening on sock, once it listens, until ctx ends.
+func sendNet(ctx context.Context, sock string, f *os.File) {
+	for {
+		if cc, err := macvm.DialControl(ctx, sock); err == nil {
+			_ = cc.SendNetFD(ctx, f)
+			_ = cc.Close()
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 // prepareDeps wires prepare's first-boot provisioner (macvm.NewProvisioner),

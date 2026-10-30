@@ -67,6 +67,10 @@ describe("MacOSOfferProvider", () => {
     show(vi.fn(async () => list({ offered: true, guest_os: "macOS 27.0.1 (26A434)", min_cpus: 4, min_memory_mib: 8192, harnesses: ["claude-code", "none"], runner: "mac-studio-07" })));
     await waitFor(() => expect(offer()).toMatchObject({ ok: true, guestOS: "macOS 27.0.1 (26A434)", minCPUs: 4, minMemoryMiB: 8192, runner: "mac-studio-07" }));
   });
+  it("offered: the profile's name comes from the same list's allowance, for MAC-B05", async () => {
+    show(vi.fn(async () => ({ ...list({ offered: true, harnesses: ["none"], standard_not_allowed: true }), allowance: { active: 0, unit_name: "Platform" } })));
+    await waitFor(() => expect(offer()).toMatchObject({ ok: true, standardNotAllowed: true, profile: "Platform" }));
+  });
   it("refused: the pool's refusal", async () => {
     show(vi.fn(async () => list({ offered: false, runner: "mac-studio-07", refusals: [{ runner: "mac-studio-07", why: "preparing", progress: 42, detail: "" }] })));
     await waitFor(() => expect(offer()).toEqual({ ok: false, refusal: { why: "preparing", runner: "mac-studio-07", percent: 42 } }));

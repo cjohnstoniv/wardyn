@@ -11,6 +11,24 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- `wardyn-runnerd macos-vm edit-base` boots a copy of a Mac's macOS base for one attended session, then checks it before
+  runs use it: desktop control, accounts, Remote Login and the launcher's self-test. A copy that fails is discarded and
+  runs keep the old base. The runner reports when its base was last edited, and each run records it. See
+  [Editing a base](docs/operations/macos-vms.md#editing-a-base).
+- A Mac can hold more than one macOS base, each derived from Standard with its own install list, and a run picks one
+  with `macos_base`. A governance profile's `allowed_macos_bases` limits which a team may pick. See
+  [Several bases](docs/operations/macos-vms.md#several-bases).
+- The console shows a disk drive's Mac in New Run and in a new list of people's drives on the admin Drives screen, with
+  delete, and says how a disk drive's delete ended. A Mac's runner drawer now shows its macOS base's guest posture, age
+  and last edit, and marks a base past the organisation's maximum age as not offered, as does its card in the runner
+  list. An admin sets that maximum in Settings, under macOS virtual machines, as the oldest macOS base in days; empty is
+  no maximum.
+- New Run offers a macOS base picker when the pool's Macs hold more than one base, and says why a base can't be
+  picked; Review names the chosen base. A Mac's runner drawer lists its bases, and a governance profile's macOS bases
+  limit has its own label and hint.
+
 ### Changed
 
 - The workloads guide now explains that a workload's policy is laid onto the deployment default, and how to launch on a local runner.
@@ -19,6 +37,27 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   revive. A deny on `dev.azure.com` alone used to leave the person's credential on `<org>.visualstudio.com` and the
   `vssps`, `vsrm`, `feeds`, `pkgs` and `almsearch` hosts. `run.ceiling.reassert` and `run.revive` name the lane
   `azure_devops` in `dropped_broker_lanes`.
+- A macOS VM that gets less than the base image's minimum size now says what cut it: your own request, the governance
+  profile's ceiling or `limits.max_*`, the pool, or the server. It names the setting that raises it.
+- A macOS VM run is not recorded in this release, and says so when it is created. Where the organisation, the pool, a
+  locked organisation level or the run's own ceiling asks for recording, it is refused at create and Review instead, and
+  says which of them asked.
+- A macOS VM run now denies Apple's background boot-time hosts without an approval prompt. The list is deny-only: a host
+  your policy allows stays reachable, and nothing on it widens egress. See
+  [Apple's boot-time hosts](docs/operations/macos-vms.md#apples-boot-time-hosts).
+- A macOS VM run that mounts a drive is refused at create and Review in the launcher's words, before a Mac is asked
+  to start the VM.
+- A macOS VM run can mount an admin or team drive that is a folder on the Mac. It is shared into the guest at the
+  container's names under `/Users/agent`, read-only as granted, and a runner that predates this refuses it at create.
+  See [Drives](docs/operations/macos-vms.md#drives).
+- A macOS VM run can mount a person's own disk drive, a disk image kept on one of their Macs (`POST /me/drives` with
+  `runner_id`), and keep its work folder as one. Only macOS VM runs on that Mac can use it, and deleting the drive
+  deletes the image there, at once or when the Mac reconnects. See [Drives](docs/operations/macos-vms.md#drives).
+- A disk drive is in one macOS VM run at a time: a second run on the Mac that asks for it while another holds it is
+  refused when that run starts, not at Review.
+- A macOS VM run is also refused at create and Review when a second harness has its own starting prompt, or when a tool
+  rule, tool approvals, autonomy level L1 or the policy's inner walls would hold a tool call for approval. The launcher
+  still refuses the same shapes as a backstop.
 
 ### Fixed
 
@@ -209,6 +248,55 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   while a check is still waiting on a store that does not answer. A hung check used to hold the connection open for good, and a store that kept
   failing kept it open about a minute. The refusal's audit row is now written after the close, so a slow audit write
   no longer delays it.
+### Added
+
+- macOS VMs: a run's workload now starts in the guest. Each base carries the standard launcher (task, command and
+  self-test modes). A run that asks for several agents, held tool approvals or a service is refused by the launcher
+  with a reason.
+- Preparing a macOS VM base now ends with the launcher's self-test as the agent user. A harness that fails it is
+  withheld, and a base that cannot start a run is not published.
+- macOS VMs: the guest agent trusts the run's proxy certificate in the run's System keychain, for TLS only, before
+  the run starts, so tools that use only the keychain trust it too. If macOS refuses, the run goes on and its audit
+  says so.
+- macOS VMs: the runner setting `macos_vm_base_file` names a list of packages, apps and files, each pinned by its
+  SHA-256, that prepare and every tools update install into the base as admin. A changed list starts a tools update.
+- macOS VMs: configuration profiles in the install list are staged in the base, approved once in `edit-base`, and
+  read back as installed.
+- macOS VMs: an organisation CA in the install list is trusted in the base for SSL only, then verified. A CA macOS
+  will not trust without a person reads `not_trusted`; trust it by hand in `edit-base`.
+- macOS VMs: a package in the install list may take secret files, such as an EDR licence, removed after its install
+  and never logged or recorded.
+- macOS VMs: the runner reports the guest's posture (macOS version, SIP, Gatekeeper, profiles, MDM enrolment, the
+  organisation CA) beside the Mac's own.
+- A Mac's MDM can now attest posture (`MDMManaged`, `DiskEncrypted`) and set `register` and `setup` limits (`MaxRuns`,
+  `TotalCPU`, `TotalMemoryGB`, `PerRunCPU`, `PerRunMemoryGB`) from the managed preferences profile, with no posture file to
+  push. `macos-vm prepare` sizes its VM from the per-run keys when the organisation has sent no limit.
+- A Mac now reports when its macOS base was prepared and its build. `macos-vm status` shows the base's age and this Mac's
+  macOS, and a new site-config setting, `macos_vm.max_base_age_days`, refuses macOS VM runs on a Mac whose base is older
+  (or whose runner reports no age).
+- `wardyn-runnerd macos-vm prepare --ipsw-url <https URL> --sha256 <hex>` builds the macOS base from an image on your own
+  mirror, which must answer HTTP Range requests, and never falls back to Apple. `MacOSVMImageURL` and `MacOSVMImageHash`
+  in the managed profile (or `macos_vm_image_url` and `macos_vm_image_sha256` in `runnerd.json`; the profile wins) set it for setup too.
+  With `--ipsw-url`, the hash is `--sha256` alone.
+
+### Fixed
+
+- macOS VMs: the files a run's policy manages in the guest, such as a harness's managed settings and server list and
+  the cloud CLI's configuration, are now written where macOS reads them. A managed file with no macOS location stops the
+  run's start with a reason.
+- Preparing a macOS VM base no longer logs the guest's tools connection as `tools_dial: transport failure` while it is
+  still opening. Stage 2 reads the dial after its first tools request, and logs one still unclassified as `pending`.
+### Fixed
+
+- Preparing a macOS base no longer fails at stage 1 when Screen Sharing was already turned on during setup by hand: stage 1 checks that the service is loaded and skips loading it again. A macOS base prepared with Screen Sharing on view-only now says in `macos-vm status` how to get control.
+- During base preparation the guest's DNS lookups are refused instead of answered, so Setup Assistant's Screen Time screen no longer waits minutes for a network that is not there. Run-time DNS is unchanged.
+- The macOS setup window comes to the front, shows the three steps to follow, and `macos-vm status` no longer warns, wrongly, that the base's guest agent is not this runner's.
+
+### Before you upgrade
+
+- Migration `0246_user_drives_mac_disk` admits `mac_disk` in `user_drives.backend`'s CHECK and in the member-drive
+  rule, and adds `user_drives.home_runner_id`, the Mac a disk drive is kept on. It changes no row and adds no grant.
+  A downgrade with a disk drive present is unsupported.
 
 ## [0.10.0-rc.8] — 2026-10-29
 

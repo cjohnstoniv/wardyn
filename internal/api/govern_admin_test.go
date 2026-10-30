@@ -347,6 +347,7 @@ var governSiteElsewhere = map[string]string{
 	"refuseNoTicketAttach":    "none: attach entry door, no switch-on test",
 	"revivePATNarrowing":      "test: run_revive_test.go",
 	"unionDirectGitHubEgress": "none: direct GitHub egress union, no switch-on test",
+	"macOSBaseAllowedFor":     "none: a macOS base's allowance, shared by create and the pool list, no switch-on test",
 }
 
 // runUngovernedCallers is every function in dir's non-test sources that calls

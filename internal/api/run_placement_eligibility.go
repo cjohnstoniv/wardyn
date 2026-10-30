@@ -280,8 +280,13 @@ func withinAnyRoot(path string, roots []string) bool {
 // people's own runners: never placed there, permanently. Its volume or claim
 // would live on that person's machine, which deleting the drive cannot reach.
 // No later proof a pool's runners give about local paths (verifiedLocalPaths)
-// relaxes it.
+// relaxes it. A disk drive is the one kept on a person's machine, which its
+// delete reaches (reclaim_drive): it is on a pool only when the pool holds the
+// Mac it is kept on, and on no other.
 func memberDriveNeverOnPool(pool store.RunnerPoolCatalogueRow, d types.UserDrive) bool {
+	if d.Backend == types.DriveBackendMacDisk {
+		return d.HomeRunnerID == nil || !slices.Contains(pool.OwnRunnerIDs, *d.HomeRunnerID)
+	}
 	return d.OwnerSubject != "" && pool.Pool.Scope == types.RunnerPoolUser && len(pool.ExecutorIDs) == 0
 }
 

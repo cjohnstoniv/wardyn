@@ -242,6 +242,11 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 	if types.DeniesEveryPlacement(l.DenyPlacements) {
 		return governanceRefusedAllPlacements
 	}
+	for _, b := range l.AllowedMacOSBases {
+		if !types.ValidMacOSBaseName(b) {
+			return fmt.Sprintf("limits.allowed_macos_bases: %q is not a macOS base name — use Standard, or lowercase letters, digits, '.', '_' and '-'", b)
+		}
+	}
 	if l.AutonomyRubric != nil {
 		if err := l.AutonomyRubric.Validate(); err != nil {
 			return "limits.autonomy_rubric." + err.Error()

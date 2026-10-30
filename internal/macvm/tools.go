@@ -6,6 +6,7 @@ package macvm
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -41,6 +42,22 @@ const (
 
 // PhaseTools is stage 2 of prepare, "Installing developer tools".
 const PhaseTools = "tools"
+
+// SelftestFailurePrefix starts the reason a harness is withheld when the run launcher's self-test for
+// it failed; the rest is the end of the self-test's output.
+const SelftestFailurePrefix = "the run launcher's self-test failed: "
+
+// selftestTail is how much of a failed self-test's output its reason keeps.
+const selftestTail = 4 << 10
+
+// BaseSelftestError is stage 2's failure when the launcher's self-test as a command run fails: the base
+// cannot start any run, so it is not published. Its text is the base's error as status and the
+// runner drawer show it; Output is the end of the self-test's output on one line.
+type BaseSelftestError struct{ Output string }
+
+func (e *BaseSelftestError) Error() string {
+	return "The launcher's self-test failed in the base, so it was not published: " + e.Output + ". Run `wardyn-runnerd macos-vm prepare` to try again."
+}
 
 // CLTFailurePrefix starts the reason a harness is withheld when the Command Line Tools did not install;
 // the cause follows it. The runner reads it from tools.json.
@@ -143,6 +160,10 @@ type ToolsGuest interface {
 	// ToolsDial is the guest agent's own classified result for its dial of
 	// the tools port (a ToolsDial* class).
 	ToolsDial(ctx context.Context) (string, error)
+	// AgentExec runs argv as the agent user through the run's own exec path,
+	// with env added, and returns its combined output and exit code. err is a
+	// transport failure, not a non-zero exit.
+	AgentExec(ctx context.Context, argv, env []string) (out string, exit int, err error)
 }
 
 // ToolsBoot boots the base with stage 2's network (the run-style NIC behind
@@ -157,6 +178,11 @@ type Stage2Input struct {
 	// ControlCheck runs the desktop control check first (prepare's stage 2;
 	// a tools update keeps the manifest's desktop value).
 	ControlCheck bool
+	// Previous is the items the base held before this stage 2 (a tools update's), so a CA the list no
+	// longer has is removed.
+	Previous []ItemRecord
+	// Kept is a derivation's (DeriveBase): the tools.json of the Standard it cloned, whose tools it keeps.
+	Kept *ToolsRecord
 }
 
 // ToolsResult is what stage 2 left in the guest.
@@ -168,6 +194,8 @@ type ToolsResult struct {
 	Withheld     map[string]error
 	CLT          bool
 	AgentVersion string // set when the guest agent was replaced
+	// AgentRun says the run launcher (guestagent.MacAgentRunPath, the agent's own binary) was pushed.
+	AgentRun bool
 	// Pins are the pins that installed and passed their version check; Tried
 	// are all the pins this run attempted.
 	Pins  map[string]PinRecord
@@ -176,6 +204,11 @@ type ToolsResult struct {
 	Desktop string
 	// ToolsDial is the guest agent's classified tools-port dial.
 	ToolsDial string
+	// Items are the install list's items as installed, and ItemsDigest the list's digest.
+	Items       []ItemRecord
+	ItemsDigest string
+	// Guest is the guest posture read at the end of stage 2.
+	Guest *GuestPosture
 }
 
 // PinRecord is a pin as stage 2 applied it.
@@ -207,6 +240,8 @@ type ToolsOptions struct {
 	// Desktop is the control check's RFB client (nil: the check finds
 	// observe).
 	Desktop DesktopProbe
+	// Items is the operator's install list (none: no items).
+	Items BaseList
 }
 
 // ToolsStage is the Stage2 that boots the base through Boot and applies Tooling.
@@ -245,13 +280,20 @@ func (s *ToolsStage) Run(ctx context.Context, in Stage2Input) (ToolsResult, erro
 	return res, err
 }
 
-// onGuest reads the guest agent's tools-port dial, runs the control check
-// when asked, then installs the tools.
-func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) (ToolsResult, error) {
-	dial, err := g.ToolsDial(ctx)
-	if err != nil || !ValidToolsDial(dial) {
-		dial = ToolsDialTransport
-	}
+// ToolsDialPending is how stage 2 reports a tools-port dial the guest agent
+// has not classified yet: it accepted the connection and is waiting for the
+// host's first request (the host's tools client dials lazily).
+const ToolsDialPending = "pending"
+
+// toolsDialAsks bounds readToolsDial, as the run boot's recordToolsDial is
+// bounded: the guest agent's own dial of the tools port takes up to 5 s.
+var toolsDialAsks, toolsDialEvery = 15, time.Second
+
+// onGuest runs the control check when asked, then installs the tools, then
+// reads the guest agent's tools-port dial: only once the host has used the
+// tools session has the guest seen its first request and classified it.
+func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) (res ToolsResult, err error) {
+	defer func() { res.ToolsDial = readToolsDial(ctx, g) }()
 	desktop := ""
 	if in.ControlCheck {
 		probe := o.Desktop
@@ -259,12 +301,94 @@ func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) 
 			probe = dp // the stage-2 boot's own RFB client
 		}
 		if desktop, err = controlCheck(ctx, g, probe); err != nil {
-			return ToolsResult{ToolsDial: dial}, err
+			return ToolsResult{}, err
 		}
 	}
-	res, err := installTools(ctx, g, o)
-	res.Desktop, res.ToolsDial = desktop, dial
+	res, err = stage2Tools(ctx, g, in, o)
+	if err == nil {
+		err = installItems(ctx, g, o, in.Previous, &res)
+	}
+	if err == nil {
+		res.Guest = readPosture(ctx, g, res.Items)
+	}
+	if err == nil {
+		err = selftestBase(ctx, g, &res, o.Log)
+	}
+	res.Desktop = desktop
 	return res, err
+}
+
+// readToolsDial is the guest agent's class for its tools-port dial, asked
+// again while it has none yet: ToolsDialPending if it never does, and
+// ToolsDialTransport only when the guest cannot be asked or names no class.
+func readToolsDial(ctx context.Context, g ToolsGuest) string {
+	for i := range toolsDialAsks {
+		dial, err := g.ToolsDial(ctx)
+		switch {
+		case err != nil:
+			return ToolsDialTransport
+		case dial != "":
+			if !ValidToolsDial(dial) {
+				return ToolsDialTransport
+			}
+			return dial
+		}
+		if i == toolsDialAsks-1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ToolsDialPending
+		case <-time.After(toolsDialEvery):
+		}
+	}
+	return ToolsDialPending
+}
+
+// selftestBase is stage 2's final check, made as a run is started: the run launcher's --selftest as the
+// agent user, once as a command run and once per offered harness. A harness that fails it is withheld.
+// A base whose command run fails it cannot start any run, so stage 2 fails: prepare publishes no base,
+// and a tools update keeps the old one.
+func selftestBase(ctx context.Context, g ToolsGuest, res *ToolsResult, log *slog.Logger) error {
+	argv := []string{guestagent.MacAgentRunPath, "--selftest"}
+	out, exit, err := g.AgentExec(ctx, argv, []string{"WARDYN_TASK_MODE=exec"})
+	if err != nil {
+		return fmt.Errorf("macvm: the run launcher's self-test: %w", err)
+	}
+	if exit != 0 {
+		line := strings.TrimRight(strings.Join(strings.Fields(outputTail(out)), " "), ".")
+		return &BaseSelftestError{Output: cmp.Or(line, fmt.Sprintf("exit %d", exit))}
+	}
+	kept := []string{HarnessNone}
+	for _, h := range res.Harnesses {
+		if h == HarnessNone {
+			continue
+		}
+		out, exit, err := g.AgentExec(ctx, argv, []string{"WARDYN_HARNESSES=" + h, "WARDYN_START_HARNESS=" + h})
+		if err != nil {
+			return fmt.Errorf("macvm: the run launcher's self-test of %s: %w", h, err)
+		}
+		if exit != 0 {
+			if log != nil {
+				log.Warn("macvm: harness withheld", "harness", h, "selftest_exit", exit)
+			}
+			res.Withheld[h] = errors.New(SelftestFailurePrefix + outputTail(out))
+			delete(res.Pins, h)
+			continue
+		}
+		kept = append(kept, h)
+	}
+	res.Harnesses = kept
+	return nil
+}
+
+// outputTail is the last selftestTail bytes of out.
+func outputTail(out string) string {
+	out = strings.TrimSpace(out)
+	if len(out) > selftestTail {
+		out = out[len(out)-selftestTail:]
+	}
+	return out
 }
 
 func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResult, error) {
@@ -279,19 +403,15 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 		res.Tried[p.ID] = PinRecord{Version: p.Version, SHA256: p.SHA256}
 	}
 	if o.Agent != nil {
-		f, err := os.Open(o.Agent.Path)
-		if err != nil {
-			return res, fmt.Errorf("macvm: guest agent: %w", err)
-		}
-		fi, err := f.Stat()
-		if err == nil {
-			err = g.Push(ctx, o.Agent.Dest, 0o755, f, fi.Size())
-		}
-		_ = f.Close()
-		if err != nil {
+		if err := pushAgent(ctx, g, o.Agent.Path, o.Agent.Dest); err != nil {
 			return res, fmt.Errorf("macvm: replacing the guest agent: %w", err)
 		}
 		res.AgentVersion = o.Agent.Version
+		// The same binary is the run launcher by its name, so a run's agent-run is always this build's.
+		if err := pushAgent(ctx, g, o.Agent.Path, guestagent.MacAgentRunPath); err != nil {
+			return res, fmt.Errorf("macvm: installing the run launcher: %w", err)
+		}
+		res.AgentRun = true
 	}
 	var cltErr error
 	for attempt := 0; attempt < 2; attempt++ {
@@ -322,6 +442,20 @@ func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResul
 		res.Pins[p.ID] = res.Tried[p.ID]
 	}
 	return res, nil
+}
+
+// pushAgent pushes the guest agent's binary at path on the host to dest in the guest, root's and 0755.
+func pushAgent(ctx context.Context, g ToolsGuest, path, dest string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	return g.Push(ctx, dest, 0o755, f, fi.Size())
 }
 
 // installCLT installs the Command Line Tools through softwareupdate, the
@@ -570,10 +704,17 @@ type WithheldRecord struct {
 // with the reason, for the status the drawer reads.
 type ToolsRecord struct {
 	AgentVersion string                    `json:"agent_version,omitempty"`
+	AgentRun     bool                      `json:"agent_run,omitempty"`
 	Pins         map[string]PinRecord      `json:"pins"`
 	Withheld     map[string]WithheldRecord `json:"withheld,omitempty"`
 	Harnesses    []string                  `json:"harnesses"`
 	TriedAt      time.Time                 `json:"tried_at"`
+	// ItemsDigest is the install list's digest (BaseList.Digest) the base was built with, and Items its
+	// items.
+	ItemsDigest string       `json:"items_digest,omitempty"`
+	Items       []ItemRecord `json:"items,omitempty"`
+	// Guest is the guest posture read when the base was last prepared, updated or edited.
+	Guest *GuestPosture `json:"guest,omitempty"`
 }
 
 // ReadToolsRecord reads a base's tools.json.
@@ -587,7 +728,8 @@ func ReadToolsRecord(baseDir string) (ToolsRecord, error) {
 }
 
 func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Time) error {
-	rec := ToolsRecord{AgentVersion: agentVersion, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC()}
+	rec := ToolsRecord{AgentVersion: agentVersion, AgentRun: r.AgentRun, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC(),
+		ItemsDigest: r.ItemsDigest, Items: r.Items, Guest: r.Guest}
 	for id, err := range r.Withheld {
 		if rec.Withheld == nil {
 			rec.Withheld = map[string]WithheldRecord{}
@@ -598,7 +740,8 @@ func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Ti
 }
 
 // NeedsToolsUpdate says whether the base in baseDir lacks the pins in t or
-// the guest agent build agentVersion ("" skips the agent check). A harness
+// the guest agent build agentVersion, or its run launcher ("" skips both agent
+// checks: a base without the launcher cannot start a run). A harness
 // withheld at the current pin does not count for ToolsRetryAfter after the
 // attempt; a new pin counts at once.
 func NeedsToolsUpdate(baseDir string, t Tooling, agentVersion string, now time.Time) bool {
@@ -606,7 +749,7 @@ func NeedsToolsUpdate(baseDir string, t Tooling, agentVersion string, now time.T
 	if err != nil {
 		return true
 	}
-	if agentVersion != "" && rec.AgentVersion != agentVersion {
+	if agentVersion != "" && (rec.AgentVersion != agentVersion || !rec.AgentRun) {
 		return true
 	}
 	for _, p := range t.Harnesses {
@@ -640,9 +783,10 @@ type UpdateOptions struct {
 	// is a VM like any other (nil: the caller already holds one).
 	Admit func(ctx context.Context) (release func(), err error)
 	Stage Stage2
-	// Tooling and AgentVersion are what the base should end up with.
+	// Tooling, AgentVersion and ItemsDigest (the install list's) are what the base should end up with.
 	Tooling      Tooling
 	AgentVersion string
+	ItemsDigest  string
 	// Force runs the update even when the base looks current or a withheld
 	// harness is inside its retry delay: an update someone asked for.
 	Force bool
@@ -683,7 +827,7 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	if err != nil {
 		return m, false, err
 	}
-	if !o.Force && !NeedsToolsUpdate(base, o.Tooling, o.AgentVersion, o.Now()) {
+	if !o.Force && !NeedsToolsUpdate(base, o.Tooling, o.AgentVersion, o.Now()) && !ItemsChanged(base, o.ItemsDigest) {
 		return m, false, nil
 	}
 	drifted := o.AgentVersion != "" && m.AgentVersion != o.AgentVersion
@@ -723,7 +867,8 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		HardwareModel: m.HardwareModel, MachineIdentifier: id.MachineIdentifier,
 		DiskPath: filepath.Join(nb, DiskFile), AuxPath: filepath.Join(nb, AuxFile),
 	}
-	res, err := o.Stage.Run(ctx, Stage2Input{Spec: spec, Dir: nb})
+	prev, _ := ReadToolsRecord(base)
+	res, err := o.Stage.Run(ctx, Stage2Input{Spec: spec, Dir: nb, Previous: prev.Items})
 	if res.ToolsDial != "" {
 		o.Progress(PrepareEvent{Phase: PhaseTools, ToolsDial: res.ToolsDial})
 	}

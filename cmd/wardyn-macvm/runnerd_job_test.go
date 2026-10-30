@@ -72,6 +72,7 @@ func TestUpdateToolsAsRunnerdStartsIt(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(guestagent.ToolsExecResult{Output: "No new software available.", ExitCode: 0})
 		})
 		control := http.NewServeMux()
+		control.HandleFunc("POST /v1/exec", passSelftest)
 		control.HandleFunc("GET /v1/dial/tools", func(w http.ResponseWriter, _ *http.Request) {
 			_ = json.NewEncoder(w).Encode(guestagent.ToolsDial{Class: guestagent.DialConnected, Dials: 1})
 		})

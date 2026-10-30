@@ -198,16 +198,21 @@ func TestMacVMLookupRemembersAContainer(t *testing.T) {
 func TestMacGuestInitTurnsTheAutoUpdaterOff(t *testing.T) {
 	spec := macSpec()
 	spec.Env["DISABLE_AUTOUPDATER"] = "0"
-	if v := macGuestInit(spec, "").Env["DISABLE_AUTOUPDATER"]; v != "1" {
+	in, err := macGuestInit(spec, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := in.Env["DISABLE_AUTOUPDATER"]; v != "1" {
 		t.Fatalf("DISABLE_AUTOUPDATER = %q", v)
 	}
 }
 
 // A run's boot never asks for tools mode (vsock 1026): run.json has no field that could carry it, and
 // the run.json a create writes holds only the run boot's own keys. A field added to RunConfig fails
-// this test, so tools mode can reach a run boot only by a reviewed change here.
+// this test, so tools mode can reach a run boot only by a reviewed change here. disks is the run's disk
+// drives (macvm.Disk: id, path, read_only, size_bytes), which a prepare or tools-update boot refuses.
 func TestMacVMRunBootCarriesNoToolsMode(t *testing.T) {
-	want := []string{"base_dir", "cpus", "identity", "ledger_dir", "ledger_entry", "memory_mib", "run_id", "runner_id", "shares", "sock_root"}
+	want := []string{"base_dir", "cpus", "disks", "identity", "ledger_dir", "ledger_entry", "memory_mib", "run_id", "runner_id", "shares", "sock_root"}
 	var got []string
 	rt := reflect.TypeFor[macvm.RunConfig]()
 	for i := range rt.NumField() {

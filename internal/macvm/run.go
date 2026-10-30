@@ -120,6 +120,33 @@ func Run(ctx context.Context, o RunOptions) error {
 	return r.run(ctx)
 }
 
+// lockDisks locks each disk drive for as long as this VM may have it attached, and makes a writable one
+// on its first run. Another run on this Mac that holds one stops this start. unlock releases them all.
+func (r *runner) lockDisks() (unlock func(), err error) {
+	var held []func()
+	unlock = func() {
+		for _, u := range held {
+			u()
+		}
+	}
+	for _, d := range r.cfg.Disks {
+		u, err := LockDisk(d.Path)
+		if err != nil {
+			unlock()
+			return nil, fmt.Errorf("macvm: disk %s: %w", d.ID, err)
+		}
+		held = append(held, u)
+		if !d.ReadOnly {
+			if err := MakeDiskImage(d.Path, d.SizeBytes); err != nil {
+				unlock()
+				return nil, err
+			}
+		}
+		r.o.Log.Info("macvm: attaching a disk drive", "run_id", r.cfg.RunID, "id", d.ID, "read_only", d.ReadOnly)
+	}
+	return unlock, nil
+}
+
 func (r *runner) run(ctx context.Context) error {
 	if err := thermalGate(r.o.Engine); err != nil {
 		return err
@@ -151,12 +178,17 @@ func (r *runner) run(ctx context.Context) error {
 		r.o.Log.Info("macvm: sharing a folder", "run_id", r.cfg.RunID, "tag", sh.Tag, "target", sh.Target,
 			"read_only", sh.ReadOnly)
 	}
+	unlockDisks, err := r.lockDisks()
+	if err != nil {
+		return err
+	}
+	defer unlockDisks()
 	plan, err := BuildPlan(MachineSpec{
 		CPUs: r.cfg.CPUs, MemoryBytes: r.cfg.MemoryMiB * mib,
 		MinCPUs: man.MinCPUs, MinMemoryBytes: man.MinMemoryMiB * mib,
 		HardwareModel: man.HardwareModel, MachineIdentifier: r.id.MachineIdentifier,
 		DiskPath: filepath.Join(r.o.RunDir, DiskFile), AuxPath: filepath.Join(r.o.RunDir, AuxFile),
-		BaseDir: r.cfg.BaseDir, Net: guestNet, Shares: r.cfg.Shares,
+		BaseDir: r.cfg.BaseDir, Net: guestNet, Shares: r.cfg.Shares, Disks: r.cfg.Disks,
 	})
 	if err != nil {
 		return err

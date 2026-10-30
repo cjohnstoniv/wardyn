@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -50,6 +51,37 @@ func TestPoolMacOSVMEveryRunnerMustOfferIt(t *testing.T) {
 	if busy.Offered || busy.GuestOS != "" || busy.MinCPUs != 0 || busy.Harnesses != nil || len(busy.Refusals) != 1 ||
 		busy.Refusals[0].Runner != "b" || busy.Refusals[0].Why != client.MacOSVMWhyAtLimit || busy.Refusals[0].Detail == "" {
 		t.Fatalf("one Mac at its limit: %+v, want not offered, naming b at_limit", busy)
+	}
+}
+
+// Standard's prepare time is the oldest among the Macs' (the rule a derived base's age follows); a Mac that
+// reports none does not blank it, and a pool whose Macs report none carries none.
+func TestPoolMacOSVMCreatedAtIsTheOldestStandard(t *testing.T) {
+	at := func(c string) *runnerwire.MacVMCaps {
+		mc := readyMac()
+		mc.Base.CreatedAt = c
+		return mc
+	}
+	cands := func(created ...string) []macOSCandidate {
+		var out []macOSCandidate
+		for i, c := range created {
+			out = append(out, macCandidate(managedMac(string(rune('a'+i))), at(c), 0))
+		}
+		return out
+	}
+	old, newer := time.Now().UTC().Add(-48*time.Hour).Format(time.RFC3339), time.Now().UTC().Add(-24*time.Hour).Format(time.RFC3339)
+	for name, tc := range map[string]struct {
+		created []string
+		want    string
+	}{
+		"oldest of two":    {[]string{newer, old}, old},
+		"one reports none": {[]string{newer, ""}, newer},
+		"none report":      {[]string{"", ""}, ""},
+		"one Mac":          {[]string{newer}, newer},
+	} {
+		if got := poolMacOSVM(cands(tc.created...), false); !got.Offered || got.CreatedAt != tc.want {
+			t.Errorf("%s: CreatedAt %q (offered %v), want %q", name, got.CreatedAt, got.Offered, tc.want)
+		}
 	}
 }
 
@@ -167,30 +199,30 @@ func TestPoolMacOSVMOfReadsTheListsFits(t *testing.T) {
 	target := func(id uuid.UUID) poolTarget { return poolTarget{id: id.String(), runnerID: &id} }
 
 	member := operatorCtx("alice", "alice@corp.example", oidc.RoleUser)
-	if got := s.poolMacOSVMOf(member, []poolTarget{target(mac), {id: "docker", executor: "docker"}}, fits, nil); got.Offered ||
+	if got := s.poolMacOSVMOf(member, []poolTarget{target(mac), {id: "docker", executor: "docker"}}, fits, nil, governanceCeiling{}); got.Offered ||
 		len(got.Refusals) != 1 || got.Refusals[0].Why != client.MacOSVMWhyAtLimit {
 		t.Fatalf("a Mac running 2 macOS VMs: %+v, want at_limit from the fits' count", got)
 	}
-	if got := s.poolMacOSVMOf(member, []poolTarget{{id: "docker", executor: "docker"}}, fits, nil); got.Offered || len(got.Refusals) != 0 {
+	if got := s.poolMacOSVMOf(member, []poolTarget{{id: "docker", executor: "docker"}}, fits, nil, governanceCeiling{}); got.Offered || len(got.Refusals) != 0 {
 		t.Fatalf("a remote-hosted target only: %+v, want not offered and no runner named", got)
 	}
-	if got := s.poolMacOSVMOf(member, []poolTarget{target(unmarked)}, fits, nil); len(got.Refusals) != 1 || got.Refusals[0].RunnerID != "" {
+	if got := s.poolMacOSVMOf(member, []poolTarget{target(unmarked)}, fits, nil, governanceCeiling{}); len(got.Refusals) != 1 || got.Refusals[0].RunnerID != "" {
 		t.Fatalf("member: %+v, want no runner id", got)
 	}
 	ready := macRunner(t, s, readyMac(), nil)
 	fits[ready.String()] = runnerFit{runner: rows[ready]}
-	if got := s.poolMacOSVMOf(member, []poolTarget{target(ready)}, fits, nil); !got.Offered {
+	if got := s.poolMacOSVMOf(member, []poolTarget{target(ready)}, fits, nil, governanceCeiling{}); !got.Offered {
 		t.Fatalf("a ready Mac: %+v, want offered", got)
 	}
 	// A profile that denies the person's own runners leaves the pool no Mac a macOS VM could run on.
-	if got := s.poolMacOSVMOf(member, []poolTarget{target(ready)}, fits, []types.Placement{types.PlacementLocal}); got.Offered || len(got.Refusals) != 0 {
+	if got := s.poolMacOSVMOf(member, []poolTarget{target(ready)}, fits, []types.Placement{types.PlacementLocal}, governanceCeiling{}); got.Offered || len(got.Refusals) != 0 {
 		t.Fatalf("own runners denied: %+v, want not offered", got)
 	}
-	if got := s.poolMacOSVMOf(member, []poolTarget{target(ready)}, fits, []types.Placement{types.PlacementRemote}); !got.Offered {
+	if got := s.poolMacOSVMOf(member, []poolTarget{target(ready)}, fits, []types.Placement{types.PlacementRemote}, governanceCeiling{}); !got.Offered {
 		t.Fatalf("remote denied: %+v, want the Mac still offered", got)
 	}
 	operator := operatorCtx("sam", "sam@corp.example", oidc.RoleSecurityAdmin)
-	if got := s.poolMacOSVMOf(operator, []poolTarget{target(unmarked)}, fits, nil); len(got.Refusals) != 1 || got.Refusals[0].RunnerID != unmarked.String() {
+	if got := s.poolMacOSVMOf(operator, []poolTarget{target(unmarked)}, fits, nil, governanceCeiling{}); len(got.Refusals) != 1 || got.Refusals[0].RunnerID != unmarked.String() {
 		t.Fatalf("operator: %+v, want the runner id to mark", got)
 	}
 }

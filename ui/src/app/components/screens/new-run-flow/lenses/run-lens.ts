@@ -29,10 +29,15 @@ export const choosePool = (intent: RunIntent, poolId: string): RunIntent => with
 
 /**
  * The machine kind. A container is the default, so it is the absent key; a VM is its own barrier, so a
- * barrier chosen for a container is dropped with the switch.
+ * barrier chosen for a container is dropped with the switch. A macOS base belongs to a macOS VM and goes with it.
  */
 export const chooseMachineKind = (intent: RunIntent, kind: MachineKind): RunIntent =>
-  kind === "container" ? withKeys(intent, { machine_kind: undefined }) : withKeys(intent, { machine_kind: kind, confinement_class: undefined });
+  kind === "container"
+    ? withKeys(intent, { machine_kind: undefined, macos_base: undefined })
+    : withKeys(intent, { machine_kind: kind, confinement_class: undefined, ...(kind !== "macos_vm" && { macos_base: undefined }) });
+
+/** The macOS VM's base. Standard is the default, so it is the absent key. */
+export const chooseMacOSBase = (intent: RunIntent, base: string | undefined): RunIntent => withKeys(intent, { macos_base: base });
 
 /** Called only when the person changes the barrier: an untouched draft lets the server choose. */
 export const chooseBarrier = (intent: RunIntent, cc: ConfinementClass): RunIntent => withKeys(intent, { confinement_class: cc });

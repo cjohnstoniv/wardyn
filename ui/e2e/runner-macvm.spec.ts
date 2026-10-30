@@ -5,7 +5,7 @@
 
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole } from "./fixtures";
-import { MACVM_K, MACVM_R } from "../src/app/components/wardyn/copy/runner-macvm";
+import { MACVM_K, MACVM_P, MACVM_R } from "../src/app/components/wardyn/copy/runner-macvm";
 import { DESKTOP } from "../src/app/components/wardyn/copy/desktop";
 import { RES } from "../src/app/components/wardyn/copy/runner-pools";
 import { aheadByHours } from "../src/app/lib/test-clock";
@@ -34,13 +34,21 @@ const RUNNERS = [
   mac("mac-preparing", "00000000-0000-4000-8000-0000000000c2", { max: 2, base: { state: "preparing", progress: 42 } }),
   mac("mac-failed", "00000000-0000-4000-8000-0000000000c3", { max: 0, base: { state: "failed", error: "connection reset by peer" } }),
   mac("linux-box", "00000000-0000-4000-8000-0000000000c4"),
+  // A base 41 days old: past the 30-day maximum the too-old test sets.
+  mac("mac-old", "00000000-0000-4000-8000-0000000000c5", {
+    ...READY,
+    base: { ...READY.base, created_at: aheadByHours(-41 * 24), guest: { os_version: "27.0.1", sip: "on", gatekeeper: "on", profiles: 2, mdm: "not_enrolled", org_ca: "trusted" } },
+  }),
 ];
 
-async function openRunners(page: Page) {
+async function openRunners(page: Page, siteConfig: Record<string, unknown> = {}) {
   await page.route("**/api/v1/runners/settings", (route) => route.fulfill({ json: { enabled: true } }));
   await page.route("**/api/v1/runners/tokens**", (route) => route.fulfill({ json: [] }));
   await page.route("**/api/v1/remote-runners", (route) => route.fulfill({ json: [] }));
   await page.route(/\/api\/v1\/runners\?/, (route) => route.fulfill({ json: RUNNERS }));
+  // The live site config is shared with the Settings spec, which sets a maximum on it: no maximum here unless a test says so.
+  // One route only: the last route registered answers first, so a test's own route set before this one would never be read.
+  await page.route("**/api/v1/site-config", (route) => route.fulfill({ json: siteConfig }));
   await gotoConsole(page, "admin");
   await page.goto("/admin/runners");
 }
@@ -86,6 +94,22 @@ test.describe("Runner drawer: macOS virtual machines", () => {
     const section = (await openDrawer(page, "mac-failed")).locator("[data-macvm]");
     await expect(section.getByText(MACVM_R.R15, { exact: true })).toBeVisible();
     await expect(section.getByText("connection reset by peer")).toBeVisible();
+  });
+
+  test("a base older than the organisation's maximum is not offered, with its age and guest posture", async ({ page }) => {
+    await openRunners(page, { macos_vm: { max_base_age_days: 30 } });
+    const section = (await openDrawer(page, "mac-old")).locator("[data-macvm]");
+    await expect(section.getByText(MACVM_P.P12, { exact: true })).toBeVisible();
+    await expect(section.getByText(MACVM_R.R14, { exact: true })).toBeVisible();
+    await expect(section.getByText(MACVM_P.P01, { exact: true })).toBeVisible();
+    await expect(section.getByText(MACVM_P.P07_INSTALLED(2))).toBeVisible();
+    await expect(section.getByText(MACVM_R.R25)).toHaveCount(0);
+  });
+
+  test("the card badge reads the same maximum: too old is not offered, the rest still are", async ({ page }) => {
+    await openRunners(page, { macos_vm: { max_base_age_days: 30 } });
+    await expect(card(page, "mac-old").getByText(MACVM_K.K03)).toBeVisible();
+    await expect(card(page, "mac-preparing").getByText(MACVM_K.K02("42"))).toBeVisible();
   });
 
   test("a runner that sends no macOS VM caps has no section", async ({ page }) => {

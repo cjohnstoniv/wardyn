@@ -80,6 +80,7 @@ describe("template field registry", () => {
       "keep_work_folder",
       "local_folder",
       "machine_kind",
+      "macos_base",
       "max_wait_sec",
       "mode_contract",
       "policy_overlay",

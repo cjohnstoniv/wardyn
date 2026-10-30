@@ -6,7 +6,7 @@
 // The profile editor's composition half (0.8.6, M3): the base picker, per-field
 // overlay opt-in, the effective view and the server's refusals. Mounts the
 // editor directly, like profile-editor.test.tsx.
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -41,6 +41,7 @@ vi.mock("../../../lib/api/setup", () => ({
 import { HttpError } from "../../../lib/api/core";
 import type { GovernanceUnit } from "../../../lib/api/governance";
 import { GOVERNANCE as GOV, LIMITS_CHIP } from "../../../lib/governance-copy";
+import { MAC_BASES } from "../../wardyn/copy/mac-bases";
 import { baseStatus } from "../../../lib/test-fixtures";
 import type { RunPolicySpec } from "../../../lib/types";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -177,6 +178,28 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
     });
   });
 
+  // Board J6-b: the macOS bases row says MAC-B14 and MAC-B15, and what is stored comes back out of a save as it went in.
+  it("macOS bases: labelled B14 with the B15 hint, narrowed from the editor, and a stored list survives a save", async () => {
+    renderEditor(null);
+    typeValue(GOV.FIELD_NAME, "Team A");
+    await pickBase("Baseline");
+    expect(screen.getByText(MAC_BASES.B14)).toBeInTheDocument();
+    expect(screen.getByText(MAC_BASES.B15)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("switch", { name: `${MAC_BASES.B14} ${GOV.OVERLAY_NARROW}` }));
+    typeValue(MAC_BASES.B14, "Standard\nxcode-16");
+    // The hint sits under the input (board J6-b).
+    expect(screen.getByLabelText(MAC_BASES.B14).compareDocumentPosition(screen.getByText(MAC_BASES.B15)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    expect(createProfileMock).toHaveBeenLastCalledWith(expect.objectContaining({ overlay_limits: { allowed_macos_bases: ["Standard", "xcode-16"] } }));
+
+    cleanup();
+    const child = row({ id: "pc", name: "Team A", ceiling: {} as RunPolicySpec, parent_id: "pb", overlay: {} as never, overlay_limits: { allowed_macos_bases: ["Standard", "xcode-16"] } as never });
+    renderEditor(child, [BASE, child]);
+    expect(screen.getByLabelText(MAC_BASES.B14)).toHaveValue("Standard\nxcode-16");
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    expect(updateProfileMock).toHaveBeenLastCalledWith("pc", expect.objectContaining({ overlay_limits: { allowed_macos_bases: ["Standard", "xcode-16"] } }));
+  });
+
   it("composing a standalone profile moves its stored limits and rubric into the overlay, with a note", async () => {
     const solo = row({
       id: "ps",
@@ -303,6 +326,14 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
     renderEditor(row({ id: "ps", name: "Solo" }), [BASE]);
     await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
     expect(Object.keys(updateProfileMock.mock.calls[0][1]).sort()).toEqual(["ceiling", "limits", "name"]);
+  });
+
+  // The standalone editor has no macOS bases row, so a stored list must ride a save back untouched.
+  it("a standalone profile's stored macOS bases list is sent back unchanged by a save", async () => {
+    renderEditor(row({ id: "ps", name: "Solo", limits: { allowed_macos_bases: ["Standard", "xcode-16"] } as never }), [BASE]);
+    typeValue(GOV.FIELD_NAME, "Solo 2");
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    expect(updateProfileMock.mock.calls[0][1].limits).toEqual({ allowed_macos_bases: ["Standard", "xcode-16"] });
   });
 });
 

@@ -317,10 +317,34 @@ export interface PoolMacOSVM {
   harnesses?: string[];
   runner?: string;
   refusals?: PoolMacOSVMRefusal[];
+  /** The Macs' other macOS bases (besides Standard); offered only. */
+  bases?: PoolMacOSBase[];
+  /** Standard's oldest prepare among the Macs, RFC 3339; display only, never compared with the clock. */
+  created_at?: string;
+  /** The caller's own answer: their governance does not let them pick Standard (MAC-B05). Never the list. */
+  standard_not_allowed?: boolean;
+}
+
+/** Go: client.MacOSBase*. */
+export type PoolMacOSBaseState = "ready" | "rebuilding" | "missing";
+
+/**
+ * Go: client.PoolMacOSBase. `progress` is the least done while rebuilding; ready, `guest_os` is the build every
+ * copy holds (absent when they differ), `harnesses` those every copy serves, `created_at` the oldest copy's.
+ */
+export interface PoolMacOSBase {
+  name: string;
+  state: PoolMacOSBaseState;
+  progress?: number;
+  guest_os?: string;
+  harnesses?: string[];
+  created_at?: string;
+  /** The caller's own answer: their governance does not let them pick this base, whatever its state (MAC-B05). */
+  not_allowed?: boolean;
 }
 
 /** Go: client.MacOSVMWhy*. */
-export type PoolMacOSVMWhy = "not_offered" | "preparing" | "at_limit" | "no_room" | "not_managed" | "no_posture" | "no_base" | "runner_refused";
+export type PoolMacOSVMWhy = "not_offered" | "preparing" | "at_limit" | "no_room" | "not_managed" | "no_posture" | "no_base" | "runner_refused" | "base_too_old";
 
 /** Go: client.MacOSVMRefused*, the reason of a runner_refused refusal. */
 export type PoolMacOSVMRefusedReason = "below_min_memory" | "below_min_cpu" | "other";

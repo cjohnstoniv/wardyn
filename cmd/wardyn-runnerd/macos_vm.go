@@ -121,6 +121,8 @@ type macOSVMs struct {
 	mu    sync.Mutex
 	caps  *runnerwire.MacVMCaps
 	drift string // the base agent version a tools update was last asked for
+	items macOSVMItems
+	bases macOSVMBases
 }
 
 // macOSVMSetup is what openMacOSVMs reads.
@@ -156,7 +158,7 @@ func (m *macOSVMs) useDriver(d macVMDriver) {
 // none of them) makes a handle that offers no macOS VM and names the fix.
 func openMacOSVMs(s macOSVMSetup) *macOSVMs {
 	m := &macOSVMs{host: s.host, layout: macvm.Layout{Root: s.root}, runnerID: s.runnerID, uid: s.uid, version: s.version, perRunMemory: s.perRunMemory, limitsFile: s.limitsFile,
-		defaultPerRunMemory: s.perRunMemory, interval: macOSVMRecompute, kick: make(chan struct{}, 1)}
+		defaultPerRunMemory: s.perRunMemory, interval: macOSVMRecompute, kick: make(chan struct{}, 1), items: openMacOSVMItems()}
 	if s.ledgerDir != admission.DefaultDir {
 		m.ledgerDir = s.ledgerDir
 	}
@@ -293,7 +295,7 @@ func (m *macOSVMs) recompute() bool {
 // base ready it offers none. A ledger read that fails keeps the last max, as the organisation already
 // has it.
 func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
-	c := runnerwire.MacVMCaps{SignIns: true, Folders: true, Base: runnerwire.MacVMBase{State: runnerwire.MacVMBaseNone}}
+	c := runnerwire.MacVMCaps{SignIns: true, Folders: true, Drives: true, DiskDrives: true, Base: runnerwire.MacVMBase{State: runnerwire.MacVMBaseNone}}
 	reason, hostOS, hostReason, thermal, noSession := m.hostStatus()
 	c.NoSession = noSession
 	if m.ledger == nil {
@@ -321,6 +323,8 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 	c.MinCPUs, c.MinMemoryMiB = man.MinCPUs, int(man.MinMemoryMiB)
 	c.Harnesses, c.Desktop = slices.Clone(man.Harnesses), man.Desktop
 	m.checkAgent(man)
+	m.checkItems(man)
+	c.Bases = m.derivedBases(man)
 	if why, refusal, belowReason := m.belowMinimum(man); why != "" {
 		// design 3.10: a per-run limit below the base's minimum offers none and names the flag to raise.
 		slog.Warn("macOS VM sandboxes: this runner offers none", "reason", why)
@@ -401,6 +405,10 @@ func (m *macOSVMs) setPerRunLimits(cpuMillis, memoryMiB int64) {
 func (m *macOSVMs) base() (macvm.Manifest, runnerwire.MacVMBase) {
 	man, err := macvm.ReadManifest(m.layout.BaseDir(0))
 	b := runnerwire.MacVMBase{State: runnerwire.MacVMBaseNone, GuestOS: man.GuestOS}
+	if !man.CreatedAt.IsZero() {
+		b.CreatedAt = man.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	b.BuildVersion = man.BuildVersion
 	switch {
 	case err == nil && man.Format != macvm.BaseFormat:
 		b.State = runnerwire.MacVMBaseUpdateNeeded
@@ -408,6 +416,10 @@ func (m *macOSVMs) base() (macvm.Manifest, runnerwire.MacVMBase) {
 		b.State = runnerwire.MacVMBaseReady
 		if cause := toolsFailure(m.layout.BaseDir(0)); cause != "" {
 			b.Failure, b.Error = runnerwire.MacVMFailureTools, m.scrubError(cause)
+		}
+		b.Customisation, b.Guest = baseCustomisation(m.layout.BaseDir(0))
+		if rec, ok := macvm.ReadEditRecord(m.layout.BaseDir(0), man); ok {
+			b.EditedAt, b.EditRecheck = macvm.BaseEditedAt(m.layout.BaseDir(0), man), rec.Recheck
 		}
 	case m.preparing():
 		b.State, b.Progress = runnerwire.MacVMBasePreparing, prepareProgress(m.layout.PrepareLog())
@@ -495,7 +507,7 @@ func (m *macOSVMs) vmGone(e admission.Entry) bool {
 // (the helper releases nothing, startJob): neither job has a run directory, and the ledger itself
 // refuses while a VM process of this user could still be its VM.
 func (m *macOSVMs) reconcilePrepare() {
-	for _, k := range []admission.Kind{admission.KindPrepare, admission.KindToolsUpdate} {
+	for _, k := range []admission.Kind{admission.KindPrepare, admission.KindToolsUpdate, kindEditBase} {
 		for _, e := range m.own(k) {
 			if !m.vmGone(e) {
 				continue
@@ -563,47 +575,9 @@ func desktopMode(mode string) string {
 	case "", "none":
 		return "none"
 	case "observe":
-		return "view only (macOS turned Screen Sharing on for viewing only)"
+		return "view only (Screen Sharing was not turned on with control; to get control, run macos-vm edit-base, turn on Screen Sharing with \"VNC viewers may control screen with password\", then close the window)"
 	}
 	return mode
-}
-
-// macOSVMArithmetic is setup's worked sum (design 3.10): a runner's macOS guests together get at most
-// its total memory, which cannot pass Docker's, while the host's budget for them is what Docker and
-// macOS leave. Bytes throughout.
-type macOSVMArithmetic struct {
-	host, docker, total, perRun uint64
-}
-
-// max is how many macOS VMs this Mac can run at once at the per-run memory: Apple's cap, the runner's
-// total and the host budget, whichever holds fewest.
-func (a macOSVMArithmetic) max() int {
-	if a.perRun == 0 {
-		return 0
-	}
-	n := min(admission.LicenceCap, int(a.total/a.perRun))
-	return min(n, int(a.budget()/(a.perRun+admission.DefaultOverheadBytes)))
-}
-
-func (a macOSVMArithmetic) budget() uint64 {
-	if a.host <= a.docker+admission.MacOSReserveBytes {
-		return 0
-	}
-	return a.host - a.docker - admission.MacOSReserveBytes
-}
-
-// lines are setup's words for the sum, with this Mac's numbers, and what to change when it holds none.
-func (a macOSVMArithmetic) lines() []string {
-	gb := func(b uint64) string { return strconv.FormatFloat(float64(b)/(1<<30), 'f', -1, 64) }
-	out := []string{
-		fmt.Sprintf("macOS VMs on this Mac: %s GB of memory, less %s GB for Docker and 4 GB for macOS, leaves %s GB for macOS guests.", gb(a.host), gb(a.docker), gb(a.budget())),
-		fmt.Sprintf("Each guest takes the per-run memory (%s GB) and about 1 GB more, and the runner's total memory (%s GB) holds all of them at once.", gb(a.perRun), gb(a.total)),
-		fmt.Sprintf("So this Mac runs at most %d macOS VM(s) at once (Apple's licence allows 2).", a.max()),
-	}
-	if a.max() == 0 {
-		out = append(out, "To run one: give Docker less memory, or lower --per-run-memory (a guest needs at least the macOS base's minimum, which prepare reports), or raise --total-memory up to what Docker has.")
-	}
-	return out
 }
 
 // excludeFromBackups runs `tmutil addexclusion` on Wardyn's own VM directory: a sticky exclusion that
@@ -629,6 +603,10 @@ type prepareArgs struct {
 	// ipsw is a restore image the operator downloaded, built from instead of Apple's download ("": download),
 	// and sha256 the SHA-256 it must have (required with ipsw; the helper checks it on a copy in the cache).
 	ipsw, sha256 string
+	// ipswURL is an HTTPS mirror the restore image is downloaded from instead of Apple's, with sha256 the hash
+	// it must have; it excludes ipsw. Neither given, the profile's MacOSVMImageURL and MacOSVMImageHash stand
+	// for them (setup's prepare has no flags).
+	ipswURL string
 	// newImage builds a new base from Apple's newest restore image even when one is ready (the helper's
 	// --reprepare); without it, a ready base needs no prepare.
 	newImage bool
@@ -703,14 +681,22 @@ type helperJob struct {
 	runner string
 	ledger string // the ledger directory ("" is the package's)
 	extra  []string
-	descr  string // the job in the error words: "prepare" or "tools update"
+	descr  string // the job in the error words: "prepare", "tools update" or "edit"
+	// out, when set, makes the job a foreground one (edit-base): its stdout goes to out as well as to the
+	// log, which holds only this run, and startJob returns once the helper has exited.
+	out io.Writer
 }
 
 // startPrepare starts the helper's prepare (see startJob), or with newImage and a ready base its
 // re-prepare; a ready base and no newImage starts nothing (errMacOSBaseReady). The helper's probe must
 // pass first.
 func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
-	sum, err := macvm.CheckIPSWFlags(a.ipsw, a.sha256)
+	if a.ipsw == "" && a.ipswURL == "" {
+		if a.ipswURL = managedPref("MacOSVMImageURL"); a.ipswURL != "" && a.sha256 == "" {
+			a.sha256 = managedPref("MacOSVMImageHash")
+		}
+	}
+	sum, err := macvm.CheckImageFlags(a.ipsw, a.ipswURL, a.sha256)
 	if err != nil {
 		return err
 	}
@@ -725,6 +711,9 @@ func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
 		}
 		extra = append(extra, "--"+macvm.FlagIPSW, path, "--"+macvm.FlagSHA256, sum)
 	}
+	if a.ipswURL != "" {
+		extra = append(extra, "--"+macvm.FlagIPSWURL, a.ipswURL, "--"+macvm.FlagSHA256, sum)
+	}
 	if _, err := macvm.ReadyBase(m.layout.BaseDir(0)); err == nil {
 		if !a.newImage {
 			return errMacOSBaseReady
@@ -733,6 +722,9 @@ func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
 	}
 	if a.keepIPSW {
 		extra = append(extra, "--"+macvm.FlagKeepIPSW)
+	}
+	if extra, err = m.baseFileArgs(extra); err != nil {
+		return err
 	}
 	r, err := probeHelper(ctx, a.helper)
 	if err != nil {
@@ -780,9 +772,54 @@ func (m *macOSVMs) startToolsUpdate(ctx context.Context, man macvm.Manifest) err
 	if m.ledger == nil {
 		return errors.New(cmp.Or(m.refusal, m.why))
 	}
-	return m.startJob(ctx, helperJob{kind: admission.KindToolsUpdate, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
+	items, err := m.baseFileArgs(nil)
+	if err != nil {
+		return err
+	}
+	return m.startJob(ctx, helperJob{kind: admission.KindToolsUpdate, extra: items, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
 		log: filepath.Join(m.layout.Root, toolsUpdateLog), sub: macvm.UpdateToolsCommand, helper: m.helper, cpus: max(man.MinCPUs, 1),
 		memMiB: m.guestMemory(man) >> 20, runner: m.runnerID, ledger: m.ledgerDir, descr: "tools update"})
+}
+
+// kindEditBase is an edit's ledger entry: one VM slot for its boots, which run one at a time. serve hands
+// it no stage-2 network (the helper gives its guest-agent boots their own); reconcilePrepare releases it.
+const kindEditBase admission.Kind = "edit_base"
+
+// editBaseLog, in the VM directory, is the last edit's output.
+const editBaseLog = "edit-base.log"
+
+// editBase is `macos-vm edit-base`: it refuses while a prepare, tools update or edit of this runner's runs,
+// without a ready base, outside the desktop session or as root (prepare's setup-by-hand checks), and when
+// both VM slots are in use, then runs the helper's edit-base in the foreground under its own entry, which
+// the helper claims (ClaimHelper). The helper's lines go to out.
+func (m *macOSVMs) editBase(ctx context.Context, out io.Writer, runnerID string) error {
+	if m.ledger == nil {
+		return errors.New(cmp.Or(m.refusal, m.why))
+	}
+	m.reconcilePrepare()
+	for _, k := range []admission.Kind{admission.KindPrepare, admission.KindToolsUpdate, kindEditBase} {
+		if slices.ContainsFunc(m.own(k), func(e admission.Entry) bool { return !m.vmGone(e) }) {
+			return macvm.ErrEditBusy
+		}
+	}
+	man, err := macvm.ReadyBase(m.layout.BaseDir(0))
+	if err != nil {
+		return macvm.ErrEditNoBase
+	}
+	m.checkSession(ctx)
+	if _, _, _, _, noSession := m.hostStatus(); noSession || processEUID() == 0 {
+		return macvm.ErrEditNoDesktop
+	}
+	counted, err := m.ledger.Counted()
+	if err != nil {
+		return err
+	}
+	if len(counted) >= admission.LicenceCap {
+		return macvm.ErrEditSlots
+	}
+	return m.startJob(ctx, helperJob{kind: kindEditBase, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
+		log: filepath.Join(m.layout.Root, editBaseLog), sub: macvm.EditBaseCommand, helper: m.helper, cpus: max(man.MinCPUs, 1),
+		memMiB: m.guestMemory(man) >> 20, runner: runnerID, ledger: m.ledgerDir, descr: "edit", out: out, extra: m.editItems()})
 }
 
 // startJob takes the job's ledger entry (the tombstone pass first) and starts the helper in its own
@@ -807,7 +844,11 @@ func (m *macOSVMs) startJob(ctx context.Context, j helperJob) error {
 		// The VM never started: the entry goes at once.
 		return errors.Join(err, m.ledger.Release(e.ID, admission.Destroyed{Stopped: true}))
 	}
-	logf, err := os.OpenFile(j.log, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	mode := os.O_APPEND
+	if j.out != nil {
+		mode = os.O_TRUNC
+	}
+	logf, err := os.OpenFile(j.log, os.O_WRONLY|os.O_CREATE|mode, 0o600)
 	if err != nil {
 		return never(err)
 	}
@@ -823,13 +864,39 @@ func (m *macOSVMs) startJob(ctx context.Context, j helperJob) error {
 	cmd := exec.Command(j.helper, append(args, j.extra...)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdout, cmd.Stderr = logf, logf
+	if j.out != nil {
+		cmd.Stdout = io.MultiWriter(logf, j.out)
+	}
 	if err := cmd.Start(); err != nil {
 		return never(fmt.Errorf("start the macOS VM helper: %w", err))
 	}
 	exited := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(exited) }()
 	m.changed()
-	return m.awaitClaim(ctx, e.ID, j, cmd, exited, never)
+	if err := m.awaitClaim(ctx, e.ID, j, cmd, exited, never); err != nil || j.out == nil {
+		return err
+	}
+	return m.awaitJob(ctx, j, cmd, exited)
+}
+
+// awaitJob waits for a foreground job's helper to exit, stopping it with SIGTERM (it ends its boots and
+// keeps the old base) if ctx ends first. It then releases the entry, and a helper that failed answers its
+// last error line, which a refusal or a discard is.
+func (m *macOSVMs) awaitJob(ctx context.Context, j helperJob, cmd *exec.Cmd, exited chan struct{}) error {
+	select {
+	case <-exited:
+	case <-ctx.Done():
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		<-exited
+	}
+	m.reconcilePrepare()
+	if cmd.ProcessState.Success() {
+		return nil
+	}
+	if msg := prepareFailure(j.log); msg != "" {
+		return errors.New(msg)
+	}
+	return fmt.Errorf("the macOS VM helper's %s ended; see %s", j.descr, j.log)
 }
 
 // awaitClaim is startJob's wait: a helper that never claimed its entry never built a VM (it claims

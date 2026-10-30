@@ -29,6 +29,9 @@ func sandboxCreateFailure(err error) (hint, reason string) {
 	if pe := (*prewrappedPlatformError)(nil); errors.As(err, &pe) {
 		return "the sandbox could not be created: " + pe.msg, pe.reason
 	}
+	if we := (*runnerwire.Error)(nil); errors.As(err, &we) && runner.IsMacVMDiskLocked(we.Message) {
+		return we.Message, "sandbox_create" // a disk drive held by another run: the runner's sentence, word for word
+	}
 	if !errors.Is(err, runner.ErrImageArch) {
 		return "the sandbox could not be created: " + err.Error(), "sandbox_create"
 	}

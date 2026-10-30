@@ -40,6 +40,53 @@ export interface MacVMBase {
   image_version?: string;
   /** The download rate; step download with no wait only. */
   bytes_per_sec?: number;
+  /** When the base was prepared, RFC 3339 in UTC; absent from an older runner. */
+  created_at?: string;
+  /** The base's macOS build, e.g. "25G83". */
+  build_version?: string;
+  /** When the base was last edited (edit-base), RFC 3339; state ready only. */
+  edited_at?: string;
+  /** The last edit's recheck: "passed" or why it discarded the copy. */
+  edit_recheck?: string;
+  /** The install list as the base holds it (macos_vm_base_file), in list order; state ready only. */
+  customisation?: MacVMItem[];
+  /** The guest's posture as last read from the base, never the Mac's own; state ready only. */
+  guest?: MacVMGuest;
+}
+
+/** Go: runnerwire.MacVMDerivedBase.State. A string: a newer runner may send another. */
+export type MacVMDerivedState = "ready" | "rebuilding" | "failed";
+
+/** Go: runnerwire.MacVMDerivedBase: one of a Mac's other bases. items: how many items its own list adds to Standard's. */
+export interface MacVMDerivedBase {
+  name: string;
+  state: string;
+  items: number;
+  /** Percent done while it is rebuilt. */
+  progress?: number;
+  guest_os?: string;
+  harnesses?: string[];
+  created_at?: string;
+  build_version?: string;
+}
+
+/** Go: runnerwire.MacVMItem. kind: pkg, app, file, profile or ca; state: installed, staged, trusted or not_trusted. */
+export interface MacVMItem {
+  kind: string;
+  name: string;
+  state: string;
+}
+
+/** Go: runnerwire.MacVMGuest. sip, gatekeeper: "on" or "off"; mdm: "enrolled" or "not_enrolled"; org_ca: "trusted" or "not_trusted". */
+export interface MacVMGuest {
+  os_version?: string;
+  os_build?: string;
+  sip?: string;
+  gatekeeper?: string;
+  /** How many configuration profiles are installed; absent when unread. */
+  profiles?: number;
+  mdm?: string;
+  org_ca?: string;
 }
 
 /** Go: runnerwire.MacVMReasonLedgerDamaged and its siblings, in priority order; MacVMCaps.reason. */
@@ -72,7 +119,13 @@ export interface MacVMCaps {
   sign_ins?: boolean;
   /** The runner shares a run's folders into its macOS VM. */
   folders?: boolean;
+  /** The runner carries a run's admin and team drives (a host folder) into its macOS VM as shared folders. */
+  drives?: boolean;
   base: MacVMBase;
+  /** The runner keeps a person's disk drives and kept work folders as disk images on this Mac, and deletes them. */
+  disk_drives?: boolean;
+  /** The Mac's other bases, each derived from `base` (Standard), in name order; absent when it has none. */
+  bases?: MacVMDerivedBase[];
   /** In words, why the runner offers no macOS VM. The runner inventory leaves it out: the console words `reason` itself. */
   refusal?: string;
   /** MacVMReason: why it offers none, or can't start or prepare one now. A string: a newer runner may send another. */

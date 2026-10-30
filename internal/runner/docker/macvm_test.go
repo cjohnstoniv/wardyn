@@ -25,6 +25,7 @@ import (
 	"github.com/moby/moby/client"
 	"golang.org/x/sys/unix"
 
+	"github.com/cjohnstoniv/wardyn/internal/agentpolicy"
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
@@ -395,7 +396,10 @@ func assertMacCA(t *testing.T, in guestagent.Init) {
 func TestMacGuestInitForwardsNoLinuxCAPaths(t *testing.T) {
 	spec := macSpec()
 	spec.Env["SSL_CERT_FILE"] = "/Users/agent/own.pem" // the operator's own value stays
-	in := macGuestInit(spec, "")
+	in, err := macGuestInit(spec, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	assertMacCA(t, in)
 	if in.Env["SSL_CERT_FILE"] != "/Users/agent/own.pem" {
 		t.Fatalf("an operator's own CA variable was dropped: %v", in.Env)
@@ -688,5 +692,36 @@ func TestDriverCoversKind(t *testing.T) {
 		if !r.d.CoversKind(kind) {
 			t.Errorf("CoversKind(%q) = false with macOS VMs off", kind)
 		}
+	}
+}
+
+// The guest Init goes through the path table: Bedrock's AWS config lands under /Users/agent and the
+// managed settings where Claude Code reads them on macOS; a managed file the table cannot place refuses
+// the run instead of reaching the guest at its Linux path.
+func TestMacGuestInitTranslatesLinuxPaths(t *testing.T) {
+	spec := macSpec()
+	spec.Env["AWS_CONFIG_FILE"] = "/home/agent/.aws/config"
+	spec.ManagedFiles = []runner.ManagedFile{{Path: agentpolicy.ClaudeCodeManagedSettingsPath, Content: []byte("{}")}}
+	spec.ProxyConfig.MITMCACertPEM = "run-ca\n"
+	in, err := macGuestInit(spec, "operator-ca")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.Env["AWS_CONFIG_FILE"] != "/Users/agent/.aws/config" {
+		t.Errorf("AWS_CONFIG_FILE = %q", in.Env["AWS_CONFIG_FILE"])
+	}
+	// The keychain is given the run proxy's CA alone, never the operator's.
+	if in.RunCA != "run-ca" {
+		t.Errorf("RunCA = %q, want the run CA alone", in.RunCA)
+	}
+	if len(in.Files) == 0 || in.Files[0].Path != guestagent.MacClaudeCodeManagedSettingsPath {
+		t.Errorf("files %+v", in.Files)
+	}
+	if !strings.Contains(in.Env[guestagent.EnvManagedFiles], guestagent.MacClaudeCodeManagedSettingsPath) {
+		t.Errorf("the launcher's pre-start check is not told the managed files: %q", in.Env[guestagent.EnvManagedFiles])
+	}
+	spec.ManagedFiles = append(spec.ManagedFiles, runner.ManagedFile{Path: "/etc/claude-code/other.json"})
+	if _, err := macGuestInit(spec, ""); err == nil || !strings.Contains(err.Error(), "/etc/claude-code/other.json") {
+		t.Fatalf("an unmapped managed file reached the guest: %v", err)
 	}
 }

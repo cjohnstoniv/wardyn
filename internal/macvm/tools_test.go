@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +38,14 @@ type guest struct {
 	mu    sync.Mutex
 	files map[string][]byte
 	runs  [][]string
+	// agentRuns are the AgentExec calls, argv then env; selftest, if set, answers one with its output
+	// and exit code (nil: every self-test passes).
+	agentRuns [][]string
+	selftest  func(env []string) (string, int)
+	// dials answers ToolsDial in turn, the last one for ever (nil: connected);
+	// dialAsks is how many tools-mode runs had been made at each ask.
+	dials    []string
+	dialAsks []int
 	// sw overrides `softwareupdate` (nil: offers 16.4 and 16.10, installs fine).
 	sw func(argv []string) (string, int)
 	// version overrides a version check's output.
@@ -105,7 +114,30 @@ func (g *guest) Pointer(context.Context) (int, int, error) {
 	return g.pointerX, g.pointerY, nil
 }
 
-func (g *guest) ToolsDial(context.Context) (string, error) { return macvm.ToolsDialConnected, nil }
+func (g *guest) ToolsDial(context.Context) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.dialAsks = append(g.dialAsks, len(g.runs))
+	if len(g.dials) > 0 {
+		d := g.dials[0]
+		if len(g.dials) > 1 {
+			g.dials = g.dials[1:]
+		}
+		return d, nil
+	}
+	return macvm.ToolsDialConnected, nil
+}
+
+func (g *guest) AgentExec(_ context.Context, argv, env []string) (string, int, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.agentRuns = append(g.agentRuns, slices.Concat(argv, env))
+	if g.selftest != nil {
+		out, exit := g.selftest(env)
+		return out, exit, nil
+	}
+	return "", 0, nil
+}
 
 func (g *guest) ran(prefix ...string) bool {
 	g.mu.Lock()
@@ -326,6 +358,35 @@ func TestStage2ReplacesGuestAgent(t *testing.T) {
 	if res.AgentVersion != "0.10.1" || string(g.files["/usr/local/libexec/wardyn-guest-agent"]) != "new agent" {
 		t.Fatalf("agent not replaced: %+v", res)
 	}
+	// The same build is the run launcher: every run's workload starts through it.
+	if !res.AgentRun || string(g.files[guestagent.MacAgentRunPath]) != "new agent" {
+		t.Fatalf("no run launcher at %s: %+v", guestagent.MacAgentRunPath, res)
+	}
+}
+
+// A base whose record has no run launcher (an rc.8 base) wants a tools update even at the runner's own
+// agent build, so its runs can start.
+func TestNeedsToolsUpdateWithoutTheRunLauncher(t *testing.T) {
+	f, tf, _ := stage2Prep(t)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	base := f.opts.Layout.BaseDir(0)
+	if macvm.NeedsToolsUpdate(base, tf.tooling, "0.10.0", time.Now()) {
+		t.Fatal("a base with its launcher wants an update")
+	}
+	rec, err := macvm.ReadToolsRecord(base)
+	if err != nil || !rec.AgentRun {
+		t.Fatalf("record %+v %v", rec, err)
+	}
+	rec.AgentRun = false
+	b, _ := json.Marshal(rec)
+	if err := os.WriteFile(filepath.Join(base, macvm.ToolsRecordFile), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !macvm.NeedsToolsUpdate(base, tf.tooling, "0.10.0", time.Now()) {
+		t.Fatal("a base without the run launcher does not want an update")
+	}
 }
 
 func TestParseToolingRefusesLoosePins(t *testing.T) {
@@ -408,6 +469,12 @@ func TestShippedToolingMatchesCatalog(t *testing.T) {
 func stage2Prep(t *testing.T) (*prepFixture, *toolsFixture, *guest) {
 	t.Helper()
 	f, tf, g := newPrep(t), newTools(t), newGuest()
+	// Prepare pushes this helper's guest agent build, the one stage 1 installed.
+	bin := filepath.Join(t.TempDir(), "agent")
+	if err := os.WriteFile(bin, []byte("agent 0.10.0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tf.opts.Agent = &macvm.AgentPin{Version: "0.10.0", Path: bin, Dest: "/usr/local/libexec/wardyn-guest-agent"}
 	var boots, stops atomic.Int64
 	f.opts.Stage2 = tf.stage(g, &boots, &stops)
 	return f, tf, g
@@ -872,7 +939,84 @@ func TestStage2CLTCommandsPassTheGuestAgentAllowlist(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 5 { // touch, softwareupdate -l, softwareupdate -i, git --version, rm -f
-		t.Fatalf("checked %d guest commands, want the 5 of the CLT install: %q", checked, g.runs)
+	// touch, softwareupdate -l, softwareupdate -i, git --version, rm -f; then the guest posture's six reads
+	if checked != 11 {
+		t.Fatalf("checked %d guest commands, want the 5 of the CLT install and the 6 posture reads: %q", checked, g.runs)
+	}
+}
+
+// Stage 2 ends with the run launcher's self-test as the agent user, as a command run and per harness:
+// a harness that fails it is withheld with the end of its output.
+func TestStage2SelftestWithholdsAFailingHarness(t *testing.T) {
+	f, g := newTools(t), newGuest()
+	g.selftest = func(env []string) (string, int) {
+		if slices.Contains(env, "WARDYN_START_HARNESS=codex-cli") {
+			return "  FAIL    /usr/local/bin/codex --version: exit status 1", 1
+		}
+		return "", 0
+	}
+	var boots, stops atomic.Int64
+	res := runStage(t, f.stage(g, &boots, &stops))
+	if want := []string{"none", "claude-code"}; !slices.Equal(res.Harnesses, want) {
+		t.Fatalf("harnesses %v", res.Harnesses)
+	}
+	if w := res.Withheld["codex-cli"]; w == nil || w.Error() != macvm.SelftestFailurePrefix+"FAIL    /usr/local/bin/codex --version: exit status 1" {
+		t.Fatalf("withheld %v", res.Withheld)
+	}
+	if _, ok := res.Pins["codex-cli"]; ok {
+		t.Fatal("a harness that failed its self-test kept its pin")
+	}
+	for _, want := range [][]string{
+		{guestagent.MacAgentRunPath, "--selftest", "WARDYN_TASK_MODE=exec"},
+		{guestagent.MacAgentRunPath, "--selftest", "WARDYN_HARNESSES=claude-code", "WARDYN_START_HARNESS=claude-code"},
+		{guestagent.MacAgentRunPath, "--selftest", "WARDYN_HARNESSES=codex-cli", "WARDYN_START_HARNESS=codex-cli"},
+	} {
+		if !slices.ContainsFunc(g.agentRuns, func(a []string) bool { return slices.Equal(a, want) }) {
+			t.Errorf("no self-test %q in %q", want, g.agentRuns)
+		}
+	}
+	if g.ran(guestagent.MacAgentRunPath) {
+		t.Error("the self-test ran as root, not as the agent user")
+	}
+}
+
+// A base whose command run fails the self-test cannot start a run: stage 2 fails and prepare publishes
+// no base.
+func TestPrepareFailingSelftestPublishesNoBase(t *testing.T) {
+	f, _, g := stage2Prep(t)
+	g.selftest = func(env []string) (string, int) {
+		if slices.Contains(env, "WARDYN_TASK_MODE=exec") {
+			return "  FAIL    /bin/sh: not executable", 1
+		}
+		return "", 0
+	}
+	_, err := macvm.Prepare(context.Background(), f.opts)
+	// The copy canon's base error (MAC-A11), byte for byte, with the output on one line.
+	if want := "The launcher's self-test failed in the base, so it was not published: FAIL /bin/sh: not executable. Run `wardyn-runnerd macos-vm prepare` to try again."; err == nil || err.Error() != want {
+		t.Fatalf("prepare: %v", err)
+	}
+	if _, err := macvm.ReadyBase(f.opts.Layout.BaseDir(0)); err == nil {
+		t.Fatal("a base that cannot start a run was published")
+	}
+}
+
+// The guest agent classifies its tools-port dial only on the host's first tools request, so stage 2
+// reads it after the tools are installed, asks again while it is unclassified, and reports one that
+// never is as pending, never as a transport failure.
+func TestStage2ReadsTheToolsDialAfterTheFirstToolsRequest(t *testing.T) {
+	defer macvm.SetToolsDialAsks(3, time.Millisecond)()
+	f, g := newTools(t), newGuest()
+	g.dials = []string{"", "", macvm.ToolsDialConnected}
+	var boots, stops atomic.Int64
+	if res := runStage(t, f.stage(g, &boots, &stops)); res.ToolsDial != macvm.ToolsDialConnected {
+		t.Fatalf("tools dial %q", res.ToolsDial)
+	}
+	if len(g.dialAsks) == 0 || g.dialAsks[0] == 0 {
+		t.Fatalf("the dial was read before any tools request: %v", g.dialAsks)
+	}
+	g = newGuest()
+	g.dials = []string{""}
+	if res := runStage(t, f.stage(g, &boots, &stops)); res.ToolsDial != macvm.ToolsDialPending {
+		t.Fatalf("an unclassified dial reads %q", res.ToolsDial)
 	}
 }

@@ -37,8 +37,8 @@ import (
 // holds for table.column, as Postgres renders it.
 //
 // Every CHECK on the column counts (enumCheckDefs) except the cross-column
-// pairings skipped by name (cliPairingChecks, user_drives_member_managed and
-// user_drives_team_shape):
+// pairings skipped by name (cliPairingChecks, user_drives_member_managed,
+// user_drives_team_shape and user_drives_mac_disk_home):
 // each admits no value its column's list does not, and a CHECK of any other
 // shape that touches the column still refuses it.
 //
@@ -287,7 +287,7 @@ func enumCheckDefs(ctx context.Context, pool *pgxpool.Pool, table, column string
 		  AND n.nspname = ANY (current_schemas(false))
 		  -- A named cross-column pairing is not the column's enum.
 		  AND con.conname NOT IN ('user_drives_member_managed', 'user_drives_team_shape', 'user_drives_second_place_shape',
-		      'base_images_check_state')
+		      'user_drives_mac_disk_home', 'base_images_check_state')
 		  AND NOT (con.conname = ANY ($3::text[]))`, table, column, cliPairingChecks)
 	if err != nil {
 		return nil, err

@@ -20,16 +20,21 @@ import { useEscapeClosesThis } from "./nested-escape";
 
 const NAME_ID = "nr-create-drive-name";
 
-export function CreateDriveCard({ create, onCreated, onClose }: {
+export function CreateDriveCard({ create, onCreated, onClose, intro = NR_FILES.CREATE_INTRO, hint }: {
   create: (name: string) => Promise<MeDrive>;
   onCreated: (drive: MeDrive) => void;
   onClose: () => void;
+  /** The sentence above the field; a disk kept on a Mac says so. */
+  intro?: string;
+  /** Under the field: how many drives the person has of how many (board J4, a macOS run). */
+  hint?: string;
 }) {
   const [name, setName] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [failure, setFailure] = React.useState("");
   const card = React.useRef<HTMLFormElement>(null);
   const errorId = React.useId();
+  const hintId = React.useId();
   // The create cannot be recalled once sent, so nothing here pretends to cancel it: the key is taken and ignored.
   useEscapeClosesThis(React.useCallback(() => !busy && onClose(), [busy, onClose]), card);
 
@@ -50,7 +55,7 @@ export function CreateDriveCard({ create, onCreated, onClose }: {
 
   return (
     <form ref={card} onSubmit={submit} className="mt-1 flex basis-full flex-col gap-3.5 rounded-[9px] border border-border bg-muted p-3.5">
-      <p className="text-sm text-muted-foreground">{NR_FILES.CREATE_INTRO}</p>
+      <p className="text-sm text-muted-foreground">{intro}</p>
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center justify-between gap-2">
           <Label htmlFor={NAME_ID}>{NR_FILES.DRIVE_NAME}</Label>
@@ -63,9 +68,10 @@ export function CreateDriveCard({ create, onCreated, onClose }: {
           placeholder={NR_FILES.DRIVE_NAME_PLACEHOLDER}
           aria-required="true"
           aria-invalid={failure ? true : undefined}
-          aria-describedby={failure ? errorId : undefined}
+          aria-describedby={[hint && hintId, failure && errorId].filter(Boolean).join(" ") || undefined}
           onChange={(e) => setName(e.target.value)}
         />
+        {hint && <p id={hintId} className="text-xs text-muted-foreground">{hint}</p>}
         {failure && <p id={errorId} role="alert" className="text-sm text-danger">{failure}</p>}
       </div>
       <div className="flex justify-end gap-2">

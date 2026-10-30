@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
@@ -115,6 +116,20 @@ func TestControlCheckFallsBackToObserveOnlyForThePointer(t *testing.T) {
 	}
 	if len(g.passwords) != 2 {
 		t.Fatalf("%d passwords set, want the check's and the reset", len(g.passwords))
+	}
+	if !slices.ContainsFunc(f.ev.evs, func(ev macvm.PrepareEvent) bool { return ev.Detail == macvm.ObserveDesktopDetail }) {
+		t.Fatalf("no detail event names why the desktop is view only: %+v", f.ev.evs)
+	}
+}
+
+// A desktop that took control says nothing about it.
+func TestControlDesktopEmitsNoObserveDetail(t *testing.T) {
+	f, _, _ := controlPrep(t, false)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(f.ev.evs, func(ev macvm.PrepareEvent) bool { return ev.Detail == macvm.ObserveDesktopDetail }) {
+		t.Fatal("the observe detail event was emitted for a desktop with control")
 	}
 }
 

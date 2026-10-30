@@ -48,8 +48,13 @@ type Server struct {
 	// ToolsDial is how the agent's tools-port dial ended (ServeTools), answered as GET /v1/dial/tools;
 	// nil serves no such request. The tools requests themselves are never served here.
 	ToolsDial *ToolsDialRecord
+	// TrustRunCA trusts Init.RunCA in the System keychain (MacKeychain.TrustRunCA); nil tries
+	// nothing (tests only).
+	TrustRunCA func(ctx context.Context, runCA string) (status, reason string)
 	// Mount mounts one folder share (MacShares.Mount); nil refuses an Init that names one.
 	Mount func(context.Context, Mount) error
+	// Disk attaches one disk drive (MacDisks.Attach); nil refuses an Init that names one.
+	Disk func(context.Context, Disk) error
 
 	// signal signals a process group; nil is kill(2) (tests hold or fail it).
 	signal func(pgid int, sig unix.Signal) error
@@ -169,6 +174,16 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	for _, d := range in.Disks {
+		if s.Disk == nil {
+			http.Error(w, "this agent cannot attach disk drives", http.StatusUnprocessableEntity)
+			return
+		}
+		if err := s.Disk(r.Context(), d); err != nil {
+			http.Error(w, fmt.Sprintf("the disk drive at %s: %v", d.Target, err), http.StatusUnprocessableEntity)
+			return
+		}
+	}
 	// 0.10.0 cannot make a macOS keychain read-only, so a run that wants no sign-ins kept gets no
 	// desktop: no password is set, and the tunnel refuses. It still runs agent-only. This is
 	// first, so an Init that fails while writing leaves the desktop off.
@@ -199,6 +214,11 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.env = initEnv(in.Env, in.SecretEnv, ca)
+	// Before Init answers, so before the host starts any agent process. A CA that is not trusted
+	// does not fail the Init: the answer says so, and the run goes on its CA bundle.
+	if in.RunCA != "" && s.TrustRunCA != nil {
+		res.KeychainTrust, res.KeychainTrustReason = s.TrustRunCA(r.Context(), in.RunCA)
+	}
 	if s.Desktop != nil {
 		*res.DesktopPasswordSet = s.initDesktop(r.Context(), ca, in.DesktopPassword, !in.SignInsOff)
 	}

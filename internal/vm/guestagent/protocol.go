@@ -56,10 +56,17 @@ type Init struct {
 	Files      []File            `json:"files,omitempty"`
 	Mounts     []Mount           `json:"mounts,omitempty"`
 	SignInsOff bool              `json:"sign_ins_off,omitempty"`
+	// Disks are a macOS run's disk drives, each mounted at its target after the Mounts. A Linux VM is
+	// never sent one.
+	Disks []Disk `json:"disks,omitempty"`
 	// DesktopPassword is a macOS run's VNC password, which the host's helper made (its ctl.sock
 	// desktop_password read); the guest agent sets it in Screen Sharing. A secret: Init prints with it
 	// and SecretEnv's values redacted. A Linux guest ignores it.
 	DesktopPassword string `json:"desktop_password,omitempty"`
+	// RunCA is the PEM of the one CA a macOS run's proxy minted for this run. The guest agent trusts
+	// it in the guest's System keychain, for TLS only, before Init answers (MacKeychain). The
+	// operator's CAs are not in it. A Linux guest ignores it.
+	RunCA string `json:"run_ca,omitempty"`
 }
 
 // initPrint is Init without its String method, so printing it does not recurse.
@@ -97,6 +104,11 @@ type InitResult struct {
 	// absent from a Linux guest or an agent that predates it. The helper's shim then fails to log in
 	// and refuses each session with a log line.
 	DesktopPasswordSet *bool `json:"desktop_password_set,omitempty"`
+	// KeychainTrust is a macOS guest's answer to Init.RunCA: KeychainTrusted or KeychainNotTrusted,
+	// with KeychainTrustReason one of the fixed reason codes. Both are absent when no RunCA was sent,
+	// from a Linux guest, and from an agent that predates them.
+	KeychainTrust       string `json:"keychain_trust,omitempty"`
+	KeychainTrustReason string `json:"keychain_trust_reason,omitempty"`
 }
 
 // AgentSignal is the body of POST /v1/agent/pause and /v1/agent/resume. Generation orders them
@@ -153,6 +165,15 @@ type File struct {
 // Mount is one virtiofs share: the QEMU device tag and where it is mounted.
 type Mount struct {
 	Tag      string `json:"tag"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"read_only,omitempty"`
+}
+
+// Disk is one disk drive of a macOS run: the guest's block device whose identifier is ID, given an
+// APFS volume named Label when it holds none yet (its first attach), and mounted at Target.
+type Disk struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
 	Target   string `json:"target"`
 	ReadOnly bool   `json:"read_only,omitempty"`
 }

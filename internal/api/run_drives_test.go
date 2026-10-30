@@ -245,7 +245,7 @@ func TestStepDriveEligibility_PersonsOwnRunner(t *testing.T) {
 	drive := runDrive{resolved: types.ResolvedDrive{Drive: ds.team.Drive}, target: runner.DrivesRoot + "/team-data"}
 	for kind, want := range map[types.Placement]bool{types.PlacementLocal: false, types.PlacementRemote: true} {
 		w := httptest.NewRecorder()
-		f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), drives: []runDrive{drive},
+		f := &runFold{w: w, req: &createRunRequest{}, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), drives: []runDrive{drive},
 			place: runPlacement{pooled: true, placement: kind, row: types.RunnerPool{Scope: types.RunnerPoolUser}}}
 		if got := (&Server{}).stepDriveEligibility(f, &foldRecorder{}); got != want {
 			t.Fatalf("%s: step = %v, want %v (%s)", kind, got, want, w.Body)
@@ -536,7 +536,7 @@ func TestDriveDenialsAreAudited(t *testing.T) {
 
 	audit.events = nil
 	w := httptest.NewRecorder()
-	f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx),
+	f := &runFold{w: w, req: &createRunRequest{}, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx),
 		drives: []runDrive{{resolved: types.ResolvedDrive{Drive: ds.share.Drive}}},
 		place:  runPlacement{pooled: true, placement: types.PlacementLocal, row: types.RunnerPool{Scope: types.RunnerPoolUser}}}
 	if srv.stepDriveEligibility(f, &foldRecorder{}) || len(audit.events) != 1 || !strings.Contains(string(audit.events[0].Data), string(authz.ReasonDriveNotInPool)) {

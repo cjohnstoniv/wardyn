@@ -32,6 +32,8 @@ export interface CreateRunInput {
   confinement_class?: ConfinementClass;
   // pkg/client.CreateRunRequest.MachineKind: absent is a container; otherwise a VM kind.
   machine_kind?: MachineKind;
+  // pkg/client.CreateRunRequest.MacOSBase: a macos_vm run's base, "Standard" or another base's name; absent is Standard.
+  macos_base?: string;
   interactive?: boolean;
   // Bring Your Own Image: a user-supplied base image the backend WRAPS with the
   // runner tools (FROM <image> + COPY tools + cleared ENTRYPOINT) before use.

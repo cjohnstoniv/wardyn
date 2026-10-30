@@ -143,7 +143,7 @@ func TestStdioRelayReach(t *testing.T) {
 }
 
 // A preparation relay's scope is smaller: no proxy, so the guest reaches
-// nothing at all (a DNS name included), and the only path is the host's
+// nothing at all (a DNS name gets a refusal: TestPrepDNSIsRefusedAndRunDNSIsUnchanged), and the only path is the host's
 // DialGuest to the guest's own address. A dial to the proxy address from a
 // preparation relay is a failure of that scope.
 func TestPrepRelayReach(t *testing.T) {
@@ -163,15 +163,6 @@ func TestPrepRelayReach(t *testing.T) {
 		if c, err := dialTCP(gs, tg.ip, tg.port); err == nil {
 			c.Close()
 			t.Errorf("REACH: prep guest TCP connected to %s (%s)", ipPort(tg), tg.name)
-		}
-	}
-	// A name resolves to a synthetic address, and a flow to it must still be
-	// refused without any attempt to reach a proxy or anything else.
-	for _, port := range []uint16{443, 80} {
-		synth := dnsQuery(t, gs, "allowed", "test")
-		if c, err := dialTCP(gs, synth, port); err == nil {
-			c.Close()
-			t.Errorf("REACH: prep guest connected to a named host on :%d", port)
 		}
 	}
 	for _, tg := range reachUDP {

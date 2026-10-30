@@ -69,12 +69,15 @@ export function RunnerDrawer({
   onClose,
   onChanged,
   onOpenPool,
+  maxBaseAgeDays,
 }: {
   runner: RunnerView | null;
   onClose: () => void;
   /** The runner was revoked, or turned out to be already: re-read the list. */
   onChanged: () => void;
   onOpenPool: (id: string) => void;
+  /** The organisation's maximum macOS base age in days; absent is none. */
+  maxBaseAgeDays?: number;
 }) {
   const [confirming, setConfirming] = React.useState(false);
   const securityAdmin = useSecurityOperator();
@@ -155,6 +158,8 @@ export function RunnerDrawer({
                   active={runner.usage.in_use.macos_vm_runs ?? 0}
                   perRun={runner.limits?.per_run}
                   runner={runner.name}
+                  hostOS={runner.posture?.os === "darwin" ? runner.posture.os_version : undefined}
+                  maxBaseAgeDays={maxBaseAgeDays}
                 />
                 {trust}
                 <Section label={RUNNER_V6.POOLS} data-pools>

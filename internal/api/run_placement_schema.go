@@ -77,8 +77,9 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.RunnerSettings]():      strings.Fields("Enabled"),
 	reflect.TypeFor[types.SiteBranding]():        strings.Fields("LogoPath"),
 	reflect.TypeFor[types.SiteConfig](): strings.Fields("Runners UpstreamProxySecretRef UpstreamProxyURL UpstreamProxyNoProxy ArtifactOverrides EgressRedirects ScmHosts Integrations InternalHosts Egress " +
-		"WorkspaceProviders AgentProviders ModelProviders SignInHelpText SignInHelpURL PolicyHelp GovernanceMaxDepth Branding Components Recording EffectiveScmHosts WithheldScmHosts OnboardingCompletedAt"),
+		"WorkspaceProviders AgentProviders ModelProviders SignInHelpText SignInHelpURL PolicyHelp GovernanceMaxDepth Branding Components Recording EffectiveScmHosts WithheldScmHosts OnboardingCompletedAt MacOSVM"),
 	reflect.TypeFor[types.SiteEgress]():         strings.Fields("BaselineHosts"),
+	reflect.TypeFor[types.SiteMacOSVM]():        strings.Fields("MaxBaseAgeDays"), // a placement limit, no credential
 	reflect.TypeFor[types.SiteRecording]():      strings.Fields("Level Locked"),
 	reflect.TypeFor[types.StorageProviders]():   strings.Fields("Ephemeral UserDrive"),
 	reflect.TypeFor[types.UserDriveProvider]():  strings.Fields("Disabled MaxSizeMiB MemberCreate TeamDrives"),

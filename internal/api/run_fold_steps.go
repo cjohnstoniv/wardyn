@@ -117,7 +117,7 @@ func (s *Server) stepDrive(f *runFold, rec *foldRecorder) bool {
 		return true
 	}
 	var refusal *runRefusal
-	f.keep, refusal = s.keepWorkFolderGates(f.r, f.spec, f.promoted)
+	f.keep, refusal = s.keepWorkFolderGates(f.r, f.spec, f.promoted, types.MachineKind(f.req.MachineKind).IsMacOSVM())
 	if refusal == nil {
 		refusal = keptDriveMixRefusal(f.drives, f.keep.row)
 	}
@@ -354,9 +354,26 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 	mounts := len(buildRunMounts(f.spec, s.userMountPosture(f.wsRefs))) // the folders the sandbox would get
 	var ask macOSVMAsk
 	if types.MachineKind(f.req.MachineKind).IsMacOSVM() {
-		ask = macOSVMAskOf(f.place.applied, f.harnesses, f.req.Agent)
+		ask = macOSVMAskOf(f.place, f.ceiling, f.harnesses, f.req.Agent)
+		ask.askDrives(f.drives, f.keep)
+		ask.Prompts = slices.ContainsFunc(f.harnesses, func(h types.RunHarness) bool { return h.Task != "" })
+		ask.Holds = macOSVMHolds(*f.req, f.spec)
 	}
-	return !s.placementCapabilityRefusalFor(f.r.Context(), *f.req, f.place, f.ceiling, mounts, ask).write(s, f.w, f.r)
+	if s.placementCapabilityRefusalFor(f.r.Context(), *f.req, f.place, f.ceiling, mounts, ask).write(s, f.w, f.r) {
+		return false
+	}
+	if !types.MachineKind(f.req.MachineKind).IsMacOSVM() {
+		return true
+	}
+	// A macOS VM is not recorded in this release: refused where recording is asked for, else said.
+	notice, refusal := s.macOSVMRecordingGate(f.r.Context(), f.place, f.ceiling)
+	if refusal.write(s, f.w, f.r) {
+		return false
+	}
+	if notice != "" {
+		f.policyWarns = append(f.policyWarns, notice)
+	}
+	return true
 }
 
 // stepModelProvider makes the model-provider choice and refuses one whose
@@ -398,14 +415,20 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 		}}
 		defer func() { f.w = w }()
 	}
+	// Create and Review's preflight renew alike, so the two give the same answer (the preview
+	// returned above). A renewal at Review says so on its audit row (preflightRenewal).
+	r := f.r
+	if f.mode == foldPreflight {
+		r = r.WithContext(withPreflightRenewal(r.Context()))
+	}
 	var choice runProviderChoice
-	if choice, ok = s.enforceRunModelProvider(f.w, f.r, *f.req, f.spec, f.wsRefs, f.mode == foldCreate, f.queued); !ok {
+	if choice, ok = s.enforceRunModelProvider(f.w, r, *f.req, f.spec, f.wsRefs, f.mode != foldPreview, f.queued); !ok {
 		return false
 	}
 	f.mpChoice = choice
 	f.modelCred = choice.modelCredential()
 	recordProviderHost(rec, choice, f.req.Agent)
-	f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, false, f.mode == foldCreate, f.queued)
+	f.harnessChoices, ok = s.judgeHarnessProviders(f.w, r, *f.req, f.spec, f.harnesses, rec, choice, false, f.mode != foldPreview, f.queued)
 	grantHarnessProviders(f.harnesses, f.harnessChoices)
 	if len(f.harnessChoices) > 1 {
 		f.modelCred = mostResident(f.harnessChoices).modelCredential()
@@ -427,7 +450,7 @@ func (s *Server) stepAWSCLIProfile(f *runFold, _ *foldRecorder) bool {
 // judgeHarnessProviders is stepModelProvider's half for the harnesses of set
 // beside the primary (req.Agent), whose choice is primary: preview authorizes
 // the selection alone, the other doors also check the caller's own credential
-// (renew at create only, and never for a run that waits: queued), each as its own agent with its own requested
+// (renew at create and preflight only, and never for a run that waits: queued), each as its own agent with its own requested
 // provider and no workspace pin; an AWS sign-in serves the primary alone
 // (harnessProviderNeedsPrimary). Then the set is held to the one-lane
 // invariant (harnessProvidersConflict). It writes its own refusal.
@@ -520,6 +543,12 @@ func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 	var refusal *runRefusal
 	f.innerWalls, refusal = innerWallsFor(*f.req, f.spec, f.harnesses, f.enforced)
 	return !refusal.write(s, f.w, f.r)
+}
+
+// stepMacOSHold is macOSHoldRefusal (run_macos_hold.go) after the tool lane: autonomy and the policy's
+// inner walls have derived req.ToolApprovals by then, and a macOS VM cannot hold a tool call.
+func (s *Server) stepMacOSHold(f *runFold, _ *foldRecorder) bool {
+	return !macOSHoldRefusal(*f.req).write(s, f.w, f.r)
 }
 
 // stepGitHubCLIRepo is githubCLIRepoRefusal (runs_cli_github.go) at the doors that launch and
@@ -731,30 +760,45 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 // own runner a drive mounts only from a second place bound to that runner (M10);
 // any other drive, and a kept work folder, is refused there, named, before
 // anything is sized or minted. A person's own drive has no second place, so it
-// stays off such a runner (memberDriveNeverOnPool). A run with a second place
-// gets its mounts here, where its placement is known (seedRequestDrives left
-// them); every other run's were built with its drives.
+// stays off such a runner (memberDriveNeverOnPool). A disk drive mounts only in a
+// macOS VM on the Mac it is kept on (MAC-D05), and a macOS VM's kept work folder
+// becomes a disk on the one Mac the run is placed on (MAC-D07). A run with a
+// second place or a disk drive gets its mounts here, where its placement is known
+// (seedRequestDrives left them); every other run's were built with its drives.
 func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
-	var at drivePlace
+	macOS := types.MachineKind(f.req.MachineKind).IsMacOSVM()
+	at := drivePlace{macOS: macOS}
 	if mountsDrives(f.drives, f.keep) && f.place.pooled && f.place.placement == types.PlacementLocal {
 		at.runner = f.place.placedRunner()
 		msg := ""
 		for _, d := range f.drives {
-			if msg = driveOnRunnerMsg(d.resolved.Drive, at.runner); msg != "" {
+			if msg = s.driveOnRunner(f.r.Context(), d.resolved.Drive, at.runner, macOS); msg != "" {
 				break
 			}
 		}
-		if msg == "" && f.keep != nil {
+		if msg == "" && f.keep != nil && !f.keep.onMac() {
 			msg = driveNotInPoolMsg("keep_work_folder")
 		}
 		if msg != "" {
 			return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
 		}
 	}
+	// A disk drive in a run not placed on one person's own runner is refused here, with the reason it gets on the wrong one.
+	if i := slices.IndexFunc(f.drives, func(d runDrive) bool { return d.resolved.Drive.Backend == types.DriveBackendMacDisk }); i >= 0 && at.runner == nil {
+		msg := s.driveOnRunner(f.r.Context(), f.drives[i].resolved.Drive, nil, macOS)
+		return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
+	}
+	if f.keep.onMac() {
+		if at.runner == nil {
+			msg := keepWorkFolderOneMacMsg()
+			return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
+		}
+		f.keep.row.HomeRunnerID = at.runner
+	}
 	if f.mode == foldPreview {
 		return true
 	}
-	if !slices.ContainsFunc(f.drives, func(d runDrive) bool { return d.resolved.Drive.AltRunnerID != nil }) {
+	if !slices.ContainsFunc(f.drives, func(d runDrive) bool { return driveBoundRunnerOf(d.resolved.Drive) != nil }) {
 		return true
 	}
 	var ok bool

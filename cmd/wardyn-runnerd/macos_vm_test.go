@@ -166,6 +166,16 @@ func TestMacOSVMMaxResentOnChange(t *testing.T) {
 	waitFor(t, func() bool { return sent.Load() == 1 && m.current().Max == 1 })
 }
 
+// A runner that shares a run's folders into its macOS VM says so, and says it carries drives the same
+// way: the organisation refuses a drive to a runner that does not (MAC-D13).
+func TestMacOSVMOffersFoldersAndDrives(t *testing.T) {
+	m := newMacLedgerRig(t).open(t)
+	m.recompute()
+	if c := m.current(); !c.Folders || !c.Drives {
+		t.Fatalf("caps: folders=%v drives=%v, want both", c.Folders, c.Drives)
+	}
+}
+
 // Each recompute first runs the tombstone pass: another login's VM whose helper is gone stops holding
 // a slot, and the runner offers it again.
 func TestMacOSVMRecomputeTombstones(t *testing.T) {

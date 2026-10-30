@@ -118,12 +118,16 @@ func (s *Server) reviveCeilingAdmitting(ctx context.Context, run types.AgentRun,
 // the create doors' reason and sentence: a profile changed after create stops the run's next revive.
 func (s *Server) revivePlacementDenied(ctx context.Context, run types.AgentRun, c ownerCeiling, actorType types.ActorType, actor string) *reviveError {
 	p, denied := deniedRunPlacement(run, c.denyPlacements)
+	msg := placementDeniedMsg(p, c.profile)
 	if !denied {
-		return nil
+		// allowed_macos_bases binds a live run as deny_placements does (MAC-B09).
+		if msg = macOSBaseDeniedMsg(run, c.profile, c.allowedMacOSBases); msg == "" {
+			return nil
+		}
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
 		mustJSON(map[string]any{"subject": run.CreatedBy, "reason": placement.ReasonPlacementDenied})))
-	return reviveRefused(placement.ReasonPlacementDenied.Status(), string(placement.ReasonPlacementDenied), placementDeniedMsg(p, c.profile))
+	return reviveRefused(placement.ReasonPlacementDenied.Status(), string(placement.ReasonPlacementDenied), msg)
 }
 
 // deniedRunPlacement is the run's placement and whether deny (a profile's deny_placements) bars it. A
@@ -143,6 +147,9 @@ type ownerCeiling struct {
 	profile string
 	// denyPlacements is the profile's deny_placements, judged against where the run already is.
 	denyPlacements []types.Placement
+	// allowedMacOSBases are the non-empty allowed_macos_bases lists that bind the owner, each of which must
+	// allow the base a macOS VM run is on.
+	allowedMacOSBases [][]string
 	// restrictionIDs are the restrictions the revived run is held to (reviveRestrictions), re-captured on
 	// the run before it is sealed.
 	restrictionIDs []uuid.UUID
@@ -167,6 +174,9 @@ func (s *Server) reviveCeiling(ctx context.Context, run types.AgentRun, actorTyp
 	var c ownerCeiling
 	if p != nil {
 		c = ownerCeiling{deny: p.Ceiling.DeniedDomains, profile: p.Name, denyPlacements: p.Limits.DenyPlacements}
+		if len(p.Limits.AllowedMacOSBases) > 0 {
+			c.allowedMacOSBases = [][]string{p.Limits.AllowedMacOSBases}
+		}
 	}
 	// The restrictions bind the revive whatever the unit (governance_restrictions.go).
 	list, err := s.reviveRestrictions(ctx, run)

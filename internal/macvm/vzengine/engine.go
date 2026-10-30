@@ -178,6 +178,12 @@ func (*Engine) NewMachine(p macvm.Plan) (macvm.Machine, error) {
 		if err != nil {
 			return nil, err
 		}
+		// A disk drive is found in the guest by this identifier (guestagent.MacDisks).
+		if s.Identifier != "" {
+			if err := blk.SetBlockDeviceIdentifier(s.Identifier); err != nil {
+				return nil, fmt.Errorf("disk %s: %w", s.Identifier, err)
+			}
+		}
 		storage = append(storage, blk)
 	}
 	cfg.SetStorageDevicesVirtualMachineConfiguration(storage)

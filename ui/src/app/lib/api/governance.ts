@@ -55,6 +55,10 @@ export interface GovernanceLimits extends RunLimits {
   // under this profile may not take. A deny list: absent means every placement
   // is permitted. The server refuses a profile denying both.
   deny_placements?: PlacementValue[];
+  // types.GovernanceLimits.AllowedMacOSBases (0.10) — the macOS bases a macOS VM
+  // run under this profile may pick. An allow list: absent or empty allows any
+  // base a Mac offers.
+  allowed_macos_bases?: string[];
   // 0/absent is unlimited (R4/F032). The editor's LimitNumberRow writes this.
   max_concurrent_runs?: number;
   // types.GovernanceLimits.MaxCPUMillis / MaxMemoryMiB — the sandbox CPU and

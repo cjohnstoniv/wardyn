@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -260,6 +261,11 @@ func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID 
 		}
 		stamp(placementCredentialIndex("ProxyConfig.Injection", i), row)
 	}
+	if c := spec.ProxyConfig.AWSSigV4; c != nil {
+		if row, found := byID[c.GrantID]; found && awsSigV4GrantMatches(c, row) {
+			stamp("ProxyConfig.AWSSigV4", row)
+		}
+	}
 	for host, pat := range spec.ProxyConfig.PATGrants {
 		row, found := byID[pat.GrantID]
 		if !found || row.Spec.Kind != types.GrantGitPAT {
@@ -287,6 +293,19 @@ func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID 
 		}
 	}
 	return fault
+}
+
+// awsSigV4GrantMatches binds a re-signed AWS lane to the grant dispatch wrote for it: the same portal, the
+// same account and role, and the same set of hosts it signs (authorAWSSSOGrant).
+func awsSigV4GrantMatches(c *proxy.AWSSigV4Config, row types.CredentialGrant) bool {
+	if row.Spec.Kind != types.GrantAPIKey {
+		return false
+	}
+	rule, e := injectionRuleFromScope(row.Spec.Scope)
+	hosts := grantHosts(row.Spec)
+	hostSet := func(h []string) []string { return slices.Compact(slices.Sorted(slices.Values(h))) }
+	return e == nil && len(hosts) > 0 && hostEqual(rule.Host, c.PortalHost) &&
+		maps.Equal(rule.PinQuery, awsSSOPinQuery(c.AccountID, c.RoleName)) && slices.Equal(hostSet(hosts[1:]), hostSet(c.Hosts))
 }
 
 // localIdentityLanes is the Azure DevOps lane and the Azure Foundry lane a local run's identity

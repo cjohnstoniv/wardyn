@@ -265,6 +265,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			sandboxEnv["WARDYN_ARTIFACT_CONFIG_B64"] = artifactPlan.configB64
 		}
 	}
+	// Apple's background boot hosts are denied quietly on a macOS VM, so the guest's first minutes raise
+	// no approval (run_macos_egress.go). A deny only: no allowed domain is added.
+	policy.DeniedDomains = appendMacOSBootDenials(run.MachineKind, policy)
 	artifactInject := len(artifactPlan.injections) > 0
 
 	// LLM transport resolution (precedence: host-staged subscription > managed >
@@ -413,6 +416,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		Image:            p.Image,
 		ConfinementClass: run.ConfinementClass,
 		MachineKind:      run.MachineKind,
+		MacOSBase:        macOSBaseOf(run),
 		// "Sign-ins in a desktop" for the run's agent (run_desktop_vm_signin.go); only a VM reads it.
 		DesktopSignInsOff: desktopSignInsOff(siteCfg, siteCfgErr, run.Agent),
 		Env:               sandboxEnv,

@@ -9,6 +9,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -903,5 +906,92 @@ func TestPrepareLogReadsPastALongForeignLine(t *testing.T) {
 	}
 	if got := prepareFailure(p); got != "macvm: stage 1: boom" {
 		t.Fatalf("failure %q with the error line before the long one, want that line", got)
+	}
+}
+
+// A harness the launcher's self-test withheld gets the copy canon's status line (MAC-A09), naming the
+// tools.json that keeps the end of its output; one withheld for another reason gets none.
+func TestMacOSVMStatusSelftestWithheld(t *testing.T) {
+	dir := t.TempDir()
+	rec := macvm.ToolsRecord{Withheld: map[string]macvm.WithheldRecord{
+		"codex-cli":   {Reason: macvm.SelftestFailurePrefix + "FAIL codex --version"},
+		"claude-code": {Reason: macvm.CLTFailurePrefix + "no network"},
+	}}
+	raw, _ := json.Marshal(rec)
+	if err := os.WriteFile(filepath.Join(dir, macvm.ToolsRecordFile), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := macOSVMStatus{State: runnerwire.MacVMBaseReady, Harnesses: []string{"none", "claude-code"}, withheld: selftestWithheld(dir)}
+	var out strings.Builder
+	st.writeText(&out)
+	want := "withheld: codex-cli (its self-test failed; see " + filepath.Join(dir, "tools.json") + ")\n"
+	if !strings.Contains(out.String(), "MiB\n"+want) || strings.Count(out.String(), "withheld:") != 1 {
+		t.Fatalf("status:\n%s", out.String())
+	}
+}
+
+// A view-only desktop names how to get control, and stays "view only" up front.
+func TestDesktopModeObserveNamesTheFix(t *testing.T) {
+	got := desktopMode("observe")
+	if !strings.HasPrefix(got, "view only") || !strings.Contains(got, "macos-vm edit-base") {
+		t.Fatalf("desktopMode(observe) = %q; want view only, then the macos-vm edit-base that fixes it", got)
+	}
+}
+
+// isVersionString is the expression version.String().
+func isVersionString(e ast.Expr) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, isID := sel.X.(*ast.Ident)
+	return isID && pkg.Name == "version" && sel.Sel.Name == "String"
+}
+
+// Every macOSVMSetup the command line and the daemon build carries the runner's version, or `status` warns
+// that the base's agent is not this runner's, runner="", every time.
+func TestEveryMacOSVMSetupCarriesTheVersion(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		tree, err := parser.ParseFile(token.NewFileSet(), f, nil, 0)
+		if err != nil {
+			continue // a file that does not parse
+		}
+		ast.Inspect(tree, func(n ast.Node) bool {
+			lit, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			if id, isID := lit.Type.(*ast.Ident); !isID || id.Name != "macOSVMSetup" {
+				return true
+			}
+			seen++
+			has := false
+			for _, e := range lit.Elts {
+				if kv, ok := e.(*ast.KeyValueExpr); ok {
+					if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "version" {
+						has = isVersionString(kv.Value)
+					}
+				}
+			}
+			if !has {
+				t.Errorf("%s: a macOSVMSetup without version: version.String()", f)
+			}
+			return true
+		})
+	}
+	if seen < 3 {
+		t.Fatalf("found %d macOSVMSetup literals, want the CLI's, setup's and the daemon's", seen)
 	}
 }

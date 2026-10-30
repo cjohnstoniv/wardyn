@@ -47,6 +47,9 @@ type MachineSpec struct {
 	// Shares are the host folders shared into the guest, share n tagged ShareTag(n). Only a run boot
 	// has any.
 	Shares []Share
+	// Disks are the disk drives attached after the clone, disk n identified DiskID(n). Only a run boot
+	// has any.
+	Disks []Disk
 }
 
 // Share is one host folder shared into the guest over virtio-fs. HostPath is the canonical path
@@ -58,12 +61,26 @@ type Share struct {
 	ReadOnly bool   `json:"read_only"`
 }
 
-// errSharesOutsideRun refuses a folder share in a prepare or tools-update boot: only a run's VM
-// shares folders.
-var errSharesOutsideRun = errors.New("macvm: only a run's VM shares folders; a prepare or tools-update boot shares none")
+// Disk is one disk drive's image on this Mac, a raw sparse file the guest sees as a block device
+// whose identifier is ID. The guest agent formats and mounts it.
+type Disk struct {
+	ID       string `json:"id"`
+	Path     string `json:"path"`
+	ReadOnly bool   `json:"read_only,omitempty"`
+	// SizeBytes is the size a writable disk's image is made at on its first run.
+	SizeBytes int64 `json:"size_bytes,omitempty"`
+}
+
+// errSharesOutsideRun refuses a folder share or a disk drive in a prepare or tools-update boot: only
+// a run's VM has them.
+var errSharesOutsideRun = errors.New("macvm: only a run's VM shares folders or attaches disk drives; a prepare or tools-update boot shares none")
 
 // ShareTag is the virtio-fs tag of share n, the same shape as a Linux VM's.
 func ShareTag(n int) string { return "wardyn" + strconv.Itoa(n) }
+
+// DiskID is the block device identifier of disk n (the guest agent's Disk.ID), at most VZ's 20
+// characters.
+func DiskID(n int) string { return "wardyn-disk" + strconv.Itoa(n) }
 
 // NetworkKind names a network attachment. FileHandle is the only kind: no NAT
 // or bridged attachment exists in this package, so no plan can ask for one.
@@ -78,10 +95,11 @@ type NetworkDevice struct {
 	MTU  int
 }
 
-// StorageDevice is one guest block device.
+// StorageDevice is one guest block device. Identifier is a disk drive's DiskID, "" on the clone.
 type StorageDevice struct {
-	Path     string
-	ReadOnly bool
+	Path       string
+	ReadOnly   bool
+	Identifier string
 }
 
 // Display is one guest display.
@@ -143,13 +161,20 @@ func BuildPlan(s MachineSpec) (Plan, error) {
 	if err := checkShares(s.Shares, s.BaseDir); err != nil {
 		return Plan{}, err
 	}
+	storage := []StorageDevice{{Path: s.DiskPath}}
+	for i, d := range s.Disks {
+		if err := checkDisk(i, d, s.BaseDir); err != nil {
+			return Plan{}, err
+		}
+		storage = append(storage, StorageDevice{Path: d.Path, ReadOnly: d.ReadOnly, Identifier: d.ID})
+	}
 	return Plan{
 		CPUs:              s.CPUs,
 		MemoryBytes:       s.MemoryBytes,
 		HardwareModel:     s.HardwareModel,
 		MachineIdentifier: s.MachineIdentifier,
 		AuxPath:           s.AuxPath,
-		Storage:           []StorageDevice{{Path: s.DiskPath}},
+		Storage:           storage,
 		Network:           []NetworkDevice{{Kind: NetworkFileHandle, File: s.Net, MTU: GuestMTU}},
 		Displays:          []Display{{Width: DisplayWidth, Height: DisplayHeight, PPI: DisplayPPI}},
 		Vsock:             true,
@@ -165,10 +190,30 @@ func CheckPlan(p Plan) error {
 	if len(p.Network) != 1 || p.Network[0].Kind != NetworkFileHandle || p.Network[0].File == nil {
 		return errors.New("macvm: a macOS VM has exactly one network device, a FileHandle attachment")
 	}
-	if len(p.Storage) != 1 || p.Storage[0].ReadOnly {
-		return errors.New("macvm: a macOS VM has exactly one writable disk, its own clone")
+	if len(p.Storage) == 0 || p.Storage[0].ReadOnly || p.Storage[0].Identifier != "" {
+		return errors.New("macvm: a macOS VM boots one writable disk, its own clone")
+	}
+	for i, sd := range p.Storage[1:] {
+		if err := checkDisk(i, Disk{ID: sd.Identifier, Path: sd.Path, ReadOnly: sd.ReadOnly}, ""); err != nil {
+			return err
+		}
 	}
 	return checkShares(p.Shares, "")
+}
+
+// checkDisk refuses disk n unless it is identified DiskID(n) and its image is an absolute, clean
+// path outside baseDir (when set).
+func checkDisk(n int, d Disk, baseDir string) error {
+	if d.ID != DiskID(n) {
+		return fmt.Errorf("macvm: disk %d is identified %q, not %q", n, d.ID, DiskID(n))
+	}
+	if !filepath.IsAbs(d.Path) || filepath.Clean(d.Path) != d.Path {
+		return fmt.Errorf("macvm: disk %s needs an absolute, clean image path", d.ID)
+	}
+	if baseDir != "" && within(baseDir, d.Path) {
+		return fmt.Errorf("macvm: disk %s is inside the base image", d.ID)
+	}
+	return nil
 }
 
 // checkShares refuses a share list that is not share n at ShareTag(n), each an absolute clean

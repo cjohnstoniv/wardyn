@@ -26,11 +26,7 @@ func Read(goos, root, domain, key string, extract func(file, key string) (string
 	if goos != "darwin" {
 		return "", nil
 	}
-	files := []string{filepath.Join(root, domain+".plist")}
-	if u, err := user.Current(); err == nil {
-		files = append([]string{filepath.Join(root, u.Username, domain+".plist")}, files...)
-	}
-	for _, f := range files {
+	for _, f := range Files(root, domain) {
 		v, err := extract(f, key)
 		if err != nil {
 			return "", err
@@ -40,6 +36,30 @@ func Read(goos, root, domain, key string, extract func(file, key string) (string
 		}
 	}
 	return "", nil
+}
+
+// Files are the profile files of domain under root, in the order Read consults them: the person's own file
+// under <root>/<user>/, then the device-wide one.
+func Files(root, domain string) []string {
+	files := []string{filepath.Join(root, domain+".plist")}
+	if u, err := user.Current(); err == nil {
+		files = append([]string{filepath.Join(root, u.Username, domain+".plist")}, files...)
+	}
+	return files
+}
+
+// Bool is a value Read or PlutilExtract returned, read as a boolean: set is false for "" (the key is unset).
+// plutil prints a plist boolean as true or false; a profile that holds the word as a string is read the same.
+func Bool(v string) (val, set bool, err error) {
+	switch strings.ToLower(v) {
+	case "":
+		return false, false, nil
+	case "true", "1", "yes":
+		return true, true, nil
+	case "false", "0", "no":
+		return false, true, nil
+	}
+	return false, true, fmt.Errorf("%q is not true or false", v)
 }
 
 // PlutilExtract is key's value in the plist at file, read with the plutil at plutil. Only a missing file, or

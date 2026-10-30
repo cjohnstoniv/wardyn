@@ -215,6 +215,7 @@ const (
 	reasonComputerRunnerNoFolders              = "computer_runner_no_folders"               // the runner does not share folders (older than 0.10, or not --substrate folders)
 	reasonComputerFolderRefused                = "computer_folder_refused"                  // the runner refused that path (outside its roots, a symlink, a credential folder)
 	reasonMachineKindUnknown                   = "machine_kind_unknown"                     // machine_kind is not "container" or "linux_vm"
+	reasonMacOSBaseInvalid                     = "macos_base_invalid"                       // macos_base on a run that is not a macOS VM, or not a base name
 	reasonInteractiveStartUnknown              = "interactive_start_unknown"                // interactive_start is not "shell" or "agent"
 	reasonToolApprovalsUnknown                 = "tool_approvals_unknown"                   // tool_approvals is not "auto" or "hold"
 	reasonToolApprovalsHoldUnsupportedAgent    = "tool_approvals_hold_unsupported_agent"    // tool_approvals=hold on an agent with no external tool-approval contract (codex-cli)
@@ -751,4 +752,10 @@ const (
 	// workload_binding_inactive as its refusal, so a restart's 200 (launch.reason) and last_refusal may carry it.
 	reasonWorkloadPoolMismatch    = "workload_pool_mismatch"    // the resource names a runner pool other than its namespace binding's
 	reasonWorkloadBindingInactive = "workload_binding_inactive" // the binding's identity is suspended or retired, its sponsor changed, or the sponsor's access was revoked
+)
+
+// A person's disk drive kept on a Mac (member_drives.go): its delete while the Mac is away.
+const (
+	reasonMemberDriveDeleteDeferred = "member_drive_delete_deferred" // 202: the Mac is offline; the disk is removed when it reconnects
+	reasonMemberDriveRecordOnly     = "member_drive_record_only"     // 200: the Mac is no longer registered; only the record was removed
 )

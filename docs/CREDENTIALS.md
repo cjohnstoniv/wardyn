@@ -116,7 +116,8 @@ One mode places a Git credential inside the sandbox:
 
 - On a `bedrock_sso` model provider, the AWS SDK inside the sandbox exchanges the sign-in session for short-lived role credentials and signs each request with them.
 - The signature is computed in the workload's process, so by default those role credentials are inside the sandbox on every such run ([`internal/api/credential_residency.go#kindResidency`](../internal/api/credential_residency.go)).
-- With `WARDYN_AWS_SIGV4_AT_PROXY=on` (off by default) the role's credentials never enter the sandbox of a lane the proxy re-signs. The sandbox's profile gets a placeholder key pair in place of the SSO session, and the proxy signs each request again with role credentials it gets itself ([`internal/egress/proxy/aws_sigv4.go`](../internal/egress/proxy/aws_sigv4.go)).
+- With `WARDYN_AWS_SIGV4_AT_PROXY=on` (off by default) the role's credentials never enter the sandbox of a lane the proxy re-signs on an organisation's runner. The sandbox's profile gets a placeholder key pair in place of the SSO session, and the proxy signs each request again with role credentials it gets itself ([`internal/egress/proxy/aws_sigv4.go`](../internal/egress/proxy/aws_sigv4.go)).
+- On a person's own runner, the run's proxy on that computer re-signs the lane the same way ([`internal/placement/classify.go`](../internal/placement/classify.go)). This release has not yet verified it end to end on a person's runner.
 - It applies to a lane only when the proxy can re-sign every one of its hosts: exact `<service>.<region>.amazonaws.com` hosts on port 443.
   - One host it cannot re-sign keeps the whole lane on its old path, with the role credentials in the sandbox ([`internal/api/runs_dispatch_aws_sigv4.go#Server.awsSigV4Hosts`](../internal/api/runs_dispatch_aws_sigv4.go)).
   - Such a host is a wildcard, a private endpoint such as `vpce`, a dual-stack host, a port other than 443, GovCloud IAM or a test endpoint.

@@ -130,6 +130,9 @@ type SandboxSpec struct {
 	// MachineKind is the sandbox's kind; empty is a container. A substrate that cannot start the kind
 	// refuses the create before creating anything, never falls back to a container.
 	MachineKind types.MachineKind `json:"machine_kind,omitempty"`
+	// MacOSBase is the macOS base a macos_vm run is started on: a Mac's other base's name, or "" for its
+	// Standard base. A Mac that has no ready base of that name refuses the create.
+	MacOSBase string `json:"macos_base,omitempty"`
 	// ImageArches, when set, are the only architectures Image runs on: a prewrapped image's accepted
 	// set (design final §3). A Kubernetes substrate places the agent pod on a node of one of them.
 	ImageArches []string `json:"image_arches,omitempty"`
@@ -381,6 +384,49 @@ type Sandbox struct {
 	// SignIns is what a VM's guest made of its sign-in store (guestagent.SignInsMemory or
 	// SignInsNone); empty for a container, or a guest or runner that predates the store.
 	SignIns string `json:",omitempty"`
+	// KeychainTrust is what a macOS guest made of trusting this run's proxy CA in its System
+	// keychain; nil when nothing was attempted (a container, a Linux guest, a run with no proxy CA,
+	// or a guest or runner that predates it). Read it through Known.
+	KeychainTrust *KeychainTrust `json:",omitempty"`
+}
+
+// KeychainTrust is a macOS guest's answer to trusting the run's proxy CA: a status and, when not
+// trusted, a fixed reason code. It never carries the guest's own output.
+type KeychainTrust struct {
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// The KeychainTrust codes. The guest agent sends the same strings (guestagent.KeychainTrusted and
+// its siblings).
+const (
+	KeychainTrusted    = "trusted"
+	KeychainNotTrusted = "not_trusted"
+	// KeychainRefused: macOS refused the trust change.
+	KeychainRefused = "refused"
+	// KeychainFailed: the security command failed for another reason.
+	KeychainFailed = "failed"
+	// KeychainUnavailable: the command could not run, the CA was not one certificate, or the guest
+	// sent a code this host does not know.
+	KeychainUnavailable = "unavailable"
+)
+
+// Known is k with any code this host does not know read as not trusted, unavailable. Nil stays nil:
+// absent means not attempted, never failed.
+func (k *KeychainTrust) Known() *KeychainTrust {
+	if k == nil {
+		return nil
+	}
+	if k.Status == KeychainTrusted && k.Reason == "" {
+		return &KeychainTrust{Status: KeychainTrusted}
+	}
+	switch k.Reason {
+	case KeychainRefused, KeychainFailed, KeychainUnavailable:
+		if k.Status == KeychainNotTrusted {
+			return &KeychainTrust{Status: KeychainNotTrusted, Reason: k.Reason}
+		}
+	}
+	return &KeychainTrust{Status: KeychainNotTrusted, Reason: KeychainUnavailable}
 }
 
 // Status reports observed sandbox state.
