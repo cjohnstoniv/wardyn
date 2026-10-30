@@ -147,15 +147,16 @@ func (p *Proxy) vmnetStage(r *http.Request) (flow, stage string) {
 // sends the caller to evaluate() as for any CONNECT.
 // decideConnect decides a CONNECT: a relay's tunnel stage resumes the decision
 // its ask parked, and anything else is evaluated (a relay row carries its flow).
-func (p *Proxy) decideConnect(ctx context.Context, flow, stage, host string, port int) (egress.Decision, string, *egress.DecisionLog) {
+// resumed reports the first: only then does the relay hold the flow's slot.
+func (p *Proxy) decideConnect(ctx context.Context, flow, stage, host string, port int) (_ egress.Decision, _ string, _ *egress.DecisionLog, resumed bool) {
 	if d, target, log, ok := p.resumeVMFlow(ctx, flow, stage, host, port); ok {
-		return d, target, log
+		return d, target, log, true
 	}
 	d, target, log := p.evaluate(ctx, host, port, http.MethodConnect, "")
 	if log != nil {
 		log.Flow = flow
 	}
-	return d, target, log
+	return d, target, log, false
 }
 
 func (p *Proxy) resumeVMFlow(ctx context.Context, flow, stage, host string, port int) (egress.Decision, string, *egress.DecisionLog, bool) {

@@ -289,7 +289,8 @@ type Proxy struct {
 // failed and pending dials included: the desktop VM relay's maxOpaqueTunnels
 // (internal/vmnet/relay.go), so both egress paths bound a run the same way. A
 // tunnel past it is refused with ruleSourceTunnelLimit and a retry hint; it
-// never evicts an established one. Intercepted (MITM) tunnels are not counted.
+// never evicts an established one. Intercepted (MITM) tunnels are not counted,
+// nor a relay flow resumed from its ask, which already holds the relay's slot.
 const maxOpenTunnels = 1024
 
 // ruleSourceTunnelLimit is the deny reason for a tunnel past maxOpenTunnels.
@@ -798,7 +799,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// stage resumes the decision the ask parked, so one flow is decided, held
 	// and dialled once.
 	flow, stage := p.vmnetStage(r)
-	decision, target, log := p.decideConnect(r.Context(), flow, stage, host, port)
+	decision, target, log, resumed := p.decideConnect(r.Context(), flow, stage, host, port)
 	// Deny/Pending are emitted now. The ALLOW decision is deferred until the
 	// tunnel is actually established (E3): emitting it before the dial would
 	// over-report an allow when the dial then fails.
@@ -878,13 +879,14 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			p.emitLLMBlindOnce(host, port, http.MethodConnect)
 		}
 	}
-	p.openTunnel(w, r, host, port, target, log, p.countActivity)
+	p.openTunnel(w, r, host, port, target, log, p.countActivity, resumed)
 }
 
 // openTunnel dials an allowed CONNECT's destination and pipes the client leg
 // to it opaquely. count wraps the client leg (the activity counter on the
-// agent's listener; the sign-in lane passes none).
-func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, port int, target string, log *egress.DecisionLog, count func(net.Conn) net.Conn) {
+// agent's listener; the sign-in lane passes none). relayed is a relay flow
+// resumed from its ask (decideConnect), never the stage header alone.
+func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, port int, target string, log *egress.DecisionLog, count func(net.Conn) net.Conn, relayed bool) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking unsupported", http.StatusInternalServerError)
@@ -892,19 +894,23 @@ func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, 
 	}
 	// The slot is taken before the dial and given back on every return, which a
 	// tunnel reaches once either leg ends (a shutdown that closes it included).
-	if p.openTunnels.Add(1) > p.maxTunnels {
-		p.openTunnels.Add(-1)
-		if log != nil {
-			p.sink.emit(decisionLog(log.Request, egress.Deny, ruleSourceTunnelLimit))
+	// A relayed flow takes none: the relay counted it before its ask.
+	if !relayed {
+		if p.openTunnels.Add(1) > p.maxTunnels {
+			p.openTunnels.Add(-1)
+			if log != nil {
+				p.sink.emit(decisionLog(log.Request, egress.Deny, ruleSourceTunnelLimit))
+			}
+			// Temporary, so not X-Wardyn-Egress: denied: a retry succeeds once a tunnel closes.
+			w.Header().Set(egressHeaderReason, ruleSourceTunnelLimit)
+			w.Header().Set(egressHeaderHost, host)
+			w.Header().Set("Retry-After", "1")
+			w.Header().Set("X-Should-Retry", "true")
+			http.Error(w, "wardyn: the run holds the most open tunnels it may; retry once one closes", http.StatusServiceUnavailable)
+			return
 		}
-		// Temporary, so not X-Wardyn-Egress: denied: a retry succeeds once a tunnel closes.
-		w.Header().Set(egressHeaderReason, ruleSourceTunnelLimit)
-		w.Header().Set("Retry-After", "1")
-		w.Header().Set("X-Should-Retry", "true")
-		http.Error(w, "wardyn: the run holds the most open tunnels it may; retry once one closes", http.StatusServiceUnavailable)
-		return
+		defer p.openTunnels.Add(-1)
 	}
-	defer p.openTunnels.Add(-1)
 
 	// Dial the destination: through the corp proxy (CONNECT <real-host>) when an
 	// upstream is configured and this host is not on its bypass list, else

@@ -39,9 +39,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A model gateway host both vendors share that is also the run's own model endpoint is now inspected as that endpoint's
   vendor. Under fail-closed inspection its request bodies were refused as uninspected (#3819).
 - A run's container `CONNECT` tunnels are now capped at 1,024 open at once, the bound desktop VM tunnels already have.
-  The next one is refused with a `503`, `Retry-After` and `X-Wardyn-Egress-Reason: builtin:tunnel-limit`, and a
-  `builtin:tunnel-limit` deny row; it is admitted once a tunnel closes. Before, a process could hold any number of
-  tunnels open (#3698).
+  The next one is refused with a `503`, `Retry-After`, `X-Wardyn-Host` and `X-Wardyn-Egress-Reason:
+  builtin:tunnel-limit`, and a `builtin:tunnel-limit` deny row; it is admitted once a tunnel closes. Before, a process
+  could hold any number of tunnels open (#3698). The person's sign-in tunnels count too. A desktop VM's tunnels count
+  only at its network relay, so a VM at its own bound still leaves room for the person to sign in.
 - With `WARDYN_FILE_SECRET_PLACEHOLDERS` on, a file named by two `file_secret` grants now holds the placeholder of the
   grant that delivered it. A later grant's placeholder replaced it, so requests to the delivering grant's host lost
   their credential.
