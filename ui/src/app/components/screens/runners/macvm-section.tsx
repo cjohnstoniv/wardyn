@@ -118,7 +118,7 @@ function Body({ caps, active, perRun, runner, hostOS, maxBaseAgeDays }: { caps: 
     return (
       <>
         <Chip tone="warning" dot>{MACVM_R.R17}</Chip>
-        <p className="mt-1 text-warning">{MACVM_R.R43}</p>
+        <p className="mt-1 text-warning">{caps.base.failure === "format" ? <MacVMText text={MACVM_R.R43_FORMAT} /> : MACVM_R.R43}</p>
       </>
     );
   }

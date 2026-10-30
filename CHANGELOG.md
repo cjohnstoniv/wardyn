@@ -113,6 +113,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A process inside a macOS VM could pose as Wardyn's guest agent.
+- Installing a macOS base's file items no longer follows a symbolic link, or passes through a folder others can write
+  to, on the way to an item's destination.
 - The error body of a `capability_feature` refusal now carries `feature`, the feature it names (such as `inbound` or
   `custom_component`), and the New Run page reads it to tell an inbound-app refusal from the other feature refusals.
   It used to match the wording of the message, so rewording the message would have turned the notice off (#3769).
@@ -341,6 +344,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you upgrade
 
+- macOS bases prepared on 0.10.0-rc.8 or an earlier release candidate must be prepared again: run
+  `wardyn-runnerd macos-vm prepare` on each Mac. Until then the Mac's runner reports its base as needing an update
+  and offers no macOS VMs.
 - Migration `0246_user_drives_mac_disk` admits `mac_disk` in `user_drives.backend`'s CHECK and in the member-drive
   rule, and adds `user_drives.home_runner_id`, the Mac a disk drive is kept on. It changes no row and adds no grant.
   A downgrade with a disk drive present is unsupported.

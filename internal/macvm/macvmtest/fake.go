@@ -13,9 +13,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
 // Engine is a fake macvm.Engine. Set fields before use; read counters with
@@ -269,6 +271,24 @@ func (m *Machine) DialGuest(port uint32) (net.Conn, error) {
 	case <-l.closed:
 		return nil, net.ErrClosed
 	}
+}
+
+// DialPaired connects to port as the guest agent does: it answers the host's pairing challenge with key.
+func (m *Machine) DialPaired(port uint32, key []byte) (net.Conn, error) {
+	return guestagent.PairedDial(func(context.Context) (net.Conn, error) { return m.DialGuest(port) }, port, key)(context.Background())
+}
+
+// DialAgent is DialPaired with the key this VM's guest disk holds: the one in its disk's directory, which
+// is the run's or the staging copy's clone of the base.
+func (m *Machine) DialAgent(port uint32) (net.Conn, error) {
+	if len(m.Plan.Storage) == 0 {
+		return nil, errors.New("fake: no disk, so no pairing key")
+	}
+	key, err := os.ReadFile(filepath.Join(filepath.Dir(m.Plan.Storage[0].Path), macvm.PairKeyFile))
+	if err != nil {
+		return nil, fmt.Errorf("fake: the guest's pairing key: %w", err)
+	}
+	return m.DialPaired(port, key)
 }
 
 // Listening reports whether the host listens on port.

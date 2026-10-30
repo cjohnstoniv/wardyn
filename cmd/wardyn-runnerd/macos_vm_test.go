@@ -113,7 +113,7 @@ func (r *macLedgerRig) open(t *testing.T) *macOSVMs {
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	man := `{"format":1,"state":"ready","guest_os":"macOS 26.1","agent_version":"1.0.0","min_cpus":4,"min_memory_mib":8192,"desktop":"control","harnesses":["claude-code"]}`
+	man := `{"format":2,"state":"ready","guest_os":"macOS 26.1","agent_version":"1.0.0","min_cpus":4,"min_memory_mib":8192,"desktop":"control","harnesses":["claude-code"]}`
 	if err := os.WriteFile(filepath.Join(base, macvm.ManifestFile), []byte(man), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +499,7 @@ func TestMacOSVMStatusNeverShowsTheSetupCode(t *testing.T) {
 	r := newMacLedgerRig(t)
 	m := r.open(t)
 	m.helper, _ = fakeHelper(t, 0)
-	man := `{"format":1,"state":"ready","guest_os":"macOS 27.0","build_version":"26A428","min_cpus":4,"min_memory_mib":8192,"desktop":"observe","harnesses":["none"]}`
+	man := `{"format":2,"state":"ready","guest_os":"macOS 27.0","build_version":"26A428","min_cpus":4,"min_memory_mib":8192,"desktop":"observe","harnesses":["none"]}`
 	_ = os.WriteFile(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile), []byte(man), 0o600)
 	const code = "K7MP2QXR"
 	_ = os.WriteFile(m.layout.PrepareLog(), []byte(`{"phase":"install","fraction":1}`+"\n"+`{"phase":"setup_by_hand","detail":"`+code+`"}`+"\n"), 0o600)

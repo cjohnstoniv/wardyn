@@ -35,6 +35,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# A failed cache download leaves @actions/cache's segment timer running, and the
+# step does not exit until it fires: 10 minutes by default, the whole budget of a
+# ten-minute job. Three minutes bounds that wait; a 128 MB segment still has room.
+env:
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: "3"
+
 # Every job sets timeout-minutes. Unset, GitHub allows 360, so one hung job holds
 # a runner for six hours. Each value is at least twice the job's measured
 # maximum, with a ten-minute floor (docs/CI.md); raise it with the measurement.
@@ -1786,6 +1792,8 @@ jobs:
           # -v: prove the darwin-native guest agent tests (server_darwin_test.go) ran, not just compiled.
           go test -count=1 -timeout 10m -v ./internal/vm/guestagent/ | tee "$RUNNER_TEMP/guestagent.out"
           grep -q -- '^--- PASS: TestDarwin' "$RUNNER_TEMP/guestagent.out"
+          # The pairing key's root-only mode, proven with a sudo-made file: a skip here is a failure.
+          grep -q -- '^--- PASS: TestDarwinPairKeyIsReadableByRootOnly' "$RUNNER_TEMP/guestagent.out"
       - name: Live suite self-tests (its P-rows skip on a hosted Mac)
         if: ${{ !cancelled() }}
         run: |
@@ -2523,7 +2531,8 @@ jobs:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 15
+    # A cold staticcheck ran past 15 min on main (no cache entry), and only a success saves one.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -2830,8 +2839,15 @@ jobs:
           done
           [ -n "$id" ] || { echo "::error::no dispatched nightly run appeared on $HEAD_SHA"; exit 1; }
           echo "nightly run: $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$id"
-          gh run watch "$id" --interval 60 >/dev/null || true
-          conclusion="$(gh run view "$id" --json conclusion --jq .conclusion)"
+          # Poll rather than `gh run watch`: one API 502 ended a watch early and
+          # read an in-progress run's empty conclusion. A failed read is retried;
+          # the job timeout bounds the wait.
+          until [ "$(gh run view "$id" --json status --jq .status 2>/dev/null)" = completed ]; do sleep 60; done
+          conclusion=
+          for _ in 1 2 3 4 5; do
+            conclusion="$(gh run view "$id" --json conclusion --jq .conclusion 2>/dev/null)" && break
+            sleep 15
+          done
           [ "$conclusion" = success ] || { echo "::error::nightly run $id concluded '$conclusion'"; exit 1; }
 
   train-gate:

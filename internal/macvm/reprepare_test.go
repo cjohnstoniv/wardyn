@@ -342,7 +342,7 @@ func TestPrepareKeepsACompleteOldFormatBaseUntilTheSwap(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := stamps(t, base)
-	for _, name := range []string{macvm.DiskFile, macvm.AuxFile, macvm.MachineIDFile, macvm.ManifestFile, macvm.ToolsRecordFile} {
+	for _, name := range []string{macvm.DiskFile, macvm.AuxFile, macvm.MachineIDFile, macvm.ManifestFile, macvm.PairKeyFile, macvm.ToolsRecordFile} {
 		if _, ok := want[name]; !ok {
 			t.Fatalf("the old base has no %s", name)
 		}

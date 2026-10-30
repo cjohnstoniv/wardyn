@@ -102,7 +102,14 @@ func cloneRun(e Engine, baseDir, runDir string, s IdentityStrategy) (Identity, e
 	if !s.Valid() {
 		return Identity{}, fmt.Errorf("macvm: unknown identity strategy %q", s)
 	}
+	// No key, no clone: nothing could pair with its guest.
+	if _, err := readPairKey(baseDir); err != nil {
+		return Identity{}, err
+	}
 	if err := mkdirPrivate(runDir); err != nil {
+		return Identity{}, err
+	}
+	if err := copyPairKey(baseDir, runDir); err != nil {
 		return Identity{}, err
 	}
 	for _, f := range []string{DiskFile, AuxFile} {

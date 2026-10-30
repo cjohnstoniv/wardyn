@@ -48,6 +48,7 @@ func TestSilentNetGivesEachStage2BootItsNetwork(t *testing.T) {
 	for _, f := range []string{macvm.DiskFile, macvm.AuxFile} {
 		_ = os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o600)
 	}
+	_ = os.WriteFile(filepath.Join(dir, macvm.PairKeyFile), []byte("wardyn-test-pair-key-0123456789!"), 0o600)
 	spec := macvm.MachineSpec{CPUs: 2, MemoryBytes: 4 << 30, MinCPUs: 2, MinMemoryBytes: 4 << 30, HardwareModel: []byte("hw"),
 		MachineIdentifier: []byte("id"), DiskPath: filepath.Join(dir, macvm.DiskFile), AuxPath: filepath.Join(dir, macvm.AuxFile)}
 	for i := range 2 {

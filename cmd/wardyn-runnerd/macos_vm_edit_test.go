@@ -143,7 +143,7 @@ func TestMacOSVMStatusTellsAnEditFromSetupByHand(t *testing.T) {
 	r.root = root
 	m := r.open(t)
 	m.helper, _ = fakeHelper(t, 0)
-	man := `{"format":1,"state":"ready","guest_os":"macOS 27.0","build_version":"26A428","min_cpus":4,"min_memory_mib":8192,"desktop":"observe","harnesses":["none"]}`
+	man := `{"format":2,"state":"ready","guest_os":"macOS 27.0","build_version":"26A428","min_cpus":4,"min_memory_mib":8192,"desktop":"observe","harnesses":["none"]}`
 	_ = os.WriteFile(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile), []byte(man), 0o600)
 	_ = os.WriteFile(m.layout.SetupCode(), []byte(`{"account":"wardyn-admin","code":"K7MP2QXR"}`), 0o600)
 	logs := map[string]string{"prepare": m.layout.PrepareLog(), "edit": filepath.Join(root, editBaseLog)}

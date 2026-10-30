@@ -10,8 +10,9 @@
 // prep relay, which dials the fixed lease of the VM it just booted; there is
 // no address to configure. Its host key is trusted on first use for this one
 // boot and pinned in memory only, so nothing outlives the call. Every remote
-// command is a fixed argv from the commands table; passwords and the one-time
-// code go over stdin only, and never into an argv, an event or an error.
+// command is a fixed argv from the commands table; passwords, the one-time
+// code and the base's pairing key go over stdin only, and never into an argv,
+// an event or an error.
 package stage1
 
 import (
@@ -33,6 +34,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 	"golang.org/x/crypto/ssh"
 	"gvisor.dev/gvisor/pkg/tcpip"
 )
@@ -160,6 +162,7 @@ type session struct {
 	code     []byte // the one-time code, on the D1(c) path only
 	next     []byte // its replacement
 	agentPw  []byte
+	pairKey  []byte // the base's pairing key: raw bytes for dd, so never through safeWord
 	agent    []byte
 	agentSHA string
 	pin      []byte // the host key trusted on this boot's first connection
@@ -194,7 +197,10 @@ func (s *session) sameBoot() error {
 }
 
 func newSession(in macvm.BootstrapInput, agent []byte) (*session, error) {
-	s := &session{in: in, username: in.Username, agent: agent}
+	if len(in.PairKey) != guestagent.PairKeyLen {
+		return nil, fmt.Errorf("stage 1: prepare gave no %d-byte pairing key", guestagent.PairKeyLen)
+	}
+	s := &session{in: in, username: in.Username, agent: agent, pairKey: bytes.Clone(in.PairKey)}
 	sum := sha256.Sum256(agent)
 	s.agentSHA = hex.EncodeToString(sum[:])
 	if !safeWord(in.Username) {
@@ -339,6 +345,8 @@ func (s *session) stdin(c command) []byte {
 		n += len(s.agentPw) + 1
 	case stdinKCPassword:
 		n += kcpasswordLen(len(s.agentPw))
+	case stdinPairKey:
+		n += len(s.pairKey)
 	}
 	b := make([]byte, 0, n)
 	if c.Root {
@@ -361,6 +369,8 @@ func (s *session) stdin(c command) []byte {
 		kc := kcpassword(s.agentPw)
 		b = append(b, kc...)
 		clear(kc)
+	case stdinPairKey:
+		b = append(b, s.pairKey...)
 	}
 	return b
 }
@@ -445,7 +455,7 @@ func (s *session) dropped(c command, err error) error {
 // scrub is a command's stderr, cut short, with every secret this run holds
 // taken out.
 func (s *session) scrub(text string) string {
-	for _, v := range [][]byte{s.admin, s.code, s.next, s.agentPw} {
+	for _, v := range [][]byte{s.admin, s.code, s.next, s.agentPw, s.pairKey} {
 		if len(v) > 0 {
 			text = strings.ReplaceAll(text, string(v), "[redacted]")
 		}
@@ -587,7 +597,7 @@ func refused(err error) bool {
 }
 
 func (s *session) zero() {
-	for _, v := range [][]byte{s.admin, s.code, s.next, s.agentPw} {
+	for _, v := range [][]byte{s.admin, s.code, s.next, s.agentPw, s.pairKey} {
 		clear(v)
 	}
 }

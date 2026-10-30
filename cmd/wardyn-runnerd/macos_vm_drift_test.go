@@ -51,8 +51,8 @@ func TestMacOSVMAgentDriftUpdatesWithoutForce(t *testing.T) {
 	nets := &prepNets{t: t}
 	nets.use(m, macvmtest.SockRoot(t))
 	base := m.layout.BaseDir(0)
-	for n, b := range map[string]string{macvm.DiskFile: "d", macvm.AuxFile: "a", macvm.MachineIDFile: "base-id",
-		macvm.ManifestFile: `{"format":1,"state":"ready","hardware_model":"aHc=","min_cpus":2,"min_memory_mib":4096,"desktop":"control","helper_version":"old","agent_version":"0.0.0-old"}`} {
+	for n, b := range map[string]string{macvm.DiskFile: "d", macvm.AuxFile: "a", macvm.MachineIDFile: "base-id", macvm.PairKeyFile: "wardyn-test-pair-key-0123456789!",
+		macvm.ManifestFile: `{"format":2,"state":"ready","hardware_model":"aHc=","min_cpus":2,"min_memory_mib":4096,"desktop":"control","helper_version":"old","agent_version":"0.0.0-old"}`} {
 		if err := os.WriteFile(filepath.Join(base, n), []byte(b), 0o600); err != nil {
 			t.Fatal(err)
 		}

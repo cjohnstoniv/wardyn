@@ -23,7 +23,7 @@ func TestMacOSVMBaseCarriesItsAge(t *testing.T) {
 	if _, b := m.base(); b.CreatedAt != "" || b.BuildVersion != "" {
 		t.Fatalf("a manifest with no age sent %+v", b)
 	}
-	man := `{"format":1,"state":"ready","guest_os":"macOS 26.6.2 (25G83)","build_version":"25G83","created_at":"2026-10-28T09:30:00+02:00","agent_version":"1.0.0","min_cpus":4,"min_memory_mib":8192,"desktop":"control","harnesses":["claude-code"]}`
+	man := `{"format":2,"state":"ready","guest_os":"macOS 26.6.2 (25G83)","build_version":"25G83","created_at":"2026-10-28T09:30:00+02:00","agent_version":"1.0.0","min_cpus":4,"min_memory_mib":8192,"desktop":"control","harnesses":["claude-code"]}`
 	if err := os.WriteFile(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile), []byte(man), 0o600); err != nil {
 		t.Fatal(err)
 	}

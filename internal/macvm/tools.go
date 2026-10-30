@@ -969,8 +969,9 @@ func swapBase(ctx context.Context, nb, base string) error {
 	return nil
 }
 
-// baseFiles are the files a base dir holds; tools.json only after stage 2.
-var baseFiles = []string{DiskFile, AuxFile, MachineIDFile, ManifestFile, ToolsRecordFile}
+// baseFiles are the files a base dir holds, and requiredBaseFiles those it must (tools.json comes with stage 2).
+var baseFiles, requiredBaseFiles = []string{DiskFile, AuxFile, MachineIDFile, ManifestFile, PairKeyFile, ToolsRecordFile},
+	[]string{DiskFile, AuxFile, MachineIDFile, ManifestFile, PairKeyFile}
 
 // checkBaseFiles fails unless dir holds the base's own files only, each a
 // regular file, with the disk, aux storage, identifier and manifest present.
@@ -986,7 +987,7 @@ func checkBaseFiles(dir string) error {
 		}
 		seen[de.Name()] = true
 	}
-	for _, f := range baseFiles[:4] {
+	for _, f := range requiredBaseFiles {
 		if !seen[f] {
 			return fmt.Errorf("macvm: the new macOS base has no %s", f)
 		}
