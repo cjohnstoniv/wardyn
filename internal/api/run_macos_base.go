@@ -95,11 +95,18 @@ func macOSBaseNotFound(base string) *placement.Refusal {
 	return macOSRefusal("macos_base", fmt.Sprintf(macOSBaseNotInPool, base))
 }
 
+// macOSBaseAllowedFor is THE allowed_macos_bases rule for the caller whose ceiling is ceiling: the create door
+// (macOSBaseDeniedRefusal) and the pool list (poolMacOSVMOf) both ask it, so the picker never offers a base
+// create then refuses. "" is Standard. An ungoverned caller, or one no profile governs, may pick any base.
+func (s *Server) macOSBaseAllowedFor(ctx context.Context, base string, ceiling governanceCeiling) bool {
+	return ceiling.Unit == nil || s.runUngoverned(ctx) || types.MacOSBaseAllowed(ceiling.Limits.AllowedMacOSBases, base)
+}
+
 // macOSBaseDeniedRefusal is the allowed_macos_bases door: 403 placement_denied naming the profile (MAC-B09),
 // with the authz.denied row a governance door writes; nil when the caller's profile allows base, or does not
 // govern them.
 func (s *Server) macOSBaseDeniedRefusal(ctx context.Context, base string, ceiling governanceCeiling) *runRefusal {
-	if ceiling.Unit == nil || s.runUngoverned(ctx) || types.MacOSBaseAllowed(ceiling.Limits.AllowedMacOSBases, base) {
+	if s.macOSBaseAllowedFor(ctx, base, ceiling) {
 		return nil
 	}
 	d := authz.Deny(authz.ReasonGovernanceUnit, "runs.placement", fmt.Sprintf(macOSBaseDenied, ceiling.Unit.Name, cmp.Or(base, types.MacOSStandardBase))).
