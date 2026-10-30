@@ -302,10 +302,46 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 // endKeepsRun is whether endRun tries to keep run past its end, its files kept
 // for the grace: the runner can end a sandbox, there is a grace, and the run
 // has a sandbox. A router whose substrate for the run cannot keep one answers
-// only at the end itself (runner.ErrEndUnsupported).
+// only at the end itself (runner.ErrEndUnsupported); a warning ahead of the end
+// asks endKeepsRunTarget.
 func (s *Server) endKeepsRun(run types.AgentRun) bool {
 	_, canKeep := s.cfg.Runner.(runner.SandboxEnder)
 	return canKeep && s.cfg.EndedRunGrace > 0 && run.SandboxRef != ""
+}
+
+// endKeepsRunTarget is endKeepsRun ahead of the end, for a router as well
+// (runner.TargetInspector): a router is always a SandboxEnder, and keeps the
+// run only when the target holding it does. That target is the run's runner,
+// its pool executor, or else whichever executor placed it, known only when
+// every executor gives the same answer. known is false when no fact settles it.
+func (s *Server) endKeepsRunTarget(ctx context.Context, run types.AgentRun) (keeps, known bool) {
+	if !s.endKeepsRun(run) {
+		return false, true
+	}
+	if _, router := s.targetInspector(); !router {
+		return true, true
+	}
+	switch {
+	case run.RunnerID != nil:
+		f, ok := s.runnerFacts(*run.RunnerID)
+		return f.KeepsEnded, ok
+	case run.RunnerPoolExecutor != "":
+		f, ok := s.executorFacts(ctx, run.RunnerPoolExecutor)
+		return f.KeepsEnded, ok
+	}
+	ex, ok := s.cfg.Runner.(interface{ Executors() []string })
+	if !ok {
+		return false, false
+	}
+	names := ex.Executors()
+	for i, name := range names {
+		f, ok := s.executorFacts(ctx, name)
+		if !ok || (i > 0 && f.KeepsEnded != keeps) {
+			return false, false
+		}
+		keeps = f.KeepsEnded
+	}
+	return keeps, len(names) > 0
 }
 
 // endSandbox is the runner half of the end. The caller has checked the runner
@@ -449,17 +485,23 @@ func (s *Server) warnRunEnding(ctx context.Context, leaser store.RunLeaser, run 
 			// the lifetime kill tears down at its end (Background, or an end at or
 			// past the cap) has nothing kept (#2792), nor one endRun tears down at
 			// once (#3510).
-			var keptSec int64
-			if _, killed := lifetimeEndDue(run, *run.EndsAt); !killed && s.endKeepsRun(run) {
-				keptSec = int64(s.cfg.EndedRunGrace.Seconds())
+			// A router's answer is its target's fact; with no fact that names one
+			// answer, the row says nothing rather than either guess.
+			data := map[string]any{
+				"ends_at":       run.EndsAt,
+				"threshold_sec": int64(threshold.Seconds()),
+				"left_sec":      int64(left.Seconds()),
+			}
+			if _, killed := lifetimeEndDue(run, *run.EndsAt); killed {
+				data["files_kept_sec"] = int64(0)
+			} else if keeps, known := s.endKeepsRunTarget(ctx, run); known {
+				data["files_kept_sec"] = int64(0)
+				if keeps {
+					data["files_kept_sec"] = int64(s.cfg.EndedRunGrace.Seconds())
+				}
 			}
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.ending_soon",
-				run.ID.String(), "success", mustJSON(map[string]any{
-					"ends_at":        run.EndsAt,
-					"threshold_sec":  int64(threshold.Seconds()),
-					"left_sec":       int64(left.Seconds()),
-					"files_kept_sec": keptSec,
-				})))
+				run.ID.String(), "success", mustJSON(data)))
 		}
 		return
 	}
