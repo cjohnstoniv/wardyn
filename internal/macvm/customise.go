@@ -372,6 +372,41 @@ func StagedProfiles(dir string) ([]string, error) {
 	return out, nil
 }
 
+// restageProfiles stages again, as prepare does (0600 in its 0700 stage directory), each profile dir's
+// tools.json holds as staged whose file the install list l still names with the same pin, and returns
+// their guest paths: edit-base, before its window, since its last recheck removed them. A profile with no
+// such file on this Mac is not staged and keeps its state.
+func restageProfiles(ctx context.Context, g ToolsGuest, dir string, l BaseList) ([]string, error) {
+	rec, err := ReadToolsRecord(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	files := map[string]BaseItem{}
+	for _, it := range l.Items {
+		if it.Kind == ItemKindProfile {
+			files[it.Name] = it
+		}
+	}
+	var out []string
+	for _, r := range rec.Items {
+		it, ok := files[r.Name]
+		if r.Kind != ItemKindProfile || r.State != ItemStaged || !ok || it.SHA256 != r.SHA256 {
+			continue
+		}
+		if _, err := os.Stat(it.Path); err != nil {
+			continue
+		}
+		if _, err := installItem(ctx, g, it); err != nil {
+			return nil, fmt.Errorf("macvm: base item %s (%s): %w", it.Name, it.Kind, err)
+		}
+		out = append(out, guestagent.ItemDir(it.Name)+"/"+guestagent.ItemProfile)
+	}
+	return out, nil
+}
+
 // removeStagedProfiles removes each staged profile (StagedProfiles' guest paths) with its stage directory,
 // in edit-base's recheck: the first session in the guest after its window closes. A profile is installed
 // by then, or still staged in the record until a later prepare or tools update stages it again: no tools

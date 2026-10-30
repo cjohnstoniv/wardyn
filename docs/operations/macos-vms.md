@@ -257,7 +257,8 @@ The `ca` item trusts your organisation's root in the guest at prepare. It is sep
 ### Configuration profiles
 
 - macOS installs a profile only with a person's approval, or from MDM. Prepare stages each `profile` item and reads `profiles list` back: `staged` until it is approved, then `installed`.
-- `edit-base` prints each staged profile's path, `/Library/Wardyn/stage/<name>/item.mobileconfig`, before its window opens. Signed in as wardyn-admin, run `sudo open <path>` in Terminal, then approve the profile in System Settings. The recheck removes each staged file, then reads the profiles back.
+- Before its window opens, `edit-base` stages each profile still `staged` again from its file in the list, and prints its path, `/Library/Wardyn/stage/<name>/item.mobileconfig`. A profile whose file is not on the Mac is not offered.
+- Signed in as wardyn-admin, run `sudo open <path>` in Terminal, then approve the profile in System Settings. The recheck removes each staged file, then reads the profiles back.
 - Some payloads take effect only from MDM, whatever a person approves, so a guest never gets them from a staged profile.
   - These include Privacy Preferences Policy Control (TCC), system extension and kernel extension policies, and managed login items.
   - Approve a system extension by hand in `edit-base` instead.

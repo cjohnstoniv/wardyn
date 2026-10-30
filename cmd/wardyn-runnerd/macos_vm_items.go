@@ -49,6 +49,13 @@ func (m *macOSVMs) baseFileArgs(extra []string) ([]string, error) {
 	return append(extra, "--"+macvm.FlagBaseFile, m.items.file), nil
 }
 
+// editItems is the install list flag for an edit-base, whose files stage again the profiles still waiting:
+// none when the setting is unset or could not be read, and the edit then offers none.
+func (m *macOSVMs) editItems() []string {
+	a, _ := m.baseFileArgs(nil)
+	return a
+}
+
 // checkItems is the install list trigger: a base built with another list than the one macos_vm_base_file
 // names now needs a tools update, asked for once per list digest. A base whose agent drifted is left to
 // checkAgent's update, which installs the list too. A list that cannot be read is logged once per error,

@@ -86,7 +86,13 @@ func TestMacOSVMJobsPassTheInstallList(t *testing.T) {
 	if jobs != 2 {
 		t.Fatalf("jobs: %q", calls(t, args))
 	}
+	if a := m.editItems(); !slices.Equal(a, []string{"--" + macvm.FlagBaseFile, m.items.file}) {
+		t.Errorf("edit-base's args %q", a)
+	}
 	m.items.err = errors.New("managed preference unreadable")
+	if a := m.editItems(); a != nil {
+		t.Errorf("edit-base's args with an unreadable setting: %q", a)
+	}
 	if err := m.startToolsUpdate(context.Background(), man); err == nil || !strings.Contains(err.Error(), "macos_vm_base_file") {
 		t.Fatalf("tools update: %v", err)
 	}

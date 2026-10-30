@@ -118,6 +118,9 @@ type EditOptions struct {
 	PrepNet   func() (PrepNetwork, error)
 	// Leaked records a framework slot a refused window boot left (RunOptions.Leaked).
 	Leaked func() error
+	// Items is the install list (macos_vm_base_file), whose files stage again each profile still waiting
+	// for the person's approval (restageProfiles).
+	Items BaseList
 	// Desktop is the control check's RFB client (nil: the boot's own).
 	Desktop DesktopProbe
 	// CPUs and MemoryMiB are the runner's per-run limits, never raised.
@@ -197,11 +200,12 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 		}
 	}
 	defer removeCode()
-	if err := o.mintCode(ctx, spec, codeFile); err != nil {
+	offered, err := o.mintCode(ctx, spec, codeFile, staging)
+	if err != nil {
 		return m, err
 	}
 	fmt.Fprintf(o.Out, editCodeLine+"\n", codeFile)
-	for _, p := range staged {
+	for _, p := range offered {
 		fmt.Fprintf(o.Out, editProfileLine+"\n", p)
 	}
 	if err := o.window(ctx, spec); err != nil {
@@ -279,18 +283,26 @@ func setAdminCode(ctx context.Context, g EditGuest, code []byte) error {
 	return nil
 }
 
-// mintCode sets a fresh one-time code in a headless boot and, once the boot has stopped, writes it to the
-// setup-code file (0600), which only the person at this Mac reads.
-func (o *EditOptions) mintCode(ctx context.Context, spec MachineSpec, path string) error {
+// mintCode sets a fresh one-time code in a headless boot, stages the waiting profiles again there
+// (restageProfiles, from staging's tools.json) and, once the boot has stopped, writes the code to the
+// setup-code file (0600), which only the person at this Mac reads. It returns the profiles' guest paths.
+func (o *EditOptions) mintCode(ctx context.Context, spec MachineSpec, path, staging string) (offered []string, err error) {
 	code, err := randomCode(8)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer clear(code)
-	if err := o.guest(ctx, spec, func(g EditGuest) error { return setAdminCode(ctx, g, code) }); err != nil {
+	err = o.guest(ctx, spec, func(g EditGuest) error {
+		if err := setAdminCode(ctx, g, code); err != nil {
+			return err
+		}
+		offered, err = restageProfiles(ctx, g, staging, o.Items)
 		return err
+	})
+	if err != nil {
+		return nil, err
 	}
-	return writeSetupCode(path, SetupCodeRecord{Account: provisionUser, Code: string(code)})
+	return offered, writeSetupCode(path, SetupCodeRecord{Account: provisionUser, Code: string(code)})
 }
 
 // window boots spec plain in a window on this Mac, with the edit's text, and waits until the guest shuts

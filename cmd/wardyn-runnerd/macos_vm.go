@@ -839,7 +839,7 @@ func (m *macOSVMs) editBase(ctx context.Context, out io.Writer, runnerID string)
 	}
 	return m.startJob(ctx, helperJob{kind: kindEditBase, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
 		log: filepath.Join(m.layout.Root, editBaseLog), sub: macvm.EditBaseCommand, helper: m.helper, cpus: max(man.MinCPUs, 1),
-		memMiB: m.guestMemory(man) >> 20, runner: runnerID, ledger: m.ledgerDir, descr: "edit", out: out})
+		memMiB: m.guestMemory(man) >> 20, runner: runnerID, ledger: m.ledgerDir, descr: "edit", out: out, extra: m.editItems()})
 }
 
 // startJob takes the job's ledger entry (the tombstone pass first) and starts the helper in its own

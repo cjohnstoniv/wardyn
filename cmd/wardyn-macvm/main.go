@@ -564,6 +564,12 @@ func cmdEditBase(ctx context.Context, args []string, d deps) int {
 		FirstBoot: fb, PrepNet: func() (macvm.PrepNetwork, error) { return newPrepNet(relayLog) }, Leaked: j.leaked(d),
 		CPUs: *j.cpus, MemoryMiB: *j.memMiB, Out: d.stdout, Log: slog.New(slog.NewTextHandler(d.stderr, nil)),
 	}
+	if *j.baseFile != "" {
+		// A list that cannot be read stages no profile again: the edit offers none, and they stay staged.
+		if o.Items, err = macvm.LoadBaseList(*j.baseFile); err != nil {
+			o.Log.Warn("wardyn-macvm: edit-base offers no staged profile: the install list could not be read", "err", err.Error())
+		}
+	}
 	if _, err := macvm.EditBase(ctx, o); err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
