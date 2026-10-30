@@ -72,17 +72,17 @@
 - To wall off GitHub, deny `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com` and `ssh.github.com`; the GitHub CLI component also reaches `api.github.com`.
 - A profile that denies any host in GitHub's family (`github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`) also withholds the git broker, while plain egress to `api.github.com` stays exact-host. Such a profile refuses a run that attaches a GitHub CLI row or the built-in GitHub component.
 - Denying any Azure DevOps host, such as `dev.azure.com`, withdraws the person's Azure DevOps credential lane: its credentials and the hosts it added; hosts your policy allows itself stay reachable without the credential.
-- After a revive, if a boundary layer is in force and your policy lists one of these hosts with exactly the same host:port spelling, that host also loses plain egress for that person's runs. A bare host or a wildcard is not affected.
+- After a revive, a host your policy lists with exactly the same host:port spelling as one of these hosts also loses plain egress for that person's runs. This happens only if the Wardyn boundary's allowlist applied to the run at its start or at the revive. A bare host or a wildcard is not affected.
 - To wall off plain Azure DevOps egress, deny `dev.azure.com`, `*.dev.azure.com` and `*.visualstudio.com`.
 - Empty under default-deny: no egress.
 - Each entry must be a shape the proxy's matcher can match.
-- A mid-label wildcard, a URL, a bad `:port`, or a non-ASCII spelling is rejected at write time.
-- Type an internationalised host as punycode (`xn--…`).
-- A policy stored before that check can still carry a dead entry.
-- Each sidecar re-checks both lists at boot, with one `WARN` naming each dead entry.
-- A warning, never a refusal: failing a run over a long-inert entry is worse.
+- Write time rejects a mid-label wildcard, a URL, a bad `:port` or a non-ASCII spelling.
+- Type internationalised hosts as punycode (`xn--…`).
+- A policy stored earlier can still carry a dead entry.
+- Each sidecar's boot `WARN` names every dead entry in both lists.
+- Never a refusal: failing a run over a long-inert entry is worse.
 - It matters most on `denied_domains`, where it denies nothing.
-- Capped at **256 entries**, a hostile-input ceiling; more is a `400` at write time.
+- Capped at **256 entries**, a hostile-input ceiling; more is a write-time `400`.
 
 ### `allow_all_egress`
 

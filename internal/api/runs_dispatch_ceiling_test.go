@@ -616,11 +616,12 @@ func TestReviveADOLane_UnlayeredExactPolicyEntrySurvives(t *testing.T) {
 	}
 }
 
-// DELIBERATE, and pinned so it is not "fixed" into keeping the entry: under a layered seal, a policy
+// DELIBERATE, and pinned so it is not "fixed" into keeping the entry: under the boundary's allowlist, a policy
 // entry spelled exactly as a lane entry (contoso.visualstudio.com:443) is minimised into the lane's one
 // copy, and the frozen config cannot tell the two apart, so a revive that withdraws the lane takes it
 // too. That host loses plain egress for the run; the credential is gone either way. A bare host or a
-// wildcard the policy lists is a different spelling, and stays.
+// wildcard the policy lists is a different spelling, and stays. The fixture is pre-minimised (one
+// copy) to stand for the allowlist seal; its deny-only layer does not minimise.
 func TestReviveADOLane_LayeredExactPolicyEntryIsWithdrawnDeliberately(t *testing.T) {
 	run := types.AgentRun{ID: uuid.New()}
 	cfg := adoFrozenConfig(run, "", "contoso.visualstudio.com", "*.visualstudio.com")

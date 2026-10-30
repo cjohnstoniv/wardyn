@@ -69,7 +69,7 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling,
 	}
 	// The person's Azure DevOps lane goes whole, by dispatch's rule (adoLaneWithheld). Its allowlist
 	// entries lose one copy each: the frozen config cannot say whether the policy listed one as well,
-	// and after a layered seal (minimise) a duplicate the policy also listed is a single copy.
+	// and under the boundary's allowlist a duplicate the policy also listed is a single copy.
 	rules := make([]egress.InjectionRule, 0, len(cfg.Injection))
 	for _, in := range cfg.Injection {
 		rules = append(rules, in.InjectionRule)
