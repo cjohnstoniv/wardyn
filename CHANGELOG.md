@@ -56,6 +56,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run's second UI app now opens while the first app's idle relay connections fill the run's 8-connection cap: at the
   cap the relay closes idle pooled connections and tries again. It used to answer a `503` at once, for up to 90
   seconds (#3507).
+- A macOS VM's plain-HTTP relay refuses CONNECT and drops the relay's own flow and stage headers a guest sends, so a
+  guest can no longer raise approval asks under a flow it did not open.
 - An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
   edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
   terminal. They used to stay open until they closed or reached their time limit (#3398).
@@ -74,9 +76,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A model gateway host both vendors share that is also the run's own model endpoint is now inspected as that endpoint's
   vendor. Under fail-closed inspection its request bodies were refused as uninspected (#3819).
 - A run's container `CONNECT` tunnels are now capped at 1,024 open at once, the bound desktop VM tunnels already have.
-  The next one is refused with a `503`, `Retry-After` and `X-Wardyn-Egress-Reason: builtin:tunnel-limit`, and a
-  `builtin:tunnel-limit` deny row; it is admitted once a tunnel closes. Before, a process could hold any number of
-  tunnels open (#3698).
+  The next one is refused with a `503`, `Retry-After`, `X-Wardyn-Host` and `X-Wardyn-Egress-Reason:
+  builtin:tunnel-limit`, and a `builtin:tunnel-limit` deny row; it is admitted once a tunnel closes. Before, a process
+  could hold any number of tunnels open (#3698). The person's sign-in tunnels count too. A desktop VM's tunnels count
+  only at its network relay, so a VM at its own bound still leaves room for the person to sign in.
 - With `WARDYN_FILE_SECRET_PLACEHOLDERS` on, a file named by two `file_secret` grants now holds the placeholder of the
   grant that delivered it. A later grant's placeholder replaced it, so requests to the delivering grant's host lost
   their credential.
@@ -195,6 +198,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `wardyn doctor`'s `runner-exits` stage, when the organisation will not show the runner, now says a revoked runner is
   not shown to its owner and points at the administrator's `runner.exit.park` audit rows. `docs/runner-offline.md`
   no longer says doctor reports a revoked runner's parked receipts (#3614).
+- The proxy's decision log now masks the AWS access key id of the role credentials it re-signs with, as it already
+  masked their secret key and session token.
 
 ### Security
 

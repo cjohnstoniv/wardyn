@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -92,8 +93,8 @@ func TestTunnelCap_RefusesPastTheCapUntilOneCloses(t *testing.T) {
 	}
 	_, resp := openCONNECT(t, addr)
 	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get(egressHeaderReason) != ruleSourceTunnelLimit ||
-		resp.Header.Get("Retry-After") == "" || resp.Header.Get("X-Should-Retry") != "true" {
-		t.Fatalf("tunnel %d = %d %v, want a 503 naming %s with a retry hint", maxOpenTunnels+1, resp.StatusCode, resp.Header, ruleSourceTunnelLimit)
+		resp.Header.Get("Retry-After") == "" || resp.Header.Get("X-Should-Retry") != "true" || resp.Header.Get(egressHeaderHost) != "example.com" {
+		t.Fatalf("tunnel %d = %d %v, want a 503 naming %s and example.com with a retry hint", maxOpenTunnels+1, resp.StatusCode, resp.Header, ruleSourceTunnelLimit)
 	}
 	if got := resp.Header.Get(egressHeaderStatus); got != "" {
 		t.Errorf("%s = %q on a temporary refusal, want none: denied means permanently blocked", egressHeaderStatus, got)
@@ -169,4 +170,55 @@ func TestTunnelCap_DrainReleasesTheSlots(t *testing.T) {
 		}
 	}
 	waitTunnels(t, p, 0)
+}
+
+// TestTunnelCap_ResumedRelayFlowsLeaveTheSigninLane: a relay flow resumed from
+// its ask holds the relay's slot, not the proxy's, so a VM guest at the relay's
+// bound cannot starve the person's sign-in CONNECT.
+func TestTunnelCap_ResumedRelayFlowsLeaveTheSigninLane(t *testing.T) {
+	rig := newSigninLaneRigFor(t, true, func(o *Options) {
+		o.Policy = CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"site.test", "relay.test"}})
+	})
+	for i := range maxOpenTunnels {
+		flow := fmt.Sprintf("%016x", i+1)
+		if st, _, _ := stagedConnect(t, rig.agentAddr, "relay.test:443", flow, vmnetStageAsk); st != http.StatusNoContent {
+			t.Fatalf("relay ask %d = %d, want 204", i+1, st)
+		}
+		if st, _, _ := stagedConnect(t, rig.agentAddr, "relay.test:443", flow, vmnetStageTunnel); st != http.StatusOK {
+			t.Fatalf("relay tunnel %d = %d, want 200", i+1, st)
+		}
+	}
+	if _, _, st := rig.connect(t, rig.signinAddr, "site.test:443", signinAuth(rig.goodCred)); st != http.StatusOK {
+		t.Fatalf("sign-in CONNECT beside %d relay flows = %d, want 200", maxOpenTunnels, st)
+	}
+}
+
+// TestTunnelCap_ForgedStageIsCounted: a tunnel-stage header with no parked flow
+// behind it, which a guest can send, is evaluated afresh and takes a slot.
+func TestTunnelCap_ForgedStageIsCounted(t *testing.T) {
+	p, _ := newRuleTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"origin.test"}}, echoListener(t), true, "", nil)
+	p.maxTunnels = 1
+	srv := httptest.NewServer(p)
+	t.Cleanup(srv.Close)
+	addr := srv.Listener.Addr().String()
+
+	if st, _, _ := stagedConnect(t, addr, "origin.test:443", flowA, vmnetStageTunnel); st != http.StatusOK {
+		t.Fatalf("forged tunnel stage = %d, want 200 under the cap", st)
+	}
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	_, _ = fmt.Fprintf(c, "CONNECT origin.test:443 HTTP/1.1\r\nHost: origin.test:443\r\n%s: %s\r\n%s: %s\r\n\r\n",
+		vmnetFlowHeader, flowB, vmnetStageHeader, vmnetStageTunnel)
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get(egressHeaderReason) != ruleSourceTunnelLimit ||
+		resp.Header.Get(egressHeaderHost) != "origin.test" {
+		t.Fatalf("second forged tunnel stage = %d %v, want a 503 naming %s and origin.test", resp.StatusCode, resp.Header, ruleSourceTunnelLimit)
+	}
 }
