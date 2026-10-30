@@ -70,6 +70,7 @@ func run(out, plist string) error {
 		ToolsDial:  dial,
 		TrustRunCA: guestagent.MacKeychain{Run: runner, Dir: out}.TrustRunCA,
 		Mount:      guestagent.MacShares{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID)}.Mount,
+		Disk:       guestagent.MacDisks{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID)}.Attach,
 	}
 	h, err := srv.Handler()
 	if err != nil {

@@ -53,6 +53,8 @@ type Server struct {
 	TrustRunCA func(ctx context.Context, runCA string) (status, reason string)
 	// Mount mounts one folder share (MacShares.Mount); nil refuses an Init that names one.
 	Mount func(context.Context, Mount) error
+	// Disk attaches one disk drive (MacDisks.Attach); nil refuses an Init that names one.
+	Disk func(context.Context, Disk) error
 
 	// signal signals a process group; nil is kill(2) (tests hold or fail it).
 	signal func(pgid int, sig unix.Signal) error
@@ -169,6 +171,16 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.Mount(r.Context(), m); err != nil {
 			http.Error(w, fmt.Sprintf("the shared folder at %s: %v", m.Target, err), http.StatusUnprocessableEntity)
+			return
+		}
+	}
+	for _, d := range in.Disks {
+		if s.Disk == nil {
+			http.Error(w, "this agent cannot attach disk drives", http.StatusUnprocessableEntity)
+			return
+		}
+		if err := s.Disk(r.Context(), d); err != nil {
+			http.Error(w, fmt.Sprintf("the disk drive at %s: %v", d.Target, err), http.StatusUnprocessableEntity)
 			return
 		}
 	}

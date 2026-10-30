@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
@@ -110,11 +112,11 @@ func macShareTarget(target string) (string, error) {
 	return guestagent.MacAgentHome + "/" + rest, nil
 }
 
-// macShares checks every mount of a macOS VM run and returns the shares the helper builds and the
-// guest mounts. Each source is resolved once, on a probe worker, and every rule, and the privacy
-// probe, decides about that one canonical path, which alone is recorded.
+// macShares checks every mount and every share drive of a macOS VM run and returns the shares the
+// helper builds and the guest mounts. Each source is resolved once, on a probe worker, and every rule,
+// and the privacy probe, decides about that one canonical path, which alone is recorded.
 func (d *Driver) macShares(ctx context.Context, spec runner.SandboxSpec) ([]macvm.Share, []guestagent.Mount, error) {
-	if len(spec.Mounts) == 0 {
+	if len(spec.Mounts) == 0 && len(spec.Drives) == 0 {
 		return nil, nil, nil
 	}
 	c := d.macVMConfig()
@@ -163,7 +165,75 @@ func (d *Driver) macShares(ctx context.Context, spec runner.SandboxSpec) ([]macv
 		shares = append(shares, macvm.Share{Tag: tag, HostPath: real, Target: guest, ReadOnly: m.ReadOnly})
 		mounts = append(mounts, guestagent.Mount{Tag: tag, Target: guest, ReadOnly: m.ReadOnly})
 	}
+	// Drives last, as the container's mounts do; two at one target would hide one of them.
+	seen := map[string]bool{}
+	for i := range spec.Drives {
+		drive := &spec.Drives[i]
+		if seen[drive.Target] {
+			return nil, nil, fmt.Errorf("docker: denied user drive (%s) -> %q: %w (another drive mounts there)",
+				runner.DriveSubject(drive), drive.Target, errDriveTargetInvalid)
+		}
+		seen[drive.Target] = true
+		real, guest, err := d.macDriveShare(ctx, drive, protected)
+		if err != nil {
+			return nil, nil, err
+		}
+		tag := macvm.ShareTag(len(shares))
+		shares = append(shares, macvm.Share{Tag: tag, HostPath: real, Target: guest, ReadOnly: drive.ReadOnly})
+		mounts = append(mounts, guestagent.Mount{Tag: tag, Target: guest, ReadOnly: drive.ReadOnly})
+	}
 	return shares, mounts, nil
+}
+
+// hasNonShareDrive reports whether a run has a drive a macOS VM cannot take as a shared folder: one
+// that is not a host folder.
+func hasNonShareDrive(drives []types.DriveMount) bool {
+	return slices.ContainsFunc(drives, func(drive types.DriveMount) bool { return drive.Backend != types.DriveBackendHostPath })
+}
+
+// macDriveShare is one share drive's place in a macOS VM: the container's own checks of its target and
+// of its source (hostPathDriveReal), then the folder-share rules on the path they resolved
+// (checkMacShare), all on a probe worker. It returns the canonical host path and the guest target.
+func (d *Driver) macDriveShare(ctx context.Context, drive *types.DriveMount, protected []string) (string, string, error) {
+	if err := runner.ValidateDriveTarget(drive); err != nil {
+		return "", "", fmt.Errorf("docker: denied user drive (%s) -> %q: %w (%v)",
+			runner.DriveSubject(drive), drive.Target, errDriveTargetInvalid, err)
+	}
+	if err := runner.ValidateTarget(drive.Target); err != nil {
+		return "", "", fmt.Errorf("docker: denied user drive (%s) -> %q: %w", runner.DriveSubject(drive), drive.Target, err)
+	}
+	guest, err := macShareTarget(drive.Target)
+	if err != nil {
+		return "", "", err
+	}
+	real, err := macShareProbes.run(ctx, func() (string, error) {
+		real, err := d.hostPathDriveReal(drive)
+		if err != nil {
+			return "", err
+		}
+		// The folder-share rules name the path they refused: it goes to the operator's log, as the
+		// container's source refusals do, and the person reads the drive and a reason only. A path that
+		// resolves differently the second time never passed the drive's own root check.
+		got, err := checkMacShare(real, false, nil, nil, protected)
+		if err == nil && got != real {
+			err = errors.New("the drive's folder changed while it was being checked")
+		}
+		switch {
+		case errors.Is(err, errShareUnreadable):
+			return "", err
+		case err != nil:
+			return "", fmt.Errorf("docker: denied user drive mount -> %q: %w", drive.Target,
+				runner.RefuseUserDriveBind(drive, drive.ObjectName, real, runner.DriveSourceRefused, err))
+		}
+		return got, nil
+	})
+	switch {
+	case errors.Is(err, errShareUnreadable):
+		return "", "", errors.New(runner.MacVMFolderUnreadable(cmp.Or(drive.DriveName, runner.DriveSubject(drive))))
+	case err != nil:
+		return "", "", err
+	}
+	return real, guest, nil
 }
 
 // checkMacShare is one share's filesystem work, run on a probe worker: resolve the source once,

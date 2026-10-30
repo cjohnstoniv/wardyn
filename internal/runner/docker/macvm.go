@@ -247,7 +247,8 @@ func (d *Driver) refuseMacVMSpec(spec runner.SandboxSpec) (macvm.Manifest, error
 	switch {
 	case c == nil:
 		return macvm.Manifest{}, errors.New("docker: this runner does not offer macOS VM sandboxes")
-	case len(spec.Drives) > 0:
+	case hasNonShareDrive(nonDiskDrives(spec.Drives)):
+		// A share drive is a shared folder (macShares) and a disk drive a disk (macDisks); no other is opened.
 		//lint:ignore ST1005 the sentence the person reads, as written in the approved copy
 		return macvm.Manifest{}, errors.New("A macOS VM sandbox has no drives in this release.")
 	case spec.RecordWithin(d.cfg.Record):
@@ -350,8 +351,8 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
-	// Folders are checked before anything exists, as createVM checks its mounts.
-	shares, guestMounts, err := d.macShares(ctx, spec)
+	// Folders are checked before anything exists, as createVM checks its mounts, and disk drives with them.
+	shares, guestMounts, disks, guestDisks, err := d.macDrives(ctx, spec)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -422,7 +423,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	})
 	if err := macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: spec.RunID.String(), BaseDir: c.Layout.BaseDir(0), CPUs: cpus, MemoryMiB: memMiB,
 		Identity: c.Identity, RunnerID: c.RunnerID, LedgerEntry: entry.ID, LedgerDir: c.LedgerDir, SockRoot: c.SockRoot,
-		Shares: shares}); err != nil {
+		Shares: shares, Disks: disks}); err != nil {
 		return fail(fmt.Errorf("docker: macOS VM run directory: %w", err))
 	}
 	if err := c.spawn(dir); err != nil {
@@ -473,7 +474,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 			return fail(fmt.Errorf("docker: %w", macvm.ErrDesktopPassword))
 		}
 	}
-	res, err := d.bootMacVM(bctx, v, cc, spec, guestMounts, password)
+	res, err := d.bootMacVM(bctx, v, cc, spec, guestMounts, guestDisks, password)
 	password = ""
 	if err != nil {
 		return fail(err)
@@ -541,7 +542,7 @@ func waitMacVMRunning(ctx context.Context, cc *macvm.ControlClient) error {
 
 // bootMacVM waits for the guest agent and hands it its sandbox; it answers what the guest made of its
 // sign-in store.
-func (d *Driver) bootMacVM(ctx context.Context, v *vmRun, cc *macvm.ControlClient, spec runner.SandboxSpec, mounts []guestagent.Mount,
+func (d *Driver) bootMacVM(ctx context.Context, v *vmRun, cc *macvm.ControlClient, spec runner.SandboxSpec, mounts []guestagent.Mount, disks []guestagent.Disk,
 	desktopPassword string) (guestagent.InitResult, error) {
 	var none guestagent.InitResult
 	if err := waitForSocket(ctx, filepath.Join(d.macVMConfig().sockDir(v.runID), macvm.AgentSock), 30*time.Second); err != nil {
@@ -565,7 +566,7 @@ func (d *Driver) bootMacVM(ctx context.Context, v *vmRun, cc *macvm.ControlClien
 	if err != nil {
 		return none, err
 	}
-	in.Mounts = mounts
+	in.Mounts, in.Disks = mounts, disks
 	in.DesktopPassword = desktopPassword
 	res, err := v.agent.Init(ctx, in)
 	in.DesktopPassword = "" // best effort: this copy is dropped once Init returns

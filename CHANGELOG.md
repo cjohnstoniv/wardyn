@@ -28,6 +28,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   [Apple's boot-time hosts](docs/operations/macos-vms.md#apples-boot-time-hosts).
 - A macOS VM run that mounts a drive is refused at create and Review in the launcher's words, before a Mac is asked
   to start the VM.
+- A macOS VM run can mount an admin or team drive that is a folder on the Mac. It is shared into the guest at the
+  container's names under `/Users/agent`, read-only as granted, and a runner that predates this refuses it at create.
+  See [Drives](docs/operations/macos-vms.md#drives).
+- A macOS VM run can mount a person's own disk drive, a disk image kept on one of their Macs (`POST /me/drives` with
+  `runner_id`), and keep its work folder as one. Only macOS VM runs on that Mac can use it, and deleting the drive
+  deletes the image there, at once or when the Mac reconnects. See [Drives](docs/operations/macos-vms.md#drives).
+- A disk drive is in one macOS VM run at a time: a second run on the Mac that asks for it while another holds it is
+  refused when that run starts, not at Review.
 - A macOS VM run is also refused at create and Review when a second harness has its own starting prompt, or when a tool
   rule, tool approvals, autonomy level L1 or the policy's inner walls would hold a tool call for approval. The launcher
   still refuses the same shapes as a backstop.
@@ -148,6 +156,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Preparing a macOS base no longer fails at stage 1 when Screen Sharing was already turned on during setup by hand: stage 1 checks that the service is loaded and skips loading it again. A macOS base prepared with Screen Sharing on view-only now says in `macos-vm status` how to get control.
 - During base preparation the guest's DNS lookups are refused instead of answered, so Setup Assistant's Screen Time screen no longer waits minutes for a network that is not there. Run-time DNS is unchanged.
 - The macOS setup window comes to the front, shows the three steps to follow, and `macos-vm status` no longer warns, wrongly, that the base's guest agent is not this runner's.
+
+### Before you upgrade
+
+- Migration `0246_user_drives_mac_disk` admits `mac_disk` in `user_drives.backend`'s CHECK and in the member-drive
+  rule, and adds `user_drives.home_runner_id`, the Mac a disk drive is kept on. It changes no row and adds no grant.
+  A downgrade with a disk drive present is unsupported.
 
 ## [0.10.0-rc.8] — 2026-10-29
 

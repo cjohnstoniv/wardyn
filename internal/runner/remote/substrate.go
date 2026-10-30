@@ -547,6 +547,23 @@ func (s *Substrate) ProbeDrive(ctx context.Context, mount types.DriveMount) (run
 	return res, err
 }
 
+// ReclaimMacDisk deletes a person's disk drive from this runner's Mac (reclaim_drive): runner.ErrDriveInUse
+// while a run there has it attached. A runner whose caps do not say it keeps disk drives is never asked.
+// It is not runner.DriveReclaimer's method, so no reclaim of the deployment's own storage reaches a runner.
+func (s *Substrate) ReclaimMacDisk(ctx context.Context, mount types.DriveMount) (runner.DriveReclaimOutcome, error) {
+	if c, ok := s.Caps(); !ok || c.MacOSVM == nil || !c.MacOSVM.DiskDrives {
+		return "", runnerwire.Refuse("this runner keeps no disk drives")
+	}
+	var res runnerwire.ReclaimDriveResult
+	if err := s.call(ctx, runnerwire.MethodReclaimDrive, mount, &res); err != nil {
+		return "", err
+	}
+	if res.InUse {
+		return "", runner.ErrDriveInUse
+	}
+	return res.Outcome, nil
+}
+
 // RecoverOutput reads the runner-side output buffer into w. For a live run adopted after a restart the
 // sink is registered before the runner is asked, so the OPEN the runner sends at connect finds it and
 // retries until the reply has set the sink's offset and gap.

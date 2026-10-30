@@ -8,6 +8,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +16,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -82,6 +85,27 @@ func memberDriveDeleteFailedMsg() string {
 	return "The drive's files couldn't be deleted. Nothing was removed; try again."
 }
 
+// memberDriveMacUnavailableMsg refuses a disk drive on a runner that is not one of the caller's own
+// Macs keeping disk drives.
+func memberDriveMacUnavailableMsg() string {
+	return "runner_id: choose one of your own Macs. It must be online, with a runner that is up to date."
+}
+
+// memberDriveDeleteDeferredMsg, memberDriveInRunOnMacMsg and memberDriveRecordOnlyMsg are a disk
+// drive's delete when its Mac is offline (MAC-D10), runs it now (MAC-D11) or is no longer registered
+// (MAC-D12).
+func memberDriveDeleteDeferredMsg(mac string) string {
+	return fmt.Sprintf("Deleting. %s is offline, so the disk is removed when it reconnects.", mac)
+}
+
+func memberDriveInRunOnMacMsg(name, mac string) string {
+	return fmt.Sprintf("%s is in a run on %s. Delete it after that run ends.", name, mac)
+}
+
+func memberDriveRecordOnlyMsg(mac string) string {
+	return fmt.Sprintf("%s is no longer registered, so this drive's disk stays on that Mac. Deleting removes only the record.", mac)
+}
+
 func memberDriveRateLimitedMsg() string {
 	return "Too many drive changes; wait a minute and try again."
 }
@@ -131,9 +155,15 @@ func (s *Server) handleCreateMemberDrive(w http.ResponseWriter, r *http.Request)
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonMemberDriveUnsupported, memberDriveUnsupportedMsg())
 		return
 	}
-	d, policy, refusal := s.memberDriveCreateGates(r, strings.TrimSpace(req.Name))
+	d, policy, refusal := s.memberDriveCreateGates(r, strings.TrimSpace(req.Name), req.RunnerID != "")
 	if refusal.write(s, w, r) {
 		return
+	}
+	if req.RunnerID != "" {
+		if d.HomeRunnerID = s.memberDriveMac(r.Context(), owner, req.RunnerID); d.HomeRunnerID == nil {
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonMemberDriveUnsupported, memberDriveMacUnavailableMsg())
+			return
+		}
 	}
 	d.OwnerSubject, d.CreatedBy = owner, principalFromRequest(r)
 	saved, err := ms.CreateMemberDrive(r.Context(), d, policy.MaxPerPerson)
@@ -153,14 +183,37 @@ func (s *Server) handleCreateMemberDrive(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.auditMemberDriveCreate(r, ms, saved, policy.MaxPerPerson)
-	writeJSON(w, http.StatusCreated, memberMeDrive(saved))
+	out := memberMeDrive(saved)
+	out.Mac = s.macDiskName(r.Context(), saved)
+	writeJSON(w, http.StatusCreated, out)
+}
+
+// memberDriveMac is the Mac a disk drive is created on: one of owner's own claimed runners, not revoked,
+// online here, whose caps keep disk drives. nil for anything else, all alike, so the refusal says nothing
+// about a runner the caller does not own.
+func (s *Server) memberDriveMac(ctx context.Context, owner, raw string) *uuid.UUID {
+	id, err := uuid.Parse(raw)
+	st, ok := s.cfg.Store.(store.RunnerStore)
+	if err != nil || !ok {
+		return nil
+	}
+	rn, err := st.GetRunner(ctx, id)
+	if err != nil || rn.OwnerKind != types.RunnerOwnerPerson || rn.State != types.RunnerClaimed || rn.RevokedAt != nil ||
+		types.CanonicalUserSubject(rn.Owner) != owner {
+		return nil
+	}
+	caps, ok := s.runnerLastCaps(id)
+	if !ok || caps.MacOSVM == nil || !caps.MacOSVM.DiskDrives || !s.runnerOnline(id) {
+		return nil
+	}
+	return &id
 }
 
 // memberDriveCreateGates runs create's gates after the name rule: the doors
 // (memberDriveCreateDoors), then the caller's own view of drive names. It
 // returns the row to insert and the switch's policy, or the refusal.
-func (s *Server) memberDriveCreateGates(r *http.Request, name string) (types.UserDrive, types.MemberDrivePolicy, *runRefusal) {
-	d, policy, f := s.memberDriveCreateDoors(r)
+func (s *Server) memberDriveCreateGates(r *http.Request, name string, mac bool) (types.UserDrive, types.MemberDrivePolicy, *runRefusal) {
+	d, policy, f := s.memberDriveCreateDoors(r, mac)
 	if f == nil {
 		f = s.memberDriveNameRefusal(r.Context(), name)
 	}
@@ -174,7 +227,9 @@ func (s *Server) memberDriveCreateGates(r *http.Request, name string) (types.Use
 // memberDriveCreateDoors runs every create gate that does not need the name,
 // in order: the org switch, the profile doors, the backend and size, and the
 // substrate's lifecycle. The catalogue's create block reads the same answer.
-func (s *Server) memberDriveCreateDoors(r *http.Request) (types.UserDrive, types.MemberDrivePolicy, *runRefusal) {
+// mac makes the row a disk drive, which the Mac it is kept on deletes
+// (reclaim_drive), so the deployment's own lifecycle does not decide it.
+func (s *Server) memberDriveCreateDoors(r *http.Request, mac bool) (types.UserDrive, types.MemberDrivePolicy, *runRefusal) {
 	ctx := r.Context()
 	provider, err := s.userDriveProvider(ctx)
 	if err != nil {
@@ -191,11 +246,11 @@ func (s *Server) memberDriveCreateDoors(r *http.Request) (types.UserDrive, types
 	if f := s.memberDriveDoorRefusal(r, ceiling); f != nil {
 		return types.UserDrive{}, policy, f
 	}
-	d, f := s.memberDriveRow(policy, provider.MaxSizeMiB, ceiling.Limits.MaxDriveSizeMiB)
+	d, f := s.memberDriveRow(policy, provider.MaxSizeMiB, ceiling.Limits.MaxDriveSizeMiB, mac)
 	if f != nil {
 		return types.UserDrive{}, policy, f
 	}
-	if !s.memberDrivesDeletable(ctx) {
+	if !mac && !s.memberDrivesDeletable(ctx) {
 		return types.UserDrive{}, policy, runError(http.StatusUnprocessableEntity, reasonMemberDriveDeleteUnavailable, memberDriveDeleteUnavailableCreateMsg())
 	}
 	return d, policy, nil
@@ -220,25 +275,33 @@ func (s *Server) memberDriveDoorRefusal(r *http.Request, ceiling governanceCeili
 // backend, and on Kubernetes the switch's claim size clamped by the deployment
 // and profile ceilings. A Docker volume has no size, so it gets none. A stored
 // Kubernetes switch with no size is refused rather than made into an unsized
-// claim.
-func (s *Server) memberDriveRow(policy types.MemberDrivePolicy, deploymentMiB, profileMiB int) (types.UserDrive, *runRefusal) {
+// claim. mac makes it a disk drive, sized as a claim is, or macDiskDefaultMiB
+// when the switch sets no size; its home Mac is the caller's to set.
+func (s *Server) memberDriveRow(policy types.MemberDrivePolicy, deploymentMiB, profileMiB int, mac bool) (types.UserDrive, *runRefusal) {
 	var d types.UserDrive
-	switch s.cfg.RunnerTarget {
-	case "docker":
+	switch {
+	case mac:
+		d.Backend, d.SizeMiB = types.DriveBackendMacDisk, cmp.Or(policy.SizeMiB, macDiskDefaultMiB)
+	case s.cfg.RunnerTarget == "docker":
 		d.Backend = types.DriveBackendDockerVolume
-	case "k8s":
+		return d, nil
+	case s.cfg.RunnerTarget == "k8s":
 		if policy.SizeMiB <= 0 {
 			return d, runError(http.StatusUnprocessableEntity, reasonMemberDriveUnsupported, memberDriveUnsizedMsg())
 		}
 		d.Backend, d.SizeMiB, d.StorageClass = types.DriveBackendK8sPVC, policy.SizeMiB, policy.StorageClass
-		if bound, _ := (driveSizeCeiling{DeploymentMiB: deploymentMiB, ProfileMiB: profileMiB}).bound(); bound > 0 && bound < d.SizeMiB {
-			d.SizeMiB = bound
-		}
 	default:
 		return d, runError(http.StatusUnprocessableEntity, reasonMemberDriveUnsupported, memberDriveUnsupportedMsg())
 	}
+	if bound, _ := (driveSizeCeiling{DeploymentMiB: deploymentMiB, ProfileMiB: profileMiB}).bound(); bound > 0 && bound < d.SizeMiB {
+		d.SizeMiB = bound
+	}
 	return d, nil
 }
+
+// macDiskDefaultMiB is a disk drive's size when the switch sets none: 64 GiB. The image is sparse, so it
+// takes room on the Mac only as the drive fills.
+const macDiskDefaultMiB = 64 << 10
 
 // memberDrivesDeletable reports whether the wired runner can destroy what it
 // would create: it must be a DriveReclaimer, and its lifecycle check must say
@@ -362,6 +425,15 @@ func (s *Server) handleDeleteMyDrive(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "finish member drive delete", res.err)
 	case res.reason == "":
 		w.WriteHeader(http.StatusNoContent)
+	case res.reason == reasonMemberDriveDeleteDeferred:
+		_, mac, _ := s.macDiskHome(r.Context(), d)
+		writeJSON(w, http.StatusAccepted, client.MyDriveDeleteResult{Reason: res.reason, Message: memberDriveDeleteDeferredMsg(mac)})
+	case res.reason == reasonMemberDriveRecordOnly:
+		_, mac, _ := s.macDiskHome(r.Context(), d)
+		writeJSON(w, http.StatusOK, client.MyDriveDeleteResult{Reason: res.reason, Message: memberDriveRecordOnlyMsg(mac)})
+	case res.reason == reasonMemberDriveInUse && d.Backend == types.DriveBackendMacDisk && res.driverErr != nil:
+		_, mac, _ := s.macDiskHome(r.Context(), d)
+		writeErrorReason(w, http.StatusConflict, reasonMemberDriveInUse, memberDriveInRunOnMacMsg(d.Name, mac))
 	case res.reason == reasonMemberDriveInUse:
 		writeErrorReason(w, http.StatusConflict, reasonMemberDriveInUse, memberDriveInUseMsg())
 	case res.reason == reasonMemberDriveDeleteUnavailable:
@@ -418,6 +490,8 @@ func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStor
 	switch {
 	case err != nil:
 		res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteFailed
+	case d.Backend == types.DriveBackendMacDisk:
+		res.outcome, res.reason, res.driverErr = s.reclaimMacDisk(sctx, ms, d, mount)
 	case !ok || d.Backend.RunnerTarget() != s.cfg.RunnerTarget || !s.memberDrivesDeletable(sctx):
 		res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteUnavailable
 	default:
@@ -448,16 +522,116 @@ func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStor
 			res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteFailed
 		}
 	}
-	if res.reason == "" {
+	switch {
+	case res.reason == "" || res.reason == reasonMemberDriveRecordOnly:
 		if ferr := ms.FinishMemberDriveDelete(ctx, d.ID, started); ferr != nil && !errors.Is(ferr, store.ErrNotFound) {
 			res.err = ferr
 		}
-	} else if aerr := ms.AbortMemberDriveDelete(ctx, d.ID, started); aerr != nil && !errors.Is(aerr, store.ErrNotFound) {
-		slog.ErrorContext(ctx, "api: clear a member drive's delete tombstone",
-			slog.String("drive_id", d.ID.String()), slog.String("error", aerr.Error()))
+	case res.reason == reasonMemberDriveDeleteDeferred, by == memberDriveByMacReconnect && res.reason == reasonMemberDriveInUse:
+		// The tombstone stays: the drive reads as deleting, no run attaches it, and the Mac's reconnect
+		// finishes the delete (finishMacDiskDeletes). A disk its Mac's run still has, met by that
+		// sweep, waits for the next one: the owner already asked for the delete.
+	default:
+		if aerr := ms.AbortMemberDriveDelete(ctx, d.ID, started); aerr != nil && !errors.Is(aerr, store.ErrNotFound) {
+			slog.ErrorContext(ctx, "api: clear a member drive's delete tombstone",
+				slog.String("drive_id", d.ID.String()), slog.String("error", aerr.Error()))
+		}
 	}
 	s.auditMemberDriveDelete(ctx, d, res, by)
 	return res
+}
+
+// Outcomes of a disk drive's delete that are not its Mac's (drive.member.delete's outcome).
+const (
+	driveReclaimOutcomeDeferred   = "deferred"    // the Mac is offline: the tombstone stays until it reconnects
+	driveReclaimOutcomeRecordOnly = "record_only" // the Mac is no longer registered: the image stays on it
+)
+
+// reclaimMacDisk is deleteMemberDrive's substrate step for a disk drive: the Mac
+// it is kept on deletes its image (reclaim_drive). A Mac no longer registered
+// keeps the image and the row goes (MAC-D12); an offline one keeps the tombstone
+// for its reconnect (MAC-D10); one whose run has the disk refuses (MAC-D11). A run
+// of the owner's still starting may attach the disk, so it refuses too.
+func (s *Server) reclaimMacDisk(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, mount types.DriveMount) (string, string, error) {
+	rn, _, err := s.macDiskHome(ctx, d)
+	switch {
+	case errors.Is(err, store.ErrNotFound) || err == nil && rn.RevokedAt != nil:
+		return driveReclaimOutcomeRecordOnly, reasonMemberDriveRecordOnly, nil
+	case err != nil:
+		return driveReclaimOutcomeFailed, reasonMemberDriveDeleteFailed, nil
+	case !s.macDiskHeldHere(rn.ID):
+		return driveReclaimOutcomeDeferred, reasonMemberDriveDeleteDeferred, nil
+	}
+	if starting, serr := ms.MemberDriveOwnerStarting(ctx, d.OwnerSubject, watcherLeaseStaleAfter); serr != nil || starting {
+		if serr != nil {
+			return driveReclaimOutcomeFailed, reasonMemberDriveDeleteFailed, nil
+		}
+		return driveReclaimOutcomeRefused, reasonMemberDriveInUse, nil
+	}
+	outcome, rerr := s.runnerEndpoint(rn.ID).sub.ReclaimMacDisk(ctx, mount)
+	switch {
+	case rerr == nil:
+		return string(outcome), "", nil
+	case errors.Is(rerr, runner.ErrDriveInUse):
+		return driveReclaimOutcomeRefused, reasonMemberDriveInUse, rerr
+	}
+	slog.WarnContext(ctx, "api: a disk drive's delete failed on its Mac",
+		slog.String("drive_id", d.ID.String()), slog.String("runner_id", rn.ID.String()), slog.String("error", rerr.Error()))
+	return driveReclaimOutcomeFailed, reasonMemberDriveDeleteFailed, nil
+}
+
+// macDiskHeldHere reports whether this replica holds runnerID's session, online
+// with caps that keep disk drives, so reclaim_drive reaches the Mac from here. A
+// Mac held by another replica counts as away: that replica's sweep finishes the
+// delete (finishMacDiskDeletes).
+func (s *Server) macDiskHeldHere(runnerID uuid.UUID) bool {
+	caps, ok := s.runnerLastCaps(runnerID)
+	return ok && caps.MacOSVM != nil && caps.MacOSVM.DiskDrives && s.runnerOnline(runnerID)
+}
+
+// macDiskDeleteStore lists the disk drives whose delete waits for their Mac (store.PG).
+type macDiskDeleteStore interface {
+	ListMacDiskDeletes(ctx context.Context) ([]types.UserDrive, error)
+}
+
+// memberDriveByMacReconnect is the "by" of a disk drive delete its Mac's return finishes.
+const memberDriveByMacReconnect = "mac_reconnect"
+
+// finishMacDiskDeletes finishes each disk drive delete that waited for its Mac
+// (MAC-D10) once this replica holds that Mac, or the Mac is no longer registered
+// (MAC-D12): the tombstone is taken over once it is older than a minute, and the
+// delete runs as its owner's did. The runner-ready kick and the run watcher's
+// sweep call it; a drive skipped now is met again on the next sweep.
+func (s *Server) finishMacDiskDeletes(ctx context.Context) error {
+	ms, ok := s.cfg.Store.(store.MemberDriveStore)
+	ls, lok := s.cfg.Store.(macDiskDeleteStore)
+	if !ok || !lok {
+		return nil
+	}
+	waiting, err := ls.ListMacDiskDeletes(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, w := range waiting {
+		rn, _, herr := s.macDiskHome(ctx, w)
+		gone := errors.Is(herr, store.ErrNotFound) || herr == nil && rn.RevokedAt != nil
+		if !gone && (herr != nil || !s.macDiskHeldHere(rn.ID)) {
+			continue
+		}
+		d, started, err := ms.BeginMemberDriveDeleteAdmin(ctx, w.ID)
+		switch {
+		case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrMemberDriveBusy):
+			continue
+		case err != nil:
+			errs = append(errs, err)
+			continue
+		}
+		if res := s.deleteMemberDrive(ctx, ms, d, started, memberDriveByMacReconnect); res.err != nil {
+			errs = append(errs, res.err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // memberDriveMount is the DriveMount a member drive's object is addressed by:
@@ -470,7 +644,7 @@ func memberDriveMount(d types.UserDrive) (types.DriveMount, error) {
 	return types.DriveMount{
 		DriveID: d.ID, Backend: d.Backend, ObjectName: types.DriveObjectName(d, home), DriveName: d.Name,
 		StorageClass: d.StorageClass, HomeName: home, SubjectHash: types.DriveSubjectHash(d.OwnerSubject),
-		Target: runner.DriveTarget,
+		Target: runner.DriveTarget, SizeMiB: d.SizeMiB, RunnerID: d.HomeRunnerID,
 	}, nil
 }
 
@@ -478,7 +652,8 @@ func memberDriveMount(d types.UserDrive) (types.DriveMount, error) {
 // and already_absent are successes; refused and failed are failures.
 func (s *Server) auditMemberDriveDelete(ctx context.Context, d types.UserDrive, res memberDriveDeletion, by string) {
 	result := "failure"
-	if res.reason == "" {
+	switch res.reason {
+	case "", reasonMemberDriveRecordOnly, reasonMemberDriveDeleteDeferred:
 		result = "success"
 	}
 	actorType, actor := auditActorFromContext(ctx)

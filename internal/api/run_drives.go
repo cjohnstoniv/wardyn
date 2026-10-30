@@ -162,10 +162,10 @@ func (s *Server) seedRequestDrives(w http.ResponseWriter, r *http.Request,
 	if refusal.write(s, w, r) {
 		return nil, nil, false
 	}
-	// A run with a drive that has a second place mounts its drives where placement
-	// puts it (stepDriveEligibility builds them then); every other run builds them
-	// here, as it always has.
-	if slices.ContainsFunc(drives, func(d runDrive) bool { return d.resolved.Drive.AltRunnerID != nil }) {
+	// A run with a drive that has a second place, or a disk drive, mounts its drives
+	// where placement puts it (stepDriveEligibility builds them then); every other
+	// run builds them here, as it always has.
+	if slices.ContainsFunc(drives, func(d runDrive) bool { return driveBoundRunnerOf(d.resolved.Drive) != nil }) {
 		return drives, nil, true
 	}
 	mounts, ok := s.driveMountsAt(w, r, drives, drivePlace{})

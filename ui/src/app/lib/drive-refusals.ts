@@ -23,6 +23,11 @@ export const DRIVE_REFUSAL = {
   TARGET_CONFLICT: (a: string, b: string, target: string) => `${a} and ${b} both mount at ${target}. Attach one of them.`,
   SHARE_BESIDE_MANAGED: (share: string, managed: string) =>
     `${share} is a shared drive and ${managed} a managed one; a Kubernetes run mounts one kind or the other. Attach one of them.`,
+  // A macOS VM can't open a Docker volume or a cluster volume.
+  MACOS_DOCKER_VOLUME: (name: string) => `${name} is a Docker volume, which a macOS VM can't open.`,
+  MACOS_CLUSTER_VOLUME: (name: string) => `${name} is a cluster volume, which a macOS VM can't open.`,
+  // A person's disk drive is kept on one Mac, and only a macOS VM there attaches it.
+  MAC_DISK_ELSEWHERE: (name: string, mac: string) => `${name} is a disk on ${mac}, so only macOS VM runs on ${mac} can use it.`,
   // Member drives: POST /me/drives and DELETE /me/drives/{id}. A quoted name is
   // Go's %q, which JSON.stringify matches for the names a drive can carry.
   MEMBER_REQUIRES_PERSON: () => "Sign in under your own account to create or delete a drive.",
@@ -41,6 +46,12 @@ export const DRIVE_REFUSAL = {
   MEMBER_BUSY: () => "This drive is already being deleted.",
   MEMBER_DELETE_FAILED: () => "The drive's files couldn't be deleted. Nothing was removed; try again.",
   MEMBER_RATE_LIMITED: () => "Too many drive changes; wait a minute and try again.",
+  // A disk drive kept on a Mac: made on one of the person's own Macs, and deleted there.
+  MEMBER_MAC_UNAVAILABLE: () => "runner_id: choose one of your own Macs. It must be online, with a runner that is up to date.",
+  MEMBER_DELETE_DEFERRED: (mac: string) => `Deleting. ${mac} is offline, so the disk is removed when it reconnects.`,
+  MEMBER_IN_RUN_ON_MAC: (name: string, mac: string) => `${name} is in a run on ${mac}. Delete it after that run ends.`,
+  MEMBER_RECORD_ONLY: (mac: string) =>
+    `${mac} is no longer registered, so this drive's disk stays on that Mac. Deleting removes only the record.`,
 } as const;
 
 /** The reason each sentence is sent with; the console matches on these, never on the text. */
@@ -54,6 +65,9 @@ export const DRIVE_REFUSAL_REASON = {
   BOUND_ELSEWHERE: "drive_not_in_pool",
   TARGET_CONFLICT: "drive_target_conflict",
   SHARE_BESIDE_MANAGED: "drive_share_beside_managed",
+  MACOS_DOCKER_VOLUME: "placement_capability",
+  MACOS_CLUSTER_VOLUME: "placement_capability",
+  MAC_DISK_ELSEWHERE: "drive_not_in_pool",
   MEMBER_REQUIRES_PERSON: "member_drive_requires_person",
   MEMBER_DISABLED: "member_drives_disabled",
   MEMBER_DENIED_BY_UNIT: "member_drives_denied_by_unit",
@@ -68,4 +82,8 @@ export const DRIVE_REFUSAL_REASON = {
   MEMBER_BUSY: "member_drive_busy",
   MEMBER_DELETE_FAILED: "member_drive_delete_failed",
   MEMBER_RATE_LIMITED: "member_drive_rate_limited",
+  MEMBER_MAC_UNAVAILABLE: "member_drive_unsupported",
+  MEMBER_DELETE_DEFERRED: "member_drive_delete_deferred",
+  MEMBER_IN_RUN_ON_MAC: "member_drive_in_use",
+  MEMBER_RECORD_ONLY: "member_drive_record_only",
 } as const satisfies Record<keyof typeof DRIVE_REFUSAL, string>;
