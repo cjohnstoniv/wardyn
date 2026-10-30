@@ -21,6 +21,7 @@ import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { Hint } from "./resource-table";
 import { shortDate } from "../../../lib/format";
+import { MacVMBases } from "./macvm-bases";
 import { baseAgeOf, baseTooOld, editedAtText, macVMBadge, postureRows, refused, sizeShortfall } from "./macvm-view";
 
 /** A string with `code` spans, the way the boards set `wardyn-runnerd setup`. */
@@ -179,6 +180,7 @@ function Body({ caps, active, perRun, runner, hostOS, maxBaseAgeDays }: { caps: 
         {guest_os && <span className="text-muted-foreground">{MACVM_R.R06(guest_os)}</span>}
       </div>
       {observe && <p className="mt-1 text-foreground">{MACVM_R.R40}</p>}
+      <MacVMBases caps={caps} />
       {ageLine}
       {posture}
       <div className="mt-1"><Facts caps={caps} active={active} /></div>
