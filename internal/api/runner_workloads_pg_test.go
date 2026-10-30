@@ -23,13 +23,15 @@ import (
 )
 
 // crEnv is svcEnv with the service identity created, one claimed organization runner attached over loopback
-// (fake) and a member of an organization pool, and that pool binding namespace team-a to the service.
+// (fake) and a member of an organization pool, and that pool binding namespace team-a to the service. The
+// runner's current session is session, as a fresh session's BeginInventory records it.
 type crEnv struct {
 	svcEnv
-	runner uuid.UUID
-	rp     types.RunnerPool // the runner's pool
-	fake   *runnertest.Fake
-	pol    string
+	runner  uuid.UUID
+	session string
+	rp      types.RunnerPool // the runner's pool
+	fake    *runnertest.Fake
+	pol     string
 }
 
 func newCREnv(t *testing.T) crEnv {
@@ -38,24 +40,36 @@ func newCREnv(t *testing.T) crEnv {
 	e.mustCreate(t, svcName, svcSponsor)
 	e.pol = e.plainPolicy(t, "wl-pol")
 	e.rp = e.orgPool(t, "Cluster")
-	ctx := context.Background()
-	e.runner = uuid.New()
-	fp, org := "fp-"+e.runner.String(), federation.OrgURLSHA256("https://org.example.com")
-	// An organization pool runs only the organization's own runners (runnerpool.OrgRunnerCandidates), so the
-	// runner is one, claimed and added as the security admin's routes do; a person's runner never joins.
-	if _, err := e.st.CreateRunner(ctx, types.Runner{ID: e.runner, OwnerKind: types.RunnerOwnerOrg, Name: "cluster", PublicKey: append(e.runner[:], e.runner[:]...),
-		KeyFingerprint: fp, OrgURLSHA256: org, Limits: roomyRunnerLimits()}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.st.ClaimOrgRunner(ctx, e.runner, fp, org, "sec-sub", time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, _, err := e.st.AddOrgRunnerToPool(ctx, e.rp.ID, e.runner, org, ""); err != nil {
-		t.Fatal(err)
-	}
+	e.runner, e.session = e.poolRunner(t, "cluster")
 	e.bindNamespace(t, e.rp.ID, "team-a")
 	attachRunner(t, e.h.srv, e.runner, e.fake)
 	return e
+}
+
+// poolRunner adds a claimed organization runner named name to the env's pool and begins a session of it,
+// and returns the runner and that session.
+func (e crEnv) poolRunner(t *testing.T, name string) (uuid.UUID, string) {
+	t.Helper()
+	ctx := context.Background()
+	id := uuid.New()
+	fp, org := "fp-"+id.String(), federation.OrgURLSHA256("https://org.example.com")
+	// An organization pool runs only the organization's own runners (runnerpool.OrgRunnerCandidates), so the
+	// runner is one, claimed and added as the security admin's routes do; a person's runner never joins.
+	if _, err := e.st.CreateRunner(ctx, types.Runner{ID: id, OwnerKind: types.RunnerOwnerOrg, Name: name, PublicKey: append(id[:], id[:]...),
+		KeyFingerprint: fp, OrgURLSHA256: org, Limits: roomyRunnerLimits()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.ClaimOrgRunner(ctx, id, fp, org, "sec-sub", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := e.st.AddOrgRunnerToPool(ctx, e.rp.ID, id, org, ""); err != nil {
+		t.Fatal(err)
+	}
+	session := uuid.NewString()
+	if err := e.st.BeginRunnerInventory(ctx, id, session); err != nil {
+		t.Fatal(err)
+	}
+	return id, session
 }
 
 func (e crEnv) orgPool(t *testing.T, name string) types.RunnerPool {
@@ -75,14 +89,20 @@ func (e crEnv) bindNamespace(t *testing.T, pool uuid.UUID, ns string) {
 	}
 }
 
-// report sends rep as the runner's workload event.
+// report sends rep as the runner's workload event, on its current session.
 func (e crEnv) report(t *testing.T, rep runnerwire.WorkloadReport) {
+	t.Helper()
+	e.reportFrom(t, e.runner, e.session, rep)
+}
+
+// reportFrom sends rep as runner's workload event on session.
+func (e crEnv) reportFrom(t *testing.T, runner uuid.UUID, session string, rep runnerwire.WorkloadReport) {
 	t.Helper()
 	data, err := json.Marshal(rep)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.h.srv.WorkloadFromRunner(context.Background(), e.runner, runnerwire.Event{Kind: runnerwire.EventWorkload, Data: data}); err != nil {
+	if err := e.h.srv.WorkloadFromRunner(context.Background(), runner, session, runnerwire.Event{Kind: runnerwire.EventWorkload, Data: data}); err != nil {
 		t.Fatalf("report %s %s/%s: %v", rep.Op, rep.Namespace, rep.Name, err)
 	}
 }
@@ -316,7 +336,7 @@ func TestPG_WorkloadFromRunner_DropLeavesARecreatedResource(t *testing.T) {
 	defer cancel()
 	drop := func(w store.Workload) {
 		t.Helper()
-		if err := e.h.srv.dropK8sWorkload(ctx, e.st, sr, e.runner, b, si, w, w.K8sUID, workloadViaK8s); err != nil {
+		if err := e.h.srv.dropK8sWorkload(ctx, e.st, sr, store.WorkloadReporter{Runner: e.runner, Session: e.session}, b, si, w, w.K8sUID, workloadViaK8s); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -549,5 +569,194 @@ func TestPG_WorkloadSweep_RetriesALapsedLaunch(t *testing.T) {
 	}
 	if v, err := e.st.GetWorkload(ctx, svcPrin, "db"); err != nil || v.CurrentRunID != nil || v.LastRefusal == nil || v.LastRefusal.Reason != "policy_ceiling_exceeded" {
 		t.Fatalf("refused workload = %+v (%v), want its refusal to stand with no run", v.Workload, err)
+	}
+}
+
+// wlRow is the stored custom-resource workload name, read now.
+func (e crEnv) wlRow(t *testing.T, name string) store.WorkloadView {
+	t.Helper()
+	v, err := e.st.GetWorkload(context.Background(), svcPrin, name)
+	if err != nil {
+		t.Fatalf("workload %s: %v", name, err)
+	}
+	return v
+}
+
+// Two runners serve one bound namespace, and their reports are not in order. A full list from a runner
+// other than the one that last applied a workload can be older than that apply, so it prunes nothing: the
+// workload and its run survive. The applying runner's own current list still prunes it and ends the run.
+func TestPG_WorkloadFromRunner_OnlyTheSourceRunnersListPrunes(t *testing.T) {
+	e := newCREnv(t)
+	ctx := context.Background()
+	other, otherSession := e.poolRunner(t, "cluster-b")
+	_, run := e.k8sWorkloadWithRun(t, "web", "uid-web")
+
+	e.reportFrom(t, other, otherSession, runnerwire.WorkloadReport{Op: runnerwire.WorkloadOpSync, Namespace: "team-a", Names: []string{}})
+	if v := e.wlRow(t, "web"); v.CurrentRunID == nil || *v.CurrentRunID != run {
+		t.Fatalf("after another runner's older list = %+v, want the workload kept with run %s", v.Workload, run)
+	}
+	if n := countAudit(e.h.audit.snapshot(), "workload.delete"); n != 0 || owedEnds(t, e.svcEnv, run) != 0 {
+		t.Fatalf("%d workload.delete rows and %d owed ends after another runner's list, want none", n, owedEnds(t, e.svcEnv, run))
+	}
+
+	e.report(t, runnerwire.WorkloadReport{Op: runnerwire.WorkloadOpSync, Namespace: "team-a", Names: []string{}})
+	if _, err := e.st.GetWorkload(ctx, svcPrin, "web"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the applying runner's own list left the workload: %v", err)
+	}
+	if got := killReason(t, e.svcEnv, run); got != workloadKillDeleted {
+		t.Fatalf("run.kill reason = %q, want %q", got, workloadKillDeleted)
+	}
+	var vias []any
+	for _, ev := range e.h.audit.snapshot() {
+		if ev.Action == "workload.delete" {
+			var d map[string]any
+			_ = json.Unmarshal(ev.Data, &d)
+			vias = append(vias, d["via"])
+		}
+	}
+	if len(vias) != 1 || vias[0] != workloadViaK8sSync {
+		t.Fatalf("workload.delete vias %v, want one %s", vias, workloadViaK8sSync)
+	}
+}
+
+// After the applying runner replaced U1 with the recreated resource's U2, another runner's late report of
+// U1, with U2's spec or another, changes nothing (uid, spec, generation, run), records no workload.apply and
+// launches nothing; its delete of U1 then leaves U2's workload and run standing.
+func TestPG_WorkloadFromRunner_AnotherRunnersOlderUIDChangesNothing(t *testing.T) {
+	e := newCREnv(t)
+	other, otherSession := e.poolRunner(t, "cluster-b")
+	_, run := e.k8sWorkloadWithRun(t, "web", "uid-u1")
+	e.putK8sWorkload(t, "web", "uid-u2", "t") // the applying runner's report of the recreated resource
+	want := e.wlRow(t, "web")
+	if want.K8sUID != "uid-u2" || want.CurrentRunID == nil || *want.CurrentRunID != run {
+		t.Fatalf("after the recreate = %+v, want uid-u2 with run %s", want.Workload, run)
+	}
+	applies, launches := countAudit(e.h.audit.snapshot(), "workload.apply"), countAudit(e.h.audit.snapshot(), "workload.launch")
+
+	same := e.apply("team-a", "web", "")
+	same.UID = "uid-u1"
+	changed := same
+	changed.Spec = json.RawMessage(`{"intent":{"agent":"claude-code","task":"older","policy_id":"` + e.pol + `"}}`)
+	for _, rep := range []runnerwire.WorkloadReport{same, changed} {
+		e.reportFrom(t, other, otherSession, rep)
+		v := e.wlRow(t, "web")
+		if v.K8sUID != "uid-u2" || v.Digest != want.Digest || v.Generation != want.Generation || v.CurrentRunID == nil || *v.CurrentRunID != run ||
+			v.SourceRunnerID == nil || *v.SourceRunnerID != e.runner {
+			t.Fatalf("after another runner's U1 = %+v, want %+v unchanged", v.Workload, want.Workload)
+		}
+	}
+	events := e.h.audit.snapshot()
+	if countAudit(events, "workload.apply") != applies || countAudit(events, "workload.launch") != launches {
+		t.Fatalf("workload.apply/launch = %d/%d after the stale U1, want %d/%d", countAudit(events, "workload.apply"),
+			countAudit(events, "workload.launch"), applies, launches)
+	}
+
+	e.reportFrom(t, other, otherSession, runnerwire.WorkloadReport{Op: runnerwire.WorkloadOpDelete, Namespace: "team-a", Name: "web", UID: "uid-u1"})
+	if v := e.wlRow(t, "web"); v.K8sUID != "uid-u2" || v.CurrentRunID == nil || *v.CurrentRunID != run {
+		t.Fatalf("after U1's delete = %+v, want U2's workload with run %s", v.Workload, run)
+	}
+	if r, err := e.st.GetRun(context.Background(), run); err != nil || r.State == types.RunKilled {
+		t.Fatalf("run after U1's delete = %q (%v), want it running", r.State, err)
+	}
+}
+
+// A runner other than the one that last applied a workload that reports the recreated resource's U2 first
+// is held, not lost: the row keeps U1 until the applying runner reports U2 itself, which then replaces it.
+func TestPG_WorkloadFromRunner_AnotherRunnersEarlyUIDIsHeldForTheSource(t *testing.T) {
+	e := newCREnv(t)
+	other, otherSession := e.poolRunner(t, "cluster-b")
+	e.putK8sWorkload(t, "web", "uid-u1", "t")
+	u2 := e.apply("team-a", "web", "")
+	u2.UID = "uid-u2"
+
+	e.reportFrom(t, other, otherSession, u2)
+	if v := e.wlRow(t, "web"); v.K8sUID != "uid-u1" || v.SourceRunnerID == nil || *v.SourceRunnerID != e.runner {
+		t.Fatalf("after another runner's early U2 = %+v, want U1 held from %s", v.Workload, e.runner)
+	}
+	e.report(t, u2)
+	if v := e.wlRow(t, "web"); v.K8sUID != "uid-u2" || v.SourceRunnerID == nil || *v.SourceRunnerID != e.runner {
+		t.Fatalf("after the applying runner's U2 = %+v, want U2 from %s", v.Workload, e.runner)
+	}
+}
+
+// Once the runner that last applied a workload has left the pool, another runner of the pool takes over: its
+// report of another uid replaces the row, and its full list prunes what it omits.
+func TestPG_WorkloadFromRunner_AnotherRunnerTakesOverOnceTheSourceLeftThePool(t *testing.T) {
+	e := newCREnv(t)
+	ctx := context.Background()
+	other, otherSession := e.poolRunner(t, "cluster-b")
+	e.putK8sWorkload(t, "web", "uid-web", "t")
+	e.putK8sWorkload(t, "api", "uid-api-1", "t")
+	if _, err := e.pool.Exec(ctx, `DELETE FROM runner_pool_members WHERE pool_id = $1 AND runner_id = $2`, e.rp.ID, e.runner); err != nil {
+		t.Fatal(err)
+	}
+
+	api := e.apply("team-a", "api", "")
+	api.UID = "uid-api-2"
+	e.reportFrom(t, other, otherSession, api)
+	if v := e.wlRow(t, "api"); v.K8sUID != "uid-api-2" || v.SourceRunnerID == nil || *v.SourceRunnerID != other {
+		t.Fatalf("after the takeover's report = %+v, want uid-api-2 from %s", v.Workload, other)
+	}
+	e.reportFrom(t, other, otherSession, runnerwire.WorkloadReport{Op: runnerwire.WorkloadOpSync, Namespace: "team-a", Names: []string{"api"}})
+	if _, err := e.st.GetWorkload(ctx, svcPrin, "web"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the takeover's list left web: %v", err)
+	}
+	e.wlRow(t, "api")
+}
+
+// Two runners' reports of one resource converge on its higher metadata.generation, and a frame redelivered
+// on a resumed session (the same frame twice) moves the workload's generation once.
+func TestPG_WorkloadFromRunner_ReportsConvergeAndARedeliveryIsOneWrite(t *testing.T) {
+	e := newCREnv(t)
+	other, otherSession := e.poolRunner(t, "cluster-b")
+	at := func(gen int64) runnerwire.WorkloadReport {
+		rep := e.apply("team-a", "web", "")
+		rep.UID, rep.Generation = "uid-u2", gen
+		return rep
+	}
+	e.report(t, at(3))
+	e.reportFrom(t, other, otherSession, at(2))
+	if v := e.wlRow(t, "web"); v.K8sGeneration == nil || *v.K8sGeneration != 3 {
+		t.Fatalf("after the lower generation = %+v, want generation 3", v.Workload)
+	}
+	e.reportFrom(t, other, otherSession, at(4))
+	first := e.wlRow(t, "web")
+	if first.K8sGeneration == nil || *first.K8sGeneration != 4 {
+		t.Fatalf("after the higher generation = %+v, want generation 4", first.Workload)
+	}
+
+	changed := at(5)
+	changed.Spec = json.RawMessage(`{"intent":{"agent":"claude-code","task":"t2","policy_id":"` + e.pol + `"}}`)
+	applies := countAudit(e.h.audit.snapshot(), "workload.apply")
+	e.reportFrom(t, other, otherSession, changed)
+	e.reportFrom(t, other, otherSession, changed)
+	if v := e.wlRow(t, "web"); v.Generation != first.Generation+1 {
+		t.Fatalf("after the frame twice = generation %d, want %d", v.Generation, first.Generation+1)
+	}
+	if n := countAudit(e.h.audit.snapshot(), "workload.apply"); n != applies+1 {
+		t.Fatalf("%d workload.apply rows after the frame twice, want %d", n, applies+1)
+	}
+}
+
+// A frame of a session a newer one replaced writes nothing: no apply, no prune. A frame on the runner's
+// current session, as a resumed connection carries it (remote.EventSession), is taken.
+func TestPG_WorkloadFromRunner_AReplacedSessionWritesNothing(t *testing.T) {
+	e := newCREnv(t)
+	ctx := context.Background()
+	old, current := e.session, uuid.NewString()
+	if err := e.st.BeginRunnerInventory(ctx, e.runner, current); err != nil {
+		t.Fatal(err)
+	}
+	e.reportFrom(t, e.runner, old, e.apply("team-a", "web", ""))
+	if _, err := e.st.GetWorkload(ctx, svcPrin, "web"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("an apply on the replaced session recorded a workload: %v", err)
+	}
+	e.reportFrom(t, e.runner, current, e.apply("team-a", "web", ""))
+	e.reportFrom(t, e.runner, current, e.apply("team-a", "web", "")) // the same session again, as on a resume
+	e.reportFrom(t, e.runner, old, runnerwire.WorkloadReport{Op: runnerwire.WorkloadOpSync, Namespace: "team-a", Names: []string{}})
+	e.reportFrom(t, e.runner, old, runnerwire.WorkloadReport{Op: runnerwire.WorkloadOpDelete, Namespace: "team-a", Name: "web", UID: "uid-web"})
+	e.wlRow(t, "web")
+	if n := countAudit(e.h.audit.snapshot(), "workload.delete"); n != 0 {
+		t.Fatalf("%d workload.delete rows from the replaced session, want none", n)
 	}
 }

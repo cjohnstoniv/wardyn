@@ -73,6 +73,12 @@ describe("HarnessSetup", () => {
     expect(isStepSectionHeading(screen.getByRole("heading", { name: NR_TOOLS.HARNESS_SETUP_TITLE }))).toBe(true);
   });
 
+  it("#3818: its fields never ask for more than the card's width, so a 320 px viewport does not scroll sideways", () => {
+    show([CLAUDE_UNGATED]);
+    const grid = card("Claude Code").getByText(NR_TOOLS.DEFAULT_LABEL).closest("div.grid");
+    expect(grid?.className).toContain("minmax(min(230px,100%),1fr)");
+  });
+
   it("shows nothing until the server has answered, and says so when the run has no harness", () => {
     const { container } = show(undefined);
     expect(container.querySelector("section")).toBeNull();

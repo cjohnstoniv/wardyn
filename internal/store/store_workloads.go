@@ -41,6 +41,9 @@ const (
 	WorkloadCreated   WorkloadWrite = "created"
 	WorkloadUpdated   WorkloadWrite = "updated"
 	WorkloadUnchanged WorkloadWrite = "unchanged"
+	// WorkloadHeld: a custom resource's report of another uid from a runner whose removals do not count
+	// (PutWorkload), so nothing was written; the runner that last applied it reports the change itself.
+	WorkloadHeld WorkloadWrite = "held"
 )
 
 // ErrWorkloadSourceConflict is returned by PutWorkload when the row belongs to the other writer, or to a
@@ -56,6 +59,12 @@ var ErrWorkloadCapReached = errors.New("store: the owner holds the most workload
 // the workload's and must be ended; and by RecordWorkloadRefusal when the caller's claim is no longer the
 // workload's, so the refusal is not recorded. Wraps ErrConflict.
 var ErrWorkloadSuperseded = fmt.Errorf("%w: a launch of this generation was already recorded", ErrConflict)
+
+// ErrWorkloadStaleSession is returned by a runner report's write (PutWorkload, DeleteK8sWorkload,
+// PruneK8sWorkload) when the session the report came in on is not the runner's current inventory session
+// (BeginRunnerInventory): a frame of a session a newer one replaced writes nothing, and the runner's next
+// full report carries the resource.
+var ErrWorkloadStaleSession = errors.New("store: the report came in on a runner session that is no longer current")
 
 // ErrWorkloadBindingConflict is returned by CreateWorkloadBinding when the namespace is bound on the pool
 // already. Wraps ErrConflict.
@@ -135,6 +144,48 @@ type WorkloadPut struct {
 	Intent          json.RawMessage
 	Digest          string
 	By              string
+	// SourceSession is the session SourceRunnerID's report came in on: when set, the write holds only while
+	// it is that runner's current one (ErrWorkloadStaleSession).
+	SourceSession string
+}
+
+// WorkloadReporter is the runner a custom resource's report came from and the session it came in on. A
+// zero Session fences nothing: a write no runner report made.
+type WorkloadReporter struct {
+	Runner  uuid.UUID
+	Session string
+}
+
+// workloadSessionFence is ErrWorkloadStaleSession unless session is runner's current inventory session; an
+// empty session fences nothing. The runner row is locked first, as RecordRunnerCaps locks it, so a fresh
+// session's BeginRunnerInventory waits for this write and a write after it sees that session.
+func workloadSessionFence(ctx context.Context, q Querier, runner uuid.UUID, session string) error {
+	if session == "" {
+		return nil
+	}
+	if _, err := q.Exec(ctx, `SELECT 1 FROM runners WHERE id = $1 FOR NO KEY UPDATE`, runner); err != nil {
+		return err
+	}
+	var current bool
+	if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_inventories WHERE runner_id = $1 AND session_id::text = $2::text)`,
+		runner, session).Scan(&current); err != nil {
+		return err
+	}
+	if !current {
+		return ErrWorkloadStaleSession
+	}
+	return nil
+}
+
+// workloadSourceCountsSQL is TRUE when runner $n's report about workloads row w counts as its resource's
+// removal (a prune, or a report of another uid): w names no source runner, $n is the runner that last
+// applied it (source_runner_id), or that runner has left the row's pool, so another may take over. One
+// runner's reports are in order; two runners' are not, so another runner's snapshot can be older than the
+// source's last apply.
+func workloadSourceCountsSQL(n int) string {
+	p := fmt.Sprintf("$%d", n)
+	return `(w.source_runner_id IS NULL OR w.source_runner_id = ` + p + ` OR NOT EXISTS (SELECT 1 FROM runner_pool_members m
+		WHERE m.pool_id = w.source_pool_id AND m.runner_id = w.source_runner_id))`
 }
 
 // WorkloadBinding authorises the custom resources of one namespace, on the runners of one pool, to
@@ -165,7 +216,8 @@ type WorkloadStore interface {
 	ListLapsedK8sWorkloadLaunches(ctx context.Context, limit int) ([]Workload, error)
 	ListBoundK8sWorkloads(ctx context.Context, poolID uuid.UUID, namespace string) ([]Workload, error)
 	DeleteWorkload(ctx context.Context, owner, name string) (Workload, error)
-	DeleteK8sWorkload(ctx context.Context, w Workload) (Workload, error)
+	DeleteK8sWorkload(ctx context.Context, w Workload, by WorkloadReporter) (Workload, error)
+	PruneK8sWorkload(ctx context.Context, w Workload, by WorkloadReporter) (Workload, error)
 	OweWorkloadRunEnd(ctx context.Context, e WorkloadRunEnd) error
 	ListWorkloadRunEnds(ctx context.Context, olderThan time.Duration, limit int) ([]WorkloadRunEnd, error)
 	DropWorkloadRunEnd(ctx context.Context, runID uuid.UUID) error
@@ -235,6 +287,11 @@ func sameUUIDPtr(a, b *uuid.UUID) bool {
 //   - A custom resource of the stored metadata.uid at a lower metadata.generation than stored: a late
 //     report from a stale cache, answered WorkloadUnchanged with nothing written, whatever its digest.
 //     Generations are compared within one uid only: a new uid is a new resource.
+//   - A custom resource of another metadata.uid, from a runner whose removals do not count
+//     (workloadSourceCountsSQL): its report may be older than the stored one, so it is WorkloadHeld and
+//     nothing is written. The source runner's own report of the new uid, or of the old one's delete,
+//     moves the row.
+//   - A report whose session is not its runner's current one: ErrWorkloadStaleSession, nothing written.
 //   - A different digest: the spec is replaced and the generation moves by one (WorkloadUpdated).
 //   - The same digest: only the description is written, and for a custom resource the reporting runner,
 //     metadata.generation and metadata.uid (WorkloadUnchanged).
@@ -244,6 +301,14 @@ func (s PG) PutWorkload(ctx context.Context, in WorkloadPut) (Workload, Workload
 	var out Workload
 	var write WorkloadWrite
 	err := s.inTx(ctx, func(q Querier) error {
+		if in.SourceSession != "" {
+			if in.SourceRunnerID == nil {
+				return errors.New("store: put workload: a fenced report names no runner")
+			}
+			if err := workloadSessionFence(ctx, q, *in.SourceRunnerID, in.SourceSession); err != nil {
+				return err
+			}
+		}
 		if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1::text))`, "workloads.put/"+in.Owner); err != nil {
 			return err
 		}
@@ -282,6 +347,17 @@ func (s PG) PutWorkload(ctx context.Context, in WorkloadPut) (Workload, Workload
 			// Another runner's informer cache, behind this one's: the stored generation stands.
 			out, write = cur, WorkloadUnchanged
 			return nil
+		}
+		if in.Source == WorkloadSourceK8s && in.K8sUID != "" && cur.K8sUID != "" && in.K8sUID != cur.K8sUID && in.SourceRunnerID != nil {
+			var counts bool
+			if err := q.QueryRow(ctx, `SELECT `+workloadSourceCountsSQL(2)+` FROM workloads w WHERE w.id = $1`,
+				cur.ID, *in.SourceRunnerID).Scan(&counts); err != nil {
+				return err
+			}
+			if !counts {
+				out, write = cur, WorkloadHeld
+				return nil
+			}
 		}
 		if cur.Digest != in.Digest {
 			out, err = scanWorkload(q.QueryRow(ctx, `
@@ -505,23 +581,38 @@ func (s PG) ListLapsedK8sWorkloadLaunches(ctx context.Context, limit int) ([]Wor
 // ends, or ErrNotFound. The run itself is not touched here; the same transaction records it as owed its
 // end (WorkloadRunEnd).
 func (s PG) DeleteWorkload(ctx context.Context, owner, name string) (Workload, error) {
-	return s.deleteWorkload(ctx, `w.owner = $1 AND w.name = $2`, owner, name)
+	return s.deleteWorkload(ctx, WorkloadReporter{}, `w.owner = $1 AND w.name = $2`, owner, name)
 }
 
 // DeleteK8sWorkload is DeleteWorkload for w, a custom resource's workload as the caller read it, and only
 // while the row is still that resource's: the same row id, metadata.uid, pool and namespace. ErrNotFound,
 // with nothing deleted and no end owed, when the row is gone or an apply of a recreated resource has moved
-// it to another uid since the read.
-func (s PG) DeleteK8sWorkload(ctx context.Context, w Workload) (Workload, error) {
-	return s.deleteWorkload(ctx, `w.id = $1 AND w.source = 'k8s' AND w.k8s_uid = $2 AND w.source_pool_id = $3 AND w.source_namespace = $4`,
-		w.ID, w.K8sUID, w.SourcePoolID, w.SourceNamespace)
+// it to another uid since the read. by is the runner whose delete report it is (ErrWorkloadStaleSession):
+// a uid's delete counts from any runner of the pool, since a deleted uid never comes back.
+func (s PG) DeleteK8sWorkload(ctx context.Context, w Workload, by WorkloadReporter) (Workload, error) {
+	return s.deleteWorkload(ctx, by, k8sWorkloadRowSQL, w.ID, w.K8sUID, w.SourcePoolID, w.SourceNamespace)
 }
 
+// PruneK8sWorkload is DeleteK8sWorkload for a row by's full list of the namespace no longer names, and only
+// while by's removals count for it (workloadSourceCountsSQL), checked in the delete itself: an apply by
+// another runner that lands between the list's read and the delete keeps the row. ErrNotFound otherwise.
+func (s PG) PruneK8sWorkload(ctx context.Context, w Workload, by WorkloadReporter) (Workload, error) {
+	return s.deleteWorkload(ctx, by, k8sWorkloadRowSQL+` AND `+workloadSourceCountsSQL(5),
+		w.ID, w.K8sUID, w.SourcePoolID, w.SourceNamespace, by.Runner)
+}
+
+// k8sWorkloadRowSQL matches a custom resource's workloads row as it was read: id, uid, pool and namespace.
+const k8sWorkloadRowSQL = `w.id = $1 AND w.source = 'k8s' AND w.k8s_uid = $2 AND w.source_pool_id = $3 AND w.source_namespace = $4`
+
 // deleteWorkload deletes the workload where matches and owes its current run's end in the same transaction,
-// and at once the end of a run that waited on it to take over.
-func (s PG) deleteWorkload(ctx context.Context, where string, args ...any) (Workload, error) {
+// and at once the end of a run that waited on it to take over. A runner's report (by) writes only on that
+// runner's current session (workloadSessionFence).
+func (s PG) deleteWorkload(ctx context.Context, by WorkloadReporter, where string, args ...any) (Workload, error) {
 	var w Workload
 	err := s.inTx(ctx, func(q Querier) error {
+		if err := workloadSessionFence(ctx, q, by.Runner, by.Session); err != nil {
+			return err
+		}
 		var err error
 		w, err = scanWorkload(q.QueryRow(ctx, `DELETE FROM workloads w WHERE `+where+` RETURNING `+workloadCols, args...))
 		if err != nil || w.CurrentRunID == nil {

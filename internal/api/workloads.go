@@ -22,7 +22,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -315,11 +317,17 @@ func (s *Server) launchWorkload(r *http.Request, ws store.WorkloadStore, wl stor
 	if wl.CurrentGeneration >= wl.Generation {
 		return none, nil // a live or ended run of this spec stands: an ended one is restarted, never relaunched
 	}
-	ctx := r.Context()
-	claimed, ok, err := ws.ClaimWorkloadLaunch(ctx, wl.ID)
+	claimed, ok, err := ws.ClaimWorkloadLaunch(r.Context(), wl.ID)
 	if err != nil || !ok {
 		return none, err
 	}
+	return s.launchClaimed(r, ws, claimed)
+}
+
+// launchClaimed is launchWorkload once claimed, the workload ClaimWorkloadLaunch returned, holds the claim.
+func (s *Server) launchClaimed(r *http.Request, ws store.WorkloadStore, claimed store.Workload) (client.WorkloadLaunch, error) {
+	none := client.WorkloadLaunch{State: client.WorkloadNoLaunch}
+	ctx := r.Context()
 	if claimed.Source == store.WorkloadSourceK8s && claimed.SourcePoolID == nil {
 		// A custom resource's runs go to its binding's pool only; with the pool gone there is nowhere to go.
 		gone := &runnerpool.Refusal{Reason: runnerpool.ReasonNotFound}
@@ -336,7 +344,7 @@ func (s *Server) launchWorkload(r *http.Request, ws store.WorkloadStore, wl stor
 		if reason == "" {
 			reason = reasonInternalError
 		}
-		return s.refuseWorkloadLaunch(r, ws, claimed, reason, msg)
+		return s.refuseWorkloadLaunch(r, ws, claimed, reason, workloadRefusalMsg(reason, msg))
 	}
 	var created createRunResponse
 	if err := json.Unmarshal(cw.body, &created); err != nil {
@@ -366,6 +374,20 @@ func (s *Server) launchWorkload(r *http.Request, ws store.WorkloadStore, wl stor
 		})))
 	}
 	return client.WorkloadLaunch{State: client.WorkloadLaunched, RunID: &created.ID, Warnings: created.Warnings}, nil
+}
+
+// workloadDefaultGrantHint follows a launch's placement_credential refusal of one of its policy's grants.
+const workloadDefaultGrantHint = "The grant may come from the default policy, which a workload's inline_policy is laid onto: " +
+	"set eligible_grants in the inline_policy, [] for none, to replace the default's grants."
+
+// workloadRefusalMsg is the sentence a launch refused with reason and the create path's msg records. A
+// credential refusal of a grant (a path under ProxyConfig.Policy.EligibleGrants, placement.Refusal.Error)
+// says where such a grant often comes from, within the status message's bound.
+func workloadRefusalMsg(reason, msg string) string {
+	if reason != string(placement.ReasonPlacementCredential) || !strings.HasPrefix(msg, "ProxyConfig.Policy.EligibleGrants[") {
+		return msg
+	}
+	return clipUTF8(msg+" "+workloadDefaultGrantHint, runnerwire.MaxWorkloadMessage)
 }
 
 // workloadCreateRequest is the POST /api/v1/runs a launch of wl makes on r's identity: the stored intent

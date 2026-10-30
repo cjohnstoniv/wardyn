@@ -29,6 +29,7 @@ import { PageContainer } from "../../wardyn/page-container";
 import { CC_META } from "../../wardyn/cc-meta";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
+import { useDiscardReload } from "../../wardyn/use-discard-reload";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { Note } from "../governance/display";
@@ -85,7 +86,8 @@ const modeLabel = (m: BoundaryMode) => (m === "hard_limits" ? BOUNDARY.MODE_HARD
 const floorLabel = (c: ConfinementClass | undefined) => CC_META[c ?? "CC1"].label;
 
 type Outcome = { kind: "saved" | "submitted" } | { kind: "refused"; message: string } | null;
-type ReportState = { status: "loading" } | { status: "error" } | { status: "ready"; report: BoundaryReport };
+// principalChanged: the 412 that says the browser's session now belongs to someone else.
+type ReportState = { status: "loading" } | { status: "error"; principalChanged: boolean } | { status: "ready"; report: BoundaryReport };
 
 export function BoundaryScreen() {
   const securityOperator = useSecurityOperator();
@@ -153,8 +155,8 @@ export function BoundaryScreen() {
       .then((r) => {
         if (id === dryRunRef.current) setReport({ status: "ready", report: r });
       })
-      .catch(() => {
-        if (id === dryRunRef.current) setReport({ status: "error" });
+      .catch((e) => {
+        if (id === dryRunRef.current) setReport({ status: "error", principalChanged: e instanceof HttpError && e.status === 412 && e.reason === "expected_principal_mismatch" });
       });
   }, [body]);
 
@@ -470,6 +472,7 @@ function DryRunReport({
   onSubmit: () => void;
 }) {
   const refusedRef = React.useRef<HTMLHeadingElement>(null);
+  const reload = useDiscardReload(onRetry);
   React.useEffect(() => {
     if (outcome?.kind === "refused") refusedRef.current?.focus();
   }, [outcome]);
@@ -516,9 +519,9 @@ function DryRunReport({
       {state.status === "error" && (
         <Note tone="red" role="alert">
           <b className="font-semibold">{BOUNDARY_DRY_RUN.FAILED_TITLE}</b>
-          <span>{BOUNDARY_DRY_RUN.FAILED_BODY}</span>
-          <Button variant="outline" size="sm" onClick={onRetry}>
-            {BOUNDARY_DRY_RUN.RETRY}
+          <span>{state.principalChanged ? BOUNDARY_DRY_RUN.SIGNED_IN_CHANGED_BODY : BOUNDARY_DRY_RUN.FAILED_BODY}</span>
+          <Button variant="outline" size="sm" onClick={state.principalChanged ? reload : onRetry}>
+            {state.principalChanged ? BOUNDARY_DRY_RUN.RELOAD : BOUNDARY_DRY_RUN.RETRY}
           </Button>
         </Note>
       )}

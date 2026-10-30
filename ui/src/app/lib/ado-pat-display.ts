@@ -139,9 +139,13 @@ function mintedCard(access: SCMAccessPAT, title: string): PatCardView | null {
       if (access.cause === "blocked") {
         return { title, chip: { label: ADO_PAT.CHIP_BLOCKED, tone: "danger" }, body: [ADO_PAT.BLOCKED_BODY], action: null, disconnect: false, remove: false };
       }
-      // permissions_missing is the admin's to fix too (the server says so): signing in again cannot help.
-      if (access.cause === "ado_pat_needs_console_app" || access.cause === "permissions_missing") {
+      if (access.cause === "ado_pat_needs_console_app") {
         return { title, chip: { label: ADO_PAT.CHIP_NOT_CONNECTED, tone: "neutral" }, body: [ADO_PAT.MEMBER_NEEDS_ADMIN], action: null, disconnect: false, remove: false };
+      }
+      // permissions_missing: the admin grants the token permissions, then the person signs in again (Getting started
+      // reads the same: scmAccessCause, scmAccessNeedsConnect).
+      if (access.cause === "permissions_missing") {
+        return { title, chip: { label: ADO_PAT.CHIP_NOT_CONNECTED, tone: "neutral" }, body: [ADO_PAT.MEMBER_NEEDS_ADMIN], action: "connect", disconnect: false, remove: false };
       }
       // ended, consent_needed and an unnamed cause: the
       // person signs in again (Microsoft asks for consent there if it is due).

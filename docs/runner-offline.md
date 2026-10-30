@@ -41,7 +41,10 @@ refuses as a foreign, stale or incomplete incarnation on 8 tries in a row
 (about ten minutes) is parked (migration `0232_runner_exit_parked.sql`): the
 row is kept with `parked_at` set, a `runner.exit.park` audit row records the
 tries and the error, and the worker no longer retries it. `wardyn doctor` on
-the runner's computer reports it as a failed `runner-exits` stage.
+the runner's computer reports it as a failed `runner-exits` stage, as long as
+the organisation still shows that runner to its owner. It does not for a
+revoked runner: doctor then skips the stage and says so, and only an
+administrator can read the `runner.exit.park` audit rows.
 
 ## A parked exit receipt
 

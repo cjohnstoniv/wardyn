@@ -345,7 +345,7 @@ curl -sf -b jar "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET
   forms is honored per request.
 - Both forms run the **same** consume-then-re-check path: the ticket is consumed, then everything it cannot prove on its own is re-checked against freshly-loaded state —
   - the run's owner (or a super admin, on a run with no personal owner),
-  - the governance profile the run was created under not carrying `deny_ui_apps` (a super admin is exempt; a limit set later stops new sessions but does not end one already open),
+  - the governance profile the run was created under not carrying `deny_ui_apps` (a super admin is exempt; a later limit ends an open session at its next re-check),
   - the run still `RUNNING` with a sandbox,
   - and the app actually declared in the run's **effective** policy.
 - Only then does it set the relay cookie — `wardyn_ui_sess`, `HttpOnly`,
@@ -501,7 +501,9 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 |---|---|
 | `401` `inbound_credential_invalid`, with `WWW-Authenticate: Bearer` | The bearer is not a live inbound token. An API, CLI, admin or portal token is refused the same way |
 | `404` `inbound_not_found` | No such run, no such app, an app that is not inbound, or a holder who is neither the owner nor a caller |
-| `429` `inbound_rate_limited`, `Retry-After: 1` | The run's inbound apps are past 50 requests a second, burst 100, all callers together, or the caller is past the same limit over all the runs they call |
+| `429` `inbound_rate_limited`, `Retry-After: 1` | Past 50 requests a second, burst 100: the run's inbound apps together, or one caller over all runs. The owner's browser spends only the run's |
+| `409` `ui_gateway_not_running` | The run is not running, is kept or has no sandbox |
+| `503` `run_unreadable` | The run or its policy is unreadable |
 | `503` `runner_offline` | The runner holding the run is offline. Retry when it reconnects |
 | `403` `ui_gateway_cross_site` | A cookie session request from another site, in host mode (see "What Wardyn checks" below) |
 
@@ -513,7 +515,7 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 ### What Wardyn checks on every call
 
 - **The token** is looked up, then checked for expiry and revocation, and for an owner who is a service identity, its live record and sponsor. The result is reused for 30 seconds per token, run and app.
-- **A revoked, expired or suspended token** stops calling within that window. A WebSocket or other upgraded connection an inbound token opened is re-checked every 30 seconds (rc.8) and closed once the token no longer holds or the run's profile denies UI apps or interactive sessions.
+- **A revoked, expired or suspended token** stops calling within that window. A WebSocket or other upgraded connection an inbound token opened is re-checked every 15 seconds (rc.8). It closes within 30 seconds of the last admitting check once the token no longer holds or the profile denies UI apps or interactive sessions.
 - **A browser session** is re-checked as in [Bounds](#bounds), minus the owner rule for a named caller, and also refused when the run's profile now denies UI apps or interactive sessions.
 - **Host mode** adds a cross-site check to every cookie session, inbound or not. A request must be same-origin, carry no fetch metadata, or be a top-level `GET` or `HEAD` navigation, and an `Origin` header must be the request's own.
 - **Capacity** is shared: at most 8 relay connections per run, each a `socat` exec that is slower to open on Kubernetes or a remote runner. Inbound suits internal APIs and tools, not high-traffic services.
@@ -691,7 +693,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 - And a connection already established (a relayed WebSocket) keeps working until
   it closes, including after a portal revoke: killing the run is what ends an
   in-flight session, the same bound attach and [SSH](SSH.md#bounds) publish.
-  - A WebSocket or other upgraded connection an inbound token opened is the exception (rc.8). It is re-checked at most every 30 seconds and closed once its token is revoked, expired or suspended, or the run's profile denies inbound apps.
+  - A WebSocket or other upgraded connection an inbound token opened is the exception (rc.8); see [its re-check](#what-wardyn-checks-on-every-call).
 - Every refusal writes a
   `ui.authorize` / `denied` row naming the reason.
 - **Header hygiene, both directions.** Cookies are not port-scoped, so a shared

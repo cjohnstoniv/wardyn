@@ -35,7 +35,8 @@ type Admission struct {
 	// call this runner nor wait on a lock held across a call to it. An error
 	// refuses READY and forces a fresh session; the Hub keeps only a cursor.
 	StatePage func(ctx context.Context, sessionID string, page runnerwire.StatePage) error
-	Event     func(context.Context, runnerwire.Event) error
+	// Event ingests one event of the session; its context names that session (EventSession).
+	Event func(context.Context, runnerwire.Event) error
 	// Activity checks current run ownership/lifecycle in its database transaction.
 	// Nil refuses live activity; historical EVENT ingestion never calls it.
 	Activity func(context.Context, uuid.UUID) error
@@ -453,9 +454,22 @@ func (h *Hub) fresh(ctx context.Context, s *hubSession, a Admission, id uuid.UUI
 	return pending, nil
 }
 
+// eventSessionKey carries, on the context of each Admission.Event call, the session the event came in on.
+type eventSessionKey struct{}
+
+// EventSession is the session id the Admission.Event call whose context is ctx came in on: the
+// connection's own, fresh or resumed, the one BeginInventory recorded when that session began. "" when
+// ctx is not such a call's.
+func EventSession(ctx context.Context) string {
+	id, _ := ctx.Value(eventSessionKey{}).(string)
+	return id
+}
+
 // configureAdmission binds sessionID by value: a superseded peer's late page
-// must reach the store under its own, already fenced, inventory.
+// must reach the store under its own, already fenced, inventory, and each
+// event carries it (EventSession).
 func configureAdmission(ctx context.Context, cfg *runnerwire.PeerConfig, resumed bool, actions []runnerwire.PendingAction, a Admission, session *hubSession, sessionID string, peer func() *runnerwire.Peer) {
+	eventCtx := context.WithValue(ctx, eventSessionKey{}, sessionID)
 	state := resumed
 	ready := resumed
 	var inventory runnerwire.StateInventory
@@ -509,7 +523,7 @@ func configureAdmission(ctx context.Context, cfg *runnerwire.PeerConfig, resumed
 			if ev.Kind != runnerwire.EventActionResult || runnerwire.Unmarshal(ev.Data, &result) != nil || !pending[result.ID] {
 				return fmt.Errorf("%w: expected pending action result before STATE", runnerwire.ErrBadFrame)
 			}
-			if err := a.Event(ctx, ev); err != nil {
+			if err := a.Event(eventCtx, ev); err != nil {
 				var refusal *runnerwire.EventRefusal
 				if errors.As(err, &refusal) {
 					delete(pending, result.ID) // answered: the org refused it for good and recorded that; the peer acknowledges
@@ -519,7 +533,7 @@ func configureAdmission(ctx context.Context, cfg *runnerwire.PeerConfig, resumed
 			delete(pending, result.ID)
 			return nil
 		}
-		return a.Event(ctx, ev)
+		return a.Event(eventCtx, ev)
 	}
 }
 

@@ -18,7 +18,7 @@
 #     `COPY . .` is the Go builder's and is decided by the next rule);
 #   - a non-test file in the directory of a Go package in the `go list -deps`
 #     closure of a binary those Dockerfiles `go build`, or a file such a package
-#     embeds. The closure is read from the tree under test, so a new import
+#     embeds (a removed file below such a package's directory counts as one). The closure is read from the tree under test, so a new import
 #     changes it, and it is taken for the tags and platforms the Dockerfiles
 #     build (none, and docker,k8s; linux and darwin, amd64 and arm64);
 #   - go.mod, go.sum, go.work, go.work.sum, vendor/, deploy/base-images.txt,
@@ -170,7 +170,15 @@ for img in "${!dockerfile_of[@]}"; do
     done
     case "$f" in *_test.go) return 0 ;; esac
     d=${f%/*}; [ "$d" = "$f" ] && d=.
-    if [ -n "${dirs[$d]:-}" ] || [ -n "${embeds[$f]:-}" ]; then echo "$f (Go package of ${mains[*]})"; fi
+    if [ -n "${dirs[$d]:-}" ] || [ -n "${embeds[$f]:-}" ]; then echo "$f (Go package of ${mains[*]})"; return 0; fi
+    # A removed file is in no head-tree embed list. One below a package directory may have been a nested
+    # embedded file (internal/db/migrations/*.sql), so it reaches the image like an embedded file would.
+    if [ ! -e "$f" ]; then
+      while [ "$d" != . ]; do
+        [ -n "${dirs[$d]:-}" ] && { echo "$f (removed below a Go package of ${mains[*]})"; return 0; }
+        case "$d" in */*) d=${d%/*} ;; *) d=. ;; esac
+      done
+    fi
   }
 
   reason=""

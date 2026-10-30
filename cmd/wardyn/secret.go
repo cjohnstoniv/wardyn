@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -201,10 +202,6 @@ func printNamespaceNames(cmd *cobra.Command, list func(context.Context, ...sdk.L
 	return nil
 }
 
-func isTerminal(f *os.File) bool {
-	fi, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
-}
+// isTerminal is whether f is a real terminal; /dev/null is a character device but not one, so a
+// ModeCharDevice check would take the interactive prompt for an unattended run.
+func isTerminal(f *os.File) bool { return term.IsTerminal(int(f.Fd())) }

@@ -84,7 +84,7 @@ describe("Signed-in CLIs card", () => {
     ["CLI sign-in", SIGNED_IN_CLIS.CHIP],
     ["Keychain", SIGNED_IN_CLIS.STORE_KEYCHAIN],
     ["File, 0600", SIGNED_IN_CLIS.STORE_FILE],
-    ["No keychain here: the sign-in is kept in a file only you can read, so it ends after 7 days.", SIGNED_IN_CLIS.FILE_NOTE],
+    ["No keychain here: the sign-in is kept in a file only you can read, so it ends after 7 days at most.", SIGNED_IN_CLIS.FILE_NOTE],
     ["Admin access, ends in 42 min", SIGNED_IN_CLIS.ADMIN_CHIP(42)],
     ["Sign out", SIGNED_IN_CLIS.SIGN_OUT],
     ["Sign out mbp-dev?", SIGNED_IN_CLIS.DIALOG_TITLE("mbp-dev")],

@@ -78,8 +78,19 @@ type Client struct {
 	session string
 	ended   time.Time
 	ready   bool
-	link    linkState
+	// quickDeaths counts the resumed sessions in a row that ended within resumeQuickDeath of READY with an EVENT
+	// at the head of the replay buffer.
+	quickDeaths int
+	link        linkState
 }
+
+// A resumed session that ends within resumeQuickDeath of READY with an EVENT unacknowledged, resumeQuickDeaths times
+// in a row, is replaying an event its organisation refuses on every attempt (a 0.9.x organisation cannot acknowledge
+// a refusal): the next connect is fresh instead.
+const (
+	resumeQuickDeath  = 2 * time.Second
+	resumeQuickDeaths = 5
+)
 
 // offlineLogEvery is how often a runner with no session up says it is still offline, whatever its
 // connection attempt is doing: a dial, handshake or hook that is waiting is never silent for longer.
@@ -199,6 +210,12 @@ func (c *Client) Run(ctx context.Context) error {
 		if errors.Is(err, ErrGoaway) || errors.Is(err, ErrResumeGap) {
 			c.session, c.ready = "", false
 		}
+		if c.dropLivelockedResume() {
+			slog.WarnContext(ctx, "runner stops resuming its session and starts a fresh one: it ended within seconds of READY "+
+				"with an event unacknowledged, repeatedly, so the organisation refuses that event. Kinds the runner regenerates "+
+				"are not replayed, but an agent exit or spool record still is, and keeps failing until the organisation is upgraded",
+				slog.Int("times_in_a_row", resumeQuickDeaths))
+		}
 		if c.ready && c.ended.After(started) {
 			attempt = 0
 			failures = connectLog{}
@@ -292,6 +309,33 @@ func (c *Client) resume(ctx context.Context) (PeerConfig, *Resume) {
 	return cfg, &Resume{SessionID: c.session, LastSeq: cfg.LastReceived}
 }
 
+// noteSessionEnd counts a session's end toward resumeQuickDeaths: a resumed one that reached READY at least
+// resumeQuickDeath ago, or whose replay buffer holds no EVENT at its head, starts the count over.
+func (c *Client) noteSessionEnd(resumedReady bool, sinceReady time.Duration, headIsEvent bool) {
+	if resumedReady && sinceReady < resumeQuickDeath && headIsEvent {
+		c.quickDeaths++
+		return
+	}
+	c.quickDeaths = 0
+}
+
+// dropLivelockedResume forgets the session to resume once resumeQuickDeaths quick deaths have run in a row, and
+// says whether it did.
+func (c *Client) dropLivelockedResume() bool {
+	if c.quickDeaths < resumeQuickDeaths {
+		return false
+	}
+	c.session, c.ready, c.quickDeaths = "", false, 0
+	return true
+}
+
+// replayHeadIsEvent reports whether the oldest frame b still holds, unacknowledged, is an EVENT.
+func replayHeadIsEvent(b *ReplayBuffer) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.frames) > 0 && b.frames[0].Type == TypeEvent
+}
+
 func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -299,6 +343,7 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 	var ready atomic.Bool
 	started := false
 	var peer *Peer
+	var readyAt time.Time
 	c.configure(ctx, &cfg, &ready, pending, func() *Peer { return peer })
 	peer = NewPeer(conn, cfg)
 	c.peer = peer
@@ -306,6 +351,7 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 		c.setLink(false, "")
 		peer.Close()
 		c.ended, c.ready = time.Now(), started && ready.Load()
+		c.noteSessionEnd(ok.Resumed && c.ready, c.ended.Sub(readyAt), replayHeadIsEvent(peer.replay))
 		if c.cfg.Hooks.StreamOffline != nil {
 			c.cfg.Hooks.StreamOffline(peer)
 		}
@@ -317,6 +363,7 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 			return err
 		}
 		ready.Store(true)
+		readyAt = time.Now()
 	}
 	if err := peer.Start(ctx, ok.LastSeq); err != nil {
 		return err

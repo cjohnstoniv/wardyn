@@ -28,7 +28,7 @@ export const SERVICE_FORM = {
 /** The field errors under the form's inputs: the server's limits (internal/types/service.go) said before launch. Not in the mocks. */
 export const SERVICE_FORM_ERRORS = {
   PORT_INVALID: "The service port must be from 1 to 65535.",
-  PATH_INVALID: "The health check path must start with /.",
+  PATH_INVALID: "The health check path must start with /, use only URL characters, and be at most 256 characters.",
   EVERY_INVALID: "The health check runs every 5 to 300 seconds.",
   FAILURES_INVALID: "A service is unhealthy after 1 to 10 failed checks.",
 } as const;
