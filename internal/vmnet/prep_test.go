@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/vmnet/vmnettest"
+	"golang.org/x/net/dns/dnsmessage"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -151,6 +153,63 @@ func TestDialGuestOnlyInPrep(t *testing.T) {
 	}
 }
 
+// A preparation relay answers every DNS query REFUSED and keeps no name; a run relay's answers are unchanged,
+// byte for byte, on the same queries.
+func TestPrepDNSIsRefusedAndRunDNSIsUnchanged(t *testing.T) {
+	queries := []struct {
+		labels []string
+		qtype  dnsmessage.Type
+	}{
+		{[]string{"origin", "test"}, dnsmessage.TypeA},
+		{[]string{"origin", "test"}, dnsmessage.TypeAAAA},
+		{[]string{"origin", "test"}, dnsmessage.TypeMX},
+		{[]string{"evil\r\nx", "test"}, dnsmessage.TypeA},
+	}
+	prep := newPrepRelay(t, io.Discard)
+	pg := vmnettest.Attach(t, prep.Serve)
+	run, err := New(Config{Proxy: "127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(run.Close)
+	rg := vmnettest.Attach(t, run.Serve)
+	for _, q := range queries {
+		m, err := pg.Query(q.labels, q.qtype)
+		if err != nil || m.Header.RCode != dnsmessage.RCodeRefused || len(m.Answers) != 0 {
+			t.Fatalf("prep %v %v: reply %+v, %v; want REFUSED with no answer", q.labels, q.qtype, m, err)
+		}
+		// What the run relay answered before this change: answer() on a fresh table, the same question.
+		wire := []byte{0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0}
+		for _, l := range q.labels {
+			wire = append(append(wire, byte(len(l))), l...)
+		}
+		wire = append(wire, 0, byte(uint16(q.qtype)>>8), byte(q.qtype), 0, 1)
+		want, _, err := answer(newNameTable(time.Now, maxNames), wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := rg.Query(q.labels, q.qtype)
+		if err != nil {
+			t.Fatalf("run %v %v: %v", q.labels, q.qtype, err)
+		}
+		gotWire, err := got.Pack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wm dnsmessage.Message
+		if err := wm.Unpack(want); err != nil {
+			t.Fatal(err)
+		}
+		wantWire, _ := wm.Pack()
+		if !bytes.Equal(gotWire, wantWire) {
+			t.Fatalf("run %v %v: reply changed\n got %x\nwant %x", q.labels, q.qtype, gotWire, wantWire)
+		}
+	}
+	if len(prep.names.byName) != 0 {
+		t.Fatalf("the preparation relay's table holds %d names, want none", len(prep.names.byName))
+	}
+}
+
 func TestPrepRefusesAllGuestEgress(t *testing.T) {
 	var logs lockedBuf
 	rl := newPrepRelay(t, &logs)
@@ -169,28 +228,6 @@ func TestPrepRefusesAllGuestEgress(t *testing.T) {
 			c.Close()
 			t.Fatalf("guest connected to %v:%d through a preparation relay", target.addr, target.port)
 		}
-	}
-	// A DNS answer is only the relay's own synthetic address, and a flow to it is
-	// refused like the rest.
-	dc, err := gonet.DialUDP(gs, nil, &tcpip.FullAddress{NIC: 1, Addr: gatewayIP, Port: 53}, ipv4.ProtocolNumber)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer dc.Close()
-	q := []byte{0x12, 0x34, 0x01, 0, 0, 1, 0, 0, 0, 0, 0, 0, 6, 'o', 'r', 'i', 'g', 'i', 'n', 4, 't', 'e', 's', 't', 0, 0, 1, 0, 1}
-	_, _ = dc.Write(q)
-	_ = dc.SetReadDeadline(time.Now().Add(2 * time.Second))
-	resp := make([]byte, 512)
-	n, err := dc.Read(resp)
-	if err != nil || n < 4+len(q) {
-		t.Fatalf("dns reply %d bytes, %v", n, err)
-	}
-	synth := net.IP(resp[n-4 : n]).To4()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if c, err := gonet.DialContextTCP(ctx, gs, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4([4]byte(synth)), Port: 443}, ipv4.ProtocolNumber); err == nil {
-		c.Close()
-		t.Fatal("guest connected to a synthetic address through a preparation relay")
 	}
 	waitFor(t, "prep-egress refusal logged", func() bool { return strings.Contains(logs.String(), `"reason":"prep-egress"`) })
 	if strings.Contains(logs.String(), "tcp_allow") {

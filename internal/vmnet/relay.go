@@ -328,6 +328,12 @@ func (rl *Relay) serveDNS(c *gonet.UDPConn) {
 		if err != nil {
 			return
 		}
+		if rl.prep {
+			if resp, err := refuseAll(buf[:n]); err == nil {
+				_, _ = c.WriteTo(resp, from)
+			}
+			continue
+		}
 		resp, res, err := answer(rl.names, buf[:n])
 		if err != nil {
 			continue

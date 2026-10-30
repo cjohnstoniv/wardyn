@@ -145,6 +145,13 @@ func (s *Server) Dial(ctx context.Context, port int) (net.Conn, error) {
 	return d.DialContext(ctx, "tcp", addr)
 }
 
+// LoadSharing loads Screen Sharing before stage 1 runs, as a person turning it on in System Settings does.
+func (s *Server) LoadSharing() {
+	s.mu.Lock()
+	s.sharing = true
+	s.mu.Unlock()
+}
+
 // SetPassword sets the account's password, as the provisioning boot does.
 func (s *Server) SetPassword(pw string) {
 	s.mu.Lock()
@@ -310,7 +317,14 @@ func (s *Server) exec(line string, stdin []byte) (code int, stdout, stderr []byt
 	case len(argv) == 4 && argv[0] == "/usr/bin/shasum":
 		sum := sha256.Sum256(s.files[argv[3]])
 		return 0, []byte(hex.EncodeToString(sum[:]) + "  " + argv[3] + "\n"), nil, false
+	case len(argv) == 3 && slices.Equal(argv[:2], []string{"/bin/launchctl", "print"}) && argv[2] == "system/com.apple.screensharing":
+		if !s.sharing {
+			return 113, nil, []byte("Could not find service \"com.apple.screensharing\" in domain for system\n"), false
+		}
 	case len(argv) == 4 && argv[0] == "/bin/launchctl" && argv[1] == "bootstrap" && strings.HasSuffix(argv[3], "com.apple.screensharing.plist"):
+		if s.sharing {
+			return 5, nil, []byte("Bootstrap failed: 5: Input/output error\n"), false
+		}
 		s.sharing = true
 	case len(argv) == 4 && argv[0] == "/usr/sbin/systemsetup" && argv[2] == "-setremotelogin" && argv[3] == "off":
 		s.on = s.StaysOn

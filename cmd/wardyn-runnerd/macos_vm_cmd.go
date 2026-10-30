@@ -23,6 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
 // newMacOSVMCommand is `wardyn-runnerd macos-vm`: this Mac's macOS VM state, its base's preparation, and
@@ -52,7 +53,7 @@ func newMacOSVMCommand() *cobra.Command {
 		if err != nil {
 			return nil, "", err
 		}
-		m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: id.RunnerID.String(), uid: os.Getuid(),
+		m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: id.RunnerID.String(), version: version.String(), uid: os.Getuid(),
 			host: admission.SystemHost(), owner: fileOwner, limitsFile: macOSVMLimitsFile(stateDir)})
 		if m.helper, err = macVMHelperPath(); err != nil {
 			return nil, "", err
@@ -274,7 +275,7 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 }
 
 // macOSVMSetupWindow is the short name of the setup-by-hand window the helper opens (internal/macvm wardynScreenShow):
-// the window's title starts with it and goes on to name the account to create and its password.
+// the window's title is it.
 const macOSVMSetupWindow = "Wardyn: set up this macOS VM"
 
 // runToolsDialFile, in the VM directory, is the driver's record of how the last run boot's guest agent

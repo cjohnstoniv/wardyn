@@ -11,6 +11,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- Preparing a macOS base no longer fails at stage 1 when Screen Sharing was already turned on during setup by hand: stage 1 checks that the service is loaded and skips loading it again. A macOS base prepared with Screen Sharing on view-only now says in `macos-vm status` how to get control.
+- During base preparation the guest's DNS lookups are refused instead of answered, so Setup Assistant's Screen Time screen no longer waits minutes for a network that is not there. Run-time DNS is unchanged.
+- The macOS setup window comes to the front, shows the three steps to follow, and `macos-vm status` shows the runner version in its agent-drift line.
+
 ## [0.10.0-rc.8] — 2026-10-29
 
 ### Before you upgrade

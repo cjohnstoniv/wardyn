@@ -146,8 +146,13 @@ func TestPrepareStage1FailureAtEachStepPublishesNoBase(t *testing.T) {
 	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
 		t.Fatal(err)
 	}
-	steps := len(srv.Execs())
+	execs := srv.Execs()
+	steps := len(execs)
 	for n := 1; n <= steps+1; n++ {
+		// A probe that fails is its row's answer "not loaded", not a failed step.
+		if n <= steps && slices.Contains(execs[n-1].Argv, "print") {
+			continue
+		}
 		t.Run(fmt.Sprint(n), func(t *testing.T) {
 			f, srv := stage1Prep(t)
 			if n <= steps {

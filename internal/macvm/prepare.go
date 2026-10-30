@@ -65,6 +65,10 @@ type PrepareEvent struct {
 	Version string `json:"version,omitempty"`
 }
 
+// ObserveDesktopDetail is the detail event stage 2 emits when its control check reads observe: the
+// base is ready and runs agent-only, and the person did not turn Screen Sharing on with control during setup by hand.
+const ObserveDesktopDetail = "Screen Sharing was not turned on with control during setup"
+
 // InstallFailurePrefix starts the error an install that failed ends with; the cause follows it.
 const InstallFailurePrefix = "macvm: install: "
 
@@ -477,6 +481,9 @@ func (p *prep) stage2(ctx context.Context, spec MachineSpec, res *BootstrapResul
 	}
 	if tr.Desktop != "" {
 		res.Desktop = tr.Desktop
+	}
+	if tr.Desktop == DesktopObserve {
+		p.emit(PrepareEvent{Phase: PhaseTools, Detail: ObserveDesktopDetail})
 	}
 	res.Harnesses = tr.Harnesses
 	return writeToolsRecord(p.base, tr, res.AgentVersion, time.Now())

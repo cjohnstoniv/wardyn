@@ -563,7 +563,7 @@ func desktopMode(mode string) string {
 	case "", "none":
 		return "none"
 	case "observe":
-		return "view only (macOS turned Screen Sharing on for viewing only)"
+		return "view only (Screen Sharing was not turned on with control in setup; to get control, run macos-vm remove, then macos-vm prepare, and turn it on with control in setup by hand)"
 	}
 	return mode
 }
