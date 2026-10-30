@@ -96,7 +96,7 @@ func dhcpRoundTrip(t *testing.T, guest int, xid uint32) error {
 	buf := make([]byte, maxFrame+1)
 	want := binary.BigEndian.AppendUint32(nil, xid)
 	for {
-		n, err := unix.Read(guest, buf)
+		n, err := readGuest(guest, buf)
 		if err != nil {
 			return fmt.Errorf("no DHCP reply for xid %#x: %w", xid, err)
 		}
@@ -253,6 +253,17 @@ func TestDialGuestFailureIsNilConn(t *testing.T) {
 	}
 }
 
+// readGuest is a blocking unix.Read on the guest end, retried on EINTR: the Go runtime's preemption
+// signal interrupts a raw read, which the relay's os.File would retry.
+func readGuest(fd int, buf []byte) (int, error) {
+	for {
+		n, err := unix.Read(fd, buf)
+		if !errors.Is(err, unix.EINTR) {
+			return n, err
+		}
+	}
+}
+
 // TestDatagramWriterBuffersPartialFrame: a frame split across stream writes
 // goes out as one datagram once it is whole, and not before.
 func TestDatagramWriterBuffersPartialFrame(t *testing.T) {
@@ -280,7 +291,7 @@ func TestDatagramWriterBuffersPartialFrame(t *testing.T) {
 	if _, err := w.Write(stream[34:]); err != nil {
 		t.Fatal(err)
 	}
-	n, err := unix.Read(guest, buf)
+	n, err := readGuest(guest, buf)
 	if err != nil || !bytes.Equal(buf[:n], frame) {
 		t.Fatalf("datagram %d bytes, %v; want the %d-byte frame", n, err, len(frame))
 	}
