@@ -98,6 +98,40 @@ test.describe("Policies: the Wardyn boundary", () => {
     }
   });
 
+  test("a dry run refused 412 after a session switch is the failed report, with no Submit", async ({ page }) => {
+    await asRealSecurityAdmin(page);
+    // What the server answers when the shared cookie now names someone else (expected_principal_mismatch).
+    await page.route("**/api/v1/governance/dry-run", (route) =>
+      route.fulfill({
+        status: 412,
+        json: { error: "This page was opened as a different person than the one now signed in — reload and retry", reason: "expected_principal_mismatch" },
+      }),
+    );
+    const path = "/api/v1/governance/boundary";
+    const original = await consoleAPI(page, "GET", path);
+    const { mode, spec, limits, contact } = JSON.parse(original.text);
+    const off = await consoleAPI(page, "PUT", path, { mode: "no_limits", spec: {}, limits: {} });
+    expect(off.status, off.text).toBe(200);
+    try {
+      await gotoConsole(page, "admin");
+      await navTo(page, "Policies");
+      await page.getByRole("link", { name: BOUNDARY.TITLE, exact: true }).click();
+      await page.getByRole("radio", { name: new RegExp(BOUNDARY.MODE_HARD_BODY.slice(0, 20)) }).check();
+      await page.getByRole("button", { name: BOUNDARY.REVIEW, exact: true }).click();
+      const report = page.getByTestId("boundary-dry-run");
+      await expect(report.getByText(BOUNDARY_DRY_RUN.FAILED_TITLE)).toBeVisible();
+      await expect(report.getByText(BOUNDARY_DRY_RUN.FAILED_BODY)).toBeVisible();
+      // Which label shows depends on whether this install holds a save for a second person.
+      const submit = report.getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT_SAVE }).or(report.getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT }));
+      await expect(submit).toBeDisabled();
+      const stored = await consoleAPI(page, "GET", path);
+      expect(JSON.parse(stored.text).mode).toBe("no_limits");
+    } finally {
+      const back = await consoleAPI(page, "PUT", path, { mode, spec, limits, contact });
+      expect(back.status, back.text).toBe(200);
+    }
+  });
+
   test("the Desktop card holds an unset direction to its default and drafts a change into the dry run", async ({ page }) => {
     await asRealSecurityAdmin(page);
     const path = "/api/v1/governance/boundary";

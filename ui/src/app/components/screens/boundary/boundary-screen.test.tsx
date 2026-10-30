@@ -303,6 +303,28 @@ describe("BoundaryScreen", () => {
     expect(await within(report).findByText(BOUNDARY_DRY_RUN.NO_CHANGE)).toBeInTheDocument();
   });
 
+  // The dry run names the person (asPerson); a session another tab switched to someone else is refused 412
+  // (expected_principal_mismatch). Today that is the generic failed report: it does not show the server's
+  // "reload and retry" sentence, offers no reload, and sends nothing.
+  it("a 412 from the dry run after a session switch is the failed report: no Submit, no write", async () => {
+    getMock.mockResolvedValue(hardLimits);
+    const sentence = "This page was opened as a different person than the one now signed in — reload and retry";
+    dryRunMock.mockRejectedValueOnce(new HttpError(412, sentence, "expected_principal_mismatch"));
+    const user = userEvent.setup();
+    renderScreen();
+    await draftHosts("paste.example.org");
+    await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
+    const report = await screen.findByTestId("boundary-dry-run");
+    const alert = await within(report).findByRole("alert");
+    expect(within(alert).getByText(BOUNDARY_DRY_RUN.FAILED_TITLE)).toBeInTheDocument();
+    expect(within(alert).getByText(BOUNDARY_DRY_RUN.FAILED_BODY)).toBeInTheDocument();
+    expect(within(alert).getByRole("button", { name: BOUNDARY_DRY_RUN.RETRY })).toBeInTheDocument();
+    expect(within(report).queryByText(sentence)).toBeNull();
+    expect(within(report).queryByRole("button", { name: /reload/i })).toBeNull();
+    expect(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT_SAVE })).toBeDisabled();
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
   it("a direct save says Saved and adopts the stored document", async () => {
     getMock.mockResolvedValue(hardLimits);
     putMock.mockImplementation(() => Promise.resolve({ mode: "no_limits", spec: { denied_domains: ["x.example"] }, limits: {}, etag: '"b2"' }));
