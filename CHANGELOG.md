@@ -21,6 +21,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- Setup's Egress redirection step no longer records a redirect test for a target that is no longer configured. A test
+  still running when its redirect was saved with a new To used to land as the redirect's verdict and could open the
+  corporate-network gate; it is now dropped, and a test of an unchanged redirect still counts (#3517).
 - When a person's Azure DevOps sign-in lacks the permissions Wardyn needs to create tokens, Settings and Getting started
   now agree: both say the administrator needs to finish setting up Azure DevOps, and both keep Connect, so the person
   can sign in again once the permissions are granted. Settings offered no Connect, and Getting started left out the
