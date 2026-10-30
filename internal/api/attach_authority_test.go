@@ -131,6 +131,7 @@ type authorityRig struct {
 	srv    *Server
 	ts     *httptest.Server
 	ast    *authzStore
+	units  *authorityUnits
 	rev    *attachRevocations
 	run    types.AgentRun
 	audit  *sshTestRecorder
@@ -139,11 +140,36 @@ type authorityRig struct {
 
 const authorityTick = 20 * time.Millisecond
 
+// authorityUnits is the rig's store with the governance profiles a test sets (none by default).
+type authorityUnits struct {
+	*touchCountingStore
+	mu       sync.Mutex
+	profiles []types.GovernanceUnit
+}
+
+func (s *authorityUnits) GetGovernanceUnitChain(_ context.Context, id uuid.UUID) ([]types.GovernanceUnit, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return unitChainOf(s.profiles, nil, id)
+}
+
+func (s *authorityUnits) set(u types.GovernanceUnit) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.profiles = []types.GovernanceUnit{u}
+}
+
 func newAuthorityRig(t *testing.T, roleStampTTL time.Duration) *authorityRig {
 	t.Helper()
+	return newAuthorityRigWith(t, roleStampTTL, nil)
+}
+
+// newAuthorityRigWith is newAuthorityRig with configure applied to the server's config before it is built.
+func newAuthorityRigWith(t *testing.T, roleStampTTL time.Duration, configure func(*Config)) *authorityRig {
+	t.Helper()
 	rig := &authorityRig{ast: newAuthzStore(), rev: newAttachRevocations()}
-	st := &touchCountingStore{authzStore: rig.ast}
-	cfg := baseTestConfig(newHarness(t), st)
+	rig.units = &authorityUnits{touchCountingStore: &touchCountingStore{authzStore: rig.ast}}
+	cfg := baseTestConfig(newHarness(t), rig.units)
 	rig.audit = &sshTestRecorder{}
 	cfg.Audit = rig.audit
 	cfg.Runner = &holderTestRunner{}
@@ -154,6 +180,9 @@ func newAuthorityRig(t *testing.T, roleStampTTL time.Duration) *authorityRig {
 	cfg.SessionRevocations = rig.rev
 	cfg.RoleStampTTL = roleStampTTL
 	cfg.Now = func() time.Time { return time.Now().Add(time.Duration(rig.offset.Load())) }
+	if configure != nil {
+		configure(&cfg)
+	}
 	rig.srv = New(cfg)
 	rig.srv.authorityTest = attachAuthorityTimings{every: authorityTick, lookup: 100 * time.Millisecond}
 	rig.run = types.AgentRun{ID: uuid.New(), CreatedBy: holderOwner, OperatorOwned: true, State: types.RunRunning, SandboxRef: "sbx-1"}
@@ -473,8 +502,8 @@ func TestEndAttachAuthority_ClosesBeforeCancel(t *testing.T) {
 
 // TestAttachAuthority_ProfileEditEndsAnOpenTerminal: the re-check asks the attach door's deny_interactive of
 // the run as it stands now, so a profile edit that denies interactive sessions ends an open terminal at its
-// next check and a profile that does not leaves it open; a super admin's ticket on an operator-owned run
-// stays exempt, as at the door (#3398).
+// next check and a profile that does not leaves it open. A governed super admin's ticket is re-checked too,
+// and exempt on an operator-owned run, as at the door (#3398).
 func TestAttachAuthority_ProfileEditEndsAnOpenTerminal(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	set := walledRun(h)
@@ -498,11 +527,59 @@ func TestAttachAuthority_ProfileEditEndsAnOpenTerminal(t *testing.T) {
 	if err := member(context.Background()); !errors.Is(err, errAttachAuthorityEnded) {
 		t.Fatalf("checked under a profile that now denies interactive sessions: %v, want %v", err, errAttachAuthorityEnded)
 	}
+	h.srv.cfg.GovernAdminRuns = true // ungoverned, a super admin's ticket has nothing to re-check here
+	admin := check(oidc.RoleAdmin)
+	if admin == nil {
+		t.Fatal("a governed super admin's ticket socket has no re-check")
+	}
+	if err := admin(context.Background()); !errors.Is(err, errAttachAuthorityEnded) {
+		t.Fatalf("a governed super admin's ticket on their own run: %v, want %v", err, errAttachAuthorityEnded)
+	}
 	h.run.OperatorOwned = true
 	h.store.putRun(h.run)
-	if admin := check(oidc.RoleAdmin); admin != nil {
-		if err := admin(context.Background()); err != nil {
-			t.Fatalf("a super admin's ticket on an operator-owned run: %v, want exempt", err)
-		}
+	if err := admin(context.Background()); err != nil {
+		t.Fatalf("a super admin's ticket on an operator-owned run: %v, want exempt", err)
+	}
+}
+
+// TestAttachAuthority_ProfileEditEndsAnOpenCookieTerminal: the cookie lane asks the door's deny_interactive
+// again too, with refuseNoTicketAttach's exemption: a governed caller's terminal on their own run ends at the
+// next check once the profile denies interactive sessions, and one on an operator-owned run stays open (#3398).
+func TestAttachAuthority_ProfileEditEndsAnOpenCookieTerminal(t *testing.T) {
+	for name, operatorOwned := range map[string]bool{"their own run": false, "an operator-owned run": true} {
+		t.Run(name, func(t *testing.T) {
+			rig := newAuthorityRigWith(t, 30*time.Minute, func(c *Config) { c.GovernAdminRuns = true })
+			unit := types.GovernanceUnit{ID: uuid.New(), Name: "walled"}
+			rig.units.set(unit)
+			rig.ast.mu.Lock()
+			rig.run.OperatorOwned, rig.run.UnitID = operatorOwned, &unit.ID
+			rig.ast.runs[rig.run.ID] = rig.run
+			rig.ast.mu.Unlock()
+			ends := rig.pair(t, "cookie", rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
+			unit.Limits.DenyUIApps = true // the attach door asks deny_interactive alone
+			rig.units.set(unit)
+			time.Sleep(10 * authorityTick)
+			for i, end := range ends {
+				select {
+				case err := <-end:
+					t.Fatalf("socket %d ended under a profile that allows interactive sessions: %v", i, err)
+				default:
+				}
+			}
+			unit.Limits.DenyInteractive = true
+			rig.units.set(unit)
+			if !operatorOwned {
+				wantAuthEnded(t, ends)
+				return
+			}
+			time.Sleep(10 * authorityTick)
+			for i, end := range ends {
+				select {
+				case err := <-end:
+					t.Fatalf("socket %d on an operator-owned run ended: %v", i, err)
+				default:
+				}
+			}
+		})
 	}
 }
