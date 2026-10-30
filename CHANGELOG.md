@@ -18,6 +18,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   an ASCII subject is matched case-insensitively, and only on its ASCII letters.
 - With second-person approval on, a held unit create or update now shows the approver the unit's mode, own walls or
   pass-through, in its before and after.
+- Offboarding no longer stops handing a person's workspaces to the operator when the renamed fallback for a name
+  collision is itself taken. The fallback now takes a counter until neither the person nor the operator holds the
+  name, and one workspace that cannot be handed over no longer stops the others.
 
 ## [0.10.0-rc.8] — 2026-10-29
 
