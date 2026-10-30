@@ -4,12 +4,14 @@
 package macvm_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,11 +24,15 @@ import (
 )
 
 // readBackGuest is the edit's guest whose verify-cert fails with verifyErr when it is set: a read-back that
-// cannot finish. seq is the pushes, removals, posture reads and verify-certs in order, each with the codes
-// set by then.
+// cannot finish. A stat answers that its path is gone unless it is in left; an rm of rmFails exits 1 in the
+// recheck's boot. seq
+// is the pushes, the file runs (rm, mkdir, ditto, chown, stat), posture reads and verify-certs in order,
+// each with the codes set by then.
 type readBackGuest struct {
 	*editGuest
 	verifyErr error
+	left      []string
+	rmFails   string
 	seq       []string
 }
 
@@ -35,6 +41,13 @@ func (g *readBackGuest) note(what string) {
 	n := len(g.codes)
 	g.editGuest.mu.Unlock()
 	g.seq = append(g.seq, fmt.Sprintf("%s after %d codes", what, n))
+}
+
+// inRecheck says whether the recheck's boot, which sets the second code, has begun.
+func (g *readBackGuest) inRecheck() bool {
+	g.editGuest.mu.Lock()
+	defer g.editGuest.mu.Unlock()
+	return len(g.codes) >= 2
 }
 
 func (g *readBackGuest) Posture(ctx context.Context) (guestagent.ToolsPosture, error) {
@@ -49,8 +62,15 @@ func (g *readBackGuest) Push(_ context.Context, dest string, mode fs.FileMode, r
 }
 
 func (g *readBackGuest) Run(ctx context.Context, argv []string) (string, int, error) {
-	if argv[0] == "/bin/rm" {
-		g.note(strings.Join(argv, " "))
+	switch argv[0] {
+	case "/bin/rm", "/bin/mkdir", "/usr/bin/ditto", "/usr/sbin/chown", "/usr/bin/stat":
+		g.note("run " + strings.Join(argv, " "))
+	}
+	if argv[0] == "/usr/bin/stat" && !slices.Contains(g.left, argv[1]) {
+		return "", 1, nil
+	}
+	if argv[0] == "/bin/rm" && argv[2] == g.rmFails && g.inRecheck() {
+		return "", 1, nil
 	}
 	if len(argv) > 1 && argv[1] == "verify-cert" {
 		g.note("verify-cert")
@@ -115,14 +135,19 @@ func (e *editFix) again(t *testing.T) {
 }
 
 const (
-	wifiPush = "push /Library/Wardyn/stage/wifi/item.mobileconfig 600"
-	wifiLine = "To install a staged profile: signed in as wardyn-admin, run sudo open /Library/Wardyn/stage/wifi/item.mobileconfig in Terminal, then approve it in System Settings."
+	wifiPush  = "push /Library/Wardyn/stage/wifi/item.mobileconfig 600"
+	wifiCopy  = "/Users/wardyn-admin/Library/Wardyn/wifi.mobileconfig"
+	wifiLine  = "While signed in as wardyn-admin, open " + wifiCopy + ", then review and install the staged profile in System Settings."
+	adminDir  = "/Users/wardyn-admin/Library/Wardyn"
+	stageWifi = "/Library/Wardyn/stage/wifi"
 )
 
-// The edit stages each waiting profile again before the window, 0600 as prepare does, and names it by its
-// path. The recheck's boot removes it (StagedProfiles, of the base) and reads the items back
-// (ReadBackItems) after the accounts and Remote Login, into the copy, whose tools.json is swapped in with
-// it.
+// The edit's first boot stages each waiting profile again, 0600 in its 0700 stage directory as prepare
+// does, then copies it into wardyn-admin's own 0700 directory (ditto keeps the 0600) and hands the copy and
+// then the directory to wardyn-admin, and the edit prints the copy's path only. Nothing reaches the run
+// user's home. The recheck's boot first removes the copies' directory, then the stage directory, each
+// checked gone by a stat that must fail, and reads the items back (ReadBackItems) after the accounts and
+// Remote Login, into the copy, whose tools.json is swapped in with it.
 func TestEditBaseNamesProfilesThenReadsItemsBack(t *testing.T) {
 	e, g, _ := newItemsEdit(t)
 	if _, err := macvm.EditBase(context.Background(), e.opts); err != nil {
@@ -132,9 +157,26 @@ func TestEditBaseNamesProfilesThenReadsItemsBack(t *testing.T) {
 	if len(lines) != 5 || lines[2] != wifiLine || lines[3] != macvm.EditCheckingLine {
 		t.Fatalf("lines:\n%s", e.out.String())
 	}
-	want := []string{wifiPush + " after 1 codes", "/bin/rm -rf /Library/Wardyn/stage/wifi after 2 codes", "posture after 2 codes", "verify-cert after 2 codes"}
+	var want []string
+	for _, w := range []string{
+		"run /bin/mkdir -p -m 0700 " + stageWifi, wifiPush,
+		"run /bin/rm -rf " + adminDir, "run /bin/mkdir -m 0700 " + adminDir,
+		"run /usr/bin/ditto " + stageWifi + "/item.mobileconfig " + wifiCopy,
+		"run /usr/sbin/chown -h wardyn-admin " + wifiCopy, "run /usr/sbin/chown -h wardyn-admin " + adminDir,
+	} {
+		want = append(want, w+" after 1 codes")
+	}
+	for _, w := range []string{
+		"run /bin/rm -rf " + adminDir, "run /usr/bin/stat " + adminDir, "run /bin/rm -rf " + stageWifi, "run /usr/bin/stat " + stageWifi,
+		"posture", "verify-cert",
+	} {
+		want = append(want, w+" after 2 codes")
+	}
 	if !slices.Equal(g.seq, want) {
-		t.Fatalf("the edit's boots ran %q, want the profile staged before the window, then removed, then the read-back after the posture", g.seq)
+		t.Fatalf("the edit's boots ran\n%s\nwant\n%s", strings.Join(g.seq, "\n"), strings.Join(want, "\n"))
+	}
+	if strings.Contains(strings.Join(g.seq, " "), "/Users/agent") || strings.Contains(e.out.String(), stageWifi) {
+		t.Fatalf("the run user's home was touched, or the stage path printed:\n%s", e.out.String())
 	}
 	rec, err := macvm.ReadToolsRecord(e.base)
 	if err != nil {
@@ -182,7 +224,7 @@ func TestEditBaseRestagesTheWaitingProfiles(t *testing.T) {
 		if _, err := macvm.EditBase(context.Background(), e.opts); err != nil {
 			t.Fatalf("edit %d: %v", i+1, err)
 		}
-		if pushed() != 1 || !slices.Contains(e.lines(), wifiLine) || !slices.Contains(g.seq, "/bin/rm -rf /Library/Wardyn/stage/wifi after "+fmt.Sprint(2*i+2)+" codes") {
+		if pushed() != 1 || !slices.Contains(e.lines(), wifiLine) || !slices.Contains(g.seq, "run /bin/rm -rf "+stageWifi+" after "+fmt.Sprint(2*i+2)+" codes") {
 			t.Fatalf("edit %d: ran %q, printed\n%s", i+1, g.seq, e.out.String())
 		}
 	}
@@ -199,5 +241,50 @@ func TestEditBaseRestagesTheWaitingProfiles(t *testing.T) {
 	}
 	if rec, err := macvm.ReadToolsRecord(e.base); err != nil || rec.Items[0].State != macvm.ItemStaged {
 		t.Fatalf("record %+v %v", rec, err)
+	}
+}
+
+// A removal that fails, or that a stat finds undone, discards the edit like a failed read-back: a base that
+// still holds wardyn-admin's copy or the staged file never reaches runs.
+func TestEditBaseDiscardsOnAFailedRemoval(t *testing.T) {
+	for name, set := range map[string]func(g *readBackGuest){
+		"the copies' rm fails":           func(g *readBackGuest) { g.rmFails = adminDir },
+		"the copies' dir is still there": func(g *readBackGuest) { g.left = []string{adminDir} },
+		"the stage rm fails":             func(g *readBackGuest) { g.rmFails = stageWifi },
+		"the stage dir is still there":   func(g *readBackGuest) { g.left = []string{stageWifi} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, g, _ := newItemsEdit(t)
+			set(g)
+			_, err := macvm.EditBase(context.Background(), e.opts)
+			var discarded *macvm.EditDiscardedError
+			if err == nil || !strings.Contains(err.Error(), "staged profiles") || errors.As(err, &discarded) {
+				t.Fatalf("err %v", err)
+			}
+			e.oldBaseKept(t)
+			m, _ := macvm.ReadyBase(e.base)
+			if r, ok := macvm.ReadEditRecord(e.base, m); ok && r.Recheck == macvm.EditRecheckPassed {
+				t.Errorf("a discarded edit was recorded as passed: %+v", r)
+			}
+		})
+	}
+}
+
+// A profile the install list pins differently than the base was built with is not offered: no push, no
+// line, one log line naming its file by path.
+func TestEditBaseLogsAProfilePinnedDifferently(t *testing.T) {
+	e, g, wifi := newItemsEdit(t)
+	var log bytes.Buffer
+	e.opts.Log = slog.New(slog.NewTextHandler(&log, nil))
+	e.opts.Items.Items[0].SHA256 = strings.Repeat("d", 64)
+	if _, err := macvm.EditBase(context.Background(), e.opts); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(g.seq, func(s string) bool { return strings.HasPrefix(s, wifiPush) }) || slices.Contains(e.lines(), wifiLine) {
+		t.Fatalf("ran %q, printed\n%s", g.seq, e.out.String())
+	}
+	lines := strings.Split(strings.TrimSpace(log.String()), "\n")
+	if len(lines) != 1 || !strings.Contains(lines[0], "path="+wifi) || strings.Contains(lines[0], "wifi</plist>") {
+		t.Fatalf("log:\n%s", log.String())
 	}
 }

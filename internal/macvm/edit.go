@@ -23,7 +23,7 @@ import (
 const (
 	EditStartLine    = "Editing this Mac's macOS base. Runs keep using the current base until the edited one passes its checks."
 	editCodeLine     = "Sign in as wardyn-admin with the one-time code in %s."
-	editProfileLine  = "To install a staged profile: signed in as wardyn-admin, run sudo open %s in Terminal, then approve it in System Settings."
+	editProfileLine  = "While signed in as wardyn-admin, open %s, then review and install the staged profile in System Settings."
 	EditCheckingLine = "The window closed and the guest shut down. Checking the edited base: desktop control, accounts, Remote Login and the launcher's self-test."
 	editReadyLine    = "The edited base is ready, and runs now use it. Desktop: %s."
 )
@@ -214,7 +214,7 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 	removeCode()
 	fmt.Fprintln(o.Out, EditCheckingLine)
 	last, _ := ReadEditRecord(base, m)
-	desktop, err := o.recheck(ctx, spec, m, staging, staged)
+	desktop, err := o.recheck(ctx, spec, m, staging, len(offered) > 0, staged)
 	var discarded *EditDiscardedError
 	if errors.As(err, &discarded) {
 		discarded.Since = m.CreatedAt
@@ -283,9 +283,9 @@ func setAdminCode(ctx context.Context, g EditGuest, code []byte) error {
 	return nil
 }
 
-// mintCode sets a fresh one-time code in a headless boot, stages the waiting profiles again there
-// (restageProfiles, from staging's tools.json) and, once the boot has stopped, writes the code to the
-// setup-code file (0600), which only the person at this Mac reads. It returns the profiles' guest paths.
+// mintCode sets a fresh one-time code in a headless boot, offers the waiting profiles there
+// (offerProfiles, from staging's tools.json) and, once the boot has stopped, writes the code to the
+// setup-code file (0600), which only the person at this Mac reads. It returns wardyn-admin's copies' paths.
 func (o *EditOptions) mintCode(ctx context.Context, spec MachineSpec, path, staging string) (offered []string, err error) {
 	code, err := randomCode(8)
 	if err != nil {
@@ -296,7 +296,7 @@ func (o *EditOptions) mintCode(ctx context.Context, spec MachineSpec, path, stag
 		if err := setAdminCode(ctx, g, code); err != nil {
 			return err
 		}
-		offered, err = restageProfiles(ctx, g, staging, o.Items)
+		offered, err = offerProfiles(ctx, g, staging, o.Items, o.Log)
 		return err
 	})
 	if err != nil {
@@ -367,10 +367,11 @@ func (o *EditOptions) window(ctx context.Context, spec MachineSpec) error {
 
 // recheck boots the edited copy headless: it replaces the one-time code first, whatever follows, then
 // checks desktop control, the accounts, Remote Login and the launcher's self-test, in that order. The
-// first that fails is an *EditDiscardedError. Right after the code it removes the staged profiles, and after
-// Remote Login it reads the items back into staging's tools.json (ReadBackItems), a failure of either
-// discarding the copy with no line of its own. It returns the desktop mode.
-func (o *EditOptions) recheck(ctx context.Context, spec MachineSpec, m Manifest, staging string, staged []string) (desktop string, err error) {
+// first that fails is an *EditDiscardedError. Right after the code it removes the profiles' copies
+// (removeProfiles: copied, and staged), and after Remote Login it reads the items back into staging's
+// tools.json (ReadBackItems), a failure of either discarding the copy with no line of its own. It returns
+// the desktop mode.
+func (o *EditOptions) recheck(ctx context.Context, spec MachineSpec, m Manifest, staging string, copied bool, staged []string) (desktop string, err error) {
 	err = o.guest(ctx, spec, func(g EditGuest) error {
 		reset, err := randomCode(24)
 		if err != nil {
@@ -380,7 +381,7 @@ func (o *EditOptions) recheck(ctx context.Context, spec MachineSpec, m Manifest,
 		if err := setAdminCode(ctx, g, reset); err != nil {
 			return err
 		}
-		if err := removeStagedProfiles(ctx, g, staged); err != nil {
+		if err := removeProfiles(ctx, g, copied, staged); err != nil {
 			return fmt.Errorf("macvm: the staged profiles: %w", err)
 		}
 		probe := o.Desktop

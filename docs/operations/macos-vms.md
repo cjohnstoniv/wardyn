@@ -251,14 +251,16 @@ The `ca` item trusts your organisation's root in the guest at prepare. It is sep
 3. It writes the saved rule back. This always runs, also when a step failed or the request was cancelled; a rule it cannot restore fails stage 2.
 4. `security verify-cert -p ssl` reads the trust back. `tools.json` records `trusted` or `not_trusted` with the certificate's SHA-256 and SHA-1 fingerprints.
 
-- `not_trusted` means macOS refused a trust without a person. In `edit-base`, open Keychain Access, import the staged certificate into the System keychain, and set it to Always Trust for SSL. The staged certificate, `/Library/Wardyn/stage/<name>/item.cer`, opens only with `sudo`.
+- `not_trusted` means macOS refused a trust without a person. Trust it by hand in `edit-base`: in Terminal, run `sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain /Library/Wardyn/stage/<name>/item.cer` and answer macOS's prompt.
 - A tools update removes a CA the list no longer pins, with its trust settings, by its SHA-1.
 
 ### Configuration profiles
 
 - macOS installs a profile only with a person's approval, or from MDM. Prepare stages each `profile` item and reads `profiles list` back: `staged` until it is approved, then `installed`.
-- Before its window opens, `edit-base` stages each profile still `staged` again from its file in the list, and prints its path, `/Library/Wardyn/stage/<name>/item.mobileconfig`. A profile whose file is not on the Mac is not offered.
-- Signed in as wardyn-admin, run `sudo open <path>` in Terminal, then approve the profile in System Settings. The recheck removes each staged file, then reads the profiles back.
+- Before its window opens, `edit-base` stages each profile still `staged` again from its file in the list. It copies each to `/Users/wardyn-admin/Library/Wardyn/<name>.mobileconfig`, readable by wardyn-admin only, and prints that path.
+- A profile whose file is not on the Mac, or that the list now pins differently, is not offered. `edit-base` logs the second by its path.
+- While signed in as wardyn-admin, open the copy, then review and install the profile in System Settings.
+- The recheck removes the copies, then the staged files, and checks each is gone before it reads the profiles back. A removal that fails discards the edit.
 - Some payloads take effect only from MDM, whatever a person approves, so a guest never gets them from a staged profile.
   - These include Privacy Preferences Policy Control (TCC), system extension and kernel extension policies, and managed login items.
   - Approve a system extension by hand in `edit-base` instead.

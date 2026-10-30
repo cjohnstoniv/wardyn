@@ -175,3 +175,44 @@ func TestTrustSettingsBracketRestoresOnEveryPath(t *testing.T) {
 		}
 	}
 }
+
+// edit-base's forms for wardyn-admin's copies take only its own directory and a valid item's copy there,
+// never another account's home, another name or another source.
+func TestToolsExecAdminProfileForms(t *testing.T) {
+	D, E := MacAdminProfileDir, MacItemStageDir+"/wifi"
+	for _, argv := range [][]string{
+		{"/bin/rm", "-rf", D},
+		{"/bin/mkdir", "-m", "0700", D},
+		{"/usr/bin/ditto", E + "/item.mobileconfig", D + "/wifi.mobileconfig"},
+		{"/usr/sbin/chown", "-h", "wardyn-admin", D},
+		{"/usr/sbin/chown", "-h", "wardyn-admin", D + "/wifi.mobileconfig"},
+		{"/usr/bin/stat", D},
+		{"/usr/bin/stat", E},
+	} {
+		if err := ToolsExecAllowed(argv, t.TempDir()); err != nil {
+			t.Errorf("%q refused: %v", argv, err)
+		}
+	}
+	for _, argv := range [][]string{
+		{"/bin/rm", "-rf", "/Users/wardyn-admin"},
+		{"/bin/rm", "-rf", D + "/.."},
+		{"/bin/mkdir", "-p", "-m", "0700", D},
+		{"/bin/mkdir", "-m", "0755", D},
+		{"/bin/mkdir", "-m", "0700", "/Users/agent/Library/Wardyn"},
+		{"/usr/bin/ditto", E + "/item.mobileconfig", "/Users/agent/Library/Wardyn/wifi.mobileconfig"},
+		{"/usr/bin/ditto", E + "/item.mobileconfig", D + "/other.mobileconfig"},
+		{"/usr/bin/ditto", E + "/item.pkg", D + "/wifi.mobileconfig"},
+		{"/usr/bin/ditto", "/etc/sudoers", D + "/wifi.mobileconfig"},
+		{"/usr/sbin/chown", "-h", "agent", D + "/wifi.mobileconfig"},
+		{"/usr/sbin/chown", "wardyn-admin", D + "/wifi.mobileconfig"},
+		{"/usr/sbin/chown", "-h", "wardyn-admin", D + "/../wifi.mobileconfig"},
+		{"/usr/sbin/chown", "-h", "wardyn-admin", D + "/Wi Fi.mobileconfig"},
+		{"/usr/sbin/chown", "-h", "wardyn-admin", "/Users/agent"},
+		{"/usr/bin/stat", "/Users/agent"},
+		{"/usr/bin/stat", "-f", "%N", D},
+	} {
+		if err := ToolsExecAllowed(argv, t.TempDir()); err == nil {
+			t.Errorf("%q allowed", argv)
+		}
+	}
+}
