@@ -11,6 +11,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- An egress approval-pending answer now carries `X-Wardyn-Egress-Reason` on every path: a CONNECT, a plain request, an
+  organisation-forwarded request and the sign-in listener. An approval that expired or was cancelled answers
+  `approval:expired`, a full host table `approval:host-cap` and a raise the control plane refused `approval:refused`,
+  so a sandbox can tell them from `approval:pending`, an approval a person has yet to decide (#3815).
+
 ## [0.10.0-rc.8] — 2026-10-29
 
 ### Before you upgrade
