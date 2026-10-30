@@ -333,32 +333,17 @@ offline.
 
 ## A workspace folder on your runner
 
-A workspace's `local_dir` folder can live on your own computer instead of the Wardyn server. The source names your
-runner, and a run with the workspace runs on that runner, which binds the folder into the sandbox.
+A workspace folder can live on your computer: the `local_dir` source names your runner, and its runs run only there.
 
-1. Serve your runner with a `--drive-root` that covers the folder, such as `wardyn-runnerd serve --drive-root ~/src`.
-   A runner with none binds no such folder.
-2. Add the workspace with the folder on that runner: in Add workspace choose **On my runner**, or run
-   `wardyn workspace create --runner <runner-id> --add dir:/Users/you/src/app`.
-3. Start a run with the workspace in a runner pool that holds that runner, with placement local.
+1. Serve the runner with a `--drive-root` that covers the folder.
+2. Add the folder with **On my runner**, or `wardyn workspace create --runner <runner-id> --add dir:<path>`.
+3. Run it in a pool that holds that runner, with placement local.
 
-What happens:
-
-- When the workspace is saved and when a run starts, Wardyn checks only the folder's path, against your workspace
-  roots ([`WARDYN_USER_WORKSPACE_ROOTS`](../ENV.md#wardyn_user_workspace_roots)): the folder is not on the Wardyn
-  server. Wardyn does not scan it, so the source stays "pending scan"; the runner checks it when the run starts.
-- The run goes to that runner and nowhere else. A pin to another runner, a pool without it, a remote-hosted runner or
-  a run with no pool is refused (`placement_local_path`).
-- Before the bind the runner resolves links, then holds the real path to your workspace roots, to its own
-  `--drive-root`, to the credential-folder list and, for a writable folder, to the writable roots and their deny list
-  in any letter case. A Linux VM or macOS VM run gets the folder into its guest the same way.
-- Only a runner whose caps say `bound_folders` is sent such a folder. A runner older than this release is refused the
-  run until it is updated.
-- Revoking or removing the runner, or handing the workspace to someone else, leaves the folder bound to that runner.
-  A run with it is then refused by name (`workspace_source_runner_unavailable`): add a new workspace with a folder on
-  a runner you own or on the Wardyn server.
-- Record and verify sessions run on the Wardyn server, so they refuse such a folder (`workspace_session_runner_bound`).
-  The workspace scan skips it, and env-as-code leaves it out.
+- Wardyn checks only the path's text; it never scans the folder.
+- The runner resolves links and checks the real path against your roots and its `--drive-root`. A writable folder must also sit in the writable roots.
+- An older runner, without `bound_folders` in its caps, is refused the run until updated.
+- If the runner is revoked or removed, or the workspace changes owner, runs are refused (`workspace_source_runner_unavailable`); add a new workspace.
+- Record and verify refuse such a folder; the scan and env-as-code skip it.
 
 ## Offline and revocation
 

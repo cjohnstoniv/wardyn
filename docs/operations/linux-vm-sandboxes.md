@@ -14,7 +14,8 @@
 | The disk | The run's image converted once to a read-only ext4 base, plus the run's own copy-on-write overlay |
 | The boot | Direct kernel boot of the image's own kernel and initrd, with `noresume` |
 | The agent | The Wardyn guest agent in the guest starts the harness and serves terminals, as `agent` (uid 1000). It accepts the run's setup once per boot, even after it restarts |
-| Shared folders | The folders a container on this runner would get, at the same paths and mode, one unprivileged `virtiofsd` container each: a workspace folder only when it is bound to this runner and inside its `--drive-root`. No other host folder is shared, and a guest write lands as the runner's user |
+| Shared folders | The folders a container on this runner would get, at the same paths and mode, one unprivileged `virtiofsd` container each. No other host folder is shared, and a guest write lands as the runner's user |
+| Bound folders | A workspace folder bound to this runner, inside its `--drive-root` ([more](hybrid-laptops.md#a-workspace-folder-on-your-runner)) |
 | Synced folders | A folder synced from another computer lands in the guest as in a container: through the guest agent and the image's `sftp-server`, as `agent`. The agent waits for the first sync |
 | Confinement | The VM boundary, which the runner treats as the `CC3` family (hardware virtualisation). The run's recorded `confinement_class` stays the one it asked for |
 | Network | On a Docker runner, QEMU's only link is the network relay (`wardyn-vmnet`), which hands connections to allowed hosts to the run's proxy. A Kubernetes VM pod has no relay yet |

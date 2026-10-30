@@ -108,13 +108,9 @@ Three things worth naming here, because they read as bugs otherwise:
   shared list for you) — see [ENV.md](ENV.md).
 - Unset means you may mount no host directory; that is fail-closed by design, not
   a bug.
-- A folder on your own computer can sit on your runner instead of the Wardyn
-  server: pick **On my runner** when you add it, or `wardyn workspace create
-  --runner <id>`. It still sits under your root, and under your runner's
-  `--drive-root`, and a run with it goes only to that runner — see
-  [hybrid-laptops.md](operations/hybrid-laptops.md#a-workspace-folder-on-your-runner).
-- Such folders are checked by their runner when the run starts, not scanned by
-  Wardyn, so they stay "pending scan".
+- A folder can sit on your own runner instead
+  ([how](operations/hybrid-laptops.md#a-workspace-folder-on-your-runner)). Such
+  folders are checked by their runner when the run starts, not scanned by Wardyn.
 - `GET /me` shows the root or roots that apply to you — a hint for the console;
   the server enforces the boundary when a mount binds.
 - Writability is a second, separate gate.

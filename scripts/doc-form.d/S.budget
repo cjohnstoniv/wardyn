@@ -300,7 +300,7 @@
 # docs/sdk.md 23965 measured at the guards merge onto the wave (both sentences above).
 # docs/sdk.md 23974 measured (rc.8): workload_binding_inactive says a revoke, not a session-only sign-out, ends a binding.
 # docs/sdk.md 24038 measured at the Mac train main merge (+42: a disk drive's delete while its Mac is offline or no longer registered; +23: the workload_binding_inactive row says a deleted binding and a restart's launch.reason carry it).
-docs/sdk.md=24040 share=21 # +2 (rc.9 Mac train, measured 24040: the macos_base_invalid reason)
+docs/sdk.md=24091 share=21 # +2 (rc.9 Mac train, measured 24040: the macos_base_invalid reason); +51 (rc.9 U12, measured 24091: the runner-bound folder reasons)
 # docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/sdk.md 20315 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # 0.10 HYB-C: docs/sdk.md 20343 adds 28 over 20315, measured: the placement_capability refusal of a linux_vm run with a folder on a runner that cannot share one.
