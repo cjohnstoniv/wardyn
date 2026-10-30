@@ -1118,18 +1118,8 @@ ADMIN pre-authorized** —
 - The check runs at onboarding, again at run-create, and a THIRD time in the docker driver
   immediately before `ContainerCreate` (`agentMounts`, on `Mount.MemberAuthored` only), which
   makes a source repointed between onboarding and launch fail closed.
-- A source bound to the member's own runner (a `local_dir` source's `runner_id`) is not on
-  wardynd's host, so onboarding and run-create check its text alone (`ValidateUserMountLexical`:
-  the roots, the credential paths and, when writable, the writable ceiling).
-  - Placement sends it only to that runner, and only when the runner's caps say `bound_folders`;
-    dispatch fails a run carrying one anywhere else, and wardynd's own driver refuses it.
-  - The runner trusts the org's roots, intersected with its owner's `--drive-root`, resolves the
-    path and runs the full check before it binds or shares the folder. It binds only a member
-    mount bound to itself, and a writable one only under a writable ceiling.
-  - A revoked, removed or reassigned runner leaves the binding in place and stale: every door
-    refuses it by name, and nothing rebinds it elsewhere.
-- `WARDYN_USER_WRITABLE_DENY` matches in any letter case, as a case-insensitive disk resolves
-  `.SSH` and `.ssh` to one folder.
+- A folder bound to the member's runner (`runner_id`) is checked by text here, and by that
+  runner, inside its `--drive-root`, before the bind.
 - Gating on `MemberAuthored` rather than "this is a member run" is load-bearing: an
   operator-authored mount rides the same spec and lives outside every member root by
   construction.

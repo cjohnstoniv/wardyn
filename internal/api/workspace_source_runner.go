@@ -390,3 +390,56 @@ func (s *Server) boundFolderPlacementRefusal(rid *uuid.UUID, placed types.Placem
 	}
 	return nil
 }
+
+// refuseUserSources answers 400 workspace_sources_not_allowed for sources a
+// workspace owned by owner may not hold: a runner binding that does not hold
+// (sourceBindingRefusal), then the member gate (userSourcesAllowed).
+func (s *Server) refuseUserSources(w http.ResponseWriter, r *http.Request, owner string, sources []types.WorkspaceSource) bool {
+	msg, err := s.sourceBindingRefusal(r.Context(), owner, sources)
+	if err != nil {
+		writeServerError(w, r, "read the folder's runner", err)
+		return true
+	}
+	if msg == "" {
+		msg = s.userSourcesAllowed(r, owner, sources)
+	}
+	if msg == "" {
+		return false
+	}
+	writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceSourcesNotAllowed, msg)
+	return true
+}
+
+// userSourcesAllowed gates a MEMBER-owned workspace's local_dir sources
+// through the member-safe mount rules (internal/runner's UserMountPolicy):
+// the operator/MDM root allowlist matched on the CANONICALIZED real path, the
+// credential-dotfile deny-list, and — only for a source asking to be writable —
+// the separate writable allowlist minus its deny carve-out. It returns "" (fine)
+// or a 400-worthy message.
+//
+// owner=="" means OPERATOR-owned, and returns "" immediately: an operator's
+// mounts keep exactly the reach they have today (runner.ValidateMountSource
+// alone, already run by validateWorkspaceSource). This function only ever
+// NARROWS, never widens — it is additive on top of that deny-list, matching
+// SandboxSpec.UserMountRoots' nil-means-today's-behavior contract at the
+// other end of the same path.
+func (s *Server) userSourcesAllowed(r *http.Request, owner string, sources []types.WorkspaceSource) string {
+	if owner == "" {
+		return ""
+	}
+	for i, src := range sources {
+		if src.Type != types.WorkspaceSourceTypeLocalDir {
+			continue
+		}
+		// A folder bound to the owner's runner is not on this host: its text alone is checked here, and
+		// the runner checks the folder itself at bind.
+		check := s.cfg.UserMounts.ValidateUserMount
+		if src.RunnerID != nil {
+			check = s.cfg.UserMounts.ValidateUserMountLexical
+		}
+		if err := check(owner, src.Path, src.Writable); err != nil {
+			return fmt.Sprintf("sources[%d]: %s", i, err.Error())
+		}
+	}
+	return ""
+}
