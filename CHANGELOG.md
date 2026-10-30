@@ -46,8 +46,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - macOS VMs: an organisation CA in the install list is trusted in the base for SSL only, then verified. A CA macOS
   will not trust without a person reads `not_trusted`; trust it by hand in `edit-base`. Built and unit-tested; not yet
   run on a real Mac.
-- macOS VMs: a package in the install list may take secret files, such as an EDR licence, removed after its install
-  and never logged or recorded. Built and unit-tested; not yet run on a real Mac.
+- macOS VMs: a package in the install list may take secret files, such as an EDR licence. A file's value is never in a
+  command line, a log, `tools.json` or the caps, and the file is removed after the install. Built and unit-tested; not
+  yet run on a real Mac.
 - macOS VMs: the runner reports the guest's posture (macOS version, SIP, Gatekeeper, profiles, MDM enrolment, the
   organisation CA) beside the Mac's own. Built and unit-tested; not yet run on a real Mac.
 - A Mac's MDM can now attest posture (`MDMManaged`, `DiskEncrypted`) and set `register` and `setup` limits (`MaxRuns`,
