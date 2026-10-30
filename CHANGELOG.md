@@ -116,6 +116,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `--default` and `--name`, instead of dropping them silently. `--artifact-base` is saved in `cli.json` only after the
   release or runner downloaded from it has been verified, so a mirror that served something refused is no longer
   remembered (#3551).
+- `wardyn doctor`'s `runner-exits` stage, when the organisation will not show the runner, now says a revoked runner is
+  not shown to its owner and points at the administrator's `runner.exit.park` audit rows. `docs/runner-offline.md`
+  no longer says doctor reports a revoked runner's parked receipts (#3614).
 
 ### Security
 
