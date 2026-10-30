@@ -6,6 +6,8 @@ package stage1
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -33,6 +35,9 @@ const (
 	newPass  = "replacement-Pass_0123456789abcdefghijklmnopqrstu"
 )
 
+// pairKey is the base's pairing key, printable so a leak of it shows in any text it reaches.
+var pairKey = []byte("wardyn-test-pair-key-0123456789!")
+
 var sudoWords = []string{"/usr/bin/sudo", "-k", "-S", "-p", "", "--"}
 
 func root(argv ...string) []string { return append(append([]string(nil), sudoWords...), argv...) }
@@ -45,6 +50,9 @@ var wantArgv = [][]string{
 	root("/usr/bin/shasum", "-a", "256", "/usr/local/libexec/wardyn-guest-agent"),
 	root("/usr/bin/install", "-o", "root", "-g", "wheel", "-m", "644", "/dev/null", "/Library/LaunchDaemons/com.wardyn.guest-agent.plist"),
 	root("/bin/dd", "of=/Library/LaunchDaemons/com.wardyn.guest-agent.plist"),
+	root("/usr/bin/install", "-d", "-o", "root", "-g", "wheel", "-m", "755", "/Library/Wardyn"),
+	root("/usr/bin/install", "-o", "root", "-g", "wheel", "-m", "600", "/dev/null", "/Library/Wardyn/pair.key"),
+	root("/bin/dd", "of=/Library/Wardyn/pair.key"),
 	root("/usr/sbin/sysadminctl", "-addUser", "agent", "-fullName", "agent", "-password", "-"),
 	root("/usr/bin/dscl", ".", "-list", "/Users", "UniqueID"),
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.loginwindow", "autoLoginUser", "agent"),
@@ -92,7 +100,7 @@ func (f *fixture) input(withCode bool) macvm.BootstrapInput {
 		f.mu.Lock()
 		f.evs = append(f.evs, ev)
 		f.mu.Unlock()
-	}, GuestEpoch: func() (uint64, error) { return 7, nil }}
+	}, GuestEpoch: func() (uint64, error) { return 7, nil }, PairKey: bytes.Clone(pairKey)}
 	if withCode {
 		in.Password, in.NewPassword = code, newPass
 		in.Replaced = func() {
@@ -153,6 +161,24 @@ func TestSequenceAndArgvExactly(t *testing.T) {
 	}
 	if !bytes.Equal(f.srv.File("/etc/kcpassword"), kcpassword([]byte(lines[1]))) {
 		t.Fatal("kcpassword does not hold the agent user's password")
+	}
+	// The pairing key reaches the guest's root-only file over dd's stdin, after sudo's line, and no argv.
+	if guestagent.MacPairKeyPath != "/Library/Wardyn/pair.key" {
+		t.Fatalf("stage 1 writes the key where the guest agent does not read it: %s", guestagent.MacPairKeyPath)
+	}
+	if !bytes.Equal(f.srv.File("/Library/Wardyn/pair.key"), pairKey) {
+		t.Fatal("the guest's pairing key is not the key prepare gave stage 1")
+	}
+	k := slices.IndexFunc(execs, func(e stage1test.Exec) bool {
+		return slices.Equal(e.Argv, root("/bin/dd", "of=/Library/Wardyn/pair.key"))
+	})
+	if k < 0 || !bytes.Equal(execs[k].Stdin, append([]byte(provPass+"\n"), pairKey...)) {
+		t.Fatal("the key's dd does not read sudo's line and then the key alone")
+	}
+	for _, e := range execs {
+		if strings.Contains(e.Line, string(pairKey)) || slices.ContainsFunc(e.Argv, func(w string) bool { return strings.Contains(w, string(pairKey)) }) {
+			t.Fatalf("the pairing key is in the argv %q", e.Line)
+		}
 	}
 	if d := f.srv.Dials(); slices.ContainsFunc(d, func(p int) bool { return p != 22 && p != 5900 }) {
 		t.Fatalf("dialled ports %v; stage 1 dials the guest's ports 22 and 5900 only", d)
@@ -263,7 +289,7 @@ func TestNoSecretInArgvEventsOrErrors(t *testing.T) {
 						agentPw = strings.Split(string(e.Stdin), "\n")[1]
 					}
 				}
-				secrets := []string{provPass, code, newPass}
+				secrets := []string{provPass, code, newPass, string(pairKey), hex.EncodeToString(pairKey), base64.StdEncoding.EncodeToString(pairKey)}
 				if agentPw != "" {
 					secrets = append(secrets, agentPw)
 				}
@@ -629,4 +655,19 @@ func TestOnlyTheAdminAndTheAgentMayBeAccounts(t *testing.T) {
 			t.Errorf("an admin with no UniqueID passed: %v", err)
 		}
 	})
+}
+
+// Stage 1 does not run without the base's pairing key: a base it made could never pair.
+func TestStage1RefusesAnInputWithoutAPairKey(t *testing.T) {
+	for _, key := range [][]byte{nil, bytes.Repeat([]byte{1}, 31)} {
+		f := newFixture(t, provPass)
+		in := f.input(false)
+		in.PairKey = key
+		if _, err := f.b.Bootstrap(context.Background(), in); err == nil {
+			t.Fatalf("stage 1 ran with a %d-byte pairing key", len(key))
+		}
+		if len(f.srv.Execs()) != 0 {
+			t.Fatal("stage 1 ran a command before it had a pairing key")
+		}
+	}
 }

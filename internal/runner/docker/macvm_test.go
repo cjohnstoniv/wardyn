@@ -326,6 +326,10 @@ func TestMacVMCreateAndTeardown(t *testing.T) {
 	if st, err := r.d.Status(context.Background(), sb.Ref); err != nil || st.State != types.RunRunning {
 		t.Fatalf("status %+v %v", st, err)
 	}
+	// The run's clone holds its own copy of the base's pairing key, which goes with the run directory.
+	if fi, err := os.Lstat(filepath.Join(r.c.runDir(spec.RunID), macvm.PairKeyFile)); err != nil || fi.Mode() != 0o600 {
+		t.Fatalf("the run's pairing key: %v %v", fi, err)
+	}
 
 	if err := r.d.StopSandbox(context.Background(), sb.Ref); err != nil {
 		t.Fatal(err)
