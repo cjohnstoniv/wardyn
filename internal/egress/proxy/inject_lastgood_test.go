@@ -107,6 +107,28 @@ func TestInjector_LastGoodEndsWithTheGrace(t *testing.T) {
 	}
 }
 
+// The retry pacing never carries the last-good header past the grace: a
+// failure just before expiry + lastGoodGrace serves it until that deadline,
+// not for a whole lastGoodRetry beyond it. lastGood takes its clock as an
+// argument, so the deadline is crossed by value, never by sleeping.
+func TestInjector_LastGoodPacingStopsAtTheGrace(t *testing.T) {
+	inj, _ := lastGoodControlPlane(t, func() int { return http.StatusServiceUnavailable })
+	e := inj.byHost["api.test"]
+	e.reMu.Lock()
+	defer e.reMu.Unlock()
+	deadline := time.UnixMilli(e.expiresAt).Add(lastGoodGrace)
+	outage := injectionStatusError{status: http.StatusServiceUnavailable}
+	if !e.lastGood(outage, deadline.Add(-lastGoodRetry/2)) {
+		t.Fatal("an outage just before the grace deadline did not serve the last-good header")
+	}
+	if e.retryAt.After(deadline) {
+		t.Fatalf("retry paced to %v past the grace deadline", e.retryAt.Sub(deadline))
+	}
+	if e.lastGood(outage, deadline) {
+		t.Fatal("an outage at the grace deadline still served the last-good header")
+	}
+}
+
 // Recovery: once the store answers again, the fresh value replaces the
 // last-good one at the next attempt.
 func TestInjector_RecoversAfterTheOutage(t *testing.T) {

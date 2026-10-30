@@ -29,6 +29,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   while a check is still waiting on a store that does not answer. A hung check used to hold the connection open for good, and a store that kept
   failing kept it open about a minute. The refusal's audit row is now written after the close, so a slow audit write
   no longer delays it.
+- An egress approval-pending answer now carries `X-Wardyn-Egress-Reason` on every path: a CONNECT, a plain request, an
+  organisation-forwarded request and the sign-in listener. An approval that expired or was cancelled answers
+  `approval:expired`, a full host table `approval:host-cap` and a raise the control plane refused `approval:refused`,
+  so a sandbox can tell them from `approval:pending`, an approval a person has yet to decide (#3815).
+- While the control plane cannot be reached, a minted credential's last-good header now stops at expiry plus the
+  15-minute grace. A failed re-check just before that deadline could keep serving it for up to 30 seconds past it,
+  the pause between re-checks (#3416).
+- A model gateway host both vendors share that is also the run's own model endpoint is now inspected as that endpoint's
+  vendor. Under fail-closed inspection its request bodies were refused as uninspected (#3819).
+- A run's container `CONNECT` tunnels are now capped at 1,024 open at once, the bound desktop VM tunnels already have.
+  The next one is refused with a `503`, `Retry-After` and `X-Wardyn-Egress-Reason: builtin:tunnel-limit`, and a
+  `builtin:tunnel-limit` deny row; it is admitted once a tunnel closes. Before, a process could hold any number of
+  tunnels open (#3698).
 
 ## [0.10.0-rc.8] — 2026-10-29
 
