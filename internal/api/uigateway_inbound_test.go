@@ -34,6 +34,9 @@ type uiTokenStore struct {
 	// lookupErr, when set, fails every lookup (failed counts them): the store cannot answer.
 	lookupErr error
 	failed    int
+	// hang, when set, holds every lookup until it is closed (hung counts them): the store does not answer.
+	hang chan struct{}
+	hung int
 	// runErr and policyErr, when set, fail every read of the run and of its policy's audit events.
 	runErr, policyErr error
 }
@@ -68,6 +71,12 @@ func (s *uiTokenStore) failReads(err error) {
 // GetAPITokenByRaw answers as the store's lookup does: a revoked or expired token is no token.
 func (s *uiTokenStore) GetAPITokenByRaw(_ context.Context, raw string) (types.APIToken, error) {
 	s.mu.Lock()
+	if hang := s.hang; hang != nil {
+		s.hung++
+		s.mu.Unlock()
+		<-hang
+		s.mu.Lock()
+	}
 	defer s.mu.Unlock()
 	if s.lookupErr != nil {
 		s.failed++
@@ -93,6 +102,22 @@ func (s *uiTokenStore) failedLookups() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.failed
+}
+
+// hangLookups holds every lookup from now until the test ends.
+func (s *uiTokenStore) hangLookups(t *testing.T) {
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hang = hang
+}
+
+// hungLookups is how many lookups have been held.
+func (s *uiTokenStore) hungLookups() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hung
 }
 
 // update changes the stored token raw, as a revoke or an expiry would.
@@ -485,6 +510,43 @@ func (s *uiServiceTokenStore) GetServiceIdentity(context.Context, string) (types
 	return s.si, nil
 }
 
+// uiDenyGate is safeRecorder whose inbound.deny writes, once held, wait until the test ends: an audit sink
+// that has stopped answering, which a stream's close must not wait on.
+type uiDenyGate struct {
+	*safeRecorder
+	mu   sync.Mutex
+	held chan struct{}
+}
+
+func (g *uiDenyGate) Record(ctx context.Context, ev types.AuditEvent) error {
+	g.mu.Lock()
+	held := g.held
+	g.mu.Unlock()
+	if held != nil && ev.Action == "inbound.deny" {
+		<-held
+	}
+	return g.safeRecorder.Record(ctx, ev)
+}
+
+// hold holds every inbound.deny write from now until the test ends.
+func (g *uiDenyGate) hold(t *testing.T) {
+	held := make(chan struct{})
+	t.Cleanup(func() { close(held) })
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.held = held
+}
+
+// awaitDenies is h's inbound.deny rows once there is one, or after 5 s: a stream writes its refusal's row
+// after it closes.
+func awaitDenies(h *uiHarness) []types.AuditEvent {
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) > 0 || time.Now().After(deadline) {
+			return rows
+		}
+	}
+}
+
 // openInboundStream upgrades a connection to h's inbound app "code" with token and returns it with its
 // reader, past the 101.
 func openInboundStream(t *testing.T, h *uiHarness, gw *httptest.Server, token string) (net.Conn, *bufio.Reader) {
@@ -572,7 +634,7 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 				t.Fatal("the stream outlived its token")
 			}
 			// One row, naming who the stream was open for, though the token no longer proves it.
-			rows := h.audit.auditRows("inbound.deny", "denied")
+			rows := awaitDenies(h)
 			if len(rows) != 1 || rows[0].Actor != h.owner || !h.audit.hasDataValue("reason", inboundDenyCredentialInvalid) ||
 				!h.audit.hasDataValue("token_id", tok.ID.String()) {
 				t.Errorf("inbound.deny rows = %+v, want one credential_invalid by %s for token %s", rows, h.owner, tok.ID)
@@ -599,7 +661,7 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 		if !closes(conn, br) {
 			t.Fatal("the stream outlived its sponsor")
 		}
-		if !h.audit.hasDataValue("reason", inboundDenyCredentialInvalid) {
+		if awaitDenies(h); !h.audit.hasDataValue("reason", inboundDenyCredentialInvalid) {
 			t.Errorf("no inbound.deny credential_invalid; reasons: %s", h.audit.dataReasons())
 		}
 	})
@@ -630,7 +692,7 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 			if !closes(conn, br) {
 				t.Fatal("the stream outlived the profile that now denies it")
 			}
-			if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner ||
+			if rows := awaitDenies(h); len(rows) != 1 || rows[0].Actor != h.owner ||
 				!h.audit.hasDataValue("reason", inboundDenyUnitDenies) {
 				t.Errorf("inbound.deny rows = %+v, want one unit_denies by %s", rows, h.owner)
 			}
@@ -688,7 +750,7 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 		if !closes(conn, br) {
 			t.Fatal("the stream outlived re-admissions unanswerable past the bound")
 		}
-		if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner ||
+		if rows := awaitDenies(h); len(rows) != 1 || rows[0].Actor != h.owner ||
 			!h.audit.hasDataValue("reason", reasonRunUnreadable) || h.audit.hasDataValue("reason", inboundDenyNotFound) {
 			t.Errorf("inbound.deny rows = %+v, want one run_unreadable by %s and no not_found", rows, h.owner)
 		}
@@ -701,16 +763,91 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 		if !closes(conn, br) {
 			t.Fatal("the stream outlived re-admissions unanswerable past the bound")
 		}
-		if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner ||
+		if rows := awaitDenies(h); len(rows) != 1 || rows[0].Actor != h.owner ||
 			!h.audit.hasDataValue("reason", reasonTokenLookupUnavailable) {
 			t.Errorf("inbound.deny rows = %+v, want one token_lookup_unavailable by %s", rows, h.owner)
+		}
+	})
+
+	// The bound runs from the last check that confirmed the stream, here the lookup of the session it opened
+	// on (cached), not from the first that failed.
+	t.Run("lookups failing close the stream a bound after its last good check, not after the first failure", func(t *testing.T) {
+		h, gw := open(t)
+		if _, ok := h.srv.inboundTokenSession(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, uiRelayPrefix(h.run.ID, "code")+"/", nil),
+			h.run.ID, "code", "wdn_alice"); !ok {
+			t.Fatal("the token was not admitted")
+		}
+		h.clock.advance(inboundResolveTTL / 2)
+		ts := tokens(h)
+		from := ts.failLookups(errors.New("connection refused"))
+		conn, br := openInboundStream(t, h, gw, "wdn_alice") // on the cached session
+		for deadline := time.Now().Add(5 * time.Second); ts.failedLookups() < from+1; time.Sleep(every) {
+			if time.Now().After(deadline) {
+				t.Fatal("no re-admission was attempted while the store failed")
+			}
+		}
+		if !echoes(conn, br) {
+			t.Fatal("a failure inside the bound closed the stream")
+		}
+		h.clock.advance(inboundResolveTTL / 2) // the bound after the good check; half of it after the first failure
+		if !closes(conn, br) {
+			t.Fatal("the stream outlived its last good check by the bound")
+		}
+		if rows := awaitDenies(h); len(rows) != 1 || !h.audit.hasDataValue("reason", reasonTokenLookupUnavailable) {
+			t.Errorf("inbound.deny rows = %+v, want one token_lookup_unavailable", rows)
+		}
+	})
+
+	// A check that never answers holds no stream past the bound: the tick closes it with the check in flight.
+	t.Run("a token lookup that never answers closes the stream at the bound", func(t *testing.T) {
+		h, gw := open(t)
+		conn, br := openInboundStream(t, h, gw, "wdn_alice")
+		if !echoes(conn, br) {
+			t.Fatal("the stream carried nothing before the store hung")
+		}
+		ts := tokens(h)
+		ts.hangLookups(t)
+		for deadline := time.Now().Add(5 * time.Second); ts.hungLookups() == 0; time.Sleep(every) {
+			if time.Now().After(deadline) {
+				t.Fatal("no re-admission was attempted while the store hung")
+			}
+		}
+		time.Sleep(5 * every)
+		if !echoes(conn, br) {
+			t.Fatal("a check in flight inside the bound closed the stream")
+		}
+		h.clock.advance(inboundResolveTTL)
+		if !closes(conn, br) {
+			t.Fatal("the stream outlived a re-admission that never answered")
+		}
+		if rows := awaitDenies(h); len(rows) != 1 || rows[0].Actor != h.owner ||
+			!h.audit.hasDataValue("reason", reasonTokenLookupUnavailable) {
+			t.Errorf("inbound.deny rows = %+v, want one token_lookup_unavailable by %s", rows, h.owner)
+		}
+	})
+
+	t.Run("a refusal closes the stream though the write of its row hangs", func(t *testing.T) {
+		h, gw := open(t)
+		gate := &uiDenyGate{safeRecorder: h.audit}
+		h.srv.cfg.Audit = gate
+		conn, br := openInboundStream(t, h, gw, "wdn_alice")
+		if !echoes(conn, br) {
+			t.Fatal("the stream carried nothing before the token was revoked")
+		}
+		gate.hold(t)
+		tokens(h).update("wdn_alice", func(tok *types.APIToken) { at := time.Now(); tok.RevokedAt = &at })
+		if !closes(conn, br) {
+			t.Fatal("the stream's close waited on its refusal's audit write")
 		}
 	})
 
 	t.Run("a stream whose token keeps its authority stays open", func(t *testing.T) {
 		h, gw := open(t)
 		conn, br := openInboundStream(t, h, gw, "wdn_alice")
-		time.Sleep(10 * every)
+		for range 4 { // two bounds' worth of time: each check that admits the stream moves its bound on
+			h.clock.advance(inboundResolveTTL / 2)
+			time.Sleep(5 * every)
+		}
 		if !echoes(conn, br) {
 			t.Fatal("a stream with a live token closed across the re-admissions")
 		}

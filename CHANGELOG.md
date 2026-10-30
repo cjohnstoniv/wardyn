@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- An upgraded connection an inbound token opened, a WebSocket say, is now closed at the first re-check after its token
+  has gone 30 seconds unconfirmed, counted from the last check that confirmed it, even while a check is still waiting
+  on a store that does not answer. A hung check used to hold the connection open for good, and a store that kept
+  failing kept it open about a minute. The refusal's audit row is now written after the close, so a slow audit write
+  no longer delays it.
+
 ## [0.10.0-rc.8] — 2026-10-29
 
 ### Before you upgrade
