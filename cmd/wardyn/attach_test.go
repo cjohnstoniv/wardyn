@@ -301,9 +301,15 @@ func TestRunAttach_CtxCancelRestoresTerminal(t *testing.T) {
 			return
 		}
 		defer c.CloseNow()
-		// Hold the session open; the test drives the end via ctx cancel, not
-		// a server-side close.
-		<-r.Context().Done()
+		// Hold the session open; the test drives the end via ctx cancel, not a server-side close. Read
+		// until the child's close frame so the close handshake completes: a cancel that lands before
+		// Half 1's first read leaves the connection up, and coder/websocket's Close would otherwise
+		// wait its own 5s for a peer that never reads, delaying the restore past this test's wait.
+		for {
+			if _, _, err := c.Read(r.Context()); err != nil {
+				return
+			}
+		}
 	}))
 	defer srv.Close()
 
