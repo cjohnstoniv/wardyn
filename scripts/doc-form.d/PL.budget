@@ -5,7 +5,7 @@
 # docs/PLUGGABILITY.md 3229 adds 15 (0.9 F-588 M1): azurekv and awskms are shipped KEK alternates, no longer planned.
 # docs/PLUGGABILITY.md 3229 measured after F-588 M1 merge.
 # docs/PLUGGABILITY.md 3252 adds 23 over 3229, measured (rc.8 E5): the code-map pointer to docs/EXTENDING.md.
-docs/PLUGGABILITY.md=3666 share=35 # +314 (rc.9, measured 3566: an external AI gateway such as agentgateway, beside Wardyn); +72 (rc.9 review, measured 3638: what reaches the provider through a gateway, the allowlist step); +28 (measured 3666: internal_hosts is for a hostname gateway; credential headers are stripped)
+docs/PLUGGABILITY.md=3954 share=35 # +314 (rc.9, measured 3566: an external AI gateway such as agentgateway, beside Wardyn); +72 (rc.9 review, measured 3638: what reaches the provider through a gateway, the allowlist step); +28 (measured 3666: internal_hosts is for a hostname gateway; credential headers are stripped); +288 (measured 3954: a Kubernetes sandbox controller such as agent-sandbox, and inner walls)
 # docs/VERIFY.md 1532 measured after F-588 M1 merge.
 # docs/VERIFY.md 1547 adds 15 over 1532 (0.9.3 PKG), measured: the runner-package release-asset bullet.
 # docs/VERIFY.md 1559 adds 12 over 1547 (0.9.4 L9, #2472): the licence bundle among the release assets, measured.
