@@ -1786,6 +1786,8 @@ jobs:
           # -v: prove the darwin-native guest agent tests (server_darwin_test.go) ran, not just compiled.
           go test -count=1 -timeout 10m -v ./internal/vm/guestagent/ | tee "$RUNNER_TEMP/guestagent.out"
           grep -q -- '^--- PASS: TestDarwin' "$RUNNER_TEMP/guestagent.out"
+          # The pairing key's root-only mode, proven with a sudo-made file: a skip here is a failure.
+          grep -q -- '^--- PASS: TestDarwinPairKeyIsReadableByRootOnly' "$RUNNER_TEMP/guestagent.out"
       - name: Live suite self-tests (its P-rows skip on a hosted Mac)
         if: ${{ !cancelled() }}
         run: |
