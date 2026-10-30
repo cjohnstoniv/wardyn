@@ -355,8 +355,8 @@ run_log="${OUT_DIR}/run.log"
 # does at once; a cancel before the run is created has no id to kill (nothing exists to kill yet).
 remote_kill_run() { # REASON
   local rid st
-  rid="$(sed -n 's/.*"id": *"\([0-9a-f-]\{36\}\)".*/\1/p;T;q' "${run_json}" 2>/dev/null)"
-  [[ -n "${rid}" ]] || rid="$(sed -n 's/^waiting for run \([0-9a-f-]\{36\}\) .*/\1/p;T;q' "${run_log}" 2>/dev/null)"
+  rid="$(sed -n 's/.*"id": *"\([0-9a-f-]\{36\}\)".*/\1/p' "${run_json}" 2>/dev/null | head -n 1 || true)"
+  [[ -n "${rid}" ]] || rid="$(sed -n 's/^waiting for run \([0-9a-f-]\{36\}\) .*/\1/p' "${run_log}" 2>/dev/null | head -n 1 || true)"
   [[ -n "${rid}" ]] || return 0
   # Exit 124 is also the AGENT's own exit code for a run that FAILED: a terminal run has nothing left to kill.
   st="$(wardyn run get "${rid}" --json 2>/dev/null | sed -n 's/.*"state"[^"]*"\([A-Z_]*\)".*/\1/p' | head -1)"

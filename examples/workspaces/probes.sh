@@ -186,10 +186,13 @@ probe_git_credential() {
 
     printf "Output:\n%s\n" "$cred_output"
 
-    # 125-127 are docker's own failures (daemon error, cannot run, not found), not the helper's answer:
-    # their error text must not reach the generic "error|fail" arm below.
-    if [[ "$cred_rc" -ge 125 && "$cred_rc" -le 127 ]]; then
-        fail "docker exec could not run wardyn-git-helper (exit $cred_rc)"
+    # An exec that docker itself refused is not the helper's answer, and its error text must not reach the
+    # generic "error|fail" arm below: 125-127 are docker's own exit codes; a daemon refusal can also be exit 1
+    # (the container stopped between require_sandbox and the exec).
+    if [[ "$cred_rc" -ge 125 && "$cred_rc" -le 127 ]] || { [[ "$cred_rc" -ne 0 ]] && {
+        [[ "$(docker inspect -f '{{.State.Running}}' "$SANDBOX_REF" 2>/dev/null)" != true ]] ||
+        echo "$cred_output" | grep -E "Error response from daemon|OCI runtime exec failed|Error: No such container" >/dev/null; }; }; then
+        printf "ERROR: docker exec could not run wardyn-git-helper (exit %s)\n" "$cred_rc" >&2
         return 1
     fi
 
