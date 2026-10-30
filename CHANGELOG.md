@@ -104,6 +104,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Kubernetes run whose pinned proxy image is older than the runner now fails with the cause named: the proxy image is
   older than this runner and refused a setting at config load, so have the organisation name this release's proxy
   image, or run setup with `--proxy-image` set to it. It showed only a generic sidecar failure.
+- New Run Review no longer calls a local MCP server's secret a Kubernetes service account when it shares an
+  organisation row with a cluster, and the Tools step's added local server card no longer shows another component's
+  command or secret name while a later preview is out (#3409).
+- Check again on New Run Review now reads the web app gateway and the drive catalogue again, so a gateway turned on or a
+  drive deleted since the page opened clears its blocker (#3410, #3420).
+- One "Your walls leave out" line on New Run Review no longer hides the walls' warning for the other host list (#3797).
+  The effective-policy card's Network row no longer counts the hosts your walls take out (#3780).
+- New Run checks a service health path's characters and length before launch, as the server does (#3776), and the Tools
+  step's harness fields fit a 320 px viewport (#3818).
+- A credential refusal from Review's preflight refreshes the model-access banner at once instead of at its next poll.
 
 ### Security
 
