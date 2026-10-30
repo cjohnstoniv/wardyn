@@ -130,6 +130,9 @@ func (b *Bootstrapper) Bootstrap(ctx context.Context, in macvm.BootstrapInput) (
 				return macvm.BootstrapResult{}, err
 			}
 		}
+		if c.SkipIfOK != nil && s.run(ctx, command{ID: c.ID + "-probe", Step: c.Step, Root: c.Root, Argv: c.SkipIfOK}) == nil {
+			continue
+		}
 		if err := s.run(ctx, c); err != nil {
 			return macvm.BootstrapResult{}, &StepError{Step: c.Step, Command: c.ID, Err: err}
 		}

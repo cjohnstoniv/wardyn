@@ -54,6 +54,19 @@ func (c *Client) ToolsDesktopPassword(ctx context.Context, pw string) (bool, err
 	return r.Set, err
 }
 
+// ToolsAdminCode sets the setup admin's password (MacAdminUser) and says whether it was set.
+func (c *Client) ToolsAdminCode(ctx context.Context, code string) (bool, error) {
+	var r AdminCodeResult
+	err := c.do(ctx, http.MethodPost, "/v1/tools/admin_code", AdminCode{Code: code}, &r)
+	return r.Set, err
+}
+
+// ToolsPosture reads the guest's local accounts and whether Remote Login answers.
+func (c *Client) ToolsPosture(ctx context.Context) (ToolsPosture, error) {
+	var p ToolsPosture
+	return p, c.do(ctx, http.MethodGet, "/v1/tools/posture", nil, &p)
+}
+
 // ToolsPointer reads the pointer position in the console user's session.
 func (c *Client) ToolsPointer(ctx context.Context) (Pointer, error) {
 	var p Pointer

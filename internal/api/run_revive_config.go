@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -66,8 +67,31 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling,
 		cfg.AWSSigV4 = nil
 		re.droppedLane = append(re.droppedLane, awsSigV4Lane)
 	}
+	// The person's Azure DevOps lane goes whole, by dispatch's rule (adoLaneWithheld). Its allowlist
+	// entries lose one copy each: the frozen config cannot say whether the policy listed one as well,
+	// and under the boundary's allowlist a duplicate the policy also listed is a single copy.
+	rules := make([]egress.InjectionRule, 0, len(cfg.Injection))
+	for _, in := range cfg.Injection {
+		rules = append(rules, in.InjectionRule)
+	}
+	adoLane := adoLaneWithheld(w, cfg.ADOGrant, rules...)
+	if adoLane && cfg.ADOGrant != nil {
+		lane := adoLaneAllowEntries(cfg.ADOGrant)
+		cfg.Policy.AllowedDomains = slices.DeleteFunc(cfg.Policy.AllowedDomains, func(d string) bool {
+			i := slices.IndexFunc(lane, func(e string) bool { return strings.EqualFold(e, d) })
+			if i < 0 {
+				return false
+			}
+			lane = slices.Delete(lane, i, i+1) // each lane entry takes one copy
+			return true
+		})
+		cfg.ADOGrant = nil
+	}
+	if adoLane {
+		re.droppedLane = append(re.droppedLane, adoCeilingLane)
+	}
 	cfg.Injection = slices.DeleteFunc(cfg.Injection, func(in proxy.InjectionConfig) bool {
-		if w.withheld(in.Host) {
+		if w.withheld(in.Host) || adoLane && isADOLaneRule(in.InjectionRule) {
 			re.droppedInjection = append(re.droppedInjection, in.Host)
 			return true
 		}

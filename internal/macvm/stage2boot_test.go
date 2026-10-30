@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -72,6 +73,18 @@ func controlSession() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/dial/tools", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(guestagent.ToolsDial{Class: guestagent.DialConnected, Dials: 1})
+	})
+	// The launcher's self-test: echoes its argv and env on stdout, a line on stderr, and exits 3.
+	mux.HandleFunc("POST /v1/exec", func(w http.ResponseWriter, r *http.Request) {
+		_, spec, err := guestagent.ReadFrame(r.Body)
+		var er guestagent.ExecRequest
+		if err != nil || json.Unmarshal(spec, &er) != nil || er.TTY {
+			http.Error(w, "bad spec", http.StatusBadRequest)
+			return
+		}
+		_ = guestagent.WriteFrame(w, guestagent.FrameStdout, []byte(strings.Join(slices.Concat(er.Argv, er.Env), " ")+"\n"))
+		_ = guestagent.WriteFrame(w, guestagent.FrameStderr, []byte("from stderr"))
+		_ = guestagent.WriteFrame(w, guestagent.FrameExit, binary.BigEndian.AppendUint32(nil, 3))
 	})
 	return mux
 }
@@ -199,6 +212,11 @@ func TestStage2BootTakesNetFDAndReachesToolsMode(t *testing.T) {
 	}
 	if d, err := b.g.ToolsDial(tctx); err != nil || d != macvm.ToolsDialConnected {
 		t.Fatalf("tools dial %q %v", d, err)
+	}
+	// The self-test goes over the control session, the run's own exec path.
+	if out, exit, err := b.g.AgentExec(tctx, []string{guestagent.MacAgentRunPath, "--selftest"}, []string{"WARDYN_TASK_MODE=exec"}); err != nil || exit != 3 ||
+		!strings.Contains(out, "/usr/local/bin/agent-run --selftest WARDYN_TASK_MODE=exec\n") || !strings.Contains(out, "from stderr") {
+		t.Fatalf("agent exec: %q %d %v", out, exit, err)
 	}
 	sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer scancel()

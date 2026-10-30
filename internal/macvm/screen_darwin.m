@@ -11,7 +11,9 @@
 //
 // The app is an accessory (no Dock icon, no menu bar), so no Quit can end
 // the prepare, and it has no delegate, so no window closing ends it either.
-// The window has no close button: it closes when setup by hand ends.
+// Setup's window has no close button: it closes when setup by hand ends.
+// The edit's window has one, which asks the guest to shut down; it closes
+// once the guest has.
 
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
@@ -59,19 +61,79 @@ static NSSize wardynScreenSize(void) {
 	return s;
 }
 
+// The steps the person at the guest's screen follows. Before Remote Login there is no SSH and no guest agent,
+// so the host cannot drive the guest's settings: the window says what to do.
+static NSString *const wardynScreenSteps =
+	@"1. Create the account wardyn-admin. Its password is the one-time code.\n"
+	@"2. In System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on "
+	@"\"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n"
+	@"3. In the same pane, turn on Remote Login.";
+
+// wardynScreenAccessory is the strip of steps under the window's title bar.
+static NSTitlebarAccessoryViewController *wardynScreenAccessory(CGFloat width, NSString *steps) {
+	NSTextField *label = [NSTextField wrappingLabelWithString:steps];
+	label.font = [NSFont systemFontOfSize:12];
+	// The strip is as tall as the steps are at this width (a narrow window wraps them).
+	NSSize fit = [label.cell cellSizeForBounds:NSMakeRect(0, 0, width - 20, CGFLOAT_MAX)];
+	NSView *box = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, ceil(fit.height) + 8)];
+	label.frame = NSInsetRect(box.bounds, 10, 4);
+	label.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+	[box addSubview:label];
+	NSTitlebarAccessoryViewController *a = [[NSTitlebarAccessoryViewController alloc] init];
+	a.layoutAttribute = NSLayoutAttributeBottom;
+	a.view = box;
+	return a;
+}
+
+void wardynProvisionRequestStop(void *h); // provision_darwin.m
+
+// WardynScreenCloser is the edit window's delegate: its close button asks
+// the guest to shut down, off the main thread, and the window stays until
+// the guest has (wardynScreenClose).
+@interface WardynScreenCloser : NSObject <NSWindowDelegate>
+@property(strong) id handle; // the VM's provision handle
+@end
+
+@implementation WardynScreenCloser
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+	id handle = self.handle;
+	dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+		wardynProvisionRequestStop((__bridge void *)handle);
+	});
+	return NO;
+}
+@end
+
+static WardynScreenCloser *wardynScreenCloser; // main thread only; the window's delegate is weak
+
 // wardynScreenShow opens the window on vm, a VZVirtualMachine; the block
-// keeps it until the window closes.
-void wardynScreenShow(void *vm) {
+// keeps it until the window closes. title and steps NULL are setup by
+// hand's. stop, the VM's provision handle, gives the window a close button
+// that asks the guest to shut down; NULL gives it none.
+void wardynScreenShow(void *vm, void *stop, const char *title, const char *steps) {
 	VZVirtualMachine *machine = (__bridge VZVirtualMachine *)vm;
+	id handle = (__bridge id)stop;
+	NSString *t = title == NULL ? @"Wardyn: set up this macOS VM" : [[NSString alloc] initWithUTF8String:title];
+	NSString *s = steps == NULL ? wardynScreenSteps : [[NSString alloc] initWithUTF8String:steps];
 	dispatch_async(dispatch_get_main_queue(), ^{
 		if (wardynScreenWindow == nil) {
 			NSSize size = wardynScreenSize();
+			NSWindowStyleMask mask = NSWindowStyleMaskTitled | NSWindowStyleMaskResizable;
+			if (handle != nil) {
+				mask |= NSWindowStyleMaskClosable;
+			}
 			NSWindow *w = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, size.width, size.height)
-			                                          styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskResizable
+			                                          styleMask:mask
 			                                            backing:NSBackingStoreBuffered
 			                                              defer:NO];
 			w.releasedWhenClosed = NO;
-			w.title = @"Wardyn: set up this macOS VM — create the account wardyn-admin; its password is the one-time code";
+			w.title = t;
+			if (handle != nil) {
+				wardynScreenCloser = [[WardynScreenCloser alloc] init];
+				wardynScreenCloser.handle = handle;
+				w.delegate = wardynScreenCloser;
+			}
+			[w addTitlebarAccessoryViewController:wardynScreenAccessory(size.width, s)];
 			w.contentAspectRatio = NSMakeSize(16, 9);
 			VZVirtualMachineView *view = [[VZVirtualMachineView alloc] init];
 			view.virtualMachine = machine;
@@ -79,8 +141,18 @@ void wardynScreenShow(void *vm) {
 			[w center];
 			wardynScreenWindow = w;
 		}
+		// An accessory app's window opens behind the active app: macOS 14's activate is cooperative and is
+		// ignored while another app is active. So the window orders itself front regardless, follows the
+		// person to their Space and floats while setup waits (it closes when setup ends).
+		wardynScreenWindow.collectionBehavior |= NSWindowCollectionBehaviorMoveToActiveSpace;
+		wardynScreenWindow.level = NSFloatingWindowLevel;
 		[wardynScreenWindow makeKeyAndOrderFront:nil];
+		[wardynScreenWindow orderFrontRegardless];
 		[NSApp activate];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+		[NSApp activateIgnoringOtherApps:YES];
+#pragma clang diagnostic pop
 		atomic_store(&wardynScreenState, wardynScreenWindow != nil && wardynScreenWindow.contentView != nil ? 1 : -1);
 	});
 }
@@ -93,7 +165,9 @@ void wardynScreenClose(void) {
 	dispatch_async(dispatch_get_main_queue(), ^{
 		[wardynScreenWindow orderOut:nil];
 		wardynScreenWindow.contentView = nil;
+		wardynScreenWindow.delegate = nil;
 		wardynScreenWindow = nil;
+		wardynScreenCloser = nil;
 		atomic_store(&wardynScreenState, 0);
 	});
 }

@@ -77,7 +77,7 @@ func installVM(ctx context.Context, eng Engine, spec MachineSpec, ipsw string, p
 	}
 	defer guest.Close()
 	defer host.Close() // nothing reads it: the installer's VM has no network
-	if len(spec.Shares) > 0 {
+	if len(spec.Shares) > 0 || len(spec.Disks) > 0 {
 		return errSharesOutsideRun
 	}
 	spec.Net = guest

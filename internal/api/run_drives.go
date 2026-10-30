@@ -139,6 +139,14 @@ func driveKindMixRefusal(drives []runDrive) *runRefusal {
 	return runError(http.StatusUnprocessableEntity, reasonDriveShareBesideManaged, driveShareBesideManagedMsg(share, managed))
 }
 
+// keptDriveMixRefusal is driveKindMixRefusal over drives and the managed drive
+// a keep_work_folder run adds only at dispatch (kept, not yet named), so the
+// pair the substrate refuses is refused at every door instead (#3400).
+func keptDriveMixRefusal(drives []runDrive, kept types.UserDrive) *runRefusal {
+	kept.Name = cmp.Or(kept.Name, "the kept work folder")
+	return driveKindMixRefusal(append(slices.Clone(drives), runDrive{resolved: types.ResolvedDrive{Drive: kept}}))
+}
+
 // seedRequestDrives resolves the request's drives into the mounts the runner
 // will execute, writing its own HTTP error and returning ok=false once it has
 // responded. Every drive mounts or the run is refused: one that cannot is
@@ -154,10 +162,10 @@ func (s *Server) seedRequestDrives(w http.ResponseWriter, r *http.Request,
 	if refusal.write(s, w, r) {
 		return nil, nil, false
 	}
-	// A run with a drive that has a second place mounts its drives where placement
-	// puts it (stepDriveEligibility builds them then); every other run builds them
-	// here, as it always has.
-	if slices.ContainsFunc(drives, func(d runDrive) bool { return d.resolved.Drive.AltRunnerID != nil }) {
+	// A run with a drive that has a second place, or a disk drive, mounts its drives
+	// where placement puts it (stepDriveEligibility builds them then); every other
+	// run builds them here, as it always has.
+	if slices.ContainsFunc(drives, func(d runDrive) bool { return driveBoundRunnerOf(d.resolved.Drive) != nil }) {
 		return drives, nil, true
 	}
 	mounts, ok := s.driveMountsAt(w, r, drives, drivePlace{})

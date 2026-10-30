@@ -968,3 +968,29 @@ func TestPG_WorkloadBinding_RetiredServiceLosesItsBindings(t *testing.T) {
 		t.Fatalf("bindings after the retire = %+v (%v), want only other-bot's", left, err)
 	}
 }
+
+// A namespace's full list answers for the custom-resource workloads its resources recorded on its pool only:
+// not another namespace's, another pool's, or a workload applied through the API.
+func TestPG_Workload_ListBoundK8sWorkloadsReadsOneNamespaceOnOnePool(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	p, other := ownPool(t, st, "sub-a", "A"), ownPool(t, st, "sub-a", "B")
+	k8s := func(name string, poolID uuid.UUID, ns string) store.WorkloadPut {
+		in := workloadPut("service:bot", name, "d")
+		in.Source, in.SourcePoolID, in.SourceNamespace, in.K8sUID = store.WorkloadSourceK8s, &poolID, ns, "uid-"+name
+		return in
+	}
+	web := mustPutWorkload(t, st, k8s("web", p.ID, "team-a"))
+	mustPutWorkload(t, st, k8s("db", p.ID, "team-b"))
+	mustPutWorkload(t, st, k8s("cache", other.ID, "team-a"))
+	mustPutWorkload(t, st, workloadPut("service:bot", "api-one", "d"))
+
+	got, err := st.ListBoundK8sWorkloads(ctx, p.ID, "team-a")
+	if err != nil || len(got) != 1 || got[0].ID != web.ID || got[0].K8sUID != "uid-web" {
+		t.Fatalf("bound workloads of team-a on pool A = %+v (%v), want web only", got, err)
+	}
+	if got, err := st.ListBoundK8sWorkloads(ctx, p.ID, "team-c"); err != nil || len(got) != 0 {
+		t.Fatalf("bound workloads of an unrecorded namespace = %+v (%v), want none", got, err)
+	}
+}

@@ -5,6 +5,7 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"crypto/ed25519"
 	"crypto/x509"
 	"errors"
@@ -202,6 +203,15 @@ func registrationClient(a registerArgs) (*http.Client, error) {
 	return orgHTTPClient(bundle + orgOnly)
 }
 
+// registrationRoute is the route setup's connection check left on ctx, nil when there is none.
+func registrationRoute(ctx context.Context) func(*http.Request) (*url.URL, error) {
+	if ctx == nil {
+		return nil
+	}
+	route, _ := ctx.Value(registrationRouteKey{}).(func(*http.Request) (*url.URL, error))
+	return route
+}
+
 // dropUnsentKey removes the key made for this call when the failure was an unknown authority: nothing left
 // this computer, and the retry with --org-ca-file must not be refused for finding it.
 func dropUnsentKey(err error, a registerArgs, stateDir string) {
@@ -209,6 +219,28 @@ func dropUnsentKey(err error, a registerArgs, stateDir string) {
 	if errors.As(err, &unknown) && !a.reuseKey {
 		_ = os.Remove(filepath.Join(stateDir, "runner.key"))
 	}
+}
+
+// registrationSDK is the client registration spends the token through: no redirects, the org bundle's
+// transport when there is one, and the route setup's check chose.
+func registrationSDK(ctx context.Context, org string, orgClient *http.Client) *sdk.Client {
+	client := sdk.New(strings.TrimSpace(org), "")
+	client.HTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return errors.New("runner registration does not follow redirects")
+	}}
+	if orgClient != nil {
+		client.HTTPClient.Transport = orgClient.Transport
+	}
+	// Setup's check has already chosen the route (the service's, not this shell's); a plain register has none.
+	if route := registrationRoute(ctx); route != nil {
+		tr, _ := client.HTTPClient.Transport.(*http.Transport)
+		if tr == nil {
+			tr = http.DefaultTransport.(*http.Transport).Clone()
+		}
+		tr.Proxy = route
+		client.HTTPClient.Transport = tr
+	}
+	return client
 }
 
 // registeredRunner is what a registration left on this host and with the organisation.
@@ -280,13 +312,7 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 	if err != nil {
 		return registeredRunner{}, err
 	}
-	client := sdk.New(strings.TrimSpace(org), "")
-	client.HTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
-		return errors.New("runner registration does not follow redirects")
-	}}
-	if orgClient != nil {
-		client.HTTPClient.Transport = orgClient.Transport
-	}
+	client := registrationSDK(cmd.Context(), org, orgClient)
 	arch := a.arch
 	if arch == "" && !a.noMeasure {
 		arch = engineArch(cmd.Context())

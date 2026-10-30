@@ -58,7 +58,7 @@ copy is permanent.
 | Postgres | volume `<project>_postgres_data` | runs, approvals, workspaces, policies, encrypted secrets, the append-only audit log — and, under the default `pg` recording store, the PTY asciicasts too | everything |
 | Recordings | volume `${WARDYN_NS:-wardyn}-recordings` (`WARDYN_RECORDING_DIR=/data/recordings`) | PTY asciicasts for Replay — **only with `WARDYN_RECORDING_STORE=fs`**; the shipped default (`pg`) keeps them in Postgres and leaves this volume empty | every session replay it holds; nothing reconstructs them |
 | Age key | `WARDYN_AGE_KEY` in `deploy/compose/.env` | the X25519 identity the `local` key-encryption key is derived from — the key that wraps every stored secret's data key | every secret in Postgres becomes undecryptable ciphertext |
-| User drives | one object per person, per drive, on a deployment that registered one — a Docker volume or a PVC, both named `wardyn-drive-<drive-slug>-<home>`, or a subdirectory of the share YOU mounted (`host_path` — `<host_root>/<home>`) | each person's own files, written by their own runs at `/home/agent/drive`. Postgres holds the drive rows and the allocations, never the bytes, so `pg_dump` never carried this | that person's work; nothing reconstructs it |
+| User drives | one object per person, per drive, on a deployment that registered one — a Docker volume or a PVC, both named `wardyn-drive-<drive-slug>-<home>`, or a subdirectory of the share YOU mounted (`host_path` — `<host_root>/<home>`), or a person's disk drive, a disk image on the Mac it is kept on (`wardyn-drive-<drive-id-hex>-<home>`, with `.img` added, in `macos-vm.noindex/drives/` under the runner login's `Application Support/Wardyn`) | each person's own files, written by their own runs at `/home/agent/drive`. Postgres holds the drive rows and the allocations, never the bytes, so `pg_dump` never carried this | that person's work; nothing reconstructs it |
 | Audit fallback | `WARDYN_AUDIT_SPOOL` and its `.consumed` / `.quarantine` sidecars; Compose mounts their directory on `<project>_audit` | pending failed-Postgres writes, their replay cursor, and permanently refused events | audit events absent from the database backup |
 
 - `postgres_data`, `registry_data` and `audit` carry no explicit `name:` in
@@ -108,8 +108,8 @@ copy is permanent.
   - A run on a runner that keeps a tail (Docker, on a laptop or on this deployment) reads `source: "stdout"`.
   - A recorded run on a Kubernetes runner under the session recorder, this deployment's or an organisation's, reads
     `source: "recording"`.
-  - A run that is not recorded (`not_recorded` set) reads its tail, unless its runner predates per-run recording and
-    records it anyway.
+  - A run not recorded (`not_recorded` set; macOS VMs are) reads its tail, unless a runner older than per-run recording
+    records anyway.
   - When the run's own runner cannot be asked (offline, or connected to another replica), this deployment's runner
     answers: a recorded run keeps the recording path, and a run that is not recorded keeps its tail.
   - A pooled run asks the substrate its pool named.
@@ -2768,7 +2768,7 @@ The residuals an operator should plan for:
   - Take the SSO hosts out of the profile's `denied_domains` rather than widening `allowed_domains`.
 - **Launch with a lapsed session.**
   - `POST /runs` refuses a run whose own session for the chosen provider is missing, or expired with no refresh token that could renew it, BEFORE any run exists (`422`, with `"reason":"model_credential"`).
-  - Neither Review nor create spends a one-use refresh token; dispatch renews an expired session whose refresh token still lives, and a renewal AWS refuses fails the run naming AWS's answer and opens the sign-in door (0.9.1).
+  - Review's preflight and create renew an expired session whose refresh token still lives, the same way, so both give the same answer. The policy preview never does, nor does a run that waits in a pool's queue. A renewal AWS refuses refuses the run, naming AWS's answer, and opens the sign-in door.
   - Launch is never pre-checked on the console's cached status — the server is the gate.
 - **What the sign-in sandbox is, and what it is not.**
   - It is the AWS CLI and nothing else: no LLM harness, no repo, no mounts.
@@ -3246,7 +3246,7 @@ Naming these is the point of the walk, not a caveat on it:
 - The proxy's own resolve renews too, but only when the sandbox asks; the renewer covers a run that is quiet through the window.
 - So the hold is for a session that could not be renewed: its refresh token was refused or is gone, or AWS failed until it expired.
 - A refused refresh token is remembered in `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`), so every replica grades it alike until a sign-in or a renewal replaces it.
-- Each renewal writes one `harness.credential.refresh` row; the renewer's carry `trigger: renewer`, and its passes are the `aws_sso_renewal` sweep in [sweep health](operations/monitoring.md#substrate-and-sweep-health).
+- Each renewal writes one `harness.credential.refresh` row; the renewer's carry `trigger: renewer`, and Review's carry `trigger: preflight`. The renewer's passes are the `aws_sso_renewal` sweep in [sweep health](operations/monitoring.md#substrate-and-sweep-health).
 - It skips a paused, lost or revoked run; the proxy's own resolve still renews for any run it serves.
 
 **What the operator sees.**
@@ -4847,6 +4847,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 - The folder mounts at `/home/agent/shared/<name-slug>`, read-only unless the allocation says `members_can_write`. A run asking to write a read-only one is refused.
 - Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-<home>` (`id` scheme; under `slug` the drive's name-slug stands in for the id, see `object_scheme`) with that home. `POST /api/v1/drives/preview` for any group member prints it.
 - People outside the allocated groups never get the mount.
+- A team drive in a host folder also mounts in a macOS VM, shared at the same `/Users/agent/shared/<name-slug>`, read-only as allocated; a runner that predates drives refuses the run at create.
 - `GET /api/v1/me/drives` marks the row `team: true` and lists in `shared_with` the caller's own groups that carry the allocation, never anyone else's.
 - Every run's mount writes `run.drive.mount` with `team: true` and `mounted_by`, the person whose run mounted it.
 

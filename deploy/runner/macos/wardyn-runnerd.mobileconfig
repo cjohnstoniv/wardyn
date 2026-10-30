@@ -17,13 +17,36 @@
     RelayHostTarget   flag relay-host-target    what a run's proxy reaches the relay at; left out, found by a probe
     InternalNetwork   flag internal-network     Docker bridge for proxy sidecars (default wardyn-internal)
     TrustedCAFile     flag trusted-ca-file      PEM bundle of extra roots; the file must exist on the Mac
-                                             (deliver it with a separate MDM file payload)
+                                             (deliver it with a package or script your MDM runs)
     OrgCAFile         flag org-ca-file          PEM file of extra roots for runnerd's own connection to the organisation only,
                                              never a run's proxy or sandbox; root-owned, not writable by group or others
     RecordingStore    flag recording-store      pg, fs or off (default pg)
     DockerHost        DOCKER_HOST            the engine's socket, when it is not the default
+    ArtifactBase      the artifact-base flag of wardyn runner install
+                                             read by the wardyn CLI, not serve: the release mirror for install, upgrade and setup
     LocalModelPort    flag local-model-port     port(s), comma-separated, of a model server on this Mac a run may be relayed
                                              to; left out, none
+    MacOSVMBaseFile   macos_vm_base_file     the macOS VM base's install list, a JSON file on the Mac; left out, none
+    MacOSVM           WARDYN_RUNNER_MACOS_VM    true offers macOS VM sandboxes from this Mac (default off)
+    MacOSVMImageURL   flag ipsw-url of macos-vm prepare
+                                             an https mirror of Apple's restore image (it must answer HTTP Range requests); prepare
+                                             downloads from it and never falls back to Apple. Needs MacOSVMImageHash
+    MacOSVMImageHash  flag sha256 of macos-vm prepare
+                                             the SHA-256 (64 hex digits) that mirror's image must have
+    MDMManaged        none: profile only        true says this Mac is managed; the organisation's macOS gate takes it as the
+                                             posture file's word (evidence mdm_file). An MDM posture.json outranks it; the profile
+                                             is read only when that file is absent. Left out, the profile reports no posture
+    DiskEncrypted     none: profile only        true says the disk is encrypted (FileVault); read with MDMManaged. Left out, the runner's own probe
+    MaxRuns           flag max-runs             runs this Mac may hold at once, a default for register and setup (a flag wins)
+    TotalCPU          flag total-cpu            CPUs all its runs together may use, a default for register and setup
+    TotalMemoryGB     flag total-memory         GB of memory all its runs together may use, a default for register and setup
+    PerRunCPU         flag per-run-cpu          CPUs one run may use; also what macos-vm prepare sizes its VM at when the
+                                             organisation has sent no per-run limit
+    PerRunMemoryGB    flag per-run-memory       GB of memory one run may use; read as PerRunCPU is
+
+  lock_security_settings (profile only; a boolean, false here) true makes OrgURL, ProxyImage,
+  TrustedCAFile, OrgCAFile and RecordingStore in this profile win over a flag or environment variable, and refuses
+  one that disagrees. Default off.
 
   Replace each __PLACEHOLDER__: the two UUIDs with fresh ones (uuidgen), __ORG_URL__ and __ORGANIZATION__.
   Committed as-is it is valid plist XML — see scripts/test-runner-pkg.sh. MDM signs and scopes the profile;
@@ -67,6 +90,28 @@
       <key>LocalModelPort</key>
       <string></string>
       <key>MacOSVM</key>
+      <string></string>
+      <key>MacOSVMBaseFile</key>
+      <string></string>
+      <key>MacOSVMImageURL</key>
+      <string></string>
+      <key>MacOSVMImageHash</key>
+      <string></string>
+      <key>MDMManaged</key>
+      <string></string>
+      <key>DiskEncrypted</key>
+      <string></string>
+      <key>lock_security_settings</key>
+      <false/>
+      <key>MaxRuns</key>
+      <string></string>
+      <key>TotalCPU</key>
+      <string></string>
+      <key>TotalMemoryGB</key>
+      <string></string>
+      <key>PerRunCPU</key>
+      <string></string>
+      <key>PerRunMemoryGB</key>
       <string></string>
     </dict>
   </array>

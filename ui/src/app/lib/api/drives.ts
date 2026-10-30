@@ -61,6 +61,8 @@ export interface UserDrive {
   alt_backend?: "host_path";
   alt_host_root?: string;
   alt_runner_id?: string;
+  // types.UserDrive.HomeRunnerID: the Mac a mac_disk drive is kept on; absent on every other backend.
+  home_runner_id?: string;
 }
 
 // types.UserDriveListItem — the row plus the count the delete dialog pre-fills

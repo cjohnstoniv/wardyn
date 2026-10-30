@@ -17,14 +17,19 @@ import (
 // restoreImage returns a validated restore image in the cache: reused if
 // already complete and of known origin, otherwise downloaded (resuming a partial
 // file). An image that fails validation is deleted and downloaded again, once.
-// With an operator-supplied IPSW it is that file's cache copy instead (givenImage).
+// With an operator-supplied IPSW it is that file's cache copy instead (givenImage). With an IPSWURL mirror it
+// is the image there, reused only when its record is the pinned hash, and Apple is never asked.
 func (p *prep) restoreImage(ctx context.Context) (RestoreImage, string, string, error) {
 	if p.IPSW != "" {
 		return p.givenImage(ctx)
 	}
-	u, err := p.Engine.LatestRestoreImageURL(ctx)
-	if err != nil {
-		return RestoreImage{}, "", "", fmt.Errorf("macvm: latest restore image: %w", err)
+	// With a mirror the image is the one at its URL, whatever Apple has newest, and Apple is never asked.
+	u := p.IPSWURL
+	if u == "" {
+		var err error
+		if u, err = p.Engine.LatestRestoreImageURL(ctx); err != nil {
+			return RestoreImage{}, "", "", fmt.Errorf("macvm: latest restore image: %w", err)
+		}
 	}
 	name, err := ipswName(u)
 	if err != nil {
@@ -52,9 +57,19 @@ func (p *prep) restoreImage(ctx context.Context) (RestoreImage, string, string, 
 			// Only a file shown absent is downloaded over: one that cannot be inspected is kept.
 			return RestoreImage{}, "", "", fmt.Errorf("macvm: inspect cached restore image %s: %w", final, err)
 		}
+		// A cached image of another hash than the mirror's pin is a Wardyn download of some other image
+		// (its record says so): it is replaced.
+		if sha != "" && p.IPSWURL != "" && sha != p.IPSWSHA256 {
+			removeImage(final)
+			sha = ""
+		}
 		if sha == "" {
 			if sha, err = p.download(ctx, u, final); err != nil {
 				return RestoreImage{}, "", "", err
+			}
+			if p.IPSWURL != "" && sha != p.IPSWSHA256 {
+				removeImage(final)
+				return RestoreImage{}, "", "", &MirrorMismatchError{URL: u, Want: p.IPSWSHA256, Got: sha}
 			}
 		}
 		img, err := p.validate(ctx, final)

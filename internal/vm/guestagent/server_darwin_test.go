@@ -328,3 +328,36 @@ func TestDarwinToolsRoutesAre404OnTheControlSession(t *testing.T) {
 		t.Errorf("GET /v1/dial/tools on the control session = %d", w.Code)
 	}
 }
+
+// Init trusts the run CA before it answers, so before the host starts any agent process, and says
+// how it went in fixed codes. A CA that is not trusted still answers 200: the run goes on. An Init with
+// no run CA tries nothing and answers no keychain field.
+func TestDarwinInitTrustsTheRunCABeforeItAnswers(t *testing.T) {
+	for _, tc := range []struct{ status, reason string }{{KeychainTrusted, ""}, {KeychainNotTrusted, KeychainRefused}} {
+		s, _, h := newDarwinServer(t)
+		var got []string
+		s.TrustRunCA = func(_ context.Context, runCA string) (string, string) {
+			if s.inited {
+				t.Error("the run CA was trusted after Init answered")
+			}
+			got = append(got, runCA)
+			return tc.status, tc.reason
+		}
+		w := postInit(h, Init{RunCA: "run-ca-pem"})
+		var res InitResult
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &res) != nil {
+			t.Fatalf("Init = %d %s", w.Code, w.Body)
+		}
+		if len(got) != 1 || got[0] != "run-ca-pem" || res.KeychainTrust != tc.status || res.KeychainTrustReason != tc.reason {
+			t.Errorf("trusted %q, answered %q %q, want %q %q", got, res.KeychainTrust, res.KeychainTrustReason, tc.status, tc.reason)
+		}
+	}
+	s, _, h := newDarwinServer(t)
+	s.TrustRunCA = func(context.Context, string) (string, string) {
+		t.Error("an Init with no run CA trusted one")
+		return KeychainTrusted, ""
+	}
+	if w := postInit(h, Init{}); w.Code != 200 || strings.Contains(w.Body.String(), "keychain_trust") {
+		t.Errorf("Init with no run CA = %d %s", w.Code, w.Body)
+	}
+}

@@ -1696,7 +1696,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Unsigned payloads (`UNSIGNED-PAYLOAD`, `STREAMING-UNSIGNED-PAYLOAD-TRAILER`) and streamed responses, such as `InvokeModelWithResponseStream`, are re-signed and relayed.
 - A session that lapses mid-run is not held while its owner signs in again, as `WARDYN_AWS_SSO_PROXY_INJECT` holds a sandbox's `GetRoleCredentials`. The request is refused with `aws_sigv4_credentials`; retry once the owner has signed in.
 - The role credentials live as long as the permission set's session duration, and the proxy renews them five minutes before they expire.
-- A run that re-signs cannot be placed on a person's own runner (`placement_credential`).
+- On a runner registered to the organisation, a person's own included, that runner's proxy re-signs the lane with the run owner's own AWS sign-in (`credential_source: per_user`, the only kind a model provider has).
+- A shared AWS session is refused there (`placement_credential`).
+- A runner whose `wardyn-runnerd` is older than 0.10 cannot re-sign, so its runs are refused, and operator setup names it (`aws_sigv4_refused:<runner>`).
+- Role credentials the proxy has already redeemed keep signing until whichever comes first:
+  - 5 minutes before they expire, at most the permission set's session duration (set it to `PT1H`);
+  - about 1h5m after the runner loses its link.
+- Ending or killing the run, or revoking the runner, stops the proxy at once while the runner is connected.
 - New dispatches only: a running sandbox keeps the lane it was authored with.
 - What the role may create or read, the sandbox can obtain through the proxy; the role's own policy bounds that, not this switch.
   - A token API the role may call (for example ECR or CodeArtifact GetAuthorizationToken) returns a usable credential into the sandbox.
@@ -1706,11 +1712,11 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_AWS_SSO_REFRESH_SKEW`
 
 - How long before a captured AWS SSO session's access token expires Wardyn renews it, with the stored refresh token (flag `-aws-sso-refresh-skew`, default `10m`).
-- It applies at dispatch and at create, to the proxy's resolve for a live run, and to the AWS SSO renewer.
-- A session AWS refused to renew reads `expiring` on the model-access grade inside the same window.
+- It applies at dispatch, at create and at Review's preflight, to the proxy's resolve for a live run, and to the AWS SSO renewer.
+- A session AWS refused to renew reads `expiring` on the model-access grade until its access token expires, then `expired_signin`.
 - The renewer runs on the sweeper leader every minute. It renews a live run's session inside this window while the token still works, so a quiet run never reaches the sign-in hold for a session a renewal could keep.
 - A live run is pending, starting, running or waiting, and not paused, lost or revoked. The broker would still mint its grant, and its provider or AWS CLI row is unchanged since dispatch.
-- Each renewal takes the person's cross-replica lock and writes one `harness.credential.refresh` row, with `trigger: renewer` when the renewer made it.
+- Each renewal takes the person's cross-replica lock and writes one `harness.credential.refresh` row, with `trigger: renewer` when the renewer made it and `trigger: preflight` when Review's preflight did.
 - A renewal that fails is retried on the next pass while the token is valid. A refresh token AWS refused or retired is not retried; the run's next request holds for a sign-in as before.
 - `5m` to `30m`; a value outside refuses boot. A skew near the token's own lifetime would renew on every pass.
 

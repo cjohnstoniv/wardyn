@@ -202,7 +202,7 @@
 # docs/OPERATIONS.md=60885 adds 27 over 60858, measured (rc.8 runs namespace): the 0242 migration row.
 # docs/OPERATIONS.md=60909 adds 24 over 60885, measured (rc.8 run shape): the 0245 migration row.
 # docs/OPERATIONS.md=60947 adds 38 over 60909, measured (rc.8 E5): the Workloads index line and the pointer to the high-availability page.
-docs/OPERATIONS.md=60972 # +25 (0.10.0 final docs): the leaver reassign renames on a name clash and a stuck step keeps the purge pending, measured.
+docs/OPERATIONS.md=61051 # +27, measured: a person's disk drive is a disk image on its Mac; +31: a team drive in a host folder also mounts in a macOS VM.
 # docs/OPERATIONS.md 57751 = ours 57562 + theirs 57690 - base 57501 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/OPERATIONS.md 57722 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # docs/OPERATIONS.md 55840 adds 124 over 55716, measured: where a run's output comes from: the runner that served it, and a recording store moving remote Kubernetes runs' output to the recording source.

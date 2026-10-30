@@ -1525,3 +1525,23 @@ func TestDriverIsNoSandboxEnder(t *testing.T) {
 		t.Fatal("the k8s Driver keeps an ended sandbox; runnerd would advertise the keep its pods cannot give")
 	}
 }
+
+// A pinned proxy image older than the runner refuses a setting it does not know at config load,
+// and the run's failure names that cause, not a generic sidecar exit.
+func TestProxyStartFailure_NamesAnOlderProxyImage(t *testing.T) {
+	pod := func(msg string) *corev1.Pod {
+		return &corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name:  proxyContainerName,
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error", Message: msg}},
+		}}}}
+	}
+	err := proxyStartFailure(pod(`level=ERROR msg="load config" err="json: unknown field \"resident_mints\""`))
+	if err == nil || !strings.Contains(err.Error(), "the proxy image is older than this runner (it refused setting resident_mints)") ||
+		!strings.Contains(err.Error(), "have the organisation name this release's proxy image, or run setup with --proxy-image set to it") || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("an older proxy image's refusal = %v, want the fix sentence naming the setting and keeping the proxy's output", err)
+	}
+	err = proxyStartFailure(pod("open /etc/wardyn/proxy.json: no such file"))
+	if err == nil || strings.Contains(err.Error(), "older than this runner") || !strings.Contains(err.Error(), "exited before the proxy was ready") {
+		t.Fatalf("an unrelated exit = %v, want the generic sidecar failure", err)
+	}
+}

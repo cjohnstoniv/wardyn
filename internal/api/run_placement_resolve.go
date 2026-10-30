@@ -153,6 +153,12 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	if demand.requireRecording, refusal = s.poolRecordingDemand(org, row.Pool); refusal != nil {
 		return runPlacement{}, refusal
 	}
+	// A macOS VM is not recorded in this release, so a requirement refuses it here, in its own words
+	// (macOSVMRecordingRefusal), rather than as a pool whose runners do not record.
+	if demand.requireRecording && types.MachineKind(f.req.MachineKind).IsMacOSVM() {
+		return runPlacement{}, placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind"},
+			macOSVMRecordingRefusal(types.RecordingChoice{Required: true}))
+	}
 	offered, offers, refusal := s.offerKinds(ctx, f, row.Pool, kinds, demand)
 	if refusal != nil {
 		return runPlacement{}, refusal

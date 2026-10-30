@@ -35,10 +35,12 @@ type doctorRig struct {
 	imageAt   string
 	relayErr  error
 	relayRan  bool
-	noNet     bool
-	netErr    error
-	orgPool   *x509.CertPool
-	cert      *x509.Certificate
+	// relayPulls is whether the relay probe was allowed to pull the proxy image.
+	relayPulls bool
+	noNet      bool
+	netErr     error
+	orgPool    *x509.CertPool
+	cert       *x509.Certificate
 	// routed leaves the route to the settings doctor resolves, instead of a direct one.
 	routed bool
 	org    string
@@ -113,8 +115,8 @@ func (r *doctorRig) run(o doctorOptions) doctor.Report {
 		},
 		image:      func(context.Context, string) (string, error) { return r.imageAt, r.imageErr },
 		hasNetwork: func(context.Context, string) (bool, error) { return !r.noNet && r.netErr == nil, r.netErr },
-		relay: func(context.Context, string, string, dockerEngine, relayPair) (relayPair, error) {
-			r.relayRan = true
+		relay: func(ctx context.Context, _, _ string, _ dockerEngine, _ relayPair) (relayPair, error) {
+			r.relayRan, r.relayPulls = true, pullsAllowed(ctx)
 			return relayPair{bind: netip.MustParseAddr("172.17.0.1"), target: hostGateway}, r.relayErr
 		}}
 	net := doctor.Network{LookupHost: func(context.Context, string) ([]string, error) { return []string{"203.0.113.7"}, nil },
@@ -237,6 +239,15 @@ func TestDoctorNeverPullsOrStartsAProbeForAnImageNotOnTheEngine(t *testing.T) {
 	}
 	if s := stage(t, rep, "proxy-image"); s.Status != doctor.StatusOK || !strings.Contains(s.Detail, "registry") {
 		t.Errorf("proxy-image = %s %q", s.Status, s.Detail)
+	}
+}
+
+// The image can vanish between doctor's look at it and the probe: the probe is told not to pull it.
+func TestDoctorsRelayProbeIsNotAllowedToPull(t *testing.T) {
+	r := newRig(t)
+	r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"})
+	if !r.relayRan || r.relayPulls {
+		t.Errorf("relay probe ran=%v, pulls allowed=%v; want it run with pulling off", r.relayRan, r.relayPulls)
 	}
 }
 

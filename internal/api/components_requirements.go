@@ -70,6 +70,8 @@ func (s *Server) componentSaveRequirements(r *http.Request, c types.Component) [
 		adm.caller = runIdentitySubject(ctx, principalFromRequest(r))
 	}
 	hasOperator := func(name string) bool { return s.operatorSecretNames(ctx, adm)[name] }
-	hasOwn := func(name string) bool { return s.callerOwnsSecret(r, adm, name) }
+	// Advisory and after the write, so a store fault cannot refuse anything: the
+	// name reads missing, as an unprovable claim does.
+	hasOwn := func(name string) bool { own, _ := s.callerOwnsSecret(r, adm, name); return own }
 	return componentRequirements(c.Definition, hasOwn, hasOperator)
 }

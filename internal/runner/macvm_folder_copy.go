@@ -3,7 +3,10 @@
 
 package runner
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // The person-facing sentences of a macOS VM's folder shares, in one place: they are the approved copy,
 // word for word, and change only with it.
@@ -19,3 +22,12 @@ const MacVMShareTarget = "A macOS VM shares a folder only from a path inside /ho
 func MacVMFolderUnreadable(name string) string {
 	return fmt.Sprintf("Wardyn couldn't read %s on that Mac. If macOS is blocking it, allow the Wardyn runner under System Settings → Privacy & Security → Files and Folders, then start the run again.", name)
 }
+
+// MacVMDiskLocked refuses a run whose disk drive name another macOS VM on this Mac has attached
+// (MAC-D04): a disk drive is in one run at a time.
+func MacVMDiskLocked(name string) string { return name + macVMDiskLockedTail }
+
+const macVMDiskLockedTail = " is in another macOS VM on this Mac. A disk drive is in one run at a time: try again when that run ends."
+
+// IsMacVMDiskLocked reports whether msg is a MacVMDiskLocked sentence, so the run's failure shows it as written.
+func IsMacVMDiskLocked(msg string) bool { return strings.HasSuffix(msg, macVMDiskLockedTail) }

@@ -45,6 +45,9 @@ type command struct {
 	// MayDropSession: turning Remote Login off may end this very session
 	// before it reports an exit status; the fresh-dial check after it decides.
 	MayDropSession bool
+	// SkipIfOK: a probe argv, run the way the row runs. The row is skipped when the probe exits 0,
+	// and runs when it exits anything else.
+	SkipIfOK []string
 }
 
 var sudoArgv = []string{"/usr/bin/sudo", "-k", "-S", "-p", "", "--"}
@@ -87,7 +90,8 @@ var commands = []command{
 	// c. Screen Sharing as root, with the legacy VNC-password option; the
 	// password itself is set later by the guest agent's file write (§3.4 step 7c, §3.8).
 	{ID: "screensharing-enable", Step: "7c", Event: "turning on Screen Sharing", Root: true, Argv: []string{"/bin/launchctl", "enable", "system/com.apple.screensharing"}},
-	{ID: "screensharing-load", Step: "7c", Root: true, Argv: []string{"/bin/launchctl", "bootstrap", "system", "/System/Library/LaunchDaemons/com.apple.screensharing.plist"}},
+	// A person who turned Screen Sharing on in System Settings has it loaded already, and bootstrapping a loaded service exits 5.
+	{ID: "screensharing-load", Step: "7c", Root: true, Argv: []string{"/bin/launchctl", "bootstrap", "system", "/System/Library/LaunchDaemons/com.apple.screensharing.plist"}, SkipIfOK: []string{"/bin/launchctl", "print", "system/com.apple.screensharing"}},
 	{ID: "vnc-legacy", Step: "7c", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.RemoteManagement", "VNCLegacyConnectionsEnabled", "-bool", "true"}},
 
 	// d. never sleep, no screen lock, no automatic software updates (§3.4 step 7d).

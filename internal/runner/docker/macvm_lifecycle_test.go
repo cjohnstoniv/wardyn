@@ -198,7 +198,11 @@ func TestMacVMLookupRemembersAContainer(t *testing.T) {
 func TestMacGuestInitTurnsTheAutoUpdaterOff(t *testing.T) {
 	spec := macSpec()
 	spec.Env["DISABLE_AUTOUPDATER"] = "0"
-	if v := macGuestInit(spec, "").Env["DISABLE_AUTOUPDATER"]; v != "1" {
+	in, err := macGuestInit(spec, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := in.Env["DISABLE_AUTOUPDATER"]; v != "1" {
 		t.Fatalf("DISABLE_AUTOUPDATER = %q", v)
 	}
 }

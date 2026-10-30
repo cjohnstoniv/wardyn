@@ -265,6 +265,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			sandboxEnv["WARDYN_ARTIFACT_CONFIG_B64"] = artifactPlan.configB64
 		}
 	}
+	// Apple's background boot hosts are denied quietly on a macOS VM, so the guest's first minutes raise
+	// no approval (run_macos_egress.go). A deny only: no allowed domain is added.
+	policy.DeniedDomains = appendMacOSBootDenials(run.MachineKind, policy)
 	artifactInject := len(artifactPlan.injections) > 0
 
 	// LLM transport resolution (precedence: host-staged subscription > managed >
@@ -336,6 +339,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	layers := s.sealRunPolicy(ctx, run, &policy, p.Provenance)
 	signsBedrock := llm.signsBedrock()
 	grantRows = s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, layers, grantRows, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
+	withdrawADOLane(withholding{deny: ceiling.deny, layers: layers}, &ado, &policy, p.Policy.AllowedDomains) // no gate or interception entry ships for a withdrawn lane
 	plan.withdrawSigV4(signsBedrock, llm)
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
 	kubeAPI := plan.kubectlCLI.closeWithheld(&policy, injections)

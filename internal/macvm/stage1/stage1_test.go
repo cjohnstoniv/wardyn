@@ -53,6 +53,7 @@ var wantArgv = [][]string{
 	root("/bin/launchctl", "enable", "system/com.wardyn.guest-agent"),
 	root("/bin/launchctl", "bootstrap", "system", "/Library/LaunchDaemons/com.wardyn.guest-agent.plist"),
 	root("/bin/launchctl", "enable", "system/com.apple.screensharing"),
+	root("/bin/launchctl", "print", "system/com.apple.screensharing"),
 	root("/bin/launchctl", "bootstrap", "system", "/System/Library/LaunchDaemons/com.apple.screensharing.plist"),
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.RemoteManagement", "VNCLegacyConnectionsEnabled", "-bool", "true"),
 	root("/usr/bin/pmset", "-a", "sleep", "0", "displaysleep", "0", "disksleep", "0"),
@@ -158,6 +159,21 @@ func TestSequenceAndArgvExactly(t *testing.T) {
 	}
 	if res.AgentVersion != "0.10.0-test" || f.srv.RemoteLogin() {
 		t.Fatalf("result %+v, Remote Login on %v", res, f.srv.RemoteLogin())
+	}
+}
+
+// Screen Sharing turned on in System Settings is loaded already, and bootstrapping a loaded service exits 5:
+// stage 1 probes first and skips the bootstrap, and the RFB banner check still has to pass.
+func TestScreenSharingLoadedByHandIsNotBootstrappedAgain(t *testing.T) {
+	f := newFixture(t, provPass)
+	f.srv.LoadSharing()
+	if _, err := f.b.Bootstrap(context.Background(), f.input(false)); err != nil {
+		t.Fatalf("stage 1 with Screen Sharing already loaded: %v", err)
+	}
+	for _, a := range argvs(f.srv.Execs()) {
+		if slices.Contains(a, "bootstrap") && strings.HasSuffix(a[len(a)-1], "com.apple.screensharing.plist") {
+			t.Fatalf("bootstrapped a loaded Screen Sharing: %q", a)
+		}
 	}
 }
 
@@ -270,7 +286,13 @@ func TestAFailureAtEachStepStopsStage1(t *testing.T) {
 				t.Fatalf("err = %v; want step %s (%s)", err, c.Step, c.ID)
 			}
 			execs := f.srv.Execs()
-			if len(execs) != i+1 || !slices.Equal(execs[len(execs)-1].Argv, c.argv()) {
+			probes := 0 // each SkipIfOK row costs one more exec
+			for _, p := range commands[:i+1] {
+				if p.SkipIfOK != nil {
+					probes++
+				}
+			}
+			if len(execs) != i+1+probes || !slices.Equal(execs[len(execs)-1].Argv, c.argv()) {
 				t.Fatalf("%d commands ran, the last %q; want the failing one last", len(execs), execs[len(execs)-1].Line)
 			}
 			if !f.srv.RemoteLogin() {

@@ -136,3 +136,70 @@ func TestPG_CreateApproval_LargeScopeKeepsDedup(t *testing.T) {
 		t.Fatalf("a different scope must insert: %v", err)
 	}
 }
+
+// readBarrierStore holds each raise's first dedup read until every raise has read, so every one
+// reaches the insert having seen no pending row.
+type readBarrierStore struct {
+	approvalStore
+	read   *sync.WaitGroup
+	waited bool
+}
+
+func (b *readBarrierStore) ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
+	out, err := b.approvalStore.ListPendingApprovalsForRuns(ctx, runIDs)
+	if !b.waited {
+		b.waited = true
+		b.read.Done()
+		b.read.Wait()
+	}
+	return out, err
+}
+
+// TestPG_RequestApproval_ValueEqualSpellingsOneRow: raises whose scopes are value-equal but spell a
+// number differently all read before any inserts, and still leave one PENDING row. The index hashes
+// jsonb_send bytes, which keep a number's scale, so this holds only because the insert carries one
+// spelling per value. A row stored with an older spelling still dedups a later raise, by the read.
+func TestPG_RequestApproval_ValueEqualSpellingsOneRow(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
+
+	spellings := []string{"443", "443.0", "4.43e2", "4430e-1", "443.00"}
+	var read, done sync.WaitGroup
+	read.Add(len(spellings))
+	ids := make([]uuid.UUID, len(spellings))
+	errs := make([]error, len(spellings))
+	for i, n := range spellings {
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			st := &readBarrierStore{approvalStore: approvalStore{store.NewPG(pool)}, read: &read}
+			got, err := approval.RequestApproval(ctx, st, types.ApprovalRequest{RunID: run.ID, Kind: types.ApprovalEgressDomain,
+				RequestedScope: json.RawMessage(`{"domain":"example.com","port":` + n + `}`)})
+			ids[i], errs[i] = got.ID, err
+		}()
+	}
+	done.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("raise %d (%s): %v", i, spellings[i], err)
+		}
+		if ids[i] != ids[0] {
+			t.Errorf("raise %d (%s) got approval %s, want %s", i, spellings[i], ids[i], ids[0])
+		}
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM approvals WHERE run_id=$1 AND state='PENDING'`, run.ID); n != 1 {
+		t.Fatalf("got %d PENDING rows for value-equal raises, want 1", n)
+	}
+
+	other := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	old, err := store.NewPG(pool).CreateApproval(ctx, pendingApproval(other.ID, types.ApprovalEgressDomain, `{"domain":"example.com","port":443.0}`))
+	if err != nil {
+		t.Fatalf("seed a row in the old spelling: %v", err)
+	}
+	got, err := approval.RequestApproval(ctx, approvalStore{store.NewPG(pool)}, types.ApprovalRequest{RunID: other.ID, Kind: types.ApprovalEgressDomain,
+		RequestedScope: json.RawMessage(`{"domain":"example.com","port":443}`)})
+	if err != nil || got.ID != old.ID {
+		t.Fatalf("raise over an old-spelling row = %s, %v; want the old row %s", got.ID, err, old.ID)
+	}
+}

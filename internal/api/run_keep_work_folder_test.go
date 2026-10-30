@@ -51,7 +51,7 @@ func keepRequest(ctx context.Context) *http.Request {
 
 func keepGates(t *testing.T, srv *Server, ctx context.Context, spec types.RunPolicySpec) (*keptWorkFolder, *runRefusal) {
 	t.Helper()
-	return srv.keepWorkFolderGates(keepRequest(ctx), spec, false)
+	return srv.keepWorkFolderGates(keepRequest(ctx), spec, false, false)
 }
 
 // TestKeepWorkFolderNeedsMemberDrivesAndItsSwitch: keep_work_folder is refused

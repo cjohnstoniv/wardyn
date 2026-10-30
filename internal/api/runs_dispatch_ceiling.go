@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -17,6 +18,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
@@ -610,9 +613,11 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		added = unionCeilingDenies(policy, c.deny)
 		grantRows, droppedGrant = dropWithheldGrants(w, grantRows, injections, p, policy, sandboxEnv)
 
+		// The person's Azure DevOps lane goes whole (adoLaneWithheld); withdrawADOLane takes the rest of it.
+		adoLane := adoLaneWithheld(w, nil, injectionRules(*injections)...)
 		kept := (*injections)[:0:0] // :0:0 — never alias the caller's array
 		for _, in := range *injections {
-			if w.withheld(in.Rule.Host) {
+			if w.withheld(in.Rule.Host) || adoLane && isADOLaneRule(in.Rule) {
 				droppedInjection = append(droppedInjection, in.Rule.Host)
 				continue
 			}
@@ -621,6 +626,9 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		*injections = kept
 
 		droppedLane = s.dropBrokeredLanes(w, p, sandboxEnv)
+		if adoLane {
+			droppedLane = append(droppedLane, adoCeilingLane)
+		}
 		droppedLane = append(droppedLane, dropGitHubDoor(w, policy, p, sandboxEnv)...)
 		lanes, lane := narrowCeilingBedrockLane(w, llm, mitmHosts, injections, sandboxEnv)
 		droppedLane = append(droppedLane, lanes...)
@@ -824,6 +832,63 @@ func (s *Server) dropBrokeredLanes(w withholding, p *dispatchParams, sandboxEnv 
 	}
 	slices.Sort(dropped)
 	return dropped
+}
+
+// adoCeilingLane is how the re-assertion names the person's Azure DevOps lane in
+// dropped_broker_lanes, a lane name as bedrockCeilingLane is.
+const adoCeilingLane = "azure_devops"
+
+// adoLaneWithheld is the one rule that withdraws the person's Azure DevOps lane, at dispatch and on a
+// revive (reassertProxyCeiling), as dropBrokeredLanes withdraws the git broker: the lane goes whole
+// when w withholds any host it reaches, by one of its injections (rules) or by its REST gate. Its
+// credential rides one injection per host of the organisation (adoEntraHosts), so a deny on one host
+// would otherwise leave it live on the organisation's other names and services.
+func adoLaneWithheld(w withholding, gate *proxy.ADOGrantConfig, rules ...egress.InjectionRule) bool {
+	if gate != nil && w.withheldAny(gate.Hosts) {
+		return true
+	}
+	return slices.ContainsFunc(rules, func(r egress.InjectionRule) bool { return isADOLaneRule(r) && w.withheld(r.Host) })
+}
+
+// isADOLaneRule reports whether r carries the person's Azure DevOps credential.
+func isADOLaneRule(r egress.InjectionRule) bool {
+	return r.SecretName == types.ADOEntraAccessTokenSecret
+}
+
+// injectionRules is each injection's rule.
+func injectionRules(ins []runner.InjectionGrant) []egress.InjectionRule {
+	out := make([]egress.InjectionRule, 0, len(ins))
+	for _, in := range ins {
+		out = append(out, in.Rule)
+	}
+	return out
+}
+
+// adoLaneAllowEntries is the allowlist entries the lane added: its gate's hosts, port-qualified as
+// authorADOEntraInjection writes them (adoEntraEgressEntries for the Services hosts, the one Server host
+// on an Azure DevOps Server lane, whose Organization is a collection, not an organisation).
+func adoLaneAllowEntries(gate *proxy.ADOGrantConfig) []string {
+	out := make([]string, 0, len(gate.Hosts))
+	for _, h := range gate.Hosts {
+		out = append(out, net.JoinHostPort(h, adoEntraHostPort))
+	}
+	return out
+}
+
+// withdrawADOLane is the rest of the lane's withdrawal at dispatch, once reassertCeilingDenies has
+// dropped its injections by adoLaneWithheld: the REST gate, the interception entries, and the
+// allowlist entries the lane added (adoLaneAllowEntries). An entry own lists stays, own being the
+// run's policy before any dispatch phase added a host: that policy wants it.
+func withdrawADOLane(w withholding, ado *adoEntraLane, policy *types.RunPolicySpec, own []string) {
+	if ado.gate == nil || !adoLaneWithheld(w, ado.gate, injectionRules(ado.injections)...) {
+		return
+	}
+	lane := adoLaneAllowEntries(ado.gate)
+	policy.AllowedDomains = slices.DeleteFunc(slices.Clone(policy.AllowedDomains), func(d string) bool {
+		return slices.ContainsFunc(lane, func(e string) bool { return strings.EqualFold(e, d) }) &&
+			!slices.ContainsFunc(own, func(e string) bool { return strings.EqualFold(e, d) })
+	})
+	ado.gate, ado.mitmHosts = nil, nil
 }
 
 // bedrockCeilingLane is how the re-assertion names the Bedrock credential lane

@@ -257,8 +257,15 @@ type MacVMCaps struct {
 	SignIns bool `json:"sign_ins,omitempty"`
 	// Folders says the runner shares a run's folders into its macOS VM. A runner without it is never
 	// sent a macOS VM run with a mount.
-	Folders bool      `json:"folders,omitempty"`
-	Base    MacVMBase `json:"base"`
+	Folders bool `json:"folders,omitempty"`
+	// Drives says the runner carries a run's admin and team drives (a host folder as a second place)
+	// into its macOS VM as shared folders. A runner without it is never sent a macOS VM run with a drive.
+	Drives bool      `json:"drives,omitempty"`
+	Base   MacVMBase `json:"base"`
+	// DiskDrives says the runner keeps a person's disk drives and kept work folders as disk images on
+	// this Mac, attaches them to its macOS VM, and deletes them (reclaim_drive). A runner without it is
+	// never sent a macOS VM run with one.
+	DiskDrives bool `json:"disk_drives,omitempty"`
 	// Refusal is, in words, why the runner offers no macOS VM; empty when it offers them.
 	Refusal string `json:"refusal,omitempty"`
 	// Reason is why the runner offers no macOS VM, or can't start or prepare one now: MacVMReason*, the
@@ -327,7 +334,72 @@ type MacVMBase struct {
 	ImageVersion string `json:"image_version,omitempty"`
 	// BytesPerSec is the download rate; Step download with no Wait only.
 	BytesPerSec int64 `json:"bytes_per_sec,omitempty"`
+	// Customisation is the operator's install list as the base holds it (macos_vm_base_file), in list
+	// order; state ready only.
+	Customisation []MacVMItem `json:"customisation,omitempty"`
+	// Guest is the guest's posture as it was read from the base when it was last prepared, updated or
+	// edited: not live, and never the Mac's own (RunnerPosture). State ready only.
+	Guest *MacVMGuest `json:"guest,omitempty"`
+	// EditedAt is when `macos-vm edit-base` last swapped in an edited base, which passed its recheck; absent:
+	// never edited. EditRecheck is the last edit's recheck: MacVMEditRecheck*, absent before one.
+	EditedAt    *time.Time `json:"edited_at,omitempty"`
+	EditRecheck string     `json:"edit_recheck,omitempty"`
+	// CreatedAt is when the base was prepared, RFC 3339 in UTC; absent from a runner that predates it, or
+	// when there is no base.
+	CreatedAt string `json:"created_at,omitempty"`
+	// BuildVersion is the base's macOS build, e.g. "25G83", or absent.
+	BuildVersion string `json:"build_version,omitempty"`
 }
+
+// MacVMGuest is a macOS base's guest posture. Each field is absent when its read did not say; an unknown
+// value is a newer runner's, and decodes as itself.
+type MacVMGuest struct {
+	// OSVersion and OSBuild are the guest's macOS, e.g. "26.6.2" and "25G83".
+	OSVersion string `json:"os_version,omitempty"`
+	OSBuild   string `json:"os_build,omitempty"`
+	// SIP (System Integrity Protection) and Gatekeeper are MacVMGuestOn or MacVMGuestOff.
+	SIP        string `json:"sip,omitempty"`
+	Gatekeeper string `json:"gatekeeper,omitempty"`
+	// Profiles is how many configuration profiles are installed (0 is none); absent when unread.
+	Profiles *int `json:"profiles,omitempty"`
+	// MDM is MacVMGuestEnrolled or MacVMGuestNotEnrolled.
+	MDM string `json:"mdm,omitempty"`
+	// OrgCA is MacVMItemTrusted or MacVMItemNotTrusted for the install list's CA; absent without one.
+	OrgCA string `json:"org_ca,omitempty"`
+}
+
+// MacVMGuest values.
+const (
+	MacVMGuestOn          = "on"
+	MacVMGuestOff         = "off"
+	MacVMGuestEnrolled    = "enrolled"
+	MacVMGuestNotEnrolled = "not_enrolled"
+)
+
+// MacVMItem is one install list item: Kind is MacVMItemKind*, Name the operator's, State MacVMItem*. An
+// unknown kind or state is a newer runner's, and decodes as itself.
+type MacVMItem struct {
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+// MacVMItem kinds and states.
+const (
+	MacVMItemKindPkg     = "pkg"
+	MacVMItemKindApp     = "app"
+	MacVMItemKindFile    = "file"
+	MacVMItemKindProfile = "profile"
+	MacVMItemKindCA      = "ca"
+
+	MacVMItemInstalled = "installed"
+	// MacVMItemStaged is a profile waiting for the person's approval in macos-vm edit-base.
+	MacVMItemStaged = "staged"
+	// MacVMItemTrusted and MacVMItemNotTrusted are a CA's read-back trust; not_trusted is trusted by hand in
+	// macos-vm edit-base.
+	MacVMItemTrusted    = "trusted"
+	MacVMItemNotTrusted = "not_trusted"
+)
 
 // MacVMBase.Step, Wait and Failure values. An unknown value is a newer runner's, and decodes as itself.
 const (
@@ -348,6 +420,17 @@ const (
 	MacVMFailureTools    = "tools"
 	// MacVMFailureNoDesktop is a setup by hand the helper refused because it cannot reach the Mac's desktop.
 	MacVMFailureNoDesktop = "no_desktop"
+)
+
+// MacVMBase.EditRecheck values: the last edit passed, or why its copy was discarded (the base stayed as it
+// was). They are the helper's (macvm.EditRecheck*). The recheck is a tripwire, not prevention: the Mac's
+// person is root on the host.
+const (
+	MacVMEditRecheckPassed       = "passed"
+	MacVMEditRecheckDesktopOff   = "desktop_control_off"
+	MacVMEditRecheckExtraAccount = "extra_account"
+	MacVMEditRecheckRemoteLogin  = "remote_login"
+	MacVMEditRecheckSelftest     = "selftest_failed"
 )
 
 // MacVMBase.State values. Only ready serves a run; update_needed is a base whose guest agent no longer
