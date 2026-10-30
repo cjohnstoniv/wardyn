@@ -238,6 +238,12 @@ func WithoutCancelUnlessLost(ctx context.Context) (_ context.Context, release co
 		return out, func() { cancel(context.Canceled) }
 	}
 	lost := h.conn.lost
+	if lost.Err() != nil {
+		// AfterFunc on a done context runs in a new goroutine: end it here, so
+		// it is never handed back live over a lost lock.
+		cancel(context.Cause(lost))
+		return out, func() { cancel(context.Canceled) }
+	}
 	stop := context.AfterFunc(lost, func() { cancel(context.Cause(lost)) })
 	return out, func() { stop(); cancel(context.Canceled) }
 }

@@ -916,8 +916,8 @@ func withOwnedSecretMemo(ctx context.Context) context.Context {
 
 // ownsSecretChecked is ownsSecret through the request's memo; its error is
 // errSecretStoreUnavailable. Without a memo in ctx it IS ownsSecret, byte for
-// byte — every caller outside the member run pipeline (policies.go,
-// workspace_refs.go, compose_setup.go) keeps today's behaviour.
+// byte, so a door with no memo reads the store once per call. It is ownsSecret's
+// only caller.
 //
 // Single-goroutine by construction: the member pipeline is one sequential
 // resolution inside one handler, and the memo is installed per resolution rather

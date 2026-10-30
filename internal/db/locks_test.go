@@ -272,3 +272,20 @@ func TestWithoutCancelUnlessLost_EndsOnlyOnTheLockLoss(t *testing.T) {
 		}
 	}
 }
+
+// A fence derived after the lock is already lost is ended when it is handed
+// back, not a moment later: no write may start on a lost lock.
+func TestWithoutCancelUnlessLost_AlreadyLostIsEndedOnReturn(t *testing.T) {
+	lc := &lockConn{}
+	lc.lost, lc.lose = context.WithCancelCause(context.Background())
+	lc.lose(ErrLockLost)
+	held := withHolds(context.Background(), &holds{keys: []LockKey{testKey(t, RunOpLockClass)}, conn: lc})
+	fenced, release := WithoutCancelUnlessLost(held)
+	defer release()
+	if fenced.Err() == nil {
+		t.Fatal("a fence over an already-lost lock was live when returned")
+	}
+	if cause := context.Cause(fenced); !errors.Is(cause, ErrLockLost) {
+		t.Errorf("cause = %v, want ErrLockLost", cause)
+	}
+}

@@ -481,6 +481,28 @@ func TestKeptDriveMixRefusal_CountsTheProspectiveWorkFolder(t *testing.T) {
 	}
 }
 
+// TestStepDrive_K8sShareBesideKeptWorkFolderAtThePreview: keep_work_folder
+// with a Kubernetes share attached is refused at the door through the common
+// mix check, the kept work folder counted before dispatch makes it (#3400).
+func TestStepDrive_K8sShareBesideKeptWorkFolderAtThePreview(t *testing.T) {
+	share := winnerOf("Cluster Share", types.DriveBackendK8sPVCStatic, types.CapabilitySubjectAll, "", true)
+	st := newMemberDriveStore()
+	st.site = keepSite(true, true, 3, 1024)
+	st.winners[aliceSub] = []store.UserDriveWinner{share}
+	srv, _ := memberDriveServer(st, &keepRunner{}, "k8s")
+	req := drivesRequest(share.Drive.ID.String())
+	req.KeepWorkFolder = true
+	w := httptest.NewRecorder()
+	f := &runFold{mode: foldPreview, w: w, req: &req, r: keepRequest(personCtx(aliceSub))}
+	if srv.stepDrive(f, &foldRecorder{}) {
+		t.Fatal("a share beside the kept work folder passed")
+	}
+	want := driveShareBesideManagedMsg("Cluster Share", "the kept work folder")
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), reasonDriveShareBesideManaged) || !strings.Contains(w.Body.String(), want) {
+		t.Errorf("%d %s, want 422 %s %q", w.Code, w.Body, reasonDriveShareBesideManaged, want)
+	}
+}
+
 // TestDriveDenialsAreAudited: drive_not_found, drive_target_conflict and
 // drive_not_in_pool each leave an authz.denied row; another person's drive and
 // an id that names nothing leave the same row.
