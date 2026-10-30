@@ -752,8 +752,8 @@ func proxyStartFailure(pod *corev1.Pod) error {
 		}
 		if cs.Name == proxyContainerName {
 			if m := unknownProxyConfigField.FindStringSubmatch(t.Message); m != nil {
-				return fmt.Errorf("the proxy image is older than this runner (it refused setting %s): upgrade the organisation "+
-					"before its runners, or pin a proxy image at least as new as this runner; proxy container %s exited at config load (exit code %d, %s): %s",
+				return fmt.Errorf("the proxy image is older than this runner (it refused setting %s): have the organisation "+
+					"name this release's proxy image, or run setup with --proxy-image set to it; proxy container %s exited at config load (exit code %d, %s): %s",
 					m[1], cs.Name, t.ExitCode, t.Reason, t.Message)
 			}
 		}
