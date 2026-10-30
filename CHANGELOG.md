@@ -21,6 +21,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- Retrying an AWS model sign-in no longer shows the new sandbox as waiting for AWS before it has shown a code. While
+  the retry launched, the old sandbox, still stopping, could put its device code on screen and move the new run's
+  progress to the waiting step (#3407).
 - Setup's Egress redirection step no longer records a redirect test for a target that is no longer configured. A test
   still running when its redirect was saved with a new To used to land as the redirect's verdict and could open the
   corporate-network gate; it is now dropped, and a test of an unchanged redirect still counts (#3517).
