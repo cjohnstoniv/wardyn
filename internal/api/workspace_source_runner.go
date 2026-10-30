@@ -70,9 +70,9 @@ func sourceRunnerState(rn types.Runner, found bool, owner string) string {
 	return types.WorkspaceSourceRunnerClaimed
 }
 
-// runnerLabel names a runner in a sentence: its name, or the first 8 characters of its id when it is
+// boundRunnerLabel names a runner in a sentence: its name, or the first 8 characters of its id when it is
 // gone or has none.
-func runnerLabel(id uuid.UUID, rn types.Runner) string {
+func boundRunnerLabel(id uuid.UUID, rn types.Runner) string {
 	if rn.Name != "" {
 		return rn.Name
 	}
@@ -87,7 +87,7 @@ func runnerUnavailableMsg(workspace string, id uuid.UUID, rn types.Runner, state
 		types.WorkspaceSourceRunnerNotOwner: "not your runner",
 	}[state]
 	return fmt.Sprintf("The folder for %s is on %s, which can't run it now (%s). "+
-		"Add a new workspace with a folder on a runner you own or on the Wardyn server.", workspace, runnerLabel(id, rn), why)
+		"Add a new workspace with a folder on a runner you own or on the Wardyn server.", workspace, boundRunnerLabel(id, rn), why)
 }
 
 // sourceScanRunnerBoundMsg is the library scan door's refusal of a folder bound to a runner.
