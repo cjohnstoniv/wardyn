@@ -84,26 +84,26 @@ func TestCheckMacShareSource(t *testing.T) {
 	writable := &UserWritableCeiling{Roots: []string{wroots}}
 	protected := MacProtectedPaths(home, filepath.Join(home, "vms"), filepath.Join(home, "ledger"))
 
-	if err := CheckMacShareSource(readOnly, true, []string{roots}, nil, protected); err != nil {
+	if err := CheckMacShareSource(readOnly, true, true, []string{roots}, nil, nil, protected); err != nil {
 		t.Fatalf("a member folder in its roots, read-only: %v", err)
 	}
-	if err := CheckMacShareSource(wroots, true, []string{roots}, writable, protected); err != nil {
+	if err := CheckMacShareSource(wroots, true, false, []string{roots}, nil, writable, protected); err != nil {
 		t.Fatalf("a member folder in the writable roots: %v", err)
 	}
-	if err := CheckMacShareSource(readOnly, true, []string{roots}, writable, protected); err == nil {
+	if err := CheckMacShareSource(readOnly, true, false, []string{roots}, nil, writable, protected); err == nil {
 		t.Fatal("a writable share outside the writable roots was accepted")
 	}
-	if err := CheckMacShareSource(filepath.Join(home, "elsewhere"), true, []string{roots}, nil, protected); err == nil {
+	if err := CheckMacShareSource(filepath.Join(home, "elsewhere"), true, true, []string{roots}, nil, nil, protected); err == nil {
 		t.Fatal("a member folder outside its roots was accepted")
 	}
-	if err := CheckMacShareSource(home, false, nil, nil, protected); err == nil {
+	if err := CheckMacShareSource(home, false, true, nil, nil, nil, protected); err == nil {
 		t.Fatal("an operator share of the whole home was accepted")
 	}
 	link := filepath.Join(roots, "link")
 	if err := os.Symlink(wroots, link); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckMacShareSource(link, true, []string{roots}, nil, protected); err == nil {
+	if err := CheckMacShareSource(link, true, true, []string{roots}, nil, nil, protected); err == nil {
 		t.Fatal("a path that is not its own resolution was accepted")
 	}
 }
@@ -136,8 +136,65 @@ func TestCheckMacShareSourceRefusesASwapAndRestore(t *testing.T) {
 			swap("")
 		}
 	}
-	err := CheckMacShareSource(d, true, []string{roots}, writable, nil)
+	err := CheckMacShareSource(d, true, false, []string{roots}, nil, writable, nil)
 	if err == nil || !strings.Contains(err.Error(), "changed while it was being checked") {
 		t.Fatalf("a swap and restore around the member rule: %v", err)
+	}
+}
+
+// A member share on a runner is also held to the runner owner's own roots (--drive-root): none
+// refuses, and a folder in the org's roots but outside the owner's is refused. No own roots (nil)
+// is wardynd's host, checked as before.
+func TestCheckMacShareSource_MemberHeldToOwnRoots(t *testing.T) {
+	home := realTemp(t)
+	roots := filepath.Join(home, "roots")
+	own := filepath.Join(roots, "own")
+	inOwn, outOwn := filepath.Join(own, "d"), filepath.Join(roots, "d")
+	mkdirs(t, inOwn, outOwn)
+	protected := MacProtectedPaths(home, filepath.Join(home, "vms"))
+	writable := &UserWritableCeiling{Roots: []string{roots}}
+	for _, tc := range []struct {
+		name     string
+		real     string
+		readOnly bool
+		ownRoots []string
+		refused  bool
+	}{
+		{"inside the owner's roots", inOwn, true, []string{own}, false},
+		{"inside the owner's roots, writable", inOwn, false, []string{own}, false},
+		{"a runner with no own roots", inOwn, true, []string{}, true},
+		{"inside the org's roots, outside the owner's", outOwn, true, []string{own}, true},
+		{"writable, outside the owner's roots", outOwn, false, []string{own}, true},
+		{"wardynd's host", outOwn, true, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckMacShareSource(tc.real, true, tc.readOnly, []string{roots}, tc.ownRoots, writable, protected)
+			if tc.refused != (err != nil) {
+				t.Fatalf("CheckMacShareSource(%s, own=%v) = %v, want refused=%v", tc.real, tc.ownRoots, err, tc.refused)
+			}
+		})
+	}
+}
+
+// A writable member share with no writable ceiling is refused: an absent ceiling never means
+// "anything goes". A read-only member share and an operator share need none.
+func TestCheckMacShareSource_MemberWritableNeedsCeiling(t *testing.T) {
+	home := realTemp(t)
+	roots := filepath.Join(home, "roots")
+	d := filepath.Join(roots, "d")
+	mkdirs(t, d)
+	protected := MacProtectedPaths(home, filepath.Join(home, "vms"))
+	err := CheckMacShareSource(d, true, false, []string{roots}, nil, nil, protected)
+	if err == nil || !strings.Contains(err.Error(), "writable") {
+		t.Fatalf("a writable member share with no ceiling = %v, want the writable refusal", err)
+	}
+	if err := CheckMacShareSource(d, true, true, []string{roots}, nil, nil, protected); err != nil {
+		t.Fatalf("a read-only member share with no ceiling = %v, want allowed", err)
+	}
+	if err := CheckMacShareSource(d, true, false, []string{roots}, nil, &UserWritableCeiling{Roots: []string{roots}}, protected); err != nil {
+		t.Fatalf("a writable member share inside the ceiling = %v, want allowed", err)
+	}
+	if err := CheckMacShareSource(d, false, false, nil, nil, nil, protected); err != nil {
+		t.Fatalf("a writable operator share = %v, want allowed", err)
 	}
 }
