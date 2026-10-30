@@ -152,7 +152,8 @@ func resolveAttachSources(cmd *cobra.Command, client clientFn, args []string) ([
 		entry := sdk.WorkspaceSource{Type: sdk.WorkspaceSourceType(src.Kind), Ref: src.Ref, Target: target}
 		switch src.Kind {
 		case sdk.SourceLocalDir:
-			entry.Path, entry.Writable = src.Locator, writable
+			// The runner is part of the source's identity: without it the same path names a folder on the server.
+			entry.Path, entry.Writable, entry.RunnerID = src.Locator, writable, src.RunnerID
 		case sdk.SourceRepo:
 			entry.Source = src.Locator
 		}

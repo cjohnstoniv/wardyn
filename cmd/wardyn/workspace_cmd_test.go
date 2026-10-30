@@ -142,6 +142,22 @@ func TestWorkspaceCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("create attaching a runner-bound library folder keeps its runner", func(t *testing.T) {
+		rid := uuid.New()
+		lib := types.Source{ID: uuid.New(), Kind: types.SourceLocalDir, Locator: "/Users/me/app", RunnerID: &rid}
+		api2 := newWorkspaceAPI(t, lib, ws)
+		root := rootCmd()
+		root.SetArgs([]string{"workspace", "create", "--name", "w", "--attach", lib.ID.String(), "--url", api2.URL, "--token", "tok"})
+		root.SetOut(&strings.Builder{})
+		root.SetErr(&strings.Builder{})
+		if err := root.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if s := api2.created.Sources; len(s) != 1 || s[0].Path != "/Users/me/app" || s[0].RunnerID == nil || *s[0].RunnerID != rid {
+			t.Errorf("sent sources %+v, want the folder still bound to runner %s", s, rid)
+		}
+	})
+
 	t.Run("create refuses a bad --add and an unresolvable --attach before creating anything", func(t *testing.T) {
 		before := api.creates
 		if _, _, err := run("workspace", "create", "--add", "volume:/x"); err == nil || !strings.Contains(err.Error(), "type must be dir, repo, or ephemeral") {
