@@ -12,12 +12,21 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
 
-// listedRunners is ownedRunners that also lists its rows, as setup does.
-type listedRunners struct{ ownedRunners }
+// listedRunners is ownedRunners that also lists its rows, as setup does. It is a store.RunnerStore, the
+// type setup asserts; the runner methods it does not read are the nil embedded ones.
+type listedRunners struct {
+	ownedRunners
+	store.RunnerStore
+}
+
+func (l listedRunners) GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error) {
+	return l.ownedRunners.GetRunner(ctx, id)
+}
 
 func (l listedRunners) ListRunners(context.Context) ([]types.Runner, error) {
 	return slices.Collect(maps.Values(l.rows)), nil
@@ -29,7 +38,7 @@ func (l listedRunners) ListRunners(context.Context) ([]types.Runner, error) {
 // and a key-only provider list say nothing.
 func TestAWSSigV4RefusedRunnerChecks(t *testing.T) {
 	rows := map[uuid.UUID]types.Runner{}
-	s := &Server{cfg: Config{AWSSigV4AtProxy: true, AWSSSOProxyInject: true, Store: listedRunners{ownedRunners{rows: rows}}}}
+	s := &Server{cfg: Config{AWSSigV4AtProxy: true, AWSSSOProxyInject: true, Store: listedRunners{ownedRunners: ownedRunners{rows: rows}}}}
 	s.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{}
 	install := func(name string, state types.RunnerState, settings []string) uuid.UUID {
 		id := uuid.New()
