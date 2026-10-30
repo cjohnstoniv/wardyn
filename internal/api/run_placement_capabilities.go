@@ -391,9 +391,10 @@ type macOSVMAsk struct {
 	// ShareDrives is the run mounts an admin or team drive whose place is a host folder, which a macOS VM
 	// takes as a shared folder; a runner without MacVMCaps.Drives is never asked. Drives is the run
 	// mounts any other drive of a person's, or keeps its work folder, which a macOS VM does not take yet.
-	// VolumeDrive names a drive that is a Docker or cluster volume, which a macOS VM can never open.
-	ShareDrives, Drives bool
-	VolumeDrive         string
+	// VolumeDrive names a drive that is a Docker or cluster volume (ClusterVolume), which a macOS VM can
+	// never open.
+	ShareDrives, Drives, ClusterVolume bool
+	VolumeDrive                        string
 	// Prompts is that a second harness has a starting prompt of its own; Holds that it would hold tool
 	// calls for approval. A macOS VM does neither.
 	Prompts, Holds bool
@@ -593,6 +594,8 @@ func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementC
 // harness and size again at start, against its own manifest.
 func macOSVMFit(mc *runnerwire.MacVMCaps, rn types.Runner, ask macOSVMAsk, pool bool) *placement.Refusal {
 	switch {
+	case ask.VolumeDrive != "" && ask.ClusterVolume:
+		return macOSRefusal("drives", fmt.Sprintf(macOSVMClusterDrive, ask.VolumeDrive))
 	case ask.VolumeDrive != "":
 		return macOSRefusal("drives", fmt.Sprintf(macOSVMVolumeDrive, ask.VolumeDrive))
 	case ask.Drives:
@@ -653,10 +656,11 @@ const (
 )
 
 // What a macOS VM's drives are refused for: MAC-D13 (the runner predates drives in a macOS VM) and the
-// drive's name in front of MAC-D03's meaning (a Docker or cluster volume).
+// drive's name in front of MAC-D03's meaning (a Docker or a cluster volume).
 const (
 	macOSVMNoDriveShare = "This runner's version can't attach drives to a macOS VM. Update the runner, or run without drives."
 	macOSVMVolumeDrive  = "%s is a Docker volume, which a macOS VM can't open."
+	macOSVMClusterDrive = "%s is a cluster volume, which a macOS VM can't open."
 )
 
 // askDrives sorts a run's drives into what a macOS VM asks of its Mac: an admin or team drive in a host
@@ -674,7 +678,9 @@ func (a *macOSVMAsk) askDrives(drives []runDrive, keep *keptWorkFolder) {
 		case drive.OwnerSubject != "":
 			a.Drives = true
 		case drive.Backend.RunnerTarget() == "k8s" || drive.Backend == types.DriveBackendDockerVolume && drive.Team:
-			a.VolumeDrive = cmp.Or(a.VolumeDrive, drive.Name)
+			if a.VolumeDrive == "" {
+				a.VolumeDrive, a.ClusterVolume = drive.Name, drive.Backend.RunnerTarget() == "k8s"
+			}
 		case drive.Backend == types.DriveBackendHostPath:
 			a.ShareDrives = true
 		default:

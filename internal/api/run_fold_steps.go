@@ -355,7 +355,7 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 	var ask macOSVMAsk
 	if types.MachineKind(f.req.MachineKind).IsMacOSVM() {
 		ask = macOSVMAskOf(f.place, f.ceiling, f.harnesses, f.req.Agent)
-		ask.Drives = mountsDrives(f.drives, f.keep)
+		ask.askDrives(f.drives, f.keep)
 		ask.Prompts = slices.ContainsFunc(f.harnesses, func(h types.RunHarness) bool { return h.Task != "" })
 		ask.Holds = macOSVMHolds(*f.req, f.spec)
 	}

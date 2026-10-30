@@ -100,19 +100,56 @@ func TestStepPlacementCapability_MacOSVMRefusesWhatItCannotDo(t *testing.T) {
 	}
 }
 
+// The create path asks a Mac for a share drive: refused with MAC-D13 on a runner whose caps lack Drives,
+// admitted on one that carries them.
+func TestStepPlacementCapability_MacOSVMShareDrive(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		drives bool // the Mac's runner carries drives
+		want   string
+	}{
+		{name: "a runner that predates drives", want: "This runner's version can't attach drives to a macOS VM. Update the runner, or run without drives."},
+		{name: "a runner that carries drives", drives: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := capsServer(&fakeRunner{})
+			mc := readyMac()
+			mc.Drives = tc.drives
+			req := macReq(macRunner(t, s, mc, roomyRunner))
+			req.Agent, req.Task = "claude-code", "build it"
+			w := httptest.NewRecorder()
+			f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(capsCtx), req: &req,
+				drives: []runDrive{{resolved: types.ResolvedDrive{Drive: types.UserDrive{Name: "Team", Backend: types.DriveBackendHostPath}}}}}
+			ok := s.stepPlacementCapability(f, nil)
+			if tc.want == "" {
+				if !ok {
+					t.Fatalf("refused: %d %s", w.Code, w.Body)
+				}
+				return
+			}
+			body := w.Body.String()
+			if ok || w.Code != http.StatusUnprocessableEntity || !strings.Contains(body, `"placement_capability"`) || !strings.Contains(body, tc.want) ||
+				!strings.Contains(body, `"field":"drives"`) {
+				t.Fatalf("ok = %v, %d %s; want 422 placement_capability on drives saying %q", ok, w.Code, body, tc.want)
+			}
+		})
+	}
+}
+
 // A run's drives are sorted for a macOS VM: an admin or team drive in a host folder is a shared folder,
 // refused only on a runner that predates them (MAC-D13); a Docker or cluster volume is never opened; a
 // person's drive and the kept work folder are refused as before (MAC-F01) until a disk carries them.
 func TestPlacementCapability_MacOSVMDrives(t *testing.T) {
 	const (
-		d13    = "This runner's version can't attach drives to a macOS VM. Update the runner, or run without drives."
-		f01    = "A macOS VM sandbox has no drives in this release."
-		volume = "Team is a Docker volume, which a macOS VM can't open."
+		d13     = "This runner's version can't attach drives to a macOS VM. Update the runner, or run without drives."
+		f01     = "A macOS VM sandbox has no drives in this release."
+		volume  = "Team is a Docker volume, which a macOS VM can't open."
+		cluster = "Team is a cluster volume, which a macOS VM can't open."
 	)
 	// driveAsk is the drive fields of the ask; the ask itself holds slices and cannot be compared.
 	type driveAsk struct {
-		ShareDrives, Drives bool
-		VolumeDrive         string
+		ShareDrives, Drives, ClusterVolume bool
+		VolumeDrive                        string
 	}
 	secondRunner := uuid.New()
 	drive := func(edit func(*types.UserDrive)) runDrive {
@@ -126,7 +163,7 @@ func TestPlacementCapability_MacOSVMDrives(t *testing.T) {
 		d.Backend, d.AltBackend, d.AltHostRoot, d.AltRunnerID = types.DriveBackendK8sPVCStatic, types.DriveBackendHostPath, "/Volumes/team", &secondRunner
 	})
 	teamVolume := drive(func(d *types.UserDrive) { d.Backend, d.Team = types.DriveBackendDockerVolume, true })
-	cluster := drive(func(d *types.UserDrive) { d.Backend = types.DriveBackendK8sPVCStatic })
+	clusterDrive := drive(func(d *types.UserDrive) { d.Backend = types.DriveBackendK8sPVCStatic })
 	personal := drive(func(d *types.UserDrive) { d.Backend, d.OwnerSubject = types.DriveBackendDockerVolume, "alice" })
 	managed := drive(func(d *types.UserDrive) { d.Backend = types.DriveBackendDockerVolume })
 	for _, tc := range []struct {
@@ -143,7 +180,7 @@ func TestPlacementCapability_MacOSVMDrives(t *testing.T) {
 		{name: "a team drive", drives: []runDrive{team}, caps: true, placed: true, wantAsk: driveAsk{ShareDrives: true}},
 		{name: "a drive on its second place", drives: []runDrive{secondPlace}, caps: true, placed: true, wantAsk: driveAsk{ShareDrives: true}},
 		{name: "a team volume", drives: []runDrive{teamVolume}, caps: true, want: volume, wantAsk: driveAsk{VolumeDrive: "Team"}},
-		{name: "a cluster volume", drives: []runDrive{cluster}, caps: true, want: volume, wantAsk: driveAsk{VolumeDrive: "Team"}},
+		{name: "a cluster volume", drives: []runDrive{clusterDrive}, caps: true, want: cluster, wantAsk: driveAsk{VolumeDrive: "Team", ClusterVolume: true}},
 		{name: "a person's drive", drives: []runDrive{personal}, caps: true, want: f01, wantAsk: driveAsk{Drives: true}},
 		{name: "a managed drive", drives: []runDrive{managed}, caps: true, want: f01, wantAsk: driveAsk{Drives: true}},
 		{name: "a kept work folder", keep: &keptWorkFolder{}, caps: true, want: f01, wantAsk: driveAsk{Drives: true}},
@@ -154,7 +191,7 @@ func TestPlacementCapability_MacOSVMDrives(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var ask macOSVMAsk
 			ask.askDrives(tc.drives, tc.keep)
-			if got := (driveAsk{ask.ShareDrives, ask.Drives, ask.VolumeDrive}); got != tc.wantAsk {
+			if got := (driveAsk{ask.ShareDrives, ask.Drives, ask.ClusterVolume, ask.VolumeDrive}); got != tc.wantAsk {
 				t.Fatalf("ask = %+v, want %+v", got, tc.wantAsk)
 			}
 			s := capsServer(&fakeRunner{})
