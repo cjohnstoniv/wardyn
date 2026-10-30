@@ -62,8 +62,9 @@ require_sandbox() {
         printf "  SANDBOX_REF=wardyn-agent-<run-id> bash probes.sh\n" >&2
         exit 1
     fi
-    if ! docker inspect "$SANDBOX_REF" >/dev/null 2>&1; then
-        printf "ERROR: container %q not found. Is the sandbox still running?\n" "$SANDBOX_REF" >&2
+    # A stopped container still inspects, so ask whether it is running.
+    if [[ "$(docker inspect -f '{{.State.Running}}' "$SANDBOX_REF" 2>/dev/null)" != true ]]; then
+        printf "ERROR: container %q not found or not running. Is the sandbox still running?\n" "$SANDBOX_REF" >&2
         exit 1
     fi
 }
@@ -178,11 +179,19 @@ probe_git_credential() {
     require_sandbox
 
     info "Invoking wardyn-git-helper get (git credential protocol format)"
+    cred_rc=0
     cred_output=$(docker exec "$SANDBOX_REF" \
         sh -c 'printf "protocol=https\nhost=github.com\n\n" | wardyn-git-helper get' \
-        2>&1 || true)
+        2>&1) || cred_rc=$?
 
     printf "Output:\n%s\n" "$cred_output"
+
+    # 125-127 are docker's own failures (daemon error, cannot run, not found), not the helper's answer:
+    # their error text must not reach the generic "error|fail" arm below.
+    if [[ "$cred_rc" -ge 125 && "$cred_rc" -le 127 ]]; then
+        fail "docker exec could not run wardyn-git-helper (exit $cred_rc)"
+        return 1
+    fi
 
     if echo "$cred_output" | grep "is brokered through wardyn-proxy" >/dev/null; then
         pass "Helper refused to mint into the sandbox -- GitHub access is brokered through wardyn-proxy"
