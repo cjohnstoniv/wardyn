@@ -73,7 +73,7 @@ func TestWorkloadFromRunner_RefusesAReportOutsideItsShape(t *testing.T) {
 		"oversize": {Kind: runnerwire.EventWorkload, Data: json.RawMessage(`{"op":"sync","namespace":"team-a","names":["` +
 			strings.Repeat("a", maxWorkloadReportBytes) + `"]}`)},
 	} {
-		if err := srv.WorkloadFromRunner(context.Background(), uuid.New(), ev); !errors.Is(err, errRunnerEventShape) {
+		if err := srv.WorkloadFromRunner(context.Background(), uuid.New(), "sess-1", ev); !errors.Is(err, errRunnerEventShape) {
 			t.Errorf("%s: %v, want a shape refusal", name, err)
 		}
 	}

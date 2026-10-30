@@ -493,7 +493,7 @@ func TestPG_Workload_K8sDeleteHoldsOnlyForTheRowRead(t *testing.T) {
 	stale := read()
 	for _, next := range []struct{ uid, digest string }{{"uid-2", "d1"}, {"uid-3", "d2"}} {
 		put(next.uid, next.digest)
-		if _, err := st.DeleteK8sWorkload(ctx, stale); !errors.Is(err, store.ErrNotFound) {
+		if _, err := st.DeleteK8sWorkload(ctx, stale, store.WorkloadReporter{}); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("delete of %s after %s was applied = %v, want ErrNotFound", stale.K8sUID, next.uid, err)
 		}
 		if v := read(); v.ID != w.ID || v.K8sUID != next.uid || v.CurrentRunID == nil || *v.CurrentRunID != run {
@@ -516,10 +516,10 @@ func TestPG_Workload_K8sDeleteHoldsOnlyForTheRowRead(t *testing.T) {
 	if _, err := st.SetWorkloadRun(ctx, cur.ID, mustClaim(t, st, cur.ID), cur.Generation, run2); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.DeleteK8sWorkload(ctx, stale); !errors.Is(err, store.ErrNotFound) || owedEnds(run2) != 0 {
+	if _, err := st.DeleteK8sWorkload(ctx, stale, store.WorkloadReporter{}); !errors.Is(err, store.ErrNotFound) || owedEnds(run2) != 0 {
 		t.Fatalf("delete of a replaced row with a run = %v, %d owed ends; want ErrNotFound and none", err, owedEnds(run2))
 	}
-	gone, err := st.DeleteK8sWorkload(ctx, read())
+	gone, err := st.DeleteK8sWorkload(ctx, read(), store.WorkloadReporter{})
 	if err != nil || gone.ID != cur.ID || gone.CurrentRunID == nil || *gone.CurrentRunID != run2 || owedEnds(run2) != 1 {
 		t.Fatalf("matching delete = %+v (%v), %d owed ends; want row %s with run %s owed its end", gone, err, owedEnds(run2), cur.ID, run2)
 	}

@@ -114,6 +114,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   from the default policy, which a workload's `inline_policy` is laid onto, and that `eligible_grants` (`[]` for none)
   replaces it. The console's last refusal says so in plain words and, for a reader who may see it, adds the server's
   sentence naming the grant.
+- With several Kubernetes runners serving one bound namespace, one runner's late full list no longer deletes a workload
+  another runner applied since, and a late report of a deleted resource's uid no longer overwrites the recreated
+  resource's workload. A prune, or a report of another uid, now counts only from the runner that last applied the
+  workload, or from another once that runner has left the pool; a report from a runner session a newer one replaced
+  writes nothing. A short-lived duplicate run can last until the reporting runner's delete arrives.
 
 ### Security
 
