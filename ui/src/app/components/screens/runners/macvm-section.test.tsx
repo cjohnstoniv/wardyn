@@ -99,11 +99,11 @@ describe("M-R1 runner drawer section", () => {
     expect(screen.getByText("Update needed")).toBeInTheDocument();
     expect(screen.getByText("This Mac's runner was upgraded, so the macOS base's tools are being updated. It offers no macOS VMs until that finishes.")).toBeInTheDocument();
   });
-  it("13b: update needed: a base of an older format is prepared again, and no tools update is promised", () => {
+  it("13b: update needed: a base of another format is prepared again, and no tools update is promised", () => {
     const { container } = section({ ...ready, base: { state: "update_needed", failure: "format", guest_os: "macOS 27.0.1 (26A434)" } });
     expect(screen.getByText("Update needed")).toBeInTheDocument();
     expect(container.textContent).toContain(
-      "This Mac's runner was upgraded and can't use the macOS base it has. Run wardyn-runnerd macos-vm prepare to prepare the base again. It offers no macOS VMs until then.",
+      "This Mac's macOS base was prepared by a different runner version, so it can't be used. Run wardyn-runnerd macos-vm prepare to prepare it again. It offers no macOS VMs until then.",
     );
     expect(container.textContent).not.toContain("tools are being updated");
   });

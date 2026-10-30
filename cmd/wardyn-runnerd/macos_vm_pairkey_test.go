@@ -20,7 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
-// update_needed has two causes, and each has its own remedy: a base of an older format is prepared again
+// update_needed has two causes, and each has its own remedy: a base of another format is prepared again
 // (failure "format"), and a base whose tools are behind waits for its tools update (no failure).
 func TestMacOSVMUpdateNeededCarriesItsCause(t *testing.T) {
 	if runnerwire.MacVMFailureFormat != "format" {
@@ -37,7 +37,7 @@ func TestMacOSVMUpdateNeededCarriesItsCause(t *testing.T) {
 	}
 	write(macvm.BaseFormat-1, macvm.BaseReady)
 	if _, b := m.base(); b.State != runnerwire.MacVMBaseUpdateNeeded || b.Failure != runnerwire.MacVMFailureFormat {
-		t.Fatalf("a base of an older format: %+v, want update_needed with failure %q", b, runnerwire.MacVMFailureFormat)
+		t.Fatalf("a base of another format: %+v, want update_needed with failure %q", b, runnerwire.MacVMFailureFormat)
 	}
 	write(macvm.BaseFormat, macvm.BaseUpdateNeeded)
 	if _, b := m.base(); b.State != runnerwire.MacVMBaseUpdateNeeded || b.Failure != "" {

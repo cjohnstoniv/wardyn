@@ -448,7 +448,7 @@ const (
 	MacVMFailureTools    = "tools"
 	// MacVMFailureNoDesktop is a setup by hand the helper refused because it cannot reach the Mac's desktop.
 	MacVMFailureNoDesktop = "no_desktop"
-	// MacVMFailureFormat is a base whose format is older than this runner's (state update_needed): only
+	// MacVMFailureFormat is a base whose format differs from this runner's (state update_needed): only
 	// preparing it again makes it usable. update_needed with no failure is a tools update still to run.
 	MacVMFailureFormat = "format"
 )
