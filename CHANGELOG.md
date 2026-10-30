@@ -42,6 +42,25 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   The next one is refused with a `503`, `Retry-After` and `X-Wardyn-Egress-Reason: builtin:tunnel-limit`, and a
   `builtin:tunnel-limit` deny row; it is admitted once a tunnel closes. Before, a process could hold any number of
   tunnels open (#3698).
+### Changed
+
+- Denying any Azure DevOps host now withdraws the person's Azure DevOps credential lane: its credentials and the hosts
+  it added; hosts your policy allows itself stay reachable without the credential. This holds at dispatch and on a
+  revive. A deny on `dev.azure.com` alone used to leave the person's credential on `<org>.visualstudio.com` and the
+  `vssps`, `vsrm`, `feeds`, `pkgs` and `almsearch` hosts. `run.ceiling.reassert` and `run.revive` name the lane
+  `azure_devops` in `dropped_broker_lanes`.
+
+### Fixed
+
+- With `WARDYN_FILE_SECRET_PLACEHOLDERS` on, a file named by two `file_secret` grants now holds the placeholder of the
+  grant that delivered it. A later grant's placeholder replaced it, so requests to the delivering grant's host lost
+  their credential.
+- Promoting a recording's hosts into a workspace's egress no longer promotes a model provider's host when the site
+  configuration can't be read. The promote now writes nothing and answers `503`, to retry; the provider hosts are read
+  once, for both the filter and the hosts a request names.
+- Two value-equal approval requests for one run that spell a number differently (`1` and `1.0`) no longer both open a
+  pending approval when they race: a request's scope is stored with one spelling per number. A pending request no
+  longer stands in for another whose numbers differ past floating-point precision.
 
 ## [0.10.0-rc.8] — 2026-10-29
 
