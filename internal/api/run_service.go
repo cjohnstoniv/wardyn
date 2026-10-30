@@ -52,9 +52,12 @@ func frozenRunService(s *types.RunService) (*types.RunService, error) {
 }
 
 // serviceEnv sets the supervisor's variables from the run's frozen spec, never from the request. User
-// env writers refuse the WARDYN_ prefix, so nothing else can set them.
+// env writers refuse the WARDYN_ prefix, so nothing else can set them. A run that is no service gets
+// WARDYN_SERVICE=0: the sandbox's env wins over an image's own ENV, so an image that sets
+// WARDYN_SERVICE=1 cannot make a plain exec run a service that restarts in a loop.
 func serviceEnv(env map[string]string, s *types.RunService) {
 	if s == nil {
+		env["WARDYN_SERVICE"] = "0"
 		return
 	}
 	env["WARDYN_SERVICE"] = "1"

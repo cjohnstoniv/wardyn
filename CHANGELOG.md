@@ -155,6 +155,21 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   column starting at 8, and moves down only the widgets under it (#3784).
 - On a run's own Approvals tab, an approval the run owner's walls refuse now closes the way it does on the Approvals page:
   the walls card, Approve off and Deny on. It stayed live with no reason (#3781).
+- The lease sweep no longer re-reads a healthy service's limits, sponsor and policy on every pass. It reads the
+  owner's authority to extend only once a `run.ending_soon` warning would be due, and the renewal re-checks it as
+  before (#3762).
+- An image whose own `ENV` sets `WARDYN_SERVICE=1` no longer turns a plain command run into a service that restarts
+  in a loop. Dispatch now sets `WARDYN_SERVICE=0` on every run that is no service, and the sandbox's env wins over the
+  image's (#3763).
+- A workload launch refused `placement_credential` for one of its policy's grants now says that the grant may come
+  from the default policy, which a workload's `inline_policy` is laid onto, and that `eligible_grants` (`[]` for none)
+  replaces it. The console's last refusal says so in plain words and, for a reader who may see it, adds the server's
+  sentence naming the grant.
+- With several Kubernetes runners serving one bound namespace, one runner's late full list no longer deletes a workload
+  another runner applied since, and a late report of a deleted resource's uid no longer overwrites the recreated
+  resource's workload. A prune, or a report of another uid, now counts only from the runner that last applied the
+  workload, or from another once that runner has left the pool; a report from a runner session a newer one replaced
+  writes nothing. A short-lived duplicate run can last until the reporting runner's delete arrives.
 
 ### Security
 

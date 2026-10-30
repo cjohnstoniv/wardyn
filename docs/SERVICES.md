@@ -86,7 +86,7 @@ Every minute the lease sweep looks at each running service. It renews the lease 
 - The run has a lifetime cap, is not paused or lost, and has an end.
 - The end is within half a lease unit of now.
 - The run's owner could still extend it: the check a `PATCH` does.
-- For a run a service identity owns: the identity is not suspended or retired, its sponsor's access is not revoked, and its sponsor is the one it had when the run was created.
+- For a service identity's run: the identity is not suspended or retired, and its sponsor is unchanged since the run was created and not revoked or deactivated: a session-only sign-out does not count.
 
 Renewal moves the end to now plus the lease unit, or to the cap if that is sooner. The unit is cut to the boundary's maximum as every `PATCH` is. A lost race with a person's edit renews nothing. A ceiling tightened later lowers the unit at the next renewal; one loosened frees nothing on a run already created.
 

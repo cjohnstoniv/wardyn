@@ -149,8 +149,12 @@ func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, 
 	// the boundary is read only for a run that is about to renew.
 	if _, ok := planServiceRenewal(run, 0, now); !ok {
 		// Quiet only while the renewal it waits for will be allowed: a run whose owner lost the
-		// authority to extend is warned now, not first at its half-life.
-		return run, serviceRenewsLater(run, now) && s.extendRefusal(ctx, run, false) == nil
+		// authority to extend is warned now, not first at its half-life. With no warning due there is
+		// nothing to quiet, so the owner's authority is read only inside the warning window.
+		if !serviceRenewsLater(run, now) {
+			return run, false
+		}
+		return run, !endingSoonDue(run, now) || s.extendRefusal(ctx, run, false) == nil
 	}
 	boundarySec, err := s.boundaryEndCap(ctx, run)
 	if err != nil {
@@ -207,6 +211,18 @@ func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, 
 		"success", mustJSON(data)))
 	run.EndsAt, run.EndTightenedAt = &renewal.target, nil
 	return run, true
+}
+
+// endingSoonDue is whether warnRunEnding has a warning for run now: its end is inside the closest
+// threshold it has passed, the 24-hour one only for a lease longer than dayWarningMinLease.
+func endingSoonDue(run types.AgentRun, now time.Time) bool {
+	left := run.EndsAt.Sub(now)
+	for _, threshold := range endingSoonThresholds {
+		if left <= threshold {
+			return threshold != 24*time.Hour || run.EndsAt.Sub(run.CreatedAt) > dayWarningMinLease
+		}
+	}
+	return false
 }
 
 // serviceRunLive reports whether the service identity that created run still carries the authority it

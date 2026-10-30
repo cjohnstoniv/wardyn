@@ -50,4 +50,15 @@ describe("workload refusal sentences", () => {
     expect(refusalSentence("some_other_reason", " The ceiling refused it. ")).toBe("The ceiling refused it.");
     expect(refusalSentence("some_other_reason")).toBe("The launch was refused.");
   });
+
+  it("follows a credential refusal's table sentence with the server's, for the reader the server gives it to", () => {
+    const told = WORKLOAD_REFUSAL_SENTENCE.placement_credential;
+    const server = "ProxyConfig.Policy.EligibleGrants[0]: a github_token grant is not delivered to this runner. The grant may come from the default policy.";
+    expect(told).toBe("A credential in its policy, often a grant from the default policy, cannot be sent to the runner it would land on.");
+    // Full tier: the server sentence names the grant and the fix.
+    expect(refusalSentence("placement_credential", ` ${server} `)).toBe(`${told} ${server}`);
+    // Security tier: the server withholds the sentence, so the table's stands alone.
+    expect(refusalSentence("placement_credential", "")).toBe(told);
+    expect(refusalSentence("placement_credential")).toBe(told);
+  });
 });
