@@ -7,24 +7,28 @@ import * as React from "react";
 import { runners as runnersApi } from "./api/runners";
 import type { RunnerView } from "./types/runners";
 
-/**
- * The caller's own runners (GET /me/runners), read once; null until the read answers. A failed read, or the
- * 403 while personal runners are off, is an empty list: a name the list lacks is shown by its short id.
- */
-export function useMyRunners(enabled = true): RunnerView[] | null {
-  const [list, setList] = React.useState<RunnerView[] | null>(null);
+export interface MyRunners {
+  /** The last list that was read; null until the first read answers. A failed read leaves it as it was. */
+  runners: RunnerView[] | null;
+  /** The latest read failed (an error, or the 403 while runners are off): says nothing about whether the person has runners. */
+  failed: boolean;
+}
+
+/** The caller's own runners (GET /me/runners), read each time `enabled` turns on. */
+export function useMyRunners(enabled = true): MyRunners {
+  const [state, setState] = React.useState<MyRunners>({ runners: null, failed: false });
   React.useEffect(() => {
     if (!enabled) return;
     let alive = true;
     runnersApi.listMine().then(
-      (rs) => alive && setList(rs),
-      () => alive && setList([]),
+      (runners) => alive && setState({ runners, failed: false }),
+      () => alive && setState((prev) => ({ ...prev, failed: true })),
     );
     return () => {
       alive = false;
     };
   }, [enabled]);
-  return list;
+  return state;
 }
 
 /** A runner a folder can be put on: the caller's own, claimed and not revoked. */

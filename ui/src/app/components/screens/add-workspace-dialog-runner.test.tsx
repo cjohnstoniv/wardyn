@@ -4,7 +4,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { AddWorkspaceDialog } from "./add-workspace-dialog";
@@ -176,5 +176,57 @@ describe("Add workspace: where is this folder", () => {
     expect(await screen.findByText("Personal runners aren't turned on for you. Ask your admin.")).toBeInTheDocument();
     expect(screen.queryByText(/You have no runner of your own/)).not.toBeInTheDocument();
     expect(screen.getAllByRole("radio")).toHaveLength(1);
+  });
+
+  it("a failed read of the runners shows the server alone, and neither line", async () => {
+    listMineMock.mockRejectedValue(new Error("boom"));
+    renderDialog();
+    await pickLocalDir();
+    await waitFor(() => expect(listMineMock).toHaveBeenCalled());
+    await screen.findByLabelText("Path on this host");
+    expect(screen.getAllByRole("radio")).toHaveLength(1);
+    expect(screen.queryByText(/You have no runner of your own/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Personal runners aren't turned on/)).not.toBeInTheDocument();
+  });
+
+  it("shows neither line until /me/capabilities has answered, then the one that applies", async () => {
+    let answer: (c: { may_self_host_runner: boolean }) => void = () => {};
+    getMyCapabilitiesMock.mockReturnValue(new Promise((res) => (answer = res)));
+    renderDialog();
+    await pickLocalDir();
+    await waitFor(() => expect(listMineMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText(/You have no runner of your own/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Personal runners aren't turned on/)).not.toBeInTheDocument();
+    answer({ may_self_host_runner: false });
+    expect(await screen.findByText("Personal runners aren't turned on for you. Ask your admin.")).toBeInTheDocument();
+    expect(screen.queryByText(/You have no runner of your own/)).not.toBeInTheDocument();
+  });
+
+  it("a failed refresh keeps the picked runner and still sends its id", async () => {
+    listMineMock.mockResolvedValueOnce([MAC]).mockRejectedValue(new Error("boom"));
+    renderDialog();
+    await pickLocalDir();
+    await userEvent.click(await screen.findByRole("radio", { name: "On my runner: ec2-mac-rc9" }));
+    await userEvent.type(screen.getByLabelText("Path on ec2-mac-rc9"), "/Users/dana/work/payments");
+    await userEvent.click(screen.getByRole("button", { name: /^repository/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^local directory/i }));
+    await waitFor(() => expect(listMineMock).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("radio", { name: "On my runner: ec2-mac-rc9" })).toBeChecked();
+    expect(screen.getByLabelText("Path on ec2-mac-rc9")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^add workspace/i }));
+    expect(createWorkspaceMock.mock.calls[0][0].sources[0]).toMatchObject({ path: "/Users/dana/work/payments", runner_id: MAC.id });
+  });
+
+  it("a refresh that no longer lists the picked runner clears it, visibly back on the server", async () => {
+    listMineMock.mockResolvedValueOnce([MAC]).mockResolvedValue([]);
+    renderDialog();
+    await pickLocalDir();
+    await userEvent.click(await screen.findByRole("radio", { name: "On my runner: ec2-mac-rc9" }));
+    await userEvent.click(screen.getByRole("button", { name: /^repository/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^local directory/i }));
+    expect(await screen.findByText(/You have no runner of your own/)).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "On the Wardyn server (this host)" })).toBeChecked();
+    expect(screen.getByLabelText("Path on this host")).toBeInTheDocument();
   });
 });

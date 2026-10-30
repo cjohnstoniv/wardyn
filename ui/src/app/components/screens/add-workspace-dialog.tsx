@@ -168,11 +168,22 @@ export function AddWorkspaceDialog({
   const localDirShown = kind === "local_dir" && !localDirUnavailable;
   // Only a member binds a folder to their own runner: the server refuses a runner_id from an administrator.
   const askWhere = localDirShown && memberClamped;
-  const myRunners = useMyRunners(askWhere);
+  const { runners: myRunners, failed: readFailed } = useMyRunners(askWhere);
+  const caps = useMyCapabilities(askWhere);
   // Unknown (not read yet, or the read failed) never takes the options away: only an explicit false does.
-  const selfHostOff = useMyCapabilities(askWhere)?.may_self_host_runner === false;
+  const selfHostOff = caps?.may_self_host_runner === false;
   const folderRunners = React.useMemo(() => (selfHostOff ? [] : (myRunners ?? []).filter(isFolderRunner)), [myRunners, selfHostOff]);
   const pickedRunner = folderRunners.find((r) => r.id === runnerId);
+  // A runner that a successful read no longer lists is dropped; a failed read keeps the last list, so the pick stays.
+  React.useEffect(() => {
+    if (runnerId && myRunners !== null && !readFailed && !pickedRunner) setRunnerId("");
+  }, [runnerId, myRunners, readFailed, pickedRunner]);
+  // The no-runner line says what to do, so it waits for both answers; a failed read says nothing, not "none".
+  const noRunnerLine = selfHostOff
+    ? ADD_COMPUTER.SELF_HOST_OFF
+    : caps !== null && myRunners !== null && !readFailed && folderRunners.length === 0
+      ? FOLDER_RUNNER.NO_RUNNER
+      : undefined;
 
   const sourceRequired = kind !== "ephemeral";
   // No path field renders when local directories are unavailable, so a value typed under another kind is not theirs to send.
@@ -313,9 +324,9 @@ export function AddWorkspaceDialog({
                 ))}
               </RadioGroup>
               {pickedRunner && <p className="text-meta leading-snug text-muted-foreground">{FOLDER_RUNNER.HELPER}</p>}
-              {myRunners !== null && folderRunners.length === 0 && (
+              {noRunnerLine && (
                 <p className="rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-meta leading-snug text-muted-foreground">
-                  {selfHostOff ? ADD_COMPUTER.SELF_HOST_OFF : FOLDER_RUNNER.NO_RUNNER}
+                  {noRunnerLine}
                 </p>
               )}
             </div>
