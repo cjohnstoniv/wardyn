@@ -311,7 +311,7 @@ func (f *driveBindFailure) write(s *Server, w http.ResponseWriter) {
 func (s *Server) driveBindFailureHere(ctx context.Context, resolved types.ResolvedDrive, at drivePlace) *driveBindFailure {
 	// A disk drive mounts only where it is kept; stepDriveEligibility has held the run to a macOS VM.
 	if disk := resolved.Drive.Backend == types.DriveBackendMacDisk; at.runner != nil || disk {
-		if msg := s.driveOnRunner(ctx, resolved.Drive, at.runner, disk); msg != "" {
+		if msg := s.driveOnRunner(ctx, resolved.Drive, at.runner, at.macOS); msg != "" {
 			return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalBackendElsewhere,
 				member: strings.TrimPrefix(msg, "drive: "), attrs: []any{slog.String("drive", resolved.Drive.Name)}}
 		}

@@ -23,8 +23,11 @@ import (
 // drive with no second place behaves exactly as it did.
 
 // drivePlace is where a run mounts its drives: the organisation's runners (the
-// zero value) or one person's own runner.
-type drivePlace struct{ runner *uuid.UUID }
+// zero value) or one person's own runner, and whether the run is a macOS VM.
+type drivePlace struct {
+	runner *uuid.UUID
+	macOS  bool
+}
 
 // driveSecondPlaceMsg is the admin save refusal for a second place of the wrong shape.
 func driveSecondPlaceMsg(name string) string {
@@ -156,7 +159,9 @@ const macDiskNoName = "your Mac"
 // name its owner knows it by. store.ErrNotFound when the drive names no Mac or the
 // row is gone; a store that keeps no runners is an error, never a gone Mac.
 func (s *Server) macDiskHome(ctx context.Context, d types.UserDrive) (types.Runner, string, error) {
-	st, ok := s.cfg.Store.(store.RunnerStore)
+	st, ok := s.cfg.Store.(interface {
+		GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error)
+	})
 	switch {
 	case d.HomeRunnerID == nil:
 		return types.Runner{}, macDiskNoName, store.ErrNotFound

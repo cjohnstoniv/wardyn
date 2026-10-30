@@ -766,8 +766,8 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 // second place or a disk drive gets its mounts here, where its placement is known
 // (seedRequestDrives left them); every other run's were built with its drives.
 func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
-	var at drivePlace
 	macOS := types.MachineKind(f.req.MachineKind).IsMacOSVM()
+	at := drivePlace{macOS: macOS}
 	if mountsDrives(f.drives, f.keep) && f.place.pooled && f.place.placement == types.PlacementLocal {
 		at.runner = f.place.placedRunner()
 		msg := ""
@@ -782,6 +782,11 @@ func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
 		if msg != "" {
 			return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
 		}
+	}
+	// A disk drive in a run not placed on one person's own runner is refused here, with the reason it gets on the wrong one.
+	if i := slices.IndexFunc(f.drives, func(d runDrive) bool { return d.resolved.Drive.Backend == types.DriveBackendMacDisk }); i >= 0 && at.runner == nil {
+		msg := s.driveOnRunner(f.r.Context(), f.drives[i].resolved.Drive, nil, macOS)
+		return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
 	}
 	if f.keep.onMac() {
 		if at.runner == nil {
