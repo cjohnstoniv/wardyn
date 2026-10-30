@@ -47,7 +47,7 @@ export const DRIVE_REFUSAL = {
   MEMBER_DELETE_FAILED: () => "The drive's files couldn't be deleted. Nothing was removed; try again.",
   MEMBER_RATE_LIMITED: () => "Too many drive changes; wait a minute and try again.",
   // A disk drive kept on a Mac: made on one of the person's own Macs, and deleted there.
-  MEMBER_MAC_UNAVAILABLE: () => "runner_id: choose one of your own Macs, online, whose runner keeps disk drives.",
+  MEMBER_MAC_UNAVAILABLE: () => "runner_id: choose one of your own Macs. It must be online, with a runner that is up to date.",
   MEMBER_DELETE_DEFERRED: (mac: string) => `Deleting. ${mac} is offline, so the disk is removed when it reconnects.`,
   MEMBER_IN_RUN_ON_MAC: (name: string, mac: string) => `${name} is in a run on ${mac}. Delete it after that run ends.`,
   MEMBER_RECORD_ONLY: (mac: string) =>

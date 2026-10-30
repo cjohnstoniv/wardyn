@@ -25,7 +25,7 @@
   { "key": "MEMBER_BUSY", "args": [], "text": "This drive is already being deleted." },
   { "key": "MEMBER_DELETE_FAILED", "args": [], "text": "The drive's files couldn't be deleted. Nothing was removed; try again." },
   { "key": "MEMBER_RATE_LIMITED", "args": [], "text": "Too many drive changes; wait a minute and try again." },
-  { "key": "MEMBER_MAC_UNAVAILABLE", "args": [], "text": "runner_id: choose one of your own Macs, online, whose runner keeps disk drives." },
+  { "key": "MEMBER_MAC_UNAVAILABLE", "args": [], "text": "runner_id: choose one of your own Macs. It must be online, with a runner that is up to date." },
   { "key": "MEMBER_DELETE_DEFERRED", "args": ["Studio Mac"], "text": "Deleting. Studio Mac is offline, so the disk is removed when it reconnects." },
   { "key": "MEMBER_IN_RUN_ON_MAC", "args": ["Notes", "Studio Mac"], "text": "Notes is in a run on Studio Mac. Delete it after that run ends." },
   { "key": "MEMBER_RECORD_ONLY", "args": ["Studio Mac"], "text": "Studio Mac is no longer registered, so this drive's disk stays on that Mac. Deleting removes only the record." }
