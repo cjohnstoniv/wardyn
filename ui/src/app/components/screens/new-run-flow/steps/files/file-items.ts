@@ -84,9 +84,9 @@ const BACKEND: Record<Exclude<MeDrive["backend"], "mac_disk">, string> = {
 };
 const SOURCE: Record<MeDrive["source"], string> = { personal: NR_FILES.SOURCE_PERSONAL, team: NR_FILES.SOURCE_TEAM, organisation: NR_FILES.SOURCE_ORG };
 
-/** The chips a drive is stored on: where it comes from, then its storage. */
 const macLine = (d?: MeDrive): string | undefined => (d?.backend === "mac_disk" && d.mac ? MAC_DRIVES.D01(d.mac) : undefined);
 
+/** The chips a drive is stored on: where it comes from, then its storage. */
 export const driveChips = (d: MeDrive): string[] =>
   // A disk drive names its Mac; with no name to give (the row is gone) it says only where it comes from.
   d.backend === "mac_disk" ? [SOURCE[d.source], ...(d.mac ? [MAC_DRIVES.D01(d.mac)] : [])] : [SOURCE[d.source], BACKEND[d.backend]];

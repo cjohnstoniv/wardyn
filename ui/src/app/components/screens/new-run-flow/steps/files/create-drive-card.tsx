@@ -34,6 +34,7 @@ export function CreateDriveCard({ create, onCreated, onClose, intro = NR_FILES.C
   const [failure, setFailure] = React.useState("");
   const card = React.useRef<HTMLFormElement>(null);
   const errorId = React.useId();
+  const hintId = React.useId();
   // The create cannot be recalled once sent, so nothing here pretends to cancel it: the key is taken and ignored.
   useEscapeClosesThis(React.useCallback(() => !busy && onClose(), [busy, onClose]), card);
 
@@ -67,10 +68,10 @@ export function CreateDriveCard({ create, onCreated, onClose, intro = NR_FILES.C
           placeholder={NR_FILES.DRIVE_NAME_PLACEHOLDER}
           aria-required="true"
           aria-invalid={failure ? true : undefined}
-          aria-describedby={failure ? errorId : undefined}
+          aria-describedby={[hint && hintId, failure && errorId].filter(Boolean).join(" ") || undefined}
           onChange={(e) => setName(e.target.value)}
         />
-        {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+        {hint && <p id={hintId} className="text-xs text-muted-foreground">{hint}</p>}
         {failure && <p id={errorId} role="alert" className="text-sm text-danger">{failure}</p>}
       </div>
       <div className="flex justify-end gap-2">
