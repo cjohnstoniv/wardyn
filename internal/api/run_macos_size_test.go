@@ -43,7 +43,7 @@ const (
 	memCeil  = "your governance profile Platform caps it with its ceiling's `resources.memory_mib`, set on it or on a profile it inherits from. An admin raises that; `limits.max_memory_mib` only lowers it."
 )
 
-// A size under the base's minimum names what lowered it and the setting that raises it (MAC-Z01 to Z07),
+// A size under the base's minimum names what lowered it and the setting that raises it (MAC-Z01 to Z07, Z09),
 // the leaf profile only; a run that asked for less itself keeps the plain minimum (MAC-Z08).
 func TestPlacementCapability_MacOSVMSizeNamesItsCause(t *testing.T) {
 	for _, tc := range []struct {
@@ -55,6 +55,8 @@ func TestPlacementCapability_MacOSVMSizeNamesItsCause(t *testing.T) {
 			sizeNeed + "This run gets 1 CPU: " + cpuCeil},
 		{"limits cap CPU", macOSVMAsk{CPUMillis: 2000, MemoryMiB: 8192, Profile: "Platform", CPU: capped(8000, 2000, types.LimitSourceGovernance, runnerpool.CapKnobLimits)},
 			sizeNeed + "This run gets 2 CPU: your governance profile Platform caps it with `limits.max_cpu_millis`. An admin raises that."},
+		{"the policy's size holds CPU", macOSVMAsk{CPUMillis: 2000, MemoryMiB: 8192, Profile: "Platform", CPU: capped(8000, 2000, types.LimitSourceGovernance, runnerpool.CapKnobBaseline)},
+			sizeNeed + "This run gets 2 CPU: your governance profile Platform keeps a run to the size its policy sets, or to the default size when it sets none. An admin raises that with the policy's `resources.cpu_millis`."},
 		{"ceiling caps memory", macOSVMAsk{CPUMillis: 4000, MemoryMiB: 4096, Profile: "Platform", Memory: capped(16384, 4096, types.LimitSourceGovernance, runnerpool.CapKnobCeiling)},
 			sizeNeed + "This run gets 4096 MiB: " + memCeil},
 		{"limits cap memory", macOSVMAsk{CPUMillis: 4000, MemoryMiB: 4096, Profile: "Platform", Memory: capped(16384, 4096, types.LimitSourceGovernance, runnerpool.CapKnobLimits)},
