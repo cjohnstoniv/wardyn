@@ -85,7 +85,7 @@ export function workspaceUnavailableToCaller(
 }
 
 /** The runner a source is bound to, by the name the server projects; a runner that no longer exists is shown by the first 8 characters of its id. */
-export const runnerLabel = (s: { runner_id: string; runner_name?: string }): string => s.runner_name || s.runner_id.slice(0, 8);
+export const sourceRunnerLabel = (s: { runner_id: string; runner_name?: string }): string => s.runner_name || s.runner_id.slice(0, 8);
 
 /** The source whose runner can no longer run it: its runner_state is anything but claimed. */
 export function staleRunnerSource(ws: Workspace): (WorkspaceSourceInput & { runner_id: string; runner_state: "revoked" | "missing" | "not_owner" }) | undefined {
@@ -102,5 +102,5 @@ export function staleRunnerSource(ws: Workspace): (WorkspaceSourceInput & { runn
  */
 export function workspaceRunnerRefusal(ws: Workspace): string | undefined {
   const s = staleRunnerSource(ws);
-  return s ? FOLDER_RUNNER.REFUSAL(ws.name, runnerLabel(s), FOLDER_RUNNER.STATE_CHIP[s.runner_state].toLowerCase()) : undefined;
+  return s ? FOLDER_RUNNER.REFUSAL(ws.name, sourceRunnerLabel(s), FOLDER_RUNNER.STATE_CHIP[s.runner_state].toLowerCase()) : undefined;
 }

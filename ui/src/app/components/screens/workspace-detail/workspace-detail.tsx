@@ -35,7 +35,7 @@ import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
 import { useCanMutate, useOperator, useSecurityOperator } from "../../wardyn/operator-context";
 import { KIND_META, kindMetaOf, workspaceImage } from "../workspaces";
-import { compositionSummary, resolvedModelProviders, runnerLabel, staleRunnerSource, workspaceModelProviderUnavailable, workspaceRunnerRefusal, workspaceUnavailableToCaller } from "../new-run-flow/checks/workspace-availability";
+import { compositionSummary, resolvedModelProviders, sourceRunnerLabel, staleRunnerSource, workspaceModelProviderUnavailable, workspaceRunnerRefusal, workspaceUnavailableToCaller } from "../new-run-flow/checks/workspace-availability";
 import { ProfileReview } from "../profile-review";
 import { llmCredLabel, WorkspaceLLMCredDialog } from "../workspace-llm-cred";
 import { DetailSectionCard } from "./section-card";
@@ -412,7 +412,7 @@ export function WorkspaceDetailScreen() {
               {boundSource?.runner_id && (
                 <span className="inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-meta text-muted-foreground">
                   <Laptop className="size-3" aria-hidden />
-                  {FOLDER_RUNNER.CHIP(runnerLabel({ runner_id: boundSource.runner_id, runner_name: boundSource.runner_name }))}
+                  {FOLDER_RUNNER.CHIP(sourceRunnerLabel({ runner_id: boundSource.runner_id, runner_name: boundSource.runner_name }))}
                 </span>
               )}
               {staleState && (

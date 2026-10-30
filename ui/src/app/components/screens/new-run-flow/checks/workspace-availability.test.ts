@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { resolvedModelProviders, runnerLabel, workspaceModelProviderUnavailable, workspaceRunnerRefusal } from "./workspace-availability";
+import { resolvedModelProviders, sourceRunnerLabel, workspaceModelProviderUnavailable, workspaceRunnerRefusal } from "./workspace-availability";
 import { folderSources } from "../steps/files/file-items";
 import { makeWorkspace } from "../../../../../test/factories";
 
@@ -82,9 +82,9 @@ describe("a folder bound to a runner", () => {
 
   it("names the runner by runner_name, and by the first 8 characters of its id only when there is none", () => {
     const id = "abcdef12-3456-7890-abcd-ef1234567890";
-    expect(runnerLabel({ runner_id: id, runner_name: "ec2-mac-rc9" })).toBe("ec2-mac-rc9");
-    expect(runnerLabel({ runner_id: id, runner_name: "" })).toBe("abcdef12");
-    expect(runnerLabel({ runner_id: id })).toBe("abcdef12");
+    expect(sourceRunnerLabel({ runner_id: id, runner_name: "ec2-mac-rc9" })).toBe("ec2-mac-rc9");
+    expect(sourceRunnerLabel({ runner_id: id, runner_name: "" })).toBe("abcdef12");
+    expect(sourceRunnerLabel({ runner_id: id })).toBe("abcdef12");
   });
 
   it("a claimed runner blocks nothing, and a bound source is never blocked for not being scanned", () => {
