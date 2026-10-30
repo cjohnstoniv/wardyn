@@ -936,12 +936,17 @@ func TestCancelTerminalRunApprovals_CountsTheIdleStop(t *testing.T) {
 
 // TestRunLease_EndingSoonFilesKeptOnlyForAKeptRun: run.ending_soon says the files
 // are kept for the grace only when the end keeps the run. A Background run is
-// killed at its end with nothing kept, so it reports 0 (#2792).
+// killed at its end with nothing kept, so it reports 0 (#2792); so does a run
+// endRun tears down at once: no sandbox recorded, a runner that cannot keep one,
+// or no grace (#3510).
 func TestRunLease_EndingSoonFilesKeptOnlyForAKeptRun(t *testing.T) {
-	keptSec := func(exp types.RunExperience) float64 {
+	keptSec := func(exp types.RunExperience, tweaks ...func(*leaseFixture)) float64 {
 		f := newLeaseFixture(t, 30*time.Minute)
 		f.srv.cfg.EndedRunGrace = 7 * 24 * time.Hour
 		f.st.run.Experience = exp
+		for _, tweak := range tweaks {
+			tweak(f)
+		}
 		f.sweep(t)
 		evs := f.audit.eventsFor(f.run.ID, "run.ending_soon")
 		if len(evs) != 1 {
@@ -955,4 +960,63 @@ func TestRunLease_EndingSoonFilesKeptOnlyForAKeptRun(t *testing.T) {
 	if got := keptSec(types.ExperienceBackground); got != 0 {
 		t.Errorf("background run files_kept_sec = %v, want 0 (nothing is kept)", got)
 	}
+	for name, tweak := range map[string]func(*leaseFixture){
+		"no sandbox":           func(f *leaseFixture) { f.st.run.SandboxRef = "" },
+		"a runner that cannot": func(f *leaseFixture) { f.srv.cfg.Runner = f.rn.finalizeTailRunner },
+		"no grace":             func(f *leaseFixture) { f.srv.cfg.EndedRunGrace = 0 },
+	} {
+		if got := keptSec(types.ExperienceInteractive, tweak); got != 0 {
+			t.Errorf("%s: interactive run files_kept_sec = %v, want 0 (the end tears it down)", name, got)
+		}
+	}
+	// A router is always a SandboxEnder: its executor's fact decides (#3510).
+	router := func(keeps ...bool) func(*leaseFixture) {
+		return func(f *leaseFixture) { f.srv.cfg.Runner = leaseRouter{leaseRunner: f.rn, keeps: keeps} }
+	}
+	if got := keptSec(types.ExperienceInteractive, router(false)); got != 0 {
+		t.Errorf("a router over a substrate that cannot keep: files_kept_sec = %v, want 0", got)
+	}
+	if got := keptSec(types.ExperienceInteractive, router(true)); got != float64(7*24*3600) {
+		t.Errorf("a router over a substrate that keeps: files_kept_sec = %v, want the grace", got)
+	}
+	f := newLeaseFixture(t, 30*time.Minute)
+	f.srv.cfg.EndedRunGrace = 7 * 24 * time.Hour
+	f.st.run.Experience = types.ExperienceInteractive
+	router(true, false)(f)
+	f.sweep(t)
+	evs := f.audit.eventsFor(f.run.ID, "run.ending_soon")
+	if len(evs) != 1 {
+		t.Fatalf("ending_soon rows = %d, want 1", len(evs))
+	}
+	if got, said := leaseAuditData(t, evs[0])["files_kept_sec"]; said {
+		t.Errorf("executors that disagree: files_kept_sec = %v, want it left out (neither answer is known)", got)
+	}
+}
+
+// leaseRouter is a router over one executor per keeps entry, each keeping an
+// ended sandbox or not; like runner/orchestrator it is a SandboxEnder whatever
+// its executors are.
+type leaseRouter struct {
+	*leaseRunner
+	keeps []bool
+}
+
+func (r leaseRouter) Executors() []string {
+	names := make([]string, len(r.keeps))
+	for i := range r.keeps {
+		names[i] = fmt.Sprintf("exec-%d", i)
+	}
+	return names
+}
+
+func (r leaseRouter) RunnerFacts(string) (runner.TargetFacts, bool) {
+	return runner.TargetFacts{}, false
+}
+
+func (r leaseRouter) ExecutorFacts(_ context.Context, name string) (runner.TargetFacts, bool) {
+	i := slices.Index(r.Executors(), name)
+	if i < 0 {
+		return runner.TargetFacts{}, false
+	}
+	return runner.TargetFacts{KeepsEnded: r.keeps[i]}, true
 }

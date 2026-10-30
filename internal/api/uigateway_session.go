@@ -31,6 +31,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -40,6 +41,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -316,6 +318,8 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 //
 // An inbound session (uigateway_inbound.go) skips the background-only arm, a named caller's skips the
 // ownership one (sess.Caller), and both answer to the run's profile's deny_ui_apps and deny_interactive.
+// Any other session answers to the profile as its door did (uiSessionUnitDenies), so a profile edit ends it
+// at its next re-check.
 //
 // Three arms are needed: the ownership re-assert catches a handed-over run but
 // NOT an off-boarded owner (they still equal run.CreatedBy), the revoke cutoff
@@ -359,6 +363,8 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 		if de := s.uiInboundUnitDenies(ctx, sess, run); de != nil {
 			return de
 		}
+	} else if de := s.uiSessionUnitDenies(ctx, sess, run); de != nil {
+		return de
 	}
 	if s.cfg.SessionRevocations == nil {
 		return nil
@@ -379,6 +385,32 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 	if revoked {
 		return s.uiDenyReassert(sess, uiDeniedReasonRevoked,
 			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+	}
+	return nil
+}
+
+// uiSessionUnitDenies is the re-check's profile arm for a session that is not inbound: the run's profile as it
+// stands now refuses what its door would refuse a new one, deny_ui_apps (uiEnterCommon) and, for a desktop,
+// deny_interactive too (uiEnterDesktop, the harness sign-in run exempt as interactiveDeniedBy exempts it),
+// with the doors' super-admin exemption. A profile that cannot be read is unverifiable: fail closed.
+func (s *Server) uiSessionUnitDenies(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
+	if sess.Role == oidc.RoleAdmin && s.adminDoorExempt(run) {
+		return nil
+	}
+	p, err := s.runUnit(ctx, run)
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: ui gateway could not read the run's governance profile", "run_id", run.ID, "err", err)
+		return s.uiDenyReassert(sess, reasonRunUnreadable, http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
+	}
+	switch {
+	case p == nil:
+		return nil
+	case p.Limits.DenyUIApps:
+		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden,
+			fmt.Sprintf("UI apps are not allowed under the governance profile %q this run was launched under.", p.Name))
+	case sess.Desktop && p.Limits.DenyInteractive && run.Task != harnessLoginTask:
+		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden,
+			fmt.Sprintf("A desktop is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.", p.Name))
 	}
 	return nil
 }

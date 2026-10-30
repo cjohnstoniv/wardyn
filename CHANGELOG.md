@@ -11,6 +11,110 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- Denying any Azure DevOps host now withdraws the person's Azure DevOps credential lane: its credentials and the hosts
+  it added; hosts your policy allows itself stay reachable without the credential. This holds at dispatch and on a
+  revive. A deny on `dev.azure.com` alone used to leave the person's credential on `<org>.visualstudio.com` and the
+  `vssps`, `vsrm`, `feeds`, `pkgs` and `almsearch` hosts. `run.ceiling.reassert` and `run.revive` name the lane
+  `azure_devops` in `dropped_broker_lanes`.
+
+### Fixed
+
+- An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
+  edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
+  terminal. They used to stay open until they closed or reached their time limit (#3398).
+- A browser session, or a recently checked inbound token, calling an inbound app on a run that has ended or been kept
+  is now refused with a `not_running` audit row and no `inbound.allow` row. It used to be recorded as allowed before
+  the refusal (#3775).
+- Page loads of an inbound app from a person's browser session, the run owner's included, no longer count against
+  the per-caller inbound rate limit that inbound tokens use. They still count against the run's own limit (#3792).
+- An egress approval-pending answer now carries `X-Wardyn-Egress-Reason` on every path: a CONNECT, a plain request, an
+  organisation-forwarded request and the sign-in listener. An approval that expired or was cancelled answers
+  `approval:expired`, a full host table `approval:host-cap` and a raise the control plane refused `approval:refused`,
+  so a sandbox can tell them from `approval:pending`, an approval a person has yet to decide (#3815).
+- While the control plane cannot be reached, a minted credential's last-good header now stops at expiry plus the
+  15-minute grace. A failed re-check just before that deadline could keep serving it for up to 30 seconds past it,
+  the pause between re-checks (#3416).
+- A model gateway host both vendors share that is also the run's own model endpoint is now inspected as that endpoint's
+  vendor. Under fail-closed inspection its request bodies were refused as uninspected (#3819).
+- A run's container `CONNECT` tunnels are now capped at 1,024 open at once, the bound desktop VM tunnels already have.
+  The next one is refused with a `503`, `Retry-After` and `X-Wardyn-Egress-Reason: builtin:tunnel-limit`, and a
+  `builtin:tunnel-limit` deny row; it is admitted once a tunnel closes. Before, a process could hold any number of
+  tunnels open (#3698).
+- With `WARDYN_FILE_SECRET_PLACEHOLDERS` on, a file named by two `file_secret` grants now holds the placeholder of the
+  grant that delivered it. A later grant's placeholder replaced it, so requests to the delivering grant's host lost
+  their credential.
+- Promoting a recording's hosts into a workspace's egress no longer promotes a model provider's host when the site
+  configuration can't be read. The promote now writes nothing and answers `503`, to retry; the provider hosts are read
+  once, for both the filter and the hosts a request names.
+- Two value-equal approval requests for one run that spell a number differently (`1` and `1.0`) no longer both open a
+  pending approval when they race: a request's scope is stored with one spelling per number. A pending request no
+  longer stands in for another whose numbers differ past floating-point precision.
+- Restarting a `WardynWorkload` custom resource's workload now needs the namespace binding that holds now, as the
+  runner's next report of the resource would. A restart after the binding was deleted could still launch the run on
+  the deleted binding's pool; it is now refused `workload_binding_inactive`, and the refusal is recorded on the
+  workload. The launch uses the binding's own sponsor and standing (#3758).
+- A `WardynWorkload` custom resource's launch whose claim lapsed (the replica that took it went away, or the launch
+  failed before it recorded a run or a refusal) is now retried by the daemon's 30-second workload sweep, instead of
+  waiting up to 10 minutes for the runner's next full report. The retry launches as the bound service under the
+  namespace binding that holds now; at most one retry per workload per claim (60 seconds), and a refused launch still
+  waits for the resource's next report (#3772).
+- A runner's full list of a bound namespace now reads only that namespace's workloads on the binding's pool, in the
+  database, instead of every custom-resource workload in the organization on every list (#3773).
+- A dropped base image and an unbuilt SSH devcontainer are now recorded in the audit log.
+- A secret-store fault while proving that a person holds their own credential, for a run on their own runner, now
+  refuses with the retryable 503 `store_unavailable` instead of reading the credential as the organisation's. At
+  dispatch the run fails as unreadable rather than refused. The store is read once per person per request, fault or
+  not. The same fault on any other check of a person's own secret (an inline policy, an override, a component, a
+  model provider key) is the same 503, never "unknown secret", a dropped grant or a 500.
+- A run's end no longer loses its settlement when the sandbox stop overruns: the teardown-error audit, the output
+  finish, the workspace and record settlement and the cleared sandbox reference each get a budget of their own, so a
+  workspace scan is no longer left in `scanning`. A replica that loses the run's lock during that tail now stops it,
+  instead of running it beside the replica that took the lock and writing duplicate audit rows.
+- `run.ending_soon` no longer promises kept files (`files_kept_sec`) for a run its end tears down at once: one with no
+  sandbox recorded, on a runner that cannot keep a sandbox, or with no ended-run grace. Behind the router it reads the
+  run's own runner or executor, and leaves `files_kept_sec` out when no fact says whether the end will keep the run.
+- A run Wardyn launches itself (a workspace scan or recording, a harness sign-in, a probe) no longer records its
+  placement as `remote` on a deployment where runner pools do not place runs: it is left empty there, as every other
+  run's is. The 0.9.1 note that `run.create` records the placement of every run holds only where pools place runs.
+- On Kubernetes, a run that keeps its work folder beside a shared drive is refused up front, at the preview,
+  preflight, create and queue replay, with `drive_share_beside_managed`. It was accepted and then refused at dispatch,
+  since the kept work folder is a managed drive the run adds only then.
+- Erasing a person no longer clears the author of a launch preset written by a different subject whose name only
+  matches after the database's lower-casing, such as a Kelvin sign in place of a K or a non-ASCII case variant. Only
+  an ASCII subject is matched case-insensitively, and only on its ASCII letters.
+- With second-person approval on, a held unit create or update now shows the approver the unit's mode, own walls or
+  pass-through, in its before and after.
+- Offboarding no longer stops handing a person's workspaces to the operator when the renamed fallback for a name
+  collision is itself taken. The fallback now takes a counter until neither the person nor the operator holds the
+  name, and one workspace that cannot be handed over no longer stops the others.
+- `wardyn-runnerd setup` now registers through the proxy its connection check used. The check went through the
+  settings setup installs for the service, but the registration followed this shell's environment, so a rerun from a
+  shell with no proxy could pass the check and then dial the organisation direct.
+- A Docker runner whose relay status failed to reach the organisation now sends it again at the next relay check. A
+  failed rebuild or send of the runner's capabilities was retried only on a reconnect or a further change of state.
+- A folders runner that resumes its session now sends the failure it recorded while the connection was down. Only a
+  fresh session sent it, so a stable resumed runner stayed connected without the organisation seeing it.
+- A `wardyn-runnerd serve` start that fails on a bad flag now records that error as the last error in the runner's
+  `status.json`. The file was rewritten as starting then stopped, which dropped the previous process's last error and
+  recorded nothing in its place.
+- `wardyn-runnerd doctor` no longer pulls the proxy image if it is removed from the engine between its image check and
+  its relay check. The relay check now fails on the missing image instead, as the page says doctor never pulls.
+- A Kubernetes run whose pinned proxy image is older than the runner now fails with the cause named: the proxy image is
+  older than this runner and refused a setting at config load, so have the organisation name this release's proxy
+  image, or run setup with `--proxy-image` set to it. It showed only a generic sidecar failure.
+- A Kubernetes runner no longer stops a run's proxy pod created while it lists its namespaces: the list read the pod
+  as gone, and the run failed with the proxy's config stage "exited" (exit code 137, `ContainerStatusUnknown`) (#3823).
+
+### Security
+
+- An upgraded connection an inbound token opened, a WebSocket say, is now re-checked every 15 seconds and closed at
+  most 45 seconds after the last check that confirmed its token (30 seconds unconfirmed, plus one re-check), even
+  while a check is still waiting on a store that does not answer. A hung check used to hold the connection open for good, and a store that kept
+  failing kept it open about a minute. The refusal's audit row is now written after the close, so a slow audit write
+  no longer delays it.
+
 ## [0.10.0-rc.8] — 2026-10-29
 
 ### Before you upgrade

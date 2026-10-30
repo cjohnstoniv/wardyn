@@ -816,9 +816,12 @@ func (s *Server) handleRestartWorkload(w http.ResponseWriter, r *http.Request) {
 	s.answerWorkload(w, r, ws, wl, client.WorkloadUnchanged, launch, http.StatusOK)
 }
 
-// restartLaunch launches a restarted workload as its owner (handleRestartWorkload says who that can be).
+// restartLaunch launches a restarted workload as its owner (handleRestartWorkload says who that can be). A
+// custom resource's workload launches, whoever asks, as a report of its resource would: under the namespace
+// binding that holds now (launchUnderBinding), so a binding deleted since sends nothing to its pool.
 func (s *Server) restartLaunch(r *http.Request, ws store.WorkloadStore, wl store.Workload) (client.WorkloadLaunch, error) {
-	if principalFromRequest(r) == wl.Owner {
+	k8s := wl.Source == store.WorkloadSourceK8s
+	if principalFromRequest(r) == wl.Owner && !k8s {
 		return s.launchWorkload(r, ws, wl)
 	}
 	name, ok := strings.CutPrefix(wl.Owner, types.ServicePrincipalPrefix)
@@ -835,10 +838,19 @@ func (s *Server) restartLaunch(r *http.Request, ws store.WorkloadStore, wl store
 	case err != nil:
 		return client.WorkloadLaunch{}, err
 	}
-	// The service's standing as of the spec's last write, the authority that recorded it, as a binding's
-	// launch is judged as of the binding's making: usable, the same sponsor since, and the sponsor's
-	// access not revoked since (a sign-out that keeps tokens does not count).
-	sr, cancel, err := serviceLaunchRequest(si, si.Sponsor)
+	sponsor := si.Sponsor
+	var b store.WorkloadBinding
+	var found bool
+	if k8s {
+		bindings, err := ws.ListWorkloadBindings(ctx, store.Page{})
+		if err != nil {
+			return client.WorkloadLaunch{}, err
+		}
+		if b, found = workloadBindingOf(bindings, wl); found {
+			sponsor = b.Sponsor
+		}
+	}
+	sr, cancel, err := serviceLaunchRequest(si, sponsor)
 	if err != nil {
 		return client.WorkloadLaunch{}, err
 	}
@@ -846,6 +858,12 @@ func (s *Server) restartLaunch(r *http.Request, ws store.WorkloadStore, wl store
 	// The run is the service's; the workload rows and the replaced run's run.kill name who asked.
 	actorType, actor := actorFromRequest(r)
 	sr = sr.WithContext(withActor(sr.Context(), actorType, actor))
+	if k8s {
+		return s.launchUnderBinding(sr, ws, b, found, si, wl)
+	}
+	// The service's standing as of the spec's last write, the authority that recorded it, as a binding's
+	// launch is judged as of the binding's making: usable, the same sponsor since, and the sponsor's
+	// access not revoked since (a sign-out that keeps tokens does not count).
 	if live, err := s.queueOwnerLive(sr.Context(), serviceAuthority(si, si.Sponsor), wl.UpdatedAt); err != nil || !live {
 		return inactive, err
 	}

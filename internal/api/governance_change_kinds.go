@@ -10,6 +10,7 @@ package api
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -178,6 +179,7 @@ func nonZeroContact(c *policyref.Contact) *policyref.Contact {
 // provenance (which do not change what the profile permits).
 type unitDiffStored struct {
 	Name          string                 `json:"name"`
+	Mode          string                 `json:"mode,omitempty"`
 	Ceiling       types.RunPolicySpec    `json:"ceiling"`
 	Limits        types.GovernanceLimits `json:"limits"`
 	Contact       *policyref.Contact     `json:"contact,omitempty"`
@@ -198,7 +200,7 @@ type unitDiffView struct {
 // is decided by super admins only, so it is rendered whole; any other is rendered for a security admin.
 func newUnitDiffView(row types.GovernanceUnit, res *ResolvedUnit, tier specReadTier) *unitDiffView {
 	v := &unitDiffView{unitDiffStored: unitDiffStored{
-		Name: row.Name, Ceiling: redactSpecForRead(row.Ceiling, tier), Limits: row.Limits,
+		Name: row.Name, Mode: cmp.Or(row.Mode, types.UnitModeOwnWalls), Ceiling: redactSpecForRead(row.Ceiling, tier), Limits: row.Limits,
 		Contact: nonZeroContact(row.Contact), ParentID: row.ParentID,
 		Overlay: redactOverlayForRead(row.Overlay, tier), OverlayLimits: row.OverlayLimits, LockedKnobs: row.LockedKnobs,
 	}}

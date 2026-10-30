@@ -691,7 +691,7 @@ start.
 | `delivery_not_via_org` / `via_org_destination_refused` / `via_org_cap_exceeded` | `/internal/via-org/{grantID}/…` serves only this run's grant delivered `via_org`, to the grant's own destination, within 16 open streams and 8 GiB a run per server replica, reset on restart. |
 | `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). Azure DevOps, AWS SSO; and every grant naming `bedrock-api-key`, which is no longer a model credential. |
 | `owner_not_caller` | The grant's snapshot owner is not the run token's own subject. Azure DevOps. |
-| `roster_unreadable` | The site configuration could not be read, so nothing is resolved. Azure DevOps, AWS SSO, and a service identity's `GET /workspaces` and `GET /me` (`503`). |
+| `roster_unreadable` | The site configuration could not be read. Azure DevOps, AWS SSO, a service identity's `GET /workspaces` and `GET /me`, and a Record Mode promote (`503`). |
 | `run_unreadable` | The run row itself could not be read. AWS SSO; also `POST /approvals/{id}/{approve,deny}`'s second-human gate (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`). |
 | `scope_changed` | The live provider row has drifted from the run's dispatch-time snapshot. Azure DevOps, AWS SSO. |
 | `store_error` | The credential store operation failed. AWS SSO (a read); also the Azure DevOps sign-in callback's own captured-credential write (`ado_entra.go`) — the identical "a store errored" fact, not a second name for it. |

@@ -217,3 +217,54 @@ func TestSecretPlaceholders_WriteTimeRules(t *testing.T) {
 		}
 	}
 }
+
+// Two file_secret grants naming one file, each on its own host: the file holds the placeholder of the
+// grant that delivered it, filled on that grant's host from its secret, and the other grant authors
+// nothing, whether it was skipped as a duplicate or failed to resolve.
+func TestSecretPlaceholders_DuplicateFileUsesTheDeliveringGrant(t *testing.T) {
+	const hostA, hostB = "a.corp.test", "b.corp.test"
+	on := func(g types.GrantSpec, host string) types.GrantSpec {
+		var sc map[string]any
+		if err := json.Unmarshal(g.Scope, &sc); err != nil {
+			t.Fatal(err)
+		}
+		sc["host"] = host
+		g.Scope = mustJSON(sc)
+		return g
+	}
+	for name, tc := range map[string]struct {
+		grants     []types.GrantSpec
+		host, from string
+	}{
+		"both resolve": {[]types.GrantSpec{on(fileSecretGrant("api-token", "deploy-token", true), hostA),
+			on(fileSecretGrant("api-token", "corp-token", false), hostB)}, hostA, "deploy-token"},
+		"the first fails": {[]types.GrantSpec{on(fileSecretGrant("api-token", "no-such-secret", false), hostA),
+			on(fileSecretGrant("api-token", "deploy-token", true), hostB)}, hostB, "deploy-token"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rn := &fakeRunner{}
+			srv, st, audit, run := dispatchTeardownFixture(t, rn, types.RunPending)
+			run.Task, run.CreatedBy = "", fileOwner
+			st.run = run
+			rec := &grantRecStore{dispatchTestStore: st}
+			_, sec, _ := fileSecretServer(t)
+			srv.cfg.Store, srv.cfg.Secrets, srv.cfg.MaskRegistry = rec, sec, secretmask.NewRegistry()
+			srv.cfg.FileSecretPlaceholders = true
+			dispatchOf(srv, run, types.RunPolicySpec{AllowedDomains: []string{hostA, hostB}, EligibleGrants: tc.grants})
+			if rn.createCalls != 1 {
+				t.Fatalf("the sandbox was not created; events: %s", auditDump(audit.snapshot(), run.ID))
+			}
+			ph := agentFile(rn.lastSpec, "api-token")
+			i := slices.IndexFunc(rn.lastSpec.ProxyConfig.Injection, func(in runner.InjectionGrant) bool { return in.Rule.Placeholder == ph })
+			if !strings.HasPrefix(ph, secretPlaceholderPrefix) || i < 0 {
+				t.Fatalf("api-token = %q with injections %+v; want a placeholder the proxy fills", ph, rn.lastSpec.ProxyConfig.Injection)
+			}
+			if rule := rn.lastSpec.ProxyConfig.Injection[i].Rule; rule.Host != tc.host || rule.SecretName != tc.from {
+				t.Errorf("the file's placeholder fills %s from %s, want %s from %s: the grant that delivered the file", rule.Host, rule.SecretName, tc.host, tc.from)
+			}
+			if len(rec.created) != 1 {
+				t.Errorf("authored %d placeholder grants %+v, want only the delivering grant's", len(rec.created), rec.created)
+			}
+		})
+	}
+}

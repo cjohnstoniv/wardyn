@@ -14,6 +14,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -436,5 +437,35 @@ func TestRecordPromote_BulkSkipIsNamedInTheHeaderAndTheAudit(t *testing.T) {
 	w = do(t, srv, http.MethodPost, f6PromoteURL(wsID, "build"), adminToken, `{"hosts":["api.stripe.com"]}`)
 	if w.Code != http.StatusOK || w.Header().Get("X-Wardyn-Record-Skipped-Hosts") != "" {
 		t.Errorf("code=%d header=%q, want 200 and no header", w.Code, w.Header().Get("X-Wardyn-Record-Skipped-Hosts"))
+	}
+}
+
+// siteUnreadableStore is recordStore whose site config read fails.
+type siteUnreadableStore struct{ *recordStore }
+
+func (siteUnreadableStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, errors.New("store: site config read failed")
+}
+
+// TestRecordPromote_UnreadableSiteConfigWritesNothing: with the model provider rows unreadable,
+// a promote cannot tell a provider's host from a need, so it writes no marker and no requirement
+// and answers a retryable 503, whether or not it names its hosts.
+func TestRecordPromote_UnreadableSiteConfigWritesNothing(t *testing.T) {
+	for _, body := range []string{"", `{"hosts":["bedrock-runtime.us-east-1.amazonaws.com","api.stripe.com"]}`} {
+		runID, wsID := uuid.New(), uuid.New()
+		obs := recordmode.Observations{Domains: []recordmode.DomainObservation{
+			{Host: "api.stripe.com", AllowCount: 1},
+			{Host: "bedrock-runtime.us-east-1.amazonaws.com", AllowCount: 9},
+		}}
+		fake := &recordStore{importStateFake: importStateFake{ws: f6Workspace(wsID, runID, "build", f6RecordedOpen(runID, &obs))}}
+		srv := New(baseTestConfig(newHarness(t), siteUnreadableStore{fake}))
+
+		w := do(t, srv, http.MethodPost, f6PromoteURL(wsID, "build"), adminToken, body)
+		if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "nothing was promoted") {
+			t.Errorf("body %q: code = %d, want 503 naming the retry; body=%s", body, w.Code, w.Body.String())
+		}
+		if len(fake.ws.Requirements) != 0 || fake.saved != nil {
+			t.Errorf("body %q: requirements = %v, record_results = %s, want nothing written", body, fake.ws.Requirements, fake.saved)
+		}
 	}
 }

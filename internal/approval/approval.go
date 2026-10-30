@@ -12,12 +12,15 @@
 package approval
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,6 +54,9 @@ type Store interface {
 // PENDING approval when one already exists for the same run+kind+scope hash
 // (deduplication guard).
 func RequestApproval(ctx context.Context, st Store, req types.ApprovalRequest) (types.ApprovalRequest, error) {
+	// The insert carries the canonical spelling, so the pending index, which hashes the stored bytes,
+	// refuses a value-equal raise that races past the dedup read below.
+	req.RequestedScope = canonicalScope(req.RequestedScope)
 	// Dedup: return any existing PENDING approval for the same run+kind+scope.
 	hash := scopeHash(req.RunID, req.Kind, req.RequestedScope)
 	if existing, found, err := findPendingDup(ctx, st, req, hash); err != nil || found {
@@ -465,11 +471,17 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 }
 
 // scopeHash produces a stable content hash over (runID, kind, scope) for
-// deduplication. The scope JSON is re-encoded to normalise key ordering.
+// deduplication. The scope JSON is re-encoded to normalise key ordering, and
+// its numbers to canonicalNumber's spelling: a row stored before the insert
+// was canonical still matches, and no number is rounded through float64.
 func scopeHash(runID uuid.UUID, kind types.ApprovalKind, scope json.RawMessage) string {
 	var raw any
-	if err := json.Unmarshal(scope, &raw); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(scope))
+	dec.UseNumber()
+	if !json.Valid(scope) || dec.Decode(&raw) != nil {
 		raw = string(scope) // not valid JSON: hash the raw bytes
+	} else {
+		raw = canonicalNumbers(raw)
 	}
 	norm, _ := json.Marshal(raw)
 
@@ -480,4 +492,106 @@ func scopeHash(runID uuid.UUID, kind types.ApprovalKind, scope json.RawMessage) 
 	h.Write([]byte("|"))
 	h.Write(norm)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// canonicalScope is scope with each number rewritten to canonicalNumber's spelling and every other
+// byte as written. The pending index (migration 0213) hashes jsonb_send bytes, which normalise keys,
+// spacing and escapes but keep a number's scale, so 1.0 and 1 hash apart unless the insert carries
+// one spelling. Scope that is not JSON is returned as it came.
+func canonicalScope(scope json.RawMessage) json.RawMessage {
+	if !json.Valid(scope) {
+		return scope
+	}
+	out := make([]byte, 0, len(scope))
+	for i := 0; i < len(scope); {
+		switch c := scope[i]; {
+		case c == '"': // copied whole: a string holds no number to rewrite
+			j := i + 1
+			for scope[j] != '"' {
+				if scope[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			out = append(out, scope[i:j+1]...)
+			i = j + 1
+		case c == '-' || '0' <= c && c <= '9':
+			j := i
+			for j < len(scope) && strings.IndexByte("+-.eE0123456789", scope[j]) >= 0 {
+				j++
+			}
+			out = append(out, canonicalNumber(string(scope[i:j]))...)
+			i = j
+		default:
+			out = append(out, c)
+			i++
+		}
+	}
+	return out
+}
+
+// canonicalNumbers is canonicalNumber over every json.Number in a value decoded with UseNumber.
+func canonicalNumbers(v any) any {
+	switch t := v.(type) {
+	case json.Number:
+		return json.Number(canonicalNumber(string(t)))
+	case map[string]any:
+		for k, e := range t {
+			t[k] = canonicalNumbers(e)
+		}
+	case []any:
+		for i, e := range t {
+			t[i] = canonicalNumbers(e)
+		}
+	}
+	return v
+}
+
+// canonicalNumber is one spelling per value of a JSON number, made from its decimal digits and never
+// through float64: no exponent, no trailing fractional zeros, and no minus on zero, as Postgres
+// prints a numeric with no excess scale; past 20 zeros of padding, the significant digits with an
+// exponent, which Postgres reads to the same numeric. An exponent too large to compute with is
+// returned as written (Postgres refuses such a number).
+func canonicalNumber(n string) string {
+	neg := strings.HasPrefix(n, "-")
+	mant, expPart, hasExp := strings.Cut(strings.TrimPrefix(n, "-"), "e")
+	if !hasExp {
+		mant, expPart, hasExp = strings.Cut(mant, "E")
+	}
+	exp := 0
+	if hasExp {
+		e, err := strconv.Atoi(expPart)
+		if err != nil || e > 1<<40 || e < -(1<<40) {
+			return n
+		}
+		exp = e
+	}
+	whole, frac, _ := strings.Cut(mant, ".")
+	digits := strings.TrimLeft(whole+frac, "0")
+	if digits == "" {
+		return "0"
+	}
+	q := exp - len(frac) // the value is digits × 10^q
+	for strings.HasSuffix(digits, "0") {
+		digits, q = digits[:len(digits)-1], q+1
+	}
+	var out string
+	switch point := len(digits) + q; {
+	case q >= 0 && q <= 20:
+		out = digits + strings.Repeat("0", q)
+	case q < 0 && point > 0:
+		out = digits[:point] + "." + digits[point:]
+	case q < 0 && point > -20:
+		out = "0." + strings.Repeat("0", -point) + digits
+	default:
+		out = digits[:1]
+		if len(digits) > 1 {
+			out += "." + digits[1:]
+		}
+		out += "e" + strconv.Itoa(point-1)
+	}
+	if neg {
+		return "-" + out
+	}
+	return out
 }

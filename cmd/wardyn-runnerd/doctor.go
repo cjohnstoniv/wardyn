@@ -429,6 +429,15 @@ func proxyImageSkew(image string, pinned bool, serverVersion string) (doctor.Sta
 		image, imageReleaseTag(image), serverVersion), "WARDYN_PROXY_IMAGE", "the release the organisation runs, or remove the pin (WARDYN_PROXY_IMAGE_PINNED) to follow the organisation"), true
 }
 
+// noPullKey marks a context whose relay probe must not pull the proxy image: doctor's contract.
+type noPullKey struct{}
+
+func withoutPulling(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noPullKey{}, true)
+}
+
+func pullsAllowed(ctx context.Context) bool { return ctx.Value(noPullKey{}) == nil }
+
 // relayStage is setup's own relay check (findRelay, through h.relay) on a throwaway container, run only
 // when the image is already on the engine: doctor never pulls.
 func (h setupHost) relayStage(ctx context.Context, s doctorSettings, image, state string, eng dockerEngine, want relayPair, wantErr error, engineUp bool) doctor.Stage {
@@ -456,7 +465,7 @@ func (h setupHost) relayStage(ctx context.Context, s doctorSettings, image, stat
 		return doctor.FailStage("relay", fmt.Sprintf("the Docker network %s that run proxies attach to does not exist on this engine", network), "WARDYN_INTERNAL_NETWORK",
 			"the name of an existing network, or run `wardyn-runnerd setup` or restart the runner service, which creates "+network)
 	}
-	pair, err := h.relay(ctx, image, network, eng, want)
+	pair, err := h.relay(withoutPulling(ctx), image, network, eng, want)
 	if err != nil {
 		return doctor.FailStage("relay", oneLine(err.Error()), "WARDYN_RELAY_LISTEN", fix)
 	}

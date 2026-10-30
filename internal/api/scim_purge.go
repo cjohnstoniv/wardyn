@@ -346,7 +346,9 @@ func (s *Server) reassignWorkspaces(ctx context.Context, targets []string) (map[
 	if err != nil {
 		return nil, err
 	}
-	for _, ws := range all {
+	// One workspace that cannot be handed over stops no other: its error keeps the step pending.
+	var failed []error
+	for i, ws := range all {
 		if ws.OwnedBy == "" || !slices.ContainsFunc(targets, func(t string) bool { return strings.EqualFold(t, ws.OwnedBy) }) {
 			continue
 		}
@@ -354,22 +356,46 @@ func (s *Server) reassignWorkspaces(ctx context.Context, targets []string) (map[
 		_, err := s.cfg.Store.SetWorkspaceOwner(ctx, ws.ID, "")
 		if errors.Is(err, store.ErrConflict) {
 			// An operator-owned workspace already has this name (names are per owner): an offboarding
-			// must not stop on it, so the reassigned one takes its id as a suffix, which names nobody.
+			// must not stop on it, so the reassigned one takes a name neither owner holds.
 			renamed := ws
-			renamed.Name = ws.Name + " (" + ws.ID.String()[:8] + ")"
+			renamed.Name = handoverName(ws, all)
 			if _, err = s.cfg.Store.UpdateWorkspace(ctx, ws.ID, renamed, false); err == nil {
+				all[i].Name = renamed.Name
 				data["renamed_to"] = renamed.Name
 				_, err = s.cfg.Store.SetWorkspaceOwner(ctx, ws.ID, "")
 			}
 		}
 		if err != nil {
-			return nil, err
+			failed = append(failed, fmt.Errorf("workspace %s: %w", ws.ID, err))
+			continue
 		}
+		all[i].OwnedBy = ""
 		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "workspace.reassign", ws.ID.String(), "success",
 			mustJSON(data)))
 		n++
 	}
+	if err := errors.Join(failed...); err != nil {
+		return nil, err
+	}
 	return map[string]int{"workspaces_reassigned": n}, nil
+}
+
+// handoverName is the name ws is handed to the operator under when its own is taken there: its id's
+// first eight characters as a suffix, then a counter after them, the first that no other workspace of
+// its owner or of the operator holds in all. A name taken since all was read is refused by the store,
+// and the retry reads again.
+func handoverName(ws types.Workspace, all []types.Workspace) string {
+	for i := 1; ; i++ {
+		name := ws.Name + " (" + ws.ID.String()[:8] + ")"
+		if i > 1 {
+			name = fmt.Sprintf("%s (%s-%d)", ws.Name, ws.ID.String()[:8], i)
+		}
+		if !slices.ContainsFunc(all, func(w types.Workspace) bool {
+			return w.ID != ws.ID && (w.OwnedBy == "" || w.OwnedBy == ws.OwnedBy) && w.Name == name
+		}) {
+			return name
+		}
+	}
 }
 
 // personGrantedDrives is the names of the drives allocated to any of subjects as a user, sorted.

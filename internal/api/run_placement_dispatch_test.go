@@ -234,7 +234,7 @@ func TestLocalADOOriginIsOwnOnlyForTheOwnersProvenOwnPAT(t *testing.T) {
 		t.Skip("fixture row id is not valid")
 	}
 	ctx := context.Background()
-	if got := f.srv.localADOOrigin(ctx, capSub, own); got.Class != placement.ClassOwn || !got.OwnNamespace || !got.OwnerOnly {
+	if got, err := f.srv.localADOOrigin(ctx, capSub, own); err != nil || got.Class != placement.ClassOwn || !got.OwnNamespace || !got.OwnerOnly {
 		t.Fatalf("own PAT: %+v", got)
 	}
 	for name, a := range map[string]adoEntraRun{
@@ -242,12 +242,12 @@ func TestLocalADOOriginIsOwnOnlyForTheOwnersProvenOwnPAT(t *testing.T) {
 		"another owner":  {rowID: rowID, owner: "someone-else", tokenMode: types.ADOTokenModeOwnPAT},
 		"invalid row id": {rowID: "", owner: capSub, tokenMode: types.ADOTokenModeOwnPAT},
 	} {
-		if got := f.srv.localADOOrigin(ctx, capSub, a); got.Class != placement.ClassBrokered {
+		if got, err := f.srv.localADOOrigin(ctx, capSub, a); err != nil || got.Class != placement.ClassBrokered {
 			t.Errorf("%s: %+v", name, got)
 		}
 	}
 	missing := adoEntraRun{rowID: "ado-row-2", owner: capSub, tokenMode: types.ADOTokenModeOwnPAT}
-	if got := f.srv.localADOOrigin(ctx, capSub, missing); got.Class != placement.ClassOwn || got.OwnNamespace || got.OwnerOnly {
+	if got, err := f.srv.localADOOrigin(ctx, capSub, missing); err != nil || got.Class != placement.ClassOwn || got.OwnNamespace || got.OwnerOnly {
 		t.Errorf("own PAT without a stored secret: %+v", got)
 	}
 }

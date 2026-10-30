@@ -307,3 +307,29 @@ func TestPG_RunTemplates_EraseRunSetups(t *testing.T) {
 		t.Fatal("an erase with no person ran")
 	}
 }
+
+// TestPG_RunTemplates_EraseRunSetupsFoldsOnlyASCII: erasing a person clears a
+// launch preset written under an ASCII case variant of their subject, but not
+// one whose author only matches after lower() under the database collation: a
+// Kelvin sign standing in for the K, or a non-ASCII case pair.
+func TestPG_RunTemplates_EraseRunSetupsFoldsOnlyASCII(t *testing.T) {
+	st, _ := templatesPG(t)
+	ctx := context.Background()
+	for name, by := range map[string]string{"mixed-case": "Kate@X.com", "kelvin": "\u212Aate@x.com", "umlaut-exact": "äb@x.com", "umlaut-upper": "ÄB@x.com"} {
+		if _, _, err := st.PutLaunchPreset(ctx, types.LaunchPreset{Name: name, Request: json.RawMessage(`{}`), CreatedBy: by}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The erasure caller passes the canonical subject: ASCII lower-cased, non-ASCII as it is.
+	for _, person := range []string{"Kate@X.com", "äb@x.com"} {
+		if _, err := st.EraseRunSetupsOf(ctx, types.CanonicalUserSubject(person)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, want := range map[string]string{"mixed-case": "", "kelvin": "\u212Aate@x.com", "umlaut-exact": "", "umlaut-upper": "ÄB@x.com"} {
+		p, err := st.GetLaunchPreset(ctx, name)
+		if err != nil || p.CreatedBy != want || p.UpdatedBy != want {
+			t.Errorf("preset %s = created_by %q updated_by %q (%v), want %q", name, p.CreatedBy, p.UpdatedBy, err, want)
+		}
+	}
+}
