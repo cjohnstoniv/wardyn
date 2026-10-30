@@ -434,21 +434,21 @@ Stage 2 and the `edit-base` recheck read the guest's posture. The caps carry it 
 
 - Your Mac may be managed: encrypted, patched, watched by an endpoint agent, and behind your network controls.
 - The guest is a separate machine on that Mac, so each control either reaches it, is replaced by a Wardyn control, or is a gap you close.
-- This table says which. A row marked "Added in this release" is completed when that work lands.
+- This table says which.
 
 | Mac control | In the guest | State |
 |---|---|---|
 | Network filtering | The guest's one NIC goes to the run's own relay and proxy, with no NAT or bridged device. The proxy allows, denies and audits each request | Today |
-| Trust in your organisation's certificate authority | Node, Python, git and curl are pointed at the run proxy's certificate. Tools that use the macOS keychain do not trust it (see Limits below) | Added in this release (base customisation); this row is completed when that work lands |
-| Endpoint security agent | None is installed in the base. Stage 2 installs the Command Line Tools, the harness CLIs and the guest agent only | Added in this release (base customisation); this row is completed when that work lands |
+| Trust in your organisation's certificate authority | Node, Python, git and curl are pointed at the run proxy's certificate. Tools that use the macOS keychain do not trust it (see Limits below) | Today for your own CA: a `ca` item is trusted in the guest's System keychain for SSL at prepare, and the caps report `org_ca` as `trusted` or `not_trusted` ([The organisation CA](#the-organisation-ca)) |
+| Endpoint security agent | None is installed in the base. Stage 2 installs the Command Line Tools, the harness CLIs and the guest agent only | Today, in part: a `pkg` item installs your agent's package into the base as admin, with its licence as a `secret_files` entry. A system-extension or helper approval is by hand in `edit-base`, or from your MDM ([Customising the base](#customising-the-base)) |
 | Privilege management | `agent` is a standard user. Stage 1 refuses to publish a base that holds any other account than it and the setup account, and no one holds the setup account's password after preparing | Today |
 | Disk encryption | The guest's disk is a file on the Mac's volume, so the Mac's disk encryption covers it when the volume has any. The run's clone is deleted at the end, which is not secure erasure | Today |
-| OS integrity (SIP, Gatekeeper) | Stage 1 changes neither, so the guest keeps macOS's defaults | Added in this release (guest posture); this row is completed when that work lands |
+| OS integrity (SIP, Gatekeeper) | Stage 1 changes neither, so the guest keeps macOS's defaults | Today: the runner reports the base's `os_version`, `os_build`, `sip` and `gatekeeper` in the caps, as read at prepare, update or edit. They are not live ([Guest posture](#guest-posture)) |
 | Firewall | Nothing connects in. The guest agent dials out over a virtual socket, and the desktop is reached only through the organisation's gateway | Today |
 | Screen lock and password policy | Stage 1 turns the screen lock and screen saver off, and the guest signs in as `agent` on its own. The guest has no console ([Threat model, B14](../../threatmodel/THREAT-MODEL.md#b14--macos-vm-guest-vs-the-mac-that-runs-it)) | Today |
-| Patch policy | Automatic updates are off, so a base stays at the macOS it was built with. Re-prepare to move to a newer one | Added in this release (base age); this row is completed when that work lands |
-| Device identity for sign-in checks | The guest is an unmanaged device, so a provider that requires a compliant device may refuse sign-ins from its browser | Added in this release (guest MDM); this row is completed when that work lands |
-| Managed application configuration | Wardyn delivers no organisation browser, editor or assistant settings into the guest | Added in this release (base customisation); this row is completed when that work lands |
+| Patch policy | Automatic updates are off, so a base stays at the macOS it was built with. Re-prepare to move to a newer one | Today: the caps carry the base's macOS build and when it was prepared. `macos_vm.max_base_age_days` refuses a run on a Mac whose base is older, or whose runner reports no age ([Settings](#settings)) |
+| Device identity for sign-in checks | The guest is an unmanaged device, so a provider that requires a compliant device may refuse sign-ins from its browser | Today, in part: the caps report whether the guest is `enrolled` in MDM and how many profiles it holds. A `profile` item is approved by hand, and MDM-only payloads never take effect from it ([Configuration profiles](#configuration-profiles)) |
+| Managed application configuration | Wardyn delivers no organisation browser, editor or assistant settings into the guest | Today, if you list them: a `file` item pushes a settings file under `/Library`, `/usr/local` or `/opt`. One at a harness's managed settings path is refused, as are Wardyn's own files ([Customising the base](#customising-the-base)) |
 | Process-level audit | Wardyn audits the guest's network, credentials and lifecycle. It records no processes inside the guest | Today, in part |
 
 ## Limits in this release
