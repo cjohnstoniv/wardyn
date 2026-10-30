@@ -110,6 +110,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run ended `gone` (its runner reported the sandbox gone with no exit code) now shows a failure hint saying so: the
   container, pod or VM was removed, or its host restarted, including when the lease sweep finishes the end. It was
   FAILED with no reason on its page (#3669).
+- A runner that resumes its session and keeps dying within seconds of READY with an event unacknowledged, five times in
+  a row, now starts a fresh session and logs a warning, instead of resuming for good against an organisation that
+  refuses that event. An agent exit or spool record is still replayed and keeps failing until the organisation is
+  upgraded (#3660).
 
 ### Security
 
