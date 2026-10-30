@@ -58,7 +58,7 @@ var stage2Ports = []uint32{AgentPort, DesktopPort, ToolsPort}
 // boot does.
 func (c Stage2BootConfig) ToolsBoot() ToolsBoot {
 	return func(ctx context.Context, spec MachineSpec) (ToolsGuest, func(context.Context) error, error) {
-		if len(spec.Shares) > 0 {
+		if len(spec.Shares) > 0 || len(spec.Disks) > 0 {
 			return nil, nil, errSharesOutsideRun
 		}
 		return c.boot(ctx, spec)

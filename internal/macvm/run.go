@@ -151,12 +151,27 @@ func (r *runner) run(ctx context.Context) error {
 		r.o.Log.Info("macvm: sharing a folder", "run_id", r.cfg.RunID, "tag", sh.Tag, "target", sh.Target,
 			"read_only", sh.ReadOnly)
 	}
+	// Each disk drive is locked for as long as this VM may have it attached, and a writable one is made on
+	// its first run. Another run on this Mac that holds one stops this start.
+	for _, d := range r.cfg.Disks {
+		unlock, err := LockDisk(d.Path)
+		if err != nil {
+			return fmt.Errorf("macvm: disk %s: %w", d.ID, err)
+		}
+		defer unlock()
+		if !d.ReadOnly {
+			if err := MakeDiskImage(d.Path, d.SizeBytes); err != nil {
+				return err
+			}
+		}
+		r.o.Log.Info("macvm: attaching a disk drive", "run_id", r.cfg.RunID, "id", d.ID, "read_only", d.ReadOnly)
+	}
 	plan, err := BuildPlan(MachineSpec{
 		CPUs: r.cfg.CPUs, MemoryBytes: r.cfg.MemoryMiB * mib,
 		MinCPUs: man.MinCPUs, MinMemoryBytes: man.MinMemoryMiB * mib,
 		HardwareModel: man.HardwareModel, MachineIdentifier: r.id.MachineIdentifier,
 		DiskPath: filepath.Join(r.o.RunDir, DiskFile), AuxPath: filepath.Join(r.o.RunDir, AuxFile),
-		BaseDir: r.cfg.BaseDir, Net: guestNet, Shares: r.cfg.Shares,
+		BaseDir: r.cfg.BaseDir, Net: guestNet, Shares: r.cfg.Shares, Disks: r.cfg.Disks,
 	})
 	if err != nil {
 		return err
