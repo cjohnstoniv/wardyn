@@ -11,6 +11,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
+  edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
+  terminal. They used to stay open until they closed or reached their time limit (#3398).
+
 ### Security
 
 - An upgraded connection an inbound token opened, a WebSocket say, is now closed at the first re-check after its token

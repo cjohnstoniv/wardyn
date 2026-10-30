@@ -470,3 +470,39 @@ func TestEndAttachAuthority_ClosesBeforeCancel(t *testing.T) {
 		t.Fatalf("order = %q, want the close frame, then cancel", got)
 	}
 }
+
+// TestAttachAuthority_ProfileEditEndsAnOpenTerminal: the re-check asks the attach door's deny_interactive of
+// the run as it stands now, so a profile edit that denies interactive sessions ends an open terminal at its
+// next check and a profile that does not leaves it open; a super admin's ticket on an operator-owned run
+// stays exempt, as at the door (#3398).
+func TestAttachAuthority_ProfileEditEndsAnOpenTerminal(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	set := walledRun(h)
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+h.run.ID.String()+"/attach", nil)
+	check := func(role string) func(context.Context) error {
+		ta := ticketActor{actorType: types.ActorHuman, principal: h.owner, role: role, authorizedAt: time.Now()}
+		return h.srv.attachAuthority(r.WithContext(withTicketActor(r.Context(), ta)), h.run.ID)
+	}
+	member := check(oidc.RoleUser)
+	if member == nil {
+		t.Fatal("a member's ticket socket has no re-check")
+	}
+	if err := member(context.Background()); err != nil {
+		t.Fatalf("checked under a profile that denies nothing: %v", err)
+	}
+	set(types.GovernanceLimits{DenyUIApps: true}) // the attach door asks deny_interactive alone
+	if err := member(context.Background()); err != nil {
+		t.Fatalf("checked under a profile that allows interactive sessions: %v", err)
+	}
+	set(types.GovernanceLimits{DenyInteractive: true})
+	if err := member(context.Background()); !errors.Is(err, errAttachAuthorityEnded) {
+		t.Fatalf("checked under a profile that now denies interactive sessions: %v, want %v", err, errAttachAuthorityEnded)
+	}
+	h.run.OperatorOwned = true
+	h.store.putRun(h.run)
+	if admin := check(oidc.RoleAdmin); admin != nil {
+		if err := admin(context.Background()); err != nil {
+			t.Fatalf("a super admin's ticket on an operator-owned run: %v, want exempt", err)
+		}
+	}
+}
