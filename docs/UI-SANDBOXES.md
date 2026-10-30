@@ -515,7 +515,7 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 ### What Wardyn checks on every call
 
 - **The token** is looked up, then checked for expiry and revocation, and for an owner who is a service identity, its live record and sponsor. The result is reused for 30 seconds per token, run and app.
-- **A revoked, expired or suspended token** stops calling within that window. A WebSocket or other upgraded connection an inbound token opened is re-checked every 15 seconds (rc.8). It closes within 45 seconds of its last good check once the token no longer holds or the profile denies UI apps or interactive sessions.
+- **A revoked, expired or suspended token** stops calling within that window. A WebSocket or other upgraded connection an inbound token opened is re-checked every 15 seconds (rc.8). It closes within 30 seconds of the last admitting check once the token no longer holds or the profile denies UI apps or interactive sessions.
 - **A browser session** is re-checked as in [Bounds](#bounds), minus the owner rule for a named caller, and also refused when the run's profile now denies UI apps or interactive sessions.
 - **Host mode** adds a cross-site check to every cookie session, inbound or not. A request must be same-origin, carry no fetch metadata, or be a top-level `GET` or `HEAD` navigation, and an `Origin` header must be the request's own.
 - **Capacity** is shared: at most 8 relay connections per run, each a `socat` exec that is slower to open on Kubernetes or a remote runner. Inbound suits internal APIs and tools, not high-traffic services.

@@ -7,4 +7,5 @@
 # docs/operations/workloads.md 2677 measured (rc.8): the binding table says a revoke, not a session-only sign-out, ends a binding.
 # docs/operations/workloads.md 2722 adds 45 over 2677: the policy laid onto the deployment default and the three ways to launch on a local runner.
 # docs/operations/workloads.md 2787 adds 65 over 2722: the restart under the current binding and the 30-second launch sweep.
-docs/operations/workloads.md=2787 share=10
+# docs/operations/workloads.md 2827 adds 40 over 2787: which runner's removals count with several runners on one bound namespace.
+docs/operations/workloads.md=2827 share=10
