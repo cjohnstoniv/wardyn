@@ -199,6 +199,11 @@ func TestEditBaseDiscardsOnEachFailedCheck(t *testing.T) {
 			func(g *editGuest) {
 				g.posture.Accounts = append(g.posture.Accounts, guestagent.GuestAccount{Name: "hidden", UID: 400})
 			}},
+		{"a person's account named like macOS's", macvm.EditRecheckExtraAccount,
+			"The edited base was discarded: it has an account Wardyn didn't make, _helper. Runs keep using the base from ",
+			func(g *editGuest) {
+				g.posture.Accounts = append(g.posture.Accounts, guestagent.GuestAccount{Name: "_helper", UID: 503})
+			}},
 		{"Remote Login on", macvm.EditRecheckRemoteLogin,
 			"The edited base was discarded: Remote Login is on. Runs keep using the base from ",
 			func(g *editGuest) { g.posture.RemoteLogin = true }},
