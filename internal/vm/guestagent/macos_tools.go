@@ -508,7 +508,8 @@ func replaceFileOutside(dst string, perm os.FileMode, refused []string, fill fun
 	if err != nil {
 		return &os.PathError{Op: "open", Path: filepath.Join(dir, tmp), Err: err}
 	}
-	f := os.NewFile(uintptr(fd), filepath.Join(dir, tmp))
+	// The name only labels f's errors; the file is the one Openat made under dirFD.
+	f := os.NewFile(uintptr(fd), "pushed file")
 	defer func() {
 		if f != nil {
 			_ = f.Close()
