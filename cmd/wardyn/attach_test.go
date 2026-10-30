@@ -385,7 +385,11 @@ func TestHelperAttachSignal(t *testing.T) {
 	if os.Getenv("WARDYN_ATTACH_SIGNAL_HELPER") != "1" {
 		t.Skip("helper process for the subprocess signal tests; not run directly")
 	}
-	makeRawFn = func(int) (*term.State, error) { return &term.State{}, nil }
+	makeRawFn = func(int) (*term.State, error) {
+		// The parent signals on this marker: the session is in the pump, past the dial.
+		fmt.Fprintln(os.Stderr, "raw")
+		return &term.State{}, nil
+	}
 	restoreTerminalFn = func(int, *term.State) error {
 		// The parent greps stderr for this marker: proof term.Restore's real
 		// (seamed) path actually ran, not just that the process exited.
@@ -419,6 +423,44 @@ func helperCmd(t *testing.T, url string, stdin, stdout *os.File) *exec.Cmd {
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	return cmd
+}
+
+// helperStderr keeps a helper's stderr and closes raw once the helper has entered raw mode.
+type helperStderr struct {
+	mu   sync.Mutex
+	b    strings.Builder
+	raw  chan struct{}
+	once sync.Once
+}
+
+func newHelperStderr() *helperStderr { return &helperStderr{raw: make(chan struct{})} }
+
+func (h *helperStderr) Write(p []byte) (int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n, _ := h.b.Write(p)
+	if strings.Contains(h.b.String(), "raw\n") {
+		h.once.Do(func() { close(h.raw) })
+	}
+	return n, nil
+}
+
+func (h *helperStderr) String() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.b.String()
+}
+
+// waitRaw waits for the helper to enter raw mode, so a signal lands in the pump and not during the dial,
+// where it is a different clean exit that never reaches restoreTerminalFn.
+func waitRaw(t *testing.T, cmd *exec.Cmd, stderr *helperStderr) {
+	t.Helper()
+	select {
+	case <-stderr.raw:
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatalf("helper never entered raw mode; stderr:\n%s", stderr.String())
+	}
 }
 
 // A single TERM must end the session cleanly (exit 0) and the terminal must
@@ -460,8 +502,8 @@ func TestRunAttach_SIGTERMDetachesCleanly(t *testing.T) {
 	defer stdinR.Close()
 
 	cmd := helperCmd(t, srv.URL, stdinR, nil)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
+	stderr := newHelperStderr()
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start helper: %v", err)
 	}
@@ -472,16 +514,7 @@ func TestRunAttach_SIGTERMDetachesCleanly(t *testing.T) {
 		_ = cmd.Process.Kill()
 		t.Fatal("helper never completed the WS handshake")
 	}
-	// The server's Accept() returning is not quite the same instant as the
-	// CHILD's own websocket.Dial call returning client-side — under heavy
-	// system load there is a small window where the child's Dial is still
-	// in flight. A TERM landing in exactly that window is a DIFFERENT
-	// (also correct) clean-exit path — R-02's dial-cancellation return,
-	// which never reaches raw mode / restoreTerminalFn at all — that would
-	// make this specific test flaky without pinning what it means to. This
-	// margin keeps TERM squarely inside the pump, where restoreTerminalFn is
-	// this test's actual target.
-	time.Sleep(500 * time.Millisecond)
+	waitRaw(t, cmd, stderr)
 
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("signal helper: %v", err)
@@ -554,8 +587,8 @@ func TestRunAttach_SecondSIGTERMKillsAWedgedSession(t *testing.T) {
 	defer stdoutR.Close()
 
 	cmd := helperCmd(t, srv.URL, stdinR, stdoutW)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
+	stderr := newHelperStderr()
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start helper: %v", err)
 	}
@@ -567,6 +600,7 @@ func TestRunAttach_SecondSIGTERMKillsAWedgedSession(t *testing.T) {
 		_ = cmd.Process.Kill()
 		t.Fatal("helper never completed the WS handshake")
 	}
+	waitRaw(t, cmd, stderr)
 	// Give the flood time to actually fill the pipe and wedge the write.
 	time.Sleep(300 * time.Millisecond)
 
