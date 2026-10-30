@@ -1,6 +1,8 @@
 module github.com/cjohnstoniv/wardyn
 
-go 1.27
+go 1.26.0
+
+toolchain go1.26.10
 
 require (
 	filippo.io/age v1.3.2
@@ -29,8 +31,8 @@ require (
 	github.com/moby/profiles/seccomp v0.2.4
 	github.com/pkg/sftp v1.13.12
 	github.com/sigstore/protobuf-specs v0.5.2
-	github.com/sigstore/rekor v1.5.5
-	github.com/sigstore/sigstore v1.11.1
+	github.com/sigstore/rekor v1.5.3
+	github.com/sigstore/sigstore v1.10.8
 	github.com/sigstore/sigstore-go v1.3.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
@@ -68,6 +70,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.38.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.43.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.5 // indirect
+	github.com/blang/semver v3.5.1+incompatible // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
