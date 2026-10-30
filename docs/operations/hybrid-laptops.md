@@ -353,6 +353,7 @@ A workspace folder can live on your computer: the `local_dir` source names your 
 - An older runner, without `bound_folders` in its caps, is refused the run until updated.
 - If the runner is revoked or removed, or the workspace changes owner, runs are refused (`workspace_source_runner_unavailable`); add a new workspace.
 - Record and verify refuse such a folder. The workspace scan and env-as-code skip it, and a scan of the source itself is refused (`source_scan_runner_bound`).
+- A `write:` requirement is checked against the server's own files, so one that names such a folder can be refused. Make the folder writable with the source's `--writable` instead.
 
 ## Offline and revocation
 

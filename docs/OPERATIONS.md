@@ -2127,6 +2127,7 @@ predates it.
 - Every control a source or workspace can carry — a secret by name, an egress host, write access to a directory, a named integration — is a row with ONE axis.
 - **Required** rides along with every run that attaches the workspace, **Optional** is a per-run opt-in.
 - `PUT /api/v1/workspaces/{id}/requirements` writes the workspace's own overlay rows (`handleSetWorkspaceRequirements`, [`internal/api/workspace_requirements.go`](../internal/api/workspace_requirements.go)); the workspace detail page is the surface that writes them.
+  - A `write:<path>` key is checked against the server's own files. For a folder on a person's runner, use the source's `--writable` instead: such a key can be refused ([A workspace folder on your runner](operations/hybrid-laptops.md#a-workspace-folder-on-your-runner)).
 - Launch and preflight both read `effectiveRequirements(ws)` — the same fold — so Review can never predict something launch won't do.
 - A `scan_seeded` requirement can never auto-grant a secret on its own: the scanner reads untrusted repo content, so only an operator's direct declaration attaches a credential (the fail-closed provenance rule above).
 
