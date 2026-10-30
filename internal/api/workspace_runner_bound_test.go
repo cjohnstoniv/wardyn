@@ -161,6 +161,38 @@ func TestWorkspaceOwnership_RunnerBoundRefusals(t *testing.T) {
 			t.Errorf("%s: a refused binding stored a workspace", c.name)
 		}
 	}
+
+	// An operator editing a member's workspace adds or moves no binding; a binding the workspace already
+	// has, unchanged, round-trips.
+	spare := st.add(ownerMemberSub, types.RunnerOwnerPerson, types.RunnerClaimed)
+	create := func(name string, src types.WorkspaceSource) uuid.UUID {
+		t.Helper()
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", member, workspaceBody(t, name, src))
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create %s = %d %s", name, w.Code, w.Body.String())
+		}
+		return decodeJSON[types.Workspace](t, w).ID
+	}
+	unbound := create("scratch-only", types.WorkspaceSource{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/scratch"})
+	bound := create("bound", boundSource(boundFolder, mine))
+	for _, c := range []struct {
+		name string
+		id   uuid.UUID
+		src  types.WorkspaceSource
+		want int
+	}{
+		{"an operator PUT adding a binding", unbound, boundSource(boundFolder, mine), http.StatusBadRequest},
+		{"an operator PUT keeping the binding unchanged", bound, boundSource(boundFolder, mine), http.StatusOK},
+		{"an operator PUT moving the binding to another of the member's runners", bound, boundSource(boundFolder, spare), http.StatusBadRequest},
+	} {
+		w := doSSO(t, srv, http.MethodPut, "/api/v1/workspaces/"+c.id.String(), admin, workspaceBody(t, "edited", c.src))
+		if w.Code != c.want {
+			t.Errorf("%s: code = %d, want %d; body=%s", c.name, w.Code, c.want, w.Body.String())
+		}
+		if c.want == http.StatusBadRequest && !strings.Contains(w.Body.String(), "runner_id") {
+			t.Errorf("%s: body = %s, want the refusal to name runner_id", c.name, w.Body.String())
+		}
+	}
 }
 
 // Guard: a folder that names no runner is checked on the control plane's host exactly as before, so a

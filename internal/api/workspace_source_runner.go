@@ -151,6 +151,18 @@ func (s *Server) sourceBindingRefusal(ctx context.Context, owner string, sources
 	return "", nil
 }
 
+// newBinding reports whether incoming binds a folder to a runner that stored does not already bind the
+// same way: the same path, target, runner and writability.
+func newBinding(stored, incoming []types.WorkspaceSource) bool {
+	return slices.ContainsFunc(incoming, func(src types.WorkspaceSource) bool {
+		return src.Type == types.WorkspaceSourceTypeLocalDir && src.RunnerID != nil &&
+			!slices.ContainsFunc(stored, func(old types.WorkspaceSource) bool {
+				return old.Type == types.WorkspaceSourceTypeLocalDir && old.RunnerID != nil && *old.RunnerID == *src.RunnerID &&
+					old.Path == src.Path && old.Target == src.Target && old.Writable == src.Writable
+			})
+	})
+}
+
 // runnerStateStamper projects runner_state and runner_name onto every bound folder of a workspace read,
 // from the runner row as it stands now; a runner whose row is gone has no name. Each runner is read once
 // per request; a read that fails leaves both fields unset.

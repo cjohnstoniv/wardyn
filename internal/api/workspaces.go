@@ -719,6 +719,12 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceSSHSourcesNotReady, msg)
 		return
 	}
+	// An operator editing a member's workspace binds no folder to the member's runner: only a binding the
+	// workspace already has, unchanged, passes.
+	if principal := principalFromRequest(r); (ws.OwnedBy == "" || principal != ws.OwnedBy) && newBinding(ws.Sources, req.Sources) {
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceSourcesNotAllowed, operatorRunnerIDMsg)
+		return
+	}
 	if s.refuseUserSources(w, r, ws.OwnedBy, req.Sources) {
 		return
 	}
