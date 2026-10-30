@@ -160,6 +160,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   and never logged or recorded.
 - macOS VMs: the runner reports the guest's posture (macOS version, SIP, Gatekeeper, profiles, MDM enrolment, the
   organisation CA) beside the Mac's own.
+- A Mac's MDM can now attest posture (`MDMManaged`, `DiskEncrypted`) and set `register` and `setup` limits (`MaxRuns`,
+  `TotalCPU`, `TotalMemoryGB`, `PerRunCPU`, `PerRunMemoryGB`) from the managed preferences profile, with no posture file to
+  push. `macos-vm prepare` sizes its VM from the per-run keys when the organisation has sent no limit.
+- A Mac now reports when its macOS base was prepared and its build. `macos-vm status` shows the base's age and this Mac's
+  macOS, and a new site-config setting, `macos_vm.max_base_age_days`, refuses macOS VM runs on a Mac whose base is older
+  (or whose runner reports no age).
+- `wardyn-runnerd macos-vm prepare --ipsw-url <https URL> --sha256 <hex>` builds the macOS base from an image on your own
+  mirror, which must answer HTTP Range requests, and never falls back to Apple. `MacOSVMImageURL` and `MacOSVMImageHash`
+  in the managed profile (or `macos_vm_image_url` and `macos_vm_image_sha256` in `runnerd.json`; the profile wins) set it for setup too.
+  With `--ipsw-url`, the hash is `--sha256` alone.
 
 ### Fixed
 

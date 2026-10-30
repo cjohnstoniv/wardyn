@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -85,7 +86,7 @@ func newMacOSVMCommand() *cobra.Command {
 	var cpu float64
 	var memGB int64
 	var keep, newImage bool
-	var ipsw, sha256 string
+	var ipsw, ipswURL, sha256 string
 	prepare := &cobra.Command{Use: "prepare", Short: "Build this Mac's macOS base image from Apple's restore image (hours; it continues in the background)", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			m, runnerID, err := open(cmd)
@@ -96,8 +97,16 @@ func newMacOSVMCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			err = m.startPrepare(cmd.Context(), prepareArgs{helper: m.helper, runnerID: runnerID, cpus: cpus, memoryMiB: memMiB, keepIPSW: keep, ipsw: ipsw, sha256: sha256, newImage: newImage})
+			imgURL, imgSHA, err := prepareMirror(cmd, ipsw, ipswURL, sha256)
+			if err != nil {
+				return err
+			}
+			err = m.startPrepare(cmd.Context(), prepareArgs{helper: m.helper, runnerID: runnerID, cpus: cpus, memoryMiB: memMiB, keepIPSW: keep, ipsw: ipsw, ipswURL: imgURL, sha256: imgSHA, newImage: newImage})
 			if errors.Is(err, errMacOSBaseReady) {
+				if imgURL != "" {
+					fmt.Fprintln(cmd.OutOrStdout(), "This Mac's macOS base is ready; nothing to prepare, and the mirror was not used. `--new-image` builds a new one, from the mirror's image.")
+					return nil
+				}
 				if ipsw != "" {
 					fmt.Fprintln(cmd.OutOrStdout(), "This Mac's macOS base is ready; nothing to prepare, and the --ipsw file was not used. `--new-image` builds a new one, from that file.")
 					return nil
@@ -115,7 +124,8 @@ func newMacOSVMCommand() *cobra.Command {
 	prepare.Flags().Int64Var(&memGB, "per-run-memory", 0, "the runner's per-run memory in GB (default: the limit its organisation last sent)")
 	prepare.Flags().BoolVar(&keep, "keep-ipsw", false, "keep Apple's restore image after the base is ready")
 	prepare.Flags().StringVar(&ipsw, "ipsw", "", "build from this macOS restore image (.ipsw) you downloaded instead of downloading Apple's; needs --sha256. With a ready base it does nothing (the file is not used) unless --new-image is given, which builds the new base from this file")
-	prepare.Flags().StringVar(&sha256, "sha256", "", "the SHA-256 (64 hex digits) the --ipsw file must have, from a source you trust; prepare checks a copy in its cache and refuses a file that differs, before anything uses it")
+	prepare.Flags().StringVar(&sha256, "sha256", "", "the SHA-256 (64 hex digits) the --ipsw file or the --ipsw-url image must have, from a source you trust; prepare checks a copy in its cache and refuses an image that differs, before anything uses it")
+	prepare.Flags().StringVar(&ipswURL, "ipsw-url", "", "download the restore image from this HTTPS mirror instead of Apple's; it must answer HTTP Range requests, and needs --sha256. Apple's image is never the fallback (default: the MacOSVMImageURL managed preference or macos_vm_image_url in runnerd.json)")
 	prepare.Flags().BoolVar(&newImage, "new-image", false, "build a new base from Apple's newest restore image (or the --ipsw file) even when one is ready, and swap it in")
 	remove := &cobra.Command{Use: "remove", Short: "Delete this Mac's macOS base images and download cache", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		m, _, err := open(cmd)
@@ -179,9 +189,11 @@ func serviceOrgArg() string {
 // macOSVMStatus is `macos-vm status`: its JSON (--json) and, with the unexported fields, its text. The
 // one-time setup code is never in it: only the path of the file that holds it.
 type macOSVMStatus struct {
-	State         string   `json:"state"` // the base's state
-	Phase         string   `json:"phase"` // prepare's last phase, "setup_by_hand" while macOS waits for it
-	Base          string   `json:"base"`  // the base's macOS
+	State         string   `json:"state"`                 // the base's state
+	Phase         string   `json:"phase"`                 // prepare's last phase, "setup_by_hand" while macOS waits for it
+	Base          string   `json:"base"`                  // the base's macOS
+	PreparedAt    string   `json:"prepared_at,omitempty"` // when the base was prepared, RFC 3339; a ready base only
+	HostOS        string   `json:"host_os,omitempty"`     // this Mac's macOS, beside the base's
 	Desktop       string   `json:"desktop"`
 	Harnesses     []string `json:"harnesses"`
 	Thermal       string   `json:"thermal"` // the helper's probe's, "" when it reports none
@@ -217,6 +229,7 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 		st.Error = cmp.Or(st.Error, perr.Error())
 	}
 	if c.Base.State == runnerwire.MacVMBaseReady {
+		st.PreparedAt, st.HostOS = c.Base.CreatedAt, macProductVersion()
 		st.Desktop, st.Harnesses, st.minCPUs, st.minMemoryMiB = cmp.Or(c.Desktop, "none"), append(st.Harnesses, c.Harnesses...), c.MinCPUs, c.MinMemoryMiB
 		st.withheld = selftestWithheld(m.layout.BaseDir(0))
 	}
@@ -248,11 +261,22 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 	return st, nil
 }
 
+// statusNow is the clock the base's age is read against (tests replace it).
+var statusNow = time.Now
+
 // writeText prints the status for a person.
 func (st macOSVMStatus) writeText(out io.Writer) {
 	fmt.Fprintf(out, "base: %s", st.State)
 	if st.Base != "" {
 		fmt.Fprintf(out, ", %s", st.Base)
+	}
+	if st.State == runnerwire.MacVMBaseReady {
+		if at, err := time.Parse(time.RFC3339, st.PreparedAt); err == nil {
+			fmt.Fprintf(out, ", prepared %s (%s)", at.Local().Format(time.DateOnly), daysAgo(calendarDays(at, statusNow())))
+		}
+		if st.HostOS != "" {
+			fmt.Fprintf(out, "; this Mac: macOS %s", st.HostOS)
+		}
 	}
 	if st.State == runnerwire.MacVMBasePreparing {
 		fmt.Fprintf(out, ", %d%%", st.progress)
@@ -326,4 +350,36 @@ func macOSVMDoctorStages() []doctor.Stage {
 		return []doctor.Stage{doctor.SkipStage("macos-vm", "macOS asked for setup by hand in the window \""+macOSVMSetupWindow+"\"; the one-time code is in "+p)}
 	}
 	return nil
+}
+
+// daysAgo is "1 day ago" for one and "<n> days ago" for every other count.
+func daysAgo(n int) string {
+	if n == 1 {
+		return "1 day ago"
+	}
+	return fmt.Sprintf("%d days ago", n)
+}
+
+// prepareMirror is the mirror prepare downloads from: the flags, else the profile or runnerd.json. A restore
+// image file named with --ipsw stands alone, and so does a mirror named with --ipsw-url: its hash is --sha256
+// or prepare refuses, never the profile's, which was pinned for another image.
+func prepareMirror(cmd *cobra.Command, ipsw, ipswURL, sha256 string) (url, hash string, err error) {
+	if ipsw != "" || cmd.Flags().Changed("ipsw-url") {
+		return ipswURL, sha256, nil
+	}
+	cfg, err := serveConfig(cmd, "")
+	if err != nil {
+		return "", "", err
+	}
+	return cfg.get("macos_vm_image_url"), cfg.get("macos_vm_image_sha256"), nil
+}
+
+// calendarDays is the days from the local date of from to the local date of to, never negative: a base
+// prepared yesterday evening is "1 day ago" this morning, the date the status line prints beside it.
+func calendarDays(from, to time.Time) int {
+	day := func(t time.Time) time.Time {
+		y, m, d := t.Local().Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+	}
+	return max(0, int(day(to).Sub(day(from)).Hours()/24))
 }

@@ -37,10 +37,10 @@ MC="${SRC}/wardyn-runnerd.mobileconfig"
 domain="$(sed -n 's/^const Domain = "\(.*\)"$/\1/p' "${REPO_ROOT}/internal/managedprefs/managedprefs.go")"
 [ -n "$domain" ] && [ "$(plist_get "$MC" 'd["PayloadContent"][0]["PayloadType"]')" = "$domain" ] || fail "the profile's payload type is not the domain internal/managedprefs names"
 grep -qx 'const prefsDomain = managedprefs.Domain' "${REPO_ROOT}/cmd/wardyn-runnerd/managed_prefs.go" || fail "runnerd does not read the domain internal/managedprefs names"
-# The keys: runnerconfig.go's managed: tags, and each key the CLI reads with managedprefs.Read.
-cli_keys="$(grep -ho 'managedprefs\.Domain, "[A-Za-z]*"' "${REPO_ROOT}"/cmd/wardyn/*.go | sed 's/.*"\([A-Za-z]*\)"$/\1/')"
+# The keys: runnerconfig.go's managed: tags, its lockSettingKey, and each key the CLI reads with managedprefs.Read.
+cli_keys="$(grep -ho 'managedprefs\.Domain, "[A-Za-z_]*"' "${REPO_ROOT}"/cmd/wardyn/*.go | sed 's/.*"\([A-Za-z_]*\)"$/\1/')"
 [ -n "$cli_keys" ] || fail "found no preference the CLI reads (the extractor is scanning nothing)"
-want_keys="$({ grep -ho 'managed: "[A-Za-z]*"' "${REPO_ROOT}"/cmd/wardyn-runnerd/runnerconfig.go | sed 's/.*"\([A-Za-z]*\)".*/\1/'; echo "$cli_keys"; } | sort -u | tr '\n' ' ')"
+want_keys="$({ grep -ho 'managed: "[A-Za-z_]*"' "${REPO_ROOT}"/cmd/wardyn-runnerd/runnerconfig.go | sed 's/.*"\([A-Za-z_]*\)".*/\1/'; grep -ho 'lockSettingKey = "[A-Za-z_]*"' "${REPO_ROOT}/cmd/wardyn-runnerd/runnerconfig.go" | sed 's/.*"\([A-Za-z_]*\)"$/\1/'; echo "$cli_keys"; } | sort -u | tr '\n' ' ')"
 have_keys="$(plist_get "$MC" '" ".join(sorted(k for k in d["PayloadContent"][0] if not k.startswith("Payload")))')"
 [ "$want_keys" = "$have_keys " ] || fail "the profile's keys ($have_keys) are not the preferences runnerconfig.go and the CLI read ($want_keys)"
 

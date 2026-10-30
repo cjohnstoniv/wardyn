@@ -344,6 +344,11 @@ type MacVMBase struct {
 	// never edited. EditRecheck is the last edit's recheck: MacVMEditRecheck*, absent before one.
 	EditedAt    *time.Time `json:"edited_at,omitempty"`
 	EditRecheck string     `json:"edit_recheck,omitempty"`
+	// CreatedAt is when the base was prepared, RFC 3339 in UTC; absent from a runner that predates it, or
+	// when there is no base.
+	CreatedAt string `json:"created_at,omitempty"`
+	// BuildVersion is the base's macOS build, e.g. "25G83", or absent.
+	BuildVersion string `json:"build_version,omitempty"`
 }
 
 // MacVMGuest is a macOS base's guest posture. Each field is absent when its read did not say; an unknown

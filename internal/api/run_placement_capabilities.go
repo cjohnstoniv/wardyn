@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -346,6 +347,13 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 	if p != types.PlacementLocal || (!demands.IdlePause && !demands.LinuxVM && !demands.MacOSVM) {
 		return nil
 	}
+	var baseLimit macOSBaseLimit // read once for the whole pool, not once per runner
+	if demands.MacOSVM {
+		var err error
+		if baseLimit, err = s.macOSBaseLimitOf(ctx); err != nil {
+			return runServerError("read macOS VM capability", err)
+		}
+	}
 	for _, id := range runners {
 		pc, err := s.placementCapabilities(ctx, types.PlacementLocal, id)
 		var ref *placement.Refusal
@@ -357,7 +365,7 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 			ref = pc.unsupportedDemand(demands)
 			if ref == nil && demands.MacOSVM {
 				var rerr error
-				if ref, rerr = s.macOSVMRefusal(ctx, id, pc, ask, place.pooled && len(runners) > 1); rerr != nil {
+				if ref, rerr = s.macOSVMRefusal(ctx, id, pc, ask, place.pooled && len(runners) > 1, baseLimit); rerr != nil {
 					return runServerError("read macOS VM capability", rerr)
 				}
 			}
@@ -441,6 +449,46 @@ const (
 	macOSPoolCannotTake = "Every runner in this pool must be able to take a macOS VM, and at least one can't right now. Try again later, or choose another pool."
 )
 
+// macOSBaseLimit is the organisation's maximum macOS base age (site config macos_vm.max_base_age_days) and the
+// clock to read it against. The zero value sets no maximum.
+type macOSBaseLimit struct {
+	MaxDays int
+	Now     time.Time
+}
+
+// macOSBaseLimitOf is the organisation's maximum base age now, none when the site config sets none.
+func (s *Server) macOSBaseLimitOf(ctx context.Context) (macOSBaseLimit, error) {
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return macOSBaseLimit{}, err
+	}
+	if sc.MacOSVM == nil || sc.MacOSVM.MaxBaseAgeDays <= 0 {
+		return macOSBaseLimit{}, nil
+	}
+	return macOSBaseLimit{MaxDays: sc.MacOSVM.MaxBaseAgeDays, Now: time.Now()}, nil
+}
+
+// macOSPoolBaseTooOld is what a pool of several Macs is told when a base is too old, or reports no age.
+const macOSPoolBaseTooOld = "Every runner in this pool must have a macOS base prepared in the last %s, and at least one doesn't. Choose another pool, or ask the Mac's owner to prepare a new base."
+
+// macOSBaseRefusal is the refusal of a ready base under limit's maximum age, with the base's age in days; nil
+// when no maximum is set or the base is young enough. A runner that reports no age (days 0) is refused: with
+// a maximum set, an age nobody can read is not a young one.
+func macOSBaseRefusal(name string, b runnerwire.MacVMBase, limit []macOSBaseLimit) (ref *placement.Refusal, days int) {
+	if len(limit) == 0 || limit[0].MaxDays <= 0 {
+		return nil, 0
+	}
+	maxDays := limit[0].MaxDays
+	created, err := time.Parse(time.RFC3339, b.CreatedAt)
+	if err != nil {
+		return macOSRefusal("machine_kind", name+" doesn't report its macOS base's age, and your organisation sets a maximum. Update the runner."), 0
+	}
+	if days = max(0, int(limit[0].Now.Sub(created).Hours()/24)); days <= maxDays {
+		return nil, days
+	}
+	return macOSRefusal("machine_kind", fmt.Sprintf("%s's macOS base was prepared %s, and your organisation allows %d. Its owner runs `wardyn-runnerd macos-vm prepare --new-image`.", name, daysAgoText(days), maxDays)), days
+}
+
 // macRunnerName is the name the console shows for a runner (runnerLabel in nav-copy.ts): its own, else
 // "Runner" and the first 8 characters of its id.
 func macRunnerName(rn types.Runner) string {
@@ -460,8 +508,9 @@ func macOSRefusal(field, detail string) *placement.Refusal {
 // macOSVMOffer turns a runner's last caps, the managed-Mac gate and the macOS VMs already running on it
 // into one answer. haveCaps is false for a runner that never sent caps; live is the macos_vm runs the
 // org counts on it, a best-effort guard (the runner's own ledger is the authority); operator is whether
-// the asker is a security operator, who is told the command that fixes the trust refusal.
-func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int, operator bool) macOSOffer {
+// the asker is a security operator, who is told the command that fixes the trust refusal. limit, when given,
+// is the organisation's maximum base age: an older base, or one whose runner reports no age, is refused.
+func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int, operator bool, limit ...macOSBaseLimit) macOSOffer {
 	mc := caps.MacOSVM
 	if !haveCaps || mc == nil {
 		return macOSOffer{Refusal: macOSRefusal("machine_kind", remote.MacOSVMNotOffered(macRunnerName(rn))), Why: client.MacOSVMWhyNotOffered, Pool: macOSPoolNotOffered}
@@ -482,6 +531,7 @@ func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int
 	}
 	out.Evidence = evidence
 	name := macRunnerName(rn)
+	ageRefusal, days := macOSBaseRefusal(name, mc.Base, limit)
 	switch {
 	case mc.Base.State == runnerwire.MacVMBasePreparing:
 		out.Refusal, out.Why = macOSRefusal("machine_kind", fmt.Sprintf("%s is still preparing macOS (%d%%).", name, mc.Base.Progress)), client.MacOSVMWhyPreparing
@@ -491,6 +541,8 @@ func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int
 			detail = fmt.Sprintf("%s has no macOS base image ready yet: %s.", name, mc.Base.Error)
 		}
 		out.Refusal, out.Why = macOSRefusal("machine_kind", detail), client.MacOSVMWhyNoBase
+	case ageRefusal != nil:
+		out.Refusal, out.Why, out.Have, out.Need = ageRefusal, client.MacOSVMWhyBaseTooOld, days, limit[0].MaxDays
 	case live >= mc.Max && mc.Max >= 2:
 		out.Refusal, out.Why = macOSRefusal("machine_kind", name+" already runs 2 macOS VMs, the most Apple's licence allows."), client.MacOSVMWhyAtLimit
 	case live >= mc.Max:
@@ -498,6 +550,9 @@ func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int
 	}
 	if out.Refusal != nil {
 		out.Pool = macOSPoolCannotTake
+		if out.Why == client.MacOSVMWhyBaseTooOld {
+			out.Pool = fmt.Sprintf(macOSPoolBaseTooOld, daysText(out.Need))
+		}
 	}
 	out.Offered = out.Refusal == nil
 	return out
@@ -553,7 +608,7 @@ func macOSHostGate(rn types.Runner, operator bool) (evidence []string, refusal *
 
 // macOSVMRefusal is the refusal (placement_capability, or runner_posture_unmet from the gate) of a macOS VM run on runner id, or nil when the
 // Mac offers it and the run's harnesses and size fit what the Mac's base can give.
-func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementCaps, ask macOSVMAsk, pool bool) (*placement.Refusal, error) {
+func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementCaps, ask macOSVMAsk, pool bool, limit macOSBaseLimit) (*placement.Refusal, error) {
 	var caps runnerwire.Caps
 	var haveCaps bool
 	if rc, ok := pc.impl.(runnerCaps); ok {
@@ -579,7 +634,7 @@ func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementC
 		}
 		live = held[id]
 	}
-	offer := macOSVMOffer(rn, caps, haveCaps, live, s.isSecurityOperator(ctx))
+	offer := macOSVMOffer(rn, caps, haveCaps, live, s.isSecurityOperator(ctx), limit)
 	if !offer.Offered {
 		if pool && offer.Pool != "" {
 			return macOSRefusal(offer.Refusal.Field, offer.Pool), nil
@@ -859,3 +914,14 @@ func (c sizeCause) sentence(group []sizeLow) string {
 	}
 	return fmt.Sprintf("%s, the default size %s. Ask for at least the minimum in the run's `resources`, or set it on Review.", gets, c.name)
 }
+
+// daysText is "1 day" for one and "<n> days" for every other count.
+func daysText(n int) string {
+	if n == 1 {
+		return "1 day"
+	}
+	return fmt.Sprintf("%d days", n)
+}
+
+// daysAgoText is "1 day ago" for one and "<n> days ago" for every other count.
+func daysAgoText(n int) string { return daysText(n) + " ago" }

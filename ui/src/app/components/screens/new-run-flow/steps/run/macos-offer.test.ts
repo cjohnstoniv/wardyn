@@ -34,6 +34,17 @@ describe("macOSOfferOf", () => {
     expect(text(one({ why: "no_base", error: "disk full" }))).toBe("mac-studio-07 has no macOS base image ready yet: disk full.");
     expect(text(one({ why: "no_posture" }))).toContain("mac-studio-07 has no MDM posture file");
   });
+  it("a base too old reads MAC-P14 for one Mac, singular at one day, and MAC-P16 when the runner reports no age", () => {
+    const tenant = "Its owner runs `wardyn-runnerd macos-vm prepare --new-image`.";
+    expect(text(one({ why: "base_too_old", have: 41, need: 30 }))).toBe(`mac-studio-07's macOS base was prepared 41 days ago, and your organisation allows 30. ${tenant}`);
+    expect(text(one({ why: "base_too_old", have: 1, need: 0.5 }))).toBe(`mac-studio-07's macOS base was prepared 1 day ago, and your organisation allows 0.5. ${tenant}`);
+    expect(text(one({ why: "base_too_old", need: 30 }))).toBe("mac-studio-07 doesn't report its macOS base's age, and your organisation sets a maximum. Update the runner.");
+  });
+  it("a base too old among several Macs reads MAC-P15, singular at a maximum of one day", () => {
+    const old = (need: number) => [refusal({ why: "base_too_old", runner: "mac-1", have: 5, need }), refusal({ why: "at_limit", runner: "mac-2" })];
+    expect(text({ offered: false, refusals: old(30) })).toBe("Every runner in this pool must have a macOS base prepared in the last 30 days, and at least one doesn't. Choose another pool, or ask the Mac's owner to prepare a new base.");
+    expect(text({ offered: false, refusals: old(1) })).toContain("prepared in the last 1 day, and at least one doesn't.");
+  });
   it("a Mac that refused itself shows the canon line for its reason, with the numbers, and never its own text", () => {
     const refused = (extra: Record<string, unknown>) => one({ why: "runner_refused" as PoolMacOSVMRefusal["why"], detail: "PLANTED runner text", ...extra } as Partial<PoolMacOSVMRefusal>);
     expect(text(refused({ reason: "below_min_memory", have: 6, need: 8 }))).toBe(
