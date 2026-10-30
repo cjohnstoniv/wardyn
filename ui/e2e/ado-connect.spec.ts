@@ -150,7 +150,7 @@ test.describe("the person's Azure DevOps card, a row that creates a token for ea
   test("permissions missing: the card names the administrator's step, and Connect signs in again once it is done", async ({ page }) => {
     await spliceAccess(page, () => ({ token_mode: "minted_pat", state: "expired_signin", cause: "permissions_missing", source: "org" }));
     await openAccountCard(page);
-    await expect(page.getByText(ADO_PAT.MEMBER_NEEDS_ADMIN)).toBeVisible();
+    await expect(page.getByText(ADO_PAT.MEMBER_NEEDS_ADMIN, { exact: true })).toBeVisible();
     await expect(page.getByText(ADO_PAT.SIGN_IN_AGAIN_BODY)).toHaveCount(0);
     await expect(page.getByRole("button", { name: ADO_PAT.MEMBER_CONNECT })).toBeVisible();
   });
