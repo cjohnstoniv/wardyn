@@ -98,6 +98,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"run_entry.go:admitRunEntry":                               {2, "authz-only: the interactive entry rule an attach ticket and a takeover share"},
 	"run_entry.go:getRunForEntry":                              {1, "authz-only: run reach"},
 	"run_limit_sources.go:limitSources":                        {1, "authz-only: a display of where limits came from"},
+	"run_macos_base.go:macOSBaseDeniedRefusal":                 {1, "D: placement; the run it admits meets the boundary at resolve and dispatch"},
 	"run_overrides_apply.go:applySecretOverrides":              {2, "R: a removal only narrows; the spec meets the boundary at resolve"},
 	"run_owner_authority.go:ownerCapabilityRefusal":            {1, "V: the owner re-check at revive, beside the boundary floor check"},
 	"run_placement_capabilities.go:macOSVMRefusal":             {1, "authz-only: a refusal's wording; the runner id and trust command go to a security operator only, and every caller is refused alike"},

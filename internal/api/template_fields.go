@@ -204,6 +204,8 @@ var templateRequestRules = []TemplateFieldRule{
 		"A folder on one person's computer is named at each launch; a template cannot know where it is."),
 	excludedField("machine_kind", templateExcludeLaunch,
 		"The kind of sandbox is chosen at each launch in this release; a template never prefills a Linux VM."),
+	excludedField("macos_base", templateExcludeLaunch,
+		"A macOS VM's base is chosen at each launch, with the kind of sandbox."),
 	excludedField("max_wait_sec", templateExcludeLaunch,
 		"How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."),
 	excludedField("start_at", templateExcludeLaunch,

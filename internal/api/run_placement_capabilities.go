@@ -353,6 +353,10 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 		if baseLimit, err = s.macOSBaseLimitOf(ctx); err != nil {
 			return runServerError("read macOS VM capability", err)
 		}
+		if f := s.macOSBaseDeniedRefusal(ctx, req.MacOSBase, ceiling); f != nil {
+			return f
+		}
+		baseLimit.Base = req.MacOSBase
 	}
 	for _, id := range runners {
 		pc, err := s.placementCapabilities(ctx, types.PlacementLocal, id)
@@ -447,6 +451,8 @@ const (
 type macOSBaseLimit struct {
 	MaxDays int
 	Now     time.Time
+	// Base is the base the run picked (CreateRunRequest.MacOSBase), whose age is the one read; "" is Standard.
+	Base string
 }
 
 // macOSBaseLimitOf is the organisation's maximum base age now, none when the site config sets none.
@@ -524,7 +530,9 @@ func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int
 	}
 	out.Evidence = evidence
 	name := macRunnerName(rn)
-	ageRefusal, days := macOSBaseRefusal(name, mc.Base, limit)
+	base, harnesses, known := macOSChosenBase(mc, limit)
+	out.Harnesses = harnesses
+	ageRefusal, days := macOSBaseRefusal(name, base, limit)
 	switch {
 	case mc.Base.State == runnerwire.MacVMBasePreparing:
 		out.Refusal, out.Why = macOSRefusal("machine_kind", fmt.Sprintf("%s is still preparing macOS (%d%%).", name, mc.Base.Progress)), client.MacOSVMWhyPreparing
@@ -534,6 +542,8 @@ func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int
 			detail = fmt.Sprintf("%s has no macOS base image ready yet: %s.", name, mc.Base.Error)
 		}
 		out.Refusal, out.Why = macOSRefusal("machine_kind", detail), client.MacOSVMWhyNoBase
+	case !known:
+		out.Refusal, out.Why = macOSBaseNotFound(limit[0].Base), client.MacOSVMWhyNoBase
 	case ageRefusal != nil:
 		out.Refusal, out.Why, out.Have, out.Need = ageRefusal, client.MacOSVMWhyBaseTooOld, days, limit[0].MaxDays
 	case live >= mc.Max && mc.Max >= 2:
@@ -545,6 +555,9 @@ func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int
 		out.Pool = macOSPoolCannotTake
 		if out.Why == client.MacOSVMWhyBaseTooOld {
 			out.Pool = fmt.Sprintf(macOSPoolBaseTooOld, daysText(out.Need))
+		}
+		if !known {
+			out.Pool = "" // MAC-B08 says it of the pool already
 		}
 	}
 	out.Offered = out.Refusal == nil
@@ -634,7 +647,9 @@ func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementC
 		}
 		return offer.Refusal, nil
 	}
-	return macOSVMFit(caps.MacOSVM, rn, ask, pool), nil
+	fit := *caps.MacOSVM
+	fit.Harnesses = offer.Harnesses // the picked base's
+	return macOSVMFit(&fit, rn, ask, pool), nil
 }
 
 // macOSVMFit refuses a run that shares a folder on a runner that cannot, whose harness the Mac's base

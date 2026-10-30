@@ -173,7 +173,7 @@ type AgentRun struct {
 	// field), linux_vm or macos_vm. Written once at create.
 	MachineKind MachineKind `json:"machine_kind,omitempty"`
 	// VMMachine is the virtual hardware a VM run was started with, recorded after its create; nil
-	// for a container.
+	// for a container. A macOS VM run that picked a base holds only its MacOSBase until then.
 	VMMachine *VMMachine `json:"vm_machine,omitempty"`
 	// RecordingLevel is the level the run is recorded at, resolved once at dispatch with NotRecorded
 	// (RecordingChoice); empty for a run dispatched before the level existed, which reads as terminal.
