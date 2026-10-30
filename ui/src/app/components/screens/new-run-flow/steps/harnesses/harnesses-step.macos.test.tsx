@@ -6,7 +6,7 @@
 // The Harnesses step for a macOS VM (mock M-N1 frames 9a to 9c).
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { NR_HARNESSES } from "../../../../wardyn/copy/new-run/harnesses";
 import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
@@ -51,9 +51,9 @@ describe("Harnesses step: macOS VM", () => {
   it("frame 9a: the picker keeps Your own tools and disables the harnesses the base cannot serve", async () => {
     show({ ...MACOS, tools: [{ id: "none", kind: "harness" }] }, OFFER("mac-studio-07"));
     const select = await picker();
-    const options = within(select).getAllByRole("option") as HTMLOptionElement[];
-    const by = (text: string) => options.find((o) => o.textContent === text) as HTMLOptionElement;
-    expect(by("Your own tools")).toBeEnabled();
+    // The roster loads after the picker renders, so read the options once they are there.
+    const by = (text: string) => (within(select).getAllByRole("option") as HTMLOptionElement[]).find((o) => o.textContent === text) as HTMLOptionElement;
+    await waitFor(() => expect(by("Your own tools")).toBeEnabled());
     expect(by("Claude Code")).toBeDisabled();
     expect(by("Codex CLI")).toBeDisabled();
   });
