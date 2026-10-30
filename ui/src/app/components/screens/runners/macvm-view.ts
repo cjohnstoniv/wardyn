@@ -5,7 +5,7 @@
 
 // What a Mac runner's macOS VM caps say, as the runner card badge (mock M-R2) and the drawer section
 // (mock M-R1) show it. One function decides "offered", so the two never tell different stories.
-import { shortDate } from "../../../lib/format";
+import { shortDate, shortTime } from "../../../lib/format";
 import type { MacVMBase, MacVMCaps, MacVMGuest } from "../../../lib/types/runner-macvm";
 import type { RunnerAmounts } from "../../../lib/types/runners";
 import { MACVM_K, MACVM_P } from "../../wardyn/copy/runner-macvm";
@@ -58,9 +58,8 @@ export function baseAgeOf(base: MacVMBase, maxDays: number | undefined, now = Da
 export const baseTooOld = (base: MacVMBase, maxDays: number | undefined, now = Date.now()): boolean =>
   base.state === "ready" && !!maxDays && maxDays > 0 && (baseAgeOf(base, maxDays, now)?.tooOld ?? true);
 
-/** "3 Nov, 14:20": the day and the time the base was last edited. */
-export const editedAtText = (iso: string): string =>
-  `${shortDate(iso)}, ${new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })}`;
+/** "3 Nov, 2:20 PM": the day and the time the base was last edited, in the reader's own clock style (lib/format owns the locale calls). */
+export const editedAtText = (iso: string): string => `${shortDate(iso)}, ${shortTime(iso)}`;
 
 /** The guest posture rows the runner read, label and value; a field it did not read, or one a newer runner sends in another word, is left out. */
 export function postureRows(g: MacVMGuest | undefined): [string, string][] {

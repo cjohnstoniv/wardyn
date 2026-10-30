@@ -41,7 +41,8 @@ const DOCKER: MeDrive = { ...base, id: "d-docker", name: "scratch-2025", backend
 const CLUSTER: MeDrive = { ...base, id: "d-pvc", name: "team-datasets", backend: "k8s_pvc", target: "/home/agent/drives/datasets", owned: false };
 const OFFER: MacOSOffer = { ok: true, guestOS: "macOS 26.6.2 (25G83)", minCPUs: 4, minMemoryMiB: 8192, harnesses: ["none"], runner: MAC };
 const MACOS: RunIntent = { shape: "environment", experience: "interactive", machine_kind: "macos_vm" };
-const OWN_MAC = { id: "r-mac", name: MAC, macos_vm: { max: 2, base: { state: "ready" } } };
+const OWN_MAC = { id: "r-mac", name: MAC, macos_vm: { max: 2, disk_drives: true, base: { state: "ready" } } };
+const announce = vi.fn();
 
 let drives: MeDrive[];
 let create: MemberDriveCreate | undefined;
@@ -76,6 +77,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   wfetchMock.mockReset();
+  announce.mockReset();
 });
 
 function Seed({ intent }: { intent: RunIntent }) {
@@ -86,7 +88,7 @@ function Seed({ intent }: { intent: RunIntent }) {
 function show(intent: RunIntent = MACOS) {
   render(
     <MemoryRouter>
-      <AnnounceContext.Provider value={vi.fn()}>
+      <AnnounceContext.Provider value={announce}>
         <MacOSOfferContext.Provider value={offer}>
           <NewRunDraftProvider owner="alice">
             <Seed intent={intent} />
@@ -123,11 +125,44 @@ describe("the picker of a macOS run", () => {
     expect(radio(DOCKER.name)).toBeEnabled();
     expect(within(top()).queryByText(MAC_DRIVES.D03)).toBeNull();
   });
+  it("the collapsed row of an attached disk says it is stored on the Mac, as a second line (MAC-D01)", async () => {
+    show({ ...MACOS, drives: [{ drive_id: DISK.id }] });
+    const card = await screen.findByTestId("nr-attach-card");
+    expect(card.querySelector("button[aria-expanded]")).toHaveAttribute("aria-expanded", "false");
+    const line = within(card).getByText(`${NR_FILES.STORED_ON}: ${MAC_DRIVES.D01(MAC)}`);
+    expect(line).toBeInTheDocument();
+    // It wraps at its spaces and is never cut with an ellipsis, so the Mac's name is not lost on a phone.
+    expect(line.className).toContain("whitespace-normal");
+    expect(line.className).not.toContain("truncate");
+    expect(line).toHaveAttribute("title", MAC_DRIVES.D01(MAC));
+  });
+  it("a drive's name wraps at words, is cut rather than split, carries its full name, and gives its room to the name on a phone", async () => {
+    show({ ...MACOS, drives: [{ drive_id: DISK.id }] });
+    const card = await screen.findByTestId("nr-attach-card");
+    const name = within(card).getByText(DISK.name);
+    expect(name).toHaveAttribute("title", DISK.name);
+    expect(name.className).toContain("text-ellipsis");
+    expect(name.className).not.toContain("anywhere");
+    expect(card.querySelector("button[aria-expanded] > span[aria-hidden]")?.className).toContain("max-[520px]:hidden");
+  });
   it("the attached disk's card says where it is stored (MAC-D01)", async () => {
     show({ ...MACOS, drives: [{ drive_id: DISK.id }] });
     const card = await screen.findByTestId("nr-attach-card");
     await userEvent.click(card.querySelector<HTMLElement>("button[aria-expanded]")!);
     expect(await screen.findByText(MAC_DRIVES.D01(MAC))).toBeInTheDocument();
+  });
+});
+
+describe("the Main drive card (MAC-D19)", () => {
+  it("a macOS run describes the VM's own disk, not /home/agent", async () => {
+    show();
+    expect(await screen.findByText(MAC_DRIVES.D19)).toBeInTheDocument();
+    expect(screen.queryByText(NR_FILES.MAIN_BODY)).toBeNull();
+  });
+  it("a container run keeps today's description", async () => {
+    show({ shape: "environment", experience: "interactive" });
+    expect(await screen.findByText(NR_FILES.MAIN_BODY)).toBeInTheDocument();
+    expect(screen.queryByText(MAC_DRIVES.D19)).toBeNull();
   });
 });
 
@@ -157,15 +192,26 @@ describe("creating a drive for a macOS run (MAC-D02)", () => {
     await openChoose();
     expect(within(top()).queryByRole("button", { name: NR_FILES.CREATE_USER_DRIVE })).toBeNull();
   });
+  it("is not offered while the person's Mac of that name cannot keep disk drives", async () => {
+    runners = [{ ...OWN_MAC, macos_vm: { max: 2, base: { state: "ready" } } }];
+    await openChoose();
+    expect(within(top()).queryByRole("button", { name: NR_FILES.CREATE_USER_DRIVE })).toBeNull();
+  });
   it("is not offered in a pool of several Macs, which names none", async () => {
     offer = { ...OFFER, runner: undefined };
     await openChoose();
     expect(within(top()).queryByRole("button", { name: NR_FILES.CREATE_USER_DRIVE })).toBeNull();
   });
-  it("a container run creates as before: no runner, today's intro", async () => {
+  it("says how many drives the person has of how many, under the field", async () => {
+    await openChoose();
+    await userEvent.click(await within(top()).findByRole("button", { name: NR_FILES.CREATE_USER_DRIVE }));
+    expect(within(top()).getByText(NR_FILES.CREATE_LIMIT(CREATE_ALLOWED.count, CREATE_ALLOWED.limit))).toBeInTheDocument();
+  });
+  it("a container run creates as before: no runner, today's intro, no count", async () => {
     await openChoose({ shape: "environment", experience: "interactive" });
     await userEvent.click(await within(top()).findByRole("button", { name: NR_FILES.CREATE_USER_DRIVE }));
     expect(within(top()).getByText(NR_FILES.CREATE_INTRO)).toBeInTheDocument();
+    expect(within(top()).queryByText(NR_FILES.CREATE_LIMIT(CREATE_ALLOWED.count, CREATE_ALLOWED.limit))).toBeNull();
     await userEvent.type(within(top()).getByLabelText(NR_FILES.DRIVE_NAME), "Case notes{Enter}");
     await waitFor(() => expect(posts()).toHaveLength(1));
     expect(JSON.parse(posts()[0][1].body)).toEqual({ name: "Case notes" });
@@ -174,7 +220,7 @@ describe("creating a drive for a macOS run (MAC-D02)", () => {
 
 describe("deleting a disk drive (MAC-D10, D11, D12)", () => {
   const confirmDelete = async () => {
-    await userEvent.click(within(screen.getByTestId("nr-own-drives")).getAllByRole("button", { name: NR_FILES.DELETE_DRIVE })[0]);
+    await userEvent.click(dialogs()[0].querySelector<HTMLElement>("[data-own-delete]")!);
     await userEvent.click(within(top()).getByRole("button", { name: NR_FILES.DELETE_DRIVE }));
   };
   it("a Mac that is offline: the server's sentence stays up until the person closes it", async () => {
@@ -185,12 +231,15 @@ describe("deleting a disk drive (MAC-D10, D11, D12)", () => {
     expect(within(top()).queryByRole("button", { name: NR_FILES.DELETE_DRIVE })).toBeNull();
     await userEvent.click(within(top()).getByRole("button", { name: NR_SHARED.CLOSE_DIALOG }));
     await waitFor(() => expect(dialogs()).toHaveLength(1));
+    // The live Notice spoke for it: no "deleted" on top.
+    expect(announce).not.toHaveBeenCalledWith(NR_FILES.DRIVE_DELETED(DISK.name));
   });
   it("a Mac no longer registered: only the record goes, and the sentence says so", async () => {
     del = () => json({ reason: "member_drive_record_only", message: DRIVE_REFUSAL.MEMBER_RECORD_ONLY("old-mac-mini") }, 200);
     await openChoose();
     await confirmDelete();
     expect(await within(top()).findByText(DRIVE_REFUSAL.MEMBER_RECORD_ONLY("old-mac-mini"))).toBeInTheDocument();
+    expect(announce).not.toHaveBeenCalledWith(NR_FILES.DRIVE_DELETED(DISK.name));
   });
   it("a drive in a run on its Mac is refused with the server's sentence, and the confirm stays", async () => {
     del = () => json({ error: DRIVE_REFUSAL.MEMBER_IN_RUN_ON_MAC(DISK.name, MAC), reason: "member_drive_in_use" }, 409);
@@ -199,10 +248,11 @@ describe("deleting a disk drive (MAC-D10, D11, D12)", () => {
     expect(await within(top()).findByRole("alert")).toHaveTextContent(DRIVE_REFUSAL.MEMBER_IN_RUN_ON_MAC(DISK.name, MAC));
     expect(within(top()).getByRole("button", { name: NR_FILES.DELETE_DRIVE })).toBeEnabled();
   });
-  it("an ordinary delete (204) closes the confirm at once", async () => {
+  it("an ordinary delete (204) closes the confirm at once, and is announced", async () => {
     await openChoose();
     await confirmDelete();
     await waitFor(() => expect(dialogs()).toHaveLength(1));
+    expect(announce).toHaveBeenCalledWith(NR_FILES.DRIVE_DELETED(DISK.name));
   });
 });
 

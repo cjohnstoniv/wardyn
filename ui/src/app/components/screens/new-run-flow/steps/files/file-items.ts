@@ -84,6 +84,8 @@ const BACKEND: Record<Exclude<MeDrive["backend"], "mac_disk">, string> = {
 };
 const SOURCE: Record<MeDrive["source"], string> = { personal: NR_FILES.SOURCE_PERSONAL, team: NR_FILES.SOURCE_TEAM, organisation: NR_FILES.SOURCE_ORG };
 
+const macLine = (d?: MeDrive): string | undefined => (d?.backend === "mac_disk" && d.mac ? MAC_DRIVES.D01(d.mac) : undefined);
+
 /** The chips a drive is stored on: where it comes from, then its storage. */
 export const driveChips = (d: MeDrive): string[] =>
   // A disk drive names its Mac; with no name to give (the row is gone) it says only where it comes from.
@@ -111,6 +113,8 @@ export interface FileItem {
   /** The request may place it: a repository its workspace clones alone, or a workspace's one folder. */
   pathEditable: boolean;
   storedOn: string[];
+  /** MAC-D01, a disk kept on a Mac: the collapsed row says it too (board J4), as a second line under the path. */
+  onMac?: string;
   hostPath?: string;
   starts: boolean;
   /** The run can start here. A workspace start with no repository opens its first folder, so no other folder can be one. */
@@ -175,7 +179,7 @@ export function fileItems(intent: RunIntent, src: ItemSources): FileItem[] {
       sharedWith: driveSharedWith(legacy),
       path: legacy?.target ?? src.attachments.find((a) => a.kind === "drive" && !a.drive_id)?.target,
       readOnly: intent.drive.read_only === true || legacy?.writable === false, locked: legacy?.writable === false, pathEditable: false,
-      storedOn: legacy ? driveChips(legacy) : [], starts: f?.attachment === START_FOLDER_DRIVE, canStart: true, driveId: legacy?.id,
+      storedOn: legacy ? driveChips(legacy) : [], onMac: macLine(legacy), starts: f?.attachment === START_FOLDER_DRIVE, canStart: true, driveId: legacy?.id,
     });
   }
   for (const a of intent.drives ?? []) {
@@ -185,7 +189,7 @@ export function fileItems(intent: RunIntent, src: ItemSources): FileItem[] {
       key: `drive:${a.drive_id}`, kind: d ? driveKind(d) : "userDrive", name: d?.name ?? served?.name ?? a.drive_id,
       sharedWith: driveSharedWith(d),
       path: d?.target ?? served?.target, readOnly: a.read_only === true || d?.writable === false, locked: d?.writable === false,
-      pathEditable: false, storedOn: d ? driveChips(d) : [], starts: f?.drive_id === a.drive_id, canStart: true, driveId: a.drive_id,
+      pathEditable: false, storedOn: d ? driveChips(d) : [], onMac: macLine(d), starts: f?.drive_id === a.drive_id, canStart: true, driveId: a.drive_id,
     });
   }
   return out;

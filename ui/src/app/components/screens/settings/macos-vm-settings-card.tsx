@@ -19,6 +19,7 @@ import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { COMPONENTS_ADMIN as C } from "../../wardyn/copy/components-admin";
+import { FORM_ACTIONS } from "../../wardyn/copy/form-actions";
 import { MAC_SETTINGS as T } from "../../wardyn/copy/mac-settings";
 import { INLINE_ACTIONS } from "../../wardyn/form-actions";
 
@@ -151,7 +152,7 @@ export function MacOSVMSettingsCard() {
           <div className={`${INLINE_ACTIONS} pt-3`}>
             <Button onClick={() => void save()} disabled={saving || !dirty || invalid}>
               {saving ? <Loader2 className="size-4 animate-spin" /> : null}
-              {T.SAVE}
+              {FORM_ACTIONS.SAVE}
             </Button>
           </div>
         </div>

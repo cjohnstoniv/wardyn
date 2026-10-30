@@ -161,7 +161,7 @@ test.describe("New Run, Files: create and delete a person's drive", () => {
 
   test("Escape on the delete confirm closes only the confirm", async ({ page }) => {
     const { seen, dialog } = await withOwnDrive(page);
-    const open = dialog.getByTestId("nr-own-drives").getByRole("button", { name: NR_FILES.DELETE_DRIVE });
+    const open = dialog.locator("[data-own-delete]");
     await open.click();
     const confirm = page.getByRole("dialog", { name: NR_FILES.DELETE_CONFIRM(NAME) });
     await expect(confirm.getByRole("button", { name: NR_SHARED.CANCEL })).toBeFocused();
@@ -180,13 +180,13 @@ test.describe("New Run, Files: create and delete a person's drive", () => {
     await expect(card).toHaveCount(1);
 
     const again = await openUserDrives(page);
-    await again.getByTestId("nr-own-drives").getByRole("button", { name: NR_FILES.DELETE_DRIVE }).click();
+    await again.locator("[data-own-delete]").click();
     const confirm = page.getByRole("dialog", { name: NR_FILES.DELETE_CONFIRM(NAME) });
     await expect(confirm.getByRole("button", { name: NR_SHARED.CANCEL })).toBeFocused();
     await confirm.getByRole("button", { name: NR_FILES.DELETE_DRIVE }).click();
     await expect(confirm).toHaveCount(0);
     expect(seen.deletes).toEqual([DRIVE_ID]);
-    await expect(again.getByTestId("nr-own-drives")).toHaveCount(0);
+    await expect(again.locator("[data-own-delete]")).toHaveCount(0);
     await expect(again.getByRole("radio", { name: new RegExp(`^${NAME}`) })).toHaveCount(0);
     await again.getByRole("button", { name: NR_SHARED.CANCEL, exact: true }).click();
     await expect(card).toHaveCount(0);

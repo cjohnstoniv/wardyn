@@ -20,6 +20,8 @@ export const MAC_DRIVES = {
   D08: "On a Mac, a drive keeps only its own folder. Apps you install onto the drive survive; keychain sign-ins don't.",
   /** MAC-D09, the admin list's Mac column */
   D09: "Mac",
+  /** MAC-D19, the Main drive card's description on a macOS run */
+  D19: "The VM's own disk: macOS, your tools and /Users/agent. Every run has one.",
   /** MAC-D14, the keep control's label on a macOS run */
   D14: "Keep the work folder",
   /** MAC-D15, the admin list's storage-type column */

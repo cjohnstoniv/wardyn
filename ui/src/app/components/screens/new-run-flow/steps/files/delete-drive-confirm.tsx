@@ -24,7 +24,8 @@ export function DeleteDriveConfirm({ name, remove, onDeleted, onClose, returnFoc
   name: string;
   /** Destroys the drive; rejects with the server's refusal, and answers with a result when a disk drive was not removed in full. */
   remove: () => Promise<MyDriveDeleteResult | null>;
-  onDeleted: () => void;
+  /** Called once the delete was accepted, with the result when it was not a full delete (the Notice then speaks for itself). */
+  onDeleted: (result: MyDriveDeleteResult | null) => void;
   onClose: () => void;
   /** Where focus goes when the confirm closes: the control that opened it, or whatever stands in once that is gone. */
   returnFocusTo: () => HTMLElement | null;
@@ -43,7 +44,7 @@ export function DeleteDriveConfirm({ name, remove, onDeleted, onClose, returnFoc
     setFailure("");
     try {
       const result = await remove();
-      onDeleted();
+      onDeleted(result);
       if (result) {
         setPartial(result);
         setBusy(false);

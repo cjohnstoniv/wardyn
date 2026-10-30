@@ -139,6 +139,41 @@ export interface UserDrivesSnapshot {
   disabled: boolean;
 }
 
+// pkg/client.MemberDriveAdminItem — one person's drive in GET /drives/member (super admin). The registry's own
+// GET /drives never holds one: it lists only the drives an admin registered.
+export interface MemberDriveAdminItem {
+  id: string;
+  name: string;
+  owner: string;
+  backend: DriveBackend;
+  // The Mac a mac_disk drive's disk is kept on; absent on every other backend.
+  home_runner_id?: string;
+  size_mib?: number;
+  storage_class?: string;
+  // The Docker volume or claim name the drive stores into.
+  object: string;
+  created_at: string;
+  // True while a delete of the drive is in flight (a disk drive whose Mac is offline stays so until it returns).
+  deleting: boolean;
+}
+
+// pkg/client.MemberDriveList — one page, by owner then name, and how many there are in all.
+export interface MemberDriveList {
+  drives: MemberDriveAdminItem[];
+  total: number;
+}
+
+// pkg/client.MemberDriveDeleteResult — DELETE /drives/member/{id}'s answer. 202 when a disk drive's Mac is offline
+// and the delete finishes when it returns; 200 otherwise, with outcome deleted, already_absent or record_only.
+export interface MemberDriveDeleteResult {
+  drive: string;
+  drive_id: string;
+  owner: string;
+  backend: DriveBackend;
+  object: string;
+  outcome: string;
+}
+
 // userDriveRequest — the POST/PUT body. id/created_at/updated_at/created_by are
 // never sent; the server assigns provenance.
 export interface UserDriveInput {
@@ -294,6 +329,9 @@ export function backendsFor(runner: string): DriveBackend[] {
   return [];
 }
 
+// Rows per page of the people's drives list.
+export const MEMBER_DRIVES_PAGE = 50;
+
 export const drives = {
   // GET /api/v1/drives -> the whole picture. Nil Go slices encode as null, so
   // both lists are coerced and every caller can map over them.
@@ -335,6 +373,20 @@ export const drives = {
     const qs = confirmRehome ? "?confirm=rehome" : "";
     const res = await wfetch(`/drives/${encodeURIComponent(id)}${qs}`, { method: "PUT", asPerson: true, body: JSON.stringify(input) });
     return asJson<UserDrive>(res);
+  },
+
+  // GET /api/v1/drives/member?limit&offset: one page of every person's drives (super admin; a member's read is a 403).
+  async listMemberDrives(offset = 0, limit = MEMBER_DRIVES_PAGE): Promise<MemberDriveList> {
+    const res = await wfetch(`/drives/member?limit=${limit}&offset=${offset}`, { method: "GET" });
+    const body = await asJson<Partial<MemberDriveList>>(res);
+    return { drives: unwrapList<MemberDriveAdminItem>(body.drives), total: body.total ?? 0 };
+  },
+
+  // DELETE /api/v1/drives/member/{id}: a person's drive and its files. The server's refusal (409, 422, 503) reaches
+  // the caller as an HttpError with its own sentence.
+  async deleteMemberDrive(id: string): Promise<MemberDriveDeleteResult> {
+    const res = await wfetch(`/drives/member/${encodeURIComponent(id)}`, { method: "DELETE" });
+    return asJson<MemberDriveDeleteResult>(res);
   },
 
   // DELETE /api/v1/drives/{id} -> 204.

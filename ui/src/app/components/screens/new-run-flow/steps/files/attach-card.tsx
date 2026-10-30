@@ -57,9 +57,10 @@ export function AttachCard({ item, open, onToggle, onEdit, onRemove }: {
           className="flex min-w-0 items-center gap-[9px] rounded-[7px] p-1 text-left hover:bg-muted max-[760px]:[grid-area:toggle]"
         >
           <ChevronRight aria-hidden="true" className={cn("size-3.5 flex-none text-muted-foreground transition-transform", open && "rotate-90")} />
-          <KindTile kind={kind} />
+          <KindTile kind={kind} className="max-[520px]:hidden" />
           <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <strong className="font-semibold [overflow-wrap:anywhere]">{item.name}</strong>
+            {/* Wraps at spaces and hyphens only: a word wider than the room is cut with an ellipsis (the title has all of it), never split mid-word. */}
+            <strong title={item.name} className="min-w-0 max-w-full overflow-hidden text-ellipsis font-semibold [overflow-wrap:normal]">{item.name}</strong>
             <KindBadge kind={kind} />
             {item.starts && (
               <span className="inline-flex items-center whitespace-nowrap rounded-full border border-[color-mix(in_srgb,var(--success)_30%,var(--border))] bg-success-subtle px-[7px] py-[3px] text-[10px] font-semibold leading-[1.3] text-success">
@@ -72,6 +73,7 @@ export function AttachCard({ item, open, onToggle, onEdit, onRemove }: {
           {/* One line, cut with an ellipsis, until the phone layout lets it wrap after "/". */}
           {item.path && <PathText path={item.path} className="whitespace-nowrap [&_wbr]:hidden max-[520px]:whitespace-normal max-[520px]:[&_wbr]:inline" />}
           {item.sharedWith && <small className="block truncate text-xs">{item.sharedWith}</small>}
+          {item.onMac && <small title={item.onMac} className="block whitespace-normal text-xs">{`${NR_FILES.STORED_ON}: ${item.onMac}`}</small>}
         </span>
         <span className="min-w-0 whitespace-nowrap max-[760px]:justify-self-end max-[760px]:[grid-area:access]">{access}</span>
         <span className="flex items-center justify-end gap-0.5 max-[760px]:[grid-area:actions]">
