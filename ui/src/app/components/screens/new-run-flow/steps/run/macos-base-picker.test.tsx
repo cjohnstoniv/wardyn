@@ -6,11 +6,12 @@
 // The New Run macOS base picker (board J6, "Picker · several bases", "open, with reasons", "Only one base · no picker").
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { SCENARIO_POOLS } from "../../../../../lib/new-run-fixtures/scenarios/pools";
 import { shortDate } from "../../../../../lib/format";
+import { aheadByHours } from "../../../../../lib/test-clock";
 import type { SetupStatus } from "../../../../../lib/types/setup";
 import type { PoolMacOSBase } from "../../../../../lib/types/runner-pools";
 import { MAC_BASES } from "../../../../wardyn/copy/mac-bases";
@@ -27,12 +28,15 @@ afterEach(cleanup);
 
 const STATUS = { features: { macos_vms: true }, harnesses: [{ id: "claude-code", display: "Claude Code" }, { id: "none", display: "Your own tools" }] } as SetupStatus;
 const MAC: RunIntent = { shape: "agent_task", experience: "interactive", machine_kind: "macos_vm" };
+const STANDARD_AT = aheadByHours(-72);
+const XCODE_AT = aheadByHours(-70);
 const BASES: PoolMacOSBase[] = [
-  { name: "xcode-16", state: "ready", guest_os: "macOS 26.6.2", harnesses: ["claude-code", "none"], created_at: "2026-10-28T10:00:00Z" },
-  { name: "ios-sim", state: "missing", guest_os: "macOS 26.6.2", harnesses: ["none"], created_at: "2026-10-28T10:00:00Z" },
-  { name: "qa-profiles", state: "rebuilding", progress: 60, guest_os: "macOS 26.6.2", harnesses: ["claude-code"], created_at: "2026-10-27T10:00:00Z" },
+  { name: "xcode-16", state: "ready", guest_os: "macOS 26.6.2", harnesses: ["claude-code", "none"], created_at: XCODE_AT },
+  { name: "ios-sim", state: "missing", guest_os: "macOS 26.6.2", harnesses: ["none"], created_at: XCODE_AT },
+  { name: "qa-profiles", state: "rebuilding", progress: 60, guest_os: "macOS 26.6.2", harnesses: ["claude-code"], created_at: STANDARD_AT },
 ];
-const offer = (bases?: PoolMacOSBase[]): MacOSOffer => ({ ok: true, guestOS: "macOS 26.6.2 (25G83)", minCPUs: 4, minMemoryMiB: 8192, harnesses: ["none", "claude-code"], bases });
+const offer = (bases?: PoolMacOSBase[], over: Partial<Extract<MacOSOffer, { ok: true }>> = {}): MacOSOffer =>
+  ({ ok: true, guestOS: "macOS 26.6.2 (25G83)", minCPUs: 4, minMemoryMiB: 8192, harnesses: ["none", "claude-code"], bases, createdAt: STANDARD_AT, profile: "Platform", ...over });
 
 function Seeded({ intent, children }: { intent: RunIntent; children: React.ReactNode }) {
   const dispatch = useNewRunDispatch();
@@ -83,9 +87,9 @@ describe("picker · open, with reasons (J6 open)", () => {
   it("lists Standard then each base with its MAC-B03 line, and why a base cannot be picked", async () => {
     await show(MAC, offer(BASES));
     const group = await open();
-    const std = MAC_BASES.B03("macOS 26.6.2 (25G83)", undefined, "Claude Code, Your own tools");
+    const std = MAC_BASES.B03("macOS 26.6.2 (25G83)", shortDate(STANDARD_AT), "Claude Code, Your own tools");
     expect(within(group).getByText(std)).toBeInTheDocument();
-    expect(within(group).getByText(MAC_BASES.B03("macOS 26.6.2", shortDate("2026-10-28T10:00:00Z"), "Claude Code, Your own tools"))).toBeInTheDocument();
+    expect(within(group).getByText(MAC_BASES.B03("macOS 26.6.2", shortDate(XCODE_AT), "Claude Code, Your own tools"))).toBeInTheDocument();
     expect(within(group).getByText(MAC_BASES.B06)).toBeInTheDocument();
     expect(within(group).getByText(MAC_BASES.B07(60))).toBeInTheDocument();
     expect(radio(MAC_BASES.B04)).toBeEnabled();
@@ -112,6 +116,59 @@ describe("picker · open, with reasons (J6 open)", () => {
     await open();
     await userEvent.click(radio("qa-profiles"));
     expect(intentNow().macos_base).toBeUndefined();
+  });
+});
+
+// Board J6 "denied": the caller's own answer per base, with the profile's name from the same list (MAC-B05).
+describe("picker · not allowed by the profile (J6 open, denied)", () => {
+  it("greys a ready base the profile does not allow, with MAC-B05 ahead of any other reason, and cannot pick it", async () => {
+    await show(MAC, offer([...BASES, { name: "security-tools", state: "ready", not_allowed: true }, { name: "ios-sim-2", state: "rebuilding", progress: 10, not_allowed: true }]));
+    const group = await open();
+    expect(within(group).getAllByText(MAC_BASES.B05("Platform"))).toHaveLength(2);
+    expect(within(group).queryByText(MAC_BASES.B07(10))).toBeNull();
+    expect(radio("security-tools")).toBeDisabled();
+    await userEvent.click(radio("security-tools"));
+    expect(intentNow().macos_base).toBeUndefined();
+  });
+
+  it("disables Standard when the allow list leaves it off, and still lets the person pick an allowed base", async () => {
+    await show(MAC, offer([{ name: "xcode-16", state: "ready" }], { standardNotAllowed: true }));
+    await open();
+    expect(radio(MAC_BASES.B04)).toBeDisabled();
+    expect(within(screen.getByRole("radiogroup", { name: MAC_BASES.B01 })).getByText(MAC_BASES.B05("Platform"))).toBeInTheDocument();
+    await userEvent.click(radio("xcode-16"));
+    expect(intentNow().macos_base).toBe("xcode-16");
+  });
+
+  it("offers the picker for a pool with only Standard when the profile leaves Standard off", async () => {
+    await show(MAC, offer([], { standardNotAllowed: true }));
+    expect(trigger()).toBeInTheDocument();
+  });
+});
+
+describe("picker · keyboard", () => {
+  it("an arrow key moves focus and does not pick or close; Space picks and closes", async () => {
+    await show(MAC, offer([{ name: "xcode-16", state: "ready" }, { name: "lint", state: "ready" }]));
+    await open();
+    act(() => radio(MAC_BASES.B04).focus());
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByRole("radiogroup", { name: MAC_BASES.B01 })).toBeInTheDocument();
+    await vi.waitFor(() => expect(radio("xcode-16")).toHaveFocus());
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByRole("radiogroup", { name: MAC_BASES.B01 })).toBeInTheDocument();
+    await vi.waitFor(() => expect(radio("lint")).toHaveFocus());
+    await userEvent.keyboard(" ");
+    expect(intentNow().macos_base).toBe("lint");
+    await vi.waitFor(() => expect(screen.queryByRole("radiogroup", { name: MAC_BASES.B01 })).toBeNull());
+  });
+
+  it("Enter on a base picks it and closes the menu", async () => {
+    await show(MAC, offer([{ name: "xcode-16", state: "ready" }]));
+    await open();
+    act(() => radio("xcode-16").focus());
+    await userEvent.keyboard("{Enter}");
+    expect(intentNow().macos_base).toBe("xcode-16");
+    await vi.waitFor(() => expect(screen.queryByRole("radiogroup", { name: MAC_BASES.B01 })).toBeNull());
   });
 });
 

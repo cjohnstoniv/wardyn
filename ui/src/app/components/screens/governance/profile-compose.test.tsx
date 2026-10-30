@@ -187,6 +187,8 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
     expect(screen.getByText(MAC_BASES.B15)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("switch", { name: `${MAC_BASES.B14} ${GOV.OVERLAY_NARROW}` }));
     typeValue(MAC_BASES.B14, "Standard\nxcode-16");
+    // The hint sits under the input (board J6-b).
+    expect(screen.getByLabelText(MAC_BASES.B14).compareDocumentPosition(screen.getByText(MAC_BASES.B15)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
     expect(createProfileMock).toHaveBeenLastCalledWith(expect.objectContaining({ overlay_limits: { allowed_macos_bases: ["Standard", "xcode-16"] } }));
 
@@ -324,6 +326,14 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
     renderEditor(row({ id: "ps", name: "Solo" }), [BASE]);
     await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
     expect(Object.keys(updateProfileMock.mock.calls[0][1]).sort()).toEqual(["ceiling", "limits", "name"]);
+  });
+
+  // The standalone editor has no macOS bases row, so a stored list must ride a save back untouched.
+  it("a standalone profile's stored macOS bases list is sent back unchanged by a save", async () => {
+    renderEditor(row({ id: "ps", name: "Solo", limits: { allowed_macos_bases: ["Standard", "xcode-16"] } as never }), [BASE]);
+    typeValue(GOV.FIELD_NAME, "Solo 2");
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+    expect(updateProfileMock.mock.calls[0][1].limits).toEqual({ allowed_macos_bases: ["Standard", "xcode-16"] });
   });
 });
 

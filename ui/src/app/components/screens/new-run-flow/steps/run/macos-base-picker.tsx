@@ -20,6 +20,8 @@ import type { MacOSOffer } from "./macos-offer";
 export function MacOSBasePicker({ offer, value, onChoose }: { offer: Extract<MacOSOffer, { ok: true }>; value: string | undefined; onChoose: (base: string | undefined) => void }) {
   const labelId = React.useId();
   const [open, setOpen] = React.useState(false);
+  // An arrow key checks the item it moves to by clicking it, which would close the menu on a browse; only a pick closes it.
+  const arrowing = React.useRef(false);
   const { status } = useShellSetupStatus();
   // Your own tools last, as the runner drawer lists them.
   const harnessNames = (ids: readonly string[]) => [...ids.filter((id) => id !== "none"), ...ids.filter((id) => id === "none")].map((id) => harnessDisplayNames(status, [id])).join(", ");
@@ -36,21 +38,20 @@ export function MacOSBasePicker({ offer, value, onChoose }: { offer: Extract<Mac
           <span>{current}</span>
           <ChevronDown aria-hidden="true" className="size-4 text-muted-foreground" />
         </PopoverTrigger>
-        <PopoverContent align="start" className="w-[520px] p-1.5">
+        <PopoverContent align="start" className="w-[min(520px,calc(100vw-2rem))] p-1.5">
           <RadioGroup
             aria-labelledby={labelId}
             value={current}
             className="gap-0.5"
-            onValueChange={(name) => {
-              onChoose(name === MAC_BASES.B04 ? undefined : name);
-              setOpen(false);
-            }}
+            onKeyDownCapture={(e) => { if (e.key.startsWith("Arrow")) arrowing.current = true; }}
+            onKeyUp={() => { arrowing.current = false; }}
+            onValueChange={(name) => onChoose(name === MAC_BASES.B04 ? undefined : name)}
           >
             {choices.map((c, i) => {
               const id = `${labelId}-${i}`;
               return (
-                <label key={c.name} className={`flex items-start gap-2.5 rounded-sm px-2 py-1.5 text-sm ${c.reason ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer hover:bg-accent"}`}>
-                  <RadioGroupItem value={c.name} disabled={!!c.reason} aria-labelledby={`${id}-name`} aria-describedby={`${id}-why`} className="mt-0.5" />
+                <label key={c.name} onClick={() => { if (!c.reason && !arrowing.current) setOpen(false); }} className={`flex items-start gap-2.5 rounded-sm px-2 py-1.5 text-sm ${c.reason ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer hover:bg-accent"}`}>
+                  <RadioGroupItem value={c.name} disabled={!!c.reason} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.click(); }} aria-labelledby={`${id}-name`} aria-describedby={`${id}-why`} className="mt-0.5" />
                   <span className="flex min-w-0 flex-col">
                     <span id={`${id}-name`} className="font-medium">{c.name}</span>
                     <span id={`${id}-why`} className="flex flex-col text-xs">

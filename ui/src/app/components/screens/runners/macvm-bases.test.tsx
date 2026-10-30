@@ -8,7 +8,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { MacVMCaps, MacVMDerivedBase } from "../../../lib/types/runner-macvm";
 import type { SetupStatus } from "../../../lib/types/setup";
+import { DESKTOP } from "../../wardyn/copy/desktop";
 import { MAC_BASES } from "../../wardyn/copy/mac-bases";
+import { MACVM_R } from "../../wardyn/copy/runner-macvm";
 import { ModelAccessProvider } from "../../wardyn/model-access-context";
 import { MacVMSection } from "./macvm-section";
 
@@ -40,9 +42,9 @@ describe("drawer bases list (J6-b)", () => {
     ]));
     const rows = within(list()).getAllByRole("listitem");
     expect(rows.map((r) => r.textContent)).toEqual([
-      "Standard · macOS 26.6.2 (25G83) · Claude Code, Your own toolsReady",
+      `${MAC_BASES.B04} · macOS 26.6.2 (25G83) · Claude Code, Your own tools${DESKTOP.ready}`,
       `qa-profiles · ${MAC_BASES.B11(2)}${MAC_BASES.B12}`,
-      `xcode-16 · ${MAC_BASES.B11(3)}Ready`,
+      `xcode-16 · ${MAC_BASES.B11(3)}${DESKTOP.ready}`,
     ]);
     expect(within(rows[1]).getByText(MAC_BASES.B12)).toHaveAttribute("title", "60%");
     expect(screen.getByText(MAC_BASES.B13(2))).toBeInTheDocument();
@@ -50,8 +52,8 @@ describe("drawer bases list (J6-b)", () => {
 
   it("says plus 1 item for one item, and shows a failed rebuild as Failed", () => {
     show(caps([{ name: "solo", state: "failed", items: 1 }]));
-    expect(within(list()).getByText(/plus 1 item$/)).toBeInTheDocument();
-    expect(within(list()).getByText("Failed")).toBeInTheDocument();
+    expect(within(list()).getByText(`· ${MAC_BASES.B11(1)}`, { exact: false })).toBeInTheDocument();
+    expect(within(list()).getByText(MACVM_R.R15)).toBeInTheDocument();
   });
 
   it("shows nothing for a Mac with no other base, so its drawer is as it was", () => {

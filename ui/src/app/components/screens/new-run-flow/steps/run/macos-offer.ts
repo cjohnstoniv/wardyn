@@ -51,6 +51,11 @@ export type MacOSOffer =
       runner?: string;
       /** The Macs' other bases besides Standard, by name; none when the pool has only Standard. */
       bases?: readonly PoolMacOSBase[];
+      /** When Standard was prepared (the oldest Mac's), for display; never compared with the clock. */
+      createdAt?: string;
+      /** The caller's governance does not let them pick Standard, and the profile's name for MAC-B05. */
+      standardNotAllowed?: boolean;
+      profile?: string;
     }
   | { ok: false; refusal: MacOSRefusal };
 
@@ -121,7 +126,7 @@ function runnerRefusal(r: PoolMacOSVMRefusal): MacOSRefusal {
  * one Mac names it (`runner`) and gets that Mac's own refusal; a pool of several gets the pool form, MV-N05 when any
  * Mac does not offer macOS VMs at all, else MV-N14.
  */
-export function macOSOfferOf(pool: PoolMacOSVM | undefined): MacOSOffer | undefined {
+export function macOSOfferOf(pool: PoolMacOSVM | undefined, profile?: string): MacOSOffer | undefined {
   if (!pool) return undefined;
   if (pool.offered) {
     return {
@@ -132,6 +137,9 @@ export function macOSOfferOf(pool: PoolMacOSVM | undefined): MacOSOffer | undefi
       harnesses: pool.harnesses?.includes("none") ? pool.harnesses : ["none", ...(pool.harnesses ?? [])],
       runner: pool.runner,
       bases: pool.bases ?? [],
+      createdAt: pool.created_at,
+      standardNotAllowed: !!pool.standard_not_allowed,
+      profile,
     };
   }
   const refusals = pool.refusals ?? [];

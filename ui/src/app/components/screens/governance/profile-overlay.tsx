@@ -265,8 +265,8 @@ export function OverlayRows({
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   {GOV.OVERLAY_INHERITED(shown(f.kind, inherited[f.key]))}
                 </p>
-                {f.hint && <p className="mt-0.5 text-xs text-muted-foreground">{f.hint}</p>}
                 {on && <OverlayValue field={f} id={id} value={value[f.key]} disabled={disabled} onChange={(v) => set(f.key, v)} />}
+                {f.hint && <p className="mt-1 text-xs text-muted-foreground">{f.hint}</p>}
               </div>
             </div>
           </div>

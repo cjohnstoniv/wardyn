@@ -77,9 +77,12 @@ describe("Review: where it runs on a macOS base", () => {
   const view = (intent: RunIntent) =>
     render(<WhereGroup draft={{ ...initialDraft("alice"), intent }} pre={SCENARIO_PREFLIGHT.member} preview={null} docRows={[]} go={vi.fn()} dispatch={vi.fn()} />);
 
-  it("adds MAC-B16 to the pool's detail for a chosen base", () => {
+  it("puts MAC-B16 on its own line under the pool's detail for a chosen base", () => {
     view({ ...AGENT, machine_kind: "macos_vm", macos_base: "xcode-16" });
-    expect(screen.getByText((t) => t.endsWith(MAC_BASES.B16("xcode-16")))).toBeInTheDocument();
+    const line = screen.getByText(MAC_BASES.B16("xcode-16"));
+    expect(line.tagName).toBe("SPAN");
+    expect(line.parentElement?.textContent).toMatch(/\S.*macOS base · xcode-16$/);
+    expect(line.parentElement?.textContent).not.toBe(MAC_BASES.B16("xcode-16"));
   });
   it("names no base for Standard, or for a draft that is no longer a macOS VM", () => {
     view({ ...AGENT, machine_kind: "macos_vm" });

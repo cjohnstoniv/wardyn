@@ -836,6 +836,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["internal/types/types.go", "RunQueue", "runs.ts", "RunQueue"],
     ["pkg/client/runner_pools.go", "PoolSlots", "runner-pools.ts", "PoolSlots"],
     ["pkg/client/runner_pools.go", "RunnerPoolCatalogueEntry", "runner-pools.ts", "RunnerPoolCatalogueEntry"],
+    ...["PoolMacOSVM", "PoolMacOSBase"].map((n): [string, string, string, string] => ["pkg/client/runner_pools.go", n, "runner-pools.ts", n]),
   ])("%s %s: full parity with the TS %s %s mirror", (goFile, goName, tsFile, tsName) => {
     const go = readFileSync(join(root, goFile), "utf8");
     const ts = readFileSync(join(root, "ui/src/app/lib/types", tsFile), "utf8");

@@ -81,9 +81,9 @@ export function WhereGroup({ draft, pre, docRows, dispatch }: GroupProps) {
     : slots.max === undefined ? NR_SHARED.JOIN(kind, NR_RUN.RUNNING_ONLY(slots.used))
     : NR_REVIEW.WHERE_DETAIL(kind, slots.used, slots.max);
   const poolDetail = online === undefined ? poolLine : poolLine ? NR_SHARED.JOIN(poolLine, NR_REVIEW.WHERE_ONLINE(online)) : NR_REVIEW.WHERE_ONLINE(online);
-  // A macOS VM on a base other than Standard names it in the detail (board J6, Review row).
+  // A macOS VM on a base other than Standard names it on its own line under the detail (board J6, Review row).
   const base = draft.intent.machine_kind === "macos_vm" ? draft.intent.macos_base : undefined;
-  const detail = !base ? poolDetail : poolDetail ? NR_SHARED.JOIN(poolDetail, MAC_BASES.B16(base)) : MAC_BASES.B16(base);
+  const detail = !base ? poolDetail : <>{poolDetail}<span className="block">{MAC_BASES.B16(base)}</span></>;
   const cc = pre?.enforced_confinement_class ?? draft.intent.confinement_class;
   const provenance = pool
     ? pool.selection === "explicit" ? NR_REVIEW.PROV_SELECTED : pool.selection === "organisation_default" ? NR_REVIEW.PROV_ORG_DEFAULT : undefined
