@@ -22,6 +22,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   waiting up to 10 minutes for the runner's next full report. The retry launches as the bound service under the
   namespace binding that holds now; at most one retry per workload per claim (60 seconds), and a refused launch still
   waits for the resource's next report (#3772).
+- A runner's full list of a bound namespace now reads only that namespace's workloads on the binding's pool, in the
+  database, instead of every custom-resource workload in the organization on every list (#3773).
 
 ## [0.10.0-rc.8] — 2026-10-29
 

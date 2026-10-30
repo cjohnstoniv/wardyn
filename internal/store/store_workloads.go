@@ -163,6 +163,7 @@ type WorkloadStore interface {
 	ListWorkloadsOf(ctx context.Context, owners []string, p Page) ([]WorkloadView, error)
 	ListK8sWorkloadStatuses(ctx context.Context) ([]WorkloadView, error)
 	ListLapsedK8sWorkloadLaunches(ctx context.Context, limit int) ([]Workload, error)
+	ListBoundK8sWorkloads(ctx context.Context, poolID uuid.UUID, namespace string) ([]Workload, error)
 	DeleteWorkload(ctx context.Context, owner, name string) (Workload, error)
 	DeleteK8sWorkload(ctx context.Context, w Workload) (Workload, error)
 	OweWorkloadRunEnd(ctx context.Context, e WorkloadRunEnd) error
@@ -482,6 +483,13 @@ func (s PG) ListWorkloadsOf(ctx context.Context, owners []string, p Page) ([]Wor
 func (s PG) ListK8sWorkloadStatuses(ctx context.Context) ([]WorkloadView, error) {
 	return collect(ctx, s.Pool, "list", "k8s workload statuses",
 		`SELECT `+workloadViewCols+workloadViewFrom+` WHERE w.source = 'k8s' ORDER BY w.id`, nil, scanWorkloadView)
+}
+
+// ListBoundK8sWorkloads returns the custom-resource workloads the resources of namespace recorded on the
+// pool poolID: the rows a runner's full list of that namespace, under its binding on that pool, answers for.
+func (s PG) ListBoundK8sWorkloads(ctx context.Context, poolID uuid.UUID, namespace string) ([]Workload, error) {
+	return collect(ctx, s.Pool, "list", "bound k8s workloads", `SELECT `+workloadCols+` FROM workloads w
+		WHERE w.source = 'k8s' AND w.source_pool_id = $1 AND w.source_namespace = $2 ORDER BY w.id`, []any{poolID, namespace}, scanWorkload)
 }
 
 // ListLapsedK8sWorkloadLaunches returns up to limit custom-resource workloads whose launch is owed under a

@@ -284,15 +284,15 @@ func (s *Server) syncWorkloadReport(ctx context.Context, ws store.WorkloadStore,
 		skipDeleteOfInactiveBinding(ctx, runnerID, b, rep.Namespace, err)
 		return err
 	}
-	views, err := ws.ListK8sWorkloadStatuses(ctx)
+	bound, err := ws.ListBoundK8sWorkloads(ctx, b.PoolID, rep.Namespace)
 	if err != nil {
 		return err
 	}
-	for _, v := range views {
-		if !boundK8sWorkload(v.Workload, b, rep.Namespace) || slices.Contains(rep.Names, v.Name) {
+	for _, wl := range bound {
+		if slices.Contains(rep.Names, wl.Name) {
 			continue
 		}
-		if err := s.dropK8sWorkload(ctx, ws, sr, runnerID, b, si, v.Workload, "", workloadViaK8sSync); err != nil {
+		if err := s.dropK8sWorkload(ctx, ws, sr, runnerID, b, si, wl, "", workloadViaK8sSync); err != nil {
 			return err
 		}
 	}
