@@ -5,6 +5,7 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -31,6 +32,8 @@ func (h setupHost) checkConnection(cmd *cobra.Command, plan setupPlan) error {
 	shellProxy := cmp.Or(strings.TrimSpace(os.Getenv("HTTPS_PROXY")), strings.TrimSpace(os.Getenv("https_proxy")))
 	var usedShellCredential bool
 	conn.proxyFor, usedShellCredential = serviceProxyFor(plan.runnerFile(), shellProxy)
+	// The registration that follows takes this route too, so it cannot pass on a path the check did not.
+	cmd.SetContext(context.WithValue(cmd.Context(), registrationRouteKey{}, conn.proxyFor))
 	net := h.network
 	net.ProxyAuthFix = proxyAuthFix
 	// A credential the shell did not supply may be one the service has already been given another way.
@@ -84,6 +87,10 @@ func proxyFunc(https, noProxy string) func(*http.Request) (*url.URL, error) {
 	proxy := (&httpproxy.Config{HTTPSProxy: https, NoProxy: noProxy}).ProxyFunc()
 	return func(r *http.Request) (*url.URL, error) { return proxy(r.URL) }
 }
+
+// registrationRouteKey carries the route the connection check took, on the command's context, to the
+// registration call that follows it in the same setup.
+type registrationRouteKey struct{}
 
 // serviceProxyFor routes a request the way the runner service will: by the HTTPS_PROXY and NO_PROXY that
 // runnerd.json carries for it (serve exports them), credential-stripped. The one exception is the operator's

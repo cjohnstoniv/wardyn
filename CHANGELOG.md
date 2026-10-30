@@ -11,6 +11,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- `wardyn-runnerd setup` now registers through the proxy its connection check used. The check went through the
+  settings setup installs for the service, but the registration followed this shell's environment, so a rerun from a
+  shell with no proxy could pass the check and then dial the organisation direct.
+
 ## [0.10.0-rc.8] — 2026-10-29
 
 ### Before you upgrade
