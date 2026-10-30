@@ -290,7 +290,7 @@
 
 | Limit | Detail |
 |---|---|
-| Proxy certificate | Tools that use the macOS keychain (Safari, `gh`, `kubectl`) do not trust the run's proxy certificate, so hosts the proxy inspects show certificate errors in them. Node, Python, git and curl are pointed at it |
+| Proxy certificate | Trusted in the run's System keychain for TLS before the run starts. If macOS refuses, the run goes on, its audit says so, and keychain-only tools (Safari, `gh`, `kubectl`) fail TLS. Node, Python, git and curl are pointed at it |
 | Harnesses | Claude Code, Codex CLI and "Your own tools", depending on what the base installed and what passed the launcher's self-test. If Apple's Command Line Tools cannot install, only "Your own tools" is offered |
 | Folders | Shared into the guest; see [Folders](#folders) |
 | Desktop | One fixed 1920 x 1080 display. An `observe` result (see above) leaves macOS VMs agent-only |

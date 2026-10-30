@@ -18,6 +18,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   with a reason.
 - Preparing a macOS VM base now ends with the launcher's self-test as the agent user. A harness that fails it is
   withheld, and a base that cannot start a run is not published.
+- macOS VMs: the guest agent trusts the run's proxy certificate in the run's System keychain, for TLS only, before
+  the run starts, so tools that use only the keychain trust it too. If macOS refuses, the run goes on and its audit
+  says so.
 
 ### Fixed
 

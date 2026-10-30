@@ -124,3 +124,13 @@ func isPathByte(c byte) bool {
 	return c == '/' || c == '.' || c == '_' || c == '-' || c == '~' ||
 		'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9'
 }
+
+// macKeychainTrust is the guest's answer to Init.RunCA as the runner wire carries it: nil when the
+// guest answered nothing (no run CA, or an agent that predates it), otherwise its codes, read through
+// runner.KeychainTrust.Known so a code the runner does not know reads as unavailable.
+func macKeychainTrust(res guestagent.InitResult) *runner.KeychainTrust {
+	if res.KeychainTrust == "" && res.KeychainTrustReason == "" {
+		return nil
+	}
+	return (&runner.KeychainTrust{Status: res.KeychainTrust, Reason: res.KeychainTrustReason}).Known()
+}

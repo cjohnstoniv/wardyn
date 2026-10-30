@@ -702,12 +702,17 @@ func TestMacGuestInitTranslatesLinuxPaths(t *testing.T) {
 	spec := macSpec()
 	spec.Env["AWS_CONFIG_FILE"] = "/home/agent/.aws/config"
 	spec.ManagedFiles = []runner.ManagedFile{{Path: agentpolicy.ClaudeCodeManagedSettingsPath, Content: []byte("{}")}}
-	in, err := macGuestInit(spec, "")
+	spec.ProxyConfig.MITMCACertPEM = "run-ca\n"
+	in, err := macGuestInit(spec, "operator-ca")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if in.Env["AWS_CONFIG_FILE"] != "/Users/agent/.aws/config" {
 		t.Errorf("AWS_CONFIG_FILE = %q", in.Env["AWS_CONFIG_FILE"])
+	}
+	// The keychain is given the run proxy's CA alone, never the operator's.
+	if in.RunCA != "run-ca" {
+		t.Errorf("RunCA = %q, want the run CA alone", in.RunCA)
 	}
 	if len(in.Files) == 0 || in.Files[0].Path != guestagent.MacClaudeCodeManagedSettingsPath {
 		t.Errorf("files %+v", in.Files)

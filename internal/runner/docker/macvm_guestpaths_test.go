@@ -122,3 +122,25 @@ func TestMacGuestFilesResolveTheModeAndNameThemForTheCheck(t *testing.T) {
 		t.Error("no files still named a check")
 	}
 }
+
+// The guest's keychain answer reaches the runner wire as it was sent for a known code, absent as
+// nil (not attempted), and anything else as unavailable. The guest's codes are the runner's.
+func TestMacKeychainTrustFromTheGuestAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		res  guestagent.InitResult
+		want *runner.KeychainTrust
+	}{
+		{"ok", guestagent.InitResult{KeychainTrust: guestagent.KeychainTrusted}, &runner.KeychainTrust{Status: runner.KeychainTrusted}},
+		{"refused", guestagent.InitResult{KeychainTrust: guestagent.KeychainNotTrusted, KeychainTrustReason: guestagent.KeychainRefused}, &runner.KeychainTrust{Status: runner.KeychainNotTrusted, Reason: runner.KeychainRefused}},
+		{"failed", guestagent.InitResult{KeychainTrust: guestagent.KeychainNotTrusted, KeychainTrustReason: guestagent.KeychainFailed}, &runner.KeychainTrust{Status: runner.KeychainNotTrusted, Reason: runner.KeychainFailed}},
+		{"unavailable", guestagent.InitResult{KeychainTrust: guestagent.KeychainNotTrusted, KeychainTrustReason: guestagent.KeychainUnavailable}, &runner.KeychainTrust{Status: runner.KeychainNotTrusted, Reason: runner.KeychainUnavailable}},
+		{"absent", guestagent.InitResult{SignIns: guestagent.SignInsRunDisk}, nil},
+		{"guest text", guestagent.InitResult{KeychainTrust: guestagent.KeychainNotTrusted, KeychainTrustReason: "SecTrustSettingsSetTrustSettings: denied"}, &runner.KeychainTrust{Status: runner.KeychainNotTrusted, Reason: runner.KeychainUnavailable}},
+	} {
+		got := macKeychainTrust(tc.res)
+		if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+			t.Errorf("%s: macKeychainTrust = %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}

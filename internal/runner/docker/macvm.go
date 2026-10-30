@@ -317,7 +317,10 @@ func macGuestInit(spec runner.SandboxSpec, trustedPEM string) (guestagent.Init, 
 	if v := macGuestFilesEnv(files); v != "" {
 		env[guestagent.EnvManagedFiles] = v
 	}
-	in := guestagent.Init{Env: env, SecretEnv: spec.SecretEnv, SignInsOff: spec.DesktopSignInsOff, Files: files}
+	// RunCA is the run proxy's own CA alone, which the guest trusts in its System keychain; the
+	// operator's CAs reach the guest only in the bundle file below.
+	in := guestagent.Init{Env: env, SecretEnv: spec.SecretEnv, SignInsOff: spec.DesktopSignInsOff, Files: files,
+		RunCA: strings.TrimSpace(spec.ProxyConfig.MITMCACertPEM)}
 	if ca := vmCA(spec, trustedPEM); ca != "" {
 		in.Files = append(in.Files, guestagent.File{Path: guestagent.MacCABundlePath, Mode: 0o644, Content: []byte(ca)})
 	}
@@ -491,7 +494,8 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	d.notVMs.Delete(ref)
 	d.vms.Store(ref, v)
 	d.keepExecOutput(ref, spec.ExecOutput)
-	return runner.Sandbox{Ref: ref, Driver: driverName, EnforcedClass: types.CC3, Machine: machine, SignIns: signIns}, nil
+	return runner.Sandbox{Ref: ref, Driver: driverName, EnforcedClass: types.CC3, Machine: machine, SignIns: signIns,
+		KeychainTrust: macKeychainTrust(res)}, nil
 }
 
 // makeRunDir creates a run's directory, new: a directory already there (another run's whose id shares
