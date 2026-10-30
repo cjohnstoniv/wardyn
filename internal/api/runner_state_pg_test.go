@@ -155,6 +155,9 @@ func (g *goneAPIRig) checkGoneEnd(got types.AgentRun) {
 	if got.State != types.RunFailed || got.LostReason != types.LostGone {
 		g.t.Fatalf("gone end: state=%s lost_reason=%q", got.State, got.LostReason)
 	}
+	if got.FailureHint != goneRunFailureHint {
+		g.t.Fatalf("gone end: failure_hint=%q, want %q", got.FailureHint, goneRunFailureHint)
+	}
 	rows := g.lostEvents()
 	if len(rows) != 1 {
 		g.t.Fatalf("run.lost rows = %d, want 1: %+v", len(rows), rows)
