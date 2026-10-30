@@ -122,6 +122,7 @@ type macOSVMs struct {
 	caps  *runnerwire.MacVMCaps
 	drift string // the base agent version a tools update was last asked for
 	items macOSVMItems
+	bases macOSVMBases
 }
 
 // macOSVMSetup is what openMacOSVMs reads.
@@ -323,6 +324,7 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 	c.Harnesses, c.Desktop = slices.Clone(man.Harnesses), man.Desktop
 	m.checkAgent(man)
 	m.checkItems(man)
+	c.Bases = m.derivedBases(man)
 	if why, refusal, belowReason := m.belowMinimum(man); why != "" {
 		// design 3.10: a per-run limit below the base's minimum offers none and names the flag to raise.
 		slog.Warn("macOS VM sandboxes: this runner offers none", "reason", why)

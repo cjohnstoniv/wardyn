@@ -68,6 +68,9 @@ type runnerFile struct {
 	// must have: `macos-vm prepare` downloads from the mirror instead of Apple, and never falls back to Apple.
 	MacOSVMImageURL  string `json:"macos_vm_image_url,omitempty"`
 	MacOSVMImageHash string `json:"macos_vm_image_sha256,omitempty"`
+	// MacOSVMBasesDir is the Mac's other macOS bases: a directory of <name>.json install lists, one per base,
+	// each derived from Standard (macvm.LoadBaseVariants); none when unset.
+	MacOSVMBasesDir string `json:"macos_vm_bases_dir,omitempty"`
 }
 
 // Where each setting is read from, in the order serve consults them. A managed preference outranks the
@@ -119,6 +122,8 @@ var runnerFields = []runnerField{
 	{name: "macos_vm_base_file", managed: "MacOSVMBaseFile", file: func(f *runnerFile) *string { return &f.MacOSVMBaseFile }},
 	{name: "macos_vm_image_url", flag: "ipsw-url", managed: "MacOSVMImageURL", file: func(f *runnerFile) *string { return &f.MacOSVMImageURL }},
 	{name: "macos_vm_image_sha256", flag: "sha256", managed: "MacOSVMImageHash", file: func(f *runnerFile) *string { return &f.MacOSVMImageHash }},
+	// No flag or environment variable sets it, as macos_vm_base_file.
+	{name: "macos_vm_bases_dir", managed: "MacOSVMBasesDir", file: func(f *runnerFile) *string { return &f.MacOSVMBasesDir }},
 }
 
 // profileOnlyKeys are the managed preferences no serve setting stands for: the posture a Mac's MDM attests

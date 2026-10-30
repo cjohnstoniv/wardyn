@@ -259,6 +259,9 @@ type MacVMCaps struct {
 	// sent a macOS VM run with a mount.
 	Folders bool      `json:"folders,omitempty"`
 	Base    MacVMBase `json:"base"`
+	// Bases are the Mac's other bases, each derived from Base (Standard, MAC-B04) with its operator's own
+	// install list, in name order; absent when it has none. A run names one in its create's macos_base.
+	Bases []MacVMDerivedBase `json:"bases,omitempty"`
 	// Refusal is, in words, why the runner offers no macOS VM; empty when it offers them.
 	Refusal string `json:"refusal,omitempty"`
 	// Reason is why the runner offers no macOS VM, or can't start or prepare one now: MacVMReason*, the
@@ -343,6 +346,30 @@ type MacVMBase struct {
 	// BuildVersion is the base's macOS build, e.g. "25G83", or absent.
 	BuildVersion string `json:"build_version,omitempty"`
 }
+
+// MacVMDerivedBase is one of a Mac's other bases: Name is the operator's, State MacVMDerived*, Items how
+// many items its own install list adds to Standard's, and Progress the percent done while it is rebuilt.
+// GuestOS, Harnesses, CreatedAt and BuildVersion are its own manifest's, read as Standard's are for the
+// caps; state ready only. CreatedAt is Standard's prepare, which a derived base's clone keeps.
+type MacVMDerivedBase struct {
+	Name         string   `json:"name"`
+	State        string   `json:"state"`
+	Items        int      `json:"items"`
+	Progress     int      `json:"progress,omitempty"`
+	GuestOS      string   `json:"guest_os,omitempty"`
+	Harnesses    []string `json:"harnesses,omitempty"`
+	CreatedAt    string   `json:"created_at,omitempty"`
+	BuildVersion string   `json:"build_version,omitempty"`
+}
+
+// MacVMDerivedBase.State values: ready to run on; rebuilding, from Standard, one at a time (stale since
+// Standard changed, or not built yet: queued or under way); failed, its last derivation from this
+// Standard. An unknown value is a newer runner's, and decodes as itself.
+const (
+	MacVMDerivedReady      = "ready"
+	MacVMDerivedRebuilding = "rebuilding"
+	MacVMDerivedFailed     = "failed"
+)
 
 // MacVMGuest is a macOS base's guest posture. Each field is absent when its read did not say; an unknown
 // value is a newer runner's, and decodes as itself.
