@@ -76,7 +76,9 @@ export function CreateUserDrive({ choose, reload, creating, setCreating, deletin
   // No door: not a person. Disabled: the switch is off, which is the default.
   const offersCreate = !!door && door.reason !== "disabled" && (!macOS || !!mac);
   const own = (catalogue?.drives ?? []).filter((d) => d.owned);
-  if (!offersCreate && own.length === 0) return null;
+  // Nothing to offer and nothing open: with a confirm or the create card open (their state lives in the dialog) it stays, so a
+  // finished delete can say how it ended and the dialog's footer is never left hidden with no card.
+  if (!offersCreate && own.length === 0 && !deleting && !creating) return null;
   const reasonText = door && !door.allowed && door.reason ? createReasonText(door) : undefined;
   const refresh = () => {
     reload();

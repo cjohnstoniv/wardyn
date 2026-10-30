@@ -23,20 +23,26 @@ import type { RunIntent } from "../../draft/run-intent";
 import { NewRunDraftProvider, useNewRunDispatch } from "../../new-run-route";
 import { MacOSOfferContext, type MacOSOffer } from "../run/macos-offer";
 import { AnnounceContext } from "../step-shell";
+import { guestPath } from "./file-items";
 import { FilesRoute } from "./files-route";
 
 const wfetchMock = vi.fn();
 vi.mock("../../../../../lib/api/core", async (orig) => ({ ...(await orig<typeof import("../../../../../lib/api/core")>()), wfetch: (...a: unknown[]) => wfetchMock(...a) }));
-const checks = vi.hoisted(() => ({ result: null as unknown }));
+const checks = vi.hoisted(() => ({ result: null as unknown, body: null as unknown }));
 vi.mock("../../draft/use-intent-checks", () => ({
   useDraftIdentity: () => ({ principal: "alice", resolved: true, revision: 0, authGeneration: 0 }),
-  useIntentChecks: (params: { body: unknown }) => ({ preflightResult: params.body === null ? null : checks.result }),
+  useIntentChecks: (params: { body: unknown }) => {
+    if (params.body !== null) checks.body = params.body;
+    return { preflightResult: params.body === null ? null : checks.result };
+  },
 }));
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const MAC = "mac-studio-07";
 const base = { section: "user", source: "personal", enforcement: "none", legacy: false, team: false, writable: true } as const;
 const DISK: MeDrive = { ...base, id: "d-disk", name: "Investigation files", backend: "mac_disk", target: "/Users/agent/drives/investigation-files", owned: true, mac: MAC };
+// A disk the server places under /home/agent: a macOS run's guest has /Users/agent in its place.
+const HOMEY: MeDrive = { ...base, id: "d-homey", name: "Notes disk", backend: "mac_disk", target: "/home/agent/drives/notes", owned: true, mac: MAC, size_mib: 65536, enforcement: "filesystem" };
 const DOCKER: MeDrive = { ...base, id: "d-docker", name: "scratch-2025", backend: "docker_volume", target: "/home/agent/drives/scratch", owned: true };
 const CLUSTER: MeDrive = { ...base, id: "d-pvc", name: "team-datasets", backend: "k8s_pvc", target: "/home/agent/drives/datasets", owned: false };
 const OFFER: MacOSOffer = { ok: true, guestOS: "macOS 26.6.2 (25G83)", minCPUs: 4, minMemoryMiB: 8192, harnesses: ["none"], runner: MAC };
@@ -51,7 +57,8 @@ let del: (id: string) => Response;
 let offer: MacOSOffer | undefined;
 
 beforeEach(() => {
-  drives = [DISK, DOCKER, CLUSTER];
+  drives = [DISK, DOCKER, CLUSTER, HOMEY];
+  checks.body = null;
   create = CREATE_ALLOWED;
   runners = [OWN_MAC];
   offer = OFFER;
@@ -113,7 +120,7 @@ const posts = () => wfetchMock.mock.calls.filter(([, init]) => init?.method === 
 describe("the picker of a macOS run", () => {
   it("names the Mac a disk is kept on (MAC-D01) and greys a Docker or cluster volume with its reason (MAC-D03)", async () => {
     await openChoose();
-    expect(within(top()).getByText(MAC_DRIVES.D01(MAC))).toBeInTheDocument();
+    expect(within(top()).getAllByText(MAC_DRIVES.D01(MAC)).length).toBeGreaterThan(0);
     expect(radio(DISK.name)).toBeEnabled();
     for (const v of [DOCKER, CLUSTER]) {
       expect(radio(v.name)).toBeDisabled();
@@ -280,5 +287,85 @@ describe("the keep control of a macOS run (MAC-D14, D06)", () => {
     show({ shape: "environment", experience: "interactive", keep_work_folder: true });
     expect(await screen.findByLabelText(NR_FILES.REUSE_LABEL)).toBeChecked();
     expect(screen.getByTestId("nr-keep-work-folder")).toHaveTextContent(NR_FILES.KEEP_WHAT);
+  });
+});
+
+// The drive is where the run starts, so the draft is whole enough to preflight and the map has a line to draw.
+const ATTACHED: Partial<RunIntent> = { drives: [{ drive_id: HOMEY.id }], start_folder: { kind: "attachment", drive_id: HOMEY.id } };
+// The mount map's line for a path: the path itself is the code element that carries it as its title.
+const mapPath = async (path: string) => within(await screen.findByRole("region", { name: NR_FILES.MOUNT_TITLE })).findByTitle(path);
+
+describe("paths as the guest sees them (display only)", () => {
+  const shown = () => document.body.textContent ?? "";
+  // The server's resolved attachment, as the preflight returns it: the drive at the path it keeps under /home/agent.
+  beforeEach(() => {
+    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), attachments: [{ kind: "drive", drive_id: HOMEY.id, name: HOMEY.name, target: HOMEY.target, read_only: false, starts_here: false }] };
+  });
+  it("a macOS run shows /Users/agent on the card, the mount map and the starting folder, never /home/agent", async () => {
+    show({ ...MACOS, ...ATTACHED });
+    await mapPath("/Users/agent/drives/notes");
+    const card = screen.getAllByTestId("nr-attach-card").find((c) => c.textContent?.includes(HOMEY.name))!;
+    expect(card).toHaveTextContent("/Users/agent/drives/notes");
+    expect(screen.getByRole("option", { name: NR_FILES.START_OPTION(HOMEY.name, "/Users/agent/drives/notes") })).toBeInTheDocument();
+    expect(shown()).not.toContain("/home/agent");
+  });
+  it("turns the home folder of a macOS guest, and only a whole path segment of it, in words and in paths", () => {
+    expect(guestPath(NR_FILES.START_MAIN, true)).toBe("Main drive · /Users/agent");
+    expect(guestPath("/home/agent/work/app", true)).toBe("/Users/agent/work/app");
+    expect(guestPath("/home/agentic/work", true)).toBe("/home/agentic/work");
+    expect(guestPath("/srv/home/agent/work", true)).toBe("/srv/home/agent/work");
+    expect(guestPath(NR_FILES.START_MAIN, false)).toBe(NR_FILES.START_MAIN);
+  });
+  it("a container run is unchanged", async () => {
+    show({ shape: "environment", experience: "interactive", ...ATTACHED });
+    await mapPath("/home/agent/drives/notes");
+    expect(screen.getAllByTestId("nr-attach-card").find((c) => c.textContent?.includes(HOMEY.name))).toHaveTextContent("/home/agent/drives/notes");
+    expect(shown()).not.toContain("/Users/agent");
+  });
+  it("what is sent keeps the server's own paths: the request names the drive and no guest path", async () => {
+    show({ ...MACOS, ...ATTACHED });
+    await mapPath("/Users/agent/drives/notes");
+    await waitFor(() => expect(checks.body).not.toBeNull());
+    expect(JSON.stringify(checks.body)).toContain(HOMEY.id);
+    expect(JSON.stringify(checks.body)).not.toContain("/Users/agent");
+  });
+  it("the Add dialog's rows show it too, and the typed path field is left as typed", async () => {
+    await openChoose();
+    expect(radio(HOMEY.name).closest("label")).toHaveTextContent("/Users/agent/drives/notes");
+    expect(radio(HOMEY.name).closest("label")).not.toHaveTextContent("/home/agent");
+  });
+});
+
+describe("a drive's size and enforcement on its Add-dialog row (board J4-a-add)", () => {
+  it("reads the size, then the approved enforcement word, on a macOS run and on a container run", async () => {
+    for (const intent of [MACOS, { shape: "environment", experience: "interactive" } as RunIntent]) {
+      await openChoose(intent);
+      expect(within(radio(HOMEY.name).closest("label")!).getByTestId("nr-drive-meta")).toHaveTextContent(`64 GiB · ${NR_FILES.ENFORCED}`);
+      cleanup();
+    }
+  });
+  it("a drive with no size has no meta line", async () => {
+    await openChoose();
+    expect(within(radio(DISK.name).closest("label")!).queryByTestId("nr-drive-meta")).toBeNull();
+  });
+});
+
+describe("the files step on a phone", () => {
+  beforeEach(() => {
+    checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), attachments: [{ kind: "drive", drive_id: HOMEY.id, name: HOMEY.name, target: HOMEY.target, read_only: false, starts_here: false }] };
+  });
+  it("the mount map breaks a path only after a slash, as the attach card does", async () => {
+    show({ ...MACOS, ...ATTACHED });
+    await mapPath("/Users/agent/drives/notes");
+    const path = await mapPath("/Users/agent/drives/notes");
+    expect(path.className).toContain("[overflow-wrap:normal]");
+    expect(path.className).not.toContain("anywhere");
+    expect(path.querySelector("wbr")).not.toBeNull();
+  });
+  it("the access beside an attached drive keeps the card's inner padding", async () => {
+    show({ ...MACOS, ...ATTACHED });
+    const card = (await screen.findAllByTestId("nr-attach-card")).find((c) => c.textContent?.includes(HOMEY.name))!;
+    const access = within(card).getByText(NR_FILES.ACCESS_EDIT).parentElement!;
+    expect(access.className).toContain("max-[760px]:pr-2.5");
   });
 });

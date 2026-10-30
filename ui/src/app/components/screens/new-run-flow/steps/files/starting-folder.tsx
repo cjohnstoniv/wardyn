@@ -13,6 +13,7 @@ import { Chip } from "../../../../wardyn/primitives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { FileItem } from "./file-items";
+import { useGuestPath } from "./guest-path";
 import { FilesGroup, PathText } from "./kind-visuals";
 
 /** The id a held Continue focuses when something is added and nothing starts (starts_here_required). */
@@ -43,6 +44,7 @@ export function StartingFolder({ items, text, onText, onStart }: {
   const errorId = React.useId();
   const sub = cleanSubfolder(text);
   const none = choices.length === 0;
+  const guest = useGuestPath();
   const result = start?.path ? `${start.path}${sub.value && !sub.bad ? `/${sub.value}` : ""}` : "/home/agent";
 
   return (
@@ -62,10 +64,10 @@ export function StartingFolder({ items, text, onText, onStart }: {
               onStart(item);
             }}
           >
-            {none ? <option value="main">{NR_FILES.START_MAIN}</option> : (
+            {none ? <option value="main">{guest(NR_FILES.START_MAIN)}</option> : (
               <>
                 {!start && <option value="" disabled hidden />}
-                {choices.map((i) => <option key={i.key} value={i.key}>{NR_FILES.START_OPTION(i.name, i.path ?? "")}</option>)}
+                {choices.map((i) => <option key={i.key} value={i.key}>{NR_FILES.START_OPTION(i.name, guest(i.path ?? ""))}</option>)}
               </>
             )}
           </select>
@@ -88,7 +90,7 @@ export function StartingFolder({ items, text, onText, onStart }: {
         </div>
         <p className="col-span-full flex flex-wrap items-baseline gap-2 border-t border-border pt-[11px] text-sm">
           <span className="font-semibold text-muted-foreground">{NR_FILES.STARTS_HERE}</span>
-          <PathText path={result} className="text-sm font-semibold text-foreground" />
+          <PathText path={guest(result)} className="text-sm font-semibold text-foreground" />
         </p>
       </div>
     </FilesGroup>

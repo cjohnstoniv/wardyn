@@ -15,6 +15,7 @@ import { Chip } from "../../../../wardyn/primitives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { FileItem } from "./file-items";
+import { useGuestPath } from "./guest-path";
 import { KIND_INFO, kindStyle, KindBadge, KindTile, PathText } from "./kind-visuals";
 import { LockedAccess } from "./locked-access";
 
@@ -29,6 +30,7 @@ export function AttachCard({ item, open, onToggle, onEdit, onRemove }: {
   onEdit: () => void;
   onRemove: () => void;
 }) {
+  const guest = useGuestPath();
   const kind = item.kind === "computer" ? "folder" : item.kind;
   const bodyId = `nr-attach-body-${item.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const access = item.kind === "repo"
@@ -71,11 +73,11 @@ export function AttachCard({ item, open, onToggle, onEdit, onRemove }: {
         </button>
         <span className="min-w-0 truncate text-muted-foreground max-[760px]:pl-[60px] max-[760px]:[grid-area:path] max-[520px]:pl-[29px] max-[520px]:whitespace-normal">
           {/* One line, cut with an ellipsis, until the phone layout lets it wrap after "/". */}
-          {item.path && <PathText path={item.path} className="whitespace-nowrap [&_wbr]:hidden max-[520px]:whitespace-normal max-[520px]:[&_wbr]:inline" />}
+          {item.path && <PathText path={guest(item.path)} className="whitespace-nowrap [&_wbr]:hidden max-[520px]:whitespace-normal max-[520px]:[&_wbr]:inline" />}
           {item.sharedWith && <small className="block truncate text-xs">{item.sharedWith}</small>}
           {item.onMac && <small title={item.onMac} className="block whitespace-normal text-xs">{`${NR_FILES.STORED_ON}: ${item.onMac}`}</small>}
         </span>
-        <span className="min-w-0 whitespace-nowrap max-[760px]:justify-self-end max-[760px]:[grid-area:access]">{access}</span>
+        <span className="min-w-0 whitespace-nowrap max-[760px]:justify-self-end max-[760px]:pr-2.5 max-[760px]:[grid-area:access]">{access}</span>
         <span className="flex items-center justify-end gap-0.5 max-[760px]:[grid-area:actions]">
           <Button type="button" variant="ghost" size="sm" className={ACTION} aria-label={NR_FILES.EDIT_NAMED(item.name)} onClick={onEdit}>{NR_FILES.EDIT}</Button>
           <Button type="button" variant="ghost" size="sm" className={ACTION} aria-label={NR_FILES.REMOVE_NAMED(item.name)} disabled={!!item.removeBlocked} onClick={onRemove}>{NR_SHARED.REMOVE}</Button>

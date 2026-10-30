@@ -410,6 +410,27 @@ describe("delete: Escape and focus", () => {
     await waitFor(() => expect(focused()).toHaveAttribute("data-own-delete", "d-second"));
   });
 
+  it("the last own drive going record-only (no create door) keeps D12 up until Close, then the footer returns", async () => {
+    create = CREATE_DOORS.disabled;
+    drives = [DRIVE_OWNED];
+    // The record is gone, the Mac's folder is not: the server's 200 says so, and the list has no own drive left.
+    del = (id) => {
+      drives = drives.filter((d) => d.id !== id);
+      return json({ reason: "member_drive_record_only", message: DRIVE_REFUSAL.MEMBER_RECORD_ONLY("old-mac-mini") }, 200);
+    };
+    await openOwn();
+    await userEvent.click(ownDeletes()[0]);
+    await userEvent.click(within(top()).getByRole("button", { name: NR_FILES.DELETE_DRIVE }));
+    const sentence = await screen.findByText(DRIVE_REFUSAL.MEMBER_RECORD_ONLY("old-mac-mini"));
+    await waitFor(() => expect(ownDeletes()).toHaveLength(0));
+    // The list has refreshed and nothing is left to offer, yet the sentence is still on screen.
+    expect(sentence).toBeInTheDocument();
+    await userEvent.click(within(top()).getByRole("button", { name: NR_SHARED.CLOSE_DIALOG }));
+    await waitFor(() => expect(dialogs()).toHaveLength(1));
+    expect(screen.queryByText(DRIVE_REFUSAL.MEMBER_RECORD_ONLY("old-mac-mini"))).toBeNull();
+    expect(within(addDialog()).getByRole("button", { name: NR_SHARED.BACK })).toBeVisible();
+  });
+
   it("moves focus to Back when nothing else is left to land on", async () => {
     create = CREATE_DOORS.disabled;
     drives = [DRIVE_OWNED];
