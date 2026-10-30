@@ -11,22 +11,39 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// A run Wardyn launches itself is placed by no pool, so its row says remote at create (newStepRun is the one
-// constructor every sign-in, scan and probe goes through) instead of reading as "not recorded".
+// A run Wardyn launches itself is placed by no pool, so where pools place runs its row says remote at create
+// (newStepRun is the one constructor every sign-in, scan and probe goes through) instead of reading as "not
+// recorded". Where they do not, it is left empty, as every unpooled run is (#3812).
 func TestStepRun_StampsTheRemotePlacement(t *testing.T) {
 	h := newHarness(t)
-	srv := New(baseTestConfig(h, &dispatchTestStore{}))
 	gov := stepRunGoverned(governanceCeiling{}, false, false)
-	for _, task := range []string{harnessLoginTask, "source scan"} {
-		run, _, err := srv.newStepRun(context.Background(), uuid.New(), "owner", task, types.CC2, gov, nil)
-		if err != nil {
-			t.Fatal(err)
+	for _, tc := range []struct {
+		st   store.Store
+		want types.Placement
+	}{
+		{&dispatchTestStore{}, ""},
+		{struct {
+			*dispatchTestStore
+			store.RunnerPoolStore
+		}{dispatchTestStore: &dispatchTestStore{}}, types.PlacementRemote},
+	} {
+		srv := New(baseTestConfig(h, tc.st))
+		srv.cfg.Runner = &fakeRunner{}
+		if pooled := srv.poolsPlaceRuns(); pooled != (tc.want != "") {
+			t.Fatalf("pools place runs = %v for a store of %T", pooled, tc.st)
 		}
-		if run.Placement != types.PlacementRemote || run.RunnerID != nil || run.RunnerPoolID != nil {
-			t.Errorf("%s run: placement %q runner %v pool %v, want remote and unbound", task, run.Placement, run.RunnerID, run.RunnerPoolID)
+		for _, task := range []string{harnessLoginTask, "source scan"} {
+			run, _, err := srv.newStepRun(context.Background(), uuid.New(), "owner", task, types.CC2, gov, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if run.Placement != tc.want || run.RunnerID != nil || run.RunnerPoolID != nil {
+				t.Errorf("%s run: placement %q runner %v pool %v, want %q and unbound", task, run.Placement, run.RunnerID, run.RunnerPoolID, tc.want)
+			}
 		}
 	}
 }

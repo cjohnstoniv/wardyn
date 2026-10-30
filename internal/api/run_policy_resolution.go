@@ -32,6 +32,9 @@ func (s *Server) boundRunUserSpecDrops(ctx context.Context, r *http.Request, spe
 	spec, warns := composer.ClampMember(spec, ceiling.Spec, ceiling.Limits, ceiling.authoredSize(), ceiling.memberSize())
 	warns = append(literalWarns, warns...)
 	kept, grantWarns, code, gerr := s.filterUserGrants(ctx, s.secretOwnerFromRequest(r), spec.AllowedDomains, spec.EligibleGrants)
+	if errors.Is(gerr, errSecretStoreUnavailable) {
+		return types.RunPolicySpec{}, nil, nil, runError(http.StatusServiceUnavailable, reasonSinkStoreUnavailable, gerr.Error())
+	}
 	if gerr != nil {
 		return types.RunPolicySpec{}, nil, nil, runError(code, reasonInlinePolicyInvalid, errPrefix+gerr.Error())
 	}

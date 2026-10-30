@@ -72,6 +72,25 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   waits for the resource's next report (#3772).
 - A runner's full list of a bound namespace now reads only that namespace's workloads on the binding's pool, in the
   database, instead of every custom-resource workload in the organization on every list (#3773).
+- A dropped base image and an unbuilt SSH devcontainer are now recorded in the audit log.
+- A secret-store fault while proving that a person holds their own credential, for a run on their own runner, now
+  refuses with the retryable 503 `store_unavailable` instead of reading the credential as the organisation's. At
+  dispatch the run fails as unreadable rather than refused. The store is read once per person per request, fault or
+  not. The same fault on any other check of a person's own secret (an inline policy, an override, a component, a
+  model provider key) is the same 503, never "unknown secret", a dropped grant or a 500.
+- A run's end no longer loses its settlement when the sandbox stop overruns: the teardown-error audit, the output
+  finish, the workspace and record settlement and the cleared sandbox reference each get a budget of their own, so a
+  workspace scan is no longer left in `scanning`. A replica that loses the run's lock during that tail now stops it,
+  instead of running it beside the replica that took the lock and writing duplicate audit rows.
+- `run.ending_soon` no longer promises kept files (`files_kept_sec`) for a run its end tears down at once: one with no
+  sandbox recorded, on a runner that cannot keep a sandbox, or with no ended-run grace. Behind the router it reads the
+  run's own runner or executor, and leaves `files_kept_sec` out when no fact says whether the end will keep the run.
+- A run Wardyn launches itself (a workspace scan or recording, a harness sign-in, a probe) no longer records its
+  placement as `remote` on a deployment where runner pools do not place runs: it is left empty there, as every other
+  run's is. The 0.9.1 note that `run.create` records the placement of every run holds only where pools place runs.
+- On Kubernetes, a run that keeps its work folder beside a shared drive is refused up front, at the preview,
+  preflight, create and queue replay, with `drive_share_beside_managed`. It was accepted and then refused at dispatch,
+  since the kept work folder is a managed drive the run adds only then.
 
 ## [0.10.0-rc.8] — 2026-10-29
 

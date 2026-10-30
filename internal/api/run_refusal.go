@@ -47,6 +47,9 @@ func ceilingRunRefusal(err error) *runRefusal {
 }
 
 func capabilityRunRefusal(err error) *runRefusal {
+	if errors.Is(err, errSecretStoreUnavailable) {
+		return runError(http.StatusServiceUnavailable, reasonSinkStoreUnavailable, err.Error())
+	}
 	var refused *errUngrantedWorkspaceRepo
 	if errors.As(err, &refused) {
 		return runDenied(authz.Deny(authz.ReasonCapabilityWorkspace, "runs.workspace",

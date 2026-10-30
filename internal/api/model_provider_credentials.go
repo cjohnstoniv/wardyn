@@ -186,7 +186,14 @@ func (s *Server) providerForCredential(w http.ResponseWriter, r *http.Request, o
 	}
 	// Ahead of the kind check, whose 422 would tell a provider apart from an
 	// unknown id.
-	holdsKey := !granted && s.ownsSecretMemoized(r.Context(), owner, providerSecretName(p.UID, providerKeyPart))
+	holdsKey := false
+	if !granted {
+		var err error
+		if holdsKey, err = s.ownsSecretChecked(r.Context(), owner, providerSecretName(p.UID, providerKeyPart)); err != nil {
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonSinkStoreUnavailable, err.Error())
+			return types.ModelProvider{}, false
+		}
+	}
 	if !holdsKey && s.denyProviderAsMissing(w, r, id, "model_provider.credential") {
 		return types.ModelProvider{}, false
 	}

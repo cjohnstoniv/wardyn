@@ -118,6 +118,9 @@ func (s *Server) stepDrive(f *runFold, rec *foldRecorder) bool {
 	}
 	var refusal *runRefusal
 	f.keep, refusal = s.keepWorkFolderGates(f.r, f.spec, f.promoted)
+	if refusal == nil {
+		refusal = keptDriveMixRefusal(f.drives, f.keep.row)
+	}
 	return !refusal.write(s, f.w, f.r)
 }
 

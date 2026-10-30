@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -293,9 +294,27 @@ func localTrustedOutputRequest(req createRunRequest) bool {
 	}
 }
 
+// ownershipUnreadable is the refusal for an ownership proof the secret store
+// could not answer: the fixed retryable 503 the policy path gives, never a
+// verdict on the credential.
+func ownershipUnreadable() *runRefusal {
+	return runError(http.StatusServiceUnavailable, reasonSinkStoreUnavailable, errSecretStoreUnavailable.Error())
+}
+
+// ownershipFault is errSecretStoreUnavailable when ref is ownershipUnreadable,
+// for a dispatch caller with no HTTP answer that must not read the fault as a
+// credential with no provenance.
+func ownershipFault(ref *runRefusal) error {
+	if ref != nil && ref.status == http.StatusServiceUnavailable && ref.body.Reason == reasonSinkStoreUnavailable {
+		return errSecretStoreUnavailable
+	}
+	return nil
+}
+
 // localGrantOrigin proves the owner's actual namespace before any grant write.
 // Shared component scopes remain operator material even if the owner happens
 // to store a colliding name. No secret value or fallback Get is used as proof.
+// A store fault during that proof is ownershipUnreadable, never operator material.
 func (s *Server) localGrantOrigin(ctx context.Context, owner string, g types.GrantSpec) (placement.CredentialOrigin, *runRefusal) {
 	origin := placement.CredentialOrigin{GrantKind: g.Kind}
 	switch g.Kind {
@@ -307,6 +326,9 @@ func (s *Server) localGrantOrigin(ctx context.Context, owner string, g types.Gra
 		return origin, nil
 	}
 	if captured, handled, err := s.localCapturedGrantOrigin(ctx, owner, g); handled {
+		if errors.Is(err, errSecretStoreUnavailable) {
+			return origin, ownershipUnreadable()
+		}
 		if err != nil {
 			return origin, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), "eligible_grants: captured credential provenance cannot be resolved")
 		}
@@ -317,7 +339,13 @@ func (s *Server) localGrantOrigin(ctx context.Context, owner string, g types.Gra
 		return origin, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), fmt.Sprintf("eligible_grants: %s credential provenance cannot be resolved", g.Kind))
 	}
 	origin.Stored = true
-	own := owner != "" && s.ownsSecretMemoized(ctx, owner, name) && (knownHosts == "" || s.ownsSecretMemoized(ctx, owner, knownHosts))
+	own, err := s.ownsSecretChecked(ctx, owner, name)
+	if err == nil && own && knownHosts != "" {
+		own, err = s.ownsSecretChecked(ctx, owner, knownHosts)
+	}
+	if err != nil {
+		return origin, ownershipUnreadable()
+	}
 	if g.Kind == types.GrantAPIKey && apiKeyScopeShared(g.Scope) {
 		own = false
 	}
