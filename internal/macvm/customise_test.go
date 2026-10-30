@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -139,6 +140,11 @@ func TestParseBaseListRefuses(t *testing.T) {
 		"a profile, no identifier": listJSON(t, map[string]any{"kind": "profile", "name": "p", "path": "/opt/p.mobileconfig", "sha256": pin64}),
 		"a pkg with an identifier": listJSON(t, with("identifier", "com.example.x")),
 		"a ca not a certificate":   listJSON(t, map[string]any{"kind": "ca", "name": "c", "path": "/opt/c.p12", "sha256": pin64}),
+		"a secret on an app": listJSON(t, map[string]any{"kind": "app", "name": "a", "path": "/opt/a.zip", "sha256": pin64,
+			"secret_files": []map[string]any{{"path": "/opt/k", "name": "k", "sha256": pin64}}}),
+		"a secret named item.pkg": listJSON(t, with("secret_files", []map[string]any{{"path": "/opt/k", "name": "item.pkg", "sha256": pin64}})),
+		"a secret with no pin":    listJSON(t, with("secret_files", []map[string]any{{"path": "/opt/k", "name": "k"}})),
+		"a secret path relative":  listJSON(t, with("secret_files", []map[string]any{{"path": "k", "name": "k", "sha256": pin64}})),
 		// A harness's managed settings are written per run (P0), so no item may write them.
 		"claude managed settings":      listJSON(t, file(guestagent.MacClaudeCodeManagedSettingsPath)),
 		"claude managed, another case": listJSON(t, file("/library/application support/claudecode/managed-settings.json")),
@@ -423,5 +429,70 @@ func TestReadBackItemsVerifiesTheCA(t *testing.T) {
 	}
 	if rec, _ := macvm.ReadToolsRecord(base); rec.Items[0].State != macvm.ItemTrusted {
 		t.Fatalf("%+v", rec.Items)
+	}
+}
+
+// A pkg item's secret file: pushed 0600 beside the pkg before the installer runs, removed with the stage
+// directory after it on every path, and its value never in an argv, the log, the error, tools.json, or the
+// list's digest. A secret file others can read is refused before anything is pushed.
+func TestSecretFilesNeverLeak(t *testing.T) {
+	const value = "LICENCE-VALUE-7Q2X9"
+	dir := t.TempDir()
+	pkg, pkgPin := itemFile(t, dir, "edr.pkg", "pkg-bytes")
+	lic, licPin := itemFile(t, dir, "licence.key", value)
+	S := guestagent.MacItemStageDir
+	for name, tc := range map[string]struct {
+		installExit int
+		pin         string
+		mode        os.FileMode
+		wantErr     string
+	}{
+		"installed":         {pin: licPin, mode: 0o600},
+		"installer fails":   {installExit: 1, pin: licPin, mode: 0o600, wantErr: "installer -pkg exited 1"},
+		"pin mismatch":      {pin: pin64, mode: 0o600, wantErr: "does not match its pinned SHA-256"},
+		"readable by group": {pin: licPin, mode: 0o640, wantErr: "chmod 600"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := os.Chmod(lic, tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			l, err := macvm.ParseBaseList(listJSON(t, map[string]any{"kind": "pkg", "name": "edr", "path": pkg, "sha256": pkgPin,
+				"secret_files": []map[string]any{{"path": lic, "name": "com.vendor.registration-token", "sha256": tc.pin}}}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := newTools(t)
+			var logs strings.Builder
+			f.opts.Items, f.opts.Log = l, slog.New(slog.NewTextHandler(&logs, nil))
+			g := newItemGuest()
+			g.fail = func(argv []string) int { return map[bool]int{true: tc.installExit}[argv[0] == "/usr/sbin/installer"] }
+			res, err := f.itemStage(g).Run(context.Background(), macvm.Stage2Input{})
+			if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("stage 2: %v", err)
+			}
+			pushed := slices.Index(g.steps, "push "+S+"/edr/com.vendor.registration-token 600")
+			installer := slices.IndexFunc(g.steps, func(s string) bool { return strings.HasPrefix(s, "run /usr/sbin/installer") })
+			if (tc.wantErr == "" || tc.installExit != 0) && (pushed < 0 || installer < pushed) {
+				t.Fatalf("the secret is pushed before the installer: %q", g.steps)
+			}
+			if pushed >= 0 && g.steps[len(g.steps)-1] != "run /bin/rm -rf "+S+"/edr" {
+				t.Fatalf("the stage dir, and the secret with it, was not removed last: %q", g.steps)
+			}
+			base := t.TempDir()
+			if err := macvm.WriteToolsRecord(base, res, "1", time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			rec, _ := os.ReadFile(filepath.Join(base, macvm.ToolsRecordFile))
+			errText := ""
+			if err != nil {
+				errText = err.Error()
+			}
+			for what, s := range map[string]string{"argv": fmt.Sprint(g.argvs), "steps": strings.Join(g.steps, "\n"), "log": logs.String(),
+				"error": errText, "tools.json": string(rec), "digest": l.Digest()} {
+				if strings.Contains(s, value) {
+					t.Errorf("the secret's value is in the %s", what)
+				}
+			}
+		})
 	}
 }

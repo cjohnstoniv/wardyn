@@ -63,12 +63,12 @@ func TestToolsExecBaseItemForms(t *testing.T) {
 // managed settings, Wardyn's own files or anything outside the roots.
 func TestToolsPushBaseItems(t *testing.T) {
 	tl := &Tools{}
-	for _, dest := range []string{MacItemStageDir + "/edr/item.pkg", MacItemStageDir + "/a/item.dmg", MacItemStageDir + "/wifi/item.mobileconfig", MacItemStageDir + "/org-ca/item.cer", "/Library/Application Support/Org/conf.json", "/opt/org/x"} {
+	for _, dest := range []string{MacItemStageDir + "/edr/item.pkg", MacItemStageDir + "/a/item.dmg", MacItemStageDir + "/wifi/item.mobileconfig", MacItemStageDir + "/org-ca/item.cer", MacItemStageDir + "/edr/com.vendor.registration-token", "/Library/Application Support/Org/conf.json", "/opt/org/x"} {
 		if err := tl.pushAllowed(dest); err != nil {
 			t.Errorf("%s refused: %v", dest, err)
 		}
 	}
-	for _, dest := range []string{MacItemStageDir + "/edr/other", MacItemStageDir + "/item.pkg", MacItemStageDir + "/Edr/item.pkg",
+	for _, dest := range []string{MacItemStageDir + "/edr/mnt", MacItemStageDir + "/edr/.hidden", MacItemStageDir + "/edr/a/b", MacItemStageDir + "/item.pkg", MacItemStageDir + "/Edr/item.pkg",
 		MacClaudeCodeManagedSettingsPath, strings.ToUpper(MacClaudeCodeManagedMCPPath), MacCodexRequirementsPath, MacRunDir + "/secret",
 		MacAgentBinaryPath, MacAgentPlistPath, "/Library/Keychains/System.keychain", "/Users/agent/x", "/etc/sudoers", "/private/etc/codex/requirements.toml", "/Library/../etc/codex/requirements.toml"} {
 		if err := tl.pushAllowed(dest); err == nil {

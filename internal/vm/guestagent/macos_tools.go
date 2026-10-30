@@ -390,6 +390,10 @@ const (
 // ItemNamePattern is an item's name, its stage directory's.
 var ItemNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
+// ItemSecretPattern is the name a pkg item's secret file (a licence, a registration token) has beside
+// its item.pkg, where the vendor's installer reads it; it is pushed 0600 and goes with the stage directory.
+var ItemSecretPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
 // ItemAppPattern is the bundle an app item's dmg holds, as it lands in MacApplications.
 var ItemAppPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,95}\.app$`)
 
@@ -442,11 +446,12 @@ func isItemDir(p string) bool {
 // isItemFile says whether p is file in an item's stage directory.
 func isItemFile(p, file string) bool { return filepath.Base(p) == file && isItemDir(filepath.Dir(p)) }
 
-// itemPushAllowed says whether a push may write dest for a base item: a staged file of its kind, or a
-// file item's destination.
+// itemPushAllowed says whether a push may write dest for a base item: a staged file of its kind or a
+// secret file in its stage directory, or a file item's destination.
 func itemPushAllowed(dest string) bool {
 	if isItemDir(filepath.Dir(dest)) {
-		return slices.Contains([]string{ItemPkg, ItemZip, ItemDmg, ItemProfile, ItemCert}, filepath.Base(dest))
+		return slices.Contains([]string{ItemPkg, ItemZip, ItemDmg, ItemProfile, ItemCert}, filepath.Base(dest)) ||
+			(ItemSecretPattern.MatchString(filepath.Base(dest)) && filepath.Base(dest) != ItemMount)
 	}
 	return ItemDestAllowed(dest) == nil
 }

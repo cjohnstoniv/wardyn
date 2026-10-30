@@ -76,6 +76,18 @@ type BaseItem struct {
 	// Identifier is a profile item's PayloadIdentifier, which `profiles list` reads back once it is
 	// installed.
 	Identifier string `json:"identifier,omitempty"`
+	// SecretFiles are a pkg item's secret files, such as an EDR's licence.
+	SecretFiles []SecretFile `json:"secret_files,omitempty"`
+}
+
+// SecretFile is a file on this Mac, mode 0600 and pinned by its SHA-256, that stage 2 pushes as Name
+// beside the item's pkg, root's and 0600, for its installer to read, and removes with the item's stage
+// directory after the install, on every path. Its contents are never in an argv, a log, tools.json or
+// the caps; the list's digest covers its pin only.
+type SecretFile struct {
+	Path   string `json:"path"`
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
 }
 
 // LoadBaseList reads and checks the install list at path.
@@ -136,6 +148,9 @@ func (it BaseItem) check() error {
 	if it.Kind != ItemKindProfile && it.Identifier != "" {
 		return errors.New("only a profile item takes an identifier")
 	}
+	if err := it.checkSecrets(); err != nil {
+		return err
+	}
 	switch it.Kind {
 	case ItemKindPkg:
 		if ext != ".pkg" || it.Dest != "" || it.App != "" {
@@ -162,6 +177,23 @@ func (it BaseItem) check() error {
 		}
 	default:
 		return fmt.Errorf("kind %q is not one of pkg, app, file, profile, ca", it.Kind)
+	}
+	return nil
+}
+
+func (it BaseItem) checkSecrets() error {
+	if len(it.SecretFiles) > 0 && it.Kind != ItemKindPkg {
+		return errors.New("only a pkg item takes secret_files")
+	}
+	seen := map[string]bool{}
+	for _, sf := range it.SecretFiles {
+		switch {
+		case !filepath.IsAbs(sf.Path) || !sha256Hex.MatchString(sf.SHA256):
+			return errors.New("a secret file has an absolute path on this Mac and its sha256")
+		case !guestagent.ItemSecretPattern.MatchString(sf.Name) || sf.Name == guestagent.ItemPkg || sf.Name == guestagent.ItemMount || seen[sf.Name]:
+			return fmt.Errorf("a secret file's name %q is letters, digits, '.', '_' and '-', not item.pkg or mnt, and used once", sf.Name)
+		}
+		seen[sf.Name] = true
 	}
 	return nil
 }
@@ -315,6 +347,11 @@ func installItem(ctx context.Context, g ToolsGuest, it BaseItem) (rec ItemRecord
 		if err := pushItem(ctx, g, it.Path, it.SHA256, pkg, 0o600); err != nil {
 			return rec, err
 		}
+		for _, sf := range it.SecretFiles {
+			if err := pushSecret(ctx, g, sf, dir+"/"+sf.Name); err != nil {
+				return rec, fmt.Errorf("its secret file %s: %w", sf.Name, err)
+			}
+		}
 		return rec, runItem(ctx, g, "/usr/sbin/installer", "-pkg", pkg, "-target", "/")
 	case it.App == "":
 		zip := dir + "/" + guestagent.ItemZip
@@ -418,6 +455,18 @@ func pushItem(ctx context.Context, g ToolsGuest, path, pin, dest string, mode os
 		return fmt.Errorf("%s does not match its pinned SHA-256", path)
 	}
 	return g.Push(ctx, dest, mode, f, fi.Size())
+}
+
+// pushSecret pushes a secret file, which must be its owner's alone (mode 0600 or narrower), as pushItem.
+func pushSecret(ctx context.Context, g ToolsGuest, sf SecretFile, dest string) error {
+	fi, err := os.Stat(sf.Path)
+	if err != nil {
+		return err
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("%s is mode %#o; a secret file is its owner's alone (chmod 600)", sf.Path, fi.Mode().Perm())
+	}
+	return pushItem(ctx, g, sf.Path, sf.SHA256, dest, 0o600)
 }
 
 // runItem runs one item form and fails on a non-zero exit, naming the command and not its output.
