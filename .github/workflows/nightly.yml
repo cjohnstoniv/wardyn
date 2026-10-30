@@ -1716,6 +1716,11 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 50
     steps:
+      # The same builds and kindest/node pull as the k6 legs, so the same disk step (see there).
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
