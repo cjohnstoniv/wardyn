@@ -6,11 +6,14 @@
 // The true notices: the pool is at its limit, a size was narrowed, and each of the server's own preflight warnings.
 
 import { Notice } from "../../../wardyn/notice";
+import { PolicyRemedy, safeRequestHref } from "../../../wardyn/policy-remedy";
+import type { PolicyRef } from "../../../../lib/api/health";
+import type { WarningContext } from "../../../../lib/types/preflight";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { RUN_WAIT } from "../../../../lib/runner-pool-refusals";
 import type { AppliedAmount, AppliedResources } from "../../../../lib/types/new-run-contract";
 import type { LimitSource } from "../../../../lib/types/runner-pools";
-import { reviewWarningText } from "./drop-warnings";
+import { isWallsHostWarning, reviewWarningText } from "./drop-warnings";
 import { amountText } from "./format";
 import type { PoolSlotsFact } from "./review-seams";
 
@@ -54,17 +57,31 @@ export interface NoticesProps {
   askedByYou: boolean;
   /** The preflight's `warnings`, the server's sentences, shown as they came. */
   warnings?: readonly string[];
+  /** The preflight's `warning_context`, keyed to `warnings` by index. */
+  warningContext?: readonly WarningContext[];
   /** The main drive was cut by a limit: that cut is folded into the shared "resources capped" warning too, as is a PIDs cut (applied.pids_limit). */
   diskCut?: boolean;
+  /** The Access group draws a "Your walls leave out {host}." line, which says the walls' host warning by host. */
+  wallsLeftOut?: boolean;
 }
 
-export function Notices({ poolName, slots, applied, askedByYou, warnings, diskCut }: NoticesProps) {
+/** The policy a drop warning names, only when it publishes a way to ask; otherwise the warning reads as it always did. */
+function askablePolicy(ctx: WarningContext | undefined): PolicyRef | undefined {
+  const p = ctx?.kind === "egress_policy_drop" ? ctx.policy : undefined;
+  return p && (safeRequestHref(p.request_url) || p.email || p.request_text) ? p : undefined;
+}
+
+export function Notices({ poolName, slots, applied, askedByYou, warnings, warningContext, diskCut, wallsLeftOut }: NoticesProps) {
   const full = slots?.verdict === "waits" && slots.max !== undefined && !!poolName;
   const found = applied
     ? [narrowing(applied.cpu_millis, poolName), narrowing(applied.memory_mib, poolName)].filter((n): n is Narrowing => n !== undefined)
     : [];
   const distinct = found.filter((n, i) => found.findIndex((m) => m.key === n.key) === i);
-  const server = (warnings ?? []).filter((w) => w !== RESOURCES_CAPPED || (distinct.length === 0 || diskCut || !!applied?.pids_limit?.capped));
+  // Each warning keeps its index into the server's list, which is what its context names.
+  const server = (warnings ?? [])
+    .map((w, index) => ({ w, policy: askablePolicy(warningContext?.find((c) => c.warning_index === index)) }))
+    .filter(({ w }) => w !== RESOURCES_CAPPED || (distinct.length === 0 || diskCut || !!applied?.pids_limit?.capped))
+    .filter(({ w }) => !(wallsLeftOut && isWallsHostWarning(w)));
   if (!full && distinct.length === 0 && server.length === 0) return null;
   return (
     <div className="flex flex-col gap-3">
@@ -84,9 +101,17 @@ export function Notices({ poolName, slots, applied, askedByYou, warnings, diskCu
           </p>
         </Notice>
       ))}
-      {server.map((w, i) => (
+      {server.map(({ w, policy }, i) => (
         <Notice key={`${i}:${w}`} tone="warning">
           {reviewWarningText(w)}
+          {policy && (
+            <>
+              <span data-testid="drop-warning-policy" className="mt-1.5 block text-xs text-muted-foreground">
+                {policy.source === "deployment" ? NR_REVIEW.POLICY_CONTEXT_DEPLOYMENT : NR_REVIEW.POLICY_CONTEXT(policy.name ?? "")}
+              </span>
+              <PolicyRemedy policy={{ ...policy, layer: undefined }} line className="mt-0.5" />
+            </>
+          )}
         </Notice>
       ))}
     </div>

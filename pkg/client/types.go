@@ -236,6 +236,14 @@ type (
 	// Returned by GetGovernance and ApplyGovernance.
 	GovernanceUnit = types.GovernanceUnit
 
+	// Restriction is a deny-only list that follows people (GovernanceDocument.Restrictions).
+	Restriction = types.Restriction
+
+	// PersonalWalls is a person's own narrow-only walls (GET and PUT /api/v1/me/walls);
+	// PersonalWallsSpec is the part a person writes.
+	PersonalWalls     = types.PersonalWalls
+	PersonalWallsSpec = types.PersonalWallsSpec
+
 	// PolicyContact is the contact a GovernanceUnit (and SiteConfig.PolicyHelp)
 	// publishes: owner, email, request_url and request_text, validated by the
 	// server on write.

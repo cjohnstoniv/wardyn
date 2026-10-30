@@ -174,6 +174,13 @@ describe("connectionRowCopy — key/token providers (C8-C9)", () => {
     expect(copy.button).toBe(CONNECTIONS.ADD_TOKEN);
   });
 
+  it("a local_model provider says token like custom_endpoint: No token added, Add your token", () => {
+    const local = { ...MODEL_PROVIDERS.gateway, id: "local-llm", kind: "local_model" } as const;
+    const copy = connectionRowCopy(baseStatus(), { provider: local, access: { provider: local.id, state: "not_configured" } });
+    expect(copy.chip).toEqual({ label: CONNECTIONS.NO_TOKEN, tone: "neutral" });
+    expect(copy.button).toBe(CONNECTIONS.ADD_TOKEN);
+  });
+
   it("C9 key, stored: Your key, 'Sent to {host}', Replace", () => {
     const copy = connectionRowCopy(
       baseStatus(),

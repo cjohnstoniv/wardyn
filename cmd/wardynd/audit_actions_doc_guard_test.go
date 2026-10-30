@@ -585,6 +585,14 @@ func TestAuditActionsForwardGuardCoversEveryEmitShape(t *testing.T) {
 // is for the forward guard: an action deliberately outside docs/AUDIT-ACTIONS.md's
 // "Grammar" section, each with the reason it is not renamed.
 var auditActionGrammarAllow = map[string]bool{
+	// A service's health row (0.10 rc.8), named by the service-lifecycle plan before it met this grammar:
+	// it records the health the sandbox reported, a noun with no imperative to stand in for it.
+	"run.service.health": true,
+	// An approval rule's dry-run row (0.10 SI-POLICY), named by the service-identity design and its upgrade note
+	// ("Before you upgrade", quoted verbatim) before it met this grammar: it says what the rule would have done.
+	"approval.policy.would_approve": true,
+	// A workload's refused launch (0.10), named by the workloads design before it met this grammar.
+	"workload.launch_refused": true,
 	// CLI sign-in's refusal and reuse rows (0.10 ATT-LOGIN-SRV), named by the attach design
 	// (DESIGN-ATTACH.md section 11.2) before they met this grammar; the CLI and console lanes build on them.
 	"cli.session.refresh_refused": true,

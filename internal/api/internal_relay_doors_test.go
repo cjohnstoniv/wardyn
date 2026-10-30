@@ -5,11 +5,14 @@ package api
 
 import (
 	"crypto/tls"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -168,5 +171,34 @@ func TestRelayListenerCapsStreamsPerRunner(t *testing.T) {
 	t.Cleanup(func() { _ = peer4.Close(); _ = extra.Close() })
 	if _, _ = l.Accept(); l.offerFor(a, extra) == nil {
 		t.Fatal("a double Close freed two slots")
+	}
+}
+
+// The relay server keeps the internal listener's bounds (10 s to finish the TLS handshake and the
+// request header, 120 s idle between requests): a stream that never sends a handshake is closed and
+// gives its runner's relay slot back.
+func TestRelayServerBoundsHandshakeAndIdle(t *testing.T) {
+	noCert := &tls.Config{GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return nil, errors.New("no certificate") }}
+	srv := newRelayHTTPServer(http.NotFoundHandler(), noCert)
+	if srv.ReadHeaderTimeout != 10*time.Second || srv.IdleTimeout != 120*time.Second {
+		t.Fatalf("relay server bounds = handshake/header %v, idle %v; want 10s and 2m0s", srv.ReadHeaderTimeout, srv.IdleTimeout)
+	}
+	srv.ReadHeaderTimeout = 100 * time.Millisecond
+	var l relayListener
+	l.start()
+	go func() { _ = srv.ServeTLS(&l, "", "") }()
+	t.Cleanup(func() { _ = srv.Close() })
+	id := uuid.New()
+	c, peer := net.Pipe()
+	t.Cleanup(func() { _ = peer.Close() })
+	if err := l.offerFor(id, c); err != nil {
+		t.Fatal(err)
+	}
+	held := func() int32 { v, _ := l.held.Load(id); return v.(*atomic.Int32).Load() }
+	for i := 0; i < 300 && held() != 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := held(); n != 0 {
+		t.Fatalf("a stream that never sent a handshake still holds %d relay slot(s) of its runner", n)
 	}
 }

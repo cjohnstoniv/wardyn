@@ -90,7 +90,25 @@ func (s *Server) setupModelProviderState(ctx context.Context, sc types.SiteConfi
 		p, _ := modelProviderByID(sc.ModelProviders, a.Provider)
 		checks = append(checks, providerAccessCheck(p, a, len(defaultFor[a.Provider]) > 0))
 	}
-	return mp, access, checks
+	return mp, access, append(checks, s.awsSigV4FallbackChecks(sc, mp)...)
+}
+
+// awsSigV4FallbackChecks warn, with WARDYN_AWS_SIGV4_AT_PROXY on, of each AWS sign-in provider in mp
+// whose lane the proxy does not re-sign, and why: those runs still get role credentials in the
+// sandbox. Advisory: the decision is dispatch's own (awsSigV4Lane), taken again for each run.
+func (s *Server) awsSigV4FallbackChecks(sc types.SiteConfig, mp []SetupModelProvider) []SetupCheck {
+	var checks []SetupCheck
+	for _, sp := range mp {
+		p, ok := modelProviderByID(sc.ModelProviders, sp.ID)
+		if !ok || p.Kind != types.ModelProviderBedrockSSO {
+			continue
+		}
+		if _, why := s.awsSigV4Lane(providerBedrockHosts(p)); why.Code != "" && why.Code != awsSigV4WhyOff {
+			checks = append(checks, SetupCheck{ID: "aws_sigv4_fallback:" + sp.ID, Label: "AWS signing at the proxy: " + cmp.Or(p.Name, sp.ID),
+				Status: "warn", Detail: "Runs on this provider are not signed at the proxy, so their AWS role credentials enter the sandbox: " + why.String() + "."})
+		}
+	}
+	return checks
 }
 
 // The checklist copy for the per-provider rows.

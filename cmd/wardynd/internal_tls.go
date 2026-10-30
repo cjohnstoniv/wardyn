@@ -41,6 +41,22 @@ func (h *hopTLS) caCertPEM() string {
 	return h.caPEM
 }
 
+// internalListenBinds reports whether the proxy-facing listener comes up for this control-plane URL: only an https
+// URL gets one (loadHopTLS); a loopback http URL is a local install with no internal listener at all.
+func internalListenBinds(controlURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(controlURL))
+	return err == nil && strings.EqualFold(u.Scheme, "https")
+}
+
+// boundInternalListen is the internal listener's address when it binds, and "" when it does not: an unbound
+// listener holds no address another listener could collide with.
+func boundInternalListen(internalListen, controlURL string) string {
+	if internalListenBinds(controlURL) {
+		return internalListen
+	}
+	return ""
+}
+
 // loadHopTLS refuses a plaintext control-plane URL on a non-local install
 // (hoptls.CheckURL — the same rule the proxy applies at start), then loads or
 // mints the internal CA through the boot-key pattern (loadOrCreateSecret) and

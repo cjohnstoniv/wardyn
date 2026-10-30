@@ -81,6 +81,13 @@ type manifest struct {
 	Grant       *Grant       `json:"grant,omitempty"`
 	Gen         uint64       `json:"gen,omitempty"`
 	PendingLoss *PendingLoss `json:"pending_loss,omitempty"`
+	// RefusedAtGrant is Producer.Refused when the outstanding grant was issued: a refusal counted
+	// past it was made against this grant (Full).
+	RefusedAtGrant uint64 `json:"refused_at_grant,omitempty"`
+	// EndPending is set, durably, before the runner starts ending the run's VM for a full spool and
+	// cleared only once the VM is ended: a restart in between still finishes the end, whatever Full
+	// says by then (a reconnecting proxy's Accept resets it).
+	EndPending bool `json:"end_pending,omitempty"`
 }
 
 // Disposition is the one durable outcome of a producer sequence.
@@ -445,6 +452,53 @@ func (s *Spool) CanRecord(ctx context.Context) error {
 	})
 }
 
+// Full reports whether the spool is full for the proxy that writes it: the sink can grant no record,
+// or a request was refused against the outstanding grant (Producer.Refused moved since it was issued)
+// while the room left is below the largest record a request can reserve (MaxRecordBytes). A refusal
+// with more room than that is a burst a regrant clears. A real request reserves its record envelope
+// plus 12 bytes per byte of its target, so the proxy stalls tens or hundreds of bytes above
+// MinRequestReservation, and a scanned POST a megabyte above it: only a counted refusal says which.
+// A sealed spool is not full: its run is retired.
+func (s *Spool) Full(ctx context.Context) (full bool, err error) {
+	err = s.locked(ctx, func() error {
+		m, err := s.readManifest()
+		if err != nil || m.Sealed {
+			return err
+		}
+		records, bytes := grantRoom(m)
+		refusedHere := m.Producer != nil && m.Producer.Refused > m.RefusedAtGrant
+		full = records < 1 || (refusedHere && bytes < MaxRecordBytes)
+		return nil
+	})
+	return full, err
+}
+
+// SetEndPending records, durably, that the run's VM is being ended for a full spool (true) or has been
+// (false). A sealed spool takes neither.
+func (s *Spool) SetEndPending(ctx context.Context, pending bool) error {
+	return s.locked(ctx, func() error {
+		m, err := s.readManifest()
+		if err != nil || m.Sealed || m.EndPending == pending {
+			return err
+		}
+		m.EndPending = pending
+		return s.writeManifest(m)
+	})
+}
+
+// EndPending reports whether SetEndPending(true) was recorded and not cleared.
+func (s *Spool) EndPending(ctx context.Context) (pending bool, err error) {
+	err = s.locked(ctx, func() error {
+		m, err := s.readManifest()
+		if err != nil || m.Sealed {
+			return err
+		}
+		pending = m.EndPending
+		return nil
+	})
+	return pending, err
+}
+
 // Refuse durably counts one egress admission refused because capacity is full.
 func (s *Spool) Refuse(ctx context.Context) error {
 	return s.locked(ctx, func() error {
@@ -473,6 +527,9 @@ const (
 	GrantReservations = 16
 	GrantBytes        = GrantReservations * MaxRecordBytes
 	LossReserveBytes  = 4 << 10
+	// MinRequestReservation is the least a proxy reserves for one request (its record envelope); a
+	// grant with fewer bytes admits nothing.
+	MinRequestReservation = 64 << 10
 	// grantRecordEnvelope is what a spool row adds to a record body: the
 	// stream id, sequence and hash. A grant's byte credit leaves it per record.
 	grantRecordEnvelope = 512
@@ -522,14 +579,21 @@ func (m manifest) remoteSettled() bool {
 // nextGrant is the credit a live session may hold now; it never lowers an
 // outstanding ceiling (design Q5).
 func nextGrant(m manifest) Grant {
-	free := max(int64(MaxRecords)-(m.Last-m.Ack.Seq)-1, 0)
-	n := min(int64(GrantRecords), free)
-	bytes := max(min(int64(GrantBytes), int64(MaxBytes)-m.Bytes-LossReserveBytes-n*grantRecordEnvelope), 0)
+	n, bytes := grantRoom(m)
 	g := Grant{Gen: m.Gen, Base: m.Producer.Seq, Through: m.Producer.Seq + n, Bytes: bytes}
 	if old := m.Grant; old != nil && old.Through > g.Through {
 		g.Through = old.Through
 	}
 	return g
+}
+
+// grantRoom is the records and bytes of credit the spool has room for now: the last record slot and
+// LossReserveBytes stay free, and each granted record leaves its envelope.
+func grantRoom(m manifest) (records, bytes int64) {
+	free := max(int64(MaxRecords)-(m.Last-m.Ack.Seq)-1, 0)
+	records = min(int64(GrantRecords), free)
+	bytes = max(min(int64(GrantBytes), int64(MaxBytes)-m.Bytes-LossReserveBytes-records*grantRecordEnvelope), 0)
+	return records, bytes
 }
 
 // Session is an accepted sink session's durable start.
@@ -562,7 +626,7 @@ func (s *Spool) Accept(ctx context.Context, instance string) (out Session, err e
 			m.Producer = &Producer{Instance: instance}
 		}
 		g := nextGrant(m)
-		m.Grant = &g
+		m.Grant, m.RefusedAtGrant = &g, m.Producer.Refused
 		if err := s.writeManifest(m); err != nil {
 			return err
 		}
@@ -587,7 +651,7 @@ func (s *Spool) Regrant(ctx context.Context, gen uint64, instance string) (g Gra
 		if g == *m.Grant {
 			return nil
 		}
-		m.Grant, changed = &g, true
+		m.Grant, m.RefusedAtGrant, changed = &g, m.Producer.Refused, true
 		return s.writeManifest(m)
 	})
 	return

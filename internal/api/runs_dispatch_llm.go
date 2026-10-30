@@ -77,6 +77,8 @@ type llmTransport struct {
 type bedrockTransportAudit struct {
 	region, model, endpoint, mode, detail string
 	hosts                                 []string
+	// signing is the AWS sign-in lane's re-signing choice (awsSigningAudit); nil on the bearer lane.
+	signing *awsSigV4Why
 }
 
 // providerSubscription reports whether this run chose a Claude subscription
@@ -159,6 +161,10 @@ func (s *Server) applyBedrockTransport(b bedrockAuth, policy *types.RunPolicySpe
 		detail = "captured AWS SSO session materialized as a minimal synthetic ~/.aws; the sandbox SDK exchanges it for short-lived role credentials (portal.sso GetRoleCredentials). The SSO access token IS resident — Phase B (WARDYN_AWS_SSO_PROXY_INJECT) injects it proxy-side on portal.sso instead"
 		mode = "sso-inject"
 	}
+	var signing *awsSigV4Why
+	if b.ssoInject {
+		signing = &b.sigv4Why
+	}
 	return secretEnvKeys, bedrockTransportAudit{
 		region: b.region, model: b.model, hosts: b.egressHosts,
 		// The EFFECTIVE data-plane host — the provider's own base URL
@@ -166,7 +172,7 @@ func (s *Server) applyBedrockTransport(b bedrockAuth, policy *types.RunPolicySpe
 		// where the call actually went rather than leaving an auditor to infer
 		// it from the region.
 		endpoint: b.runtimeHost,
-		mode:     mode, detail: detail,
+		mode:     mode, detail: detail, signing: signing,
 	}
 }
 
@@ -184,6 +190,9 @@ func (s *Server) recordBedrockTransport(ctx context.Context, run types.AgentRun,
 	}
 	if run.ModelProviderID != "" {
 		data["provider"] = run.ModelProviderID
+	}
+	if a.signing != nil {
+		awsSigningAudit(data, *a.signing)
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.bedrock.configure",
 		run.ID.String(), "success", mustJSON(data)))
@@ -376,6 +385,8 @@ type dispatchLLMPlan struct {
 	// localModels is ProxyConfig.LocalModels: each local_model upstream's model
 	// allowlist and request bounds, for the proxy's route gate.
 	localModels map[string]types.LocalModelSettings
+	// localAllowlists is those allowlists by provider id, as recorded on the run (recordModelAllowlists).
+	localAllowlists map[string][]string
 	// mitmLLM is whether the BUILT-IN LLM hosts should be intercepted —
 	// subscription injection or intercept_tls inspection, never a CA minted
 	// purely for artifact tokens. Computed here because every input to it is
@@ -469,7 +480,8 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// refuses to share a sandbox profile with. Same stop-on-failure contract.
 	// The two never both re-sign: the row refuses a run on the captured-SSO lane.
 	var cliMITMHosts []string
-	if injections, cliMITMHosts, cliSigV4, ok = s.authorAWSCLI(ctx, run, p.Components.AWSCLI, policy, sandboxEnv, injections); !ok {
+	var cliSigning *awsSigV4Why
+	if injections, cliMITMHosts, cliSigV4, cliSigning, ok = s.authorAWSCLI(ctx, run, p.Components.AWSCLI, policy, sandboxEnv, injections); !ok {
 		return dispatchLLMPlan{}, false
 	}
 	awsSigV4 = cmp.Or(awsSigV4, cliSigV4)
@@ -505,6 +517,8 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// takes from showing a "success" injection row for a credential it was
 	// never handed (#518).
 	s.recordBedrockTransport(ctx, bedrockRun, llm)
+	s.recordAWSCLIConfigure(ctx, run, p.Components.AWSCLI, cliSigning)
+	s.recordModelAllowlists(ctx, run.ID, prov.localAllowlists)
 
 	return dispatchLLMPlan{
 		llm: llm, injections: injections,
@@ -516,7 +530,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		awsSigV4:             awsSigV4,
 		kubectlCLI:           kubectlCLI,
 		mitmLLM:              subscription || mitmForInspect,
-		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams, localModels: prov.localModels,
+		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams, localModels: prov.localModels, localAllowlists: prov.localAllowlists,
 	}, true
 }
 

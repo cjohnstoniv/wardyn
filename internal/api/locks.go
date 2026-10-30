@@ -33,6 +33,17 @@ type lockState struct {
 	// override replaces the store's locker. Set by tests only, to hand a server
 	// a locker that refuses or has a one-connection pool.
 	override db.Locker
+	// held replaces db.LockHeld. Set by tests only, to lose a hold the
+	// in-process locker never loses.
+	held func(context.Context) error
+}
+
+// lockHeld is db.LockHeld: nil only while every lock ctx carries is held.
+func (s *Server) lockHeld(ctx context.Context) error {
+	if s.locks.held != nil {
+		return s.locks.held(ctx)
+	}
+	return db.LockHeld(ctx)
 }
 
 // locker is the store's own (Postgres, shared by every replica over one
@@ -94,7 +105,7 @@ func writeLockRefused(w http.ResponseWriter, r *http.Request, err error) {
 	writeErrorReason(w, http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg)
 }
 
-const lockUnavailableMsg = "another operation on this resource is in progress, or the server cannot take its lock right now; retry in a moment"
+const lockUnavailableMsg = "Another operation on this resource is in progress, or the server cannot take its lock right now; retry in a moment"
 
 // The per-run operation lock (#1480). Two paths in this daemon act on one run's
 // proxy and broker credentials from a row they read earlier: a revive replaces

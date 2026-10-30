@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -85,23 +86,40 @@ type RFBRecorder struct {
 	msg     []byte
 
 	stream  *rfbStream // the RFB stream after a 101
-	kept    []byte
 	stopped int64
 	seen    int64 // every byte Write was given
+
+	// A frame holds whole server messages only, so a pause leaves out whole messages and what is kept
+	// still decodes. pending is the kept bytes of the message being read, out the whole messages the
+	// WebSocket message being read ended. dropping: the message being read is left out, since it
+	// overlaps a pause. The handshake is kept even while paused: it holds no screen and a replay
+	// cannot decode anything without it.
+	pending  []byte
+	out      []byte
+	inited   bool
+	dropping bool
 
 	frames    []string
 	size      int
 	truncated bool
 	gaps      []RFBGap
 	paused    bool
-	// tainted: the message being read holds bytes that arrived while paused (or the stream carries a
-	// field begun then), so it is not kept even if it ends after Resume. The parser still follows it.
+	// tainted: the WebSocket message being read holds bytes that arrived while paused, so no server
+	// message in it is kept even if it ends after Resume. The parser still follows it.
 	tainted bool
 }
 
 // NewRFBRecorder starts a recording at now().
 func NewRFBRecorder(now func() time.Time) *RFBRecorder {
 	return &RFBRecorder{now: now, start: now()}
+}
+
+// NewRFBFrameRecorder starts a recording at now() of a stream that is WebSocket frames from its first
+// byte, with no HTTP upgrade before them: a Linux VM's display as the UI gateway frames it.
+func NewRFBFrameRecorder(now func() time.Time) *RFBRecorder {
+	r := NewRFBRecorder(now)
+	r.startFrames()
+	return r
 }
 
 func (r *RFBRecorder) ms() int64 { return r.now().Sub(r.start).Milliseconds() }
@@ -164,7 +182,7 @@ func (r *RFBRecorder) readHeader(p []byte) []byte {
 	r.hdr = nil
 	status, fields, _ := strings.Cut(head, "\r\n")
 	if parts := strings.Fields(status); len(parts) >= 2 && parts[1] == "101" {
-		r.state, r.stream = rfbFrames, newRFBStream()
+		r.startFrames()
 		return rest
 	}
 	r.state = rfbScan
@@ -184,6 +202,13 @@ func (r *RFBRecorder) readHeader(p []byte) []byte {
 		r.state = rfbHeader
 	}
 	return rest
+}
+
+// startFrames begins a fresh RFB stream read from WebSocket frames.
+func (r *RFBRecorder) startFrames() {
+	r.state, r.stream = rfbFrames, newRFBStream()
+	r.stream.boundary = r.boundary
+	r.pending, r.inited, r.dropping = nil, false, false
 }
 
 // readFrames consumes WebSocket frames, keeping each complete data message.
@@ -213,7 +238,7 @@ func (r *RFBRecorder) readFrames(p []byte) []byte {
 				r.msg = append(r.msg, b)
 			}
 			r.tainted = r.tainted || r.paused
-			if r.size+len(r.msg) > MaxRFBBytes {
+			if r.size+len(r.pending)+len(r.msg) > MaxRFBBytes {
 				r.truncated, r.msg = true, nil
 			}
 		}
@@ -265,7 +290,7 @@ func (r *RFBRecorder) frameHeader() bool {
 }
 
 // endFrame closes a frame; a final data frame ends its message. The RFB reader keeps the message's
-// bytes except ServerCutText, and they are a frame unless paused.
+// bytes except ServerCutText, and the whole server messages it ended are a frame.
 func (r *RFBRecorder) endFrame() {
 	r.inFrame = false
 	if r.ctl || !r.fin {
@@ -279,18 +304,37 @@ func (r *RFBRecorder) endFrame() {
 		}
 		payload = dec
 	}
-	r.kept = r.kept[:0]
-	r.stream.feed(payload, func(b []byte) { r.kept = append(r.kept, b...) })
+	r.out = r.out[:0]
+	r.stream.feed(payload, r.keep)
 	if r.stream.failed && r.stopped == 0 {
 		r.stopped = max(r.ms(), 1)
 	}
-	if len(r.kept) > 0 && !r.paused && !r.tainted && !r.truncated {
-		r.frames = append(r.frames, "{"+strconv.FormatInt(r.ms(), 10)+"{"+base64.StdEncoding.EncodeToString(r.kept))
-		r.size += len(r.kept)
+	r.tainted = false
+	if r.stream.atBoundary() {
+		r.dropping = r.paused
+	}
+	if len(r.out) > 0 && !r.truncated {
+		r.frames = append(r.frames, "{"+strconv.FormatInt(r.ms(), 10)+"{"+base64.StdEncoding.EncodeToString(r.out))
+		r.size += len(r.out)
 	}
 	r.msg, r.opcode = r.msg[:0], 0
-	// A paused field the stream still carries keeps the next message tainted too.
-	r.tainted = r.tainted && len(r.stream.buf) > 0
+}
+
+// keep takes bytes the RFB reader keeps, unless the message they belong to is left out.
+func (r *RFBRecorder) keep(b []byte) {
+	if !r.inited || !r.dropping {
+		r.pending = append(r.pending, b...)
+	}
+}
+
+// boundary runs as each server message starts: the one that just ended is kept unless it was left
+// out, and the next is left out when it starts during a pause or in bytes that arrived during one.
+func (r *RFBRecorder) boundary() {
+	if !r.inited || !r.dropping {
+		r.out = append(r.out, r.pending...)
+	}
+	r.inited, r.pending = true, r.pending[:0]
+	r.dropping = r.paused || r.tainted
 }
 
 // ClipboardOmitted is how many clipboard messages the recording left out so far.
@@ -303,6 +347,14 @@ func (r *RFBRecorder) ClipboardOmitted() int {
 	return r.stream.cutTexts
 }
 
+// StoppedMS is the playback's StoppedMS: when the recorder stopped at a message it could not follow,
+// or 0 when it never did.
+func (r *RFBRecorder) StoppedMS() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stopped
+}
+
 // Pause stops keeping frames and opens a gap; it reports false when already paused.
 func (r *RFBRecorder) Pause(reason string) bool {
 	r.mu.Lock()
@@ -311,6 +363,10 @@ func (r *RFBRecorder) Pause(reason string) bool {
 		return false
 	}
 	r.paused = true
+	if r.inited {
+		// The message being read began before the pause and ends in it: none of it is kept.
+		r.pending, r.dropping = r.pending[:0], true
+	}
 	r.gaps = append(r.gaps, RFBGap{StartMS: r.ms(), Reason: reason})
 	return true
 }
@@ -323,8 +379,11 @@ func (r *RFBRecorder) Resume() bool {
 		return false
 	}
 	r.paused = false
-	// A message or RFB field already begun holds paused bytes: the message that ends it is not kept.
-	r.tainted = r.tainted || r.inFrame || len(r.msg) > 0 || (r.stream != nil && len(r.stream.buf) > 0)
+	// A server message already begun holds paused bytes: it stays out, and keeping starts with the
+	// next message to start.
+	if r.stream != nil && r.stream.atBoundary() && len(r.msg) == 0 {
+		r.dropping = false
+	}
 	r.gaps[len(r.gaps)-1].EndMS = max(r.ms(), 1)
 	return true
 }
@@ -349,26 +408,39 @@ func (r *RFBRecorder) Playback() (doc []byte, hadFrames bool) {
 // ReadSideConn tees every byte read from c (the sandbox side) into rec, and runs onClose once when
 // the connection closes. Write is c's own: what the browser sends is never seen here.
 func ReadSideConn(c net.Conn, rec *RFBRecorder, onClose func()) net.Conn {
-	return &readSideConn{Conn: c, rec: rec, onClose: onClose}
+	return &readSideConn{Conn: c, side: readSide{ReadWriteCloser: c, rec: rec, onClose: onClose}}
+}
+
+// ReadSide is ReadSideConn on a stream that is not a net.Conn (a Linux VM's display).
+func ReadSide(c io.ReadWriteCloser, rec *RFBRecorder, onClose func()) io.ReadWriteCloser {
+	return &readSide{ReadWriteCloser: c, rec: rec, onClose: onClose}
 }
 
 type readSideConn struct {
 	net.Conn
+	side readSide
+}
+
+func (c *readSideConn) Read(p []byte) (int, error) { return c.side.Read(p) }
+func (c *readSideConn) Close() error               { return c.side.Close() }
+
+type readSide struct {
+	io.ReadWriteCloser
 	rec     *RFBRecorder
 	once    sync.Once
 	onClose func()
 }
 
-func (c *readSideConn) Read(p []byte) (int, error) {
-	n, err := c.Conn.Read(p)
+func (c *readSide) Read(p []byte) (int, error) {
+	n, err := c.ReadWriteCloser.Read(p)
 	if n > 0 {
 		_, _ = c.rec.Write(p[:n])
 	}
 	return n, err
 }
 
-func (c *readSideConn) Close() error {
-	err := c.Conn.Close()
+func (c *readSide) Close() error {
+	err := c.ReadWriteCloser.Close()
 	c.once.Do(c.onClose)
 	return err
 }

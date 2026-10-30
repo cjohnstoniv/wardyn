@@ -11,6 +11,7 @@ import type { ApprovalRequest } from "../../lib/types";
 import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
 import { ADO } from "../../lib/ado-entra-copy";
 import { heldFieldsFor } from "../../lib/test-hold-fixture";
+import { ADO_CAPABILITIES } from "../../lib/ado-capabilities";
 
 const OWNER: AdoCardRun = { created_by: "dana@acme.example", state: "RUNNING" };
 const ENDED_RUN: AdoCardRun = { created_by: "dana@acme.example", state: "COMPLETED" };
@@ -502,6 +503,45 @@ describe("AdoCapabilityCard — the escalation states", () => {
     expect(within(card).getByRole("button", { name: "Approve" }).className).not.toMatch(/\bbg-info\b/);
     expect(within(card).getByRole("button", { name: "Deny" }).className).toMatch(/\bbg-destructive\b/);
   });
+
+  // #2594: every capability the catalogue flags high risk, not the two Q3 named.
+  it.each(ADO_CAPABILITIES.filter((c) => c.highRisk).map((c) => c.cap))(
+    "high-risk %s gets a plain Approve and a destructive Deny",
+    async (capability) => {
+      renderCard(
+        <AdoCapabilityCard
+          item={escalation({ requested_scope: { ...escalation().requested_scope, capability } as never })}
+          securityOperator
+          run={OWNER}
+          busy={null}
+          onApprove={vi.fn()}
+          onDeny={vi.fn()}
+        />,
+      );
+      const card = await screen.findByTestId("ado-capability-card");
+      expect(within(card).getByRole("button", { name: "Approve" }).className).not.toMatch(/\bbg-info\b/);
+      expect(within(card).getByRole("button", { name: "Deny" }).className).toMatch(/\bbg-destructive\b/);
+    },
+  );
+
+  it.each(ADO_CAPABILITIES.filter((c) => !c.highRisk).map((c) => c.cap))(
+    "ordinary %s keeps a teal Approve and a plain Deny",
+    async (capability) => {
+      renderCard(
+        <AdoCapabilityCard
+          item={escalation({ requested_scope: { ...escalation().requested_scope, capability } as never })}
+          securityOperator
+          run={OWNER}
+          busy={null}
+          onApprove={vi.fn()}
+          onDeny={vi.fn()}
+        />,
+      );
+      const card = await screen.findByTestId("ado-capability-card");
+      expect(within(card).getByRole("button", { name: "Approve" }).className).toMatch(/\bbg-info\b/);
+      expect(within(card).getByRole("button", { name: "Deny" }).className).not.toMatch(/\bbg-destructive\b/);
+    },
+  );
 
   it("renders no buttons and neutral 'Not yours to decide' for a non-owner, non-security viewer", async () => {
     const onApprove = vi.fn();

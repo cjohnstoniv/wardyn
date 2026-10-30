@@ -10,6 +10,8 @@ import { CircleAlert } from "lucide-react";
 import { Button } from "../../../ui/button";
 import { cn } from "../../../ui/utils";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
+import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
+import type { SetupItem } from "../../../../lib/types/preflight";
 import type { NewRunLocation } from "../draft/new-run-url";
 import type { Blocker } from "./blockers";
 
@@ -19,11 +21,14 @@ export function BlockerList({
   blockers,
   go,
   onCheckAgain,
+  onAdd,
 }: {
   blockers: readonly Blocker[];
   go: (loc: NewRunLocation) => void;
   /** The stale result's fix sits in its own card (#3043); the footer's Check again stays too. */
   onCheckAgain?: () => void;
+  /** Opens the paste-once dialog for a missing secret, as Tools' Add does. */
+  onAdd?: (item: SetupItem) => void;
 }) {
   // A stale result blames no group, so its card is amber; any blocker that names something stays red.
   const stale = blockers.length > 0 && blockers.every((b) => b.kind === "stale");
@@ -45,13 +50,18 @@ export function BlockerList({
           </p>
           <ul className="mt-2 flex flex-col gap-1 pl-6">
             {blockers.map((b) => (
-              <li key={b.id}>
+              <li key={b.id} className={b.addSecret && onAdd ? "flex flex-wrap items-center justify-between gap-2" : undefined}>
                 {b.to ? (
-                  <button type="button" className="text-left text-foreground underline underline-offset-2 hover:no-underline" onClick={() => b.to && go(b.to)}>
+                  <button id={`${b.id}-text`} type="button" className="text-left text-foreground underline underline-offset-2 hover:no-underline" onClick={() => b.to && go(b.to)}>
                     {b.text}
                   </button>
                 ) : (
                   <span>{b.text}</span>
+                )}
+                {b.addSecret && onAdd && (
+                  <Button type="button" variant="outline" size="sm" aria-describedby={`${b.id}-text`} onClick={() => b.addSecret && onAdd(b.addSecret)}>
+                    {NR_TOOLS.SETUP_ADD}
+                  </Button>
                 )}
                 {b.hint && <p className="text-xs text-muted-foreground">{b.hint}</p>}
               </li>

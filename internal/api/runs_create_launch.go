@@ -70,6 +70,8 @@ type createRunLaunch struct {
 	// mainDrive is the main drive the fold decided (stepMainDrive); dispatch writes its size and
 	// treats it as soft unless the run's policy wrote it.
 	mainDrive *mainDriveDecision
+	// signinImageUngranted is the fold's (runFold.signinImageUngranted).
+	signinImageUngranted bool
 }
 
 // launch is what both doors hand finishCreateRunLaunch for a run the fold admitted: create, and the pool
@@ -83,6 +85,7 @@ func (f *runFold) launch(req createRunRequest, spec types.RunPolicySpec, ceiling
 		wsRefs: f.wsRefs, driveMounts: f.driveMounts, memberDrives: memberDriveOwners(f.drives), ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
 		runToken: runToken, created: created, comps: f.comps, overridden: f.source.overridden(), provenance: f.source.knobs, pushSets: f.pushSets,
 		harnessRules: harnessRules, harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
+		signinImageUngranted: f.signinImageUngranted,
 	}
 }
 
@@ -135,10 +138,11 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 	// Resolve the sandbox image (BYOI wrap > devcontainer build > workspace
 	// profile > convention image) and persist it for provenance. A failed
 	// BYOI/devcontainer build has already marked the run FAILED.
-	image, failed := s.resolveCreateRunImage(ctx, l.req, l.created, l.wsRefs)
+	image, arches, failed := s.resolveCreateRunImage(ctx, l.req, l.created, l.wsRefs)
 	if failed {
 		return
 	}
+	l.created.ImageArches = arches
 
 	// Dispatch the sandbox if a runner is wired; otherwise stay PENDING.
 	if s.cfg.Runner != nil {
@@ -183,6 +187,8 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			HarnessToolRules: l.harnessRules,
 			Harnesses:        l.harnesses,
 			MainDrive:        l.mainDrive,
+			// SigninImageUngranted keeps a person's own desktop image (desktopSigninDispatch).
+			SigninImageUngranted: l.signinImageUngranted,
 		})
 	}
 }

@@ -27,11 +27,15 @@ import (
 // egress off and keeps the run's own allowlist, and DeniedDomains is added. A
 // layer that only denies leaves the first two nil. grants is the credential
 // grants the layer lets a run be given, nil for no limit (an empty list allows
-// none); the seal never reads it, the withholding after it does.
+// none); the seal never reads it, the withholding after it does. desktop is
+// the desktop directions the layer blocks, nil when it bounds none.
 type sealLayer struct {
-	rec    policyref.Provenance
-	egress types.CeilingOverlay
-	grants *[]types.GrantSpec
+	rec     policyref.Provenance
+	egress  types.CeilingOverlay
+	grants  *[]types.GrantSpec
+	desktop *types.DesktopControls
+	// withheldGrants is the credentials the layer keeps from a run (a restriction's withheld_grants).
+	withheldGrants []types.GrantSpec
 }
 
 // sealDecision is one knob a layer narrowed.
@@ -41,24 +45,28 @@ type sealDecision struct {
 }
 
 // outerLayers is the ordered outer layers a run is sealed against, outermost
-// first: the Wardyn boundary, then the owner's restrictions (still to come).
+// first: the Wardyn boundary, then the restrictions the run captured (restrictionSealLayers),
+// then the run owner's own walls (personalWallsSealLayer).
 // Unit walls are inner layers, applied at resolve, never here. In no_limits there
 // is no layer, so the seal is the identity. A boundary that cannot be read seals
-// the run to no egress and no credential at all: an unread boundary is never no
-// boundary.
+// the run to no egress, no credential and no desktop direction at all: an unread
+// boundary is never no boundary.
 func (s *Server) outerLayers(ctx context.Context, run types.AgentRun) []sealLayer {
 	b, err := s.governanceBoundary(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: read the Wardyn boundary at the seal; the run is sealed to no egress",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		off := false
+		none := types.DesktopControls{PasteIn: types.TransferBlocked, CopyOut: types.TransferBlocked, Upload: types.TransferBlocked, Download: types.TransferBlocked}
 		return []sealLayer{{rec: boundaryProvenance, egress: types.CeilingOverlay{AllowedDomains: &[]string{}, AllowAllEgress: &off},
-			grants: &[]types.GrantSpec{}}}
+			grants: &[]types.GrantSpec{}, desktop: &none}}
 	}
-	if !b.HardLimits() {
-		return nil
+	var layers []sealLayer
+	if b.HardLimits() {
+		layers = append(layers, sealLayer{rec: boundaryProvenance, egress: boundarySealEgress(b.Spec), grants: b.Spec.EligibleGrants, desktop: b.Spec.Desktop})
 	}
-	return []sealLayer{{rec: boundaryProvenance, egress: boundarySealEgress(b.Spec), grants: b.Spec.EligibleGrants}}
+	layers = append(layers, s.restrictionSealLayers(ctx, run)...)
+	return append(layers, s.personalWallsSealLayer(ctx, run)...)
 }
 
 // boundarySealEgress is the boundary's egress as a seal layer: its allowlist when it names one and
@@ -112,7 +120,8 @@ func (s *Server) sealRunPolicy(ctx context.Context, run types.AgentRun, policy *
 // sealPolicy meets spec with each layer in order, by the governance meet
 // (composer.ApplyOverlay): the allowlist is intersected, allow_all_egress
 // survives only where every layer allows it, and the deny lists are merged.
-// Only those three knobs are read, so nothing else in spec can change. With no
+// The desktop directions a layer blocks are blocked (types.DesktopControls.Meet).
+// Only those four knobs are read, so nothing else in spec can change. With no
 // layers spec is untouched.
 func sealPolicy(spec *types.RunPolicySpec, layers []sealLayer) []sealDecision {
 	var decided []sealDecision
@@ -136,6 +145,13 @@ func sealPolicy(spec *types.RunPolicySpec, layers []sealLayer) []sealDecision {
 			decided = append(decided, sealDecision{"denied_domains", l.rec})
 		}
 		spec.AllowedDomains, spec.DeniedDomains, spec.AllowAllEgress = out.AllowedDomains, out.DeniedDomains, out.AllowAllEgress
+		if l.desktop != nil {
+			// Written only when it narrows, so a run the layer already holds keeps its spelling.
+			if d := spec.Desktop.Meet(l.desktop); d != spec.Desktop.Effective() {
+				spec.Desktop = &d
+				decided = append(decided, sealDecision{"desktop", l.rec})
+			}
+		}
 	}
 	return decided
 }

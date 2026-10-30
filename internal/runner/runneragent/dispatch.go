@@ -34,6 +34,11 @@ type Config struct {
 	// and durably holds. Any other ref reaches the substrate only when the
 	// substrate proves it a sandbox created for this runner.
 	HoldsSandbox func(string) bool
+	// Covered reports whether Status can observe a local ref's sandbox now: false for a run whose
+	// machine kind the substrate cannot enumerate now (macOS VMs off). Status and AgentStatus of such a
+	// ref answer errUnobservable, never the substrate's "not found", which the org would read as gone.
+	// Nil covers every ref.
+	Covered func(localRef string) bool
 	// BeforeCreate durably establishes a unique creation intent and live lease.
 	// Nil proves a NEW run; every existing or ambiguous intent must refuse.
 	BeforeCreate func(context.Context, runner.SandboxSpec) error
@@ -66,7 +71,22 @@ type Config struct {
 	// Resident is the runner_resident adapter; nil refuses both verbs and any
 	// create or proxy replacement that names a resident grant.
 	Resident *Resident
+	// LinuxVM says the substrate starts Linux VM sandboxes, as the runner's
+	// caps say; false refuses create_vm before any intent is recorded.
+	LinuxVM bool
+	// MacOSVM is LinuxVM for macOS VM sandboxes (Caps.MacOSVM): false refuses a create_vm for
+	// machine_kind macos_vm. Each kind has its own switch, so a runner that offers one starts none of
+	// the other.
+	MacOSVM bool
+	// WorkloadStatus patches the status of one WardynWorkload custom resource from the org's answer
+	// (a k8s runner that lists workload namespaces); nil refuses workload_status.
+	WorkloadStatus func(context.Context, runnerwire.WorkloadStatusArgs) error
 }
+
+// errUnobservable is Status's and AgentStatus's answer for a sandbox Covered says this runner cannot
+// observe now. It is internal on the wire (runnerwire.ErrorFor), so the org reads it as unknown: never
+// runner.ErrSandboxGone, never runner.ErrRunnerOffline.
+var errUnobservable = errors.New("runner: this sandbox's machine kind cannot be observed on this runner now (macOS VMs are off)")
 
 type Dispatcher struct {
 	cfg Config
@@ -97,11 +117,12 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 		return nil, runner.ErrRunnerOffline
 	}
 	switch method {
-	case runnerwire.MethodCreateSandbox:
-		return d.create(ctx, peer, id, args)
+	case runnerwire.MethodCreateSandbox, runnerwire.MethodCreateVM:
+		return d.create(ctx, peer, id, method, args)
 	case runnerwire.MethodExecutionResult:
 		return d.executionResult(ctx, args)
-	case runnerwire.MethodAttach, runnerwire.MethodExecStream, runnerwire.MethodResize, runnerwire.MethodExecWait, runnerwire.MethodRecoverOutput, runnerwire.MethodOutputAck, runnerwire.MethodExecClose:
+	case runnerwire.MethodAttach, runnerwire.MethodDialDesktop, runnerwire.MethodExecStream, runnerwire.MethodResize, runnerwire.MethodExecWait, runnerwire.MethodRecoverOutput, runnerwire.MethodOutputAck, runnerwire.MethodExecClose,
+		runnerwire.MethodLocalAttach, runnerwire.MethodLocalAttachMode, runnerwire.MethodLocalAttachTeeAck:
 		if d.cfg.Streams == nil {
 			return nil, runnerwire.Refuse("runner stream adapter is unavailable")
 		}
@@ -127,6 +148,18 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 			return nil, err
 		}
 		return probe.ProbeDrive(ctx, drive)
+	case runnerwire.MethodWorkloadStatus:
+		if d.cfg.WorkloadStatus == nil {
+			return nil, runnerwire.Refuse("this runner serves no workload namespaces")
+		}
+		var a runnerwire.WorkloadStatusArgs
+		if err := runnerwire.Unmarshal(args, &a); err != nil {
+			return nil, err
+		}
+		if err := a.Validate(); err != nil {
+			return nil, err
+		}
+		return nil, d.cfg.WorkloadStatus(ctx, a)
 	case runnerwire.MethodSweep:
 		return d.sweep(ctx, args)
 	case runnerwire.MethodSelftest:
@@ -143,13 +176,28 @@ func (d *Dispatcher) local(ref string) (string, error) {
 	return local, nil
 }
 
-func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint32, args json.RawMessage) (result any, err error) {
+func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint32, method string, args json.RawMessage) (result any, err error) {
 	var a runnerwire.CreateSandboxArgs
 	if err := runnerwire.Unmarshal(args, &a); err != nil {
 		return nil, err
 	}
 	if a.Spec.RunID == uuid.Nil || a.Spec.RunnerID != d.cfg.RunnerID {
 		return nil, runnerwire.Refuse("create must name this runner and a run id")
+	}
+	// Each create method starts exactly one kind: a container is never started for a VM run, nor a
+	// VM for a container run.
+	if err := a.Spec.MachineKind.Validate(); err != nil {
+		return nil, runnerwire.Refuse("%v", err)
+	}
+	switch kind := a.Spec.MachineKind; {
+	case method == runnerwire.MethodCreateSandbox && kind.Normalize() != "":
+		return nil, runnerwire.Refuse("create_sandbox starts containers only; a %s sandbox needs create_vm", kind)
+	case method == runnerwire.MethodCreateVM && !kind.IsVM():
+		return nil, runnerwire.Refuse("create_vm starts VM sandboxes only")
+	case kind == types.MachineLinuxVM && !d.cfg.LinuxVM:
+		return nil, runnerwire.Refuse("this runner does not offer Linux VM sandboxes")
+	case kind.IsMacOSVM() && !d.cfg.MacOSVM:
+		return nil, runnerwire.Refuse("this runner does not offer macOS VM sandboxes")
 	}
 	if err := d.cfg.BeforeCreate(ctx, a.Spec); err != nil {
 		return nil, err
@@ -237,6 +285,7 @@ type refArgs struct {
 	Argv        []string `json:"argv"`
 	AgentExecID string   `json:"agent_exec_id"`
 	CfgJSON     []byte   `json:"cfg_json"`
+	Generation  int64    `json:"generation"` // runnerwire.AgentPauseArgs
 }
 
 func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMessage) (result any, err error) {
@@ -279,6 +328,9 @@ func (d *Dispatcher) refCall(ctx context.Context, method string, args json.RawMe
 	defer cancel()
 	if err := d.cfg.AfterRefCall(persist, method, ref, execID, generation); err != nil {
 		return nil, err
+	}
+	if method == runnerwire.MethodStop || method == runnerwire.MethodKill || method == runnerwire.MethodEnd {
+		result = runnerwire.TeardownReply(d.cfg.Substrate, ref) // the run's macOS VM disk report, if any
 	}
 	return result, nil
 }
@@ -335,8 +387,25 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 		code, err := sub.Wait(ctx, ref)
 		return runnerwire.WaitResult{ExitCode: code}, err
 	case runnerwire.MethodStatus:
+		if d.cfg.Covered != nil && !d.cfg.Covered(ref) {
+			return nil, errUnobservable
+		}
 		return sub.Status(ctx, ref)
+	case runnerwire.MethodPauseAgent, runnerwire.MethodResumeAgent:
+		p, ok := sub.(runner.AgentPauser)
+		if !ok {
+			return nil, runner.ErrAgentPauseUnsupported
+		}
+		call := p.ResumeAgent
+		if method == runnerwire.MethodPauseAgent {
+			call = p.PauseAgent
+		}
+		fenced, err := call(ctx, ref, a.Generation)
+		return runnerwire.AgentPauseResult{FencedPause: fenced}, err
 	case runnerwire.MethodAgentStatus:
+		if d.cfg.Covered != nil && !d.cfg.Covered(ref) {
+			return nil, errUnobservable
+		}
 		return sub.AgentStatus(ctx, ref, a.AgentExecID)
 	case runnerwire.MethodStop:
 		d.selftests.Delete(ref)
@@ -405,12 +474,12 @@ func (d *Dispatcher) sweep(ctx context.Context, args json.RawMessage) (any, erro
 			slog.WarnContext(ctx, "runner: orphan sweep listed its candidates with an error", slog.String("err", err.Error()))
 			err = nil
 		}
-		return runnerwire.SweepResult{Candidates: candidates}, err
+		return runnerwire.SweepResult{Candidates: candidates, MacOSVMDisks: runnerwire.SweepDisks(d.cfg.Substrate)}, err
 	}
 	remove := make(map[uuid.UUID]bool, len(a.Remove))
 	for _, id := range a.Remove {
 		remove[id] = true
 	}
 	n, err := sweep.SweepOrphanedSandboxes(ctx, a.MinAge, func(id uuid.UUID) bool { return remove[id] })
-	return runnerwire.SweepResult{Removed: n}, err
+	return runnerwire.SweepResult{Removed: n, MacOSVMDisks: runnerwire.SweepDisks(d.cfg.Substrate)}, err
 }

@@ -27,7 +27,7 @@ import { VIEWER_APPROVAL_BLOCKS_NOTE } from "../../wardyn/copy";
 import { deriveTitle } from "../approvals";
 import { viewerBlockedOnDecision } from "./viewer-blocked";
 import { RunCanvas } from "./canvas";
-import { RunStatusStrip } from "./status-strip";
+import { RunStatusStrip, useEvidenceFacts } from "./status-strip";
 import { RunFailureBlock } from "./failure-block";
 import { LocalModelsCard } from "./local-models-card";
 import { LoginSandboxNote } from "./login-sandbox-note";
@@ -135,6 +135,10 @@ export function Cockpit({
         onGoRecording={onGoRecording}
         execMode={execMode}
       />
+    </>
+  );
+  const decisionPane = (
+    <>
       {!terminal && notOnStrip.length > 0 && (
         <div className="shrink-0 pt-2.5">
           <DecisionBar
@@ -146,7 +150,7 @@ export function Cockpit({
         </div>
       )}
       {run.state === "RUNNING" && (
-        <div className="shrink-0 space-y-2 pt-2.5">
+        <div className="shrink-0 space-y-2 pt-2.5 empty:hidden">
           {/* Said once, where a viewer actually feels the consequence: the
               run is stopped and they personally cannot unstick it — the
               command bar states the pending count and the strip below is the
@@ -166,6 +170,7 @@ export function Cockpit({
     </>
   );
 
+  const evidence = useEvidenceFacts(run.id, !terminal);
   const ctx: WidgetContext = {
     run,
     finished: terminal,
@@ -179,16 +184,18 @@ export function Cockpit({
     // render; this is the state the alarm chip states.
     heldCount: pending.filter(isHeld).length,
     audit,
+    evidence,
     auditGap,
     onGoAudit,
     onGoPolicy,
     terminalPane,
+    decisionPane,
   };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <RunStatusStrip ctx={ctx} />
-      <LocalModelsCard run={run} audit={audit} />
+      <LocalModelsCard run={run} />
       <div className="flex min-h-0 flex-1 flex-col">
         <RunCanvas ctx={ctx} />
       </div>

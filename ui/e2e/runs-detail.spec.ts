@@ -145,6 +145,19 @@ test.describe("Run detail (/runs/:id)", () => {
     await expect(page.getByRole("button", { name: RUN.CLONE_CTA })).toBeVisible();
   });
 
+  // #3038: a finished run's widgets are as tall as their content: Identity is shown whole, and with no sandbox left
+  // there is no Files box around a sentence the Files tile already says.
+  test("a FAILED run's Overview shows Identity whole and no empty Files box", async ({ page }) => {
+    await openRuns(page);
+    await page.getByText("e2e fixture 6").click();
+    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
+    const identity = page.getByRole("heading", { name: "Identity" });
+    await expect(identity).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Files changed" })).toHaveCount(0);
+    const body = identity.locator("xpath=ancestor::section[1]/*[last()]");
+    await expect.poll(async () => body.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
+  });
+
   // 0.7.3 F7: the clone door used to live only inside the failure block (a run
   // that ended BADLY) — it now sits on the header for every terminal state,
   // COMPLETED included, in the place a dead Kill used to take.

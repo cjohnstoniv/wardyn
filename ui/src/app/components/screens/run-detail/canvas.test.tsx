@@ -8,7 +8,7 @@
 // and not a failure, a save sends the wire shape the server validates, a
 // deployment that cannot persist degrades to this session instead of erroring,
 // and the terminal survives every route by which a layout could lose it.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -46,6 +46,13 @@ const toasted = vi.hoisted(() => ({
   message: vi.fn(),
   error: vi.fn(),
 }));
+// jsdom lays nothing out, so what a tile's content measures is the test's to say (#3038).
+const measured = vi.hoisted(() => ({ px: {} as Record<string, number> }));
+vi.mock("./fit-layout", async (orig) => ({
+  ...(await orig<typeof import("./fit-layout")>()),
+  measureTile: (tile: HTMLElement) => measured.px[tile.dataset.widget ?? ""] ?? 0,
+}));
+
 vi.mock("sonner", () => ({
   toast: {
     success: (...a: unknown[]) => toasted.success(...a),
@@ -54,7 +61,17 @@ vi.mock("sonner", () => ({
   },
 }));
 
+// Focus mode is the shell's state; a test outside <AppShell> drives it directly, then re-renders the canvas.
+const focusState = vi.hoisted(() => ({ on: false }));
+vi.mock("../app-shell", () => ({ useFocusMode: () => ({ focus: focusState.on, setFocus: () => {} }) }));
+const listApprovalsMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../lib/api/approvals", () => ({
+  approvals: { listApprovals: (...a: unknown[]) => listApprovalsMock(...a), approve: vi.fn(), deny: vi.fn() },
+}));
+
 import { HttpError } from "../../../lib/api/core";
+import { LiveApprovals } from "../../wardyn/live-approvals";
+import { makeApproval } from "../../../../test/factories";
 import { RUN_COCKPIT } from "../../wardyn/copy";
 import { RunCanvas, canvasRowHeight } from "./canvas";
 import { OperatorProvider } from "../../wardyn/operator-context";
@@ -105,6 +122,7 @@ function tileY(el: Element | null | undefined): number {
 const widgetHeading = (name: string) => screen.queryByRole("heading", { name });
 
 beforeEach(() => {
+  measured.px = {};
   getLayout.mockReset();
   putLayout.mockReset();
   getLayout.mockResolvedValue({ preset: "live", layout: [] });
@@ -162,12 +180,48 @@ describe("RunCanvas — loading a layout", () => {
   });
 
   it("uses the finished preset for a stopped run — the situation picks it", async () => {
-    render(<RunCanvas ctx={ctx({ finished: true })} />);
+    render(<RunCanvas ctx={ctx({ finished: true, evidence: { files: 3, sandbox: null } })} />);
 
     await waitFor(() => expect(getLayout).toHaveBeenCalledWith("finished"));
     // A stopped run has no sandbox to meter, so that preset leaves it out.
     await waitFor(() => expect(widgetHeading("Sandbox")).not.toBeInTheDocument());
     expect(widgetHeading("Files changed")).toBeInTheDocument();
+  });
+
+  // #3038: a finished run whose sandbox is gone has no files to list, and the strip's Files tile already says so.
+  it("gives a finished run with no files no Files box, and a live run keeps it", async () => {
+    const done = render(<RunCanvas ctx={ctx({ finished: true, evidence: { files: null, sandbox: null } })} />);
+    await screen.findByRole("heading", { name: "Egress" });
+    expect(widgetHeading("Files changed")).not.toBeInTheDocument();
+    done.unmount();
+    render(<RunCanvas ctx={ctx({ evidence: { files: null, sandbox: null } })} />);
+    await screen.findByRole("heading", { name: "Egress" });
+    expect(widgetHeading("Files changed")).toBeInTheDocument();
+  });
+
+  // #3038: the finished default sizes each tile to what it holds, so Identity is whole rather than four rows.
+  it("sizes a finished run's Identity tile to its content", async () => {
+    measured.px = { identity: 700 };
+    const tile = (name: string) => widgetHeading(name)!.closest(".react-grid-item") as HTMLElement;
+    render(<RunCanvas ctx={ctx({ finished: true, evidence: { files: 3, sandbox: null } })} />);
+    await screen.findByRole("heading", { name: "Identity" });
+    await waitFor(() => expect(parseFloat(tile("Identity").style.height)).toBeGreaterThanOrEqual(700));
+  });
+
+  it("shows an arrangement the person made exactly as stored, however tall its content", async () => {
+    measured.px = { identity: 700 };
+    getLayout.mockResolvedValue({
+      preset: "finished",
+      layout: [
+        { widget: "terminal", x: 0, y: 0, w: 12, h: 6 },
+        { widget: "identity", x: 0, y: 6, w: 12, h: 3 },
+      ],
+    });
+    render(<RunCanvas ctx={ctx({ finished: true })} />);
+    const item = (await screen.findByRole("heading", { name: "Identity" })).closest(".react-grid-item") as HTMLElement;
+    // Three stored rows are 116px at the unmeasured row height; the 700px it would measure changes nothing.
+    await waitFor(() => expect(item.style.height).toBe("116px"));
+    expect(measured.px.identity).toBe(700);
   });
 
   it("still renders a cockpit when the layout GET fails outright", async () => {
@@ -627,6 +681,16 @@ describe("RunCanvas — the fill rule stretches a widget's root card, not a widg
     expect(fillTargets(document.body)).not.toContain(block);
   });
 
+  // #2912: the decision part of the session column is its own context field; the canvas still shows it in the
+  // terminal tile, straight after the terminal pane, so the run page reads as it always did.
+  it("renders the decision pane after the terminal pane in the terminal tile", async () => {
+    render(<RunCanvas ctx={ctx({ decisionPane: <div data-testid="decision-pane">held</div> })} />);
+    const decision = await screen.findByTestId("decision-pane");
+    const session = screen.getByText("the session");
+    expect(session.compareDocumentPosition(decision) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(session.closest("[data-widget]")).toBe(decision.closest("[data-widget]"));
+  });
+
   it("still stretches a widget that IS a single card", async () => {
     render(<RunCanvas ctx={ctx({ terminalPane: paneWithFailureBlock })} />);
     const card = (await screen.findByRole("heading", { name: "Egress" })).closest("section");
@@ -647,5 +711,60 @@ describe("canvasRowHeight", () => {
   });
   it("is unchanged for a tall pane", () => {
     expect(canvasRowHeight(900)).toBe(64);
+  });
+});
+
+// #2912: the decision row sits in its own persistent host, so entering or leaving focus mode moves it instead of
+// remounting LiveApprovals, which would collapse "Show all N" and drop the in-flight Approve/Deny state.
+describe("RunCanvas — the decision row survives focus mode", () => {
+  afterEach(() => {
+    focusState.on = false;
+  });
+
+  it("keeps \"Show all\" open across entering and leaving focus", async () => {
+    listApprovalsMock.mockResolvedValue(
+      [1, 2, 3].map((n) =>
+        makeApproval({ id: `a${n}`, run_id: "run-1", kind: "egress_domain", requested_scope: { host: `h${n}.example` }, state: "PENDING", requested_at: "" }),
+      ),
+    );
+    const decision = ctx({ decisionPane: <LiveApprovals runId="run-1" /> });
+    const { rerender } = render(<RunCanvas ctx={decision} />);
+    await userEvent.click(await screen.findByTestId("live-approvals-show-all"));
+    expect(screen.getByTestId("live-approvals-show-all")).toHaveTextContent("Show fewer");
+
+    focusState.on = true;
+    rerender(<RunCanvas ctx={decision} />);
+    expect(await screen.findByTestId("live-approvals-show-all")).toHaveTextContent("Show fewer");
+
+    focusState.on = false;
+    rerender(<RunCanvas ctx={decision} />);
+    expect(await screen.findByTestId("live-approvals-show-all")).toHaveTextContent("Show fewer");
+  });
+});
+
+// Mock r15 T1-c: the Service panel is a cockpit widget at the head of the right column, above Egress, on a service run only.
+describe("the Service widget", () => {
+  const SERVICE_RUN = { ...RUN, interactive: false, service: { restart: "on_failure" }, ends_at: null } as unknown as WidgetContext["run"];
+  const above = async () => {
+    expect(await screen.findByRole("heading", { name: "Egress" })).toBeInTheDocument();
+    expect(tileY(widgetHeading("Service"))).toBeLessThan(tileY(widgetHeading("Egress")));
+  };
+
+  it("sits above Egress in a service run's default layout", async () => {
+    render(<RunCanvas ctx={ctx({ run: SERVICE_RUN })} />);
+    await above();
+  });
+
+  it("is added above Egress to a saved layout that predates it", async () => {
+    getLayout.mockResolvedValue({ preset: "live", layout: presetLayout("live"), updated_at: new Date().toISOString() });
+    render(<RunCanvas ctx={ctx({ run: SERVICE_RUN })} />);
+    await waitFor(() => expect(getLayout).toHaveBeenCalledWith("live"));
+    await above();
+  });
+
+  it("is not on a run with no service", async () => {
+    render(<RunCanvas ctx={ctx()} />);
+    expect(await screen.findByRole("heading", { name: "Egress" })).toBeInTheDocument();
+    expect(widgetHeading("Service")).not.toBeInTheDocument();
   });
 });

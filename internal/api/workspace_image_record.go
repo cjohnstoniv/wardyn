@@ -225,7 +225,7 @@ const remoteDigestTimeout = 10 * time.Second
 // GET /build open; no answer reads as unrecorded.
 const localImageTimeout = 10 * time.Second
 
-const pinnedInputGoneError = "a pinned input is no longer available; refresh the image to resolve it again"
+const pinnedInputGoneError = "A pinned input is no longer available; refresh the image to resolve it again"
 
 // remoteDigest is one bounded RemoteDigest lookup. A builder that cannot answer is an error,
 // which every caller reads as "leave it unpinned" or "inconclusive".

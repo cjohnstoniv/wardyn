@@ -63,6 +63,10 @@ type userDrivePreviewResponse struct {
 	// §7's frozen strings — those are the member's doors, and this is an
 	// admin's typo — so the console may render it verbatim without a new key.
 	Warning string `json:"warning,omitempty"`
+	// PlacementEligible and MountsFrom are the matched drive's, as GET /drives
+	// answers them (M10): read off the drive, never the admin's own context.
+	PlacementEligible bool   `json:"placement_eligible,omitempty"`
+	MountsFrom        string `json:"mounts_from,omitempty"`
 }
 
 // drivePreviewWarning is the one request-shape hint the preview offers: the
@@ -126,7 +130,7 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 //     is about a member: with drives off nobody was denied, so a 403 here would
 //     tell an admin a profile refused somebody it did not.
 //  1. THE DOOR, resolved for the PREVIEWED claims rather than for the admin
-//     doing the previewing (driveDoorShut over ResolveGovernanceUnit).
+//     doing the previewing (driveDoorShut over the context resolver).
 //     seedRequestDrives runs it after the switch and before the resolver, so a
 //     403 beats a 500 or an allocation-shaped 422; so does this.
 //  2. The unanswerable group tier. A request that carries no `groups` at all
@@ -250,7 +254,7 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 	// an admin checking why a member cannot mount a drive must read the sentence
 	// that member reads.
 	if !resolved.Paused {
-		if f := s.driveBindFailureHere(r.Context(), *resolved); f != nil {
+		if f := s.driveBindFailureHere(r.Context(), *resolved, drivePlace{}); f != nil {
 			// #656: the same reason the real enforcement door would send
 			// (refuseDrive) — this IS that door's verdict, just written by the
 			// admin preview instead of a launch, so the class is identical.
@@ -267,23 +271,25 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 		homeSubject = ""
 	}
 	// A host_path object name is a path under the drive's host_root, which only
-	// a super admin is shown (GET /drives stays operatorOnly for that reason);
+	// a super admin is shown (GET /drives withholds it from a security admin for that reason);
 	// this route is also on the security tier, so it answers that tier without it.
 	objectName := resolved.ObjectName
 	if !types.DriveObjectNamedByWardyn(resolved.Drive.Backend) && !s.isOperator(r.Context()) {
 		objectName = ""
 	}
 	writeJSON(w, http.StatusOK, userDrivePreviewResponse{
-		DriveName:   resolved.Drive.Name,
-		MatchedTier: resolved.Tier,
-		HomeName:    resolved.HomeName,
-		ObjectName:  objectName,
-		SizeMiB:     resolved.SizeMiB,
-		Writable:    resolved.Writable,
-		Enforcement: resolved.Enforcement,
-		Paused:      resolved.Paused,
-		HomeSubject: homeSubject,
-		Warning:     drivePreviewWarning(resolved.Drive.HomeTemplate, users),
+		DriveName:         resolved.Drive.Name,
+		MatchedTier:       resolved.Tier,
+		HomeName:          resolved.HomeName,
+		ObjectName:        objectName,
+		SizeMiB:           resolved.SizeMiB,
+		Writable:          resolved.Writable,
+		Enforcement:       resolved.Enforcement,
+		Paused:            resolved.Paused,
+		HomeSubject:       homeSubject,
+		Warning:           drivePreviewWarning(resolved.Drive.HomeTemplate, users),
+		PlacementEligible: types.PlacementEligible(resolved.Drive.Backend),
+		MountsFrom:        s.driveMountsFrom(r.Context(), resolved.Drive),
 	})
 }
 
@@ -336,8 +342,7 @@ func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, 
 	if len(groups) == 0 {
 		ceiling, err = s.ceilingWithUnusableGroups(r.Context(), users, userType, deployment)
 	} else {
-		p, _, rerr := s.resolveAssignedUnit(r.Context(), users, groups, userType)
-		ceiling, err = s.ceilingFromUnit(r.Context(), p, rerr, deployment)
+		ceiling, err = s.contextCeiling(r.Context(), contextQuery{users: users, groups: groups, userType: userType}, contextChoice{}, deployment)
 	}
 	if err != nil {
 		writeCeilingError(w, r, err)

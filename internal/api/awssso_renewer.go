@@ -7,7 +7,7 @@ package api
 // says why there are two halves). Each pass lists the live runs' AWS SSO
 // grants, re-derives each one's credential exactly as the proxy's resolve does
 // (awsSSOScopeAt), and renews those inside the skew window through
-// refreshAWSSSOBlob: the same cross-replica owner lock, spent map and
+// refreshAWSSSOBlob: the same cross-replica credential lock, spent map and
 // harness.credential.refresh row, plus `trigger: renewer`.
 //
 // The schedule exists for the audit log. Every read of a stored session writes

@@ -317,7 +317,7 @@ dark, Inter + JetBrains Mono, `chip`/`btn`/`sw`/`seg`/`dlg`/`note`/`card` idioms
 Unlike the People round, **teal is in budget here** — the Governance console is a full screen,
 not a setup step, so `CONSOLE-RULES.md` §2's normal rule applies: exactly **one** `default`
 (teal) button per surface, and the screen enforces it over time rather than by counting forms.
-**Assign** is the screen's teal button at rest. When the profile editor opens in place its
+**Assign profile** is the screen's teal button at rest. When the profile editor opens in place its
 **Save profile** takes that role, and the add-assignment form collapses to its disabled
 `ADD_TITLE` summary row for exactly that span — so the two teal buttons can never co-occur
 (§2.6; drawn in the mock's editor state). Everything else is `outline` or `ghost`; Delete is
@@ -521,12 +521,15 @@ time) and one must be able to change without the other.
 | `NAME_HINT` | What this profile is called on the assignments below, and in the run of anyone assigned to it. Names are unique. |
 | `CEILING_TITLE` | Ceiling |
 | `CEILING_LEAD` | Every run under this profile is bounded by this spec. A member's own policy is clamped to it, and so is a saved policy they pick. |
+| `CEILING_MOUNTS_LOCKED` | Only a super admin can see or change a mount's host path. You can keep or remove the mount. |
 | `LIMITS_TITLE` | Limits |
 | `LIMITS_LEAD` | Some of what a run can do routes around the ceiling entirely. Deny it here instead. |
 | `LIMIT_EXEC_LABEL` | Deny exec runs |
 | `LIMIT_EXEC_HINT` | `task_mode=exec` runs a command with no agent, so no tool rule is ever consulted. |
 | `LIMIT_INTERACTIVE_LABEL` | Deny interactive runs |
 | `LIMIT_INTERACTIVE_HINT` | An interactive run is supervised at the attach pane rather than by rules. A run with no task comes up interactive too, and is refused the same way. |
+| `LIMIT_INTERACTIVE_INBOUND` | Inbound ports are turned off too, since a port can serve a shell. |
+| `LIMIT_UI_APPS_HINT` | Also turns off inbound ports. |
 | `LIMIT_DRIVE_LABEL` | Deny mounting a user drive |
 | `LIMIT_DRIVE_HINT` | A run under this profile cannot mount the person's drive, even when one is allocated to them. |
 | `LIMIT_CONCURRENT_LABEL` | Concurrent runs |
@@ -582,7 +585,7 @@ is what an operator can actually do.
 | `PRIORITY_NA` | — |
 | `PRIORITY_HINT` | Breaks ties between groups a person is in. Higher wins. It is ignored for a person and for everyone. |
 | `ADD_TITLE` | Assign a profile |
-| `ADD_CTA` | Assign |
+| `ADD_CTA` | Assign profile |
 | `FIELD_PROFILE` | Profile |
 | `PROFILE_PLACEHOLDER` | Pick a profile |
 | `FIELD_PRIORITY` | Priority |
@@ -932,6 +935,10 @@ minimum.") and `DELIVERY.OS_MIN_INVALID`, each marked pending in `governance-cop
 | `DELIVERY.RESIDENT_FLOOR` | A run whose barrier floor covers this credential still can't use it on a runner: a runner's barrier is reported, not verified. |
 | `DELIVERY.NOT_IN_RELEASE` | Not used in this release |
 | `DELIVERY.RUNNERS_OFF_NOTE` | Runners are off, so nothing here applies yet. You can set it now; it takes effect when runners are turned on. |
+| `DELIVERY.EXCEPTIONS_NOTE` | Each row is the default for every runner. A trust class can have an exception, shown under its row; on that class's runners the exception wins. |
+| `DELIVERY.EXCEPTION_CHIP` | Exception |
+| `DELIVERY.EXCEPTION_KEPT` | Kept as stored when you save. This screen can't change exceptions yet. |
+| `DELIVERY.EXCEPTION_PEOPLE_SEE(trust, outcome)` | {trust}: {outcome} |
 | `DELIVERY.CLASS.api_key` | Header API keys |
 | `DELIVERY.CLASS_HINT.api_key` | Model and service keys sent in a header. |
 | `DELIVERY.CLASS.bedrock_bearer` | Shared Amazon Bedrock API keys |

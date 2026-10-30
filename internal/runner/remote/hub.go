@@ -89,6 +89,24 @@ type hubSession struct {
 	// abort cancels an admission in progress, which holds mu: a revocation or GOAWAY that finds mu taken
 	// ends the attach with it, instead of waiting out a stalled one.
 	abort atomic.Pointer[context.CancelFunc]
+	// perRun is the per-run pair the session's AUTH_OK carried, which recheck compares with the stored
+	// row: a limits change committed through another replica ends the session. Nil before the first AUTH_OK.
+	perRun atomic.Pointer[perRunLimits]
+	// activityPeer is the peer a current-activity check has verified under mu, set while that check
+	// holds mu across its store lookups: Online reads it instead of reading the held mu as a session
+	// in transition. Nil whenever no check runs.
+	activityPeer atomic.Pointer[runnerwire.Peer]
+}
+
+// perRunLimits is the per-run CPU (milli-CPU) and memory (MiB) AUTH_OK names; zero when the runner
+// has declared no limits.
+type perRunLimits struct{ cpuMillis, memoryMiB int64 }
+
+func perRunOf(rn types.Runner) perRunLimits {
+	if rn.Limits == nil {
+		return perRunLimits{}
+	}
+	return perRunLimits{rn.Limits.PerRun.CPUMillis, rn.Limits.PerRun.MemoryMiB}
 }
 
 // readyFor reports whether id is the current session and reached READY
@@ -246,7 +264,7 @@ func (h *Hub) serveClaimed(ctx context.Context, conn runnerwire.Conn, row types.
 			peer.Close()
 			live = false
 		case <-recheck.C:
-			h.recheck(ctx, row.ID)
+			h.recheck(ctx, row.ID, s, peer)
 		}
 	}
 	h.ended(row.ID, s, peer)
@@ -267,10 +285,10 @@ const reasonOwnerInactive = "runner_owner_inactive"
 var errOwnerInactive = errors.New("runner hub: the runner's owner is deactivated")
 
 // recheck ends the session with REVOKED once the stored row says so, and with
-// GOAWAY once its owner is deactivated. A failed read is retried at the next
+// GOAWAY once its owner is deactivated or its per-run limits differ from the pair AUTH_OK carried. A failed read is retried at the next
 // tick: the store already refuses a revoked runner's writes, so this only
 // bounds the session's lifetime.
-func (h *Hub) recheck(ctx context.Context, id uuid.UUID) {
+func (h *Hub) recheck(ctx context.Context, id uuid.UUID, s *hubSession, peer *runnerwire.Peer) {
 	current, err := h.cfg.Lookup(ctx, id)
 	if err != nil || current.ID != id {
 		return
@@ -287,6 +305,11 @@ func (h *Hub) recheck(ctx context.Context, id uuid.UUID) {
 	}
 	if h.cfg.Disabled != nil && h.cfg.Disabled(ctx) {
 		_ = h.Goaway(ctx, id)
+		return
+	}
+	if sent := s.perRun.Load(); sent != nil && *sent != perRunOf(current) {
+		// The pair is the one peer's AUTH_OK carried: a reconnect since then has its own, so end only peer's session.
+		_ = h.endWithControl(ctx, id, runnerwire.TypeGoaway, "fresh_session_required", peer, "")
 	}
 }
 
@@ -341,6 +364,7 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 	}
 	ok := runnerwire.AuthOK{SessionID: s.id, Resumed: resumed, PingInterval: runnerwire.PingInterval, LastSeq: cfg.LastReceived}
 	h.orgChoices(&ok, current)
+	s.perRun.Store(&perRunLimits{ok.PerRunCPUMillis, ok.PerRunMemoryMiB})
 	if err := runnerwire.WriteControl(ctx, conn, runnerwire.TypeAuthOK, ok); err != nil {
 		return nil, err
 	}
@@ -486,6 +510,10 @@ func configureAdmission(ctx context.Context, cfg *runnerwire.PeerConfig, resumed
 				return fmt.Errorf("%w: expected pending action result before STATE", runnerwire.ErrBadFrame)
 			}
 			if err := a.Event(ctx, ev); err != nil {
+				var refusal *runnerwire.EventRefusal
+				if errors.As(err, &refusal) {
+					delete(pending, result.ID) // answered: the org refused it for good and recorded that; the peer acknowledges
+				}
 				return err
 			}
 			delete(pending, result.ID)
@@ -561,4 +589,6 @@ func (h *Hub) orgChoices(ok *runnerwire.AuthOK, current types.Runner) {
 	if h.cfg.LocalAttach != nil {
 		ok.LocalAttach = h.cfg.LocalAttach(current)
 	}
+	p := perRunOf(current)
+	ok.PerRunCPUMillis, ok.PerRunMemoryMiB = p.cpuMillis, p.memoryMiB
 }

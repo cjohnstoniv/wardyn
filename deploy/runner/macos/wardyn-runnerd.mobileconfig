@@ -22,6 +22,8 @@
                                              never a run's proxy or sandbox; root-owned, not writable by group or others
     RecordingStore    flag recording-store      pg, fs or off (default pg)
     DockerHost        DOCKER_HOST            the engine's socket, when it is not the default
+    LocalModelPort    flag local-model-port     port(s), comma-separated, of a model server on this Mac a run may be relayed
+                                             to; left out, none
 
   Replace each __PLACEHOLDER__: the two UUIDs with fresh ones (uuidgen), __ORG_URL__ and __ORGANIZATION__.
   Committed as-is it is valid plist XML — see scripts/test-runner-pkg.sh. MDM signs and scopes the profile;
@@ -59,6 +61,12 @@
       <key>RecordingStore</key>
       <string></string>
       <key>DockerHost</key>
+      <string></string>
+      <key>ArtifactBase</key>
+      <string></string>
+      <key>LocalModelPort</key>
+      <string></string>
+      <key>MacOSVM</key>
       <string></string>
     </dict>
   </array>

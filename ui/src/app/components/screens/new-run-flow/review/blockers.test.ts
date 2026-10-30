@@ -36,6 +36,17 @@ describe("Review blockers", () => {
     expect(setup).toMatchObject({ text: "Add the deploy key.", to: { screen: "step", step: "tools" } });
   });
 
+  it("offers the Add door only on a missing secret whose fix names it (#2108)", () => {
+    const named: SetupItem = { ...ITEM, id: "secret:npm_token", label: "Secret: npm_token", detail: undefined, fix: { action: "add_secret", secret_name: "npm_token" } };
+    const unnamed: SetupItem = { ...ITEM, id: "secret:x", fix: { action: "add_secret" } };
+    const other: SetupItem = { ...ITEM, id: "llm:y", kind: "llm_access", fix: { action: "choose_model_provider", tool: "claude-code" } };
+    const [a, b, c, d] = buildBlockers({ ...NOTHING, setupItems: [named, unnamed, other, ITEM] });
+    expect(a).toMatchObject({ text: "Secret: npm_token", addSecret: named });
+    expect(b.addSecret).toBeUndefined();
+    expect(c.addSecret).toBeUndefined();
+    expect(d.addSecret).toBeUndefined();
+  });
+
   it("holds a harness combination no image carries, right after the local issues, linked to the Harnesses step", () => {
     const out = buildBlockers({ ...NOTHING, combination: "No sandbox image here includes A and B together.", unsupported: ["legacy_field"] });
     expect(out.map((b) => b.id)).toEqual(["local:combination", "unsupported:legacy_field"]);

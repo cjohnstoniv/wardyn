@@ -12,9 +12,9 @@
 - Launch adds workspace and source-control hosts, routes GitHub through the git-broker, applies the governance profile's walls and the org's disk size, and clamps a member's policy to their limits.
 - `GET /api/v1/runs/{id}/policy` and `wardyn run policy <run-id>` return the resolved policy, under `spec` as a `RunPolicySpec` document, where it started from, what changed and why, and whether a saved policy has since been edited (see [OPERATIONS.md](OPERATIONS.md#the-policy-a-run-got) and [sdk.md](sdk.md)).
 - The CLI prints YAML behind `#` comment lines, so `wardyn run policy <id> > p.yaml` is a policy file.
-- Reuse is scoped: the document always strict-decodes as a policy, and it passes `validatePolicySpec` for a security or super admin.
+- Reuse is scoped: the document always strict-decodes as a policy, and it passes `validatePolicySpec` for a super admin.
 - For them `wardyn run --policy-file p.yaml` runs it again as is, as long as the run's allowlist, with what launch added, still fits the per-policy domain cap.
-- For anyone else, mount sources read `<redacted>` and grant secret names are dropped: it is a starting point, with those values to fill in.
+- For anyone else, mount sources read `<redacted>` (and, below the security admin tier, grant secret names are dropped): it is a starting point, with those values to fill in.
 - A run that used an organisation component's shared secret is the exception for every reader, an admin included.
   - Its grant carries `shared: true`, which no authored policy may set, so validation refuses the document.
   - It is a record of the run, not a policy to reuse: select the component on the new run instead ([Custom components](#custom-components)).
@@ -55,6 +55,7 @@
 | `workspace_repos` | `[]WorkspaceRepo` | `[]` | Additional git repos cloned into the run — the clone counterpart of `workspace_mounts`. |
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's tool calls: `allow`, `hold` or `deny`. A `hold` or `deny` rule routes a background Claude Code run through the tool gate. Operator-authored, evaluated proxy-side. |
+| `desktop` | `DesktopControls` | omitted = paste in and upload allowed, copy out and download blocked | The desktop's clipboard and file-transfer rules by direction. See [below](#desktop--desktopcontrols). |
 | `harness_inner_walls` | `HarnessInnerWalls` | omitted = what the harness and lane give | The harness's own walls inside Wardyn's: its `sandbox_mode` and where its `approvals` happen. Only adds walls; a looser choice refuses the run. See [below](#harness_inner_walls--harnessinnerwalls). |
 | `recording` | `string` | omitted = the organisation's level (`terminal` unless it sets one) | How much of the run is recorded: `off`, `terminal` or `screen_actions` (a desktop's screen and an action log). A ceiling's level is a minimum. `WARDYN_RECORDING_STORE=off` still records nothing. Keystrokes are never recorded at any level. See [below](#recording). |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes on every brokered lane; operator-authored, never agent-settable. See [`git_push_any_branch`](#git_push_any_branch). |
@@ -503,7 +504,7 @@ What the check does and does not settle:
 | Value | Behavior |
 |---|---|
 | `always_deny` | Hard-deny the unknown domain and log it. No approval is ever raised. |
-| `deny_with_review` | Raise a pending approval **and** deny the in-flight request. Once approved, a retry passes. The connection is never held. |
+| `deny_with_review` | Raise a pending approval **and** deny the in-flight request. Once approved, a retry passes. The connection is never held; a stalled control plane delays the request by at most 5 s. |
 | `wait_for_review` | Raise a pending approval and **hold the connection** until it is decided or the hold deadline passes (`first_use_hold_seconds`, default 30s; at most `max_holds` concurrent holds, default 16). |
 | | Approved in time, the same in-flight request completes; on deadline it fails closed (403) with the approval still pending. |
 
@@ -532,6 +533,39 @@ What the check does and does not settle:
 - That is a live write path this migration left untouched.
 - Whatever `approved_egress` already holds, from that button or from before this migration, is still unioned into a confined replay's allowlist.
 - An `egress:<host>` requirement row is kept safe by who may write it (the write-side authorization) and by its provenance (only `operator_set` rows are auto-added at launch), not by a clamp at fold time. With [`WARDYN_REQUIRE_OPERATOR_SET_EGRESS`](ENV.md#wardyn_require_operator_set_egress) set to `false`, the operator has chosen to drop the provenance gate, and no fold-time clamp replaces it.
+
+## Your walls
+
+- Your walls are limits you set on every run you start, which only narrow what your organisation allows. They are one private document per signed-in person; no one else reads or edits it, and no admin route reaches it.
+- Set them in **Settings** in the console, with `wardyn walls`, or through `/api/v1/me/walls` ([sdk.md](sdk.md#your-walls)). A save applies to runs you start from then on.
+- The admin token, local mode and a service identity are no person, so they have no walls (`400` `walls_need_person`) and none are applied to their runs.
+
+| Knob | Console | Effect on each run you start |
+|---|---|---|
+| `allowed_domains` | **Only these sites** | The run reaches only these sites and what its own setup needs: repositories, model and tools. `[]` leaves only the setup. Naming it turns `allow_all_egress` off |
+| `denied_domains` | **Never these sites** | Added to the run's deny list, which wins |
+| `allow_all_egress` | | `false` only. Turns open egress off |
+| `first_use_approval` | **When a site is not listed** | **Block it** (`always_deny`), **Block and ask for review** (`deny_with_review`) or **Hold for review** (`wait_for_review`). The stricter of the run's and yours stands |
+| `min_confinement_class` | **Barrier at least** | The run's floor is raised to at least `CC1` (Fence), `CC2` (Wall) or `CC3` (Vault) |
+| `desktop` | **Clipboard and files** | `paste_in`, `copy_out`, `upload` and `download` each take `blocked`. A direction you leave out stays as the run has it |
+| `withheld_grants` | **Credentials kept out** | The run is not given a grant of that `kind`, or of that `kind` and `scope` |
+
+- A knob you leave out is no limit. Every value only narrows: `allow_all_egress: true` and a direction set to anything but `blocked` are refused as `400` `walls_invalid`, naming the path.
+- A site is a DNS name or a `*.` wildcard, never an IP address, a port or a URL. A list holds at most 64 entries and `withheld_grants` at most 16.
+- In the console, choosing **Only these sites** also selects **Block it** for unlisted sites.
+
+### How your walls apply
+
+1. At create, on every base policy, the walls meet the run's policy just inside the Wardyn boundary's step. A super admin's own run is bound too.
+2. A host or credential they cut is dropped with the warning `your walls narrowed <knob>`. The run's policy record names the layer `personal` for each knob they decided, and the run's **Policy** tab heads those changes **Your walls**.
+3. At dispatch, at revive and at the credential mint door, your denies, your blocked directions and your withheld credentials are applied again. Your site list is not, so a host the run's own setup adds stays reachable.
+   - Loosening your walls after a run starts frees nothing for it. A deny, a blocked direction or a withheld credential added later binds it.
+4. An egress approval for a host your `denied_domains` cover is refused for every approver, `403` `personal_walls_host`: "Your walls block {host}. Change them in Settings." to you, and "{owner}'s walls block {host} for this run." to anyone else. A host outside your list follows your **When a site is not listed** choice.
+5. A mint of a credential you keep out is refused `403` `credential_withheld`.
+6. If your walls cannot be read, a create is refused `500`, the run is sealed to no egress and no credential, a mint is `503` `credential_withheld_unread` and an approval is `500`. A run is never started without them.
+
+- Unit and boundary locks do not apply to your walls, and your walls do not change unit limits or door switches. They have no GPU knob.
+- To narrow one run only, set `overrides.egress.allow_all_egress: false` beside `overrides.hosts.add_allowed` ([NEW-RUN.md](NEW-RUN.md#step-5-tools-and-access), [sdk.md](sdk.md#narrowing-one-run)).
 
 ## Approval decision scopes
 
@@ -884,6 +918,28 @@ What the check does and does not settle:
 | `name` | `string` | — (required) | Lower-case slug (`[a-z0-9-]`, 1–32 chars, alphanumeric at both ends), unique within the policy. It reaches a filesystem path (`/usr/local/bin/wardyn-ui-<name>`) and a URL query, so the shape is enforced at write time rather than sanitised later. |
 | `port` | `int` | — (required) | The port the app listens on **inside** the sandbox, on `127.0.0.1`. Unique within the policy. The sandbox has no other reachable address, and the relay dials nothing else. |
 | `path` | `string` | `/` | Landing path after the gateway's ticket handoff. Must be an absolute same-origin path — a scheme, a host, a `//` prefix or a `..` is rejected, since that redirect would otherwise leave the UI origin. |
+| `inbound` | `bool` | `false` | Makes the port a service port: the run's owner and its `callers` reach it through the gateway on any run, a background run included. Declaring it needs the restricted `feature` value `inbound`. See [Inbound](UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port). |
+| `callers` | `[]string` | `[]` | Who besides the owner may call an `inbound` app: `user:<sub or email>`, `group:<name>` or `service:<name>`, lower-case, each once, at most 32. Refused without `inbound`; `all` is not a caller. Fixed at create. |
+
+## `desktop` — `DesktopControls`
+
+- What may cross a desktop's edge, one rule per direction. Each is `allowed` or `blocked`; an omitted field keeps its default.
+- The clipboard rules are enforced at the UI gateway's relay, outside the sandbox: it drops a blocked RFB cut-text message and audits every one as `ui.clipboard.transfer` by direction, size and SHA-256, never by content.
+- The file rules are enforced at the run's Files panel endpoints, which move files to and from `~/Transfers` in the desktop.
+- A member's run can only block more than its ceiling, the defaults included: to let members copy out, the ceiling has to allow it.
+- What it does not stop: what the desktop shows on screen, and what a UI app serves over HTTP.
+- The clipboard rules bind the relay of the app named `novnc` only. A member may declare the same desktop server
+  under another app name, so a ceiling that blocks copy out should also pin `ui_apps` to the desktop app. An SSH
+  port forward to the desktop's VNC port is outside the relay.
+- The desktop page comes from the sandbox, so these rules stop ordinary copy and paste; they are not a boundary against
+  a run built to get data out.
+
+| Field | Type | Default | What it does |
+|---|---|---|---|
+| `paste_in` | `string` | `allowed` | The browser's clipboard sent into the desktop (RFB `ClientCutText`). |
+| `copy_out` | `string` | `blocked` | The desktop's clipboard sent to the browser (RFB `ServerCutText`). |
+| `upload` | `string` | `allowed` | Files sent from the Files panel into `~/Transfers`. |
+| `download` | `string` | `blocked` | Files fetched from `~/Transfers` through the Files panel. |
 
 
 ## `tool_rules` — `[]ToolRule`
@@ -959,15 +1015,15 @@ The match is exact, so it would never fire and would silently read as enforcemen
 - A required setting (the organisation's or a runner pool's `recording: required`) records at least `terminal`. With `WARDYN_RECORDING_STORE=off` nothing is recorded at any level.
 - Keystrokes are never recorded. No value names them, and the desktop relay never reads the browser's side of the stream.
 - The level is resolved once at dispatch and kept on the run as `recording_level`; a run resolved to `off` is `not_recorded: policy_off`.
+- A take over keeps no screen frames until the hand back, on every replica and after a restart. After a `wardynd` restart during a take over, the earlier `desktop.recording.pause` row has no matching resume; the new process writes and closes its own.
 
 ## `harness_inner_walls` — `HarnessInnerWalls`
 
 **What it is.**
 
-- Wardyn's walls surround the run: egress, credentials, confinement and the audit trail.
-- The harness inside it, Claude Code or Codex, has walls of its own: its sandbox, and a prompt that asks before a tool runs.
-- `harness_inner_walls` lets a policy choose those inner walls. Omitted, each run keeps what its harness and lane give today.
-- It only adds walls. A choice looser than what the run launches with refuses the run (`harness_inner_walls_looser`), and so does one the run's harness and lane cannot express (`harness_inner_walls_unmet`).
+- Wardyn's walls surround the run. Its harness (Claude Code or Codex) has its own: a sandbox, and a prompt before a tool runs.
+- `harness_inner_walls` chooses those. Omitted, a run keeps what its harness and lane give today.
+- It only adds walls: a looser choice refuses the run (`harness_inner_walls_looser`), as does an unmet one (`harness_inner_walls_unmet`).
 
 ```json
 { "harness_inner_walls": { "sandbox_mode": "off", "approvals": "wardyn" } }
@@ -975,8 +1031,8 @@ The match is exact, so it would never fire and would silently read as enforcemen
 
 | Field | Type | Values | What it does |
 |---|---|---|---|
-| `sandbox_mode` | `string` | `off` | The harness's own sandbox stays off, as Wardyn launches it today. `workspace-write` and `read-only` are refused with `harness_sandbox_unavailable`: both harnesses' sandboxes need user namespaces, which Wardyn's sandbox does not grant. |
-| `approvals` | `string` | `harness` / `wardyn` / `none` | `harness`: the harness asks the person at its prompt (interactive runs; refuses `seed_auto_tools`). `wardyn`: a background Claude Code run goes on the tool-approval hold lane, as `tool_approvals: hold` does. `none`: only where the run already asks nothing. |
+| `sandbox_mode` | `string` | `off` / `workspace-write` / `read-only` | `off`: as today. A mode: Codex runs in its own sandbox (below). |
+| `approvals` | `string` | `harness` / `wardyn` / `none` | `harness`: the harness asks at its prompt (interactive runs; turns `seed_auto_tools` off). `wardyn`: a background Claude Code run takes the hold lane (`tool_approvals: hold`). `none`: only where the run asks nothing. |
 
 **What each run launches with.**
 
@@ -984,13 +1040,19 @@ The match is exact, so it would never fire and would silently read as enforcemen
 |---|---|---|
 | Claude Code, background | `off` | `none`, or `wardyn` on the hold lane |
 | Claude Code, interactive | `off` | `harness`, or `none` with `seed_auto_tools` |
-| Codex, background | `off` | `none` |
-| Codex, interactive | Codex's own default | `harness`, or `off` and `none` with `seed_auto_tools` |
+| Codex, background | `off`, or the mode | `none` |
+| Codex, interactive | Codex's default, or the mode | `harness`, or `off` and `none` with `seed_auto_tools` |
 
-- An exec run, and a custom image's agent, launch no harness whose walls Wardyn sets, so a policy that sets `harness_inner_walls` refuses them.
-- A member's inline policy keeps every axis the operator's ceiling chooses.
-- The walls a run launched with are on the run (`inner_walls`) and on New Run's Review.
-- A run whose policy sets `harness_inner_walls` needs the proxy image from the same release: an older proxy refuses the key.
+**Codex's own sandbox.**
+
+- `read-only` writes nothing; `workspace-write` only the workspace, on the run's network.
+- `/etc/codex/requirements.toml`, which the agent cannot rewrite, binds every `codex`, refusing the bypass flag.
+- It needs user namespaces: CC3 (Kata) starts both modes, CC2 background `workspace-write`, CC1 neither (`harness_sandbox_unavailable`). krun fails at launch.
+- Claude Code's image has no sandbox; Codex's MCP servers run outside it.
+- An exec run, or a custom image's agent, has no walls Wardyn sets, so the policy refuses it.
+- The operator ceiling's axes bind a member's inline policy.
+- Review and the run (`inner_walls`) show the walls it launched with.
+- Setting it needs this release's proxy image (older ones refuse the key); a Codex sandbox mode, this release's runner.
 
 ## `push_rules` — `PushRulesSpec`
 
@@ -1140,6 +1202,7 @@ So an entry a pattern matches is judged one of two ways:
   - the first ten matched paths, sorted, and how many matched in all; the object ids the push sets its refs to, sorted;
   - each ref paired with the object id it is set to (`updates`, sorted by ref, all zeros for a delete); and a SHA-256 over **every** matched path, sorted and NUL-terminated.
   - The scope is the dedup key — two identical pushes are one request.
+  - With `WARDYN_PUSH_HOLD_CANONICAL_REPOS` on (off by default), a `git_pat` push to github.com names its repository lowercased and without `.git`, so `Owner/Repo.git` and `owner/repo` are one request; other forges keep the path git sent.
   - Commits are content addresses, so a retry git repacks carries the same commits in different bytes and is let through on the approval already given.
   - The key is the whole scope: the same commits pushed
     - to another repository or branch, or
@@ -1158,7 +1221,13 @@ So an entry a pattern matches is judged one of two ways:
   - There the card's `acts_as_kind` is `ado_entra` and its label is the person whose sign-in the push uses.
   - The lane's REST door holds the same way — see **Every door, not only git's**.
 
-- `deny_new_executables` is not supported yet (see its row below).
+- `deny_new_executables` refuses a file executable in the pushed tree that the carried parent tree held not executable, or not at all (`gitpack.Change.BaseMode`).
+  - Any regular-file mode with the user-execute bit counts, since git checks it out executable.
+- Without that tree, the forge must show the path executable, or a directory unchanged, in any commit the push builds on. That is any parent of a pushed commit already in the history of the default branch or of a branch the push updates.
+  - So a path executable in any such commit, a merge parent included, may stay executable or become executable again, and its content is not judged, as with an edit to an existing executable. The exception is a parent tree the push carries that held it not executable, which the first bullet refuses.
+  - A lane whose forge cannot be read refuses nearly every push.
+- A symlink or a submodule pointer is not an executable file; what a submodule brings in is not judged.
+- The Azure DevOps REST door refuses every content push while it is on: a REST push names no file modes.
 - `max_file_size_mib` decides with `gitpack.Change.Size()`, which returns `(bytes, known)`, so a bare comparison against a limit does not compile.
 - A size the pack does not carry (a submodule pointer, an unchanged file on a second push) is cleared against the forge or refused.
 - The forge can be read only on github.com:
@@ -1170,7 +1239,7 @@ So an entry a pattern matches is judged one of two ways:
 >
 > - A policy that sets `push_rules` while `ssh_key` is the run's **only** git-capable grant is legal (never a `422` at write time) but the rules cannot be enforced.
 > - The policy's risk grade (`composer.Grade`, shown by the Policies screen's safety meter and returned by preflight as `risk_assessment`) surfaces that as a **medium**-risk item so the operator is told rather than blocked.
-> - An all-zero `push_rules: {}` — nothing in `deny_paths` or `require_review_paths`, `max_inspect_pack_mib` and `max_file_size_mib` `0`/absent — reads as **absent** (a `hold_seconds` with no review path to hold for does not count), the same as `null`.
+> - An all-zero `push_rules: {}` — nothing in `deny_paths` or `require_review_paths`, `max_inspect_pack_mib` and `max_file_size_mib` `0`/absent, `deny_new_executables` `false` — reads as **absent** (a `hold_seconds` with no review path to hold for does not count), the same as `null`.
 > - It never survives an operator ceiling into a member's clamped spec, and never grades the warning above.
 
 **Clamped as a floor, not a bare merge.**
@@ -1188,7 +1257,7 @@ So an entry a pattern matches is judged one of two ways:
 | `max_inspect_pack_mib` | `int` | `0` | Caps how much of an incoming push the broker buffers before refusing it as too large. |
 | | | | `0`/absent means **32 MiB**, deliberately below the maximum an operator may author so that raising the ceiling — the stated remedy for a `413` — is available. Bounded at write time to **0..64**. |
 | `max_file_size_mib` | `int` | `0` | Refuses a push that introduces a file larger than this many MiB; `0`/absent is **off**, bounded to **0..32** at write time. A deny, like a `deny_paths` match. See [`max_file_size_mib`](#max_file_size_mib). |
-| `deny_new_executables` | `bool` | `false` | **Not supported yet:** a policy that sets it `true` is refused (`400`) at write time, because the broker cannot yet tell a newly added executable from an edit to an existing one. |
+| `deny_new_executables` | `bool` | `false` | Refuses a push that adds an executable file or makes a file executable. An edit to an executable passes unless a parent tree the push carries held it not executable; see [`push_rules`](#push_rules--pushrulesspec). `false`/absent is **off**. |
 | `require_review_paths` | `[]string` | `[]` | Path patterns whose match **holds** a push for an admin's `push_content` decision instead of refusing it — see **Held for review** above. |
 | | | | Same pattern language and the same per-entry write-time checks as `deny_paths` (256 bytes, valid UTF-8, no control character, no leading or trailing whitespace, no empty/`.`/`..` segment), and likewise no count cap. A `deny_paths` match wins. |
 | `hold_seconds` | `int` | `0` | How long a held push waits for its decision before it is refused. `0`/absent means **120**. Bounded at write time to **0..600**, the proxy's own hold ceiling, which also clamps a stored value past it. |

@@ -43,11 +43,21 @@ type boundaryChange struct {
 // It reports each knob it changed. A meet nothing satisfies is impossible over the knobs the
 // boundary holds (types.BoundarySpec); an error is still returned, never a wider policy.
 func boundaryMeet(b types.Boundary, spec types.RunPolicySpec, limits types.GovernanceLimits) (types.RunPolicySpec, types.GovernanceLimits, []boundaryChange, error) {
-	base := composer.Authority{Ceiling: spec.Clone(), Limits: limits}
+	// The boundary holds no deny_placements, so the base's list goes around the meet: the overlay check
+	// re-judges it, and a profile that denies every placement (a row the write door refuses) would answer 500
+	// here instead of the placement_denied it gives without a boundary (#3446). Only the meet's own copy
+	// drops it; limits, the caller's, is never written, so every return below hands back the list as it came.
+	meetLimits := limits
+	meetLimits.DenyPlacements = nil
+	base := composer.Authority{Ceiling: spec.Clone(), Limits: meetLimits}
 	if base.Ceiling.AllowAllEgress && b.Spec.AllowedDomains != nil && (b.Spec.AllowAllEgress == nil || !*b.Spec.AllowAllEgress) {
 		base.Ceiling.AllowedDomains = slices.Clone(*b.Spec.AllowedDomains)
 	}
-	out, _, err := composer.ApplyOverlay(base, composer.Overlay{Ceiling: b.Spec.Overlay(), Limits: b.Limits.Overlay()})
+	ov := boundaryOverlay(b)
+	if boundaryBoundsNothing(b, ov) {
+		return spec, limits, nil, nil
+	}
+	out, _, err := composer.ApplyOverlay(base, ov)
 	if err != nil {
 		return types.RunPolicySpec{}, types.GovernanceLimits{}, nil, fmt.Errorf("api: meet the Wardyn boundary: %w", err)
 	}
@@ -60,7 +70,27 @@ func boundaryMeet(b types.Boundary, spec types.RunPolicySpec, limits types.Gover
 		}
 		out.Ceiling.EligibleGrants = kept
 	}
+	out.Limits.DenyPlacements = limits.DenyPlacements
 	return out.Ceiling, out.Limits, boundaryChanges(spec, out.Ceiling, limits, out.Limits), nil
+}
+
+// boundaryOverlay is the boundary as the meet's overlay. A floor at the lowest class bounds nothing:
+// every run launches at CC1 or above, so an unset floor already means CC1. It is left out, so the
+// fresh-install seed (floor CC1) changes no value and adds no narrowed warning.
+func boundaryOverlay(b types.Boundary) composer.Overlay {
+	ov := b.Spec.Overlay()
+	if ov.MinConfinementClass != nil && *ov.MinConfinementClass == types.CC1 {
+		ov.MinConfinementClass = nil
+	}
+	return composer.Overlay{Ceiling: ov, Limits: b.Limits.Overlay()}
+}
+
+// boundaryBoundsNothing reports whether b names no knob that narrows (ov is boundaryOverlay(b)): no
+// overlay knob and no eligible grants. Its meet is then the identity and is skipped, since
+// ApplyOverlay would re-judge the policy itself and refuse one no_limits answers (a profile that
+// denies every placement). So the fresh-install seed answers as no_limits does.
+func boundaryBoundsNothing(b types.Boundary, ov composer.Overlay) bool {
+	return b.Spec.EligibleGrants == nil && reflect.ValueOf(ov).IsZero()
 }
 
 // boundaryChanges lists the knobs that differ between before and after, the policy's compared in the
@@ -112,8 +142,16 @@ func (s *Server) governanceBoundary(ctx context.Context) (types.Boundary, error)
 // included: break-glass lifts a profile's walls, never the boundary.
 func (s *Server) boundaryCeiling(ctx context.Context, c governanceCeiling) (governanceCeiling, error) {
 	b, err := s.governanceBoundary(ctx)
-	if err != nil || !b.HardLimits() {
+	if err != nil {
 		return c, err
+	}
+	return boundCeiling(b, c)
+}
+
+// boundCeiling is boundaryCeiling over a boundary already read.
+func boundCeiling(b types.Boundary, c governanceCeiling) (governanceCeiling, error) {
+	if !b.HardLimits() {
+		return c, nil
 	}
 	c.boundary = &b
 	spec, limits, changes, err := boundaryMeet(b, c.Spec, c.Limits)
@@ -159,6 +197,15 @@ func (c governanceCeiling) boundaryBoundsEnd() bool {
 // and an operator's unclamped run. Knobs the boundary already narrowed in the ceiling are recorded
 // as the boundary's where the ceiling's layer set them.
 func (s *Server) boundaryRunStep(ceiling governanceCeiling, spec *types.RunPolicySpec, source *policySourceRecord) ([]string, *runRefusal) {
+	warns, refusal := s.boundaryMeetRunStep(ceiling, spec, source)
+	if refusal == nil {
+		ceiling.restrictionRunStep(source.knobs)
+	}
+	return warns, refusal
+}
+
+// boundaryMeetRunStep is boundaryRunStep's meet with the boundary alone.
+func (s *Server) boundaryMeetRunStep(ceiling governanceCeiling, spec *types.RunPolicySpec, source *policySourceRecord) ([]string, *runRefusal) {
 	if !ceiling.bounded() {
 		return nil, nil
 	}

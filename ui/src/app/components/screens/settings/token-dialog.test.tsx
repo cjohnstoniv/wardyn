@@ -61,6 +61,40 @@ async function lifetimeOptions(): Promise<string[]> {
 
 const claim = () => user.click(screen.getByRole("button", { name: T.CLAIM_SUBMIT }));
 
+describe("TokenDialog inbound use (r15 T2-d)", () => {
+  const mint = (over: Partial<TokenDialogProps> = {}) => mount({ kind: "mint", service: "billing", initialName: "billing-callers", ...over });
+
+  it("offers Use: Wardyn API or Calling inbound ports on a mint, with the API chosen and its warning shown", () => {
+    mint();
+    const group = screen.getByRole("group", { name: T.USE_LABEL });
+    expect(within(group).getByRole("radio", { name: T.USE_API })).toBeChecked();
+    expect(within(group).getByRole("radio", { name: T.USE_INBOUND })).not.toBeChecked();
+    expect(screen.getByText(T.MINT_WARNING("billing"))).toBeInTheDocument();
+    expect(screen.queryByText(T.INBOUND_HELP)).toBeNull();
+  });
+
+  it("swaps the warning for the inbound help and mints an inbound token", async () => {
+    const { props } = mint();
+    await user.click(screen.getByRole("radio", { name: T.USE_INBOUND }));
+    expect(screen.getByText(T.INBOUND_HELP)).toBeInTheDocument();
+    expect(screen.queryByText(T.MINT_WARNING("billing"))).toBeNull();
+    await user.click(screen.getByRole("button", { name: T.MINT_SUBMIT }));
+    expect(props.submit).toHaveBeenCalledWith({ name: "billing-callers", ttl_seconds: 90 * 86400, kind: "inbound" });
+  });
+
+  it("sends no kind for the Wardyn API, and a claim has no Use", async () => {
+    const { props } = mint();
+    await user.click(screen.getByRole("button", { name: T.MINT_SUBMIT }));
+    expect(props.submit).toHaveBeenCalledWith({ name: "billing-callers", ttl_seconds: 90 * 86400 });
+    expect(props.submit).not.toHaveBeenCalledWith(expect.objectContaining({ kind: expect.anything() }));
+  });
+
+  it("a claim asks nothing about use", () => {
+    mount();
+    expect(screen.queryByRole("group", { name: T.USE_LABEL })).toBeNull();
+  });
+});
+
 describe("TokenDialog form", () => {
   it("claims with the invitation's name and limit, and focuses the name", async () => {
     const { props } = mount({ limitSeconds: 30 * 86400, replaces: "ci-old-key" });

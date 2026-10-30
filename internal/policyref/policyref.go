@@ -33,7 +33,7 @@ const (
 	SourceDeployment = "deployment"
 
 	// The layer kinds: which layer set a limit (Ref.Layer) or a value of a run's
-	// effective policy (Provenance.Layer). A ceiling is a deployment or a profile
+	// effective policy (Provenance.Layer). A ceiling is a deployment or a unit
 	// layer; member is the run's own policy and operator a run no ceiling binds;
 	// boundary is the Wardyn boundary, the outermost layer (types.Boundary).
 	LayerDeployment = SourceDeployment
@@ -41,6 +41,10 @@ const (
 	LayerMember     = "member"
 	LayerOperator   = "operator"
 	LayerBoundary   = "boundary"
+	// LayerRestriction is a restriction (types.Restriction): a deny-only list that follows people.
+	LayerRestriction = "restriction"
+	// LayerPersonal is a person's own walls (types.PersonalWalls): a private, narrow-only document that follows them.
+	LayerPersonal = "personal"
 
 	mailtoScheme = "mailto:"
 )
@@ -84,19 +88,33 @@ type Ref struct {
 	// cards), inside what their ceiling allows. A refusal then names the policy
 	// as changed, so the person is not sent to the owner of a policy they edited.
 	Overridden bool `json:"overridden,omitempty"`
-	// Layer is the kind of layer that set the limit (LayerDeployment or
-	// LayerUnit today). Layered stamps it on a refusal's policy; the
+	// Layer is the kind of layer that set the limit (LayerDeployment,
+	// LayerUnit or LayerPersonal). Layered stamps it on a refusal's policy; the
 	// proxy's attribution never carries it, because its wire predates the key.
 	Layer string `json:"layer,omitempty"`
+	// Locked says the knob a refusal is attributed to is locked by the layer that set it, so no
+	// lower layer could have allowed it (AttributedTo). False until per-knob locks are derived.
+	Locked bool `json:"locked,omitempty"`
+}
+
+// AttributedTo is a copy of ref for a refusal attributed to the one knob whose provenance record is
+// p: Locked is p's. Nil for nil.
+func AttributedTo(ref *Ref, p Provenance) *Ref {
+	if ref == nil {
+		return nil
+	}
+	cp := *ref
+	cp.Locked = p.Locked
+	return &cp
 }
 
 // Provenance is which layer set one value of a run's effective policy. Name is
 // the leaf profile's name, or "deployment", and never a profile it is built
 // from; a member, operator or boundary record has none. Contact is the leaf's (or
 // the deployment's policy_help), filled on read and never written to the audit.
-// Locked says a layer forbids the layers below it to change the value
-// (lower_may_change false). The boundary locks nothing, since a lower layer may
-// still narrow what it allows, so it stays false until per-knob delegation.
+// Locked says a layer above the run's unit forbids the units below it to change the
+// value, a narrowing included (locked_knobs); Name and Contact are then that
+// nearest locker's: a unit above the leaf, or "the Wardyn boundary".
 type Provenance struct {
 	Layer   string   `json:"layer"`
 	Name    string   `json:"name,omitempty"`
@@ -105,15 +123,15 @@ type Provenance struct {
 }
 
 // Layered is a copy of ref stamped with the layer kind its source names
-// (deployment or profile; none for any other source), nil for nil. The one place
-// a refusal's policy gains its layer.
+// (deployment, unit or personal; none for any other source), nil for nil. The one
+// place a refusal's policy gains its layer.
 func Layered(ref *Ref) *Ref {
 	if ref == nil {
 		return nil
 	}
 	cp := *ref
 	cp.Layer = ""
-	if cp.Source == SourceUnit || cp.Source == SourceDeployment {
+	if cp.Source == SourceUnit || cp.Source == SourceDeployment || cp.Source == LayerPersonal {
 		cp.Layer = cp.Source
 	}
 	return &cp
@@ -170,6 +188,16 @@ func Project(source, name string, c *Contact) *Ref {
 	}
 	if validText(c.RequestText, requestTextMax) {
 		ref.RequestText = c.RequestText
+	}
+	return ref
+}
+
+// Personal is the policy a refusal by a person's own walls names: source personal, which Layered stamps as
+// the personal layer, and the walls' owner, kept when it passes as Project keeps a contact's owner.
+func Personal(owner string) *Ref {
+	ref := &Ref{Source: LayerPersonal}
+	if validText(owner, ownerMax) {
+		ref.Owner = owner
 	}
 	return ref
 }

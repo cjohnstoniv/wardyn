@@ -5,7 +5,7 @@
 # Coverage floor gate over the real shipped set.
 #
 # `go test -coverprofile` measures ONE build, and Wardyn ships three: the
-# tagless build, the `-tags docker` build, and the `-tags k8s` build. The
+# tagless build, the `-tags docker` build, and the `-tags docker,k8s` build. The
 # docker build contains the container-hardening driver (internal/runner/docker),
 # internal/envbuild, and the wardynd wiring that calls them; the k8s build
 # contains the Kubernetes confinement substrate (internal/runner/k8s) — so a
@@ -103,6 +103,6 @@ go tool cover -func="$OUT/cover.out" > "$OUT/coverage-func.txt"
 go tool cover -html="$OUT/cover.out" -o "$OUT/coverage.html" 2>/dev/null || true
 TOTAL="$(awk '/^total:/ {print $NF}' "$OUT/coverage-func.txt" | tr -d '%')"
 
-echo "Union Go coverage (tagless + -tags docker + -tags k8s): ${TOTAL}% (floor ${FLOOR}%)"
+echo "Union Go coverage (tagless + -tags docker + -tags docker,k8s): ${TOTAL}% (floor ${FLOOR}%)"
 awk -v t="$TOTAL" -v m="$FLOOR" 'BEGIN{exit !(t + 0 >= m + 0)}' ||
   { echo "coverage ${TOTAL}% below floor ${FLOOR}%"; exit 1; }

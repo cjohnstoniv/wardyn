@@ -169,9 +169,18 @@ type AgentRun struct {
 	// NotRecorded says why the run has no session recording, decided once at dispatch and kept for
 	// the run's life; empty when the run is recorded (or predates the field).
 	NotRecorded RunNotRecorded `json:"not_recorded,omitempty"`
+	// MachineKind is the kind of the run's sandbox: empty for a container (every run before the
+	// field), linux_vm or macos_vm. Written once at create.
+	MachineKind MachineKind `json:"machine_kind,omitempty"`
+	// VMMachine is the virtual hardware a VM run was started with, recorded after its create; nil
+	// for a container.
+	VMMachine *VMMachine `json:"vm_machine,omitempty"`
 	// RecordingLevel is the level the run is recorded at, resolved once at dispatch with NotRecorded
 	// (RecordingChoice); empty for a run dispatched before the level existed, which reads as terminal.
 	RecordingLevel RecordingLevel `json:"recording_level,omitempty"`
+	// ImageArches are the architectures the run's prewrapped image was checked on, recorded when its
+	// image resolved; nil for any other image. Dispatch places the run by these, never by the catalog.
+	ImageArches []string `json:"-"`
 	// RunnerPoolID is the runner pool the run was admitted into, and the next three fields say how
 	// (all written once at create). A pool is a label for a choice and never admission: the run
 	// goes to the exact runner recorded in RunnerID (a self-hosted runner) or RunnerPoolExecutor (a
@@ -194,6 +203,9 @@ type AgentRun struct {
 	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;
 	// BackgroundOnly is the one predicate every interactive door reads. It is not Interactive, which is the legacy execution flag.
 	Experience RunExperience `json:"experience,omitempty"`
+	// Shape is the New Run shape the run was set up from, frozen at create: the request's own, else the one shape
+	// its experience, workload and tools fit. Empty when they fit more than one, for an older client, or before 0245.
+	Shape RunShape `json:"shape,omitempty"`
 	// WorkspacePath is the run's primary host directory, denormalized so the control plane can warn (never block) a second run on it.
 	WorkspacePath string `json:"workspace_path,omitempty"`
 	// WorkspaceID marks a governed scan run: the driver runs wardyn-scan instead of the agent, trusted (not sandbox input) to persist the profile.
@@ -224,6 +236,8 @@ type AgentRun struct {
 	// RunLimits are the owner's profile limits as they stood at create; later clamps use these captured bounds, never the profile's current ones.
 	RunLimits RunLimits  `json:"run_limits"`
 	UnitID    *uuid.UUID `json:"unit_id,omitempty"`
+	// RestrictionIDs are the restrictions the run was launched under, captured at create and at a queued start; the seal, the doors and the sweep read their current specs. Empty for an ungoverned or break-glass run.
+	RestrictionIDs []uuid.UUID `json:"restriction_ids,omitempty"`
 	// LostAt/LostReason mark a run that lost its sandbox but is kept (no proxy/network, files stay); stays RUNNING until a kill or the ended-run grace.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`
@@ -247,12 +261,18 @@ type AgentRun struct {
 	BreakGlass bool `json:"break_glass,omitempty"`
 	// CreatedVia is the registered portal this run was launched through on the person's behalf; nil when self-launched. The owner is still the person.
 	CreatedVia *uuid.UUID `json:"created_via,omitempty"`
-	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored, projected only with ?include=recording_meta; HasRecording is the only "no recording" signal.
+	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored: projected on every single-run read,
+	// and on a list only with ?include=recording_meta. HasRecording is the only "no recording" signal.
 	HasRecording         bool          `json:"has_recording"`
 	RecordingBytes       int64         `json:"recording_bytes,omitempty"`
 	RecordingDurationSec float64       `json:"recording_duration_sec,omitempty"`
 	DiskMiB              int           `json:"disk_mib,omitempty"`  // effective ephemeral disk cap MiB; 0 = no cap resolved
 	Attention            *RunAttention `json:"attention,omitempty"` // what this live run awaits and who can clear it; derived, only on view-opted-in read paths
+
+	// Service is the spec of a background run that is kept running, frozen at create with its defaults filled; nil for any other run.
+	Service *RunService `json:"service,omitempty"`
+	// ServiceStatus is the last health observation of that service, written by wardynd's sweep; absent until the first one.
+	ServiceStatus *RunServiceStatus `json:"service_status,omitempty"`
 
 	// HumanAuthor is the principal accountable for the run at create, written once: the service identity's sponsor
 	// at launch for a service identity's run, unchanged by a later sponsor change, and CreatedBy for any other run. A
@@ -357,13 +377,18 @@ const (
 	// ApprovalPushContent: a brokered git push touched a require_review_paths path, held for an
 	// admin decision. Admin-only — a member deciding their own push is the exfiltration it stops.
 	ApprovalPushContent ApprovalKind = "push_content"
+	// ApprovalHumanTakeover: the run's agent asked a person to take over its desktop or terminal
+	// ("Needs you", `wardyn needs-you <reason>`). Not decided with approve/deny: take over moves it
+	// to APPROVED with a holder, hand back stamps handed_back_at, decline moves it to DENIED. It
+	// grants the run nothing — the person drives what the agent already has.
+	ApprovalHumanTakeover ApprovalKind = "human_takeover"
 )
 
 // ApprovalKinds is the closed set, checked by test against the constants above — closedEnumChecks
 // once missed approvals.kind entirely, which would have let a DB-rejected constant pass every gate green.
 var ApprovalKinds = []ApprovalKind{
 	ApprovalCredential, ApprovalEgressDomain, ApprovalToolCall, ApprovalCredentialReauth,
-	ApprovalPushContent,
+	ApprovalPushContent, ApprovalHumanTakeover,
 }
 
 // ApprovalState is the approval lifecycle.
@@ -461,6 +486,13 @@ type ApprovalRequest struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 	Held      bool       `json:"held,omitempty"` // Held/HeldUntil project approval.Hold(this, now) at response time, never stored; both zero on a DECIDED row
 	HeldUntil *time.Time `json:"held_until,omitempty"`
+	// Decidable is the list route's verdict on whether THIS caller may act on a PENDING row (mayDecide, the egress_host
+	// grant included), projected at response time and never stored. Nil on a row the verdict was not computed for.
+	Decidable *bool `json:"decidable,omitempty"`
+	// WallsBlock is true on a PENDING egress_domain row whose host the requesting run owner's own walls deny: no
+	// approver can admit it (personal_walls_host), so the console draws Approve disabled. Projected at response time
+	// and never stored; absent when the host is not denied or the walls could not be read.
+	WallsBlock bool `json:"walls_block,omitempty"`
 	// LastRejoinedAt is when a held request last re-entered the hold on this PENDING row (nil until
 	// then); approval.Hold measures a bounded hold from it when it is later than RequestedAt. Not on the wire.
 	LastRejoinedAt *time.Time `json:"-"`
@@ -469,7 +501,20 @@ type ApprovalRequest struct {
 	// rows only, never stored; tier 0 (the first notice) and "no later tier" leave them zero.
 	EscalationTier int16      `json:"escalation_tier,omitempty"`
 	SLADueAt       *time.Time `json:"sla_due_at,omitempty"`
+	// TakeoverHolder is the person who has control on an APPROVED human_takeover row (the latest one
+	// to take over), and HandedBackAt is when they handed control back. Empty/nil on every other kind.
+	TakeoverHolder string     `json:"takeover_holder,omitempty"`
+	HandedBackAt   *time.Time `json:"handed_back_at,omitempty"`
 }
+
+// TakeoverScope is the requested_scope of an ApprovalHumanTakeover row: the agent's own words, shown
+// to the person quoted and unedited. MaxTakeoverReason bounds it where it is raised.
+type TakeoverScope struct {
+	Reason string `json:"reason"`
+}
+
+// MaxTakeoverReason caps a takeover reason in bytes: a sentence or two for a person, not a payload.
+const MaxTakeoverReason = 1000
 
 // ApprovalDecision is what a human (or the sweeper, for a stale-PENDING expiry) is deciding,
 // threaded as one value instead of growing DecideApproval's signature. ExpireStale leaves Scope at
@@ -480,6 +525,7 @@ type ApprovalDecision struct {
 	Reason    string
 	Scope     ApprovalScope // meaningful only for an egress_domain approval; others leave the zero value
 	ExpiresAt *time.Time
+	Policy    *ApprovalPolicyMatch // the approval rule that decided, nil for a person or the admin token
 }
 
 // AuditEvent is one append-only audit record. Every credential mint/revoke, approval decision,
@@ -568,7 +614,10 @@ type APIToken struct {
 	// ServiceIdentity names the service identity an admin linked this token to, set with Disposition on
 	// a token that has a move row (#1508); empty on any other token.
 	ServiceIdentity string `json:"service_identity,omitempty"`
-	Token           string `json:"token,omitempty"` // plaintext, create response ONLY
+	// Inbound marks a token of APITokenKindInbound: it calls the inbound ports that name its principal as a
+	// caller, through the app gateway, and authenticates nothing on the API. Read from Kind.
+	Inbound bool   `json:"inbound,omitempty"`
+	Token   string `json:"token,omitempty"` // plaintext, create response ONLY
 	// IdentityStampedAt is when Role and Groups were last stamped: at mint, then at each sign-in of
 	// the owner. Nil reads as stale under WARDYN_ROLE_STAMP_TTL. Never on the wire.
 	IdentityStampedAt *time.Time `json:"-"`
@@ -576,8 +625,9 @@ type APIToken struct {
 	// that existed their order once. 0 only for a token written by a replica that predates it, which a
 	// revocation cutoff orders on CreatedAt. Never on the wire.
 	RevSeq int64 `json:"-"`
-	// Kind is APITokenKindAPI for a personal token, or a CLI kind (cli_sign_in.go). Never on the wire:
-	// the name says which computer a CLI token belongs to.
+	// Kind is APITokenKindAPI for a personal token, APITokenKindInbound for an inbound one, or a CLI kind
+	// (cli_sign_in.go). Never on the wire (Inbound says the one kind a list needs): the name says which
+	// computer a CLI token belongs to.
 	Kind string `json:"-"`
 	// CLISessionID is the CLI session a CLI token belongs to; the token stops authenticating when the
 	// session ends. Nil on a personal token. Never on the wire.
@@ -669,6 +719,17 @@ const (
 type RunLocalFolderStatus struct {
 	Seed *FolderPassRecord `json:"seed,omitempty"`
 	Back *FolderPassRecord `json:"back,omitempty"`
+	// Resume is set while a pass back that was cut short keeps the run's sandbox for a later
+	// sweep to resume it.
+	Resume *FolderResume `json:"resume,omitempty"`
+}
+
+// FolderResume is a pass back kept for a resume: Stalled counts the cut passes in a row that
+// saved nothing, and Unsynced is the sandbox's changed files the latest pass that counted them
+// had not brought back.
+type FolderResume struct {
+	Stalled  int `json:"stalled"`
+	Unsynced int `json:"unsynced,omitempty"`
 }
 
 // FolderPassRecord is one pass as the runner counted it. Error is set when it did not complete.

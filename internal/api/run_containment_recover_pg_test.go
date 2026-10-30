@@ -146,7 +146,12 @@ func (f *runnerLeaseFixture) reviveRecovering(t *testing.T, run types.AgentRun) 
 // settled stop_proxy, so the runner refuses it any lease.
 func (f *runnerLeaseFixture) heldRun(t *testing.T) types.AgentRun {
 	t.Helper()
-	run := f.localRun(t, 0)
+	// Its token was stamped half an hour ago. A run on a runner is lost to an outage only once its token
+	// has lapsed (store ListRunnerLapsedRuns), so the floor the runner keeps from the run's last lease is
+	// always far older than a revive's fresh stamp, and the runner takes the revive's LEASE only above it.
+	// A stamp of now left about a second between the two, which a host wall clock stepping back (WSL2
+	// steps about 1.7 s every 28 s) closed, and the runner refused the LEASE (#3445).
+	run := f.localRun(t, 30*time.Minute)
 	f.running(t, &run, nil)
 	f.placed(t, &run)
 	if err := f.srv.keepRunProxyConfig(f.ctx, run.ID, runner.ProxyConfig{RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081"}); err != nil {

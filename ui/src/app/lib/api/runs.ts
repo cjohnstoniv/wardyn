@@ -209,6 +209,9 @@ export interface RunsListFilter {
   status?: RunsListStatus;
   endedWithin?: RunsEndedWithin;
   includeKilled?: boolean;
+  // "exclude" turns off only the addition of the runs of service identities the caller sponsors to their own
+  // list (#2513); omitted keeps them.
+  sponsored?: "exclude";
   workspace?: string;
   q?: string;
   limit?: number;
@@ -231,6 +234,7 @@ async function listRunsFiltered(filter: RunsListFilter): Promise<RunsListFiltere
   if (filter.status) q.set("status", filter.status);
   if (filter.endedWithin) q.set("ended_within", filter.endedWithin);
   if (filter.includeKilled) q.set("include_killed", "1");
+  if (filter.sponsored) q.set("sponsored", filter.sponsored);
   if (filter.workspace) q.set("workspace", filter.workspace);
   if (filter.q) q.set("q", filter.q);
   q.set("limit", String(filter.limit ?? LIST_LIMIT));
@@ -283,6 +287,15 @@ export const runs = {
     const res = await wfetch(`/runs/${encodeURIComponent(runId)}/attach/ticket${query}`, {
       method: "POST",
     });
+    const body = await asJson<{ ticket: string }>(res);
+    return body.ticket;
+  },
+
+  // POST /api/v1/runs/{id}/apps/{app}/ticket — a single-use ticket that opens one inbound app in a browser, for
+  // the run's owner or a person its callers name. Any other person, a run that is gone and an app that is not
+  // inbound all answer the same 404.
+  async appTicket(runId: string, app: string): Promise<string> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/apps/${encodeURIComponent(app)}/ticket`, { method: "POST" });
     const body = await asJson<{ ticket: string }>(res);
     return body.ticket;
   },

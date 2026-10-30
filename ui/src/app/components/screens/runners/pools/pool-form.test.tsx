@@ -66,6 +66,19 @@ describe("pool form layout", () => {
     expect(back).toHaveClass("-ml-3");
   });
 
+  // #3058: the admin editor sits in the shared form column; My runner's page keeps its own narrower one.
+  it("the admin pool editor uses the shared form column, and My runner's does not", async () => {
+    getMock.mockResolvedValue(pool());
+    const admin = renderAt("/admin/runners/pools/p-ci/edit", "admin");
+    const adminTitle = await screen.findByRole("heading", { level: 1 });
+    expect(adminTitle.closest("[data-page-width]")).toHaveAttribute("data-page-width", "form");
+    admin.unmount();
+    getMock.mockResolvedValue(MINE);
+    renderAt("/account/pools/new", "mine");
+    const mineTitle = await screen.findByRole("heading", { level: 1 });
+    expect(mineTitle.closest("[data-page-width]")).toBeNull();
+  });
+
   // #3063: the qualifier is said once per fieldset, not under every resource field.
   it("says the qualifier once per fieldset, with the not-chosen sentence appended while no runners are chosen", async () => {
     renderAt("/account/pools/new", "mine");

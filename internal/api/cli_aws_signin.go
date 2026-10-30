@@ -26,9 +26,9 @@ import (
 )
 
 const (
-	cliSignInNotAWS        = "this component is not an AWS CLI, so there is nothing to sign in to"
+	cliSignInNotAWS        = "This component is not an AWS CLI, so there is nothing to sign in to"
 	cliSignInPreview       = "Exit the user view to sign in — the capture would land on your own identity."
-	cliSignInCaptureChange = "the AWS CLI component this sign-in was for was removed or changed while it was open — start the sign-in again"
+	cliSignInCaptureChange = "The AWS CLI component this sign-in was for was removed or changed while it was open — start the sign-in again"
 )
 
 // cliRowLockPart keys the lock a capture's store (lockCLIRow) and a row's
@@ -129,7 +129,7 @@ func (s *Server) handleCLISignIn(w http.ResponseWriter, r *http.Request) {
 	run, dispatch, err := s.launchHarnessLoginRun(r.Context(), actor, hl, t)
 	switch {
 	case errors.Is(err, errRecordCeilingLimit):
-		writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "), recordCeilingRef(err))
+		writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "), recordCeilingRef(err), recordCeilingKnob(err))
 		return
 	case errors.Is(err, errSignInBusy):
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonCaptureSignInBusy, signInBusyRefusal)

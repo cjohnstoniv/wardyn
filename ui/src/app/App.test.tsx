@@ -12,10 +12,11 @@
 import { describe, it, expect, vi, afterEach, type Mock } from "vitest";
 import { act, render, screen, cleanup, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import App, { FirstRunLanding } from "./App";
 import { roleCanReach } from "./components/wardyn/reauth-layer";
 import { SESSION_ENDED_REASON } from "./lib/api/core";
+import { SESSION_ENDED } from "./lib/session-continuity-copy";
 import { RoleProvider, type Role } from "./components/wardyn/operator-context";
 import { baseStatus } from "./lib/test-fixtures";
 import type { SetupStatus } from "./lib/types";
@@ -187,7 +188,23 @@ describe("App — the sign-in screen's notice", () => {
     vi.stubGlobal("fetch", mockFetch({ probeReason: "expired_session" }).fetch);
     renderApp();
     await screen.findByText("Admin token", { exact: true });
-    expect(await screen.findByText(SESSION_ENDED_REASON)).toBeInTheDocument();
+    expect(await screen.findByText(SESSION_ENDED.EXPIRED)).toBeInTheDocument();
+    expect(screen.queryByText(SESSION_ENDED_REASON)).toBeNull();
+  });
+
+  // M12 (#1995): one sentence per reason the server sends, and a deactivated person is told so
+  // rather than shown the bare gate.
+  it.each([
+    ["expired_session", SESSION_ENDED.EXPIRED],
+    ["revoked_session", SESSION_ENDED.REVOKED],
+    ["role_stamp_stale", SESSION_ENDED.ROLE_STALE],
+    ["invalid_session", SESSION_ENDED.INVALID],
+    ["identity_deactivated", SESSION_ENDED.DEACTIVATED],
+  ])("a cold-mount 401 with reason %s names that reason", async (reason, sentence) => {
+    vi.stubGlobal("fetch", mockFetch({ probeReason: reason }).fetch);
+    renderApp();
+    await screen.findByText("Admin token", { exact: true });
+    expect(await screen.findByText(sentence)).toBeInTheDocument();
   });
 
   // #483: a stored token refused on load is a session this browser held — the
@@ -205,6 +222,176 @@ describe("App — the sign-in screen's notice", () => {
 // The reauth dialog itself (#483) is pinned in App.reauth.test.tsx; the path a
 // different person reloads to is decided by roleCanReach, pinned directly here.
 
+function Where() {
+  const l = useLocation();
+  return <output data-testid="where">{l.pathname + l.search}</output>;
+}
+
+describe("App — where a token sign-in lands (#2493)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    sessionStorage.clear();
+    cleanup();
+  });
+
+  function renderAt(initialPath: string) {
+    return render(
+      <MemoryRouter initialEntries={[initialPath]}>
+        <App />
+        <Where />
+      </MemoryRouter>,
+    );
+  }
+
+  it("returns to the deep link the person opened, not /runs", async () => {
+    const gate = { open: false };
+    const base = mockFetch({}).fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes("/runs?limit=1") && !u.includes("limit=1000") && !gate.open) {
+          return Promise.resolve(jsonResponse(401, { error: "unauthorized" }));
+        }
+        return base(url, init);
+      }),
+    );
+    renderAt("/admin/settings?tab=people");
+    await screen.findByText("Admin token", { exact: true });
+
+    const user = userEvent.setup();
+    gate.open = true;
+    setField(screen.getByLabelText("Admin token"), "any-token");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await screen.findByText("admin settings screen stub");
+    expect(screen.getByTestId("where")).toHaveTextContent("/admin/settings?tab=people");
+  });
+
+  it("after a deliberate sign-out the next person starts at /runs, not the last page", async () => {
+    vi.stubGlobal("fetch", mockFetch({}).fetch);
+    renderAt("/admin/settings");
+    const user = userEvent.setup();
+    const header = await screen.findByRole("banner");
+    await waitFor(() => expect(within(header).getByText("cj")).toBeInTheDocument());
+    const headerButtons = within(header).getAllByRole("button");
+    await user.click(headerButtons[headerButtons.length - 1]);
+    await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
+    await screen.findByText("Admin token", { exact: true });
+
+    setField(screen.getByLabelText("Admin token"), "any-token");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await screen.findByText("runs screen stub");
+    expect(screen.getByTestId("where")).toHaveTextContent(/^\/runs$/);
+  });
+});
+
+describe("App — the nav badges across a sign-out (#2492)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    cleanup();
+  });
+
+  it("drops the previous person's counts, so the next sign-in's first paint shows none of them", async () => {
+    let answering = true;
+    const base = mockFetch({}).fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+        if (String(url).includes("/me/attention")) {
+          return answering ? Promise.resolve(jsonResponse(200, { pending_approvals: 7, needs_you: 3 })) : new Promise<Response>(() => {});
+        }
+        return base(url, init);
+      }),
+    );
+    renderApp("/admin/settings");
+    const approvals = () => screen.getByRole("link", { name: /Approvals/ });
+    await waitFor(() => expect(approvals()).toHaveTextContent("7"));
+
+    answering = false;
+    const user = userEvent.setup();
+    const header = await screen.findByRole("banner");
+    const headerButtons = within(header).getAllByRole("button");
+    await user.click(headerButtons[headerButtons.length - 1]);
+    await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
+    await screen.findByText("Admin token", { exact: true });
+
+    setField(screen.getByLabelText("Admin token"), "any-token");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await screen.findByRole("banner");
+    await waitFor(() => expect(approvals()).toBeInTheDocument());
+    expect(approvals()).not.toHaveTextContent("7");
+  });
+
+  // A /me/attention read that started under one session may answer under another (#2492): the counts
+  // it carries are the previous person's, whether they land at the gate or on the next sign-in's shell.
+  function stubAttention(answer: (n: number) => Promise<Response>) {
+    const base = mockFetch({}).fetch;
+    let n = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL, init?: RequestInit) => (String(url).includes("/me/attention") ? answer(n++) : base(url, init))),
+    );
+    return () => n;
+  }
+  const approvalsLink = () => screen.getByRole("link", { name: /Approvals/ });
+  const runsLink = () => screen.getByRole("link", { name: /Runs/ });
+  async function signOutAndBackIn() {
+    const user = userEvent.setup();
+    const header = await screen.findByRole("banner");
+    const headerButtons = within(header).getAllByRole("button");
+    await user.click(headerButtons[headerButtons.length - 1]);
+    await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
+    await screen.findByText("Admin token", { exact: true });
+    return async () => {
+      setField(screen.getByLabelText("Admin token"), "any-token");
+      await user.click(screen.getByRole("button", { name: "Sign in" }));
+      await screen.findByRole("banner");
+    };
+  }
+
+  it("a 200 held open across the sign-out and resolved after it leaves both counts at zero", async () => {
+    const first = deferred<Response>();
+    const asked = stubAttention((n) => (n === 0 ? first.promise : new Promise<Response>(() => {})));
+    renderApp("/admin/settings");
+    await waitFor(() => expect(asked()).toBe(1));
+    const signIn = await signOutAndBackIn();
+    await act(async () => {
+      first.resolve(jsonResponse(200, { pending_approvals: 9, needs_you: 8 }));
+    });
+    await signIn();
+    await waitFor(() => expect(approvalsLink()).toBeInTheDocument());
+    expect(approvalsLink()).not.toHaveTextContent("9");
+    expect(runsLink()).not.toHaveTextContent("8");
+  });
+
+  it("a 200 that resolves after the next sign-in's own answer does not overwrite it", async () => {
+    const first = deferred<Response>();
+    const asked = stubAttention((n) => (n === 0 ? first.promise : Promise.resolve(jsonResponse(200, { pending_approvals: 2, needs_you: 1 }))));
+    renderApp("/admin/settings");
+    await waitFor(() => expect(asked()).toBe(1));
+    const signIn = await signOutAndBackIn();
+    await signIn();
+    await waitFor(() => expect(approvalsLink()).toHaveTextContent("2"));
+    await waitFor(() => expect(runsLink()).toHaveTextContent("1"));
+    await act(async () => {
+      first.resolve(jsonResponse(200, { pending_approvals: 9, needs_you: 8 }));
+    });
+    expect(approvalsLink()).toHaveTextContent("2");
+    expect(approvalsLink()).not.toHaveTextContent("9");
+    expect(runsLink()).toHaveTextContent("1");
+    expect(runsLink()).not.toHaveTextContent("8");
+  });
+
+  it("an answer within the same session still commits both counts", async () => {
+    stubAttention(() => Promise.resolve(jsonResponse(200, { pending_approvals: 7, needs_you: 3 })));
+    renderApp("/admin/settings");
+    await waitFor(() => expect(approvalsLink()).toHaveTextContent("7"));
+    await waitFor(() => expect(runsLink()).toHaveTextContent("3"));
+  });
+});
+
 describe("roleCanReach — pure", () => {
   // ticket: M2
   it("a member cannot reach an operator-only route", () => {
@@ -219,6 +406,7 @@ describe("roleCanReach — pure", () => {
 
   it("a security admin's return path to Drives is honoured (its grants are theirs)", () => {
     expect(roleCanReach("/admin/drives", "security_admin")).toBe(true);
+    expect(roleCanReach("/admin/images", "security_admin")).toBe(true);
   });
 
   it("a user reaches their own account page but nothing in the Admin view", () => {
@@ -449,5 +637,15 @@ describe("App — the Templates route table", () => {
   it("a member reaches /templates and nothing under /admin/templates", () => {
     expect(roleCanReach("/templates", "user")).toBe(true);
     expect(roleCanReach("/admin/templates", "user")).toBe(false);
+  });
+});
+
+// #2884: the two catch-alls keep the address and say there is no page there, in place of a silent redirect to Runs.
+describe("App — an unknown address", () => {
+  it.each(["/definitely/not/a/page", "/admin/definitely-not", "/integrations"])("%s shows Page not found at that address", async (path) => {
+    const { fetch } = mockFetch({});
+    vi.stubGlobal("fetch", fetch);
+    renderApp(path);
+    expect(await screen.findByRole("region", { name: "Page not found" })).toHaveTextContent(`There's no page at ${path}.`);
   });
 });

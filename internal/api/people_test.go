@@ -6,7 +6,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -180,6 +182,43 @@ func TestListAllAPITokens_MintedForOthersInventory(t *testing.T) {
 	}
 	if w := doSSO(t, srv, http.MethodGet, "/api/v1/tokens", sec, ""); !strings.Contains(w.Body.String(), own.ID.String()) || !strings.Contains(w.Body.String(), legacy.ID.String()) {
 		t.Errorf("without the parameter the route lists everything, got %s", w.Body.String())
+	}
+}
+
+// mintedForOthersStore answers the minted-for-others inventory in the store, and refuses the whole list.
+type mintedForOthersStore struct {
+	*tokenMemStore
+	rows         []types.APIToken
+	withFinished []bool
+}
+
+func (s *mintedForOthersStore) ListAPITokens(context.Context) ([]types.APIToken, error) {
+	return nil, errors.New("every token in the deployment was read")
+}
+
+func (s *mintedForOthersStore) ListAPITokensMintedForOthers(_ context.Context, withFinished bool, _ time.Time) ([]types.APIToken, error) {
+	s.withFinished = append(s.withFinished, withFinished)
+	return s.rows, nil
+}
+
+// The minted-for-others inventory is the store's to filter: the route reads that list, with the
+// finished tokens only when include_revoked asks, and never every token in the deployment.
+func TestListAllAPITokens_MintedForOthersFilterRunsInTheStore(t *testing.T) {
+	h := newHarness(t)
+	row := types.APIToken{ID: uuid.New(), Principal: "pat", Role: oidc.RoleUser, Name: "n", MintedBy: "admin-1", CreatedAt: time.Now().UTC()}
+	st := &mintedForOthersStore{tokenMemStore: newTokenMemStore(), rows: []types.APIToken{row}}
+	cfg := baseTestConfig(h, st)
+	cfg.OIDC = newAccessAuth(t, map[string]string{"sec@corp.example": oidc.RoleSecurityAdmin}, oidc.RoleUser, nil, nil)
+	srv := New(cfg)
+	sec := accessSession(t, "sec", "sec@corp.example", oidc.RoleSecurityAdmin, []string{})
+	for _, q := range []string{"minted_for_others=true", "minted_for_others=true&include_revoked=true"} {
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/tokens?"+q, sec, "")
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), row.ID.String()) {
+			t.Fatalf("%s: %d %s, want the store's row", q, w.Code, w.Body.String())
+		}
+	}
+	if !slices.Equal(st.withFinished, []bool{false, true}) {
+		t.Errorf("finished tokens asked for as %v, want [false true]", st.withFinished)
 	}
 }
 

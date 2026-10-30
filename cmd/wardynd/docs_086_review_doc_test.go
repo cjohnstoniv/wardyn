@@ -10,13 +10,13 @@ import (
 	"testing"
 )
 
-// changelog086 is the CHANGELOG.md [0.8.6] section, read by version so text under [Unreleased] and
+// changelog086 is the docs/releases/0.8.md [0.8.6] section, read by version so text under [Unreleased] and
 // the position of the neighbouring headings never move what these tests pin.
 func changelog086(t *testing.T) string {
 	t.Helper()
-	sec, ok := changelogSections(readRepo(t, "CHANGELOG.md"))["0.8.6"]
+	sec, ok := changelogSections(readRepo(t, "docs/releases/0.8.md"))["0.8.6"]
 	if !ok {
-		t.Fatal("CHANGELOG.md has no [0.8.6] section")
+		t.Fatal("docs/releases/0.8.md has no [0.8.6] section")
 	}
 	return sec
 }
@@ -45,12 +45,12 @@ func TestUnreleasedNamesTheOperatorFacingAdditions(t *testing.T) {
 	un := changelog086(t)
 	_, before, ok := strings.Cut(un, "\n### Before you upgrade")
 	if !ok {
-		t.Fatal("CHANGELOG.md [0.8.6] has no Before you upgrade subsection")
+		t.Fatal("docs/releases/0.8.md [0.8.6] has no Before you upgrade subsection")
 	}
 	before, _, _ = strings.Cut(before, "\n### ")
-	wantAll(t, "CHANGELOG.md [0.8.6] Before you upgrade", before,
+	wantAll(t, "docs/releases/0.8.md [0.8.6] Before you upgrade", before,
 		"WARDYN_PREFLIGHT_RATE_PER_MIN", "preflight_rate_limited", "WARDYN_RUN_OUTPUT_TAIL_BYTES")
-	wantAll(t, "CHANGELOG.md [0.8.6]", un,
+	wantAll(t, "docs/releases/0.8.md [0.8.6]", un,
 		"WARDYN_RUN_MAX_AGE", "run.max_age.expire", "activeDeadlineSeconds",
 		"WARDYN_GOVERN_ADMIN_RUNS", "WARDYN_GOVERN_ADMIN_RUNS_EXEMPT", "recording_governed", "user_view_preview",
 		"WARDYN_MAX_CONCURRENT_RUNS", "WARDYN_SANDBOX_REQUEST_RATIO", "WARDYN_KEK_REQUIRED",
@@ -60,7 +60,7 @@ func TestUnreleasedNamesTheOperatorFacingAdditions(t *testing.T) {
 
 // TestUnreleasedNamesTheTerminalChanges pins the day-one terminal behaviour changes.
 func TestUnreleasedNamesTheTerminalChanges(t *testing.T) {
-	wantAll(t, "CHANGELOG.md [0.8.6]", changelog086(t),
+	wantAll(t, "docs/releases/0.8.md [0.8.6]", changelog086(t),
 		"tmux selection", "Shift", "right-click", "device-login", "Terminal renderer",
 		"stale_writer", "session.takeover", "session.attach")
 }
@@ -124,8 +124,8 @@ func TestNoDowngradePathIsDocumented(t *testing.T) {
 	}
 	// The changelog's 0.8.6 entries make the same promise: the dump is the only way back.
 	cl := strings.Join(strings.Fields(changelog086(t)), " ")
-	wantAll(t, "CHANGELOG.md [0.8.6]", cl, "restore the pre-upgrade dump")
-	wantNone(t, "CHANGELOG.md [0.8.6]", cl,
+	wantAll(t, "docs/releases/0.8.md [0.8.6]", cl, "restore the pre-upgrade dump")
+	wantNone(t, "docs/releases/0.8.md [0.8.6]", cl,
 		"First turn every composed profile back into a standalone one",
 		"A downgrade to 0.8.5 ignores the new tables",
 		"a downgrade runs a narrowed policy unnarrowed",
@@ -149,7 +149,7 @@ func TestKeyDomainAssignmentsAreListedAsFourEyesCovered(t *testing.T) {
 // TestNoPlanLabelsInShippedDocs pins that plan-internal decision and lane ids stay out of shipped docs.
 func TestNoPlanLabelsInShippedDocs(t *testing.T) {
 	label := regexp.MustCompile(`\bQ-[A-Z]+[0-9]+\b|\bha-l2\.[0-9]\b`)
-	for _, f := range []string{"CHANGELOG.md", "docs/OPERATIONS.md", "docs/AUDIT-ACTIONS.md", "docs/sdk.md"} {
+	for _, f := range append([]string{"CHANGELOG.md", "docs/OPERATIONS.md", "docs/AUDIT-ACTIONS.md", "docs/sdk.md"}, changelogFiles(t)[1:]...) {
 		for i, line := range strings.Split(readRepo(t, f), "\n") {
 			if m := label.FindString(line); m != "" {
 				t.Errorf("%s:%d carries the plan label %q, which no reader can resolve", f, i+1, m)
@@ -163,5 +163,5 @@ func TestNoPlanLabelsInShippedDocs(t *testing.T) {
 func TestConnectionBudgetCountsTheListeners(t *testing.T) {
 	wantAll(t, "docs/ENV.md WARDYN_PG_DSN row", readRepo(t, "docs/ENV.md"),
 		"**at least 4**", "`pool_max_conns` plus up to 3 dedicated lifetime connections per replica", "`pool_max_conns` plus 3 dedicated lifetime connections plus 8 lock connections plus 2 listener connections per replica")
-	wantAll(t, "CHANGELOG.md [0.8.6]", changelog086(t), "two more database connections", "LISTEN wardyn_mask")
+	wantAll(t, "docs/releases/0.8.md [0.8.6]", changelog086(t), "two more database connections", "LISTEN wardyn_mask")
 }

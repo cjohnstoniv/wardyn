@@ -73,15 +73,20 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 			t.Errorf("routes.go does not mount %s (%v)", route, err)
 		}
 	}
-	// sponsorsRun itself is asked only by the predicate above and by the ticket mint, whose load admits a
-	// sponsor so that its entry check can refuse by capability; any other caller is a new sponsor door.
-	if want := map[string]int{"ownsRunOrSponsorOrAdmin": 1, "handleAttachTicket": 1, "sponsorMayEnter": 1}; !maps.Equal(direct, want) {
+	// sponsorsRun itself is asked only by the predicate above and by the interactive entry rule (admitRunEntry,
+	// the ticket mint's and a takeover's), whose load admits a sponsor so that its entry check can refuse by
+	// capability. loadTakeover asks it only to send a sponsor on to that rule rather than refuse them as a
+	// stranger; it admits nothing itself. Any other caller is a new sponsor door.
+	if want := map[string]int{"ownsRunOrSponsorOrAdmin": 1, "admitRunEntry": 1, "loadTakeover": 1, "sponsorMayEnter": 1}; !maps.Equal(direct, want) {
 		t.Errorf("sponsorsRun is asked by %v, want %v", direct, want)
 	}
 	// mayEnterRunOrSponsor admits a sponsor on a redeemed ticket or an open UI session without a delegation
 	// check of its own: the portal refusal holds because the one ticket mint refuses. A new redemption site
-	// is a new way in, and has to be classified here.
-	wantRedeem := map[string]int{"refuseAttachEntry": 1, "uiEnterCommon": 1, "uiSessionStillAuthorized": 1}
+	// is a new way in, and has to be classified here. uiTicketMayEnter is the gateway enter's redemption
+	// (uiEnterCommon's, moved there beside the inbound caller's ticket, which never takes this arm).
+	// inboundCaller redeems an inbound token, with no role (superAdmin false); a portal's delegated token
+	// cannot mint one (mintGuards' delegation refusal, on both token mints), so the portal refusal holds there too.
+	wantRedeem := map[string]int{"refuseAttachEntry": 1, "uiTicketMayEnter": 1, "uiSessionStillAuthorized": 1, "inboundCaller": 1}
 	if !maps.Equal(redeem, wantRedeem) {
 		t.Errorf("mayEnterRunOrSponsor is asked by %v, want %v", redeem, wantRedeem)
 	}

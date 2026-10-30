@@ -24,7 +24,7 @@ export function Refusal({
 }: {
   title: string;
   chip: string;
-  body: string;
+  body: React.ReactNode;
   rows: RefusalRow[];
   tone?: "blocked" | "absent";
   ariaLabel?: string;

@@ -118,6 +118,10 @@ func (m *FirstUseMode) UnmarshalJSON(b []byte) error {
 	}
 }
 
+// MaxAllowedDomainsPerSpec is the hostile-input ceiling on one allowed_domains list; the policy
+// validators and the composer's overlay check share it.
+const MaxAllowedDomainsPerSpec = 256
+
 type RunPolicySpec struct {
 	// AllowedDomains is the L2 egress allowlist (exact hosts or "*." wildcards).
 	AllowedDomains []string `json:"allowed_domains"`
@@ -216,6 +220,9 @@ type RunPolicySpec struct {
 	// A choice only narrows: the create door refuses a run whose walls it cannot meet, a looser one
 	// included, so a policy never widens what Wardyn allows.
 	HarnessInnerWalls *HarnessInnerWalls `json:"harness_inner_walls,omitempty"`
+	// Desktop sets the desktop's clipboard and file-transfer rules by direction (#2967). Nil is
+	// the defaults: paste in and upload allowed, copy out and download blocked.
+	Desktop *DesktopControls `json:"desktop,omitempty"`
 	// Recording is how much of a run under this policy is recorded (RecordingLevel); empty chooses
 	// nothing, and the organisation's level applies (types.RecordingChoice). A ceiling's level is a
 	// minimum: a policy under it may record more, never less.
@@ -231,8 +238,8 @@ type HarnessInnerWalls struct {
 }
 
 // The inner-wall values. InnerSandboxWorkspaceWrite and InnerSandboxReadOnly name the harness's
-// own sandbox modes, which cannot start inside Wardyn's sandbox today, so a policy may not choose
-// them yet (the policy validator says why).
+// own sandbox modes; Wardyn binds Codex to them where its sandbox starts (CC2 workspace-write on a
+// background run, CC3 both), and the create door refuses them anywhere else.
 const (
 	InnerSandboxOff            = "off"
 	InnerSandboxWorkspaceWrite = "workspace-write"
@@ -268,10 +275,9 @@ type PushRulesSpec struct {
 	// HoldSeconds is how long a held push waits for that decision before it
 	// is refused. 0/absent means 120; bounded 0..600 by validatePolicySpec.
 	HoldSeconds int `json:"hold_seconds,omitempty"`
-	// DenyNewExecutables is reserved: the broker cannot yet tell a newly added executable from an
-	// edit to an existing one, so validation refuses it when true rather than store a rule nothing
-	// enforces, and IsSet does not count it, so a stored true never makes the broker inspect for
-	// a rule it cannot apply.
+	// DenyNewExecutables refuses a push that adds an executable file or makes an existing file
+	// executable; an edit to a file that was executable already passes. Where the pack does not
+	// show the base, the forge must (GitHub lanes only), or the push is refused. false/absent is off.
 	DenyNewExecutables bool `json:"deny_new_executables,omitempty"`
 	// MaxFileSizeMiB refuses a push that introduces a file larger than this many MiB, or one whose
 	// size the pack does not carry and the forge cannot show unchanged. 0/absent is off; bounded
@@ -285,7 +291,7 @@ type PushRulesSpec struct {
 // advertisement/enforcement) — one method so those readers can't drift.
 func (s *PushRulesSpec) IsSet() bool {
 	return s != nil && (len(s.DenyPaths) > 0 || len(s.RequireReviewPaths) > 0 || s.MaxInspectPackMiB > 0 ||
-		s.MaxFileSizeMiB > 0)
+		s.MaxFileSizeMiB > 0 || s.DenyNewExecutables)
 }
 
 // DenyPathSegments is the one reading of a push_rules.deny_paths entry, shared by write-time
@@ -364,6 +370,9 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	out.WorkspaceMounts = append([]WorkspaceMount(nil), s.WorkspaceMounts...)
 	out.WorkspaceRepos = append([]WorkspaceRepo(nil), s.WorkspaceRepos...)
 	out.UIApps = append([]UIApp(nil), s.UIApps...)
+	for i := range out.UIApps {
+		out.UIApps[i].Callers = append([]string(nil), s.UIApps[i].Callers...)
+	}
 	out.ToolRules = append([]ToolRule(nil), s.ToolRules...)
 	out.AzureDevOpsCapabilities = append([]adoscope.Capability(nil), s.AzureDevOpsCapabilities...)
 	out.GitHubCapabilities = append([]ghscope.Capability(nil), s.GitHubCapabilities...)
@@ -383,6 +392,10 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	if s.HarnessInnerWalls != nil {
 		w := *s.HarnessInnerWalls
 		out.HarnessInnerWalls = &w
+	}
+	if s.Desktop != nil {
+		d := *s.Desktop
+		out.Desktop = &d
 	}
 	if s.PushRules != nil {
 		pr := *s.PushRules
@@ -494,15 +507,22 @@ type WorkspaceRepo struct {
 }
 
 // UIApp is one declared in-sandbox HTTP app the UI gateway may relay to (RunPolicySpec.UIApps).
-// Three fields, no command string: Name identifies the app to the operator and the launcher
+// Name, Port and Path, plus the optional inbound declaration below; no command string: Name identifies the app to the operator and the launcher
 // convention (/usr/local/bin/wardyn-ui-<name>), constrained to a short lower-case slug since it
 // reaches a filesystem path and a URL query (never a slash, space, or ".."); Port is the port the
 // app listens on INSIDE the sandbox, on 127.0.0.1 (the sandbox has no other reachable address);
 // Path is where the app's UI lives, the landing path after the gateway's ticket handoff — empty means "/".
+//
+// Inbound marks the port as callable from outside the run through the gateway, with or without a terminal;
+// Callers names who besides the run's owner may call it (user:<sub or email>, group:<name> or
+// service:<name>) and is meaningful only with Inbound. Both are part of the effective policy, so they are
+// fixed at create.
 type UIApp struct {
-	Name string `json:"name"`
-	Port int    `json:"port"`
-	Path string `json:"path,omitempty"`
+	Name    string   `json:"name"`
+	Port    int      `json:"port"`
+	Path    string   `json:"path,omitempty"`
+	Inbound bool     `json:"inbound,omitempty"`
+	Callers []string `json:"callers,omitempty"`
 }
 
 // PathOrRoot is Path with the empty default applied.

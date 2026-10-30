@@ -51,12 +51,12 @@ import (
 const (
 	// uiSessionNoLongerAuthorizedMsg is the 403 body when role/ownership or the
 	// revoke cutoff turns a still-valid cookie down at connect time.
-	uiSessionNoLongerAuthorizedMsg = "this UI session is no longer authorized for this run — open the app again from its run page"
+	uiSessionNoLongerAuthorizedMsg = "This UI session is no longer authorized for this run — open the app again from its run page"
 	// uiSessionUnverifiableMsg is the 503 body when the store cannot answer —
 	// the revocation cutoff, or the run the session is re-checked against. A
 	// retryable condition, said as one: the relay fails CLOSED rather than
 	// serving a credential an admin may have just cancelled.
-	uiSessionUnverifiableMsg = "could not verify this UI session; try again"
+	uiSessionUnverifiableMsg = "Could not verify this UI session; try again"
 )
 
 // The ui.authorize/denied `reason` values a refused re-check writes are
@@ -127,6 +127,18 @@ type uiSession struct {
 	// Service is the service identity whose run the session entered as its sponsor (#1508), empty
 	// otherwise; every row the session writes names it with entry=sponsor.
 	Service string `json:"c,omitempty"`
+	// Desktop marks a session on a VM's desktop (App uiDesktopAppName, no Port): it lasts at most
+	// uiDesktopSessionTTL and ends when its person closes it (uigateway_desktop.go).
+	Desktop bool `json:"d,omitempty"`
+	// Inbound marks a session on an app declared inbound: true, the one door a background run keeps
+	// (uigateway_inbound.go). Caller is the callers entry the session's principal matched, empty for the
+	// run's owner: a Caller session skips the owner rule, its run's callers being fixed at create.
+	Inbound bool   `json:"n,omitempty"`
+	Caller  string `json:"k,omitempty"`
+	// tokenID and sponsor ride an inbound token's session only, never a cookie: the token its rows name,
+	// and the sponsor of the service identity that holds it.
+	tokenID uuid.UUID
+	sponsor string
 }
 
 // auditUISession writes one ui.* row for sess: its run, its principal, and the
@@ -138,7 +150,7 @@ func (s *Server) auditUISession(sess uiSession, action, target, outcome string, 
 	if sess.Service != "" {
 		data["service_identity"], data["entry"] = sess.Service, sponsorEntry
 	}
-	s.recordStreamAudit(s.cfg.BaseCtx, sess.SandboxRef, s.auditEvent(&sess.Run, types.ActorHuman, sess.Principal, action, target, outcome, mustJSON(data)))
+	s.recordStreamAudit(s.uiAuditCtx(s.cfg.BaseCtx, sess), sess.SandboxRef, s.auditEvent(&sess.Run, uiActorType(sess), sess.Principal, action, target, outcome, mustJSON(data)))
 }
 
 type uiSessionCtxKey struct{}
@@ -157,6 +169,36 @@ func (s *Server) uiSessionTTL() time.Duration {
 		return s.cfg.UISessionTTL
 	}
 	return defaultUISessionTTL
+}
+
+// newUISession is the session a redeemed ticket opens on one app of run, for at most ttl.
+func (s *Server) newUISession(run types.AgentRun, ta ticketActor, app string, port int, ttl time.Duration) uiSession {
+	now := s.cfg.Now()
+	return uiSession{
+		Run: run.ID, App: app, Port: port,
+		Principal: ta.principal, Role: ta.role, Email: ta.email,
+		Expires: ta.sessionExpiry(now, ttl).Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), AuthorizedNs: int64(ta.authorizedAt.Nanosecond()), RevSeq: ta.revSeq, Via: ta.via, Service: sponsoredService(run),
+	}
+}
+
+// startUISession sets sess's cookie, audits the authorization and sends the browser to the app. The row
+// names the sponsor entry only when sess entered as the sponsor (sess.Service): a caller of a service
+// identity's app enters as themselves, as their inbound.allow rows say.
+func (s *Server) startUISession(w http.ResponseWriter, r *http.Request, run types.AgentRun, ta ticketActor, sess uiSession, data map[string]any, landing string, redirectStatus int) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     uiCookieName,
+		Value:    s.encodeUISession(sess),
+		Path:     s.uiBasePath() + uiCookiePath(run.ID, sess.App),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   s.cfg.OIDCSecureCookies,
+		Expires:  time.Unix(sess.Expires, 0),
+	})
+	if sess.Service != "" {
+		data = withSponsorEntry(run, data)
+	}
+	s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", sess.App, "success", ta.withVia(data))
+	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(run.ID, sess.App)+landing, redirectStatus)
 }
 
 // uiCookiePath scopes the cookie to ONE app of ONE run. Cookies are not
@@ -240,14 +282,19 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 	if err := json.Unmarshal(payload, &sess); err != nil {
 		return uiSession{}, false
 	}
-	if sess.Run == uuid.Nil || sess.App == "" || sess.Port <= 0 || now.Unix() >= sess.Expires {
+	// A desktop session has no port and only the desktop has one without: neither can pass for the other.
+	if sess.Run == uuid.Nil || sess.App == "" || (sess.Port <= 0) != sess.Desktop || sess.Desktop != (sess.App == uiDesktopAppName) || now.Unix() >= sess.Expires {
 		return uiSession{}, false
 	}
 	// Issued-at, then the CONFIGURED TTL over it. Checking the TTL here and not
 	// only at mint is the whole point of the knob: shortening it has to bind
 	// the cookies already sitting in browsers, whose signed Expires was
 	// computed under the old, longer bound.
-	if sess.IssuedAt <= 0 || sess.AuthorizedAt <= 0 || now.Sub(time.Unix(sess.IssuedAt, 0)) >= s.uiSessionTTL() {
+	if sess.IssuedAt <= 0 || sess.AuthorizedAt <= 0 || now.Sub(time.Unix(sess.IssuedAt, 0)) >= s.uiSessionTTLFor(sess) {
+		return uiSession{}, false
+	}
+	// A Closed desktop is refused on every replica and after a restart: uiDesktopClosed reads the shared set.
+	if sess.Desktop && s.uiDesktopClosed(r.Context(), sess, now) {
 		return uiSession{}, false
 	}
 	return sess, true
@@ -266,6 +313,9 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 // stamp with WARDYN_SSH_ROLE_TTL — the relay was the one lane where
 // "authorized at enter" meant "authorized until the cookie expires", while
 // holding an editor with an in-sandbox terminal.
+//
+// An inbound session (uigateway_inbound.go) skips the background-only arm, a named caller's skips the
+// ownership one (sess.Caller), and both answer to the run's profile's deny_ui_apps and deny_interactive.
 //
 // Three arms are needed: the ownership re-assert catches a handed-over run but
 // NOT an off-boarded owner (they still equal run.CreatedBy), the revoke cutoff
@@ -297,13 +347,18 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 				http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 		}
 	}
-	if !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, sess.AuthorizedNs).UTC()) {
+	if sess.Caller == "" && !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, sess.AuthorizedNs).UTC()) {
 		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
 			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
-	if backgroundOnlyRefusal(run, "web application gateway") != nil {
+	if !sess.Inbound && backgroundOnlyRefusal(run, "web application gateway") != nil {
 		return s.uiDenyReassert(sess, reasonRunBackgroundOnly,
 			http.StatusConflict, runBackgroundOnlyMsg("web application gateway"))
+	}
+	if sess.Inbound {
+		if de := s.uiInboundUnitDenies(ctx, sess, run); de != nil {
+			return de
+		}
 	}
 	if s.cfg.SessionRevocations == nil {
 		return nil

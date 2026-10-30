@@ -240,7 +240,7 @@ export function overrideItems(o: RunOverrides): OverrideItem[] {
   }
   const eg = o.egress;
   if (eg?.first_use_approval) out.push({ kind: "first_use_approval", op: "set", subject: eg.first_use_approval });
-  if (eg?.allow_all_egress !== undefined) out.push({ kind: "allow_all_egress", op: "set", subject: "allow_all_egress" });
+  if (eg?.allow_all_egress !== undefined) out.push({ kind: "allow_all_egress", op: eg.allow_all_egress ? "set" : "narrow", subject: "allow_all_egress" });
   for (const p of o.push_rules ?? []) {
     for (const path of p.deny_paths ?? []) out.push({ kind: "push_rule_deny", op: "add", subject: `${pushRuleKey(p)} ${path}` });
     for (const path of p.require_review_paths ?? []) out.push({ kind: "push_rule_review", op: "add", subject: `${pushRuleKey(p)} ${path}` });

@@ -1,5 +1,5 @@
 {{/*
-runnerd's own policy, default-deny both ways. Ingress: only the proxy pods of its runs namespace, on the relay
+runnerd's own policy, default-deny both ways. Ingress: only the proxy pods of its runs namespaces, on the relay
 and sink ports, so an agent pod (wardyn.component=agent) cannot reach runnerd. The substrate refuses a run's
 extra labels that would set wardyn.component. Egress: DNS, the apiserver and the organisation; the default
 organisation rule excludes the private ranges pods use, so runnerd has no route to sandbox pods.
@@ -22,8 +22,10 @@ spec:
   ingress:
     - from:
         - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.runsNamespace }}
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values: {{ include "runnerd.runsNamespaces" . }}
           podSelector:
             matchLabels:
               wardyn.managed: "true"

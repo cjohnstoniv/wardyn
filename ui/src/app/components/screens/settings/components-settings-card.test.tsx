@@ -10,6 +10,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { expandCard } from "../../../lib/test-dom";
+import { expectActionBar } from "../../../../test/action-bar";
 
 const toastSuccess = vi.fn();
 const toastError = vi.fn();
@@ -69,13 +70,21 @@ describe("settingsBody", () => {
 });
 
 describe("ComponentsSettingsCard", () => {
+  // #3064: a full-size filled teal Save on the right, labelled with its object.
+  it("the action bar is one full-size teal Save component settings on the right", async () => {
+    const card = await open();
+    const save = within(card).getByRole("button", { name: "Save component settings" });
+    expectActionBar(save);
+    expect(save.className).not.toContain("h-8");
+  });
+
   it("collapsed, the summary states the defaults; open, the defaults are what is selected", async () => {
     const card = await open();
     expect(screen.getByRole("button", { name: TITLE })).toHaveTextContent("Unattended runs: no restriction");
     expect(within(card).getByRole("radio", { name: /^No restriction \(default\)/ })).toBeChecked();
     expect(within(card).getByRole("switch", { name: "Allow environment and file delivery" })).toBeChecked();
     expect(within(card).getByRole("switch", { name: "Require the strongest sandbox for custom credentials" })).not.toBeChecked();
-    expect(within(card).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(card).getByRole("button", { name: "Save component settings" })).toBeDisabled();
     expect(within(card).getByText("Who may define their own components")).toBeInTheDocument();
   });
 
@@ -99,14 +108,14 @@ describe("ComponentsSettingsCard", () => {
     const card = await open();
     await userEvent.click(within(card).getByRole("radio", { name: /^Hold tool calls/ }));
     await userEvent.click(within(card).getByRole("switch", { name: "Allow environment and file delivery" }));
-    await userEvent.click(within(card).getByRole("button", { name: "Save" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Save component settings" }));
     await waitFor(() => expect(putSiteConfigMock).toHaveBeenCalledTimes(1));
     expect(putSiteConfigMock).toHaveBeenCalledWith(
       { upstream_proxy_url: "http://p", components: { autonomy_cap: "L1", deny_resident_delivery: true } },
       '"v1"',
     );
     expect(toastSuccess).toHaveBeenCalledWith("Custom component settings saved.");
-    await waitFor(() => expect(within(card).getByRole("button", { name: "Save" })).toBeDisabled());
+    await waitFor(() => expect(within(card).getByRole("button", { name: "Save component settings" })).toBeDisabled());
     expect(screen.getByRole("button", { name: TITLE })).toHaveTextContent("Unattended runs: tool calls held · Variable and file delivery off");
   });
 
@@ -116,7 +125,7 @@ describe("ComponentsSettingsCard", () => {
     await screen.findByRole("button", { name: /tool calls held/ });
     await expandCard("Custom components");
     await userEvent.click(screen.getByRole("radio", { name: /^No restriction \(default\)/ }));
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save component settings" }));
     await waitFor(() => expect(putSiteConfigMock).toHaveBeenCalledWith({ components: {} }, '"v1"'));
   });
 
@@ -125,7 +134,7 @@ describe("ComponentsSettingsCard", () => {
     putSiteConfigMock.mockRejectedValue(new HttpError(412, "stale"));
     snapshotMock.mockResolvedValue({ siteConfig: { components: { autonomy_cap: "L0" } }, etag: '"v9"' });
     await userEvent.click(within(card).getByRole("switch", { name: "Require the strongest sandbox for custom credentials" }));
-    await userEvent.click(within(card).getByRole("button", { name: "Save" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Save component settings" }));
     expect(await within(card).findByRole("status")).toHaveTextContent(/Someone else changed these settings/);
     expect(within(card).getByRole("radio", { name: /^Never/ })).toBeChecked();
     expect(within(card).getByRole("switch", { name: "Require the strongest sandbox for custom credentials" })).not.toBeChecked();
@@ -135,7 +144,7 @@ describe("ComponentsSettingsCard", () => {
     const card = await open();
     putSiteConfigMock.mockRejectedValue(new HttpError(400, 'components.autonomy_cap: "L9" is not accepted'));
     await userEvent.click(within(card).getByRole("switch", { name: "Require the strongest sandbox for custom credentials" }));
-    await userEvent.click(within(card).getByRole("button", { name: "Save" }));
+    await userEvent.click(within(card).getByRole("button", { name: "Save component settings" }));
     expect(await within(card).findByRole("alert")).toHaveTextContent('components.autonomy_cap: "L9" is not accepted');
   });
 

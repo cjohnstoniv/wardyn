@@ -54,7 +54,7 @@ var lateAddCensus = map[string]int{
 	"provider_subscription.go authorOAuthSentinelGrant":         1,
 	"run_derived_egress.go deriveRunEgress":                     3,
 	"run_overrides_apply.go applyHostOverrides":                 1,
-	"run_overrides_apply.go applyRunEgressOverrides":            2,
+	"run_overrides_apply.go applyRunEgressOverrides":            3, // the person's allow_all_egress edit at resolve, before the clamp and the seal; the third records a false narrowing the census reads only as a variable
 	"run_overrides_apply.go applyRunHostOverrides":              1,
 	"run_overrides_apply.go boundOverrideAdds":                  1,
 	"run_policy_provenance.go canonicalKnobs":                   1,
@@ -76,6 +76,12 @@ var lateAddCensus = map[string]int{
 
 // unionHelpers are the allowlist and denylist unions; their bodies, and the seal's own, are not sites.
 var unionHelpers = []string{"unionAllowedDomains", "unionDeniedDomains", "unionDomains"}
+
+// clonedSites hold their site on their own clone of a spec and hand it to no policy: canonicalKnobs
+// is setBy's comparison form, and setBy keeps only a provenance map, so reaching it after a seal
+// (composeChain steps it for path_provenance) adds no host. Each is still a census site; a caller
+// that put its result in a policy would be that caller's own site.
+var clonedSites = []string{"canonicalKnobs"}
 
 // sealedPaths is each path that dispatches or revives a run: the ceiling
 // re-assertion that must follow its seal (it withholds credentials against the
@@ -253,7 +259,7 @@ func runSealCensus(fset *token.FileSet, files map[string]*ast.File) sealCensus {
 		widens[h] = true
 	}
 	for _, a := range c.adds {
-		if _, ok := sealedPaths[a.fn]; !ok { // a sealed path's own sites are placed by position, below
+		if _, ok := sealedPaths[a.fn]; !ok && !slices.Contains(clonedSites, a.fn) { // a sealed path's own sites are placed by position, below
 			widens[a.fn] = true
 		}
 	}
@@ -583,5 +589,59 @@ func (s *Server) finishCreateRunLaunchTwin() { s.dispatchRun(nil, nil, nil, nil)
 	got := dispatchRunCallsIn(files)
 	if maps.Equal(got, dispatchRunCallers) || got["planted.go finishCreateRunLaunchTwin"] != 1 {
 		t.Errorf("a planted dispatch door went unseen: %v", got)
+	}
+}
+
+// sealLayerCensus is every function that builds an outer layer of the seal (a sealLayer literal), as
+// "file function" and how many it builds: the Wardyn boundary, a restriction and the run owner's own
+// walls, each with its fail-closed layer for a read that failed. A new layer is listed only once the
+// withholding, the mint door's pre-read and the run.ceiling.reassert row read it as they read these.
+var sealLayerCensus = map[string]int{
+	"run_policy_seal.go outerLayers":                   2,
+	"governance_restrictions.go restrictionSealLayers": 2,
+	"personal_walls.go personalWallsSealLayer":         2,
+}
+
+// sealLayersIn is each sealLayer literal in f's functions, as "file function": a typed one, or an
+// element of a []sealLayer literal.
+func sealLayersIn(name string, f *ast.File) []string {
+	var out []string
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			lit, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			if isBare(lit.Type, "sealLayer") {
+				out = append(out, name+" "+fn.Name.Name)
+			}
+			if arr, ok := lit.Type.(*ast.ArrayType); ok && isBare(arr.Elt, "sealLayer") {
+				for _, e := range lit.Elts {
+					if inner, ok := e.(*ast.CompositeLit); ok && inner.Type == nil {
+						out = append(out, name+" "+fn.Name.Name)
+					}
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// TestEverySealLayerIsListed is sealLayerCensus as a test.
+func TestEverySealLayerIsListed(t *testing.T) {
+	_, files := parsePackageSources(t, ".")
+	got := map[string]int{}
+	for name, f := range files {
+		for _, site := range sealLayersIn(name, f) {
+			got[site]++
+		}
+	}
+	if !maps.Equal(got, sealLayerCensus) {
+		t.Errorf("seal layers = %v, want sealLayerCensus %v", got, sealLayerCensus)
 	}
 }

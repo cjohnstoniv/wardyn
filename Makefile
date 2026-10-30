@@ -1,4 +1,4 @@
-.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build runnerd-image compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-pg-store test-report-docker test-report-k8s cover-check cover-union release-check release-patch candidate-preflight ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-claude-code-multiarch agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build runnerd-image compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-pg-store test-report-docker test-report-k8s cover-check cover-union release-check release-patch candidate-preflight ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-editors test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-claude-code-multiarch agent-image-vscode agent-image-novnc agent-image-novnc-signin test-image-novnc-signin gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -174,6 +174,17 @@ agent-image-novnc: agent-image-base ## Build the noVNC UI-sandbox agent image
 	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/novnc/Dockerfile -t wardyn/agent-novnc:local .
 	@echo "noVNC UI-sandbox image built: wardyn/agent-novnc:local"
 
+# The desktop sign-in variant (#2972): agent-novnc plus the person's browser.
+# wardynd runs it only with WARDYN_DESKTOP_SIGNINS=on (docs/UI-SANDBOXES.md).
+agent-image-novnc-signin: agent-image-novnc ## Build the desktop sign-in variant of the noVNC image
+	docker build $(DOCKER_BUILD_ARGS) -f deploy/images/novnc-signin/Dockerfile -t wardyn/agent-novnc-signin:local .
+	@echo "desktop sign-in image built: wardyn/agent-novnc-signin:local"
+
+# Image gate for desktop sign-ins (#2972): needs a built wardyn/agent-novnc-signin:local
+# (IMAGE= overrides) and a docker daemon (DOCKER_HOST, default the wardyn-docker one).
+test-image-novnc-signin: ## Image gate: a person's cookie reaches the agent only through a per-site share
+	./scripts/test-image-novnc-signin.sh
+
 build: ## Build Go binaries (default tags)
 	@echo "Building Go binaries..."
 	go build ./...
@@ -225,14 +236,16 @@ test-race: cover-check ## Alias: race coverage now rides along inside the test-r
 # two-server exactly-once PAT mint, the leader and sweeper proofs) are named on the lines below; the
 # guard selects them with scripts/pg-test-select.sh, whatever they are called.
 test-race-pg: ## Race-detector pass over the Postgres-gated concurrency proofs (needs WARDYN_TEST_PG)
+# -timeout 30m, not go's 10m per-package default: internal/store's proofs alone take 6-7 minutes under
+# -race on a hosted runner, and a slow runner took them past 10 (a -timeout panic discards every verdict).
 	@echo "Running the Postgres-gated concurrency proofs under the race detector (requires WARDYN_TEST_PG)..."
-	go test -race -p 1 -count=1 -run 'TestPG_|TestGeneration_' ./internal/maskstore/... ./internal/secretmask/... ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
-	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)|TestPG_WriteBegunBeforeAnErase|TestPG_CreateWait_|TestPG_MaskErasure|TestRecordingOutputPG_|TestPG_TokenEventStreamOutlivesABrowserSignOutAndEndsOnARevoke|TestPG_ServiceTokenEventStreamEndsOnItsSponsorsRevokeUnderABackwardClockStep|TestPG_ServiceTokenMintBehindAnInFlightRevokeOfItsSponsorIsRefused|TestPG_GovernanceChanges_(RenameSeesAnAssignmentApprovedWhileItWaits|AssignmentWritesWaitForTheProfileGraph)|TestComponents_ConcurrentOrgMCPKeyCollisionSavesOne|TestHALivePG_|TestInvitation_ConcurrentClaimsMintOneToken|TestMaskManifest_Fence|TestMaskPipe_PG_AnAttachRelaysAtBandwidthNotAtTheReadRate|TestPGUploadRecording_|TestRelay_RecordingUploadReadDeadline|TestRunOutputPG_|TestRecoverRunOutputPG_|TestSCIM(GroupRemovalSweeperWaitsForAnAddInFlight|SweeperPurgesOnceAcrossInstances)|TestServiceIdentity_TokenCapHoldsInTheStore|TestViaOrg_|TestRunnerAdmissionPG_LossClaimHoldsNoRunnerLockWhileItWaitsForTheRun|TestCredentialDeliveryWrite_DirectSaveStaleAgainstAConcurrentWrite' ./internal/api/...
-	go test -race -p 1 -count=1 -run 'TestPG_AuditPartition_.*Contiguous|TestSweeperLeader_|TestPGLocker_LockHeldIsBoundedWhileANestedLockWaits|TestNestedAcquireGuard_' ./internal/db/...
-	go test -race -p 1 -count=1 -run 'TestPG_RevocationBeforeCookiePoolWaitDoesNotLoseCutoff|TestPG_Issue(Waits|Racing)|TestLeaderGo_(AuditEnsureRunsOnOneReplica|RecordingSweepRunsOnOneReplica)|TestBootKeyCreate_TwoConcurrentBootsEndOnOneKey|TestLoadHopTLS_TwoConcurrentFirstBootsEndOnOneCA|TestStampLoginGroups_GivesUpOnAHeldAssignmentLock|TestTwoBootsEndOnOneKey|TestDefaultPool_ReaperTickBesideLifetimeLocks|TestRehearse_OnePostgresBackendOnTheTargetThroughoutARun' ./cmd/wardynd/...
-	go test -race -p 1 -count=1 -run 'TestWorker_(TwoWorkersDeliver100RowsExactlyOnce|ExpiredLeaseIsReclaimedAndAStaleFinaliserLoses)' ./internal/notify/...
-	go test -race -p 1 -count=1 -run 'TestPGStore_(EraseWithAPausedStreamAndAnInMemoryWriter|InMemorySaveDoesNotWaitBehindUploads)' ./internal/recording/...
-	go test -race -p 1 -count=1 -run 'TestStoreMode_|TestMigrate_ToLocal|TestRecordLoginGroups_WaitsForAnAssignmentWrite|TestDelete_IfRevisionKeepsARowReplacedWhileItWaited' ./internal/secretstore/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestPG_|TestGeneration_' ./internal/maskstore/... ./internal/secretmask/... ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestPG_.*(Concurrent|Supersede)|TestPG_WriteBegunBeforeAnErase|TestPG_CreateWait_|TestPG_MaskErasure|TestRecordingOutputPG_|TestPG_TokenEventStreamOutlivesABrowserSignOutAndEndsOnARevoke|TestPG_ServiceTokenEventStreamEndsOnItsSponsorsRevokeUnderABackwardClockStep|TestPG_ServiceTokenMintBehindAnInFlightRevokeOfItsSponsorIsRefused|TestPG_GovernanceChanges_(RenameSeesAnAssignmentApprovedWhileItWaits|AssignmentWritesWaitForTheProfileGraph)|TestComponents_ConcurrentOrgMCPKeyCollisionSavesOne|TestHALivePG_|TestInvitation_ConcurrentClaimsMintOneToken|TestMaskManifest_Fence|TestMaskPipe_PG_AnAttachRelaysAtBandwidthNotAtTheReadRate|TestPGUploadRecording_|TestRelay_RecordingUploadReadDeadline|TestRunOutputPG_|TestRecoverRunOutputPG_|TestSCIM(GroupRemovalSweeperWaitsForAnAddInFlight|SweeperPurgesOnceAcrossInstances|OwedRefusalRowLandsOnceForTwoDrainers)|TestServiceIdentity_TokenCapHoldsInTheStore|TestViaOrg_|TestRunnerAdmissionPG_LossClaimHoldsNoRunnerLockWhileItWaitsForTheRun|TestCredentialDeliveryWrite_DirectSaveStaleAgainstAConcurrentWrite|TestUnitAdminDecisionSerializesScopeWrites|TestPG_OrgRunnerRemovalWaitsOnTheTargetLockAndRefusesAGovernedPool' ./internal/api/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestPG_AuditPartition_.*Contiguous|TestSweeperLeader_|TestPGLocker_LockHeldIsBoundedWhileANestedLockWaits|TestNestedAcquireGuard_' ./internal/db/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestPG_RevocationBeforeCookiePoolWaitDoesNotLoseCutoff|TestPG_Issue(Waits|Racing)|TestLeaderGo_(AuditEnsureRunsOnOneReplica|RecordingSweepRunsOnOneReplica)|TestBootKeyCreate_TwoConcurrentBootsEndOnOneKey|TestLoadHopTLS_TwoConcurrentFirstBootsEndOnOneCA|TestStampLoginGroups_GivesUpOnAHeldAssignmentLock|TestTwoBootsEndOnOneKey|TestDefaultPool_ReaperTickBesideLifetimeLocks|TestRehearse_OnePostgresBackendOnTheTargetThroughoutARun' ./cmd/wardynd/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestWorker_(TwoWorkersDeliver100RowsExactlyOnce|ExpiredLeaseIsReclaimedAndAStaleFinaliserLoses)' ./internal/notify/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestPGStore_(EraseWithAPausedStreamAndAnInMemoryWriter|InMemorySaveDoesNotWaitBehindUploads)' ./internal/recording/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestStoreMode_|TestMigrate_ToLocal|TestRecordLoginGroups_WaitsForAnAssignmentWrite|TestDelete_IfRevisionKeepsARowReplacedWhileItWaited' ./internal/secretstore/...
 
 test-docker: ## Run all Go tests with -tags docker
 	@echo "Running Go tests (-tags docker)..."
@@ -303,20 +316,21 @@ test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon ne
 	@echo "Running docker-tagged suite with reports (-race; fakeDocker; WARDYN_TEST_DOCKER=1 adds the real-daemon cases)..."
 	WARDYN_TEST_PG= ./scripts/test-report.sh docker -race -tags docker ./...
 
-# The whole tree under -tags k8s, so the k8s confinement substrate
-# (internal/runner/k8s) and the wardynd wiring that calls it — none of which
-# the tagless build can even compile — are actually tested and measured, under
+# The whole tree under -tags docker,k8s (the production image's tags), so the
+# k8s confinement substrate (internal/runner/k8s), the wardynd wiring that calls
+# it and wardyn-runnerd's `docker && k8s` files (production_k8s.go) — none of
+# which the tagless build can even compile — are actually tested and measured, under
 # -race (drive provisioning, the teardown wait-for-gone poll and the orphan
 # sweep all run concurrently against the apiserver). No cluster needed: the real-cluster case (test/conformance's TestConformanceK8s)
 # self-skips unless WARDYN_TEST_K8S=1, leaving the fake-clientset-backed unit
 # tests (internal/runner/k8s/*_test.go) to run anywhere.
-test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster needed), under the race detector
-	@echo "Running k8s-tagged suite with reports (-race; fake clientset; WARDYN_TEST_K8S=1 + a kubeconfig adds the real-cluster conformance case)..."
-	WARDYN_TEST_PG= ./scripts/test-report.sh k8s -race -tags k8s ./...
+test-report-k8s: ## -tags docker,k8s suite with reports (fake clientset; no cluster needed), under the race detector
+	@echo "Running docker,k8s-tagged suite with reports (-race; fake clientset; WARDYN_TEST_K8S=1 + a kubeconfig adds the real-cluster conformance case)..."
+	WARDYN_TEST_PG= ./scripts/test-report.sh k8s -race -tags docker,k8s ./...
 
 # Coverage floor gate. Override with `make cover-check COVER_MIN=NN`.
 # Enforced over the UNION of all three shipped builds (tagless + -tags docker +
-# -tags k8s), not the tagless subset alone — measuring only the tagless build
+# -tags docker,k8s), not the tagless subset alone — measuring only the tagless build
 # reported a number for code that is not what ships. Pulling the excluded
 # packages in moved the honest total from 67.1% (tagless-only) to 66.1%
 # (docker union); the floor sits under that measurement with a margin for
@@ -565,6 +579,10 @@ test-e2e-ssh: ## Live SSH gateway e2e: exec/sftp/-L forward/recording/denial/con
 	@echo "Running live SSH gateway e2e (dedicated compose stack; requires Docker)..."
 	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-ssh.sh
 
+test-e2e-ssh-editors: ## Real editor clients (Mutagen, JetBrains backend) in a container against the live SSH gateway
+	@echo "Running the editors e2e (dedicated compose stack; requires Docker)..."
+	WARDYN_TEST_DOCKER=1 WARDYN_E2E_SSH_EDITORS=1 ./scripts/run-e2e-ssh.sh
+
 # The same gateway on the OTHER substrate: the sandbox is a Pod, reached
 # through Runner.Attach/ExecStream's k8s implementation. Proves the exec lane
 # ('id' exits 0 + exit-code propagation), the pty lane, and the ssh.exec +
@@ -601,17 +619,17 @@ test-provider-seed: ## Model-providers seeding path: UID-keyed credential captur
 	@echo "Running model-providers seeding path test (headless; requires Docker for Postgres)..."
 	WARDYN_TEST_DOCKER=1 ./scripts/test-kind-sso-provider-seed.sh
 
-govulncheck: ## Scan for known vulnerabilities (tagless + -tags docker + -tags k8s)
-	@echo "Running govulncheck (tagless + -tags docker + -tags k8s, the shipped builds)..."
+govulncheck: ## Scan for known vulnerabilities (tagless + -tags docker + -tags docker,k8s)
+	@echo "Running govulncheck (tagless + -tags docker + -tags docker,k8s, the shipped builds)..."
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -tags docker ./...
-	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -tags k8s ./...
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -tags docker,k8s ./...
 
-staticcheck: ## Static analysis (tagless + -tags docker + -tags k8s)
-	@echo "Running staticcheck (tagless + -tags docker + -tags k8s)..."
+staticcheck: ## Static analysis (tagless + -tags docker + -tags docker,k8s)
+	@echo "Running staticcheck (tagless + -tags docker + -tags docker,k8s)..."
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) -tags docker ./...
-	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) -tags k8s ./...
+	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) -tags docker,k8s ./...
 
 # go.mod/go.sum must stay tidy: `go mod tidy` produces no diff. A stray require,
 # or an indirect that a test/code now imports directly (e.g. moby/docker-image-spec
@@ -623,10 +641,10 @@ tidy-check: ## Fail if go.mod/go.sum are untidy (go mod tidy -diff)
 	go mod tidy -diff
 
 lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + migration-numbering + script-hazard + actionlint gates + console ESLint
-	@echo "Running go vet (default + docker + k8s tags)..."
+	@echo "Running go vet (default + docker + docker,k8s tags)..."
 	go vet ./...
 	go vet -tags docker ./...
-	go vet -tags k8s ./...
+	go vet -tags docker,k8s ./...
 	@echo "Running golangci-lint $(GOLANGCI_LINT_VERSION) (function-size/complexity gate, .golangci.yml)..."
 	GOLANGCI_LINT_CACHE=$(CURDIR)/.golangci-cache go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
 	@echo "Running file-size gate (scripts/check-file-size.sh)..."
@@ -648,6 +666,8 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	@echo "Running Helm template-file gate (scripts/check-helm-templates.sh)..."
 	./scripts/check-helm-templates.sh
 	./scripts/check-helm-templates.sh deploy/helm/wardyn-runnerd
+	@echo "Running macOS VM selector gate (scripts/check-macvm-selectors.sh)..."
+	./scripts/check-macvm-selectors.sh --selftest
 	@echo "Running migration-numbering gate (scripts/check-migration-numbers.sh)..."
 	./scripts/check-migration-numbers.sh
 	@echo "Running actionlint $(ACTIONLINT_VERSION) (workflow YAML)..."
@@ -689,10 +709,14 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-desktop-profile.sh
 	./scripts/test-runner-units.sh
 	./scripts/test-runner-pkg.sh
+	./scripts/test-runner-pkg-dry-run.sh
+	./scripts/test-pkg-postinstall.sh
 	./scripts/test-runner-limits.sh
+	./scripts/test-service-supervisor.sh
 	./scripts/test-stage-agent-binary.sh
 	./scripts/test-doc-form.sh
 	./scripts/test-doc-links.sh
+	./scripts/test-e2e-backend-down.sh
 	./scripts/test-e2e-harness.sh
 	./scripts/test-e2e-lane-kill-tree.sh
 	./scripts/test-e2e-live-base-url.sh
@@ -700,6 +724,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-e2e-recording-step.sh
 	./scripts/test-fetch-gate-tools.sh
 	./scripts/test-fixture-dates.sh
+	./scripts/test-forward-port-check.sh
 	./scripts/test-gaps.sh --self-test
 	./scripts/test-gpl-source-offer.sh
 	./scripts/test-green-by-tree.sh
@@ -707,14 +732,17 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-helm-templates.sh
 	./scripts/test-image-pins.sh
 	./scripts/test-image-build-logs.sh
+	./scripts/test-install-cli.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
+	./scripts/test-k6-rerun-rate.sh
 	./scripts/test-kind-follow-main.sh
 	./scripts/test-kind-sso-walk-log.sh
 	./scripts/test-lane-preflight.sh
 	./scripts/test-migration-numbers.sh
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-nightly-migration-merge-check.sh
+	./scripts/test-overlay-proof.sh
 	./scripts/test-release-check.sh
 	./scripts/test-release-commit.sh
 	./scripts/test-test-report.sh
@@ -769,7 +797,8 @@ gitleaks: ## Scan this branch's own git history for committed secrets
 # covered by driving the tag through GOFLAGS on the later passes (U112). The
 # fourth pass is the real production build invocation (GO_BUILD_TAGS=docker,k8s).
 ALLOWED_LICENSES_FILE ?= licenses/ALLOWED-LICENSES.txt
-GO_LICENSE_ALLOW ?= $(shell grep -vE '^[[:space:]]*(\#|$$)' $(ALLOWED_LICENSES_FILE) | paste -sd,)
+# One-token lines only: a scoped "<id> <package>" line is a UI package exception, never a Go one.
+GO_LICENSE_ALLOW ?= $(shell grep -vE '^[[:space:]]*(\#|$$)' $(ALLOWED_LICENSES_FILE) | awk 'NF == 1' | paste -sd,)
 
 licenses: ## Every Go dependency licence must be on licenses/ALLOWED-LICENSES.txt (all tag sets)
 	@echo "Checking Go dependency licences against $(ALLOWED_LICENSES_FILE) (tagless + docker + k8s + docker,k8s)..."
@@ -814,7 +843,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	echo "$$out" | grep -q "kind: NetworkPolicy" || { echo "chart rendered no NetworkPolicy (default-on L0 egress control)"; exit 1; }; \
 	echo "$$out" | grep -q "runAsNonRoot: true" || { echo "chart rendered no runAsNonRoot: true securityContext"; exit 1; }; \
 	echo "$$out" | grep -q "readOnlyRootFilesystem: true" || { echo "chart rendered no readOnlyRootFilesystem: true securityContext"; exit 1; }; \
-	echo "$$out" | grep -q "terminationGracePeriodSeconds: 70$$" || { echo "chart no longer renders terminationGracePeriodSeconds: 70 — the Kubernetes default of 30s SIGKILLs wardynd's orderly stop (HTTP 15s + detached work 35s + audit flush 15s) mid-teardown"; exit 1; }; \
+	echo "$$out" | grep -q "terminationGracePeriodSeconds: 85$$" || { echo "chart no longer renders terminationGracePeriodSeconds: 85 — the Kubernetes default of 30s SIGKILLs wardynd's orderly stop (HTTP 15s + detached work 50s + audit flush 15s) mid-teardown"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_ADMIN_TOKEN" || { echo "chart rendered no WARDYN_ADMIN_TOKEN — the API would 401 every request"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_RECORDING_STORE" | grep -q 'value: "off"' || { echo "chart no longer pins WARDYN_RECORDING_STORE=off on a stock install — with wardynd's pg default it silently persists every PTY asciicast into Postgres, forever, while values.yaml/README say recording is off (and 0.7.0's fs + empty-dir spelling crash-looped the pod)"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_RECORDING_DIR" && { echo "chart set WARDYN_RECORDING_DIR without persistence — an empty value keeps wardynd's default, which writes to the read-only root FS"; exit 1; }; \
@@ -837,7 +866,10 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn); \
 	echo "$$out" | grep -A1 "name: WARDYN_BASE_PATH" | grep -q 'value: "/wardyn"' || { echo "basePath did not reach wardynd as WARDYN_BASE_PATH"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'path: /wardyn/healthz')" = "2" ] || { echo "basePath: liveness + startup probes are not under it — wardynd 404s /healthz outside the base path"; exit 1; }; \
-	echo "$$out" | grep -q 'path: "/wardyn/readyz"' || { echo "basePath: readinessProbe is not under it"; exit 1; }
+	echo "$$out" | grep -q 'path: "/wardyn/readyz"' || { echo "basePath: readinessProbe is not under it"; exit 1; }; \
+	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn --set-string env.WARDYN_BASE_PATH= --set metrics.serviceMonitor.enabled=true --set metrics.serviceMonitor.bearerTokenSecret.name=wardyn-metrics --set metrics.serviceMonitor.bearerTokenSecret.key=token); \
+	echo "$$out" | grep -A1 "name: WARDYN_BASE_PATH" | grep -q 'value: ""' || { echo "an empty env.WARDYN_BASE_PATH no longer reaches wardynd as empty"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'path: /healthz')" = "2" ] && echo "$$out" | grep -q 'path: "/readyz"' && echo "$$out" | grep -q 'path: "/metrics"' || { echo "an empty env.WARDYN_BASE_PATH serves wardynd at the root, but its probes or ServiceMonitor still use basePath"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
 	echo "$$out" | grep -A20 "startupProbe:" | grep -q 'failureThreshold: 90$$' || { echo "default startupProbe window is not 90 periods (30s connect + 5m WARDYN_MIGRATE_TIMEOUT + 120s slack, 5s each)"; exit 1; }; \
 	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_MIGRATE_TIMEOUT=30m); \
@@ -1268,7 +1300,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	@helm template wardyn ./deploy/helm/wardyn --set secrets.ageKeyFromSecret=true --set env.WARDYN_ADMIN_TOKEN=tok --set extraEnv[0].name=WARDYN_ADMIN_TOKEN_FILE --set extraEnv[0].value=/mnt/s/admin-token 2>&1 | grep -q "WARDYN_ADMIN_TOKEN and WARDYN_ADMIN_TOKEN_FILE are both set" || { echo "chart no longer refuses WARDYN_ADMIN_TOKEN beside WARDYN_ADMIN_TOKEN_FILE (across env and extraEnv) — wardynd refuses both forms at boot"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name= --set env.WARDYN_PG_DSN_FILE=/mnt/s/pg-dsn 2>&1 | grep -q "WARDYN_PG_DSN_FILE is a PERSISTENT Postgres, but no age identity is wired" || { echo "chart no longer refuses a file-delivered (Vault Agent / CSI) DSN with an ephemeral age key — boot 2 cannot decrypt what boot 1 wrote"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set-file defaultPolicy=examples/policies/demo.json --set env.WARDYN_DEFAULT_POLICY=/examples/policies/demo.json | grep -q 'value: "/examples/policies/demo.json"' || { echo "env.WARDYN_DEFAULT_POLICY no longer wins over the ConfigMap-backed default"; exit 1; }
-	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set awsSSOProxyInject=off --set env.WARDYN_AWS_SSO_PROXY_INJECT=on | grep -A1 "name: WARDYN_AWS_SSO_PROXY_INJECT" | grep -q 'value: "on"' || { echo "env.WARDYN_AWS_SSO_PROXY_INJECT no longer wins over awsSSOProxyInject — scripts/kind-sso-walk.sh's --set env.WARDYN_AWS_SSO_PROXY_INJECT posture pin would stop working"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set awsSSOProxyInject=shadowed --set env.WARDYN_AWS_SSO_PROXY_INJECT=on | grep -A1 "name: WARDYN_AWS_SSO_PROXY_INJECT" | grep -q 'value: "on"' || { echo "env.WARDYN_AWS_SSO_PROXY_INJECT no longer wins over awsSSOProxyInject — scripts/kind-sso-walk.sh's --set env.WARDYN_AWS_SSO_PROXY_INJECT posture pin would stop working"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set defaultPolicy='not json' 2>&1 | grep -q "mustFromJson" || { echo "chart no longer refuses an invalid defaultPolicy at render"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set ingress.enabled=true 2>&1 | grep -q "ingress.enabled is set with no ingress.hosts" || { echo "chart no longer refuses ingress.enabled with no hosts — an Ingress with no rules applies cleanly and routes nothing"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set ingress.enabled=true --set 'ingress.hosts[0].host=wardyn.example.test' | grep -A2 'paths:' | grep -q 'path: /' || { echo "an ingress.hosts entry with no paths no longer defaults to the console root — it rendered paths: null, which the API server rejects"; exit 1; }

@@ -186,6 +186,8 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		Origins: map[string]placement.CredentialOrigin{}, UpstreamProxySecretRef: sc.UpstreamProxySecretRef,
 		LocalSelfDefinedComponents: ceiling.Limits.LocalSelfDefinedComponents,
 		TrustedOutput:              localTrustedOutputRequest(req),
+		// A bound drive's runner is the run's (kindTargets holds the run to it).
+		VerifiedLocalPaths: s.drivePathsOn(boundMountRunner(drives), drives),
 	}
 	for _, c := range comps.attached {
 		if !c.snapshot.SelfDefined && c.snapshot.Definition.LocalMCP() {
@@ -212,11 +214,11 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 			p.Spec.ProxyConfig.Policy.EligibleGrants[i].OwnerOnly = true
 		}
 	}
-	intents, upstreams, refusal := s.localCredentialIntents(r, req, spec, comps, workspaces, sc)
+	intents, upstreams, localModels, refusal := s.localCredentialIntents(r, req, spec, comps, workspaces, sc)
 	if refusal != nil {
 		return placement.LocalPlan{}, refusal
 	}
-	p.CredentialIntents, p.Spec.ProxyConfig.LLMUpstreams = intents, upstreams
+	p.CredentialIntents, p.Spec.ProxyConfig.LLMUpstreams, p.Spec.ProxyConfig.LocalModels = intents, upstreams, localModels
 	return p, nil
 }
 
@@ -249,9 +251,9 @@ type boundLocalPath struct {
 // verifiedLocalPaths is the plan's VerifiedLocalPaths: a path is verified only
 // when its stored runner binding is the candidate runner and the path lies
 // inside one of that runner's allowed roots. bound is keyed by the plan path
-// ("SandboxSpec.Mounts[0]", "SandboxSpec.Drives[0]"). Nothing produces a binding on
-// batch yet (local_dir sources and host_path drives carry no runner column), so
-// every local mount still refuses placement_local_path until one does.
+// ("SandboxSpec.Mounts[0]", "SandboxSpec.Drives[0]"). A drive's second place is
+// bound to one runner (drivePathsOn); local_dir sources carry no runner column
+// yet, so every local mount still refuses placement_local_path.
 func verifiedLocalPaths(candidate uuid.UUID, roots []string, bound map[string]boundLocalPath) map[string]bool {
 	out := map[string]bool{}
 	for key, b := range bound {

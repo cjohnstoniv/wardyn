@@ -1,0 +1,232 @@
+[
+  {
+    "person": "user_row_on_a_chain_leaf",
+    "unit": "l-leaf",
+    "ceiling_spec": {
+      "allowed_domains": [
+        "pypi.org"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "ceiling_limits": {},
+    "ceiling_warnings": null,
+    "sealed_spec": {
+      "allowed_domains": [
+        "pypi.org"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "ok": true
+  },
+  {
+    "person": "group_tie_by_unit_name",
+    "unit": "c-no-base",
+    "ceiling_spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "github.com",
+        "npmjs.org"
+      ],
+      "denied_domains": [
+        "evil.example"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "ceiling_limits": {},
+    "ceiling_warnings": null,
+    "sealed_spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "github.com",
+        "npmjs.org"
+      ],
+      "denied_domains": [
+        "evil.example"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "ok": true
+  },
+  {
+    "person": "user_type_over_all",
+    "unit": "c-no-base",
+    "ceiling_spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "github.com",
+        "npmjs.org"
+      ],
+      "denied_domains": [
+        "evil.example"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "ceiling_limits": {},
+    "ceiling_warnings": null,
+    "sealed_spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "github.com",
+        "npmjs.org"
+      ],
+      "denied_domains": [
+        "evil.example"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "ok": true
+  },
+  {
+    "person": "all_only",
+    "unit": "s-standalone",
+    "ceiling_spec": {
+      "allowed_domains": [
+        "s.example",
+        "pypi.org"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "ceiling_limits": {
+      "max_concurrent_runs": 4
+    },
+    "ceiling_warnings": null,
+    "sealed_spec": {
+      "allowed_domains": [
+        "s.example",
+        "pypi.org"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "ok": true
+  },
+  {
+    "person": "sub_over_email",
+    "unit": "s-standalone",
+    "ceiling_spec": {
+      "allowed_domains": [
+        "s.example",
+        "pypi.org"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "ceiling_limits": {
+      "max_concurrent_runs": 4
+    },
+    "ceiling_warnings": null,
+    "sealed_spec": {
+      "allowed_domains": [
+        "s.example",
+        "pypi.org"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "ok": true
+  },
+  {
+    "person": "group_below_user",
+    "unit": "c-no-base",
+    "ceiling_spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "github.com",
+        "npmjs.org"
+      ],
+      "denied_domains": [
+        "evil.example"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "ceiling_limits": {},
+    "ceiling_warnings": null,
+    "sealed_spec": {
+      "allowed_domains": [
+        "api.anthropic.com",
+        "pypi.org",
+        "github.com",
+        "npmjs.org"
+      ],
+      "denied_domains": [
+        "evil.example"
+      ],
+      "first_use_approval": "",
+      "min_confinement_class": "CC2",
+      "resources": {
+        "cpu_millis": 2000,
+        "memory_mib": 4096,
+        "pids_limit": 512
+      }
+    },
+    "ok": true
+  }
+]

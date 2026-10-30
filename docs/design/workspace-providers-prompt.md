@@ -563,11 +563,11 @@ exist in Go; the Go side's own marker is still the open ponytail) — plus the n
 | Lane the kind cannot carry (400) | `validateWorkspaceProviders` | lanes: "{lane}" is not available for {kind} ({reason}) |
 | Ephemeral default above maximum (400) | `validateWorkspaceProviders` | storage.ephemeral: default_disk_mib may not exceed max_disk_mib |
 | Duplicate row id (400) | `validateWorkspaceProviders` | id "{id}" is not unique |
-| Stale `If-Match` (412; M2 sheet) | `handlePutWorkspaceProviders` | providers changed since you loaded them — reload and retry |
-| Repo outside every enabled provider — OPERATOR (422; when a legacy host was refused by a kind-wide claim, the list is the CLAIMING row's) | A3 `ADMIT.*`, beside `providerFor` | repository {repo} is outside every enabled provider's allowed addresses ({addresses}) |
-| Lane veto (201 warning + audit) | `ADMIT.*` | the {lane} lane is not permitted for {kind}; the {grant} grant was not wired |
-| Unclaimed legacy host (201 warning) | `ADMIT.*` | host {host} is admitted through the legacy scm_hosts list; enable a provider for it before 0.8 |
-| Drives off — every drive and grant write (422; also `REFUSED_BACKEND`'s `{reason}` for a run carrying `drive.enabled`) | S2 `DRIVES.*`, `decodeUserDriveRequest` / `handleUpsertUserDriveGrant` | drives are disabled for this deployment |
+| Stale `If-Match` (412; M2 sheet) | `handlePutWorkspaceProviders` | Providers changed since you loaded them — reload and retry |
+| Repo outside every enabled provider — OPERATOR (422; when a legacy host was refused by a kind-wide claim, the list is the CLAIMING row's) | A3 `ADMIT.*`, beside `providerFor` | Repository {repo} is outside every enabled provider's allowed addresses ({addresses}) |
+| Lane veto (201 warning + audit) | `ADMIT.*` | The {lane} lane is not permitted for {kind}; the {grant} grant was not wired |
+| Unclaimed legacy host (201 warning) | `ADMIT.*` | Host {host} is admitted through the legacy scm_hosts list; enable a provider for it before 0.8 |
+| Drives off — every drive and grant write (422; also `REFUSED_BACKEND`'s `{reason}` for a run carrying `drive.enabled`) | S2 `DRIVES.*`, `decodeUserDriveRequest` / `handleUpsertUserDriveGrant` | Drives are disabled for this deployment |
 | Drive size or override above the provider ceiling (422) | `decodeUserDriveRequest` / `handleUpsertUserDriveGrant` | size_mib {size} exceeds this deployment's drive ceiling ({max} MiB) |
 | Static claim not provisioned (run `failure_hint`; REPLACES the namespace-bearing `errDriveClaimNotProvisioned`) | `internal/runner/k8s/drives.go` | drive: your drive's volume is not provisioned on this cluster — ask an admin |
 | Claim identity mismatch (run `failure_hint`; REPLACES the digest-bearing `driveClaimIdentity`) | `internal/runner/k8s/drives.go` | drive: your drive's volume is not the one allocated to you — ask an admin |
@@ -711,7 +711,7 @@ member meets these on the launch path; the console renders them verbatim under i
 
 | Key | String |
 |---|---|
-| `ADMIT_MEMBER` | this repository's host is not an enabled git provider — ask an admin |
+| `ADMIT_MEMBER` | This repository's host is not an enabled git provider — ask an admin |
 | `AGENT_NOT_ENABLED(id)` | agent: "{id}" is not an enabled agent on this deployment — ask an admin |
 | `LLM_MECHANISM_DEAD(mechanism, ts)` | This run's model access is configured as {mechanism}, and that credential expired at {ts} and could not be renewed — sign in again under Settings → Model provider. Wardyn does not substitute a different model provider. |
 
@@ -839,6 +839,10 @@ GROUPS` verbatim, and `unmountable` renders `NR_UNAVAILABLE` too — NOT `REFUSE
 | `AGENTS_TITLE` | Agents |
 | `AGENTS_LEAD` | Which coding agents this Wardyn offers, and the model provider each one uses by default. Every credential is each person's own. |
 | `AGENT_ROW_DISABLED_HINT` | Off: runs naming this agent are refused, and it shows as unavailable in New run. |
+| `FIELD_DESKTOP_SIGN_INS` | Sign-ins in a desktop |
+| `DESKTOP_SIGN_INS_ALLOWED` | Allowed |
+| `DESKTOP_SIGN_INS_NOT_ALLOWED` | Not allowed |
+| `DESKTOP_SIGN_INS_HINT` | Allowed: a sign-in made in a desktop is kept in that machine's memory until it shuts down, and the agent can use it. Not allowed: a desktop running this agent keeps no sign-ins. |
 | `MECHANISM_NONE` | None — the image brings its own |
 | `MECHANISM_BEDROCK_BEARER` | Bearer key |
 | `MECHANISM_BEDROCK_SSO` | SSO sign-in |

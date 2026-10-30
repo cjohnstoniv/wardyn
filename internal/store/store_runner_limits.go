@@ -83,7 +83,8 @@ func limitArgs(l *types.RunnerLimits) []any {
 // $1 is the states, $2 the self-hosted runner ids, $3 the remote-hosted runner ids, $4 a run never
 // counted (uuid.Nil for none).
 const runnerUsageSQL = `SELECT COALESCE(runner_id::text, runner_pool_executor), count(*)::int,
-	COALESCE(sum(reserved_cpu_millis), 0)::bigint, COALESCE(sum(reserved_memory_mib), 0)::bigint, COALESCE(sum(reserved_disk_mib), 0)::bigint
+	COALESCE(sum(reserved_cpu_millis), 0)::bigint, COALESCE(sum(reserved_memory_mib), 0)::bigint, COALESCE(sum(reserved_disk_mib), 0)::bigint,
+	count(*) FILTER (WHERE machine_kind = 'macos_vm')::int
 	FROM agent_runs WHERE (runner_id = ANY($2) OR (runner_id IS NULL AND runner_pool_executor = ANY($3)))
 	AND state = ANY($1) AND id <> $4 AND ` + HoldsSandboxSQL + ` GROUP BY 1`
 
@@ -112,7 +113,7 @@ func runnerUsage(ctx context.Context, q Querier, runners []uuid.UUID, remotes []
 	for rows.Next() {
 		var key string
 		var t types.RunnerTally
-		if err := rows.Scan(&key, &t.Runs, &t.CPUMillis, &t.MemoryMiB, &t.DiskMiB); err != nil {
+		if err := rows.Scan(&key, &t.Runs, &t.CPUMillis, &t.MemoryMiB, &t.DiskMiB, &t.MacOSVMRuns); err != nil {
 			return nil, fmt.Errorf("store: runner usage: %w", err)
 		}
 		out[key] = t
@@ -314,15 +315,6 @@ func (s PG) ListRunnerPoolRunners(ctx context.Context, poolID uuid.UUID) ([]type
 	return collect(ctx, s.Pool, "list", "runner pool runners", `SELECT `+prefixedRunnerCols+`
 		FROM runner_pool_members m JOIN runner_pools p ON p.id = m.pool_id JOIN runners r ON r.id = m.runner_id
 		WHERE m.pool_id = $1 AND r.owner = p.owner ORDER BY r.created_at DESC, r.id`, []any{poolID}, scanRunner)
-}
-
-// SetRunnerArch records the CPU architecture a runner reported on connect, the latest kept; a revoked
-// runner keeps the one it had. The caller has checked it with types.ValidArch.
-func (s PG) SetRunnerArch(ctx context.Context, id uuid.UUID, arch string) error {
-	if _, err := s.Pool.Exec(ctx, `UPDATE runners SET arch = $2 WHERE id = $1 AND state <> 'revoked' AND arch <> $2`, id, arch); err != nil {
-		return fmt.Errorf("store: set runner arch: %w", err)
-	}
-	return nil
 }
 
 // UpdateRunnerLimits declares the limits of a runner its owner holds, unclaimed or claimed, and returns

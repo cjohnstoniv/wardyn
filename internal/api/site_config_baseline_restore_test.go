@@ -129,3 +129,104 @@ func TestSiteConfigCaptureRestoresThroughTheSDKWhateverTheStoredBaseline(t *test
 		})
 	}
 }
+
+// TestSiteConfigCaptureRestoresThroughTheSDKWhateverTheStoredRecording: PUT /site-config refuses a body
+// that changes the recording block, as it does the egress baseline, so the SDK sends the document
+// without it: a restore lands, the stored level stays as it was, and the result says the file's level
+// was not applied. The server's refusal for any other caller stays.
+func TestSiteConfigCaptureRestoresThroughTheSDKWhateverTheStoredRecording(t *testing.T) {
+	captured := types.SiteConfig{
+		UpstreamProxyURL: "http://proxy.corp.example:3128",
+		Recording:        &types.SiteRecording{Level: types.RecordingScreenActions},
+	}
+	stored := func(t *testing.T, sc types.SiteConfig) (*client.Client, *fakeSiteConfigStore, *Server) {
+		t.Helper()
+		srv, fake, _ := egressBaselineServer(t, sc)
+		ts := httptest.NewServer(panicFails(t, srv.Handler()))
+		t.Cleanup(ts.Close)
+		return &client.Client{BaseURL: ts.URL, Token: adminToken, HTTPClient: ts.Client()}, fake, srv
+	}
+
+	t.Run("get then set of the unchanged document, recording present", func(t *testing.T) {
+		c, fake, _ := stored(t, captured)
+		doc, err := c.GetSiteConfig(context.Background())
+		if err != nil || doc.Recording == nil {
+			t.Fatalf("GetSiteConfig = %+v, %v, want the recording block in the document", doc, err)
+		}
+		res, err := c.PutSiteConfigResult(context.Background(), doc)
+		if err != nil {
+			t.Fatalf("PutSiteConfigResult of the unchanged document: %v", err)
+		}
+		if res.RecordingIgnored || fake.cfg.Recording == nil || *fake.cfg.Recording != *captured.Recording {
+			t.Fatalf("ignored = %v, stored recording = %+v, want it kept and nothing reported", res.RecordingIgnored, fake.cfg.Recording)
+		}
+	})
+
+	t.Run("restore after a reset", func(t *testing.T) {
+		c, fake, srv := stored(t, types.SiteConfig{})
+		res, err := c.PutSiteConfigResult(context.Background(), captured)
+		if err != nil {
+			t.Fatalf("restore of a capture onto an empty install: %v", err)
+		}
+		if !res.RecordingIgnored || fake.cfg.Recording != nil || fake.cfg.UpstreamProxyURL != captured.UpstreamProxyURL {
+			t.Fatalf("ignored = %v, stored recording = %+v, proxy = %q, want the rest restored and no level planted", res.RecordingIgnored, fake.cfg.Recording, fake.cfg.UpstreamProxyURL)
+		}
+		// The guard itself is unchanged: the same document sent raw is still a governance write.
+		raw, _ := json.Marshal(captured)
+		if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, string(raw)); w.Code != http.StatusBadRequest || errorReason(w) != reasonSiteConfigRecordingViaOwnRoute {
+			t.Fatalf("raw PUT of a changed recording block = %d %s, want 400 %s", w.Code, w.Body, reasonSiteConfigRecordingViaOwnRoute)
+		}
+	})
+
+	t.Run("restore after the security tier moved the level", func(t *testing.T) {
+		moved := types.SiteConfig{Recording: &types.SiteRecording{Level: types.RecordingOff}}
+		c, fake, _ := stored(t, moved)
+		res, err := c.PutSiteConfigResult(context.Background(), captured)
+		if err != nil {
+			t.Fatalf("restore of an older capture: %v", err)
+		}
+		if !res.RecordingIgnored || fake.cfg.Recording == nil || *fake.cfg.Recording != *moved.Recording {
+			t.Fatalf("ignored = %v, stored recording = %+v, want the stored level untouched", res.RecordingIgnored, fake.cfg.Recording)
+		}
+	})
+
+	t.Run("PutSiteConfig still gets the refusal for a changed recording block", func(t *testing.T) {
+		c, fake, _ := stored(t, captured)
+		changed := captured
+		changed.Recording = &types.SiteRecording{Level: types.RecordingOff}
+		_, _, _, err := c.PutSiteConfig(context.Background(), changed)
+		var apiErr *client.APIError
+		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest || apiErr.Reason != reasonSiteConfigRecordingViaOwnRoute {
+			t.Fatalf("PutSiteConfig of a changed recording block = %v, want 400 %s", err, reasonSiteConfigRecordingViaOwnRoute)
+		}
+		if fake.cfg.Recording == nil || *fake.cfg.Recording != *captured.Recording {
+			t.Fatalf("stored recording = %+v, want it untouched", fake.cfg.Recording)
+		}
+	})
+
+	// Only a level the file asserts and the install lacks is reported: a file silent about it is not,
+	// and an empty block reads as the unset default the server compares it with.
+	for _, tc := range []struct {
+		name   string
+		stored types.SiteConfig
+		doc    types.SiteConfig
+		want   bool
+	}{
+		{"a file with no recording block is quiet", captured, types.SiteConfig{}, false},
+		{"the same block is quiet", captured, types.SiteConfig{Recording: &types.SiteRecording{Level: types.RecordingScreenActions}}, false},
+		{"an empty block over none stored is quiet", types.SiteConfig{}, types.SiteConfig{Recording: &types.SiteRecording{}}, false},
+		{"a different level is reported", captured, types.SiteConfig{Recording: &types.SiteRecording{Level: types.RecordingTerminal}}, true},
+		{"a lock the install lacks is reported", captured, types.SiteConfig{Recording: &types.SiteRecording{Level: types.RecordingScreenActions, Locked: true}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _, _ := stored(t, tc.stored)
+			res, err := c.PutSiteConfigResult(context.Background(), tc.doc)
+			if err != nil {
+				t.Fatalf("PutSiteConfigResult: %v", err)
+			}
+			if res.RecordingIgnored != tc.want {
+				t.Fatalf("RecordingIgnored = %v, want %v", res.RecordingIgnored, tc.want)
+			}
+		})
+	}
+}

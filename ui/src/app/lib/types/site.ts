@@ -127,6 +127,9 @@ export interface SiteConfig {
   // Set through the site-config document (API, CLI or MDM); no console surface
   // writes it.
   policy_help?: PolicyContact;
+  // types.SiteConfig.GovernanceMaxDepth — the maximum unit depth: 0 resets to 16, null or absent
+  // keeps the stored value, otherwise 1..64. A value below the deepest unit path that exists is refused.
+  governance_max_depth?: number;
   // #1215 — the part of the console branding a site config carries: the logo,
   // as a file wardynd reads when this document is applied
   // (types.SiteConfig.Branding). Delivered by `wardyn site-config set` or the
@@ -243,6 +246,8 @@ export interface AgentProvider {
   // agent; that provider may be turned off, which makes this default's runs
   // refused rather than moved. Absent is today.
   default_provider?: string;
+  // "Sign-ins in a desktop: Not allowed" (#2972). Negative-sense: absent is Allowed.
+  desktop_sign_ins_off?: boolean;
 }
 
 // The org's model-provider configuration. Hand-maintained mirror of Go's
@@ -308,6 +313,9 @@ export interface LocalModelSettings {
   max_context?: number;
   max_output?: number;
   keep_alive_seconds?: number;
+  // Admin-set through the API (no console control yet): runs on a person's own
+  // runner may use this server on that computer.
+  allow_on_laptop_runners?: boolean;
 }
 
 // Go's types.DefaultLocal* and the API's maxLocalModels, maxLocalBound and

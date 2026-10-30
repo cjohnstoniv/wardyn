@@ -168,6 +168,10 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, decidedByType types.Act
 	if decision.ExpiresAt != nil {
 		data["decision_expires_at"] = decision.ExpiresAt.UTC()
 	}
+	// The approval rule that decided, with the version and digest it matched (actor system, policy:<rule_id>).
+	if decision.Policy != nil {
+		data["policy"] = decision.Policy
+	}
 	auditData, _ := json.Marshal(data)
 	ev := types.AuditEvent{
 		ID:        uuid.New(),

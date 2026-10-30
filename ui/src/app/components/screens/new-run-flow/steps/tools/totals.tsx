@@ -7,12 +7,17 @@
 // server's `access` block. A host is Requested until the server has answered
 // this exact body; only then does its verdict show.
 
+import { Grid3x3 } from "lucide-react";
 import { AdoLaunchNote, AdoOwnTokenNote, AdoRunTokenLine, adoLaunchNoteKind, ownTokenNoteOrgs } from "../../../../wardyn/ado-run-token-line";
+import { Switch } from "../../../../wardyn/form-primitives";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
+import { NR_WALLS } from "../../../../wardyn/copy/personal-walls";
+import type { PersonalWallsSpec } from "../../../../../lib/api/walls";
 import type { SCMAccessPAT } from "../../../../../lib/types/ado-pat";
 import type { AccessCredential, AccessFacts, AccessUnlisted } from "../../../../../lib/types/new-run-access";
-import { hostBadge, rowLabel, type HarnessNames, type HostBadge } from "../../lenses/tools-lens";
+import { hostBadge, rowLabel, wallsLeaveOut, type HarnessNames, type HostBadge } from "../../lenses/tools-lens";
+import { isLocalMcp } from "./local-mcp";
 
 const DELIVERY: Record<string, string> = {
   proxy: NR_TOOLS.DELIVERY_PROXY,
@@ -22,7 +27,7 @@ const DELIVERY: Record<string, string> = {
   sandbox_file: NR_TOOLS.DELIVERY_FILE,
   sandbox_short_lived: NR_TOOLS.DELIVERY_SHORT_LIVED,
 };
-const BADGE: Record<HostBadge, { text: string; tone: "neutral" | "success" | "info" | "danger" }> = {
+export const BADGE: Record<HostBadge, { text: string; tone: "neutral" | "success" | "info" | "danger" }> = {
   requested: { text: NR_TOOLS.NET_REQUESTED, tone: "neutral" },
   allowed: { text: NR_TOOLS.NET_ALLOWED, tone: "success" },
   needs_approval: { text: NR_TOOLS.NET_NEEDS_APPROVAL, tone: "info" },
@@ -90,10 +95,20 @@ export interface AdoTokenFacts {
   onFallbackClick?: () => void;
 }
 
-export function Totals({ access, answered, names: harnessNames, providers, ado, ownRows }: { access: AccessFacts | undefined; answered: boolean; names?: HarnessNames; providers?: ReadonlyMap<string, string>; ado?: AdoTokenFacts; ownRows?: readonly SCMAccessPAT[] }) {
+/** The Network total's "Only the sites listed" switch: whether the draft sends allow_all_egress: false, and how to change it. */
+export interface NarrowEgress {
+  on: boolean;
+  onChange: (on: boolean) => void;
+}
+
+export function Totals({ access, answered, names: harnessNames, providers, ado, ownRows, narrow, walls }: { access: AccessFacts | undefined; answered: boolean; names?: HarnessNames; providers?: ReadonlyMap<string, string>; ado?: AdoTokenFacts; ownRows?: readonly SCMAccessPAT[]; narrow?: NarrowEgress; walls?: PersonalWallsSpec }) {
   const names = new Map((access?.rows ?? []).map((r) => [r.id, rowLabel(r, harnessNames)]));
   const rowName = new Map((access?.rows ?? []).map((r) => [r.id, r.name]));
+  const localRows = new Set((access?.rows ?? []).filter(isLocalMcp).map((r) => r.id));
   // Only a run that carries the Azure DevOps credential gets a token, so only its row says so.
+  const leftOut = wallsLeaveOut(walls, access, answered);
+  // The switch shows while the run allows all egress, and stays once it is on (the answer then says it does not).
+  const onlyListed = narrow && (narrow.on || access?.unlisted.allow_all) ? narrow : undefined;
   const adoToken = ado?.access?.token_mode === "minted_pat" && !!access?.credentials.some((c) => c.kind === ADO_SIGN_IN) ? ado : undefined;
   return (
     <section aria-label={NR_TOOLS.TOTALS_ARIA} className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]">
@@ -116,6 +131,25 @@ export function Totals({ access, answered, names: harnessNames, providers, ado, 
           {answered && access?.hosts.length === 0 && <li className="text-sm text-muted-foreground">{NR_TOOLS.NO_HOSTS}</li>}
         </ul>
         {access && <p className={POLICY_CLASS}>{unlistedSentences(access.unlisted, answered).join(" ")}</p>}
+        {leftOut.map((host) => (
+          <p key={host} data-testid="walls-leave-out" className="flex items-center gap-2 rounded-md border border-border bg-muted px-3 py-2 text-xs text-foreground">
+            <Grid3x3 aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 [overflow-wrap:anywhere]">
+              {NR_WALLS.LEAVE_OUT_BEFORE}
+              <span className="font-mono">{host}</span>
+              {NR_WALLS.LEAVE_OUT_AFTER}
+            </span>
+          </p>
+        ))}
+        {onlyListed && (
+          <div className="flex items-start gap-2.5 border-t border-border pt-2.5">
+            <Switch checked={onlyListed.on} onChange={onlyListed.onChange} label={NR_WALLS.ONLY_LISTED} className="mt-0.5" />
+            <div>
+              <p className="text-sm font-medium">{NR_WALLS.ONLY_LISTED}</p>
+              <p className="text-xs text-muted-foreground">{NR_WALLS.ONLY_LISTED_HELP}</p>
+            </div>
+          </div>
+        )}
       </div>
       <div className={TOTAL_CLASS}>
         <h3 className="font-medium">{NR_TOOLS.CREDENTIALS_TITLE}</h3>
@@ -128,6 +162,9 @@ export function Totals({ access, answered, names: harnessNames, providers, ado, 
                 <span className="min-w-0 [overflow-wrap:anywhere]">
                   {kind && <span>{kind} </span>}
                   {names.has(c.row) && <span className="text-sm text-muted-foreground">{NR_TOOLS.FOR_ROW(names.get(c.row) ?? "")}</span>}
+                  {localRows.has(c.row) && (c.delivery === "sandbox_env" || c.delivery === "sandbox_file") && (
+                    <span className="block text-sm text-muted-foreground">{NR_TOOLS.MCP_SANDBOX_READABLE}</span>
+                  )}
                   {c.after_end === "expires" && <span className="block text-sm text-muted-foreground">{NR_TOOLS.EXPIRES_OWN}</span>}
                 </span>
                 {delivery && <Chip className="whitespace-normal">{delivery}</Chip>}

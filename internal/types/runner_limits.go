@@ -110,12 +110,14 @@ func PerRunShare(total RunnerAmounts, runsAtOnce int) RunnerAmounts {
 	}
 }
 
-// RunnerTally is a number of runs and the CPU, memory and disk they reserve.
+// RunnerTally is a number of runs and the CPU, memory and disk they reserve. MacOSVMRuns is how many of
+// those runs are macos_vm ones; only a runner's in use counts it, so it is absent from every other tally.
 type RunnerTally struct {
-	Runs      int   `json:"runs"`
-	CPUMillis int64 `json:"cpu_millis"`
-	MemoryMiB int64 `json:"memory_mib"`
-	DiskMiB   int64 `json:"disk_mib"`
+	Runs        int   `json:"runs"`
+	CPUMillis   int64 `json:"cpu_millis"`
+	MemoryMiB   int64 `json:"memory_mib"`
+	DiskMiB     int64 `json:"disk_mib"`
+	MacOSVMRuns int   `json:"macos_vm_runs,omitempty"`
 }
 
 // RunnerUsage is how much of a runner its runs hold. InUse is every run holding a sandbox on it, from

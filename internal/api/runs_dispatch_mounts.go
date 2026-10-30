@@ -6,9 +6,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 
@@ -176,9 +180,14 @@ func envEnabled(env string) bool {
 // envAllowAgentTelemetry lets agent-CLI telemetry through; see buildBaseSandboxEnv.
 const envAllowAgentTelemetry = "WARDYN_ALLOW_AGENT_TELEMETRY"
 
+// envMacOSVMs turns on macOS VM sandboxes (machine_kind macos_vm). Off, the default, create refuses the
+// kind (machineKindRefusal) and the console is told the option is off (SetupFeatures.MacOSVMs), so
+// nothing else about a run changes.
+const envMacOSVMs = "WARDYN_MACOS_VMS"
+
 // envToggles names every switch this package reads with envEnabled.
 // TestEnvTogglesListEveryEnvEnabledRead fails when a call site is missing here.
-var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGovernanceSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry, envGitPATAPIBitbucketServer, envScheduledRuns, envMCPLocalServers}
+var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGovernanceSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry, envGitPATAPIBitbucketServer, envScheduledRuns, envMCPLocalServers, envMacOSVMs}
 
 // ValidateEnvToggles reads each envToggles switch once, so a value that is
 // neither truthy nor falsey exits 2 at boot, in every auth mode, rather than
@@ -187,6 +196,10 @@ var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGov
 func ValidateEnvToggles() {
 	for _, name := range envToggles {
 		cliutil.EnvBool(name, false)
+	}
+	if err := validateApprovalRulesSwitch(); err != nil {
+		fmt.Fprintln(flag.CommandLine.Output(), err)
+		os.Exit(2)
 	}
 }
 
@@ -332,6 +345,14 @@ func interactiveBootSeed(interactive bool, task string) string {
 	return task
 }
 
+// applicationRun is the interactive application (#1994) as dispatch resolves
+// it: a run whose boot seed is a startup command (not an agent's starting
+// prompt) and whose policy declares the app it serves. It is the predicate
+// applicationServer applies to a request, read off the resolved run.
+func applicationRun(p dispatchParams, seed string) bool {
+	return seed != "" && p.InteractiveStart != "agent" && len(p.Policy.UIApps) > 0
+}
+
 // applyDispatchModeEnv sets dispatchRun's run-mode discriminator env vars
 // (scan-only / exec task mode / interactive-start / boot-seed / tool-approval
 // posture) plus the non-secret grant-id maps (WARDYN_GITHUB_GRANT_ID /
@@ -366,6 +387,8 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	if p.TaskMode == "exec" {
 		sandboxEnv["WARDYN_TASK_MODE"] = "exec"
 	}
+	// A service: the supervisor's settings come from the spec frozen on the run (serviceEnv).
+	serviceEnv(sandboxEnv, run.Service)
 	// interactive_start=agent: the attach shell opens IN the image's agent CLI
 	// instead of a bare shell. Consumed by attach-bashrc.sh (the image's
 	// ~/.bashrc), which the tmux/bash attach chain sources — the same seam its
@@ -387,6 +410,15 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 		sandboxEnv["WARDYN_INTERACTIVE_SEED"] = seed
 		if p.SeedAutoTools {
 			sandboxEnv["WARDYN_SEED_AUTO_TOOLS"] = "1"
+		}
+		// The interactive application (#1994): its startup command is the app, so
+		// the image starts it again on a revive, which it never does for any other
+		// seed. Decided here from the resolved run, never from the request's env: a
+		// user variable of this name is refused by every user-env writer below
+		// (component config and env_secret both reject the WARDYN_ prefix and
+		// never overwrite a set variable).
+		if applicationRun(p, seed) {
+			sandboxEnv["WARDYN_APPLICATION_RUN"] = "1"
 		}
 	}
 	// Tool-approval posture: "hold" routes an AUTONOMOUS run's own
@@ -627,8 +659,8 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drives []types.DriveMount) 
 // is the whole claim: masking the Target while the payload still spelled
 // <host_root>/<home> moved the operator's filesystem layout one field over,
 // inside the same row GET /audit?run_id= hands the run's creator whole. So a
-// share's `object` is "<drive>/<home>" as well, and the operator reads the root
-// from GET /drives — operator-only, and it already shows it — rather than from a
+// share's `object` is "<drive>/<home>" as well, and a super admin reads the root
+// from GET /drives — which withholds it from a security admin — rather than from a
 // member-readable audit row. A MANAGED object is untouched on both fields: its
 // name is Wardyn's own and discloses nothing about the host. `drive` is the
 // per-person HOME SEGMENT — not the drive object's name, which is what the same
@@ -687,8 +719,8 @@ func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy
 // share's target is "<drive>/<home>" — which drive, whose directory — and the
 // absolute path is on the row NOWHERE, `object` included (auditDriveMount calls
 // this for that field too): a payload the same reader can fetch is not a place
-// to keep it. The operator reads the root from GET /drives, which is
-// operator-only and already carries it.
+// to keep it. A super admin reads the root from GET /drives, which
+// withholds it from a security admin.
 //
 // A mount that carries no DriveName (an older control plane, a hand-written
 // -spec) falls back to the home alone rather than to the object: the fallback
@@ -728,6 +760,37 @@ func (s *Server) recordSandboxRef(ctx context.Context, runID uuid.UUID, ref stri
 		err = s.cfg.Store.SetSandboxRef(ctx, runID, ref)
 	}
 	return err
+}
+
+// recordStartedSandbox records what CreateSandbox started: its ref, then a VM's machine.
+func (s *Server) recordStartedSandbox(ctx context.Context, run types.AgentRun, sb runner.Sandbox) error {
+	if err := s.recordSandboxRef(ctx, run.ID, sb.Ref); err != nil {
+		return err
+	}
+	if err := s.recordVMMachine(ctx, run, sb); err != nil {
+		return err
+	}
+	s.recordDesktopVMSignIns(ctx, run, sb)
+	return nil
+}
+
+// recordVMMachine writes the virtual hardware a VM run was started with (#2996). A VM whose machine is
+// missing from the runner's answer, incomplete for its kind (CompleteFor) or cannot be written never
+// runs: it could not later be checked against a move or a restore. A container run writes nothing.
+func (s *Server) recordVMMachine(ctx context.Context, run types.AgentRun, sb runner.Sandbox) error {
+	if !run.MachineKind.IsVM() {
+		return nil
+	}
+	if !sb.Machine.CompleteFor(run.MachineKind) {
+		return errors.New("the runner did not say which machine it started the VM on")
+	}
+	st, ok := s.cfg.Store.(interface {
+		SetRunVMMachine(context.Context, uuid.UUID, types.VMMachine) error
+	})
+	if !ok {
+		return errors.New("this store cannot record a VM's machine")
+	}
+	return st.SetRunVMMachine(ctx, run.ID, *sb.Machine)
 }
 
 // abortUnrecordedSandbox ends a dispatch whose sandbox ref could not be recorded, while this dispatch

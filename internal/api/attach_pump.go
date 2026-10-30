@@ -36,7 +36,7 @@ import (
 // attach opens the exec (establishExec) once the reader is running. Its error
 // ends the pump with the reason "attach failed".
 //
-// castTee, when non-nil, receives a copy of EVERY chunk of PTY output (after it
+// castTee, when non-nil, receives a copy of EVERY chunk of PTY output (before it
 // is written to the client) for the session recording. It is the masked
 // asciicast sink. A castTee write error never affects the live session — the
 // recording is best-effort provenance, not part of the data path.
@@ -179,6 +179,14 @@ func (p *attachPumpState) output() {
 			if !p.flow.wait(p.ctx) {
 				return
 			}
+			// Tee the output into the session recording (best-effort: a
+			// recording write error must not break the live terminal) before
+			// the client gets it: the pump returns on the client's close without
+			// waiting for this goroutine, so a chunk the client saw is already
+			// in the recording when it is persisted.
+			if p.castTee != nil {
+				_, _ = p.castTee.Write(buf[:n])
+			}
 			wctx, wcancel := context.WithTimeout(p.ctx, attachWriteTimeout)
 			werr := p.c.Write(wctx, websocket.MessageBinary, buf[:n])
 			wcancel()
@@ -187,11 +195,6 @@ func (p *attachPumpState) output() {
 				return
 			}
 			p.holder.lastOutput.Store(time.Now().UnixNano())
-			// Tee the output into the session recording (best-effort: a
-			// recording write error must not break the live terminal).
-			if p.castTee != nil {
-				_, _ = p.castTee.Write(buf[:n])
-			}
 		}
 		if rerr != nil {
 			if errors.Is(rerr, io.EOF) {

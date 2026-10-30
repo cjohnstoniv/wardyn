@@ -164,6 +164,7 @@ vi.mock("../../lib/api/runs", () => ({
 import { ApprovalsScreen } from "./approvals";
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
 import { DENIED } from "../../lib/permissions-copy";
+import { HttpError } from "../../lib/api/core";
 import { APPROVAL, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../wardyn/copy";
 
 // Every describe below assumes a LIVE run unless it says otherwise (B4 gates
@@ -426,6 +427,7 @@ describe("ApprovalsScreen — egress host not granted (member)", () => {
   beforeEach(() => {
     mockPendingKind = "egress_domain";
     mockPendingEmpty = false;
+    toastError.mockClear();
     denyMock.mockReset();
     approveMock.mockReset();
     mockCaps = { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false, kinds_version: 1 };
@@ -457,6 +459,40 @@ describe("ApprovalsScreen — egress host not granted (member)", () => {
     expect(screen.getByText(DENIED.APPROVE_CHIP)).toBeInTheDocument();
     expect(screen.getByText(DENIED.APPROVE_BODY("api.example.com"))).toBeInTheDocument();
     expect(screen.getByText(DENIED.ALWAYS_STILL_ADMIN)).toBeInTheDocument();
+  });
+
+  // The caps read cannot see a grant an admin withheld, so the server's refusal is what closes the card.
+  async function approveInDialog() {
+    fireEvent.click(await screen.findByRole("button", { name: /^approve$/i }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^approve$/i }));
+    await waitFor(() => expect(approveMock).toHaveBeenCalled());
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    fireEvent.click(within(dialog).getByRole("button", { name: /cancel/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  }
+
+  it("a capability_egress_host refusal turns the card's buttons off and says why", async () => {
+    approveMock.mockRejectedValueOnce(new HttpError(403, "you are not granted egress host api.example.com", "capability_egress_host"));
+    renderMember();
+    await approveInDialog();
+    expect(screen.getByRole("button", { name: /^approve$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^deny$/i })).toBeDisabled();
+    expect(screen.getByText(DENIED.APPROVE_CHIP)).toBeInTheDocument();
+    expect(screen.getByText(DENIED.APPROVE_BODY("api.example.com"))).toBeInTheDocument();
+  });
+
+  // A 403 with another reason (the Always scope is admin-only) must not read as the host being withheld.
+  it.each([
+    [409, "approval_not_pending"],
+    [403, "security_admin_surface"],
+  ])("a %i %s refusal leaves the buttons live", async (status, reason) => {
+    approveMock.mockRejectedValueOnce(new HttpError(status, "refused", reason));
+    renderMember();
+    await approveInDialog();
+    expect(screen.getByRole("button", { name: /^approve$/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /^deny$/i })).not.toBeDisabled();
+    expect(screen.queryByText(DENIED.APPROVE_CHIP)).not.toBeInTheDocument();
   });
 
   it("enforced + granted by a *.suffix row: the decision is offered again", async () => {
@@ -717,6 +753,17 @@ describe("ApprovalsScreen — an egress approval says it is host-wide", () => {
     expect(await screen.findByText(APPROVAL.HOST_WIDE_NOTE)).toBeInTheDocument();
   });
 
+  // #2859: the note runs the card's width; no 72-character cap left "on it." alone on a line.
+  it("lets the host-wide note use the card's width", async () => {
+    mockPendingKind = "egress_domain";
+    render(
+      <MemoryRouter>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    expect((await screen.findByText(APPROVAL.HOST_WIDE_NOTE)).className).not.toMatch(/max-w-/);
+  });
+
   it("says nothing of the sort on a credential card, where it would be false", async () => {
     mockPendingKind = "credential";
     render(
@@ -732,7 +779,7 @@ describe("ApprovalsScreen — an egress approval says it is host-wide", () => {
 // #638 — a run opened FROM /admin/approvals stays in the Admin view: the plain
 // /runs/:id path is the User view's (the owner cockpit on a "url"-access
 // install, a refusal for an admin-only token). Both run links on the screen —
-// the pending card's "Open run" and the decided row's run id — go through
+// the pending card's "Open run" and the decided row's run reference — go through
 // runPath; the User-view mount keeps /runs/:id.
 describe("ApprovalsScreen — run links stay in the view they are opened from (#638)", () => {
   it("/admin/approvals: the pending card's Open run goes to /admin/runs/:id", async () => {
@@ -752,7 +799,7 @@ describe("ApprovalsScreen — run links stay in the view they are opened from (#
         <ApprovalsScreen />
       </MemoryRouter>,
     );
-    const link = await screen.findByRole("link", { name: "run_1" });
+    const link = await screen.findByRole("link", { name: "Run" });
     expect(link).toHaveAttribute("href", "/admin/runs/run_1");
   });
 
@@ -767,7 +814,7 @@ describe("ApprovalsScreen — run links stay in the view they are opened from (#
     const open = await screen.findByRole("link", { name: /open run/i });
     expect(open).toHaveAttribute("href", "/runs/run_1");
     await user.click(screen.getByRole("tab", { name: /decided/i }));
-    const link = await screen.findByRole("link", { name: "run_1" });
+    const link = await screen.findByRole("link", { name: "Run" });
     expect(link).toHaveAttribute("href", "/runs/run_1");
   });
 });

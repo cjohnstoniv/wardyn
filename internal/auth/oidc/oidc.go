@@ -134,6 +134,11 @@ type Config struct {
 	// BackchannelLogout is WARDYN_OIDC_BACKCHANNEL_LOGOUT: mount the identity provider's back-channel
 	// logout endpoint (backchannel.go). Off by default, and then the route does not exist.
 	BackchannelLogout bool
+	// FrontchannelLogout is WARDYN_OIDC_FRONTCHANNEL_LOGOUT: record each sign-in's sid in SessionSIDs
+	// and mount the front-channel logout endpoint (frontchannel.go). Off by default, and then nothing
+	// is recorded and the route does not exist.
+	FrontchannelLogout bool
+	SessionSIDs        SessionSIDs
 
 	// OnLogin, when set, is called synchronously after an APPROVED login with what that login
 	// established (LoginFacts). A failure inside it must never fail the login; nil is a no-op.
@@ -302,7 +307,8 @@ type Subject struct {
 // only when KeysPeopleByObjectID; every other issuer signs in as its `sub`, exactly as before.
 type PersonKeying interface {
 	// PrincipalFor is the principal s signs in as: the person keyed by exactly s.Issuer,
-	// s.TenantID and s.ObjectID if there is one and s.Sub names no one yet, else s.Sub. refused is true when s.Sub itself
+	// s.TenantID and s.ObjectID if there is one and either s.Sub names no one yet or that identity
+	// is already bound to the person, else s.Sub. refused is true when s.Sub itself
 	// names a person keyed by an object id this token does not carry. An email never enters it.
 	PrincipalFor(ctx context.Context, s Subject) (principal string, refused bool, err error)
 	// Attached records an admitted sign-in that resolved to such a person, naming both parties.

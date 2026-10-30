@@ -72,6 +72,14 @@ const (
 // it expired.
 const adoEntraAccessReuseMargin = 10 * time.Minute
 
+// adoEntraAccessCacheTTL bounds how long a cached access token is handed out
+// after the redemption that filled the cache, whatever lifetime the authority
+// gave it (a tenant policy can lengthen it). A hit reads no stored sign-in and
+// writes no secret.read row, so this is the longest a person's token is served
+// with no read of their sign-in on the record. docs/AZURE-DEVOPS.md and
+// docs/AUDIT-ACTIONS.md state it.
+const adoEntraAccessCacheTTL = time.Hour
+
 // adoEntraAccessCache holds the last access token minted per person, row,
 // application and requested scope set.
 //
@@ -95,17 +103,19 @@ type adoEntraAccessCache struct {
 	refused map[string]time.Time
 }
 
-// adoEntraCached is a cached token and the stored sign-in revision it was redeemed from.
+// adoEntraCached is a cached token, the stored sign-in revision it was redeemed
+// from, and when the redemption filled the cache.
 type adoEntraCached struct {
 	ADOEntraAccess
-	rev string
+	rev    string
+	filled time.Time
 }
 
 func (c *adoEntraAccessCache) get(key string, now time.Time) (adoEntraCached, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	a, ok := c.m[key]
-	if !ok || !a.ExpiresAt.After(now.Add(adoEntraAccessReuseMargin)) {
+	if !ok || !a.ExpiresAt.After(now.Add(adoEntraAccessReuseMargin)) || !now.Before(a.filled.Add(adoEntraAccessCacheTTL)) {
 		return adoEntraCached{}, false
 	}
 	return a, true
@@ -136,10 +146,21 @@ func (c *adoEntraAccessCache) forget(owner string) {
 // adoEntraAccessFor returns a live access token for owner, redeeming only when
 // no cached one has comfortably more life left than the proxy's own margin.
 //
+// scopes nil asks for the row's request scopes (adoRequestScopes). Those are
+// read from the stored sign-in, a decrypt and an audited secret.read, so they
+// are read only on a miss (#2140): the token is cached under the row's ceiling
+// instead, and a hit is served only while the stored sign-in is the revision
+// the token was redeemed from, which fixes the scopes it was asked with.
+//
 // fresh skips the cache: a cached token predates any sign-in since, so a
 // caller asking whether the person has NOW consented to something must redeem.
 func (s *Server) adoEntraAccessFor(ctx context.Context, cfg ADOEntraConfig, owner string, scopes []string, fresh bool) (ADOEntraAccess, error) {
-	key := strings.Join([]string{owner, cfg.RowID, cfg.TenantID, cfg.ClientID, strings.Join(scopes, " ")}, "\x00")
+	// Every key starts with the owner and a NUL, which is what forget matches.
+	parts := []string{owner, cfg.RowID, cfg.TenantID, cfg.ClientID, strings.Join(scopes, " ")}
+	if scopes == nil {
+		parts = append(parts[:4], "ceiling", strings.Join(cfg.Scopes, " "))
+	}
+	key := strings.Join(parts, "\x00")
 	if a, ok := s.adoEntraTokens.get(key, s.cfg.Now()); ok && !fresh {
 		rev, guarded, err := s.entraRevision(ctx, owner, adoCapture(cfg))
 		if err == nil && (!guarded || (rev != "" && rev == a.rev)) {
@@ -148,6 +169,9 @@ func (s *Server) adoEntraAccessFor(ctx context.Context, cfg ADOEntraConfig, owne
 		if err == nil {
 			s.adoEntraTokens.forget(owner) // deleted or replaced on another replica: what is held here came from the old one
 		}
+	}
+	if scopes == nil {
+		scopes = s.adoRequestScopes(ctx, cfg, owner)
 	}
 	if err := adoEntraRedeemable(cfg, owner, scopes); err != nil {
 		return ADOEntraAccess{}, err
@@ -170,7 +194,7 @@ func (s *Server) adoEntraAccessFor(ctx context.Context, cfg ADOEntraConfig, owne
 	if rerr != nil {
 		rev = ""
 	}
-	s.adoEntraTokens.put(key, adoEntraCached{ADOEntraAccess: a, rev: rev})
+	s.adoEntraTokens.put(key, adoEntraCached{ADOEntraAccess: a, rev: rev, filled: s.cfg.Now()})
 	return a, nil
 }
 
@@ -308,10 +332,9 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	if capAsk.capability != "" && s.adoConsentRefusedRecently(ctx, cfg, snapshot.OwnerSubject, need) {
 		return s.raiseADOConsent(w, r, claims, snapshot, need, fail)
 	}
-	scopes := s.adoRequestScopes(ctx, cfg, snapshot.OwnerSubject)
-	access, err := s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, scopes, false)
+	access, err := s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, nil, false)
 	if err == nil && capAsk.capability != "" && !subsetOf(need, access.Scopes) {
-		access, err = s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, scopes, true)
+		access, err = s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, nil, true)
 	}
 	if err != nil {
 		class := ADOEntraClassify(err)

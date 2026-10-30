@@ -171,4 +171,4 @@ func mainDriveUnenforceableUnpooledMsg() string {
 // warnDiskPolicyCut is the clamp warning when the run's own policy, not an operator maximum, cut a
 // requested disk size; composer.WarnResourcesCapped would blame an operator for a policy the person
 // may have written.
-const warnDiskPolicyCut = "disk size reduced to the size this run's policy sets"
+const warnDiskPolicyCut = "Disk size reduced to the size this run's policy sets"

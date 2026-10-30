@@ -13,7 +13,7 @@
 #     serving its runner URL over TLS from a CA this script mints;
 #   - enrols an organisation runner the production way: an org token minted by the org, the
 #     deploy/helm/wardyn-runnerd chart registering with it, a security operator claiming it by its
-#     fingerprint, then runnerd dialling the org's hub outbound;
+#     fingerprint, then runnerd dialling the org's hub outbound; it serves two runs namespaces;
 #   - enrols a second, personal runner (a person's token, a second chart release) for the trust
 #     placement case;
 #   - runs TestK6Org (test/k6) against that org and the live runnerd, then scales runnerd down and
@@ -31,12 +31,16 @@
 # K6_KEEP=1 (development only) leaves the last cluster, its images and the work directory
 # up and prints how to remove them; K6_SKIP_INPROC=1 skips TestK6. K6_SUITES (default "org inproc")
 # picks which suites run: the nightly runs each kubelet as two jobs, one per suite, so a job fits in 30
-# minutes. The cluster and organisation are stood up the same way whichever suites run.
+# minutes. The cluster and organisation are stood up the same way whichever suites run. K6_SUITES=workload
+# runs TestK6Workload (#3804) against the same organisation, with a throwaway in-cluster Dex for its
+# people's sign-ins: only that suite deploys Dex and turns OIDC on, so the org and inproc legs are unchanged.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/lib/common.sh disable=SC1091  # followed under shellcheck -x
 source "$ROOT/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/image-build.sh disable=SC1091
+source "$ROOT/scripts/lib/image-build.sh"
 cd "$ROOT"
 
 [ "${WARDYN_TEST_K8S:-}" = "1" ] || skip_lane "k6-kind-conformance: WARDYN_TEST_K8S=1 not set; skipping"
@@ -47,7 +51,7 @@ done
 NODE_IMAGES="${K6_NODE_IMAGES:-kindest/node:v1.31.4 kindest/node:v1.35.0}"
 SUITES="${K6_SUITES:-org inproc}"
 for s in $SUITES; do
-  case "$s" in org | inproc) ;; *) die "K6_SUITES names '$s', want org and/or inproc" ;; esac
+  case "$s" in org | inproc | workload) ;; *) die "K6_SUITES names '$s', want org, inproc and/or workload" ;; esac
 done
 want() { case " $SUITES " in *" $1 "*) return 0 ;; esac; return 1; }
 CALICO_VERSION="${K6_CALICO_VERSION:-v3.28.0}"
@@ -62,6 +66,7 @@ ORG_NS=wardyn-k6-org
 ORG_RUNS_NS=wardyn-k6-orgruns
 OWN_NS=wardyn-k6-runner
 RUNS_NS=wardyn-k6-runs
+EXTRA_RUNS_NS=wardyn-k6-runs-b
 RELEASE=k6
 P_RELEASE=k6p
 P_OWN_NS=wardyn-k6-prunner
@@ -71,6 +76,13 @@ ORG_FULL=wardyn-org
 ORG_HOST="$ORG_FULL.$ORG_NS.svc.cluster.local"
 ORG_URL="https://$ORG_HOST:8080"
 SCHED_LABEL="wardyn-k6/sched"
+# The workload suite: the namespace it binds, one nothing binds, its Dex and the two people who sign in there.
+WL_NS=wardyn-k6-wl
+WL_FREE_NS=wardyn-k6-wl-free
+DEX_HOST="k6-dex.$ORG_NS.svc.cluster.local"
+WL_SECOP_EMAIL=k6-secop@k6.wardyn.invalid
+WL_SPONSOR_EMAIL=k6-sponsor@k6.wardyn.invalid
+DEX_PORT=""
 WORK="$(mktemp -d)"
 CREATED=""
 START=$SECONDS
@@ -141,8 +153,7 @@ docker compose -f deploy/compose/docker-compose.yaml --profile build-only build 
   || { tail -40 "$WORK/build.log"; die "proxy image build failed"; }
 docker tag wardyn/wardyn-runnerd:local "$RUNNERD_IMAGE"
 docker tag wardyn/wardyn-proxy:local "$PROXY_IMAGE"
-docker build -q -f deploy/compose/Dockerfile.wardynd -t "$WARDYND_IMAGE" . >>"$WORK/build.log" 2>&1 \
-  || { tail -40 "$WORK/build.log"; die "wardynd image build failed"; }
+wardyn_docker_build -f deploy/compose/Dockerfile.wardynd -t "$WARDYND_IMAGE" . || die "wardynd image build failed"
 # The agent and postgres are rebuilt as single-platform local images: kind load cannot import a
 # pulled multi-platform index from Docker Desktop's containerd store (content digest not found).
 mkdir -p "$WORK/agent"
@@ -154,10 +165,8 @@ CGO_ENABLED=0 go build -o "$WORK/agent/agentprobe" ./test/k6/agentprobe || die "
 printf '#!/bin/sh\n[ "$1" = --idle ] && exec sleep 2147483647\nexec sh -c "$1"\n' >"$WORK/agent/agent-run"
 chmod 0755 "$WORK/agent/agent-run"
 printf 'FROM busybox:1.36\nCOPY wardyn-rec agentprobe agent-run /usr/local/bin/\n' >"$WORK/agent/Dockerfile"
-docker build -q -t "$AGENT_IMAGE" "$WORK/agent" >>"$WORK/build.log" 2>&1 \
-  || { tail -20 "$WORK/build.log"; die "agent image build failed"; }
-printf 'FROM postgres:17\n' | docker build -q -t "$PG_IMAGE" - >>"$WORK/build.log" 2>&1 \
-  || { tail -20 "$WORK/build.log"; die "postgres image build failed"; }
+wardyn_docker_build -t "$AGENT_IMAGE" "$WORK/agent" || die "agent image build failed"
+printf 'FROM postgres:17\n' | wardyn_docker_build -t "$PG_IMAGE" - || die "postgres image build failed"
 
 docker pull -q "$RUNNER_IMAGE" >/dev/null
 CGO_ENABLED=0 go test -c -tags k8s -o "$WORK/k6.test" ./test/k6/ || die "building test/k6 failed"
@@ -169,6 +178,16 @@ openssl req -newkey rsa:2048 -nodes -subj "/CN=$ORG_HOST" -keyout "$WORK/tls.key
 printf 'subjectAltName=DNS:%s\n' "$ORG_HOST" >"$WORK/san.ext"
 openssl x509 -req -in "$WORK/tls.csr" -CA "$WORK/ca.pem" -CAkey "$WORK/ca.key" -CAcreateserial -days 1 \
   -extfile "$WORK/san.ext" -out "$WORK/tls.crt" >/dev/null 2>&1
+if want workload; then
+  # Dex serves its issuer over TLS from the same CA: wardynd refuses a plain http:// issuer while it
+  # serves TLS itself. The OIDC client secret is minted per run and reaches Dex and wardynd only through
+  # a Secret; it is never printed.
+  openssl req -newkey rsa:2048 -nodes -subj "/CN=$DEX_HOST" -keyout "$WORK/dex.key" -out "$WORK/dex.csr" >/dev/null 2>&1
+  printf 'subjectAltName=DNS:%s\n' "$DEX_HOST" >"$WORK/dex-san.ext"
+  openssl x509 -req -in "$WORK/dex.csr" -CA "$WORK/ca.pem" -CAkey "$WORK/ca.key" -CAcreateserial -days 1 \
+    -extfile "$WORK/dex-san.ext" -out "$WORK/dex.crt" >/dev/null 2>&1
+  OIDC_SECRET="$(openssl rand -hex 24)"
+fi
 ADMIN_TOKEN="$(openssl rand -hex 24)"
 SEC_TOKEN="wdn_$(openssl rand -hex 32)"
 AGE_KEY="$(docker run --rm "$WARDYND_IMAGE" -gen-age-key 2>/dev/null)"
@@ -213,6 +232,91 @@ env:
 extraVolumes: [{name: org-tls, secret: {secretName: org-tls}}]
 extraVolumeMounts: [{name: org-tls, mountPath: /etc/wardyn/org-tls, readOnly: true}]
 EOF
+
+# The workload suite's people sign in through Dex (a binding is made by a signed-in person, never an API
+# token), so the org gets OIDC on top of its admin token, trusting the CA above for Dex's TLS. Dex reuses
+# deploy/kind/sso/dex.yaml's image and public demo password hash, read from it rather than retyped.
+ORG_OIDC=()
+if want workload; then
+  DEX_IMAGE="$(sed -n 's/^ *image: \(ghcr\.io\/dexidp\/dex:[^ ]*\)$/\1/p' deploy/kind/sso/dex.yaml | head -1)"
+  DEX_HASH="$(sed -n 's/^ *hash: "\(.*\)"$/\1/p' deploy/kind/sso/dex.yaml | head -1)"
+  [ -n "$DEX_IMAGE" ] && [ -n "$DEX_HASH" ] || die "could not read Dex's image and demo hash from deploy/kind/sso/dex.yaml"
+  cat >"$WORK/org-oidc.yaml" <<EOF
+env:
+  WARDYN_OIDC_ISSUER: "https://$DEX_HOST:5554"
+  WARDYN_OIDC_CLIENT_ID: "wardyn-k6"
+  WARDYN_OIDC_REDIRECT_URL: "$ORG_URL/auth/callback"
+  WARDYN_OIDC_EMAIL_DOMAINS: "k6.wardyn.invalid"
+  WARDYN_OIDC_ROLE_MAP: "$WL_SECOP_EMAIL=security_admin,$WL_SPONSOR_EMAIL=user"
+  WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS: "true"
+extraEnv:
+  - name: WARDYN_OIDC_CLIENT_SECRET
+    valueFrom: {secretKeyRef: {name: k6-oidc, key: client-secret}}
+networkPolicy:
+  egress:
+    extra:
+      - to: [{podSelector: {matchLabels: {app: k6-dex}}}]
+        ports: [{protocol: TCP, port: 5554}]
+EOF
+  ORG_OIDC=(-f "$WORK/org-oidc.yaml" --set-file "trustedCA=$WORK/ca.pem")
+  cat >"$WORK/dex.yaml" <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: k6-dex}
+data:
+  config.yaml: |
+    issuer: https://$DEX_HOST:5554
+    storage: {type: memory}
+    web:
+      https: 0.0.0.0:5554
+      tlsCert: /etc/dex/tls/tls.crt
+      tlsKey: /etc/dex/tls/tls.key
+    oauth2: {skipApprovalScreen: true}
+    enablePasswordDB: true
+    staticClients:
+      - id: wardyn-k6
+        name: k6
+        secretEnv: K6_OIDC_CLIENT_SECRET
+        redirectURIs: ["$ORG_URL/auth/callback"]
+    staticPasswords:
+      - {email: "$WL_SECOP_EMAIL", hash: "$DEX_HASH", username: k6-secop, userID: k6-secop-0001}
+      - {email: "$WL_SPONSOR_EMAIL", hash: "$DEX_HASH", username: k6-sponsor, userID: k6-sponsor-0001}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: k6-dex, labels: {app: k6-dex}}
+spec:
+  selector: {matchLabels: {app: k6-dex}}
+  template:
+    metadata: {labels: {app: k6-dex}}
+    spec:
+      ${CP_PLACE//$'\n'/$'\n'      }
+      containers:
+        - name: dex
+          image: $DEX_IMAGE
+          imagePullPolicy: IfNotPresent
+          command: ["dex", "serve", "/etc/dex/cfg/config.yaml"]
+          ports: [{containerPort: 5554}]
+          env:
+            - name: K6_OIDC_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: k6-oidc, key: client-secret}}
+          readinessProbe: {httpGet: {path: /healthz, port: 5554, scheme: HTTPS}, periodSeconds: 2}
+          volumeMounts:
+            - {name: cfg, mountPath: /etc/dex/cfg, readOnly: true}
+            - {name: tls, mountPath: /etc/dex/tls, readOnly: true}
+      volumes:
+        - {name: cfg, configMap: {name: k6-dex}}
+        - {name: tls, secret: {secretName: k6-dex-tls}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: k6-dex}
+spec:
+  type: NodePort
+  selector: {app: k6-dex}
+  ports: [{port: 5554, targetPort: 5554}]
+EOF
+fi
 
 cat >"$WORK/values.yaml" <<EOF
 org: $ORG_URL
@@ -269,10 +373,32 @@ api() {
 }
 
 # patch_https_probes DEPLOYMENT NS: the org serves its runner URL over TLS on the probed port.
+# The deployment controller can update the object between the get and the replace (a Conflict),
+# so the read-modify-replace is retried on a fresh read.
 patch_https_probes() {
-  kubectl -n "$2" get deployment "$1" -o json | jq '.spec.template.spec.containers[0] |=
-    ((.livenessProbe.httpGet.scheme, .readinessProbe.httpGet.scheme, .startupProbe.httpGet.scheme) = "HTTPS")' |
-    kubectl replace -f - >/dev/null
+  local i
+  for i in 1 2 3 4 5; do
+    kubectl -n "$2" get deployment "$1" -o json | jq '.spec.template.spec.containers[0] |=
+      ((.livenessProbe.httpGet.scheme, .readinessProbe.httpGet.scheme, .startupProbe.httpGet.scheme) = "HTTPS")' |
+      kubectl replace -f - >/dev/null && return 0
+    sleep "$i"
+  done
+  return 1
+}
+
+# deploy_dex stands up the workload suite's Dex in $ORG_NS and waits until it serves, so wardynd's OIDC
+# discovery at boot meets a ready issuer; it leaves Dex's node port in DEX_PORT. The control plane pulls
+# the image (pinned by digest in deploy/kind/sso/dex.yaml) from ghcr, as the kind-sso overlay's Dex does.
+deploy_dex() {
+  kubectl -n "$ORG_NS" create secret tls k6-dex-tls --cert="$WORK/dex.crt" --key="$WORK/dex.key" >/dev/null
+  kubectl -n "$ORG_NS" create secret generic k6-oidc --from-file=client-secret=<(printf %s "$OIDC_SECRET") >/dev/null
+  kubectl -n "$ORG_NS" apply -f "$WORK/dex.yaml" >/dev/null
+  if ! kubectl -n "$ORG_NS" rollout status deployment/k6-dex --timeout=180s >/dev/null; then
+    kubectl -n "$ORG_NS" describe pods -l app=k6-dex | tail -30 || true
+    kubectl -n "$ORG_NS" logs deployment/k6-dex --tail=40 || true
+    return 1
+  fi
+  DEX_PORT="$(kubectl -n "$ORG_NS" get svc k6-dex -o jsonpath='{.spec.ports[0].nodePort}')"
 }
 
 # deploy_org stands up postgres and wardynd in $ORG_NS and seeds the security operator's token.
@@ -312,8 +438,9 @@ EOF
     --from-literal=dsn="postgres://wardyn:wardyn@postgres:5432/wardyn?sslmode=disable" --from-literal=age-key="$AGE_KEY" >/dev/null
   kubectl -n "$ORG_NS" create secret tls org-tls --cert="$WORK/tls.crt" --key="$WORK/tls.key" >/dev/null
   kubectl -n "$ORG_NS" rollout status deployment/postgres --timeout=180s >/dev/null
+  if want workload; then deploy_dex || return 1; fi
   sed "s#NODE_CIDR#$node_cidr#" "$WORK/org-values.yaml" >"$WORK/org-values-$VERSION.yaml"
-  helm install "$ORG_RELEASE" deploy/helm/wardyn -n "$ORG_NS" -f "$WORK/org-values-$VERSION.yaml" >/dev/null
+  helm install "$ORG_RELEASE" deploy/helm/wardyn -n "$ORG_NS" -f "$WORK/org-values-$VERSION.yaml" "${ORG_OIDC[@]}" >/dev/null
   patch_https_probes "$ORG_FULL" "$ORG_NS"
   if ! kubectl -n "$ORG_NS" rollout status "deployment/$ORG_FULL" --timeout=300s >/dev/null; then
     kubectl -n "$ORG_NS" describe pods -l app.kubernetes.io/name=wardyn | tail -30 || true
@@ -329,18 +456,29 @@ EOF
     '$(printf '%s' "$SEC_TOKEN" | sha256sum | cut -d' ' -f1)')" >/dev/null
 }
 
-# install_runnerd RELEASE OWN_NS RUNS_NS TOKEN installs the runnerd chart registering with TOKEN, waits
-# for its boot checks, and leaves the deployment's name in INSTALLED; it fails when runnerd never boots.
+# install_runnerd RELEASE OWN_NS RUNS_NS TOKEN [EXTRA_RUNS_NS] installs the runnerd chart registering with
+# TOKEN (placing runs in EXTRA_RUNS_NS too when given), waits for its boot checks, and leaves the
+# deployment's name in INSTALLED; it fails when runnerd never boots.
 install_runnerd() {
-  local release=$1 own=$2 runs=$3 token=$4
+  local release=$1 own=$2 runs=$3 token=$4 extra=${5:-} ns
+  local extra_set=()
   kubectl create namespace "$own" >/dev/null
-  kubectl create namespace "$runs" >/dev/null
-  kubectl label namespace "$runs" pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/enforce-version=latest >/dev/null
+  for ns in "$runs" ${extra:+"$extra"}; do
+    kubectl create namespace "$ns" >/dev/null
+    kubectl label namespace "$ns" pod-security.kubernetes.io/enforce=restricted pod-security.kubernetes.io/enforce-version=latest >/dev/null
+  done
+  [ -z "$extra" ] || extra_set=(--set "extraRunsNamespaces[0]=$extra")
+  # The workload suite's two namespaces, watched by the org runner only: one the case binds, one never bound.
+  if [ "$release" = "$RELEASE" ] && want workload; then
+    kubectl create namespace "$WL_NS" >/dev/null
+    kubectl create namespace "$WL_FREE_NS" >/dev/null
+    extra_set+=(--set "workloads.namespaces={$WL_NS,$WL_FREE_NS}")
+  fi
   kubectl -n "$own" create configmap k6-org-ca --from-file=ca.pem="$WORK/ca.pem" >/dev/null
   kubectl -n "$own" create secret generic k6-registration --from-literal=token="$token" >/dev/null
   sed -e "s/arch: ARCH/arch: $ARCH/" -e "s/^runsNamespace: .*/runsNamespace: $runs/" \
     "$WORK/values.yaml" >"$WORK/values-$release-$VERSION.yaml"
-  helm install "$release" deploy/helm/wardyn-runnerd -n "$own" -f "$WORK/values-$release-$VERSION.yaml" >/dev/null
+  helm install "$release" deploy/helm/wardyn-runnerd -n "$own" -f "$WORK/values-$release-$VERSION.yaml" "${extra_set[@]}" >/dev/null
   INSTALLED="$(kubectl -n "$own" get deploy -l "app.kubernetes.io/instance=$release" -o jsonpath='{.items[0].metadata.name}')"
   if kubectl -n "$own" rollout status "deployment/$INSTALLED" --timeout=300s >/dev/null &&
      timeout 300 bash -c "until kubectl -n $own logs deployment/$INSTALLED -c runnerd 2>/dev/null | grep 'k8s runner ready to connect' >/dev/null; do sleep 3; done"; then
@@ -409,9 +547,9 @@ for image in $NODE_IMAGES; do
 
   log "[$VERSION] the runnerd chart, registering with the org's token"
   boot=PASS
-  install_runnerd "$RELEASE" "$OWN_NS" "$RUNS_NS" "$(jq -r .token "$WORK/resp.json")" || { boot=FAIL; rc=1; }
+  install_runnerd "$RELEASE" "$OWN_NS" "$RUNS_NS" "$(jq -r .token "$WORK/resp.json")" "$EXTRA_RUNS_NS" || { boot=FAIL; rc=1; }
   DEPLOY="$INSTALLED"
-  case_line in-cluster-runnerd-boot "$boot" "chart Role; SSAR, foreign objects, kubelet floor, relay listen and the relay source probe on Calico (log: k8s runner ready to connect)"
+  case_line in-cluster-runnerd-boot "$boot" "chart Role in two runs namespaces; SSAR, foreign objects, the canary in each, kubelet floor, relay listen and the relay source probe on Calico (log: k8s runner ready to connect)"
 
   # The claim: the security operator confirms the fingerprint runnerd printed at registration.
   FP="$(fingerprint "$OWN_NS" "$DEPLOY")"
@@ -439,7 +577,7 @@ for image in $NODE_IMAGES; do
   # fingerprint and puts it in a pool of their own.
   PERSONAL_POOL=""
   P_DEPLOY=""
-  if [ "$hub" = PASS ]; then
+  if [ "$hub" = PASS ] && want org; then
     log "[$VERSION] a personal runner (second chart release, self-minted token)"
     api "$ADMIN_TOKEN" POST /api/v1/permissions/grants \
       '{"subject_type":"all","subject":"","capability":"feature","value":"self_host_runner","effect":"allow"}' >/dev/null
@@ -480,6 +618,7 @@ WARDYN_TEST_K6=1
 KUBECONFIG=$WORK/runnerd.kc
 K6_ADMIN_KUBECONFIG=$WORK/admin-internal.kc
 K6_RUNS_NS=$RUNS_NS
+K6_EXTRA_RUNS_NS=$EXTRA_RUNS_NS
 K6_OWN_NS=$OWN_NS
 K6_SA=$SA
 K6_RUNNER_ID=$RUNNER_ID
@@ -499,6 +638,12 @@ K6_SCHED_NODE=$PIN
 K6_APISERVER=$CP_IP:6443
 K6_PERSONAL_POOL=$PERSONAL_POOL
 K6_AGENTPROBE=$WORK/agent/agentprobe
+K6_DEX_HOST=$DEX_HOST
+K6_DEX_ADDR=$CP_IP:$DEX_PORT
+K6_WL_NS=$WL_NS
+K6_WL_FREE_NS=$WL_FREE_NS
+K6_WL_SECOP_EMAIL=$WL_SECOP_EMAIL
+K6_WL_SPONSOR_EMAIL=$WL_SPONSOR_EMAIL
 EOF
   # suite NAME RUN: one test/k6 run in a container on the kind network; its K6-CASE lines join the table.
   suite() {
@@ -521,14 +666,29 @@ EOF
     log "[$VERSION] org cases (TestK6Org, against the org and the live runnerd)"
     suite org "${K6_ORG_RUN:-^TestK6Org\$}"
   fi
+  if want workload && [ "$hub" = PASS ]; then
+    log "[$VERSION] workload case (TestK6Workload, Dex sign-ins against the org and the live runnerd)"
+    suite workload '^TestK6Workload$'
+    # Run pods go to the runs namespaces; these two hold only the case's resources.
+    kubectl delete namespace "$WL_NS" "$WL_FREE_NS" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  fi
 
   # runnerd stops here: TestK6 drives the same runner identity in process under its token.
   kubectl -n "$OWN_NS" scale "deployment/$DEPLOY" --replicas=0 >/dev/null
   [ -n "${P_DEPLOY:-}" ] && kubectl -n "$P_OWN_NS" scale "deployment/$P_DEPLOY" --replicas=0 >/dev/null
   kubectl -n "$OWN_NS" wait --for=delete pod -l "app.kubernetes.io/instance=$RELEASE" --timeout=120s >/dev/null 2>&1 || true
+  # Both suites on one cluster: the org suite's last runs outlive the runner it revoked (a revoke stops no
+  # run), held by runnerd's finalizer on the worker node-name-reuse-tick needs; TestK6 starts without them.
+  if want org && want inproc; then
+    kubectl -n "$RUNS_NS" get pods -o name | xargs -r -n1 kubectl -n "$RUNS_NS" patch --type merge -p '{"metadata":{"finalizers":null}}' >/dev/null 2>&1 || true
+    kubectl -n "$RUNS_NS" delete pods --all --grace-period=0 --force --wait=true >/dev/null 2>&1 || true
+  fi
+  # A killed inproc run skips the Go cleanups: drop pod-ip-reuse-after-stop's IP reservation so a kept
+  # cluster never starts starved (Calico before v3.22 has no such resource; the case names that).
+  kubectl delete ipreservations.crd.projectcalico.org k6-only-ip --ignore-not-found >/dev/null 2>&1 || true
   # A 16-address Calico pool for the runs namespace, applied after runnerd's boot checks so the
-  # relay probe runs on the default pool. Calico reuses a freed address only after the
-  # rest of its block, so pod-ip-reuse-after-stop needs a small block to see a stopped proxy's IP again.
+  # relay probe runs on the default pool. pod-ip-reuse-after-stop reserves every address of it but the
+  # one the next proxy must receive (an IPReservation; test/k6 onlyIP), so the reuse is deterministic.
   kubectl apply -f - >/dev/null <<'POOL'
 apiVersion: crd.projectcalico.org/v1
 kind: IPPool

@@ -37,13 +37,16 @@ const (
 	mpRunNoToken        = "no token is available for it"
 	mpRunCredUnreadable = "Wardyn couldn't read your credential for model provider %s just now, so nothing was started. Try again in a moment."
 	mpRunUnreadable     = "Wardyn couldn't read its model providers just now, so nothing was started. Try again in a moment."
-	mpRunNoIntegration  = "integration_id no longer chooses a model credential: a run's model provider does — use model_provider instead."
+	// mpRunRemedyService replaces the console remedy for a service identity on
+	// a sign-in kind: it has no console, and nothing it can do signs it in.
+	mpRunRemedyService = "a service identity cannot sign in, so choose a model provider whose credential it stores as a key or token."
+	mpRunNoIntegration = "integration_id no longer chooses a model credential: a run's model provider does — use model_provider instead."
 	// mpNoProviderDetail is the brokered-LLM 404's detail for a model run no
 	// provider serves: under a provider block nothing else credentials it.
-	mpNoProviderDetail = "no model provider serves this agent on this deployment — an admin adds one under Settings → Model providers"
+	mpNoProviderDetail = "No model provider serves this agent on this deployment — an admin adds one under Settings → Model providers"
 	// mpNoProviderHarnessDetail is mpNoProviderDetail for a run whose other
 	// harnesses each reach their own provider: it names the one that has none.
-	mpNoProviderHarnessDetail = "no model provider serves %s on this deployment, though this run's other harnesses have their own — an admin adds one under Settings → Model providers"
+	mpNoProviderHarnessDetail = "No model provider serves %s on this deployment, though this run's other harnesses have their own — an admin adds one under Settings → Model providers"
 )
 
 // providerDenial is a model-provider refusal: the sentence, and whether the
@@ -56,12 +59,15 @@ const (
 type providerDenial struct {
 	msg        string
 	credential bool
+	// state is the state clause of a credential refusal, kept so providerLiveness
+	// can rebuild the sentence with another remedy. Empty for every other denial.
+	state string
 }
 
 // connectDenial is the one constructor of a credential refusal: its remedy is
 // always the connect door, which is what makes it one.
 func connectDenial(id, state string) providerDenial {
-	return providerDenial{msg: fmt.Sprintf(mpRunRefusal, id, state, mpRunRemedySignIn), credential: true}
+	return providerDenial{msg: fmt.Sprintf(mpRunRefusal, id, state, mpRunRemedySignIn), credential: true, state: state}
 }
 
 // stateDenial is a refusal a sign-in does not repair.
@@ -89,7 +95,20 @@ func providerTakesNoCredential(p types.ModelProvider) bool {
 // session's one-use refresh token, and the renewed session dispatch reads is
 // returned for its arm. An error is a credential that could not be read, never
 // "not connected"; callers answer it with providerReadFailed, which is no door.
+//
+// A service identity cannot sign in, so on a sign-in kind its credential
+// refusal swaps the console remedy for mpRunRemedyService; the reason stays
+// model_credential. A human owner's sentence is untouched.
 func (s *Server) providerLiveness(ctx context.Context, p types.ModelProvider, agent, owner string, refresh bool) (awsSSOBlob, providerDenial, error) {
+	blob, d, err := s.providerLivenessByKind(ctx, p, agent, owner, refresh)
+	if d.credential && isServicePrincipal(owner) && !providerTypedKinds[p.Kind] {
+		d.msg = fmt.Sprintf(mpRunRefusal, p.ID, d.state, mpRunRemedyService)
+	}
+	return blob, d, err
+}
+
+// providerLivenessByKind dispatches providerLiveness by the provider's kind.
+func (s *Server) providerLivenessByKind(ctx context.Context, p types.ModelProvider, agent, owner string, refresh bool) (awsSSOBlob, providerDenial, error) {
 	switch {
 	case providerKeyKind(p.Kind):
 		d, err := s.providerCredentialRefusal(ctx, owner, p)
@@ -217,7 +236,9 @@ type providerDispatch struct {
 	upstreams map[string]string // ProxyConfig.LLMUpstreams: {vendor host → BaseURL+Path}, nil for the vendor itself
 	// localModels is ProxyConfig.LocalModels: {local_model BaseURL → its allowlist and bounds}.
 	localModels map[string]types.LocalModelSettings
-	detail      string // the brokered-LLM 404's detail
+	// localAllowlists is localModels' allowlists by provider id, for the run's own record (recordModelAllowlists).
+	localAllowlists map[string][]string
+	detail          string // the brokered-LLM 404's detail
 }
 
 // addLocalModel records a local_model lane's upstream, allowlist and bounds for
@@ -230,6 +251,10 @@ func (d *providerDispatch) addLocalModel(l providerKeyLane) {
 		d.localModels = map[string]types.LocalModelSettings{}
 	}
 	d.localModels[l.upstream] = l.provider.Local.LocalModelBounds()
+	if d.localAllowlists == nil {
+		d.localAllowlists = map[string][]string{}
+	}
+	d.localAllowlists[l.provider.ID] = slices.Clone(l.provider.Local.Models)
 }
 
 // providerLane is what the chosen provider's arm resolved for one run before

@@ -4,7 +4,7 @@
  */
 
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Bot, Check, ChevronRight, Code2, ShieldCheck, X } from "lucide-react";
 import {
   canDecideApproval,
@@ -22,15 +22,19 @@ import { absoluteTime, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { ApprovalKindChip, ApprovalStateBadge, Chip } from "../wardyn/primitives";
 import { RunContextRow } from "../wardyn/run-context-row";
+import { RunRef } from "../wardyn/run-ref";
 import { JsonBlock } from "../wardyn/yaml-block";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-card";
+import { isTakeoverRequest, TakeoverCard } from "../wardyn/takeover-card";
 import { REAUTH_ROW, reauthAudience } from "../wardyn/model-access-copy";
 import { useClaimModelAccessDoor, useModelAccessDoor, useShellSetupStatus } from "../wardyn/model-access-context";
 import { resolveDoor } from "../../lib/model-access";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { OpenInUserView, runPath, useConsoleMode } from "../wardyn/console-view";
 import { PUSH } from "../wardyn/copy/push";
+import { APPROVAL_WALLS } from "../wardyn/copy/personal-walls";
+import { PolicyRemedy, personalOwn } from "../wardyn/policy-remedy";
 import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON, approvalScopeBadge } from "../wardyn/copy";
 import { APPROVAL_ASKED, APPROVAL_ESCALATION } from "../wardyn/copy/approvals";
 import { useAgentName } from "../wardyn/use-agent-name";
@@ -49,6 +53,9 @@ export function ApprovalCard({
   onAct,
   onAdoDecide,
   onPushDecide,
+  onTakeOver,
+  onDecline,
+  refused = false,
 }: {
   item: ApprovalRequest;
   run?: RunDetail;
@@ -64,6 +71,13 @@ export function ApprovalCard({
   // #181 — the push_content card's own decide path; see decidePushDirect's
   // doc above for why it bypasses onAct/ReasonDialog too, minus the scope.
   onPushDecide: (id: string, approve: boolean) => Promise<void>;
+  // #2963 — a "Needs you" request's Decline (Take over opens the run instead).
+  onDecline?: (id: string) => Promise<void>;
+  // A caller on the run's own page opens its Overview for Take over instead of navigating.
+  onTakeOver?: () => void;
+  // The server refused this viewer's decision with capability_egress_host: the caps read cannot see it
+  // (the run page passes none), so the refusal itself turns the buttons off.
+  refused?: boolean;
 }) {
   const scope = item.requested_scope ?? {};
   const KindIcon = KIND_ICON[item.kind] ?? ShieldCheck;
@@ -108,7 +122,7 @@ export function ApprovalCard({
   // early return happens BEFORE this capability leg, so a security admin is
   // never bounded by it.
   const host = item.kind === "egress_domain" ? str(scope, "host", "domain") : undefined;
-  const hostUngranted = !securityOperator && !!host && !capabilityAllowed(caps, "egress_host", host);
+  const hostUngranted = refused || (!securityOperator && !!host && !capabilityAllowed(caps, "egress_host", host));
   // B4 — the run this approval gates, from the context row below's OWN fetch.
   // A run that has ended cancels its PENDING approvals (types.ApprovalCancelled;
   // the finalizeRunTail / handleKillRun cascade), so Approve and Deny here
@@ -139,6 +153,11 @@ export function ApprovalCard({
   const agentCount = run?.agents?.length ?? 0;
   const asker = item.kind === "tool_call" && agentCount >= 2 && typeof scope.harness === "string" && scope.harness ? scope.harness : undefined;
   const canDecide = kindDecidable && !hostUngranted && !runEnded;
+  // T4-c: the requester's own walls deny this host, so no approver can admit it: Approve is off before the click,
+  // Deny stays, and the sentence and Why card say whose walls they are. Drawn once the run read has settled, since
+  // the owner is the run's creator and "Your walls" would otherwise flash on an approver who is not the owner.
+  const wallsBlocked = !!item.walls_block && !runEnded;
+  const wallsPolicy = { source: "personal", layer: "personal", owner: run?.created_by } as const;
 
   // S10 — an Azure DevOps escalation (or the Entra-consent chain it can
   // raise) gets ITS OWN card, not this generic one: it needs fields
@@ -158,6 +177,8 @@ export function ApprovalCard({
   // enough to spin only the pressed button. The push card follows the same rule.
   const [adoBusy, setAdoBusy] = React.useState<"approve" | "deny" | null>(null);
   const [pushBusy, setPushBusy] = React.useState<"approve" | "deny" | null>(null);
+  const [takeoverBusy, setTakeoverBusy] = React.useState(false);
+  const navigate = useNavigate();
   // N1 (round 2): ApprovalCard only ever receives PENDING rows today
   // (pendingItems is fetched via api.listApprovals("PENDING")), but the
   // state check is explicit here too — defense-in-depth against this
@@ -195,6 +216,26 @@ export function ApprovalCard({
   // branch, the paths under review) this generic card has no slot for, and
   // an admin-only decide with no scope menu (see push-content-card.tsx's own
   // doc). Same "PENDING only" defense-in-depth as the ADO branch above.
+  // #2963 — a "Needs you" request is answered on its run: Take over opens it there, where the
+  // banner drives the takeover; Decline answers it here.
+  if (isTakeoverRequest(item) && item.state === "PENDING") {
+    return (
+      <div className="space-y-2">
+        {runRow}
+        <TakeoverCard
+          item={item}
+          busy={takeoverBusy}
+          onTakeOver={() => (onTakeOver ? onTakeOver() : void navigate(runPath(view, item.run_id)))}
+          onDecline={async () => {
+            setTakeoverBusy(true);
+            await onDecline?.(item.id);
+            setTakeoverBusy(false);
+          }}
+        />
+      </div>
+    );
+  }
+
   if (isPushContentRequest(item) && item.state === "PENDING") {
     return (
       <div className="space-y-2">
@@ -237,9 +278,12 @@ export function ApprovalCard({
           </Chip>
         )}
         {item.sla_due_at && <Chip tone="neutral">{APPROVAL_ESCALATION.ESCALATES(relativeTime(item.sla_due_at))}</Chip>}
-        <span className="ml-auto">
-          <ApprovalStateBadge state={item.state} />
-        </span>
+        {/* #3031: a Pending-tab card does not wear the name of its tab. Decided rows keep their state chip. */}
+        {item.state !== "PENDING" && (
+          <span className="ml-auto">
+            <ApprovalStateBadge state={item.state} />
+          </span>
+        )}
       </div>
 
       {/* #543: which AWS provider the hold is for — a sign-in to another
@@ -296,7 +340,7 @@ export function ApprovalCard({
           connection in front of you. The scope words above are canon and
           not paraphrased, so this is its own line. */}
       {item.kind === "egress_domain" && (
-        <p className="mt-2.5 max-w-[72ch] text-xs text-muted-foreground">{APPROVAL.HOST_WIDE_NOTE}</p>
+        <p className="mt-2.5 text-xs text-muted-foreground">{APPROVAL.HOST_WIDE_NOTE}</p>
       )}
 
       {/* B4 — the decision pair is GONE, not merely disabled, once the run has
@@ -305,7 +349,7 @@ export function ApprovalCard({
           answer". */}
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-3">
         {runEnded ? (
-          <p className="max-w-[72ch] text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
+          <p className="text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
         ) : (
           item.kind === "credential_reauth" ? (
           /* A door, not a decision (UX round B3). The pair is removed, not
@@ -319,7 +363,7 @@ export function ApprovalCard({
           ) : null
         ) : (
           <>
-            <Button size="sm" variant="info" onClick={() => onAct("approve")} disabled={!canDecide}>
+            <Button size="sm" variant="info" onClick={() => onAct("approve")} disabled={!canDecide || wallsBlocked}>
               <Check className="size-4" /> Approve
             </Button>
             <Button variant="outline" size="sm" onClick={() => onAct("deny")} disabled={!canDecide}>
@@ -341,12 +385,23 @@ export function ApprovalCard({
         </span>
       </div>
 
+      {wallsBlocked && host && run && (
+        <div className="mt-2.5 space-y-2" data-testid="approval-walls-block">
+          <p className="text-sm text-foreground">
+            {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_BEFORE : APPROVAL_WALLS.OTHER_BEFORE(wallsPolicy.owner ?? "")}
+            <span className="font-mono">{host}</span>
+            {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_AFTER : APPROVAL_WALLS.OTHER_AFTER}
+          </p>
+          <PolicyRemedy policy={wallsPolicy} copyable />
+        </div>
+      )}
+
       {/* Say what the denial costs and the way out, at the moment it happens —
           and that a grant would still not hand this member the Always scope. */}
       {hostUngranted && host && (
         <>
-          <p className="mt-2.5 max-w-[72ch] text-xs text-muted-foreground">{DENIED.APPROVE_BODY(host)}</p>
-          <p className="mt-1.5 max-w-[72ch] text-xs text-muted-foreground">{DENIED.ALWAYS_STILL_ADMIN}</p>
+          <p className="mt-2.5 text-xs text-muted-foreground">{DENIED.APPROVE_BODY(host)}</p>
+          <p className="mt-1.5 text-xs text-muted-foreground">{DENIED.ALWAYS_STILL_ADMIN}</p>
         </>
       )}
     </div>
@@ -354,7 +409,15 @@ export function ApprovalCard({
 }
 
 // `showRun` is false on a run's own page, where the run is the context and a link back to it is noise.
-export function DecidedRow({ item, showRun = true }: { item: ApprovalRequest; showRun?: boolean }) {
+export function DecidedRow({
+  item,
+  showRun = true,
+  runTitle,
+}: {
+  item: ApprovalRequest;
+  showRun?: boolean;
+  runTitle?: string;
+}) {
   const scope = item.requested_scope ?? {};
   // A CANCELLED row carries decided_by="system" (the terminal-run cascade wrote
   // it), so it reads with the same "by …" prefix an expiry-with-a-writer does —
@@ -372,15 +435,7 @@ export function DecidedRow({ item, showRun = true }: { item: ApprovalRequest; sh
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-3 first:border-t-0">
       <ApprovalKindChip kind={item.kind} />
       <span className="min-w-0 flex-1 truncate text-sm text-foreground">{deriveTitle(item.kind, scope)}</span>
-      {showRun && (
-        <Link
-          to={runPath(view, item.run_id)}
-          className="font-mono text-xs text-muted-foreground hover:text-foreground"
-          title={`Open run ${item.run_id}`}
-        >
-          {item.run_id.slice(0, 8)}
-        </Link>
-      )}
+      {showRun && <RunRef runId={item.run_id} title={runTitle} to={runPath(view, item.run_id)} className="max-w-[16rem]" />}
       <ApprovalStateBadge state={item.state} />
       {scopeBadge && <Chip tone="neutral">{scopeBadge}</Chip>}
       <span className="whitespace-nowrap text-xs text-muted-foreground">{meta}</span>

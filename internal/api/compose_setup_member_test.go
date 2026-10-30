@@ -34,7 +34,7 @@ func TestDeriveSetupItems_AMemberIsNotShownTheOperatorsSecretNames(t *testing.T)
 	srv := newSetupTestServer(admins, own)
 	srv.cfg.Secrets = sec
 	spec := types.RunPolicySpec{
-		EligibleGrants: []types.GrantSpec{apiKeyGrant("jira.example", "jira-token"), apiKeyGrant("own.example", "mine"), gitPATGrant("git.example", "jira-token")},
+		EligibleGrants:  []types.GrantSpec{apiKeyGrant("jira.example", "jira-token"), apiKeyGrant("own.example", "mine"), gitPATGrant("git.example", "jira-token")},
 		WorkspaceMounts: []types.WorkspaceMount{{Source: "/ops", Target: "/home/agent/ops"}, {Source: "/mine", Target: "/home/agent/work"}},
 	}
 	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral"}

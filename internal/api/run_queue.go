@@ -60,6 +60,7 @@ type queueStore interface {
 	StalePromotedRuns(ctx context.Context, staleAfter time.Duration) ([]types.AgentRun, error)
 	StartQueuedRun(ctx context.Context, id uuid.UUID, st store.QueueStart) (types.AgentRun, bool, error)
 	SetQueueWait(ctx context.Context, id uuid.UUID, detail string) error
+	SetHeldQueueWaits(ctx context.Context, poolID uuid.UUID, details map[uuid.UUID]string) error
 	SetPromotedStatusDetail(ctx context.Context, id uuid.UUID, detail string) error
 	RequeuePromotedRun(ctx context.Context, e store.RunQueueEntry, detail string) (bool, error)
 	ExitQueuedRun(ctx context.Context, id uuid.UUID, to types.RunState, detail, hint string) (bool, error)
@@ -78,8 +79,12 @@ type queuedLaunch struct {
 	// Request is the decoded, validated request before the fold changed it (a workspace's base image or
 	// repo seeded onto it, say), so the start folds it afresh as the owner.
 	Request json.RawMessage `json:"request"`
-	// ProfileID is the governance profile the owner resolved to at launch; nil for none.
+	// UnitID is the unit the owner's run context resolved to at launch; nil for the Default unit.
 	UnitID *uuid.UUID `json:"unit_id,omitempty"`
+	// RunIn and OwningUnits are the launch's context choice (contextChoice), re-stamped on the start
+	// so its resolve selects the context the launch did, and sameUnit compares like with like.
+	RunIn       uuid.UUID   `json:"run_in,omitzero"`
+	OwningUnits []uuid.UUID `json:"owning_units,omitempty"`
 	// ProviderID is the model provider the launch chose; the start re-resolves this one, never another.
 	ProviderID string `json:"provider_id,omitempty"`
 	// ConfinementDefault says who chose the class of a launch that named none (the organisation or the
@@ -102,6 +107,9 @@ type queuedLaunch struct {
 	// keep. A launch queued before they existed is held to neither.
 	Barrier types.ConfinementClass `json:"barrier,omitempty"`
 	Drives  bool                   `json:"drives,omitempty"`
+	// DriveRunner is the one runner every drive is bound to (drivesBoundRunner), nil for none: the
+	// verdict then keeps that runner of the person's own, as the start's fold does.
+	DriveRunner *uuid.UUID `json:"drive_runner,omitempty"`
 	// NoLocal says the launch waits on the pool's remote-hosted runners and cannot run on the person's
 	// own (runPlacement.noLocal): the verdict and the start then keep it off them.
 	NoLocal bool `json:"no_local,omitempty"`
@@ -282,7 +290,8 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		created = runs[0]
 	}
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+created.ID.String())
-	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings, ResourcesApplied: &q.f.place.applied})
+	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings,
+		WarningContext: s.warningContexts(ctx, q.f.ceiling, warnings), ResourcesApplied: &q.f.place.applied})
 }
 
 // waitReason is why the launch waits: it is scheduled for later, the pool is at its own cap, or (a pool
@@ -311,13 +320,16 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		Request: q.original, ProviderID: q.f.mpChoice.provider.ID, MaxWaitSec: waitSec, ConfinementDefault: q.f.confinementDefault,
 		Repos: runRepos(types.AgentRun{Repo: q.req.Repo}, nil), LifetimeCapSec: q.f.end.capSec,
 		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources, Unbound: q.f.place.unbound,
-		Barrier: q.f.enforced, Drives: mountsDrives(q.f.drives, q.f.keep), NoLocal: q.f.place.noLocal,
+		Barrier: q.f.enforced, Drives: mountsDrives(q.f.drives, q.f.keep), DriveRunner: drivesBoundRunner(q.f.drives, q.f.keep),
+		NoLocal: q.f.place.noLocal,
 	}
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
 	if q.f.ceiling.Unit != nil {
 		id := q.f.ceiling.Unit.ID
 		launch.UnitID = &id
 	}
+	choice := contextChoiceFrom(ctx)
+	launch.RunIn, launch.OwningUnits = choice.RunIn, choice.OwningUnits
 	raw, err := json.Marshal(launch)
 	if err != nil {
 		return store.RunQueueEntry{}, err
@@ -380,6 +392,7 @@ func (q queuedCreate) warnings(s *Server, r *http.Request, created types.AgentRu
 	warnings = append(warnings, s.repoSourceWarnings(ctx, created.ID, q.f.spec, q.req)...)
 	warnings = append(warnings, q.f.fitWarnings...)
 	warnings = append(warnings, q.f.end.warnings(created)...)
+	warnings = append(warnings, queuedServiceWarnings(created, q.f.ceiling.Limits.RunLimits, q.f.end)...)
 	warnings, _ = appendCredentialConfinementAdvisory(warnings, q.f.spec, q.f.enforced, q.f.modelCred.Kind)
 	return append(warnings, noModelAccessWarning(q.req, q.f.mpChoice)...)
 }
@@ -419,6 +432,7 @@ func (s *Server) exitQueued(ctx context.Context, runID uuid.UUID, to types.RunSt
 	if applied {
 		s.metrics.runTerminal(to)
 		s.runEvents.moved(runID, types.RunQueued, to)
+		s.dropUnstartedKeptDrive(ctx, runID)
 	}
 	return applied, nil
 }
@@ -431,6 +445,7 @@ func (s *Server) killQueuedTail(ctx context.Context, run types.AgentRun, killerT
 	maps.Copy(data, extra)
 	s.metrics.queueWait(queueOutcomeCancelled, s.cfg.Now().Sub(run.CreatedAt))
 	s.recordAudit(ctx, s.auditEvent(&run.ID, killerType, killer, "run.kill", run.ID.String(), "success", mustJSON(data)))
+	s.dropUnstartedKeptDrive(ctx, run.ID)
 	return map[string]any{}
 }
 
@@ -442,6 +457,7 @@ func (s *Server) auditPoolRemovalCancels(ctx context.Context, ids []uuid.UUID) {
 		s.runEvents.moved(id, types.RunQueued, types.RunKilled)
 		s.recordAudit(ctx, s.auditEvent(&id, types.ActorSystem, "wardynd", "run.kill", id.String(), "success",
 			mustJSON(map[string]any{"queued": true, "reason": string(types.RunEndRunnerPoolRemoved)})))
+		s.dropUnstartedKeptDrive(ctx, id)
 	}
 }
 

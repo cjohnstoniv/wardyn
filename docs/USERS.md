@@ -20,8 +20,16 @@ sandboxes inside the ceiling your admin set. There is nothing to install.
 - With `WARDYN_OIDC_SESSION_IDLE_TIMEOUT` set, a console tab left with no activity for that long is signed out, even before the session would otherwise lapse. The knob is in [ENV.md](ENV.md#wardyn_oidc_session_idle_timeout).
 - When it lapses you sign in again. A terminal you had open closes: the server re-checks it every 30 seconds, and a lapse or a cut ends it.
 - **Sign out** clears your cookie and ends every console session you have, in every browser. Your personal API tokens, SSH keys and runs keep working, except a console-launched run still waiting in a pool queue, which fails when it would start.
-- Signing out of Wardyn does not sign you out of your identity provider, nor the reverse: Wardyn has no front-channel logout, and back-channel logout is off unless your operator turned it on ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)). A session ends at expiry, at your sign-out, or when an admin, SCIM deprovisioning or that back-channel logout cuts it.
+- Signing out of Wardyn does not sign you out of your identity provider, nor the reverse: back- and front-channel logout are off unless your operator turned them on ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)). A session ends at expiry, at your sign-out, or when an admin, SCIM deprovisioning or one of those logouts cuts it.
 - A run's idle clock does not stop when your terminal closes. A lapse that closes your terminal leaves the run under its own idle and end limits, which [run lifetime](operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run) explains. A run with idle stop off never stops for inactivity.
+
+## Session lifetime
+
+- How long a console session lasts: your identity provider's ID token expiry, or `WARDYN_OIDC_SESSION_TTL` when your admin sets it. The account menu shows "Signed in until".
+- Why you may be asked to sign in sooner: an admin ended your session, your access changed (`WARDYN_ROLE_STAMP_TTL`), or your access was turned off. The sign-in screen says which.
+- What survives: the page you were on, open editors in that tab, a run's terminal and the run itself. Signing out leaves the run itself unaffected.
+- Shared computers: Sign out ends the Wardyn session only; sign out of your work account too.
+- Tabs: signing out or in in one tab updates the others in the same browser, not other browsers or devices.
 
 ## What you can and cannot do
 
@@ -346,16 +354,15 @@ resolves your drive the same way, in a dry run too:
     sandbox.
   - A Bedrock SSO sign-in is the one exception: the in-sandbox AWS SDK
     always derives short-lived AWS role credentials that stay resident in the
-    sandbox for the run.
-  - With `WARDYN_AWS_SSO_PROXY_INJECT=off` the SSO
-    access token itself is written into the sandbox too — see
+    sandbox for the run — see
     [../threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) ("Derived
-    AWS role credentials") and [ENV.md](ENV.md)
+    AWS role credentials").
+  - The SSO access token itself stays at the proxy; see [ENV.md](ENV.md)
     (`WARDYN_AWS_SSO_PROXY_INJECT`).
 
 ## Your model connections
 
-- Add your own credential for a provider from Your account ▸ Your model
+- Add your own credential for a provider from Settings ▸ Your model
   connections in the console.
 - One row per provider your admin enabled for your
   agents, each with its own sign-in or key button.

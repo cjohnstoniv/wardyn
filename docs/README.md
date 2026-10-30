@@ -3,7 +3,7 @@
 - Start at the repo [README](../README.md) — it, the in-product Getting Started wizard — with its built-in demo steps — is the first-run path.
 - Everything here is the next question.
 
-![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by policy and audit.](img/wardyn-walls.webp)
+![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by runs and audit.](img/wardyn-walls.webp)
 
 ![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and the proxy adds keys to outbound requests.](img/wardyn-places.webp)
 
@@ -28,6 +28,8 @@
 | Deploy to a Kubernetes cluster (Helm chart, quickstart, k8s runner substrate) | [../deploy/helm/wardyn/README.md](../deploy/helm/wardyn/README.md) |
 | Run a local daemon on each developer's managed laptop (MDM envelope, and its ceiling) | [DESKTOP.md](DESKTOP.md) + [../deploy/desktop/](../deploy/desktop/) |
 | Register a self-hosted runner on a laptop, and what it does while offline | [runner-registration.md](runner-registration.md), [runner-offline.md](runner-offline.md), [operations/hybrid-laptops.md](operations/hybrid-laptops.md) |
+| Offer Linux VM sandboxes (QEMU/KVM) from a Linux runner host: requirements, the `/dev/kvm` step, the guest image contract | [operations/linux-vm-sandboxes.md](operations/linux-vm-sandboxes.md) |
+| Offer macOS VM sandboxes from a company-managed Mac: requirements, the base image, memory and disk limits, the shared ledger | [operations/macos-vms.md](operations/macos-vms.md) |
 | Run the organisation's own runner in a Kubernetes cluster (Helm chart, enrolment, claim, trust class, failure modes) | [operations/k8s-runners.md](operations/k8s-runners.md) + [design/0.9/k8s-runnerd.md](design/0.9/k8s-runnerd.md) + the `wardyn-k8s-runner-setup` Claude Code skill |
 | Set up SSO (Entra ID / OIDC) and admin/member RBAC on a cluster install | [operations/who-gets-in.md](operations/who-gets-in.md) + the `wardyn-k8s-setup` Claude Code skill |
 | Give each person their own Azure DevOps access | [AZURE-DEVOPS.md](AZURE-DEVOPS.md) |
@@ -36,8 +38,12 @@
 | Narrow what a member's own run may reach — egress, secrets, images, agents, features | [operations/member-runs.md](operations/member-runs.md) + [operations/capabilities.md](operations/capabilities.md) |
 | Turn a governance write into a two-human decision, and work the approval queue | [operations/governance-writes.md](operations/governance-writes.md) |
 | Set the Wardyn boundary, the outermost layer of every run, super admins' included, and use break-glass | [operations/boundary.md](operations/boundary.md) |
+| Let a security admin's rule approve a service identity's held tool calls and first-use hosts | [operations/approval-rules.md](operations/approval-rules.md) |
 | Stop sharing the admin token — a token per person, and tokens for someone who never signs in | [operations/api-tokens.md](operations/api-tokens.md) |
 | Decide where runs go — runner pools, their limits and barriers, and the queue | [operations/runner-pools.md](operations/runner-pools.md) |
+| Run more than one wardynd replica, and see what a second replica still cannot do | [operations/high-availability.md](operations/high-availability.md) |
+| Keep a command running, with restarts and a health check | [SERVICES.md](SERVICES.md) |
+| Keep a run declared from a file or a WardynWorkload resource, and bind a namespace | [operations/workloads.md](operations/workloads.md) |
 | Give each person persistent storage, and reclaim it when they leave | [operations/user-drives.md](operations/user-drives.md) |
 | Offboard a person: sessions, tokens, keys, runs, credentials, workspaces, drives | [operations/ownership-and-offboarding.md](operations/ownership-and-offboarding.md) |
 | Write the organisation's provider policy — console, CLI or MDM | [operations/provider-policy.md](operations/provider-policy.md) |
@@ -47,8 +53,10 @@
 | See which exported functions have no test (`make test-gaps`) | [TEST-GAPS.md](TEST-GAPS.md) |
 | Run the live tests against real Entra/ADO/Bedrock | [LIVE-TESTS.md](LIVE-TESTS.md) |
 | Swap a component (identity, secret store, recording, substrate) | [PLUGGABILITY.md](PLUGGABILITY.md) |
+| Find the layers of the code, the interface each extension implements, and where a service or workload plugs in | [EXTENDING.md](EXTENDING.md) |
 | Write or edit a doc (form, size caps, links, visuals, the headings code quotes) | [STYLE.md](STYLE.md) |
 | Design or review a console screen (color budget, type rungs, elevation, status glyphs) | [design/CONSOLE-RULES.md](design/CONSOLE-RULES.md) |
+| Read a design note, and tell a current one from a record | [design/README.md](design/README.md) |
 | Understand the design, or contribute | [../ARCHITECTURE.md](../ARCHITECTURE.md), [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | Plan a change — issues, branches, pull requests, what "done" means | [../CONTRIBUTING.md](../CONTRIBUTING.md#branching-issues-and-pull-requests) |
 | Know how Wardyn is built — AI-written code, and the human-driven planning and review around it | [HOW-WARDYN-IS-BUILT.md](HOW-WARDYN-IS-BUILT.md) |

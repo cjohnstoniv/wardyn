@@ -182,3 +182,26 @@ func ceilingGrantsBounding(g types.GrantSpec, ceiling []types.GrantSpec) []types
 	}
 	return sameKind
 }
+
+// DuplicatePairing returns the first two entries of grants, by index, that are the same kind and name
+// the same stored-secret pairing (samePairing), ok=false when there are none. A ceiling listing one
+// pairing twice is answered by list order at runtime (clampGrants bounds against the first dominating
+// entry) but by any entry at write (GrantWithin), so the profile write refuses it. A kind with no
+// stored secret, or a scope that does not decode, names no pairing and is never a duplicate here.
+func DuplicatePairing(grants []types.GrantSpec) (first, second int, ok bool) {
+	for j, g := range grants {
+		want, covered, decoded := grantPairingOf(g)
+		if !covered || !decoded {
+			continue
+		}
+		for i, prior := range grants[:j] {
+			if prior.Kind != g.Kind {
+				continue
+			}
+			if got, c, d := grantPairingOf(prior); c && d && samePairing(got, want) {
+				return i, j, true
+			}
+		}
+	}
+	return 0, 0, false
+}

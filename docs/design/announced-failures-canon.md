@@ -32,7 +32,6 @@ only as a duplicate of the now-visible text, never as the sole explanation.
 | `setup-layout.tsx` — optional step's "Done with this one" (standing alone) (#497) | helper text under | the `refuseNext` reason |
 | `setup-layout.tsx` — required step's "Next" (standing alone) (#497) | helper text under, for a plain `refuseNext` refusal only; a `nextGate.blocked` reason already shows in the gate's head/reason row above | the `refuseNext` reason |
 | `phase-rail.tsx` — full rail step row (#497) | trailing meta (a line under the step's badge) | the `refuseNext` reason |
-| `phase-rail.tsx` — icon-only compact rail (#497) | **exception:** no room for a caption, so the reason joins the button's `sr-only` accessible name, and the `title` stays for a sighted mouse user (at `lg` this is the only rail rendered) | the `refuseNext` reason |
 
 ## Frozen strings
 

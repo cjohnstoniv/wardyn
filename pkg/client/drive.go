@@ -77,4 +77,7 @@ const (
 	MeDriveUnavailableNotInPool   = "not_in_pool"
 	// MeDriveUnavailablePlacementDenied: the caller's profile denies remote runs, and drives mount only there.
 	MeDriveUnavailablePlacementDenied = "placement_denied"
+	// MeDriveUnavailableBoundElsewhere: the pool holds only the caller's own runners, and the drive's second
+	// place is bound to a runner it does not hold.
+	MeDriveUnavailableBoundElsewhere = "bound_elsewhere"
 )

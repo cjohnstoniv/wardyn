@@ -18,8 +18,9 @@
 // A second origin is what keeps it out. Boot REFUSES a UI listen address equal
 // to the console's (cmd/wardynd, validateUISandboxConfig).
 //
-// The listener has exactly ONE authentication mechanism and never falls
-// through to the console's session cookie or admin bearer:
+// The listener authenticates a person ONE way, below, and never falls through
+// to the console's session cookie or admin bearer (a machine calling an inbound
+// app holds an inbound token instead, uigateway_inbound.go):
 //
 //	POST /runs/{id}/attach/ticket  (existing, run owner, single-use, 30s)
 //	  → POST <ui-origin>/__wardyn/bind (console fetch; binds the ticket to
@@ -155,6 +156,8 @@ func (s *Server) uiSandboxHealthz() map[string]any {
 		// refuses a ticket this browser did not bind first. Same {run}
 		// placeholder rule as enter_post_url in host mode.
 		"bind_url": s.uiBindURL(),
+		// inbound_url_template is where an API client calls an inbound app (uigateway_inbound.go).
+		"inbound_url_template": strings.TrimSuffix(s.uiEnterBaseURL(), uiEnterPath) + uiRunPrefix + "{run}/{app}/",
 	}
 }
 
@@ -297,7 +300,9 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// byte for byte; only the audit reason says which it was.
 	if !s.uiTicketBound(w, r, ticket) {
 		s.auditUIRefusedBounded(runID, app, map[string]any{"reason": "ticket not bound to this browser"})
-		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, "invalid, expired, or already-used attach ticket")
+		if !s.uiDesktopLinkRefused(w, r, runID, app) {
+			writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketInvalid, uiTicketInvalidMsg)
+		}
 		return
 	}
 	ta, v, err := s.redeemAttachTicket(r.Context(), ticket, runID)
@@ -310,7 +315,11 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 	if v != verdictOK {
-		s.refuseUITicket(w, runID, app, ta, v)
+		if v != verdictInvalid || !s.uiDesktopLinkRefused(w, r, runID, app) {
+			s.refuseUITicket(w, runID, app, ta, v)
+		} else {
+			s.auditUIRefusedBounded(runID, app, map[string]any{"reason": "invalid, expired, or already-used ticket"})
+		}
 		return
 	}
 
@@ -327,7 +336,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// runs humanOrAdminAuth, so the ticket's stamped role/principal is the only
 	// authorization signal, exactly as in handleAttachWS.
 	superAdmin := ta.role == oidc.RoleAdmin
-	if !s.mayEnterRunOrSponsor(r.Context(), run, ta.principal, superAdmin, ta.authorizedAt) {
+	if !s.uiTicketMayEnter(r.Context(), run, ta, app, superAdmin) { // a caller's ticket: inbound_ticket.go
 		if superAdmin {
 			s.refuseRunOwnerOnly(w, r.WithContext(withTicketActor(r.Context(), ta)), run)
 			return
@@ -337,8 +346,8 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketRunMismatch, "attach ticket does not authorize this run")
 		return
 	}
-	// After the ownership check (a foreign caller learns nothing), before any cookie.
-	if rf := backgroundOnlyRefusal(run, "web application gateway"); rf != nil {
+	// After the ownership check (a foreign caller learns nothing), before any cookie. An inbound app is a background run's one door.
+	if rf := backgroundOnlyRefusal(run, "web application gateway"); rf != nil && !s.uiAppIsInbound(r.Context(), runID, app) {
 		s.uiRefuseBackground(w, r, rf, runID, app, ta)
 		return
 	}
@@ -360,12 +369,18 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
+	if app == uiDesktopAppName {
+		s.uiEnterDesktop(w, r, run, ta, superAdmin, redirectStatus)
+		return
+	}
+
 	apps, err := s.effectiveUIApps(r.Context(), runID)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardynd: ui gateway policy lookup failed", "run_id", runID, "err", err)
 		writeErrorReason(w, http.StatusInternalServerError, reasonUIGatewayPolicyLookupFailed, "run policy lookup failed")
 		return
 	}
+	apps = s.withDesktopSigninApp(r.Context(), run, ta.principal, apps)
 	declared, found := types.UIApp{}, false
 	for _, a := range apps {
 		if a.Name == app {
@@ -380,47 +395,23 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
-	now := s.cfg.Now()
-	expires := ta.sessionExpiry(now, s.uiSessionTTL())
-	sess := uiSession{
-		Run: runID, App: declared.Name, Port: declared.Port,
-		Principal: ta.principal, Role: ta.role, Email: ta.email,
-		Expires: expires.Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), AuthorizedNs: int64(ta.authorizedAt.Nanosecond()), RevSeq: ta.revSeq, Via: ta.via, Service: sponsoredService(run),
+	sess := s.newUISession(run, ta, declared.Name, declared.Port, s.uiSessionTTL())
+	sess.Inbound = declared.Inbound
+	if sess.Caller = ta.caller; sess.Caller != "" {
+		sess.Service = "" // a caller enters as themselves, never as the sponsor of the run's service identity
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     uiCookieName,
-		Value:    s.encodeUISession(sess),
-		Path:     s.uiBasePath() + uiCookiePath(runID, declared.Name),
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-		Secure:   s.cfg.OIDCSecureCookies,
-		Expires:  expires,
-	})
-	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", declared.Name, "success",
-		ta.withVia(withSponsorEntry(run, map[string]any{"app": declared.Name, "port": declared.Port})))
-	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(runID, declared.Name)+declared.PathOrRoot(), redirectStatus)
-}
-
-// uiRunOrigin returns the host this run's apps must be served on in HOST mode
-// (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE), or "" in shared-origin path mode where
-// any host that reaches the listener is acceptable.
-func (s *Server) uiRunOrigin(runID uuid.UUID) string {
-	if s.cfg.UIOriginTemplate == "" {
-		return ""
+	data := map[string]any{"app": declared.Name, "port": declared.Port}
+	if sess.Caller != "" {
+		data["inbound"], data["caller"] = true, sess.Caller // the entry that admitted them, as their inbound.allow rows name it
 	}
-	origin := strings.ReplaceAll(s.cfg.UIOriginTemplate, "{run}", runID.String())
-	if i := strings.Index(origin, "://"); i >= 0 {
-		origin = origin[i+3:]
-	}
-	return strings.TrimSuffix(origin, "/")
+	s.startUISession(w, r, run, ta, sess, data, declared.PathOrRoot(), redirectStatus)
 }
 
 // relay
 
-// handleUIRelay serves /r/<run-id>/<app>/... — every request after the handoff.
-// The cookie is the ONLY credential accepted here: there is no fall-through to
-// the console's session or admin bearer, because the caller on this origin may
-// be sandbox-authored JavaScript.
+// handleUIRelay serves /r/<run-id>/<app>/... — every request after the handoff. The cookie is the
+// credential here, and an inbound token on an inbound app the one other (uigateway_inbound.go): there is
+// no fall-through to the console's session or admin bearer, because the caller may be sandbox-authored JavaScript.
 //
 // The session has to match BOTH segments. The run match is the origin-isolation
 // backstop for the browser's path-scoped cookie; the app match is the same
@@ -433,16 +424,31 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusNotFound, reasonUIGatewayNotFound, "not found on the Wardyn UI gateway (open an app from the run detail page)")
 		return
 	}
-	sess, ok := s.decodeUISession(r, s.cfg.Now())
-	if !ok || sess.Run != runID || sess.App != app {
-		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayNoSession, "no valid UI session for this run — open the app again from its run page")
+	if s.uiRelayAnsweredEarly(w, r, runID, app) { // an inbound token's request, or a cross-site one in host mode
 		return
 	}
+	if app == uiDesktopAppName {
+		s.handleDesktopRelay(w, r, runID)
+		return
+	}
+	sess, ok := s.decodeUISession(r, s.cfg.Now())
+	if !ok || sess.Run != runID || sess.App != app || sess.Desktop {
+		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayNoSession, uiNoSessionMsg)
+		return
+	}
+	s.relayUISession(w, r, sess)
+}
+
+// relayUISession serves one request of an authenticated session, a cookie's or an inbound token's.
+func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiSession) {
 	// Re-assert the human here as well as in uiDial, debounced: net/http dials
 	// only when its pool has nothing reusable, so most requests of a busy
 	// session never reach uiDial at all (uiReassertRelay).
 	if de := s.uiReassertRelay(r.Context(), sess); de != nil {
 		writeErrorReason(w, de.status, de.reason, de.msg)
+		return
+	}
+	if sess.Inbound && !s.admitInbound(w, r, sess) {
 		return
 	}
 	// Keep the run's idle clock alive for the life of the session, debounced
@@ -451,38 +457,18 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	// them.
 	// "" is never ruleSourceCredentialReauthTimeout: a human relaying UI traffic
 	// is always real presence, so this touch is never excluded.
-	if s.shouldTouch(runID, "") { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
-		_ = s.cfg.Store.TouchRun(r.Context(), runID)
+	if s.shouldTouch(sess.Run, "") { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
+		_ = s.cfg.Store.TouchRun(r.Context(), sess.Run)
 	}
 	ctx := context.WithValue(r.Context(), uiSessionCtxKey{}, sess)
 	if sess.Via != nil {
 		ctx = audit.WithDelegation(ctx, *sess.Via) // a thaw here, or in uiDial, names the portal (#1234)
 	}
 	// The same human is presence for the pause, and thaws a paused run.
-	_ = s.markPresent(ctx, runID, types.ActorHuman, sess.Principal, "presence")
+	_ = s.markPresent(ctx, sess.Run, uiActorType(sess), sess.Principal, "presence")
 	ctx = context.WithValue(ctx, uiDialErrCtxKey{}, &uiDialErrBox{})
 	s.serveUIRelay(w, r.WithContext(ctx))
 }
-
-// uiInterimWriter filters Set-Cookie on a 1xx (a 103 Early Hints, say). ReverseProxy copies an interim
-// response's headers straight onto the writer and never runs ModifyResponse for it, so without this
-// uiStripOutbound's rules would not apply to a sandbox's 1xx at all. Unwrap keeps flush and hijack
-// reachable through http.ResponseController.
-type uiInterimWriter struct{ http.ResponseWriter }
-
-func (w uiInterimWriter) WriteHeader(code int) {
-	if code >= 100 && code < 200 {
-		uiFilterSetCookie(w.Header())
-		w.Header().Del("Clear-Site-Data")
-	} else {
-		// ReverseProxy clears the header map after each 1xx, which takes the
-		// gateway's own Referrer-Policy with it; put it back on the final response.
-		w.Header().Set("Referrer-Policy", "no-referrer")
-	}
-	w.ResponseWriter.WriteHeader(code)
-}
-
-func (w uiInterimWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // uiReverseProxy builds the ONE shared reverse proxy (and its exec-lane
 // transport) on first use. Per-request state — which run, which port — rides
@@ -540,49 +526,16 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 	// The app sees a plain loopback Host, which is what it is bound to and what
 	// its own CSRF/host checks expect — never the run id we dial by.
 	pr.Out.Host = "localhost:" + strconv.Itoa(sess.Port)
-	uiStripInbound(pr.Out, s.cfg.UICookiePolicy)
-}
-
-// uiStripInbound is the sandbox-ward half of the header hygiene. Cookies are
-// not port-scoped, so a browser attaches EVERY wardyn_* cookie for this
-// hostname — including the console's session on a shared-host deployment — to
-// a request bound for sandbox-authored code. They come off here, along with
-// Authorization (same reason) and any ?ticket (single-use, but a ticket in an
-// app's access log is still a ticket in a log). Every other cookie is the
-// operator's policy (UICookiePolicy; the default forwards it).
-func uiStripInbound(out *http.Request, policy UICookiePolicy) {
-	out.Header.Del("Authorization")
-	out.Header.Del("Proxy-Authorization")
-	// Filtered off the RAW header, never rebuilt from out.Cookies(): net/http's
-	// parser silently DROPS any cookie whose value is not RFC-6265-valid (a
-	// space, a comma, a quote), so re-serialising through it ate a sandbox
-	// app's own non-conforming cookies as a side effect of stripping ours.
-	// This relay is supposed to be a pass-through for everything that is not
-	// a wardyn_* credential, so only those segments come off and the rest goes
-	// on to the app as it arrived.
-	if raw := strings.Join(out.Header.Values("Cookie"), "; "); raw != "" {
-		kept := make([]string, 0, strings.Count(raw, ";")+1)
-		for _, seg := range strings.Split(raw, ";") {
-			seg = strings.TrimSpace(seg)
-			// A segment with no '=' is a NAMELESS cookie (RFC 6265bis sends
-			// just its value), so it matches only what the policy says of "".
-			name, _, ok := strings.Cut(seg, "=")
-			if !ok {
-				name = ""
-			}
-			if seg != "" && policy.forwards(name) {
-				kept = append(kept, seg)
-			}
-		}
-		if len(kept) == 0 {
-			out.Header.Del("Cookie")
-		} else {
-			out.Header.Set("Cookie", strings.Join(kept, "; "))
-		}
+	// A request from the app's own page carries the gateway's origin, which is not that Host: an app that
+	// checks Origin against Host (code-server refuses its workbench's WebSocket so) would refuse its own
+	// page. That origin becomes the app's own; any other goes on as it came, for the app's check to judge.
+	if s.uiOwnOrigin(pr.In) {
+		pr.Out.Header.Set("Origin", "http://"+pr.Out.Host)
 	}
-	if q := out.URL.Query(); q.Has("ticket") {
-		q.Del("ticket")
-		out.URL.RawQuery = q.Encode()
+	uiStripInbound(pr.Out, s.cfg.UICookiePolicy)
+	uiCallerHeaders(pr.Out.Header, sess)
+	if uiDesktopApp(sess.App) {
+		pr.Out.Header.Del("Sec-WebSocket-Extensions") // compression would hide the RFB stream (uiFilterUpgrade)
 	}
 }
 
@@ -596,6 +549,12 @@ func (s *Server) uiStripOutbound(resp *http.Response) error {
 	resp.Header.Del("Clear-Site-Data")
 	if sess, ok := uiSessionFromContext(resp.Request.Context()); ok {
 		uiConfineServiceWorker(resp.Request, resp.Header, s.uiBasePath()+uiRelayPrefix(sess.Run, sess.App)+"/")
+		if resp.StatusCode == http.StatusSwitchingProtocols {
+			if err := s.uiFilterUpgrade(resp, sess); err != nil {
+				return err
+			}
+			s.watchInboundStream(resp)
+		}
 	} else {
 		resp.Header.Del("Service-Worker-Allowed")
 	}
@@ -773,7 +732,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	sess.SandboxRef = run.SandboxRef
 	s.markUIReasserted(sess, s.cfg.Now())
 	// A paused run is thawed before the execs below (run_pause.go).
-	if err := s.thawForExec(ctx, run, types.ActorHuman, sess.Principal, "presence"); err != nil {
+	if err := s.thawForExec(ctx, run, uiActorType(sess), sess.Principal, "presence"); err != nil {
 		return nil, uiFail(ctx, http.StatusBadGateway, reasonUIGatewayResumeFailed, "run is paused and could not be resumed; try again")
 	}
 
@@ -781,7 +740,16 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	if !ok {
 		return nil, uiFail(ctx, http.StatusServiceUnavailable, reasonUIGatewayConnCapReached, uiConnCapMsg)
 	}
+	if sess.App == desktopSigninApp {
+		return s.desktopSigninDial(ctx, run, sess, release)
+	}
+	stopSignIn, err := s.watchDesktopApp(ctx, run, sess)
+	if err != nil {
+		release()
+		return nil, err
+	}
 	if err := s.uiEnsureApp(ctx, run, sess); err != nil {
+		stopSignIn()
 		release()
 		return nil, err
 	}
@@ -790,8 +758,9 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 		Argv: []string{"socat", "-", fmt.Sprintf("TCP:127.0.0.1:%d", sess.Port)},
 	})
 	if err != nil {
+		stopSignIn()
 		release()
-		return nil, uiFail(ctx, http.StatusBadGateway, reasonUIGatewayExecFailed, uiExecFailMsg(ctx, "start ui relay exec", err))
+		return nil, uiExecFailure(ctx, reasonUIGatewayExecFailed, "start ui relay exec", err)
 	}
 
 	// Keepalive per connection, not per inbound request. handleUIRelay touches
@@ -818,48 +787,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 		release()
 		s.auditUISession(sess, "ui.close", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
 			map[string]any{"app": sess.App, "port": sess.Port, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())})
-	}}), nil
-}
-
-// uiConn is an execConn that releases its per-run slot and writes the ui.close
-// audit exactly once, whichever of net/http's read or write loop closes first.
-type uiConn struct {
-	*execConn
-	once    sync.Once
-	closeFn func()
-}
-
-func (c *uiConn) Close() error {
-	c.once.Do(c.closeFn)
-	return c.execConn.Close()
-}
-
-// acquireUIConn takes one of the run's connection slots, returning a release
-// func and whether a slot was available. Process-local, like every other
-// in-memory bound here (the single-replica control plane is a documented
-// constraint, docs/OPERATIONS.md).
-func (s *Server) acquireUIConn(runID uuid.UUID) (func(), bool) {
-	s.uiConnsMu.Lock()
-	defer s.uiConnsMu.Unlock()
-	if s.uiConns == nil {
-		s.uiConns = map[uuid.UUID]int{}
-	}
-	if s.uiConns[runID] >= maxUIConnsPerRun {
-		return nil, false
-	}
-	s.uiConns[runID]++
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			s.uiConnsMu.Lock()
-			defer s.uiConnsMu.Unlock()
-			if s.uiConns[runID] <= 1 {
-				delete(s.uiConns, runID)
-				return
-			}
-			s.uiConns[runID]--
-		})
-	}, true
+	}}, stopSignIn), nil
 }
 
 // on-demand launcher
@@ -890,11 +818,18 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 	defer cancel()
 
 	launcher := uiLauncherPrefix + sess.App
+	// A run with a boot seed (an application's startup command, #1994) brings
+	// its own app up: with no launcher, wait for the port before calling it
+	// missing, so an app still starting is not reported as one never shipped.
+	seedPolls := 0
+	if interactiveBootSeed(run.Interactive, run.Task) != "" {
+		seedPolls = uiEnsureWaitSecs * 2
+	}
 	exec, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
-		Argv: []string{"sh", "-c", uiLauncherScript(launcher, sess.Port)},
+		Argv: []string{"sh", "-c", uiLauncherScript(launcher, sess.Port, seedPolls)},
 	})
 	if err != nil {
-		return uiFail(ctx, http.StatusBadGateway, reasonUIGatewayLauncherExecFailed, uiExecFailMsg(ctx, "start ui app launcher", err))
+		return uiExecFailure(ctx, reasonUIGatewayLauncherExecFailed, "start ui app launcher", err)
 	}
 	// Both streams MUST be drained before Wait: they are unbuffered pipes off
 	// one demux goroutine (runner.ExecSession's contract), so an undrained byte
@@ -930,6 +865,14 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 		// missing-launcher error (docs/design/ui-sandboxes-prompt.md §7).
 		return uiFail(ctx, http.StatusBadGateway, reasonUIGatewayLauncherMissing,
 			"no UI launcher in this image: "+launcher+" not found")
+	case 6:
+		// An application run (WARDYN_APPLICATION_RUN, which the probe reads off
+		// the sandbox's own env) has no launcher to blame: its startup command
+		// is the app. The probe cannot tell a command that exited from one that
+		// has not started yet, so the sentence does not say which.
+		return uiFail(ctx, http.StatusBadGateway, reasonUIGatewayLauncherNotListening,
+			fmt.Sprintf("Nothing is listening on port %d yet. If the app's startup command has exited, "+
+				"it isn't restarted; its output is in the run's terminal.", sess.Port))
 	case 4:
 		s.auditUISession(sess, "ui.start", sess.App, "failure",
 			map[string]any{"app": sess.App, "port": sess.Port, "reason": "did not listen in time"})
@@ -949,11 +892,29 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 // ponytail: no setsid/nohup. The exec has no TTY, so there is no SIGHUP to
 // survive; the launched process is reparented to the sandbox's PID 1 and dies
 // with the sandbox — which is exactly the lifetime a relayed app should have.
-func uiLauncherScript(launcher string, port int) string {
+//
+// seedPolls is how many half-second polls a missing launcher waits for the
+// port before exit 3: 0 answers at once; a seeded run's startup command may
+// still be opening it, and if it does the answer is exit 0, nothing started.
+// Only a shell startup command is waited for: a harness prompt seed (the
+// sandbox's WARDYN_INTERACTIVE_START is agent, set from the run's interactive_start,
+// which the run row does not keep) starts no server, so it answers at once.
+// After the wait an application run (its env says so) answers 6, not 3.
+func uiLauncherScript(launcher string, port, seedPolls int) string {
 	return fmt.Sprintf(`p=%d
 b='%s'
 socat -u /dev/null "TCP:127.0.0.1:$p" >/dev/null 2>&1 && exit 0
-[ -x "$b" ] || exit 3
+if ! [ -x "$b" ]; then
+  [ "${WARDYN_INTERACTIVE_START:-}" = agent ] && exit 3
+  i=0
+  while [ "$i" -lt %d ]; do
+    sleep 0.5
+    socat -u /dev/null "TCP:127.0.0.1:$p" >/dev/null 2>&1 && exit 0
+    i=$((i+1))
+  done
+  [ "${WARDYN_APPLICATION_RUN:-}" = 1 ] && exit 6
+  exit 3
+fi
 "$b" >/dev/null 2>&1 </dev/null &
 i=0
 while [ "$i" -lt %d ]; do
@@ -962,7 +923,7 @@ while [ "$i" -lt %d ]; do
   i=$((i+1))
 done
 exit 4
-`, port, launcher, uiEnsureWaitSecs*2)
+`, port, launcher, seedPolls, uiEnsureWaitSecs*2)
 }
 
 func (s *Server) uiAppReady(key string) bool {

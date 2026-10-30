@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -37,15 +38,20 @@ import (
 // path) and `secret:<name>` / `egress:<host>` requirement NAMES, and a
 // BaseImageEntry the internal registry host and bootstrap URLs — topology and
 // credential-REF disclosure. Nothing member-facing consumes either route.
-func (s *Server) mountLibraryRoutes(r chi.Router, operatorOnly chi.Router) {
+//
+// The base-image routes sit on securityOps because a security admin registers, checks again and
+// deletes PREWRAPPED images; each handler refuses them every other kind (mayWriteBaseImageKind), and
+// their list carries prewrapped rows only, so the operator's registry coordinate stays withheld.
+func (s *Server) mountLibraryRoutes(r chi.Router, operatorOnly, securityOps chi.Router) {
 	operatorOnly.Get("/sources", s.handleListSources)
 	operatorOnly.Post("/sources", s.handleCreateSource)
 	operatorOnly.Get("/sources/{id}", s.handleGetSource)
 	operatorOnly.Post("/sources/{id}/scan", s.handleScanSource)
 	operatorOnly.Delete("/sources/{id}", s.handleDeleteSource)
-	operatorOnly.Get("/base-images", s.handleListBaseImages)
-	operatorOnly.Post("/base-images", s.handleCreateBaseImage)
-	operatorOnly.Delete("/base-images/{id}", s.handleDeleteBaseImage)
+	securityOps.Get("/base-images", s.handleListBaseImages)
+	securityOps.Post("/base-images", s.handleCreateBaseImage)
+	securityOps.Post("/base-images/{id}/check", s.handleCheckBaseImage)
+	securityOps.Delete("/base-images/{id}", s.handleDeleteBaseImage)
 }
 
 // canonicalSourceIdentity normalizes the identity triple the library dedupes
@@ -408,12 +414,16 @@ func overridesBySourceID(existing []types.WorkspaceAttachment) map[uuid.UUID]map
 	return out
 }
 
+// errPrewrappedNotRegistered: a workspace named a prewrapped image with no ready row.
+var errPrewrappedNotRegistered = errors.New("this prewrapped image is not registered and checked ready: register it under Images first")
+
 // upsertAndAttach turns a request's embedded sources + base image into the
 // three-tier shape: each dir/repo upserts into the shared library (dedupe on
 // canonical identity — the request "already configured this" case lands on the
 // existing entry, contract and all) and becomes an attachment carrying the
 // request's per-attachment target/writable/overrides; ephemerals stay inline.
-// A registry/custom/byo base image upserts into the catalog; "recommended"/nil
+// A registry/custom/byo base image upserts into the catalog, a prewrapped one
+// attaches its ready row (errPrewrappedNotRegistered otherwise); "recommended"/nil
 // yields a nil id — NULL is the derived-build marker.
 //
 // existing is the workspace's CURRENT attachments (nil for a new workspace); its
@@ -473,7 +483,13 @@ func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, 
 		})
 	}
 	var baseImageID *uuid.UUID
-	if baseImage != nil && baseImage.Kind != "" && baseImage.Kind != "recommended" {
+	prewrapped, err := s.readyPrewrappedBase(ctx, baseImage)
+	switch {
+	case err != nil:
+		return nil, nil, err
+	case prewrapped != nil:
+		baseImageID = &prewrapped.ID
+	case baseImage != nil && baseImage.Kind != "" && baseImage.Kind != "recommended":
 		row, err := s.cfg.Store.UpsertBaseImage(ctx, types.BaseImageEntry{
 			ID: uuid.New(), Kind: baseImage.Kind, Name: lastPathSegment(baseImage.Image, nil),
 			Image: baseImage.Image, Steps: baseImage.Steps,
@@ -486,4 +502,29 @@ func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, 
 		baseImageID = &id
 	}
 	return atts, baseImageID, nil
+}
+
+// readyPrewrappedBase is the ready prewrapped row a workspace's base image attaches to, never one it
+// creates: registration creates a prewrapped row and starts its check. A prewrapped base with no ready
+// row is errPrewrappedNotRegistered. Any other explicit kind naming the exact ref of a ready prewrapped
+// image attaches that row too, so the console's pinned-image field picks a registered image as is, and
+// naming one that is not ready is errPrewrappedNotRegistered too, never an ordinary image.
+func (s *Server) readyPrewrappedBase(ctx context.Context, b *types.WorkspaceBaseImage) (*types.BaseImageEntry, error) {
+	if b == nil || b.Kind == "" || b.Kind == "recommended" {
+		return nil, nil
+	}
+	if b.Kind != types.BaseImageKindPrewrapped && !prewrappedPinned(b.Image) {
+		return nil, nil
+	}
+	row, err := s.cfg.Store.GetBaseImageByRef(ctx, types.BaseImageKindPrewrapped, b.Image)
+	ready := err == nil && row.Check != nil && row.Check.Status == types.BaseImageCheckReady
+	switch {
+	case ready:
+		return &row, nil
+	case err != nil && !errors.Is(err, store.ErrNotFound):
+		return nil, err
+	case err == nil || b.Kind == types.BaseImageKindPrewrapped:
+		return nil, errPrewrappedNotRegistered
+	}
+	return nil, nil
 }

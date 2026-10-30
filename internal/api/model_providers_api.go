@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	mp412Stale        = "model providers changed since you loaded them — reload and retry"
+	mp412Stale        = "Model providers changed since you loaded them — reload and retry"
 	mp400StillDefault = "model_providers: %q is the default for %q — choose another default first"
 )
 
@@ -142,7 +142,7 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	assignModelProviderUIDs(block, existing.ModelProviders)
 	invalidated, err := s.purgeProviderCredentials(ctx, existing.ModelProviders, block)
 	if err != nil {
-		writeServerError(w, r, "purge model provider credentials", err)
+		writeServerError(w, r, modelProviderPurgeFailedMsg, err)
 		return
 	}
 	candidate := existing

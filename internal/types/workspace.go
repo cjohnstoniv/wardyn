@@ -236,6 +236,11 @@ type Workspace struct {
 	// set it, so a plain bool would ship a false "unavailable" elsewhere — the
 	// console's "absent means fall back" contract needs the omitted key.
 	AvailableToYou *bool `json:"available_to_you,omitempty"`
+	// OwningUnitID pins the workspace to a unit: a run on it runs in that unit's walls (B1). Read-only on
+	// the wire: written only by the scoped SetWorkspaceOwningUnit, never by UpdateWorkspace. OwningUnitName
+	// is the unit's name, joined at read.
+	OwningUnitID   *uuid.UUID `json:"owning_unit_id,omitempty"`
+	OwningUnitName string     `json:"owning_unit_name,omitempty"`
 }
 
 // Integration kinds. An integration is a BASE COMPONENT extended by kind: a

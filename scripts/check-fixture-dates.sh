@@ -57,14 +57,20 @@ literal_dates() {
 
 declare -A ALLOWLIST=(
   ["internal/api/uigateway_record_test.go"]=1 # injected clock only: srv.cfg.Now starts here and steps a second per call, never compared to the wall clock
-  ["internal/recording/rfb_test.go"]=3 # injected clock only: the recorder's clock starts here and the test advances it, never compared to the wall clock
+  ["internal/recording/rfb_test.go"]=4 # injected clock only: the recorder's clock starts here and the test advances it, never compared to the wall clock
+  ["cmd/wardyn-runnerd/doctor_status_test.go"]=2 # passthrough only: status.json's last-error time, echoed in the stage detail, never compared to the clock
+  ["ui/src/app/components/screens/run-detail/service-panel.test.tsx"]=2 # injected clock only: the panel is rendered at a fixed now and a lease end, both passed in, never compared to the wall clock
+  ["ui/src/app/components/wardyn/copy/run-service.test.ts"]=5 # injected clock only: agoText and serviceBadge read a fixed now passed in, never the wall clock
+  ["ui/src/app/components/screens/approvals-lists.test.tsx"]=4 # display only: two decided rows' requested and decided times
+  ["ui/src/app/components/screens/permissions.test.tsx"]=1 # display only: a deactivated person's deactivated_at
   ["ui/e2e/recording-level.spec.ts"]=4 # passthrough only: stubbed audit rows and a recording's started_at, rendered as given, never compared to the clock
-  ["ui/src/app/components/screens/run-detail/recording-tab.level.test.tsx"]=3 # passthrough only: audit rows' time and a gap's start/end, never compared to the clock
+  ["ui/src/app/components/screens/run-detail/recording-tab.level.test.tsx"]=24 # passthrough only: audit rows' time, a gap's start/end, a playback's started_at (also in the failed action-feed case) and the stopped-at time read from it, never compared to the clock
   ["cmd/wardyn-aws-sso/main_test.go"]=2
   ["cmd/wardyn/commands_test.go"]=6
   ["cmd/wardyn/runner_limits_test.go"]=2 # display only: runner list prints LastSeenAt as given, never compared to the clock
   ["cmd/wardyn/drive_test.go"]=1 # passthrough only: the member drive list's created_at, never compared to the clock
   ["cmd/wardyn/people_test.go"]=3 # display only: personDay formats LastSignedInAt, never compared to the clock
+  ["cmd/wardyn/folder_test.go"]=3 # display only: a bring-back's back.at, printed as a local time, never compared to the clock
   ["cmd/wardyn/policyio_test.go"]=2
   ["cmd/wardyn/siteconfig_test.go"]=4
   ["cmd/wardynd/login_stamp_test.go"]=1
@@ -189,9 +195,6 @@ declare -A ALLOWLIST=(
   ["ui/src/app/components/screens/new-run-flow/steps/shape/seed-loaders.test.ts"]=1 # passthrough: a launch intent's created_at, never compared to the clock
   ["ui/src/app/components/screens/templates/rename-template-dialog.test.tsx"]=1 # display only: a template's updated_at
   ["ui/src/app/components/screens/templates/templates-screen.test.tsx"]=1 # display only: a template's updated_at
-  # 0.10 W4d: scheduled runs (SCHED), kept/team drives (KEEP, TEAM) and runner health (RDIAG-B) tests. Each date is a fixed
-  # instant passed in as the clock (NOW, now) or as stubbed row data the code under test only echoes or compares to that
-  # injected clock; none is compared to the wall clock.
   # 0.10 W4d: the scheduled-runs (SCHED), kept and team drive (KEEP, TEAM) and runner-health (RDIAG-B) tests. Each date is a fixed
   # instant passed in as the clock (NOW, now) or stubbed row data the code under test only echoes or compares to that
   # injected clock; none is compared to the wall clock.
@@ -205,10 +208,21 @@ declare -A ALLOWLIST=(
   ["ui/src/app/components/screens/new-run-flow/launch/refusal-text.test.ts"]=2
   ["ui/src/app/components/screens/new-run-flow/steps/run/run-step.test.tsx"]=1
   ["ui/src/app/components/screens/run-detail-summary-header.test.tsx"]=1
-  ["ui/src/app/components/screens/runs/run-row.test.tsx"]=1
+  ["ui/src/app/components/screens/runs/run-row.test.tsx"]=3 # display only: a scheduled start and two end times, rendered as absolute dates, never compared to the clock
   ["ui/src/app/components/screens/runs/runs-model.test.ts"]=1
   ["ui/src/app/components/screens/runs/scheduled-state.test.ts"]=3
   ["ui/src/app/lib/schedule.test.ts"]=32
+  # 0.10 W4f: SESS-M12's signedInUntil tests pass a fixed instant in as the clock (now) and compare only to it.
+  ["ui/src/app/lib/session-continuity-copy.test.ts"]=3 # injected clock only: signedInUntil(at, now), never compared to the wall clock
+  # 0.10 MAC26: a sample AppKit stderr line whose timestamp is log text the prepare.log readers skip, never a time.
+  ["cmd/wardyn-runnerd/macos_vm_status_test.go"]=1
+  # 0.10 DESK-PLAYER: a recorded desktop's started_at and the chain check's from bound, fixed instants the replay and
+  # the range read only echo or offset from; audit rows' time is passthrough (partitions key on recorded_at). None is
+  # compared to the wall clock.
+  ["internal/api/recording_chain_test.go"]=8
+  ["internal/store/auditchain_range_pg_test.go"]=1
+  ["ui/e2e/desktop-replay.spec.ts"]=1
+  ["ui/src/app/lib/desktop-replay-timeline.test.ts"]=1
 )
 
 fail=0

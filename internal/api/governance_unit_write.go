@@ -5,10 +5,11 @@
 // (a whole ceiling) or composed (a base plus an overlay that can only narrow it, migration 0125).
 // Every write decides its row inside one store transaction under the profile-graph lock
 // (store.WriteGovernanceUnit), from the graph as that transaction reads it, so concurrent writes
-// cannot together make a cycle or a chain deeper than three.
+// cannot together make a cycle or a path deeper than the maximum unit depth.
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -43,10 +45,36 @@ type governanceUnitRequest struct {
 	ParentID      json.RawMessage        `json:"parent_id"`
 	Overlay       json.RawMessage        `json:"overlay"`
 	OverlayLimits json.RawMessage        `json:"overlay_limits"`
+	// Mode is own_walls or pass_through (the parent's walls exactly). Absent keeps the stored mode
+	// on a PUT and is own_walls on a POST.
+	Mode string `json:"mode,omitempty"`
+	// LockedKnobs replaces the unit's locks (governance_locks.go) when present; absent or null keeps
+	// them, so a client that does not know the field never unlocks a knob.
+	LockedKnobs *[]string `json:"locked_knobs,omitempty"`
+	// unitReadOnly takes the fields GET /governance returns that a write never sets, so a client can GET a
+	// unit, change one field and PUT the rest back. The path names the unit and the server stamps the
+	// rest, so each is ignored.
+	unitReadOnly
 
 	contact    *policyref.Contact
 	contactSet bool
 	comp       compositionRequest
+	// keepsSecrets: the write is served at the member tier, so keepSecretRefs puts back what that
+	// tier's read hid before the ceiling is judged in full.
+	keepsSecrets bool
+}
+
+// unitReadOnly is the server-set fields of a unit as GET /governance shows it (governanceUnitView).
+type unitReadOnly struct {
+	ID             json.RawMessage `json:"id,omitempty"`
+	CreatedAt      json.RawMessage `json:"created_at,omitempty"`
+	UpdatedAt      json.RawMessage `json:"updated_at,omitempty"`
+	CreatedBy      json.RawMessage `json:"created_by,omitempty"`
+	Kind           json.RawMessage `json:"kind,omitempty"`
+	Depth          json.RawMessage `json:"depth,omitempty"`
+	Effective      json.RawMessage `json:"effective,omitempty"`
+	People         json.RawMessage `json:"people,omitempty"`
+	PathProvenance json.RawMessage `json:"path_provenance,omitempty"`
 }
 
 // compositionRequest is the parsed composition members. Each pair is (set, value): not set keeps the
@@ -76,6 +104,13 @@ type governanceUnitResponse struct {
 type governanceUnitView struct {
 	types.GovernanceUnit
 	Effective governanceEffective `json:"effective"`
+	// People counts, on GET /governance, the membership subjects (a user, a group, a user type or
+	// everyone) in this unit or a unit below it. Absent for the Default unit, whose people hold no rows.
+	People *int `json:"people,omitempty"`
+	// PathProvenance is, on GET /governance only, POST /governance/check's path_provenance for a
+	// person homed in this unit (contextWalls). Absent on the unit write responses, to a caller below
+	// the security tier (a unit admin), and when the unit has no effective walls.
+	PathProvenance knobProvenance `json:"path_provenance,omitempty"`
 }
 
 // governanceEffective is a profile's composed content. Warnings and Error carry base-level detail
@@ -88,17 +123,18 @@ type governanceEffective struct {
 	Error    string                 `json:"error,omitempty"`
 }
 
-// newUnitView pairs a stored profile with its resolution for an admin response. The effective
-// ceiling goes through the same redaction the stored one does.
-func newUnitView(row types.GovernanceUnit, res *ResolvedUnit, err error) governanceUnitView {
-	row.Ceiling = redactSpecForRead(row.Ceiling, true)
+// newUnitView pairs a stored profile with its resolution for an admin response read at tier. The
+// effective ceiling and the overlay go through the same redaction the stored ceiling does.
+func newUnitView(row types.GovernanceUnit, res *ResolvedUnit, err error, tier specReadTier) governanceUnitView {
+	row.Ceiling = redactSpecForRead(row.Ceiling, tier)
+	row.Overlay = redactOverlayForRead(row.Overlay, tier)
 	v := governanceUnitView{GovernanceUnit: row}
 	switch {
 	case err != nil:
 		v.Effective.Error = adminResolveError(err)
 	case res != nil:
 		v.Effective = governanceEffective{
-			Ceiling: redactSpecForRead(res.Ceiling, true), Limits: res.Limits, Warnings: res.AdminWarnings,
+			Ceiling: redactSpecForRead(res.Ceiling, tier), Limits: res.Limits, Warnings: res.AdminWarnings,
 		}
 	}
 	return v
@@ -139,10 +175,17 @@ func writeRefusal(status int, reason, format string, args ...any) *unitWriteErro
 // (its policy is the overlay), and an older client sends it back unchanged. A standalone row's empty
 // ceiling is refused by buildGovernanceUnit, which knows which kind of row it is writing.
 func decodeGovernanceUnitRequest(w http.ResponseWriter, r *http.Request) (governanceUnitRequest, string) {
+	return decodeGovernanceUnitRequestKeeping(w, r, false)
+}
+
+// decodeGovernanceUnitRequestKeeping is decodeGovernanceUnitRequest for a write that, when keepsSecrets,
+// puts back the secret refs and names a member-tier read hid (keepSecretRefs).
+func decodeGovernanceUnitRequestKeeping(w http.ResponseWriter, r *http.Request, keepsSecrets bool) (governanceUnitRequest, string) {
 	var req governanceUnitRequest
 	if msg := decodeStrictMsg(w, r, &req); msg != "" {
 		return governanceUnitRequest{}, msg
 	}
+	req.keepsSecrets = keepsSecrets
 	return finishGovernanceUnitRequest(req)
 }
 
@@ -158,7 +201,14 @@ func finishGovernanceUnitRequest(req governanceUnitRequest) (governanceUnitReque
 		return governanceUnitRequest{}, "name is invalid"
 	}
 	if !reflect.DeepEqual(req.Ceiling, types.RunPolicySpec{}) {
-		if err := validateAuthoredPolicySpec(req.Ceiling); err != nil {
+		// A kept mount's sentinel source is not a path: buildGovernanceUnit puts the stored one back
+		// and judges the result. On a write that keeps secrets (keepSecretRefs), the same holds for a
+		// grant read without its secret ref and for a names count.
+		spec := withoutKeptMounts(req.Ceiling)
+		if req.keepsSecrets {
+			spec = withoutKeptSecrets(spec)
+		}
+		if err := validateAuthoredPolicySpec(spec); err != nil {
 			return governanceUnitRequest{}, "invalid ceiling: " + err.Error()
 		}
 	}
@@ -175,8 +225,14 @@ func finishGovernanceUnitRequest(req governanceUnitRequest) (governanceUnitReque
 	if req.contact, req.contactSet, contactMsg = parseProfileContact(req.Contact); contactMsg != "" {
 		return governanceUnitRequest{}, contactMsg
 	}
+	if req.Mode != "" && req.Mode != types.UnitModeOwnWalls && req.Mode != types.UnitModePassThrough {
+		return governanceUnitRequest{}, fmt.Sprintf("mode: %q is not a unit mode — use own_walls or pass_through", req.Mode)
+	}
 	return req, ""
 }
+
+// passThroughTopLevelMsg refuses a pass-through unit with no parent of its own.
+const passThroughTopLevelMsg = "A top-level unit that adds no limits would pass everything through; give it a parent or its own walls"
 
 // parseComposition reads the three composition members. A message is the 400
 // governance_overlay_invalid; the overlay is decoded strictly, so an unknown key is refused rather
@@ -219,6 +275,28 @@ func (req *governanceUnitRequest) parseComposition() string {
 	return ""
 }
 
+// writeUnit is store.WriteGovernanceUnit for a security caller, whose build is handed no transaction.
+func (s *Server) writeUnit(ctx context.Context, id uuid.UUID, build func(store.Querier) store.GovernanceUnitBuild) (types.GovernanceUnit, error) {
+	return s.cfg.Store.WriteGovernanceUnit(ctx, id, build(nil))
+}
+
+// unitWriteApplies reports whether a write build accepted applies without a second human: the
+// exemption (unitWriteExempt) judged on the assignments the write commits beside, and for a unit
+// admin's write, whose transaction q is handed in, no rename that changes whose legacy row wins
+// (unitRenameShiftQ, H3), since the unit it hands a person may be outside their units. A security
+// caller's write (q nil) is judged by the exemption alone.
+func (s *Server) unitWriteApplies(ctx context.Context, q store.Querier, all []types.GovernanceUnit, assignments []types.GovernanceMembership,
+	p types.GovernanceUnit, res *ResolvedUnit) (bool, error) {
+	if !s.unitWriteExempt(withGovernanceMemberships(ctx, assignments), all, p, res) {
+		return false, nil
+	}
+	if q == nil {
+		return true, nil
+	}
+	shift, err := unitRenameShiftQ(ctx, q, all, p.ID, p.Name)
+	return len(shift.activates)+len(shift.vacates) == 0, err
+}
+
 // writeGovernanceUnit is the shared body of POST and PUT: build the row under the graph lock,
 // persist, audit, and answer with the saved row plus warnings. id is the row to write (a fresh one
 // for POST, the path's for PUT) and status the success code.
@@ -227,11 +305,11 @@ func (req *governanceUnitRequest) parseComposition() string {
 // then, unless the build proves it narrowing (unitWriteExempt), held for approval instead of
 // stored: the same transaction that would have stored it is abandoned and the change is proposed.
 func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id uuid.UUID, status int) {
-	mode, ok := s.governanceWriteMode(w, r)
+	mode, ok := s.unitWriteMode(w, r)
 	if !ok {
 		return
 	}
-	req, msg := decodeGovernanceUnitRequest(w, r)
+	req, msg := decodeGovernanceUnitRequestKeeping(w, r, s.specReadTierFor(r.Context()) == specReadMember)
 	if msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, repoURLMsgReason(msg, reasonGovernanceUnitRequestInvalid), msg)
 		return
@@ -240,29 +318,76 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceOverlayInvalid, msg)
 		return
 	}
+	write, unitAdmin := s.writeUnit, s.isUnitAdminCaller(r.Context())
+	if unitAdmin {
+		if !s.unitWritePrecheck(w, r, id, status, req) {
+			return
+		}
+		write = s.writeUnitInScope
+	}
+	// The site-config lock: a PUT /site-config lowering governance_max_depth checks the deepest path
+	// and saves under it, so this write reads the limit and stores its path either wholly before or
+	// wholly after that change.
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		return
+	}
+	defer unlock()
+	limit, err := s.unitDepthLimit(r.Context())
+	if err != nil {
+		writeServerError(w, r, "write governance profile", err)
+		return
+	}
+	// The boundary's locks, read before the write's transaction: they bind only in hard_limits, and
+	// the boundary's walls meet every run whatever a unit states.
+	b, err := s.governanceBoundary(r.Context())
+	if err != nil {
+		writeServerError(w, r, "write governance profile", err)
+		return
+	}
 	var effective *ResolvedUnit
 	var held *heldUnitWrite
+	putCreates := false
 	createdBy := principalFromRequest(r)
-	saved, err := s.cfg.Store.WriteGovernanceUnit(r.Context(), id,
-		func(all []types.GovernanceUnit, assignments []types.GovernanceMembership) (types.GovernanceUnit, error) {
-			if refusal := s.unitPutCreateRefusal(r, id, status, all); refusal != nil {
+	heldReq := req
+	saved, err := write(r.Context(), id, func(q store.Querier) store.GovernanceUnitBuild {
+		return func(all []types.GovernanceUnit, assignments []types.GovernanceMembership) (types.GovernanceUnit, error) {
+			putCreates = unitPutCreatesAtID(id, status, all)
+			if refusal := s.unitPutCreateRefusal(putCreates); refusal != nil {
 				return types.GovernanceUnit{}, refusal
 			}
-			p, res, err := s.buildGovernanceUnit(createdBy, id, req, all)
+			kept, err := s.keepSecretRefs(r.Context(), id, req, all)
+			if err != nil {
+				return types.GovernanceUnit{}, err
+			}
+			heldReq = kept
+			p, res, keep, err := s.buildGovernanceUnit(createdBy, s.isOperator(r.Context()), id, kept, all, b, limit)
 			effective = res
-			exemptCtx := withGovernanceMemberships(r.Context(), assignments)
-			if err == nil && mode == govQueue && !s.unitWriteExempt(exemptCtx, all, p, res) {
-				held = &heldUnitWrite{all: all, row: p, res: res}
+			// A unit admin's new unit is empty, so it binds nobody and applies directly (DESIGN-TREE §5.2).
+			newUnit := !slices.ContainsFunc(all, func(x types.GovernanceUnit) bool { return x.ID == id })
+			if err != nil || mode != govQueue || (unitAdmin && newUnit) {
+				return p, err
+			}
+			applies, err := s.unitWriteApplies(r.Context(), q, all, assignments, p, res)
+			if err == nil && !applies {
+				held = &heldUnitWrite{all: all, row: p, res: res, keep: keep}
 				return p, errHoldForApproval
 			}
 			return p, err
-		})
+		}
+	})
 	if held != nil && errors.Is(err, errHoldForApproval) {
-		s.holdUnitWrite(w, r, id, req, *held)
+		s.holdUnitWrite(w, r, id, heldReq, *held)
 		return
 	}
 	var refusal *unitWriteError
+	var tier *mountTierRefusal
 	switch {
+	case s.answerOutsideScope(w, r, "governance.unit", err):
+		return
+	case errors.As(err, &tier):
+		s.refuse(w, r, tier.decision())
+		return
 	case errors.As(err, &refusal):
 		writeErrorReason(w, refusal.status, refusal.reason, refusal.msg)
 		return
@@ -274,8 +399,18 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeServerError(w, r, "write governance profile", err)
 		return
 	}
+	data := unitWriteAuditData(saved, effective)
+	if unitAdmin {
+		data = unitScopeAudit(data, r, s.auditUnitScope(r.Context(), saved.ID, false))
+	}
+	if putCreates {
+		// Only a PUT that created a profile is logged, and only now that the write stored it: a held, refused or
+		// failed write created nothing.
+		slog.InfoContext(r.Context(), "api: a PUT created a governance profile at the id it named; WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY would refuse it",
+			"unit_id", id.String())
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"governance.unit.write", saved.ID.String(), "success", mustJSON(unitWriteAuditData(saved, effective))))
+		"governance.unit.write", saved.ID.String(), "success", mustJSON(data)))
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindUnit, saved.ID.String(), "success", nil)
 	}
@@ -287,23 +422,24 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 	if posture := s.rubricPostureAdvisory(r.Context(), effective); posture != "" {
 		warns = append(warns, posture)
 	}
-	writeJSON(w, status, governanceUnitResponse{Unit: newUnitView(saved, effective, nil), Warnings: warns})
+	writeJSON(w, status, governanceUnitResponse{Unit: newUnitView(saved, effective, nil, s.specReadTierFor(r.Context())), Warnings: warns})
 }
 
-// unitPutCreateRefusal answers a PUT (status 200) naming an id no profile in all holds. A run keeps
-// the id of the profile it was created under, so a profile created at a deleted one's id would
-// govern that profile's runs: with Config.GovernanceUnitPutExistingOnly the PUT is a 404 and a
-// new profile comes through POST, which mints its id. Off, the create goes through and is logged.
-func (s *Server) unitPutCreateRefusal(r *http.Request, id uuid.UUID, status int, all []types.GovernanceUnit) *unitWriteError {
-	if status != http.StatusOK || slices.ContainsFunc(all, func(p types.GovernanceUnit) bool { return p.ID == id }) {
-		return nil
-	}
-	if s.cfg.GovernanceUnitPutExistingOnly {
+// unitPutCreatesAtID reports a PUT (status 200) naming an id no profile in all holds: it would create a
+// profile at the id it named.
+func unitPutCreatesAtID(id uuid.UUID, status int, all []types.GovernanceUnit) bool {
+	return status == http.StatusOK && !slices.ContainsFunc(all, func(p types.GovernanceUnit) bool { return p.ID == id })
+}
+
+// unitPutCreateRefusal answers a PUT that would create at the id it named. A run keeps the id of the
+// profile it was created under, so a profile created at a deleted one's id would govern that profile's
+// runs: by default the PUT is a 404 and a new profile comes through POST, which mints its id. With
+// Config.GovernanceUnitPutCreates the create goes through and is logged once it has stored.
+func (s *Server) unitPutCreateRefusal(creates bool) *unitWriteError {
+	if creates && !s.cfg.GovernanceUnitPutCreates {
 		return &unitWriteError{status: http.StatusNotFound, reason: reasonGovernanceUnitNotFoundByID,
 			msg: "governance profile not found; create a profile with POST /api/v1/governance/units"}
 	}
-	slog.InfoContext(r.Context(), "api: a PUT created a governance profile at the id it named; WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY would refuse it",
-		"unit_id", id.String())
 	return nil
 }
 
@@ -322,6 +458,7 @@ func unitWriteAuditData(saved types.GovernanceUnit, effective *ResolvedUnit) map
 		"contact_request_url":   contactURL,
 		"parent_id":             saved.ParentID,
 		"overlay_fields":        overlayFieldNames(saved),
+		"locked_knobs":          nonNilStrings(saved.LockedKnobs),
 	}
 }
 
@@ -378,32 +515,84 @@ func composedFrom(all []types.GovernanceUnit, id uuid.UUID, comp compositionRequ
 // buildGovernanceUnit decides the row one write stores and what it resolves to, from every
 // profile as the write transaction reads them (all). Anything it returns as *unitWriteError is a
 // refusal the caller can fix; the row is stored only if it returns nil.
-func (s *Server) buildGovernanceUnit(createdBy string, id uuid.UUID, req governanceUnitRequest, all []types.GovernanceUnit) (types.GovernanceUnit, *ResolvedUnit, error) {
-	p := types.GovernanceUnit{
+//
+// super is whether the request being served is a super admin's (isOperator): the proposer's at a
+// direct or held write, the approver's when a held write is applied. It decides what the mount guard
+// (governance_mount_keep.go) admits, and keep is what that guard decided.
+func (s *Server) buildGovernanceUnit(createdBy string, super bool, id uuid.UUID, req governanceUnitRequest,
+	all []types.GovernanceUnit, b types.Boundary, limit int) (p types.GovernanceUnit, res *ResolvedUnit, keep mountKeep, err error) {
+	if !super {
+		defer func() { err = scrubMountSources(err, s.mountSourcesOf(all)) }()
+	}
+	p = types.GovernanceUnit{
 		ID: id, Name: req.Name, CreatedBy: createdBy, Contact: req.contact, ContactSet: req.contactSet,
+		Mode: cmp.Or(req.Mode, storedUnitMode(all, id)), LockedKnobs: unitsByID(all)[id].LockedKnobs,
+	}
+	if p.LockedKnobs, err = requestLockedKnobs(req, p.LockedKnobs); err != nil {
+		return p, nil, keep, err
 	}
 	// UNIQUE(name) is judged here too, so a held create or rename is refused at proposal
 	// and not left pending to fail at every approval.
 	if slices.ContainsFunc(all, func(x types.GovernanceUnit) bool { return x.ID != id && x.Name == req.Name }) {
-		return p, nil, writeRefusal(http.StatusConflict, reasonGovernanceUnitNameConflict, "a governance profile named %q already exists", req.Name)
+		return p, nil, keep, writeRefusal(http.StatusConflict, reasonGovernanceUnitNameConflict, "a governance profile named %q already exists", req.Name)
 	}
 	base, overlay, limits := composedFrom(all, id, req.comp)
+	if base == nil && overlay != nil && slices.ContainsFunc(all, func(x types.GovernanceUnit) bool { return x.ID == store.DefaultUnitID }) {
+		// Built on the deployment default with no base named: the Default unit is that base, for a
+		// pass-through unit as for an own-walls one (the console sends no parent for either).
+		base = &store.DefaultUnitID
+	}
+	if p.Mode == types.UnitModePassThrough {
+		// Its parent's walls exactly: a parent of its own, and nothing it adds.
+		if base == nil {
+			return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceUnitRequestInvalid, passThroughTopLevelMsg)
+		}
+		if (overlay != nil && !reflect.DeepEqual(*overlay, types.CeilingOverlay{})) || (limits != nil && !reflect.DeepEqual(*limits, types.LimitsOverlay{})) {
+			return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
+				"a pass-through unit adds no limits of its own: send no overlay or overlay_limits, or make it own_walls")
+		}
+		overlay, limits = &types.CeilingOverlay{}, nil
+	}
 	switch {
 	case overlay == nil && base != nil:
-		return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "parent_id: a base needs an overlay (send overlay: {} for the base unchanged)")
+		return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "parent_id: a base needs an overlay (send overlay: {} for the base unchanged)")
 	case overlay == nil && limits != nil:
-		return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "overlay_limits: needs an overlay")
+		return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "overlay_limits: needs an overlay")
 	}
 	if overlay != nil {
 		if !reflect.DeepEqual(req.Ceiling, types.RunPolicySpec{}) || !reflect.DeepEqual(req.Limits, types.GovernanceLimits{}) {
-			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
+			return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
 				"a composed profile states its policy in overlay and overlay_limits: ceiling and limits must be empty")
+		}
+		// Only an overlay the request sent is judged: an absent one is the stored row's, unchanged.
+		if req.comp.overlaySet && overlay.WorkspaceMounts != nil {
+			// An empty host path is the author's 400 at every tier, judged before the keep step's tier
+			// refusal, as the ceiling's is at decode (finishGovernanceUnitRequest).
+			for i, m := range *overlay.WorkspaceMounts {
+				if m.Source == "" {
+					return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
+						"invalid overlay: workspace_mounts[%d]: mount source is empty", i)
+				}
+			}
+			out, held, sets, kerr := keepMounts("overlay.workspace_mounts", *overlay.WorkspaceMounts, s.storedOverlayMounts(all, id, base), super)
+			if kerr != nil {
+				return p, nil, keep, kerr
+			}
+			cp := *overlay
+			cp.WorkspaceMounts, overlay = &out, &cp
+			keep.overlay, keep.setsHostPath = &held, sets
 		}
 		p.ParentID, p.Overlay, p.OverlayLimits = base, overlay, limits
 	} else {
+		out, held, sets, kerr := keepMounts("ceiling.workspace_mounts", req.Ceiling.WorkspaceMounts, s.storedCeilingMounts(all, id), super)
+		if kerr != nil {
+			return p, nil, keep, kerr
+		}
+		req.Ceiling.WorkspaceMounts = out
+		keep.ceiling, keep.setsHostPath = held, sets
 		// A standalone row's ceiling is judged in full here, an empty one included (decode skips it).
 		if err := validateAuthoredPolicySpec(req.Ceiling); err != nil {
-			return p, nil, writeRefusal(http.StatusBadRequest, specRefusalReason(err, reasonGovernanceUnitRequestInvalid), "invalid ceiling: %v", err)
+			return p, nil, keep, writeRefusal(http.StatusBadRequest, specRefusalReason(err, reasonGovernanceUnitRequestInvalid), "invalid ceiling: %v", err)
 		}
 		// The structural bound (governance_grantbound.go). A profile may narrow the
 		// deployment's credential eligibility; it may never mint eligibility the
@@ -411,17 +600,52 @@ func (s *Server) buildGovernanceUnit(createdBy string, id uuid.UUID, req governa
 		// time because Config.DefaultPolicy is env-borne and a redeploy that drops
 		// a pairing must not leave old profiles serving it.
 		if err := governanceGrantsWithinCeiling(req.Ceiling.EligibleGrants, s.cfg.DefaultPolicy.EligibleGrants); err != nil {
-			return p, nil, writeRefusal(http.StatusBadRequest, reasonGovernanceCeilingInvalid, "invalid ceiling: %v", err)
+			return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceCeilingInvalid, "invalid ceiling: %v", err)
+		}
+		if err := ceilingDuplicatePairing(req.Ceiling.EligibleGrants); err != nil {
+			return p, nil, keep, writeRefusal(http.StatusBadRequest, reasonGovernanceCeilingInvalid, "invalid ceiling: %v", err)
 		}
 		p.Ceiling, p.Limits = req.Ceiling, req.Limits
 	}
-	return s.checkGraphWrite(p, all)
+	p, res, err = s.checkLockedGraphWrite(p, all, b, limit)
+	return p, res, keep, err
+}
+
+// requestLockedKnobs is the locks a unit write stores: the request's, normalized, when it sends them,
+// the stored row's otherwise.
+func requestLockedKnobs(req governanceUnitRequest, stored []string) ([]string, error) {
+	if req.LockedKnobs == nil {
+		return stored, nil
+	}
+	locks, msg := normalizeLockedKnobs(*req.LockedKnobs)
+	if msg != "" {
+		return stored, writeRefusal(http.StatusUnprocessableEntity, reasonGovernanceUnitRequestInvalid, "%s", msg)
+	}
+	return locks, nil
+}
+
+// checkLockedGraphWrite is checkGraphWrite, then the locks, which bind every writer, a narrowing
+// included (governance_locks.go).
+func (s *Server) checkLockedGraphWrite(p types.GovernanceUnit, all []types.GovernanceUnit, b types.Boundary, limit int) (types.GovernanceUnit, *ResolvedUnit, error) {
+	p, res, err := s.checkGraphWrite(p, all, limit)
+	if err != nil {
+		return p, res, err
+	}
+	return p, res, s.checkUnitLocks(p, res, all, b, limit)
+}
+
+// storedUnitMode is the mode of the stored row id, own_walls when there is none.
+func storedUnitMode(all []types.GovernanceUnit, id uuid.UUID) string {
+	if i := slices.IndexFunc(all, func(x types.GovernanceUnit) bool { return x.ID == id }); i >= 0 && all[i].Mode != "" {
+		return all[i].Mode
+	}
+	return types.UnitModeOwnWalls
 }
 
 // checkGraphWrite refuses a row that would break the graph and resolves it: its base must exist, no
-// chain through it may repeat or pass three profiles, an overlay may name nothing its base does not
+// path through it may repeat or be longer than limit, an overlay may name nothing its base does not
 // permit, and no descendant may be left with a policy nothing satisfies.
-func (s *Server) checkGraphWrite(p types.GovernanceUnit, all []types.GovernanceUnit) (types.GovernanceUnit, *ResolvedUnit, error) {
+func (s *Server) checkGraphWrite(p types.GovernanceUnit, all []types.GovernanceUnit, limit int) (types.GovernanceUnit, *ResolvedUnit, error) {
 	proposed := append(slices.DeleteFunc(slices.Clone(all), func(x types.GovernanceUnit) bool { return x.ID == p.ID }), p)
 	byID := unitsByID(proposed)
 	if p.ParentID != nil {
@@ -431,19 +655,19 @@ func (s *Server) checkGraphWrite(p types.GovernanceUnit, all []types.GovernanceU
 	}
 	descendants := descendantsOf(proposed, p.ID)
 	for _, row := range append([]types.GovernanceUnit{p}, descendants...) {
-		if _, err := chainFromRows(byID, row.ID); err != nil {
+		if _, err := chainFromRows(byID, row.ID, limit); err != nil {
 			switch {
 			case errors.Is(err, errUnitCycle):
 				return p, nil, writeRefusal(http.StatusConflict, reasonGovernanceUnitCycle,
 					"this change would make %q (through its base) its own base", row.Name)
 			case errors.Is(err, errUnitDepth):
 				return p, nil, writeRefusal(http.StatusConflict, reasonGovernanceUnitDepth,
-					"this change would put %q more than %d profiles deep", row.Name, maxUnitDepth)
+					"this change would put %q more than %d units deep, the maximum unit depth (governance_max_depth)", row.Name, limit)
 			}
 			return p, nil, err
 		}
 	}
-	chain, err := chainFromRows(byID, p.ID)
+	chain, err := chainFromRows(byID, p.ID, limit)
 	if err != nil {
 		return p, nil, err
 	}
@@ -457,7 +681,7 @@ func (s *Server) checkGraphWrite(p types.GovernanceUnit, all []types.GovernanceU
 		return p, nil, unsatisfiableWrite(err, p.Name)
 	}
 	for _, d := range descendants {
-		dchain, err := chainFromRows(byID, d.ID)
+		dchain, err := chainFromRows(byID, d.ID, limit)
 		if err == nil {
 			_, err = s.composeChain(dchain)
 		}
@@ -500,6 +724,9 @@ func (s *Server) checkOverlay(p types.GovernanceUnit, chain []types.GovernanceUn
 			if err := governanceGrantWithinCeiling(g, base.Ceiling.EligibleGrants); err != nil {
 				return writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "overlay.eligible_grants: %v", err)
 			}
+		}
+		if err := ceilingDuplicatePairing(*p.Overlay.EligibleGrants); err != nil {
+			return writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid, "overlay.eligible_grants: %v", err)
 		}
 	}
 	ov := overlayOf(p)
@@ -561,11 +788,11 @@ func (s *Server) handleCreateGovernanceUnit(w http.ResponseWriter, r *http.Reque
 // handleUpdateGovernanceUnit replaces the profile at {id} (200), rename
 // included — renaming has to work, because ON DELETE RESTRICT makes
 // delete-and-recreate impossible for a profile that is actually assigned. A PUT
-// naming an id no row holds creates it there, which is what PUT means.
+// naming an id no row holds is a 404 unless Config.GovernanceUnitPutCreates.
 // operatorOnly (routes.go).
 func (s *Server) handleUpdateGovernanceUnit(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "governance profile")
-	if !ok {
+	if !ok || refuseDefaultUnitWrite(w, id) {
 		return
 	}
 	s.writeGovernanceUnit(w, r, id, http.StatusOK)
@@ -582,12 +809,16 @@ func (s *Server) handleUpdateGovernanceUnit(w http.ResponseWriter, r *http.Reque
 // way, naming them, because deleting it would widen every child to the deployment. operatorOnly
 // (routes.go).
 func (s *Server) handleDeleteGovernanceUnit(w http.ResponseWriter, r *http.Request) {
-	mode, ok := s.governanceWriteMode(w, r)
+	mode, ok := s.unitWriteMode(w, r)
 	if !ok {
 		return
 	}
 	id, ok := parseIDParam(w, r, "id", "governance profile")
-	if !ok {
+	if !ok || refuseDefaultUnitWrite(w, id) {
+		return
+	}
+	if s.isUnitAdminCaller(r.Context()) {
+		s.deleteUnitInScope(w, r, id)
 		return
 	}
 	if mode == govQueue {
@@ -625,6 +856,27 @@ func (s *Server) handleDeleteGovernanceUnit(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// defaultUnitReadonlyMsg is the refusal of a write to the Default unit.
+const defaultUnitReadonlyMsg = "The Default unit is set by WARDYN_DEFAULT_POLICY; change that and redeploy"
+
+// defaultUnitWriteRefusal is the 409 for a write to id when id is the Default unit, else nil. Its walls
+// are the deployment default, read at resolve, so no stored write could change them.
+func defaultUnitWriteRefusal(id uuid.UUID) *unitWriteError {
+	if id != store.DefaultUnitID {
+		return nil
+	}
+	return writeRefusal(http.StatusConflict, reasonGovernanceUnitDefaultReadonly, "%s", defaultUnitReadonlyMsg)
+}
+
+// refuseDefaultUnitWrite writes defaultUnitWriteRefusal and reports true when there is one.
+func refuseDefaultUnitWrite(w http.ResponseWriter, id uuid.UUID) bool {
+	if e := defaultUnitWriteRefusal(id); e != nil {
+		writeErrorReason(w, e.status, e.reason, e.msg)
+		return true
+	}
+	return false
+}
+
 // writeUnitDeleteError answers a failed profile delete (or a dry run of one) and reports true, or
 // reports false for a nil error.
 func (s *Server) writeUnitDeleteError(w http.ResponseWriter, r *http.Request, err error) bool {
@@ -641,6 +893,11 @@ func (s *Server) writeUnitDeleteError(w http.ResponseWriter, r *http.Request, er
 				"(deleting it would silently widen them back to the deployment ceiling)", strings.Join(children.Names, ", ")))
 		return true
 	}
+	var pinned *store.ErrUnitPinned
+	if errors.As(err, &pinned) {
+		writeErrorReason(w, http.StatusConflict, reasonGovernanceUnitInUse, unitPinnedMsg(pinned))
+		return true
+	}
 	if errors.Is(err, store.ErrConflict) {
 		writeErrorReason(w, http.StatusConflict, reasonGovernanceUnitInUse,
 			"this governance profile is still assigned — delete its assignments first "+
@@ -649,4 +906,13 @@ func (s *Server) writeUnitDeleteError(w http.ResponseWriter, r *http.Request, er
 	}
 	writeServerError(w, r, "delete governance profile", err)
 	return true
+}
+
+// unitPinnedMsg is the 409 a unit delete gets while workspaces name it as their owning unit.
+func unitPinnedMsg(e *store.ErrUnitPinned) string {
+	names := "a workspace"
+	if len(e.Workspaces) > 0 {
+		names = "workspace(s) " + strings.Join(e.Workspaces, ", ")
+	}
+	return "this governance profile is pinned by " + names + "; unpin them first"
 }

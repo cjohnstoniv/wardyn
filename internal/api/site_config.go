@@ -327,7 +327,7 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 		return err
 	}
 	if err := cmp.Or(validateSignInHelp(cfg.SignInHelpText, cfg.SignInHelpURL), validatePolicyHelp(cfg.PolicyHelp), validateComponentSettings(cfg.Components),
-		validateSiteRecording(cfg.Recording)); err != nil {
+		validateSiteRecording(cfg.Recording), validGovernanceMaxDepth(cfg.GovernanceMaxDepth)); err != nil {
 		return err
 	}
 	// The workspace-provider block, when the body carries one: ONE validator for
@@ -523,7 +523,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
 	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help", "components",
-	"recording",
+	"recording", "governance_max_depth",
 }
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
@@ -539,8 +539,12 @@ var siteConfigFieldsAfter066 = []string{
 // A bare carry-forward would make them unclearable, which is why this keys on
 // the body's own keys rather than on emptiness: `{"internal_hosts": []}` and
 // `{"internal_hosts": null}` both MENTION the field and both clear it, exactly
-// as a client intends. Only silence is treated as silence.
+// as a client intends. Only silence is treated as silence. The exception is
+// governance_max_depth, a pointer: null and absent both keep the stored value, and 0 is the reset.
 func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.SiteConfig, present map[string]bool) {
+	if cfg.GovernanceMaxDepth == nil { // null or absent keeps it; 0 is the explicit reset
+		cfg.GovernanceMaxDepth = existing.GovernanceMaxDepth
+	}
 	if !present["upstream_proxy_no_proxy"] {
 		cfg.UpstreamProxyNoProxy = existing.UpstreamProxyNoProxy
 	}
@@ -702,9 +706,6 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
 		return
 	}
-	if s.refuseSiteRecordingWithoutStore(w, cfg.Recording) {
-		return
-	}
 	// The logo file (#1215) is read and checked BEFORE anything is written, so a
 	// bad file refuses the apply whole — after the shape rule above, and before
 	// the lock, since a read of the host filesystem has no business inside it.
@@ -717,6 +718,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// Integrations forward from its own read, below) against the three
 	// integration-write handlers' own RMWs on the same document
 	// (setup_integrations.go) — see handlePutIntegration's SEAM-1 comment.
+	defer s.revokeWithdrawnLocalPATs(r.Context()) // before the unlock below, so it runs after it
 	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
 	if !ok {
 		return
@@ -765,14 +767,12 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
-	// The egress baseline lowers grades, so it has a stricter writer than this door: the egress block
-	// and the set of baseline-marked internal hosts must come back as stored, whoever is asking.
-	carryForwardInternalHostMarks(&cfg, existing)
-	if msg := inlineBaselineRefusal(cfg, existing); msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigEgressViaOwnRoute, msg)
+	if !s.admitGovernanceMaxDepth(w, r, &cfg, existing) { // under the lock, after the carry-forward
 		return
 	}
-	cfg.Egress = existing.Egress
+	if !carryOwnRouteBlocks(w, &cfg, existing) {
+		return
+	}
 	// After the carry-forward: the roster's defaults are checked against the
 	// providers this document will actually hold, whichever side was named; the
 	// sign-in help link against the stored one (signInHelpURLHTTPS).
@@ -807,7 +807,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// same as PUT /model-providers, so it purges the same way, before the save.
 	invalidated, err := s.purgeProviderCredentials(r.Context(), existing.ModelProviders, cfg.ModelProviders)
 	if err != nil {
-		writeServerError(w, r, "purge model provider credentials", err)
+		writeServerError(w, r, modelProviderPurgeFailedMsg, err)
 		return
 	}
 	saved, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg)

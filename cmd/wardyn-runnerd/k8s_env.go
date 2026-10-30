@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,11 +33,13 @@ var k8sEnvRead = []string{
 	"WARDYN_RUNNERD_APISERVER_PEERS",
 	"WARDYN_RUNNERD_HARD_DENY_CIDRS",
 	"WARDYN_RUNNERD_POD_SELECTOR",
+	"WARDYN_RUNNERD_WORKLOAD_NAMESPACES",
 	archEnv,
 	"WARDYN_CONFINEMENT_MAP",
 	"WARDYN_K8S_READ_NODES",
 	"WARDYN_K8S_IMAGE_PULL_SECRET",
 	"WARDYN_K8S_SANDBOX_PLACEMENT",
+	"WARDYN_RUNNER_LINUX_VM",
 }
 
 // k8sEnv is the parsed chart settings.
@@ -47,6 +50,10 @@ type k8sEnv struct {
 	apiserverPeers, hardDenyCIDRs     []string
 	podSelector                       map[string]string
 	confinement                       map[types.ConfinementClass]string
+	linuxVM                           bool // WARDYN_RUNNER_LINUX_VM=1: offer Linux VM sandboxes as CC3 pods
+	// workloadNamespaces are the namespaces watched for WardynWorkload resources (design T3 §2.5);
+	// none leaves the workload path off.
+	workloadNamespaces []string
 }
 
 // readK8sEnv parses environ (os.Environ's form). Every value is checked: a malformed or missing
@@ -106,6 +113,11 @@ func readK8sEnv(environ []string) (k8sEnv, error) {
 			e.hardDenyCIDRs = append(e.hardDenyCIDRs, p.String())
 		}
 	}
+	if v, ok := env["WARDYN_RUNNERD_WORKLOAD_NAMESPACES"]; ok {
+		if e.workloadNamespaces, err = parseWorkloadNamespaces(v); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if err := json.Unmarshal([]byte(env["WARDYN_RUNNERD_POD_SELECTOR"]), &e.podSelector); err != nil || len(e.podSelector) == 0 {
 		errs = append(errs, fmt.Errorf("WARDYN_RUNNERD_POD_SELECTOR: want a JSON object of runnerd's pod labels, got %q", env["WARDYN_RUNNERD_POD_SELECTOR"]))
 	}
@@ -117,10 +129,36 @@ func readK8sEnv(environ []string) (k8sEnv, error) {
 	if e.confinement, err = parseConfinementMap(env["WARDYN_CONFINEMENT_MAP"]); err != nil {
 		errs = append(errs, err)
 	}
+	switch v := env["WARDYN_RUNNER_LINUX_VM"]; v {
+	case "", "1":
+		e.linuxVM = v == "1"
+	default:
+		errs = append(errs, fmt.Errorf("WARDYN_RUNNER_LINUX_VM: want 1 or unset, got %q", v))
+	}
 	if err := errors.Join(errs...); err != nil {
 		return k8sEnv{}, fmt.Errorf("runner k8s settings: %w", err)
 	}
 	return e, nil
+}
+
+// workloadNamespaceLabel is a Kubernetes namespace name, which the workload wire also requires.
+var workloadNamespaceLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+
+// parseWorkloadNamespaces reads WARDYN_RUNNERD_WORKLOAD_NAMESPACES, the chart's comma-separated
+// workloads.namespaces. A set value names each namespace once; an empty entry is refused, not dropped.
+func parseWorkloadNamespaces(v string) ([]string, error) {
+	var out []string
+	for _, ns := range strings.Split(v, ",") {
+		ns = strings.TrimSpace(ns)
+		switch {
+		case !workloadNamespaceLabel.MatchString(ns):
+			return nil, fmt.Errorf("WARDYN_RUNNERD_WORKLOAD_NAMESPACES: want comma-separated namespace names, got %q", v)
+		case slices.Contains(out, ns):
+			return nil, fmt.Errorf("WARDYN_RUNNERD_WORKLOAD_NAMESPACES: %q is named twice", ns)
+		}
+		out = append(out, ns)
+	}
+	return out, nil
 }
 
 // apiserverPeerCIDRs reads apiServer.peers (a JSON list of NetworkPolicyPeer) into the CIDRs the
@@ -176,6 +214,22 @@ func parseConfinementMap(s string) (map[types.ConfinementClass]string, error) {
 	return out, nil
 }
 
+// checkRunsNamespaces checks --runs-namespace against runnerd's own namespace (design T5 §2.7): each
+// is named once and none is runnerd's own, where a run pod could name runnerd's ServiceAccount.
+func checkRunsNamespaces(runs []string, ownNS string) error {
+	seen := map[string]bool{}
+	for _, ns := range runs {
+		switch {
+		case ns == "" || ownNS == "" || ns == ownNS:
+			return fmt.Errorf("--runs-namespace %q must be a dedicated namespace, not runnerd's own (%q)", ns, ownNS)
+		case seen[ns]:
+			return fmt.Errorf("--runs-namespace %q is given twice", ns)
+		}
+		seen[ns] = true
+	}
+	return nil
+}
+
 // k8sServeFlags are the serve flags only a k8s runnerd takes.
 var k8sServeFlags = []string{"runs-namespace", "relay-service", "arch", "max-pod-lifetime"}
 
@@ -183,6 +237,12 @@ var k8sServeFlags = []string{"runs-namespace", "relay-service", "arch", "max-pod
 func checkSubstrateFlags(substrate string, changed func(string) bool) error {
 	if substrate != "folders" && changed("folder-root") {
 		return errors.New("--folder-root applies only to --substrate=folders")
+	}
+	if substrate != "docker" && changed("drive-root") {
+		return errors.New("--drive-root applies only to --substrate=docker")
+	}
+	if substrate != "docker" && changed("local-model-port") {
+		return errors.New("--local-model-port applies only to --substrate=docker")
 	}
 	switch substrate {
 	case "folders":

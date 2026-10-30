@@ -6,6 +6,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -807,5 +808,131 @@ func TestPG_RunnerActions_DeferredStopProxyIsNeverReissued(t *testing.T) {
 	}
 	if has, _ := f.st.RunHasPendingRunnerAction(ctx, run.ID); !has {
 		t.Fatal("the deferred obligation stopped fencing")
+	}
+}
+
+// The lease sweep re-asserts a kept run's stop every pass: once the runner has answered that exact
+// binding, a re-assert returns the answered action and queues nothing. A new loss, or a successful
+// recovery since (even at the same ref, generation and loss), queues.
+func TestPG_RunnerActions_AnsweredActionIsNotRequeued(t *testing.T) {
+	f := newActionFixture(t)
+	ctx := t.Context()
+	run := f.run(t)
+	gen := f.issue(t, run)
+	run = f.lose(t, run)
+	answer := func(a types.RunnerPendingAction) {
+		t.Helper()
+		if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, a.ID, types.RunnerActionSuccess, "", time.Now(), prepareSpoolTest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, kind := range []types.RunnerActionKind{types.RunnerActionStopProxy, types.RunnerActionEnd} {
+		first := f.mustQueue(t, f.action(run, kind, gen))
+		answer(first)
+		for range 3 {
+			again, queued, err := f.st.QueueRunnerAction(ctx, f.action(run, kind, gen))
+			if err != nil || queued || again.ID != first.ID {
+				t.Fatalf("%s re-asserted after its answer: queued=%v id=%s err=%v", kind, queued, again.ID, err)
+			}
+		}
+		if n := f.count(t, `SELECT count(*) FROM runner_pending_actions WHERE run_id=$1 AND kind=$2`, run.ID, string(kind)); n != 1 {
+			t.Fatalf("%d %s rows, want the one answered", n, kind)
+		}
+	}
+
+	if _, err := f.pool.Exec(ctx, `UPDATE agent_runs SET lost_at = lost_at + interval '1 minute' WHERE id=$1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	relost, err := f.st.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer(f.mustQueue(t, f.action(relost, types.RunnerActionStopProxy, gen)))
+
+	// A successful recovery reopens what the answered stops closed, at the same ref and generation:
+	// the stop obligation it renews queues again, for the same loss as for a new one.
+	if _, err := f.pool.Exec(ctx, `INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref, binding_version, owner, execution_generation, proof, applied_at, outcome, observed_at)
+		VALUES ($1,$2,$3,'recover_containment',$4,1,$5,$6,'{}'::jsonb,now(),'success',now())`,
+		uuid.New(), f.rn.ID, run.ID, run.SandboxRef, f.rn.Owner, gen); err != nil {
+		t.Fatal(err)
+	}
+	renewed := f.mustQueue(t, f.action(relost, types.RunnerActionStopProxy, gen))
+	answer(renewed)
+	if again, queued, err := f.st.QueueRunnerAction(ctx, f.action(relost, types.RunnerActionStopProxy, gen)); err != nil || queued || again.ID != renewed.ID {
+		t.Fatalf("the renewed stop re-asserted after its answer: queued=%v id=%s err=%v", queued, again.ID, err)
+	}
+	f.mustQueue(t, f.action(run, types.RunnerActionEnd, gen))
+}
+
+// A run's lease checks read its action history by run, not the table: every earlier index is partial on
+// the open or unsettled rows, and a run that ended leaves applied rows those cannot serve.
+func TestPG_RunnerActions_RunReadsUseTheRunIndex(t *testing.T) {
+	f := newActionFixture(t)
+	ctx := t.Context()
+	run := f.run(t)
+	if _, err := f.pool.Exec(ctx, `
+		INSERT INTO agent_runs (id, created_at, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
+		SELECT gen_random_uuid(), now(), 'history', 'claude-code', 'o/r', 'CC2', 'COMPLETED', 'spiffe://x/' || g, 'docker'
+		FROM generate_series(1, 10000) g`); err != nil {
+		t.Fatalf("seed runs: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx, `
+		INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref, binding_version, owner, applied_at, outcome, observed_at)
+		SELECT gen_random_uuid(), $1, r.id, k, 'ref', 1, 'o', now(), 'success', now()
+		FROM agent_runs r, unnest(ARRAY['kill', 'end']) k WHERE r.created_by = 'history'`, f.rn.ID); err != nil {
+		t.Fatalf("seed actions: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx, `ANALYZE runner_pending_actions`); err != nil {
+		t.Fatal(err)
+	}
+	for name, call := range map[string]func(store.PG){
+		"RunHeldContainedOnRunner": func(st store.PG) { _, _ = st.RunHeldContainedOnRunner(ctx, run.ID) },
+		"LastRunnerTeardown":       func(st store.PG) { _, _, _, _ = st.LastRunnerTeardown(ctx, run.ID, run.SandboxRef) },
+	} {
+		plan := planOfCall(t, ctx, f.pool, call)
+		t.Logf("%s plan:\n%s", name, plan)
+		if strings.Contains(plan, "Seq Scan on runner_pending_actions") || !strings.Contains(plan, "runner_pending_actions_run_kind_queued") {
+			t.Errorf("%s does not use runner_pending_actions_run_kind_queued:\n%s", name, plan)
+		}
+	}
+}
+
+// A teardown the runner applied before a successful recovery stopped an execution the recovery reopened,
+// so it is no proof of a later stop; one applied after the recovery is.
+func TestPG_RunnerActions_LastTeardownIgnoresOneBeforeARecovery(t *testing.T) {
+	f := newActionFixture(t)
+	ctx := t.Context()
+	run := f.run(t)
+	gen := f.issue(t, run)
+	observed := time.Now().Add(-time.Minute)
+	end := f.mustQueue(t, f.action(run, types.RunnerActionEnd, gen))
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, end.ID, types.RunnerActionSuccess, "", observed, prepareSpoolTest); err != nil {
+		t.Fatal(err)
+	}
+	last := func() (types.RunnerActionKind, bool) {
+		t.Helper()
+		kind, outcome, answered, err := f.st.LastRunnerTeardown(ctx, run.ID, run.SandboxRef)
+		if err != nil || (answered && outcome != types.RunnerActionSuccess) {
+			t.Fatalf("last teardown = %q %q %v", kind, outcome, err)
+		}
+		return kind, answered
+	}
+	if kind, ok := last(); !ok || kind != types.RunnerActionEnd {
+		t.Fatalf("before any recovery: %q answered=%v, want the end", kind, ok)
+	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref, binding_version, owner, execution_generation, proof, applied_at, outcome, observed_at)
+		VALUES ($1,$2,$3,'recover_containment',$4,1,$5,$6,'{}'::jsonb,now(),'success',now())`,
+		uuid.New(), f.rn.ID, run.ID, run.SandboxRef, f.rn.Owner, gen); err != nil {
+		t.Fatal(err)
+	}
+	if kind, ok := last(); ok {
+		t.Fatalf("after a recovery: the earlier %q still answers", kind)
+	}
+	kill := f.mustQueue(t, f.action(run, types.RunnerActionKill, gen))
+	if _, _, err := f.st.RecordRunnerActionResult(ctx, f.rn.ID, run.ID, kill.ID, types.RunnerActionSuccess, "", observed, prepareSpoolTest); err != nil {
+		t.Fatal(err)
+	}
+	if kind, ok := last(); !ok || kind != types.RunnerActionKill {
+		t.Fatalf("after the recovery: %q answered=%v, want the later kill", kind, ok)
 	}
 }

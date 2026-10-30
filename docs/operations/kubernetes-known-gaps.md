@@ -31,7 +31,7 @@ flowchart LR
 | 🟡 No k8s ground-truth correlator | The Tetragon host-sensor → ground-truth pipeline ([`cmd/wardynd/gt_rotator.go`](../../cmd/wardynd/gt_rotator.go), `wardyn-tetragon-ingest`, the `groundtruth` Compose profile) has no k8s-substrate equivalent. | A k8s deployment gets the NetworkPolicy-enforced boundary (proven live by the boot-time egress canary) but not the independent kernel-level corroboration Compose + Tetragon provides. |
 | ⛔ A pre-existing default-deny NetworkPolicy in `k8s.runsNamespace` refuses boot outright | Unless the canary pod actually ran and could not connect — see "The boot-time egress canary" below | |
 | 🟡 The proxy's DNS rule covers only `kube-dns` pods in `kube-system` | The per-run proxy NetworkPolicy admits DNS to its address range (cloud-metadata address excluded) and to pods labelled `k8s-app=kube-dns` in `kube-system` ([`internal/runner/k8s/sandbox.go`](../../internal/runner/k8s/sandbox.go)). | GKE Cloud DNS, NodeLocal DNSCache on the host network and DNS outside `kube-system` (OpenShift) need an operator-supplied NetworkPolicy. |
-| 🟡 `replicas` stays 1 on k8s unless `ha.enabled` is set | HA is supported on Kubernetes only. See [High availability](../OPERATIONS.md#high-availability) for what the replicas share, what stays per replica (caps multiply by the replica count) and the residual risks | |
+| 🟡 `replicas` stays 1 on k8s unless `ha.enabled` is set | HA is supported on Kubernetes only. See [High availability](../OPERATIONS.md#high-availability) for what the replicas share, what stays per replica (caps multiply by the replica count) and the residual risks. With registered runners keep one replica: [what a second replica still hits](high-availability.md) | |
 
 
 ## The proxy's DNS peer

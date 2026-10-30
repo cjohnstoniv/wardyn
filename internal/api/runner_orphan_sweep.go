@@ -7,11 +7,18 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
+
+// readySweepRetries are the waits before each further pass of the READY sweep. A pass can fail for a
+// reason that clears in minutes: the call or a run read erring, or a candidate the runner holds until
+// its pod is proven stopped, which the runner reports as the pass's error. Without a retry the next
+// chance was the cadence sweep, an undispatchedGrace later.
+var readySweepRetries = []time.Duration{10 * time.Second, 30 * time.Second, 90 * time.Second}
 
 // sweepRunnerOrphansOnReady sweeps one runner's orphans the moment its session is READY, so a run
 // whose create died with runnerd (its proxy pod left Running, renewing against a run token the org
@@ -22,7 +29,29 @@ import (
 // flight on this runner across a reconnect, which only the cadence sweep's age gate may judge. The
 // runs are read only after the runner lists its candidates, so any run whose objects it listed was
 // already inserted: "no row" is a leak, never a run created after the read.
-func (s *Server) sweepRunnerOrphansOnReady(ctx context.Context, runnerID uuid.UUID, sub SandboxOrphanSweeper) {
+//
+// A pass that errs is tried again after each of waits, while ctx lives and sameSession holds. A retry
+// only repeats the call: a held candidate meets the runner's own proof-of-stop hold on every pass and
+// goes only once the runner has that proof. Every pass logs one line, swept=0 included.
+func (s *Server) sweepRunnerOrphansOnReady(ctx context.Context, runnerID uuid.UUID, sub SandboxOrphanSweeper, sameSession func() bool, waits []time.Duration) {
+	for attempt := 0; ; attempt++ {
+		if !s.sweepRunnerOrphansOnce(ctx, runnerID, sub, attempt+1) || attempt == len(waits) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(waits[attempt]):
+		}
+		if ctx.Err() != nil || !sameSession() {
+			return
+		}
+	}
+}
+
+// sweepRunnerOrphansOnce is one pass of the READY sweep. It reports whether the pass failed, the
+// sweep call or a run read, and so is worth another.
+func (s *Server) sweepRunnerOrphansOnce(ctx context.Context, runnerID uuid.UUID, sub SandboxOrphanSweeper, attempt int) bool {
 	var loadErr error
 	isOrphan := func(runID uuid.UUID) bool {
 		run, err := s.cfg.Store.GetRun(ctx, runID)
@@ -36,13 +65,17 @@ func (s *Server) sweepRunnerOrphansOnReady(ctx context.Context, runnerID uuid.UU
 		return isTerminalRunState(run.State)
 	}
 	swept, err := sub.SweepOrphanedSandboxes(ctx, 0, isOrphan)
-	if loadErr != nil {
-		slog.WarnContext(ctx, "wardynd: runner orphan sweep on reconnect: read run", slog.String("runner_id", runnerID.String()), slog.Any("err", loadErr))
+	attrs := []any{slog.String("runner_id", runnerID.String()), slog.Int("attempt", attempt), slog.Int("swept", swept)}
+	if err == nil && loadErr == nil {
+		slog.InfoContext(ctx, "wardynd: runner orphan sweep on reconnect", attrs...)
+		return false
 	}
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: runner orphan sweep on reconnect", slog.String("runner_id", runnerID.String()), slog.Any("err", err))
+		attrs = append(attrs, slog.Any("err", err))
 	}
-	if swept > 0 {
-		slog.InfoContext(ctx, "wardynd: runner orphan sweep on reconnect", slog.String("runner_id", runnerID.String()), slog.Int("swept", swept))
+	if loadErr != nil {
+		attrs = append(attrs, slog.Any("read_run_err", loadErr))
 	}
+	slog.WarnContext(ctx, "wardynd: runner orphan sweep on reconnect", attrs...)
+	return true
 }

@@ -151,6 +151,14 @@ describe("ApprovalsScreen — the Azure DevOps capability card", () => {
     expect(screen.getByText(ADO.TOOL_CALL_NOTE)).toBeInTheDocument();
   });
 
+  // #2859: the note runs the column's width, like the header description above it; no 72-character cap.
+  it("lets the tool_call note use the column's width", async () => {
+    mockRow = escalationRow;
+    renderScreen(false, false, "dana@acme.example");
+    await screen.findByTestId("ado-capability-card");
+    expect(screen.getByText(ADO.TOOL_CALL_NOTE).className).not.toMatch(/max-w-/);
+  });
+
   // #458 — the toast on a successful decide comes from the shared canon
   // module, not a hand-typed literal.
   it("#458: approving toasts the canon APPROVALS.TOAST_APPROVED", async () => {

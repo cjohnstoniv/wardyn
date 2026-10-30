@@ -199,6 +199,55 @@ func TestApprovalFreshApprovedServedFromCache(t *testing.T) {
 	}
 }
 
+// Held siblings of one approval that expires all report approval:expired. The first to take the lock forgets the
+// host's entry; the rest used to find it gone and answer "pending", though their own poll had said it ended.
+func TestResolveWaitHeldSiblingsAllReportExpired(t *testing.T) {
+	saved := holdPollInterval
+	holdPollInterval = 5 * time.Millisecond
+	defer func() { holdPollInterval = saved }()
+
+	apID := uuid.New()
+	release := make(chan struct{})
+	var polls atomic.Int32
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: apID, State: types.ApprovalPending})
+			return
+		}
+		polls.Add(1)
+		<-release // every held connection has polled before any answer lands
+		_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: apID, State: types.ApprovalExpired})
+	}))
+	defer cp.Close()
+
+	const holders = 3
+	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
+	ap.configureHold(types.FirstUseWaitForReview, 5*time.Second, holders+1)
+	results := make(chan resolveResult, holders)
+	for i := 0; i < holders; i++ {
+		go func() { results <- ap.ResolveWait(context.Background(), "egress.test") }()
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for polls.Load() < holders {
+		if time.Now().After(deadline) {
+			close(release)
+			t.Fatalf("only %d of %d holders polled the approval", polls.Load(), holders)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	close(release)
+	for i := 0; i < holders; i++ {
+		if res := <-results; res.State != apExpired || res.ApprovalID != apID {
+			t.Errorf("holder %d answered %+v, want apExpired naming %s", i, res, apID)
+		}
+		// What the decision log records for that answer.
+		if got := approvalPendingReason(apExpired); got != "approval:expired" {
+			t.Errorf("an expired approval logs %q, want approval:expired", got)
+		}
+	}
+}
+
 // TestResolveWaitHold covers wait_for_review: the proxy HOLDS the connection
 // until the approval is decided or the hold deadline passes, failing CLOSED on
 // timeout/saturation (never to allow) and leaving the approval PENDING for a

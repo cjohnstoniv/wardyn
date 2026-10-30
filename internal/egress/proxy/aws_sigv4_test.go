@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -128,6 +129,27 @@ func TestAWSSigV4Scope(t *testing.T) {
 		"amazonaws.com":                                   "",
 		"bedrock-runtime.us-east-1.amazonaws.com.cn":      "",
 		"example.com":                                     "",
+		// Bedrock PrivateLink: the endpoint id, then AWS's generated token and any zone.
+		"vpce-0123456789abcdef0-lj2wisx3.bedrock-runtime.us-east-1.vpce.amazonaws.com":            "bedrock us-east-1",
+		"vpce-0123456789abcdef0-lj2wisx3-us-east-1a.bedrock-runtime.us-east-1.vpce.amazonaws.com": "bedrock us-east-1",
+		"vpce-0123456789abcdef0.bedrock-agent-runtime.eu-west-1.vpce.amazonaws.com":               "bedrock eu-west-1",
+		"vpce-1a2b3c4d.bedrock.us-west-2.vpce.amazonaws.com":                                      "bedrock us-west-2",
+		"VPCE-0123456789ABCDEF0.Bedrock-Runtime.US-EAST-1.vpce.amazonaws.com.":                    "bedrock us-east-1",
+		// A customer's endpoint service, another service, S3, and every malformed shape stay off.
+		"vpce-0123456789abcdef0-lj2wisx3.vpce-svc-0123456789abcdef0.us-east-1.vpce.amazonaws.com": "",
+		"vpce-0123456789abcdef0.sts.us-east-1.vpce.amazonaws.com":                                 "",
+		"vpce-0123456789abcdef0.s3.us-east-1.vpce.amazonaws.com":                                  "",
+		"bucket.vpce-0123456789abcdef0.s3.us-east-1.vpce.amazonaws.com":                           "",
+		"x.vpce-0123456789abcdef0.bedrock-runtime.us-east-1.vpce.amazonaws.com":                   "",
+		"vpce-0123456789abcdef0-bedrock-runtime.us-east-1.vpce.amazonaws.com":                     "",
+		"vpce-0123456789abcdef0.bedrock-runtime-fips.us-east-1.vpce.amazonaws.com":                "",
+		"vpce-0123456789abcdef0.bedrock-runtime.us-east-1.vpce.amazonaws.com.cn":                  "",
+		"vpce-*.bedrock-runtime.us-east-1.vpce.amazonaws.com":                                     "",
+		"vpce-0123456789abcdef0--x.bedrock-runtime.us-east-1.vpce.amazonaws.com":                  "",
+		"vpce-0123.bedrock-runtime.us-east-1.vpce.amazonaws.com":                                  "",
+		"vpce-0123456789abcdef0.bedrock-runtime.vpce.amazonaws.com":                               "",
+		"bedrock-runtime.us-east-1.vpce.amazonaws.com":                                            "",
+		"vpce-0123456789abcdef0.bedrock-runtime.us-gov-west-1.vpce.amazonaws.com":                 "",
 	} {
 		service, region, ok := AWSSigV4Scope(host)
 		got := ""
@@ -154,10 +176,11 @@ const (
 	sigv4STSLondon  = "sts.eu-west-2.amazonaws.com"
 	sigv4STSFIPS    = "sts-fips.us-east-1.amazonaws.com"
 	sigv4IAM        = "iam.amazonaws.com"
+	sigv4BedrockPL  = "vpce-0123456789abcdef0-lj2wisx3.bedrock-runtime.eu-west-1.vpce.amazonaws.com"
 )
 
 // sigv4Hosts are the hosts the harness's run re-signs on.
-var sigv4Hosts = []string{sigv4Bedrock, sigv4S3, sigv4STS, sigv4STSLondon, sigv4STSFIPS, sigv4IAM}
+var sigv4Hosts = []string{sigv4Bedrock, sigv4S3, sigv4STS, sigv4STSLondon, sigv4STSFIPS, sigv4IAM, sigv4BedrockPL}
 
 // sigv4Arrival is one request as the fake AWS service read it.
 type sigv4Arrival struct {
@@ -403,6 +426,15 @@ func TestAWSSigV4_ReSignsAllowedRequests(t *testing.T) {
 			t.Fatalf("no %s allow row: %s", ruleSourceAWSSigV4, log)
 		}
 	})
+	t.Run("bedrock PrivateLink endpoint signed for its own host and region", func(t *testing.T) {
+		h := newSigV4Harness(t)
+		rec := h.send(t, sandboxRequest(t, "POST", sigv4BedrockPL, "/model/m/converse", `{}`,
+			map[string]string{"Content-Type": "application/json"}, "", "bedrock", "eu-west-1", ""), sigv4BedrockPL)
+		a := h.mustReSign(t, rec, "bedrock")
+		if a.host != sigv4BedrockPL || !strings.Contains(a.header.Get("Authorization"), "/eu-west-1/bedrock/aws4_request") {
+			t.Fatalf("AWS saw host %q Authorization %q, want the endpoint host and its eu-west-1 bedrock scope", a.host, a.header.Get("Authorization"))
+		}
+	})
 	t.Run("bedrock response stream relayed", func(t *testing.T) {
 		h := newSigV4Harness(t)
 		h.respond = func(w http.ResponseWriter, _ *http.Request) {
@@ -608,6 +640,16 @@ func TestAWSSigV4_ConfigValidation(t *testing.T) {
 	}
 }
 
+// IAM is guarded by a read-only allow list: exactly these action prefixes, compared with their case.
+func TestAWSSigV4_IAMReadPrefixes(t *testing.T) {
+	if got, want := awsSigV4ActionGuards["iam"].reads, []string{"Get", "List", "Simulate", "Generate"}; !slices.Equal(got, want) {
+		t.Fatalf("iam read prefixes = %v, want %v", got, want)
+	}
+	if g := awsSigV4ActionGuards["iam"]; g.allow != nil {
+		t.Fatalf("iam guard carries an exact allow list %v; it is judged by its read prefixes only", g.allow)
+	}
+}
+
 // STS and IAM are judged on the one Action they run, read from the query and the plain form
 // body together, never from a header, an encoded body or one of several Actions.
 func TestAWSSigV4_GuardsQueryProtocolActions(t *testing.T) {
@@ -637,7 +679,9 @@ func TestAWSSigV4_GuardsQueryProtocolActions(t *testing.T) {
 		{"sts GetCallerIdentity in the body", req{"POST", sigv4STSLondon, "/", "Action=GetCallerIdentity&Version=2011-06-15", form, "sts", "eu-west-2", false, ""}, "sts"},
 		{"sts-fips GetCallerIdentity", req{"POST", sigv4STSFIPS, "/", "Action=GetCallerIdentity&Version=2011-06-15", form, "sts", "us-east-1", false, ""}, "sts"},
 		{"iam ListUsers", req{"POST", sigv4IAM, "/", "Action=ListUsers&Version=2010-05-08", form, "iam", "us-east-1", false, ""}, "iam"},
-		{"iam TagUser with member keys", req{"POST", sigv4IAM, "/", "Action=TagUser&UserName=u&Tags.member.1.Key=team&Tags.member.1.Value=a_b-c&Version=2010-05-08", form, "iam", "us-east-1", false, ""}, "iam"},
+		{"iam GetUser", req{"GET", sigv4IAM, "/?Action=GetUser&UserName=u&Version=2010-05-08", "", nil, "iam", "us-east-1", false, ""}, "iam"},
+		{"iam SimulatePrincipalPolicy with member keys", req{"POST", sigv4IAM, "/", "Action=SimulatePrincipalPolicy&PolicySourceArn=arn&ActionNames.member.1=s3%3AGetObject&Version=2010-05-08", form, "iam", "us-east-1", false, ""}, "iam"},
+		{"iam GenerateCredentialReport", req{"POST", sigv4IAM, "/", "Action=GenerateCredentialReport&Version=2010-05-08", form, "iam", "us-east-1", false, ""}, "iam"},
 	}
 	for _, tc := range allowed {
 		t.Run(tc.name, func(t *testing.T) {
@@ -706,7 +750,10 @@ func TestAWSSigV4_GuardsQueryProtocolActions(t *testing.T) {
 			name, code string
 			r          req
 		}{"a key with a tab", awsSigV4Action, req{"POST", sigv4IAM, "/?Action=ListUsers", "Act%09ion=CreateAccessKey&UserName=u", form, "iam", "us-east-1", false, ""}})
-	for _, action := range []string{"ResetServiceSpecificCredential", "UploadSSHPublicKey", "UploadSigningCertificate"} {
+	// Every IAM write, not only the ones that mint a credential directly: each can make one for some
+	// principal. A read prefix under another case is not a read.
+	for _, action := range []string{"ResetServiceSpecificCredential", "UploadSSHPublicKey", "UploadSigningCertificate",
+		"TagUser", "AttachRolePolicy", "PutRolePolicy", "UpdateAssumeRolePolicy", "CreateRole", "AddUserToGroup", "getUser", "LISTUsers"} {
 		refused = append(refused,
 			struct {
 				name, code string

@@ -58,6 +58,8 @@ func (s *Server) routes() chi.Router {
 		if s.cfg.OIDC.BackchannelLogoutEnabled() {
 			r.Post("/auth/backchannel-logout", s.backchannelLogout())
 		}
+		// Its front-channel twin, absent unless WARDYN_OIDC_FRONTCHANNEL_LOGOUT is on (signin_denied.go).
+		s.mountFrontchannelLogout(r)
 	}
 
 	// SCIM Users (scim_users.go): its own bearer, outside /api/v1 and every human gate.
@@ -100,14 +102,15 @@ func (s *Server) routes() chi.Router {
 			//   adminRoutes            (this file)  one per group, plus
 			//       mountUserTypeRoutes (user_types.go) securityOps, and
 			//       mountKeyDomainRoutes (key_domains.go) securityOps
-			//   mountLibraryRoutes     (sources.go) operatorOnly (+ member reads on r)
+			//   mountLibraryRoutes     (sources.go) operatorOnly; /base-images securityOps,
+			//       prewrapped rows only for a security admin (+ member reads on r)
 			//   mountSetupMutationRoutes            operatorOnly
 			//   mountAccessRoutes      (access.go)  operatorOnly
-			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps,
-			//       despite naming its parameter operatorOnly; read the call site
+			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps
+			//       and r: promotion on securityOps, the rest behind requireUnitScope
 			//   mountUserDriveFamily   (user_drives_reclaim.go) — wraps
-			//       mountUserDriveRoutes (user_drives.go) split: 4 operatorOnly,
-			//       3 securityOps (issue #168) + the destroy verb, operatorOnly
+			//       mountUserDriveRoutes (user_drives.go) split: 3 operatorOnly,
+			//       4 securityOps (issue #168, and the list in #2827) + the destroy verb, operatorOnly
 			//   mountWorkspaceProviderRoutes        operatorOnly
 			//       (workspace_providers.go)
 			//   mountAgentProviderRoutes            operatorOnly
@@ -159,8 +162,9 @@ func (s *Server) routes() chi.Router {
 			// comment.
 			//
 			// WHY THE OPERATOR-TOPOLOGY READS ARE NOT HERE. GET /site-config,
-			// /sources, /sources/{id} and /base-images are operatorOnly, not
-			// securityOps. The tier argument for widening them is real — a security
+			// /sources and /sources/{id} are operatorOnly, not securityOps, and
+			// GET /base-images, which is here so a security admin can register a
+			// prewrapped image, serves that tier the prewrapped rows only. The tier argument for widening them is real — a security
 			// admin holds the org allow/denylist, so scm_hosts is arguably theirs —
 			// but it does not survive what those documents actually carry: an
 			// upstream-proxy PASSWORD ref, a database-password requirement key, and
@@ -171,21 +175,22 @@ func (s *Server) routes() chi.Router {
 			// carries a proxy password — and such an endpoint has no caller today, so
 			// it is not built on spec.
 			//
-			// One rule, and it is not "these four routes". The tier does not reach
+			// One rule, and it is not "these routes". The tier does not reach
 			// the host axis — local_dir paths, the operator's registry coordinate,
-			// stored secret NAMES — on ANY route, and there are two ways for a route
-			// to honour that. These four stay narrowed because they serve whole
-			// operator documents nobody projects. GET
-			// /workspaces{,/{id},/build,/observed-egress} instead WITHHOLD that axis
-			// per reader (helpers.go's workspaceReadSecurity: paths and
-			// base_image.image blanked, the secret:/write: requirement keys and the
-			// scanned profile's host keys dropped) while keeping the EGRESS axis,
-			// which is the input to the decision this tier is widened to make.
+			// stored secret NAMES — on ANY route, and there are three ways for a route
+			// to honour that. These three stay narrowed because they serve whole
+			// operator documents nobody projects. GET /base-images serves the tier
+			// only the prewrapped rows, the one kind it registers itself. GET
+			// /workspaces{,/{id},/build,/observed-egress} and /workloads{,/{name}} instead WITHHOLD that
+			// axis per reader (helpers.go's workspaceReadSecurity: paths and base_image.image blanked,
+			// the secret:/write: requirement keys and the scanned profile's host keys dropped; for a
+			// workload, redactWorkloadIntentForRead) while keeping the EGRESS axis, which is the input
+			// to the decision this tier is widened to make.
 			//
 			// Said here because the asymmetry is what a reader notices first: a
 			// security_admin is answered 403 by /sources and 200 by
 			// /workspaces/{id} on what looks like the same datum, and the
-			// tempting resolution — widen these four to match — is the wrong
+			// tempting resolution — widen these three to match — is the wrong
 			// one. The workspace read is not wider; it is projected. Pinned
 			// field by field by TestSecurityAdminForeignWorkspaceFieldByField
 			// (security_admin_workspace_read_test.go), and this paragraph is
@@ -215,6 +220,11 @@ func (s *Server) routes() chi.Router {
 			s.mountRunLeaseRoutes(r)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
 			r.Get("/runs/{id}/policy", s.handleGetRunPolicy) // owner or admin; not on the delegation list
+			// The run's Files panel (#2967): the person who may enter the run only (desktopRun).
+			r.Get("/runs/{id}/desktop/files", s.handleListDesktopFiles)
+			r.Put("/runs/{id}/desktop/files/{name}", s.handleUploadDesktopFile)
+			r.Get("/runs/{id}/desktop/files/{name}", s.handleDownloadDesktopFile)
+			s.mountDesktopSignInRoutes(r) // sign-ins in a VM's desktop (#2972)
 			// The run's Azure DevOps tokens: owner or admin; not on the delegation list.
 			r.Get("/runs/{id}/ado-tokens", s.handleListRunADOTokens)
 			// Resume a paused run (#572): owner or SUPER admin — handleResumeRun.
@@ -239,6 +249,10 @@ func (s *Server) routes() chi.Router {
 			// OWNER only, or a super admin on a run with no personal owner
 			// (mayEnterRun); any other super admin gets 403 run_owner_only.
 			r.Post("/runs/{id}/attach/takeover", s.handleAttachTakeover)
+			// Ends the run and brings its computer folder back first: the run's OWNER ONLY
+			// (ownsRun, no admin bypass), as it writes onto that person's computer
+			// (run_computer_folder_bring_back.go). Off unless WARDYN_COMPUTER_FOLDERS is set.
+			r.Post("/runs/{id}/computer-folder/bring-back", s.handleBringComputerFolderBack)
 
 			// Single-use WS attach tickets: browsers cannot put the admin
 			// bearer on a WebSocket handshake, so the UI first POSTs here
@@ -259,7 +273,7 @@ func (s *Server) routes() chi.Router {
 			// docs/sdk.md "Renamed in 0.8") are factored out of this already-long
 			// function into mountRenamedRunRoutes, called once, below.
 			s.mountRenamedRunRoutes(r)
-
+			s.mountInboundTicketRoutes(r) // a browser's ticket to one inbound app, for its owner or a named caller (inbound_ticket.go)
 			// Approvals: reading the queue is a member act (own runs only — see
 			// handleListApprovals), DECIDING is OWNER-OR-ADMIN rather than
 			// operator-only: the decision IS the live authorization over an
@@ -274,16 +288,21 @@ func (s *Server) routes() chi.Router {
 			r.Get("/approvals/{id}/paths", s.handleGetPushPathList)
 			r.Post("/approvals/{id}/approve", s.handleApproveApproval)
 			r.Post("/approvals/{id}/deny", s.handleDenyApproval)
+			// "Needs you": a human_takeover request's three verbs, under the attach entry rule
+			// (approvals_takeover.go), never approve/deny.
+			r.Post("/approvals/{id}/take-over", s.handleTakeOverApproval)
+			r.Post("/approvals/{id}/hand-back", s.handleHandBackApproval)
+			r.Post("/approvals/{id}/decline", s.handleDeclineTakeover)
 
 			r.Get("/audit", s.handleQueryAudit)
 			// Uncapped NDJSON bulk export beside the capped, paginated read above —
 			// per-principal evidence ("everything developer X did") in one request.
 			r.Get("/audit/export", s.handleExportAudit)
-			// Tamper-evidence sweep over the audit hash chain (migration 0047),
-			// plus the sandbox sweep — one on each tier, hence two routers.
+			// Tamper-evidence sweep over the audit hash chain (migration 0047), plus the sandbox sweep: one per tier.
 			s.adminRoutes(operatorOnly, securityOps)
 			s.mountRunnerRevokeRoutes(r, securityOps)             // runner_revoke.go: the security tier, or the runner's own owner
 			s.mountRunnerPoolRoutes(r, operatorOnly, securityOps) // runner_pools.go: 501 until the pool storage lands
+			s.mountWorkloadRoutes(r, securityOps)                 // workloads.go: the caller's own workloads; the bindings are the security tier's
 			s.mountRunnerInventoryRoutes(r, operatorOnly, securityOps)
 			s.mountOrgRunnerRoutes(securityOps) // runner_registration.go: org runner mint, claim and trust
 			s.mountTemplateRoutes(r, operatorOnly)
@@ -421,7 +440,7 @@ func (s *Server) routes() chi.Router {
 			// profile + status.
 			// Tier-1 source library + tier-2 base-image catalog routes —
 			// mounted from sources.go, same posture as the workspaces block.
-			s.mountLibraryRoutes(r, operatorOnly)
+			s.mountLibraryRoutes(r, operatorOnly, securityOps)
 
 			r.Post("/workspaces", s.handleCreateWorkspace)
 			r.Get("/workspaces", s.handleListWorkspaces)
@@ -439,6 +458,7 @@ func (s *Server) routes() chi.Router {
 			// Operator-owned egress approvals (promotion of the scanner's
 			// content-derived suggestions; see handleSetApprovedEgress).
 			securityOps.Put("/workspaces/{id}/approved-egress", s.handleSetApprovedEgress)
+			securityOps.Put("/workspaces/{id}/owning-unit", s.handleSetWorkspaceOwningUnit)
 			// Denied-egress twin (Phase 4 revocation) — the only way to undo a
 			// `deny · always` decision, including curing an already-bricked
 			// workspace (H5); see handleSetDeniedEgress's doc comment for why its
@@ -592,11 +612,13 @@ func (s *Server) routes() chi.Router {
 			// Governance profiles (migration 0052): named, ASSIGNABLE ceilings
 			// and the rows binding them to a user/group/everyone — what lets one
 			// deployment run two groups under two different policies instead of
-			// the single site-wide DefaultPolicy. Seven routes, all securityOps
-			// (governance.go's mountGovernanceRoutes): profile authoring IS the
-			// security-admin duty. Note mountGovernanceRoutes still NAMES its
-			// parameter `operatorOnly`; the group a mount function receives is
-			// decided HERE, never by that parameter's name.
+			// the single site-wide DefaultPolicy. governance.go's
+			// mountGovernanceRoutes: profile authoring IS the security-admin
+			// duty, which a unit admin holds for their own units only, so all
+			// but the promotion sit behind requireUnitScope on r. Note
+			// mountGovernanceRoutes still NAMES its first parameter
+			// `operatorOnly`; the group a mount function receives is decided
+			// HERE, never by that parameter's name.
 			//
 			// Authoring a profile is not self-exemption: effectiveCeiling's
 			// short-circuit keys on isOperator, so a security admin's own runs
@@ -606,19 +628,21 @@ func (s *Server) routes() chi.Router {
 			// claims and answers with the profile THE RESOLVER picks, so the
 			// console never re-implements the precedence rule in order to show
 			// it.
-			s.mountGovernanceRoutes(securityOps)
+			s.mountGovernanceRoutes(securityOps, r)
 
 			// User drives (migration 0054): the storage an admin registers
 			// and allocates, and the per-run flag a member mounts theirs with.
-			// Seven routes SPLIT across both tiers (issue #168, 0.8): the four
-			// that name a HOST PATH (host_root) or a cluster storage class —
-			// creating, listing, updating, and removing the drive itself — stay
+			// Seven routes SPLIT across both tiers (issue #168, 0.8): the three
+			// that write a HOST PATH (host_root) or a cluster storage class —
+			// creating, updating, and removing the drive itself — stay
 			// operatorOnly, because "never the host" is exactly what separates
 			// the two admin tiers. The other three — granting an allocation,
 			// revoking one, and previewing whose drive resolves — moved to
 			// securityOps: a security admin's authority over drives was already
 			// the DenyUserDrive door in the profile editor (/governance above),
-			// and none of the three names a host path.
+			// and none of the three names a host path. The list joined them in
+			// 0.10 (issue #2827) so a security admin's Drives page has something
+			// to read; the handler blanks host_root and storage_class for them.
 			//
 			// Registered UNCONDITIONALLY (mountUserDriveRoutes' own doc), so
 			// TestAuthzMatrix's every-conditional-route-mounted doctrine has
@@ -627,14 +651,7 @@ func (s *Server) routes() chi.Router {
 			// (user_drives_reclaim.go) joins the family's two halves.
 			s.mountUserDriveFamily(r, operatorOnly, securityOps)
 
-			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin:
-			// recordingAuthorizer is the SAME ownership rule
-			// getRunAuthorized enforces, applied INSIDE the handler (the outer {id}
-			// here only selects a chi sub-route, so the authorization decision
-			// belongs to the mounted handler, not this registration).
-			if s.cfg.RecordingStore != nil {
-				r.Mount("/runs/{id}/recording", recording.Handler(s.cfg.RecordingStore, s.recordingAuthorizer))
-			}
+			s.mountRecordingRoutes(r)
 		})
 
 		// Interactive attach (WebSocket). Its own group: browsers cannot put
@@ -676,6 +693,21 @@ func (s *Server) routes() chi.Router {
 	return r
 }
 
+// mountRecordingRoutes registers a run's recording replay and its audit-chain
+// check on r — carved out of routes() purely for funlen.
+func (s *Server) mountRecordingRoutes(r chi.Router) {
+	// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin:
+	// recordingAuthorizer is the SAME ownership rule
+	// getRunAuthorized enforces, applied INSIDE the handler (the outer {id}
+	// here only selects a chi sub-route, so the authorization decision
+	// belongs to the mounted handler, not this registration).
+	if s.cfg.RecordingStore != nil {
+		r.Mount("/runs/{id}/recording", recording.Handler(s.cfg.RecordingStore, s.recordingAuthorizer))
+	}
+	// A desktop recording's stretch of the audit chain verifies (recording_chain.go): the recording's readers.
+	r.Get("/runs/{id}/recording-chain", s.handleRecordingChain)
+}
+
 // mountRenamedRunRoutes registers the 0.8 names for three routes issue #658
 // renamed for one consistent shape across the attach family and the
 // synthesize-a-profile verb — carved out of routes() purely for funlen. Each
@@ -703,6 +735,11 @@ func (s *Server) mountRunLeaseRoutes(r chi.Router) {
 	r.Get("/runs/{id}/launch-intent", s.handleGetLaunchIntent)
 	r.Post("/runs/{id}/kill", s.handleKillRun)
 	r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go); they open no shell, so #1476 leaves them
+	// Desktop sign-ins (#2972): the run's creator only, off unless
+	// WARDYN_DESKTOP_SIGNINS=on (run_desktop_signin.go).
+	r.Post("/runs/{id}/desktop-signin", s.handleBeginDesktopSignin)
+	r.Post("/runs/{id}/desktop-signin/shares", s.handleShareDesktopSignin)
+	r.Post("/runs/{id}/desktop-signin/end", s.handleEndDesktopSignin)
 }
 
 // mountAccountRoutes registers the caller's own account surfaces — per-user
@@ -735,14 +772,14 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	s.mountInvitationRoutes(r, securityOps)
 	s.mountServiceIdentityRoutes(r, securityOps)
 	s.mountSCIMStatusRoute(securityOps)
-	// Run-detail widget layout: per-user, per-preset, server-synced so a
-	// layout survives a new machine (localStorage would not). Scoped to
-	// the caller's OWN principal at the store, exactly like the ssh-keys
-	// block above — never a principal taken from the body.
+	// Run-detail widget layout: per-user, per-preset, server-synced so a layout survives a new
+	// machine (localStorage would not). Scoped to the caller's OWN principal at the store, exactly
+	// like the ssh-keys block above — never a principal taken from the body.
 	r.Get("/me/run-layout", s.handleGetRunLayout)
 	// The caller's own kept launch setups, newest first (launch_intent.go).
 	r.Get("/me/launch-intents", s.handleListLaunchIntents)
 	r.Put("/me/run-layout", s.handlePutRunLayout)
+	s.mountPersonalWallsRoutes(r) // the caller's own walls, keyed by their session (personal_walls.go)
 	// Per-user Azure DevOps sign-in (ado_entra.go): two browser doors that
 	// capture ONE PERSON'S Azure DevOps refresh token. It belongs in this
 	// self-service block and nowhere else — both doors refuse a caller with no
@@ -824,7 +861,13 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Put("/governance/egress-baseline", s.handlePutEgressBaseline)
 	securityOps.Get("/governance/boundary", s.handleGetBoundary)
 	securityOps.Put("/governance/boundary", s.handlePutBoundary)
-	securityOps.Post("/governance/dry-run", s.handleBoundaryDryRun)
+	securityOps.Get("/governance/recording", s.handleGetRecording)
+	securityOps.Put("/governance/recording", s.handlePutRecording)
+	s.mountGovernanceRestrictionRoutes(securityOps)
+	securityOps.Get("/governance/approval-rules", s.handleListApprovalRules)
+	securityOps.Post("/governance/approval-rules/dry-run", s.handleApprovalRuleDryRun)
+	securityOps.Put("/governance/approval-rules/{name}", s.handlePutApprovalRule)
+	securityOps.Delete("/governance/approval-rules/{name}", s.handleDeleteApprovalRule)
 	securityOps.Get("/governance/credential-delivery", s.handleGetCredentialDelivery)
 	securityOps.Put("/governance/credential-delivery", s.handlePutCredentialDelivery)
 }
@@ -907,6 +950,9 @@ func (s *Server) mountInternalRoutes(r chi.Router) {
 	// raised instead of leaving it PENDING for the sweep.
 	r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
 	r.Post("/internal/credentials/mint", s.handleInternalMint)
+	// The run proxy's sign-in lane asks whether a credential is the run's
+	// open sign-in's (run_desktop_signin.go).
+	r.Post("/internal/desktop-signin/check", s.handleInternalDesktopSigninCheck)
 	// via_org egress (design 0.9 §7.3): a local run's request for a via_org
 	// destination, served by the organisation; via_org.go.
 	s.mountViaOrgRoute(r)

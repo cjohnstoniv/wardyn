@@ -33,7 +33,7 @@ ARG UI_STAGE=ui-build
 # stage runs NATIVELY on the builder even for a linux/arm64 target — no QEMU,
 # no emulated pnpm. Same reason applies to every other stage in this file that
 # carries the flag.
-FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS ui-build
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS ui-build
 WORKDIR /ui
 
 # Corporate build support (no-ops on an OSS build): stage the optional corp CA so
@@ -62,13 +62,17 @@ ARG NO_PROXY=
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
  && if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi \
  && if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi \
- && npm install -g pnpm@9.15.4
+ && for i in 1 2 3; do timeout -k 10 180 npm install -g pnpm@9.15.4 && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
 COPY ui/package.json ui/pnpm-lock.yaml ./
 # puppeteer (a test-only devDependency) postinstalls a full Chrome download,
 # which is dead weight for `pnpm build` and FAILS on bookworm-slim (no unzip).
 # This stage only produces /ui/dist — skip the browser download entirely.
 ENV PUPPETEER_SKIP_DOWNLOAD=true
-RUN pnpm install --frozen-lockfile
+# #3472: the retried, timed step fetches and installs from the lockfile (postinstalls
+# run here), so a hung registry fails in minutes; --offline then only checks the
+# lockfile, with no network.
+RUN for i in 1 2 3; do timeout -k 10 300 pnpm fetch --frozen-lockfile && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+RUN pnpm install --frozen-lockfile --offline
 COPY ui/ ./
 # Produces /ui/dist (tsc && vite build). The UI calls /api/v1 same-origin, so
 # no base-URL config is needed — wardynd serves it on the same port.
@@ -92,6 +96,12 @@ FROM ${UI_STAGE} AS ui
 # Stage 2: build the Go binaries. Runs on the BUILDER's arch and CROSS-COMPILES
 # to $TARGETARCH below — every binary here is pure Go (CGO_ENABLED=0), so a
 # linux/arm64 image needs no QEMU for the compile, only Go's own GOARCH.
+# Module-download seed: empty unless a build passes `--build-context gomodcache=<dir>`
+# (nightly.yml's multi-arch build and scripts/lib/image-build.sh do), so a CI job's
+# already-filled module cache feeds `go mod download` below instead of the network.
+# An ordinary and a release build leave it empty and download as before.
+FROM scratch AS gomodcache
+
 FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS builder
 
 WORKDIR /build
@@ -121,7 +131,19 @@ RUN apk add --no-cache ca-certificates && \
 COPY go.mod go.sum ./
 # Bounded retry of the module FETCH only (a proxy stream error is transient); go.sum still
 # verifies every module, and no build or test step is ever retried.
-RUN for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+# The seed (a module cache's cache/download tree, empty unless a build passes
+# `--build-context gomodcache=<dir>`) is copied in first; `go mod download` then fetches
+# only what it lacks. go.sum is checked against each module's recorded hash, and
+# `go mod verify` re-checks the cache when a seed was used.
+RUN --mount=type=bind,from=gomodcache,target=/gomodcache-seed \
+    seed=; \
+    if [ -n "$(ls -A /gomodcache-seed)" ]; then \
+        seed=1 && \
+        mkdir -p "$(go env GOMODCACHE)/cache/download" && \
+        cp -a /gomodcache-seed/. "$(go env GOMODCACHE)/cache/download/"; \
+    fi && \
+    for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done && \
+    if [ -n "$seed" ]; then go mod verify; fi
 
 COPY . .
 # Pure-Go build (CGO off) so the binary runs on distroless static. The docker

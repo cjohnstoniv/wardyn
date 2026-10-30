@@ -263,7 +263,7 @@ https://<your-wardyn-address>/api/v1/scm/azure-devops/callback
 - A run that names an Azure DevOps repository but does not get the credential starts without it and says why, in its Credentials panel, `wardyn run get` and its clone failure line.
 - A run with no person behind it (an operator token, local mode or a service identity) starts without the credential; a device is still refused.
 - A person who has not connected cannot launch against the row:
-  - the launch is refused ("you are not connected to Azure DevOps — connect and start the run again"),
+  - the launch is refused ("You are not connected to Azure DevOps — connect and start the run again"),
   - and a run that reaches dispatch without a stored connection fails with "Connect Azure DevOps once before launching; Wardyn creates the run's token from that connection."
 - Their state shows in Settings and in `/me/scm-access`, and a launch is refused with the sentence for the state they are in.
 - Every sign-in that captures a connection on a `minted_pat` row is audited as `ado_pat.connect`.
@@ -460,7 +460,7 @@ That has two consequences:
   - Runs already using it keep it for up to 10 minutes; revoke it in Azure DevOps to stop them now.
   - The bound is the stored-key lease (`storedKeyTTL`, 10 minutes), or the date you entered when that is sooner.
   - A run on a grant that waits for approval does not refresh its lease, so it keeps the token until that date.
-- **A launch with no token is refused** ("you are not connected to Azure DevOps — connect and start the run again"),
+- **A launch with no token is refused** ("You are not connected to Azure DevOps — connect and start the run again"),
   - **and so is one with an expired token:**
     - "Your runs can't reach Azure DevOps until you add a new token."
 - **A token that expires mid-run** holds the run's next Azure DevOps request on the Azure DevOps sign-in request until the person adds a new token, which answers it.
@@ -701,6 +701,10 @@ What the refresh token is redeemed for depends on the mode:
 - **`bearer`:** the access token injected on the wire.
   - It is short-lived, on the order of an hour, up to about ninety minutes,
     - and Wardyn's control plane renews it when a run's proxy starts and again as it nears expiry, without the person doing anything, for as long as the refresh token keeps redeeming.
+  - Wardyn reuses one redeemed token across a run's hosts and resolves.
+    - A resolve served from that cache reads no stored sign-in, so it writes only the injected token's `secret.read` row (no `ado-refresh` read); every redemption that fills it reads the sign-in and records `secret.read` with purpose `ado-refresh`.
+    - A cached token is served for at most one hour after its redemption, and never within ten minutes of its expiry.
+    - It is dropped when the person disconnects, when their credentials are erased, when the authority refuses the sign-in, and when the stored sign-in is replaced.
 
 When a redemption is refused — the refresh token has been revoked or has expired, or a Conditional Access policy requires the person to sign in interactively — what happens depends on when:
 

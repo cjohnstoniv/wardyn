@@ -37,8 +37,9 @@ func runShapeRefusal(req createRunRequest) *runRefusal {
 		return runModeInvalid("shape: %q is not one of agent_task, environment, application", string(req.Shape))
 	case req.Experience == "":
 		return conflict("it needs experience, which says whether the run is background or interactive")
-	case req.Shape == client.RunShapeApplication && (!background || kind != client.WorkloadCommand):
-		return conflict("an application is a background run of a command: set experience background and workload kind command")
+	case req.Shape == client.RunShapeApplication && !(background && kind == client.WorkloadCommand) && !applicationServer(req):
+		return conflict("an application is a background run of a command, or an interactive run that starts a command and declares its app: " +
+			"set experience background and workload kind command, or experience interactive with startup kind command and ui_apps")
 	case req.Shape == client.RunShapeEnvironment && background:
 		return conflict("an environment is interactive: set experience interactive")
 	case req.Shape == client.RunShapeAgentTask && background && kind != client.WorkloadAgentTask:
@@ -48,4 +49,36 @@ func runShapeRefusal(req createRunRequest) *runRefusal {
 		return conflict("an interactive agent task includes a harness in tools")
 	}
 	return nil
+}
+
+// storedRunShape is the shape the run row keeps: the request's own, else the one
+// shape runShapeRefusal lets this request carry. A request that fits more than
+// one (an interactive run that includes a harness) or none (an older client's,
+// with no experience) keeps "".
+func storedRunShape(req createRunRequest) client.RunShape {
+	if req.Shape != "" {
+		return req.Shape
+	}
+	var fit client.RunShape
+	for _, shape := range []client.RunShape{client.RunShapeAgentTask, client.RunShapeEnvironment, client.RunShapeApplication} {
+		req.Shape = shape
+		if runShapeRefusal(req) != nil {
+			continue
+		}
+		if fit != "" {
+			return ""
+		}
+		fit = shape
+	}
+	return fit
+}
+
+// applicationServer is the interactive application (#1994): an Environment run
+// that starts a command and declares the app it serves, opened through the web
+// app gateway. It is the same run the environment shape accepts; the shape only
+// says which choice it was set up from.
+func applicationServer(req createRunRequest) bool {
+	pol, _ := requestPolicyRules(req)
+	return req.Experience == client.ExperienceInteractive && req.Startup != nil &&
+		req.Startup.Kind == client.StartupCommand && pol != nil && len(pol.UIApps) > 0
 }

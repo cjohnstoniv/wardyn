@@ -43,6 +43,8 @@ var scopeVerbs = []struct{ method, call string }{
 	{runnerwire.MethodStop, "stop"},
 	{runnerwire.MethodEnd, "end"},
 	{runnerwire.MethodStopProxy, "stop_proxy"},
+	{runnerwire.MethodPauseAgent, "pause_agent"},
+	{runnerwire.MethodResumeAgent, "resume_agent"},
 	{runnerwire.MethodStatus, "status"},
 	{runnerwire.MethodWait, "wait"},
 	{runnerwire.MethodAgentStatus, "agent_status "},
@@ -170,7 +172,7 @@ func TestDispatcherRequiresTheHeldSandboxRecord(t *testing.T) {
 func TestDispatcherStampsItsOwnRunnerLabel(t *testing.T) {
 	runnerID := uuid.NewString()
 	fake := runnertest.NewFake()
-	d, err := newTestDispatcher(Config{RunnerID: runnerID, Substrate: fake,
+	d, err := newTestDispatcher(Config{RunnerID: runnerID, Substrate: labelledEngine{fake, nil},
 		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
 		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil },
 	})
@@ -188,5 +190,42 @@ func TestDispatcherStampsItsOwnRunnerLabel(t *testing.T) {
 	}
 	if got := fake.Created[0].Labels; got[runner.LabelRunnerID] != runnerID || got["wardyn.run"] != "x" {
 		t.Fatalf("sandbox labels %v do not name this runner", got)
+	}
+}
+
+// pause_agent and resume_agent hand the substrate the pause's generation and answer the guest agent's
+// fenced_pause; an org that sends no generation reaches it as 0.
+func TestDispatcherRelaysThePauseGeneration(t *testing.T) {
+	runnerID := uuid.NewString()
+	fake := runnertest.NewFake()
+	fake.FencedPause = true
+	sb, err := fake.CreateSandbox(t.Context(), runner.SandboxSpec{RunID: uuid.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := newTestDispatcher(Config{RunnerID: runnerID, Substrate: labelledEngine{fake, nil},
+		HoldsSandbox: func(ref string) bool { return ref == sb.Ref },
+		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := runnerwire.Loopback()
+	defer b.Close()
+	peer := runnerwire.NewPeer(a, runnerwire.PeerConfig{})
+	defer peer.Close()
+	ref := placement.RunnerRefPrefix(runnerID) + sb.Ref
+	for _, args := range []any{runnerwire.AgentPauseArgs{Ref: ref, Generation: 4}, runnerwire.RefArgs{Ref: ref}} {
+		for _, method := range []string{runnerwire.MethodPauseAgent, runnerwire.MethodResumeAgent} {
+			data, _ := runnerwire.Marshal(args)
+			res, err := d.Call(t.Context(), peer, 1, method, data)
+			if got, ok := res.(runnerwire.AgentPauseResult); err != nil || !ok || !got.FencedPause {
+				t.Fatalf("%s %+v = %#v, %v; want the guest agent's fenced_pause", method, args, res, err)
+			}
+		}
+	}
+	if want := []int64{4, 4, 0, 0}; fmt.Sprint(fake.PauseGens) != fmt.Sprint(want) {
+		t.Fatalf("generations the substrate got = %v, want %v", fake.PauseGens, want)
 	}
 }

@@ -68,7 +68,7 @@ vi.mock("../../../lib/api/workspaces", () => ({
 vi.mock("../../../lib/api/policies", () => ({
   policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
 }));
-// The Workspaces step's user-drives card summarises GET /drives (SUPER-only,
+// The Workspaces step's user-drives card summarises GET /drives (the card is SUPER-only,
 // and this suite runs on the operator-context's fail-open default).
 const getDrivesMock = vi.fn();
 vi.mock("../../../lib/api/drives", () => ({
@@ -210,9 +210,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await screen.findByRole("heading", { name: /^secrets$/i });
       await user.click(screen.getByRole("button", { name: /^done with this one$/i })); // -> review, leaves integrations
 
-      // Both PhaseRail landmarks share the "Setup steps" accessible name
-      // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
-      // renders both — the full rail is the SECOND in DOM order.
+      // The one "Setup steps" nav is the rail (#2844).
       const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
       const nav = navs[navs.length - 1];
       const btn = within(nav).getByRole("button", { name: /^secrets/i });
@@ -239,9 +237,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await screen.findByRole("heading", { name: /^secrets$/i });
       await user.click(screen.getByRole("button", { name: /^done with this one$/i })); // -> review, leaves integrations
 
-      // Both PhaseRail landmarks share the "Setup steps" accessible name
-      // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
-      // renders both — the full rail is the SECOND in DOM order.
+      // The one "Setup steps" nav is the rail (#2844).
       const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
       const nav = navs[navs.length - 1];
       const btn = within(nav).getByRole("button", { name: /^secrets/i });
@@ -267,9 +263,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(screen.getByRole("button", { name: /^done with this one$/i }));
 
       expect(await screen.findByRole("heading", { name: /review readiness/i })).toBeInTheDocument();
-      // Both PhaseRail landmarks share the "Setup steps" accessible name
-      // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
-      // renders both — the full rail is the SECOND in DOM order.
+      // The one "Setup steps" nav is the rail (#2844).
       const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
       const nav = navs[navs.length - 1];
       const btn = within(nav).getByRole("button", { name: /^secrets/i });
@@ -302,9 +296,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // localStorage, not in-memory React state that a remount would lose.
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
-      // Both PhaseRail landmarks share the "Setup steps" accessible name
-      // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
-      // renders both — the full rail is the SECOND in DOM order.
+      // The one "Setup steps" nav is the rail (#2844).
       const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
       const nav = navs[navs.length - 1];
       const btn = within(nav).getByRole("button", { name: /^secrets/i });
@@ -329,7 +321,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await clearCorpNetworkGate();
 
     // Review is the final step now, and "Finish setup" is its completion.
-    await user.click(screen.getByRole("button", { name: /^Review —/ }));
+    await user.click(screen.getByRole("button", { name: /^Review/ }));
     await user.click(screen.getByRole("button", { name: /^finish setup$/i }));
     expect(setupDismissed()).toBe(true);
     expect(onDone).toHaveBeenCalledTimes(1);
@@ -356,7 +348,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await screen.findAllByText("Single-user");
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    await user.click(screen.getByRole("button", { name: /^Review —/ }));
+    await user.click(screen.getByRole("button", { name: /^Review/ }));
     await user.click(screen.getByRole("button", { name: "Switch to user view" }));
   }
 
@@ -377,7 +369,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await screen.findAllByText("Single-user");
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    await user.click(screen.getByRole("button", { name: /^Review —/ }));
+    await user.click(screen.getByRole("button", { name: /^Review/ }));
     expect(screen.getByRole("button", { name: /^finish setup$/i })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Switch to user view" }));
     expect(screen.getByRole("button", { name: "Switch to user view" })).toBeDisabled();
@@ -444,13 +436,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // Exactly 1 — the orchestrator's own mount, and nothing this walk touched
     // re-fetches the same status a second time.
     expect(getSetupStatusMock).toHaveBeenCalledTimes(1);
-    // Two Re-check buttons now share this step: the persistent HostStatusBar (first
-    // in DOM order) and ReviewStep's own (rendered after it in the step body). Both
-    // invoke the same re-check; click the ReviewStep's own and assert getSetupStatus
-    // is called again.
+    // #2847: one Re-check per page, the one in the step's header row; Review carries no second button or stamp.
+    // Click it and assert getSetupStatus is called again.
     const rechecks = screen.getAllByRole("button", { name: /re-check/i });
-    expect(rechecks).toHaveLength(2);
-    await user.click(rechecks[rechecks.length - 1]);
+    expect(rechecks).toHaveLength(1);
+    await user.click(rechecks[0]);
     await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalledTimes(2));
   });
 

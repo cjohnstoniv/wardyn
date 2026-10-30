@@ -54,7 +54,8 @@ only `String` and `Where` traded places.
 | `sign_in_help_url.label` | `/setup/status` row label (`signInHelpHTTPCheck`), the card's own title | When someone can't sign in |
 | `sign_in_help_url.warn` | setup row `detail`, warn, never blocking (#489) | The sign-in help link uses http://. Change it to an https:// address so people who can't sign in aren't sent to an unencrypted page. |
 | SSH keys chip | Your SSH keys pane (`/account`), a key whose `capped` is true (#584; rewritten M-5/#636 S-2, 2026-09-27) | User access |
-| SSH keys chip tooltip | Your SSH keys pane (`/account`), the chip's `title` (#584; rewritten M-5/#636 S-2, 2026-09-27) | Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view. |
+| SSH keys chip note | Your SSH keys pane (`/account`), under the keys table, beside the chip, once per chip kind listed (#584; rewritten M-5/#636 S-2, 2026-09-27; moved out of the chip's `title`, r11 #2244) | Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view. |
+| SSH keys Admin override note | Your SSH keys pane (`/account`) and Admin view > Settings > Admin SSH keys, under the keys table, beside the Admin override chip (r11 #2244; copy unchanged from the former chip `title`, owner note: moved, not reworded) | Registered while you were an admin, so this key reaches runs you do not own. Refreshed automatically each time you sign in, and expires on its own if you don't; delete and re-register the key to drop the override immediately. |
 | SSH pane description | Your SSH keys pane (`/account`), the page header's description (M-5/#636 S-2, 2026-09-27) | Public keys only — Wardyn never stores or asks for a private key. Keys are yours alone; admins can't list anyone else's. |
 
 ## Implementation strings (not in the mock)
@@ -65,7 +66,7 @@ These strings cover the card's save mechanics. The mock did not draw them.
 |---|---|
 | refusal: control character | sign_in_help_text: contains a line break, control character or invisible formatting character — it renders as one plain paragraph on the sign-in page |
 | refusal: malformed URL | sign_in_help_url: must be a plain web address with a real host name — no spaces, sign-in details or hidden characters — it is shown to people who have not signed in |
-| `SIGNIN_HELP.SAVE` | Save |
+| `SIGNIN_HELP.SAVE` | Save sign-in help |
 | `SIGNIN_HELP.SAVED_TOAST` | Sign-in help saved. |
 | `SIGNIN_HELP.SAVE_ERROR` | Couldn't save the sign-in help. |
 | `SIGNIN_HELP.LOAD_FAILED` | Couldn't load the sign-in help. Retry to edit it. |

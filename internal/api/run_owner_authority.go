@@ -50,6 +50,7 @@ type ownerRefusal struct {
 	status int
 	reason string
 	msg    string
+	arm    string // unit_membership_gone only: which check refused (ownerMembershipRefusal)
 }
 
 // ownerCapabilityRefusal re-checks the run's launch-door capabilities for its
@@ -367,8 +368,9 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, userType, kind, valu
 
 // ownerUnit is the run's captured profile, composed from its chain as it stands now, refusing
 // when it no longer exists (its walls cannot be known), when it cannot be read (a base included:
-// never a partial chain) and when a composition nothing satisfies leaves it with no valid policy. A
-// run that captured none (an unassigned or super-admin owner) passes.
+// never a partial chain), when a composition nothing satisfies leaves it with no valid policy, and
+// when the owner no longer holds a membership placing them in it (ownerMembershipRefusal). A run
+// that captured none (an owner in the Default unit, or a super admin) passes.
 func (s *Server) ownerUnit(ctx context.Context, run types.AgentRun) (*ResolvedUnit, *ownerRefusal) {
 	if run.UnitID == nil {
 		return nil, nil
@@ -384,6 +386,17 @@ func (s *Server) ownerUnit(ctx context.Context, run types.AgentRun) (*ResolvedUn
 	if err != nil {
 		return nil, &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnitUnreadable,
 			msg: loggedMsg(ctx, "resolve the owner's governance profile", err)}
+	}
+	if restrictionDefaultUnit(p) {
+		return p, nil // the Default unit a restriction put the run in needs no membership
+	}
+	ref, err := s.ownerMembershipRefusal(ctx, run, p)
+	if err != nil {
+		return nil, &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnitUnreadable,
+			msg: loggedMsg(ctx, "re-check the owner's unit memberships", err)}
+	}
+	if ref != nil {
+		return nil, ref
 	}
 	return p, nil
 }
@@ -671,13 +684,22 @@ func runRepos(run types.AgentRun, cfg *proxy.Config) []string {
 
 // extendRefusal re-checks the owner's authority before a run's end moves
 // later or is removed: extending keeps a sandbox and its credentials alive,
-// so it needs the authority a revive needs, less the proxy rebuild. The
+// so it needs the authority a revive needs, less the proxy rebuild (the
+// profile's deny_placements included). The
 // repos come from the run's stored proxy config where there is one
 // (run_proxy_config.go); a run without one leaves the legacy repo field alone.
-func (s *Server) extendRefusal(r *http.Request, run types.AgentRun) *ownerRefusal {
-	ctx := r.Context()
-	if _, ref := s.ownerUnit(ctx, run); ref != nil {
+// callerIsOwner is ownerCapabilityRefusal's: false for a renewal wardynd makes
+// itself, which knows the owner only by the run row.
+func (s *Server) extendRefusal(ctx context.Context, run types.AgentRun, callerIsOwner bool) *ownerRefusal {
+	prof, ref := s.ownerUnit(ctx, run)
+	if ref != nil {
 		return ref
+	}
+	if prof != nil {
+		if p, denied := deniedRunPlacement(run, prof.Limits.DenyPlacements); denied {
+			return &ownerRefusal{status: placement.ReasonPlacementDenied.Status(), reason: string(placement.ReasonPlacementDenied),
+				msg: placementDeniedMsg(p, prof.Name)}
+		}
 	}
 	var cfg *proxy.Config
 	raw, err := s.loadRunProxyConfig(ctx, run.ID)
@@ -692,7 +714,7 @@ func (s *Server) extendRefusal(r *http.Request, run types.AgentRun) *ownerRefusa
 				msg: "the run's proxy config does not load: " + err.Error()}
 		}
 	}
-	ref, err := s.ownerCapabilityRefusal(ctx, run, principalFromRequest(r) == run.CreatedBy, runRepos(run, cfg))
+	ref, err = s.ownerCapabilityRefusal(ctx, run, callerIsOwner, runRepos(run, cfg))
 	if err == nil && ref == nil {
 		ref, err = s.modelProviderRefusal(ctx, run)
 	}

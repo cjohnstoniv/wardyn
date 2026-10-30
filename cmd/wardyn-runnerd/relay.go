@@ -15,8 +15,11 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
@@ -52,6 +55,57 @@ type localRelay struct {
 	waiting   int                           // connections in conns yet to send their first byte
 	refused   int                           // closed at the cap since capWarnAt
 	capWarnAt time.Time
+	// sources is WARDYN_RELAY_ALLOWED_SOURCES: when set, a connection from outside every prefix is
+	// closed before a byte is read. Empty admits every source.
+	sources    []netip.Prefix
+	srcRefused int // closed for their source since srcWarnAt
+	srcWarnAt  time.Time
+
+	// models are the laptop local model ports served at the bind to flagged runs' proxies
+	// (OpenLocalModel); modelAddr is where each is forwarded, this computer's loopback when zero
+	// (tests use another loopback address).
+	models    map[uint16]*modelPort
+	modelAddr netip.Addr
+	// modelPorts are the ports the person allows a local model server on (--local-model-port); none
+	// when empty, and OpenLocalModel refuses any other.
+	modelPorts []uint16
+}
+
+// envRelaySources is the opt-in source list for the Docker local relay (off when unset).
+const envRelaySources = "WARDYN_RELAY_ALLOWED_SOURCES"
+
+// parseRelaySources reads envRelaySources' comma-separated prefixes (a bare address is its own /32 or
+// /128). An empty value is no list.
+func parseRelaySources(v string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, f := range strings.Split(v, ",") {
+		if f = strings.TrimSpace(f); f == "" {
+			continue
+		}
+		p, err := netip.ParsePrefix(f)
+		if err != nil {
+			a, aerr := netip.ParseAddr(f)
+			if aerr != nil {
+				return nil, fmt.Errorf("%s: %q is neither a prefix nor an address", envRelaySources, f)
+			}
+			p = netip.PrefixFrom(a.Unmap(), a.Unmap().BitLen())
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
+}
+
+// admitsSource reports whether c's source may use the relay: always with no list. r.mu is held.
+func (r *localRelay) admitsSource(c net.Conn) bool {
+	if len(r.sources) == 0 {
+		return true
+	}
+	ap, err := netip.ParseAddrPort(c.RemoteAddr().String())
+	if err != nil {
+		return false
+	}
+	a := ap.Addr().Unmap()
+	return slices.ContainsFunc(r.sources, func(p netip.Prefix) bool { return p.Contains(a) })
 }
 
 // relayBind admits only Docker's host-gateway address held by the Docker
@@ -125,6 +179,8 @@ func (r *localRelay) Ensure(u *url.URL) (string, error) {
 		return "", errors.New("relay: no address a proxy reaches has been found yet")
 	case r.listeners[uint16(port)] != nil:
 		return r.pair.target, nil
+	case r.models[uint16(port)] != nil:
+		return "", fmt.Errorf("relay: port %d serves a local model server, not the organisation", port)
 	}
 	ln, err := net.Listen("tcp", netip.AddrPortFrom(r.pair.bind, uint16(port)).String())
 	if err != nil {
@@ -133,6 +189,185 @@ func (r *localRelay) Ensure(u *url.URL) (string, error) {
 	r.listeners[uint16(port)] = ln
 	go r.serve(ln)
 	return r.pair.target, nil
+}
+
+// localModelDialWait bounds the dial of the model server on this computer.
+const localModelDialWait = 5 * time.Second
+
+// modelPort is one laptop local model port served at the bind: its listener, the runs whose
+// proxies it admits (each by every address the proxy holds), and its open connections by source.
+type modelPort struct {
+	ln    net.Listener
+	runs  map[uuid.UUID][]netip.Addr
+	conns map[net.Conn]netip.Addr
+}
+
+// admits reports whether src is an address of a run's proxy the port serves.
+func (m *modelPort) admits(src netip.Addr) bool {
+	for _, peers := range m.runs {
+		if slices.Contains(peers, src) {
+			return true
+		}
+	}
+	return false
+}
+
+// OpenLocalModel is the Docker driver's LocalModelRelay (#2957): runID's proxy, at peers, reaches a
+// laptop local model at the relay target on each of ports, and that port alone is forwarded to this
+// computer's loopback, where the model server listens. A connection from any other address is closed
+// before a byte is read or relayed, and nothing else is reached through it: no other port, address or
+// relay stream. A port the person has not allowed (modelPorts) is refused. A port's listener opens with the first run that names it and closes with the last
+// (CloseLocalModel) or when the runner stops (Close). Where the bind is that loopback address (a
+// VM-backed engine, whose route to this computer lands there) the server itself answers and nothing
+// is opened.
+func (r *localRelay) OpenLocalModel(runID uuid.UUID, ports []uint16, peers []netip.Addr) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	to := cmp.Or(r.modelAddr, relayLoopback)
+	switch {
+	case r.closed:
+		return net.ErrClosed
+	case !r.pair.bind.IsValid():
+		return errors.New("relay: no address a proxy reaches has been found yet")
+	case len(peers) == 0:
+		return errors.New("relay: a local model server is served only to a run's proxy, and none was named")
+	}
+	for _, port := range ports {
+		if !slices.Contains(r.modelPorts, port) {
+			return fmt.Errorf("relay: port %d is not a local model port this runner allows (wardyn-runnerd --local-model-port)", port)
+		}
+	}
+	r.closeModelRunLocked(runID)
+	if r.pair.bind == to {
+		return nil
+	}
+	if r.models == nil {
+		r.models = map[uint16]*modelPort{}
+	}
+	for _, port := range ports {
+		if r.listeners[port] != nil {
+			r.closeModelRunLocked(runID)
+			return fmt.Errorf("relay: port %d is the organisation relay's own, so no local model server can use it", port)
+		}
+		m := r.models[port]
+		if m == nil {
+			ln, err := net.Listen("tcp", netip.AddrPortFrom(r.pair.bind, port).String())
+			if err != nil {
+				r.closeModelRunLocked(runID)
+				return fmt.Errorf("relay: serve the local model server's port %d at %s: %w", port, r.pair.bind, err)
+			}
+			m = &modelPort{ln: ln, runs: map[uuid.UUID][]netip.Addr{}, conns: map[net.Conn]netip.Addr{}}
+			r.models[port] = m
+			go r.serveModel(port, m, netip.AddrPortFrom(to, port).String())
+		}
+		m.runs[runID] = slices.Clone(peers)
+	}
+	return nil
+}
+
+// CloseLocalModel ends runID's admission at every port: its proxy's open connections are closed, and
+// a port no run is left on closes its listener.
+func (r *localRelay) CloseLocalModel(runID uuid.UUID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closeModelRunLocked(runID)
+}
+
+func (r *localRelay) closeModelRunLocked(runID uuid.UUID) {
+	for port, m := range r.models {
+		if _, ok := m.runs[runID]; !ok {
+			continue
+		}
+		delete(m.runs, runID)
+		if len(m.runs) == 0 {
+			_ = m.ln.Close()
+			delete(r.models, port)
+		}
+		for c, src := range m.conns {
+			if !m.admits(src) {
+				_ = c.Close()
+			}
+		}
+	}
+}
+
+// modelConnsLocked is the number of open local model connections, bounded by maxLocalRelays. r.mu is held.
+func (r *localRelay) modelConnsLocked() int {
+	n := 0
+	for _, m := range r.models {
+		n += len(m.conns)
+	}
+	return n
+}
+
+// serveModel copies each connection m admits to the model server at addr, with half-close both
+// ways, once it has sent a first byte within the relay's wait and while fewer than maxLocalRelays are
+// open; any other is closed at once.
+func (r *localRelay) serveModel(port uint16, m *modelPort, addr string) {
+	for {
+		c, err := m.ln.Accept()
+		if errors.Is(err, net.ErrClosed) {
+			return
+		}
+		if err != nil {
+			time.Sleep(50 * time.Millisecond) // a transient accept error (EMFILE) must not end the listener
+			continue
+		}
+		var src netip.Addr
+		if ta, ok := c.RemoteAddr().(*net.TCPAddr); ok {
+			src = ta.AddrPort().Addr().Unmap()
+		}
+		r.mu.Lock()
+		if r.closed || r.models[port] != m || !m.admits(src) {
+			r.mu.Unlock()
+			_ = c.Close()
+			slog.Debug("relay: closed a local model connection from no flagged run's proxy", "port", port, "from", src)
+			continue
+		}
+		if r.modelConnsLocked() >= maxLocalRelays {
+			r.mu.Unlock()
+			_ = c.Close()
+			slog.Warn("relay: local model connection closed at the cap", "port", port, "limit", maxLocalRelays)
+			continue
+		}
+		m.conns[c] = src
+		r.mu.Unlock()
+		go func() {
+			defer func() {
+				r.mu.Lock()
+				delete(m.conns, c)
+				r.mu.Unlock()
+				_ = c.Close()
+			}()
+			first, ok := readFirstByte(c, cmp.Or(r.firstByte, relayFirstByteWait))
+			if !ok {
+				return
+			}
+			s, err := net.DialTimeout("tcp", addr, localModelDialWait)
+			if err != nil {
+				return
+			}
+			defer s.Close()
+			if _, err := s.Write([]byte{first}); err != nil {
+				return
+			}
+			done := make(chan struct{})
+			go func() { halfCopy(s, c); close(done) }()
+			halfCopy(c, s)
+			<-done
+		}()
+	}
+}
+
+// halfCopy copies src to dst, then half-closes dst's write side (or closes it, ending the other copy).
+func halfCopy(dst, src net.Conn) {
+	if _, err := io.Copy(dst, src); err == nil {
+		if hc, ok := dst.(interface{ CloseWrite() error }); ok {
+			_ = hc.CloseWrite()
+			return
+		}
+	}
+	_ = dst.Close()
 }
 
 func (r *localRelay) serve(ln net.Listener) {
@@ -153,6 +388,12 @@ func (r *localRelay) serve(ln net.Listener) {
 // the connection is closed at once; the proxy's own retry recovers.
 func (r *localRelay) forward(c net.Conn) {
 	r.mu.Lock()
+	if !r.admitsSource(c) {
+		r.warnSource(c)
+		r.mu.Unlock()
+		_ = c.Close()
+		return
+	}
 	peer := r.peer
 	full := r.waiting >= maxLocalRelays
 	if full {
@@ -191,6 +432,21 @@ func (r *localRelay) warnAtCap() {
 	slog.Warn("relay: local connection closed at the cap on connections yet to send a first byte",
 		slog.Int("limit", maxLocalRelays), slog.Int("refused", r.refused))
 	r.refused, r.capWarnAt = 0, time.Now()
+}
+
+// warnSource counts a connection closed for its source and warns at most every relayCapWarnEvery.
+// The runner's own reachability dial (answers) comes from the bind and is not counted. r.mu is held.
+func (r *localRelay) warnSource(c net.Conn) {
+	if ap, err := netip.ParseAddrPort(c.RemoteAddr().String()); err == nil && ap.Addr().Unmap() == r.pair.bind.Unmap() {
+		return
+	}
+	r.srcRefused++
+	if time.Since(r.srcWarnAt) < relayCapWarnEvery {
+		return
+	}
+	slog.Warn("relay: local connection closed: its source is outside "+envRelaySources,
+		slog.String("source", c.RemoteAddr().String()), slog.Int("refused", r.srcRefused))
+	r.srcRefused, r.srcWarnAt = 0, time.Now()
 }
 
 // readFirstByte reads c's first byte within wait. A relay stream opens only once c has sent one.
@@ -274,6 +530,13 @@ func (r *localRelay) Close() error {
 		errs = append(errs, ln.Close())
 	}
 	conns := make([]net.Conn, 0, len(r.conns))
+	for _, m := range r.models {
+		errs = append(errs, m.ln.Close())
+		for c := range m.conns {
+			conns = append(conns, c)
+		}
+	}
+	r.models = nil
 	for c := range r.conns {
 		conns = append(conns, c)
 	}

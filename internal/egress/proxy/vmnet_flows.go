@@ -62,6 +62,7 @@ var vmnetReasons = map[string]string{
 	"host-mismatch":        "the plain HTTP request's Host is not the name the connection was resolved as",
 	"not-http":             "the guest sent something other than an HTTP request on port 80",
 	"first-flight-timeout": "the guest sent nothing on a web port within the relay's wait",
+	"tunnel-limit":         "the run already holds the most open tunnels on granted ports other than 80 that its relay allows",
 }
 
 type parkedFlow struct {

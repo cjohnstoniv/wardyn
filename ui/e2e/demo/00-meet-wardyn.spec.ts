@@ -471,7 +471,7 @@ test("V00 act 1 — a workspace", async () => {
   ).toBeVisible({ timeout: 30_000 });
   await centerInFrame(allowedHeading);
   await spotlight(page, allowedHeading);
-  await expect(page.getByText("Nothing approved yet.")).toBeVisible();
+  await expect(page.getByText("No approved hosts")).toBeVisible();
   await caption(page, "The workspace keeps its own list of hosts a run may reach."); // C16
   await beat(page, PACE.read);
   await caption(page, "Right now: nothing. Nothing has been earned yet."); // C17
@@ -491,7 +491,7 @@ test("V00 act 2 — a run, and a knock at the door", async () => {
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
   await startGuided(page);
 
-  // The Environment sandbox is the plain command window, not the agent: this
+  // The Environment is the plain command window, not the agent: this
   // episode is keyless, and a shell is all a curl needs. Shape's cards are
   // buttons named by the card's title, which is how shapeCard finds it. An environment starts no harness, so the run comes up
   // idle with a shell, which is what act 2 and act 3 type into.

@@ -64,6 +64,14 @@ func TestValidateModelProviders_LocalModel(t *testing.T) {
 		{"bounds set", with(func(p *types.ModelProvider) {
 			p.Local.MaxContext, p.Local.MaxOutput, p.Local.KeepAliveSeconds = 8192, 4096, 600
 		}), ""},
+		// The laptop path (#2957) is the runner's own computer, nothing else.
+		{"on laptop runners at host.docker.internal", with(func(p *types.ModelProvider) { p.Local.AllowOnLaptopRunners = true }), ""},
+		{"on laptop runners at a node address", with(func(p *types.ModelProvider) {
+			p.BaseURL, p.Local.AllowOnLaptopRunners = "http://10.0.4.7:11434", true
+		}), "local.allow_on_laptop_runners needs base_url on host.docker.internal"},
+		{"on laptop runners at gateway.docker.internal", with(func(p *types.ModelProvider) {
+			p.BaseURL, p.Local.AllowOnLaptopRunners = "http://gateway.docker.internal:11434", true
+		}), "local.allow_on_laptop_runners needs base_url"},
 		{"no base url", with(func(p *types.ModelProvider) { p.BaseURL = "" }), "base_url is required for a local_model"},
 		{"localhost", with(func(p *types.ModelProvider) { p.BaseURL = "http://localhost:11434" }), "proxy's own loopback"},
 		{"a loopback literal", with(func(p *types.ModelProvider) { p.BaseURL = "http://127.0.0.1:11434" }), "loopback"},
@@ -168,6 +176,9 @@ func TestProviderDispatch_LocalModel(t *testing.T) {
 			if !found || !slices.Equal(lm.Models, p.Local.Models) || lm.MaxContext != types.DefaultLocalMaxContext ||
 				lm.MaxOutput != types.DefaultLocalMaxOutput || lm.KeepAliveSeconds != types.DefaultLocalKeepAliveSeconds {
 				t.Errorf("local models = %+v, want the allowlist with the default bounds", plan.localModels)
+			}
+			if got := plan.localAllowlists[p.ID]; !slices.Equal(got, p.Local.Models) {
+				t.Errorf("local allowlists = %v, want %s -> %v", plan.localAllowlists, p.ID, p.Local.Models)
 			}
 			switch tc.agent {
 			case "claude-code":

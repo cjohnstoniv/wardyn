@@ -80,7 +80,7 @@ const (
 	// runFilesUnsupportedMsg is the honest 501 reason for a runner with no
 	// ExecStream primitive at all: there is no other way to read the sandbox's
 	// working tree, so this is a capability statement, not a failure.
-	runFilesUnsupportedMsg = "per-file diff stat needs sandbox exec, which this runner does not support"
+	runFilesUnsupportedMsg = "Per-file diff stat needs sandbox exec, which this runner does not support"
 )
 
 // runFilesScript is the ONE exec behind this endpoint: the numstat section, a

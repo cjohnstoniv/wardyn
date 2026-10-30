@@ -14,6 +14,8 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,9 +24,10 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 
-	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/docker"
@@ -68,23 +71,52 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	if err != nil {
 		return runnerRuntime{}, atStage(types.RunnerStageEngine, err)
 	}
+	driveRoots, err := parseDriveRoots(opts.driveRoots)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
+	modelPorts, err := parseLocalModelPorts(opts.localModelPorts)
+	if err != nil {
+		return runnerRuntime{}, err
+	}
 	relay := newLocalRelay(ctx)
+	if relay.sources, err = parseRelaySources(os.Getenv(envRelaySources)); err != nil {
+		return runnerRuntime{}, err
+	}
+	relay.modelPorts = modelPorts
 	// The decision sink before the runtime: its startup containment stops the runs' proxies, and one
 	// still running delivers what it holds while it stops only if the sink already listens.
 	sink, err := newDockerSink(ctx, stateDir, eng)
 	if err != nil {
 		return runnerRuntime{}, fmt.Errorf("decision sink did not start: %w", err)
 	}
+	runSubnets, runSubnetBits, err := docker.RunSubnetPoolFromEnv(os.Getenv)
+	if err != nil {
+		return runnerRuntime{}, errors.Join(err, sink.Close())
+	}
 	ev := &evidenceForwarder{}
 	sub, err := docker.New(docker.Config{RunnerID: identity.RunnerID.String(), ProxyImage: opts.proxyImage, InternalNetwork: opts.network, Record: record,
-		ControlPlaneRelay: relay.Ensure, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath, UpstreamProxyURL: opts.upstreamProxy,
+		ControlPlaneRelay: relay.Ensure, LocalModelRelay: relay, TrustedCAPEM: opts.trustedCA, TrustedCAFile: opts.trustedCAPath, UpstreamProxyURL: opts.upstreamProxy,
 		DecisionSink: sinkAdapter{s: sink.spoolSink, url: sink.proxyURL}, Evidence: ev,
-		ProxySandboxPeersOnly: cliutil.EnvBool(docker.EnvProxySandboxPeersOnly, false)})
+		ProxyServesAnyPeer: docker.ProxyServesAnyPeerFromEnv(), UserDriveHostRoots: driveRoots,
+		ProxyPeersOnlyByDefault: docker.ProxyPeersOnlyByDefaultFromEnv(), PeersOnlyFallback: opts.offline.peersOnlyChanged,
+		RunSubnetPool: runSubnets, RunSubnetBits: runSubnetBits})
+	if err != nil {
+		return runnerRuntime{}, errors.Join(err, sink.Close())
+	}
+	local, err := opts.localAttachEnabled()
 	if err != nil {
 		return runnerRuntime{}, errors.Join(err, sink.Close())
 	}
 	extras := sink.extras(sub, ev)
-	extras.report = connectReport{log: opts.offline, relay: newRelayWatch(relayReprobe(relay), opts.offline.secretsOrNil())}
+	watch := newRelayWatch(relayReprobe(relay), opts.offline.secretsOrNil())
+	watch.onChange = opts.offline.relayChanged
+	extras.report = connectReport{log: opts.offline, relay: watch}
+	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
+	extras.macOSVM = enableMacOSVM(ctx, sub, identity.RunnerID.String(), stateDir, opts.macOSVM)
+	extras.localAttach, extras.orgURL = local, opts.orgURL
+	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, sub.EndVM)
+	extras.driveRoots, extras.localModelRelay, extras.localModelPorts = driveRoots, true, modelPorts
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
 	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, extras)
 	if err != nil {
@@ -99,6 +131,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 		return runnerRuntime{}, errors.Join(fmt.Errorf("decision sink: %w", err), rt.close())
 	}
 	relay.use(pair)
+	opts.offline.relayChanged(types.RelayReachable)
 	slog.InfoContext(ctx, "run relay reachable", "engine", eng.desc, "listen", pair.bind, "target", pair.target)
 	return rt, nil
 }
@@ -363,8 +396,49 @@ type runtimeExtras struct {
 	started func(context.Context, *offline.Manager) error
 	// closeAlso runs when the runtime closes (the decision sink).
 	closeAlso func() error
+	// linuxVM, set when the operator turned Linux VM sandboxes on and the probe passed, is what the
+	// runner's caps offer; nil offers none and refuses create_vm.
+	linuxVM *runnerwire.VMCaps
+	// macOSVM, set when the operator turned macOS VM sandboxes on (enableMacOSVM), builds the caps'
+	// macos_vm and resends them when they change; nil offers none.
+	macOSVM *macOSVMs
+	// localAttach opens the local attach socket while the organisation allows it (--local-attach on,
+	// Docker only); orgURL is the organisation its pointer file names.
+	localAttach bool
+	orgURL      string
 	// report is what caps carry beyond the substrate's own (offline summary, relay status).
 	report connectReport
+	// driveRoots are --drive-root, advertised as the runner's allowed_roots.
+	driveRoots []string
+	// localModelRelay: the substrate relays a laptop local model (the Docker driver's
+	// LocalModelRelay), so the caps name runnerwire.ProxySettingLocalModelRelay.
+	localModelRelay bool
+	// localModelPorts are --local-model-port, advertised as the runner's local_model_ports.
+	localModelPorts []uint16
+	// runsNamespaces are a k8s runner's --runs-namespace, advertised as its runs_namespaces.
+	runsNamespaces []string
+	// workloadStatus is the k8s runner's workload_status adapter (workloads_k8s.go); nil refuses the call.
+	workloadStatus func(context.Context, runnerwire.WorkloadStatusArgs) error
+}
+
+// proxySettings are the run proxy settings the caps name: every one this build carries, and the
+// local model relay where the substrate serves it.
+func (e runtimeExtras) proxySettings() []string {
+	if !e.localModelRelay {
+		return runnerwire.ProxySettings
+	}
+	return append(slices.Clip(runnerwire.ProxySettings), runnerwire.ProxySettingLocalModelRelay)
+}
+
+// parseDriveRoots checks --drive-root: each an absolute, cleaned folder. The docker driver binds a drive
+// only strictly below one of them, after resolving symlinks (runner.UserDriveMountSourceCheck).
+func parseDriveRoots(raw []string) ([]string, error) {
+	for _, r := range raw {
+		if !filepath.IsAbs(r) || filepath.Clean(r) != r || r == "/" {
+			return nil, fmt.Errorf("--drive-root %q: give an absolute, cleaned folder below /", r)
+		}
+	}
+	return raw, nil
 }
 
 func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay, capacity func(context.Context) placement.Capacity, extra runtimeExtras) (runnerRuntime, error) {
@@ -373,6 +447,43 @@ func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, s
 		return runnerRuntime{}, err
 	}
 	return runnerRuntimeWith(ctx, identity, stateDir, sub, ref, relay, capacity, extra)
+}
+
+// runnerKeystore is the keystore the runner's resident credentials live in: the caller's, else this
+// runner's own.
+func runnerKeystore(ks runneragent.Keystore, runnerID string) runneragent.Keystore {
+	if ks.Set != nil {
+		return ks
+	}
+	store := keystore.For(runnerID)
+	return runneragent.Keystore{Set: store.Set, Get: store.Get, Delete: store.Delete, DeleteAll: store.DeleteAll, Precheck: store.Precheck}
+}
+
+// hostCaps is the part of the caps report that belongs to the machine and the substrate: what it
+// supports, its name, version and arch, and whether it keeps a sandbox after the run ends.
+func hostCaps(ctx context.Context, sub substrate.Substrate, arch string) (runnerwire.Caps, error) {
+	_, keeps := sub.(runner.SandboxEnder)
+	support, err := sub.Classes(ctx)
+	if err != nil {
+		return runnerwire.Caps{}, err
+	}
+	// A host that cannot say its name reports none, and keeps the machine name it had.
+	machine, _ := os.Hostname()
+	if arch == "" {
+		arch = engineArch(ctx)
+	}
+	return runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, EndsUnkept: !keeps}, nil
+}
+
+// checkLapsesAtStartup runs the first lapse check. Run retries transient containment errors, and
+// BeforeReady refuses admission until required containment actually succeeds.
+func checkLapsesAtStartup(ctx context.Context, manager *offline.Manager) {
+	startup, cancel := context.WithTimeout(ctx, 30*time.Second)
+	err := manager.CheckLapses(startup)
+	cancel()
+	if err != nil {
+		slog.WarnContext(ctx, "runner startup containment will retry", "error", err)
+	}
 }
 
 func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay runRelay, capacity func(context.Context) placement.Capacity, extra runtimeExtras) (_ runnerRuntime, retErr error) {
@@ -385,18 +496,18 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		return runnerRuntime{}, err
 	}
 	streams.HoldSandboxes(manager.HoldsSandbox)
+	streams.AttachRuns(manager.AttachRef)
+	local, err := newLocalSocket(extra.localAttach, identity.RunnerID.String(), extra.orgURL, stateDir, streams.ServeLocal)
+	if err != nil {
+		return runnerRuntime{}, errors.Join(err, manager.Close())
+	}
 	manager.ReleaseSettledOutput(streams.ReleaseOutput)
 	defer func() {
 		if retErr != nil {
 			retErr = errors.Join(retErr, manager.Close())
 		}
 	}()
-	ks := extra.keystore
-	if ks.Set == nil {
-		store := keystore.For(identity.RunnerID.String())
-		ks = runneragent.Keystore{Set: store.Set, Get: store.Get, Delete: store.Delete, DeleteAll: store.DeleteAll, Precheck: store.Precheck}
-	}
-	resident, err := runneragent.NewResident(ks, stateDir, manager.AdmitResident, time.Now)
+	resident, err := runneragent.NewResident(runnerKeystore(extra.keystore, identity.RunnerID.String()), stateDir, manager.AdmitResident, time.Now)
 	if err != nil {
 		return runnerRuntime{}, err
 	}
@@ -413,54 +524,26 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		}
 	}
 	dispatcher, err := runneragent.New(runneragent.Config{
-		RunnerID: identity.RunnerID.String(), Substrate: sub, HoldsSandbox: manager.HoldsSandbox,
+		RunnerID: identity.RunnerID.String(), Substrate: sub, HoldsSandbox: manager.HoldsSandbox, Covered: manager.CoversRef,
 		BeforeCreate: manager.BeforeCreate, Created: manager.Created, CreateFailed: manager.CreateFailed,
-		BeforeRefCall: manager.BeforeRefCall, AfterRefCall: manager.AfterRefCall, CheckSelftest: manager.CheckSelftest,
+		BeforeRefCall: func(ctx context.Context, method, ref string, generation uuid.UUID) error {
+			if method == runnerwire.MethodKill || method == runnerwire.MethodEnd {
+				streams.EndLocalAttach(ref) // a local terminal never outlives its sandbox
+			}
+			return manager.BeforeRefCall(ctx, method, ref, generation)
+		},
+		AfterRefCall: manager.AfterRefCall, CheckSelftest: manager.CheckSelftest,
 		MutationFinished: manager.MutationFinished,
 		ExecutionResult:  manager.ExecutionResult,
 		Streams:          streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
-		Resident: resident,
+		Resident: resident, LinuxVM: extra.linuxVM != nil, MacOSVM: extra.macOSVM.enabled(),
+		WorkloadStatus: extra.workloadStatus,
 	})
 	if err != nil {
 		return runnerRuntime{}, err
 	}
-	startup, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err = manager.CheckLapses(startup)
-	cancel()
-	if err != nil {
-		// Run retries transient containment errors. BeforeReady refuses
-		// admission until required containment actually succeeds.
-		slog.WarnContext(ctx, "runner startup containment will retry", "error", err)
-	}
-	var online atomic.Pointer[runnerwire.Peer]
-	// sendCaps reports the runner's caps on peer; reprobe re-checks the relay first, and always sends
-	// even when nothing in the report is new (a fresh session's caps are required).
-	sendCaps := func(ctx context.Context, peer *runnerwire.Peer, reprobe, always bool) error {
-		_, keeps := sub.(runner.SandboxEnder)
-		support, err := sub.Classes(ctx)
-		if err != nil {
-			return err
-		}
-		// A host that cannot say its name reports none, and keeps the machine name it had.
-		machine, _ := os.Hostname()
-		arch := extra.arch
-		if arch == "" {
-			arch = engineArch(ctx)
-		}
-		caps := runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, Capacity: capacity(ctx), BYOISelftest: dispatcher.Selftests(), Retire: true, Resident: dispatcher.Residents(), EndsUnkept: !keeps}
-		if !extra.report.fill(ctx, &caps, reprobe) && !always {
-			return nil
-		}
-		data, err := runnerwire.Marshal(caps)
-		if err != nil {
-			return err
-		}
-		if err := peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
-			return err
-		}
-		extra.report.sent(caps)
-		return nil
-	}
+	checkLapsesAtStartup(ctx, manager)
+	caps := &capsReporter{sub: sub, extra: extra, capacity: capacity, dispatcher: dispatcher, hasLocal: local != nil}
 	hooks := runnerwire.RunnerHooks{
 		Call: dispatcher.Call,
 		// The org never opens a stream toward a runner: a relay is the
@@ -474,7 +557,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		// erase runs (lock order: Resident, then Manager).
 		Revoked: func(ctx context.Context) error { return errors.Join(manager.Revoked(ctx), resident.EraseAll(ctx)) },
 		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
-			if err := sendCaps(ctx, peer, true, true); err != nil {
+			if err := caps.send(ctx, peer, true, true); err != nil {
 				return err
 			}
 			// Posture only gates runner_resident delivery; a refused report
@@ -487,38 +570,28 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			return manager.Replay(ctx, peer)
 		},
 		Online: func(peer *runnerwire.Peer, resumed bool) {
-			online.Store(peer)
+			caps.online.Store(peer)
 			manager.Online(peer)
 			streams.Online(peer)
 			relay.Online(peer)
-			if resumed {
-				// A resumed session sends no caps unless the relay check on this reconnect changed or a
-				// summary waits.
-				go func() {
-					if err := sendCaps(ctx, peer, true, false); err != nil {
-						slog.WarnContext(ctx, "runner caps after resume failed", "error", err)
-					}
-				}()
-			}
+			caps.afterOnline(ctx, peer, resumed)
 			if reporter != nil {
 				go reporter.Watch(peer, postureInterval)
 			}
 		},
+		LocalAttach: local.Set,
+		// The organisation's per-run limits, on every connect: each macOS guest is sized at them.
+		PerRunLimits: extra.macOSVM.setPerRunLimits,
 		StreamOffline: func(peer *runnerwire.Peer) {
-			online.CompareAndSwap(peer, nil)
+			caps.online.CompareAndSwap(peer, nil)
 			streams.Offline(peer)
 			relay.Offline(peer)
 		},
 	}
 	run := func(ctx context.Context) error {
+		extra.macOSVM.start(ctx, func() { caps.resendMacOS(ctx) })
 		if w := extra.report.relay; w != nil {
-			go w.run(ctx, func() {
-				if peer := online.Load(); peer != nil {
-					if err := sendCaps(ctx, peer, false, true); err != nil {
-						slog.WarnContext(ctx, "runner caps after a relay change failed", "error", err)
-					}
-				}
-			})
+			go w.run(ctx, func() { caps.resendRelay(ctx) })
 		}
 		go func() {
 			if manager.IsRevoked() {
@@ -531,7 +604,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		return manager.Run(ctx)
 	}
 	return runnerRuntime{hooks: hooks, run: run, close: func() error {
-		err := errors.Join(manager.Close(), relay.Close())
+		err := errors.Join(local.Close(), manager.Close(), relay.Close())
 		if extra.closeAlso != nil {
 			err = errors.Join(err, extra.closeAlso())
 		}
@@ -624,6 +697,12 @@ type dockerSink struct {
 	bound  map[netip.Addr]uint16 // where it listens: address and port
 	lns    []net.Listener
 	url    string // decision_sink.url for new proxies; "" until use
+
+	fullBusy   atomic.Bool // a full-spool pass is running (endFullSpoolVMsInBackground)
+	fullMu     sync.Mutex  // guards fullClosed, fullCancel and the Add on fullPasses
+	fullClosed bool        // Close has begun: no new pass starts
+	fullPasses sync.WaitGroup
+	fullCancel context.CancelFunc // cancels the running pass; guarded by fullMu
 }
 
 // newDockerSink starts the sink, listening at once where it listened before a restart when that
@@ -669,6 +748,9 @@ func (d *dockerSink) listen(ap netip.AddrPort) (uint16, error) {
 // Close closes the sink and every listener it opened, one whose Serve has not started included, so
 // its port is free once Close returns.
 func (d *dockerSink) Close() error {
+	if d.spoolSink.fullRuleOn() {
+		d.joinFullPass()
+	}
 	err := d.spoolSink.Close()
 	d.addrMu.Lock()
 	lns := d.lns
@@ -710,16 +792,138 @@ func (d *dockerSink) proxyURL() string {
 	return d.url
 }
 
+// fullSpoolBound bounds one full-spool pass: ending a VM waits for the guest's power down.
+var fullSpoolBound = 2 * time.Minute
+
+// closeJoinBound is how long Close waits for a running full-spool pass before cancelling it, and
+// cancelUnwindBound how long it then waits for the pass to return. Together they sit under the service
+// manager's stop timeout (systemd's 90 s default for the unit, launchd's 20 s ExitTimeOut), which would
+// otherwise kill the runner mid-pass. A pass cut short is not lost: its run's spool records that the
+// VM is being ended (Spool.SetEndPending), and the next start's pass finishes it.
+var (
+	closeJoinBound    = 10 * time.Second
+	cancelUnwindBound = 2 * time.Second
+)
+
+// endFullSpoolVMsInBackground runs the full-spool pass off the containment tick, one at a time. The tick
+// shares its 30 s safety context with CheckLapses, which runs after it, and ending one VM can take
+// that long: the pass gets a budget of its own and never delays a lapse.
+func (d *dockerSink) endFullSpoolVMsInBackground(ctx context.Context) {
+	if !d.spoolSink.fullRuleOn() {
+		return // the Linux VM switch is off: no pass, no goroutine
+	}
+	d.fullMu.Lock()
+	if d.fullClosed || !d.fullBusy.CompareAndSwap(false, true) {
+		d.fullMu.Unlock()
+		return
+	}
+	pass, cancel := context.WithTimeout(context.WithoutCancel(ctx), fullSpoolBound)
+	d.fullCancel = cancel
+	d.fullPasses.Add(1)
+	d.fullMu.Unlock()
+	go func() {
+		defer d.fullPasses.Done()
+		defer d.fullBusy.Store(false)
+		defer cancel()
+		d.EndVMsWithFullSpools(pass)
+	}()
+}
+
+// joinFullPass stops new full-spool passes and waits up to closeJoinBound for a running one, then
+// cancels it and waits up to cancelUnwindBound for it to return, so spoolSink.Close does not race a
+// live pass. Only a pass that ignores its cancelled context for cancelUnwindBound outlives it. Close
+// calls it only when the full-spool rule is on.
+func (d *dockerSink) joinFullPass() {
+	d.fullMu.Lock()
+	d.fullClosed = true
+	d.fullMu.Unlock()
+	done := make(chan struct{})
+	go func() { d.fullPasses.Wait(); close(done) }()
+	select {
+	case <-done:
+		return
+	case <-time.After(closeJoinBound):
+	}
+	d.fullMu.Lock()
+	if d.fullCancel != nil {
+		d.fullCancel()
+	}
+	d.fullMu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(cancelUnwindBound):
+	}
+}
+
 // extras are the sink's part of the runtime: Tick regrants credit after the organisation's acks and
 // retries loss rows, and at startup, before the containment pass, the driver's record store becomes
 // the manager's and every run's sink key is registered again.
 func (d *dockerSink) extras(sub *docker.Driver, ev *evidenceForwarder) runtimeExtras {
 	return runtimeExtras{
-		options: offline.Options{Tick: d.Tick},
+		options: offline.Options{Tick: func(ctx context.Context) { d.Tick(ctx); d.endFullSpoolVMsInBackground(ctx) }},
 		started: func(_ context.Context, m *offline.Manager) error {
 			ev.m = m
 			return sub.ReregisterSinks(m.SinkRunIDs())
 		},
 		closeAlso: d.Close,
 	}
+}
+
+// enableMacOSVM turns macOS VM sandboxes on when the operator asked for them on an Apple silicon Mac,
+// and returns the handle that builds the caps' macos_vm. Off by default. A Mac whose ledger is missing or
+// damaged offers none and says why in its caps, in words; one with no helper beside wardyn-runnerd, or
+// whose helper's probe does not pass, offers none and says why in its caps as a code, and in its log in words. Container runs are untouched
+// either way. The runner does not know its per-run memory here (the organisation keeps the limits), so
+// the offer sizes each guest at the base's minimum until it does.
+func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir string, on bool) *macOSVMs {
+	if !on {
+		return nil
+	}
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner: they need an Apple silicon Mac")
+		return nil
+	}
+	root, err := macvm.DefaultRoot()
+	if err != nil {
+		slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
+		return nil
+	}
+	measured, err := measureHost(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "macOS VM sandboxes: Docker did not report its memory; the ledger subtracts none", "error", err.Error())
+	}
+	m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: runnerID, version: version.String(), uid: os.Getuid(), limitsFile: macOSVMLimitsFile(stateDir),
+		dockerMemory: uint64(max(measured.MemoryMiB, 0)) << 20, host: admission.SystemHost(), owner: fileOwner})
+	m.helper, err = macVMHelperPath()
+	if err == nil {
+		_, err = os.Stat(m.helper)
+	}
+	if m.ledger != nil && err != nil {
+		slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner: no helper beside wardyn-runnerd", "error", err.Error())
+		m.ledger, m.why, m.reason = nil, macOSVMNoHelper, runnerwire.MacVMReasonNoHelper
+	}
+	m.gate(ctx)
+	m.dockerUp = func(ctx context.Context) bool { _, err := sub.Classes(ctx); return err == nil }
+	if m.ledger != nil {
+		m.sweepStaging()
+		cfg := &docker.MacVMConfig{Layout: m.layout, Helper: m.helper, Identity: macOSVMIdentity, SockRoot: m.sockRoot,
+			ToolsDialFile: filepath.Join(root, runToolsDialFile), Ledger: m.ledger, Host: m.host, RunnerID: runnerID, HostOS: macHostOS(), Changed: m.changed}
+		if err := sub.EnableMacVM(cfg); err != nil {
+			slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
+			m.ledger, m.refusal, m.reason = nil, macOSVMLedgerDamaged, runnerwire.MacVMReasonLedgerDamaged
+		} else {
+			m.useDriver(sub)
+			m.toolsUpdate = func(man macvm.Manifest) {
+				go func() {
+					if err := m.startToolsUpdate(context.WithoutCancel(ctx), man); err != nil {
+						slog.WarnContext(ctx, "macOS VM base: the tools update did not start", "error", err.Error())
+					}
+				}()
+			}
+			slog.InfoContext(ctx, "macOS VM sandboxes are on", "dir", root, "identity", string(cfg.Identity))
+		}
+	}
+	m.checkSession(ctx)
+	m.recompute()
+	return m
 }

@@ -305,7 +305,7 @@ type AutonomyResolution struct {
 // A STANDALONE profile (Overlay nil) is a full RunPolicySpec with replacement semantics: an
 // assigned profile IS the principal's ceiling; with no assignment a principal falls through to
 // Config.DefaultPolicy byte for byte. A COMPOSED profile (Overlay set) stores no raw Ceiling or
-// Limits, only a base (ParentID, or the deployment default when nil) and an overlay that can
+// Limits, only a base (ParentID; the Default unit stands for the deployment default) and an overlay that can
 // only narrow it; the effective ceiling is composer.ApplyOverlay over the resolved base, computed
 // whenever authority is read (internal/api/governance_compose.go is the only reader). composer.Clamp
 // is NOT that meet (it drops workspace_mounts unconditionally, is order-dependent through
@@ -336,7 +336,39 @@ type GovernanceUnit struct {
 	Overlay *CeilingOverlay `json:"overlay,omitempty"`
 	// OverlayLimits narrows the base's limits. Only with an Overlay; nil is no narrowing.
 	OverlayLimits *LimitsOverlay `json:"overlay_limits,omitempty"`
+	// Kind is UnitKindUnit, or UnitKindDefault for the one Default unit, whose walls are the
+	// deployment default (unit-tree migration). Mode is UnitModeOwnWalls or UnitModePassThrough (its
+	// parent's walls exactly). Depth is the unit's place from the top, Default and every
+	// parent-less unit being 1; the store keeps it, and a write never sets it.
+	Kind  string `json:"kind,omitempty"`
+	Mode  string `json:"mode,omitempty"`
+	Depth int    `json:"depth,omitempty"`
+	// LockedKnobs are the knobs (overlay and limits JSON names, and desktop.<direction> for one desktop
+	// direction) this unit fixes for every unit below it: no write to a unit below may change one, a
+	// narrowing included.
+	LockedKnobs []string `json:"locked_knobs,omitempty"`
 }
+
+// GovernanceUnitAdmin makes a person (a user subject: sub or email) or an IdP group the admin of one
+// unit and every unit below it (migration governance_unit_admins). GrantedBy proposed the grant and
+// ApprovedBy is the second human who approved it ("" when it applied directly).
+type GovernanceUnitAdmin struct {
+	ID          uuid.UUID             `json:"id"`
+	UnitID      uuid.UUID             `json:"unit_id"`
+	SubjectType CapabilitySubjectType `json:"subject_type"`
+	Subject     string                `json:"subject"`
+	GrantedBy   string                `json:"granted_by"`
+	ApprovedBy  string                `json:"approved_by,omitempty"`
+	CreatedAt   time.Time             `json:"created_at"`
+}
+
+// The unit kinds and modes (unit-tree migration).
+const (
+	UnitKindUnit        = "unit"
+	UnitKindDefault     = "default"
+	UnitModeOwnWalls    = "own_walls"
+	UnitModePassThrough = "pass_through"
+)
 
 // Composed reports whether the profile is a base plus an overlay rather than a standalone ceiling.
 func (p GovernanceUnit) Composed() bool { return p.Overlay != nil }
@@ -358,4 +390,9 @@ type GovernanceMembership struct {
 	Priority    int                   `json:"priority"`
 	CreatedAt   time.Time             `json:"created_at"`
 	CreatedBy   string                `json:"created_by,omitempty"`
+	// Home marks the context a run uses when the person holds several and names none.
+	Home bool `json:"home,omitempty"`
+	// Legacy marks a membership that existed before the tree (unit-tree migration): per person only the
+	// precedence winner among legacy rows is a context; the rest are dormant for that person.
+	Legacy bool `json:"legacy,omitempty"`
 }

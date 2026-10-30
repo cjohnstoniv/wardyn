@@ -52,6 +52,30 @@ describe("LiveApprovals", () => {
     expect(await screen.findByTestId("live-approvals-idle")).toBeInTheDocument();
   });
 
+  it("#3030: a strip row reads the Approvals card's human title, with Approve before Deny", async () => {
+    listApprovalsMock.mockResolvedValue([pending({ id: "t", requested_scope: { host: "title.example" } })]);
+    render(<LiveApprovals runId="r1" />);
+    const row = await screen.findByTestId("live-approval-row");
+    expect(within(row).getByText("Reach title.example")).toBeInTheDocument();
+    const approve = within(row).getByRole("button", { name: "Approve" });
+    const deny = within(row).getByRole("button", { name: "Deny" });
+    expect(approve.compareDocumentPosition(deny) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  // #2912: under 640px the title takes its own line, whole, and the verdict controls sit under it at the right. jsdom
+  // applies no CSS, so this pins the classes; the e2e focus-dock-decision spec measures the result.
+  it("#2912: the request row wraps below 640px — title on its own line, never truncated there", async () => {
+    listApprovalsMock.mockResolvedValue([pending({ id: "w", requested_scope: { host: "wrap.example" } })]);
+    render(<LiveApprovals runId="r1" />);
+    const row = await screen.findByTestId("live-approval-row");
+    expect(row).toHaveClass("flex-wrap");
+    const title = within(row).getByText("Reach wrap.example");
+    expect(title).toHaveClass("sm:truncate");
+    expect(title).not.toHaveClass("truncate");
+    expect(title.parentElement).toHaveClass("max-sm:basis-full");
+    expect(within(row).getByRole("button", { name: "Approve" }).closest("div.max-sm\\:ml-auto")).not.toBeNull();
+  });
+
   it("flags a wait_for_review request as HELD ('waiting') and only this run's approvals", async () => {
     listApprovalsMock.mockResolvedValue([
       pending({ id: "held", requested_scope: { host: "held.example", mode: "wait_for_review" } }),
@@ -59,7 +83,7 @@ describe("LiveApprovals", () => {
     ]);
     render(<LiveApprovals runId="r1" />);
     const panel = await screen.findByTestId("live-approvals");
-    expect(within(panel).getByText("held.example")).toBeInTheDocument();
+    expect(within(panel).getByText("Reach held.example")).toBeInTheDocument();
     expect(within(panel).queryByText("other.example")).not.toBeInTheDocument(); // filtered by runId
     expect(within(panel).getByText("waiting")).toBeInTheDocument(); // per-row held badge (exact)
     expect(within(panel).getByText(/Sandbox is waiting/i)).toBeInTheDocument(); // header
@@ -75,7 +99,7 @@ describe("LiveApprovals", () => {
     ]);
     render(<LiveApprovals runId="r1" />);
     const panel = await screen.findByTestId("live-approvals");
-    expect(within(panel).getByText("stale.example")).toBeInTheDocument();
+    expect(within(panel).getByText("Reach stale.example")).toBeInTheDocument();
     expect(within(panel).queryByText("waiting")).not.toBeInTheDocument();
     expect(within(panel).queryByText(/Sandbox is waiting/i)).not.toBeInTheDocument();
   });
@@ -107,8 +131,8 @@ describe("LiveApprovals", () => {
   // secrets demos' authorized-not-issued mint is raised from INSIDE the
   // sandbox mid-run, over the broker's own route — the same
   // decision-visible-where-it-happens principle egress/tool_call rows already
-  // get, so it renders on the strip, labeled by host like an egress row.
-  it("a pending api_key-shaped credential renders on the strip, labeled by host", async () => {
+  // get, so it renders on the strip, titled with the host like an egress row.
+  it("a pending api_key-shaped credential renders on the strip, titled with the host", async () => {
     listApprovalsMock.mockResolvedValue([
       pending({
         id: "cred-key",
@@ -118,7 +142,7 @@ describe("LiveApprovals", () => {
     ]);
     render(<LiveApprovals runId="r1" />);
     const panel = await screen.findByTestId("live-approvals");
-    expect(within(panel).getByText("example.com")).toBeInTheDocument();
+    expect(within(panel).getByText(/for example\.com$/)).toBeInTheDocument();
   });
 
   // Deny's confirm copy must own up to what the click actually refuses: a
@@ -157,11 +181,11 @@ describe("LiveApprovals", () => {
       });
     }
 
-    it("renders tool + cmd, clipped for the strip with the full string on the title", async () => {
+    it("titles a tool call as Run <cmd>, clipped for the strip with the full string on the title", async () => {
       listApprovalsMock.mockResolvedValue([toolRow({ requested_scope: { tool: "Bash", cmd: LONG_CMD } })]);
       render(<LiveApprovals runId="r1" />);
       const panel = await screen.findByTestId("live-approvals");
-      const full = `Bash: ${LONG_CMD}`;
+      const full = `Run ${LONG_CMD}`;
       const line = within(panel).getByTitle(full);
       expect(line.textContent).toBe(full.slice(0, 71) + "…");
       expect(line.textContent!.length).toBeLessThan(full.length);
@@ -524,6 +548,53 @@ describe("LiveApprovals", () => {
       expect(screen.getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
     });
 
+    // #2604: the list carries the server's verdict (egress_host grant applied), so no click is needed to learn it.
+    it("decidable=false turns the buttons off before any click and shows the admin-only hint; decidable=true leaves them on", async () => {
+      listApprovalsMock.mockResolvedValue([
+        pending({ id: "e-no", requested_scope: { host: "unlisted.example" }, decidable: false }),
+        pending({ id: "e-yes", requested_scope: { host: "listed.example" }, decidable: true }),
+      ]);
+      render(
+        <OperatorProvider operator={false} securityOperator={false}>
+          <LiveApprovals runId="r1" />
+        </OperatorProvider>,
+      );
+      const panel = await screen.findByTestId("live-approvals");
+      const approve = within(panel).getAllByRole("button", { name: /^Approve$/ });
+      const deny = within(panel).getAllByRole("button", { name: /^Deny$/ });
+      expect(approve).toHaveLength(2);
+      const off = approve.findIndex((b) => (b as HTMLButtonElement).disabled);
+      expect(off).toBeGreaterThanOrEqual(0);
+      expect(approve.filter((b) => !(b as HTMLButtonElement).disabled)).toHaveLength(1);
+      expect(deny[off]).toBeDisabled();
+      expect(screen.getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
+      expect(approveMock).not.toHaveBeenCalled();
+    });
+
+    // T4-c: a host the run owner's own walls deny can be denied but never approved.
+    it("walls_block turns Approve off and leaves Deny on", async () => {
+      listApprovalsMock.mockResolvedValue([pending({ id: "w1", requested_scope: { host: "paste.example.net" }, decidable: true, walls_block: true })]);
+      render(
+        <OperatorProvider operator={false} securityOperator={false}>
+          <LiveApprovals runId="r1" />
+        </OperatorProvider>,
+      );
+      const panel = await screen.findByTestId("live-approvals");
+      expect(within(panel).getByRole("button", { name: /^Approve$/ })).toBeDisabled();
+      expect(within(panel).getByRole("button", { name: /^Deny$/ })).not.toBeDisabled();
+    });
+
+    it("decidable=true enables a row role+kind alone would have closed", async () => {
+      listApprovalsMock.mockResolvedValue([pending({ id: "t1", kind: "tool_call", requested_scope: {}, decidable: true })]);
+      render(
+        <OperatorProvider operator={false} securityOperator={false}>
+          <LiveApprovals runId="r1" />
+        </OperatorProvider>,
+      );
+      const panel = await screen.findByTestId("live-approvals");
+      expect(within(panel).getByRole("button", { name: /^Approve$/ })).not.toBeDisabled();
+    });
+
     it("a member CANNOT Approve/Deny an api_key credential row — stays admin-only", async () => {
       listApprovalsMock.mockResolvedValue([
         pending({
@@ -691,10 +762,10 @@ describe("LiveApprovals — precedence and the two-row overflow", () => {
     render(<LiveApprovals runId="r1" />);
     const panel = await screen.findByTestId("live-approvals");
     const rows = within(panel).getAllByTestId("live-approval-row");
-    expect(rows[0]).toHaveTextContent("held.example");
+    expect(rows[0]).toHaveTextContent("Reach held.example");
     // The regression the cap creates: the one decision parking the sandbox
     // must never be the row behind "Show all".
-    expect(within(panel).getByText("held.example")).toBeInTheDocument();
+    expect(within(panel).getByText("Reach held.example")).toBeInTheDocument();
   });
 
   it("Show all reveals every row, and folds back", async () => {
@@ -750,7 +821,7 @@ describe("LiveApprovals — the PENDING read is scoped server-side", () => {
     );
     render(<LiveApprovals runId="r1" />);
     const panel = await screen.findByTestId("live-approvals");
-    expect(within(panel).getByText("unlisted.example")).toBeInTheDocument();
+    expect(within(panel).getByText("Reach unlisted.example")).toBeInTheDocument();
     expect(listApprovalsMock).toHaveBeenCalledWith("PENDING", "r1");
   });
 
@@ -763,11 +834,11 @@ describe("LiveApprovals — the PENDING read is scoped server-side", () => {
     const many = { created_by: "dana", state: "RUNNING" as const, agents: [{ agent: "claude-code" }, { agent: "codex-cli" }] };
     const { unmount } = render(<LiveApprovals runId="r1" run={many} />);
     const panel = await screen.findByTestId("live-approvals");
-    expect(within(panel).getByText("Bash: npm ci")).toBeInTheDocument();
+    expect(within(panel).getByText("Run npm ci")).toBeInTheDocument();
     expect(within(panel).getByText("· Asked by Claude Code")).toBeInTheDocument();
     unmount();
     render(<LiveApprovals runId="r1" run={{ ...many, agents: [{ agent: "claude-code" }] }} />);
-    expect(await screen.findByText("Bash: npm ci")).toBeInTheDocument();
+    expect(await screen.findByText("Run npm ci")).toBeInTheDocument();
     expect(screen.queryByText(/Asked by/)).toBeNull();
   });
 
@@ -775,7 +846,7 @@ describe("LiveApprovals — the PENDING read is scoped server-side", () => {
     listApprovalsMock.mockResolvedValue([pending({ requested_scope: { host: "registry.npmjs.org", harness: "claude-code" } })]);
     const many = { created_by: "dana", state: "RUNNING" as const, agents: [{ agent: "claude-code" }, { agent: "codex-cli" }] };
     render(<LiveApprovals runId="r1" run={many} />);
-    expect(await screen.findByText("registry.npmjs.org")).toBeInTheDocument();
+    expect(await screen.findByText("Reach registry.npmjs.org")).toBeInTheDocument();
     expect(screen.queryByText(/Asked by/)).toBeNull();
   });
 });

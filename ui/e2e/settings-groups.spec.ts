@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navToRoute } from "./fixtures";
+import { test, expect, expandCard, gotoConsole, navToRoute } from "./fixtures";
 import { SETTINGS_GROUPS } from "../src/app/components/wardyn/copy/card-status";
+import { HOST_CARD } from "../src/app/components/wardyn/copy/host-card";
 
 // Admin Settings reads as three places, and the two cards that only link out are rows with an arrow (#3048).
 test("Settings groups its cards, and Workspace providers and User drives are link rows", async ({ page }) => {
@@ -26,4 +27,12 @@ test("Settings groups its cards, and Workspace providers and User drives are lin
   await navToRoute(page, "/admin/settings");
   await page.getByTestId("user-drives-card").getByRole("link").click();
   await expect(page).toHaveURL(/\/admin\/drives$/);
+});
+
+// #3342: the Host card's Re-check has its own name, so it never reads like the shell's no-barrier one.
+test("the Host card's Re-check is named for the host", async ({ page }) => {
+  await gotoConsole(page, "admin");
+  await navToRoute(page, "/admin/settings");
+  await expandCard(page, "Host");
+  await expect(page.getByTestId("host-card").getByRole("button", { name: HOST_CARD.RECHECK, exact: true })).toHaveCount(1);
 });

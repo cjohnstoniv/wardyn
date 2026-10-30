@@ -123,18 +123,19 @@ func cliAWSPortalEgress(ssoRegion, endpointOverride string) []string {
 // that set the run owner's session on the wire. The kill switch is read here,
 // at dispatch, and its off position refuses the run: the only other way to
 // serve the CLI is the SSO token in the sandbox. ok=false: the run was marked
-// FAILED and dispatch stops.
+// FAILED and dispatch stops. why is the lane's re-signing choice, for
+// recordAWSCLIConfigure after the lane-authoring gates; nil without the row.
 func (s *Server) authorAWSCLI(ctx context.Context, run types.AgentRun, cli *awsCLIDispatch, policy *types.RunPolicySpec,
 	sandboxEnv map[string]string, injections []runner.InjectionGrant,
-) ([]runner.InjectionGrant, []string, *proxy.AWSSigV4Config, bool) {
+) (inj []runner.InjectionGrant, mitm []string, sig *proxy.AWSSigV4Config, why *awsSigV4Why, ok bool) {
 	if cli == nil {
-		return injections, nil, nil, true
+		return injections, nil, nil, nil, true
 	}
-	refuse := func(msg string) ([]runner.InjectionGrant, []string, *proxy.AWSSigV4Config, bool) {
+	refuse := func(msg string) ([]runner.InjectionGrant, []string, *proxy.AWSSigV4Config, *awsSigV4Why, bool) {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, msg)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": msg, "component_id": cli.ComponentID})))
-		return injections, nil, nil, false
+		return injections, nil, nil, nil, false
 	}
 	switch {
 	case !s.cfg.AWSSSOProxyInject:
@@ -145,15 +146,15 @@ func (s *Server) authorAWSCLI(ctx context.Context, run types.AgentRun, cli *awsC
 	a := cli.AWS
 	// Re-signing: the placeholder profile with the row's Region, and no token
 	// cache or portal route; otherwise the profile, the inert cache and the portal.
-	sigv4Hosts, sigv4 := s.awsSigV4Hosts(cli.Hosts)
-	if sigv4 {
+	sigv4Hosts, lane := s.awsSigV4Lane(cli.Hosts)
+	if lane.Code == "" {
 		stageAWSSigV4Files(sandboxEnv, a.Region)
 	} else {
 		profile := awsSSOBlob{StartURL: a.StartURL, Region: a.SSORegion, AccountID: a.AccountID, RoleName: a.RoleName}
 		s.stageAWSSSOFiles(sandboxEnv, cliAWSConfigFileContents(profile, a.Region), profile, true)
 		unionAllowedDomains(policy, cliAWSPortalEgress(a.SSORegion, s.cfg.AWSSSOEndpointOverride))
 	}
-	return s.authorAWSSSOGrant(ctx, run, awsSSOScopeSnapshot{
+	inj, mitm, sig, ok = s.authorAWSSSOGrant(ctx, run, awsSSOScopeSnapshot{
 		OwnerSubject:     runIdentitySubject(ctx, run.CreatedBy),
 		CredentialSource: string(types.CredentialSourcePerUser),
 		Mechanism:        cliAWSMechanism,
@@ -163,6 +164,20 @@ func (s *Server) authorAWSCLI(ctx context.Context, run types.AgentRun, cli *awsC
 		ComponentID:      cli.ComponentID,
 		SSOStartURL:      a.StartURL,
 	}, injections, sigv4Hosts)
+	return inj, mitm, sig, &lane, ok
+}
+
+// recordAWSCLIConfigure records an AWS CLI run's run.aws_cli.configure row: where dispatch set the
+// lane up to sign, and why not at the proxy. Written beside run.bedrock.configure, past the lane
+// gates, so a run those refuse shows no row; a later withdrawal is its own row (run.ceiling.reassert).
+func (s *Server) recordAWSCLIConfigure(ctx context.Context, run types.AgentRun, cli *awsCLIDispatch, why *awsSigV4Why) {
+	if cli == nil || why == nil {
+		return
+	}
+	data := map[string]any{"component_id": cli.ComponentID}
+	awsSigningAudit(data, *why)
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.aws_cli.configure",
+		cli.ComponentID, "success", mustJSON(data)))
 }
 
 // runCarriesCLIComponent reports whether run still carries the org row id as an

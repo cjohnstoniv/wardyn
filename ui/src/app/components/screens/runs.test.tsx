@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import type { AgentRun, SetupStatus } from "../../lib/types";
 
@@ -105,6 +105,13 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     expect(screen.getByText("Your runs · 1+")).toBeInTheDocument();
   });
 
+  it("sits in the shared list column (#3058), not a page of its own width", async () => {
+    listRunsFilteredMock.mockResolvedValue({ runs: [run()], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
+    renderScreen("user");
+    const title = await screen.findByRole("heading", { level: 1, name: "Runs" });
+    expect(title.closest("[data-page-width]")).toHaveAttribute("data-page-width", "list");
+  });
+
   it("a page that is not truncated carries no such note", async () => {
     listRunsFilteredMock.mockResolvedValue({ runs: [run()], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
     renderScreen("user");
@@ -149,6 +156,20 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     expect(screen.queryByRole("form", { name: "Start a run" })).not.toBeInTheDocument();
   });
 
+  it("Admin view: a decision this admin can make sits under Needs you, with the R6 row's held count", async () => {
+    listRunsFilteredMock.mockResolvedValue({
+      runs: [run({ id: "d1", task: "Held for me", attention: { kind: "approval", by: "you", pending: 1 } })],
+      truncated: false,
+      hiddenOlder: 0,
+      hiddenKilled: 0,
+    });
+    renderScreen(undefined, "/admin/runs");
+    expect(await screen.findByRole("heading", { name: "Needs you" })).toBeInTheDocument();
+    const row = screen.getByText("Held for me").closest('[data-testid="run-row"]') as HTMLElement;
+    expect(within(row).getByText("Needs you")).toBeInTheDocument();
+    expect(within(row).getByText("1 held")).toBeInTheDocument();
+  });
+
   it("all quiet: nothing needs you and nothing is running, Ended sections still show", async () => {
     // has_runs=true with a truly empty AND nothing-hidden window can't occur in
     // real data (a run is always either live or accounted for by a hidden
@@ -190,6 +211,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     // filters/ageing — the shown rows plus the two hidden counts, not just
     // runsList.length (home-runs-1197-packet.html:672, design §2.1).
     expect(screen.getByText("Your runs · 8")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Needs you" })).toBeInTheDocument();
     expect(screen.getByText("1 decision needs you")).toBeInTheDocument();
     expect(screen.getByText("Still running")).toBeInTheDocument();
     expect(screen.getAllByText("Running", { exact: true }).length).toBeGreaterThan(0);
@@ -271,6 +293,63 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     );
   });
 
+  describe("segments (R17-N3)", () => {
+    const board = () =>
+      listRunsFilteredMock.mockResolvedValue({
+        runs: [
+          run({ id: "a", task: "Agent one", shape: "agent_task" }),
+          run({ id: "e", task: "Env one", shape: "environment", agent: "" }),
+          run({ id: "p", task: "App one", shape: "application", agent: "" }),
+          run({ id: "s", task: "Svc one", shape: "application", agent: "", service: { restart: "on_failure" } }),
+        ],
+        truncated: false,
+        hiddenOlder: 0,
+        hiddenKilled: 0,
+      });
+
+    it("counts each segment, and a pick shows only that segment's runs", async () => {
+      board();
+      renderScreen();
+      await screen.findByText("Agent one");
+      const group = screen.getByRole("group", { name: "Run shape" });
+      for (const label of ["All", "Agent tasks", "Environments", "Apps & scripts", "Services"]) {
+        expect(within(group).getByRole("button", { name: new RegExp(`^${label} \\d$`) })).toBeTruthy();
+      }
+      expect(within(group).getByRole("button", { name: "All 4" })).toBeTruthy();
+      fireEvent.click(within(group).getByRole("button", { name: "Environments 1" }));
+      await screen.findByText("Env one");
+      expect(screen.queryByText("Agent one")).toBeNull();
+      expect(screen.queryByText("Svc one")).toBeNull();
+    });
+
+    it("marks the picked segment with a tint and teal text, not a solid fill", async () => {
+      board();
+      renderScreen();
+      await screen.findByText("Agent one");
+      const group = screen.getByRole("group", { name: "Run shape" });
+      fireEvent.click(within(group).getByRole("button", { name: "Environments 1" }));
+      const picked = within(group).getByRole("button", { name: "Environments 1" });
+      expect(picked).toHaveAttribute("aria-pressed", "true");
+      expect(picked).toHaveClass("bg-primary/10", "text-primary");
+      expect(picked).not.toHaveClass("bg-primary");
+      expect(within(group).getByRole("button", { name: "All 4" })).not.toHaveClass("bg-primary/10");
+    });
+
+    it("Services with no service reads the approved sentence", async () => {
+      listRunsFilteredMock.mockResolvedValue({ runs: [run({ shape: "agent_task" })], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
+      renderScreen();
+      await screen.findByText("Fix flaky auth tests");
+      fireEvent.click(screen.getByRole("button", { name: "Services 0" }));
+      await screen.findByText("No services yet. Start one with Keep it running on an Automation / script run.");
+    });
+
+    it("a segment with no run under another active filter reads as no match, not as no services", async () => {
+      listRunsFilteredMock.mockResolvedValue({ runs: [run({ shape: "agent_task" })], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
+      renderScreen(undefined, "/runs?segment=services&status=failed");
+      await screen.findByText("No runs match these filters");
+    });
+  });
+
   it("no match, then Clear restores the default filters", async () => {
     // The mock stands in for the server's own q= filtering (runs-api-filters
     // is what pins the real thing): populated with the default (no q), empty
@@ -287,9 +366,40 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     await screen.findByText("Fix flaky auth tests");
     const search = await screen.findByLabelText("Search runs");
     fireEvent.change(search, { target: { value: "zzz-no-match" } });
-    await screen.findByText("No runs match these filters.");
+    await screen.findByText("No runs match these filters");
     fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
     await screen.findByText("Fix flaky auth tests");
+  });
+
+  it("'Your runs · N' stays the total while a search narrows the rows (#2552)", async () => {
+    listRunsFilteredMock.mockImplementation((f: { q?: string }) =>
+      Promise.resolve(
+        f.q
+          ? { runs: [run()], truncated: false, hiddenOlder: 0, hiddenKilled: 0 }
+          : { runs: [run(), run({ id: "run-2" }), run({ id: "run-3" })], truncated: false, hiddenOlder: 4, hiddenKilled: 1 },
+      ),
+    );
+    renderScreen();
+    await screen.findByText("Your runs · 8");
+    fireEvent.change(await screen.findByLabelText("Search runs"), { target: { value: "auth" } });
+    await waitFor(() => expect(listRunsFilteredMock).toHaveBeenLastCalledWith(expect.objectContaining({ q: "auth" })));
+    await waitFor(() => expect(screen.queryByLabelText("Loading runs")).not.toBeInTheDocument());
+    expect(screen.getByText("Your runs · 8")).toBeInTheDocument();
+  });
+
+  it("the Workspace filter offers a folder run's path, and the active value even when no row matches (#2544)", async () => {
+    listRunsFilteredMock.mockResolvedValue({
+      runs: [run({ repo: "", workspace_path: "/home/me/proj" })],
+      truncated: false,
+      hiddenOlder: 0,
+      hiddenKilled: 0,
+    });
+    renderScreen("user", "/runs?workspace=acme%2Fgone");
+    const trigger = within(await screen.findByRole("search")).getByRole("combobox", { name: "Workspace" });
+    expect(trigger).toHaveTextContent("acme/gone");
+    fireEvent.click(trigger);
+    expect(await screen.findByRole("option", { name: "/home/me/proj" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "acme/gone" })).toBeInTheDocument();
   });
 
   it("a refetch (search) keeps the filter bar mounted and its input focused — only the rows region shows a skeleton", async () => {
@@ -390,7 +500,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ has_runs: false }));
     renderScreen("user", "/runs?owner=me");
     await screen.findByText("Runs you launch appear here");
-    expect(screen.queryByText("No runs match these filters.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No runs match these filters")).not.toBeInTheDocument();
   });
 
   it("group-by section ids never collide, even when two titles would slugify the same", async () => {

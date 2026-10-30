@@ -746,7 +746,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
           {/* The sandbox's own device code, as the run page shows it, from the moment the
               sign-in reports one — before the terminal is attached. Only the AWS sign-in
               has a device code to read (the route 409s the others). */}
-          {flow.capture === "helper" && runId && launchedAt && <RunSignInStrip runId={runId} createdAt={launchedAt} onWaiting={onCodeShown} />}
+          {flow.capture === "helper" && runId && launchedAt && <RunSignInStrip runId={runId} onWaiting={onCodeShown} />}
           <Button size="sm" variant="ghost" onClick={cancel}>
             {SIGNIN_PROGRESS.CANCEL}
           </Button>

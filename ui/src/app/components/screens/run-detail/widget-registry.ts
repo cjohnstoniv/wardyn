@@ -12,7 +12,7 @@
 // The ids are NOT ours to choose: internal/api/ui_layout.go's
 // runLayoutWidgetIDs is a CLOSED set the server validates every PUT against
 // ("terminal, egress, files, sandbox, credentials, identity, effective-policy,
-// ssh"). An id outside it is a 400, so this table's keys must match that slice
+// ssh, service"). An id outside it is a 400, so this table's keys must match that slice
 // exactly — the two halves of the contract are kept in sync by hand (C-UI adds
 // `effective-policy` to BOTH, in the same commit — a client-only add would
 // 400 every layout PUT that ever placed it). That file's own doc explains what
@@ -23,7 +23,7 @@
 // use React.createElement rather than turning the registry into a component
 // module.
 import * as React from "react";
-import { Box, FileDiff, Fingerprint, Globe, KeyRound, ShieldCheck, SquareTerminal, Terminal } from "lucide-react";
+import { Box, FileDiff, Fingerprint, Globe, HeartPulse, KeyRound, ShieldCheck, SquareTerminal, Terminal } from "lucide-react";
 import type {
   AuditEvent,
   CredentialGrant,
@@ -34,7 +34,9 @@ import type { RunLayoutPreset, RunLayoutWidget } from "../../../lib/api/run-layo
 import type { ConsoleView } from "../../wardyn/console-view";
 import { createRequestFromAudit } from "../../../lib/api/audit";
 import { mayEnterRunOrUnknown } from "../../../lib/run-entry";
+import { isMacOSVM } from "../../../lib/types/machine-kind";
 import { ConnectSSHCard } from "../run-detail-ssh";
+import { ServicePanel } from "./service-panel";
 import {
   CredentialsWidget,
   EffectivePolicyWidget,
@@ -60,7 +62,8 @@ export type WidgetId =
   | "credentials"
   | "identity"
   | "effective-policy"
-  | "ssh";
+  | "ssh"
+  | "service";
 
 // Everything a widget can need, assembled once by the screen. Widgets keep
 // their own props — this is only the bag the registry destructures from, so a
@@ -99,6 +102,8 @@ export type WidgetContext = {
    *  COUNT comes from the live derivation every other surface already uses. */
   heldCount: number;
   audit: AuditEvent[];
+  /** The Files and Sandbox evidence the status strip states (#3038); undefined until the first read lands. */
+  evidence?: EvidenceFacts;
   /** The oldest and newest audit pages did not meet, so counts read off `audit` are a floor. */
   auditGap?: boolean;
   onGoAudit: () => void;
@@ -109,7 +114,15 @@ export type WidgetContext = {
    *  The registry only PLACES it; teaching this table to build it would drag
    *  the whole recording/attach fetch graph into a data file. */
   terminalPane: React.ReactNode;
+  /** The decision part of the session column: the approvals that hold the run and the viewer note that goes with
+   *  them. Its own field (#2912) so focus mode can seat it where the dock panel cannot cover it; the terminal
+   *  widget renders it straight after `terminalPane`, so the run page reads as it always did. Undefined or null
+   *  renders nothing. */
+  decisionPane?: React.ReactNode;
 };
+
+/** What the evidence endpoints answered, read once for the status strip and the Files gate. null = nothing to read. */
+export type EvidenceFacts = { files: number | null; sandbox: string | null };
 
 export type WidgetPlacement = { x: number; y: number; w: number; h: number };
 
@@ -145,7 +158,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
   terminal: {
     label: "Terminal",
     Icon: SquareTerminal,
-    component: (ctx) => ctx.terminalPane,
+    component: (ctx) => React.createElement(React.Fragment, null, ctx.terminalPane, ctx.decisionPane),
     defaultLayout: { w: 8, h: 12, minW: 4, minH: 4 },
     presets: {
       // Live: the phase-1 cockpit exactly — session down the left, evidence
@@ -181,6 +194,9 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
       live: { x: 8, y: 4, w: 4, h: 4 },
       finished: { x: 7, y: 0, w: 5, h: 4 },
     },
+    // #3038: a finished run's sandbox is gone, so unless the strip read real files the tile would be a box around one
+    // sentence the Files tile already says. A live run keeps it: files appear there as the agent works.
+    available: (ctx) => !ctx.finished || (ctx.evidence?.files ?? 0) > 0,
   },
   sandbox: {
     label: "Sandbox",
@@ -244,15 +260,26 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // absent (owner-only), and with free placement an absent tile leaves a
     // hole — at the bottom of the rail that hole costs nothing, between two
     // widgets it is a visible gap on every run you did not start.
-    presets: { live: { x: 8, y: 20, w: 4, h: 5 } },
-    // ConnectSSHCard's mayEnterRun gate, plus the RUNNING check.
+    presets: { live: { x: 8, y: 20, w: 4, h: 5 }, finished: { x: 6, y: 12, w: 6, h: 5 } },
+    // ConnectSSHCard's mayEnterRun gate, plus the RUNNING check, or a finished macOS VM run with a disk line.
     // M-7: AND the user view — the admin monitor carries no Connect-via-SSH
     // door at all, even on the admin's own run (admin-member-modes-design.md
     // §4.6, §6).
+    // A finished macOS VM run keeps the tile while its disk's removal has something to say (mock M-D1 9-11).
     available: (ctx) =>
       ctx.view === "user" &&
-      ctx.run.state === "RUNNING" &&
+      (ctx.run.state === "RUNNING" || (isMacOSVM(ctx.run) && !!ctx.run.macos_disk)) &&
       mayEnterRunOrUnknown(ctx.run, ctx.principal, ctx.operator, ctx.operatorResolved ?? true),
+  },
+  // Mock r15 T1-c: the Service panel heads the Overview's right column, above Egress. It exists only on a live service
+  // run, so the default layouts leave it out and presetLayout / withService add it (and make room) for one.
+  service: {
+    label: "Service",
+    Icon: HeartPulse,
+    component: (ctx) => React.createElement(ServicePanel, { run: ctx.run }),
+    defaultLayout: { w: 4, h: 5, minW: 3, minH: 3 },
+    presets: {},
+    available: (ctx) => !!ctx.run.service && ctx.run.state === "RUNNING",
   },
 };
 
@@ -262,12 +289,27 @@ function isWidgetId(id: string): id is WidgetId {
   return id in RUN_WIDGETS;
 }
 
-/** The situational default for a preset, in wire shape. */
-export function presetLayout(preset: RunLayoutPreset): RunLayoutWidget[] {
-  return WIDGET_IDS.flatMap((id) => {
+/** Where a service run's Service panel sits in the live layout: the top of the right column. */
+const SERVICE_AT = { x: 8, y: 0, w: 4, h: 5 };
+
+/** The layout with the Service panel at the top of the right column and everything in that column moved down to make room. */
+export function withService(layout: RunLayoutWidget[]): RunLayoutWidget[] {
+  if (layout.some((w) => w.widget === "service")) return layout;
+  return [...layout.map((w) => (w.x >= SERVICE_AT.x ? { ...w, y: w.y + SERVICE_AT.h } : w)), { widget: "service", ...SERVICE_AT }];
+}
+
+/** A layout for one run: a service run's live layout has the Service panel, one saved before the panel existed included. */
+export function forRun(layout: RunLayoutWidget[], preset: RunLayoutPreset, service: boolean): RunLayoutWidget[] {
+  return service && preset === "live" ? withService(layout) : layout;
+}
+
+/** The situational default for a preset, in wire shape. `service`: the run is a service, which adds its panel. */
+export function presetLayout(preset: RunLayoutPreset, service = false): RunLayoutWidget[] {
+  const base = WIDGET_IDS.flatMap((id) => {
     const at = RUN_WIDGETS[id].presets[preset];
     return at ? [{ widget: id, ...at }] : [];
   });
+  return forRun(base, preset, service);
 }
 
 // The ONE guard every layout passes through — load, add, remove, preset

@@ -19,7 +19,8 @@ import {
   CircleX,
 } from "lucide-react";
 import type { AuditEvent, ActorType, AgentRun } from "../../lib/types";
-import { ERASED_VALUE, isNetworkFault, runHeadline } from "../../lib/types";
+import { isNetworkFault, runHeadline } from "../../lib/types";
+import { describeEvent, hasNoCaller, inboundDetail, isInbound, serviceSource } from "../../lib/audit-copy";
 import { RunRef } from "../wardyn/run-ref";
 import { AUDIT } from "./audit-copy";
 import { audit as api } from "../../lib/api/audit";
@@ -47,6 +48,7 @@ import {
 } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { InboundOutcome, NoCaller, SourceLabel } from "../wardyn/audit-inbound";
 import { AuditDecision, ErasedFields, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
@@ -109,7 +111,8 @@ function eventKind(e: AuditEvent): EventKind {
   // approval route, not on the wire. Bucketing it under Egress hides it from
   // the one facet an operator would look in.
   if (toolRuleDecision(e)) return "tool";
-  if (action.startsWith("egress.") || action.startsWith("llm.scan.")) return "egress";
+  // An inbound call is network traffic the run answers: the egress facet's counterpart.
+  if (action.startsWith("egress.") || action.startsWith("llm.scan.") || action.startsWith("inbound.")) return "egress";
   if (action.startsWith("kernel.") || action === "run.exec") return "tool";
   if (
     action.startsWith("credential.") ||
@@ -130,131 +133,6 @@ function eventKind(e: AuditEvent): EventKind {
   }
   if (action.startsWith("approval.")) return "approvals";
   return "lifecycle";
-}
-
-// Short, human verbs for the actions we know about. Anything not in this table
-// falls back to the raw dotted action — a guess at prose for a backend action we
-// don't recognize would be dishonest; the raw verb is always true.
-const ACTION_VERB: Record<string, string> = {
-  "run.create": "created the run",
-  "run.build": "built the sandbox image",
-  "run.dispatch": "dispatched the run",
-  "run.interactive.start": "started the run idle for attach",
-  "run.exec": "executed the agent task",
-  // Not "completed": the same action records a run that ended in failure, whose row
-  // carries a red failure badge.
-  "run.complete": "the run ended",
-  "run.kill": "killed the run",
-  "run.revoke": "revoked the run's identity",
-  "run.autostop": "auto-stopped the idle run",
-  "run.reconcile": "reconciled run state",
-  // The EFFECTIVE policy the sandbox was actually given, recorded after every
-  // widening phase, so this is what the proxy enforces, not what was asked for.
-  "run.policy.resolve": "resolved the policy this run was given",
-  // The operator's corporate upstream proxy, resolved per dispatch. A failure
-  // row means the run went out with direct egress, not that the run was refused.
-  "run.upstream_proxy.resolve": "checked the corporate proxy setting for the run's egress",
-  "run.workspace.collide": "detected a workspace directory collision",
-  "run.requirement.allow": "applied a workspace's required egress to the run",
-  "run.requirement.grant": "granted a workspace's required secret to the run",
-  "run.requirement.inject": "applied a workspace's required integration to the run",
-  "run.record.synthesize": "synthesized a least-privilege profile from the recording",
-  "credential.mint": "minted a credential",
-  "identity.mint": "minted a workload identity",
-  "identity.revoke": "revoked a workload identity",
-  "run.bedrock.configure": "configured Bedrock model access for the run",
-  // Deliberately NOT "the managed subscription credential": the same action
-  // fires for source="subscription" (the operator's own resident Anthropic
-  // OAuth token) as for source="managed" (the Wardyn-captured one), and only
-  // the event's data carries which — naming one mode would be false on half
-  // the rows.
-  "run.subscription.inject": "injected the subscription credential at the proxy",
-  "secret.read": "read a secret into the run",
-  "secret.write": "stored a secret",
-  "secret.delete": "deleted a secret",
-  "approval.decide": "decided an approval request",
-  "approval.expire": "an approval request expired",
-  "policy.create": "created a policy",
-  "policy.update": "updated a policy",
-  "policy.delete": "deleted a policy",
-  "policy.inline.apply": "applied an inline policy",
-  "session.attach": "attached to the run's terminal",
-  "session.detach": "detached from the run's terminal",
-  "session.recording.write": "recorded the terminal session",
-  "recording.upload": "uploaded the run recording",
-  "ssh.authenticate": "an ssh authentication attempt against a run's terminal",
-  "ssh.exec": "ran a command over the run's ssh channel",
-  "ssh.sftp.transfer": "an sftp session against the run's sandbox",
-  // pending H11-P2: recommended text until the owner answers; the packet names no label for wardyn sync's own row.
-  "ssh.sync.transfer": "a wardyn sync session against the run's sandbox",
-  "ssh.forward": "an ssh port forward into the run's sandbox",
-  "kernel.process.exec": "observed a process exec",
-  "kernel.network.connect": "observed a network connect",
-  "kernel.file.write": "observed a write to a sensitive path",
-  "kernel.sensor.ping": "sensor heartbeat",
-  "kernel.sensor.bypass": "kernel sensor blind — no ground truth for this run",
-  // DEADCODE-4: the tier-1/tier-2/integration surfaces' own actions — shipped
-  // with zero rows here, so they rendered as raw dotted strings.
-  "source.write": "added a source",
-  "source.delete": "removed a source",
-  "source.scan": "scanned a source",
-  "base_image.write": "added a base image",
-  "base_image.delete": "removed a base image",
-  "integration.write": "stored an integration",
-  "integration.delete": "deleted an integration",
-  "workspace.requirement.write": "added a workspace requirement",
-  "workspace.create": "created a workspace",
-  "setup.onboarding.complete": "finished setup",
-  "authz.denied": "was refused access to",
-  "auth.fail": "failed to sign in to",
-};
-
-function capitalize(s: string): string {
-  return s.length ? s[0].toUpperCase() + s.slice(1) : s;
-}
-
-// Human description built ONLY from real fields (action + target). egress.* and
-// llm.scan.* are dynamic families (the suffix is the decision/scan outcome), so
-// they're handled directly rather than enumerated in ACTION_VERB.
-function describeEvent(e: AuditEvent): string {
-  // An erased target reads as erased, never as the sentinel (surface D).
-  if (e.target === ERASED_VALUE) e = { ...e, target: AUDIT.ERASED };
-  // #3036: a target that is the row's own run id says nothing the run reference beside it doesn't.
-  if (e.target && e.target === e.run_id) e = { ...e, target: "" };
-  if (e.action.startsWith("egress.")) {
-    const decision = e.action.slice("egress.".length);
-    const verb = isNetworkFault(e)
-      ? "Failed egress to"
-      : decision === "allow"
-        ? "Allowed egress to"
-        : decision === "deny"
-          ? "Denied egress to"
-          : "Deferred egress to";
-    return `${verb} ${e.target || "an unknown host"}`;
-  }
-  if (e.action.startsWith("llm.scan.")) {
-    return `LLM content scan (${e.action.slice("llm.scan.".length)}) for ${e.target || "an unknown host"}`;
-  }
-  if (e.action === "credential.revoke") return AUDIT.REVOKE_RUN_CREDENTIALS;
-  // "Removed" only on a row whose deletion happened; a failure row says what
-  // was not removed. Any other outcome reads as the raw line.
-  if (e.action === "credential.expired.delete" && (e.outcome === "success" || e.outcome === "failure")) {
-    const ok = e.outcome === "success";
-    const reason = e.data?.reason;
-    if (reason === "invalid_grant") {
-      if (e.data?.after_lost_reply === true) {
-        return ok ? AUDIT.EXPIRED_DELETE_LOST_REPLY : AUDIT.EXPIRED_DELETE_LOST_REPLY_FAILED;
-      }
-      return ok ? AUDIT.EXPIRED_DELETE_REFUSED : AUDIT.EXPIRED_DELETE_REFUSED_FAILED;
-    }
-    if (reason === "expired") return ok ? AUDIT.EXPIRED_DELETE_EXPIRED : AUDIT.EXPIRED_DELETE_EXPIRED_FAILED;
-  }
-  if (e.action === "run.build" && e.data?.cache_hit === true) {
-    return e.target ? `${AUDIT.REUSED_IMAGE} — ${e.target}` : AUDIT.REUSED_IMAGE;
-  }
-  const verb = ACTION_VERB[e.action];
-  if (verb) return e.target ? `${capitalize(verb)} — ${e.target}` : capitalize(verb);
-  return e.target ? `${e.action} — ${e.target}` : e.action;
 }
 
 // Day grouping. Groups are created in the order their day is first seen while
@@ -757,6 +635,9 @@ function EventOutcome({ e }: { e: AuditEvent }) {
       decision === "allow" ? "text-success" : decision === "deny" ? "text-danger" : "text-warning";
     return <span className={cn("font-mono text-xs font-semibold", tone)}>{decision}</span>;
   }
+  if (isInbound(e)) return <InboundOutcome allowed={e.action === "inbound.allow"} />;
+  const source = serviceSource(e);
+  if (source) return <SourceLabel source={source} />;
   if (e.action === "credential.mint" && e.outcome === "success") {
     return <span className="font-mono text-xs font-semibold text-info">brokered</span>;
   }
@@ -821,7 +702,8 @@ function EventRow({
   // its host, so "Allowed egress to …" would be false on the row.
   const ruled = toolRuleDecision(event);
   const Icon = KIND_META[kind].Icon;
-  // Below sm the row is two lines: time, actor, icon and outcome, then the description with the run chip.
+  const detail = inboundDetail(event, true);
+  // Below sm the row is up to three lines: time, actor, icon and outcome, then the description, then the run reference (#3036).
   // `order` moves the outcome up without touching the DOM order; from sm up it is the one line it always was (#2849).
   return (
     <div className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-surface-2/50 sm:flex-nowrap">
@@ -833,16 +715,27 @@ function EventRow({
       </span>
       {/* Fixed-width cells so the description and the run chip start at the same x on every row (#2852). */}
       <span data-testid="audit-actor-cell" className="w-[88px] shrink-0">
-        <ActorTypeChip type={event.actor_type} />
+        {hasNoCaller(event) ? <NoCaller /> : <ActorTypeChip type={event.actor_type} />}
       </span>
       <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       {ruled ? (
         <AuditDecision event={event} className="order-2 flex min-w-[12rem] flex-1 items-center gap-2 text-sm sm:order-none sm:min-w-0" />
       ) : (
         <span className="order-2 flex min-w-[12rem] flex-1 items-center gap-2 sm:order-none sm:min-w-0">
-          <span className="flex-1 truncate sm:min-w-[10rem] text-sm text-foreground" title={describeEvent(event)}>
-            {describeEvent(event)}
-          </span>
+          {detail ? (
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5 sm:min-w-[10rem]">
+              <span className="truncate text-sm text-foreground" title={describeEvent(event)}>
+                {describeEvent(event)}
+              </span>
+              <span data-testid="audit-detail" className="truncate font-mono text-xs text-muted-foreground" title={detail}>
+                {detail}
+              </span>
+            </span>
+          ) : (
+            <span className="flex-1 truncate sm:min-w-[10rem] text-sm text-foreground" title={describeEvent(event)}>
+              {describeEvent(event)}
+            </span>
+          )}
           <RuleSourceChip event={event} />
           <ErasedFields event={event} className="shrink-0 text-xs" />
         </span>

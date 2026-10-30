@@ -84,10 +84,11 @@ func (s *Server) authorizeRequestDrives(r *http.Request, req createRunRequest, c
 	out := make([]runDrive, 0, len(req.Drives))
 	for _, a := range req.Drives {
 		i := slices.IndexFunc(reach, func(d reachableDrive) bool { return d.winner.Drive.ID.String() == a.DriveID })
-		if i < 0 {
+		if i < 0 || reach[i].held {
 			// The row carries no id (authz.Datum records no sentence), so
 			// another person's drive and an id that names nothing leave the
-			// same row; only the 422 body echoes the id as sent.
+			// same row; only the 422 body echoes the id as sent. A kept work
+			// folder whose run has not ended (held) is refused the same way.
 			return nil, driveDenied(authz.Deny(authz.ReasonDriveNotFound, "runs.drive", ""), driveNotFoundMsg(a.DriveID))
 		}
 		d := reach[i]
@@ -153,15 +154,28 @@ func (s *Server) seedRequestDrives(w http.ResponseWriter, r *http.Request,
 	if refusal.write(s, w, r) {
 		return nil, nil, false
 	}
+	// A run with a drive that has a second place mounts its drives where placement
+	// puts it (stepDriveEligibility builds them then); every other run builds them
+	// here, as it always has.
+	if slices.ContainsFunc(drives, func(d runDrive) bool { return d.resolved.Drive.AltRunnerID != nil }) {
+		return drives, nil, true
+	}
+	mounts, ok := s.driveMountsAt(w, r, drives, drivePlace{})
+	return drives, mounts, ok
+}
+
+// driveMountsAt builds every drive's mount where the run mounts it, or writes
+// the first refusal.
+func (s *Server) driveMountsAt(w http.ResponseWriter, r *http.Request, drives []runDrive, at drivePlace) ([]types.DriveMount, bool) {
 	mounts := make([]types.DriveMount, 0, len(drives))
 	for _, d := range drives {
-		mount, ok := s.driveMountFor(r.Context(), w, d)
+		mount, ok := s.driveMountFor(r.Context(), w, d, at)
 		if !ok {
-			return nil, nil, false
+			return nil, false
 		}
 		mounts = append(mounts, *mount)
 	}
-	return drives, mounts, true
+	return mounts, true
 }
 
 // driveTargets are the run's drives as attachment targets, for the overlap tree,

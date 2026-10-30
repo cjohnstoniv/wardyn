@@ -57,17 +57,27 @@ export interface ComponentDefinition {
   config?: Record<string, string>;
   // Org rows only: marks the row as a CLI credential card.
   cli?: ComponentCLI;
-  // Makes the component a remote MCP server, reached only through the proxy's broker route.
+  // Makes the component an MCP server: a remote one, reached only through the proxy's broker route, or one its harness starts in the sandbox.
   mcp?: ComponentMCP;
 }
 
-/** A remote MCP server: its streamable HTTP URL, whose host is one of the component's hosts. */
+/**
+ * An MCP server. http: a remote one, at its streamable HTTP `url` (its host one of the component's hosts).
+ * stdio: one its harness starts inside the run's sandbox from `launch`, with no url.
+ */
 export interface ComponentMCP {
-  url: string;
-  transport: "http";
+  url?: string;
+  transport: "http" | "stdio";
+  launch?: ComponentMCPLaunch;
 }
 
-export type CLIKind = "azure" | "aws" | "github";
+/** A local MCP server's command and arguments, started with no shell. */
+export interface ComponentMCPLaunch {
+  command: string;
+  args?: string[];
+}
+
+export type CLIKind = "azure" | "aws" | "github" | "kubectl";
 
 /** The credential an org row gives a run's CLI; `kind` names the one arm that is set. */
 export interface ComponentCLI {

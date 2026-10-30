@@ -18,7 +18,9 @@ import type { RunnerKind } from "../../../lib/types/runner-pools";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { POOLS, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
 import { RUNNERS } from "../../wardyn/copy/runners";
+import { WORKLOAD_BINDINGS } from "../../wardyn/copy/workloads";
 import { useOperator } from "../../wardyn/operator-context";
+import { AddComputerBlock } from "../../wardyn/add-computer-block";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -28,7 +30,7 @@ import { PageContainer } from "../../wardyn/page-container";
 import { PageTabs } from "../../wardyn/page-tabs";
 import { HowItWorks } from "../../wardyn/how-it-works";
 import { EmptyState, STATES, TableSkeleton } from "../../wardyn/states";
-import { MintTokenDialog } from "./mint-token-dialog";
+import { MintTokenPanel } from "./mint-token-panel";
 import { PoolsTab } from "./pools/pools-tab";
 import { RemoteRunnerDrawer } from "./remote-runner-drawer";
 import { fleetOf, RunnerCard, searchText, type FleetRunner } from "./runner-card";
@@ -37,6 +39,7 @@ import { sortRunners } from "./runner-display";
 import { RunnersSwitchDialog } from "./runners-switch";
 import { UnusedTokens } from "./unused-tokens";
 import { useRunnersData } from "./use-runners-data";
+import { WorkloadBindingsTab } from "./workload-bindings-tab";
 
 type Filter = "active" | "revoked" | "all";
 const FILTERS: { id: Filter; label: string }[] = [
@@ -94,19 +97,18 @@ function FilterGroup({ filter, onChange }: { filter: Filter; onChange: (f: Filte
   );
 }
 
-type Tab = "runners" | "pools";
+type Tab = "runners" | "pools" | "bindings";
 
 export function RunnersScreen() {
   const superAdmin = useOperator();
   const { status, enabled, rows, remote, tokens, reload } = useRunnersData();
   const [params, setParams] = useSearchParams();
-  const tab: Tab = params.get("tab") === "pools" ? "pools" : "runners";
+  const tab: Tab = params.get("tab") === "pools" ? "pools" : params.get("tab") === "bindings" ? "bindings" : "runners";
   const openPoolId = params.get("pool");
   const [filter, setFilter] = React.useState<Filter>("active");
   const [search, setSearch] = React.useState("");
   const [q, setQ] = React.useState("");
   const [selected, setSelected] = React.useState<{ kind: RunnerKind; id: string } | null>(null);
-  const [minting, setMinting] = React.useState(false);
   const [switching, setSwitching] = React.useState<"on" | "off" | null>(null);
 
   // The box debounces into q, so each keystroke is not a pass over the rows.
@@ -117,7 +119,7 @@ export function RunnersScreen() {
 
   // A tab change replaces the entry; opening a pool or a runner out of one adds an entry, so Back returns to where it was.
   const go = (next: Tab, pool?: string, push = false) => {
-    setParams(next === "pools" ? { tab: "pools", ...(pool ? { pool } : {}) } : {}, { replace: !pool && !push });
+    setParams(next === "pools" ? { tab: "pools", ...(pool ? { pool } : {}) } : next === "bindings" ? { tab: "bindings" } : {}, { replace: !pool && !push });
   };
   const openPool = (id: string) => {
     setSelected(null);
@@ -145,17 +147,13 @@ export function RunnersScreen() {
   const selectedRunner = selected?.kind === "self_hosted" ? (rows.find((r) => r.id === selected.id) ?? null) : null;
   const selectedRemote = selected?.kind === "remote_hosted" ? (remote.find((r) => r.id === selected.id) ?? null) : null;
 
-  const createToken = superAdmin && enabled && status === "ready";
+  const addComputer = superAdmin && enabled && status === "ready";
   const empty = rows.length === 0 && remote.length === 0;
   const actions =
-    createToken && tab === "runners" ? (
-      <div className="flex items-center gap-2">
-        <Button variant="outline" onClick={() => setSwitching("off")}>
-          {RUNNERS.TURN_OFF}
-        </Button>
-        {/* The page's one default. */}
-        <Button onClick={() => setMinting(true)}>{RUNNERS.MINT_CTA}</Button>
-      </div>
+    addComputer && tab === "runners" ? (
+      <Button variant="outline" onClick={() => setSwitching("off")}>
+        {RUNNERS.TURN_OFF}
+      </Button>
     ) : undefined;
 
   const off = (
@@ -199,6 +197,7 @@ export function RunnersScreen() {
   if (status === "loading") body = <Framed><TableSkeleton rows={5} cols={6} /></Framed>;
   else if (status === "forbidden") body = <Framed><p className="p-4 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p></Framed>;
   else if (status === "error") body = <Framed><LoadFailed onRetry={reload} /></Framed>;
+  else if (tab === "bindings") body = <WorkloadBindingsTab />;
   else if (tab === "pools") body = <PoolsTab runners={rows} remote={remote} openPoolId={openPoolId} onOpenPool={(id) => go("pools", id ?? undefined)} onOpenRunner={openRunner} />;
   else if (empty) {
     body = enabled ? (
@@ -206,8 +205,7 @@ export function RunnersScreen() {
         <EmptyState
           icon={Laptop}
           title={RUNNERS.EMPTY_TITLE}
-          description={RUNNERS.EMPTY_BODY}
-          action={superAdmin ? <Button onClick={() => setMinting(true)}>{RUNNERS.MINT_CTA}</Button> : undefined}
+          description={addComputer ? `${RUNNERS.EMPTY_BODY} ${RUNNERS.EMPTY_BODY_MDM}` : RUNNERS.EMPTY_BODY}
         />
       </Framed>
     ) : (
@@ -236,6 +234,12 @@ export function RunnersScreen() {
           <span className="font-medium text-foreground">{RUNNERS.HOW_POOLS_TAB}</span> {POOLS.LEAD}
         </p>
       </HowItWorks>
+      {/* Kept mounted (hidden) on the Pools tab, so a minted token that was not copied survives a tab switch. */}
+      {addComputer && (
+        <div className="mb-4" hidden={tab !== "runners"}>
+          <AddComputerBlock mdm={<MintTokenPanel onMinted={reload} />} />
+        </div>
+      )}
       {ready && (
         <PageTabs
           className="mb-4"
@@ -245,6 +249,7 @@ export function RunnersScreen() {
           tabs={[
             { value: "runners", label: RUNNER_V6.TAB_RUNNERS },
             { value: "pools", label: RUNNER_V6.TAB_POOLS },
+            { value: "bindings", label: WORKLOAD_BINDINGS.TAB },
           ]}
         />
       )}
@@ -258,7 +263,6 @@ export function RunnersScreen() {
         onOpenPool={openPool}
         onSaveLimits={(r, limits) => remoteRunners.update(r.id, { revision: r.revision, limits })}
       />
-      <MintTokenDialog open={minting} onOpenChange={setMinting} onMinted={reload} />
       <RunnersSwitchDialog mode={switching} onOpenChange={(o) => !o && setSwitching(null)} onChanged={reload} />
     </PageContainer>
   );

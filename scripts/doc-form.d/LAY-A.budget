@@ -3,5 +3,12 @@
 # docs/operations/boundary.md 785 measured: the final seal meets late hosts with the boundary
 # docs/operations/boundary.md 819 measured: the seal keeps an explicit allow-all false
 # docs/operations/boundary.md 1047 measured: credentials the boundary withholds at dispatch, revive and live
+# docs/operations/boundary.md 1096 measured: the resident captured AWS SSO session meets eligible_grants
+# docs/operations/boundary.md 1098 measured: the fresh-install seed
 # docs/operations/boundary.md 1054 measured: the redeem door names its audited unread refusals
-docs/operations/boundary.md=1054 share=35
+# docs/operations/boundary.md 1105 measured: merged with the redeem door lines
+# docs/operations/boundary.md 1121 measured: withheld_grants lists stored rows, broker lanes their own list
+# docs/operations/boundary.md 1142 measured: break-glass only while the boundary bounds something; revive judges hosts only
+# docs/operations/boundary.md 1176 adds 34 over 1142, measured (0.10 W5-API-DESKTOP, #2967): the spec.desktop row and the unread seal's desktop
+# docs/operations/boundary.md 1241 adds 65 over 1176, measured (rc.8 E4, #2948): how a person's walls meet the run and the seal.
+docs/operations/boundary.md=1241 share=35

@@ -22,7 +22,8 @@ import (
 // re-derives (and risks drifting) the agent contract.
 
 // ProxyListenPort is the port wardyn-proxy listens on inside the per-run
-// internal network/namespace. The agent's ONLY reachable address.
+// internal network/namespace. The agent's ONLY egress (the sign-in listener on
+// SigninListenPort, when open, admits the person's sign-in browser alone).
 const ProxyListenPort = 3128
 
 // Conservative platform resource defaults, applied when a Resources field is
@@ -174,6 +175,13 @@ func ProxySidecarEnvKnobs() [][2]string {
 // port is the sidecar's listen port (ProxyListenPort in production;
 // parameterized for tests).
 func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error) {
+	return json.Marshal(ProxyConfigOf(runID, pc, port))
+}
+
+// ProxyConfigOf is the proxy.Config a run's ProxyConfig becomes on its way to the sidecar. It is the
+// one mapping: BuildProxyConfig marshals it, and a caller that asks what the proxy will do with the
+// run reads it, so the two cannot differ.
+func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 	inj := make([]proxy.InjectionConfig, 0, len(pc.Injection))
 	for _, g := range pc.Injection {
 		inj = append(inj, proxy.InjectionConfig{InjectionRule: g.Rule, GrantID: g.GrantID})
@@ -210,6 +218,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		LocalModels:          pc.LocalModels,
 		Unattended:           pc.Unattended,
 		ScrubResponses:       pc.ScrubResponses,
+		CanonicalPushRepos:   pc.CanonicalPushRepos,
 		Attribution:          pc.Attribution,
 		PushRuleSets:         pc.PushRuleSets,
 		PushRuleBase:         pc.PushRuleBase,
@@ -221,5 +230,8 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		VM:                   pc.VM,
 		PortRule:             pc.PortRule,
 	}
-	return json.Marshal(cfg)
+	if pc.DesktopSignins {
+		cfg.SigninListen = ":" + strconv.Itoa(SigninListenPort)
+	}
+	return cfg
 }

@@ -46,12 +46,25 @@ type serveOptions struct {
 	// startup and handed to every run's proxy. It is never sent to the organisation.
 	upstreamProxy string
 	// substrate is --substrate: docker (default) or k8s. The rest are k8s only (design K1 §3.3).
-	substrate, runsNamespace, relayService, arch string
-	maxPodLifetime                               time.Duration
+	substrate, relayService, arch string
+	maxPodLifetime                time.Duration
+	// runsNamespaces is --runs-namespace, repeatable: the namespaces runs are placed in, the first being
+	// the default (design T5 §2.7).
+	runsNamespaces []string
 	// folderRoots is --folder-root: the folders a --substrate folders runner shares (default: home).
 	folderRoots []string
+	// localAttach is --local-attach, the runner's own ceiling on local attach; orgURL is --org, which
+	// the local attach pointer file names.
+	localAttach, orgURL string
 	// offline is what the next connect reports about why this runner could not connect or start.
 	offline *offlineLog
+	// driveRoots is --drive-root: the folders a drive bound to this runner may mount from (none by
+	// default, so no drive mounts here until its owner allows one).
+	driveRoots []string
+	// localModelPorts is --local-model-port (parseLocalModelPorts): the laptop local model ports the person allows.
+	localModelPorts string
+	// macOSVM is the macos_vm setting: macOS VM sandboxes on a Mac (off by default).
+	macOSVM bool
 }
 
 func (o serveOptions) recordingEnabled() (bool, error) {
@@ -65,11 +78,29 @@ func (o serveOptions) recordingEnabled() (bool, error) {
 	}
 }
 
+// localAttachEnabled is --local-attach: on lets the organisation turn local attach on, off withdraws
+// the capability and the socket whatever the organisation says. Unset is the flag's default, on.
+func (o serveOptions) localAttachEnabled() (bool, error) {
+	switch o.localAttach {
+	case "on", "":
+		return true, nil
+	case "off":
+		return false, nil
+	default:
+		return false, errors.New("runner local attach must be on or off")
+	}
+}
+
 func newServeCommand(build runnerHooksBuilder) *cobra.Command {
-	var org, stateDir, configPath string
+	var org, stateDir, configPath, logFile string
 	var opts serveOptions
 	cmd := &cobra.Command{Use: "serve", Short: "Connect this registered runner to its organisation", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) (retErr error) {
+		restoreLog, err := logToFile(logFile)
+		if err != nil {
+			return err
+		}
+		defer restoreLog()
 		cfg, err := serveConfig(cmd, configPath)
 		if err != nil {
 			return err
@@ -145,10 +176,15 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if err := proxy.ValidUpstreamProxyURL(opts.upstreamProxy); err != nil {
 			return fmt.Errorf("--upstream-proxy / WARDYN_UPSTREAM_PROXY / runnerd.json upstream_proxy (%s): %w (the URL is not repeated here: it may hold a credential)", cfg.field("upstream_proxy").Source, err)
 		}
+		opts.orgURL = org
 		if build == nil {
 			return errors.New("runner execution and durable offline handlers are unavailable")
 		}
 		opts.offline = newOfflineLog(stateDir, urlSecrets(opts.upstreamProxy))
+		// The status file from here, so a refusal at start is on record in it before serve exits.
+		status := newStatusWriter(stateDir)
+		defer status.stopped()
+		opts.offline.reportTo(status)
 		runtime, err := build(cmd.Context(), identity, stateDir, opts)
 		if err != nil {
 			opts.offline.startFailed(err)
@@ -165,8 +201,6 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		status := newStatusWriter(stateDir)
-		defer status.stopped()
 		client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: org, RunnerID: identity.RunnerID.String(), PrivateKey: identity.PrivateKey, Hooks: runtime.hooks, HTTPClient: httpClient, LinkChanged: status.linkChanged})
 		if err != nil {
 			return err
@@ -176,6 +210,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&org, "org", "", "organisation public HTTPS URL used at registration (default: the OrgURL managed preference, else org_url in runnerd.json)")
 	cmd.Flags().StringVar(&configPath, "config", "", "the runner's settings file (default: <user configuration directory>/wardyn/runnerd.json, which may be absent); the file never holds a credential")
+	cmd.Flags().StringVar(&logFile, "log-file", "", "write the log to this file, not stderr, rotated at 10 MiB with 3 older files kept (the LaunchAgent sets it: launchd cannot rotate its own)")
 	cmd.Flags().StringVar(&stateDir, "state-dir", "", "private runner state directory (defaults to the user configuration directory)")
 	cmd.Flags().StringVar(&opts.proxyImage, "proxy-image", "", "Wardyn proxy image matching this daemon version (defaults to the image the organisation named at registration, else the release image on a release build)")
 	cmd.Flags().StringVar(&opts.relayListen, "relay-listen", "", "address the run relay listens on: loopback, the native Docker bridge's gateway or Rancher Desktop's veth-rd-wsl address (found by a probe container when left out)")
@@ -188,10 +223,14 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&opts.upstreamProxy, "upstream-proxy", "", "this runner's own corporate upstream proxy, http://[user:pass@]host[:port], that every run's proxy chains its egress through; "+
 		"never sent to the organisation. Prefer the WARDYN_UPSTREAM_PROXY environment variable when it holds a credential (it is read after the flags are parsed, so --help never shows it). Read at startup only")
 	cmd.Flags().StringVar(&opts.recording, "recording-store", "", "organisation recording mode: pg, fs or off (off disables local capture; default pg)")
+	cmd.Flags().StringVar(&opts.localAttach, "local-attach", "on", "on lets a person's CLI on this computer attach to its runs over a per-user socket when the organisation allows it; off never opens the socket")
 	cmd.Flags().StringVar(&opts.substrate, "substrate", "docker", "where runs execute: docker (this host's engine) or k8s (a runs namespace of the cluster runnerd runs in); "+
 		"folders runs nothing and only shares folders on this computer with runs elsewhere")
 	cmd.Flags().StringArrayVar(&opts.folderRoots, "folder-root", nil, "folders: a folder this runner may share, with everything under it (repeatable; default: your home folder)")
-	cmd.Flags().StringVar(&opts.runsNamespace, "runs-namespace", "", "k8s: the dedicated namespace runs are created in; never runnerd's own")
+	cmd.Flags().StringVar(&opts.localModelPorts, "local-model-port", "", "docker: the port, or comma-separated ports, of a model server on this computer that runs here may use when the organisation allows it, "+
+		"such as 11434; default: none, so no run here uses this computer's model server")
+	cmd.Flags().StringArrayVar(&opts.driveRoots, "drive-root", nil, "docker: a folder a drive bound to this runner may mount from, with everything under it (repeatable; default: none, so no drive mounts here)")
+	cmd.Flags().StringArrayVar(&opts.runsNamespaces, "runs-namespace", nil, "k8s: a dedicated namespace runs are created in, never runnerd's own (repeatable; the first is where a run that names none goes)")
 	cmd.Flags().StringVar(&opts.relayService, "relay-service", "", "k8s: the relay Service's DNS name (<name>.<namespace>.svc.<cluster domain>), which must resolve to exactly one ClusterIP")
 	cmd.Flags().StringVar(&opts.arch, "arch", os.Getenv(archEnv), "k8s, required: the sandbox node architecture, amd64 or arm64, pinned as every run pod's kubernetes.io/arch node selector")
 	cmd.Flags().DurationVar(&opts.maxPodLifetime, "max-pod-lifetime", 0, "k8s: the most any run pod may live (activeDeadlineSeconds), e.g. 24h")
@@ -218,5 +257,6 @@ func (c runnerConfig) applyTo(org, stateDir *string, o *serveOptions) {
 	o.proxyImage, o.proxyImageMirror = c.get("proxy_image"), c.get("proxy_image_mirror")
 	o.relayListen, o.relayHostTarget, o.network = c.get("relay_listen"), c.get("relay_host_target"), c.get("internal_network")
 	o.trustedCAFile, o.upstreamProxy, o.recording = c.get("trusted_ca_file"), c.get("upstream_proxy"), c.get("recording_store")
-	o.orgCAFile = c.get("org_ca_file")
+	o.orgCAFile, o.localModelPorts = c.get("org_ca_file"), c.get("local_model_port")
+	o.macOSVM = macOSVMOn(c.get("macos_vm"))
 }

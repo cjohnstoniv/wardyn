@@ -29,6 +29,10 @@ func (s *reclampStore) ListGovernanceUnits(context.Context) ([]types.GovernanceU
 	return s.profiles, nil
 }
 
+func (s *reclampStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
+	return allRowsFor(s.profiles), nil
+}
+
 func (s *reclampStore) ListProfiledLiveRuns(ctx context.Context) ([]types.AgentRun, error) {
 	run, _ := s.GetRun(ctx, s.run.ID)
 	if run.UnitID == nil || (run.LostAt != nil && run.LostReason == types.LostEnded) || run.State.IsTerminal() {

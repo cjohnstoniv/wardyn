@@ -45,6 +45,9 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))
+	if r, ok = s.stampContextChoice(w, r, req); !ok {
+		return
+	}
 	ceiling, reqCC, refusal := s.authorizePreviewRequest(r, req)
 	if refusal.write(s, w, r) {
 		return
@@ -77,6 +80,9 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	if f.adoNarrowed != "" {
 		response.Warnings = append(response.Warnings, f.adoNarrowed)
 	}
+	// A service under an idle pause is frozen while it waits for requests, and one no lifetime cap
+	// applies to ends at its lease. The sentences name no limit.
+	response.Warnings = append(response.Warnings, serviceWarnings(f.req.Service != nil, f.ceiling.Limits.PauseIdleAfterSec, f.end.capSec > 0)...)
 	// Run-level, never per repository group: the groups include devcontainer_repo,
 	// which the server clones and the lane never serves.
 	response.ADOLaneDeclined = string(f.adoDecline)
@@ -85,7 +91,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	var err error
 	if response.Access, err = s.accessFor(r, accessInputs{req: f.req, spec: f.spec, prov: f.prov, source: f.source,
-		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: response.Components, level: f.autonomy.Level}); err != nil {
+		scmSite: f.scmSite, mpChoice: f.mpChoice, comps: f.comps, facts: response.Components, level: f.autonomy.Level, class: f.enforced}); err != nil {
 		writeServerError(w, r, "resolve capability", err)
 		return
 	}
@@ -122,7 +128,7 @@ func (s *Server) authorizePreviewRequest(r *http.Request, req createRunRequest) 
 			return ceiling, "", refusal
 		}
 	}
-	if msg, reason := s.validateImageBuildRequest(req); msg != "" {
+	if msg, reason := s.validateImageBuildRequest(r.Context(), req); msg != "" {
 		return ceiling, "", runError(http.StatusBadRequest, reason, msg)
 	}
 	cc, refusal := runRequestEnums(req)
@@ -154,6 +160,13 @@ func unionPreviewWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.W
 		kept, _ := runCloneEgress(ws, trusted)
 		unionAllowedDomains(spec, kept)
 	}
+}
+
+// previewWorkspaceEgressHosts is what unionPreviewWorkspaceEgress adds to an empty allowlist.
+func previewWorkspaceEgressHosts(workspaces []types.Workspace, trusted []string) []string {
+	var scratch types.RunPolicySpec
+	unionPreviewWorkspaceEgress(&scratch, workspaces, trusted)
+	return scratch.AllowedDomains
 }
 
 func previewPending(req createRunRequest, choice runProviderChoice) []policyPreviewPending {

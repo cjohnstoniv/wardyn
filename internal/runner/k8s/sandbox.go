@@ -13,7 +13,9 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -106,6 +108,14 @@ func proxyConfigStagedPath() string { return proxyConfigStagedMountDir + "/" + p
 // createPreflight is CreateSandbox's checks before it creates anything: the runtime class to run
 // under, and the class enforced.
 func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (runtimeClassName, runtimeHandler string, enforced types.ConfinementClass, err error) {
+	enforced = spec.ConfinementClass
+	if spec.MachineKind.Normalize() != "" {
+		if err := d.refuseVMSpec(spec); err != nil {
+			return "", "", "", err
+		}
+		// A VM is the CC3 pod: its RuntimeClass boots a guest kernel, whatever class the run named.
+		enforced = types.CC3
+	}
 	if len(spec.Mounts) > 0 {
 		return "", "", "", fmt.Errorf("k8s: sandbox mounts are not supported (requested %d): %w", len(spec.Mounts), errMountsUnsupported)
 	}
@@ -121,11 +131,10 @@ func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (
 	if n := len(mitmCAPEMEnv) + 1 + len(d.withRunnerTrustedCA(spec.Env)[mitmCAPEMEnv]); n >= maxEnvString {
 		return "", "", "", fmt.Errorf("k8s: %w: %d bytes with the organisation's staged CA and this runner's own bundle; trim one of them", errTrustedCATooBig, n)
 	}
-	runtimeClassName, runtimeHandler, err = d.resolveRuntimeClassName(ctx, spec.ConfinementClass)
+	runtimeClassName, runtimeHandler, err = d.resolveRuntimeClassName(ctx, enforced)
 	if err != nil {
 		return "", "", "", err
 	}
-	enforced = spec.ConfinementClass
 	if enforced == "" {
 		// Class-less floor for direct driver callers only (mirrors docker).
 		enforced = types.CC1
@@ -139,21 +148,39 @@ func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (
 	return runtimeClassName, runtimeHandler, enforced, nil
 }
 
+// placeAgentPod sets the agent pod's pull secret and its placement: the deployment's, narrowed to the
+// architectures a prewrapped image was checked on (spec.ImageArches).
+func (d *Driver) placeAgentPod(pod *corev1.Pod, spec runner.SandboxSpec) error {
+	if d.cfg.ImagePullSecret != "" {
+		pod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
+	}
+	placement, err := d.placement.withArches(spec.ImageArches)
+	if err != nil {
+		return err
+	}
+	placement.apply(pod, spec.RunID, componentAgent, spec.Labels)
+	return nil
+}
+
 // CreateSandbox provisions the run's Secret, NetworkPolicies, proxy pod, and
 // agent pod, in that order, fail-closed with full rollback on any error
 // (mirrors the docker driver's LIFO teardown-closure shape). Kept as one
 // linear ordered sequence in one scope so the rollback compensations stay
 // verifiably complete — hence the funlen nolint below.
 //
-//nolint:funlen // one linear ordered sequence, kept in one scope on purpose
+//nolint:funlen,gocyclo // one linear ordered sequence, kept in one scope on purpose
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
-	ns := d.cfg.Namespace
+	ns, err := d.createNamespace(spec)
+	if err != nil {
+		return runner.Sandbox{}, err
+	}
 
 	// (1) Preflight: fail closed BEFORE creating anything.
 	runtimeClassName, runtimeHandler, enforced, err := d.createPreflight(ctx, spec)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
+	d.noteNamespace(spec.RunID, ns)
 	defer d.brackets.Delete(proxyPodName(spec.RunID))
 	defer d.brackets.Delete(agentPodName(spec.RunID))
 	// The drives come LAST in preflight since it's the only step that
@@ -249,6 +276,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if proxyJSON, err = d.runnerProxyConfig(ctx, spec.RunID, proxyJSON); err != nil {
 		return fail(err)
 	}
+	d.warnOlderProxy()
 	secretData := map[string][]byte{proxyConfigSecretKey: proxyJSON}
 	// The agent's credential-bearing env rides this SAME Secret (see
 	// runner.SandboxSpec.SecretEnv), via a secretKeyRef per variable rather
@@ -322,6 +350,15 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 				SecurityContext:          restrictedSecurityContext(),
 				Resources:                proxyResources(len(spec.ProxyConfig.AzureGates) > 0),
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
+				// The proxy binds its listener only once it serves: after its startup resolve has
+				// succeeded and, on a runner (self_lapse), after its first renew. A connect to it is that
+				// proof: without a probe the container is Ready as soon as it runs, and waitPodIP can
+				// return before a failing resolve exits it, or start an agent whose requests the proxy
+				// still refuses, a short run's recording upload among them.
+				ReadinessProbe: &corev1.Probe{
+					ProbeHandler:  corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(runner.ProxyListenPort)}},
+					PeriodSeconds: 1,
+				},
 			}},
 			Volumes: []corev1.Volume{
 				{
@@ -362,7 +399,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	clock := d.newStartClock()
-	proxyIP, err := d.waitPodIP(ctx, clock, proxyPodName(spec.RunID), spec.NotifyWaiting)
+	proxyIP, err := d.waitPodIP(ctx, clock, ns, proxyPodName(spec.RunID), spec.NotifyWaiting)
 	if err != nil {
 		return fail(fmt.Errorf("k8s: proxy pod never became ready: %w", err))
 	}
@@ -439,10 +476,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if runtimeClassName != "" {
 		agentPod.Spec.RuntimeClassName = &runtimeClassName
 	}
-	if d.cfg.ImagePullSecret != "" {
-		agentPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
+	if err := d.placeAgentPod(agentPod, spec); err != nil {
+		return fail(err)
 	}
-	d.placement.apply(agentPod, spec.RunID, componentAgent, spec.Labels)
 	agentPod.Labels[labelRecord] = strconv.FormatBool(spec.RecordWithin(d.cfg.Record))
 	if err := d.runnerPodSpec(agentPod, componentAgent, ""); err != nil {
 		return fail(err)
@@ -455,14 +491,25 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// the sandbox out: a k8s Pod Create is purely declarative, unlike
 	// docker's ContainerStart, so a caller racing straight into
 	// Attach/ExecStream would hit "container not found" against a pod still Pending.
-	if err := d.waitContainerRunning(ctx, clock, agentPodName(spec.RunID), mainContainerName, spec.NotifyWaiting); err != nil {
+	if err := d.waitContainerRunning(ctx, clock, ns, agentPodName(spec.RunID), mainContainerName, spec.NotifyWaiting); err != nil {
 		return fail(fmt.Errorf("k8s: agent pod's main container never started: %w", err))
 	}
 
 	if spec.ExecOutput != nil {
 		d.execOutputs.Store(agentPodName(spec.RunID), spec.ExecOutput)
 	}
-	return runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced}, nil
+	return podSandbox(spec, enforced, runtimeHandler), nil
+}
+
+// podSandbox is CreateSandbox's answer for the pod it created: its ref, the class enforced and, for
+// a VM run, the machine its RuntimeClass boots.
+func podSandbox(spec runner.SandboxSpec, enforced types.ConfinementClass, runtimeHandler string) runner.Sandbox {
+	sb := runner.Sandbox{Ref: agentPodName(spec.RunID), Driver: driverName, EnforcedClass: enforced}
+	if spec.MachineKind == types.MachineLinuxVM {
+		m := vmMachine(runtimeHandler)
+		sb.Machine = &m
+	}
+	return sb
 }
 
 // ownedByPod is the ownerReference list that makes a pod owned by owner, or nil when the API
@@ -499,14 +546,14 @@ func addMainContainerVolumes(pod *corev1.Pod, vols []corev1.Volume, mounts []cor
 //
 // onWaiting (nil-safe) gets that reason while waiting, once per change — see
 // runner.SandboxSpec.OnWaiting.
-func (d *Driver) waitContainerRunning(ctx context.Context, clock *startClock, podName, containerName string, onWaiting func(string)) error {
+func (d *Driver) waitContainerRunning(ctx context.Context, clock *startClock, ns, podName, containerName string, onWaiting func(string)) error {
 	var lastPod *corev1.Pod
 	var lastGetErr error
 	// Last reason REPORTED, so the report fires on change, not on a tick.
 	var lastReason string
 	var pulls pullWatch
 	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
-		pod, gerr := d.readPod(pollCtx, podName)
+		pod, gerr := d.readPod(pollCtx, ns, podName)
 		if tolerateGetError(gerr, &lastGetErr) {
 			return false, false, nil
 		}
@@ -638,13 +685,13 @@ func (d *Driver) resolveRuntimeClassName(ctx context.Context, class types.Confin
 // One bound, clock's: absolute across the proxy and the agent, so an
 // unplaceable proxy waits for room under the same deadlines the agent does
 // rather than failing on a deadline of its own.
-func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, podName string, onWaiting func(string)) (string, error) {
+func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, ns, podName string, onWaiting func(string)) (string, error) {
 	var ip string
 	var lastPod *corev1.Pod
 	var lastGetErr error
 	var lastReason string
 	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
-		pod, gerr := d.readPod(pollCtx, podName)
+		pod, gerr := d.readPod(pollCtx, ns, podName)
 		if tolerateGetError(gerr, &lastGetErr) {
 			return false, false, nil
 		}
@@ -676,7 +723,11 @@ func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, podName strin
 	if errors.Is(err, context.DeadlineExceeded) && lastPod != nil {
 		// A container's own Waiting reason first: podStuckReason reads only the
 		// pod, and would call an init-blocked pod one "with no container status".
-		if why := cmp.Or(waitingDetail(lastPod), podStuckReason(lastPod)); why != "" {
+		why := cmp.Or(waitingDetail(lastPod), podStuckReason(lastPod))
+		if line := proxyNotReadyDetail(lastPod, d.cfg.ProxyImage, d.runnerMode()); line != "" {
+			why = strings.Join(slices.DeleteFunc([]string{why, line}, func(s string) bool { return s == "" }), "; ")
+		}
+		if why != "" {
 			return "", fmt.Errorf("%w (%s)", err, why)
 		}
 	}
@@ -695,6 +746,9 @@ func proxyStartFailure(pod *corev1.Pod) error {
 		t := cs.State.Terminated
 		if t == nil || (cs.Name == stageProxyConfigInitName && t.ExitCode == 0) {
 			continue
+		}
+		if cs.Name == proxyContainerName && t.ExitCode == proxyExitLapsed {
+			return proxyRenewFailure(t.Message)
 		}
 		return fmt.Errorf("proxy container %s exited before the proxy was ready (exit code %d, %s): %s", cs.Name, t.ExitCode, t.Reason, t.Message)
 	}
@@ -761,6 +815,68 @@ func (d *Driver) runnerdPeerRules() []networkingv1.NetworkPolicyEgressRule {
 	}}
 }
 
+// proxyReadyRelease is the first release whose runner proxy listens only once it serves.
+const proxyReadyRelease = "0.10.0-rc.2"
+
+// warnOlderProxy says once, in runner mode, that the proxy image is a known release older than
+// proxyReadyRelease: that proxy listens while it still refuses every request, so its pod reads Ready
+// before it serves and a short run's recording upload can be refused. Its runs start as before. An
+// image whose release cannot be read (a digest pin, a development build) is not judged.
+func (d *Driver) warnOlderProxy() {
+	if !d.runnerMode() {
+		return
+	}
+	if tag := imageReleaseTag(d.cfg.ProxyImage); tag == "" || !releaseOlder(tag, proxyReadyRelease) {
+		return
+	}
+	d.olderProxyWarned.Do(func() {
+		slog.Warn("k8s: the proxy image is older than this runner; its pod reads ready before it serves, so a short run's recording can be lost",
+			slog.String("image", d.cfg.ProxyImage), slog.String("needs", proxyReadyRelease),
+			slog.String("fix", "have the organisation name this release's proxy image, or run setup with --proxy-image set to it"))
+	})
+}
+
+// releaseTagRE is a release (X.Y.Z) or a release candidate (X.Y.Z-rc.N) image tag. It is the same
+// pattern as releaseVersion in cmd/wardyn-runnerd (proxy_image.go), kept apart on purpose: change
+// one and change the other. TestReleaseTagRETable and the same table in cmd/wardyn-runnerd pin the pair.
+var releaseTagRE = regexp.MustCompile(`^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-rc\.([0-9]+))?$`)
+
+// imageReleaseTag is image's tag when it names a release, else "": a digest-only reference, an
+// untagged one or a development tag has none.
+func imageReleaseTag(image string) string {
+	ref, _, _ := strings.Cut(image, "@")
+	i := strings.LastIndex(ref, ":")
+	if i < 0 || strings.Contains(ref[i:], "/") || !releaseTagRE.MatchString(ref[i+1:]) {
+		return ""
+	}
+	return ref[i+1:]
+}
+
+// releaseOlder reports whether release tag a is older than b: a release candidate is older than
+// its release.
+func releaseOlder(a, b string) bool {
+	pa, pb := releaseParts(a), releaseParts(b)
+	for i := range pa {
+		if pa[i] != pb[i] {
+			return pa[i] < pb[i]
+		}
+	}
+	return false
+}
+
+func releaseParts(v string) [4]int {
+	m := releaseTagRE.FindStringSubmatch(v)
+	var p [4]int
+	for i := range 3 {
+		p[i], _ = strconv.Atoi(m[i+1])
+	}
+	p[3] = math.MaxInt // a release sorts after each of its candidates
+	if m[4] != "" {
+		p[3], _ = strconv.Atoi(m[4])
+	}
+	return p
+}
+
 // runnerProxyConfig adds the runner-only proxy config keys (runner mode): runnerd's own CA bundle
 // (§5.2), self_lapse (§6.2), the run's decision_sink (§3.2) and hard_deny (§5.3). The proxy
 // decodes strictly, so a proxy that does not know a key refuses to start.
@@ -792,6 +908,7 @@ func (d *Driver) openSink(runID uuid.UUID) (any, error) {
 	}
 	if _, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {
 		ev.SinkKeyHash = hex.EncodeToString(hash[:])
+		ev.Namespace = d.notedNamespace(runID)
 		return true, nil
 	}); err != nil {
 		return nil, err
@@ -854,34 +971,4 @@ func (d *Driver) runnerPodSpec(pod *corev1.Pod, component, controlPlaneURL strin
 	}
 	pod.Spec.HostAliases = append(pod.Spec.HostAliases, corev1.HostAlias{IP: ip, Hostnames: []string{u.Hostname()}})
 	return nil
-}
-
-// createPod creates a pod; in runner mode it first persists the bracket's lower end (a node list
-// scoped by the pod's own nodeSelector), then records the create response's UID, and routes the
-// start wait's reads of the pod through the bracket.
-func (d *Driver) createPod(ctx context.Context, runID uuid.UUID, component string, pod *corev1.Pod) (*corev1.Pod, error) {
-	if !d.runnerMode() {
-		return d.clientset.CoreV1().Pods(d.cfg.Namespace).Create(ctx, pod, metav1.CreateOptions{})
-	}
-	b := &bracket{d: d, runID: runID, component: component, selector: pod.Spec.NodeSelector}
-	if err := b.before(ctx, pod.Name); err != nil {
-		return nil, err
-	}
-	created, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).Create(ctx, pod, metav1.CreateOptions{})
-	if err != nil {
-		return nil, err
-	}
-	if err := b.created(created); err != nil {
-		return nil, err
-	}
-	d.brackets.Store(pod.Name, b)
-	return created, nil
-}
-
-// readPod is the start wait's pod read: through the pod's bracket in runner mode.
-func (d *Driver) readPod(ctx context.Context, name string) (*corev1.Pod, error) {
-	if v, ok := d.brackets.Load(name); ok {
-		return v.(*bracket).get(ctx, name)
-	}
-	return d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(ctx, name, metav1.GetOptions{})
 }

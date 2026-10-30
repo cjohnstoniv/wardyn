@@ -354,7 +354,7 @@ test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and 
   // The refusal is the provider's own (providerBedrockRefusal, mpBRPinned):
   // the run does not spend the wrong identity, and the sentence names both
   // pairs so the member knows which to pick.
-  // The Terminal is the Environment sandbox; claude-code is added to it (not started) so the run
+  // The Terminal is the Environment; claude-code is added to it (not started) so the run
   // has a model credential for the contradicted pin to refuse.
   await page.goto("/runs/new");
   await walkNewRunToTools(page, "environment");

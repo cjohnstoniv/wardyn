@@ -148,6 +148,9 @@ func (m *meeter) validatePresence(ov Overlay) {
 	if c.AllowedMethods != nil && len(normMethods(*c.AllowedMethods)) == 0 {
 		m.fail(ReasonOverlayInvalid, "allowed_methods", "an empty list would allow every method; omit the field to inherit the base's")
 	}
+	if c.AllowedDomains != nil && len(*c.AllowedDomains) > types.MaxAllowedDomainsPerSpec {
+		m.fail(ReasonOverlayInvalid, "allowed_domains", "at most %d entries, got %d", types.MaxAllowedDomainsPerSpec, len(*c.AllowedDomains))
+	}
 	if c.AzureDevOpsCapabilities != nil && len(*c.AzureDevOpsCapabilities) == 0 {
 		m.fail(ReasonOverlayInvalid, "azure_devops_capabilities", "an empty list would mean the provider row's default profile; omit the field to inherit the base's")
 	}
@@ -158,10 +161,16 @@ func (m *meeter) validatePresence(ov Overlay) {
 		m.fail(ReasonOverlayInvalid, "llm_inspection.workspace_secret_values", "resolved secret values are never authored")
 	}
 	if c.ToolRules != nil {
+		seen := map[string]bool{}
 		for _, r := range *c.ToolRules {
 			if !types.ValidToolEffect(r.Effect) {
 				m.fail(ReasonOverlayInvalid, "tool_rules", "tool %q has unknown effect %q", r.Tool, r.Effect)
 			}
+			// A stored overlay keeps resolving (last wins, as the proxy reads it); only a write is sent back.
+			if seen[r.Tool] {
+				m.widen("tool_rules", "two rules for tool %q means one of them does nothing", r.Tool)
+			}
+			seen[r.Tool] = true
 		}
 	}
 	if c.Recording != nil && (*c.Recording == "" || !c.Recording.Valid()) {
@@ -169,6 +178,10 @@ func (m *meeter) validatePresence(ov Overlay) {
 	}
 	if w := c.HarnessInnerWalls; w != nil && !validInnerWalls(*w) {
 		m.fail(ReasonOverlayInvalid, "harness_inner_walls", "sandbox_mode %q or approvals %q is not a value a policy may choose", w.SandboxMode, w.Approvals)
+	}
+	if d := c.Desktop; d != nil && !(types.ValidTransferRule(d.PasteIn) && types.ValidTransferRule(d.CopyOut) &&
+		types.ValidTransferRule(d.Upload) && types.ValidTransferRule(d.Download)) {
+		m.fail(ReasonOverlayInvalid, "desktop", "each direction is allowed or blocked")
 	}
 	m.validateNonNegative(ov)
 	if d := ov.Limits.DenyPlacements; d != nil {
@@ -273,9 +286,13 @@ func derefBool(p *bool) bool { return p != nil && *p }
 func trimJoin(xs []string) string { return strings.Join(xs, ",") }
 
 // validInnerWalls is the harness_inner_walls values a policy may choose: the API's
-// validateHarnessInnerWalls, whose refusal of the harness's own sandbox modes says why they are not here.
+// validateHarnessInnerWalls.
 func validInnerWalls(w types.HarnessInnerWalls) bool {
-	sandbox := w.SandboxMode == "" || w.SandboxMode == types.InnerSandboxOff
+	var sandbox bool
+	switch w.SandboxMode {
+	case "", types.InnerSandboxOff, types.InnerSandboxWorkspaceWrite, types.InnerSandboxReadOnly:
+		sandbox = true
+	}
 	switch w.Approvals {
 	case "", types.InnerApprovalsHarness, types.InnerApprovalsWardyn, types.InnerApprovalsNone:
 		return sandbox

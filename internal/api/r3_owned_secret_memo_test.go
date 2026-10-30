@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -48,6 +50,12 @@ func (r3PlainStore) ListCapabilityRestrictions(context.Context) (map[string]map[
 func (r3PlainStore) ListWorkspaces(context.Context) ([]types.Workspace, error) { return nil, nil }
 func (r3PlainStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
+}
+
+// GetRun answers "no such run": GET /approvals' Decidable projection reads a member's runs, and the
+// embedded nil store.Store would panic where a real store answers not found (#2604).
+func (r3PlainStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
+	return types.AgentRun{}, store.ErrNotFound
 }
 
 // countingSecretStore counts the OWNER-scoped List calls the member pipeline
@@ -290,4 +298,8 @@ func TestMemberPipelineOwnedSecretReadsPerSite(t *testing.T) {
 			}
 		})
 	}
+}
+
+func (f r3PlainStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(f.ResolveGovernanceUnit(ctx, users, groups, userType))
 }

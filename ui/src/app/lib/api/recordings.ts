@@ -84,7 +84,33 @@ export const recordings = {
     const text = await fetchCast(runId, key);
     return text === undefined ? undefined : { playback: JSON.parse(text) as DesktopPlayback, raw: text };
   },
+
+  // GET /api/v1/runs/{id}/recording-chain: whether the audit chain verifies over a desktop
+  // recording's stretch of the log, from `from` (its started_at) to its desktop.recording.write row.
+  async verifyChain(runId: string, key: string, from: string): Promise<AuditChainRange> {
+    const qs = new URLSearchParams({ key, from });
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/recording-chain?${qs}`, { method: "GET" });
+    if (!res.ok) throw new HttpError(res.status, await errText(res));
+    return (await res.json()) as AuditChainRange;
+  },
 };
+
+/** Go: store.AuditChainMark. */
+export interface AuditChainMark {
+  id: string;
+  seq: number;
+}
+
+/** Go: store.AuditChainRange. */
+export interface AuditChainRange {
+  ok: boolean;
+  first_seq: number;
+  last_seq: number;
+  checked: number;
+  broken_seq?: number;
+  reason?: string;
+  marks: AuditChainMark[];
+}
 
 /** Go: recording.RFBGap. */
 export interface DesktopGap {
@@ -102,4 +128,8 @@ export interface DesktopPlayback {
   frames: string[];
   gaps?: DesktopGap[];
   truncated?: boolean;
+  /** Clipboard messages the desktop sent that the frames leave out. */
+  clipboard_omitted?: number;
+  /** When the stream stopped being one the recorder could follow; nothing after it is kept. */
+  stopped_ms?: number;
 }

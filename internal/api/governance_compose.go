@@ -31,13 +31,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// maxUnitDepth is the longest chain: the profile, its base, that base's base. The deployment
-// default under the root is not counted.
-const maxUnitDepth = 3
+// maxUnitDepthDefault is the longest unit path from the top when site_config.governance_max_depth
+// is 0: Default (or a top-level unit) counts as 1. The configured limit is never above
+// store.MaxUnitDepthCap, which bounds every walk here structurally.
+const maxUnitDepthDefault = 16
 
 var (
 	errUnitCycle = errors.New("api: a governance profile chain repeats a profile")
-	errUnitDepth = errors.New("api: a governance profile chain is deeper than 3 profiles")
+	errUnitDepth = errors.New("api: a governance unit path is deeper than the configured maximum")
 )
 
 // ResolvedUnit is one profile as authority: the leaf's identity and contact beside the EFFECTIVE
@@ -61,12 +62,19 @@ type ResolvedUnit struct {
 	Warnings []string
 	// AdminWarnings carry the base-level detail for GET /governance and the 409 bodies.
 	AdminWarnings []string
+	// PathProvenance is, per knob, the layer that last changed it from the deployment default to
+	// Ceiling: the deployment, or the unit on the path whose step changed it (never a pass-through
+	// unit, which changes nothing). It names the bases, so it is admin surfaces only.
+	PathProvenance knobProvenance
 }
 
-// unitLink names one profile of a chain.
+// unitLink names one profile of a chain, with the knobs it locks for the units below it and its
+// contact (markLocked reads both).
 type unitLink struct {
-	ID   uuid.UUID
-	Name string
+	ID      uuid.UUID
+	Name    string
+	Locked  []string
+	Contact *policyref.Contact
 }
 
 // overlayUnsatisfiableError is a composition the meet refuses: no value satisfies both the base and
@@ -99,47 +107,10 @@ func (s *Server) resolveUnitByID(ctx context.Context, id uuid.UUID) (*ResolvedUn
 		}
 		return nil, fmt.Errorf("api: read the governance profile chain: %w", err)
 	}
+	if err := s.checkConfiguredDepth(ctx, chain); err != nil {
+		return nil, err
+	}
 	return s.composeChain(chain)
-}
-
-// resolveAssignedUnit is the resolver for a caller's assignment: the store's precedence read,
-// then the chain of the profile it names when that profile is composed. store.ErrNotFound means no
-// assignment matched (the deployment ceiling). A composition nothing satisfies comes back as an
-// *overlayUnsatisfiableError, audited by ceilingFromUnit, the one place every ceiling passes.
-func (s *Server) resolveAssignedUnit(ctx context.Context, users, groups []string, userType string) (*ResolvedUnit, types.CapabilitySubjectType, error) {
-	row, tier, err := s.cfg.Store.ResolveGovernanceUnit(ctx, users, groups, userType)
-	if err != nil {
-		return nil, "", err
-	}
-	if row == nil {
-		return nil, "", store.ErrNotFound
-	}
-	chain := []types.GovernanceUnit{*row}
-	if row.Composed() {
-		if chain, err = s.cfg.Store.GetGovernanceUnitChain(ctx, row.ID); err != nil {
-			// Never ErrNotFound here: an assigned profile cannot be deleted, and reading "gone" as
-			// "no assignment" would hand back the deployment ceiling.
-			return nil, "", fmt.Errorf("api: read the governance profile chain: %v", err)
-		}
-	}
-	p, err := s.composeChain(chain)
-	if err != nil {
-		return nil, "", err
-	}
-	return p, tier, nil
-}
-
-// assignedUnitIdentity answers which profile binds the claims, for the admin preview: identity
-// and tier only, never authority, so it composes nothing.
-func (s *Server) assignedUnitIdentity(ctx context.Context, users, groups []string, userType string) (id uuid.UUID, name string, tier types.CapabilitySubjectType, err error) {
-	row, tier, err := s.cfg.Store.ResolveGovernanceUnit(ctx, users, groups, userType)
-	if err != nil {
-		return uuid.Nil, "", "", err
-	}
-	if row == nil {
-		return uuid.Nil, "", "", store.ErrNotFound
-	}
-	return row.ID, row.Name, tier, nil
 }
 
 // unitLeafName is the name of the profile id names and nothing else: no chain is composed and no
@@ -152,6 +123,21 @@ func (s *Server) unitLeafName(ctx context.Context, id uuid.UUID) (string, error)
 	return chain[0].Name, nil
 }
 
+// unitOutlines is every unit's id, name, kind and parent and nothing else: walls, overlay, limits
+// and contact stay here, so no reader can take authority from what it returns. It is for the readers
+// that only name units or walk their paths (the check's contexts, a legacy delete's activations).
+func (s *Server) unitOutlines(ctx context.Context) ([]types.GovernanceUnit, error) {
+	rows, err := s.cfg.Store.ListGovernanceUnits(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]types.GovernanceUnit, len(rows))
+	for i, r := range rows {
+		out[i] = types.GovernanceUnit{ID: r.ID, Name: r.Name, Kind: r.Kind, ParentID: r.ParentID}
+	}
+	return out, nil
+}
+
 // unitResolution is one profile of the whole list with what composing it gave. Err is why it
 // has no effective content (a cycle, a depth overflow, an unsatisfiable overlay), shown to admins
 // rather than failing the list.
@@ -161,23 +147,27 @@ type unitResolution struct {
 	Err      error
 }
 
-// resolveAllUnits composes every profile from ONE list read, for the readers that show the
-// whole list.
+// resolveAllUnits composes every unit from ONE list read, for the readers that show the
+// whole list. Default is a node like any other: its effective content is the deployment default.
 func (s *Server) resolveAllUnits(ctx context.Context) ([]unitResolution, error) {
 	rows, err := s.cfg.Store.ListGovernanceUnits(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return s.composeAll(rows), nil
+	limit, err := s.unitDepthLimit(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.composeAll(rows, limit), nil
 }
 
-// composeAll composes each row of an already-read list independently.
-func (s *Server) composeAll(rows []types.GovernanceUnit) []unitResolution {
+// composeAll composes each row of an already-read list independently, refusing a path past limit.
+func (s *Server) composeAll(rows []types.GovernanceUnit, limit int) []unitResolution {
 	byID := unitsByID(rows)
 	out := make([]unitResolution, len(rows))
 	for i, row := range rows {
 		out[i] = unitResolution{Row: row}
-		chain, err := chainFromRows(byID, row.ID)
+		chain, err := chainFromRows(byID, row.ID, limit)
 		if err == nil {
 			out[i].Resolved, err = s.composeChain(chain)
 		}
@@ -195,8 +185,8 @@ func unitsByID(rows []types.GovernanceUnit) map[uuid.UUID]types.GovernanceUnit {
 }
 
 // chainFromRows walks id's bases through an in-memory list, leaf first, refusing a repeat
-// (errUnitCycle), a chain past maxUnitDepth (errUnitDepth) and a base the list lacks.
-func chainFromRows(byID map[uuid.UUID]types.GovernanceUnit, id uuid.UUID) ([]types.GovernanceUnit, error) {
+// (errUnitCycle), a path longer than limit (errUnitDepth) and a base the list lacks.
+func chainFromRows(byID map[uuid.UUID]types.GovernanceUnit, id uuid.UUID, limit int) ([]types.GovernanceUnit, error) {
 	var chain []types.GovernanceUnit
 	for cur := &id; cur != nil; {
 		row, ok := byID[*cur]
@@ -206,7 +196,7 @@ func chainFromRows(byID map[uuid.UUID]types.GovernanceUnit, id uuid.UUID) ([]typ
 		if slices.ContainsFunc(chain, func(r types.GovernanceUnit) bool { return r.ID == row.ID }) {
 			return nil, errUnitCycle
 		}
-		if len(chain) == maxUnitDepth {
+		if len(chain) == min(limit, store.MaxUnitDepthCap) {
 			return nil, errUnitDepth
 		}
 		chain = append(chain, row)
@@ -217,8 +207,9 @@ func chainFromRows(byID map[uuid.UUID]types.GovernanceUnit, id uuid.UUID) ([]typ
 
 // checkUnitChain refuses a chain that is not a clean line to a root: an id that repeats, a link
 // that does not point at the next row, a standalone row with a base above it, or a last row that
-// still names a base (the bound cut the chain short, or the base is missing).
-func checkUnitChain(chain []types.GovernanceUnit) error {
+// still names a base (the bound cut the chain short, or the base is missing). limit is the longest
+// path it admits.
+func checkUnitChain(chain []types.GovernanceUnit, limit int) error {
 	seen := make(map[uuid.UUID]bool, len(chain))
 	for i, r := range chain {
 		if seen[r.ID] {
@@ -237,37 +228,44 @@ func checkUnitChain(chain []types.GovernanceUnit) error {
 		switch {
 		case seen[*last.ParentID]:
 			return errUnitCycle
-		case len(chain) >= maxUnitDepth:
+		case len(chain) >= limit:
 			return errUnitDepth
 		}
 		// The base was not read: only reachable from a store that returned a short chain.
 		return fmt.Errorf("api: governance profile %s names a base that was not read", last.ID)
 	}
-	if len(chain) > maxUnitDepth {
+	if len(chain) > limit {
 		return errUnitDepth
 	}
 	return nil
 }
 
-// composeChain composes a chain (leaf first) from the deployment down.
+// composeChain composes a chain (leaf first) from the top down. Its shape is checked at the store's
+// cap; the configured depth is the caller's (checkConfiguredDepth, chainFromRows).
 func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, error) {
 	if len(chain) == 0 {
 		return nil, errors.New("api: an empty governance profile chain")
 	}
-	if err := checkUnitChain(chain); err != nil {
+	if err := checkUnitChain(chain, store.MaxUnitDepthCap); err != nil {
 		return nil, err
 	}
 	leaf := chain[0]
 	out := &ResolvedUnit{ID: leaf.ID, Name: leaf.Name, Contact: leaf.Contact, Composed: leaf.Composed()}
 	for _, r := range chain {
-		out.Chain = append(out.Chain, unitLink{ID: r.ID, Name: r.Name})
+		out.Chain = append(out.Chain, unitLink{ID: r.ID, Name: r.Name, Locked: r.LockedKnobs, Contact: r.Contact})
 	}
 	root := len(chain) - 1
 	var base composer.Authority
 	next := root
-	if chain[root].Composed() {
+	switch {
+	case chain[root].Kind == types.UnitKindDefault:
+		// Default's walls are the deployment default, read now; the row stores none.
 		base = s.deploymentAuthority()
-	} else {
+		next = root - 1
+	case chain[root].Composed():
+		// A composed row with no base: a store read before the unit-tree migration put it under Default.
+		base = s.deploymentAuthority()
+	default:
 		var warns []string
 		base, warns = s.standaloneAuthority(chain[root])
 		if r := chain[root].Ceiling.Resources; r != nil {
@@ -279,16 +277,30 @@ func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, erro
 		}
 		next = root - 1
 	}
+	// The path's provenance, step by step from the deployment's walls with its own size filled in:
+	// that fill-in is the deployment's (Default's root changes nothing), a standalone root's own walls
+	// are the root's, and each step's changes are its unit's.
+	deployment := s.deploymentAuthority().Ceiling
+	last := policyref.Provenance{Layer: policyref.LayerUnit, Name: chain[root].Name}
+	out.PathProvenance = startProvenance(deploymentProvenance)
+	out.PathProvenance.setBy(last, deployment, base.Ceiling)
 	for i := next; i >= 0; i-- {
+		if chain[i].Mode == types.UnitModePassThrough {
+			continue // its parent's walls exactly: the step is the identity
+		}
+		before := base.Ceiling.Clone()
 		var err error
 		if base, err = s.applyStep(out, base, chain[i], i == 0); err != nil {
 			return nil, err
 		}
+		last = policyref.Provenance{Layer: policyref.LayerUnit, Name: chain[i].Name}
+		out.PathProvenance.setBy(last, before, base.Ceiling)
 	}
 	out.Ceiling, out.Limits = base.Ceiling, base.Limits
 	if out.Composed {
 		out.Ceiling.Resources = s.inheritDeploymentResources(out.Ceiling.Resources)
 	}
+	out.PathProvenance.resetUnchanged(deploymentProvenance, deployment, out.Ceiling)
 	return out, nil
 }
 

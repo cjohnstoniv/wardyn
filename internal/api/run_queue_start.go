@@ -172,13 +172,22 @@ func newQueuedStart(base, prep context.Context, p store.PromotedRun) (*queuedSta
 func (st *queuedStart) bind(a queueAuthority) error {
 	st.auth = a
 	st.base = a.context(st.daemon)
-	st.ctx = withPromotedStart(withCeilingMemo(withCapBatch(a.context(st.prep))), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
+	choice := contextChoice{RunIn: st.launch.RunIn, OwningUnits: st.launch.OwningUnits}
+	st.ctx = withPromotedStart(bindAuthority(st.prep, a, choice), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
 	r, err := http.NewRequestWithContext(st.ctx, http.MethodPost, "/api/v1/runs", nil)
 	if err != nil {
 		return err
 	}
 	st.r = r
 	return nil
+}
+
+// bindAuthority puts a on ctx with the memos a request carries, so a launch made without the owner's
+// session resolves the ceiling, the capability rows and the pool catalogue for a as a request of theirs
+// would. ctx must carry no other caller's identity. The queue start binds its stored authority with it,
+// and a workload launch acting as a service identity binds that identity's (serviceLaunchRequest).
+func bindAuthority(ctx context.Context, a queueAuthority, choice contextChoice) context.Context {
+	return withCeilingMemo(withCapBatch(withContextChoice(a.context(ctx), choice)))
 }
 
 // runQueuedStart is the table of section 7: the owner's standing, the profile, the doors, the policy,
@@ -382,7 +391,15 @@ func (s *Server) queueGovernance(st *queuedStart, req createRunRequest) (governa
 }
 
 // sameUnit reports whether ceiling resolved to the profile the launch recorded (nil for none).
+// A run the restrictions alone put in the Default unit counts as none, so a restriction added or
+// removed while the run waited is not a changed profile (the restrictions are re-read at start).
 func sameUnit(ceiling governanceCeiling, recorded *uuid.UUID) bool {
+	if recorded != nil && *recorded == store.DefaultUnitID {
+		recorded = nil
+	}
+	if restrictionDefaultUnit(ceiling.Unit) {
+		ceiling.Unit = nil
+	}
 	if ceiling.Unit == nil || recorded == nil {
 		return ceiling.Unit == nil && recorded == nil
 	}
@@ -451,7 +468,7 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 	}
 	started, ok, err := qs.StartQueuedRun(st.ctx, run.ID, store.QueueStart{
 		SPIFFEID: id.SPIFFEID, ConfinementClass: f.enforced, ModelProviderID: f.mpChoice.provider.ID, AutonomyLevel: f.autonomy.Level, InnerWalls: f.innerWalls,
-		EndsAt: anchor.EndsAt, WaitBudgetSec: anchor.WaitBudgetSec, RunLimits: anchor.RunLimits, UnitID: anchor.UnitID,
+		EndsAt: anchor.EndsAt, WaitBudgetSec: anchor.WaitBudgetSec, RunLimits: anchor.RunLimits, UnitID: anchor.UnitID, RestrictionIDs: anchor.RestrictionIDs,
 		LifetimeCapAt: anchor.LifetimeCapAt, LifetimeCapSource: anchor.LifetimeCapSource,
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID,
 		EvidenceSource: placed.EvidenceSource, RunnerPoolExecutor: placed.RunnerPoolExecutor, RunnerFallbacks: f.place.otherRunners(f.enforced, placed.RunnerID),

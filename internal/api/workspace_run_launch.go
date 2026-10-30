@@ -27,7 +27,9 @@ import (
 // built from EVERY workspace's Sources — not the single-source Kind/Source
 // mirror, which is empty for a multi-source workspace.
 // A source several workspaces carry resolves to one owner may launch (their own
-// or an operator's; every one for owner "", an operator), as at launch.
+// or an operator's; every one for owner "", an operator), and a repo to the
+// carrier owner's admission was granted on, as at launch. A failed capability
+// read references none, as a failed list does.
 func (s *Server) referencedWorkspaces(ctx context.Context, owner string, spec types.RunPolicySpec) []types.Workspace {
 	if s.cfg.Store == nil {
 		return nil
@@ -39,6 +41,10 @@ func (s *Server) referencedWorkspaces(ctx context.Context, owner string, spec ty
 	var rule runCarrierRule
 	if owner != "" {
 		rule.mayLaunch = func(ws types.Workspace) bool { return ws.OwnedBy == "" || ws.OwnedBy == owner }
+		rule.person = owner
+		if rule.holdAdmittedRepos(ctx, s.capBatchFor(ctx), all, spec) != nil {
+			return nil
+		}
 	}
 	return referencedWorkspacesBy(rule.index(all), spec)
 }
@@ -401,7 +407,7 @@ func (s *Server) stepRunCeilingLimits(ctx context.Context, actor string, gov ste
 	// it — there is no request shape here to inspect.
 	if ceiling.Limits.DenyInteractive && gov.interactive {
 		//lint:ignore ST1005 canon member sentence (docs/design/governance-prompt.md limits table), pinned verbatim by governance_limits_test.go; it ends the way the doc writes it
-		return recordCeilingError{fmt.Errorf("%w: interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", errRecordCeilingLimit, name), s.ceilingPolicy(ctx, ceiling)}
+		return recordCeilingError{fmt.Errorf("%w: interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", errRecordCeilingLimit, name), s.ceilingPolicy(ctx, ceiling), ceiling.lockOf("deny_interactive")}
 	}
 	if limit := ceiling.Limits.MaxConcurrentRuns; limit > 0 && gov.counted {
 		active, err := s.cfg.Store.CountActiveRunsBy(ctx, actor)
@@ -410,7 +416,7 @@ func (s *Server) stepRunCeilingLimits(ctx context.Context, actor string, gov ste
 		}
 		if active >= limit {
 			//lint:ignore ST1005 canon member sentence (docs/design/governance-prompt.md limits table), pinned verbatim by governance_limits_test.go; it ends the way the doc writes it
-			return recordCeilingError{fmt.Errorf("%w: too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.", errRecordCeilingLimit, limit, name, active), s.ceilingPolicy(ctx, ceiling)}
+			return recordCeilingError{fmt.Errorf("%w: too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.", errRecordCeilingLimit, limit, name, active), s.ceilingPolicy(ctx, ceiling), ceiling.lockOf("max_concurrent_runs")}
 		}
 	}
 	return nil
@@ -683,9 +689,16 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 
 	// Record in the built devcontainer image so the task actually runs (its
 	// toolchain isn't in the convention agent image) — same lane as verify.
-	image, ierr := s.workspaceRunImage(ctx, runID, ws)
+	image, arches, ierr := s.workspaceRunImage(ctx, runID, ws)
 	if ierr != nil {
 		return types.AgentRun{}, false, abort(ierr)
+	}
+	// A prewrapped image's checked architectures go on the run before dispatch, which places it by them.
+	if arches != nil {
+		if err := s.cfg.Store.SetRunImageArches(ctx, runID, arches); err != nil {
+			return types.AgentRun{}, false, abort(fmt.Errorf("record the prewrapped image's architectures: %w", err))
+		}
+		created.ImageArches = arches
 	}
 
 	// The chosen model provider's host joins at dispatch, like any run's; it is

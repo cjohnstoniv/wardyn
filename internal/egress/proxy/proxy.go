@@ -6,7 +6,6 @@ package proxy
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -117,6 +116,8 @@ type Proxy struct {
 	maskKey uuid.UUID
 	// scrubResponses is Options.ScrubResponses (scrub.go).
 	scrubResponses bool
+	// canonicalPushRepos is Options.CanonicalPushRepos (patPushTarget).
+	canonicalPushRepos bool
 	// patGrants is the per-run git_pat broker allowlist: lowercased host -> the
 	// grant to mint from. Empty/nil == no host brokered (the route always 403s),
 	// which is also what a deployment with the lane switched off looks like.
@@ -172,6 +173,9 @@ type Proxy struct {
 	localClient *http.Client
 	// streamMoved is set when a tunnel or MITM stream moves a byte (activity.go).
 	streamMoved atomic.Bool
+	// signin caches the sign-in credentials the control plane accepted
+	// (desktop_signin_lane.go).
+	signin signinChecks
 
 	// dial connects to a vetted "ip:port" target. Both the plain-HTTP
 	// transport and the CONNECT path use this single seam; tests override it.
@@ -298,18 +302,6 @@ type internalHostRule struct {
 // the hostname (TOCTOU / DNS-rebinding guard).
 type vettedIPKey struct{}
 
-// canonicalGitGrants canonicalises git-broker allowlist keys to lowercase "<org>/<repo>" so
-// lookups match regardless of the slug casing git sends (github owner/repo is case-insensitive).
-func canonicalGitGrants(in map[string]uuid.UUID) map[string]uuid.UUID {
-	gitGrants := make(map[string]uuid.UUID, len(in))
-	for k, id := range in {
-		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && id != uuid.Nil {
-			gitGrants[k] = id
-		}
-	}
-	return gitGrants
-}
-
 //nolint:funlen // one linear wiring of each Options field into the Proxy; splitting it would scatter the wiring
 func newProxy(opts Options) *Proxy {
 	dial := opts.Dial
@@ -329,17 +321,11 @@ func newProxy(opts Options) *Proxy {
 	if evaluator == nil {
 		evaluator = builtinEvaluator{p: opts.Policy} // default: builtin RunPolicySpec verdict
 	}
-	mitmHosts, mitmPorts, mitmPlaintext := compileMITMHosts(opts.MITMHosts)
 	gitGrants := canonicalGitGrants(opts.GitGrants)
 	// Same canonicalisation as the repo keys above: a host is matched
 	// case-insensitively, so the map key is lowercased once here rather than at
 	// every lookup.
-	patGrants := make(map[string]PATGrant, len(opts.PATGrants))
-	for k, g := range opts.PATGrants {
-		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && g.GrantID != uuid.Nil {
-			patGrants[k] = g
-		}
-	}
+	patGrants := canonicalPATGrants(opts.PATGrants)
 	internalHosts := compileInternalHosts(opts.InternalHosts)
 	// Compile the LLM-gateway table + its reverse lookup. LLMUpstreams is
 	// already validated (api.ValidateLLMGateways at boot, applyDefaultsAndValidate
@@ -364,9 +350,7 @@ func newProxy(opts Options) *Proxy {
 		llmUpstreams[vendor] = llmUpstream{host: host, port: port, prefix: strings.TrimSuffix(u.Path, "/")}
 		gatewayVendor[hostKey(host)] = vendor
 	}
-	// A git_pat grant with api: true terminates its own host on 443 and nothing else, so the
-	// forge API is reached only through the door. An entry the operator already authored keeps its own scope.
-	patAPI := newPATAPIGrants(patGrants, mitmHosts, mitmPorts)
+	mitm := buildMITMTables(opts.MITMHosts, patGrants, opts.GitHubAPI, opts.AzureARM, opts.AWSSigV4, opts.KubeAPI)
 	p := &Proxy{
 		runID:                opts.RunID,
 		policy:               opts.Policy,
@@ -377,20 +361,20 @@ func newProxy(opts Options) *Proxy {
 		res:                  res,
 		scanner:              opts.Scanner,
 		ca:                   opts.CA,
-		mitmHosts:            mitmHosts,
-		mitmPorts:            mitmPorts,
-		mitmPlaintext:        mitmPlaintext,
+		mitmHosts:            mitm.hosts,
+		mitmPorts:            mitm.ports,
+		mitmPlaintext:        mitm.plaintext,
 		mitmLLM:              opts.MITMLLM,
 		gitGrants:            gitGrants,
 		patGrants:            patGrants,
 		brokeredPATGrantIDs:  opts.BrokeredPATGrantIDs,
 		adoGrants:            opts.ADOGrants,
 		azure:                newAzureGates(opts.AzureGates),
-		patAPI:               patAPI,
-		ghAPI:                newGitHubAPIDoor(opts.GitHubAPI, mitmHosts, mitmPorts),
-		arm:                  newAzureARMDoor(opts.AzureARM, mitmHosts, mitmPorts),
-		sigv4:                newAWSSigV4Door(opts.AWSSigV4, mitmHosts, mitmPorts),
-		kube:                 newKubeAPIDoor(opts.KubeAPI, mitmHosts, mitmPorts),
+		patAPI:               mitm.patAPI,
+		ghAPI:                mitm.ghAPI,
+		arm:                  mitm.arm,
+		sigv4:                mitm.sigv4,
+		kube:                 mitm.kube,
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      controlPlaneEndpoint(opts.ControlPlaneURL, ""),
 		runToken:             opts.RunToken,
@@ -403,9 +387,10 @@ func newProxy(opts Options) *Proxy {
 		exclusionUnknown:     opts.ExclusionUnknown,
 		llmUpstreams:         llmUpstreams,
 		llmUnavailableDetail: opts.LLMUnavailableDetail,
-		localModels:          compileLocalModels(opts.LocalModels),
+		localModels:          compileLocalModels(opts.LocalModels, opts.RunnerLocalModels),
 		pushHolds:            pushHolds{unattended: opts.Unattended},
 		scrubResponses:       opts.ScrubResponses,
+		canonicalPushRepos:   opts.CanonicalPushRepos,
 		attribution:          opts.Attribution,
 		gatewayVendor:        gatewayVendor,
 		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
@@ -542,6 +527,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuseClosed(w)
 		return
 	}
+	// The person's sign-in lane has its own listener and rules (desktop_signin_lane.go).
+	if onSigninLane(r.Context()) {
+		p.serveSignin(w, r)
+		return
+	}
 	// A via_org destination is the organisation's to decide: no spool row, no
 	// hold and no decision here (design 0.9 §7.3).
 	if route, authority, ok := p.viaOrgRouteFor(r); ok {
@@ -621,15 +611,15 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		return egress.Deny, "", &log
 	}
 
-	// 1. Policy host verdict (deny beats allow, default-deny) — delegated to the
-	// pluggable Evaluator (default: builtin RunPolicySpec). An evaluator error
-	// fails closed. The IP guard (step 0), first-use approval (step 2), and IP
-	// vetting (step 4) stay HARDWIRED around this verdict regardless of engine.
-	verdict, verr := p.evaluator.EvaluateHost(ctx, req)
-	if verr != nil {
-		log := decisionLog(req, egress.Deny, "policy:evaluator-error")
+	// 1-2. The part of the decision the config alone makes (connect_gate.go): the policy host verdict,
+	// the port rule and the method restriction, in that order. The IP guard (step 0), first-use approval
+	// (step 3), and IP vetting (step 4) stay HARDWIRED around it regardless of engine.
+	gate := gateConnect(ctx, req, p.evaluator, p.policy, p.portRule)
+	if gate.refusal != "" {
+		log := decisionLog(req, egress.Deny, gate.refusal)
 		return egress.Deny, "", &log
 	}
+	verdict, portDryRun := gate.verdict, gate.portDryRun
 	// approvalID records whether (and via which approval) this request's verdict
 	// was RELEASED by the first-use approval flow, so the eventual Allow decision
 	// below can attribute to "approval:<id>" instead of "policy:allowed" — a
@@ -638,48 +628,6 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// who approved the egress. Zero == this request never went
 	// through approval (a direct policy allow).
 	var approvalID uuid.UUID
-
-	if verdict == egress.VerdictDeny {
-		log := decisionLog(req, egress.Deny, "policy:denied")
-		return egress.Deny, "", &log
-	}
-	// The port rule (port_rule.go) sits below policy:denied and above the method
-	// check and the approval raise: an approval is host-wide and never opens a
-	// port, so asking for one the rule refuses is a question the answer cannot
-	// change.
-	portDryRun := false
-	if p.portRuleRefuses(host, port) {
-		if p.portRule == PortRuleOn {
-			log := decisionLog(req, egress.Deny, ruleSourcePort)
-			return egress.Deny, "", &log
-		}
-		portDryRun = true
-	}
-
-	// 2. Method restriction (CONNECT counts as method "CONNECT"), applied BEFORE
-	// the first-use approval flow below.
-	//
-	// The method check runs BEFORE the first-use approval raise because it
-	// depends on nothing the approval produces, so refusing first is free. If it
-	// ran after the raise, a request whose method can NEVER pass —
-	// allowed_methods=["GET"] and the sandbox sends POST — would still POST an
-	// egress_domain ApprovalRequest to the control plane, and under
-	// wait_for_review would PARK the connection in ResolveWait until a human
-	// answered or the hold deadline passed: a human asked to decide egress for a
-	// request the very next step refuses unconditionally. Since the SANDBOX picks
-	// the method, it also picks how many approval rows and hold slots it can
-	// create — N POSTs to N unknown hosts under a GET-only policy would fill the
-	// operator's queue and saturate max_holds, stalling the run's legitimate
-	// first-use approvals. Running the check first also stops a method-denied
-	// request from SPENDING a scope=once grant (the trade-off approvals.go
-	// documents for the already-granted half of this ordering).
-	//
-	// Order against policy:denied is unchanged: a host the policy denies outright
-	// still logs policy:denied, never policy:method.
-	if !p.evaluator.MethodAllowed(req.Method) {
-		log := decisionLog(req, egress.Deny, "policy:method")
-		return egress.Deny, "", &log
-	}
 
 	// B6, and it sits HERE — above the first-use approval flow, below
 	// policy:denied/policy:method — for the reason privateIPMemoHit's own doc
@@ -711,7 +659,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 			case apDenied:
 				log := decisionLog(req, egress.Deny, "approval:denied")
 				return egress.Deny, "", &log
-			default: // apPending / apNone / apCapped / apRefused / apExpired
+			default: // apPending / apNone / apCapped / apRefused / apExpired / apStale
 				log := decisionLog(req, egress.Pending, approvalPendingReason(r.State))
 				if r.ApprovalID != uuid.Nil {
 					id := r.ApprovalID
@@ -914,7 +862,13 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			p.emitLLMBlindOnce(host, port, http.MethodConnect)
 		}
 	}
+	p.openTunnel(w, r, host, port, target, log, p.countActivity)
+}
 
+// openTunnel dials an allowed CONNECT's destination and pipes the client leg
+// to it opaquely. count wraps the client leg (the activity counter on the
+// agent's listener; the sign-in lane passes none).
+func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, port int, target string, log *egress.DecisionLog, count func(net.Conn) net.Conn) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking unsupported", http.StatusInternalServerError)
@@ -966,18 +920,25 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// never see the client's opening flight. Same readerConn the MITM lane uses
 	// for the same reason.
 	watch := newTunnelWatch(upstream)
-	first, err := tunnel(p.countActivity(&readerConn{Conn: clientConn, r: brw.Reader}), watch)
+	dest := net.JoinHostPort(host, strconv.Itoa(port))
+	watch.onSSH = func() error { return p.sshAgent.sshTunnel(watch, dest) }
+	defer p.sshAgent.dropTunnel(watch)
+	var client net.Conn = &readerConn{Conn: clientConn, r: brw.Reader}
+	if count != nil {
+		client = count(client)
+	}
+	first, err := tunnel(client, watch)
 	p.tunnelEnded(log, host, watch, first, err)
 }
 
-// writeApprovalPending returns the first-use 403 body the sandbox client sees.
-func writeApprovalPending(w http.ResponseWriter, log *egress.DecisionLog) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	id := ""
-	if log != nil && log.ApprovalID != nil {
-		id = log.ApprovalID.String()
+// canonicalPATGrants keys the git_pat grants by lower-cased host and drops an entry with no
+// host or no grant id. The proxy and Config.TerminatesTLS read the same set.
+func canonicalPATGrants(in map[string]PATGrant) map[string]PATGrant {
+	out := make(map[string]PATGrant, len(in))
+	for k, g := range in {
+		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && g.GrantID != uuid.Nil {
+			out[k] = g
+		}
 	}
-	// {"wardyn":"approval-pending","approval_id":...}
-	_, _ = fmt.Fprintf(w, `{"wardyn":"approval-pending","approval_id":%q}`, id)
+	return out
 }

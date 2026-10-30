@@ -7,12 +7,44 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
+	"sync"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// workspaceListKey carries a workspaceListMemo on a fold's request context.
+type workspaceListKey struct{}
+
+// workspaceListMemo is one fold's read of the workspaces table: the policy, onboarding and
+// workspace steps each need the whole list, and one request's gates must not each read it again.
+type workspaceListMemo struct {
+	mu   sync.Mutex
+	list []types.Workspace
+	read bool
+}
+
+// listWorkspaces is Store.ListWorkspaces, answered once per fold when ctx carries a memo.
+// A failed read is not kept: the next caller reads again, as it would without the memo.
+func (s *Server) listWorkspaces(ctx context.Context) ([]types.Workspace, error) {
+	m, ok := ctx.Value(workspaceListKey{}).(*workspaceListMemo)
+	if !ok {
+		return s.cfg.Store.ListWorkspaces(ctx)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.read {
+		list, err := s.cfg.Store.ListWorkspaces(ctx)
+		if err != nil {
+			return nil, err
+		}
+		m.list, m.read = list, true
+	}
+	return slices.Clone(m.list), nil
+}
 
 // workspaceSourceIndex indexes onboarded workspaces by each of their local_dir
 // (by Path) and repo (by Source slug/URL) entries — the lookup a workspace
@@ -62,18 +94,60 @@ func indexWorkspacesFor(all []types.Workspace, usable func(types.Workspace) bool
 	return idx
 }
 
+// admittedCarriersKey carries an admittedCarriers on a fold's request context.
+type admittedCarriersKey struct{}
+
+// admittedCarriers is one fold's record of the carrier a member's capability
+// narrowing admitted each repo by (narrowUserInlinePolicy). The workspace step
+// holds those repos, and only those, to it: the record is never recomputed,
+// and a repo no narrowing judged (an operator-authored or default-policy
+// entry) keeps the index's carrier.
+type admittedCarriers struct {
+	mu   sync.Mutex
+	repo map[string]types.Workspace
+}
+
+// recordAdmittedCarrier records ws as the carrier repo was admitted by, when
+// ctx is a fold's.
+func recordAdmittedCarrier(ctx context.Context, repo string, ws types.Workspace) {
+	m, ok := ctx.Value(admittedCarriersKey{}).(*admittedCarriers)
+	if !ok {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.repo == nil {
+		m.repo = map[string]types.Workspace{}
+	}
+	m.repo[repo] = ws
+}
+
+// admittedCarriersIn is the fold's record, nil outside a fold.
+func admittedCarriersIn(ctx context.Context) map[string]types.Workspace {
+	m, ok := ctx.Value(admittedCarriersKey{}).(*admittedCarriers)
+	if !ok {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return maps.Clone(m.repo)
+}
+
 // runCarrierRule is how one launch picks the workspace each source is judged by
 // (index) and whose member mount gate it owes. The carrier is the one the run
 // uses: an attached workspace that carries the source, else one mayLaunch
 // admits (indexWorkspacesFor), else the last carrier. nil mayLaunch admits
 // every workspace. person is the member the run is for, "" for an operator:
 // their own mount gate runs on a source a workspace of theirs carries, whichever
-// carrier judged it. The zero value is the authoring doors' rule: every
+// carrier judged it. admitted holds a repo to the carrier a member's admission
+// admitted it by (a fold's admittedCarriers, or holdAdmittedRepos outside one),
+// ahead of mayLaunch and behind attached. The zero value is the authoring doors' rule: every
 // workspace, no person.
 type runCarrierRule struct {
 	attached  []types.Workspace
 	mayLaunch func(types.Workspace) bool
 	person    string
+	admitted  map[string]types.Workspace
 }
 
 // launchCarrierRule is the rule for the caller of r launching with attached.
@@ -85,8 +159,40 @@ func (s *Server) launchCarrierRule(r *http.Request, attached []types.Workspace) 
 	return rule
 }
 
+// holdAdmittedRepos is admittedCarriers for a caller outside a fold (the setup
+// checklist, referencedWorkspaces): each repo of spec that several workspaces
+// carry is held to the carrier a member's admission would judge it by
+// (admittingCarrier). A repo no carrier is granted keeps the index's choice; an
+// operator's rule (no person) is left as it is.
+func (c *runCarrierRule) holdAdmittedRepos(ctx context.Context, cap *capBatch, all []types.Workspace, spec types.RunPolicySpec) error {
+	if c.person == "" {
+		return nil
+	}
+	usable := carrierUsableBy(c.person)
+	idx := indexWorkspacesFor(all, usable)
+	for _, wr := range spec.WorkspaceRepos {
+		if len(idx.repoAll[wr.Repo]) < 2 {
+			continue
+		}
+		ws, ok, err := admittingCarrier(ctx, cap, idx.repo[wr.Repo], idx.repoAll[wr.Repo], usable)
+		if err != nil {
+			return err
+		}
+		if ok {
+			if c.admitted == nil {
+				c.admitted = map[string]types.Workspace{}
+			}
+			c.admitted[wr.Repo] = ws
+		}
+	}
+	return nil
+}
+
 func (c runCarrierRule) index(all []types.Workspace) workspaceSourceIndex {
 	idx := indexWorkspacesFor(all, c.mayLaunch)
+	for repo, ws := range c.admitted {
+		idx.repo[repo] = ws
+	}
 	for _, ws := range c.attached {
 		for _, src := range ws.Sources {
 			switch src.Type {
@@ -143,7 +249,7 @@ func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPol
 		return http.StatusUnprocessableEntity, reasonWorkspaceSourcesStoreUnavailable, fmt.Errorf(
 			"workspace onboarding requires a store, but none is configured")
 	}
-	all, err := s.cfg.Store.ListWorkspaces(ctx)
+	all, err := s.listWorkspaces(ctx)
 	if err != nil {
 		return http.StatusUnprocessableEntity, reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err)
 	}
@@ -254,7 +360,7 @@ func (s *Server) requirementWriteRefusal(ctx context.Context, attached []types.W
 					return refuse(reasonWorkspaceSourcesStoreUnavailable, errors.New("workspace onboarding requires a store, but none is configured"))
 				}
 				var err error
-				if stored, err = s.cfg.Store.ListWorkspaces(ctx); err != nil {
+				if stored, err = s.listWorkspaces(ctx); err != nil {
 					return refuse(reasonWorkspaceSourcesListUnavailable, fmt.Errorf("list workspaces: %w", err))
 				}
 			}

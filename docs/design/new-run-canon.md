@@ -55,6 +55,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | A "(team)" suffix on a model provider | Providers show their record names. |
 | "Platform team" as an approver | No team routing exists. An approval sentence says "An admin decides each new host." |
 | "Custom harness" as a literal row | The harness roster comes from the server. |
+| "Available now" on the two application cards (the mock's `APP_AUTOMATION_META`) | Deviation (#3045: both kinds available; no availability meta). |
 | The mock's interactive "kept until its 72-hour maximum lifetime" line and "the main drive is kept until its lifetime ends" | False for runners that keep a drive for a grace period only. |
 
 ## 7. Frozen strings
@@ -101,12 +102,12 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `AGENT_TITLE` | mock | Agent task |
 | `AGENT_BODY` | mock | A one-time coding task, driven by you or running autonomously. |
 | `AGENT_SUB` | mock | Interactive · Autonomous |
-| `ENV_TITLE` | mock | Environment sandbox |
+| `ENV_TITLE` | mock | Environment |
 | `ENV_BODY` | mock | A reusable workspace for development, analysis or investigation. |
 | `ENV_SUB` | pending (A18) | Interactive · Your drive is attached when you have one |
 | `APP_TITLE` | mock | Application sandbox |
 | `APP_BODY` | mock | Run a sandboxed command, automation or script on its own. |
-| `APP_SUB` | mock | Automation / script |
+| `APP_SUB` | mock | Automation / script · Application / server |
 
 ### 7.3 Run
 
@@ -115,6 +116,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `TITLE_AGENT` | mock | Choose how and where it runs |
 | `TITLE_ENV` | mock | Choose where the environment runs |
 | `TITLE_APP` | mock | Choose where the automation runs |
+| `TITLE_APP_SERVER` | mock | Choose where the application runs |
 | `LEDE_ORG` | pending (W-05) | Your organisation's defaults are selected. |
 | `LEDE_PERSONAL` | pending (W-05) | Your defaults are selected. |
 | `LEDE_NONE` | pending (W-05) | Choose where it runs. |
@@ -139,6 +141,50 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `APP_LABEL` | mock | What should run? |
 | `APP_AUTOMATION` | mock | Automation / script |
 | `APP_AUTOMATION_BODY` | mock | A command or job that runs on its own. |
+| `APP_SERVER` | mock | Application / server |
+| `APP_SERVER_BODY` | mock | A web app, API or dev server you open in your browser. |
+| `START_COMMAND_LABEL` | mock | Start command |
+| `START_COMMAND_HELP` | mock | Run verbatim in the sandbox when it starts. The run keeps going until you end it or it reaches its lifetime limit. |
+| `PORTS_LABEL` | mock | Ports |
+| `PORTS_HELP` | mock | Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it, unless you make it callable from outside. |
+| `PORT_COL_NAME` | mock | Name |
+| `PORT_COL_PORT` | mock | Port |
+| `PORT_COL_PATH` | mock | Path |
+| `PORT_ADD` | mock | Add a port |
+| `PORTS_FULL` | mock | A run can open up to 8 ports. |
+| `PORT_INVALID` | mock | Enter a port from 1 to 65535. |
+| `PORT_DUPLICATE(port)` | mock | Two apps can't share port {port}. |
+| `PORT_INBOUND_LABEL` | mock | Callable from outside the run |
+| `PORT_INBOUND_HELP` | mock | People and services you name can reach this port through Wardyn's gateway, even when the run has no terminal. Every call is recorded. |
+| `PORT_INBOUND_REFUSED` | mock | Your organisation hasn't turned on inbound access for you. |
+| `CALLERS_LABEL` | mock | Who can call it |
+| `CALLERS_HELP` | mock | You can always call it. Add the people, groups and service identities that may call it too. |
+| `CALLERS_NONE` | mock | Only you can call it. |
+| `CALLERS_ADD` | mock | Add a caller |
+| `CALLER_PERSON` | mock | Person |
+| `CALLER_GROUP` | mock | Group |
+| `CALLER_SERVICE` | mock | Service identity |
+| `CALLERS_MENU_DIRECTORY` | mock | Search the directory |
+| `CALLERS_MENU_GROUPS` | mock | Your groups |
+| `CALLERS_MENU_SERVICES` | mock | Services you sponsor |
+| `CALLERS_MENU_PERSON` | mock | A person |
+| `CALLERS_NO_GROUPS` | mock | Your sign-in doesn't list any groups. |
+| `CALLERS_NO_SERVICES` | mock | You don't sponsor any service identities. |
+| `CALLER_EMAIL_PLACEHOLDER` | mock | name@example.com |
+| `CALLER_EMAIL_INVALID` | mock | Enter a full email address, like ana@example.com. |
+| `CALLER_ADD_PERSON` | mock | Add |
+| `CALLER_ADDED` | mock | Added |
+| `CALLER_REMOVE_ARIA(value)` | mock | Remove {value} |
+| `PORT_REQUIRED` | deviation (lead wording 2026-10-20, FEAT-1APP-UI) | An application needs at least one port to open. |
+| `APP_NAME_DUPLICATE(name)` | deviation (lead wording 2026-10-20, APP-UI-2) | Two applications are named {name}. Give each its own name. |
+| `APP_NAME_INVALID` | deviation (lead wording 2026-10-20, APP-UI-2) | Use lower-case letters, numbers and dashes, up to 32 characters, starting and ending with a letter or number. |
+| `APP_PATH_INVALID` | deviation (lead wording 2026-10-20, APP-UI-2) | Start the path with a single /, with no host and no "..". |
+| `APP_ROW(n)` | deviation (lead wording 2026-10-20, APP-UI-2) | row {n} |
+| `APP_NAME_ARIA(n)` | deviation (lead wording 2026-10-20, APP-UI-2) | Name for row {n} |
+| `APP_PORT_ARIA(who)` | deviation (lead wording 2026-10-20, APP-UI-2) | Port for {who} |
+| `APP_PATH_ARIA(who)` | deviation (lead wording 2026-10-20, APP-UI-2) | Path for {who} |
+| `APP_REMOVE_ARIA(who)` | deviation (lead wording 2026-10-20, APP-UI-2) | Remove {who} |
+| `APP_TERMINAL_NOTE` | mock | The sandbox also has a terminal, as an Environment does. |
 | `COMMAND_LABEL` | mock | Command |
 | `COMMAND_HELP` | mock | Run verbatim in the sandbox. The run ends when the command exits. |
 | `COMMAND_REQUIRED` | deviation (lead wording 2026-10-17, FR-0099) | A command run needs a command to run. |
@@ -528,6 +574,28 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `DETAIL_NOTE` | mock | Note |
 | `DETAIL_NONE` | mock | None |
 | `DETAIL_MCP_BODY` | mock | Turn it on for a harness under Harness setup. |
+| `BRINGS_FOR(name)` | mock | What {name} brings |
+| `DETAIL_FILES` | mock | Files and drives |
+| `DETAIL_OTHER` | mock | Other |
+| `DETAIL_WHERE` | mock | Where it runs |
+| `MORE(n)` | mock | +{n} more |
+| `MCP_REMOTE` | mock | Remote (HTTPS) |
+| `GITHUB_APP` | mock | Wardyn GitHub App |
+| `GITHUB_REPOS(repos)` | mock | This run's repositories: {repos} |
+| `GITHUB_REPOS_LABEL` | mock | This run's repositories: |
+| `KUBE_CREDENTIAL(cluster)` | mock | {cluster} service account |
+| `KUBE_CREDENTIAL_NOTE` | mock | Acts as the service account your organisation set for this cluster, not as you. The cluster's audit log names that account. |
+| `KUBE_NAMESPACES(namespaces)` | mock | Namespaces: {namespaces} |
+| `KUBE_READ_ONLY` | mock | Read only |
+| `KUBE_READ_WRITE` | mock | Read and write |
+| `KUBE_NO_EXEC` | mock | No exec |
+| `KUBE_CLUSTER` | mock | Cluster |
+| `KUBE_NAMESPACES_LABEL` | mock | Namespaces |
+| `KUBE_ACCESS` | mock | Access |
+| `KUBE_EXEC` | mock | Exec |
+| `KUBE_READ_DETAIL` | mock | Read only: get, list and watch. |
+| `KUBE_WRITE_DETAIL` | mock | Read and write: also create, update, patch and delete. |
+| `KUBE_EXEC_DETAIL` | mock | Exec, attach and port-forward aren't allowed. |
 | `IMAGE_NO` | pending (W-34) | Not in this sandbox's image. The access still works if the tool is installed another way. |
 | `IMAGE_UNKNOWN` | pending (W-34) | Wardyn can't tell whether this sandbox's image has it. |
 | `NO_HARNESSES` | mock | No harnesses in this run. Add one on the Harnesses step if the sandbox should include an agent tool. |
@@ -544,7 +612,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `DEFAULT_HELP_OPERATOR` | pending (W-30) | Ask first holds the call until you or another admin approves it. |
 | `DEFAULT_HELP_ATTENDED` | pending (W-30) | Ask first: Claude Code asks you in the terminal before it runs the tool. |
 | `PROFILE_REQUIRES(profile)` | pending (W-30) | {profile} requires Ask first or stricter for tools with no rule. |
-| `CODEX_NOTE` | pending (W-32) | Codex CLI can't pause a tool call for approval, and Wardyn can't block its own tools. Rules for its MCP tools are enforced by the proxy. |
+| `CODEX_NOTE` | pending (W-32) | Rules for Codex CLI's MCP tools are enforced by the proxy. |
+| `CODEX_NOTE_REMOTE` | mock | Rules for Codex CLI's remote MCP tools are enforced by the proxy. |
 | `RULES_LABEL` | mock | Tool rules |
 | `ROW_LOCKED` | deviation (lead wording 2026-10-17, FUG-L771) | Set by your organisation's policy |
 | `ADD_RULE` | mock | Add a tool rule |
@@ -583,7 +652,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `ADD_TO_RUN` | mock | Add to run |
 | `SECRET_INTRO` | pending (W-39) | Choose one of your saved secrets and how the run receives it. Prefer a request header: no copy is placed in the sandbox. |
 | `SECRET_LABEL` | mock | Secret |
-| `SECRET_HELP` | mock | Values are stored encrypted and never shown again. Add new secrets under Your account. |
+| `SECRET_HELP` | mock | Values are stored encrypted and never shown again. Add new secrets in Settings. |
 | `SECRET_NONE` | deviation (owner approved 2026-10-17, FR-0110) | You have no saved secrets yet. |
 | `DELIVERY_LABEL` | mock | Delivery |
 | `DELIVERY_HEADER_OPTION` | pending (W-39) | Request header |
@@ -609,6 +678,25 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `MCP_NO_TOKEN` | mock | No token |
 | `MCP_LOCAL_SOON` | mock | Servers that run inside the sandbox (a local command) are Coming soon. |
 | `MCP_ERR_URL` | mock | Enter the server URL. |
+| `MCP_CARD_BODY_LOCAL` | mock | Connect a remote MCP server by URL, or start one in a sandbox. A remote server's token stays with the proxy. |
+| `MCP_TAB_LOCAL` | mock | Runs in a sandbox |
+| `MCP_WHERE_RUN` | mock | This run's sandbox |
+| `MCP_WHERE_RUN_HINT` | mock | A server Wardyn starts as a command inside this run's sandbox. It runs with the agent's access: anything the agent can read or reach, the server can too, and the agent can use the server's secrets. |
+| `MCP_WHERE_OWN` | mock | Its own sandbox |
+| `MCP_WHERE_OWN_HINT` | mock | Runs the server in a sandbox of its own, apart from the agent, with its own access. |
+| `MCP_LOCAL_NAME_PLACEHOLDER` | mock | e.g. docs-search |
+| `MCP_COMMAND_HELP` | mock | The command and its arguments, started in the sandbox and spoken to over stdio. Pin the package version, for example @1.4.2. |
+| `MCP_ERR_COMMAND` | mock | Enter the command. |
+| `MCP_ERR_PIN` | mock | Pin the package version, for example @example/mcp-server@1.4.2. |
+| `MCP_ERR_PROGRAM(command)` | deviation (lead 2026-10-20: the server's own sentence, validateLocal) | "{command}" must be npx or the absolute path of a program in the image. |
+| `MCP_ERR_NPX_FLAG` | deviation (lead 2026-10-20: the server's own sentence, validateLocal) | npx takes only -y before the package here; name the package as its first argument. |
+| `MCP_HOSTS_PLACEHOLDER` | mock | e.g. api.example.com |
+| `MCP_HOSTS_HELP` | mock | The hosts the server reaches. Your organisation's ceiling still applies. |
+| `MCP_DELIVERY_NOTE` | mock | A request header is added by the proxy and never enters the sandbox. An environment variable or a file is placed in the sandbox. |
+| `MCP_HARNESS_RULES` | mock | Rules for this server's tools are applied by the harness, not by Wardyn's proxy. |
+| `MCP_RUNS_HERE` | mock | Runs in this run's sandbox |
+| `MCP_SANDBOX_READABLE` | mock | Any process in the sandbox can read it, the agent included. |
+| `MCP_REFUSED(harness, server)` | mock | {harness} can't apply rules for {server}'s tools, so this run would be refused. Turn {server} off for {harness}, or remove its rules for {harness}. |
 | `CC_INTRO` | mock | Bundle the hosts and secrets one tool needs, so you can reuse it. Saved components appear under Add tools and access next time. |
 | `CC_NAME` | mock | Name |
 | `CC_NAME_PLACEHOLDER` | mock | e.g. Billing service API |
@@ -739,6 +827,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `SETUP_AGENT_AUTONOMOUS` | mock | Autonomous agent task |
 | `SETUP_AGENT_INTERACTIVE` | mock | Interactive agent task |
 | `SETUP_APPLICATION` | mock | Background automation |
+| `SETUP_APPLICATION_SERVER` | mock | Application server |
 | `SETUP_ENVIRONMENT` | mock | Interactive environment |
 | `BADGE_ATTENTION` | mock | Needs attention |
 | `BADGE_COMPLETE` | mock | Complete |
@@ -751,8 +840,12 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `GROUP_LIMITS` | mock | Limits |
 | `VALUE_AGENT` | mock | Agent task |
 | `VALUE_APPLICATION` | mock | Application sandbox |
-| `VALUE_ENVIRONMENT` | mock | Environment sandbox |
+| `VALUE_ENVIRONMENT` | mock | Environment |
 | `TIMING_APPLICATION` | mock | Background automation · Runs when launched |
+| `TIMING_APPLICATION_SERVER` | mock | Application server · Starts when launched |
+| `APP_PORT(port)` | mock | Port {port} |
+| `APP_OPENS(path)` | mock | {path} · Opens through the web app gateway |
+| `BLOCKER_GATEWAY_OFF` | mock | The web app gateway is off on this server, so this run's apps can't be opened. Ask your admin to turn it on. |
 | `TIMING_INTERACTIVE` | mock | Interactive · Starts when launched |
 | `TIMING_NOW` | mock | Autonomous · Run now |
 | `TIMING_STARTS(when)` | deviation (FEAT-2 board F2SCHED-1) | Autonomous · Starts {when} |
@@ -773,6 +866,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `WORK_ITEMS(n)` | mock | {n} items attached |
 | `MAIN_DRIVE(size)` | mock | Main drive · {size} |
 | `NO_HARNESSES` | mock | No harnesses |
+| `TOOLS_START_COMMAND` | mock | Start command · no harness |
 | `TOOLS_COMMAND_ONE` | mock | Command · 1 optional harness |
 | `TOOLS_COMMAND(n)` | mock | Command · {n} optional harnesses |
 | `TOOLS_NONE` | mock | Optional · none added |
@@ -825,6 +919,9 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `POLICY_ACCEPTS_EDITS` | deviation (qualified for tools no rule names, #2428; proposed wording awaiting approval) | For tools without a named rule, Claude Code accepts file edits without asking and asks before other tools. Named rules still apply. |
 | `POLICY_AUTOMATIC` | mock | Run automatically |
 | `POLICY_TOOLS_OF(harness, effect)` | mock | {harness}: {effect} |
+| `POLICY_IN_SANDBOX(secret, server)` | mock | In the sandbox: {secret} for {server} |
+| `POLICY_IN_SANDBOX_UNNAMED(server)` | deviation (lead wording, cleared by the overseer 2026-10-20, FEAT-1MCP-UI) | In the sandbox: a secret for {server} |
+| `POLICY_HARNESS_RULES(server)` | mock | {server}: rules applied by the harness |
 | `INNER_WALLS(sandbox, approvals)` | deviation (approved 2026-10-19, overseer, #2822) | Harness walls: {sandbox}, {approvals} |
 | `INNER_SANDBOX_OFF` | deviation (approved 2026-10-19, overseer, #2822) | harness sandbox off |
 | `INNER_SANDBOX_OWN` | deviation (approved 2026-10-19, overseer, #2822) | the harness's own sandbox |
@@ -844,6 +941,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `LAUNCH_RUN` | mock | Launch run |
 | `DROPPED_HOST_ONE(host)` | deviation (approved 2026-10-17) | This run can't reach {host}: your organisation doesn't allow it. Ask your admin to allow it. |
 | `DROPPED_HOSTS_MANY(hosts)` | deviation (approved 2026-10-17) | This run can't reach {hosts}: your organisation doesn't allow them. Ask your admin to allow them. |
+| `POLICY_CONTEXT(name)` | deviation (approved 2026-10-28) | Policy context: {name} |
+| `POLICY_CONTEXT_DEPLOYMENT` | deviation (approved 2026-10-28) | Policy context: Deployment ceiling |
 | `POOL_FULL` | server | wait reason at_capacity, runnerpool WaitAtCapacityMsg (Go owns the sentence) |
 | `OFFLINE_BLOCKER` | server | reason runner_offline (Go owns the sentence) |
 

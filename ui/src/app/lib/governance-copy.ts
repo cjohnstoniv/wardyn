@@ -167,6 +167,7 @@ export const GOVERNANCE = {
   CEILING_TITLE: "Ceiling",
   CEILING_LEAD:
     "Every run under this profile is bounded by this spec. A member's own policy is clamped to it, and so is a saved policy they pick.",
+  CEILING_MOUNTS_LOCKED: "Only a super admin can see or change a mount's host path. You can keep or remove the mount.",
   LIMITS_TITLE: "Limits",
   LIMITS_LEAD:
     "Some of what a run can do routes around the ceiling entirely. Deny it here instead.",
@@ -175,6 +176,9 @@ export const GOVERNANCE = {
   LIMIT_INTERACTIVE_LABEL: "Deny interactive runs",
   LIMIT_INTERACTIVE_HINT:
     "An interactive run is supervised at the attach pane rather than by rules. A run with no task comes up interactive too, and is refused the same way.",
+  // r16 T2-e: what the two doors also turn off. Said after LIMIT_INTERACTIVE_HINT, and as the hint of the Deny UI apps row.
+  LIMIT_INTERACTIVE_INBOUND: "Inbound ports are turned off too, since a port can serve a shell.",
+  LIMIT_UI_APPS_HINT: "Also turns off inbound ports.",
   GRADE_NOTE: "Grades this ceiling as written — advisory, the same meter the policy editor shows.",
   SAVE: "Save profile",
   LIMIT_DRIVE_LABEL: "Deny mounting a user drive",
@@ -235,7 +239,7 @@ export const GOVERNANCE = {
   PRIORITY_NA: "—",
   PRIORITY_HINT: "Breaks ties between groups a person is in. Higher wins. It is ignored for a person and for everyone.",
   ADD_TITLE: "Assign a profile",
-  ADD_CTA: "Assign",
+  ADD_CTA: "Assign profile",
   FIELD_PROFILE: "Profile",
   PROFILE_PLACEHOLDER: "Pick a profile",
   FIELD_PRIORITY: "Priority",
@@ -340,6 +344,10 @@ export const DELIVERY = {
   RESIDENT_FLOOR: "A run whose barrier floor covers this credential still can't use it on a runner: a runner's barrier is reported, not verified.",
   NOT_IN_RELEASE: "Not used in this release",
   RUNNERS_OFF_NOTE: "Runners are off, so nothing here applies yet. You can set it now; it takes effect when runners are turned on.",
+  EXCEPTIONS_NOTE: "Each row is the default for every runner. A trust class can have an exception, shown under its row; on that class's runners the exception wins.",
+  EXCEPTION_CHIP: "Exception",
+  EXCEPTION_KEPT: "Kept as stored when you save. This screen can't change exceptions yet.",
+  EXCEPTION_PEOPLE_SEE: (trust: string, outcome: string) => `${trust}: ${outcome}`,
   CLASS: {
     api_key: "Header API keys",
     bedrock_bearer: "Shared Amazon Bedrock API keys",
@@ -400,7 +408,7 @@ export const BASELINE = {
   SUFFIXES_HINT: "One per line. Each must already be an internal host in site config; it covers that host only, not the hosts under it — list each of those under Exact hosts.",
   // Under the suffixes box, one line per entry as typed: the reach an entry has before it is saved (#2130).
   COVERS: (entry: string) => `${entry} covers ${entry} only, not the hosts under it (*.${entry}).`,
-  SAVE: "Save",
+  SAVE: "Save hosts",
   SAVED: "Saved. New runs are graded with these hosts; runs already going keep the level they started with.",
   REFUSED_TITLE: "This can't be saved as written",
   FETCH_FAILED_TITLE: "Couldn't load the baseline hosts",
@@ -419,6 +427,9 @@ export const CHANGES = {
   COL_BY: "Proposed by",
   COL_PROPOSED: "Proposed",
   COL_EXPIRES: "Expires",
+  // A held organization runner removal reads as a sentence, with who decides it under it.
+  ORG_RUNNER_REMOVE: (runner: string, pool: string) => `Remove organization runner ${runner} from ${pool}`,
+  SUPER_ADMIN_DECIDES: "A super admin decides this.",
   // By target_kind. A kind this console predates shows its raw name.
   KIND: {
     governance_unit: "Profile",
@@ -437,6 +448,9 @@ export const CHANGES = {
     run_node_record: "Node record",
     local_credential_delivery: DELIVERY.CHANGE_KIND,
     governance_boundary: "Wardyn boundary",
+    governance_restriction: "Restriction",
+    workspace_owning_unit: "Workspace unit",
+    org_recording: "Recording level",
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.
   OP: {

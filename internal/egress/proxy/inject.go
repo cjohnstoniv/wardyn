@@ -523,8 +523,9 @@ func (i *injector) apply(req *http.Request, host string, port int) {
 		}
 		return
 	}
-	// Strip always, inject only where the rule's PIN allows — same two decisions the MITM lane makes,
-	// or the pin is bypassable by skipping TLS.
+	// A host-owned rule: strip always, inject only where the rule's PIN allows — same two decisions the
+	// MITM lane makes, or the pin is bypassable by skipping TLS. A placeholder replacement (above)
+	// deliberately keeps the scheme and the other headers.
 	stripSandboxCredentials(req.Header, h.name)
 	if !i.allowsInjection(host, req.Method, req.URL.Path, req.URL.RawQuery) {
 		return
@@ -606,10 +607,11 @@ func (i *injector) allowsInjection(host, method, path, rawQuery string) bool {
 
 // applyCredential puts a rule's credential on an upstream request.
 //
-// Strip and inject are two decisions, not one: a host with an injection rule always has the
-// sandbox's headers removed, whether or not the pin then supplies one — a request the pin doesn't
+// Strip and inject are two decisions, not one: a host with a host-owned injection rule always has
+// the sandbox's headers removed, whether or not the pin then supplies one — a request the pin doesn't
 // cover forwards with neither header, keeping the sandbox's header from reaching the portal on
-// requests the pin narrows.
+// requests the pin narrows. A placeholder replacement deliberately keeps the scheme and the other
+// headers.
 //
 // ownedHeader == "" means no rule governs this host, so nothing is stripped.
 func applyCredential(h http.Header, ownedHeader string, hdr *injectedHeader) {

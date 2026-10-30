@@ -27,11 +27,15 @@ import { Chip } from "../../../../wardyn/primitives";
 import type { RunIntent } from "../../draft/run-intent";
 import { providerControlId, setupDoor, setupRowId, signInProvider, type HarnessNames, type SetupDoor } from "../../lenses/tools-lens";
 import { useAnnounce } from "../step-shell";
+import { StepSection } from "../../../../wardyn/step-section";
+
+/** A disabled filled button in dark is grey, not a dimmed teal that reads as pressable (#2865's treatment, here for Review's Launch run and Save token). */
+export const DISABLED_FILL = "dark:disabled:bg-muted dark:disabled:text-muted-foreground";
 
 const DOOR_LABEL: Record<SetupDoor, string> = { sign_in: NR_TOOLS.SETUP_SIGN_IN, choose: NR_TOOLS.SETUP_CHOOSE, add: NR_TOOLS.SETUP_ADD, connect: ADO_PAT.MEMBER_CONNECT };
 
 /** One saved secret's value, pasted once. The value is write-only: nothing is shown back. */
-function AddTokenDialog({ item, onClose, onSaved }: { item: SetupItem; onClose: () => void; onSaved: () => void }) {
+export function AddTokenDialog({ item, onClose, onSaved }: { item: SetupItem; onClose: () => void; onSaved: () => void }) {
   const inputId = React.useId();
   const [value, setValue] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -72,7 +76,7 @@ function AddTokenDialog({ item, onClose, onSaved }: { item: SetupItem; onClose: 
         </div>
         <DialogFooter>
           <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>{NR_SHARED.CANCEL}</Button>
-          <Button type="button" disabled={busy || !value.trim()} onClick={() => void save()}>{NR_TOOLS.TOKEN_CONFIRM}</Button>
+          <Button type="button" className={DISABLED_FILL} disabled={busy || !value.trim()} onClick={() => void save()}>{NR_TOOLS.TOKEN_CONFIRM}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -129,11 +133,7 @@ export function SetupNeeded({ items, pending, done, intent, names, answered = tr
   };
 
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-3.5 rounded-xl border border-border bg-card p-[18px]">
-      <div>
-        <h2 id={headingId} className="font-semibold">{NR_TOOLS.SETUP_TITLE}</h2>
-        <p className="text-sm text-muted-foreground">{NR_TOOLS.SETUP_BODY}</p>
-      </div>
+    <StepSection titleId={headingId} title={NR_TOOLS.SETUP_TITLE} description={NR_TOOLS.SETUP_BODY} bodyClassName="flex flex-col gap-3.5">
       {items.length === 0 ? (
         answered && <p className="flex items-center gap-2 text-sm text-muted-foreground"><Check aria-hidden className="size-4 text-success" />{NR_TOOLS.SETUP_ALL_SET}</p>
       ) : (
@@ -170,6 +170,6 @@ export function SetupNeeded({ items, pending, done, intent, names, answered = tr
           onSaved={() => { announce(NR_TOOLS.TOKEN_SAVED); onDone(adding.id); setAdding(null); }}
         />
       )}
-    </section>
+    </StepSection>
   );
 }

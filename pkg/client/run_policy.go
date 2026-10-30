@@ -27,9 +27,10 @@ type RunPolicyView struct {
 	RecordedAt *time.Time           `json:"recorded_at,omitempty"`
 	Source     RunPolicySource      `json:"source"`
 	Spec       *types.RunPolicySpec `json:"spec,omitempty"`
-	// Redacted is true when the reader is below the security admin tier and the
-	// policy holds mount sources or secret names, which read as "<redacted>" or
-	// are dropped. Such a spec is a starting point, not a policy that validates.
+	// Redacted is true when the reader was shown less than a super admin: mount
+	// sources read as "<redacted>" below the super admin tier, and secret names
+	// are dropped below the security admin tier. Such a spec is a starting
+	// point, not a policy that validates.
 	Redacted bool `json:"redacted"`
 	// Changes is never null.
 	Changes  []RunPolicyChange `json:"changes"`
@@ -40,6 +41,20 @@ type RunPolicyView struct {
 	// name): deployment, profile (the leaf's name), member or operator, the
 	// contact to ask, and whether the value is locked.
 	Provenance map[string]PolicyProvenance `json:"provenance,omitempty"`
+	// HostMarks is which allowed hosts the run's proxy opened at launch. Absent
+	// for a run recorded before it existed and for one restarted since.
+	HostMarks *RunPolicyHostMarks `json:"host_marks,omitempty"`
+}
+
+// RunPolicyHostMarks lists the allowed_domains entries the proxy terminates TLS
+// for (Inspected). Every other allowed entry passes through unread (Tunnel only).
+// Terminated is every host the proxy terminates: "host" on any port, "host:port" scoped to one.
+type RunPolicyHostMarks struct {
+	Inspected  []string `json:"inspected"`
+	Terminated []string `json:"terminated"`
+	// Outside is the Terminated hosts the proxy opens on a port no allowed_domains entry names; under
+	// allow-all, every one it opens, whatever the allowlist names. It can overlap allowed_domains.
+	Outside []string `json:"outside"`
 }
 
 // The RunPolicyView.State values.

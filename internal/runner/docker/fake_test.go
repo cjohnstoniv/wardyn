@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/jsonstream"
@@ -30,6 +31,8 @@ import (
 	"github.com/moby/moby/api/types/system"
 	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 )
 
 // fakeNotFound is a Docker-shaped not-found error: the driver's isNotFound now
@@ -99,6 +102,8 @@ type fakeDocker struct {
 
 	// inspectFailures is how many more ContainerInspect calls fail outright.
 	inspectFailures int
+	// stopFailures is how many more ContainerStop calls on a container fail with a cancelled context.
+	stopFailures map[string]int
 
 	info system.Info
 	// pingErr is what Ping answers; pingBlock makes it wait for ctx instead.
@@ -116,6 +121,10 @@ type fakeDocker struct {
 	// else the first free 10.N.0.0/16 from N=88, as the daemon picks one. A
 	// create asking for a subnet another network holds fails on the overlap.
 	subnets map[string]netip.Prefix
+	// netCreated is when each network was created (NetworkList's Created), so a
+	// sweep test can backdate one; networkLists counts NetworkList calls.
+	netCreated   map[string]time.Time
+	networkLists int
 	// onNetworkCreate, when set, runs INSIDE NetworkCreate before the network
 	// is recorded, so a test can have another network take a subnet first.
 	// Called without f.mu held.
@@ -275,6 +284,11 @@ type fakeDocker struct {
 	lastListFilters client.Filters
 	lastListAll     bool
 
+	// failRemove makes ContainerRemove of a name fail that many times first; inspectCalls counts
+	// ContainerInspect calls per name.
+	failRemove   map[string]int
+	inspectCalls map[string]int
+
 	// probeExitCode is the exit code ContainerWait reports for a container
 	// whose name carries the drive-probe prefix ("wardyn-drive-probe-") —
 	// there is no real command interpreter here to run `test -r/-x` against a
@@ -312,15 +326,43 @@ type fakeDocker struct {
 	exitAfterInspects map[string]int
 	inspectCounts     map[string]int
 	logs              map[string][]byte
+	// olderProxyRefuses, when set, is a config key a proxy image older than the runner does not know: a
+	// proxy whose stdin carries it is exited(1) from its next inspect, logging the strict decode's refusal.
+	olderProxyRefuses string
 	logOpts           []client.ContainerLogsOptions // every ContainerLogs call's options, in order
 
-	// startedAtOverride, keyed by container name, overrides ContainerStart's
-	// default (real, current-time) StartedAt for that container — used to
-	// simulate a daemon whose clock lags the host's (L1): a test sets an
-	// in-the-past value before Start to prove watchProxyExit measures its
-	// settle window from the watch's own start, never from a skewed
-	// StartedAt (driver_proxy_revive.go's proxySettleSince).
+	// proxyReadyDelay holds back the ready marker a started proxy prints on its attach stream, and
+	// proxyNeverReady withholds it (the proxy stays up and silent). proxyReadyAt is when the marker was
+	// delivered and createdAt when each container was created, so a test can order the two.
+	proxyReadyDelay time.Duration
+	proxyNeverReady bool
+	// legacyProxyImages are proxy images from before the ready marker: they carry no label and
+	// their proxy prints no marker. A tag the fake has not seen is a current image.
+	legacyProxyImages map[string]bool
+	proxyReadyAt      time.Time
+	createdAt         map[string]time.Time
+
+	// startedAtOverride, keyed by container name, overrides ContainerStart's default (real, current-time)
+	// StartedAt for that container: it simulates a daemon whose clock lags the host's, to prove
+	// watchProxyExit measures its settle window from the watch's own start, never from a skewed StartedAt.
 	startedAtOverride map[string]time.Time
+
+	// exportTar is what ContainerExport streams (a VM image's filesystem); exports counts the calls.
+	exportTar []byte
+	exports   int
+	// onStart, when set, runs as a container starts (outside the lock): a VM test's fake QEMU and
+	// prep steps act on the run directory the container's mounts name.
+	onStart func(c *createdContainer)
+}
+
+func (f *fakeDocker) ContainerExport(_ context.Context, id string, _ client.ContainerExportOptions) (client.ContainerExportResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.containers[id] == nil {
+		return nil, fakeNotFound{msg: "no such container: " + id}
+	}
+	f.exports++
+	return io.NopCloser(bytes.NewReader(f.exportTar)), nil
 }
 
 // ContainerList makes this fake a containerListerAPI, the narrow seam
@@ -345,6 +387,7 @@ func newFakeDocker() *fakeDocker {
 		imageMeta:  map[string]image.InspectResponse{},
 		networks:   map[string]client.NetworkCreateOptions{},
 		subnets:    map[string]netip.Prefix{},
+		netCreated: map[string]time.Time{},
 		containers: map[string]*createdContainer{},
 		volumes:    map[string]client.VolumeCreateOptions{},
 		stdin:      map[string][]byte{},
@@ -357,7 +400,8 @@ type fakeAttach struct {
 	started bool
 }
 
-// ContainerAttach hands back a connection whose writes land in f.stdin[id].
+// ContainerAttach hands back a connection whose writes land in f.stdin[id] and whose reads are the
+// container's stdout: for a wardyn-proxy, the ready marker (see fakeStdinConn.Read).
 func (f *fakeDocker) ContainerAttach(_ context.Context, id string, opts client.ContainerAttachOptions) (client.ContainerAttachResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -366,16 +410,26 @@ func (f *fakeDocker) ContainerAttach(_ context.Context, id string, opts client.C
 		return client.ContainerAttachResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
 	f.attached = append(f.attached, fakeAttach{id: id, started: c.state != nil && c.state.Running})
+	// The stream's behaviour is fixed here, under the lock, so a test changing the knobs between calls
+	// cannot race a stream still being read.
+	conn := &fakeStdinConn{f: f, id: id, closed: make(chan struct{}), delay: f.proxyReadyDelay, never: f.proxyNeverReady,
+		legacy: c.cfg != nil && f.legacyProxyImages[c.cfg.Image]}
 	return client.ContainerAttachResult{
-		HijackedResponse: client.NewHijackedResponse(&fakeStdinConn{f: f, id: id}, "application/vnd.docker.raw-stream"),
+		HijackedResponse: client.NewHijackedResponse(conn, "application/vnd.docker.raw-stream"),
 	}, nil
 }
 
 // fakeStdinConn is an attach connection that records what is written to it.
 type fakeStdinConn struct {
 	fakeConn
-	f  *fakeDocker
-	id string
+	f      *fakeDocker
+	id     string
+	closed chan struct{}
+	once   sync.Once
+	sent   bool
+	// delay, never and legacy are the proxy's output script, taken at attach.
+	delay         time.Duration
+	never, legacy bool
 }
 
 func (c *fakeStdinConn) Write(b []byte) (int, error) {
@@ -383,6 +437,45 @@ func (c *fakeStdinConn) Write(b []byte) (int, error) {
 	defer c.f.mu.Unlock()
 	c.f.stdin[c.id] = append(c.f.stdin[c.id], b...)
 	return len(b), nil
+}
+
+// Read is the proxy's stdout. After the config was written a proxy that stays up prints the ready
+// marker (late when proxyReadyDelay is set, never when proxyNeverReady is), then the stream stays
+// open until Close, as a live container's does. A proxy scripted to exit (exitAfterInspects,
+// olderProxyRefuses) prints nothing and its stream ends. Any other container's stream ends at once.
+func (c *fakeStdinConn) Read(p []byte) (int, error) {
+	if c.sent { // the marker went out: the stream only waits for Close, and reads nothing of the fake's
+		<-c.closed
+		return 0, io.EOF
+	}
+	c.f.mu.Lock()
+	ct := c.f.containers[c.id]
+	_, exits := c.f.exitAfterInspects[c.id]
+	refuses := c.f.olderProxyRefuses != "" && bytes.Contains(c.f.stdin[c.id], []byte(`"`+c.f.olderProxyRefuses+`"`))
+	c.f.mu.Unlock()
+	delay, never := c.delay, c.never
+	if ct == nil || !strings.HasPrefix(ct.name, "wardyn-proxy-") || exits || refuses || c.legacy {
+		return 0, io.EOF
+	}
+	if !c.sent && !never {
+		select {
+		case <-time.After(delay):
+		case <-c.closed:
+			return 0, io.EOF
+		}
+		c.sent = true
+		c.f.mu.Lock()
+		c.f.proxyReadyAt = time.Now()
+		c.f.mu.Unlock()
+		return copy(p, muxFrame(1, proxy.ReadyMarker+"\n")), nil
+	}
+	<-c.closed
+	return 0, io.EOF
+}
+
+func (c *fakeStdinConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
 }
 
 func (c *fakeStdinConn) CloseWrite() error { return nil }
@@ -444,8 +537,13 @@ func (f *fakeDocker) ImageInspect(ctx context.Context, imageID string, _ ...clie
 	defer f.mu.Unlock()
 	if f.images[imageID] {
 		m := f.imageMeta[imageID]
-		return client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: imageID, Architecture: f.imageArch[imageID],
-			RepoDigests: m.RepoDigests, Os: m.Os, Variant: m.Variant, Descriptor: m.Descriptor}}, nil
+		resp := image.InspectResponse{ID: imageID, Architecture: f.imageArch[imageID],
+			RepoDigests: m.RepoDigests, Os: m.Os, Variant: m.Variant, Descriptor: m.Descriptor}
+		if !f.legacyProxyImages[imageID] {
+			resp.Config = &dockerspec.DockerOCIImageConfig{}
+			resp.Config.Labels = map[string]string{proxyReadyLabel: "1"}
+		}
+		return client.ImageInspectResult{InspectResponse: resp}, nil
 	}
 	return client.ImageInspectResult{}, fakeNotFound{msg: "no such image: " + imageID}
 }
@@ -487,7 +585,25 @@ func (f *fakeDocker) NetworkCreate(ctx context.Context, name string, opts client
 	}
 	f.networks[name] = opts
 	f.subnets[name] = subnet
+	f.netCreated[name] = time.Now()
 	return client.NetworkCreateResult{ID: name}, nil
+}
+
+// NetworkList answers every network, its labels, creation time and subnet. Like
+// ContainerList, the filter is not applied: the sweep's own label checks are
+// what the tests drive.
+func (f *fakeDocker) NetworkList(_ context.Context, _ client.NetworkListOptions) (client.NetworkListResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.networkLists++
+	var res client.NetworkListResult
+	for name, opts := range f.networks {
+		var n network.Summary
+		n.Name, n.ID, n.Labels, n.Created = name, name, opts.Labels, f.netCreated[name]
+		n.IPAM.Config = []network.IPAMConfig{{Subnet: f.subnets[name]}}
+		res.Items = append(res.Items, n)
+	}
+	return res, nil
 }
 
 func (f *fakeDocker) NetworkInspect(ctx context.Context, networkID string, _ client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
@@ -541,6 +657,7 @@ func (f *fakeDocker) NetworkRemove(ctx context.Context, networkID string, _ clie
 	}
 	delete(f.networks, networkID)
 	delete(f.subnets, networkID)
+	delete(f.netCreated, networkID)
 	return client.NetworkRemoveResult{}, nil
 }
 
@@ -623,6 +740,10 @@ func (f *fakeDocker) ContainerCreate(ctx context.Context, opts client.ContainerC
 		state: &container.State{Status: "created"},
 	}
 	f.containers[name] = c
+	if f.createdAt == nil {
+		f.createdAt = map[string]time.Time{}
+	}
+	f.createdAt[name] = time.Now()
 	id := name
 	if f.createIDOverride != "" {
 		id = f.createIDOverride
@@ -714,7 +835,18 @@ func (f *fakeDocker) CopyFromContainer(ctx context.Context, id string, opts clie
 	return client.CopyFromContainerResult{Content: io.NopCloser(&buf)}, nil
 }
 
-func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {
+func (f *fakeDocker) ContainerStart(_ context.Context, id string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {
+	res, err := f.containerStart(id)
+	f.mu.Lock()
+	c, hook := f.containers[id], f.onStart
+	f.mu.Unlock()
+	if err == nil && hook != nil {
+		hook(c)
+	}
+	return res, err
+}
+
+func (f *fakeDocker) containerStart(id string) (client.ContainerStartResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c := f.containers[id]
@@ -753,13 +885,9 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 		// this fast would leave ContainerWait to observe.
 		c.state = &container.State{Status: "exited", ExitCode: int(f.probeExitCode)}
 	} else {
-		// StartedAt defaults to real, current time — a Driver's proxySettle
-		// defaults to 0 for every fake-backed test driver (newWithClient),
-		// so the settle check is trivially satisfied regardless of this value
-		// UNLESS a test explicitly sets proxySettle back to a real duration,
-		// in which case the true current time is exactly what a real daemon
-		// would report. startedAtOverride lets a specific test (the L1 clock-
-		// skew regression) simulate a daemon whose clock lags the host's.
+		// StartedAt defaults to real, current time; a Driver's proxySettle defaults to 0 for every
+		// fake-backed test driver (newWithClient), so the settle check is trivially satisfied
+		// unless a test sets proxySettle to a real duration.
 		startedAt := time.Now()
 		if t, ok := f.startedAtOverride[id]; ok {
 			startedAt = t
@@ -773,6 +901,10 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.inspectCalls == nil {
+		f.inspectCalls = map[string]int{}
+	}
+	f.inspectCalls[id]++
 	if f.inspectFailures > 0 {
 		f.inspectFailures--
 		return client.ContainerInspectResult{}, errors.New("fake: inspect: daemon busy")
@@ -790,6 +922,13 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 		if count >= n {
 			c.state = &container.State{Status: "exited", ExitCode: 1}
 		}
+	}
+	if k := f.olderProxyRefuses; k != "" && strings.HasPrefix(c.name, "wardyn-proxy-") && bytes.Contains(f.stdin[id], []byte(`"`+k+`"`)) {
+		c.state = &container.State{Status: "exited", ExitCode: 1}
+		if f.logs == nil {
+			f.logs = map[string][]byte{}
+		}
+		f.logs[id] = muxFrame(2, `ERROR wardyn-proxy: load config failed err="parse config: json: unknown field \"`+k+`\""`)
 	}
 	// Synthesize NetworkSettings from the container's known networks (primary
 	// NetworkMode + explicit endpoints + NetworkConnect'd nets) with a
@@ -864,6 +1003,10 @@ func (f *fakeDocker) ContainerLogs(ctx context.Context, id string, opts client.C
 func (f *fakeDocker) ContainerStop(ctx context.Context, id string, _ client.ContainerStopOptions) (client.ContainerStopResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.stopFailures[id] > 0 {
+		f.stopFailures[id]--
+		return client.ContainerStopResult{}, context.Canceled
+	}
 	c := f.containers[id]
 	if c == nil || c.removed {
 		return client.ContainerStopResult{}, fakeNotFound{msg: "no such container: " + id}
@@ -939,6 +1082,10 @@ func (f *fakeDocker) ContainerUnpause(ctx context.Context, id string, _ client.C
 func (f *fakeDocker) ContainerRemove(ctx context.Context, id string, opts client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failRemove[id] > 0 {
+		f.failRemove[id]--
+		return client.ContainerRemoveResult{}, errors.New("fake: remove: daemon busy")
+	}
 	c := f.containers[id]
 	if c == nil {
 		return client.ContainerRemoveResult{}, fakeNotFound{msg: "no such container: " + id}

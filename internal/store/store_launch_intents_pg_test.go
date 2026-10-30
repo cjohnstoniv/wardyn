@@ -185,7 +185,13 @@ func TestPG_LaunchIntentEraseLinearizesWithQueuedLaunches(t *testing.T) {
 		t.Helper()
 		for {
 			var waiting int
-			if err := poolHold.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype IN ('transactionid', 'tuple') AND NOT granted`).Scan(&waiting); err != nil {
+			// pg_locks lists the whole server and a transactionid lock has no database column, so scope by the waiter's
+			// database. pg_stat_activity is cached for the life of poolHold's transaction; drop the cache so a later waiter shows.
+			if _, err := poolHold.Exec(ctx, `SELECT pg_stat_clear_snapshot()`); err != nil {
+				t.Fatal(err)
+			}
+			if err := poolHold.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype IN ('transactionid', 'tuple') AND NOT granted
+				AND pid IN (SELECT pid FROM pg_stat_activity WHERE datname = current_database())`).Scan(&waiting); err != nil {
 				t.Fatal(err)
 			}
 			if waiting >= n {
@@ -254,12 +260,14 @@ func TestPG_LaunchIntentEraseLinearizesWithQueuedLaunches(t *testing.T) {
 
 // waitAdvisoryWaiters returns once n sessions wait on an advisory lock. It polls
 // through q, the connection the test already holds: a second pool acquire while
-// the cap holder is out would trip the nested-acquire guard.
+// the cap holder is out would trip the nested-acquire guard. Only this test's
+// database counts: pg_locks lists the whole server.
 func waitAdvisoryWaiters(ctx context.Context, t *testing.T, q pgx.Tx, n int) {
 	t.Helper()
 	for {
 		var waiting int
-		if err := q.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`).Scan(&waiting); err != nil {
+		if err := q.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
+			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(&waiting); err != nil {
 			t.Fatalf("poll pg_locks (want %d waiting): %v", n, err)
 		}
 		if waiting >= n {

@@ -70,5 +70,12 @@ func (s *Server) listRunsWhere(ctx context.Context, keep func(types.AgentRun) bo
 	if err != nil {
 		return nil, err
 	}
-	return slices.DeleteFunc(runs, func(run types.AgentRun) bool { return !keep(run) }), nil
+	// A fresh slice: a store may hand back its own backing array, which an in-place filter would corrupt.
+	out := make([]types.AgentRun, 0, len(runs))
+	for _, run := range runs {
+		if keep(run) {
+			out = append(out, run)
+		}
+	}
+	return out, nil
 }

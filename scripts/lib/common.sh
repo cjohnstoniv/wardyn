@@ -74,6 +74,19 @@ die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 # reworded; asserting `rc != 77` does not (#463).
 skip_lane() { printf '%s\n' "$1"; exit 77; }
 
+# retry CMD... — run CMD up to three times, 5 s then 10 s apart. For a single
+# network read (an image pull, a release API read) that one registry or API
+# blip fails, so the blip costs a wait instead of a red attempt 1.
+retry() {
+  local i
+  for i in 1 2 3; do
+    "$@" && return 0
+    [[ "$i" -lt 3 ]] || return 1
+    warn "attempt ${i} of 3 failed, retrying in $((i * 5)) s: $*"
+    sleep $((i * 5))
+  done
+}
+
 # image_missing IMAGE_REF — true (0) if IMAGE_REF is not present locally. The
 # build-if-missing scripts differ in build command, failure handling and log
 # text on purpose; only this predicate is shared.

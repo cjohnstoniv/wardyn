@@ -8,6 +8,7 @@
 // mirrors one Go struct and runners.wire.test.ts pins its json tags to that struct's source. Every
 // posture fact is what the runner said about itself; none of it is verified.
 
+import type { MacVMCaps } from "./runner-macvm";
 import type { ConfinementClass } from "./runs";
 
 /** Go: types.RunnerState. */
@@ -76,6 +77,8 @@ export interface RunnerView {
   allowed_roots?: string[];
   /** The runner shares folders on its computer with runs elsewhere (`--substrate folders`, 0.10 on); read like `capacity`. */
   folders?: boolean;
+  /** The macOS VM caps of the runner's last caps event, as the runner sent them; read like `capacity`, absent when it offers no macOS VM. */
+  macos_vm?: MacVMCaps;
   kind: "self_hosted";
   /**
    * What the owner declared; only they change it (PUT /me/runners/{id}). null while not all of it is
@@ -99,6 +102,8 @@ export interface RunnerView {
   offline_summary?: RunnerOfflineSummary;
   /** One-runner reads only: the runner's last run relay check; runner-reported, absent for a runner with no relay. */
   relay_status?: RunnerRelayStatus;
+  /** One-runner reads only: how many of its exit receipts the organisation parked (refused on every try, no longer retried); absent for none. */
+  parked_exits?: number;
 }
 
 /** The `wardyn-runnerd doctor` stage names an offline summary names. Go: types.RunnerStages. */
@@ -143,12 +148,13 @@ export interface RunnerLimits {
   per_run: RunnerAmounts;
 }
 
-/** Go: types.RunnerTally: a number of runs and the CPU, memory and disk they reserve. */
+/** Go: types.RunnerTally: a number of runs and the CPU, memory and disk they reserve. `macos_vm_runs` is how many of those runs are macOS VMs, on a runner's `in_use` only. */
 export interface RunnerTally {
   runs: number;
   cpu_millis: number;
   memory_mib: number;
   disk_mib: number;
+  macos_vm_runs?: number;
 }
 
 /**

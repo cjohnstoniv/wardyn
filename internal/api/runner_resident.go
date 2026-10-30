@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"time"
@@ -50,12 +51,12 @@ func decodeRunnerEventData[T any](data []byte) (T, error) {
 func (s *Server) PostureFromRunner(ctx context.Context, runnerID uuid.UUID, ev runnerwire.Event) error {
 	st, ok := s.cfg.Store.(store.RunnerStore)
 	if !ok {
-		return errRunnerEventRefused
+		return errRunnerIngestUnavailable
 	}
 	p, err := decodeRunnerEventData[types.RunnerPosture](ev.Data)
 	if err != nil || ev.RunID != nil || p.OS == "" || len(p.OS) > maxPostureField || len(p.OSVersion) > maxPostureField ||
 		!slices.Contains([]string{types.PostureEvidenceMDMFile, types.PostureEvidenceOSProbe}, p.Evidence) {
-		return errRunnerEventRefused
+		return errReportShape
 	}
 	changed, err := st.RecordRunnerPosture(ctx, runnerID, p, time.Now())
 	if err != nil || !changed {
@@ -64,6 +65,7 @@ func (s *Server) PostureFromRunner(ctx context.Context, runnerID uuid.UUID, ev r
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "runner:"+runnerID.String(),
 		placement.ActionRunnerPostureRecord, runnerID.String(), "success",
 		mustJSON(map[string]any{"posture": p, "posture_source": types.RunnerPostureSourceRunnerAsserted})))
+	s.revokeWithdrawn(ctx, runnerID)
 	return nil
 }
 
@@ -78,9 +80,14 @@ func (s *Server) ResidentEraseFromRunner(ctx context.Context, runnerID uuid.UUID
 	e, err := decodeRunnerEventData[runnerwire.ResidentErase](ev.Data)
 	if err != nil || ev.RunID == nil || e.ReportID == uuid.Nil ||
 		(e.Outcome != runnerwire.ResidentErased && e.Outcome != runnerwire.ResidentEraseFailed) {
-		return errRunnerEventRefused
+		return errReportShape
 	}
 	run, err := s.cfg.Store.GetRun(ctx, *ev.RunID)
+	// Permanent (DR-0436): no production path deletes an agent_runs row, and the runner learns a run's id only
+	// after the run commits, so the same report always meets the same missing run.
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("%w: %w", errRunnerUnknownRun, err)
+	}
 	if err != nil {
 		return err
 	}

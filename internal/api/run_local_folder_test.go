@@ -31,10 +31,21 @@ type localFolderStore struct {
 	sets   int
 }
 
-func (s *localFolderStore) RunLocalFolderSeed(context.Context, uuid.UUID) (*types.RunLocalFolder, store.LocalFolderSeed, error) {
+// The seed and run reads fail on a done ctx, as Postgres does.
+func (s *localFolderStore) RunLocalFolderSeed(ctx context.Context, _ uuid.UUID) (*types.RunLocalFolder, store.LocalFolderSeed, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, store.LocalFolderSeed{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.folder, s.seed, nil
+}
+
+func (s *localFolderStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if err := ctx.Err(); err != nil {
+		return types.AgentRun{}, err
+	}
+	return s.dispatchTestStore.GetRun(ctx, id)
 }
 
 func (s *localFolderStore) SetRunLocalFolderSeed(_ context.Context, _ uuid.UUID, errText string) (bool, error) {
@@ -99,6 +110,43 @@ func TestHoldForLocalFolder_WaitsForTheFirstSync(t *testing.T) {
 	}
 	if ls.State() != types.RunRunning {
 		t.Errorf("state = %s", ls.State())
+	}
+}
+
+// A Linux VM run is held for its folder as a container run is, and released by the same first sync
+// (the guest agent serves the sync's sftp-server). The runner's container class map does not
+// describe a VM: a class that resolves to the exec-less krun there still refuses a container run,
+// never a VM.
+func TestHoldForLocalFolder_AVMRunIsHeldLikeAContainer(t *testing.T) {
+	for _, kind := range []types.MachineKind{types.MachineLinuxVM, ""} {
+		s, ls, audit, run, rn := localFolderFixture(t)
+		rn.capsResolved = map[types.ConfinementClass]string{types.CC3: "oci/krun"}
+		run.MachineKind, run.ConfinementClass = kind, types.CC3
+		done := make(chan bool, 1)
+		go func() { done <- s.holdForLocalFolder(context.Background(), run, "sbx") }()
+		if kind == "" {
+			if <-done || !strings.Contains(ls.FailureHint(), "exec-less (krun)") {
+				t.Fatalf("a container run on krun: hint %q, want the krun refusal", ls.FailureHint())
+			}
+			continue
+		}
+		select {
+		case <-done:
+			t.Fatalf("the VM run's hold let the agent start before the first sync (hint %q)", ls.FailureHint())
+		case <-time.After(50 * time.Millisecond):
+		}
+		s.localFolderPassed(context.Background(), run.ID, "alice@example.com", "/home/agent/work", true, "")
+		select {
+		case ok := <-done:
+			if !ok || ls.State() != types.RunRunning {
+				t.Fatalf("the VM run's hold refused the start after the sync landed: state %s", ls.State())
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("the VM run's hold never released")
+		}
+		if findAudit(audit.snapshot(), run.ID, "run.seed.hold", "success") == nil {
+			t.Error("the VM run's wait is not audited")
+		}
 	}
 }
 

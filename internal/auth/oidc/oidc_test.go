@@ -320,6 +320,40 @@ func TestCallbackHandlerRejectsMissingStateCookie(t *testing.T) {
 	}
 }
 
+// TestExpiredStateRefusesAValidCodeAndMintsNoSession pins that the sign_in_expired redirect is still a refusal:
+// everything else in the callback is valid (a token the IdP would accept), only the state differs from the
+// cookie, and no session may come out of it.
+
+func TestExpiredStateRefusesAValidCodeAndMintsNoSession(t *testing.T) {
+	env := newIdPEnv(t)
+	auth := env.newAuth(t, nil)
+
+	loginW := httptest.NewRecorder()
+	auth.LoginHandler(loginW, httptest.NewRequest(http.MethodGet, "/auth/login", nil))
+	cookies := cookieMap(loginW.Result().Cookies())
+	env.buildIDToken(t, "sub-user", "user@example.com", cookies["wardyn_oidc_nonce"].Value, time.Now().Add(time.Hour))
+
+	for name, stateParam := range map[string]string{"another tab's state": "state-of-a-newer-login", "no state": ""} {
+		t.Run(name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/auth/callback?state="+stateParam+"&code=testcode", nil)
+			r.AddCookie(&http.Cookie{Name: "wardyn_oidc_state", Value: cookies["wardyn_oidc_state"].Value})
+			r.AddCookie(&http.Cookie{Name: "wardyn_oidc_nonce", Value: cookies["wardyn_oidc_nonce"].Value})
+			r.AddCookie(&http.Cookie{Name: "wardyn_oidc_pkce", Value: cookies["wardyn_oidc_pkce"].Value})
+			w := httptest.NewRecorder()
+			auth.CallbackHandler(w, r)
+
+			if loc := w.Header().Get("Location"); w.Code != http.StatusFound || !strings.HasSuffix(loc, "/?auth_error=sign_in_expired") {
+				t.Fatalf("status = %d, Location %q, want the sign_in_expired redirect", w.Code, loc)
+			}
+			for _, c := range w.Result().Cookies() {
+				if c.Name == "wardyn_session" {
+					t.Fatalf("a stale state minted a session cookie: %+v", c)
+				}
+			}
+		})
+	}
+}
+
 // TestFullCodeFlow
 //
 // Full round-trip: LoginHandler → (simulate IdP redirect) → CallbackHandler.

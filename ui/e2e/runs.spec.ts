@@ -36,7 +36,7 @@ import type { Page } from "@playwright/test";
 // the old title-grouped board needed one. State is asserted via the row's own
 // status WORD (runs/runs-model.ts's rowPresentation), never CSS classes:
 //   PENDING "Pending", STARTING "Starting", RUNNING "Running",
-//   WAITING_FOR_CONFIRMATION "Awaiting confirmation", COMPLETED "Completed",
+//   WAITING_FOR_CONFIRMATION "1 decision needs you", COMPLETED "Completed",
 //   STOPPED "Stopped", FAILED "Failed", KILLED "Killed", ARCHIVED "Archived".
 // Barriers, the agent monogram and the Run ID moved to the run page — none of
 // them render on this page anymore (design.md §4).
@@ -93,6 +93,12 @@ test.describe("Runs landing — the seeded 9-fixture backend", () => {
     await expect(page.getByText("Completed", { exact: true }).first()).toBeVisible();
     await expect(sidebarLink(page, "Runs")).toBeVisible();
 
+    // #3039: a row's status is the run header's pill: Killed is the solid red chip, Completed is not.
+    const statusOf = (task: string, word: string) =>
+      page.getByTestId("run-row").filter({ hasText: task }).getByText(word, { exact: true });
+    await expect(statusOf("e2e fixture 7", "Killed")).toHaveClass(/bg-danger/);
+    await expect(statusOf("e2e fixture 4", "Completed")).not.toHaveClass(/bg-danger/);
+
     // The needs-you / ended words this backend's own fixtures reach.
     await expect(page.getByText("Failed", { exact: true }).first()).toBeVisible({ timeout: 15_000 });
   });
@@ -113,6 +119,19 @@ test.describe("Runs landing — the seeded 9-fixture backend", () => {
     }).toPass({ timeout: 15_000 });
   });
 
+  test("a search leaves the 'Your runs · N' total alone", async ({ page }) => {
+    await openRuns(page);
+    const total = page.getByText(/^Your runs · \d+\+?$/);
+    const before = await total.textContent();
+    const search = page.getByLabel("Search runs", { exact: true });
+
+    await expect(async () => {
+      await search.fill("zzz-no-such-run-zzz");
+      await expect(page.getByText("No runs match these filters", { exact: true })).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 15_000 });
+    await expect(total).toHaveText(before ?? "");
+  });
+
   test("a non-matching search shows the empty state, then recovers when cleared", async ({ page }) => {
     await openRuns(page);
     const search = page.getByLabel("Search runs", { exact: true });
@@ -120,7 +139,7 @@ test.describe("Runs landing — the seeded 9-fixture backend", () => {
     await expect(async () => {
       await search.fill("zzz-no-such-run-zzz");
       await expect(search).toHaveValue("zzz-no-such-run-zzz");
-      await expect(page.getByText("No runs match these filters.")).toBeVisible({ timeout: 3_000 });
+      await expect(page.getByText("No runs match these filters", { exact: true })).toBeVisible({ timeout: 3_000 });
     }).toPass({ timeout: 15_000 });
     await expect(page.getByText("Try a different search term or filter.")).toBeVisible();
 
@@ -276,7 +295,7 @@ test.describe("Runs landing — real hold-timing edges reaching the row (#509, #
       const row = lane.getByTestId("run-row").filter({ hasText: "e2e long-held solo" });
       await expect(row).toBeVisible();
       await expect(row.getByRole("button", { name: "Review" })).toBeVisible();
-      await expect(row.getByText("1 decision needs you")).toBeVisible();
+      await expect(row.getByText("1 decision needs you", { exact: true })).toBeVisible();
       await expect(row.getByText(RUN_WAIT.waitingHeld(1))).toBeVisible();
       // Review opens the run on its Approvals tab, where the decision card is (#3032).
       await row.getByRole("button", { name: "Review" }).click();

@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { expandCard } from "../../lib/test-dom";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -33,6 +33,12 @@ vi.mock("../../lib/api/permissions", () => ({
 }));
 
 import { SshKeysPane } from "./ssh-keys";
+
+// The frozen sentences (docs/design/admin-access-canon.md), typed out so the test does not read the source's copy.
+const ADMIN_OVERRIDE_SENTENCE =
+  "Registered while you were an admin, so this key reaches runs you do not own. Refreshed automatically each time you sign in, and expires on its own if you don't; delete and re-register the key to drop the override immediately.";
+const USER_ACCESS_SENTENCE =
+  "Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view.";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { DENIED } from "../../lib/permissions-copy";
 import type { MeCapabilities } from "../../lib/types";
@@ -68,7 +74,7 @@ describe("SshKeysPane — empty state", () => {
   it("shows the empty-state copy and an Add key affordance", async () => {
     listKeysMock.mockResolvedValue([]);
     renderScreen();
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
     expect(screen.getByText("Add your public key to connect over SSH.")).toBeInTheDocument();  });
 });
 
@@ -92,7 +98,7 @@ describe("SshKeysPane — Your account card", () => {
       </MemoryRouter>,
     );
     await expandCard("Your SSH keys");
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
     expect(screen.getAllByRole("button", { name: /add key/i })).toHaveLength(1);
     unmount();
 
@@ -182,7 +188,7 @@ describe("SshKeysPane — add key", () => {
     });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
 
     await user.click(screen.getAllByRole("button", { name: /add key/i })[0]);
     setField(screen.getByLabelText(/name/i), "new key");
@@ -201,7 +207,7 @@ describe("SshKeysPane — add key", () => {
     addKeyMock.mockRejectedValue(new Error("this looks like a PRIVATE key — paste your PUBLIC key instead"));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
 
     await user.click(screen.getAllByRole("button", { name: /add key/i })[0]);
     setField(screen.getByLabelText(/public key/i), "-----BEGIN OPENSSH PRIVATE KEY-----");
@@ -214,7 +220,7 @@ describe("SshKeysPane — add key", () => {
   it("never asks for a name in the paste field's own text — the helper line says public-key-only", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
     await user.click(screen.getAllByRole("button", { name: /add key/i })[0]);
     expect(screen.getByText("Public key only — never paste a private key.")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/ssh-ed25519 AAAA/)).toBeInTheDocument();
@@ -227,7 +233,7 @@ describe("SshKeysPane — add key", () => {
   it("marks the Public key field required — the app's required-field convention", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
     await user.click(screen.getAllByRole("button", { name: /add key/i })[0]);
     expect(screen.getByLabelText(/public key/i)).toBeRequired();
     expect(screen.getByLabelText(/^name$/i)).not.toBeRequired();
@@ -259,11 +265,34 @@ describe("SshKeysPane — admin-override badge", () => {
       },
     ]);
     renderScreen();
-    const badge = await screen.findByText("Admin override");
-    expect(badge).toBeInTheDocument();
-    expect(screen.getAllByText("Admin override")).toHaveLength(1);
+    const rows = await screen.findAllByRole("row");
+    const badges = rows.flatMap((r) => within(r).queryAllByText("Admin override"));
+    expect(badges).toHaveLength(1);
     // …on the admin key's row, not the member key's.
-    expect(badge.closest("tr")).toHaveTextContent("workstation");
+    expect(badges[0].closest("tr")).toHaveTextContent("workstation");
+  });
+
+  // r11 #2244: the meaning is visible text under the table, once, and the chip carries no title.
+  it("states the override's meaning as text under the table, and the chip has no title", async () => {
+    listKeysMock.mockResolvedValue([
+      { fingerprint: "SHA256:aaa", principal: "a@example.com", name: "laptop", public_key: "", role: "user", created_at: aheadByHours(-2) },
+      { fingerprint: "SHA256:bbb", principal: "a@example.com", name: "workstation", public_key: "", role: "admin", created_at: aheadByHours(-1) },
+    ]);
+    renderScreen();
+    const notes = await screen.findByTestId("ssh-key-chip-notes");
+    expect(within(notes).getByText(ADMIN_OVERRIDE_SENTENCE)).toBeVisible();
+    expect(within(notes).queryByText(USER_ACCESS_SENTENCE)).not.toBeInTheDocument();
+    expect(document.querySelector("[title*='Registered while you were an admin']")).toBeNull();
+    for (const chip of screen.getAllByText("Admin override")) expect(chip).not.toHaveAttribute("title");
+  });
+
+  it("shows no chip note when no listed key carries a chip", async () => {
+    listKeysMock.mockResolvedValue([
+      { fingerprint: "SHA256:aaa", principal: "a@example.com", name: "laptop", public_key: "", role: "user", capped: false, created_at: aheadByHours(-2) },
+    ]);
+    renderScreen();
+    await screen.findByText("laptop");
+    expect(screen.queryByTestId("ssh-key-chip-notes")).not.toBeInTheDocument();
   });
 });
 
@@ -274,7 +303,7 @@ describe("SshKeysPane — admin-override badge", () => {
 // pointed at a door M-5 removed (the user view was the only place left to add
 // ANY key), so it now points at Admin Settings' new Admin SSH keys card (S-1).
 describe("SshKeysPane — capped-key chip", () => {
-  it("marks only the capped key, with the owner-approved tooltip", async () => {
+  it("marks only the capped key, with the owner-approved note and no title", async () => {
     listKeysMock.mockResolvedValue([
       {
         fingerprint: "SHA256:aaa",
@@ -296,13 +325,13 @@ describe("SshKeysPane — capped-key chip", () => {
       },
     ]);
     renderScreen();
-    const chip = await screen.findByText("User access");
-    expect(screen.getAllByText("User access")).toHaveLength(1);
-    expect(chip.closest("tr")).toHaveTextContent("laptop");
-    expect(chip.closest("[title]")).toHaveAttribute(
-      "title",
-      "Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view.",
-    );
+    const notes = await screen.findByTestId("ssh-key-chip-notes");
+    expect(within(notes).getByText(USER_ACCESS_SENTENCE)).toBeVisible();
+    expect(within(notes).queryByText(ADMIN_OVERRIDE_SENTENCE)).not.toBeInTheDocument();
+    const chips = screen.getAllByRole("row").flatMap((r) => within(r).queryAllByText("User access"));
+    expect(chips).toHaveLength(1);
+    expect(chips[0].closest("tr")).toHaveTextContent("laptop");
+    expect(document.querySelector("[title*='Added in the user view']")).toBeNull();
   });
 });
 
@@ -337,7 +366,7 @@ describe("SshKeysPane — ssh_key feature not available", () => {
       grants: [{ id: "g2", subject_type: "all", subject: "", capability: "feature", value: "api_token", effect: "deny", created_at: "" }],
     };
     renderAsUser();
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
     await waitFor(() => {
       for (const b of screen.getAllByRole("button", { name: /add key/i })) expect(b).toBeEnabled();
     });
@@ -347,7 +376,7 @@ describe("SshKeysPane — ssh_key feature not available", () => {
   it("never fetches or disables for a super admin", async () => {
     mockCaps = { ...mockCaps, enforcement: { feature: true } };
     renderScreen();
-    await screen.findByText("No keys yet.");
+    await screen.findByText("No keys yet");
     for (const b of screen.getAllByRole("button", { name: /add key/i })) expect(b).toBeEnabled();
     expect(screen.queryByText(DENIED.SSH_KEY_FEATURE)).not.toBeInTheDocument();
   });

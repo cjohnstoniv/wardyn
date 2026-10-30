@@ -4,13 +4,13 @@
  */
 
 // The /drives screen (0.7) — the admin's drive registry: what storage a run can
-// mount at /home/agent/drive, and who gets it. SUPER-only, with NO nav item:
-// it is reached from the Workspaces header's outline button, the setup
-// Workspaces step's card and the Settings card, all three of which render for
-// an operator only (docs/design/user-drives-prompt.md §5 #7, §6). Nothing
-// LINKS a security admin here — but a URL is a URL, and GET /drives is
-// operatorOnly, so their READ is a 403. That is a tier refusal, not a transport
-// failure, and the screen answers it as one (see `status`).
+// mount at /home/agent/drive, and who gets it. A super admin edits it and reaches
+// it from the Workspaces header's outline button, the setup Workspaces step's
+// card and the Settings card (docs/design/user-drives-prompt.md §5 #7, §6). A
+// security admin has the sidebar item and READS it: GET /drives is securityOps
+// with host_root and storage_class withheld, and no write control renders for
+// them. A member's read is a 403, a tier refusal, not a transport failure (see
+// `status`).
 //
 // EVERY user-visible string here comes from user-drives-copy.ts (§7, frozen)
 // plus the subject/priority/preview vocabulary already frozen in
@@ -88,8 +88,9 @@ const EMPTY: UserDrivesSnapshot = {
 export function DrivesScreen() {
   // The SUPER tier, not the security one: a drive names a host path or a
   // cluster storage class, and "never the host" is what separates the two admin
-  // tiers. Mirrors the operatorOnly route group exactly. UX only — the
-  // middleware is what refuses a write.
+  // tiers. A security admin reads the page (GET /drives is securityOps, with the
+  // host fields withheld) and gets NO write control: not disabled, absent. UX
+  // only — the middleware is what refuses a write.
   const operator = useOperator();
   const [snap, setSnap] = React.useState<UserDrivesSnapshot>(EMPTY);
   const [status, setStatus] = React.useState<"loading" | "error" | "forbidden" | "ready">("loading");
@@ -118,8 +119,8 @@ export function DrivesScreen() {
         setSnap(s);
         setStatus("ready");
       })
-      // A 403 is the TIER, not the network: GET /drives is operatorOnly, so a
-      // security admin who typed this URL is refused the read itself. Rendering
+      // A 403 is the TIER, not the network: GET /drives is securityOps, so a
+      // member who typed this URL is refused the read itself. Rendering
       // FETCH_FAILED_* there would call an authorization answer a server
       // hiccup, and offer a Retry that returns the same 403 forever.
       .catch((e) => setStatus(loadFailStatus(e)));
@@ -226,13 +227,16 @@ export function DrivesScreen() {
               </div>
               {/* With no drives the empty state carries this action instead, so
                   the screen never offers two New drive buttons. */}
-              {!noDrives && (
-                <Button variant="outline" disabled={!operator || editorOpen} onClick={() => openEditor(null)}>
+              {!noDrives && operator && (
+                <Button variant="outline" disabled={editorOpen} onClick={() => openEditor(null)}>
                   {DRIVES.NEW_CTA}
                 </Button>
               )}
             </div>
 
+            {/* #3052: with no drives, the empty state shows only while the editor is closed; an open New drive
+                editor takes its place right under the card's title. Cancel brings it back. */}
+            {!(noDrives && editorOpen) && (
             <div className="mt-4">
               {status === "loading" ? (
                 <TableSkeleton rows={3} cols={7} />
@@ -242,13 +246,15 @@ export function DrivesScreen() {
                   icon={HardDrive}
                   title={DRIVES.EMPTY_TITLE}
                   action={
-                    <Button
-                      variant={newIsTeal ? "default" : "outline"}
-                      disabled={!operator || editorOpen}
-                      onClick={() => openEditor(null)}
-                    >
-                      {DRIVES.NEW_CTA}
-                    </Button>
+                    operator ? (
+                      <Button
+                        variant={newIsTeal ? "default" : "outline"}
+                        disabled={editorOpen}
+                        onClick={() => openEditor(null)}
+                      >
+                        {DRIVES.NEW_CTA}
+                      </Button>
+                    ) : undefined
                   }
                 />
               ) : (
@@ -258,11 +264,12 @@ export function DrivesScreen() {
                       <TableRow className="hover:bg-transparent">
                         <TableHead>{DRIVES.COL_NAME}</TableHead>
                         <TableHead>{DRIVES.COL_BACKEND}</TableHead>
+                        <TableHead>{DRIVES.COL_MOUNTS_FROM}</TableHead>
                         <TableHead>{DRIVES.COL_SIZE}</TableHead>
                         <TableHead>{DRIVES.COL_MODE}</TableHead>
                         <TableHead>{DRIVES.COL_RECLAIM}</TableHead>
                         <TableHead>{DRIVES.COL_ALLOCATED}</TableHead>
-                        <TableHead className="w-[140px]" />
+                        {operator && <TableHead className="w-[140px]" />}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -293,6 +300,8 @@ export function DrivesScreen() {
                               {team && d.single_host && <Chip tone="warning">{DRIVES.TEAM_ONE_HOST_CHIP}</Chip>}
                             </span>
                           </TableCell>
+                          {/* The server's phrase, as it is (M10): the console names no runner itself. */}
+                          <TableCell data-testid="drives-mounts-from">{d.mounts_from}</TableCell>
                           <TableCell>
                             {sizeText(d.size_mib)}
                             {/* The gloss on every number, not only in the note. */}
@@ -316,28 +325,30 @@ export function DrivesScreen() {
                                 ? DRIVES.ALLOCATED_NONE
                                 : DRIVES.ALLOCATED_COUNT(d.grant_count)}
                           </TableCell>
-                          <TableCell>
-                            <div className="flex justify-end gap-1">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                disabled={!operator || editorOpen}
-                                onClick={() => openEditor(d)}
-                                aria-label={`${DRIVES.EDIT} ${d.name}`}
-                              >
-                                {DRIVES.EDIT}
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                disabled={!operator || editorOpen}
-                                onClick={() => openDelete(d)}
-                                aria-label={`${DRIVES.DELETE} ${d.name}`}
-                              >
-                                {DRIVES.DELETE}
-                              </Button>
-                            </div>
-                          </TableCell>
+                          {operator && (
+                            <TableCell>
+                              <div className="flex justify-end gap-1">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={editorOpen}
+                                  onClick={() => openEditor(d)}
+                                  aria-label={`${DRIVES.EDIT} ${d.name}`}
+                                >
+                                  {DRIVES.EDIT}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  disabled={editorOpen}
+                                  onClick={() => openDelete(d)}
+                                  aria-label={`${DRIVES.DELETE} ${d.name}`}
+                                >
+                                  {DRIVES.DELETE}
+                                </Button>
+                              </div>
+                            </TableCell>
+                          )}
                         </TableRow>
                         );
                       })}
@@ -363,6 +374,7 @@ export function DrivesScreen() {
                 </>
               )}
             </div>
+            )}
 
             {/* Opens IN PLACE, under the list it edits — not a dialog. The
                 allocation form below collapses for exactly this span. */}

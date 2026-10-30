@@ -8,6 +8,7 @@
 // preflight twins have room; the shared run types stay there.
 
 import type { AutonomyResolution } from "../api/governance";
+import type { PolicyRef } from "../api/health";
 import type { ComponentFact } from "./components";
 import type { AccessFacts } from "./new-run-access";
 import type { AllowedImage, AppliedResources, HarnessSetFact, ImageFact, LocalPlacementFact, MainDriveApplied, RunAttachment } from "./new-run-contract";
@@ -126,6 +127,9 @@ export interface PreflightResult {
   // tells the member WHY the enforced policy differs from what they typed, since
   // launch itself stays silent. Absent on an older server that predates it.
   warnings?: string[];
+  // internal/api's warningContext: for each policy drop warning, by its index in `warnings`, the policy the run is
+  // bound by and the contact it publishes. Absent when there is none, and on an older server.
+  warning_context?: WarningContext[];
   // WHERE this run's model credential will land (internal/api's
   // modelCredentialFacts): the provider this body chose, its kind and its
   // residency. preflightIsCurrent compares the whole request body, so a verdict
@@ -199,4 +203,11 @@ export interface ModelCredential {
   provider?: string;
   kind?: string;
   residency: ModelCredentialResidency;
+}
+
+// internal/api's warningContext.
+export interface WarningContext {
+  warning_index: number;
+  kind: string;
+  policy: PolicyRef;
 }

@@ -37,8 +37,18 @@ type Network struct {
 	// Identity adds the /api/v1/me stage. Token is never printed; TokenSource names where it came from.
 	Identity           bool
 	Token, TokenSource string
-	LookupHost         func(ctx context.Context, host string) ([]string, error)
-	ProxyFor           func(*http.Request) (*url.URL, error)
+	// Wire adds the runner-wire stage: whether a WebSocket upgrade on the runner stream route gets through.
+	Wire bool
+	// WireDespiteHealthz runs the wire stage after an advisory healthz failure too, for a command that
+	// goes on past it.
+	WireDespiteHealthz bool
+	// ProxyAuthFix replaces "a proxy address that includes credentials it accepts" in the fix for a proxy's 407, for
+	// a command whose proxy address never carries one. ProxyAuthAdvisory makes that 407 advisory: it is not
+	// the end of the command, which has been told the credential comes another way.
+	ProxyAuthFix      string
+	ProxyAuthAdvisory bool
+	LookupHost        func(ctx context.Context, host string) ([]string, error)
+	ProxyFor          func(*http.Request) (*url.URL, error)
 	// SystemRoots is the trust store the command uses (nil: the system's). ExtraCA is a PEM bundle named by
 	// ExtraCASource (a setting's name); ExtraCATrusted says whether the command being diagnosed trusts it:
 	// the runner does, the CLI does not, and a certificate only that bundle verifies is a failure there.
@@ -63,6 +73,9 @@ func (n *Network) Run(ctx context.Context) []Stage {
 	var out []Stage
 	add := func(s Stage) { out = append(out, s.scrub(secrets)) }
 	rest := func(why string, names ...string) {
+		if n.Wire {
+			names = append(names, "wire")
+		}
 		if n.Identity {
 			names = append(names, "identity")
 		}
@@ -97,6 +110,13 @@ func (n *Network) Run(ctx context.Context) []Stage {
 		healthSt = n.healthStage(u, proxy, p, resp, err)
 	}
 	add(healthSt)
+	if n.Wire {
+		if healthSt.Status != StatusOK && !(n.WireDespiteHealthz && healthSt.Advisory) {
+			add(SkipStage("wire", "not run: /healthz did not answer"))
+		} else {
+			add(n.wireStage(ctx, u, proxy, p, tr))
+		}
+	}
 	if n.Identity {
 		if healthSt.Status != StatusOK {
 			add(SkipStage("identity", "not run: /healthz did not answer"))
@@ -292,8 +312,8 @@ func (n *Network) connFailure(name string, err error, p *probe, u, proxy *url.UR
 	var op *net.OpError
 	switch {
 	case p.connect == http.StatusProxyAuthRequired:
-		return FailStage(name, fmt.Sprintf("the proxy %s refused the connection (407: it wants proxy authentication)", proxy.Host), variable,
-			"a proxy address that includes credentials it accepts, or add "+u.Hostname()+" to NO_PROXY")
+		return n.proxyAuth(FailStage(name, fmt.Sprintf("the proxy %s refused the connection (407: it wants proxy authentication)", proxy.Host), variable,
+			n.authFix()+", or add "+u.Hostname()+" to NO_PROXY"))
 	case p.connect == http.StatusForbidden:
 		return FailStage(name, fmt.Sprintf("the proxy %s refused the connection (403: it does not allow this destination)", proxy.Host), variable,
 			"a proxy that allows "+u.Hostname()+", or add it to NO_PROXY")
@@ -303,6 +323,19 @@ func (n *Network) connFailure(name string, err error, p *probe, u, proxy *url.UR
 		return FailStage(name, fmt.Sprintf("no connection through the proxy %s: %v", proxy.Host, unwrapURL(err)), variable, "a proxy that reaches "+u.Host+", or add it to NO_PROXY")
 	}
 	return FailStage(name, fmt.Sprintf("no connection to %s: %v", u.Host, unwrapURL(err)), n.OrgSetting, "an address this computer reaches (check a VPN or firewall)")
+}
+
+// proxyAuth marks st as a proxy's 407, and advisory when the command asked for that.
+func (n *Network) proxyAuth(st Stage) Stage {
+	st.ProxyAuth, st.Advisory = true, n.ProxyAuthAdvisory
+	return st
+}
+
+func (n *Network) authFix() string {
+	if n.ProxyAuthFix != "" {
+		return n.ProxyAuthFix
+	}
+	return "a proxy address that includes credentials it accepts"
 }
 
 func unwrapURL(err error) error {
@@ -323,7 +356,7 @@ func (n *Network) healthStage(u, proxy *url.URL, p *probe, resp *http.Response, 
 		if proxy != nil {
 			who = "the proxy " + proxy.Host
 		}
-		return FailStage("healthz", who+" answered 407: it wants proxy authentication", proxyVar(u), "a proxy address that includes credentials it accepts")
+		return n.proxyAuth(FailStage("healthz", who+" answered 407: it wants proxy authentication", proxyVar(u), n.authFix()))
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
 		to := "elsewhere"
 		if loc, err := resp.Location(); err == nil {
@@ -331,7 +364,10 @@ func (n *Network) healthStage(u, proxy *url.URL, p *probe, resp *http.Response, 
 		}
 		return FailStage("healthz", fmt.Sprintf("redirected (%d) to %s", resp.StatusCode, to), n.OrgSetting, "the address it redirects to")
 	case resp.StatusCode != http.StatusOK:
-		return FailStage("healthz", fmt.Sprintf("answered %d: this address is not a healthy Wardyn control plane", resp.StatusCode), n.OrgSetting, "your organisation's Wardyn address")
+		// A gateway may route the API and answer nothing at /healthz, and the runner never calls it.
+		st := FailStage("healthz", fmt.Sprintf("answered %d: this address is not a healthy Wardyn control plane", resp.StatusCode), n.OrgSetting, "your organisation's Wardyn address")
+		st.Advisory = true
+		return st
 	}
 	var body struct{ Status, Version string }
 	raw, _ := io.ReadAll(resp.Body)
@@ -361,7 +397,7 @@ func (n *Network) identityStage(ctx context.Context, u *url.URL, tr *http.Transp
 			setting = n.TokenSource
 		}
 		return FailStage("identity", fmt.Sprintf("/api/v1/me answered %d: %s", ae.Status, from), setting,
-			"a personal API token: sign in to the console and create one under Your account (a deployment with single sign-on and no admin token takes nothing else)")
+			"a personal API token: sign in to the console and create one in Settings (a deployment with single sign-on and no admin token takes nothing else)")
 	case err != nil:
 		return FailStage("identity", "/api/v1/me did not answer: "+unwrapURL(err).Error(), n.OrgSetting, "your organisation's Wardyn address")
 	}
@@ -372,4 +408,42 @@ func (n *Network) identityStage(ctx context.Context, u *url.URL, tr *http.Transp
 		who = "the token from " + n.TokenSource
 	}
 	return OKStage("identity", fmt.Sprintf("%s: method %s, role %s", who, me.Method, me.Role))
+}
+
+// nilRunner names no runner. The wire stage asks for an upgrade on this runner's stream route, so no
+// identity of the runner's is used and no credential is sent.
+const nilRunner = "00000000-0000-0000-0000-000000000000"
+
+// wireStage asks the runner stream route to switch to a WebSocket and hangs up at once. The organisation
+// answers 101 when the upgrade got through every proxy and gateway on the route; a proxy that strips the
+// upgrade headers leaves the organisation a plain GET (426), or answers by itself.
+func (n *Network) wireStage(ctx context.Context, u, proxy *url.URL, p *probe, tr *http.Transport) Stage {
+	ctx, cancel := context.WithTimeout(ctx, 3*stageBound)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(u.String(), "/")+"/api/v1/runners/"+nilRunner+"/stream", nil)
+	if err != nil {
+		return FailStage("wire", "the runner stream address cannot be built: "+err.Error(), n.OrgSetting, "your organisation's public HTTPS address")
+	}
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	resp, err := (&http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+	if err != nil {
+		return n.connFailure("wire", err, p, u, proxy)
+	}
+	_ = resp.Body.Close()
+	where, setting, fix := "something on the route to "+u.Host, n.OrgSetting, "an address that reaches Wardyn without a gateway that strips the WebSocket upgrade (a runner holds one WebSocket open to it)"
+	if proxy != nil {
+		where, setting, fix = "the proxy "+proxy.Host, proxyVar(u), "a proxy that passes WebSocket upgrades (Connection: Upgrade, Upgrade: websocket) to "+u.Host+", or add it to NO_PROXY"
+	}
+	switch {
+	case resp.StatusCode == http.StatusSwitchingProtocols:
+		return OKStage("wire", "the runner stream route switched to a WebSocket: the upgrade gets through")
+	case resp.StatusCode == http.StatusProxyAuthRequired:
+		return n.proxyAuth(FailStage("wire", where+" answered 407: it wants proxy authentication", proxyVar(u), n.authFix()))
+	case resp.StatusCode == http.StatusUpgradeRequired || resp.StatusCode < 300:
+		return FailStage("wire", fmt.Sprintf("the runner stream route answered %d instead of switching to a WebSocket: %s removes the upgrade, and a runner cannot connect through it", resp.StatusCode, where), setting, fix)
+	}
+	return FailStage("wire", fmt.Sprintf("the runner stream route answered %d: runners are switched off there, or %s blocks WebSocket upgrades", resp.StatusCode, where), setting, fix)
 }

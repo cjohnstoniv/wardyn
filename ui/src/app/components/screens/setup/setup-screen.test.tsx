@@ -63,7 +63,7 @@ vi.mock("../../../lib/api/workspaces", () => ({
 vi.mock("../../../lib/api/policies", () => ({
   policies: { listPolicies: () => Promise.resolve([]), createPolicy: vi.fn() },
 }));
-// The Workspaces step's user-drives card summarises GET /drives (SUPER-only,
+// The Workspaces step's user-drives card summarises GET /drives (the card is SUPER-only,
 // and this suite runs on the operator-context's fail-open default).
 const getDrivesMock = vi.fn();
 vi.mock("../../../lib/api/drives", () => ({
@@ -335,9 +335,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await screen.findByRole("heading", { name: /^network$/i });
     await clearCorpNetworkGate();
 
-    // Both PhaseRail landmarks share the "Setup steps" accessible name
-    // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
-    // renders both — the full rail is the SECOND in DOM order.
+    // The one "Setup steps" nav is the rail (#2844).
     const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
     const nav = navs[navs.length - 1];
 
@@ -499,9 +497,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.queryByText(/set up as model providers/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("radiogroup", { name: /git host/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /add integration/i })).not.toBeInTheDocument();
-    // Both PhaseRail landmarks share the "Setup steps" accessible name
-    // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
-    // renders both — the full rail is the SECOND in DOM order.
+    // The one "Setup steps" nav is the rail (#2844).
     const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
     const nav = navs[navs.length - 1];
     const btn = within(nav).getByRole("button", { name: /^secrets/i });
@@ -559,9 +555,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
 
-    // Both PhaseRail landmarks share the "Setup steps" accessible name
-    // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
-    // renders both — the full rail is the SECOND in DOM order.
+    // The one "Setup steps" nav is the rail (#2844).
     const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
     const nav = navs[navs.length - 1];
     const btn = within(nav).getByRole("button", { name: /^secrets/i });

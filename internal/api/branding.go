@@ -106,13 +106,17 @@ func (s *Server) publicBranding(b types.Branding) brandingPublic {
 			v.DarkPrimary, v.DarkPrimaryText = deriveDarkPrimary(c)
 		}
 	}
-	icon := brandIcon(b)
-	sum := sha256.Sum256(icon)
-	v.IconURL = s.cfg.BasePath + fmt.Sprintf(brandLogoPathFmt, hex.EncodeToString(sum[:6]))
+	v.IconURL = s.cfg.BasePath + fmt.Sprintf(brandLogoPathFmt, brandIconDigest(brandIcon(b)))
 	if len(b.Logo) > 0 {
 		v.LogoURL = v.IconURL
 	}
 	return v
+}
+
+// brandIconDigest names an icon's bytes in its ?v= URL.
+func brandIconDigest(icon []byte) string {
+	sum := sha256.Sum256(icon)
+	return hex.EncodeToString(sum[:6])
 }
 
 // brandIcon is what GET /branding/logo serves for a branded console: the
@@ -188,7 +192,8 @@ func (s *Server) handleGetBrandingSettings(w http.ResponseWriter, r *http.Reques
 // handleGetBrandingLogo serves the stored logo (or the monogram tile, see
 // brandIcon), ANONYMOUS like the read that names it. The type is the one validated at write time, never sniffed, and
 // nosniff is set here as well as by securityHeaders so the pairing cannot
-// come apart.
+// come apart. A request whose ?v= is the icon's current digest is cached for good: a branding change
+// moves the digest, so the page that names the icon asks for a new URL.
 func (s *Server) handleGetBrandingLogo(w http.ResponseWriter, r *http.Request) {
 	b, found, ok := s.loadBranding(w, r)
 	if !ok {
@@ -205,8 +210,13 @@ func (s *Server) handleGetBrandingLogo(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", contentType)
 	h.Set("X-Content-Type-Options", "nosniff")
+	icon := brandIcon(b)
+	if digest := brandIconDigest(icon); r.URL.Query().Get("v") == digest {
+		h.Set("Cache-Control", "public, max-age=31536000, immutable")
+		h.Set("ETag", `"`+digest+`"`)
+	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(brandIcon(b))
+	_, _ = w.Write(icon)
 }
 
 // brandingRequest is the PUT body. Logo nil keeps the stored logo;
@@ -269,17 +279,21 @@ func (s *Server) handlePutBranding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A logo the site config delivers would be put back by its next apply, so a
-	// removal is refused rather than quietly undone (#1215). The console never
-	// offers it; this is the API's answer to a caller that tries.
-	if req.RemoveLogo {
+	// removal or a replacement is refused rather than quietly undone (#1215). The
+	// console never offers either; this is the API's answer to a caller that tries.
+	if req.RemoveLogo || req.Logo != nil {
 		cur, err := bs.GetBranding(r.Context())
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			writeServerError(w, r, "get branding", err)
 			return
 		}
 		if err == nil && cur.LogoFromFile && len(cur.Logo) > 0 {
+			field := "logo"
+			if req.RemoveLogo {
+				field = "remove_logo"
+			}
 			writeErrorReason(w, http.StatusBadRequest, brandReasonLogoFromFile,
-				"remove_logo: this logo comes from the site configuration's branding.logo_path; take that key out of the site configuration instead")
+				field+": this logo comes from the site configuration's branding.logo_path; change or take that key out of the site configuration instead")
 			return
 		}
 	}

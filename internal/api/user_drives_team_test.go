@@ -59,7 +59,7 @@ func TestTeamDriveResolvesOneReadOnlyFolder(t *testing.T) {
 	}
 	srv := New(Config{BaseCtx: testBaseCtx(t), RunnerTarget: "docker", LocalMode: true})
 	mount, ok := srv.driveMountFor(context.Background(), httptest.NewRecorder(),
-		runDrive{resolved: *alice, target: runner.DriveTargetFor(*alice, false)})
+		runDrive{resolved: *alice, target: runner.DriveTargetFor(*alice, false)}, drivePlace{})
 	if !ok || !mount.Team || mount.SubjectHash != "" || mount.Target != runner.SharedRoot+"/team-data" {
 		t.Fatalf("mount = %+v (ok %v), want a team mount with no subject hash under %s", mount, ok, runner.SharedRoot)
 	}
@@ -109,7 +109,7 @@ func TestTeamDriveMemberWriteIsRefused(t *testing.T) {
 	}
 	srv := New(Config{BaseCtx: testBaseCtx(t), RunnerTarget: "docker", LocalMode: true})
 	mount, ok := srv.driveMountFor(context.Background(), httptest.NewRecorder(),
-		runDrive{resolved: *resolved, target: runner.DriveTargetFor(*resolved, false)})
+		runDrive{resolved: *resolved, target: runner.DriveTargetFor(*resolved, false)}, drivePlace{})
 	if !ok || !mount.ReadOnly {
 		t.Fatalf("mount = %+v (ok %v), want read-only", mount, ok)
 	}
@@ -214,7 +214,7 @@ func TestTeamDriveReclaimSkipsIt(t *testing.T) {
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if w.Code != http.StatusUnprocessableEntity || len(rn.calls) != 0 || len(audit.events) != 0 ||
-		body.Error != "this is a team drive: its files belong to its groups and are not reclaimed per person; "+
+		body.Error != "This is a team drive: its files belong to its groups and are not reclaimed per person; "+
 			"remove the folder on the substrate (docs/OPERATIONS.md) once the groups no longer need it" {
 		t.Fatalf("reclaim of a team drive = %d (%s), calls %d, rows %d; want 422 and nothing touched",
 			w.Code, w.Body.String(), len(rn.calls), len(audit.events))

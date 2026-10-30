@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -30,8 +31,13 @@ const (
 	mpBRPortal      = "your AWS sign-in is for a different AWS access portal than the one it names"
 	mpBRRenewing    = "renewing your AWS sign-in did not complete, because AWS did not answer the token request"
 	mpBRRemedyRetry = "your sign-in is still good; launch again in a moment."
-	// awsSSORefreshRefusedSentence's case: %s is the AWS code and its description.
-	mpBRRefused = "AWS refused to renew your AWS sign-in (AWS answered %s)"
+	// awsSSORefreshRefusedSentence's case: the AWS code and its description, then
+	// mpBRRefusedAge when the sign-in's time is known (awsSSORefusedState).
+	mpBRRefused = "AWS refused to renew your AWS sign-in (AWS answered %s)%s"
+	// A refusal soon after every sign-in is the session ending on AWS's side, which
+	// neither Wardyn nor a retry can change.
+	mpBRRefusedAge = " %s after you signed in; if it does that every time, your AWS administrator can check the " +
+		"IAM Identity Center session duration and your identity provider's sign-in session length, since either can end it that soon"
 	// The two 503s of a create-time renewal (awsSSORefreshStoreUnwritableSentence,
 	// awsSSORefreshPersistFailedSentence): no run row exists for either.
 	mpBRStoreUnwritable = "Wardyn's secret store did not accept a write, so your AWS sign-in was not renewed"
@@ -87,6 +93,12 @@ func providerBedrockSettings(p types.ModelProvider) types.BedrockSettings {
 func providerBedrockRuntimeHost(p types.ModelProvider) string {
 	b := providerBedrockSettings(p)
 	return bedrockDataPlaneHostFor(b.Region, b.BaseURL)
+}
+
+// providerBedrockHosts is the two hosts a Bedrock provider's lane reaches: its data plane and the
+// Region's control plane. Dispatch and the run's access facts both read them here.
+func providerBedrockHosts(p types.ModelProvider) []string {
+	return []string{providerBedrockRuntimeHost(p), bedrockControlHost(providerBedrockSettings(p).Region)}
 }
 
 // sameStartURL compares two AWS access-portal URLs the way a person reads
@@ -161,14 +173,16 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 				return awsSSOBlob{}, providerDenial{}, providerUnavailable{fmt.Sprintf(mpRunRefusal, p.ID, mpBRPersistFailed, mpRunRemedySignIn)}
 			}
 			if detail, refused := strings.CutPrefix(failure, awsSSORefreshRefusedSentence); refused {
-				return refuse(connectDenial(p.ID, fmt.Sprintf(mpBRRefused, detail)))
+				// The renewal re-reads the blob under its lock, so the returned one is the sign-in AWS refused.
+				return refuse(connectDenial(p.ID, s.awsSSORefusedState(detail, blob.CapturedAt)))
 			}
 			return refuse(stateDenial(p.ID, mpBRRenewing, mpBRRemedyRetry))
 		}
 	}
-	// A session whose last renewal AWS refused reads the same at Review as at dispatch.
+	// A session whose last renewal AWS refused reads as dispatch's refusal at Review, without its
+	// age: the mark keeps AWS's answer, not when it came.
 	if detail, refused := s.awsSSORefusedFor(blob); refused && blob.expired(s.cfg.Now()) {
-		return refuse(connectDenial(p.ID, fmt.Sprintf(mpBRRefused, detail)))
+		return refuse(connectDenial(p.ID, s.awsSSORefusedState(detail, time.Time{})))
 	}
 	if now := s.cfg.Now(); blob.expired(now) && (refresh || !blob.renewable(now)) {
 		return refuse(connectDenial(p.ID, mpBRNotSignedIn))
@@ -209,7 +223,7 @@ func (s *Server) providerBedrockTransport(ctx context.Context, run types.AgentRu
 	b := providerBedrockSettings(mp)
 	model := providerModel(mp, run.Agent)
 	env := bedrockBaseEnv(b.Region, model, b.BaseURL)
-	hosts := []string{providerBedrockRuntimeHost(mp), bedrockControlHost(b.Region)}
+	hosts := providerBedrockHosts(mp)
 	var auth bedrockAuth
 	if mp.Kind == types.ModelProviderBedrockBearer {
 		// A non-empty sentinel so claude-code uses bearer auth; the proxy

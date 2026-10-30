@@ -15,6 +15,7 @@ import { RES, RUNNER_KIND, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
 import { RUNNER, RUNNERS } from "../../wardyn/copy/runners";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
+import { MacVMBadge } from "./macvm-section";
 import { OfflineNote, ResourceTable } from "./resource-table";
 import { runnerRes } from "./resources";
 import { RunnerChip, TrustChip } from "./runner-chip";
@@ -98,10 +99,13 @@ export function RunnerCard({ f, onOpen, onOpenPool }: { f: FleetRunner; onOpen: 
           <Chip>{self ? RUNNER_KIND.SELF : RUNNER_KIND.REMOTE}</Chip>
           {self ? <RunnerChip runner={self} /> : <Chip dot>{online ? RUNNER.ONLINE : RUNNER.OFFLINE}</Chip>}
           {self && <TrustChip runner={self} />}
+          {self && <MacVMBadge caps={self.macos_vm} active={self.usage.in_use.macos_vm_runs ?? 0} perRun={self.limits?.per_run} />}
           {shared && !shared.configured && <Chip tone="warning">{RUNNER_KIND.NOT_CONFIGURED}</Chip>}
           {self && self.state === "claimed" && (online || self.last_seen_at) && (
             <span className="text-xs text-muted-foreground" title={self.last_seen_at ? absoluteTime(self.last_seen_at) : undefined}>
-              {RUNNER_V6.LAST_SEEN(online ? RUNNER_V6.LAST_SEEN_NOW : relativeTime(self.last_seen_at ?? ""))}
+              {online && Date.now() - Date.parse(self.created_at) < 60_000
+                ? RUNNER_V6.REGISTERED_JUST_NOW
+                : RUNNER_V6.LAST_SEEN(online ? RUNNER_V6.LAST_SEEN_NOW : relativeTime(self.last_seen_at ?? ""))}
             </span>
           )}
           {self && self.state === "claimed" && !online && !self.last_seen_at && <span className="text-xs text-muted-foreground">{RUNNER.NEVER_CONNECTED}</span>}

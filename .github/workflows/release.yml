@@ -1,6 +1,6 @@
 name: Release images
 
-# Publishes the nine images a Wardyn release actually ships, cosign-signed
+# Publishes the ten images a Wardyn release actually ships, cosign-signed
 # (keyless), plus a signed-release SBOM — on every vX.Y.Z tag push
 # (RELEASING.md's tagging convention). This is the "release" half of image
 # publishing; .github/workflows/publish-image.yml remains the CONTINUOUS half
@@ -10,7 +10,7 @@ name: Release images
 # to push the identical wardynd:X.Y.Z ref, one signed one not — see that
 # file's header for the current split).
 #
-# ── the nine images, and why each ref is what it is (verified against the
+# ── the ten images, and why each ref is what it is (verified against the
 #    tree, not assumed) ──────────────────────────────────────────────────────
 #   ghcr.io/cjohnstoniv/wardynd
 #     deploy/helm/wardyn/values.yaml's `image.repository` default (line ~16)
@@ -52,6 +52,11 @@ name: Release images
 #     LICENSING.md's claim that no published image bundles the vendor CLI
 #     depends on that. See the images-ui-sandbox job below for why that
 #     dependency needs its own job rather than two more rows here.
+#   ghcr.io/cjohnstoniv/agent-novnc-signin
+#     agent-novnc plus desktop sign-ins (#2972): wardynd dispatches a desktop
+#     run on it only with WARDYN_DESKTOP_SIGNINS=on. It builds FROM the
+#     agent-novnc this run just pushed, so it has a job of its own after
+#     images-ui-sandbox (images-ui-sandbox-signin).
 #
 # ── cosign (keyless) ─────────────────────────────────────────────────────────
 # No key material anywhere: `id-token: write` lets the job mint a short-lived
@@ -150,6 +155,11 @@ name: Release images
 # binaries and the chart are built here on both paths. Promote is idempotent, so
 # a failed job can simply be re-run.
 #
+# Writes. Every step that pushes, signs, attests, uploads to the Release or
+# submits for notarization runs only on a vX.Y.Z tag ref (a tag push, or a
+# dispatch whose ref is the tag), and, as before, not under dry_run.
+# test-repo-guards.sh guard 29 fails when a new write step lacks that condition.
+#
 on:
   push:
     tags: ['v*']
@@ -216,7 +226,7 @@ jobs:
   # let that path through with no gate at all.
   preflight-green:
     name: Preflight — required contexts + newest dispatched nightly green on the tag's tree
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -232,6 +242,15 @@ jobs:
       digests: ${{ steps.staging.outputs.digests }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # Every write below (registry push, signature, attestation, Release upload,
+      # notarization) also requires a vX.Y.Z tag ref, so a dispatch off a branch
+      # with dry_run=false would publish nothing. Fail it here, so the mistake is
+      # loud rather than a run that quietly skips its publishing.
+      - name: Refuse a real publish outside a release tag
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && !startsWith(github.ref, 'refs/tags/v')
+        run: |
+          echo "::error::dry_run=false needs the dispatch ref to be a vX.Y.Z tag (got ${GITHUB_REF}); rehearse with dry_run=true"
+          exit 1
       # Which publish path runs: build rebuilds the images at the tag, promote
       # copies the digests the candidate's nightly staged. A dispatch asks for one
       # (the input defaults to build). A tag push promotes when green-by-tree.sh,
@@ -250,7 +269,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
-          watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift runner-compat-walk"
+          watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift runner-compat-walk kind-survival-walk k6-kind-conformance k6-workload-e2e kind-acceptance-walks hybrid-walk kind-upgrade-walk"
           echo "watched=${watched}" >> "$GITHUB_OUTPUT"
           choice=build
           if [ "$EVENT_NAME" = workflow_dispatch ]; then
@@ -375,7 +394,7 @@ jobs:
 
   images:
     name: build, push, sign (${{ matrix.name }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: preflight-green
     if: needs.preflight-green.outputs.path == 'build'
     # 60, not 30: the three agent rows run their apt-get/npm/installer steps
@@ -541,7 +560,7 @@ jobs:
           # is exactly what a multi-arch build produces. Building without an
           # exporter still validates every Dockerfile and every RUN step, which is
           # what this rehearsal is for.
-          push: ${{ inputs.dry_run != true }}
+          push: ${{ inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}
           platforms: linux/amd64,linux/arm64
           provenance: false
           build-args: ${{ matrix.build-args }}
@@ -551,7 +570,7 @@ jobs:
       # both platforms. The Dockerfile checks the same line at build time, which
       # is all a dry run (nothing pushed) can reach. Gated on the exit code.
       - name: Assert the pushed digest carries the pinned GOFIPS140 snapshot
-        if: inputs.dry_run != true && contains(matrix.build-args, 'GOFIPS140=')
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') && contains(matrix.build-args, 'GOFIPS140=')
         env:
           BUILD_ARGS: ${{ matrix.build-args }}
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
@@ -561,7 +580,7 @@ jobs:
           test -n "$pin"
           ./scripts/check-fips-image.sh "$IMAGE_REF" "$pin"
       - name: Sign the pushed image (keyless, by digest)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
         run: cosign sign --yes "${IMAGE_REF}"
@@ -616,14 +635,14 @@ jobs:
           test "$(jq '.components | length' "sbom-${{ matrix.name }}.cdx.json")" -gt 0 \
             || { echo "SBOM for ${IMAGE_REF} has zero components — refusing to attest it"; exit 1; }
       - name: Attest the SBOM to the digest
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
         run: cosign attest --yes --type cyclonedx --predicate "sbom-${{ matrix.name }}.cdx.json" "${IMAGE_REF}"
       # Build provenance: how it was built, not merely who signed it. Separate
       # from cosign because this is the format GitHub's own verification consumes.
       - name: Attest build provenance
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/${{ matrix.name }}
@@ -664,7 +683,7 @@ jobs:
     name: build, push, sign (${{ matrix.name }})
     needs: [preflight-green, images]
     if: needs.preflight-green.outputs.path == 'build'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Same 60-minute floor as `images`, for the same reason (novnc alone is
     # 1.22 GB across two platforms, one pass under arm64 emulation).
     timeout-minutes: 60
@@ -681,9 +700,13 @@ jobs:
         include:
           - name: agent-vscode
             dockerfile: deploy/images/vscode/Dockerfile
+            base: agent-base
           - name: agent-novnc
             dockerfile: deploy/images/novnc/Dockerfile
-    steps:
+            base: agent-base
+    # Written once and reused by images-ui-sandbox-signin (`*ui_sandbox_steps`);
+    # a row's `base` names the image it builds FROM.
+    steps: &ui_sandbox_steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # binfmt_misc handlers — see the `images` job's identical step for why.
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
@@ -724,11 +747,12 @@ jobs:
         env:
           DRY_RUN: ${{ inputs.dry_run }}
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          BASE_NAME: ${{ matrix.base }}
         run: |
           if [ "$DRY_RUN" = "true" ]; then
-            echo "ref=ghcr.io/cjohnstoniv/agent-base:latest" >> "$GITHUB_OUTPUT"
+            echo "ref=ghcr.io/cjohnstoniv/${BASE_NAME}:latest" >> "$GITHUB_OUTPUT"
           else
-            echo "ref=ghcr.io/cjohnstoniv/agent-base:${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+            echo "ref=ghcr.io/cjohnstoniv/${BASE_NAME}:${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
           fi
       - name: Build and push
         id: build
@@ -736,14 +760,14 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          push: ${{ inputs.dry_run != true }}
+          push: ${{ inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}
           platforms: linux/amd64,linux/arm64
           provenance: false
           build-args: |
             BASE_IMAGE=${{ steps.base.outputs.ref }}
           tags: ${{ steps.tags.outputs.tags }}
       - name: Sign the pushed image (keyless, by digest)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
         run: cosign sign --yes "${IMAGE_REF}"
@@ -769,12 +793,12 @@ jobs:
           test "$(jq '.components | length' "sbom-${{ matrix.name }}.cdx.json")" -gt 0 \
             || { echo "SBOM for ${IMAGE_REF} has zero components — refusing to attest it"; exit 1; }
       - name: Attest the SBOM to the digest
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/${{ matrix.name }}@${{ steps.build.outputs.digest }}
         run: cosign attest --yes --type cyclonedx --predicate "sbom-${{ matrix.name }}.cdx.json" "${IMAGE_REF}"
       - name: Attest build provenance
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/${{ matrix.name }}
@@ -787,13 +811,41 @@ jobs:
           path: sbom-${{ matrix.name }}.cdx.json
           if-no-files-found: error
 
+  # The desktop sign-in variant (agent-novnc-signin, #2972). It builds FROM the
+  # agent-novnc that images-ui-sandbox pushed at the same release tag, and a
+  # matrix row cannot wait on a sibling row, so it is a job of its own after
+  # that one, with the same steps. A dry run pushes no agent-novnc to build on
+  # (and agent-novnc floats no :latest), so a dry run skips this job, as it
+  # skips release-assets.
+  images-ui-sandbox-signin:
+    name: build, push, sign (${{ matrix.name }})
+    needs: [preflight-green, images-ui-sandbox]
+    if: needs.preflight-green.outputs.path == 'build' && inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # cosign keyless signing (Fulcio/Rekor OIDC exchange)
+      attestations: write
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: agent-novnc-signin
+            dockerfile: deploy/images/novnc-signin/Dockerfile
+            base: agent-novnc
+    steps: *ui_sandbox_steps
+
   # The promote path: no build. preflight-green resolved and verified the digests
   # the candidate's nightly staged (see "build once, promote" in the header), and
   # this job copies each one to the release tags, then signs, scans and attests
   # that same digest under this workflow's own identity, so verify-release.sh and
   # docs/VERIFY.md see no difference from the build path.
   #
-  # One job for all nine images, not one job per image: each image needs only
+  # One job for all ten images, not one job per image: each image needs only
   # 0.6 to 1.5 minutes, and nine jobs queued for runner slots for up to 16 minutes
   # in the 0.9.5 cut. The per-image work is the function `promote_one` below, run
   # four at a time, each in its own bash process (errexit and pipefail on) with
@@ -801,7 +853,7 @@ jobs:
   # still finished, because promote is idempotent and a re-run redoes them.
   promote:
     name: promote and sign the images
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: preflight-green
     if: needs.preflight-green.outputs.path == 'promote'
     timeout-minutes: 30
@@ -812,17 +864,17 @@ jobs:
       attestations: write
     env:
       DIGESTS: ${{ needs.preflight-green.outputs.digests }}
-      DRY_RUN: ${{ inputs.dry_run == true }}
       REF_NAME: ${{ github.ref_name }}
       PARALLEL: "4"
-      # The same nine rows as `images` and `images-ui-sandbox`, as YAML text so
+      # The same ten rows as `images`, `images-ui-sandbox` and
+      # `images-ui-sandbox-signin`, as YAML text so
       # that the `- name:` and `dockerfile:` greps in verify-release.sh,
       # check-image-pins.sh and gpl-source-offer.sh still read them (guard 16
       # in test-repo-guards.sh parses them with yq). `dockerfile` is the recipe
       # nightly built; this job never builds it. The wardynd-fips digest was
       # checked for its GOFIPS140 snapshot in nightly's staging job, and
       # preflight-green proves that run built it. The Attest build provenance
-      # steps below name the same nine images, one step each (an action cannot
+      # steps below name the same ten images, one step each (an action cannot
       # run in a loop); guard 16 checks that those names match this list.
       IMAGES: |
         - name: wardynd
@@ -846,6 +898,8 @@ jobs:
           dockerfile: deploy/images/vscode/Dockerfile
         - name: agent-novnc
           dockerfile: deploy/images/novnc/Dockerfile
+        - name: agent-novnc-signin
+          dockerfile: deploy/images/novnc-signin/Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # An empty or malformed digest would make every later step fail on a ref
@@ -900,6 +954,9 @@ jobs:
       # promoted: the same bytes as the release tags, and readable in a dry run,
       # where nothing is copied.
       - name: Promote, sign and attest each image (no rebuild)
+        env:
+          # Copies, signs and attests only on a vX.Y.Z tag ref and not under dry_run (guard 29).
+          DRY_RUN: ${{ inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v') }}
         run: |
           set -euo pipefail
           RELEASE_TAG="${REF_NAME#v}"
@@ -979,67 +1036,74 @@ jobs:
           fi
           echo "promoted: $(wc -l <<<"$names") images"
       - name: Attest build provenance (wardynd)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/wardynd
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['wardynd'] }}
           push-to-registry: true
       - name: Attest build provenance (wardynd-fips)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/wardynd-fips
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['wardynd-fips'] }}
           push-to-registry: true
       - name: Attest build provenance (wardyn-proxy)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/wardyn-proxy
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['wardyn-proxy'] }}
           push-to-registry: true
       - name: Attest build provenance (wardyn-runnerd)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/wardyn-runnerd
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['wardyn-runnerd'] }}
           push-to-registry: true
       - name: Attest build provenance (agent-base)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/agent-base
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['agent-base'] }}
           push-to-registry: true
       - name: Attest build provenance (agent-codex-cli)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/agent-codex-cli
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['agent-codex-cli'] }}
           push-to-registry: true
       - name: Attest build provenance (agent-aws-sso)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/agent-aws-sso
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['agent-aws-sso'] }}
           push-to-registry: true
       - name: Attest build provenance (agent-vscode)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/agent-vscode
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['agent-vscode'] }}
           push-to-registry: true
       - name: Attest build provenance (agent-novnc)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/cjohnstoniv/agent-novnc
           subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['agent-novnc'] }}
+          push-to-registry: true
+      - name: Attest build provenance (agent-novnc-signin)
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/cjohnstoniv/agent-novnc-signin
+          subject-digest: ${{ fromJSON(needs.preflight-green.outputs.digests)['agent-novnc-signin'] }}
           push-to-registry: true
       - name: Upload the SBOMs for the release-assets job
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -1059,7 +1123,7 @@ jobs:
   # runner-pkg and release-assets read.
   binaries:
     name: CLI binaries
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: preflight-green
     timeout-minutes: 20
     permissions:
@@ -1079,7 +1143,7 @@ jobs:
           set -euo pipefail
           export CGO_ENABLED=0
           build_one() {
-            local GOOS="${1%/*}" GOARCH="${1#*/}" out runnerd ldflags
+            local GOOS="${1%/*}" GOARCH="${1#*/}" out runnerd ldflags pin
             export GOOS GOARCH
             out="wardyn-${GOOS}-${GOARCH}"
             runnerd="wardyn-runnerd-${GOOS}-${GOARCH}"
@@ -1090,17 +1154,24 @@ jobs:
             # the bare release (no +<commit> suffix) — this job only runs from a
             # `v*` tag push or a manual dispatch, never from a plain commit build.
             ldflags="-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=true"
-            go build -trimpath -ldflags "$ldflags" -o "$out" ./cmd/wardyn
+            # The runner is built FIRST, and the CLI is stamped with its SHA-256, so
+            # each wardyn-<os>-<arch> pins the same platform's wardyn-runnerd-<os>-<arch>
+            # (`wardyn runner setup` checks the runner it installs against that).
             # The runner needs the docker tag: without it the build is the stub
             # that refuses to serve.
+            # Windows has no runner, so its CLI pins none (cmd/wardyn/pinned.go).
+            pin=""
             if [ "$GOOS" != windows ]; then
               go build -tags docker -trimpath -ldflags "$ldflags" -o "$runnerd" ./cmd/wardyn-runnerd
+              pin="$(sha256sum "$runnerd" | cut -d' ' -f1)"
             fi
+            go build -trimpath -ldflags "$ldflags -X main.pinnedRunnerdSHA256=$pin" -o "$out" ./cmd/wardyn
             # A cross-built binary that cannot report its own version is a binary
             # nobody can support. Only checkable natively.
             if [ "$GOOS" = linux ] && [ "$GOARCH" = amd64 ]; then
               "./$out" --version || "./$out" version
               "./$runnerd" --version
+              test "$("./$out" version --json | jq -r .runnerd_sha256)" = "$pin"
             fi
             echo "done ${GOOS}/${GOARCH}"
           }
@@ -1177,9 +1248,14 @@ jobs:
   # With none set the package is unsigned: a person allows it in System Settings (Privacy & Security, Open
   # Anyway), and only an MDM agent or script install can push it (Apple's own app-install command needs a
   # Developer ID Installer signature).
+  #
+  # The package also carries wardyn-macvm, the macOS VM helper. It needs cgo and the Virtualization
+  # framework, so it is built here, on the arm64 macos-26 image, not cross-built with the binaries above.
+  # It is signed with its one entitlement (deploy/runner/macos/wardyn-macvm.entitlements) even with no
+  # Developer ID secrets, ad hoc, and the payload check below reads that entitlement back from the package.
   runner-pkg:
     name: macOS runner package (.pkg)
-    runs-on: macos-14
+    runs-on: macos-26
     needs: [preflight-green, binaries]
     timeout-minutes: 30
     permissions:
@@ -1191,8 +1267,29 @@ jobs:
           pattern: "cli-darwin-*"
           merge-multiple: true
           path: bin
+      # cache: false: release builds start from a clean Go cache.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      # The helper installs the guest agent into the VM and refuses one whose version differs from its own, so both
+      # are built here with the one ldflags value. (-trimpath makes Go drop -ldflags from `go version -m`, so the
+      # pair's equality is by construction; the package step reads back the helper's version and the build commit.)
+      - name: Build the macOS VM helper (cgo, arm64) and its guest agent
+        # clang stamps a cgo binary with the image's own macOS as its floor; the helper must load on macOS 26.
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '26.0'
+        run: |
+          set -euo pipefail
+          ldflags="-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=true"
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$ldflags" \
+            -o bin/wardyn-macvm ./cmd/wardyn-macvm
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$ldflags" \
+            -o bin/wardyn-guest-agent ./cmd/wardyn-guest-agent
       - name: Build, sign and notarize (each only with its secrets)
         env:
+          # Notarization submits the package to Apple, so it runs only for a real release tag run.
+          DRY_RUN: ${{ inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v') }}
           APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
           APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
           APPLE_DEVELOPER_ID_APPLICATION_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_IDENTITY }}
@@ -1205,10 +1302,10 @@ jobs:
         run: |
           set -euo pipefail
           version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
-          scripts/build-runner-pkg.sh --version "$version" \
+          DRY_RUN="$DRY_RUN" scripts/build-runner-pkg.sh --version "$version" \
             --arm64 bin/wardyn-runnerd-darwin-arm64 --amd64 bin/wardyn-runnerd-darwin-amd64 \
             --cli-arm64 bin/wardyn-darwin-arm64 --cli-amd64 bin/wardyn-darwin-amd64 \
-            --out wardyn-runnerd.pkg
+            --macvm bin/wardyn-macvm --guest-agent bin/wardyn-guest-agent --out wardyn-runnerd.pkg
           # An unsigned package has no signature to check; a signed one must verify.
           pkgutil --check-signature wardyn-runnerd.pkg || true
           payload="$(pkgutil --payload-files wardyn-runnerd.pkg)"
@@ -1216,6 +1313,52 @@ jobs:
           grep -Eq '(^|/)usr/local/wardyn/bin/wardyn$' <<<"$payload"
           grep -q 'usr/local/wardyn/share/doc/LICENSE' <<<"$payload"
           grep -q 'usr/local/wardyn/share/doc/THIRD-PARTY-NOTICES.md' <<<"$payload"
+          # The helper is in the package, no macOS image ever is,
+          # and the helper carries exactly the virtualization entitlement.
+          grep -Eq '(^|/)usr/local/wardyn/bin/wardyn-macvm$' <<<"$payload"
+          grep -Eq '(^|/)usr/local/wardyn/bin/wardyn-guest-agent$' <<<"$payload"
+          if grep -Eiq '\.(ipsw|img)$' <<<"$payload"; then echo "::error::the package payload lists a macOS image"; exit 1; fi
+          pkgutil --expand-full wardyn-runnerd.pkg "$RUNNER_TEMP/pkg"
+          # The package installs on macOS 26: no binary slice and no Distribution os-version asks for more.
+          above26() { awk -v m="$1" 'BEGIN { split(m, v, "."); exit !(v[1] + 0 > 26 || (v[1] + 0 == 26 && v[2] + 0 > 0)) }'; }
+          for b in wardyn-runnerd wardyn wardyn-macvm wardyn-guest-agent; do
+            f="$(find "$RUNNER_TEMP/pkg" -path "*/Payload/usr/local/wardyn/bin/$b" -type f)"
+            mins="$(otool -arch all -l "$f" | awk '$1 == "minos" { print $2 }')"
+            [ -n "$mins" ] || { echo "::error::$b has no LC_BUILD_VERSION"; exit 1; }
+            for m in $mins; do if above26 "$m"; then echo "::error::$b needs macOS $m; the floor is 26.0"; exit 1; fi; done
+          done
+          dist="$RUNNER_TEMP/pkg/Distribution"
+          [ -f "$dist" ] || { echo "::error::the expanded package has no Distribution"; exit 1; }
+          for m in $(sed -n 's/.*<os-version[^>]*min="\([^"]*\)".*/\1/p' "$dist"); do
+            if above26 "$m"; then echo "::error::the package Distribution needs macOS $m; the floor is 26.0"; exit 1; fi
+          done
+          helper="$(find "$RUNNER_TEMP/pkg" -path '*/Payload/usr/local/wardyn/bin/wardyn-macvm' -type f)"
+          [ -n "$helper" ]
+          [ "$(wc -l <<<"$helper")" -eq 1 ]
+          codesign -d --entitlements :- "$helper" 2>/dev/null | plutil -convert json -o - - \
+            | jq -e '. == {"com.apple.security.virtualization": true}'
+          # The guest agent is in the package once, signed, and carries no entitlement.
+          agent="$(find "$RUNNER_TEMP/pkg" -path '*/Payload/usr/local/wardyn/bin/wardyn-guest-agent' -type f)"
+          [ -n "$agent" ]
+          [ "$(wc -l <<<"$agent")" -eq 1 ]
+          [ -x "$agent" ]
+          codesign --verify --strict "$agent"
+          [ -z "$(codesign -d --entitlements :- "$agent" 2>/dev/null)" ]
+          # Nothing at run time compares the agent's version, so this proves provenance: the helper reports the
+          # bare release version, and the pair were built from the same commit.
+          [ "$("$helper" version)" = "$version" ]
+          stamp() { go version -m "$1" | grep -E '^[[:space:]]+build[[:space:]]+(-ldflags|vcs\.revision|vcs\.modified)=' || true; }
+          want="$(stamp "$helper")"
+          grep -q 'vcs.revision=' <<<"$want"
+          [ "$(stamp "$agent")" = "$want" ]
+      # The check above cannot see the agent's own stamp (-trimpath drops -ldflags from the build info, and the
+      # agent has no version command), so this reads the stamped variable out of the packaged binary (#3636).
+      - name: The packaged guest agent carries the release stamp
+        run: |
+          set -euo pipefail
+          agent="$(find "$RUNNER_TEMP/pkg" -path '*/Payload/usr/local/wardyn/bin/wardyn-guest-agent' -type f)"
+          [ -n "$agent" ] && [ "$(wc -l <<<"$agent")" -eq 1 ]
+          scripts/check-release-stamp.sh "$agent"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: runner-pkg
@@ -1231,7 +1374,7 @@ jobs:
   # charts, so this is a package + push.
   chart:
     name: Publish the Helm chart (OCI)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: preflight-green
     timeout-minutes: 10
     permissions:
@@ -1255,6 +1398,7 @@ jobs:
         id: push
         env:
           TAG: ${{ github.ref_name }}
+          PUBLISH: ${{ inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}
         run: |
           set -euo pipefail
           ver="${TAG#v}"
@@ -1269,14 +1413,14 @@ jobs:
           test "$chart_ver" = "$ver" \
             || { echo "Chart.yaml version=$chart_ver but the tag is $ver — bump it (RELEASING.md step 1b)"; exit 1; }
           helm package deploy/helm/wardyn -d dist/
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            echo "dry run: packaged dist/wardyn-${ver}.tgz, not pushing"
+          if [ "$PUBLISH" != "true" ]; then
+            echo "not a release tag run, or a dry run: packaged dist/wardyn-${ver}.tgz, not pushing"
             exit 0
           fi
           helm push "dist/wardyn-${ver}.tgz" oci://ghcr.io/cjohnstoniv/charts 2>&1 | tee push.log
           echo "digest=$(grep -oE 'sha256:[a-f0-9]{64}' push.log | head -1)" >> "$GITHUB_OUTPUT"
       - name: Sign the chart (keyless, by digest)
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v')
         run: cosign sign --yes "ghcr.io/cjohnstoniv/charts/wardyn@${{ steps.push.outputs.digest }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -1293,9 +1437,9 @@ jobs:
     name: Release assets (SBOMs, checksums, notices)
     # !failure() lets this run when `images` or `promote` was skipped by the path
     # choice; any job that FAILED still stops it.
-    if: ${{ !cancelled() && !failure() && inputs.dry_run != true }}
-    needs: [preflight-green, images, images-ui-sandbox, promote, chart, binaries, runner-pkg]
-    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && !failure() && inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}
+    needs: [preflight-green, images, images-ui-sandbox, images-ui-sandbox-signin, promote, chart, binaries, runner-pkg]
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: write   # gh release upload
@@ -1311,8 +1455,9 @@ jobs:
           # so leaving it unset made a green release depend on that default
           # never crossing a major — and docs/VERIFY.md's `cosign verify-blob
           # --signature/--certificate` recipe depends on the same v2 shape.
-          # Migrating to `--bundle SHA256SUMS.sigstore.json` means changing that
-          # documented verify recipe in the same edit; until then, pin.
+          # The sign step also writes the Sigstore bundle SHA256SUMS.sigstore.json
+          # (`wardyn runner install` verifies it offline); the .sig/.pem pair stays
+          # for that documented recipe, so keep the pin.
           cosign-release: "v2.6.4"
       - name: Collect the per-image SBOMs
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -1323,9 +1468,19 @@ jobs:
       - name: Assemble the asset set
         env:
           RELEASE_PATH: ${{ needs.preflight-green.outputs.path }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           cp THIRD-PARTY-NOTICES.md LICENSE NOTICE install.sh assets/
+          # The CLI installers carry their own release version (they never ask
+          # releases/latest, which skips pre-releases). Each stamp rewrites exactly
+          # one line; the grep fails the job if that line did not change.
+          ver="${TAG#v}"
+          sed "s|^RELEASE_VERSION=\"@WARDYN_VERSION@\"\$|RELEASE_VERSION=\"${ver}\"|" scripts/install-cli.sh > assets/install-cli.sh
+          sed "s|^\$ReleaseVersion = '@WARDYN_VERSION@'\$|\$ReleaseVersion = '${ver}'|" scripts/install-cli.ps1 > assets/install-cli.ps1
+          grep -qx "RELEASE_VERSION=\"${ver}\"" assets/install-cli.sh
+          grep -qxF "\$ReleaseVersion = '${ver}'" assets/install-cli.ps1
+          chmod +x assets/install-cli.sh
           # The standalone binaries are copies: the verbatim licence texts travel with them.
           tar -czf assets/wardyn-licenses.tar.gz THIRD-PARTY-NOTICES.md licenses/texts
           chmod +x assets/wardyn-{linux,darwin}-* assets/wardyn-runnerd-{linux,darwin}-* 2>/dev/null || true
@@ -1338,17 +1493,28 @@ jobs:
           if [ "$RELEASE_PATH" = promote ]; then
             want=$(yq -r '.jobs.promote.env.IMAGES' ../.github/workflows/release.yml | yq 'length')
           else
-            want=$(yq '[.jobs.images.strategy.matrix.include[], .jobs["images-ui-sandbox"].strategy.matrix.include[]] | length' ../.github/workflows/release.yml)
+            want=$(yq '[.jobs.images.strategy.matrix.include[], .jobs["images-ui-sandbox"].strategy.matrix.include[], .jobs["images-ui-sandbox-signin"].strategy.matrix.include[]] | length' ../.github/workflows/release.yml)
           fi
           have=$(ls -1 sbom-*.cdx.json | wc -l)
           test "$have" -eq "$want" || { echo "expected $want image SBOMs, found $have"; ls -1; exit 1; }
           sha256sum ./* > SHA256SUMS
+          # Each CLI must carry the SHA-256 that this very SHA256SUMS lists for its
+          # platform's runner. -a: the CLI is a binary. The linux/amd64 CLI also
+          # runs, so `version --json` is checked as the person will see it.
+          for p in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+            want=$(awk -v n="wardyn-runnerd-$p" '{x=$2; sub(/^\.\//,"",x); if (x==n) print $1}' SHA256SUMS)
+            test -n "$want" || { echo "SHA256SUMS lists no wardyn-runnerd-$p"; exit 1; }
+            grep -aqF "$want" "wardyn-$p" || { echo "wardyn-$p does not carry the SHA-256 of wardyn-runnerd-$p ($want)"; exit 1; }
+          done
+          want=$(awk '{x=$2; sub(/^\.\//,"",x); if (x=="wardyn-runnerd-linux-amd64") print $1}' SHA256SUMS)
+          test "$(./wardyn-linux-amd64 version --json | jq -r .runnerd_sha256)" = "$want"
       - name: Sign the checksums (keyless)
         working-directory: assets
         run: |
           cosign sign-blob --yes \
             --output-signature SHA256SUMS.sig \
             --output-certificate SHA256SUMS.pem \
+            --bundle SHA256SUMS.sigstore.json --new-bundle-format \
             SHA256SUMS
       - name: Upload to the Release
         env:
@@ -1367,8 +1533,8 @@ jobs:
         run: |
           set -euo pipefail
           have=$(gh release view "$TAG" --json assets -q '.assets[].name' | sort)
-          for want in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem THIRD-PARTY-NOTICES.md LICENSE NOTICE \
-                      install.sh wardyn-linux-amd64 wardyn-linux-arm64 wardyn-darwin-amd64 wardyn-darwin-arm64 \
+          for want in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem SHA256SUMS.sigstore.json THIRD-PARTY-NOTICES.md LICENSE NOTICE \
+                      install.sh install-cli.sh install-cli.ps1 wardyn-linux-amd64 wardyn-linux-arm64 wardyn-darwin-amd64 wardyn-darwin-arm64 \
                       wardyn-windows-amd64.exe wardyn-windows-arm64.exe \
                       wardyn-runnerd-linux-amd64 wardyn-runnerd-linux-arm64 wardyn-runnerd-darwin-amd64 wardyn-runnerd-darwin-arm64 \
                       wardyn-runner-units.tar.gz wardyn-runnerd.pkg wardyn-licenses.tar.gz; do

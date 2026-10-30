@@ -8,6 +8,9 @@ import type { Page } from "@playwright/test";
 import { test, expect, MEMBER_PRINCIPAL, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, sql } from "./fixtures";
 import { APPROVAL, RUN_COCKPIT, SECURITY_ONLY_REASON, UNTIL_PAST } from "../src/app/components/wardyn/copy";
 import { APPROVALS } from "../src/app/lib/approvals-copy";
+import { RUN_REF } from "../src/app/components/wardyn/copy/run-ref";
+import { APPROVALS_TAB } from "../src/app/components/wardyn/copy/approvals";
+import { DENIED } from "../src/app/lib/permissions-copy";
 import { REAUTH_ROW, REAUTH_TITLE } from "../src/app/components/wardyn/model-access-copy";
 import { toDatetimeLocalValue } from "../src/app/lib/datetime-local";
 import { aheadByHours } from "../src/app/lib/test-clock";
@@ -165,8 +168,10 @@ test.describe("Approvals screen", () => {
     // ("Credential"), not the raw wire token (ui-approvals-2, copy.ts's
     // APPROVAL_KIND_LABEL via WIRE_TO_COPY).
     await expect(page.getByText("Credential", { exact: true }).first()).toBeVisible();
-    // The PENDING state badge renders capitalized ("Pending").
-    await expect(page.getByText("Pending", { exact: true }).first()).toBeVisible();
+    // #3031: a card in the Pending tab does not wear a Pending chip; only the tab itself reads "Pending".
+    await expect(page.getByText("What you're approving:").first()).toBeVisible();
+    const pendingChips = await page.getByText("Pending", { exact: true }).evaluateAll((els) => els.filter((e) => e.getAttribute("role") !== "tab").length);
+    expect(pendingChips).toBe(0);
     // The egress pending card's derived title carries its unique scope domain.
     await expect(page.getByText(markerRe("ro-pending.example.com")).first()).toBeVisible();
 
@@ -277,6 +282,11 @@ test.describe("Approvals screen", () => {
 
     // Honesty: a DENIED verdict renders in the danger/red tone, never a green ✓.
     await expect(page.getByText("Denied", { exact: true }).first()).toHaveClass(/text-danger/);
+
+    // #3036: a decided row names its run through RunRef (title, then the short id that copies), never the bare id link.
+    const ref = page.getByTestId("run-ref").filter({ has: page.locator(`button[title^="${anyRunId()}"]`) }).first();
+    await expect(ref).toContainText(anyRunId().replace(/^run_/, "").slice(0, 8));
+    await expect(ref.getByRole("button", { name: /^[0-9a-f]{8}/ })).toHaveAttribute("title", new RegExp(RUN_REF.CLICK_TO_COPY));
 
     // Decided cards are terminal — no Approve/Deny actions.
     await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
@@ -556,6 +566,8 @@ test.describe("Approvals — decision-scope split button (run cockpit)", () => {
       const row = page.getByTestId("live-approval-row");
       await expect(row).toBeVisible();
       await expect(row.getByText(markerRe(marker))).toBeVisible();
+      // #3030: the strip row reads the Approvals card's human title, not the bare host.
+      await expect(row.getByText(`Reach ${marker}`, { exact: true })).toBeVisible();
 
       // The split button's bare halves stay named "Approve"/"Deny" — same
       // unanchored match the card buttons above use (not exact:true: that's
@@ -890,6 +902,55 @@ test.describe("F-12 — LiveApprovals row gate mirrors canDecideApproval, not a 
       await expect(row.getByRole("button", { name: "Approve" })).toBeDisabled();
       await expect(row.getByRole("button", { name: "Deny" })).toBeDisabled();
       await expect(panel.getByText(SECURITY_ONLY_REASON, { exact: true })).toBeVisible();
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
+  // #3438: the Approvals page card and the run's Approvals tab close on the same refusal the strip does.
+  async function refuseFromDialog(page: Page, scope: ReturnType<Page["locator"]>, marker: string, id: string): Promise<void> {
+    await page.route(`**/api/v1/approvals/${id}/approve`, (route) =>
+      route.fulfill({
+        status: 403,
+        json: { error: `you are not granted egress host ${marker} — an admin decides this one, or can grant it to you`, reason: "capability_egress_host" },
+      }),
+    );
+    await expect(scope.getByRole("button", { name: "Approve" })).toBeEnabled();
+    await expect(scope.getByText(DENIED.APPROVE_CHIP, { exact: true })).toHaveCount(0);
+    await scope.getByRole("button", { name: "Approve" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Approve", exact: true }).click();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(scope.getByRole("button", { name: "Approve" })).toBeDisabled();
+    await expect(scope.getByRole("button", { name: "Deny" })).toBeDisabled();
+    await expect(scope.getByText(DENIED.APPROVE_CHIP, { exact: true })).toBeVisible();
+  }
+
+  test("a capability_egress_host refusal turns the Approvals page card's buttons off and says why", async ({ page }) => {
+    clearPending();
+    const runId = await memberRunningRun(page);
+    const marker = uniqueMarker("3438-card");
+    const id = seedPending({ kind: "egress_domain", runId, scope: { host: marker, port: 443 } });
+    try {
+      await page.goto("/approvals");
+      await expect(page.getByRole("heading", { name: "Approvals", level: 1 })).toBeVisible();
+      const card = page.locator("div.rounded-xl").filter({ hasText: markerRe(marker) }).filter({ has: page.getByRole("button", { name: "Approve" }) }).last();
+      await refuseFromDialog(page, card, marker, id);
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
+  test("a capability_egress_host refusal turns the run Approvals tab's buttons off and says why", async ({ page }) => {
+    clearPending();
+    const runId = await memberRunningRun(page);
+    const marker = uniqueMarker("3438-tab");
+    const id = seedPending({ kind: "egress_domain", runId, scope: { host: marker, port: 443 } });
+    try {
+      await page.goto(`/runs/${runId}`);
+      await page.getByRole("tab", { name: /^Approvals/ }).click();
+      await refuseFromDialog(page, page.getByRole("region", { name: APPROVALS_TAB.WAITING }), marker, id);
     } finally {
       deleteApproval(id);
     }

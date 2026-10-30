@@ -48,6 +48,8 @@ export const POLICY_TAB = {
   // S-31
   hidden: "Hidden",
   hiddenTip: "Only admins can see this.",
+  // A mount's host path: hidden from every reader but a super admin.
+  mountHiddenTip: "Only a super admin can see this.",
   // S-32
   scope:
     "Not shown here: hosts approved while the run was running (see Approvals), credentials it was handed (see Credentials on Overview), folders added from a workspace or drive, and Azure DevOps access that came from the connection's defaults.",
@@ -60,6 +62,8 @@ export const POLICY_TAB = {
 export const CHANGE_HEADING = {
   limitsOwn: "Narrowed to fit your limits", // S-14a
   limitsOther: (person: string) => `Narrowed to fit the limits set for ${person}`, // S-14b
+  wallsOwn: "Your walls",
+  wallsOther: (person: string) => `${person}'s walls`,
   workspace: "Added for the workspace", // S-15
   source_control: "Added so the run can reach its code", // S-16
   component: "Added for an attached component",
@@ -75,7 +79,34 @@ export const CHANGE_HEADING = {
   overlay: "Set by the policy you chose for this run",
 } as const;
 
-export type PlainCause = Exclude<RunPolicyCause, "limits" | "unit" | "restart">;
+// The field a change row is about, in the console's words: the middle column of a change group (T4-c, board R16).
+// The Summary's own section and row names are reused; a field this map lacks leaves its cell empty, never a wire
+// name. "Clipboard and files" is the board's word for the desktop directions.
+export const FIELD_LABEL: Record<string, string> = {
+  allowed_domains: "Allowed hosts",
+  denied_domains: "Blocked hosts",
+  allow_all_egress: "Network",
+  first_use_approval: "Any other host",
+  first_use_hold_seconds: "Any other host",
+  allowed_methods: "Request types",
+  min_confinement_class: "Barrier",
+  eligible_grants: "Credentials",
+  desktop: "Clipboard and files",
+  workspace_mounts: "Folders from the host",
+  workspace_repos: "Repositories",
+  ui_apps: "Apps",
+  tool_rules: "Tool rules",
+  git_push_any_branch: "Pushes",
+  azure_devops_capabilities: "Azure DevOps access",
+  github_capabilities: "GitHub access",
+  auto_stop_after_sec: "Limits",
+  "resources.cpu_millis": "Limits",
+  "resources.memory_mib": "Limits",
+  "resources.pids_limit": "Limits",
+  "resources.disk_mib": "Limits",
+};
+
+export type PlainCause = Exclude<RunPolicyCause, "limits" | "unit" | "restart" | "walls">;
 
 // S-34 .. S-47: the Summary view.
 export const SUMMARY = {
@@ -93,6 +124,14 @@ export const SUMMARY = {
   blockedHosts: "Blocked hosts",
   otherHost: "Any other host",
   requestTypes: "Request types",
+  // The host marks (#2956, mock R13). cmd/wardyn/run_policy.go holds the same five strings.
+  inspected: "Inspected",
+  tunnelOnly: "Tunnel only",
+  inspectedMeaning:
+    "Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate.",
+  tunnelOnlyMeaning:
+    "Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here.",
+  tunnelOnlyAllowAll: "Hosts not listed as Inspected pass through unread.",
   // S-37
   refused: "Refused",
   refusedThenApproval: "Refused, then sent for approval",

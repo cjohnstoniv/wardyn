@@ -20,6 +20,10 @@ on:
         description: "Stage the multi-arch images and attest them. Leave on for a release candidate; a hand run that must not touch the registry turns it off."
         type: boolean
         default: true
+      compat_refusal:
+        description: "runner-compat-walk also runs step 3b (DR-0436): the released runner's exit refused for good by this tree's organisation is acknowledged once. Off in the nightly."
+        type: boolean
+        default: false
   # Kept, but nothing calls it today: ci.yml's train-suites dispatches this workflow with
   # scope=candidate and publish=false. The input is a string here (workflow_call has no choice
   # type); a value other than candidate runs every lane.
@@ -71,7 +75,7 @@ concurrency:
 jobs:
   e2e-live:
     if: inputs.scope != 'candidate'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -122,7 +126,7 @@ jobs:
   # key not available in CI. On native docker the proxy->control-plane egress
   # callback routes, so the recording-replay synthesis allowlist is populated too.
   task-e2e-live:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -186,7 +190,7 @@ jobs:
   # into a red job instead of a green one that proved runc again. No KVM is
   # needed: runsc's default systrap platform runs in an ordinary VM.
   gvisor-cc2-live:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     env:
       RUNSC_RELEASE: "20260601"
@@ -282,7 +286,7 @@ jobs:
   # uniquely-namespaced compose stack and builds its own agent image, so it
   # must not share a runner with the e2e jobs above.
   ssh-e2e-live:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -319,6 +323,51 @@ jobs:
           path: test/reports/e2e/ssh-e2e.log
           if-no-files-found: error
 
+  # Real editor clients against the SSH gateway: Mutagen 0.18.1 (sync create + flush) and
+  # the JetBrains remote-dev-server bootstrap (IntelliJ IDEA 2026.2.3), run in a container
+  # (test/editors/Dockerfile), never on the runner. Versions and sha256 are pinned there.
+  # docs/SSH.md's "Editors over the gateway" table cites this job by name, so a rename
+  # changes that table too. It reuses run-e2e-ssh.sh's dedicated stack in its editors mode.
+  #
+  # NEVER RUN BEFORE on a hosted runner: NOTIFY_EXEMPT_UNTIL (scripts/test-repo-guards.sh),
+  # kept out of notify-new-lanes' needs and release.yml's watched= until it has gone green
+  # on a real scheduled run. Not a required check.
+  ssh-editors-live:
+    if: inputs.scope != 'candidate'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: unit
+      - name: Docker available
+        run: docker --version
+      - name: Editor clients against the SSH gateway (dedicated compose stack)
+        env:
+          WARDYN_TEST_DOCKER: "1"
+        shell: bash
+        run: |
+          mkdir -p test/reports/e2e
+          make test-e2e-ssh-editors 2>&1 | tee test/reports/e2e/ssh-editors.log
+      - name: Upload e2e results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ssh-editors-live-results
+          path: test/reports/e2e/ssh-editors.log
+          if-no-files-found: error
+
   # The guided governance test-drive — the walkthrough the docs point a new
   # operator at (clone + governed egress, egress deny, metadata block, first-use
   # approval, brokered git, kill cascade, recording). It ran in NO automation, so
@@ -328,7 +377,7 @@ jobs:
   # claude-code agent image (AGENT=claude-code in the script), which the compose
   # `up` does not build.
   test-drive:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -353,7 +402,7 @@ jobs:
   # waits, collects artifacts, tears down. Also asserts exit-code propagation:
   # a task that exits 3 must fail the script with exit 3.
   ci-mode-dogfood:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -404,10 +453,10 @@ jobs:
   #
   # NEVER RUN BEFORE on a hosted runner: NOTIFY_EXEMPT (scripts/test-repo-guards.sh),
   # kept out of notify-new-lanes' needs and release.yml's watched= until it has
-  # gone green on a real scheduled run, the same posture kind-survival-walk has.
+  # gone green on a real scheduled run, the same promotion rule kind-survival-walk had.
   ci-mode-dogfood-model-fake:
     if: inputs.scope != 'candidate'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -469,7 +518,7 @@ jobs:
   # those cases (internal/runner/docker network/integration tests,
   # internal/envbuild's integration_test.go) actually exercise a live daemon.
   docker-tagged-live:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -558,7 +607,7 @@ jobs:
   # 2026-09-28, run 36393687863), so it is now in notify-new-lanes.needs +
   # release.yml's watched= (guard 13) rather than NOTIFY_EXEMPT.
   provider-subscription-docker-pg:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       packages: read
@@ -639,7 +688,7 @@ jobs:
   # control plane's own shared-host concurrency safety (scripts/test-concurrent.sh).
   test-e2e-concurrent:
     if: inputs.scope != 'candidate'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -674,7 +723,7 @@ jobs:
   # one up, the same way ci.yml's helm-install-test does in its desktop-envelope
   # half.
   byoi-e2e-live:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -723,7 +772,7 @@ jobs:
   # to invoke it — but for that reason it must not share a runner with the jobs
   # above.
   ui-sandbox-e2e-live:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -768,7 +817,8 @@ jobs:
   # latency still catches before a tag.
   #
   # STAGING CONTRACT. A `workflow_dispatch` run pushes every row with
-  # `stage: "true"` (and buildx-smoke-ui-sandbox's two rows) to
+  # `stage: "true"` (and buildx-smoke-ui-sandbox's two rows and
+  # buildx-smoke-ui-sandbox-signin's one) to
   # ghcr.io/cjohnstoniv/staging/<image>:run-<run_id> and attests its build
   # provenance; those digests are what release.yml promotes to the release
   # tags. A scheduled run pushes nothing: no registry login, nothing attested,
@@ -785,9 +835,13 @@ jobs:
   # SELECTS its AWS CLI installer by TARGETARCH. timeout-minutes is generous on
   # purpose: emulated apt/npm is slow, and a timeout kill here would read as a
   # build break.
+  #
+  # agent-claude-code is not a row here: it is never published (release.yml's `images`
+  # matrix says why), so it needs no staging, and agent-claude-code-native below
+  # builds each architecture on a runner of that architecture instead of emulating arm64.
   buildx-smoke:
     name: multi-arch build (${{ matrix.name }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -806,6 +860,7 @@ jobs:
               GO_BUILD_TAGS=docker,k8s
               RELEASE_BUILD=true
             stage: "true"
+            gomod: "true"
           # The same recipe with the Go Cryptographic Module pinned to the
           # snapshot CMVP certificate #5247 covers. release.yml's `images` row
           # carries the identical build-args (test-repo-guards.sh guard 16).
@@ -816,33 +871,33 @@ jobs:
               RELEASE_BUILD=true
               GOFIPS140=v1.0.0-c2097c7c
             stage: "true"
+            gomod: "true"
           - name: wardyn-proxy
             dockerfile: deploy/compose/Dockerfile.proxy
             build-args: ""
             stage: "true"
+            gomod: "true"
           - name: wardyn-runnerd
             dockerfile: deploy/compose/Dockerfile.runnerd
             build-args: |
               RELEASE_BUILD=true
             stage: "true"
+            gomod: "true"
           - name: agent-base
             dockerfile: deploy/images/base/Dockerfile
             build-args: ""
             stage: "true"
+            gomod: "true"
           - name: agent-codex-cli
             dockerfile: deploy/images/codex-cli/Dockerfile
             build-args: ""
             stage: "true"
+            gomod: "true"
           - name: agent-aws-sso
             dockerfile: deploy/images/aws-sso/Dockerfile
             build-args: ""
             stage: "true"
-          # Never pushed, because it bundles the vendor CLI (release.yml's
-          # `images` matrix explains why that image is not published).
-          - name: agent-claude-code
-            dockerfile: deploy/images/claude-code/Dockerfile
-            build-args: ""
-            stage: "false"
+            gomod: "true"
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
@@ -867,6 +922,24 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # The image builds read the module set this job already downloaded (the Go
+      # Dockerfiles' `gomodcache` build context) instead of each re-fetching every module
+      # from the proxy inside buildx, where one proxy stream error failed a whole build
+      # (#3469). The cache is this job's own fresh `go mod download` of the checked-out
+      # go.mod/go.sum, so it carries nothing the tree did not ask for, and each build runs
+      # `go mod verify` over it. release.yml keeps its cold fetch (DECISIONS-010.md:1137).
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        if: matrix.gomod == 'true'
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Fill the Go module cache for the image builds
+        id: gomod
+        if: matrix.gomod == 'true'
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+          echo "dir=$(go env GOMODCACHE)/cache/download" >> "$GITHUB_OUTPUT"
       - name: Build both platforms (pushed to staging on a dispatch, discarded otherwise)
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
@@ -877,6 +950,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           provenance: false
           build-args: ${{ matrix.build-args }}
+          build-contexts: ${{ matrix.gomod == 'true' && format('gomodcache={0}', steps.gomod.outputs.dir) || '' }}
           labels: org.opencontainers.image.revision=${{ github.sha }}
           tags: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}:run-${{ github.run_id }}
           # No cache-from or cache-to: a cached apt-get layer would ship stale Debian packages.
@@ -902,6 +976,80 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
+  # agent-claude-code on each architecture's own runner (#2980). The image is a local
+  # build recipe that release.yml never publishes, so nothing here is staged or pushed.
+  # Its RUN steps (apt, npm, gh, the AWS CLI) run as the target arch, so the arm64 leg
+  # builds on GitHub's arm64 runner rather than under QEMU: no setup-qemu step, nothing
+  # emulated. Both legs then run what the image contract promises, in the image just
+  # built: the harness reports its version and agent-run's selftest passes.
+  # The checks are named `multi-arch build (...)` so green-by-tree.sh and
+  # release-patch.sh keep judging them as the arm64 half's proof before a release.
+  agent-claude-code-native:
+    name: multi-arch build (agent-claude-code, ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-26.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
+        run: |
+          command -v dockerd >/dev/null || exit 0
+          f=/etc/docker/daemon.json
+          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
+          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
+          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
+          running="$(docker ps -q)"; sudo systemctl restart docker
+          [ -z "$running" ] || docker start $running >/dev/null
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+      # The same job-filled module cache as buildx-smoke (#3469); the Dockerfile verifies it.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Fill the Go module cache for the image build
+        id: gomod
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+          echo "dir=$(go env GOMODCACHE)/cache/download" >> "$GITHUB_OUTPUT"
+      - name: Build the runner's own architecture (loaded, not pushed)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: deploy/images/claude-code/Dockerfile
+          push: false
+          load: true
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          build-contexts: gomodcache=${{ steps.gomod.outputs.dir }}
+          tags: wardyn/agent-claude-code:native
+          # No cache-from or cache-to: a cached apt-get layer would ship stale Debian packages.
+      - name: Acceptance on this architecture (harness version, agent-run selftest)
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          img=wardyn/agent-claude-code:native
+          test "$(docker image inspect "$img" --format '{{.Architecture}}')" = "$ARCH"
+          case "$ARCH" in amd64) m=x86_64 ;; arm64) m=aarch64 ;; esac
+          test "$(docker run --rm "$img" uname -m)" = "$m"
+          docker run --rm "$img" claude --version
+          docker run --rm "$img" agent-run --selftest
+
   # agent-vscode and agent-novnc build FROM the agent-base staged by
   # buildx-smoke in this same run, by digest, so the tag a release promotes is
   # built on the base it ships with. Dispatch only: there is nothing to build
@@ -910,7 +1058,7 @@ jobs:
     name: multi-arch build (${{ matrix.name }})
     needs: buildx-smoke
     if: github.event_name == 'workflow_dispatch' && inputs.publish
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     permissions:
       contents: read
@@ -925,9 +1073,14 @@ jobs:
         include:
           - name: agent-vscode
             dockerfile: deploy/images/vscode/Dockerfile
+            base: agent-base
           - name: agent-novnc
             dockerfile: deploy/images/novnc/Dockerfile
-    steps:
+            base: agent-base
+    # Written once and reused by buildx-smoke-ui-sandbox-signin
+    # (`*ui_sandbox_stage_steps`); a row's `base` names the staged image it
+    # builds FROM.
+    steps: &ui_sandbox_stage_steps
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
@@ -950,12 +1103,14 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Resolve the staged agent-base digest
+      - name: Resolve the staged base image's digest
         id: base
+        env:
+          BASE_NAME: ${{ matrix.base }}
         run: |
           set -euo pipefail
-          digest="$(docker buildx imagetools inspect "ghcr.io/cjohnstoniv/staging/agent-base:run-${{ github.run_id }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
-          ref="ghcr.io/cjohnstoniv/staging/agent-base@${digest}"
+          digest="$(docker buildx imagetools inspect "ghcr.io/cjohnstoniv/staging/${BASE_NAME}:run-${{ github.run_id }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          ref="ghcr.io/cjohnstoniv/staging/${BASE_NAME}@${digest}"
           printf '%s' "$ref" | grep -Eq '@sha256:[0-9a-f]{64}$' \
             || { echo "not a digest ref: $ref" >&2; exit 1; }
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
@@ -978,6 +1133,31 @@ jobs:
           subject-name: ghcr.io/cjohnstoniv/staging/${{ matrix.name }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+
+  # agent-novnc-signin (#2972) builds FROM the agent-novnc staged by
+  # buildx-smoke-ui-sandbox in this same run, by digest, as that job builds on
+  # agent-base: so its own job, after that one, with the same steps.
+  buildx-smoke-ui-sandbox-signin:
+    name: multi-arch build (${{ matrix.name }})
+    needs: buildx-smoke-ui-sandbox
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # attest-build-provenance's OIDC token
+      attestations: write
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: agent-novnc-signin
+            dockerfile: deploy/images/novnc-signin/Dockerfile
+            base: agent-novnc
+    steps: *ui_sandbox_stage_steps
 
   # ── Live Kubernetes AWS SSO walk (kind) ─────────────────────────────────────
   # scripts/kind-sso-walk.sh only ever ran by hand, so the "a member signs in
@@ -1029,7 +1209,7 @@ jobs:
   # actually reached its own PASS line and reported at least one executed
   # spec file — belt and suspenders, neither one a grep of the skip message.
   kind-sso-walk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1184,7 +1364,7 @@ jobs:
   # (the self-skip happens before the script dispatches to the ado profile, so
   # the message names only "the AWS SSO walk" — that's expected, not a bug).
   kind-sso-ado-walk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
       WARDYN_QUICKSTART_CLUSTER: wardyn-ado
@@ -1263,7 +1443,7 @@ jobs:
   # kind-sso-walk builds, built fresh in this job (nightly jobs run on separate
   # runners, so there is nothing to reuse from the job above).
   compose-sso-roles:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1342,14 +1522,14 @@ jobs:
           if-no-files-found: error
 
   # T-40 (#700), kind leg: scripts/kind-survival-walk.sh against the SAME
-  # `make kind-quickstart` cluster kind-sso-walk reuses. NEVER RUN BEFORE — see
-  # NOTIFY_EXEMPT in scripts/test-repo-guards.sh — kept out of
-  # notify-new-lanes' needs and release.yml's watched= until it has gone green
-  # here at least once, the same posture PR #1245 gave daemon-proxy-secret-kind.
+  # `make kind-quickstart` cluster kind-sso-walk reuses. Green on a real scheduled run (39782025578),
+  # so it is in notify-new-lanes' needs and release.yml's watched= (guard 13), and runs under
+  # scope=candidate: a watched job must never be skipped.
   kind-survival-walk:
-    if: inputs.scope != 'candidate'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ubuntu-26.04
+    # 50: the walk measured 16-18 minutes (four green nightlies on 2026-10-28) and the prewrapped check adds
+    # about five, so twice the new maximum.
+    timeout-minutes: 50
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
@@ -1407,12 +1587,41 @@ jobs:
             exit 1
           fi
           grep -q '^kind-survival-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
+      # A prewrapped image's check on this cluster (design final §3; internal/runner/k8s/imagecheck_kind_test.go):
+      # agent-base passes, agent-base without wardyn-rec is refused, and a check whose process is killed is
+      # reclaimed by the orphan sweep. Its own PSS-restricted namespace, so the cluster's wardynd never sweeps
+      # it; the internal kubeconfig because the boot canary dials the apiserver's address from a pod.
+      - name: Prewrapped image check on the cluster (real image, killed control plane)
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'FROM wardyn/agent-base:local\nUSER root\nRUN rm /usr/local/bin/wardyn-rec\nUSER agent\n' \
+            | docker build -t wardyn/agent-base:prewrap-no-rec -
+          kind load docker-image wardyn/agent-base:prewrap-no-rec --name wardyn-quickstart
+          kubectl --context kind-wardyn-quickstart create namespace wardyn-prewrap-check
+          kubectl --context kind-wardyn-quickstart label namespace wardyn-prewrap-check \
+            pod-security.kubernetes.io/enforce=restricted
+          NODE_IP=$(kubectl --context kind-wardyn-quickstart get nodes wardyn-quickstart-control-plane \
+            -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
+          kind get kubeconfig --name wardyn-quickstart --internal \
+            | sed "s/wardyn-quickstart-control-plane:6443/${NODE_IP}:6443/" > "$RUNNER_TEMP/prewrap.kc"
+          mkdir -p test/reports/e2e
+          KUBECONFIG="$RUNNER_TEMP/prewrap.kc" WARDYN_TEST_K8S=1 WARDYN_K8S_NAMESPACE=wardyn-prewrap-check \
+            WARDYN_PROXY_IMAGE=wardyn/wardyn-proxy:quickstart WARDYN_TEST_PREWRAP_IMAGE=wardyn/agent-base:local \
+            WARDYN_TEST_PREWRAP_NO_REC_IMAGE=wardyn/agent-base:prewrap-no-rec \
+            go test -tags k8s -count=1 -v -timeout 15m -run '^TestKindPrewrappedCheck' ./internal/runner/k8s/ \
+            2>&1 | tee test/reports/e2e/prewrap-check.log
+          # A skip exits 0: both tests must have run and passed.
+          grep -q '^--- PASS: TestKindPrewrappedCheck ' test/reports/e2e/prewrap-check.log
+          grep -q '^--- PASS: TestKindPrewrappedCheckControlPlaneKilled ' test/reports/e2e/prewrap-check.log
       - name: Upload walk evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: kind-survival-walk-results
-          path: test/reports/e2e/kind-survival-walk.log
+          path: |
+            test/reports/e2e/kind-survival-walk.log
+            test/reports/e2e/prewrap-check.log
           if-no-files-found: error
 
   # scripts/k6-kind-conformance.sh, the Kubernetes runner's kind conformance. It creates and
@@ -1420,17 +1629,16 @@ jobs:
   # real organisation (wardynd and postgres from deploy/helm/wardyn), enrols runnerd through its
   # chart and rendered Role, and runs test/k6 against both, then under runnerd's own token.
   # bind-delete-serial and bind-delete-overlap are the release gate for the unbound-pod arm: a pod
-  # deleted before it binds must never leave a proxy no one can stop. NEVER RUN BEFORE: NOTIFY_EXEMPT in
-  # scripts/test-repo-guards.sh, out of notify-new-lanes' needs and release.yml's watched= until it
-  # has gone green here, the same posture kind-survival-walk has.
+  # deleted before it binds must never leave a proxy no one can stop. Green on a real scheduled run
+  # (39782025578), so it is in notify-new-lanes' needs and release.yml's watched=: green-by-tree.sh
+  # requires every one of its four "k6-kind-conformance (<kubelet>, <suite>)" legs (#3439).
   # One job per kubelet and suite (four legs, each its own kind cluster), because the two kubelets
   # one after the other with both suites took 61 minutes. The kubelet pins live here, not in the
   # script's default, so a bump is made in both places. fail-fast is off: a red leg must not hide
   # the other three.
   k6-kind-conformance:
-    if: inputs.scope != 'candidate'
     name: k6-kind-conformance (${{ matrix.kubelet }}, ${{ matrix.suite }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1496,17 +1704,114 @@ jobs:
           path: test/reports/e2e/
           if-no-files-found: error
 
+  # #3804: a WardynWorkload, end to end on a real kind cluster. scripts/k6-kind-conformance.sh with
+  # K6_SUITES=workload stands up the same organisation and org runner as the k6 legs, plus a throwaway
+  # in-cluster Dex whose two people sign in for real (a binding is made by a signed-in person): the
+  # bound namespace's resource launches a run on the bound pool and carries its status, its delete ends
+  # the run, and an unbound namespace's resource is refused on its status. A job of its own so the four
+  # k6 legs carry no Dex or OIDC. Watched from day one: the 0.10.0 final is gated on it.
+  # timeout-minutes: the rule above is twice the measured maximum. 50 is set from an estimated 20-25
+  # minutes until it is measured, and is tightened to twice the measured maximum after three green runs.
+  k6-workload-e2e:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 50
+    steps:
+      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
+        run: |
+          command -v dockerd >/dev/null || exit 0
+          f=/etc/docker/daemon.json
+          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
+          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
+          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
+          running="$(docker ps -q)"; sudo systemctl restart docker
+          [ -z "$running" ] || docker start $running >/dev/null
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: k8s
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          install_only: "true"
+      - name: WardynWorkload end to end (kind v1.35.0, Dex sign-ins)
+        env:
+          WARDYN_TEST_K8S: "1"
+          K6_KEEP_LOGS: ${{ github.workspace }}/test/reports/e2e
+          K6_NODE_IMAGES: kindest/node:v1.35.0
+          K6_SUITES: workload
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test/reports/e2e
+          ./scripts/k6-kind-conformance.sh 2>&1 | tee test/reports/e2e/k6-workload-e2e.log
+          echo "K6_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      - name: Assert the harness ran (not a self-skip) and passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/k6-workload-e2e.log
+          if [ "${K6_EXIT:-}" = "77" ]; then
+            echo "::error::k6-kind-conformance.sh self-skipped (exit 77) — WARDYN_TEST_K8S did not reach the step"
+            exit 1
+          fi
+          if [ "${K6_EXIT:-1}" != "0" ]; then
+            echo "::error::k6-kind-conformance.sh exited ${K6_EXIT:-<unset>} — see the uploaded log"
+            exit 1
+          fi
+          grep -q '^k6-kind-conformance: PASS' "$log" || { echo "::error::the harness never reached its own closing PASS line"; exit 1; }
+      - name: Upload harness evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: k6-workload-e2e-results
+          path: test/reports/e2e/
+          if-no-files-found: error
+
+  # Each k6 leg's failure rate over the last 30 scheduled nightlies, from the job history (#3538), in
+  # this run's summary. A failed leg costs a full rerun, so a leg that keeps failing shows as a number.
+  # It reads history, so it needs no `needs:` (this run is not counted until it completes), and it
+  # must not turn the nightly red, so a gh error is not a failure. actions: read is all it asks for.
+  k6-rerun-rate:
+    if: inputs.scope != 'candidate'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    continue-on-error: true
+    permissions:
+      contents: read # checkout
+      actions: read # gh run list / gh run view
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Write each k6 leg's failure rate to the job summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### k6-kind-conformance: failure rate per leg, last 30 scheduled nightlies"
+            echo
+            ./scripts/k6-rerun-rate.sh 30
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # The acceptance walks that had no caller (#3110): kind-components-walk (a header secret absent from
   # the sandbox's environment and files, a file secret 0440 root:fsGroup, the audit rows, and the docker
   # half of the file-mode proof) and kind-run-output-walk in both modes (a run's output surviving a
   # restart, recovered from the recording in pg mode, #1831). Each walk makes and deletes its OWN
-  # quickstart cluster, so the three legs share nothing and run apart. NEVER RUN BEFORE: NOTIFY_EXEMPT in
-  # scripts/test-repo-guards.sh, out of notify-new-lanes' needs and release.yml's watched= until each
-  # leg has gone green here, the same posture kind-survival-walk has.
+  # quickstart cluster, so the three legs share nothing and run apart. Green on a real scheduled run
+  # (39782025578), so it is in notify-new-lanes' needs and release.yml's watched=: green-by-tree.sh
+  # requires every "kind-acceptance-walks (<walk>)" leg (#3439).
   kind-acceptance-walks:
-    if: inputs.scope != 'candidate'
     name: kind-acceptance-walks (${{ matrix.walk }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -1577,11 +1882,10 @@ jobs:
   # T-41 (#701): scripts/hybrid-walk.sh — laptop compose <-> org kind. Same
   # `make kind-quickstart` cluster as the job above; the laptop is its own
   # dedicated compose project this job builds fresh (nightly runners share
-  # nothing between jobs). NEVER RUN BEFORE — same NOTIFY_EXEMPT posture as
+  # nothing between jobs). Green on a real scheduled run (39782025578), so watched like
   # kind-survival-walk above.
   hybrid-walk:
-    if: inputs.scope != 'candidate'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1659,10 +1963,9 @@ jobs:
   # `make kind-quickstart`'s shared one — see that script's own header for
   # what is and is not built. Needs read access to this repo's own published
   # ghcr.io packages (the chart + wardynd images), hence packages: read below.
-  # NEVER RUN BEFORE — same NOTIFY_EXEMPT posture as the two jobs above.
+  # Green on a real scheduled run (39782025578), so watched like the jobs above.
   kind-upgrade-walk:
-    if: inputs.scope != 'candidate'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     permissions:
       contents: read
@@ -1725,7 +2028,7 @@ jobs:
   # Released binaries come from the release assets, released images from ghcr.io
   # (both public); the candidate images are built here from the tree.
   runner-compat-walk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1746,6 +2049,7 @@ jobs:
         env:
           WARDYN_TEST_DOCKER: "1"
           GH_TOKEN: ${{ github.token }} # the releases API read that resolves the released tag
+          WARDYN_COMPAT_REFUSAL: ${{ inputs.compat_refusal && '1' || '' }}
         shell: bash
         run: |
           set +e
@@ -1753,6 +2057,8 @@ jobs:
           ./scripts/runner-compat-walk.sh 2>&1 | tee test/reports/e2e/runner-compat-walk.log
           echo "WALK_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
       - name: Assert the walk actually ran (not a self-skip) and passed
+        env:
+          WARDYN_COMPAT_REFUSAL: ${{ inputs.compat_refusal && '1' || '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1766,6 +2072,9 @@ jobs:
             exit 1
           fi
           grep -q '^runner-compat-walk: PASS' "$log" || { echo "::error::the walk never reached its own closing PASS line"; exit 1; }
+          if [ "${WARDYN_COMPAT_REFUSAL}" = "1" ]; then
+            grep -q '^refusal-acked-once: PASS' "$log" || { echo "::error::step 3b (compat_refusal) never passed"; exit 1; }
+          fi
       - name: Upload walk evidence (log, wardynd and serve logs, run reads)
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -1781,7 +2090,7 @@ jobs:
   # the same pins; the kind leg installs Vault from its Helm chart and logs in
   # with Kubernetes auth and a projected service-account token.
   kek-conformance:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1829,7 +2138,7 @@ jobs:
   # run 36377937351) — now in notify-new-lanes.needs AND release.yml's
   # watched= (guard 13), per PR #1245 review F2's own promotion rule.
   daemon-proxy-secret-kind:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1859,7 +2168,7 @@ jobs:
   # does not verify must never decode into a session. Every PR runs the seed
   # corpus as an ordinary test; this lane searches past it.
   fuzz:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
@@ -1917,7 +2226,7 @@ jobs:
   # PR that breaks them; PRs that conflict with an earlier one are set aside
   # and listed. Also flags any open PR stacked on a branch that is no longer
   # open (merged/closed) and so should have been retargeted to main. psql
-  # (preinstalled on ubuntu-latest) resets the database between check runs.
+  # (preinstalled on ubuntu-26.04) resets the database between check runs.
   #
   # Informational: it never merges or pushes anything for real, only reports.
   # No measured baseline yet (new job) — 180 min budgets for about 30 check
@@ -1925,7 +2234,7 @@ jobs:
   # each); re-measure and tighten once nightly runs exist (docs/CI.md).
   migration-merge-check:
     if: inputs.scope != 'candidate'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 180
     permissions:
       packages: read
@@ -1980,7 +2289,7 @@ jobs:
   # 36786358051, so it is in notify-new-lanes.needs and release.yml's watched= like the
   # other lanes.
   managed-settings-drift:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2022,7 +2331,7 @@ jobs:
   published-image-scan:
     if: inputs.scope != 'candidate'
     name: published-image-scan (${{ matrix.name }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
       contents: read # checkout (.trivyignore) and `gh release list`; the images are public
@@ -2097,7 +2406,7 @@ jobs:
     needs: [published-image-scan]
     # main only: a workflow_dispatch on any other branch must not post to the main-health issue.
     if: failure() && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       issues: write
@@ -2128,10 +2437,10 @@ jobs:
           fi
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, buildx-smoke-ui-sandbox, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, agent-claude-code-native, buildx-smoke-ui-sandbox, buildx-smoke-ui-sandbox-signin, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, k6-workload-e2e, kind-acceptance-walks, hybrid-walk, kind-upgrade-walk]
     # main only: a workflow_dispatch on any other branch must not post to the main-health issue.
     if: failure() && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       issues: write
@@ -2153,7 +2462,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing (${failed:-no job reported failure}): $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke and buildx-smoke-ui-sandbox (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift or runner-compat-walk." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, agent-claude-code-native, buildx-smoke-ui-sandbox and buildx-smoke-ui-sandbox-signin (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, k6-workload-e2e, kind-acceptance-walks, hybrid-walk or kind-upgrade-walk." \
               "" \
               "None of them shares the pre-existing failures of the older e2e-live job (deliberately not watched here)." \
               "" \

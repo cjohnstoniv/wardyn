@@ -85,6 +85,7 @@ import {
   denyDialogCopy,
 } from "./copy";
 import { ScopeMenu, ReauthRow } from "./live-approvals-rows";
+import { deriveTitle } from "../screens/approvals";
 
 const POLL_MS = 2000;
 
@@ -109,9 +110,9 @@ interface DenyTarget {
 // a longer hold this chip stops flagging at 30s; wire the policy value
 // through if anyone ships a policy that sets it.
 
-// rowLabel is the row's identity line: the host for an egress hold, the tool
-// and its command for a tool hold. The full string is the Mono title; clip()
-// keeps the strip one line tall (the Approvals screen renders the whole scope).
+// rowLabel is the identity string behind a row: the host for an egress hold, the tool and its command for a tool
+// hold. It names the telemetry tag and the Deny dialog; the row itself reads deriveTitle, as the Approvals card does.
+// clip() keeps the strip one line tall.
 function rowLabel(a: ApprovalRequest): string {
   // A re-auth row has no host and no tool: its scope is an identity. The label
   // states the NEED, which is all the row proves.
@@ -336,15 +337,15 @@ export function LiveApprovals({
   // function, right after this one) — NOT decide() — because decisionArgs'
   // omit-for-"run" convention would collide with adoDecisionRule's own
   // different bodyless default; see decideAdo's doc.
-  // Rows the server refused with capability_egress_host: the list cannot tell who holds the host, so the first
-  // refusal is what turns that row's buttons off and names the admin.
+  // The server's per-row `decidable` (egress_host grant applied) leads; role+kind is only the guess for an
+  // unstamped row. A 403 capability_egress_host still turns that row off, for a grant withdrawn since the list.
   const [adminOnly, setAdminOnly] = React.useState<ReadonlySet<string>>(new Set());
   const noteRefusal = (id: string, e: unknown) => {
     if (e instanceof HttpError && e.status === 403 && e.reason === "capability_egress_host") {
       setAdminOnly((cur) => new Set(cur).add(id));
     }
   };
-  const canDecide = (a: ApprovalRequest) => canDecideApproval(securityOperator, a.kind) && !adminOnly.has(a.id);
+  const canDecide = (a: ApprovalRequest) => (a.decidable ?? canDecideApproval(securityOperator, a.kind)) && !adminOnly.has(a.id);
   const decide = async (a: ApprovalRequest, approve: boolean, scope: ApprovalScope = "run", until?: string) => {
     setBusy(a.id);
     try {
@@ -537,6 +538,7 @@ export function LiveApprovals({
           );
         }
         const label = rowLabel(a);
+        const title = deriveTitle(a.kind, a.requested_scope ?? {});
         const held = isHeld(a);
         // Only egress decisions carry a scope (decide rule 4) — see decide().
         const scoped = a.kind === "egress_domain";
@@ -545,18 +547,21 @@ export function LiveApprovals({
           return <ReauthRow key={a.id} request={a} adminView={adminView} runId={runId} />;
         }
         return (
-          <div key={a.id} className="flex items-center gap-2" data-testid="live-approval-row">
+          <div key={a.id} className="flex flex-wrap items-center gap-2" data-testid="live-approval-row">
             {held ? (
               <Clock className="size-3.5 shrink-0 text-warning" aria-label="request held live" />
             ) : (
               <ShieldAlert className="size-3.5 shrink-0 text-warning" />
             )}
-            <span className="flex min-w-0 flex-1 items-baseline gap-2">
-              <Mono className="text-foreground" title={label}>
-                {clip(label)}
-              </Mono>
+            {/* #2912: under 640px the title takes its own line, whole, and the verdict controls sit under it at the right. */}
+            <span className="flex min-w-0 flex-1 items-baseline gap-2 max-sm:basis-full">
+              {/* #3030: the Approvals screen's own title (deriveTitle), so a request reads the same on the card and the strip. */}
+              <span className="min-w-0 text-sm text-foreground sm:truncate" title={title}>
+                {clip(title)}
+              </span>
               {asker(a) && <span className="text-xs text-muted-foreground">{APPROVAL_ASKED.STRIP(agentName(asker(a)!))}</span>}
             </span>
+            <div className="flex items-center gap-2 max-sm:ml-auto">
             {telemetry && (
               <Chip tone="neutral" className="h-5 shrink-0 px-1.5" title={TELEMETRY_TAG.title}>
                 {TELEMETRY_TAG.label}
@@ -579,7 +584,7 @@ export function LiveApprovals({
               size="sm"
               variant="info"
               className="h-7 rounded-r-none border-r-0"
-              disabled={!canDecide(a) || busy === a.id}
+              disabled={!canDecide(a) || !!a.walls_block || busy === a.id}
               onClick={() => decide(a, true)}
             >
               {busy === a.id && decidingSpinner ? (
@@ -589,7 +594,7 @@ export function LiveApprovals({
               )}{" "}
               Approve
             </Button>
-            {scoped && (
+            {scoped && !a.walls_block && (
               <ScopeMenu
                 verb="approve"
                 hasWorkspace={hasWorkspace}
@@ -621,6 +626,7 @@ export function LiveApprovals({
                 onPick={(scope, until) => setDenyTarget({ request: a, scope, until })}
               />
             )}
+            </div>
           </div>
         );
       })}

@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -164,6 +166,26 @@ func (i TemplateIntent) Request() (CreateRunRequest, error) {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	return req, dec.Decode(&req)
+}
+
+// RunDocumentRequest is the request a `kind: Run` document's intent makes: the intent's fields as a
+// CreateRunRequest, with its inline_policy laid on as the policy overlay rather than as the request's
+// own policy (which would replace the source policy), and the run-mode contract set when the intent
+// names an experience. The intent is left as it was. The caller sets title, description and the rest
+// of what a document does not carry.
+func RunDocumentRequest(intent TemplateIntent) (CreateRunRequest, error) {
+	intent.fields = maps.Clone(intent.fields)
+	overlay := intent.Raw("inline_policy")
+	intent.Unset("inline_policy")
+	req, err := intent.Request()
+	if err != nil {
+		return req, fmt.Errorf("read the run document: %w", err)
+	}
+	req.PolicyOverlay = overlay
+	if req.Experience != "" {
+		req.ModeContract = RunModeContractV09
+	}
+	return req, nil
 }
 
 // MarshalJSON writes the fields in sorted order, each as stored.

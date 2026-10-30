@@ -44,6 +44,12 @@ type RunnerHooks struct {
 	Online      func(*Peer, bool)
 	// ProxyImage, when set, is told the proxy image the organisation named in AUTH_OK (never "").
 	ProxyImage func(string)
+	// LocalAttach, when set, is told on every connect whether the organisation's AUTH_OK allows local
+	// attach (false from an organisation that does not say).
+	LocalAttach func(bool)
+	// PerRunLimits, when set, is told on every connect the per-run CPU (milli-CPU) and memory (MiB) the
+	// organisation's AUTH_OK names for this runner (0, 0 from an organisation that names none).
+	PerRunLimits func(cpuMillis, memoryMiB int64)
 	// StreamOffline releases per-connection PTY/exec resources, not sandboxes.
 	StreamOffline func(*Peer)
 	// ConnectFailed, when set, is told each error that ended a connection attempt or a session, except
@@ -79,13 +85,26 @@ type Client struct {
 // connection attempt is doing: a dial, handshake or hook that is waiting is never silent for longer.
 var offlineLogEvery = time.Minute
 
-// linkState is what the offline log reads: whether a session is up, since when it has not been, and
-// why the last attempt ended.
+// The steps of one connection attempt, as the offline log names the one it is waiting on.
+const (
+	phaseDial         = "dial"
+	phaseAuthenticate = "authenticate"
+	phaseOrgPending   = "org_pending"
+	phaseInventory    = "inventory"
+	phaseReplay       = "replay"
+	phaseBeforeReady  = "before_ready"
+	phaseRetryWait    = "retry_wait"
+)
+
+// linkState is what the offline log reads: whether a session is up, since when it has not been, why the
+// last attempt ended and when, and the step the current attempt is on.
 type linkState struct {
-	mu     sync.Mutex
-	up     bool
-	since  time.Time
-	reason string
+	mu       sync.Mutex
+	up       bool
+	since    time.Time
+	reason   string
+	reasonAt time.Time
+	phase    string
 }
 
 func (l *linkState) set(up bool, reason string) {
@@ -96,8 +115,14 @@ func (l *linkState) set(up bool, reason string) {
 	}
 	l.up = up
 	if reason != "" {
-		l.reason = reason
+		l.reason, l.reasonAt = reason, time.Now()
 	}
+}
+
+func (l *linkState) setPhase(phase string) {
+	l.mu.Lock()
+	l.phase = phase
+	l.mu.Unlock()
 }
 
 // setLink records the link state and tells ClientConfig.LinkChanged.
@@ -119,10 +144,16 @@ func (l *linkState) logWhileOffline(ctx context.Context) {
 		case <-tick.C:
 		}
 		l.mu.Lock()
-		up, since, reason := l.up, l.since, l.reason
+		up, since, reason, reasonAt, phase := l.up, l.since, l.reason, l.reasonAt, l.phase
 		l.mu.Unlock()
 		if !up {
-			slog.WarnContext(ctx, "runner still offline, retrying", slog.Duration("offline_for", time.Since(since).Round(time.Second)), slog.String("last_error", reason))
+			// last_error is the last attempt that finished; waiting_on is the step the current one is on, so
+			// an attempt that is stuck reads differently from one that keeps failing.
+			attrs := []any{slog.Duration("offline_for", time.Since(since).Round(time.Second)), slog.String("last_error", reason), slog.String("waiting_on", phase)}
+			if !reasonAt.IsZero() {
+				attrs = append(attrs, slog.Duration("last_error_age", time.Since(reasonAt).Round(time.Second)))
+			}
+			slog.WarnContext(ctx, "runner still offline, retrying", attrs...)
 		}
 	}
 }
@@ -176,6 +207,7 @@ func (c *Client) Run(ctx context.Context) error {
 		if ctx.Err() == nil {
 			failures.failed(ctx, err, delay)
 		}
+		c.link.setPhase(phaseRetryWait)
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
@@ -221,12 +253,14 @@ func (c *Client) Connect(ctx context.Context) error {
 			return DialWebSocket(ctx, c.cfg.OrgURL, c.cfg.RunnerID, c.cfg.HTTPClient)
 		}
 	}
+	c.link.setPhase(phaseDial)
 	conn, err := dial(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 	cfg, resume := c.resume(ctx)
+	c.link.setPhase(phaseAuthenticate)
 	ok, err := authenticateOrg(ctx, conn, c.cfg.RunnerID, c.cfg.OrgURL, c.cfg.PrivateKey, resume, c.cfg.Hooks.Clock)
 	if err != nil {
 		return err
@@ -236,6 +270,12 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 	if ok.ProxyImage != "" && c.cfg.Hooks.ProxyImage != nil {
 		c.cfg.Hooks.ProxyImage(ok.ProxyImage)
+	}
+	if c.cfg.Hooks.LocalAttach != nil {
+		c.cfg.Hooks.LocalAttach(ok.LocalAttach)
+	}
+	if c.cfg.Hooks.PerRunLimits != nil {
+		c.cfg.Hooks.PerRunLimits(ok.PerRunCPUMillis, ok.PerRunMemoryMiB)
 	}
 	c.session, c.ready = ok.SessionID, false
 	return c.serve(ctx, conn, cfg, ok)
@@ -272,6 +312,7 @@ func (c *Client) serve(ctx context.Context, conn Conn, cfg PeerConfig, ok AuthOK
 		c.cfg.Hooks.Offline(ctx)
 	}()
 	if ok.Resumed {
+		c.link.setPhase(phaseBeforeReady)
 		if err := c.cfg.Hooks.BeforeReady(ctx, peer, true); err != nil {
 			return err
 		}
@@ -343,11 +384,19 @@ func (c *Client) configure(ctx context.Context, cfg *PeerConfig, ready *atomic.B
 	}
 }
 
-func (c *Client) fresh(ctx context.Context, peer *Peer, pending <-chan []PendingAction, ready *atomic.Bool) error {
-	ctx, cancel := context.WithCancel(ctx)
+func (c *Client) fresh(parent context.Context, peer *Peer, pending <-chan []PendingAction, ready *atomic.Bool) (err error) {
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	stop := context.AfterFunc(peer.ctx, cancel)
 	defer stop()
+	// The peer's end cancels ctx too, so a step can see that cancellation first. The session still ended
+	// for the peer's reason, a GOAWAY or REVOKED that Run acts on.
+	defer func() {
+		if errors.Is(err, context.Canceled) && parent.Err() == nil && peer.Err() != nil {
+			err = peer.Err()
+		}
+	}()
+	c.link.setPhase(phaseOrgPending)
 	select {
 	case actions := <-pending:
 		if err := c.cfg.Hooks.Pending(ctx, peer, actions); err != nil {
@@ -358,12 +407,15 @@ func (c *Client) fresh(ctx context.Context, peer *Peer, pending <-chan []Pending
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	c.link.setPhase(phaseInventory)
 	if err := c.sendInventory(ctx, peer); err != nil {
 		return err
 	}
+	c.link.setPhase(phaseReplay)
 	if err := c.cfg.Hooks.Replay(ctx, peer); err != nil {
 		return err
 	}
+	c.link.setPhase(phaseBeforeReady)
 	if err := c.cfg.Hooks.BeforeReady(ctx, peer, false); err != nil {
 		return err
 	}

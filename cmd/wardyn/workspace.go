@@ -293,7 +293,7 @@ func workspaceCmd(client clientFn) *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(create, list, get, del, scan, workspaceBuildCmd(client))
+	cmd.AddCommand(create, list, get, del, scan, workspaceBuildCmd(client), workspaceSetUnitCmd(client))
 	return subcommandGroup(cmd)
 }
 

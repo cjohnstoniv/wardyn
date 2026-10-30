@@ -278,6 +278,41 @@ func TestLocalPlacement_GatewayKeyLaneRefused(t *testing.T) {
 	}
 }
 
+// A local run on a laptop local model (#2957) is judged at create on the plan dispatch writes, LocalModels
+// included: flagged, it is admitted at a person's own runner and narrowed to those; on an organisation's
+// runner, or unflagged, it is refused on ProxyConfig.LLMUpstreams exactly as before the flag.
+func TestLocalPlacement_LaptopLocalModel(t *testing.T) {
+	org := map[types.RunnerTrustClass]types.RunnerOwnerKind{}
+	for _, c := range placement.TrustClassesByRank() {
+		org[c] = types.RunnerOwnerOrg
+	}
+	for _, tc := range []struct {
+		name   string
+		allow  bool
+		owners map[types.RunnerTrustClass]types.RunnerOwnerKind
+		admit  bool
+	}{
+		{"flagged, a person's own runner", true, nil, true},
+		{"flagged, an organisation's runner", true, org, false},
+		{"unflagged, a person's own runner", false, nil, false},
+	} {
+		f := newComponentFixture(t)
+		f.srv.cfg.Store = localPlanTestStore{f.st}
+		p := types.ModelProvider{ID: "lap", UID: "uid-lap", Kind: types.ModelProviderLocalModel, BaseURL: "http://host.docker.internal:11434",
+			Local: &types.LocalModelSettings{Models: []string{"qwen2.5:3b"}, AllowOnLaptopRunners: tc.allow}, Harnesses: []types.ProviderHarness{{Harness: "claude-code", Model: "qwen2.5:3b"}}}
+		f.st.siteConfig = types.SiteConfig{ModelProviders: providerBlock(p)}
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil))
+		req := createRunRequest{Placement: placement.Local, Agent: "claude-code", ModelProvider: p.ID}
+		j, ref := f.srv.localPlacementRefusal(r, req, true, nil, tc.owners, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+		switch {
+		case tc.admit && (ref != nil || !j.personOwned):
+			t.Errorf("%s: refusal %+v, person-owned %v: want it admitted at a person's own runner only", tc.name, ref, j.personOwned)
+		case !tc.admit && (ref == nil || ref.body.Reason != string(placement.ReasonPlacementCredential) || !strings.HasPrefix(ref.body.Error, "ProxyConfig.LLMUpstreams: ")):
+			t.Errorf("%s: refusal %+v, want placement_credential on ProxyConfig.LLMUpstreams", tc.name, ref)
+		}
+	}
+}
+
 // A harness set judges every harness's provider at the doors, as dispatch authors every lane: a second
 // harness on a gateway-routed key provider is refused at create, preflight and preview, not only after
 // the run was accepted. The same set with the second harness on the vendor host is admitted.

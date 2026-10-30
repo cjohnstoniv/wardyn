@@ -32,6 +32,12 @@ type Boundary struct {
 	Contact   *policyref.Contact `json:"contact,omitempty"`
 	UpdatedBy string             `json:"updated_by,omitempty"`
 	UpdatedAt *time.Time         `json:"updated_at,omitempty"`
+	// LockedKnobs are the knobs no unit may change, a narrowing included (docs/operations/unit-admins.md).
+	LockedKnobs []string `json:"locked_knobs,omitempty"`
+	// SaveHeldForApproval is set on the read: this caller's save would be held for a second human, not applied
+	// (WARDYN_GOVERNANCE_SECOND_HUMAN on, the caller is not the admin token and the server is not in local mode,
+	// which refuses the write instead), so the editor words its submit as a request. Never stored.
+	SaveHeldForApproval bool `json:"save_held_for_approval,omitempty"`
 }
 
 // HardLimits reports whether the boundary binds runs.
@@ -45,6 +51,9 @@ type BoundarySpec struct {
 	AllowAllEgress      *bool             `json:"allow_all_egress,omitempty"`
 	MinConfinementClass *ConfinementClass `json:"min_confinement_class,omitempty"`
 	EligibleGrants      *[]GrantSpec      `json:"eligible_grants,omitempty"`
+	// Desktop blocks desktop directions for every run (#2967). It only blocks more: a direction it
+	// allows is left to the layers below, and one it leaves unset is that direction's default.
+	Desktop *DesktopControls `json:"desktop,omitempty"`
 }
 
 // BoundaryLimits is the GovernanceLimits subset the boundary bounds. MaxEndAheadSec is also the cap
@@ -61,6 +70,9 @@ type BoundaryWrite struct {
 	Spec    BoundarySpec       `json:"spec"`
 	Limits  BoundaryLimits     `json:"limits"`
 	Contact *policyref.Contact `json:"contact,omitempty"`
+	// LockedKnobs replaces the boundary's locks when present; absent keeps them, so a client that does
+	// not know the field never unlocks a knob.
+	LockedKnobs *[]string `json:"locked_knobs,omitempty"`
 }
 
 // Overlay is the boundary as a composed-profile overlay over an effective policy. Eligible grants
@@ -71,6 +83,7 @@ func (b BoundarySpec) Overlay() CeilingOverlay {
 	out := CeilingOverlay{
 		AllowedDomains: b.AllowedDomains, DeniedDomains: b.DeniedDomains,
 		AllowAllEgress: b.AllowAllEgress, MinConfinementClass: b.MinConfinementClass,
+		Desktop: b.Desktop,
 	}
 	if b.AllowedDomains != nil && b.AllowAllEgress == nil {
 		off := false

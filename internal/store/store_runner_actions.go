@@ -164,7 +164,8 @@ func beginRunnerActionTx(ctx context.Context, s PG) (pgx.Tx, error) {
 // A replayed action ID, an open action of the same kind for the run, or a
 // deferred stop_proxy for the same loss is returned with queued=false only
 // when every binding matches; otherwise
-// ErrConflict. A runner that is not claimed, or a run that is gone, is
+// ErrConflict. One the runner already answered (not deferred) with every
+// binding equal is returned with queued=false too. A runner that is not claimed, or a run that is gone, is
 // ErrNotFound: the runner row is locked FOR SHARE, so a queue meeting a revoke
 // waits for it and then refuses. Recovery, quarantine and retirement need
 // explicit org authority that this queue does not establish, so they refuse.
@@ -257,6 +258,22 @@ func queueRunnerActionTx(ctx context.Context, tx pgx.Tx, a types.RunnerPendingAc
 	if a.Generation != uuid.Nil {
 		generationArg = &a.Generation
 	}
+	// The runner's answer to this exact binding already settles a re-assert of
+	// it (the lease sweep queues a kept run's stop every pass), so it is
+	// returned, not repeated. A deferred answer is no answer, and one before a
+	// successful recover_containment stopped what the recovery reopened.
+	done, err := scanAction(tx.QueryRow(ctx, `SELECT `+actionCols+` FROM runner_pending_actions t
+		WHERE t.run_id = $1 AND t.kind = $2 AND t.ref = $3 AND t.applied_at IS NOT NULL AND t.outcome <> 'deferred'
+		AND t.execution_generation IS NOT DISTINCT FROM $4 AND t.containment_lost_at IS NOT DISTINCT FROM $5
+		AND NOT EXISTS (SELECT 1 FROM runner_pending_actions r WHERE r.run_id = t.run_id AND r.kind = 'recover_containment'
+			AND r.outcome = 'success' AND r.queue_seq > t.queue_seq)
+		ORDER BY t.queue_seq DESC LIMIT 1`, a.RunID, string(a.Kind), a.Ref, generationArg, a.LostAt))
+	if err == nil && sameRunnerAction(done, a) {
+		return done, false, nil
+	}
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return types.RunnerPendingAction{}, false, err
+	}
 	out, err := scanAction(tx.QueryRow(ctx, `
 		INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref, binding_version, owner, execution_generation, containment_lost_at)
 		VALUES ($1,$2,$3,$4,$5,1,$6,$7,$8)
@@ -292,10 +309,14 @@ func (s PG) RunHasPendingRunnerAction(ctx context.Context, runID uuid.UUID) (boo
 
 // LastRunnerTeardown reports the runner's latest answer to a queued end or kill
 // of runID at ref: its kind and outcome, or answered false when it has answered none.
+// An answer older than a successful recover_containment (queue_seq, the delivery
+// order) stopped an execution that recovery has since reopened, so it is not current.
 func (s PG) LastRunnerTeardown(ctx context.Context, runID uuid.UUID, ref string) (kind types.RunnerActionKind, outcome string, answered bool, err error) {
-	err = s.Pool.QueryRow(ctx, `SELECT kind, outcome FROM runner_pending_actions
-		WHERE run_id = $1 AND ref = $2 AND kind IN ('end', 'kill') AND applied_at IS NOT NULL
-		ORDER BY applied_at DESC, id DESC LIMIT 1`, runID, ref).Scan(&kind, &outcome)
+	err = s.Pool.QueryRow(ctx, `SELECT t.kind, t.outcome FROM runner_pending_actions t
+		WHERE t.run_id = $1 AND t.ref = $2 AND t.kind IN ('end', 'kill') AND t.applied_at IS NOT NULL
+		AND NOT EXISTS (SELECT 1 FROM runner_pending_actions r WHERE r.run_id = t.run_id AND r.kind = 'recover_containment'
+			AND r.outcome = 'success' AND r.queue_seq > t.queue_seq)
+		ORDER BY t.applied_at DESC, t.id DESC LIMIT 1`, runID, ref).Scan(&kind, &outcome)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", "", false, nil
 	}
@@ -356,10 +377,20 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 		return recordAssertedActionResultTx(ctx, tx, runnerID, runID, actionID, outcome, reason, observedAt, prepare)
 	}
 	owner, run, generation, err := lockRunnerActionRun(ctx, tx, runnerID, runID)
+	// Permanent, so refused (DR-0436): a runner leaves claimed only for revoked and never returns, its owner never
+	// changes (store_runners.go ClaimRunner, RevokeRunner), and no production path deletes an agent_runs row.
+	if errors.Is(err, ErrNotFound) {
+		return types.RunnerPendingAction{}, false, fmt.Errorf("%w: %w", ErrRunnerActionRefused, err)
+	}
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
 	a, err := scanAction(tx.QueryRow(ctx, `SELECT `+actionCols+` FROM runner_pending_actions WHERE id = $1 FOR UPDATE`, actionID))
+	// Permanent, so refused: the runner learns an action's id only from a committed row (PENDING), every insert
+	// mints a fresh uuid.New(), and a deleted row (PurgeAssertedRunnerSubjects) never comes back.
+	if errors.Is(err, ErrNotFound) {
+		return types.RunnerPendingAction{}, false, fmt.Errorf("%w: %w", ErrRunnerActionRefused, err)
+	}
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
@@ -367,8 +398,10 @@ func (s PG) RecordRunnerActionResult(ctx context.Context, runnerID, runID, actio
 		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
 	}
 	if a.AppliedAt != nil {
+		// Permanent, so refused: applied_at, outcome and observed_at are set once, by an UPDATE guarded by
+		// applied_at IS NULL, and never cleared, so the same changed repeat always meets the same first receipt.
 		if a.Outcome != outcome || !a.ObservedAt.Equal(observedAt) {
-			return types.RunnerPendingAction{}, false, ErrConflict
+			return types.RunnerPendingAction{}, false, fmt.Errorf("%w: %w", ErrRunnerActionRefused, ErrConflict)
 		}
 		return a, false, tx.Commit(ctx)
 	}

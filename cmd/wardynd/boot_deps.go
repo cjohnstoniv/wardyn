@@ -37,6 +37,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
+// afterMigrations runs once the migrations have succeeded; a test outlasts the
+// connect budget there.
+var afterMigrations = func() {}
+
 // connectAndMigrate connects the runtime app pool and applies migrations.
 //
 // N4 (DDL protection via role separation): when migrateDSN (WARDYN_PG_MIGRATE_DSN)
@@ -56,6 +60,9 @@ import (
 // deadline, so deriving migrateCtx from an already-30s-bounded parent would have
 // silently kept the old cap.
 //
+// The checks after the migration run on a fresh connect-sized budget, also from
+// rootCtx: a migration that outlasted connectCtx left it expired.
+//
 // allowUnknownMigrations is the WARDYN_ALLOW_UNKNOWN_MIGRATIONS break-glass: it
 // turns db.Migrate's refusal of a database a newer wardynd migrated into a WARN.
 func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectTimeout, migrateTimeout time.Duration, allowUnknownMigrations bool) (*pgxpool.Pool, error) {
@@ -65,7 +72,11 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		apply = db.MigrateAllowingUnknown
 	}
 	migrate := func(ctx context.Context, p *pgxpool.Pool) error {
-		return migrateRecordingVersion(ctx, p, func() error { return apply(ctx, p) })
+		if err := migrateRecordingVersion(ctx, p, func() error { return apply(ctx, p) }); err != nil {
+			return err
+		}
+		afterMigrations()
+		return nil
 	}
 	connectCtx, cancelConnect := context.WithTimeout(rootCtx, connectTimeout)
 	defer cancelConnect()
@@ -87,6 +98,8 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 			pool.Close()
 			return nil, fmt.Errorf("migrate: %w", merr)
 		}
+		verifyCtx, cancelVerify := context.WithTimeout(rootCtx, connectTimeout)
+		defer cancelVerify()
 		// Do NOT assume the split delivered protection: VERIFY the app role
 		// (WARDYN_PG_DSN) is actually a non-owner, non-superuser of audit_events.
 		// An operator who pointed WARDYN_PG_MIGRATE_DSN at the same (or another
@@ -102,11 +115,11 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		// refusal rules: a chain that demonstrably does not chain refuses the
 		// boot; a canary that could not RUN (chain lock busy, statement
 		// cancelled) reports at ERROR and lets it continue.
-		if aerr := verifyAuditAppendPosture(connectCtx, rootCtx, pool); aerr != nil {
+		if aerr := verifyAuditAppendPosture(verifyCtx, rootCtx, pool); aerr != nil {
 			pool.Close()
 			return nil, aerr
 		}
-		if cerr := db.AuditChainCanary(connectCtx, pool); cerr != nil {
+		if cerr := db.AuditChainCanary(verifyCtx, pool); cerr != nil {
 			pool.Close()
 			return nil, fmt.Errorf("verify the audit chain on the app role: %w", cerr)
 		}
@@ -118,7 +131,7 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		// distinct non-owner role" is the wrong remedy for that route, and
 		// misleading about what the role actually holds. db.AuditDDLBypassRoutes
 		// answers the same question a bool would and says WHICH.
-		routes, perr := db.AuditDDLBypassRoutes(connectCtx, pool)
+		routes, perr := db.AuditDDLBypassRoutes(verifyCtx, pool)
 		if perr != nil {
 			pool.Close()
 			return nil, fmt.Errorf("verify audit ddl protection: %w", perr)
@@ -135,8 +148,10 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		pool.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	verifyCtx, cancelVerify := context.WithTimeout(rootCtx, connectTimeout)
+	defer cancelVerify()
 	slog.InfoContext(rootCtx, "wardynd: NOTICE single-DSN mode — wardynd's DB role owns audit_events, so DROP TRIGGER / ALTER TABLE ... DISABLE TRIGGER / DROP TABLE bypass the append-only guard. Set WARDYN_PG_MIGRATE_DSN to a separate owner/migrator role (wardynd then connects as a non-owner app role) for DDL protection.")
-	if aerr := verifyAuditAppendPosture(connectCtx, rootCtx, pool); aerr != nil {
+	if aerr := verifyAuditAppendPosture(verifyCtx, rootCtx, pool); aerr != nil {
 		pool.Close()
 		return nil, aerr
 	}
@@ -149,8 +164,8 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 // credential mint: that refuses the boot, naming the GRANT. The other two findings are postures to
 // report, not defects to refuse over: a role that can still INSERT directly (always true of the
 // owner, so of every single-DSN install), and an audit function any role may execute.
-func verifyAuditAppendPosture(connectCtx, rootCtx context.Context, pool *pgxpool.Pool) error {
-	p, err := db.AuditAppendPostureOf(connectCtx, pool)
+func verifyAuditAppendPosture(verifyCtx, rootCtx context.Context, pool *pgxpool.Pool) error {
+	p, err := db.AuditAppendPostureOf(verifyCtx, pool)
 	if err != nil {
 		return fmt.Errorf("verify the audit append privileges: %w", err)
 	}
@@ -514,6 +529,8 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			LoginHint:            orZero(f.sessionLife.loginHint),
 			BrowserSessionCookie: orZero(f.sessionLife.browserSession),
 			BackchannelLogout:    orZero(f.sessionLife.backchannelLogout),
+			FrontchannelLogout:   orZero(f.sessionLife.frontchannelLogout),
+			SessionSIDs:          store.NewPG(pool),
 			RoleMap:              roleMap,
 			DefaultRole:          defaultRole,
 			// Legacy source: a 0.4.5 deployment's WARDYN_OIDC_OPERATOR_EMAILS

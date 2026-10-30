@@ -20,7 +20,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/notify"
@@ -40,7 +39,7 @@ func (s PG) Ping(ctx context.Context) error {
 // runReservedCols and runInsertOnlyCols column, in order (TestCreateRunBindsEveryInsertColumn).
 var createRunSQL = `
 		INSERT INTO agent_runs (` + runInsertCols + `, ` + runReservedCols + `, ` + runInsertOnlyCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57)
 		RETURNING ` + runCols
 
 // runnerPoolFence is the value of the runner_pool_id column in createRunSQL: the pool read through its
@@ -244,6 +243,10 @@ func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 			return nil, fmt.Errorf("store: marshal local folder: %w", err)
 		}
 	}
+	serviceJSON, err := runServiceJSON(r.Service)
+	if err != nil {
+		return nil, err
+	}
 	return []any{
 		r.ID, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
@@ -252,7 +255,8 @@ func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.UnitID, r.ModelProviderID, r.UserType,
 		r.Preset, r.PresetVersion, r.OperatorOwned, r.CreatedVia, r.DiskMiB,
 		string(r.Placement), r.PlacementFilled, r.RunnerID, string(r.EvidenceSource), string(r.Experience),
-		r.LifetimeCapAt, string(r.LifetimeCapSource), r.RunnerPoolID, r.RunnerPoolRevision, string(r.RunnerPoolSelection), r.RunnerPoolExecutor, r.HumanAuthor, walls, r.BreakGlass,
+		r.LifetimeCapAt, string(r.LifetimeCapSource), r.RunnerPoolID, r.RunnerPoolRevision, string(r.RunnerPoolSelection), r.RunnerPoolExecutor, r.HumanAuthor, walls,
+		string(r.MachineKind.Normalize()), r.BreakGlass, restrictionIDsParam(r.RestrictionIDs), serviceJSON, string(r.Shape),
 		r.Reserved.CPUMillis, r.Reserved.MemoryMiB, r.Reserved.DiskMiB,
 		localFolder,
 	}, nil
@@ -343,6 +347,13 @@ func (s PG) SetRunImage(ctx context.Context, id uuid.UUID, image string) error {
 		`UPDATE agent_runs SET image=$1, updated_at=now() WHERE id=$2`, image, id)
 }
 
+// SetRunImageArches scoped-writes ONLY the architectures the run's prewrapped image was checked on, once
+// its image resolves to a ready prewrapped row.
+func (s PG) SetRunImageArches(ctx context.Context, id uuid.UUID, arches []string) error {
+	return s.execRun(ctx, "set run image arches",
+		`UPDATE agent_runs SET image_arches=$1, updated_at=now() WHERE id=$2`, arches, id)
+}
+
 // SetRunDiskMiB scoped-writes ONLY the resolved ephemeral-disk-cap column.
 // Called once applyEphemeralDisk resolves the effective disk_mib, since that
 // needs dispatch-time inputs unavailable at CreateRun.
@@ -423,7 +434,7 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 // so a column appended to runInsertCols reaches both lists at once.
 const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level, ` +
 	`ends_at, wait_budget_sec, run_limits, unit_id, model_provider_id, user_type, preset, preset_version, operator_owned, created_via, disk_mib, placement, placement_filled, runner_id, ` +
-	`evidence_source, experience, lifetime_cap_at, lifetime_cap_source, runner_pool_id, runner_pool_revision, runner_pool_selection, runner_pool_executor, human_author, inner_walls, break_glass`
+	`evidence_source, experience, lifetime_cap_at, lifetime_cap_source, runner_pool_id, runner_pool_revision, runner_pool_selection, runner_pool_executor, human_author, inner_walls, machine_kind, break_glass, restriction_ids, service, shape`
 
 // runReservedCols are what a run holds on its runner (0174, types.AgentRun.Reserved): written at
 // insert and summed by runnerUsageSQL, never read back into a run.
@@ -433,15 +444,15 @@ const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk
 // (0195, types.AgentRun.LocalFolder) by RunLocalFolderSeed.
 const runInsertOnlyCols = `local_folder`
 
-const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, recording_level`
+const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, vm_machine, recording_level, image_arches, service_status`
 
 // scanRun is the ONE reader for runCols. A new column is appended to
 // runInsertCols/runCols and to the end of this Scan — appending is the one edit
 // that can't silently transpose two same-typed columns past the compiler.
 func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
-	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection, notRecorded, recordingLevel string
-	var limitsRaw, wallsRaw []byte
+	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection, notRecorded, machineKind, recordingLevel, shape string
+	var limitsRaw, wallsRaw, vmMachineRaw, serviceRaw, serviceStatusRaw []byte
 	var containmentErr *string
 	err := row.Scan(
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
@@ -451,9 +462,9 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.UnitID, &r.ModelProviderID, &r.UserType,
 		&r.Preset, &r.PresetVersion, &r.OperatorOwned, &r.CreatedVia, &r.DiskMiB,
 		&placement, &r.PlacementFilled, &r.RunnerID, &evidenceSource, &experience, &r.LifetimeCapAt, &capSource,
-		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor, &wallsRaw, &r.BreakGlass,
+		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor, &wallsRaw, &machineKind, &r.BreakGlass, &r.RestrictionIDs, &serviceRaw, &shape,
 		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &containmentErr, &r.ContainmentErrorAt, &r.EndedAt,
-		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt, &notRecorded, &recordingLevel,
+		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt, &notRecorded, &vmMachineRaw, &recordingLevel, &r.ImageArches, &serviceStatusRaw,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
@@ -469,6 +480,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	r.Placement = types.Placement(placement)
 	r.EvidenceSource = types.RunEvidenceSource(evidenceSource)
 	r.Experience = types.RunExperience(experience)
+	r.Shape = types.RunShape(shape)
 	r.LifetimeCapSource = types.LimitSource(capSource)
 	r.RunnerPoolSelection, r.NotRecorded = types.RunnerPoolSelection(poolSelection), types.RunNotRecorded(notRecorded)
 	r.RecordingLevel = types.RecordingLevel(recordingLevel)
@@ -483,6 +495,12 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		if err := json.Unmarshal(wallsRaw, r.InnerWalls); err != nil {
 			return types.AgentRun{}, fmt.Errorf("store: unmarshal run inner walls: %w", err)
 		}
+	}
+	if err := scanRunMachine(&r, machineKind, vmMachineRaw); err != nil {
+		return types.AgentRun{}, err
+	}
+	if err := scanRunService(&r, serviceRaw, serviceStatusRaw); err != nil {
+		return types.AgentRun{}, err
 	}
 	return r, nil
 }
@@ -738,15 +756,19 @@ func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.App
 		UPDATE approvals
 		SET state=$1, decided_at=$2, decided_by=$3, reason=$4, decision_scope=$5, decision_expires_at=$6
 		WHERE id=$7 AND state='PENDING'
+		  AND (($1 IN ('EXPIRED', 'CANCELLED') AND $3 = 'system') OR COALESCE(` + approvalExpiresAtSQL + ` > $2, true))
 		RETURNING ` + approvalCols
 	a, err := scanApproval(s.Pool.QueryRow(ctx, q,
 		string(decision.State), anchor.Translate(decidedAt), decision.DecidedBy, decision.Reason,
 		string(decision.Scope), decision.ExpiresAt, id,
 	))
 	if errors.Is(err, ErrNotFound) {
-		// Distinguish "not PENDING" from "doesn't exist" by checking existence.
+		// Distinguish "not PENDING or past its expires_at" from "doesn't exist" by checking existence.
+		// A person's decision on a PENDING row past its expiry is refused like a decided one; only the system actor (the sweeper's EXPIRED, the run-end cascade's CANCELLED) still lands there.
 		var exists bool
-		_ = s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM approvals WHERE id=$1)`, id).Scan(&exists)
+		if qerr := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM approvals WHERE id=$1)`, id).Scan(&exists); qerr != nil {
+			return types.ApprovalRequest{}, fmt.Errorf("store: decide approval existence check: %w", qerr)
+		}
 		if exists {
 			return types.ApprovalRequest{}, ErrAlreadyDecided
 		}
@@ -759,7 +781,7 @@ func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.App
 // scanApproval's order. Same shape as agent_runs: the read list adds the
 // columns a raise does not set (see CreateApproval).
 const approvalInsertCols = `id, run_id, grant_id, kind, requested_scope, state, requested_at, decided_at, decided_by, minted_jti, reason`
-const approvalCols = approvalInsertCols + `, decision_scope, decision_expires_at, ` + approvalExpiresAtSQL + `, last_rejoined_at`
+const approvalCols = approvalInsertCols + `, decision_scope, decision_expires_at, ` + approvalExpiresAtSQL + `, last_rejoined_at, takeover_holder, handed_back_at`
 
 // approvalExpiresAtSQL computes a request's expiry from its run's CURRENT end
 // and wait: min(requested_at + wait_budget_sec, ends_at); NULL when the run has
@@ -779,7 +801,7 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 	err := row.Scan(
 		&a.ID, &a.RunID, &a.GrantID, &kind, &scopeRaw, &state, &a.RequestedAt,
 		&a.DecidedAt, &a.DecidedBy, &a.MintedJTI, &a.Reason, &decisionScope, &a.DecisionExpiresAt, &a.ExpiresAt,
-		&a.LastRejoinedAt,
+		&a.LastRejoinedAt, &a.TakeoverHolder, &a.HandedBackAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.ApprovalRequest{}, ErrNotFound
@@ -795,69 +817,6 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 }
 
 // AuditEvent
-
-// InsertAuditEvent appends a single audit event. Implements audit.Recorder.
-// The Postgres trigger blocks UPDATE/DELETE; this function only ever INSERTs.
-//
-// ev is taken by POINTER so the hash chain can be handed back: on success
-// ev.PrevHash/ev.RowHash carry the values Postgres computed, and ev.RowHash IS
-// the chain head at that instant, which fanoutRecorder emits to the audit sinks
-// so an external SIEM ends up holding a head hash Wardyn cannot later disown.
-//
-// Runs in a transaction because pg_advisory_xact_lock must be held across the
-// append: this caller's seq allocation and head read must not interleave with
-// another writer's, keeping seq order and chain order identical. audit_append
-// takes the same lock itself (the only way a row enters the table since 0111);
-// the lock here is re-entrant and free, and keeps the bounded wait below in
-// front of it.
-func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEvent) error {
-	// The cap lives at the one INSERT every audit writer reaches (api server,
-	// broker, identity, approval sweeper, spool drain), not in Server.auditEvent,
-	// which internal/approval bypasses by building its own AuditEvent values.
-	ev.Target = CapAuditTarget(ev.Target)
-	dataJSON, err := json.Marshal(ev.Data)
-	if err != nil {
-		return fmt.Errorf("store: marshal audit data: %w", err)
-	}
-	// Read committed is pinned, not inherited: the trigger's prev_hash head read
-	// happens inside THIS transaction, so under REPEATABLE READ a writer queued
-	// behind the lock would read a stale snapshot and fork the chain. The
-	// isolation level otherwise comes from default_transaction_isolation, a
-	// USERSET GUC any role can change, so chain correctness can't depend on it.
-	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	if err != nil {
-		return fmt.Errorf("store: begin audit tx: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
-	// Bound the wait BEFORE asking for the lock, since any open transaction that
-	// touched audit_events holds it and this call is on the request path. A
-	// timeout is not a lost event: the error reaches spoolingRecorder, which
-	// fsyncs it to the local spool for the drain to replay.
-	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
-		return fmt.Errorf("store: bound audit chain lock wait: %w", err)
-	}
-	if _, err := tx.Exec(ctx, lockAuditChainSQL, db.AuditChainLockKey); err != nil {
-		return fmt.Errorf("store: lock audit chain (waited up to %s; another transaction that inserted into audit_events may still be open): %w",
-			db.AuditChainLockTimeout, err)
-	}
-	// audit_append is the only way a row enters audit_events: it allocates seq and recorded_at under
-	// the chain lock and the chain trigger refuses a row it did not allocate. COALESCE: the genesis
-	// row's prev_hash is SQL NULL, which won't scan into a string; empty string and NULL both mean
-	// "nothing before this row".
-	const q = `
-		SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'')
-		FROM audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
-	if err := tx.QueryRow(ctx, q,
-		ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
-		ev.Target, ev.Outcome, ev.SourceIP, dataJSON,
-	).Scan(&ev.PrevHash, &ev.RowHash); err != nil {
-		return fmt.Errorf("store: insert audit event: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("store: commit audit event: %w", err)
-	}
-	return nil
-}
 
 // QueryAuditEvents returns audit events for a run in time order.
 // limit <= 0 means no explicit limit (returns up to 1000).

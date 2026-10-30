@@ -23,6 +23,7 @@ import { health } from "../../../lib/api/health";
 import { getErrorMessage } from "../../../lib/format";
 import type { ComponentSettings, SiteConfig } from "../../../lib/types";
 import { Button } from "../../ui/button";
+import { INLINE_ACTIONS } from "../../wardyn/form-actions";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { COMPONENTS_ADMIN as T } from "../../wardyn/copy/components-admin";
@@ -191,8 +192,8 @@ export function ComponentsSettingsCard() {
               {refused}
             </p>
           )}
-          <div className="flex justify-end py-3">
-            <Button variant="outline" size="sm" onClick={() => void save()} disabled={saving || !dirty}>
+          <div className={`${INLINE_ACTIONS} py-3`}>
+            <Button onClick={() => void save()} disabled={saving || !dirty}>
               {saving ? <Loader2 className="size-4 animate-spin" /> : null}
               {T.SETTINGS_SAVE}
             </Button>

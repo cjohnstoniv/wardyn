@@ -26,6 +26,7 @@ import { anyCapabilityEnforced, useMyCapabilities } from "../../lib/capabilities
 import { DENIED } from "../../lib/permissions-copy";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { usePoll } from "../../lib/use-poll";
+import { useRunTitles } from "../../lib/use-run-titles";
 import { getErrorMessage } from "../../lib/format";
 import { grantsWrite, scopeRepos } from "../../lib/grant-sentence";
 import { Button } from "../ui/button";
@@ -34,10 +35,12 @@ import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
 import { ReasonDialog } from "../wardyn/reason-dialog";
+import { useRefusedApprovals } from "../../lib/hooks/use-refused-approvals";
 import { REAUTH_ROW, REAUTH_TITLE, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
 import { useOperator, useRole } from "../wardyn/operator-context";
 import { useConsoleMode } from "../wardyn/console-view";
 import { ADO } from "../../lib/ado-entra-copy";
+import { NEEDS_YOU } from "../wardyn/copy/needs-you";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { PUSH } from "../wardyn/copy/push";
 import {
@@ -122,7 +125,7 @@ export function deriveTitle(kind: ApprovalKind, scope: Scope): string {
       const ck = credentialKind(scope);
       const host = str(scope, "host");
       if (ck === "git_pat") return host ? `Hand git a token for ${host}` : "Hand git an access token";
-      if (ck === "ssh_key") return host ? `Write an SSH key for ${host}` : "Write a private SSH key to disk";
+      if (ck === "ssh_key") return host ? `Sign Git's SSH sign-in for ${host}` : "Sign Git's SSH sign-in";
       if (ck === "github_token") {
         const repos = scopeRepos(scope);
         return repos.length ? `Mint a GitHub token for ${repos[0]}` : "Mint a GitHub token";
@@ -232,7 +235,7 @@ export function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAu
         const write = grantsWrite(scope);
         return {
           what: `The broker mints a short-lived GitHub token${repos.length ? ` scoped to ${repos.join(", ")}` : ""}${ttl}. The agent never sees your stored key.`,
-          blast: `${CAPABILITY.brokerLine} ${write ? "It can push to the listed repos" : "It's limited to the listed read permissions"} until it expires — it can't mint a wider scope, and no other repo is reachable.`,
+          blast: `${write ? "It can push to the listed repos" : "It's limited to the listed read permissions"} until it expires — it can't mint a wider scope, and no other repo is reachable.`,
         };
       }
       if (ck === "api_key") {
@@ -297,6 +300,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // per-card DECISION gate moves to the security predicate.
   const operator = useOperator();
   const caps = useMyCapabilities(!operator);
+  const runTitles = useRunTitles();
   const [pendingItems, setPendingItems] = React.useState<ApprovalRequest[]>([]);
   const [decidedItems, setDecidedItems] = React.useState<ApprovalRequest[]>([]);
   const [decidedLongest, setDecidedLongest] = React.useState(0);
@@ -321,6 +325,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     },
     [setSearchParams],
   );
+  const { refused, noteRefusal } = useRefusedApprovals();
   const [prompt, setPrompt] = React.useState<{ id: string; action: "approve" | "deny"; kind: ApprovalRequest["kind"] } | null>(null);
 
   // EXPIRED approvals must be fetched too, or a request that timed out
@@ -353,9 +358,20 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // the one on screen (#2487: it is up to four capped lists, and only grows).
   const filterRef = React.useRef(filter);
   filterRef.current = filter;
+  const viewRef = React.useRef(view);
+  viewRef.current = view;
+  // A refresh that loads the decided lists for the view still on screen also heals a failed first load of the tab.
   const fetchAll = React.useCallback(
-    () => (filterRef.current === "decided" ? Promise.all([fetchPending(), fetchDecided()]).then(() => undefined) : fetchPending()),
-    [fetchPending, fetchDecided],
+    () =>
+      filterRef.current === "decided"
+        ? Promise.all([
+            fetchPending(),
+            fetchDecided().then(() => {
+              if (viewRef.current === view) setDecidedStatus("ready");
+            }),
+          ]).then(() => undefined)
+        : fetchPending(),
+    [fetchPending, fetchDecided, view],
   );
   const loadDecided = React.useCallback(() => {
     setDecidedStatus((st) => (st === "ready" ? st : "loading"));
@@ -426,6 +442,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       onChanged?.();
       return true;
     } catch (err) {
+      noteRefusal(prompt.id, err);
       toast.error(
         prompt.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED,
         { description: getErrorMessage(err) },
@@ -463,6 +480,19 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // decideAdoDirect above takes for its own kind, minus the scope.
   const decidePushDirect = (id: string, approve: boolean): Promise<void> => decideAdoDirect(id, approve, []);
 
+  // #2963 — a "Needs you" request's Decline: not a decide() verb (approvals_takeover.go).
+  const declineTakeover = async (id: string): Promise<void> => {
+    try {
+      await api.decline(id);
+      fetchAll().catch(() => {
+        /* transient refresh failure — the decline itself already succeeded */
+      });
+      onChanged?.();
+    } catch (err) {
+      toast.error(NEEDS_YOU.failed.decline, { description: getErrorMessage(err) });
+    }
+  };
+
   // The pending queue's own tool_call items, and only those — the screen-
   // level honesty note (ADO.TOOL_CALL_NOTE) is worth a line only
   // when a tool_call approval is actually in view.
@@ -490,7 +520,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           the proxy until decided; every OTHER tool_call approval is still
           the record-only kind deriveBanner's tool_call case describes. */}
       {anyToolCall && (
-        <p className="mb-4 max-w-[72ch] text-xs text-muted-foreground">{ADO.TOOL_CALL_NOTE}</p>
+        <p className="mb-4 text-xs text-muted-foreground">{ADO.TOOL_CALL_NOTE}</p>
       )}
 
       <Tabs value={filter} onValueChange={(v) => setFilterParam(v as Filter)} className="mb-4">
@@ -539,6 +569,8 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
                 onAct={(action) => setPrompt({ id: a.id, action, kind: a.kind })}
                 onAdoDecide={decideAdoDirect}
                 onPushDecide={decidePushDirect}
+                onDecline={declineTakeover}
+                refused={refused.has(a.id)}
               />
             ))}
           </div>
@@ -568,7 +600,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
         <>
           <div className="overflow-hidden rounded-xl border border-border bg-card">
             {decidedItems.map((d) => (
-              <DecidedRow key={d.id} item={d} />
+              <DecidedRow key={d.id} item={d} runTitle={runTitles.get(d.run_id)} />
             ))}
           </div>
           <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">

@@ -7,7 +7,7 @@
 // part of the unsplit settings-screen.test.tsx until M-5 split the page in
 // two (issue #636's own "Check": "the settings specs split per view").
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -30,6 +30,13 @@ const listMineMock = vi.fn();
 vi.mock("../../../lib/api/runners", () => ({
   RUNNERS_DISABLED: "runners_disabled",
   runners: { listMine: (...a: unknown[]) => listMineMock(...a) },
+}));
+
+// Your walls reads /me/walls; none are set here.
+const getWallsMock = vi.fn();
+vi.mock("../../../lib/api/walls", async (orig) => ({
+  ...(await orig<typeof import("../../../lib/api/walls")>()),
+  walls: { get: (...a: unknown[]) => getWallsMock(...a) },
 }));
 
 vi.mock("../../../lib/api/secrets", () => ({
@@ -65,12 +72,13 @@ beforeEach(() => {
   getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
   listKeysMock.mockReset().mockResolvedValue([]);
   listMineMock.mockReset().mockRejectedValue(new HttpError(403, "runners are off", "runners_disabled"));
+  getWallsMock.mockReset().mockResolvedValue({ spec: {} });
 });
 
 describe("YourAccountScreen", () => {
-  it("titles the page 'Your account' with the S-3 description", async () => {
+  it("titles the page 'Your settings' with the S-3 description", async () => {
     renderScreen();
-    expect(await screen.findByRole("heading", { name: "Your account", level: 1 })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Your settings", level: 1 })).toBeInTheDocument();
     expect(screen.getByText(YOUR_ACCOUNT.LEDE)).toBeInTheDocument();
   });
 
@@ -82,6 +90,21 @@ describe("YourAccountScreen", () => {
     expect(screen.queryByRole("heading", { name: startsWith("Model provider") })).not.toBeInTheDocument();
     expect(screen.queryByText(/set up as model providers/i)).not.toBeInTheDocument();
     expect(screen.queryByText("Azure DevOps")).not.toBeInTheDocument();
+  });
+
+  // T4-a: Your walls sits after Your components, collapsed; it is absent for a caller who is no person.
+  it("draws the Your walls card after Your components, and none when the caller is no person", async () => {
+    renderScreen();
+    const walls = await screen.findByRole("heading", { name: startsWith("Your walls"), level: 3 });
+    const titles = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent ?? "");
+    expect(titles.findIndex((t) => t.startsWith("Your walls"))).toBeGreaterThan(titles.findIndex((t) => t.startsWith("Your components")));
+    expect(walls).toBeInTheDocument();
+    cleanup();
+    getWallsMock.mockRejectedValue(new HttpError(400, "no person", "walls_need_person"));
+    renderScreen();
+    await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
+    await waitFor(() => expect(getWallsMock).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("heading", { name: startsWith("Your walls") })).not.toBeInTheDocument();
   });
 
   it("draws the Azure DevOps card when a row is configured", async () => {
@@ -169,19 +192,22 @@ describe("YourAccountScreen — Your SSH keys, the S-2 strings", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows 'User access' (not 'Member access') on a capped key, with the rewritten tooltip", async () => {
+  it("shows 'User access' (not 'Member access') on a capped key, with the rewritten note", async () => {
     listKeysMock.mockResolvedValue([
       { fingerprint: "SHA256:aaa", name: "laptop", public_key: "", role: "user", capped: true, created_at: new Date().toISOString() },
     ]);
     renderScreen();
     await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
     await expandCard("Your SSH keys");
-    const chip = await screen.findByText("User access");
+    expect(await screen.findByText("User access", { selector: "tr *" })).toBeInTheDocument();
     expect(screen.queryByText("Member access")).not.toBeInTheDocument();
-    expect(chip.closest("[title]")).toHaveAttribute(
-      "title",
-      "Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view.",
-    );
+    // r11 #2244: the sentence is visible text under the table, not a title.
+    expect(
+      screen.getByText(
+        "Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view.",
+      ),
+    ).toBeVisible();
+    expect(document.querySelector("[title*='Added in the user view']")).toBeNull();
   });
 
   // review R2-L1: the packet has no error row for this card, and the

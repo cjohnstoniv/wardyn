@@ -316,6 +316,48 @@ func TestSiteConfigSet_EmptyListWithoutClearStaysUnsentAndSaysSo(t *testing.T) {
 	}
 }
 
+// TestSiteConfigSet_EmptyListSpellings pins that `[ ]` and a multi-line empty
+// list are the empty list, not a value: same note without --clear, no conflict
+// with --clear.
+func TestSiteConfigSet_EmptyListSpellings(t *testing.T) {
+	for _, field := range []string{"internal_hosts", "upstream_proxy_no_proxy"} {
+		for name, empty := range map[string]string{"compact": "[]", "spaced": "[ ]", "multiline": "[\n\n  ]"} {
+			t.Run(field+"/"+name, func(t *testing.T) {
+				var body []byte
+				srv := rawBodyServer(t, &body)
+				doc := `{"` + field + `":` + empty + `}`
+
+				stderr, err := runSiteConfigSetArgs(t, srv.URL, doc)
+				if err != nil {
+					t.Fatalf("apply without --clear: %v", err)
+				}
+				if strings.Contains(string(body), field) {
+					t.Errorf("wire body = %s, want %s absent without --clear", body, field)
+				}
+				if !strings.Contains(stderr, field+" empty") {
+					t.Errorf("stderr = %q, want the empty-not-sent note naming %s", stderr, field)
+				}
+
+				body = nil
+				stderr, err = runSiteConfigSetArgs(t, srv.URL, doc, "--clear", field)
+				if err != nil {
+					t.Fatalf("apply with --clear: %v", err)
+				}
+				var wire map[string]json.RawMessage
+				if err := json.Unmarshal(body, &wire); err != nil {
+					t.Fatalf("wire body %q: %v", body, err)
+				}
+				if string(wire[field]) != "[]" {
+					t.Errorf("wire[%s] = %q, want [] (body %s)", field, wire[field], body)
+				}
+				if strings.Contains(stderr, field) {
+					t.Errorf("stderr = %q, want no note for a field --clear handled", stderr)
+				}
+			})
+		}
+	}
+}
+
 func TestSiteConfigSet_ClearRefusesUnknownFieldAndConflictingValue(t *testing.T) {
 	var body []byte
 	srv := rawBodyServer(t, &body)
@@ -373,12 +415,35 @@ func TestSiteConfigSet_NoOmittedFieldsNoteIsSilent(t *testing.T) {
 
 	_, stderr, err := runSiteConfigSet(t, srv.URL,
 		`{"scm_hosts":["gitlab.corp"],"upstream_proxy_no_proxy":[],"internal_hosts":[],"workspace_providers":{},"agent_providers":{},`+
-			`"model_providers":{},"sign_in_help_text":"","sign_in_help_url":"","branding":{},"policy_help":{},"components":{},"recording":{}}`)
+			`"model_providers":{},"sign_in_help_text":"","sign_in_help_url":"","branding":{},"policy_help":{},"components":{},"recording":{},"governance_max_depth":16}`)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	if strings.Contains(stderr, "left as the server already has it") {
 		t.Errorf("stderr = %q, want no omitted-fields note when the file omits nothing", stderr)
+	}
+}
+
+// TestSiteConfigSet_GovernanceMaxDepthZeroStaysOnTheWire: governance_max_depth 0 is the explicit
+// reset to the default, so the re-marshalled document must keep the key (an int with omitempty
+// dropped it, and the server then carried the stored depth forward instead).
+func TestSiteConfigSet_GovernanceMaxDepthZeroStaysOnTheWire(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{}"))
+	}))
+	t.Cleanup(srv.Close)
+	if _, _, err := runSiteConfigSet(t, srv.URL, `{"governance_max_depth":0}`); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("wire body %q: %v", body, err)
+	}
+	if v, ok := wire["governance_max_depth"]; !ok || v != float64(0) {
+		t.Errorf("wire = %s, want governance_max_depth present as 0", body)
 	}
 }
 
@@ -529,6 +594,49 @@ func TestSiteConfigSet_WarnsTheEgressBaselineWasNotApplied(t *testing.T) {
 	}
 	if strings.Contains(quiet, "egress baseline") {
 		t.Errorf("stderr = %q, want silence when the stored baseline is the file's", quiet)
+	}
+}
+
+// TestSiteConfigSet_WarnsTheRecordingLevelWasNotApplied: the SDK sends the document without the
+// recording block (PUT /site-config refuses a body that changes it), so a captured level the server
+// does not already hold does not land. `set` says so, and stays quiet when the server's own level is
+// the file's.
+func TestSiteConfigSet_WarnsTheRecordingLevelWasNotApplied(t *testing.T) {
+	const captured = `{"recording":{"level":"screen_actions"}}`
+
+	var got types.SiteConfig
+	_, stderr, err := runSiteConfigSet(t, applyServer(t, &got).URL, captured)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if got.Recording != nil {
+		t.Errorf("wire body = %+v, want it without the recording block", got)
+	}
+	if !strings.Contains(stderr, "recording level in this file was not applied") {
+		t.Errorf("stderr = %q, want a warning that the file's recording level was not applied", stderr)
+	}
+
+	// A file silent about the level asserts nothing, so it is never reported.
+	var plain types.SiteConfig
+	_, quietPlain, err := runSiteConfigSet(t, applyServer(t, &plain).URL, `{"scm_hosts":["gitlab.corp"]}`)
+	if err != nil {
+		t.Fatalf("apply of a file with no recording block: %v", err)
+	}
+	if strings.Contains(quietPlain, "recording level") {
+		t.Errorf("stderr = %q, want silence for a file that names no recording block", quietPlain)
+	}
+
+	holds := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(captured))
+	}))
+	t.Cleanup(holds.Close)
+	_, quiet, err := runSiteConfigSet(t, holds.URL, captured)
+	if err != nil {
+		t.Fatalf("apply against a server that holds the level: %v", err)
+	}
+	if strings.Contains(quiet, "recording level") {
+		t.Errorf("stderr = %q, want silence when the stored level is the file's", quiet)
 	}
 }
 

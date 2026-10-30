@@ -8,30 +8,53 @@ an operator follows to turn one on and run the queue.
 **Optional: require a SECOND human on egress decisions.**
 
 - Set `WARDYN_EGRESS_SECOND_HUMAN=1` and the human who DECIDES an `egress_domain` approval may not be the human who created the run.
-- Off by default: turning it on unprompted would deadlock every single-operator deployment.
-- Both verbs are covered — a self-*deny* is refused too.
+- Off by default: on unprompted, it would deadlock every single-operator deployment.
+- Both verbs: a self-*deny* is refused too.
 - A refusal is a `403` recorded as `authz.denied` with `reason: second_human_required`, landing **before** the decision is written, so a refused decision leaves the approval `PENDING`.
 - Scoped to `egress_domain` only; `credential` and every other `tool_call` approval are admin-only, and the one a run's owner may decide, an Azure DevOps access request, has its own switch, `WARDYN_CAPABILITY_SECOND_HUMAN`.
-- A run with an empty `created_by` (system-created follow-on runs) has no human creator to be the same as, so the rule cannot apply.
-- **Local mode REFUSES the switch** (`503`) rather than enforcing it:
-  - local mode authenticates nobody, so both the decider and the run's `created_by` come from the same client-supplied source — the DEV-ONLY `X-Wardyn-Principal` header, honored there by design —
-  - and no request in that mode can prove a second human decided.
-- Configure SSO to use this switch, or leave it unset.
-- The refusal is scoped to `egress_domain` decisions, so nothing else in local mode changes.
+- The rule cannot apply to a run with an empty `created_by` (a system-created follow-on run): it has no human creator.
+- **Local mode REFUSES the switch** (`503`): it authenticates nobody, so the decider and the run's `created_by` both come from the client-supplied, DEV-ONLY `X-Wardyn-Principal` header, and no request can prove a second human decided.
+- Configure SSO to use this switch, or leave it unset. The refusal covers only `egress_domain` decisions.
 
 **Optional: the same for Azure DevOps capability escalations.**
 
-- A member may decide an Azure DevOps capability escalation on a run they own, and ownership is the whole member rule, so a run's creator can approve their own escalation, admin-class capabilities included.
+- A member may decide an Azure DevOps capability escalation on a run they own; ownership is the whole member rule, so a creator can approve their own, admin-class capabilities included.
 - Set `WARDYN_CAPABILITY_SECOND_HUMAN=1` and the human who creates the run can neither approve nor deny its Azure DevOps escalation; a different administrator decides.
 - It is a separate switch, off by default, with every rule above:
   - the same `403` / `second_human_required`, the approval left `PENDING`, the `503` in local mode (plus a boot warning), and the `admin-token` break-glass, whose `approval.second_human.bypass` row names this switch in its `switch` field.
 - Each switch governs only its own kind.
-- A run's attention state follows the setting, as it does for egress: it stops naming the creator as the person who can act.
+- A run's attention state follows the setting, as for egress: it stops naming the creator as the one who can act.
+
+**Units and memberships (0.10.0).**
+
+- Units form a tree under one Default unit, whose walls are the deployment default: a unit built on the deployment default is its child; a standalone unit is top-level.
+- Memberships are keyed by unit, subject type and subject, so a person can belong to several units.
+  - Re-posting `POST /governance/memberships` for the same unit and subject updates `priority` and `home`, and never moves the subject to another unit.
+  - `home: true` marks the unit a person runs in when a run names none.
+  - With a stale group list, a run naming no unit is refused `groups_snapshot_stale` while any group home exists, unless the person's user membership is their home.
+  - A held membership change's `target_key` is `<unit_id>:<subject_type>:<subject>`; one held before the upgrade reads `stale` at approval: propose it again.
+- A unit with `mode` `pass_through` has its parent's walls exactly: it sends no `overlay` or `overlay_limits` and names its parent in `parent_id` (`400` `governance_unit_request_invalid` otherwise).
+- A unit path is at most `governance_max_depth` deep (site config; 16 unset, max 64; `0` resets, `null` keeps it); Default or a top-level unit is 1.
+  - A write past it: `409` `governance_unit_depth`.
+  - Lowering it below the deepest path: `400` `site_config_invalid`, naming that path.
+- Unit admins (0.10.0) govern their units and the units below them; [unit admins](unit-admins.md) has the full rule.
+  - A security admin's unit-admin grant follows `WARDYN_GOVERNANCE_SECOND_HUMAN`, so a single-admin install can create unit admins.
+  - A unit admin's widening, a grant of a unit admin below included, is always held, whatever the switch says.
+- `GET /governance` gives units `kind` (`default` for Default), `mode` and `depth`, memberships `home` and `legacy` (pre-0.10.0: only a person's first by precedence is a context), and `max_depth`. `ApplyGovernance` and `PlanGovernance` match memberships by unit name and never write Default or `legacy`.
+- A revive, admin restart or run-end extension (`run.end.set`) is refused `409` `unit_membership_gone` once the owner holds no membership of the run's unit or one above it. The owner's own checks their memberships (audit `arm` `owner_session`). Anyone else's passes while such a unit has a membership the owner could hold: their sub, user type, `all` or any group, never an email row (`arm` `row_can_match`).
+- The Default unit is read-only (`PUT` and `DELETE` are `409` `governance_unit_default_readonly`; its walls are `WARDYN_DEFAULT_POLICY`) and memberless: adding or moving a membership into it is `409` `governance_membership_default_unit`.
+- `PUT /governance/memberships/{id}` `{"unit_id"}` moves a membership, keeping its id, `priority`, `home` and `legacy` (audit `governance.membership.write`, with `from_unit_id`). An unknown unit is `404` `governance_unit_not_found`; one the subject is in, `409` `governance_membership_invalid`.
+- `POST /governance/memberships/{id}/promote` makes a legacy membership a context (already one: `409` `governance_membership_invalid`); audit `governance.membership.promote`. Both follow the switch below, held as ops `move`/`promote`.
+- Deleting a legacy membership can let a lower legacy one become someone's context. `activates: [{unit_id, unit_name}]` lists those units in the held change's diff, or the direct delete's `governance.membership.delete` row.
+
+**Restrictions.**
+
+- A restriction (`/governance/restrictions`) is a deny-only list (with `withheld_grants`, credentials kept from the run) that follows its members; a workspace's unit pin is `PUT /workspaces/{id}/owning-unit`.
 
 **Optional: four-eyes on governance writes.**
 
 - Set `WARDYN_GOVERNANCE_SECOND_HUMAN=1` and no single administrator can change a governance profile, an assignment, a capability grant, the enforcement map, a value's availability, a user type's priority, a role mapping or a key-domain assignment alone.
-- With it on, a human's write to `POST/PUT/DELETE /governance/units`, `POST/DELETE /governance/memberships`, `POST/DELETE /permissions/grants`, `PUT /permissions/enforcement`, `PUT /permissions/availability/{kind}/*`, `PUT /user-types/{id}` (when the priority changes), `POST/DELETE /access/mappings` or `PUT/DELETE /key-domains/assignments/{subject_type}/{subject}` is decoded and validated exactly as before and then stored as a pending change, answered `202` with `Location: /api/v1/governance/changes/{id}` and `{"pending_change": {id, target_kind, op, target_key, state, proposed_by, proposed_at, expires_at, diff}}`.
+- With it on, a human's write to `POST/PUT/DELETE /governance/units`, `POST/PUT/DELETE /governance/memberships` (with `POST /governance/memberships/{id}/promote`), `POST/DELETE /permissions/grants`, `PUT /permissions/enforcement`, `PUT /permissions/availability/{kind}/*`, `PUT /user-types/{id}` (when the priority changes), `POST/DELETE /access/mappings` or `PUT/DELETE /key-domains/assignments/{subject_type}/{subject}` is decoded and validated exactly as before and then stored as a pending change, answered `202` with `Location: /api/v1/governance/changes/{id}` and `{"pending_change": {id, target_kind, op, target_key, state, proposed_by, proposed_at, expires_at, diff}}`.
 - Nothing is applied.
 - `diff` is rendered by the server, never by a client:
   - the target's current row and the proposed one (every ceiling passes the same read-redaction as a read of it) plus the changed field paths;
@@ -39,22 +62,20 @@ an operator follows to turn one on and run the queue.
 - A second human approves it with `POST /governance/changes/{id}/approve`, or any authorised human rejects it with `POST /governance/changes/{id}/reject` (an optional `reason`, at most 512 characters, no control characters, recorded on the change and its audit row only).
 - `GET /governance/changes` lists the queue (`?state=` narrows it; pending by default) and `GET /governance/changes/{id}` reads one.
 - A change nobody decides expires after `WARDYN_GOVERNANCE_CHANGE_TTL` (default `72h`).
-- Nothing notifies anyone that a change is waiting: approvers find them through `wardyn governance changes list` or the API.
+- Nothing notifies anyone that a change waits: approvers find them with `wardyn governance changes list` or the API; name who looks, and how often, in your runbook.
 
 - **Who may approve.**
   - The approver must pass the predicate of the tier the write was proposed on, never a weaker one.
   - Profile, assignment, grant, enforcement, availability and user-type priority changes are proposed on the security tier, so a security admin or a super admin approves; a security admin may approve a super admin's change.
-  - A role mapping, and an organization pool's remote-hosted runner add or removal that the table below marks, is written on the super-admin tier, so only a super admin approves one:
+  - A role mapping, an organization pool's remote-hosted runner add or removal and organization runner removal that the table below marks, and a profile change that sets a mount's host path or makes a mount writable, is written on the super-admin tier, so only a super admin approves one:
     - a security admin who tries is refused `403` `authz.denied` reason `admin_surface` (target `governance.change`),
     - and those changes are neither listed to a security admin nor readable by one (`GET /governance/changes/{id}` answers `404`).
-  - The predicate is evaluated again inside the approval transaction:
-    - an API token that was revoked after it authenticated, one cut off by a session revocation, or one whose role no longer passes is refused and the change stays pending.
+  - The predicate is evaluated again inside the approval transaction: a token revoked since it authenticated, cut off by a session revocation, or whose role no longer passes is refused, and the change stays pending.
 - **Distinct human.**
   - An approval is refused (`403`, `authz.denied`, reason `second_human_required`, target `governance.change`) when the approver's principal equals the proposer's, or when both emails are non-empty and equal once case-folded.
   - The proposer may reject their own change.
 - **What applies.**
-  - One transaction locks the change, requires it pending and unexpired, compares the target (and, for an assignment, the profile it points at) and the deployment default with what the proposal reviewed, applies the write,
-    - and moves the change to `applied`.
+  - One transaction locks the change, requires it pending and unexpired, compares the target (and, for an assignment, the profile it points at) and the deployment default with what the proposal reviewed, applies the write and moves the change to `applied`.
   - A write to the target in between (the break-glass included), a rename or ceiling change of the profile an assignment points at, or a changed deployment default makes the change `stale` (`409` `governance_change_stale`): it never overwrites.
   - The write is re-validated against the current deployment default, so an approval cannot apply what a direct write would refuse.
   - Two approvals racing on one change apply it once; the other is `409` `governance_change_not_pending`.
@@ -79,7 +100,7 @@ an operator follows to turn one on and run the queue.
     - a delete by id is resolved to it at proposal, so a pending delete and a pending upsert of one grant collide.
     - Staleness covers the row at that key.
   - *Enforcement* (`PUT /permissions/enforcement`): the whole-map replacement.
-    - A stale `If-Match` is refused `412` at proposal as for a direct write; the approval then compares the map's ETag, and the approval transaction, not the in-process lock a direct write takes, is what serializes it.
+    - A stale `If-Match` is refused `412` at proposal as for a direct write; the approval then compares the map's ETag and is serialized by its transaction, not the in-process lock a direct write takes.
   - *Availability* (`PUT /permissions/availability/{kind}/*`): held whenever the stored restricted bit changes, in either direction.
     - Staleness covers the bit and the allow rows naming the value, so a restriction accepted at proposal is applied only while its list is what it was.
   - *User-type priority* (`PUT /user-types/{id}`): held when the priority changes, whole (a name and a priority edit together are one held change).
@@ -102,51 +123,47 @@ an operator follows to turn one on and run the queue.
 - **Audit.**
   - `governance.change.propose`, `.approve`, `.reject`, `.expire` and `.bypass` ([AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md)).
   - On approval the target's own row (`governance.unit.write`, `governance.membership.write`, ...) is written too, its actor the approver, carrying `change_id` and `proposed_by`.
-  - The proposer, the approver, their emails and a rejection's `reason` are personal fields:
-    - the `audit_personal_fields` erasure scope clears them from the change rows,
-    - and a pending change whose proposer is erased expires, so a change with no recorded proposer can never be approved.
+  - The proposer, the approver, their emails and a rejection's `reason` are personal fields: the `audit_personal_fields` erasure scope clears them from the change rows, and a pending change whose proposer is erased expires, so one with no recorded proposer is never approved.
 - **Residual risks.**
   - The `admin-token` is single-human by design.
   - A database writer can change the tables directly: the audit chain then shows a target row with no `propose`/`approve` pair, which is detection, not prevention.
   - Each change is reviewed alone: two separately approved changes can compose into a widening neither diff shows.
   - Not covered here: the rest of the governance-adjacent writes (workspace egress lists, `/policies`, `/site-config`, `/integrations`, the approval `always` scope, and user-type create and delete stay single-human until their own lanes).
 - **In the console.**
-  - The Governance screen's Changes tab lists the pending changes with the server's diff, and an approver approves or rejects there (a reason is optional).
-  - A covered write made in the console that is held shows "Submitted for approval" at the place it was made, never a save.
-  - Approve is disabled on your own proposal, and the server remains the authority.
+  - The Governance screen's Changes tab lists pending changes with the server's diff; an approver approves or rejects there (a reason is optional).
+  - A held console write shows "Submitted for approval" where it was made, never a save.
+  - Approve is disabled on your own proposal; the server remains the authority.
 
 > [!IMPORTANT]
 > **The `admin-token` principal BYPASSES it**, and you should plan around that.
 
-- A bare `WARDYN_ADMIN_TOKEN` caller is attributed `system`/`admin-token` because a shared token carries no per-human identity
-  - there is no second human to compare it against,
-  - and `X-Wardyn-Principal` is ignored off local mode specifically so a token bearer cannot forge one.
-- Refusing the token instead would lock you out of your own approval queue the moment SSO breaks, so the bypass is the deliberate break-glass.
-- It is not silent: every one writes an `approval.second_human.bypass` audit event beside the `actor_type=system` `approval.decide`.
+- A bare `WARDYN_ADMIN_TOKEN` caller is attributed `system`/`admin-token`: a shared token carries no per-human identity to compare, and `X-Wardyn-Principal` is ignored off local mode so a token bearer cannot forge one.
+- Refusing the token would lock you out of your own approval queue when SSO breaks, so the bypass is the deliberate break-glass.
+- It is not silent: each writes an `approval.second_human.bypass` audit event beside the `actor_type=system` `approval.decide`.
 - **For this gate to actually bind, treat the admin token as a break-glass credential** — configure SSO, and hold the token out of band.
 ## Four-eyes on governance writes: a walkthrough
 
-- The rules are in "Optional: four-eyes on governance writes" above; this is the order an operator works in.
-- The switch and its TTL are in [ENV.md](../ENV.md); the audit rows are in [AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md); the residuals are in [THREAT-MODEL.md](../../threatmodel/THREAT-MODEL.md) §5 "Four-eyes on governance writes".
+- The rules are in "Optional: four-eyes on governance writes" above; this is the order to work in.
+- The switch and its TTL are in [ENV.md](../ENV.md); the audit rows in [AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md); the residuals in [THREAT-MODEL.md](../../threatmodel/THREAT-MODEL.md) §5 "Four-eyes on governance writes".
 
 **1. Before you turn it on.** All four must hold, or the switch deadlocks you or does not bind:
 
 - **SSO is configured.** Local mode authenticates nobody, so with the switch on every covered write and every approve or reject answers `503` `governance_second_human_local_mode`.
 - **The admin token is held out of band.** It applies a covered write directly and approves a change, each audited as `governance.change.bypass`. It is the break-glass and the one way past this gate.
-- **Two humans can approve.** Every covered target needs a second security admin or super admin, except role mappings and an organization pool's remote-hosted runner add or removal, which need a second super admin (see step 6).
-- **Every CLI and SDK caller is upgraded.** A client built before 0.8.6 decodes the `202` as an empty object ([sdk.md](../sdk.md) "Old clients"). Nothing applies without approval, but the error it reports is confusing.
+- **Two humans can approve.** Every covered target needs a second security admin or super admin, except role mappings and an organization pool's remote-hosted runner add or removal and organization runner removal, which need a second super admin (see step 6).
+- **Every CLI and SDK caller is upgraded.** A client built before 0.8.6 decodes the `202` as an empty object ([sdk.md](../sdk.md) "Old clients"): nothing applies unapproved, but its error confuses.
 
-Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your approvers, `WARDYN_GOVERNANCE_CHANGE_TTL`) in the daemon's environment; on Kubernetes that is the chart's existing `env` map.
+Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong, `WARDYN_GOVERNANCE_CHANGE_TTL`) in the daemon's environment; on Kubernetes that is the chart's existing `env` map.
 
 - Both are read at boot.
-- Turning the switch off later leaves pending changes approvable and rejectable under the same rules, self-approval included; new writes apply directly.
+- Turned off later, pending changes stay approvable and rejectable under the same rules, self-approval included; new writes apply directly.
 
 **2. What is held, and who approves it.** A write the table lists is held when the condition in its row is true, and approved at the tier it was proposed on.
 
 | Write | Held when | Approver |
 |---|---|---|
 | Governance profile create, update, delete | the write is not exempt (below) | security admin or super admin |
-| Governance assignment upsert, delete | always, deletes included | security admin or super admin |
+| Governance membership upsert, move, promote, delete | always, deletes included | security admin or super admin |
 | Capability grant upsert, delete | always | security admin or super admin |
 | Enforcement map replace | always | security admin or super admin |
 | Availability set | the stored restricted bit changes, in either direction | security admin or super admin |
@@ -156,11 +173,14 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong for your appro
 | Service identity create, and a PATCH that changes the sponsor | always (the PATCH whole) | security admin or super admin |
 | Egress baseline (`PUT /governance/egress-baseline`) | always | security admin or super admin |
 | The Wardyn boundary (`PUT /governance/boundary`, see [boundary.md](boundary.md)) | always | security admin or super admin |
+| The recording level (`PUT /governance/recording`) | always | security admin or super admin |
+| A restriction delete or loosening; a unit pin moved off its branch | always | security admin or super admin |
+| An approval rule (`PUT /governance/approval-rules/{name}`, see [approval-rules.md](approval-rules.md)); a `DELETE` is never held | always, an edit included | security admin or super admin |
 | Credential delivery policy (`PUT /governance/credential-delivery`) | always | security admin or super admin |
 | Runner pool use policy set, delete | always | security admin or super admin |
 | Remote-hosted runner people policy set, delete | always | security admin or super admin |
 | Remote-hosted runner added to an organization pool | the runner is in another pool that carries a use policy | **super admin only** |
-| Remote-hosted runner removed from an organization pool | the pool carries a use policy | **super admin only** |
+| Remote-hosted or organization runner removed from an organization pool | the pool carries a use policy | **super admin only** |
 | Runner trust class change (`PUT /runners/{id}/trust`) | the class changes | security admin or super admin |
 | Run node record (`POST /runs/{id}/node-record`) | the held run shows a reused node name or no causal association, or four-eyes is on | security admin or super admin |
 
@@ -187,28 +207,26 @@ wardyn governance changes approve <change-id>     # a different human, at the ri
 wardyn governance changes reject <change-id> --reason "widens egress past the review"
 ```
 
-- `governance set` exits 0 on a pending result and skips `--prune` until every write is decided, so run it again afterwards.
-- `wardyn governance plan` previews the same apply without writing anything. Its `deletes:` list names every item a prune would remove, so read it before you run `set --prune`:
+- `governance set` exits 0 on a pending result and skips `--prune` until every write is decided: run it again then.
+- `wardyn governance plan` previews the same apply without writing. Read its `deletes:` list, every item a prune would remove, before `set --prune`:
 
 ```
 wardyn governance plan governance.json --prune   # plan: N create, N update, N delete; then the deletes
 wardyn governance set governance.json --prune    # the same apply, once the plan is what you expect
 ```
-- Running the SAME document again before then is safe: a target whose held change is that very write is reported as pending, with the held change named, and the rest of the file is applied.
-- A document edited since is refused at that target (`409` `governance_change_pending`, naming the held change) until the held change is decided; nothing of the edit is stored.
+- Running the SAME document again before then is safe: a target whose held change is that very write reports pending, naming it, and the rest of the file applies.
+- A document edited since is refused at that target (`409` `governance_change_pending`, naming the held change) until it is decided; none of the edit is stored.
 - The console does the same on the Governance screen's Changes tab, with the diff in a drawer; Approve is disabled on your own proposal.
-- Nothing notifies an approver that a change is waiting, so name who looks, and how often, in your own runbook.
 - There is at most one pending change per target:
   - a second proposal at the same target is `409` `governance_change_pending`, which names the first and carries it in `pending_change`,
   - with `pending_change_matches` saying whether it is the very write that was refused (same operation, same payload).
-- A new profile's target is its name while its create waits, so creating the same name again (by `POST`, or `PUT` at any new id) meets the held create.
+- A new profile's target is its name while its create waits, so creating that name again (`POST`, or `PUT` at any new id) meets the held create.
 
 **4. Expiry and stale changes.**
 
-- A change nobody decides within the TTL reads as `expired` and cannot be approved (`409` `governance_change_not_pending`); propose it again.
+- A change undecided within the TTL is `expired` and cannot be approved (`409` `governance_change_not_pending`); propose it again.
 - A change is `stale` (`409` `governance_change_stale`) when, at approval, the target, the profile an assignment points at or the deployment default differs from what the proposer's diff showed.
-- Approval never overwrites: a stale change is dead, and the remedy is to propose the write again against the current state.
-- A direct write in between (the break-glass included) is the usual cause.
+- Approval never overwrites: propose a stale change again. The usual cause is a direct write in between, the break-glass included.
 
 **5. Reading the audit.**
 
@@ -223,12 +241,10 @@ wardyn governance set governance.json --prune    # the same apply, once the plan
 
 **6. One super admin.**
 
-- Role mappings, and a held remote-hosted runner add to or removal from an organization pool, are written on the super-admin tier, so only a super admin may approve one, and nobody approves their own.
-- A deployment with a single super admin therefore cannot change a role mapping or a held pool membership while the switch is on, except through the admin token (audited as a bypass).
-- Add a second super admin before you enable the switch, or accept the token as the path for those changes.
+- Role mappings, a held remote-hosted runner add to an organization pool, and a held remote-hosted or organization runner removal from one, are written on the super-admin tier, so only a super admin may approve one, and nobody approves their own.
+- With a single super admin, no role mapping or held pool membership can change while the switch is on, except through the admin token (audited as a bypass).
 - The lockout guard is judged against the **approver's** own roles at apply, so the approver cannot be the person whose mapping change would strip their own admin.
 
 **7. What stays single-human.**
 
 - Workspace approved and denied egress lists, record-egress promotion, `/policies`, `/site-config`, `/integrations`, the approval `always` scope, user-type create and delete, and the SCIM purge's deletion of a person's own assignments and grants.
-- The threat model lists each with its reason.

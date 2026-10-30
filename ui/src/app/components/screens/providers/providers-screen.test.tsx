@@ -74,7 +74,7 @@ vi.mock("../../../lib/api/drives", async () => {
 });
 
 vi.mock("../../../lib/api/base-images", () => ({
-  baseImages: { list: () => Promise.resolve([]), add: vi.fn() },
+  baseImages: { list: () => Promise.resolve({ rows: [], imageBuilder: true }), add: vi.fn() },
 }));
 
 const { navigateMock } = vi.hoisted(() => ({ navigateMock: vi.fn() }));
@@ -121,6 +121,7 @@ describe("ProvidersScreen — a security admin", () => {
   it("is refused with the super-admin card and a way back to Runs, and nothing is fetched", async () => {
     renderScreen(false);
     expect(await screen.findByText(PROVIDERS_SUPER_ONLY.TITLE)).toBeInTheDocument();
+    expect(screen.getByTestId("refusal")).toBeInTheDocument(); // #3047: the Why can't I? card, one action
     expect(screen.getByText(PROVIDERS_SUPER_ONLY.BODY)).toBeInTheDocument();
     expect(getWorkspaceProvidersMock).not.toHaveBeenCalled();
     expect(getSetupStatusMock).not.toHaveBeenCalled();
@@ -449,7 +450,7 @@ describe("ProvidersScreen", () => {
       providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
       etag: '"e5"',
     });
-    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "providers changed since you loaded them — reload and retry"));
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "Providers changed since you loaded them — reload and retry"));
     renderScreen();
     const row = await screen.findByTestId("provider-row-github");
     await userEvent.type(within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS), "{Enter}https://git.corp.example/team");
@@ -477,7 +478,7 @@ describe("ProvidersScreen", () => {
       providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
       etag: '"e5"',
     });
-    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "providers changed since you loaded them — reload and retry"));
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "Providers changed since you loaded them — reload and retry"));
     whoamiMock.mockResolvedValue({ principal: "someone-else" });
     renderScreen();
     await screen.findByTestId("provider-row-github");
@@ -495,7 +496,7 @@ describe("ProvidersScreen", () => {
       providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
       etag: '"e5"',
     });
-    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "providers changed since you loaded them — reload and retry"));
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "Providers changed since you loaded them — reload and retry"));
     whoamiMock.mockResolvedValue({ principal: "alice" });
     renderScreen();
     await screen.findByTestId("provider-row-github");
@@ -514,7 +515,7 @@ describe("ProvidersScreen", () => {
       providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
       etag: '"e5"',
     });
-    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "providers changed since you loaded them — reload and retry"));
+    putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "Providers changed since you loaded them — reload and retry"));
     whoamiMock.mockResolvedValue(null);
     renderScreen();
     await screen.findByTestId("provider-row-github");

@@ -112,8 +112,8 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeScanLaunchRefusal answers the policy refusals a scan launch can end in,
-// the provider admission, the placement denial and a governance run limit, and
-// reports whether it did.
+// the provider admission, the placement denial, a governance run limit and a stale
+// group snapshot, and reports whether it did.
 func (s *Server) writeScanLaunchRefusal(w http.ResponseWriter, r *http.Request, err error) bool {
 	var denied *placementDeniedError
 	if errors.As(err, &denied) {
@@ -122,7 +122,11 @@ func (s *Server) writeScanLaunchRefusal(w http.ResponseWriter, r *http.Request, 
 	// A limit refuses a well-formed request, so 403 with the limit's own
 	// sentence, as the record and sign-in lanes answer it.
 	if errors.Is(err, errRecordCeilingLimit) {
-		writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "), recordCeilingRef(err))
+		writeErrorReasonPolicy(w, http.StatusForbidden, reasonRecordCeilingLimit, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "), recordCeilingRef(err), recordCeilingKnob(err))
+		return true
+	}
+	if errors.Is(err, errGroupsSnapshotStale) {
+		writeCeilingError(w, r, err)
 		return true
 	}
 	return s.writeAdmissionLaunchRefusal(w, r, err)
@@ -379,11 +383,37 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// #386 review follow-up N4: a scan clones a repo server-side too — the
-	// same gate the Build step and New Run door answer with.
-	if s.gitCredentialRefusal(w, r, repoSourceLocators(ws.Sources)...) {
+	// same gate the Build step and New Run door answer with, but worded for a scan.
+	if s.scanCredentialRefusal(w, r, repoSourceLocators(ws.Sources)...) {
 		return
 	}
 	s.scanAttachedSources(w, r, ws)
+}
+
+// sourceScanNoADOConnectionRefusal replaces the "connect and start the run again" sentences at the Scan door
+// (#2276): a scan run never carries a person's Azure DevOps credential (TestSourceScan_NeverTakesTheADOLane), so
+// connecting would not let it read the repository and the refusal must not offer it.
+const sourceScanNoADOConnectionRefusal = "A scan doesn't use your Azure DevOps connection, so it can't read a private repository there yet — " +
+	"connecting doesn't change that"
+
+// scanCredentialRefusal is gitCredentialRefusal at the Scan door: the same gate and the same unreadable 503, with
+// the refusal's sentence swapped for sourceScanNoADOConnectionRefusal and its cause dropped, since no cause
+// (ended, consent needed, blocked) is repaired by connecting. The device caller's own sentence stays: it is not
+// about connecting.
+func (s *Server) scanCredentialRefusal(w http.ResponseWriter, r *http.Request, repos ...string) bool {
+	err := s.gitCredentialRefusalForLauncher(r.Context(), oidcHumanFromContext(r.Context()), repos...)
+	var gcErr *gitCredentialRefusalError
+	switch {
+	case errors.Is(err, errGitCredentialUnreadable):
+		writeGitCredentialUnreadable(w, r, err)
+	case !errors.As(err, &gcErr):
+		return false
+	case gcErr.Sentence == gitCredentialNoPersonRefusal:
+		writeJSON(w, http.StatusUnprocessableEntity, gitCredentialErrorBody{Error: gcErr.Sentence, Reason: gitCredentialRefusalReason, Org: gcErr.Org})
+	default:
+		writeJSON(w, http.StatusUnprocessableEntity, gitCredentialErrorBody{Error: sourceScanNoADOConnectionRefusal, Reason: gitCredentialRefusalReason, Org: gcErr.Org})
+	}
+	return true
 }
 
 // scanAttachedSources is the whole-workspace scan's attachment-backed branch:

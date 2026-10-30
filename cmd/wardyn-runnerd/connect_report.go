@@ -72,8 +72,20 @@ type offlineLog struct {
 	secrets []string
 	now     func() time.Time
 
+	// status, when set, gets each failure's stage as well (nil in a test that has none).
+	status *statusWriter
+
 	mu  sync.Mutex
 	cur *types.RunnerOfflineSummary
+}
+
+// reportTo has the stage of each failure go to w too, starting from a refusal an earlier serve kept, so
+// status.json holds it until a connect succeeds.
+func (l *offlineLog) reportTo(w *statusWriter) {
+	l.status = w
+	if s := l.pending(); s != nil {
+		w.failed(s.Stage, s.Reason, s.LastFailureAt, true)
+	}
 }
 
 // newOfflineLog starts from the refusal an earlier serve recorded, if any.
@@ -100,7 +112,23 @@ func (l *offlineLog) secretsOrNil() []string {
 
 // connectFailed is the client's ConnectFailed hook.
 func (l *offlineLog) connectFailed(err error) {
-	l.fail(runnerwire.ConnectStage(err), err)
+	s := l.fail(runnerwire.ConnectStage(err), err)
+	l.status.failed(s.Stage, s.Reason, s.LastFailureAt, false)
+}
+
+// relayChanged is relayWatch.onChange: the relay's new state goes to status.json.
+func (l *offlineLog) relayChanged(state string) {
+	if l != nil {
+		l.status.relayChanged(state)
+	}
+}
+
+// peersOnlyChanged is docker.Config.PeersOnlyFallback: the proxy image whose runs serve any peer, or ""
+// once one takes allowed_peers again, goes to status.json.
+func (l *offlineLog) peersOnlyChanged(image string) {
+	if l != nil {
+		l.status.peersOnlyChanged(image)
+	}
 }
 
 // startFailed records a refusal of serve's start and keeps it on disk; an error without a stage is
@@ -111,6 +139,7 @@ func (l *offlineLog) startFailed(err error) {
 		return
 	}
 	s := l.fail(se.stage, err)
+	l.status.failed(s.Stage, s.Reason, s.LastFailureAt, true)
 	if b, err := json.Marshal(s); err == nil && l.path != "" {
 		if err := os.WriteFile(l.path, b, 0o600); err != nil {
 			slog.Warn("runner: the startup refusal could not be kept for the organisation", "error", err)
@@ -164,6 +193,9 @@ type relayWatch struct {
 	now     func() time.Time
 	// ticker is time.NewTicker's channel and stop; tests replace it.
 	ticker func(time.Duration) (<-chan time.Time, func())
+	// onChange, when set, is told the new state (types.RelayReachable or RelayUnreachable) once per
+	// transition, as the log line is.
+	onChange func(state string)
 
 	mu     sync.Mutex
 	status types.RunnerRelayStatus
@@ -198,6 +230,9 @@ func (w *relayWatch) check(ctx context.Context) bool {
 	}
 	w.status = types.RunnerRelayStatus{State: state, Since: w.now().UTC(), Reason: reason}
 	w.unsent = true
+	if w.onChange != nil {
+		w.onChange(state)
+	}
 	if err != nil {
 		slog.WarnContext(ctx, relayUnreachableWarning, "warning", "relay_unreachable", "error", reason)
 	} else {

@@ -421,10 +421,12 @@ func TestHubInventoryOverBoundPageClosesSessionOnWire(t *testing.T) {
 		f := newInventoryFixture(t, realWire)
 		conn, _, _ := f.open(t, nil)
 		page := runnerwire.StatePage{InventoryID: uuid.New(), Runs: orderedRuns(runnerwire.StatePageRows + 1), Final: true}
-		writeFrames(t, f.ctx, conn, 0, stateFrame(t, page), runnerwire.Frame{Type: runnerwire.TypeReady})
+		writeFrames(t, f.ctx, conn, 0, stateFrame(t, page))
 		if err := awaitValue(t, f.ctx, f.hubDone); !errors.Is(err, runnerwire.ErrBadFrame) {
 			t.Fatal("over-bound page did not close the session", err)
 		}
+		// The org may already have closed the link on the refused page, so READY is only offered.
+		_ = conn.WriteFrame(f.ctx, runnerwire.Frame{Type: runnerwire.TypeReady, Seq: 2})
 		if f.store.calls() != 0 || f.link.Online() {
 			t.Fatal("over-bound page reached intake or READY")
 		}

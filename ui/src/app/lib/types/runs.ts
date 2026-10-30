@@ -12,6 +12,7 @@ import type { PolicyRef } from "../api/health";
 import type { PolicyContact } from "./site";
 import type { Experience, RunOverrides } from "./new-run-contract";
 import type { HarnessInnerWalls, RecordingLevel, RunPolicySpec } from "./policy";
+import type { VMKind } from "./machine-kind";
 import type { RunnerPoolSelection } from "./runner-pools";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
@@ -37,6 +38,9 @@ export interface UIApp {
   name: string;
   port: number;
   path?: string;
+  // Callable from outside the run through the gateway, by the callers listed.
+  inbound?: boolean;
+  callers?: string[];
 }
 
 // Canonical weakest -> strongest ladder — the single place the Fence < Wall <
@@ -47,9 +51,9 @@ export interface UIApp {
 // not import from components/, so a home under components/ forced a second copy.
 export const CC_ORDER: ConfinementClass[] = ["CC1", "CC2", "CC3"];
 
-// The New Run choice a request was set up from (Go: client.RunShape, request field
+// The New Run choice a request was set up from (Go: types.RunShape, request field
 // `shape`). The server checks it against experience, workload and tools
-// (run_shape_conflict) and otherwise does not use it.
+// (run_shape_conflict) and stores it on the run (AgentRun.shape).
 export type RunShape = "agent_task" | "environment" | "application";
 export const RUN_SHAPES: readonly RunShape[] = ["agent_task", "environment", "application"];
 
@@ -80,6 +84,35 @@ export type RunState =
   // Keep the union open so an unrecognized backend state degrades to a
   // neutral badge instead of crashing the console (see primitives.tsx).
   | (string & {});
+
+/** Go: types.RunService. A service is a background run of a command that wardynd keeps running. */
+export interface RunService {
+  restart: "on_failure" | "never";
+  /** Listens on 127.0.0.1 inside the sandbox; absent = none declared. */
+  port?: number;
+  /** Needs `port`: an HTTP GET of `path` (2xx/3xx passes), or a TCP connect without one. */
+  health?: ServiceHealth;
+}
+
+/** Go: types.ServiceHealth. */
+export interface ServiceHealth {
+  path?: string;
+  interval_sec: number;
+  failure_threshold: number;
+}
+
+/** Go: types.ServiceHealthState. */
+export type ServiceHealthState = "starting" | "healthy" | "unhealthy" | "unknown";
+
+/** Go: types.RunServiceStatus. `reason` is closed: restarting | probe_failing | supervisor_missing | unreachable | paused. */
+export interface RunServiceStatus {
+  health: ServiceHealthState;
+  reason?: string;
+  restarts: number;
+  last_exit_code?: number;
+  /** wardynd's clock, never the sandbox's. */
+  observed_at: string;
+}
 
 /** Go: types.RunQueue. `position` is how many runs wait ahead in the pool, never whose. */
 export interface RunQueue {
@@ -169,6 +202,10 @@ export interface AgentRun {
   // client or before 0.9, which keeps every door's behaviour. Not `interactive`,
   // which is the legacy execution flag.
   experience?: Experience;
+  // The New Run shape the run was set up from, frozen at create: the request's own, else the one
+  // shape its experience, workload and tools fit. Absent when they fit more than one, for a run
+  // from an older client, or one created before the field.
+  shape?: RunShape;
   // The host working-directory the run's workspace is bind-mounted from. Surfaced
   // on the runs board so a workspace-directory collision is visible at a glance.
   workspace_path?: string;
@@ -271,6 +308,11 @@ export interface AgentRun {
   // AgentRun.InnerWalls (#2822): the harness's own walls the run launched with.
   // Absent for a run with no catalog harness, or one created before the field.
   inner_walls?: HarnessInnerWalls;
+  // AgentRun.Service: the spec of a background run kept running, frozen at create with defaults
+  // filled. Absent for any other run. AgentRun.ServiceStatus: its last health observation, absent
+  // until the first one.
+  service?: RunService;
+  service_status?: RunServiceStatus;
   // Run limits captured at create (migration 0072, #567): the lease end (null =
   // no end), the wait for a decision (absent = the deployment's approval
   // expiry), the owner's profile run limits and that profile's id (absent for
@@ -289,21 +331,24 @@ export interface AgentRun {
   wait_budget_sec?: number;
   run_limits?: RunLimits;
   unit_id?: string;
+  // The restrictions captured at create (internal/types AgentRun.RestrictionIDs); each is read at its
+  // current spec by the seal, the mint, the doors and a revive.
+  restriction_ids?: string[];
   // Set when the run lost its sandbox but is kept (migration 0073, #568):
   // "ended" = its end passed, so it is stopped with no network and its files
   // stay for the ended-run grace. "reboot" = its container exited under it
   // and is kept stopped; "outage" = its token lapsed, so its proxy was removed
-  // and its agent left running with no network (#574). The run stays RUNNING
-  // meanwhile.
+  // and its agent left running with no network (#574). "gone" = a runner
+  // reported its sandbox gone with no exit code, so the run was ended FAILED
+  // (#3667). A kept run stays RUNNING meanwhile.
   lost_at?: string;
-  lost_reason?: "ended" | "reboot" | "outage";
+  lost_reason?: "ended" | "reboot" | "outage" | "gone";
   // The run's end time, stamped by the three state writers that move a run to
   // a terminal state (migration 0092, #1197). Absent for a live run and for a
   // legacy row the backfill could not date exactly. A lease-ended run (
   // lost_reason "ended") stays RUNNING until the ended-run grace makes it
   // terminal, so ITS end time is lost_at, not this field — internal/types/
-  // types.go's AgentRun.EndedAt doc. Nothing in the console reads this field
-  // yet; it is a live wire field and the mirror rule forbids dropping one.
+  // types.go's AgentRun.EndedAt doc. The run header's total run time reads it.
   ended_at?: string;
   // Set while a kept run's stop could not be confirmed (migration 0088,
   // #1060): the latest stop error and when containment first failed. The
@@ -355,10 +400,26 @@ export interface AgentRun {
   // tracking, so an inline nested object's own keys (kind/by/pending) would
   // misread as top-level AgentRun keys and fail that parity test.
   attention?: RunAttention;
+  // AgentRun.MachineKind / VMMachine (migration 0217): "linux_vm" or
+  // "macos_vm" for a run in a VM, with the virtual hardware its runner
+  // started. Absent for a container run. A named interface for the same line-scrape reason as above.
+  machine_kind?: VMKind;
+  vm_machine?: VMMachine;
+}
+
+// internal/types/machine.go's VMMachine.
+export interface VMMachine {
+  machine_type: string;
+  cpu_model: string;
+  accelerator: string;
+  qemu_version: string;
+  // A macOS VM's guest build and its Mac's; absent on a Linux VM.
+  guest_os?: string;
+  host_os?: string;
 }
 
 export interface RunAttention {
-  kind: "approval" | "reauth" | "ado_consent" | "lost";
+  kind: "approval" | "reauth" | "ado_consent" | "lost" | "takeover";
   by: "you" | "owner" | "admin";
   pending: number;
 }
@@ -403,7 +464,7 @@ export interface RunProxyRelease {
   run_id: string;
   created_by: string;
   state: RunState;
-  lost_reason?: "ended" | "reboot" | "outage";
+  lost_reason?: "ended" | "reboot" | "outage" | "gone";
   proxy_release: string;
 }
 
@@ -491,6 +552,9 @@ export interface RunDetail extends AgentRun {
   model_provider_name?: string;
   model_provider_deleted?: boolean;
   created_via_name?: string;
+  // The model allowlist each local model provider handed the run's proxy at its latest dispatch, {provider id: models}
+  // (#3374): what the run is held to, whatever the provider lists now. Absent when the run holds none.
+  model_allowlists?: Record<string, string[]>;
   // The name of the pool the run was admitted into, as it reads now; a deleted pool is still named.
   runner_pool_name?: string;
   kept_until?: string;
@@ -503,6 +567,25 @@ export interface RunDetail extends AgentRun {
   computer_folder?: RunComputerFolder;
   // Every agent of a background run with several, the run's own first; absent otherwise.
   agents?: RunDetailAgent[];
+  // A macOS VM run's desktop as its Mac offers it (GET /runs/{id} only); see RunMacOS.
+  macos?: RunMacOS;
+  // Where a macOS VM run's disk stands on its Mac at the run's end (GET /runs/{id} only); see RunMacOSDisk.
+  macos_disk?: RunMacOSDisk;
+}
+
+// GET /runs/{id}'s macos (runMacOSView, internal/api/run_macos_view.go): whether the Mac's Screen Sharing
+// lets the desktop be controlled or only watched, read off the runner's live caps. Absent for any other run,
+// and while the runner's caps are unknown.
+export interface RunMacOS {
+  desktop: "control" | "observe";
+}
+
+// GET /runs/{id}'s macos_disk (runMacOSDiskView, internal/api/run_macos_disk.go): "removing" while no report
+// has come (for 10 minutes after the end), "removed" with at, or "kept" with the runner's reason code ("" for none).
+export interface RunMacOSDisk {
+  state: "removing" | "removed" | "kept";
+  at?: string;
+  reason?: string;
 }
 
 // One agent of a run with several agents (runDetailAgent, internal/api/run_multi_agent.go).
@@ -565,6 +648,7 @@ export type RunPolicyCause =
   | "git_broker"
   | "overlay"
   | "unit"
+  | "walls"
   | "org_disk"
   | "pool_disk"
   | "restart"
@@ -605,12 +689,25 @@ export interface RunPolicyView {
   stored_policy_now?: StoredPolicyNow;
   // Which layer set each top-level policy value, keyed by its json name.
   provenance?: Record<string, PolicyProvenance>;
+  // Which allowed hosts the run's proxy opened at launch; every other allowed
+  // host passed through unread. Absent for a run recorded before it existed.
+  host_marks?: RunPolicyHostMarks;
+}
+
+// internal/api/run_host_marks.go hostMarks: the allowed_domains entries marked Inspected.
+export interface RunPolicyHostMarks {
+  inspected: string[];
+  // Every host the proxy terminates: "host" on any port, "host:port" scoped to one.
+  terminated: string[];
+  // The terminated hosts the proxy opens on a port no allowed_domains entry names (under allow-all,
+  // every one it opens), by the proxy's own rule. It can overlap allowed_domains.
+  outside: string[];
 }
 
 // internal/policyref.Provenance: the layer that set one value of a run's policy
 // ("deployment", "unit" with the leaf's name, "member" or "operator"), the
 // contact to ask, and locked once a layer forbids lower layers to change it
-// (never set until walls or delegation can lock a knob).
+// (never set until a boundary or delegation can lock a knob).
 export interface PolicyProvenance {
   layer: string;
   name?: string;

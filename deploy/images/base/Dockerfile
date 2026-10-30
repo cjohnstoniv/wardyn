@@ -50,6 +50,12 @@
 # --platform=$BUILDPLATFORM: runs on the BUILDER's arch and cross-compiles to
 # $TARGETARCH below. Every binary here is pure Go (CGO_ENABLED=0), so this stage
 # never needs QEMU. Stage 2 does (apt + npm run as the target arch).
+# Module-download seed: empty unless a build passes `--build-context gomodcache=<dir>`
+# (nightly.yml's multi-arch build and scripts/lib/image-build.sh do), so a CI job's
+# already-filled module cache feeds `go mod download` below instead of the network.
+# An ordinary and a release build leave it empty and download as before.
+FROM scratch AS gomodcache
+
 FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
 
 WORKDIR /build
@@ -78,7 +84,19 @@ RUN if [ -f /corp-ca/corp-ca.pem ]; then \
 COPY go.mod go.sum ./
 # Bounded retry of the module FETCH only (a proxy stream error is transient); go.sum still
 # verifies every module, and no build or test step is ever retried.
-RUN for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+# The seed (a module cache's cache/download tree, empty unless a build passes
+# `--build-context gomodcache=<dir>`) is copied in first; `go mod download` then fetches
+# only what it lacks. go.sum is checked against each module's recorded hash, and
+# `go mod verify` re-checks the cache when a seed was used.
+RUN --mount=type=bind,from=gomodcache,target=/gomodcache-seed \
+    seed=; \
+    if [ -n "$(ls -A /gomodcache-seed)" ]; then \
+        seed=1 && \
+        mkdir -p "$(go env GOMODCACHE)/cache/download" && \
+        cp -a /gomodcache-seed/. "$(go env GOMODCACHE)/cache/download/"; \
+    fi && \
+    for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done && \
+    if [ -n "$seed" ]; then go mod verify; fi
 
 # Full source tree needed to build the two binaries.
 COPY . .
@@ -92,7 +110,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-rec ./
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-toolgate ./cmd/wardyn-toolgate
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
-FROM node:24-trixie-slim@sha256:8ec5d7557396cfe32d21c3f9c13072355ceab22b584578ca4bb28af31120cffe
+FROM node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
 
 # Apache-2.0 s4(a) requires a copy of the Licence to accompany the distribution and
 # s4(d) requires the NOTICE contents to be carried. Publishing an image IS
@@ -219,7 +237,7 @@ ARG TARGETARCH
 # bumped deliberately, like every other version here.
 ARG NPM_VERSION=11.19.1
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
- && npm install -g "npm@${NPM_VERSION}" \
+ && for i in 1 2 3; do timeout -k 10 180 npm install -g "npm@${NPM_VERSION}" && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done \
  && npm --version
 
 # ── GitHub CLI (gh) ──────────────────────────────────────────────────────────
@@ -229,9 +247,9 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi 
 # a bump moves GH_VERSION and both digests together. gh gets no GitHub
 # credential here: a run with a GitHub CLI row gets an inert GH_TOKEN, and the
 # proxy adds the App token per request.
-ARG GH_VERSION=2.102.0
-ARG GH_SHA256_AMD64=7e54a307f90afdc59796c325ec0c49fb09e6c18537727207a8ac7513584ea5b0
-ARG GH_SHA256_ARM64=5006962696f01e1624b3fcf1f9d8e1a11547f24bf067dd2a0371b7b421945237
+ARG GH_VERSION=2.103.3
+ARG GH_SHA256_AMD64=e3bafef96328d1a67de3a968bdfe1cc2ffd58cf6aba8b5e201356897ed06bb3d
+ARG GH_SHA256_ARM64=cac3ff84b60b68e64cca69f31f303210c26320361cc3286b773655d4226b7b06
 ARG TARGETARCH
 RUN set -eu; \
     arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
@@ -381,6 +399,8 @@ COPY --from=builder /out/wardyn-git-helper /usr/local/bin/wardyn-git-helper
 COPY --from=builder /out/wardyn-scan       /usr/local/bin/wardyn-scan
 # wardyn-toolgate: parks tool-use approvals on the Wardyn UI (hold runs).
 COPY --from=builder /out/wardyn-toolgate   /usr/local/bin/wardyn-toolgate
+# wardyn: the in-sandbox `wardyn needs-you <reason>` ("Needs you" takeover request), run by wardyn-toolgate.
+COPY deploy/images/common/wardyn-in-sandbox /usr/local/bin/wardyn
 
 # agent-run: the thin shell wrapper used by the Wardyn driver to launch one task.
 # agent-run-lib.sh: functions shared with every other agent image's agent-run.
@@ -397,6 +417,7 @@ RUN chmod +x /usr/local/bin/wardyn-rec \
            /usr/local/bin/wardyn-git-helper \
            /usr/local/bin/wardyn-scan \
            /usr/local/bin/wardyn-toolgate \
+           /usr/local/bin/wardyn \
            /usr/local/bin/agent-run
 
 # System-wide GLOBAL git credential helper (all hosts).

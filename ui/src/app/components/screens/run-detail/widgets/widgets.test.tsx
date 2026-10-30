@@ -699,6 +699,9 @@ describe("IdentityWidget: Runs on and Evidence", () => {
     const view = renderAs({ ...base, inner_walls: { sandbox_mode: "off", approvals: "wardyn" } } as AgentRun, "me");
     expect(screen.getByText("Harness walls: harness sandbox off, approvals in Wardyn")).toBeInTheDocument();
     view.unmount();
+    const bound = renderAs({ ...base, inner_walls: { sandbox_mode: "workspace-write", approvals: "none" } } as AgentRun, "me");
+    expect(screen.getByText(/^Harness walls: harness sandbox workspace-write, /)).toBeInTheDocument();
+    bound.unmount();
     renderAs(base, "me");
     expect(screen.queryByText(/Harness walls/)).not.toBeInTheDocument();
   });

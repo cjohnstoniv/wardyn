@@ -1,0 +1,9 @@
+# Prose-word budgets (scripts/doc-form.sh): path=N share=S. N is the measured prose words of the page, so growth fails.
+# docs/operations/unit-admins.md 714 measured: who holds a grant, the scoped routes, four-eyes, locks and the grant steps.
+# docs/operations/unit-admins.md 728 adds 14 over 714, measured (#2967): the desktop direction lock names.
+# docs/operations/unit-admins.md 746 adds 18 over 728, measured: the legacy move rule (activates or vacates, approver governs every unit).
+# docs/operations/unit-admins.md 768 adds 22 over 746, measured (0.10 rc1): the unit-rename approval row.
+# docs/operations/unit-admins.md 790 adds 22 over 768, measured (0.10 rc1): a held change is checked again when decided.
+# docs/operations/unit-admins.md 801 adds 11 over 790, measured (0.10 rc1): a renamed unit tied in priority with another group's unit is held.
+# docs/operations/unit-admins.md 806 adds 5 over 801, measured (rc.8 E4, #2948): a person's walls ignore locks.
+docs/operations/unit-admins.md=806 share=35

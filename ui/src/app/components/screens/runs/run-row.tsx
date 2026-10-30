@@ -20,12 +20,13 @@ import { OpenInUserViewMenu, runPath, useConsoleMode } from "../../wardyn/consol
 import { ownerLabel } from "../../wardyn/copy/console-view";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
-import { cn } from "../../ui/utils";
+import { Chip, RunStateBadge } from "../../wardyn/primitives";
 import { repoLabel, rowHeadline } from "./board-groups";
 import { glyphKindFor, RowGlyph } from "./row-glyph";
 import { rowPresentation, waitingSignInPresentation } from "./runs-model";
 import { mayReadSignIn } from "../run-detail/sign-in-run";
-import { RUNS_ROW_ACTION } from "../../wardyn/copy/runs-landing";
+import { RUNS_ROW_ACTION, RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
+import { serviceBadge } from "../../wardyn/copy/run-service";
 import { SCHEDULED_RUN } from "../../wardyn/copy/scheduled-runs";
 import { scheduledMeta, signInTimedOut } from "./scheduled-state";
 import { REVIVE, REVIVING } from "../../wardyn/copy/run-lifetime";
@@ -102,14 +103,19 @@ export function RunRow({ run }: { run: AgentRun }) {
       ? RUNS_ROW_ACTION.REVIEW
       : p.action === "sign-in"
         ? RUNS_ROW_ACTION.SIGN_IN
-        : p.action === "cancel"
-          ? SCHEDULED_RUN.CANCEL_RUN
-          : p.action === "revive"
-            ? reviving
-              ? REVIVING
-              : REVIVE
-            : null;
+        : p.action === "take-over"
+          ? RUNS_ROW_ACTION.TAKE_OVER
+          : p.action === "cancel"
+            ? SCHEDULED_RUN.CANCEL_RUN
+            : p.action === "revive"
+              ? reviving
+                ? REVIVING
+                : REVIVE
+              : null;
   const meta = metaLine(run, adminView, own);
+  // A live service says its health in place of "Running". Unhealthy is a warning chip on the same row, under Running:
+  // a report is not a request, so the row never moves to Needs you or borrows its glyph.
+  const health = p.word === RUNS_ROW_WORD.RUNNING ? serviceBadge(run) : undefined;
 
   return (
     <div
@@ -140,15 +146,20 @@ export function RunRow({ run }: { run: AgentRun }) {
         </div>
       </div>
       <div className="col-start-2 flex flex-wrap items-center justify-start gap-2 text-left sm:col-auto sm:flex-col sm:items-end sm:justify-normal sm:gap-1 sm:text-right">
-        <span
-          className={cn(
-            "text-meta sm:whitespace-nowrap",
-            p.hue === "amber" && "text-warning",
-            p.hue === "red" && "text-danger",
-            p.hue !== "amber" && p.hue !== "red" && "text-muted-foreground",
+        {/* #3039: the run header's own pill, so a row and its page say the same thing. An attention row keeps an amber
+            chip, because "Needs you" is not a run state; a lease-ended RUNNING run is over, so it gets a neutral one. */}
+        <span className="sm:whitespace-nowrap">
+          {p.hue === "amber" ? (
+            <Chip tone="warning" dot>
+              {p.word}
+            </Chip>
+          ) : run.lost_reason === "ended" ? (
+            <Chip tone="neutral">{p.word}</Chip>
+          ) : health ? (
+            <RunStateBadge state={run.state} word={health.word} tone={health.tone} pulse={health.pulse} />
+          ) : (
+            <RunStateBadge state={run.state} word={p.word} />
           )}
-        >
-          {p.word}
         </span>
         {/* The held-count subline (design.md §2.2) — its own line under the
             status word, always muted (the word already carries the hue). */}
@@ -184,7 +195,7 @@ export function RunRow({ run }: { run: AgentRun }) {
       )}
       {eligible && (
         <React.Suspense fallback={null}>
-          <RowSignInProbe runId={run.id} createdAt={run.created_at} onChange={setWaitingSignIn} />
+          <RowSignInProbe runId={run.id} onChange={setWaitingSignIn} />
         </React.Suspense>
       )}
     </div>

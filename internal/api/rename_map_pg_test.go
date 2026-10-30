@@ -20,11 +20,13 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 type renameMapFile struct {
@@ -86,7 +88,11 @@ func TestRenameMap(t *testing.T) {
 	pool := throwawayPGPool(t)
 	ctx := context.Background()
 	h := newHarness(t)
-	srv := New(baseTestConfig(h, store.NewPG(pool)))
+	cfg := baseTestConfig(h, store.NewPG(pool))
+	// The origin corpus was recorded on 0.9, where "update unknown" (a PUT to an id no unit holds) created
+	// one: WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY set off reproduces it.
+	cfg.GovernanceUnitPutCreates = true
+	srv := New(cfg)
 
 	ids := map[string]string{}
 	type rawStep struct {
@@ -149,6 +155,11 @@ func TestRenameMap(t *testing.T) {
 		if text := mask(r.body); strings.TrimSpace(text) != "" {
 			parsed = decodeAny(t, text)
 		}
+		if body, ok := parsed.(map[string]any); ok {
+			for _, k := range treeAPIFields[r.step] {
+				delete(body, k)
+			}
+		}
 		steps = append(steps, renameStep{Step: r.step, Status: r.status, Body: parsed})
 	}
 
@@ -168,7 +179,7 @@ func TestRenameMap(t *testing.T) {
 		}
 		audit = append(audit, auditRow{ev.Action, data})
 	}
-	got := rekey(decodeAny(t, mustJSONString(t, map[string]any{"steps": steps, "audit": audit})), renameMapFile{})
+	got := withoutTreeFields(rekey(decodeAny(t, mustJSONString(t, map[string]any{"steps": steps, "audit": audit})), renameMapFile{}))
 
 	if path := os.Getenv("RENAME_CAPTURE_ORIGIN"); path != "" {
 		if err := os.WriteFile(path, []byte(mustJSONString(t, got)+"\n"), 0o644); err != nil {
@@ -181,12 +192,49 @@ func TestRenameMap(t *testing.T) {
 	if err := json.Unmarshal(mustReadFile(t, "testdata/rename/map.json"), &m); err != nil {
 		t.Fatal(err)
 	}
-	want := rekey(decodeAny(t, string(mustReadFile(t, "testdata/rename/corpus.origin.json"))), m)
+	want := withoutTreeFields(rekey(decodeAny(t, string(mustReadFile(t, "testdata/rename/corpus.origin.json"))), m))
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the branch's governance surface differs from the origin corpus re-keyed by testdata/rename/map.json\n got: %s\nwant: %s",
 			mustJSONString(t, got), mustJSONString(t, want))
 	}
 	_ = ctx
+}
+
+// treeFields are what the unit tree (unit-tree migration) and its unit admins and locks (migration 0228) added to
+// the governance surface; this pin covers the rename only, so they and the Default unit's row are left out of the
+// comparison.
+var treeFields = []string{"kind", "mode", "depth", "home", "legacy", "max_depth", "people", "path_provenance", "locked_knobs", "unit_admins"}
+
+// treeAPIFields are the top-level keys the unit tree's API (lane TREE-API brief §8 and §10) added to
+// a step's body, left out per step because a unit's own "effective" is renamed surface: check's
+// contexts, dormant and effective, and the read's boundary. A unit's people (§10) is in treeFields.
+var treeAPIFields = map[string][]string{
+	"check":        {"contexts", "dormant", "effective"},
+	"check nobody": {"contexts", "dormant", "effective"},
+	"read":         {"boundary"},
+}
+
+func withoutTreeFields(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			if !slices.Contains(treeFields, k) {
+				out[k] = withoutTreeFields(val)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(x))
+		for _, e := range x {
+			if m, ok := e.(map[string]any); ok && m["kind"] == types.UnitKindDefault {
+				continue
+			}
+			out = append(out, withoutTreeFields(e))
+		}
+		return out
+	}
+	return v
 }
 
 func mustJSONString(t *testing.T, v any) string {

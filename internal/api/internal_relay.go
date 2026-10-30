@@ -20,6 +20,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -59,6 +60,7 @@ var relayedInternalRoutes = map[string]bool{
 	"PUT /api/v1/internal/scan-results/{runID}":            false, // trusted output is cluster-only
 	"PUT /api/v1/internal/sso-token/{runID}":               false, // container login is cluster-only
 	"POST /api/v1/internal/groundtruth":                    false, // no host sensor on a laptop
+	"POST /api/v1/internal/desktop-signin/check":           false, // sign-ins never run on a runner (signinTarget)
 }
 
 type relayRunnerKey struct{}
@@ -205,6 +207,14 @@ func (s *Server) acceptRelay(runnerID string, c net.Conn) error {
 	return nil
 }
 
+// relayHandshakeWait and relayIdleWait are the internal listener's own bounds (internal_tls.go):
+// a relay stream that does not finish its TLS handshake and request header within the first, or
+// stays idle between requests past the second, is closed, and its runner's relay slot comes back.
+const (
+	relayHandshakeWait = 10 * time.Second
+	relayIdleWait      = 120 * time.Second
+)
+
 // newRelayHTTPServer is the relay's HTTP server. It speaks HTTP/1.1 only: an h2 connection
 // multiplexes requests over the one relay stream, and the per-connection runner tag and the
 // per-runner stream cap assume one request at a time per stream.
@@ -212,11 +222,13 @@ func newRelayHTTPServer(h http.Handler, tlsCfg *tls.Config) *http.Server {
 	cfg := tlsCfg.Clone()
 	cfg.NextProtos = slices.DeleteFunc(slices.Clone(cfg.NextProtos), func(p string) bool { return p == "h2" })
 	return &http.Server{
-		Handler:        h,
-		TLSConfig:      cfg,
-		TLSNextProto:   map[string]func(*http.Server, *tls.Conn, http.Handler){},
-		ConnContext:    relayConnContext,
-		MaxHeaderBytes: 1 << 20,
+		Handler:           h,
+		TLSConfig:         cfg,
+		TLSNextProto:      map[string]func(*http.Server, *tls.Conn, http.Handler){},
+		ConnContext:       relayConnContext,
+		MaxHeaderBytes:    1 << 20,
+		ReadHeaderTimeout: relayHandshakeWait, // net/http bounds the TLS handshake by it too
+		IdleTimeout:       relayIdleWait,
 	}
 }
 
@@ -368,8 +380,9 @@ func (s *Server) refuseRelayedDelivery(w http.ResponseWriter, r *http.Request, c
 // least every residentRejudgeEvery (resolveADORunPAT), so a policy flip, a
 // trust change or a withdrawn opt-in refuses within that interval, and the
 // run's tokens are then revoked at Azure DevOps (reason drift), so a token the
-// proxy still holds is dead at the provider too. Every other resident grant is
-// refused.
+// proxy still holds is dead at the provider too. A write that withdraws the
+// delivery revokes them at once (revokeWithdrawnLocalPATs). Every other
+// resident grant is refused.
 func (s *Server) relayedResidentADO(ctx context.Context, runID, runner uuid.UUID, grant types.CredentialGrant) bool {
 	if grant.RunID != runID || grant.Spec.Kind != types.GrantAPIKey {
 		return false
@@ -378,19 +391,11 @@ func (s *Server) relayedResidentADO(ctx context.Context, runID, runner uuid.UUID
 	if err != nil || run.Placement != types.PlacementLocal || run.RunnerID == nil || *run.RunnerID != runner {
 		return false
 	}
-	origin, ref := s.localGrantOrigin(ctx, runIdentitySubject(ctx, run.CreatedBy), grant.Spec)
-	if ref != nil || !residentADOOrigin(origin) {
-		return false
-	}
-	r, err := s.residentADOAdmits(ctx, run, origin)
-	if err != nil {
-		return false
-	}
-	if r != nil {
+	admitted, withdrawn := s.judgeResidentADO(ctx, run, runIdentitySubject(ctx, run.CreatedBy), grant)
+	if withdrawn {
 		s.revokeRunPATs(ctx, runID, adoPATRevokeDrift)
-		return false
 	}
-	return true
+	return admitted
 }
 
 // denyRelayed writes a relay refusal: authz.denied with runner_id (the

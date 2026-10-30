@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.8)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.8)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -55,6 +55,7 @@ coverage verdict pointing back into this document.
 | **Enrolled hybrid laptop (device, v0.8; deprecated in 0.9, removed in 1.0)** | Not a human — a member-mode laptop (topology m′) that has enrolled with an org control plane and holds a `wdd_`-prefixed device credential (issue #103). | 🟡 Authenticated, narrowly trusted, self-reporting. Trusted to submit ITS OWN audit rows under a chain the organisation verifies on ingest. |
 | | `deviceAuth` ([`internal/api/devices_auth.go`](../internal/api/devices_auth.go)) resolves that bearer to a device identity ONLY, scoped ONLY to `/api/v1/devices/{id}/*` (push its own audit rows, heartbeat) — it is never a caller `isOperator` or `isMember` admits anywhere else. | Not trusted for completeness of what it chose to send, and not an operator or member principal on any other route. Residuals #50–#52 state the limits. |
 | **Runner host (client mode, 0.9)** | A developer's laptop running `wardyn-runnerd`: it holds a runner key, dials out to the organisation and runs its owner's local runs. | 🟡 Authenticated by key possession; self-reporting, and its developer is root: [B12](#b12--runner-host-vs-the-organisation). |
+| **Mac runner with macOS VM sandboxes (0.10, off by default)** | A company-managed Mac whose `wardyn-runnerd` also starts macOS guests under Apple's hypervisor; it is a runner host, so its person is root there. | 🟡 Authenticated by key possession; self-reporting; its guest is untrusted and bounded by the hypervisor: [B14](#b14--macos-vm-guest-vs-the-mac-that-runs-it). |
 | **Organisation runner (Kubernetes, 0.9.3)** | `wardyn-runnerd` in a cluster, owned by the organisation rather than a person and claimed by a security operator; it runs any member's runs an organisation pool places on it. | 🟡 Authenticated by key possession; self-reporting; its cluster's admins are trusted with what its runs use: [B13](#b13--organisation-runner-vs-its-kubernetes-cluster). |
 
 ### Member on a member-mode desktop (topology m′)
@@ -253,6 +254,7 @@ coverage verdict pointing back into this document.
 | | | Refusals on each side audit distinctly (`authz.denied` `reason` `admin_surface` vs `security_admin_surface`) so a reader can tell WHICH tier a denial was measured against. Residual #14. |
 | **B12 — Runner host vs. the organisation** | 🟡 partial **[0.9]** | A developer-administered laptop runs what the organisation schedules, enforces and audits: [detail](#b12--runner-host-vs-the-organisation). |
 | **B13 — Organisation runner vs. its Kubernetes cluster** | 🟡 partial **[0.9.3]** | An organisation's runner in a cluster: outbound-only, ServiceAccount and NetworkPolicy isolation, and the cluster's admins trusted: [detail](#b13--organisation-runner-vs-its-kubernetes-cluster). |
+| **B14 — macOS VM guest vs. the Mac that runs it** | 🟡 partial **[0.10]** | A macOS guest under Apple's hypervisor on a company-managed Mac: one NIC to the run's own proxy, a managed-Mac gate that is two assertions, and a ledger any local account can starve: [detail](#b14--macos-vm-guest-vs-the-mac-that-runs-it). |
 
 On a single-operator machine the boundaries compose into a strict containment
 ladder — Wardyn never *adds* power beyond what the operating user already has:
@@ -456,6 +458,24 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | Proxy pod → runnerd | Ingress from proxy pods only; the relay admits only a live, unfenced proxy pod's address; the decision sink needs a per-run key (`DecisionSink`) | #89 |
 | Agent pod → runnerd, API server, in-cluster services | Egress to its own proxy only, then the proxy's hard deny | #89 |
 | Cluster admins → run material | None: choosing `org_cluster` trusts them | #89 |
+
+### B14 — macOS VM guest vs. the Mac that runs it
+
+- **[0.10, off by default]** A run with `machine_kind: macos_vm` is a macOS guest under Apple's Virtualization framework on a company-managed Mac ([`docs/operations/macos-vms.md`](../docs/operations/macos-vms.md)). B12 holds for it: the Mac's person is root there, and no control binds them.
+- **The boundary is Apple's hypervisor.** The guest's only NIC is wired to the run's own relay and proxy in Docker, with no NAT device. Egress, recording, the clipboard rules and audit are enforced outside the guest.
+- **What the guest can reach in our code.** Four bounded inputs: the guest agent session, the network bridge's frames, a strict RFB shim that ends the session on any server message it does not know, and a DHCP responder that answers one fixed lease. The helper runs as the logged-in user, never root, with one virtualization entitlement.
+- **Inside the guest.** The agent is a standard user, not an admin. The setup account and its random password stay in every run's guest. The helper held the password in memory only, so no one holds it after preparing, and Remote Login is proved off on a live guest before the base is published. Screen Sharing is reachable only through the helper, by a person who already holds that run's desktop ticket. Nothing here relies on the guest's own protections.
+- **Managed-Mac gate.** The run is placed only on a runner whose trust class is `managed_device` and whose posture says `mdm_managed` from the MDM's file. Both are assertions, and no device-certificate check exists yet (residuals #90 and #96).
+- **Licence and image.** The guest comes only from Apple's restore image, on the Mac that uses it. No macOS image is in a release, a registry or the organisation.
+
+| Crossing | Guard | Residual |
+|---|---|---|
+| Guest ↔ Mac network | One FileHandle NIC to the run's relay and proxy; no NAT; stage-one preparation has no egress at all | #96 |
+| Guest agent ↔ runner | Guest-initiated vsock; the same session parser as Linux VMs | #96 |
+| Desktop ↔ gateway | A runner-side RFB shim on a socket only the helper reaches; the existing ticket, clipboard filter and recording | #96 |
+| Other local accounts ↔ the VM ledger | A root-owned, sticky ledger: it can deny service, never admit past the cap | #96 |
+| Other local accounts ↔ a run's sockets | A login-made `0700` folder under a root-owned sticky parent, checked on every use: a planted name denies that login's VMs, never access | #96 |
+| Guest secrets ↔ the Mac's volume | The run's clone disk is deleted at the end, which is not secure erasure | #96 |
 
 ---
 
@@ -1097,6 +1117,7 @@ ADMIN pre-authorized** —
   operator-authored mount rides the same spec and lives outside every member root by
   construction.
 - An operator run carries no roots and takes exactly the pre-0.6 path.
+- A Linux VM sandbox (0.10) gets those same binds as virtiofs shares, from the same `agentMounts` call: same folders, targets and mode (a read-only one is read-only in its virtiofsd bind, in `--readonly` and in the guest mount), and no other host folder (the runner's own VM state reaches the guest only as its disk). A guest write lands on the host as the runner's user.
 
 ### 4.5 The audit hash chain — what it is and is not
 
@@ -1410,7 +1431,7 @@ ADMIN pre-authorized** —
 #### Team drives (0.10) — one folder a group shares
 
 - **With team drives on, members of the allocated groups share one folder.**
-  - One person's agent can read, and if the allocation is writable run, what another person's agent wrote there. That is cross-person injection, by design.
+  - If the allocation is writable, what one person's agent writes there, another person's agent can read and run. That is cross-person injection, by design.
   - Any secret an agent writes there is visible to the whole group.
   - Nothing inspects or scans the folder's contents.
 - **What bounds it.**
@@ -1418,7 +1439,7 @@ ADMIN pre-authorized** —
     - `newResolvedDrive` treats a row as team only when the row says `team` AND the switch is on; otherwise it resolves per person, as before ([`internal/api/user_drives_resolve.go`](../internal/api/user_drives_resolve.go)).
     - With the switch off, a `team: true` drive write is a `422` (`driveTeamWriteRefusal`, [`internal/api/user_drives_team.go`](../internal/api/user_drives_team.go)).
   - It is admin-made and allocated to groups only.
-    - Drive writes are super-admin routes. Postgres keeps a team row an admin share with no owner (`user_drives_team_shape`, migration `0200_user_drives_team.sql`).
+    - Drive writes are super-admin routes. Postgres keeps a team row an admin share with no owner (`user_drives_team_shape`, migration `0205_user_drives_team.sql`).
     - `types.ValidateTeamDriveGrant` refuses any subject type but `group`, and any `home_override`, at the grant write (`teamDriveGrantAllowed`), and `teamResolvedDrive` runs it again at resolution, so a row written around the boundary mounts nothing.
   - It is read-only unless a super admin sets `members_can_write`, and the drive itself must be writable.
     - `newResolvedDrive` folds a team allocation to `writable && members_can_write && drive.writable`, so an allocation's `writable_override` cannot open a read-only team drive.
@@ -1721,6 +1742,14 @@ hiding them would repeat the failure mode we are designed to avoid.
       - Set `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` to a per-run host (wildcard DNS + wildcard certificate) and each run gets its own origin, with an enter served on any other host refused outright.
       - That is the recommendation for any install with more than one user ([docs/OPERATIONS.md](../docs/OPERATIONS.md#ui-apps-with-more-than-one-user-use-host-mode), "UI apps with more than one user").
       - Which mode is running is published, not inferred — boot logs the shared-origin mode as a warning and `/healthz` carries `ui_sandbox.host_mode`.
+    - **Inbound apps (rc.8).**
+      - An app that names callers can be opened by a person who is not the run's owner, so in path mode the residual above would turn cross-user: a foreign app could script the caller's own apps.
+      - So a browser ticket for a named caller who is not the owner is refused `inbound_needs_host_mode` unless host mode is on (`handleAppTicket`, [`internal/api/inbound_ticket.go`](../internal/api/inbound_ticket.go)).
+      - The owner opens an app in either mode, and a caller with an inbound token works in either mode, because a bearer is never ambient and carries no cookie.
+      - Host mode adds a cross-site check to every cookie session, inbound or not (`uiCrossSite`, [`internal/api/uigateway_inbound.go`](../internal/api/uigateway_inbound.go)).
+      - A request must be same-origin, carry no fetch metadata, or be a top-level `GET` navigation, and an `Origin` it names must be its own.
+      - It closes a foreign app on a sibling run's origin driving the caller's own editor session: a same-site WebSocket carries the cookie, and CORS does not cover a WebSocket.
+      - Path mode serves every run from one origin, so the check is off there and the refusal above is the control.
     - **The console's own cookies (#1258).**
       - A relayed page is B1 code, and its `document.cookie` can set `Domain=<registrable domain>` cookies that the browser then sends to the console on any host under that domain.
       - Under secure cookies (TLS served directly, or `WARDYN_TLS_TERMINATED`) the console's session and sign-in cookies are `__Host-` cookies ([`internal/auth/oidc/cookies.go`](../internal/auth/oidc/cookies.go)).
@@ -1794,10 +1823,18 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The relay deliberately sets no CSP or `X-Frame-Options` (`UIGatewayHandler`: "this origin serves the sandbox's own app, and the console's policy would break it"), and audit records only `ui.authorize`/`ui.open`/`ui.close` (residual #19).
     - **Operator acknowledgment:** opening a run's UI app runs that run's (agent-authored, possibly prompt-injected) code in your browser, with your browser's network reach.
     - A `Content-Security-Policy: connect-src 'self'` would narrow, not close, this — it stops in-page `fetch`/`XHR`/WebSocket egress but not navigation or a form submit — and is not implemented.
+    - **Inbound callers (rc.8).**
+      - A person an inbound app names opens it in their own browser, so the same acknowledgement holds for them: the app's code runs with that caller's network reach.
+      - That is why a named caller who is not the owner needs host mode (residual #18).
+      - The app's operator named its callers and each call is recorded: `inbound.allow` and `inbound.deny` rows carry the caller, the app, the method and the path, never the query.
+      - The `inbound` grant decides who may declare a port, not whom they may name: a granted person may name any person, group or service as a caller. An administrator limits the callers only by writing the app and its callers into a ceiling or a stored policy.
+      - The run's 8 gateway connections are shared by all its apps and callers, so callers holding them can make the owner's other apps on that run wait, or answer 503.
+      - A call keeps the run alive and thaws a paused one, which is intended for a service.
+      - The first connection may start the owner's launcher, which the owner declared.
 
 22. **The UI-relay's session cookie re-asserts ownership and revocation every 30 seconds; only a role demotion waits for the TTL.**
     - `uiSessionTTL` is 8 hours (`WARDYN_UI_SANDBOX_SESSION_TTL`); the cookie is minted once at `handleUIEnter` against the caller's role at that moment.
-    - Every 30 seconds (`uiReassertInterval`, `uiSessionStillAuthorized`) the relay re-checks, per request, that the principal may still enter the run, that no revocation postdates the session, and that a portal grant is live; an upgraded WebSocket is checked only at its start.
+    - Every 30 seconds (`uiReassertInterval`, `uiSessionStillAuthorized`) the relay re-checks, per request, that the principal may still enter the run, that no revocation postdates the session, and that a portal grant is live; an upgraded WebSocket is checked only at its start, except an inbound-token stream (rc.8: re-checked at most every 30 s; residual #98).
     - Demoting an admin does not end their cookie: its role is a login-time snapshot, so it keeps the admin's reach until the TTL lapses or the run stops.
 
 23. **The shipped default deployment collapses the audited insider into the trusted operator.**
@@ -1822,6 +1859,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Two things bound the blast radius: the roots are **operator/MDM-set**, so the widest a member can aim the race is *within the declared roots* — the target set cannot be enlarged, only raced within.
     - And the credential-dotfile deny-list matches the **post-`EvalSymlinks` real path**, so a won race landing on `~/.ssh` inside a too-wide root is still refused unless the attacker also defeats that list.
     - The tests pin the ORDERING this depends on; the race itself is not deterministically testable and no test claims to cover it.
+    - The env-as-code write (`POST /workspaces/{id}/env-as-code/write`) re-checks the directory it opened through `/proc/self/fd` on Linux; on a daemon host without it (macOS, Windows) a source swapped between that write's path check and its open is not re-checked.
 
 26. **A reckless member root is a boot WARNING, not a boot refusal.**
     - Setting `WARDYN_USER_WORKSPACE_ROOTS` (or a `_MAP` entry, or `WARDYN_USER_WRITABLE_ROOTS`) to `/` or the daemon's own `$HOME` leaves the dotfile deny-list as the ONLY thing between a member and the operator's credentials.
@@ -2588,7 +2626,7 @@ hiding them would repeat the failure mode we are designed to avoid.
       - A component whose `mcp` block has `transport: stdio` names a launch command, not a URL. Its harness starts that command inside the run's sandbox, as the agent's user (`claudeMCPFile`, `codexLocalTOML`, [`internal/api/run_mcp.go`](../internal/api/run_mcp.go)).
       - It is off by default. Until an admin sets `WARDYN_MCP_LOCAL_SERVERS`, saving such a component and attaching one already saved are both refused (`mcpLocalOffProblem`, called by `componentSaveRefusal` and `componentDefinitionProblem`).
       - An env or file secret given to it is readable by any process in the sandbox, the agent included. Only a request header the proxy adds to one of its hosts stays out of the sandbox.
-      - Its traffic still leaves through the run's proxy and egress policy. Its hosts join the run's allowlist as raw egress, with no broker route in front of them (`rawEgressHosts`).
+      - Its traffic still leaves through the run's proxy and egress policy. Its hosts join the run's allowlist as raw egress (so the agent can reach them too), with no broker route in front of them (`rawEgressHosts`).
       - The broker never sees its tool calls, so the harness applies the run's rules to them, and the in-sandbox relay that asks is cooperative.
       - Hold or block rules on its tools are refused at create where the harness can't apply them: Codex CLI in any mode, and any harness a command starts (`localMCPRulesRefusal`, [`internal/api/run_harness_tool_rules.go`](../internal/api/run_harness_tool_rules.go)).
       - The person chooses which package runs. An `npx` package must pin one exact version (`validateLocal`, [`internal/types/component_mcp.go`](../internal/types/component_mcp.go)), which bounds that supply-chain risk but does not remove it; an absolute program in the image is trusted as the image is.
@@ -2875,7 +2913,8 @@ hiding them would repeat the failure mode we are designed to avoid.
 93. **On the Docker runner, a run's proxy serves any caller that reaches its listen port, not only its own sandbox [0.9.4; switch in 0.10].** ([`internal/runner/sandbox.go`](../internal/runner/sandbox.go), [`internal/runner/docker/driver_proxy_revive.go`](../internal/runner/docker/driver_proxy_revive.go), [`internal/egress/proxy/peer_listener.go`](../internal/egress/proxy/peer_listener.go).)
     - The proxy listens on all of its interfaces and also joins the shared `wardyn-internal` network to reach wardynd, whose members are Wardyn's own containers.
     - With `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` on, the driver writes the run's own network subnet into the proxy config (`allowed_peers`) and the proxy closes any connection from outside it before reading a byte. How the proxy is addressed does not change.
-    - The switch is off by default in 0.10 until proven on Docker and Podman; with it off the proxy serves every caller as before.
+    - On by default from 0.10. Proof: the driver's fake-daemon tests on every PR, and `TestProxySandboxPeersOnly_RealDocker` on a real Docker daemon (a caller on the run's network is answered, one on `wardyn-internal`'s side is closed) in the nightly docker-tagged-live job. Not tested on Podman. Set off, the proxy serves every caller as before.
+    - Three grant switches are also on by default from 0.10: `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL`, `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY` and `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT` ([`docs/ENV.md`](../docs/ENV.md)). Their proof is the `internal/api` unit and Postgres suites and the wardynd boot-flag pins.
 94. **A folder-only runner trusts wardynd for every folder call, and its default root is the person's home [0.10, off by default].** ([`internal/runner/folders/folders.go`](../internal/runner/folders/folders.go), [`internal/api/run_computer_folder.go`](../internal/api/run_computer_folder.go).)
     - `wardyn-runnerd serve --substrate folders` answers every `list_folders` and `sync_folder` call that arrives on its own outbound session. It cannot tell which run or person a call is for, so it does not check either.
     - The only check that a run may use a folder is wardynd's: the runner must be claimed by the run's creator (`run.CreatedBy` equals the runner's owner), not an organisation runner, online and sharing folders. That check runs at browse, at create, and again before each pass (`folderRunner`). With `WARDYN_COMPUTER_FOLDERS` off, wardynd makes no folder call.
@@ -2894,6 +2933,37 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Read-only enforcement moves to runnerd: it drops an observer's input and resizes. The organisation pushes every change of write authority, the lease fence included, and ends the session when runnerd does not acknowledge it in 2 s. Anyone sharing that tmux session is the same person or already on that host's Docker (#69).
     - This departs from "recordings record the attach exactly as they do today" in one respect: the cast, masker, key, head cap and audit rows are the same, but the bytes recorded are runnerd's copy, not bytes the organisation forwarded. Both are `runner_asserted` (#73), and the developer already has unrecorded `docker exec` on that host (#69). Rows carry `transport` `local` and `runner_id`.
     - The copy reaches the organisation at most 64 KiB or 2 s ahead of its acknowledgement, which is sent once the recorder accepts the bytes; so up to that much output can be shown before the organisation holds it. A stalled acknowledgement ends the session (`attach_tee_stalled`).
+
+96. **A macOS VM keeps the run's secrets and sign-ins on the Mac's disk, trusts an administrator's word that the Mac is managed, and can be starved by any local account [0.10; off by default].** ([`docs/operations/macos-vms.md`](../docs/operations/macos-vms.md).)
+    - Credentials: Wardyn brokers some kinds, and the proxy injects them in Docker, so those never enter the guest. A secret delivered as an environment variable or file, and an SSH key, do enter it. They sit in the guest's memory and on the run's clone disk, in the Mac user's home, until the run ends.
+    - Wardyn deletes the clone when the run ends. That is not secure erasure: the Mac's local APFS snapshots (Time Machine takes one about hourly and keeps it for 24 hours, and no folder can be excluded), freed blocks, and a backup tool that ignores Wardyn's Time Machine exclusion may keep a copy. Wardyn changes no backup or snapshot setting beyond excluding its own directory.
+    - Sign-ins in a macOS desktop are on the run's disk, not in memory as in a Linux VM. An agent set "Sign-ins in a desktop: Not allowed" is refused a macOS desktop. The Mac's own user can read a live run's disk (#69).
+    - The helper signs in to the guest's Screen Sharing with VNC's password scheme, DES of a challenge under the password, because the protocol requires it (RFC 6143 §7.2.2). Only the first 8 characters count: the desktop password is 8 characters from a 57-character alphabet, about 46 bits, and is per run, or per base where the guest cannot change it. The exchange never crosses a network. It goes over the VM's private channel to the guest's loopback port, so only the Mac's own root or the helper's user, or root in the guest, could capture it and attack it offline. The agent runs as a standard user.
+    - The gate is two assertions, `managed_device` (#90) and the MDM posture file, so it does not constrain a root developer. The MDM device-certificate proof is the next patch.
+    - Every local account can write the shared admission ledger. It can hold this Mac's macOS VM slots, memory or disk, or the lock, and so stop macOS VMs until it stops or the Mac restarts. It cannot admit a VM past the cap, and a runner refuses with a named reason after 10 seconds. An account that can do this can already exhaust the Mac directly. It can also make a package install fail closed by holding the lock for over 10 seconds.
+    - A runner frees its own ledger entry early in one stated case: a process-count heuristic that errs toward keeping the entry. Apple's cap of two is the backstop.
+    - Disk reserved per VM is its worst case on the live volume. Space that local snapshots hold is outside it, so macOS VMs can use more disk than they reserved.
+    - In the guest, tools that use the macOS keychain do not trust the run's proxy certificate, so hosts the proxy inspects show certificate errors there.
+    - The setup account and its random password stay in every run's guest. No one holds the password after preparing, and Remote Login is proved off. The guest may also hold it in its auto-login file until stage 1 overwrites that. A one-time code from a setup by hand is replaced by stage 1's first step.
+    - A Mac runner reports its macOS VM status to its own organisation as fixed codes and numbers: the preparing step, percent and download rate; a wait, failure or host-check code with free GB; and whether it runs in a GUI login session, as yes or no. No user or account name is sent. The base's error is the one free text: the runner replaces its login's home folder with `~`, but an error from Apple's framework, `softwareupdate` or the guest may still name another path.
+    - The macOS VM base's pinned guest tools are checked against SHA-256 values compiled into the runner, so the remaining trust is the supply chain at the time each pin was chosen.
+    - A macOS VM run's page says whether its disk was removed from the Mac, from its runner's report. The report is a state and a reason from closed code sets. It is kept only for that runner's own macOS VM runs and is shown as fixed console strings. It is the runner's word, so a compromised runner can claim a removal it did not make.
+
+97. **A runner can make its organisation write audit rows by sending events it will refuse; the rows are capped, and a refused event is acknowledged and not kept [0.10].** ([`internal/api/runner_event_refuse.go#Server.classifyRunnerEvent`](../internal/api/runner_event_refuse.go), [`internal/store/store_runner_event_refuse.go#PG.RefuseRunnerEvent`](../internal/store/store_runner_event_refuse.go).)
+    - The cap is 32 `runner.event.refuse` rows per runner per hour on each replica, then one `suppressed` row; it is held in memory, so a restart re-arms it.
+    - A refused event is acknowledged so the runner stops resending it, and only its SHA-256 and size are kept.
+    - A refused spool record next in its run's stream moves the run's spool cursor past it, as an accepted one would, so the records after it are not refused as a gap.
+    - A runner can close its own open actions as `refused` this way, which it could already do by answering `refused`.
+
+98. **A browser stream already open is not cut when its session ends; an inbound-token stream is [rc.8].**
+    - A UI-app session, the owner's or a named caller's, is re-checked every 30 seconds on a request, but an upgraded WebSocket is checked only at its start.
+    - So an owner's relayed socket that was open when their sessions were revoked keeps working until it closes or the run ends. Killing the run ends it.
+    - A stream an inbound token opened is the exception (rc.8: re-checked at most every 30 s): it is closed when the token is revoked, expires or its owner is suspended, or when the run's profile now denies UI apps or interactive sessions.
+    - The gateway also reuses a verified token's session for 30 seconds per token, run and app, so a new request after a revoke can still pass within that window.
+    - A named caller's browser session never re-checks the callers list, which is fixed for the run, or the caller's group membership.
+    - A person removed from a group keeps a session already open until `WARDYN_UI_SANDBOX_SESSION_TTL` (8 hours by default) bounds its later requests; a socket already upgraded is not cut by it. An inbound token carries the groups stamped at its mint, refreshed when its owner signs in again.
+    - Bounds: a caller can reach only the apps the run declared inbound, at most 8 relay connections and 50 requests a second per run and per caller, and the token never reaches the sandbox.
+    - No role reaches an inbound app: only the owner and the named callers can. A profile's `deny_ui_apps` or `deny_interactive` refuses a live call at the next re-check and closes an open inbound-token stream at its next tick; a browser stream already open is not cut by it.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
@@ -3017,6 +3087,7 @@ exactly these terms.
   - an OPT-IN Shannon-entropy detector (`detect_entropy`; high-FP in code, pure-hex skipped, medium severity so `block_min_severity` can exclude it),
   - an OPT-IN regex/Luhn PII detector (`detect_pii`; ≈60-70% recall = high false-negative — visibility, NEVER a control),
   - and an OPT-IN out-of-process sidecar (`detector_sidecar_url`; e.g. Presidio/LLM-Guard — fail-open by default, fail-closed under `on_scanner_error=block`).
+    - The sidecar scans at most 64 spans per request. Under the default fail-open (`on_scanner_error=pass`), spans past the 64th are not sent to it, so a request built with more spans gets the rest past the sidecar. The in-process detectors still scan every span, and the skip is recorded as `sidecar_call_cap`. To have every span scanned or the request refused, set `on_scanner_error=block`.
   - None is exhaustive; entropy and PII in particular are best-effort.
   - Detections stay content-free regardless of detector.
 - "Protects all LLM traffic" — Bedrock (SigV4) stays opaque, and any run without `intercept_tls` leaves subscription/OAuth tunnels uninspected (flagged blind).
@@ -3041,6 +3112,7 @@ exactly these terms.
 | **Tool-approval credential** (0.9, a run with a started harness) | The Wardyn-minted credential that selects the started harness's tool rules, as the file `/run/wardyn/secrets/wardyn-toolgate-<harness>`, and the git helper's per-run caller-auth nonce | Not a third party's credential: Wardyn mints it, and the in-sandbox tool gate has to read it | Docker: mode 0400, agent-owned. Kubernetes: root-owned 0440 through the pod's fsGroup, and the plaintext also sits in the run's Secret object. Any process running as the agent user can read it, and the gate is cooperative, so a uid boundary would not stop a process that skips the gate. See [B3](#b3--sandbox-vs-mcptool-gateway). |
 | **Derived AWS role credentials** (every `bedrock_sso` run) | The short-lived role credentials the in-sandbox AWS SDK mints for itself from the SSO session (`portal.sso.<region>` `GetRoleCredentials`) | SigV4 signs in-process, so these stay resident today **regardless** of how the SSO session reached the sandbox; with `WARDYN_AWS_SIGV4_AT_PROXY=on` (off by default) the proxy re-signs SigV4 after TLS interception and they stay out of the sandbox of a lane it re-signs, while a lane with one host it cannot re-sign (a private endpoint, a dual-stack host, a port other than 443, GovCloud IAM) keeps them resident — Phase B would end the SSO token's residency, not theirs — and in 0.7.6 it did. On a lane the proxy re-signs, the proxy holds them and mask-registers their secret key and session token; on an old-path lane they are still resident, still outside Wardyn's sight and still unmaskable, which is why `kindResidency` keeps answering `residencySandbox` for this lane. Phase B did not change the residency classification, and a reader who "fixes" `credential_residency.go` because the SSO token left the sandbox is reading the wrong row. | Bounded only by their own STS lifetime and the IAM role's scope, both set outside Wardyn. On an old-path lane Wardyn never sees these values, so they are **not** mask-registered and cannot be masked; on a re-signed lane the proxy obtains them and mask-registers their secret key and session token. |
 | **AWS CLI component role credentials** (0.9, a run with an AWS CLI component) | The short-lived role credentials the in-sandbox `aws` gets from the person's own sign-in, for the one account and permission set the component pins, cached under `~/.aws/cli/cache`, which since 0.10.0 is a link onto the sandbox's `/tmp` memory file system and ends with the sandbox (`link_aws_cli_cache_to_tmpfs` in [`deploy/images/common/agent-run-lib.sh`](../deploy/images/common/agent-run-lib.sh)); a Docker sandbox kept after its run ends, on a run Wardyn staged an AWS profile for, has `~/.aws/sso/cache` and that cache deleted just before it stops (`wipeAWSCaches` in [`internal/runner/docker/aws_cache_wipe.go`](../internal/runner/docker/aws_cache_wipe.go)), and every other end removes the container or pod | AWS issues them to the client, which signs in-process | Bounded only by the permission set's session duration and its policies, both set outside Wardyn; `GetRoleCredentials` takes no duration, so the administrator's lever is a `PT1H` session duration, the shortest AWS allows. They stay valid at AWS after the run ends and are not mask-registered. Wardyn cannot revoke one STS session; the administrator's lever is revoking the role's active sessions. |
+| **Desktop sign-in logins** (0.10, `WARDYN_DESKTOP_SIGNINS=on` only, a run that declares the `novnc` desktop, the in-process Docker runner only) | The cookies of each website the run's creator signs in to in their own browser inside the run's desktop; and, for each site they **share**, that site's cookies in the agent's browser | The login is made by the person in the sandbox's desktop, through a site Wardyn has no credential for, so there is nothing for the proxy to hold | The person's browser runs as uid 1001, its profile and every socket in a 0700 tmpfs only that uid can open; the agent is stopped (pid 1 from outside, every other agent process proven stopped) for the whole sign-in, at most 30 minutes; a share copies one registrable domain's cookies, re-filtered by wardynd, at most 512 KiB. **This is a uid boundary inside one sandbox, not a sandbox boundary**; the bounds and residuals below say what it does not stop |
 | Container-**login** runs (`harness login`) | **Launched by the person capturing their OWN credential through a model provider's sign-in door; the sandbox is seeded with the ADMIN'S access-portal URL from the provider record and ignores any the caller supplies, so a capture can never be bound to a foreign IdP/account.** The credential the run exists to obtain: `claude setup-token` prints it to the PTY; `aws sso login` writes it to `~/.aws/sso/cache` before `wardyn-aws-sso` uploads it | The credential does not exist yet — there is nothing to inject | A throwaway box: no workspace, no repo, no credential mounts, mints nothing (the AWS flow is seeded with one NON-secret file — a `~/.aws/config` holding the operator's SSO start URL + region, which `aws sso login` cannot run without), default-deny egress pinned to the login flow's hosts, idle auto-stop. **Never recorded** — the recorder is dropped entirely for a `harness login` run (masking could not have covered it: the value arrives after the run's mask snapshot). **0.7.5 — and the sign-in the image now runs itself is not recorded either, deliberately.** The claude-code image's boot pane wraps its seed in `wardyn-rec` (`boot_seed_rec_wrap`, [`deploy/images/common/agent-run-lib.sh`](../deploy/images/common/agent-run-lib.sh)); the aws-sso image's sign-in pane does NOT. It handles the credential this run exists to obtain — the device code, the portal's reply, and the helper's upload — and the recorder is exactly what must not see them, for the same reason the run's recorder is dropped at dispatch: the value arrives after the run's mask snapshot is taken, so masking could not have covered it. The consequence, stated rather than implied: **there is no cast of what happened inside a sign-in sandbox**, including whatever a human typed at the pane's trailing shell after the sign-in finished. That shell has the same bounds as any other attach into this box — the AWS CLI, no repo, no mounts, default-deny egress pinned to the SSO endpoints, and a 30-minute idle cap — and the audit trail still carries the capture (`harness.credential.capture` / `.refused`) and the launch (`harness.login.start`). What is not carried is the keystrokes. **0.10.0:** once the capture is stored, `wardyn-aws-sso` deletes `~/.aws/sso/cache` and `~/.aws/cli/cache` and the pane's history is cleared, and the control plane stops the sign-in sandbox after a 5-second grace (`signInCaptureKillGrace` in [`internal/api/ssotoken.go`](../internal/api/ssotoken.go)); a Claude paste capture stops its sandbox the same way, so the credential no longer sits in the box until the idle cap. |
 
 **On a runner (client mode, 0.9) the laptop is a second place a value lands.**
@@ -3056,11 +3128,22 @@ exactly these terms.
 - Deleting or re-pinning the component deletes every person's sign-in for it, and erasing a person's credentials removes theirs.
 - Residual: within their own run, a person granted the component holds role credentials for that role until they expire, as on the `bedrock_sso` lane.
 
+**Desktop sign-ins (0.10, off by default) are a uid boundary inside one sandbox, not a sandbox boundary.**
+
+- With `WARDYN_DESKTOP_SIGNINS=on`, a run's creator can sign in to websites in a browser of their own inside the run's desktop ([`internal/api/run_desktop_signin.go`](../internal/api/run_desktop_signin.go), [`cmd/wardyn-signin`](../cmd/wardyn-signin)). The person's browser and the agent share one container, one kernel and one network namespace; what separates them is the uid, file modes and the stop. The stronger form, the person's browser in a sandbox of its own, is a 0.10.x option and is not built.
+- **What holds.** The agent is stopped before the person's display starts and stays stopped until the person's processes are killed and proven gone; if either step cannot be proven, the display does not start, or the agent stays stopped and the sweep retries. The person's store is a 0700 tmpfs owned by uid 1001; short of a kernel escape, the agent's uid cannot list it, read the lane credential in it, signal or read the environment of the person's processes, or run the person's helper subcommands. The person's proxy forwarder on loopback serves the person's uid alone (it reads the peer's uid from `/proc/net/tcp`).
+- **The sign-in lane (proxy).** The person's traffic leaves on a second proxy listener that admits only `CONNECT` carrying the open sign-in's credential, which wardynd checks and which the agent's uid does not hold ([`internal/egress/proxy/desktop_signin_lane.go`](../internal/egress/proxy/desktop_signin_lane.go)). It is tunnel-only: no TLS interception, no credential injection, and the proxy records host and port, never a URL path, query or body. The run's egress policy still decides by host. The same request from the agent's side is intercepted per policy as before.
+- **A share is the moment to decide.** After a share the agent holds that site's cookies and can act as the person on that site, within its egress, until the run ends or the site expires the login. Nothing Wardyn does after a share takes them back.
+- **Residuals.** Chromium runs with `--no-sandbox` (the hardened container drops the capabilities its own sandbox needs), so a page that exploits the person's browser runs as the person's uid with their logins. The person's lane is not content-inspected. The sign-in image (`agent-novnc-signin`) keeps the `xwayland` package only as cage's hard Depends and deletes its `/usr/bin/Xwayland` binary, so wlroots creates no Xwayland server and cage opens no X socket in the shared `/tmp`; [`scripts/test-image-novnc-signin.sh`](../scripts/test-image-novnc-signin.sh) pins both. The package's unfixed CVEs are accepted for that image alone (`.trivyignore.novnc-signin`). wardynd's own helper execs as the agent's uid (file list, resources, the UI launcher) are not stopped by the sign-in. Abstract unix sockets carry no file mode: the person's own sockets (Wayland, VNC, noVNC, control) are path sockets in its store, and no test pins that Chromium opens no abstract socket. Code the agent left running in a shared place before the sign-in (`/tmp`, `/dev/shm`) is stopped with the agent, but what it wrote there stays.
+- **Snapshots.** A run where any sign-in began counts as holding secrets for good (`internal/secretspresent`), so a future snapshot or fork refuses it.
+
 **The `ssh_key` grant (0.10) is not resident.**
 
 - The proxy holds the key and signs only an SSH sign-in for it (`isUserauthRequest`, [`internal/egress/proxy/ssh_agent.go`](../internal/egress/proxy/ssh_agent.go)); `ssh` reaches it through a per-command socket from `wardyn-git-helper ssh-exec`.
 - The mint route withholds any `ssh_key` answer, the broker issues it once per run (`checkedMintRow`), and `close_ssh_agent` closes the agent after the clone.
-- Residual: until that close, a sandbox process can have the proxy sign a sign-in with it. An image that never closes it leaves that open for the run.
+- A host-bound sign-in must name a grant known_hosts or `pinnedSSHHostKeys` key; GitHub signs only host-bound. While a key is held, a CONNECT tunnel either side opens with an SSH identification goes only to grant endpoints.
+- Residual: Azure DevOps's plain sign-in names no host; that tunnel bound misses TLS-wrapped SSH and pre-banner lines.
+- Residual: until that close (all run, if an image skips it), sandbox code can have the proxy sign one.
 
 **Where this table is now stated to the person launching the run.**
 
@@ -4142,9 +4225,10 @@ The **explicit kill** path (`handleKillRun`) runs this fixed order:
 
 1. **Durable state transition** — compare-and-swap to KILLED from the state just
    read.
-   - This runs FIRST (C002): a kill that loses the race to a concurrent forward transition (e.g. a
-     dispatch PENDING→STARTING) 409s WITHOUT touching the runner or revoking anything.
+   - This runs FIRST (C002): a kill that loses the race touches neither the runner nor a credential.
      - So it can never strip a still-live run's credentials.
+     - A loss to a forward transition (e.g. a dispatch PENDING→STARTING) re-reads the run and claims
+       it from the state it now holds, a bounded number of times; a loss to an end or another kill 409s.
    - Only the transition that actually WINS KILLED proceeds.
    - An already-KILLED run is the one exception to the terminal guard: re-kill CASes KILLED→KILLED
      (a value no-op) and re-runs the idempotent steps below.

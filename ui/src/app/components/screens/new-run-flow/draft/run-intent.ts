@@ -54,6 +54,8 @@ export interface GuidedFacts {
   /** The pool's default the field was filled with, while the person has not changed it. */
   mainDriveFill?: string;
   mainDriveClampNote?: string;
+  /** The CPU and memory asks choosing macOS filled in, with the numbers it set, while the person is on macOS; leaving takes back only those, while each is unchanged. */
+  macosFill?: { cpu_millis?: number; memory_mib?: number };
   /** The unit the size field is in: GiB, or whole MiB for a size under 0.1 GiB. Absent means GiB. */
   mainDriveUnit?: "GiB" | "MiB";
   /** Free-text ref per `${workspaceId}/${repo}` while the branch list is unavailable. */

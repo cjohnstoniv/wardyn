@@ -142,6 +142,9 @@ func (d *Driver) exec(ctx context.Context, ref string, argv []string, out io.Wri
 	if len(argv) == 0 {
 		return "", errors.New("docker: exec: empty argv")
 	}
+	if v := d.vmFor(ctx, ref); v != nil {
+		return d.vmExec(ctx, v, ref, argv, out)
+	}
 	// EXEC-LESS path: a deferred (krun) agent is created NOW with the workload as
 	// its main process — there is no exec to attach, and the container IS the agent
 	// (empty exec id => the reconciler uses container Status for liveness).
@@ -349,6 +352,9 @@ func (d *Driver) runAsMainProcess(ctx context.Context, ref string, p *pendingAge
 // by ctx — the agent process may run as long as the run is alive. Errors if
 // no agent exec is tracked for ref, or ctx is cancelled first.
 func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
+	if v := d.vmFor(ctx, ref); v != nil {
+		return d.vmWait(ctx, v, ref)
+	}
 	d.mu.Lock()
 	isMain := d.mainProc[ref]
 	execID, ok := d.agentExecs[ref]
@@ -547,6 +553,9 @@ func (d *Driver) waitMainProcess(ctx context.Context, ref string) (int, error) {
 }
 
 func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) {
+	if v := d.vmFor(ctx, ref); v != nil && v.mac {
+		return d.macVMStatus(ctx, v)
+	}
 	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
 	if err != nil {
 		if isNotFound(err) {
@@ -576,6 +585,9 @@ const mainProcessExecID = runner.MainProcessExecID
 // caller into its bounded-retry/backoff path rather than finalizing a
 // healthy live-restore run.
 func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runner.Status, error) {
+	if v := d.vmFor(ctx, ref); v != nil {
+		return d.vmAgentStatus(ctx, v, ref, agentExecID)
+	}
 	if agentExecID == "" || agentExecID == mainProcessExecID {
 		return d.Status(ctx, ref)
 	}

@@ -128,7 +128,19 @@ export const test = base.extend({
       (route) => route.fulfill({ json: SCENARIO_POOLS.member }),
     );
 
+    // The page's console and a renderer crash, with the time each came, for a failed attempt's report. A
+    // page that stopped answering leaves no snapshot or screenshot, so this is what shows it.
+    const started = Date.now();
+    const pageLog: string[] = [];
+    const logLine = (what: string) => pageLog.push(`+${Date.now() - started}ms ${what}`);
+    page.on("console", (msg) => logLine(`console.${msg.type()} ${msg.text()}`));
+    page.on("crash", () => logLine("PAGE CRASHED"));
+
     await use(page);
+
+    if (testInfo.status !== testInfo.expectedStatus) {
+      await testInfo.attach("page-console.txt", { body: pageLog.join("\n") || "(no console output, no crash)", contentType: "text/plain" });
+    }
 
     // A spec's route splice that round-trips through route.fetch() can still be running when the body
     // ends (the shell polls, so a read lands at any moment). Closing the context then disposes that
@@ -159,7 +171,10 @@ export { expect };
 // it is intentionally absent from this list.
 export type NavLabel =
   | "Runs"
+  | "Workloads"
   | "Approvals"
+  // 0.10 — beside Runs, in both views.
+  | "Workloads"
   // 0.8.6 (ppl-p2) — first under Access (#3056), both admin tiers.
   | "People"
   | "Workspaces"
@@ -174,14 +189,13 @@ export type NavLabel =
   | "Secrets"
   | "Audit"
   | "Recordings"
-  // A security admin's Admin view only (packet M-A).
+  // Under Setup, both admin tiers (app-shell.tsx).
   | "User drives"
-  // #217's slot, under a divider (app-shell.tsx#SidebarNav): Getting started and
-  // Settings in the Admin view, Getting started and Your account in the User
-  // view.
+  | "Images"
+  // Under Setup, at the end: Getting started and Settings in both views (the Admin view's Settings is
+  // /admin/settings, the User view's is /account).
   | "Settings"
-  | "Getting started"
-  | "Your account";
+  | "Getting started";
 
 // Sidebar entries are react-router <NavLink>s (role="link"), not <button>s.
 // Their accessible name can carry trailing content beyond the label — Runs/

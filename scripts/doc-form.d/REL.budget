@@ -1,0 +1,6 @@
+# Prose-word budgets for docs/releases/*.md (#466): the released sections moved out of CHANGELOG.md, measured at the move. They are frozen, so a budget can only fall.
+docs/releases/0.8.md=75205
+docs/releases/0.7.md=68146
+docs/releases/0.6.md=10431
+docs/releases/0.5.md=3707
+docs/releases/0.4.md=10939

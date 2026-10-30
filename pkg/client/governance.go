@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -41,6 +42,11 @@ type GovernanceUnitRequest struct {
 	ParentID      json.RawMessage `json:"parent_id,omitempty"`
 	Overlay       json.RawMessage `json:"overlay,omitempty"`
 	OverlayLimits json.RawMessage `json:"overlay_limits,omitempty"`
+	// Mode is own_walls or pass_through; "" keeps the stored mode (own_walls on a create).
+	Mode string `json:"mode,omitempty"`
+	// LockedKnobs replaces the knobs the unit locks for the units below it; nil keeps the stored
+	// locks. ApplyGovernance sends an empty list when it must clear them.
+	LockedKnobs *[]string `json:"locked_knobs,omitempty"`
 }
 
 // withComposition sets the request's composition members from p. Nothing is sent when neither p nor
@@ -70,14 +76,15 @@ type GovernanceUnitResponse struct {
 }
 
 // GovernanceMembershipRequest is POST /governance/memberships's body. There is
-// no PUT for an assignment: the natural key (subject_type, subject) upserts,
-// repointing an existing binding rather than accumulating a second one, the
-// same shape DriveGrantRequest already takes for a drive allocation.
+// no PUT for a membership: the natural key (unit_id, subject_type, subject) upserts,
+// so a subject holds one membership per unit and re-posting one updates its
+// priority and home. Home marks the unit a person runs in when a run names none.
 type GovernanceMembershipRequest struct {
 	SubjectType CapabilitySubjectType `json:"subject_type"`
 	Subject     string                `json:"subject"`
 	UnitID      uuid.UUID             `json:"unit_id"`
 	Priority    int                   `json:"priority"`
+	Home        bool                  `json:"home,omitempty"`
 }
 
 // GovernanceDocument is GET /governance's body and ApplyGovernance's
@@ -86,6 +93,17 @@ type GovernanceMembershipRequest struct {
 type GovernanceDocument struct {
 	Units       []GovernanceUnit       `json:"units"`
 	Memberships []GovernanceMembership `json:"memberships"`
+	// Restrictions are the deny-only lists that follow people, upserted by name.
+	Restrictions []Restriction `json:"restrictions,omitempty"`
+	// MaxDepth is the server's maximum unit depth, as GET /governance reports it. An apply never
+	// sends it: the limit is site_config.governance_max_depth.
+	MaxDepth int `json:"max_depth,omitempty"`
+	// Admins is each unit's unit admins, by unit name (GET /governance's unit_admins). An apply
+	// grants the ones the server lacks; --prune also revokes the ones the document omits.
+	Admins map[string][]GovernanceAdminSubject `json:"admins,omitempty"`
+	// grants is the server's grants as GetGovernance read them, with their ids, for a plan or an
+	// apply against that state. Never encoded.
+	grants []GovernanceUnitAdmin
 }
 
 // GovernanceChangeDiff is a pending change's server-rendered diff: the target's
@@ -115,6 +133,9 @@ type GovernanceChange struct {
 	DecidedAt  *time.Time           `json:"decided_at,omitempty"`
 	// Reason is a rejection's optional explanation.
 	Reason string `json:"reason,omitempty"`
+	// Approvers is who could decide the change, the proposer left out (GET
+	// /governance/changes/{id} only).
+	Approvers []GovernanceChangeApprover `json:"approvers,omitempty"`
 }
 
 // GovernanceDeferredWrite is a write ApplyGovernanceResult did not send because
@@ -165,16 +186,24 @@ func (e *PendingApprovalError) Error() string {
 // GetGovernance returns every governance profile and assignment. GET
 // /api/v1/governance.
 func (c *Client) GetGovernance(ctx context.Context) (GovernanceDocument, error) {
-	var out GovernanceDocument
-	err := c.do(ctx, http.MethodGet, "/api/v1/governance", nil, &out)
-	return out, err
+	var read governanceRead
+	if err := c.do(ctx, http.MethodGet, "/api/v1/governance", nil, &read); err != nil {
+		return GovernanceDocument{}, err
+	}
+	out := read.GovernanceDocument
+	out.Admins = adminsByUnitName(out.Units, read.UnitAdmins)
+	if len(read.UnitAdmins) > 0 {
+		out.grants = read.UnitAdmins
+	}
+	return out, nil
 }
 
 // governanceMembershipKey is the natural key ApplyGovernance and
-// handleUpsertGovernanceMembership both upsert an assignment by. The subject is folded the way
+// handleUpsertGovernanceMembership both upsert a membership by: the unit (by name, as a document
+// moves between servers) and the subject. The subject is folded the way
 // validateGovernanceMembership stores it, so a document's "Alice@Corp.com" meets the stored
 // "alice@corp.com" instead of reading as one delete plus one create.
-func governanceMembershipKey(subjectType CapabilitySubjectType, subject string) string {
+func governanceMembershipKey(unit string, subjectType CapabilitySubjectType, subject string) string {
 	switch subjectType {
 	case types.CapabilitySubjectAll:
 		subject = ""
@@ -188,7 +217,38 @@ func governanceMembershipKey(subjectType CapabilitySubjectType, subject string) 
 	default:
 		subject = strings.TrimSpace(subject)
 	}
-	return string(subjectType) + "\x00" + subject
+	return unit + "\x00" + string(subjectType) + "\x00" + subject
+}
+
+// membershipUnitName is the name a membership's unit id has in the document (fileIDToName), else on
+// the server (currentIDToName), else the id itself.
+func membershipUnitName(id uuid.UUID, fileIDToName, currentIDToName map[uuid.UUID]string) string {
+	if name, ok := fileIDToName[id]; ok {
+		return name
+	}
+	if name, ok := currentIDToName[id]; ok {
+		return name
+	}
+	return id.String()
+}
+
+// defaultUnitOf is the Default unit in units (kind default), nil when there is none.
+func defaultUnitOf(units []GovernanceUnit) *GovernanceUnit {
+	for i := range units {
+		if units[i].Kind == types.UnitKindDefault {
+			return &units[i]
+		}
+	}
+	return nil
+}
+
+// normalizeComposedParent points a composed document unit with no base at the Default unit, as the
+// server stores it, so an older document compares equal to what it wrote.
+func normalizeComposedParent(p *GovernanceUnit, def *GovernanceUnit) {
+	if def != nil && p.Composed() && p.ParentID == nil {
+		id := def.ID
+		p.ParentID = &id
+	}
 }
 
 // governanceUnitChangedFields returns the JSON names of the fields that
@@ -214,7 +274,28 @@ func governanceUnitChangedFields(existing, p GovernanceUnit) []string {
 	if !reflect.DeepEqual(existing.OverlayLimits, p.OverlayLimits) {
 		fields = append(fields, "overlay_limits")
 	}
+	// An absent mode keeps the stored one, as the write does.
+	if p.Mode != "" && p.Mode != cmpOr(existing.Mode, types.UnitModeOwnWalls) {
+		fields = append(fields, "mode")
+	}
+	if !slices.Equal(sortedKnobs(existing.LockedKnobs), sortedKnobs(p.LockedKnobs)) {
+		fields = append(fields, "locked_knobs")
+	}
 	return fields
+}
+
+// sortedKnobs is a locked_knobs list in the server's order (sorted, without repeats).
+func sortedKnobs(knobs []string) []string {
+	out := slices.Clone(knobs)
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 // governanceUnitUnchanged reports whether writing p over existing would
@@ -405,6 +486,29 @@ type GovernanceApplyResult struct {
 	Steps []ApplyStep `json:"steps,omitempty"`
 }
 
+// writeChangedUnit sends one unit write the server does not already hold and records its step. It answers the
+// saved unit, or nil when the server holds the write for approval (recorded in Pending; the unit is marked pending).
+func (c *Client) writeChangedUnit(ctx context.Context, p, existing GovernanceUnit, exists bool, res *GovernanceApplyResult, pendingProfile map[string]bool) (*GovernanceUnit, error) {
+	var replacing *GovernanceUnit
+	if exists {
+		replacing = &existing
+	}
+	step := governanceUnitStep(p.Name, replacing)
+	got, warnings, pending, werr := c.writeGovernanceUnit(ctx, p, replacing)
+	step = step.withOutcome(pending != nil, werr)
+	step.Warnings = warnings
+	res.Steps = append(res.Steps, step)
+	if werr != nil {
+		return nil, werr
+	}
+	if pending != nil {
+		res.Pending = append(res.Pending, *pending)
+		pendingProfile[p.Name] = true
+		return nil, nil
+	}
+	return &got, nil
+}
+
 // ApplyGovernanceResult is ApplyGovernance with the pending-approval outcome
 // returned as data, not an error: a 202 pending change is an expected result
 // under four-eyes, not a failure. See ApplyGovernance for the matching and
@@ -429,8 +533,9 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 	}
 	assignmentByKey := make(map[string]GovernanceMembership, len(current.Memberships))
 	for _, a := range current.Memberships {
-		assignmentByKey[governanceMembershipKey(a.SubjectType, a.Subject)] = a
+		assignmentByKey[governanceMembershipKey(membershipUnitName(a.UnitID, nil, currentIDToName), a.SubjectType, a.Subject)] = a
 	}
+	def := defaultUnitOf(current.Units)
 
 	// fileIDToName/nameToRealID translate an assignment's ProfileID from
 	// "whatever id this SAME file's profile entry carried" to "the id that
@@ -453,6 +558,15 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 
 	for _, i := range order {
 		p := doc.Units[i]
+		if p.Kind == types.UnitKindDefault {
+			// The Default unit is the server's own: never written, its id the server's.
+			if def != nil {
+				doc.Units[i] = *def
+				nameToRealID[p.Name] = def.ID
+			}
+			continue
+		}
+		normalizeComposedParent(&p, def)
 		saved := p
 		// Every graph reference is rewritten to the id the base holds on THIS server; bases were
 		// written first, so nameToRealID has it. A base the document does not carry is sent as given.
@@ -471,68 +585,45 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 		if ok && governanceUnitUnchanged(existing, p) {
 			saved = existing
 		} else {
-			var replacing *GovernanceUnit
-			if ok {
-				replacing = &existing
-			}
-			step := governanceUnitStep(p.Name, replacing)
-			got, warnings, pending, werr := c.writeGovernanceUnit(ctx, p, replacing)
-			step = step.withOutcome(pending != nil, werr)
-			step.Warnings = warnings
-			res.Steps = append(res.Steps, step)
+			got, werr := c.writeChangedUnit(ctx, p, existing, ok, &res, pendingProfile)
 			if werr != nil {
 				return res, werr
 			}
-			if pending != nil {
-				res.Pending = append(res.Pending, *pending)
-				pendingProfile[p.Name] = true
-			} else {
-				saved = got
+			if got != nil {
+				saved = *got
 			}
 		}
 		doc.Units[i] = saved
 		nameToRealID[p.Name] = saved.ID
 	}
 
+	plan := membershipPlan{
+		fileIDToName: fileIDToName, currentIDToName: currentIDToName, nameToRealID: nameToRealID,
+		pendingProfile: pendingProfile, byKey: assignmentByKey,
+	}
 	for i, a := range doc.Memberships {
-		name, named := fileIDToName[a.UnitID]
-		if !named {
-			name, named = currentIDToName[a.UnitID]
-		}
-		if named && pendingProfile[name] {
-			res.Deferred = append(res.Deferred, GovernanceDeferredWrite{
-				SubjectType: a.SubjectType, Subject: a.Subject, Unit: name,
-			})
-			continue
-		}
-		if name, ok := fileIDToName[a.UnitID]; ok {
-			if real, ok := nameToRealID[name]; ok {
-				a.UnitID = real
-			}
-		}
-		key := governanceMembershipKey(a.SubjectType, a.Subject)
-		if existing, ok := assignmentByKey[key]; ok &&
-			existing.UnitID == a.UnitID && existing.Priority == a.Priority {
-			doc.Memberships[i] = existing
-			continue
-		}
-		req := GovernanceMembershipRequest{
-			SubjectType: a.SubjectType, Subject: a.Subject,
-			UnitID: a.UnitID, Priority: a.Priority,
-		}
-		var saved GovernanceMembership
-		pending, err := c.doPending(ctx, http.MethodPost, "/api/v1/governance/memberships", req, &saved)
-		err = governanceMembershipErr(a, err)
-		step := governanceMembershipStep(a, name)
-		res.Steps = append(res.Steps, step.withOutcome(pending != nil, err))
+		saved, store, err := c.applyMembership(ctx, plan, a, &res)
 		if err != nil {
 			return res, err
 		}
-		if pending != nil {
-			res.Pending = append(res.Pending, *pending)
-			continue
+		if store {
+			doc.Memberships[i] = saved
 		}
-		doc.Memberships[i] = saved
+	}
+
+	admins := newAdminPlan(current, func(name string) (uuid.UUID, bool) {
+		if id, ok := nameToRealID[name]; ok {
+			return id, true
+		}
+		p, ok := profileByName[name]
+		return p.ID, ok
+	}, pendingProfile)
+	if err := c.applyUnitAdmins(ctx, admins, doc.Admins, &res); err != nil {
+		return res, err
+	}
+
+	if err := c.applyRestrictions(ctx, current, &doc, &res); err != nil {
+		return res, err
 	}
 
 	if prune {
@@ -540,7 +631,19 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 		// final, so no delete is issued after one (ApplyGovernance's doc).
 		res.PruneSkipped = len(res.Pending) > 0
 		if !res.PruneSkipped {
+			res.PruneSkipped, err = c.pruneUnitAdmins(ctx, admins, doc.Admins, &res)
+			if err != nil {
+				return res, err
+			}
+		}
+		if !res.PruneSkipped {
 			res.PruneSkipped, err = c.pruneGovernance(ctx, current, doc, &res)
+			if err != nil {
+				return res, err
+			}
+		}
+		if !res.PruneSkipped {
+			res.PruneSkipped, err = c.pruneRestrictions(ctx, current, doc, &res)
 			if err != nil {
 				return res, err
 			}
@@ -551,12 +654,70 @@ func (c *Client) ApplyGovernanceResult(ctx context.Context, doc GovernanceDocume
 	return res, err
 }
 
+// membershipPlan is what applyMembership reads: the unit names and ids the document and the server
+// carry, the units whose write was held, and the memberships the server already has.
+type membershipPlan struct {
+	fileIDToName, currentIDToName map[uuid.UUID]string
+	nameToRealID                  map[string]uuid.UUID
+	pendingProfile                map[string]bool
+	byKey                         map[string]GovernanceMembership
+}
+
+// applyMembership sends one membership of an apply. store is true when the document entry becomes
+// the returned membership: the server's own when it is unchanged, or the one just saved. A deferred
+// or held membership is recorded in res and stores nothing.
+func (c *Client) applyMembership(ctx context.Context, plan membershipPlan, a GovernanceMembership, res *GovernanceApplyResult) (saved GovernanceMembership, store bool, err error) {
+	name, named := plan.fileIDToName[a.UnitID]
+	if !named {
+		name, named = plan.currentIDToName[a.UnitID]
+	}
+	if named && plan.pendingProfile[name] {
+		res.Deferred = append(res.Deferred, GovernanceDeferredWrite{
+			SubjectType: a.SubjectType, Subject: a.Subject, Unit: name,
+		})
+		return saved, false, nil
+	}
+	if name, ok := plan.fileIDToName[a.UnitID]; ok {
+		if real, ok := plan.nameToRealID[name]; ok {
+			a.UnitID = real
+		}
+	}
+	key := governanceMembershipKey(membershipUnitName(a.UnitID, nil, plan.currentIDToName), a.SubjectType, a.Subject)
+	if named {
+		key = governanceMembershipKey(name, a.SubjectType, a.Subject)
+	}
+	if existing, ok := plan.byKey[key]; ok && existing.Priority == a.Priority && existing.Home == a.Home {
+		return existing, true, nil
+	}
+	req := GovernanceMembershipRequest{
+		SubjectType: a.SubjectType, Subject: a.Subject,
+		UnitID: a.UnitID, Priority: a.Priority, Home: a.Home,
+	}
+	pending, err := c.doPending(ctx, http.MethodPost, "/api/v1/governance/memberships", req, &saved)
+	err = governanceMembershipErr(a, err)
+	step := governanceMembershipStep(a, name)
+	res.Steps = append(res.Steps, step.withOutcome(pending != nil, err))
+	if err != nil {
+		return saved, false, err
+	}
+	if pending != nil {
+		res.Pending = append(res.Pending, *pending)
+		return saved, false, nil
+	}
+	return saved, true, nil
+}
+
 // writeGovernanceUnit creates p, or replaces the stored profile it names, with the warnings the
 // server raised on it. A write the server holds for approval comes back as the pending change and a
 // zero profile.
 func (c *Client) writeGovernanceUnit(ctx context.Context, p GovernanceUnit, replacing *GovernanceUnit) (GovernanceUnit, []string, *GovernanceChange, error) {
-	req := GovernanceUnitRequest{Name: p.Name, Ceiling: p.Ceiling, Limits: p.Limits, Contact: p.Contact}
+	req := GovernanceUnitRequest{Name: p.Name, Ceiling: p.Ceiling, Limits: p.Limits, Contact: p.Contact, Mode: p.Mode}
 	req.withComposition(p, replacing)
+	// The document's locks replace the stored ones; none sent keeps them, so an empty list clears.
+	if len(p.LockedKnobs) > 0 || (replacing != nil && len(replacing.LockedKnobs) > 0) {
+		knobs := append([]string{}, p.LockedKnobs...)
+		req.LockedKnobs = &knobs
+	}
 	method, path := http.MethodPost, "/api/v1/governance/units"
 	if replacing != nil {
 		method, path = http.MethodPut, path+"/"+replacing.ID.String()
@@ -574,14 +735,22 @@ func (c *Client) writeGovernanceUnit(ctx context.Context, p GovernanceUnit, repl
 // (recording it in res.Pending) and reports that as skipped=true, because the
 // deletes after it would run against a state that is not final.
 func (c *Client) pruneGovernance(ctx context.Context, current, doc GovernanceDocument, res *GovernanceApplyResult) (skipped bool, err error) {
+	currentIDToName := make(map[uuid.UUID]string, len(current.Units))
+	for _, p := range current.Units {
+		currentIDToName[p.ID] = p.Name
+	}
+	docIDToName := make(map[uuid.UUID]string, len(doc.Units))
+	for _, p := range doc.Units {
+		docIDToName[p.ID] = p.Name
+	}
 	keepAssignment := make(map[string]bool, len(doc.Memberships))
 	for _, a := range doc.Memberships {
-		keepAssignment[governanceMembershipKey(a.SubjectType, a.Subject)] = true
+		keepAssignment[governanceMembershipKey(membershipUnitName(a.UnitID, docIDToName, currentIDToName), a.SubjectType, a.Subject)] = true
 	}
 	// Assignments before profiles: a profile doc drops still fails the FK
 	// restrict while a stale assignment of it survives.
 	for _, a := range current.Memberships {
-		if keepAssignment[governanceMembershipKey(a.SubjectType, a.Subject)] {
+		if keepAssignment[governanceMembershipKey(membershipUnitName(a.UnitID, nil, currentIDToName), a.SubjectType, a.Subject)] {
 			continue
 		}
 		pending, err := c.doPending(ctx, http.MethodDelete, "/api/v1/governance/memberships/"+a.ID.String(), nil, nil)
@@ -604,7 +773,7 @@ func (c *Client) pruneGovernance(ctx context.Context, current, doc GovernanceDoc
 		keepProfile[p.Name] = true
 	}
 	for _, p := range governancePruneOrder(current.Units) {
-		if keepProfile[p.Name] {
+		if keepProfile[p.Name] || p.Kind == types.UnitKindDefault {
 			continue
 		}
 		pending, err := c.doPending(ctx, http.MethodDelete, "/api/v1/governance/units/"+p.ID.String(), nil, nil)
@@ -665,5 +834,103 @@ func (c *Client) RejectGovernanceChange(ctx context.Context, id uuid.UUID, reaso
 		Reason string `json:"reason,omitempty"`
 	}{Reason: reason}
 	err := c.do(ctx, http.MethodPost, "/api/v1/governance/changes/"+id.String()+"/reject", body, &out)
+	return out, err
+}
+
+// MoveGovernanceMembership moves membership id to the unit unitID. PUT
+// /api/v1/governance/memberships/{id}. A move the server holds for approval
+// comes back as the pending change and a zero membership.
+func (c *Client) MoveGovernanceMembership(ctx context.Context, id, unitID uuid.UUID) (GovernanceMembership, *GovernanceChange, error) {
+	var out GovernanceMembership
+	body := struct {
+		UnitID uuid.UUID `json:"unit_id"`
+	}{UnitID: unitID}
+	pending, err := c.doPending(ctx, http.MethodPut, "/api/v1/governance/memberships/"+id.String(), body, &out)
+	return out, pending, err
+}
+
+// PromoteGovernanceMembership makes the legacy membership id a context, so
+// the person may run in its unit beside their others. POST
+// /api/v1/governance/memberships/{id}/promote. A promotion the server holds
+// for approval comes back as the pending change and a zero membership.
+func (c *Client) PromoteGovernanceMembership(ctx context.Context, id uuid.UUID) (GovernanceMembership, *GovernanceChange, error) {
+	var out GovernanceMembership
+	pending, err := c.doPending(ctx, http.MethodPost, "/api/v1/governance/memberships/"+id.String()+"/promote", nil, &out)
+	return out, pending, err
+}
+
+// GovernanceCheckRequest is POST /api/v1/governance/check's body: a person's
+// claims, and optionally one of their units (by id or exact name) to answer
+// Effective for instead of the home one.
+type GovernanceCheckRequest struct {
+	UserSubjects []string `json:"user_subjects,omitempty"`
+	Groups       []string `json:"groups,omitempty"`
+	UserType     string   `json:"user_type,omitempty"`
+	RunIn        string   `json:"run_in,omitempty"`
+}
+
+// GovernanceUnitLink is one unit of a path.
+type GovernanceUnitLink struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
+// GovernanceCheckContext is one unit the person may run in; Path is the unit
+// and those above it, leaf first.
+type GovernanceCheckContext struct {
+	UnitID   uuid.UUID            `json:"unit_id"`
+	UnitName string               `json:"unit_name"`
+	Home     bool                 `json:"home"`
+	Legacy   bool                 `json:"legacy"`
+	Path     []GovernanceUnitLink `json:"path"`
+}
+
+// GovernanceDormantMembership is a legacy membership another one outranks for
+// the person: it places them nowhere.
+type GovernanceDormantMembership struct {
+	MembershipID uuid.UUID `json:"membership_id"`
+	UnitID       uuid.UUID `json:"unit_id"`
+	UnitName     string    `json:"unit_name"`
+}
+
+// GovernanceEffectiveWalls is one context's resolved walls and which layer set
+// each knob: Provenance is the leaf-level answer a run gets, PathProvenance
+// which unit on the path changed each value.
+type GovernanceEffectiveWalls struct {
+	Ceiling        types.RunPolicySpec         `json:"ceiling"`
+	Limits         GovernanceLimits            `json:"limits"`
+	Provenance     map[string]PolicyProvenance `json:"provenance"`
+	PathProvenance map[string]PolicyProvenance `json:"path_provenance"`
+}
+
+// GovernanceCheckResult is POST /api/v1/governance/check's answer: the home
+// unit (zero for the Default unit) and the tier that matched it, every context,
+// the dormant memberships, and the walls of the context asked for or the home
+// one.
+type GovernanceCheckResult struct {
+	UnitID      uuid.UUID                     `json:"unit_id,omitzero"`
+	UnitName    string                        `json:"unit_name,omitempty"`
+	MatchedTier CapabilitySubjectType         `json:"matched_tier,omitempty"`
+	Contexts    []GovernanceCheckContext      `json:"contexts"`
+	Dormant     []GovernanceDormantMembership `json:"dormant"`
+	Effective   *GovernanceEffectiveWalls     `json:"effective"`
+}
+
+// CheckGovernance answers which units a person with req's claims may run in,
+// and the walls of one. POST /api/v1/governance/check.
+func (c *Client) CheckGovernance(ctx context.Context, req GovernanceCheckRequest) (GovernanceCheckResult, error) {
+	var out GovernanceCheckResult
+	err := c.do(ctx, http.MethodPost, "/api/v1/governance/check", req, &out)
+	return out, err
+}
+
+// GovernanceDryRun reports what a drafted write would change, writing nothing.
+// body carries a target: boundary (the boundary document; also a body with no
+// target), unit (a unit write body plus its id) or membership_move ({id,
+// unit_id}). The report's shape follows the target. POST
+// /api/v1/governance/dry-run.
+func (c *Client) GovernanceDryRun(ctx context.Context, body json.RawMessage) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.do(ctx, http.MethodPost, "/api/v1/governance/dry-run", body, &out)
 	return out, err
 }

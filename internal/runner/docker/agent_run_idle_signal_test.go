@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -68,7 +70,7 @@ func TestAgentRunIdle_ExitsOnSignal(t *testing.T) {
 
 // runIdleAndSignal starts the real agent-run --idle script as its own process
 // group leader, waits for it to reach the hold-open point (prepDone written —
-// same signal ccRunIdle/runIdle/cxRunIdle wait for, via `timeout`, in the
+// same signal ccRunIdle/runIdle/cxRunIdle wait for in the
 // sibling boot-ordering tests) and then for the idle loop's `sleep` child,
 // sends sig to the LEADER ONLY (matching docker stop / the kubelet), and
 // returns the exit code.
@@ -94,7 +96,15 @@ func runIdleAndSignal(t *testing.T, script string, env []string, prepDone string
 		b, _ := os.ReadFile(outFile.Name())
 		return string(b)
 	}
-	if err := cmd.Start(); err != nil {
+	// A signal ignored when this test binary started (a background job of a
+	// non-interactive shell ignores SIGINT) stays ignored across exec, and bash
+	// cannot trap a signal it starts with ignored, so the INT cases would sit
+	// out the wait below. Handling it here makes exec hand bash the default.
+	ignored := make(chan os.Signal, 1)
+	signal.Notify(ignored, sig)
+	err = cmd.Start()
+	signal.Stop(ignored)
+	if err != nil {
 		t.Fatalf("start agent-run --idle: %v", err)
 	}
 	// Reaches every process in the group, including the orphaned `sleep` the
@@ -159,7 +169,7 @@ func hasSleepChild(pid int) bool {
 
 // ccEnvIdleSignalSetup reuses the real-script plumbing (ccRunnableAgentRun or
 // cxRunnableAgentRun) over the claude-code fake tmux (ccIdleEnv) — the same env
-// ccRunIdle and cxRunIdle build, minus the `timeout` wrapper this test replaces
+// ccRunIdle and cxRunIdle build, minus the prep-done wait this test replaces
 // with a signal.
 func ccEnvIdleSignalSetup(runnable func(*testing.T) string) func(*testing.T) (string, []string, string) {
 	return func(t *testing.T) (script string, env []string, prepDone string) {
@@ -181,7 +191,7 @@ func ccEnvIdleSignalSetup(runnable func(*testing.T) string) func(*testing.T) (st
 
 // awsSSOIdleSignalSetup reuses awssso_agent_run_idle_test.go's real-script and
 // fake-tmux plumbing (runnableAgentRun, fakeTmuxBin, mitmNonce) — the same env
-// runIdle builds, minus the `timeout` wrapper.
+// runIdle builds, minus the prep-done wait.
 func awsSSOIdleSignalSetup(t *testing.T) (script string, env []string, prepDone string) {
 	home, binDir, tmuxLog := fakeTmuxBin(t)
 	nonce := mitmNonce(t)
@@ -261,5 +271,140 @@ func TestAgentBaseExecTaskPreparesCredentialsBeforeTheTask(t *testing.T) {
 	out, err := cmd.Output()
 	if err != nil || strings.TrimSpace(string(out)) != "ready" {
 		t.Fatalf("exec task did not see the prepared credentials: err=%v out=%q", err, out)
+	}
+}
+
+// gitHostRE finds the host in a URL (scheme://[user@]host[:port]) or scp-like (user@host:path) git argument.
+var gitHostRE = regexp.MustCompile(`(?:://(?:[^/@\s]+@)?|\b[a-z]+@)([a-z0-9.-]+(?::\d+)?)`)
+
+// fakeGitDir returns a PATH dir whose `git` logs every call (args plus whether the helper secret was
+// exported) to the returned file and fakes a checkout for `git clone`, so a test sees what agent-base's
+// exec branch asks git to do without any network.
+func fakeGitDir(t *testing.T) (dir, log string) {
+	t.Helper()
+	dir, log = t.TempDir(), filepath.Join(t.TempDir(), "git.log")
+	body := `#!/bin/sh
+echo "secret=${WARDYN_GIT_HELPER_SECRET:+set} $*" >> "` + log + `"
+if [ "$1" = clone ]; then
+    for a in "$@"; do d="$a"; done
+    mkdir -p "$d/.git"
+fi
+`
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(body), 0o755); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	return dir, log
+}
+
+// An exec task whose run clones a repository (WARDYN_REPOS, or the legacy WARDYN_REPO_URL) but names no
+// starting folder gets the workspace prep a harness run does: git is first pointed at the proxy broker, the
+// git helper secret is provisioned and exported before the clone, and the clone is the workspace's own URL
+// into the workspace folder through the lib's clone_one, with no other git call naming a host. A run with
+// no workspace gets no helper, no clone and no git call at all.
+func TestAgentBaseExecTaskClonesTheWorkspace(t *testing.T) {
+	script := baseRunnableAgentRun(t)
+	const url = "https://github.com/acme/app.git"
+	const broker = "http://wardyn-proxy:3128/wardyn/gh/acme/app"
+	run := func(mode string) (home, pwd, gitLog string) {
+		t.Helper()
+		home = t.TempDir()
+		bin, glog := fakeGitDir(t)
+		env := []string{"HOME=" + home, "PATH=" + bin + ":" + os.Getenv("PATH"), "WARDYN_TASK_MODE=exec",
+			"WARDYN_START_FOLDER=", "WARDYN_REPOS=", "WARDYN_REPO_URL=", "WARDYN_MITM_CA_PEM=",
+			"WARDYN_GITHUB_GRANT_ID=grant-1"}
+		switch mode {
+		case "repos":
+			env = append(env, "WARDYN_REPOS="+url+"\t"+filepath.Join(home, "work", "app")+"\tacme/app\t")
+		case "repo_url":
+			env = append(env, "WARDYN_REPO_URL="+url, "WARDYN_REPO_SLUG=acme/app")
+		}
+		cmd := exec.Command("bash", script, "pwd -P")
+		cmd.Dir = t.TempDir()
+		cmd.Env = append(os.Environ(), env...)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("agent-run exec task: %v", err)
+		}
+		b, _ := os.ReadFile(glog)
+		return home, strings.TrimSpace(string(out)), string(b)
+	}
+
+	for _, mode := range []string{"repos", "repo_url"} {
+		t.Run(mode, func(t *testing.T) {
+			// 1. With a workspace: checkout made, helper ready before it, task runs in it.
+			home, pwd, gitLog := run(mode)
+			dest, _ := filepath.EvalSymlinks(filepath.Join(home, "work", "app"))
+			if _, err := os.Stat(filepath.Join(dest, ".git")); err != nil {
+				t.Errorf("exec task with a workspace has no checkout at %s: %v", dest, err)
+			}
+			if _, err := os.Stat(filepath.Join(home, ".wardyn", "git-helper.secret")); err != nil {
+				t.Errorf("exec task with a workspace has no git helper secret: %v", err)
+			}
+			if pwd != dest {
+				t.Errorf("exec task with a workspace ran in %q, want the clone %q", pwd, dest)
+			}
+			// 3. git is asked to clone only the workspace, with the helper secret exported, after it was pointed at
+			// the proxy broker; every host it is told about is the workspace's own or the broker -- no new host.
+			rewrite := "secret= config --global url." + broker + ".insteadOf https://github.com/acme/app"
+			rewriteAt, cloneAt, clones := -1, -1, 0
+			for n, line := range strings.Split(strings.TrimSpace(gitLog), "\n") {
+				if line == rewrite {
+					rewriteAt = n
+				}
+				if strings.Contains(line, " clone ") {
+					clones++
+					cloneAt = n
+					if want := "secret=set clone --depth 1 -- " + url + " " + filepath.Join(home, "work", "app"); line != want {
+						t.Errorf("git call %q, want %q", line, want)
+					}
+				}
+				for _, m := range gitHostRE.FindAllStringSubmatch(line, -1) {
+					if h := m[1]; h != "github.com" && h != "wardyn-proxy:3128" {
+						t.Errorf("git was told about host %q, which is neither the workspace's nor the proxy broker: %s", h, line)
+					}
+				}
+			}
+			if clones != 1 {
+				t.Errorf("clones: %d, want exactly the workspace clone\n%s", clones, gitLog)
+			}
+			if rewriteAt < 0 || rewriteAt > cloneAt {
+				t.Errorf("the broker rewrite %q must be set before the clone (rewrite at %d, clone at %d)\n%s", rewrite, rewriteAt, cloneAt, gitLog)
+			}
+		})
+	}
+
+	// 2. Without one: no helper, no clone, no git call at all, as before.
+	t.Run("none", func(t *testing.T) {
+		home, _, gitLog := run("none")
+		if _, err := os.Stat(filepath.Join(home, ".wardyn", "git-helper.secret")); err == nil {
+			t.Error("exec task with no workspace provisioned a git helper secret")
+		}
+		if _, err := os.Stat(filepath.Join(home, "work")); err == nil {
+			t.Error("exec task with no workspace made a work folder")
+		}
+		if gitLog != "" {
+			t.Errorf("exec task with no workspace called git:\n%s", gitLog)
+		}
+	})
+}
+
+// A WARDYN_REPOS record keeps its empty fields: with the slug empty, the ref stays the ref (tab-IFS `read`
+// collapsed the tabs and moved the ref into the slug's place, so the clone lost its branch).
+func TestAgentBaseExecTaskRepoRecordKeepsEmptyFields(t *testing.T) {
+	script := baseRunnableAgentRun(t)
+	home := t.TempDir()
+	bin, glog := fakeGitDir(t)
+	dest := filepath.Join(home, "work", "app")
+	cmd := exec.Command("bash", script, "true")
+	cmd.Dir = t.TempDir()
+	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+bin+":"+os.Getenv("PATH"), "WARDYN_TASK_MODE=exec",
+		"WARDYN_START_FOLDER=", "WARDYN_REPO_URL=", "WARDYN_MITM_CA_PEM=", "WARDYN_GITHUB_GRANT_ID=",
+		"WARDYN_REPOS=https://github.com/acme/app.git\t"+dest+"\t\tmain")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("agent-run exec task: %v\n%s", err, out)
+	}
+	b, _ := os.ReadFile(glog)
+	if want := "clone --depth 1 --branch main -- https://github.com/acme/app.git " + dest; !strings.Contains(string(b), want) {
+		t.Errorf("git log lacks %q:\n%s", want, b)
 	}
 }

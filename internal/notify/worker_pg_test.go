@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
@@ -482,6 +483,66 @@ func TestWorker_PurgesOldTerminalRows(t *testing.T) {
 	}
 	if h.row(t, fresh.ID).State != "sent" {
 		t.Fatal("a fresh terminal row was purged")
+	}
+}
+
+// lastStatement records the SQL and arguments of the last statement a pool ran.
+type lastStatement struct {
+	sql  string
+	args []any
+}
+
+func (l *lastStatement) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
+	l.sql, l.args = d.SQL, d.Args
+	return ctx
+}
+func (l *lastStatement) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// TestWorker_PurgeUsesThePurgeIndex: an idle tick's purge reads only the terminal rows by last_attempt_at,
+// not the whole outbox, which every replica runs every 15 s.
+func TestWorker_PurgeUsesThePurgeIndex(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	h := newHarness(t, chanJSON(srv.URL, ""))
+	ctx := context.Background()
+	a := h.raise(t, h.run(t), `{"host":"seed.example"}`, "")
+	if _, err := h.pool.Exec(ctx, `
+		INSERT INTO approval_notifications (id, approval_id, tier, channel, due_at, state, next_attempt_at, last_attempt_at)
+		SELECT gen_random_uuid(), $1, 0, 'c' || g, now(), (ARRAY['sent', 'cancelled', 'dead', 'pending'])[1 + g % 4],
+		       now() + interval '1 day', now() - g * interval '1 second'
+		FROM generate_series(1, 40000) g`, a.ID); err != nil {
+		t.Fatalf("seed outbox: %v", err)
+	}
+	if _, err := h.pool.Exec(ctx, `ANALYZE approval_notifications`); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := h.pool.Config().Copy()
+	last := &lastStatement{}
+	cfg.ConnConfig.Tracer = last
+	traced, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("traced pool: %v", err)
+	}
+	defer traced.Close()
+	if _, err := notify.NewWorker(notify.Deps{Pool: traced, Config: h.cfg, Client: nil}).Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(last.sql, "DELETE FROM approval_notifications") {
+		t.Fatalf("the tick's last statement is not the purge: %q", last.sql)
+	}
+	rows, err := h.pool.Query(ctx, "EXPLAIN (COSTS OFF) "+last.sql, last.args...)
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	plan := strings.Join(lines, "\n")
+	t.Logf("purge plan:\n%s", plan)
+	if strings.Contains(plan, "Seq Scan on approval_notifications") || !strings.Contains(plan, "approval_notifications_purge_idx") {
+		t.Errorf("the purge does not use approval_notifications_purge_idx:\n%s", plan)
 	}
 }
 

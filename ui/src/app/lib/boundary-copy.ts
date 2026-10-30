@@ -32,8 +32,6 @@ export const BOUNDARY = {
   MODE_HARD: "Hard limits",
   RECOMMENDED: "Recommended",
   MODE_HARD_BODY: "A short list of what no Wardyn run may ever do. Teams give access inside it; the Default team gives everyone else a working setup.",
-  /** not on the boards: why the Hard limits choice is off until the boundary bounds brokered credential paths. */
-  HARD_GATED: "Not available yet. Hard limits can't be switched on until the Wardyn boundary bounds every brokered credential path a run is given.",
   MODE_ORG: "As your organisation's boundary allows",
   MODE_ORG_BODY: "Wardyn adds no limits of its own at the top. Only the walls below and your organisation's boundary apply.",
 
@@ -60,13 +58,43 @@ export const BOUNDARY = {
 
   // The pinned footer.
   // The board's footer is "Every save shows a dry run first. Changing the mode needs a second admin."; the
-  // second sentence is true only when the deployment requires a second person, which the console can't read.
+  // second sentence is true only when the deployment requires a second person, which the read says
+  // (save_held_for_approval), so the footer, the report's After column and its submit button follow it.
   FOOTER: "Every save shows a dry run first.",
+  /** not on the boards: the board's second sentence, worded for a save of any kind being held. */
+  FOOTER_SECOND_HUMAN: "Every save shows a dry run first, then waits for a second admin to approve it.",
   DISCARD: "Discard",
   REVIEW: "Review changes",
 
   /** not on the boards: the page's load failure. */
   FETCH_FAILED_TITLE: "Couldn't load the Wardyn boundary",
+} as const;
+
+// The Desktop group card (board M7-Knobs-B, approved 2026-10-20 as Option B), in the boundary's hard limits,
+// with a lock per setting and one for the group. The board's group also holds Recording ("5 settings"), which
+// the boundary does not hold yet, so the count is the rows shown.
+export const BOUNDARY_DESKTOP = {
+  TITLE: "Desktop",
+  /** not on the boards: the board's "5 settings" counts Recording too. */
+  COUNT: (n: number) => `${n} settings`,
+  APPLIES: "Applies to runs that land on a desktop.",
+  NOW: "Now",
+  ALLOWED: "Allowed",
+  BLOCKED: "Blocked",
+  BELOW: "Teams below may only block more.",
+  ENFORCED: "Enforced at the desktop relay, outside the sandbox. Every use is logged by direction, size and hash. Never the content.",
+  LOCK_ROW: "Lock for teams below",
+  LOCK_GROUP: "Lock the group for teams below",
+  /** not on the boards: the dry run's row for the drafted locks. */
+  LOCKS: "Desktop locks",
+  /** not on the boards: no desktop setting is locked. */
+  NO_LOCKS: "None",
+  ROWS: [
+    { key: "paste_in", short: "Paste in", label: "Paste into the desktop" },
+    { key: "copy_out", short: "Copy out", label: "Copy out of the desktop" },
+    { key: "upload", short: "Upload", label: "Upload files" },
+    { key: "download", short: "Download", label: "Download files" },
+  ],
 } as const;
 
 // The dry run (board T4's report anatomy, for the Wardyn boundary).
@@ -78,6 +106,8 @@ export const BOUNDARY_DRY_RUN = {
   CHANGE: "The change",
   TODAY: "Today",
   AFTER: "After approval",
+  /** not on the boards: the column when no second person is required and a save applies at once. */
+  AFTER_SAVE: "After saving",
   MODE: "Mode",
   // Tile labels. T4's are "team below narrows" and "people narrow"; the other forms are not on the boards.
   TILE_TEAMS: (n: number) => (n === 1 ? "team below narrows" : "teams below narrow"),
@@ -88,13 +118,18 @@ export const BOUNDARY_DRY_RUN = {
   POLICIES: "Stored policies",
   PEOPLE: "People",
   /** not on the boards: assignments to an IdP group, a user type or everyone (T3 says "IdP group"). */
-  OTHER_ASSIGNMENTS: "Assigned to a group, a user type or everyone",
+  OTHER_ASSIGNMENTS: "Assigned to an IdP group, a user type or everyone",
+  /** not on the boards: an assignment row names its kind; an "everyone" assignment has no subject to show. */
+  ASSIGNMENT_ROW: (kind: string, subject: string, team: string) =>
+    `${kind === "group" ? `IdP group ${subject}` : kind === "user_type" ? `User type ${subject}` : kind === "all" ? "Everyone" : subject} · ${team}`,
   DEFAULT_TEAM: "Default",
   NARROWED: "Narrowed",
   NO_CHANGE: "No change",
   COMPARED: "Compared with Wardyn's walls only. Your organisation's boundary isn't included.",
   BACK: "Back to editing",
   SUBMIT: "Submit for approval",
+  /** not on the boards: the button when no second person is required and a save applies at once. */
+  SUBMIT_SAVE: "Save changes",
   /** not on the boards: the report's own failure (M1's approved wording, before the tree rename). */
   FAILED_TITLE: "Couldn't build the report",
   /** not on the boards. */
@@ -106,6 +141,7 @@ export const BOUNDARY_DRY_RUN = {
     denied_domains: "Blocked hosts and ranges",
     min_confinement_class: "Confinement floor",
     eligible_grants: "Credentials",
+    desktop: BOUNDARY_DESKTOP.TITLE,
     "limits.max_end_ahead_sec": "Longest run",
     "limits.default_end_sec": RUN_LIMITS.DEFAULT_END_LABEL, // canon: the profile limit's own label
   } as Record<string, string>,

@@ -85,6 +85,7 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 
 	warns = clampOperatorSwitches(&out, ceiling, warns)
 	warns = clampInnerWalls(&out, ceiling, warns)
+	warns = clampDesktop(&out, ceiling, warns)
 	warns = clampRecording(&out, ceiling, warns)
 
 	// Per-tool effects: a proposal may narrow the operator's rules, never widen.
@@ -254,9 +255,7 @@ func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limit
 // IsSet treats an all-zero-but-non-nil PushRulesSpec (push_rules: {} on the wire) as "no opinion"
 // like nil, so an empty ceiling doesn't get inherited wholesale and false-warn.
 func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
-	// deny_new_executables is not in IsSet (nothing enforces it yet) but a ceiling's true must
-	// still reach the merged spec, so a proposal can never switch it off.
-	if !ceiling.PushRules.IsSet() && (ceiling.PushRules == nil || !ceiling.PushRules.DenyNewExecutables) {
+	if !ceiling.PushRules.IsSet() {
 		return warns
 	}
 	if out.PushRules == nil {
@@ -319,6 +318,9 @@ func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
 	out.DeniedDomains = slices.Clone(s.DeniedDomains)
 	out.AllowedMethods = slices.Clone(s.AllowedMethods)
 	out.UIApps = slices.Clone(s.UIApps)
+	for i := range out.UIApps {
+		out.UIApps[i].Callers = slices.Clone(s.UIApps[i].Callers)
+	}
 	out.ToolRules = slices.Clone(s.ToolRules)
 	out.WorkspaceRepos = slices.Clone(s.WorkspaceRepos)
 	out.WorkspaceMounts = slices.Clone(s.WorkspaceMounts)
@@ -349,6 +351,10 @@ func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
 		w := *s.HarnessInnerWalls
 		out.HarnessInnerWalls = &w
 	}
+	if s.Desktop != nil {
+		d := *s.Desktop
+		out.Desktop = &d
+	}
 	if s.PushRules != nil {
 		pr := *s.PushRules
 		pr.DenyPaths = slices.Clone(s.PushRules.DenyPaths)
@@ -364,24 +370,43 @@ func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
 // access never asked for.
 //
 // Matched on name AND port, since name alone would let a proposal point the ceiling's app at any
-// port in the sandbox; path is left as proposed.
+// port in the sandbox; path is left as proposed. Inbound survives only where the ceiling's entry is
+// inbound too, and callers are cut to the ceiling's (a caller the ceiling does not name is dropped
+// with a warning). A ceiling that lists no apps has no opinion on either.
 func clampUIApps(proposed, ceiling []types.UIApp, warns *[]string) []types.UIApp {
 	if len(ceiling) == 0 || len(proposed) == 0 {
 		return proposed
 	}
 	var kept []types.UIApp
-	var dropped []string
+	var dropped, uninbound, uncalled []string
 	for _, a := range proposed {
-		if slices.ContainsFunc(ceiling, func(c types.UIApp) bool { return c.Name == a.Name && c.Port == a.Port }) {
-			kept = append(kept, a)
+		name := fmt.Sprintf("%s:%d", a.Name, a.Port)
+		i := slices.IndexFunc(ceiling, func(c types.UIApp) bool { return c.Name == a.Name && c.Port == a.Port })
+		if i < 0 {
+			dropped = append(dropped, name)
 			continue
 		}
-		dropped = append(dropped, fmt.Sprintf("%s:%d", a.Name, a.Port))
+		switch c := ceiling[i]; {
+		case a.Inbound && !c.Inbound:
+			a.Inbound, a.Callers = false, nil
+			uninbound = append(uninbound, name)
+		case a.Inbound:
+			if allowed := slices.DeleteFunc(slices.Clone(a.Callers), func(x string) bool { return !slices.Contains(c.Callers, x) }); len(allowed) != len(a.Callers) {
+				a.Callers = allowed
+				uncalled = append(uncalled, name)
+			}
+		}
+		kept = append(kept, a)
 	}
-	if len(dropped) == 0 {
-		return proposed
+	if len(dropped) > 0 {
+		*warns = append(*warns, fmt.Sprintf("dropped %d ui_app(s) not in operator allowlist: %s", len(dropped), strings.Join(dropped, ",")))
 	}
-	*warns = append(*warns, fmt.Sprintf("dropped %d ui_app(s) not in operator allowlist: %s", len(dropped), strings.Join(dropped, ",")))
+	if len(uninbound) > 0 {
+		*warns = append(*warns, fmt.Sprintf("dropped inbound from %d ui_app(s) the operator allowlist does not make inbound: %s", len(uninbound), strings.Join(uninbound, ",")))
+	}
+	if len(uncalled) > 0 {
+		*warns = append(*warns, fmt.Sprintf("dropped callers not in operator allowlist from %d ui_app(s): %s", len(uncalled), strings.Join(uncalled, ",")))
+	}
 	return kept
 }
 
@@ -878,6 +903,17 @@ func clampInnerWalls(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warn
 		out.HarnessInnerWalls = &p
 	}
 	return warns
+}
+
+// clampDesktop blocks every desktop direction the ceiling blocks, its defaults included: a member may
+// block more, never open what the operator keeps shut. A proposal already within is left as written.
+func clampDesktop(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if leqDesktop(out.Desktop, ceiling.Desktop) {
+		return warns
+	}
+	m := out.Desktop.Meet(ceiling.Desktop)
+	out.Desktop = &m
+	return append(warns, "desktop narrowed: operator policy blocks a direction the proposal allowed")
 }
 
 // clampRecording raises a proposal's recording level to the ceiling's: a ceiling's level is a minimum,

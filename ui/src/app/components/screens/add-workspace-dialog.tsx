@@ -157,7 +157,8 @@ export function AddWorkspaceDialog({
   }, [derived, nameTouched]);
 
   const sourceRequired = kind !== "ephemeral";
-  const canSubmit = !sourceRequired || sourceValue.trim().length > 0;
+  // No path field renders when local directories are unavailable, so a value typed under another kind is not theirs to send.
+  const canSubmit = (!sourceRequired || sourceValue.trim().length > 0) && !(kind === "local_dir" && localDirUnavailable);
 
   const mountPathOrDefault = mountPath.trim() || DEFAULT_TARGET;
   const summaryImage =
@@ -268,10 +269,10 @@ export function AddWorkspaceDialog({
           )}
           {/* M3: a member with no configured root sees WHY instead of a path
               field — an admin-configuration gap, not a control that silently
-              vanishes. No Input renders here, so canSubmit stays gated on a
-              non-empty path same as every other kind; the server's own
-              root-empty fail-closed (ValidateUserMountSource) is what
-              actually stops a stale client from racing past this hint. */}
+              vanishes. No Input renders here, so canSubmit refuses this kind
+              outright; the server's own root-empty fail-closed
+              (ValidateUserMountSource) is what stops a stale client from
+              racing past this hint. */}
           {kind === "local_dir" && localDirUnavailable && (
             <p className="text-meta leading-snug text-muted-foreground">
               {MEMBER_WORKSPACE.LOCAL_DIR_UNAVAILABLE_BODY}

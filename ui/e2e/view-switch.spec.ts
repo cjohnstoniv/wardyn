@@ -106,10 +106,10 @@ async function expectUserChrome(page: Page) {
   await expect(segment(page, CONSOLE_VIEW.USER)).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("aside").getByText(CONSOLE_VIEW.EYEBROW_ADMIN, { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "New run" })).toBeVisible();
-  for (const label of ["Getting started", "Your account"] as NavLabel[]) {
+  for (const label of ["Workloads", "Getting started", "Settings"] as NavLabel[]) {
     await expect(sidebarLink(page, label)).toBeVisible();
   }
-  for (const label of ["Policies", "Permissions", "Audit", "Settings"] as NavLabel[]) {
+  for (const label of ["Policies", "Permissions", "Audit"] as NavLabel[]) {
     await expect(sidebarLink(page, label)).toHaveCount(0);
   }
   await expect(page).toHaveTitle(CONSOLE_VIEW.TITLE_USER);
@@ -344,7 +344,7 @@ test.describe("who sees the switch", () => {
     await gotoConsole(page);
     await expect(page.getByRole("group", { name: CONSOLE_VIEW.GROUP })).toHaveCount(0);
     await expect(page.locator("aside").getByText(CONSOLE_VIEW.EYEBROW_ADMIN, { exact: true })).toHaveCount(0);
-    await expect(sidebarLink(page, "Your account")).toBeVisible();
+    await expect(sidebarLink(page, "Settings")).toBeVisible();
   });
 
   test("the admin token on an SSO install: no switch, and the eyebrow still names the view", async ({ page }) => {
@@ -363,13 +363,13 @@ test.describe("who sees the switch", () => {
     await expect(page.getByRole("button", { name: "New run" })).toHaveCount(0);
   });
 
-  test("a security admin's Admin view: no Drives (a super admin's page); Secrets, Recordings, Getting started and Settings do not", async ({ page, context }) => {
+  test("a security admin's Admin view: User drives and Images appear; Secrets, Recordings, Getting started and Settings do not", async ({ page, context }) => {
     await ssoAdminSession(context, { role: "security_admin", operator: false, security_operator: true });
     await gotoConsole(page, "admin");
-    for (const label of ["Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "Audit"] as NavLabel[]) {
+    for (const label of ["Runs", "Workloads", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "User drives", "Images", "Audit"] as NavLabel[]) {
       await expect(sidebarLink(page, label)).toBeVisible();
     }
-    for (const label of ["Drives", "Secrets", "Recordings", "Getting started", "Settings"] as NavLabel[]) {
+    for (const label of ["Secrets", "Recordings", "Getting started", "Settings"] as NavLabel[]) {
       await expect(sidebarLink(page, label)).toHaveCount(0);
     }
   });
@@ -490,6 +490,8 @@ test.describe("#214 no-barrier CTA: the to-admin click keeps ?step=environment",
 
     await expect(page.getByText(NO_BARRIER.BANNER_TITLE)).toBeVisible();
     await expect(page.getByRole("link", { name: NO_BARRIER.CTA })).toHaveCount(0);
+    // #3050: no link and no command, but a next step: whom to ask.
+    await expect(page.getByText(NO_BARRIER.BANNER_MEMBER)).toBeVisible();
   });
 
   // §2.4 re-sync, #2618: a user type switched in another tab is what a launch from this one is governed as, so

@@ -16,6 +16,7 @@ import {
 import type { AccessFacts, ToolPolicyFact } from "../../../../../lib/types/new-run-access";
 import type { HarnessSetFact } from "../../../../../lib/types/new-run-contract";
 import type { SetupItem } from "../../../../../lib/types/preflight";
+import { isStepSectionHeading } from "../../../../../lib/test-dom";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import type { RunIntent } from "../../draft/run-intent";
@@ -67,6 +68,11 @@ beforeEach(() => { h.operator = false; h.answered = true; h.providers = null; h.
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("HarnessSetup", () => {
+  it("#3044: is drawn as the guided steps' StepSection", () => {
+    show([]);
+    expect(isStepSectionHeading(screen.getByRole("heading", { name: NR_TOOLS.HARNESS_SETUP_TITLE }))).toBe(true);
+  });
+
   it("shows nothing until the server has answered, and says so when the run has no harness", () => {
     const { container } = show(undefined);
     expect(container.querySelector("section")).toBeNull();
@@ -266,6 +272,29 @@ describe("HarnessSetup", () => {
       expect((group.getByRole("radio", { name: NR_TOOLS.EFFECT_HOLD }) as HTMLInputElement).disabled).toBe(true);
       expect((group.getByRole("radio", { name: NR_TOOLS.EFFECT_DENY }) as HTMLInputElement).disabled).toBe(true);
       expect(screen.getByText("Codex CLI can't pause a tool call for approval.")).toBeTruthy();
+    });
+
+    it("states each Codex CLI limit once and never the generic Ask first sentence (#3395)", () => {
+      for (const operator of [false, true]) {
+        h.operator = operator;
+        show([CODEX], BOTH);
+        const row = card("Codex CLI");
+        expect(row.queryByText(/Ask first holds the call/)).toBeNull();
+        expect(row.getAllByText(/can't pause a tool call/)).toHaveLength(1);
+        expect(row.getAllByText(/can't block Codex CLI's own tools/)).toHaveLength(1);
+        expect(row.getByText("Rules for Codex CLI's MCP tools are enforced by the proxy.")).toBeTruthy();
+        cleanup();
+      }
+    });
+
+    it("leaves another harness's row text as it was (#3395)", () => {
+      show([CLAUDE_GATED]);
+      expect(screen.getByText("Ask first holds the call until an admin approves it.")).toBeTruthy();
+      expect(screen.queryByText(/Rules for its MCP tools/)).toBeNull();
+      cleanup();
+      h.operator = true;
+      show([CLAUDE_GATED]);
+      expect(screen.getByText("Ask first holds the call until you or another admin approves it.")).toBeTruthy();
     });
 
     it("turns Codex CLI's rule choices off for its own tools in the Add dialog", async () => {

@@ -52,29 +52,20 @@ printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'
 ### code-server's embedded shell-quote tracking
 
 - [#1904](https://github.com/cjohnstoniv/wardyn/issues/1904) remains open.
-- Inspection of both official code-server 4.139.1 Linux release archives on 2026-10-07 found the same `@devcontainers/cli` 0.88.0 bundle and shrinkwrap:
+- Inspection of both official code-server 4.141.1 Linux release archives on 2026-10-27 found the same `@devcontainers/cli` 0.88.0 bundle as 4.139.1 and 4.141.0, and the same shrinkwrap as 4.141.0:
 
 | Artifact | SHA256 |
 | --- | --- |
-| [amd64 archive](https://github.com/coder/code-server/releases/download/v4.139.1/code-server-4.139.1-linux-amd64.tar.gz) | `53029be6c5781b7bca49b815fcc9a2a3fc111813ad8c9965b2c0f0d2985a0674` |
-| [arm64 archive](https://github.com/coder/code-server/releases/download/v4.139.1/code-server-4.139.1-linux-arm64.tar.gz) | `0edb4b60d9c4744b2dd14b0911e3c2e6dd8c6f3c13bd58bda23ae744e59e7df1` |
+| [amd64 archive](https://github.com/coder/code-server/releases/download/v4.141.1/code-server-4.141.1-linux-amd64.tar.gz) | `45fd3cfbff9fd0c36fe37105859b0f4f7a0544341ca4e322657f5b3caeca1cbe` |
+| [arm64 archive](https://github.com/coder/code-server/releases/download/v4.141.1/code-server-4.141.1-linux-arm64.tar.gz) | `898903adc4d28dc23b9147073afe36fcafdb49e6ada8e1007bfc62a330ff9315` |
 | `lib/vscode/node_modules/@devcontainers/cli/dist/spec-node/devContainersSpecCLI.js` (both) | `f49753e8ead0a8dc2c8d257169eab6fe338b1c162c778353f0b085ad343bf833` |
-| `lib/vscode/npm-shrinkwrap.json` (both) | `dfcafb7490d47210f39ea1f4bd4d45fbc3c859e398ff895ee239f94214609ec4` |
+| `lib/vscode/npm-shrinkwrap.json` (both) | `55f1f064bdf406c9d46e0e80c586771772c429a97a115366a24f82f98b8c04d7` |
 
 - The bundle inlines the old `quote()` implementation: its comment-token branch checks the comment itself but does not reject a line terminator in a following string.
 - Isolating that bundled function reproduces the [upstream advisory](https://github.com/ljharb/shell-quote/security/advisories/GHSA-pqg4-j6r4-53mv) output without executing it as shell.
 - The bundle exports this through `Gb` and imports it as `yp`; the inspected consumer references call `yp.parse`, not `yp.quote`.
 - That limited static inspection found no affected call path; it is not a general reachability proof.
-- The shrinkwrap still records `shell-quote` 1.10.0.
-
-- Checked 2026-10-18 against the newest release, 4.141.0 (linux-amd64 only):
-
-| Artifact | Result |
-| --- | --- |
-| [amd64 archive](https://github.com/coder/code-server/releases/download/v4.141.0/code-server-4.141.0-linux-amd64.tar.gz) | `65bcd20b524d03eb1b5adb7f360244599ef0e5b74089a46a982d32c074b97a29` |
-| `devContainersSpecCLI.js` | `f49753e8ead0a8dc2c8d257169eab6fe338b1c162c778353f0b085ad343bf833`, identical to 4.139.1 |
-| `npm-shrinkwrap.json` | `55f1f064bdf406c9d46e0e80c586771772c429a97a115366a24f82f98b8c04d7`, `shell-quote` 1.10.0 |
-| bundled `shell-quote` | 1.10.0 |
+- The shrinkwrap and the bundled module both still record `shell-quote` 1.10.0.
 
 - The Dockerfile's replacement of the separate module with 1.11.0 changes neither the inlined function nor the shrinkwrap.
 - Keep the tracking issue open and the replacement in place until a candidate [code-server release](https://github.com/coder/code-server/releases) has been inspected for both the embedded code and metadata; a clean scanner result alone does not establish this.
@@ -452,6 +443,32 @@ What the wrap does NOT add — your base must still provide:
   - Only relevant if you attach a shell to an untrusted image on a non-MITM'd allowed host.
 
 - **Raw (deploy-time).** If you build an image that already satisfies the contract below, register it under an agent name in `WARDYN_AGENT_IMAGES` (a JSON `{"<agent>":"<ref>"}` map) and launch that agent — no per-run wrap.
+- **Pre-wrapped (Kubernetes, no image builder).** Build it `FROM` agent-base yourself and add it under Images; see [Pre-wrapped image](#pre-wrapped-image).
+
+### Pre-wrapped image
+
+A pre-wrapped image already carries Wardyn's runner tools, so it runs as is: no image builder, no per-run wrap.
+It is for a Kubernetes control plane, which has no image builder.
+
+1. **Build it `FROM` agent-base 0.10.0 or later**, and add your toolchain on top.
+   - Leave `/usr/local/bin` as agent-base ships it, and add no `ENTRYPOINT`.
+   - Build each architecture your nodes run (`docker buildx build --platform linux/amd64,linux/arm64`).
+2. **Push it and pin it by digest**: `<registry>/<repository>[:tag]@sha256:<digest>`.
+   - Images refuses a tag without a digest, because a tag can be moved to another image after the check.
+3. **Add it under Images** with *How it runs* → *Pre-wrapped: runs as is*, or `POST /api/v1/base-images` with `{"kind":"prewrapped","image":"<ref>"}`.
+   - A super admin finds Images under Settings → Providers; a security admin's own Images page adds, checks and removes pre-wrapped images only.
+   - The cluster pulls it with the deployment's existing pull secret (`k8s.imagePullSecret`); the control plane reads no registry.
+
+**What the check does.**
+
+- It runs one short pod from the pinned image per node architecture (amd64, arm64), with no network and no service account token, for at most 10 minutes.
+- The pod looks for `agent-run`, `agent-run-lib.sh`, `wardyn-rec` and `wardyn-git-helper` in `/usr/local/bin`, and runs `wardyn-rec -contract`.
+- Only a ready image is offered to a workspace or a run, and its runs go only to the architectures that passed.
+- An architecture with no build or no node is left out; anything else refuses the image, and *Check again* runs a new check.
+- It needs the boot canary to have shown NetworkPolicy enforced, since the pod runs the image's own shell.
+
+**What it does not prove.** It proves the tools are there and `wardyn-rec` runs. It does not test your agent or your toolchain, and it does not scan the image.
+
 
 ## Adding a new agent image
 

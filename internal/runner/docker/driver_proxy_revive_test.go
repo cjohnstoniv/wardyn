@@ -223,7 +223,7 @@ func TestCreateSandbox_TheRunNetworkNamesItsSubnet(t *testing.T) {
 
 // TestReplaceProxy_NewProxyExitsAtConfigLoad: when the REPLACEMENT proxy
 // itself exits at config load, the OLD proxy is already gone by the time
-// startProxy's exit-watch catches this; the error names the config-load cause
+// startProxy's ready wait catches this; the error names the config-load cause
 // and the exited NEW container (same deterministic name) is LEFT IN PLACE, so
 // its logs still say why.
 func TestReplaceProxy_NewProxyExitsAtConfigLoad(t *testing.T) {
@@ -238,11 +238,6 @@ func TestReplaceProxy_NewProxyExitsAtConfigLoad(t *testing.T) {
 	runID := testSpec().RunID
 	cfg := renderedTestConfig(t, "fresh")
 	old := f.containers[proxyContainerName(runID)]
-
-	// A fake-backed driver defaults proxySettle to 0; exercise the real
-	// settle window on the REPLACEMENT proxy's start below (set after the
-	// initial CreateSandbox above, so its own healthy-proxy start stays fast).
-	d.proxySettle = proxyStartSettle
 
 	// The replacement proxy reuses the OLD proxy's deterministic name, and
 	// ReplaceProxy inspects the OLD proxy once (for its labels) before

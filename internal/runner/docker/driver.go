@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -77,10 +79,18 @@ type Config struct {
 	// controller missing/not delegated). OFF by default — an untrusted
 	// sandbox must not run uncapped. Set only on a trusted host.
 	AllowUnenforceableCaps bool
-	// ProxySandboxPeersOnly (WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY, default off)
-	// has each run's proxy serve only callers on the run's own network, on
-	// create and on revive (proxy Config.AllowedPeers).
-	ProxySandboxPeersOnly bool
+	// ProxyServesAnyPeer (WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY set off) has
+	// each run's proxy serve any caller. The zero value (the default) serves
+	// only callers on the run's own network, on create and on revive (proxy
+	// Config.AllowedPeers).
+	ProxyServesAnyPeer bool
+	// ProxyPeersOnlyByDefault (wardyn-runnerd, WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY unset) has a proxy
+	// image that refuses allowed_peers, one older than this runner, started again without them: it serves
+	// any peer, as it did before peers-only. The zero value, and the switch set on, refuse that run.
+	ProxyPeersOnlyByDefault bool
+	// PeersOnlyFallback, when set, is told the proxy image whose runs serve any peer because it refused
+	// allowed_peers, and "" once a proxy takes them again; each change once.
+	PeersOnlyFallback func(image string)
 	// UserDriveHostRoots is the deployment's WARDYN_USER_DRIVE_HOST_ROOTS
 	// ceiling over host_path USER DRIVES, parsed once at boot and handed to
 	// the substrate constructor, so the driver's bind-time re-check and the
@@ -102,6 +112,10 @@ type Config struct {
 	// the target, so the proxy's control-plane clamp covers one address, and an
 	// IP-literal URL (which no hosts entry can remap) refuses the create.
 	ControlPlaneRelay func(controlPlaneURL *url.URL) (target string, err error)
+	// LocalModelRelay, set only by wardyn-runnerd beside ControlPlaneRelay, serves a laptop local
+	// model's port at the relay target to a flagged run's proxy alone, forwarded to this computer's
+	// loopback at that port (withRunnerLocalModels). Nil refuses a run that needs one.
+	LocalModelRelay LocalModelRelay
 	// TrustedCAPEM, set only by wardyn-runnerd, is the runner's own validated
 	// corporate CA bundle (--trusted-ca-file, runner.TrustedCABundle). It
 	// becomes every proxy's trusted_ca_pem, on create and on revive, in place
@@ -125,6 +139,11 @@ type Config struct {
 	// and on revive, as TrustedCAPEM becomes trusted_ca_pem; the organisation never sends one to a
 	// runner. It may carry a credential, so it is never logged. Empty changes nothing.
 	UpstreamProxyURL string
+	// RunSubnetPool (WARDYN_DOCKER_RUN_SUBNET_POOL, default unset) is the IPv4 range each run's
+	// network takes its own RunSubnetBits-long subnet from (WARDYN_DOCKER_RUN_SUBNET_SIZE, default
+	// 28), so runs stop using up the daemon's default address pools. Unset, the daemon picks the subnet.
+	RunSubnetPool netip.Prefix
+	RunSubnetBits int
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent
@@ -164,12 +183,20 @@ type Driver struct {
 	cli dockerAPI
 	cfg Config
 
-	// proxySettle is how long startProxy's exit-watch requires a proxy's
-	// Running state to have HELD before trusting it. New() sets this to
-	// proxyStartSettle for a real daemon; newWithClient's zero value (0) is
-	// the deliberate default for fake-backed test drivers, so the unit suite
-	// doesn't pay a real wall-clock tax on every CreateSandbox.
+	// proxySettle is how long startProxy's exit-watch (a proxy image without the ready marker) requires
+	// a proxy's Running state to have HELD before trusting it. New() sets this to proxyStartSettle for a
+	// real daemon; newWithClient's zero value (0) is the deliberate default for fake-backed test drivers,
+	// so the unit suite doesn't pay a real wall-clock tax on every CreateSandbox.
 	proxySettle time.Duration
+	// legacyProxyWarned holds the proxy images already logged as lacking the ready marker.
+	legacyProxyWarned sync.Map
+
+	// proxyReady overrides how long startProxy waits for a proxy's ready marker; zero means
+	// proxyReadyWait. Tests shorten it.
+	proxyReady time.Duration
+
+	// subnetMu serialises this driver's run network creates from RunSubnetPool (createPoolRunNetwork).
+	subnetMu sync.Mutex
 
 	// mu guards agentExecs, pending, mainProc, and creating — the driver's
 	// only mutable state.
@@ -205,6 +232,22 @@ type Driver struct {
 
 	// proxyImg, once set by SetProxyImage, replaces Config.ProxyImage for every later sidecar.
 	proxyImg atomic.Pointer[string]
+
+	// peersMu guards peersFallback, the image of the last proxy start that refused allowed_peers ("" once
+	// one took them), and peersWarned, the images a warning has named (notePeersOnly).
+	peersMu       sync.Mutex
+	peersFallback string
+	peersWarned   map[string]bool
+
+	// vmCfg, set by EnableVM (wardyn-runnerd only), turns Linux VM sandboxes on; vms maps a VM's
+	// ref to its *vmRun; notVMs holds the refs found to be containers, until their teardown;
+	// vmDial, a test hook, replaces the unix dial to a VM's sockets.
+	vmCfg    atomic.Pointer[VMConfig]
+	macCfg   atomic.Pointer[MacVMConfig] // EnableMacVM: macOS VM sandboxes, whose refs vms holds too
+	vms      sync.Map
+	notVMs   sync.Map
+	macDisks sync.Map // run id -> runner.MacOSVMDisk: each macOS VM run's disk report (macvm_disk.go)
+	vmDial   func(ctx context.Context, path string) (net.Conn, error)
 }
 
 // pendingAgent is the fully-built agent-container config CreateSandbox defers

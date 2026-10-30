@@ -217,6 +217,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
+	// The restrictions the revive holds the run to are the run's from here: the seal and the mint read them.
+	capturedRestrictions := run.RestrictionIDs
+	run.RestrictionIDs = c.restrictionIDs
 	cfg, rerr := s.reviveSourceConfig(ctx, rv, run, actorType, actor)
 	if rerr != nil {
 		return reviveResult{}, rerr
@@ -282,6 +285,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// the row as read here, so a run read live still had its old proxy running.
 	// It also refreshes the watcher lease, so the watcher sweep does not find
 	// a rebooted agent not yet started and lose the run again.
+	if rerr := s.saveRevivedRestrictions(ctx, run, capturedRestrictions); rerr != nil {
+		return reviveResult{}, rerr
+	}
 	if rerr := s.claimRevive(ctx, reviver, run, rebooted, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -481,6 +487,7 @@ func (s *Server) reviveRecoverContainment(ctx context.Context, run types.AgentRu
 	if err := s.runnerHub(st).Goaway(ctx, *run.RunnerID); err != nil {
 		slog.WarnContext(ctx, "wardynd: a contained run's recovery waits for its runner's next session", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
+	s.announceRunnerGoaway(*run.RunnerID)
 	return reviveRefused(http.StatusConflict, reasonReviveContainmentRecovering,
 		"the run's runner holds it contained since it was offline; a recovery is queued and the runner applies it when it next connects; revive the run again once it has")
 }

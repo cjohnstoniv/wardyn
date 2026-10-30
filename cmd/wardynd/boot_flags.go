@@ -104,6 +104,8 @@ type bootFlags struct {
 	governAdminRunsExempt *string
 	// egressPortRule is WARDYN_EGRESS_PORT_RULE (boot_egress.go).
 	egressPortRule *string
+	// desktopSignins is WARDYN_DESKTOP_SIGNINS (boot_desktop_signins.go).
+	desktopSignins *string
 	// runnerTargetOverride is WARDYN_RUNNER_TARGET, and it is a TEST-HARNESS
 	// knob: the substrate name STORED objects validate against while -runner is
 	// "none". A runner-less daemon resolves the target "none", which no drive
@@ -161,6 +163,10 @@ type bootFlags struct {
 	// once at boot, control-plane-authored only. Mutually exclusive with
 	// daemonProxyURL (bootDaemonProxy refuses boot if both are set).
 	daemonProxySecretFile *string
+	// cliArtifactBase is WARDYN_CLI_ARTIFACT_BASE (see
+	// internal/api/cli_artifact_base.go): the operator's internal mirror of the
+	// release assets, published on /healthz. Empty (default) = none.
+	cliArtifactBase *string
 	// orgCAFingerprints is WARDYN_ORG_CA_FINGERPRINTS (see
 	// internal/api/org_ca_fingerprints.go): published on /healthz for
 	// `wardyn ca add` to be compared against. Empty (default) = none.
@@ -237,7 +243,8 @@ type bootFlags struct {
 	// Role/group keys, which env WARDYN_OIDC_ROLE_MAP email keys were never
 	// gated on (legacy, still boot-warned separately).
 	oidcAllowEmailMappings *bool
-	// Three default-off tightenings, each fed to the api.Config field of the same name.
+	// Three tightenings, each default on; api.Config takes their inverse
+	// (unverifiedEmailGrants, unitPutCreates, hostPortGrantsMatch).
 	capabilityGrantsVerifiedEmail *bool
 	governanceUnitPutExistingOnly *bool
 	egressHostPortGrantsInert     *bool
@@ -279,6 +286,9 @@ type bootFlags struct {
 	// proxyResponseScrub has every run's proxy replace a value it injected when a
 	// relayed response echoes it back (off by default in 0.10.0).
 	proxyResponseScrub *bool
+	// pushHoldCanonicalRepos keys a held git_pat push to github.com on one
+	// spelling of its repository (off by default in 0.10.0).
+	pushHoldCanonicalRepos *bool
 	// attachLocal lets a person's CLI attach to their run on their own runner's computer (off by
 	// default in 0.10.0; only "on" enables it).
 	attachLocal *string
@@ -390,6 +400,11 @@ type bootFlags struct {
 	sshAdvertise    *string
 	sshProxyCommand *string
 	sshRoleTTL      *time.Duration
+
+	// sshBindEarly binds the gateway before the background workers start and, when the port is taken, keeps booting
+	// with SSH left out of /healthz. Off (default) keeps the log-only bind failure inside ServeSSHGateway.
+	sshBindEarly *bool
+
 	// sshMaxSessionsPerRun is api.Config.SSHMaxSessionsPerRun, validated by
 	// validateSSHMaxSessionsPerRun.
 	sshMaxSessionsPerRun *int
@@ -484,6 +499,7 @@ func parseBootFlags() *bootFlags {
 		userDriveHostRoots:     flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a host_path user drive may be registered inside, typically the mount point of a share the operator mounted host-side. Empty (default) means no host_path drive may be registered; never $HOME or /"),
 		governAdminRuns:        flagBool("govern-admin-runs", "WARDYN_GOVERN_ADMIN_RUNS", false, "govern every run an SSO admin or an admin-role personal token launches, like a member's; the admin token and local mode stay ungoverned and are marked governance_exempt on run.create. With OIDC unset it binds nobody (default false)"),
 		egressPortRule:         flagEnv("egress-port-rule", "WARDYN_EGRESS_PORT_RULE", "off", "container runs' egress port rule: off (default; a bare allowlist host is open on every port), dry_run (nothing refused; each allow the rule would refuse is marked port_rule=dry_run in the audit log) or on (ports 80 and 443 plus host:port allowlist entries). The proxy turns it on for runs dispatched as a desktop VM. Any other value is refused at boot"),
+		desktopSignins:         flagEnv("desktop-signins", "WARDYN_DESKTOP_SIGNINS", "off", "desktop sign-ins: on lets a run's creator sign in to websites in a browser of their own inside the run's desktop (a run whose policy declares the novnc app, on the in-process Docker runner), with the agent stopped, and share one site's login with the agent; off (default) mounts no sign-in store and opens no sign-in lane. Any other value is refused at boot"),
 		governAdminRunsExempt:  flagEnv("govern-admin-runs-exempt", "WARDYN_GOVERN_ADMIN_RUNS_EXEMPT", "", "comma-separated lanes left ungoverned under -govern-admin-runs; the only value is \"recording\" (Record Mode runs as before). Any other value is refused at boot; set without -govern-admin-runs it does nothing"),
 		ssoOnly:                flagBool("sso-only", "WARDYN_SSO_ONLY", false, "declare SSO the only way into the console; refuses to start unless OIDC is configured and the admin token, local mode, member mode and no-operator-list override are all unset (default false)"),
 		uiDir:                  flagEnv("ui-dir", "WARDYN_UI_DIR", "", "directory holding the built web UI (optional)"),
@@ -509,6 +525,7 @@ func parseBootFlags() *bootFlags {
 		daemonProxyURL:         flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) for wardynd's own outbound HTTP calls: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO token renewal and Entra directory sync. Empty (default) leaves the default transport untouched"),
 		daemonNoProxy:          flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-style bypass list for -daemon-proxy-url (host, .suffix, CIDR or *); ignored when the proxy URL is unset"),
 		daemonProxySecretFile:  flagEnv("daemon-proxy-secret-file", "WARDYN_DAEMON_PROXY_SECRET", "", "path to a file holding one forward-proxy URL that may embed user:pass@, the credentialed form of -daemon-proxy-url; refused if group- or world-writable, or if other-readable and owned by wardynd's own non-root uid (group-read, as a Kubernetes Secret mount gives, is accepted). Mutually exclusive with -daemon-proxy-url"),
+		cliArtifactBase:        flagEnv("cli-artifact-base", "WARDYN_CLI_ARTIFACT_BASE", "", "internal mirror (https://) of the release assets, published on the anonymous /healthz as cli_artifact_base so the console's install line and 'wardyn runner setup' fetch from it: <base>/v<version>/<asset>. Empty (default) publishes none"),
 		orgCAFingerprints:      flagEnv("org-ca-fingerprints", "WARDYN_ORG_CA_FINGERPRINTS", "", "comma-separated sha256:<hex> fingerprints of the organisation's CA certificates, published on the anonymous /healthz as org_ca_fingerprints for people to compare with what 'wardyn ca add' prints. Empty (default) publishes none"),
 		demoVideoBaseURL:       flagEnv("demo-video-base-url", "WARDYN_DEMO_VIDEO_BASE_URL", "", "mirror base URL (https://) re-pointing the Getting Started demo episodes for an air-gapped deployment where github.com is unreachable. Empty (default) uses the two GitHub hosts"),
 		ageKey:                 flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated and logged if empty"),
@@ -550,12 +567,12 @@ func parseBootFlags() *bootFlags {
 		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs mapping an App Role, group or email to "admin", "security_admin" or "user"; highest tier wins (user < security_admin < admin); this map is the only way to grant "security_admin". The pre-0.8 "member" is refused since 0.9. Empty (default) disables role derivation; every signed-in human is "admin"`),
 		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin", "user" or a user type id; the pre-0.8 "member" is refused since 0.9) assigned when -oidc-role-map is set but nothing matched; "security_admin" is refused here. Empty (default) denies that login instead. Ignored when -oidc-role-map is empty`),
 		oidcAllowEmailMappings:  flagBool("oidc-allow-email-mappings", "WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS", false, "allow an email-shaped value on a console People-step role mapping (POST /access/mappings); refused by default in favor of an App Role or group key (default false)"),
-		capabilityGrantsVerifiedEmail: flagBool("capability-grants-verified-email", "WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL", false,
-			"a capability allow grant written for a person's email matches them only when sign-in verifies the email (WARDYN_OIDC_EMAIL_DOMAINS or WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED) or WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS is on; deny grants match either way (default false: the match is kept and logged)"),
-		governanceUnitPutExistingOnly: flagBool("governance-unit-put-existing-only", "WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY", false,
-			"PUT /api/v1/governance/units/{id} replaces an existing profile only and answers 404 for an id no profile holds; create through POST (default false: a PUT creates at the id and is logged)"),
-		egressHostPortGrantsInert: flagBool("egress-host-port-grants-inert", "WARDYN_EGRESS_HOST_PORT_GRANTS_INERT", false,
-			"a stored egress_host allow grant whose value carries a :port is inert: marked on the Permissions read and never matched; deny grants keep matching (default false: matched by host and logged)"),
+		capabilityGrantsVerifiedEmail: flagBool("capability-grants-verified-email", "WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL", true,
+			"a capability allow grant written for a person's email matches them only when sign-in verifies the email (WARDYN_OIDC_EMAIL_DOMAINS or WARDYN_OIDC_REQUIRE_EMAIL_VERIFIED) or WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS is on; deny grants match either way (default true; false keeps the match, logged)"),
+		governanceUnitPutExistingOnly: flagBool("governance-unit-put-existing-only", "WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY", true,
+			"PUT /api/v1/governance/units/{id} replaces an existing profile only and answers 404 for an id no profile holds; create through POST (default true; false lets a PUT create at the id, logged)"),
+		egressHostPortGrantsInert: flagBool("egress-host-port-grants-inert", "WARDYN_EGRESS_HOST_PORT_GRANTS_INERT", true,
+			"a stored egress_host allow grant whose value carries a :port is inert: marked on the Permissions read and never matched; deny grants keep matching (default true; false matches it by host, logged)"),
 
 		dirProvider: flagEnv("directory-provider", "WARDYN_DIRECTORY_PROVIDER", "", `identity-directory connector for the console's "who" autocomplete: "entra" (Microsoft Graph) or empty. Empty (default) is the feature off; enabling it grants wardynd read of the whole directory`),
 		dirTenant:   flagEnv("directory-tenant", "WARDYN_DIRECTORY_TENANT", "", "Entra tenant id/domain for the directory connector. Empty (default) derives it from -oidc-issuer; set together with -directory-client-id/-secret to use a dedicated app registration"),
@@ -596,6 +613,7 @@ func parseBootFlags() *bootFlags {
 		fileSecretPlaceholders:   flagBool("file-secret-placeholders", "WARDYN_FILE_SECRET_PLACEHOLDERS", false, "a file_secret grant whose scope names a host gets a placeholder file in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
 		runnerSecretPlaceholders: flagBool("runner-secret-placeholders", "WARDYN_RUNNER_SECRET_PLACEHOLDERS", false, "a runner_resident env_secret or file_secret grant whose scope names a host gets a placeholder on the runner, which the organisation's egress replaces with the value on requests to that host (default false)"),
 		attachLocal:              flagEnv("attach-local", "WARDYN_ATTACH_LOCAL", "off", `"on": a person's CLI on their own runner's computer attaches to their run there, the terminal staying on that computer while the organisation keeps the admission, the writer lease, the recording and the audit; anything else keeps every attach on the relay`),
+		pushHoldCanonicalRepos:   flagBool("push-hold-canonical-repos", "WARDYN_PUSH_HOLD_CANONICAL_REPOS", false, "have each run's egress proxy name a held git_pat push to github.com by its repository lowercased and without .git, so one admin decision covers every spelling; off names the path as git spelled it"),
 		proxyResponseScrub:       flagBool("proxy-response-scrub", "WARDYN_PROXY_RESPONSE_SCRUB", false, "have each run's egress proxy replace a credential it added when an upstream response echoes it back to the sandbox (default false)"),
 		gitPATBrokerOffRefused:   flagBool("git-pat-broker-off-refused", "WARDYN_GIT_PAT_BROKER_OFF_REFUSED", false, "while WARDYN_GIT_PAT_BROKER is off, refuse a run that would hold a resident PAT on operators' runs too; a member's run is refused it either way (default false)"),
 		multiAgentTasks:          flagBool("multi-agent-tasks", "WARDYN_MULTI_AGENT_TASKS", false, "let a background agent task run several agents side by side in one sandbox, each on its own tools[].task: every agent's rules are met (strictest wins), the run ends when the last agent exits and fails if any failed; off refuses a request that gives an agent its own task"),
@@ -688,6 +706,7 @@ func parseBootFlags() *bootFlags {
 		uiOriginTemplate: flagEnv("ui-sandbox-origin-template", "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE", "", `optional per-run origin for the UI-sandbox gateway, e.g. "https://run-{run}.ui.example.com" (needs wildcard DNS and certificate); must contain {run}. Empty (default) shares one origin across every run`),
 		metricsListen:    flagEnv("metrics-listen", "WARDYN_METRICS_LISTEN", "", `plain-HTTP listen address that serves only GET /metrics with no credential, for a scraper that sends none, e.g. ":9464". Empty (default) disables it; must differ from -listen, -internal-listen, -ssh-listen and -ui-sandbox-listen`),
 
+		sshBindEarly:           flagBool("ssh-bind-early", "WARDYN_SSH_BIND_EARLY", false, "bind the SSH gateway before the background workers start; if its port is taken, keep booting and stop advertising SSH on /healthz instead of only logging at accept time (default false)"),
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn run ssh" refuses`),
 		oidcSessionTTL:         flagDuration("oidc-session-ttl", "WARDYN_OIDC_SESSION_TTL", 0, "how long a console session lasts from sign-in, instead of ending at the ID token's expiry (duration; 0 = the ID token's expiry; at most 24h)"),
 		sessionLife:            registerSessionLifeFlags(),
@@ -733,6 +752,7 @@ func finalizeBootFlags(f *bootFlags) {
 	exitOnBadSecretFiles(f)
 	exitOnGovernanceFlags(f)
 	exitOnBadPortRule(f)
+	exitOnBadDesktopSignins(f)
 }
 
 // exitOnBadSecretFiles is parseBootFlags' <VAR>_FILE resolution, extracted

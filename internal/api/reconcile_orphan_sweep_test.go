@@ -40,6 +40,10 @@ type orphanSweepStore struct {
 	clearedRefs []uuid.UUID
 }
 
+func (*orphanSweepStore) LiveImageCheckAttempts(context.Context) (map[uuid.UUID]bool, error) {
+	return nil, nil
+}
+
 func (s *orphanSweepStore) ListRuns(context.Context) ([]types.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -320,5 +324,66 @@ func TestOrphanPassesBoundTheirSubstrateCalls(t *testing.T) {
 	}
 	if !rn.stopBounded || !rn.sweepBounded {
 		t.Fatalf("orphan teardown bounded %v, orphan sweep bounded %v; want both", rn.stopBounded, rn.sweepBounded)
+	}
+}
+
+// keptFolderStore is orphanSweepStore whose runs in kept have a computer folder's pass back that
+// keeps their sandbox for a resume.
+type keptFolderStore struct {
+	*orphanSweepStore
+	kept map[uuid.UUID]bool
+}
+
+func (s *keptFolderStore) RunLocalFolderStatus(_ context.Context, id uuid.UUID) (types.RunLocalFolderStatus, error) {
+	if s.kept[id] {
+		return types.RunLocalFolderStatus{Resume: &types.FolderResume{Stalled: 1}}, nil
+	}
+	return types.RunLocalFolderStatus{}, nil
+}
+
+func (s *keptFolderStore) SetRunLocalFolderStatus(context.Context, uuid.UUID, types.RunLocalFolderStatus) (bool, error) {
+	return true, nil
+}
+
+// orphanVerdictRunner records the orphan sweep's verdict on each run it is asked about.
+type orphanVerdictRunner struct {
+	*orphanSweepRunner
+	verdicts map[uuid.UUID]bool
+}
+
+func (r *orphanVerdictRunner) SweepOrphanedSandboxes(_ context.Context, _ time.Duration, isOrphan func(uuid.UUID) bool) (int, error) {
+	for id := range r.verdicts {
+		r.verdicts[id] = isOrphan(id)
+	}
+	return 0, nil
+}
+
+// Neither orphan pass tears down a sandbox that its computer folder's pass back keeps for
+// resumeComputerFolderBacks; another terminal run's sandbox still goes (#3466).
+func TestOrphanPasses_LeaveASandboxKeptForAComputerFolderResume(t *testing.T) {
+	h := newHarness(t)
+	now := time.Now().UTC()
+	kept, ended := uuid.New(), uuid.New()
+	run := func(id uuid.UUID, ref string) types.AgentRun {
+		return types.AgentRun{ID: id, CreatedAt: now, UpdatedAt: now, CreatedBy: "t@example.com", Agent: "claude-code",
+			ConfinementClass: types.CC1, State: types.RunCompleted, RunnerTarget: "docker", SandboxRef: ref}
+	}
+	st := &keptFolderStore{orphanSweepStore: &orphanSweepStore{runs: []types.AgentRun{run(kept, "kept"), run(ended, "ended")}},
+		kept: map[uuid.UUID]bool{kept: true}}
+	rn := &orphanVerdictRunner{orphanSweepRunner: &orphanSweepRunner{fakeRunner: &fakeRunner{}}, verdicts: map[uuid.UUID]bool{kept: true, ended: false}}
+	cfg := baseTestConfig(h, st)
+	cfg.Runner = rn
+	srv := testServer(t, cfg)
+	if err := srv.reconcileOrphanedSandbox(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if k, e := rn.stopCount("kept"), rn.stopCount("ended"); k != 0 || e != 1 {
+		t.Errorf("boot orphan pass stopped the kept sandbox %d times and the other %d; want 0 and 1", k, e)
+	}
+	if err := srv.sweepOrphanedSandboxes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rn.verdicts[kept] || !rn.verdicts[ended] {
+		t.Errorf("orphan sweep verdicts: kept %v, ended %v; want false and true", rn.verdicts[kept], rn.verdicts[ended])
 	}
 }

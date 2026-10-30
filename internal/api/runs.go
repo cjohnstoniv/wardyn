@@ -34,13 +34,13 @@ const (
 	// identity already minted, so the compensator has to say WHY the badge reads
 	// FAILED. The driver's own error text is in the 500 body and in the audit
 	// row; this is the one line the console shows under the badge.
-	createRunGrantAbortHint = "the run's credential grants could not be recorded, so it was never started"
+	createRunGrantAbortHint = "The run's credential grants could not be recorded, so it was never started"
 	// createRunComponentsAbortHint is the same for the run's component snapshot.
-	createRunComponentsAbortHint = "the run's components could not be recorded, so it was never started"
+	createRunComponentsAbortHint = "The run's components could not be recorded, so it was never started"
 	// createRunHarnessesAbortHint is the same for the run's harness set.
-	createRunHarnessesAbortHint = "the run's harnesses could not be recorded, so it was never started"
+	createRunHarnessesAbortHint = "The run's harnesses could not be recorded, so it was never started"
 	// createRunKeepAbortHint is the same for the drive keep_work_folder makes.
-	createRunKeepAbortHint = "the drive for the run's work folder could not be made, so it was never started"
+	createRunKeepAbortHint = "The drive for the run's work folder could not be made, so it was never started"
 	// devcontainerNoBuilderWarning is the 201 warning for a devcontainer_repo run
 	// on a deployment with no image builder wired: the build silently fell
 	// through to the convention image, which is a different sandbox from the one
@@ -175,8 +175,8 @@ func (s *Server) refuseCreatedRun(w http.ResponseWriter, r *http.Request, runID 
 }
 
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
-	var asked []byte // the request as asked, for the launch intent (launch_intent.go)
-	r = withAskedRequest(r, &asked)
+	var asked []byte                                       // the request as asked, for the launch intent (launch_intent.go)
+	r = withContextChoiceSlot(withAskedRequest(r, &asked)) // the slot is filled once the body is decoded (decodeAndValidateCreateRun)
 	if s.refuseAdminViewLaunch(w, r) {
 		return
 	}
@@ -280,7 +280,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// exactly the path this closure exists for. Detaching here and again below
 	// is harmless (WithoutCancel of a detached ctx is a no-op in effect) and
 	// keeps the two concerns independent.
-	abort := s.abortHalfBuiltRun(ctx, runID)
+	abort := s.abortHalfBuiltRun(ctx, runID, f.keep != nil)
 
 	// The kept work folder's drive, counted again at the insert: a race past the
 	// fold's count is refused here and the run is never started.
@@ -326,7 +326,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// repoSourceWarnings.
 	warnings = append(warnings, s.repoSourceWarnings(ctx, runID, spec, req)...)
 	warnings = append(warnings, f.fitWarnings...)
-	warnings = append(warnings, f.end.warnings(run)...)
+	warnings = append(append(warnings, f.end.warnings(run)...), serviceCreateWarnings(run)...)
 
 	// The requirements fold that ran ABOVE the confinement floor, audited now
 	// that the run id exists. See recordCreateFolds.
@@ -402,7 +402,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Nothing below can become a 4xx, so the caller gets its run now and the
 	// image build + dispatch continue server-side (runs_create_launch.go).
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+runID.String())
-	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings, ResourcesApplied: &f.place.applied})
+	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings,
+		WarningContext: s.warningContexts(r.Context(), ceiling, warnings), ResourcesApplied: &f.place.applied})
 	launch := f.launch(req, spec, ceiling, gw, id.Token, created)
 	launchCtx := context.WithoutCancel(ctx)
 	s.goBackground(func() { s.finishCreateRunLaunch(launchCtx, launch) })
@@ -449,6 +450,7 @@ type runRowInput struct {
 func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 	req, f, placed := in.req, in.f, in.placed
 	operatorOwned := operatorOwnedRequest(ctx)
+	service, _ := frozenRunService(req.Service) // serviceRefusal has already held it valid
 	return types.AgentRun{
 		ID:               in.runID,
 		CreatedAt:        in.now,
@@ -464,7 +466,10 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		ConfinementClass: in.enforced,
 		RunnerTarget:     in.runnerTarget,
 		Interactive:      req.Interactive,
+		MachineKind:      types.MachineKind(req.MachineKind).Normalize(),
 		Experience:       req.Experience,
+		Shape:            storedRunShape(req),
+		Service:          service,
 		LocalFolder:      req.LocalFolder,
 		WorkspacePath:    in.workspacePath,
 		WorkspaceIDs:     workspaceIDsOf(f.wsRefs), // referencedWorkspaces above, same spec as WorkspacePath
@@ -615,6 +620,15 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		data["preset"] = req.Preset
 		data["preset_version"] = req.PresetVersion
 	}
+	if service, _ := frozenRunService(req.Service); service != nil {
+		data["service"] = service // the spec the run keeps, defaults filled
+	}
+	if req.Shape != "" {
+		// The New Run choice the run was set up from. The run row keeps it too,
+		// but the chained audit row outlives the run, so this row is what says a
+		// run was started as an application (#1994).
+		data["shape"] = req.Shape
+	}
 	if req.TaskMode == "exec" {
 		// The run row doesn't store task_mode (request-scoped), so the audit
 		// event is the provenance record that this run ran a plain command.
@@ -693,6 +707,8 @@ type grantChecker interface {
 type createRunResponse struct {
 	types.AgentRun
 	Warnings []string `json:"warnings,omitempty"`
+	// WarningContext is preflight's, for these warnings.
+	WarningContext []warningContext `json:"warning_context,omitempty"`
 	// ResourcesApplied is the CPU, memory and PIDs the run asked for and got (stepResources).
 	ResourcesApplied *client.AppliedResources `json:"resources_applied,omitempty"`
 }

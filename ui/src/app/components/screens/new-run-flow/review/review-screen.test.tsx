@@ -13,14 +13,19 @@ import { NR_HARNESSES } from "../../../wardyn/copy/new-run/harnesses";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { ENDS_NONE } from "../../../wardyn/copy/run-lifetime";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
+import { isStepSectionHeading } from "../../../../lib/test-dom";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_SAVE } from "../../../wardyn/copy/new-run/save";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
+import { health } from "../../../../lib/api/health";
 import { RUN_WAIT } from "../../../../lib/runner-pool-refusals";
 import { SCENARIO_PREFLIGHT } from "../../../../lib/new-run-fixtures/scenarios/preflight";
 import { SCENARIO_ACCESS } from "../../../../lib/new-run-fixtures/scenarios/tools";
+import { CODEX, MCP_LOCAL } from "../../../../lib/new-run-fixtures/scenarios/tools-harness";
+import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
+import { mcpLocalRef } from "../steps/tools/catalogue-edits";
 import type { PreflightResult } from "../../../../lib/types/preflight";
 import { intentToWire } from "../draft/intent-to-wire";
 import { PREFLIGHT_FRESH_MS } from "../draft/launch-gate";
@@ -29,6 +34,8 @@ import { NEW_RUN_SCREENS, NewRunRoute, useNewRunDraft, type Seed, type SeedLoade
 import { runDocumentText } from "../document/run-document";
 import { ReviewScreen } from "./review-screen";
 
+const setSecretMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../../lib/api/secrets", () => ({ secrets: { setSecret: (...a: unknown[]) => setSecretMock(...a) } }));
 const { checks, wfetchMock } = vi.hoisted(() => ({
   checks: { current: {} as Record<string, unknown>, params: undefined as { body: unknown } | undefined },
   wfetchMock: vi.fn(),
@@ -141,6 +148,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   wfetchMock.mockReset();
+  vi.restoreAllMocks();
 });
 
 describe("Review: a draft that keeps its work folder at the drive limit (#1991)", () => {
@@ -223,6 +231,31 @@ describe("Review Launch gate (U11)", () => {
     });
   });
 
+  describe("a server that runs in the sandbox", () => {
+    const LOCAL = mcpLocalRef("docs-search", "npx -y @example/mcp-server@1.4.2", ["docs.example.com"]);
+    const withRule = (effect: "deny" | "allow"): RunIntent => ({
+      ...AGENT, components: [LOCAL], tools: [{ id: "codex-cli", kind: "harness", tool_rules: [{ tool: "mcp__docs-search__write_page", effect }] }],
+    });
+    const access = { ...SCENARIO_ACCESS.member, harnesses: [CODEX], rows: [MCP_LOCAL] };
+    const previewWith = { result: { spec: {}, source: { name: "Default" }, pending: [], warnings: [], repository_access: [], access }, retry };
+
+    it("holds Launch while Codex CLI is asked to block one of its tools, and links to Tools and access", async () => {
+      checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, { preview: previewWith });
+      open(withRule("deny"));
+      await ready();
+      expect(launch()).toBeDisabled();
+      fireEvent.click(within(blockerList()).getByRole("button", { name: NR_TOOLS.MCP_REFUSED("codex-cli", "docs-search") }));
+      expect(path()).toContain("step=tools");
+    });
+
+    it("leaves Launch open under a rule that only allows", async () => {
+      checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, { preview: previewWith });
+      open(withRule("allow"));
+      await ready();
+      expect(launch()).toBeEnabled();
+    });
+  });
+
   it("leaves Launch open on a model credential refusal, so the launch refusal opens the sign-in door", async () => {
     checks.current = answered(null, 1000, {
       preflightRead: { generation: GENERATION, at: Date.now() - 1000 },
@@ -267,6 +300,88 @@ describe("Review Launch gate (U11)", () => {
   });
 });
 
+describe("Review: Add a secret that is not stored (#2108)", () => {
+  const NPM = { id: "secret:npm_token", kind: "secret", label: "Secret: npm_token", required_by: "Application", status: "missing", fix: { action: "add_secret", secret_name: "npm_token" } };
+  const withItems = (items: unknown[]) => ({ ...SCENARIO_PREFLIGHT.member, setup_items: items }) as unknown as PreflightResult;
+
+  it("a blocker for a named missing secret has Add beside its link; the dialog starts empty and names only the secret", async () => {
+    checks.current = answered(withItems([NPM]));
+    const user = userEvent.setup();
+    open(AGENT);
+    await ready();
+    const list = within(blockerList());
+    expect(list.getByRole("button", { name: "Secret: npm_token" })).toBeInTheDocument();
+    await user.click(list.getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Secret: npm_token" });
+    const token = within(dialog).getByLabelText(NR_TOOLS.TOKEN_LABEL);
+    expect(token).toHaveAttribute("type", "password");
+    expect(token).toHaveValue("");
+    expect(within(dialog).getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM })).toBeDisabled();
+  });
+
+  it("saving stores the secret under the item's name, announces it, and asks the server again; Launch stays shut until it answers", async () => {
+    checks.current = answered(withItems([NPM]));
+    setSecretMock.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    open(AGENT);
+    await ready();
+    await user.click(within(blockerList()).getByRole("button", { name: NR_TOOLS.SETUP_ADD }));
+    const dialog = await screen.findByRole("dialog", { name: "Secret: npm_token" });
+    setField(within(dialog).getByLabelText(NR_TOOLS.TOKEN_LABEL), "s3cret");
+    await user.click(within(dialog).getByRole("button", { name: NR_TOOLS.TOKEN_CONFIRM }));
+
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("npm_token", "s3cret"));
+    expect(await screen.findByText(NR_TOOLS.TOKEN_SAVED)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(preflight).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveBeenCalledTimes(1);
+    // The server has not yet said it is stored: the blocker and the shut Launch stand.
+    expect(launch()).toBeDisabled();
+    expect(within(blockerList()).getByRole("button", { name: "Secret: npm_token" })).toBeInTheDocument();
+  });
+
+  it("offers no Add on a blocker that is not a named add-secret fix", async () => {
+    checks.current = answered(SCENARIO_PREFLIGHT.app);
+    open(AGENT);
+    await ready();
+    expect(within(blockerList()).queryByRole("button", { name: NR_TOOLS.SETUP_ADD })).toBeNull();
+  });
+
+  it("a shut Launch run is aria-disabled and wears the grey disabled fill, not a dimmed teal", async () => {
+    checks.current = answered(withItems([NPM]));
+    open(AGENT);
+    await ready();
+    expect(launch()).toBeDisabled();
+    expect(launch()).toHaveAttribute("aria-disabled", "true");
+    expect(launch().className).toContain("dark:disabled:bg-muted");
+    expect(launch().className).toContain("dark:disabled:text-muted-foreground");
+  });
+
+  it("an open Launch run is not aria-disabled", async () => {
+    open(AGENT);
+    await ready();
+    expect(launch()).toBeEnabled();
+    expect(launch()).not.toHaveAttribute("aria-disabled");
+  });
+});
+
+describe("Review sections", () => {
+  it("#3044: Run setup is the one StepSection card, with the groups as rows inside it and the status as its marker", async () => {
+    open(AGENT, { via: "template" });
+    await ready();
+    const heading = screen.getByRole("heading", { name: NR_REVIEW.SETUP_TITLE });
+    expect(isStepSectionHeading(heading)).toBe(true);
+    const card = heading.closest("section") as HTMLElement;
+    expect(card.querySelectorAll("[data-review-group]").length).toBeGreaterThan(1);
+    // The marker is a status mark like the group rows draw, with its word beside it: never a pill.
+    const mark = within(card).getByTestId("review-status-mark");
+    expect(mark).toHaveTextContent(new RegExp(`^(${NR_REVIEW.BADGE_COMPLETE}|${NR_REVIEW.BADGE_ATTENTION}|${NR_REVIEW.BADGE_CHECK})$`));
+    expect(mark.className).not.toMatch(/rounded-(full|md)|border|bg-/);
+    expect(mark.querySelector("svg")).not.toBeNull();
+  });
+});
+
 describe("Review blockers", () => {
   it("lists them in the design's order, links each to its fix, and keeps Launch shut", async () => {
     const user = userEvent.setup();
@@ -297,6 +412,29 @@ describe("Review blockers", () => {
     const blocked = Array.from(document.querySelectorAll("[data-review-group][data-blocked]")).map((g) => g.getAttribute("data-review-group"));
     expect(blocked).toEqual(["where"]);
     expect(group("where").getByText(NR_REVIEW.BADGE_ATTENTION)).toBeInTheDocument();
+  });
+
+  // The server names the field (errorBody.field): the machine kind links to the Run step, a harness to Harnesses,
+  // and the run's size stays on Review, under Limits, with no link away. Without the field, placement_capability
+  // would send all three to Tools.
+  it.each<[field: string, step: string | null, group: string | null]>([
+    ["machine_kind", "step=run", "where"],
+    ["harness", "step=harnesses", null],
+    ["resources", null, "limits"],
+  ])("routes a macOS VM placement refusal naming %s to where that field is changed", async (field, step, group) => {
+    const user = userEvent.setup();
+    const text = "This Mac has no room for another macOS VM right now.";
+    checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, { preflightError: text, preflightReason: "placement_capability", preflightField: field });
+    open(AGENT);
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    const blocked = Array.from(document.querySelectorAll("[data-review-group][data-blocked]")).map((g) => g.getAttribute("data-review-group"));
+    // A harness has no Review field of its own: its blocker marks the groups the Harnesses step edits.
+    expect(blocked).toEqual(group ? [group] : ["run", "tools"]);
+    const link = within(blockerList()).queryByRole("button", { name: text });
+    if (!step) return expect(link).toBeNull();
+    await user.click(link!);
+    await waitFor(() => expect(path()).toContain(step));
   });
 
   it("holds Launch for harnesses no one image carries together, and links to the Harnesses step", async () => {
@@ -351,7 +489,7 @@ describe("Review blockers", () => {
     // #3043: nothing specific is to blame, so the chip and the card are amber, every group keeps its tick.
     expect(screen.getByText("Check needed")).toBeInTheDocument();
     expect(screen.queryByText(NR_REVIEW.BADGE_ATTENTION)).toBeNull();
-    expect(screen.getByText("Check needed").className).toContain("warning");
+    expect(screen.getByTestId("review-status-mark")).toHaveAttribute("data-tone", "warning");
     expect(blockerList().className).toContain("warning");
     expect(document.querySelector("[data-review-group][data-blocked]")).toBeNull();
   });
@@ -361,7 +499,8 @@ describe("Review blockers", () => {
     open(AGENT);
     await ready();
     await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
-    expect(screen.getByText(NR_REVIEW.BADGE_ATTENTION, { selector: "span.inline-flex" }).className).toContain("danger");
+    expect(screen.getByTestId("review-status-mark")).toHaveAttribute("data-tone", "danger");
+    expect(screen.getByTestId("review-status-mark")).toHaveTextContent(NR_REVIEW.BADGE_ATTENTION);
     expect(screen.queryByText("Check needed")).toBeNull();
     expect(within(blockerList()).queryByRole("button", { name: NR_REVIEW.CHECK_AGAIN })).toBeNull();
     expect(blockerList().className).toContain("danger");
@@ -476,6 +615,116 @@ describe("Review groups", () => {
     await user.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_TOOLS}` }));
     setField(screen.getByLabelText(NR_REVIEW.COMMAND_LABEL), "make lint");
     expect(intentNow().workload).toEqual({ kind: "command", command: "make lint" });
+  });
+});
+
+describe("Review: an application server (#1994)", () => {
+  const SERVER: RunIntent = {
+    shape: "application", experience: "interactive", no_repositories_or_drives: true, runner_pool_id: "pool-general",
+    startup: { kind: "command", command: "npm run dev" },
+    inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }, { name: "api", port: 8080, path: "/api" }] },
+  };
+  const gatewayIs = (ui_sandbox?: { enabled: boolean }) => vi.spyOn(health, "health").mockResolvedValue({ status: "ok", ...(ui_sandbox && { ui_sandbox }) });
+
+  it("names the server, its start command and each port, and opens Launch with the gateway on", async () => {
+    gatewayIs({ enabled: true });
+    open(SERVER);
+    await ready();
+    await waitFor(() => expect(launch()).toBeEnabled());
+    expect(screen.getByText(NR_REVIEW.SETUP_APPLICATION_SERVER)).toBeInTheDocument();
+    const run = group("run");
+    expect(run.getByText(NR_REVIEW.VALUE_APPLICATION)).toBeInTheDocument();
+    expect(run.getByText(NR_REVIEW.TIMING_APPLICATION_SERVER)).toBeInTheDocument();
+    const rows = Array.from(document.querySelectorAll<HTMLElement>("[data-app]"));
+    expect(rows.map((r) => r.textContent)).toEqual([
+      `web${NR_REVIEW.APP_PORT(3000)}${NR_REVIEW.APP_OPENS("/")}`,
+      `api${NR_REVIEW.APP_PORT(8080)}${NR_REVIEW.APP_OPENS("/api")}`,
+    ]);
+    expect(group("tools").getByText("npm run dev")).toBeInTheDocument();
+    expect(group("tools").getByText(NR_REVIEW.TOOLS_START_COMMAND)).toBeInTheDocument();
+    expect(run.queryByText(NR_REVIEW.DOC_ONLY_CHIP)).not.toBeInTheDocument();
+  });
+
+  it("holds Launch with one blocker, on the Run group, linking to the Run step, when the gateway is off", async () => {
+    gatewayIs();
+    const user = userEvent.setup();
+    open(SERVER);
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKERS_ONE);
+    expect(within(blockerList()).getByRole("listitem")).toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF);
+    expect(launch()).toBeDisabled();
+    const blocked = Array.from(document.querySelectorAll("[data-review-group][data-blocked]")).map((g) => g.getAttribute("data-review-group"));
+    expect(blocked).toEqual(["run"]);
+    await user.click(within(blockerList()).getByRole("button", { name: NR_REVIEW.BLOCKER_GATEWAY_OFF }));
+    await waitFor(() => expect(path()).toContain("step=run"));
+  });
+
+  it("does not call the gateway off before /healthz has answered, and never for a script", async () => {
+    vi.spyOn(health, "health").mockResolvedValue({});
+    open(SERVER);
+    await ready();
+    expect(blockerList()).toBeEmptyDOMElement();
+    cleanup();
+    gatewayIs();
+    open(APP);
+    await ready();
+    expect(blockerList()).toBeEmptyDOMElement();
+  });
+
+  it("shows the server's clamp warning and no port rows when governance strips the apps", async () => {
+    gatewayIs({ enabled: true });
+    const warning = 'dropped 2 ui_app(s) denied by governance profile "Platform team": web:3000,api:8080';
+    checks.current = answered({ ...SCENARIO_PREFLIGHT.member, warnings: [warning] }, 1000, {
+      preview: { result: { spec: {}, source: { name: "Default" }, pending: [], warnings: [], repository_access: [] }, retry },
+    });
+    open(SERVER);
+    await ready();
+    expect(screen.getByText(warning)).toBeInTheDocument();
+    expect(document.querySelector("[data-app]")).toBeNull();
+    expect(screen.queryByText(NR_REVIEW.APP_OPENS("/"))).not.toBeInTheDocument();
+  });
+
+  it("shows the ports the policy preview kept, not the ones asked for", async () => {
+    gatewayIs({ enabled: true });
+    checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, {
+      preview: { result: { spec: { ui_apps: [{ name: "web", port: 3000, path: "/" }] }, source: { name: "Default" }, pending: [], warnings: [], repository_access: [] }, retry },
+    });
+    open(SERVER);
+    await ready();
+    expect(Array.from(document.querySelectorAll("[data-app]")).map((r) => r.getAttribute("data-app"))).toEqual(["web"]);
+  });
+
+  it("edits the start command in place", async () => {
+    gatewayIs({ enabled: true });
+    const user = userEvent.setup();
+    open(SERVER);
+    await ready();
+    await user.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_TOOLS}` }));
+    setField(screen.getByLabelText(NR_REVIEW.COMMAND_LABEL), "pnpm dev");
+    expect(intentNow().startup).toEqual({ kind: "command", command: "pnpm dev" });
+  });
+
+  it("blocks Launch on a bad port with the Run step's sentence", async () => {
+    gatewayIs({ enabled: true });
+    open({ ...SERVER, inline_policy: { ui_apps: [{ name: "web", port: 70000 }, { name: "api", port: 70000 }] } });
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    expect(blockerList()).toHaveTextContent(NR_RUN.PORT_INVALID);
+    expect(launch()).toBeDisabled();
+  });
+
+  it.each([
+    ["a repeated name", [{ name: "web", port: 3000 }, { name: "web", port: 3001 }], "Two applications are named web. Give each its own name."],
+    ["a name the server refuses", [{ name: "Web App", port: 3000 }], "Use lower-case letters, numbers and dashes, up to 32 characters, starting and ending with a letter or number."],
+    ["a path the server refuses", [{ name: "web", port: 3000, path: "//host" }], 'Start the path with a single /, with no host and no "..".'],
+  ])("blocks Launch on %s with the Run step's sentence", async (_what, ui_apps, text) => {
+    gatewayIs({ enabled: true });
+    open({ ...SERVER, inline_policy: { ui_apps } });
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    expect(within(blockerList()).getByRole("listitem")).toHaveTextContent(text);
+    expect(launch()).toBeDisabled();
   });
 });
 

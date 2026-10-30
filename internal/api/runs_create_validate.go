@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -70,6 +71,9 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		return req, noCeiling, "", "", false
 	}
 	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))
+	if _, ok := s.stampContextChoice(w, r, req); !ok {
+		return req, noCeiling, "", "", false
+	}
 	// Only agent is hard-required. Repo is OPTIONAL: an inline-policy run that
 	// mounts a local host folder (WorkspaceMount target /work) has no git repo to
 	// clone, so requiring a repo would block the local-folder wizard path. The
@@ -112,6 +116,10 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// independently defend itself.
 	if reservedRunTasks[req.Task] {
 		writeErrorReason(w, http.StatusBadRequest, reasonRunTaskReserved, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
+		return req, noCeiling, "", "", false
+	}
+	if msg := machineKindRefusal(types.MachineKind(req.MachineKind)); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonMachineKindUnknown, msg)
 		return req, noCeiling, "", "", false
 	}
 
@@ -158,7 +166,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// convention one). seedRequestWorkspace's caller re-runs this SAME check after
 	// workspace_id is resolved — a workspace's base_image can ALSO set req.Image,
 	// after this ran, and must clear the identical gate (see validateImageBuildRequest).
-	if msg, reason := s.validateImageBuildRequest(req); msg != "" {
+	if msg, reason := s.validateImageBuildRequest(r.Context(), req); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reason, msg)
 		return req, noCeiling, "", "", false
 	}
@@ -217,6 +225,28 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	return req, ceiling, reqCC, warning, true
 }
 
+// macOSVMsOff is the create refusal of machine_kind macos_vm while WARDYN_MACOS_VMS is off.
+const macOSVMsOff = "macOS virtual machines are turned off in this organisation."
+
+// machineKindRefusal is why kind cannot be created, or "" when it can. With WARDYN_MACOS_VMS off the
+// closed set is today's two kinds, and a refusal reads as it did before macos_vm existed, except that
+// macos_vm itself says the switch is off.
+func machineKindRefusal(kind types.MachineKind) string {
+	if envEnabled(envMacOSVMs) {
+		if err := kind.Validate(); err != nil {
+			return err.Error()
+		}
+		return ""
+	}
+	switch kind {
+	case "", types.MachineContainer, types.MachineLinuxVM:
+		return ""
+	case types.MachineMacOSVM:
+		return macOSVMsOff
+	}
+	return fmt.Sprintf("machine_kind %q is neither %q nor %q", string(kind), types.MachineContainer, types.MachineLinuxVM)
+}
+
 // requestIsInteractive reports a create request's POST-COERCION interactivity:
 // a request with no task becomes interactive at the coercion above, so the raw
 // req.Interactive is the wrong question everywhere the ANSWER matters.
@@ -243,7 +273,9 @@ func requestIsInteractive(req createRunRequest) bool {
 // refusal deployment-wide, on an upgrade that changed no configuration. Absent
 // row, absent behaviour change.
 func governanceHoldRules(ceiling governanceCeiling) bool {
-	if ceiling.Unit == nil {
+	// A restriction alone puts a run in the Default unit (withRestrictions); that is no assigned
+	// profile, so the deployment default's tool rules stay what they were for such a person.
+	if ceiling.Unit == nil || restrictionDefaultUnit(ceiling.Unit) {
 		return false
 	}
 	for _, r := range ceiling.Spec.ToolRules {
@@ -474,7 +506,10 @@ func (s *Server) denyUserRunQuota(w http.ResponseWriter, r *http.Request, ceilin
 // The two refusals are different causes (#656 M1) — the first is the
 // caller's own request shape, the second a deployment capability the caller
 // cannot fix by changing the request — so each gets its own reason.
-func (s *Server) validateImageBuildRequest(req createRunRequest) (msg, reason string) {
+//
+// A prewrapped image needs no builder: it runs as is once its check made it ready, and one that is
+// not ready is refused for that. A store that cannot be read leaves the builder refusal standing.
+func (s *Server) validateImageBuildRequest(ctx context.Context, req createRunRequest) (msg, reason string) {
 	if req.Image == "" {
 		return "", ""
 	}
@@ -482,6 +517,13 @@ func (s *Server) validateImageBuildRequest(req createRunRequest) (msg, reason st
 		return "image and devcontainer_repo are mutually exclusive", reasonImageDevcontainerExclusive
 	}
 	if s.cfg.ImageBuilder == nil {
+		pw, refusal := s.prewrappedRunImage(ctx, req.Image)
+		if pw != nil {
+			return "", ""
+		}
+		if refusal != nil && refusal.body.Reason == reasonPrewrappedImageNotRegistered {
+			return refusal.body.Error, refusal.body.Reason
+		}
 		return "a custom sandbox image was requested but this control plane has no image builder wired " +
 			"(start wardynd with -tags docker and set WARDYN_ENVBUILD_TOOLS_DIR / -envbuild)", reasonImageBuilderUnavailable
 	}

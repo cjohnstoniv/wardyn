@@ -27,11 +27,12 @@
 //     place that can tell "the client said false" from "the client said
 //     nothing" — see userDriveGrantRequest.Enabled.
 //
-// Four routes stay super-only: the ones that name a host path (host_root) or
-// a cluster storage class — creating, listing, updating, and removing the
-// drive itself. The other three — granting an allocation, revoking one, and
-// previewing whose drive resolves — moved to securityOps in 0.8 (issue #168):
-// none of the three names a host path. The tier argument for each route is
+// Three routes stay super-only: the ones that write a host path (host_root) or
+// a cluster storage class — creating, updating, and removing the drive itself.
+// The other three — granting an allocation, revoking one, and previewing whose
+// drive resolves — moved to securityOps in 0.8 (issue #168): none of the three
+// names a host path. The list is securityOps too (0.10, issue #2827), READ-ONLY,
+// with host_root and storage_class withheld from a security admin. The tier argument for each route is
 // written at the mountUserDriveRoutes call that decides it (routes.go).
 package api
 
@@ -52,9 +53,10 @@ import (
 )
 
 // mountUserDriveRoutes registers the /drives family — SEVEN routes split
-// across two admin tiers. Four name a HOST PATH (host_root) or a cluster
-// storage class and stay on operatorOnly (SUPER): creating, listing,
-// updating, and removing the drive itself. The other three — granting an
+// across two admin tiers. Three write a HOST PATH (host_root) or a cluster
+// storage class and stay on operatorOnly (SUPER): creating, updating, and
+// removing the drive itself. The list is on securityOps, with those two fields
+// withheld from a caller who is not a super admin. The other three — granting an
 // allocation, revoking one, and previewing whose drive resolves — sit on
 // securityOps: a security admin already reaches drives through the
 // DenyUserDrive door on a governance profile, and none of the three names a
@@ -71,7 +73,7 @@ import (
 // arrange for, and the every-conditional-route-mounted doctrine exists so it
 // never has to.
 func (s *Server) mountUserDriveRoutes(operatorOnly, securityOps chi.Router) {
-	operatorOnly.Get("/drives", s.handleGetUserDrives)
+	securityOps.Get("/drives", s.handleGetUserDrives)
 	operatorOnly.Post("/drives", s.handleCreateUserDrive)
 	operatorOnly.Put("/drives/{id}", s.handleUpdateUserDrive)
 	operatorOnly.Delete("/drives/{id}", s.handleDeleteUserDrive)
@@ -139,7 +141,8 @@ type userDrivesResponse struct {
 }
 
 // handleGetUserDrives returns the whole drives picture: every drive, and a
-// BOUNDED page of the allocations. operatorOnly (routes.go).
+// BOUNDED page of the allocations. securityOps (routes.go), with host fields
+// withheld from a caller who is not a super admin.
 //
 // The two reads have different costs and only one needed fixing. ListUserDrives
 // is an index-only scan over user_drive_grants_drive_id_idx and stays whole —
@@ -186,6 +189,8 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 	for i := range drives {
 		total += drives[i].GrantCount
 		drives[i].SingleHost = drives[i].TeamSingleHost()
+		drives[i].PlacementEligible = types.PlacementEligible(drives[i].Backend)
+		drives[i].MountsFrom = s.driveMountsFrom(r.Context(), drives[i].UserDrive)
 	}
 
 	var grants []types.UserDriveGrant
@@ -213,14 +218,21 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 	if truncated {
 		w.Header().Set("X-Wardyn-Truncated", "true")
 	}
-	writeJSON(w, http.StatusOK, userDrivesResponse{
+	resp := userDrivesResponse{
 		Drives:              drives,
 		Grants:              grants,
 		HostRootsConfigured: s.userDriveHostRootsUsableWithin(r.Context()),
 		RunnerTarget:        s.cfg.RunnerTarget,
 		Disabled:            provider.Disabled,
 		GrantTotal:          total,
-	})
+	}
+	// "Never the host" is the line between the two admin tiers: anyone but a
+	// super admin gets the allow-listed projection, built by name into fresh
+	// values (user_drives_security_view.go).
+	if !s.isOperator(r.Context()) {
+		resp = securityAdminDrivesView(resp)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // the org switch and the deployment's drive ceiling
@@ -232,7 +244,7 @@ const (
 	// driveDisabledMsg is storage.user_drive.disabled: a 422 in the
 	// REFUSED_BACKEND family and never a 403, because nobody was denied by a
 	// profile — this install offers no drives at all.
-	driveDisabledMsg = "drives are disabled for this deployment"
+	driveDisabledMsg = "Drives are disabled for this deployment"
 	// driveCeilingMsg is storage.user_drive.max_size_mib at the WRITE boundary.
 	// A 422 for decodeUserDriveRequest's own reason: the request is well-formed
 	// and it is the DEPLOYMENT that cannot accept it.
@@ -242,7 +254,7 @@ const (
 	// sentence is this template's {reason} for a run carrying `drive.enabled`, so
 	// it is composed from two constants in this block rather than written out at
 	// the refusal site, and the M2 swap stays a one-file diff.
-	driveRefusedBackendMsg = "this deployment cannot mount your drive (%s)"
+	driveRefusedBackendMsg = "This deployment cannot mount your drive (%s)"
 )
 
 // userDriveProvider is the org's storage.user_drive block — the switch and the
@@ -355,9 +367,15 @@ func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, 
 		Reclaim:      req.Reclaim,
 		Team:         req.Team,
 		CreatedBy:    principalFromRequest(r),
+		AltBackend:   req.AltBackend,
+		AltHostRoot:  req.AltHostRoot,
+		AltRunnerID:  req.AltRunnerID,
 	}
 	if err := types.ValidateUserDrive(&d, s.cfg.RunnerTarget); err != nil {
 		return types.UserDrive{}, http.StatusBadRequest, "", "invalid drive: " + err.Error()
+	}
+	if code, msg := s.driveSecondPlaceRefusal(r.Context(), &d); msg != "" {
+		return types.UserDrive{}, code, "", msg
 	}
 	// The org switch and the deployment ceiling, in the same arm as the env
 	// host_root ceiling below and for the same reason — both are facts about the
@@ -698,18 +716,6 @@ func driveGrantConflictMsg(g types.UserDriveGrant, homeOverrideStated bool) stri
 	return fmt.Sprintf("another allocation on this drive already uses the "+
 		"directory name %q — a directory name is one person's, which is why a group allocation may not "+
 		"carry one; pick a different name or remove the allocation that holds it", g.HomeOverride)
-}
-
-// pluralDriveSubjects counts a drive's allocations the way the console's
-// ALLOCATED_COUNT does — "1 subject" / "n subjects" — so the wire and the screen
-// count the same things in the same words. ALLOCATIONS, never people: a group
-// allocation is one row and Wardyn holds no directory read, so "14 people" would
-// be a claim rather than a count.
-func pluralDriveSubjects(n int) string {
-	if n == 1 {
-		return "1 subject"
-	}
-	return fmt.Sprintf("%d subjects", n)
 }
 
 // handleDeleteUserDrive removes a drive (204), or 409 when it is still

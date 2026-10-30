@@ -44,6 +44,8 @@ import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
 import { Chip } from "../../wardyn/primitives";
+import { TRUST_LABEL } from "../runners/runner-trust";
+import type { RunnerTrustClass } from "../../../lib/types/runners";
 import { Ban } from "lucide-react";
 import { Note } from "./display";
 import { SubmittedNote } from "./submitted-note";
@@ -119,6 +121,34 @@ function policyFrom(draft: Draft, stored: DeliveryPolicy): DeliveryPolicy {
   if (azure && azure.mode !== "refuse") classes.azure_foundry_token = azure;
   // Per-trust-class overrides have no editor control yet; a save keeps them as stored.
   return stored.by_trust ? { classes, by_trust: stored.by_trust } : { classes };
+}
+
+const TRUSTS: readonly RunnerTrustClass[] = ["personal", "managed_device", "org_cluster"];
+
+interface Exception {
+  trust: RunnerTrustClass;
+  cp: ClassPolicy;
+}
+
+// The exceptions to show under a class's row, by DeliveryPolicy.ForTrust: a row kept in the organisation is the same
+// on every runner (the server refuses an exception there), otherwise a trust class's exception wins where it names the class.
+function exceptionsFor(stored: DeliveryPolicy, c: DeliveryClass, rowMode: EditableMode): Exception[] {
+  if (rowMode === "via_org") return [];
+  return TRUSTS.flatMap((trust) => {
+    const cp = stored.by_trust?.[trust]?.classes[c];
+    return cp && (MODES as readonly string[]).includes(cp.mode) ? [{ trust, cp }] : [];
+  });
+}
+
+// An exception's posture in the row's own words, "" when it asks for none.
+function postureText(cp: ClassPolicy): string {
+  const req = cp.require_posture;
+  const parts = [
+    req?.mdm_managed && DELIVERY.POSTURE_MDM,
+    req?.disk_encrypted && DELIVERY.POSTURE_DISK,
+    ...Object.entries(req?.os_min ?? {}).map(([os, v]) => `${DELIVERY.OS_MIN(DELIVERY.OS_NAME[os as PostureOS] ?? os)} ${v}`),
+  ].filter(Boolean);
+  return parts.length > 0 ? `${DELIVERY.POSTURE_TITLE}: ${parts.join(", ")}` : "";
 }
 
 const versionInvalid = (v: string) => v.trim() !== "" && !VERSION.test(v.trim());
@@ -215,6 +245,9 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
         <h2 className="text-sm font-medium text-foreground">{DELIVERY.TAB}</h2>
         <p className="mt-1 max-w-[82ch] text-body text-muted-foreground">{DELIVERY.LEAD}</p>
         {status === "ready" && runnersOn === false && <Note>{DELIVERY.RUNNERS_OFF_NOTE}</Note>}
+        {status === "ready" && editable.some((c) => exceptionsFor(stored, c, draft[c].mode).length > 0) && (
+          <Note tone="info">{DELIVERY.EXCEPTIONS_NOTE}</Note>
+        )}
       </div>
 
       {status === "loading" && (
@@ -254,6 +287,7 @@ export function RunnerCredentials({ onSubmitted }: { onSubmitted?: () => void })
                   key={c}
                   cls={c}
                   row={draft[c]}
+                  exceptions={exceptionsFor(stored, c, draft[c].mode)}
                   buildable={buildable}
                   disabled={!securityOperator || busy}
                   onEdit={(patch) => edit(c, patch)}
@@ -313,12 +347,14 @@ type WritableClass = Exclude<DeliveryClass, "oauth_subscription" | "cloud_sts" |
 function ClassRow({
   cls,
   row,
+  exceptions,
   buildable,
   disabled,
   onEdit,
 }: {
   cls: DeliveryClass;
   row: RowDraft;
+  exceptions: Exception[];
   buildable: CredentialDeliverySnapshot["buildable_modes"] | null;
   disabled: boolean;
   onEdit: (patch: Partial<RowDraft>) => void;
@@ -378,8 +414,29 @@ function ClassRow({
               <Chip tone="info">{DELIVERY.LOCAL_DELIVERY[row.mode]}</Chip>
             </span>
           )}
+          {exceptions.map(({ trust, cp }) => (
+            <span key={trust} data-people-see-exception={trust} className="block text-muted-foreground">
+              {DELIVERY.EXCEPTION_PEOPLE_SEE(TRUST_LABEL[trust], DELIVERY.LOCAL_DELIVERY[cp.mode as EditableMode])}
+            </span>
+          ))}
         </div>
       </RadioGroup>
+      {exceptions.length > 0 && (
+        <div data-testid={`dc-${cls}-exceptions`} className="mx-6 mb-4 flex flex-col gap-1 rounded-r-lg border-l-2 border-warning/50 bg-warning-subtle px-2.5 py-1.5">
+          {exceptions.map(({ trust, cp }) => (
+            <div key={trust} className="flex flex-col gap-0.5">
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <Chip tone="warning">{DELIVERY.EXCEPTION_CHIP}</Chip>
+                <span className="font-medium text-foreground">{TRUST_LABEL[trust]}</span>
+                <span className="text-muted-foreground">·</span>
+                <span className="text-foreground">{DELIVERY.MODE[cp.mode as EditableMode]}</span>
+              </div>
+              {postureText(cp) && <p className="text-xs text-muted-foreground">{postureText(cp)}</p>}
+            </div>
+          ))}
+          <p className="text-xs text-muted-foreground">{DELIVERY.EXCEPTION_KEPT}</p>
+        </div>
+      )}
       {resident && (
         <div className="px-6 pb-4">
           <PostureBlock cls={cls} row={row} disabled={disabled} onEdit={onEdit} />

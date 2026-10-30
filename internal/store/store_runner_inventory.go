@@ -83,6 +83,9 @@ type RunnerInventoryResult struct {
 	// AssertedCapHeld reports a page that met a new asserted subject past
 	// the runner's cap: nothing was queued and the runner stays not-ready.
 	AssertedCapHeld bool
+	// GoneDue reports a Final page after which a run's sandbox is confirmed gone (goneConfirmedSQL):
+	// the offline sweep's gone pass can end it now, while this inventory holds the confirming report.
+	GoneDue bool
 	// Containment lists the page's containment-pending transitions, audited after it commits.
 	Containment []RunContainmentEvent
 }
@@ -197,6 +200,10 @@ func (s PG) IntakeRunnerStatePage(ctx context.Context, runnerID uuid.UUID, sessi
 			return out, err
 		}
 		out.NeedsReconciliation = out.NeedsReconciliation || omitted
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs a WHERE a.runner_id=$1 AND a.placement='local' AND `+goneConfirmedSQL+`)`,
+			runnerID, RunnerSandboxGoneAfter.String()).Scan(&out.GoneDue); err != nil {
+			return out, err
+		}
 	}
 	_, err = tx.Exec(ctx, `UPDATE runner_inventories SET inventory_id=$2,last_run_id=$3,complete=$4,needs_reconciliation=$5 WHERE runner_id=$1`, runnerID, next.ID, next.Last, next.Complete, out.NeedsReconciliation)
 	if err != nil {
@@ -249,6 +256,11 @@ func (s PG) intakeRunnerStateRow(ctx context.Context, tx pgx.Tx, runnerID uuid.U
 			return false, false, nil, err
 		}
 	}
+	gone, err := runnerSandboxGoneTx(ctx, tx, row)
+	if err != nil {
+		return false, false, nil, err
+	}
+	needsLoss = needsLoss || gone
 	if _, err = tx.Exec(ctx, `INSERT INTO runner_inventory_observations(runner_id,run_id,assertion,containment,needs_loss) VALUES($1,$2,$3,$4,$5)`, runnerID, row.RunID, assertion, proof, needsLoss); err != nil {
 		return false, false, nil, err
 	}

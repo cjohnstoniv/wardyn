@@ -53,13 +53,19 @@ func (s *Server) promoteQueue(ctx context.Context, poolID uuid.UUID, bound time.
 			slog.Int("promoted", len(promoted)), slog.Any("err", err))
 		errs = append(errs, fmt.Errorf("promote the queue of pool %s: %w", poolID, err))
 	}
+	// Reason precedence for a waiting run: the pool's cap (runner_pool_at_capacity) outranks a reason
+	// found while judging, because the judging held no lock and the pool may have filled since. The store
+	// drops these writes when the pool is full by the time it writes them.
+	details := map[uuid.UUID]string{}
 	for _, h := range held {
-		if h.Wait == "" {
-			continue
+		if h.Wait != "" {
+			details[h.RunID] = statusDetailQueuePrefix + h.Wait
 		}
-		if err := qs.SetQueueWait(ctx, h.RunID, statusDetailQueuePrefix+h.Wait); err != nil {
-			slog.WarnContext(ctx, "wardynd: record queue wait", slog.String("run_id", h.RunID.String()), slog.Any("err", err))
-			errs = append(errs, fmt.Errorf("record queue wait of run %s: %w", h.RunID, err))
+	}
+	if len(details) > 0 {
+		if err := qs.SetHeldQueueWaits(ctx, poolID, details); err != nil {
+			slog.WarnContext(ctx, "wardynd: record queue waits", slog.String("pool_id", poolID.String()), slog.Any("err", err))
+			errs = append(errs, fmt.Errorf("record queue waits of pool %s: %w", poolID, err))
 		}
 	}
 	for _, p := range promoted {
@@ -148,7 +154,7 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	// on each (placementDemand.refusal: online, the barrier the run was queued at, limits declared, recording
 	// under a required setting). A ceiling that cannot be read denies nothing here: the start judges the
 	// run against it again.
-	in := placementInput{req: &req, reqCC: launch.Barrier, reqCCOK: launch.Barrier != "", drives: launch.Drives, noLocal: launch.NoLocal}
+	in := placementInput{req: &req, reqCC: launch.Barrier, reqCCOK: launch.Barrier != "", drives: launch.Drives, driveRunner: launch.DriveRunner, noLocal: launch.NoLocal}
 	if ceiling, err := s.queueCeiling(ctx); err == nil {
 		in.ceiling = ceiling
 	}
@@ -353,8 +359,9 @@ func (s *Server) failStalePromoted(ctx context.Context) error {
 // queueStartLostHint is the line under the FAILED badge of a promoted run whose start died.
 const queueStartLostHint = "This run left the queue, but the server that was starting it stopped before it came up. Start it again."
 
-// queueRefusalCapture is the ResponseWriter a replayed fold writes its refusal to: the start has no
-// client to answer, so the refusal becomes the run's end reason instead.
+// queueRefusalCapture is the ResponseWriter a create path with no client to answer writes to: a replayed
+// fold's refusal becomes the queued run's end reason, and a workload launch (launchWorkload) reads either
+// the 201 it captured or the refusal it records.
 type queueRefusalCapture struct {
 	header http.Header
 	status int

@@ -20,7 +20,14 @@
 # docs/CREDENTIALS.md 4012 = ours 4000 + theirs 3696 - base 3684 at the 0.10 W2 merge of MDL onto the train.
 # docs/CREDENTIALS.md 4333 = ours 4321 + theirs 3997 - base 4000 = 4318 at the 0.10 merge of main (W2) into SEC-1c; measured 4333.
 # docs/CREDENTIALS.md 4451 = ours 4115 + theirs 4333 - base 3997 at the 0.10 W3 merge of SEC-1c onto the train.
+# docs/CREDENTIALS.md 4050 adds 53 over 3997 (0.10 FEAT-1MCP), measured: where a local MCP server's secrets are delivered, and a remote one's.
+# docs/CREDENTIALS.md 4504 = ours 4451 + theirs 4050 - base 3997 at the 0.10 W4c merge of FEAT-1MCP onto the train.
+# 0.10 CTL-C (#2972): docs/CREDENTIALS.md 4601 adds 150 over 4451, measured: the desktop sign-in row (a person's login, shared one site at a time).
+# docs/CREDENTIALS.md 4654 = ours 4504 + theirs 4601 - base 4451 at the 0.10 W4c merge of CTL-C 6de42c110 onto the train.
+# docs/CREDENTIALS.md 4654, measured at the 0.10 W4c merge of origin/main 83367f614 (W4e) onto the train: FEAT-1MCP is merged into both trains, so ours + theirs - base would count its 53 words twice.
 # docs/CREDENTIALS.md 4475 adds 24 (0.10.0 SEC-1b), measured: the runner placeholder switch, WARDYN_RUNNER_SECRET_PLACEHOLDERS.
 # docs/CREDENTIALS.md 4127 adds 130 over 3997, measured: the kubectl service-account token row and its mint line (#1990).
 # docs/CREDENTIALS.md 4605 = ours 4475 + theirs 4127 - base 3997 at the 0.10 W4d merge of FEAT-1KUBE onto the train.
-docs/CREDENTIALS.md=4658 share=35
+# docs/CREDENTIALS.md 4808 = ours 4654 + theirs 4658 - base 4504 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
+docs/CREDENTIALS.md=4836 share=35 # +28 (0.10.0 final docs): a placeholder rule fills its one header and leaves the others, measured.
+# docs/CREDENTIALS.md 4504 = ours 4451 + theirs 4050 - base 3997 at the 0.10 W4e merge of FEAT-1MCP onto the train.

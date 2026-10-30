@@ -7,9 +7,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { LOCAL_MODEL_CARD as T } from "../../../lib/local-model-copy";
-import type { AuditEvent, RunDetail } from "../../../lib/types";
+import type { RunDetail } from "../../../lib/types";
 import type { ModelProvider } from "../../../lib/types/site";
-import { aheadByHours } from "../../../lib/test-clock";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { LocalModelsCard } from "./local-models-card";
 
@@ -41,16 +40,20 @@ const LAPTOP: ModelProvider = {
   ],
 };
 
+// The allowlist the run launched with (#3374): not the provider's list now (LAPTOP carries two models).
 const run = (patch: Partial<RunDetail> = {}) =>
-  ({ id: "r1", model_provider_id: "laptop-gpu", model_provider_name: "Laptop GPU", ...patch }) as RunDetail;
-const created = (kind: string): AuditEvent[] => [
-  { id: "a1", time: aheadByHours(-1), actor_type: "human", actor: "alice", action: "run.create", outcome: "success", data: { model_provider: { id: "laptop-gpu", kind } } },
-];
+  ({
+    id: "r1",
+    model_provider_id: "laptop-gpu",
+    model_provider_name: "Laptop GPU",
+    model_allowlists: { "laptop-gpu": ["qwen2.5-coder:7b", "llama3.2:3b"] },
+    ...patch,
+  }) as RunDetail;
 
-function renderCard(r: RunDetail, audit: AuditEvent[], operator = true, operatorResolved = true) {
+function renderCard(r: RunDetail, operator = true, operatorResolved = true) {
   return render(
     <OperatorProvider operator={operator} operatorResolved={operatorResolved} principal="alice">
-      <LocalModelsCard run={r} audit={audit} />
+      <LocalModelsCard run={r} />
     </OperatorProvider>,
   );
 }
@@ -61,13 +64,11 @@ beforeEach(() => {
 
 describe("LocalModelsCard", () => {
   it("lists the allowed models, who asks for each, the server and the caps (defaults when unset)", async () => {
-    renderCard(run(), created("local_model"));
+    renderCard(run());
     expect(await screen.findByRole("heading", { name: T.TITLE })).toBeInTheDocument();
     expect(screen.getByText("Laptop GPU")).toBeInTheDocument();
-    expect(screen.getByText(T.LEDE)).toBeInTheDocument();
-    expect(T.LEDE).toMatch(/current models/);
-    expect(T.RUN_KEEPS).toMatch(/keeps the models it launched with/);
-    expect(screen.getByText(T.RUN_KEEPS)).toBeInTheDocument();
+    expect(T).not.toHaveProperty("LEDE");
+    expect(T).not.toHaveProperty("RUN_KEEPS");
     expect(screen.getByText("qwen2.5-coder:7b")).toBeInTheDocument();
     expect(screen.getByText(T.ASKED_FOR(["Claude Code", "Codex CLI"]))).toBeInTheDocument();
     expect(screen.getByText("llama3.2:3b")).toBeInTheDocument();
@@ -79,13 +80,30 @@ describe("LocalModelsCard", () => {
     expect(screen.getByText(T.NO_MANAGEMENT)).toBeInTheDocument();
   });
 
+  it("lists the models the run launched with, not the provider's list now", async () => {
+    renderCard(run({ model_allowlists: { "laptop-gpu": ["llama3.2:3b"] } }));
+    expect(await screen.findByText("llama3.2:3b")).toBeInTheDocument();
+    await waitFor(() => expect(getMock).toHaveBeenCalled());
+    expect(screen.queryByText("qwen2.5-coder:7b")).toBeNull();
+  });
+
+  it("a member sees the run's own list without reading the admin-only provider record", async () => {
+    renderCard(run(), false);
+    expect(await screen.findByRole("heading", { name: T.TITLE })).toBeInTheDocument();
+    expect(screen.getByText("qwen2.5-coder:7b")).toBeInTheDocument();
+    expect(screen.getByText("llama3.2:3b")).toBeInTheDocument();
+    expect(screen.getByText(T.NO_MANAGEMENT)).toBeInTheDocument();
+    expect(screen.queryByText(T.SERVER)).toBeNull();
+    expect(getMock).not.toHaveBeenCalled();
+  });
+
   it("states the provider's own caps", async () => {
     getMock.mockResolvedValue({
       providers: { providers: [{ ...LAPTOP, local: { models: ["a"], max_context: 8192, max_output: 1024, keep_alive_seconds: 3600 } }] },
       connected: {},
       etag: '"e"',
     });
-    renderCard(run(), created("local_model"));
+    renderCard(run());
     expect(await screen.findByText("8,192 tokens")).toBeInTheDocument();
     expect(screen.getByText("1,024 tokens")).toBeInTheDocument();
     expect(screen.getByText("Up to 1 hour")).toBeInTheDocument();
@@ -97,33 +115,29 @@ describe("LocalModelsCard", () => {
     expect(T.KEEP_FOR(60)).toBe("Up to 1 minute");
   });
 
-  it("is absent for a run on any other provider, and reads nothing", () => {
-    renderCard(run(), created("custom_endpoint"));
+  it("is absent for a run that holds no model allowlist, and reads nothing", () => {
+    renderCard(run({ model_allowlists: undefined }));
     expect(screen.queryByText(T.TITLE)).toBeNull();
     expect(getMock).not.toHaveBeenCalled();
   });
 
   it("is absent for a run under no provider", () => {
-    renderCard(run({ model_provider_id: undefined }), []);
+    renderCard(run({ model_provider_id: undefined }));
     expect(getMock).not.toHaveBeenCalled();
-  });
-
-  it("is absent for a member, who cannot read the provider record", () => {
-    renderCard(run(), created("local_model"), false);
-    expect(getMock).not.toHaveBeenCalled();
-    expect(screen.queryByText(T.TITLE)).toBeNull();
   });
 
   it("fails closed while /me has not answered: an unresolved identity reads operator, and the read is operatorOnly", () => {
-    renderCard(run(), created("local_model"), true, false);
+    renderCard(run(), true, false);
     expect(getMock).not.toHaveBeenCalled();
-    expect(screen.queryByText(T.TITLE)).toBeNull();
+    expect(screen.getByText(T.TITLE)).toBeInTheDocument();
+    expect(screen.queryByText(T.SERVER)).toBeNull();
   });
 
-  it("is absent when the provider has since been removed or the read fails", async () => {
+  it("keeps the run's own list when the provider has since been removed or the read fails", async () => {
     getMock.mockRejectedValue(new Error("down"));
-    renderCard(run(), created("local_model"));
+    renderCard(run());
     await waitFor(() => expect(getMock).toHaveBeenCalled());
-    expect(screen.queryByText(T.TITLE)).toBeNull();
+    expect(screen.getByText("qwen2.5-coder:7b")).toBeInTheDocument();
+    expect(screen.queryByText(T.SERVER)).toBeNull();
   });
 });

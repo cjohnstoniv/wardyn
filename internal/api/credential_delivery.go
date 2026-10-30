@@ -185,6 +185,7 @@ func (s *Server) handlePutCredentialDelivery(w http.ResponseWriter, r *http.Requ
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		placement.ActionCredentialDeliveryWrite, govCredentialDeliveryKey, "success", mustJSON(map[string]any{"before": before, "after": after})))
+	s.revokeWithdrawnLocalPATs(r.Context())
 	if mode == govBypass {
 		s.recordGovernanceBypass(r, govKindCredentialDelivery, govCredentialDeliveryKey, "success", nil)
 	}
@@ -227,5 +228,6 @@ func applyCredentialDeliveryChange(s *Server, r *http.Request, q store.Querier, 
 		return govApplied{}, err
 	}
 	return govApplied{action: placement.ActionCredentialDeliveryWrite, target: govCredentialDeliveryKey,
-		data: map[string]any{"before": before, "after": after}}, nil
+		data:        map[string]any{"before": before, "after": after},
+		afterCommit: func() map[string]any { s.revokeWithdrawnLocalPATs(ctx); return nil }}, nil
 }

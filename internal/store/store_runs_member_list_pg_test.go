@@ -119,6 +119,21 @@ func planOf(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tr *planTrace
 	return strings.Join(lines, "\n")
 }
 
+// planOfCall is the plan Postgres picks for the last statement call runs through a store on a tracing pool.
+func planOfCall(t *testing.T, ctx context.Context, pool *pgxpool.Pool, call func(store.PG)) string {
+	t.Helper()
+	cfg := pool.Config().Copy()
+	tr := &planTracer{}
+	cfg.ConnConfig.Tracer = tr
+	traced, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("traced pool: %v", err)
+	}
+	t.Cleanup(traced.Close)
+	call(store.NewPG(traced))
+	return planOf(t, ctx, pool, tr)
+}
+
 // A member with a few runs among a long history is found by agent_runs_created_by_idx, not by walking every
 // run newest-first and testing each against a hashed sub-plan, which is what the OR query did (it read 302k
 // rows to return 5 on the synthetic table in the lane's EXPLAIN).

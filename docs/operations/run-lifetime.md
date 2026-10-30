@@ -39,7 +39,7 @@ Every run captures a **lease** at create:
 | A run already kept by its own end, still inside its files grace | Allowed — moving `ends_at` into the future is the first step toward reviving it (#1061) |
 | A run kept by its own end, past its files grace | Refused: "its end cannot be moved" — start a new run |
 
-- Every extend also re-checks the owner's CURRENT authority over the run's agent, workspaces, model provider, stored policy and git provider.
+- Every extend also re-checks the owner's CURRENT authority over the run's agent, workspaces, model provider, stored policy and git provider, and that the owner's profile still allows the run's placement (`placement_denied`).
 - An owner who has since lost one of those gets the extend refused, naming the capability — exactly as a revive does.
 
 ## End
@@ -148,6 +148,6 @@ Four clocks can end a run or freeze its agent. They are independent; the first o
 - On Kubernetes the runner cannot freeze a pod in place, so the setting is inert there and an idle run is stopped by idle stop.
 - The limit is set in a governance profile's run limits; see the [profile table](../OPERATIONS.md#multi-user-who-can-change-what) for how profiles combine.
 
-**The lease.** A run has no `ends_at` on the defaults. A governance profile's run limits set one at create, from `default_end_sec` or `max_end_ahead_sec`; the owner moves it later within the captured maximum (see [Extend](#extend)).
+**The lease.** A run has no `ends_at` on the defaults. A governance profile's run limits set one at create, from `default_end_sec` or `max_end_ahead_sec`; the owner moves it later within the captured maximum (see [Extend](#extend)). For a service with a lifetime cap, `max_end_ahead_sec` is also the renewal unit ([Services](../SERVICES.md)).
 
 **`WARDYN_RUN_MAX_AGE`.** Off by default (unset, `0` or negative). It is an absolute cap on a run's age since creation and is not the lease: a person cannot extend it. See [ENV.md](../ENV.md).

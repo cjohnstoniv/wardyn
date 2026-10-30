@@ -110,6 +110,9 @@ type auditChainWalk struct {
 	prev string
 	// anchored: the walk starts after an attested drop, and prev began as that drop's tail hash.
 	anchored bool
+	// ranged: the walk checks a range of the chain (VerifyRecordingAuditRange), and prev began as the
+	// hash of the row before it, not a drop's tail.
+	ranged bool
 }
 
 func newAuditChainWalk() *auditChainWalk {
@@ -149,7 +152,7 @@ func (w *auditChainWalk) step(l auditChainLink) bool {
 		w.fail(l.seq, "row_hash does not match the row's contents (the row was edited after it was written)")
 	case w.prev == "" && !l.prevIsNull:
 		w.fail(l.seq, removedWithoutDrop+": the first chained row carries a prev_hash (the row it chained to was deleted)")
-	case w.prev != "" && l.prev != w.prev && w.st.Checked == 1 && w.anchored:
+	case w.prev != "" && l.prev != w.prev && w.st.Checked == 1 && w.anchored && !w.ranged:
 		w.fail(l.seq, removedWithoutDrop+": the first retained row does not chain to the newest retention drop's recorded tail")
 	case w.prev != "" && l.prev != w.prev:
 		w.fail(l.seq, removedWithoutDrop+": prev_hash does not match the preceding row (a row was deleted or reordered)")
@@ -213,19 +216,13 @@ func verifyAuditChain(ctx context.Context, tx pgx.Tx) (AuditChainStatus, error) 
 	// An audit_events that was never partitioned (a schema from before 0111) has no anchors or
 	// high-water mark to check. Once it is partitioned, a missing bookkeeping table is an error, not a
 	// reason to skip the checks.
-	var partitioned bool
-	if err := tx.QueryRow(ctx, `SELECT relkind = 'p' FROM pg_class WHERE oid = 'audit_events'::regclass`).Scan(&partitioned); err != nil {
-		return AuditChainStatus{}, fmt.Errorf("store: read audit_events kind: %w", err)
+	partitioned, err := auditEventsPartitioned(ctx, tx)
+	if err != nil {
+		return AuditChainStatus{}, err
 	}
-	var anchorTail string
-	var anchorSeq int64
-	if partitioned {
-		if err := tx.QueryRow(ctx, `
-			SELECT COALESCE(tail_row_hash, ''), COALESCE(seq_hi, 0)
-			  FROM audit_chain_anchors WHERE kind = 'drop' AND row_count > 0 ORDER BY id DESC LIMIT 1`).
-			Scan(&anchorTail, &anchorSeq); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return AuditChainStatus{}, fmt.Errorf("store: read audit chain anchors: %w", err)
-		}
+	anchorTail, anchorSeq, err := newestDropAnchor(ctx, tx, partitioned)
+	if err != nil {
+		return AuditChainStatus{}, err
 	}
 	w := newAnchoredAuditChainWalk(anchorTail)
 	w.st.AnchorSeq = anchorSeq
@@ -294,6 +291,33 @@ func verifyAuditChain(ctx context.Context, tx pgx.Tx) (AuditChainStatus, error) 
 		}
 	}
 	return w.st, nil
+}
+
+// auditEventsPartitioned is whether audit_events is partitioned (migration 0111), so has anchors.
+func auditEventsPartitioned(ctx context.Context, tx pgx.Tx) (bool, error) {
+	var partitioned bool
+	if err := tx.QueryRow(ctx, `SELECT relkind = 'p' FROM pg_class WHERE oid = 'audit_events'::regclass`).Scan(&partitioned); err != nil {
+		return false, fmt.Errorf("store: read audit_events kind: %w", err)
+	}
+	return partitioned, nil
+}
+
+// newestDropAnchor is the tail hash and last seq of the newest attested retention drop that dropped
+// rows, which the first retained row must chain to; both are zero with no such drop, and always when
+// audit_events was never partitioned (it has no anchors).
+func newestDropAnchor(ctx context.Context, tx pgx.Tx, partitioned bool) (string, int64, error) {
+	var tail string
+	var seq int64
+	if !partitioned {
+		return tail, seq, nil
+	}
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(tail_row_hash, ''), COALESCE(seq_hi, 0)
+		  FROM audit_chain_anchors WHERE kind = 'drop' AND row_count > 0 ORDER BY id DESC LIMIT 1`).
+		Scan(&tail, &seq); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", 0, fmt.Errorf("store: read audit chain anchors: %w", err)
+	}
+	return tail, seq, nil
 }
 
 // verifyAuditPartitionState is what the chain cannot say about itself, checked once the walk is clean.

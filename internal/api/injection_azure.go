@@ -351,7 +351,7 @@ func (s *Server) resolvePendingAzureReauth(ctx context.Context, lane, owner, row
 	if s.cfg.Approvals == nil {
 		return nil
 	}
-	rows, err := s.cfg.Approvals.List(ctx, types.ApprovalPending)
+	rows, err := s.pendingReauths(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not list pending Azure sign-in requests after a capture; the next poll will resolve them",
 			slog.Any("err", err))

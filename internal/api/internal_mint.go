@@ -132,7 +132,16 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt:  minted.ExpiresAt.UTC().Format(time.RFC3339),
 		Injection:  s.mintedRule(r.Context(), claims, body.GrantID, minted),
 		KnownHosts: minted.KnownHosts,
+		Host:       sshKeyHost(minted),
 	})
+}
+
+// sshKeyHost is an ssh_key mint's SSH host, "" for any other kind.
+func sshKeyHost(m broker.Minted) string {
+	if m.Kind != types.GrantSSHKey {
+		return ""
+	}
+	return m.Metadata["host"]
 }
 
 // mintedRule is the injection rule a mint answers with. The proxy relays this
@@ -274,7 +283,7 @@ func (s *Server) liveGrantWithheld(ctx context.Context, runID, grantID uuid.UUID
 }
 
 // liveWithholding is a running run's withholding: its captured profile's current denies and the
-// outer layers as the seal reads them now.
+// outer layers as the seal reads them now, the run owner's walls among them.
 func (s *Server) liveWithholding(ctx context.Context, run types.AgentRun) (withholding, error) {
 	p, err := s.runUnit(ctx, run)
 	if err != nil {
@@ -283,6 +292,10 @@ func (s *Server) liveWithholding(ctx context.Context, run types.AgentRun) (withh
 	// An unread boundary is answered 503 here, retried by the caller, rather than the seal's
 	// fail-closed layer, whose 403 would say the credential is no longer given.
 	if _, err := s.governanceBoundary(ctx); err != nil {
+		return withholding{}, err
+	}
+	// The run owner's walls the same way (personalWallsSealLayer would seal instead).
+	if _, err := s.personalWalls(ctx, run.CreatedBy); err != nil {
 		return withholding{}, err
 	}
 	w := withholding{layers: s.outerLayers(ctx, run)}
@@ -318,12 +331,12 @@ func (s *Server) refuseWithheldGrant(w http.ResponseWriter, r *http.Request, cla
 			"reason":   reasonGrantWithheld,
 		})))
 	writeErrorReason(w, http.StatusForbidden, reasonGrantWithheld,
-		"wardyn: this run is no longer given this credential: the run's governance profile or the Wardyn boundary withholds it or a host it reaches")
+		"wardyn: this run is no longer given this credential: the run's governance profile, the Wardyn boundary or the run owner's walls withhold it or a host it reaches")
 	return nil, true
 }
 
 // withheldUnreadMsg is the logged text of a withheld check that could not be read.
-const withheldUnreadMsg = "read the run's grants, profile or Wardyn boundary to check the credential"
+const withheldUnreadMsg = "read the run's grants, profile, Wardyn boundary or owner's walls to check the credential"
 
 // mintWithheldUnread is the mint door's answer to an unread withheld check: 503
 // credential_withheld_unread, retried by the caller.
@@ -335,19 +348,18 @@ func mintWithheldUnread(w http.ResponseWriter, r *http.Request) func(liveGrant, 
 
 // sinkWithheldUnread is the injection door's: the sink's own audited refusal, a secret.read failure
 // row and 503 run_unreadable when the run could not be read (store_unavailable for its grants,
-// profile or the boundary), so no delivery is refused unaudited.
+// profile or the boundary), so no delivery is refused unaudited. The row's target is the sink's
+// own (injectionRead.auditTarget): the grant for a shared grant or one whose scope was not read.
 func (s *Server) sinkWithheldUnread(w http.ResponseWriter, r *http.Request, claims *identity.Claims, grantID uuid.UUID) func(liveGrant, error) {
 	return func(lg liveGrant, err error) {
 		reason := reasonSinkStoreUnavailable
 		if errors.Is(err, errRunUnread) {
 			reason = reasonRunUnreadable
 		}
-		target := grantID.String()
-		if rule, rerr := injectionRuleFromScope(lg.spec.Scope); rerr == nil && rule.SecretName != "" {
-			target = rule.SecretName
-		}
+		rule, rerr := injectionRuleFromScope(lg.spec.Scope)
+		read := injectionRead{shared: apiKeyScopeShared(lg.spec.Scope), unknown: rerr != nil || rule.SecretName == ""}
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"secret.read", target, "failure", mustJSON(map[string]any{"reason": reason, "grant_id": grantID})))
+			"secret.read", read.auditTarget(rule.SecretName, grantID), "failure", mustJSON(map[string]any{"reason": reason, "grant_id": grantID})))
 		writeErrorReason(w, http.StatusServiceUnavailable, reason, loggedMsg(r.Context(), withheldUnreadMsg, err))
 	}
 }

@@ -354,15 +354,22 @@ if command -v systemd-analyze >/dev/null 2>&1; then
   _t="$(mktemp -d)"
   sed "s#__WARDYN_DESKTOP_SH__#${DESK_DIR}/wardyn-desktop.sh#" "${UNIT}" > "${_t}/wardyn.service"
   cp "${TIMER}" "${_t}/wardyn.timer"
-  # Filter this HOST's unrelated unit warnings; only our two files' verdict counts.
+  # Keep only lines about our two units; the host's own units warn too, and
+  # which ones changes with the runner image (ubuntu-26.04's systemd flags
+  # CPUAccounting= in xfs_scrub and walinuxagent units).
   # CAPTURE, THEN MATCH — never `grep | grep -q` under `pipefail`: `grep -q`
   # exits on its first match while systemd-analyze/the upstream grep are still
   # writing, the upstream takes SIGPIPE, and pipefail reports the pipeline
   # failed even on a clean (matching) verdict.
-  _verify_warnings="$(systemd-analyze verify "${_t}/wardyn.service" "${_t}/wardyn.timer" 2>&1 | grep -vE 'docker\.socket|legacy directory' || true)"
-  if ! grep -q . <<<"${_verify_warnings}"; then
-    :  # no output => clean
+  # A nonzero status fails on its own, whatever it printed: a verifier that could not start names
+  # neither unit.
+  _verify_rc=0
+  _verify_out="$(systemd-analyze verify "${_t}/wardyn.service" "${_t}/wardyn.timer" 2>&1)" || _verify_rc=$?
+  _verify_warnings="$(grep -E 'wardyn\.(service|timer)' <<<"${_verify_out}" || true)"
+  if [[ ${_verify_rc} -eq 0 ]] && ! grep -q . <<<"${_verify_warnings}"; then
+    :  # status 0 and no line about our units => clean
   else
+    if [[ ${_verify_rc} -ne 0 ]]; then _verify_warnings="systemd-analyze verify exited ${_verify_rc}:"$'\n'"${_verify_out}"; fi
     printf '%s\n' "${_verify_warnings}" >&2
     rm -rf "${_t}"
     fail "the rendered systemd units do not verify"
@@ -541,6 +548,16 @@ printf '#!/usr/bin/env bash\necho 4242\n' > "${F185_TMP}/bin/id"; chmod +x "${F1
 out="$(f185_run "${md}")"; rm -f "${F185_TMP}/bin/id"
 grep -q 'wardyn.env is a symlink owned by uid' <<<"${out}" \
   || fail "wardyn-desktop.sh did not refuse a symlinked wardyn.env that another account owns. Got: $(printf '%s' "${out}" | tail -1)"
+# ...and so is a link in a directory another account can write, which could replace the link between
+# the check and the read. The same link in a directory only the launcher's uid writes starts (above).
+md="$(f185_fixture 0600)"
+mkdir "${md}/real"; mv "${md}/wardyn.env" "${md}/real/wardyn.env"; ln -s real/wardyn.env "${md}/wardyn.env"
+chmod 0777 "${md}"
+out="$(f185_run "${md}")"; chmod 0700 "${md}"
+[ ! -e "${md}/PWNED" ] \
+  || fail "wardyn-desktop.sh went on past a symlinked wardyn.env in a world-writable directory"
+grep -q 'wardyn.env is a symlink in .* group/world-writable' <<<"${out}" \
+  || fail "wardyn-desktop.sh did not refuse a symlinked wardyn.env in a directory another account can write. Got: $(printf '%s' "${out}" | tail -1)"
 echo "test-desktop-profile: envelope file trust-boundary invariants PASS"
 
 # ── #1493: the published port the launcher probes is the one compose publishes ─

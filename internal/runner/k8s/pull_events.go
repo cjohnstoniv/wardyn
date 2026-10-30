@@ -54,7 +54,7 @@ func (d *Driver) pullingDetail(ctx context.Context, pod *corev1.Pod, container s
 		"involvedObject.name": pod.Name,
 		"involvedObject.uid":  string(pod.UID),
 	}.AsSelector().String()
-	evs, err := d.clientset.CoreV1().Events(d.cfg.Namespace).List(ctx, metav1.ListOptions{FieldSelector: sel})
+	evs, err := d.clientset.CoreV1().Events(pod.Namespace).List(ctx, metav1.ListOptions{FieldSelector: sel})
 	if err != nil {
 		w.off, w.last = true, ""
 		slog.Debug("wardynd: k8s substrate: cannot read pod events; image pulls report as ContainerCreating",

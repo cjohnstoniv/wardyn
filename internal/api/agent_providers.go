@@ -41,7 +41,7 @@ const (
 	agent400Unknown = "agents: %q names no agent this deployment can run — a catalog id or a WARDYN_AGENT_IMAGES key"
 	agent400DupID   = "agents: id %q is not unique"
 	agent400SetKey  = "agents: %q joins harness ids with +, which names a harness-set image, not an agent"
-	agent412Stale   = "agents changed since you loaded them — reload and retry"
+	agent412Stale   = "Agents changed since you loaded them — reload and retry"
 
 	// The default model provider. A turned-off provider is still a valid
 	// default (it is the one-click incident switch); a missing one, or one not
@@ -338,8 +338,11 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 // provider each one defaults to.
 func agentProviderAuditData(block types.AgentProviders) map[string]any {
 	ids, disabled := []string{}, []string{}
-	var defaults []string
+	var defaults, signInsOff []string
 	for _, row := range block.Agents {
+		if row.DesktopSignInsOff {
+			signInsOff = append(signInsOff, row.ID)
+		}
 		ids = append(ids, row.ID)
 		if row.DefaultProvider != "" {
 			defaults = append(defaults, row.ID+":"+row.DefaultProvider)
@@ -356,6 +359,10 @@ func agentProviderAuditData(block types.AgentProviders) map[string]any {
 	if len(defaults) > 0 {
 		slices.Sort(defaults)
 		datum["defaults"] = defaults
+	}
+	if len(signInsOff) > 0 {
+		slices.Sort(signInsOff)
+		datum["desktop_sign_ins_off"] = signInsOff
 	}
 	return datum
 }

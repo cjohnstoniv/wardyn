@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"net"
-	"net/http/httputil"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -205,6 +204,11 @@ type Config struct {
 	// the default: a bare allowlist host is open on every port), "dry_run" or
 	// "on" (80/443 plus host:port entries). Desktop VM runs always have it on.
 	EgressPortRule string
+	// DesktopSignins is WARDYN_DESKTOP_SIGNINS=on: a run whose policy declares
+	// the desktop gets the person's sign-in store and the proxy's sign-in lane,
+	// and its owner may sign in to websites there (run_desktop_signin.go).
+	// Off by default.
+	DesktopSignins bool
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).
 	// Defaults to "docker".
@@ -276,20 +280,20 @@ type Config struct {
 	// UNAFFECTED either way (legacy, still boot-warned separately — see
 	// buildOptionalFeatures).
 	AllowEmailMappings bool
-	// CapabilityGrantsVerifiedEmail is WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL: a
-	// capability ALLOW row written for a person's email matches them only when
-	// sign-in vouches for the email (unverifiedEmailSubject). Default false keeps
-	// the match and logs it. Deny rows match the email either way.
-	CapabilityGrantsVerifiedEmail bool
-	// GovernanceUnitPutExistingOnly is WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY:
-	// PUT /governance/units/{id} replaces an existing profile only, and a
-	// new one is created through POST. Default false keeps create-at-id and logs it.
-	GovernanceUnitPutExistingOnly bool
-	// EgressHostPortGrantsInert is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT: a stored
-	// egress_host ALLOW row whose value carries a ":port" (written before the
-	// write boundary stored the host alone) is inert, marked and never matched.
-	// Default false keeps matching it by host and logs it. Deny rows keep matching.
-	EgressHostPortGrantsInert bool
+	// UnverifiedEmailCapGrantsMatch is WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL set
+	// off: a capability ALLOW row written for a person's email still matches when
+	// sign-in does not vouch for it (unverifiedEmailSubject), logged. The zero value
+	// (the default) grants nothing through it. Deny rows match the email either way.
+	UnverifiedEmailCapGrantsMatch bool
+	// GovernanceUnitPutCreates is WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY set off:
+	// PUT /governance/units/{id} naming an id no profile holds creates one there,
+	// logged. The zero value (the default) answers it 404; create through POST.
+	GovernanceUnitPutCreates bool
+	// EgressHostPortGrantsMatch is WARDYN_EGRESS_HOST_PORT_GRANTS_INERT set off: a
+	// stored egress_host ALLOW row whose value carries a ":port" (written before
+	// the write boundary stored the host alone) still matches by host, logged. The
+	// zero value (the default) leaves it inert, marked and never matched. Deny rows keep matching.
+	EgressHostPortGrantsMatch bool
 	// UserMounts is the operator/MDM-set posture for MEMBER-authored local_dir
 	// binds (WARDYN_USER_WORKSPACE_ROOTS + _MAP + WARDYN_USER_WRITABLE_ROOTS
 	// + _DENY, parsed at boot by runner.ParseUserMountPolicy). The ZERO VALUE
@@ -581,9 +585,11 @@ type Config struct {
 	// MultiAgentTasks (WARDYN_MULTI_AGENT_TASKS, off by default in 0.10.0): a background task
 	// may run several agents, each on its tools[].task. Off, that is refused multi_agent_tasks_off.
 	MultiAgentTasks bool
-	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps
-	// proxy.Config.ScrubResponses on every new dispatch.
+	// ScrubProxyResponses (WARDYN_PROXY_RESPONSE_SCRUB) stamps proxy.Config.ScrubResponses on every new dispatch.
 	ScrubProxyResponses bool
+	// CanonicalPushRepos (WARDYN_PUSH_HOLD_CANONICAL_REPOS; off by default in
+	// 0.10.0) stamps proxy.Config.CanonicalPushRepos on every new dispatch.
+	CanonicalPushRepos bool
 	// EnvSecretPlaceholders / FileSecretPlaceholders (WARDYN_ENV_SECRET_PLACEHOLDERS,
 	// WARDYN_FILE_SECRET_PLACEHOLDERS; off by default in 0.10.0): an env_secret
 	// or file_secret grant whose scope names a host gets a placeholder in the
@@ -751,6 +757,12 @@ type Config struct {
 	// boundary as TrustedCAPEM above — never a SiteConfig field,
 	// never agent-reachable.
 	DemoVideoBaseURL string
+	// CLIArtifactBase is WARDYN_CLI_ARTIFACT_BASE, validated at boot by
+	// ValidateCLIArtifactBase: an internal mirror that holds the release's
+	// assets under <base>/v<version>/. /healthz publishes it as
+	// cli_artifact_base (the console's install line and `wardyn runner setup`
+	// read it there); empty (the default) publishes nothing.
+	CLIArtifactBase string
 	// OrgCAFingerprints is WARDYN_ORG_CA_FINGERPRINTS, parsed at boot by
 	// ParseOrgCAFingerprints: "sha256:<lowercase hex>" of each CA certificate
 	// the operator publishes for `wardyn ca add` to be compared against.
@@ -764,19 +776,23 @@ type Server struct {
 	runnerStreams runnerStreamState
 	cfg           Config
 	router        chi.Router
-	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is
-	// ready to use.
+	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is ready to use.
 	metrics metrics
-	// viaOrg is the organisation's via_org egress state (via_org_streams.go).
+	// recordingChainWalk lets one recording range check (recording_chain.go) walk the audit log at a time on this replica:
+	// the walk hashes the org's whole log over the run's lifetime, so a second check is refused, not queued. Zero value is ready to use.
+	recordingChainWalk sync.Mutex
+	// sshUnbound is set by MarkSSHGatewayUnbound when the SSH gateway could not bind at boot; /healthz then omits ssh.
+	sshUnbound atomic.Bool
+	// viaOrg is the organisation's via_org egress state (via_org_streams.go); fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
 	viaOrg viaOrgState
-	// fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
-	fleet fleetSnapshot
-	// revokedEndRetry spaces out the queue sweep's retries of a run it could not end (runner_revoke.go).
+	fleet  fleetSnapshot
+	// revokedEndRetry and exitRetry space out the retries of the queue sweep (a run it could not end, runner_revoke.go) and of the runner exit sweep (each receipt, which it may park; runner_exits.go); eventRefusals bounds each runner's runner.event.refuse rows on this replica (runner_event_refuse.go).
 	revokedEndRetry revokedEndRetry
-	// inventoryHoldAudit spaces one runner's runner.inventory.hold rows (runner_state.go).
+	exitRetry       runnerExitRetry
+	eventRefusals   runnerEventRefusals
+	// inventoryHoldAudit spaces one runner's runner.inventory.hold rows (runner_state.go); privIPRefusals caches the private_ip_refusals row's audit read (setup_private_ip_refusals.go).
 	inventoryHoldAudit inventoryHoldAudit
-	// privIPRefusals caches the private_ip_refusals row's audit read (setup_private_ip_refusals.go).
-	privIPRefusals privateIPRefusalCache
+	privIPRefusals     privateIPRefusalCache
 	// capRowsScanned counts capability-grant rows compared inside capBatch (see capabilities.go). It is
 	// INSTRUMENTATION, read by nothing on any request path: the per-request cost of the capability seam is
 	// chosen partly by the member's own request body (spec.AllowedDomains), so "how much work did one request
@@ -852,8 +868,7 @@ type Server struct {
 	// sshSyncOpen is the directory and open time of each live wardyn-sync
 	// channel, for GET /runs/{id}'s sync.open. Guarded by sshSessionsMu.
 	sshSyncOpen map[uuid.UUID][]*runSyncOpen
-	// builds tracks per-workspace image builds (the wizard's Build step).
-	// Zero value is ready to use.
+	// builds tracks per-workspace image builds (the wizard's Build step). Zero value is ready to use.
 	builds buildTracker
 	// attachHolders tracks who currently holds each run's SHARED tmux PTY, so a
 	// second client can be admitted read-only instead of silently competing for
@@ -871,24 +886,8 @@ type Server struct {
 	leaseKeeperOnce sync.Once   // starts attachLeaseKeeper (attach_lease.go)
 	runEvents       runEventHub // each run's lifecycle event ring (run_events.go)
 	// execOutputs holds each non-interactive run's output tail (run_output.go).
-	execOutputs execOutputTails
-	// uiConns counts concurrent UI-gateway relay connections per run, enforcing
-	// maxUIConnsPerRun (uigateway.go) — each one is a live socat exec in the
-	// sandbox. uiReady caches the per-(run,app) launcher probe, and uiProxy is
-	// the single shared reverse proxy + exec-lane transport built on first use.
-	// All process-local, like sshSessions and lastTouch above and correct for
-	// the same reason (replicas>1 is refused by construction). Zero values are
-	// ready to use.
-	uiConnsMu sync.Mutex
-	uiConns   map[uuid.UUID]int
-	uiReadyMu sync.Mutex
-	uiReady   map[string]time.Time
-	// uiReassert debounces the relay's REQUEST-path authorization re-check, one
-	// entry per minted session (uiReassertKey) — see uiReassertRelay.
-	uiReassertMu sync.Mutex
-	uiReassert   map[string]time.Time
-	uiProxyOnce  sync.Once
-	uiProxy      *httputil.ReverseProxy
+	execOutputs    execOutputTails
+	uiGatewayState // the UI gateway's process state (server_uigateway.go)
 
 	// desktopRecs are the live desktop recordings and each run's pause (uigateway_record.go).
 	desktopRecs desktopRecordings
@@ -925,8 +924,9 @@ type Server struct {
 	// branchLimiter rate-bounds GET /workspaces/{id}/branches per person (workspace_branches.go): each
 	// call can use a forge credential. memberDriveLimiter bounds member drive changes (member_drives.go).
 	branchLimiter, memberDriveLimiter principalLimiter
-	// backchannelLimiter bounds the logout tokens that fail to verify on POST /auth/backchannel-logout (signin_denied.go).
-	backchannelLimiter principalLimiter
+	// backchannelLimiter bounds the logout tokens that fail to verify on POST /auth/backchannel-logout, and
+	// frontchannelLimiter the requests that cut nothing on GET /auth/frontchannel-logout (signin_denied.go).
+	backchannelLimiter, frontchannelLimiter principalLimiter
 	// preflightLimiter rate-bounds POST /runs/preflight per person
 	// (preflight.go); nil when Config.PreflightRatePerMin is 0 (off).
 	preflightLimiter     *principalLimiter

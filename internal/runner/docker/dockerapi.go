@@ -37,6 +37,7 @@ type dockerAPI interface {
 	NetworkConnect(ctx context.Context, networkID string, options client.NetworkConnectOptions) (client.NetworkConnectResult, error)
 	NetworkInspect(ctx context.Context, networkID string, options client.NetworkInspectOptions) (client.NetworkInspectResult, error) // reads back the subnet the daemon picked for a per-run network
 	NetworkRemove(ctx context.Context, networkID string, options client.NetworkRemoveOptions) (client.NetworkRemoveResult, error)
+	NetworkList(ctx context.Context, options client.NetworkListOptions) (client.NetworkListResult, error) // only with Config.RunSubnetPool: the subnets in use, and the orphan network sweep
 
 	ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
 	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
@@ -61,6 +62,7 @@ type dockerAPI interface {
 	ContainerStatPath(ctx context.Context, containerID string, options client.ContainerStatPathOptions) (client.ContainerStatPathResult, error) // checks a managed file's target directory exists before copy
 	CopyFromContainer(ctx context.Context, containerID string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) // reads /etc, /etc/passwd to vet an image without running anything
 	ContainerLogs(ctx context.Context, containerID string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error)             // last lines of a proxy that exited at boot, so a config-load failure reports its cause
+	ContainerExport(ctx context.Context, containerID string, options client.ContainerExportOptions) (client.ContainerExportResult, error)       // a VM image's filesystem, converted to its ext4 base
 
 	ExecCreate(ctx context.Context, containerID string, options client.ExecCreateOptions) (client.ExecCreateResult, error)
 	ExecAttach(ctx context.Context, execID string, options client.ExecAttachOptions) (client.ExecAttachResult, error)

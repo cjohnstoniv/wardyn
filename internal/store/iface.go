@@ -39,6 +39,7 @@ type Store interface {
 	UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, notAfter time.Time) (bool, error)
 	SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error
 	SetRunImage(ctx context.Context, id uuid.UUID, image string) error
+	SetRunImageArches(ctx context.Context, id uuid.UUID, arches []string) error
 	SetRunDiskMiB(ctx context.Context, id uuid.UUID, mib int) error
 	SetRunAgentExecID(ctx context.Context, id uuid.UUID, execID string) error
 	TouchRun(ctx context.Context, id uuid.UUID) error
@@ -77,6 +78,9 @@ type Store interface {
 	// to the operator via owner ""). Scoped and separate from UpdateWorkspace so no ordinary edit
 	// can move ownership or race a concurrent async scan.
 	SetWorkspaceOwner(ctx context.Context, id uuid.UUID, owner string) (types.Workspace, error)
+	// SetWorkspaceOwningUnit replaces ONLY owning_unit_id (nil unpins): the pin's one writer, scoped
+	// as SetWorkspaceOwner is, so UpdateWorkspace can never move it. ErrNotFound for an unknown workspace or unit.
+	SetWorkspaceOwningUnit(ctx context.Context, id uuid.UUID, unit *uuid.UUID) (types.Workspace, error)
 	SetWorkspaceRequirements(ctx context.Context, id uuid.UUID, reqs map[string]types.WorkspaceRequirement) (types.Workspace, error)
 	SetWorkspaceRecordResult(ctx context.Context, id uuid.UUID, taskKey string, result json.RawMessage, onlyIfStatus string) (types.Workspace, bool, error)
 	ClaimWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID, expected *uuid.UUID) (types.Workspace, bool, error)
@@ -113,6 +117,12 @@ type Store interface {
 	// UpdateSourceConfig above, deliberately NOT folded into UpsertBaseImage's identity-hit dedupe.
 	UpdateBaseImageName(ctx context.Context, id uuid.UUID, name string) (types.BaseImageEntry, error)
 	ListBaseImages(ctx context.Context) ([]types.BaseImageEntry, error)
+	GetBaseImage(ctx context.Context, id uuid.UUID) (types.BaseImageEntry, error)
+	GetBaseImageByRef(ctx context.Context, kind, image string) (types.BaseImageEntry, error)
+	// ClaimImageCheck and FinishImageCheck are a prewrapped row's fenced check writes (store_sources.go).
+	ClaimImageCheck(ctx context.Context, id, attempt uuid.UUID) (types.BaseImageEntry, error)
+	FinishImageCheck(ctx context.Context, id uuid.UUID, image string, attempt uuid.UUID, status, reason string, arches []string) (types.BaseImageEntry, error)
+	LiveImageCheckAttempts(ctx context.Context) (map[uuid.UUID]bool, error)
 	WorkspacesUsingBaseImage(ctx context.Context, id uuid.UUID) ([]string, error)
 	DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) error
 
@@ -261,13 +271,13 @@ type Store interface {
 	// ListGovernanceUnits and GetGovernanceUnitChain return RAW rows: a composed row
 	// carries no authority of its own. Only internal/api/governance_compose.go calls them for
 	// authority (a source guard fails any other caller); GetGovernanceUnitChain is one
-	// statement, leaf first, bounded at depth 3, and ErrNotFound when the leaf is gone.
+	// statement, leaf first, bounded at MaxUnitDepthCap rows, and ErrNotFound when the leaf is gone.
 	ListGovernanceUnits(ctx context.Context) ([]types.GovernanceUnit, error)
 	GetGovernanceUnitChain(ctx context.Context, id uuid.UUID) ([]types.GovernanceUnit, error)
-	// UpsertGovernanceMembership keys on the natural UNIQUE (subject_type,
-	// subject): re-assigning a subject REPOINTS its one row, returning the
-	// EXISTING row's id on a conflict. ErrNotFound when unit_id names no
-	// profile (the FK rejects it).
+	// UpsertGovernanceMembership keys on the natural UNIQUE (unit_id, subject_type,
+	// subject): a subject holds one row per unit, and re-posting one updates it,
+	// returning the EXISTING row's id on a conflict. ErrNotFound when unit_id names no
+	// unit (the FK rejects it).
 	UpsertGovernanceMembership(ctx context.Context, a types.GovernanceMembership) (types.GovernanceMembership, error)
 	DeleteGovernanceMembership(ctx context.Context, id uuid.UUID) (types.GovernanceMembership, error)
 	ListGovernanceMemberships(ctx context.Context) ([]types.GovernanceMembership, error)
@@ -280,17 +290,21 @@ type Store interface {
 	DecideGovernanceChange(ctx context.Context, id uuid.UUID, d GovernanceDecision, fn GovernanceDecideFunc) (types.GovernanceChange, error)
 	// DryRunGovernance runs fn on a transaction that is always rolled back.
 	DryRunGovernance(ctx context.Context, fn func(q Querier) error) error
-	// ResolveGovernanceUnit returns THE ONE profile that applies to a caller — user > group >
-	// user_type > all, sub over email within the user tier, then priority DESC and name ASC — as a
-	// single indexed read whose ORDER BY is the whole precedence rule. ErrNotFound means "no
-	// assignment matched", read as the deployment ceiling. userSubjects must arrive in the caller's
-	// own precedence order since the query matches by POSITION.
+	// ListMembershipsFor returns EVERY membership matching a caller, each joined to its unit, in
+	// precedence order — user > group > user_type > all, sub over email within the user tier, then
+	// priority DESC, unit name ASC, subject ASC — one read whose ORDER BY is the whole precedence
+	// rule. Empty means no membership matched (the Default unit). userSubjects must arrive in the
+	// caller's own precedence order since the query matches by POSITION.
 	//
-	// Also returns WHICH TIER matched, load-bearing not informational: on a
-	// stale/truncated group snapshot the caller must tell a user-tier winner
-	// (serve it) from an all-tier one (refuse), indistinguishable from the
-	// profile alone. HasGroupTierMemberships below is that separate read.
-	ResolveGovernanceUnit(ctx context.Context, userSubjects, groups []string, userType string) (*types.GovernanceUnit, types.CapabilitySubjectType, error)
+	// Each row carries its subject type, load-bearing not informational: on a
+	// stale/truncated group snapshot the caller must tell a user-tier row
+	// (sound) from an all-tier one (not), indistinguishable from the
+	// unit alone. HasGroupTierMemberships below is that separate read.
+	ListMembershipsFor(ctx context.Context, userSubjects, groups []string, userType string) ([]MembershipMatch, error)
+	// CountOwnWallsUnits counts the units with walls of their own (kind unit, mode own_walls);
+	// MaxUnitDepth is the deepest unit path's depth and names, top first (see MaxUnitDepthQ).
+	CountOwnWallsUnits(ctx context.Context) (int, error)
+	MaxUnitDepth(ctx context.Context) (int, []string, error)
 	// HasGroupTierMemberships gates the stale/truncated group-snapshot refusal:
 	// with no group-tier row there is nothing an unknown group could have
 	// matched, so a nil or truncated snapshot must fall through rather than
@@ -332,7 +346,7 @@ type Store interface {
 	// de-allocated, and by then it is gone.
 	DeleteUserDriveGrant(ctx context.Context, id uuid.UUID) (types.UserDriveGrant, error)
 	ListUserDriveGrants(ctx context.Context) ([]types.UserDriveGrant, error)
-	// ResolveUserDrive mirrors ResolveGovernanceUnit's precedence and
+	// ResolveUserDrive mirrors ListMembershipsFor's precedence and
 	// stale-snapshot reasoning. DISABLED grants stay IN the query: one that
 	// wins its tier comes back Enabled false, rendered PAUSED rather than
 	// falling through (a pause must never widen a member onto an unchosen

@@ -136,7 +136,7 @@ describe("Pools tab", () => {
     expect(screen.queryByText(/^Pools your organization provides/)).toBeNull();
     expect(screen.queryByText(/You edit them here/)).toBeNull();
     expect(screen.getByText("No user pools yet")).toBeInTheDocument();
-    expect(screen.getByText("People create their own from Your account → My runner.")).toBeInTheDocument();
+    expect(screen.getByText("People create their own from Settings → My runner.")).toBeInTheDocument();
   });
 
   it("announces loading, then the pools", async () => {

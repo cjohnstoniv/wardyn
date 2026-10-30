@@ -52,6 +52,7 @@ type orgEnv struct {
 	// state the later cases continue from
 	fenced *fencedProxy
 	lapse  *lapseRun
+	runs   runIDs // the runs launched since the last case ended: what a failed case dumps
 }
 
 // lapseRun is self-lapse-end-to-end's run: renewed once, then ended at the org behind runnerd's back.
@@ -239,6 +240,7 @@ func (o *orgEnv) launchUntil(t, owner *testing.T, task string, extra map[string]
 		t.Fatalf("POST /runs = %d %s", code, raw)
 	}
 	owner.Cleanup(func() { o.api(owner, o.secToken, http.MethodPost, "/api/v1/runs/"+r.ID+"/kill", nil, nil) })
+	o.runs.add(r.ID)
 	return r.ID
 }
 
@@ -361,21 +363,49 @@ func (o *orgEnv) audit(t *testing.T, runID string) []auditRow {
 	return rows
 }
 
-// waitAudit waits for an audit row of the run that match accepts.
-// dumpRun logs what a failed case needs to say why: the run's state and failure hint, every audit row
-// for it, its pods, and its proxy's log.
-func (o *orgEnv) dumpRun(t *testing.T, id string) {
-	r := o.run(t, id)
-	t.Logf("run %s: state %s, failure hint %q, sandbox_ref %q", id, r.State, r.FailureHint, r.SandboxRef)
-	for _, a := range o.audit(t, id) {
-		t.Logf("audit %s %s %s %s %s %s", a.Time.UTC().Format(time.RFC3339), a.Action, a.Outcome, a.Actor, a.Target, a.Data)
+// dumpFailure logs what a failed case needs to say why: for each run it started, the org's view (state,
+// failure hint, every audit row), then the cluster's (diagSrc.dump). It must not fail the case again,
+// so it reads the org without o.api.
+func (o *orgEnv) dumpFailure(t *testing.T, ids []string) {
+	for _, id := range ids {
+		var r orgRun
+		if err := o.getJSON("/api/v1/runs/"+id, &r); err != nil {
+			t.Logf("run %s: %v", id, err)
+			continue
+		}
+		t.Logf("run %s: state %s, failure hint %q, sandbox_ref %q", id, r.State, r.FailureHint, r.SandboxRef)
+		var rows []auditRow
+		if err := o.getJSON("/api/v1/audit?run_id="+id+"&limit=500", &rows); err != nil {
+			t.Logf("run %s audit: %v", id, err)
+		}
+		for _, a := range rows {
+			t.Logf("audit %s %s %s %s %s %s", a.Time.UTC().Format(time.RFC3339), a.Action, a.Outcome, a.Actor, a.Target, a.Data)
+		}
 	}
-	pods, _ := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.runsNS, "get", "pods", "-o", "wide").CombinedOutput()
-	t.Logf("pods in %s:\n%s", o.runsNS, pods)
-	logs, _ := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.runsNS, "logs", "wardyn-proxy-"+id, "-c", "wardyn-proxy", "--timestamps").CombinedOutput()
-	t.Logf("proxy log (tail):\n%s", tail(string(logs), 6000))
-	rd, _ := exec.Command("kubectl", "--kubeconfig", o.adminKC, "-n", o.ownNS, "logs", "deployment/"+o.deploy, "-c", "runnerd", "--timestamps").CombinedOutput()
-	t.Logf("runnerd log (tail):\n%s", tail(string(rd), 6000))
+	o.diag().dump(t, ids)
+}
+
+func (o *orgEnv) diag() diagSrc {
+	return diagSrc{admin: o.admin, kc: o.adminKC, runsNS: o.runsNS, ownNS: o.ownNS, orgNS: o.orgNS, runnerd: o.deploy, runnerID: o.runnerID}
+}
+
+// getJSON GETs path from the org as the security token and decodes a 200 answer into out.
+func (o *orgEnv) getJSON(path string, out any) error {
+	req, err := http.NewRequest(http.MethodGet, "https://"+o.orgHost+path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+o.secToken)
+	resp, err := o.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s = %d %s", path, resp.StatusCode, raw)
+	}
+	return json.Unmarshal(raw, out)
 }
 
 func (o *orgEnv) waitAudit(t *testing.T, runID string, within time.Duration, what string, match func(auditRow) bool) auditRow {
@@ -637,14 +667,15 @@ func caseOrgRestart(t *testing.T, o *orgEnv) {
 		t.Fatal("fence-live-http2 left no fenced proxy")
 	}
 	f := o.fenced
+	// The boot canary and run B go to the worker whose kubelet runs: the one the fenced proxy is not on,
+	// which the scheduler may have placed on the last worker from its view before the label moved.
 	ws := o.workers(t)
-	o.sched(t, ws[len(ws)-1]) // the boot canary and run B go to the worker whose kubelet runs
+	up := ws[len(ws)-1]
+	if up == f.node {
+		up = ws[0]
+	}
+	o.sched(t, up)
 	b := o.live(t, nil)
-	t.Cleanup(func() {
-		if t.Failed() {
-			o.dumpRun(t, b)
-		}
-	})
 	if got := o.connect(t, b, "example.com:443"); got != "status 200" {
 		t.Fatalf("run B control before the restart: %q", got)
 	}
@@ -780,11 +811,6 @@ func caseOrgSelfLapse(t *testing.T, o *orgEnv) {
 		t.Fatalf("self-lapse setup: %+v", o.lapse)
 	}
 	id := o.lapse.id
-	t.Cleanup(func() {
-		if t.Failed() {
-			o.dumpRun(t, id)
-		}
-	})
 	row := o.waitAudit(t, id, time.Until(o.lapse.marked.Add(14*time.Minute)), "a refused renew", func(r auditRow) bool {
 		return r.Action == "identity.renew" && r.Outcome == "denied"
 	})
@@ -873,6 +899,11 @@ func TestK6Org(t *testing.T) {
 	kase := func(name string, fn func(t *testing.T, o *orgEnv)) {
 		var status, detail string
 		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if ids := o.runs.take(); t.Failed() {
+					o.dumpFailure(t, ids)
+				}
+			}()
 			defer func() {
 				detail = notes(t)
 				switch {

@@ -10,10 +10,10 @@
 ## 1. The standard
 
 - **Honesty rule (read this first).**
-  - The *shipped out-of-box default* and the *recommended production default* are deliberately kept as **two separate columns** below, and for every seam `/healthz.components` covers — exactly `identity`, `secret_store`, `recording`, `policy_engine`, and `sandbox` —
-  - it reports the **actual running** impl in `components.<seam>.selected`, plus `available` and `source` —
+  - The *shipped out-of-box default* and the *recommended production default* are kept as **two columns** below, and for every seam `/healthz.components` (signed in) covers — exactly `identity`, `secret_store`, `recording`, `policy_engine`, and `sandbox` —
+  - it reports the **running** impl in `components.<seam>.selected`, plus `available` and `source` —
   - the recommended-production column lives in the matrix below and [ROADMAP.md](../ROADMAP.md), because a runtime endpoint reports runtime facts (see §2 step 5).
-  - A row that recommends, say, SPIRE does **not** mean the running binary is SPIRE.
+  - A row that recommends SPIRE does **not** mean the running binary is SPIRE.
   - It means SPIRE is the standard Wardyn recommends converging to, and the seam + a conformance suite are ready to hold an implementation to contract when it lands.
   - Until then, `selected` is what you are running, and `/healthz` says so.
 
@@ -61,12 +61,12 @@
 2. `Register("<name>", <constructor>)` from your package's `init()`.
 3. Make it pass `<seam>test.RunConformance` (a 3-line `_test.go` calling the suite).
 4. Add a row to the matrix below.
-5. For the registry-backed seams — identity, secret store, recording, confinement substrate, and **only** those four; `policy_engine` is NOT among them — it now appears in `/healthz.components.<seam>.available` automatically (`<seam>` ∈ `identity`, `secret_store`, `recording`, `sandbox`)
+5. For the registry-backed seams — identity, secret store, recording, confinement substrate, and **only** those four; `policy_engine` is NOT among them — it appears in `/healthz.components.<seam>.available` (signed in) automatically (`<seam>` ∈ `identity`, `secret_store`, `recording`, `sandbox`)
    - and is selectable via that seam's selector env var — `WARDYN_IDENTITY`, `WARDYN_SECRET_STORE`, and `WARDYN_RECORDING_STORE` respectively
    - (the substrate selects via the `-runner` flag / `WARDYN_RUNNER`;
    - a build-tag-gated impl like the OCI substrate registers — and thus appears — only in builds that compile it, so a tagless binary honestly advertises `sandbox.available: []` and fails closed on `-runner docker`).
    - Seams **without** a registry are wired through their own config knobs and surface elsewhere at runtime, not in `components`:
-     - the LLM gateway and content detection are builtin (proxy-side), audit sinks via `WARDYN_AUDIT_SINKS` (boot log), eBPF ground-truth via `/healthz.ebpf_groundtruth`, and per-class substrate runtimes via `/healthz.confinement_substrates`.
+     - the LLM gateway and content detection are builtin (proxy-side), audit sinks via `WARDYN_AUDIT_SINKS` (boot log), eBPF ground-truth via `/healthz.ebpf_groundtruth`, and per-class substrate runtimes via `/healthz.confinement_substrates` (signed in).
 
 - For the **policy-evaluator**, **egress-gateway**, and **confinement-substrate** seams, also honor the security rules:
   - the evaluator's verdict cannot relax the IP guard / approval FSM;
@@ -226,12 +226,12 @@
 ## 4. The recommended-vs-shipped tension, made honest
 
 - We recommend SPIRE / OpenBao / OPA / Kata-CC3 / Tetragon for hostile-multi-tenant production while the binary ships embedded / pg / builtin / docker(runc..kata) / heartbeat-only.
-- "Recommended: SPIRE" must never be misread as "you are running SPIRE", so three things keep the gap visible:
+- "Recommended: SPIRE" must never read as "you are running SPIRE", so three things keep the gap visible:
 
 1. The two columns above never merge.
-2. **`/healthz` is machine-honest.** For every seam `components` covers, `components.<seam>.selected` is the *actual* running impl, `components.<seam>.available` is what this build's registry actually holds, and `source` distinguishes `default` from `configured`.
-   - Same structural anti-overclaim guarantee as `ebpf_groundtruth` and runner `Capabilities`.
-3. **One shared conformance contract.** A future SPIRE / OpenBao / OPA impl must pass the *same* `RunConformance` suite the shipped default passes — until an alternate is built and green, the shipped default is what you run.
+2. **`/healthz` is machine-honest.** For every seam `components` covers, `components.<seam>.selected` is the *running* impl, `components.<seam>.available` is this build's registry, and `source` distinguishes `default` from `configured`. Signed out, `/healthz` omits it and `confinement_substrates`.
+   - Same anti-overclaim guarantee as `ebpf_groundtruth` and runner `Capabilities`.
+3. **One shared conformance contract.** A future SPIRE / OpenBao / OPA impl must pass the *same* `RunConformance` suite the shipped default passes — until an alternate is green, the shipped default is what you run.
 
 ---
 
@@ -248,4 +248,5 @@
   - [`internal/runner/docker/hardening.go`](../internal/runner/docker/hardening.go) (`resolveRuntime`, `capabilitiesForWith`) + `cmd/wardynd` `WARDYN_CONFINEMENT_MAP` — the confinement substrate/runtime seam.
 - [`internal/egress/evaluator.go`](../internal/egress/evaluator.go) (policy evaluator, overridable via `Options.Evaluator` in [`internal/egress/proxy/proxy.go`](../internal/egress/proxy/proxy.go)) + [`internal/egress/proxy/local_routes.go`](../internal/egress/proxy/local_routes.go) (LLM-route forwarding) — the egress seams.
 - [`internal/runner/runner.go`](../internal/runner/runner.go) (`Capabilities.Resolved`) + [`internal/api/healthz.go`](../internal/api/healthz.go) (`/healthz` `confinement_substrates` + `components`).
+- [EXTENDING.md](EXTENDING.md) maps the layers and the interface each extension implements, including the closed sets (model provider kinds, credential classes) that have no seam.
 - Planned impls (seams ready, alternates not built): the non-OCI VMM `Substrate` (SmolVM/Firecracker), SPIRE identity, OPA/Cedar evaluator, an external LLM gateway.

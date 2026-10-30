@@ -50,13 +50,13 @@ func Serve(ctx context.Context, conn runnerwire.Conn, runnerID string, sub subst
 }
 
 // PublishCaps sends the `caps` event: the backing substrate's classes plus the
-// capacity and roots given.
+// capacity and roots given, and every run proxy setting, as a current runner does.
 func (s *Server) PublishCaps(ctx context.Context, capacity placement.Capacity, roots []string, version string) error {
 	cs, err := s.sub.Classes(ctx)
 	if err != nil {
 		return err
 	}
-	data, err := json.Marshal(runnerwire.Caps{Support: cs, Capacity: capacity, AllowedRoots: roots, Version: version})
+	data, err := json.Marshal(runnerwire.Caps{Support: cs, Capacity: capacity, AllowedRoots: roots, Version: version, ProxySettings: runnerwire.ProxySettings})
 	if err != nil {
 		return err
 	}
@@ -148,6 +148,21 @@ func (s *Server) handle(ctx context.Context, id uint32, method string, args json
 			return nil, err
 		}
 		return p.ProbeDrive(ctx, m)
+	case runnerwire.MethodWorkloadStatus:
+		ws, ok := s.sub.(interface {
+			WorkloadStatus(context.Context, runnerwire.WorkloadStatusArgs) error
+		})
+		if !ok {
+			return nil, runnerwire.Refuse("this runner serves no workload namespaces")
+		}
+		a, err := decode[runnerwire.WorkloadStatusArgs](args)
+		if err != nil {
+			return nil, err
+		}
+		if err := a.Validate(); err != nil {
+			return nil, err
+		}
+		return nil, ws.WorkloadStatus(ctx, a)
 	case runnerwire.MethodEnsureProxyImg:
 		rv, ok := s.sub.(runner.ProxyReviver)
 		if !ok {
@@ -212,15 +227,33 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 	case runnerwire.MethodStatus:
 		return s.sub.Status(ctx, ref)
 	case runnerwire.MethodStop:
-		return nil, s.sub.StopSandbox(ctx, ref)
+		return s.teardown(ref, s.sub.StopSandbox(ctx, ref))
 	case runnerwire.MethodKill:
-		return nil, s.sub.KillSandbox(ctx, ref)
+		return s.teardown(ref, s.sub.KillSandbox(ctx, ref))
 	case runnerwire.MethodEnd:
 		e, ok := s.sub.(runner.SandboxEnder)
 		if !ok {
 			return nil, runner.ErrEndUnsupported
 		}
-		return nil, e.EndSandbox(ctx, ref)
+		return s.teardown(ref, e.EndSandbox(ctx, ref))
+	case runnerwire.MethodPauseAgent, runnerwire.MethodResumeAgent:
+		p, ok := s.sub.(runner.AgentPauser)
+		if !ok {
+			return nil, runner.ErrAgentPauseUnsupported
+		}
+		pa, err := decode[runnerwire.AgentPauseArgs](args)
+		if err != nil {
+			return nil, err
+		}
+		call := p.ResumeAgent
+		if method == runnerwire.MethodPauseAgent {
+			call = p.PauseAgent
+		}
+		fenced, err := call(ctx, ref, pa.Generation)
+		if !fenced {
+			return nil, err // as a runner that predates the generation answers
+		}
+		return runnerwire.AgentPauseResult{FencedPause: true}, err
 	case runnerwire.MethodStopProxy:
 		p, ok := s.sub.(runner.ProxyStopper)
 		if !ok {
@@ -241,6 +274,15 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		return nil, rv.CanReplaceProxy(ctx, ref)
 	}
 	return nil, fmt.Errorf("unknown method %q", method)
+}
+
+// teardown answers a stop, kill or end as the real dispatcher does: a teardown
+// reply only after a successful call.
+func (s *Server) teardown(ref string, err error) (any, error) {
+	if err != nil {
+		return nil, err
+	}
+	return runnerwire.TeardownReply(s.sub, ref), nil
 }
 
 func (s *Server) create(ctx context.Context, id uint32, args json.RawMessage) (any, error) {
@@ -447,14 +489,14 @@ func (s *Server) sweep(ctx context.Context, args json.RawMessage) (any, error) {
 	if a.Remove == nil {
 		var seen []uuid.UUID
 		_, err := sw.SweepOrphanedSandboxes(ctx, a.MinAge, func(id uuid.UUID) bool { seen = append(seen, id); return false })
-		return runnerwire.SweepResult{Candidates: seen}, err
+		return runnerwire.SweepResult{Candidates: seen, MacOSVMDisks: runnerwire.SweepDisks(s.sub)}, err
 	}
 	rm := map[uuid.UUID]bool{}
 	for _, id := range a.Remove {
 		rm[id] = true
 	}
 	n, err := sw.SweepOrphanedSandboxes(ctx, a.MinAge, func(id uuid.UUID) bool { return rm[id] })
-	return runnerwire.SweepResult{Removed: n}, err
+	return runnerwire.SweepResult{Removed: n, MacOSVMDisks: runnerwire.SweepDisks(s.sub)}, err
 }
 
 type (

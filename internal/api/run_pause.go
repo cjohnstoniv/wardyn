@@ -391,7 +391,7 @@ func (s *Server) noteAgentActive(ctx context.Context, runID uuid.UUID) {
 // runPausedReadMsg is the run page widgets' answer for a paused run. They poll,
 // and a poll is not a person, so reading never thaws a run (an open tab would
 // otherwise keep it awake); the daemon would refuse the exec anyway.
-const runPausedReadMsg = "run is paused; resume it to read its sandbox"
+const runPausedReadMsg = "Run is paused; resume it to read its sandbox"
 
 // presenceReader calls mark before handing on bytes a person sent, so a paused
 // run is thawed before they reach it.
@@ -576,6 +576,7 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 		idle    []types.AgentRun
 		stop    []types.AgentRun
 		capsErr error
+		signins map[uuid.UUID]bool
 	)
 	freezable := func(class types.ConfinementClass) bool {
 		if freeze == nil && capsErr == nil {
@@ -606,6 +607,9 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 				s.resumeClosedRun(ctx, pauser, c)
 			}
 			continue
+		}
+		if s.inDesktopSignin(ctx, &signins, run.ID) {
+			continue // a freeze would stop the person's display (run_desktop_signin.go)
 		}
 		quiet := now.Sub(activeSince(run))
 		switch {

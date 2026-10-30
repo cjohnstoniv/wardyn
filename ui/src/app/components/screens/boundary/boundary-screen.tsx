@@ -5,10 +5,9 @@
 
 // Policies -> Wardyn boundary (board T2) and its dry run (board T4's report anatomy), over
 // GET/PUT /governance/boundary and POST /governance/dry-run. Every save shows the dry run first; the PUT goes
-// through the governance-writes path (202 -> SubmittedNote, 412 -> reload). While the server refuses
-// hard_limits (409 boundary_hard_limits_gated) the Hard limits choice is off (DESIGN-TREE §8 "UI lanes"); the 409
-// is still shown in the server's words should a hard-limits write reach it. The route is security-admin only, as
-// the server's GET is.
+// through the governance-writes path (202 -> SubmittedNote, 412 -> reload). A security admin can choose Hard
+// limits from any stored mode; a refused write is shown in the server's words. The route is security-admin only,
+// as the server's GET is.
 //
 // EVERY user-visible string comes from lib/boundary-copy.ts, or is canon reused from governance-copy.ts.
 import * as React from "react";
@@ -17,7 +16,8 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import { boundary as boundaryApi, type BoundaryChange, type BoundaryMode, type BoundaryReport, type BoundaryReportAssign, type BoundarySnapshot, type BoundaryWrite } from "../../../lib/api/boundary";
 import type { ConfinementClass } from "../../../lib/types/runs";
-import { BOUNDARY, BOUNDARY_DRY_RUN } from "../../../lib/boundary-copy";
+import type { DesktopControls } from "../../../lib/types/policy";
+import { BOUNDARY, BOUNDARY_DESKTOP, BOUNDARY_DRY_RUN } from "../../../lib/boundary-copy";
 import { BASELINE, CHANGES, DELIVERY } from "../../../lib/governance-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { getErrorMessage } from "../../../lib/format";
@@ -25,6 +25,7 @@ import { Button } from "../../ui/button";
 import { Label } from "../../ui/label";
 import { Textarea } from "../../ui/textarea";
 import { Chip } from "../../wardyn/primitives";
+import { PageContainer } from "../../wardyn/page-container";
 import { CC_META } from "../../wardyn/cc-meta";
 import { useSecurityOperator } from "../../wardyn/operator-context";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
@@ -32,17 +33,18 @@ import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { Note } from "../governance/display";
 import { SubmittedNote } from "../governance/submitted-note";
+import { DesktopGroupCard, desktopLocksNow, desktopNow } from "./desktop-group-card";
 
 const CLASSES: ConfinementClass[] = ["CC1", "CC2", "CC3"];
-
-// Off until the boundary bounds every brokered credential path a run is given (#3238): the server refuses
-// hard_limits with 409 boundary_hard_limits_gated until then, and that lane turns this on.
-export const HARD_LIMITS_SWITCH_ON = false;
 
 interface Draft {
   mode: BoundaryMode;
   blocked: string;
   floor: ConfinementClass | "";
+  // Absent: the boundary names no desktop, so it bounds none of its directions.
+  desktop?: DesktopControls;
+  // The boundary's locked_knobs: the Desktop card edits its desktop ones, and the rest are kept.
+  locks: string[];
 }
 
 const lines = (text: string) =>
@@ -55,16 +57,27 @@ const draftFrom = (b: BoundaryWrite): Draft => ({
   mode: b.mode,
   blocked: (b.spec.denied_domains ?? []).join("\n"),
   floor: b.spec.min_confinement_class ?? "",
+  desktop: b.spec.desktop,
+  locks: b.locked_knobs ?? [],
 });
 
-// The PUT body: the draft's knobs over the stored document, so knobs this page doesn't edit are kept.
+const sameLocks = (a: readonly string[], b: readonly string[]) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+
+// The PUT body: the draft's knobs over the stored document, so knobs this page doesn't edit are kept. Locks
+// are sent only when the draft changes them; absent keeps the stored ones.
 const bodyFrom = (d: Draft, stored: BoundaryWrite): BoundaryWrite => {
   const blocked = lines(d.blocked);
   return {
     mode: d.mode,
-    spec: { ...stored.spec, denied_domains: blocked.length > 0 ? blocked : undefined, min_confinement_class: d.floor || undefined },
+    spec: {
+      ...stored.spec,
+      denied_domains: blocked.length > 0 ? blocked : undefined,
+      min_confinement_class: d.floor || undefined,
+      desktop: d.desktop,
+    },
     limits: stored.limits,
     ...(stored.contact ? { contact: stored.contact } : {}),
+    ...(sameLocks(d.locks, stored.locked_knobs ?? []) ? {} : { locked_knobs: d.locks }),
   };
 };
 
@@ -78,19 +91,27 @@ export function BoundaryScreen() {
   const securityOperator = useSecurityOperator();
   const [status, setStatus] = React.useState<ScreenStatus>(securityOperator ? "loading" : "forbidden");
   const [stored, setStored] = React.useState<BoundaryWrite>({ mode: "no_limits", spec: {}, limits: {} });
-  const [draft, setDraft] = React.useState<Draft>({ mode: "no_limits", blocked: "", floor: "" });
+  const [draft, setDraft] = React.useState<Draft>({ mode: "no_limits", blocked: "", floor: "", locks: [] });
   const [report, setReport] = React.useState<ReportState | null>(null);
   const [outcome, setOutcome] = React.useState<Outcome>(null);
   const [busy, setBusy] = React.useState(false);
   const [savedElsewhere, setSavedElsewhere] = React.useState<string | null>(null);
+  const [held, setHeld] = React.useState(false);
   const [submittedJson, setSubmittedJson] = React.useState<string | null>(null);
   const etagRef = React.useRef<string | null>(null);
   // The dry run a reply belongs to: Back, a new review or an edit makes any earlier reply stale.
   const dryRunRef = React.useRef(0);
 
   const adopt = (doc: BoundarySnapshot) => {
-    const b: BoundaryWrite = { mode: doc.mode, spec: doc.spec ?? {}, limits: doc.limits ?? {}, ...(doc.contact ? { contact: doc.contact } : {}) };
+    const b: BoundaryWrite = {
+      mode: doc.mode,
+      spec: doc.spec ?? {},
+      limits: doc.limits ?? {},
+      ...(doc.contact ? { contact: doc.contact } : {}),
+      ...(doc.locked_knobs ? { locked_knobs: doc.locked_knobs } : {}),
+    };
     setStored(b);
+    setHeld(doc.save_held_for_approval === true);
     setDraft(draftFrom(b));
     etagRef.current = doc.etag ?? null;
     setSubmittedJson(null);
@@ -169,7 +190,6 @@ export function BoundaryScreen() {
 
   const disabled = !securityOperator || busy;
   const hard = draft.mode === "hard_limits";
-  const hardSelectable = HARD_LIMITS_SWITCH_ON || stored.mode === "hard_limits";
   // "No hard limits yet" only while the draft names no knob at all.
   const noKnobs = [...Object.values(body.spec), ...Object.values(body.limits)].every((v) => v === undefined);
   const chip = hard ? (
@@ -179,7 +199,7 @@ export function BoundaryScreen() {
   );
 
   return (
-    <div className="mx-auto max-w-[1100px] px-4 py-6 sm:px-6">
+    <PageContainer width="form">
       <nav aria-label="Breadcrumb" className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
         <Link to="/admin/policies" className="hover:text-foreground">
           {BOUNDARY.BREADCRUMB_PARENT}
@@ -221,13 +241,11 @@ export function BoundaryScreen() {
             <fieldset disabled={disabled}>
               <legend className="text-sm font-medium text-foreground">{BOUNDARY.MODE}</legend>
               <div className="mt-2 grid gap-2 md:grid-cols-2">
-                <label className={`flex gap-2 rounded-lg border border-border p-3${hardSelectable ? "" : " opacity-60"}`}>
+                <label className="flex gap-2 rounded-lg border border-border p-3">
                   <input
                     type="radio"
                     name="boundary-mode"
                     checked={hard}
-                    disabled={!hardSelectable}
-                    aria-describedby={hardSelectable ? undefined : "boundary-hard-gated"}
                     onChange={() => edit({ mode: "hard_limits" })}
                   />
                   <span className="flex flex-col gap-1">
@@ -236,11 +254,6 @@ export function BoundaryScreen() {
                       <Chip tone="primary">{BOUNDARY.RECOMMENDED}</Chip>
                     </span>
                     <span className="text-xs text-muted-foreground">{BOUNDARY.MODE_HARD_BODY}</span>
-                    {!hardSelectable && (
-                      <span id="boundary-hard-gated" className="text-xs text-muted-foreground">
-                        {BOUNDARY.HARD_GATED}
-                      </span>
-                    )}
                   </span>
                 </label>
                 <label className="flex gap-2 rounded-lg border border-border p-3">
@@ -291,6 +304,13 @@ export function BoundaryScreen() {
                   <span className="text-muted-foreground">{BOUNDARY.FLOOR_TAIL(floorLabel(draft.floor || undefined))}</span>
                 </div>
               </div>
+              <DesktopGroupCard
+                value={draft.desktop}
+                locks={draft.locks}
+                disabled={disabled}
+                onChange={(desktop) => edit({ desktop })}
+                onLocksChange={(locks) => edit({ locks })}
+              />
               <p className="text-xs text-muted-foreground">
                 {BOUNDARY.HARD_FOOT}
                 <br />
@@ -321,7 +341,7 @@ export function BoundaryScreen() {
             {savedElsewhere !== null && <SavedElsewhereBanner reloaded documentText={savedElsewhere} onDiscard={() => setSavedElsewhere(null)} />}
             {outcome?.kind === "saved" && <Note role="status">{DELIVERY.SAVED}</Note>}
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <span className="mr-auto text-xs text-muted-foreground">{BOUNDARY.FOOTER}</span>
+              <span className="mr-auto text-xs text-muted-foreground">{held ? BOUNDARY.FOOTER_SECOND_HUMAN : BOUNDARY.FOOTER}</span>
               <Button variant="ghost" disabled={disabled || !dirty} onClick={() => edit(draftFrom(stored))}>
                 {BOUNDARY.DISCARD}
               </Button>
@@ -337,6 +357,7 @@ export function BoundaryScreen() {
         <DryRunReport
           stored={stored}
           body={body}
+          held={held}
           state={report}
           outcome={outcome}
           canSubmit={!disabled && dirty}
@@ -350,7 +371,7 @@ export function BoundaryScreen() {
           onSubmit={() => void submit()}
         />
       )}
-    </div>
+    </PageContainer>
   );
 }
 
@@ -428,6 +449,7 @@ function ReportRows({ title, rows }: { title: string; rows: { key: string; name:
 function DryRunReport({
   stored,
   body,
+  held,
   state,
   outcome,
   canSubmit,
@@ -438,6 +460,7 @@ function DryRunReport({
 }: {
   stored: BoundaryWrite;
   body: BoundaryWrite;
+  held: boolean;
   state: ReportState;
   outcome: Outcome;
   canSubmit: boolean;
@@ -455,6 +478,8 @@ function DryRunReport({
     [BOUNDARY_DRY_RUN.MODE, modeLabel(stored.mode), modeLabel(body.mode)],
     [BOUNDARY.BLOCKED_LABEL, showValue("denied_domains", stored.spec.denied_domains), showValue("denied_domains", body.spec.denied_domains)],
     [BOUNDARY.FLOOR_LABEL, floorLabel(stored.spec.min_confinement_class), floorLabel(body.spec.min_confinement_class)],
+    [BOUNDARY_DESKTOP.TITLE, desktopNow(stored.spec.desktop), desktopNow(body.spec.desktop)],
+    [BOUNDARY_DESKTOP.LOCKS, desktopLocksNow(stored.locked_knobs), desktopLocksNow(body.locked_knobs ?? stored.locked_knobs)],
   ];
 
   return (
@@ -468,7 +493,7 @@ function DryRunReport({
           <tr>
             <th className="py-1 font-medium">{BOUNDARY.TITLE}</th>
             <th className="py-1 font-medium">{BOUNDARY_DRY_RUN.TODAY}</th>
-            <th className="py-1 font-medium">{BOUNDARY_DRY_RUN.AFTER}</th>
+            <th className="py-1 font-medium">{held ? BOUNDARY_DRY_RUN.AFTER : BOUNDARY_DRY_RUN.AFTER_SAVE}</th>
           </tr>
         </thead>
         <tbody>
@@ -518,7 +543,7 @@ function DryRunReport({
           </Button>
           <Button disabled={!canSubmit || state.status !== "ready"} onClick={onSubmit}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : null}
-            {BOUNDARY_DRY_RUN.SUBMIT}
+            {held ? BOUNDARY_DRY_RUN.SUBMIT : BOUNDARY_DRY_RUN.SUBMIT_SAVE}
           </Button>
         </div>
       </div>
@@ -532,7 +557,7 @@ function ReportBody({ report }: { report: BoundaryReport }) {
     ...report.units.map((p) => ({ key: p.id, name: p.name, changes: p.changes })),
   ];
   const policies = report.stored_policies.map((p) => ({ key: p.id, name: p.name, changes: p.changes }));
-  const row = (a: BoundaryReportAssign) => ({ key: a.id, name: `${a.subject} · ${a.unit_name}`, changes: a.changes });
+  const row = (a: BoundaryReportAssign) => ({ key: a.id, name: BOUNDARY_DRY_RUN.ASSIGNMENT_ROW(a.subject_type, a.subject, a.unit_name), changes: a.changes });
   const people = report.memberships.filter((a) => a.subject_type === "user").map(row);
   const others = report.memberships.filter((a) => a.subject_type !== "user").map(row);
   const none = teams.length + policies.length + people.length + others.length === 0;

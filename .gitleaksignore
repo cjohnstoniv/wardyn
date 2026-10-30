@@ -147,8 +147,13 @@ f97122834de2de0a730e7286b38bd4bd65520227:internal/workspacescan/golden_test.go:g
 b822c57c208258f042ff991ef2e973947d66ce2f:internal/api/launch_intent_test.go:github-pat:74
 e3894e8bdf5469faa29c4b542d3756d99b3c1186:internal/contentscan/fieldpath_corpus_cut_test.go:generic-api-key:17
 
-# Test fixtures (fake tokens and passwords): runner setup and doctor tests.
+# Fake runner tokens and doctor test credentials in test fixtures (add-computer e2e, runner setup, doctor): never real.
+c9c8e953850334b614811583a9b10ceda49d7779:ui/e2e/add-computer.spec.ts:generic-api-key:101
 94d14bf2b507a4d4bc7122e2d5362d4bed06bdd9:cmd/wardyn/runner_setup_test.go:generic-api-key:50
 af08ab4eaccf9f4262452dc525e18792430725a7:internal/doctor/doctor_test.go:generic-api-key:48
-af08ab4eaccf9f4262452dc525e18792430725a7:internal/doctor/network_test.go:generic-api-key:87
 af08ab4eaccf9f4262452dc525e18792430725a7:cmd/wardyn/doctor_test.go:generic-api-key:23
+af08ab4eaccf9f4262452dc525e18792430725a7:internal/doctor/network_test.go:generic-api-key:87
+
+# The runner doctor's wire stage: the RFC 6455 sample WebSocket key and a fake test token. Never real.
+2276693f5cfcd9899c6b00c5fcc39244168045d7:internal/doctor/network.go:generic-api-key:406
+2276693f5cfcd9899c6b00c5fcc39244168045d7:internal/doctor/wire_test.go:generic-api-key:121

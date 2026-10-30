@@ -72,7 +72,7 @@ func (s txSite) pinned() bool {
 // together and prove nothing.
 var auditWriterPins = map[string]string{
 	"internal/store/store_runner_exit.go:PG.AcceptRunnerExit": "runner exit transition, durable receipt and chained audit commit atomically at READ COMMITTED",
-	"internal/store/store.go:InsertAuditEvent":                "the control plane's audit writer: pool.BeginTx(pgx.ReadCommitted), then the chain lock, then the INSERT",
+	"internal/store/store_audit_insert.go:InsertAuditEvent":   "the control plane's audit writer: pool.BeginTx(pgx.ReadCommitted), then the chain lock, then the INSERT",
 	"internal/broker/pgx.go:PgxStore.BeginReadCommitted":      "the broker's mint transaction: broker.mint opens it through the TxBeginner interface's ONLY opener, BeginReadCommitted (R3 HANDOFF-1), whose first statement is SET TRANSACTION ISOLATION LEVEL READ COMMITTED with a fail-closed rollback; insertAuditEventTx chains the mint's audit row inside it. The interface carries no bare Begin any more, so every caller of the seam is pinned by construction",
 	"internal/db/db.go:beginReadCommitted":                    "the boot chain canary, which INSERTs a synthetic audit row and rolls it back",
 }
@@ -85,6 +85,9 @@ var declaredNonAuditTx = map[string]string{
 	"internal/store/auditchain.go:PG.VerifyAuditChain": "the verify sweep: one READ ONLY repeatable-read snapshot, so the " +
 		"chain, the anchors, the high-water mark and the manifest are one instant. Postgres refuses any write in it, " +
 		"audit_events included, so there is no head for it to chain onto stale",
+	"internal/store/auditchain_range.go:PG.VerifyRecordingAuditRange": "the recording range check: one READ ONLY " +
+		"repeatable-read snapshot, so the predecessor row, the range and the run's desktop rows are one instant. " +
+		"Postgres refuses any write in it, audit_events included, so there is no head for it to chain onto stale",
 	"internal/store/auditpartition.go:PG.ExportAuditPartition": "reads one closed partition and its manifest from one READ ONLY " +
 		"repeatable-read snapshot, so the header can never disagree with the rows. Postgres refuses any write in it",
 	"internal/store/auditretention.go:PG.AuditRetentionStatus": "reads the retention policy, the partitions and their eligibility " +

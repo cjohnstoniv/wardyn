@@ -64,6 +64,8 @@ type walledDispatch struct {
 	gitGrants  map[string]uuid.UUID
 	patGrants  map[string]string
 	injections []runner.InjectionGrant
+	// mutate adjusts the server after the harness has configured it and before dispatch.
+	mutate func(*Server)
 }
 
 // runWalledDispatch dispatches one run and returns the run.policy.resolve
@@ -76,6 +78,9 @@ func runWalledDispatch(t *testing.T, d walledDispatch) (types.RunPolicySpec, run
 	srv, st, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	srv.cfg.Store = ceilingDispatchStore{dispatchTestStore: st, site: d.site}
 	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{govCeilingSecret: []byte("v")}}
+	if d.mutate != nil {
+		d.mutate(srv)
+	}
 	run.Task = "" // no agent exec / completion watcher: this is about composition
 	st.grants = patRowsFor(run.ID, d.patGrants)
 
@@ -419,4 +424,8 @@ func TestApplySandboxSize_CutsARunThatSetNoSize(t *testing.T) {
 	if policy.Resources != nil {
 		t.Errorf("resources = %+v, want none: the default sits under the maximum", policy.Resources)
 	}
+}
+
+func (s ceilingRecordStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
 }

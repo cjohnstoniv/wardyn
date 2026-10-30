@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -81,6 +82,12 @@ func domainAllowedExact(domains []string, host string) bool {
 	return slices.ContainsFunc(domains, func(d string) bool {
 		return strings.EqualFold(strings.TrimSpace(d), h)
 	})
+}
+
+// hostDeniedBy reports whether deny names host, by the proxy's own rule (exactHostDenied
+// through AllowedExactHost): lower-cased, trailing dot trimmed, a bare entry or a wildcard.
+func hostDeniedBy(deny []string, host string) bool {
+	return !proxy.CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{host}, DeniedDomains: deny}).AllowedExactHost(host)
 }
 
 // The retired Claude subscription-mode credential mount targets. A policy
@@ -197,4 +204,7 @@ func (s *Server) isModelProviderRejectHost(ctx context.Context, h string) bool {
 type composeLLMAccess struct {
 	Provisioned bool   `json:"provisioned"`
 	Note        string `json:"note"`
+	// sandboxResident: the chosen provider's credential lands inside the sandbox
+	// (kindResidency), so the checklist row must not call it proxy-held.
+	sandboxResident bool
 }

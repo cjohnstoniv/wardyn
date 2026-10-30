@@ -11,6 +11,7 @@ export const NR_RUN = {
   TITLE_AGENT: "Choose how and where it runs",
   TITLE_ENV: "Choose where the environment runs",
   TITLE_APP: "Choose where the automation runs",
+  TITLE_APP_SERVER: "Choose where the application runs",
   /** pending W-05: the recommended text until the owner answers. */
   LEDE_ORG: "Your organisation's defaults are selected.",
   /** pending W-05: the recommended text until the owner answers. */
@@ -40,6 +41,60 @@ export const NR_RUN = {
   APP_LABEL: "What should run?",
   APP_AUTOMATION: "Automation / script",
   APP_AUTOMATION_BODY: "A command or job that runs on its own.",
+  APP_SERVER: "Application / server",
+  APP_SERVER_BODY: "A web app, API or dev server you open in your browser.",
+  START_COMMAND_LABEL: "Start command",
+  START_COMMAND_HELP:
+    "Run verbatim in the sandbox when it starts. The run keeps going until you end it or it reaches its lifetime limit.",
+  PORTS_LABEL: "Ports",
+  PORTS_HELP:
+    "Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it, unless you make it callable from outside.",
+  /** T2-a (r16): a port's own card carries the checkbox and its help. */
+  PORT_INBOUND_LABEL: "Callable from outside the run",
+  PORT_INBOUND_HELP:
+    "People and services you name can reach this port through Wardyn's gateway, even when the run has no terminal. Every call is recorded.",
+  /** T2-a (r15, spelling per the r15 notes): preflight's capability_feature refusal on runs.ui_apps, under the checkbox. */
+  PORT_INBOUND_REFUSED: "Your organisation hasn't turned on inbound access for you.",
+  /** T2-a (r17): "Who can call it" is a set of chips and an "Add a caller" menu built from what the console already knows. */
+  CALLERS_LABEL: "Who can call it",
+  CALLERS_HELP: "You can always call it. Add the people, groups and service identities that may call it too.",
+  CALLERS_NONE: "Only you can call it.",
+  CALLERS_ADD: "Add a caller",
+  CALLER_PERSON: "Person",
+  CALLER_GROUP: "Group",
+  CALLER_SERVICE: "Service identity",
+  CALLERS_MENU_DIRECTORY: "Search the directory",
+  CALLERS_MENU_GROUPS: "Your groups",
+  CALLERS_MENU_SERVICES: "Services you sponsor",
+  CALLERS_MENU_PERSON: "A person",
+  CALLERS_NO_GROUPS: "Your sign-in doesn't list any groups.",
+  CALLERS_NO_SERVICES: "You don't sponsor any service identities.",
+  CALLER_EMAIL_PLACEHOLDER: "name@example.com",
+  CALLER_EMAIL_INVALID: "Enter a full email address, like ana@example.com.",
+  CALLER_ADD_PERSON: "Add",
+  CALLER_ADDED: "Added",
+  /** Accessible name of a caller chip's remove button; the value is what the chip shows. */
+  CALLER_REMOVE_ARIA: (value: string) => `Remove ${value}`,
+  PORT_COL_NAME: "Name",
+  PORT_COL_PORT: "Port",
+  PORT_COL_PATH: "Path",
+  PORT_ADD: "Add a port",
+  PORTS_FULL: "A run can open up to 8 ports.",
+  PORT_INVALID: "Enter a port from 1 to 65535.",
+  PORT_DUPLICATE: (port: string | number) => `Two apps can't share port ${port}.`,
+  /** Lead wording 2026-10-20 (FEAT-1APP-UI): the Review blocker for a server with no port left. */
+  PORT_REQUIRED: "An application needs at least one port to open.",
+  /** Lead wording, cleared by the overseer 2026-10-20 (APP-UI-2): a port row the server would refuse, said on the row and on Review. */
+  APP_NAME_DUPLICATE: (name: string) => `Two applications are named ${name}. Give each its own name.`,
+  APP_NAME_INVALID: "Use lower-case letters, numbers and dashes, up to 32 characters, starting and ending with a letter or number.",
+  APP_PATH_INVALID: 'Start the path with a single /, with no host and no "..".',
+  /** Accessible names for a port row's controls; a row with no name yet is called by its place, APP_ROW(n). */
+  APP_ROW: (n: number) => `row ${n}`,
+  APP_NAME_ARIA: (n: number) => `Name for row ${n}`,
+  APP_PORT_ARIA: (who: string) => `Port for ${who}`,
+  APP_PATH_ARIA: (who: string) => `Path for ${who}`,
+  APP_REMOVE_ARIA: (who: string) => `Remove ${who}`,
+  APP_TERMINAL_NOTE: "The sandbox also has a terminal, as an Environment does.",
   COMMAND_LABEL: "Command",
   /** Lead wording 2026-10-17 (FR-0099): the Review blocker for a command run with no command. */
   COMMAND_REQUIRED: "A command run needs a command to run.",

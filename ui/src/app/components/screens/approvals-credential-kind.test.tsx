@@ -39,7 +39,7 @@ vi.mock("../../lib/api/runs", () => ({
 }));
 
 import { ApprovalsScreen } from "./approvals";
-import { egressBlastRadius } from "../wardyn/copy";
+import { CAPABILITY, egressBlastRadius } from "../wardyn/copy";
 
 function renderScreen() {
   return render(
@@ -79,11 +79,23 @@ describe("ApprovalsScreen — credentialKind banner per grant shape", () => {
     // The "what" line names the host; the "blast" line carries the shared
     // sshKeyLine, so match the host-qualified line to find a single element.
     await screen.findByText(/sign this run's Git SSH sign-in for github\.com/i);
+    // The title says the proxy signs, as the banner does; it never says a key is written.
+    expect(screen.getByText("Sign Git's SSH sign-in for github.com")).toBeInTheDocument();
+    expect(screen.queryByText(/Write an SSH key for/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Write a private SSH key to disk/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/written to disk/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/attached to the request by the proxy/i)).not.toBeInTheDocument();
     // ssh_key is a non-downscopable key like a PAT, signed with at the proxy —
     // it still earns the "grants git write" capability chip.
     expect(screen.getByText(/grants git write/i)).toBeInTheDocument();
+  });
+
+  it("titles an ssh_key approval with no host as signing, never writing a key to disk", async () => {
+    pending = [{ ...base, requested_scope: { key_secret_ref: "ssh-key-github.com" } }];
+    renderScreen();
+    expect(await screen.findByText("Sign Git's SSH sign-in")).toBeInTheDocument();
+    expect(screen.queryByText(/Write a private SSH key to disk/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Write an SSH key for/i)).not.toBeInTheDocument();
   });
 
   it("renders the git_pat banner for an actual PAT scope", async () => {
@@ -163,5 +175,34 @@ describe("egressBlastRadius — per-scope blast-radius copy", () => {
     renderScreen();
     await screen.findByText(/evil\.example\.com until it ends/i);
     expect(screen.queryByText(/for its remaining lifetime/i)).not.toBeInTheDocument();
+  });
+
+  // #3031: the broker sentence is said once on a card. The github_token card's first line already says the
+  // credential is short-lived and the key stays put, so its blast line starts at what the token can do.
+  it("github_token: the blast line does not repeat the broker sentence the first line carries", async () => {
+    pending = [
+      { ...base, requested_scope: { repos: ["acme/widgets"], permissions: { contents: "write" } } },
+    ];
+    renderScreen();
+    await screen.findByText(/short-lived GitHub token/i);
+    expect(screen.getByText(/^It can push to the listed repos until it expires/)).toBeInTheDocument();
+    expect(screen.queryByText(CAPABILITY.brokerLine, { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("github_token: a read grant's blast line starts at its limit, without the broker sentence", async () => {
+    pending = [
+      { ...base, requested_scope: { repos: ["acme/widgets"], permissions: { contents: "read" } } },
+    ];
+    renderScreen();
+    await screen.findByText(/short-lived GitHub token/i);
+    expect(screen.getByText(/^It's limited to the listed read permissions until it expires/)).toBeInTheDocument();
+    expect(screen.queryByText(CAPABILITY.brokerLine, { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("generic credential: keeps the broker sentence as the one place the card says it", async () => {
+    pending = [{ ...base, requested_scope: {} }];
+    renderScreen();
+    await screen.findByText(/Wardyn mints a credential bound to this run's identity/i);
+    expect(screen.getAllByText(CAPABILITY.brokerLine, { exact: false })).toHaveLength(1);
   });
 });

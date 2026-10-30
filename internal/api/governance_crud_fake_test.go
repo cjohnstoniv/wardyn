@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"slices"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -46,6 +46,10 @@ func (s *govCrudStore) DryRunGovernance(context.Context, func(store.Querier) err
 
 func (s *govCrudStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	return s.profiles, s.listProfilesErr
+}
+
+func (s *govCrudStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
 }
 
 func (s *govCrudStore) ListGovernanceMemberships(context.Context) ([]types.GovernanceMembership, error) {
@@ -183,8 +187,9 @@ func TestGovernanceCRUD_ProfileWriteCreatesUpdatesAndAudits(t *testing.T) {
 		t.Error("the store was not told who wrote the profile")
 	}
 
-	// PUT names its id in the path: the row stored is that id, answered 200.
-	id := uuid.New()
+	// PUT names an existing profile's id in the path: the row stored is that id, answered 200.
+	st.profiles = append(st.profiles, created.Unit.GovernanceUnit)
+	id := created.Unit.ID
 	w = do(t, srv, http.MethodPut, "/api/v1/governance/units/"+id.String(), adminToken, `{"name":"interns-2","ceiling":{"min_confinement_class":"CC2"}}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("PUT = %d %s, want 200", w.Code, w.Body.String())
@@ -406,7 +411,7 @@ func TestComposedUIAppsDenial_ReadSurfacesShowTheDenial(t *testing.T) {
 			continue
 		}
 		seen = true
-		if !p.Effective.Limits.DenyUIApps || !slices.Equal(p.Effective.Ceiling.UIApps, docs) {
+		if !p.Effective.Limits.DenyUIApps || !reflect.DeepEqual(p.Effective.Ceiling.UIApps, docs) {
 			t.Errorf("effective view = ui_apps %+v, deny_ui_apps %v; want the base's list with the denial", p.Effective.Ceiling.UIApps, p.Effective.Limits.DenyUIApps)
 		}
 	}
@@ -458,4 +463,8 @@ func TestGovernanceCRUD_ProfileDeleteAuditNamesTheRowTheDeleteRemoved(t *testing
 	if !strings.Contains(data, `"name":"interns"`) {
 		t.Fatalf("delete audit data = %q, want the name the delete returned", data)
 	}
+}
+
+func (s *composedUIAppsStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
+	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
 }

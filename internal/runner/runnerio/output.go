@@ -19,7 +19,7 @@ import (
 func (s *Server) sendOutput(peer *runnerwire.Peer, id uuid.UUID, b *outputBuffer) {
 	ctx := s.life(peer)
 	b.mu.Lock()
-	offset := b.state.Ack
+	offset, acks := b.state.Ack, b.acks
 	b.mu.Unlock()
 	go func() {
 		delay := 50 * time.Millisecond
@@ -36,7 +36,11 @@ func (s *Server) sendOutput(peer *runnerwire.Peer, id uuid.UUID, b *outputBuffer
 			if reset.Code == runnerwire.ResetRefused {
 				// The org holds no sink for this run (it restarted): nothing will
 				// ACK until it recovers the run, so the agent must not wait for it.
-				b.unacknowledged()
+				if s.markRefused != nil {
+					s.markRefused(b, acks)
+				} else {
+					b.unacknowledgedSince(acks)
+				}
 			}
 			if reset.Code != runnerwire.ResetCapacity {
 				return

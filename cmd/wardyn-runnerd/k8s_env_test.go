@@ -27,11 +27,15 @@ func TestReadK8sEnv(t *testing.T) {
 		"WARDYN_RUNNERD_HARD_DENY_CIDRS=10.96.0.0/12, 10.244.0.0/16",
 		"WARDYN_CONFINEMENT_MAP=CC2=runsc;CC3=kata-qemu",
 		"WARDYN_RUNNERD_ARCH=arm64",
+		"WARDYN_RUNNER_LINUX_VM=1",
 	))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.podIP.String() != "10.244.0.12" || e.relayPort != 8443 || e.sink != 9443 || e.clusterDomain != "cluster.local" ||
+	if off, err := readK8sEnv(k8sEnvFixture()); err != nil || off.linuxVM {
+		t.Fatalf("Linux VMs without the switch: on=%v err=%v, want off", off.linuxVM, err)
+	}
+	if e.podIP.String() != "10.244.0.12" || e.relayPort != 8443 || e.sink != 9443 || e.clusterDomain != "cluster.local" || !e.linuxVM ||
 		len(e.apiserverPeers) != 1 || len(e.hardDenyCIDRs) != 2 || e.podSelector["app.kubernetes.io/name"] != "wardyn-runnerd" || e.confinement["CC3"] != "kata-qemu" {
 		t.Fatalf("env %+v", e)
 	}
@@ -47,6 +51,10 @@ func TestReadK8sEnv(t *testing.T) {
 		{"empty arch", "WARDYN_RUNNERD_ARCH=", "WARDYN_RUNNERD_ARCH"},
 		{"unenforced netpol override", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL is set"},
 		{"unenforced netpol override off", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=false", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL is set"},
+		{"Linux VM switch not 1", "WARDYN_RUNNER_LINUX_VM=true", "WARDYN_RUNNER_LINUX_VM"},
+		{"empty workload namespace", "WARDYN_RUNNERD_WORKLOAD_NAMESPACES=team-a,", "WARDYN_RUNNERD_WORKLOAD_NAMESPACES"},
+		{"workload namespace not a name", "WARDYN_RUNNERD_WORKLOAD_NAMESPACES=Team_A", "WARDYN_RUNNERD_WORKLOAD_NAMESPACES"},
+		{"workload namespace twice", "WARDYN_RUNNERD_WORKLOAD_NAMESPACES=team-a,team-a", "named twice"},
 		{"ambient deny override", "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=true", "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY is set"},
 	} {
 		t.Run(bad.name, func(t *testing.T) {
@@ -57,6 +65,17 @@ func TestReadK8sEnv(t *testing.T) {
 	}
 	if _, err := readK8sEnv([]string{"PATH=/usr/bin"}); err == nil {
 		t.Fatal("missing settings accepted")
+	}
+}
+
+func TestReadK8sEnvWorkloadNamespaces(t *testing.T) {
+	off, err := readK8sEnv(k8sEnvFixture())
+	if err != nil || len(off.workloadNamespaces) != 0 {
+		t.Fatalf("no setting: %v, %v, want the workload path off", off.workloadNamespaces, err)
+	}
+	on, err := readK8sEnv(k8sEnvFixture("WARDYN_RUNNERD_WORKLOAD_NAMESPACES=team-a, team-b"))
+	if err != nil || strings.Join(on.workloadNamespaces, ",") != "team-a,team-b" {
+		t.Fatalf("two namespaces: %v, %v", on.workloadNamespaces, err)
 	}
 }
 
@@ -96,6 +115,26 @@ func TestSubstrateFlagChecks(t *testing.T) {
 	}
 }
 
+// TestRunsNamespacesCheck: every --runs-namespace is dedicated and named once (design T5 §2.7).
+func TestRunsNamespacesCheck(t *testing.T) {
+	if err := checkRunsNamespaces([]string{"team-a", "team-b"}, "wardyn-runner"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		runs []string
+		own  string
+	}{
+		{[]string{"team-a", "wardyn-runner"}, "wardyn-runner"},
+		{[]string{"team-a", "team-a"}, "wardyn-runner"},
+		{[]string{"team-a", ""}, "wardyn-runner"},
+		{[]string{"team-a"}, ""},
+	} {
+		if err := checkRunsNamespaces(tc.runs, tc.own); err == nil {
+			t.Errorf("--runs-namespace %q with runnerd in %q accepted", tc.runs, tc.own)
+		}
+	}
+}
+
 func TestOrgHTTPClientTrustsBundle(t *testing.T) {
 	if c, err := orgHTTPClient(""); c != nil || err != nil {
 		t.Fatalf("no bundle: %v %v", c, err)
@@ -113,5 +152,19 @@ func TestServeArchEnvRefusedOnDocker(t *testing.T) {
 	cmd.SetArgs([]string{"--org", "https://wardyn.example.com", "--state-dir", t.TempDir()})
 	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), archEnv+" in the environment) applies only to --substrate=k8s") {
 		t.Fatalf("docker serve with %s = %v, want the k8s-only refusal", archEnv, err)
+	}
+}
+
+// TestDriveRootOnlyOnDocker: --drive-root binds drives through the docker driver,
+// so another substrate refuses it rather than ignoring it.
+func TestDriveRootOnlyOnDocker(t *testing.T) {
+	changed := func(name string) bool { return name == "drive-root" }
+	if err := checkSubstrateFlags("docker", changed); err != nil {
+		t.Fatalf("docker refused --drive-root: %v", err)
+	}
+	for _, sub := range []string{"k8s", "folders"} {
+		if err := checkSubstrateFlags(sub, changed); err == nil {
+			t.Errorf("--substrate %s took --drive-root", sub)
+		}
 	}
 }

@@ -75,7 +75,7 @@ func TestDispatch_NoProviderDetailNamesTheHarness(t *testing.T) {
 	st.run.ModelProviderID = ""
 	rows := harnessRows{{Harness: "claude-code", Starts: true}, {Harness: laneSecondHarness, ModelProviderID: b.ID}}
 	plan, _, _, ok := dispatchLanes(t, h, st, rows, &types.RunPolicySpec{}, nil)
-	if want := "no model provider serves Claude Code on this deployment, though this run's other harnesses have their own"; !ok || !strings.HasPrefix(plan.llmUnavailableDetail, want) {
+	if want := "No model provider serves Claude Code on this deployment, though this run's other harnesses have their own"; !ok || !strings.HasPrefix(plan.llmUnavailableDetail, want) {
 		t.Fatalf("ok=%v detail = %q, want it to start %q", ok, plan.llmUnavailableDetail, want)
 	}
 }

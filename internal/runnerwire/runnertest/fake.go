@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -36,6 +39,14 @@ type Fake struct {
 	Orphans    []uuid.UUID // runs the sweep may remove
 	execed     map[string]bool
 	StoppedRef map[string]bool
+	// PauseGens is the generation of each pause_agent and resume_agent, and FencedPause their answer.
+	PauseGens   []int64
+	FencedPause bool
+	// EndErr, when set, is what EndSandbox answers, as an end that failed on the runner.
+	EndErr error
+	disks  map[string]runner.MacOSVMDisk // SetMacOSVMDisk's reports, by local ref
+	// workloads is every workload_status the runner was sent, in order.
+	workloads []runnerwire.WorkloadStatusArgs
 }
 
 // NewFake offers CC1 and CC2.
@@ -43,6 +54,7 @@ func NewFake() *Fake {
 	return &Fake{
 		Support:   substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1, types.CC2}, StructuralEgress: true},
 		sandboxes: map[string]uuid.UUID{}, execed: map[string]bool{}, StoppedRef: map[string]bool{},
+		disks: map[string]runner.MacOSVMDisk{},
 	}
 }
 
@@ -55,7 +67,45 @@ var (
 	_ runner.DriveProber           = (*Fake)(nil)
 	_ runner.DriveLifecycleChecker = (*Fake)(nil)
 	_ runner.OutputRecoverer       = (*Fake)(nil)
+	_ runner.MacOSVMDiskReporter   = (*Fake)(nil)
 )
+
+// SetMacOSVMDisk stores ref's macOS VM disk report, as a driver's teardown or sweep would.
+func (f *Fake) SetMacOSVMDisk(ref string, d runner.MacOSVMDisk) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.disks[ref] = d
+}
+
+// MacOSVMDisk is runner.MacOSVMDiskReporter's: ref's report, left in place.
+func (f *Fake) MacOSVMDisk(ref string) (runner.MacOSVMDisk, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, ok := f.disks[ref]
+	return d, ok
+}
+
+// MacOSVMDisks is runner.MacOSVMDiskReporter's: every report set, nil when there is none.
+func (f *Fake) MacOSVMDisks() []runner.MacOSVMDisk {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Collect(maps.Values(f.disks))
+}
+
+// WorkloadStatus records a workload_status, as a k8s runner patches it into the resource's status.
+func (f *Fake) WorkloadStatus(_ context.Context, a runnerwire.WorkloadStatusArgs) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.workloads = append(f.workloads, a)
+	return nil
+}
+
+// WorkloadStatuses is every workload_status the runner was sent, in order.
+func (f *Fake) WorkloadStatuses() []runnerwire.WorkloadStatusArgs {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.workloads)
+}
 
 func (f *Fake) note(verb, ref string) {
 	f.mu.Lock()
@@ -162,11 +212,28 @@ func (f *Fake) EndSandbox(_ context.Context, ref string) error {
 	f.note("end", ref)
 	f.mu.Lock()
 	f.StoppedRef[ref] = true
+	err := f.EndErr
 	f.mu.Unlock()
-	return nil
+	return err
 }
 
 func (f *Fake) StopProxy(_ context.Context, ref string) error { f.note("stop_proxy", ref); return nil }
+
+func (f *Fake) PauseAgent(_ context.Context, ref string, gen int64) (bool, error) {
+	f.note("pause_agent", ref)
+	return f.notePause(gen), nil
+}
+func (f *Fake) ResumeAgent(_ context.Context, ref string, gen int64) (bool, error) {
+	f.note("resume_agent", ref)
+	return f.notePause(gen), nil
+}
+
+func (f *Fake) notePause(gen int64) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.PauseGens = append(f.PauseGens, gen)
+	return f.FencedPause
+}
 
 func (f *Fake) StartSandbox(_ context.Context, ref string) error {
 	f.note("start", ref)

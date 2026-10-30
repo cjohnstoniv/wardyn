@@ -168,6 +168,31 @@ func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 	return queryAPITokens(ctx, s, q)
 }
 
+// APITokensMintedForOthersLister is the SQL form of the minted-for-others inventory: only the tokens an
+// admin minted for someone else, the filter GET /tokens?minted_for_others=true applies, so the
+// deployment's finished tokens are not read to be thrown away. A capability interface like
+// APITokensByPrincipalPager.
+type APITokensMintedForOthersLister interface {
+	ListAPITokensMintedForOthers(ctx context.Context, withFinished bool, now time.Time) ([]types.APIToken, error)
+}
+
+var _ APITokensMintedForOthersLister = PG{}
+
+// ListAPITokensMintedForOthers returns, newest first, the tokens whose minter is set and is not their
+// owner. A finished token (revoked, or expired at now) is left out unless withFinished.
+func (s PG) ListAPITokensMintedForOthers(ctx context.Context, withFinished bool, now time.Time) ([]types.APIToken, error) {
+	q := `
+		SELECT ` + apiTokenCols + `
+		FROM api_tokens WHERE COALESCE(minted_by, '') <> '' AND minted_by <> principal`
+	var args []any
+	if !withFinished {
+		q += ` AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > $1)`
+		args = append(args, now)
+	}
+	q += ` ORDER BY created_at DESC`
+	return queryAPITokens(ctx, s, q, args...)
+}
+
 // RefreshAPITokenIdentity re-stamps role, user type, and the group snapshot
 // (with its completeness bit) on EVERY token principal holds — the api-token
 // twin of RefreshSSHKeyRoles; OnLogin fires both so one login bounds both
@@ -206,23 +231,30 @@ func (s PG) RefreshAPITokenIdentity(ctx context.Context, principal, role, userTy
 	if err != nil {
 		return err
 	}
-	_, err = s.Pool.Exec(ctx,
-		`UPDATE api_tokens SET role = $1, user_type = $2, groups = $3, groups_truncated = $4,
-		   identity_stamped_at = now(),
-		   revoked_at = CASE WHEN minted_by IS NOT NULL AND role <> $1 THEN now() END
-		 WHERE principal = $5 AND revoked_at IS NULL`,
-		role, userType, g, truncated, principal)
+	// One transaction, the session rows first: a CLI rotation holds its session row from its identity
+	// read to its token insert, so the api_tokens UPDATE below either waits for that insert and
+	// re-stamps the new token, or runs first and the rotation reads the new identity.
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return fmt.Errorf("store: refresh api token identity: %w", err)
+		return fmt.Errorf("store: begin refresh identity: %w", err)
 	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	// A live CLI session is re-stamped the same way: the access tokens a refresh mints carry its stamp,
 	// and WARDYN_ROLE_STAMP_TTL reads its identity_stamped_at at every refresh.
-	if _, err = s.Pool.Exec(ctx,
+	if _, err = tx.Exec(ctx,
 		`UPDATE cli_sessions SET role = $1, user_type = $2, groups = $3, groups_truncated = $4, identity_stamped_at = now()
 		 WHERE principal = $5 AND ended_at IS NULL`, role, userType, g, truncated, principal); err != nil {
 		return fmt.Errorf("store: refresh cli session identity: %w", err)
 	}
-	return nil
+	if _, err = tx.Exec(ctx,
+		`UPDATE api_tokens SET role = $1, user_type = $2, groups = $3, groups_truncated = $4,
+		   identity_stamped_at = now(),
+		   revoked_at = CASE WHEN minted_by IS NOT NULL AND role <> $1 THEN now() END
+		 WHERE principal = $5 AND revoked_at IS NULL`,
+		role, userType, g, truncated, principal); err != nil {
+		return fmt.Errorf("store: refresh api token identity: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 // RevokeAPIToken marks id revoked. principal scopes the UPDATE when non-empty
@@ -287,6 +319,7 @@ func scanAPIToken(row pgx.Row) (types.APIToken, error) {
 	if err != nil {
 		return types.APIToken{}, fmt.Errorf("store: scan api token: %w", err)
 	}
+	t.Inbound = t.Kind == types.APITokenKindInbound
 	if groups != nil {
 		if err := json.Unmarshal(groups, &t.Groups); err != nil {
 			return types.APIToken{}, fmt.Errorf("store: scan api token groups: %w", err)

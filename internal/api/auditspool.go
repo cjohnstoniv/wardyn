@@ -4,12 +4,14 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -19,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 )
@@ -351,7 +354,8 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 			drop[i] = true
 			continue
 		}
-		if err := rec.Record(passCtx, ev); err != nil {
+		// A line whose event already landed (a write that committed after its caller gave up) adds no row.
+		if err := rec.Record(store.WithAuditReplay(passCtx), ev); err != nil {
 			replayErr = err
 			// A timeout is NOT a rejection: the store never answered, so this
 			// line has proved nothing about itself and must not earn a strike
@@ -585,34 +589,14 @@ func (a *AuditSpool) reclaimAll(size int64) error {
 //
 // Caller must hold a.mu.
 func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
-	var out []byte
-	if len(head) > 0 {
-		out = append(bytes.Join(head, []byte{'\n'}), '\n')
-	}
-	if tailStart < size {
-		tail := make([]byte, size-tailStart)
-		rf, err := os.Open(a.path)
-		if err != nil {
-			return err
-		}
-		_, err = rf.ReadAt(tail, tailStart)
-		rf.Close()
-		if err != nil {
-			return err
-		}
-		out = append(out, tail...)
-	}
 	tmp := a.path + ".tmp"
 	tf, err := os.OpenFile(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
-	if _, err := tf.Write(out); err != nil {
+	if err := a.stageRewrite(tf, head, tailStart, size); err != nil {
 		tf.Close()
-		return err
-	}
-	if err := tf.Sync(); err != nil {
-		tf.Close()
+		_ = os.Remove(tmp)
 		return err
 	}
 	// The cursor is retired BEFORE the rename: a crash between them would
@@ -633,6 +617,42 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 	return nil
 }
 
+// spoolCopyChunk is the buffer a rewrite and the volume probe move the spool through, so their
+// memory does not grow with the backlog.
+const spoolCopyChunk = 64 << 10
+
+// stageRewrite writes head, then the spool's bytes from tailStart to size, to tf and syncs it.
+// The tail goes through the writer's ReadFrom, so memory does not grow with the backlog. Caller must hold a.mu.
+func (a *AuditSpool) stageRewrite(tf *os.File, head [][]byte, tailStart, size int64) error {
+	w := bufio.NewWriterSize(tf, spoolCopyChunk)
+	for _, line := range head {
+		if _, err := w.Write(line); err != nil {
+			return err
+		}
+		if err := w.WriteByte('\n'); err != nil {
+			return err
+		}
+	}
+	if tailStart < size {
+		rf, err := os.Open(a.path)
+		if err != nil {
+			return err
+		}
+		defer rf.Close()
+		n, err := io.Copy(w, io.NewSectionReader(rf, tailStart, size-tailStart))
+		if err != nil {
+			return err
+		}
+		if n != size-tailStart {
+			return io.ErrUnexpectedEOF
+		}
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	return tf.Sync()
+}
+
 // volumeWritable reports whether the spool's directory takes a synced write at the path compact
 // stages its rewrite at, without touching the spool itself. Caller must hold a.mu.
 // The probe is as large as the spool, the most a rewrite writes: a one-byte probe passes on a
@@ -647,7 +667,11 @@ func (a *AuditSpool) volumeWritable() bool {
 	if err != nil {
 		return false
 	}
-	_, werr := tf.Write(make([]byte, max(fi.Size(), 1)))
+	var werr error
+	chunk := make([]byte, spoolCopyChunk)
+	for left := max(fi.Size(), 1); left > 0 && werr == nil; left -= int64(len(chunk)) {
+		_, werr = tf.Write(chunk[:min(left, int64(len(chunk)))])
+	}
 	serr := tf.Sync()
 	cerr := tf.Close()
 	rerr := os.Remove(tmp)
@@ -825,6 +849,9 @@ const (
 // Audit failures must never block the primary operation (the Recorder owns
 // durability/retry); we swallow the error after the event is constructed.
 func (s *Server) recordAudit(ctx context.Context, ev types.AuditEvent) {
+	if d, ok := policyDeciderFrom(ctx); ok && d.report {
+		return // the draft approval-rule dry run reports and writes nothing (approval_rules.go)
+	}
 	_ = s.recordAuditDurably(ctx, ev)
 }
 

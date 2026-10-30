@@ -66,6 +66,9 @@ var (
 	_ client.HomeTemplate
 	_ client.DriveReclaim
 	_ client.CapabilitySubjectType
+	_ client.Restriction
+	_ client.PersonalWalls
+	_ client.PersonalWallsSpec
 	_ client.PresetsDocument
 	_ client.Preset
 	_ client.PresetRequest
@@ -103,6 +106,7 @@ var (
 	_ client.CreateServiceIdentityRequest
 	_ client.UpdateServiceIdentityRequest
 	_ client.MintServiceTokenRequest
+	_ client.CreateAPITokenRequest
 	_ client.MoveTokenRequest
 )
 
@@ -112,19 +116,21 @@ var (
 // parity in both directions.
 func routeFamilies() map[string][]string {
 	return map[string][]string{
-		"runs":            {"CreateRun", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "RunSignIn", "GetRunPolicy", "GetRunSyncRules", "RunContainment", "RecordRunNode"},
-		"runs.list":       {"ListRuns", "ListRunsPage"},
-		"approvals":       {"ListApprovals", "ListApprovalsPage", "Approve", "Deny"},
-		"policies":        {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
-		"workspaces":      {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask", "GetWorkspaceBuild", "BuildWorkspace"},
-		"sources":         {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
-		"audit":           {"AuditEvents", "AuditEventsPage", "RecentAuditEvents", "ExportAuditPartition", "AuditRetention", "DropAuditPartition"},
-		"secrets":         {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret", "ListMySecrets", "ListMySecretsPage", "SetMySecret", "DeleteMySecret", "ListSharedSecrets", "ListSharedSecretsPage", "SetSharedSecret", "DeleteSharedSecret"},
-		"site-config":     {"GetSiteConfig", "PutSiteConfig", "PutSiteConfigResult", "PutSiteConfigClearing"},
-		"drives":          {"GetDrives", "ApplyDrives", "ApplyDrivesResult", "ListMemberDrives", "DeleteMemberDrive", "CreateMyDrive", "DeleteMyDrive"},
-		"templates":       {"ListTemplates", "GetTemplate", "SaveTemplate", "DeleteTemplate", "CopyTemplate", "ImportTemplate", "ListTemplateGroupAdmins", "GrantTemplateGroupAdmin", "RevokeTemplateGroupAdmin"},
-		"presets":         {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
-		"governance":      {"GetGovernance", "ApplyGovernance", "ApplyGovernanceResult", "PlanGovernance"},
+		"runs":        {"CreateRun", "Preflight", "GetRun", "ListGrants", "ListGrantsPage", "KillRun", "SynthesizeProfile", "GetRecording", "RunFiles", "RunEvents", "RunOutput", "RunSignIn", "GetRunPolicy", "GetRunSyncRules", "RunContainment", "RecordRunNode"},
+		"runs.list":   {"ListRuns", "ListRunsPage"},
+		"approvals":   {"ListApprovals", "ListApprovalsPage", "Approve", "Deny"},
+		"policies":    {"CreatePolicy", "GetPolicy", "GetDefaultPolicy", "ListPolicies", "ListPoliciesPage", "UpdatePolicy", "DeletePolicy"},
+		"workspaces":  {"CreateWorkspace", "GetWorkspace", "ListWorkspaces", "ListWorkspacesPage", "UpdateWorkspace", "DeleteWorkspace", "ScanWorkspace", "RecordWorkspaceTask", "GetWorkspaceBuild", "BuildWorkspace", "SetWorkspaceOwningUnit"},
+		"sources":     {"ListSources", "CreateSource", "GetSource", "ScanSource", "DeleteSource"},
+		"audit":       {"AuditEvents", "AuditEventsPage", "RecentAuditEvents", "ExportAuditPartition", "AuditRetention", "DropAuditPartition"},
+		"secrets":     {"ListSecrets", "ListSecretsPage", "ListSecretsScoped", "ListSecretsScopedPage", "SetSecret", "DeleteSecret", "ListMySecrets", "ListMySecretsPage", "SetMySecret", "DeleteMySecret", "ListSharedSecrets", "ListSharedSecretsPage", "SetSharedSecret", "DeleteSharedSecret"},
+		"site-config": {"GetSiteConfig", "PutSiteConfig", "PutSiteConfigResult", "PutSiteConfigClearing"},
+		"drives":      {"GetDrives", "ApplyDrives", "ApplyDrivesResult", "ListMemberDrives", "DeleteMemberDrive", "CreateMyDrive", "DeleteMyDrive"},
+		"templates":   {"ListTemplates", "GetTemplate", "SaveTemplate", "DeleteTemplate", "CopyTemplate", "ImportTemplate", "ListTemplateGroupAdmins", "GrantTemplateGroupAdmin", "RevokeTemplateGroupAdmin"},
+		"walls":       {"GetMyWalls", "PutMyWalls", "ClearMyWalls"},
+		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
+		"governance": {"GetGovernance", "ApplyGovernance", "ApplyGovernanceResult", "PlanGovernance",
+			"MoveGovernanceMembership", "PromoteGovernanceMembership", "GrantUnitAdmin", "RevokeUnitAdmin", "CheckGovernance", "GovernanceDryRun"},
 		"gov.changes":     {"ListGovernanceChanges", "GetGovernanceChange", "ApproveGovernanceChange", "RejectGovernanceChange"},
 		"setup":           {"SetupStatus"},
 		"identity":        {"Me"},
@@ -133,7 +139,8 @@ func routeFamilies() map[string][]string {
 		"ssh-keys":        {"ListSSHKeys", "ListSSHKeysPage", "AddSSHKey", "DeleteSSHKey"},
 		"people":          {"ListPeople", "ErasePerson"},
 		"invitations":     {"CreateInvitation", "ListInvitations", "ListPersonInvitations", "ListPersonInvitationsPage", "ListMyInvitations", "RevokeInvitation", "ClaimInvitation"},
-		"service-ids":     {"CreateServiceIdentity", "ListServiceIdentities", "ListServiceIdentitiesPage", "GetServiceIdentity", "UpdateServiceIdentity", "RetireServiceIdentity", "ListMyServiceIdentities", "MintServiceToken", "ListServiceTokens", "ListServiceTokensPage", "RevokeServiceToken", "MoveToken"},
+		"service-ids":     {"CreateServiceIdentity", "ListServiceIdentities", "ListServiceIdentitiesPage", "GetServiceIdentity", "UpdateServiceIdentity", "RetireServiceIdentity", "ListMyServiceIdentities", "MintServiceToken", "ListServiceTokens", "ListServiceTokensPage", "RevokeServiceToken", "MoveToken", "CreateAPIToken", "RevokeAPIToken"},
+		"workloads":       {"ApplyWorkload", "ListWorkloads", "ListWorkloadsPage", "GetWorkload", "WorkloadHistory", "DeleteWorkload", "RestartWorkload", "CreateWorkloadBinding", "ListWorkloadBindings", "ListWorkloadBindingsPage", "DeleteWorkloadBinding"},
 		"components":      {"MyComponents", "SaveMyComponent", "UpdateMyComponent", "DeleteMyComponent", "ListComponents", "PutComponent", "DeleteComponent"},
 		"runners":         {"MintRunnerToken", "RegisterRunner", "ClaimRunner", "ListRunners", "ListRunnersPage", "GetRunner", "ListMyRunners", "ListMyRunnersPage", "GetMyRunner", "SetMyRunnerLimits", "ListRunnerTokens", "ListRunnerTokensPage", "RevokeMyRunner", "RevokeRunnerToken", "GetRunnerSettings", "SetRunnersEnabled", "MintOrgRunnerToken", "ClaimOrgRunner", "SetRunnerTrust"},
 		"runner-pools":    {"ListRunnerPools", "ListRunnerPoolsPage", "ListRunnerPoolsFor", "ListMyRunnerPools", "GetRunnerPool", "CreateRunnerPool", "UpdateRunnerPool", "DeleteRunnerPool", "CreateMyRunnerPool", "UpdateMyRunnerPool", "DeleteMyRunnerPool", "OwnRunnerPool", "AddMyRunnerToPool", "RemoveMyRunnerFromPool", "AddRunnerPoolRunner", "RemoveRunnerPoolRunner", "GetOrgRunnerPoolDefaults", "SetOrgRunnerPoolDefaults", "GetMyRunnerPoolDefaults", "SetMyRunnerPoolDefaults", "ClearMyRunnerPoolDefaults", "AddRunnerPoolRemoteRunner", "RemoveRunnerPoolRemoteRunner", "AddMyPoolRemoteRunner", "RemoveMyPoolRemoteRunner", "ListRunnerPoolMembers", "GetRunnerPoolUsePolicy", "SetRunnerPoolUsePolicy", "ClearRunnerPoolUsePolicy"},

@@ -22,11 +22,11 @@
 import * as React from "react";
 import { Info, Loader2, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
-import { HttpError, LIST_LIMIT, PendingChangeError } from "../../lib/api/core";
+import { HttpError, PendingChangeError } from "../../lib/api/core";
 import { permissions as api } from "../../lib/api/permissions";
-import { runs as runsApi } from "../../lib/api/runs";
+import { people as peopleApi } from "../../lib/api/people";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../lib/format";
-import { CAPABILITY_KINDS, KIND, PERM, PERM_EXTRA, type CapabilityKind } from "../../lib/permissions-copy";
+import { CAPABILITY_KINDS, INBOUND_ACCESS, KIND, PERM, PERM_EXTRA, type CapabilityKind } from "../../lib/permissions-copy";
 import type {
   CapabilityEffect,
   CapabilityGrant,
@@ -34,6 +34,7 @@ import type {
   PermissionsSnapshot,
 } from "../../lib/types";
 import { Button } from "../ui/button";
+import { INLINE_ACTIONS } from "../wardyn/form-actions";
 import { Input } from "../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
@@ -56,6 +57,7 @@ import { PageContainer } from "../wardyn/page-container";
 import { PreviewAsNewUser } from "../wardyn/user-preview";
 import { DefineOwnComponentsRow } from "./components/define-own-row";
 import { SelfHostRunnerRow } from "./self-host-runner-row";
+import { INBOUND_VALUE, InboundAccessRow, serviceName } from "./inbound-access-row";
 import { Chip } from "../wardyn/primitives";
 import { Segmented } from "../wardyn/segmented";
 import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
@@ -134,7 +136,9 @@ export const SUBJECT_LABEL: Record<CapabilitySubjectType, string> = {
 // A stored grant may name a kind this build doesn't know (the schema puts no
 // CHECK on `capability` on purpose — see migration 0042). Render it verbatim
 // rather than blank: an unknown row is inert, not invisible.
-function kindLabel(capability: string): string {
+function kindLabel(capability: string, value = ""): string {
+  // The feature kind is titled for its first values (SSH keys and API tokens); an inbound grant is the Inbound access row's.
+  if (capability === "feature" && value === INBOUND_VALUE) return INBOUND_ACCESS.LABEL;
   return KIND[capability as CapabilityKind]?.label ?? capability;
 }
 
@@ -217,6 +221,7 @@ export function PermissionsScreen() {
   const [status, setStatus] = React.useState<ScreenStatus>("loading");
   const [confirm, setConfirm] = React.useState<{ kind: CapabilityKind; next: boolean } | null>(null);
   const [presetKind, setPresetKind] = React.useState<CapabilityKind | undefined>(undefined);
+  const [presetValue, setPresetValue] = React.useState<{ value: string } | undefined>(undefined);
   const [toRemove, setToRemove] = React.useState<CapabilityGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
   // A write the server held for a second person (202): nothing has changed yet.
@@ -328,6 +333,7 @@ export function PermissionsScreen() {
                   onToggle={(next) => setConfirm({ kind, next })}
                   onAddGrant={() => {
                     setPresetKind(kind);
+                    setPresetValue(undefined);
                     document.getElementById("permissions-add-grant")?.scrollIntoView({ block: "center" });
                   }}
                 />
@@ -357,6 +363,18 @@ export function PermissionsScreen() {
                 onSubmitted={() => {
                   setSubmitted(true);
                   load();
+                }}
+              />
+              {/* The `inbound` feature value: restricted, so it lists its allows and opens the add-grant form with it filled in. */}
+              <InboundAccessRow
+                grants={snap.grants}
+                disabled={!securityOperator}
+                typeName={typeName}
+                labels={SUBJECT_LABEL}
+                onAddGrant={() => {
+                  setPresetKind("feature");
+                  setPresetValue({ value: INBOUND_VALUE });
+                  document.getElementById("permissions-add-grant")?.scrollIntoView({ block: "center" });
                 }}
               />
             </>
@@ -405,11 +423,11 @@ export function PermissionsScreen() {
                   <TableRow key={g.id} className={cn(g.effect === "deny" && "bg-danger-subtle")}>
                     <TableCell>
                       <span className="flex flex-wrap items-center gap-2">
-                        <Chip tone="neutral">{SUBJECT_LABEL[g.subject_type] ?? g.subject_type}</Chip>
-                        <SubjectName g={g} typeName={typeName} />
+                        <Chip tone="neutral">{serviceName(g) !== null ? INBOUND_ACCESS.SUBJECT_SERVICE : SUBJECT_LABEL[g.subject_type] ?? g.subject_type}</Chip>
+                        {serviceName(g) !== null ? <Mono>{serviceName(g)}</Mono> : <SubjectName g={g} typeName={typeName} />}
                       </span>
                     </TableCell>
-                    <TableCell>{kindLabel(g.capability)}</TableCell>
+                    <TableCell>{kindLabel(g.capability, g.value)}</TableCell>
                     <TableCell>
                       <Mono>{g.value}</Mono>
                     </TableCell>
@@ -442,7 +460,7 @@ export function PermissionsScreen() {
                         size="sm"
                         disabled={!securityOperator}
                         onClick={() => setToRemove(g)}
-                        aria-label={`${PERM.REMOVE} ${kindLabel(g.capability)} ${g.value}`}
+                        aria-label={`${PERM.REMOVE} ${kindLabel(g.capability, g.value)} ${g.value}`}
                       >
                         {PERM.REMOVE}
                       </Button>
@@ -463,6 +481,7 @@ export function PermissionsScreen() {
         }}
         onSubmitted={load}
         presetKind={presetKind}
+        presetValue={presetValue}
       />
 
       <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
@@ -558,8 +577,8 @@ function KindRow({
         {!enforced && grants.length > 0 && <Note>{PERM.ADVISORY}</Note>}
         {/* The one thing that bites with the switch off. */}
         {!enforced && hasDeny && <Note tone="red">{PERM.DENY_BEFORE_ENFORCE}</Note>}
-        {/* The dangerous cell: enforced with nothing granted. */}
-        {enforced && !hasAllow && <Note tone="red">{PERM.ENFORCE_ON_ZERO}</Note>}
+        {/* The dangerous cell: enforced with nothing granted. A widening kind was refused before the switch, so nothing changes there. */}
+        {enforced && !hasAllow && copy.direction === "narrows" && <Note tone="red">{PERM.ENFORCE_ON_ZERO}</Note>}
       </div>
       <div className="flex items-center gap-3">
         <Button
@@ -601,7 +620,7 @@ function ConfirmEnforcement({
   onConfirm: () => void;
 }) {
   const turningOn = !!state?.next;
-  const lockout = turningOn && !hasAllow;
+  const lockout = turningOn && !hasAllow && !!state && KIND[state.kind].direction === "narrows";
   return (
     <AlertDialog open={!!state} onOpenChange={(o) => !o && onCancel()}>
       <AlertDialogContent>
@@ -668,6 +687,7 @@ export function AddGrantForm({
   fixed,
   hideTitle,
   presetKind,
+  presetValue,
 }: {
   disabled: boolean;
   onAdded: () => void;
@@ -677,6 +697,8 @@ export function AddGrantForm({
   hideTitle?: boolean;
   /** A capability's own Add grant button chooses its kind here (ignored once `fixed`). */
   presetKind?: CapabilityKind;
+  /** A feature row's Add grant button fills the value as well (ignored once `fixed`). An object, so a second click on the same button fills it again. */
+  presetValue?: { value: string };
 }) {
   const [subjectType, setSubjectType] = React.useState<PickableSubjectType>(fixed?.subjectType ?? "user");
   const [subject, setSubject] = React.useState(fixed?.subject ?? "");
@@ -696,6 +718,9 @@ export function AddGrantForm({
   React.useEffect(() => {
     if (presetKind && !fixed) setKind(presetKind);
   }, [presetKind, fixed]);
+  React.useEffect(() => {
+    if (presetValue && !fixed) setValue(presetValue.value);
+  }, [presetValue, fixed]);
 
   const copy = KIND[kind];
   const whoHint = SUBJECTS.find((s) => s.value === subjectType)?.hint ?? "";
@@ -818,7 +843,8 @@ export function AddGrantForm({
           />
         </Field>
       </div>
-      <div className="mt-4 flex flex-wrap items-center gap-3">
+      <div className={`mt-4 ${INLINE_ACTIONS}`}>
+        {duplicate && <Chip tone="info">{PERM.DUPLICATE}</Chip>}
         <Button
           // A deny on a user type is a wall no person or group allow lifts —
           // design §7 asks before writing one.
@@ -828,7 +854,6 @@ export function AddGrantForm({
           {saving ? <Loader2 className="size-4 animate-spin" /> : null}
           {PERM.ADD_CTA}
         </Button>
-        {duplicate && <Chip tone="info">{PERM.DUPLICATE}</Chip>}
       </div>
       {/* G-7's "Refused" state (packet §2): the server's own sentence, in the
           form the caller is still looking at. The dialog never closes on it. */}
@@ -870,39 +895,33 @@ export function AddGrantForm({
   );
 }
 
-// How many members the enforcement confirm says are about to be bounded.
-//
-// ponytail: there is no member registry to count — Wardyn keeps no user table,
-// and OIDC identities exist only inside a session cookie. The console's one
-// durable record of who has used this deployment is the runs list, so this
-// counts DISTINCT run creators, minus the signed-in admin (exempt) and minus
-// the admin-token machine lane. Ceiling: it over-counts if another ADMIN has
-// launched a run (the safe direction — a louder warning), and it cannot see a
-// member who has never launched one. Upgrade path: a server-side principal
-// roster (or a count on GET /permissions), at which point this hook reads it
-// instead of deriving it.
-// `null` is UNKNOWN, not zero: listRuns() can be refused (403) or fail, and a
-// dialog that then reads "0 members are bounded" states the opposite of the
-// lockout risk it exists to communicate. It is also unknown when the server
-// cut the runs page short (X-Wardyn-Truncated): the creators in the newest
-// page are then only some of the members, and a number would under-count them.
+// How many members the enforcement confirm says are about to be bounded: the People directory's active
+// entries (GET /people, the same security tier as /permissions), minus super admins (the one role capAllowed
+// exempts: a security admin is bounded like a member), the signed-in admin and the admin-token machine lane. The directory holds people who never launched a run, which the
+// runs list cannot see (#2515). A person whose role is "unknown" (their sign-in's groups were truncated) is
+// counted: an over-count only makes the warning louder.
+// `null` is UNKNOWN, not zero: the read can be refused (403) or fail, and a dialog that then reads "0 members
+// are bounded" states the opposite of the lockout risk it exists to communicate.
+
 function useAffectedMemberCount(): number | null {
   const principal = usePrincipal();
   const [count, setCount] = React.useState<number | null>(null);
   React.useEffect(() => {
     let live = true;
-    runsApi
-      .listRuns({ limit: LIST_LIMIT, offset: 0 })
-      .then(({ runs: rs, truncated }) => {
-        if (!live) return;
-        if (truncated) return setCount(null);
-        const people = new Set(
-          rs
-            .map((r) => r.created_by)
-            .filter((p) => !!p && p !== principal && p !== ADMIN_TOKEN_PRINCIPAL),
-        );
-        setCount(people.size);
-      })
+    (async () => {
+      const members = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const page = await peopleApi.list({ limit: 200, cursor, state: "active" });
+        for (const p of page.people) {
+          if (p.deactivated_at || p.role === "admin") continue;
+          if (p.principal !== principal && p.principal !== ADMIN_TOKEN_PRINCIPAL) members.add(p.principal);
+        }
+        cursor = page.next_cursor;
+      } while (cursor);
+      return members.size;
+    })()
+      .then((n) => live && setCount(n))
       .catch(() => {
         // The dialog still states the consequence; the count stays null, and
         // ConfirmEnforcement says so instead of printing a number it never read.

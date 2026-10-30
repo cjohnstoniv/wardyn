@@ -113,12 +113,17 @@ const wsCols = `id, name, sources, base_image, requirements, profile, image_ref,
 	`record_results, llm_cred, attachments, base_image_id, denied_egress, owned_by, ` +
 	`egress_edited_at, image_build`
 
+// wsReadCols is wsCols plus the pin a workspace carries (owning_unit_id) and the pinned unit's name,
+// read by every SELECT and RETURNING (scanWorkspace). The INSERT list stays wsCols: a pin is written
+// only by SetWorkspaceOwningUnit.
+const wsReadCols = wsCols + `, owning_unit_id, (SELECT u.name FROM governance_units u WHERE u.id = workspaces.owning_unit_id)`
+
 // CreateWorkspace inserts an onboarded workspace and returns the persisted row.
 func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Workspace, error) {
 	q := `
 		INSERT INTO workspaces (` + wsCols + `)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-		RETURNING ` + wsCols
+		RETURNING ` + wsReadCols
 	out, err := s.hydratedScan(ctx, s.Pool.QueryRow(ctx, q,
 		ws.ID, ws.Name, workspaceSourcesParam(ws.Sources), workspaceBaseImageParam(ws.BaseImage),
 		workspaceRequirementsParam(ws.Requirements), workspaceProfileParam(ws.Profile), ws.ImageRef,
@@ -136,13 +141,28 @@ func (s PG) CreateWorkspace(ctx context.Context, ws types.Workspace) (types.Work
 
 // GetWorkspace returns the workspace for id, or ErrNotFound.
 func (s PG) GetWorkspace(ctx context.Context, id uuid.UUID) (types.Workspace, error) {
-	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx, `SELECT `+wsCols+` FROM workspaces WHERE id = $1`, id))
+	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx, `SELECT `+wsReadCols+` FROM workspaces WHERE id = $1`, id))
 }
 
 // ListWorkspaces returns all workspaces in reverse creation order. The slice
 // is empty (never nil) when no workspaces exist.
 func (s PG) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
 	return s.ListWorkspacesPage(ctx, Page{})
+}
+
+// WorkspaceOwnerChecker answers whether anyone names owner as a workspace's owner, without reading
+// the workspaces. A capability interface like WorkspacesByOwnerPager.
+type WorkspaceOwnerChecker interface {
+	OwnsWorkspace(ctx context.Context, owner string) (bool, error)
+}
+
+var _ WorkspaceOwnerChecker = PG{}
+
+// OwnsWorkspace reports whether any workspace is owned_by owner exactly; workspaces_owned_by_idx serves it.
+func (s PG) OwnsWorkspace(ctx context.Context, owner string) (bool, error) {
+	var owns bool
+	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM workspaces WHERE owned_by = $1)`, owner).Scan(&owns)
+	return owns, err
 }
 
 // UpdateWorkspace replaces a workspace's editable composition via a
@@ -175,7 +195,7 @@ func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspac
 			egress_edited_at=CASE WHEN $15::bool THEN now() ELSE $16::timestamptz END,
 			updated_at=now()
 		WHERE id=$17 AND ($18::timestamptz IS NULL OR updated_at=$18)
-		RETURNING ` + wsCols
+		RETURNING ` + wsReadCols
 	var seen *time.Time
 	if !ws.UpdatedAt.IsZero() {
 		seen = &ws.UpdatedAt
@@ -204,7 +224,7 @@ func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspac
 // async scan. Pass nil to clear the binding.
 func (s PG) SetWorkspaceLLMCred(ctx context.Context, id uuid.UUID, cred *types.WorkspaceLLMCred) (types.Workspace, error) {
 	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
-		`UPDATE workspaces SET llm_cred=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
+		`UPDATE workspaces SET llm_cred=$1, updated_at=now() WHERE id=$2 RETURNING `+wsReadCols,
 		workspaceLLMCredParam(cred), id))
 }
 
@@ -214,7 +234,7 @@ func (s PG) SetWorkspaceLLMCred(ctx context.Context, id uuid.UUID, cred *types.W
 // ordinary edit can never move ownership.
 func (s PG) SetWorkspaceOwner(ctx context.Context, id uuid.UUID, owner string) (types.Workspace, error) {
 	out, err := s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
-		`UPDATE workspaces SET owned_by=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
+		`UPDATE workspaces SET owned_by=$1, updated_at=now() WHERE id=$2 RETURNING `+wsReadCols,
 		owner, id))
 	if isUniqueViolation(err) {
 		// The new owner already has a workspace of this name (UNIQUE(owned_by, name), 0192).
@@ -230,7 +250,7 @@ func (s PG) SetWorkspaceOwner(ctx context.Context, id uuid.UUID, owner string) (
 // "the operator confirmed this at this moment".
 func (s PG) SetWorkspaceApprovedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
 	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
-		`UPDATE workspaces SET approved_egress=$1, egress_edited_at=now(), updated_at=now() WHERE id=$2 RETURNING `+wsCols,
+		`UPDATE workspaces SET approved_egress=$1, egress_edited_at=now(), updated_at=now() WHERE id=$2 RETURNING `+wsReadCols,
 		workspaceApprovedParam(domains), id))
 }
 
@@ -241,6 +261,8 @@ func (s PG) SetWorkspaceApprovedEgress(ctx context.Context, id uuid.UUID, domain
 // list (deny beats allow), and guards the cap against the target list only,
 // ORed with "already present" so an idempotent re-decide on a full list
 // never errors. Both effects land in ONE UPDATE, so a decision never half-applies.
+// $4 is WithEgressDecidedAt's time, NULL when unset: set, the write also
+// refuses a row whose list the operator edited after that moment.
 const (
 	qAddApprovedEgressDecision = `
 		UPDATE workspaces
@@ -255,7 +277,8 @@ const (
 			jsonb_array_length(COALESCE(approved_egress,'[]'::jsonb)) < $3
 			OR COALESCE(approved_egress,'[]'::jsonb) @> to_jsonb($2::text)
 		  )
-		RETURNING ` + wsCols
+		  AND ($4::timestamptz IS NULL OR egress_edited_at IS NULL OR egress_edited_at <= $4::timestamptz)
+		RETURNING ` + wsReadCols
 
 	qAddDeniedEgressDecision = `
 		UPDATE workspaces
@@ -270,23 +293,42 @@ const (
 			jsonb_array_length(COALESCE(denied_egress,'[]'::jsonb)) < $3
 			OR COALESCE(denied_egress,'[]'::jsonb) @> to_jsonb($2::text)
 		  )
-		RETURNING ` + wsCols
+		  AND ($4::timestamptz IS NULL OR egress_edited_at IS NULL OR egress_edited_at <= $4::timestamptz)
+		RETURNING ` + wsReadCols
 )
+
+type egressDecidedAtKey struct{}
+
+// WithEgressDecidedAt returns a context under which AddWorkspaceEgressDecision
+// writes only while the workspace's egress lists were not edited after at (the
+// moment the decision was made), so a replay of an old verdict cannot land on a
+// list the operator has since restated. Unset, the write is unconditional.
+func WithEgressDecidedAt(ctx context.Context, at time.Time) context.Context {
+	return context.WithValue(ctx, egressDecidedAtKey{}, at)
+}
 
 // AddWorkspaceEgressDecision records one `always`-scoped egress decision for
 // host: on allow it is added to approved_egress (capped, deduped) and removed
 // from denied_egress; on deny the mirror. Returns ErrConflict, not a bare
-// "not found", when id exists but the cap guard refused the write.
+// "not found", when id exists but the cap guard (or WithEgressDecidedAt's
+// freshness guard) refused the write.
 func (s PG) AddWorkspaceEgressDecision(ctx context.Context, id uuid.UUID, host string, allow bool, maxApprovedEgress int) (types.Workspace, error) {
 	q := qAddApprovedEgressDecision
 	if !allow {
 		q = qAddDeniedEgressDecision
 	}
-	ws, err := scanWorkspace(s.Pool.QueryRow(ctx, q, id, host, maxApprovedEgress))
+	var decidedAt *time.Time
+	if at, ok := ctx.Value(egressDecidedAtKey{}).(time.Time); ok {
+		decidedAt = &at
+	}
+	ws, err := scanWorkspace(s.Pool.QueryRow(ctx, q, id, host, maxApprovedEgress, decidedAt))
 	ws, err = s.hydrateIfOK(ctx, ws, err)
 	if errors.Is(err, ErrNotFound) {
-		// Distinguish "no such workspace" from "cap reached".
+		// Distinguish "no such workspace" from "cap reached" (or, with a decided-at, a newer list edit).
 		if _, gerr := s.GetWorkspace(ctx, id); gerr == nil {
+			if decidedAt != nil {
+				return types.Workspace{}, fmt.Errorf("%w: cap reached or a newer egress-list edit", ErrConflict)
+			}
 			return types.Workspace{}, ErrConflict
 		}
 		return types.Workspace{}, ErrNotFound
@@ -303,7 +345,7 @@ func (s PG) AddWorkspaceEgressDecision(ctx context.Context, id uuid.UUID, host s
 // operator override the boot heal must not undo).
 func (s PG) SetWorkspaceDeniedEgress(ctx context.Context, id uuid.UUID, domains []string) (types.Workspace, error) {
 	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
-		`UPDATE workspaces SET denied_egress=$1, egress_edited_at=now(), updated_at=now() WHERE id=$2 RETURNING `+wsCols,
+		`UPDATE workspaces SET denied_egress=$1, egress_edited_at=now(), updated_at=now() WHERE id=$2 RETURNING `+wsReadCols,
 		workspaceDeniedParam(domains), id))
 }
 
@@ -312,7 +354,7 @@ func (s PG) SetWorkspaceDeniedEgress(ctx context.Context, id uuid.UUID, domains 
 // desired map — this replaces rather than merges.
 func (s PG) SetWorkspaceRequirements(ctx context.Context, id uuid.UUID, reqs map[string]types.WorkspaceRequirement) (types.Workspace, error) {
 	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx,
-		`UPDATE workspaces SET requirements=$1, updated_at=now() WHERE id=$2 RETURNING `+wsCols,
+		`UPDATE workspaces SET requirements=$1, updated_at=now() WHERE id=$2 RETURNING `+wsReadCols,
 		workspaceRequirementsParam(reqs), id))
 }
 
@@ -332,7 +374,7 @@ func (s PG) SetWorkspaceRecordResult(ctx context.Context, id uuid.UUID,
 		q += ` AND COALESCE(record_results->$2->>'status','') = $4`
 		args = append(args, onlyIfStatus)
 	}
-	ws, err := scanWorkspace(s.Pool.QueryRow(ctx, q+` RETURNING `+wsCols, args...))
+	ws, err := scanWorkspace(s.Pool.QueryRow(ctx, q+` RETURNING `+wsReadCols, args...))
 	ws, err = s.hydrateIfOK(ctx, ws, err)
 	if errors.Is(err, ErrNotFound) && onlyIfStatus != "" {
 		// Distinguish guard-miss from a missing workspace.
@@ -354,7 +396,7 @@ func (s PG) SetWorkspaceRecordResult(ctx context.Context, id uuid.UUID,
 func (s PG) ClaimWorkspaceActiveRun(ctx context.Context, id, runID uuid.UUID, expected *uuid.UUID) (types.Workspace, bool, error) {
 	ws, err := scanWorkspace(s.Pool.QueryRow(ctx,
 		`UPDATE workspaces SET active_run_id=$2, updated_at=now()
-		 WHERE id=$1 AND active_run_id IS NOT DISTINCT FROM $3 RETURNING `+wsCols,
+		 WHERE id=$1 AND active_run_id IS NOT DISTINCT FROM $3 RETURNING `+wsReadCols,
 		id, runID, expected))
 	ws, err = s.hydrateIfOK(ctx, ws, err)
 	if errors.Is(err, ErrNotFound) {
@@ -418,7 +460,7 @@ func (s PG) SetWorkspaceImportState(ctx context.Context, id uuid.UUID,
 	// IS NOT DISTINCT FROM (not `=`): `active_run_id = NULL` is never true in SQL.
 	ws, err := scanWorkspace(s.Pool.QueryRow(ctx,
 		`UPDATE workspaces SET status=$1, active_run_id=$2, updated_at=now()
-		 WHERE id=$3 AND active_run_id IS NOT DISTINCT FROM $4 RETURNING `+wsCols,
+		 WHERE id=$3 AND active_run_id IS NOT DISTINCT FROM $4 RETURNING `+wsReadCols,
 		string(status), activeRunID, id, expectedActive))
 	ws, err = s.hydrateIfOK(ctx, ws, err)
 	if errors.Is(err, ErrNotFound) {
@@ -466,18 +508,19 @@ func (s PG) hydratedScan(ctx context.Context, row pgx.Row) (types.Workspace, err
 }
 
 // scanWorkspace is the ONE reader for every workspaces column list in this
-// package. A new column is APPENDED to the end of wsCols and of this Scan —
+// package. A new column is APPENDED to the end of wsReadCols and of this Scan —
 // the only edit that cannot silently transpose two same-typed columns.
 func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 	var ws types.Workspace
 	var status string
 	var sourcesRaw, baseImageRaw, requirementsRaw, profileRaw, approvedRaw, recordRaw, llmCredRaw, attachmentsRaw, deniedRaw, imageBuildRaw []byte
+	var owningUnitName *string
 	err := row.Scan(
 		&ws.ID, &ws.Name, &sourcesRaw, &baseImageRaw, &requirementsRaw,
 		&profileRaw, &ws.ImageRef, &ws.BuiltProfileHash, &approvedRaw, &ws.ActiveRunID,
 		&status, &ws.CreatedAt, &ws.UpdatedAt, &recordRaw, &llmCredRaw,
 		&attachmentsRaw, &ws.BaseImageID, &deniedRaw, &ws.OwnedBy, &ws.EgressEditedAt,
-		&imageBuildRaw,
+		&imageBuildRaw, &ws.OwningUnitID, &owningUnitName,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Workspace{}, ErrNotFound
@@ -486,6 +529,9 @@ func scanWorkspace(row pgx.Row) (types.Workspace, error) {
 		return types.Workspace{}, fmt.Errorf("store: scan workspace: %w", err)
 	}
 	ws.Status = types.WorkspaceStatus(status)
+	if owningUnitName != nil {
+		ws.OwningUnitName = *owningUnitName
+	}
 	if profileRaw != nil {
 		ws.Profile = json.RawMessage(profileRaw)
 	}

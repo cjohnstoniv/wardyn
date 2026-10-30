@@ -43,7 +43,7 @@ func buildConfig(d substrate.Deps, recordingMount string) Config {
 		// a warn. cliutil.EnvBool so a garbage value exits 2 at boot instead of
 		// silently staying off.
 		AllowUnenforceableCaps: cliutil.EnvBool("WARDYN_ALLOW_UNENFORCEABLE_CAPS", false),
-		ProxySandboxPeersOnly:  cliutil.EnvBool(EnvProxySandboxPeersOnly, false),
+		ProxyServesAnyPeer:     ProxyServesAnyPeerFromEnv(),
 		ConfinementRuntimes:    d.ConfinementRuntimes,
 		// The deployment's host_path user-drive ceiling, parsed once at boot.
 		UserDriveHostRoots: d.UserDriveHostRoots,
@@ -62,7 +62,12 @@ func init() {
 		// joins; empty keeps "wardyn-internal". A shared multi-job host sets a
 		// per-project name so concurrent stacks don't share one network — it MUST
 		// match the compose network's name (both derive from WARDYN_NS).
-		s, err := New(buildConfig(d, recordingMount))
+		cfg := buildConfig(d, recordingMount)
+		var err error
+		if cfg.RunSubnetPool, cfg.RunSubnetBits, err = RunSubnetPoolFromEnv(os.Getenv); err != nil {
+			return nil, err
+		}
+		s, err := New(cfg)
 		if err != nil {
 			return nil, err
 		}

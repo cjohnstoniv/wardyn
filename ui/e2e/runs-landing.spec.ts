@@ -172,7 +172,8 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
 
     await expect(page.getByRole("heading", { name: /Needs you/ })).toBeVisible();
     await expect(page.getByText("Held approval")).toBeVisible();
-    await expect(page.getByText("1 decision needs you")).toBeVisible();
+    const heldRow = page.getByTestId("run-row").filter({ hasText: "Held approval" });
+    await expect(heldRow.getByText("1 decision needs you", { exact: true })).toBeVisible();
     // Both "a1" (by=you) and "a5" (H-3's by=admin) carry this same subword —
     // the design table doesn't differ on it, only on the WORD above it.
     await expect(page.getByText("1 waiting · sandbox held").first()).toBeVisible();
@@ -307,7 +308,7 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
 
     const search = page.getByLabel("Search runs", { exact: true });
     await search.fill("zzz-no-such-run");
-    await expect(page.getByText("No runs match these filters.")).toBeVisible();
+    await expect(page.getByText("No runs match these filters", { exact: true })).toBeVisible();
     await expect(page.getByText("Try a different search term or filter.")).toBeVisible();
 
     await page.getByRole("button", { name: "Clear filters" }).click();
@@ -368,7 +369,8 @@ test.describe("Runs landing — page states (design.md §6 L3 row)", () => {
         ],
       }));
       await gotoConsole(page);
-      await expect(page.getByText("Needs a decision")).toBeVisible();
+      const row = page.getByTestId("run-row").filter({ hasText: "Needs a decision" });
+      await expect(row.getByText("1 decision needs you", { exact: true })).toBeVisible();
       await expect(page.getByText("Failed today")).toBeVisible();
       const isDark = await page.evaluate(() => document.documentElement.classList.contains("dark"));
       expect(isDark).toBe(theme === "dark");

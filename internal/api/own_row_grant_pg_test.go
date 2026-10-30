@@ -174,7 +174,7 @@ func TestPG_SSHKeyGrantDecidesEachRefOnItsOwn(t *testing.T) {
 		t.Fatalf("PUT own secret: %d %s", w.Code, w.Body.String())
 	}
 	for name, refs := range map[string][2]string{
-		"another person's key":           {"bob-ssh", "corp-kh"},
+		"another person's key":          {"bob-ssh", "corp-kh"},
 		"org known_hosts without grant": {"dev-ssh", "corp-kh-ungranted"},
 	} {
 		if _, grants := launch(refs[0], refs[1]); len(grants) != 0 {

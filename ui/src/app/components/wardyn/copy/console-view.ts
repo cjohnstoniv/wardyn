@@ -41,14 +41,17 @@ export const VIEW_DROPPED = {
   STAY: "Stay in the Admin view",
 } as const;
 
+// The User view's nav item for /account. Its page heading is YOUR_ACCOUNT.TITLE; the Admin view's own
+// Settings (/admin/settings) is the deployment's.
 export const NAV = {
-  YOUR_ACCOUNT: "Your account",
+  SETTINGS: "Settings",
 } as const;
 
 // M-5 (#636, packet S-3, approved 2026-09-27): the /account page header's
 // description — every console page header has one, and this says what's here
 // and whose it is, which is the point of the split.
 export const YOUR_ACCOUNT = {
+  TITLE: "Your settings",
   LEDE: "The connections and keys your own runs use. No one else's runs can use them.",
 } as const;
 
@@ -61,7 +64,13 @@ export const YOUR_ACCOUNT = {
 // page is fetched (AdminSettingsScreen checks this before its first read).
 export const SETTINGS_SUPER_ONLY = {
   TITLE: "Settings is for super admins",
+  CHIP: "Refused by role",
   BODY: "You're signed in as a security admin.",
+  // #3047: the card's Wall, Set by, Enforced and Can change values, in that order.
+  WALL: "Super admin pages",
+  SET_BY: "Wardyn super admins",
+  ENFORCED: "By the server, on every settings read and write",
+  CAN_CHANGE: "Not from here. A super admin can give you access.",
   CTA: "Back to Runs",
 } as const;
 
@@ -69,7 +78,12 @@ export const SETTINGS_SUPER_ONLY = {
 // URL. It was a page header over an 11px "Requires the admin role." to someone who is an admin, with no way back.
 export const PROVIDERS_SUPER_ONLY = {
   TITLE: "Workspace providers is for super admins",
+  CHIP: "Refused by role",
   BODY: "You're signed in as a security admin.",
+  WALL: "Super admin pages",
+  SET_BY: "Wardyn super admins",
+  ENFORCED: "By the server, on every provider read and write",
+  CAN_CHANGE: "Not from here. A super admin can give you access.",
   CTA: "Back to Runs",
 } as const;
 
@@ -115,7 +129,13 @@ export const VIEW_TO_USER = {
 
 // The admin token on an SSO install opens a user page: it is not a person.
 export const VIEW_ADMIN_TOKEN = {
+  TITLE: "This page needs a person",
+  CHIP: "Refused by sign-in",
   BODY: "Runs and connections belong to a person. Sign in with SSO to use them.",
+  WALL: "User pages",
+  SET_BY: "Wardyn",
+  ENFORCED: "By the server, on every request the admin token makes",
+  CAN_CHANGE: "Not with the admin token. Sign in as a person.",
   CTA: "Back to the admin view",
 } as const;
 

@@ -3,7 +3,8 @@
 
 // Package livebus carries the notices replicas send each other over Postgres NOTIFY (ha-l2.4):
 // a run's lifecycle events, a kill that must reach the replica creating the run's sandbox, and
-// the end of an attach lease. A notice is a hint, never a record. NOTIFY is not durable, so
+// the end of an attach lease, and a runner's session that must end to read an action queued for
+// it. A notice is a hint, never a record. NOTIFY is not durable, so
 // each use has a path that needs none: the events stream re-reads the store every beat, a lost
 // kill is caught by the dispatch's STARTING to RUNNING compare, and an attach lease lapses or
 // is found lost by its holder. Losing the listener loses only promptness.
@@ -44,6 +45,14 @@ const (
 	KindAttachEvict = "attach_evict"
 	// KindAttachFree: a run's attach lease was released; observers queued on any replica may take it.
 	KindAttachFree = "attach_free"
+	// KindRecordingGap: a "Needs you" takeover began or ended on a recorded run, or a desktop sign-in
+	// ended, for a recorder to mark the gap. Only a desktop recorder acts on it: a resume ends the
+	// desktop hold it names on the replica that holds it.
+	KindRecordingGap = "recording_gap"
+	// KindRunnerGoaway: an action was queued for a runner (or a change made that its session must
+	// re-read); the replica holding the runner's session ends it, and the fresh one reads the action.
+	// The Run field carries the runner's id.
+	KindRunnerGoaway = "runner_goaway"
 )
 
 // Message is one notice.

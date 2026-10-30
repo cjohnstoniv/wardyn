@@ -20,5 +20,5 @@ func (s *Server) localPeerTrusted(remoteAddr string) bool {
 }
 
 // localPeerRefusal is the local-mode peer gate's 403 sentence.
-const localPeerRefusal = "local mode: request peer is not loopback (bind wardynd to 127.0.0.1, set WARDYN_LOCAL_TRUST_FORWARDER when behind a loopback-only publish " +
+const localPeerRefusal = "Local mode: request peer is not loopback (bind wardynd to 127.0.0.1, set WARDYN_LOCAL_TRUST_FORWARDER when behind a loopback-only publish " +
 	"and WARDYN_LOCAL_TRUSTED_PEERS when its traffic arrives from an address wardynd does not resolve, or configure auth)"

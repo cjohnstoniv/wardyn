@@ -22,3 +22,18 @@ BSD-3-Clause
 ISC
 MIT
 OFL-1.1
+
+# Scoped entries: "<id> <package> [<package>...]" allows the id ONLY for the named UI packages,
+# never for Go modules (the Go gate reads one-token lines only) and never for any other UI package
+# (scripts/check-ui-licenses.sh). Owner ruling 2026-10-23: MPL-2.0 for @novnc/novnc, shipped
+# unmodified (the desktop replay's decoder, #2968). MPL-2.0 is a free licence with no fee or paid
+# tier; its file-level copyleft applies only to modified MPL files, and Wardyn modifies none
+# (check-ui-licenses.sh refuses a vendored or patched copy).
+MPL-2.0 @novnc/novnc
+# Owner ruling 2026-10-24: core/crypto/des.js inside @novnc/novnc is accepted as shipped. Its three
+# notices (AT&T, Widget Workshop, Jef Poskanzer) ship verbatim as texts/npm/@novnc/novnc/des-NOTICE,
+# which is the text LicenseRef-noVNC-des names. core/input/keysymdef.js is generated from X.Org keysymdef.h, whose
+# Open Group (MIT-open-group) and DEC (HPND) notices ship verbatim as texts/npm/@novnc/novnc/keysymdef-NOTICE.
+LicenseRef-noVNC-des @novnc/novnc
+MIT-open-group @novnc/novnc
+HPND @novnc/novnc

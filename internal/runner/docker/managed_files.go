@@ -97,8 +97,9 @@ func (d *Driver) deliverManagedFiles(ctx context.Context, containerID string, fi
 // directory itself. /run may instead be absent, since the delivery then
 // creates it root-owned like the rest; /etc must be there, as it always has.
 var managedFileAnchors = map[string]string{
-	runner.ManagedFileDir:     "/etc",
-	runner.ComponentSecretDir: "/run",
+	runner.ManagedFileDir:      "/etc",
+	runner.CodexManagedFileDir: "/etc",
+	runner.ComponentSecretDir:  "/run",
 }
 
 // checkManagedFileImage refuses a container whose image would let the agent

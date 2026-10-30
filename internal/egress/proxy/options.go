@@ -104,10 +104,14 @@ type Options struct {
 	LLMUnavailableDetail string
 	// LocalModels is Config.LocalModels, forwarded verbatim. See Proxy.localModels.
 	LocalModels map[string]types.LocalModelSettings
+	// RunnerLocalModels is Config.RunnerLocalModels, forwarded verbatim.
+	RunnerLocalModels []string
 	// Unattended is Config.Unattended: a review-path push is refused, not held.
 	Unattended bool
 	// ScrubResponses is Config.ScrubResponses.
 	ScrubResponses bool
+	// CanonicalPushRepos is Config.CanonicalPushRepos.
+	CanonicalPushRepos bool
 	// Attribution is Config.Attribution, already re-projected by LoadConfigBytes.
 	Attribution *policyref.Ref
 

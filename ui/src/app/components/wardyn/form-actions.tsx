@@ -11,6 +11,15 @@ import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
 import { FORM_ACTIONS } from "./copy/form-actions";
 
+/**
+ * #3064: the inline action bar of a short form (the long editors use FormActions). Actions sit at the right end,
+ * secondary then the one primary last; a destructive action takes `mr-auto` and `DANGER_OUTLINE` to sit at the
+ * far left, never next to the primary.
+ */
+export const INLINE_ACTIONS = "flex flex-wrap items-center justify-end gap-2";
+/** A destructive action's weight: outline with danger text. It always opens a confirm. */
+export const DANGER_OUTLINE = "border-danger text-danger hover:bg-danger/10 hover:text-danger";
+
 /** How many top-level fields of `now` differ from `opened`, for the unsaved-change count. */
 export function countChanged(now: object, opened: object): number {
   const a = now as Record<string, unknown>;

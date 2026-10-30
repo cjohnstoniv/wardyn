@@ -42,7 +42,7 @@ describe("template field registry", () => {
       expect(new Set(rules.map((r) => r.name)).size).toBe(rules.length);
     }
     expect(TEMPLATE_REQUEST_FIELDS.length).toBeGreaterThanOrEqual(34);
-    expect(TEMPLATE_POLICY_FIELDS).toHaveLength(22);
+    expect(TEMPLATE_POLICY_FIELDS).toHaveLength(23);
   });
 
   it("every carried field names its part and omission meaning; every excluded one its reason", () => {
@@ -79,11 +79,13 @@ describe("template field registry", () => {
       "integration_id",
       "keep_work_folder",
       "local_folder",
+      "machine_kind",
       "max_wait_sec",
       "mode_contract",
       "policy_overlay",
       "preset",
       "preset_version",
+      "run_in",
       "start_at",
       "start_time_zone",
       "title",
@@ -129,7 +131,7 @@ describe("template field registry", () => {
     expect(templateFieldRule("shape")).toMatchObject({ part: "runner", omitted: "unset_optional" });
     expect(templateFieldRule("shape")?.pending).toBeFalsy();
     expect(templateCarriedFields()).toContain("shape");
-    const goShapes = new Set([...readFileSync(join(root, "pkg/client/runs_mode.go"), "utf8").matchAll(/\bRunShape\w+\s+RunShape = "([a-z_]+)"/g)].map((m) => m[1]));
+    const goShapes = new Set([...readFileSync(join(root, "internal/types/run_mode.go"), "utf8").matchAll(/\bRunShape\w+\s+RunShape = "([a-z_]+)"/g)].map((m) => m[1]));
     expect(new Set(RUN_SHAPES)).toEqual(goShapes);
   });
 

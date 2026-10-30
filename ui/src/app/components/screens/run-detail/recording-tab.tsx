@@ -29,6 +29,7 @@ import {
   RECORDING_MISSING_SESSION_BODY,
 } from "./recording-tab-copy";
 import { RECORDING_REPLAY, RECORDING_STRIP, recordingLevelLabel } from "../../wardyn/copy/recording-level";
+import { RUN_RECORDING } from "../../wardyn/copy/runners";
 import { clockTime } from "../../../lib/format";
 import { DesktopReplay, desktopSessions } from "./desktop-replay";
 
@@ -36,8 +37,8 @@ import { DesktopReplay, desktopSessions } from "./desktop-replay";
 function LevelStrip({ level, notRecorded, storeOff }: { level?: RecordingLevel; notRecorded?: RunNotRecorded; storeOff: boolean }) {
   const [title, note] = storeOff
     ? [RECORDING_STRIP.UNAVAILABLE, RECORDING_DISABLED_TITLE]
-    : notRecorded === "policy_off"
-      ? [RECORDING_STRIP.OFF, RECORDING_STRIP.OFF_NOTE]
+    : notRecorded
+      ? [RECORDING_STRIP.OFF, notRecorded === "policy_off" ? RECORDING_STRIP.OFF_NOTE : RUN_RECORDING[notRecorded]]
       : level === "screen_actions"
         ? [RECORDING_STRIP.ON(recordingLevelLabel(level)), ""]
         : [RECORDING_STRIP.TERMINAL_ONLY, RECORDING_STRIP.TERMINAL_ONLY_NOTE];
@@ -61,6 +62,7 @@ export function RecordingTab({
   level,
   notRecorded,
   recordingAudit = [],
+  onGoAudit,
 }: {
   state: "idle" | "loading" | "error" | "ready";
   recording: Recording | null;
@@ -78,6 +80,8 @@ export function RecordingTab({
   notRecorded?: RunNotRecorded;
   /** The run's session.recording and desktop.recording rows, for the desktop recordings and gaps. */
   recordingAudit?: AuditEvent[];
+  /** Opens the run's Audit tab (the desktop replay's "Open in Audit"). */
+  onGoAudit?: () => void;
 }) {
   // M-1b: the Recordings library is Admin view only (/admin/recordings) and,
   // until F1, not offered to a security admin either — a user reaches a
@@ -115,7 +119,7 @@ export function RecordingTab({
       )}
 
       {desktopSelected ? (
-        <DesktopReplay runId={runId} recKey={selected} audit={recordingAudit} />
+        <DesktopReplay runId={runId} recKey={selected} audit={recordingAudit} onGoAudit={onGoAudit} />
       ) : state === "loading" || state === "idle" ? (
         <div className="flex h-[360px] items-center justify-center rounded-xl border border-border bg-card">
           <Loader2 className="size-5 animate-spin text-muted-foreground" />

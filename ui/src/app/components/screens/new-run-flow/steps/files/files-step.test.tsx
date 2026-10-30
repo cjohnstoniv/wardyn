@@ -390,7 +390,6 @@ describe("drives (GET /me/drives)", () => {
     await openAdd();
     await pickType(NR_FILES.KIND_SHARED_DRIVE);
     expect(await within(dialog()).findByRole("radio", { name: /^Finance archive/ })).toBeDisabled();
-    expect(within(dialog()).getByText(NR_FILES.NOT_IN_POOL)).toBeInTheDocument();
     // #3045: "+ Create shared drive" was a disabled button with a chip; it is not drawn.
     expect(within(dialog()).queryByRole("button", { name: /create shared drive/i })).toBeNull();
     await pickSource("Data team share");

@@ -15,6 +15,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
@@ -54,6 +55,11 @@ type runnerFile struct {
 	// RunnerNoProxy is the NO_PROXY list that goes with RunnerProxy.
 	RunnerNoProxy  string `json:"runner_no_proxy,omitempty"`
 	RecordingStore string `json:"recording_store,omitempty"`
+	// LocalModelPort lists the ports, comma-separated, a laptop local model server may be relayed on
+	// (#2957); none when unset, so no run on this computer uses its model server until the person allows one.
+	LocalModelPort string `json:"local_model_port,omitempty"`
+	// MacOSVM turns macOS VM sandboxes on ("1") on a Mac; off when unset.
+	MacOSVM string `json:"macos_vm,omitempty"`
 }
 
 // Where each setting is read from, in the order serve consults them. A managed preference outranks the
@@ -99,6 +105,35 @@ var runnerFields = []runnerField{
 	{name: "runner_proxy", env: []string{"HTTPS_PROXY", "https_proxy"}, file: func(f *runnerFile) *string { return &f.RunnerProxy }},
 	{name: "runner_no_proxy", env: []string{"NO_PROXY", "no_proxy"}, file: func(f *runnerFile) *string { return &f.RunnerNoProxy }},
 	{name: "recording_store", flag: "recording-store", env: []string{"WARDYN_RECORDING_STORE"}, managed: "RecordingStore", def: "pg", locked: true, file: func(f *runnerFile) *string { return &f.RecordingStore }},
+	{name: "local_model_port", flag: "local-model-port", env: []string{"WARDYN_LOCAL_MODEL_PORT"}, managed: "LocalModelPort", file: func(f *runnerFile) *string { return &f.LocalModelPort }},
+	{name: "macos_vm", env: []string{"WARDYN_RUNNER_MACOS_VM"}, managed: "MacOSVM", file: func(f *runnerFile) *string { return &f.MacOSVM }},
+}
+
+// macOSVMOn reads the macos_vm setting.
+func macOSVMOn(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "on", "yes":
+		return true
+	}
+	return false
+}
+
+// parseLocalModelPorts reads local_model_port: comma-separated ports, each 1 to 65535. Empty allows none.
+func parseLocalModelPorts(s string) ([]uint16, error) {
+	var out []uint16
+	for p := range strings.SplitSeq(s, ",") {
+		if p = strings.TrimSpace(p); p == "" {
+			continue
+		}
+		n, err := strconv.ParseUint(p, 10, 16)
+		if err != nil || n == 0 {
+			return nil, fmt.Errorf("local_model_port: %q is not a port", p)
+		}
+		if !slices.Contains(out, uint16(n)) {
+			out = append(out, uint16(n))
+		}
+	}
+	return out, nil
 }
 
 // resolvedField is one setting's effective value and where it came from, for serve and for any command
@@ -308,6 +343,9 @@ func checkRunnerFile(f runnerFile) error {
 	}
 	if f.RecordingStore != "" && !slices.Contains([]string{"pg", "fs", "off"}, f.RecordingStore) {
 		return errors.New("recording_store: must be pg, fs or off")
+	}
+	if _, err := parseLocalModelPorts(f.LocalModelPort); err != nil {
+		return err
 	}
 	if err := refuseProxyCredential("upstream_proxy", f.UpstreamProxy, "WARDYN_UPSTREAM_PROXY"); err != nil {
 		return err

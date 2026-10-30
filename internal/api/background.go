@@ -42,17 +42,25 @@ func (s *Server) GoBackground(fn func()) {
 // (runs_lifecycle.go) is the longest bound most goroutines tracked by
 // goBackground give themselves internally (killTeardownTail's own
 // detach+bound, or finishHarnessLoginLaunch's dispatch). killSignInRunAfterCapture
-// (ssotoken.go) is the one exception with an inner bound of its OWN: its
-// post-grace run read (signInCaptureReadTimeout) plus the kill cascade it may
-// then run (killCascadeTimeout) — the sum this constant is built from, so that
-// goroutine's own worst case is exactly what this budget covers, not a vague
-// margin for "small synchronous work".
+// (ssotoken.go) is the one exception with an inner bound of its OWN, and it
+// loops: each of up to supersedeCASAttempts passes is a run read
+// (signInCaptureReadTimeout) plus killRunCascade (killCascadeTimeout, claim and
+// teardown under one shared bound), so the strict ceiling is
+// supersedeCASAttempts * (signInCaptureReadTimeout + killCascadeTimeout), 105s.
+// This constant is one pass of that sum. It covers the kill because a pass that
+// loses its swap to the launch moving the run forward tears nothing down: it
+// costs a read and one row update, then re-reads, so the teardown runs once, in
+// the pass that wins. A store where every read and every lost swap ran to its
+// full timeout could pass the budget; the goroutine is then abandoned with the
+// WARN below and the run is ended by ReconcileOnBoot or its idle cap. The budget
+// is not sized to 105s because HTTPShutdownTimeout, this budget and the audit
+// flush must fit the 70s termination grace (TestShutdownGraceCoversTheBudget).
 //
 // finishCreateRunLaunch has no such inner bound: a devcontainer build may take
 // imageBuildTimeout (30 minutes). The budget still applies to it, so a shutdown
 // during a long build is abandoned with the WARN below, and the run it leaves
 // non-terminal is picked up by ReconcileOnBoot's passes (reconcile.go).
-const backgroundShutdownBudget = killCascadeTimeout + signInCaptureReadTimeout
+const backgroundShutdownBudget = killCascadeTimeout + killRevokeTimeout + signInCaptureReadTimeout
 
 // WaitBackground blocks until every goroutine started through goBackground has
 // returned, or until backgroundShutdownBudget elapses — whichever comes first.
@@ -83,6 +91,6 @@ func (s *Server) WaitBackground() {
 // runs before WaitBackground. The two budgets run back to back, so together
 // with the audit sinks' final flush they set the shortest grace period
 // wardynd needs before SIGKILL. deploy/helm's terminationGracePeriodSeconds
-// and deploy/compose's stop_grace_period are 70s for that reason, and
+// and deploy/compose's stop_grace_period are 85s for that reason, and
 // TestShutdownGraceCoversTheBudget fails if either falls below the sum.
 const HTTPShutdownTimeout = 15 * time.Second

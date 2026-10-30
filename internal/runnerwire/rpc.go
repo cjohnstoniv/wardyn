@@ -4,6 +4,10 @@
 package runnerwire
 
 import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -44,12 +48,24 @@ const (
 	// MethodSelftest runs a BYOI image's contract check on a runner that
 	// advertises Caps.BYOISelftest: never an Exec, so it spends no generation.
 	MethodSelftest = "byoi_selftest"
+	// MethodCreateVM creates a Linux VM sandbox on a runner whose caps carry LinuxVM. It is its own
+	// method so a runner that predates VMs refuses it instead of reading it as create_sandbox and
+	// starting a container; every later verb on the VM's ref is the container one.
+	MethodCreateVM = "create_vm"
 	// MethodListFolders, MethodSyncFolder and MethodSyncFolderWait are a
 	// folder-only runner's (Caps.Folders): the folders under its roots, and one
 	// `wardyn sync` pass between one of them and a run's sandbox.
 	MethodListFolders    = "list_folders"
 	MethodSyncFolder     = "sync_folder"
 	MethodSyncFolderWait = "sync_folder_wait"
+	// MethodDialDesktop opens a `desktop` stream to a VM sandbox's display (QEMU's RFB socket) on a
+	// runner whose caps carry LinuxVM.Desktop; an older runner never gets the call.
+	MethodDialDesktop = "dial_desktop"
+	// MethodPauseAgent and MethodResumeAgent stop and continue a VM sandbox's agent inside the guest
+	// (runner.AgentPauser, AgentPauseArgs), on a runner whose caps carry LinuxVM.SignIns; an older one
+	// never gets them.
+	MethodPauseAgent  = "pause_agent"
+	MethodResumeAgent = "resume_agent"
 	// The local attach calls are sent only to a runner that advertises Caps.LocalAttach.
 	// MethodLocalAttach opens a pty_tee stream and answers its id; MethodLocalAttachMode changes the
 	// session's writer/observer mode and is answered once the runner has applied it;
@@ -57,6 +73,9 @@ const (
 	MethodLocalAttach       = "local_attach"
 	MethodLocalAttachMode   = "local_attach_mode"
 	MethodLocalAttachTeeAck = "local_attach_tee_ack"
+	// MethodWorkloadStatus patches the status of one WardynWorkload custom resource from the org's
+	// answer (WorkloadStatusArgs). It is sent only to a runner that reported a workload.
+	MethodWorkloadStatus = "workload_status"
 )
 
 // The tee window of a local attach session whose Tee is true. The runner shows at most
@@ -90,6 +109,20 @@ type RefArgs struct {
 	Ref                 string    `json:"ref"`
 }
 
+// AgentPauseArgs is pause_agent's and resume_agent's. Generation is the run's pause generation, which
+// the runner hands the guest agent (runner.AgentPauser). A runner that predates it reads only Ref, and a
+// wardynd that predates it sends none, which the guest agent reads as 0 and signals as before.
+type AgentPauseArgs struct {
+	Ref        string `json:"ref"`
+	Generation int64  `json:"generation,omitempty"`
+}
+
+// AgentPauseResult is their answer: FencedPause is the guest agent's. A runner that predates it
+// answers nothing, which reads as false.
+type AgentPauseResult struct {
+	FencedPause bool `json:"fenced_pause,omitempty"`
+}
+
 type ExecArgs struct {
 	ExecutionGeneration uuid.UUID `json:"execution_generation"`
 	Ref                 string    `json:"ref"`
@@ -119,6 +152,11 @@ type WaitResult struct {
 type AttachArgs struct {
 	Ref     string               `json:"ref"`
 	Options runner.AttachOptions `json:"options"`
+}
+
+// DialDesktopArgs names the VM sandbox whose display dial_desktop opens.
+type DialDesktopArgs struct {
+	Ref string `json:"ref"`
 }
 
 // StreamResult names the byte stream a call opened (the pty stream of Attach).
@@ -182,7 +220,8 @@ type SyncFolderWaitArgs struct {
 }
 
 // FolderPass is one pass's outcome, as the runner counts it. Refused holds at
-// most MaxFolderRefusals paths. Error is set when the pass did not complete.
+// most MaxFolderRefusals paths. Error is set when the pass did not complete; its
+// file counts are then what it finished, and saved in its state, before it stopped.
 type FolderPass struct {
 	Pushed    int             `json:"pushed"`
 	Pulled    int             `json:"pulled"`
@@ -191,7 +230,9 @@ type FolderPass struct {
 	Ignored   int             `json:"ignored"`
 	BytesOut  int64           `json:"bytes_out"`
 	BytesIn   int64           `json:"bytes_in"`
-	Error     string          `json:"error,omitempty"`
+	// Unsynced is, on a pass back cut short, the sandbox's changed files it had not brought back.
+	Unsynced int    `json:"unsynced,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // FolderRefusal is one path a pass refused and why.
@@ -246,6 +287,8 @@ type SweepArgs struct {
 type SweepResult struct {
 	Candidates []uuid.UUID `json:"candidates,omitempty"`
 	Removed    int         `json:"removed"`
+	// MacOSVMDisks is every macOS VM disk report the runner still keeps; an older runner sends none.
+	MacOSVMDisks []runner.MacOSVMDisk `json:"macos_vm_disks,omitempty"`
 }
 
 // RecoverOutputArgs are recover_output's arguments. Gap says the org takes a copy whose first bytes
@@ -346,4 +389,132 @@ type LocalAttachModeArgs struct {
 type LocalAttachTeeAckArgs struct {
 	Stream uint32 `json:"stream"`
 	Offset int64  `json:"offset"`
+}
+
+// The WorkloadReport ops.
+const (
+	WorkloadOpApply  = "apply"
+	WorkloadOpDelete = "delete"
+	WorkloadOpSync   = "sync"
+)
+
+// Workload report bounds. MaxWorkloadSpecBytes is the most a custom resource's spec may take; the
+// org refuses a larger one. MaxWorkloadSyncNames bounds a sync's name list, and MaxWorkloadUID a
+// resource's metadata.uid (a Kubernetes UID is 36 bytes).
+const (
+	MaxWorkloadSpecBytes = 256 << 10
+	MaxWorkloadSyncNames = 1000
+	MaxWorkloadMessage   = 512
+	MaxWorkloadUID       = 128
+)
+
+// WorkloadReport is the `workload` event's data. Namespace is where the custom resource lives; the
+// org reads it only as the key of a binding, never as the namespace a run is placed in.
+//
+//   - apply: Name, UID, Generation (metadata.generation) and Spec (the resource's spec, as written).
+//   - delete: Name and UID.
+//   - sync: Names, every workload the runner saw in Namespace after its informer synced; the org
+//     deletes the workloads it holds for the namespace that the list omits.
+type WorkloadReport struct {
+	Op         string          `json:"op"`
+	Namespace  string          `json:"namespace"`
+	Name       string          `json:"name,omitempty"`
+	UID        string          `json:"uid,omitempty"`
+	Generation int64           `json:"generation,omitempty"`
+	Spec       json.RawMessage `json:"spec,omitempty"`
+	Names      []string        `json:"names,omitempty"`
+}
+
+// workloadLabel is a namespace: a DNS label. workloadName is a workload's name, the same label
+// starting with a letter, the grammar pkg/client and the workloads table hold.
+var (
+	workloadLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+	workloadName  = regexp.MustCompile(`^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$`)
+)
+
+// ValidWorkloadName reports whether n is a name a workload frame may carry. A Kubernetes name
+// may start with a digit; such a resource can never be a workload, so a sync leaves it out.
+func ValidWorkloadName(n string) bool { return workloadName.MatchString(n) }
+
+// Validate refuses a report outside the shape of its op.
+func (r WorkloadReport) Validate() error {
+	if !workloadLabel.MatchString(r.Namespace) {
+		return fmt.Errorf("%w: workload namespace %q", ErrBadFrame, r.Namespace)
+	}
+	switch r.Op {
+	case WorkloadOpApply, WorkloadOpDelete:
+		if !workloadName.MatchString(r.Name) || r.UID == "" || len(r.UID) > MaxWorkloadUID || len(r.Names) > 0 {
+			return fmt.Errorf("%w: workload %s needs a name and uid, and no names", ErrBadFrame, r.Op)
+		}
+		if r.Op == WorkloadOpDelete {
+			if r.Generation != 0 || len(r.Spec) > 0 {
+				return fmt.Errorf("%w: workload delete carries no generation or spec", ErrBadFrame)
+			}
+			return nil
+		}
+		if r.Generation < 1 || len(r.Spec) == 0 || len(r.Spec) > MaxWorkloadSpecBytes {
+			return fmt.Errorf("%w: workload apply needs a generation and a spec of at most %d bytes", ErrBadFrame, MaxWorkloadSpecBytes)
+		}
+	case WorkloadOpSync:
+		if r.Name != "" || r.UID != "" || r.Generation != 0 || len(r.Spec) > 0 || len(r.Names) > MaxWorkloadSyncNames {
+			return fmt.Errorf("%w: workload sync carries only a namespace and at most %d names", ErrBadFrame, MaxWorkloadSyncNames)
+		}
+		for _, n := range r.Names {
+			if !workloadName.MatchString(n) {
+				return fmt.Errorf("%w: workload name %q", ErrBadFrame, n)
+			}
+		}
+	default:
+		return fmt.Errorf("%w: unknown workload op %q", ErrBadFrame, r.Op)
+	}
+	return nil
+}
+
+// The phases of WorkloadStatusArgs, as a WardynWorkload's status.phase shows them.
+const (
+	WorkloadPhasePending         = "Pending"
+	WorkloadPhaseQueued          = "Queued"
+	WorkloadPhaseRunning         = "Running"
+	WorkloadPhaseUnhealthy       = "Unhealthy"
+	WorkloadPhaseCompleted       = "Completed"
+	WorkloadPhaseEnded           = "Ended"
+	WorkloadPhaseRefused         = "Refused"
+	WorkloadPhaseInvalid         = "Invalid"
+	WorkloadPhaseNotBound        = "NotBound"
+	WorkloadPhaseBindingInactive = "BindingInactive"
+)
+
+// WorkloadPhases is the closed list.
+var WorkloadPhases = []string{WorkloadPhasePending, WorkloadPhaseQueued, WorkloadPhaseRunning, WorkloadPhaseUnhealthy, WorkloadPhaseCompleted,
+	WorkloadPhaseEnded, WorkloadPhaseRefused, WorkloadPhaseInvalid, WorkloadPhaseNotBound, WorkloadPhaseBindingInactive}
+
+// WorkloadStatusArgs is workload_status's. The runner writes it to the resource's status
+// subresource and nowhere else; the org ignores the status of every resource it reads. UID and
+// ObservedGeneration are the resource the org answers, as its report named them: the runner writes the
+// status only to that resource (metadata.uid) at that metadata.generation, so a late answer never lands
+// on a resource recreated under the same name, nor on a newer spec.
+type WorkloadStatusArgs struct {
+	Namespace          string `json:"namespace"`
+	Name               string `json:"name"`
+	UID                string `json:"uid"`
+	ObservedGeneration int64  `json:"observed_generation"`
+	Phase              string `json:"phase"`
+	RunID              string `json:"run_id,omitempty"`
+	// Reason is a Wardyn reason token on Refused, Invalid and the like.
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// Validate refuses a status outside the closed phase list or past its bounds.
+func (a WorkloadStatusArgs) Validate() error {
+	if !workloadLabel.MatchString(a.Namespace) || !workloadName.MatchString(a.Name) || a.UID == "" || len(a.UID) > MaxWorkloadUID {
+		return fmt.Errorf("%w: workload status for %q/%q (uid %q)", ErrBadFrame, a.Namespace, a.Name, a.UID)
+	}
+	if !slices.Contains(WorkloadPhases, a.Phase) {
+		return fmt.Errorf("%w: unknown workload phase %q", ErrBadFrame, a.Phase)
+	}
+	if a.ObservedGeneration < 0 || len(a.Reason) > MaxRefusalReason || len(a.Message) > MaxWorkloadMessage {
+		return fmt.Errorf("%w: workload status out of bounds", ErrBadFrame)
+	}
+	return nil
 }

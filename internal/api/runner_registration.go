@@ -70,7 +70,7 @@ func (s *Server) runnerPersonalOwner(w http.ResponseWriter, r *http.Request) (st
 	return s.runnerSessionOwner(w, r, string(placement.ReasonRunnerClaimMismatch), "sign in as the runner's owner; administrative and delegated credentials cannot claim for a person")
 }
 
-const runnerSelfHostRefusal = "hosting your own runner isn't available to you. Ask your admin for the self_host_runner permission."
+const runnerSelfHostRefusal = "Hosting your own runner isn't available to you. Ask your admin for the self_host_runner permission."
 
 func (s *Server) handleRunnerTokenSelf(w http.ResponseWriter, r *http.Request) {
 	if !s.requireRunnersEnabled(w, r) {

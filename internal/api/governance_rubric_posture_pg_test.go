@@ -25,10 +25,8 @@ func TestPG_HeldProfileWriteNotesCarryTheRubricPosture(t *testing.T) {
 		t.Fatalf("decode diff %s: %v", ch.Diff, err)
 	}
 	// No model provider on this site: every run folds no credential, so every secrets row can bind.
-	const want = "on this deployment a run under this profile grades egress sealed, reviewed or open; " +
-		"secrets none, baseline or powerful; and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, " +
-		"secrets_powerful, secrets_baseline, secrets_none and confinement_cc1 can cap it, and confinement_cc2 and " +
-		"confinement_cc3 cap nothing here"
+	const want = "2 rubric rows never cap a run under this profile here: Wall (CC2) and Vault (CC3). " +
+		"A run here is graded egress sealed, reviewed or open, secrets none, baseline or powerful, and confinement Fence (CC1); those rows can cap it."
 	if !slices.Contains(diff.Notes, want) {
 		t.Errorf("held change notes = %q, want the rubric sentence %q", diff.Notes, want)
 	}

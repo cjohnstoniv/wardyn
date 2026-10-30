@@ -120,8 +120,8 @@ func TestDispatch_DriveReachesSpecEnvAndAudit(t *testing.T) {
 	// …AND THE PAYLOAD IS NOT A SIDE DOOR. Masking the Target while `object`
 	// still spelled the absolute path moved the operator's layout one field over
 	// inside the SAME row: GET /audit?run_id= hands the creator the whole event,
-	// data included, so `object` carries the masked name too. The operator reads
-	// the root from GET /drives, which is operator-only and already shows it.
+	// data included, so `object` carries the masked name too. A super admin reads
+	// the root from GET /drives, which withholds it from a security admin.
 	var data map[string]any
 	if err := json.Unmarshal(ev.Data, &data); err != nil {
 		t.Fatalf("run.drive.mount payload is not an object: %v (%s)", err, ev.Data)

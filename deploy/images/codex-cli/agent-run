@@ -53,6 +53,7 @@ set -euo pipefail
 # provision_git_helper_secret, clone_one, dispatch_repo_clones,
 # resolve_workdir) — identical across every agent image's agent-run.
 source /usr/local/bin/agent-run-lib.sh
+wait_for_proxy
 
 # ── managed agent-side policy ────────────────────────────────────────────────
 # codex reads no managed-policy file — nothing in this image consults one — so
@@ -241,7 +242,12 @@ fi
 if [[ "${1:-}" == "--idle" || "${1:-}" == "--revive" ]]; then
     : "${HOME:=/home/agent}"; export HOME
     # BEFORE any prep — see start_boot_session for why; a revive never re-seeds.
-    if [[ "$1" == "--revive" ]]; then revive_markers; else start_boot_session; fi
+    # An application run (WARDYN_APPLICATION_RUN, set by dispatch) is its startup
+    # command, so a revive starts it again; any other seed is never replayed.
+    if [[ "$1" == "--revive" ]]; then
+        revive_markers
+        if [[ "${WARDYN_APPLICATION_RUN:-}" == "1" ]]; then start_boot_session; fi
+    else start_boot_session; fi
     install_mitm_ca
     prepare_claude_config_dir  # no-op unless CLAUDE_CONFIG_DIR is set (RO cred mount)
     install_artifact_config
@@ -444,9 +450,36 @@ maybe_exec_task_mode "$task"
 #     --dangerously-skip-permissions (claude-code/agent-run). Codex's own
 #     sandbox cannot start under Wardyn's hardening (no user namespaces under
 #     the default seccomp profile), so without this every write fails. Wardyn
-#     IS the boundary: default-deny egress, proxy-injected credentials,
-#     confinement class and the audit trail govern the run (#2174).
+#     IS the boundary: default-deny egress, credentials kept out of the
+#     sandbox wherever Wardyn brokers them, confinement class and the audit
+#     trail govern the run (#2174).
+# WARDYN_HARNESS_SANDBOX (read-only | workspace-write) is the run's policy binding
+# codex to its own sandbox (harness_inner_walls, #2822), on a class where it can
+# start (CC2 workspace-write, CC3 both).  Dispatch also delivers
+# /etc/codex/requirements.toml, which refuses the bypass flag above, so a codex
+# started without -s fails rather than running unsandboxed.  workspace-write keeps
+# the sandbox's network (Wardyn's egress is the network wall): bubblewrap cannot
+# raise a new network namespace under gVisor.  The probe below runs first, because
+# codex exec can exit 0 and report edits it never made when its sandbox fails.
 # The exit code from `codex` propagates to the caller.
 exec_argv=(codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
+case "${WARDYN_HARNESS_SANDBOX:-}" in
+    "") ;;
+    read-only|workspace-write)
+        sandbox_cfg=()
+        if [[ "$WARDYN_HARNESS_SANDBOX" == "workspace-write" ]]; then
+            sandbox_cfg=(-c 'sandbox_workspace_write.network_access=true')
+        fi
+        if ! codex sandbox -c "sandbox_mode=\"$WARDYN_HARNESS_SANDBOX\"" "${sandbox_cfg[@]}" -- true; then
+            echo "agent-run: Codex's own sandbox ($WARDYN_HARNESS_SANDBOX) did not start in this sandbox; the run's policy requires it, so the task was not run" >&2
+            exit 1
+        fi
+        exec_argv=(codex exec --skip-git-repo-check -s "$WARDYN_HARNESS_SANDBOX" -c 'approval_policy="never"' "${sandbox_cfg[@]}")
+        ;;
+    *)
+        echo "agent-run: WARDYN_HARNESS_SANDBOX=$WARDYN_HARNESS_SANDBOX is not read-only or workspace-write; the task was not run" >&2
+        exit 1
+        ;;
+esac
 if [[ -n "${WARDYN_CODEX_MODEL:-}" ]]; then exec_argv+=(-m "$WARDYN_CODEX_MODEL"); fi
 exec "${exec_argv[@]}" "$task"

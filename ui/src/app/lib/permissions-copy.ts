@@ -137,7 +137,7 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     label: "SSH keys and API tokens",
     blurb: "Whether a member may add an SSH key or mint an API token.",
     valueLabel: "Feature",
-    valueHint: "ssh_key, api_token or custom_component. Use * for those three. self_host_runner and service_attach are never covered by *: name them.",
+    valueHint: "ssh_key, api_token or custom_component. Use * for those three. inbound, self_host_runner and service_attach are never covered by *: name them.",
     unenforced: "Members can add SSH keys and mint API tokens.",
     enforced:
       "A member can only add SSH keys or mint API tokens when granted. Keys and tokens they already have keep working until removed or revoked.",
@@ -185,6 +185,18 @@ export const SELF_HOST = {
   FAILED: "Failed to save the rule",
 } as const;
 
+// The Permissions row for the `inbound` feature value (a port callable from outside the run, r16 T2-e). Restricted
+// by migration 0239, so it is off until an allow names it; its grants are written in the add-grant form, so the row
+// lists who is allowed and opens that form. A service is a `user` grant naming service:<name>.
+export const INBOUND_ACCESS = {
+  LABEL: "Inbound access",
+  BLURB: "Declare ports that other people and services can call through the gateway. Off until you allow it.",
+  ALLOWED_FOR: "Allowed for:",
+  SUBJECT_SERVICE: "Service",
+  ADD_GRANT: "Add a grant",
+  REQUIRES_ROLE: "Requires the admin or security admin role.",
+} as const;
+
 export const PERM = {
   TITLE: "Permissions",
   LEAD: "Grant members and groups specific Wardyn capabilities. A capability refuses nothing until you enforce it.",
@@ -223,7 +235,7 @@ export const PERM = {
   ENFORCE_ON_TITLE: (kind: string) => `Enforce ${kind}?`,
   ENFORCE_ON_BODY: (n: number) =>
     `${n} member${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} bounded by the grants below from their next request. Anything not granted starts being refused.`,
-  // The count comes from GET /runs, which can be refused or fail — an unread
+  // The count comes from GET /people, which can be refused or fail — an unread
   // count must not print as "0 members are bounded", the opposite of the
   // lockout risk this dialog exists to state. Same sentence, minus the number.
   ENFORCE_ON_BODY_UNKNOWN:

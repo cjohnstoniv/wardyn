@@ -88,7 +88,7 @@ func TestMultiAgent_A8MeetNarrowsAnInnerWallNeverWidens(t *testing.T) {
 	walls := func(req createRunRequest) types.HarnessInnerWalls {
 		var spec types.RunPolicySpec
 		(&Server{}).applyToolPosture(&req, &spec)
-		w, _ := agentpolicy.InnerWalls("claude-code", false, holdLane(false, req.ToolApprovals, req.TaskMode), false)
+		w, _ := agentpolicy.InnerWalls("claude-code", false, holdLane(false, req.ToolApprovals, req.TaskMode), false, "")
 		return w
 	}
 	alone := walls(multiAgentReq(t, "claude-code", harnessTool("claude-code", "")))

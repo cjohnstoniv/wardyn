@@ -222,6 +222,9 @@ export class HttpError extends Error {
    *  consent_needed, blocked, permissions_missing, ado_pat_needs_console_app); "" when the body
    *  names none, which is not connected. */
   cause: string;
+  /** The request field a refusal is about (the envelope's `field`, a dotted path such as machine_kind), "" when
+   *  the body names none: New Run takes the person to the step that changes it. */
+  field: string;
   /** The policy a governance refusal came from and how to ask for a change
    *  (the envelope's `policy`, internal/policyref.Ref). Absent when the body
    *  carries none, which is every refusal that is not a policy decision. */
@@ -241,6 +244,7 @@ export class HttpError extends Error {
     policy?: PolicyRef,
     tool = "",
     cause = "",
+    field = "",
   ) {
     super(message);
     this.status = status;
@@ -250,6 +254,7 @@ export class HttpError extends Error {
     this.kind = kind;
     this.tool = tool;
     this.cause = cause;
+    this.field = field;
     if (policy) this.policy = policy;
     this.name = "HttpError";
   }
@@ -470,8 +475,8 @@ export class PendingChangeError extends Error {
 
 export async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const { message, reason, org, provider, kind, policy, tool, cause } = await errEnvelope(res);
-    throw new HttpError(res.status, message, reason, org, provider, kind, policy, tool, cause);
+    const { message, reason, org, provider, kind, policy, tool, cause, field } = await errEnvelope(res);
+    throw new HttpError(res.status, message, reason, org, provider, kind, policy, tool, cause, field);
   }
   const body = await res.json();
   if (res.status === 202 && body && typeof body === "object" && (body as { pending_change?: unknown }).pending_change) {
@@ -523,6 +528,7 @@ type ErrEnvelope = {
   policy?: PolicyRef;
   tool: string;
   cause: string;
+  field: string;
 };
 
 // The envelope's `policy` object, kept only when it is an object naming its
@@ -540,7 +546,7 @@ function policyField(v: unknown): PolicyRef | undefined {
 }
 
 export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
-  const bare = (message: string): ErrEnvelope => ({ message, reason: "", org: "", provider: "", kind: "", tool: "", cause: "" });
+  const bare = (message: string): ErrEnvelope => ({ message, reason: "", org: "", provider: "", kind: "", tool: "", cause: "", field: "" });
   const field = (v: unknown) => (typeof v === "string" ? v : "");
   try {
     const body = await res.text();
@@ -555,6 +561,7 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
         policy?: unknown;
         tool?: unknown;
         cause?: unknown;
+        field?: unknown;
         message?: unknown;
       };
       // The host-capacity 503 keeps its older shape (error = the code, reason = the measured
@@ -572,6 +579,7 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
           policy: policyField(j.policy),
           tool: field(j.tool),
           cause: field(j.cause),
+          field: field(j.field),
         };
       }
     } catch {
@@ -628,7 +636,7 @@ export type AuthProbe = "authed" | "unauthed" | "unreachable";
 
 // The 401 reasons (internal/api/auth_status.go) that mean a session this browser held has ended; the
 // cold load says so (App.tsx) instead of showing a bare sign-in screen.
-const SESSION_ENDED_REASONS = new Set(["expired_session", "revoked_session", "role_stamp_stale", "invalid_session"]);
+const SESSION_ENDED_REASONS = new Set(["expired_session", "revoked_session", "role_stamp_stale", "invalid_session", "identity_deactivated"]);
 export const isSessionEnded = (reason: string): boolean => SESSION_ENDED_REASONS.has(reason);
 
 // Probe auth by hitting a protected endpoint. It needs only a yes/no on the

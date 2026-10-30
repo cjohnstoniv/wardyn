@@ -119,6 +119,7 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// whole lifetime, which is exactly what returning early ahead of this line
 	// did. Both boot passes then run regardless of the other's error.
 	s.goBackground(func() { s.runWatcherSweeper(s.watcherBaseCtx(), watcherSweepInterval) })
+	s.startWorkloadStatusSweeper() // custom-resource workloads' statuses, on their own faster cadence
 	// sweepOrphanedSandboxes runs LAST: finalizeUndispatchedRuns above has by now
 	// flipped every ref-empty abandoned run terminal, so those runs' leaked
 	// containers are visible to the label sweep as "row terminal, containers still
@@ -219,8 +220,17 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 		run, known = byID[runID]
 		return run, known, err
 	}
+	// A prewrapped image check's pods carry its attempt ID where a run's carry the run ID: a live attempt
+	// is never an orphan, and one past its deadline is swept like any unknown run.
+	liveChecks, err := s.cfg.Store.LiveImageCheckAttempts(ctx)
+	if err != nil {
+		return fmt.Errorf("sweep orphaned sandboxes: list live image checks: %w", err)
+	}
 	leaser, hasLease := s.cfg.Store.(store.RunWatcherLeaser)
 	isOrphan := func(runID uuid.UUID) bool {
+		if liveChecks[runID] {
+			return false
+		}
 		run, known, err := lookup(runID)
 		if err != nil {
 			lookupErr = errors.Join(lookupErr, err)
@@ -230,7 +240,9 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 			return true // no run row owns these containers — pure leak
 		}
 		if isTerminalRunState(run.State) {
-			return true // the run ended; its containers should already be gone
+			// The run ended; its containers should already be gone, unless its computer folder's
+			// pass back keeps them for resumeComputerFolderBacks, which runs before this sweep.
+			return !s.computerFolderKept(ctx, runID)
 		}
 		if run.SandboxRef != "" {
 			return false // live and tracked — its own lifecycle owns teardown
@@ -297,6 +309,9 @@ func (s *Server) reconcileOrphanedSandbox(ctx context.Context) error {
 	}
 	for _, run := range runs {
 		s.revokeRunCascade(ctx, run.ID)
+		if s.computerFolderKept(ctx, run.ID) {
+			continue // kept for its computer folder's pass back, which resumeComputerFolderBacks resumes
+		}
 		kind, outcome, answered := s.lastRunnerTeardown(ctx, run)
 		torn := false
 		switch {
@@ -539,6 +554,11 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 			continue
 		}
 		st, serr := s.probeAgent(ctx, run.SandboxRef, run.AgentExecID)
+		if errors.Is(serr, runner.ErrRunnerOffline) && onRunner(run.SandboxRef) {
+			// No live session to the run's runner here (another replica may hold it). Attach no
+			// watcher: the claim's lease goes stale, and a later sweep, maybe on that replica, adopts it.
+			continue
+		}
 		// A genuinely-gone sandbox/agent reports a terminal STATE (RunStopped), not
 		// an error — an error means the probe couldn't determine liveness (a docker
 		// daemon blip). Do NOT finalize a possibly-healthy run on a transient error;
@@ -547,6 +567,15 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 		if serr == nil && isTerminalRunState(st.State) {
 			// An interactive run whose container exited under it (a reboot) is
 			// kept, not finalized (run_lost.go).
+			switch s.probeRunnerSandbox(ctx, run, run.SandboxRef, st) {
+			case runnerProbeEnded:
+				finalized++
+				continue
+			case runnerProbeAbsent:
+				s.goBackground(func() { s.reconcileWatch(base, run.ID, run.SandboxRef, run.AgentExecID) })
+				reattached++
+				continue
+			}
 			if s.keepRebootedRun(ctx, run, st) {
 				continue
 			}
@@ -650,6 +679,7 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 		// ref-empty run's leaked containers are swept the same tick.
 		// ponytail: no separate ticker — piggy-backing this cadence keeps
 		// one ContainerList per grace period, free next to what it reclaims.
+		pass("computer folder resume", s.resumeComputerFolderBacks(ctx))
 		pass("orphaned sandbox sweep", s.sweepOrphanedSandboxes(ctx))
 		pass("terminal run proxy config purge", s.purgeTerminalRunProxyConfigs(ctx))
 		pass("asserted runner subject purge", s.purgeAssertedRunnerSubjects(ctx))
@@ -665,6 +695,16 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	// not frozen first; its backstop resumes a run whose request
 	// closed without a writer calling approvalClosed.
 	pass("run pause sweep", s.sweepRunPauses(ctx))
+	// A service's health, read from the state file its supervisor keeps. The read is
+	// never presence, so it does not hold a run past an idle wall.
+	pass("service health sweep", s.sweepServiceHealth(ctx))
+	// A sign-in whose run ended, whose window passed, or whose end failed.
+	pass("desktop sign-in sweep", s.sweepDesktopSignins(ctx))
+	// A VM's pause whose run ended with the agent still paused writes its row here.
+	pass("ended desktop pause sweep", s.sweepEndedDesktopVMPauses(ctx))
+	// And the recording hold of a pause whose run ended with no desktop connection left, on every
+	// replica: each holds its own.
+	pass("ended desktop recording pause sweep", s.sweepEndedDesktopRecordingPauses(ctx))
 	// A run whose token lapsed loses its proxy within a tick.
 	pass("lapsed run token sweep", s.sweepLapsedRunTokens(ctx))
 	// Azure DevOps personal access tokens, on their own slower clock.
@@ -829,6 +869,12 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 				// healthy RUNNING run on a daemon blip or a >60s loaded-dockerd restart.
 				// BACK OFF and keep the sandbox alive; only give up
 				// after a generous wall-clock ceiling for a genuinely-wedged ref.
+				if errors.Is(err, runner.ErrRunnerOffline) && onRunner(ref) {
+					// No live session to the run's runner here (another replica may hold it): stop, and
+					// leave the lease to expire, so a later sweep, maybe on that replica, adopts the run.
+					// A runner run is never finalized here (reconcileFinalize), so nothing is lost.
+					return
+				}
 				if firstErr.IsZero() {
 					firstErr = s.cfg.Now()
 				}
@@ -846,8 +892,16 @@ func (s *Server) reconcileWatch(ctx context.Context, runID uuid.UUID, ref, agent
 				tick.Reset(baseInterval)
 			}
 			if isTerminalRunState(st.State) {
-				if run, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil && s.keepRebootedRun(ctx, run, st) {
-					return
+				if run, gerr := s.cfg.Store.GetRun(ctx, runID); gerr == nil {
+					switch s.probeRunnerSandbox(ctx, run, ref, st) {
+					case runnerProbeEnded:
+						return
+					case runnerProbeAbsent:
+						continue // not yet confirmed: the next tick checks again, due within store.RunnerSandboxGoneAfter
+					}
+					if s.keepRebootedRun(ctx, run, st) {
+						return
+					}
 				}
 				final := types.RunFailed
 				if st.ExitCode != nil && *st.ExitCode == 0 {

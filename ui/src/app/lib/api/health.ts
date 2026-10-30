@@ -7,7 +7,7 @@
 // The small "server & session" surface the shell always needs.
 import { SERVER_OWNED_SITE_CONFIG_KEYS, type SiteConfig } from "../types";
 import type { DriveBackend, StorageEnforcement } from "./drives";
-import { LAUNCH_DEADLINE_MS, WFETCH_TIMEOUT_MS, asJson, wfetch } from "./core";
+import { LAUNCH_DEADLINE_MS, WFETCH_TIMEOUT_MS, asJson, getToken, wfetch } from "./core";
 import { appURL } from "../base-path";
 
 // GET /me's `user_drive` (0.7, migration 0054) — what this caller would mount
@@ -35,6 +35,10 @@ export interface MeUserDrive {
   home_name?: string;
   /** Allocated, then disabled by an admin. Omitted when false. */
   paused?: boolean;
+  /** A share, which can be reached from more than one place (#113). */
+  placement_eligible?: boolean;
+  /** Where it mounts from, printed as it is (M10): "Organisation runners", and the bound runner when you own it. */
+  mounts_from?: string;
 }
 
 // GET /me — see whoami() below for where each field comes from. One
@@ -151,6 +155,31 @@ export interface Me {
   // binds them. null for an operator and whenever the ceiling could not be
   // resolved; absent on a pre-0.8.6 daemon.
   governance_contact?: PolicyRef | null;
+  // The units this caller administers by a unit-admin grant (internal/api/governance_scope_read.go):
+  // always present, [] for none; absent on a pre-0.10.0 daemon.
+  unit_admin_of?: { unit_id: string; unit_name: string }[];
+  // A service identity's reach (internal/api/me_service_reach.go): the routes
+  // its token may call and what it may already launch with. Present only for a
+  // service identity's token; a person's /me never carries it.
+  service?: ServiceReach;
+}
+
+export interface ServiceReach {
+  name: string;
+  sponsor: string;
+  routes: string[];
+  presets: ServiceReachPreset[];
+  workspaces: ServiceReachWorkspace[];
+}
+
+export interface ServiceReachPreset {
+  name: string;
+  version: number;
+}
+
+export interface ServiceReachWorkspace {
+  id: string;
+  name: string;
 }
 
 // internal/policyref.Ref — the member-safe reference a refusal, /me and a run
@@ -162,10 +191,12 @@ export interface PolicyRef {
   email?: string;
   request_url?: string;
   request_text?: string;
-  // On a refusal: the kind of layer that refused ("deployment" or "unit").
+  // On a refusal: the kind of layer that refused ("deployment", "unit" or "personal").
   layer?: string;
   // The person changed the policy for this run, inside their ceiling.
   overridden?: boolean;
+  // On a refusal: the knob it is about is locked by the layer that set it (absent until locks exist).
+  locked?: boolean;
 }
 
 // Result of a real throwaway-sandbox probe (test-proxy / test-redirect) —
@@ -414,12 +445,15 @@ export const health = {
       // browser (#1241); the gateway refuses an enter without it.
       bind_url?: string;
       host_mode?: boolean;
+      // inbound_url_template: where an API client calls an inbound app, with {run} and {app} to fill in.
+      inbound_url_template?: string;
     };
     // Per-pluggable-seam selection (server.go's ComponentInfo), keyed by seam
     // name ("recording", "identity", ...). recording.selected ===
     // "none" is the honest signal that THIS deployment's recording store
     // never came up (stock Helm install: persistence off) — distinct from
-    // "no run has produced one yet". Absent on an older daemon.
+    // "no run has produced one yet". Absent on an older daemon, and for a
+    // caller who is not signed in (internal/api/healthz.go healthzSignedIn).
     components?: Record<string, { selected?: string; available?: string[]; source?: string }>;
     // The daemon's own build (internal/api/healthz.go's deliberate anonymous
     // disclosure — a support issue or CLI/server skew after a rolling upgrade
@@ -439,6 +473,11 @@ export const health = {
     // mean "no mirror" — lib/demo-videos.ts's episodeUrl falls back to its
     // own hardcoded GitHub base either way.
     demo_video_base_url?: string;
+    // WARDYN_CLI_ARTIFACT_BASE (internal/api/healthz.go on lane ATT-INSTALL, not on
+    // main yet): the operator's internal mirror of the release assets, already
+    // validated at boot (https, no userinfo/query/fragment). Absent while unset and
+    // on an older daemon. The card's Get the CLI lines fetch from it when present.
+    cli_artifact_base?: string;
   }> {
     try {
       // /healthz is un-prefixed (not under /api/v1), so it is the ONE call
@@ -448,8 +487,12 @@ export const health = {
       // every route is gated behind that (app-shell.tsx:128-158, App.tsx's
       // roleResolved). The catch below already turns a failure into {}, which
       // is exactly how the shell reads "control plane unreachable".
+      // Signed in, the body also carries components: the session cookie rides
+      // on credentials:"include", and the admin token, when one is set, here.
+      const token = getToken();
       const res = await fetch(appURL("/healthz"), {
         credentials: "include",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         signal: AbortSignal.timeout(WFETCH_TIMEOUT_MS),
       });
       if (!res.ok) return {};

@@ -26,7 +26,7 @@ func (s PG) GetBoundary(ctx context.Context) (types.Boundary, error) {
 	return GetBoundaryQ(ctx, s.Pool)
 }
 
-// PutBoundary replaces the boundary.
+// PutBoundary replaces the boundary, and marks it seeded so a fresh-install seed never overwrites it.
 func (s PG) PutBoundary(ctx context.Context, b types.BoundaryWrite, by string) (types.Boundary, error) {
 	return PutBoundaryQ(ctx, s.Pool, b, by)
 }
@@ -35,8 +35,8 @@ func (s PG) PutBoundary(ctx context.Context, b types.BoundaryWrite, by string) (
 func GetBoundaryQ(ctx context.Context, q Querier) (types.Boundary, error) {
 	var b types.Boundary
 	var spec, limits, contact []byte
-	err := q.QueryRow(ctx, `SELECT mode, spec, limits, contact, updated_by, updated_at FROM governance_boundary WHERE singleton`).
-		Scan(&b.Mode, &spec, &limits, &contact, &b.UpdatedBy, &b.UpdatedAt)
+	err := q.QueryRow(ctx, `SELECT mode, spec, limits, contact, updated_by, updated_at, locked_knobs FROM governance_boundary WHERE singleton`).
+		Scan(&b.Mode, &spec, &limits, &contact, &b.UpdatedBy, &b.UpdatedAt, &b.LockedKnobs)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Boundary{Mode: types.BoundaryNoLimits}, nil
 	}
@@ -57,7 +57,8 @@ func GetBoundaryQ(ctx context.Context, q Querier) (types.Boundary, error) {
 	return b, nil
 }
 
-// PutBoundaryQ replaces the boundary on q and returns it as stored.
+// PutBoundaryQ replaces the boundary on q and returns it as stored. A nil b.LockedKnobs keeps the
+// stored locks.
 func PutBoundaryQ(ctx context.Context, q Querier, b types.BoundaryWrite, by string) (types.Boundary, error) {
 	spec, err := json.Marshal(b.Spec)
 	if err != nil {
@@ -73,13 +74,20 @@ func PutBoundaryQ(ctx context.Context, q Querier, b types.BoundaryWrite, by stri
 			return types.Boundary{}, fmt.Errorf("store: marshal boundary contact: %w", err)
 		}
 	}
+	var locks []string // NULL keeps the stored locks
+	if b.LockedKnobs != nil {
+		locks = nonNil(*b.LockedKnobs)
+	}
+	// seeded_at: a written boundary is never seeded afterwards (internal/db/fresh_seed.go).
 	if _, err := q.Exec(ctx, `
-		INSERT INTO governance_boundary (singleton, mode, spec, limits, contact, updated_by, updated_at)
-		VALUES (true, $1, $2, $3, $4, $5, now())
+		INSERT INTO governance_boundary (singleton, mode, spec, limits, contact, updated_by, updated_at, locked_knobs, seeded_at)
+		VALUES (true, $1, $2, $3, $4, $5, now(), COALESCE($6::text[], '{}'), now())
 		ON CONFLICT (singleton) DO UPDATE
 			SET mode = EXCLUDED.mode, spec = EXCLUDED.spec, limits = EXCLUDED.limits, contact = EXCLUDED.contact,
-			    updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at`,
-		string(b.Mode), spec, limits, contact, by); err != nil {
+			    updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at,
+			    locked_knobs = COALESCE($6::text[], governance_boundary.locked_knobs),
+			    seeded_at = COALESCE(governance_boundary.seeded_at, now())`,
+		string(b.Mode), spec, limits, contact, by, locks); err != nil {
 		return types.Boundary{}, fmt.Errorf("store: put boundary: %w", err)
 	}
 	return GetBoundaryQ(ctx, q)

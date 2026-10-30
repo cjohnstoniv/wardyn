@@ -39,8 +39,10 @@ import { LIST_LIMIT } from "../../lib/api/core";
 import { appURL } from "../../lib/base-path";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { absoluteTime, clockTime, getErrorMessage } from "../../lib/format";
+import { awsSigningLine, describeAction, describeEvent, describeObject, hasNoCaller, inboundDetail, isInbound } from "../../lib/audit-copy";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
+import { InboundOutcome, NoCaller } from "../wardyn/audit-inbound";
 import { ActorTypeChip } from "../wardyn/primitives";
 import {
   AuditDecision,
@@ -57,18 +59,21 @@ import { Refusal } from "../wardyn/refusal";
 import { REFUSAL, RUN_NOT_FOUND } from "../wardyn/copy/refusal";
 import { isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
+import { useRefusedApprovals } from "../../lib/hooks/use-refused-approvals";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { useConsoleMode } from "../wardyn/console-view";
 import { RUN_COCKPIT, RUN_OUTPUT } from "../wardyn/copy";
 import { ProfileReview } from "./profile-review";
 import { SummaryHeader } from "./run-detail-summary-header";
+import { useRunWorkload } from "./workloads/use-run-workload";
 import { viewerBlockedOnDecision } from "./run-detail/viewer-blocked";
 import { ApprovalsTab } from "./run-detail-approvals-tab";
+import { NeedsYouBanner } from "../wardyn/needs-you-banner";
+import { NEEDS_YOU } from "../wardyn/copy/needs-you";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
 import { RunLifetimeWithContainment } from "./run-detail/containment-pending";
-import { RunEndsRow } from "./run-detail/run-ends-row";
 import { PolicyTab } from "./run-detail/policy-tab";
 import { POLICY_TAB } from "./run-detail/policy-tab-copy";
 import { RecordingTab } from "./run-detail/recording-tab";
@@ -105,6 +110,7 @@ function RunDetailPage({ id }: { id: string }) {
     recording, recState, setRecState, recKey, setRecKey, recordingDisabled,
     load, terminal, pending, endingEvents, held, killAgain, outcomeReady,
   } = useRunDetail(id);
+  const workload = useRunWorkload(run?.id);
 
   // "Make a policy from this run" — the honest home of "write the policy from
   // what actually happened", now that /runs/new's Record radio (which only ever
@@ -115,6 +121,7 @@ function RunDetailPage({ id }: { id: string }) {
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
 
   const { copyAsync } = useCopyToClipboard(1400);
+  const { refused, noteRefusal } = useRefusedApprovals();
   const [decide, setDecide] = React.useState<{
     id: string;
     action: "approve" | "deny";
@@ -193,6 +200,7 @@ function RunDetailPage({ id }: { id: string }) {
       void load(false);
       return true;
     } catch (err) {
+      noteRefusal(decide.id, err);
       toast.error(decide.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(err),
       });
@@ -224,6 +232,16 @@ function RunDetailPage({ id }: { id: string }) {
   // field — but unlike ADO, NO opts at all (decide's rule 4 refuses a
   // decision_scope on this kind).
   const decidePushDirect = (id: string, approve: boolean): Promise<void> => decideAdoDirect(id, approve, []);
+
+  // #2963 — a "Needs you" request's Decline from the Approvals tab.
+  const declineTakeover = async (approvalId: string): Promise<void> => {
+    try {
+      await approvalsApi.decline(approvalId);
+      void load(false);
+    } catch (err) {
+      toast.error(NEEDS_YOU.failed.decline, { description: getErrorMessage(err) });
+    }
+  };
 
   // The page does not scroll. `h-full min-h-0 flex flex-col` fills
   // app-shell's <main> exactly — main is flex-1 inside a h-screen column, so
@@ -297,15 +315,23 @@ function RunDetailPage({ id }: { id: string }) {
             canKillAgain={killAgain}
             onClone={view === "user" ? () => void onClone() : undefined}
             onRename={view === "user" ? rename : undefined}
+            onLifetimeChanged={() => load(false)}
+            workload={workload}
           />
 
           <LaunchWarningsNote />
           {/* RL-15 (#580, #1197 L5): one lifetime banner (lost/ended/paused/
-              ending-soon — mutually exclusive server facts) plus the
-              persistent Ends/wait row, both self-contained per the
-              LaunchWarningsNote pattern above. */}
+              ending-soon — mutually exclusive server facts), self-contained per the LaunchWarningsNote pattern
+              above. The Ends and wait controls live in the header's facts row (#3034). */}
           <RunLifetimeWithContainment run={run} pending={pending} onChanged={() => load(false)} />
-          <RunEndsRow run={run} onChanged={() => load(false)} />
+          {/* "Needs you" (#2963, mock M8 Option A): the agent's takeover request on the run. */}
+          <NeedsYouBanner
+            run={run}
+            approvals={approvals}
+            onChanged={() => void load(false)}
+            onOpenTerminal={() => setTab("overview")}
+            onGoAudit={() => setTab("audit")}
+          />
 
           <RunDetailCommandBar
             tabs={
@@ -369,6 +395,9 @@ function RunDetailPage({ id }: { id: string }) {
               onDecide={(approvalId, action, kind) => setDecide({ id: approvalId, action, kind })}
               onAdoDecide={decideAdoDirect}
               onPushDecide={decidePushDirect}
+              onTakeOver={() => setTab("overview")}
+              onDecline={declineTakeover}
+              refused={refused}
             />
           </TabsContent>
 
@@ -396,6 +425,7 @@ function RunDetailPage({ id }: { id: string }) {
                 setRecState("idle");
               }}
               onRetry={() => setRecState("idle")}
+              onGoAudit={() => setTab("audit")}
             />
           </TabsContent>
 
@@ -493,49 +523,74 @@ function AuditTab({
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
           <div className="divide-y divide-border">
-            {events.map((e) => (
-              // One line from sm up; below sm the target drops to a second line of its own (#2917).
-              <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${isAttributedRefusal(e) && !toolRuleDecision(e) ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
-                <span
-                  data-testid="run-audit-time"
-                  className="w-[84px] shrink-0 whitespace-nowrap font-mono text-meta text-muted-foreground"
-                  title={absoluteTime(e.time)}
-                >
-                  {clockTime(e.time)}
-                </span>
-                {/* A fixed slot, so the action and target columns start at one x for every actor. */}
-                <span className="inline-flex w-[88px] shrink-0">
-                  <ActorTypeChip type={e.actor_type} />
-                </span>
-                <span
-                  className="min-w-0 grow basis-[120px] truncate font-mono text-xs text-muted-foreground sm:w-[190px] sm:grow-0 sm:basis-auto sm:shrink-0"
-                  title={e.action}
-                >
-                  {e.action}
-                </span>
-                {/* A tool call the policy's own tool_rules answered rides an
-                    egress.allow/deny row whose target is the CONTROL PLANE —
-                    so the row says who decided, as the Audit screen does. */}
-                {toolRuleDecision(e) ? (
-                  <AuditDecision event={e} className="flex min-w-0 grow basis-full items-center gap-2 text-xs sm:basis-0" />
-                ) : (
-                  <span data-testid="run-audit-target" className="flex min-w-0 grow basis-full items-center gap-2 sm:basis-0">
-                    {e.target === ERASED_VALUE ? (
-                      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={AUDIT.ERASED_HINT}>
-                        {AUDIT.ERASED}
-                      </span>
-                    ) : (
-                      <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target}>
-                        {e.target || "—"}
-                      </span>
-                    )}
-                    <RuleSourceChip event={e} />
-                    <ErasedFields event={e} className="shrink-0 text-xs" />
+            {events.map((e) => {
+              const signing = awsSigningLine(e);
+              const inbound = inboundDetail(e);
+              return (
+                // One line from sm up; below sm the target drops to a second line of its own (#2917).
+                <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${(isAttributedRefusal(e) && !toolRuleDecision(e)) || signing || inbound ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
+                  <span
+                    data-testid="run-audit-time"
+                    className="w-[84px] shrink-0 whitespace-nowrap font-mono text-meta text-muted-foreground"
+                    title={absoluteTime(e.time)}
+                  >
+                    {clockTime(e.time)}
                   </span>
-                )}
-                {!toolRuleDecision(e) && isAttributedRefusal(e) && <PolicyRemedy policy={policy} className="basis-full" />}
-              </div>
-            ))}
+                  {/* A fixed slot, so the action and target columns start at one x for every actor. */}
+                  <span className="inline-flex w-[88px] shrink-0">
+                    {hasNoCaller(e) ? <NoCaller /> : <ActorTypeChip type={e.actor_type} />}
+                  </span>
+                  <span
+                    data-testid="run-audit-action"
+                    className="min-w-0 grow basis-[120px] truncate text-xs text-foreground sm:w-[190px] sm:grow-0 sm:basis-auto sm:shrink-0"
+                    title={`${describeEvent(e)}\n${e.action}`}
+                  >
+                    {describeAction(e)}
+                  </span>
+                  {/* A tool call the policy's own tool_rules answered rides an
+                      egress.allow/deny row whose target is the CONTROL PLANE —
+                      so the row says who decided, as the Audit screen does. */}
+                  {toolRuleDecision(e) ? (
+                    <AuditDecision event={e} className="flex min-w-0 grow basis-full items-center gap-2 text-xs sm:basis-0" />
+                  ) : (
+                    <span data-testid="run-audit-target" className="flex min-w-0 grow basis-full items-center gap-2 sm:basis-0">
+                      {e.target === ERASED_VALUE ? (
+                        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={AUDIT.ERASED_HINT}>
+                          {AUDIT.ERASED}
+                        </span>
+                      ) : (
+                        // #3035: the viewed run's own id says nothing the page does not.
+                        <span className="min-w-0 flex-1 truncate text-xs text-foreground" title={e.target === runId ? undefined : e.target}>
+                          {e.target === runId ? "" : describeObject(e) || "—"}
+                        </span>
+                      )}
+                      <RuleSourceChip event={e} />
+                      <ErasedFields event={e} className="shrink-0 text-xs" />
+                    </span>
+                  )}
+                  {isInbound(e) && (
+                    <span data-testid="run-audit-outcome" className="ml-auto shrink-0">
+                      <InboundOutcome allowed={e.action === "inbound.allow"} />
+                    </span>
+                  )}
+                  {inbound && (
+                    <span data-testid="run-audit-detail" className="min-w-0 basis-full truncate font-mono text-xs text-muted-foreground sm:pl-[208px]" title={inbound}>
+                      {inbound}
+                    </span>
+                  )}
+                  {!toolRuleDecision(e) && isAttributedRefusal(e) && <PolicyRemedy policy={policy} className="basis-full" />}
+                  {/* Mock packet rc.6 §2b: its own wrapping line, so a long endpoint host is never cut. */}
+                  {signing && (
+                    <span
+                      data-testid="run-audit-aws-signing"
+                      className={`min-w-0 basis-full text-xs [overflow-wrap:anywhere] sm:pl-[208px] ${signing.sandbox ? "text-warning" : "text-muted-foreground"}`}
+                    >
+                      {signing.text}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

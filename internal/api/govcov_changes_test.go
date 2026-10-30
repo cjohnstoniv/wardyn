@@ -40,7 +40,8 @@ func govCovGrantDelete(s *Server, proposedBy, email string) types.GovernanceChan
 }
 
 func TestGovCovListChangesFiltersByKindAndValidatesState(t *testing.T) {
-	profile := types.GovernanceChange{ID: uuid.MustParse("aaaaaaaa-0000-0000-0000-0000000000a1"), TargetKind: govKindUnit}
+	profile := types.GovernanceChange{ID: uuid.MustParse("aaaaaaaa-0000-0000-0000-0000000000a1"), TargetKind: govKindUnit,
+		Payload: json.RawMessage(`{"name":"p","ceiling":{}}`)} // a held profile write names no host path
 	mapping := types.GovernanceChange{ID: uuid.MustParse("aaaaaaaa-0000-0000-0000-0000000000a2"), TargetKind: govKindRoleMapping}
 	newer := types.GovernanceChange{ID: uuid.MustParse("aaaaaaaa-0000-0000-0000-0000000000a3"), TargetKind: "from_a_newer_binary"}
 	st := &govCovStore{changes: []types.GovernanceChange{profile, mapping, newer}}
@@ -102,7 +103,8 @@ func TestGovCovListChangesStoreFailure(t *testing.T) {
 }
 
 func TestGovCovGetChange(t *testing.T) {
-	visible := types.GovernanceChange{ID: govCovChangeID, TargetKind: govKindUnit, Op: "create", TargetKey: "k", Diff: json.RawMessage(`{"changed":["name"]}`)}
+	visible := types.GovernanceChange{ID: govCovChangeID, TargetKind: govKindUnit, Op: "create", TargetKey: "k", Diff: json.RawMessage(`{"changed":["name"]}`),
+		Payload: json.RawMessage(`{"name":"p","ceiling":{}}`)}
 	hidden := types.GovernanceChange{ID: govCovChangeID, TargetKind: govKindRoleMapping}
 	alice := govCovSession(t, "sub-alice", "alice@corp.example", oidc.RoleSecurityAdmin)
 	path := govCovChangesPath + "/" + govCovChangeID.String()
@@ -488,10 +490,19 @@ func TestGovCovRecheckApprover(t *testing.T) {
 	kind := governanceChangeKinds[govKindGrant]
 	r := govCovHumanReq(http.MethodPost, "/x", "sub-alice", "alice@corp.example", oidc.RoleSecurityAdmin)
 
-	t.Run("a session or the admin token carries nothing to re-read", func(t *testing.T) {
+	t.Run("a session that still passes the approver predicate passes", func(t *testing.T) {
 		q := &govCovQuerier{}
 		if err := s.recheckApprover(r.Context(), r, q, kind); err != nil || len(q.seen) != 0 {
 			t.Errorf("recheck = %v after %v, want nil and no statement", err, q.seen)
+		}
+	})
+
+	t.Run("a session that no longer passes the approver predicate is refused", func(t *testing.T) {
+		member := govCovHumanReq(http.MethodPost, "/x", "sub-mallory", "mallory@corp.example", oidc.RoleUser)
+		err := s.recheckApprover(member.Context(), member, &govCovQuerier{}, kind)
+		var refusal *govRefusal
+		if !errors.As(err, &refusal) || !strings.Contains(err.Error(), "approver tier") {
+			t.Fatalf("recheck = %v, want the approver-tier refusal", err)
 		}
 	})
 

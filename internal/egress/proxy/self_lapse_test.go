@@ -7,8 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -41,6 +44,128 @@ func TestSelfLapse_ClosedBeforeFirstRenew(t *testing.T) {
 	}
 	if !p.lapse.renewed(clock.Now(), func() {}) || !p.lapse.serving() {
 		t.Fatal("first successful renew did not open the proxy")
+	}
+}
+
+// TestSelfLapse_ListensOnlyOnceOpen: a self-lapsing proxy binds its listener only on its first
+// renew, so a k8s runner's TCP readiness probe reads its pod Ready only once it serves. Closed, the
+// proxy accepts no connection, so no agent can start and a short run's recording upload is never
+// refused there; once open, the upload reaches the control plane; lapsed, the listener stays bound
+// and refuses. Lapsed before its first renew, it never listens, and Shutdown still ends it. A proxy
+// with no gate (Docker, server) listens at once.
+func TestSelfLapse_ListensOnlyOnceOpen(t *testing.T) {
+	var landed atomic.Int32
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		landed.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer cp.Close()
+	serve := func(gate *lapseGate) (*Server, string, chan error) {
+		p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(cp), nil, nil)
+		p.lapse = gate
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addr := ln.Addr().String()
+		_ = ln.Close()
+		s := &Server{proxy: p, http: &http.Server{Addr: addr, Handler: p}}
+		s.watchShutdown()
+		served := make(chan error, 1)
+		go func() { served <- s.ListenAndServe() }()
+		t.Cleanup(func() { _ = s.http.Shutdown(context.Background()) })
+		return s, addr, served
+	}
+	listening := func(addr string, within time.Duration) bool {
+		for end := time.Now().Add(within); ; time.Sleep(10 * time.Millisecond) {
+			if c, err := net.Dial("tcp", addr); err == nil {
+				_ = c.Close()
+				return true
+			}
+			if time.Now().After(end) {
+				return false
+			}
+		}
+	}
+	upload := func(p *Proxy, addr string) int {
+		req, err := http.NewRequest(http.MethodPut, "http://"+addr+routeRecordings+p.runID.String(), strings.NewReader("{\"version\": 2}\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("upload: %v", err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if _, addr, _ := serve(nil); !listening(addr, 5*time.Second) {
+		t.Fatal("ungated proxy never listened")
+	}
+
+	clock := &fakeBoot{}
+	s, addr, _ := serve(newLapseGate(clock, testLapseTTL))
+	p := s.proxy
+	if listening(addr, 300*time.Millisecond) || landed.Load() != 0 {
+		t.Fatalf("closed proxy accepted a connection (%d forwarded); a probe would read it Ready before it serves", landed.Load())
+	}
+	if !p.lapse.renewed(clock.Now(), func() {}) {
+		t.Fatal("first renew did not apply")
+	}
+	if !listening(addr, 5*time.Second) {
+		t.Fatal("open proxy never listened")
+	}
+	if got := upload(p, addr); got != http.StatusNoContent || landed.Load() != 1 {
+		t.Fatalf("open proxy: upload %d, %d forwarded; want 204, one", got, landed.Load())
+	}
+	clock.advance(testLapseTTL)
+	if got := upload(p, addr); got != http.StatusServiceUnavailable || landed.Load() != 1 {
+		t.Fatalf("lapsed proxy: upload %d, %d forwarded; want 503, still one", got, landed.Load())
+	}
+
+	s, addr, served := serve(newLapseGate(clock, testLapseTTL))
+	s.proxy.lapse.lapse(LapseRenewRefused)
+	if listening(addr, 300*time.Millisecond) {
+		t.Fatal("a proxy lapsed before its first renew listened")
+	}
+	// ListenAndServe registers its Shutdown hook on its own goroutine, so Shutdown is repeated
+	// until it has been seen.
+	for end := time.Now().Add(5 * time.Second); ; {
+		_ = s.http.Shutdown(context.Background())
+		select {
+		case err := <-served:
+			if err != nil || listening(addr, 0) {
+				t.Fatalf("a proxy shut down before its first renew: ListenAndServe %v, listening %v", err, listening(addr, 0))
+			}
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+		if time.Now().After(end) {
+			t.Fatal("a proxy shut down before its first renew never returned from ListenAndServe")
+		}
+	}
+}
+
+// TestSelfLapse_ShutdownBeforeListenAndServeReturns: a Shutdown that completes before ListenAndServe
+// reaches its open gate still ends it, as net/http runs only the hooks registered before Shutdown.
+func TestSelfLapse_ShutdownBeforeListenAndServeReturns(t *testing.T) {
+	p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", "127.0.0.1:1", nil, nil)
+	p.lapse = newLapseGate(&fakeBoot{}, testLapseTTL)
+	s := &Server{proxy: p, http: &http.Server{Addr: "127.0.0.1:0", Handler: p}}
+	s.watchShutdown()
+	if err := s.http.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- s.ListenAndServe() }()
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Fatalf("ListenAndServe after Shutdown: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ListenAndServe after a completed Shutdown never returned")
 	}
 }
 
@@ -220,4 +345,120 @@ func TestSelfLapse_FarFutureClockSaturates(t *testing.T) {
 	if g.serving() || g.reason != LapseDeadline {
 		t.Fatalf("serving on a far-future clock (reason %q)", g.reason)
 	}
+}
+
+// TestSelfLapse_NeverRenewedLapsesWithItsCause: a proxy whose first renew keeps failing keeps
+// trying until its next try would land past firstRenewWithin, then lapses, closed all along, with
+// its last renew error as the termination message a k8s runner names the failed start by. That
+// error keeps its class and the organisation's host:port, never the token, the URL's user info or
+// query. An open proxy failing as long does not lapse before its deadline; a permanent refusal
+// lapses at once with its own cause.
+func TestSelfLapse_NeverRenewedLapsesWithItsCause(t *testing.T) {
+	const tok = "SEEDTOK-abc123"
+	run := func(t *testing.T, base string, client *http.Client, g *lapseGate) {
+		t.Helper()
+		go runSelfLapseRenewer(t.Context(), newTokenSource(tok), base, client, g, lapseTestTuning())
+	}
+	lapsed := func(g *lapseGate, within time.Duration) bool {
+		select {
+		case <-g.Done():
+			return true
+		case <-time.After(within):
+			return false
+		}
+	}
+	readCause := func(t *testing.T, g *lapseGate) string {
+		t.Helper()
+		path := t.TempDir() + "/termination-log"
+		if err := (&Server{proxy: &Proxy{lapse: g}}).WriteLapseCause(path); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+
+	t.Run("unreachable", func(t *testing.T) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		hostPort := ln.Addr().String()
+		_ = ln.Close()
+		clock := &fakeBoot{}
+		g := newLapseGate(clock, testLapseTTL)
+		run(t, "http://user:hunter2@"+hostPort+"/?sig="+tok, http.DefaultClient, g)
+		if lapsed(g, 200*time.Millisecond) {
+			t.Fatal("lapsed before its first renew's bound")
+		}
+		clock.set(firstRenewWithin)
+		if !lapsed(g, 5*time.Second) {
+			t.Fatal("a proxy failing its first renew past its bound never lapsed")
+		}
+		if g.serving() || g.reason != LapseDeadline {
+			t.Fatalf("serving=%v reason=%q", g.serving(), g.reason)
+		}
+		cause := readCause(t, g)
+		for _, want := range []string{"http://" + hostPort, "connection refused"} {
+			if !strings.Contains(cause, want) {
+				t.Errorf("cause %q lacks %q", cause, want)
+			}
+		}
+		for _, leak := range []string{tok, "hunter2", "sig=", "token/renew"} {
+			if strings.Contains(cause, leak) {
+				t.Errorf("cause %q leaks %q", cause, leak)
+			}
+		}
+	})
+
+	t.Run("refused", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "token "+strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")+" not valid\n"+strings.Repeat("x", 2*maxRenewCause), http.StatusUnauthorized)
+		}))
+		defer srv.Close()
+		clock := &fakeBoot{}
+		g := newLapseGate(clock, testLapseTTL)
+		run(t, srv.URL, srv.Client(), g)
+		clock.set(firstRenewWithin)
+		if !lapsed(g, 5*time.Second) {
+			t.Fatal("never lapsed")
+		}
+		cause := readCause(t, g)
+		if !strings.HasPrefix(cause, "renew status 401: token [redacted] not valid x") || strings.Contains(cause, tok) ||
+			strings.Contains(cause, "\n") || len(cause) > maxRenewCause+len("…") {
+			t.Fatalf("cause %q (%d bytes)", cause, len(cause))
+		}
+	})
+
+	t.Run("open", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "blip", http.StatusServiceUnavailable)
+		}))
+		defer srv.Close()
+		clock := &fakeBoot{}
+		g := newLapseGate(clock, testLapseTTL)
+		g.renewed(0, func() {})
+		clock.set(firstRenewWithin)
+		run(t, srv.URL, srv.Client(), g)
+		if lapsed(g, 200*time.Millisecond) {
+			t.Fatal("an open proxy lapsed before its deadline")
+		}
+	})
+
+	t.Run("permanent", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "run terminal", http.StatusForbidden)
+		}))
+		defer srv.Close()
+		g := newLapseGate(&fakeBoot{}, testLapseTTL)
+		run(t, srv.URL, srv.Client(), g)
+		if !lapsed(g, 5*time.Second) || g.reason != LapseRenewRefused {
+			t.Fatalf("reason %q", g.reason)
+		}
+		if cause := readCause(t, g); cause != "refused for good: renew status 403: run terminal" {
+			t.Fatalf("cause %q", cause)
+		}
+	})
 }

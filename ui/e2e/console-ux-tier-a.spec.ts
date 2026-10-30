@@ -51,7 +51,8 @@ test.describe("Tier A at 390px", () => {
     await phoneAt(page, "admin", "/admin/setup?step=environment");
     const matrix = page.getByRole("radiogroup", { name: "Barrier tier" });
     await expect(matrix).toBeVisible();
-    expect(await scrollsSideways(page)).toBe(false);
+    // Polled: the step's reads land after the matrix shows, and the page is judged once its layout settles.
+    await expect.poll(() => scrollsSideways(page)).toBe(false);
     await expect(matrix).toHaveCSS("opacity", "1");
     await expect(matrix).toHaveCSS("pointer-events", "auto");
   });
@@ -66,7 +67,7 @@ test.describe("Tier A at 390px", () => {
     expect(box.height).toBeLessThan(26);
   });
 
-  // #2849: an event row is at most two lines, fits the viewport, keeps a readable description and a short run chip.
+  // #2849: an event row is at most three lines, fits the viewport, keeps a readable description and a short run chip.
   test("Audit: rows fit the viewport in three lines at most, the description is readable and the run chip is short", async ({ page }) => {
     await gotoConsole(page, "admin");
     const id = await seedRun(page);

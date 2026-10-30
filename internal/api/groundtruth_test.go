@@ -592,7 +592,7 @@ func TestEbpfGroundtruthCaveat_OneLinePerState(t *testing.T) {
 				}
 				return
 			}
-			if got == "" || !strings.Contains(got, "kernel ground truth") || !strings.Contains(got, c.wantState) {
+			if got == "" || !strings.Contains(got, "Kernel ground truth") || !strings.Contains(got, c.wantState) {
 				t.Fatalf("hostSensorCaveat = %q, want a one-line note naming %q", got, c.wantState)
 			}
 		})

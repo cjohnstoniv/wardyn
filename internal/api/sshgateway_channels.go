@@ -36,7 +36,7 @@ const sshDisplaceGrace = time.Second
 // sshExecStreamUnsupportedMsg is what every ExecStream consumer in this file
 // reports on runner.ErrExecStreamUnsupported: a clean channel error, never a
 // hang, on a substrate with no exec-streaming primitive.
-const sshExecStreamUnsupportedMsg = "this sandbox's runtime does not support SSH exec/sftp/forwarding"
+const sshExecStreamUnsupportedMsg = "This sandbox's runtime does not support SSH exec/sftp/forwarding"
 
 // SSH connection-protocol request/channel-open payloads (RFC 4254 §6, §7.2),
 // mirrored here with EXPORTED fields so ssh.Unmarshal (reflection-based,
@@ -853,10 +853,26 @@ func (p *sshPumpState) applyResize(cols, rows uint16) bool {
 	return true
 }
 
+// sshExecFromHome is the wrapper bridgeSSHExec runs the client's command
+// under: it enters the sandbox user's $HOME first, as sshd does before
+// `${SHELL} -c command`, and stays in the image's working directory when HOME
+// is unset or cannot be entered. The command itself goes through an
+// unchanged `/bin/sh -c`, so a client that installs a helper under $HOME and
+// runs it by a relative path (Mutagen's agent) finds it (#3549). The cd's stdout
+// is discarded too: a relative HOME that CDPATH resolves, or HOME of "-", makes
+// cd print a directory line ahead of the command's output, which sshd's
+// chdir never does.
+const sshExecFromHome = `[ -n "${HOME:-}" ] && cd "$HOME" >/dev/null 2>&1; exec /bin/sh -c "$1"`
+
+// sshExecArgv is the argv one exec channel's command runs as.
+func sshExecArgv(command string) []string {
+	return []string{"/bin/sh", "-c", sshExecFromHome, "sh", command}
+}
+
 // bridgeSSHExec runs command through /bin/sh -c inside the sandbox via
-// ExecStream — NO protocol reimplementation: word-splitting/quoting is the
-// SANDBOX's own shell's job, exactly like a real sshd's `${SHELL} -c
-// command`. TTY=false (separate stdout/stderr, per the brief); env is the
+// ExecStream, from the sandbox user's $HOME (sshExecFromHome) — NO protocol
+// reimplementation: word-splitting/quoting is the SANDBOX's own shell's job,
+// exactly like a real sshd's `${SHELL} -c command`. TTY=false (separate stdout/stderr, per the brief); env is the
 // caller's TERM/LANG/LC_*-allowlisted set collected from "env" requests.
 // Never recorded — distinct from bridgeSSHShell's Attach call, this is
 // runner.ExecStream's "fresh, streamable exec... no PTY tmux session, no
@@ -870,7 +886,7 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 		return
 	}
 	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
-		Argv: []string{"/bin/sh", "-c", command},
+		Argv: sshExecArgv(command),
 		Env:  env,
 	})
 	if err != nil {

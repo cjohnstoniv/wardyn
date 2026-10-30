@@ -21,7 +21,9 @@ import { heldCredentials } from "../../../lib/held-credentials";
 import { recordings as recordingsApi } from "../../../lib/api/recordings";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { usePoll } from "../../../lib/use-poll";
+import { LIST_LIMIT } from "../../../lib/api/core";
 import { withNewestEvents } from "./audit-window";
+import { macOSDiskPending } from "./macos-run-facts";
 
 // Live refresh cadence for a non-terminal run's detail.
 const DETAIL_POLL_MS = 4000;
@@ -39,6 +41,9 @@ export function useRunDetail(id: string) {
   const [audit, setAudit] = React.useState<AuditEvent[]>([]);
   // The oldest and newest pages of a very long trail did not meet: counts read off `audit` are a floor.
   const [auditGap, setAuditGap] = React.useState(false);
+  // A full oldest page cannot change (the trail is append-only), so it is read once per run id and
+  // only the newest page is fetched again on later polls.
+  const oldestPage = React.useRef<{ id: string; events: AuditEvent[] } | null>(null);
   // The run's session.recording(.write) events (RECORDING_ACTIONS), via a
   // SEPARATE action_prefix fetch so the general trail's cap can't crowd them out.
   const [recordingAudit, setRecordingAudit] = React.useState<AuditEvent[]>([]);
@@ -134,7 +139,7 @@ export function useRunDetail(id: string) {
         // LIST_LIMIT lifetime rows — see approvals.ts's listApprovals comment
         // and internal/api/approvals.go:56-61.
         approvalsApi.listApprovals("", id),
-        auditApi.listAudit(id),
+        oldestPage.current?.id === id ? Promise.resolve(oldestPage.current.events) : auditApi.listAudit(id),
         // "session.recording" names the ACTION FAMILY, prefixing both the old
         // and new action names — not itself a legacy action name (Conductor ruling, #1062).
         auditApi.listAudit(id, { actionPrefix: "session.recording" }),
@@ -157,6 +162,7 @@ export function useRunDetail(id: string) {
           }
           // The first page is the OLDEST 1000 rows; a run past that joins its newest page on, so the live
           // evidence (egress, mints) keeps moving instead of freezing at row 1000.
+          if (a.status === "fulfilled" && a.value.length >= LIST_LIMIT) oldestPage.current = { id, events: a.value };
           const trail = a.status === "fulfilled" ? await withNewestEvents(id, a.value) : undefined;
           setRun(r.value ?? null);
           setGrantsReadable(g.status === "fulfilled");
@@ -281,7 +287,8 @@ export function useRunDetail(id: string) {
   const unconfirmedKill = run?.state === "KILLED" && !killSettled;
   if (unconfirmedKill && settleSince.current === null) settleSince.current = Date.now();
   const killSettling = unconfirmedKill && Date.now() - (settleSince.current ?? Date.now()) < KILL_SETTLE_MS;
-  usePoll(() => load(false), DETAIL_POLL_MS, terminal && !killSettling);
+  // …and a macOS VM run whose disk is still being removed
+  usePoll(() => load(false), DETAIL_POLL_MS, terminal && !killSettling && !macOSDiskPending(run));
 
   return {
     run, grants, egress, approvals, audit, auditGap, recordingAudit, status, tab, setTab,

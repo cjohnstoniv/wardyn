@@ -78,7 +78,7 @@ function DialogContent({
       >
         <RememberOpener into={opener} />
         {children}
-        <DialogPrimitive.Close className="ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute top-4 right-4 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4">
+        <DialogPrimitive.Close className="ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute top-4 right-4 z-20 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4">
           <XIcon />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>
@@ -91,7 +91,13 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-header"
-      className={cn("flex flex-col gap-2 text-center sm:text-left", className)}
+      className={cn(
+        // Pinned like the footer so the title stays with it in a tall dialog. The negative margins and matching
+        // padding stretch the bar over DialogContent's p-6 without moving the title; -top-6 because a sticky box
+        // is clamped to the scroll container's content edge, which would undo -mt-6 and show a strip above it.
+        "bg-background sticky -top-6 z-10 -mx-6 -mt-6 flex flex-col gap-2 px-6 pt-6 pb-2 text-center sm:text-left",
+        className,
+      )}
       {...props}
     />
   );

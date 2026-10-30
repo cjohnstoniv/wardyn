@@ -55,9 +55,9 @@ const PLURALISED = ["SAVED_NARROWED(n)", "CARD_PROVIDERS(n)", "CARD_AGENTS(n)", 
 const NAMESPACES: Record<string, unknown>[] = [PROVIDERS, PROVIDER_MEMBER, AGENTS];
 
 // ONE lookup across the three namespaces is safe because none of their keys
-// collide (61 / 3 / 30, #125: AGENTS lost OPEN_RUN_CTA; #539: twelve
+// collide (61 / 3 / 34, #125: AGENTS lost OPEN_RUN_CTA; #539: twelve
 // mechanism-radio and credential-toggle keys out, five default-provider keys
-// in); the completeness
+// in; #2972: four desktop sign-in keys in); the completeness
 // test below is what keeps that true.
 const render = (docKey: string) => renderFromNamespaces(docKey, NAMESPACES);
 
@@ -66,8 +66,9 @@ const RENDERABLE = [...doc.keys()].filter((k) => !PLURALISED.includes(k));
 describe("workspace-providers-copy — §7.2-§7.5 + §7.7 parsed out of the prompt doc", () => {
   // #125: OPEN_RUN_CTA retired with the held "Open run" screen — 102 -> 101.
   // #539: the Agents tab's default provider — 101 -> 94.
-  it("finds all 94 frozen keys in the doc (§7.6 excluded)", () => {
-    expect(doc.size).toBe(94);
+  // #2972: the Agents tab's "Sign-ins in a desktop" switch — 94 -> 98.
+  it("finds all 98 frozen keys in the doc (§7.6 excluded)", () => {
+    expect(doc.size).toBe(98);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {

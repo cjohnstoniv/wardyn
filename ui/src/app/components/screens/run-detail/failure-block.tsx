@@ -32,6 +32,7 @@ import type { AgentRun, AuditEvent, RunEnding, RunEndingKind } from "../../../li
 import type { HeldCredential, HeldCredentials } from "../../../lib/held-credentials";
 import { runEndingFromAudit } from "../../../lib/api/audit";
 import { absoluteTime, formatDuration } from "../../../lib/format";
+import { desktopSigninReasonLine } from "../../../lib/desktop-signin-reasons";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Mono } from "../../wardyn/code-block";
@@ -311,6 +312,8 @@ export function RunFailureBlock({
     void refresh();
   }, [credential, refresh]);
   if (!ending) return null;
+  // A kill Wardyn made itself for a desktop sign-in says why in words, not as its reason code.
+  const signinLine = ending.kind === "killed" ? desktopSigninReasonLine(ending.detail) : undefined;
   const copy =
     ending.kind === "killed"
       ? // A revocation whose cascade did not finish is a partial teardown first: its credentials may still work.
@@ -319,10 +322,10 @@ export function RunFailureBlock({
         : killedCopy(ending.evidence, held, run.placement === "local" ? runnerLabel(run) : undefined, runnerLabel(run))
       : ENDING_COPY[ending.kind];
   // The ending event's own timestamp bounds the run's lifetime; without one
-  // (a truncated trail) fall back to the run's last update, which is what the
-  // command bar's own clock freezes at.
+  // (a truncated trail) fall back to when the run ended, then to its last
+  // update, which is what the command bar's own clock freezes at.
   const elapsed = formatDuration(
-    new Date(ending.time ?? run.updated_at).getTime() - new Date(run.created_at).getTime(),
+    new Date(ending.time ?? run.ended_at ?? run.updated_at).getTime() - new Date(run.created_at).getTime(),
   );
 
   return (
@@ -367,10 +370,14 @@ export function RunFailureBlock({
               (§3) — the same data.error the CLI's runFailureReason prints.
               Under an unrecognised ending there is no copy block at all, so
               this never appears without a cause naming it. */}
-          {ending.detail && (
-            <p className="mt-1 break-words text-muted-foreground">
-              <Mono>{dispatchFailure ? stripCriWrapper(ending.detail) : ending.detail}</Mono>
-            </p>
+          {signinLine ? (
+            <p className="mt-1 text-xs leading-relaxed text-foreground">{signinLine}</p>
+          ) : (
+            ending.detail && (
+              <p className="mt-1 break-words text-muted-foreground">
+                <Mono>{dispatchFailure ? stripCriWrapper(ending.detail) : ending.detail}</Mono>
+              </p>
+            )
           )}
           {/* Only the two dispatch kinds: the unstripped text, and only when
               stripping removed something (nothing new is fetched; it is the

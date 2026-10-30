@@ -6,13 +6,21 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
+	"log/slog"
 	"net"
+	"net/http"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/livebus"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -35,28 +43,94 @@ type runDesktopRecording struct {
 	paused *desktopPause
 }
 
+// desktopPause is one gap: it opens with the first hold on the run and closes when the last one ends,
+// so take overs and a sign-in that overlap keep one gap, named by the reason that opened it.
 type desktopPause struct {
-	at     time.Time
-	reason string
+	at      time.Time
+	reason  string
+	holders []string // the id of every take over or sign-in still holding the gap open, the opener's included
 }
 
 // recordDesktopConn records conn's sandbox side when the run records screen_actions, the app is the
 // desktop and the organisation keeps recordings; any other connection is returned as it is. The
 // browser's side is never read (recording.ReadSideConn), so keystrokes are never recorded. A run its
 // runner declined to record is still recorded here: this relay is Wardyn's, as for a console session.
-func (s *Server) recordDesktopConn(run types.AgentRun, sess uiSession, conn net.Conn) net.Conn {
-	if sess.App != desktopApp || run.RecordingLevel != types.RecordingScreenActions || run.NotRecorded == types.NotRecordedPolicyOff ||
-		s.cfg.RecordingStore == nil || runIsUnrecordable(run) {
+// closed, when set, runs once the recording is stored (watchDesktopApp's stop).
+func (s *Server) recordDesktopConn(run types.AgentRun, sess uiSession, conn net.Conn, closed func()) net.Conn {
+	if !s.recordsDesktopApp(run, sess) {
 		return conn
 	}
 	rec := recording.NewRFBRecorder(s.cfg.Now)
-	session := desktopRecordingSuffix + uuid.NewString()
-	s.desktopRecs.add(run.ID, rec)
+	stored := s.trackDesktopRecording(run, sess, rec)
 	return recording.ReadSideConn(conn, rec, func() {
-		s.desktopRecs.remove(run.ID, rec)
-		s.saveDesktopRecording(s.cfg.BaseCtx, run, sess, session, rec)
+		stored()
+		if closed != nil {
+			closed()
+		}
 	})
 }
+
+// recordsDesktopApp is whether recordDesktopConn records sess's connections on run.
+func (s *Server) recordsDesktopApp(run types.AgentRun, sess uiSession) bool {
+	return sess.App == desktopApp && s.desktopRecorded(run)
+}
+
+// watchDesktopApp admits a recorded desktop app connection as a Linux VM's display is admitted
+// (serveDesktopRFB): the recording is held from the first frame while the run has an open take over or,
+// on a Linux VM, its sign-in row marks a pause, and either read failing refuses the connection (503).
+// The watch starts now, before the dial, so a pause or take over on another replica during the dial is
+// held within the same bound. stop ends it, once the connection's recording is stored; it is a no-op
+// for any other connection.
+func (s *Server) watchDesktopApp(ctx context.Context, run types.AgentRun, sess uiSession) (stop func(), err error) {
+	if !s.recordsDesktopApp(run, sess) {
+		return func() {}, nil
+	}
+	signIn, err := s.watchVMSignIn(ctx, run.ID)
+	if err != nil {
+		return nil, uiFail(ctx, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, desktopSignInsUnreadableMsg)
+	}
+	wctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	go signIn.watch(wctx)
+	return sync.OnceFunc(func() { cancel(); signIn.stop() }), nil
+}
+
+// recordVMDisplay is recordDesktopConn on a Linux VM's display, framed as the clipboard filter reads it
+// (wsFramed): the same rules, pauses and stored recording, with the viewer's side never read.
+func (s *Server) recordVMDisplay(run types.AgentRun, sess uiSession, display io.ReadWriteCloser) io.ReadWriteCloser {
+	if !s.desktopRecorded(run) {
+		return display
+	}
+	rec := recording.NewRFBFrameRecorder(s.cfg.Now)
+	return recording.ReadSide(display, rec, s.trackDesktopRecording(run, sess, rec))
+}
+
+// trackDesktopRecording is the hook both desktop relays share: rec joins the run's live recordings,
+// so a pause open now or later reaches it, and the returned func, run once when its connection
+// closes, stores it (desktop.recording.write) and lets the run's entry go.
+func (s *Server) trackDesktopRecording(run types.AgentRun, sess uiSession, rec *recording.RFBRecorder) func() {
+	session := desktopRecordingSuffix + uuid.NewString()
+	s.desktopRecs.add(run.ID, rec)
+	return func() {
+		s.desktopRecs.remove(run.ID, rec)
+		s.saveDesktopRecording(s.cfg.BaseCtx, run, sess, session, rec)
+		s.forgetEndedDesktopPause(s.cfg.BaseCtx, run.ID)
+	}
+}
+
+// desktopRecorded reports whether run's desktop screen is recorded: the run records screen_actions and
+// the organisation keeps recordings.
+func (s *Server) desktopRecorded(run types.AgentRun) bool {
+	return run.RecordingLevel == types.RecordingScreenActions && run.NotRecorded != types.NotRecordedPolicyOff &&
+		s.cfg.RecordingStore != nil && !runIsUnrecordable(run)
+}
+
+// Why Wardyn paused a desktop recording, as the gap names it: a "Needs you" takeover, a desktop
+// sign-in (board M7-Replay's words), or a desktop that could not read whether either is open.
+const (
+	desktopPauseTakeover = "you took over"
+	desktopPauseSignin   = "you took over to sign in"
+	desktopPauseUnread   = "Wardyn could not read whether you had taken over"
+)
 
 // saveDesktopRecording stores a closed connection's recording and writes desktop.recording.write.
 // A connection that carried no RFB frames (a static file, or one that never upgraded) stores nothing.
@@ -73,6 +147,13 @@ func (s *Server) saveDesktopRecording(ctx context.Context, run types.AgentRun, s
 		"clipboard_omitted": rec.ClipboardOmitted()}
 	if err != nil {
 		outcome, data["error"] = "failure", err.Error()
+	}
+	// A recorder that met a message it could not follow stopped keeping frames: the stored cast is
+	// shorter than the session, so the write row says where it ends rather than reading as complete.
+	if stopped := rec.StoppedMS(); stopped > 0 {
+		data["stopped_ms"] = stopped
+		slog.WarnContext(ctx, "wardynd: desktop recording stopped early at a message it could not follow",
+			"run_id", run.ID, "session", session, "stopped_ms", stopped)
 	}
 	s.auditUISession(sess, "desktop.recording.write", key, outcome, data)
 }
@@ -105,11 +186,66 @@ func (d *desktopRecordings) remove(run uuid.UUID, rec *recording.RFBRecorder) {
 	}
 }
 
+// forgetEndedDesktopPause drops a paused run's entry once its last connection closed and the run is
+// over (desktopPauseOver) or gone, so a pause nothing will resume does not stay for the life of
+// the process, and writes the gap's resume row, end_reason run_ended: every pause row has one. A
+// live run keeps it: a connection that opens during the pause must start paused. The entry is deleted under the lock
+// before the row is written, so the last connection's close and sweepEndedDesktopRecordingPauses,
+// or two sweeps, write it once.
+func (s *Server) forgetEndedDesktopPause(ctx context.Context, runID uuid.UUID) {
+	if s.cfg.Store == nil {
+		return
+	}
+	cur, err := s.cfg.Store.GetRun(ctx, runID)
+	if !errors.Is(err, store.ErrNotFound) && (err != nil || !s.desktopPauseOver(ctx, cur)) {
+		return
+	}
+	d := &s.desktopRecs
+	d.mu.Lock()
+	r := d.byRun[runID]
+	if r == nil || len(r.recs) > 0 {
+		d.mu.Unlock()
+		return
+	}
+	delete(d.byRun, runID)
+	d.mu.Unlock()
+	if r.paused != nil {
+		s.auditDesktopResume(ctx, runID, cur.SandboxRef, *r.paused, true)
+	}
+}
+
+// sweepEndedDesktopRecordingPauses closes every pause this replica holds on a run with no desktop
+// connection left, once the run has ended (forgetEndedDesktopPause): a person who disconnected
+// before the run ended left a take over's or sign-in's hold that no connection's close would end.
+// The hold lives in the memory of the replica that took it, so this pass runs on every replica, not
+// only the leader. One pass of the reconciler.
+func (s *Server) sweepEndedDesktopRecordingPauses(ctx context.Context) error {
+	for _, runID := range s.desktopRecs.idlePaused() {
+		s.forgetEndedDesktopPause(ctx, runID)
+	}
+	return nil
+}
+
+// idlePaused lists the runs whose gap is open here with no connection recording.
+func (d *desktopRecordings) idlePaused() []uuid.UUID {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []uuid.UUID
+	for id, r := range d.byRun {
+		if r.paused != nil && len(r.recs) == 0 {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // PauseDesktopRecording stops keeping the run's screen frames (C11): the action log, the clipboard
 // rules and the run itself carry on. The pause is written to the tamper-evident audit log as
-// desktop.recording.pause, by Wardyn, never by the desktop. It reports false when already paused.
-// Its caller is the "Needs you" takeover.
-func (s *Server) PauseDesktopRecording(ctx context.Context, run types.AgentRun, reason string) bool {
+// desktop.recording.pause, by Wardyn, never by the desktop. A pause while one is open joins it: no
+// new gap or row, and the gap stays open until every reason holding it has resumed. It reports
+// whether it opened the gap. Its callers are the "Needs you" takeover and a desktop sign-in, on a run
+// whose screen is recorded; hold is that take over's or sign-in's id, which its end resumes.
+func (s *Server) PauseDesktopRecording(ctx context.Context, run types.AgentRun, reason, hold string) bool {
 	d := &s.desktopRecs
 	d.mu.Lock()
 	if d.byRun == nil {
@@ -121,11 +257,14 @@ func (s *Server) PauseDesktopRecording(ctx context.Context, run types.AgentRun, 
 		d.byRun[run.ID] = r
 	}
 	if r.paused != nil {
+		if !slices.Contains(r.paused.holders, hold) {
+			r.paused.holders = append(r.paused.holders, hold)
+		}
 		d.mu.Unlock()
 		return false
 	}
 	at := s.cfg.Now().UTC()
-	r.paused = &desktopPause{at: at, reason: reason}
+	r.paused = &desktopPause{at: at, reason: reason, holders: []string{hold}}
 	for rec := range r.recs {
 		rec.Pause(reason)
 	}
@@ -135,13 +274,27 @@ func (s *Server) PauseDesktopRecording(ctx context.Context, run types.AgentRun, 
 	return true
 }
 
-// ResumeDesktopRecording keeps frames again and writes desktop.recording.resume with the whole gap:
-// its start, end, length and reason. It reports false when the run was not paused.
-func (s *Server) ResumeDesktopRecording(ctx context.Context, run types.AgentRun) bool {
+// ResumeDesktopRecording ends hold's hold on the gap. When it was the last one, frames are kept
+// again and desktop.recording.resume is written with the whole gap: its start, end, length and the
+// reason that opened it. It reports whether the recording resumed, so one pause's end never ends
+// another's. Whether the gap closed once the run was over is read from the run (desktopPauseOver);
+// a caller that knows it says so (resumeDesktopHold).
+func (s *Server) ResumeDesktopRecording(ctx context.Context, run types.AgentRun, hold string) bool {
+	return s.resumeDesktopHold(ctx, run, hold, nil)
+}
+
+// resumeDesktopHold is ResumeDesktopRecording with the run's disposition, when ended is set, taken as
+// given rather than read again: the run read later may be one a revive has since made live again.
+func (s *Server) resumeDesktopHold(ctx context.Context, run types.AgentRun, hold string, ended *bool) bool {
 	d := &s.desktopRecs
 	d.mu.Lock()
 	r := d.byRun[run.ID]
 	if r == nil || r.paused == nil {
+		d.mu.Unlock()
+		return false
+	}
+	r.paused.holders = slices.DeleteFunc(r.paused.holders, func(h string) bool { return h == hold })
+	if len(r.paused.holders) > 0 {
 		d.mu.Unlock()
 		return false
 	}
@@ -154,9 +307,78 @@ func (s *Server) ResumeDesktopRecording(ctx context.Context, run types.AgentRun)
 		delete(d.byRun, run.ID)
 	}
 	d.mu.Unlock()
-	end := s.cfg.Now().UTC()
-	s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "desktop.recording.resume",
-		run.ID.String(), "success", mustJSON(map[string]any{"reason": p.reason, "gap_start": p.at, "gap_end": end,
-			"gap_ms": end.Sub(p.at).Milliseconds()})))
+	if ended == nil {
+		ended = new(s.desktopPauseOver(ctx, run))
+	}
+	s.auditDesktopResume(ctx, run.ID, run.SandboxRef, p, *ended)
 	return true
+}
+
+// endDesktopHold ends a desktop sign-in's hold here and, on a screen-recorded run, over the live bus on
+// the replica that holds it: the leader's sweep may close a sign-in another replica began. A take
+// over's hand back tells the other replicas in its own recording_gap notice (recordingGap). ended,
+// when set, is whether the run was over when the sign-in ended, carried in the notice
+// (recordingGapNotice.RunEnded) so the replica holding the pause writes what this one knew; unset,
+// each replica reads it from the run (desktopPauseOver).
+func (s *Server) endDesktopHold(ctx context.Context, run types.AgentRun, hold string, ended *bool) {
+	if !s.resumeDesktopHold(ctx, run, hold, ended) && s.desktopRecorded(run) {
+		s.publishNotice(livebus.KindRecordingGap, run.ID, recordingGapNotice{Reason: desktopSigninGapReason, DesktopHold: hold, RunEnded: ended})
+	}
+}
+
+// desktopSigninGapReason is the reason a sign-in's recording_gap notice names.
+const desktopSigninGapReason = "desktop_signin"
+
+// onRecordingGapNotice ends another replica's resumed hold on this replica's desktop recording, when
+// this replica holds it, with the run's disposition the notice carries (RunEnded); a notice without
+// one, an older replica's, has it read from the run.
+func (s *Server) onRecordingGapNotice(m livebus.Message) {
+	var n recordingGapNotice
+	if m.Origin == s.replicaName() || unmarshalNotice(m, &n) != nil || n.Paused || n.DesktopHold == "" || !s.desktopRecs.holds(m.Run, n.DesktopHold) {
+		return
+	}
+	run := types.AgentRun{ID: m.Run}
+	if s.cfg.Store != nil {
+		if cur, err := s.cfg.Store.GetRun(s.cfg.BaseCtx, m.Run); err == nil {
+			run = cur
+		}
+	}
+	s.resumeDesktopHold(s.cfg.BaseCtx, run, n.DesktopHold, n.RunEnded)
+}
+
+// holds reports whether hold holds run's desktop recording paused here.
+func (d *desktopRecordings) holds(run uuid.UUID, hold string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	r := d.byRun[run]
+	return r != nil && r.paused != nil && slices.Contains(r.paused.holders, hold)
+}
+
+// heldWith lists the holds on run's open gap here whose id starts with prefix.
+func (d *desktopRecordings) heldWith(run uuid.UUID, prefix string) []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	r := d.byRun[run]
+	if r == nil || r.paused == nil {
+		return nil
+	}
+	var out []string
+	for _, h := range r.paused.holders {
+		if strings.HasPrefix(h, prefix) {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// auditDesktopResume writes desktop.recording.resume for gap p, ending now. A gap closed once the run
+// was over (desktopPauseOver) says so, as a container sign-in's close does: end_reason run_ended (signinEndRunEnded).
+func (s *Server) auditDesktopResume(ctx context.Context, runID uuid.UUID, sandboxRef string, p desktopPause, runEnded bool) {
+	end := s.cfg.Now().UTC()
+	data := map[string]any{"reason": p.reason, "gap_start": p.at, "gap_end": end, "gap_ms": end.Sub(p.at).Milliseconds()}
+	if runEnded {
+		data["end_reason"] = signinEndRunEnded
+	}
+	s.recordStreamAudit(ctx, sandboxRef, s.auditEvent(&runID, types.ActorSystem, "wardynd", "desktop.recording.resume",
+		runID.String(), "success", mustJSON(data)))
 }

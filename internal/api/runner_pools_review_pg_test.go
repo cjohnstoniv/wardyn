@@ -167,6 +167,15 @@ func TestPG_RunnerPoolLeaverPurgeStripsUseSubjectsAndNeverWidens(t *testing.T) {
 	if n.PoolsNarrowed != 2 || n.PoolsEmptied != 1 {
 		t.Errorf("pools narrowed %d, emptied %d; want 2 and 1", n.PoolsNarrowed, n.PoolsEmptied)
 	}
+	// And names them, each with its policy as the purge left it, so the audit can say which pool changed.
+	byPool := map[uuid.UUID]types.RunnerPoolUsePolicy{}
+	for _, p := range n.Pools {
+		byPool[p.PoolID] = p
+	}
+	if len(n.Pools) != 2 || len(byPool[shared.ID].Subjects) != 2 || byPool[shared.ID].Revision != revShared+1 ||
+		len(byPool[solo.ID].Subjects) != 0 || byPool[solo.ID].Revision != revSolo+1 {
+		t.Errorf("purged pools = %+v, want shared (2 subjects, revision %d) and solo (none, revision %d)", n.Pools, revShared+1, revSolo+1)
+	}
 	got := e.policySubjects(shared.ID)
 	if len(got) != 2 || got[0].Subject != "sub-stays" || got[1].Subject != "pool-users" || e.revision(shared.ID) != revShared+1 {
 		t.Errorf("shared policy after the purge = %v (revision %d -> %d)", got, revShared, e.revision(shared.ID))

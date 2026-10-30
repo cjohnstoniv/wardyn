@@ -22,8 +22,12 @@ import type {
   RunPolicySpec,
 } from "../types";
 import type { PlacementValue } from "../types/new-run-contract";
+import type { PolicyProvenance } from "../types/runs";
+import type { Boundary, BoundaryChange } from "./boundary";
+import type { GovernanceChangeApprover } from "../types/governance-change";
+import type { RestrictionLimits, RestrictionSpec, RestrictionView } from "./restrictions";
 import { USER_TYPE_STANDARD } from "../types/user-types";
-import { asJson, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
+import { asJson, asNoContent, errEnvelope, errText, HttpError, throwIfPending, unwrapList, wfetch } from "./core";
 
 // types.GovernanceLimits. ALL are `omitempty` on the wire, so an unrestricted
 // profile arrives with the keys absent — optional here for the same reason,
@@ -214,8 +218,41 @@ export interface GovernanceUnit {
   parent_id?: string;
   overlay?: CeilingOverlay;
   overlay_limits?: LimitsOverlay;
+  // The policy tree (0.10.0): kind "default" is the one Default unit (the deployment default);
+  // mode "pass_through" is its parent's walls exactly; depth counts from the top (Default is 1).
+  kind?: "unit" | "default";
+  mode?: "own_walls" | "pass_through";
+  depth?: number;
   // governanceUnitView.Effective: on GET /governance and the write responses.
   effective?: GovernanceEffective;
+  // On GET /governance: the membership subjects in this unit or below it; absent for Default.
+  people?: number;
+  // On GET /governance: which unit on the path changed each knob (check's path_provenance for a
+  // person homed here); absent when the unit has no effective walls.
+  path_provenance?: Record<string, PolicyProvenance>;
+  // The knobs this unit locks for every unit below it, a narrowing included (0.10.0).
+  locked_knobs?: string[];
+}
+
+// types.GovernanceUnitAdmin — a person or an IdP group that governs a unit and every unit below it.
+export interface GovernanceUnitAdmin {
+  id: string;
+  unit_id: string;
+  subject_type: "user" | "group";
+  subject: string;
+  granted_by: string;
+  approved_by?: string;
+  created_at: string;
+}
+
+// unitParentWalls: for a unit admin, the walls one of their subtrees hangs from, knob by knob with the
+// layer that set it (locked when a lock above fixes it).
+export interface GovernanceParentWalls {
+  unit_id: string;
+  parent_id: string;
+  parent_name: string;
+  effective: GovernanceEffective;
+  provenance?: Record<string, PolicyProvenance>;
 }
 
 // types.GovernanceMembership — one subject bound to one profile.
@@ -227,12 +264,28 @@ export interface GovernanceMembership {
   priority: number;
   created_at: string;
   created_by?: string;
+  // home: the unit a person runs in when a run names none. legacy: a membership that existed
+  // before the policy tree; only a person's first legacy membership by precedence is a context.
+  home?: boolean;
+  legacy?: boolean;
 }
 
 // GET /governance's body: the whole picture in one read.
 export interface GovernanceSnapshot {
   profiles: GovernanceUnit[];
   assignments: GovernanceMembership[];
+  // The maximum unit depth in force (site_config.governance_max_depth, 16 when unset).
+  max_depth?: number;
+  // The Wardyn boundary, as GET /governance/boundary returns it; absent for a unit admin.
+  boundary?: Boundary;
+  // The unit-admin grants (a unit admin sees those on their units).
+  unit_admins?: GovernanceUnitAdmin[];
+  // A unit admin's view only: the walls each of their subtrees hangs from.
+  parent_walls?: GovernanceParentWalls[];
+  // The deny-only lists that follow people, each with how many people it names.
+  restrictions?: RestrictionView[];
+  // Console only, never on the wire: every unit's name by id, Default included, for a membership on a unit the list hides.
+  unit_names?: Record<string, string>;
 }
 
 // The POST/PUT body. id/created_at/updated_at/created_by are never sent — the
@@ -248,6 +301,10 @@ export interface GovernanceUnitInput {
   parent_id?: string | null;
   overlay?: CeilingOverlay | null;
   overlay_limits?: LimitsOverlay | null;
+  // Absent keeps the stored mode on a PUT (own_walls on a POST).
+  mode?: "own_walls" | "pass_through";
+  // Absent keeps the stored locks on a PUT; [] clears them.
+  locked_knobs?: string[];
 }
 
 // governanceUnitResponse: the saved row plus the OMISSION warnings the
@@ -268,6 +325,7 @@ export interface GovernanceMembershipInput {
   subject: string;
   unit_id: string;
   priority: number;
+  home?: boolean;
 }
 
 // The POST /governance/check body — the two claim lists
@@ -284,6 +342,8 @@ export interface GovernancePreviewInput {
   // The user type id both previews send: the picker's choice, Standard when there is no picker. An empty value means "no type tier" to the
   // server, which is not what a signed-in person's run is given.
   user_type: string;
+  // One of the person's units (id or exact name) to answer `effective` for; absent: the home one.
+  run_in?: string;
 }
 
 // One kind-LESS claims textarea onto the two typed wire lists both previews
@@ -323,6 +383,83 @@ export interface GovernancePreview {
   matched_tier?: CapabilitySubjectType;
 }
 
+// governanceCheckResponse (internal/api/governance_check.go): the preview's home fields plus every
+// context of the person (path leaf first), their dormant memberships, and the walls of the context
+// asked for (run_in) or the home one, with the layer that set each knob.
+export interface GovernanceUnitLink {
+  id: string;
+  name: string;
+}
+export interface GovernanceCheckContext {
+  unit_id: string;
+  unit_name: string;
+  home: boolean;
+  legacy: boolean;
+  path: GovernanceUnitLink[];
+}
+export interface GovernanceDormantMembership {
+  membership_id: string;
+  unit_id: string;
+  unit_name: string;
+}
+// A restriction covering the person (checkRestriction), and their workspaces grouped by owning unit
+// (checkWorkspaceGroup; a null unit_id is the group pinned to none).
+export interface GovernanceCheckRestriction {
+  id: string;
+  name: string;
+  spec: RestrictionSpec;
+  limits: RestrictionLimits;
+  contact?: PolicyContact;
+}
+export interface GovernanceCheckWorkspaceGroup {
+  unit_id: string | null;
+  unit_name?: string;
+  count: number;
+  names: string[];
+}
+export interface GovernanceCheck extends GovernancePreview {
+  contexts: GovernanceCheckContext[];
+  dormant: GovernanceDormantMembership[];
+  restrictions?: GovernanceCheckRestriction[];
+  workspaces?: GovernanceCheckWorkspaceGroup[];
+  // provenance: the leaf-level answer a run gets; path_provenance: which unit on the path changed each
+  // knob, a security-tier read (absent for a unit admin).
+  effective: {
+    ceiling: RunPolicySpec;
+    limits: GovernanceLimits;
+    provenance: Record<string, PolicyProvenance>;
+    path_provenance?: Record<string, PolicyProvenance>;
+  } | null;
+}
+
+// POST /governance/dry-run with a unit or membership_move target (governance_dry_run.go). The
+// boundary target's body and report are boundary.ts's.
+export type TreeDryRunInput =
+  | ({ target: "unit"; id?: string } & GovernanceUnitInput)
+  | { target: "membership_move"; id: string; unit_id: string };
+export interface TreeDryRunPerson {
+  membership_id: string;
+  subject_type: CapabilitySubjectType;
+  subject: string;
+  from_unit_id: string;
+  from_unit_name: string;
+  unit_id: string;
+  unit_name: string;
+  changes: BoundaryChange[];
+  error?: string;
+}
+export interface TreeDryRunReport {
+  target: "unit" | "membership_move";
+  people: TreeDryRunPerson[];
+  live_runs: string[];
+  // Who could decide the write were it held, the caller left out.
+  approvers: GovernanceChangeApprover[];
+  // A legacy membership move: the units it may make someone's context, and the units it may take
+  // someone out of; absent when none.
+  activates?: { unit_id: string; unit_name: string }[];
+  vacates?: { unit_id: string; unit_name: string }[];
+}
+
 // The server composes a grant-bound refusal as "invalid ceiling: " + the
 // comparator's own error, and EVERY leg of that comparator opens "eligible
 // grant " (governanceGrantWithinCeiling, internal/api/governance_grantbound.go).
@@ -343,11 +480,43 @@ export const governance = {
   // null, so both halves are coerced and every caller can map over them.
   async getGovernance(): Promise<GovernanceSnapshot> {
     const res = await wfetch("/governance", { method: "GET" });
-    const body = await asJson<{ units?: unknown; memberships?: unknown }>(res);
+    const body = await asJson<{
+      units?: unknown;
+      memberships?: unknown;
+      max_depth?: number;
+      restrictions?: unknown;
+      unit_admins?: unknown;
+      parent_walls?: unknown;
+    }>(res);
     return {
       profiles: unwrapList<GovernanceUnit>(body.units),
       assignments: unwrapList<GovernanceMembership>(body.memberships),
+      restrictions: unwrapList<RestrictionView>(body.restrictions),
+      max_depth: body.max_depth,
+      unit_admins: unwrapList<GovernanceUnitAdmin>(body.unit_admins),
+      parent_walls: unwrapList<GovernanceParentWalls>(body.parent_walls),
     };
+  },
+
+  // POST /api/v1/governance/units/{id}/admins -> 201 the grant, or PendingChangeError when held
+  // (always, for a unit admin's grant).
+  async grantUnitAdmin(unitId: string, subjectType: "user" | "group", subject: string): Promise<GovernanceUnitAdmin> {
+    const res = await wfetch(`/governance/units/${encodeURIComponent(unitId)}/admins`, {
+      method: "POST",
+      asPerson: true,
+      body: JSON.stringify({ subject_type: subjectType, subject }),
+    });
+    return asJson<GovernanceUnitAdmin>(res);
+  },
+
+  // DELETE /api/v1/governance/units/{id}/admins/{admin} -> 204, or PendingChangeError when held.
+  async revokeUnitAdmin(unitId: string, adminId: string): Promise<void> {
+    const res = await wfetch(`/governance/units/${encodeURIComponent(unitId)}/admins/${encodeURIComponent(adminId)}`, {
+      method: "DELETE",
+      asPerson: true,
+    });
+    await throwIfPending(res);
+    await asNoContent(res);
   },
 
   // POST /api/v1/governance/units -> 201 {profile, warnings}. A 400 whose
@@ -399,6 +568,34 @@ export const governance = {
     if (!res.ok && res.status !== 404) {
       throw new HttpError(res.status, await errText(res));
     }
+  },
+
+  // PUT /api/v1/governance/memberships/{id} -> the moved row, or PendingChangeError when held.
+  async moveAssignment(id: string, unitId: string): Promise<GovernanceMembership> {
+    const res = await wfetch(`/governance/memberships/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      asPerson: true,
+      body: JSON.stringify({ unit_id: unitId }),
+    });
+    return asJson<GovernanceMembership>(res);
+  },
+
+  // POST /api/v1/governance/memberships/{id}/promote -> the row as a context, or PendingChangeError when held.
+  async promoteAssignment(id: string): Promise<GovernanceMembership> {
+    const res = await wfetch(`/governance/memberships/${encodeURIComponent(id)}/promote`, { method: "POST", asPerson: true });
+    return asJson<GovernanceMembership>(res);
+  },
+
+  // POST /api/v1/governance/check -> the full check: the person's contexts and the walls of one.
+  async checkGovernance(input: GovernancePreviewInput): Promise<GovernanceCheck> {
+    const res = await wfetch("/governance/check", { method: "POST", body: JSON.stringify(input) });
+    return asJson<GovernanceCheck>(res);
+  },
+
+  // POST /api/v1/governance/dry-run with a unit or membership_move target. Writes nothing.
+  async dryRunTree(input: TreeDryRunInput): Promise<TreeDryRunReport> {
+    const res = await wfetch("/governance/dry-run", { method: "POST", asPerson: true, body: JSON.stringify(input) });
+    return asJson<TreeDryRunReport>(res);
   },
 
   // POST /api/v1/governance/check -> 200, the resolved profile or {}.

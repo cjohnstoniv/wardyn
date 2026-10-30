@@ -31,20 +31,23 @@ var runDocumentKeys = []string{"api_version", "kind", "intent"}
 // templateDependencies are the edges a partial template must not cut: a field
 // and the field it only means anything beside. Either side may be an
 // inline_policy.<field>. The dependency is satisfied by being in the template or
-// being listed under needs_setup. TestTemplateDependencyEdges holds every row.
-var templateDependencies = []struct{ field, needs string }{
-	{"devcontainer_ref", "devcontainer_repo"},
-	{"model_provider", "agent"},
-	{"tool_approvals", "agent"},
-	{"seed_auto_tools", "agent"},
-	{"inline_policy.tool_rules", "agent"},
-	{"workload", "experience"},
-	{"startup", "experience"},
-	{"interactive_start", "interactive"},
-	{"task_mode", "interactive"},
-	{"inline_policy.ui_apps", "interactive"},
-	{"runner_id", "placement"},
-	{"runner_id", "runner_pool_id"},
+// being listed under needs_setup. A row with an alt is satisfied by that field
+// too (ui_apps beside a background run's experience, where the callable port is
+// the point). TestTemplateDependencyEdges holds every row.
+var templateDependencies = []struct{ field, needs, alt string }{
+	{"devcontainer_ref", "devcontainer_repo", ""},
+	{"model_provider", "agent", ""},
+	{"tool_approvals", "agent", ""},
+	{"seed_auto_tools", "agent", ""},
+	{"inline_policy.tool_rules", "agent", ""},
+	{"workload", "experience", ""},
+	{"startup", "experience", ""},
+	{"service", "workload", ""},
+	{"interactive_start", "interactive", ""},
+	{"task_mode", "interactive", ""},
+	{"inline_policy.ui_apps", "interactive", "experience"},
+	{"runner_id", "placement", ""},
+	{"runner_id", "runner_pool_id", ""},
 }
 
 // The single door. A template document is checked in exactly one way, however
@@ -369,11 +372,20 @@ func (d *templateDecoder) checkDependencies(doc client.TemplateDocument) {
 		return slices.ContainsFunc(doc.NeedsSetup, func(n client.TemplateSetupNeed) bool { return n.Field == field })
 	}
 	for _, dep := range templateDependencies {
-		if templateSpecifies(doc, dep.field) && !templateSpecifies(doc, dep.needs) && !listed(dep.needs) {
+		has := func(field string) bool { return templateSpecifies(doc, field) || listed(field) }
+		if templateSpecifies(doc, dep.field) && !has(dep.needs) && !(dep.alt != "" && has(dep.alt)) {
 			path := "intent." + dep.field
-			d.add(path, reasonTemplateDependencyMissing, templateDependencyMissingMsg(path, dep.needs))
+			d.add(path, reasonTemplateDependencyMissing, templateDependencyMissingMsg(path, dependencyNeeds(dep.needs, dep.alt)))
 		}
 	}
+}
+
+// dependencyNeeds is what a dependency edge's refusal names: the field it needs, or either of two.
+func dependencyNeeds(needs, alt string) string {
+	if alt == "" {
+		return needs
+	}
+	return needs + " or " + alt
 }
 
 // checkAvailable refuses a valid field this server cannot honour yet. Each case

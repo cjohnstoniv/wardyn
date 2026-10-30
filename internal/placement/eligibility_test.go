@@ -122,6 +122,60 @@ func TestLocalEligibilityRefusesALocalModelRoute(t *testing.T) {
 	}
 }
 
+// laptopModelPlan is a local_model run's plan as dispatch writes it: both vendor routes on the
+// server's base URL, and the server's allowlist, the laptop flag as given.
+func laptopModelPlan(allow bool, owner types.RunnerOwnerKind) LocalPlan {
+	const base = "http://host.docker.internal:11434"
+	return LocalPlan{OwnerKind: owner, Spec: runner.SandboxSpec{ProxyConfig: runner.ProxyConfig{
+		LLMUpstreams: map[string]string{"api.anthropic.com": base, "api.openai.com": base},
+		LocalModels:  map[string]types.LocalModelSettings{base: {Models: []string{"qwen2.5:3b"}, AllowOnLaptopRunners: allow}}}}}
+}
+
+// With allow_on_laptop_runners off, a local_model run is refused exactly as before the flag
+// existed (#2957): the same reason, field and detail, on a person's runner or the organisation's.
+func TestLocalEligibilityLaptopModelFlagOffRefusalUnchanged(t *testing.T) {
+	gateway := Refusal{Reason: ReasonPlacementCredential, Field: "ProxyConfig.LLMUpstreams", Detail: "credential variant has no permitted local rule"}
+	models := Refusal{Reason: ReasonPlacementCredential, Field: "ProxyConfig.LocalModels", Detail: "credential variant has no permitted local rule"}
+	for _, owner := range []types.RunnerOwnerKind{types.RunnerOwnerPerson, types.RunnerOwnerOrg, ""} {
+		p := laptopModelPlan(false, owner)
+		if _, r := LocalEligibility(p); r == nil || *r != gateway {
+			t.Errorf("owner %q: refusal %+v, want %+v", owner, r, gateway)
+		}
+		p.Spec.ProxyConfig.LLMUpstreams = nil
+		if _, r := LocalEligibility(p); r == nil || *r != models {
+			t.Errorf("owner %q, no gateway table: refusal %+v, want %+v", owner, r, models)
+		}
+	}
+	// On, the flag admits a person's runner only, and only that server's own entries.
+	if _, r := LocalEligibility(laptopModelPlan(true, types.RunnerOwnerOrg)); r == nil || *r != gateway {
+		t.Errorf("an organisation's runner: refusal %+v, want %+v", r, gateway)
+	}
+	p := laptopModelPlan(true, types.RunnerOwnerPerson)
+	p.Spec.ProxyConfig.LLMUpstreams["api.openai.com"] = "https://gw.corp.example/v1"
+	if _, r := LocalEligibility(p); r == nil || *r != gateway {
+		t.Errorf("a gateway beside the laptop model: refusal %+v, want %+v", r, gateway)
+	}
+	p = laptopModelPlan(true, types.RunnerOwnerPerson)
+	p.Spec.ProxyConfig.LLMUpstreams = nil
+	p.Spec.ProxyConfig.LocalModels["http://10.0.4.7:11434"] = types.LocalModelSettings{Models: []string{"m"}}
+	if _, r := LocalEligibility(p); r == nil || *r != models {
+		t.Errorf("a second, unflagged server: refusal %+v, want %+v", r, models)
+	}
+}
+
+// With allow_on_laptop_runners on, a person's runner takes the run, and the laptop copy keeps the
+// server's routes and allowlist for its proxy.
+func TestLocalEligibilityAdmitsALaptopModelOnAPersonsRunner(t *testing.T) {
+	out, r := LocalEligibility(laptopModelPlan(true, types.RunnerOwnerPerson))
+	if r != nil {
+		t.Fatalf("refused: %+v", r)
+	}
+	lm := out.ProxyConfig.LocalModels["http://host.docker.internal:11434"]
+	if !lm.AllowOnLaptopRunners || len(lm.Models) != 1 || len(out.ProxyConfig.LLMUpstreams) != 2 {
+		t.Fatalf("laptop copy %+v", out.ProxyConfig)
+	}
+}
+
 func TestLocalEligibilityStripsOperatorConfigWithoutMutating(t *testing.T) {
 	li := &types.LLMInspectionSpec{Mode: "block", WorkspaceSecretNames: []string{"operator-key"}, WorkspaceSecretValues: []string{"private"}, DetectSecretPatterns: true}
 	p := LocalPlan{OrgConfigKeys: []string{"ORG_KEY"}, Spec: runner.SandboxSpec{Env: map[string]string{"ORG_KEY": "private", "OWN": "value"}, ProxyConfig: runner.ProxyConfig{Policy: types.RunPolicySpec{LLMInspection: li}, UpstreamProxyURL: "https://user:password@parent", TrustedCAPEM: "corporate", InternalHosts: []types.InternalHost{{HostSuffix: "corp"}}, MITMHosts: []string{"corp:443"}}}}

@@ -323,9 +323,9 @@ func (s *Server) enforceChosenModelProvider(w http.ResponseWriter, r *http.Reque
 }
 
 const (
-	mpAccessProvisioned = "model access provisioned for agent %q: your own credential for model provider %s is injected proxy-side — it is never resident in the sandbox."
-	mpAccessNoProvider  = "no model access for agent %q: no model provider serves it on this deployment — an admin adds one under Settings → Model providers."
-	mpAccessAWSSignIn   = "model access provisioned for agent %q: your own AWS sign-in for model provider %s serves it."
+	mpAccessProvisioned = "Model access provisioned for agent %q: your own credential for model provider %s is injected proxy-side — it is never resident in the sandbox."
+	mpAccessNoProvider  = "No model access for agent %q: no model provider serves it on this deployment — an admin adds one under Settings → Model providers."
+	mpAccessAWSSignIn   = "Model access provisioned for agent %q: your own AWS sign-in for model provider %s serves it."
 )
 
 // providerLLMAccess is a model run's model-access verdict: the chosen
@@ -338,7 +338,8 @@ func providerLLMAccess(agent string, mp runProviderChoice) *composeLLMAccess {
 		if mp.provider.Kind == types.ModelProviderBedrockSSO {
 			note = mpAccessAWSSignIn
 		}
-		return &composeLLMAccess{Provisioned: true, Note: fmt.Sprintf(note, agent, mp.provider.ID)}
+		return &composeLLMAccess{Provisioned: true, Note: fmt.Sprintf(note, agent, mp.provider.ID),
+			sandboxResident: kindResidency(mp.provider.Kind) == residencySandbox}
 	}
 	return &composeLLMAccess{Note: fmt.Sprintf(mpAccessNoProvider, agent)}
 }

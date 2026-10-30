@@ -61,7 +61,12 @@ type SandboxSpec struct {
 	RunnerID string
 	// RunnerMaxRuns is that runner's max_runs when the create was sent: the runner refuses a create past
 	// it, a backstop to the control plane's own count. 0 sets no bound.
-	RunnerMaxRuns    int
+	RunnerMaxRuns int
+	// Namespace is the Kubernetes namespace a k8s runner creates the run in, from the run's pool
+	// membership; empty is the runner's default (first) namespace. A runner that does not serve it
+	// refuses the create (runs_namespace_not_served). Other substrates ignore it. Omitted when empty, so a
+	// runner that predates it gets the bytes it always did.
+	Namespace        string `json:"namespace,omitempty"`
 	Image            string // resolved agent/workspace OCI image
 	ConfinementClass types.ConfinementClass
 	// Env is non-secret environment. Credential material NEVER passes through
@@ -108,6 +113,10 @@ type SandboxSpec struct {
 	// Interactive marks a run that comes up idle for `wardyn attach`; a
 	// driver prepares the workspace on the idle main process for it.
 	Interactive bool
+	// DesktopSignins mounts the person's sign-in store (SigninStorePath): a
+	// tmpfs only the person's uid can open, gone with the container. Set only
+	// with WARDYN_DESKTOP_SIGNINS=on, on a run whose policy declares a desktop.
+	DesktopSignins bool `json:"desktop_signins,omitempty"`
 	// ExecOutput, non-nil, receives a copy of the agent exec's combined
 	// stdout/stderr (GET /runs/{id}/output). Its Write must never block or
 	// fail: the driver drains the exec through it. A writer that also
@@ -118,6 +127,15 @@ type SandboxSpec struct {
 	// and the substrate records by its own setting, as before; a substrate never records past its own
 	// setting either way (RecordWithin).
 	Record *bool `json:"record,omitempty"`
+	// MachineKind is the sandbox's kind; empty is a container. A substrate that cannot start the kind
+	// refuses the create before creating anything, never falls back to a container.
+	MachineKind types.MachineKind `json:"machine_kind,omitempty"`
+	// ImageArches, when set, are the only architectures Image runs on: a prewrapped image's accepted
+	// set (design final §3). A Kubernetes substrate places the agent pod on a node of one of them.
+	ImageArches []string `json:"image_arches,omitempty"`
+	// DesktopSignInsOff makes a VM's sign-in store read-only, so its desktop keeps no sign-ins: the
+	// admin set "Not allowed" for the run's agent (#2972). A container ignores it.
+	DesktopSignInsOff bool `json:"desktop_sign_ins_off,omitempty"`
 }
 
 // RecordWithin is whether this run is recorded on a substrate whose own setting is ceiling.
@@ -199,6 +217,7 @@ type ProxyConfig struct {
 	LLMUnavailableDetail string                    // reason for the brokered-LLM 404 when no credential backs it
 	Unattended           bool                      // a run nobody is driving: a held push is refused instead
 	ScrubResponses       bool                      // replace proxy-held credentials in relayed responses (proxy.Config.ScrubResponses)
+	CanonicalPushRepos   bool                      // one held-push key per github.com repository spelling (proxy.Config.CanonicalPushRepos)
 	Attribution          *policyref.Ref            // the policy named in a policy-decided refusal; nil when none
 	PushRuleSets         []types.PushRuleSet       // push content rules per SCM entry (provider+org); proxy.Config.PushRuleSets
 	PushRuleBase         *types.PushRulesSpec      // the run's push rules after the ceiling, for an entry with no set; proxy.Config.PushRuleBase
@@ -207,12 +226,16 @@ type ProxyConfig struct {
 	ViaOrgRoutes         []proxy.ViaOrgRoute       // a runner's via_org destinations; set only by placement's local copy
 	MCPServers           []proxy.MCPServerConfig   // the run's MCP servers on the broker route; proxy.Config.MCPServers
 	MCPBindings          []proxy.MCPBinding        // SHA-256 of each harness's MCP token; proxy.Config.MCPBindings (never the token)
-	// VM marks a desktop VM run (machine_kind linux_vm): the proxy's only client
-	// is wardyn-vmnet, and the port rule is on (proxy.Config.VM).
+	// VM is proxy.Config.VM. Dispatch leaves it false: the Docker driver adds the
+	// key itself for a desktop VM, whose proxy's only client is the wardyn-vmnet
+	// relay it starts.
 	VM bool
 	// PortRule is a container run's port rule, "" (off), "dry_run" or "on"
 	// (WARDYN_EGRESS_PORT_RULE; proxy.Config.PortRule).
 	PortRule string
+	// DesktopSignins opens the proxy's sign-in listener (SigninListenPort) for
+	// the person's sign-in browser; see SandboxSpec.DesktopSignins.
+	DesktopSignins bool `json:"desktop_signins,omitempty"`
 
 	// LocalModels: local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels).
 	LocalModels map[string]types.LocalModelSettings
@@ -288,6 +311,10 @@ type Session interface {
 // ExecStream when unimplemented, so the conformance suite can skip cleanly.
 var ErrExecStreamUnsupported = errors.New("runner: ExecStream not supported")
 
+// ErrObserveUnsupported is Attach's answer for an observer when the sandbox has no shared terminal to
+// watch (a Linux VM): a capability the sandbox lacks, so the console says so and does not retry.
+var ErrObserveUnsupported = errors.New("runner: this sandbox does not support watching a terminal")
+
 // ErrSandboxGone is what a Runner/Substrate wraps around an ExecStream failure
 // whose cause is that the sandbox (the pod or container) no longer exists: a
 // finishing run's sandbox is torn down a moment before its state flips, and an
@@ -349,6 +376,11 @@ type Sandbox struct {
 	Ref           string // container ID / pod name
 	Driver        string
 	EnforcedClass types.ConfinementClass // what the driver actually applied (>= requested or error)
+	// Machine is the virtual hardware a VM sandbox was started with; nil for a container.
+	Machine *types.VMMachine `json:",omitempty"`
+	// SignIns is what a VM's guest made of its sign-in store (guestagent.SignInsMemory or
+	// SignInsNone); empty for a container, or a guest or runner that predates the store.
+	SignIns string `json:",omitempty"`
 }
 
 // Status reports observed sandbox state.
@@ -409,6 +441,14 @@ type SandboxEnder interface {
 	EndSandbox(ctx context.Context, ref string) error
 }
 
+// KindCoverer is an OPTIONAL substrate capability: whether Status can enumerate a machine kind's
+// sandboxes now. A kind it cannot (macOS VMs off in this runnerd) is unknown, never absent: the offline
+// Manager reports such a run present and does not probe it (#3667). A substrate without it covers
+// containers and Linux VMs only, the kinds whose Status answers from the engine's own record.
+type KindCoverer interface {
+	CoversKind(kind types.MachineKind) bool
+}
+
 // ErrEndUnsupported is EndSandbox's (and StopProxy's) answer from a router
 // whose substrate for ref cannot keep a stopped (or lost) sandbox.
 var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended sandbox")
@@ -433,6 +473,34 @@ func KeptDespiteAWSCacheWipe(ctx context.Context, ref string, err error) error {
 // AWSProfileRecordEnv is the sandbox env var carrying the ~/.aws files Wardyn stages for an AWS
 // sign-in lane; a sandbox that has it is one whose AWS caches a kept end wipes.
 const AWSProfileRecordEnv = "WARDYN_AWS_SSO_CONFIG_B64"
+
+// DesktopDialer is an OPTIONAL Runner capability: open a byte stream to a VM sandbox's display, the
+// RFB server QEMU keeps on a unix socket outside the guest, so the guest cannot tamper with it. The
+// UI gateway relays it to the person's browser; nothing inside the sandbox is reached.
+type DesktopDialer interface {
+	DialDesktop(ctx context.Context, ref string) (io.ReadWriteCloser, error)
+}
+
+// AgentPauser is an OPTIONAL Runner capability: stop a VM sandbox's agent inside the guest and
+// continue it, through the guest agent (SIGSTOP and SIGCONT of the agent's process group), while the
+// guest and its desktop keep running. It is not Freezer, which would freeze the desktop too.
+//
+// gen is the run's pause generation (migration 0231): a guest agent that orders requests by it drops
+// one out of order (guestagent.PauseFence), so a continue delivered after a later pause's stop does not
+// run the agent. fenced says the request was ordered so; it is false from a runner or guest image that
+// predates the generation, which signals each request as it arrives.
+type AgentPauser interface {
+	PauseAgent(ctx context.Context, ref string, gen int64) (fenced bool, err error)
+	ResumeAgent(ctx context.Context, ref string, gen int64) (fenced bool, err error)
+}
+
+// ErrAgentPauseUnsupported is AgentPauser's answer for a sandbox whose agent it cannot pause (a
+// container), or from a router or runner that cannot.
+var ErrAgentPauseUnsupported = errors.New("runner: this sandbox's agent cannot be paused in place")
+
+// ErrDesktopUnsupported is DialDesktop's answer for a sandbox with no desktop to open (a container),
+// or from a router or runner that cannot open one.
+var ErrDesktopUnsupported = errors.New("runner: this sandbox has no desktop to open")
 
 // ProxyStopper is an OPTIONAL Runner capability: stop a sandbox's proxy
 // sidecar and leave its agent running (a run lost to a control-plane outage).
@@ -561,6 +629,43 @@ type Freezer interface {
 
 // ErrFreezeUnsupported is Freezer's answer from a router that cannot pause ref.
 var ErrFreezeUnsupported = errors.New("runner: this substrate cannot freeze a sandbox")
+
+// SigninExecer is an OPTIONAL Runner capability desktop sign-ins need (issue
+// #2972): an exec as a named uid, and a signal to the sandbox's main process
+// sent from outside its pid namespace (the only way pid 1 can be stopped).
+// Only the in-process Docker driver implements it. It is an interface, not an
+// ExecSpec field, because an older remote runner would drop an unknown field
+// and start the person's stack as the agent; a substrate without it refuses
+// sign-ins with ErrSigninUnsupported.
+type SigninExecer interface {
+	ExecStreamAs(ctx context.Context, ref, user string, spec ExecSpec) (*ExecSession, error)
+	SignalMain(ctx context.Context, ref, signal string) error
+}
+
+// SigninTargeter is a router's answer, before a create, to whether the
+// substrate it would route class to implements SigninExecer. Dispatch sends
+// the proxy's signin_listen key only to such a substrate: it runs this
+// deployment's own proxy image, which knows the key, where an older proxy
+// would refuse it and the run with it.
+type SigninTargeter interface {
+	SigninsFor(ctx context.Context, class types.ConfinementClass) bool
+}
+
+// ErrSigninUnsupported is SigninExecer's answer from a router whose substrate
+// for ref cannot run a desktop sign-in.
+var ErrSigninUnsupported = errors.New("runner: this substrate cannot run a desktop sign-in")
+
+// Desktop sign-in constants, shared by the driver, dispatch and the API.
+const (
+	// SigninStorePath is the person's store inside the sandbox.
+	SigninStorePath = "/run/wardyn/signin"
+	// SigninStoreTmpfs is its mount: 256 MiB, the person's uid, 0700.
+	SigninStoreTmpfs = "rw,nosuid,nodev,noexec,size=256m,uid=1001,gid=1001,mode=0700"
+	// SigninPersonUser is the person's uid:gid in the desktop image.
+	SigninPersonUser = "1001:1001"
+	// SigninListenPort is the proxy's sign-in listener.
+	SigninListenPort = 3129
+)
 
 // ActivitySampler is an OPTIONAL Runner capability: the CPU the agent of each
 // sandbox is using, read from the substrate, never by running anything inside

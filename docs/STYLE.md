@@ -139,7 +139,7 @@ The citation guard ([`cmd/wardynd/citation_guard_test.go`](../cmd/wardynd/citati
 - Each script's header comment defines its rule. [doc-form.d](../scripts/doc-form.d/README) holds the lists: asserted docs (`.list`), budgets (`.budget`), must-link docs (`.links`).
 - The `docs/operations/` pages named in the form script keep their older checks until a `.list` names them. No other doc fails the caps.
 - A doc that gains a visual joins `DOCS` in the same change; until then no gate checks its alt text or labels.
-- Dead links in [CHANGELOG.md](../CHANGELOG.md), [CHANGELOG-ARCHIVE.md](../CHANGELOG-ARCHIVE.md) and the third-party notices are counted, never failed. `docs/design/` is exempt from must-link.
+- Dead links in [CHANGELOG.md](../CHANGELOG.md), [CHANGELOG-ARCHIVE.md](../CHANGELOG-ARCHIVE.md), `docs/releases/` and the third-party notices are counted, never failed. `docs/design/` is exempt from must-link.
 - A `:NNN` suffix after a `.go`, `.md`, `.ts` or `.sh` name is a line citation: it fails in a must-link doc and warns elsewhere.
 - A guard change never weakens its check: state what it protected and how the new text still does.
 

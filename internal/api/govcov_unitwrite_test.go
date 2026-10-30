@@ -23,6 +23,12 @@ import (
 // govCovBuildErr runs the real build for a request body and returns what it refused with.
 func govCovBuildErr(t *testing.T, s *Server, all []types.GovernanceUnit, id uuid.UUID, body string) error {
 	t.Helper()
+	return govCovBuildErrAt(t, s, all, id, body, maxUnitDepthDefault)
+}
+
+// govCovBuildErrAt is govCovBuildErr under a configured maximum unit depth.
+func govCovBuildErrAt(t *testing.T, s *Server, all []types.GovernanceUnit, id uuid.UUID, body string, limit int) error {
+	t.Helper()
 	var req governanceUnitRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
@@ -34,7 +40,7 @@ func govCovBuildErr(t *testing.T, s *Server, all []types.GovernanceUnit, id uuid
 	if msg != "" {
 		t.Fatalf("fixture body refused before the build: %s", msg)
 	}
-	_, _, err := s.buildGovernanceUnit("alice", id, req, all)
+	_, _, _, err := s.buildGovernanceUnit("alice", true, id, req, all, types.Boundary{Mode: types.BoundaryNoLimits}, limit)
 	return err
 }
 
@@ -197,10 +203,10 @@ func TestGovCovCheckGraphWrite(t *testing.T) {
 		}
 	})
 
-	t.Run("a chain past three profiles is a 409 depth", func(t *testing.T) {
+	t.Run("a chain past the configured maximum (3) is a 409 depth", func(t *testing.T) {
 		body := `{"name":"x","parent_id":"` + govCovBase.String() + `","overlay":{}}`
-		ref := govCovAsRefusal(t, govCovBuildErr(t, s, []types.GovernanceUnit{top, mid, leaf}, govCovPID, body))
-		if ref.status != http.StatusConflict || ref.reason != reasonGovernanceUnitDepth || !strings.Contains(ref.msg, "more than 3 profiles deep") {
+		ref := govCovAsRefusal(t, govCovBuildErrAt(t, s, []types.GovernanceUnit{top, mid, leaf}, govCovPID, body, 3))
+		if ref.status != http.StatusConflict || ref.reason != reasonGovernanceUnitDepth || !strings.Contains(ref.msg, "more than 3 units deep") {
 			t.Errorf("refusal = %+v", ref)
 		}
 	})
@@ -245,7 +251,7 @@ func TestGovCovNewProfileView(t *testing.T) {
 	row.Ceiling.LLMInspection = &types.LLMInspectionSpec{WorkspaceSecretValues: []string{"stored-secret-value"}}
 	res := &ResolvedUnit{Ceiling: types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}}, Limits: types.GovernanceLimits{MaxConcurrentRuns: 3}, AdminWarnings: []string{"w"}}
 
-	v := newUnitView(row, res, nil)
+	v := newUnitView(row, res, nil, specReadFull)
 	if raw, _ := json.Marshal(v); strings.Contains(string(raw), "stored-secret-value") {
 		t.Errorf("the view carries the stored secret value: %s", raw)
 	}
@@ -254,11 +260,11 @@ func TestGovCovNewProfileView(t *testing.T) {
 	}
 
 	u := &overlayUnsatisfiableError{Leaf: "p", Detail: "base detail"}
-	v = newUnitView(row, nil, u)
+	v = newUnitView(row, nil, u, specReadFull)
 	if v.Effective.Error != "base detail" || len(v.Effective.Ceiling.AllowedDomains) != 0 {
 		t.Errorf("effective on an unsatisfiable chain = %+v, want the admin detail and no content", v.Effective)
 	}
-	if v = newUnitView(row, nil, nil); !reflect.DeepEqual(v.Effective, governanceEffective{}) {
+	if v = newUnitView(row, nil, nil, specReadFull); !reflect.DeepEqual(v.Effective, governanceEffective{}) {
 		t.Errorf("effective with neither a resolution nor an error = %+v", v.Effective)
 	}
 }
@@ -321,6 +327,12 @@ func TestGovCovOverlayFieldNames(t *testing.T) {
 	}
 }
 
+// govCovPIDStored is a stored profile at govCovPID, so a PUT there updates it rather than creating one
+// (which the default refuses).
+func govCovPIDStored() []types.GovernanceUnit {
+	return []types.GovernanceUnit{govCovStandalone(govCovPID, "p", "pypi.org")}
+}
+
 // govCovProfilePut runs PUT /governance/units/{id} as the admin token against st.
 func govCovProfilePut(t *testing.T, s *Server, body string) (code int, reason string, resp string) {
 	t.Helper()
@@ -338,9 +350,9 @@ func TestGovCovProfileWriteDoorRefusals(t *testing.T) {
 		wantReason string
 	}{
 		{"a composition member that does not parse", `{"name":"p","parent_id":3,"overlay":{}}`, &govCovStore{}, 400, reasonGovernanceOverlayInvalid},
-		{"a composition the build refuses", `{"name":"p","parent_id":"` + govCovBase.String() + `","overlay":{}}`, &govCovStore{}, 400, reasonGovernanceOverlayInvalid},
-		{"a name another profile holds", good, &govCovStore{writeErr: store.ErrConflict}, 409, reasonGovernanceUnitNameConflict},
-		{"a store failure", good, &govCovStore{writeErr: errors.New("pg: down")}, 500, reasonInternalError},
+		{"a composition the build refuses", `{"name":"p","parent_id":"` + govCovBase.String() + `","overlay":{}}`, &govCovStore{profiles: govCovPIDStored()}, 400, reasonGovernanceOverlayInvalid},
+		{"a name another profile holds", good, &govCovStore{writeErr: store.ErrConflict, profiles: govCovPIDStored()}, 409, reasonGovernanceUnitNameConflict},
+		{"a store failure", good, &govCovStore{writeErr: errors.New("pg: down"), profiles: govCovPIDStored()}, 500, reasonInternalError},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, h := govCovServer(t, c.st)
@@ -358,7 +370,7 @@ func TestGovCovProfileWriteDoorRefusals(t *testing.T) {
 	}
 
 	t.Run("a name conflict names the profile", func(t *testing.T) {
-		s, _ := govCovServer(t, &govCovStore{writeErr: store.ErrConflict})
+		s, _ := govCovServer(t, &govCovStore{writeErr: store.ErrConflict, profiles: govCovPIDStored()})
 		_, _, resp := govCovProfilePut(t, s, good)
 		if !strings.Contains(resp, `a governance profile named \"p\" already exists`) {
 			t.Errorf("body = %s", resp)
@@ -376,7 +388,7 @@ func TestGovCovProfileWriteDoorRefusals(t *testing.T) {
 }
 
 func TestGovCovProfileWriteDoorAnswersWithWarningsAndAudit(t *testing.T) {
-	s, h := govCovServer(t, &govCovStore{})
+	s, h := govCovServer(t, &govCovStore{profiles: govCovPIDStored()})
 	code, _, resp := govCovProfilePut(t, s, govCovProfileBody("p", "pypi.org"))
 	if code != http.StatusOK {
 		t.Fatalf("PUT = %d %s", code, resp)

@@ -377,6 +377,55 @@ describe("RunDetailScreen — Audit tab row shape", () => {
   });
 });
 
+// #3035: the run's Audit tab speaks the Audit screen's words; the raw key stays on hover.
+describe("RunDetailScreen — Audit tab wording", () => {
+  const base = { time: new Date().toISOString(), actor_type: "system", actor: "wardynd", outcome: "success", run_id: "run-1" };
+
+  async function openAuditTab(rows: Record<string, unknown>[]) {
+    listAuditMock.mockImplementation((_id: string, action?: unknown) => Promise.resolve(action ? [] : rows));
+    renderRun(RUN);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /audit/i }));
+    return screen.findAllByTestId("run-audit-row");
+  }
+
+  it("shows the sentence with the raw key on hover, and blanks the run's own id", async () => {
+    const [own, other] = await openAuditTab([
+      { ...base, id: "e1", action: "run.create", target: "run-1" },
+      { ...base, id: "e2", action: "egress.allow", target: "pypi.org", actor_type: "proxy" },
+    ]);
+    const action = within(own).getByTestId("run-audit-action");
+    expect(action).toHaveTextContent("Created the run");
+    expect(action).toHaveAttribute("title", "Created the run\nrun.create");
+    expect(within(own).getByTestId("run-audit-target").textContent).toBe("");
+    expect(within(own).getByTestId("run-audit-target").querySelector("[title]")).toBeNull();
+
+    expect(within(other).getByTestId("run-audit-action")).toHaveTextContent("Allowed egress to");
+    expect(within(other).getByTestId("run-audit-action")).toHaveAttribute("title", "Allowed egress to pypi.org\negress.allow");
+    expect(within(other).getByTestId("run-audit-target")).toHaveTextContent("pypi.org");
+  });
+
+  it("reads an egress row with no target as the Audit screen does", async () => {
+    const [row] = await openAuditTab([{ ...base, id: "e3", action: "egress.deny", target: "", actor_type: "proxy", outcome: "deny" }]);
+    expect(within(row).getByTestId("run-audit-action")).toHaveTextContent("Denied egress to");
+    expect(within(row).getByTestId("run-audit-target")).toHaveTextContent("an unknown host");
+  });
+
+  // r15 T2-f: an inbound row says allow or deny and carries its request on a line of its own; no credential, no caller.
+  it("shows an inbound call's decision and request, and says no caller for a refusal that had no credential", async () => {
+    const [allow, deny] = await openAuditTab([
+      { ...base, id: "e4", action: "inbound.allow", target: "api", actor: "service:billing", data: { method: "GET", path: "/v1/invoices", via: "token", caller: "service:billing" } },
+      { ...base, id: "e5", action: "inbound.deny", target: "api", actor: "", outcome: "denied", data: { reason: "credential_invalid", via: "token", method: "POST", path: "/v1/refunds" } },
+    ]);
+    expect(within(allow).getByTestId("run-audit-outcome")).toHaveTextContent("allow");
+    expect(within(allow).getByTestId("run-audit-detail")).toHaveTextContent("GET /v1/invoices · via token · caller service:billing");
+    expect(within(allow).queryByText("no caller")).not.toBeInTheDocument();
+    expect(within(deny).getByTestId("run-audit-outcome")).toHaveTextContent("deny");
+    expect(within(deny).getByTestId("run-audit-detail")).toHaveTextContent("reason credential_invalid · via token · POST /v1/refunds");
+    expect(within(deny).getByText("no caller")).toBeInTheDocument();
+  });
+});
+
 // #2925: the empty card has the populated list's width, so the content does not jump between tabs.
 describe("RunDetailScreen — Approvals tab empty card", () => {
   it("is capped at the populated list's width", async () => {
@@ -806,7 +855,7 @@ describe("RunDetailScreen — erased values on the Audit tab (M4 D)", () => {
       "Erased on request. The event and its place in the log remain.",
     );
     expect(screen.queryByText("[erased]")).toBeNull();
-    expect(screen.getByText("approval.decide")).toBeInTheDocument();
+    expect(screen.getByText("Decided an approval request")).toHaveAttribute("title", "Decided an approval request — Erased\napproval.decide");
   });
 
   it("a row with nothing erased shows no Erased note", async () => {

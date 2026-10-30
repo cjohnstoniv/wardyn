@@ -49,6 +49,7 @@ import {
   orphanedVerifySessions,
   isRecording,
   lastCleanReplay,
+  sessionKeyOf,
   sessionStage,
   verifyKeyOf,
 } from "./session-helpers";
@@ -57,10 +58,10 @@ import { AttachTerminal } from "../../attach-terminal";
 import { LiveApprovals } from "../../wardyn/live-approvals";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { CC_META } from "../../wardyn/cc-meta";
-import { Chip, SectionLabel } from "../../wardyn/primitives";
+import { SectionLabel } from "../../wardyn/primitives";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
-import { C } from "../../../lib/workspace-copy";
+import { C, WORKSPACE_DETAIL_EXTRA } from "../../../lib/workspace-copy";
 import { RecordReviewCard, ConfinedReviewCard } from "./record-pane-review";
 
 // A held request approved during a confined replay does more than
@@ -183,15 +184,6 @@ export function RecordPane({
       {!securityOperator && <p className="text-xs text-muted-foreground">{SECURITY_ONLY_REASON}</p>}
       {/* No "Sessions" label here — the DetailSectionCard wrapping this pane already
           titles it; repeating it would show the same word twice on the page. */}
-      <Chip tone="info">Recommended · skippable</Chip>
-      <p className="text-sm leading-relaxed text-muted-foreground">
-        Record a session for anything this workspace needs to do — build, run tests, drive the agent,
-        deploy. Wardyn opens a sandbox with the repo and your model provider ready, watches what it
-        reaches, and you approve those hosts. Once it&apos;s recorded, <strong>replay it confined</strong> —
-        default-deny egress, only your approved access — to prove the approved set is enough; any
-        off-policy host is <strong>blocked live</strong> and one click to approve.
-      </p>
-
       <ModelAccessNote modelReady={modelReady} view={view} />
 
       <OpenEgressBanner tier={tier} />
@@ -287,10 +279,7 @@ export function RecordPane({
         </div>
       )}
       {sessions.length === 0 && orphans.length === 0 && (
-        <p className="text-xs text-muted-foreground">
-          Never recorded. A session is the environment-proof: drive the workspace once in an open
-          sandbox, then replay the capture confined.
-        </p>
+        <p className="text-xs text-muted-foreground">{WORKSPACE_DETAIL_EXTRA.SESSIONS_EMPTY}</p>
       )}
       <NewSessionForm
         existing={sessions.map((s) => s.label)}
@@ -320,8 +309,13 @@ function NewSessionForm({
   const operator = useOperator();
   const [name, setName] = React.useState(existing.length === 0 ? "build & test" : "");
   const trimmed = name.trim();
+  // The server overwrites a session recorded under the same name, so a name that matches one is the
+  // same Re-record the session's own card confirms.
+  const [confirming, setConfirming] = React.useState(false);
   const start = () => {
-    if (trimmed) onRecord(trimmed);
+    if (!trimmed || disabled || !operator) return;
+    if (existing.some((label) => sessionKeyOf(label) === sessionKeyOf(trimmed))) setConfirming(true);
+    else onRecord(trimmed);
   };
   return (
     <div className="space-y-2 rounded-lg border border-dashed border-border p-3" data-testid="record-new-session">
@@ -331,7 +325,10 @@ function NewSessionForm({
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") start();
+            if (e.key !== "Enter") return;
+            // The confirm below takes focus; without this the same keypress lands on its Cancel.
+            e.preventDefault();
+            start();
           }}
           placeholder="name this session — e.g. build & test"
           className="h-9 max-w-xs flex-1"
@@ -343,10 +340,21 @@ function NewSessionForm({
         </Button>
       </div>
       {!operator && <p className="text-meta text-muted-foreground">{OPERATOR_ONLY_REASON}</p>}
-      <p className="text-meta text-muted-foreground">
-        Opens an attached terminal with the repo + your model provider ready. Do the real thing, then
-        click Done recording to capture what it used. You can replay it confined once it settles.
-      </p>
+      <p className="text-meta text-muted-foreground">{WORKSPACE_DETAIL_EXTRA.SESSIONS_START_HELP}</p>
+      <AlertDialog open={confirming} onOpenChange={setConfirming}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Re-record &quot;{trimmed}&quot;?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The current recorded review for this session will be replaced once the new recording settles.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => onRecord(trimmed)}>Re-record</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

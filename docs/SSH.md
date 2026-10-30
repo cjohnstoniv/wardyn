@@ -9,7 +9,7 @@
 
 ## 1. Register a public key
 
-- **SSO deployment (OIDC configured):** User view sidebar → **Your account**
+- **SSO deployment (OIDC configured):** User view sidebar → **Settings**
   (`/account`) → **Add key**.
 - Paste your public key (the console never asks
   for a private key; the paste field's own helper line says so, and pasting
@@ -120,7 +120,7 @@ For incident response or offboarding:
    - An unresolved email or ambiguous name is `422`;
      a lookup or deletion failure is `500`.
    - Owners can still remove individual
-     keys through **Your account** (`/account`), `wardyn ssh-key delete <fingerprint>`,
+     keys through **Settings** (`/account`), `wardyn ssh-key delete <fingerprint>`,
      or `DELETE /api/v1/me/ssh-keys/{fingerprint}`.
 4. End existing access with `wardyn run kill <run-id>` and verify teardown
    succeeded.
@@ -208,6 +208,10 @@ Host wardyn-<short-id>
   `ssh-keygen`'s own presentation, nothing custom.
 - A stopped or SSH-disabled run shows no card at all — there is nothing to
   connect to, and no "try anyway" affordance that would just fail.
+- **Where a channel starts.** An interactive shell joins the run's shared terminal session, in whatever directory
+  that session is in now.
+  - A command (`ssh <run-id>@<advertise-host> -p <port> <command>` or `wardyn run exec`) and an sftp session start
+    in `$HOME`, as OpenSSH does. Give paths under `/home/agent/work` in full.
 
 ### Exec, forward and editor from the CLI
 
@@ -215,7 +219,7 @@ Host wardyn-<short-id>
   - Each word after `--` reaches the sandbox as one argument.
   - For a pipe or a redirect, run a shell: `wardyn run exec <run-id> -- sh -c 'make test | tail'`.
 - `wardyn run forward <run-id> [<local-port>:]<sandbox-port>...` is `ssh -L` to the sandbox's loopback ([section 4](#4--l-port-forwarding)), bound to `127.0.0.1` here.
-- `wardyn run editor <run-id>` writes the run's `Host` block to `~/.wardyn/ssh_config`, asks before adding `Include ~/.wardyn/ssh_config` at the top of `~/.ssh/config`, then opens VS Code Remote-SSH.
+- `wardyn run editor <run-id>` writes the run's `Host` block to `~/.wardyn/ssh_config`, asks before adding `Include ~/.wardyn/ssh_config` at the top of `~/.ssh/config`, then opens VS Code Remote-SSH. Keep that `Include` outside any `Host` or `Match` block, or ssh will not find the run's host.
   - `--dir` picks the sandbox folder (default `/home/agent/work`).
   - The setting in [VS Code Remote-SSH](#5-vs-code-remote-ssh) is still required.
 - All three need the gateway on and a key on your account.
@@ -448,7 +452,7 @@ Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
 
 `wardyn run --task ... --local-folder ./project` creates the run, waits for its sandbox and syncs the folder in once. The agent starts only after that pass completes, within `WARDYN_LOCAL_FOLDER_SEED_WAIT` (10 minutes) and the run's end. A failed or missing pass fails the run with a reason naming the folder. `wardyn sync <run-id> ./project` can seed it within the wait. Audit: `run.seed.hold`, `run.seed`.
 
-Interactive runs, background-only runs, exec-less (krun) runtimes and deployments without an SSH gateway refuse `local_folder` (`local_folder_unsupported`).
+Interactive runs, background-only runs, exec-less (krun) runtimes and deployments without an SSH gateway refuse `local_folder` (`local_folder_unsupported`). A Linux VM sandbox is held and synced the same way, through its guest agent ([Linux VM sandboxes](operations/linux-vm-sandboxes.md#what-a-run-gets)).
 
 `rsync` works too, over `wardyn run ssh --config`'s `Host` block; add `--chmod=F644,D755` to pull. It applies none of the conflict, collision or size rules, so prefer `wardyn sync --pull`:
 
@@ -507,8 +511,19 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
 | Editor | What it needs from the gateway | Tested |
 |---|---|---|
 | VS Code Remote-SSH | Exec channels, an sftp transfer of the server it downloaded, and `-L` to the server's port | The gateway side, on one connection ([`sshgateway_remote_ssh_test.go`](../internal/api/sshgateway_remote_ssh_test.go)) |
-| JetBrains Gateway | Exec channels, a file transfer for its backend, and `-L` to the backend's port | Not yet tested |
-| Mutagen | Exec channels and a file transfer for its agent | Not yet tested |
+| JetBrains Gateway | Exec channels, a file transfer for its backend, and `-L` to the backend's port | Backend half: tested (nightly `ssh-editors-live`). The GUI thin client is not run |
+| Mutagen | Exec channels and a file transfer for its agent | Tested (nightly `ssh-editors-live`), with the link below |
+
+- **How they are tested**: the nightly job `ssh-editors-live` runs the real clients in a container against a live gateway (`make test-e2e-ssh-editors`, [`test/editors/`](../test/editors/)). Versions are pinned there by sha256: Mutagen 0.18.1, IntelliJ IDEA 2026.2.3.
+  - JetBrains: an sftp upload of the IDE, an exec unpack, the headless `remote-dev-server.sh`, and a TLS handshake with the backend through `-L`. Gateway's GUI thin client is not run.
+  - Mutagen: `sync create`, a flush each way, a byte compare.
+- **Mutagen needs one link.** It runs its agent by the relative path `.mutagen/agents/<version>/mutagen-agent`. A normal `sshd` starts commands in `$HOME`; the gateway starts them in the sandbox's working directory, so the agent is not found. Once per sandbox, before `mutagen sync create`:
+
+```sh
+ssh <host> 'mkdir -p ~/.mutagen && ln -sfn ~/.mutagen .mutagen'
+```
+
+- **The image must carry** `openssh-sftp-server` for the file transfers and `socat` for `-L` ([image contract](#image-contract-byoi)). Exec channels need only `/bin/sh`. JetBrains unpacks about 6 GB in the sandbox.
 
 - A folder on your computer can also reach a remote sandbox with no editor and no `wardyn sync`: see
   [hybrid-laptops.md](operations/hybrid-laptops.md#a-folder-on-your-computer-for-a-remote-sandbox).
@@ -543,7 +558,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   it.
 - `--path` picks a different keypair; the default is deliberately **not**
   `~/.ssh/id_ed25519` — a key an external tool dials sandboxes with should be
-  revocable from Your account (`/account`) without touching your everyday identity.
+  revocable from Settings (`/account`) without touching your everyday identity.
 - **`wardyn run wait-ready <run-id>`** ([`cmd/wardyn/run_wait_ready.go`](../cmd/wardyn/run_wait_ready.go)) blocks
   past what `run --wait` waits for.
 - `--wait` waits for a TERMINAL state (and is refused outright on an interactive run, which never reaches one on its own);
@@ -632,6 +647,8 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   path and touches neither binary.
 - Install both if you want full parity with
   the built-in images.
+- Keep the image's `ENV HOME` equal to the sandbox user's passwd home. An exec channel takes `$HOME` from the
+  sandbox environment and an sftp session takes the passwd home, so a mismatch starts them in different directories.
 
 ## Recording
 
@@ -779,7 +796,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
     - **log in again** (the ordinary path now — `oidc.Config.OnLogin` re-stamps both `role` and `role_checked_at` for every key that principal owns, no re-registration needed)
     - **or `DELETE`/`POST` the key again** (still supported, still immediate, useful when you want the refresh before your next login rather than after).
   - Which of your own keys carries the `admin` stamp is
-    visible without reading the database: Your account (`/account`) badges the
+    visible without reading the database: Settings (`/account`) badges the
     row **Admin override**.
   - That badge reflects the STORED `role` only — it does not
     currently show whether `role_checked_at` has aged past `WARDYN_SSH_ROLE_TTL`,

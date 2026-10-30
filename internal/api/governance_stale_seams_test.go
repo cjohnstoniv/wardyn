@@ -52,6 +52,9 @@ func TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded(t *testing.T) {
 	// recordRefusal with it — which the second half of this test then checks.
 	want := map[string]bool{
 		"selectByTier": true, // select_by_tier.go
+		// restrictionsFor decides it for a group-keyed restriction the unit tiers know nothing of, and
+		// records it the same way (governance_restrictions.go).
+		"restrictionsFor": true,
 	}
 
 	raisers, records := staleSentinelSites(t)
@@ -192,7 +195,7 @@ func TestDrivePreviewWritesNoDenial(t *testing.T) {
 		t.Errorf("body = %s, want the stale-snapshot refusal", w.Body.String())
 	}
 
-	for _, ev := range audit.events {
+	for _, ev := range audit.snapshot() {
 		if ev.Action != "authz.denied" {
 			continue
 		}

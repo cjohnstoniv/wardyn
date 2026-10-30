@@ -85,6 +85,10 @@ func (s *sshMemStore) putRun(r types.AgentRun) {
 	s.runs[r.ID] = r
 }
 
+func (s *sshMemStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 func (s *sshMemStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -847,7 +851,7 @@ func TestSSHGateway_OfferWithoutSignatureNeverAudited(t *testing.T) {
 }
 
 // TestSSHGateway_ExecExitCode covers the exec channel: the command reaches
-// ExecStream wrapped as `/bin/sh -c <command>` (no protocol
+// ExecStream as sshExecArgv's `/bin/sh -c` from $HOME (no protocol
 // reimplementation), the real exit code round-trips to the client, and the
 // env allowlist forwards TERM but drops an arbitrary variable.
 func TestSSHGateway_ExecExitCode(t *testing.T) {
@@ -883,8 +887,8 @@ func TestSSHGateway_ExecExitCode(t *testing.T) {
 	}
 
 	argv, env := fr.lastCall()
-	if len(argv) != 3 || argv[0] != "/bin/sh" || argv[1] != "-c" || argv[2] != "do the thing" {
-		t.Errorf("argv = %v, want [/bin/sh -c \"do the thing\"] (no protocol reimplementation)", argv)
+	if !slices.Equal(argv, sshExecArgv("do the thing")) {
+		t.Errorf("argv = %v, want the command last, under sshExecFromHome (no protocol reimplementation)", argv)
 	}
 	if !containsEnv(env, "TERM=xterm-256color") {
 		t.Errorf("env = %v, want TERM forwarded", env)
@@ -1040,8 +1044,8 @@ func TestSSHGateway_SubsystemPlumbing(t *testing.T) {
 			t.Errorf("echoed = %q, want %q (subsystem's exec is not bridged)", buf, payload)
 		}
 		argv, _ := fr.lastCall()
-		if len(argv) != 2 || argv[0] != sftpServerPath || argv[1] != "-e" {
-			t.Errorf("argv = %v, want [%s -e]", argv, sftpServerPath)
+		if !slices.Equal(argv, []string{sftpServerPath, "-e", "-d", "%d"}) {
+			t.Errorf("argv = %v, want [%s -e -d %%d]", argv, sftpServerPath)
 		}
 	})
 

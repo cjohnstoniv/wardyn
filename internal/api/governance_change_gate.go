@@ -19,6 +19,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -80,6 +82,24 @@ func isAdminTokenCaller(r *http.Request) bool {
 	return actorType == types.ActorSystem && principal == adminTokenPrincipal
 }
 
+// governanceSaveHeld reports whether a covered write by this caller would be held for a second human: the
+// switch is on and the caller is not the admin token, which governanceWriteMode lets through as govBypass.
+// Local mode never holds a write: governanceWriteMode refuses it there, so the editor must not word it as held.
+func (s *Server) governanceSaveHeld(r *http.Request) bool {
+	return envEnabled(envGovernanceSecondHuman) && !isAdminTokenCaller(r) && !s.cfg.LocalMode
+}
+
+// unitWriteMode is governanceWriteMode for the routes a unit admin may use (governance_scope.go): a
+// security caller's write follows the switch, unchanged, and so does a security admin's unit-admin
+// grant, so a single-admin install can create unit admins. A unit admin's write is
+// govQueue whatever the switch says: held unless an exemption proves it narrowing (DESIGN-TREE §5.2).
+func (s *Server) unitWriteMode(w http.ResponseWriter, r *http.Request) (govWriteMode, bool) {
+	if s.isUnitAdminCaller(r.Context()) {
+		return govQueue, true
+	}
+	return s.governanceWriteMode(w, r)
+}
+
 // governanceWriteMode decides how a covered write is carried out, having already written its own 503
 // (ok=false) in local mode. The admin token is checked before local mode, so it stays the way past a
 // switch local mode cannot enforce.
@@ -122,10 +142,12 @@ func (s *Server) recordGovernanceBypass(r *http.Request, kind, target, outcome s
 }
 
 // govApprover is who may decide a change of one kind: the predicate of the tier the write was
-// proposed on, never a weaker one, and the refusal reason that tier gives.
+// proposed on, never a weaker one, and the refusal reason that tier gives. scoped marks a predicate
+// that reads the unit scope, which the decision re-reads under the graph lock (recheckApprover).
 type govApprover struct {
 	allowed func(s *Server, r *http.Request) bool
 	reason  authz.Reason
+	scoped  bool
 }
 
 // operatorApprover is the tier of the operatorOnly routes: a super admin only. A security admin who
@@ -182,17 +204,35 @@ var governanceChangeKinds = map[string]govKind{
 	govKindRunnerTrust:         {approver: securityApprover, apply: applyRunnerTrustChange},
 	govKindRunNodeRecord:       {approver: securityApprover, apply: applyRunNodeRecordChange},
 	govKindBoundary:            {approver: securityApprover, apply: applyBoundaryChange},
+	govKindUnitAdmin:           {approver: securityApprover, apply: applyUnitAdminChange},
+	govKindRestriction:         {approver: securityApprover, apply: applyRestrictionChange},
+	govKindWorkspaceOwningUnit: {approver: securityApprover, apply: applyWorkspaceOwningUnitChange},
+	govKindApprovalRule:        {approver: securityApprover, apply: applyApprovalRuleChange},
+	govKindRecording:           {approver: securityApprover, apply: applyRecordingChange},
 }
 
 // forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an
-// organization pool is held under the use-policy kind but written on the operatorOnly tier, so only a
-// super admin decides it; a payload that does not decode is given the stricter tier.
+// organization pool, or an organization runner's removal from one, is held under the use-policy kind but written on the operatorOnly tier, so only a
+// super admin decides it; a payload that does not decode is given the stricter tier. So is a profile
+// change whose payload names a mount's host path (a kept mount is held as the sentinel, so only a
+// change that adds a mount, changes a host path or makes a kept mount writable names one).
+//
+// A unit, membership or unit-admin change may also be decided by a unit admin governing every unit it
+// touches (unitChangeApprover, governance_unit_admin.go): the same predicate decides it and shows it.
 func (k govKind) forChange(ch types.GovernanceChange) govKind {
-	if ch.TargetKind == govKindRunnerPoolUsePolicy {
+	switch ch.TargetKind {
+	case govKindRunnerPoolUsePolicy:
 		var held runnerPoolHeldChange
-		if decodeHeldPayload(ch.Payload, &held) != nil || held.Executor != "" {
+		if decodeHeldPayload(ch.Payload, &held) != nil || held.Executor != "" || held.RunnerID != "" {
 			k.approver = operatorApprover
 		}
+	case govKindUnit:
+		k.approver = unitChangeApprover(ch)
+		if profilePayloadSetsHostPath(ch.Payload) {
+			k.approver = operatorApprover
+		}
+	case govKindMembership, govKindUnitAdmin:
+		k.approver = unitChangeApprover(ch)
 	}
 	return k
 }
@@ -218,6 +258,11 @@ type govProposal struct {
 	notes []string
 	// baseState is the target as the proposal saw it; its hash is what an approval compares.
 	baseState any
+	// shift is what a legacy membership delete or move may do to whose row wins (H3).
+	shift legacyShift
+	// belongsBy is, for a unit admin's membership add or delete, the units they are granted that its
+	// subject holds another membership below (governingRoots, heldBelongsStale).
+	belongsBy []uuid.UUID
 }
 
 // proposeGovernanceChange stores p as pending and answers 202 with the pending change. A live change
@@ -232,7 +277,7 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 	ch := types.GovernanceChange{
 		TargetKind: p.kind, Op: p.op, TargetKey: p.key,
 		Payload:         payload,
-		Diff:            renderGovernanceDiff(p.before, p.after, p.changed, p.notes),
+		Diff:            renderGovernanceDiff(p.before, p.after, p.changed, p.notes, heldReads{shift: p.shift, belongsBy: p.belongsBy}),
 		BaseHash:        computeETag(p.baseState),
 		DeploymentHash:  computeETag(s.cfg.DefaultPolicy),
 		ProposedBy:      proposer,
@@ -249,6 +294,7 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 		// plain refusal, as does a held change the caller's role may not read.
 		if held, gerr := s.cfg.Store.GetGovernanceChange(r.Context(), pending.ID); gerr == nil && held.State == types.GovernanceChangePending && s.canSeeGovernanceChange(r, held) {
 			matches := held.Op == p.op && samePayload(held.Payload, payload)
+			held = s.changeForRead(r, held)
 			body.PendingChange, body.PendingChangeMatches = &held, &matches
 		}
 		writeJSON(w, http.StatusConflict, body)
@@ -265,7 +311,7 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.propose", saved.ID.String(), "success",
 		mustJSON(map[string]any{"target_kind": p.kind, "op": p.op, "target_key": p.key, "expires_at": saved.ExpiresAt})))
 	w.Header().Set("Location", "/api/v1/governance/changes/"+saved.ID.String())
-	writeJSON(w, http.StatusAccepted, map[string]any{"pending_change": saved})
+	writeJSON(w, http.StatusAccepted, map[string]any{"pending_change": s.changeForRead(r, saved)})
 }
 
 // samePayload reports whether two change payloads encode the same JSON value, whatever their key
@@ -282,12 +328,30 @@ type governanceDiffBody struct {
 	Changed []string        `json:"changed"`
 	// Notes are advisory, never a refusal: what a write would have returned as warnings had it not been held.
 	Notes []string `json:"notes,omitempty"`
+	// Activates lists the units a legacy membership delete or move may make someone's context.
+	Activates []unitActivation `json:"activates,omitempty"`
+	// Vacates lists the units a legacy membership move may take someone out of.
+	Vacates []unitActivation `json:"vacates,omitempty"`
+	// BelongsBy lists, for a unit admin's membership add or delete, the units they are granted that its
+	// subject holds another membership below.
+	BelongsBy []uuid.UUID `json:"belongs_by,omitempty"`
+}
+
+// heldReads is what a held change records for its decision to read again: a legacy shift (H3), and
+// the units a unit admin's add or delete was admitted by (heldBelongsStale).
+type heldReads struct {
+	shift     legacyShift
+	belongsBy []uuid.UUID
 }
 
 // renderGovernanceDiff is the diff stored with a change: the redacted before and after views and the
 // changed field paths, rendered by the server so the console and the CLI never compute their own.
-func renderGovernanceDiff(before, after any, changed, notes []string) json.RawMessage {
+// held is a change's heldReads (none for a change that records none).
+func renderGovernanceDiff(before, after any, changed, notes []string, held ...heldReads) json.RawMessage {
 	body := governanceDiffBody{Changed: changed, Notes: notes}
+	if len(held) > 0 {
+		body.Activates, body.Vacates, body.BelongsBy = held[0].shift.activates, held[0].shift.vacates, held[0].belongsBy
+	}
 	if body.Changed == nil {
 		body.Changed = []string{}
 	}

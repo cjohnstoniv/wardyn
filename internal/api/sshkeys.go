@@ -109,7 +109,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		// key that will ever work. Reject before writing one that would sit
 		// dead in the store forever (docs/SSH.md's admin-token/CI-only note).
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSSHKeyRequiresHuman,
-			"a key registered with the admin token can never authorize an SSO-signed-in human's run — sign in to the console and add the key from Your account instead")
+			"a key registered with the admin token can never authorize an SSO-signed-in human's run — sign in to the console and add the key in Settings instead")
 		return
 	}
 

@@ -44,6 +44,10 @@ type CreateRunRequest struct {
 	// never-reap policy (AutoStopAfterSec < 0) or the idle reaper will stop the
 	// idle sandbox.
 	Interactive bool `json:"interactive,omitempty"`
+	// MachineKind is the kind of sandbox: "" or "container" (the default), "linux_vm", a Linux
+	// guest under QEMU/KVM, or "macos_vm", a macOS guest on a managed Mac; only a registered runner
+	// offering the kind starts it.
+	MachineKind string `json:"machine_kind,omitempty"`
 	// WorkspaceID, when set, launches the run against that ONBOARDED workspace:
 	// the server prepends the workspace's stored source onto the resolved policy
 	// (a repo as a workspace_repos entry, a local dir as a read-only-by-default
@@ -140,6 +144,10 @@ type CreateRunRequest struct {
 	// deployment with no model providers, or on a run that calls no model, it
 	// is refused rather than ignored.
 	ModelProvider string `json:"model_provider,omitempty"`
+	// RunIn names the unit this run runs in: one of the caller's units, by id or exact name. Empty runs
+	// in the caller's home unit. A unit that is not one of theirs, or no unit at all, is refused 403
+	// unit_not_a_context.
+	RunIn string `json:"run_in,omitempty"`
 	// Drive opts this run into the member's USER DRIVE — the per-user storage
 	// an admin allocated them. Nil (the default) mounts nothing, byte for byte
 	// today. Nothing here names a path or a drive: the server resolves which
@@ -259,7 +267,7 @@ type CreateRunRequest struct {
 	NoRepositoriesOrDrives bool `json:"no_repositories_or_drives,omitempty"`
 	// Shape is the New Run choice a run was set up from: agent_task,
 	// environment or application. Optional; the server checks it against
-	// experience, workload and tools and otherwise does not use it.
+	// experience, workload and tools, and the run keeps it (AgentRun.Shape).
 	Shape RunShape `json:"shape,omitempty"`
 	// EndsAfterSec ends the run this many seconds after it is created, 1 to
 	// 2147483647 (below 1 is a 400, run_end_after_too_small). An end past what the pool, the deployment and the person's
@@ -272,6 +280,13 @@ type CreateRunRequest struct {
 	// No end (allow_no_end with user_changes_limits); otherwise 403
 	// run_end_no_end_not_allowed or run_limits_gate_denied.
 	NoEnd bool `json:"no_end,omitempty"`
+	// Service keeps a background command running: the supervisor in the sandbox restarts it when it
+	// exits with an error and, with both a port and a health block, checks it; a port alone is not
+	// checked. Only with experience background and workload kind command on a container sandbox;
+	// anything else is 422 run_service_shape, and a VM machine_kind is 422 request_field_unavailable.
+	// The server fills the defaults (restart on_failure, a health check's interval 15 and
+	// failure_threshold 3) and stores the spec frozen on the run.
+	Service *types.RunService `json:"service,omitempty"`
 	// Preset launches the named launch preset (see Preset): the server
 	// expands it into the equivalent explicit request and runs the unchanged
 	// create path under the caller's own ceiling. Alongside it only Title,

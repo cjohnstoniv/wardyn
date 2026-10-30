@@ -173,14 +173,18 @@ func (e compRace) holdSnapshots(t *testing.T) (release func()) {
 	return release
 }
 
-// waitHeld returns once n inserts are waiting on snapshotLockKey.
+// waitHeld returns once n inserts are waiting on snapshotLockKey in this
+// test's database. Advisory locks are per database but pg_locks lists the
+// whole server, so another test binary's create held at its own snapshot write
+// is not one of this test's.
 func (e compRace) waitHeld(t *testing.T, n int) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for {
 		var waiting int
 		if err := e.pg.Pool.QueryRow(context.Background(),
-			`SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = $1 AND NOT granted`, snapshotLockKey).Scan(&waiting); err != nil {
+			`SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid = $1 AND NOT granted
+			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`, snapshotLockKey).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting >= n {

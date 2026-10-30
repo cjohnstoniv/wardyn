@@ -5,11 +5,10 @@
 
 // The Wardyn boundary routes (internal/api/boundary.go), both securityOps. The PUT replaces the whole document,
 // takes the GET's ETag as If-Match (a stale draft is a 412), and is held for a second person where one is
-// required (202, thrown as PendingChangeError by asJson). A PUT naming hard_limits is refused 409
-// boundary_hard_limits_gated until the boundary bounds every brokered credential path. The dry run writes nothing.
+// required (202, thrown as PendingChangeError by asJson). The dry run writes nothing.
 import { asJson, wfetch } from "./core";
 import type { ConfinementClass } from "../types/runs";
-import type { GrantSpec } from "../types/policy";
+import type { DesktopControls, GrantSpec } from "../types/policy";
 import type { PolicyContact } from "../types/site";
 
 export type BoundaryMode = "no_limits" | "hard_limits";
@@ -21,6 +20,8 @@ export interface BoundarySpec {
   allow_all_egress?: boolean;
   min_confinement_class?: ConfinementClass;
   eligible_grants?: GrantSpec[];
+  // The desktop directions every run is held to (#2967); a direction left unset is its default.
+  desktop?: DesktopControls;
 }
 
 export interface BoundaryLimits {
@@ -33,6 +34,8 @@ export interface BoundaryWrite {
   spec: BoundarySpec;
   limits: BoundaryLimits;
   contact?: PolicyContact;
+  // The knobs no unit may change while the boundary is in hard_limits; absent keeps the stored locks.
+  locked_knobs?: string[];
 }
 
 /** types.Boundary. */
@@ -41,8 +44,11 @@ export interface Boundary {
   spec: BoundarySpec;
   limits: BoundaryLimits;
   contact?: PolicyContact;
+  locked_knobs?: string[];
   updated_by?: string;
   updated_at?: string;
+  /** This caller's save would be held for a second human; absent when it applies at once. */
+  save_held_for_approval?: boolean;
 }
 
 /** The document with the ETag the response carried, which the next PUT sends back as If-Match. */
@@ -72,6 +78,7 @@ export interface BoundaryReportAssign {
 
 /** boundaryReport: only the rows the drafted boundary would narrow are listed. */
 export interface BoundaryReport {
+  target: "boundary";
   deployment: BoundaryChange[];
   units: BoundaryReportRow[];
   stored_policies: BoundaryReportRow[];
@@ -101,6 +108,6 @@ export const boundary = {
   async dryRun(body: Pick<BoundaryWrite, "spec" | "limits">): Promise<BoundaryReport> {
     const res = await wfetch("/governance/dry-run", { method: "POST", asPerson: true, body: JSON.stringify(body) });
     const r = await asJson<Partial<BoundaryReport>>(res);
-    return { deployment: r.deployment ?? [], units: r.units ?? [], stored_policies: r.stored_policies ?? [], memberships: r.memberships ?? [] };
+    return { target: "boundary", deployment: r.deployment ?? [], units: r.units ?? [], stored_policies: r.stored_policies ?? [], memberships: r.memberships ?? [] };
   },
 };

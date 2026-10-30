@@ -59,8 +59,9 @@ func (s *Server) refuse(w http.ResponseWriter, r *http.Request, d authz.Decision
 	if d.WireReason != "" || ref.Effect == authz.EffectHidden {
 		policy = nil
 	}
+	// The policy is attributed to the knob the door named (d.Knob), so one a lock fixes says locked.
 	// The tool rides as itself: it is the request's own tools[].id.
-	writeJSON(w, ref.Effect.Status(), errorBody{Error: cmp.Or(d.Sentence, ref.Sentence), Reason: string(wireReason), Policy: policyref.Layered(policy), Tool: d.Detail["tool"]})
+	writeJSON(w, ref.Effect.Status(), errorBody{Error: cmp.Or(d.Sentence, ref.Sentence), Reason: string(wireReason), Policy: policyref.Layered(policyref.AttributedTo(policy, d.Knob)), Tool: d.Detail["tool"]})
 	if ref.Audit {
 		s.recordRefusal(r.Context(), r, d)
 	}

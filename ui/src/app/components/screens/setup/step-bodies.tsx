@@ -11,18 +11,17 @@
 // write is the one-shot POST inside AddWorkspaceDialog).
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, Info, Loader2, Plus, CircleCheck, RotateCw } from "lucide-react";
+import { AlertTriangle, Info, Plus, CircleCheck } from "lucide-react";
 import type { SetupCheck, SetupCheckStatus, SetupStatus, SiteConfig, Workspace } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
 import { Chip, SectionCard, SectionLabel } from "../../wardyn/primitives";
-import { BTN, OPERATOR_ONLY_REASON, PEOPLE_STEP as PT, SETUP } from "../../wardyn/copy";
+import { OPERATOR_ONLY_REASON, PEOPLE_STEP as PT, SETUP } from "../../wardyn/copy";
 import { PEOPLE_PAGE } from "../../wardyn/copy/people";
 import { useOperator } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { sourceSubLine } from "../workspaces";
 import { Readiness, deploymentMode } from "../../../lib/readiness";
-import { lastCheckedLabel } from "../../../lib/readiness";
 import { toast } from "sonner";
 import { CONFIG_STEPS, DEMO_EGRESS_IDS, DEMO_SECRETS_IDS, STEP_LABEL, stepOrder, type SetupStepId, type StepBadge } from "./steps";
 import { statusTone, statusWord } from "../../../lib/workspace-status";
@@ -126,9 +125,6 @@ function OptionalWorkLists({ status, onJump }: { status: SetupStatus; onJump: (i
 export function ReviewStep({
   status,
   readiness,
-  onRecheck,
-  rechecking,
-  lastCheckedAt,
   onJump,
   // M-6 (QM-8/§4.8): Finish's own offer (setup-screen.tsx's
   // finishSwitchToUser); this step stays presentational, same as every other
@@ -140,9 +136,6 @@ export function ReviewStep({
 }: {
   status: SetupStatus;
   readiness: Readiness;
-  onRecheck: () => void;
-  rechecking: boolean;
-  lastCheckedAt: Date | null;
   onJump: (id: SetupStepId) => void;
   onSwitchToUser?: () => void;
   /** Finish is gated (#214): the switch completes onboarding too, so it waits on the same gate. */
@@ -198,22 +191,12 @@ export function ReviewStep({
         </Button>
       </SectionCard>
 
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          Every setup check, in one place. {readiness.ready && readiness.llmReady
-            ? "The essentials are ready — you can launch."
-            : "Not everything a first run needs is ready yet — review what's left."}
-        </p>
-        <div className="flex shrink-0 items-center gap-2.5">
-          {lastCheckedAt && (
-            <span className="text-meta text-muted-foreground">{lastCheckedLabel(lastCheckedAt)}</span>
-          )}
-          <Button variant="outline" size="sm" onClick={onRecheck} disabled={rechecking}>
-            {rechecking ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
-            {BTN.recheck}
-          </Button>
-        </div>
-      </div>
+      {/* #2847: the step's one Re-check is in the layout's header row. */}
+      <p className="text-sm leading-relaxed text-muted-foreground">
+        Every setup check, in one place. {readiness.ready && readiness.llmReady
+          ? "The essentials are ready — you can launch."
+          : "Not everything a first run needs is ready yet — review what's left."}
+      </p>
 
       {group("Blocking", "warning", blockers)}
       {group("Worth a look", "neutral", warnings)}

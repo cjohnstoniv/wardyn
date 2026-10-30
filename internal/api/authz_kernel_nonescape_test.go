@@ -46,10 +46,14 @@ var kernelDoors = map[string][]string{
 	// repos resolve to, then the model provider it will use.
 	"runRequestGovernance":      {"capAgent", "capImage", "capPolicy", "capWorkspace"},
 	"narrowUserInlinePolicy":    {"capEgressHost", "capSecret"},
-	"anyCarrierGranted":         {"capWorkspace"}, // narrowUserInlinePolicy's workspace bound
+	"admittingCarrier":          {"capWorkspace"}, // narrowUserInlinePolicy's workspace bound, and the carrier the run then uses
 	"seededImageRefusal":        {"capImage"},
+	"inboundDeclaredRefusal":    {"capFeature"}, // an inbound ui_app the request itself declares
 	"workspaceProvidersRefusal": {"capWorkspaceProvider"},
 	"chooseRunModelProvider":    {"capModelProvider"},
+	// A desktop run's sign-in variant of the person's own image (#2972 M1):
+	// decides the dispatched image, refuses nothing.
+	"signinVariantUngranted": {"capImage"},
 	// Every harness a run-mode request includes, beside the projected agent.
 	"harnessSetRefusalFor": {"capAgent"},
 	// A record session's model provider, chosen as a run's would be.
@@ -74,6 +78,8 @@ var kernelDoors = map[string][]string{
 	"cliSessionCutsPass": {"capFeature"},
 	// Self-hosting: POST /me/runners/tokens asks the self_host_runner value.
 	"handleRunnerTokenSelf": {"capFeature"},
+	// GET /me/capabilities' may_self_host_runner: the same value, asked read-only so the console can say so first.
+	"handleMeCapabilities": {"capFeature"},
 	// A sponsor entering a service identity's run: service_attach, asked with the operator step off (F6).
 	"sponsorMayEnter": {"capFeature"},
 	// The key and sign-in doors, answered as an unknown provider (D-6).

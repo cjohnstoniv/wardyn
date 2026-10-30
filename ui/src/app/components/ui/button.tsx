@@ -9,7 +9,10 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/95",
+        // #2865: dark primary is a bright fill under a near-black label, so opacity-50 alone still reads as
+        // solid; the filled variants swap to the muted pair in dark (light fades to pale and already reads off).
+        default:
+          "bg-primary text-primary-foreground hover:bg-primary/95 dark:disabled:bg-muted dark:disabled:text-muted-foreground",
         // F7-F15: --destructive is var(--danger) — text-danger-foreground is
         // its AA-proven text token, not a raw text-white guess. R-01: no
         // dark:bg-destructive/NN dilution — the unified token is already the
@@ -17,7 +20,7 @@ const buttonVariants = cva(
         // dropped it to 3.18:1, a stale leftover from when dark --destructive
         // was a hand-copied hex needing a tone-down).
         destructive:
-          "bg-destructive text-danger-foreground hover:bg-destructive/90",
+          "bg-destructive text-danger-foreground hover:bg-destructive/90 dark:disabled:bg-muted dark:disabled:text-muted-foreground",
         outline:
           "border bg-background text-foreground hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50",
         secondary:
@@ -25,7 +28,8 @@ const buttonVariants = cva(
         ghost:
           "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
         link: "text-info underline-offset-4 hover:underline",
-        info: "bg-info text-info-foreground hover:bg-info/90",
+        info:
+          "bg-info text-info-foreground hover:bg-info/90 dark:disabled:bg-muted dark:disabled:text-muted-foreground",
       },
       size: {
         default: "h-9 px-4 py-2 has-[>svg]:px-3",

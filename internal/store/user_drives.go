@@ -21,7 +21,8 @@ import (
 )
 
 const userDriveCols = `id, name, backend, host_root, storage_class, home_template, ` +
-	`size_mib, writable, reclaim, created_at, updated_at, created_by, object_scheme, team`
+	`size_mib, writable, reclaim, created_at, updated_at, created_by, object_scheme, team, ` +
+	`COALESCE(alt_backend, ''), COALESCE(alt_host_root, ''), alt_runner_id`
 
 // driveRowCols is userDriveCols plus the member-drive columns: every read that
 // can return a member drive scans these, so the owner always travels with it.
@@ -61,8 +62,10 @@ var driveHomeNamespaceClashSQL = `SELECT ` + fmt.Sprintf(driveHomeNamespaceClash
 // refuses a member drive (owner_subject set): the admin write path never edits one.
 var userDriveUpsertSQL = `
 		INSERT INTO user_drives (id, name, backend, host_root, storage_class,
-			home_template, size_mib, writable, reclaim, created_by, name_slug, object_scheme, team)
-		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text,$11::text,'id'::text,$13::boolean
+			home_template, size_mib, writable, reclaim, created_by, name_slug, object_scheme, team,
+			alt_backend, alt_host_root, alt_runner_id)
+		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text,$11::text,'id'::text,$13::boolean,
+			NULLIF($14::text, ''),NULLIF($15::text, ''),$16::uuid
 		WHERE (NOT $12::boolean OR NOT EXISTS (
 			SELECT 1 FROM user_drive_grants WHERE drive_id = $1::uuid
 		))
@@ -74,6 +77,8 @@ var userDriveUpsertSQL = `
 			    home_template = EXCLUDED.home_template, size_mib = EXCLUDED.size_mib,
 			    writable = EXCLUDED.writable, reclaim = EXCLUDED.reclaim,
 			    name_slug = EXCLUDED.name_slug, team = EXCLUDED.team, updated_at = now(),
+			    alt_backend = EXCLUDED.alt_backend, alt_host_root = EXCLUDED.alt_host_root,
+			    alt_runner_id = EXCLUDED.alt_runner_id,
 			    object_scheme = user_drives.object_scheme
 			WHERE user_drives.owner_subject = ''
 		RETURNING ` + userDriveCols
@@ -82,7 +87,8 @@ var userDriveUpsertSQL = `
 // column list and destinations cannot drift.
 func userDriveDest(d *types.UserDrive) []any {
 	return []any{&d.ID, &d.Name, &d.Backend, &d.HostRoot, &d.StorageClass, &d.HomeTemplate,
-		&d.SizeMiB, &d.Writable, &d.Reclaim, &d.CreatedAt, &d.UpdatedAt, &d.CreatedBy, &d.ObjectScheme, &d.Team}
+		&d.SizeMiB, &d.Writable, &d.Reclaim, &d.CreatedAt, &d.UpdatedAt, &d.CreatedBy, &d.ObjectScheme, &d.Team,
+		&d.AltBackend, &d.AltHostRoot, &d.AltRunnerID}
 }
 
 // driveRowDest is the scan target list for driveRowCols.
@@ -188,7 +194,7 @@ func (s PG) upsertUserDriveOn(ctx context.Context, q driveQuerier, d types.UserD
 	out, err := scanUserDrive(q.QueryRow(ctx, userDriveUpsertSQL,
 		d.ID, d.Name, d.Backend, d.HostRoot, d.StorageClass,
 		d.HomeTemplate, d.SizeMiB, d.Writable, d.Reclaim, d.CreatedBy,
-		types.DriveSlug(d.Name), refuseIfAllocated, d.Team))
+		types.DriveSlug(d.Name), refuseIfAllocated, d.Team, d.AltBackend, d.AltHostRoot, d.AltRunnerID))
 	if err != nil {
 		if conflict := userDriveUniqueConflict(err); conflict != nil {
 			return types.UserDrive{}, conflict
@@ -275,6 +281,7 @@ func (s PG) DeleteUserDrive(ctx context.Context, id uuid.UUID) error {
 func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, error) {
 	const q = `SELECT d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
 			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme, d.team,
+			COALESCE(d.alt_backend, ''), COALESCE(d.alt_host_root, ''), d.alt_runner_id,
 			d.owner_subject, d.delete_started_at, d.kept_from_run, COALESCE(c.n, 0)
 		FROM user_drives d
 		LEFT JOIN (SELECT drive_id, COUNT(*) AS n FROM user_drive_grants GROUP BY drive_id) c
@@ -603,7 +610,7 @@ func (s PG) ListUserDriveGrantsPage(ctx context.Context, p Page) ([]types.UserDr
 
 // ResolveUserDrive returns THE ONE drive that applies to a caller, the winning grant, and its tier
 // — or ErrNotFound. The whole precedence rule lives in the ORDER BY (subjectMatch/subjectPrecedence,
-// shared with ResolveGovernanceUnit since both rank the same subject vocabulary): one indexed
+// shared with ListMembershipsFor since both rank the same subject vocabulary): one indexed
 // read on UNIQUE(subject_type, subject), so there's no second Go implementation to mis-order.
 //
 // Disabled grants stay in the query; the winner's own `enabled` decides PAUSED vs MOUNTED. Excluding
@@ -612,7 +619,7 @@ func (s PG) ListUserDriveGrantsPage(ctx context.Context, p Page) ([]types.UserDr
 // one stopping (DESIGN §2.2).
 //
 // userSubjects/groups are normalized from nil to empty: a nil Go slice binds as SQL NULL, and
-// `x = ANY(NULL)` is NULL rather than false — same reasoning as ResolveGovernanceUnit.
+// `x = ANY(NULL)` is NULL rather than false — same reasoning as ListMembershipsFor.
 //
 // userType is the caller's one type id; "" matches no row.
 func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string, userType string) (
@@ -625,6 +632,7 @@ func (s PG) ResolveUserDrive(ctx context.Context, userSubjects, groups []string,
 	}
 	q := `SELECT d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
 			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme, d.team,
+			COALESCE(d.alt_backend, ''), COALESCE(d.alt_host_root, ''), d.alt_runner_id,
 			g.id, g.subject_type, g.subject, g.drive_id, g.priority,
 			g.size_mib_override, g.writable_override, g.home_override, g.enabled,
 			g.created_at, g.created_by, g.members_can_write

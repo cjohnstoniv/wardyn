@@ -5,6 +5,7 @@
 
 import * as React from "react";
 import { Loader2 } from "lucide-react";
+import { NotFoundPage } from "./components/wardyn/not-found-page";
 import { RouteFallback } from "./components/wardyn/route-fallback";
 import { Navigate, Route, Routes, useLocation, useNavigate, Outlet } from "react-router-dom";
 import { toast } from "sonner";
@@ -12,10 +13,11 @@ import { Toaster } from "./components/ui/sonner";
 import { SHELL } from "./components/wardyn/copy";
 import { ThemeProvider } from "./components/wardyn/theme-provider";
 import { SignIn } from "./components/screens/sign-in";
+import { noticeView, type GateNotice } from "./lib/session-continuity-copy";
 import { AppShell } from "./components/screens/app-shell";
 import { RunsScreen } from "./components/screens/runs";
 import { WardynMark } from "./components/wardyn/logo";
-import { getToken, isSessionEnded, listenForOtherTabs, onUnauthorized, probeAuthWithReason, safeReturnPath, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
+import { getAuthGeneration, getToken, isSessionEnded, listenForOtherTabs, onUnauthorized, probeAuthWithReason, safeReturnPath, setSignedOutHold, setToken } from "./lib/api/core";
 import { listenForInput } from "./lib/api/session-activity";
 import { onRemoteAuthChange } from "./lib/api/auth-sync";
 import { health } from "./lib/api/health";
@@ -106,6 +108,13 @@ const ProvidersScreen = React.lazy(() =>
     default: m.ProvidersScreen,
   })),
 );
+// A security admin's Images page (design final §3): pre-wrapped images only. A super admin reaches the
+// same tab under Providers, so it has no nav item in that tier.
+const ImagesScreen = React.lazy(() =>
+  import("./components/screens/providers/images-tab").then((m) => ({
+    default: m.ImagesScreen,
+  })),
+);
 // The org's custom components (0.8.9): the catalog and who may use each. Super admin only, no nav item:
 // reached from the Settings card.
 const ComponentsScreen = React.lazy(() =>
@@ -118,6 +127,12 @@ const ComponentsScreen = React.lazy(() =>
 const TemplatesScreen = React.lazy(() =>
   import("./components/screens/templates/templates-screen").then((m) => ({
     default: m.TemplatesScreen,
+  })),
+);
+// The workloads Wardyn keeps running (0.10): /workloads in the User view, /admin/workloads in the Admin view.
+const WorkloadsScreen = React.lazy(() =>
+  import("./components/screens/workloads").then((m) => ({
+    default: m.WorkloadsScreen,
   })),
 );
 const PermissionsScreen = React.lazy(() =>
@@ -183,6 +198,12 @@ const YourAccountScreen = React.lazy(() =>
 const CliSignInScreen = React.lazy(() =>
   import("./components/screens/cli-sign-in").then((m) => ({
     default: m.CliSignInScreen,
+  })),
+);
+// /open/{run}/{app}: the link people are given for an inbound app. Outside the setup gate, like /cli/sign-in.
+const OpenAppScreen = React.lazy(() =>
+  import("./components/screens/open-app").then((m) => ({
+    default: m.OpenAppScreen,
   })),
 );
 const WorkspacesScreen = React.lazy(() =>
@@ -397,11 +418,17 @@ export default function App() {
   // for a session this browser held that was refused on load (a stored
   // token the mount probe sent and got a 401 for) — never a first visit,
   // never a deliberate sign-out.
-  const [signedOut, setSignedOut] = React.useState(false);
+  const [notice, setNotice] = React.useState<GateNotice | null>(null);
   const signingOutRef = React.useRef(false);
   // This tab signed out on purpose, so a focus or visibility re-probe must not walk back in (a failed logout leaves
   // the cookie live). Another tab announcing a sign-in is still believed. Cleared by signing in here.
   const signedOutHereRef = React.useRef(false);
+  // A 401 on any probe path says why the session ended (M12): the cold load, its retries and the re-probes
+  // all read it the same way. This tab's own sign-out is never overwritten by a probe; a stored token
+  // refused with no reason named is the generic sentence.
+  const noteEnded = React.useCallback((reason: string, hadToken = false) => {
+    setNotice((prev) => (prev?.kind === "own" ? prev : isSessionEnded(reason) ? { kind: "reason", reason } : hadToken ? { kind: "fallback" } : prev));
+  }, []);
   // Someone else signed in over the page: nothing of it may survive, so the
   // tree unmounts first (dropping every draft and its beforeunload guard)
   // and the document then loads fresh as them.
@@ -434,9 +461,13 @@ export default function App() {
   // NOT the server-side user/admin session split — same distinction
   // GET /runs?view= and GET /approvals?view= already draw.
   const refreshBadges = React.useCallback(() => {
+    // A read that started before a sign-out (or a sign-in) answers for the previous person; it may
+    // neither repaint their counts after the reset nor overwrite the next session's.
+    const generation = getAuthGeneration();
     return attentionApi
       .getMeAttention(viewOfPath(location.pathname))
       .then((counts) => {
+        if (generation !== getAuthGeneration() || authRef.current !== "authed") return;
         setPendingApprovals(counts.pending_approvals);
         setAttentionCount(counts.needs_you);
         /* 401 already routes through onUnauthorized */
@@ -466,13 +497,13 @@ export default function App() {
         if (transient) setColdUnreachable(true);
       }
       // A cold load whose session ended says so, as a rejected stored token does.
-      if (probe === "unauthed" && (hadToken || isSessionEnded(reason))) setSignedOut(true);
+      if (probe === "unauthed") noteEnded(reason, hadToken);
       setAuth(probe === "authed" ? "authed" : "unauthed");
     });
     return () => {
       active = false;
     };
-  }, []);
+  }, [noteEnded]);
 
   // A cold load whose probe hit a transient failure (a network error, a timeout, a 5xx or a 429) is not a
   // signed-out person, but it parks on the sign-in gate, and nothing else asks again until a focus or
@@ -500,6 +531,7 @@ export default function App() {
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let attempt = 0;
+    const hadToken = getToken() !== null;
     const stop = () => {
       alive = false;
       clearTimeout(timer);
@@ -509,7 +541,7 @@ export default function App() {
         // The focus re-probe has one out: wait for it rather than stack a second.
         if (probingRef.current) return schedule();
         const { current, answer } = startProbe();
-        void answer.then(({ probe, transient }) => {
+        void answer.then(({ probe, reason, transient }) => {
           if (!current()) return alive ? schedule() : undefined;
           probingRef.current = false;
           if (!alive) return;
@@ -520,6 +552,7 @@ export default function App() {
           }
           stop();
           setColdUnreachable(false);
+          if (probe === "unauthed") noteEnded(reason, hadToken);
           if (probe === "authed") setAuth("authed");
         });
       }, COLD_PROBE_RETRY_MS[Math.min(attempt, COLD_PROBE_RETRY_MS.length - 1)]);
@@ -530,7 +563,7 @@ export default function App() {
       stop();
       document.removeEventListener("input", stop, true);
     };
-  }, [auth, coldUnreachable, startProbe]);
+  }, [auth, coldUnreachable, startProbe, noteEnded]);
 
   // DR-0020: the other tabs of this browser signed out, signed in or switched mode. Every signed-in tab
   // re-asks /me (the shell's reauth layer); a tab on the sign-in screen asks here, and enters the
@@ -541,28 +574,34 @@ export default function App() {
   React.useEffect(() => {
     if (auth !== "unauthed") return;
     let alive = true;
-    const reprobe = (fromOtherTab: boolean) => {
+    const reprobe = (fromOtherTab: boolean, heardSignOut = false) => {
       if (signingOutRef.current) return;
       if (!fromOtherTab && signedOutHereRef.current) return;
       // Another tab's announcement always asks again: a probe already out was sent before that sign-in and
       // would answer 401 (#3368). It takes over from that probe, whose answer is then dropped.
       if (probingRef.current && !fromOtherTab) return;
+      const hadToken = getToken() !== null;
       const { current, answer } = startProbe();
-      void answer.then(({ probe, transient }) => {
+      void answer.then(({ probe, reason, transient }) => {
         if (!current()) return;
         probingRef.current = false;
         // An answer that is final ends the cold-load retries; a transient failure leaves them running.
         if (alive && !(probe === "unreachable" && transient)) setColdUnreachable(false);
+        if (alive && probe === "unauthed") {
+          // The person signed out in another tab: that, not the server's reason, is what happened to them.
+          if (heardSignOut) setNotice((prev) => (prev?.kind === "own" ? prev : { kind: "elsewhere" }));
+          else noteEnded(reason, hadToken);
+        }
         if (!alive || probe !== "authed" || authRef.current !== "unauthed") return;
         // Back in, by another tab's sign-in: a later sign-out here starts from a clean slate.
         signedOutHereRef.current = false;
-        setSignedOut(false);
+        setNotice(null);
         setAuth("authed");
       });
     };
     const onFocus = () => reprobe(false);
     const onVisible = () => document.visibilityState === "visible" && reprobe(false);
-    const stop = onRemoteAuthChange(() => reprobe(true));
+    const stop = onRemoteAuthChange((kind) => reprobe(true, kind === "signed_out"));
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -571,7 +610,7 @@ export default function App() {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [auth, startProbe]);
+  }, [auth, startProbe, noteEnded]);
 
   // Any HTTP 401. H1: it also fires for the cold mount probe (no session ever
   // established this tab), which is the gate's business, not the dialog's.
@@ -690,6 +729,10 @@ export default function App() {
     // tab renders the shell (and the model-access strip in it) before the
     // landing read answers, which would show them the last person's.
     setSetupStatus(null);
+    // The nav badges are the previous person's too: an org-wide approvals count must not paint on the
+    // next sign-in's first shell render, before /me/attention answers for them.
+    setPendingApprovals(0);
+    setAttentionCount(0);
   }, [auth, refreshSetupStatus]);
   // …and again every five minutes, because model_access is a per-person
   // credential LIFECYCLE: read once per session, a member who signed in at 09:00
@@ -726,13 +769,16 @@ export default function App() {
     return (
       <ThemeProvider>
         <SignIn
-          reason={signedOut ? SESSION_ENDED_REASON : undefined}
+          notice={notice ? noticeView(notice) : undefined}
           onSignIn={() => {
+            // The gate does not mount the Routes, so the URL the person arrived on is still current; after
+            // a deliberate sign-out it is the previous person's last page, so the next one starts at /runs.
+            const returnTo = signedOutHereRef.current ? "/runs" : safeReturnPath(location.pathname + location.search);
             signingOutRef.current = false;
             signedOutHereRef.current = false;
-            setSignedOut(false);
+            setNotice(null);
             setAuth("authed");
-            void navigate("/runs", { replace: true });
+            void navigate(returnTo, { replace: true });
           }}
         />
         <Toaster />
@@ -790,17 +836,17 @@ export default function App() {
                 signingOutRef.current = true;
                 signedOutHereRef.current = true;
                 setSignedOutHold(true);
-                if (!(await health.logout())) {
+                const confirmed = await health.logout();
+                if (!confirmed) {
                   toast.error(SHELL.SIGN_OUT_FAILED_TITLE, {
                     description: SHELL.SIGN_OUT_FAILED_BODY,
                   });
-                } else if (sso) {
-                  // #2100: only the Wardyn session ended; the identity provider's is still live.
-                  toast.info(SHELL.SIGN_OUT_SSO_TITLE, { description: SHELL.SIGN_OUT_SSO_BODY });
                 }
                 setToken(null);
                 resetReauth();
-                setSignedOut(false);
+                // #2100, M12: only the Wardyn session ended; the identity provider's is still live, and the
+                // gate says so once the server has confirmed the sign-out.
+                setNotice(confirmed && sso ? { kind: "own", sso: true } : null);
                 setAuth("unauthed");
               }}
             />
@@ -838,6 +884,7 @@ export default function App() {
             element={<SetupRoute onDone={() => navigate("/runs")} status={setupStatus} />}
           />
           <Route path="/cli/sign-in" element={suspend(<CliSignInScreen />)} />
+          <Route path="/open/:run/:app" element={suspend(<OpenAppScreen />)} />
           <Route element={<RequireSetup status={setupStatus} />}>
             <Route
               path="/"
@@ -852,6 +899,7 @@ export default function App() {
             <Route path="/admin/runs/new" element={<Navigate to="/admin/runs" replace />} />
             <Route path="/admin/runs/:id" element={suspend(<RunDetailScreen />)} />
             <Route path="/admin/approvals" element={suspend(<ApprovalsScreen onChanged={refreshBadges} />)} />
+            <Route path="/admin/workloads" element={suspend(<WorkloadsScreen />)} />
             <Route path="/admin/people" element={suspend(<PeopleScreen />)} />
             <Route path="/admin/runners" element={suspend(<RunnersScreen />)} />
             <Route path="/admin/runners/pools/:id/edit" element={suspend(<PoolFormScreen scope="admin" />)} />
@@ -870,8 +918,9 @@ export default function App() {
             <Route path="/admin/settings" element={suspend(<AdminSettingsScreen />)} />
             <Route path="/admin/providers" element={suspend(<ProvidersScreen />)} />
             <Route path="/admin/drives" element={suspend(<DrivesScreen />)} />
+            <Route path="/admin/images" element={suspend(<ImagesScreen />)} />
             <Route path="/admin/components" element={suspend(<ComponentsScreen />)} />
-            <Route path="/admin/*" element={<Navigate to="/admin/runs" replace />} />
+            <Route path="/admin/*" element={<NotFoundPage admin />} />
             <Route path="/account" element={suspend(<YourAccountScreen />)} />
             <Route path="/account/pools/new" element={suspend(<PoolFormScreen scope="mine" />)} />
             <Route path="/account/pools/:id/edit" element={suspend(<PoolFormScreen scope="mine" />)} />
@@ -894,6 +943,7 @@ export default function App() {
               }
             />
             <Route path="/templates" element={suspend(<TemplatesScreen />)} />
+            <Route path="/workloads" element={suspend(<WorkloadsScreen />)} />
             <Route
               path="/approvals"
               element={
@@ -934,7 +984,7 @@ export default function App() {
                 </React.Suspense>
               }
             />
-            <Route path="*" element={<Navigate to="/runs" replace />} />
+            <Route path="*" element={<NotFoundPage admin={false} />} />
           </Route>
           </Route>
         </Route>

@@ -44,18 +44,21 @@ func sameJSON(a, b any) bool {
 // stay distinguishable when the payload is replayed).
 type unitChangePayload struct {
 	Name          string                 `json:"name"`
+	Mode          string                 `json:"mode,omitempty"`
 	Ceiling       types.RunPolicySpec    `json:"ceiling"`
 	Limits        types.GovernanceLimits `json:"limits"`
 	Contact       json.RawMessage        `json:"contact,omitempty"`
 	ParentID      json.RawMessage        `json:"parent_id,omitempty"`
 	Overlay       json.RawMessage        `json:"overlay,omitempty"`
 	OverlayLimits json.RawMessage        `json:"overlay_limits,omitempty"`
+	LockedKnobs   *[]string              `json:"locked_knobs,omitempty"`
 }
 
 func unitPayloadOf(req governanceUnitRequest) unitChangePayload {
 	return unitChangePayload{
-		Name: req.Name, Ceiling: req.Ceiling, Limits: req.Limits,
+		Name: req.Name, Mode: req.Mode, Ceiling: req.Ceiling, Limits: req.Limits,
 		Contact: req.Contact, ParentID: req.ParentID, Overlay: req.Overlay, OverlayLimits: req.OverlayLimits,
+		LockedKnobs: req.LockedKnobs,
 	}
 }
 
@@ -81,9 +84,10 @@ func unitRequestFromPayload(raw json.RawMessage) (governanceUnitRequest, string)
 // heldUnitWrite is what a profile build proved before it was abandoned: every profile as the
 // transaction read them, the row it would have stored and what that composes to.
 type heldUnitWrite struct {
-	all []types.GovernanceUnit
-	row types.GovernanceUnit
-	res *ResolvedUnit
+	all  []types.GovernanceUnit
+	row  types.GovernanceUnit
+	res  *ResolvedUnit
+	keep mountKeep
 }
 
 // unitWriteExempt reports whether a human's profile update applies without a second human. Only an
@@ -102,7 +106,7 @@ type heldUnitWrite struct {
 func (s *Server) unitWriteExempt(ctx context.Context, all []types.GovernanceUnit, p types.GovernanceUnit, res *ResolvedUnit) bool {
 	byID := unitsByID(all)
 	cur, exists := byID[p.ID]
-	if !exists || res == nil {
+	if !exists || res == nil || locksRemoved(cur.LockedKnobs, p.LockedKnobs) {
 		return false
 	}
 	if !sameJSON(nonZeroContact(cur.Contact), nonZeroContact(unitContactAfter(cur, p))) {
@@ -115,7 +119,7 @@ func (s *Server) unitWriteExempt(ctx context.Context, all []types.GovernanceUnit
 		sameJSON(cur.Overlay, p.Overlay) && sameJSON(cur.OverlayLimits, p.OverlayLimits) {
 		return true
 	}
-	chain, err := chainFromRows(byID, p.ID)
+	chain, err := chainFromRows(byID, p.ID, store.MaxUnitDepthCap)
 	if err != nil {
 		return false
 	}
@@ -180,6 +184,7 @@ type unitDiffStored struct {
 	ParentID      *uuid.UUID             `json:"parent_id,omitempty"`
 	Overlay       *types.CeilingOverlay  `json:"overlay,omitempty"`
 	OverlayLimits *types.LimitsOverlay   `json:"overlay_limits,omitempty"`
+	LockedKnobs   []string               `json:"locked_knobs,omitempty"`
 }
 
 // unitDiffView is a profile as the reviewer reads it: the stored fields and what composing them
@@ -189,36 +194,70 @@ type unitDiffView struct {
 	Effective *governanceEffective `json:"effective,omitempty"`
 }
 
-func newUnitDiffView(row types.GovernanceUnit, res *ResolvedUnit) *unitDiffView {
+// tier is the lowest tier that may read the change (holdUnitWrite): a change that sets a host path
+// is decided by super admins only, so it is rendered whole; any other is rendered for a security admin.
+func newUnitDiffView(row types.GovernanceUnit, res *ResolvedUnit, tier specReadTier) *unitDiffView {
 	v := &unitDiffView{unitDiffStored: unitDiffStored{
-		Name: row.Name, Ceiling: redactSpecForRead(row.Ceiling, true), Limits: row.Limits,
+		Name: row.Name, Ceiling: redactSpecForRead(row.Ceiling, tier), Limits: row.Limits,
 		Contact: nonZeroContact(row.Contact), ParentID: row.ParentID,
-		Overlay: redactOverlayForRead(row.Overlay), OverlayLimits: row.OverlayLimits,
+		Overlay: redactOverlayForRead(row.Overlay, tier), OverlayLimits: row.OverlayLimits, LockedKnobs: row.LockedKnobs,
 	}}
 	if res != nil {
 		v.Effective = &governanceEffective{
-			Ceiling: redactSpecForRead(res.Ceiling, true), Limits: res.Limits, Warnings: res.AdminWarnings,
+			Ceiling: redactSpecForRead(res.Ceiling, tier), Limits: res.Limits, Warnings: res.AdminWarnings,
 		}
 	}
 	return v
 }
 
-// redactOverlayForRead is redactSpecForRead for an overlay's llm_inspection block: a raw secret value
-// is replaced by a count, on a copy.
-func redactOverlayForRead(o *types.CeilingOverlay) *types.CeilingOverlay {
-	if o == nil || o.LLMInspection == nil || len(o.LLMInspection.WorkspaceSecretValues) == 0 {
+// redactOverlayForRead is redactSpecForRead for an overlay, on a copy: a raw llm_inspection secret
+// value is replaced by a count, below the super admin tier each workspace mount's host path is
+// withheld, and at the member tier (a unit admin's read) redactOverlayForUser applies.
+func redactOverlayForRead(o *types.CeilingOverlay, tier specReadTier) *types.CeilingOverlay {
+	if tier == specReadMember {
+		o = redactOverlayForUser(o)
+	}
+	withhold := tier != specReadFull && o != nil && o.WorkspaceMounts != nil && len(*o.WorkspaceMounts) > 0
+	if !withhold && (o == nil || o.LLMInspection == nil || len(o.LLMInspection.WorkspaceSecretValues) == 0) {
 		return o
 	}
 	cp := *o
-	li := *o.LLMInspection
-	li.WorkspaceSecretValues = []string{fmt.Sprintf("<%d value(s) redacted>", len(li.WorkspaceSecretValues))}
-	cp.LLMInspection = &li
+	if withhold {
+		mounts := withholdMounts(*o.WorkspaceMounts)
+		cp.WorkspaceMounts = &mounts
+	}
+	if o.LLMInspection != nil && len(o.LLMInspection.WorkspaceSecretValues) > 0 {
+		li := *o.LLMInspection
+		li.WorkspaceSecretValues = []string{fmt.Sprintf("<%d value(s) redacted>", len(li.WorkspaceSecretValues))}
+		cp.LLMInspection = &li
+	}
+	return &cp
+}
+
+// redactOverlayForUser is redactSpecForUser for an overlay's eligible grants and llm_inspection, on a
+// copy: the secret refs on the grants and llm_inspection.workspace_secret_names are hidden as a
+// member-tier ceiling hides them.
+func redactOverlayForUser(o *types.CeilingOverlay) *types.CeilingOverlay {
+	if o == nil || (o.EligibleGrants == nil && o.LLMInspection == nil) {
+		return o
+	}
+	cp := *o
+	spec := types.RunPolicySpec{LLMInspection: o.LLMInspection}
+	if o.EligibleGrants != nil {
+		spec.EligibleGrants = *o.EligibleGrants
+	}
+	spec = redactSpecForUser(spec)
+	if o.EligibleGrants != nil {
+		grants := spec.EligibleGrants
+		cp.EligibleGrants = &grants
+	}
+	cp.LLMInspection = spec.LLMInspection
 	return &cp
 }
 
 // resolveForDiff is what the profile id composes to in all, or nil when it does not compose.
 func (s *Server) resolveForDiff(all []types.GovernanceUnit, id uuid.UUID) *ResolvedUnit {
-	chain, err := chainFromRows(unitsByID(all), id)
+	chain, err := chainFromRows(unitsByID(all), id, store.MaxUnitDepthCap)
 	if err != nil {
 		return nil
 	}
@@ -231,16 +270,22 @@ func (s *Server) resolveForDiff(all []types.GovernanceUnit, id uuid.UUID) *Resol
 
 // unitBaseState is the profile graph as a change to profile id depends on it: the row itself (nil
 // when absent) and the chain of bases above base. An approval that finds either changed refuses as
-// stale, so the profile the reviewer saw, and what it composes on, is what is written.
+// stale, so the profile the reviewer saw, and what it composes on, is what is written. With no base
+// (a fold into a standalone ceiling), the chain is the stored row's own: the fold keeps the mounts
+// that chain resolves to (storedCeilingMounts), so a change there makes the held fold stale too.
 func unitBaseState(all []types.GovernanceUnit, id uuid.UUID, base *uuid.UUID) any {
 	byID := unitsByID(all)
 	state := map[string]any{"self": nil}
-	if row, ok := byID[id]; ok {
+	row, ok := byID[id]
+	if ok {
 		state["self"] = row
+	}
+	if base == nil {
+		base = row.ParentID
 	}
 	bases := []types.GovernanceUnit{}
 	seen := map[uuid.UUID]bool{id: true}
-	for cur := base; cur != nil && !seen[*cur] && len(bases) <= maxUnitDepth; {
+	for cur := base; cur != nil && !seen[*cur] && len(bases) <= store.MaxUnitDepthCap; {
 		row, ok := byID[*cur]
 		if !ok {
 			break
@@ -258,16 +303,35 @@ func (s *Server) holdUnitWrite(w http.ResponseWriter, r *http.Request, id uuid.U
 	cur, exists := unitsByID(h.all)[id]
 	row := h.row
 	op := "create"
+	// Rendered for the lowest tier that may read the change: whole only when it sets a host path,
+	// which only a super admin decides.
+	tier := specReadSecurity
+	if h.keep.setsHostPath {
+		tier = specReadFull
+	}
 	var before *unitDiffView
 	if exists {
 		op = "update"
-		before = newUnitDiffView(cur, s.resolveForDiff(h.all, id))
+		before = newUnitDiffView(cur, s.resolveForDiff(h.all, id), tier)
 		row.Contact = unitContactAfter(cur, h.row)
 	}
-	after := newUnitDiffView(row, h.res)
+	after := newUnitDiffView(row, h.res, tier)
 	p := govProposal{
-		kind: govKindUnit, op: op, key: id.String(), payload: unitPayloadOf(req),
+		kind: govKindUnit, op: op, key: id.String(), payload: heldProfilePayload(req, h.keep),
 		after: after, baseState: unitBaseState(h.all, id, h.row.ParentID),
+	}
+	if exists && cur.Name != row.Name {
+		shift, err := s.renameShift(r.Context(), id, row.Name)
+		if errors.Is(err, store.ErrConflict) {
+			writeErrorReason(w, http.StatusConflict, reasonGovernanceUnitNameConflict,
+				fmt.Sprintf("a governance profile named %q already exists", req.Name))
+			return
+		}
+		if err != nil {
+			writeServerError(w, r, "hold governance profile", err)
+			return
+		}
+		p.shift = shift
 	}
 	var beforeStored *unitDiffStored
 	if before != nil {
@@ -284,6 +348,20 @@ func (s *Server) holdUnitWrite(w http.ResponseWriter, r *http.Request, id uuid.U
 		p.notes = append(p.notes, posture)
 	}
 	s.proposeGovernanceChange(w, r, p)
+}
+
+// renameShift is renameShiftQ for a held rename of unit id to name, read under the graph lock on a
+// rolled-back transaction once the write's own has ended. A snapshot that moves on before the decision
+// fails safe: the decision reads it again (applyUnitChange) and answers stale.
+func (s *Server) renameShift(ctx context.Context, id uuid.UUID, name string) (shift legacyShift, err error) {
+	err = s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) error {
+		if err := store.LockGovernanceGraph(ctx, q); err != nil {
+			return err
+		}
+		shift, err = renameShiftQ(ctx, q, id, name)
+		return err
+	})
+	return shift, err
 }
 
 // holdUnitDelete stores a profile delete as a pending change, after a dry run of the delete has
@@ -305,7 +383,7 @@ func (s *Server) holdUnitDelete(w http.ResponseWriter, r *http.Request, id uuid.
 		return
 	}
 	cur := unitsByID(all)[id]
-	before := newUnitDiffView(cur, s.resolveForDiff(all, id))
+	before := newUnitDiffView(cur, s.resolveForDiff(all, id), specReadSecurity)
 	s.proposeGovernanceChange(w, r, govProposal{
 		kind: govKindUnit, op: "delete", key: id.String(), payload: map[string]any{"id": id},
 		before: before, changed: changedPaths(before.unitDiffStored, nil),
@@ -320,6 +398,9 @@ func applyUnitChange(s *Server, r *http.Request, q store.Querier, ch types.Gover
 	if err != nil {
 		return govApplied{}, fmt.Errorf("governance change %s: target key %q is not a profile id", ch.ID, ch.TargetKey)
 	}
+	if refusal := defaultUnitWriteRefusal(id); refusal != nil {
+		return govApplied{}, refusal
+	}
 	if ch.Op == "delete" {
 		return applyUnitDelete(ctx, q, ch, id)
 	}
@@ -333,10 +414,32 @@ func applyUnitChange(s *Server, r *http.Request, q store.Querier, ch types.Gover
 		if computeETag(unitBaseState(all, id, base)) != ch.BaseHash {
 			return types.GovernanceUnit{}, store.ErrGovernanceChangeStale
 		}
-		p, res, err := s.buildGovernanceUnit(ch.ProposedBy, id, req, all)
+		limit, err := unitDepthLimitQ(ctx, q) // on the transaction, under the graph lock
+		if err != nil {
+			return types.GovernanceUnit{}, err
+		}
+		b, err := s.boundaryQ(ctx, q)
+		if err != nil {
+			return types.GovernanceUnit{}, err
+		}
+		p, res, _, err := s.buildGovernanceUnit(ch.ProposedBy, s.isOperator(ctx), id, req, all, b, limit)
 		effective = res
-		return p, err
+		if err != nil {
+			return p, err
+		}
+		// A rename's legacy shift as it stands now (H3): what the change was held and scoped with.
+		shift, err := unitRenameShiftQ(ctx, q, all, id, p.Name)
+		if err != nil {
+			return p, err
+		}
+		return p, heldShiftStale(ch, shift)
 	})
+	var tier *mountTierRefusal
+	if errors.As(err, &tier) {
+		return govApplied{}, &govRefusal{why: "mount source tier", write: func(w http.ResponseWriter, r *http.Request) {
+			s.refuse(w, r, tier.decision())
+		}}
+	}
 	if errors.Is(err, store.ErrConflict) {
 		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceUnitNameConflict,
 			"a governance profile named %q already exists", req.Name)
@@ -364,9 +467,12 @@ func applyUnitDelete(ctx context.Context, q store.Querier, ch types.GovernanceCh
 	}
 	err = store.DeleteGovernanceUnitQ(ctx, q, id)
 	var children *store.ErrProfileHasChildren
+	var pinned *store.ErrUnitPinned
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceUnitNotFoundByID, "governance profile not found")
+	case errors.As(err, &pinned):
+		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceUnitInUse, "%s", unitPinnedMsg(pinned))
 	case errors.As(err, &children):
 		return govApplied{}, writeRefusal(http.StatusConflict, reasonGovernanceUnitInUse,
 			"this governance profile is the base of %s — delete or re-base them first", strings.Join(children.Names, ", "))
@@ -381,14 +487,26 @@ func applyUnitDelete(ctx context.Context, q store.Querier, ch types.GovernanceCh
 
 // ── governance assignments ───────────────────────────────────────────────────
 
-// membershipKey is an assignment's natural key as target_key: the subject type, a colon, the subject.
-// A subject type never contains a colon, so the first one splits the two.
-func membershipKey(subjectType types.CapabilitySubjectType, subject string) string {
-	return string(subjectType) + ":" + subject
+// membershipKey is a membership's natural key as target_key: the unit id, a colon, the subject type,
+// a colon, the subject. Neither a unit id nor a subject type contains a colon, so the first two split
+// the three.
+func membershipKey(unitID uuid.UUID, subjectType types.CapabilitySubjectType, subject string) string {
+	return unitID.String() + ":" + string(subjectType) + ":" + subject
 }
 
-func splitMembershipKey(key string) (subjectType, subject string, ok bool) {
-	return strings.Cut(key, ":")
+// splitMembershipKey is membershipKey's inverse; false for a key of any other shape, including the
+// (subject_type, subject) keys held before the unit-tree migration.
+func splitMembershipKey(key string) (unitID uuid.UUID, subjectType, subject string, ok bool) {
+	unit, rest, ok := strings.Cut(key, ":")
+	if !ok {
+		return uuid.Nil, "", "", false
+	}
+	id, err := uuid.Parse(unit)
+	if err != nil {
+		return uuid.Nil, "", "", false
+	}
+	subjectType, subject, ok = strings.Cut(rest, ":")
+	return id, subjectType, subject, ok
 }
 
 // membershipWriteAuditData is the governance.membership.write row's data, shared by a direct write
@@ -399,6 +517,7 @@ func membershipWriteAuditData(saved types.GovernanceMembership) map[string]any {
 		"subject":      saved.Subject,
 		"unit_id":      saved.UnitID,
 		"priority":     saved.Priority,
+		"home":         saved.Home,
 	}
 }
 
@@ -431,7 +550,8 @@ type membershipDiffView struct {
 }
 
 // newMembershipDiffView renders a with the profile chain (leaf first) it points at. The profile's
-// ceiling and limits are its EFFECTIVE ones, and the ceiling passes read-redaction.
+// ceiling and limits are its EFFECTIVE ones, and the ceiling passes a security admin's read-redaction
+// (an assignment sets no host path, so a security admin may decide it).
 func (s *Server) newMembershipDiffView(a types.GovernanceMembership, chain []types.GovernanceUnit) *membershipDiffView {
 	v := &membershipDiffView{SubjectType: a.SubjectType, Subject: a.Subject, UnitID: a.UnitID, Priority: a.Priority}
 	if len(chain) == 0 {
@@ -440,9 +560,9 @@ func (s *Server) newMembershipDiffView(a types.GovernanceMembership, chain []typ
 	pv := &membershipUnitView{ID: chain[0].ID, Name: chain[0].Name}
 	res, err := s.composeChain(chain)
 	if err != nil {
-		pv.Ceiling, pv.Limits, pv.Error = redactSpecForRead(chain[0].Ceiling, true), chain[0].Limits, adminResolveError(err)
+		pv.Ceiling, pv.Limits, pv.Error = redactSpecForRead(chain[0].Ceiling, specReadSecurity), chain[0].Limits, adminResolveError(err)
 	} else {
-		pv.Ceiling, pv.Limits = redactSpecForRead(res.Ceiling, true), res.Limits
+		pv.Ceiling, pv.Limits = redactSpecForRead(res.Ceiling, specReadSecurity), res.Limits
 	}
 	v.Unit = pv
 	return v
@@ -453,7 +573,7 @@ func (s *Server) newMembershipDiffView(a types.GovernanceMembership, chain []typ
 func unitChainQ(ctx context.Context, q store.Querier, id uuid.UUID, forUpdate bool) ([]types.GovernanceUnit, error) {
 	chain := []types.GovernanceUnit{}
 	seen := map[uuid.UUID]bool{}
-	for cur := &id; cur != nil && *cur != uuid.Nil && !seen[*cur] && len(chain) <= maxUnitDepth; {
+	for cur := &id; cur != nil && *cur != uuid.Nil && !seen[*cur] && len(chain) <= store.MaxUnitDepthCap; {
 		row, err := store.GetGovernanceUnitQ(ctx, q, *cur, forUpdate)
 		if errors.Is(err, store.ErrNotFound) {
 			break
@@ -489,19 +609,17 @@ func (st membershipState) state() any {
 
 func (st membershipState) hash() string { return computeETag(st.state()) }
 
-func readMembershipState(ctx context.Context, q store.Querier, subjectType, subject string, profileID uuid.UUID, forUpdate bool) (membershipState, error) {
+// readMembershipState reads the membership at (unitID, subjectType, subject) and the chain of unitID.
+func readMembershipState(ctx context.Context, q store.Querier, unitID uuid.UUID, subjectType, subject string, forUpdate bool) (membershipState, error) {
 	var st membershipState
-	row, err := store.GetGovernanceMembershipByKeyQ(ctx, q, subjectType, subject, forUpdate)
+	row, err := store.GetGovernanceMembershipByKeyQ(ctx, q, unitID, subjectType, subject, forUpdate)
 	switch {
 	case err == nil:
 		st.current = &row
-		if profileID == uuid.Nil {
-			profileID = row.UnitID
-		}
 	case !errors.Is(err, store.ErrNotFound):
 		return st, err
 	}
-	if st.chain, err = unitChainQ(ctx, q, profileID, forUpdate); err != nil {
+	if st.chain, err = unitChainQ(ctx, q, unitID, forUpdate); err != nil {
 		return st, err
 	}
 	return st, nil
@@ -509,20 +627,19 @@ func readMembershipState(ctx context.Context, q store.Querier, subjectType, subj
 
 // holdMembershipUpsert stores a validated assignment upsert as a pending change, after a dry run of
 // the upsert has shown the store would accept it (an unknown profile is the direct write's own 404).
-func (s *Server) holdMembershipUpsert(w http.ResponseWriter, r *http.Request, a types.GovernanceMembership) {
+func (s *Server) holdMembershipUpsert(w http.ResponseWriter, r *http.Request, a types.GovernanceMembership, belongsBy []uuid.UUID) {
 	ctx := r.Context()
 	var st membershipState
 	var beforeChain []types.GovernanceUnit
+	var shift legacyShift
 	err := s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) error {
 		var err error
-		if st, err = readMembershipState(ctx, q, string(a.SubjectType), a.Subject, a.UnitID, false); err != nil {
+		if st, err = readMembershipState(ctx, q, a.UnitID, string(a.SubjectType), a.Subject, false); err != nil {
 			return err
 		}
 		beforeChain = st.chain
-		if st.current != nil && st.current.UnitID != a.UnitID {
-			if beforeChain, err = unitChainQ(ctx, q, st.current.UnitID, false); err != nil {
-				return err
-			}
+		if shift, err = upsertShiftQ(ctx, q, st.current, a); err != nil {
+			return err
 		}
 		_, err = store.UpsertGovernanceMembershipQ(ctx, q, a)
 		return err
@@ -536,10 +653,12 @@ func (s *Server) holdMembershipUpsert(w http.ResponseWriter, r *http.Request, a 
 	}
 	after := s.newMembershipDiffView(a, st.chain)
 	p := govProposal{
-		kind: govKindMembership, op: "upsert", key: membershipKey(a.SubjectType, a.Subject),
-		payload:   governanceMembershipRequest{SubjectType: a.SubjectType, Subject: a.Subject, UnitID: a.UnitID, Priority: a.Priority},
+		kind: govKindMembership, op: "upsert", key: membershipKey(a.UnitID, a.SubjectType, a.Subject),
+		payload:   governanceMembershipRequest{SubjectType: a.SubjectType, Subject: a.Subject, UnitID: a.UnitID, Priority: a.Priority, Home: a.Home},
 		after:     after,
 		baseState: st.state(),
+		belongsBy: belongsBy,
+		shift:     shift,
 	}
 	var before *membershipDiffView
 	if st.current != nil {
@@ -550,16 +669,57 @@ func (s *Server) holdMembershipUpsert(w http.ResponseWriter, r *http.Request, a 
 	s.proposeGovernanceChange(w, r, p)
 }
 
-// holdMembershipDelete stores an assignment delete as a pending change.
-func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
+// heldBelongsStale answers stale when held change ch, a membership add or delete admitted for a unit
+// admin because its subject already belonged in their units (membershipAddInScope) or kept another
+// membership there (deleteMembershipInScope), finds no membership of the subject other than except in
+// a unit that now lies at or below one of the granted units it recorded (governingRoots), read on the
+// decision's transaction under its graph and key locks. The base covers only the target row and its
+// unit chain, so the membership that admitted the change may since have gone, or its unit moved out
+// from under them. Any such membership lets it apply, not only the one that admitted it. A change
+// that records none, a security caller's, is not rechecked.
+func heldBelongsStale(ctx context.Context, q store.Querier, ch types.GovernanceChange, st types.CapabilitySubjectType, subject string, except uuid.UUID) error {
+	var held governanceDiffBody
+	if err := json.Unmarshal(ch.Diff, &held); err != nil {
+		return fmt.Errorf("governance change %s: diff: %w", ch.ID, err)
+	}
+	if len(held.BelongsBy) == 0 {
+		return nil
+	}
+	all, err := store.ListGovernanceUnitsQ(ctx, q)
+	if err != nil {
+		return err
+	}
+	ms, err := store.ListGovernanceMembershipsQ(ctx, q)
+	if err != nil {
+		return err
+	}
+	units, err := subjectUnitsInScope(ms, st, subject, except, func(u uuid.UUID) (bool, error) {
+		return len(rootsOver(all, []uuid.UUID{u}, held.BelongsBy)) > 0, nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(units) == 0 {
+		return store.ErrGovernanceChangeStale
+	}
+	return nil
+}
+
+// holdMembershipDelete stores an assignment delete as a pending change. keepsIn is, for a unit admin's
+// delete, the units they are granted that the subject keeps another membership below (heldBelongsStale).
+func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id uuid.UUID, keepsIn []uuid.UUID) {
 	ctx := r.Context()
 	var st membershipState
+	var activates []unitActivation
 	err := s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) error {
 		row, err := store.GetGovernanceMembershipQ(ctx, q, id, false)
 		if err != nil {
 			return err
 		}
-		st, err = readMembershipState(ctx, q, string(row.SubjectType), row.Subject, uuid.Nil, false)
+		if st, err = readMembershipState(ctx, q, row.UnitID, string(row.SubjectType), row.Subject, false); err != nil {
+			return err
+		}
+		activates, err = deleteActivationsQ(ctx, q, row)
 		return err
 	})
 	if notFoundIf(w, err, "governance assignment", reasonGovernanceMembershipNotFound) {
@@ -571,10 +731,48 @@ func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id
 	}
 	before := s.newMembershipDiffView(*st.current, st.chain)
 	s.proposeGovernanceChange(w, r, govProposal{
-		kind: govKindMembership, op: "delete", key: membershipKey(st.current.SubjectType, st.current.Subject),
+		kind: govKindMembership, op: "delete", key: membershipKey(st.current.UnitID, st.current.SubjectType, st.current.Subject),
 		payload: map[string]any{"id": id}, before: before, changed: changedPaths(before, nil),
-		baseState: st.state(),
+		baseState: st.state(), shift: legacyShift{activates: activates}, belongsBy: keepsIn,
 	})
+}
+
+// applyMembershipDelete is applyMembershipChange's delete, under its graph and key locks: the base, the
+// memberships that admitted a unit admin's delete (heldBelongsStale) and a legacy row's shift (H3) as
+// they stand now, then the delete.
+func applyMembershipDelete(ctx context.Context, q store.Querier, ch types.GovernanceChange, unitID uuid.UUID, subjectType, subject string) (govApplied, error) {
+	var p struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if err := json.Unmarshal(ch.Payload, &p); err != nil {
+		return govApplied{}, fmt.Errorf("governance change %s: payload: %w", ch.ID, err)
+	}
+	st, err := readMembershipState(ctx, q, unitID, subjectType, subject, true)
+	if err != nil {
+		return govApplied{}, err
+	}
+	if st.hash() != ch.BaseHash {
+		return govApplied{}, store.ErrGovernanceChangeStale
+	}
+	if err := heldBelongsStale(ctx, q, ch, types.CapabilitySubjectType(subjectType), subject, p.ID); err != nil {
+		return govApplied{}, err
+	}
+	if st.current != nil && st.current.Legacy {
+		activates, err := deleteActivationsQ(ctx, q, *st.current)
+		if err == nil {
+			err = heldShiftStale(ch, legacyShift{activates: activates})
+		}
+		if err != nil {
+			return govApplied{}, err
+		}
+	}
+	if err := store.DeleteGovernanceMembershipQ(ctx, q, p.ID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceMembershipNotFound, "governance assignment not found")
+		}
+		return govApplied{}, err
+	}
+	return govApplied{action: "governance.membership.delete", target: p.ID.String()}, nil
 }
 
 // applyMembershipChange applies a held assignment change inside the decision transaction. It takes
@@ -583,9 +781,11 @@ func (s *Server) holdMembershipDelete(w http.ResponseWriter, r *http.Request, id
 // the assignment and the profile it references FOR UPDATE.
 func applyMembershipChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	ctx := r.Context()
-	subjectType, subject, ok := splitMembershipKey(ch.TargetKey)
+	unitID, subjectType, subject, ok := splitMembershipKey(ch.TargetKey)
 	if !ok {
-		return govApplied{}, fmt.Errorf("governance change %s: target key %q is not an assignment key", ch.ID, ch.TargetKey)
+		// A change held before the unit-tree migration keyed one assignment per subject; what its reviewer
+		// saw no longer exists in that shape, so it is stale, as a changed base is.
+		return govApplied{}, store.ErrGovernanceChangeStale
 	}
 	if err := store.LockGovernanceGraph(ctx, q); err != nil {
 		return govApplied{}, err
@@ -593,27 +793,11 @@ func applyMembershipChange(s *Server, r *http.Request, q store.Querier, ch types
 	if err := store.LockGovernanceMembershipKey(ctx, q, subjectType, subject); err != nil {
 		return govApplied{}, err
 	}
+	if ch.Op == "move" || ch.Op == "promote" {
+		return applyMembershipTreeChange(ctx, q, ch)
+	}
 	if ch.Op == "delete" {
-		var p struct {
-			ID uuid.UUID `json:"id"`
-		}
-		if err := json.Unmarshal(ch.Payload, &p); err != nil {
-			return govApplied{}, fmt.Errorf("governance change %s: payload: %w", ch.ID, err)
-		}
-		st, err := readMembershipState(ctx, q, subjectType, subject, uuid.Nil, true)
-		if err != nil {
-			return govApplied{}, err
-		}
-		if st.hash() != ch.BaseHash {
-			return govApplied{}, store.ErrGovernanceChangeStale
-		}
-		if err := store.DeleteGovernanceMembershipQ(ctx, q, p.ID); err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceMembershipNotFound, "governance assignment not found")
-			}
-			return govApplied{}, err
-		}
-		return govApplied{action: "governance.membership.delete", target: p.ID.String()}, nil
+		return applyMembershipDelete(ctx, q, ch, unitID, subjectType, subject)
 	}
 	var req governanceMembershipRequest
 	dec := json.NewDecoder(bytes.NewReader(ch.Payload))
@@ -621,22 +805,38 @@ func applyMembershipChange(s *Server, r *http.Request, q store.Querier, ch types
 	if err := dec.Decode(&req); err != nil {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonGovernanceMembershipInvalid, "invalid assignment: %v", err)
 	}
-	a := types.GovernanceMembership{SubjectType: req.SubjectType, Subject: req.Subject, UnitID: req.UnitID, Priority: req.Priority}
+	a := types.GovernanceMembership{SubjectType: req.SubjectType, Subject: req.Subject, UnitID: req.UnitID, Priority: req.Priority, Home: req.Home}
 	if err := validateGovernanceMembership(&a); err != nil {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonGovernanceMembershipInvalid, "invalid assignment: %v", err)
+	}
+	if err := defaultMembershipRefusal(a.UnitID, defaultTakesNoMembershipsMsg); err != nil {
+		return govApplied{}, err
 	}
 	if err := s.checkUserTypeSubject(ctx, q, a.SubjectType, a.Subject); err != nil {
 		return govApplied{}, err
 	}
-	st, err := readMembershipState(ctx, q, subjectType, subject, a.UnitID, true)
+	if a.UnitID != unitID || string(a.SubjectType) != subjectType || a.Subject != subject {
+		return govApplied{}, fmt.Errorf("governance change %s: the payload names another membership than its target key", ch.ID)
+	}
+	st, err := readMembershipState(ctx, q, unitID, subjectType, subject, true)
 	if err != nil {
 		return govApplied{}, err
 	}
 	if st.hash() != ch.BaseHash {
 		return govApplied{}, store.ErrGovernanceChangeStale
 	}
+	if err := heldBelongsStale(ctx, q, ch, a.SubjectType, a.Subject, uuid.Nil); err != nil {
+		return govApplied{}, err
+	}
 	a.ID = uuid.New()
 	a.CreatedBy = ch.ProposedBy
+	shift, err := upsertShiftQ(ctx, q, st.current, a) // under the graph and key locks taken above
+	if err == nil {
+		err = heldShiftStale(ch, shift)
+	}
+	if err != nil {
+		return govApplied{}, err
+	}
 	saved, err := store.UpsertGovernanceMembershipQ(ctx, q, a)
 	if errors.Is(err, store.ErrNotFound) {
 		return govApplied{}, writeRefusal(http.StatusNotFound, reasonGovernanceUnitNotFoundByID, "governance profile not found")

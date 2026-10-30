@@ -57,6 +57,17 @@ func TestRunPlacement_AuditFields(t *testing.T) {
 	if named {
 		t.Error("an unknown runner name is recorded as empty, not omitted")
 	}
+
+	// A runner serving the pool in a runs namespace records it; the default namespace records nothing.
+	other := uuid.New()
+	eligible := []poolTarget{{id: other.String(), runnerID: &other, runsNamespace: "team-b"}, {id: rid.String(), runnerID: &rid, runsNamespace: "team-a"}}
+	if ns := (runPlacement{pooled: true, pool: pool, eligible: eligible}).auditFields(run, "laptop")["runs_namespace"]; ns != "team-a" {
+		t.Errorf("a namespaced run.create records runs_namespace %v, want the bound runner's team-a", ns)
+	}
+	eligible[1].runsNamespace = ""
+	if _, has := (runPlacement{pooled: true, pool: pool, eligible: eligible}).auditFields(run, "laptop")["runs_namespace"]; has {
+		t.Error("a run in the runner's default namespace records runs_namespace")
+	}
 }
 
 // A provider sign-in holds the person's sign-in credentials and runs on the server's own substrate: one that

@@ -35,6 +35,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.f
 
 import { RecordPane } from "./record-pane";
 import { setField } from "../../../../test/set-field";
+import { WORKSPACE_DETAIL_EXTRA } from "../../../lib/workspace-copy";
 
 const obs = (over: Partial<ProfileObservations> = {}): ProfileObservations => ({
   domains: [],
@@ -116,9 +117,12 @@ beforeEach(() => {
 });
 
 describe("RecordPane — header, open-egress banner, model note", () => {
-  it("shows the recommended/skippable chip and, with no tier data at all, the weakest-barrier wording", () => {
+  it("with no tier data at all, shows the weakest-barrier wording, and says the record-then-replay idea nowhere (the card description does)", () => {
     renderPane();
-    expect(screen.getByText(/recommended/i)).toBeInTheDocument();
+    // #3042: no chip and no paragraph repeating what the card's description already says.
+    expect(screen.queryByText(/recommended/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/skippable/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/replay it confined/i)).not.toBeInTheDocument();
     const banner = screen.getByTestId("record-open-egress-banner");
     expect(banner).toHaveTextContent(/fence/i);
     expect(banner).toHaveTextContent(/egress/i);
@@ -206,9 +210,78 @@ describe("RecordPane — new session", () => {
     expect(onRecord).toHaveBeenCalledWith("agent dev loop");
   });
 
-  it("shows the never-recorded helper line when there are no sessions yet", () => {
+  describe("a name that matches a recorded session (#2582)", () => {
+    const settled = { "build-test": { run_id: "r1", label: "build & test", mode: "interactive", status: "recorded" } as RecordResult };
+
+    it("asks the Re-record question first, and records only on confirm", async () => {
+      const onRecord = vi.fn();
+      renderPane({ record_results: settled }, { onRecord });
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      const form = screen.getByTestId("record-new-session");
+      const input = within(form).getByLabelText(/session name/i);
+      await user.clear(input);
+      setField(input, "Build & Test");
+      await user.click(within(form).getByRole("button", { name: /start recording/i }));
+
+      expect(onRecord).not.toHaveBeenCalled();
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog).toHaveTextContent("The current recorded review for this session will be replaced");
+      await user.click(within(dialog).getByRole("button", { name: "Re-record" }));
+      expect(onRecord).toHaveBeenCalledWith("Build & Test");
+    });
+
+    it("Cancel records nothing", async () => {
+      const onRecord = vi.fn();
+      renderPane({ record_results: settled }, { onRecord });
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      const input = within(screen.getByTestId("record-new-session")).getByLabelText(/session name/i);
+      await user.clear(input);
+      setField(input, "build & test");
+      await user.click(input);
+      await user.keyboard("{Enter}");
+      await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
+      expect(onRecord).not.toHaveBeenCalled();
+    });
+
+    it("a different name starts at once", async () => {
+      const onRecord = vi.fn();
+      renderPane({ record_results: settled }, { onRecord });
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      const input = within(screen.getByTestId("record-new-session")).getByLabelText(/session name/i);
+      setField(input, "lint");
+      await user.click(input);
+      await user.keyboard("{Enter}");
+      expect(onRecord).toHaveBeenCalledWith("lint");
+    });
+  });
+
+  it("Enter does nothing while Start recording is disabled (#2582)", async () => {
+    const onRecord = vi.fn();
+    const rec = { "other": { run_id: "r2", label: "other", mode: "interactive", status: "recording" } as RecordResult };
+    renderPane({ record_results: rec }, { onRecord });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const input = within(screen.getByTestId("record-new-session")).getByLabelText(/session name/i);
+    setField(input, "lint");
+    await user.click(input);
+    await user.keyboard("{Enter}");
+    expect(onRecord).not.toHaveBeenCalled();
+  });
+
+  it("shows No sessions yet, with the New session form right under it, when there are no sessions", () => {
     renderPane();
-    expect(screen.getByText(/never recorded/i)).toBeInTheDocument();
+    const empty = screen.getByText(WORKSPACE_DETAIL_EXTRA.SESSIONS_EMPTY);
+    expect(empty).toHaveTextContent("No sessions yet");
+    expect(screen.queryByText(/never recorded/i)).not.toBeInTheDocument();
+    expect(empty.nextElementSibling).toBe(screen.getByTestId("record-new-session"));
+  });
+
+  it("keeps the first two sentences of the helper under the form and drops the replay sentence (#3042 B)", () => {
+    renderPane();
+    const helper = screen.getByText(/^Opens an attached terminal/);
+    expect(helper).toHaveTextContent(
+      "Opens an attached terminal with the repo + your model provider ready. Do the real thing, then click Done recording to capture what it used.",
+    );
+    expect(helper).not.toHaveTextContent(/replay/i);
   });
 });
 

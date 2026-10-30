@@ -25,10 +25,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -50,6 +53,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/k8s"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
@@ -74,15 +78,18 @@ const (
 type env struct {
 	admin, sa                                        kubernetes.Interface
 	runsNS, ownNS, saName, runnerID, relayIP, orgURL string
-	orgCA, proxyImage, agentImage, arch              string
+	extraNS                                          string // the runner's second runs namespace
+	proxyImage, agentImage, arch                     string
 	peerLabels                                       map[string]string
 	pin, other                                       string // the two workers: pin carries runs, other is spare
 	nodes                                            []string
 	store                                            *store
 	sink                                             *fakeSink
+	cp                                               *fakeControlPlane
 	fences                                           *fences
 	main                                             *k8s.Driver
 	stoppedIP                                        string // normal-stop's proxy IP, for pod-ip-reuse-after-stop
+	runs                                             runIDs // the runs a case registered with cleanupRun: what a failed case dumps
 }
 
 func must(t *testing.T, key string) string {
@@ -108,17 +115,17 @@ func TestK6(t *testing.T) {
 	}
 	e := &env{
 		admin: kubernetes.NewForConfigOrDie(adminCfg), sa: kubernetes.NewForConfigOrDie(saCfg),
-		runsNS: must(t, "K6_RUNS_NS"), ownNS: must(t, "K6_OWN_NS"), saName: must(t, "K6_SA"),
+		runsNS: must(t, "K6_RUNS_NS"), extraNS: must(t, "K6_EXTRA_RUNS_NS"), ownNS: must(t, "K6_OWN_NS"), saName: must(t, "K6_SA"),
 		runnerID: must(t, "K6_RUNNER_ID"), relayIP: must(t, "K6_RELAY_IP"), orgURL: must(t, "K6_ORG_URL"),
 		proxyImage: must(t, "WARDYN_PROXY_IMAGE"), agentImage: must(t, "K6_AGENT_IMAGE"),
 		arch:  must(t, "K6_ARCH"),
 		store: newStore(), fences: newFences(),
 	}
-	ca, err := os.ReadFile(must(t, "K6_ORG_CA"))
+	orgU, err := url.Parse(e.orgURL)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("K6_ORG_URL: %v", err)
 	}
-	e.orgCA = string(ca)
+	e.cp = newFakeControlPlane(t, orgU.Hostname(), must(t, "K6_APISERVER"))
 	if err := json.Unmarshal([]byte(must(t, "K6_RUNNERD_SELECTOR")), &e.peerLabels); err != nil {
 		t.Fatalf("K6_RUNNERD_SELECTOR: %v", err)
 	}
@@ -144,6 +151,20 @@ func TestK6(t *testing.T) {
 	kase := func(name string, fn func(t *testing.T, e *env)) {
 		var status, detail string
 		t.Run(name, func(t *testing.T) {
+			// A run a case leaves fenced keeps its proxy IP refused for the rest of the suite while Calico
+			// counts the address free, so a later case's proxy could draw it and be refused for that run
+			// (relay_ip_fenced). Registered first, so it runs after the case's own cleanups: every address a
+			// fence still holds is reserved until the cluster goes.
+			t.Cleanup(func() {
+				if ips := e.fences.held(); len(ips) > 0 {
+					reserveIPs(t, k6FencedIP, ips)
+				}
+			})
+			defer func() {
+				if ids := e.runs.take(); t.Failed() {
+					e.dump(t, ids)
+				}
+			}()
 			defer func() {
 				detail = notes(t)
 				switch {
@@ -182,6 +203,7 @@ func TestK6(t *testing.T) {
 	kase("crash-gaps-orphan-sweep", caseCrashGapsSweep)
 	kase("hard-deny-in-proxy-config", caseHardDenyConfig)
 	kase("retained-policy-probe", caseRetainedPolicy)
+	kase("runs-namespaces", caseRunsNamespaces)
 	kase("node-name-reuse-tick", caseNodeReuse) // last: it restarts a kind node
 	for _, r := range results {
 		fmt.Println(r)
@@ -425,11 +447,84 @@ func (f *fences) ipOf(run uuid.UUID) (string, bool) {
 	return ip, ok
 }
 
+// held is every proxy IP a fence still refuses, sorted.
+func (f *fences) held() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var ips []string
+	for _, ip := range f.byRun {
+		if ip != "" && !slices.Contains(ips, ip) {
+			ips = append(ips, ip)
+		}
+	}
+	sort.Strings(ips)
+	return ips
+}
+
+// fakeControlPlane stands in for the runnerd relay that production puts in front of the org: a TLS
+// listener on this process's kind-network address that answers the proxy's run-token renew. The proxy
+// opens only after its first successful renew, so without it no runner-mode proxy becomes ready.
+type fakeControlPlane struct {
+	ip     string // the kind-network source address the proxy pod reaches this process on
+	url    string // https://<org host>:8443, the port the relay Service exposes
+	caPEM  string
+	renews atomic.Int64
+}
+
+func newFakeControlPlane(t *testing.T, host, apiserver string) *fakeControlPlane {
+	t.Helper()
+	// A UDP "dial" sends nothing; it only makes the kernel pick the source address for the route.
+	c, err := net.Dial("udp", apiserver)
+	if err != nil {
+		t.Fatalf("fake control plane: route to %s: %v", apiserver, err)
+	}
+	ip := c.LocalAddr().(*net.UDPAddr).IP.String()
+	_ = c.Close()
+	now := time.Now()
+	blob, err := hoptls.NewCA(now)
+	if err != nil {
+		t.Fatalf("fake control plane: CA: %v", err)
+	}
+	ca, err := hoptls.ParseCA(blob)
+	if err != nil {
+		t.Fatalf("fake control plane: parse CA: %v", err)
+	}
+	cert, err := ca.ServingCert(host, now)
+	if err != nil {
+		t.Fatalf("fake control plane: serving cert for %s: %v", host, err)
+	}
+	ln, err := tls.Listen("tcp", net.JoinHostPort(ip, "8443"), &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13})
+	if err != nil {
+		t.Fatalf("fake control plane: listen on %s:8443: %v", ip, err)
+	}
+	f := &fakeControlPlane{ip: ip, url: "https://" + net.JoinHostPort(host, "8443"), caPEM: string(ca.CertPEM)}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/internal/token/renew", func(w http.ResponseWriter, r *http.Request) {
+		f.renews.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"token":      strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "),
+			"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		})
+	})
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return f
+}
+
 // --- driver and runs ----------------------------------------------------------------------------
 
-// newDriver builds a runner-mode Driver as runnerd's k8sRunnerHooks does, over v. Its boot canary
-// runs on the pin node, so the pin node is labelled and schedulable first.
+// newDriver builds a runner-mode Driver as runnerd's k8sRunnerHooks does, over v, placing runs in the
+// runs namespace.
 func (e *env) newDriver(t *testing.T, v *view) *k8s.Driver {
+	t.Helper()
+	return e.newDriverIn(t, v, e.runsNS)
+}
+
+// newDriverIn is newDriver over namespaces, the first being the default. Its boot canary runs on the
+// pin node, so the pin node is labelled and schedulable first.
+func (e *env) newDriverIn(t *testing.T, v *view, namespaces ...string) *k8s.Driver {
 	t.Helper()
 	e.setSched(t, e.pin)
 	e.cordon(t, e.pin, false)
@@ -438,9 +533,16 @@ func (e *env) newDriver(t *testing.T, v *view) *k8s.Driver {
 		t.Fatal(err)
 	}
 	d, err := k8s.NewRunner(substrate.Deps{ProxyImage: e.proxyImage}, func(c *k8s.Config) {
-		c.Namespace = e.runsNS
+		c.Namespaces = namespaces
 		c.RunnerID = e.runnerID
-		c.ControlPlaneRelay = func(*url.URL) (string, error) { return e.relayIP, nil }
+		// Mirrors relay.Ensure (cmd/wardyn-runnerd/relay_k8s.go): the URL must use the relay Service's port.
+		// The address it returns is the fake control plane's, so the proxy's hostAlias maps the org host to it.
+		c.ControlPlaneRelay = func(u *url.URL) (string, error) {
+			if u.Port() != "8443" {
+				return "", fmt.Errorf("relay_port_mismatch: the control-plane URL uses port %q and the relay Service exposes 8443", u.Port())
+			}
+			return e.cp.ip, nil
+		}
 		c.RunnerdPeer = &k8s.RunnerdPeer{Namespace: e.ownNS, PodLabels: e.peerLabels, RelayPort: 8443, SinkPort: 8444}
 		c.Evidence = v
 		c.Fence = e.fences.fence
@@ -463,7 +565,7 @@ func (e *env) spec(id uuid.UUID) runner.SandboxSpec {
 	return runner.SandboxSpec{
 		RunID: id, RunnerID: e.runnerID, Image: e.agentImage, ConfinementClass: types.CC1,
 		Labels:      map[string]string{"wardyn.k6": "true"},
-		ProxyConfig: runner.ProxyConfig{RunToken: "k6-" + id.String(), ControlPlaneURL: e.orgURL, ControlPlaneCAPEM: e.orgCA},
+		ProxyConfig: runner.ProxyConfig{RunToken: "k6-" + id.String(), ControlPlaneURL: e.cp.url, ControlPlaneCAPEM: e.cp.caPEM},
 	}
 }
 
@@ -494,32 +596,49 @@ func proxyName(id uuid.UUID) string { return "wardyn-proxy-" + id.String() }
 
 // cleanupRun strips every finalizer from the run's pods and deletes what is left, so one case's
 // leftovers never reach the next. It runs after a case's assertions.
-func (e *env) cleanupRun(t *testing.T, id uuid.UUID) {
+func (e *env) cleanupRun(t *testing.T, id uuid.UUID) { e.cleanupRunIn(t, e.runsNS, id) }
+
+// cleanupRunIn is cleanupRun for a run in namespace ns.
+func (e *env) cleanupRunIn(t *testing.T, ns string, id uuid.UUID) {
+	e.runs.add(id.String())
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		sel := metav1.ListOptions{LabelSelector: labelRun + "=" + id.String()}
-		pods, _ := e.admin.CoreV1().Pods(e.runsNS).List(ctx, sel)
+		pods, _ := e.admin.CoreV1().Pods(ns).List(ctx, sel)
 		zero := int64(0)
 		for _, p := range pods.Items {
-			_, _ = e.admin.CoreV1().Pods(e.runsNS).Patch(ctx, p.Name, k8stypes.MergePatchType, []byte(`{"metadata":{"finalizers":null}}`), metav1.PatchOptions{})
-			_ = e.admin.CoreV1().Pods(e.runsNS).Delete(ctx, p.Name, metav1.DeleteOptions{GracePeriodSeconds: &zero})
+			_, _ = e.admin.CoreV1().Pods(ns).Patch(ctx, p.Name, k8stypes.MergePatchType, []byte(`{"metadata":{"finalizers":null}}`), metav1.PatchOptions{})
+			_ = e.admin.CoreV1().Pods(ns).Delete(ctx, p.Name, metav1.DeleteOptions{GracePeriodSeconds: &zero})
 		}
-		_ = e.admin.NetworkingV1().NetworkPolicies(e.runsNS).DeleteCollection(ctx, metav1.DeleteOptions{}, sel)
-		_ = e.admin.CoreV1().Secrets(e.runsNS).DeleteCollection(ctx, metav1.DeleteOptions{}, sel)
+		_ = e.admin.NetworkingV1().NetworkPolicies(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, sel)
+		_ = e.admin.CoreV1().Secrets(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, sel)
 		_ = wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, time.Minute, true, func(ctx context.Context) (bool, error) {
-			l, err := e.admin.CoreV1().Pods(e.runsNS).List(ctx, sel)
+			l, err := e.admin.CoreV1().Pods(ns).List(ctx, sel)
 			return err == nil && len(l.Items) == 0, nil
 		})
 	})
 }
 
+// dump logs the failed case's diagnostics (diagSrc.dump). The org namespace and runnerd's deployment
+// are the script's; a harness that does not hand them over gets the pods, events and proxy logs.
+func (e *env) dump(t *testing.T, ids []string) {
+	d := diagSrc{admin: e.admin, kc: os.Getenv("K6_ADMIN_KUBECONFIG"), runsNS: e.runsNS, ownNS: e.ownNS,
+		orgNS: os.Getenv("K6_ORG_NS"), runnerd: os.Getenv("K6_RUNNERD_DEPLOY"), runnerID: e.runnerID}
+	d.dump(t, ids)
+}
+
 // runGone reports whether every object of the run is gone.
 func (e *env) runGone(ctx context.Context, id uuid.UUID) (bool, string) {
+	return e.runGoneIn(ctx, e.runsNS, id)
+}
+
+// runGoneIn is runGone for a run in namespace ns.
+func (e *env) runGoneIn(ctx context.Context, ns string, id uuid.UUID) (bool, string) {
 	sel := metav1.ListOptions{LabelSelector: labelRun + "=" + id.String()}
-	pods, err1 := e.admin.CoreV1().Pods(e.runsNS).List(ctx, sel)
-	pols, err2 := e.admin.NetworkingV1().NetworkPolicies(e.runsNS).List(ctx, sel)
-	secs, err3 := e.admin.CoreV1().Secrets(e.runsNS).List(ctx, sel)
+	pods, err1 := e.admin.CoreV1().Pods(ns).List(ctx, sel)
+	pols, err2 := e.admin.NetworkingV1().NetworkPolicies(ns).List(ctx, sel)
+	secs, err3 := e.admin.CoreV1().Secrets(ns).List(ctx, sel)
 	if err := errors.Join(err1, err2, err3); err != nil {
 		return false, err.Error()
 	}
@@ -536,6 +655,10 @@ func (e *env) waitRunGone(t *testing.T, id uuid.UUID, within time.Duration) {
 		return ok, nil
 	})
 	if err != nil {
+		// The poll's deadline can cut its last List short; read once more so the message names what is left.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, left = e.runGone(ctx, id)
 		t.Fatalf("run %s objects not gone within %s: %s", id, within, left)
 	}
 }

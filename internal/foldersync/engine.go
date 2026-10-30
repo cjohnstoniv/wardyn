@@ -4,8 +4,10 @@
 package foldersync
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -52,6 +54,9 @@ type Report struct {
 	Ignored  int   `json:"ignored"`
 	BytesOut int64 `json:"bytes_to_sandbox"`
 	BytesIn  int64 `json:"bytes_from_sandbox"`
+	// Unsynced is set on a --pull pass that was cut short: the sandbox's changed files it had not
+	// brought back yet. The folder runner reports it; `wardyn sync` prints no report for such a pass.
+	Unsynced int `json:"unsynced,omitempty"`
 	seenSet  map[string]bool
 }
 
@@ -255,7 +260,9 @@ type passView struct {
 }
 
 // pass syncs once: it lists both sides, then pushes, and under --pull pulls.
-// Nothing is ever deleted on either side.
+// Nothing is ever deleted on either side. A pass that ends early once both
+// sides are listed still saves what it finished, so the next pass resumes from
+// there, and returns its report with the error (cut).
 func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 	rep := NewReport()
 	sy.ig = newSyncIgnore(sy.Opts.OrgDeny)
@@ -287,13 +294,13 @@ func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 	}
 	renamed, err := sy.renames(ctx, rels, v, eligible, rep)
 	if err != nil {
-		return nil, err
+		return sy.cut(rep, rels, v, err)
 	}
 
 	pulled := int64(0)
-	for _, rel := range rels {
+	for i, rel := range rels {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return sy.cut(rep, rels[i:], v, err)
 		}
 		switch {
 		case renamed[rel]:
@@ -302,12 +309,12 @@ func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 		case syncCollides(remote.blocked, rel):
 		default:
 			if err := sy.decide(ctx, rel, v, rep, &pulled); err != nil {
-				return nil, err
+				return sy.cut(rep, rels[i:], v, err)
 			}
 		}
 	}
 	if err := sy.deleteLocal(ctx, v, rep); err != nil {
-		return nil, err
+		return sy.cut(rep, nil, v, err)
 	}
 	// A path both sides have lost needs no record.
 	for rel := range sy.State.Files {
@@ -319,6 +326,25 @@ func (sy *Syncer) Pass(ctx context.Context) (*Report, error) {
 		return nil, fmt.Errorf("save sync state: %w", err)
 	}
 	return rep, nil
+}
+
+// cut ends a pass that stopped at left, the paths it had not finished. Every
+// path it finished is already in State, which records a path only once both
+// sides hold it, so State is saved and the report says what was done. Under
+// --pull it also counts the sandbox's changes among left.
+func (sy *Syncer) cut(rep *Report, left []string, v *passView, err error) (*Report, error) {
+	if serr := sy.State.Save(sy.StateFile); serr != nil {
+		return nil, errors.Join(err, fmt.Errorf("save sync state: %w", serr))
+	}
+	if sy.Opts.Pull {
+		for _, rel := range left {
+			r, onRemote := v.remote.files[rel]
+			if seen, known := sy.State.Files[rel]; onRemote && (!known || remoteSide(r) != seen.Remote) {
+				rep.Unsynced++
+			}
+		}
+	}
+	return rep, err
 }
 
 func syncCollides(collide map[string]bool, rel string) bool {
@@ -394,9 +420,10 @@ func (sy *Syncer) deleted(ctx context.Context, rel string, v *passView, rep *Rep
 // renames finds the files the laptop renamed since the last pass: a path this
 // sync put in the sandbox, gone from the laptop with the sandbox's copy
 // unchanged, paired with a new laptop path the sandbox lacks that has the same
-// size and modification time, when no other file shares them. Each pair is
-// renamed in the sandbox rather than deleted and sent again. It returns the
-// paths it handled.
+// size and modification time, when no other file shares them, and whose bytes
+// match the sandbox's copy. Each pair is renamed in the sandbox rather than
+// deleted and sent again; a pair that fails the check is left to the delete
+// and push paths. It returns the paths it handled.
 func (sy *Syncer) renames(ctx context.Context, rels []string, v *passView, eligible func(string) bool, rep *Report) (map[string]bool, error) {
 	gone, fresh := map[Side][]string{}, map[Side][]string{}
 	for _, rel := range rels {
@@ -419,31 +446,69 @@ func (sy *Syncer) renames(ctx context.Context, rels []string, v *passView, eligi
 		if len(from) != 1 || len(to) != 1 {
 			continue
 		}
-		if err := sy.renameRemote(ctx, from[0], to[0], v, rep); err != nil {
+		ok, err := sy.renameRemote(ctx, from[0], to[0], v, rep)
+		if err != nil {
 			return nil, err
 		}
-		done[from[0]], done[to[0]] = true, true
+		if ok {
+			done[from[0]], done[to[0]] = true, true
+		}
 	}
 	return done, nil
 }
 
-func (sy *Syncer) renameRemote(ctx context.Context, from, to string, v *passView, rep *Report) error {
-	dst := path.Join(sy.Opts.Remote, to)
-	if err := sy.Client.MkdirAll(path.Dir(dst)); err != nil {
-		return sy.pathFailed(ctx, rep, to, "create the directory in the sandbox", err)
+// renameRemote renames the sandbox's from to to, only if to has the bytes from
+// has and the sandbox copy is still the one the walk saw. It reports whether it
+// renamed; false leaves both paths to the normal delete and push.
+func (sy *Syncer) renameRemote(ctx context.Context, from, to string, v *passView, rep *Report) (bool, error) {
+	src, dst := path.Join(sy.Opts.Remote, from), path.Join(sy.Opts.Remote, to)
+	if !sy.sameBytes(to, v.local[to].side.Size, src, v.remote.files[from].Size()) {
+		return false, nil
 	}
-	if err := sy.Client.Rename(path.Join(sy.Opts.Remote, from), dst); err != nil {
-		return sy.pathFailed(ctx, rep, to, "rename in the sandbox", err)
+	// The agent may have written the file since the walk: only the copy the
+	// walk saw is renamed.
+	fi, err := sy.Client.Lstat(src)
+	if err != nil || !fi.Mode().IsRegular() || remoteSide(fi) != remoteSide(v.remote.files[from]) {
+		return false, nil
+	}
+	if err := sy.Client.MkdirAll(path.Dir(dst)); err != nil {
+		return false, sy.pathFailed(ctx, rep, to, "create the directory in the sandbox", err)
+	}
+	if err := sy.Client.Rename(src, dst); err != nil {
+		return false, sy.pathFailed(ctx, rep, to, "rename in the sandbox", err)
 	}
 	rfi, err := sy.Client.Stat(dst)
 	if err != nil {
-		return sy.pathFailed(ctx, rep, to, "stat in the sandbox", err)
+		return false, sy.pathFailed(ctx, rep, to, "stat in the sandbox", err)
 	}
 	delete(sy.State.Files, from)
 	sy.State.Files[to] = FileSeen{Local: v.local[to].side, Remote: remoteSide(rfi)}
 	rep.Renamed = append(rep.Renamed, Rename{From: from, To: to})
 	sy.pruneRemoteDirs(from, v)
-	return nil
+	return true, nil
+}
+
+// sameBytes reports whether the laptop file rel and the sandbox file remote hold
+// the same bytes, reading no more than the sizes the walks listed. Any read
+// error says no, so the pair is sent and deleted instead of renamed.
+func (sy *Syncer) sameBytes(rel string, lsize int64, remote string, rsize int64) bool {
+	if lsize != rsize {
+		return false
+	}
+	lf, err := sy.Root.Open(rel)
+	if err != nil {
+		return false
+	}
+	defer lf.Close()
+	rf, err := sy.Client.Open(remote)
+	if err != nil {
+		return false
+	}
+	defer rf.Close()
+	lh, rh := sha256.New(), sha256.New()
+	ln, lerr := io.Copy(lh, io.LimitReader(lf, lsize))
+	rn, rerr := io.Copy(rh, io.LimitReader(rf, rsize))
+	return lerr == nil && rerr == nil && ln == lsize && rn == rsize && bytes.Equal(lh.Sum(nil), rh.Sum(nil))
 }
 
 func (sy *Syncer) removeRemote(ctx context.Context, rel string, v *passView, rep *Report) error {
@@ -573,6 +638,11 @@ func (sy *Syncer) walkLocal(rep *Report) (files map[string]syncFile, dirs []stri
 		case syncInvisible(d.Name()):
 			rep.refuse(rel, "invisible character in the name")
 			return skipIf(d.IsDir())
+		case syncEntryName(d.Name()) != nil:
+			// The remote walk refuses this name too; a file pushed here would
+			// read as deleted there under --pull-deletes.
+			rep.refuse(rel, "not a plain file name")
+			return skipIf(d.IsDir())
 		case sy.ig.orgDenied(rel, d.IsDir()):
 			rep.refuse(rel, "organisation rule")
 			return skipIf(d.IsDir())
@@ -637,6 +707,8 @@ func (sy *Syncer) walkRemote(ctx context.Context, rep *Report) (*remoteView, err
 			name := fi.Name()
 			if err := syncEntryName(name); err != nil {
 				rep.refuse(path.Join(rel, "?"), err.Error())
+				// Met, so a laptop file of that name is never read as gone.
+				v.seen[path.Join(rel, name)] = true
 				continue
 			}
 			childRel := path.Join(rel, name)
@@ -722,7 +794,7 @@ func (sy *Syncer) push(ctx context.Context, rel string, l syncFile, rep *Report)
 // bit. The bytes counted against the budget are the bytes read, not the size
 // the sandbox listed.
 func (sy *Syncer) pull(ctx context.Context, rel string, r os.FileInfo, walked *syncFile, rep *Report, pulled *int64) error {
-	if syncIsIgnoreFile(rel) {
+	if syncNamesIgnoreFile(rel) {
 		rep.refuse(rel, "ignore file")
 		return nil
 	}

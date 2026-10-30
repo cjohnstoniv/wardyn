@@ -42,7 +42,8 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Kubernetes: day-2](#kubernetes-day-2)
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
-- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run)
+- Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call), [Unit admins](operations/unit-admins.md#unit-admins-governing-one-part-of-the-tree)
+- [Workloads](operations/workloads.md): keep a run declared with `wardyn apply` or a WardynWorkload resource, bind a namespace, read its status, and the Argo CD health check.
 
 </details>
 
@@ -208,7 +209,7 @@ copy is permanent.
 - **An interactive run with no snapshot.**
   - It answers `409 run_output_interactive`, and the sentence says what this run kept.
   - With recording on, it points at the run's recording.
-  - With recording off (`components.recording` reads `none` on `/healthz`), it says nothing was kept from this
+  - With recording off (`components.recording` reads `none` on a signed-in `/healthz`), it says nothing was kept from this
     session, and for a kill, a failure or a reconcile, that the session did not end through a Wardyn stop.
   - A security admin always gets the recording-on sentence, so it never tells them whether a snapshot exists.
 - **From the CLI.**
@@ -744,12 +745,17 @@ commands are the ones in "Back them up" and "Restore them", and in
     - so each compaction halves it and a full drain writes at most about twice the backlog rather than once per batch.
   - The consequence to know is that mid-drain the spool FILE can still hold lines that have already reached the store —
     - `wc -l` on it is not the backlog, `wardyn_audit_spool_lines` is —
-    - and that an unclean stop mid-recovery can replay the not-yet-reclaimed prefix, which the trail records as
-      duplicate events with the same `id`.
-  - The spool has always been at-least-once for this reason (a crash between the store write and the trim).
+    - and that an unclean stop mid-recovery can replay the not-yet-reclaimed prefix.
+  - A replayed line whose event the store already holds (same `id` and `time`) adds no row, so the trail keeps one;
+    the audit sinks may still receive it again.
+  - The spool replays at least once for this reason (a crash between the store write and the trim).
   - This widens that window in exchange for not fsyncing the whole backlog once per batch onto the volume the database
     is recovering on.
-  - Duplicates are the benign direction: `seq` still identifies every row, and each one verifies.
+
+- A runner's event the organisation can never accept is acknowledged only after its `runner.event.refuse` row commits,
+  so the runner stops resending it and nothing it sent is dropped without a row; a refused action result also closes
+  its action as `refused`; at most 32 such rows an hour are written per runner on one replica before one `suppressed`
+  row stands for the rest.
 
 ### The hash chain — what a rewritten row looks like
 
@@ -938,6 +944,11 @@ psql -Atc "SELECT 'db:     ' || audit_partition_digest('audit_events_p202610')"
 - Only a security operator may export a partition; anyone else gets an empty export, and `?partition=` with any other
   filter is refused (`audit_export_partition_filter`).
 - The readable form (`form=readable`, the default) gives the same rows in the audit feed's own event shape.
+- A `security_admin`'s export withholds host detail: such a row carries `redacted_fields` and stored hashes, so the
+  fold and links verify, and `redacted_rows` in the footer counts them. Report their content apart, as not verifiable
+  at that tier; a super admin's export re-hashes in full. Cross-check that the marker appears only on the actions
+  [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#host-detail-below-the-super-admin-tier) lists, that each row's
+  `redacted_fields` names only that action's withheld fields, and that the marked rows number `redacted_rows`.
 
 - **Rows written before the upgrade** keep `NULL` hashes, are reported as `legacy`, and are never a failure.
   - There is no backfill, on purpose: hashes computed after the fact by the same process that could have altered the
@@ -1064,6 +1075,8 @@ lever today**. Concretely:
     an empty export; a run that is not theirs or does not exist still answers the same empty `200`.
   - Below the security tier both `GET /audit` and the export leave out the name of an organisation's `shared` component
     secret; `admin` and `security_admin` receive the rows as recorded ([Custom components](operations/custom-components.md#custom-components)).
+  - Below a super admin both reads also withhold host detail, such as a drive's host root, named in `redacted_fields`;
+    sinks keep the whole row ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#host-detail-below-the-super-admin-tier)).
 
 - **This is asymmetric with session recordings**, which have the retention lever audit lacks:
   `WARDYN_RECORDING_RETENTION_DAYS` ([ENV.md](ENV.md#wardyn_recording_retention_days)) age-deletes stored PTY casts, defaulting to
@@ -1436,7 +1449,7 @@ erases one person's retained records by explicit scope, in one audited act
 |---|---|
 | Suspend | Completed first, if it is not already |
 | Erase | Credentials, masking copies, components, run setups and runner pools: see [Erase](#erase) |
-| Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, audited as `workspace.reassign`; `keep` leaves them |
+| Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, renamed when the operator already has one of that name, and audited as `workspace.reassign`; `keep` leaves them. A step that cannot finish keeps the purge pending, and the sweeper retries it |
 | Grants | User-subject grants and governance assignments: see [Grants](#grants) |
 | Runners | Revoked with their unused registration tokens (`DELETE /runners/...`). Their name is cleared as the revoker of any runner and as the minter of a token made for someone else |
 | Invitations, service identities | Invitations to the person deleted, their name cleared from the rest. A service identity they still sponsor keeps the purge pending until handed over (`PATCH /service-identities/{name}`) or retired |
@@ -1526,7 +1539,7 @@ lose access now, do not wait for it:
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again. A group removal also lags for API tokens when the sign-in's groups claim carries names, not the object ids
   the group's `externalId` holds ("Turn it on", step 5): it then cuts sessions only.
-- **Identity-provider logout is opt-in, and back-channel only.** Signing out at the identity provider does not end a Wardyn session unless `WARDYN_OIDC_BACKCHANNEL_LOGOUT` is on and the provider posts its logout token to `/auth/backchannel-logout` ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)). Wardyn has no front-channel logout, which is what Entra ID offers, and SCIM deprovisioning is a separate revocation. A person's own sign-out ends their console sessions only (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
+- **Identity-provider logout is opt-in.** Signing out at the identity provider does not end a Wardyn session unless `WARDYN_OIDC_BACKCHANNEL_LOGOUT` is on and the provider posts its logout token to `/auth/backchannel-logout` ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)), or `WARDYN_OIDC_FRONTCHANNEL_LOGOUT` is on and the provider's sign-out page loads `/auth/frontchannel-logout` with `iss` and `sid` ([ENV.md](ENV.md#wardyn_oidc_frontchannel_logout)), which is what Entra ID offers. SCIM deprovisioning is a separate revocation. A person's own sign-out ends their console sessions only (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
 - **Shared computers.** After an SSO sign-out the console tells the person to sign out of the identity provider too. That session stays live, so the next person could press Sign in with SSO and arrive as them.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
   console streams end at their next authentication check or reconnect.
@@ -1859,13 +1872,21 @@ enforces, not a re-derivation:
   record existed can only say the policy was updated after launch, which a rename
   alone also does.
 
+**Host marks.** `host_marks` marks each allowed host from the proxy config the runner was sent, after secret placeholders and placement, and `terminated` lists every host that proxy terminates once admitted. Hosts it opens on a port no entry names (under allow-all, all of them) are listed too, marked Inspected (`outside`): admitted, or held for first-use approval.
+
+| Mark | Meaning |
+|---|---|
+| Inspected | Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate. |
+| Tunnel only | Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here. |
+
 **Who can read it.**
 
 - Whoever can read the run (`GET /runs/{id}`): its creator or an admin.
 - Anyone else gets the run's own `404` and a `not_owner` audit row.
 - A portal's delegated token is refused `403` `delegation_scope`: the route is not on the delegation list.
-- Below the security admin tier the policy's mount sources read `<redacted>` and grant secret names are dropped (`redacted: true`), the same rule as reading a policy; `llm_inspection` secret values are never returned.
-- The result is a policy document you can reuse as is only from the security admin tier up; below it, fill in the hidden values first.
+- Below the super admin tier the policy's mount sources read `<redacted>`, and below the security admin tier grant secret names are dropped too (`redacted: true`), the same rule as reading a policy; `llm_inspection` secret values are never returned.
+- Tier reach: a mount's host path is the super admin's to read and to set, on every policy, preset and governance profile read; a security admin keeps or removes a mount but never sees or changes its host path.
+- The result is a policy document you can reuse as is only as a super admin; anyone else fills in the hidden values first.
 - A run that used an organisation component's shared secret is the exception for everyone: its grant carries `shared: true`, which no authored policy may set, so the document is a record of the run and validation refuses it. Select the component again on the new run.
 
 **What it does not cover:** hosts approved while the run was running (Approvals), credentials the run was handed (Credentials), folders added from a workspace or a drive, and Azure DevOps access that came from the connection's defaults.
@@ -2282,7 +2303,7 @@ It is dropped there with an audited reason (`unloadable-upstream-url`, a
 
 ### Phase B: the SSO/Bedrock MITM lane and the upstream proxy
 
-- Phase B (`WARDYN_AWS_SSO_PROXY_INJECT=on`, the default — see [ENV.md](ENV.md) and "[Turning the lane off](#turning-the-lane-off)" below) terminates and re-originates `portal.sso.<region>.amazonaws.com` inside the `wardyn-proxy` sidecar to inject a captured AWS SSO session on the wire.
+- Phase B (`WARDYN_AWS_SSO_PROXY_INJECT=on`, the default — see [ENV.md](ENV.md); `off` was removed, see "[Removed in 0.10.0](#removed-in-0100)" below) terminates and re-originates `portal.sso.<region>.amazonaws.com` inside the `wardyn-proxy` sidecar to inject a captured AWS SSO session on the wire.
 - That re-origination is a forward dial like any other in this section, not a separate lane with its own rules: it is governed by `upstream_proxy_url`, `upstream_proxy_no_proxy` and `internal_hosts` exactly as above.
 - On a private-endpoint estate it needs the same configuration a VPC-endpoint Bedrock deployment does:
   - bypass plus lift where the sidecar can reach the endpoint itself;
@@ -2882,7 +2903,7 @@ Consequences worth knowing:
   - A capture takes the same per-person lock as a launch and re-reads the run's state before it stores.
   - So a capture from a sandbox the person's next sign-in replaced is refused (`harness.credential.refuse` / `reason = run_killed`) instead of overwriting the newer session.
   - A capture that cannot get the lock within about 5 seconds is refused with `reason = signin_busy` and stores nothing.
-  - Whoever is watching the old sandbox sees "this sign-in sandbox was closed — a newer sign-in for you replaced it…" and finishes in the new one.
+  - Whoever is watching the old sandbox sees "This sign-in sandbox was closed — a newer sign-in for you replaced it…" and finishes in the new one.
   - At an unserialized pass (every call at `pool_max_conns=1`) there is no lock, so a supersede landing between the re-read and the write can still lose to the old capture; the next sign-in replaces it.
 
 ### What the sign-in pane's waiting messages mean
@@ -2972,6 +2993,15 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 > [!WARNING]
 > Residual: a run whose teardown failed after it reached a terminal state is not counted, though its pods may still exist; `POST /admin/sandboxes/sweep` reaps those.
 
+### A runner's run whose sandbox is gone
+
+- A registered runner reports each run's sandbox when it connects, and while it stays connected the server checks each running run's sandbox every few seconds. When two of these reports, at least 30 seconds apart with none between that found it there, find a `RUNNING` run's sandbox gone with no exit code (its container removed, its pod lost, its macOS VM stopped or the Mac restarted), the run is ended `FAILED`, lost with reason `gone`. Its slot frees at once, and a runner held back on connecting comes back online.
+- With several server replicas, only the one holding the runner's connection can check its runs, so a run there may take a few minutes longer to end.
+- A runner with macOS VMs turned off reports its macOS VM runs as unknown, not gone, both on connecting and to the server's checks, and they are not ended. Reviving one lost to an outage answers `revive_agent_status_unreadable` until macOS VMs are back on.
+
+> [!WARNING]
+> Accepted: a runner started against a different Docker daemon than the one holding its sandboxes (another `DOCKER_HOST`) finds every sandbox gone, and its running runs end `FAILED`. No setting turns this off.
+
 ### Docker host: one subnet per run
 
 - Every Docker sandbox gets its own internal network, and each network holds one subnet from the daemon's `default-address-pools`.
@@ -2988,6 +3018,14 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 1. Pick a base range the host does not route anywhere else (not a corporate or VPN range).
 2. Add the `default-address-pools` line to `daemon.json` and restart the daemon; networks that already exist keep their subnets.
 3. Optionally set `WARDYN_MAX_CONCURRENT_RUNS` below what the pool holds.
+
+Or leave `daemon.json` alone and give Wardyn its own range:
+
+- Set `WARDYN_DOCKER_RUN_SUBNET_POOL` on `wardynd` or `wardyn-runnerd` to a range no host route or VPN uses (for example `10.200.0.0/16`); Docker checks only its own networks.
+- Each run network then takes the next free `/28` of it (`WARDYN_DOCKER_RUN_SUBNET_SIZE` changes the length).
+- Free means no network on the daemon overlaps it, so a restart, a second replica and other stacks all count.
+- A full range refuses the run with a sentence naming the setting.
+- The orphan sweep removes the network of a run that is gone, which hands its subnet back.
 
 ### The start deadlines
 
@@ -3268,21 +3306,15 @@ Naming these is the point of the walk, not a caveat on it:
 - It also ends after three consecutive 404s, and at its budget.
 - It never ends later.
 
-### Turning the lane off
+### Removed in 0.10.0
 
-- `WARDYN_AWS_SSO_PROXY_INJECT=off` restores the pre-0.7.6 behaviour:
-  - the SSO access token is written into the sandbox's token cache;
-  - `portal.sso` is not TLS-MITM'd;
-  - no injection grant is authored;
-  - a lapsed session fails the run's model call as it used to.
-- It is also the sanctioned stopgap for the corporate-proxy interaction described in ["Phase B: the SSO/Bedrock MITM lane and the upstream proxy"](#phase-b-the-ssobedrock-mitm-lane-and-the-upstream-proxy) above.
-- It is reachable now as a named Helm value and a Compose env line, not only through the raw env passthrough.
-- It applies to **new dispatches only**.
-- The placeholder cache, the injection grant and the MITM entry are all authored at dispatch.
-- So a run that is already running keeps the lane it was authored with until it ends.
-- That includes a run that is currently HELD, which keeps holding to its budget and can still be resolved by a sign-in.
-- After flipping the switch, relaunch the runs that matter or wait them out; do not expect a running sandbox to change lane under you.
-- The default is `on` — set the environment variable to `off` to roll back; a run already dispatched under `on` is unaffected by a later flip either direction.
+- `WARDYN_AWS_SSO_PROXY_INJECT=off` is gone: `wardynd` refuses to start on `off`, `false` or `0` (`refuseAWSSSOProxyInjectOff` in [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)), whether it comes from the environment, the `-aws-sso-proxy-inject` flag or the Helm value `awsSSOProxyInject`. To start again, unset it or set it to `on`. The default `on` applies to new dispatches only: a run already running keeps the lane it was authored with, a held run included.
+- The AWS sign-in token now always stays at the proxy, and the sandbox's token cache holds a placeholder.
+- `off` was the stopgap for a TLS-intercepting corporate proxy. Stage that proxy's CA instead:
+  1. Put the proxy's root CA in a PEM bundle.
+  2. Point `WARDYN_TRUSTED_CA_FILE` at it (see [ENV.md](ENV.md#wardyn_trusted_ca_file)).
+  3. Start new runs. The `wardyn-proxy` then trusts that CA when it re-originates the sign-in lane.
+- A proxy that cannot reach the AWS hosts is a routing problem, not a TLS one: use `upstream_proxy_no_proxy` and `internal_hosts` ("[Upstream proxy: the bypass list](#upstream-proxy-the-bypass-list-upstream_proxy_no_proxy)").
 
 > [!WARNING]
 > **A downgrade to 0.7.5 with `credential_reauth` rows present is UNSUPPORTED.**
@@ -3363,12 +3395,13 @@ No provider of this kind registered means today's behaviour, unchanged.
 | `local.max_context` | Cap on a request's `options.num_ctx` | 0 = 32768 |
 | `local.max_output` | Cap on `max_tokens`, `max_completion_tokens`, `max_output_tokens` and `options.num_predict` | 0 = 32768 |
 | `local.keep_alive_seconds` | Cap on `keep_alive`; a negative ("forever") value is capped too | 0 = 1800, at most 86400 |
+| `local.allow_on_laptop_runners` | Runs on a person's own runner may use the server on that computer | Default `false`; `true` needs `base_url` on `host.docker.internal` |
 | `auth` | How each person's own token is sent, when the server wants one | Unset = no credential at all |
 | `harnesses[].model` | The model that agent asks for | Required; one of `local.models` |
 
 1. Bind the model server where the proxy can reach it but the network cannot: on a laptop, the Docker host (`http://host.docker.internal:11434` under Docker Desktop); on a node, its private address.
 2. Pull every model yourself on that machine. A run can never pull, push, create, copy or delete one.
-3. `GET /api/v1/model-providers`, add the row, and `PUT` the list back; a `PUT` replaces the whole list. The console form comes later. The row:
+3. Add the row in Settings → Model providers (kind Local model server), or `GET /api/v1/model-providers`, add it and `PUT` the list back; a `PUT` replaces the whole list. The row:
    `{"id":"laptop-gpu","kind":"local_model","base_url":"http://host.docker.internal:11434","local":{"models":["qwen2.5-coder:7b"]},"harnesses":[{"harness":"claude-code","model":"qwen2.5-coder:7b"},{"harness":"codex-cli","model":"qwen2.5-coder:7b"}]}`
 4. Grant it to people as any other provider; with no `auth`, nobody has anything to connect.
 
@@ -3388,7 +3421,19 @@ What a run may call on the server (every other method and path is refused `403 e
 - The private-address guard is lifted for this route and this address alone: the registered host and port may answer on the Docker bridge's gateway address (the Docker host). The control plane, loopback and link-local stay refused.
 - With `auth` set, each person's own token rides as a custom endpoint's does, and the host joins the run's allowlist so the token can be attached. Over `http://` it crosses the network unencrypted, so a write with `auth` over `http://` is refused unless the host is `host.docker.internal`, `gateway.docker.internal` or a private IPv4 address (10/8, 172.16/12, 192.168/16, 100.64/10): use `https://` to send a token off this machine.
 - Claude Code gets the allowlisted model for every tier (`ANTHROPIC_MODEL` and the opus, sonnet and haiku defaults), so no background call names another.
-- A run placed on your own runner is refused (`ProxyConfig.LocalModels`): the runner path is a later release.
+- A run placed on a person's own runner is refused (`ProxyConfig.LocalModels`) unless `local.allow_on_laptop_runners` is `true`.
+
+#### On a person's own runner
+
+With `local.allow_on_laptop_runners: true` (off by default; set it with the switch on the Local model server form in Settings › Model providers, or in the API), a run on a person's own runner uses the model server on that computer, such as Ollama on `127.0.0.1:11434`.
+
+- What it opens: on native Docker, a listener on the Docker bridge's gateway at that one port, forwarded to the computer's loopback at the same port. It opens with the first flagged run and closes when the last one ends or the runner stops.
+- To whom: only the proxies of those flagged runs, by their container addresses. Any other container or process that reaches the gateway is closed before a byte is relayed.
+- The person allows the port on their own runner: `wardyn-runnerd --local-model-port 11434` (or `local_model_port` in `runnerd.json`). Until they do, the run is refused with `runner_local_model_port_not_allowed`.
+- Only a run granted the provider reaches it: its proxy admits the relay address for that host and port alone, with the same routes, allowlist and caps as above.
+- An organisation's runner is refused (`ProxyConfig.LLMUpstreams`). A wardyn-runnerd without the relay refuses the run with `runner_proxy_setting_unsupported`, naming `local_model_relay`.
+- On Docker Desktop and other VM-backed engines the engine already routes to the computer's loopback, so the flag opens nothing there; any container on that engine reaches the loopback as before.
+- A server bound to every address already holds that port there, so the run is refused at create: bind it to `127.0.0.1`.
 
 > [!IMPORTANT]
 > **Upgrade note.** Move the proxy image pin with wardynd, image first, before you add a `local_model` provider.
@@ -4005,13 +4050,43 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0198` (`0198_agent_runs_local_folder_status`) adds `local_folder_status` to `agent_runs` (`0001`'s table): the passes a person's folder-only runner made for a run's computer folder, in and back.
 - `0199` (`0199_cli_sign_in`) adds `api_tokens.kind` and `api_tokens.cli_session_id` (`0045`'s table), which mark a CLI sign-in's access and admin tokens and tie them to their CLI session, and creates `cli_sessions` and `cli_sign_ins`.
 - `0200` (`0200_governance_boundary`) creates `governance_boundary` and adds `agent_runs.break_glass` (`0001`'s table), a constant-default boolean, so no row is rewritten; a split-role install grants the app role `SELECT, INSERT, UPDATE` on `governance_boundary`.
-- `0201` (`0201_run_recording_level`) adds `recording_level` to `agent_runs` (`0001`'s table) and replaces its `not_recorded` check (`0180`'s column) to admit `policy_off`: the level a run is recorded at, resolved once at dispatch.
-- `0202` (`0202_run_queue_start_at`) adds `start_at` to `run_queue` (`0162`'s table): a scheduled run's start time, before which no promotion judges it; `NULL` for every other waiting run.
-- `0203` (`0203_run_harness_task`) adds `task` to `run_harnesses` (`0164`'s table): a harness's own task in a background run with several agents. Person erasure blanks it; a split-role install that turns `WARDYN_MULTI_AGENT_TASKS` on grants the app role `UPDATE` on `run_harnesses` for that.
-- `0204` (`0204_user_drives_kept_from_run`) adds `kept_from_run` to `user_drives` (`0054`'s table): the run a person's drive was kept from (`keep_work_folder`), NULL on every drive made by hand.
+- `0201` (`0201_run_recording_level`) adds `recording_level` to `agent_runs` (`0001`'s table) and replaces its `not_recorded` check (`0180`'s column) to admit `policy_off`: a run's recording level, resolved once at dispatch.
+- `0202` (`0202_run_queue_start_at`) adds `start_at` to `run_queue` (`0162`'s table): a scheduled run's start time, before which no promotion judges it; `NULL` for other waiting runs.
+- `0203` (`0203_run_harness_task`) adds `task` to `run_harnesses` (`0164`'s table): a harness's own task in a multi-agent background run. Person erasure blanks it; a split-role install that turns `WARDYN_MULTI_AGENT_TASKS` on grants the app role `UPDATE` on `run_harnesses`.
+- `0204` (`0204_user_drives_kept_from_run`) adds `kept_from_run` to `user_drives` (`0054`'s table): the run a person's drive was kept from (`keep_work_folder`), NULL on a drive made by hand.
 - `0205` (`0205_user_drives_team`) adds `user_drives.team` (`0054`'s table), with a check keeping it off a person's own drive and off `k8s_pvc`, and `user_drive_grants.members_can_write` (`0054`'s table, false by default): a team drive and its allocations' write bit (`storage.user_drive.team_drives`). A write setting `team` on a `k8s_pvc` or member-owned row now fails.
-- `0206` (`0206_runner_health`) adds `runner_health`, one row per runner (`0139`'s `runners`): the last offline summary a runner reported, when it was stored, and its last relay status, each runner-reported and capped.
-- `0207` (`0207_governance_units`) renames `governance_profiles` to `governance_units` (`base_profile_id` becomes `parent_id`), `governance_assignments` to `governance_memberships` (`profile_id` becomes `unit_id`) and `agent_runs.governance_profile_id` to `unit_id`, and rewrites the `profile_id` key of each queued run's launch and the kind and JSON keys of each `governance_changes` row. No other row is rewritten and a table rename keeps its grants, so a split-role install needs no grant change. A governance change proposed before the upgrade reads as stale once and is proposed again.
+- `0206` (`0206_runner_health`) adds `runner_health`, one row per runner (`0139`'s `runners`): the last offline summary a runner reported, when stored, and its last relay status, each runner-reported and capped.
+- `0207` (`0207_governance_units`) renames `governance_profiles` to `governance_units` (`base_profile_id` becomes `parent_id`), `governance_assignments` to `governance_memberships` (`profile_id` becomes `unit_id`) and `agent_runs.governance_profile_id` to `unit_id`, and rewrites the `profile_id` key of each queued run's launch and the kind and JSON keys of each `governance_changes` row. No other row is rewritten; a table rename keeps its grants, so a split-role install needs no grant change. A change proposed before the upgrade reads as stale once: propose it again.
+- `0208` (`0208_governance_unit_tree`) makes units a tree under one Default unit (id `00000000-0000-0000-0000-000000000001`, named `Default`, else the first free of `Default (deployment)`, `Default (deployment 2)`, …). Composed units with no base become its children and compose as before. Memberships are keyed `(unit_id, subject_type, subject)`; existing ones are `legacy`, and only a person's first by precedence is a context, so no run's walls change. No table is new: no grant change.
+- `0209` (`0209_runner_pending_actions_run_index`) adds the index `runner_pending_actions_run_kind_queued` on `runner_pending_actions` (`0139`'s table), which a run's lease checks read its action history through; the build holds a lock on the table for its duration.
+- `0210` (`0210_approval_notifications_purge_index`) adds the partial index `approval_notifications_purge_idx` on `approval_notifications` (`0118`'s table) over its sent, cancelled and dead rows, which the outbox purge reads; the build holds a lock on the table for its duration.
+- `0211` (`0211_principal_identity_scim_lookup_indexes`) adds indexes on `principal_identities` (`0113`'s table) over `lower(scim_user_name)`, `lower(scim_external_id)`, `object_id` and `email_lower`, and on `principal_identity_aliases` over `value_lower`, which SCIM user lookups read; the builds hold a lock on each table for their duration.
+- `0212` (`0212_principal_lower_indexes`) adds indexes over `lower(principal)` on `principal_identities` (`0113`), `people` (`0090`) and `api_tokens` (`0045`), and over `lower(owned_by)` on `workspaces` (`0008`), which the case-folded name lookup behind a person's erasure and a SCIM group removal reads; the builds hold a lock on each table for their duration.
+- `0213` (`0213_approvals_pending_scope_hash_uniq`) replaces the partial unique index `approvals_pending_noncred_uniq` on `approvals` with `approvals_pending_noncred_hash_uniq`, keyed on a sha256 of the requested scope instead of the scope itself so a large scope no longer fails to insert; the build holds a lock on the table for its duration.
+- `0214` (`0214_audit_chain_head_lazy`) is a later `CREATE OR REPLACE` of `0130`'s chain function, which reads the newest hashed row from `audit_events` only while no head has been recorded in `audit_partition_meta`, instead of on every insert; it re-creates the audit triggers, which holds a lock on the table briefly.
+- `0215` (`0215_agent_runs_runner_ref_index`) adds the partial index `agent_runs_runner_ref_idx` on `agent_runs` over runner runs that still hold a sandbox ref, which the runner retirement producer reads; the build holds a lock on the table for its duration.
+- `0216` (`0216_recordings_size_tail`) adds `size_bytes`, `tail` and `stat_updated_at` to `recordings` (`0028`'s table): a cast's byte size and last 8 KiB, which the Recordings list reads instead of decompressing each stored recording; the migration reads every stored recording once to fill them, and holds an exclusive lock on `recordings` until it commits.
+- `0217` (`0217_run_machine_kind`) adds `machine_kind` and `vm_machine` to `agent_runs` (`0001`'s table): the kind of sandbox a run asked for (empty for a container) and the virtual machine a Linux VM run started on.
+- `0218` (`0218_approval_human_takeover`) admits the approval kind `human_takeover` ("Needs you") in `approvals.kind`'s CHECK and adds `approvals.takeover_holder` and `approvals.handed_back_at` (`0001`'s table): who has control of a run the agent asked a person to take over, and when they handed it back.
+- `0222` (`0222_agent_runs_model_allowlists`) adds `model_allowlists` to `agent_runs` (`0001`'s table): the model allowlist each local model provider handed the run's proxy at its latest dispatch.
+- `0223` (`0223_governance_boundary_seed`) adds `governance_boundary.seeded_at` and the boundary's one row in `no_limits`, so an upgrade keeps its boundary as it was. Only a fresh install's first boot then moves that row to `hard_limits` with floor `CC1` and nothing listed, which reaches what `no_limits` does, and writes `governance.boundary.seed`.
+- `0224` (`0224_approval_rules`) creates `approval_rules`, the security tier's approval rules ([approval-rules.md](operations/approval-rules.md)); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `approval_rules`.
+- `0225` (`0225_user_drives_second_place`) adds `alt_backend`, `alt_host_root` and `alt_runner_id` to `user_drives` (`0054`'s table; the runner references `runners`): a share's second place, the same share as one person's own runner sees it. All three are NULL on every existing drive, which mounts exactly as before. Before you upgrade: a drive becomes reachable on a person's own runner only once an admin binds it to that runner and the runner's owner starts `wardyn-runnerd` with a `--drive-root` covering the path; nothing else changes reach.
+- `0226` (`0226_governance_change_tree_ops`) admits held-change ops `move` and `promote`; no row or grant changes.
+- `0227` (`0227_governance_restrictions`): a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_restrictions` and `governance_restriction_members`.
+- `0228` (`0228_governance_unit_admins`) creates `governance_unit_admins` (the people and IdP groups who administer a unit and the units below it) and adds `locked_knobs` to `governance_units` and `governance_boundary` (a constant-default array, so no row is rewritten); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_unit_admins`.
+- `0229` (`0229_oidc_session_sids`) creates `oidc_session_sids`, the identity provider's `sid` of each sign-in while `WARDYN_OIDC_FRONTCHANNEL_LOGOUT` is on; a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `oidc_session_sids`.
+- `0231` (`0231_desktop_vm_pause_generation`) adds `pause_generation` to `desktop_vm_sign_ins` (`0230`'s table): the count of a VM run's sign-in pauses, which orders each stop and continue in its guest. A constant default, so no row is rewritten and no grant changes.
+- `0234` (`0234_macos_vm_kind`) admits `macos_vm` in `agent_runs.machine_kind`'s CHECK (`0001`'s table) and `run_disk` in `desktop_vm_sign_ins.store`'s CHECK; no row or grant changes.
+- `0235` (`0235_run_sandbox_absent_at`) adds `agent_runs.sandbox_absent_at` (`0001`'s table): when a runner first reported a RUNNING run's sandbox absent with no exit code, on connecting or to a status check. A later report that it is still absent, at least 30 seconds on, ends the run lost (`gone`) and `FAILED`. No row or grant changes.
+- `0236` (`0236_macos_vm_disks`) creates `macos_vm_disks`, one row per macOS VM run whose runner reported what became of its disk on the Mac; a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `macos_vm_disks`. It also appends the `ssh` tile to each saved non-empty `finished` row of `ui_run_layouts` (`0037`'s table) that lacks one; no grant changes for that.
+- `0237` (`0237_base_image_prewrapped`) admits `prewrapped` in `base_images.kind`'s CHECK (`0031`'s table) and adds the registration check's columns (`check_status`, `check_attempt`, `check_deadline`, `check_reason`, `accepted_arches`, `checked_at`), NULL or empty on every existing row; no row or grant changes.
+- `0238` (`0238_run_image_arches`) adds `agent_runs.image_arches` (`0001`'s table): the architectures a run's pre-wrapped image was checked on, which place the run. NULL on every existing row; no grant changes.
+- `0239` (`0239_inbound`) adds the restricted `feature` value `inbound` to `capability_restrictions` (so nobody may declare an inbound app until an admin allows it), admits `inbound` in `api_tokens.kind`'s CHECK (`0199`'s column), and adds `caller` and `app` to `attach_tickets` (`0026`'s table), empty on every existing ticket; no row or grant changes.
+- `0240` (`0240_run_service`) adds `agent_runs.service` and `agent_runs.service_status` (`0001`'s table): a service run's frozen spec and its last health. NULL on every existing row; no grant changes.
+- `0241` (`0241_workloads`) creates `workloads` (a named run request Wardyn keeps running, and the run it started) and `workload_bindings` (a Kubernetes namespace on a runner pool bound to a service identity); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on both.
+- `0242` (`0242_runner_pool_member_namespace`) adds `runner_pool_members.runs_namespace` (`0152`'s table): the Kubernetes namespace an organization runner serves a pool in, empty (the runner's default) on every existing row; no grant changes.
+- `0245` (`0245_run_shape`) adds `agent_runs.shape` (`0001`'s table): the New Run shape a run was set up from, empty on every existing row; no grant changes.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4770,7 +4845,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 **What a member's run sees.**
 
 - The folder mounts at `/home/agent/shared/<name-slug>`, read-only unless the allocation says `members_can_write`. A run asking to write a read-only one is refused.
-- Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-<home>` with that home. `POST /api/v1/drives/preview` for any group member prints it.
+- Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-<home>` (`id` scheme; under `slug` the drive's name-slug stands in for the id, see `object_scheme`) with that home. `POST /api/v1/drives/preview` for any group member prints it.
 - People outside the allocated groups never get the mount.
 - `GET /api/v1/me/drives` marks the row `team: true` and lists in `shared_with` the caller's own groups that carry the allocation, never anyone else's.
 - Every run's mount writes `run.drive.mount` with `team: true` and `mounted_by`, the person whose run mounted it.
@@ -5260,6 +5335,13 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
   - a driver that takes no size option (`vfs`, `fuse-overlayfs`) runs the request UNCAPPED with a warning,
   - while overlay2 over a non-xfs backing filesystem is handed the option anyway and the daemon REFUSES the create, so that run fails closed instead.
 
+### Pre-wrapped images
+
+- A Kubernetes control plane has no image builder, so an image it runs must already carry Wardyn's runner tools.
+- Build one `FROM` agent-base, pin it by digest and add it under Images; the control plane checks it on the cluster
+  before offering it. The recipe and what the check proves are in
+  [deploy/images/README.md](../deploy/images/README.md#pre-wrapped-image).
+
 ## High availability
 
 - `ha.enabled` runs two or more wardynd replicas on Kubernetes so that the loss of a
@@ -5272,6 +5354,7 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
   is **not zero-downtime upgrades**.
 - The Deployment strategy stays `Recreate`, so an
   upgrade stops the old replicas before it starts the new ones.
+- With registered runners keep one replica: [High availability: what a second replica still hits](operations/high-availability.md).
 
 ### Turning it on
 
@@ -5479,8 +5562,10 @@ What the switch needs, and refuses to render or boot without:
     - a sweep never waits for it, it skips a locked run until the next pass),
   - the **site-config** and **capability-enforcement** writers, the **audit chain verify sweep**, and the **AWS SSO** and
     **Azure DevOps sign-in refresh** single-flights, which keep one rotating refresh token from being redeemed twice.
+    The AWS SSO one is per stored credential, so one person's sessions renew independently; a capture and the
+    credential erase also take the person's AWS SSO lock, and the erase then takes every credential's.
 - They are taken in one order (run operation, run-token mint,
-  AWS SSO, Azure DevOps sign-in, the organisation MCP server key, the document locks, the audit sweep last), each
+  the person's AWS SSO lock, then each AWS SSO credential's in a fixed order, Azure DevOps sign-in, the organisation MCP server key, the document locks, the audit sweep last), each
   nested lock shares its caller's connection, and none proceeds unlocked.
 - A lock
   that cannot be taken answers `503` `lock_unavailable` and is retried.
@@ -5543,6 +5628,9 @@ What the switch needs, and refuses to render or boot without:
       and app role install grants the app role `SELECT, INSERT, DELETE` on
       `run_output_chunks`, `SELECT, INSERT, UPDATE, DELETE` on `run_attach_leases` and
       `ado_run_pat_state`, and `SELECT, INSERT, UPDATE` on `ado_signin_ends`.
+- **A desktop Close is shared through the database** (`ui_desktop_closed`): every replica refuses the closed cookie,
+  and a stream open on another replica ends within 15 s.
+  - While the database is unreachable, open desktops end and new opens are refused until it is back.
 
 ### What stays per replica
 

@@ -23,14 +23,27 @@ const maxClientHello = 16 << 10
 
 // Variables only so tests can shorten them.
 var (
-	helloBudget = 10 * time.Second // the whole ClientHello, from its first byte
-	firstWait   = 10 * time.Second // the first byte, from the handshake
+	helloBudget    = 10 * time.Second // the whole ClientHello, from its first byte
+	firstWait      = 10 * time.Second // the first byte on 443, from the handshake
+	firstWaitOther = time.Second      // the first byte on any other port
 )
+
+// firstWaitFor is how long the relay waits for the guest's first byte on port.
+// Silence refuses a flow only on 443, so another port is tunnelled after the
+// wait anyway: a guest whose server speaks first (MySQL, SMTP, IMAP) sends
+// nothing until the tunnel opens, and a short wait keeps that inside its
+// client's handshake timeout.
+func firstWaitFor(port uint16) time.Duration {
+	if port == 443 {
+		return firstWait
+	}
+	return firstWaitOther
+}
 
 type flightKind int
 
 const (
-	flightNone  flightKind = iota // nothing within firstWait
+	flightNone  flightKind = iota // nothing within the port's first wait
 	flightTLS                     // a ClientHello with a server name
 	flightOther                   // bytes that are not a TLS record (an SSH banner, a database's opening)
 )
@@ -48,13 +61,17 @@ type flight struct {
 	bytes []byte
 }
 
-// readFlight reads the guest's opening bytes from c. A TLS record is read to
-// the end of its ClientHello; err is errSNIMissing when that yields no server
-// name (none sent, unparseable, larger than maxClientHello, or slower than
-// helloBudget).
-func readFlight(c net.Conn) (flight, error) {
+// readFlight reads the guest's opening bytes from c, a flow to port. A TLS
+// record is read to the end of its ClientHello; err is errSNIMissing when that
+// yields no server name (none sent, unparseable, larger than maxClientHello,
+// or slower than helloBudget).
+func readFlight(c net.Conn, port uint16) (flight, error) {
 	first := make([]byte, 1)
-	_ = c.SetReadDeadline(time.Now().Add(firstWait))
+	_ = c.SetReadDeadline(time.Now().Add(firstWaitFor(port)))
+	// Every return clears it: a deadline left behind (the silent guest's, which
+	// has already passed) fails the splice's first read of the guest, and the
+	// relay half-closes a tunnel the guest never ended.
+	defer func() { _ = c.SetReadDeadline(time.Time{}) }()
 	n, err := c.Read(first)
 	if n == 0 {
 		var ne net.Error
@@ -64,11 +81,9 @@ func readFlight(c net.Conn) (flight, error) {
 		return flight{}, err
 	}
 	if first[0] != 0x16 { // not a TLS handshake record
-		_ = c.SetReadDeadline(time.Time{})
 		return flight{kind: flightOther, bytes: first}, nil
 	}
 	_ = c.SetReadDeadline(time.Now().Add(helloBudget))
-	defer func() { _ = c.SetReadDeadline(time.Time{}) }()
 	rec := &recordingConn{Conn: c, pending: first}
 	var sni string
 	srv := tls.Server(rec, &tls.Config{GetConfigForClient: func(h *tls.ClientHelloInfo) (*tls.Config, error) {

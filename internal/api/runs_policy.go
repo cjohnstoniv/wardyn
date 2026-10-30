@@ -231,8 +231,10 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	}
 	// Same server-side projection handleListRuns applies per page —
 	// a single run's own detail read must agree with what the list showed.
+	// The recording fields are always filled here: a default read that said
+	// has_recording false for a stored recording read as a lost one (#3705).
 	runs := []types.AgentRun{run}
-	s.projectRecordingMeta(r, runs)
+	s.fillRecordingMeta(r.Context(), runs)
 	s.projectStatusDetailFor(r, runs)
 	s.projectRunnerFacts(r, runs)
 	redactRunRepos(runs)
@@ -282,16 +284,27 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// Agents (#1987) is every agent of a background run with several, the run's own
 		// first, each with its own task; absent on every other run.
 		Agents []runDetailAgent `json:"agents,omitempty"`
+		// ModelAllowlists (#3374) is the model allowlist each local model provider handed the run's proxy at
+		// its latest dispatch, {provider id: models}: what the run is held to, whatever the provider lists now.
+		ModelAllowlists map[string][]string `json:"model_allowlists,omitempty"`
+		// MacOS is a macOS VM run's desktop as its Mac offers it (run_macos_view.go); absent on every other run.
+		MacOS *runMacOSView `json:"macos,omitempty"`
+		// MacOSDisk is where a macOS VM run's disk stands on its Mac at the run's end (run_macos_disk.go);
+		// absent on every other run.
+		MacOSDisk *runMacOSDiskView `json:"macos_disk,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
-		CreatedViaName: s.runCreatedViaName(r.Context(), run),
-		RunnerPoolName: s.runPoolName(r.Context(), run),
-		KeptUntil:      s.endedRunKeptUntil(run),
-		Policy:         s.runPolicyRef(r.Context(), run),
-		Sync:           s.runSyncOpenView(run.ID),
-		ComputerFolder: s.computerFolderRunView(r.Context(), run.ID),
-		Agents:         s.runDetailAgents(r.Context(), run),
+		CreatedViaName:  s.runCreatedViaName(r.Context(), run),
+		RunnerPoolName:  s.runPoolName(r.Context(), run),
+		KeptUntil:       s.endedRunKeptUntil(run),
+		Policy:          s.runPolicyRef(r.Context(), run),
+		Sync:            s.runSyncOpenView(run.ID),
+		ComputerFolder:  s.computerFolderRunView(r.Context(), run.ID),
+		Agents:          s.runDetailAgents(r.Context(), run),
+		ModelAllowlists: s.runModelAllowlists(r.Context(), run.ID),
+		MacOS:           s.runMacOSView(run),
+		MacOSDisk:       s.runMacOSDiskView(r.Context(), run),
 	})
 }
 
@@ -820,6 +833,10 @@ func actorFromRequest(r *http.Request) (types.ActorType, string) {
 // actorFromContext is actorFromRequest's chain for a caller holding only a
 // context. localOverride is the validated dev-only header value, "" for none.
 func actorFromContext(ctx context.Context, localOverride string) (types.ActorType, string) {
+	// An approval rule decides as itself, never the admin-token fallback its human-less context would read as.
+	if d, ok := policyDeciderFrom(ctx); ok {
+		return types.ActorSystem, policyActor(d)
+	}
 	// A device request is the device, never the admin-token fallback at the
 	// bottom (which is what a context with no human would otherwise read as).
 	if d, ok := deviceFromContext(ctx); ok {

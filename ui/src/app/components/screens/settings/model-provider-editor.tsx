@@ -23,6 +23,7 @@ import { HttpError } from "../../../lib/api/core";
 import { modelProviders, type ModelProvidersList } from "../../../lib/api/model-providers";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { getErrorMessage } from "../../../lib/format";
+import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { LOCAL_MODEL_EDITOR } from "../../../lib/local-model-copy";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR, PROVIDERS } from "../../../lib/model-providers-copy";
 import { LOCAL_MODEL_DEFAULTS, type ModelProvider } from "../../../lib/types/site";
@@ -38,6 +39,7 @@ import {
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
 import { Button, buttonVariants } from "../../ui/button";
+import { DANGER_OUTLINE, INLINE_ACTIONS } from "../../wardyn/form-actions";
 import { Checkbox } from "../../ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../ui/dialog";
 import { Input } from "../../ui/input";
@@ -55,6 +57,7 @@ import { useDiscardReload } from "../../wardyn/use-discard-reload";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { ModelChips } from "./model-chips";
+import { LaptopRunnersSwitch } from "./model-provider-laptop";
 import {
   EDITOR_KINDS,
   addressChanged,
@@ -67,6 +70,7 @@ import {
   newDraft,
   providerFrom,
   refusedField,
+  laptopBaseUrlRefused,
   refusedHarness,
   refusedModel,
   vendorHost,
@@ -97,6 +101,8 @@ export interface ModelProviderEditorProps {
 
 type Confirm = "address" | "remove" | null;
 
+const editedText = (draft: ProviderDraft, audience: AvailabilityDraftValue) => JSON.stringify({ ...draft, audience }, null, 2);
+
 export function ModelProviderEditor({
   list: listProp,
   editing: editingProp,
@@ -119,6 +125,8 @@ export function ModelProviderEditor({
   // Once the create landed, closing must re-read even without another save.
   const close = partial ? onSaved : onClose;
   const [draft, setDraft] = React.useState<ProviderDraft | null>(() => (editing ? draftFrom(editing, harnesses) : null));
+  // What the editor opened on (an existing provider), or the kind picked (a new one): the baseline for the unsaved guard.
+  const [baseline, setBaseline] = React.useState<string | null>(() => (editing ? editedText(draftFrom(editing, harnesses), audience) : null));
   const [saving, setSaving] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
   const [stale, setStale] = React.useState<string | null>(null);
@@ -148,6 +156,10 @@ export function ModelProviderEditor({
     }
   };
 
+  // Leaving with edits that were not saved asks first. The draft holds names and settings only, never a credential.
+  const edited = draft ? editedText(draft, audience) : "";
+  useUnsavedGuard("model-provider-editor", draft !== null && edited !== baseline, () => edited);
+
   const candidate = () => providerFrom(draft!, editing, stored.map((p) => p.id));
 
   const save = async () => {
@@ -161,6 +173,7 @@ export function ModelProviderEditor({
       } catch (e) {
         const provider = snap.providers.providers?.find((p) => p.id === next.id) ?? next;
         setPartial({ list: { ...snap, connected: list.connected }, provider, message: getErrorMessage(e) });
+        setBaseline(edited);
         return;
       }
     }
@@ -209,7 +222,11 @@ export function ModelProviderEditor({
 
         {!draft ? (
           <KindStep
-            onPick={(kind) => setDraft(newDraft(kind, harnesses))}
+            onPick={(kind) => {
+              const d = newDraft(kind, harnesses);
+              setDraft(d);
+              setBaseline(editedText(d, audience));
+            }}
             onCancel={onClose}
             subscriptionAvailable={subscriptionAvailable}
           />
@@ -250,17 +267,16 @@ export function ModelProviderEditor({
               </div>
             )}
             {stale && <SavedElsewhereBanner documentText={stale} onDiscard={discard} />}
-            <div className="flex flex-wrap items-center gap-2 pt-2">
+            <div className={`${INLINE_ACTIONS} pt-2`}>
               {editing && (
-                <Button type="button" variant="outline" disabled={busy} onClick={() => setConfirm("remove")}>
+                <Button type="button" variant="outline" className={`mr-auto ${DANGER_OUTLINE}`} disabled={busy} onClick={() => setConfirm("remove")}>
                   {PROVIDER_EDITOR.REMOVE}
                 </Button>
               )}
-              <span className="grow" />
               <Button type="button" variant="ghost" onClick={close}>
                 {PROVIDER_EDITOR.CANCEL}
               </Button>
-              <Button type="submit" disabled={busy}>
+              <Button type="submit" disabled={busy || audience.pending}>
                 {showSpinner && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
                 {PROVIDER_EDITOR.SAVE}
               </Button>
@@ -366,6 +382,7 @@ function ProviderFields({
   const endpoint = isEndpoint(draft.kind);
   const local = isLocal(draft.kind);
   const badField = refusedField(refused);
+  const laptopBad = laptopBaseUrlRefused(draft);
   const bedrock = isBedrock(draft.kind);
   const sso = draft.kind === "bedrock_sso";
   const routeThrough = draft.kind === "anthropic_api_key" || draft.kind === "openai_api_key";
@@ -464,11 +481,20 @@ function ProviderFields({
 
       {local && (
         <>
-          <Field label={PROVIDER_EDITOR.BASE_URL} htmlFor="mp-base-url" hint={LOCAL_MODEL_EDITOR.BASE_URL_HINT}>
+          <Field
+            label={PROVIDER_EDITOR.BASE_URL}
+            htmlFor="mp-base-url"
+            hint={
+              <>
+                {laptopBad && <span className="mb-1 block text-danger">{LOCAL_MODEL_EDITOR.LAPTOP_BASE_URL}</span>}
+                {LOCAL_MODEL_EDITOR.BASE_URL_HINT}
+              </>
+            }
+          >
             <Input
               id="mp-base-url"
               className="font-mono"
-              aria-invalid={badField === "base_url" || undefined}
+              aria-invalid={badField === "base_url" || laptopBad || undefined}
               value={draft.baseUrl}
               onChange={(e) => set({ baseUrl: e.target.value })}
             />
@@ -498,6 +524,7 @@ function ProviderFields({
               <p className="text-xs leading-snug text-muted-foreground">{LOCAL_MODEL_EDITOR.TOKEN_OFF_HINT}</p>
             )}
           </div>
+          <LaptopRunnersSwitch on={draft.laptopRunners} onChange={(laptopRunners) => set({ laptopRunners })} />
           <Field label={LOCAL_MODEL_EDITOR.MODELS} htmlFor="mp-models">
             <ModelChips
               id="mp-models"

@@ -19,6 +19,7 @@ derives its role.
   - `GET /workspaces/{id}/env-as-code` is NOT in that set (owner-or-super, since F287): its files carry the internal registry coordinate, the site-config artifact redirects and the operator's setup commands, none of which are an egress-decision input.
   - They cannot otherwise WRITE a workspace: renaming, reassigning, deleting, binding credential material and launching a recording all stay with the super admin.
   - Security admins author and assign **governance profiles** (named ceilings bound to users or groups), write the org allow/denylists (capability grants).
+  - Mount host paths are the exception: a security admin reads them as `<redacted>`, and may keep a mount, make it read-only or remove it. Only a super admin adds a mount, changes its host path or makes it writable.
   - They decide escalated approvals — egress, credential, tool — on anyone's run.
   - They revoke sessions and API tokens, and verify the audit chain.
   - They can also **stop** any run in the deployment.
@@ -55,6 +56,9 @@ derives its role.
   - Authoring no policy at all yields it, and its denied hosts are re-asserted when the run is dispatched.
   - A denied host cannot receive an injected or brokered credential at all.
   - What a member can change is what the profile leaves open; what they can ask for is an escalation on the Approvals page.
+- **Unit admins (0.10.0).**
+  - A unit admin is not a fourth role: it is a grant on a unit, held by a person or an IdP group, whatever their role.
+  - It governs that unit and every unit below it, nothing else. A unit admin's widenings are always held for a second human ([unit admins](unit-admins.md)).
 - **Governance profiles.**
   - One profile per subject; when several match, the most specific wins (user beats group beats user type beats everyone; priority breaks group ties).
   - The Governance page shows the resolved answer, and `GET /policies/default` returns the ceiling that actually binds the caller.
@@ -153,6 +157,7 @@ derives its role.
   - A base's name, overlay and contact are not disclosed, and a profile with no `contact` falls back to the site's `policy_help` rather than inherit a base's contact, since that would name the base.
   - Only an admin or a `security_admin` can read the graph (`GET /governance`).
   - `GET /governance` returns every profile and every assignment. `/governance/units` and `/governance/units/{id}` take writes only, so a `GET` on either answers `405`.
+  - A `PUT /governance/units/{id}` body may be a unit as `GET /governance` returns it; its server-set fields are ignored.
   - When you write an example for a member, show the effective result and the profile's own name; do not describe the structure behind it.
 - *Deleting and unassigning.*
   - Deleting a profile requires unassigning it first, and a base that still has profiles built on it is a `409` naming them (never a silent widening).
@@ -229,11 +234,11 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - The write is a security-admin governance write, held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`. It takes `If-Match` (a stale ETag is a 412) and is audited as `governance.egress_baseline.write`.
 - **What the rubric can see here, at profile-write time.**
   - A profile write whose resolved rubric sets any row answers with one more advisory, beside the omission warnings; a held write keeps it in the change's notes.
-  - It names the egress, secrets and confinement grades a run under the profile can get on this deployment, the rows those grades select, and the rows that cap nothing here.
+  - It names the rows that cap nothing here first, by the editor's labels, then the grades a run can get on this deployment: three short sentences at most.
   - For example, on a deployment with one Bedrock provider and a substrate that offers only CC1:
 
     ```text
-    on this deployment a run under this profile grades egress sealed, reviewed or open; secrets none, baseline or powerful; and confinement CC1 — so only egress_open, egress_reviewed, egress_sealed, secrets_powerful, secrets_baseline, secrets_none and confinement_cc1 can cap it, and confinement_cc2 and confinement_cc3 cap nothing here; a run on one of its model providers always grades secrets powerful
+    2 rubric rows never cap a run under this profile here: Wall (CC2) and Vault (CC3). A run here is graded egress sealed, reviewed or open, secrets none, baseline or powerful, and confinement Fence (CC1); those rows can cap it. A run on one of this profile's model providers is always graded secrets powerful.
     ```
 
   - It claims only what the deployment forces on every run, so a row it calls inert really is.

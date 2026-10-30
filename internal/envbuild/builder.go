@@ -35,6 +35,7 @@ import (
 	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/dockerutil"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
@@ -77,15 +78,11 @@ const (
 	envRegistryInsecure = "WARDYN_ENVBUILD_REGISTRY_INSECURE"
 )
 
-// requiredTools is the single canonical declaration of the Wardyn runner tools that must be present
-// in a built/wrapped image for the runner to exec, record, verify, and broker git into it; every gate
-// in this package consumes this list (the shell sites agent-run --selftest/ci-run.sh keep their own hardcoded checks).
-var requiredTools = []string{
-	"agent-run",         // task entrypoint the runner execs
-	"agent-run-lib.sh",  // sourced by agent-run under `set -euo pipefail` (load-bearing)
-	"wardyn-rec",        // session recorder; required by the image --selftest
-	"wardyn-git-helper", // brokered-token git credential helper
-}
+// requiredTools are the Wardyn runner tools that must be present in a built/wrapped image for the runner
+// to exec, record, verify, and broker git into it; every gate in this package consumes this list (the shell
+// sites agent-run --selftest/ci-run.sh keep their own hardcoded checks). The canonical list is
+// types.ImageContractTools, which a prewrapped image's registration check reads too.
+var requiredTools = types.ImageContractTools
 
 // Builder drives coder/envbuilder as a container to turn a devcontainer.json repository into a local workspace image.
 type Builder struct {

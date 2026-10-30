@@ -1,0 +1,135 @@
+name: Overlay proofs
+
+# Revert proofs on hosted runners, by hand. A proof puts one reverted source file
+# back at an exact sha and demands that `go test` exits 1 with the named
+# `--- FAIL:` line; a green run or a build error is a failed proof. The logic is
+# scripts/overlay-proof.sh (the same script runs locally); see docs/CI.md.
+#
+# Operational rule: never dispatch while a train attempt 1 is queued. Every proof
+# compiles internal/api, and these jobs take runner slots that attempt waits on.
+#
+# Dispatch it on the bundle branch, never on main:
+#   gh workflow run overlay-proofs.yml --ref proofs/<lane>-<sha12> -f keyed_sha=<sha>
+# That throwaway branch is one commit on origin/main that adds .proofs/ (a
+# manifest.json and the reverted files). It is never merged.
+#
+# Input
+#   keyed_sha   the 40-hex commit the bundle was made for. It must equal the
+#               manifest's keyed_sha, and it is the tree the proofs run against.
+#
+# Cache scope. The proofs run lane code, and code in any step can save Actions
+# cache entries under the run's ref through the job's runtime token, whatever
+# this file's permissions say. Entries saved on main reach every branch, and
+# ci.yml and the nightly restore them, so every job runs only on a
+# refs/heads/proofs/ ref, whose entries no other branch restores. Dispatched on
+# main, every job skips, and only main's copy of this file can run there. No
+# step restores or saves a cache either (setup-go cache: false): a job starts
+# with empty module and build caches. The token is read-only and no step reads
+# a secret.
+#
+# Trust. This file and the script run from the dispatched branch, so plan first
+# refuses a branch whose tree differs from the main commit it sits on anywhere
+# outside .proofs/ (`overlay-proof.sh base`). That check runs from the branch
+# too, so a run counts only once `git diff --quiet origin/main...<head sha> --
+# ':(exclude).proofs'` exits 0 locally: it reads no file from the branch.
+on:
+  workflow_dispatch:
+    inputs:
+      keyed_sha:
+        description: "Full 40-hex sha the bundle is keyed to; the proofs run against this tree"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+# Every job sets timeout-minutes, at least twice its measured maximum with a
+# ten-minute floor (docs/CI.md). The prove value is computed per group by
+# `overlay-proof.sh plan` from the allowances in that script's header; plan
+# gets 10.
+jobs:
+  # Refuses a branch that is more than main plus .proofs/, reads the manifest,
+  # refuses a keyed_sha that is not the manifest's, and groups the proofs by
+  # package: one prove job per package, its proofs in turn.
+  plan:
+    name: plan
+    if: startsWith(github.ref, 'refs/heads/proofs/')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      # Every branch's history, so the merge base with main is known.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: bundle
+          fetch-depth: 0
+          persist-credentials: false
+      - id: plan
+        env:
+          KEYED_SHA: ${{ inputs.keyed_sha }}
+        run: |
+          [[ "$KEYED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "keyed_sha must be 40 lowercase hex" >&2; exit 2; }
+          base="$(bash bundle/scripts/overlay-proof.sh base bundle HEAD origin/main)"
+          echo "the bundle is main at $base plus .proofs/"
+          matrix="$(bash bundle/scripts/overlay-proof.sh plan bundle "$KEYED_SHA")"
+          echo "$matrix"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  prove:
+    name: prove (${{ matrix.package }})
+    needs: plan
+    if: startsWith(github.ref, 'refs/heads/proofs/')
+    runs-on: ubuntu-26.04
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    # The same Postgres as ci.yml's test-pg-shard, so a proof of a PG-backed test
+    # (./internal/store, the PG tests in ./internal/api) runs instead of skipping,
+    # and overlay-proof.sh counts a skip as a failed proof. ci.yml logs in to
+    # ghcr.io with the job token; this job does not, because the package is public
+    # and a login would need a packages: read grant and a secrets reference. The
+    # password is a throwaway literal on a service container that dies with the job.
+    services:
+      postgres:
+        image: ghcr.io/cjohnstoniv/base-images:library-postgres-17-a426e44bac0b@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+        env:
+          POSTGRES_PASSWORD: wardyn
+          POSTGRES_DB: wardyn
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: bundle
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.keyed_sha }}
+          path: src
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: src/go.mod
+          cache: false
+      # Fetch modules before any proof, with a bounded retry, so a registry blip
+      # fails the job as setup instead of turning a proof into "build failed".
+      - name: Download modules
+        working-directory: src
+        run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+      - name: Run the proofs
+        env:
+          ONLY: ${{ matrix.only }}
+          # ci.yml's test-pg-shard DSN and pool guard. WARDYN_TEST_PG_SUPERUSER is
+          # left unset: it turns a skipped probe into a failure, and a proof must
+          # not take a FAIL line from anything but the reverted code.
+          WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
+          WARDYN_TEST_POOL_GUARD: '1'
+        run: |
+          read -ra names <<< "$ONLY"
+          bash bundle/scripts/overlay-proof.sh run bundle src --only "${names[@]}"

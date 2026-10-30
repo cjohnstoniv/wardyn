@@ -53,7 +53,7 @@ const accessEmailKeyRefused = "Email mappings are disabled on this install. Map 
 // snapshot is too stale to answer "would this write remove your admin
 // access" at all, so refusing on ITS say-so would be a false lockout, not a
 // caught one.
-const accessStaleSnapshot = "your sign-in is too old to verify this change — sign in again before changing role mappings"
+const accessStaleSnapshot = "Your sign-in is too old to verify this change — sign in again before changing role mappings"
 
 // accessStaleSnapshotToken is the SAME refusal for the API-TOKEN lane, and it
 // exists because oidcGroupsFromContext resolves to the token's STAMPED
@@ -77,7 +77,7 @@ const accessStaleSnapshot = "your sign-in is too old to verify this change — s
 // exemption above), so this is the same distinction applied to the sentence
 // rather than to the decision: the refusal is unchanged, only the remedy is the
 // caller's own.
-const accessStaleSnapshotToken = "your API token's sign-in snapshot is too old to verify this change — the token owner's next sign-in re-stamps it; sign in again, then retry, or re-mint the token from the console (Account → API tokens) if you cannot sign in again"
+const accessStaleSnapshotToken = "Your API token's sign-in snapshot is too old to verify this change — the token owner's next sign-in re-stamps it; sign in again, then retry, or re-mint the token from the console (Account → API tokens) if you cannot sign in again"
 
 // mountAccessRoutes registers the People-step access surface. ALL FOUR routes
 // are operatorOnly, including the two reads: unlike /permissions (a member
@@ -492,8 +492,10 @@ func (s *Server) accessLockoutErr(r *http.Request, existing []types.RoleMapping,
 		// accessStaleSnapshotToken. The residual for either lane is the same:
 		// an owner who never signs in again keeps whatever snapshot they had.
 		if apiTokenIDFromContext(r.Context()) != uuid.Nil {
+			//lint:ignore ST1005 the text is the sentence the refused person reads
 			return errors.New(accessStaleSnapshotToken)
 		}
+		//lint:ignore ST1005 the text is the sentence the refused person reads
 		return errors.New(accessStaleSnapshot)
 	}
 	after := s.cfg.OIDC.PreviewRoleAgainst(candidate, userTypes, nil, groups, email)

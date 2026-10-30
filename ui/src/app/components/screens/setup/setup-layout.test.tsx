@@ -29,6 +29,43 @@ function renderLayout(overrides: Partial<ComponentProps<typeof SetupLayout>> = {
 describe("SetupLayout", () => {
   const user = userEvent.setup({ pointerEventsCheck: 0 });
 
+  // #2847: the full-width "Host status" bar is gone; its Re-check, live text and stamp sit at the right end of
+  // the step's eyebrow row, on a required and on an optional step alike, in three states.
+  describe("the eyebrow row's Re-check (#2847)", () => {
+    it.each(["environment", "integrations"] as const)("%s: one Re-check, no 'Host status' words", async (current) => {
+      const onRecheck = vi.fn();
+      renderLayout({ current, onRecheck });
+      expect(screen.queryByText(/host status/i)).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Re-check" }));
+      expect(onRecheck).toHaveBeenCalledTimes(1);
+    });
+
+    it("the button shares the row with the step counter, and the stamp reads beside it", () => {
+      renderLayout({ current: "environment", order: ["environment", "review"], lastCheckedLabel: "Checked just now" });
+      const row = screen.getByText(/^Step 1 of 2$/).closest(".label-eyebrow")!.parentElement!;
+      expect(row).toContainElement(screen.getByRole("button", { name: "Re-check" }));
+      expect(row).toHaveTextContent("Checked just now");
+    });
+
+    it("first visit (no stamp) says nothing; checking shows the in-flight text and disables the button", () => {
+      const { unmount } = renderLayout({ lastCheckedLabel: "" });
+      expect(screen.queryByText(/checked|checking/i)).not.toBeInTheDocument();
+      unmount();
+      renderLayout({ checking: true, lastCheckedLabel: "" });
+      expect(screen.getByText("Checking Wardyn's setup…")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Re-check" })).toBeDisabled();
+    });
+  });
+
+  // #2844: the 1024-1279 band keeps the full rail, so its grid column is 200px (240px at xl), never the 56px icon column.
+  it("gives the rail a 200px column from lg and 240px from xl, never 56px (#2844)", () => {
+    const { container } = renderLayout();
+    const grid = container.querySelector("aside")!.parentElement!;
+    expect(grid.className).toContain("lg:grid-cols-[200px_minmax(0,1fr)]");
+    expect(grid.className).toContain("xl:grid-cols-[240px_minmax(0,1fr)]");
+    expect(grid.className).not.toContain("56px");
+  });
+
   it("renders the step heading from STEP_HEADING and an Optional chip on an optional step", () => {
     renderLayout({ current: "integrations" });
     expect(screen.getByRole("heading", { name: /^secrets$/i })).toBeInTheDocument();
@@ -356,7 +393,7 @@ describe("order — the walked steps, not the whole contract", () => {
     expect(onSelect).toHaveBeenCalledWith("review");
   });
 
-  it("an optional step's 'Done with this one' is disabled, with the refusal as visible text — not a title", () => {
+  it("an optional step's 'Done with this one' and 'Back to required steps' are disabled, with the refusal as visible text — not a title", () => {
     const order: SetupStepId[] = ["environment", "corp_network", "integrations", "review"];
     renderLayout({
       current: "sealed-box",
@@ -367,9 +404,9 @@ describe("order — the walked steps, not the whole contract", () => {
     expect(done).toBeDisabled();
     expect(done).not.toHaveAttribute("title");
     expect(screen.getByText("Prove network access first.")).toBeInTheDocument();
-    // Back stays enabled — it is never gated by refuseNext, same as every
-    // other Back button in this shell.
-    expect(screen.getByRole("button", { name: /^back to required steps$/i })).toBeEnabled();
+    // "Back to required steps" makes the same move, so it is refused for the same reason (#2578):
+    // a live button that does nothing is a dead click.
+    expect(screen.getByRole("button", { name: /^back to required steps$/i })).toBeDisabled();
   });
 });
 

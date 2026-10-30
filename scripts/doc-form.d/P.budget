@@ -41,11 +41,31 @@
 # docs/POLICIES.md=18607 adds 187 (0.10.0 VM-B): the port-rule box and the relay residual (#3193).
 # docs/POLICIES.md 19292 = ours 19105 + theirs 18777 - base 18590 at the 0.10 W2 merge of VM-B onto the train.
 # docs/POLICIES.md 19378 = ours 18870 + theirs 19292 - base 18784 at the 0.10 merge of main (W2) into SEC-92.
+# docs/POLICIES.md 19390 adds 12 over 19378, measured (0.10 OC-API1b): the 5 s bound on a stalled control plane in the deny_with_review row.
+# docs/POLICIES.md 19490 adds 198 (0.10 CTL-A): the desktop field and its section (#2967).
+# docs/POLICIES.md 19542 adds 52 (0.10 CTL-A r3): the desktop rules bind the novnc app's relay only (#2967).
+# docs/POLICIES.md 19570 adds 28 (0.10 CTL-A r3): the desktop rules are not a boundary against a run built to get data out.
+# docs/POLICIES.md 19668 = ours 19390 + theirs 19570 - base 19292 at the 0.10 W4c merge of CTL-A 99d68a80a onto the train.
+# docs/POLICIES.md 19446 adds 68 over 19378, measured: push_rules.deny_new_executables is enforced (three bullets and its row).
+# docs/POLICIES.md 19539 adds 93 over 19446, measured: deny_new_executables review round 2 (execute-bit modes, any counted base, symlinks and submodules).
+# docs/POLICIES.md 19558 adds 19 over 19539, measured: a merge whose carried parent held the path not executable is the exception.
+# docs/POLICIES.md 19556 is 2 under 19558, measured: the deny_new_executables row points at the push_rules section for the carried-parent exception.
+# docs/POLICIES.md 19846 = ours 19668 + theirs 19556 - base 19378 at the 0.10 W4c merge of STRAG-GATED 38f5e63a3 onto the train.
+# docs/POLICIES.md 20065 = ours 19846 + theirs 19597 - base 19378 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
 # docs/POLICIES.md 19440 adds 62 (0.10.0 SEC-1b), measured: the runner placeholder switch, WARDYN_RUNNER_SECRET_PLACEHOLDERS.
+# docs/POLICIES.md 19659 = ours 19440 + theirs 19597 - base 19378 at the 0.10 W4d merge of W4b-main onto the train.
+# docs/POLICIES.md 20127 = ours 20065 + theirs 19659 - base 19597 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
+# docs/POLICIES.md 19629 adds 32 over 19597 (0.10 RUL-API), measured: the WARDYN_PUSH_HOLD_CANONICAL_REPOS bullet under what an approval covers (#2749).
+# docs/POLICIES.md 19600 adds 3 over 19597, measured (0.10 POL-MOUNT): policy reuse validates for a super admin only.
+# docs/POLICIES.md 19694 = ours 19691 + theirs 19600 - base 19597 at the 0.10 W4f merge of POL-MOUNT onto the train.
+# docs/POLICIES.md 19691 = ours 19659 + theirs 19629 - base 19597 at the 0.10 W4f merge of RUL-API onto the train.
+# docs/POLICIES.md 20162 = ours 20127 + theirs 19694 - base 19659 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
+# docs/POLICIES.md 20204 adds 42 over 20162, measured: a take over keeps no screen frames on every replica and after a restart, and the restart leaves one pause row unpaired.
+# docs/POLICIES.md 20788 adds 584 over 20204, measured (rc.8 E4, #2948): the Your walls section.
+# docs/POLICIES.md 20858 adds 72 over the measured 20786, measured (rc.8): the ui_apps `inbound` and `callers` field rows.
+docs/POLICIES.md=20858 share=12
 # docs/POLICIES.md 19597 = ours 19378 + theirs 19511 - base 19292 at the 0.10 W4b merge of the CTL-B fix onto the train.
 # docs/POLICIES.md 19511 adds 219 (0.10 CTL-B): the recording knob (#2968).
-# docs/POLICIES.md 19659 = ours 19440 + theirs 19597 - base 19378 at the 0.10 W4d merge of W4b-main onto the train.
-docs/POLICIES.md=19659 share=12
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.
 examples/policies/README.md=1446 share=5
 # docs/POLICIES.md 18013 adds 40 over 17973, measured: a member's private-range workspace clone host.

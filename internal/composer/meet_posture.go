@@ -70,6 +70,13 @@ func (m *meeter) meetPosture(o types.CeilingOverlay) {
 	if o.HarnessInnerWalls != nil {
 		m.meetInnerWalls(*o.HarnessInnerWalls)
 	}
+	if o.Desktop != nil {
+		if !leqDesktop(o.Desktop, c.Desktop) {
+			m.widen("desktop", "the base blocks a desktop direction, and an overlay can only block more")
+		}
+		d := c.Desktop.Meet(o.Desktop)
+		c.Desktop = &d
+	}
 	if o.Recording != nil {
 		// A level is a minimum: the overlay may record more than the base, and less is a widening.
 		if o.Recording.Rank() < c.Recording.Rank() {
@@ -116,10 +123,10 @@ func (m *meeter) meetMounts(base, ov []types.WorkspaceMount) []types.WorkspaceMo
 		i := slices.IndexFunc(base, func(b types.WorkspaceMount) bool { return mountKey{b.Source, b.Target} == k })
 		switch {
 		case i < 0:
-			m.widen("workspace_mounts", "%s:%s is not a mount of the base", o.Source, o.Target)
+			m.widen("workspace_mounts", "%s is not a mount of the base", o.Target) // the target only: a host path is the super admin's to read
 			continue
 		case base[i].ReadOnlyOrDefault() && !o.ReadOnlyOrDefault():
-			m.widen("workspace_mounts", "%s:%s is read-only in the base", o.Source, o.Target)
+			m.widen("workspace_mounts", "%s is read-only in the base", o.Target)
 		}
 		if seen[k] {
 			continue
@@ -173,7 +180,9 @@ func sameJSON(a, b any) bool {
 }
 
 // meetUIApps keeps the (name, port, path) apps both sides name, the same
-// identity Leq compares. A base without any stays without any.
+// identity Leq compares. A base without any stays without any. A kept app is inbound only if both sides
+// make it inbound, and its callers are the ones both sides name; an overlay that makes an app inbound, or
+// names a caller, beyond its base widens (refused at write, narrowed with a warning at resolve).
 //
 // An empty list is no opinion to Clamp, so it can never be the result over a base that names apps. An
 // overlay that sets ui_apps empty there means "no UI apps": the base's list is kept and the composed
@@ -195,7 +204,16 @@ func (m *meeter) meetUIApps(base, ov []types.UIApp) []types.UIApp {
 			m.widen("ui_apps", "%s:%d serves %s in the base, not %s", o.Name, o.Port, base[i].PathOrRoot(), o.PathOrRoot())
 			continue
 		}
-		app := types.UIApp{Name: o.Name, Port: o.Port, Path: base[i].Path}
+		app := types.UIApp{Name: o.Name, Port: o.Port, Path: base[i].Path, Inbound: base[i].Inbound && o.Inbound}
+		if o.Inbound && !base[i].Inbound {
+			m.widen("ui_apps", "%s:%d is not inbound in the base", o.Name, o.Port)
+		}
+		if extra := slices.DeleteFunc(slices.Clone(o.Callers), func(x string) bool { return slices.Contains(base[i].Callers, x) }); app.Inbound && len(extra) > 0 {
+			m.widen("ui_apps", "%s:%d: the base does not let %s call it", o.Name, o.Port, trimJoin(extra))
+		}
+		if app.Inbound {
+			app.Callers = slices.DeleteFunc(slices.Clone(o.Callers), func(x string) bool { return !slices.Contains(base[i].Callers, x) })
+		}
 		if !slices.ContainsFunc(out, func(x types.UIApp) bool { return x.Name == app.Name && x.Port == app.Port }) {
 			out = append(out, app)
 		}

@@ -4,9 +4,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -142,6 +145,75 @@ func TestReconcileStillHealsDecisionsNewerThanTheListEdit(t *testing.T) {
 	}
 	if approved, _ := f.egressLists(t, ws); !slices.Contains(approved, host) {
 		t.Fatalf("the dropped write-back was not healed: approved=%v", approved)
+	}
+}
+
+// rcReadStore wraps the fixture store so a test controls what the Nth
+// GetWorkspace answers: the heal reads each workspace once in the scan and once
+// in its apply loop, and the faults these tests pin live between the two reads.
+type rcReadStore struct {
+	*authzStore
+	reads atomic.Int32
+	on    func(n int32, ws types.Workspace, err error) (types.Workspace, error)
+}
+
+func (r *rcReadStore) GetWorkspace(ctx context.Context, id uuid.UUID) (types.Workspace, error) {
+	ws, err := r.authzStore.GetWorkspace(ctx, id)
+	return r.on(r.reads.Add(1), ws, err)
+}
+
+// TestReconcileSkipsWhenTheScanCannotReadTheWorkspace covers the fail-closed
+// edge end to end: an errored read of the workspace in the scan is not "never
+// edited", and the host the operator removed stays removed. The apply loop's
+// later read also sees the edit, so this alone does not tell the scan's check
+// from the apply loop's; each is a guard for the other.
+func TestReconcileSkipsWhenTheScanCannotReadTheWorkspace(t *testing.T) {
+	const host = "registry.npmjs.org"
+	f := newScopeFixture(t)
+	ws := f.seedWorkspace(t, []string{host}, nil)
+	rcSeedDecided(f, host, types.ApprovalApproved, time.Now().UTC().Add(-time.Hour))
+	if _, err := f.store.SetWorkspaceApprovedEgress(t.Context(), ws, nil); err != nil {
+		t.Fatalf("undo PUT: %v", err)
+	}
+	rs := &rcReadStore{authzStore: f.store, on: func(n int32, w types.Workspace, err error) (types.Workspace, error) {
+		if n == 1 {
+			return types.Workspace{}, errors.New("transient read failure")
+		}
+		return w, err
+	}}
+	f.srv.cfg.Store = rs
+
+	if n, err := f.srv.ReconcileWorkspaceEgressDecisions(t.Context()); err != nil || n != 0 {
+		t.Fatalf("reconcile = %d/%v, want 0 re-applied: an unreadable workspace must skip the verdict, not pass it", n, err)
+	}
+	if approved, _ := f.egressLists(t, ws); slices.Contains(approved, host) {
+		t.Fatalf("the removed host came back after a failed scan read: approved=%v", approved)
+	}
+}
+
+// TestReconcileApplyLoopSkipsAVerdictEditedAfterTheScan pins the apply loop's own
+// check: the scan saw a never-edited workspace, the operator's PUT landed before
+// the apply loop's read, and that read shows the stamp. The verdict is older than
+// it, so it is skipped rather than written over the operator's list.
+func TestReconcileApplyLoopSkipsAVerdictEditedAfterTheScan(t *testing.T) {
+	const host = "registry.npmjs.org"
+	f := newScopeFixture(t)
+	ws := f.seedWorkspace(t, nil, nil)
+	rcSeedDecided(f, host, types.ApprovalApproved, time.Now().UTC().Add(-time.Hour))
+	rs := &rcReadStore{authzStore: f.store, on: func(n int32, w types.Workspace, err error) (types.Workspace, error) {
+		if n > 1 {
+			at := time.Now().UTC()
+			w.EgressEditedAt = &at
+		}
+		return w, err
+	}}
+	f.srv.cfg.Store = rs
+
+	if n, err := f.srv.ReconcileWorkspaceEgressDecisions(t.Context()); err != nil || n != 0 {
+		t.Fatalf("reconcile = %d/%v, want 0 re-applied: the apply loop's row carries a newer list edit", n, err)
+	}
+	if approved, _ := f.egressLists(t, ws); slices.Contains(approved, host) {
+		t.Fatalf("a verdict older than the list edit was written: approved=%v", approved)
 	}
 }
 

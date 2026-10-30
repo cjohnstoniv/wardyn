@@ -10,10 +10,12 @@
 // is structural (the workspace can't function without reaching it) and
 // carries neither.
 import * as React from "react";
+import { Globe } from "lucide-react";
 import { toast } from "sonner";
 import { getErrorMessage } from "../../../lib/format";
 import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
 import { effectiveWorkspaceRequirements, type Workspace } from "../../../lib/types";
+import { EmptyState } from "../../wardyn/states";
 import { DetailSectionCard } from "./section-card";
 import { HostList, type HostRow } from "./host-list";
 import { useOperator, useSecurityOperator } from "../../wardyn/operator-context";
@@ -171,7 +173,11 @@ export function AllowedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; on
       title={`Allowed hosts · ${rows.length}`}
       subtitle={EGRESS.ALLOWED_HOSTS_SUBTITLE}
     >
-      <HostList rows={rows} emptyText="Nothing approved yet." canRemove={!!securityOperator} removing={removing} onRemove={(h) => void remove(h)} />
+      {rows.length === 0 ? (
+        <EmptyState size="compact" icon={Globe} title={EGRESS.ALLOWED_EMPTY_TITLE} description={EGRESS.ALLOWED_EMPTY_BODY} />
+      ) : (
+        <HostList rows={rows} emptyText={EGRESS.ALLOWED_EMPTY_TITLE} canRemove={!!securityOperator} removing={removing} onRemove={(h) => void remove(h)} />
+      )}
     </DetailSectionCard>
   );
 }

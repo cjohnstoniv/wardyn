@@ -51,16 +51,20 @@ async function stubApprovals(page: Page, runId: string, approvals: unknown[]): P
   });
 }
 
-test.describe("Run lifetime — the Ends row (real backend round trip)", () => {
+test.describe("Run lifetime — the header's Ends pill (real backend round trip)", () => {
   test("a fresh run has no end; 'Set an end…' sets one, and Extend pushes it further out", async ({ page }) => {
     await gotoConsole(page);
     const id = await seedRun(page, "run-lifetime e2e ends " + randomUUID().slice(0, 8));
     await navToRoute(page, `/runs/${id}`);
 
-    const row = page.getByTestId("run-ends-row");
-    await expect(row.getByText("No end")).toBeVisible();
+    // #3034: the lifetime is two pill menus on the header's facts row, not a band under it.
+    await expect(page.getByTestId("run-ends-row")).toHaveCount(0);
+    const pill = page.getByTestId("run-ends-pill");
+    await expect(pill).toHaveText("Ends: never");
+    await expect(page.getByTestId("run-waits-pill")).toBeVisible();
 
-    await row.getByRole("button", { name: "Set an end…" }).click();
+    await pill.click();
+    await page.getByRole("menuitem", { name: /Set an end…/ }).click();
     const dialog = page.getByRole("dialog", { name: "When this run ends" });
     await expect(dialog).toBeVisible();
     const input = dialog.locator('input[type="datetime-local"]');
@@ -70,15 +74,15 @@ test.describe("Run lifetime — the Ends row (real backend round trip)", () => {
     await input.fill(value);
     await dialog.getByRole("button", { name: "Save" }).click();
 
-    await expect(row.getByText(/^Ends /)).toBeVisible();
+    await expect(pill).toHaveText(/^Ends: (?!never)/);
     const afterSet = await consoleAPI(page, "GET", `/api/v1/runs/${id}`);
     const setEndsAt = JSON.parse(afterSet.text).ends_at as string;
     expect(setEndsAt).toBeTruthy();
 
     // Extend "1 more day" moves the CAPTURED end forward, not "now" — proven
     // at the unit level (run-ends-row.test.tsx); here it's the real PATCH.
-    await row.getByRole("button", { name: "Extend" }).click();
-    await page.getByText("1 more day").click();
+    await pill.click();
+    await page.getByRole("menuitem", { name: "1 more day" }).click();
     // The row already read "Ends …" before the click, so wait on the stored end
     // itself: a read that lands before the PATCH would still see the old one.
     let extendedEndsAt = setEndsAt;
@@ -99,7 +103,8 @@ test.describe("Run lifetime — the Change dialog's date", () => {
     await gotoConsole(page);
     const id = await seedRun(page, "run-lifetime e2e empty date " + randomUUID().slice(0, 8));
     await navToRoute(page, `/runs/${id}`);
-    await page.getByTestId("run-ends-row").getByRole("button", { name: "Set an end…" }).click();
+    await page.getByTestId("run-ends-pill").click();
+    await page.getByRole("menuitem", { name: /Set an end…/ }).click();
     const dialog = page.getByRole("dialog", { name: "When this run ends" });
     const input = dialog.locator('input[type="datetime-local"]');
     const save = dialog.getByRole("button", { name: "Save" });
@@ -118,7 +123,8 @@ test.describe("Run lifetime — No end on a run with a lifetime cap", () => {
     const id = await seedRun(page, "run-lifetime e2e no-end " + randomUUID().slice(0, 8));
     await stubRunDetail(page, id, { ends_at: aheadByHours(8), ...overlay });
     await navToRoute(page, `/runs/${id}`);
-    await page.getByTestId("run-ends-row").getByRole("button", { name: "Change…" }).click();
+    await page.getByTestId("run-ends-pill").click();
+    await page.getByRole("menuitem", { name: "Change…" }).click();
     const dialog = page.getByRole("dialog", { name: "When this run ends" });
     await expect(dialog).toBeVisible();
     return dialog;

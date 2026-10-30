@@ -51,6 +51,32 @@ import { useOperator } from "../wardyn/operator-context";
 const SSH_KEYS_DESCRIPTION =
   "Public keys only — Wardyn never stores or asks for a private key. Keys are yours alone; admins can't list anyone else's.";
 
+// What each chip means, on the page rather than in a hover-only title (r11 #2244, CONSOLE-RULES §8). The
+// sentences are the former titles, moved; docs/design/admin-access-canon.md freezes them.
+const ADMIN_OVERRIDE_NOTE =
+  "Registered while you were an admin, so this key reaches runs you do not own. Refreshed automatically each time you sign in, and expires on its own if you don't; delete and re-register the key to drop the override immediately.";
+const USER_ACCESS_NOTE =
+  "Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view.";
+
+// One line per chip kind that at least one listed key carries, under the keys table.
+export function SshKeyChipNotes({ keys }: { keys: SSHPublicKey[] }) {
+  const notes = [
+    keys.some((k) => k.role === "admin") && { chip: <Chip tone="warning">Admin override</Chip>, text: ADMIN_OVERRIDE_NOTE },
+    keys.some((k) => k.capped) && { chip: <Chip>User access</Chip>, text: USER_ACCESS_NOTE },
+  ].filter((n) => n !== false);
+  if (notes.length === 0) return null;
+  return (
+    <ul data-testid="ssh-key-chip-notes" className="mt-3 space-y-2">
+      {notes.map((n) => (
+        <li key={n.text} className="flex items-start gap-3 text-xs text-muted-foreground">
+          <span className="shrink-0">{n.chip}</span>
+          <span>{n.text}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) {
   const [keys, setKeys] = React.useState<SSHPublicKey[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
@@ -75,7 +101,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
   React.useEffect(load, [load]);
 
   // #1200 compact cards — one line, absent while unloaded. "No keys", not the
-  // EmptyState's own "No keys yet." — both render at once once expanded, and
+  // EmptyState's own "No keys yet" — both render at once once expanded, and
   // a query for that canon string must still resolve to a single node. The
   // error case is absent too (review R2-L1): the packet has no error summary
   // for this card, and ErrorState's own heading (states.tsx's STATES.
@@ -107,7 +133,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
         ) : keys.length === 0 ? (
           <EmptyState
             icon={KeyRound}
-            title="No keys yet."
+            title="No keys yet"
             description="Add your public key to connect over SSH."
             action={
               <Button onClick={() => setAddOpen(true)} disabled={addBlocked}>
@@ -138,12 +164,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
                           (internal/api/sshkeys.go never stamps security_admin,
                           deliberately). Unchanged by the three-tier model. */}
                       {k.role === "admin" && (
-                        <Chip
-                          tone="warning"
-                          title="Registered while you were an admin, so this key reaches runs you do not own. Refreshed automatically each time you sign in, and expires on its own if you don't; delete and re-register the key to drop the override immediately."
-                        >
-                          Admin override
-                        </Chip>
+                        <Chip tone="warning">Admin override</Chip>
                       )}
                       {/* #584: added in the user view, so capped at member
                           rights for good (docs/SSH.md §Bounds). Frozen strings:
@@ -153,9 +174,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
                           key); rewritten to "User access", tooltip pointing
                           at S-1's new Admin SSH keys card instead. */}
                       {k.capped && (
-                        <Chip title="Added in the user view, so it keeps user rights. To reach other people's runs over SSH, add a key in Settings in the admin view.">
-                          User access
-                        </Chip>
+                        <Chip>User access</Chip>
                       )}
                     </span>
                   </TableCell>
@@ -186,6 +205,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
           </Table>
         )}
       </div>
+      {status === "ready" && <SshKeyChipNotes keys={keys} />}
     </>
   );
 

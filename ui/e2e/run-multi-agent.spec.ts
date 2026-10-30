@@ -110,7 +110,7 @@ test.describe("A run with several agents", () => {
 
     await navToRoute(page, `/runs/${id}`);
     const strip = page.getByTestId("live-approvals");
-    await expect(strip.getByTestId("live-approval-row")).toContainText("Bash: npm ci");
+    await expect(strip.getByTestId("live-approval-row")).toContainText("Run npm ci");
     await expect(strip.getByText(/^· Asked by .*Codex/)).toBeVisible();
 
     await page.getByRole("link", { name: /^Approvals(\s+\d+)?$/ }).click();

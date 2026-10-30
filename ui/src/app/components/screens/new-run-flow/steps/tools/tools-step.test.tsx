@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { adoCapName } from "../../../../../lib/ado-access-copy";
 import { ADO_PAT } from "../../../../../lib/ado-pat-copy";
 import { secrets } from "../../../../../lib/api/secrets";
+import { MY_COMPONENTS, ORG_GITHUB } from "../../../../../lib/new-run-fixtures/scenarios/catalogue";
 import { SCENARIO_ACCESS, SETUP_ITEMS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import { CLAUDE_UNGATED, withFacts } from "../../../../../lib/new-run-fixtures/scenarios/tools-harness";
 import type { AccessFacts } from "../../../../../lib/types/new-run-access";
@@ -17,6 +18,7 @@ import type { HarnessSetFact } from "../../../../../lib/types/new-run-contract";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
+import { NR_WALLS } from "../../../../wardyn/copy/personal-walls";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import type { RunIntent } from "../../draft/run-intent";
 import { checkFailureText } from "../../draft/use-intent-checks";
@@ -30,6 +32,7 @@ const h = vi.hoisted(() => ({
   scm: undefined as unknown,
   refresh: vi.fn(),
   connect: vi.fn(),
+  mine: vi.fn(),
 }));
 vi.mock("../../draft/use-intent-checks", async (orig) => ({
   ...(await orig<typeof import("../../draft/use-intent-checks")>()),
@@ -44,7 +47,7 @@ vi.mock("../../../../wardyn/model-access-context", () => ({
   }),
 }));
 // The catalogue's own read is its tests' (catalogue.test.tsx): here it stays unanswered.
-vi.mock("../../../../../lib/api/components", () => ({ components: { mine: () => new Promise(() => {}), saveMine: vi.fn() } }));
+vi.mock("../../../../../lib/api/components", () => ({ components: { mine: () => h.mine(), saveMine: vi.fn() } }));
 vi.mock("../../../../../lib/hooks/use-ado-connect", () => ({
   useAdoConnect: () => ({ connecting: false, connect: h.connect, connectFallback: h.connect, cancel: () => {}, blockedUrl: null }),
 }));
@@ -81,6 +84,7 @@ beforeEach(() => {
   h.refresh.mockReset();
   h.connect.mockReset().mockResolvedValue(true);
   answer(undefined, false);
+  h.mine.mockReturnValue(new Promise(() => {}));
   vi.spyOn(secrets, "setSecret").mockResolvedValue(undefined);
 });
 afterEach(() => {
@@ -92,6 +96,41 @@ afterEach(() => {
 });
 
 describe("Tools and access step", () => {
+  it("gives the GitHub CLI card the repositories the preview says go through the GitHub App", async () => {
+    h.mine.mockResolvedValue({ ...MY_COMPONENTS, org: [ORG_GITHUB], clis: MY_COMPONENTS.clis.map((c) => (c.kind === "github" ? { ...c, state: "available", rows: [ORG_GITHUB.id] } : c)) });
+    h.checks.preview = {
+      result: {
+        access: SCENARIO_ACCESS.member,
+        components: [{ kind: "git_provider", provider: "github", lane: "app", id: "git_provider:github:app:acme", reason: "workspace", status: "ready", requirements: [], repos: ["github.com/acme/web-app"] }],
+      },
+      current: true,
+    };
+    show();
+    const card = (await screen.findByRole("heading", { name: ORG_GITHUB.name })).closest("li") as HTMLElement;
+    expect(within(card).getByText(NR_TOOLS.GITHUB_REPOS("acme/web-app"))).toBeTruthy();
+  });
+
+  // The e2e spec "Only the sites listed" gets this from the server's preview of a member with no walls saved.
+  it("offers Only the sites listed while the preview says the run allows all egress, and sends allow_all_egress false", async () => {
+    answer({ ...SCENARIO_ACCESS.member, unlisted: { mode: "always_deny", allow_all: true, decider: "you" } }, true);
+    const Egress = () => <p data-testid="egress">{JSON.stringify(useNewRunDraft().intent.overrides?.egress ?? null)}</p>;
+    render(
+      <NewRunDraftProvider owner="alice">
+        <Seed intent={READY}><ToolsStep {...props} /><Egress /></Seed>
+      </NewRunDraftProvider>,
+    );
+    const only = await screen.findByRole("switch", { name: NR_WALLS.ONLY_LISTED });
+    await userEvent.click(only);
+    expect(JSON.parse(screen.getByTestId("egress").textContent!)).toEqual({ allow_all_egress: false });
+    expect(screen.getByRole("switch", { name: NR_WALLS.ONLY_LISTED })).toBeChecked();
+  });
+  it("offers no such switch when the preview already narrows the run, as it does for a person whose walls name only some sites", async () => {
+    answer({ ...SCENARIO_ACCESS.member, unlisted: { mode: "always_deny", allow_all: false, decider: "you" } }, true);
+    show();
+    await screen.findByRole("heading", { name: NR_TOOLS.NETWORK_TITLE });
+    expect(screen.queryByRole("switch", { name: NR_WALLS.ONLY_LISTED })).toBeNull();
+  });
+
   const SENTENCE = "This tool cannot be added to this run.";
 
   it("an added inline component's row removes that component through the answer it came from", async () => {

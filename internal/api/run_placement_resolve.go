@@ -87,8 +87,10 @@ type placementInput struct {
 	dryDoor bool
 	// promoted: the queue's start of a promoted run, whose runner the promotion already found room on.
 	promoted bool
-	// drives: the run mounts drives, which no person's own runner does.
-	drives bool
+	// drives: the run mounts drives, which a person's own runner does only from a second place bound to
+	// it; driveRunner is the one runner every drive is bound to (drivesBoundRunner), nil for none.
+	drives      bool
+	driveRunner *uuid.UUID
 	// noLocal: a waiting run the local-eligibility step refused on the person's own runners
 	// (queuedLaunch.NoLocal); set by the queue's verdict and by a promoted run's start, never by a launch.
 	noLocal bool
@@ -279,10 +281,12 @@ func (s *Server) offerKinds(ctx context.Context, f placementInput, pool types.Ru
 
 // kindTargets splits the pool's candidates by kind and keeps the kinds this run may use: the one its
 // request asks for (a pin asks for local), then none its owner's profile denies, since deny_placements
-// holds each kind, not the pool. A run with drives keeps only the remote-hosted kind when the pool has
-// it, as no drive mounts on a person's own runner (a pin naming that runner is refused, not dropped); with none it stays on the person's own runners for
+// holds each kind, not the pool. A run whose drives are all bound to one of the person's own runners in
+// the pool keeps that runner alone of their own. Any other run with drives keeps only the remote-hosted
+// kind when the pool has it, as no other drive mounts on a person's own runner (a pin naming that runner is refused, not dropped); with none it stays on the person's own runners for
 // the drive step to refuse. A waiting run the local-eligibility step refused on the person's own runners
-// (noLocal) keeps only the remote-hosted kind the same way. A kind the pool has no runner of is the kind
+// (noLocal) keeps only the remote-hosted kind the same way. A macOS VM run never keeps the remote-hosted
+// kind, so neither rule moves it off the person's own Macs. A kind the pool has no runner of is the kind
 // mismatch, and a pool whose every kind is denied is the deny sentence for the first of them.
 func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.RunnerPool, targets []poolTarget) (map[types.Placement][]poolTarget, *runRefusal) {
 	kinds := map[types.Placement][]poolTarget{}
@@ -295,6 +299,15 @@ func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.R
 		}
 		kinds = map[types.Placement][]poolTarget{asked: kinds[asked]}
 	}
+	// A macOS VM runs only on a person's own Mac, so the remote-hosted kind is never a candidate: the run
+	// waits for its Mac or is refused for why it cannot have one, never sent where it cannot start. Left
+	// with no other kind, it is refused for that.
+	if _, remote := kinds[types.PlacementRemote]; remote && types.MachineKind(f.req.MachineKind).IsMacOSVM() {
+		delete(kinds, types.PlacementRemote)
+		if len(kinds) == 0 {
+			return nil, placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind"}, macOSVMOnRemote)
+		}
+	}
 	var refused types.Placement
 	for _, kind := range kindOrder {
 		if _, ok := kinds[kind]; ok && slices.Contains(s.deniedPlacements(ctx, f.ceiling), kind) {
@@ -304,6 +317,12 @@ func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.R
 	}
 	if len(kinds) == 0 {
 		return nil, s.placementDeniedRefusal(ctx, refused, f.ceiling)
+	}
+	// A run whose every drive is bound to one of the person's own runners in this pool keeps that runner
+	// alone of their own (M10).
+	if on := targetsOn(kinds[types.PlacementLocal], f.driveRunner); f.drives && !f.noLocal && len(on) > 0 {
+		kinds[types.PlacementLocal] = on
+		return kinds, nil
 	}
 	if _, remote := kinds[types.PlacementRemote]; remote && (f.drives || f.noLocal) {
 		// A pin names the person's own runner, which this run cannot use: say so, never route it elsewhere.
@@ -318,6 +337,17 @@ func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.R
 		delete(kinds, types.PlacementLocal)
 	}
 	return kinds, nil
+}
+
+// targetsOn is the targets that are runner, none when runner is nil.
+func targetsOn(targets []poolTarget, runner *uuid.UUID) []poolTarget {
+	var out []poolTarget
+	for _, t := range targets {
+		if runner != nil && t.runnerID != nil && *t.runnerID == *runner {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // kindOrder is the order the pool offers its kinds in: the person's own runners first, which spend no
@@ -703,6 +733,13 @@ func (p runPlacement) auditFields(run types.AgentRun, runnerName string) map[str
 	if runnerName != "" {
 		data["runner_name"] = runnerName
 	}
+	if run.RunnerID != nil {
+		for _, t := range p.eligible {
+			if t.runnerID != nil && *t.runnerID == *run.RunnerID && t.runsNamespace != "" {
+				data["runs_namespace"] = t.runsNamespace
+			}
+		}
+	}
 	return data
 }
 
@@ -770,6 +807,11 @@ func eligibleTargets(targets []poolTarget, d placementDemand) ([]poolTarget, pla
 
 func (d placementDemand) refusal(t poolTarget) placement.Reason {
 	if t.offline {
+		return placement.ReasonRunnerOffline
+	}
+	// A runner that does not advertise the namespace its membership names cannot take the run, answered
+	// like an offline member: the pool has none eligible.
+	if !t.servesRunsNamespace() {
 		return placement.ReasonRunnerOffline
 	}
 	if d.reqCCOK {

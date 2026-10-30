@@ -60,6 +60,9 @@ type bareWriteErrorEntry struct {
 }
 
 var bareWriteErrorAllowlist = map[string]bareWriteErrorEntry{
+	// The recording range check refuses exactly as the recording read (recording.Handler) does, so it is
+	// no existence oracle beside it; TestRecordingChain_ReadersOnly pins the bytes against that handler.
+	"recording_chain.go:recordingNotFound": {1, "the recording read's own reason-less 404, byte for byte; TestRecordingChain_ReadersOnly"},
 	// The same two provider sites, split between selection authorization and
 	// credential liveness: "a transient store
 	// failure is no door" (multi-provider §5.8) — the site config read and

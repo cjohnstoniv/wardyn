@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -279,9 +280,9 @@ func validateWorkspaceBaseImage(b *types.WorkspaceBaseImage) string {
 		return ""
 	}
 	switch b.Kind {
-	case "recommended", "registry", "custom", "byo":
+	case "recommended", "registry", "custom", "byo", types.BaseImageKindPrewrapped:
 	default:
-		return `base_image.kind must be "recommended", "registry", "custom", or "byo"`
+		return `base_image.kind must be "recommended", "registry", "custom", "byo" or "prewrapped"`
 	}
 	if b.Kind != "recommended" {
 		if strings.TrimSpace(b.Image) == "" {
@@ -371,6 +372,17 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 		}
 		return out, nil
 	}
+	// A service identity lists only what it may launch. Fetch-all and filter before servePage windows it,
+	// so a page never comes back short; a site config that cannot be read answers 503 (fail closed).
+	if _, _, ok := serviceIdentityFromContext(r.Context()); ok {
+		rows, err := s.serviceLaunchableWorkspaces(r)
+		if errors.Is(err, errServiceSiteConfigUnreadable) {
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonRosterUnreadable, "the site configuration could not be read; try again")
+			return
+		}
+		servePage(w, r, page, nil, func() ([]types.Workspace, error) { return redact(rows, err) })
+		return
+	}
 	if !s.isSecurityOperator(r.Context()) {
 		principal := principalFromRequest(r)
 		var ownerPageFn func(store.Page) ([]types.Workspace, error)
@@ -401,6 +413,35 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	servePage(w, r, page, pageFn, func() ([]types.Workspace, error) {
 		return redact(s.cfg.Store.ListWorkspaces(r.Context()))
 	})
+}
+
+// errServiceSiteConfigUnreadable is serviceLaunchableWorkspaces' refusal when the site config cannot be read.
+var errServiceSiteConfigUnreadable = errors.New("site config unreadable")
+
+// serviceLaunchableWorkspaces is the service arm of GET /workspaces: every row the caller may launch, the
+// launch tier's ownership half (mayLaunchWorkspace) and its capability half (workspaceAvailableToCaller).
+// Unlike the member arm's advisory stamp, a site config that cannot be read is an error here, never the
+// degraded "no providers configured" answer, so a provider-refused row is never listed. Known limits, neither
+// of which widens reach: a row whose repo no enabled provider admits is still listed (launch refuses it), and
+// a grants read error drops the row. r should carry a capBatch memo (withCapBatch).
+func (s *Server) serviceLaunchableWorkspaces(r *http.Request) ([]types.Workspace, error) {
+	ctx := r.Context()
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		slog.ErrorContext(ctx, "api: get site config for a service workspace list", "err", err)
+		return nil, errServiceSiteConfigUnreadable
+	}
+	all, err := s.cfg.Store.ListWorkspaces(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]types.Workspace, 0, len(all))
+	for _, ws := range all {
+		if s.mayLaunchWorkspace(r, ws) && s.workspaceAvailableToCaller(ctx, sc, ws) {
+			out = append(out, ws)
+		}
+	}
+	return out, nil
 }
 
 // handleGetWorkspace returns one workspace by id (404 when unknown).
@@ -596,6 +637,10 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, nil)
+	if errors.Is(aerr, errPrewrappedNotRegistered) {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPrewrappedImageNotRegistered, aerr.Error())
+		return
+	}
 	if aerr != nil {
 		writeServerError(w, r, "attach sources", aerr)
 		return
@@ -736,6 +781,10 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		// SourceID — must be read before the next line overwrites
 		// ws.Attachments.
 		atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, ws.Attachments)
+		if errors.Is(aerr, errPrewrappedNotRegistered) {
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonPrewrappedImageNotRegistered, aerr.Error())
+			return
+		}
 		if aerr != nil {
 			writeServerError(w, r, "attach sources", aerr)
 			return

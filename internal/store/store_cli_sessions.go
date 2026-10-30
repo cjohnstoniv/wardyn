@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -259,6 +260,23 @@ func (s PG) CreateCLISession(ctx context.Context, sess CLISessionRow, secret str
 	var out types.APIToken
 	err = s.cliTx(ctx, func(tx pgx.Tx) error {
 		id := sess.Identity
+		// Ordered against every cut: the shared revocation-order lock, held to commit, comes after the
+		// guard's row locks (as in SuspendIdentity). A cut that committed before it is read below against
+		// the approval's own sequence; a cut after it waits for this commit, and its sweep then ends the row.
+		// The read is its own statement, so its snapshot is taken after the lock is granted.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared($1, 0)`, db.RevocationOrderLockClass); err != nil {
+			return fmt.Errorf("store: lock revocation order: %w", err)
+		}
+		var cut bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM (
+				SELECT sub, seq FROM oidc_session_revocations UNION ALL SELECT sub, seq FROM oidc_session_cuts) c
+			WHERE (c.sub = $1 OR lower(c.sub) = lower($2) OR c.sub = '') AND c.seq > $3)`,
+			id.Principal, id.Email, id.RevSeq).Scan(&cut); err != nil {
+			return fmt.Errorf("store: cli session cut check: %w", err)
+		}
+		if cut {
+			return ErrIdentityDeactivated
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO cli_sessions (id, principal, email, role, user_type, groups, groups_truncated, rev_seq, authority_epoch,
 			                          identity_stamped_at, machine, store, public_key, secret_sha256, created_at, last_refresh_at, expires_at)
@@ -279,18 +297,34 @@ func (s PG) GetCLISession(ctx context.Context, id uuid.UUID) (CLISessionRow, err
 	return scanCLISession(s.Pool.QueryRow(ctx, `SELECT `+cliSessionCols+` FROM cli_sessions WHERE id = $1`, id))
 }
 
-// RotateCLISession is the refresh's write.
+// RotateCLISession is the refresh's write. The new access token's identity is the session row's,
+// read under the row lock the generation check takes, not tok's snapshot: a sign-in that re-stamped
+// the session after the caller read it is carried onto the token (RefreshAPITokenIdentity locks the
+// same row first). A changed identity is not a reused secret, so it never reads as ErrConflict.
 func (s PG) RotateCLISession(ctx context.Context, id uuid.UUID, generation int64, newSecret string, now time.Time, tok types.APIToken, raw string) (types.APIToken, error) {
 	var out types.APIToken
 	err := s.cliTx(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `
-			UPDATE cli_sessions SET secret_sha256 = $3, generation = generation + 1, last_refresh_at = $4
-			WHERE id = $1 AND generation = $2 AND ended_at IS NULL`, id, generation, hashToken(newSecret), now)
-		if err != nil {
-			return fmt.Errorf("store: rotate cli session: %w", err)
-		}
-		if tag.RowsAffected() != 1 {
+		var groups []byte
+		var stamped time.Time
+		err := tx.QueryRow(ctx, `
+			SELECT role, user_type, groups, groups_truncated, identity_stamped_at FROM cli_sessions
+			WHERE id = $1 AND generation = $2 AND ended_at IS NULL FOR UPDATE`, id, generation).
+			Scan(&tok.Role, &tok.UserType, &groups, &tok.GroupsTruncated, &stamped)
+		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrConflict
+		} else if err != nil {
+			return fmt.Errorf("store: read cli session identity: %w", err)
+		}
+		tok.Groups = nil
+		if groups != nil {
+			if err := json.Unmarshal(groups, &tok.Groups); err != nil {
+				return fmt.Errorf("store: scan cli session groups: %w", err)
+			}
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE cli_sessions SET secret_sha256 = $2, generation = generation + 1, last_refresh_at = $3
+			WHERE id = $1`, id, hashToken(newSecret), now); err != nil {
+			return fmt.Errorf("store: rotate cli session: %w", err)
 		}
 		// The new access token replaces the old: a session holds one live cli_access token, so a
 		// rotation is count-neutral under the per-person token cap and a rotated-past token stops at
@@ -300,7 +334,16 @@ func (s PG) RotateCLISession(ctx context.Context, id uuid.UUID, generation int64
 			return fmt.Errorf("store: revoke rotated cli token: %w", err)
 		}
 		out, err = s.insertAPIToken(ctx, tx, tok, raw)
-		return err
+		if err != nil {
+			return err
+		}
+		// The insert stamps now(); the token carries the session's stamp so the role-stamp TTL
+		// counts from the sign-in, not from the rotation.
+		if _, err := tx.Exec(ctx, `UPDATE api_tokens SET identity_stamped_at = $2 WHERE id = $1`, out.ID, stamped); err != nil {
+			return fmt.Errorf("store: stamp rotated cli token: %w", err)
+		}
+		out.IdentityStampedAt = &stamped
+		return nil
 	})
 	return out, err
 }

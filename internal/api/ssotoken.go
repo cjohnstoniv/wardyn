@@ -29,7 +29,7 @@ const maxSSOTokenUploadBytes = 16 << 10 // 16 KiB
 // names no model provider: a sign-in launched before the model-provider
 // conversion, whose capture no provider could serve. Refused rather than
 // stored; the person signs in again from a provider's own door.
-const ssoTokenUnstampedScopeRefusal = "this sign-in started before Wardyn recorded which model provider it was for — " +
+const ssoTokenUnstampedScopeRefusal = "This sign-in started before Wardyn recorded which model provider it was for — " +
 	"start the sign-in again from Getting started"
 
 // ssoTokenRunKilledRefusal answers a login run that has been KILLED: its own
@@ -39,7 +39,7 @@ const ssoTokenUnstampedScopeRefusal = "this sign-in started before Wardyn record
 // attempt won rather than blaming this one — CONDITIONALLY: after a
 // Cancel, or the pane's own post-capture kill, there is no newer sandbox to be
 // sent to, and a sentence that assumes one sends the reader looking for it.
-const ssoTokenRunKilledRefusal = "this sign-in sandbox was closed — a newer sign-in for you replaced it, " +
+const ssoTokenRunKilledRefusal = "This sign-in sandbox was closed — a newer sign-in for you replaced it, " +
 	"or it was cancelled; if you started a newer sign-in, finish it there"
 
 // handleUploadSSOToken accepts a PUT /api/v1/internal/sso-token/{runID} from
@@ -167,16 +167,16 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	}
 	defer releaseLoginLock()
 
-	// Serialised per scope, because the once-only guard below is a read-then-put
+	// Serialised per credential, because the once-only guard below is a read-then-put
 	// (a read-then-put race): two concurrent PUTs from the same login sandbox both read
 	// "not captured yet" and both stored, last write winning, so the guard held
 	// only against a SEQUENTIAL second capture. This is the refresher's own
-	// per-owner single-flight lock (awssso_refresh.go), keyed the same way — the
-	// scope IS the secret-store namespace both paths read-modify-write, so an
-	// upload racing a dispatch-time renewal of the same credential is serialised
-	// too, and two different people's uploads still never wait on each other.
+	// per-credential single-flight lock (awssso_locks.go), so an upload racing a
+	// dispatch-time renewal of the same credential is serialised too, and a
+	// renewal of another one never waits on it. The person's lock is taken first,
+	// as the whole-person erase takes it: no capture lands while an erase runs.
 	// Held through the store so the check and the write are one critical section.
-	lctx, unlock, lerr := s.lockAWSSSOOwner(r.Context(), scope.owner)
+	lctx, unlock, lerr := s.lockAWSSSOCapture(r.Context(), scope)
 	if lerr != nil {
 		slog.WarnContext(r.Context(), "wardynd: could not take the AWS SSO credential lock; refusing the capture", slog.Any("err", lerr))
 		s.refuseCapture(w, r, claims, http.StatusServiceUnavailable, reasonLockUnavailable, lockUnavailableMsg, &scope)
@@ -330,13 +330,28 @@ const signInCaptureKillGrace = 5 * time.Second
 // signInCaptureReadTimeout bounds killSignInRunAfterCapture's own post-grace
 // run read (below) — a plain single-row read, nowhere near as long as the kill
 // cascade that may follow it. background.go's backgroundShutdownBudget is
-// built from this PLUS killCascadeTimeout: that sum is this goroutine's own
-// worst-case internal bound, the one WaitBackground must actually cover.
+// built from this PLUS killCascadeTimeout: that sum is one pass of this
+// goroutine's retry loop, the one WaitBackground must actually cover (see there
+// for the whole-loop ceiling).
 // Before this existed the read shared killCascadeTimeout's own 30s budget, so
 // the read-then-cascade could together take up to 60s against a 35s shutdown
 // budget — a shutdown landing between the two would abandon a live kill
 // cascade mid-flight instead of waiting the bounded time it asked for.
 const signInCaptureReadTimeout = 5 * time.Second
+
+// readSignInRunToEnd reads the captured sign-in run, once more when the first read failed fast with a store
+// error (a dropped pooled connection): without the run there is nothing to kill, and the run would sit to its idle
+// cap. A read that timed out is not retried, so the read phase stays inside signInCaptureReadTimeout and the
+// background shutdown budget holds.
+func (s *Server) readSignInRunToEnd(ctx context.Context, runID uuid.UUID) (types.AgentRun, error) {
+	readCtx, cancel := context.WithTimeout(ctx, signInCaptureReadTimeout)
+	defer cancel()
+	run, err := s.cfg.Store.GetRun(readCtx, runID)
+	if err != nil && readCtx.Err() == nil {
+		run, err = s.cfg.Store.GetRun(readCtx, runID)
+	}
+	return run, err
+}
 
 // killSignInRunAfterCapture is #151's server belt: a sign-in run whose capture
 // was just STORED ends on the server, so a closed console tab (or a pane mount
@@ -375,9 +390,7 @@ func (s *Server) killSignInRunAfterCapture(ctx context.Context, runID uuid.UUID,
 		// now holds, as supersedeOneLoginRun does. Only a lost CAS repeats, so
 		// the extra reads are cheap; the cascade itself runs once.
 		for attempt := 0; attempt < supersedeCASAttempts; attempt++ {
-			readCtx, cancel := context.WithTimeout(detached, signInCaptureReadTimeout)
-			run, err := s.cfg.Store.GetRun(readCtx, runID)
-			cancel()
+			run, err := s.readSignInRunToEnd(detached, runID)
 			if err != nil {
 				slog.WarnContext(detached, "wardynd: could not read a captured sign-in run to end it",
 					slog.String("run_id", runID.String()), slog.Any("error", err))

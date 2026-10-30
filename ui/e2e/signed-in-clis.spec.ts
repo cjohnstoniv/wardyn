@@ -58,7 +58,7 @@ async function openAccount(page: Page): Promise<void> {
   await asRealMember(page);
   await gotoConsole(page, "user");
   await navToRoute(page, "/account");
-  await expect(page.getByRole("heading", { name: "Your account", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your settings", level: 1 })).toBeVisible();
 }
 
 const cardOf = (page: Page) => page.getByTestId("signed-in-clis-card");

@@ -25,7 +25,25 @@ vi.mock("../../lib/api/runs", () => ({
 vi.mock("../../lib/api/policies", () => ({
   policies: { createPolicy: (...a: unknown[]) => createPolicyMock(...a) },
 }));
+const getAvailabilityMock = vi.fn();
+const putAvailabilityMock = vi.fn();
+const upsertGrantMock = vi.fn();
+vi.mock("../../lib/api/permissions", async () => {
+  const actual = await vi.importActual<typeof import("../../lib/api/permissions")>("../../lib/api/permissions");
+  return {
+    ...actual,
+    permissions: {
+      ...actual.permissions,
+      getAvailability: (...a: unknown[]) => getAvailabilityMock(...a),
+      putAvailability: (...a: unknown[]) => putAvailabilityMock(...a),
+      upsertGrant: (...a: unknown[]) => upsertGrantMock(...a),
+      listUserTypes: async () => [],
+    },
+  };
+});
 
+import { HttpError } from "../../lib/api/core";
+import { AVAILABILITY } from "../../lib/availability-copy";
 import { ProfileReview } from "./profile-review";
 import { setField } from "../../../test/set-field";
 
@@ -75,6 +93,15 @@ describe("ProfileReview", () => {
     createPolicyMock.mockReset();
     profileRunMock.mockResolvedValue(proposal());
     createPolicyMock.mockResolvedValue({ id: "pol-1" });
+    getAvailabilityMock.mockReset();
+    putAvailabilityMock.mockReset();
+    upsertGrantMock.mockReset();
+    getAvailabilityMock.mockImplementation(async (kind: string, value: string) => ({
+      kind,
+      value,
+      restricted: false,
+      allowed_by: [],
+    }));
   });
 
   it("synthesizes a profile for the run and renders the observations", async () => {
@@ -164,20 +191,65 @@ describe("ProfileReview", () => {
     expect(screen.queryByLabelText(/policy name/i)).not.toBeInTheDocument();
   });
 
-  it("Save as is persists directly under the workspace+recording name (no dialog)", async () => {
+  it("the sheet foot has one Save as policy; Save as is and Save as with a name are gone (#2514)", async () => {
+    render(<ProfileReview runId="run-1" suggestedName="acme-api-build-test" onClose={() => {}} />);
+    await screen.findByText("Overall risk");
+
+    expect(screen.getAllByRole("button", { name: /save as/i })).toHaveLength(1);
+    expect(screen.queryByText(/save as is/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/with a name/i)).not.toBeInTheDocument();
+  });
+
+  it("opens the dialog with the recording's name and Available to at Everyone; Save policy writes the list after the policy (#2514)", async () => {
     const onClose = vi.fn();
+    createPolicyMock.mockResolvedValue({ id: "pol-1" });
     render(<ProfileReview runId="run-1" suggestedName="acme-api-build-test" onClose={onClose} />);
     await screen.findByText("Overall risk");
 
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    await user.click(screen.getByTestId("profile-save-as-is"));
+    await user.click(screen.getByRole("button", { name: /^save as policy$/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Save as policy" });
+    expect(within(dialog).getByLabelText(/policy name/i)).toHaveValue("acme-api-build-test");
+    expect(within(dialog).getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
+    expect(within(dialog).getByTestId("availability-only").textContent).toBe(AVAILABILITY.POLICY_ONLY_HINT);
+    expect(within(dialog).getByText(AVAILABILITY.POLICY_NOTE)).toBeInTheDocument();
 
-    await waitFor(() => expect(createPolicyMock).toHaveBeenCalledTimes(1));
+    await user.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
+    // Only these with nobody listed holds Save policy shut.
+    expect(within(dialog).getByRole("button", { name: /^save policy$/i })).toBeDisabled();
+    setField(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "team-docs");
+    await user.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    await user.click(within(dialog).getByRole("button", { name: /^save policy$/i }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(createPolicyMock.mock.calls[0][0]).toBe("acme-api-build-test");
-    expect(createPolicyMock.mock.calls[0][1]).toMatchObject({
-      allowed_domains: ["api.anthropic.com", "github.com"],
-    });
-    expect(toastSuccess).toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalled(); // closes the drawer on success
+    expect(upsertGrantMock).toHaveBeenCalledWith(
+      expect.objectContaining({ subject: "team-docs", capability: "policy", value: "pol-1", effect: "allow" }),
+    );
+    expect(putAvailabilityMock).toHaveBeenCalledWith("policy", "pol-1", true);
+  });
+
+  it("a refused list write keeps the dialog open with the three-part alert and the live control (#2514)", async () => {
+    const onClose = vi.fn();
+    createPolicyMock.mockResolvedValue({ id: "pol-1" });
+    upsertGrantMock.mockRejectedValue(new HttpError(400, "That group doesn't exist."));
+    render(<ProfileReview runId="run-1" suggestedName="acme-api-build-test" onClose={onClose} />);
+    await screen.findByText("Overall risk");
+
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole("button", { name: /^save as policy$/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Save as policy" });
+    await user.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
+    setField(within(dialog).getByPlaceholderText(AVAILABILITY.ADD_PLACEHOLDER), "team-docs");
+    await user.click(within(dialog).getByRole("button", { name: AVAILABILITY.ADD_CTA }));
+    await user.click(within(dialog).getByRole("button", { name: /^save policy$/i }));
+
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert).toHaveTextContent(AVAILABILITY.CREATE_PARTIAL_TITLE);
+    expect(alert).toHaveTextContent("That group doesn't exist.");
+    expect(alert).toHaveTextContent(AVAILABILITY.CREATE_PARTIAL_EVERYONE);
+    expect(onClose).not.toHaveBeenCalled();
+    await waitFor(() => expect(getAvailabilityMock).toHaveBeenCalledWith("policy", "pol-1"));
+    expect(createPolicyMock).toHaveBeenCalledTimes(1);
   });
 });

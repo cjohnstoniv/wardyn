@@ -428,7 +428,9 @@ func run() error {
 		DefaultPolicy:       knobs.defaultPolicy,
 		TrustedCAPEM:        trustedCAPEM,
 		EgressPortRule:      egressPortRule(*f.egressPortRule),
+		DesktopSignins:      *f.desktopSignins == "on",
 		DemoVideoBaseURL:    knobs.demoVideoBaseURL,
+		CLIArtifactBase:     knobs.cliArtifactBase,
 		OrgCAFingerprints:   knobs.orgCAFingerprints,
 		RunnerTarget:        runnerTarget,
 		RunnerOrgURL:        *f.runnerOrgURL,
@@ -458,9 +460,9 @@ func run() error {
 		SessionRevocations:            sessionRevocationsFor(feats.authn, pool),
 		OperatorEmails:                splitCSV(*f.oidcOperatorEmails),
 		AllowEmailMappings:            *f.oidcAllowEmailMappings,
-		CapabilityGrantsVerifiedEmail: *f.capabilityGrantsVerifiedEmail,
-		GovernanceUnitPutExistingOnly: *f.governanceUnitPutExistingOnly,
-		EgressHostPortGrantsInert:     *f.egressHostPortGrantsInert,
+		UnverifiedEmailCapGrantsMatch: f.unverifiedEmailGrants(),
+		GovernanceUnitPutCreates:      f.unitPutCreates(),
+		EgressHostPortGrantsMatch:     f.hostPortGrantsMatch(),
 		UserMounts:                    memberMounts,
 		UserDriveHostRoots:            driveHostRoots,
 		ImageBuilder:                  feats.imgBuilder,
@@ -509,6 +511,7 @@ func run() error {
 		DisableGitPATBroker:      strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
 		RefuseGitPATBrokerOff:    *f.gitPATBrokerOffRefused,
 		ScrubProxyResponses:      *f.proxyResponseScrub,
+		CanonicalPushRepos:       *f.pushHoldCanonicalRepos,
 		AttachLocal:              strings.EqualFold(strings.TrimSpace(*f.attachLocal), "on"),
 		EnvSecretPlaceholders:    *f.envSecretPlaceholders,
 		FileSecretPlaceholders:   *f.fileSecretPlaceholders,
@@ -578,6 +581,7 @@ func run() error {
 	// answers "nothing to add", the authorization request is not widened and the
 	// callback stores nothing (internal/api/ado_entra_login.go).
 	attachLoginGrantSink(feats.authn, srv)
+	srv.LogGrantSwitches(bootCtx)
 
 	// The network settings a rebuilt database lost, from WARDYN_SITE_CONFIG_SEED_FILE,
 	// before anything is served. A no-op when the file is unset.
@@ -596,13 +600,16 @@ func run() error {
 		return err
 	}
 
+	// WARDYN_SSH_BIND_EARLY: bind the SSH gateway before the workers start. Nil (and a no-op) with it off.
+	sshLn := bindSSHGatewayEarly(f, srv)
+
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
 	startBackgroundWorkers(rootCtx, f, srv, run, pool, st, idp, brk, maskedRec, feats.recStore, leader, ticks)
 
 	// SSH gateway accept loop (own goroutine, like the periodic workers above,
 	// and extracted the same way — see startSSHGateway's own doc comment).
-	startSSHGateway(rootCtx, f, srv)
+	startSSHGateway(rootCtx, f, srv, sshLn)
 
 	// UI-sandbox gateway: a SECOND HTTP listener on its own origin (see
 	// startUISandboxGateway; a no-op when -ui-sandbox-listen is empty).
@@ -894,6 +901,7 @@ type serveKnobs struct {
 	defaultPolicy         types.RunPolicySpec
 	siteConfigSeed        *api.SiteConfigSeed
 	demoVideoBaseURL      string
+	cliArtifactBase       string
 	orgCAFingerprints     []string
 	governAdminRunsExempt []string
 	trustedProxies        []netip.Prefix
@@ -902,7 +910,8 @@ type serveKnobs struct {
 // parseServeKnobs reads, once at boot and failing closed on a malformed value, the two
 // files the Server is given (WARDYN_DEFAULT_POLICY and WARDYN_SITE_CONFIG_SEED_FILE) and
 // the free-text knobs api.Config carries parsed: WARDYN_DEMO_VIDEO_BASE_URL,
-// WARDYN_ORG_CA_FINGERPRINTS, WARDYN_GOVERN_ADMIN_RUNS_EXEMPT and WARDYN_TRUSTED_PROXIES.
+// WARDYN_CLI_ARTIFACT_BASE, WARDYN_ORG_CA_FINGERPRINTS, WARDYN_GOVERN_ADMIN_RUNS_EXEMPT
+// and WARDYN_TRUSTED_PROXIES.
 func parseServeKnobs(f *bootFlags) (k serveKnobs, err error) {
 	if k.defaultPolicy, err = api.LoadPolicySpec(*f.policyPath); err != nil {
 		return serveKnobs{}, err
@@ -911,6 +920,9 @@ func parseServeKnobs(f *bootFlags) (k serveKnobs, err error) {
 		return serveKnobs{}, err
 	}
 	if k.demoVideoBaseURL, err = api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL); err != nil {
+		return serveKnobs{}, err
+	}
+	if k.cliArtifactBase, err = api.ValidateCLIArtifactBase(*f.cliArtifactBase); err != nil {
 		return serveKnobs{}, err
 	}
 	if k.orgCAFingerprints, err = api.ParseOrgCAFingerprints(*f.orgCAFingerprints); err != nil {

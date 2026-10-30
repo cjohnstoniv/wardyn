@@ -68,6 +68,8 @@ func (s *Server) stepPolicy(f *runFold, rec *foldRecorder) bool {
 // re-runs every admission check seeding can invalidate (seedAndAdmitWorkspace).
 // Only create gates on git_credential there (review finding F2); the preview
 // reads no credential at all. ephemeralDirs is create's (WARDYN_EPHEMERAL_DIRS).
+// Every door decides signinImageUngranted from the seeded image; it refuses
+// nothing, and only create's dispatch reads it.
 func (s *Server) stepSeedWorkspace(f *runFold, rec *foldRecorder) bool {
 	ctx := f.r.Context()
 	var seed workspaceSeed
@@ -75,11 +77,13 @@ func (s *Server) stepSeedWorkspace(f *runFold, rec *foldRecorder) bool {
 		var refusal *runRefusal
 		seed, refusal = s.seedAuthorizedWorkspace(ctx, f.r, &f.spec, f.req)
 		f.ephemeralDirs, f.seed = seed.ephemeralDirs, seed
+		f.signinImageUngranted = refusal == nil && s.signinVariantUngranted(ctx, *f.req, seed)
 		return !refusal.write(s, f.w, f.r)
 	}
 	var ok bool
 	seed, ok = s.seedAndAdmitWorkspace(ctx, f.w, f.r, &f.spec, f.req, f.mode == foldCreate)
 	f.ephemeralDirs, f.seed = seed.ephemeralDirs, seed
+	f.signinImageUngranted = ok && s.signinVariantUngranted(ctx, *f.req, seed)
 	return ok
 }
 
@@ -131,9 +135,14 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	// referencedWorkspaces does.
 	var all []types.Workspace
 	if s.cfg.Store != nil {
-		all, _ = s.cfg.Store.ListWorkspaces(f.r.Context())
+		all, _ = s.listWorkspaces(f.r.Context())
 	}
-	carriers := s.launchCarrierRule(f.r, f.seed.attached).index(all)
+	// A repo a member's admission judged keeps the carrier it was admitted by.
+	rule := s.launchCarrierRule(f.r, f.seed.attached)
+	if rule.person != "" {
+		rule.admitted = admittedCarriersIn(f.r.Context())
+	}
+	carriers := rule.index(all)
 	f.wsRefs = attachedWorkspaceRefs(f.seed.attached, referencedWorkspacesBy(carriers, f.spec))
 	for _, ws := range f.wsRefs {
 		recordWorkspaceSources(rec, f.spec, ws)
@@ -228,10 +237,13 @@ func (s *Server) stepRequirements(f *runFold, rec *foldRecorder) bool {
 	// Review's checklist read the same map.
 	f.present = s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(f.r))
 	selections := resolveWorkspaceSelections(*f.req)
+	ahead := previewWorkspaceEgressHosts(f.wsRefs, f.ceiling.Spec.AllowedDomains)
+	// The denies create unions after this fold; the dry doors already hold the workspaces' in f.spec.
+	denied := slices.Concat(f.ceiling.Spec.DeniedDomains, workspaceDeniedEgress(f.wsRefs))
 	// One workspace at a time, so each one's additions are its own.
 	for _, ws := range f.wsRefs {
 		before := f.spec.Clone()
-		bound := &egressBound{trusted: f.ceiling.Spec.AllowedDomains}
+		bound := &egressBound{trusted: f.ceiling.Spec.AllowedDomains, ahead: ahead, denied: denied}
 		events, refusal := s.applyWorkspaceRequirementsFor(ctx, f.present, &f.spec, f.req.Agent, []types.Workspace{ws}, f.seed.attached, selections, bound)
 		if refusal != nil {
 			return !runError(refusal.status, refusal.reason, refusal.Error()).write(s, f.w, f.r)
@@ -336,7 +348,12 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 // runner_offline. The remote placement is the deployment's own executor and is
 // not asked.
 func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
-	return !s.placementCapabilityRefusal(f.r.Context(), *f.req, f.place, f.ceiling).write(s, f.w, f.r)
+	mounts := len(buildRunMounts(f.spec, s.userMountPosture(f.wsRefs))) // the folders the sandbox would get
+	var ask macOSVMAsk
+	if types.MachineKind(f.req.MachineKind).IsMacOSVM() {
+		ask = macOSVMAskOf(f.place.applied, f.harnesses, f.req.Agent)
+	}
+	return !s.placementCapabilityRefusalFor(f.r.Context(), *f.req, f.place, f.ceiling, mounts, ask).write(s, f.w, f.r)
 }
 
 // stepModelProvider makes the model-provider choice and refuses one whose
@@ -478,12 +495,15 @@ func (s *Server) stepAutonomy(f *runFold, rec *foldRecorder) bool {
 // it, already allows the tool. An interactive Claude Code run's default, and
 // every tool name it carries, is held to what its managed settings can say
 // first, as step 5 greys it. Last, the policy's harness_inner_walls: approvals
-// in Wardyn put a background Claude Code run on the gated lane, and walls the
-// run cannot meet refuse it (innerWallsFor).
+// in Wardyn put a background Claude Code run on the gated lane, approvals in the
+// harness turn a seed's seed_auto_tools off, and walls the run cannot meet
+// refuse it (innerWallsFor).
 func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 	before := f.spec
-	if warn := applyInnerWallsHold(f.req, f.spec); warn != "" {
-		f.policyWarns = append(f.policyWarns, warn)
+	for _, warn := range []string{applyInnerWallsHold(f.req, f.spec), applyInnerWallsSeed(f.req, f.spec)} {
+		if warn != "" {
+			f.policyWarns = append(f.policyWarns, warn)
+		}
 	}
 	s.applyToolPosture(f.req, &f.spec)
 	recordSpecAdds(rec, before, f.spec, provSource{Kind: provKindPosture})
@@ -495,7 +515,7 @@ func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	var refusal *runRefusal
-	f.innerWalls, refusal = innerWallsFor(*f.req, f.spec, f.harnesses)
+	f.innerWalls, refusal = innerWallsFor(*f.req, f.spec, f.harnesses, f.enforced)
 	return !refusal.write(s, f.w, f.r)
 }
 
@@ -704,21 +724,39 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 	return true
 }
 
-// stepDriveEligibility holds the run's drives to the kind of runner it got: no
-// drive mounts on a person's own runner, so a run stepPlacement left on one (its
-// pool has no remote-hosted runner for it, or the request asked for its own
-// runner) is refused, named, before anything is sized or minted. A person's own
-// drive is held off such a runner permanently (memberDriveNeverOnPool).
+// stepDriveEligibility holds the run's drives to the runner it got. On a person's
+// own runner a drive mounts only from a second place bound to that runner (M10);
+// any other drive, and a kept work folder, is refused there, named, before
+// anything is sized or minted. A person's own drive has no second place, so it
+// stays off such a runner (memberDriveNeverOnPool). A run with a second place
+// gets its mounts here, where its placement is known (seedRequestDrives left
+// them); every other run's were built with its drives.
 func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
-	if !mountsDrives(f.drives, f.keep) || !f.place.pooled || f.place.placement != types.PlacementLocal {
+	var at drivePlace
+	if mountsDrives(f.drives, f.keep) && f.place.pooled && f.place.placement == types.PlacementLocal {
+		at.runner = f.place.placedRunner()
+		msg := ""
+		for _, d := range f.drives {
+			if msg = driveOnRunnerMsg(d.resolved.Drive, at.runner); msg != "" {
+				break
+			}
+		}
+		if msg == "" && f.keep != nil {
+			msg = driveNotInPoolMsg("keep_work_folder")
+		}
+		if msg != "" {
+			return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
+		}
+	}
+	if f.mode == foldPreview {
 		return true
 	}
-	name := "keep_work_folder"
-	if len(f.drives) > 0 {
-		name = f.drives[0].resolved.Drive.Name
+	if !slices.ContainsFunc(f.drives, func(d runDrive) bool { return d.resolved.Drive.AltRunnerID != nil }) {
+		return true
 	}
-	msg := driveNotInPoolMsg(name)
-	return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
+	var ok bool
+	f.driveMounts, ok = s.driveMountsAt(f.w, f.r, f.drives, at)
+	return ok
 }
 
 // stepPlacement runs after the components and before the local-eligibility step: the confinement
@@ -735,7 +773,8 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	}
 	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),
-		promoted: f.promoted, drives: mountsDrives(f.drives, f.keep), noLocal: promotedNoLocal(f.r.Context())}
+		promoted: f.promoted, drives: mountsDrives(f.drives, f.keep), driveRunner: drivesBoundRunner(f.drives, f.keep),
+		noLocal: promotedNoLocal(f.r.Context())}
 	if f.spec.Resources != nil {
 		in.policyDiskMiB = f.spec.Resources.DiskMiB
 	}

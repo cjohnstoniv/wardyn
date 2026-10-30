@@ -13,7 +13,8 @@
 # 0.9.4 W4-DOCS-1: docs/USERS.md 4720 adds 15 over 4705, measured: #2369: runner trust class and run node record in the approver list.
 # API-5: USERS.md 4761 adds 13 over 4748 (back-channel logout in the sign-out bullet), measured.
 # PRIV-1: docs/USERS.md 4784 adds 23 over 4761, measured: an admin may replay your recordings, and each replay is audited.
-docs/USERS.md=4784 share=35
+# SESS-M12: docs/USERS.md 4903 adds 119 over 4784, measured: the Session lifetime section.
+docs/USERS.md=4903 share=35
 # docs/SSH.md 5396 adds 84 (0.9 SSH lane): the wardyn-sync subsystem and its env, the sync cap, the configurable channel cap and the sync audit action.
 # docs/SSH.md 5508 adds 112 over 5396 (0.9 E-S1): the `wardyn sync` section (command, safety rules, the rsync alternative).
 # docs/SSH.md 5586 adds 78 over 5508 (0.9 E-S1 round 1): the pull byte limits, the plain-http refusal, the invisible-name and normalisation rules, the one-second mtime limit and the rsync caveat.
@@ -41,7 +42,11 @@ docs/USERS.md=4784 share=35
 # docs/SSH.md 6566 = ours 6476 + theirs 6326 - base 6236 at the 0.10 W3 merge of HYBB onto the train.
 # docs/SSH.md=6373 adds 140 over 6233 (0.10 ATT-CLI): the "Without SSH: `wardyn attach`" section (path line, one admission, --via, --take-over); the `run attach` -> `attach` sweep took 3 words off 6236.
 # docs/SSH.md 6703 = ours 6566 + theirs 6373 - base 6236 at the 0.10 W4a merge of ATT-CLI onto the train.
-docs/SSH.md=6703 share=35
+# 0.10 HYB-C: docs/SSH.md 6721 adds 18 over 6703, measured: a Linux VM sandbox is held and synced the same way.
+# 0.10 EDITORS: docs/SSH.md 6876 adds 155 over 6721, measured: the editors table rows, how they are tested, the Mutagen link and the image needs.
+# 0.10 GW-HOME (#3549): docs/SSH.md 6924 adds 48 over 6876 at the merge of main onto the lane, measured: where a shell, a command and an sftp session start.
+# 0.10 W5SMALL (#3555): docs/SSH.md 6961 adds 37 over 6924, measured: keep ENV HOME equal to the passwd home in the image contract.
+docs/SSH.md=6974 share=35 # +13 (0.10.0 final docs): the Include stays outside any Host or Match block, measured.
 # docs/UI-SANDBOXES.md 5341 measured after C-mode-doors merge.
 # docs/UI-SANDBOXES.md 5472 adds 131 over 5341 (0.9.3 lane B): the reasons table for a refusal an SDK reads.
 # docs/UI-SANDBOXES.md 5477 adds 5 (0.9.3 lane B review): the AWS no-credential 404 in the reasons table.
@@ -53,7 +58,32 @@ docs/SSH.md=6703 share=35
 # docs/UI-SANDBOXES.md 5610 adds 26 (0.10.0 VM-B): the policy:port reason row (#3193).
 # docs/UI-SANDBOXES.md 5626 adds 42 (0.10 API-2): the UI-app ticket purpose and an expired approval asked again.
 # docs/UI-SANDBOXES.md 5653: measured after the main merge.
-docs/UI-SANDBOXES.md=5653 share=35
+# docs/UI-SANDBOXES.md 5690 adds 37 over 5653, measured (0.10 OC-API1b): the approval:stale reason row, measured from the last answered re-check.
+# docs/UI-SANDBOXES.md 5731 adds 78 over 5653 (0.10 FEAT-1APP): an application server started by the run (#1994).
+# docs/UI-SANDBOXES.md 5768 = ours 5690 + theirs 5731 - base 5653 at the 0.10 W4c merge of FEAT-1APP onto the train.
+# docs/UI-SANDBOXES.md 5773 adds 42 over 5731 (0.10 FEAT-1APP DR-0312): the start-after-prep, revive and wait-from-open sentences.
+# docs/UI-SANDBOXES.md 5810 = ours 5768 + theirs 5773 - base 5731 at the 0.10 W4c merge of FEAT-1APP 20b62c676 onto the train.
+# docs/UI-SANDBOXES.md 5760 adds 29 over 5731 (APP-FU #3391): the application server is refused at create under deny_ui_apps, and only a shell startup command waits for its port.
+# docs/UI-SANDBOXES.md 5839 = ours 5810 + theirs 5760 - base 5731 at the 0.10 W4c merge of APP-FU 857bd637f onto the train.
+# docs/UI-SANDBOXES.md 5814 adds 161 (0.10 CTL-A): the desktop clipboard section and the ui.clipboard row (#2967).
+# docs/UI-SANDBOXES.md 5882 adds 68 (0.10 CTL-A r2): the desktop is the novnc app, the hold, the not-RFB close (#2967).
+# docs/UI-SANDBOXES.md 5925 adds 43 (0.10 CTL-A r3): only the novnc app is filtered; pin ui_apps; SSH forwards are outside (#2967).
+# docs/UI-SANDBOXES.md 5953 adds 28 (0.10 CTL-A r3): the desktop page comes from the sandbox, not a boundary against a run built to get data out.
+# docs/UI-SANDBOXES.md 6139 = ours 5839 + theirs 5953 - base 5653 at the 0.10 W4c merge of CTL-A 99d68a80a onto the train.
+# docs/UI-SANDBOXES.md 6155 adds 202 (0.10 DSK-A r2): the Linux VM desktop section (reserved __desktop segment, 1-hour cookie cap, Close, the restart residual, the clipboard filter on the VM relay and that no clipboard flows from QEMU today, not a boundary), measured.
+# docs/UI-SANDBOXES.md 6175 adds 20 (0.10 DSK-A r3), measured: Close cuts a stream on the same replica at once and on another within 15 s, and the database-outage line.
+# docs/UI-SANDBOXES.md 6361, measured, at the 0.10 W4c merge of DSK-A 46d21862b onto the train: two merge bases (CTL-A 99d68a80a and VM-C~1 4b06ac1e5), so no single base to subtract.
+# 0.10 CTL-C (#2972): docs/UI-SANDBOXES.md 5914 adds 261 over 5653, measured: the desktop sign-ins section and its image.
+# docs/UI-SANDBOXES.md 6622 = ours 6361 + theirs 5914 - base 5653 at the 0.10 W4c merge of CTL-C 6de42c110 onto the train.
+# docs/UI-SANDBOXES.md 6627 adds 5 (0.10 W4c seam, CTL-A x CTL-C): the clipboard filter names the sign-in display, measured.
+# docs/UI-SANDBOXES.md 7749 adds 1122 over 6627, measured (rc.8 inbound docs): the Inbound section, and the bearer, background-run and stream-lifetime lines in Open an app and Bounds.
+# docs/UI-SANDBOXES.md 7769 measured (rc.8 review): inbound wording made exact (groups refreshed at sign-in, rate-bound denials, burst, HEAD, session TTL).
+# docs/UI-SANDBOXES.md 7796 adds 27 over 7769, measured (rc.8 inbound review F1: the limit is per caller as well as per run).
+# docs/UI-SANDBOXES.md 7815 adds 19 over 7796, measured (rc.8 inbound review F3: a token stream is closed by the profile too).
+# docs/UI-SANDBOXES.md 7890 adds 75 over 7815, measured (rc.8 inbound review F5, F6: who the grant lets a caller name, and the shared connections).
+# docs/UI-SANDBOXES.md 7914 adds 24 over 7890, measured (a person mints their own inbound token in Settings → Your API tokens).
+# docs/UI-SANDBOXES.md 7922 adds 8 over 7914, measured (rc.8 cumulative review: only an upgraded connection an inbound token opened is re-checked).
+docs/UI-SANDBOXES.md=7922 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.
@@ -65,4 +95,7 @@ docs/UI-SANDBOXES.md=5653 share=35
 # docs/NEW-RUN.md 3056, measured at the FIN-E2 merge into the final train (both sides' sentences).
 # docs/NEW-RUN.md 3072 = 3056 + 16, measured: a wait row for a required recording with no store
 # 0.9.4 W4-DOCS-1: docs/NEW-RUN.md 3073 adds 1 over 3072, measured: #2320: --max-wait among the run --file companion flags.
-docs/NEW-RUN.md=3073 share=35
+# docs/NEW-RUN.md 3147 adds 74 over 3073 (0.10 FEAT-1APP-UI): the Application / server card, measured (#1994).
+# docs/NEW-RUN.md 3163 adds 16 over 3147, measured (0.10 final docs): scheduling and Your computer described by their gates instead of Coming soon
+# docs/NEW-RUN.md 3273 adds 110 over 3163, measured (rc.8 E4, #2948): the Only the sites listed switch, the walls drop line and the walls warning.
+docs/NEW-RUN.md=3273 share=35

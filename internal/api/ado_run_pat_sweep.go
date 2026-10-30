@@ -8,7 +8,7 @@ package api
 //
 //   - the end paths: revokeRunCascade (completion, failure, lease loss,
 //     reconcile, the probe reclaim, the sandbox sweeps), the kill
-//     (killTeardownTail), the idle stop (CancelTerminalRunApprovals) and a
+//     (killTeardownTail), the idle and max-age stops (RevokeStoppedRun) and a
 //     kept run's end (revokeRunBroker);
 //   - pause (pauseRun), drift (resolveADOInjection), and the erase of a
 //     person's credentials (handleErasePersonCredentials);
@@ -46,7 +46,7 @@ func (s *Server) revokeRunPATs(ctx context.Context, runID uuid.UUID, reason stri
 	}
 	ctx, e, unlock, lerr := s.lockRunPAT(ctx, runID)
 	if lerr != nil {
-		slog.WarnContext(ctx, "wardynd: a run's Azure DevOps token lock could not be taken; its tokens are not revoked now and the sweep retries",
+		slog.WarnContext(ctx, "wardynd: a run's Azure DevOps token lock could not be taken; its tokens are not revoked now; the sweep retries an ended or paused run, and a live run's next relayed resolve judges it again",
 			slog.String("run_id", runID.String()), slog.Any("err", lerr))
 		return
 	}
