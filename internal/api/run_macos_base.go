@@ -36,7 +36,7 @@ func macOSBaseRequestRefusal(req createRunRequest) string {
 	case !types.MachineKind(req.MachineKind).IsMacOSVM():
 		return "macos_base is for a macOS VM run (machine_kind macos_vm)."
 	case !types.ValidMacOSBaseName(req.MacOSBase):
-		return "macos_base is not a macOS base name: Standard, or lowercase letters, digits, '.', '_' and '-'."
+		return "macos_base is not a macOS base name. Use Standard, or lowercase letters, digits, '.', '_' and '-'."
 	}
 	return ""
 }
