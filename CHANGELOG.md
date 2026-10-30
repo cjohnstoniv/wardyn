@@ -180,6 +180,21 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   a row, now starts a fresh session and logs a warning, instead of resuming for good against an organisation that
   refuses that event. An agent exit or spool record is still replayed and keeps failing until the organisation is
   upgraded (#3660).
+- `wardyn secret set` and `wardyn-aws-sso` no longer take standard input on `/dev/null` for a terminal. An unattended
+  run with input from `/dev/null` now reads it as piped input, or refuses, instead of offering the interactive prompt
+  (#3106).
+- `wardyn run --editor` no longer counts an `Include` under a `Host` or `Match` block in `~/.ssh/config` as the one it
+  needs. Only an `Include` above the first of those lines counts; otherwise it asks before adding its own at the top
+  (#3415).
+- `wardyn runner list --no-limits` now filters every page of runners, not only the one it fetched, so a runner with
+  no limits set past the first page is listed. `--limit` and `--offset` then cut the filtered list (#3811).
+- `wardyn runner install` on a computer that already runs a runner now says it is upgrading and ignores `--pool`,
+  `--default` and `--name`, instead of dropping them silently. `--artifact-base` is saved in `cli.json` only after the
+  release or runner downloaded from it has been verified, so a mirror that served something refused is no longer
+  remembered (#3551).
+- `wardyn doctor`'s `runner-exits` stage, when the organisation will not show the runner, now says a revoked runner is
+  not shown to its owner and points at the administrator's `runner.exit.park` audit rows. `docs/runner-offline.md`
+  no longer says doctor reports a revoked runner's parked receipts (#3614).
 
 ### Security
 

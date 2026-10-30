@@ -8,6 +8,7 @@ package main
 const (
 	copyInstallVerified    = "Verified %s: v%s's SHA256SUMS is signed by %s, and lists SHA-256 %s for it." // URL, version, identity, hash
 	copyUpgradeCurrent     = "This computer's runner is already v%s: nothing to do."
+	copyUpgradeIgnores     = "wardyn: this computer already runs a runner, so this upgrades it and ignores %s: they apply when a runner is first set up." // the flags given
 	copyUpgradeSwapping    = "Replacing the runner (%s) with v%s and restarting its service."
 	copyUpgradeDone        = "The runner is v%s, started and connected."
 	copyUpgradeRollingBack = "v%s did not start (%v): putting %s back."

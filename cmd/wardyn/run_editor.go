@@ -173,8 +173,13 @@ func ensureSSHInclude(cmd *cobra.Command, cfg string) (bool, error) {
 		return false, fmt.Errorf("editor: read %s: %w", sshCfg, err)
 	}
 	for _, ln := range strings.Split(string(raw), "\n") {
-		f := strings.Fields(ln)
-		if len(f) == 2 && strings.EqualFold(f[0], "Include") && (f[1] == wardynSSHConfig || f[1] == cfg) {
+		kw, arg := sshConfigLine(ln)
+		// ssh applies an Include under a Host or Match line only to the hosts that block selects, so only an
+		// Include above the first of them is the global one VS Code needs.
+		if strings.EqualFold(kw, "Host") || strings.EqualFold(kw, "Match") {
+			break
+		}
+		if strings.EqualFold(kw, "Include") && (arg == wardynSSHConfig || arg == cfg) {
 			return true, nil
 		}
 	}
@@ -192,6 +197,16 @@ func ensureSSHInclude(cmd *cobra.Command, cfg string) (bool, error) {
 		return false, fmt.Errorf("editor: write %s: %w", sshCfg, err)
 	}
 	return true, nil
+}
+
+// sshConfigLine is an ssh_config line's keyword and argument: ssh separates them with spaces, an "=", or both.
+func sshConfigLine(ln string) (kw, arg string) {
+	ln = strings.TrimSpace(ln)
+	i := strings.IndexAny(ln, " \t=")
+	if i < 0 {
+		return ln, ""
+	}
+	return ln[:i], strings.TrimSpace(strings.TrimPrefix(strings.TrimLeft(ln[i:], " \t"), "="))
 }
 
 // writeTarget is the file a write to path lands on: every symlink followed, in the directory it sits in
