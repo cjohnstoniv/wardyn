@@ -233,6 +233,10 @@ declare -A ALLOWLIST=(
   ["internal/api/run_macos_vm_age_test.go"]=1
   ["internal/macvm/edit_test.go"]=1
   ["internal/runnerwire/macvm_base_age_test.go"]=2
+  # A derived base's created_at: echoed from its manifest to the caps, and a pool's oldest copy picked among
+  # literals; the picked-base age test passes a fixed now in as the clock.
+  ["cmd/wardyn-runnerd/macos_vm_bases_test.go"]=2
+  ["internal/api/run_macos_base_test.go"]=4
   ["internal/runnerwire/macvm_edit_test.go"]=2
 )
 
