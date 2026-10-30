@@ -135,10 +135,10 @@
   - The gateway adds what an organisation sets once for every caller: provider routing and failover, rate limits and its own logs.
 - **MCP servers.**
   - Wardyn has no MCP gateway (above). A gateway can put many remote MCP servers behind one host, and hold or exchange a credential for each of them.
-  - Allow that host in the run's egress policy; a gateway on a private address also needs `internal_hosts`. Wardyn then governs whether a run reaches the gateway at all. The gateway decides which tools a caller gets.
+  - Allow that host in the run's egress policy. A gateway on a private address named by hostname also needs an `internal_hosts` entry in site config; an exact literal IP in `allowed_domains` is honoured on its own. Wardyn then governs whether a run reaches the gateway at all. The gateway decides which tools a caller gets.
 - **Before you set it up.**
   - A Claude subscription provider's `base_url` sends each person's sign-in token to the gateway on every call. That makes the gateway a trust decision for the people who connect.
-  - The gateway sees `wardyn-proxy` as its caller. Wardyn adds no run or person identity; what the harness itself sends passes through unchanged.
+  - The gateway sees `wardyn-proxy` as its caller. Wardyn adds no run or person identity. The harness's own headers pass through, except credential-shaped ones, which Wardyn strips before it injects the credential.
   - So a per-person limit there can key only on what the gateway still sees: a person's sign-in token for a subscription provider, and nothing per person once the gateway swaps in its own key.
   - Two policy points can disagree. Decide which one owns model choice and tool access, and keep the other permissive for that concern.
 - **When it is worth it.**
