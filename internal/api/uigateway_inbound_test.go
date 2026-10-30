@@ -866,33 +866,52 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 		}
 	})
 
-	// A check that never answers holds no stream past the bound: the tick closes it with the check in flight.
-	t.Run("a token lookup that never answers closes the stream at the bound", func(t *testing.T) {
-		h, gw := open(t)
-		conn, br := openInboundStream(t, h, gw, "wdn_alice")
-		if !echoes(conn, br) {
-			t.Fatal("the stream carried nothing before the store hung")
-		}
-		ts := tokens(h)
-		ts.hangLookups(t)
-		for deadline := time.Now().Add(5 * time.Second); ts.hungLookups() == 0; time.Sleep(every) {
-			if time.Now().After(deadline) {
-				t.Fatal("no re-admission was attempted while the store hung")
+	// A check that never answers holds no stream past the bound, inboundResolveTTL plus one tick after its last
+	// good check: the tick closes it with the check in flight. A tick costs nothing on the test clock, so here the
+	// bound is inboundResolveTTL to the second. The last good check is the lookup of the session the stream opened
+	// on, a cached session's included: a stream opened half a bound after that lookup still ends a bound after
+	// it, not a bound after the open.
+	for name, cachedFor := range map[string]time.Duration{"a fresh session": 0, "a session cached half a bound": inboundResolveTTL / 2} {
+		t.Run("a token lookup that never answers closes a stream on "+name+" a bound after its lookup", func(t *testing.T) {
+			h, gw := open(t)
+			ts := tokens(h)
+			var conn net.Conn
+			var br *bufio.Reader
+			if cachedFor > 0 {
+				if _, ok := h.srv.inboundTokenSession(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, uiRelayPrefix(h.run.ID, "code")+"/", nil),
+					h.run.ID, "code", "wdn_alice"); !ok {
+					t.Fatal("the token was not admitted")
+				}
+				h.clock.advance(cachedFor)
+				ts.hangLookups(t)
+				conn, br = openInboundStream(t, h, gw, "wdn_alice") // on the cached session: no lookup
+			} else {
+				conn, br = openInboundStream(t, h, gw, "wdn_alice")
+				if !echoes(conn, br) {
+					t.Fatal("the stream carried nothing before the store hung")
+				}
+				ts.hangLookups(t)
 			}
-		}
-		time.Sleep(5 * every)
-		if !echoes(conn, br) {
-			t.Fatal("a check in flight inside the bound closed the stream")
-		}
-		h.clock.advance(inboundResolveTTL)
-		if !closes(conn, br) {
-			t.Fatal("the stream outlived a re-admission that never answered")
-		}
-		if rows := awaitDenies(h); len(rows) != 1 || rows[0].Actor != h.owner ||
-			!h.audit.hasDataValue("reason", reasonTokenLookupUnavailable) {
-			t.Errorf("inbound.deny rows = %+v, want one token_lookup_unavailable by %s", rows, h.owner)
-		}
-	})
+			for deadline := time.Now().Add(5 * time.Second); ts.hungLookups() == 0; time.Sleep(every) {
+				if time.Now().After(deadline) {
+					t.Fatal("no re-admission was attempted while the store hung")
+				}
+			}
+			h.clock.advance(inboundResolveTTL - cachedFor - 2*time.Second)
+			time.Sleep(5 * every)
+			if !echoes(conn, br) {
+				t.Fatal("a check in flight inside the bound closed the stream")
+			}
+			h.clock.advance(2 * time.Second)
+			if !closes(conn, br) {
+				t.Fatal("the stream outlived its last good check by the bound")
+			}
+			if rows := awaitDenies(h); len(rows) != 1 || rows[0].Actor != h.owner ||
+				!h.audit.hasDataValue("reason", reasonTokenLookupUnavailable) {
+				t.Errorf("inbound.deny rows = %+v, want one token_lookup_unavailable by %s", rows, h.owner)
+			}
+		})
+	}
 
 	t.Run("a refusal closes the stream though the write of its row hangs", func(t *testing.T) {
 		h, gw := open(t)

@@ -8,7 +8,7 @@
 // API, CLI, admin or portal token ever calls a port). From there both ride one pipeline: the session
 // re-assert, a per-run request bucket, one inbound.allow row per admitted request, then the relay. The
 // token never reaches the sandbox (uiStripInbound drops Authorization); X-Wardyn-Caller names the caller.
-// A WebSocket or other upgrade a token opens is admitted again every inboundResolveTTL while it lasts
+// A WebSocket or other upgrade a token opens is admitted again every half inboundResolveTTL while it lasts
 // (watchInboundStream), so a revoke reaches it as it reaches the token's next request.
 //
 // The host-mode cross-site check here binds every cookie session, inbound or not: the victim of a foreign
@@ -381,19 +381,22 @@ func (w *inboundReadmitWriter) Write(b []byte) (int, error) {
 }
 
 // watchInboundStream holds an upgraded stream an inbound token opened to the authority that admitted it:
-// every inboundResolveTTL (uiInboundStreamEvery in tests) the token is admitted again, uncached, by
-// admitInboundToken, so the token's revoke or expiry, its service identity or sponsor going, its owner
+// every half inboundResolveTTL (a tick; uiInboundStreamEvery in tests) the token is admitted again, uncached,
+// by admitInboundToken, so the token's revoke or expiry, its service identity or sponsor going, its owner
 // losing the run or the app no longer naming its caller all reach the stream as they reach a request, as
 // does the run's profile coming to deny UI apps or interactive sessions (uiInboundUnitDenies). A
 // refusal closes the stream and then writes the inbound.deny row a refused request writes. A lookup or read
-// that cannot be made keeps the stream and asks again next tick, so one store blip ends no stream; but a
-// stream whose authority no check has confirmed for inboundResolveTTL since the last one that did, the
-// staleness the design allows, is closed with an inbound.deny row naming what was unavailable
-// (token_lookup_unavailable, or run_unreadable for the run, its policy or its profile): fail closed, never a
-// stream held open on a store that stays down. Each check runs off the watch, on the stream's own context
-// and within inboundReadmitTimeout, so a check that never answers holds nothing up: the tick closes the
-// stream past the bound with the check still in flight (as token_lookup_unavailable, unless an earlier
-// check named what failed). The close comes first; its row is written after it, off the watch and within
+// that cannot be made keeps the stream and asks again next tick, so one store blip between two good checks
+// ends no stream; but a stream whose authority no check has confirmed for inboundResolveTTL since the last
+// one that did, the staleness the design allows, is closed with an inbound.deny row naming what was
+// unavailable (token_lookup_unavailable, or run_unreadable for the run, its policy or its profile): fail
+// closed, never a stream held open on a store that stays down. Each check runs off the watch, on the
+// stream's own context and within inboundReadmitTimeout, so a check that never answers holds nothing up:
+// the tick closes the stream past the bound with the check still in flight (as token_lookup_unavailable,
+// unless an earlier check named what failed). So a stream ends at most inboundResolveTTL plus one tick
+// after its last good check, hung store or not. The first good check is the lookup of the session the
+// stream opened on, a cached session's included (inboundReadmission.checked), and the first re-check is
+// due one tick after it, or at once when the session is older than that. The close comes first; its row is written after it, off the watch and within
 // inboundReadmitTimeout, so an audit write that hangs delays no close. A browser session's stream carries
 // no re-admission and is left as it was (TestUIGateway_EstablishedConnectionOutlivesTheRevoke).
 func (s *Server) watchInboundStream(resp *http.Response) {
@@ -411,7 +414,8 @@ func (s *Server) watchInboundStream(resp *http.Response) {
 		// ctx is the stream's: its end cancels a check still in flight.
 		ctx, cancel := context.WithCancel(a.r.Context())
 		defer cancel()
-		tick := time.NewTicker(cmp.Or(s.uiInboundStreamEvery, inboundResolveTTL))
+		every := cmp.Or(s.uiInboundStreamEvery, inboundResolveTTL/2)
+		tick := time.NewTimer(max(0, every-s.cfg.Now().Sub(a.checked)))
 		defer tick.Stop()
 		type readmitted struct {
 			at          time.Time
@@ -445,6 +449,7 @@ func (s *Server) watchInboundStream(resp *http.Response) {
 			case <-stream.done:
 				return
 			case <-tick.C:
+				tick.Reset(every)
 				if (checking || failing != "") && stale() {
 					end(unconfirmed(cmp.Or(failing, reasonTokenLookupUnavailable)))
 					return

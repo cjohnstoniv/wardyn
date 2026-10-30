@@ -24,9 +24,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Security
 
-- An upgraded connection an inbound token opened, a WebSocket say, is now closed at the first re-check after its token
-  has gone 30 seconds unconfirmed, counted from the last check that confirmed it, even while a check is still waiting
-  on a store that does not answer. A hung check used to hold the connection open for good, and a store that kept
+- An upgraded connection an inbound token opened, a WebSocket say, is now re-checked every 15 seconds and closed at
+  most 45 seconds after the last check that confirmed its token (30 seconds unconfirmed, plus one re-check), even
+  while a check is still waiting on a store that does not answer. A hung check used to hold the connection open for good, and a store that kept
   failing kept it open about a minute. The refusal's audit row is now written after the close, so a slow audit write
   no longer delays it.
 
