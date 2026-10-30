@@ -178,6 +178,9 @@ type Stage2Input struct {
 	// ControlCheck runs the desktop control check first (prepare's stage 2;
 	// a tools update keeps the manifest's desktop value).
 	ControlCheck bool
+	// Previous is the items the base held before this stage 2 (a tools update's), so a CA the list no
+	// longer has is removed.
+	Previous []ItemRecord
 }
 
 // ToolsResult is what stage 2 left in the guest.
@@ -299,7 +302,7 @@ func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) 
 	}
 	res, err = installTools(ctx, g, o)
 	if err == nil {
-		err = installItems(ctx, g, o, &res)
+		err = installItems(ctx, g, o, in.Previous, &res)
 	}
 	if err == nil {
 		err = selftestBase(ctx, g, &res, o.Log)
@@ -855,7 +858,8 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		HardwareModel: m.HardwareModel, MachineIdentifier: id.MachineIdentifier,
 		DiskPath: filepath.Join(nb, DiskFile), AuxPath: filepath.Join(nb, AuxFile),
 	}
-	res, err := o.Stage.Run(ctx, Stage2Input{Spec: spec, Dir: nb})
+	prev, _ := ReadToolsRecord(base)
+	res, err := o.Stage.Run(ctx, Stage2Input{Spec: spec, Dir: nb, Previous: prev.Items})
 	if res.ToolsDial != "" {
 		o.Progress(PrepareEvent{Phase: PhaseTools, ToolsDial: res.ToolsDial})
 	}

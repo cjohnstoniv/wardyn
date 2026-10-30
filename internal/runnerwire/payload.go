@@ -346,10 +346,15 @@ const (
 	MacVMItemKindApp     = "app"
 	MacVMItemKindFile    = "file"
 	MacVMItemKindProfile = "profile"
+	MacVMItemKindCA      = "ca"
 
 	MacVMItemInstalled = "installed"
 	// MacVMItemStaged is a profile waiting for the person's approval in macos-vm edit-base.
 	MacVMItemStaged = "staged"
+	// MacVMItemTrusted and MacVMItemNotTrusted are a CA's read-back trust; not_trusted is trusted by hand in
+	// macos-vm edit-base.
+	MacVMItemTrusted    = "trusted"
+	MacVMItemNotTrusted = "not_trusted"
 )
 
 // MacVMBase.Step, Wait and Failure values. An unknown value is a newer runner's, and decodes as itself.

@@ -4,6 +4,11 @@
 package guestagent
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -58,7 +63,7 @@ func TestToolsExecBaseItemForms(t *testing.T) {
 // managed settings, Wardyn's own files or anything outside the roots.
 func TestToolsPushBaseItems(t *testing.T) {
 	tl := &Tools{}
-	for _, dest := range []string{MacItemStageDir + "/edr/item.pkg", MacItemStageDir + "/a/item.dmg", MacItemStageDir + "/wifi/item.mobileconfig", "/Library/Application Support/Org/conf.json", "/opt/org/x"} {
+	for _, dest := range []string{MacItemStageDir + "/edr/item.pkg", MacItemStageDir + "/a/item.dmg", MacItemStageDir + "/wifi/item.mobileconfig", MacItemStageDir + "/org-ca/item.cer", "/Library/Application Support/Org/conf.json", "/opt/org/x"} {
 		if err := tl.pushAllowed(dest); err != nil {
 			t.Errorf("%s refused: %v", dest, err)
 		}
@@ -68,6 +73,96 @@ func TestToolsPushBaseItems(t *testing.T) {
 		MacAgentBinaryPath, MacAgentPlistPath, "/Library/Keychains/System.keychain", "/Users/agent/x", "/etc/sudoers", "/private/etc/codex/requirements.toml", "/Library/../etc/codex/requirements.toml"} {
 		if err := tl.pushAllowed(dest); err == nil {
 			t.Errorf("%s allowed", dest)
+		}
+	}
+}
+
+// The trust-settings forms run inside the authorization bracket, in this order: authorizationdb read
+// (saved), write allow, the form, write the saved rule back. The restore runs on every path: the form
+// failing, the allow failing, the request cancelled. A read that fails changes nothing, and a restore
+// that fails is an error. verify-cert and every other form run without it, and no authorizationdb form
+// can be run on its own.
+func TestTrustSettingsBracketRestoresOnEveryPath(t *testing.T) {
+	const saved = "<?xml?><plist><dict><key>rule</key></dict></plist>"
+	cer := ItemDir("org-ca") + "/" + ItemCert
+	add := []string{"/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "ssl", "-k", MacSystemKeychain, cer}
+	del := []string{"/usr/bin/security", "delete-certificate", "-t", "-Z", strings.Repeat("AB", 20), MacSystemKeychain}
+	for name, tc := range map[string]struct {
+		argv               []string
+		readErr, allowErr  error
+		restoreErr         error
+		formExit           int
+		cancel             bool
+		wantSteps          string
+		wantStatus, wantEx int
+	}{
+		"trusted":           {argv: add, wantSteps: "read|allow|form|restore", wantStatus: 200},
+		"removed":           {argv: del, wantSteps: "read|allow|form|restore", wantStatus: 200},
+		"the form fails":    {argv: add, formExit: 1, wantSteps: "read|allow|form|restore", wantStatus: 200, wantEx: 1},
+		"the allow fails":   {argv: add, allowErr: errors.New("denied"), wantSteps: "read|allow|restore", wantStatus: 500},
+		"cancelled":         {argv: add, cancel: true, wantSteps: "read|allow|form|restore", wantStatus: 500},
+		"the read fails":    {argv: add, readErr: errors.New("no"), wantSteps: "read", wantStatus: 500},
+		"the restore fails": {argv: add, restoreErr: errors.New("io"), wantSteps: "read|allow|form|restore", wantStatus: 500},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rig := newToolsRig(t)
+			var steps []string
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			rig.t.run = func(c context.Context, argv []string) ([]byte, int, error) {
+				steps = append(steps, "form")
+				if tc.cancel {
+					cancel()
+					return nil, 0, c.Err()
+				}
+				return nil, tc.formExit, nil
+			}
+			rig.t.authdb = func(c context.Context, args []string, stdin []byte) ([]byte, error) {
+				switch {
+				case slices.Equal(args, []string{"read", trustSettingsRight}):
+					steps = append(steps, "read")
+					return []byte(saved), tc.readErr
+				case slices.Equal(args, []string{"write", trustSettingsRight, "allow"}):
+					steps = append(steps, "allow")
+					return nil, tc.allowErr
+				case slices.Equal(args, []string{"write", trustSettingsRight}) && string(stdin) == saved && c.Err() == nil:
+					steps = append(steps, "restore")
+					return nil, tc.restoreErr
+				}
+				t.Fatalf("authorizationdb %q stdin %q ctx %v", args, stdin, c.Err())
+				return nil, nil
+			}
+			b := `{"argv":[` + strings.Join(quoteAll(tc.argv), ",") + `]}`
+			w := httptest.NewRecorder()
+			rig.t.ToolsHandler().ServeHTTP(w, httptest.NewRequest("POST", "/v1/tools/exec", strings.NewReader(b)).WithContext(ctx))
+			if got := strings.Join(steps, "|"); got != tc.wantSteps || w.Code != tc.wantStatus {
+				t.Fatalf("steps %s status %d (%s), want %s %d", got, w.Code, w.Body, tc.wantSteps, tc.wantStatus)
+			}
+			if tc.wantStatus == 200 && !strings.Contains(w.Body.String(), fmt.Sprintf(`"exit_code":%d`, tc.wantEx)) {
+				t.Fatalf("answer %s", w.Body)
+			}
+		})
+	}
+	rig := newToolsRig(t)
+	rig.t.authdb = func(context.Context, []string, []byte) ([]byte, error) {
+		t.Fatal("verify-cert ran in the bracket")
+		return nil, nil
+	}
+	if w := rig.exec("/usr/bin/security", "verify-cert", "-L", "-p", "ssl", "-c", cer); w.Code != 200 {
+		t.Fatalf("verify-cert: %d %s", w.Code, w.Body)
+	}
+	for _, argv := range [][]string{
+		{"/usr/bin/security", "authorizationdb", "write", trustSettingsRight, "allow"},
+		{"/usr/bin/security", "authorizationdb", "read", trustSettingsRight},
+		{"/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustRoot", "-k", MacSystemKeychain, cer},
+		{"/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "ssl", "-k", MacSystemKeychain, "/tmp/x.cer"},
+		{"/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustAsRoot", "-p", "ssl", "-k", MacSystemKeychain, cer},
+		{"/usr/bin/security", "delete-certificate", "-t", "-Z", "abc", MacSystemKeychain},
+		{"/usr/bin/security", "delete-certificate", "-c", "Org", MacSystemKeychain},
+		{"/usr/bin/security", "verify-cert", "-c", cer},
+	} {
+		if w := rig.exec(argv...); w.Code != 403 {
+			t.Errorf("%q: %d", argv, w.Code)
 		}
 	}
 }

@@ -145,6 +145,9 @@ type Tools struct {
 
 	// run runs an allowed argv as root; nil is runCombined (tests record).
 	run func(ctx context.Context, argv []string) ([]byte, int, error)
+	// authdb runs `security authorizationdb` with args and stdin and returns its stdout; nil is
+	// runAuthorizationDB (tests record).
+	authdb func(ctx context.Context, args []string, stdin []byte) ([]byte, error)
 
 	// cltListed is the Command Line Tools labels this process's own `softwareupdate -l` runs printed,
 	// in memory only, so a boot installs only what that boot listed; nil until a `-l` has run.
@@ -245,6 +248,9 @@ func (t *Tools) handleExec(w http.ResponseWriter, r *http.Request) {
 	run := t.run
 	if run == nil {
 		run = runCombined
+	}
+	if trustSettingsForm(in.Argv) {
+		run = t.withTrustSettingsRight(run)
 	}
 	out, code, err := run(r.Context(), in.Argv)
 	if err != nil {
@@ -376,6 +382,7 @@ const (
 	ItemDmg     = "item.dmg"
 	ItemMount   = "mnt"
 	ItemProfile = "item.mobileconfig"
+	ItemCert    = "item.cer"
 	// MacApplications is where an app item goes.
 	MacApplications = "/Applications"
 )
@@ -439,7 +446,7 @@ func isItemFile(p, file string) bool { return filepath.Base(p) == file && isItem
 // file item's destination.
 func itemPushAllowed(dest string) bool {
 	if isItemDir(filepath.Dir(dest)) {
-		return slices.Contains([]string{ItemPkg, ItemZip, ItemDmg, ItemProfile}, filepath.Base(dest))
+		return slices.Contains([]string{ItemPkg, ItemZip, ItemDmg, ItemProfile, ItemCert}, filepath.Base(dest))
 	}
 	return ItemDestAllowed(dest) == nil
 }
@@ -455,6 +462,11 @@ func itemPushAllowed(dest string) bool {
 //	/usr/bin/ditto S/<name>/mnt/<App>.app /Applications/<App>.app
 //	/usr/bin/hdiutil detach -force S/<name>/mnt
 //	/usr/bin/profiles list                            the profiles installed, read back
+//	/usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain S/<name>/item.cer
+//	/usr/bin/security delete-certificate -t -Z <SHA-1> /Library/Keychains/System.keychain
+//	/usr/bin/security verify-cert -L -p ssl -c S/<name>/item.cer
+//
+// The first two change the admin trust settings, so they run only inside withTrustSettingsRight.
 func itemArgvAllowed(argv []string) bool {
 	if len(argv) < 2 {
 		return false
@@ -486,4 +498,68 @@ var itemForms = map[string]func(a []string) bool{
 	},
 	"/usr/bin/hdiutil detach": func(a []string) bool { return len(a) == 4 && a[2] == "-force" && isItemFile(a[3], ItemMount) },
 	"/usr/bin/profiles list":  func(a []string) bool { return len(a) == 2 },
+	"/usr/bin/security add-trusted-cert": func(a []string) bool {
+		return len(a) == 10 && slices.Equal(a[2:9], []string{"-d", "-r", "trustRoot", "-p", "ssl", "-k", MacSystemKeychain}) && isItemFile(a[9], ItemCert)
+	},
+	"/usr/bin/security delete-certificate": func(a []string) bool {
+		return len(a) == 6 && a[2] == "-t" && a[3] == "-Z" && sha1Hex.MatchString(a[4]) && a[5] == MacSystemKeychain
+	},
+	"/usr/bin/security verify-cert": func(a []string) bool {
+		return len(a) == 7 && slices.Equal(a[2:6], []string{"-L", "-p", "ssl", "-c"}) && isItemFile(a[6], ItemCert)
+	},
+}
+
+var sha1Hex = regexp.MustCompile(`^[0-9A-F]{40}$`)
+
+// trustSettingsRight is the authorization right `security add-trusted-cert -d` and `delete-certificate -t`
+// need for the admin trust settings: without a person to type a password, only its rule set to allow
+// lets root change them.
+const trustSettingsRight = "com.apple.trust-settings.admin"
+
+// trustSettingsForm says whether argv is an item form that changes the admin trust settings.
+func trustSettingsForm(argv []string) bool {
+	return len(argv) > 1 && argv[0] == "/usr/bin/security" && (argv[1] == "add-trusted-cert" || argv[1] == "delete-certificate") &&
+		itemArgvAllowed(argv)
+}
+
+// withTrustSettingsRight wraps run for one trust-settings form: it saves trustSettingsRight's rule, sets
+// it to allow, runs the form, and then always writes the saved rule back, even when the form or the
+// allow failed or the request was cancelled. No form sets the rule on its own, so it is never left open.
+// A rule that could not be restored is an error, logged.
+func (t *Tools) withTrustSettingsRight(run func(context.Context, []string) ([]byte, int, error)) func(context.Context, []string) ([]byte, int, error) {
+	authdb := t.authdb
+	if authdb == nil {
+		authdb = runAuthorizationDB
+	}
+	return func(ctx context.Context, argv []string) (out []byte, code int, err error) {
+		saved, err := authdb(ctx, []string{"read", trustSettingsRight}, nil)
+		if err != nil || !bytes.Contains(saved, []byte("<plist")) {
+			return nil, 0, fmt.Errorf("authorizationdb read %s: %v; nothing was changed", trustSettingsRight, err)
+		}
+		defer func() {
+			if _, rerr := authdb(context.WithoutCancel(ctx), []string{"write", trustSettingsRight}, saved); rerr != nil {
+				slog.Error("guest agent: tools mode: the trust settings right was not restored", "right", trustSettingsRight, "err", rerr)
+				out, code, err = nil, 0, fmt.Errorf("authorizationdb write %s (restore): %w", trustSettingsRight, rerr)
+			}
+		}()
+		if _, err := authdb(ctx, []string{"write", trustSettingsRight, "allow"}, nil); err != nil {
+			return nil, 0, fmt.Errorf("authorizationdb write %s allow: %w", trustSettingsRight, err)
+		}
+		return run(ctx, argv)
+	}
+}
+
+// runAuthorizationDB runs `/usr/bin/security authorizationdb args...` with stdin and returns its stdout;
+// a non-zero exit is an error with its stderr.
+func runAuthorizationDB(ctx context.Context, args []string, stdin []byte) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "/usr/bin/security", append([]string{"authorizationdb"}, args...)...)
+	cmd.Stdin = bytes.NewReader(stdin)
+	var stderr capped
+	stderr.max = 1 << 10
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.b.String()))
+	}
+	return out, nil
 }

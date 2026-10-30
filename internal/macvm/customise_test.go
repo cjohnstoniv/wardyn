@@ -5,15 +5,26 @@ package macvm_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"io/fs"
+	"math/big"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
@@ -127,6 +138,7 @@ func TestParseBaseListRefuses(t *testing.T) {
 		"a zip with an app":        listJSON(t, map[string]any{"kind": "app", "name": "a", "path": "/opt/a.zip", "sha256": pin64, "app": "A.app"}),
 		"a profile, no identifier": listJSON(t, map[string]any{"kind": "profile", "name": "p", "path": "/opt/p.mobileconfig", "sha256": pin64}),
 		"a pkg with an identifier": listJSON(t, with("identifier", "com.example.x")),
+		"a ca not a certificate":   listJSON(t, map[string]any{"kind": "ca", "name": "c", "path": "/opt/c.p12", "sha256": pin64}),
 		// A harness's managed settings are written per run (P0), so no item may write them.
 		"claude managed settings":      listJSON(t, file(guestagent.MacClaudeCodeManagedSettingsPath)),
 		"claude managed, another case": listJSON(t, file("/library/application support/claudecode/managed-settings.json")),
@@ -320,5 +332,96 @@ func TestProfileItemsStagedForApproval(t *testing.T) {
 	rec, _ := macvm.ReadToolsRecord(base)
 	if got, _ := macvm.StagedProfiles(base); len(got) != 0 || rec.Items[0].State != macvm.ItemInstalled {
 		t.Fatalf("after approval: %q %+v", got, rec.Items)
+	}
+}
+
+// caPEM writes a self-signed certificate, a CA or not, as PEM and returns its path, pin and DER.
+func caPEM(t *testing.T, dir, name string, isCA bool) (string, string, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: name}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour),
+		IsCA: isCA, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, pin := itemFile(t, dir, name+".pem", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})))
+	return p, pin, der
+}
+
+// A ca item: staged and kept, trusted for SSL in the System keychain, then verified; its fingerprints are
+// recorded. A verify that fails reads not_trusted, which is not an error. A tools update first removes a
+// CA the list no longer has, with its trust settings, by its SHA-1, and the stage directory of an item the
+// list no longer names. A certificate that is not a CA is refused.
+func TestCAItemTrustVerifyAndRotation(t *testing.T) {
+	dir := t.TempDir()
+	ca, caPin, der := caPEM(t, dir, "org-ca", true)
+	leaf, leafPin, _ := caPEM(t, dir, "leaf", false)
+	S, K := guestagent.MacItemStageDir, guestagent.MacSystemKeychain
+	sum, sum1 := sha256.Sum256(der), sha1.Sum(der)
+	fp, fp1 := hex.EncodeToString(sum[:]), strings.ToUpper(hex.EncodeToString(sum1[:]))
+	old := []macvm.ItemRecord{
+		{Kind: "ca", Name: "org-ca", SHA256: pin64, State: macvm.ItemTrusted, Fingerprint: strings.Repeat("0", 64), SHA1: strings.Repeat("0A", 20)},
+		{Kind: "profile", Name: "gone", SHA256: pin64, State: macvm.ItemStaged},
+	}
+	for name, verifyExit := range map[string]int{"trusted": 0, "not trusted": 1} {
+		t.Run(name, func(t *testing.T) {
+			f := newTools(t)
+			f.opts.Items = macvm.BaseList{Version: 1, Items: []macvm.BaseItem{{Kind: "ca", Name: "org-ca", Path: ca, SHA256: caPin}}}
+			g := newItemGuest()
+			g.fail = func(argv []string) int { return map[bool]int{true: verifyExit}[argv[1] == "verify-cert"] }
+			res, err := f.itemStage(g).Run(context.Background(), macvm.Stage2Input{Previous: old})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{
+				"run /usr/bin/security delete-certificate -t -Z " + strings.Repeat("0A", 20) + " " + K,
+				"run /bin/rm -rf " + S + "/gone",
+				"run /bin/mkdir -p -m 0700 " + S,
+				"run /bin/mkdir -p -m 0700 " + S + "/org-ca", "push " + S + "/org-ca/item.cer 600",
+				"run /usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k " + K + " " + S + "/org-ca/item.cer",
+				"run /usr/bin/security verify-cert -L -p ssl -c " + S + "/org-ca/item.cer",
+			}
+			steps := g.steps[slices.Index(g.steps, want[0]):]
+			if !slices.Equal(steps, want) {
+				t.Fatalf("steps:\n%s", strings.Join(steps, "\n"))
+			}
+			for _, r := range g.argvs {
+				if err := guestagent.ToolsExecAllowed(r, guestagent.MacToolsBinDir); err != nil {
+					t.Errorf("the guest refuses %q: %v", r, err)
+				}
+			}
+			wantState := map[int]string{0: macvm.ItemTrusted, 1: macvm.ItemNotTrusted}[verifyExit]
+			if r := res.Items[0]; r.State != wantState || r.Fingerprint != fp || r.SHA1 != fp1 {
+				t.Fatalf("%+v", r)
+			}
+		})
+	}
+	f := newTools(t)
+	f.opts.Items = macvm.BaseList{Version: 1, Items: []macvm.BaseItem{{Kind: "ca", Name: "leaf", Path: leaf, SHA256: leafPin}}}
+	g := newItemGuest()
+	if _, err := f.itemStage(g).Run(context.Background(), macvm.Stage2Input{}); err == nil || !strings.Contains(err.Error(), "not a CA certificate") {
+		t.Fatalf("a leaf: %v", err)
+	}
+	if slices.ContainsFunc(g.steps, func(s string) bool { return strings.Contains(s, "add-trusted-cert") }) {
+		t.Fatal("a leaf was trusted")
+	}
+}
+
+// edit-base's recheck reads a CA's trust again: one the person trusted by hand reads trusted.
+func TestReadBackItemsVerifiesTheCA(t *testing.T) {
+	base := t.TempDir()
+	b, _ := json.Marshal(macvm.ToolsRecord{Items: []macvm.ItemRecord{{Kind: "ca", Name: "org-ca", SHA256: pin64, State: macvm.ItemNotTrusted}}})
+	if err := os.WriteFile(filepath.Join(base, macvm.ToolsRecordFile), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := macvm.ReadBackItems(context.Background(), newItemGuest(), base); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := macvm.ReadToolsRecord(base); rec.Items[0].State != macvm.ItemTrusted {
+		t.Fatalf("%+v", rec.Items)
 	}
 }

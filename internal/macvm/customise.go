@@ -6,9 +6,12 @@ package macvm
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -30,12 +33,16 @@ const (
 	ItemKindApp     = "app"
 	ItemKindFile    = "file"
 	ItemKindProfile = "profile"
+	ItemKindCA      = "ca"
 )
 
-// Item states: installed, or a profile staged for the person's approval in macos-vm edit-base.
+// Item states: installed, a profile staged for the person's approval in macos-vm edit-base, or a CA the
+// guest trusts or, read back, does not (then the person trusts it by hand in edit-base).
 const (
-	ItemInstalled = "installed"
-	ItemStaged    = "staged"
+	ItemInstalled  = "installed"
+	ItemStaged     = "staged"
+	ItemTrusted    = "trusted"
+	ItemNotTrusted = "not_trusted"
 )
 
 // profileID is a configuration profile's PayloadIdentifier.
@@ -149,8 +156,12 @@ func (it BaseItem) check() error {
 		if ext != ".mobileconfig" || it.Dest != "" || it.App != "" || !profileID.MatchString(it.Identifier) {
 			return errors.New("a profile item's path ends in .mobileconfig, and it takes its PayloadIdentifier as identifier and no dest or app")
 		}
+	case ItemKindCA:
+		if !slices.Contains([]string{".pem", ".cer", ".crt", ".der"}, ext) || it.Dest != "" || it.App != "" {
+			return errors.New("a ca item is one certificate, its path ending in .pem, .cer, .crt or .der, and it takes no dest or app")
+		}
 	default:
-		return fmt.Errorf("kind %q is not one of pkg, app, file, profile", it.Kind)
+		return fmt.Errorf("kind %q is not one of pkg, app, file, profile, ca", it.Kind)
 	}
 	return nil
 }
@@ -181,14 +192,21 @@ type ItemRecord struct {
 	State  string `json:"state"`
 	// Identifier is a profile's PayloadIdentifier.
 	Identifier string `json:"identifier,omitempty"`
+	// Fingerprint and SHA1 are a CA's SHA-256 and SHA-1 fingerprints (of its DER); a tools update removes a
+	// CA the list no longer has by its SHA-1.
+	Fingerprint string `json:"fingerprint,omitempty"`
+	SHA1        string `json:"sha1,omitempty"`
 }
 
 // installItems installs the list's items in order, after the harnesses and before the self-test, which
 // then runs on the base as a run gets it. An item that fails stops stage 2: prepare publishes no base, and
 // a tools update keeps the old one. Its command's output is not kept, since an installer's may echo what
 // it was given.
-func installItems(ctx context.Context, g ToolsGuest, o ToolsOptions, res *ToolsResult) error {
+func installItems(ctx context.Context, g ToolsGuest, o ToolsOptions, previous []ItemRecord, res *ToolsResult) error {
 	res.ItemsDigest = o.Items.Digest()
+	if err := removeRotatedCAs(ctx, g, o.Items, previous); err != nil {
+		return err
+	}
 	if len(o.Items.Items) == 0 {
 		return nil
 	}
@@ -256,6 +274,13 @@ func ReadBackItems(ctx context.Context, g ToolsGuest, dir string) error {
 	if err := readProfiles(ctx, g, rec.Items); err != nil {
 		return err
 	}
+	for i, r := range rec.Items {
+		if r.Kind == ItemKindCA {
+			if rec.Items[i].State, err = verifyCA(ctx, g, r.Name); err != nil {
+				return err
+			}
+		}
+	}
 	return writeJSONAtomic(filepath.Join(dir, ToolsRecordFile), rec, 0o600)
 }
 
@@ -271,9 +296,12 @@ func installItem(ctx context.Context, g ToolsGuest, it BaseItem) (rec ItemRecord
 	if err := runItem(ctx, g, "/bin/mkdir", "-p", "-m", "0700", dir); err != nil {
 		return rec, err
 	}
-	if it.Kind == ItemKindProfile {
+	switch it.Kind {
+	case ItemKindProfile:
 		// Kept staged for the person's approval in edit-base; readProfiles reads back whether it is installed.
 		return rec, pushItem(ctx, g, it.Path, it.SHA256, dir+"/"+guestagent.ItemProfile, 0o600)
+	case ItemKindCA:
+		return trustCA(ctx, g, it, rec)
 	}
 	// The stage directory goes after the install, whatever its end.
 	defer func() {
@@ -307,6 +335,67 @@ func installItem(ctx context.Context, g ToolsGuest, it BaseItem) (rec ItemRecord
 		err = derr
 	}
 	return rec, err
+}
+
+// trustCA stages a ca item's certificate (kept, for a trust by hand in edit-base), trusts it as a root
+// in the System keychain for SSL only, never every policy, and then verifies it. The guest agent runs
+// the trust inside the authorization bracket (guestagent withTrustSettingsRight), whose restore always
+// runs. A trust Apple refuses without a person is not an error: the CA reads not_trusted.
+func trustCA(ctx context.Context, g ToolsGuest, it BaseItem, rec ItemRecord) (ItemRecord, error) {
+	b, err := os.ReadFile(it.Path)
+	if err != nil {
+		return rec, err
+	}
+	der := b
+	if blk, _ := pem.Decode(b); blk != nil {
+		der = blk.Bytes
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil || !cert.IsCA {
+		return rec, fmt.Errorf("%s is not a CA certificate", it.Path)
+	}
+	s256, s1 := sha256.Sum256(der), sha1.Sum(der)
+	rec.Fingerprint, rec.SHA1 = hex.EncodeToString(s256[:]), strings.ToUpper(hex.EncodeToString(s1[:]))
+	cer := guestagent.ItemDir(it.Name) + "/" + guestagent.ItemCert
+	if err := pushItem(ctx, g, it.Path, it.SHA256, cer, 0o600); err != nil {
+		return rec, err
+	}
+	if _, _, err := g.Run(ctx, []string{"/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "ssl", "-k", guestagent.MacSystemKeychain, cer}); err != nil {
+		return rec, err
+	}
+	rec.State, err = verifyCA(ctx, g, it.Name)
+	return rec, err
+}
+
+// verifyCA is whether the guest trusts ca item name's staged certificate for SSL.
+func verifyCA(ctx context.Context, g ToolsGuest, name string) (string, error) {
+	_, exit, err := g.Run(ctx, []string{"/usr/bin/security", "verify-cert", "-L", "-p", "ssl", "-c", guestagent.ItemDir(name) + "/" + guestagent.ItemCert})
+	if err != nil {
+		return "", err
+	}
+	return map[bool]string{true: ItemTrusted, false: ItemNotTrusted}[exit == 0], nil
+}
+
+// removeRotatedCAs removes from the System keychain, with its trust settings, each CA the base held that
+// the list no longer has (by fingerprint), and the stage directory of each item the list no longer names.
+func removeRotatedCAs(ctx context.Context, g ToolsGuest, l BaseList, previous []ItemRecord) error {
+	names, pins := map[string]bool{}, map[string]bool{}
+	for _, it := range l.Items {
+		names[it.Name], pins[it.SHA256] = true, true
+	}
+	for _, r := range previous {
+		if r.Kind == ItemKindCA && r.SHA1 != "" && !pins[r.SHA256] {
+			if err := runItem(ctx, g, "/usr/bin/security", "delete-certificate", "-t", "-Z", r.SHA1, guestagent.MacSystemKeychain); err != nil {
+				return fmt.Errorf("macvm: removing the rotated CA %s (SHA-256 %s): %w", r.Name, r.Fingerprint, err)
+			}
+		}
+		if !names[r.Name] && r.Kind != ItemKindFile {
+			if err := runItem(ctx, g, "/bin/rm", "-rf", guestagent.ItemDir(r.Name)); err != nil {
+				return fmt.Errorf("macvm: removing the stage directory of %s: %w", r.Name, err)
+			}
+		}
+	}
+	return nil
 }
 
 // pushItem checks the file at path against its pin and pushes it to dest through the same handle.
