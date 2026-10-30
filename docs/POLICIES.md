@@ -76,12 +76,12 @@
 - To wall off plain Azure DevOps egress, deny `dev.azure.com`, `*.dev.azure.com` and `*.visualstudio.com`.
 - Empty under default-deny: no egress.
 - Each entry must be a shape the proxy's matcher can match.
-- Write time rejects a mid-label wildcard, a URL, a bad `:port` or a non-ASCII spelling.
+- Writes reject a mid-label wildcard, a URL, a bad `:port` or a non-ASCII spelling.
 - Type internationalised hosts as punycode (`xn--…`).
-- A policy stored earlier can still carry a dead entry.
+- A policy stored before that check can still carry a dead entry.
 - Each sidecar's boot `WARN` names every dead entry in both lists.
 - Never a refusal: failing a run over a long-inert entry is worse.
-- It matters most on `denied_domains`, where it denies nothing.
+- It matters most on `denied_domains`: it denies nothing.
 - Capped at **256 entries**, a hostile-input ceiling; more is a write-time `400`.
 
 ### `allow_all_egress`
