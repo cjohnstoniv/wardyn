@@ -104,6 +104,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Kubernetes run whose pinned proxy image is older than the runner now fails with the cause named: the proxy image is
   older than this runner and refused a setting at config load, so have the organisation name this release's proxy
   image, or run setup with `--proxy-image` set to it. It showed only a generic sidecar failure.
+- The proxy's decision log now masks the AWS access key id of the role credentials it re-signs with, as it already
+  masked their secret key and session token.
 
 ### Security
 
