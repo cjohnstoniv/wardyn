@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { AddWorkspaceDialog } from "./add-workspace-dialog";
 import { OperatorProvider } from "../wardyn/operator-context";
 import type { RunnerView } from "../../lib/types/runners";
+import { aheadByHours } from "../../lib/test-clock";
 
 const createWorkspaceMock = vi.fn();
 const listMineMock = vi.fn();
@@ -64,7 +65,7 @@ describe("Add workspace: where is this folder", () => {
     listMineMock.mockResolvedValue([
       MAC,
       LAPTOP,
-      runner("33333333-cccc", "old-box", { state: "revoked", revoked_at: "2026-10-29T00:00:00Z" }),
+      runner("33333333-cccc", "old-box", { state: "revoked", revoked_at: aheadByHours(-24) }),
       runner("44444444-dddd", "not-claimed-yet", { state: "unclaimed" }),
       runner("55555555-eeee", "org-pool", { owner_kind: "org" }),
     ]);
