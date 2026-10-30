@@ -225,6 +225,9 @@ export class HttpError extends Error {
   /** The request field a refusal is about (the envelope's `field`, a dotted path such as machine_kind), "" when
    *  the body names none: New Run takes the person to the step that changes it. */
   field: string;
+  /** The capability feature a capability_feature refusal is about (`inbound`, `custom_component`), absent on any
+   *  other refusal: the console branches on this, never on the sentence. */
+  feature?: string;
   /** The policy a governance refusal came from and how to ask for a change
    *  (the envelope's `policy`, internal/policyref.Ref). Absent when the body
    *  carries none, which is every refusal that is not a policy decision. */
@@ -245,6 +248,7 @@ export class HttpError extends Error {
     tool = "",
     cause = "",
     field = "",
+    feature = "",
   ) {
     super(message);
     this.status = status;
@@ -256,6 +260,7 @@ export class HttpError extends Error {
     this.cause = cause;
     this.field = field;
     if (policy) this.policy = policy;
+    if (feature) this.feature = feature;
     this.name = "HttpError";
   }
 }
@@ -475,8 +480,8 @@ export class PendingChangeError extends Error {
 
 export async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const { message, reason, org, provider, kind, policy, tool, cause, field } = await errEnvelope(res);
-    throw new HttpError(res.status, message, reason, org, provider, kind, policy, tool, cause, field);
+    const { message, reason, org, provider, kind, policy, tool, cause, field, feature } = await errEnvelope(res);
+    throw new HttpError(res.status, message, reason, org, provider, kind, policy, tool, cause, field, feature);
   }
   const body = await res.json();
   if (res.status === 202 && body && typeof body === "object" && (body as { pending_change?: unknown }).pending_change) {
@@ -529,6 +534,7 @@ type ErrEnvelope = {
   tool: string;
   cause: string;
   field: string;
+  feature?: string;
 };
 
 // The envelope's `policy` object, kept only when it is an object naming its
@@ -562,6 +568,7 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
         tool?: unknown;
         cause?: unknown;
         field?: unknown;
+        feature?: unknown;
         message?: unknown;
       };
       // The host-capacity 503 keeps its older shape (error = the code, reason = the measured
@@ -580,6 +587,7 @@ export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
           tool: field(j.tool),
           cause: field(j.cause),
           field: field(j.field),
+          feature: field(j.feature) || undefined,
         };
       }
     } catch {
