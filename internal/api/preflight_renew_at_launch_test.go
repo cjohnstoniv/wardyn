@@ -3,8 +3,8 @@
 
 package api
 
-// Review stays a dry check (it never spends a refresh token), and says so when
-// the session it passed is expired: launch will renew it.
+// Review's preflight renews an expired, renewable session as launch does, so it
+// no longer says the sign-in will be renewed at launch; a live session is not renewed.
 
 import (
 	"encoding/json"
@@ -15,16 +15,16 @@ import (
 	"time"
 )
 
-func TestCreateRenewal_ReviewSaysTheSignInWillBeRenewedAtLaunch(t *testing.T) {
+func TestCreateRenewal_ReviewRenewsAnExpiredSignIn(t *testing.T) {
 	note := fmt.Sprintf(mpBRRenewAtLaunch, "bedrock-sso")
 	live := createRenewalBlob()
 	live.ExpiresAt = time.Now().Add(2 * time.Hour)
 	for name, tc := range map[string]struct {
-		blob awsSSOBlob
-		want bool
+		blob  awsSSOBlob
+		calls int32
 	}{
-		"expired, renewable": {createRenewalBlob(), true},
-		"live":               {live, false},
+		"expired, renewable": {createRenewalBlob(), 1},
+		"live":               {live, 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv := createRenewalFixture(t)
@@ -35,11 +35,11 @@ func TestCreateRenewal_ReviewSaysTheSignInWillBeRenewedAtLaunch(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK {
 				t.Fatalf("preflight = %d %s", w.Code, w.Body.String())
 			}
-			if got := slices.Contains(resp.Warnings, note); got != tc.want {
-				t.Errorf("warnings = %q, want the renew-at-launch note: %v", resp.Warnings, tc.want)
+			if slices.Contains(resp.Warnings, note) {
+				t.Errorf("warnings = %q, want no renew-at-launch note: Review renewed it", resp.Warnings)
 			}
-			if calls.Load() != 0 {
-				t.Errorf("CreateToken calls = %d, want none: Review is a dry check", calls.Load())
+			if calls.Load() != tc.calls {
+				t.Errorf("CreateToken calls = %d, want %d", calls.Load(), tc.calls)
 			}
 		})
 	}

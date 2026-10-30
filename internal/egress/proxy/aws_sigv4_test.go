@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -584,6 +585,53 @@ func TestAWSSigV4_RefusesWhenCredentialsFail(t *testing.T) {
 			if len(h.arrivals()) != 0 {
 				t.Fatal("a request with no role credentials reached AWS")
 			}
+		})
+	}
+}
+
+// Neither the role credentials nor the sign-in they are redeemed with reach the sandbox's response
+// (its headers or its body), the decision log or the proxy's own log: not on a re-signed request,
+// and not on one refused because the credentials could not be had.
+func TestAWSSigV4_CredentialsReachNoResponseOrLog(t *testing.T) {
+	var logged lockedBuffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	check := func(t *testing.T, h *sigv4Harness, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		var headers strings.Builder
+		_ = rec.Header().Write(&headers)
+		seen := map[string]string{"the response headers": headers.String(), "the response body": rec.Body.String(),
+			"the decision log": h.log(), "the proxy's log": logged.String()}
+		for _, secret := range []string{sigv4RoleKey, sigv4RoleSecret, sigv4RoleToken, sigv4Bearer} {
+			for where, text := range seen {
+				if strings.Contains(text, secret) {
+					t.Errorf("%q reached %s", secret, where)
+				}
+			}
+		}
+	}
+	converse := func(t *testing.T) *http.Request {
+		return sandboxRequest(t, "POST", sigv4Bedrock, "/model/m/converse", `{}`, nil, "", "bedrock", "us-east-1", "")
+	}
+	t.Run("re-signed", func(t *testing.T) {
+		h := newSigV4Harness(t)
+		rec := h.send(t, converse(t), sigv4Bedrock)
+		h.mustReSign(t, rec, "bedrock")
+		check(t, h, rec)
+	})
+	for name, set := range map[string]func(h *sigv4Harness){
+		"control plane refuses": func(h *sigv4Harness) { h.cpStatus.Store(http.StatusForbidden) },
+		"portal refuses":        func(h *sigv4Harness) { h.portalCode.Store(http.StatusUnauthorized) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newSigV4Harness(t)
+			set(h)
+			rec := h.send(t, converse(t), sigv4Bedrock)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status %d body %s, want 403", rec.Code, rec.Body)
+			}
+			check(t, h, rec)
 		})
 	}
 }

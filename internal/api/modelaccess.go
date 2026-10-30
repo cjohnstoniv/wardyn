@@ -167,19 +167,18 @@ const (
 //
 // refused (awsSSORefusedFor) mirrors spent even while the session is
 // renewable: AWS refused its last renewal, so an EXPIRED session is dead (dispatch
-// refuses it too, and only a sign-in repairs it), and one inside the refresh skew
-// is `expiring` — dispatch serves it until it expires, then refuses it.
+// refuses it too, and only a sign-in repairs it), and one that has not expired is
+// `expiring`, inside the refresh skew or not — dispatch serves it until it
+// expires, then refuses it, and nothing renews it before then.
 func awsSSOCredentialState(blob awsSSOBlob, found, spent, refused bool, now time.Time, skew time.Duration) string {
 	if !found {
 		return modelAccessNotConfigured
 	}
 	if refused {
-		switch {
-		case blob.expired(now):
+		if blob.expired(now) {
 			return modelAccessExpiredSignin
-		case blob.needsRefresh(now, skew):
-			return modelAccessExpiring
 		}
+		return modelAccessExpiring
 	}
 	dead := modelAccessExpiredSignin
 	if spent {

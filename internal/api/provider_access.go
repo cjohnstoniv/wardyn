@@ -14,10 +14,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -90,7 +94,8 @@ func (s *Server) setupModelProviderState(ctx context.Context, sc types.SiteConfi
 		p, _ := modelProviderByID(sc.ModelProviders, a.Provider)
 		checks = append(checks, providerAccessCheck(p, a, len(defaultFor[a.Provider]) > 0))
 	}
-	return mp, access, append(checks, s.awsSigV4FallbackChecks(sc, mp)...)
+	checks = append(checks, s.awsSigV4FallbackChecks(sc, mp)...)
+	return mp, access, append(checks, s.awsSigV4RefusedRunnerChecks(ctx, sc, mp)...)
 }
 
 // awsSigV4FallbackChecks warn, with WARDYN_AWS_SIGV4_AT_PROXY on, of each AWS sign-in provider in mp
@@ -107,6 +112,47 @@ func (s *Server) awsSigV4FallbackChecks(sc types.SiteConfig, mp []SetupModelProv
 			checks = append(checks, SetupCheck{ID: "aws_sigv4_fallback:" + sp.ID, Label: "AWS signing at the proxy: " + cmp.Or(p.Name, sp.ID),
 				Status: "warn", Detail: "Runs on this provider are not signed at the proxy, so their AWS role credentials enter the sandbox: " + why.String() + "."})
 		}
+	}
+	return checks
+}
+
+// awsSigV4RefusedRunnerChecks warn, with an AWS sign-in provider in mp whose lane the proxy re-signs
+// (WARDYN_AWS_SIGV4_AT_PROXY on), of each claimed runner connected to this replica whose caps do not
+// name aws_sigv4: its wardyn-runnerd cannot re-sign, so the remote substrate refuses those runs' create
+// there. One row per runner; setup shows the checklist to an operator only (redactSetupStatusForUser).
+// Advisory, as awsSigV4FallbackChecks is: a runner not connected here is not graded, and a store that
+// cannot be read leaves the rows out.
+func (s *Server) awsSigV4RefusedRunnerChecks(ctx context.Context, sc types.SiteConfig, mp []SetupModelProvider) []SetupCheck {
+	resigned := slices.ContainsFunc(mp, func(sp SetupModelProvider) bool {
+		p, ok := modelProviderByID(sc.ModelProviders, sp.ID)
+		if !ok || p.Kind != types.ModelProviderBedrockSSO {
+			return false
+		}
+		_, why := s.awsSigV4Lane(providerBedrockHosts(p))
+		return why.Code == ""
+	})
+	rs, ok := s.cfg.Store.(store.RunnerStore)
+	if !resigned || !ok {
+		return nil
+	}
+	runners, err := rs.ListRunners(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: setup status: list runners", slog.Any("err", err))
+		return nil
+	}
+	var checks []SetupCheck
+	for _, r := range runners {
+		if r.State != types.RunnerClaimed {
+			continue
+		}
+		caps, connected := s.runnerLastCaps(r.ID)
+		if !connected || slices.Contains(caps.ProxySettings, runnerwire.ProxySettingAWSSigV4) {
+			continue
+		}
+		name := cmp.Or(r.Name, r.ID.String())
+		checks = append(checks, SetupCheck{ID: "aws_sigv4_refused:" + r.ID.String(), Label: "AWS signing at the proxy: " + name, Status: "warn",
+			Detail: "Runs on " + name + " are REFUSED while WARDYN_AWS_SIGV4_AT_PROXY is on: its wardyn-runnerd is too old to sign AWS requests at its proxy.",
+			Fix:    "Upgrade wardyn-runnerd on that computer to 0.10 or later."})
 	}
 	return checks
 }

@@ -2768,7 +2768,7 @@ The residuals an operator should plan for:
   - Take the SSO hosts out of the profile's `denied_domains` rather than widening `allowed_domains`.
 - **Launch with a lapsed session.**
   - `POST /runs` refuses a run whose own session for the chosen provider is missing, or expired with no refresh token that could renew it, BEFORE any run exists (`422`, with `"reason":"model_credential"`).
-  - Neither Review nor create spends a one-use refresh token; dispatch renews an expired session whose refresh token still lives, and a renewal AWS refuses fails the run naming AWS's answer and opens the sign-in door (0.9.1).
+  - Review's preflight and create renew an expired session whose refresh token still lives, the same way, so both give the same answer. The policy preview never does, nor does a run that waits in a pool's queue. A renewal AWS refuses refuses the run, naming AWS's answer, and opens the sign-in door.
   - Launch is never pre-checked on the console's cached status — the server is the gate.
 - **What the sign-in sandbox is, and what it is not.**
   - It is the AWS CLI and nothing else: no LLM harness, no repo, no mounts.
@@ -3246,7 +3246,7 @@ Naming these is the point of the walk, not a caveat on it:
 - The proxy's own resolve renews too, but only when the sandbox asks; the renewer covers a run that is quiet through the window.
 - So the hold is for a session that could not be renewed: its refresh token was refused or is gone, or AWS failed until it expired.
 - A refused refresh token is remembered in `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`), so every replica grades it alike until a sign-in or a renewal replaces it.
-- Each renewal writes one `harness.credential.refresh` row; the renewer's carry `trigger: renewer`, and its passes are the `aws_sso_renewal` sweep in [sweep health](operations/monitoring.md#substrate-and-sweep-health).
+- Each renewal writes one `harness.credential.refresh` row; the renewer's carry `trigger: renewer`, and Review's carry `trigger: preflight`. The renewer's passes are the `aws_sso_renewal` sweep in [sweep health](operations/monitoring.md#substrate-and-sweep-health).
 - It skips a paused, lost or revoked run; the proxy's own resolve still renews for any run it serves.
 
 **What the operator sees.**

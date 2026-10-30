@@ -281,3 +281,67 @@ func TestLocalEligibilityOwnBedrockRoleCredentialsAreDeliveryOrRefuse(t *testing
 		t.Fatalf("mode runner_resident: %v, want the not-built refusal", r)
 	}
 }
+
+// A re-signed lane on a local runner is admitted only for the person's own AWS
+// sign-in, proven in their namespace; its config comes back unchanged. Every
+// other origin, of any class, delivery and mode, is refused, and no gate is left.
+func TestLocalEligibilityAWSSigV4IsOwnOnly(t *testing.T) {
+	const path = "ProxyConfig.AWSSigV4"
+	cfg := &proxy.AWSSigV4Config{GrantID: uuid.New(), PortalHost: "portal.sso.us-east-1.amazonaws.com", AccountID: "123456789012", RoleName: "Dev", Hosts: []string{"bedrock-runtime.us-east-1.amazonaws.com"}}
+	plan := func(origin CredentialOrigin, mode Mode) LocalPlan {
+		classes := map[string]ClassPolicy{}
+		for _, c := range []string{ClassAWSSSOBearer, ClassAPIKey, ClassBedrockRoleCreds} {
+			classes[c] = ClassPolicy{Mode: mode}
+		}
+		return LocalPlan{Spec: runner.SandboxSpec{ProxyConfig: runner.ProxyConfig{AWSSigV4: cfg}}, Origins: map[string]CredentialOrigin{path: origin},
+			Delivery: DeliveryPolicy{Classes: classes}, Trust: types.RunnerTrustPersonal, OwnerKind: types.RunnerOwnerPerson}
+	}
+	modes := []Mode{ModeRefuse, ModeViaOrg, ModeRunnerResident}
+	for _, mode := range modes {
+		out, r := LocalEligibility(plan(CredentialOrigin{Class: ClassOwn, Stored: true, OwnNamespace: true, OwnerOnly: true}, mode))
+		if r != nil || out.ProxyConfig.AWSSigV4 != cfg {
+			t.Fatalf("mode %s: own sign-in refused or changed: %v %+v", mode, r, out.ProxyConfig.AWSSigV4)
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		origin CredentialOrigin
+		mode   Mode
+		want   string
+	}{
+		{"own without namespace", CredentialOrigin{Class: ClassOwn, Stored: true, OwnerOnly: true}, ModeRefuse, "credential requires proof of its owner namespace"},
+		{"stored own without OwnerOnly", CredentialOrigin{Class: ClassOwn, Stored: true, OwnNamespace: true}, ModeRefuse, "stored credential requires its owner's namespace and OwnerOnly"},
+		{"shared, refuse", CredentialOrigin{Class: ClassBrokered, Delivery: ClassAWSSSOBearer}, ModeRefuse, notDeliveredDetail(ClassAWSSSOBearer, types.RunnerTrustPersonal, ModeRefuse)},
+		{"shared, via_org", CredentialOrigin{Class: ClassBrokered, Delivery: ClassAWSSSOBearer}, ModeViaOrg, "aws_sso_bearer credential is not delivered to a local runner of trust class personal: via_org delivery of this credential is not built yet (delivery policy: via_org)"},
+		{"shared, runner_resident", CredentialOrigin{Class: ClassBrokered, Delivery: ClassAWSSSOBearer}, ModeRunnerResident, "runner_resident delivery of this credential is not built yet"},
+		{"no origin", CredentialOrigin{}, ModeRefuse, "credential provenance is unknown"},
+	} {
+		if _, r := LocalEligibility(plan(tc.origin, tc.mode)); r == nil || r.Reason != ReasonPlacementCredential || r.Field != path || r.Detail != tc.want {
+			t.Errorf("%s: %+v\n want %q", tc.name, r, tc.want)
+		}
+	}
+	for _, class := range []Class{ClassOperator, ClassBrokered, ClassPlatform, ClassExempt, ""} {
+		for _, delivery := range []string{"", ClassAWSSSOBearer, ClassAPIKey, ClassBedrockRoleCreds} {
+			for _, mode := range modes {
+				for _, stored := range []bool{false, true} {
+					origin := CredentialOrigin{Class: class, Delivery: delivery, Stored: stored, OwnNamespace: true, OwnerOnly: true}
+					if _, r := LocalEligibility(plan(origin, mode)); r == nil || r.Reason != ReasonPlacementCredential || r.Field != path {
+						t.Errorf("class %q delivery %q mode %s stored %v: admitted or misreported: %v", class, delivery, mode, stored, r)
+					}
+				}
+			}
+		}
+	}
+	var allow []Entry
+	for _, e := range Entries(StructProxyConfig, "AWSSigV4") {
+		if e.Rule == RuleAllow {
+			allow = append(allow, e)
+		}
+	}
+	if len(allow) != 1 || allow[0].Class != ClassOwn {
+		t.Fatalf("AWSSigV4 allow rows = %+v, want exactly one, of class own", allow)
+	}
+	if _, gated := gates[path]; gated {
+		t.Fatal("ProxyConfig.AWSSigV4 still has a gate, which would refuse the own row")
+	}
+}

@@ -239,13 +239,6 @@ var gates = map[string]func(LocalPlan) *Refusal{
 		}
 		return nil
 	},
-	// Re-signing redeems the person's AWS sign-in for role credentials the proxy holds.
-	"ProxyConfig.AWSSigV4": func(p LocalPlan) *Refusal {
-		if p.Spec.ProxyConfig.AWSSigV4 != nil {
-			return refuse(ReasonPlacementCredential, "ProxyConfig.AWSSigV4", "AWS re-signing's role credentials cannot be sent to a local runner")
-		}
-		return nil
-	},
 	// The cluster token is minted and held on the organisation's side.
 	"ProxyConfig.KubeAPI": func(p LocalPlan) *Refusal {
 		if p.Spec.ProxyConfig.KubeAPI != nil {
