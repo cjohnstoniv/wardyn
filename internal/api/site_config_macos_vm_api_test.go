@@ -26,8 +26,10 @@ func TestHandlePutSiteConfig_MacOSVM(t *testing.T) {
 	}
 	t.Run("a negative limit is refused and never stored", func(t *testing.T) {
 		fake := &fakeSiteConfigStore{cfg: stored}
-		if code := put(t, fake, `{"macos_vm":{"max_base_age_days":-1}}`); code != http.StatusBadRequest {
-			t.Fatalf("code = %d, want 400", code)
+		srv, _ := newSiteConfigHarness(t, fake)
+		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"macos_vm":{"max_base_age_days":-1}}`)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "macos_vm.max_base_age_days: must be 0 or more — use 0 for no limit") {
+			t.Fatalf("code = %d body = %s, want 400 with the approved sentence", w.Code, w.Body.String())
 		}
 		if fake.putSeen != nil {
 			t.Error("a refused limit reached the store")

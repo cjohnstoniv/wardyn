@@ -45,6 +45,14 @@ func TestMacOSVMOffer_BaseAge(t *testing.T) {
 		t.Errorf("a zero limit refused a base with no age: %+v", o.Refusal)
 	}
 
+	// The pool sentence is "1 day" at a maximum of 1 and "<n> days" otherwise.
+	for maxDays, want := range map[int]string{1: "in the last 1 day,", 2: "in the last 2 days,"} {
+		o := macOSVMOffer(rn, mac(ago(41)), true, 0, false, macOSBaseLimit{MaxDays: maxDays, Now: now})
+		if !strings.Contains(o.Pool, want) {
+			t.Errorf("maximum %d: pool sentence %q, want it to contain %q", maxDays, o.Pool, want)
+		}
+	}
+
 	o := macOSVMOffer(rn, mac(ago(41)), true, 0, false, limit)
 	want := "mac-studio-07's macOS base was prepared 41 days ago, and your organisation allows 30. Its owner runs `wardyn-runnerd macos-vm prepare --new-image`."
 	if o.Offered || o.Why != client.MacOSVMWhyBaseTooOld || o.Refusal.Detail != want || o.Have != 41 || o.Need != 30 ||

@@ -156,44 +156,44 @@ func fromMDMFile(path string, owner uint32) (mdmPosture, error) {
 type profileValues struct{ managed, disk, diskSet bool }
 
 // fromProfile is the posture the Mac's managed preferences profile (MDMManaged, DiskEncrypted) attests, and
-// the profile file it came from; ok is false for no profile, or one that does not set MDMManaged. The profile
-// is trusted on the terms of the MDM file: a regular file owned by owner that nobody else can write. Only a
-// Mac has one.
+// the profile file it came from; ok is false for no profile, or one that does not set MDMManaged. Only the
+// device-wide file counts, never one under <root>/<user>/, which a person may be able to install for
+// themselves. It is trusted on the terms of the MDM file: a regular file owned by owner that nobody else can
+// write. Only a Mac has one.
 func fromProfile(owner uint32) (v profileValues, file string, ok bool, err error) {
 	if profileOS != "darwin" {
 		return v, "", false, nil
 	}
-	for _, file = range managedprefs.Files(profileRoot, managedprefs.Domain) {
-		f, err := openTrusted(file, owner)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return v, file, false, err
-		}
-		f.Close()
-		get := func(key string) (val, set bool, err error) {
-			raw, err := profileExtract(file, key)
-			if err != nil {
-				return false, false, err
-			}
-			if val, set, err = managedprefs.Bool(raw); err != nil {
-				err = fmt.Errorf("managed preference %s: %w", key, err)
-			}
-			return val, set, err
-		}
-		var set bool
-		if v.managed, set, err = get("MDMManaged"); err != nil {
-			return v, file, false, err
-		} else if !set {
-			continue
-		}
-		if v.disk, v.diskSet, err = get("DiskEncrypted"); err != nil {
-			return v, file, false, err
-		}
-		return v, file, true, nil
+	files := managedprefs.Files(profileRoot, managedprefs.Domain)
+	file = files[len(files)-1]
+	f, err := openTrusted(file, owner)
+	if errors.Is(err, os.ErrNotExist) {
+		return v, "", false, nil
 	}
-	return v, "", false, nil
+	if err != nil {
+		return v, file, false, err
+	}
+	f.Close()
+	get := func(key string) (val, set bool, err error) {
+		raw, err := profileExtract(file, key)
+		if err != nil {
+			return false, false, err
+		}
+		if val, set, err = managedprefs.Bool(raw); err != nil {
+			err = fmt.Errorf("managed preference %s: %w", key, err)
+		}
+		return val, set, err
+	}
+	var set bool
+	if v.managed, set, err = get("MDMManaged"); err != nil {
+		return v, file, false, err
+	} else if !set {
+		return v, "", false, nil
+	}
+	if v.disk, v.diskSet, err = get("DiskEncrypted"); err != nil {
+		return v, file, false, err
+	}
+	return v, file, true, nil
 }
 
 // Reporter sends the `posture` event at READY and again when it changes.

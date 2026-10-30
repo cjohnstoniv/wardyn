@@ -4,7 +4,7 @@
 package api
 
 import (
-	"fmt"
+	"errors"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -12,7 +12,7 @@ import (
 // validateSiteMacOSVM refuses a negative base-age limit; 0 or absent is no limit.
 func validateSiteMacOSVM(m *types.SiteMacOSVM) error {
 	if m != nil && m.MaxBaseAgeDays < 0 {
-		return fmt.Errorf("macos_vm.max_base_age_days: %d is not a number of days — use 1 or more, or 0 for no limit", m.MaxBaseAgeDays)
+		return errors.New("macos_vm.max_base_age_days: must be 0 or more — use 0 for no limit")
 	}
 	return nil
 }

@@ -28,6 +28,10 @@ export type MacOSRefusal =
   | { why: "no_posture"; runner: string }
   | { why: "no_base"; runner: string; error?: string }
   | { why: "no_room"; runner: string }
+  /** The Mac's base is older than the organisation allows (`days` since it was prepared, `max` allowed), or its runner reports no age (`days` 0). */
+  | { why: "base_too_old"; runner: string; days: number; max: number }
+  /** A pool of several Macs, one of whose bases is too old or has no age. */
+  | { why: "pool_base_too_old"; max: number }
   /** The Mac sent macOS VM caps and refused on its own account; `have` and `need` are GB for memory, CPUs for CPU. */
   | { why: "runner_refused"; runner: string; reason: RunnerRefusedReason; have: number; need: number };
 
@@ -65,6 +69,8 @@ export function refusalText(r: MacOSRefusal): string {
     case "no_posture": return NR_MACHINE.MACOS_NO_POSTURE(r.runner, POSTURE_PATH);
     case "no_base": return r.error ? NR_MACHINE.MACOS_NO_BASE_ERROR(r.runner, r.error) : NR_MACHINE.MACOS_NO_BASE(r.runner);
     case "no_room": return NR_MACHINE.MACOS_NO_ROOM(r.runner);
+    case "base_too_old": return r.days > 0 ? NR_MACHINE.MACOS_BASE_TOO_OLD(r.runner, r.days, r.max) : NR_MACHINE.MACOS_BASE_NO_AGE(r.runner);
+    case "pool_base_too_old": return NR_MACHINE.MACOS_BASE_TOO_OLD_POOL(r.max);
     case "runner_refused": {
       const [have, need] = [r.have, r.need].map((n) => String(Number(n.toFixed(1))));
       if (r.reason === "below_min_memory") return MACVM_R.R47(have, need, r.runner);
@@ -103,6 +109,7 @@ function runnerRefusal(r: PoolMacOSVMRefusal): MacOSRefusal {
     case "preparing": return { why: "preparing", runner: r.runner, percent: r.progress ?? 0 };
     case "not_managed": return { why: "not_managed", runner: r.runner, markId: r.runner_id };
     case "no_base": return { why: "no_base", runner: r.runner, error: r.error };
+    case "base_too_old": return { why: "base_too_old", runner: r.runner, days: r.have ?? 0, max: r.need ?? 0 };
     default: return { why: r.why, runner: r.runner };
   }
 }
@@ -126,5 +133,7 @@ export function macOSOfferOf(pool: PoolMacOSVM | undefined): MacOSOffer | undefi
   }
   const refusals = pool.refusals ?? [];
   if (pool.runner && refusals.length === 1) return { ok: false, refusal: runnerRefusal(refusals[0]) };
-  return { ok: false, refusal: { why: refusals.length > 0 && refusals.every((r) => r.why !== "not_offered") ? "pool_cant_now" : "pool_not_offered" } };
+  const notOffered = refusals.length === 0 || refusals.some((r) => r.why === "not_offered");
+  if (!notOffered && refusals[0].why === "base_too_old") return { ok: false, refusal: { why: "pool_base_too_old", max: refusals[0].need ?? 0 } };
+  return { ok: false, refusal: { why: notOffered ? "pool_not_offered" : "pool_cant_now" } };
 }

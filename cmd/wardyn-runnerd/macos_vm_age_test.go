@@ -36,9 +36,9 @@ func TestMacOSVMBaseCarriesItsAge(t *testing.T) {
 // base's; a base that is not ready, or an older runner's with no date, has neither.
 func TestMacOSVMStatusBaseLine(t *testing.T) {
 	prev := statusNow
-	statusNow = func() time.Time { return time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC) }
+	statusNow = func() time.Time { return time.Date(2026, 10, 30, 12, 0, 0, 0, time.Local) }
 	t.Cleanup(func() { statusNow = prev })
-	prepared := time.Date(2026, 10, 28, 9, 30, 0, 0, time.UTC)
+	prepared := time.Date(2026, 10, 28, 9, 30, 0, 0, time.Local)
 	line := func(st macOSVMStatus) string {
 		var out strings.Builder
 		st.writeText(&out)
@@ -59,15 +59,17 @@ func TestMacOSVMStatusBaseLine(t *testing.T) {
 // One day reads "1 day ago", every other count "<n> days ago", on the status base line too.
 func TestMacOSVMStatusBaseLineDayPlural(t *testing.T) {
 	prev := statusNow
-	statusNow = func() time.Time { return time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC) }
+	statusNow = func() time.Time { return time.Date(2026, 10, 30, 12, 0, 0, 0, time.Local) }
 	t.Cleanup(func() { statusNow = prev })
 	for _, tc := range []struct {
 		prepared time.Time
 		want     string
 	}{
-		{time.Date(2026, 10, 29, 9, 30, 0, 0, time.UTC), "(1 day ago)"},
-		{time.Date(2026, 10, 28, 9, 30, 0, 0, time.UTC), "(2 days ago)"},
-		{time.Date(2026, 10, 30, 9, 30, 0, 0, time.UTC), "(0 days ago)"},
+		{time.Date(2026, 10, 29, 9, 30, 0, 0, time.Local), "(1 day ago)"},
+		{time.Date(2026, 10, 28, 9, 30, 0, 0, time.Local), "(2 days ago)"},
+		{time.Date(2026, 10, 30, 9, 30, 0, 0, time.Local), "(0 days ago)"},
+		// Yesterday late in the evening, read this morning: the date printed is yesterday's, so it is 1 day ago.
+		{time.Date(2026, 10, 29, 23, 30, 0, 0, time.Local), "(1 day ago)"},
 	} {
 		var out strings.Builder
 		macOSVMStatus{State: runnerwire.MacVMBaseReady, Base: "macOS 26.6.2", PreparedAt: tc.prepared.Format(time.RFC3339)}.writeText(&out)

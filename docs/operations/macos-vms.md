@@ -81,7 +81,7 @@
 | `WARDYN_RUNNER_MACOS_VM` | The Mac's runner | `1` offers macOS VMs from this Mac once its checks pass, else logs the fix. Off by default |
 | `MacOSVM` | The managed preferences profile | The same switch, from your MDM. Only a macOS profile sets it ([Managed preferences](hybrid-laptops.md#managed-preferences)) |
 | `MDMManaged`, `DiskEncrypted` | The managed preferences profile | The posture, from your MDM, when no posture file exists |
-| `macos_vm.max_base_age_days` | The organisation's site config | The most days since a Mac's base was prepared that a run is accepted. Empty: no maximum. A runner that reports no base age is refused while one is set |
+| `macos_vm.max_base_age_days` | The organisation's site config | The most days since a Mac's base was prepared that a run is accepted. Empty or 0: no maximum; a negative number is refused. A runner that reports no base age is refused while one is set |
 
 ## Which Macs qualify
 
@@ -109,8 +109,8 @@
 - It sizes its VM at the runner's per-run limits and never raises them. A runner that has connected to an organisation that sets them has them saved, and `prepare` uses them. Before that, if the organisation sets none, or to use others, pass `--per-run-cpu` (CPUs) and `--per-run-memory` (GB); a flag wins over the saved limit.
 - `--keep-ipsw` keeps Apple's image after the base is ready, and `--new-image` is the re-prepare.
 - `--ipsw <file> --sha256 <hex>` builds from a restore image you downloaded, for a network where Apple's download fails (see Network above). `--sha256` is required; take the SHA-256 from a source you trust. It never asks Apple which image is newest.
-- `--ipsw-url <https URL> --sha256 <hex>` downloads from your own mirror instead, in the same resumable ranges. The mirror must answer HTTP Range requests, else prepare says so. It never falls back to Apple; an image with another hash is deleted and refused.
-  - A managed Mac sets the mirror in the profile (`MacOSVMImageURL`, `MacOSVMImageHash`) or `runnerd.json`, and setup's prepare uses it. The Mac trusts the mirror's certificate through its own keychain.
+- `--ipsw-url <https URL> --sha256 <hex>` downloads from your own mirror instead, in the same resumable ranges. The mirror must answer HTTP Range requests, else prepare says so. With the flag, the hash is `--sha256` alone, never the profile's. It never falls back to Apple; an image with another hash is deleted and refused.
+  - A managed Mac sets the mirror in the profile (`MacOSVMImageURL`, `MacOSVMImageHash`) or `runnerd.json` (the profile wins), and setup's prepare uses it. The Mac trusts the mirror's certificate through its own keychain.
 - Prepare copies the file into its cache, never linking or moving it, and uses the copy only when its hash matches, before anything loads or installs it. A mismatch is refused with both hashes and the copy removed. Your file is never changed or deleted.
 - With a base ready, prepare does nothing and does not use the file; `--new-image` builds the new base from it. The copy is deleted once the base is ready, unless `--keep-ipsw` is set.
 - A restore image in the cache is reused only when a previous prepare's download recorded its SHA-256 (a `.sha256` file beside it) and the file still matches. The record is written only for an image Wardyn downloaded over the pinned connection, resumed only from its own partial file, or copied with `--ipsw` after its hash matched.

@@ -462,7 +462,7 @@ func (s *Server) macOSBaseLimitOf(ctx context.Context) (macOSBaseLimit, error) {
 }
 
 // macOSPoolBaseTooOld is what a pool of several Macs is told when a base is too old, or reports no age.
-const macOSPoolBaseTooOld = "Every runner in this pool must have a macOS base prepared in the last %d days, and at least one doesn't. Choose another pool, or ask the Mac's owner to prepare a new base."
+const macOSPoolBaseTooOld = "Every runner in this pool must have a macOS base prepared in the last %s, and at least one doesn't. Choose another pool, or ask the Mac's owner to prepare a new base."
 
 // macOSBaseRefusal is the refusal of a ready base under limit's maximum age, with the base's age in days; nil
 // when no maximum is set or the base is young enough. A runner that reports no age (days 0) is refused: with
@@ -544,7 +544,7 @@ func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int
 	if out.Refusal != nil {
 		out.Pool = macOSPoolCannotTake
 		if out.Why == client.MacOSVMWhyBaseTooOld {
-			out.Pool = fmt.Sprintf(macOSPoolBaseTooOld, out.Need)
+			out.Pool = fmt.Sprintf(macOSPoolBaseTooOld, daysText(out.Need))
 		}
 	}
 	out.Offered = out.Refusal == nil
@@ -871,10 +871,13 @@ func (c sizeCause) sentence(group []sizeLow) string {
 	return fmt.Sprintf("%s, the default size %s. Ask for at least the minimum in the run's `resources`, or set it on Review.", gets, c.name)
 }
 
-// daysAgoText is "1 day ago" for one and "<n> days ago" for every other count.
-func daysAgoText(n int) string {
+// daysText is "1 day" for one and "<n> days" for every other count.
+func daysText(n int) string {
 	if n == 1 {
-		return "1 day ago"
+		return "1 day"
 	}
-	return fmt.Sprintf("%d days ago", n)
+	return fmt.Sprintf("%d days", n)
 }
+
+// daysAgoText is "1 day ago" for one and "<n> days ago" for every other count.
+func daysAgoText(n int) string { return daysText(n) + " ago" }

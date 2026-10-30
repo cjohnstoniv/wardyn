@@ -113,7 +113,7 @@ func TestPrepareIPSWURLCertificateRefusalNamesTheCA(t *testing.T) {
 	f.useMirror(m, m.sha)
 	f.opts.HTTP = &http.Client{} // the system roots, which do not hold the test certificate
 	_, err := macvm.Prepare(context.Background(), f.opts)
-	if err == nil || !strings.Contains(err.Error(), "install your organisation's CA root") || strings.Contains(err.Error(), "pinning") {
+	if err == nil || !strings.Contains(err.Error(), "does not trust the certificate for 127.0.0.1; install your organisation's CA root in the System keychain, directly or through MDM, then run prepare again") || strings.Contains(err.Error(), "pinning") {
 		t.Fatalf("an untrusted mirror certificate: %v", err)
 	}
 	if n := m.reqs.Load(); n != 0 {

@@ -44,7 +44,7 @@ func (s *Server) poolMacOSVMOf(ctx context.Context, eligible []poolTarget, fits 
 	}
 	// A site config that cannot be read sets no maximum here; placement reads it again and refuses on the error.
 	var limit macOSBaseLimit
-	if len(cands) > 0 { // a pool of no Mac needs no read
+	if len(cands) > 0 { // a pool with no self-hosted runner needs no read
 		limit, _ = s.macOSBaseLimitOf(ctx)
 	}
 	return poolMacOSVM(cands, s.isSecurityOperator(ctx), limit)

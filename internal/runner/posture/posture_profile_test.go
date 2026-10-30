@@ -117,3 +117,29 @@ func TestPosture_ProfileIgnoredWhenNotTrusted(t *testing.T) {
 		}
 	}
 }
+
+// A profile under the person's own directory is not the MDM's word: only the device-wide file counts.
+func TestPosture_UserScopedProfileIsIgnored(t *testing.T) {
+	uid := uint32(os.Getuid())
+	path := fakeProfile(t, map[string]string{"MDMManaged": "false"}, 0o644)
+	mine := managedprefs.Files(filepath.Dir(path), managedprefs.Domain)
+	if len(mine) != 2 {
+		t.Skip("no current user to scope a profile to")
+	}
+	if err := os.MkdirAll(filepath.Dir(mine[0]), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(map[string]string{"MDMManaged": "true", "DiskEncrypted": "true"})
+	if err := os.WriteFile(mine[0], b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p := read(filepath.Join(t.TempDir(), "posture.json"), uid); p.MDMManaged {
+		t.Fatalf("posture = %+v, want the user-scoped profile ignored", p)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if p := read(filepath.Join(t.TempDir(), "posture.json"), uid); p.MDMManaged || p.Evidence == types.PostureEvidenceMDMFile {
+		t.Fatalf("posture = %+v, want no profile claim from a user-scoped file alone", p)
+	}
+}

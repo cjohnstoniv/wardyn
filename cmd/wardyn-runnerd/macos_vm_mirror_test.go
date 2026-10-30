@@ -8,13 +8,18 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const testMirror = "https://mirror.example/UniversalMac_27.0_26A1_Restore.ipsw"
@@ -93,4 +98,69 @@ func TestStartPrepareMirrorFromTheProfile(t *testing.T) {
 	if got := argv(); flagValue(got, macvm.FlagIPSWURL) != testMirror || flagValue(got, macvm.FlagSHA256) != hash {
 		t.Fatalf("prepare argv %q, want the profile's mirror", got)
 	}
+}
+
+// Setup's prepare takes the mirror from runnerd.json when the profile names none, and the profile's wins.
+func TestStartSetupPrepareMirrorFromRunnerJSON(t *testing.T) {
+	hash := strings.Repeat("ef", 32)
+	plan := setupPlan{existing: runnerFile{MacOSVMImageURL: testMirror, MacOSVMImageHash: hash}}
+	limits := &types.RunnerLimits{PerRun: types.RunnerAmounts{CPUMillis: 4000, MemoryMiB: 8192}}
+	run := func(t *testing.T) []string {
+		t.Helper()
+		m, argv := mirrorRig(t)
+		plan.paths.installed = filepath.Join(filepath.Dir(m.helper), "wardyn-runnerd")
+		cmd := &cobra.Command{}
+		cmd.SetContext(context.Background())
+		cmd.SetOut(io.Discard)
+		startSetupPrepare(cmd, m, plan, "runner-a", limits)
+		return argv()
+	}
+
+	withManagedPrefs(t, "darwin", nil)
+	if got := run(t); flagValue(got, macvm.FlagIPSWURL) != testMirror || flagValue(got, macvm.FlagSHA256) != hash {
+		t.Fatalf("prepare argv %q, want runnerd.json's mirror", got)
+	}
+
+	other := strings.Repeat("12", 32)
+	withManagedPrefs(t, "darwin", map[string]string{"MacOSVMImageURL": "https://profile.example/a.ipsw", "MacOSVMImageHash": other})
+	if got := run(t); flagValue(got, macvm.FlagIPSWURL) != "https://profile.example/a.ipsw" || flagValue(got, macvm.FlagSHA256) != other {
+		t.Fatalf("prepare argv %q, want the profile's mirror over runnerd.json's", got)
+	}
+}
+
+// --ipsw-url takes its hash from --sha256 only: with none, prepare refuses before any download, and the
+// profile's hash, pinned for another image, is not paired with it.
+func TestPrepareMirrorFlagTakesItsOwnHash(t *testing.T) {
+	profileHash := strings.Repeat("34", 32)
+	withManagedPrefs(t, "darwin", map[string]string{"MacOSVMImageHash": profileHash})
+	prepare := macOSVMSubCommand(t, "prepare")
+	if err := prepare.Flags().Set("ipsw-url", testMirror); err != nil {
+		t.Fatal(err)
+	}
+	url, hash, err := prepareMirror(prepare, "", testMirror, "")
+	if err != nil || url != testMirror || hash != "" {
+		t.Fatalf("mirror = %q, %q, %v; want the flag's URL and no hash", url, hash, err)
+	}
+	m, argv := mirrorRig(t)
+	if err := m.startPrepare(context.Background(), prepareArgs{helper: m.helper, runnerID: "runner-a", cpus: 4, memoryMiB: 8192, ipswURL: url, sha256: hash}); !errors.Is(err, macvm.ErrIPSWURLNeedsSHA256) {
+		t.Fatalf("start = %v, want %v", err, macvm.ErrIPSWURLNeedsSHA256)
+	}
+	if got := argv(); got != nil {
+		t.Fatalf("a mirror with no hash ran the helper: %q", got)
+	}
+	_, hash, _ = prepareMirror(prepare, "", testMirror, strings.Repeat("56", 32))
+	if hash != strings.Repeat("56", 32) {
+		t.Fatalf("--sha256 = %q, want the flag's", hash)
+	}
+}
+
+func macOSVMSubCommand(t *testing.T, name string) *cobra.Command {
+	t.Helper()
+	for _, c := range newMacOSVMCommand().Commands() {
+		if c.Name() == name {
+			return c
+		}
+	}
+	t.Fatalf("macos-vm has no %s", name)
+	return nil
 }

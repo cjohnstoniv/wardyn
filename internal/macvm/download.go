@@ -67,7 +67,7 @@ var ErrNoRange = errors.New("the server answered 200, not 206 Partial Content: a
 
 // mirrorCertAdvice is the cause a certificate refusal of a mirror ends the download with. The mirror's
 // certificate is checked against the Mac's own trust, which a managed Mac fills with the organisation's roots.
-const mirrorCertAdvice = "this Mac does not trust the certificate of %s; install your organisation's CA root in the System keychain (your MDM can) and run prepare again"
+const mirrorCertAdvice = "this Mac does not trust the certificate for %s; install your organisation's CA root in the System keychain, directly or through MDM, then run prepare again"
 
 // isCertRefusal says err is the TLS verifier refusing a server's certificate.
 func isCertRefusal(err error) bool {

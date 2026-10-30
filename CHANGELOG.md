@@ -143,7 +143,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   (or whose runner reports no age).
 - `wardyn-runnerd macos-vm prepare --ipsw-url <https URL> --sha256 <hex>` builds the macOS base from an image on your own
   mirror, which must answer HTTP Range requests, and never falls back to Apple. `MacOSVMImageURL` and `MacOSVMImageHash`
-  in the managed profile (or `macos_vm_image_url` and `macos_vm_image_sha256` in `runnerd.json`) set it for setup too.
+  in the managed profile (or `macos_vm_image_url` and `macos_vm_image_sha256` in `runnerd.json`; the profile wins) set it for setup too.
+  With `--ipsw-url`, the hash is `--sha256` alone.
 
 ### Fixed
 

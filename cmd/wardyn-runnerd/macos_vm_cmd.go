@@ -97,15 +97,9 @@ func newMacOSVMCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// The mirror: the flags, else the profile or runnerd.json. A restore image file named with --ipsw
-			// stands alone.
-			imgURL, imgSHA := ipswURL, sha256
-			if ipsw == "" {
-				cfg, cerr := serveConfig(cmd, "")
-				if cerr != nil {
-					return cerr
-				}
-				imgURL, imgSHA = cfg.get("macos_vm_image_url"), cfg.get("macos_vm_image_sha256")
+			imgURL, imgSHA, err := prepareMirror(cmd, ipsw, ipswURL, sha256)
+			if err != nil {
+				return err
 			}
 			err = m.startPrepare(cmd.Context(), prepareArgs{helper: m.helper, runnerID: runnerID, cpus: cpus, memoryMiB: memMiB, keepIPSW: keep, ipsw: ipsw, ipswURL: imgURL, sha256: imgSHA, newImage: newImage})
 			if errors.Is(err, errMacOSBaseReady) {
@@ -270,7 +264,7 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 	}
 	if st.State == runnerwire.MacVMBaseReady {
 		if at, err := time.Parse(time.RFC3339, st.PreparedAt); err == nil {
-			fmt.Fprintf(out, ", prepared %s (%s)", at.Local().Format(time.DateOnly), daysAgo(max(0, int(statusNow().Sub(at).Hours()/24))))
+			fmt.Fprintf(out, ", prepared %s (%s)", at.Local().Format(time.DateOnly), daysAgo(calendarDays(at, statusNow())))
 		}
 		if st.HostOS != "" {
 			fmt.Fprintf(out, "; this Mac: macOS %s", st.HostOS)
@@ -345,4 +339,28 @@ func daysAgo(n int) string {
 		return "1 day ago"
 	}
 	return fmt.Sprintf("%d days ago", n)
+}
+
+// prepareMirror is the mirror prepare downloads from: the flags, else the profile or runnerd.json. A restore
+// image file named with --ipsw stands alone, and so does a mirror named with --ipsw-url: its hash is --sha256
+// or prepare refuses, never the profile's, which was pinned for another image.
+func prepareMirror(cmd *cobra.Command, ipsw, ipswURL, sha256 string) (url, hash string, err error) {
+	if ipsw != "" || cmd.Flags().Changed("ipsw-url") {
+		return ipswURL, sha256, nil
+	}
+	cfg, err := serveConfig(cmd, "")
+	if err != nil {
+		return "", "", err
+	}
+	return cfg.get("macos_vm_image_url"), cfg.get("macos_vm_image_sha256"), nil
+}
+
+// calendarDays is the days from the local date of from to the local date of to, never negative: a base
+// prepared yesterday evening is "1 day ago" this morning, the date the status line prints beside it.
+func calendarDays(from, to time.Time) int {
+	day := func(t time.Time) time.Time {
+		y, m, d := t.Local().Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+	}
+	return max(0, int(day(to).Sub(day(from)).Hours()/24))
 }
