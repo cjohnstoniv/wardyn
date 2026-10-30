@@ -249,6 +249,21 @@ describe("RunnerCredentials — save", () => {
     });
   });
 
+  it("a legacy row changed and then set back before the save still goes back exactly as stored", async () => {
+    getMock.mockResolvedValue(doc({ git_pat_broker: { mode: "runner_resident", require_posture: {} } }));
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByRole("radiogroup", { name: DELIVERY.CLASS.api_key });
+    await user.click(option("git_pat_broker", "via_org"));
+    await user.click(option("git_pat_broker", "runner_resident"));
+    await user.click(option("api_key", "via_org"));
+    await user.click(screen.getByRole("button", { name: DELIVERY.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+    expect(putMock.mock.calls[0][0]).toEqual({
+      classes: { api_key: { mode: "via_org" }, git_pat_broker: { mode: "runner_resident", require_posture: {} } },
+    });
+  });
+
   it("an edited legacy row with an empty posture is rebuilt, and removing it writes nothing for it", async () => {
     getMock.mockResolvedValue(doc({ git_pat_broker: { mode: "runner_resident", require_posture: {} } }));
     putMock.mockImplementation((policy: DeliveryPolicy) => Promise.resolve({ policy, updated_at: "", updated_by: "" }));

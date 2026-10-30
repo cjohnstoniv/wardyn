@@ -26,7 +26,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   (#3402, #3813).
 - Saving Settings → Runner credentials no longer fails with a 422 when the stored policy holds an older row with an
   empty posture requirement, such as Git tokens stored on the runner with `require_posture: {}`. Rows you did not
-  edit now go back exactly as stored (#3502).
+  edit now go back exactly as stored (#3502, #3816).
 - An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
   edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
   terminal. They used to stay open until they closed or reached their time limit (#3398).
