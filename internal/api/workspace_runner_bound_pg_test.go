@@ -311,3 +311,57 @@ func TestLeaverPurge_RevokesRunnerKeepsBinding(t *testing.T) {
 	}
 	f.wantRefusedNamed(t, "after the purge", boundFolder)
 }
+
+// A runner whose wardyn-runnerd does not say bound_folders predates the checks that bind such a folder:
+// every door refuses the run on it, saying to update the runner, and writes no run.
+func TestRunCreate_RunnerBoundFolderRefusedOnAnOlderRunner(t *testing.T) {
+	e := newPlacementEnv(t)
+	e.srv.cfg.UserMounts = runner.UserMountPolicy{Roots: []string{boundLaptopRoot}}
+	pool := e.createPool("Laptops", types.RunnerPoolUser)
+	laptop := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
+	e.addToPool(e.person, pool.ID, laptop)
+	advertiseRunnerCaps(t, e.srv, laptop, false, boundLaptopRoot)
+	ws, _ := e.boundFolderWorkspace(e.person, "older-runner", boundFolder, laptop)
+	for door, w := range e.answers(e.person, boundRunBody(ws.ID, `"runner_pool_id":"`+pool.ID.String()+`"`)) {
+		if w.Code != http.StatusUnprocessableEntity || wireReason(t, w) != string(placement.ReasonPlacementLocalPath) || !strings.Contains(w.Body.String(), "update the runner") {
+			t.Errorf("%s = %d %s, want 422 %s saying to update the runner", door, w.Code, w.Body, placement.ReasonPlacementLocalPath)
+		}
+	}
+	if n := e.count(`SELECT count(*) FROM agent_runs`); n != 0 {
+		t.Errorf("%d runs were written; every door refused", n)
+	}
+}
+
+// A launch with a bound folder that waits keeps its folder's runner: the queue's verdict never offers it
+// another runner of the pool with room, and offers it none once that runner is revoked.
+func TestQueue_RunnerBoundFolderWaitsForItsRunnerOnly(t *testing.T) {
+	e := newQueueEnv(t)
+	ctx := context.Background()
+	e.srv.cfg.UserMounts = runner.UserMountPolicy{Roots: []string{boundLaptopRoot}}
+	pool := e.createPool("Laptops", types.RunnerPoolUser)
+	bound := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
+	spare := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
+	e.addToPool(e.person, pool.ID, bound)
+	e.addToPool(e.person, pool.ID, spare)
+	advertiseRunnerRoots(t, e.srv, bound, boundLaptopRoot)
+	advertiseRunnerRoots(t, e.srv, spare, boundLaptopRoot)
+	e.maxRuns(bound, e.personP, 1)
+	pool = e.reread(pool)
+	e.occupyRunner(pool, bound, e.personP)
+	ws, _ := e.boundFolderWorkspace(e.person, "bound", boundFolder, bound)
+
+	waiting := e.waitsFor(boundRunBody(ws.ID, `"runner_pool_id":"`+pool.ID.String()+`"`), "its folder's runner is full and the spare is idle")
+	launch := e.waitingLaunch(waiting.ID)
+	if launch.MountRunner == nil || *launch.MountRunner != bound {
+		t.Fatalf("the queued launch's mount_runner = %v, want %s", launch.MountRunner, bound)
+	}
+	room, err := e.srv.queueRunnerFree(withOIDCHuman(ctx, e.personP), e.reread(pool), launch)
+	if err != nil || len(room.runners)+len(room.remotes) != 0 {
+		t.Fatalf("the queue's verdict = %+v, %v; want it held for %s, never offered the spare", room, err, bound)
+	}
+	e.exec(`UPDATE runners SET state = 'revoked', revoked_at = now() WHERE id = $1`, bound)
+	room, err = e.srv.queueRunnerFree(withOIDCHuman(ctx, e.personP), e.reread(pool), launch)
+	if err != nil || len(room.runners)+len(room.remotes) != 0 {
+		t.Errorf("the verdict once %s is revoked = %+v, %v; want no runner offered, never the spare %s", bound, room, err, spare)
+	}
+}
