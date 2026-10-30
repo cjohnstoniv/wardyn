@@ -317,11 +317,17 @@ func (s *Server) launchWorkload(r *http.Request, ws store.WorkloadStore, wl stor
 	if wl.CurrentGeneration >= wl.Generation {
 		return none, nil // a live or ended run of this spec stands: an ended one is restarted, never relaunched
 	}
-	ctx := r.Context()
-	claimed, ok, err := ws.ClaimWorkloadLaunch(ctx, wl.ID)
+	claimed, ok, err := ws.ClaimWorkloadLaunch(r.Context(), wl.ID)
 	if err != nil || !ok {
 		return none, err
 	}
+	return s.launchClaimed(r, ws, claimed)
+}
+
+// launchClaimed is launchWorkload once claimed, the workload ClaimWorkloadLaunch returned, holds the claim.
+func (s *Server) launchClaimed(r *http.Request, ws store.WorkloadStore, claimed store.Workload) (client.WorkloadLaunch, error) {
+	none := client.WorkloadLaunch{State: client.WorkloadNoLaunch}
+	ctx := r.Context()
 	if claimed.Source == store.WorkloadSourceK8s && claimed.SourcePoolID == nil {
 		// A custom resource's runs go to its binding's pool only; with the pool gone there is nowhere to go.
 		gone := &runnerpool.Refusal{Reason: runnerpool.ReasonNotFound}

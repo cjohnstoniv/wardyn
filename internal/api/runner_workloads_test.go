@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // workloadSweepStore is the in-memory store with the two workload calls the status sweep makes; every other
@@ -162,5 +163,67 @@ func TestWorkloadStatusSweep_PushesWhatMovedToItsOnlineRunner(t *testing.T) {
 	srv.pushRunnerWorkloadStatuses(context.Background(), online)
 	if got := fake.WorkloadStatuses(); len(got) != 3 || got[1].Name != "moved" || got[2].Name != "same" {
 		t.Fatalf("after READY the runner holds %+v, want both of its statuses sent again", got)
+	}
+}
+
+// standingFaultStore is the in-memory store whose identity check cannot be answered, with one launch claim
+// that ClaimWorkloadLaunch takes and then holds until released; every other workload call is unset and would
+// panic.
+type standingFaultStore struct {
+	*authzStore
+	store.WorkloadStore
+
+	mu            sync.Mutex
+	held          bool
+	claims, reads int
+}
+
+func (f *standingFaultStore) ClaimWorkloadLaunch(_ context.Context, id uuid.UUID) (store.Workload, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.claims++
+	if f.held {
+		return store.Workload{}, false, nil
+	}
+	f.held = true
+	return store.Workload{ID: id, Owner: "service:ci-bot", Name: "web", Source: store.WorkloadSourceK8s, Generation: 2,
+		CurrentGeneration: 1, ClaimToken: uuid.New()}, true, nil
+}
+
+func (f *standingFaultStore) IdentityBlocked(context.Context, string, int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reads++
+	return false, errors.New("connection refused")
+}
+
+// A launch whose binding's standing cannot be read takes its claim first, so the lapsed-launch sweep's
+// passes while the claim is held read nothing: the standing is read once a claim, as the CHANGELOG bounds it.
+func TestLaunchUnderBinding_AnUnreadableStandingIsReadOnceAClaim(t *testing.T) {
+	f := &standingFaultStore{authzStore: newAuthzStore()}
+	srv := New(baseTestConfig(newHarness(t), f))
+	si := types.ServiceIdentity{Name: "ci-bot", Sponsor: "sponsor-sub"}
+	b := store.WorkloadBinding{ID: uuid.New(), PoolID: uuid.New(), Namespace: "team-a", Service: si.Name, Sponsor: si.Sponsor}
+	wl := store.Workload{ID: uuid.New(), Owner: "service:ci-bot", Name: "web", Source: store.WorkloadSourceK8s, Generation: 2, CurrentGeneration: 1}
+	sr, cancel, err := serviceLaunchRequest(si, b.Sponsor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+
+	if _, err := srv.launchUnderBinding(sr, f, b, true, si, wl); err == nil {
+		t.Fatal("a launch whose standing cannot be read succeeded")
+	}
+	for pass := 0; pass < 3; pass++ { // the sweep's passes while the claim is still held
+		if launch, err := srv.launchUnderBinding(sr, f, b, true, si, wl); err != nil || launch.State != client.WorkloadNoLaunch {
+			t.Fatalf("pass %d under a held claim = %+v, %v; want no launch and no error", pass, launch, err)
+		}
+	}
+	if f.claims != 4 || f.reads != 1 {
+		t.Fatalf("claims/standing reads = %d/%d, want 4/1: one read for the one claim taken", f.claims, f.reads)
+	}
+	f.held = false // the claim lapses: the next retry takes it and reads the standing again
+	if _, err := srv.launchUnderBinding(sr, f, b, true, si, wl); err == nil || f.reads != 2 {
+		t.Fatalf("after the claim lapsed: err %v, %d standing reads; want the error and a second read", err, f.reads)
 	}
 }
