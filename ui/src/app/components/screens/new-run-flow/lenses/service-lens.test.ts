@@ -60,6 +60,17 @@ describe("serviceProblems: the limits of internal/types/service.go", () => {
     expect(serviceProblems(svc({ health: { ...health, failure_threshold: 11 } }))).toEqual({ failures: true });
   });
 
+  it("holds the path to the server's characters and length, as well as the leading slash", () => {
+    const path = (p: string) => serviceProblems(svc({ health: { ...health, path: p } }));
+    expect(path("/health?x=1")).toEqual({ path: true });
+    expect(path("/health check")).toEqual({ path: true });
+    expect(path("/héalth")).toEqual({ path: true });
+    expect(path("/a\n")).toEqual({ path: true });
+    expect(path(`/${"a".repeat(255)}`)).toEqual({});
+    expect(path(`/${"a".repeat(256)}`)).toEqual({ path: true });
+    expect(path("/api/v1/ready.json~!$&'()*+,;=:@%2F-_")).toEqual({});
+  });
+
   it("does not hold the check to its limits while no port is named", () => {
     expect(serviceProblems({ restart: "on_failure", health: { path: "x", interval_sec: 1, failure_threshold: 99 } })).toEqual({});
   });
