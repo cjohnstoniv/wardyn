@@ -287,6 +287,7 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
   - per kubelet version (the 1.31 floor and the latest kind image) it creates a `wardyn-k6-<pid>` cluster on Calico, stands up a real organisation and enrols the `wardyn-runnerd` chart with it.
   - [`test/k6`](../test/k6) then runs under runnerd's own token; its bind/delete race cases gate the unbound-pod arm.
   - It deletes its clusters and images on exit, and runs in `nightly.yml`'s `k6-kind-conformance` job, one leg per kubelet and suite (`K6_SUITES`); self-skips unless `WARDYN_TEST_K8S=1`.
+  - `K6_SUITES=workload` runs `TestK6Workload` instead (#3804), with a throwaway in-cluster Dex for real sign-ins. A bound namespace's WardynWorkload launches a run on the bound pool; an unbound one is refused on its status. The `k6-workload-e2e` job runs it.
 - **[`scripts/kind-components-walk.sh`](../scripts/kind-components-walk.sh)** and **[`scripts/kind-run-output-walk.sh`](../scripts/kind-run-output-walk.sh)** each make and delete their own quickstart cluster, and run in `nightly.yml`'s `kind-acceptance-walks` job; self-skip unless `WARDYN_TEST_K8S=1`.
 - **[`scripts/runner-compat-walk.sh`](../scripts/runner-compat-walk.sh)** — runner and organisation version compatibility against the newest published 0.9.Z release:
   - this tree's `wardyn-runnerd` registers with the released organisation and completes one exec run. Below 0.9.3 that run must fail instead, with the error that says to upgrade the organisation first.
@@ -439,7 +440,7 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 
 - The 07:00 nightly and a plain dispatch run every lane. A release candidate dispatches it with `-f scope=candidate`, which [`scripts/release-patch.sh`](../scripts/release-patch.sh) does right after pushing the branch and before opening the PR.
 - Five jobs then skip through a job-level `if: inputs.scope != 'candidate'`: `e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `migration-merge-check` and `published-image-scan`.
-- `kind-survival-walk`, `k6-kind-conformance`, `kind-acceptance-walks`, `hybrid-walk` and `kind-upgrade-walk` run under `scope=candidate`, are in `release.yml`'s `watched=`, and gate a release. [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) requires every leg of a matrix job to be green (#3439).
+- `kind-survival-walk`, `k6-kind-conformance`, `k6-workload-e2e`, `kind-acceptance-walks`, `hybrid-walk` and `kind-upgrade-walk` run under `scope=candidate`, are in `release.yml`'s `watched=`, and gate a release. [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) requires every leg of a matrix job to be green (#3439).
 - [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 18 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
 - A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
 - On a same-repo `train/*` or `prep/*` pull request, `train-suites` dispatches the nightly (`scope=candidate`, `publish=false`) on the head and waits; `train-gate` needs that run green. A call would fail on a fork's read-only token, so nothing uses `workflow_call`.

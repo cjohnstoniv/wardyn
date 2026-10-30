@@ -1704,6 +1704,76 @@ jobs:
           path: test/reports/e2e/
           if-no-files-found: error
 
+  # #3804: a WardynWorkload, end to end on a real kind cluster. scripts/k6-kind-conformance.sh with
+  # K6_SUITES=workload stands up the same organisation and org runner as the k6 legs, plus a throwaway
+  # in-cluster Dex whose two people sign in for real (a binding is made by a signed-in person): the
+  # bound namespace's resource launches a run on the bound pool and carries its status, its delete ends
+  # the run, and an unbound namespace's resource is refused on its status. A job of its own so the four
+  # k6 legs carry no Dex or OIDC. Watched from day one: the 0.10.0 final is gated on it.
+  # timeout-minutes: the rule above is twice the measured maximum. 50 is set from an estimated 20-25
+  # minutes until it is measured, and is tightened to twice the measured maximum after three green runs.
+  k6-workload-e2e:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 50
+    steps:
+      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
+        run: |
+          command -v dockerd >/dev/null || exit 0
+          f=/etc/docker/daemon.json
+          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
+          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
+          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
+          running="$(docker ps -q)"; sudo systemctl restart docker
+          [ -z "$running" ] || docker start $running >/dev/null
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: k8s
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: latest
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          install_only: "true"
+      - name: WardynWorkload end to end (kind v1.35.0, Dex sign-ins)
+        env:
+          WARDYN_TEST_K8S: "1"
+          K6_KEEP_LOGS: ${{ github.workspace }}/test/reports/e2e
+          K6_NODE_IMAGES: kindest/node:v1.35.0
+          K6_SUITES: workload
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test/reports/e2e
+          ./scripts/k6-kind-conformance.sh 2>&1 | tee test/reports/e2e/k6-workload-e2e.log
+          echo "K6_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      - name: Assert the harness ran (not a self-skip) and passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/k6-workload-e2e.log
+          if [ "${K6_EXIT:-}" = "77" ]; then
+            echo "::error::k6-kind-conformance.sh self-skipped (exit 77) — WARDYN_TEST_K8S did not reach the step"
+            exit 1
+          fi
+          if [ "${K6_EXIT:-1}" != "0" ]; then
+            echo "::error::k6-kind-conformance.sh exited ${K6_EXIT:-<unset>} — see the uploaded log"
+            exit 1
+          fi
+          grep -q '^k6-kind-conformance: PASS' "$log" || { echo "::error::the harness never reached its own closing PASS line"; exit 1; }
+      - name: Upload harness evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: k6-workload-e2e-results
+          path: test/reports/e2e/
+          if-no-files-found: error
+
   # Each k6 leg's failure rate over the last 30 scheduled nightlies, from the job history (#3538), in
   # this run's summary. A failed leg costs a full rerun, so a leg that keeps failing shows as a number.
   # It reads history, so it needs no `needs:` (this run is not counted until it completes), and it
@@ -2367,7 +2437,7 @@ jobs:
           fi
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, agent-claude-code-native, buildx-smoke-ui-sandbox, buildx-smoke-ui-sandbox-signin, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, kind-acceptance-walks, hybrid-walk, kind-upgrade-walk]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, agent-claude-code-native, buildx-smoke-ui-sandbox, buildx-smoke-ui-sandbox-signin, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, k6-workload-e2e, kind-acceptance-walks, hybrid-walk, kind-upgrade-walk]
     # main only: a workflow_dispatch on any other branch must not post to the main-health issue.
     if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04
@@ -2392,7 +2462,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing (${failed:-no job reported failure}): $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, agent-claude-code-native, buildx-smoke-ui-sandbox and buildx-smoke-ui-sandbox-signin (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, kind-acceptance-walks, hybrid-walk or kind-upgrade-walk." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, agent-claude-code-native, buildx-smoke-ui-sandbox and buildx-smoke-ui-sandbox-signin (multi-arch build), kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, k6-workload-e2e, kind-acceptance-walks, hybrid-walk or kind-upgrade-walk." \
               "" \
               "None of them shares the pre-existing failures of the older e2e-live job (deliberately not watched here)." \
               "" \
