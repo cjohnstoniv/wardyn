@@ -54,6 +54,22 @@ export interface MacVMBase {
   guest?: MacVMGuest;
 }
 
+/** Go: runnerwire.MacVMDerivedBase.State. A string: a newer runner may send another. */
+export type MacVMDerivedState = "ready" | "rebuilding" | "failed";
+
+/** Go: runnerwire.MacVMDerivedBase: one of a Mac's other bases. items: how many items its own list adds to Standard's. */
+export interface MacVMDerivedBase {
+  name: string;
+  state: string;
+  items: number;
+  /** Percent done while it is rebuilt. */
+  progress?: number;
+  guest_os?: string;
+  harnesses?: string[];
+  created_at?: string;
+  build_version?: string;
+}
+
 /** Go: runnerwire.MacVMItem. kind: pkg, app, file, profile or ca; state: installed, staged, trusted or not_trusted. */
 export interface MacVMItem {
   kind: string;
@@ -104,6 +120,8 @@ export interface MacVMCaps {
   /** The runner shares a run's folders into its macOS VM. */
   folders?: boolean;
   base: MacVMBase;
+  /** The Mac's other bases, each derived from `base` (Standard), in name order; absent when it has none. */
+  bases?: MacVMDerivedBase[];
   /** In words, why the runner offers no macOS VM. The runner inventory leaves it out: the console words `reason` itself. */
   refusal?: string;
   /** MacVMReason: why it offers none, or can't start or prepare one now. A string: a newer runner may send another. */

@@ -33,6 +33,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -488,8 +489,13 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 	fs.SetOutput(d.stderr)
 	j := newJobFlags(fs)
 	force := fs.Bool(macvm.FlagForce, false, "update even when the base looks current, and retry every withheld harness")
+	variant := fs.String(macvm.FlagVariant, "", "derive this macOS base from Standard instead, with --"+macvm.FlagBaseFile+" its own install list")
 	if code := j.parse(fs, args, d); code != 0 {
 		return code
+	}
+	if *variant != "" && !macvm.ValidBaseName(*variant) {
+		fmt.Fprintf(d.stderr, "wardyn-macvm %s: --%s %q is not a macOS base name\n", fs.Name(), macvm.FlagVariant, *variant)
+		return 2
 	}
 	agent, err := j.stage2Agent()
 	if err != nil {
@@ -512,6 +518,13 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
 	}
+	// A derived base's list holds no profile item, as runnerd's LoadBaseVariants refuses: nothing would remove it.
+	if *variant != "" {
+		if i := slices.IndexFunc(st.Items.Items, func(it macvm.BaseItem) bool { return it.Kind == macvm.ItemKindProfile }); i >= 0 {
+			fmt.Fprintf(d.stderr, "wardyn-macvm %s: --%s %s: item %q is a profile, which only Standard's list can hold\n", fs.Name(), macvm.FlagVariant, *variant, st.Items.Items[i].Name)
+			return 2
+		}
+	}
 	enc := json.NewEncoder(d.stdout)
 	o := macvm.UpdateOptions{
 		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, Power: d.power(), Admit: j.admit(macvm.UpdateToolsCommand, d),
@@ -520,7 +533,13 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 		// The staging-cleanup warning goes to the job's log (runnerd's tools-update.log), not nowhere.
 		Log: slog.New(slog.NewTextHandler(d.stderr, nil)),
 	}
-	if _, _, err := macvm.UpdateTools(ctx, o); err != nil {
+	update := macvm.UpdateTools
+	if *variant != "" {
+		update = func(ctx context.Context, o macvm.UpdateOptions) (macvm.Manifest, bool, error) {
+			return macvm.DeriveBase(ctx, o, *variant)
+		}
+	}
+	if _, _, err := update(ctx, o); err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
 	}

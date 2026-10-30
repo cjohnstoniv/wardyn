@@ -69,6 +69,7 @@ describe("runner pool carriers", () => {
     [clientGo, "PoolCapacity", "PoolCapacity"],
     [clientGo, "PoolMacOSVM", "PoolMacOSVM"],
     [clientGo, "PoolMacOSVMRefusal", "PoolMacOSVMRefusal"],
+    [clientGo, "PoolMacOSBase", "PoolMacOSBase"],
     [clientGo, "MainDriveFacts", "MainDriveFacts"],
     [clientGo, "MainDriveKeep", "MainDriveKeep"],
     [clientGo, "PersonAllowance", "PersonAllowance"],
@@ -135,5 +136,7 @@ describe("runner pool carriers", () => {
     expect(union("PoolMacOSVMWhy").size).toBe(9);
     expect(union("PoolMacOSVMRefusedReason")).toEqual(consts(clientGo, '\\bMacOSVMRefused\\w+\\s*=\\s*"([a-z_]+)"'));
     expect(union("PoolMacOSVMRefusedReason").size).toBe(3);
+    expect(union("PoolMacOSBaseState")).toEqual(consts(clientGo, '\\bMacOSBase(?:Ready|Rebuilding|Missing)\\s*=\\s*"([a-z_]+)"'));
+    expect(union("PoolMacOSBaseState").size).toBe(3);
   });
 });

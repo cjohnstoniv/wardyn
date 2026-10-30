@@ -55,7 +55,8 @@ func (s *Server) runMacOSDiskView(ctx context.Context, run types.AgentRun) *runM
 	if ended == nil && run.LostReason == types.LostEnded {
 		ended = run.LostAt // a run its lease ended stays RUNNING
 	}
-	if run.VMMachine == nil || ended == nil || s.cfg.Now().Sub(*ended) >= macOSDiskPendingFor {
+	// A machine with no accelerator is the picked base alone (macOSBaseMachine): no VM was made.
+	if run.VMMachine == nil || run.VMMachine.Accelerator == "" || ended == nil || s.cfg.Now().Sub(*ended) >= macOSDiskPendingFor {
 		return nil
 	}
 	return &runMacOSDiskView{State: "removing"}

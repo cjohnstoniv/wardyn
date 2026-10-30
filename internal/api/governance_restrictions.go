@@ -340,8 +340,8 @@ func mergeRestrictions(a, b []types.Restriction) []types.Restriction {
 	return out
 }
 
-// withRevivedRestrictions adds list to a revive's owner ceiling: their denied hosts and placements,
-// and their ids for the run to be re-captured with.
+// withRevivedRestrictions adds list to a revive's owner ceiling: their denied hosts, placements and allowed
+// macOS bases, and their ids for the run to be re-captured with.
 func (c ownerCeiling) withRevivedRestrictions(list []types.Restriction) ownerCeiling {
 	c.restrictionIDs = c.restrictionIDs[:0:0]
 	for _, r := range list {
@@ -351,6 +351,9 @@ func (c ownerCeiling) withRevivedRestrictions(list []types.Restriction) ownerCei
 		}
 		if r.Limits.DenyPlacements != nil {
 			c.denyPlacements = append(slices.Clone(c.denyPlacements), *r.Limits.DenyPlacements...)
+		}
+		if r.Limits.AllowedMacOSBases != nil && len(*r.Limits.AllowedMacOSBases) > 0 {
+			c.allowedMacOSBases = append(slices.Clone(c.allowedMacOSBases), *r.Limits.AllowedMacOSBases)
 		}
 	}
 	return c

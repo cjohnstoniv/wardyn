@@ -93,5 +93,6 @@ func poolMacOSVM(cands []macOSCandidate, operator bool, limit ...macOSBaseLimit)
 		out.Harnesses = slices.DeleteFunc(out.Harnesses, func(h string) bool { return !slices.Contains(mc.Harnesses, h) })
 		out.MinCPUs, out.MinMemoryMiB = max(out.MinCPUs, mc.MinCPUs), max(out.MinMemoryMiB, mc.MinMemoryMiB)
 	}
+	out.Bases = poolMacOSBases(offered)
 	return out
 }

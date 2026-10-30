@@ -48,6 +48,9 @@ type CreateRunRequest struct {
 	// guest under QEMU/KVM, or "macos_vm", a macOS guest on a managed Mac; only a registered runner
 	// offering the kind starts it.
 	MachineKind string `json:"machine_kind,omitempty"`
+	// MacOSBase is a macos_vm run's macOS base: "" or "Standard", the one prepare builds, or one of
+	// the Mac's other bases by name (PoolMacOSVM.Bases). Any other kind of sandbox sends none.
+	MacOSBase string `json:"macos_base,omitempty"`
 	// WorkspaceID, when set, launches the run against that ONBOARDED workspace:
 	// the server prepends the workspace's stored source onto the resolved policy
 	// (a repo as a workspace_repos entry, a local dir as a read-only-by-default

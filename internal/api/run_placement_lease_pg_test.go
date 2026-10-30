@@ -849,6 +849,16 @@ func TestPG_RunnerLease_ReviveThroughTheDoor(t *testing.T) {
 	if f.srv.dispatchPlacementDenied(f.ctx, stored, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded())) {
 		t.Fatal("dispatch refused a run no profile denies")
 	}
+	// allowed_macos_bases binds the revive of a run already on another base, as deny_placements binds it.
+	profile.Limits = types.GovernanceLimits{AllowedMacOSBases: []string{types.MacOSStandardBase}}
+	if _, err := f.st.UpsertGovernanceUnit(f.ctx, profile); err != nil {
+		t.Fatal(err)
+	}
+	macRun := stored
+	macRun.MachineKind, macRun.VMMachine = types.MachineMacOSVM, &types.VMMachine{MacOSBase: "xcode-16"}
+	if _, rerr := f.srv.reviveCeilingAdmitting(f.ctx, macRun, types.ActorSystem, "test"); rerr == nil || rerr.reason != string(placement.ReasonPlacementDenied) {
+		t.Fatalf("revive of a run on a base its profile no longer lists = %+v, want placement_denied", rerr)
+	}
 }
 
 // fix-r2 N5: a runner's new session re-leases every live run on it, a run held for a confirmation included.

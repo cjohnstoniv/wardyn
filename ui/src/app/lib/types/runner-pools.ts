@@ -317,6 +317,24 @@ export interface PoolMacOSVM {
   harnesses?: string[];
   runner?: string;
   refusals?: PoolMacOSVMRefusal[];
+  /** The Macs' other macOS bases (besides Standard); offered only. */
+  bases?: PoolMacOSBase[];
+}
+
+/** Go: client.MacOSBase*. */
+export type PoolMacOSBaseState = "ready" | "rebuilding" | "missing";
+
+/**
+ * Go: client.PoolMacOSBase. `progress` is the least done while rebuilding; ready, `guest_os` is the build every
+ * copy holds (absent when they differ), `harnesses` those every copy serves, `created_at` the oldest copy's.
+ */
+export interface PoolMacOSBase {
+  name: string;
+  state: PoolMacOSBaseState;
+  progress?: number;
+  guest_os?: string;
+  harnesses?: string[];
+  created_at?: string;
 }
 
 /** Go: client.MacOSVMWhy*. */

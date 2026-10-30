@@ -240,7 +240,30 @@ type PoolMacOSVM struct {
 	Harnesses    []string             `json:"harnesses,omitempty"`
 	Runner       string               `json:"runner,omitempty"`
 	Refusals     []PoolMacOSVMRefusal `json:"refusals,omitempty"`
+	// Bases is the Macs' other macOS bases (besides Standard), by name; Offered only.
+	Bases []PoolMacOSBase `json:"bases,omitempty"`
 }
+
+// PoolMacOSBase is one of the other macOS bases a pool's Macs hold, as a run picking it finds them. State is
+// MacOSBase*: ready on every eligible Mac; rebuilding from Standard on at least one, Progress the least done;
+// missing on at least one, or its rebuild there failed. Ready, GuestOS is the build every copy holds (absent
+// when they differ), Harnesses those every copy serves and CreatedAt the oldest copy's (RFC 3339): a derived
+// base keeps the prepare time of the Standard it was derived from.
+type PoolMacOSBase struct {
+	Name      string   `json:"name"`
+	State     string   `json:"state"`
+	Progress  int      `json:"progress,omitempty"`
+	GuestOS   string   `json:"guest_os,omitempty"`
+	Harnesses []string `json:"harnesses,omitempty"`
+	CreatedAt string   `json:"created_at,omitempty"`
+}
+
+// PoolMacOSBase.State values.
+const (
+	MacOSBaseReady      = "ready"
+	MacOSBaseRebuilding = "rebuilding"
+	MacOSBaseMissing    = "missing"
+)
 
 // PoolMacOSVMRefusal is why one runner of a pool cannot take a macOS VM now. Why is MacOSVMWhy*;
 // Progress is set for preparing and Error for no_base when the runner said one. RunnerID is set on
