@@ -28,6 +28,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   [Apple's boot-time hosts](docs/operations/macos-vms.md#apples-boot-time-hosts).
 - A macOS VM run that mounts a drive is refused at create and Review in the launcher's words, before a Mac is asked
   to start the VM.
+- A macOS VM run can mount an admin or team drive that is a folder on the Mac. It is shared into the guest at the
+  container's names under `/Users/agent`, read-only as granted, and a runner that predates this refuses it at create.
+  See [Drives](docs/operations/macos-vms.md#drives).
 - A macOS VM run is also refused at create and Review when a second harness has its own starting prompt, or when a tool
   rule, tool approvals, autonomy level L1 or the policy's inner walls would hold a tool call for approval. The launcher
   still refuses the same shapes as a backstop.
