@@ -348,13 +348,15 @@ run_log="${OUT_DIR}/run.log"
 # contract is exiting with the RUN's code.
 #
 # Remote mode: --wait does not stop the run on a timeout (124) or a cancel, and the run keeps
-# working under the CI identity until its own auto_stop. The CLI prints the id on stderr
-# ("waiting for run <id>") before it blocks, so run.log has it though --json does not yet.
+# working under the CI identity until its own auto_stop. The CLI writes the created run to
+# run.json (--json) before it waits, and prints "waiting for run <id>" on stderr a little later, so the
+# id is read from run.json first and from run.log if that is empty.
 # A trap runs once the foreground CLI exits, which a job cancel that signals the process group
-# does at once; a cancel before that line prints has no id to kill (nothing exists to kill yet).
+# does at once; a cancel before the run is created has no id to kill (nothing exists to kill yet).
 remote_kill_run() { # REASON
   local rid st
-  rid="$(sed -n 's/^waiting for run \([0-9a-f-]\{36\}\) .*/\1/p' "${run_log}" 2>/dev/null | head -1)"
+  rid="$(sed -n 's/.*"id": *"\([0-9a-f-]\{36\}\)".*/\1/p;T;q' "${run_json}" 2>/dev/null)"
+  [[ -n "${rid}" ]] || rid="$(sed -n 's/^waiting for run \([0-9a-f-]\{36\}\) .*/\1/p;T;q' "${run_log}" 2>/dev/null)"
   [[ -n "${rid}" ]] || return 0
   # Exit 124 is also the AGENT's own exit code for a run that FAILED: a terminal run has nothing left to kill.
   st="$(wardyn run get "${rid}" --json 2>/dev/null | sed -n 's/.*"state"[^"]*"\([A-Z_]*\)".*/\1/p' | head -1)"
