@@ -107,6 +107,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `wardyn secret set` and `wardyn-aws-sso` no longer take standard input on `/dev/null` for a terminal. An unattended
   run with input from `/dev/null` now reads it as piped input, or refuses, instead of offering the interactive prompt
   (#3106).
+- `wardyn run --editor` no longer counts an `Include` under a `Host` or `Match` block in `~/.ssh/config` as the one it
+  needs. Only an `Include` above the first of those lines counts; otherwise it asks before adding its own at the top
+  (#3415).
 
 ### Security
 

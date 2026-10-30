@@ -174,6 +174,11 @@ func ensureSSHInclude(cmd *cobra.Command, cfg string) (bool, error) {
 	}
 	for _, ln := range strings.Split(string(raw), "\n") {
 		f := strings.Fields(ln)
+		// ssh applies an Include under a Host or Match line only to the hosts that block selects, so only an
+		// Include above the first of them is the global one VS Code needs.
+		if len(f) > 0 && (strings.EqualFold(f[0], "Host") || strings.EqualFold(f[0], "Match")) {
+			break
+		}
 		if len(f) == 2 && strings.EqualFold(f[0], "Include") && (f[1] == wardynSSHConfig || f[1] == cfg) {
 			return true, nil
 		}
