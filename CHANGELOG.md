@@ -16,6 +16,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `wardyn-runnerd setup` now registers through the proxy its connection check used. The check went through the
   settings setup installs for the service, but the registration followed this shell's environment, so a rerun from a
   shell with no proxy could pass the check and then dial the organisation direct.
+- A Docker runner whose relay status failed to reach the organisation now sends it again at the next relay check. A
+  failed rebuild or send of the runner's capabilities was retried only on a reconnect or a further change of state.
 
 ## [0.10.0-rc.8] — 2026-10-29
 

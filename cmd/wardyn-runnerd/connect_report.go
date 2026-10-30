@@ -266,7 +266,7 @@ func (w *relayWatch) sent(s *types.RunnerRelayStatus) {
 }
 
 // run checks every relayReprobeInterval until ctx ends, and calls changed after a check that changed
-// the state.
+// the state or while a state the organisation has not received waits, so a send that failed is retried.
 func (w *relayWatch) run(ctx context.Context, changed func()) {
 	tick, stop := w.ticker(relayReprobeInterval)
 	defer stop()
@@ -276,7 +276,8 @@ func (w *relayWatch) run(ctx context.Context, changed func()) {
 			return
 		case <-tick:
 		}
-		if w.check(ctx) {
+		moved := w.check(ctx)
+		if _, unsent := w.pending(); moved || unsent {
 			changed()
 		}
 	}
