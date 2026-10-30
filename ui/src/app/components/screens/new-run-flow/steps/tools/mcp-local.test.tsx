@@ -59,6 +59,12 @@ function Draft() {
   const { intent } = useNewRunDraft();
   return <pre data-testid="draft">{JSON.stringify({ components: intent.components, tools: intent.tools })}</pre>;
 }
+// Puts another local server first in the draft, as a later edit would, while the answer still points into the old order.
+function Prepend() {
+  const dispatch = useNewRunDispatch();
+  const apply = (i: RunIntent): RunIntent => ({ ...i, components: [mcpLocalRef("other", "node other.js", [], { secret_name: "OTHER_TOKEN", delivery: { mode: "env", var: "OTHER_TOKEN" } }), ...(i.components ?? [])] });
+  return <button type="button" onClick={() => dispatch({ type: "edit", apply })}>prepend server</button>;
+}
 const draft = () => JSON.parse(screen.getByTestId("draft").textContent ?? "{}") as { components?: Record<string, unknown>[]; tools?: Record<string, unknown>[] };
 
 beforeEach(() => {
@@ -75,7 +81,7 @@ function Catalogue({ access = SCENARIO_ACCESS.member, intent = {} }: { access?: 
 async function openDialog(intent: RunIntent = {}, access?: AccessFacts) {
   render(
     <AnnounceContext.Provider value={vi.fn()}>
-      <NewRunDraftProvider owner="alice"><Seed intent={intent}><Catalogue access={access} intent={intent} /><Draft /></Seed></NewRunDraftProvider>
+      <NewRunDraftProvider owner="alice"><Seed intent={intent}><Catalogue access={access} intent={intent} /><Draft /><Prepend /></Seed></NewRunDraftProvider>
     </AnnounceContext.Provider>,
   );
   await screen.findByRole("heading", { name: NR_TOOLS.ADD_TITLE });
@@ -237,6 +243,20 @@ describe("Add an MCP server", () => {
     cleanup();
     await openDialog(WITH_DOCS, withFacts(SCENARIO_ACCESS.member, [], [{ ...MCP_LOCAL, mcp: { ...MCP_LOCAL.mcp!, transport: "http" } }]));
     expect(screen.queryByText(NR_TOOLS.MCP_RUNS_HERE)).toBeNull();
+  });
+});
+
+describe("An added local server while the next preview is out", () => {
+  it("keeps its own command and secret name when an edit has shifted the draft's components", async () => {
+    on();
+    await openDialog(WITH_DOCS, ACCESS);
+    await userEvent.click(screen.getByRole("button", { name: "prepend server" }));
+    const card = within(screen.getByRole("heading", { name: "docs-search", level: 3 }).closest("li") as HTMLElement);
+    expect(within(card.getByLabelText(NR_TOOLS.BRINGS_FOR("docs-search"))).getByText("DOCS_TOKEN")).toBeTruthy();
+    await userEvent.click(card.getByRole("button", { name: NR_TOOLS.DETAILS_FOR("docs-search") }));
+    const details = within(await screen.findByRole("dialog"));
+    expect(details.getByText("npx -y @example/mcp-server@1.4.2")).toBeTruthy();
+    expect(details.queryByText("node other.js")).toBeNull();
   });
 });
 
