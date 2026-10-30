@@ -2833,8 +2833,15 @@ jobs:
           done
           [ -n "$id" ] || { echo "::error::no dispatched nightly run appeared on $HEAD_SHA"; exit 1; }
           echo "nightly run: $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$id"
-          gh run watch "$id" --interval 60 >/dev/null || true
-          conclusion="$(gh run view "$id" --json conclusion --jq .conclusion)"
+          # Poll rather than `gh run watch`: one API 502 ended a watch early and
+          # read an in-progress run's empty conclusion. A failed read is retried;
+          # the job timeout bounds the wait.
+          until [ "$(gh run view "$id" --json status --jq .status 2>/dev/null)" = completed ]; do sleep 60; done
+          conclusion=
+          for _ in 1 2 3 4 5; do
+            conclusion="$(gh run view "$id" --json conclusion --jq .conclusion 2>/dev/null)" && break
+            sleep 15
+          done
           [ "$conclusion" = success ] || { echo "::error::nightly run $id concluded '$conclusion'"; exit 1; }
 
   train-gate:
