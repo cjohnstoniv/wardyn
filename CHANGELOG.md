@@ -104,6 +104,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Kubernetes run whose pinned proxy image is older than the runner now fails with the cause named: the proxy image is
   older than this runner and refused a setting at config load, so have the organisation name this release's proxy
   image, or run setup with `--proxy-image` set to it. It showed only a generic sidecar failure.
+- A Kubernetes runner no longer stops a run's proxy pod created while it lists its namespaces: the list read the pod
+  as gone, and the run failed with the proxy's config stage "exited" (exit code 137, `ContainerStatusUnknown`) (#3823).
 
 ### Security
 
