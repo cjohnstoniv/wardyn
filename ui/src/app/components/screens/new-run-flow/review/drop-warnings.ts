@@ -26,12 +26,13 @@ function joinAnd(items: string[]): string {
 }
 
 /**
- * The walls step's warning for the host lists. When the Access group names a host the walls leave out ("Your walls leave
- * out {host}.", board R15 T4-b), Review says it by host and this sentence is not shown again as a notice; otherwise it is.
+ * The host list a walls step warning names, or undefined for any other warning. When the Access group names a host
+ * that list takes out ("Your walls leave out {host}.", board R15 T4-b), Review says it by host and this sentence is
+ * not shown again as a notice; otherwise it is.
  */
-export const isWallsHostWarning = (warning: string): boolean => {
+export const wallsHostKnob = (warning: string): "allowed_domains" | "denied_domains" | undefined => {
   const knob = WALLS_NARROWED.exec(warning)?.[1];
-  return knob === "allowed_domains" || knob === "denied_domains";
+  return knob === "allowed_domains" || knob === "denied_domains" ? knob : undefined;
 };
 
 /** The server's sentence, or the dropped-host sentence when it is one of the three drop warnings. */

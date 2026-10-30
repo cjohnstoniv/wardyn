@@ -50,12 +50,30 @@ const covers = (entry: string, host: string): boolean => {
  * layer that dropped a host, so the walls the person set are read against it.
  */
 export function wallsLeaveOut(walls: PersonalWallsSpec | undefined, access: AccessFacts | undefined, answered: boolean): string[] {
+  return leftOutBy(walls, access, answered).map((l) => l.host);
+}
+
+/** The two host lists of the person's walls, by the name a warning gives them. */
+export type WallsHostKnob = "allowed_domains" | "denied_domains";
+
+/** Which of the walls' two host lists take hosts out of this run: "never these sites" for a covered host, "only these sites" for one outside. */
+export function wallsLeaveOutKnobs(walls: PersonalWallsSpec | undefined, access: AccessFacts | undefined, answered: boolean): WallsHostKnob[] {
+  return [...new Set(leftOutBy(walls, access, answered).flatMap((l) => l.knobs))];
+}
+
+function leftOutBy(walls: PersonalWallsSpec | undefined, access: AccessFacts | undefined, answered: boolean): { host: string; knobs: WallsHostKnob[] }[] {
   if (!walls || !access || !answered) return [];
   const denied = walls.denied_domains ?? [];
   return access.hosts
     .filter((h) => h.verdict === "not_allowed")
-    .map((h) => h.host)
-    .filter((host) => denied.some((e) => covers(e, host)) || (walls.allowed_domains !== undefined && !walls.allowed_domains.some((e) => covers(e, host))));
+    .map(({ host }) => ({
+      host,
+      knobs: [
+        ...(denied.some((e) => covers(e, host)) ? (["denied_domains"] as const) : []),
+        ...(walls.allowed_domains !== undefined && !walls.allowed_domains.some((e) => covers(e, host)) ? (["allowed_domains"] as const) : []),
+      ],
+    }))
+    .filter((l) => l.knobs.length > 0);
 }
 
 export function setModelProvider(intent: RunIntent, toolId: string, provider: string): RunIntent {

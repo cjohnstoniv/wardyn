@@ -62,7 +62,7 @@ describe("Review: Access", () => {
       hosts: [host("api.example.com", "allowed"), host("packages.example.com", "allowed"), host("git.example.com", "allowed"), host("pypi.org", "not_allowed")],
       unlisted: { mode: "always_deny", allow_all: false, decider: "you" },
     };
-    const show = (facts: AccessFacts, onLeftOut?: (drawn: boolean) => void) =>
+    const show = (facts: AccessFacts, onLeftOut?: (knobs: readonly string[]) => void) =>
       render(<AccessGroup draft={initialDraft("alice")} pre={{ access: facts } as unknown as ReviewPreflight} preview={null} docRows={[]} go={vi.fn()} dispatch={vi.fn()} onLeftOut={onLeftOut} />);
 
     it("says how many sites and that anything else is refused, with the walls note for a host they cut", async () => {
@@ -74,7 +74,7 @@ describe("Review: Access", () => {
       expect(screen.queryByText(NR_REVIEW.POLICY_HOSTS(4))).toBeNull();
     });
 
-    it("tells Review whether a leave-out line is drawn, so the walls' own warning stays when none is", async () => {
+    it("tells Review which of the walls' host lists a leave-out line is drawn for, so the walls' own warning stays when none is", async () => {
       // pypi.org is a base-policy host the walls cut but the post-walls answer does not carry: no line, so the warning stays.
       getWalls.mockResolvedValue({ spec: { denied_domains: ["pypi.org"] } });
       const onLeftOut = vi.fn();
@@ -82,12 +82,12 @@ describe("Review: Access", () => {
       await vi.waitFor(() => expect(getWalls).toHaveBeenCalled());
       await Promise.resolve();
       expect(screen.queryByTestId("walls-leave-out")).toBeNull();
-      expect(onLeftOut).not.toHaveBeenCalledWith(true);
+      expect(onLeftOut).not.toHaveBeenCalledWith(expect.arrayContaining(["denied_domains"]));
       cleanup();
       const drawn = vi.fn();
       show(closed, drawn);
       await screen.findByTestId("walls-leave-out");
-      expect(drawn).toHaveBeenLastCalledWith(true);
+      expect(drawn).toHaveBeenLastCalledWith(["denied_domains"]);
     });
 
     it("draws no note when the walls cut nothing, and keeps the plain count when anything else may be asked for", async () => {

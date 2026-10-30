@@ -11,14 +11,14 @@ import { Chip } from "../../../../wardyn/primitives";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_WALLS } from "../../../../wardyn/copy/personal-walls";
-import { wallsLeaveOut } from "../../lenses/tools-lens";
+import { wallsLeaveOut, wallsLeaveOutKnobs, type WallsHostKnob } from "../../lenses/tools-lens";
 import { ReviewGroup } from "../review-group";
 import { AccessCredentials } from "./access-credentials";
 import { stepLocation, type GroupProps } from "./group-props";
 import { JumpButton } from "./jump-button";
 
-/** `onLeftOut` is told whether any walls-leave-out line is drawn, so Review keeps the walls' own warning when none is. */
-export function AccessGroup({ draft, pre, preview, docRows, go, onLeftOut }: GroupProps & { onLeftOut?: (drawn: boolean) => void }) {
+/** `onLeftOut` is told which of the walls' host lists the drawn leave-out lines come from, so Review keeps the walls' warning for any list no line speaks for. */
+export function AccessGroup({ draft, pre, preview, docRows, go, onLeftOut }: GroupProps & { onLeftOut?: (knobs: readonly WallsHostKnob[]) => void }) {
   const access = pre?.access ?? preview?.access;
   const hosts = access?.hosts ?? [];
   const source = preview?.source.name;
@@ -30,8 +30,8 @@ export function AccessGroup({ draft, pre, preview, docRows, go, onLeftOut }: Gro
     return () => { alive = false; };
   }, []);
   const leftOut = wallsLeaveOut(walls, pre?.access ?? preview?.access, !!access);
-  const drawn = leftOut.length > 0;
-  React.useEffect(() => onLeftOut?.(drawn), [drawn, onLeftOut]);
+  const knobKey = wallsLeaveOutKnobs(walls, pre?.access ?? preview?.access, !!access).join();
+  React.useEffect(() => onLeftOut?.(knobKey ? (knobKey.split(",") as WallsHostKnob[]) : []), [knobKey, onLeftOut]);
   // A run that reaches only its listed sites says so (T4-b); one that may ask for more keeps the plain count.
   const closed = !!access && !access.unlisted.allow_all && access.unlisted.mode === "always_deny";
   const count = hosts.length === 1 ? NR_REVIEW.POLICY_HOST_ONE : NR_REVIEW.POLICY_HOSTS(hosts.length);

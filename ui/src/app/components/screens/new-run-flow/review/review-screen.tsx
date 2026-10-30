@@ -168,8 +168,8 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   const [addingSecret, setAddingSecret] = React.useState<SetupItem | null>(null);
   const [saveKind, setSaveKind] = React.useState<TemplateKind | null>(null);
   const [publish, setPublish] = React.useState<TemplatePublish | null>(null);
-  // Whether the Access group draws a walls-leave-out line; when it does not, the walls' host warning stays a notice.
-  const [wallsLeftOut, setWallsLeftOut] = React.useState(false);
+  // Which host lists of the walls the Access group draws a leave-out line for; the warning of any other list stays a notice.
+  const [wallsLeftOut, setWallsLeftOut] = React.useState<readonly string[]>([]);
   const openSave = (kind: TemplateKind) => {
     setSaveKind(kind);
     templateSource.list().then((l) => setPublish(l.publish), () => setPublish(ONLY_ME));
