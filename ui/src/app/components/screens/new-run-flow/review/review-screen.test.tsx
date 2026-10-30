@@ -686,6 +686,30 @@ describe("Review: an application server (#1994)", () => {
     await waitFor(() => expect(blockerList()).not.toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF));
   });
 
+  it("Check again keeps the blocker while /healthz still says off", async () => {
+    const spy = gatewayIs();
+    const user = userEvent.setup();
+    open(SERVER);
+    await ready();
+    await waitFor(() => expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF));
+    await user.click(screen.getAllByRole("button", { name: NR_REVIEW.CHECK_AGAIN })[0]);
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF);
+    expect(launch()).toBeDisabled();
+  });
+
+  it("Check again does not take a failed /healthz read for off or for on: the blocker state is unchanged", async () => {
+    const spy = gatewayIs();
+    const user = userEvent.setup();
+    open(SERVER);
+    await ready();
+    await waitFor(() => expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF));
+    spy.mockResolvedValue({});
+    await user.click(screen.getAllByRole("button", { name: NR_REVIEW.CHECK_AGAIN })[0]);
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF);
+  });
+
   it("does not call the gateway off before /healthz has answered, and never for a script", async () => {
     vi.spyOn(health, "health").mockResolvedValue({});
     open(SERVER);
