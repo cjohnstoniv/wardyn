@@ -67,6 +67,7 @@ wardyn drive reclaim <drive-id> --subject <sign-in subject> --yes
 - A **user drive** is persistent storage an admin registers once and allocates to people or groups; a member mounts theirs per run at `/home/agent/drive`.
   - Turning on a disabled allocation that holds a directory name or a writable exception is a super admin's write.
 - Since `0169_user_drive_grants_per_drive` a subject may hold several (`additional`); a run's others mount at `/home/agent/drives/<slug>` or `/home/agent/shared/<slug>`.
+- A drive bound to a person's own runner, or a folder bound to it, mounts only below a drive root that runner advertises. An installed runner gets its roots with `wardyn-runnerd setup --drive-root <dir>` (repeatable; the roots live in `runnerd.json` as `drive_root`, not in the service definition); see [Drive roots on a laptop runner](hybrid-laptops.md#drive-roots-on-a-laptop-runner).
 - On a Docker deployment there are two backends, and the difference is who owns the bytes.
 - With `storage.user_drive.disabled` set, a run and `POST /drives/preview` answer 422 and `GET /me` reports no allocation, so the console never offers a mount the create path refuses (see "Turning drives OFF deployment-wide").
 

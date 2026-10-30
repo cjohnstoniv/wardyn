@@ -13,6 +13,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- An installed runner can now be given the folders drives and workspace folders may use, with
+  `wardyn-runnerd setup --drive-root <dir>` (repeatable). Setup writes them to `runnerd.json` as `drive_root`, so
+  the service needs no change; a rerun with `--drive-root` replaces the list and one without keeps it. A managed Mac
+  can set them with the `DriveRoot` profile key, and `WARDYN_DRIVE_ROOT` also sets them; a `--drive-root` on `serve`
+  wins over all three. `wardyn-runnerd doctor` prints the roots in effect and where they came from. See
+  [Drive roots](docs/operations/hybrid-laptops.md#drive-roots-on-a-laptop-runner).
 - `wardyn-runnerd macos-vm edit-base` boots a copy of a Mac's macOS base for one attended session, then checks it
   before runs use it: desktop control, accounts, Remote Login and the launcher's self-test. A copy that fails is
   discarded and runs keep the old base. The runner reports when Standard was last edited, and each run records that
