@@ -131,11 +131,12 @@ func (l *offlineLog) peersOnlyChanged(image string) {
 	}
 }
 
-// startFailed records a refusal of serve's start and keeps it on disk; an error without a stage is
-// not one the summary names.
+// startFailed records a refusal of serve's start and keeps it on disk. An error without a stage (a bad flag)
+// is not one the summary names, so it goes to status.json alone, as the last error.
 func (l *offlineLog) startFailed(err error) {
 	var se *stageError
 	if !errors.As(err, &se) {
+		l.status.startError(reasonText(err, l.secrets), l.now())
 		return
 	}
 	s := l.fail(se.stage, err)

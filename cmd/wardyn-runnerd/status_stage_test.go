@@ -228,3 +228,19 @@ func TestStatusStageHoldsNoSecret(t *testing.T) {
 		t.Errorf("status.json mode: %v %v", fi, err)
 	}
 }
+
+// A start that fails on a flag (an error with no stage) is recorded as the last error and kept through the
+// stop that follows it, in place of the error the previous process left.
+func TestStatusRecordsAStartThatFailedOnAFlag(t *testing.T) {
+	t.Setenv("WARDYN_PROXY_IMAGE", "")
+	state := filepath.Join(t.TempDir(), "runner")
+	identityIn(t, state, "https://org.example")
+	w := newStatusWriter(state)
+	w.linkChanged(false, "connection refused by the organisation")
+	w.stopped()
+	serveOnce(t, state, errors.New("--proxy-image: no image named"))
+	st, _ := readStatus(t, state)
+	if st.State != "stopped" || !strings.Contains(st.LastError, "--proxy-image: no image named") || st.LastErrorAt == nil || st.Stage != "" {
+		t.Fatalf("after a start that failed on a flag: %+v, want that error as the last error and no stage", st)
+	}
+}

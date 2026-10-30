@@ -20,6 +20,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   failed rebuild or send of the runner's capabilities was retried only on a reconnect or a further change of state.
 - A folders runner that resumes its session now sends the failure it recorded while the connection was down. Only a
   fresh session sent it, so a stable resumed runner stayed connected without the organisation seeing it.
+- A `wardyn-runnerd serve` start that fails on a bad flag now records that error as the last error in the runner's
+  `status.json`. The file was rewritten as starting then stopped, which dropped the previous process's last error and
+  recorded nothing in its place.
 
 ## [0.10.0-rc.8] — 2026-10-29
 

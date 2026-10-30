@@ -134,6 +134,25 @@ func (w *statusWriter) failed(stage, reason string, at time.Time, refusal bool) 
 	w.write()
 }
 
+// startError records a start that failed with no stage (a bad flag): the error is the last one, and is kept
+// through the stop that follows like a refusal. A stage an earlier refusal left stays until a connect succeeds.
+// A nil writer records nothing.
+func (w *statusWriter) startError(reason string, at time.Time) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	at = at.UTC()
+	w.cur.LastError, w.cur.LastErrorAt = reason, &at
+	if w.refused == nil {
+		w.refused = &runnerStatus{}
+	}
+	w.refused.LastError, w.refused.LastErrorAt = reason, &at
+	w.cur.UpdatedAt = w.now()
+	w.write()
+}
+
 // relayChanged records whether the run relay answers (types.RelayReachable or types.RelayUnreachable).
 // A nil writer records nothing.
 func (w *statusWriter) relayChanged(state string) {
