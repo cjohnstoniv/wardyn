@@ -200,10 +200,13 @@ func (a *AgentRun) harness() (string, error) {
 	}
 	switch {
 	case start == "":
+		//lint:ignore ST1005 the sentence the person reads on the run's page; it ends as a sentence does
 		return "", errors.New("this run names no harness to start (WARDYN_START_HARNESS), so the run was not started.")
 	case len(hs) > 0 && !slices.Contains(hs, start):
+		//lint:ignore ST1005 the sentence the person reads on the run's page; it ends as a sentence does
 		return "", fmt.Errorf("the start harness %s isn't one of this run's harnesses, so the run was not started.", start)
 	case start != "claude-code" && start != "codex-cli":
+		//lint:ignore ST1005 the sentence the person reads on the run's page; it ends as a sentence does
 		return "", fmt.Errorf("a macOS VM can't start %s in this release.", start)
 	}
 	return start, nil
@@ -478,6 +481,7 @@ func (a *AgentRun) resolveWorkdir(workdir string) (string, error) {
 	case strings.HasPrefix(sf, "/"):
 		real, err := filepath.EvalSymlinks(sf)
 		if st, serr := os.Stat(sf); err != nil || real != sf || serr != nil || !st.IsDir() {
+			//lint:ignore ST1005 the sentence the person reads on the run's page; it ends as a sentence does
 			return "", fmt.Errorf("the starting folder %s is missing or isn't a plain folder, so the run was not started.", sf)
 		}
 		_ = a.git("", "config", "--global", "--add", "safe.directory", sf)
@@ -746,6 +750,7 @@ func (a *AgentRun) managedFilesInPlace() error {
 			ok = rootOnlyChain(filepath.Dir(f.Path)) == nil
 		}
 		if !ok {
+			//lint:ignore ST1005 the sentence the person reads on the run's page; it ends as a sentence does
 			return fmt.Errorf(managedFileNotInPlace, f.Path, who, f.Mode.Perm())
 		}
 	}
