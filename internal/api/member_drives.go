@@ -88,7 +88,7 @@ func memberDriveDeleteFailedMsg() string {
 // memberDriveMacUnavailableMsg refuses a disk drive on a runner that is not one of the caller's own
 // Macs keeping disk drives.
 func memberDriveMacUnavailableMsg() string {
-	return "runner_id: choose one of your own Macs, online, whose runner keeps disk drives."
+	return "runner_id: choose one of your own Macs. It must be online, with a runner that is up to date."
 }
 
 // memberDriveDeleteDeferredMsg, memberDriveInRunOnMacMsg and memberDriveRecordOnlyMsg are a disk
@@ -522,14 +522,15 @@ func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStor
 			res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteFailed
 		}
 	}
-	switch res.reason {
-	case "", reasonMemberDriveRecordOnly:
+	switch {
+	case res.reason == "" || res.reason == reasonMemberDriveRecordOnly:
 		if ferr := ms.FinishMemberDriveDelete(ctx, d.ID, started); ferr != nil && !errors.Is(ferr, store.ErrNotFound) {
 			res.err = ferr
 		}
-	case reasonMemberDriveDeleteDeferred:
+	case res.reason == reasonMemberDriveDeleteDeferred, by == memberDriveByMacReconnect && res.reason == reasonMemberDriveInUse:
 		// The tombstone stays: the drive reads as deleting, no run attaches it, and the Mac's reconnect
-		// finishes the delete (finishMacDiskDeletes).
+		// finishes the delete (finishMacDiskDeletes). A disk its Mac's run still has, met by that
+		// sweep, waits for the next one: the owner already asked for the delete.
 	default:
 		if aerr := ms.AbortMemberDriveDelete(ctx, d.ID, started); aerr != nil && !errors.Is(aerr, store.ErrNotFound) {
 			slog.ErrorContext(ctx, "api: clear a member drive's delete tombstone",
