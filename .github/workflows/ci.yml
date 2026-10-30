@@ -2523,7 +2523,8 @@ jobs:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 15
+    # A cold staticcheck ran past 15 min on main (no cache entry), and only a success saves one.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
