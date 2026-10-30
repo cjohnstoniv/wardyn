@@ -50,9 +50,13 @@ test.describe("New Run, Files: a disk kept on a Mac", () => {
     await dialog.getByRole("button", { name: NR_FILES.ADD_CONFIRM, exact: true }).click();
 
     const card = page.getByTestId("nr-attach-card").filter({ hasText: DISK.name });
-    // Collapsed, the row already says where the disk is, as a second line.
-    await expect(card.getByText(`${NR_FILES.STORED_ON}: ${MAC_DRIVES.D01(MAC)}`)).toBeVisible();
-    await card.locator("button[aria-expanded]").click();
+    const toggle = card.locator("button[aria-expanded]");
+    // A card just added opens (files-step's add): its Stored on value names the Mac.
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await expect(card.getByText(MAC_DRIVES.D01(MAC), { exact: true })).toBeVisible();
+    // Collapsed, the row still says where the disk is, as a second line.
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(card.getByText(`${NR_FILES.STORED_ON}: ${MAC_DRIVES.D01(MAC)}`)).toBeVisible();
   });
 });
