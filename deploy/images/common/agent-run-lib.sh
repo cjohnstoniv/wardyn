@@ -860,6 +860,8 @@ maybe_exec_task_mode() {
         # survives `sh -c` fine), and a login shell sources /etc/profile,
         # which reassembles PATH from scratch — destroying every BYOI/
         # devcontainer image's own Dockerfile ENV PATH toolchain.
+        # Dispatch sets WARDYN_SERVICE on every run, 0 for one that is no service, so an
+        # image's own ENV never makes a plain command a service.
         if [[ "${WARDYN_SERVICE:-}" == "1" ]]; then
             run_service "$1"
             exit $?

@@ -103,14 +103,15 @@ func TestFrozenRunServiceFillsDefaults(t *testing.T) {
 }
 
 // TestServiceEnvFromTheFrozenSpec: the supervisor's variables, from run.Service, through the dispatch
-// env writer. A run with no service carries none of them.
+// env writer. A run with no service carries WARDYN_SERVICE=0 and none of the others, so an image whose
+// own ENV sets WARDYN_SERVICE=1 still runs a plain command.
 func TestServiceEnvFromTheFrozenSpec(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		spec *types.RunService
 		want map[string]string
 	}{
-		{"not a service", nil, map[string]string{}},
+		{"not a service", nil, map[string]string{"WARDYN_SERVICE": "0"}},
 		{"restart only", &types.RunService{Restart: types.ServiceRestartNever},
 			map[string]string{"WARDYN_SERVICE": "1", "WARDYN_SERVICE_RESTART": "never"}},
 		{"a port, no health check", &types.RunService{Restart: types.ServiceRestartOnFailure, Port: 8080},

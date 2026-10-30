@@ -107,6 +107,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The lease sweep no longer re-reads a healthy service's limits, sponsor and policy on every pass. It reads the
   owner's authority to extend only once a `run.ending_soon` warning would be due, and the renewal re-checks it as
   before (#3762).
+- An image whose own `ENV` sets `WARDYN_SERVICE=1` no longer turns a plain command run into a service that restarts
+  in a loop. Dispatch now sets `WARDYN_SERVICE=0` on every run that is no service, and the sandbox's env wins over the
+  image's (#3763).
 
 ### Security
 
