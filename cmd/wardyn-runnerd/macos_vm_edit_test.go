@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/doctor"
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
@@ -126,6 +127,55 @@ func TestMacOSVMCapsCarryTheLastEdit(t *testing.T) {
 	} {
 		if pair[0] != pair[1] {
 			t.Errorf("helper recheck %q is the wire's %q", pair[0], pair[1])
+		}
+	}
+}
+
+// While an edit's window is open, its code file is not setup by hand's: status and doctor say nothing of
+// setup by hand. A prepare since, whose log is newer, is setup by hand again.
+func TestMacOSVMStatusTellsAnEditFromSetupByHand(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root, err := macvm.DefaultRoot()
+	if err != nil || os.MkdirAll(root, 0o700) != nil {
+		t.Fatal(err)
+	}
+	r := newMacLedgerRig(t)
+	r.root = root
+	m := r.open(t)
+	m.helper, _ = fakeHelper(t, 0)
+	man := `{"format":1,"state":"ready","guest_os":"macOS 27.0","build_version":"26A428","min_cpus":4,"min_memory_mib":8192,"desktop":"observe","harnesses":["none"]}`
+	_ = os.WriteFile(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile), []byte(man), 0o600)
+	_ = os.WriteFile(m.layout.SetupCode(), []byte(`{"account":"wardyn-admin","code":"K7MP2QXR"}`), 0o600)
+	logs := map[string]string{"prepare": m.layout.PrepareLog(), "edit": filepath.Join(root, editBaseLog)}
+	t0 := time.Now().Add(-time.Hour)
+	for _, tc := range []struct {
+		newer   string
+		setupBy bool
+	}{{"edit", false}, {"prepare", true}} {
+		for name, p := range logs {
+			at := t0
+			if name == tc.newer {
+				at = t0.Add(time.Minute)
+			}
+			_ = os.WriteFile(p, []byte("{}\n"), 0o600)
+			if err := os.Chtimes(p, at, at); err != nil {
+				t.Fatal(err)
+			}
+		}
+		st, err := m.status(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var text, doc strings.Builder
+		st.writeText(&text)
+		_ = doctor.Report{Stages: macOSVMDoctorStages()}.WriteText(&doc)
+		for what, out := range map[string]string{"status": text.String(), "doctor": doc.String()} {
+			if got := strings.Contains(out, "setup by hand"); got != tc.setupBy {
+				t.Errorf("%s log newer: %s says setup by hand %v:\n%s", tc.newer, what, got, out)
+			}
+		}
+		if got := st.Phase == "setup_by_hand"; got != tc.setupBy {
+			t.Errorf("%s log newer: phase %q", tc.newer, st.Phase)
 		}
 	}
 }
