@@ -83,7 +83,8 @@ func dnsQuery(t *testing.T, gs *stack.Stack, label, tld string) [4]byte {
 	q = append(q, tld...)
 	q = append(q, 0, 0, 1, 0, 1)
 	_, _ = c.Write(q)
-	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	// A bound for a hung relay, not a latency budget: see vmnettest.Query.
+	_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
 	buf := make([]byte, 512)
 	n, err := c.Read(buf)
 	if err != nil || n < 4+len(q) {
