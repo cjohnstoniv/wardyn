@@ -651,8 +651,8 @@ func TestDispatch_RemoteNeverBindsRunnerBoundFolder(t *testing.T) {
 		if fr.createCalls != 0 {
 			t.Errorf("placement %q: CreateSandbox calls = %d, want 0 for a runner-bound folder", placed, fr.createCalls)
 		}
-		if findAudit(audit.events, run.ID, "run.dispatch", "failure") == nil {
-			t.Errorf("placement %q: no run.dispatch failure; events=%s", placed, auditDump(audit.events, run.ID))
+		if findAudit(audit.snapshot(), run.ID, "run.dispatch", "failure") == nil {
+			t.Errorf("placement %q: no run.dispatch failure; events=%s", placed, auditDump(audit.snapshot(), run.ID))
 		}
 	}
 	if fr, _, _ := dispatch(types.PlacementRemote, false); fr.createCalls != 1 {

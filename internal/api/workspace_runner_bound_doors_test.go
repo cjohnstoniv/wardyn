@@ -81,9 +81,9 @@ func TestDispatch_LocalOnAnotherRunnerNeverBindsRunnerBoundFolder(t *testing.T) 
 	if fr.createCalls != 0 {
 		t.Errorf("CreateSandbox calls = %d, want 0 for a folder bound to another runner", fr.createCalls)
 	}
-	ev := findAudit(audit.events, run.ID, "run.dispatch", "failure")
+	ev := findAudit(audit.snapshot(), run.ID, "run.dispatch", "failure")
 	if ev == nil || !strings.Contains(string(ev.Data), string(placement.ReasonPlacementLocalPath)) {
-		t.Errorf("run.dispatch failure = %+v, want reason %s; events=%s", ev, placement.ReasonPlacementLocalPath, auditDump(audit.events, run.ID))
+		t.Errorf("run.dispatch failure = %+v, want reason %s; events=%s", ev, placement.ReasonPlacementLocalPath, auditDump(audit.snapshot(), run.ID))
 	}
 	if hint := st.FailureHint(); !strings.Contains(hint, bound.String()[:8]) || !strings.Contains(hint, "runs only there") {
 		t.Errorf("failure hint = %q, want it to name the folder's runner %s", hint, bound.String()[:8])
