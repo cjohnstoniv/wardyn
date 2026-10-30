@@ -24,6 +24,7 @@
     DockerHost        DOCKER_HOST            the engine's socket, when it is not the default
     LocalModelPort    flag local-model-port     port(s), comma-separated, of a model server on this Mac a run may be relayed
                                              to; left out, none
+    MacOSVMBaseFile   macos_vm_base_file     the macOS VM base's install list, a JSON file on the Mac; left out, none
 
   Replace each __PLACEHOLDER__: the two UUIDs with fresh ones (uuidgen), __ORG_URL__ and __ORGANIZATION__.
   Committed as-is it is valid plist XML — see scripts/test-runner-pkg.sh. MDM signs and scopes the profile;
@@ -67,6 +68,8 @@
       <key>LocalModelPort</key>
       <string></string>
       <key>MacOSVM</key>
+      <string></string>
+      <key>MacOSVMBaseFile</key>
       <string></string>
     </dict>
   </array>

@@ -40,6 +40,33 @@ export interface MacVMBase {
   image_version?: string;
   /** The download rate; step download with no wait only. */
   bytes_per_sec?: number;
+  /** When the base was last edited (edit-base), RFC 3339; state ready only. */
+  edited_at?: string;
+  /** The last edit's recheck: "passed" or why it discarded the copy. */
+  edit_recheck?: string;
+  /** The install list as the base holds it (macos_vm_base_file), in list order; state ready only. */
+  customisation?: MacVMItem[];
+  /** The guest's posture as last read from the base, never the Mac's own; state ready only. */
+  guest?: MacVMGuest;
+}
+
+/** Go: runnerwire.MacVMItem. kind: pkg, app, file, profile or ca; state: installed, staged, trusted or not_trusted. */
+export interface MacVMItem {
+  kind: string;
+  name: string;
+  state: string;
+}
+
+/** Go: runnerwire.MacVMGuest. sip, gatekeeper: "on" or "off"; mdm: "enrolled" or "not_enrolled"; org_ca: "trusted" or "not_trusted". */
+export interface MacVMGuest {
+  os_version?: string;
+  os_build?: string;
+  sip?: string;
+  gatekeeper?: string;
+  /** How many configuration profiles are installed; absent when unread. */
+  profiles?: number;
+  mdm?: string;
+  org_ca?: string;
 }
 
 /** Go: runnerwire.MacVMReasonLedgerDamaged and its siblings, in priority order; MacVMCaps.reason. */

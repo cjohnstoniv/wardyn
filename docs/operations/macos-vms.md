@@ -80,6 +80,7 @@
 | `WARDYN_MACOS_VMS` | The organisation | `1` lets a run ask for `macos_vm`. Off by default |
 | `WARDYN_RUNNER_MACOS_VM` | The Mac's runner | `1` offers macOS VMs from this Mac once its checks pass, else logs the fix. Off by default |
 | `MacOSVM` | The managed preferences profile | The same switch, from your MDM. Only a macOS profile sets it ([Managed preferences](hybrid-laptops.md#managed-preferences)) |
+| `macos_vm_base_file` | The Mac's runner, or `MacOSVMBaseFile` in the profile | The base's install list, a JSON file on the Mac. A changed list starts a tools update ([Customising the base](#customising-the-base)) |
 
 ## Which Macs qualify
 
@@ -169,6 +170,26 @@
 
 - Stage 1's first step replaces the code with a random password, signs in again with that, and only then deletes the file. Preparing also deletes it when it discards the base or ends.
 
+## Editing a base
+
+`wardyn-runnerd macos-vm edit-base` boots the ready base once, in a window, for an attended session. Use it to turn on Screen Sharing with control when `status` says `view only`, or to change the guest by hand. Runs keep using the current base until the edited one passes its checks.
+
+1. Run `wardyn-runnerd macos-vm edit-base` in Terminal on the Mac, signed in at its desktop. Not over SSH, and not with sudo.
+2. Wardyn copies the base and, in a boot with no window, sets a fresh one-time code as the password of `wardyn-admin`. The command names the file that holds it, `setup-code.json`, as setup by hand does.
+3. The copy boots in a window. Sign in as `wardyn-admin` with the code. The guest has no internet during the session.
+4. Make your changes. For desktop control, open System Settings > General > Sharing and turn on Screen Sharing. Under its (i) button, turn on "VNC viewers may control screen with password".
+5. Leave Remote Login off and add no accounts. When you are done, close the window: Wardyn asks the guest to shut down. The window closes once the guest has shut down.
+
+- **The recheck.** The copy boots once more with no window. First the code is replaced with a random password no process keeps, and the code file is deleted.
+  - Then, in order: the control check, the accounts, Remote Login, and the launcher's self-test for a command and for each harness the base offers.
+  - Only a copy that passes is swapped in, by the same atomic exchange as a tools update. A crash at any point leaves the old base ready.
+  - A failure discards the copy and says which check failed. Runs keep using the base from its last date.
+- **Accounts.** The recheck allows `wardyn-admin`, `agent` and macOS's own accounts: below uid 500, and named with a leading `_`, or `root`, `daemon` or `nobody`. Any other account, a Guest User included, discards the copy.
+- **A tripwire, not prevention.** The recheck of accounts and Remote Login is a tripwire, not prevention, because the Mac's person is root on the host. They can change a base's disk without `edit-base`.
+- **Refusals.** `edit-base` refuses while a prepare or tools update runs, without a ready base, without the Mac's desktop, and when both VM slots are in use. The edit holds one slot for all its boots.
+- **What the organisation sees.** The runner reports when its base was last edited and the last recheck's result. Each run records when the base it started from was last edited, as `base_edited_at` on its machine.
+- Built and unit-tested; not yet run on a real Mac.
+
 ## The prep proxy
 
 - Stage 2 runs on its own Docker network, made for the job. Its only way out is a prep-only `wardyn-proxy` that allows Apple's software-update hosts on port 443 and nothing else: `swscan.apple.com`, `swcdn.apple.com`, `swdist.apple.com`, `swdownload.apple.com`, `updates.cdn-apple.com`, `mesu.apple.com` and `gdmf.apple.com`.
@@ -177,6 +198,89 @@
 - **A crash leaves none behind.** At start, before any job gets a network, the runner removes the prep containers and networks that a crash left for its own runner and deployment. A job still in the ledger keeps its own.
   - It logs how many it removed. A sweep that cannot run is logged as a warning and does not stop the runner.
   - At start the runner also deletes the staging copy that a crashed tools update or re-prepare left, unless that update is still running.
+
+## Customising the base
+
+An operator can have prepare install packages, apps, files, configuration profiles and a CA into the base, as admin. Built and unit-tested; not yet run on a real Mac.
+
+- **The list.** The runner setting `macos_vm_base_file` (in `runnerd.json`, or `MacOSVMBaseFile` from your MDM) names a JSON file on the Mac. No flag or environment variable sets it, so an MDM value always wins.
+- **When.** Prepare installs the list, and so does every tools update. A list whose contents change starts a tools update; the old base serves runs until the new one is swapped in.
+- **Pinned.** Each file is checked against its `sha256` before it is pushed, through the same handle. A mismatch stops the install.
+- **Staged as root.** Each item is staged in `/Library/Wardyn/stage/<name>`, root's and mode 0700, and installed with fixed commands. There is no shell, and the list cannot add a flag.
+- **Fails closed.** An item that fails stops stage 2. Prepare publishes no base, and a tools update keeps the old one. A command's output is not kept, since an installer may echo what it was given.
+
+```json
+{"version": 1, "items": [
+  {"kind": "pkg", "name": "edr", "path": "/Library/Org/edr.pkg", "sha256": "<64 hex>",
+   "secret_files": [{"path": "/Library/Org/edr-token", "name": "com.vendor.registration-token", "sha256": "<64 hex>"}]},
+  {"kind": "ca", "name": "org-ca", "path": "/Library/Org/root.pem", "sha256": "<64 hex>"},
+  {"kind": "profile", "name": "wifi", "path": "/Library/Org/wifi.mobileconfig", "sha256": "<64 hex>", "identifier": "com.example.wifi"}
+]}
+```
+
+| Kind | File | Installed with | Also takes |
+|---|---|---|---|
+| `pkg` | `.pkg` | `installer -pkg … -target /` | `secret_files` |
+| `app` | `.zip` of the bundle, or `.dmg` | `ditto` into `/Applications`; a `.dmg` is attached read-only first | `app`: the bundle in the `.dmg` (`Name.app`) |
+| `file` | any | pushed to `dest`, root's, mode 0644 | `dest`: under `/Library`, `/usr/local` or `/opt` |
+| `profile` | `.mobileconfig` | staged for approval in `edit-base` | `identifier`: its `PayloadIdentifier` |
+| `ca` | one CA certificate, `.pem`, `.cer`, `.crt` or `.der` | trusted in the System keychain for SSL | none |
+
+What Wardyn automates, and what the operator does by hand in `wardyn-runnerd macos-vm edit-base`:
+
+| Item kind | Done by |
+|---|---|
+| `pkg`, `app`, `file`, `secret_files` | Automated at prepare and tools update |
+| `ca` | Automated (authorizationdb, add-trusted-cert, verified). By hand in edit only when it reads `not_trusted` |
+| `profile` | Staged automatically. Approved by hand in edit. Wardyn reads back `installed` |
+| System-extension or helper approval (EDR) | By hand in edit (or by MDM, outside Wardyn) |
+| Screen Sharing control | Setup by hand at prepare; otherwise in edit |
+
+- **Refused destinations.** A `file` item may not write a harness's managed settings (`/Library/Application Support/ClaudeCode`, `/etc/codex`), because a run writes those per run. Your own agent rules go in your policy instead.
+  - Nor may it write Wardyn's own files, the stage directory, `/var/run/wardyn` or `/Library/Keychains`. Paths compare without case, as APFS does.
+- **Secret files.** A `pkg` item's `secret_files`, such as an EDR licence, are each a mode 0600 file on the Mac. A file others can read is refused.
+  - Each is pushed root's and 0600 beside the package, for its installer to read, and removed with the stage directory after the install, on every path.
+  - Its value is never in a command line, a log, `tools.json` or the caps. The list's digest covers its pin only, so to rotate a licence, change its `sha256`.
+
+### The organisation CA
+
+The `ca` item trusts your organisation's root in the guest at prepare. It is separate from the per-run proxy CA ([Credentials and sign-ins](#credentials-and-sign-ins)).
+
+1. The guest agent saves the `com.apple.trust-settings.admin` authorization rule, then sets it to allow, so root can change the admin trust settings without a password.
+2. It runs `security add-trusted-cert -d -r trustRoot -p ssl` on the certificate: SSL only, never every policy.
+3. It writes the saved rule back. This always runs, also when a step failed or the request was cancelled; a rule it cannot restore fails stage 2.
+4. `security verify-cert -p ssl` reads the trust back. `tools.json` records `trusted` or `not_trusted` with the certificate's SHA-256 and SHA-1 fingerprints.
+
+- `not_trusted` means macOS refused a trust without a person. Trust it by hand in `edit-base`: in Terminal, run `sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain /Library/Wardyn/stage/<name>/item.cer` and answer macOS's prompt.
+- A tools update removes a CA the list no longer pins, with its trust settings, by its SHA-1.
+
+### Configuration profiles
+
+- macOS installs a profile only with a person's approval, or from MDM. Prepare stages each `profile` item and reads `profiles list` back: `staged` until it is approved, then `installed`.
+- Before its window opens, `edit-base` stages each profile still `staged` again from its file in the list. It copies each to `/Users/wardyn-admin/Wardyn/<name>.mobileconfig`, readable by wardyn-admin only, and prints that path. `edit-base` owns that folder: it empties it before each window and removes it after.
+- A profile whose file is not on the Mac, or that the list now pins differently, is not offered. `edit-base` logs the second by its path.
+- While signed in as wardyn-admin, open the copy, then review and install the profile in System Settings.
+- The recheck removes the copies, then the staged files, and checks each is gone before it reads the profiles back. A removal that fails discards the edit.
+- Some payloads take effect only from MDM, whatever a person approves, so a guest never gets them from a staged profile.
+  - These include Privacy Preferences Policy Control (TCC), system extension and kernel extension policies, and managed login items.
+  - Approve a system extension by hand in `edit-base` instead.
+
+### Guest posture
+
+Stage 2 and the `edit-base` recheck read the guest's posture. The caps carry it as the base's `guest`, beside the Mac's own posture and never in it.
+
+| Field | Read from | Values |
+|---|---|---|
+| `os_version`, `os_build` | `sw_vers` | e.g. `26.6.2`, `25G83` |
+| `sip` | `csrutil status` | `on`, `off` |
+| `gatekeeper` | `spctl --status` | `on`, `off` |
+| `profiles` | `profiles list` | how many are installed |
+| `mdm` | `profiles status -type enrollment` | `enrolled`, `not_enrolled` |
+| `org_ca` | the `ca` items | `trusted` when every one is, else `not_trusted`; absent without one |
+
+- The posture is read when the base is prepared, updated or edited. It is not live.
+- Each read is tolerant: output Wardyn does not recognise leaves its field absent and fails nothing.
+- A guest is a clone. To sign-ins that require a compliant device, it is an unmanaged device, whatever it reports here.
 
 ## Apple's boot-time hosts
 

@@ -939,8 +939,9 @@ func TestStage2CLTCommandsPassTheGuestAgentAllowlist(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != 5 { // touch, softwareupdate -l, softwareupdate -i, git --version, rm -f
-		t.Fatalf("checked %d guest commands, want the 5 of the CLT install: %q", checked, g.runs)
+	// touch, softwareupdate -l, softwareupdate -i, git --version, rm -f; then the guest posture's six reads
+	if checked != 11 {
+		t.Fatalf("checked %d guest commands, want the 5 of the CLT install and the 6 posture reads: %q", checked, g.runs)
 	}
 }
 

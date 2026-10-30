@@ -416,6 +416,8 @@ export interface VMMachine {
   // A macOS VM's guest build and its Mac's; absent on a Linux VM.
   guest_os?: string;
   host_os?: string;
+  // When a macOS VM's base was last edited before the run cloned it (RFC 3339); absent when never.
+  base_edited_at?: string;
 }
 
 export interface RunAttention {

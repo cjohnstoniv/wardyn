@@ -491,7 +491,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	}
 	signIns := res.SignIns
 	machine := &types.VMMachine{Accelerator: types.MacVMAccelerator, MachineType: types.MacVMMachineType,
-		GuestOS: cmp.Or(man.GuestOS, "macOS "+man.BuildVersion), HostOS: c.HostOS}
+		GuestOS: cmp.Or(man.GuestOS, "macOS "+man.BuildVersion), HostOS: c.HostOS, BaseEditedAt: macvm.BaseEditedAt(c.Layout.BaseDir(0), man)}
 	d.notVMs.Delete(ref)
 	d.vms.Store(ref, v)
 	d.keepExecOutput(ref, spec.ExecOutput)

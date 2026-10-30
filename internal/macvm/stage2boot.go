@@ -346,7 +346,7 @@ func (g *toolsGuest) bound(ctx context.Context) (context.Context, context.Cancel
 	return ctx, func() { unhook(); cancel(nil) }
 }
 
-var _ ToolsGuest = (*toolsGuest)(nil)
+var _ EditGuest = (*toolsGuest)(nil)
 var _ DesktopProbe = (*toolsGuest)(nil)
 
 func (g *toolsGuest) close() { g.tools.Close(); g.control.Close() }
@@ -398,6 +398,18 @@ func (g *toolsGuest) DesktopPassword(ctx context.Context, pw []byte) (bool, erro
 	ctx, done := g.bound(ctx)
 	defer done()
 	return g.tools.ToolsDesktopPassword(ctx, string(pw))
+}
+
+func (g *toolsGuest) AdminCode(ctx context.Context, code []byte) (bool, error) {
+	ctx, done := g.bound(ctx)
+	defer done()
+	return g.tools.ToolsAdminCode(ctx, string(code))
+}
+
+func (g *toolsGuest) Posture(ctx context.Context) (guestagent.ToolsPosture, error) {
+	ctx, done := g.bound(ctx)
+	defer done()
+	return g.tools.ToolsPosture(ctx)
 }
 
 func (g *toolsGuest) Pointer(ctx context.Context) (int, int, error) {

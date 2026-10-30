@@ -124,7 +124,14 @@ func newMacOSVMCommand() *cobra.Command {
 		}
 		return m.remove(cmd.OutOrStdout())
 	}}
-	cmd.AddCommand(status, prepare, remove)
+	editBase := &cobra.Command{Use: "edit-base", Short: "Boot this Mac's macOS base once to edit it, and check it before runs use it", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		m, runnerID, err := open(cmd)
+		if err != nil {
+			return err
+		}
+		return m.editBase(cmd.Context(), cmd.OutOrStdout(), runnerID)
+	}}
+	cmd.AddCommand(status, prepare, editBase, remove)
 	return cmd
 }
 
@@ -216,8 +223,9 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 	if ev, ok, _, _ := lastHelperLines(m.layout.PrepareLog()); ok {
 		st.Phase = ev.Phase
 	}
-	if st.setupCode = setupCodeWaiting(m.layout.Root); st.setupCode != "" {
-		st.Phase = "setup_by_hand"
+	// During an edit the code file is the edit's, which the edit's own Terminal names.
+	if p := setupCodeWaiting(m.layout.Root); p != "" && !editsCode(m.layout.Root) {
+		st.setupCode, st.Phase = p, "setup_by_hand"
 	}
 	st.ToolsDial = lastToolsDial(m.layout.Root)
 	counted, err := m.ledger.Counted()
@@ -296,14 +304,25 @@ func lastToolsDial(root string) string {
 	return ""
 }
 
-// macOSVMDoctorStages is doctor's macOS VM stage: only while macOS waits for setup by hand, it names the
-// file that holds the one-time code, never the code.
+// editsCode: the one-time code file at root is an edit's, not setup by hand's. An edit writes its log
+// before the code file, and a prepare writes prepare.log before its own, so the newer log says whose.
+func editsCode(root string) bool {
+	el, err := os.Stat(filepath.Join(root, editBaseLog))
+	if err != nil {
+		return false
+	}
+	pl, err := os.Stat(macvm.Layout{Root: root}.PrepareLog())
+	return err != nil || el.ModTime().After(pl.ModTime())
+}
+
+// macOSVMDoctorStages is doctor's macOS VM stage: only while macOS waits for setup by hand, not during an
+// edit (editsCode), it names the file that holds the one-time code, never the code.
 func macOSVMDoctorStages() []doctor.Stage {
 	root, err := macvm.DefaultRoot()
 	if err != nil {
 		return nil
 	}
-	if p := setupCodeWaiting(root); p != "" {
+	if p := setupCodeWaiting(root); p != "" && !editsCode(root) {
 		return []doctor.Stage{doctor.SkipStage("macos-vm", "macOS asked for setup by hand in the window \""+macOSVMSetupWindow+"\"; the one-time code is in "+p)}
 	}
 	return nil

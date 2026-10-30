@@ -3,7 +3,10 @@
 
 package types
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // MachineKind is what a run's sandbox is: a container (the default, and every run before 0.10) or a
 // virtual machine. It is its own knob, not a confinement class: CC1..CC3 keep describing containers.
@@ -57,6 +60,9 @@ type VMMachine struct {
 	// on a Linux VM, whose machine they do not describe.
 	GuestOS string `json:"guest_os,omitempty"`
 	HostOS  string `json:"host_os,omitempty"`
+	// BaseEditedAt is when a macOS VM's base was last edited (`macos-vm edit-base`) before the run cloned it;
+	// absent when it never was, and on a Linux VM.
+	BaseEditedAt *time.Time `json:"base_edited_at,omitempty"`
 }
 
 // A macOS VM's machine: Virtualization.framework gives the guest no CPU model or QEMU, so the machine
