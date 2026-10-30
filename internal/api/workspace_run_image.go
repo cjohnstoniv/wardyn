@@ -265,9 +265,10 @@ func (s *Server) resolveWorkspaceImageWith(ctx context.Context, runID uuid.UUID,
 			// was DROPPED for the convention image rather than swapping it silently.
 			// (Fully closing the door = the UI sending workspace_id — later UI batch.)
 			// "failure" with skipped: the outcome CHECK refuses "skipped", and the row was lost.
-			// 0.10.x switches this to a skipped outcome.
+			// 0.10.x switches this to a skipped outcome. fail_closed:false keeps it from reading
+			// as why a run failed (audit.ts FAILED cause).
 			buildAudit("failure", map[string]any{
-				"source": "base_image:" + b.Kind, "base": b.Image, "skipped": true,
+				"source": "base_image:" + b.Kind, "base": b.Image, "skipped": true, "fail_closed": false,
 				"reason": "no image builder wired; base image dropped for the convention image",
 			})
 			return fail
@@ -357,7 +358,8 @@ func (s *Server) resolveWorkspaceImageWith(ctx context.Context, runID uuid.UUID,
 	if len(primary.Sources) > 0 && primary.Sources[0].Type == types.WorkspaceSourceTypeRepo && p.HasDevcontainer {
 		if _, ssh := sshCloneHost(primary.Sources[0].Source); ssh {
 			// "failure" with skipped, as above. 0.10.x switches this to a skipped outcome.
-			buildAudit("failure", map[string]any{"source": "repo-devcontainer", "skipped": true,
+			// fail_closed:false keeps it from reading as why a run failed (audit.ts FAILED cause).
+			buildAudit("failure", map[string]any{"source": "repo-devcontainer", "skipped": true, "fail_closed": false,
 				"reason": "ssh-source-not-buildable-by-image-builder"})
 		}
 	}
