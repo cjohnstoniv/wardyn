@@ -71,7 +71,6 @@ func (d *Driver) macDiskDrives(drives []types.DriveMount) ([]macvm.Disk, []guest
 		}
 		unlock, err := macvm.LockDisk(img)
 		if errors.Is(err, macvm.ErrDiskInUse) {
-			//lint:ignore ST1005 the sentence the person reads, as written in the approved copy
 			return nil, nil, errors.New(runner.MacVMDiskLocked(cmp.Or(drive.DriveName, runner.DriveSubject(drive))))
 		}
 		if err != nil {
