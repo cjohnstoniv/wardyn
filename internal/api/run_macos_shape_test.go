@@ -41,17 +41,22 @@ func TestStepPlacementCapability_MacOSVMRefusesWhatItCannotDo(t *testing.T) {
 				f.harnesses = []types.RunHarness{{Harness: "claude-code", Starts: true}, {Harness: "none"}}
 			}},
 		{name: "an Ask first rule in the policy", edit: task, fold: func(f *runFold) { f.spec.ToolRules = []types.ToolRule{askFirst} },
-			want: "A macOS VM can't hold a tool call for approval in this release, and this run's tool rules include Ask first. Change those rules to Run it or Block it, or choose a container or a Linux VM.", field: "tools"},
+			want: "A macOS VM can't hold a tool call for approval in this release, and this run's tool rules or tool approvals would. Change them, or choose a container or a Linux VM.", field: "tools"},
 		{name: "an Ask first rule of the person's", edit: func(req *createRunRequest) {
 			task(req)
 			req.Tools = []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness, ToolRules: []types.ToolRule{askFirst}}}
-		}, want: "tool rules include Ask first", field: "tools"},
+		}, want: "tool rules or tool approvals would", field: "tools"},
 		{name: "an Ask first default of the person's", edit: func(req *createRunRequest) {
 			task(req)
 			req.Tools = []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness, DefaultEffect: types.ToolHold}}
-		}, want: "tool rules include Ask first", field: "tools"},
+		}, want: "tool rules or tool approvals would", field: "tools"},
 		{name: "tool approvals on hold", edit: func(req *createRunRequest) { task(req); req.ToolApprovals = "hold" },
 			want: "A macOS VM can't hold a tool call for approval in this release, and this run's tool rules or tool approvals would. Change them, or choose a container or a Linux VM.", field: "tools"},
+		// Run it is a rule of the person's too, and holds like any other: there is no rule to change to.
+		{name: "a Run it rule of the person's", edit: func(req *createRunRequest) {
+			task(req)
+			req.Tools = []client.IncludedTool{{ID: "claude-code", Kind: client.IncludedToolHarness, ToolRules: []types.ToolRule{{Tool: "Bash", Effect: types.ToolAllow}}}}
+		}, want: "tool rules or tool approvals would", field: "tools"},
 		{name: "a Block it rule puts the run on the hold lane too", edit: task,
 			fold: func(f *runFold) { f.spec.ToolRules = []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}} },
 			want: "tool rules or tool approvals would", field: "tools"},
