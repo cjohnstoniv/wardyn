@@ -16,6 +16,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Erasing a person no longer clears the author of a launch preset written by a different subject whose name only
   matches after the database's lower-casing, such as a Kelvin sign in place of a K or a non-ASCII case variant. Only
   an ASCII subject is matched case-insensitively, and only on its ASCII letters.
+- With second-person approval on, a held unit create or update now shows the approver the unit's mode, own walls or
+  pass-through, in its before and after.
 
 ## [0.10.0-rc.8] — 2026-10-29
 
