@@ -498,7 +498,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 ### Drives
 
 - An admin or team drive in a folder on the Mac (a `host_path` share, or a second place bound to this runner) is shared into the guest as a folder. It mounts at the container's names: `/Users/agent/drive`, `/Users/agent/drives/<name>` and `/Users/agent/shared/<name>`. A read-only drive stays read-only.
-- It is held to its own folder and to the runner's drive roots, as in a container: a link out of either, or a folder macOS protects, is refused before the run starts.
+- It is held to its own folder and to the runner's drive roots, as in a container: a link out of either, or a folder macOS protects, is refused before the run starts. Give the Mac's runner its roots with `wardyn-runnerd setup --drive-root <dir>` (repeatable), or the `DriveRoot` key in the profile; see [Drive roots](hybrid-laptops.md#drive-roots-on-a-laptop-runner).
 - A runner that predates drives refuses the run at create: update the runner, or run without drives. A Docker or cluster volume is refused too, because a macOS VM can't open it.
 - A person's own drive can be a disk drive kept on one of their Macs (backend `mac_disk`): `POST /api/v1/me/drives` with `runner_id`, the Mac's runner id, whose runner must be online and up to date. It is a sparse disk image in `macos-vm.noindex/drives/`, 64 GiB unless the organisation sets a drive size, and takes room only as it fills.
 - Only a macOS VM run on that Mac attaches it, as a second disk at the drive's path (`/Users/agent/drive` or `/Users/agent/drives/<name>`). Its first run formats it as APFS. A run on another runner, or of another sandbox kind, is refused naming the Mac.

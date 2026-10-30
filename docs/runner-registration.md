@@ -303,13 +303,15 @@ A hand-installed macOS LaunchAgent does not get `--log-file`, so its log is not 
 | `runner_proxy`, `runner_no_proxy` | none | `HTTPS_PROXY`, `NO_PROXY` | |
 | `recording_store` | `pg` | `WARDYN_RECORDING_STORE` | `--recording-store` |
 | `local_model_port` | none | `WARDYN_LOCAL_MODEL_PORT` | `--local-model-port` |
+| `drive_root` | none | `WARDYN_DRIVE_ROOT` | `--drive-root` (also `setup --drive-root`) |
 
 - A setting comes from the first of these that has it: the flag, the managed preference (macOS profile), the environment, the file, the default.
+- `drive_root` lists the folders a drive bound to this runner, or a bound folder, may mount from, with everything under each. Unset, the runner advertises no `allowed_roots` and the organisation refuses drives on it. Each is an absolute, cleaned path below `/`. In `runnerd.json` it is a JSON array, `"drive_root": ["/Volumes/team-share", "/srv/x"]`; the `DriveRoot` managed preference is an array of strings; `WARDYN_DRIVE_ROOT` separates paths with the OS path-list separator (`:` on Linux and macOS); `--drive-root` is repeatable and, when given, wins over the other three. `serve` refuses a bad value from any of them, naming it. It applies to the Docker substrate only. See [User drives](operations/user-drives.md).
 - `local_model_port` lists the ports, comma-separated, of a model server on this computer that runs here may use, such as `11434`. Unset, no run uses it. See [Local model server](OPERATIONS.md#on-a-persons-own-runner).
 - A `proxy_image` in the file is a pin: `serve` keeps it. `proxy_image_mirror` is a repository without a tag, such as `registry.example/wardyn-proxy`: `serve` pulls the tag the organisation names from it.
 - The file never holds a credential. A proxy URL with a user name or password is refused where it is read, with the variable to set instead.
 - `serve` checks the file at every start and refuses an unknown field or a bad value by name. An absent default file is fine; a `--config` that does not exist is not.
-- `setup` rewrites what it owns (`org_url`, `state_dir`, `docker_host`, `internal_network`, the relay pair, `trusted_ca_file`, `org_ca_file`, the proxy `setup` carried and a named `proxy_image`) and keeps the rest, so a mirror or a proxy you added survives a rerun.
+- `setup` rewrites what it owns (`org_url`, `state_dir`, `docker_host`, `internal_network`, the relay pair, `trusted_ca_file`, `org_ca_file`, the proxy `setup` carried, a named `proxy_image` and, when `--drive-root` is given, `drive_root`: the new list replaces the old) and keeps the rest, so a mirror or a proxy you added survives a rerun.
 
 An install from before the file keeps working: its environment file or LaunchAgent is still read, and the environment outranks the file. Run `setup` again to move those settings into `runnerd.json` and out of the LaunchAgent, which every local account can read.
 
@@ -331,6 +333,7 @@ An install from before the file keeps working: its environment file or LaunchAge
 | `engine` | The engine answers at `DOCKER_HOST`, and its version | `DOCKER_HOST` |
 | `proxy-image` | The image is on the engine or in its registry; a pinned image of another release than the organisation's is a version-skew failure | `WARDYN_PROXY_IMAGE` |
 | `relay` | The relay address is allowed and a probe container reaches it, through `setup`'s own check; the proxy network exists | `WARDYN_RELAY_LISTEN`, `WARDYN_INTERNAL_NETWORK` (missing network) |
+| `drive-roots` | Shown only when set: the drive roots in effect and where they came from (`--drive-root` is not read by `doctor`; the managed preference, the environment or `runnerd.json` is), or the refusal `serve` would give | `drive_root` |
 | `service` | The installed service, and on Linux whether systemd reports it running | |
 | `status` | The state and last error the service recorded in `status.json`, and the stage it stopped at | `WARDYN_RUNNER_STATE_DIR`, or the setting of that stage |
 
