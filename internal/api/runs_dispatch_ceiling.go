@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -863,15 +864,26 @@ func injectionRules(ins []runner.InjectionGrant) []egress.InjectionRule {
 	return out
 }
 
+// adoLaneAllowEntries is the allowlist entries the lane added: its gate's hosts, port-qualified as
+// authorADOEntraInjection writes them (adoEntraEgressEntries for the Services hosts, the one Server host
+// on an Azure DevOps Server lane, whose Organization is a collection, not an organisation).
+func adoLaneAllowEntries(gate *proxy.ADOGrantConfig) []string {
+	out := make([]string, 0, len(gate.Hosts))
+	for _, h := range gate.Hosts {
+		out = append(out, net.JoinHostPort(h, adoEntraHostPort))
+	}
+	return out
+}
+
 // withdrawADOLane is the rest of the lane's withdrawal at dispatch, once reassertCeilingDenies has
 // dropped its injections by adoLaneWithheld: the REST gate, the interception entries, and the
-// allowlist entries the lane added (adoEntraEgressEntries). An entry own lists stays, own being the
+// allowlist entries the lane added (adoLaneAllowEntries). An entry own lists stays, own being the
 // run's policy before any dispatch phase added a host: that policy wants it.
 func withdrawADOLane(w withholding, ado *adoEntraLane, policy *types.RunPolicySpec, own []string) {
 	if ado.gate == nil || !adoLaneWithheld(w, ado.gate, injectionRules(ado.injections)...) {
 		return
 	}
-	lane := adoEntraEgressEntries(ado.gate.Organization)
+	lane := adoLaneAllowEntries(ado.gate)
 	policy.AllowedDomains = slices.DeleteFunc(slices.Clone(policy.AllowedDomains), func(d string) bool {
 		return slices.ContainsFunc(lane, func(e string) bool { return strings.EqualFold(e, d) }) &&
 			!slices.ContainsFunc(own, func(e string) bool { return strings.EqualFold(e, d) })

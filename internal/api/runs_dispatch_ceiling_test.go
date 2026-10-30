@@ -520,6 +520,17 @@ func TestDispatch_ADODenyWithdrawsTheWholeLane(t *testing.T) {
 			}
 		})
 	}
+
+	// An Azure DevOps Server lane added one entry, its host's: that goes, and a policy's own
+	// dev.azure.com:443 (no host this lane reached) stays.
+	t.Run("server lane", func(t *testing.T) {
+		ado := adoEntraLane{gate: &proxy.ADOGrantConfig{Organization: "DefaultCollection", Hosts: []string{"ado.corp.example"}}}
+		policy := types.RunPolicySpec{AllowedDomains: []string{"dev.azure.com:443", "ado.corp.example:443"}}
+		withdrawADOLane(withholding{deny: []string{"ado.corp.example"}}, &ado, &policy, []string{"dev.azure.com:443"})
+		if ado.gate != nil || !slices.Equal(policy.AllowedDomains, []string{"dev.azure.com:443"}) {
+			t.Errorf("gate %+v, allowlist %v: want no gate, the Server host's entry gone and the policy's own kept", ado.gate, policy.AllowedDomains)
+		}
+	})
 }
 
 // adoFrozenConfig is a revived run's proxy config with contoso's lane live: an injection on every host
@@ -563,6 +574,23 @@ func TestReviveADODenyWithdrawsTheWholeLane(t *testing.T) {
 			}
 		})
 	}
+
+	// An Azure DevOps Server lane's gate names a collection, not an organisation: the revive removes
+	// the Server host's entry, and leaves a policy's own dev.azure.com:443, which this lane never added.
+	t.Run("server lane", func(t *testing.T) {
+		run := types.AgentRun{ID: uuid.New()}
+		cfg := &proxy.Config{RunID: run.ID, ADOGrant: &proxy.ADOGrantConfig{Organization: "DefaultCollection", Hosts: []string{"ado.corp.example"}}}
+		cfg.Policy.AllowedDomains = []string{"dev.azure.com:443", "ado.corp.example:443"}
+		if _, rerr := reassertProxyCeiling(run, cfg, ownerCeiling{deny: []string{"ado.corp.example"}}, nil); rerr != nil {
+			t.Fatalf("refused: %+v", rerr)
+		}
+		if cfg.ADOGrant != nil || slices.Contains(cfg.Policy.AllowedDomains, "ado.corp.example:443") {
+			t.Errorf("ADOGrant %+v, allowlist %v: want no gate and the Server host's entry gone", cfg.ADOGrant, cfg.Policy.AllowedDomains)
+		}
+		if !slices.Equal(cfg.Policy.AllowedDomains, []string{"dev.azure.com:443"}) {
+			t.Errorf("allowlist %v: the policy's own exact dev.azure.com:443 must be left alone", cfg.Policy.AllowedDomains)
+		}
+	})
 }
 
 // DELIBERATE, and pinned so it is not "fixed" into keeping the entry: under a layered seal, a policy
