@@ -17,7 +17,7 @@ cd "$ROOT"
 
 DOCS=(README.md docs/README.md docs/DESKTOP.md ARCHITECTURE.md threatmodel/THREAT-MODEL.md docs/AZURE-DEVOPS.md
       docs/operations/monitoring.md docs/operations/run-lifetime.md
-      docs/operations/kubernetes-known-gaps.md docs/operations/secrets-and-keys.md
+      docs/operations/kubernetes-known-gaps.md docs/operations/secrets-and-keys.md docs/EXTENDING.md
       RELEASING.md)
 RENDER_DIR=""
 [ "${1:-}" = "--render-png" ] && RENDER_DIR="${2:?--render-png needs a dir}"
