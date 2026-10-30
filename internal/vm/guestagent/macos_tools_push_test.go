@@ -170,32 +170,35 @@ func TestItemDestRefusesNonASCII(t *testing.T) {
 	}
 }
 
-// A file item's directory is made by the walk: missing components 0755 whatever the umask, and no
-// link or world-writable directory on the way.
+// An item's directory is made by the walk: missing parents 0755 and the directory itself its mode,
+// whatever the umask, and no link or world-writable directory on the way.
 func TestMakeDirAll(t *testing.T) {
 	old := syscall.Umask(0o077)
 	defer syscall.Umask(old)
 	dir := t.TempDir()
-	if err := makeDirAll(filepath.Join(dir, "a", "b", "c"), nil); err != nil {
+	if err := makeDirAll(filepath.Join(dir, "a", "b", "c"), 0o755, nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{"a", "a/b", "a/b/c"} {
-		if fi, err := os.Lstat(filepath.Join(dir, p)); err != nil || !fi.IsDir() || fi.Mode().Perm() != 0o755 {
-			t.Errorf("%s: %v %v, want a 0755 dir", p, fi.Mode(), err)
+	if err := makeDirAll(filepath.Join(dir, "s", "t", "u"), 0o700, nil); err != nil {
+		t.Fatal(err)
+	}
+	for p, want := range map[string]os.FileMode{"a": 0o755, "a/b": 0o755, "a/b/c": 0o755, "s": 0o755, "s/t": 0o755, "s/t/u": 0o700} {
+		if fi, err := os.Lstat(filepath.Join(dir, p)); err != nil || !fi.IsDir() || fi.Mode().Perm() != want {
+			t.Errorf("%s: %v %v, want a %#o dir", p, fi.Mode(), err, want)
 		}
 	}
-	if err := makeDirAll(filepath.Join(dir, "a", "b"), nil); err != nil {
+	if err := makeDirAll(filepath.Join(dir, "a", "b"), 0o755, nil); err != nil {
 		t.Errorf("an existing dir: %v", err)
 	}
 	target := mkdirMode(t, filepath.Join(dir, "real"), 0o755)
 	if err := os.Symlink(target, filepath.Join(dir, "link")); err != nil {
 		t.Fatal(err)
 	}
-	if err := makeDirAll(filepath.Join(dir, "link", "new"), nil); !errors.Is(err, ErrUnsafeParent) {
+	if err := makeDirAll(filepath.Join(dir, "link", "new"), 0o755, nil); !errors.Is(err, ErrUnsafeParent) {
 		t.Errorf("mkdir through a link = %v, want ErrUnsafeParent", err)
 	}
 	ww := mkdirMode(t, filepath.Join(dir, "ww"), 0o777)
-	if err := makeDirAll(filepath.Join(ww, "new"), nil); !errors.Is(err, ErrUnsafeParent) {
+	if err := makeDirAll(filepath.Join(ww, "new"), 0o700, nil); !errors.Is(err, ErrUnsafeParent) {
 		t.Errorf("mkdir in a 0777 dir = %v, want ErrUnsafeParent", err)
 	}
 	if len(entries(t, target)) != 0 || len(entries(t, ww)) != 0 {
@@ -203,15 +206,50 @@ func TestMakeDirAll(t *testing.T) {
 	}
 }
 
-// The agent makes a file item's directory itself; it never runs mkdir for it.
+// A sticky world-writable directory is allowed only when its group is trusted too: gid 0 (as the
+// guest's /private/tmp) passes, any other gid is refused. The test's gid is not trusted here.
+func TestReplaceFileStickyParentNeedsATrustedGroup(t *testing.T) {
+	dir := t.TempDir()
+	setVar(t, &trustedGroupGIDs, []uint32{0, 80})
+	wheel := mkdirMode(t, filepath.Join(dir, "wheel"), os.ModeSticky|0o777)
+	err := replaceFile(filepath.Join(wheel, "f"), 0o644, writeNew)
+	if os.Chown(wheel, -1, 0) == nil {
+		if err = replaceFile(filepath.Join(wheel, "f"), 0o644, writeNew); err != nil {
+			t.Errorf("a 1777 dir of gid 0: %v", err)
+		}
+	} else if !errors.Is(err, ErrUnsafeParent) { // not chown-able to gid 0: it keeps the test's own gid
+		t.Errorf("a 1777 dir of the test's gid (untrusted) = %v, want ErrUnsafeParent", err)
+	}
+	other := mkdirMode(t, filepath.Join(dir, "other"), os.ModeSticky|0o777)
+	fi, err := os.Stat(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gid := fi.Sys().(*syscall.Stat_t).Gid; gid == 0 || gid == 80 {
+		t.Skipf("the test's gid %d is a trusted one", gid)
+	}
+	if err := replaceFile(filepath.Join(other, "f"), 0o644, writeNew); !errors.Is(err, ErrUnsafeParent) {
+		t.Errorf("a 1777 dir of an untrusted gid = %v, want ErrUnsafeParent", err)
+	}
+}
+
+// The agent makes an item's directory itself, the stage directories and a file item's alike; it never
+// runs mkdir. As a user here, making /Library fails, which the response says.
 func TestToolsExecMakesAnItemDirItself(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("as root the walk would make /Library on this host")
 	}
 	rig := newToolsRig(t)
-	rig.exec("/bin/mkdir", "-p", "-m", "0755", "/Library/Application Support/Org")
-	rig.exec("/bin/mkdir", "-p", "-m", "0700", MacItemStageDir)
-	if !slices.EqualFunc(rig.ran, [][]string{{"/bin/mkdir", "-p", "-m", "0700", MacItemStageDir}}, slices.Equal[[]string]) {
-		t.Errorf("ran %q, want only the stage dir's mkdir", rig.ran)
+	for _, argv := range [][]string{
+		{"/bin/mkdir", "-p", "-m", "0755", "/Library/Application Support/Org"},
+		{"/bin/mkdir", "-p", "-m", "0700", MacItemStageDir},
+		{"/bin/mkdir", "-p", "-m", "0700", ItemDir("edr")},
+	} {
+		if w := rig.exec(argv...); w.Code != 500 {
+			t.Errorf("%q = %d %s, want 500 (no root here)", argv, w.Code, w.Body)
+		}
+	}
+	if len(rig.ran) != 0 {
+		t.Errorf("ran %q, want nothing", rig.ran)
 	}
 }
