@@ -53,6 +53,9 @@ export function wallsLeaveOut(walls: PersonalWallsSpec | undefined, access: Acce
   return leftOutBy(walls, access, answered).map((l) => l.host);
 }
 
+/** How many of the answer's hosts the run reaches: all but those the person's walls take out. */
+export const reachedHosts = (access: AccessFacts, leftOut: readonly string[]): number => access.hosts.length - leftOut.length;
+
 /** The two host lists of the person's walls, by the name a warning gives them. */
 export type WallsHostKnob = "allowed_domains" | "denied_domains";
 

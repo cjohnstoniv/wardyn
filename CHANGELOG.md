@@ -110,7 +110,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Check again on New Run Review now reads the web app gateway and the drive catalogue again, so a gateway turned on or a
   drive deleted since the page opened clears its blocker (#3410, #3420).
 - One "Your walls leave out" line on New Run Review no longer hides the walls' warning for the other host list (#3797).
-  The effective-policy card's Network row no longer counts the hosts your walls take out (#3780).
+  The effective-policy card's Network row and the Access group's host count no longer count the hosts your walls take out (#3780).
 - New Run checks a service health path's characters and length before launch, as the server does (#3776), and the Tools
   step's harness fields fit a 320 px viewport (#3818).
 - A credential refusal from Review's preflight refreshes the model-access banner at once instead of at its next poll.

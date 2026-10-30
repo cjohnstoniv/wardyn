@@ -236,5 +236,10 @@ describe("Effective policy card", () => {
     render(<EffectivePolicyCard draft={draftOf(BASE)} pre={pre} preview={null} />);
     const network = () => within(document.querySelector('[data-policy-row="network"]') as HTMLElement);
     await waitFor(() => expect(network().getByText(NR_REVIEW.POLICY_HOSTS(2))).toBeInTheDocument());
+    const cardCount = network().getByText(NR_REVIEW.POLICY_HOSTS(2)).textContent;
+    // The same page never shows two counts: the Access group says what the card's Network row says.
+    cleanup();
+    render(<AccessGroup draft={draftOf(BASE)} pre={pre} preview={null} docRows={[]} go={() => {}} dispatch={() => {}} />);
+    expect((await screen.findByText(cardCount as string)).textContent).toBe(cardCount);
   });
 });

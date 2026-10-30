@@ -70,8 +70,8 @@ describe("Review: Access", () => {
       show(closed);
       const note = await screen.findByTestId("walls-leave-out");
       expect(note).toHaveTextContent("Your walls leave out pypi.org.");
-      expect(screen.getByText(NR_WALLS.REVIEW_SITES(4))).toBeTruthy();
-      expect(screen.queryByText(NR_REVIEW.POLICY_HOSTS(4))).toBeNull();
+      expect(screen.getByText(NR_WALLS.REVIEW_SITES(3))).toBeTruthy();
+      expect(screen.queryByText(NR_REVIEW.POLICY_HOSTS(3))).toBeNull();
     });
 
     it("tells Review which of the walls' host lists a leave-out line is drawn for, so the walls' own warning stays when none is", async () => {
