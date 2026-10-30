@@ -174,6 +174,7 @@ func (s *Server) meDrives(ctx context.Context, poolID string) ([]client.MeDrive,
 		}
 		row.KeptFromRun = keptFromRunOf(drive)
 		row.KeptFromRunTitle = s.keptFromRunTitle(ctx, drive)
+		row.Mac = s.macDiskName(ctx, drive)
 		out = append(out, row)
 	}
 	return out, checked, ""
@@ -186,6 +187,12 @@ func (s *Server) driveUnavailableHere(ctx context.Context, d reachableDrive, poo
 		return client.MeDriveUnavailablePaused
 	case d.resolved == nil || d.target() == "":
 		return client.MeDriveUnavailableUnmountable
+	case d.winner.Drive.Backend == types.DriveBackendMacDisk:
+		// A disk drive is kept on one Mac, and a run in a pool that holds that Mac goes to it.
+		if checked && driveNotInPool(pool, d.winner.Drive) {
+			return client.MeDriveUnavailableNotInPool
+		}
+		return ""
 	case checked && driveOnPoolRunner(pool, d.winner.Drive):
 		// A run in this pool goes to the bound runner (kindTargets) and mounts the
 		// second place, so the first place's checks do not decide it.

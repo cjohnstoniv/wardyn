@@ -117,7 +117,7 @@ func (s *Server) stepDrive(f *runFold, rec *foldRecorder) bool {
 		return true
 	}
 	var refusal *runRefusal
-	f.keep, refusal = s.keepWorkFolderGates(f.r, f.spec, f.promoted)
+	f.keep, refusal = s.keepWorkFolderGates(f.r, f.spec, f.promoted, types.MachineKind(f.req.MachineKind).IsMacOSVM())
 	if refusal == nil {
 		refusal = keptDriveMixRefusal(f.drives, f.keep.row)
 	}
@@ -760,30 +760,40 @@ func (s *Server) stepLocalEligibility(f *runFold, rec *foldRecorder) bool {
 // own runner a drive mounts only from a second place bound to that runner (M10);
 // any other drive, and a kept work folder, is refused there, named, before
 // anything is sized or minted. A person's own drive has no second place, so it
-// stays off such a runner (memberDriveNeverOnPool). A run with a second place
-// gets its mounts here, where its placement is known (seedRequestDrives left
-// them); every other run's were built with its drives.
+// stays off such a runner (memberDriveNeverOnPool). A disk drive mounts only in a
+// macOS VM on the Mac it is kept on (MAC-D05), and a macOS VM's kept work folder
+// becomes a disk on the one Mac the run is placed on (MAC-D07). A run with a
+// second place or a disk drive gets its mounts here, where its placement is known
+// (seedRequestDrives left them); every other run's were built with its drives.
 func (s *Server) stepDriveEligibility(f *runFold, rec *foldRecorder) bool {
 	var at drivePlace
+	macOS := types.MachineKind(f.req.MachineKind).IsMacOSVM()
 	if mountsDrives(f.drives, f.keep) && f.place.pooled && f.place.placement == types.PlacementLocal {
 		at.runner = f.place.placedRunner()
 		msg := ""
 		for _, d := range f.drives {
-			if msg = driveOnRunnerMsg(d.resolved.Drive, at.runner); msg != "" {
+			if msg = s.driveOnRunner(f.r.Context(), d.resolved.Drive, at.runner, macOS); msg != "" {
 				break
 			}
 		}
-		if msg == "" && f.keep != nil {
+		if msg == "" && f.keep != nil && !f.keep.onMac() {
 			msg = driveNotInPoolMsg("keep_work_folder")
 		}
 		if msg != "" {
 			return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
 		}
 	}
+	if f.keep.onMac() {
+		if at.runner == nil {
+			msg := keepWorkFolderOneMacMsg()
+			return !driveDenied(authz.Deny(authz.ReasonDriveNotInPool, "runs.drive", msg), msg).write(s, f.w, f.r)
+		}
+		f.keep.row.HomeRunnerID = at.runner
+	}
 	if f.mode == foldPreview {
 		return true
 	}
-	if !slices.ContainsFunc(f.drives, func(d runDrive) bool { return d.resolved.Drive.AltRunnerID != nil }) {
+	if !slices.ContainsFunc(f.drives, func(d runDrive) bool { return driveBoundRunnerOf(d.resolved.Drive) != nil }) {
 		return true
 	}
 	var ok bool

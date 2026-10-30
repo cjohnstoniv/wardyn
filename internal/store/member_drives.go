@@ -126,6 +126,14 @@ func (s PG) ListMemberDrivesOf(ctx context.Context, owner string) ([]types.UserD
 		[]any{owner}, scanDriveRow)
 }
 
+// ListMacDiskDeletes returns every disk drive whose delete waits for its Mac: a
+// mac_disk row still tombstoned, which the Mac's reconnect finishes.
+func (s PG) ListMacDiskDeletes(ctx context.Context) ([]types.UserDrive, error) {
+	return collect(ctx, s.Pool, "list", "disk drive deletes",
+		`SELECT `+driveRowCols+` FROM user_drives WHERE backend = 'mac_disk' AND delete_started_at IS NOT NULL ORDER BY id`,
+		nil, scanDriveRow)
+}
+
 // GetMemberDriveOf returns drive id if owner owns it, else ErrNotFound.
 func (s PG) GetMemberDriveOf(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, error) {
 	if owner == "" {

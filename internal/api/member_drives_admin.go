@@ -136,10 +136,16 @@ func (s *Server) handleDeleteMemberDriveAdmin(w http.ResponseWriter, r *http.Req
 		writeErrorReason(w, http.StatusConflict, reasonUserDriveReclaimConflict, "delete refused: a run of the drive's owner is starting")
 	case res.reason == reasonMemberDriveDeleteUnavailable:
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonMemberDriveDeleteUnavailable, memberDriveDeleteUnavailableMsg())
-	case res.reason != "":
+	case res.reason != "" && res.reason != reasonMemberDriveRecordOnly && res.reason != reasonMemberDriveDeleteDeferred:
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonMemberDriveDeleteFailed, memberDriveDeleteFailedMsg())
 	default:
-		writeJSON(w, http.StatusOK, client.MemberDriveDeleteResult{
+		// A disk drive whose Mac is offline is deleted when it reconnects (outcome deferred); one whose Mac
+		// is no longer registered loses only its record (record_only).
+		status := http.StatusOK
+		if res.reason == reasonMemberDriveDeleteDeferred {
+			status = http.StatusAccepted
+		}
+		writeJSON(w, status, client.MemberDriveDeleteResult{
 			Drive: d.Name, DriveID: d.ID, Owner: d.OwnerSubject, Backend: d.Backend, Object: res.object, Outcome: res.outcome,
 		})
 	}

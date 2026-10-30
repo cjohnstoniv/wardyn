@@ -29,10 +29,10 @@ func TestStepPlacementCapability_MacOSVMRefusesWhatItCannotDo(t *testing.T) {
 		field string
 	}{
 		{name: "a plain background task", edit: task},
-		{name: "a drive", edit: task, fold: func(f *runFold) { f.drives = []runDrive{{}} },
+		{name: "a drive of no place a macOS VM knows", edit: task, fold: func(f *runFold) { f.drives = []runDrive{{}} },
 			want: "A macOS VM sandbox has no drives in this release.", field: "drives"},
-		{name: "a kept work folder", edit: task, fold: func(f *runFold) { f.keep = &keptWorkFolder{} },
-			want: "A macOS VM sandbox has no drives in this release.", field: "drives"},
+		{name: "a kept work folder on a runner that predates disk drives", edit: task, fold: func(f *runFold) { f.keep = &keptWorkFolder{} },
+			want: "This runner's version can't attach drives to a macOS VM. Update the runner, or run without drives.", field: "drives"},
 		{name: "a second harness with its own prompt", edit: task,
 			fold: func(f *runFold) {
 				f.harnesses = []types.RunHarness{{Harness: "claude-code", Starts: true}, {Harness: "codex-cli", Task: "review it"}}
@@ -137,8 +137,9 @@ func TestStepPlacementCapability_MacOSVMShareDrive(t *testing.T) {
 }
 
 // A run's drives are sorted for a macOS VM: an admin or team drive in a host folder is a shared folder,
-// refused only on a runner that predates them (MAC-D13); a Docker or cluster volume is never opened; a
-// person's drive and the kept work folder are refused as before (MAC-F01) until a disk carries them.
+// and a person's disk drive and the kept work folder are disks, each refused only on a runner that
+// predates them (MAC-D13); a Docker or cluster volume is never opened, whoever owns it; only a drive of
+// no place a macOS VM knows meets MAC-F01.
 func TestPlacementCapability_MacOSVMDrives(t *testing.T) {
 	const (
 		d13     = "This runner's version can't attach drives to a macOS VM. Update the runner, or run without drives."
@@ -148,8 +149,8 @@ func TestPlacementCapability_MacOSVMDrives(t *testing.T) {
 	)
 	// driveAsk is the drive fields of the ask; the ask itself holds slices and cannot be compared.
 	type driveAsk struct {
-		ShareDrives, Drives, ClusterVolume bool
-		VolumeDrive                        string
+		ShareDrives, DiskDrives, Drives, ClusterVolume bool
+		VolumeDrive                                    string
 	}
 	secondRunner := uuid.New()
 	drive := func(edit func(*types.UserDrive)) runDrive {
@@ -165,12 +166,17 @@ func TestPlacementCapability_MacOSVMDrives(t *testing.T) {
 	teamVolume := drive(func(d *types.UserDrive) { d.Backend, d.Team = types.DriveBackendDockerVolume, true })
 	clusterDrive := drive(func(d *types.UserDrive) { d.Backend = types.DriveBackendK8sPVCStatic })
 	personal := drive(func(d *types.UserDrive) { d.Backend, d.OwnerSubject = types.DriveBackendDockerVolume, "alice" })
+	disk := drive(func(d *types.UserDrive) {
+		d.Backend, d.OwnerSubject, d.HomeRunnerID = types.DriveBackendMacDisk, "alice", &secondRunner
+	})
 	managed := drive(func(d *types.UserDrive) { d.Backend = types.DriveBackendDockerVolume })
+	unknown := drive(func(d *types.UserDrive) { d.Backend = "" })
 	for _, tc := range []struct {
 		name    string
 		drives  []runDrive
 		keep    *keptWorkFolder
 		caps    bool // the Mac's runner carries drives
+		disks   bool // the Mac's runner carries disk drives
 		want    string
 		placed  bool
 		wantAsk driveAsk
@@ -181,22 +187,27 @@ func TestPlacementCapability_MacOSVMDrives(t *testing.T) {
 		{name: "a drive on its second place", drives: []runDrive{secondPlace}, caps: true, placed: true, wantAsk: driveAsk{ShareDrives: true}},
 		{name: "a team volume", drives: []runDrive{teamVolume}, caps: true, want: volume, wantAsk: driveAsk{VolumeDrive: "Team"}},
 		{name: "a cluster volume", drives: []runDrive{clusterDrive}, caps: true, want: cluster, wantAsk: driveAsk{VolumeDrive: "Team", ClusterVolume: true}},
-		{name: "a person's drive", drives: []runDrive{personal}, caps: true, want: f01, wantAsk: driveAsk{Drives: true}},
+		{name: "a person's Docker volume", drives: []runDrive{personal}, caps: true, disks: true, want: volume, wantAsk: driveAsk{VolumeDrive: "Team"}},
+		{name: "a person's disk drive", drives: []runDrive{disk}, caps: true, disks: true, placed: true, wantAsk: driveAsk{DiskDrives: true}},
+		{name: "a person's disk drive on a runner that predates them", drives: []runDrive{disk}, caps: true, want: d13, wantAsk: driveAsk{DiskDrives: true}},
 		{name: "a managed drive", drives: []runDrive{managed}, caps: true, want: volume, wantAsk: driveAsk{VolumeDrive: "Team"}},
-		{name: "a kept work folder", keep: &keptWorkFolder{}, caps: true, want: f01, wantAsk: driveAsk{Drives: true}},
-		{name: "a share beside a person's drive", drives: []runDrive{share, personal}, caps: true, want: f01, wantAsk: driveAsk{ShareDrives: true, Drives: true}},
+		{name: "a kept work folder", keep: &keptWorkFolder{}, disks: true, placed: true, wantAsk: driveAsk{DiskDrives: true}},
+		{name: "a kept work folder on a runner that predates disks", keep: &keptWorkFolder{}, caps: true, want: d13, wantAsk: driveAsk{DiskDrives: true}},
+		{name: "a share beside a person's disk drive", drives: []runDrive{share, disk}, caps: true, disks: true, placed: true,
+			wantAsk: driveAsk{ShareDrives: true, DiskDrives: true}},
+		{name: "a drive of no place a macOS VM knows", drives: []runDrive{unknown}, caps: true, disks: true, want: f01, wantAsk: driveAsk{Drives: true}},
 		{name: "a share beside a volume", drives: []runDrive{share, teamVolume}, caps: true, want: volume,
 			wantAsk: driveAsk{ShareDrives: true, VolumeDrive: "Team"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var ask macOSVMAsk
 			ask.askDrives(tc.drives, tc.keep)
-			if got := (driveAsk{ask.ShareDrives, ask.Drives, ask.ClusterVolume, ask.VolumeDrive}); got != tc.wantAsk {
+			if got := (driveAsk{ask.ShareDrives, ask.DiskDrives, ask.Drives, ask.ClusterVolume, ask.VolumeDrive}); got != tc.wantAsk {
 				t.Fatalf("ask = %+v, want %+v", got, tc.wantAsk)
 			}
 			s := capsServer(&fakeRunner{})
 			mc := readyMac()
-			mc.Drives = tc.caps
+			mc.Drives, mc.DiskDrives = tc.caps, tc.disks
 			req := macReq(macRunner(t, s, mc, roomyRunner))
 			ref := s.placementCapabilityRefusalFor(capsCtx, req, runPlacement{}, governanceCeiling{}, 0, ask)
 			// Each family gets its own sentence: a refusal that is neither volume's names neither.
@@ -217,6 +228,45 @@ func TestPlacementCapability_MacOSVMDrives(t *testing.T) {
 				t.Fatalf("refusal = %+v, want 422 on drives saying %q", ref, tc.want)
 			}
 		})
+	}
+}
+
+// A macOS VM run with a person's own disk drive and the kept work folder, both disks on the Mac, is
+// placed on a Mac that takes disk drives, and refused on one that predates them for that reason alone:
+// never MAC-F01, and never as a Docker or cluster volume.
+func TestPlacementCapability_MacOSVMDiskDrivesNeverMeetF01(t *testing.T) {
+	f01 := macOSVMNoDrives
+	volume, cluster := driveMacOSDockerVolumeMsg("Notes"), driveMacOSClusterVolumeMsg("Notes")
+	home := uuid.New()
+	disk := runDrive{resolved: types.ResolvedDrive{Drive: types.UserDrive{Name: "Notes", Backend: types.DriveBackendMacDisk,
+		OwnerSubject: "alice", HomeRunnerID: &home}}}
+	keep := &keptWorkFolder{row: types.UserDrive{Backend: types.DriveBackendMacDisk, OwnerSubject: "alice", HomeRunnerID: &home}}
+	var ask macOSVMAsk
+	ask.askDrives([]runDrive{disk}, keep)
+	if !ask.DiskDrives || ask.Drives || ask.VolumeDrive != "" {
+		t.Fatalf("ask = %+v, want disk drives only", ask)
+	}
+	for _, capable := range []bool{true, false} {
+		s := capsServer(&fakeRunner{})
+		mc := readyMac()
+		mc.Drives, mc.DiskDrives = true, capable
+		req := macReq(macRunner(t, s, mc, roomyRunner))
+		ref := s.placementCapabilityRefusalFor(capsCtx, req, runPlacement{}, governanceCeiling{}, 0, ask)
+		got := ""
+		if ref != nil {
+			got = ref.body.Error
+		}
+		for _, sentence := range []string{f01, volume, cluster} {
+			if strings.Contains(got, sentence) {
+				t.Fatalf("disk drives (capable %v) were refused with %q", capable, got)
+			}
+		}
+		if capable && ref != nil {
+			t.Fatalf("refused on a Mac that takes disk drives: %+v", ref.body)
+		}
+		if !capable && (ref == nil || got != macOSVMNoDriveShare) {
+			t.Fatalf("refusal on a Mac that predates disk drives = %q, want %q", got, macOSVMNoDriveShare)
+		}
 	}
 }
 

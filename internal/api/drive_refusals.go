@@ -55,3 +55,9 @@ func driveMacOSDockerVolumeMsg(name string) string {
 func driveMacOSClusterVolumeMsg(name string) string {
 	return fmt.Sprintf("%s is a cluster volume, which a macOS VM can't open.", name)
 }
+
+// driveMacDiskElsewhereMsg refuses a person's disk drive on any run but a macOS VM on the Mac it is
+// kept on (MAC-D05).
+func driveMacDiskElsewhereMsg(name, mac string) string {
+	return fmt.Sprintf("%s is a disk on %s, so only macOS VM runs on %s can use it.", name, mac, mac)
+}

@@ -751,3 +751,9 @@ const (
 	reasonWorkloadPoolMismatch    = "workload_pool_mismatch"    // the resource names a runner pool other than its namespace binding's
 	reasonWorkloadBindingInactive = "workload_binding_inactive" // the binding's identity is suspended or retired, its sponsor changed, or the sponsor's access was revoked
 )
+
+// A person's disk drive kept on a Mac (member_drives.go): its delete while the Mac is away.
+const (
+	reasonMemberDriveDeleteDeferred = "member_drive_delete_deferred" // 202: the Mac is offline; the disk is removed when it reconnects
+	reasonMemberDriveRecordOnly     = "member_drive_record_only"     // 200: the Mac is no longer registered; only the record was removed
+)

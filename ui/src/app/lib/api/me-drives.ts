@@ -42,6 +42,8 @@ export interface MeDrive {
   mounts_from?: string;
   /** Set when the pool asked about holds the runner this drive is bound to: that runner, and its path there. */
   mounted_from?: { runner: string; path: string };
+  /** The Mac a disk drive (backend mac_disk) is kept on, by name; absent on any other drive. */
+  mac?: string;
 }
 
 /** GET /me/drives (pkg/client.MeDriveCatalogue). */
@@ -87,12 +89,25 @@ export async function myDrives(runnerPoolId?: string): Promise<MeDriveCatalogue>
   return { ...body, drives: unwrapList<MeDrive>(body.drives), pool_checked: !!body.pool_checked };
 }
 
-/** POST /me/drives (pkg/client.MemberDriveCreateRequest): the caller's own new drive. */
-export async function createMyDrive(name: string): Promise<MeDrive> {
-  return asJson<MeDrive>(await wfetch("/me/drives", { method: "POST", asPerson: true, body: JSON.stringify({ name }) }));
+/**
+ * POST /me/drives (pkg/client.MemberDriveCreateRequest): the caller's own new drive. A runnerId makes it
+ * a disk kept on that Mac of theirs.
+ */
+export async function createMyDrive(name: string, runnerId?: string): Promise<MeDrive> {
+  const body = runnerId ? { name, runner_id: runnerId } : { name };
+  return asJson<MeDrive>(await wfetch("/me/drives", { method: "POST", asPerson: true, body: JSON.stringify(body) }));
 }
 
-/** DELETE /me/drives/{id}: deletes the caller's own drive and its files. */
+/** A disk drive's delete that did not finish on its Mac (pkg/client.MyDriveDeleteResult). */
+export interface MyDriveDeleteResult {
+  reason: "member_drive_delete_deferred" | "member_drive_record_only";
+  message: string;
+}
+
+/**
+ * DELETE /me/drives/{id}: deletes the caller's own drive and its files. A disk drive whose Mac is offline
+ * or no longer registered answers 202 or 200 with a MyDriveDeleteResult body instead of 204.
+ */
 export async function deleteMyDrive(id: string): Promise<void> {
   const res = await wfetch(`/me/drives/${encodeURIComponent(id)}`, { method: "DELETE" });
   if (!res.ok) throw new HttpError(res.status, await errText(res));

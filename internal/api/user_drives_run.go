@@ -309,8 +309,9 @@ func (f *driveBindFailure) write(s *Server, w http.ResponseWriter) {
 // (drivePathsOn, then its own driver), so none of the organisation's checks
 // below apply there.
 func (s *Server) driveBindFailureHere(ctx context.Context, resolved types.ResolvedDrive, at drivePlace) *driveBindFailure {
-	if at.runner != nil {
-		if msg := driveOnRunnerMsg(resolved.Drive, at.runner); msg != "" {
+	// A disk drive mounts only where it is kept; stepDriveEligibility has held the run to a macOS VM.
+	if disk := resolved.Drive.Backend == types.DriveBackendMacDisk; at.runner != nil || disk {
+		if msg := s.driveOnRunner(ctx, resolved.Drive, at.runner, disk); msg != "" {
 			return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalBackendElsewhere,
 				member: strings.TrimPrefix(msg, "drive: "), attrs: []any{slog.String("drive", resolved.Drive.Name)}}
 		}
@@ -360,8 +361,12 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, d run
 	// On a person's own runner the mount carries the drive's stored binding, read before the swap, never the
 	// runner placement chose: the local plan's RuleBound gate (drivePathsOn) then holds the bound runner to the
 	// run's own, a second check beside driveBindFailureHere's.
+	// A disk drive has no second place: it carries the Mac it is kept on.
 	var bound *uuid.UUID
-	if at.runner != nil {
+	switch {
+	case resolved.Drive.Backend == types.DriveBackendMacDisk:
+		bound = resolved.Drive.HomeRunnerID
+	case at.runner != nil:
 		bound = resolved.Drive.AltRunnerID
 		resolved = secondPlaceResolved(resolved)
 	}

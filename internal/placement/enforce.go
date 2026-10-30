@@ -181,6 +181,13 @@ var gates = map[string]func(LocalPlan) *Refusal{
 	"SandboxSpec.Drives": func(p LocalPlan) *Refusal {
 		for i, d := range p.Spec.Drives {
 			path := indexed("SandboxSpec.Drives", i)
+			if d.Backend == types.DriveBackendMacDisk {
+				// A person's disk drive is a file on the Mac it is kept on, sent nowhere else.
+				if !p.VerifiedLocalPaths[path] {
+					return refuse(ReasonPlacementLocalPath, path, "disk drive is not kept on this runner")
+				}
+				continue
+			}
 			if d.Backend != types.DriveBackendHostPath {
 				return refuse(ReasonPlacementCapability, path, "organisation storage cannot be sent to a local runner")
 			}

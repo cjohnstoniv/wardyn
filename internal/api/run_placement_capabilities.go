@@ -388,12 +388,13 @@ type macOSVMAsk struct {
 	// Mounts is how many folders the run shares into the VM.
 	Mounts int
 	// ShareDrives is the run mounts an admin or team drive whose place is a host folder, which a macOS VM
-	// takes as a shared folder; a runner without MacVMCaps.Drives is never asked. Drives is the run
-	// mounts any other drive of a person's, or keeps its work folder, which a macOS VM does not take yet.
+	// takes as a shared folder; a runner without MacVMCaps.Drives is never asked. DiskDrives is the run
+	// mounts a person's disk drive or keeps its work folder, which a macOS VM attaches as a disk; a runner
+	// without MacVMCaps.DiskDrives is never asked. Drives is a drive of no place a macOS VM knows.
 	// VolumeDrive names a drive that is a Docker or cluster volume (ClusterVolume), which a macOS VM can
 	// never open.
-	ShareDrives, Drives, ClusterVolume bool
-	VolumeDrive                        string
+	ShareDrives, DiskDrives, Drives, ClusterVolume bool
+	VolumeDrive                                    string
 	// Prompts is that a second harness has a starting prompt of its own; Holds that it would hold tool
 	// calls for approval. A macOS VM does neither.
 	Prompts, Holds bool
@@ -599,7 +600,7 @@ func macOSVMFit(mc *runnerwire.MacVMCaps, rn types.Runner, ask macOSVMAsk, pool 
 		return macOSRefusal("drives", driveMacOSDockerVolumeMsg(ask.VolumeDrive))
 	case ask.Drives:
 		return macOSRefusal("drives", macOSVMNoDrives)
-	case ask.ShareDrives && !mc.Drives:
+	case ask.ShareDrives && !mc.Drives, ask.DiskDrives && !mc.DiskDrives:
 		return macOSRefusal("drives", macOSVMNoDriveShare)
 	case ask.Prompts:
 		return macOSRefusal("tools", macOSVMOneAgent)
@@ -659,19 +660,20 @@ const (
 const macOSVMNoDriveShare = "This runner's version can't attach drives to a macOS VM. Update the runner, or run without drives."
 
 // askDrives sorts a run's drives into what a macOS VM asks of its Mac: an admin or team drive in a host
-// folder is a shared folder (ShareDrives), a Docker or cluster volume is never opened (VolumeDrive, the
-// first), and a person's drive, the kept work folder or a drive of no known place waits for a disk
-// (Drives). A drive with a second place mounts from it on the runner the second place is bound to.
+// folder is a shared folder (ShareDrives), a person's disk drive and the kept work folder are disks
+// (DiskDrives), a Docker or cluster volume is never opened (VolumeDrive, the first), whoever owns it,
+// and a drive of no known place is refused (Drives). A drive with a second place mounts from it on the
+// runner the second place is bound to.
 func (a *macOSVMAsk) askDrives(drives []runDrive, keep *keptWorkFolder) {
-	a.Drives = keep != nil
+	a.DiskDrives = keep != nil
 	for _, d := range drives {
 		drive := d.resolved.Drive
 		if drive.AltRunnerID != nil {
 			drive = drive.SecondPlace()
 		}
 		switch {
-		case drive.OwnerSubject != "":
-			a.Drives = true
+		case drive.Backend == types.DriveBackendMacDisk:
+			a.DiskDrives = true
 		case drive.Backend.RunnerTarget() == "k8s" || drive.Backend == types.DriveBackendDockerVolume:
 			if a.VolumeDrive == "" {
 				a.VolumeDrive, a.ClusterVolume = drive.Name, drive.Backend.RunnerTarget() == "k8s"
