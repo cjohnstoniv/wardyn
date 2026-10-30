@@ -24,6 +24,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `run.ending_soon` no longer promises kept files (`files_kept_sec`) for a run its end tears down at once: one with no
   sandbox recorded, on a runner that cannot keep a sandbox, or with no ended-run grace. It now reads the same decision
   the end makes. A substrate that can say it cannot keep a sandbox only at the end itself is still reported as kept.
+- A run Wardyn launches itself (a workspace scan or recording, a harness sign-in, a probe) no longer records its
+  placement as `remote` on a deployment where runner pools do not place runs: it is left empty there, as every other
+  run's is. The 0.9.1 note that `run.create` records the placement of every run holds only where pools place runs.
 
 ## [0.10.0-rc.8] — 2026-10-29
 
