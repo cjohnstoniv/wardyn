@@ -660,6 +660,18 @@ describe("Review: an application server (#1994)", () => {
     await waitFor(() => expect(path()).toContain("step=run"));
   });
 
+  it("Check again reads /healthz again, so a gateway turned on since clears the blocker", async () => {
+    const spy = gatewayIs();
+    const user = userEvent.setup();
+    open(SERVER);
+    await ready();
+    await waitFor(() => expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF));
+    expect(spy).toHaveBeenCalledTimes(1);
+    gatewayIs({ enabled: true });
+    await user.click(screen.getAllByRole("button", { name: NR_REVIEW.CHECK_AGAIN })[0]);
+    await waitFor(() => expect(blockerList()).not.toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF));
+  });
+
   it("does not call the gateway off before /healthz has answered, and never for a script", async () => {
     vi.spyOn(health, "health").mockResolvedValue({});
     open(SERVER);
