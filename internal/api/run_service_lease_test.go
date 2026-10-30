@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -267,9 +268,11 @@ func TestRunLease_ALostRenewalWritesNothing(t *testing.T) {
 type ownerChainLeaseStore struct {
 	*leaseStore
 	chainErr error
+	reads    atomic.Int32 // GetGovernanceUnitChain calls: the owner re-check's first read
 }
 
 func (s *ownerChainLeaseStore) GetGovernanceUnitChain(context.Context, uuid.UUID) ([]types.GovernanceUnit, error) {
+	s.reads.Add(1)
 	return nil, s.chainErr
 }
 
@@ -397,6 +400,37 @@ func TestRunLease_AServiceNotHeardFromIsNotRenewed(t *testing.T) {
 		if n := len(f.audit.eventsFor(f.run.ID, "run.end.set")); n != 0 {
 			t.Errorf("%s: %d run.end.set rows, want none", name, n)
 		}
+	}
+}
+
+// A service renewal will keep alive has its owner's authority read only while a warning is due: before the
+// warning window the sweep has nothing to quiet, so it reads nothing, and inside it a refused authority is
+// still warned at once.
+func TestRunLease_AQuietServiceReadsTheOwnersAuthorityOnlyInsideTheWarningWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		endsIn time.Duration
+		read   bool
+	}{
+		{name: "before the warning window", endsIn: 90 * time.Minute},
+		{name: "inside the warning window", endsIn: 45 * time.Minute, read: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newServiceLeaseFixture(t, tc.endsIn)
+			f.st.run.RunLimits = types.RunLimits{MaxEndAheadSec: 3600}
+			f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthHealthy, ObservedAt: f.now}
+			unit := uuid.New()
+			f.st.run.UnitID = &unit
+			chain := &ownerChainLeaseStore{leaseStore: f.st, chainErr: store.ErrNotFound}
+			f.srv.cfg.Store = chain
+			f.sweep(t)
+			if read := chain.reads.Load() > 0; read != tc.read {
+				t.Errorf("owner authority read = %v (%d reads), want %v", read, chain.reads.Load(), tc.read)
+			}
+			if n := len(f.audit.eventsFor(f.run.ID, "run.ending_soon")); (n == 1) != tc.read || n > 1 {
+				t.Errorf("%d run.ending_soon rows, want warned=%v", n, tc.read)
+			}
+		})
 	}
 }
 

@@ -104,6 +104,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Kubernetes run whose pinned proxy image is older than the runner now fails with the cause named: the proxy image is
   older than this runner and refused a setting at config load, so have the organisation name this release's proxy
   image, or run setup with `--proxy-image` set to it. It showed only a generic sidecar failure.
+- The lease sweep no longer re-reads a healthy service's limits, sponsor and policy on every pass. It reads the
+  owner's authority to extend only once a `run.ending_soon` warning would be due, and the renewal re-checks it as
+  before (#3762).
 
 ### Security
 
