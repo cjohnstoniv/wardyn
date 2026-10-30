@@ -437,6 +437,36 @@ func TestUIGateway_InboundCallerRateLimit(t *testing.T) {
 	}
 }
 
+// TestUIGateway_InboundOwnerPageLoadsSpareTheCallerBucket: the owner's own browser session is charged to its
+// run's bucket only, not to the caller bucket their tokens share over every run; a token caller still is
+// bound by it (#3792).
+func TestUIGateway_InboundOwnerPageLoadsSpareTheCallerBucket(t *testing.T) {
+	h := inboundHarnessOn(t, okBackend())
+	runs := [2]types.AgentRun{}
+	for i := range runs {
+		runs[i] = types.AgentRun{ID: uuid.New(), CreatedBy: h.owner, State: types.RunRunning, SandboxRef: "sandbox-other"}
+		h.store.putRun(runs[i])
+	}
+	req := httptest.NewRequest(http.MethodGet, uiRelayPrefix(h.run.ID, "code")+"/", nil)
+	page := uiSession{Run: h.run.ID, App: "code", Port: uiTestPort, Principal: h.owner, Inbound: true}
+	for i := range int(inboundBurst) {
+		if !h.srv.admitInbound(httptest.NewRecorder(), req, page) {
+			t.Fatalf("the owner's page load %d was refused within the run's burst", i+1)
+		}
+	}
+	token := uiSession{Run: runs[0].ID, App: "code", Port: uiTestPort, Principal: h.owner, Inbound: true, tokenID: uuid.New()}
+	for i := range int(inboundBurst) {
+		if !h.srv.admitInbound(httptest.NewRecorder(), req, token) {
+			t.Fatalf("the owner's token call %d on another run was refused: the page loads spent its bucket", i+1)
+		}
+	}
+	token.Run = runs[1].ID // a run whose own bucket is full: only the caller bucket can refuse
+	rec := httptest.NewRecorder()
+	if h.srv.admitInbound(rec, req, token) || rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("a token caller past its burst = %d %s, want 429", rec.Code, rec.Body.String())
+	}
+}
+
 // TestUIGateway_HostModeCrossSite: in host mode a session request from another site is refused unless it
 // is a top-level navigation, and an Origin must be the request's own; path mode is unchanged.
 func TestUIGateway_HostModeCrossSite(t *testing.T) {

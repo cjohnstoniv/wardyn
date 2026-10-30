@@ -154,22 +154,28 @@ func refill[K comparable](m *map[K]*inboundBucket, k K, now time.Time) *inboundB
 	return b
 }
 
-// take spends one request from runID's bucket and from principal's, recording ref as the run's sandbox when
-// it is known, and answers whether the request may go and the sandbox reference the run's bucket holds. A
-// request that either bucket refuses spends from neither, so a caller over its own limit takes nothing
-// from the run's callers.
+// take spends one request from runID's bucket and, unless principal is "", from principal's, recording ref
+// as the run's sandbox when it is known, and answers whether the request may go and the sandbox reference
+// the run's bucket holds. A request that either bucket refuses spends from neither, so a caller over its own
+// limit takes nothing from the run's callers.
 func (st *uiInboundState) take(runID uuid.UUID, principal string, now time.Time, ref string) (bool, string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	b, c := refill(&st.buckets, runID, now), refill(&st.callers, principal, now)
+	b := refill(&st.buckets, runID, now)
 	if ref != "" {
 		b.ref = ref
 	}
-	if b.tokens < 1 || c.tokens < 1 {
+	var c *inboundBucket
+	if principal != "" {
+		c = refill(&st.callers, principal, now)
+	}
+	if b.tokens < 1 || (c != nil && c.tokens < 1) {
 		return false, b.ref
 	}
 	b.tokens--
-	c.tokens--
+	if c != nil {
+		c.tokens--
+	}
 	return true, b.ref
 }
 
@@ -659,7 +665,13 @@ func (s *Server) admitInbound(w http.ResponseWriter, r *http.Request, sess uiSes
 		writeErrorReason(w, http.StatusConflict, reasonUIGatewayNotRunning, inboundNotRunningMsg)
 		return false
 	}
-	ok, ref := s.uiInbound.take(sess.Run, sess.Principal, s.cfg.Now(), run.SandboxRef)
+	// The caller bucket is the machine callers': the owner's own browser session (no token, no callers entry)
+	// spends only the run's, so a page that loads many assets spends nothing their tokens call with (#3792).
+	caller := sess.Principal
+	if sess.tokenID == uuid.Nil && sess.Caller == "" {
+		caller = ""
+	}
+	ok, ref := s.uiInbound.take(sess.Run, caller, s.cfg.Now(), run.SandboxRef)
 	if !ok {
 		if s.authFailedAllowed() {
 			s.auditInbound(r, sess, ref, "inbound.deny", "denied", map[string]any{"reason": inboundDenyRateLimited})
