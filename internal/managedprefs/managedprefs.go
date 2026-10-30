@@ -66,13 +66,23 @@ func Bool(v string) (val, set bool, err error) {
 // a readable plist without the key, is "unset"; any other failure is an error, because a profile that is
 // there but unreadable must not read as one that sets nothing.
 func PlutilExtract(plutil, file, key string) (string, error) {
+	return plutilExtract(plutil, file, key, "raw")
+}
+
+// PlutilExtractJSON is PlutilExtract that prints the value as JSON: a plist array is a JSON array, which raw
+// would print as its length. A string comes back quoted.
+func PlutilExtractJSON(plutil, file, key string) (string, error) {
+	return plutilExtract(plutil, file, key, "json")
+}
+
+func plutilExtract(plutil, file, key, format string) (string, error) {
 	if _, err := os.Stat(file); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", nil
 		}
 		return "", fmt.Errorf("managed preferences %s: %w", file, err)
 	}
-	out, err := exec.Command(plutil, "-extract", key, "raw", "-o", "-", "--", file).Output()
+	out, err := exec.Command(plutil, "-extract", key, format, "-o", "-", "--", file).Output()
 	if err != nil {
 		// Only a plain exit 1 can mean an absent key: a plutil that could not run, or one a signal ended
 		// (ExitCode -1), proves nothing about the profile.

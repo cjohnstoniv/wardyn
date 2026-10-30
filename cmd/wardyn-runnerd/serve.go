@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
@@ -58,8 +59,9 @@ type serveOptions struct {
 	localAttach, orgURL string
 	// offline is what the next connect reports about why this runner could not connect or start.
 	offline *offlineLog
-	// driveRoots is --drive-root: the folders a drive bound to this runner may mount from (none by
-	// default, so no drive mounts here until its owner allows one).
+	// driveRoots is drive_root (--drive-root, the DriveRoot managed preference, WARDYN_DRIVE_ROOT or
+	// runnerd.json): the folders a drive bound to this runner may mount from (none by default, so no drive
+	// mounts here until its owner allows one).
 	driveRoots []string
 	// localModelPorts is --local-model-port (parseLocalModelPorts): the laptop local model ports the person allows.
 	localModelPorts string
@@ -106,6 +108,9 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 			return err
 		}
 		cfg.applyTo(&org, &stateDir, &opts)
+		if err := cfg.checkDriveRoots(opts.substrate); err != nil {
+			return err
+		}
 		if org == "" {
 			return errors.New(`required flag(s) "org" not set`)
 		}
@@ -118,13 +123,8 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 		} else if err := followDockerContext(); err != nil {
 			return err
 		}
-		// http.ProxyFromEnvironment reads the variable once, at the first connection.
-		for _, v := range [][2]string{{"runner_proxy", "HTTPS_PROXY"}, {"runner_no_proxy", "NO_PROXY"}} {
-			if f := cfg.field(v[0]); strings.HasPrefix(f.Source, sourceFile) {
-				if err := os.Setenv(v[1], f.Value); err != nil {
-					return err
-				}
-			}
+		if err := cfg.exportFileProxy(); err != nil {
+			return err
 		}
 		if stateDir == "" {
 			stateDir, err = runneridentity.DefaultDir()
@@ -229,7 +229,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringArrayVar(&opts.folderRoots, "folder-root", nil, "folders: a folder this runner may share, with everything under it (repeatable; default: your home folder)")
 	cmd.Flags().StringVar(&opts.localModelPorts, "local-model-port", "", "docker: the port, or comma-separated ports, of a model server on this computer that runs here may use when the organisation allows it, "+
 		"such as 11434; default: none, so no run here uses this computer's model server")
-	cmd.Flags().StringArrayVar(&opts.driveRoots, "drive-root", nil, "docker: a folder a drive bound to this runner may mount from, with everything under it (repeatable; default: none, so no drive mounts here)")
+	cmd.Flags().StringArrayVar(&opts.driveRoots, "drive-root", nil, "docker: a folder a drive bound to this runner may mount from, with everything under it (repeatable; default: the DriveRoot managed preference, else WARDYN_DRIVE_ROOT, a list separated by the path-list separator, else drive_root in runnerd.json, else none, so no drive mounts here)")
 	cmd.Flags().StringArrayVar(&opts.runsNamespaces, "runs-namespace", nil, "k8s: a dedicated namespace runs are created in, never runnerd's own (repeatable; the first is where a run that names none goes)")
 	cmd.Flags().StringVar(&opts.relayService, "relay-service", "", "k8s: the relay Service's DNS name (<name>.<namespace>.svc.<cluster domain>), which must resolve to exactly one ClusterIP")
 	cmd.Flags().StringVar(&opts.arch, "arch", os.Getenv(archEnv), "k8s, required: the sandbox node architecture, amd64 or arm64, pinned as every run pod's kubernetes.io/arch node selector")
@@ -240,7 +240,23 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 // serveConfig resolves every setting for serve: the flags the command line gave, the managed preferences,
 // the environment, then runnerd.json. Read here, not when the command is built, so only serve pays for it.
 func serveConfig(cmd *cobra.Command, configPath string) (runnerConfig, error) {
-	return effectiveRunnerConfig(configPath, changedFlags(cmd))
+	return effectiveRunnerConfigWith(configPath, changedFlags(cmd), changedFlagLists(cmd))
+}
+
+// changedFlagLists is changedFlags for a repeatable flag; a flag cmd lacks, or left alone, is not given.
+func changedFlagLists(cmd *cobra.Command) func(string) ([]string, bool) {
+	return func(name string) ([]string, bool) {
+		// The slice itself: GetStringArray reads a lone empty value back as no value at all.
+		f := cmd.Flags().Lookup(name)
+		if f == nil || !f.Changed {
+			return nil, false
+		}
+		sv, ok := f.Value.(pflag.SliceValue)
+		if !ok {
+			return nil, false
+		}
+		return sv.GetSlice(), true
+	}
 }
 
 // changedFlags reads a string flag the person gave on cmd's command line; a flag cmd lacks, or left alone, is not given.
@@ -251,6 +267,19 @@ func changedFlags(cmd *cobra.Command) func(string) (string, bool) {
 	}
 }
 
+// exportFileProxy hands the proxy settings runnerd.json holds to the process environment.
+// http.ProxyFromEnvironment reads the variable once, at the first connection.
+func (c runnerConfig) exportFileProxy() error {
+	for _, v := range [][2]string{{"runner_proxy", "HTTPS_PROXY"}, {"runner_no_proxy", "NO_PROXY"}} {
+		if f := c.field(v[0]); strings.HasPrefix(f.Source, sourceFile) {
+			if err := os.Setenv(v[1], f.Value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // applyTo copies the effective settings into serve's own variables.
 func (c runnerConfig) applyTo(org, stateDir *string, o *serveOptions) {
 	*org, *stateDir = c.get("org_url"), c.get("state_dir")
@@ -259,4 +288,5 @@ func (c runnerConfig) applyTo(org, stateDir *string, o *serveOptions) {
 	o.trustedCAFile, o.upstreamProxy, o.recording = c.get("trusted_ca_file"), c.get("upstream_proxy"), c.get("recording_store")
 	o.orgCAFile, o.localModelPorts = c.get("org_ca_file"), c.get("local_model_port")
 	o.macOSVM = macOSVMOn(c.get("macos_vm"))
+	o.driveRoots = c.field("drive_root").List
 }

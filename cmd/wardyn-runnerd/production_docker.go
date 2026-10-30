@@ -430,17 +430,6 @@ func (e runtimeExtras) proxySettings() []string {
 	return append(slices.Clip(runnerwire.ProxySettings), runnerwire.ProxySettingLocalModelRelay)
 }
 
-// parseDriveRoots checks --drive-root: each an absolute, cleaned folder. The docker driver binds a drive
-// only strictly below one of them, after resolving symlinks (runner.UserDriveMountSourceCheck).
-func parseDriveRoots(raw []string) ([]string, error) {
-	for _, r := range raw {
-		if !filepath.IsAbs(r) || filepath.Clean(r) != r || r == "/" {
-			return nil, fmt.Errorf("--drive-root %q: give an absolute, cleaned folder below /", r)
-		}
-	}
-	return raw, nil
-}
-
 func localRunnerRuntime(ctx context.Context, identity runneridentity.Identity, stateDir string, sub substrate.Substrate, ref func(uuid.UUID) string, relay *localRelay, capacity func(context.Context) placement.Capacity, extra runtimeExtras) (runnerRuntime, error) {
 	// A re-registered computer starts clean: the earlier registration's runs are contained, then set aside.
 	if err := offline.SetAsidePrevious(ctx, stateDir, identity.RunnerID, sub, ref); err != nil {

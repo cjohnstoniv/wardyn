@@ -296,7 +296,8 @@ func shellUnquote(s string) string {
 }
 
 // runnerFile is runnerd.json as setup settled it: what setup owns, over what the file already held (the
-// mirror, the proxies and the recording store are edited by hand and kept). The image is written only when
+// mirror, the proxies and the recording store are edited by hand and kept; so are the drive roots a setup
+// without --drive-root leaves). The image is written only when
 // someone named it: an image that follows the organisation or this release is derived again at every start,
 // so replacing the binary alone moves the proxy with it.
 func (p setupPlan) runnerFile() runnerFile {
@@ -308,6 +309,9 @@ func (p setupPlan) runnerFile() runnerFile {
 	}
 	f.RelayListen, f.RelayHostTarget, f.TrustedCAFile, f.OrgCAFile = p.relayListen, p.relayHostTarget, p.trustedCAFile, p.orgCAFile
 	f.RunnerProxy, f.RunnerNoProxy = carriedValue(p.proxy, "HTTPS_PROXY", "https_proxy"), carriedValue(p.proxy, "NO_PROXY", "no_proxy")
+	if len(p.driveRoots) > 0 {
+		f.DriveRoot = p.driveRoots
+	}
 	switch p.macOSVM {
 	case "on":
 		f.MacOSVM = "1"

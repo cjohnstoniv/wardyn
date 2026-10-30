@@ -127,13 +127,22 @@ func (s doctorSettings) org(flag string) (value, source string) {
 
 // resolve is f's value and source; key names it in a source that is no flag or managed preference.
 func (s doctorSettings) resolve(f runnerField, flagName, flag, key string) (value, source string) {
+	return s.sourceOf(s.resolved(f, flag), f, flagName, key)
+}
+
+// resolved is f as the service resolves it.
+func (s doctorSettings) resolved(f runnerField, flag string) resolvedField {
 	in := runnerInputs{getenv: func(k string) string { return cmp.Or(s.paths.setting(k), s.getenv(k)) },
 		managed: managedPref, lockRead: managedLockRead, file: s.file, filePath: s.paths.configFile()}
 	if flag != "" {
 		in.flag = func(name string) (string, bool) { return flag, name == f.flag }
 	}
 	in.locked, _ = securityLocked(in)
-	r := f.resolve(in)
+	return f.resolve(in)
+}
+
+// sourceOf is resolve's value and source, in the words doctor names a source in.
+func (s doctorSettings) sourceOf(r resolvedField, f runnerField, flagName, key string) (value, source string) {
 	switch {
 	case r.Value == "" || r.Source == sourceDefault:
 		return "", ""
@@ -147,6 +156,24 @@ func (s doctorSettings) resolve(f runnerField, flagName, flag, key string) (valu
 		}
 	}
 	return r.Value, key + " in the service's settings"
+}
+
+// driveRootStage says which folders drives bound to this runner may mount from, and where that setting came
+// from, the way the other settings are named; a value serve would refuse fails it. With none set there is no
+// stage, so a runner that offers no drive mounts reports what it always did.
+func driveRootStage(s doctorSettings) (doctor.Stage, bool) {
+	const setting, fix = "drive_root", "absolute, cleaned folders: `wardyn-runnerd setup --drive-root <dir>` (repeatable) writes runnerd.json's drive_root; the DriveRoot managed preference or WARDYN_DRIVE_ROOT overrides it"
+	i := slices.IndexFunc(runnerFields, func(f runnerField) bool { return f.name == setting })
+	f := runnerFields[i]
+	r := s.resolved(f, "")
+	if err := (runnerConfig{r}).checkDriveRoots("docker"); err != nil {
+		return doctor.FailStage("drive-roots", oneLine(err.Error()), setting, fix), true
+	}
+	if len(r.List) == 0 {
+		return doctor.Stage{}, false
+	}
+	_, source := s.sourceOf(r, f, "", setting)
+	return doctor.OKStage("drive-roots", strings.Join(r.List, ", ")+" (from "+source+")"), true
 }
 
 // fieldFor is the runnerd.json field the environment variable key stands for.
@@ -198,6 +225,9 @@ func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(st
 		serverVersion = o.serverVersion
 	}
 	stages = append(stages, h.engineStages(ctx, s, o, org, serverVersion)...)
+	if st, ok := driveRootStage(s); ok {
+		stages = append(stages, st)
+	}
 	stages = append(stages, macOSVMDoctorStages()...)
 	if fileErr != nil {
 		bad := doctor.FailStage("config", oneLine(fileErr.Error()), "", "fix that field, or remove the file and run `wardyn-runnerd setup` again")
