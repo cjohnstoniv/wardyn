@@ -162,6 +162,7 @@ type WorkloadStore interface {
 	ListWorkloads(ctx context.Context, p Page) ([]WorkloadView, error)
 	ListWorkloadsOf(ctx context.Context, owners []string, p Page) ([]WorkloadView, error)
 	ListK8sWorkloadStatuses(ctx context.Context) ([]WorkloadView, error)
+	ListLapsedK8sWorkloadLaunches(ctx context.Context, limit int) ([]Workload, error)
 	DeleteWorkload(ctx context.Context, owner, name string) (Workload, error)
 	DeleteK8sWorkload(ctx context.Context, w Workload) (Workload, error)
 	OweWorkloadRunEnd(ctx context.Context, e WorkloadRunEnd) error
@@ -481,6 +482,15 @@ func (s PG) ListWorkloadsOf(ctx context.Context, owners []string, p Page) ([]Wor
 func (s PG) ListK8sWorkloadStatuses(ctx context.Context) ([]WorkloadView, error) {
 	return collect(ctx, s.Pool, "list", "k8s workload statuses",
 		`SELECT `+workloadViewCols+workloadViewFrom+` WHERE w.source = 'k8s' ORDER BY w.id`, nil, scanWorkloadView)
+}
+
+// ListLapsedK8sWorkloadLaunches returns up to limit custom-resource workloads whose launch is owed under a
+// claim that lapsed: a launch that took its claim and neither recorded a run nor a refusal (its replica went
+// away, or the launch failed). The oldest lapse first. A refused launch, or one never claimed, is not one.
+func (s PG) ListLapsedK8sWorkloadLaunches(ctx context.Context, limit int) ([]Workload, error) {
+	return collect(ctx, s.Pool, "list", "lapsed workload launches", `SELECT `+workloadCols+` FROM workloads w
+		WHERE w.source = 'k8s' AND w.current_generation < w.generation AND w.launch_claim_until < now()
+		ORDER BY w.launch_claim_until, w.id LIMIT $1`, []any{limit}, scanWorkload)
 }
 
 // DeleteWorkload removes one owner's workload and returns the removed row, whose CurrentRunID the caller

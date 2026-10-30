@@ -350,10 +350,10 @@ func TestPG_WorkloadFromRunner_DropLeavesARecreatedResource(t *testing.T) {
 	}
 }
 
-// A bound apply, with runners on and the binding live, launches the resource's workload as the bound
-// service on the binding's pool, and the resource's status then names the run.
-func TestPG_WorkloadFromRunner_BoundApplyLaunchesOnTheBoundPool(t *testing.T) {
-	e := newCREnv(t)
+// placeRunsOnTheRunner lets the env's pool place runs on its runner: runners on in the site config, and the
+// runner wired, online, as the daemon has it.
+func (e crEnv) placeRunsOnTheRunner(t *testing.T) {
+	t.Helper()
 	ctx := context.Background()
 	site, err := e.st.GetSiteConfig(ctx)
 	if err != nil {
@@ -372,6 +372,14 @@ func TestPG_WorkloadFromRunner_BoundApplyLaunchesOnTheBoundPool(t *testing.T) {
 	// The hub reads online only the runners it admitted, and attachRunner links this one around it, so its
 	// answer for this runner is given here: placement takes no offline runner.
 	e.h.srv.cfg.RunnerOnline = func(id uuid.UUID) bool { return id == e.runner }
+}
+
+// A bound apply, with runners on and the binding live, launches the resource's workload as the bound
+// service on the binding's pool, and the resource's status then names the run.
+func TestPG_WorkloadFromRunner_BoundApplyLaunchesOnTheBoundPool(t *testing.T) {
+	e := newCREnv(t)
+	ctx := context.Background()
+	e.placeRunsOnTheRunner(t)
 	e.report(t, e.apply("team-a", "web", ""))
 
 	var got runnerwire.WorkloadStatusArgs
@@ -489,5 +497,57 @@ func TestPG_Workload_RestartNeedsTheCurrentBinding(t *testing.T) {
 	}
 	if n := runsOnPool(); n != before {
 		t.Fatalf("runs on the deleted binding's pool = %d after the restart, want %d", n, before)
+	}
+}
+
+// A launch whose claim lapsed (the replica that took it went away) is retried by the periodic sweep, not left
+// to the runner's next full report: the owed generation launches on the bound pool. A claim still held is
+// left to its holder, and a refused launch waits for its resource's next report.
+func TestPG_WorkloadSweep_RetriesALapsedLaunch(t *testing.T) {
+	e := newCREnv(t)
+	ctx := context.Background()
+	e.placeRunsOnTheRunner(t)
+	lapsed, held := e.putK8sWorkload(t, "web", "uid-web", "t"), e.putK8sWorkload(t, "api", "uid-api", "t")
+	refused := e.putK8sWorkload(t, "db", "uid-db", "t")
+	for _, wl := range []store.Workload{lapsed, held, refused} {
+		claimed, ok, err := e.st.ClaimWorkloadLaunch(ctx, wl.ID)
+		if err != nil || !ok {
+			t.Fatalf("claim %s = %v, %v; want a claim", wl.Name, ok, err)
+		}
+		if wl.ID == refused.ID {
+			if err := e.st.RecordWorkloadRefusal(ctx, wl.ID, claimed.ClaimToken, store.WorkloadRefusal{Generation: claimed.Generation,
+				Reason: "policy_ceiling_exceeded", At: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := e.pool.Exec(ctx, `UPDATE workloads SET launch_claim_until = now() - interval '1 second' WHERE id = $1`, lapsed.ID); err != nil {
+		t.Fatal(err)
+	}
+	sweep, stop := context.WithCancel(ctx)
+	swept := make(chan struct{})
+	go func() {
+		defer close(swept)
+		e.h.srv.workloadStatusSweeper(sweep, 250*time.Millisecond)
+	}()
+	defer func() { stop(); <-swept }()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		v, err := e.st.GetWorkload(ctx, svcPrin, "web")
+		if err == nil && v.CurrentRunID != nil && v.CurrentGeneration == v.Generation {
+			run, err := e.st.GetRun(ctx, *v.CurrentRunID)
+			if err != nil || run.CreatedBy != svcPrin || run.RunnerPoolID == nil || *run.RunnerPoolID != e.rp.ID {
+				t.Fatalf("run %+v (%v), want one of %s on pool %s", run, err, svcPrin, e.rp.ID)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the lapsed launch was not retried: %+v (%v), refusal %+v", v.Workload, err, v.LastRefusal)
+		}
+	}
+	if v, err := e.st.GetWorkload(ctx, svcPrin, "api"); err != nil || v.CurrentRunID != nil || v.LaunchClaimUntil == nil || v.LastRefusal != nil {
+		t.Fatalf("workload with a held claim = %+v (%v), want it left to its holder", v.Workload, err)
+	}
+	if v, err := e.st.GetWorkload(ctx, svcPrin, "db"); err != nil || v.CurrentRunID != nil || v.LastRefusal == nil || v.LastRefusal.Reason != "policy_ceiling_exceeded" {
+		t.Fatalf("refused workload = %+v (%v), want its refusal to stand with no run", v.Workload, err)
 	}
 }
