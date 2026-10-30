@@ -21,8 +21,8 @@ import type { CapabilitySubjectType } from "../types";
 import type { GovernancePreviewInput } from "./governance";
 import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 
-// types.DriveBackend — four backends, two per runner.
-export type DriveBackend = "docker_volume" | "host_path" | "k8s_pvc" | "k8s_pvc_static";
+// types.DriveBackend — five backends: two per Docker or cluster runner, and a disk kept on one Mac.
+export type DriveBackend = "docker_volume" | "host_path" | "k8s_pvc" | "k8s_pvc_static" | "mac_disk";
 // types.HomeTemplate. There is deliberately NO whole-email template: an address
 // carries an "@", which no directory segment (and no DNS-1123 label) can hold.
 export type HomeTemplate = "hash" | "sub" | "email_local";

@@ -16,6 +16,8 @@ import { Input } from "../../../../ui/input";
 import { cn } from "../../../../ui/utils";
 import { InfoTip } from "../../../../wardyn/info-tip";
 import { Chip } from "../../../../wardyn/primitives";
+import { MAC_DRIVES } from "../../../../wardyn/copy/mac-drives";
+import type { MeDrive } from "../../../../../lib/api/me-drives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { RunIntent } from "../../draft/run-intent";
@@ -121,7 +123,10 @@ export interface AddDialogProps {
   reloadDrives: () => void;
 }
 
-function optionsFor(kind: AttachKind, src: ItemSources): PickOption[] {
+/** A macOS VM opens a disk on its Mac and a host folder, never a Docker or a cluster volume. */
+const noVolumeInMacOS = (d: MeDrive): boolean => d.backend === "docker_volume" || d.backend === "k8s_pvc" || d.backend === "k8s_pvc_static";
+
+function optionsFor(kind: AttachKind, src: ItemSources, macOS: boolean): PickOption[] {
   if (kind === "repo") {
     return src.rows.map((r) => ({ key: r.key, name: r.name, chips: [], shownPath: r.path, defaultPath: r.path, locked: false, reason: r.unavailable, ref: r.ref, workspaceId: r.workspaceId, repo: r.repo }));
   }
@@ -132,7 +137,7 @@ function optionsFor(kind: AttachKind, src: ItemSources): PickOption[] {
     key: d.id, name: d.name,
     // A team drive says its access as a chip, either way; any other says only when it is read-only.
     chips: d.team ? [NR_FILES.SOURCE_TEAM, d.writable ? NR_FILES.ACCESS_EDIT : NR_FILES.ACCESS_READ] : [...driveChips(d), ...(d.writable ? [] : [NR_FILES.ACCESS_READ])],
-    shownPath: d.target, defaultPath: d.target, locked: !d.writable, reason: driveReason(d), mounts: driveMountsLine(d),
+    shownPath: d.target, defaultPath: d.target, locked: !d.writable, reason: driveReason(d) ?? (macOS && noVolumeInMacOS(d) ? MAC_DRIVES.D03 : undefined), mounts: driveMountsLine(d),
     kept: d.kept_from_run ? { line: d.kept_from_run_title ? NR_FILES.DRIVE_KEPT_FROM(d.kept_from_run_title) : NR_FILES.DRIVE_KEPT_FROM_UNTITLED, unenforced: d.enforcement === "none" } : undefined,
     sharedWith: driveSharedWith(d), othersSee: d.team === true && d.writable,
   }));
@@ -181,7 +186,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
   // name, or the older single-drive switch with no catalogue drive behind it).
   const editedSource = editing ? (editing.driveId ?? editing.key) : undefined;
   const attachKind = s.kind === "computer" ? null : s.kind;
-  const options = attachKind ? optionsFor(attachKind, src) : [];
+  const options = attachKind ? optionsFor(attachKind, src, intent.machine_kind === "macos_vm") : [];
   const source = options.find((o) => o.key === s.sourceKey);
   const choice: ItemChoice | null = attachKind && s.sourceKey
     ? { kind: attachKind, sourceKey: s.sourceKey, path: s.path.trim().replace(/\/+$/, ""), defaultPath: source?.defaultPath, branch: s.branch, readOnly: s.readOnly }

@@ -106,9 +106,10 @@ export interface MyDriveDeleteResult {
 
 /**
  * DELETE /me/drives/{id}: deletes the caller's own drive and its files. A disk drive whose Mac is offline
- * or no longer registered answers 202 or 200 with a MyDriveDeleteResult body instead of 204.
+ * (202) or no longer registered (200) answers with a MyDriveDeleteResult; any other delete answers 204, so null.
  */
-export async function deleteMyDrive(id: string): Promise<void> {
+export async function deleteMyDrive(id: string): Promise<MyDriveDeleteResult | null> {
   const res = await wfetch(`/me/drives/${encodeURIComponent(id)}`, { method: "DELETE" });
   if (!res.ok) throw new HttpError(res.status, await errText(res));
+  return res.status === 204 ? null : asJson<MyDriveDeleteResult>(res);
 }

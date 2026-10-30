@@ -20,10 +20,12 @@ import { useEscapeClosesThis } from "./nested-escape";
 
 const NAME_ID = "nr-create-drive-name";
 
-export function CreateDriveCard({ create, onCreated, onClose }: {
+export function CreateDriveCard({ create, onCreated, onClose, intro = NR_FILES.CREATE_INTRO }: {
   create: (name: string) => Promise<MeDrive>;
   onCreated: (drive: MeDrive) => void;
   onClose: () => void;
+  /** The sentence above the field; a disk kept on a Mac says so. */
+  intro?: string;
 }) {
   const [name, setName] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -50,7 +52,7 @@ export function CreateDriveCard({ create, onCreated, onClose }: {
 
   return (
     <form ref={card} onSubmit={submit} className="mt-1 flex basis-full flex-col gap-3.5 rounded-[9px] border border-border bg-muted p-3.5">
-      <p className="text-sm text-muted-foreground">{NR_FILES.CREATE_INTRO}</p>
+      <p className="text-sm text-muted-foreground">{intro}</p>
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center justify-between gap-2">
           <Label htmlFor={NAME_ID}>{NR_FILES.DRIVE_NAME}</Label>

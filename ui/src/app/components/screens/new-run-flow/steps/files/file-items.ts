@@ -14,6 +14,7 @@ import type { RunAttachment } from "../../../../../lib/types/new-run-contract";
 import { START_FOLDER_DRIVE } from "../../../../../lib/types/new-run-contract";
 import type { Workspace } from "../../../../../lib/types/workspaces";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
+import { MAC_DRIVES } from "../../../../wardyn/copy/mac-drives";
 import type { RunIntent } from "../../draft/run-intent";
 import {
   attachDrive, attachFolder, detachDrive, detachWorkspace, excludeRepo, includeRepo, repoIncluded, setDriveReadOnly, setRepoRef,
@@ -75,7 +76,7 @@ export function folderSources(workspaces: readonly Workspace[]): FolderSource[] 
   });
 }
 
-const BACKEND: Record<MeDrive["backend"], string> = {
+const BACKEND: Record<Exclude<MeDrive["backend"], "mac_disk">, string> = {
   docker_volume: NR_FILES.FAMILY_DOCKER_VOLUME,
   host_path: NR_FILES.FAMILY_HOST_FOLDER,
   k8s_pvc: NR_FILES.FAMILY_CLUSTER_VOLUME,
@@ -84,7 +85,9 @@ const BACKEND: Record<MeDrive["backend"], string> = {
 const SOURCE: Record<MeDrive["source"], string> = { personal: NR_FILES.SOURCE_PERSONAL, team: NR_FILES.SOURCE_TEAM, organisation: NR_FILES.SOURCE_ORG };
 
 /** The chips a drive is stored on: where it comes from, then its storage. */
-export const driveChips = (d: MeDrive): string[] => [SOURCE[d.source], BACKEND[d.backend]];
+export const driveChips = (d: MeDrive): string[] =>
+  // A disk drive names its Mac; with no name to give (the row is gone) it says only where it comes from.
+  d.backend === "mac_disk" ? [SOURCE[d.source], ...(d.mac ? [MAC_DRIVES.D01(d.mac)] : [])] : [SOURCE[d.source], BACKEND[d.backend]];
 // A team drive is shared whatever its backend: a Docker volume is a managed (user) section for one person, and one folder for a group here.
 export const driveKind = (d: MeDrive): FileKind => (d.section === "shared" || d.team ? "sharedDrive" : "userDrive");
 /** "Shared with" for a team drive: the caller's groups it is allocated to; undefined for every other drive. */

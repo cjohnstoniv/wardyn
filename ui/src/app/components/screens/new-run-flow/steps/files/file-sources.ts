@@ -9,6 +9,7 @@
 // says so with the drive sentences the console already has.
 
 import * as React from "react";
+import { runners as runnersApi } from "../../../../../lib/api/runners";
 import { myDrives, type MeDrive, type MeDriveCatalogue, type MemberDriveCreate, type MemberDriveCreateReason } from "../../../../../lib/api/me-drives";
 import { MEMBER } from "../../../../../lib/governance-copy";
 import { DRIVE_MEMBER } from "../../../../../lib/user-drives-copy";
@@ -94,4 +95,23 @@ export function useDriveCatalogue(poolId: string | undefined, enabled = true): D
       : c?.unavailable ? UNAVAILABLE_TEXT[c.unavailable] ?? DRIVE_MEMBER.NR_UNAVAILABLE : undefined;
   const reload = React.useCallback(() => setGeneration((g) => g + 1), []);
   return { catalogue: c, reason, reload };
+}
+
+/** The person's own Mac of this name, which a drive made for a macOS run is kept on; undefined until it is read, or when none is theirs. */
+export function useOwnMac(name: string | undefined): { id: string; name: string } | undefined {
+  const [mac, setMac] = React.useState<{ id: string; name: string }>();
+  React.useEffect(() => {
+    setMac(undefined);
+    if (!name) return;
+    let current = true;
+    runnersApi.listMine().then(
+      (rs) => {
+        const r = rs.find((x) => x.name === name && x.macos_vm);
+        if (current && r) setMac({ id: r.id, name: r.name });
+      },
+      () => {},
+    );
+    return () => { current = false; };
+  }, [name]);
+  return mac;
 }
