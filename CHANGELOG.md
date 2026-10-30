@@ -108,6 +108,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Fixed
 
 - A process inside a macOS VM could pose as Wardyn's guest agent.
+- Installing a macOS base's file items no longer follows a symbolic link, or passes through a folder others can write
+  to, on the way to an item's destination.
 - The error body of a `capability_feature` refusal now carries `feature`, the feature it names (such as `inbound` or
   `custom_component`), and the New Run page reads it to tell an inbound-app refusal from the other feature refusals.
   It used to match the wording of the message, so rewording the message would have turned the notice off (#3769).
