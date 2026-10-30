@@ -74,7 +74,7 @@ func newSetupCommand() *cobra.Command {
 			}
 			return ""
 		}
-		if err := checkSecurityLock(runnerInputs{flag: changedFlags(cmd), getenv: setupEnv, managed: managedPref, lockRead: managedLockRead}); err != nil {
+		if err := checkSecurityLock(runnerInputs{flag: changedFlags(cmd), flagList: changedFlagLists(cmd), getenv: setupEnv, managed: managedPref, lockRead: managedLockRead}); err != nil {
 			return err
 		}
 		// A drive root that serve would refuse is refused here, before the token is spent.

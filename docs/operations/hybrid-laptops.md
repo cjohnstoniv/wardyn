@@ -264,9 +264,9 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `MDMManaged` | none: profile only | a boolean: this Mac is managed. The runner reports it with the posture file's evidence (`mdm_file`), only when the posture file below is absent |
 | `DiskEncrypted` | none: profile only | a boolean: the disk is encrypted, read with `MDMManaged`; left out, the runner's own probe answers |
 | `MaxRuns`, `TotalCPU`, `TotalMemoryGB`, `PerRunCPU`, `PerRunMemoryGB` | `--max-runs`, `--total-cpu`, `--total-memory`, `--per-run-cpu`, `--per-run-memory` | defaults for `register` and `setup` limits (a flag wins); `PerRunCPU` and `PerRunMemoryGB` also size `macos-vm prepare` when the organisation has sent no per-run limit |
-| `lock_security_settings` | none: profile only | a boolean, off by default; `true` locks the five security keys, as the bullets below say |
+| `lock_security_settings` | none: profile only | a boolean, off by default; `true` locks the six security keys below |
 
-- With the lock on, `OrgURL`, `ProxyImage`, `TrustedCAFile`, `OrgCAFile` and `RecordingStore` in the profile win over a flag, and `serve` and `setup` refuse a flag or environment variable that disagrees, naming `lock_security_settings`.
+- With the lock on, `OrgURL`, `ProxyImage`, `TrustedCAFile`, `OrgCAFile`, `RecordingStore` and `DriveRoot` in the profile win over a flag, and `serve` and `setup` refuse a flag or environment variable that disagrees, naming `lock_security_settings`.
 - A value other than true, false, 1 or 0, or a profile that cannot be read, refuses start. Only a macOS profile can set it: there is no flag, variable or file twin.
 - A key the profile leaves empty, and every other key, keeps the order above.
 

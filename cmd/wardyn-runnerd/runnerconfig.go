@@ -130,7 +130,7 @@ var runnerFields = []runnerField{
 	{name: "macos_vm_image_sha256", flag: "sha256", managed: "MacOSVMImageHash", file: func(f *runnerFile) *string { return &f.MacOSVMImageHash }},
 	// No flag or environment variable sets it, as macos_vm_base_file.
 	{name: "macos_vm_bases_dir", managed: "MacOSVMBasesDir", file: func(f *runnerFile) *string { return &f.MacOSVMBasesDir }},
-	{name: "drive_root", flag: "drive-root", env: []string{"WARDYN_DRIVE_ROOT"}, managed: "DriveRoot", fileList: func(f *runnerFile) *[]string { return &f.DriveRoot }},
+	{name: "drive_root", flag: "drive-root", env: []string{"WARDYN_DRIVE_ROOT"}, managed: "DriveRoot", locked: true, fileList: func(f *runnerFile) *[]string { return &f.DriveRoot }},
 }
 
 // profileOnlyKeys are the managed preferences no serve setting stands for: the posture a Mac's MDM attests
@@ -261,6 +261,12 @@ func checkSecurityLock(in runnerInputs) error {
 		return err
 	}
 	for _, f := range runnerFields {
+		if f.fileList != nil {
+			if err := f.listLockRefusal(in); err != nil {
+				return err
+			}
+			continue
+		}
 		want := ""
 		if f.locked && f.managed != "" {
 			want = in.managed(f.managed)
@@ -268,9 +274,7 @@ func checkSecurityLock(in runnerInputs) error {
 		if want == "" {
 			continue
 		}
-		refuse := func(how string) error {
-			return fmt.Errorf("%s disagrees with the managed preference %s, and the managed profile sets %s: remove it, or ask your administrator to change the profile", how, f.managed, lockSettingKey)
-		}
+		refuse := func(how string) error { return lockRefusal(how, f.managed) }
 		if f.flag != "" && in.flag != nil {
 			if v, ok := in.flag(f.flag); ok && strings.TrimSpace(v) != "" && strings.TrimSpace(v) != want {
 				return refuse("--" + f.flag)
@@ -283,6 +287,49 @@ func checkSecurityLock(in runnerInputs) error {
 		}
 	}
 	return nil
+}
+
+// lockRefusal refuses how, a flag or environment variable, for disagreeing with the locked managed preference
+// managed.
+func lockRefusal(how, managed string) error {
+	return fmt.Errorf("%s disagrees with the managed preference %s, and the managed profile sets %s: remove it, or ask your administrator to change the profile", how, managed, lockSettingKey)
+}
+
+// listLockRefusal is checkSecurityLock for a locked list setting: a given flag or environment variable that
+// is not the managed list is refused. A managed list that is empty or not an array locks nothing here; the
+// resolve reports a bad one.
+func (f runnerField) listLockRefusal(in runnerInputs) error {
+	want, ok := f.managedList(in)
+	if !f.locked || !ok || len(want) == 0 {
+		return nil
+	}
+	if f.flag != "" && in.flagList != nil {
+		if v, given := in.flagList(f.flag); given && len(v) > 0 && !slices.Equal(v, want) {
+			return lockRefusal("--"+f.flag, f.managed)
+		}
+	}
+	for _, name := range f.env {
+		if v := strings.TrimSpace(in.getenv(name)); v != "" && !slices.Equal(filepath.SplitList(v), want) {
+			return lockRefusal("environment variable "+name, f.managed)
+		}
+	}
+	return nil
+}
+
+// managedList is the list setting's managed preference, ok false when there is none or it is not an array.
+func (f runnerField) managedList(in runnerInputs) ([]string, bool) {
+	if f.managed == "" || in.managed == nil {
+		return nil, false
+	}
+	raw := in.managed(f.managed)
+	if raw == "" {
+		return nil, false
+	}
+	var v []string
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		return nil, false
+	}
+	return v, true
 }
 
 // resolveRunnerConfig applies flag > managed preference > environment > file > default to every field. While
@@ -334,6 +381,11 @@ func (f runnerField) resolve(in runnerInputs) resolvedField {
 func (f runnerField) resolveList(in runnerInputs) resolvedField {
 	got := func(list []string, source string) resolvedField {
 		return resolvedField{Name: f.name, Value: strings.Join(list, string(os.PathListSeparator)), List: list, Source: source}
+	}
+	if in.locked && f.locked {
+		if v, ok := f.managedList(in); ok && len(v) > 0 {
+			return got(v, sourceManaged+" "+f.managed+" (locked)")
+		}
 	}
 	if f.flag != "" && in.flagList != nil {
 		if v, ok := in.flagList(f.flag); ok && len(v) > 0 {
