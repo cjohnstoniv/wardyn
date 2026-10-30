@@ -24,6 +24,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - macOS VMs: the files a run's policy manages in the guest, such as a harness's managed settings and server list and
   the cloud CLI's configuration, are now written where macOS reads them. A managed file with no macOS location stops the
   run's start with a reason.
+- Preparing a macOS VM base no longer logs the guest's tools connection as `tools_dial: transport failure` while it is
+  still opening. Stage 2 reads the dial after its first tools request, and logs one still unclassified as `pending`.
 
 ## [0.10.0-rc.8] — 2026-10-29
 

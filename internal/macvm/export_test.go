@@ -59,3 +59,10 @@ func SetAuxLockBackoff(d time.Duration) (restore func()) {
 	auxLockBackoff = d
 	return func() { auxLockBackoff = old }
 }
+
+// SetToolsDialAsks makes stage 2's tools-dial read ask n times, every every. restore undoes it.
+func SetToolsDialAsks(n int, every time.Duration) (restore func()) {
+	oldN, oldEvery := toolsDialAsks, toolsDialEvery
+	toolsDialAsks, toolsDialEvery = n, every
+	return func() { toolsDialAsks, toolsDialEvery = oldN, oldEvery }
+}

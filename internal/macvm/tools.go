@@ -258,13 +258,20 @@ func (s *ToolsStage) Run(ctx context.Context, in Stage2Input) (ToolsResult, erro
 	return res, err
 }
 
-// onGuest reads the guest agent's tools-port dial, runs the control check
-// when asked, then installs the tools.
-func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) (ToolsResult, error) {
-	dial, err := g.ToolsDial(ctx)
-	if err != nil || !ValidToolsDial(dial) {
-		dial = ToolsDialTransport
-	}
+// ToolsDialPending is how stage 2 reports a tools-port dial the guest agent
+// has not classified yet: it accepted the connection and is waiting for the
+// host's first request (the host's tools client dials lazily).
+const ToolsDialPending = "pending"
+
+// toolsDialAsks bounds readToolsDial, as the run boot's recordToolsDial is
+// bounded: the guest agent's own dial of the tools port takes up to 5 s.
+var toolsDialAsks, toolsDialEvery = 15, time.Second
+
+// onGuest runs the control check when asked, then installs the tools, then
+// reads the guest agent's tools-port dial: only once the host has used the
+// tools session has the guest seen its first request and classified it.
+func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) (res ToolsResult, err error) {
+	defer func() { res.ToolsDial = readToolsDial(ctx, g) }()
 	desktop := ""
 	if in.ControlCheck {
 		probe := o.Desktop
@@ -272,15 +279,42 @@ func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) 
 			probe = dp // the stage-2 boot's own RFB client
 		}
 		if desktop, err = controlCheck(ctx, g, probe); err != nil {
-			return ToolsResult{ToolsDial: dial}, err
+			return ToolsResult{}, err
 		}
 	}
-	res, err := installTools(ctx, g, o)
+	res, err = installTools(ctx, g, o)
 	if err == nil {
 		err = selftestBase(ctx, g, &res, o.Log)
 	}
-	res.Desktop, res.ToolsDial = desktop, dial
+	res.Desktop = desktop
 	return res, err
+}
+
+// readToolsDial is the guest agent's class for its tools-port dial, asked
+// again while it has none yet: ToolsDialPending if it never does, and
+// ToolsDialTransport only when the guest cannot be asked or names no class.
+func readToolsDial(ctx context.Context, g ToolsGuest) string {
+	for i := range toolsDialAsks {
+		dial, err := g.ToolsDial(ctx)
+		switch {
+		case err != nil:
+			return ToolsDialTransport
+		case dial != "":
+			if !ValidToolsDial(dial) {
+				return ToolsDialTransport
+			}
+			return dial
+		}
+		if i == toolsDialAsks-1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ToolsDialPending
+		case <-time.After(toolsDialEvery):
+		}
+	}
+	return ToolsDialPending
 }
 
 // selftestBase is stage 2's final check, made as a run is started: the run launcher's --selftest as the

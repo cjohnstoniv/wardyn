@@ -42,6 +42,10 @@ type guest struct {
 	// and exit code (nil: every self-test passes).
 	agentRuns [][]string
 	selftest  func(env []string) (string, int)
+	// dials answers ToolsDial in turn, the last one for ever (nil: connected);
+	// dialAsks is how many tools-mode runs had been made at each ask.
+	dials    []string
+	dialAsks []int
 	// sw overrides `softwareupdate` (nil: offers 16.4 and 16.10, installs fine).
 	sw func(argv []string) (string, int)
 	// version overrides a version check's output.
@@ -110,7 +114,19 @@ func (g *guest) Pointer(context.Context) (int, int, error) {
 	return g.pointerX, g.pointerY, nil
 }
 
-func (g *guest) ToolsDial(context.Context) (string, error) { return macvm.ToolsDialConnected, nil }
+func (g *guest) ToolsDial(context.Context) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.dialAsks = append(g.dialAsks, len(g.runs))
+	if len(g.dials) > 0 {
+		d := g.dials[0]
+		if len(g.dials) > 1 {
+			g.dials = g.dials[1:]
+		}
+		return d, nil
+	}
+	return macvm.ToolsDialConnected, nil
+}
 
 func (g *guest) AgentExec(_ context.Context, argv, env []string) (string, int, error) {
 	g.mu.Lock()
@@ -979,5 +995,26 @@ func TestPrepareFailingSelftestPublishesNoBase(t *testing.T) {
 	}
 	if _, err := macvm.ReadyBase(f.opts.Layout.BaseDir(0)); err == nil {
 		t.Fatal("a base that cannot start a run was published")
+	}
+}
+
+// The guest agent classifies its tools-port dial only on the host's first tools request, so stage 2
+// reads it after the tools are installed, asks again while it is unclassified, and reports one that
+// never is as pending, never as a transport failure.
+func TestStage2ReadsTheToolsDialAfterTheFirstToolsRequest(t *testing.T) {
+	defer macvm.SetToolsDialAsks(3, time.Millisecond)()
+	f, g := newTools(t), newGuest()
+	g.dials = []string{"", "", macvm.ToolsDialConnected}
+	var boots, stops atomic.Int64
+	if res := runStage(t, f.stage(g, &boots, &stops)); res.ToolsDial != macvm.ToolsDialConnected {
+		t.Fatalf("tools dial %q", res.ToolsDial)
+	}
+	if len(g.dialAsks) == 0 || g.dialAsks[0] == 0 {
+		t.Fatalf("the dial was read before any tools request: %v", g.dialAsks)
+	}
+	g = newGuest()
+	g.dials = []string{""}
+	if res := runStage(t, f.stage(g, &boots, &stops)); res.ToolsDial != macvm.ToolsDialPending {
+		t.Fatalf("an unclassified dial reads %q", res.ToolsDial)
 	}
 }
