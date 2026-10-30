@@ -110,6 +110,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `wardyn run --editor` no longer counts an `Include` under a `Host` or `Match` block in `~/.ssh/config` as the one it
   needs. Only an `Include` above the first of those lines counts; otherwise it asks before adding its own at the top
   (#3415).
+- `wardyn runner list --no-limits` now filters every page of runners, not only the one it fetched, so a runner with
+  no limits set past the first page is listed. `--limit` and `--offset` then cut the filtered list (#3811).
 
 ### Security
 
