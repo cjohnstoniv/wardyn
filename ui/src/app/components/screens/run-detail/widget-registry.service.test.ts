@@ -53,6 +53,16 @@ describe("the Service widget's layout", () => {
     expect(at(out, "files")!.y).toBe(4 + at(out, "service")!.h);
   });
 
+  it("ignores a widget that spans the whole grid when it looks for the right column", () => {
+    const saved = [
+      { widget: "terminal", x: 0, y: 0, w: 12, h: 6 },
+      { widget: "egress", x: 8, y: 6, w: 4, h: 4 },
+    ];
+    const out = forRun(saved, "live", true);
+    expect(at(out, "service")).toMatchObject({ x: 8, y: 0 });
+    expect(at(out, "terminal")!.y).toBe(at(out, "service")!.h);
+  });
+
   it("is available on a RUNNING service run only", () => {
     const avail = (c: WidgetContext) => RUN_WIDGETS.service.available?.(c);
     expect(avail(ctx({ service: { restart: "never" } }))).toBe(true);

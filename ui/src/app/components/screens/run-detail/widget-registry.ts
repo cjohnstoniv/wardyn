@@ -292,9 +292,9 @@ function isWidgetId(id: string): id is WidgetId {
 /** The Service panel's size, and the column it takes when the layout has no right column to read. */
 const SERVICE_AT = { x: 8, y: 0, w: 4, h: 5 };
 
-/** Where the right column starts: the left edge of the widgets that reach the grid's right edge, else the default column. */
+/** Where the right column starts: the left edge of the widgets that reach the grid's right edge without spanning it, else the default column. */
 function rightColumnX(layout: RunLayoutWidget[]): number {
-  const reaching = layout.filter((w) => w.x + w.w >= GRID_COLS).map((w) => w.x);
+  const reaching = layout.filter((w) => w.x > 0 && w.x + w.w >= GRID_COLS).map((w) => w.x);
   return reaching.length > 0 ? Math.min(...reaching) : SERVICE_AT.x;
 }
 
