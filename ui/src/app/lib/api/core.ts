@@ -225,7 +225,7 @@ export class HttpError extends Error {
   /** The request field a refusal is about (the envelope's `field`, a dotted path such as machine_kind), "" when
    *  the body names none: New Run takes the person to the step that changes it. */
   field: string;
-  /** The capability feature a capability_feature refusal is about (`inbound`, `custom_component`), absent on any
+  /** The capability feature a capability_feature refusal is about (such as `inbound`), absent on any
    *  other refusal: the console branches on this, never on the sentence. */
   feature?: string;
   /** The policy a governance refusal came from and how to ask for a change
