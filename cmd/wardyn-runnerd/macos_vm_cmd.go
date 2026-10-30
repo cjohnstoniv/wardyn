@@ -124,7 +124,14 @@ func newMacOSVMCommand() *cobra.Command {
 		}
 		return m.remove(cmd.OutOrStdout())
 	}}
-	cmd.AddCommand(status, prepare, remove)
+	editBase := &cobra.Command{Use: "edit-base", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		m, runnerID, err := open(cmd)
+		if err != nil {
+			return err
+		}
+		return m.editBase(cmd.Context(), cmd.OutOrStdout(), runnerID)
+	}}
+	cmd.AddCommand(status, prepare, editBase, remove)
 	return cmd
 }
 
