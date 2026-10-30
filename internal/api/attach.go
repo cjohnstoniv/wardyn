@@ -376,7 +376,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// not pretending it succeeded.
 	// A local socket sends its first frame once the runner has taken the grant (localAttach.run).
 	if la == nil {
-		wa.sendMode(ctx, !holder.canWrite())
+		wa.sendMode(ctx)
 	}
 
 	// Provenance: record this interactive session as a replayable

@@ -21,6 +21,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A terminal client promoted to writer while its attach was still opening is now shown as the writer. Its opening frame
+  could land after the promotion's and leave its terminal read-only until it reconnected (#3403).
 - An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
   edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
   terminal. They used to stay open until they closed or reached their time limit (#3398).
