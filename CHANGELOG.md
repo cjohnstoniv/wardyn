@@ -108,7 +108,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   organisation's memory for good. It is dropped a day after the window opened, and a summary of rows suppressed after
   the bound is lost if the runner stays silent that long (#3663).
 - A run ended `gone` (its runner reported the sandbox gone with no exit code) now shows a failure hint saying so: the
-  container, pod or VM was removed, or its host restarted. It was FAILED with no reason on its page (#3669).
+  container, pod or VM was removed, or its host restarted, including when the lease sweep finishes the end. It was
+  FAILED with no reason on its page (#3669).
 
 ### Security
 

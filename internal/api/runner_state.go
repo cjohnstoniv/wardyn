@@ -199,7 +199,7 @@ func (s *Server) endGoneRun(ctx context.Context, st store.PG, run types.AgentRun
 	s.kickQueue()
 	run.LostAt, run.LostReason = &at, types.LostGone
 	s.stopKeptRun(ctx, st, run, types.RunFailed, "run.lost", map[string]any{"reason": string(types.LostGone), "kept": false})
-	noteGoneRunHint(ctx, st, run.ID)
+	s.noteGoneRunHint(ctx, run.ID)
 	return true
 }
 
@@ -208,13 +208,17 @@ const goneRunFailureHint = "Its runner reported the sandbox gone with no exit co
 	"removed, or its host restarted."
 
 // noteGoneRunHint sets goneRunFailureHint on runID once it is FAILED with no hint of its own. Best-effort, like every
-// other hint write: a run the end did not land on (the lease sweep finishes it), or that ended some other way, is left.
-func noteGoneRunHint(ctx context.Context, st store.PG, runID uuid.UUID) {
-	cur, err := st.GetRun(ctx, runID)
+// other hint write: a run the end did not land on, or that ended some other way, is left.
+func (s *Server) noteGoneRunHint(ctx context.Context, runID uuid.UUID) {
+	setter, ok := s.cfg.Store.(runFailureHintSetter)
+	if !ok {
+		return
+	}
+	cur, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil || cur.State != types.RunFailed || cur.FailureHint != "" {
 		return
 	}
-	if err := st.SetRunFailureHint(ctx, runID, goneRunFailureHint); err != nil {
+	if err := setter.SetRunFailureHint(ctx, runID, goneRunFailureHint); err != nil {
 		slog.WarnContext(ctx, "wardynd: could not persist the gone run failure hint",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
