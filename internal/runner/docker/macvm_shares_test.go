@@ -283,13 +283,17 @@ func TestMacVMShareDrivesRefusalsComeFirst(t *testing.T) {
 	if err := os.Symlink(otherHome, intoOther); err != nil {
 		t.Fatal(err)
 	}
+	unlisted := filepath.Join(t.TempDir(), "alice") // a folder that exists, under no root the runner was given
+	if err := os.Mkdir(unlisted, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	r.d.cfg.UserDriveHostRoots = []string{root, otherRoot}
 	volume := shareDriveAt(home, runner.SharedRoot+"/vol", true)
 	volume.Backend = types.DriveBackendDockerVolume
 	for name, drives := range map[string][]types.DriveMount{
 		"a home linked out of every root":         {shareDriveAt(escape, runner.DriveTarget, true)},
 		"a home linked into another drive's root": {shareDriveAt(intoOther, runner.DriveTarget, true)},
-		"a root the runner was not given":         {shareDriveAt(filepath.Join(t.TempDir(), "alice"), runner.DriveTarget, true)},
+		"a root the runner was not given":         {shareDriveAt(unlisted, runner.DriveTarget, true)},
 		"a docker volume":                         {volume},
 		"a target that is no drive's":             {shareDriveAt(home, "/home/agent/work", true)},
 		"two drives at one target": {shareDriveAt(home, runner.DriveTarget, true),
@@ -308,6 +312,29 @@ func TestMacVMShareDrivesRefusalsComeFirst(t *testing.T) {
 		}
 		if ms := r.eng.Machines(); len(ms) != 0 {
 			t.Errorf("%s: a machine was built", name)
+		}
+	}
+}
+
+// A share drive refused by the folder-share rules (here, inside the runner's own VM folder) tells the
+// person the drive and a reason, never the operator's host root or home path.
+func TestMacVMShareDriveRefusalNamesNoHostPath(t *testing.T) {
+	r := newMacRig(t)
+	root := filepath.Join(r.c.Layout.Root, "shares")
+	home := filepath.Join(root, "alice")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r.d.cfg.UserDriveHostRoots = []string{root}
+	spec := macSpec()
+	spec.Drives = []types.DriveMount{shareDriveAt(home, runner.DriveTarget, true)}
+	_, err := r.d.CreateSandbox(context.Background(), spec)
+	if err == nil {
+		t.Fatal("a drive inside the VM folder was shared")
+	}
+	for _, path := range []string{root, home} {
+		if strings.Contains(err.Error(), path) {
+			t.Errorf("the refusal %q names %q", err, path)
 		}
 	}
 }

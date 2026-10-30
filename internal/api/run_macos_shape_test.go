@@ -182,7 +182,7 @@ func TestPlacementCapability_MacOSVMDrives(t *testing.T) {
 		{name: "a team volume", drives: []runDrive{teamVolume}, caps: true, want: volume, wantAsk: driveAsk{VolumeDrive: "Team"}},
 		{name: "a cluster volume", drives: []runDrive{clusterDrive}, caps: true, want: cluster, wantAsk: driveAsk{VolumeDrive: "Team", ClusterVolume: true}},
 		{name: "a person's drive", drives: []runDrive{personal}, caps: true, want: f01, wantAsk: driveAsk{Drives: true}},
-		{name: "a managed drive", drives: []runDrive{managed}, caps: true, want: f01, wantAsk: driveAsk{Drives: true}},
+		{name: "a managed drive", drives: []runDrive{managed}, caps: true, want: volume, wantAsk: driveAsk{VolumeDrive: "Team"}},
 		{name: "a kept work folder", keep: &keptWorkFolder{}, caps: true, want: f01, wantAsk: driveAsk{Drives: true}},
 		{name: "a share beside a person's drive", drives: []runDrive{share, personal}, caps: true, want: f01, wantAsk: driveAsk{ShareDrives: true, Drives: true}},
 		{name: "a share beside a volume", drives: []runDrive{share, teamVolume}, caps: true, want: volume,

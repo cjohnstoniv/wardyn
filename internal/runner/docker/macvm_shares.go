@@ -211,11 +211,25 @@ func (d *Driver) macDriveShare(ctx context.Context, drive *types.DriveMount, pro
 		if err != nil {
 			return "", err
 		}
-		return checkMacShare(real, false, nil, nil, protected)
+		// The folder-share rules name the path they refused: it goes to the operator's log, as the
+		// container's source refusals do, and the person reads the drive and a reason only. A path that
+		// resolves differently the second time never passed the drive's own root check.
+		got, err := checkMacShare(real, false, nil, nil, protected)
+		if err == nil && got != real {
+			err = errors.New("the drive's folder changed while it was being checked")
+		}
+		switch {
+		case errors.Is(err, errShareUnreadable):
+			return "", err
+		case err != nil:
+			return "", fmt.Errorf("docker: denied user drive mount -> %q: %w", drive.Target,
+				runner.RefuseUserDriveBind(drive, drive.ObjectName, real, runner.DriveSourceRefused, err))
+		}
+		return got, nil
 	})
 	switch {
 	case errors.Is(err, errShareUnreadable):
-		return "", "", errors.New(runner.MacVMFolderUnreadable(filepath.Base(drive.ObjectName)))
+		return "", "", errors.New(runner.MacVMFolderUnreadable(cmp.Or(drive.DriveName, runner.DriveSubject(drive))))
 	case err != nil:
 		return "", "", err
 	}
