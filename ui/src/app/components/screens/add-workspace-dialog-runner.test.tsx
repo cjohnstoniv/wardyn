@@ -157,6 +157,17 @@ describe("Add workspace: where is this folder", () => {
     expect(screen.getByLabelText("Path on this host")).toBeInTheDocument();
   });
 
+  it("with personal runners off, offers no runner even when the list holds some", async () => {
+    getMyCapabilitiesMock.mockResolvedValue({ may_self_host_runner: false });
+    listMineMock.mockResolvedValue([MAC]);
+    renderDialog();
+    await pickLocalDir();
+    expect(await screen.findByText("Personal runners aren't turned on for you. Ask your admin.")).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /On my runner/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("radio")).toHaveLength(1);
+    expect(screen.queryByText(/You have no runner of your own/)).not.toBeInTheDocument();
+  });
+
   it("with personal runners off, shows the existing sentence instead", async () => {
     getMyCapabilitiesMock.mockResolvedValue({ may_self_host_runner: false });
     listMineMock.mockRejectedValue(new Error("runners_disabled"));

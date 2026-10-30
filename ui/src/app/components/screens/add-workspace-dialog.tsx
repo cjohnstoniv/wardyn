@@ -169,8 +169,9 @@ export function AddWorkspaceDialog({
   // Only a member binds a folder to their own runner: the server refuses a runner_id from an administrator.
   const askWhere = localDirShown && memberClamped;
   const myRunners = useMyRunners(askWhere);
-  const folderRunners = React.useMemo(() => (myRunners ?? []).filter(isFolderRunner), [myRunners]);
+  // Unknown (not read yet, or the read failed) never takes the options away: only an explicit false does.
   const selfHostOff = useMyCapabilities(askWhere)?.may_self_host_runner === false;
+  const folderRunners = React.useMemo(() => (selfHostOff ? [] : (myRunners ?? []).filter(isFolderRunner)), [myRunners, selfHostOff]);
   const pickedRunner = folderRunners.find((r) => r.id === runnerId);
 
   const sourceRequired = kind !== "ephemeral";
