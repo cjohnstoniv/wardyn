@@ -98,10 +98,11 @@ func insertMemberDrive(ctx context.Context, tx pgx.Tx, d types.UserDrive, limit 
 
 	out, err := scanDriveRow(tx.QueryRow(ctx, `
 		INSERT INTO user_drives (id, name, backend, host_root, storage_class, home_template, size_mib,
-			writable, reclaim, created_by, name_slug, object_scheme, owner_subject, kept_from_run)
-		VALUES ($1, $2, $3, '', $4, 'hash', $5, true, 'delete', $6, $7, 'id', $8, $9)
+			writable, reclaim, created_by, name_slug, object_scheme, owner_subject, kept_from_run, home_runner_id)
+		VALUES ($1, $2, $3, '', $4, 'hash', $5, true, 'delete', $6, $7, 'id', $8, $9, $10)
 		RETURNING `+driveRowCols,
-		d.ID, d.Name, d.Backend, d.StorageClass, d.SizeMiB, d.CreatedBy, types.DriveSlug(d.Name), d.OwnerSubject, d.KeptFromRun))
+		d.ID, d.Name, d.Backend, d.StorageClass, d.SizeMiB, d.CreatedBy, types.DriveSlug(d.Name), d.OwnerSubject, d.KeptFromRun,
+		d.HomeRunnerID))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {

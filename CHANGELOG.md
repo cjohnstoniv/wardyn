@@ -152,6 +152,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - During base preparation the guest's DNS lookups are refused instead of answered, so Setup Assistant's Screen Time screen no longer waits minutes for a network that is not there. Run-time DNS is unchanged.
 - The macOS setup window comes to the front, shows the three steps to follow, and `macos-vm status` no longer warns, wrongly, that the base's guest agent is not this runner's.
 
+### Before you upgrade
+
+- Migration `0246_user_drives_mac_disk` admits `mac_disk` in `user_drives.backend`'s CHECK and in the member-drive
+  rule, and adds `user_drives.home_runner_id`, the Mac a disk drive is kept on. It changes no row and adds no grant.
+  A downgrade with a disk drive present is unsupported.
+
 ## [0.10.0-rc.8] — 2026-10-29
 
 ### Before you upgrade
