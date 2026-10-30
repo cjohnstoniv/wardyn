@@ -14,7 +14,7 @@ import (
 // A guest that fails the proof in a loop leaves the helper log one line, then at most one line a minute
 // carrying how many refusals it held back, per port.
 func TestPairerLogsRefusalsAtMostOnceAMinute(t *testing.T) {
-	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	now := time.Now()
 	old := pairNow
 	pairNow = func() time.Time { return now }
 	defer func() { pairNow = old }()
