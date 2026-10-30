@@ -162,6 +162,7 @@ export const LIMIT_FIELDS: Field[] = [
   // as the ceiling rows do. The autonomy rubric has its own section.
   { key: "deny_ui_apps", kind: "true", label: LIMITS_CHIP.UI_APPS, mono: false },
   ceilingField("deny_placements", "list"),
+  ceilingField("allowed_macos_bases", "list"),
   ceilingField("local_self_defined_components", "false"),
   ceilingField("max_cpu_millis", "number"),
   ceilingField("max_memory_mib", "number"),

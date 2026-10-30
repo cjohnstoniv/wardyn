@@ -63,6 +63,7 @@ var leqRules = map[string]string{
 	"deny_user_drive":                       "b implies a",
 	"deny_member_drives":                    "b implies a",
 	"deny_placements":                       "every placement b denies is denied by a",
+	"allowed_macos_bases":                   "b allows any: any a; else a is a non-empty subset of b",
 	"max_cpu_millis":                        "a is no looser bound than b",
 	"max_memory_mib":                        "a is no looser bound than b",
 	"max_ephemeral_disk_mib":                "a is no looser bound than b",

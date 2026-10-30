@@ -130,6 +130,9 @@ type SandboxSpec struct {
 	// MachineKind is the sandbox's kind; empty is a container. A substrate that cannot start the kind
 	// refuses the create before creating anything, never falls back to a container.
 	MachineKind types.MachineKind `json:"machine_kind,omitempty"`
+	// MacOSBase is the macOS base a macos_vm run is started on: a Mac's other base's name, or "" for its
+	// Standard base. A Mac that has no ready base of that name refuses the create.
+	MacOSBase string `json:"macos_base,omitempty"`
 	// ImageArches, when set, are the only architectures Image runs on: a prewrapped image's accepted
 	// set (design final §3). A Kubernetes substrate places the agent pod on a node of one of them.
 	ImageArches []string `json:"image_arches,omitempty"`

@@ -260,7 +260,12 @@ func (d *Driver) refuseMacVMSpec(spec runner.SandboxSpec) (macvm.Manifest, error
 	if err := d.preflightSpec(spec); err != nil {
 		return macvm.Manifest{}, err
 	}
-	man, err := macvm.ReadyBase(c.Layout.BaseDir(0))
+	// The base the run names: Standard, or one of the Mac's others (macvm.NamedBaseDir).
+	base, err := c.Layout.NamedBaseDir(spec.MacOSBase)
+	if err != nil {
+		return macvm.Manifest{}, fmt.Errorf("docker: %w", err)
+	}
+	man, err := macvm.ReadyBase(base)
 	if err != nil {
 		return man, fmt.Errorf("docker: %w", err)
 	}
@@ -420,7 +425,8 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 		v.agent.Close()
 		d.destroyMacVM(context.Background(), v, entry.ID, false)
 	})
-	if err := macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: spec.RunID.String(), BaseDir: c.Layout.BaseDir(0), CPUs: cpus, MemoryMiB: memMiB,
+	base, _ := c.Layout.NamedBaseDir(spec.MacOSBase) // refuseMacVMSpec checked the name
+	if err := macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: spec.RunID.String(), BaseDir: base, CPUs: cpus, MemoryMiB: memMiB,
 		Identity: c.Identity, RunnerID: c.RunnerID, LedgerEntry: entry.ID, LedgerDir: c.LedgerDir, SockRoot: c.SockRoot,
 		Shares: shares}); err != nil {
 		return fail(fmt.Errorf("docker: macOS VM run directory: %w", err))
@@ -491,6 +497,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	signIns := res.SignIns
 	machine := &types.VMMachine{Accelerator: types.MacVMAccelerator, MachineType: types.MacVMMachineType,
 		GuestOS: cmp.Or(man.GuestOS, "macOS "+man.BuildVersion), HostOS: c.HostOS, BaseEditedAt: macvm.BaseEditedAt(c.Layout.BaseDir(0), man)}
+	machine.MacOSBase = cmp.Or(spec.MacOSBase, macvm.StandardBase)
 	d.notVMs.Delete(ref)
 	d.vms.Store(ref, v)
 	d.keepExecOutput(ref, spec.ExecOutput)

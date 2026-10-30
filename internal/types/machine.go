@@ -5,6 +5,8 @@ package types
 
 import (
 	"fmt"
+	"regexp"
+	"slices"
 	"time"
 )
 
@@ -63,6 +65,31 @@ type VMMachine struct {
 	// BaseEditedAt is when a macOS VM's base was last edited (`macos-vm edit-base`) before the run cloned it;
 	// absent when it never was, and on a Linux VM.
 	BaseEditedAt *time.Time `json:"base_edited_at,omitempty"`
+	// MacOSBase is the macOS VM's base: the name the run picked at create ("Standard" or one of the Mac's
+	// other bases), then the base the Mac started it on. Absent on a Linux VM, and on a macOS VM run that
+	// predates it.
+	MacOSBase string `json:"macos_base,omitempty"`
+}
+
+// MacOSStandardBase is the name of a Mac's first macOS base, the one prepare builds (MAC-B04). A run that
+// names no base runs on it.
+const MacOSStandardBase = "Standard"
+
+// macOSBaseName is a Mac's other base's name: an install list item's name form (macvm.ValidBaseName).
+var macOSBaseName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
+// ValidMacOSBaseName says whether name can name a macOS base: MacOSStandardBase, or another base's name.
+func ValidMacOSBaseName(name string) bool {
+	return name == MacOSStandardBase || macOSBaseName.MatchString(name)
+}
+
+// MacOSBaseAllowed says whether allowed (GovernanceLimits.AllowedMacOSBases) lets a run pick base, "" being
+// Standard: an empty list allows any base a Mac offers.
+func MacOSBaseAllowed(allowed []string, base string) bool {
+	if base == "" {
+		base = MacOSStandardBase
+	}
+	return len(allowed) == 0 || slices.Contains(allowed, base)
 }
 
 // A macOS VM's machine: Virtualization.framework gives the guest no CPU model or QEMU, so the machine

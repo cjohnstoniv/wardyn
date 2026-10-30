@@ -38,6 +38,9 @@ func (m *meeter) meetLimits(o types.LimitsOverlay) {
 	if o.DenyPlacements != nil {
 		l.DenyPlacements = unionPlacements(l.DenyPlacements, *o.DenyPlacements)
 	}
+	if o.AllowedMacOSBases != nil {
+		m.meetMacOSBases(*o.AllowedMacOSBases)
+	}
 	for _, f := range []struct {
 		name string
 		base *int
@@ -92,6 +95,33 @@ func (m *meeter) meetRunLimits(o types.LimitsOverlay) {
 	got.DefaultEndSec = m.meetDefault("default_end_sec", base.DefaultEndSec, base.MaxEndAheadSec, o.DefaultEndSec, got.MaxEndAheadSec)
 	got.DefaultWaitSec = m.meetDefault("default_wait_sec", base.DefaultWaitSec, base.MaxWaitSec, o.DefaultWaitSec, got.MaxWaitSec)
 	l.RunLimits = got
+}
+
+// meetMacOSBases intersects two macOS base allow lists where empty means "any base". An empty overlay
+// narrows nothing. A disjoint pair has no representable result: the empty list the intersection would be
+// allows every base.
+func (m *meeter) meetMacOSBases(ov []string) {
+	l := &m.out.Limits
+	switch {
+	case len(ov) == 0:
+		return
+	case len(l.AllowedMacOSBases) == 0:
+		l.AllowedMacOSBases = slices.Clone(ov)
+		return
+	}
+	var both []string
+	for _, b := range ov {
+		if slices.Contains(l.AllowedMacOSBases, b) {
+			both = append(both, b)
+		}
+	}
+	switch {
+	case len(both) == 0:
+		m.fail(ReasonOverlayUnsatisfiable, "allowed_macos_bases", "no macOS base is in both the base (%s) and the overlay (%s)", trimJoin(l.AllowedMacOSBases), trimJoin(ov))
+	case len(both) < len(ov):
+		m.widen("allowed_macos_bases", "the base excludes %s", trimJoin(slicesDiff(ov, both)))
+	}
+	l.AllowedMacOSBases = both
 }
 
 // unionPlacements is a denial list only ever added to: the overlay's denials join the base's, in a
