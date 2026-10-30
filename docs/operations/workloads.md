@@ -45,10 +45,12 @@ intent:
   experience: background
   workload: {kind: command, command: make serve}
   no_repositories_or_drives: true
+  inline_policy: {eligible_grants: []}
 ```
 
 - The server normalises the intent through the same door as `POST /templates/import`, so a YAML and a JSON copy of one spec store the same bytes.
 - The run is titled with the workload's name and carries its description.
+- The intent's `inline_policy` is laid onto the deployment default ([sdk.md](../sdk.md#run-documents)), so the stock default's `github_token` grant comes with it, and a local runner refuses that grant. Name `eligible_grants: []`, deliver `github_token` via the org in the delivery policy, or use a `policy_id` without org-held grants.
 - `wardyn apply` also reads a `wardyn.dev/v1alpha1` `WardynWorkload`: the fields above sit under `spec`, and the name is `metadata.name`. The namespace is ignored, and the workload is yours with source `api`.
 
 ## The CLI

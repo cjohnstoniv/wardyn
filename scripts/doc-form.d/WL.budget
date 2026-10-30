@@ -5,4 +5,5 @@
 # docs/operations/workloads.md 2481 adds 54 over 2427: the history route.
 # docs/operations/workloads.md 2668 measured after the workload-history merge onto the crdfix wave.
 # docs/operations/workloads.md 2677 measured (rc.8): the binding table says a revoke, not a session-only sign-out, ends a binding.
-docs/operations/workloads.md=2677 share=10
+# docs/operations/workloads.md 2722 adds 45 over 2677: the policy laid onto the deployment default and the three ways to launch on a local runner.
+docs/operations/workloads.md=2722 share=10
