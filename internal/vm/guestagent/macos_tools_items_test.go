@@ -21,6 +21,7 @@ func TestToolsExecBaseItemForms(t *testing.T) {
 		{"/usr/bin/hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", E + "/mnt", E + "/item.dmg"},
 		{"/usr/bin/ditto", E + "/mnt/Tool.app", "/Applications/Tool.app"},
 		{"/usr/bin/hdiutil", "detach", "-force", E + "/mnt"},
+		{"/usr/bin/profiles", "list"},
 	} {
 		if err := ToolsExecAllowed(argv, t.TempDir()); err != nil {
 			t.Errorf("%q refused: %v", argv, err)
@@ -43,6 +44,9 @@ func TestToolsExecBaseItemForms(t *testing.T) {
 		{"/usr/bin/hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", "/Applications", E + "/item.dmg"},
 		{"/usr/bin/hdiutil", "attach", "-nobrowse", "-noautoopen", "-readonly", "-mountpoint", E + "/mnt", E + "/item.dmg"},
 		{"/usr/bin/hdiutil", "detach", "-force", "/"},
+		{"/usr/bin/profiles", "list", "-all"},
+		{"/usr/bin/profiles", "install", "-path", E + "/item.mobileconfig"},
+		{"/usr/bin/profiles", "remove", "-all"},
 	} {
 		if err := ToolsExecAllowed(argv, t.TempDir()); err == nil {
 			t.Errorf("%q allowed", argv)
@@ -54,7 +58,7 @@ func TestToolsExecBaseItemForms(t *testing.T) {
 // managed settings, Wardyn's own files or anything outside the roots.
 func TestToolsPushBaseItems(t *testing.T) {
 	tl := &Tools{}
-	for _, dest := range []string{MacItemStageDir + "/edr/item.pkg", MacItemStageDir + "/a/item.dmg", "/Library/Application Support/Org/conf.json", "/opt/org/x"} {
+	for _, dest := range []string{MacItemStageDir + "/edr/item.pkg", MacItemStageDir + "/a/item.dmg", MacItemStageDir + "/wifi/item.mobileconfig", "/Library/Application Support/Org/conf.json", "/opt/org/x"} {
 		if err := tl.pushAllowed(dest); err != nil {
 			t.Errorf("%s refused: %v", dest, err)
 		}

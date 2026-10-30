@@ -14,6 +14,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
@@ -24,13 +26,20 @@ const FlagBaseFile = "base-file"
 
 // Base item kinds.
 const (
-	ItemKindPkg  = "pkg"
-	ItemKindApp  = "app"
-	ItemKindFile = "file"
+	ItemKindPkg     = "pkg"
+	ItemKindApp     = "app"
+	ItemKindFile    = "file"
+	ItemKindProfile = "profile"
 )
 
-// ItemInstalled is an item stage 2 installed.
-const ItemInstalled = "installed"
+// Item states: installed, or a profile staged for the person's approval in macos-vm edit-base.
+const (
+	ItemInstalled = "installed"
+	ItemStaged    = "staged"
+)
+
+// profileID is a configuration profile's PayloadIdentifier.
+var profileID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`)
 
 // maxBaseList bounds the install list file.
 const maxBaseList = 1 << 20
@@ -57,6 +66,9 @@ type BaseItem struct {
 	// App is the bundle an app item's .dmg holds ("Name.app"); an app item's .zip holds its bundle at the
 	// top and needs none.
 	App string `json:"app,omitempty"`
+	// Identifier is a profile item's PayloadIdentifier, which `profiles list` reads back once it is
+	// installed.
+	Identifier string `json:"identifier,omitempty"`
 }
 
 // LoadBaseList reads and checks the install list at path.
@@ -114,6 +126,9 @@ func (it BaseItem) check() error {
 		return errors.New("sha256 must be 64 lower-case hex digits")
 	}
 	ext := strings.ToLower(filepath.Ext(it.Path))
+	if it.Kind != ItemKindProfile && it.Identifier != "" {
+		return errors.New("only a profile item takes an identifier")
+	}
 	switch it.Kind {
 	case ItemKindPkg:
 		if ext != ".pkg" || it.Dest != "" || it.App != "" {
@@ -130,8 +145,12 @@ func (it BaseItem) check() error {
 		if err := guestagent.ItemDestAllowed(it.Dest); err != nil {
 			return fmt.Errorf("dest %w", err)
 		}
+	case ItemKindProfile:
+		if ext != ".mobileconfig" || it.Dest != "" || it.App != "" || !profileID.MatchString(it.Identifier) {
+			return errors.New("a profile item's path ends in .mobileconfig, and it takes its PayloadIdentifier as identifier and no dest or app")
+		}
 	default:
-		return fmt.Errorf("kind %q is not one of pkg, app, file", it.Kind)
+		return fmt.Errorf("kind %q is not one of pkg, app, file, profile", it.Kind)
 	}
 	return nil
 }
@@ -160,6 +179,8 @@ type ItemRecord struct {
 	Name   string `json:"name"`
 	SHA256 string `json:"sha256"`
 	State  string `json:"state"`
+	// Identifier is a profile's PayloadIdentifier.
+	Identifier string `json:"identifier,omitempty"`
 }
 
 // installItems installs the list's items in order, after the harnesses and before the self-test, which
@@ -181,11 +202,65 @@ func installItems(ctx context.Context, g ToolsGuest, o ToolsOptions, res *ToolsR
 		}
 		res.Items = append(res.Items, rec)
 	}
+	return readProfiles(ctx, g, res.Items)
+}
+
+// readProfiles reads back which profile items `profiles list` names, marking each installed or staged.
+// A profile is staged at prepare and approved by the person in macos-vm edit-base: macOS installs one
+// only with that approval, or from MDM.
+func readProfiles(ctx context.Context, g ToolsGuest, items []ItemRecord) error {
+	if !slices.ContainsFunc(items, func(r ItemRecord) bool { return r.Kind == ItemKindProfile }) {
+		return nil
+	}
+	out, exit, err := g.Run(ctx, []string{"/usr/bin/profiles", "list"})
+	if err != nil {
+		return err
+	}
+	installed := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		if _, id, ok := strings.Cut(line, "attribute: profileIdentifier:"); ok {
+			installed[strings.TrimSpace(id)] = exit == 0
+		}
+	}
+	for i, r := range items {
+		if r.Kind == ItemKindProfile {
+			items[i].State = map[bool]string{true: ItemInstalled, false: ItemStaged}[installed[r.Identifier]]
+		}
+	}
 	return nil
 }
 
+// StagedProfiles is the guest path of each profile item the base in dir holds staged and not yet
+// installed: what macos-vm edit-base offers the person to approve.
+func StagedProfiles(dir string) ([]string, error) {
+	rec, err := ReadToolsRecord(dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, r := range rec.Items {
+		if r.Kind == ItemKindProfile && r.State == ItemStaged {
+			out = append(out, guestagent.ItemDir(r.Name)+"/"+guestagent.ItemProfile)
+		}
+	}
+	return out, nil
+}
+
+// ReadBackItems reads the base items' state again in g, a boot of the base in dir, and records it in dir's
+// tools.json: macos-vm edit-base's recheck calls it once the person has approved the staged profiles.
+func ReadBackItems(ctx context.Context, g ToolsGuest, dir string) error {
+	rec, err := ReadToolsRecord(dir)
+	if err != nil {
+		return err
+	}
+	if err := readProfiles(ctx, g, rec.Items); err != nil {
+		return err
+	}
+	return writeJSONAtomic(filepath.Join(dir, ToolsRecordFile), rec, 0o600)
+}
+
 func installItem(ctx context.Context, g ToolsGuest, it BaseItem) (rec ItemRecord, err error) {
-	rec = ItemRecord{Kind: it.Kind, Name: it.Name, SHA256: it.SHA256, State: ItemInstalled}
+	rec = ItemRecord{Kind: it.Kind, Name: it.Name, SHA256: it.SHA256, State: ItemInstalled, Identifier: it.Identifier}
 	if it.Kind == ItemKindFile {
 		if err := runItem(ctx, g, "/bin/mkdir", "-p", "-m", "0755", filepath.Dir(it.Dest)); err != nil {
 			return rec, err
@@ -195,6 +270,10 @@ func installItem(ctx context.Context, g ToolsGuest, it BaseItem) (rec ItemRecord
 	dir := guestagent.ItemDir(it.Name)
 	if err := runItem(ctx, g, "/bin/mkdir", "-p", "-m", "0700", dir); err != nil {
 		return rec, err
+	}
+	if it.Kind == ItemKindProfile {
+		// Kept staged for the person's approval in edit-base; readProfiles reads back whether it is installed.
+		return rec, pushItem(ctx, g, it.Path, it.SHA256, dir+"/"+guestagent.ItemProfile, 0o600)
 	}
 	// The stage directory goes after the install, whatever its end.
 	defer func() {

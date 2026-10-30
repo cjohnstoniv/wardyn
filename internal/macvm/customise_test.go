@@ -114,17 +114,19 @@ func TestParseBaseListRefuses(t *testing.T) {
 		return map[string]any{"kind": "file", "name": "f", "path": "/opt/f", "sha256": pin64, "dest": dest}
 	}
 	for name, b := range map[string][]byte{
-		"version 2":         []byte(`{"version":2,"items":[]}`),
-		"an unknown field":  []byte(`{"version":1,"items":[{"kind":"pkg","name":"a","path":"/a.pkg","sha256":"` + pin64 + `","flags":"-allowUntrusted"}]}`),
-		"an unknown kind":   listJSON(t, with("kind", "script")),
-		"a bad name":        listJSON(t, with("name", "../x")),
-		"a name twice":      listJSON(t, ok, ok),
-		"a relative path":   listJSON(t, with("path", "edr.pkg")),
-		"a short pin":       listJSON(t, with("sha256", "abc")),
-		"a pkg not .pkg":    listJSON(t, with("path", "/opt/edr.zip")),
-		"a pkg with dest":   listJSON(t, with("dest", "/Library/x")),
-		"a dmg with no app": listJSON(t, map[string]any{"kind": "app", "name": "a", "path": "/opt/a.dmg", "sha256": pin64}),
-		"a zip with an app": listJSON(t, map[string]any{"kind": "app", "name": "a", "path": "/opt/a.zip", "sha256": pin64, "app": "A.app"}),
+		"version 2":                []byte(`{"version":2,"items":[]}`),
+		"an unknown field":         []byte(`{"version":1,"items":[{"kind":"pkg","name":"a","path":"/a.pkg","sha256":"` + pin64 + `","flags":"-allowUntrusted"}]}`),
+		"an unknown kind":          listJSON(t, with("kind", "script")),
+		"a bad name":               listJSON(t, with("name", "../x")),
+		"a name twice":             listJSON(t, ok, ok),
+		"a relative path":          listJSON(t, with("path", "edr.pkg")),
+		"a short pin":              listJSON(t, with("sha256", "abc")),
+		"a pkg not .pkg":           listJSON(t, with("path", "/opt/edr.zip")),
+		"a pkg with dest":          listJSON(t, with("dest", "/Library/x")),
+		"a dmg with no app":        listJSON(t, map[string]any{"kind": "app", "name": "a", "path": "/opt/a.dmg", "sha256": pin64}),
+		"a zip with an app":        listJSON(t, map[string]any{"kind": "app", "name": "a", "path": "/opt/a.zip", "sha256": pin64, "app": "A.app"}),
+		"a profile, no identifier": listJSON(t, map[string]any{"kind": "profile", "name": "p", "path": "/opt/p.mobileconfig", "sha256": pin64}),
+		"a pkg with an identifier": listJSON(t, with("identifier", "com.example.x")),
 		// A harness's managed settings are written per run (P0), so no item may write them.
 		"claude managed settings":      listJSON(t, file(guestagent.MacClaudeCodeManagedSettingsPath)),
 		"claude managed, another case": listJSON(t, file("/library/application support/claudecode/managed-settings.json")),
@@ -243,5 +245,80 @@ func TestItemsDigestRecordedAndCompared(t *testing.T) {
 	l2.Items = []macvm.BaseItem{{Kind: "pkg", Name: "edr", Path: pkg, SHA256: pin64}}
 	if macvm.ItemsChanged(base, l.Digest()) || !macvm.ItemsChanged(base, l2.Digest()) || !macvm.ItemsChanged(base, "") {
 		t.Fatal("ItemsChanged")
+	}
+}
+
+// profilesGuest answers `profiles list` with the identifiers in installed.
+type profilesGuest struct {
+	*itemGuest
+	installed []string
+}
+
+func (g *profilesGuest) Run(ctx context.Context, argv []string) (string, int, error) {
+	if slices.Equal(argv, []string{"/usr/bin/profiles", "list"}) {
+		g.mu.Lock()
+		g.argvs = append(g.argvs, argv)
+		g.mu.Unlock()
+		var b strings.Builder
+		for i, id := range g.installed {
+			fmt.Fprintf(&b, "_computerlevel[%d] attribute: name: x\n_computerlevel[%d] attribute: profileIdentifier: %s\n", i+1, i+1, id)
+		}
+		fmt.Fprintf(&b, "There are %d system configuration profiles installed\n", len(g.installed))
+		return b.String(), 0, nil
+	}
+	return g.itemGuest.Run(ctx, argv)
+}
+
+// A profile is staged in its root-only directory and kept there; `profiles list` reads back whether it is
+// installed. Until the person approves it in edit-base it is staged, and StagedProfiles names its file;
+// ReadBackItems, edit-base's recheck, records it installed once it is.
+func TestProfileItemsStagedForApproval(t *testing.T) {
+	f, dir := newTools(t), t.TempDir()
+	wifi, wifiPin := itemFile(t, dir, "wifi.mobileconfig", "<plist/>")
+	vpn, vpnPin := itemFile(t, dir, "vpn.mobileconfig", "<plist>vpn</plist>")
+	l, err := macvm.ParseBaseList(listJSON(t,
+		map[string]any{"kind": "profile", "name": "wifi", "path": wifi, "sha256": wifiPin, "identifier": "com.example.wifi"},
+		map[string]any{"kind": "profile", "name": "vpn", "path": vpn, "sha256": vpnPin, "identifier": "com.example.vpn"},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.opts.Items = l
+	g := &profilesGuest{itemGuest: newItemGuest(), installed: []string{"com.example.vpn"}}
+	s := f.itemStage(g.itemGuest)
+	s.Boot = func(context.Context, macvm.MachineSpec) (macvm.ToolsGuest, func(context.Context) error, error) {
+		return g, func(context.Context) error { return nil }, nil
+	}
+	base := t.TempDir()
+	res := runStage(t, s)
+	S := guestagent.MacItemStageDir
+	if slices.Contains(g.steps, "run /bin/rm -rf "+S+"/wifi") || !slices.Contains(g.steps, "push "+S+"/wifi/item.mobileconfig 600") {
+		t.Fatalf("a profile is pushed to its stage dir and kept: %q", g.steps)
+	}
+	for _, r := range g.argvs {
+		if err := guestagent.ToolsExecAllowed(r, guestagent.MacToolsBinDir); err != nil {
+			t.Errorf("the guest refuses %q: %v", r, err)
+		}
+	}
+	if res.Items[0].State != macvm.ItemStaged || res.Items[1].State != macvm.ItemInstalled || res.Items[0].Identifier != "com.example.wifi" {
+		t.Fatalf("%+v", res.Items)
+	}
+	writeToolsRecord := func(rec macvm.ToolsRecord) {
+		b, _ := json.Marshal(rec)
+		if err := os.WriteFile(filepath.Join(base, macvm.ToolsRecordFile), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeToolsRecord(macvm.ToolsRecord{Items: res.Items})
+	if got, err := macvm.StagedProfiles(base); err != nil || !slices.Equal(got, []string{S + "/wifi/item.mobileconfig"}) {
+		t.Fatalf("staged %q %v", got, err)
+	}
+	g.installed = append(g.installed, "com.example.wifi")
+	if err := macvm.ReadBackItems(context.Background(), g, base); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := macvm.ReadToolsRecord(base)
+	if got, _ := macvm.StagedProfiles(base); len(got) != 0 || rec.Items[0].State != macvm.ItemInstalled {
+		t.Fatalf("after approval: %q %+v", got, rec.Items)
 	}
 }

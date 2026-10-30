@@ -371,10 +371,11 @@ func replaceFile(dst string, perm os.FileMode, fill func(*os.File) error) (err e
 const (
 	MacItemStageDir = "/Library/Wardyn/stage"
 	// The staged file of each kind, in its item's directory; a dmg is attached at ItemMount there.
-	ItemPkg   = "item.pkg"
-	ItemZip   = "item.zip"
-	ItemDmg   = "item.dmg"
-	ItemMount = "mnt"
+	ItemPkg     = "item.pkg"
+	ItemZip     = "item.zip"
+	ItemDmg     = "item.dmg"
+	ItemMount   = "mnt"
+	ItemProfile = "item.mobileconfig"
 	// MacApplications is where an app item goes.
 	MacApplications = "/Applications"
 )
@@ -438,7 +439,7 @@ func isItemFile(p, file string) bool { return filepath.Base(p) == file && isItem
 // file item's destination.
 func itemPushAllowed(dest string) bool {
 	if isItemDir(filepath.Dir(dest)) {
-		return slices.Contains([]string{ItemPkg, ItemZip, ItemDmg}, filepath.Base(dest))
+		return slices.Contains([]string{ItemPkg, ItemZip, ItemDmg, ItemProfile}, filepath.Base(dest))
 	}
 	return ItemDestAllowed(dest) == nil
 }
@@ -453,6 +454,7 @@ func itemPushAllowed(dest string) bool {
 //	/usr/bin/hdiutil attach -nobrowse -readonly -noautoopen -mountpoint S/<name>/mnt S/<name>/item.dmg
 //	/usr/bin/ditto S/<name>/mnt/<App>.app /Applications/<App>.app
 //	/usr/bin/hdiutil detach -force S/<name>/mnt
+//	/usr/bin/profiles list                            the profiles installed, read back
 func itemArgvAllowed(argv []string) bool {
 	if len(argv) < 2 {
 		return false
@@ -483,4 +485,5 @@ var itemForms = map[string]func(a []string) bool{
 			isItemFile(a[6], ItemMount) && a[7] == filepath.Dir(a[6])+"/"+ItemDmg
 	},
 	"/usr/bin/hdiutil detach": func(a []string) bool { return len(a) == 4 && a[2] == "-force" && isItemFile(a[3], ItemMount) },
+	"/usr/bin/profiles list":  func(a []string) bool { return len(a) == 2 },
 }

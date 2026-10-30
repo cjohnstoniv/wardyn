@@ -342,11 +342,14 @@ type MacVMItem struct {
 
 // MacVMItem kinds and states.
 const (
-	MacVMItemKindPkg  = "pkg"
-	MacVMItemKindApp  = "app"
-	MacVMItemKindFile = "file"
+	MacVMItemKindPkg     = "pkg"
+	MacVMItemKindApp     = "app"
+	MacVMItemKindFile    = "file"
+	MacVMItemKindProfile = "profile"
 
 	MacVMItemInstalled = "installed"
+	// MacVMItemStaged is a profile waiting for the person's approval in macos-vm edit-base.
+	MacVMItemStaged = "staged"
 )
 
 // MacVMBase.Step, Wait and Failure values. An unknown value is a newer runner's, and decodes as itself.
