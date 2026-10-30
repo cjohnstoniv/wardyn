@@ -53,8 +53,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   organisation CA) beside the Mac's own. Built and unit-tested; not yet run on a real Mac.
 - A Mac's MDM can now attest posture (`MDMManaged`, `DiskEncrypted`) and set `register` and `setup` limits (`MaxRuns`,
   `TotalCPU`, `TotalMemoryGB`, `PerRunCPU`, `PerRunMemoryGB`) from the managed preferences profile, with no posture
-  file to push. Only a device-wide profile is read; a user-scoped one is ignored. `macos-vm prepare` sizes its VM from
-  the per-run keys when the organisation has sent no limit. Built and unit-tested; not yet run on a real Mac.
+  file to push. Posture is read from the device-wide profile only; a user-scoped profile does not attest it.
+  `macos-vm prepare` sizes its VM from the per-run keys when the organisation has sent no limit. Built and
+  unit-tested; not yet run on a real Mac.
 - A Mac now reports when its macOS base was prepared and its build. `macos-vm status` shows the base's age and this
   Mac's macOS, and a new site-config setting, `macos_vm.max_base_age_days`, refuses macOS VM runs on a Mac whose base
   is older (or whose runner reports no age). Built and unit-tested; not yet run on a real Mac.
@@ -287,10 +288,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   no longer says doctor reports a revoked runner's parked receipts (#3614).
 - The proxy's decision log now masks the AWS access key id of the role credentials it re-signs with, as it already
   masked their secret key and session token.
-- macOS VMs: a harness started in a macOS VM's terminal did not get the policy's managed settings, such as its server
-  list and tool rules, or the cloud CLI's managed configuration. They are now written where macOS reads them. A
-  managed file with no macOS location stops the run's start with a reason. A run environment value that names a Linux
-  path with no place in the guest stops the start the same way. Built and unit-tested; not yet run on a real Mac.
+- macOS VMs: a harness started in a macOS VM's terminal did not get the policy's managed settings, such as its
+  autonomy ceiling, tool rules and server list, or the cloud CLI's managed configuration. They are now written where
+  macOS reads them. A managed file with no macOS location stops the run's start with a reason. A run environment value
+  that names a Linux path with no place in the guest stops the start the same way. Built and unit-tested; not yet run
+  on a real Mac.
 - Preparing a macOS VM base no longer logs the guest's tools connection as `tools_dial: transport failure` while it is
   still opening. Stage 2 reads the dial after its first tools request, and logs one still unclassified as `pending`.
   Built and unit-tested; not yet run on a real Mac.
