@@ -229,4 +229,24 @@ describe("Add workspace: where is this folder", () => {
     expect(screen.getByRole("radio", { name: "On the Wardyn server (this host)" })).toBeChecked();
     expect(screen.getByLabelText("Path on this host")).toBeInTheDocument();
   });
+
+  it("ties the visible label to the radio group, and the helper and the notice to it as its description", async () => {
+    listMineMock.mockResolvedValue([MAC]);
+    renderDialog();
+    await pickLocalDir();
+    const group = await screen.findByRole("radiogroup", { name: "Where is this folder?" });
+    expect(group).toHaveAttribute("aria-labelledby", screen.getByText("Where is this folder?").id);
+    expect(group).not.toHaveAccessibleDescription();
+    await userEvent.click(screen.getByRole("radio", { name: "On my runner: ec2-mac-rc9" }));
+    expect(group).toHaveAccessibleDescription("The runner checks the folder when the run starts. The run then runs only on that runner.");
+  });
+
+  it("describes the group by the no-runner line", async () => {
+    renderDialog();
+    await pickLocalDir();
+    await screen.findByText(/You have no runner of your own/);
+    expect(screen.getByRole("radiogroup", { name: "Where is this folder?" })).toHaveAccessibleDescription(
+      "You have no runner of your own. Add one in Settings → My runner with Add this computer.",
+    );
+  });
 });

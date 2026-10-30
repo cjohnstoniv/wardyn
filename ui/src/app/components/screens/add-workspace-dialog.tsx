@@ -310,8 +310,8 @@ export function AddWorkspaceDialog({
           )}
           {askWhere && (
             <div className="space-y-2">
-              <Label>{FOLDER_RUNNER.WHERE}</Label>
-              <RadioGroup value={pickedRunner?.id ?? SERVER} onValueChange={(v) => setRunnerId(v === SERVER ? "" : v)} className="gap-2" aria-label={FOLDER_RUNNER.WHERE}>
+              <Label id="aw-where-label">{FOLDER_RUNNER.WHERE}</Label>
+              <RadioGroup value={pickedRunner?.id ?? SERVER} onValueChange={(v) => setRunnerId(v === SERVER ? "" : v)} className="gap-2" aria-labelledby="aw-where-label" aria-describedby={pickedRunner || noRunnerLine ? "aw-where-note" : undefined}>
                 <label className="flex items-center gap-2 text-sm">
                   <RadioGroupItem value={SERVER} id="aw-where-server" />
                   {FOLDER_RUNNER.ON_SERVER}
@@ -323,9 +323,13 @@ export function AddWorkspaceDialog({
                   </label>
                 ))}
               </RadioGroup>
-              {pickedRunner && <p className="text-meta leading-snug text-muted-foreground">{FOLDER_RUNNER.HELPER}</p>}
+              {pickedRunner && (
+                <p id="aw-where-note" className="text-meta leading-snug text-muted-foreground">
+                  {FOLDER_RUNNER.HELPER}
+                </p>
+              )}
               {noRunnerLine && (
-                <p className="rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-meta leading-snug text-muted-foreground">
+                <p id="aw-where-note" className="rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-meta leading-snug text-muted-foreground">
                   {noRunnerLine}
                 </p>
               )}
