@@ -7,6 +7,7 @@ package docker
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 
@@ -29,6 +30,19 @@ func splitMacDisks(drives []types.DriveMount) (disks, rest []types.DriveMount) {
 		}
 	}
 	return disks, rest
+}
+
+// macDrives is a macOS VM run's folders and drives as the helper and the guest agent take them: its
+// folders and share drives as shared folders (macShares), its disk drives as disks (macDisks).
+func (d *Driver) macDrives(ctx context.Context, spec runner.SandboxSpec) ([]macvm.Share, []guestagent.Mount, []macvm.Disk, []guestagent.Disk, error) {
+	diskDrives, shareDrives := splitMacDisks(spec.Drives)
+	spec.Drives = shareDrives
+	shares, mounts, err := d.macShares(ctx, spec)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	disks, guest, err := d.macDisks(diskDrives)
+	return shares, mounts, disks, guest, err
 }
 
 // macDisks is each disk drive of a macOS VM run as the helper attaches it and the guest agent mounts it.

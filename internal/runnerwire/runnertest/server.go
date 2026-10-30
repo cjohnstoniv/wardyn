@@ -79,6 +79,23 @@ func decode[T any](args json.RawMessage) (T, error) {
 	return v, json.Unmarshal(args, &v)
 }
 
+// reclaimDrive answers reclaim_drive from the substrate's own reclaim, as runnerd's dispatcher does.
+func (s *Server) reclaimDrive(ctx context.Context, args json.RawMessage) (any, error) {
+	rc, ok := s.sub.(runner.DriveReclaimer)
+	if !ok {
+		return nil, runnerwire.Refuse("this runner deletes no drives")
+	}
+	m, err := decode[types.DriveMount](args)
+	if err != nil {
+		return nil, err
+	}
+	outcome, err := rc.ReclaimDrive(ctx, m)
+	if errors.Is(err, runner.ErrDriveInUse) {
+		return runnerwire.ReclaimDriveResult{InUse: true}, nil
+	}
+	return runnerwire.ReclaimDriveResult{Outcome: outcome}, err
+}
+
 func (s *Server) handle(ctx context.Context, id uint32, method string, args json.RawMessage) (any, error) {
 	switch method {
 	case runnerwire.MethodCreateSandbox:
@@ -164,19 +181,7 @@ func (s *Server) handle(ctx context.Context, id uint32, method string, args json
 		}
 		return nil, ws.WorkloadStatus(ctx, a)
 	case runnerwire.MethodReclaimDrive:
-		rc, ok := s.sub.(runner.DriveReclaimer)
-		if !ok {
-			return nil, runnerwire.Refuse("this runner deletes no drives")
-		}
-		m, err := decode[types.DriveMount](args)
-		if err != nil {
-			return nil, err
-		}
-		outcome, err := rc.ReclaimDrive(ctx, m)
-		if errors.Is(err, runner.ErrDriveInUse) {
-			return runnerwire.ReclaimDriveResult{InUse: true}, nil
-		}
-		return runnerwire.ReclaimDriveResult{Outcome: outcome}, err
+		return s.reclaimDrive(ctx, args)
 	case runnerwire.MethodEnsureProxyImg:
 		rv, ok := s.sub.(runner.ProxyReviver)
 		if !ok {

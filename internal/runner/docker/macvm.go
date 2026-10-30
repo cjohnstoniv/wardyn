@@ -352,14 +352,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 		return runner.Sandbox{}, err
 	}
 	// Folders are checked before anything exists, as createVM checks its mounts, and disk drives with them.
-	diskDrives, shareDrives := splitMacDisks(spec.Drives)
-	shareSpec := spec
-	shareSpec.Drives = shareDrives
-	shares, guestMounts, err := d.macShares(ctx, shareSpec)
-	if err != nil {
-		return runner.Sandbox{}, err
-	}
-	disks, guestDisks, err := d.macDisks(diskDrives)
+	shares, guestMounts, disks, guestDisks, err := d.macDrives(ctx, spec)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
