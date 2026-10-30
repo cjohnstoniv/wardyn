@@ -6,7 +6,9 @@ package macvm
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -54,6 +56,23 @@ type downloader struct {
 	progress func(done, total int64)
 	// retrying is told that the range at off failed and is fetched again; total is -1 until known.
 	retrying func(off, total int64)
+	// mirror: the URL is an operator's mirror, not Apple's, so a certificate refusal names the organisation's
+	// CA and not Apple's pinning.
+	mirror bool
+}
+
+// ErrNoRange is what a server that answers a Range request with 200 and the whole file ends the download
+// with: a restore image is fetched in ranges, so a mirror must answer them with 206.
+var ErrNoRange = errors.New("the server answered 200, not 206 Partial Content: a restore image mirror must answer HTTP Range requests")
+
+// mirrorCertAdvice is the cause a certificate refusal of a mirror ends the download with. The mirror's
+// certificate is checked against the Mac's own trust, which a managed Mac fills with the organisation's roots.
+const mirrorCertAdvice = "this Mac does not trust the certificate of %s; install your organisation's CA root in the System keychain (your MDM can) and run prepare again"
+
+// isCertRefusal says err is the TLS verifier refusing a server's certificate.
+func isCertRefusal(err error) bool {
+	var cv *tls.CertificateVerificationError
+	return errors.As(err, &cv)
 }
 
 // fetch downloads url into part, resuming from part's current size, one range
@@ -97,6 +116,18 @@ func (d *downloader) fetch(ctx context.Context, url, part string) error {
 			}
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if d.mirror && isCertRefusal(err) {
+				// Every range is refused the same way; retrying only waits.
+				host := url
+				if u, perr := neturl.Parse(url); perr == nil && u.Hostname() != "" {
+					host = u.Hostname()
+				}
+				return fmt.Errorf(DownloadFailurePrefix+mirrorCertAdvice+": %w", host, err)
+			}
+			if errors.Is(err, ErrNoRange) {
+				// The same answer to every range; retrying only waits.
+				return fmt.Errorf(DownloadFailurePrefix+"%w", err)
 			}
 			if isPinningRefusal(err) {
 				// A proxy that inspects TLS refuses every range the same way; retrying only waits.
@@ -176,6 +207,8 @@ func (d *downloader) fetchRange(ctx context.Context, url string, f *os.File, off
 		total = t
 	case http.StatusRequestedRangeNotSatisfiable:
 		return 0, off, nil // already complete
+	case http.StatusOK:
+		return 0, -1, ErrNoRange
 	default:
 		return 0, -1, fmt.Errorf(DownloadFailurePrefix+"HTTP %d", resp.StatusCode)
 	}

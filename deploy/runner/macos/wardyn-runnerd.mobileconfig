@@ -27,6 +27,11 @@
     LocalModelPort    flag local-model-port     port(s), comma-separated, of a model server on this Mac a run may be relayed
                                              to; left out, none
     MacOSVM           WARDYN_RUNNER_MACOS_VM    true offers macOS VM sandboxes from this Mac (default off)
+    MacOSVMImageURL   flag ipsw-url of macos-vm prepare
+                                             an https mirror of Apple's restore image (it must answer HTTP Range requests); prepare
+                                             downloads from it and never falls back to Apple. Needs MacOSVMImageHash
+    MacOSVMImageHash  flag sha256 of macos-vm prepare
+                                             the SHA-256 (64 hex digits) that mirror's image must have
     MDMManaged        none: profile only        true says this Mac is managed; the organisation's macOS gate takes it as the
                                              posture file's word (evidence mdm_file). An MDM posture.json outranks it; the profile
                                              is read only when that file is absent. Left out, the profile reports no posture
@@ -84,6 +89,10 @@
       <key>LocalModelPort</key>
       <string></string>
       <key>MacOSVM</key>
+      <string></string>
+      <key>MacOSVMImageURL</key>
+      <string></string>
+      <key>MacOSVMImageHash</key>
       <string></string>
       <key>MDMManaged</key>
       <string></string>

@@ -141,6 +141,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Mac now reports when its macOS base was prepared and its build. `macos-vm status` shows the base's age and this Mac's
   macOS, and a new site-config setting, `macos_vm.max_base_age_days`, refuses macOS VM runs on a Mac whose base is older
   (or whose runner reports no age).
+- `wardyn-runnerd macos-vm prepare --ipsw-url <https URL> --sha256 <hex>` builds the macOS base from an image on your own
+  mirror, which must answer HTTP Range requests, and never falls back to Apple. `MacOSVMImageURL` and `MacOSVMImageHash`
+  in the managed profile (or `macos_vm_image_url` and `macos_vm_image_sha256` in `runnerd.json`) set it for setup too.
 
 ### Fixed
 

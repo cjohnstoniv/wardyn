@@ -22,7 +22,8 @@ const (
 	FlagReprepare   = "reprepare"    // prepare only: build a new base and swap it in
 	FlagKeepIPSW    = "keep-ipsw"    // prepare only: keep the restore image
 	FlagIPSW        = "ipsw"         // prepare only: build from this restore image instead of downloading Apple's
-	FlagSHA256      = "sha256"       // prepare only: the SHA-256 the --ipsw file must have
+	FlagSHA256      = "sha256"       // prepare only: the SHA-256 the --ipsw file or the --ipsw-url image must have
+	FlagIPSWURL     = "ipsw-url"     // prepare only: download the restore image from this HTTPS mirror instead of Apple
 	FlagForce       = "force"        // update-tools only: an update someone asked for
 )
 

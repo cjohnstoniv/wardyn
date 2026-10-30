@@ -251,6 +251,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `DockerHost` | `DOCKER_HOST` | the engine's socket, when it is not the default |
 | `ArtifactBase` | `wardyn runner install --artifact-base` | read by the `wardyn` CLI, not `serve`: the release mirror for `wardyn runner install`, `upgrade` and `setup`, ahead of the one saved in `cli.json` |
 | `MacOSVM` | `WARDYN_RUNNER_MACOS_VM` | a boolean, off by default: offers [macOS VM sandboxes](macos-vms.md) from this Mac. The organisation's `WARDYN_MACOS_VMS` must be on as well |
+| `MacOSVMImageURL`, `MacOSVMImageHash` | `macos-vm prepare --ipsw-url`, `--sha256` | an https mirror of Apple's restore image and the SHA-256 its image must have; prepare never falls back to Apple |
 | `MDMManaged` | none: profile only | a boolean: this Mac is managed. The runner reports it with the posture file's evidence (`mdm_file`), only when the posture file below is absent |
 | `DiskEncrypted` | none: profile only | a boolean: the disk is encrypted, read with `MDMManaged`; left out, the runner's own probe answers |
 | `MaxRuns`, `TotalCPU`, `TotalMemoryGB`, `PerRunCPU`, `PerRunMemoryGB` | `--max-runs`, `--total-cpu`, `--total-memory`, `--per-run-cpu`, `--per-run-memory` | defaults for `register` and `setup` limits (a flag wins); `PerRunCPU` and `PerRunMemoryGB` also size `macos-vm prepare` when the organisation has sent no per-run limit |

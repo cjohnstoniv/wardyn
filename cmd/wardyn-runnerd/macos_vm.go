@@ -633,6 +633,10 @@ type prepareArgs struct {
 	// ipsw is a restore image the operator downloaded, built from instead of Apple's download ("": download),
 	// and sha256 the SHA-256 it must have (required with ipsw; the helper checks it on a copy in the cache).
 	ipsw, sha256 string
+	// ipswURL is an HTTPS mirror the restore image is downloaded from instead of Apple's, with sha256 the hash
+	// it must have; it excludes ipsw. Neither given, the profile's MacOSVMImageURL and MacOSVMImageHash stand
+	// for them (setup's prepare has no flags).
+	ipswURL string
 	// newImage builds a new base from Apple's newest restore image even when one is ready (the helper's
 	// --reprepare); without it, a ready base needs no prepare.
 	newImage bool
@@ -714,7 +718,12 @@ type helperJob struct {
 // re-prepare; a ready base and no newImage starts nothing (errMacOSBaseReady). The helper's probe must
 // pass first.
 func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
-	sum, err := macvm.CheckIPSWFlags(a.ipsw, a.sha256)
+	if a.ipsw == "" && a.ipswURL == "" {
+		if a.ipswURL = managedPref("MacOSVMImageURL"); a.ipswURL != "" && a.sha256 == "" {
+			a.sha256 = managedPref("MacOSVMImageHash")
+		}
+	}
+	sum, err := macvm.CheckImageFlags(a.ipsw, a.ipswURL, a.sha256)
 	if err != nil {
 		return err
 	}
@@ -728,6 +737,9 @@ func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
 			return err
 		}
 		extra = append(extra, "--"+macvm.FlagIPSW, path, "--"+macvm.FlagSHA256, sum)
+	}
+	if a.ipswURL != "" {
+		extra = append(extra, "--"+macvm.FlagIPSWURL, a.ipswURL, "--"+macvm.FlagSHA256, sum)
 	}
 	if _, err := macvm.ReadyBase(m.layout.BaseDir(0)); err == nil {
 		if !a.newImage {

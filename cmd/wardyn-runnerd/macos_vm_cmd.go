@@ -86,7 +86,7 @@ func newMacOSVMCommand() *cobra.Command {
 	var cpu float64
 	var memGB int64
 	var keep, newImage bool
-	var ipsw, sha256 string
+	var ipsw, ipswURL, sha256 string
 	prepare := &cobra.Command{Use: "prepare", Short: "Build this Mac's macOS base image from Apple's restore image (hours; it continues in the background)", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			m, runnerID, err := open(cmd)
@@ -97,8 +97,22 @@ func newMacOSVMCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			err = m.startPrepare(cmd.Context(), prepareArgs{helper: m.helper, runnerID: runnerID, cpus: cpus, memoryMiB: memMiB, keepIPSW: keep, ipsw: ipsw, sha256: sha256, newImage: newImage})
+			// The mirror: the flags, else the profile or runnerd.json. A restore image file named with --ipsw
+			// stands alone.
+			imgURL, imgSHA := ipswURL, sha256
+			if ipsw == "" {
+				cfg, cerr := serveConfig(cmd, "")
+				if cerr != nil {
+					return cerr
+				}
+				imgURL, imgSHA = cfg.get("macos_vm_image_url"), cfg.get("macos_vm_image_sha256")
+			}
+			err = m.startPrepare(cmd.Context(), prepareArgs{helper: m.helper, runnerID: runnerID, cpus: cpus, memoryMiB: memMiB, keepIPSW: keep, ipsw: ipsw, ipswURL: imgURL, sha256: imgSHA, newImage: newImage})
 			if errors.Is(err, errMacOSBaseReady) {
+				if imgURL != "" {
+					fmt.Fprintln(cmd.OutOrStdout(), "This Mac's macOS base is ready; nothing to prepare, and the mirror was not used. `--new-image` builds a new one, from the mirror's image.")
+					return nil
+				}
 				if ipsw != "" {
 					fmt.Fprintln(cmd.OutOrStdout(), "This Mac's macOS base is ready; nothing to prepare, and the --ipsw file was not used. `--new-image` builds a new one, from that file.")
 					return nil
@@ -116,7 +130,8 @@ func newMacOSVMCommand() *cobra.Command {
 	prepare.Flags().Int64Var(&memGB, "per-run-memory", 0, "the runner's per-run memory in GB (default: the limit its organisation last sent)")
 	prepare.Flags().BoolVar(&keep, "keep-ipsw", false, "keep Apple's restore image after the base is ready")
 	prepare.Flags().StringVar(&ipsw, "ipsw", "", "build from this macOS restore image (.ipsw) you downloaded instead of downloading Apple's; needs --sha256. With a ready base it does nothing (the file is not used) unless --new-image is given, which builds the new base from this file")
-	prepare.Flags().StringVar(&sha256, "sha256", "", "the SHA-256 (64 hex digits) the --ipsw file must have, from a source you trust; prepare checks a copy in its cache and refuses a file that differs, before anything uses it")
+	prepare.Flags().StringVar(&sha256, "sha256", "", "the SHA-256 (64 hex digits) the --ipsw file or the --ipsw-url image must have, from a source you trust; prepare checks a copy in its cache and refuses an image that differs, before anything uses it")
+	prepare.Flags().StringVar(&ipswURL, "ipsw-url", "", "download the restore image from this HTTPS mirror instead of Apple's; it must answer HTTP Range requests, and needs --sha256. Apple's image is never the fallback (default: the MacOSVMImageURL managed preference or macos_vm_image_url in runnerd.json)")
 	prepare.Flags().BoolVar(&newImage, "new-image", false, "build a new base from Apple's newest restore image (or the --ipsw file) even when one is ready, and swap it in")
 	remove := &cobra.Command{Use: "remove", Short: "Delete this Mac's macOS base images and download cache", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		m, _, err := open(cmd)

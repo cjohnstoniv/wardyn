@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -60,6 +61,10 @@ type runnerFile struct {
 	LocalModelPort string `json:"local_model_port,omitempty"`
 	// MacOSVM turns macOS VM sandboxes on ("1") on a Mac; off when unset.
 	MacOSVM string `json:"macos_vm,omitempty"`
+	// MacOSVMImageURL is an HTTPS mirror of Apple's restore image, and MacOSVMImageHash the SHA-256 its image
+	// must have: `macos-vm prepare` downloads from the mirror instead of Apple, and never falls back to Apple.
+	MacOSVMImageURL  string `json:"macos_vm_image_url,omitempty"`
+	MacOSVMImageHash string `json:"macos_vm_image_sha256,omitempty"`
 }
 
 // Where each setting is read from, in the order serve consults them. A managed preference outranks the
@@ -107,6 +112,8 @@ var runnerFields = []runnerField{
 	{name: "recording_store", flag: "recording-store", env: []string{"WARDYN_RECORDING_STORE"}, managed: "RecordingStore", def: "pg", locked: true, file: func(f *runnerFile) *string { return &f.RecordingStore }},
 	{name: "local_model_port", flag: "local-model-port", env: []string{"WARDYN_LOCAL_MODEL_PORT"}, managed: "LocalModelPort", file: func(f *runnerFile) *string { return &f.LocalModelPort }},
 	{name: "macos_vm", env: []string{"WARDYN_RUNNER_MACOS_VM"}, managed: "MacOSVM", file: func(f *runnerFile) *string { return &f.MacOSVM }},
+	{name: "macos_vm_image_url", flag: "ipsw-url", managed: "MacOSVMImageURL", file: func(f *runnerFile) *string { return &f.MacOSVMImageURL }},
+	{name: "macos_vm_image_sha256", flag: "sha256", managed: "MacOSVMImageHash", file: func(f *runnerFile) *string { return &f.MacOSVMImageHash }},
 }
 
 // profileOnlyKeys are the managed preferences no serve setting stands for: the posture a Mac's MDM attests
@@ -356,6 +363,9 @@ func checkRunnerFile(f runnerFile) error {
 	if _, err := parseLocalModelPorts(f.LocalModelPort); err != nil {
 		return err
 	}
+	if err := checkMacOSVMImage(f.MacOSVMImageURL, f.MacOSVMImageHash); err != nil {
+		return err
+	}
 	if err := refuseProxyCredential("upstream_proxy", f.UpstreamProxy, "WARDYN_UPSTREAM_PROXY"); err != nil {
 		return err
 	}
@@ -364,6 +374,24 @@ func checkRunnerFile(f runnerFile) error {
 	}
 	if err := proxy.ValidUpstreamProxyURL(f.UpstreamProxy); err != nil {
 		return fmt.Errorf("upstream_proxy: %w", err)
+	}
+	return nil
+}
+
+// macOSVMImageSHA256 is a SHA-256 as hex digits.
+var macOSVMImageSHA256 = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+
+// checkMacOSVMImage is the file's macos_vm_image_url (an https URL with no user name or password) and
+// macos_vm_image_sha256 (64 hex digits): both or neither.
+func checkMacOSVMImage(imageURL, sha string) error {
+	if imageURL == "" && sha == "" {
+		return nil
+	}
+	if u, err := url.Parse(imageURL); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+		return errors.New("macos_vm_image_url: an https URL without a user name or password")
+	}
+	if !macOSVMImageSHA256.MatchString(sha) {
+		return errors.New("macos_vm_image_sha256: 64 hex digits, with macos_vm_image_url")
 	}
 	return nil
 }
