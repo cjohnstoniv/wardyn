@@ -237,7 +237,11 @@ func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec 
 			if ref == "" {
 				continue
 			}
-			owned := s.ownsSecretMemoized(ctx, owner, ref)
+			// A store fault is the fixed retryable 503 (capabilityRunRefusal), never a drop.
+			owned, oerr := s.ownsSecretChecked(ctx, owner, ref)
+			if oerr != nil {
+				return nil, nil, oerr
+			}
 			ok, err := cap.allowed(ctx, capSecret, ref)
 			if err != nil {
 				return nil, nil, err

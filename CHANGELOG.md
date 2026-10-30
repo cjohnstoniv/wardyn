@@ -16,7 +16,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A secret-store fault while proving that a person holds their own credential, for a run on their own runner, now
   refuses with the retryable 503 `store_unavailable` instead of reading the credential as the organisation's. At
   dispatch the run fails as unreadable rather than refused. The store is read once per person per request, fault or
-  not.
+  not. The same fault on any other check of a person's own secret (an inline policy, an override, a component, a
+  model provider key) is the same 503, never "unknown secret", a dropped grant or a 500.
 - A run's end no longer loses its settlement when the sandbox stop overruns: the teardown-error audit, the output
   finish, the workspace and record settlement and the cleared sandbox reference each get a budget of their own, so a
   workspace scan is no longer left in `scanning`. A replica that loses the run's lock during that tail now stops it,

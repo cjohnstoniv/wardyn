@@ -914,13 +914,6 @@ func withOwnedSecretMemo(ctx context.Context) context.Context {
 	return context.WithValue(ctx, ownedSecretMemoKey{}, &ownedSecretMemo{byOwner: map[string]ownedSecretAnswer{}})
 }
 
-// ownsSecretMemoized is ownsSecretChecked for a caller that has no answer for a
-// store fault but "not owned" (fail closed; the fault is logged once).
-func (s *Server) ownsSecretMemoized(ctx context.Context, owner, name string) bool {
-	own, _ := s.ownsSecretChecked(ctx, owner, name)
-	return own
-}
-
 // ownsSecretChecked is ownsSecret through the request's memo; its error is
 // errSecretStoreUnavailable. Without a memo in ctx it IS ownsSecret, byte for
 // byte — every caller outside the member run pipeline (policies.go,
