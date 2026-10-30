@@ -13,6 +13,18 @@ const ev = (action: string, target = "", extra: Partial<AuditEvent> = {}): Audit
   ({ id: "e", time: new Date().toISOString(), actor_type: "system", actor: "x", action, outcome: "success", target, ...extra }) as AuditEvent;
 
 describe("audit sentences", () => {
+  it("a skipped run.build row says so, with its reason as the detail; a failed build is unchanged", () => {
+    const reason = "no image builder wired; base image dropped for the convention image";
+    const skipped = ev("run.build", "", { outcome: "failure", data: { skipped: true, fail_closed: false, reason } });
+    expect(describeTabEvent(skipped)).toBe("Skipped part of the sandbox image build");
+    expect(describeTabAction(skipped)).toBe("Skipped part of the sandbox image build");
+    expect(inboundDetail(skipped)).toBe(reason);
+    expect(inboundDetail(skipped, true)).toBe(reason);
+    const failed = ev("run.build", "", { outcome: "failure", data: { reason } });
+    expect(describeTabEvent(failed)).toBe("Built the sandbox image");
+    expect(inboundDetail(failed)).toBeNull();
+  });
+
   it("joins the target to the sentence for the whole line, and leaves it off the action", () => {
     expect(describeEvent(ev("run.create", "r1"))).toBe("Created the run — r1");
     expect(describeAction(ev("run.create", "r1"))).toBe("Created the run");

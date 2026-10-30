@@ -92,6 +92,11 @@ const ACTION_VERB: Record<string, string> = {
   "auth.fail": "failed to sign in to",
 };
 
+// A run.build failure row the run carried on past (a dropped base image, an unbuilt SSH devcontainer): its reason is
+// the row's detail line (inboundDetail), and the failure badge stays.
+const SKIPPED_BUILD = "Skipped part of the sandbox image build";
+const isSkippedBuild = (e: AuditEvent): boolean => e.action === "run.build" && e.data?.skipped === true;
+
 function capitalize(s: string): string {
   return s.length ? s[0].toUpperCase() + s.slice(1) : s;
 }
@@ -148,6 +153,7 @@ function describeParts(e: AuditEvent): AuditParts {
     }
     if (reason === "expired") return whole(ok ? AUDIT.EXPIRED_DELETE_EXPIRED : AUDIT.EXPIRED_DELETE_EXPIRED_FAILED);
   }
+  if (isSkippedBuild(e)) return { lead: SKIPPED_BUILD, sep: " — ", object: e.target ?? "" };
   if (e.action === "run.build" && e.data?.cache_hit === true) {
     return { lead: AUDIT.REUSED_IMAGE, sep: " — ", object: e.target ?? "" };
   }
@@ -184,8 +190,10 @@ export function serviceSource(e: AuditEvent): string | null {
 // inboundDetail is the second line of an inbound.allow / inbound.deny row, from what the row recorded: the request
 // (method and path, never the query), how the caller came (a token or a session) and who they matched, or why they
 // were refused. `withRun` ends the line with the run's short id, for the Audit page, which lists several runs; a run's
-// own Audit tab leaves it off. Null for any other row; a field the row lacks is left out, never guessed.
+// own Audit tab leaves it off. A skipped run.build row's line is its recorded reason. Null for any other row; a field
+// the row lacks is left out, never guessed.
 export function inboundDetail(e: AuditEvent, withRun = false): string | null {
+  if (isSkippedBuild(e)) return typeof e.data?.reason === "string" && e.data.reason ? e.data.reason : null;
   if (!isInbound(e)) return null;
   const d = e.data ?? {};
   const text = (k: string) => (typeof d[k] === "string" && d[k] ? (d[k] as string) : "");
