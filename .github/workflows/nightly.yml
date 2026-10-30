@@ -1454,6 +1454,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # The compose stack's image builds plus Playwright ran this runner out of disk (job 124343399994,
+      # "No space left on device"): the same disk step as the k6 legs (see there).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
