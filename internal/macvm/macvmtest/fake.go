@@ -324,7 +324,7 @@ type FirstBoot struct {
 	boots          int
 	last           BootArgs
 	done           chan error
-	stopOnce       sync.Once
+	stopOnce       *sync.Once // one per boot: an earlier boot's Shutdown may still be in Do when the next Boot runs
 	opened, closed int
 }
 
@@ -369,7 +369,7 @@ func (f *FirstBoot) Boot(disk, aux string, hw, mid []byte, cpus uint, mem uint64
 	}
 	f.last = BootArgs{disk, aux, hw, mid, cpus, mem, user, pass}
 	f.done = make(chan error, 1)
-	f.stopOnce = sync.Once{}
+	f.stopOnce = new(sync.Once)
 	stop := func(context.Context) error { f.Shutdown(nil); return nil }
 	return macvm.FirstBoot{Done: f.done, Stop: stop, Screen: f.screen}, nil
 }
@@ -395,7 +395,7 @@ func (f *FirstBoot) Windows() (opened, closed int) {
 func (f *FirstBoot) Shutdown(err error) {
 	f.mu.Lock()
 	d := f.done
-	once := &f.stopOnce
+	once := f.stopOnce
 	f.mu.Unlock()
 	if d != nil {
 		once.Do(func() { d <- err })
