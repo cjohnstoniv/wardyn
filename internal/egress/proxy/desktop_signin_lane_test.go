@@ -59,6 +59,13 @@ type signinLaneRig struct {
 // newSigninLaneRig builds the rig; each with edits the proxy's options first.
 func newSigninLaneRig(t *testing.T, with ...func(*Options)) *signinLaneRig {
 	t.Helper()
+	return newSigninLaneRigFor(t, false, with...)
+}
+
+// newSigninLaneRigFor is newSigninLaneRig for a container run, or a desktop VM
+// run when vm is set (before either listener serves).
+func newSigninLaneRigFor(t *testing.T, vm bool, with ...func(*Options)) *signinLaneRig {
+	t.Helper()
 	rig := &signinLaneRig{logs: &lockedBuf{}, upstream: captureUpstream(t, true, "site-ok")}
 	rig.goodCred = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
 
@@ -97,6 +104,9 @@ func newSigninLaneRig(t *testing.T, with ...func(*Options)) *signinLaneRig {
 		edit(&opts)
 	}
 	p := newProxy(opts)
+	if vm {
+		p.vm, p.portRule = true, effectivePortRule(true, "")
+	}
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(rig.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })

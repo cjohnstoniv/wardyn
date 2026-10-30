@@ -39,7 +39,11 @@ func TestDoctorRunnerExitsStageSaysWhenReceiptsAreParked(t *testing.T) {
 	}
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
-	if st := parkedExitStage(t.Context(), sdk.New(srv.URL, doctorToken), id); st.Status != doctor.StatusSkip {
+	st := parkedExitStage(t.Context(), sdk.New(srv.URL, doctorToken), id)
+	if st.Status != doctor.StatusSkip {
 		t.Errorf("a runner the organisation does not show: %+v, want skip", st)
+	}
+	if !strings.Contains(st.Detail, "revoked") || !strings.Contains(st.Detail, "runner.exit.park") {
+		t.Errorf("the skip does not point a revoked runner's owner at the administrator's audit rows: %+v", st)
 	}
 }

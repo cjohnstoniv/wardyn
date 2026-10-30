@@ -36,6 +36,7 @@
     "WARDYN_MITM_CA_PEM": "\u003cpem\u003e",
     "WARDYN_PROXY_URL": "http://wardyn-proxy:3128",
     "WARDYN_RUN_ID": "\u003cuuid\u003e",
+    "WARDYN_SERVICE": "0",
     "http_proxy": "http://wardyn-proxy:3128",
     "https_proxy": "http://wardyn-proxy:3128",
     "no_proxy": "wardyn-proxy,localhost,127.0.0.1,::1",

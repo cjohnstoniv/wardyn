@@ -773,6 +773,7 @@ func caseRestartWhileUnbound(t *testing.T, e *env) {
 	e.cleanupRun(t, id)
 	v1 := e.store.view(nil)
 	d1 := e.newDriver(t, v1)
+	e.setSched(t, e.pin)
 	e.cordonSeen(t, e.pin) // the node is in the before-list, but nothing binds yet
 	t.Cleanup(func() { e.cordon(t, e.pin, false) })
 	ctx1, cancel1 := context.WithCancel(bg)

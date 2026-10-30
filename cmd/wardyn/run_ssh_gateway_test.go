@@ -411,6 +411,37 @@ func TestRunEditor_WritesTheHostBlockAsksThenOpensCode(t *testing.T) {
 	eq(t, readArgs(t, codeLog), []string{"--remote", "ssh-remote+wardyn-a1b2c3d4", "/home/agent/app"})
 }
 
+// An Include under a Host or Match line reaches only that block's hosts, so it is not the global Include
+// the editor needs: the consent flow runs, and a decline leaves the file as it was.
+func TestRunEditor_AnIncludeUnderHostOrMatchIsNotTheGlobalOne(t *testing.T) {
+	for _, existing := range []string{
+		"Host other\n  Include ~/.wardyn/ssh_config\n",
+		"Match host other\n  Include ~/.wardyn/ssh_config\n",
+		"Host a\n  User me\nInclude ~/.wardyn/ssh_config\n",
+		"Host=other\n  Include ~/.wardyn/ssh_config\n",
+	} {
+		home := homeWithKey(t, true)
+		codeLog := fakeCode(t)
+		sshDir := filepath.Join(home, ".ssh")
+		if err := os.MkdirAll(sshDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(sshDir, "config"), existing)
+		f := newGatewayFixture(t, gatewayOnHealthz, oneKey)
+		out, err := runGateway(t, runEditorCmd, f, "n\n", testRunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out, "[y/N]") || !strings.Contains(out, "Not changed") {
+			t.Errorf("config %q: output = %q, want the consent question and a decline", existing, out)
+		}
+		if got, _ := os.ReadFile(filepath.Join(sshDir, "config")); string(got) != existing {
+			t.Errorf("config %q: ~/.ssh/config = %q, want it unchanged", existing, got)
+		}
+		neverRan(t, codeLog)
+	}
+}
+
 func TestRunEditor_DecliningLeavesSSHConfigAloneAndOpensNothing(t *testing.T) {
 	for _, answer := range []string{"n\n", "\n", ""} {
 		home := homeWithKey(t, false)
@@ -621,5 +652,23 @@ func TestRunEditor_RefusesARelativeDir(t *testing.T) {
 	f := newGatewayFixture(t, gatewayOnHealthz, oneKey)
 	if _, err := runGateway(t, runEditorCmd, f, "y\n", testRunID, "--dir", "work"); err == nil || !strings.Contains(err.Error(), "absolute path") {
 		t.Errorf("err = %v, want the absolute-path refusal", err)
+	}
+}
+
+// ssh separates a keyword from its argument with spaces, an "=", or both.
+func TestSSHConfigLine(t *testing.T) {
+	for ln, want := range map[string][2]string{
+		"Include ~/.wardyn/ssh_config":   {"Include", "~/.wardyn/ssh_config"},
+		"  Include=~/.wardyn/ssh_config": {"Include", "~/.wardyn/ssh_config"},
+		"Include = ~/.wardyn/ssh_config": {"Include", "~/.wardyn/ssh_config"},
+		"\tHost=other":                   {"Host", "other"},
+		"Match host other":               {"Match", "host other"},
+		"Include a b":                    {"Include", "a b"},
+		"":                               {"", ""},
+		"# Host other":                   {"#", "Host other"},
+	} {
+		if kw, arg := sshConfigLine(ln); kw != want[0] || arg != want[1] {
+			t.Errorf("sshConfigLine(%q) = %q, %q; want %q, %q", ln, kw, arg, want[0], want[1])
+		}
 	}
 }

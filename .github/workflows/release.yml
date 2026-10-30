@@ -339,7 +339,7 @@ jobs:
         run: |
           echo "workflow_dispatch dry_run=true rehearsal: preflight-green's checks apply only to a real vX.Y.Z tag push, or a workflow_dispatch with dry_run=false."
       - if: steps.path.outputs.path == 'promote'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -501,13 +501,13 @@ jobs:
       # compile stages do NOT use this — they cross-compile (see the header).
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
@@ -711,13 +711,13 @@ jobs:
       # binfmt_misc handlers — see the `images` job's identical step for why.
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         if: env.DOCKERHUB_USERNAME != ''
         with:
           username: ${{ env.DOCKERHUB_USERNAME }}
@@ -924,7 +924,7 @@ jobs:
       # first-time setup does not race inside the parallel loop.
       - name: Initialize the cosign trust root
         run: cosign initialize
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1389,7 +1389,7 @@ jobs:
           # action's own default floats, and one release must not be signed by
           # two different cosign majors.
           cosign-release: "v2.6.4"
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v3
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

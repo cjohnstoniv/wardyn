@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- The workloads guide now explains that a workload's policy is laid onto the deployment default, and how to launch on a local runner.
 - Denying any Azure DevOps host now withdraws the person's Azure DevOps credential lane: its credentials and the hosts
   it added; hosts your policy allows itself stay reachable without the credential. This holds at dispatch and on a
   revive. A deny on `dev.azure.com` alone used to leave the person's credential on `<org>.visualstudio.com` and the
@@ -21,6 +22,43 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- The error body of a `capability_feature` refusal now carries `feature`, the feature it names (such as `inbound` or
+  `custom_component`), and the New Run page reads it to tell an inbound-app refusal from the other feature refusals.
+  It used to match the wording of the message, so rewording the message would have turned the notice off (#3769).
+- Retrying an AWS model sign-in no longer shows the new sandbox as waiting for AWS before it has shown a code. While
+  the retry launched, the old sandbox, still stopping, could put its device code on screen and move the new run's
+  progress to the waiting step (#3407).
+- Setup's Egress redirection step no longer records a redirect test for a target that is no longer configured. A test
+  still running when its redirect was saved with a new To used to land as the redirect's verdict and could open the
+  corporate-network gate; it is now dropped, and a test of an unchanged redirect still counts (#3517).
+- When a person's Azure DevOps sign-in lacks the permissions Wardyn needs to create tokens, Settings and Getting started
+  now agree: both say the administrator needs to finish setting up Azure DevOps, and both keep Connect, so the person
+  can sign in again once the permissions are granted. Settings offered no Connect, and Getting started left out the
+  administrator step (#3520).
+- Settings → Signed-in CLIs now says a file-stored sign-in ends after 7 days at most. It used to say 7 days for every
+  such session, though a shorter configured session lifetime ends it sooner; the Ends column shows the real expiry
+  (#3402, #3813).
+- Saving Settings → Runner credentials no longer fails with a 422 when the stored policy holds an older row with an
+  empty posture requirement, such as Git tokens stored on the runner with `require_posture: {}`. Rows you did not
+  edit now go back exactly as stored (#3502, #3816).
+- On the Runs page, the Agent tasks, Environments and Apps & scripts segments now say how to start one when you have
+  none, as Services does. They used to show "No runs match these filters" (#3782).
+- On the Approvals page, a decision the server refuses because the run owner's own walls deny the host now turns that
+  request's Approve off and shows whose walls block it, as a request the walls already block does. It used to leave
+  Approve live with no reason (#3781).
+- The Wardyn boundary page tells you to reload when the person signed in changed while a draft was open (#3406).
+- A terminal client promoted to writer while its attach was still opening is now shown as the writer. Its opening frame
+  could land after the promotion's and leave its terminal read-only until it reconnected (#3403).
+- An SSH sign-in refused because its run could not be read now names the key's owner in its `ssh.authenticate` row,
+  with reason `run lookup failed` for a store fault and `unknown run` for a missing run. It used to name `unknown` and
+  say `unknown run` for both (#3508).
+- A UI relay connection now closes its sandbox side before it writes its `ui.close` row, and writes the row off the
+  closing path. A stuck audit write held every closing relay connection open.
+- A run's second UI app now opens while the first app's idle relay connections fill the run's 8-connection cap: at the
+  cap the relay closes idle pooled connections and tries again. It used to answer a `503` at once, for up to 90
+  seconds (#3507).
+- A macOS VM's plain-HTTP relay refuses CONNECT and drops the relay's own flow and stage headers a guest sends, so a
+  guest can no longer raise approval asks under a flow it did not open.
 - An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
   edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
   terminal. They used to stay open until they closed or reached their time limit (#3398).
@@ -39,9 +77,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A model gateway host both vendors share that is also the run's own model endpoint is now inspected as that endpoint's
   vendor. Under fail-closed inspection its request bodies were refused as uninspected (#3819).
 - A run's container `CONNECT` tunnels are now capped at 1,024 open at once, the bound desktop VM tunnels already have.
-  The next one is refused with a `503`, `Retry-After` and `X-Wardyn-Egress-Reason: builtin:tunnel-limit`, and a
-  `builtin:tunnel-limit` deny row; it is admitted once a tunnel closes. Before, a process could hold any number of
-  tunnels open (#3698).
+  The next one is refused with a `503`, `Retry-After`, `X-Wardyn-Host` and `X-Wardyn-Egress-Reason:
+  builtin:tunnel-limit`, and a `builtin:tunnel-limit` deny row; it is admitted once a tunnel closes. Before, a process
+  could hold any number of tunnels open (#3698). The person's sign-in tunnels count too. A desktop VM's tunnels count
+  only at its network relay, so a VM at its own bound still leaves room for the person to sign in.
 - With `WARDYN_FILE_SECRET_PLACEHOLDERS` on, a file named by two `file_secret` grants now holds the placeholder of the
   grant that delivered it. A later grant's placeholder replaced it, so requests to the delivering grant's host lost
   their credential.
@@ -106,6 +145,62 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   image, or run setup with `--proxy-image` set to it. It showed only a generic sidecar failure.
 - A Kubernetes runner no longer stops a run's proxy pod created while it lists its namespaces: the list read the pod
   as gone, and the run failed with the proxy's config stage "exited" (exit code 137, `ContainerStatusUnknown`) (#3823).
+- New Run Review no longer calls a local MCP server's secret a Kubernetes service account when it shares an
+  organisation row with a cluster, and the Tools step's added local server card no longer shows another component's
+  command or secret name while a later preview is out (#3409).
+- Check again on New Run Review now reads the web app gateway and the drive catalogue again, so a gateway turned on or a
+  drive deleted since the page opened clears its blocker (#3410, #3420).
+- One "Your walls leave out" line on New Run Review no longer hides the walls' warning for the other host list (#3797).
+  The effective-policy card's Network row and the Access group's host count no longer count the hosts your walls take out (#3780).
+- New Run checks a service health path's characters and length before launch, as the server does (#3776), and the Tools
+  step's harness fields fit a 320 px viewport (#3818).
+- A credential refusal from Review's preflight refreshes the model-access banner at once instead of at its next poll.
+- A service run's Service panel now takes the head of the cockpit's right column as the saved layout has it, not always the
+  column starting at 8, and moves down only the widgets under it (#3784).
+- On a run's own Approvals tab, an approval the run owner's walls refuse now closes the way it does on the Approvals page:
+  the walls card, Approve off and Deny on. It stayed live with no reason (#3781).
+- The lease sweep no longer re-reads a healthy service's limits, sponsor and policy on every pass. It reads the
+  owner's authority to extend only once a `run.ending_soon` warning would be due, and the renewal re-checks it as
+  before (#3762).
+- An image whose own `ENV` sets `WARDYN_SERVICE=1` no longer turns a plain command run into a service that restarts
+  in a loop. Dispatch now sets `WARDYN_SERVICE=0` on every run that is no service, and the sandbox's env wins over the
+  image's (#3763).
+- A workload launch refused `placement_credential` for one of its policy's grants now says that the grant may come
+  from the default policy, which a workload's `inline_policy` is laid onto, and that `eligible_grants` (`[]` for none)
+  replaces it. The console's last refusal says so in plain words and, for a reader who may see it, adds the server's
+  sentence naming the grant.
+- With several Kubernetes runners serving one bound namespace, one runner's late full list no longer deletes a workload
+  another runner applied since, and a late report of a deleted resource's uid no longer overwrites the recreated
+  resource's workload. A prune, or a report of another uid, now counts only from the runner that last applied the
+  workload, or from another once that runner has left the pool; a report from a runner session a newer one replaced
+  writes nothing. A short-lived duplicate run can last until the reporting runner's delete arrives.
+- A runner that was refused events, then went quiet or was revoked, no longer leaves its refusal bookkeeping in the
+  organisation's memory for good. It is dropped a day after the window opened, and a summary of rows suppressed after
+  the bound is lost if the runner stays silent that long (#3663).
+- A run ended `gone` (its runner reported the sandbox gone with no exit code) now shows a failure hint saying so: the
+  container, pod or VM was removed, or its host restarted, including when the lease sweep finishes the end. It was
+  FAILED with no reason on its page (#3669).
+- A runner that resumes its session and keeps dying within seconds of READY with an event unacknowledged, five times in
+  a row, now starts a fresh session and logs a warning, instead of resuming for good against an organisation that
+  refuses that event. An agent exit or spool record is still replayed and keeps failing until the organisation is
+  upgraded (#3660).
+- `wardyn secret set` and `wardyn-aws-sso` no longer take standard input on `/dev/null` for a terminal. An unattended
+  run with input from `/dev/null` now reads it as piped input, or refuses, instead of offering the interactive prompt
+  (#3106).
+- `wardyn run --editor` no longer counts an `Include` under a `Host` or `Match` block in `~/.ssh/config` as the one it
+  needs. Only an `Include` above the first of those lines counts; otherwise it asks before adding its own at the top
+  (#3415).
+- `wardyn runner list --no-limits` now filters every page of runners, not only the one it fetched, so a runner with
+  no limits set past the first page is listed. `--limit` and `--offset` then cut the filtered list (#3811).
+- `wardyn runner install` on a computer that already runs a runner now says it is upgrading and ignores `--pool`,
+  `--default` and `--name`, instead of dropping them silently. `--artifact-base` is saved in `cli.json` only after the
+  release or runner downloaded from it has been verified, so a mirror that served something refused is no longer
+  remembered (#3551).
+- `wardyn doctor`'s `runner-exits` stage, when the organisation will not show the runner, now says a revoked runner is
+  not shown to its owner and points at the administrator's `runner.exit.park` audit rows. `docs/runner-offline.md`
+  no longer says doctor reports a revoked runner's parked receipts (#3614).
+- The proxy's decision log now masks the AWS access key id of the role credentials it re-signs with, as it already
+  masked their secret key and session token.
 
 ### Security
 

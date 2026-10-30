@@ -199,7 +199,29 @@ func (s *Server) endGoneRun(ctx context.Context, st store.PG, run types.AgentRun
 	s.kickQueue()
 	run.LostAt, run.LostReason = &at, types.LostGone
 	s.stopKeptRun(ctx, st, run, types.RunFailed, "run.lost", map[string]any{"reason": string(types.LostGone), "kept": false})
+	s.noteGoneRunHint(ctx, run.ID)
 	return true
+}
+
+// goneRunFailureHint is the failure_hint of a run ended gone: nothing else says why it failed.
+const goneRunFailureHint = "Its runner reported the sandbox gone with no exit code: the container, pod or VM was " +
+	"removed, or its host restarted."
+
+// noteGoneRunHint sets goneRunFailureHint on runID once it is FAILED with no hint of its own. Best-effort, like every
+// other hint write: a run the end did not land on, or that ended some other way, is left.
+func (s *Server) noteGoneRunHint(ctx context.Context, runID uuid.UUID) {
+	setter, ok := s.cfg.Store.(runFailureHintSetter)
+	if !ok {
+		return
+	}
+	cur, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil || cur.State != types.RunFailed || cur.FailureHint != "" {
+		return
+	}
+	if err := setter.SetRunFailureHint(ctx, runID, goneRunFailureHint); err != nil {
+		slog.WarnContext(ctx, "wardynd: could not persist the gone run failure hint",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+	}
 }
 
 // runnerOfflineSweeps runs OfflineFromRunner off the Hub's session slot: at

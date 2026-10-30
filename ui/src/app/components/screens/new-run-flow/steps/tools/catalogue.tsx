@@ -357,7 +357,7 @@ export function AddTools({ access, answered, intent, answeredFor, githubRepos = 
           <h3 className="text-sm font-medium">{NR_TOOLS.ADDED_HEADING}</h3>
           <ul className="flex flex-col gap-2">
             {addedRows.map((row) => isLocalMcp(row) && access ? (
-              <ToolCard key={row.id} icon={CARD_ICON.mcp} title={row.name} sub={NR_TOOLS.SUB_RUN_ONLY} access={localMcpAccess(row, access, intent, runFacts)} look="added">
+              <ToolCard key={row.id} icon={CARD_ICON.mcp} title={row.name} sub={NR_TOOLS.SUB_RUN_ONLY} access={localMcpAccess(row, access, { ...intent, components: answeredFor }, runFacts)} look="added">
                 {(details) => (
                   <RowAction
                     name={row.name}

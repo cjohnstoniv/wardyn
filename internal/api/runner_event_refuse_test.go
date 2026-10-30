@@ -240,3 +240,25 @@ func TestRefusalRowsBounded(t *testing.T) {
 		t.Fatalf("first refusal of the next window = %+v (summary %+v), want its row and a summary of 100", last, last.Summary)
 	}
 }
+
+// A runner that suppressed rows and then goes quiet (revoked, say) owes its summary for a day; after that its window
+// is dropped by the next refusal of any other runner, instead of staying in memory.
+func TestRefusalWindowOwingASummaryIsDroppedAfterADay(t *testing.T) {
+	start := time.Now().UTC()
+	var r runnerEventRefusals
+	quiet, other := uuid.New(), uuid.New()
+	for range runnerEventRefuseRows + 6 {
+		r.count(quiet, start)
+	}
+	r.count(other, start.Add(runnerEventRefuseWindow))
+	if _, ok := r.byRunner[quiet]; !ok {
+		t.Fatal("a window that suppressed rows was dropped before its summary was owed for a day")
+	}
+	if _, _, sum := r.plan(quiet, start.Add(runnerEventRefuseWindow)); sum == nil || sum.Suppressed != 5 {
+		t.Fatalf("summary owed after an hour = %+v, want 5 suppressed", sum)
+	}
+	r.count(other, start.Add(runnerEventRefuseOwedKeep))
+	if _, ok := r.byRunner[quiet]; ok {
+		t.Fatal("a window that suppressed rows stayed in memory a day after it opened")
+	}
+}

@@ -747,7 +747,8 @@ const (
 	reasonWorkloadBindingConflict    = "workload_binding_conflict"     // 409: the namespace is bound on the pool already
 	reasonWorkloadBindingNotFound    = "workload_binding_not_found"    // 404: no such binding
 	reasonWorkloadBindingPoolScope   = "workload_binding_pool_scope"   // 422: the pool is a person's own; a binding names an organization pool only
-	// A custom resource's status reason (runner_workloads.go), never an HTTP answer.
+	// A custom resource's status reason (runner_workloads.go), never an HTTP error reason. A launch records
+	// workload_binding_inactive as its refusal, so a restart's 200 (launch.reason) and last_refusal may carry it.
 	reasonWorkloadPoolMismatch    = "workload_pool_mismatch"    // the resource names a runner pool other than its namespace binding's
 	reasonWorkloadBindingInactive = "workload_binding_inactive" // the binding's identity is suspended or retired, its sponsor changed, or the sponsor's access was revoked
 )

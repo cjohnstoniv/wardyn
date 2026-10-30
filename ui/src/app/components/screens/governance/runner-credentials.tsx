@@ -100,11 +100,18 @@ const osMinOf = (row: RowDraft) => ({
 });
 
 // The document the draft writes: only classes that are not Don't allow, a posture only under Store on the runner.
+// A row the person has not edited goes back exactly as stored: the server lets an unbuildable row through only when
+// it equals the stored one, and rebuilding drops an empty stored posture (a release before 0.9.7 wrote one).
 function policyFrom(draft: Draft, stored: DeliveryPolicy): DeliveryPolicy {
   const classes: DeliveryPolicy["classes"] = {};
   for (const c of editable) {
     const row = draft[c];
     if (row.mode === "refuse") continue;
+    const was = stored.classes[c];
+    if (was && JSON.stringify(row) === JSON.stringify(rowFrom(was))) {
+      classes[c] = was;
+      continue;
+    }
     const cp: ClassPolicy = { mode: row.mode };
     if (row.mode === "runner_resident") {
       const os_min = osMinOf(row);

@@ -4,7 +4,11 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -155,5 +159,39 @@ func TestRunnerRemotePeopleClear_SaysWhatItDid(t *testing.T) {
 	out, err := execCmdCapture(t, "runner", "remote", "people", "clear", "docker", "--url", srv.URL, "--token", "t")
 	if err != nil || !strings.Contains(out, "docker") || !strings.Contains(out, "no longer available to people's pools") {
 		t.Errorf("people clear = %q, %v; want a line naming the runner and the change", out, err)
+	}
+}
+
+// `wardyn runner list --no-limits` filters every page, not only the first one fetched: the runners with
+// no limits are the last of 250, behind two full pages of runners that have them.
+func TestRunnerListNoLimits_ReadsEveryPage(t *testing.T) {
+	const serverPage = 100
+	var rows []sdk.RunnerView
+	for i := range 250 {
+		r := sdk.RunnerView{ID: uuid.New(), Name: fmt.Sprintf("runner-%03d", i), State: "claimed", Limits: &sdk.RunnerLimits{RunsAtOnce: 4}}
+		if i == 150 || i == 240 {
+			r.Limits = nil
+		}
+		rows = append(rows, r)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		if limit <= 0 || limit > serverPage {
+			limit = serverPage
+		}
+		end := min(offset+limit, len(rows))
+		w.Header().Set("Content-Type", "application/json")
+		if end < len(rows) {
+			w.Header().Set("X-Wardyn-Truncated", "true")
+		}
+		_ = json.NewEncoder(w).Encode(rows[min(offset, end):end])
+	}))
+	t.Cleanup(srv.Close)
+	for _, args := range [][]string{{"runner", "list", "--no-limits"}, {"runner", "list", "--all", "--no-limits"}} {
+		out, err := execCmdCapture(t, append(args, "--url", srv.URL, "--token", "t")...)
+		if err != nil || !strings.Contains(out, "runner-150") || !strings.Contains(out, "runner-240") || strings.Contains(out, "runner-000") {
+			t.Fatalf("%v = %v\n%s\nwant both runners with no limits, from the later pages, and no other", args, err, out)
+		}
 	}
 }

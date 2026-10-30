@@ -134,7 +134,7 @@ func (p *Proxy) serveSignin(w http.ResponseWriter, r *http.Request) {
 	if p.refuseGrantHostTunnel(w, r, host, port) {
 		return
 	}
-	p.openTunnel(w, r, host, port, target, log, nil)
+	p.openTunnel(w, r, host, port, target, log, nil, false)
 }
 
 // signinAuthorized reports whether header carries a credential of an open

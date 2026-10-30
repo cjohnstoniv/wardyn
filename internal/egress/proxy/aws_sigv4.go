@@ -500,6 +500,7 @@ func (p *Proxy) awsSigV4Credentials(ctx context.Context) (aws.Credentials, error
 	if err != nil {
 		return aws.Credentials{}, err
 	}
+	procMaskFor(p.maskKey, []byte(creds.AccessKeyID))
 	procMaskFor(p.maskKey, []byte(creds.SecretAccessKey))
 	procMaskFor(p.maskKey, []byte(creds.SessionToken))
 	d.creds = creds

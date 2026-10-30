@@ -91,6 +91,38 @@ func TestInboundDeclaredRefusal(t *testing.T) {
 			if code != http.StatusForbidden || !strings.Contains(body, `"reason":"capability_feature"`) {
 				t.Fatalf("got %d %s, want 403 capability_feature", code, body)
 			}
+			if !strings.Contains(body, `"feature":"inbound"`) {
+				t.Fatalf("body %s, want feature inbound for the console to branch on", body)
+			}
+		})
+	}
+}
+
+// A capability_feature refusal names the feature it is about, whatever the door, and only that kind does.
+func TestCapabilityFeatureRefusalNamesItsFeature(t *testing.T) {
+	for _, tc := range []struct{ kind, value, want string }{
+		{capFeature, featureInbound, "inbound"},
+		{capFeature, featureCustomComponent, "custom_component"},
+		{capAgent, "claude", ""},
+	} {
+		t.Run(tc.kind+"/"+tc.value, func(t *testing.T) {
+			srv := capServer(&capStore{restricted: map[string]map[string]bool{tc.kind: {tc.value: true}}})
+			srv.cfg.Audit = &recRecorder{}
+			srv.cfg.Now = time.Now
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(memberCtx([]string{"eng"}))
+			refusal := srv.runCapabilityRefusal(r, tc.kind, tc.value, "runs.test", "no")
+			if refusal == nil {
+				t.Fatal("admitted, want refused")
+			}
+			w := httptest.NewRecorder()
+			refusal.write(srv, w, r)
+			var body errorBody
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Feature != tc.want || body.Error != "no" || w.Code != http.StatusForbidden {
+				t.Fatalf("got %d %s, want 403 with feature %q", w.Code, w.Body.String(), tc.want)
+			}
 		})
 	}
 }

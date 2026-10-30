@@ -61,6 +61,15 @@ func runnerInstallCmd(client clientFn, sess *sessionState) *cobra.Command {
 			if local, err := findRunnerIdentity(); err != nil {
 				return err
 			} else if local.dir != "" && fileExists(installedRunnerd()) {
+				var ignored []string
+				for _, name := range []string{"pool", "default", "name"} {
+					if cmd.Flags().Changed(name) {
+						ignored = append(ignored, "--"+name)
+					}
+				}
+				if len(ignored) > 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), copyUpgradeIgnores+"\n", strings.Join(ignored, ", "))
+				}
 				return runRunnerUpgrade(cmd, version, f.artifactBase)
 			}
 			f.release = version
@@ -337,6 +346,10 @@ func signedRunnerd(ctx context.Context, f runnerSetupFlags, _, advertised string
 		err = os.Chmod(dst, 0o700)
 	}
 	if err != nil {
+		cleanup()
+		return "", none, err
+	}
+	if err := saveArtifactBase(f.artifactBase); err != nil {
 		cleanup()
 		return "", none, err
 	}

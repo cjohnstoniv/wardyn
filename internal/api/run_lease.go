@@ -84,6 +84,7 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		// endGoneRun's mark landed and its end did not (a failed write, or an end moved between its
 		// read and its CAS): end it from this pass's fresher row. Revive never claims a gone run.
 		s.stopKeptRun(ctx, leaser, run, types.RunFailed, "run.lost", map[string]any{"reason": string(types.LostGone), "kept": false})
+		s.noteGoneRunHint(ctx, run.ID)
 	case run.LostAt != nil:
 		ended := run.LostReason == types.LostEnded
 		if until, ok := s.keptUntil(run); ok && !now.Before(until) {

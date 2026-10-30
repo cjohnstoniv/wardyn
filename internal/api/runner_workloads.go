@@ -58,7 +58,14 @@ const workloadBindingGoneMsg = "No namespace binding binds this workload's names
 // the binding and records; a launch, a run's end and every status push go on in the background, because
 // each of them may call this same runner. A report outside the wire's shape is refused for good; a
 // resource that is not a workload Wardyn accepts is acknowledged and answered by its status.
-func (s *Server) WorkloadFromRunner(ctx context.Context, runnerID uuid.UUID, ev runnerwire.Event) error {
+//
+// session is the runner session the frame came in on, fresh or resumed (remote.EventSession). One
+// runner's reports are in order within its session, and every write a report makes holds only while that
+// session is the runner's current one (store.ErrWorkloadStaleSession), so a frame of a session a newer
+// one replaced writes nothing; the runner's next full report carries the resource. Two runners' reports
+// are not in order, so a prune, or a report of another uid, counts only from the runner that last applied
+// the workload, or once that runner has left the pool (store.PruneK8sWorkload, store.WorkloadHeld).
+func (s *Server) WorkloadFromRunner(ctx context.Context, runnerID uuid.UUID, session string, ev runnerwire.Event) error {
 	ws, ok := s.cfg.Store.(store.WorkloadStore)
 	if !ok {
 		return errRunnerIngestUnavailable
@@ -67,6 +74,22 @@ func (s *Server) WorkloadFromRunner(ctx context.Context, runnerID uuid.UUID, ev 
 	if ev.RunID != nil || len(ev.Data) > maxWorkloadReportBytes || decodeStrictJSON(ev.Data, &rep) != nil || rep.Validate() != nil {
 		return errReportShape
 	}
+	if session == "" {
+		// Only a frame of a runner session is fenced, so one with none records nothing.
+		slog.WarnContext(ctx, "wardynd: a workload report with no runner session records nothing", slog.String("runner_id", runnerID.String()))
+		return nil
+	}
+	by := store.WorkloadReporter{Runner: runnerID, Session: session}
+	err := s.workloadReport(ctx, ws, by, rep)
+	if errors.Is(err, store.ErrWorkloadStaleSession) {
+		return nil // the runner's current session reports the resource again
+	}
+	return err
+}
+
+// workloadReport is WorkloadFromRunner for a report rep of the right shape, from by.
+func (s *Server) workloadReport(ctx context.Context, ws store.WorkloadStore, by store.WorkloadReporter, rep runnerwire.WorkloadReport) error {
+	runnerID := by.Runner
 	b, err := ws.BindingForRunner(ctx, runnerID, rep.Namespace)
 	if errors.Is(err, store.ErrNotFound) {
 		return s.workloadUnbound(ctx, ws, runnerID, rep)
@@ -93,7 +116,7 @@ func (s *Server) WorkloadFromRunner(ctx context.Context, runnerID uuid.UUID, ev 
 	defer cancel()
 	switch rep.Op {
 	case runnerwire.WorkloadOpApply:
-		return s.applyWorkloadReport(ctx, ws, sr, runnerID, b, si, rep)
+		return s.applyWorkloadReport(ctx, ws, sr, by, b, si, rep)
 	case runnerwire.WorkloadOpDelete:
 		v, err := ws.GetWorkload(ctx, types.ServicePrincipalPrefix+b.Service, rep.Name)
 		// A delete of a resource the name has since been recreated as leaves the newer one's workload.
@@ -103,9 +126,9 @@ func (s *Server) WorkloadFromRunner(ctx context.Context, runnerID uuid.UUID, ev 
 		if err != nil {
 			return err
 		}
-		return s.dropK8sWorkload(ctx, ws, sr, runnerID, b, si, v.Workload, rep.UID, workloadViaK8s)
+		return s.dropK8sWorkload(ctx, ws, sr, by, b, si, v.Workload, rep.UID, workloadViaK8s)
 	default:
-		return s.syncWorkloadReport(ctx, ws, sr, runnerID, b, si, rep)
+		return s.syncWorkloadReport(ctx, ws, sr, by, b, si, rep)
 	}
 }
 
@@ -147,10 +170,12 @@ func (s *Server) workloadUnbound(ctx context.Context, ws store.WorkloadStore, ru
 
 // applyWorkloadReport records an applied resource as the bound service's workload and, when its spec is
 // ahead of its run, launches it in the background. A spec Wardyn does not accept, one that names another
-// pool, or one the store refuses is answered by the resource's status and changes nothing stored.
-func (s *Server) applyWorkloadReport(ctx context.Context, ws store.WorkloadStore, sr *http.Request, runnerID uuid.UUID, b store.WorkloadBinding,
+// pool, or one the store refuses is answered by the resource's status and changes nothing stored. A report
+// of another uid the store holds (WorkloadHeld) records, launches and answers nothing.
+func (s *Server) applyWorkloadReport(ctx context.Context, ws store.WorkloadStore, sr *http.Request, by store.WorkloadReporter, b store.WorkloadBinding,
 	si types.ServiceIdentity, rep runnerwire.WorkloadReport,
 ) error {
+	runnerID := by.Runner
 	var spec client.WorkloadCRSpec
 	if err := decodeStrictJSON(rep.Spec, &spec); err != nil {
 		s.answerWorkloadReport(runnerID, rep, runnerwire.WorkloadPhaseInvalid, reasonWorkloadInvalid, "The spec is not a WardynWorkload spec: "+err.Error())
@@ -181,8 +206,11 @@ func (s *Server) applyWorkloadReport(ctx context.Context, ws store.WorkloadStore
 	owner, generation := types.ServicePrincipalPrefix+b.Service, rep.Generation
 	in.Owner, in.Source, in.By = owner, store.WorkloadSourceK8s, owner
 	in.SourcePoolID, in.SourceNamespace, in.SourceRunnerID, in.K8sGeneration, in.K8sUID = &b.PoolID, rep.Namespace, &runnerID, &generation, rep.UID
+	in.SourceSession = by.Session
 	wl, write, err := ws.PutWorkload(ctx, in)
 	switch {
+	case write == store.WorkloadHeld:
+		return nil
 	case errors.Is(err, store.ErrWorkloadSourceConflict):
 		s.answerWorkloadReport(runnerID, rep, runnerwire.WorkloadPhaseRefused, reasonWorkloadSourceConflict,
 			"The service identity already holds a workload of this name, applied through the API or from another namespace or pool.")
@@ -236,27 +264,27 @@ func (s *Server) launchBoundWorkload(ws store.WorkloadStore, b store.WorkloadBin
 // launchUnderBinding launches wl's owed generation on sr, a request acting as the bound service si, while b,
 // its namespace binding (found: it still exists), carries authority. A binding deleted since, or one that
 // carries none, records the launch refused workload_binding_inactive, and the current run keeps running.
-// A standing that cannot be read launches nothing and is the error.
+// The launch is claimed before the standing is read, so a standing that cannot be read launches nothing,
+// is the error and leaves the claim to lapse: the lapsed-launch sweep retries it once a claim, not every pass.
 func (s *Server) launchUnderBinding(sr *http.Request, ws store.WorkloadStore, b store.WorkloadBinding, found bool, si types.ServiceIdentity,
 	wl store.Workload,
 ) (client.WorkloadLaunch, error) {
+	claimed, ok, err := ws.ClaimWorkloadLaunch(sr.Context(), wl.ID)
+	if err != nil || !ok {
+		return client.WorkloadLaunch{State: client.WorkloadNoLaunch}, err
+	}
 	live := false
 	if found {
-		var err error
 		if live, err = s.bindingLive(sr.Context(), b, si); err != nil {
 			return client.WorkloadLaunch{}, err
 		}
 	}
 	if live {
-		return s.launchWorkload(sr, ws, wl)
+		return s.launchClaimed(sr, ws, claimed)
 	}
 	msg := workloadBindingInactiveMsg
 	if !found {
 		msg = workloadBindingGoneMsg
-	}
-	claimed, ok, err := ws.ClaimWorkloadLaunch(sr.Context(), wl.ID)
-	if err != nil || !ok {
-		return client.WorkloadLaunch{State: client.WorkloadNoLaunch}, err
 	}
 	return s.refuseWorkloadLaunch(sr, ws, claimed, reasonWorkloadBindingInactive, msg)
 }
@@ -277,11 +305,12 @@ func workloadBindingOf(bindings []store.WorkloadBinding, wl store.Workload) (sto
 
 // syncWorkloadReport deletes the workloads the namespace's resources recorded on the binding's pool that
 // the runner's full list of the namespace no longer names: resources deleted while no report could say so.
-func (s *Server) syncWorkloadReport(ctx context.Context, ws store.WorkloadStore, sr *http.Request, runnerID uuid.UUID, b store.WorkloadBinding,
+// A row another runner applied last is kept while that runner is in the pool (store.PruneK8sWorkload).
+func (s *Server) syncWorkloadReport(ctx context.Context, ws store.WorkloadStore, sr *http.Request, by store.WorkloadReporter, b store.WorkloadBinding,
 	si types.ServiceIdentity, rep runnerwire.WorkloadReport,
 ) error {
 	if live, err := s.bindingLive(ctx, b, si); err != nil || !live {
-		skipDeleteOfInactiveBinding(ctx, runnerID, b, rep.Namespace, err)
+		skipDeleteOfInactiveBinding(ctx, by.Runner, b, rep.Namespace, err)
 		return err
 	}
 	bound, err := ws.ListBoundK8sWorkloads(ctx, b.PoolID, rep.Namespace)
@@ -292,7 +321,7 @@ func (s *Server) syncWorkloadReport(ctx context.Context, ws store.WorkloadStore,
 		if slices.Contains(rep.Names, wl.Name) {
 			continue
 		}
-		if err := s.dropK8sWorkload(ctx, ws, sr, runnerID, b, si, wl, "", workloadViaK8sSync); err != nil {
+		if err := s.dropK8sWorkload(ctx, ws, sr, by, b, si, wl, "", workloadViaK8sSync); err != nil {
 			return err
 		}
 	}
@@ -315,17 +344,23 @@ func skipDeleteOfInactiveBinding(ctx context.Context, runnerID uuid.UUID, b stor
 // dropK8sWorkload deletes wl, the workload of a resource that is gone, and ends its run in the background
 // as the bound service (run.kill reason workload_deleted). uid is the resource's, when the report named it.
 // The delete holds only while the row is still the one wl was read as: an apply of a recreated resource
-// that moved it to its own uid in between keeps the row and its run, and nothing is audited.
-func (s *Server) dropK8sWorkload(ctx context.Context, ws store.WorkloadStore, sr *http.Request, runnerID uuid.UUID, b store.WorkloadBinding,
+// that moved it to its own uid in between keeps the row and its run, and nothing is audited. A full list's
+// prune (via k8s_sync) also holds only while by's removals count for the row (store.PruneK8sWorkload).
+func (s *Server) dropK8sWorkload(ctx context.Context, ws store.WorkloadStore, sr *http.Request, by store.WorkloadReporter, b store.WorkloadBinding,
 	si types.ServiceIdentity, wl store.Workload, uid, via string,
 ) error {
+	runnerID := by.Runner
 	// A binding that lost its authority deletes nothing: the rows and the run stay as they are, as an apply
 	// launches nothing under it (launchBoundWorkload).
 	if live, err := s.bindingLive(ctx, b, si); err != nil || !live {
 		skipDeleteOfInactiveBinding(ctx, runnerID, b, wl.SourceNamespace, err)
 		return err
 	}
-	removed, err := ws.DeleteK8sWorkload(ctx, wl)
+	drop := ws.DeleteK8sWorkload
+	if via == workloadViaK8sSync {
+		drop = ws.PruneK8sWorkload
+	}
+	removed, err := drop(ctx, wl, by)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
 	}

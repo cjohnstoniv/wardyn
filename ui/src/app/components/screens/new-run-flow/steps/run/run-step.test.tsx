@@ -892,13 +892,13 @@ describe("Run step: Keep it running", () => {
     await poolSelect();
     expect(screen.queryByText(NR_RUN.PORT_INBOUND_REFUSED)).not.toBeInTheDocument();
     cleanup();
-    // The wire's reason is shared by the feature doors: only the inbound sentence says this one.
-    checks.error = new HttpError(403, "Custom components aren't turned on for you. Ask your admin.", "capability_feature");
+    // The wire's reason is shared by the feature doors: the envelope's feature says which one.
+    checks.error = new HttpError(403, "Custom components aren't turned on for you. Ask your admin.", "capability_feature", "", "", "", undefined, "", "", "", "custom_component");
     show(inbound);
     await poolSelect();
     expect(screen.queryByText(NR_RUN.PORT_INBOUND_REFUSED)).not.toBeInTheDocument();
     cleanup();
-    checks.error = new HttpError(403, "Inbound apps aren't turned on for you. Ask your admin, or declare the app without inbound.", "capability_feature");
+    checks.error = new HttpError(403, "Inbound apps aren't turned on for you. Ask your admin, or declare the app without inbound.", "capability_feature", "", "", "", undefined, "", "", "", "inbound");
     show(inbound);
     await poolSelect();
     expect(screen.getByText(NR_RUN.PORT_INBOUND_REFUSED)).toHaveAttribute("role", "alert");
