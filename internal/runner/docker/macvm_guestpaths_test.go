@@ -46,7 +46,7 @@ func TestMacGuestFilesRefusesAnUnmappedFile(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%s was forwarded: %+v", p, got)
 		}
-		if want := "This run was not started: its managed file " + p + " has no place in a macOS VM sandbox, and the run never starts without it."; err.Error() != want {
+		if want := "This run's policy writes " + p + ", which has no macOS location yet, so the macOS VM stopped before the run started."; err.Error() != want {
 			t.Errorf("refusal %q, want %q", err, want)
 		}
 	}
@@ -95,7 +95,7 @@ func TestMacGuestEnvTranslatesPaths(t *testing.T) {
 func TestMacGuestEnvRefusesAnUnmappedPath(t *testing.T) {
 	for _, v := range []string{"/run/other/x", "/home/someone/.aws/config", "/home/agentx/y"} {
 		err := macGuestEnv(map[string]string{"SOME_FILE": v})
-		if want := "This run was not started: SOME_FILE names " + v + ", a path a macOS VM sandbox does not have."; err == nil || err.Error() != want {
+		if want := "This run's SOME_FILE names " + v + ", which has no macOS location yet, so the macOS VM stopped before the run started."; err == nil || err.Error() != want {
 			t.Errorf("%s: err %v, want %q", v, err, want)
 		}
 	}

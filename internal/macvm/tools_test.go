@@ -990,7 +990,8 @@ func TestPrepareFailingSelftestPublishesNoBase(t *testing.T) {
 		return "", 0
 	}
 	_, err := macvm.Prepare(context.Background(), f.opts)
-	if err == nil || !strings.Contains(err.Error(), "the run launcher's self-test failed, so this base cannot start a run: FAIL    /bin/sh: not executable") {
+	// The copy canon's base error (MAC-A11), byte for byte, with the output on one line.
+	if want := "The launcher's self-test failed in the base, so it was not published: FAIL /bin/sh: not executable. Run `wardyn-runnerd macos-vm prepare` to try again."; err == nil || err.Error() != want {
 		t.Fatalf("prepare: %v", err)
 	}
 	if _, err := macvm.ReadyBase(f.opts.Layout.BaseDir(0)); err == nil {

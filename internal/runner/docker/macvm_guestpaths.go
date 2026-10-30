@@ -48,7 +48,7 @@ func macGuestFiles(files []runner.ManagedFile) ([]guestagent.File, error) {
 		}
 		if !ok {
 			//lint:ignore ST1005 the sentence the run's owner reads
-			return nil, fmt.Errorf("This run was not started: its managed file %s has no place in a macOS VM sandbox, and the run never starts without it.", f.Path)
+			return nil, fmt.Errorf("This run's policy writes %s, which has no macOS location yet, so the macOS VM stopped before the run started.", f.Path)
 		}
 		out = append(out, guestagent.File{Path: p, Mode: f.FileMode(), AgentOwned: f.AgentOwned, Content: f.Content})
 	}
@@ -80,7 +80,7 @@ func macGuestEnv(env map[string]string) error {
 		}
 		if v == "/home" || v == "/run" || strings.HasPrefix(v, "/home/") || strings.HasPrefix(v, "/run/") {
 			//lint:ignore ST1005 the sentence the run's owner reads
-			return fmt.Errorf("This run was not started: %s names %s, a path a macOS VM sandbox does not have.", k, env[k])
+			return fmt.Errorf("This run's %s names %s, which has no macOS location yet, so the macOS VM stopped before the run started.", k, env[k])
 		}
 		env[k] = v
 	}

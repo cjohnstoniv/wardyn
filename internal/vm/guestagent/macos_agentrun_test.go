@@ -224,11 +224,13 @@ func TestAgentRunRefusals(t *testing.T) {
 		env  map[string]string
 		want string
 	}{
-		{[]string{"--tasks", "claude-code", "a", "codex-cli", "b"}, nil, agentRunTasksRefused},
-		{[]string{"--idle"}, nil, agentRunInteractiveRefused},
-		{[]string{"t"}, map[string]string{"WARDYN_TASK_MODE": "exec", "WARDYN_SERVICE": "1"}, agentRunServiceRefused},
-		{[]string{"t"}, map[string]string{"WARDYN_TOOL_APPROVALS": "hold"}, agentRunHoldRefused},
-		{[]string{"t"}, map[string]string{"WARDYN_SCAN_ONLY": "1"}, agentRunScanRefused},
+		// The copy canon's lines, byte for byte (MAC-A01 to MAC-A04).
+		{[]string{"--tasks", "claude-code", "a", "codex-cli", "b"}, nil, "a macOS VM runs one agent in this release; --tasks (several agents) is refused."},
+		{[]string{"--idle"}, nil, "--idle isn't supported in a macOS VM in this release."},
+		{[]string{"t"}, map[string]string{"WARDYN_TASK_MODE": "exec", "WARDYN_SERVICE": "1"}, "a macOS VM can't run a service in this release."},
+		{[]string{"t"}, map[string]string{"WARDYN_TOOL_APPROVALS": "hold"}, "a macOS VM can't hold tool calls for approval in this release (WARDYN_TOOL_APPROVALS=hold)."},
+		{[]string{"t"}, map[string]string{"WARDYN_SCAN_ONLY": "1"}, "a macOS VM can't scan a workspace in this release (WARDYN_SCAN_ONLY=1)."},
+		{[]string{"--revive"}, nil, "--revive isn't supported in a macOS VM in this release."},
 	} {
 		env := map[string]string{"WARDYN_HARNESSES": "claude-code", "WARDYN_REPO_URL": "https://github.com/o/r"}
 		for k, v := range tc.env {
@@ -427,7 +429,7 @@ func TestAgentRunChecksManagedFilesBeforeStarting(t *testing.T) {
 				}
 				return
 			}
-			want := "agent-run: This run was not started: its managed file " + settings + " is not in place as root's at mode 0644, so its walls cannot be vouched for.\n"
+			want := "agent-run: the managed file " + settings + " isn't in place as root's file at mode 0644, so the run was not started.\n"
 			if code != 1 || r.execArgv != nil || r.ran != nil || r.stderr.String() != want {
 				t.Fatalf("exit %d, exec %q, ran %q, said %q", code, r.execArgv, r.ran, r.stderr.String())
 			}

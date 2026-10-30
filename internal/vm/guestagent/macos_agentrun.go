@@ -34,13 +34,15 @@ import (
 // AgentRunRefused is the exit code of a launch the guest does not serve.
 const AgentRunRefused = 64
 
-// The launcher's refusals, the sentence the run's owner reads.
+// The launcher's refusals, the sentence the run's owner reads after "agent-run: ".
 const (
-	agentRunTasksRefused       = "A macOS VM sandbox runs one agent per run in this release, so this run's tasks for several agents were not started."
-	agentRunInteractiveRefused = "A macOS VM sandbox has no interactive agent session in this release; its terminal opens a shell."
-	agentRunServiceRefused     = "A macOS VM sandbox does not run a service in this release, so the run was not started."
-	agentRunHoldRefused        = "A macOS VM sandbox cannot hold tool calls for approval in this release, so the run was not started. Turn held tool approvals off for this run."
-	agentRunScanRefused        = "A macOS VM sandbox does not scan a workspace in this release, so the run was not started."
+	agentRunTasksRefused = "a macOS VM runs one agent in this release; --tasks (several agents) is refused."
+	// agentRunModeRefused names the mode: --idle, --revive, --boot-seed or --continue. A macOS VM's
+	// terminal is the guest's shell, which never runs the launcher.
+	agentRunModeRefused    = "%s isn't supported in a macOS VM in this release."
+	agentRunServiceRefused = "a macOS VM can't run a service in this release."
+	agentRunHoldRefused    = "a macOS VM can't hold tool calls for approval in this release (WARDYN_TOOL_APPROVALS=hold)."
+	agentRunScanRefused    = "a macOS VM can't scan a workspace in this release (WARDYN_SCAN_ONLY=1)."
 )
 
 // The harnesses' CLIs, where the pins put them (deploy/macos-guest/tooling.json).
@@ -50,7 +52,7 @@ const (
 )
 
 // managedFileNotInPlace is the pre-start check's refusal: a managed file Init wrote is gone or changed.
-const managedFileNotInPlace = "This run was not started: its managed file %s is not in place as %s at mode %04o, so its walls cannot be vouched for."
+const managedFileNotInPlace = "the managed file %s isn't in place as %s file at mode %04o, so the run was not started."
 
 // macManagedDirs is where each harness reads the files a run's walls are made of.
 var macManagedDirs = map[string]string{"claude-code": MacClaudeCodeManagedDir, "codex-cli": MacCodexManagedDir}
@@ -109,9 +111,9 @@ func (a *AgentRun) Main(args []string) int {
 	case "--tasks":
 		return a.refuse(agentRunTasksRefused)
 	case "--idle", "--revive", "--boot-seed", "--continue":
-		return a.refuse(agentRunInteractiveRefused)
+		return a.refuse(fmt.Sprintf(agentRunModeRefused, arg))
 	case "":
-		a.say("task text is required (usage: agent-run '<task>')")
+		a.say("a task is required (usage: agent-run '<task>').")
 		return 1
 	}
 	switch {
@@ -198,11 +200,11 @@ func (a *AgentRun) harness() (string, error) {
 	}
 	switch {
 	case start == "":
-		return "", errors.New("this run names no harness to start (WARDYN_START_HARNESS)")
+		return "", errors.New("this run names no harness to start (WARDYN_START_HARNESS), so the run was not started.")
 	case len(hs) > 0 && !slices.Contains(hs, start):
-		return "", fmt.Errorf("start harness %q is not one of this run's harnesses", start)
+		return "", fmt.Errorf("the start harness %s isn't one of this run's harnesses, so the run was not started.", start)
 	case start != "claude-code" && start != "codex-cli":
-		return "", fmt.Errorf("harness %q is not one this macOS base serves", start)
+		return "", fmt.Errorf("a macOS VM can't start %s in this release.", start)
 	}
 	return start, nil
 }
@@ -476,7 +478,7 @@ func (a *AgentRun) resolveWorkdir(workdir string) (string, error) {
 	case strings.HasPrefix(sf, "/"):
 		real, err := filepath.EvalSymlinks(sf)
 		if st, serr := os.Stat(sf); err != nil || real != sf || serr != nil || !st.IsDir() {
-			return "", fmt.Errorf("the starting folder %s is missing or not a plain folder; not starting elsewhere", sf)
+			return "", fmt.Errorf("the starting folder %s is missing or isn't a plain folder, so the run was not started.", sf)
 		}
 		_ = a.git("", "config", "--global", "--add", "safe.directory", sf)
 		return sf, nil

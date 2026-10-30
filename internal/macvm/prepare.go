@@ -469,6 +469,10 @@ func (p *prep) stage2(ctx context.Context, spec MachineSpec, res *BootstrapResul
 	if tr.ToolsDial != "" {
 		p.emit(PrepareEvent{Phase: PhaseTools, ToolsDial: tr.ToolsDial})
 	}
+	var selftest *BaseSelftestError
+	if errors.As(err, &selftest) {
+		return selftest // the base's error as it is shown, with nothing in front
+	}
 	if err != nil {
 		return fmt.Errorf("macvm: stage 2: %w", err)
 	}

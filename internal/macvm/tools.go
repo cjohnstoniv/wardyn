@@ -6,6 +6,7 @@ package macvm
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -48,6 +49,15 @@ const SelftestFailurePrefix = "the run launcher's self-test failed: "
 
 // selftestTail is how much of a failed self-test's output its reason keeps.
 const selftestTail = 4 << 10
+
+// BaseSelftestError is stage 2's failure when the launcher's self-test as a command run fails: the base
+// cannot start any run, so it is not published. Its text is the base's error as status and the
+// runner drawer show it; Output is the end of the self-test's output on one line.
+type BaseSelftestError struct{ Output string }
+
+func (e *BaseSelftestError) Error() string {
+	return "The launcher's self-test failed in the base, so it was not published: " + e.Output + ". Run `wardyn-runnerd macos-vm prepare` to try again."
+}
 
 // CLTFailurePrefix starts the reason a harness is withheld when the Command Line Tools did not install;
 // the cause follows it. The runner reads it from tools.json.
@@ -328,7 +338,8 @@ func selftestBase(ctx context.Context, g ToolsGuest, res *ToolsResult, log *slog
 		return fmt.Errorf("macvm: the run launcher's self-test: %w", err)
 	}
 	if exit != 0 {
-		return fmt.Errorf("macvm: the run launcher's self-test failed, so this base cannot start a run: %s", outputTail(out))
+		line := strings.TrimRight(strings.Join(strings.Fields(outputTail(out)), " "), ".")
+		return &BaseSelftestError{Output: cmp.Or(line, fmt.Sprintf("exit %d", exit))}
 	}
 	kept := []string{HarnessNone}
 	for _, h := range res.Harnesses {
