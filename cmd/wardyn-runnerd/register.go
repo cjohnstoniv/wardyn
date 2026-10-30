@@ -221,7 +221,6 @@ func dropUnsentKey(err error, a registerArgs, stateDir string) {
 	}
 }
 
-// registeredRunner is what a registration left on this host and with the organisation.
 // registrationSDK is the client registration spends the token through: no redirects, the org bundle's
 // transport when there is one, and the route setup's check chose.
 func registrationSDK(ctx context.Context, org string, orgClient *http.Client) *sdk.Client {
@@ -244,6 +243,7 @@ func registrationSDK(ctx context.Context, org string, orgClient *http.Client) *s
 	return client
 }
 
+// registeredRunner is what a registration left on this host and with the organisation.
 type registeredRunner struct {
 	name, fingerprint string
 	limits            types.RunnerLimits
