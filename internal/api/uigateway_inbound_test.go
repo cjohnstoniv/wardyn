@@ -39,11 +39,14 @@ type uiTokenStore struct {
 	hung int
 	// runErr and policyErr, when set, fail every read of the run and of its policy's audit events.
 	runErr, policyErr error
+	// runReads counts the reads of a run.
+	runReads int
 }
 
 func (s *uiTokenStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 	s.mu.Lock()
 	err := s.runErr
+	s.runReads++
 	s.mu.Unlock()
 	if err != nil {
 		return types.AgentRun{}, err
@@ -59,6 +62,13 @@ func (s *uiTokenStore) QueryAuditEvents(ctx context.Context, runID uuid.UUID, li
 		return nil, err
 	}
 	return s.uiMemStore.QueryAuditEvents(ctx, runID, limit)
+}
+
+// runReadCount is how many times a run has been read.
+func (s *uiTokenStore) runReadCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runReads
 }
 
 // failReads makes every read of the run and of its policy fail with err (nil answers again).
@@ -437,9 +447,36 @@ func TestUIGateway_InboundCallerRateLimit(t *testing.T) {
 	}
 }
 
-// TestUIGateway_InboundOwnerPageLoadsSpareTheCallerBucket: the owner's own browser session is charged to its
-// run's bucket only, not to the caller bucket their tokens share over every run; a token caller still is
-// bound by it (#3792).
+// TestUIGateway_InboundRateLimitReadsNoRun: a request the buckets refuse costs no store read; each one they
+// admit reads its run once, for the state check.
+func TestUIGateway_InboundRateLimitReadsNoRun(t *testing.T) {
+	h := inboundHarnessOn(t, okBackend())
+	ts := h.srv.cfg.Store.(*uiTokenStore)
+	req := httptest.NewRequest(http.MethodGet, uiRelayPrefix(h.run.ID, "code")+"/", nil)
+	sess := uiSession{Run: h.run.ID, App: "code", Port: uiTestPort, Principal: "bob", Inbound: true, tokenID: uuid.New(),
+		SandboxRef: h.run.SandboxRef}
+	from := ts.runReadCount()
+	for i := range int(inboundBurst) {
+		if !h.srv.admitInbound(httptest.NewRecorder(), req, sess) {
+			t.Fatalf("call %d within the burst was refused", i+1)
+		}
+	}
+	if got := ts.runReadCount() - from; got != int(inboundBurst) {
+		t.Fatalf("%d admitted calls read the run %d times, want once each", int(inboundBurst), got)
+	}
+	for range 10 {
+		if rec := httptest.NewRecorder(); h.srv.admitInbound(rec, req, sess) || rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("a call past the burst = %d %s, want 429", rec.Code, rec.Body.String())
+		}
+	}
+	if got := ts.runReadCount() - from; got != int(inboundBurst) {
+		t.Errorf("10 refused calls read the run %d times, want none", got-int(inboundBurst))
+	}
+}
+
+// TestUIGateway_InboundOwnerPageLoadsSpareTheCallerBucket: a cookie session (a person through the entry rule,
+// the owner here) is charged to its run's bucket only, not to the caller bucket inbound tokens share over
+// every run; a token caller, the same person's included, still is bound by it (#3792).
 func TestUIGateway_InboundOwnerPageLoadsSpareTheCallerBucket(t *testing.T) {
 	h := inboundHarnessOn(t, okBackend())
 	runs := [2]types.AgentRun{}

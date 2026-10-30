@@ -179,6 +179,14 @@ func (st *uiInboundState) take(runID uuid.UUID, principal string, now time.Time,
 	return true, b.ref
 }
 
+func (st *uiInboundState) setRef(runID uuid.UUID, ref string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if b := st.buckets[runID]; b != nil {
+		b.ref = ref
+	}
+}
+
 // uiRelayAnsweredEarly answers the two kinds of relay request the cookie pipeline never sees: one carrying
 // an inbound token, served here whole, and in host mode a cookie request from another site, refused. True
 // when it has answered. Any other bearer is not a credential here and falls to the cookie path, which strips it.
@@ -648,12 +656,28 @@ func (s *Server) auditInboundUnitDenies(ctx context.Context, sess uiSession) {
 // inbound.allow row.
 // False when it has answered: 429 inbound_rate_limited with Retry-After, its denial rate-bound like auth.fail.
 //
-// The run is read first, for uiDial's state check, so a call it would refuse is never admitted: a cookie
-// session, or a token's session cached for inboundResolveTTL, may hold a run that has since ended or been
-// kept. That is 409 ui_gateway_not_running with the not_running inbound.deny row inboundSessionFor's
-// refusal writes, rate-bound like it; a run that is gone is uiDial's 404, and one that cannot be read 503
-// run_unreadable, neither with a row.
+// A request the buckets admit then reads the run, for uiDial's state check, so a call it would refuse is
+// never admitted: a cookie session, or a token's session cached for inboundResolveTTL, may hold a run that
+// has since ended or been kept. That is 409 ui_gateway_not_running with the not_running inbound.deny row
+// inboundSessionFor's refusal writes, rate-bound like it; a run that is gone is uiDial's 404, and one that
+// cannot be read 503 run_unreadable, neither with a row. A request the buckets refuse reads nothing.
 func (s *Server) admitInbound(w http.ResponseWriter, r *http.Request, sess uiSession) bool {
+	// The caller bucket is the machine callers': a cookie session (a person through the entry rule, with no
+	// token and no callers entry) spends only the run's, so a page that loads many assets spends nothing an
+	// inbound token calls with (#3792).
+	caller := sess.Principal
+	if sess.tokenID == uuid.Nil && sess.Caller == "" {
+		caller = ""
+	}
+	ok, ref := s.uiInbound.take(sess.Run, caller, s.cfg.Now(), sess.SandboxRef)
+	if !ok {
+		if s.authFailedAllowed() {
+			s.auditInbound(r, sess, ref, "inbound.deny", "denied", map[string]any{"reason": inboundDenyRateLimited})
+		}
+		w.Header().Set("Retry-After", "1")
+		writeErrorReason(w, http.StatusTooManyRequests, reasonInboundRateLimited, inboundRateLimitedMsg)
+		return false
+	}
 	run, err := s.cfg.Store.GetRun(r.Context(), sess.Run)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -670,22 +694,11 @@ func (s *Server) admitInbound(w http.ResponseWriter, r *http.Request, sess uiSes
 		writeErrorReason(w, http.StatusConflict, reasonUIGatewayNotRunning, inboundNotRunningMsg)
 		return false
 	}
-	// The caller bucket is the machine callers': the owner's own browser session (no token, no callers entry)
-	// spends only the run's, so a page that loads many assets spends nothing their tokens call with (#3792).
-	caller := sess.Principal
-	if sess.tokenID == uuid.Nil && sess.Caller == "" {
-		caller = ""
+	if ref != run.SandboxRef {
+		// The bucket keeps the run's sandbox for the 429 rows, which read no run; a cookie session holds none.
+		s.uiInbound.setRef(sess.Run, run.SandboxRef)
 	}
-	ok, ref := s.uiInbound.take(sess.Run, caller, s.cfg.Now(), run.SandboxRef)
-	if !ok {
-		if s.authFailedAllowed() {
-			s.auditInbound(r, sess, ref, "inbound.deny", "denied", map[string]any{"reason": inboundDenyRateLimited})
-		}
-		w.Header().Set("Retry-After", "1")
-		writeErrorReason(w, http.StatusTooManyRequests, reasonInboundRateLimited, inboundRateLimitedMsg)
-		return false
-	}
-	s.auditInbound(r, sess, ref, "inbound.allow", "success", map[string]any{})
+	s.auditInbound(r, sess, run.SandboxRef, "inbound.allow", "success", map[string]any{})
 	return true
 }
 

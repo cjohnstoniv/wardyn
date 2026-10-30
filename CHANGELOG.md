@@ -19,8 +19,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A browser session, or a recently checked inbound token, calling an inbound app on a run that has ended or been kept
   is now refused with a `not_running` audit row and no `inbound.allow` row. It used to be recorded as allowed before
   the refusal (#3775).
-- A run owner's own page loads of an inbound app in the browser no longer count against the per-caller inbound rate
-  limit their inbound tokens use. They still count against the run's own limit (#3792).
+- Page loads of an inbound app from a person's browser session, the run owner's included, no longer count against
+  the per-caller inbound rate limit that inbound tokens use. They still count against the run's own limit (#3792).
 
 ### Security
 
