@@ -181,6 +181,8 @@ type Stage2Input struct {
 	// Previous is the items the base held before this stage 2 (a tools update's), so a CA the list no
 	// longer has is removed.
 	Previous []ItemRecord
+	// Kept is a derivation's (DeriveBase): the tools.json of the Standard it cloned, whose tools it keeps.
+	Kept *ToolsRecord
 }
 
 // ToolsResult is what stage 2 left in the guest.
@@ -302,7 +304,7 @@ func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) 
 			return ToolsResult{}, err
 		}
 	}
-	res, err = installTools(ctx, g, o)
+	res, err = stage2Tools(ctx, g, in, o)
 	if err == nil {
 		err = installItems(ctx, g, o, in.Previous, &res)
 	}

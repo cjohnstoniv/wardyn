@@ -37,6 +37,7 @@ func DefaultRoot() (string, error) {
 // Layout is the VM directory tree:
 //
 //	<root>/bases/<slot>/   disk.img aux.img machine-id manifest.json (slot 0 unless the per-slot fallback is on)
+//	<root>/variants/<name>/ a derived base's files, as a base's (variants.go)
 //	<root>/cache/          <build>.ipsw(.part)
 //	<root>/runs/<run-key>/ disk.img aux.img machine-id run.json helper.log
 //	<root>/prepare.log
@@ -51,6 +52,9 @@ func (l Layout) RunsDir() string         { return filepath.Join(l.Root, "runs") 
 func (l Layout) RunDir(runID string) string {
 	return filepath.Join(l.RunsDir(), RunKey(runID))
 }
+
+// VariantDir is the derived base name's dir; name is a ValidBaseName.
+func (l Layout) VariantDir(name string) string { return filepath.Join(l.Root, "variants", name) }
 
 // RunKeyLen is the length of a run key.
 const RunKeyLen = 12
@@ -157,6 +161,8 @@ type Manifest struct {
 	HardwareModel []byte    `json:"hardware_model"`
 	Desktop       string    `json:"desktop"`
 	Harnesses     []string  `json:"harnesses"`
+	// DerivedFrom is a derived base's: the BaseStamp of the Standard it was cloned from.
+	DerivedFrom string `json:"derived_from,omitempty"`
 }
 
 // ReadManifest reads a base's manifest.
