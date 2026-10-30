@@ -199,6 +199,14 @@ func TestPlacementCapability_MacOSVMDrives(t *testing.T) {
 			mc.Drives = tc.caps
 			req := macReq(macRunner(t, s, mc, roomyRunner))
 			ref := s.placementCapabilityRefusalFor(capsCtx, req, runPlacement{}, governanceCeiling{}, 0, ask)
+			// Each family gets its own sentence: a refusal that is neither volume's names neither.
+			if ref != nil && tc.want != volume && tc.want != cluster {
+				for _, sentence := range []string{volume, cluster} {
+					if strings.Contains(ref.body.Error, sentence) {
+						t.Fatalf("refusal %q names a volume sentence it should not: %q", ref.body.Error, sentence)
+					}
+				}
+			}
 			if tc.placed {
 				if ref != nil {
 					t.Fatalf("refused: %+v", ref.body)

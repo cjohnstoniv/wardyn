@@ -595,9 +595,9 @@ func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementC
 func macOSVMFit(mc *runnerwire.MacVMCaps, rn types.Runner, ask macOSVMAsk, pool bool) *placement.Refusal {
 	switch {
 	case ask.VolumeDrive != "" && ask.ClusterVolume:
-		return macOSRefusal("drives", fmt.Sprintf(macOSVMClusterDrive, ask.VolumeDrive))
+		return macOSRefusal("drives", driveMacOSClusterVolumeMsg(ask.VolumeDrive))
 	case ask.VolumeDrive != "":
-		return macOSRefusal("drives", fmt.Sprintf(macOSVMVolumeDrive, ask.VolumeDrive))
+		return macOSRefusal("drives", driveMacOSDockerVolumeMsg(ask.VolumeDrive))
 	case ask.Drives:
 		return macOSRefusal("drives", macOSVMNoDrives)
 	case ask.ShareDrives && !mc.Drives:
@@ -655,13 +655,9 @@ const (
 	macOSVMNoHold   = "A macOS VM can't hold a tool call for approval in this release, and this run's tool rules or tool approvals would. Change them, or choose a container or a Linux VM."
 )
 
-// What a macOS VM's drives are refused for: MAC-D13 (the runner predates drives in a macOS VM) and the
-// drive's name in front of MAC-D03's meaning (a Docker or a cluster volume).
-const (
-	macOSVMNoDriveShare = "This runner's version can't attach drives to a macOS VM. Update the runner, or run without drives."
-	macOSVMVolumeDrive  = "%s is a Docker volume, which a macOS VM can't open."
-	macOSVMClusterDrive = "%s is a cluster volume, which a macOS VM can't open."
-)
+// macOSVMNoDriveShare is MAC-D13: the runner predates drives in a macOS VM. A Docker or cluster volume's
+// refusal is driveMacOSDockerVolumeMsg's and driveMacOSClusterVolumeMsg's.
+const macOSVMNoDriveShare = "This runner's version can't attach drives to a macOS VM. Update the runner, or run without drives."
 
 // askDrives sorts a run's drives into what a macOS VM asks of its Mac: an admin or team drive in a host
 // folder is a shared folder (ShareDrives), a Docker or cluster volume is never opened (VolumeDrive, the
