@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -363,5 +364,45 @@ func TestQueue_RunnerBoundFolderWaitsForItsRunnerOnly(t *testing.T) {
 	room, err = e.srv.queueRunnerFree(withOIDCHuman(ctx, e.personP), e.reread(pool), launch)
 	if err != nil || len(room.runners)+len(room.remotes) != 0 {
 		t.Errorf("the verdict once %s is revoked = %+v, %v; want no runner offered, never the spare %s", bound, room, err, spare)
+	}
+}
+
+// Seeding a run checks a runner-bound folder by its text alone: what this server has at the same path is
+// never resolved, so a server-side symlink into a denied path neither refuses the folder nor tells the
+// caller it is there. The same path unbound is a folder on this server and is still resolved and refused.
+func TestRunCreate_RunnerBoundFolderSeedReadsNoServerPath(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "proj")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e := newPlacementEnv(t)
+	e.srv.cfg.UserMounts = runner.UserMountPolicy{Roots: []string{root}}
+	pool := e.createPool("Laptops", types.RunnerPoolUser)
+	laptop := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2)
+	e.addToPool(e.person, pool.ID, laptop)
+	advertiseRunnerRoots(t, e.srv, laptop, root)
+	w := e.call(e.person, http.MethodPost, "/api/v1/workspaces", workspaceBody(t, "server-folder", types.WorkspaceSource{Type: types.WorkspaceSourceTypeLocalDir, Path: path}))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create the unbound workspace = %d %s", w.Code, w.Body)
+	}
+	unbound := decodeJSON[types.Workspace](t, w)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc", path); err != nil {
+		t.Fatal(err)
+	}
+	bound, _ := e.boundFolderWorkspace(e.person, "laptop-folder", path, laptop)
+
+	onPool := `"runner_pool_id":"` + pool.ID.String() + `"`
+	for door, w := range e.answers(e.person, boundRunBody(bound.ID, onPool)) {
+		if w.Code >= http.StatusBadRequest {
+			t.Errorf("bound %s = %d %s, want the folder past seeding: this server's %s is not the runner's", door, w.Code, w.Body, path)
+		}
+	}
+	got := e.answers(e.person, boundRunBody(unbound.ID, onPool))
+	if body := sameEverywhere(t, "unbound", got, http.StatusUnprocessableEntity, reasonWorkspaceSeedPolicyConflict); !strings.Contains(body, "/etc") {
+		t.Errorf("unbound refusal %s, want it to name the denied path the server folder resolves to", body)
 	}
 }
