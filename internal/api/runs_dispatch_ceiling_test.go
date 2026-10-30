@@ -593,6 +593,29 @@ func TestReviveADODenyWithdrawsTheWholeLane(t *testing.T) {
 	})
 }
 
+// With no layer, a policy entry spelled exactly as a lane entry survives a revive that withdraws the
+// lane on a profile deny alone: the lane appends its entries without dedup and nothing unlayered
+// minimises them, so the frozen config holds two copies and the revive removes one.
+func TestReviveADOLane_UnlayeredExactPolicyEntrySurvives(t *testing.T) {
+	run := types.AgentRun{ID: uuid.New()}
+	cfg := adoFrozenConfig(run, "", "contoso.visualstudio.com:443")
+	if _, rerr := reassertProxyCeiling(run, cfg, ownerCeiling{deny: []string{"dev.azure.com"}}, nil); rerr != nil {
+		t.Fatalf("refused: %+v", rerr)
+	}
+	if cfg.ADOGrant != nil || len(cfg.Injection) != 0 {
+		t.Errorf("ADOGrant %+v, injections %+v: want the lane gone", cfg.ADOGrant, cfg.Injection)
+	}
+	n := 0
+	for _, d := range cfg.Policy.AllowedDomains {
+		if d == "contoso.visualstudio.com:443" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("contoso.visualstudio.com:443 appears %d times in %v, want the policy's own one copy", n, cfg.Policy.AllowedDomains)
+	}
+}
+
 // DELIBERATE, and pinned so it is not "fixed" into keeping the entry: under a layered seal, a policy
 // entry spelled exactly as a lane entry (contoso.visualstudio.com:443) is minimised into the lane's one
 // copy, and the frozen config cannot tell the two apart, so a revive that withdraws the lane takes it
