@@ -64,11 +64,12 @@ const slug = (text: string): string => text.trim().toLowerCase().replace(/[^a-z0
 export const guestPath = (text: string, macOS: boolean): string =>
   macOS ? text.replace(/(^|\s)\/home\/agent(?=\/|\s|$)/g, "$1/Users/agent") : text;
 
-/** The size and what binds it, as a drive's row says them ("64 GiB · Enforced"); the words are the step's own. */
+/** The size and what binds it, as a drive's row says them ("64 GiB · Enforced"); the words are the step's own.
+ * A kept work folder's row already says its size is not enforced, so its line gives only the size. */
 export function driveMeta(d: MeDrive): string | undefined {
   const size = driveSizeLabel(d.size_mib);
   if (!size) return undefined;
-  const word = d.enforcement === "filesystem" ? NR_FILES.ENFORCED : d.enforcement === "eviction" ? NR_FILES.ENFORCED_BY_STOP : d.enforcement === "none" ? NR_FILES.NOT_ENFORCED : undefined;
+  const word = d.enforcement === "filesystem" ? NR_FILES.ENFORCED : d.enforcement === "eviction" ? NR_FILES.ENFORCED_BY_STOP : d.enforcement === "none" && !d.kept_from_run ? NR_FILES.NOT_ENFORCED : undefined;
   return word ? `${size} · ${word}` : size;
 }
 
