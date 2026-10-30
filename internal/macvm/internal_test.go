@@ -279,6 +279,17 @@ func TestParsePmsetBatt(t *testing.T) {
 func TestPairerNewestGuestConnWinsAndOpenByte(t *testing.T) {
 	key := bytes.Repeat([]byte{7}, 32)
 	p := newPairer(DesktopPort, key, []byte{DesktopOpenByte})
+	// Each proof finishes in its own goroutine, so wait for one to be idle before the next dials.
+	paired := make(chan struct{}, 2)
+	p.connected = func() { paired <- struct{}{} }
+	waitPaired := func() {
+		t.Helper()
+		select {
+		case <-paired:
+		case <-time.After(2 * time.Second):
+			t.Fatal("connection never paired")
+		}
+	}
 	l := &chanListener{ch: make(chan net.Conn)}
 	go p.acceptGuest(l)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -288,6 +299,7 @@ func TestPairerNewestGuestConnWinsAndOpenByte(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitPaired()
 	// The newer connection answers by hand: the 40-byte frame, the proof, then the open byte.
 	newHost, newGuest := net.Pipe()
 	l.ch <- newHost
@@ -299,6 +311,7 @@ func TestPairerNewestGuestConnWinsAndOpenByte(t *testing.T) {
 	if _, err := newGuest.Write(guestagent.PairProof(key, DesktopPort, frame[8:])); err != nil {
 		t.Fatal(err)
 	}
+	waitPaired()
 	// The stale idle connection was closed.
 	_ = oldGuest.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, err := oldGuest.Read(make([]byte, 1)); err == nil {

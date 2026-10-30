@@ -300,7 +300,7 @@ func TestPrepareKeysTheGuestAndARunLeaksTheKeyNowhere(t *testing.T) {
 	waitState(t, r.cc, macvm.StateRunning)
 	m := eng.Machines()[0]
 	real := dialAgent(t, m, macvm.AgentPort, key)
-	closedWithin(t, hostClosed(dialAgent(t, m, macvm.AgentPort, wrongKey)), 10*time.Second, "a dialer without the key")
+	closedWithin(t, refusedDial(t, m, wrongKey), 10*time.Second, "a dialer without the key")
 	host, err := net.Dial("unix", filepath.Join(r.sock, macvm.AgentSock))
 	if err != nil {
 		t.Fatal(err)

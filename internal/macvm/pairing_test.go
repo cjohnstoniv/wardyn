@@ -8,6 +8,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -60,6 +61,23 @@ func dialAgent(t *testing.T, m *macvmtest.Machine, port uint32, key []byte) net.
 	}
 	t.Cleanup(func() { _ = c.Close() })
 	return c
+}
+
+// refusedDial dials the agent port answering with key, which the host refuses. The channel is closed
+// once the host closes the connection; net.Pipe can report that close as the dial's own error.
+func refusedDial(t *testing.T, m *macvmtest.Machine, key []byte) <-chan struct{} {
+	t.Helper()
+	c, err := m.DialPaired(macvm.AgentPort, key)
+	if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF) {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	if err != nil {
+		t.Fatalf("the dial: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return hostClosed(c)
 }
 
 // rawDial dials port as any process in the guest can, and answers nothing by itself.
@@ -154,8 +172,7 @@ func TestPairerRefusesADialerWithoutTheKey(t *testing.T) {
 	m, take, connected := pairVM(t, macvm.AgentPort)
 	real := dialAgent(t, m, macvm.AgentPort, pairKey)
 	waitFor(t, "the real agent to pair", func() bool { return connected.Load() == 1 })
-	imp := dialAgent(t, m, macvm.AgentPort, wrongKey)
-	closedWithin(t, hostClosed(imp), 3*time.Second, "a dialer without the key")
+	closedWithin(t, refusedDial(t, m, wrongKey), 3*time.Second, "a dialer without the key")
 	if n := connected.Load(); n != 1 {
 		t.Fatalf("connected fired %d times; a dialer without the key is not a guest connection", n)
 	}
@@ -214,9 +231,8 @@ func dialOtherPort(t *testing.T, m *macvmtest.Machine) net.Conn {
 		t.Fatalf("no challenge from the host: %v", err)
 	}
 	_ = c.SetReadDeadline(time.Time{})
-	if _, err := c.Write(proof(pairKey, macvm.DesktopPort, frame[8:])); err != nil {
-		t.Fatal(err)
-	}
+	// The host may close as it reads the wrong proof, so the write's error says nothing.
+	_, _ = c.Write(proof(pairKey, macvm.DesktopPort, frame[8:]))
 	return c
 }
 
@@ -234,7 +250,7 @@ func proof(key []byte, port uint32, challenge []byte) []byte {
 // challenge, and only then is the connection the idle one.
 func TestPairerSendsTheChallengeFrame(t *testing.T) {
 	defer macvm.SetPairDeadline(time.Second)()
-	m, take, _ := pairVM(t, macvm.AgentPort)
+	m, take, connected := pairVM(t, macvm.AgentPort)
 	frames := make([][]byte, 2)
 	var first, real net.Conn
 	for i := range frames {
@@ -250,6 +266,12 @@ func TestPairerSendsTheChallengeFrame(t *testing.T) {
 		}
 		if _, err := c.Write(proof(pairKey, macvm.AgentPort, frames[i][8:])); err != nil {
 			t.Fatal(err)
+		}
+		// Each proof finishes in its own goroutine, so wait for this one to be idle before the next dials.
+		for end := time.Now().Add(2 * time.Second); connected.Load() < int32(i+1); time.Sleep(time.Millisecond) {
+			if time.Now().After(end) {
+				t.Fatalf("connection %d never paired", i)
+			}
 		}
 		if i == 0 {
 			first = c
