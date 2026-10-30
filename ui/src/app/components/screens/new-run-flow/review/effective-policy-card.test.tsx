@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ADO_ACCESS, adoCapName } from "../../../../lib/ado-access-copy";
@@ -36,6 +36,10 @@ vi.mock("../../../../lib/api/setup", async (orig) => ({
     }),
   },
 }));
+
+const getWalls = vi.hoisted(() => vi.fn());
+vi.mock("../../../../lib/api/walls", () => ({ walls: { get: getWalls } }));
+beforeEach(() => getWalls.mockResolvedValue({ spec: {} }));
 
 afterEach(cleanup);
 
@@ -221,5 +225,16 @@ describe("Effective policy card", () => {
     cleanup();
     render(<AccessGroup draft={draftOf(BASE)} pre={pre} preview={null} docRows={[]} go={() => {}} dispatch={() => {}} />);
     expect(screen.getByText(NR_REVIEW.POLICY_HOSTS(2))).toBeInTheDocument();
+  });
+
+  // #3780: a host the person's own walls take out is in the preview but not reached, so the count leaves it out.
+  it("leaves the hosts the person's walls take out out of the Network count", async () => {
+    getWalls.mockResolvedValue({ spec: { denied_domains: ["paste.example.net"] } });
+    const one = SCENARIO_ACCESS.member.hosts[0];
+    const access = { ...SCENARIO_ACCESS.member, hosts: [one, { ...one, host: "pypi.org" }, { ...one, host: "paste.example.net", verdict: "not_allowed" }] };
+    const pre = { ...SCENARIO_PREFLIGHT.member, access } as ReviewPreflight;
+    render(<EffectivePolicyCard draft={draftOf(BASE)} pre={pre} preview={null} />);
+    const network = () => within(document.querySelector('[data-policy-row="network"]') as HTMLElement);
+    await waitFor(() => expect(network().getByText(NR_REVIEW.POLICY_HOSTS(2))).toBeInTheDocument());
   });
 });

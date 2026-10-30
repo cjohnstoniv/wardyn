@@ -69,6 +69,8 @@ export function policyRows(
   preview: PolicyPreviewResult | null,
   /** A harness's display name; its id until the roster answers. */
   harnessLabel: (id: string) => string = (id) => id,
+  /** The preview's hosts that the person's own walls take out: they are listed but not reached. */
+  wallsLeftOut: readonly string[] = [],
 ): PolicyRow[] {
   const { intent } = draft;
   const ctx = { draft, pre, preview };
@@ -87,7 +89,7 @@ export function policyRows(
     rows.push({ id: "barrier", label: NR_REVIEW.POLICY_BARRIER, barrier, detail: joined(how, pre?.runner_pool && NR_REVIEW.WHERE_VALUE(pre.runner_pool.name)) });
   }
 
-  const hosts = access?.hosts.length ?? preview?.spec.allowed_domains?.length;
+  const hosts = access ? access.hosts.length - wallsLeftOut.length : preview?.spec.allowed_domains?.length;
   if (hosts !== undefined) {
     rows.push({ id: "network", label: NR_REVIEW.POLICY_NETWORK, value: hosts === 1 ? NR_REVIEW.POLICY_HOST_ONE : NR_REVIEW.POLICY_HOSTS(hosts), detail: joined(NR_REVIEW.PROV_SOURCE_POLICY, preview?.source.name) });
   }

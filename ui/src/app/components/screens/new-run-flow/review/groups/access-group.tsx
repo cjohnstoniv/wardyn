@@ -5,7 +5,6 @@
 
 import * as React from "react";
 import { Grid3x3 } from "lucide-react";
-import { walls as wallsApi, type PersonalWallsSpec } from "../../../../../lib/api/walls";
 import { Button } from "../../../../ui/button";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
@@ -13,6 +12,7 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_WALLS } from "../../../../wardyn/copy/personal-walls";
 import { wallsLeaveOut, wallsLeaveOutKnobs, type WallsHostKnob } from "../../lenses/tools-lens";
 import { ReviewGroup } from "../review-group";
+import { useWallsSpec } from "../use-walls-spec";
 import { AccessCredentials } from "./access-credentials";
 import { stepLocation, type GroupProps } from "./group-props";
 import { JumpButton } from "./jump-button";
@@ -23,12 +23,7 @@ export function AccessGroup({ draft, pre, preview, docRows, go, onLeftOut }: Gro
   const hosts = access?.hosts ?? [];
   const source = preview?.source.name;
   // The person's own walls, to name a host they leave out; a caller with none (or no way to read them) sees no such line.
-  const [walls, setWalls] = React.useState<PersonalWallsSpec>();
-  React.useEffect(() => {
-    let alive = true;
-    wallsApi.get().then((w) => alive && setWalls(w.spec), () => undefined);
-    return () => { alive = false; };
-  }, []);
+  const walls = useWallsSpec();
   const leftOut = wallsLeaveOut(walls, pre?.access ?? preview?.access, !!access);
   const knobKey = wallsLeaveOutKnobs(walls, pre?.access ?? preview?.access, !!access).join();
   React.useEffect(() => onLeftOut?.(knobKey ? (knobKey.split(",") as WallsHostKnob[]) : []), [knobKey, onLeftOut]);
