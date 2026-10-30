@@ -80,6 +80,7 @@
 | `WARDYN_MACOS_VMS` | The organisation | `1` lets a run ask for `macos_vm`. Off by default |
 | `WARDYN_RUNNER_MACOS_VM` | The Mac's runner | `1` offers macOS VMs from this Mac once its checks pass, else logs the fix. Off by default |
 | `MacOSVM` | The managed preferences profile | The same switch, from your MDM. Only a macOS profile sets it ([Managed preferences](hybrid-laptops.md#managed-preferences)) |
+| `macos_vm_base_file` | The Mac's runner, or `MacOSVMBaseFile` in the profile | The base's install list, a JSON file on the Mac. A changed list starts a tools update ([Customising the base](#customising-the-base)) |
 
 ## Which Macs qualify
 
