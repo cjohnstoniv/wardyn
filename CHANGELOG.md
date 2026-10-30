@@ -61,6 +61,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Two value-equal approval requests for one run that spell a number differently (`1` and `1.0`) no longer both open a
   pending approval when they race: a request's scope is stored with one spelling per number. A pending request no
   longer stands in for another whose numbers differ past floating-point precision.
+- Restarting a `WardynWorkload` custom resource's workload now needs the namespace binding that holds now, as the
+  runner's next report of the resource would. A restart after the binding was deleted could still launch the run on
+  the deleted binding's pool; it is now refused `workload_binding_inactive`, and the refusal is recorded on the
+  workload. The launch uses the binding's own sponsor and standing (#3758).
+- A `WardynWorkload` custom resource's launch whose claim lapsed (the replica that took it went away, or the launch
+  failed before it recorded a run or a refusal) is now retried by the daemon's 30-second workload sweep, instead of
+  waiting up to 10 minutes for the runner's next full report. The retry launches as the bound service under the
+  namespace binding that holds now; at most one retry per workload per claim (60 seconds), and a refused launch still
+  waits for the resource's next report (#3772).
+- A runner's full list of a bound namespace now reads only that namespace's workloads on the binding's pool, in the
+  database, instead of every custom-resource workload in the organization on every list (#3773).
 
 ## [0.10.0-rc.8] — 2026-10-29
 
