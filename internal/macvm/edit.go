@@ -27,6 +27,28 @@ const (
 	editReadyLine    = "The edited base is ready, and runs now use it. Desktop: %s."
 )
 
+// ScreenText is a first boot's window text: its title and the strip of steps under the title bar.
+// Closable gives the window a close button that asks the guest to shut down. The zero value is setup
+// by hand's window, whose text lives in screen_darwin.m.
+type ScreenText struct {
+	Title, Steps string
+	Closable     bool
+}
+
+// editScreen is the edit window's text.
+var editScreen = ScreenText{
+	Title: "Wardyn: edit this macOS VM base",
+	Steps: "Sign in as wardyn-admin with the one-time code. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
+		"For desktop control: in System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on \"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n" +
+		"Leave Remote Login off and add no accounts: the check refuses a base with either.",
+	Closable: true,
+}
+
+// screenTexter is a FirstBooter whose Boot's window can show other text than setup by hand's.
+type screenTexter interface {
+	WithScreen(ScreenText) FirstBooter
+}
+
 // EditRefusal is why edit-base starts nothing. Its text is what the person reads.
 type EditRefusal string
 
@@ -262,8 +284,14 @@ func (o *EditOptions) mintCode(ctx context.Context, spec MachineSpec, path strin
 	return writeSetupCode(path, SetupCodeRecord{Account: provisionUser, Code: string(code)})
 }
 
-// window boots spec plain in a window on this Mac and waits until the guest shuts down.
+// window boots spec plain in a window on this Mac, with the edit's text, and waits until the guest shuts
+// down. The window's close button asks the guest to.
 func (o *EditOptions) window(ctx context.Context, spec MachineSpec) error {
+	texter, ok := o.FirstBoot.(screenTexter)
+	if !ok {
+		return errors.New("macvm: the edit needs the guest's window, and this build cannot open one")
+	}
+	booter := texter.WithScreen(editScreen)
 	nw, err := o.PrepNet()
 	if err != nil {
 		return err
@@ -280,7 +308,7 @@ func (o *EditOptions) window(ctx context.Context, spec MachineSpec) error {
 	// The headless boot, just stopped, may hold the aux storage a moment longer.
 	err = retryAuxLocked(ctx, o.Log, func() error {
 		var err error
-		fb, err = o.FirstBoot.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
+		fb, err = booter.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
 			uint(spec.CPUs), spec.MemoryBytes, guest, "", "")
 		return err
 	})

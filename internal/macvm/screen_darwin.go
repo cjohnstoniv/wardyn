@@ -8,10 +8,11 @@ package macvm
 /*
 #cgo LDFLAGS: -framework AppKit -framework CoreGraphics
 #include <pthread.h>
+#include <stdlib.h>
 
 int wardynScreenSession(void);
 void wardynScreenRun(void);
-void wardynScreenShow(void *vm);
+void wardynScreenShow(void *vm, void *stop, const char *title, const char *steps);
 int wardynScreenUp(void);
 void wardynScreenClose(void);
 */
@@ -75,16 +76,29 @@ func screenReady() error {
 	return nil
 }
 
-// showScreen opens the window on vm (a VZVirtualMachine the caller keeps alive until unlock) and
-// returns its close. It refuses before AppKit starts when screenReady does. The window is made on the
-// main thread once AppKit runs there, and showScreen returns once it is up.
-func showScreen(vm unsafe.Pointer, unlock func()) (func(), error) {
+// showScreen opens the window on vm (a VZVirtualMachine the caller keeps alive until unlock), with
+// text, and returns its close. When text is Closable, the window's close button asks the guest to shut
+// down through stop, vm's provision handle. It refuses before AppKit starts when screenReady does. The
+// window is made on the main thread once AppKit runs there, and showScreen returns once it is up.
+func showScreen(vm, stop unsafe.Pointer, text ScreenText, unlock func()) (func(), error) {
 	if err := screenReady(); err != nil {
 		unlock()
 		return nil, err
 	}
-	C.wardynScreenShow(vm)
-	unlock() // the window's block holds vm now
+	var title, steps *C.char // NULL: setup by hand's text
+	if text.Title != "" {
+		title = C.CString(text.Title)
+		defer C.free(unsafe.Pointer(title))
+	}
+	if text.Steps != "" {
+		steps = C.CString(text.Steps)
+		defer C.free(unsafe.Pointer(steps))
+	}
+	if !text.Closable {
+		stop = nil
+	}
+	C.wardynScreenShow(vm, stop, title, steps)
+	unlock() // the window's block holds vm and stop now
 	screenStartOnce.Do(func() { close(screenStart) })
 	var once sync.Once
 	closeWindow := func() { once.Do(func() { C.wardynScreenClose() }) }

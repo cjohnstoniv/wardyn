@@ -177,7 +177,7 @@
 2. Wardyn copies the base and, in a boot with no window, sets a fresh one-time code as the password of `wardyn-admin`. The command names the file that holds it, `setup-code.json`, as setup by hand does.
 3. The copy boots in a window. Sign in as `wardyn-admin` with the code. The guest has no internet during the session.
 4. Make your changes. For desktop control, open System Settings > General > Sharing and turn on Screen Sharing. Under its (i) button, turn on "VNC viewers may control screen with password".
-5. Leave Remote Login off and add no accounts. When you are done, shut the guest down from its Apple menu. The window closes once the guest has shut down.
+5. Leave Remote Login off and add no accounts. When you are done, close the window: Wardyn asks the guest to shut down. The window closes once the guest has shut down.
 
 - **The recheck.** The copy boots once more with no window. First the code is replaced with a random password no process keeps, and the code file is deleted.
   - Then, in order: the control check, the accounts, Remote Login, and the launcher's self-test for a command and for each harness the base offers.

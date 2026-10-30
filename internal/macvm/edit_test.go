@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
@@ -48,6 +49,17 @@ func (g *editGuest) MovePointer(_ context.Context, _ []byte, x, y int) error {
 	return nil
 }
 
+// textFirstBoot is the fake first boot, keeping the window text the edit gives it.
+type textFirstBoot struct {
+	*macvmtest.FirstBoot
+	text *macvm.ScreenText
+}
+
+func (b textFirstBoot) WithScreen(text macvm.ScreenText) macvm.FirstBooter {
+	*b.text = text
+	return b.FirstBoot
+}
+
 // editFix is a prepared base (its desktop observe, so a swap shows) and an edit of it whose window's guest
 // shuts down once the window is up, reading the code file as the person would.
 type editFix struct {
@@ -59,6 +71,7 @@ type editFix struct {
 	fbBoots  int // the first boots before the edit's (prepare's)
 	codeSeen macvm.SetupCodeRecord
 	base     string
+	screen   macvm.ScreenText
 }
 
 func newEdit(t *testing.T) *editFix {
@@ -77,7 +90,7 @@ func newEdit(t *testing.T) *editFix {
 	e.g = &editGuest{guest: newGuest(), control: true, posture: guestagent.ToolsPosture{Accounts: []guestagent.GuestAccount{
 		{Name: "root", UID: 0}, {Name: "nobody", UID: -2}, {Name: "_spotlight", UID: 89}, {Name: "wardyn-admin", UID: 501}, {Name: "agent", UID: 502}}}}
 	e.opts = macvm.EditOptions{
-		Engine: f.eng, Layout: f.opts.Layout, FirstBoot: f.fb, PrepNet: f.opts.PrepNet, CPUs: 4, MemoryMiB: 8192, Out: &e.out,
+		Engine: f.eng, Layout: f.opts.Layout, FirstBoot: textFirstBoot{f.fb, &e.screen}, PrepNet: f.opts.PrepNet, CPUs: 4, MemoryMiB: 8192, Out: &e.out,
 		Guest: func(context.Context, macvm.MachineSpec) (macvm.ToolsGuest, func(context.Context) error, error) {
 			e.boots++
 			return e.g, func(context.Context) error { return nil }, nil
@@ -177,6 +190,30 @@ func TestEditBaseSwapsOnlyAPassingCopy(t *testing.T) {
 	if opened, closed := e.f.fb.Windows(); opened != closed || opened == 0 {
 		t.Errorf("windows opened %d closed %d", opened, closed)
 	}
+	wantText := macvm.ScreenText{
+		Title: "Wardyn: edit this macOS VM base",
+		Steps: "Sign in as wardyn-admin with the one-time code. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
+			"For desktop control: in System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on \"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n" +
+			"Leave Remote Login off and add no accounts: the check refuses a base with either.",
+		Closable: true,
+	}
+	if e.screen != wantText {
+		t.Errorf("the edit window's text:\n%+v\nwant\n%+v", e.screen, wantText)
+	}
+}
+
+// A first booter that cannot take the edit's window text opens no window with setup's text instead.
+func TestEditBaseNeedsTheEditWindowText(t *testing.T) {
+	e := newEdit(t)
+	opened0, _ := e.f.fb.Windows()
+	e.opts.FirstBoot = e.f.fb
+	if _, err := macvm.EditBase(context.Background(), e.opts); err == nil || !strings.Contains(err.Error(), "cannot open one") {
+		t.Fatalf("err %v", err)
+	}
+	if opened, _ := e.f.fb.Windows(); opened != opened0 {
+		t.Error("a window opened")
+	}
+	e.oldBaseKept(t)
 }
 
 // Each failed check discards the copy with its own line and the old base's date, records why, and runs
