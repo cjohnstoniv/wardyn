@@ -17,3 +17,10 @@ var ToolingJSON []byte
 //
 //go:embed prep-allowlist.json
 var PrepAllowlistJSON []byte
+
+// BootHostsJSON is boot-hosts.json: the hosts a macOS guest calls in the background at boot. A run on a
+// macOS VM denies them quietly, with no approval raised, unless its policy allows one. It is a deny
+// list only: nothing on it is ever allowed.
+//
+//go:embed boot-hosts.json
+var BootHostsJSON []byte

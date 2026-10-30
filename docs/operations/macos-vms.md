@@ -154,6 +154,33 @@
   - It logs how many it removed. A sweep that cannot run is logged as a warning and does not stop the runner.
   - At start the runner also deletes the staging copy that a crashed tools update or re-prepare left, unless that update is still running.
 
+## Apple's boot-time hosts
+
+- A macOS guest calls a few Apple hosts in the background at boot. Each would otherwise wait for an approval nobody can usefully give.
+- A run denies them quietly: no approval is raised, and nothing on the list is ever allowed.
+
+| Host | What the guest uses it for |
+|---|---|
+| `gdmf.apple.com` | Software-update catalogue checks |
+| `mesu.apple.com` | Software-update asset metadata |
+| `gateway.icloud.com` | iCloud background services |
+| `init-kt.apple.com` | Key transparency lookups |
+
+- The list is `deploy/macos-guest/boot-hosts.json`. It grows only from hosts a real Mac pass records.
+- A run that allows all egress is left as it is.
+- To reach one of these hosts, allow it: an exact name or a wildcard in the run's policy. That host is then handled as any allowed host.
+- Apple ID sign-in, the App Store, developer downloads and certificate checks are not on the list. They keep first-use approval.
+- **Apple developer services.** To allow those hosts once for everyone, add a custom component with this definition and attach it to the runs that need it:
+
+```json
+{
+  "description": "Lets a macOS VM reach Apple ID sign-in, the App Store, Xcode and simulator downloads, and code signing and notarisation.",
+  "hosts": ["gsa.apple.com", "idmsa.apple.com", "appleid.apple.com", "buy.itunes.apple.com", "bag.itunes.apple.com", "developer.apple.com", "ocsp.apple.com"]
+}
+```
+
+- Name the component `Apple developer services`. The host list is a starting point, to be checked on a real Mac.
+
 ## How many VMs a Mac offers
 
 - The Mac offers a number, `max`, of at most 2. It is the runner's own live macOS VM runs plus how many more the Mac's ledger can admit now. The runner recomputes it every 15 seconds.
