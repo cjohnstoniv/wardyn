@@ -14,6 +14,7 @@ import type { MeDrive, MeDriveCatalogue } from "../../../../../lib/api/me-drives
 import type { RunAttachment } from "../../../../../lib/types/new-run-contract";
 import { START_FOLDER_DRIVE } from "../../../../../lib/types/new-run-contract";
 import type { Workspace } from "../../../../../lib/types/workspaces";
+import { workspaceRunnerRefusal } from "../../checks/workspace-availability";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { MAC_DRIVES } from "../../../../wardyn/copy/mac-drives";
 import type { RunIntent } from "../../draft/run-intent";
@@ -78,7 +79,7 @@ export const SERVER_FOLDER_TARGET = "/home/agent/work";
 /** Owner ruling 2026-10-13: a folder appears at /home/agent/folders/<name> unless its source names a place. */
 export const folderPath = (name: string): string => `/home/agent/folders/${slug(name) || "folder"}`;
 
-export function folderSources(workspaces: readonly Workspace[]): FolderSource[] {
+export function folderSources(workspaces: readonly Workspace[], runnerNames?: ReadonlyMap<string, string>): FolderSource[] {
   return workspaces.flatMap((w) => {
     const dirs = (w.sources ?? []).filter((s) => s.type === "local_dir");
     return dirs.map((d, i) => {
@@ -88,7 +89,7 @@ export function folderSources(workspaces: readonly Workspace[]): FolderSource[] 
         defaultPath: d.target || folderPath(name), serverPath: d.target || SERVER_FOLDER_TARGET, single: dirs.length === 1, first: i === 0,
         // The server mounts a folder read-only unless its source says writable.
         writable: d.writable === true,
-        unavailable: w.available_to_you === false ? DENIED.WORKSPACE_NOT_AVAILABLE : undefined,
+        unavailable: w.available_to_you === false ? DENIED.WORKSPACE_NOT_AVAILABLE : workspaceRunnerRefusal(w, runnerNames),
       };
     });
   });

@@ -11,7 +11,7 @@
 // scan/build machinery at all — Stage 2 stops calling those endpoints.
 import * as React from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, ChevronRight, Trash2 } from "lucide-react";
+import { AlertTriangle, ChevronRight, Laptop, Trash2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import type { ConfinementClass, Workspace } from "../../../lib/types";
 import { workspaces as workspacesApi } from "../../../lib/api/workspaces";
@@ -21,7 +21,8 @@ import { getErrorMessage } from "../../../lib/format";
 import { EGRESS } from "../../wardyn/copy";
 import { usePoll } from "../../../lib/use-poll";
 import { hasLlmPath } from "../../../lib/readiness";
-import { WORKSPACE_DETAIL_EXTRA as WORKSPACE_COPY_EXTRA } from "../../../lib/workspace-copy";
+import { FOLDER_RUNNER, WORKSPACE_DETAIL_EXTRA as WORKSPACE_COPY_EXTRA } from "../../../lib/workspace-copy";
+import { useMyRunners } from "../../../lib/use-my-runners";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { useMyCapabilities } from "../../../lib/capabilities";
 import { DENIED } from "../../../lib/permissions-copy";
@@ -35,7 +36,7 @@ import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
 import { useCanMutate, useOperator, useSecurityOperator } from "../../wardyn/operator-context";
 import { KIND_META, kindMetaOf, workspaceImage } from "../workspaces";
-import { compositionSummary, resolvedModelProviders, workspaceModelProviderUnavailable, workspaceUnavailableToCaller } from "../new-run-flow/checks/workspace-availability";
+import { compositionSummary, resolvedModelProviders, runnerLabel, staleRunnerSource, workspaceModelProviderUnavailable, workspaceRunnerRefusal, workspaceUnavailableToCaller } from "../new-run-flow/checks/workspace-availability";
 import { ProfileReview } from "../profile-review";
 import { llmCredLabel, WorkspaceLLMCredDialog } from "../workspace-llm-cred";
 import { DetailSectionCard } from "./section-card";
@@ -93,6 +94,8 @@ export function WorkspaceDetailScreen() {
   // useMyCapabilities' own `enabled` gate.
   const operator = useOperator();
   const caps = useMyCapabilities(!operator);
+  const myRunners = useMyRunners();
+  const runnerNames = React.useMemo(() => new Map((myRunners ?? []).map((r) => [r.id, r.name])), [myRunners]);
   const { status: shellStatus } = useShellSetupStatus();
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   // F6-F3 (site 2): `null` means "don't know yet" (setup status unreachable),
@@ -373,6 +376,10 @@ export function WorkspaceDetailScreen() {
   // model-provider arm (unlike New Run, it has no run-type context of its
   // own), so `isAgent=true` keeps that unconditional.
   const workspaceUnavailable = workspaceUnavailableToCaller(ws, caps, resolvedModelProviders(shellStatus), true);
+  // A folder on a runner that can't run it: shown beside the path, and said once in full under the header.
+  const boundSource = (ws.sources ?? []).find((s) => s.type === "local_dir" && s.runner_id);
+  const runnerRefusal = workspaceRunnerRefusal(ws, runnerNames);
+  const staleState = staleRunnerSource(ws)?.runner_state;
   // The pinned provider's id is not this caller's to see: the server sent provider_unavailable in its place, or (for
   // a non-admin) their own list lacks it. An admin always sees the stored id, so a dead binding can be cleared.
   const providerHidden =
@@ -405,12 +412,24 @@ export function WorkspaceDetailScreen() {
                   className="size-6 justify-center rounded-md border border-border text-muted-foreground hover:text-foreground"
                 />
               )}
+              {boundSource?.runner_id && (
+                <span className="inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-meta text-muted-foreground">
+                  <Laptop className="size-3" aria-hidden />
+                  {FOLDER_RUNNER.CHIP(runnerLabel(boundSource.runner_id, runnerNames))}
+                </span>
+              )}
+              {staleState && (
+                <span className="inline-flex items-center gap-1 rounded-md border border-warning/30 bg-warning-subtle px-1.5 py-0.5 text-meta text-warning">
+                  <AlertTriangle className="size-3" aria-hidden />
+                  {FOLDER_RUNNER.STATE_CHIP[staleState]}
+                </span>
+              )}
             </div>
           </div>
           <Button
             size="sm"
-            disabled={workspaceUnavailable}
-            title={workspaceUnavailable ? DENIED.WORKSPACE_NOT_AVAILABLE : undefined}
+            disabled={workspaceUnavailable || !!runnerRefusal}
+            title={workspaceUnavailable ? DENIED.WORKSPACE_NOT_AVAILABLE : runnerRefusal}
             onClick={() => navigate("/runs", { state: { openNewRun: true } })}
           >
             Start a run
@@ -428,6 +447,12 @@ export function WorkspaceDetailScreen() {
           </Button>
         </div>
 
+        {runnerRefusal && (
+          <p role="alert" className="mt-3 flex items-start gap-2 rounded-lg border border-danger bg-danger-subtle px-3 py-2 text-xs text-foreground">
+            <XCircle className="mt-0.5 size-3.5 shrink-0 text-danger" aria-hidden />
+            {runnerRefusal}
+          </p>
+        )}
         {/* A disabled button that doesn't say why is a dead end (M-ux-6) —
             the same rule New Run's own Launch button follows for its
             `problem` line. */}

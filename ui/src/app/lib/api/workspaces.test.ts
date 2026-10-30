@@ -144,6 +144,18 @@ describe("workspace client methods", () => {
     expect(res).toEqual({ async: true, scanRunIds: [] });
   });
 
+  it("createWorkspace() sends a folder's runner_id with its source", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(ws), { status: 201, headers: { "Content-Type": "application/json" } }),
+    );
+    await workspaces.createWorkspace({
+      name: "payments",
+      sources: [{ type: "local_dir", path: "/Users/dana/work/payments", runner_id: "abcdef12-3456-7890-abcd-ef1234567890" }],
+    });
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String(init?.body)).sources[0].runner_id).toBe("abcdef12-3456-7890-abcd-ef1234567890");
+  });
+
   it("createWorkspace() accepts the composition shape (sources + base_image) alongside the legacy fields", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify(ws), { status: 201, headers: { "Content-Type": "application/json" } }),

@@ -10,6 +10,7 @@
 
 import type { MeCapabilities, SetupModelProvider, Workspace, WorkspaceSourceInput } from "../../../../lib/types";
 import { capabilityAllowed } from "../../../../lib/capabilities";
+import { FOLDER_RUNNER } from "../../../../lib/workspace-copy";
 
 function workspaceSources(ws: Workspace): WorkspaceSourceInput[] {
   return ws.sources ?? [];
@@ -81,4 +82,25 @@ export function workspaceUnavailableToCaller(
   const workspaceOrProviderUnavailable =
     ws.available_to_you !== undefined ? !ws.available_to_you : !capabilityAllowed(caps, "workspace", ws.id);
   return workspaceOrProviderUnavailable || workspaceModelProviderUnavailable(ws, isAgent ? modelProviders : undefined);
+}
+
+/** A runner the server names only by id (removed, or not the caller's) is shown by its first 8 characters. */
+export const runnerLabel = (id: string, names?: ReadonlyMap<string, string>): string => names?.get(id) ?? id.slice(0, 8);
+
+/** The source whose runner can no longer run it: its runner_state is anything but claimed. */
+export function staleRunnerSource(ws: Workspace): (WorkspaceSourceInput & { runner_id: string; runner_state: "revoked" | "missing" | "not_owner" }) | undefined {
+  return workspaceSources(ws).find(
+    (s): s is WorkspaceSourceInput & { runner_id: string; runner_state: "revoked" | "missing" | "not_owner" } =>
+      !!s.runner_id && (s.runner_state === "revoked" || s.runner_state === "missing" || s.runner_state === "not_owner"),
+  );
+}
+
+/**
+ * Why a run can't start on this workspace's bound folder: its runner is revoked, removed or no longer the
+ * owner's. Undefined when no bound source is stale. A bound source is never refused for being unscanned: the
+ * runner checks the folder when the run starts.
+ */
+export function workspaceRunnerRefusal(ws: Workspace, names?: ReadonlyMap<string, string>): string | undefined {
+  const s = staleRunnerSource(ws);
+  return s ? FOLDER_RUNNER.REFUSAL(ws.name, runnerLabel(s.runner_id, names), FOLDER_RUNNER.STATE_CHIP[s.runner_state].toLowerCase()) : undefined;
 }

@@ -156,6 +156,10 @@ export interface BaseImageCheck {
 
 export type WorkspaceSourceKind = "local_dir" | "repo" | "ephemeral";
 
+// How a source's runner binding stands now (Go: WorkspaceSourceRunner*). Anything but
+// "claimed" refuses a run by name.
+export type WorkspaceSourceRunnerState = "claimed" | "revoked" | "missing" | "not_owner";
+
 // One entry in a workspace's composition — a Workspace is one-or-more of
 // these. Field relevance by kind: local_dir -> path/target/writable,
 // repo -> source/ref/target, ephemeral -> target only.
@@ -166,6 +170,12 @@ export interface WorkspaceSourceInput {
   ref?: string;
   target?: string;
   writable?: boolean;
+  // local_dir only: the id of the person's own runner the folder lives on; absent is the
+  // control plane's host.
+  runner_id?: string;
+  // SERVER-OWNED, read-only, on a source with a runner_id: how that binding stands now.
+  // Never sent on a write.
+  runner_state?: WorkspaceSourceRunnerState;
   // SERVER-OWNED, read-only: does this deployment's workspace-provider policy
   // admit this repo source today? Present on repo sources only, and ABSENT on a
   // deployment with no provider rows — so `admitted === false` is the ONLY value

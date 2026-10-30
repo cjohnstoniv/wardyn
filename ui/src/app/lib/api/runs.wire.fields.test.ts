@@ -341,6 +341,18 @@ describe("source parity — five more flat structs", () => {
     expect(omitted.sort()).toEqual(["attachments", "built_profile_hash", "egress_edited_at"].sort());
   });
 
+  it("WorkspaceSource: a folder's runner_id and its read-only runner_state are on both sides", () => {
+    const goTags = goJSONTags(workspaceGo, "WorkspaceSource");
+    const tsKeys = tsInterfaceKeys(workspacesTs, "WorkspaceSourceInput");
+    for (const key of ["runner_id", "runner_state"]) {
+      expect(goTags).toContain(key);
+      expect(tsKeys).toContain(key);
+    }
+    // overrides: the per-attachment contract stance, set by the sources screens that went away; the console never reads it.
+    expect(goTags.filter((t) => !tsKeys.includes(t))).toEqual(["overrides"]);
+    expect(tsKeys.filter((k) => !goTags.includes(k))).toEqual([]);
+  });
+
   it("CapabilityGrant: full parity with the BASE Go struct — `inert` is a known response-wrapper key", () => {
     const goTags = new Set(goJSONTags(typesGoFull, "CapabilityGrant"));
     expect(goTags.size).toBeGreaterThanOrEqual(8);
