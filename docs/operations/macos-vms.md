@@ -309,6 +309,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 - **Governance.** A profile's `allowed_macos_bases` lists the bases its people may pick, Standard included. Empty allows any base a Mac offers. A restriction narrows it the same way.
 - **The pool list.** A pool's `macos_vm.bases` lists the other bases: `ready` on every Mac, `rebuilding` with the least progress, or `missing` on at least one.
 - A directory that cannot be read, or a list that is refused, leaves Standard alone offered, and the runner logs why.
+- Removing a base's list does not remove its files: delete `variants/<name>` in the VM directory by hand when no run is on it.
 
 ## Apple's boot-time hosts
 
