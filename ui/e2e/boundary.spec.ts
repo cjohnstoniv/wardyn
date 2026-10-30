@@ -98,7 +98,7 @@ test.describe("Policies: the Wardyn boundary", () => {
     }
   });
 
-  test("a dry run refused 412 after a session switch is the failed report, with no Submit", async ({ page }) => {
+  test("a dry run refused 412 after a session switch asks for a reload, with no Submit", async ({ page }) => {
     await asRealSecurityAdmin(page);
     // What the server answers when the shared cookie now names someone else (expected_principal_mismatch).
     await page.route("**/api/v1/governance/dry-run", (route) =>
@@ -120,7 +120,8 @@ test.describe("Policies: the Wardyn boundary", () => {
       await page.getByRole("button", { name: BOUNDARY.REVIEW, exact: true }).click();
       const report = page.getByTestId("boundary-dry-run");
       await expect(report.getByText(BOUNDARY_DRY_RUN.FAILED_TITLE)).toBeVisible();
-      await expect(report.getByText(BOUNDARY_DRY_RUN.FAILED_BODY)).toBeVisible();
+      await expect(report.getByText(BOUNDARY_DRY_RUN.SIGNED_IN_CHANGED_BODY)).toBeVisible();
+      await expect(report.getByRole("button", { name: BOUNDARY_DRY_RUN.RELOAD })).toBeVisible();
       // Which label shows depends on whether this install holds a save for a second person.
       const submit = report.getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT_SAVE }).or(report.getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT }));
       await expect(submit).toBeDisabled();

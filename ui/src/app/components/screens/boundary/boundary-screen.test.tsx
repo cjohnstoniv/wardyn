@@ -15,6 +15,11 @@ import { MemoryRouter } from "react-router-dom";
 const getMock = vi.fn();
 const putMock = vi.fn();
 const dryRunMock = vi.fn();
+const whoamiMock = vi.fn();
+vi.mock("../../../lib/api/health", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/api/health")>("../../../lib/api/health");
+  return { ...actual, health: { ...actual.health, whoami: (...a: unknown[]) => whoamiMock(...a) } };
+});
 vi.mock("../../../lib/api/boundary", () => ({
   boundary: { get: () => getMock(), put: (...a: unknown[]) => putMock(...a), dryRun: (...a: unknown[]) => dryRunMock(...a) },
 }));
@@ -38,7 +43,7 @@ const REFUSED = "invalid Wardyn boundary: denied_domains: not a hostname";
 function renderScreen(securityOperator = true) {
   return render(
     <MemoryRouter>
-      <OperatorProvider operator securityOperator={securityOperator}>
+      <OperatorProvider operator securityOperator={securityOperator} principal="alice">
         <BoundaryScreen />
       </OperatorProvider>
     </MemoryRouter>,
@@ -61,6 +66,7 @@ beforeEach(() => {
   getMock.mockReset().mockResolvedValue(noLimits);
   putMock.mockReset().mockImplementation((body: unknown) => Promise.resolve({ ...(body as object), etag: '"b2"' }));
   dryRunMock.mockReset().mockResolvedValue(emptyReport);
+  whoamiMock.mockReset().mockResolvedValue({ principal: "alice" });
 });
 
 describe("BoundaryScreen", () => {
@@ -304,9 +310,8 @@ describe("BoundaryScreen", () => {
   });
 
   // The dry run names the person (asPerson); a session another tab switched to someone else is refused 412
-  // (expected_principal_mismatch). Today that is the generic failed report: it does not show the server's
-  // "reload and retry" sentence, offers no reload, and sends nothing.
-  it("a 412 from the dry run after a session switch is the failed report: no Submit, no write", async () => {
+  // (expected_principal_mismatch). The note tells the person to reload and offers it; nothing is sent.
+  it("a 412 from the dry run after a session switch asks for a reload: no Submit, no write", async () => {
     getMock.mockResolvedValue(hardLimits);
     const sentence = "This page was opened as a different person than the one now signed in — reload and retry";
     dryRunMock.mockRejectedValueOnce(new HttpError(412, sentence, "expected_principal_mismatch"));
@@ -317,12 +322,30 @@ describe("BoundaryScreen", () => {
     const report = await screen.findByTestId("boundary-dry-run");
     const alert = await within(report).findByRole("alert");
     expect(within(alert).getByText(BOUNDARY_DRY_RUN.FAILED_TITLE)).toBeInTheDocument();
-    expect(within(alert).getByText(BOUNDARY_DRY_RUN.FAILED_BODY)).toBeInTheDocument();
-    expect(within(alert).getByRole("button", { name: BOUNDARY_DRY_RUN.RETRY })).toBeInTheDocument();
+    expect(within(alert).getByText(BOUNDARY_DRY_RUN.SIGNED_IN_CHANGED_BODY)).toBeInTheDocument();
+    expect(within(alert).queryByText(BOUNDARY_DRY_RUN.FAILED_BODY)).toBeNull();
+    expect(within(alert).queryByRole("button", { name: BOUNDARY_DRY_RUN.RETRY })).toBeNull();
     expect(within(report).queryByText(sentence)).toBeNull();
-    expect(within(report).queryByRole("button", { name: /reload/i })).toBeNull();
     expect(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT_SAVE })).toBeDisabled();
     expect(putMock).not.toHaveBeenCalled();
+    // The same person still signed in: Reload page reruns the dry run instead of reloading the page.
+    await user.click(within(alert).getByRole("button", { name: BOUNDARY_DRY_RUN.RELOAD }));
+    await waitFor(() => expect(dryRunMock).toHaveBeenCalledTimes(2));
+    expect(whoamiMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("any other dry-run error keeps the failed copy and Try again", async () => {
+    getMock.mockResolvedValue(hardLimits);
+    dryRunMock.mockRejectedValueOnce(new HttpError(500, "boom"));
+    const user = userEvent.setup();
+    renderScreen();
+    await draftHosts("paste.example.org");
+    await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
+    const alert = await within(await screen.findByTestId("boundary-dry-run")).findByRole("alert");
+    expect(within(alert).getByText(BOUNDARY_DRY_RUN.FAILED_BODY)).toBeInTheDocument();
+    expect(within(alert).queryByText(BOUNDARY_DRY_RUN.SIGNED_IN_CHANGED_BODY)).toBeNull();
+    expect(within(alert).getByRole("button", { name: BOUNDARY_DRY_RUN.RETRY })).toBeInTheDocument();
+    expect(within(alert).queryByRole("button", { name: BOUNDARY_DRY_RUN.RELOAD })).toBeNull();
   });
 
   it("a direct save says Saved and adopts the stored document", async () => {
