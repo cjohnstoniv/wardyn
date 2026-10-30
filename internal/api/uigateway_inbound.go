@@ -173,14 +173,6 @@ func (st *uiInboundState) take(runID uuid.UUID, principal string, now time.Time,
 	return true, b.ref
 }
 
-func (st *uiInboundState) setRef(runID uuid.UUID, ref string) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if b := st.buckets[runID]; b != nil {
-		b.ref = ref
-	}
-}
-
 // uiRelayAnsweredEarly answers the two kinds of relay request the cookie pipeline never sees: one carrying
 // an inbound token, served here whole, and in host mode a cookie request from another site, refused. True
 // when it has answered. Any other bearer is not a credential here and falls to the cookie path, which strips it.
@@ -644,15 +636,30 @@ func (s *Server) auditInboundUnitDenies(ctx context.Context, sess uiSession) {
 // admitInbound spends an inbound session's request from its run's bucket and its caller's, and writes its
 // inbound.allow row.
 // False when it has answered: 429 inbound_rate_limited with Retry-After, its denial rate-bound like auth.fail.
+//
+// The run is read first, for uiDial's state check, so a call it would refuse is never admitted: a cookie
+// session, or a token's session cached for inboundResolveTTL, may hold a run that has since ended or been
+// kept. That is 409 ui_gateway_not_running with the not_running inbound.deny row inboundSessionFor's
+// refusal writes, rate-bound like it; a run that is gone is uiDial's 404, and one that cannot be read 503
+// run_unreadable, neither with a row.
 func (s *Server) admitInbound(w http.ResponseWriter, r *http.Request, sess uiSession) bool {
-	ok, ref := s.uiInbound.take(sess.Run, sess.Principal, s.cfg.Now(), sess.SandboxRef)
-	if ref == "" {
-		// A cookie session holds no sandbox reference: read it once per bucket.
-		if run, err := s.cfg.Store.GetRun(r.Context(), sess.Run); err == nil && run.SandboxRef != "" {
-			ref = run.SandboxRef
-			s.uiInbound.setRef(sess.Run, ref)
+	run, err := s.cfg.Store.GetRun(r.Context(), sess.Run)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeErrorReason(w, http.StatusNotFound, reasonRunNotFound, "run not found")
+		return false
+	case err != nil:
+		slog.ErrorContext(r.Context(), "wardynd: ui gateway inbound run lookup failed", "run_id", sess.Run, "err", err)
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunUnreadable, uiSessionUnverifiableMsg)
+		return false
+	case run.State != types.RunRunning || run.SandboxRef == "" || runIsKept(run):
+		if s.authFailedAllowed() {
+			s.auditInbound(r, sess, run.SandboxRef, "inbound.deny", "denied", map[string]any{"reason": inboundDenyNotRunning})
 		}
+		writeErrorReason(w, http.StatusConflict, reasonUIGatewayNotRunning, inboundNotRunningMsg)
+		return false
 	}
+	ok, ref := s.uiInbound.take(sess.Run, sess.Principal, s.cfg.Now(), run.SandboxRef)
 	if !ok {
 		if s.authFailedAllowed() {
 			s.auditInbound(r, sess, ref, "inbound.deny", "denied", map[string]any{"reason": inboundDenyRateLimited})

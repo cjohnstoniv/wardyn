@@ -300,6 +300,44 @@ func TestUIGateway_InboundRefusalsAreInboundDenies(t *testing.T) {
 		})
 	}
 
+	// A cookie session, and a token's session cached while the run was running, hold no state check of their
+	// own: the run's state is read before the call is admitted (#3775).
+	for name, end := range map[string]func(run *types.AgentRun){
+		"completed": func(run *types.AgentRun) { run.State = types.RunCompleted },
+		"kept":      func(run *types.AgentRun) { at := time.Now(); run.LostAt = &at },
+	} {
+		wantRefused := func(t *testing.T, h *uiHarness, rec *httptest.ResponseRecorder, allows int) {
+			t.Helper()
+			if rec.Code != http.StatusConflict || respondedReason(t, rec) != reasonUIGatewayNotRunning {
+				t.Fatalf("call = %d %s, want 409 %s", rec.Code, rec.Body.String(), reasonUIGatewayNotRunning)
+			}
+			if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner || !h.audit.hasDataValue("reason", inboundDenyNotRunning) {
+				t.Errorf("inbound.deny rows = %+v, want one not_running by %s", rows, h.owner)
+			}
+			if rows := h.audit.auditRows("inbound.allow", "success"); len(rows) != allows {
+				t.Errorf("inbound.allow rows = %+v, want %d", rows, allows)
+			}
+		}
+		t.Run("a cookie session to a "+name+" run is not_running", func(t *testing.T) {
+			h, _ := inboundHarness(t)
+			end(&h.run)
+			h.store.putRun(h.run)
+			now := h.clock.now()
+			cookie := &http.Cookie{Name: uiCookieName, Value: h.srv.encodeUISession(uiSession{Run: h.run.ID, App: "code", Port: uiTestPort,
+				Principal: h.owner, Expires: now.Add(time.Hour).Unix(), IssuedAt: now.Unix(), AuthorizedAt: now.Unix(), Inbound: true})}
+			wantRefused(t, h, h.relay("/", cookie, nil), 0)
+		})
+		t.Run("a cached token session to a run since "+name+" is not_running", func(t *testing.T) {
+			h, _ := inboundHarness(t)
+			if rec := h.call("wdn_alice", nil); rec.Code != http.StatusOK {
+				t.Fatalf("call while running = %d %s, want 200", rec.Code, rec.Body.String())
+			}
+			end(&h.run)
+			h.store.putRun(h.run)
+			wantRefused(t, h, h.call("wdn_alice", nil), 1)
+		})
+	}
+
 	t.Run("a profile denying interactive sessions is unit_denies", func(t *testing.T) {
 		h, _ := inboundHarness(t)
 		unit := types.GovernanceUnit{ID: uuid.New(), Name: "no-interactive", Limits: types.GovernanceLimits{DenyInteractive: true}}

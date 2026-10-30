@@ -16,6 +16,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
   edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
   terminal. They used to stay open until they closed or reached their time limit (#3398).
+- A browser session, or a recently checked inbound token, calling an inbound app on a run that has ended or been kept
+  is now refused with a `not_running` audit row and no `inbound.allow` row. It used to be recorded as allowed before
+  the refusal (#3775).
 
 ### Security
 
