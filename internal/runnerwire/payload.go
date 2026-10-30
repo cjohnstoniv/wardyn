@@ -262,6 +262,10 @@ type MacVMCaps struct {
 	// into its macOS VM as shared folders. A runner without it is never sent a macOS VM run with a drive.
 	Drives bool      `json:"drives,omitempty"`
 	Base   MacVMBase `json:"base"`
+	// DiskDrives says the runner keeps a person's disk drives and kept work folders as disk images on
+	// this Mac, attaches them to its macOS VM, and deletes them (reclaim_drive). A runner without it is
+	// never sent a macOS VM run with one.
+	DiskDrives bool `json:"disk_drives,omitempty"`
 	// Refusal is, in words, why the runner offers no macOS VM; empty when it offers them.
 	Refusal string `json:"refusal,omitempty"`
 	// Reason is why the runner offers no macOS VM, or can't start or prepare one now: MacVMReason*, the

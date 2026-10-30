@@ -76,7 +76,18 @@ const (
 	// MethodWorkloadStatus patches the status of one WardynWorkload custom resource from the org's
 	// answer (WorkloadStatusArgs). It is sent only to a runner that reported a workload.
 	MethodWorkloadStatus = "workload_status"
+	// MethodReclaimDrive deletes a person's disk drive from the Mac it is kept on (a mac_disk
+	// types.DriveMount), answered with ReclaimDriveResult. It is sent only to a runner whose caps carry
+	// MacVMCaps.DiskDrives, and the runner refuses every other backend.
+	MethodReclaimDrive = "reclaim_drive"
 )
+
+// ReclaimDriveResult is reclaim_drive's answer: Outcome when the disk is gone, or InUse when a run on
+// this Mac holds it, which deletes nothing.
+type ReclaimDriveResult struct {
+	Outcome runner.DriveReclaimOutcome `json:"outcome,omitempty"`
+	InUse   bool                       `json:"in_use,omitempty"`
+}
 
 // The tee window of a local attach session whose Tee is true. The runner shows at most
 // LocalAttachTeeWindowBytes of output ahead of the org's last acknowledgement, stops writing to the
