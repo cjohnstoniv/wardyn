@@ -292,8 +292,9 @@ func macVMFits(spec runner.SandboxSpec, man macvm.Manifest) error {
 // macGuestInit is what a macOS guest's agent is handed: the sandbox's env and files, and the run's CA as a
 // file at the guest's own CA path, whose variables the agent sets. The Linux paths the dispatcher put in
 // the CA variables (/tmp/wardyn) are not forwarded: no such file exists in a macOS guest, and a tool
-// pointed at one fails every TLS handshake.
-func macGuestInit(spec runner.SandboxSpec, trustedPEM string) guestagent.Init {
+// pointed at one fails every TLS handshake. Every other path, in the env and the managed files, goes
+// through the guest path table (macvm_guestpaths.go); one it cannot place refuses the run.
+func macGuestInit(spec runner.SandboxSpec, trustedPEM string) (guestagent.Init, error) {
 	linux := map[string]string{}
 	runner.SetSandboxCATrustVars(linux, false)
 	env := make(map[string]string, len(spec.Env))
@@ -306,14 +307,24 @@ func macGuestInit(spec runner.SandboxSpec, trustedPEM string) guestagent.Init {
 	// The pinned harness CLIs are root's under /usr/local/bin, so the run's agent user cannot update them:
 	// an update comes only from a new pin (a tools update), as on the Linux images.
 	env["DISABLE_AUTOUPDATER"] = "1"
-	in := guestagent.Init{Env: env, SecretEnv: spec.SecretEnv, SignInsOff: spec.DesktopSignInsOff}
-	for _, f := range spec.ManagedFiles {
-		in.Files = append(in.Files, guestagent.File{Path: f.Path, Mode: f.Mode, AgentOwned: f.AgentOwned, Content: f.Content})
+	if err := macGuestEnv(env); err != nil {
+		return guestagent.Init{}, err
 	}
+	files, err := macGuestFiles(spec.ManagedFiles)
+	if err != nil {
+		return guestagent.Init{}, err
+	}
+	if v := macGuestFilesEnv(files); v != "" {
+		env[guestagent.EnvManagedFiles] = v
+	}
+	// RunCA is the run proxy's own CA alone, which the guest trusts in its System keychain; the
+	// operator's CAs reach the guest only in the bundle file below.
+	in := guestagent.Init{Env: env, SecretEnv: spec.SecretEnv, SignInsOff: spec.DesktopSignInsOff, Files: files,
+		RunCA: strings.TrimSpace(spec.ProxyConfig.MITMCACertPEM)}
 	if ca := vmCA(spec, trustedPEM); ca != "" {
 		in.Files = append(in.Files, guestagent.File{Path: guestagent.MacCABundlePath, Mode: 0o644, Content: []byte(ca)})
 	}
-	return in
+	return in, nil
 }
 
 // admitMacVM takes the run's ledger entry: the tombstone pass first, so another login's dead VM no longer
@@ -483,7 +494,8 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	d.notVMs.Delete(ref)
 	d.vms.Store(ref, v)
 	d.keepExecOutput(ref, spec.ExecOutput)
-	return runner.Sandbox{Ref: ref, Driver: driverName, EnforcedClass: types.CC3, Machine: machine, SignIns: signIns}, nil
+	return runner.Sandbox{Ref: ref, Driver: driverName, EnforcedClass: types.CC3, Machine: machine, SignIns: signIns,
+		KeychainTrust: macKeychainTrust(res)}, nil
 }
 
 // makeRunDir creates a run's directory, new: a directory already there (another run's whose id shares
@@ -549,7 +561,10 @@ func (d *Driver) bootMacVM(ctx context.Context, v *vmRun, cc *macvm.ControlClien
 			return none, fmt.Errorf("docker: the macOS VM's guest agent did not answer: %w", err)
 		}
 	}
-	in := macGuestInit(spec, d.cfg.TrustedCAPEM)
+	in, err := macGuestInit(spec, d.cfg.TrustedCAPEM)
+	if err != nil {
+		return none, err
+	}
 	in.Mounts = mounts
 	in.DesktopPassword = desktopPassword
 	res, err := v.agent.Init(ctx, in)

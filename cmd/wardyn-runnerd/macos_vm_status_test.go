@@ -905,3 +905,24 @@ func TestPrepareLogReadsPastALongForeignLine(t *testing.T) {
 		t.Fatalf("failure %q with the error line before the long one, want that line", got)
 	}
 }
+
+// A harness the launcher's self-test withheld gets the copy canon's status line (MAC-A09), naming the
+// tools.json that keeps the end of its output; one withheld for another reason gets none.
+func TestMacOSVMStatusSelftestWithheld(t *testing.T) {
+	dir := t.TempDir()
+	rec := macvm.ToolsRecord{Withheld: map[string]macvm.WithheldRecord{
+		"codex-cli":   {Reason: macvm.SelftestFailurePrefix + "FAIL codex --version"},
+		"claude-code": {Reason: macvm.CLTFailurePrefix + "no network"},
+	}}
+	raw, _ := json.Marshal(rec)
+	if err := os.WriteFile(filepath.Join(dir, macvm.ToolsRecordFile), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := macOSVMStatus{State: runnerwire.MacVMBaseReady, Harnesses: []string{"none", "claude-code"}, withheld: selftestWithheld(dir)}
+	var out strings.Builder
+	st.writeText(&out)
+	want := "withheld: codex-cli (its self-test failed; see " + filepath.Join(dir, "tools.json") + ")\n"
+	if !strings.Contains(out.String(), "MiB\n"+want) || strings.Count(out.String(), "withheld:") != 1 {
+		t.Fatalf("status:\n%s", out.String())
+	}
+}

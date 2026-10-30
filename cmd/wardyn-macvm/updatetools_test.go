@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"net"
@@ -292,6 +293,7 @@ func updateToolsJob(t *testing.T, drift bool) {
 		_ = json.NewEncoder(w).Encode(guestagent.ToolsExecResult{Output: "No new software available.", ExitCode: 0})
 	})
 	control := http.NewServeMux()
+	control.HandleFunc("POST /v1/exec", passSelftest)
 	control.HandleFunc("GET /v1/dial/tools", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(guestagent.ToolsDial{Class: guestagent.DialConnected, Dials: 1})
 	})
@@ -330,4 +332,10 @@ func updateToolsJob(t *testing.T, drift bool) {
 	if _, err := os.Lstat(filepath.Dir(macvm.JobControlSock(sockRoot, e.ID))); !os.IsNotExist(err) {
 		t.Fatalf("the job's socket dir outlived it: %v", err)
 	}
+}
+
+// passSelftest answers stage 2's launcher self-test, an exec on the control session, with exit 0.
+func passSelftest(w http.ResponseWriter, r *http.Request) {
+	_, _, _ = guestagent.ReadFrame(r.Body)
+	_ = guestagent.WriteFrame(w, guestagent.FrameExit, binary.BigEndian.AppendUint32(nil, 0))
 }

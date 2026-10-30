@@ -26,6 +26,10 @@ import (
 )
 
 func main() {
+	// Stage 2 pushes this binary to /usr/local/bin/agent-run too: by that name it is the run launcher.
+	if filepath.Base(os.Args[0]) == filepath.Base(guestagent.MacAgentRunPath) {
+		os.Exit(guestagent.AgentRunMain(os.Args[1:]))
+	}
 	out := flag.String("out", "/var/run/wardyn-guest", "directory for detached execs' output (cleared at boot)")
 	plist := flag.String("plist", guestagent.MacAgentPlistPath, "this agent's LaunchDaemon plist, which tools mode may replace")
 	flag.Parse()
@@ -56,15 +60,16 @@ func run(out, plist string) error {
 	desktop := &guestagent.Desktop{Run: runner, Console: guestagent.ConsoleOwner{}}
 	dial := &guestagent.ToolsDialRecord{}
 	srv := &guestagent.Server{
-		Version:   version.String(),
-		Cred:      &syscall.Credential{Uid: ids.UID, Gid: ids.GID, Groups: ids.Groups},
-		Home:      guestagent.MacAgentHome,
-		User:      guestagent.MacAgentUser,
-		OutDir:    out,
-		MarkerDir: "/var/run",
-		Desktop:   desktop,
-		ToolsDial: dial,
-		Mount:     guestagent.MacShares{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID)}.Mount,
+		Version:    version.String(),
+		Cred:       &syscall.Credential{Uid: ids.UID, Gid: ids.GID, Groups: ids.Groups},
+		Home:       guestagent.MacAgentHome,
+		User:       guestagent.MacAgentUser,
+		OutDir:     out,
+		MarkerDir:  "/var/run",
+		Desktop:    desktop,
+		ToolsDial:  dial,
+		TrustRunCA: guestagent.MacKeychain{Run: runner, Dir: out}.TrustRunCA,
+		Mount:      guestagent.MacShares{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID)}.Mount,
 	}
 	h, err := srv.Handler()
 	if err != nil {

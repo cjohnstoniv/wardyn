@@ -48,6 +48,9 @@ type Server struct {
 	// ToolsDial is how the agent's tools-port dial ended (ServeTools), answered as GET /v1/dial/tools;
 	// nil serves no such request. The tools requests themselves are never served here.
 	ToolsDial *ToolsDialRecord
+	// TrustRunCA trusts Init.RunCA in the System keychain (MacKeychain.TrustRunCA); nil tries
+	// nothing (tests only).
+	TrustRunCA func(ctx context.Context, runCA string) (status, reason string)
 	// Mount mounts one folder share (MacShares.Mount); nil refuses an Init that names one.
 	Mount func(context.Context, Mount) error
 
@@ -199,6 +202,11 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.env = initEnv(in.Env, in.SecretEnv, ca)
+	// Before Init answers, so before the host starts any agent process. A CA that is not trusted
+	// does not fail the Init: the answer says so, and the run goes on its CA bundle.
+	if in.RunCA != "" && s.TrustRunCA != nil {
+		res.KeychainTrust, res.KeychainTrustReason = s.TrustRunCA(r.Context(), in.RunCA)
+	}
 	if s.Desktop != nil {
 		*res.DesktopPasswordSet = s.initDesktop(r.Context(), ca, in.DesktopPassword, !in.SignInsOff)
 	}

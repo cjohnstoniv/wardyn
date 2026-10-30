@@ -187,6 +187,7 @@ type macOSVMStatus struct {
 
 	progress, counted, minCPUs, minMemoryMiB int
 	setupCode                                string
+	withheld                                 []string // selftestWithheld's lines, for a ready base
 	// byHand: the helper's probe says this Mac has no guest provisioning, so its prepare needs setup by hand.
 	byHand bool
 }
@@ -209,6 +210,7 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 	}
 	if c.Base.State == runnerwire.MacVMBaseReady {
 		st.Desktop, st.Harnesses, st.minCPUs, st.minMemoryMiB = cmp.Or(c.Desktop, "none"), append(st.Harnesses, c.Harnesses...), c.MinCPUs, c.MinMemoryMiB
+		st.withheld = selftestWithheld(m.layout.BaseDir(0))
 	}
 	if ev, ok, _, _ := lastHelperLines(m.layout.PrepareLog()); ok {
 		st.Phase = ev.Phase
@@ -257,6 +259,9 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 	}
 	if st.State == runnerwire.MacVMBaseReady {
 		fmt.Fprintf(out, "harnesses: %s; desktop: %s; guest minimum: %d CPUs, %d MiB\n", strings.Join(st.Harnesses, ", "), desktopMode(st.Desktop), st.minCPUs, st.minMemoryMiB)
+		for _, l := range st.withheld {
+			fmt.Fprintln(out, l)
+		}
 	}
 	if st.Thermal != "" {
 		fmt.Fprintf(out, "thermal: %s\n", st.Thermal)

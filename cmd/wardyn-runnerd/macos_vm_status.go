@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -205,6 +206,24 @@ func toolsFailure(baseDir string) string {
 		}
 	}
 	return ""
+}
+
+// selftestWithheld is a status line for each harness the ready base in baseDir withheld because the
+// launcher's self-test failed for it. The end of the self-test's output is in the base's tools.json,
+// which the line names.
+func selftestWithheld(baseDir string) []string {
+	rec, err := macvm.ReadToolsRecord(baseDir)
+	if err != nil {
+		return nil
+	}
+	var lines []string
+	for id, w := range rec.Withheld {
+		if strings.HasPrefix(w.Reason, macvm.SelftestFailurePrefix) {
+			lines = append(lines, "withheld: "+id+" (its self-test failed; see "+filepath.Join(baseDir, macvm.ToolsRecordFile)+")")
+		}
+	}
+	slices.Sort(lines)
+	return lines
 }
 
 // scrubError is err as the caps carry it: this login's home as "~", the uid in a socket path as <uid>,

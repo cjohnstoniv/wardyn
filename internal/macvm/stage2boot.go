@@ -5,6 +5,7 @@ package macvm
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -328,8 +329,9 @@ func pairDial(p *pairer, wait time.Duration) func(ctx context.Context) (net.Conn
 }
 
 // toolsGuest is ToolsGuest over the guest agent's tools-mode session (1026)
-// and its control session (1024, which answers only the tools-port dial),
-// and the control check's RFB client over the desktop path (1025).
+// and its control session (1024, which answers the tools-port dial and runs
+// the launcher's self-test as the agent user), and the control check's RFB
+// client over the desktop path (1025).
 type toolsGuest struct {
 	tools, control *guestagent.Client
 	desktop        func(ctx context.Context) (net.Conn, error)
@@ -410,6 +412,42 @@ func (g *toolsGuest) ToolsDial(ctx context.Context) (string, error) {
 	defer done()
 	d, err := g.control.ToolsDial(ctx)
 	return d.Class, err
+}
+
+// AgentExec runs argv over the control session, as the agent user through the
+// run's own exec path (the guest needs no Init for it), and returns its stdout
+// and stderr together.
+func (g *toolsGuest) AgentExec(ctx context.Context, argv, env []string) (string, int, error) {
+	ctx, done := g.bound(ctx)
+	defer done()
+	s, err := g.control.Exec(ctx, guestagent.ExecRequest{Argv: argv, Env: env})
+	if err != nil {
+		return "", 0, err
+	}
+	defer s.Close()
+	_ = s.Stdin.Close()
+	var mu sync.Mutex
+	var out bytes.Buffer
+	var wg sync.WaitGroup
+	for _, r := range []io.Reader{s.Stdout, s.Stderr} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			buf := make([]byte, 4096)
+			for {
+				n, err := r.Read(buf)
+				mu.Lock()
+				out.Write(buf[:n])
+				mu.Unlock()
+				if err != nil {
+					return
+				}
+			}
+		}()
+	}
+	code, err := s.Wait()
+	wg.Wait()
+	return out.String(), code, err
 }
 
 // MovePointer logs in to the guest's Screen Sharing with VncAuth over the

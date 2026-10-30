@@ -112,6 +112,24 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   while a check is still waiting on a store that does not answer. A hung check used to hold the connection open for good, and a store that kept
   failing kept it open about a minute. The refusal's audit row is now written after the close, so a slow audit write
   no longer delays it.
+### Added
+
+- macOS VMs: a run's workload now starts in the guest. Each base carries the standard launcher (task, command and
+  self-test modes). A run that asks for several agents, held tool approvals or a service is refused by the launcher
+  with a reason.
+- Preparing a macOS VM base now ends with the launcher's self-test as the agent user. A harness that fails it is
+  withheld, and a base that cannot start a run is not published.
+- macOS VMs: the guest agent trusts the run's proxy certificate in the run's System keychain, for TLS only, before
+  the run starts, so tools that use only the keychain trust it too. If macOS refuses, the run goes on and its audit
+  says so.
+
+### Fixed
+
+- macOS VMs: the files a run's policy manages in the guest, such as a harness's managed settings and server list and
+  the cloud CLI's configuration, are now written where macOS reads them. A managed file with no macOS location stops the
+  run's start with a reason.
+- Preparing a macOS VM base no longer logs the guest's tools connection as `tools_dial: transport failure` while it is
+  still opening. Stage 2 reads the dial after its first tools request, and logs one still unclassified as `pending`.
 
 ## [0.10.0-rc.8] — 2026-10-29
 

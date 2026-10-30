@@ -364,7 +364,8 @@
 # docs/AUDIT-ACTIONS.md 55517 adds 4, measured (rc.8 service cap): run.end.set service_renewed only under a lifetime cap.
 # docs/AUDIT-ACTIONS.md 55519 adds 2, measured (rc.8 cumulative review): inbound.deny run_unreadable for a stream whose run read stays down.
 # docs/AUDIT-ACTIONS.md 55547 adds 28 over 55519, measured (rc.9 L11): the builtin:tunnel-limit row.
-docs/AUDIT-ACTIONS.md=55547 share=8
+# docs/AUDIT-ACTIONS.md 55546 adds 27 over 55519, measured (0.10.0-rc.9 macOS VM keychain): run.dispatch's denied row for a run proxy CA the guest's System keychain did not trust.
+docs/AUDIT-ACTIONS.md=55574 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
