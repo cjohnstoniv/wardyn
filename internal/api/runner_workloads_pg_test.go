@@ -452,3 +452,42 @@ func TestPG_WorkloadFromRunner_DeleteEndsTheCurrentRun(t *testing.T) {
 		t.Fatalf("workload.delete data %s (%v), want ended_run_id %s via %s for uid-web", deletes[0].Data, err, run, workloadViaK8s)
 	}
 }
+
+// A restart of a custom resource's workload launches under the namespace binding that holds now. Once the
+// binding is deleted, the sponsor's restart is refused workload_binding_inactive, the refusal is recorded on
+// the workload, and no run goes to the deleted binding's pool. While the binding stands it is not refused so.
+func TestPG_Workload_RestartNeedsTheCurrentBinding(t *testing.T) {
+	e := newCREnv(t)
+	ctx := context.Background()
+	wl := e.putK8sWorkload(t, "web", "uid-web", "t")
+	path := "/api/v1/workloads/web/restart?owner=" + svcPrin
+	if res := decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.sponsor, ""), http.StatusOK); res.Launch.Reason == reasonWorkloadBindingInactive {
+		t.Fatalf("restart under the standing binding = %+v, want it not refused %s", res.Launch, reasonWorkloadBindingInactive)
+	}
+	bindings, err := e.st.ListWorkloadBindings(ctx, store.Page{})
+	if err != nil || len(bindings) != 1 {
+		t.Fatalf("bindings = %+v (%v), want the env's one", bindings, err)
+	}
+	if _, err := e.st.DeleteWorkloadBinding(ctx, bindings[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	runsOnPool := func() int {
+		var n int
+		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM agent_runs WHERE runner_pool_id = $1`, e.rp.ID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := runsOnPool()
+	res := decodeApply(t, doSSO(t, e.h.srv, http.MethodPost, path, e.sponsor, ""), http.StatusOK)
+	if res.Launch.State != client.WorkloadRefused || res.Launch.Reason != reasonWorkloadBindingInactive || res.Launch.RunID != nil {
+		t.Fatalf("restart after the binding was deleted = %+v, want refused %s with no run", res.Launch, reasonWorkloadBindingInactive)
+	}
+	v, err := e.st.GetWorkload(ctx, svcPrin, "web")
+	if err != nil || v.LastRefusal == nil || v.LastRefusal.Reason != reasonWorkloadBindingInactive || v.LastRefusal.Generation != wl.Generation {
+		t.Fatalf("stored workload %+v (%v), want generation %d refused %s", v.Workload, err, wl.Generation, reasonWorkloadBindingInactive)
+	}
+	if n := runsOnPool(); n != before {
+		t.Fatalf("runs on the deleted binding's pool = %d after the restart, want %d", n, before)
+	}
+}

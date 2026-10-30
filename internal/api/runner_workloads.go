@@ -51,6 +51,9 @@ const (
 const workloadBindingInactiveMsg = "The namespace binding no longer carries authority: its service identity is suspended or retired, " +
 	"its sponsor changed since the binding was made, or the sponsor's access was revoked. Bind the namespace again."
 
+const workloadBindingGoneMsg = "No namespace binding binds this workload's namespace, on its pool, to its service identity any more. " +
+	"Bind the namespace again."
+
 // WorkloadFromRunner is the `workload` event. It runs on the runner's read loop, so it only decodes, finds
 // the binding and records; a launch, a run's end and every status push go on in the background, because
 // each of them may call this same runner. A report outside the wire's shape is refused for good; a
@@ -217,25 +220,55 @@ func (s *Server) launchBoundWorkload(ws store.WorkloadStore, b store.WorkloadBin
 	}
 	defer cancel()
 	ctx := sr.Context()
-	live, err := s.bindingLive(ctx, b, si)
-	switch {
-	case err != nil:
-		// Unknown standing launches nothing; the runner's next report of the resource tries again.
-	case !live:
-		var claimed store.Workload
-		var ok bool
-		if claimed, ok, err = ws.ClaimWorkloadLaunch(ctx, wl.ID); err == nil && ok {
-			_, err = s.refuseWorkloadLaunch(sr, ws, claimed, reasonWorkloadBindingInactive, workloadBindingInactiveMsg)
-		}
-	default:
-		_, err = s.launchWorkload(sr, ws, wl)
-	}
-	if err != nil {
+	// Unknown standing launches nothing; the runner's next report of the resource tries again.
+	if _, err := s.launchUnderBinding(sr, ws, b, true, si, wl); err != nil {
 		slog.ErrorContext(ctx, "wardynd: launch a custom resource's workload", slog.String("workload", workloadTarget(wl)), slog.Any("err", err))
 	}
 	if v, err := ws.GetWorkload(ctx, wl.Owner, wl.Name); err == nil {
 		s.pushWorkloadView(ctx, ws, v)
 	}
+}
+
+// launchUnderBinding launches wl's owed generation on sr, a request acting as the bound service si, while b,
+// its namespace binding (found: it still exists), carries authority. A binding deleted since, or one that
+// carries none, records the launch refused workload_binding_inactive, and the current run keeps running.
+// A standing that cannot be read launches nothing and is the error.
+func (s *Server) launchUnderBinding(sr *http.Request, ws store.WorkloadStore, b store.WorkloadBinding, found bool, si types.ServiceIdentity,
+	wl store.Workload,
+) (client.WorkloadLaunch, error) {
+	live := false
+	if found {
+		var err error
+		if live, err = s.bindingLive(sr.Context(), b, si); err != nil {
+			return client.WorkloadLaunch{}, err
+		}
+	}
+	if live {
+		return s.launchWorkload(sr, ws, wl)
+	}
+	msg := workloadBindingInactiveMsg
+	if !found {
+		msg = workloadBindingGoneMsg
+	}
+	claimed, ok, err := ws.ClaimWorkloadLaunch(sr.Context(), wl.ID)
+	if err != nil || !ok {
+		return client.WorkloadLaunch{State: client.WorkloadNoLaunch}, err
+	}
+	return s.refuseWorkloadLaunch(sr, ws, claimed, reasonWorkloadBindingInactive, msg)
+}
+
+// workloadBindingOf finds, in bindings, the one wl, a custom resource's workload, launches under now: the
+// binding of its namespace, on its pool, to its owner, as the runner's next report of the resource would
+// find it. None when that binding was deleted since or the pool row is gone.
+func workloadBindingOf(bindings []store.WorkloadBinding, wl store.Workload) (store.WorkloadBinding, bool) {
+	i := slices.IndexFunc(bindings, func(b store.WorkloadBinding) bool {
+		return wl.SourcePoolID != nil && b.PoolID == *wl.SourcePoolID && b.Namespace == wl.SourceNamespace &&
+			types.ServicePrincipalPrefix+b.Service == wl.Owner
+	})
+	if i < 0 {
+		return store.WorkloadBinding{}, false
+	}
+	return bindings[i], true
 }
 
 // syncWorkloadReport deletes the workloads the namespace's resources recorded on the binding's pool that

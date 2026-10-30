@@ -11,6 +11,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- Restarting a `WardynWorkload` custom resource's workload now needs the namespace binding that holds now, as the
+  runner's next report of the resource would. A restart after the binding was deleted could still launch the run on
+  the deleted binding's pool; it is now refused `workload_binding_inactive`, and the refusal is recorded on the
+  workload. The launch uses the binding's own sponsor and standing (#3758).
+
 ## [0.10.0-rc.8] — 2026-10-29
 
 ### Before you upgrade
