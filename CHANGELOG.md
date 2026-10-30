@@ -27,6 +27,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run Wardyn launches itself (a workspace scan or recording, a harness sign-in, a probe) no longer records its
   placement as `remote` on a deployment where runner pools do not place runs: it is left empty there, as every other
   run's is. The 0.9.1 note that `run.create` records the placement of every run holds only where pools place runs.
+- On Kubernetes, a run that keeps its work folder beside a shared drive is refused up front, at the preview,
+  preflight, create and queue replay, with `drive_share_beside_managed`. It was accepted and then refused at dispatch,
+  since the kept work folder is a managed drive the run adds only then.
 
 ## [0.10.0-rc.8] — 2026-10-29
 
