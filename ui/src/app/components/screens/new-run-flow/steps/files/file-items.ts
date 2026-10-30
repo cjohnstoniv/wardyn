@@ -9,6 +9,7 @@
 // a card is only a view of it.
 
 import { DENIED } from "../../../../../lib/permissions-copy";
+import { driveSizeLabel } from "../../../../../lib/user-drives-display";
 import type { MeDrive, MeDriveCatalogue } from "../../../../../lib/api/me-drives";
 import type { RunAttachment } from "../../../../../lib/types/new-run-contract";
 import { START_FOLDER_DRIVE } from "../../../../../lib/types/new-run-contract";
@@ -55,6 +56,22 @@ const slug = (text: string): string => text.trim().toLowerCase().replace(/[^a-z0
  * The server's mount target for a folder whose source names none (internal/api `composerWorkspaceTarget`).
  * A request can place only a workspace's one folder, so any other folder appears here or at its source's target.
  */
+/**
+ * A macOS VM run's guest has /Users/agent where a container has /home/agent: the server moves every path (docs/operations/
+ * macos-vms.md). The console shows the guest's own path on such a run, and only shows it: what is sent keeps /home/agent.
+ * Works on one path or on a sentence that holds one.
+ */
+export const guestPath = (text: string, macOS: boolean): string =>
+  macOS ? text.replace(/(^|\s)\/home\/agent(?=\/|\s|$)/g, "$1/Users/agent") : text;
+
+/** The size and what binds it, as a drive's row says them ("64 GiB · Enforced"); the words are the step's own. */
+export function driveMeta(d: MeDrive): string | undefined {
+  const size = driveSizeLabel(d.size_mib);
+  if (!size) return undefined;
+  const word = d.enforcement === "filesystem" ? NR_FILES.ENFORCED : d.enforcement === "eviction" ? NR_FILES.ENFORCED_BY_STOP : d.enforcement === "none" ? NR_FILES.NOT_ENFORCED : undefined;
+  return word ? `${size} · ${word}` : size;
+}
+
 export const SERVER_FOLDER_TARGET = "/home/agent/work";
 
 /** Owner ruling 2026-10-13: a folder appears at /home/agent/folders/<name> unless its source names a place. */

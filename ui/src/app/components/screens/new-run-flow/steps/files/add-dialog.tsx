@@ -23,7 +23,7 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { RunIntent } from "../../draft/run-intent";
 import { BranchPicker } from "./branch-picker";
 import { refTextKey } from "./typed-ref";
-import { driveChips, driveKind, driveSharedWith, fileItems, KIND_ORDER, pathError, saveChoice, choiceKey, type FileItem, type FileKind, type ItemChoice, type ItemSources } from "./file-items";
+import { driveChips, driveKind, driveMeta, driveSharedWith, fileItems, guestPath, KIND_ORDER, pathError, saveChoice, choiceKey, type FileItem, type FileKind, type ItemChoice, type ItemSources } from "./file-items";
 import { driveMountsLine, driveReason } from "./file-sources";
 import { KIND_INFO, KIND_LABEL, KindTile, PathText } from "./kind-visuals";
 import { LockedAccess } from "./locked-access";
@@ -59,6 +59,8 @@ interface PickOption {
   chips: string[];
   /** A folder's host path, otherwise where it appears. */
   shownPath?: string;
+  /** A drive's size and whether it is enforced, as the board shows them under its name. */
+  meta?: string;
   defaultPath?: string;
   locked: boolean;
   reason?: string;
@@ -154,7 +156,7 @@ function optionsFor(kind: AttachKind, src: ItemSources, macOS: boolean): PickOpt
     key: d.id, name: d.name,
     // A team drive says its access as a chip, either way; any other says only when it is read-only.
     chips: d.team ? [NR_FILES.SOURCE_TEAM, d.writable ? NR_FILES.ACCESS_EDIT : NR_FILES.ACCESS_READ] : [...driveChips(d), ...(d.writable ? [] : [NR_FILES.ACCESS_READ])],
-    shownPath: d.target, defaultPath: d.target, locked: !d.writable, reason: driveReason(d) ?? (macOS && noVolumeInMacOS(d) ? MAC_DRIVES.D03 : undefined), mounts: driveMountsLine(d),
+    shownPath: d.target, defaultPath: d.target, locked: !d.writable, reason: driveReason(d) ?? (macOS && noVolumeInMacOS(d) ? MAC_DRIVES.D03 : undefined), mounts: driveMountsLine(d), meta: driveMeta(d),
     kept: d.kept_from_run ? { line: d.kept_from_run_title ? NR_FILES.DRIVE_KEPT_FROM(d.kept_from_run_title) : NR_FILES.DRIVE_KEPT_FROM_UNTITLED, unenforced: d.enforcement === "none" } : undefined,
     sharedWith: driveSharedWith(d), othersSee: d.team === true && d.writable, own: d.owned === true,
   }));
@@ -205,7 +207,10 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
   // name, or the older single-drive switch with no catalogue drive behind it).
   const editedSource = editing ? (editing.driveId ?? editing.key) : undefined;
   const attachKind = s.kind === "computer" ? null : s.kind;
-  const options = attachKind ? optionsFor(attachKind, src, intent.machine_kind === "macos_vm") : [];
+  const macOS = intent.machine_kind === "macos_vm";
+  // A path as the run's guest sees it, for the screen only: the choice and the request keep the server's own path.
+  const guest = (text: string) => guestPath(text, macOS);
+  const options = attachKind ? optionsFor(attachKind, src, macOS) : [];
   const source = options.find((o) => o.key === s.sourceKey);
   const choice: ItemChoice | null = attachKind && s.sourceKey
     ? { kind: attachKind, sourceKey: s.sourceKey, path: s.path.trim().replace(/\/+$/, ""), defaultPath: source?.defaultPath, branch: s.branch, readOnly: s.readOnly }
@@ -421,7 +426,8 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
                           )}
                         </span>
                         {o.kept && <span className="text-xs text-muted-foreground">{o.kept.line}</span>}
-                        {o.shownPath && <PathText path={o.shownPath} className="text-muted-foreground" />}
+                        {o.meta && <span className="text-xs text-muted-foreground" data-testid="nr-drive-meta">{o.meta}</span>}
+                        {o.shownPath && <PathText path={attachKind === "folder" ? o.shownPath : guest(o.shownPath)} className="text-muted-foreground" />}
                         {o.mounts && <span className="text-xs text-muted-foreground" data-testid="nr-drive-mounts">{o.mounts}</span>}
                         {o.sharedWith && <span className="text-xs">{o.sharedWith}</span>}
                         {o.othersSee && <span className="text-xs text-warning">{NR_FILES.TEAM_OTHERS_SEE}</span>}
@@ -500,7 +506,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
               />
             ) : (
               <output id={DIALOG_PATH_ID} className="flex min-h-[42px] items-center rounded-md border border-border bg-muted px-3">
-                <PathText path={shownPath} />
+                <PathText path={guest(shownPath)} />
               </output>
             )}
             {s.attempted && error ? (
