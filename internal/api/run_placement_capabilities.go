@@ -648,7 +648,7 @@ const (
 // (WARDYN_TOOL_APPROVALS=hold), which the macOS guest launcher refuses: asksFirst when a tool rule asks
 // first, holds when the lane is held for any other reason. It is the trigger applyToolPosture uses for
 // the lane (tool approvals already hold, a person's tool rules, a policy rule that holds or blocks); a
-// hold only autonomy or the policy's inner walls derive, later in the fold, is the launcher's to refuse.
+// hold only autonomy or the policy's inner walls derive is stepMacOSHold's, later in the fold.
 // An interactive run, an exec run and one whose agents have no hold lane never reach it.
 func macOSVMHolds(req createRunRequest, spec types.RunPolicySpec) (asksFirst, holds bool) {
 	if requestIsInteractive(req) || req.TaskMode == "exec" || !slices.ContainsFunc(taskAgents(req), agentHasHoldLane) {

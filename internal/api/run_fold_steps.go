@@ -539,6 +539,12 @@ func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 	return !refusal.write(s, f.w, f.r)
 }
 
+// stepMacOSHold is macOSHoldRefusal (run_macos_hold.go) after the tool lane: autonomy and the policy's
+// inner walls have derived req.ToolApprovals by then, and a macOS VM cannot hold a tool call.
+func (s *Server) stepMacOSHold(f *runFold, _ *foldRecorder) bool {
+	return !macOSHoldRefusal(*f.req).write(s, f.w, f.r)
+}
+
 // stepGitHubCLIRepo is githubCLIRepoRefusal (runs_cli_github.go) at the doors that launch and
 // review. The preview shows the same fact as the card's reason instead.
 func (s *Server) stepGitHubCLIRepo(f *runFold, _ *foldRecorder) bool {
