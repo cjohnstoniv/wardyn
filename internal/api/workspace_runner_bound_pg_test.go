@@ -210,7 +210,7 @@ func (f *admissionFixture) seedBoundFolder(t *testing.T, path string) (types.Wor
 	if err != nil {
 		t.Fatal(err)
 	}
-	ws, err := f.st.CreateWorkspace(f.ctx, types.Workspace{ID: uuid.New(), Name: filepath.Base(path), OwnedBy: f.rn.Owner, Status: types.WorkspaceScanned,
+	ws, err := f.st.CreateWorkspace(f.ctx, types.Workspace{ID: uuid.New(), Name: boundWorkspaceName(path), OwnedBy: f.rn.Owner, Status: types.WorkspaceScanned,
 		Sources:     []types.WorkspaceSource{boundSource(path, f.rn.ID)},
 		Attachments: []types.WorkspaceAttachment{{SourceID: &src.ID}}, CreatedAt: now, UpdatedAt: now})
 	if err != nil {
@@ -234,12 +234,15 @@ func (f *admissionFixture) runGate(path string) (int, string, error) {
 	return f.srv.validateWorkspaceSources(f.ctx, readOnlyMount(path), runCarrierRule{})
 }
 
+// boundWorkspaceName is the name seedBoundFolder gives path's workspace, unlike the folder's own name.
+func boundWorkspaceName(path string) string { return "ws-" + filepath.Base(path) }
+
 // wantRefusedNamed requires the run gate to refuse path by the stale-binding reason, naming the folder's
-// workspace (seedBoundFolder names it after the path's base) as the console's copy does.
-func (f *admissionFixture) wantRefusedNamed(t *testing.T, when, path string) {
+// workspace, the runner and why, as the console's copy does.
+func (f *admissionFixture) wantRefusedNamed(t *testing.T, when, path, why string) {
 	t.Helper()
 	code, reason, err := f.runGate(path)
-	want := "The folder for " + filepath.Base(path) + " is on "
+	want := "The folder for " + boundWorkspaceName(path) + " is on " + f.rn.Name + ", which can't run it now (" + why + ")."
 	if err == nil || code != http.StatusUnprocessableEntity || reason != "workspace_source_runner_unavailable" || !strings.Contains(err.Error(), want) {
 		t.Errorf("%s: run gate = %d %q %v, want 422 workspace_source_runner_unavailable saying %q", when, code, reason, err, want)
 	}
@@ -261,7 +264,7 @@ func TestRevokeRunner_BoundSourceStaysAndRunRefusedNamed(t *testing.T) {
 	if got := f.sourceRunner(t, srcID); got == nil || *got != f.rn.ID {
 		t.Errorf("binding after the revoke = %v, want it kept on %s", got, f.rn.ID)
 	}
-	f.wantRefusedNamed(t, "after the revoke", boundFolder)
+	f.wantRefusedNamed(t, "after the revoke", boundFolder, "runner revoked")
 }
 
 // Handing a member's workspace to the operator, by the SCIM purge and by POST /workspaces/{id}/reassign,
@@ -284,7 +287,7 @@ func TestReassignWorkspace_KeepsBinding_RunRefusedNamed(t *testing.T) {
 		if got := f.sourceRunner(t, id); got == nil || *got != f.rn.ID {
 			t.Errorf("%s: binding after the reassign = %v, want it kept on %s", path, got, f.rn.ID)
 		}
-		f.wantRefusedNamed(t, path+" after the reassign", path)
+		f.wantRefusedNamed(t, path+" after the reassign", path, "not your runner")
 	}
 	if rn, err := f.st.GetRunner(f.ctx, f.rn.ID); err != nil || rn.State != types.RunnerClaimed {
 		t.Errorf("runner = %q (%v), want it still claimed: the reassign alone makes the binding stale", rn.State, err)
@@ -312,7 +315,7 @@ func TestLeaverPurge_RevokesRunnerKeepsBinding(t *testing.T) {
 	if rn, err := f.st.GetRunner(f.ctx, f.rn.ID); err != nil || rn.State != types.RunnerRevoked {
 		t.Errorf("runner = %q (%v), want revoked", rn.State, err)
 	}
-	f.wantRefusedNamed(t, "after the purge", boundFolder)
+	f.wantRefusedNamed(t, "after the purge", boundFolder, "not your runner")
 }
 
 // A runner whose wardyn-runnerd does not say bound_folders predates the checks that bind such a folder:
