@@ -11,6 +11,7 @@
 // wait, the fingerprint and Revoke; a revoked one shows who revoked it and no Revoke.
 import * as React from "react";
 import { toast } from "sonner";
+import { health } from "../../../lib/api/health";
 import { runners as runnersApi } from "../../../lib/api/runners";
 import { absoluteTime, relativeTime, shortDate } from "../../../lib/format";
 import type { RunnerView } from "../../../lib/types/runners";
@@ -64,6 +65,23 @@ function Header({ runner }: { runner: RunnerView }) {
   );
 }
 
+/** The organisation's maximum macOS base age in days, read only for a Mac that sends macOS VM caps; absent while unread or unreadable. */
+function useMaxBaseAgeDays(enabled: boolean): number | undefined {
+  const [days, setDays] = React.useState<number>();
+  React.useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    health
+      .getSiteConfig()
+      .then((sc) => alive && setDays(sc.macos_vm?.max_base_age_days))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [enabled]);
+  return days;
+}
+
 export function RunnerDrawer({
   runner,
   onClose,
@@ -79,6 +97,7 @@ export function RunnerDrawer({
   const [confirming, setConfirming] = React.useState(false);
   const securityAdmin = useSecurityOperator();
   const titleRef = React.useRef<HTMLSpanElement | null>(null);
+  const maxBaseAgeDays = useMaxBaseAgeDays(!!runner?.macos_vm);
   if (!runner) return null;
   const claimed = runner.state === "claimed";
   const reportedAt = runner.posture_reported_at ? RUNNER.REPORTED_AT(relativeTime(runner.posture_reported_at)) : "";
@@ -155,6 +174,8 @@ export function RunnerDrawer({
                   active={runner.usage.in_use.macos_vm_runs ?? 0}
                   perRun={runner.limits?.per_run}
                   runner={runner.name}
+                  hostOS={runner.posture?.os === "darwin" ? runner.posture.os_version : undefined}
+                  maxBaseAgeDays={maxBaseAgeDays}
                 />
                 {trust}
                 <Section label={RUNNER_V6.POOLS} data-pools>

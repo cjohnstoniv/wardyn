@@ -17,6 +17,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   runs use it: desktop control, accounts, Remote Login and the launcher's self-test. A copy that fails is discarded and
   runs keep the old base. The runner reports when its base was last edited, and each run records it. See
   [Editing a base](docs/operations/macos-vms.md#editing-a-base).
+- The console shows a disk drive's Mac in New Run and the admin drive list, and says how a disk drive's delete ended. A
+  Mac's runner drawer now shows its macOS base's guest posture, age and last edit, and marks a base past the
+  organisation's maximum age as not offered.
 
 ### Changed
 

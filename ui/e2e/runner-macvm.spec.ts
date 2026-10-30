@@ -5,7 +5,7 @@
 
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole } from "./fixtures";
-import { MACVM_K, MACVM_R } from "../src/app/components/wardyn/copy/runner-macvm";
+import { MACVM_K, MACVM_P, MACVM_R } from "../src/app/components/wardyn/copy/runner-macvm";
 import { DESKTOP } from "../src/app/components/wardyn/copy/desktop";
 import { RES } from "../src/app/components/wardyn/copy/runner-pools";
 import { aheadByHours } from "../src/app/lib/test-clock";
@@ -34,6 +34,11 @@ const RUNNERS = [
   mac("mac-preparing", "00000000-0000-4000-8000-0000000000c2", { max: 2, base: { state: "preparing", progress: 42 } }),
   mac("mac-failed", "00000000-0000-4000-8000-0000000000c3", { max: 0, base: { state: "failed", error: "connection reset by peer" } }),
   mac("linux-box", "00000000-0000-4000-8000-0000000000c4"),
+  // A base 41 days old: past the 30-day maximum the too-old test sets.
+  mac("mac-old", "00000000-0000-4000-8000-0000000000c5", {
+    ...READY,
+    base: { ...READY.base, created_at: aheadByHours(-41 * 24), guest: { os_version: "27.0.1", sip: "on", gatekeeper: "on", profiles: 2, mdm: "not_enrolled", org_ca: "trusted" } },
+  }),
 ];
 
 async function openRunners(page: Page) {
@@ -86,6 +91,17 @@ test.describe("Runner drawer: macOS virtual machines", () => {
     const section = (await openDrawer(page, "mac-failed")).locator("[data-macvm]");
     await expect(section.getByText(MACVM_R.R15, { exact: true })).toBeVisible();
     await expect(section.getByText("connection reset by peer")).toBeVisible();
+  });
+
+  test("a base older than the organisation's maximum is not offered, with its age and guest posture", async ({ page }) => {
+    await page.route("**/api/v1/site-config", (route) => route.fulfill({ json: { macos_vm: { max_base_age_days: 30 } } }));
+    await openRunners(page);
+    const section = (await openDrawer(page, "mac-old")).locator("[data-macvm]");
+    await expect(section.getByText(MACVM_P.P12, { exact: true })).toBeVisible();
+    await expect(section.getByText(MACVM_R.R14, { exact: true })).toBeVisible();
+    await expect(section.getByText(MACVM_P.P01, { exact: true })).toBeVisible();
+    await expect(section.getByText(MACVM_P.P07_INSTALLED(2))).toBeVisible();
+    await expect(section.getByText(MACVM_R.R25)).toHaveCount(0);
   });
 
   test("a runner that sends no macOS VM caps has no section", async ({ page }) => {
