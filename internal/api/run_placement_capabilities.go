@@ -4,7 +4,6 @@
 package api
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -673,7 +672,7 @@ func (a *macOSVMAsk) askDrives(drives []runDrive, keep *keptWorkFolder) {
 		switch {
 		case drive.OwnerSubject != "":
 			a.Drives = true
-		case drive.Backend.RunnerTarget() == "k8s" || drive.Backend == types.DriveBackendDockerVolume && drive.Team:
+		case drive.Backend.RunnerTarget() == "k8s" || drive.Backend == types.DriveBackendDockerVolume:
 			if a.VolumeDrive == "" {
 				a.VolumeDrive, a.ClusterVolume = drive.Name, drive.Backend.RunnerTarget() == "k8s"
 			}
