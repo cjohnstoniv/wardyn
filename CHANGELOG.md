@@ -110,6 +110,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - An image whose own `ENV` sets `WARDYN_SERVICE=1` no longer turns a plain command run into a service that restarts
   in a loop. Dispatch now sets `WARDYN_SERVICE=0` on every run that is no service, and the sandbox's env wins over the
   image's (#3763).
+- A workload launch refused `placement_credential` for one of its policy's grants now says that the grant may come
+  from the default policy, which a workload's `inline_policy` is laid onto, and that `eligible_grants` (`[]` for none)
+  replaces it. The console's last refusal says so in plain words and, for a reader who may see it, adds the server's
+  sentence naming the grant.
 
 ### Security
 
