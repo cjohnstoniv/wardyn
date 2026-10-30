@@ -610,9 +610,15 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		added = unionCeilingDenies(policy, c.deny)
 		grantRows, droppedGrant = dropWithheldGrants(w, grantRows, injections, p, policy, sandboxEnv)
 
+		// The person's Azure DevOps lane goes whole, as the git broker's does in dropBrokeredLanes: its
+		// credential rides one injection per host of the organisation (adoEntraHosts), so a deny on one
+		// host would leave it live on the organisation's other names and services.
+		adoLane := slices.ContainsFunc(*injections, func(in runner.InjectionGrant) bool {
+			return in.Rule.SecretName == types.ADOEntraAccessTokenSecret && w.withheld(in.Rule.Host)
+		})
 		kept := (*injections)[:0:0] // :0:0 — never alias the caller's array
 		for _, in := range *injections {
-			if w.withheld(in.Rule.Host) {
+			if w.withheld(in.Rule.Host) || adoLane && in.Rule.SecretName == types.ADOEntraAccessTokenSecret {
 				droppedInjection = append(droppedInjection, in.Rule.Host)
 				continue
 			}
@@ -621,6 +627,9 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		*injections = kept
 
 		droppedLane = s.dropBrokeredLanes(w, p, sandboxEnv)
+		if adoLane {
+			droppedLane = append(droppedLane, adoCeilingLane)
+		}
 		droppedLane = append(droppedLane, dropGitHubDoor(w, policy, p, sandboxEnv)...)
 		lanes, lane := narrowCeilingBedrockLane(w, llm, mitmHosts, injections, sandboxEnv)
 		droppedLane = append(droppedLane, lanes...)
@@ -825,6 +834,10 @@ func (s *Server) dropBrokeredLanes(w withholding, p *dispatchParams, sandboxEnv 
 	slices.Sort(dropped)
 	return dropped
 }
+
+// adoCeilingLane is how the re-assertion names the person's Azure DevOps lane in
+// dropped_broker_lanes, a lane name as bedrockCeilingLane is.
+const adoCeilingLane = "azure_devops"
 
 // bedrockCeilingLane is how the re-assertion names the Bedrock credential lane
 // in dropped_broker_lanes. A lane name rather than a host list: the lane is one

@@ -11,6 +11,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- Denying any Azure DevOps host now withdraws the person's whole Azure DevOps lane. A deny on `dev.azure.com` alone
+  used to leave the person's credential on `<org>.visualstudio.com` and the `vssps`, `vsrm`, `feeds`, `pkgs` and
+  `almsearch` hosts. `run.ceiling.reassert` names the lane `azure_devops` in `dropped_broker_lanes`.
+
 ### Fixed
 
 - Promoting a recording's hosts into a workspace's egress no longer promotes a model provider's host when the site

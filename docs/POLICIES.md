@@ -71,7 +71,8 @@
 - An exact host covers only itself, so a deny names every host a vendor answers on.
 - To wall off GitHub, deny `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com` and `ssh.github.com`; `api.github.com` is also the host the GitHub CLI component reaches.
 - A profile that denies any host in GitHub's family (`github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`) also withholds the git broker, while plain egress to `api.github.com` stays exact-host. Such a profile refuses a run that attaches a GitHub CLI row or the built-in GitHub component.
-- To wall off Azure DevOps, deny `dev.azure.com`, `*.dev.azure.com` and `*.visualstudio.com`; a deny on `dev.azure.com` alone leaves `<org>.visualstudio.com` and the `vssps`, `vsrm`, `feeds`, `pkgs` and `almsearch` service hosts reachable with the person's credential.
+- A profile or layer that denies any host of the person's Azure DevOps lane, such as `dev.azure.com`, withholds the whole lane: no host of the organisation gets the person's credential. `run.ceiling.reassert` lists `azure_devops` in `dropped_broker_lanes`.
+- To wall off Azure DevOps egress as well, deny `dev.azure.com`, `*.dev.azure.com` and `*.visualstudio.com`; plain egress stays exact-host.
 - Empty under default-deny means the sandbox reaches nothing.
 - Each entry must be a shape the proxy's matcher can match.
 - A mid-label wildcard, a URL, a bad `:port`, or a non-ASCII spelling is rejected at write time rather than shipped as a rule that silently matches nothing.

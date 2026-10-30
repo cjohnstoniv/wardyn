@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -428,4 +429,44 @@ func TestApplySandboxSize_CutsARunThatSetNoSize(t *testing.T) {
 
 func (s ceilingRecordStore) ListMembershipsFor(ctx context.Context, users, groups []string, userType string) ([]store.MembershipMatch, error) {
 	return membershipsFromResolve(s.ResolveGovernanceUnit(ctx, users, groups, userType))
+}
+
+// A deny on one Azure DevOps host withdraws the person's whole lane, as a deny on one GitHub host
+// withholds the git broker: the credential rides one injection per host of the organisation, so a
+// deny on dev.azure.com alone must leave none on <org>.visualstudio.com or the service hosts.
+func TestCeilingReassert_ADODenyOnOneHostWithdrawsTheWholeLane(t *testing.T) {
+	adoLane := func() []runner.InjectionGrant {
+		var out []runner.InjectionGrant
+		for _, h := range adoEntraHosts("contoso") {
+			out = append(out, runner.InjectionGrant{GrantID: uuid.New(), Rule: egress.InjectionRule{
+				Host: h, Header: "Authorization", SecretName: types.ADOEntraAccessTokenSecret, Format: "Bearer %s", RequireTLS: true}})
+		}
+		return out
+	}
+	srv, _, audit, run := dispatchTeardownFixture(t, &fakeRunner{}, types.RunPending)
+	var llm llmTransport
+	var bedrock []string
+
+	injections := append(adoLane(), componentRule("open.example"))
+	c := dispatchCeiling{resolved: true, profile: "walled", deny: []string{"dev.azure.com"}}
+	srv.reassertCeilingDenies(context.Background(), run, &types.RunPolicySpec{}, &injections, c, nil, nil, &dispatchParams{}, map[string]string{}, &llm, &bedrock, nil)
+	for _, in := range injections {
+		if in.Rule.SecretName == types.ADOEntraAccessTokenSecret {
+			t.Errorf("the person's Azure DevOps credential survived on %s after a deny on dev.azure.com", in.Rule.Host)
+		}
+	}
+	if len(injections) != 1 || injections[0].Rule.Host != "open.example" {
+		t.Errorf("injections = %+v, want only the unrelated open.example rule", injections)
+	}
+	if lanes := reassertDroppedLanes(t, audit); !slices.Contains(lanes, adoCeilingLane) {
+		t.Errorf("dropped_broker_lanes = %v, want %q named", lanes, adoCeilingLane)
+	}
+
+	// Control: a deny on no host of the lane leaves the lane whole.
+	kept := adoLane()
+	other := dispatchCeiling{resolved: true, profile: "walled", deny: []string{"unrelated.example"}}
+	srv.reassertCeilingDenies(context.Background(), run, &types.RunPolicySpec{}, &kept, other, nil, nil, &dispatchParams{}, map[string]string{}, &llm, &bedrock, nil)
+	if len(kept) != len(adoEntraHosts("contoso")) {
+		t.Errorf("a deny on no lane host left %d of %d Azure DevOps injections", len(kept), len(adoEntraHosts("contoso")))
+	}
 }
