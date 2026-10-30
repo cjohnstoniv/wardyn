@@ -165,8 +165,9 @@ export function AddWorkspaceDialog({
     if (!nameTouched) setName(derived);
   }, [derived, nameTouched]);
 
-  // Only a Local directory asks where the folder is, and only a member who may host a runner is offered one.
-  const askWhere = kind === "local_dir" && !localDirUnavailable;
+  const localDirShown = kind === "local_dir" && !localDirUnavailable;
+  // Only a member binds a folder to their own runner: the server refuses a runner_id from an administrator.
+  const askWhere = localDirShown && memberClamped;
   const myRunners = useMyRunners(askWhere);
   const folderRunners = React.useMemo(() => (myRunners ?? []).filter(isFolderRunner), [myRunners]);
   const selfHostOff = useMyCapabilities(askWhere)?.may_self_host_runner === false;
@@ -318,7 +319,7 @@ export function AddWorkspaceDialog({
               )}
             </div>
           )}
-          {askWhere && (
+          {localDirShown && (
             <Field
               label={pickedRunner ? FOLDER_RUNNER.PATH_LABEL(pickedRunner.name) : FOLDER_RUNNER.PATH_LABEL_SERVER}
               htmlFor="aw-source"

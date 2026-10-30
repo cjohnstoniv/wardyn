@@ -29,9 +29,8 @@ const runner = (id: string, name: string, over: Partial<RunnerView> = {}): Runne
 const MAC = runner("11111111-aaaa", "ec2-mac-rc9");
 const LAPTOP = runner("22222222-bbbb", "dev-laptop");
 
-function renderDialog(root: string | null = null) {
-  // A member with a root is clamped to it; an administrator is not.
-  const operator = root === null;
+// A member, clamped to a root, unless a test says otherwise: only a member binds a folder to their own runner.
+function renderDialog({ root = "/Users/dana/work", operator = false }: { root?: string | null; operator?: boolean } = {}) {
   return render(
     <OperatorProvider operator={operator} memberLocalDirRoot={root}>
       <AddWorkspaceDialog existingNames={[]} onClose={() => {}} onCreated={() => {}} />
@@ -77,21 +76,27 @@ describe("Add workspace: where is this folder", () => {
     expect(screen.getByRole("radio", { name: "On the Wardyn server (this host)" })).toBeChecked();
   });
 
-  it("the server option keeps today's label and hint, with no helper text", async () => {
+  it("the server option keeps today's label and clamped root hint, with no helper text", async () => {
     listMineMock.mockResolvedValue([MAC]);
     renderDialog();
     await pickLocalDir();
     await screen.findByRole("radio", { name: "On my runner: ec2-mac-rc9" });
     expect(screen.getByLabelText("Path on this host")).toBeInTheDocument();
-    expect(screen.getByText("Mounted from this machine into the sandbox.")).toBeInTheDocument();
+    expect(screen.getByText("Mounted from this machine into the sandbox. Must be under /Users/dana/work — your admin set this boundary.")).toBeInTheDocument();
     expect(screen.queryByText(/The runner checks the folder when the run starts/)).not.toBeInTheDocument();
   });
 
-  it("the server option keeps the clamped root hint", async () => {
+  it("an administrator is not asked where the folder is, reads no runners, and sends no runner_id", async () => {
     listMineMock.mockResolvedValue([MAC]);
-    renderDialog("/Users/dana/work");
+    renderDialog({ root: null, operator: true });
     await pickLocalDir();
-    expect(screen.getByText("Mounted from this machine into the sandbox. Must be under /Users/dana/work — your admin set this boundary.")).toBeInTheDocument();
+    expect(screen.queryByText("Where is this folder?")).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Path on this host")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Path on this host"), "/srv/payments");
+    await userEvent.click(screen.getByRole("button", { name: /^add workspace/i }));
+    expect(listMineMock).not.toHaveBeenCalled();
+    expect(createWorkspaceMock.mock.calls[0][0].sources[0].runner_id).toBeUndefined();
   });
 
   it("picking a runner names it in the path label and hint, and shows the helper", async () => {
@@ -101,13 +106,13 @@ describe("Add workspace: where is this folder", () => {
     await userEvent.click(await screen.findByRole("radio", { name: "On my runner: ec2-mac-rc9" }));
     expect(screen.getByLabelText("Path on ec2-mac-rc9")).toBeInTheDocument();
     expect(screen.queryByLabelText("Path on this host")).not.toBeInTheDocument();
-    expect(screen.getByText("Mounted from ec2-mac-rc9 into the sandbox.")).toBeInTheDocument();
+    expect(screen.getByText(/^Mounted from ec2-mac-rc9 into the sandbox\./)).toBeInTheDocument();
     expect(screen.getByText("The runner checks the folder when the run starts. The run then runs only on that runner.")).toBeInTheDocument();
   });
 
   it("picking a runner under a clamped root names both in the hint", async () => {
     listMineMock.mockResolvedValue([MAC]);
-    renderDialog("/Users/dana/work");
+    renderDialog();
     await pickLocalDir();
     await userEvent.click(await screen.findByRole("radio", { name: "On my runner: ec2-mac-rc9" }));
     expect(screen.getByText("Mounted from ec2-mac-rc9 into the sandbox. Must be under /Users/dana/work — your admin set this boundary.")).toBeInTheDocument();
