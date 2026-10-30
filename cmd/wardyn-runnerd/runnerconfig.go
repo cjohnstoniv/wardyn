@@ -109,6 +109,15 @@ var runnerFields = []runnerField{
 	{name: "macos_vm", env: []string{"WARDYN_RUNNER_MACOS_VM"}, managed: "MacOSVM", file: func(f *runnerFile) *string { return &f.MacOSVM }},
 }
 
+// profileOnlyKeys are the managed preferences no serve setting stands for: the posture a Mac's MDM attests
+// (read by internal/runner/posture), register's limit flags (registerLimits.applyManaged, which names the
+// flag). They have no environment variable and no runnerd.json field.
+var profileOnlyKeys = []struct{ managed, flag string }{
+	{managed: "MDMManaged"}, {managed: "DiskEncrypted"},
+	{managed: "MaxRuns", flag: "max-runs"}, {managed: "TotalCPU", flag: "total-cpu"}, {managed: "TotalMemoryGB", flag: "total-memory"},
+	{managed: "PerRunCPU", flag: "per-run-cpu"}, {managed: "PerRunMemoryGB", flag: "per-run-memory"},
+}
+
 // macOSVMOn reads the macos_vm setting.
 func macOSVMOn(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {

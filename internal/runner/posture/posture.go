@@ -3,8 +3,9 @@
 
 // Package posture is what a runner reports about its device (design 0.9 §7.4).
 // mdm_managed and disk_encrypted come from a root-owned file the device's MDM
-// writes when one is present, else from the runner's own probe of the OS. Both
-// are self-reported: they separate a lost or compromised laptop from a healthy
+// writes when one is present, else (on a Mac) from the MDMManaged and DiskEncrypted
+// keys of its managed preferences profile, else from the runner's own probe of the
+// OS. Both are self-reported: they separate a lost or compromised laptop from a healthy
 // one, and do not constrain a root developer.
 package posture
 
@@ -13,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -21,12 +23,22 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/managedprefs"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // maxMDMFile bounds the MDM posture file.
 const maxMDMFile = 4096
+
+// The managed preferences profile, swapped in tests.
+var (
+	profileOS      = runtime.GOOS
+	profileRoot    = "/Library/Managed Preferences"
+	profileExtract = func(file, key string) (string, error) {
+		return managedprefs.PlutilExtract("/usr/bin/plutil", file, key)
+	}
+)
 
 // Read is this device's posture now.
 func Read() types.RunnerPosture { return read(mdmFile, 0) }
@@ -36,7 +48,19 @@ func read(path string, owner uint32) types.RunnerPosture {
 	if f, err := fromMDMFile(path, owner); err == nil {
 		warnIgnored("", nil) // a usable file: the same break later is news again
 		p.MDMManaged, p.DiskEncrypted, p.Evidence = f.MDMManaged, f.DiskEncrypted, types.PostureEvidenceMDMFile
-	} else if !errors.Is(err, os.ErrNotExist) {
+	} else if errors.Is(err, os.ErrNotExist) {
+		// No file: the profile an MDM pushes is the other way it attests. A file that is there and unusable
+		// is not worked around by it.
+		if v, file, ok, perr := fromProfile(owner); perr != nil {
+			warnIgnored(file, perr)
+		} else if ok {
+			warnIgnored("", nil)
+			p.MDMManaged, p.Evidence = v.managed, types.PostureEvidenceMDMFile
+			if v.diskSet {
+				p.DiskEncrypted = v.disk
+			}
+		}
+	} else {
 		warnIgnored(path, err)
 	}
 	return p
@@ -69,30 +93,47 @@ type mdmPosture struct {
 	DiskEncrypted bool `json:"disk_encrypted"`
 }
 
-// fromMDMFile trusts only a regular file owned by owner (root in production)
-// that nobody else can write.
-func fromMDMFile(path string, owner uint32) (mdmPosture, error) {
-	var out mdmPosture
+// openTrusted opens a regular file owned by owner (root in production) that nobody else can write.
+func openTrusted(path string, owner uint32) (*os.File, error) {
 	// One open file for the checks and the read, so the file judged is the file read; a link is not followed.
 	// O_NONBLOCK: a FIFO opens at once (and is then refused as not a regular file) instead of waiting for a writer.
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return out, err
+		return nil, err
 	}
-	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		return out, err
+		f.Close()
+		return nil, err
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	switch {
 	case !fi.Mode().IsRegular():
-		return out, errors.New("not a regular file")
+		err = errors.New("not a regular file")
 	case !ok || st.Uid != owner:
-		return out, errors.New("not owned by root")
+		err = errors.New("not owned by root")
 	case fi.Mode().Perm()&0o022 != 0:
-		return out, errors.New("group- or world-writable")
-	case fi.Size() > maxMDMFile:
+		err = errors.New("group- or world-writable")
+	}
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// fromMDMFile trusts only a regular file owned by owner (root in production)
+// that nobody else can write.
+func fromMDMFile(path string, owner uint32) (mdmPosture, error) {
+	var out mdmPosture
+	f, err := openTrusted(path, owner)
+	if err != nil {
+		return out, err
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil {
+		return out, err
+	} else if fi.Size() > maxMDMFile {
 		return out, errors.New("too large")
 	}
 	b, err := io.ReadAll(io.LimitReader(f, maxMDMFile+1))
@@ -108,6 +149,51 @@ func fromMDMFile(path string, owner uint32) (mdmPosture, error) {
 		return out, errors.New("trailing data")
 	}
 	return out, nil
+}
+
+// profileValues are the posture keys of the managed preferences profile: MDMManaged, and DiskEncrypted when
+// the profile sets it (diskSet), else the runner's own probe answers for it.
+type profileValues struct{ managed, disk, diskSet bool }
+
+// fromProfile is the posture the Mac's managed preferences profile (MDMManaged, DiskEncrypted) attests, and
+// the profile file it came from; ok is false for no profile, or one that does not set MDMManaged. The profile
+// is trusted on the terms of the MDM file: a regular file owned by owner that nobody else can write. Only a
+// Mac has one.
+func fromProfile(owner uint32) (v profileValues, file string, ok bool, err error) {
+	if profileOS != "darwin" {
+		return v, "", false, nil
+	}
+	for _, file = range managedprefs.Files(profileRoot, managedprefs.Domain) {
+		f, err := openTrusted(file, owner)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return v, file, false, err
+		}
+		f.Close()
+		get := func(key string) (val, set bool, err error) {
+			raw, err := profileExtract(file, key)
+			if err != nil {
+				return false, false, err
+			}
+			if val, set, err = managedprefs.Bool(raw); err != nil {
+				err = fmt.Errorf("managed preference %s: %w", key, err)
+			}
+			return val, set, err
+		}
+		var set bool
+		if v.managed, set, err = get("MDMManaged"); err != nil {
+			return v, file, false, err
+		} else if !set {
+			continue
+		}
+		if v.disk, v.diskSet, err = get("DiskEncrypted"); err != nil {
+			return v, file, false, err
+		}
+		return v, file, true, nil
+	}
+	return v, "", false, nil
 }
 
 // Reporter sends the `posture` event at READY and again when it changes.

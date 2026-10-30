@@ -135,6 +135,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - macOS VMs: the guest agent trusts the run's proxy certificate in the run's System keychain, for TLS only, before
   the run starts, so tools that use only the keychain trust it too. If macOS refuses, the run goes on and its audit
   says so.
+- A Mac's MDM can now attest posture (`MDMManaged`, `DiskEncrypted`) and set `register` and `setup` limits (`MaxRuns`,
+  `TotalCPU`, `TotalMemoryGB`, `PerRunCPU`, `PerRunMemoryGB`) from the managed preferences profile, with no posture file to
+  push. `macos-vm prepare` sizes its VM from the per-run keys when the organisation has sent no limit.
 
 ### Fixed
 

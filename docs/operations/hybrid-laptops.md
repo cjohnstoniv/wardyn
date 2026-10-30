@@ -245,12 +245,15 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `RelayListen` | `--relay-listen` | left out, found by a probe container |
 | `RelayHostTarget` | `--relay-host-target` | left out, found by a probe container |
 | `InternalNetwork` | `--internal-network` | default `wardyn-internal` |
-| `TrustedCAFile` | `--trusted-ca-file` | a PEM bundle path; deliver the file with a separate MDM file payload ([A corporate CA](#a-corporate-ca-on-a-laptop-runner)) |
+| `TrustedCAFile` | `--trusted-ca-file` | a PEM bundle path; deliver the file with a package or script your MDM runs ([A corporate CA](#a-corporate-ca-on-a-laptop-runner)) |
 | `OrgCAFile` | `--org-ca-file` | a PEM file of extra roots for the runner's own connection to the organisation only; root-owned, not writable by group or others |
 | `RecordingStore` | `--recording-store` | `pg`, `fs` or `off` |
 | `DockerHost` | `DOCKER_HOST` | the engine's socket, when it is not the default |
 | `ArtifactBase` | `wardyn runner install --artifact-base` | read by the `wardyn` CLI, not `serve`: the release mirror for `wardyn runner install`, `upgrade` and `setup`, ahead of the one saved in `cli.json` |
 | `MacOSVM` | `WARDYN_RUNNER_MACOS_VM` | a boolean, off by default: offers [macOS VM sandboxes](macos-vms.md) from this Mac. The organisation's `WARDYN_MACOS_VMS` must be on as well |
+| `MDMManaged` | none: profile only | a boolean: this Mac is managed. The runner reports it with the posture file's evidence (`mdm_file`), only when the posture file below is absent |
+| `DiskEncrypted` | none: profile only | a boolean: the disk is encrypted, read with `MDMManaged`; left out, the runner's own probe answers |
+| `MaxRuns`, `TotalCPU`, `TotalMemoryGB`, `PerRunCPU`, `PerRunMemoryGB` | `--max-runs`, `--total-cpu`, `--total-memory`, `--per-run-cpu`, `--per-run-memory` | defaults for `register` and `setup` limits (a flag wins); `PerRunCPU` and `PerRunMemoryGB` also size `macos-vm prepare` when the organisation has sent no per-run limit |
 | `lock_security_settings` | none: profile only | a boolean, off by default; `true` locks the five security keys, as the bullets below say |
 
 - With the lock on, `OrgURL`, `ProxyImage`, `TrustedCAFile`, `OrgCAFile` and `RecordingStore` in the profile win over a flag, and `serve` and `setup` refuse a flag or environment variable that disagrees, naming `lock_security_settings`.
@@ -264,7 +267,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 1. Push the package as above. The VM helper runs on Apple silicon only, and macOS VMs need macOS 26 or later. On macOS 26 the first prepare needs [setup by hand](macos-vms.md#setup-by-hand) once.
 2. Add the `MacOSVM` key to the profile, set to `true`.
-3. Push the posture file to `/Library/Application Support/Wardyn/posture.json`, owned by root, writable by root only and at most 4 KiB. It holds these two keys and no other; an unknown key makes the runner ignore the file:
+3. Set `MDMManaged` and `DiskEncrypted` in the profile, or push the posture file with a script (the file wins when both exist). The file goes to `/Library/Application Support/Wardyn/posture.json`, owned by root, writable by root only and at most 4 KiB, and holds these two keys and no other; an unknown key makes the runner ignore the file:
 
    ```json
    {"mdm_managed": true, "disk_encrypted": true}
