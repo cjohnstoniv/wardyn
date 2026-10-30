@@ -16,6 +16,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - macOS VMs: a run's workload now starts in the guest. Each base carries the standard launcher (task, command and
   self-test modes). A run that asks for several agents, held tool approvals or a service is refused by the launcher
   with a reason.
+- Preparing a macOS VM base now ends with the launcher's self-test as the agent user. A harness that fails it is
+  withheld, and a base that cannot start a run is not published.
 
 ### Fixed
 

@@ -100,3 +100,25 @@ func TestMacGuestEnvRefusesAnUnmappedPath(t *testing.T) {
 		}
 	}
 }
+
+// A managed file with no mode is written at the default one, never at 0000 (the guest writes exactly the
+// mode it is handed), and the launcher is told what to check before the run starts.
+func TestMacGuestFilesResolveTheModeAndNameThemForTheCheck(t *testing.T) {
+	got, err := macGuestFiles([]runner.ManagedFile{
+		{Path: agentpolicy.ClaudeCodeManagedSettingsPath},
+		{Path: runner.ComponentSecretDir + "/tok", Mode: runner.ComponentSecretFileMode, AgentOwned: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].Mode != runner.DefaultManagedFileMode {
+		t.Fatalf("mode %04o, want %04o", got[0].Mode, runner.DefaultManagedFileMode)
+	}
+	want := `[{"path":"/Library/Application Support/ClaudeCode/managed-settings.json","mode":420},{"path":"/var/run/wardyn/secrets/tok","mode":256,"agent_owned":true}]`
+	if env := macGuestFilesEnv(got); env != want {
+		t.Errorf("env %s, want %s", env, want)
+	}
+	if macGuestFilesEnv(nil) != "" {
+		t.Error("no files still named a check")
+	}
+}

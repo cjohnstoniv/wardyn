@@ -42,6 +42,13 @@ const (
 // PhaseTools is stage 2 of prepare, "Installing developer tools".
 const PhaseTools = "tools"
 
+// SelftestFailurePrefix starts the reason a harness is withheld when the run launcher's self-test for
+// it failed; the rest is the end of the self-test's output.
+const SelftestFailurePrefix = "the run launcher's self-test failed: "
+
+// selftestTail is how much of a failed self-test's output its reason keeps.
+const selftestTail = 4 << 10
+
 // CLTFailurePrefix starts the reason a harness is withheld when the Command Line Tools did not install;
 // the cause follows it. The runner reads it from tools.json.
 const CLTFailurePrefix = "the Command Line Tools did not install: "
@@ -143,6 +150,10 @@ type ToolsGuest interface {
 	// ToolsDial is the guest agent's own classified result for its dial of
 	// the tools port (a ToolsDial* class).
 	ToolsDial(ctx context.Context) (string, error)
+	// AgentExec runs argv as the agent user through the run's own exec path,
+	// with env added, and returns its combined output and exit code. err is a
+	// transport failure, not a non-zero exit.
+	AgentExec(ctx context.Context, argv, env []string) (out string, exit int, err error)
 }
 
 // ToolsBoot boots the base with stage 2's network (the run-style NIC behind
@@ -265,8 +276,56 @@ func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) 
 		}
 	}
 	res, err := installTools(ctx, g, o)
+	if err == nil {
+		err = selftestBase(ctx, g, &res, o.Log)
+	}
 	res.Desktop, res.ToolsDial = desktop, dial
 	return res, err
+}
+
+// selftestBase is stage 2's final check, made as a run is started: the run launcher's --selftest as the
+// agent user, once as a command run and once per offered harness. A harness that fails it is withheld.
+// A base whose command run fails it cannot start any run, so stage 2 fails: prepare publishes no base,
+// and a tools update keeps the old one.
+func selftestBase(ctx context.Context, g ToolsGuest, res *ToolsResult, log *slog.Logger) error {
+	argv := []string{guestagent.MacAgentRunPath, "--selftest"}
+	out, exit, err := g.AgentExec(ctx, argv, []string{"WARDYN_TASK_MODE=exec"})
+	if err != nil {
+		return fmt.Errorf("macvm: the run launcher's self-test: %w", err)
+	}
+	if exit != 0 {
+		return fmt.Errorf("macvm: the run launcher's self-test failed, so this base cannot start a run: %s", outputTail(out))
+	}
+	kept := []string{HarnessNone}
+	for _, h := range res.Harnesses {
+		if h == HarnessNone {
+			continue
+		}
+		out, exit, err := g.AgentExec(ctx, argv, []string{"WARDYN_HARNESSES=" + h, "WARDYN_START_HARNESS=" + h})
+		if err != nil {
+			return fmt.Errorf("macvm: the run launcher's self-test of %s: %w", h, err)
+		}
+		if exit != 0 {
+			if log != nil {
+				log.Warn("macvm: harness withheld", "harness", h, "selftest_exit", exit)
+			}
+			res.Withheld[h] = errors.New(SelftestFailurePrefix + outputTail(out))
+			delete(res.Pins, h)
+			continue
+		}
+		kept = append(kept, h)
+	}
+	res.Harnesses = kept
+	return nil
+}
+
+// outputTail is the last selftestTail bytes of out.
+func outputTail(out string) string {
+	out = strings.TrimSpace(out)
+	if len(out) > selftestTail {
+		out = out[len(out)-selftestTail:]
+	}
+	return out
 }
 
 func installTools(ctx context.Context, g ToolsGuest, o ToolsOptions) (ToolsResult, error) {

@@ -712,6 +712,9 @@ func TestMacGuestInitTranslatesLinuxPaths(t *testing.T) {
 	if len(in.Files) == 0 || in.Files[0].Path != guestagent.MacClaudeCodeManagedSettingsPath {
 		t.Errorf("files %+v", in.Files)
 	}
+	if !strings.Contains(in.Env[guestagent.EnvManagedFiles], guestagent.MacClaudeCodeManagedSettingsPath) {
+		t.Errorf("the launcher's pre-start check is not told the managed files: %q", in.Env[guestagent.EnvManagedFiles])
+	}
 	spec.ManagedFiles = append(spec.ManagedFiles, runner.ManagedFile{Path: "/etc/claude-code/other.json"})
 	if _, err := macGuestInit(spec, ""); err == nil || !strings.Contains(err.Error(), "/etc/claude-code/other.json") {
 		t.Fatalf("an unmapped managed file reached the guest: %v", err)

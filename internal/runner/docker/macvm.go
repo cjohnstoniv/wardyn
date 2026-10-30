@@ -314,6 +314,9 @@ func macGuestInit(spec runner.SandboxSpec, trustedPEM string) (guestagent.Init, 
 	if err != nil {
 		return guestagent.Init{}, err
 	}
+	if v := macGuestFilesEnv(files); v != "" {
+		env[guestagent.EnvManagedFiles] = v
+	}
 	in := guestagent.Init{Env: env, SecretEnv: spec.SecretEnv, SignInsOff: spec.DesktopSignInsOff, Files: files}
 	if ca := vmCA(spec, trustedPEM); ca != "" {
 		in.Files = append(in.Files, guestagent.File{Path: guestagent.MacCABundlePath, Mode: 0o644, Content: []byte(ca)})

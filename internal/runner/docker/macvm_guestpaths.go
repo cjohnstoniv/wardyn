@@ -4,6 +4,7 @@
 package docker
 
 import (
+	"encoding/json"
 	"fmt"
 	"path"
 	"strings"
@@ -35,9 +36,9 @@ var macGuestManagedFiles = map[string]string{
 	agentpolicy.CodexRequirementsPath:           guestagent.MacCodexRequirementsPath,
 }
 
-// macGuestFiles is the run's managed files at their guest paths. A file the table does not map refuses
-// the run: forwarded at its Linux path no macOS harness reads it, and dropped the run starts without the
-// walls it carries.
+// macGuestFiles is the run's managed files at their guest paths, each at its resolved mode (the guest
+// writes exactly the mode it is handed). A file the table does not map refuses the run: forwarded at its
+// Linux path no macOS harness reads it, and dropped the run starts without the walls it carries.
 func macGuestFiles(files []runner.ManagedFile) ([]guestagent.File, error) {
 	out := make([]guestagent.File, 0, len(files))
 	for _, f := range files {
@@ -49,9 +50,23 @@ func macGuestFiles(files []runner.ManagedFile) ([]guestagent.File, error) {
 			//lint:ignore ST1005 the sentence the run's owner reads
 			return nil, fmt.Errorf("This run was not started: its managed file %s has no place in a macOS VM sandbox, and the run never starts without it.", f.Path)
 		}
-		out = append(out, guestagent.File{Path: p, Mode: f.Mode, AgentOwned: f.AgentOwned, Content: f.Content})
+		out = append(out, guestagent.File{Path: p, Mode: f.FileMode(), AgentOwned: f.AgentOwned, Content: f.Content})
 	}
 	return out, nil
+}
+
+// macGuestFilesEnv names files for the launcher's pre-start check (guestagent.EnvManagedFiles), or is ""
+// for none.
+func macGuestFilesEnv(files []guestagent.File) string {
+	if len(files) == 0 {
+		return ""
+	}
+	checks := make([]guestagent.ManagedFileCheck, 0, len(files))
+	for _, f := range files {
+		checks = append(checks, guestagent.ManagedFileCheck{Path: f.Path, Mode: f.Mode, AgentOwned: f.AgentOwned})
+	}
+	b, _ := json.Marshal(checks)
+	return string(b)
 }
 
 // macGuestEnv moves every path in env's values to the guest's own (AWS_CONFIG_FILE under /home/agent,

@@ -38,6 +38,10 @@ type guest struct {
 	mu    sync.Mutex
 	files map[string][]byte
 	runs  [][]string
+	// agentRuns are the AgentExec calls, argv then env; selftest, if set, answers one with its output
+	// and exit code (nil: every self-test passes).
+	agentRuns [][]string
+	selftest  func(env []string) (string, int)
 	// sw overrides `softwareupdate` (nil: offers 16.4 and 16.10, installs fine).
 	sw func(argv []string) (string, int)
 	// version overrides a version check's output.
@@ -107,6 +111,17 @@ func (g *guest) Pointer(context.Context) (int, int, error) {
 }
 
 func (g *guest) ToolsDial(context.Context) (string, error) { return macvm.ToolsDialConnected, nil }
+
+func (g *guest) AgentExec(_ context.Context, argv, env []string) (string, int, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.agentRuns = append(g.agentRuns, slices.Concat(argv, env))
+	if g.selftest != nil {
+		out, exit := g.selftest(env)
+		return out, exit, nil
+	}
+	return "", 0, nil
+}
 
 func (g *guest) ran(prefix ...string) bool {
 	g.mu.Lock()
@@ -910,5 +925,59 @@ func TestStage2CLTCommandsPassTheGuestAgentAllowlist(t *testing.T) {
 	}
 	if checked != 5 { // touch, softwareupdate -l, softwareupdate -i, git --version, rm -f
 		t.Fatalf("checked %d guest commands, want the 5 of the CLT install: %q", checked, g.runs)
+	}
+}
+
+// Stage 2 ends with the run launcher's self-test as the agent user, as a command run and per harness:
+// a harness that fails it is withheld with the end of its output.
+func TestStage2SelftestWithholdsAFailingHarness(t *testing.T) {
+	f, g := newTools(t), newGuest()
+	g.selftest = func(env []string) (string, int) {
+		if slices.Contains(env, "WARDYN_START_HARNESS=codex-cli") {
+			return "  FAIL    /usr/local/bin/codex --version: exit status 1", 1
+		}
+		return "", 0
+	}
+	var boots, stops atomic.Int64
+	res := runStage(t, f.stage(g, &boots, &stops))
+	if want := []string{"none", "claude-code"}; !slices.Equal(res.Harnesses, want) {
+		t.Fatalf("harnesses %v", res.Harnesses)
+	}
+	if w := res.Withheld["codex-cli"]; w == nil || w.Error() != macvm.SelftestFailurePrefix+"FAIL    /usr/local/bin/codex --version: exit status 1" {
+		t.Fatalf("withheld %v", res.Withheld)
+	}
+	if _, ok := res.Pins["codex-cli"]; ok {
+		t.Fatal("a harness that failed its self-test kept its pin")
+	}
+	for _, want := range [][]string{
+		{guestagent.MacAgentRunPath, "--selftest", "WARDYN_TASK_MODE=exec"},
+		{guestagent.MacAgentRunPath, "--selftest", "WARDYN_HARNESSES=claude-code", "WARDYN_START_HARNESS=claude-code"},
+		{guestagent.MacAgentRunPath, "--selftest", "WARDYN_HARNESSES=codex-cli", "WARDYN_START_HARNESS=codex-cli"},
+	} {
+		if !slices.ContainsFunc(g.agentRuns, func(a []string) bool { return slices.Equal(a, want) }) {
+			t.Errorf("no self-test %q in %q", want, g.agentRuns)
+		}
+	}
+	if g.ran(guestagent.MacAgentRunPath) {
+		t.Error("the self-test ran as root, not as the agent user")
+	}
+}
+
+// A base whose command run fails the self-test cannot start a run: stage 2 fails and prepare publishes
+// no base.
+func TestPrepareFailingSelftestPublishesNoBase(t *testing.T) {
+	f, _, g := stage2Prep(t)
+	g.selftest = func(env []string) (string, int) {
+		if slices.Contains(env, "WARDYN_TASK_MODE=exec") {
+			return "  FAIL    /bin/sh: not executable", 1
+		}
+		return "", 0
+	}
+	_, err := macvm.Prepare(context.Background(), f.opts)
+	if err == nil || !strings.Contains(err.Error(), "the run launcher's self-test failed, so this base cannot start a run: FAIL    /bin/sh: not executable") {
+		t.Fatalf("prepare: %v", err)
+	}
+	if _, err := macvm.ReadyBase(f.opts.Layout.BaseDir(0)); err == nil {
+		t.Fatal("a base that cannot start a run was published")
 	}
 }

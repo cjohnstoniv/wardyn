@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -372,5 +373,86 @@ func TestAgentRunSelftest(t *testing.T) {
 	r = newLaunchRig(t, map[string]string{"WARDYN_TASK_MODE": "exec", "SSL_CERT_FILE": "/no/such/ca.pem"})
 	if code := r.a.Main([]string{"--selftest"}); code != 1 {
 		t.Errorf("a missing CA file passed: %s", r.stdout.String())
+	}
+}
+
+// managedRig runs the managed-file checks as the test's own user in a temp folder, and writes a managed
+// settings file there as Init would.
+func managedRig(t *testing.T) (dir, settings string) {
+	t.Helper()
+	top := t.TempDir()
+	oldUID, oldTop, oldDirs := managedRootUID, managedChainTop, macManagedDirs
+	managedRootUID, managedChainTop = os.Getuid(), top
+	dir = filepath.Join(top, "Library", "Application Support", "ClaudeCode")
+	macManagedDirs = map[string]string{"claude-code": dir, "codex-cli": filepath.Join(top, "etc", "codex")}
+	t.Cleanup(func() { managedRootUID, managedChainTop, macManagedDirs = oldUID, oldTop, oldDirs })
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	settings = filepath.Join(dir, "managed-settings.json")
+	if err := writeFileMode(settings, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir, settings
+}
+
+func managedEnv(path string, mode os.FileMode) string {
+	return `[{"path":"` + path + `","mode":` + strconv.Itoa(int(mode)) + `}]`
+}
+
+// The pre-start check: a run whose managed settings are not at their translated path, root's at their
+// mode, in a folder only root can change, does not start, and nothing is prepared.
+func TestAgentRunChecksManagedFilesBeforeStarting(t *testing.T) {
+	dir, settings := managedRig(t)
+	for name, mut := range map[string]func(){
+		"in place": func() {},
+		"missing":  func() { _ = os.Remove(settings) },
+		"mode":     func() { _ = os.Chmod(settings, 0o666) },
+		"folder":   func() { _ = os.Chmod(dir, 0o777) },
+		"link": func() {
+			_ = os.Remove(settings)
+			_ = os.Symlink(filepath.Join(dir, "elsewhere"), settings)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_ = os.Chmod(dir, 0o755)
+			_ = os.Remove(settings)
+			_ = writeFileMode(settings, []byte("{}"), 0o644)
+			mut()
+			r := newLaunchRig(t, map[string]string{"WARDYN_HARNESSES": "claude-code", EnvManagedFiles: managedEnv(settings, 0o644)})
+			code := r.a.Main([]string{"t"})
+			if name == "in place" {
+				if code != 0 || r.execArgv == nil {
+					t.Fatalf("exit %d: %s", code, r.stderr.String())
+				}
+				return
+			}
+			want := "agent-run: This run was not started: its managed file " + settings + " is not in place as root's at mode 0644, so its walls cannot be vouched for.\n"
+			if code != 1 || r.execArgv != nil || r.ran != nil || r.stderr.String() != want {
+				t.Fatalf("exit %d, exec %q, ran %q, said %q", code, r.execArgv, r.ran, r.stderr.String())
+			}
+		})
+	}
+}
+
+// --selftest checks a harness's managed folder can hold only root's files, and, when the run's Init
+// named them, that its managed files are in place.
+func TestAgentRunSelftestChecksTheManagedFolder(t *testing.T) {
+	dir, settings := managedRig(t)
+	r := newLaunchRig(t, map[string]string{"WARDYN_HARNESSES": "claude-code", EnvManagedFiles: managedEnv(settings, 0o644)})
+	if code := r.a.Main([]string{"--selftest"}); code != 0 {
+		t.Fatalf("exit %d\n%s", code, r.stdout.String())
+	}
+	if err := os.Chmod(filepath.Dir(dir), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	r = newLaunchRig(t, map[string]string{"WARDYN_HARNESSES": "claude-code"})
+	if code := r.a.Main([]string{"--selftest"}); code != 1 || !strings.Contains(r.stdout.String(), "FAIL    managed folder "+dir) {
+		t.Fatalf("an agent-writable managed folder passed: exit %d\n%s", code, r.stdout.String())
+	}
+	// A folder not there yet is root's to create at Init.
+	r = newLaunchRig(t, map[string]string{"WARDYN_HARNESSES": "codex-cli"})
+	if code := r.a.Main([]string{"--selftest"}); code != 0 {
+		t.Fatalf("exit %d\n%s", code, r.stdout.String())
 	}
 }

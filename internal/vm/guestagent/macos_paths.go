@@ -3,6 +3,8 @@
 
 package guestagent
 
+import "io/fs"
+
 // The macOS guest agent's install, shared by the agent's own -plist default
 // and the helper's stage 1, which installs it (MAC-VM §3.4 step 7a).
 const (
@@ -44,3 +46,15 @@ const (
 	// macOS guest has no /run (its system volume is sealed).
 	MacRunDir = "/var/run/wardyn"
 )
+
+// EnvManagedFiles names the managed files a run's Init wrote, for the launcher's check that each is in
+// place before the run starts: a JSON list of ManagedFileCheck.
+const EnvManagedFiles = "WARDYN_MANAGED_FILES"
+
+// ManagedFileCheck is one managed file as Init wrote it: root's at Mode, or the agent's (a delivered
+// secret).
+type ManagedFileCheck struct {
+	Path       string      `json:"path"`
+	Mode       fs.FileMode `json:"mode"`
+	AgentOwned bool        `json:"agent_owned,omitempty"`
+}

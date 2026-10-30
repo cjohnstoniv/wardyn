@@ -8,6 +8,7 @@ package guestagent
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -46,6 +47,19 @@ const (
 const (
 	macClaudePath = MacToolsBinDir + "/claude"
 	macCodexPath  = MacToolsBinDir + "/codex"
+)
+
+// managedFileNotInPlace is the pre-start check's refusal: a managed file Init wrote is gone or changed.
+const managedFileNotInPlace = "This run was not started: its managed file %s is not in place as %s at mode %04o, so its walls cannot be vouched for."
+
+// macManagedDirs is where each harness reads the files a run's walls are made of.
+var macManagedDirs = map[string]string{"claude-code": MacClaudeCodeManagedDir, "codex-cli": MacCodexManagedDir}
+
+// The managed-file checks' root and the top of the folder chain they read: variables so a test runs them
+// as itself, in its own folder.
+var (
+	managedRootUID  = 0
+	managedChainTop = "/"
 )
 
 // macClaudeMCPConfig is the MCP file an autonomous Claude Code run is passed when Init wrote one; a
@@ -107,6 +121,10 @@ func (a *AgentRun) Main(args []string) int {
 		return a.refuse(agentRunHoldRefused)
 	case a.Env["WARDYN_SCAN_ONLY"] == "1":
 		return a.refuse(agentRunScanRefused)
+	}
+	if err := a.managedFilesInPlace(); err != nil {
+		a.say(err.Error())
+		return 1
 	}
 	execMode := a.Env["WARDYN_TASK_MODE"] == "exec"
 	harness := ""
@@ -673,7 +691,14 @@ func (a *AgentRun) selftest() int {
 			if h == "claude-code" {
 				fmt.Fprintln(a.Stdout, "  anthropic auth mode (detect only): "+a.anthropicMode())
 			}
+			dir := macManagedDirs[h]
+			err = rootOnlyChain(dir)
+			check(err == nil, "managed folder "+dir+" holds only root's files", errString(err))
 		}
+	}
+	if a.Env[EnvManagedFiles] != "" {
+		err := a.managedFilesInPlace()
+		check(err == nil, "managed files in place", errString(err))
 	}
 	for _, k := range append([]string{caAddEnv}, caReplaceEnv...) {
 		if f := a.Env[k]; f != "" {
@@ -694,4 +719,78 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// managedFilesInPlace is the pre-start check of the managed files the run's Init wrote
+// (EnvManagedFiles): each is a regular file at its mode, root's in a folder only root can change, or a
+// delivered secret that is the agent's own.
+func (a *AgentRun) managedFilesInPlace() error {
+	v := a.Env[EnvManagedFiles]
+	if v == "" {
+		return nil
+	}
+	var files []ManagedFileCheck
+	if err := json.Unmarshal([]byte(v), &files); err != nil {
+		return fmt.Errorf("%s: %w", EnvManagedFiles, err)
+	}
+	for _, f := range files {
+		owner, who := managedRootUID, "root's"
+		if f.AgentOwned {
+			owner, who = os.Getuid(), "the agent's"
+		}
+		st, err := os.Lstat(f.Path)
+		ok := err == nil && st.Mode().IsRegular() && fileUID(st) == owner && st.Mode().Perm() == f.Mode.Perm()
+		if ok && !f.AgentOwned {
+			ok = rootOnlyChain(filepath.Dir(f.Path)) == nil
+		}
+		if !ok {
+			return fmt.Errorf(managedFileNotInPlace, f.Path, who, f.Mode.Perm())
+		}
+	}
+	return nil
+}
+
+// rootOnlyChain says whether only root can create or replace a file in dir: every folder of its path that
+// exists is root's and writable by no group or other, and a link on it is root's and leads to such a
+// folder. A folder not there yet is root's to create (Init makes it).
+func rootOnlyChain(dir string) error {
+	var chain []string
+	for p := filepath.Clean(dir); ; p = filepath.Dir(p) {
+		chain = append(chain, p)
+		if p == managedChainTop || p == filepath.Dir(p) {
+			break
+		}
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		p := chain[i]
+		st, err := os.Lstat(p)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			return nil
+		case err != nil:
+			return err
+		case fileUID(st) != managedRootUID:
+			return fmt.Errorf("%s is not root's", p)
+		case st.Mode()&os.ModeSymlink != 0:
+			target, err := filepath.EvalSymlinks(p)
+			if err != nil {
+				return err
+			}
+			if err := rootOnlyChain(target); err != nil {
+				return err
+			}
+		case !st.IsDir():
+			return fmt.Errorf("%s is not a folder", p)
+		case st.Mode().Perm()&0o022 != 0:
+			return fmt.Errorf("%s can be written by others than root", p)
+		}
+	}
+	return nil
+}
+
+func fileUID(st os.FileInfo) int {
+	if sys, ok := st.Sys().(*syscall.Stat_t); ok {
+		return int(sys.Uid)
+	}
+	return -1
 }
