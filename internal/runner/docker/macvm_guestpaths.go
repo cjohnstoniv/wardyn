@@ -70,15 +70,15 @@ func macGuestFilesEnv(files []guestagent.File) string {
 }
 
 // macGuestEnv moves every path in env's values to the guest's own (AWS_CONFIG_FILE under /home/agent,
-// a comma-separated list of work folders, a repo target in JSON). A value that is still a /home or /run
-// path afterwards names a place the guest does not have, and refuses the run rather than point a tool at
+// a comma-separated list of work folders, a repo target in JSON). A value that still names a /home or
+// /run path anywhere afterwards names a place the guest does not have, and refuses the run rather than point a tool at
 // nothing.
 func macGuestEnv(env map[string]string) error {
 	for k, v := range env {
 		for _, d := range macGuestDirs {
 			v = replacePathPrefix(v, d[0], d[1])
 		}
-		if v == "/home" || v == "/run" || strings.HasPrefix(v, "/home/") || strings.HasPrefix(v, "/run/") {
+		if startsPath(v, "/home") || startsPath(v, "/run") {
 			//lint:ignore ST1005 the sentence the run's owner reads
 			return fmt.Errorf("This run's %s names %s, which has no macOS location yet, so the macOS VM stopped before the run started.", k, env[k])
 		}
@@ -95,6 +95,12 @@ func macGuestDirPath(p string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// startsPath says whether dir starts a path anywhere in s, by replacePathPrefix's rule: a list or a JSON
+// value whose first path moved can still name another later.
+func startsPath(s, dir string) bool {
+	return replacePathPrefix(s, dir, "\x00") != s
 }
 
 // replacePathPrefix replaces each occurrence of the directory from in s that starts a path: not inside a

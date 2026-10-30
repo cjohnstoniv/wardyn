@@ -93,7 +93,8 @@ func TestMacGuestEnvTranslatesPaths(t *testing.T) {
 
 // A /home or /run path the table cannot place refuses the run, naming the variable.
 func TestMacGuestEnvRefusesAnUnmappedPath(t *testing.T) {
-	for _, v := range []string{"/run/other/x", "/home/someone/.aws/config", "/home/agentx/y"} {
+	for _, v := range []string{"/run/other/x", "/home/someone/.aws/config", "/home/agentx/y",
+		"/home/agent/work,/home/x", `{"target":"/home/agent/r","other":"/run/x"}`} {
 		err := macGuestEnv(map[string]string{"SOME_FILE": v})
 		if want := "This run's SOME_FILE names " + v + ", which has no macOS location yet, so the macOS VM stopped before the run started."; err == nil || err.Error() != want {
 			t.Errorf("%s: err %v, want %q", v, err, want)
