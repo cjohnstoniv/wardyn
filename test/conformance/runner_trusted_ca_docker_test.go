@@ -254,7 +254,9 @@ func TestRunnerTrustedCADocker(t *testing.T) {
 		ref, _, _ := start(t, "", "", false)
 		code, out := curl(t, ref, mitmHost)
 		// The proxy reached the upstream and refused its certificate: not a policy or guard denial.
-		if code == 0 || strings.Contains(out, "X-Wardyn-Egress: denied") || !strings.Contains(out, "< HTTP/1.1 502") {
+		// Read the status from -w's stdout line: curl -v writes "< " and the status line to stderr
+		// separately, so the merged output can split them.
+		if code == 0 || strings.Contains(out, "X-Wardyn-Egress: denied") || !strings.Contains(out, "status=502") {
 			t.Fatalf("intercepted host: exit %d; want the proxy's 502 for an upstream certificate it does not trust:\n%s", code, out)
 		}
 		// A plain intercepted host keeps the proxy's 502; the provider-shaped "tls_untrusted" body is
