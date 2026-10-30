@@ -22,6 +22,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Promoting a recording's hosts into a workspace's egress no longer promotes a model provider's host when the site
   configuration can't be read. The promote now writes nothing and answers `503`, to retry; the provider hosts are read
   once, for both the filter and the hosts a request names.
+- Two value-equal approval requests for one run that spell a number differently (`1` and `1.0`) no longer both open a
+  pending approval when they race: a request's scope is stored with one spelling per number. A pending request no
+  longer stands in for another whose numbers differ past floating-point precision.
 
 ## [0.10.0-rc.8] — 2026-10-29
 
