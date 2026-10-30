@@ -13,9 +13,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
-- Denying any Azure DevOps host now withdraws the person's whole Azure DevOps lane. A deny on `dev.azure.com` alone
-  used to leave the person's credential on `<org>.visualstudio.com` and the `vssps`, `vsrm`, `feeds`, `pkgs` and
-  `almsearch` hosts. `run.ceiling.reassert` names the lane `azure_devops` in `dropped_broker_lanes`.
+- Denying any Azure DevOps host now withdraws the person's Azure DevOps credential lane: its credentials and the hosts
+  it added; hosts your policy allows itself stay reachable without the credential. This holds at dispatch and on a
+  revive. A deny on `dev.azure.com` alone used to leave the person's credential on `<org>.visualstudio.com` and the
+  `vssps`, `vsrm`, `feeds`, `pkgs` and `almsearch` hosts. `run.ceiling.reassert` and `run.revive` name the lane
+  `azure_devops` in `dropped_broker_lanes`.
 
 ### Fixed
 

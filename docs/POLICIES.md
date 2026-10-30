@@ -69,18 +69,19 @@
 
 - L2 egress allowlist: exact hosts or `*.` wildcards.
 - An exact host covers only itself, so a deny names every host a vendor answers on.
-- To wall off GitHub, deny `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com` and `ssh.github.com`; `api.github.com` is also the host the GitHub CLI component reaches.
+- To wall off GitHub, deny `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com` and `ssh.github.com`; the GitHub CLI component also reaches `api.github.com`.
 - A profile that denies any host in GitHub's family (`github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`) also withholds the git broker, while plain egress to `api.github.com` stays exact-host. Such a profile refuses a run that attaches a GitHub CLI row or the built-in GitHub component.
-- A deny on any host of the person's Azure DevOps lane, such as `dev.azure.com`, withholds their credential from the whole organisation. To wall off its egress too, deny `dev.azure.com`, `*.dev.azure.com` and `*.visualstudio.com`.
-- Empty under default-deny means the sandbox reaches nothing.
+- Denying any Azure DevOps host, such as `dev.azure.com`, withdraws the person's Azure DevOps credential lane: its credentials and the hosts it added; hosts your policy allows itself stay reachable without the credential.
+- After a revive, if a boundary layer is in force and your policy lists one of these hosts with exactly the same host:port spelling, that host also loses plain egress for that person's runs. A bare host or a wildcard is not affected.
+- Empty under default-deny, the sandbox reaches nothing.
 - Each entry must be a shape the proxy's matcher can match.
-- A mid-label wildcard, a URL, a bad `:port`, or a non-ASCII spelling is rejected at write time rather than shipped as a rule that silently matches nothing.
-- (An internationalised host reaches the wire as punycode, so type the `xn--…` form.)
-- That refusal is a WRITE-time check, so a policy stored before it landed can still carry a dead entry.
-- Each sidecar therefore re-checks both lists at boot and logs one `WARN` naming every entry that can never match.
-- A warning, never a refusal, since failing a run closed over an entry that has been inert since it was written would be the worse outcome.
-- It matters most on `denied_domains`, where a dead entry denies nothing.
-- Capped at **256 entries** — a hostile-input ceiling, not a sizing of any real policy — rejected (`400`) at write time.
+- A mid-label wildcard, a URL, a bad `:port`, or a non-ASCII spelling is rejected at write time.
+- Type an internationalised host in its punycode `xn--…` form.
+- A policy stored before that check landed can still carry a dead entry.
+- Each sidecar re-checks both lists at boot and logs one `WARN` naming each dead entry.
+- A warning, never a refusal: failing a run over an entry inert since it was written would be worse.
+- It matters most on `denied_domains`: a dead entry denies nothing.
+- Capped at **256 entries**, a hostile-input ceiling; more is rejected (`400`) at write time.
 
 ### `allow_all_egress`
 

@@ -336,6 +336,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	layers := s.sealRunPolicy(ctx, run, &policy, p.Provenance)
 	signsBedrock := llm.signsBedrock()
 	grantRows = s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, layers, grantRows, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
+	withdrawADOLane(withholding{deny: ceiling.deny, layers: layers}, &ado, &policy, p.Policy.AllowedDomains) // no gate or interception entry ships for a withdrawn lane
 	plan.withdrawSigV4(signsBedrock, llm)
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
 	kubeAPI := plan.kubectlCLI.closeWithheld(&policy, injections)

@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -468,5 +469,122 @@ func TestCeilingReassert_ADODenyOnOneHostWithdrawsTheWholeLane(t *testing.T) {
 	srv.reassertCeilingDenies(context.Background(), run, &types.RunPolicySpec{}, &kept, other, nil, nil, &dispatchParams{}, map[string]string{}, &llm, &bedrock, nil)
 	if len(kept) != len(adoEntraHosts("contoso")) {
 		t.Errorf("a deny on no lane host left %d of %d Azure DevOps injections", len(kept), len(adoEntraHosts("contoso")))
+	}
+}
+
+// dispatchWalledADOLane dispatches a run on contoso's Azure DevOps lane under a profile that denies deny,
+// with own as the run policy's own allowlist.
+func dispatchWalledADOLane(t *testing.T, deny, own []string) runner.SandboxSpec {
+	t.Helper()
+	fr := &fakeRunner{}
+	srv, st, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
+	srv.cfg.Store = &laneDispatchStore{siteDispatchStore: &siteDispatchStore{dispatchTestStore: st, site: adoSite(adoEntraTestRow())}}
+	p := dispatchParams{ADOLaneRepo: adoTestRepo, RunToken: "run-token", Image: "wardyn/claude-code:latest"}
+	p.Policy.MinConfinementClass = types.CC1
+	p.Policy.AllowedDomains = slices.Concat(own, []string{"api.anthropic.com"})
+	gc := governanceCeiling{Spec: types.RunPolicySpec{DeniedDomains: deny}, Unit: &ResolvedUnit{Name: "walled"}}
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc, adoEntraUngraded(), bedrockCredUngraded()), p)
+	if st.State() == types.RunFailed {
+		t.Fatalf("the run failed: %q", st.FailureHint())
+	}
+	return fr.lastSpec
+}
+
+// At dispatch a deny on dev.azure.com withdraws the whole lane: no injection, no REST gate, no
+// interception entry and no allowlist entry the lane added. An entry the run's own policy lists stays.
+func TestDispatch_ADODenyWithdrawsTheWholeLane(t *testing.T) {
+	lane := adoEntraEgressEntries("contoso")
+	if open := dispatchWalledADOLane(t, []string{"unrelated.example"}, nil); open.ProxyConfig.ADOGrant == nil {
+		t.Fatal("control: a deny on no lane host authored no lane, so the case below proves nothing")
+	}
+	for name, own := range map[string][]string{"lane only": nil, "the policy lists an alias": {"contoso.visualstudio.com:443"}} {
+		t.Run(name, func(t *testing.T) {
+			spec := dispatchWalledADOLane(t, []string{"dev.azure.com"}, own)
+			if spec.ProxyConfig.ADOGrant != nil {
+				t.Errorf("ADOGrant = %+v, want no gate for a withdrawn lane", spec.ProxyConfig.ADOGrant)
+			}
+			for _, in := range spec.ProxyConfig.Injection {
+				if isADOLaneRule(in.Rule) {
+					t.Errorf("the lane's credential survived on %s", in.Rule.Host)
+				}
+			}
+			for _, m := range spec.ProxyConfig.MITMHosts {
+				if slices.Contains(lane, m) {
+					t.Errorf("interception entry %s shipped for a withdrawn lane", m)
+				}
+			}
+			for _, e := range lane {
+				if got, want := slices.Contains(spec.ProxyConfig.Policy.AllowedDomains, e), slices.Contains(own, e); got != want {
+					t.Errorf("allowlist has %s = %v, want %v: only the lane's own entries go", e, got, want)
+				}
+			}
+		})
+	}
+}
+
+// adoFrozenConfig is a revived run's proxy config with contoso's lane live: an injection on every host
+// but skip, the REST gate, the lane's allowlist entries after allow, and the model host.
+func adoFrozenConfig(run types.AgentRun, skip string, allow ...string) *proxy.Config {
+	cfg := &proxy.Config{RunID: run.ID, ADOGrant: &proxy.ADOGrantConfig{Organization: "contoso", Hosts: adoEntraHosts("contoso")}}
+	for _, h := range adoEntraHosts("contoso") {
+		if h != skip {
+			cfg.Injection = append(cfg.Injection, proxy.InjectionConfig{GrantID: uuid.New(),
+				InjectionRule: egress.InjectionRule{Host: h, SecretName: types.ADOEntraAccessTokenSecret, RequireTLS: true}})
+		}
+	}
+	cfg.Policy.AllowedDomains = slices.Concat(allow, adoEntraEgressEntries("contoso"), []string{"api.anthropic.com:443"})
+	return cfg
+}
+
+// A revive under a profile that now denies dev.azure.com withdraws the whole lane, as dispatch does:
+// for a run whose lane was live, and for one an older dispatch already took dev.azure.com from.
+func TestReviveADODenyWithdrawsTheWholeLane(t *testing.T) {
+	for name, skip := range map[string]string{"lane live": "", "dev.azure.com already dropped": "dev.azure.com"} {
+		t.Run(name, func(t *testing.T) {
+			run := types.AgentRun{ID: uuid.New()}
+			cfg := adoFrozenConfig(run, skip)
+			re, rerr := reassertProxyCeiling(run, cfg, ownerCeiling{deny: []string{"dev.azure.com"}}, nil)
+			if rerr != nil {
+				t.Fatalf("refused: %+v", rerr)
+			}
+			if cfg.ADOGrant != nil {
+				t.Errorf("ADOGrant = %+v, want none", cfg.ADOGrant)
+			}
+			if len(cfg.Injection) != 0 {
+				t.Errorf("injections %+v survived the withdrawn lane", cfg.Injection)
+			}
+			for _, e := range adoEntraEgressEntries("contoso") {
+				if slices.Contains(cfg.Policy.AllowedDomains, e) {
+					t.Errorf("lane allowlist entry %s survived", e)
+				}
+			}
+			if !slices.Contains(cfg.Policy.AllowedDomains, "api.anthropic.com:443") || !slices.Contains(re.droppedLane, adoCeilingLane) {
+				t.Errorf("allowlist %v, dropped lanes %v: want the model host kept and %q named", cfg.Policy.AllowedDomains, re.droppedLane, adoCeilingLane)
+			}
+		})
+	}
+}
+
+// DELIBERATE, and pinned so it is not "fixed" into keeping the entry: under a layered seal, a policy
+// entry spelled exactly as a lane entry (contoso.visualstudio.com:443) is minimised into the lane's one
+// copy, and the frozen config cannot tell the two apart, so a revive that withdraws the lane takes it
+// too. That host loses plain egress for the run; the credential is gone either way. A bare host or a
+// wildcard the policy lists is a different spelling, and stays.
+func TestReviveADOLane_LayeredExactPolicyEntryIsWithdrawnDeliberately(t *testing.T) {
+	run := types.AgentRun{ID: uuid.New()}
+	cfg := adoFrozenConfig(run, "", "contoso.visualstudio.com", "*.visualstudio.com")
+	if _, rerr := reassertProxyCeiling(run, cfg, ownerCeiling{}, []sealLayer{denyOnlyLayer("dev.azure.com")}); rerr != nil {
+		t.Fatalf("refused: %+v", rerr)
+	}
+	if slices.Contains(cfg.Policy.AllowedDomains, "contoso.visualstudio.com:443") {
+		t.Error("the single contoso.visualstudio.com:443 copy survived; a revive removes one copy of each lane entry")
+	}
+	for _, own := range []string{"contoso.visualstudio.com", "*.visualstudio.com"} {
+		if !slices.Contains(cfg.Policy.AllowedDomains, own) {
+			t.Errorf("the policy's own %s was removed: %v", own, cfg.Policy.AllowedDomains)
+		}
+	}
+	if cfg.ADOGrant != nil || len(cfg.Injection) != 0 {
+		t.Errorf("ADOGrant %+v, injections %+v: want the lane gone", cfg.ADOGrant, cfg.Injection)
 	}
 }
