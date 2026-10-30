@@ -260,6 +260,19 @@ func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID 
 		}
 		stamp(placementCredentialIndex("ProxyConfig.Injection", i), row)
 	}
+	// A re-signed AWS lane is bound to the grant dispatch wrote for it: the same portal, the same
+	// account and role, and the same set of hosts it signs (authorAWSSSOGrant).
+	if c := spec.ProxyConfig.AWSSigV4; c != nil {
+		if row, found := byID[c.GrantID]; found && row.Spec.Kind == types.GrantAPIKey {
+			rule, e := injectionRuleFromScope(row.Spec.Scope)
+			hosts := grantHosts(row.Spec)
+			hostSet := func(h []string) []string { return slices.Compact(slices.Sorted(slices.Values(h))) }
+			if e == nil && len(hosts) > 0 && hostEqual(rule.Host, c.PortalHost) &&
+				maps.Equal(rule.PinQuery, awsSSOPinQuery(c.AccountID, c.RoleName)) && slices.Equal(hostSet(hosts[1:]), hostSet(c.Hosts)) {
+				stamp("ProxyConfig.AWSSigV4", row)
+			}
+		}
+	}
 	for host, pat := range spec.ProxyConfig.PATGrants {
 		row, found := byID[pat.GrantID]
 		if !found || row.Spec.Kind != types.GrantGitPAT {
