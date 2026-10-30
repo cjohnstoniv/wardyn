@@ -382,9 +382,25 @@ func (f runnerField) resolveList(in runnerInputs) resolvedField {
 	got := func(list []string, source string) resolvedField {
 		return resolvedField{Name: f.name, Value: strings.Join(list, string(os.PathListSeparator)), List: list, Source: source}
 	}
+	var managed []string
+	malformed := false
+	if f.managed != "" && in.managed != nil {
+		if raw := in.managed(f.managed); raw != "" {
+			malformed = json.Unmarshal([]byte(raw), &managed) != nil
+		}
+	}
+	refuse := func() resolvedField {
+		bad := got(nil, sourceManaged+" "+f.managed)
+		bad.Err = fmt.Errorf("managed preference %s: must be an array of folders", f.managed)
+		return bad
+	}
+	// Under the lock a malformed managed list is refused before a flag can stand in for it.
 	if in.locked && f.locked {
-		if v, ok := f.managedList(in); ok && len(v) > 0 {
-			return got(v, sourceManaged+" "+f.managed+" (locked)")
+		if malformed {
+			return refuse()
+		}
+		if len(managed) > 0 {
+			return got(managed, sourceManaged+" "+f.managed+" (locked)")
 		}
 	}
 	if f.flag != "" && in.flagList != nil {
@@ -392,18 +408,11 @@ func (f runnerField) resolveList(in runnerInputs) resolvedField {
 			return got(v, sourceFlag+" --"+f.flag)
 		}
 	}
-	if f.managed != "" && in.managed != nil {
-		if raw := in.managed(f.managed); raw != "" {
-			var v []string
-			if err := json.Unmarshal([]byte(raw), &v); err != nil {
-				bad := got(nil, sourceManaged+" "+f.managed)
-				bad.Err = fmt.Errorf("managed preference %s: must be an array of folders", f.managed)
-				return bad
-			}
-			if len(v) > 0 {
-				return got(v, sourceManaged+" "+f.managed)
-			}
-		}
+	if malformed {
+		return refuse()
+	}
+	if len(managed) > 0 {
+		return got(managed, sourceManaged+" "+f.managed)
 	}
 	for _, name := range f.env {
 		if v := strings.TrimSpace(in.getenv(name)); v != "" {
