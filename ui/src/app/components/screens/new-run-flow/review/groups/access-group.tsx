@@ -5,6 +5,7 @@
 
 import * as React from "react";
 import { Grid3x3 } from "lucide-react";
+import type { PersonalWallsSpec } from "../../../../../lib/api/walls";
 import { Button } from "../../../../ui/button";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
@@ -12,18 +13,15 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_WALLS } from "../../../../wardyn/copy/personal-walls";
 import { reachedHosts, wallsLeaveOut, wallsLeaveOutKnobs, type WallsHostKnob } from "../../lenses/tools-lens";
 import { ReviewGroup } from "../review-group";
-import { useWallsSpec } from "../use-walls-spec";
 import { AccessCredentials } from "./access-credentials";
 import { stepLocation, type GroupProps } from "./group-props";
 import { JumpButton } from "./jump-button";
 
-/** `onLeftOut` is told which of the walls' host lists the drawn leave-out lines come from, so Review keeps the walls' warning for any list no line speaks for. */
-export function AccessGroup({ draft, pre, preview, docRows, go, onLeftOut }: GroupProps & { onLeftOut?: (knobs: readonly WallsHostKnob[]) => void }) {
+/** `walls` are the person's own, read once by Review for this and the policy card; `onLeftOut` is told which of the walls' host lists the drawn leave-out lines come from, so Review keeps the walls' warning for any list no line speaks for. */
+export function AccessGroup({ draft, pre, preview, docRows, go, onLeftOut, walls }: GroupProps & { onLeftOut?: (knobs: readonly WallsHostKnob[]) => void; walls?: PersonalWallsSpec }) {
   const access = pre?.access ?? preview?.access;
   const hosts = access?.hosts ?? [];
   const source = preview?.source.name;
-  // The person's own walls, to name a host they leave out; a caller with none (or no way to read them) sees no such line.
-  const walls = useWallsSpec();
   const leftOut = wallsLeaveOut(walls, pre?.access ?? preview?.access, !!access);
   const knobKey = wallsLeaveOutKnobs(walls, pre?.access ?? preview?.access, !!access).join();
   React.useEffect(() => onLeftOut?.(knobKey ? (knobKey.split(",") as WallsHostKnob[]) : []), [knobKey, onLeftOut]);

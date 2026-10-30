@@ -115,6 +115,7 @@ function open(intent: RunIntent, o: Open = {}) {
   wfetchMock.mockImplementation(async (path: string, init?: { method?: string }) => {
     if (path === "/setup/status" && o.status) return json(o.status);
     if (path.startsWith("/me/drives")) return json(o.drivesFn ? o.drivesFn() : o.drives ?? { drives: [], pool_checked: true });
+    if (path === "/me/walls") return json({ spec: {} });
     if (path === "/templates" && init?.method === "POST") return json({ id: "t9", kind: "template" });
     if (path === "/templates") return json({ templates: [], publish: { org: false, groups: [], groups_unverified: false } });
     if (path.startsWith("/templates/")) return o.templateRead ? o.templateRead() : json({ document: { needs_setup: o.needs ?? [] } });
@@ -629,6 +630,16 @@ describe("Review groups", () => {
     await user.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_TOOLS}` }));
     setField(screen.getByLabelText(NR_REVIEW.COMMAND_LABEL), "make lint");
     expect(intentNow().workload).toEqual({ kind: "command", command: "make lint" });
+  });
+});
+
+describe("Review: the person's walls", () => {
+  it("are read once for the Access group and the policy card together, so their counts cannot differ", async () => {
+    open(AGENT);
+    await ready();
+    await screen.findByLabelText(NR_REVIEW.POLICY_TITLE);
+    await waitFor(() => expect(wfetchMock.mock.calls.some(([p]) => p === "/me/walls")).toBe(true));
+    expect(wfetchMock.mock.calls.filter(([p]) => p === "/me/walls")).toHaveLength(1);
   });
 });
 
