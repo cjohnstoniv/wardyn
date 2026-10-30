@@ -199,6 +199,9 @@ type ToolsResult struct {
 	Desktop string
 	// ToolsDial is the guest agent's classified tools-port dial.
 	ToolsDial string
+	// Items are the install list's items as installed, and ItemsDigest the list's digest.
+	Items       []ItemRecord
+	ItemsDigest string
 }
 
 // PinRecord is a pin as stage 2 applied it.
@@ -230,6 +233,8 @@ type ToolsOptions struct {
 	// Desktop is the control check's RFB client (nil: the check finds
 	// observe).
 	Desktop DesktopProbe
+	// Items is the operator's install list (none: no items).
+	Items BaseList
 }
 
 // ToolsStage is the Stage2 that boots the base through Boot and applies Tooling.
@@ -293,6 +298,9 @@ func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) 
 		}
 	}
 	res, err = installTools(ctx, g, o)
+	if err == nil {
+		err = installItems(ctx, g, o, &res)
+	}
 	if err == nil {
 		err = selftestBase(ctx, g, &res, o.Log)
 	}
@@ -691,6 +699,10 @@ type ToolsRecord struct {
 	Withheld     map[string]WithheldRecord `json:"withheld,omitempty"`
 	Harnesses    []string                  `json:"harnesses"`
 	TriedAt      time.Time                 `json:"tried_at"`
+	// ItemsDigest is the install list's digest (BaseList.Digest) the base was built with, and Items its
+	// items.
+	ItemsDigest string       `json:"items_digest,omitempty"`
+	Items       []ItemRecord `json:"items,omitempty"`
 }
 
 // ReadToolsRecord reads a base's tools.json.
@@ -704,7 +716,8 @@ func ReadToolsRecord(baseDir string) (ToolsRecord, error) {
 }
 
 func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Time) error {
-	rec := ToolsRecord{AgentVersion: agentVersion, AgentRun: r.AgentRun, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC()}
+	rec := ToolsRecord{AgentVersion: agentVersion, AgentRun: r.AgentRun, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC(),
+		ItemsDigest: r.ItemsDigest, Items: r.Items}
 	for id, err := range r.Withheld {
 		if rec.Withheld == nil {
 			rec.Withheld = map[string]WithheldRecord{}
@@ -758,9 +771,10 @@ type UpdateOptions struct {
 	// is a VM like any other (nil: the caller already holds one).
 	Admit func(ctx context.Context) (release func(), err error)
 	Stage Stage2
-	// Tooling and AgentVersion are what the base should end up with.
+	// Tooling, AgentVersion and ItemsDigest (the install list's) are what the base should end up with.
 	Tooling      Tooling
 	AgentVersion string
+	ItemsDigest  string
 	// Force runs the update even when the base looks current or a withheld
 	// harness is inside its retry delay: an update someone asked for.
 	Force bool
@@ -801,7 +815,7 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	if err != nil {
 		return m, false, err
 	}
-	if !o.Force && !NeedsToolsUpdate(base, o.Tooling, o.AgentVersion, o.Now()) {
+	if !o.Force && !NeedsToolsUpdate(base, o.Tooling, o.AgentVersion, o.Now()) && !ItemsChanged(base, o.ItemsDigest) {
 		return m, false, nil
 	}
 	drifted := o.AgentVersion != "" && m.AgentVersion != o.AgentVersion

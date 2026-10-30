@@ -60,6 +60,9 @@ type runnerFile struct {
 	LocalModelPort string `json:"local_model_port,omitempty"`
 	// MacOSVM turns macOS VM sandboxes on ("1") on a Mac; off when unset.
 	MacOSVM string `json:"macos_vm,omitempty"`
+	// MacOSVMBaseFile is the install list prepare and every tools update install into the macOS base as
+	// admin (macvm.BaseList); none when unset.
+	MacOSVMBaseFile string `json:"macos_vm_base_file,omitempty"`
 }
 
 // Where each setting is read from, in the order serve consults them. A managed preference outranks the
@@ -107,6 +110,8 @@ var runnerFields = []runnerField{
 	{name: "recording_store", flag: "recording-store", env: []string{"WARDYN_RECORDING_STORE"}, managed: "RecordingStore", def: "pg", locked: true, file: func(f *runnerFile) *string { return &f.RecordingStore }},
 	{name: "local_model_port", flag: "local-model-port", env: []string{"WARDYN_LOCAL_MODEL_PORT"}, managed: "LocalModelPort", file: func(f *runnerFile) *string { return &f.LocalModelPort }},
 	{name: "macos_vm", env: []string{"WARDYN_RUNNER_MACOS_VM"}, managed: "MacOSVM", file: func(f *runnerFile) *string { return &f.MacOSVM }},
+	// No flag or environment variable sets it, so a managed MacOSVMBaseFile is the value whatever the lock.
+	{name: "macos_vm_base_file", managed: "MacOSVMBaseFile", file: func(f *runnerFile) *string { return &f.MacOSVMBaseFile }},
 }
 
 // macOSVMOn reads the macos_vm setting.

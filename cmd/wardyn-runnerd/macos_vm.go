@@ -121,6 +121,12 @@ type macOSVMs struct {
 	mu    sync.Mutex
 	caps  *runnerwire.MacVMCaps
 	drift string // the base agent version a tools update was last asked for
+	// baseFile is the runner setting macos_vm_base_file, the install list a prepare and a tools update pass
+	// the helper (baseFileErr: it could not be read, so neither starts); itemsAsked is the list digest a
+	// tools update was last asked for.
+	baseFile    string
+	baseFileErr error
+	itemsAsked  string
 }
 
 // macOSVMSetup is what openMacOSVMs reads.
@@ -157,6 +163,7 @@ func (m *macOSVMs) useDriver(d macVMDriver) {
 func openMacOSVMs(s macOSVMSetup) *macOSVMs {
 	m := &macOSVMs{host: s.host, layout: macvm.Layout{Root: s.root}, runnerID: s.runnerID, uid: s.uid, version: s.version, perRunMemory: s.perRunMemory, limitsFile: s.limitsFile,
 		defaultPerRunMemory: s.perRunMemory, interval: macOSVMRecompute, kick: make(chan struct{}, 1)}
+	m.baseFile, m.baseFileErr = macOSVMBaseFile()
 	if s.ledgerDir != admission.DefaultDir {
 		m.ledgerDir = s.ledgerDir
 	}
@@ -321,6 +328,7 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 	c.MinCPUs, c.MinMemoryMiB = man.MinCPUs, int(man.MinMemoryMiB)
 	c.Harnesses, c.Desktop = slices.Clone(man.Harnesses), man.Desktop
 	m.checkAgent(man)
+	m.checkItems(man)
 	if why, refusal, belowReason := m.belowMinimum(man); why != "" {
 		// design 3.10: a per-run limit below the base's minimum offers none and names the flag to raise.
 		slog.Warn("macOS VM sandboxes: this runner offers none", "reason", why)
@@ -409,6 +417,7 @@ func (m *macOSVMs) base() (macvm.Manifest, runnerwire.MacVMBase) {
 		if cause := toolsFailure(m.layout.BaseDir(0)); cause != "" {
 			b.Failure, b.Error = runnerwire.MacVMFailureTools, m.scrubError(cause)
 		}
+		b.Customisation = baseItems(m.layout.BaseDir(0))
 	case m.preparing():
 		b.State, b.Progress = runnerwire.MacVMBasePreparing, prepareProgress(m.layout.PrepareLog())
 		scanPrepare(m.layout.PrepareLog()).apply(&b, true)
@@ -433,6 +442,16 @@ func (m *macOSVMs) base() (macvm.Manifest, runnerwire.MacVMBase) {
 	return man, b
 }
 
+// baseItems is the install list's items as the base in baseDir records them, for the caps.
+func baseItems(baseDir string) []runnerwire.MacVMItem {
+	rec, _ := macvm.ReadToolsRecord(baseDir)
+	var out []runnerwire.MacVMItem
+	for _, it := range rec.Items {
+		out = append(out, runnerwire.MacVMItem{Kind: it.Kind, Name: it.Name, State: it.State})
+	}
+	return out
+}
+
 // checkAgent is the guest agent drift trigger: a base whose agent is not this runner's needs a tools
 // update, asked for once per base agent version. The base keeps serving meanwhile.
 func (m *macOSVMs) checkAgent(man macvm.Manifest) {
@@ -449,6 +468,62 @@ func (m *macOSVMs) checkAgent(man macvm.Manifest) {
 	slog.Warn("macOS VM base: its guest agent is not this runner's; a tools update replaces it", "base_agent", man.AgentVersion, "runner", m.version)
 	if m.toolsUpdate != nil {
 		m.toolsUpdate(man)
+	}
+}
+
+// macOSVMBaseFile reads the runner setting macos_vm_base_file (tests replace it).
+var macOSVMBaseFile = func() (string, error) {
+	c, err := effectiveRunnerConfig("", nil)
+	if err != nil {
+		return "", err
+	}
+	return c.get("macos_vm_base_file"), nil
+}
+
+// baseFileArgs is the helper's install list flag for a prepare or a tools update: none without the setting.
+func (m *macOSVMs) baseFileArgs() ([]string, error) {
+	if m.baseFileErr != nil {
+		return nil, fmt.Errorf("macos_vm_base_file: %w", m.baseFileErr)
+	}
+	if m.baseFile == "" {
+		return nil, nil
+	}
+	return []string{"--" + macvm.FlagBaseFile, m.baseFile}, nil
+}
+
+// checkItems is the install list trigger: a base built with another list than the one macos_vm_base_file
+// names now needs a tools update, asked for once per list digest. A base whose agent drifted is left to
+// checkAgent's update, which installs the list too. A list that cannot be read is logged once per error,
+// and the base keeps serving.
+func (m *macOSVMs) checkItems(man macvm.Manifest) {
+	if m.baseFileErr != nil || (man.AgentVersion != "" && man.AgentVersion != m.version) {
+		return
+	}
+	var l macvm.BaseList
+	var err error
+	if m.baseFile != "" {
+		l, err = macvm.LoadBaseList(m.baseFile)
+	}
+	if err == nil && !macvm.ItemsChanged(m.layout.BaseDir(0), l.Digest()) {
+		return
+	}
+	key := l.Digest()
+	if err != nil {
+		key = err.Error()
+	}
+	m.mu.Lock()
+	asked := m.itemsAsked == key
+	m.itemsAsked = key
+	m.mu.Unlock()
+	switch {
+	case asked:
+	case err != nil:
+		slog.Warn("macOS VM base: the install list cannot be read; the base keeps serving as it was built", "error", err.Error())
+	default:
+		slog.Warn("macOS VM base: the install list changed; a tools update installs it")
+		if m.toolsUpdate != nil {
+			m.toolsUpdate(man)
+		}
 	}
 }
 
@@ -734,6 +809,11 @@ func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
 	if a.keepIPSW {
 		extra = append(extra, "--"+macvm.FlagKeepIPSW)
 	}
+	items, err := m.baseFileArgs()
+	if err != nil {
+		return err
+	}
+	extra = append(extra, items...)
 	r, err := probeHelper(ctx, a.helper)
 	if err != nil {
 		return err
@@ -780,7 +860,11 @@ func (m *macOSVMs) startToolsUpdate(ctx context.Context, man macvm.Manifest) err
 	if m.ledger == nil {
 		return errors.New(cmp.Or(m.refusal, m.why))
 	}
-	return m.startJob(ctx, helperJob{kind: admission.KindToolsUpdate, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
+	items, err := m.baseFileArgs()
+	if err != nil {
+		return err
+	}
+	return m.startJob(ctx, helperJob{kind: admission.KindToolsUpdate, extra: items, disk: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)),
 		log: filepath.Join(m.layout.Root, toolsUpdateLog), sub: macvm.UpdateToolsCommand, helper: m.helper, cpus: max(man.MinCPUs, 1),
 		memMiB: m.guestMemory(man) >> 20, runner: m.runnerID, ledger: m.ledgerDir, descr: "tools update"})
 }

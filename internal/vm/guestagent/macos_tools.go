@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -94,12 +95,15 @@ var cltLabel = regexp.MustCompile(`^Command Line Tools[A-Za-z0-9 ._()-]{0,96}$`)
 
 // ToolsExecAllowed says whether tools mode may run argv as root: softwareupdate as `-l` or as
 // `-i <label>` with a cltLabel label (handleExec also requires a label this process's `-l` listed); touch or rm on MacCLTTrigger only (touch T, rm -f T); exactly
-// CLTGitArgv; or a regular file (not a link) directly in binDir, a pushed CLI's version check. A path
+// CLTGitArgv; a base item's form (itemArgvAllowed); or a regular file (not a link) directly in binDir, a pushed CLI's version check. A path
 // is compared as given, so the same binary by a relative path, a ".." component or a link is refused,
 // and nothing names a shell or launchctl.
 func ToolsExecAllowed(argv []string, binDir string) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("%w: an exec needs argv", ErrToolsRefused)
+	}
+	if itemArgvAllowed(argv) {
+		return nil
 	}
 	name := argv[0]
 	switch name {
@@ -162,12 +166,13 @@ func (t *Tools) ToolsHandler() http.Handler {
 
 func (t *Tools) binDir() string { return cmp.Or(t.BinDir, MacToolsBinDir) }
 
-// pushAllowed says whether a push may write dest: a file directly in BinDir, or the agent's own binary
-// or plist.
+// pushAllowed says whether a push may write dest: a file directly in BinDir, the agent's own binary
+// or plist, or a base item's file (itemPushAllowed).
 func (t *Tools) pushAllowed(dest string) error {
 	ok := filepath.IsAbs(dest) && filepath.Clean(dest) == dest &&
 		((filepath.Dir(dest) == t.binDir() && !strings.HasPrefix(filepath.Base(dest), ".")) ||
-			(t.AgentBinary != "" && dest == t.AgentBinary) || (t.AgentPlist != "" && dest == t.AgentPlist))
+			(t.AgentBinary != "" && dest == t.AgentBinary) || (t.AgentPlist != "" && dest == t.AgentPlist) ||
+			itemPushAllowed(dest))
 	if !ok {
 		return fmt.Errorf("%w: a push to %q", ErrToolsRefused, dest)
 	}
@@ -358,4 +363,124 @@ func replaceFile(dst string, perm os.FileMode, fill func(*os.File) error) (err e
 		return err
 	}
 	return os.Rename(tmp, dst)
+}
+
+// Base items are the operator's install list (internal/macvm customise.go), which stage 2 installs as
+// root with the fixed argv forms below and nothing else: no shell, and no flag the list can choose. Each
+// item is staged in a directory of its own under MacItemStageDir, root's and mode 0700, by its name.
+const (
+	MacItemStageDir = "/Library/Wardyn/stage"
+	// The staged file of each kind, in its item's directory; a dmg is attached at ItemMount there.
+	ItemPkg   = "item.pkg"
+	ItemZip   = "item.zip"
+	ItemDmg   = "item.dmg"
+	ItemMount = "mnt"
+	// MacApplications is where an app item goes.
+	MacApplications = "/Applications"
+)
+
+// ItemNamePattern is an item's name, its stage directory's.
+var ItemNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+
+// ItemAppPattern is the bundle an app item's dmg holds, as it lands in MacApplications.
+var ItemAppPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,95}\.app$`)
+
+// ItemDir is item name's stage directory.
+func ItemDir(name string) string { return MacItemStageDir + "/" + name }
+
+// itemDestRoots are where a file item may land (not /etc, whose files are the system's own), and
+// itemDestRefused the paths under them it may not: the
+// files a run's walls are made of, which a run's Init writes (macos_paths.go), Wardyn's own files, and the
+// System keychain, which only a ca item changes. Paths compare without case, as the guest's APFS volume
+// does.
+var (
+	itemDestRoots   = []string{"/Library", "/usr/local", "/opt"}
+	itemDestRefused = []string{MacClaudeCodeManagedDir, MacCodexManagedDir, MacRunDir, MacItemStageDir, MacToolsBinDir,
+		MacAgentBinaryPath, MacAgentPlistPath, "/Library/Keychains"}
+)
+
+// ErrItemDest is a file item's destination the guest does not allow.
+var ErrItemDest = errors.New("not a place a base item may write")
+
+// ItemDestAllowed says whether a file item may write dest, or make dest as its directory: an absolute,
+// clean path strictly under an itemDestRoots entry and neither in nor above any itemDestRefused path.
+// Harness managed settings are refused because a run writes them; an organisation's own go in its rules.
+func ItemDestAllowed(dest string) error {
+	if !filepath.IsAbs(dest) || filepath.Clean(dest) != dest {
+		return fmt.Errorf("%q: %w", dest, ErrItemDest)
+	}
+	d := strings.ToLower(dest)
+	under := func(p, root string) bool { return strings.HasPrefix(p, strings.ToLower(root)+"/") }
+	ok := false
+	for _, r := range itemDestRoots {
+		ok = ok || under(d, r)
+	}
+	for _, r := range itemDestRefused {
+		if l := strings.ToLower(r); d == l || under(d, r) || under(l, dest) {
+			ok = false
+		}
+	}
+	if !ok {
+		return fmt.Errorf("%q: %w", dest, ErrItemDest)
+	}
+	return nil
+}
+
+// isItemDir says whether p is an item's stage directory.
+func isItemDir(p string) bool {
+	return filepath.Clean(p) == p && filepath.Dir(p) == MacItemStageDir && ItemNamePattern.MatchString(filepath.Base(p))
+}
+
+// isItemFile says whether p is file in an item's stage directory.
+func isItemFile(p, file string) bool { return filepath.Base(p) == file && isItemDir(filepath.Dir(p)) }
+
+// itemPushAllowed says whether a push may write dest for a base item: a staged file of its kind, or a
+// file item's destination.
+func itemPushAllowed(dest string) bool {
+	if isItemDir(filepath.Dir(dest)) {
+		return slices.Contains([]string{ItemPkg, ItemZip, ItemDmg}, filepath.Base(dest))
+	}
+	return ItemDestAllowed(dest) == nil
+}
+
+// itemArgvAllowed says whether argv is one of the base items' forms:
+//
+//	/bin/mkdir -p -m 0700 S|S/<name>                  the stage directories
+//	/bin/mkdir -p -m 0755 D                           a file item's directory (ItemDestAllowed)
+//	/bin/rm -rf S/<name>                              an item's stage directory, after its install
+//	/usr/sbin/installer -pkg S/<name>/item.pkg -target /
+//	/usr/bin/ditto -x -k S/<name>/item.zip /Applications
+//	/usr/bin/hdiutil attach -nobrowse -readonly -noautoopen -mountpoint S/<name>/mnt S/<name>/item.dmg
+//	/usr/bin/ditto S/<name>/mnt/<App>.app /Applications/<App>.app
+//	/usr/bin/hdiutil detach -force S/<name>/mnt
+func itemArgvAllowed(argv []string) bool {
+	if len(argv) < 2 {
+		return false
+	}
+	if form, ok := itemForms[argv[0]+" "+argv[1]]; ok {
+		return form(argv)
+	}
+	app := filepath.Base(argv[len(argv)-1])
+	return len(argv) == 3 && argv[0] == "/usr/bin/ditto" && ItemAppPattern.MatchString(app) &&
+		argv[1] == filepath.Dir(argv[1])+"/"+app && isItemFile(filepath.Dir(argv[1]), ItemMount) && argv[2] == MacApplications+"/"+app
+}
+
+// itemForms checks each item form's whole argv, by its command and first argument.
+var itemForms = map[string]func(a []string) bool{
+	"/bin/mkdir -p": func(a []string) bool {
+		return len(a) == 5 && a[2] == "-m" &&
+			(a[3] == "0700" && (a[4] == MacItemStageDir || isItemDir(a[4])) || a[3] == "0755" && ItemDestAllowed(a[4]) == nil)
+	},
+	"/bin/rm -rf": func(a []string) bool { return len(a) == 3 && isItemDir(a[2]) },
+	"/usr/sbin/installer -pkg": func(a []string) bool {
+		return len(a) == 5 && isItemFile(a[2], ItemPkg) && a[3] == "-target" && a[4] == "/"
+	},
+	"/usr/bin/ditto -x": func(a []string) bool {
+		return len(a) == 5 && a[2] == "-k" && isItemFile(a[3], ItemZip) && a[4] == MacApplications
+	},
+	"/usr/bin/hdiutil attach": func(a []string) bool {
+		return len(a) == 8 && slices.Equal(a[2:6], []string{"-nobrowse", "-readonly", "-noautoopen", "-mountpoint"}) &&
+			isItemFile(a[6], ItemMount) && a[7] == filepath.Dir(a[6])+"/"+ItemDmg
+	},
+	"/usr/bin/hdiutil detach": func(a []string) bool { return len(a) == 4 && a[2] == "-force" && isItemFile(a[3], ItemMount) },
 }

@@ -327,7 +327,27 @@ type MacVMBase struct {
 	ImageVersion string `json:"image_version,omitempty"`
 	// BytesPerSec is the download rate; Step download with no Wait only.
 	BytesPerSec int64 `json:"bytes_per_sec,omitempty"`
+	// Customisation is the operator's install list as the base holds it (macos_vm_base_file), in list
+	// order; state ready only.
+	Customisation []MacVMItem `json:"customisation,omitempty"`
 }
+
+// MacVMItem is one install list item: Kind is MacVMItemKind*, Name the operator's, State MacVMItem*. An
+// unknown kind or state is a newer runner's, and decodes as itself.
+type MacVMItem struct {
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+// MacVMItem kinds and states.
+const (
+	MacVMItemKindPkg  = "pkg"
+	MacVMItemKindApp  = "app"
+	MacVMItemKindFile = "file"
+
+	MacVMItemInstalled = "installed"
+)
 
 // MacVMBase.Step, Wait and Failure values. An unknown value is a newer runner's, and decodes as itself.
 const (

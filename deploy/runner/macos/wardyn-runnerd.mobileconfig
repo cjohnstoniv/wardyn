@@ -68,6 +68,8 @@
       <string></string>
       <key>MacOSVM</key>
       <string></string>
+      <key>MacOSVMBaseFile</key>
+      <string></string>
     </dict>
   </array>
   <key>PayloadDisplayName</key>

@@ -285,6 +285,7 @@ type jobFlags struct {
 	root, runner, entry, ledgerDir, sockRoot *string
 	slot, cpus                               *int
 	memMiB                                   *uint64
+	baseFile                                 *string
 }
 
 func newJobFlags(fs *flag.FlagSet) jobFlags {
@@ -297,6 +298,7 @@ func newJobFlags(fs *flag.FlagSet) jobFlags {
 		entry:     fs.String(macvm.FlagLedgerEntry, "", "the admission entry runnerd took for this job"),
 		ledgerDir: fs.String(macvm.FlagLedgerDir, "", "the admission ledger directory (default: the package's)"),
 		sockRoot:  fs.String(macvm.FlagSockRoot, "", "the socket root (default: the package's)"),
+		baseFile:  fs.String(macvm.FlagBaseFile, "", "the install list stage 2 installs into the base as admin (the runner setting macos_vm_base_file)"),
 	}
 }
 
@@ -362,6 +364,12 @@ func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger, agent 
 	if err != nil {
 		return nil, err
 	}
+	var items macvm.BaseList
+	if *j.baseFile != "" {
+		if items, err = macvm.LoadBaseList(*j.baseFile); err != nil {
+			return nil, err
+		}
+	}
 	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat,
 		Leaked: j.leaked(d), Log: relayLog}
 	return &macvm.ToolsStage{Boot: boot.ToolsBoot(), ToolsOptions: macvm.ToolsOptions{
@@ -369,6 +377,7 @@ func (j jobFlags) stage2(eng macvm.Engine, d deps, relayLog *slog.Logger, agent 
 		// Stage 2 replaces the guest agent where stage 1 installed it, with
 		// the build beside this helper (§3.4, guest agent drift).
 		Agent: &macvm.AgentPin{Version: version.String(), Path: agent, Dest: guestagent.MacAgentBinaryPath},
+		Items: items,
 	}}, nil
 }
 
@@ -502,7 +511,7 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 	enc := json.NewEncoder(d.stdout)
 	o := macvm.UpdateOptions{
 		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, Power: d.power(), Admit: j.admit(macvm.UpdateToolsCommand, d),
-		Stage: st, Tooling: st.Tooling, AgentVersion: version.String(), Force: *force, CPUs: *j.cpus, MemoryMiB: *j.memMiB, HelperVersion: version.String(),
+		Stage: st, Tooling: st.Tooling, AgentVersion: version.String(), ItemsDigest: st.Items.Digest(), Force: *force, CPUs: *j.cpus, MemoryMiB: *j.memMiB, HelperVersion: version.String(),
 		Progress: func(ev macvm.PrepareEvent) { _ = enc.Encode(ev) },
 		// The staging-cleanup warning goes to the job's log (runnerd's tools-update.log), not nowhere.
 		Log: slog.New(slog.NewTextHandler(d.stderr, nil)),
