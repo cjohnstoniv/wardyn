@@ -46,3 +46,40 @@ func TestRecordingLevelsNameNoKeystrokes(t *testing.T) {
 		}
 	}
 }
+
+// TestRecordingChoiceFloor is what a run may not be recorded under: the ceiling's level, the
+// organisation's when locked, terminal when required. The organisation's unlocked level is a default,
+// so it is no floor, and a floor of off lets a run that cannot be recorded start.
+func TestRecordingChoiceFloor(t *testing.T) {
+	org := func(l RecordingLevel, locked bool) *SiteRecording { return &SiteRecording{Level: l, Locked: locked} }
+	for _, tc := range []struct {
+		name   string
+		c      RecordingChoice
+		want   RecordingLevel
+		source RecordingFloorSource
+	}{
+		{"nothing set", RecordingChoice{}, "", ""},
+		{"unlocked org default", RecordingChoice{Org: org(RecordingScreenActions, false)}, "", ""},
+		{"policy level is no floor", RecordingChoice{Policy: RecordingScreenActions}, "", ""},
+		{"locked org, default level", RecordingChoice{Org: org("", true)}, RecordingTerminal, RecordingFloorOrgLocked},
+		{"locked org, screen", RecordingChoice{Org: org(RecordingScreenActions, true)}, RecordingScreenActions, RecordingFloorOrgLocked},
+		{"locked org, off", RecordingChoice{Org: org(RecordingOff, true)}, RecordingOff, ""},
+		{"ceiling terminal", RecordingChoice{Ceiling: RecordingTerminal}, RecordingTerminal, RecordingFloorCeiling},
+		{"ceiling off", RecordingChoice{Ceiling: RecordingOff}, RecordingOff, ""},
+		{"required", RecordingChoice{Required: true}, RecordingTerminal, RecordingFloorRequired},
+		{"required over ceiling off", RecordingChoice{Ceiling: RecordingOff, Required: true}, RecordingTerminal, RecordingFloorRequired},
+		{"highest layer wins the level", RecordingChoice{Ceiling: RecordingScreenActions, Org: org(RecordingTerminal, true)}, RecordingScreenActions, RecordingFloorOrgLocked},
+		{"ceiling under a locked off org", RecordingChoice{Ceiling: RecordingTerminal, Org: org(RecordingOff, true)}, RecordingTerminal, RecordingFloorCeiling},
+	} {
+		if got := tc.c.Floor(); got != tc.want {
+			t.Errorf("%s: Floor() = %q, want %q", tc.name, got, tc.want)
+		}
+		if got := tc.c.FloorSource(); got != tc.source {
+			t.Errorf("%s: FloorSource() = %q, want %q", tc.name, got, tc.source)
+		}
+		// A floor above off is exactly a source: the two never disagree.
+		if (tc.c.Floor().Rank() > RecordingOff.Rank()) != (tc.c.FloorSource() != "") {
+			t.Errorf("%s: Floor() %q and FloorSource() %q disagree", tc.name, tc.c.Floor(), tc.c.FloorSource())
+		}
+	}
+}

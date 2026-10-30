@@ -389,6 +389,34 @@ func MemberCap(ceiling, profileMax, untouched int) int {
 	return max(size, untouched)
 }
 
+// CapKnob names the authored setting a member cap came from (MemberCapKnob).
+type CapKnob string
+
+const (
+	// CapKnobCeiling: the governance ceiling's own size (resources.cpu_millis, resources.memory_mib).
+	CapKnobCeiling CapKnob = "ceiling"
+	// CapKnobLimits: the profile's maximum (limits.max_cpu_millis, limits.max_memory_mib).
+	CapKnobLimits CapKnob = "limits"
+	// CapKnobBaseline: the size the run already gets, above the other two.
+	CapKnobBaseline CapKnob = "baseline"
+)
+
+// MemberCapKnob is which input of MemberCap(ceiling, profileMax, untouched) set capped, the answer it
+// gave: the ceiling's size, the profile's maximum, or the untouched size when that is above both. It is
+// "" for a capped below the size the ceiling and maximum give, which MemberCap never returns.
+func MemberCapKnob(ceiling, profileMax, capped int) CapKnob {
+	size := MemberCap(ceiling, profileMax, 0)
+	switch {
+	case capped > size:
+		return CapKnobBaseline
+	case capped < size || size < 1:
+		return ""
+	case ceiling >= 1 && (profileMax < 1 || ceiling <= profileMax):
+		return CapKnobCeiling
+	}
+	return CapKnobLimits
+}
+
 // RunnerCapacity is one runner's declared per-run limit: the most one run may reserve there.
 type RunnerCapacity struct{ CPUMillis, MemoryMiB, DiskMiB int64 }
 

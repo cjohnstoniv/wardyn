@@ -6,9 +6,12 @@ package macosguest_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"os"
+	"slices"
+	"strings"
 	"testing"
 
 	macosguest "github.com/cjohnstoniv/wardyn/deploy/macos-guest"
@@ -17,7 +20,7 @@ import (
 )
 
 func TestEmbeddedBytesEqualTheFiles(t *testing.T) {
-	for name, got := range map[string][]byte{"tooling.json": macosguest.ToolingJSON, "prep-allowlist.json": macosguest.PrepAllowlistJSON} {
+	for name, got := range map[string][]byte{"tooling.json": macosguest.ToolingJSON, "prep-allowlist.json": macosguest.PrepAllowlistJSON, "boot-hosts.json": macosguest.BootHostsJSON} {
 		want, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
@@ -69,5 +72,31 @@ func TestStage2BootsNothingOnBadShippedTooling(t *testing.T) {
 	}}
 	if _, err := st.Run(context.Background(), macvm.Stage2Input{}); boots != 0 || err == nil {
 		t.Fatalf("boots = %d, err = %v: stage 2 booted on bad shipped tooling", boots, err)
+	}
+}
+
+// The boot-host list is a short list of exact background hosts. Developer-facing Apple hosts (sign-in, the
+// App Store, developer downloads) and certificate checks are never on it: they keep first-use approval.
+func TestBootHostsAreOnlyBackgroundHosts(t *testing.T) {
+	var doc struct {
+		Version int      `json:"version"`
+		Hosts   []string `json:"hosts"`
+	}
+	if err := json.Unmarshal(macosguest.BootHostsJSON, &doc); err != nil || doc.Version != 1 {
+		t.Fatalf("boot-hosts.json = %+v, %v", doc, err)
+	}
+	want := []string{"gdmf.apple.com", "mesu.apple.com", "gateway.icloud.com", "init-kt.apple.com"}
+	if !slices.Equal(doc.Hosts, want) {
+		t.Fatalf("hosts = %q, want the starting list %q", doc.Hosts, want)
+	}
+	for _, h := range doc.Hosts {
+		if strings.ContainsAny(h, "*:/ ") || h != strings.ToLower(h) {
+			t.Errorf("%q is not a lower-case exact host", h)
+		}
+		for _, never := range []string{"gsa.", "idmsa.", "buy.itunes.", "bag.itunes.", "appleid.", "developer.apple.com", "ocsp"} {
+			if strings.Contains(h, never) {
+				t.Errorf("%q is a developer-facing or certificate-check host, which keeps first-use approval", h)
+			}
+		}
 	}
 }

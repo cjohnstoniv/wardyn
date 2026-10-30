@@ -108,8 +108,8 @@ copy is permanent.
   - A run on a runner that keeps a tail (Docker, on a laptop or on this deployment) reads `source: "stdout"`.
   - A recorded run on a Kubernetes runner under the session recorder, this deployment's or an organisation's, reads
     `source: "recording"`.
-  - A run that is not recorded (`not_recorded` set) reads its tail, unless its runner predates per-run recording and
-    records it anyway.
+  - A run not recorded (`not_recorded` set; macOS VMs are) reads its tail, unless a runner older than per-run recording
+    records anyway.
   - When the run's own runner cannot be asked (offline, or connected to another replica), this deployment's runner
     answers: a recorded run keeps the recording path, and a run that is not recorded keeps its tail.
   - A pooled run asks the substrate its pool named.

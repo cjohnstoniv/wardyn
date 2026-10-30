@@ -18,6 +18,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   revive. A deny on `dev.azure.com` alone used to leave the person's credential on `<org>.visualstudio.com` and the
   `vssps`, `vsrm`, `feeds`, `pkgs` and `almsearch` hosts. `run.ceiling.reassert` and `run.revive` name the lane
   `azure_devops` in `dropped_broker_lanes`.
+- A macOS VM that gets less than the base image's minimum size now says what cut it: your own request, the governance
+  profile's ceiling or `limits.max_*`, the pool, or the server. It names the setting that raises it.
+- A macOS VM run is not recorded in this release, and says so when it is created. Where the organisation, the pool, a
+  locked organisation level or the run's own ceiling asks for recording, it is refused at create and Review instead, and
+  says which of them asked.
+- A macOS VM run now denies Apple's background boot-time hosts without an approval prompt. The list is deny-only: a host
+  your policy allows stays reachable, and nothing on it widens egress. See
+  [Apple's boot-time hosts](docs/operations/macos-vms.md#apples-boot-time-hosts).
+- A macOS VM run that mounts a drive is refused at create and Review in the launcher's words, before a Mac is asked
+  to start the VM.
+- A macOS VM run is also refused at create and Review when a second harness has its own starting prompt, or when a tool
+  rule, tool approvals, autonomy level L1 or the policy's inner walls would hold a tool call for approval. The launcher
+  still refuses the same shapes as a backstop.
 
 ### Fixed
 

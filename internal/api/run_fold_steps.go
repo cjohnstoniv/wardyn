@@ -354,9 +354,26 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 	mounts := len(buildRunMounts(f.spec, s.userMountPosture(f.wsRefs))) // the folders the sandbox would get
 	var ask macOSVMAsk
 	if types.MachineKind(f.req.MachineKind).IsMacOSVM() {
-		ask = macOSVMAskOf(f.place.applied, f.harnesses, f.req.Agent)
+		ask = macOSVMAskOf(f.place, f.ceiling, f.harnesses, f.req.Agent)
+		ask.Drives = mountsDrives(f.drives, f.keep)
+		ask.Prompts = slices.ContainsFunc(f.harnesses, func(h types.RunHarness) bool { return h.Task != "" })
+		ask.Holds = macOSVMHolds(*f.req, f.spec)
 	}
-	return !s.placementCapabilityRefusalFor(f.r.Context(), *f.req, f.place, f.ceiling, mounts, ask).write(s, f.w, f.r)
+	if s.placementCapabilityRefusalFor(f.r.Context(), *f.req, f.place, f.ceiling, mounts, ask).write(s, f.w, f.r) {
+		return false
+	}
+	if !types.MachineKind(f.req.MachineKind).IsMacOSVM() {
+		return true
+	}
+	// A macOS VM is not recorded in this release: refused where recording is asked for, else said.
+	notice, refusal := s.macOSVMRecordingGate(f.r.Context(), f)
+	if refusal.write(s, f.w, f.r) {
+		return false
+	}
+	if notice != "" {
+		f.policyWarns = append(f.policyWarns, notice)
+	}
+	return true
 }
 
 // stepModelProvider makes the model-provider choice and refuses one whose
@@ -520,6 +537,12 @@ func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 	var refusal *runRefusal
 	f.innerWalls, refusal = innerWallsFor(*f.req, f.spec, f.harnesses, f.enforced)
 	return !refusal.write(s, f.w, f.r)
+}
+
+// stepMacOSHold is macOSHoldRefusal (run_macos_hold.go) after the tool lane: autonomy and the policy's
+// inner walls have derived req.ToolApprovals by then, and a macOS VM cannot hold a tool call.
+func (s *Server) stepMacOSHold(f *runFold, _ *foldRecorder) bool {
+	return !macOSHoldRefusal(*f.req).write(s, f.w, f.r)
 }
 
 // stepGitHubCLIRepo is githubCLIRepoRefusal (runs_cli_github.go) at the doors that launch and

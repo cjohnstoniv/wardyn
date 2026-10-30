@@ -750,3 +750,33 @@ func TestEffectiveDeploymentDefaultIsTheFallback(t *testing.T) {
 		t.Errorf("a pool default past governance's cap = %+v from %q, %v; want 6000 from governance", e.CPUMillis.Default, e.CPUMillis.DefaultSource, err)
 	}
 }
+
+// MemberCapKnob names the input MemberCap's answer came from, so a refusal can say which setting an
+// admin raises: the ceiling's own size beats a higher profile maximum, the maximum stands alone or
+// beats a higher ceiling, and an untouched size above both is neither.
+func TestMemberCapKnobNamesTheInputThatBound(t *testing.T) {
+	for _, tc := range []struct {
+		name                         string
+		ceiling, profileMax, untouch int
+		want                         CapKnob
+	}{
+		{"ceiling below the maximum", 1000, 4000, 0, CapKnobCeiling},
+		{"ceiling equal to the maximum", 2000, 2000, 0, CapKnobCeiling},
+		{"ceiling alone", 1000, 0, 0, CapKnobCeiling},
+		{"maximum below the ceiling", 4000, 2000, 0, CapKnobLimits},
+		{"maximum alone", 0, 2000, 0, CapKnobLimits},
+		{"untouched above the ceiling", 1000, 4000, 3000, CapKnobBaseline},
+		{"untouched above the maximum", 0, 2000, 3000, CapKnobBaseline},
+		{"untouched below the ceiling", 2000, 4000, 1000, CapKnobCeiling},
+		{"untouched alone", 0, 0, 1000, CapKnobBaseline},
+	} {
+		capped := MemberCap(tc.ceiling, tc.profileMax, tc.untouch)
+		if got := MemberCapKnob(tc.ceiling, tc.profileMax, capped); got != tc.want {
+			t.Errorf("%s: MemberCapKnob(%d, %d, %d) = %q, want %q", tc.name, tc.ceiling, tc.profileMax, capped, got, tc.want)
+		}
+	}
+	// A value below what the inputs give is not one MemberCap returns: no knob is guessed.
+	if got := MemberCapKnob(2000, 4000, 1000); got != "" {
+		t.Errorf("a cap below the ceiling's size named %q, want none", got)
+	}
+}
