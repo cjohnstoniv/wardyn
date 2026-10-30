@@ -191,13 +191,7 @@ func (m *meeter) validatePresence(ov Overlay) {
 			}
 		}
 	}
-	if b := ov.Limits.AllowedMacOSBases; b != nil {
-		for _, n := range *b {
-			if !types.ValidMacOSBaseName(n) {
-				m.fail(ReasonOverlayInvalid, "allowed_macos_bases", "%q is not a macOS base name", n)
-			}
-		}
-	}
+	m.validateMacOSBases(ov.Limits.AllowedMacOSBases)
 	if r := ov.Limits.AutonomyRubric; r != nil {
 		if err := r.Validate(); err != nil {
 			m.fail(ReasonOverlayInvalid, "autonomy_rubric", "%v", err)

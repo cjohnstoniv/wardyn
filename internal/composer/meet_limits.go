@@ -97,6 +97,18 @@ func (m *meeter) meetRunLimits(o types.LimitsOverlay) {
 	l.RunLimits = got
 }
 
+// validateMacOSBases refuses an overlay's macOS base that is no base's name; nil names none.
+func (m *meeter) validateMacOSBases(b *[]string) {
+	if b == nil {
+		return
+	}
+	for _, n := range *b {
+		if !types.ValidMacOSBaseName(n) {
+			m.fail(ReasonOverlayInvalid, "allowed_macos_bases", "%q is not a macOS base name", n)
+		}
+	}
+}
+
 // meetMacOSBases intersects two macOS base allow lists where empty means "any base". An empty overlay
 // narrows nothing. A disjoint pair has no representable result: the empty list the intersection would be
 // allows every base.
