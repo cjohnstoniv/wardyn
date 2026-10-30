@@ -104,6 +104,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Kubernetes run whose pinned proxy image is older than the runner now fails with the cause named: the proxy image is
   older than this runner and refused a setting at config load, so have the organisation name this release's proxy
   image, or run setup with `--proxy-image` set to it. It showed only a generic sidecar failure.
+- A runner that was refused events, then went quiet or was revoked, no longer leaves its refusal bookkeeping in the
+  organisation's memory for good. It is dropped a day after the window opened, and a summary of rows suppressed after
+  the bound is lost if the runner stays silent that long (#3663).
 
 ### Security
 
