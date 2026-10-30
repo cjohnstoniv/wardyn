@@ -40,6 +40,7 @@ import { buildBlockers, groupsBlockedBy, missingSetup } from "./blockers";
 import { localMcpConflicts, useHarnessNames } from "../steps/tools/local-mcp";
 import { AddTokenDialog, DISABLED_FILL } from "../steps/tools/setup-needed";
 import { EffectivePolicyCard } from "./effective-policy-card";
+import { useWallsSpec } from "./use-walls-spec";
 import { AccessGroup } from "./groups/access-group";
 import { LimitsGroup } from "./groups/limits-group";
 import { RunGroup } from "./groups/run-group";
@@ -119,6 +120,8 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   const template = useTemplateNeeds(draft.origin, draft.intent);
   const harnessNames = useHarnessNames();
   const gateway = useUIGateway();
+  // One read of the person's walls for the Access group and the policy card, so their host counts always agree.
+  const walls = useWallsSpec();
   // Harnesses no declared image carries together: the Harnesses step refuses them, and a draft that got here another way is held too.
   const roster = useLoaded(loadRoster);
   const ids = harnessIds(draft.intent);
@@ -141,7 +144,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     templateUnread: template.unread,
     // A credential refusal is not a blocker: Launch's own refusal opens the provider's sign-in door.
     refusal: checks.preflightError === null || checks.preflightRefusal ? null : { text: checks.preflightError, reason: checks.preflightReason, field: checks.preflightField },
-    gatewayOff: isServer(draft.intent) && gateway === false,
+    gatewayOff: isServer(draft.intent) && gateway.on === false,
     setupItems: missingSetup(pre ?? (checks.preflightRefusal && { setup_items: checks.preflightRefusal.setupItems }), checks.preview.result),
     localMcp: localMcpConflicts(pre?.access ?? checks.preview.result?.access, draft.intent),
     harnessLabel: (id: string) => harnessNames.get(id) ?? id,
@@ -161,13 +164,15 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     if (template.unread) template.retry();
     void checks.preflight();
     void checks.preview.retry();
+    gateway.recheck();
+    keepDrives.reload();
   };
 
   const [addingSecret, setAddingSecret] = React.useState<SetupItem | null>(null);
   const [saveKind, setSaveKind] = React.useState<TemplateKind | null>(null);
   const [publish, setPublish] = React.useState<TemplatePublish | null>(null);
-  // Whether the Access group draws a walls-leave-out line; when it does not, the walls' host warning stays a notice.
-  const [wallsLeftOut, setWallsLeftOut] = React.useState(false);
+  // Which host lists of the walls the Access group draws a leave-out line for; the warning of any other list stays a notice.
+  const [wallsLeftOut, setWallsLeftOut] = React.useState<readonly string[]>([]);
   const openSave = (kind: TemplateKind) => {
     setSaveKind(kind);
     templateSource.list().then((l) => setPublish(l.publish), () => setPublish(ONLY_ME));
@@ -246,11 +251,11 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
               <WhereGroup {...group} docRows={docRows.where} />
               <WorkGroup {...group} docRows={docRows.work} />
               <ToolsGroup {...group} docRows={docRows.tools} />
-              <AccessGroup {...group} docRows={docRows.access} onLeftOut={setWallsLeftOut} />
+              <AccessGroup {...group} docRows={docRows.access} onLeftOut={setWallsLeftOut} walls={walls} />
               <LimitsGroup {...group} docRows={docRows.limits} />
             </BlockedGroups.Provider>
           </StepSection>
-          <EffectivePolicyCard draft={draft} pre={pre} preview={checks.preview.result} />
+          <EffectivePolicyCard draft={draft} pre={pre} preview={checks.preview.result} walls={walls} />
         </div>
       ) : (
         <RawView intent={draft.intent} format={view} go={go} />

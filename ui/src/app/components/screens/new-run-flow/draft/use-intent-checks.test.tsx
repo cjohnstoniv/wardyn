@@ -3,12 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import * as React from "react";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getAuthGeneration, HttpError, setSignedOutHold } from "../../../../lib/api/core";
 import { runs } from "../../../../lib/api/runs";
 import type { PreflightResult } from "../../../../lib/types";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
+import { ModelAccessProvider } from "../../../wardyn/model-access-context";
 import { intentToWire } from "./intent-to-wire";
 import { launchGateOpen, PREFLIGHT_FRESH_MS } from "./launch-gate";
 import { useIntentChecks } from "./use-intent-checks";
@@ -126,6 +128,34 @@ it("a model credential refusal is an answer that leaves the gate open; any other
   await tick();
   expect(result.current.preflightError).toBe("The namespace quota is spent.");
   expect(gate()).toBe(false);
+});
+
+it("re-reads the model-access door once per generation's credential refusal, and not for another refusal", async () => {
+  const refreshDoor = vi.fn();
+  const wrapper = ({ children }: { children: React.ReactNode }) => <ModelAccessProvider status={null} onRefresh={refreshDoor}>{children}</ModelAccessProvider>;
+  const credential = () => new HttpError(422, "Your AWS sign-in no longer works.", "model_credential", "", "bedrock-sso");
+  preflight.mockRejectedValueOnce(credential());
+  const p = params();
+  const { result, rerender } = renderHook(useIntentChecks, { initialProps: p, wrapper });
+  await tick();
+  expect(result.current.preflightRefusal).not.toBeNull();
+  expect(refreshDoor).toHaveBeenCalledTimes(1);
+  // The same generation refused again (Check again) is not a new answer.
+  preflight.mockRejectedValueOnce(credential());
+  await act(() => result.current.preflight());
+  expect(preflight).toHaveBeenCalledTimes(2);
+  expect(refreshDoor).toHaveBeenCalledTimes(1);
+  // Another body is a new generation, and its refusal is a fresh answer.
+  preflight.mockRejectedValueOnce(credential());
+  rerender({ ...p, body: { ...BODY, no_end: true } });
+  await tick();
+  expect(refreshDoor).toHaveBeenCalledTimes(2);
+  // A refusal that is not about the credential re-reads nothing.
+  preflight.mockRejectedValueOnce(new HttpError(422, "The namespace quota is spent.", "namespace_quota_exceeded"));
+  rerender({ ...p, body: { ...BODY, ends_after_sec: 1200 } });
+  await tick();
+  expect(result.current.preflightError).toBe("The namespace quota is spent.");
+  expect(refreshDoor).toHaveBeenCalledTimes(2);
 });
 
 it("drops a late answer for a body that is no longer the draft's", async () => {

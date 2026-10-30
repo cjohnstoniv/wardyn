@@ -169,8 +169,14 @@ describe("the policy under a drop warning", () => {
     const warn = ["your walls narrowed allowed_domains", "your walls narrowed denied_domains"];
 
     it("is left to the Access group's leave-out line when one is drawn (a host the person added)", () => {
-      const { container } = render(<Notices askedByYou={false} warnings={warn} wallsLeftOut />);
+      const { container } = render(<Notices askedByYou={false} warnings={warn} wallsLeftOut={["allowed_domains", "denied_domains"]} />);
       expect(container).toBeEmptyDOMElement();
+    });
+
+    it("drops only the list a leave-out line speaks for, and keeps the other's warning", () => {
+      render(<Notices askedByYou={false} warnings={warn} wallsLeftOut={["denied_domains"]} />);
+      expect(screen.getByText("Your walls narrowed allowed hosts.")).toBeInTheDocument();
+      expect(screen.queryByText("Your walls narrowed blocked hosts.")).toBeNull();
     });
 
     it("stays a notice when no leave-out line is drawn (a base-policy host the walls cut)", () => {

@@ -5,37 +5,32 @@
 
 import * as React from "react";
 import { Grid3x3 } from "lucide-react";
-import { walls as wallsApi, type PersonalWallsSpec } from "../../../../../lib/api/walls";
+import type { PersonalWallsSpec } from "../../../../../lib/api/walls";
 import { Button } from "../../../../ui/button";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_WALLS } from "../../../../wardyn/copy/personal-walls";
-import { wallsLeaveOut } from "../../lenses/tools-lens";
+import { reachedHosts, wallsLeaveOut, wallsLeaveOutKnobs, type WallsHostKnob } from "../../lenses/tools-lens";
 import { ReviewGroup } from "../review-group";
 import { AccessCredentials } from "./access-credentials";
 import { stepLocation, type GroupProps } from "./group-props";
 import { JumpButton } from "./jump-button";
 
-/** `onLeftOut` is told whether any walls-leave-out line is drawn, so Review keeps the walls' own warning when none is. */
-export function AccessGroup({ draft, pre, preview, docRows, go, onLeftOut }: GroupProps & { onLeftOut?: (drawn: boolean) => void }) {
+/** `walls` are the person's own, read once by Review for this and the policy card; `onLeftOut` is told which of the walls' host lists the drawn leave-out lines come from, so Review keeps the walls' warning for any list no line speaks for. */
+export function AccessGroup({ draft, pre, preview, docRows, go, onLeftOut, walls }: GroupProps & { onLeftOut?: (knobs: readonly WallsHostKnob[]) => void; walls?: PersonalWallsSpec }) {
   const access = pre?.access ?? preview?.access;
   const hosts = access?.hosts ?? [];
   const source = preview?.source.name;
-  // The person's own walls, to name a host they leave out; a caller with none (or no way to read them) sees no such line.
-  const [walls, setWalls] = React.useState<PersonalWallsSpec>();
-  React.useEffect(() => {
-    let alive = true;
-    wallsApi.get().then((w) => alive && setWalls(w.spec), () => undefined);
-    return () => { alive = false; };
-  }, []);
   const leftOut = wallsLeaveOut(walls, pre?.access ?? preview?.access, !!access);
-  const drawn = leftOut.length > 0;
-  React.useEffect(() => onLeftOut?.(drawn), [drawn, onLeftOut]);
+  const knobKey = wallsLeaveOutKnobs(walls, pre?.access ?? preview?.access, !!access).join();
+  React.useEffect(() => onLeftOut?.(knobKey ? (knobKey.split(",") as WallsHostKnob[]) : []), [knobKey, onLeftOut]);
   // A run that reaches only its listed sites says so (T4-b); one that may ask for more keeps the plain count.
   const closed = !!access && !access.unlisted.allow_all && access.unlisted.mode === "always_deny";
-  const count = hosts.length === 1 ? NR_REVIEW.POLICY_HOST_ONE : NR_REVIEW.POLICY_HOSTS(hosts.length);
-  const closedCount = hosts.length === 1 ? NR_WALLS.REVIEW_SITE_ONE : NR_WALLS.REVIEW_SITES(hosts.length);
+  // The count is the card's Network count: a host the walls take out is listed in its own line, not counted.
+  const reached = access ? reachedHosts(access, leftOut) : 0;
+  const count = reached === 1 ? NR_REVIEW.POLICY_HOST_ONE : NR_REVIEW.POLICY_HOSTS(reached);
+  const closedCount = reached === 1 ? NR_WALLS.REVIEW_SITE_ONE : NR_WALLS.REVIEW_SITES(reached);
   return (
     <ReviewGroup
       id="access"
