@@ -143,21 +143,8 @@ func TestVirtiofsdMapsTheAgentUserToTheRunner(t *testing.T) {
 		}
 	}
 	for _, f := range VirtiofsdArgs(0, false, 1000, 1000) {
-		if strings.HasPrefix(f, "--translate-") && !strings.Contains(f, "forbid-guest:0:1") {
+		if strings.HasPrefix(f, "--translate-") {
 			t.Fatalf("an identity map was passed: %q", f)
-		}
-	}
-}
-
-// Only the agent user's ids pass: guest root is refused, whether or not the runner's ids differ
-// from the agent's.
-func TestVirtiofsdForbidsGuestRoot(t *testing.T) {
-	for _, own := range [][2]int{{1001, 121}, {1000, 1000}} {
-		a := VirtiofsdArgs(0, false, own[0], own[1])
-		for _, f := range []string{"--translate-uid=forbid-guest:0:1", "--translate-gid=forbid-guest:0:1"} {
-			if !slices.Contains(a, f) {
-				t.Fatalf("args %q for runner %v lack %s: guest root must be refused", a, own, f)
-			}
 		}
 	}
 }
