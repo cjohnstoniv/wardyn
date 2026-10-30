@@ -369,8 +369,8 @@ func TestMintedPATLocal_RenewalPauseResumeAndRunEnd(t *testing.T) {
 func TestLocalADOOrigin_OnlyMintedPATCarriesTheOptIn(t *testing.T) {
 	s := &Server{}
 	for mode, want := range map[types.ADOTokenMode]bool{types.ADOTokenModeMintedPAT: true, types.ADOTokenModeBearer: false} {
-		o := s.localADOOrigin(context.Background(), "p", adoEntraRun{rowID: "ado-row-1", owner: "p", tokenMode: mode, residentOptIn: true})
-		if o.Class != placement.ClassBrokered || o.Delivery != placement.ClassADOMintedPAT || o.ResidentOptIn != want {
+		o, err := s.localADOOrigin(context.Background(), "p", adoEntraRun{rowID: "ado-row-1", owner: "p", tokenMode: mode, residentOptIn: true})
+		if err != nil || o.Class != placement.ClassBrokered || o.Delivery != placement.ClassADOMintedPAT || o.ResidentOptIn != want {
 			t.Errorf("%s: origin %+v, want brokered ado_minted_pat with opt-in %v", mode, o, want)
 		}
 	}
