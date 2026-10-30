@@ -325,7 +325,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     },
     [setSearchParams],
   );
-  const { refused, noteRefusal } = useRefusedApprovals();
+  const { refused, wallsRefused, noteRefusal } = useRefusedApprovals();
   const [prompt, setPrompt] = React.useState<{ id: string; action: "approve" | "deny"; kind: ApprovalRequest["kind"] } | null>(null);
 
   // EXPIRED approvals must be fetched too, or a request that timed out
@@ -564,7 +564,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
             {pendingItems.map((a) => (
               <ApprovalCard
                 key={a.id}
-                item={a}
+                item={wallsRefused.has(a.id) ? { ...a, walls_block: true } : a}
                 caps={caps}
                 onAct={(action) => setPrompt({ id: a.id, action, kind: a.kind })}
                 onAdoDecide={decideAdoDirect}

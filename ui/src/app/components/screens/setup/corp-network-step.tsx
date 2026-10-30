@@ -42,7 +42,7 @@ import { SITE } from "../../wardyn/copy";
 import { Tabs, TabsList, TabsTrigger } from "../../ui/tabs";
 import { useOperator } from "../../wardyn/operator-context";
 import { useSiteConfigStep } from "./step-bodies";
-import { EgressTab, useElapsedTimer, type ProbeUiState } from "./corp-network-egress";
+import { EgressTab, isSavedRedirect, useElapsedTimer, type ProbeUiState } from "./corp-network-egress";
 
 // compactEndpoint moved with the egress family; re-exported so its tests and
 // any caller keep one import path for this step's helpers.
@@ -199,12 +199,19 @@ export function CorpNetworkStep({
   // doesn't deep-merge). This ref sidesteps that: each call composes onto
   // whatever the ref most recently held, independent of render timing.
   const redirectProbesRef = React.useRef(gate.redirectProbes);
+  // The redirects as last saved, for onProbeResult: set by a landed save at once, and by each reload. A test that
+  // outlives the egress tab (a tab switch unmounts it) is still judged against what is saved now.
+  const savedRedirectsRef = React.useRef(siteConfig?.egress_redirects ?? []);
+  React.useEffect(() => {
+    savedRedirectsRef.current = siteConfig?.egress_redirects ?? [];
+  }, [siteConfig]);
 
   // Probe results are keyed by address, not by what was tested. Every save of this step
   // routes through here, so a landed save that changed the upstream or a redirect target
   // drops the verdict it just made stale (#2557, #2573).
   const saveAndInvalidate = async (next: SiteConfig) => {
     await saveSiteConfig(next);
+    savedRedirectsRef.current = next.egress_redirects ?? [];
     if (upstreamKey(next) !== upstreamKey(siteConfig)) {
       onGateChange({ proxyProbe: undefined });
       setTest({ kind: "idle" });
@@ -302,8 +309,9 @@ export function CorpNetworkStep({
           mutate={mutate}
           operator={operator}
           initialProbes={gate.redirectProbes}
-          onProbeResult={(from, result) => {
-            const next = { ...redirectProbesRef.current, [from]: result };
+          onProbeResult={(r, result) => {
+            if (!isSavedRedirect(savedRedirectsRef.current, r)) return;
+            const next = { ...redirectProbesRef.current, [r.from]: result };
             redirectProbesRef.current = next;
             onGateChange({ redirectProbes: next });
           }}

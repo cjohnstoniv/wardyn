@@ -342,7 +342,7 @@ func TestTerminatedOutsideMatchesConnect(t *testing.T) {
 				_, isViaOrg := p.viaOrgRouteForHost(host)
 				want := false
 				for _, port := range ports {
-					d, _, _ := p.decideConnect(context.Background(), "", "", host, port)
+					d, _, _, _ := p.decideConnect(context.Background(), "", "", host, port)
 					real := map[egress.Decision]connectOutcome{egress.Allow: connectAdmit, egress.Pending: connectHold, egress.Deny: connectRefuse}[d]
 					req := egress.Request{Host: host, Port: port, Method: http.MethodConnect}
 					if g := gateConnect(context.Background(), req, p.evaluator, p.policy, p.portRule).outcome(canAsk); g != real {

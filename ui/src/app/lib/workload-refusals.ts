@@ -40,9 +40,17 @@ export const WORKLOAD_REFUSAL_SENTENCE: Record<string, string> = {
   runner_limits_unset: "No runner in the pool has its limits set.",
   runner_recording_off: "Recording is required, and no runner in the pool records runs.",
   recording_store_off: "Recording is required, and this organisation keeps no session recordings.",
+  placement_credential: "A credential in its policy, often a grant from the default policy, cannot be sent to the runner it would land on.",
 };
+
+// The reasons whose server sentence follows the table's: it names the credential and how to drop it. A reader the
+// server withholds the sentence from (the security tier) sees the table's alone.
+const WITH_SERVER_SENTENCE = new Set(["placement_credential"]);
 
 /** The drawer's sentence for a refusal: the table's when the reason is told, else the server's own, else a plain fallback. */
 export function refusalSentence(reason: string, message?: string): string {
-  return WORKLOAD_REFUSAL_SENTENCE[reason] ?? (message?.trim() || "The launch was refused.");
+  const told = WORKLOAD_REFUSAL_SENTENCE[reason];
+  const own = message?.trim();
+  if (told && own && WITH_SERVER_SENTENCE.has(reason)) return `${told} ${own}`;
+  return told ?? (own || "The launch was refused.");
 }

@@ -121,7 +121,7 @@ function RunDetailPage({ id }: { id: string }) {
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
 
   const { copyAsync } = useCopyToClipboard(1400);
-  const { refused, noteRefusal } = useRefusedApprovals();
+  const { refused, wallsRefused, noteRefusal } = useRefusedApprovals();
   const [decide, setDecide] = React.useState<{
     id: string;
     action: "approve" | "deny";
@@ -389,7 +389,7 @@ function RunDetailPage({ id }: { id: string }) {
 
           <TabsContent value="approvals" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
             <ApprovalsTab
-              approvals={approvals}
+              approvals={approvals.map((a) => (wallsRefused.has(a.id) ? { ...a, walls_block: true } : a))}
               run={run}
               viewerBlocked={viewerBlockedOnDecision(pending, securityOperator, run.created_by === principal)}
               onDecide={(approvalId, action, kind) => setDecide({ id: approvalId, action, kind })}

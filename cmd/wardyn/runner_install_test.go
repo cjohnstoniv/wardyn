@@ -20,6 +20,7 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/root"
 
 	"github.com/cjohnstoniv/wardyn/internal/certbundle"
+	"github.com/cjohnstoniv/wardyn/internal/cliprofile"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/releasesig"
 	"github.com/cjohnstoniv/wardyn/internal/releasesig/releasesigtest"
@@ -354,6 +355,48 @@ func TestRunnerUpgradeRefusals(t *testing.T) {
 				t.Fatalf("a refused release changed the runner or ran setup %q", r.record("calls"))
 			}
 		})
+	}
+}
+
+// --artifact-base reaches cli.json only once the release it names has been verified: a refused one is not
+// remembered, a verified one is.
+func TestRunnerUpgradeSavesArtifactBaseOnlyOnceVerified(t *testing.T) {
+	for name, tc := range map[string]struct {
+		edit      func(map[string][]byte)
+		wantSaved bool
+	}{
+		"tampered asset": {func(f map[string][]byte) { f["wardyn-runnerd-linux-amd64"] = []byte("#!/bin/sh\n") }, false},
+		"verified":       {nil, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newInstallRig(t)
+			r.installed(r.fakeRunner("0.10.0", true))
+			r.publish("0.10.1", r.fakeRunner("0.10.1", true), releaseSigner("0.10.1"), tc.edit)
+			base := r.srv.URL + "/release"
+			out, err := r.cli("upgrade", "--version", "0.10.1", "--artifact-base", base)
+			if (err == nil) != tc.wantSaved {
+				t.Fatalf("upgrade: err = %v\n%s", err, out)
+			}
+			saved, _ := cliprofile.ReadArtifactBase(filepath.Join(r.home, ".config", "wardyn"))
+			if want := map[bool]string{true: base, false: ""}[tc.wantSaved]; saved != want {
+				t.Fatalf("saved artifact base = %q, want %q", saved, want)
+			}
+		})
+	}
+}
+
+// install on a computer that already runs a runner is an upgrade, and says so when it was given the setup
+// flags it does not use.
+func TestRunnerInstallOnAnUpgradeNamesTheSetupFlagsItIgnores(t *testing.T) {
+	r := newInstallRig(t)
+	r.installed(r.fakeRunner("0.10.0", true))
+	r.publish("0.10.1", r.fakeRunner("0.10.1", true), releaseSigner("0.10.1"), nil)
+	out, err := r.cli("install", "--version", "0.10.1", "--pool", "team", "--name", "box")
+	if err != nil {
+		t.Fatalf("install: %v\n%s", err, out)
+	}
+	if want := fmt.Sprintf(copyUpgradeIgnores, "--pool, --name"); !strings.Contains(out, want) {
+		t.Fatalf("output lacks %q:\n%s", want, out)
 	}
 }
 

@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { SCENARIO_ACCESS } from "../../../../lib/new-run-fixtures/scenarios/tools";
 import type { AccessFacts, AccessHost } from "../../../../lib/types/new-run-access";
 import type { RunIntent } from "../draft/run-intent";
-import { addAllowedHost, narrowsEgress, setNarrowEgress, wallsLeaveOut } from "./tools-lens";
+import { addAllowedHost, narrowsEgress, setNarrowEgress, wallsLeaveOut, wallsLeaveOutKnobs } from "./tools-lens";
 
 const START = { task: "t" } as unknown as RunIntent;
 
@@ -42,6 +42,13 @@ describe("wallsLeaveOut", () => {
     expect(wallsLeaveOut({ first_use_approval: "always_deny" }, hosts, true)).toEqual([]);
     expect(wallsLeaveOut({ allowed_domains: [] }, hosts, false)).toEqual([]);
     expect(wallsLeaveOut(undefined, hosts, true)).toEqual([]);
+  });
+
+  it("names the walls' list that takes each host out, so a line for one list does not stand for the other", () => {
+    expect(wallsLeaveOutKnobs({ denied_domains: ["paste.example.net"] }, hosts, true)).toEqual(["denied_domains"]);
+    expect(wallsLeaveOutKnobs({ allowed_domains: ["api.example.com", "paste.example.net", "*.docs.example.org"] }, hosts, true)).toEqual(["allowed_domains"]);
+    expect(wallsLeaveOutKnobs({ allowed_domains: ["api.example.com"], denied_domains: ["paste.example.net"] }, hosts, true)).toEqual(["allowed_domains", "denied_domains"]);
+    expect(wallsLeaveOutKnobs(undefined, hosts, true)).toEqual([]);
   });
 
   it("an empty list leaves out every host the server refuses, none it allows", () => {

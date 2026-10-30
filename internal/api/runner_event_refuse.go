@@ -21,10 +21,13 @@ import (
 )
 
 // runnerEventRefuseRows runner.event.refuse rows are written per runner per runnerEventRefuseWindow on one
-// replica; the next carries suppressed, and the rest of the window is counted for the next window's summary.
+// replica; the next carries suppressed, and the rest of the window is counted for the next window's summary. A
+// window that suppressed rows is kept for runnerEventRefuseOwedKeep after it opens, so a runner that stays quiet
+// longer (revoked, say) loses the summary it owed rather than holding its entry in memory for good.
 const (
-	runnerEventRefuseRows   = 32
-	runnerEventRefuseWindow = time.Hour
+	runnerEventRefuseRows     = 32
+	runnerEventRefuseWindow   = time.Hour
+	runnerEventRefuseOwedKeep = 24 * time.Hour
 )
 
 // errRunnerEventShape marks a handler's refusal of an event's own shape, before any store call; each kind's
@@ -64,7 +67,8 @@ func (r *runnerEventRefusals) plan(runnerID uuid.UUID, now time.Time) (row, mark
 	return w.rows <= runnerEventRefuseRows, w.rows == runnerEventRefuseRows, nil
 }
 
-// count records a refusal plan decided and the store committed, and prunes the windows that are over and owe nothing.
+// count records a refusal plan decided and the store committed, and prunes the windows that are over and owe nothing,
+// or that have owed it for runnerEventRefuseOwedKeep.
 func (r *runnerEventRefusals) count(runnerID uuid.UUID, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -72,7 +76,7 @@ func (r *runnerEventRefusals) count(runnerID uuid.UUID, now time.Time) {
 		r.byRunner = map[uuid.UUID]*refusalWindow{}
 	}
 	for id, w := range r.byRunner {
-		if id != runnerID && now.Sub(w.start) >= runnerEventRefuseWindow && w.suppressed == 0 {
+		if id != runnerID && now.Sub(w.start) >= runnerEventRefuseWindow && (w.suppressed == 0 || now.Sub(w.start) >= runnerEventRefuseOwedKeep) {
 			delete(r.byRunner, id)
 		}
 	}

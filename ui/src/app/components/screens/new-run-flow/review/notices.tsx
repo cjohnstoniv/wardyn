@@ -13,7 +13,7 @@ import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { RUN_WAIT } from "../../../../lib/runner-pool-refusals";
 import type { AppliedAmount, AppliedResources } from "../../../../lib/types/new-run-contract";
 import type { LimitSource } from "../../../../lib/types/runner-pools";
-import { isWallsHostWarning, reviewWarningText } from "./drop-warnings";
+import { reviewWarningText, wallsHostKnob } from "./drop-warnings";
 import { amountText } from "./format";
 import type { PoolSlotsFact } from "./review-seams";
 
@@ -61,8 +61,8 @@ export interface NoticesProps {
   warningContext?: readonly WarningContext[];
   /** The main drive was cut by a limit: that cut is folded into the shared "resources capped" warning too, as is a PIDs cut (applied.pids_limit). */
   diskCut?: boolean;
-  /** The Access group draws a "Your walls leave out {host}." line, which says the walls' host warning by host. */
-  wallsLeftOut?: boolean;
+  /** The walls' host lists the Access group draws a "Your walls leave out {host}." line for; that line says the list's warning by host. */
+  wallsLeftOut?: readonly string[];
 }
 
 /** The policy a drop warning names, only when it publishes a way to ask; otherwise the warning reads as it always did. */
@@ -81,7 +81,7 @@ export function Notices({ poolName, slots, applied, askedByYou, warnings, warnin
   const server = (warnings ?? [])
     .map((w, index) => ({ w, policy: askablePolicy(warningContext?.find((c) => c.warning_index === index)) }))
     .filter(({ w }) => w !== RESOURCES_CAPPED || (distinct.length === 0 || diskCut || !!applied?.pids_limit?.capped))
-    .filter(({ w }) => !(wallsLeftOut && isWallsHostWarning(w)));
+    .filter(({ w }) => { const knob = wallsHostKnob(w); return !(knob && wallsLeftOut?.includes(knob)); });
   if (!full && distinct.length === 0 && server.length === 0) return null;
   return (
     <div className="flex flex-col gap-3">

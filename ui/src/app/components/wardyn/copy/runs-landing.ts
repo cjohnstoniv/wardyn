@@ -100,6 +100,10 @@ export const RUNS_SEGMENTS = {
   APPS: "Apps & scripts",
   SERVICES: "Services",
   SERVICES_EMPTY: "No services yet. Start one with Keep it running on an Automation / script run.",
+  // The other segments' empty states, in New Run's own words for each shape (not on the board).
+  AGENT_TASKS_EMPTY: "No agent tasks yet. Start one with New run and choose Agent task.",
+  ENVIRONMENTS_EMPTY: "No environments yet. Start one with New run and choose Environment.",
+  APPS_EMPTY: "No apps or scripts yet. Start one with New run and choose Application sandbox.",
 } as const;
 
 // #3041, phone only: the search box keeps the row and everything else sits in

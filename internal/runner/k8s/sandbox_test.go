@@ -1545,3 +1545,20 @@ func TestProxyStartFailure_NamesAnOlderProxyImage(t *testing.T) {
 		t.Fatalf("an unrelated exit = %v, want the generic sidecar failure", err)
 	}
 }
+
+// A proxy pod deleted before it started carries the kubelet's placeholder status, and the run's
+// failure names the deletion, not a proxy exit (#3823).
+func TestProxyStartFailure_NamesADeletedPod(t *testing.T) {
+	now := metav1.Now()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "wardyn-proxy-x", DeletionTimestamp: &now}, Status: corev1.PodStatus{
+		InitContainerStatuses: []corev1.ContainerStatus{{
+			Name: stageProxyConfigInitName,
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "ContainerStatusUnknown",
+				Message: "The container could not be located when the pod was terminated"}},
+		}},
+	}}
+	err := proxyStartFailure(pod)
+	if err == nil || !strings.Contains(err.Error(), "proxy pod wardyn-proxy-x was deleted before the proxy was ready") || strings.Contains(err.Error(), "exited") {
+		t.Fatalf("a deleted pod's placeholder status = %v, want the deletion named, not an exit", err)
+	}
+}

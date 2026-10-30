@@ -221,6 +221,38 @@ func TestMacOSVMReconcilesFinishedPrepare(t *testing.T) {
 	}
 }
 
+// The field path: the helper claimed its entry, then exited while wardyn-runnerd stayed up. Docker's own
+// Linux VM, a Virtualization process of this user older than the helper, does not keep the slot.
+func TestMacOSVMReconcilesClaimedHelperExit(t *testing.T) {
+	for _, kind := range []admission.Kind{admission.KindPrepare, admission.KindToolsUpdate} {
+		t.Run(string(kind), func(t *testing.T) {
+			r := newMacLedgerRig(t)
+			runnerd := admission.Proc{PID: 30, UID: 501, Start: 3, MonoStart: 100, Name: "wardyn-runnerd"}
+			dockerVM := admission.Proc{PID: 50, UID: 501, Start: 1, MonoStart: 10, Name: admission.VirtualizationProcess}
+			helper := admission.Proc{PID: 40, UID: 501, Start: 4, MonoStart: 200, Name: admission.HelperProcess}
+			r.host.setProcs(runnerd, dockerVM, helper)
+			m := r.open(t)
+			e, err := m.ledger.Admit(admission.Request{Kind: kind, GuestCPUs: 4, GuestMemory: 8 * gib,
+				DiskReserve: admission.PrepareDiskReservation(macvm.BaseDiskBytes), OwnerPID: 30, OwnerStart: 3})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.ledger.ClaimHelper(e.ID, helper.PID, helper.Start); err != nil {
+				t.Fatal(err)
+			}
+			m.recompute()
+			if counted, _ := m.ledger.Counted(); len(counted) != 1 {
+				t.Fatalf("the %s was released while its helper runs: %+v", kind, counted)
+			}
+			r.host.setProcs(runnerd, dockerVM) // the helper exits; runnerd and Docker's VM stay
+			m.recompute()
+			if counted, _ := m.ledger.Counted(); len(counted) != 0 {
+				t.Fatalf("finished %s %s still counted: %+v", kind, e.ID, counted)
+			}
+		})
+	}
+}
+
 // The runner refuses a ledger the package did not install whole, and never repairs it.
 func TestMacOSVMLedgerChecked(t *testing.T) {
 	cases := map[string]func(r *macLedgerRig){

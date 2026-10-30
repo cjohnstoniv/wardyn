@@ -157,6 +157,9 @@ declare -A ALLOWLIST=(
   # New Run Launched: the wait/elapsed words are computed from a fixed reference instant passed in as now;
   # nothing reads the real clock.
   ["ui/src/app/components/screens/new-run-flow/launch/launched-model.test.ts"]=1
+  # The Azure DevOps expiring-days test pins the fake clock to one fixed instant, so it never reads the
+  # real date.
+  ["ui/src/app/components/screens/settings/ado-pat-panel.test.tsx"]=1
   # Invitations and service identities: a fixed instant that is wire passthrough (CLI table rows, the account
   # lists) or the frozen clock the token dialog and the copy formatters are tested against; nothing reads the real clock.
   ["cmd/wardyn/service_identity_test.go"]=1

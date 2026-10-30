@@ -140,7 +140,8 @@ func (g *goneAPIRig) awaitGoneEnd() {
 		if got, err = g.st.GetRun(g.t.Context(), g.run.ID); err != nil {
 			g.t.Fatal(err)
 		}
-		if got.State == types.RunFailed && len(g.lostEvents()) > 0 {
+		// run.lost is written before the teardown, and the hint after it: wait for both.
+		if got.State == types.RunFailed && len(g.lostEvents()) > 0 && got.FailureHint != "" {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -154,6 +155,9 @@ func (g *goneAPIRig) checkGoneEnd(got types.AgentRun) {
 	g.t.Helper()
 	if got.State != types.RunFailed || got.LostReason != types.LostGone {
 		g.t.Fatalf("gone end: state=%s lost_reason=%q", got.State, got.LostReason)
+	}
+	if got.FailureHint != goneRunFailureHint {
+		g.t.Fatalf("gone end: failure_hint=%q, want %q", got.FailureHint, goneRunFailureHint)
 	}
 	rows := g.lostEvents()
 	if len(rows) != 1 {

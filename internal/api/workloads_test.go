@@ -6,11 +6,15 @@ package api
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -87,5 +91,31 @@ func TestWorkloadEventOf(t *testing.T) {
 				t.Fatalf("workloadEventOf = %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// A launch refused placement_credential for one of its policy's grants says where such a grant often comes
+// from (the default policy) and how to replace it (eligible_grants), within the status message's bound. Any
+// other credential refusal, and any other reason, keeps the create path's sentence as it was.
+func TestWorkloadRefusalMsg_NamesTheDefaultPolicyForAGrant(t *testing.T) {
+	grant := (&placement.Refusal{Reason: placement.ReasonPlacementCredential, Field: "ProxyConfig.Policy.EligibleGrants[0]",
+		Detail: "credential provenance does not match its actual grant"}).Error()
+	got := workloadRefusalMsg(string(placement.ReasonPlacementCredential), grant)
+	if !strings.HasPrefix(got, grant+" ") || !strings.Contains(got, "default policy") || !strings.Contains(got, "eligible_grants") {
+		t.Fatalf("grant refusal = %q, want the create path's sentence and the default-policy hint", got)
+	}
+	long := workloadRefusalMsg(string(placement.ReasonPlacementCredential), grant+strings.Repeat(" é", runnerwire.MaxWorkloadMessage))
+	if len(long) > runnerwire.MaxWorkloadMessage || !utf8.ValidString(long) {
+		t.Fatalf("a long grant refusal is %d bytes (valid %v), want at most %d", len(long), utf8.ValidString(long), runnerwire.MaxWorkloadMessage)
+	}
+	for _, tc := range []struct{ reason, msg string }{
+		{string(placement.ReasonPlacementCredential), (&placement.Refusal{Reason: placement.ReasonPlacementCredential,
+			Field: "upstream_proxy_secret_ref", Detail: "the runner must use its own upstream proxy configuration"}).Error()},
+		{string(placement.ReasonPlacementCredential), localAWSCLIRefusal},
+		{"policy_ceiling_exceeded", grant},
+	} {
+		if got := workloadRefusalMsg(tc.reason, tc.msg); got != tc.msg {
+			t.Errorf("%s %q = %q, want it unchanged", tc.reason, tc.msg, got)
+		}
 	}
 }

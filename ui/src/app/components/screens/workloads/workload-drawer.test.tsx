@@ -166,3 +166,24 @@ describe("WorkloadDrawer inbound address", () => {
     expect(screen.queryByText(W.INBOUND_ADDRESS)).toBeNull();
   });
 });
+
+describe("WorkloadDrawer last refusal", () => {
+  const TOLD = "A credential in its policy, often a grant from the default policy, cannot be sent to the runner it would land on.";
+  const SERVER = "ProxyConfig.Policy.EligibleGrants[0]: not delivered to this runner. The grant may come from the default policy.";
+  const refused = (message?: string) =>
+    workload({ generation: 5, last_refusal: { generation: 5, reason: "placement_credential", message, at: ago(D) } });
+
+  it("shows a credential refusal's sentence with the server's after it, to a reader who gets the server's", async () => {
+    open(refused(SERVER));
+    const row = await screen.findByTestId("workload-last-refusal");
+    expect(row).toHaveTextContent(`${TOLD} ${SERVER}`);
+    expect(within(row).getByText("placement_credential")).toBeInTheDocument();
+  });
+
+  it("shows the table's sentence alone to a reader the server withheld its sentence from", async () => {
+    open(refused(""));
+    const row = await screen.findByTestId("workload-last-refusal");
+    expect(row).toHaveTextContent(TOLD);
+    expect(row).not.toHaveTextContent("EligibleGrants");
+  });
+});

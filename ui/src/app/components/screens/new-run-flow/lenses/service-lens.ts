@@ -65,6 +65,9 @@ export function setHealth(intent: RunIntent, patch: Partial<NonNullable<RunServi
 /** A field of the form that the server's limits (internal/types/service.go) would refuse. */
 export type ServiceField = "port" | "path" | "interval" | "failures";
 
+/** serviceHealthPathRE (internal/types/service.go): a request-target the supervisor can write into an HTTP request line, at most 256 characters. */
+const HEALTH_PATH = /^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,255}$/;
+
 const inRange = (n: number | undefined, min: number, max: number): boolean => !n || (n >= min && n <= max);
 
 /** Which fields are out of range. The health fields count only while a port is named; 0 or empty is the server's default. */
@@ -73,7 +76,7 @@ export function serviceProblems(s: RunService | undefined): Partial<Record<Servi
   const out: Partial<Record<ServiceField, true>> = {};
   if (!inRange(s.port, 1, 65535)) out.port = true;
   const h = s.port ? s.health : undefined;
-  if (h?.path && !h.path.startsWith("/")) out.path = true;
+  if (h?.path && !HEALTH_PATH.test(h.path)) out.path = true;
   if (!inRange(h?.interval_sec, 5, 300)) out.interval = true;
   if (!inRange(h?.failure_threshold, 1, 10)) out.failures = true;
   return out;

@@ -416,6 +416,17 @@ func (d *Driver) ObserveProxies(ctx context.Context, runIDs []uuid.UUID) (map[uu
 	if !d.runnerMode() {
 		return nil, runner.ErrEndUnsupported
 	}
+	// The created set is read before the lists: a UID read first names a pod the list must show
+	// unless it is gone, and one that lands mid-list is left for the next tick.
+	var errs []error
+	created := make(map[uuid.UUID]bool, len(runIDs))
+	for _, id := range runIDs {
+		held, err := d.proxyCreated(id)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		created[id] = held
+	}
 	byName := map[string]*corev1.Pod{}
 	for _, ns := range d.cfg.Namespaces {
 		pods, err := d.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: d.runnerSelector("")})
@@ -427,13 +438,10 @@ func (d *Driver) ObserveProxies(ctx context.Context, runIDs []uuid.UUID) (map[uu
 		}
 	}
 	out := make(map[uuid.UUID]runner.ProxyObservation, len(runIDs))
-	var errs []error
 	for _, id := range runIDs {
 		if p := byName[proxyPodName(id)]; p != nil {
 			out[id] = d.classifyProxy(p)
-		} else if held, err := d.proxyCreated(id); err != nil {
-			errs = append(errs, err)
-		} else if held {
+		} else if created[id] {
 			// NotFound speaks only for a proxy that was created: a run still inside CreateSandbox
 			// (its Ref stored before any pod exists) is left out, not reported gone.
 			out[id] = runner.ProxyNotFound

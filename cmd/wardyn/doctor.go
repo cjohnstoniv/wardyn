@@ -159,7 +159,9 @@ func parkedExitStages(ctx context.Context, c *sdk.Client) []doctor.Stage {
 func parkedExitStage(ctx context.Context, c *sdk.Client, runner uuid.UUID) doctor.Stage {
 	view, err := c.GetMyRunner(ctx, runner)
 	if err != nil {
-		return doctor.SkipStage("runner-exits", "could not read this runner from the organisation: "+err.Error())
+		return doctor.SkipStage("runner-exits", "could not read this runner from the organisation: "+err.Error()+
+			". If the runner was revoked the organisation no longer shows it to its owner, so this cannot say whether it parked any exit receipts: "+
+			"ask an administrator to look for runner.exit.park audit rows (docs/runner-offline.md#a-parked-exit-receipt)")
 	}
 	if view.ParkedExits == 0 {
 		return doctor.OKStage("runner-exits", "the organisation has parked none of this runner's exit receipts")

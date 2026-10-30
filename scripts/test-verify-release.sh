@@ -75,7 +75,7 @@ case "$1 $2" in
     # The licence tarball exists from 0.9.4.
     if [ "$(printf '%s\n' "${VER%%-*}" 0.9.4 | sort -V | head -1)" = 0.9.4 ]; then cat "${DIR}/want.txt"; else grep -vx 'wardyn-licenses.tar.gz' "${DIR}/want.txt"; fi > "${DIR}/want-ver0.txt"
     # The CLI installers exist from 0.10.0 (and a test can leave them out).
-    if [ -n "${NO_INSTALL_CLI:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.10.0 | sort -V | head -1)" != 0.10.0 ]; then grep -vE '^(install-cli\.|SHA256SUMS\.sigstore\.json$)' "${DIR}/want-ver0.txt"; else cat "${DIR}/want-ver0.txt"; fi > "${DIR}/want-ver.txt"
+    if [ -n "${NO_INSTALL_CLI:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.10.0 | sort -V | head -1)" != 0.10.0 ]; then grep -vE '^(install-cli\.|SHA256SUMS\.sigstore\.json$|wardyn-windows-)' "${DIR}/want-ver0.txt"; elif [ -n "${NO_WINDOWS:-}" ]; then grep -v '^wardyn-windows-' "${DIR}/want-ver0.txt"; else cat "${DIR}/want-ver0.txt"; fi > "${DIR}/want-ver.txt"
     if [ -n "${NO_PKG:-}" ] || [ "$(printf '%s\n' "${VER%%-*}" 0.9.3 | sort -V | head -1)" != 0.9.3 ] || [ "${VER}" = 0.9.3-rc.1 ] || [ "${VER}" = 0.9.3-rc.2 ]; then grep -vx 'wardyn-runnerd.pkg' "${DIR}/want-ver.txt"; else cat "${DIR}/want-ver.txt"; fi
     echo "wardyn-${VER}.tgz" ;;
   "release download")
@@ -174,7 +174,10 @@ NO_INSTALL_CLI=1 run 0.10.0 v0.10.0 bundle
   || fail "V=0.10.0 without install-cli.sh and install-cli.ps1 was accepted"
 run 0.9.5 v0.9.5 bundle
 [ "${rc}" = 0 ] || fail "V=0.9.5 (no CLI installers in that release) exited ${rc}: $(printf '%s' "${out}" | tail -3)"
-pass "install-cli.sh and install-cli.ps1 are required from 0.10.0 on, and not before"
+NO_WINDOWS=1 run 0.10.0 v0.10.0 bundle
+[ "${rc}" != 0 ] && printf '%s' "${out}" | grep 'FAIL missing asset: wardyn-windows-amd64.exe' >/dev/null && printf '%s' "${out}" | grep 'FAIL missing asset: wardyn-windows-arm64.exe' >/dev/null \
+  || fail "V=0.10.0 without the Windows CLI binaries was accepted"
+pass "install-cli.sh, install-cli.ps1 and the Windows CLI binaries are required from 0.10.0 on, and not before"
 
 # 3c. a failed imagetools call says why, instead of only "no index digest".
 IMG_ERR='ERROR: docker: unknown command: docker buildx' run 0.8.3 v0.8.3 bundle

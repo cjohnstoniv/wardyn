@@ -44,7 +44,7 @@ type uiGatewayState struct {
 	uiDesktop uiDesktopSessions
 	// uiDesktopClosedEvery, when set, replaces uiDesktopClosedRecheck (tests shorten it).
 	uiDesktopClosedEvery time.Duration
-	// uiInboundStreamEvery, when set, replaces inboundResolveTTL as an inbound-token stream's re-admission
+	// uiInboundStreamEvery, when set, replaces inboundResolveTTL/2 as an inbound-token stream's re-admission
 	// interval (watchInboundStream; tests shorten it).
 	uiInboundStreamEvery time.Duration
 	// vmSignInTick, when set, replaces a recorded VM desktop stream's vmSignInRecheck ticker (tests):
