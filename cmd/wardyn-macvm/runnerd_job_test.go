@@ -77,10 +77,10 @@ func TestUpdateToolsAsRunnerdStartsIt(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(guestagent.ToolsDial{Class: guestagent.DialConnected, Dials: 1})
 		})
 		go func() {
-			_ = guestagent.ServeVsock(ctx, func(context.Context) (net.Conn, error) { return m.DialGuest(macvm.ToolsPort) }, tools)
+			_ = guestagent.ServeVsock(ctx, func(context.Context) (net.Conn, error) { return m.DialAgent(macvm.ToolsPort) }, tools)
 		}()
 		go func() {
-			_ = guestagent.ServeVsock(ctx, func(context.Context) (net.Conn, error) { return m.DialGuest(macvm.AgentPort) }, control)
+			_ = guestagent.ServeVsock(ctx, func(context.Context) (net.Conn, error) { return m.DialAgent(macvm.AgentPort) }, control)
 		}()
 	}
 	if code != 0 {

@@ -61,7 +61,13 @@ func (c Stage2BootConfig) ToolsBoot() ToolsBoot {
 		if len(spec.Shares) > 0 || len(spec.Disks) > 0 {
 			return nil, nil, errSharesOutsideRun
 		}
-		return c.boot(ctx, spec)
+		// The disk's directory (a staging copy, a derived base, or prepare's base) holds the key its guest
+		// has; with none, nothing is built.
+		key, err := readPairKey(filepath.Dir(spec.DiskPath))
+		if err != nil {
+			return nil, nil, err
+		}
+		return c.boot(ctx, spec, key)
 	}
 }
 
@@ -119,7 +125,7 @@ func (v *stage2VM) netFD(f *os.File) error {
 func (v *stage2VM) subscribe() (<-chan Event, func()) { return v.events.subscribe() }
 func (v *stage2VM) desktopPassword() (string, error)  { return "", ErrNoDesktopPassword }
 
-func (c Stage2BootConfig) boot(ctx context.Context, spec MachineSpec) (ToolsGuest, func(context.Context) error, error) {
+func (c Stage2BootConfig) boot(ctx context.Context, spec MachineSpec, key []byte) (ToolsGuest, func(context.Context) error, error) {
 	if c.Engine == nil || c.SockKey == "" {
 		return nil, nil, errors.New("macvm: a stage-2 boot needs an engine and a socket key")
 	}
@@ -206,7 +212,8 @@ func (c Stage2BootConfig) boot(ctx context.Context, spec MachineSpec) (ToolsGues
 			if port == DesktopPort {
 				open = []byte{DesktopOpenByte}
 			}
-			p := newPairer(open)
+			p := newPairer(port, key, open)
+			p.log = c.Log
 			attempt = append(attempt, p.close)
 			pairs[port] = p
 			go p.acceptGuest(l)

@@ -5,6 +5,7 @@ package stage1
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
@@ -21,6 +22,7 @@ const (
 	stdinPlist                   // the guest agent's LaunchDaemon plist
 	stdinAgentPassword           // the agent user's password, one line
 	stdinKCPassword              // /etc/kcpassword: the agent user's password, obfuscated
+	stdinPairKey                 // the base's pairing key, raw bytes
 )
 
 // command is one fixed remote command. Root commands run under
@@ -73,6 +75,11 @@ var commands = []command{
 	{ID: "agent-verify", Step: "7a", Root: true, Argv: []string{"/usr/bin/shasum", "-a", "256", guestagent.MacAgentBinaryPath}, CheckAgentSHA: true},
 	{ID: "plist-create", Step: "7a", Root: true, Argv: []string{"/usr/bin/install", "-o", "root", "-g", "wheel", "-m", "644", "/dev/null", guestagent.MacAgentPlistPath}},
 	{ID: "plist-write", Step: "7a", Root: true, Argv: []string{"/bin/dd", "of=" + guestagent.MacAgentPlistPath}, In: stdinPlist},
+	// The base's pairing key, root-only, before the agent first starts: only the agent can answer the
+	// helper's challenge with it, so nothing else in the guest pairs.
+	{ID: "pairkey-dir", Step: "7a", Root: true, Argv: []string{"/usr/bin/install", "-d", "-o", "root", "-g", "wheel", "-m", "755", filepath.Dir(guestagent.MacPairKeyPath)}},
+	{ID: "pairkey-create", Step: "7a", Root: true, Argv: []string{"/usr/bin/install", "-o", "root", "-g", "wheel", "-m", "600", "/dev/null", guestagent.MacPairKeyPath}},
+	{ID: "pairkey-write", Step: "7a", Root: true, Argv: []string{"/bin/dd", "of=" + guestagent.MacPairKeyPath}, In: stdinPairKey},
 
 	// b. the standard user agent, and auto-login as it (§3.4 step 7b).
 	{ID: "agent-user", Step: "7b", Event: "creating the agent user", Root: true, Argv: []string{"/usr/sbin/sysadminctl", "-addUser", agentUser, "-fullName", agentUser, "-password", "-"}, In: stdinAgentPassword},

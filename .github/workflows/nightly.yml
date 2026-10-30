@@ -69,6 +69,12 @@ concurrency:
 # test-repo-guards.sh guard 18 pins this: a job is skipped under candidate iff it
 # is neither watched nor a multi-arch build, and a new job must pick a side.
 
+# A failed cache download leaves @actions/cache's segment timer running, and the
+# step does not exit until it fires: 10 minutes by default, the whole budget of a
+# ten-minute job. Three minutes bounds that wait; a 128 MB segment still has room.
+env:
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: "3"
+
 # Every job sets timeout-minutes, at least twice its measured maximum (docs/CI.md).
 # e2e-live and docker-tagged-live failed in every nightly measured, so no green
 # duration exists for them and theirs are wider still.
@@ -1646,6 +1652,13 @@ jobs:
         kubelet: [v1.31.4, v1.35.0]
         suite: [org, inproc]
     steps:
+      # The harness builds the stack's images and then pulls a kindest/node image; one leg ran out of
+      # disk on that pull ("no space left on device"). Drop preinstalled toolchains this job never
+      # uses, and log what is left.
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0

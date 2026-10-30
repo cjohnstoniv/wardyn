@@ -324,6 +324,11 @@ func (r *runner) serveGuest(m Machine) (func(), error) {
 	for _, port := range r.o.extraPorts {
 		ports = append(ports, guestPort{port: port, sock: "tools.sock", serve: splice})
 	}
+	// The run's clone holds its copy of the base's key, which its guest disk holds too.
+	key, err := readPairKey(r.o.RunDir)
+	if err != nil {
+		return nil, err
+	}
 	listeners := make([]net.Listener, len(ports))
 	for i, gp := range ports {
 		gl, err := m.Listen(gp.port)
@@ -342,7 +347,8 @@ func (r *runner) serveGuest(m Machine) (func(), error) {
 		return nil, err
 	}
 	for i, gp := range ports {
-		p := newPairer(gp.open)
+		p := newPairer(gp.port, key, gp.open)
+		p.log = r.o.Log
 		if gp.port == AgentPort {
 			p.connected = func() { r.events.publish(Event{Type: EventGuestAgent, Detail: "connected"}) }
 		}

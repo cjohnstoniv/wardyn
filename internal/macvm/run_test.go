@@ -32,12 +32,12 @@ func makeBase(t *testing.T, l macvm.Layout) string {
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{macvm.DiskFile: "base-disk", macvm.AuxFile: "base-aux", macvm.MachineIDFile: "base-machine-id"} {
+	for name, body := range map[string]string{macvm.DiskFile: "base-disk", macvm.AuxFile: "base-aux", macvm.MachineIDFile: "base-machine-id", macvm.PairKeyFile: "wardyn-test-pair-key-0123456789!"} {
 		if err := os.WriteFile(filepath.Join(base, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	m := `{"format":1,"state":"ready","min_cpus":2,"min_memory_mib":4096,"hardware_model":"aHc=","desktop":"control","harnesses":["none"]}`
+	m := `{"format":2,"state":"ready","min_cpus":2,"min_memory_mib":4096,"hardware_model":"aHc=","desktop":"control","harnesses":["none"]}`
 	if err := os.WriteFile(filepath.Join(base, macvm.ManifestFile), []byte(m), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestRunLifecycle(t *testing.T) {
 	}
 
 	// agent.sock pairs with the guest's idle vsock connection.
-	guest, err := m.DialGuest(macvm.AgentPort)
+	guest, err := m.DialAgent(macvm.AgentPort)
 	if err != nil {
 		t.Fatal(err)
 	}

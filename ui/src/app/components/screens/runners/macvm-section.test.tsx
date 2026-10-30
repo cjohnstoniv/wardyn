@@ -94,10 +94,18 @@ describe("M-R1 runner drawer section", () => {
     expect(screen.getByText("Preparing")).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "42%" })).toBeInTheDocument();
   });
-  it("13: update needed", () => {
+  it("13: update needed: the tools update", () => {
     section({ ...ready, base: { state: "update_needed", guest_os: "macOS 27.0.1 (26A434)" } });
     expect(screen.getByText("Update needed")).toBeInTheDocument();
     expect(screen.getByText("This Mac's runner was upgraded, so the macOS base's tools are being updated. It offers no macOS VMs until that finishes.")).toBeInTheDocument();
+  });
+  it("13b: update needed: a base of another format is prepared again, and no tools update is promised", () => {
+    const { container } = section({ ...ready, base: { state: "update_needed", failure: "format", guest_os: "macOS 27.0.1 (26A434)" } });
+    expect(screen.getByText("Update needed")).toBeInTheDocument();
+    expect(container.textContent).toContain(
+      "This Mac's macOS base was prepared by a different runner version, so it can't be used. Run wardyn-runnerd macos-vm prepare to prepare it again. It offers no macOS VMs until then.",
+    );
+    expect(container.textContent).not.toContain("tools are being updated");
   });
   it("15: failed names the runner's own error", () => {
     section({ max: 0, base: { state: "failed", error: "connection reset by peer" } });
@@ -145,5 +153,14 @@ describe("Go parity", () => {
     };
     expect(keys("MacVMCaps")).toEqual(tags("MacVMCaps"));
     expect(keys("MacVMBase")).toEqual(tags("MacVMBase"));
+  });
+  it("MacVMFailure is mirrored value for value", () => {
+    const wire = readFileSync(join(root, "internal/runnerwire/payload.go"), "utf8");
+    const goValues = [...wire.matchAll(/^\s*MacVMFailure\w+\s*=\s*"([^"]+)"/gm)].map((m) => m[1]).sort();
+    const ts = readFileSync(join(root, "ui/src/app/lib/types/runner-macvm.ts"), "utf8");
+    const union = /export type MacVMFailure = ([^;]+);/.exec(ts)?.[1] ?? "";
+    const tsValues = [...union.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+    expect(goValues).toContain("format");
+    expect(tsValues).toEqual(goValues);
   });
 });

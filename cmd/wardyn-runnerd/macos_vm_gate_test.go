@@ -76,7 +76,7 @@ func TestMacOSVMMaxAtThePerRunMemory(t *testing.T) {
 	}
 	base := m.layout.BaseDir(0)
 	_ = os.MkdirAll(base, 0o700)
-	man := `{"format":1,"state":"ready","guest_os":"macOS 27.0","agent_version":"1.0.0","min_cpus":4,"min_memory_mib":4096,"harnesses":["none"]}`
+	man := `{"format":2,"state":"ready","guest_os":"macOS 27.0","agent_version":"1.0.0","min_cpus":4,"min_memory_mib":4096,"harnesses":["none"]}`
 	if err := os.WriteFile(filepath.Join(base, macvm.ManifestFile), []byte(man), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestMacOSVMAgentDriftStartsAToolsUpdate(t *testing.T) {
 	}
 	errs := make(chan error, 4)
 	m.toolsUpdate = func(man macvm.Manifest) { errs <- m.startToolsUpdate(context.Background(), man) }
-	man := `{"format":1,"state":"ready","guest_os":"macOS 27.0","agent_version":"0.9.0","min_cpus":4,"min_memory_mib":8192,"harnesses":["none"]}`
+	man := `{"format":2,"state":"ready","guest_os":"macOS 27.0","agent_version":"0.9.0","min_cpus":4,"min_memory_mib":8192,"harnesses":["none"]}`
 	_ = os.WriteFile(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile), []byte(man), 0o600)
 	m.recompute()
 	m.recompute()

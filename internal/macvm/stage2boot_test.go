@@ -131,6 +131,7 @@ func TestStage2BootTakesNetFDAndReachesToolsMode(t *testing.T) {
 	for _, f := range []string{macvm.DiskFile, macvm.AuxFile} {
 		_ = os.WriteFile(filepath.Join(dir, f), nil, 0o600)
 	}
+	_ = os.WriteFile(filepath.Join(dir, macvm.PairKeyFile), pairKey, 0o600)
 	spec := macvm.MachineSpec{CPUs: 4, MemoryBytes: 8 << 30, MinCPUs: 2, MinMemoryBytes: 4 << 30, HardwareModel: []byte("hw"),
 		MachineIdentifier: []byte("id"), DiskPath: filepath.Join(dir, macvm.DiskFile), AuxPath: filepath.Join(dir, macvm.AuxFile)}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -161,10 +162,10 @@ func TestStage2BootTakesNetFDAndReachesToolsMode(t *testing.T) {
 	}
 	agent := &fakeToolsAgent{pushed: map[string][]byte{}}
 	go func() {
-		_ = guestagent.ServeVsock(ctx, func(context.Context) (net.Conn, error) { return m.DialGuest(macvm.ToolsPort) }, agent.tools())
+		_ = guestagent.ServeVsock(ctx, func(context.Context) (net.Conn, error) { return m.DialAgent(macvm.ToolsPort) }, agent.tools())
 	}()
 	go func() {
-		_ = guestagent.ServeVsock(ctx, func(context.Context) (net.Conn, error) { return m.DialGuest(macvm.AgentPort) }, controlSession())
+		_ = guestagent.ServeVsock(ctx, func(context.Context) (net.Conn, error) { return m.DialAgent(macvm.AgentPort) }, controlSession())
 	}()
 	tctx, tcancel := context.WithTimeout(ctx, 10*time.Second)
 	defer tcancel()
@@ -185,7 +186,7 @@ func TestStage2BootTakesNetFDAndReachesToolsMode(t *testing.T) {
 	// password just set, then one PointerEvent to the set point.
 	pointer := make(chan []byte, 1)
 	go func() {
-		c, err := m.DialGuest(macvm.DesktopPort)
+		c, err := m.DialAgent(macvm.DesktopPort)
 		if err != nil {
 			pointer <- nil
 			return
@@ -239,6 +240,7 @@ func TestStage2BootStopOnItsCtlSockEndsTheVM(t *testing.T) {
 	root := macvmtest.SockRoot(t)
 	cfg := macvm.Stage2BootConfig{Engine: eng, SockRoot: root, SockKey: "0123456789ab", SockFstat: macvmtest.SockFstat, GuestWait: time.Minute}
 	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, macvm.PairKeyFile), pairKey, 0o600)
 	spec := macvm.MachineSpec{CPUs: 4, MemoryBytes: 8 << 30, MinCPUs: 2, MinMemoryBytes: 4 << 30, HardwareModel: []byte("hw"),
 		MachineIdentifier: []byte("id"), DiskPath: filepath.Join(dir, macvm.DiskFile), AuxPath: filepath.Join(dir, macvm.AuxFile)}
 	type booted struct {
@@ -287,6 +289,7 @@ func TestStage2BootWithoutNetFDStartsNothing(t *testing.T) {
 	eng := &macvmtest.Engine{}
 	cfg := macvm.Stage2BootConfig{Engine: eng, SockRoot: macvmtest.SockRoot(t), SockKey: "0123456789ab", SockFstat: macvmtest.SockFstat, NetWait: 100 * time.Millisecond}
 	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, macvm.PairKeyFile), pairKey, 0o600)
 	spec := macvm.MachineSpec{CPUs: 4, MemoryBytes: 8 << 30, MinCPUs: 2, MinMemoryBytes: 4 << 30, HardwareModel: []byte("hw"),
 		MachineIdentifier: []byte("id"), DiskPath: filepath.Join(dir, macvm.DiskFile), AuxPath: filepath.Join(dir, macvm.AuxFile)}
 	if _, _, err := cfg.ToolsBoot()(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "network descriptor") {
@@ -314,6 +317,7 @@ func TestStage2BootLeakedHook(t *testing.T) {
 			cfg := macvm.Stage2BootConfig{Engine: &macvmtest.Engine{StartErr: tc.startErr}, SockRoot: root, SockKey: "0123456789ab",
 				SockFstat: macvmtest.SockFstat, Leaked: func() error { calls++; return nil }}
 			dir := t.TempDir()
+			_ = os.WriteFile(filepath.Join(dir, macvm.PairKeyFile), pairKey, 0o600)
 			spec := macvm.MachineSpec{CPUs: 4, MemoryBytes: 8 << 30, MinCPUs: 2, MinMemoryBytes: 4 << 30, HardwareModel: []byte("hw"),
 				MachineIdentifier: []byte("id"), DiskPath: filepath.Join(dir, macvm.DiskFile), AuxPath: filepath.Join(dir, macvm.AuxFile)}
 			done := make(chan error, 1)
@@ -340,6 +344,7 @@ func TestStage2BootRetriesTheAuxLock(t *testing.T) {
 	for _, f := range []string{macvm.DiskFile, macvm.AuxFile} {
 		_ = os.WriteFile(filepath.Join(dir, f), nil, 0o600)
 	}
+	_ = os.WriteFile(filepath.Join(dir, macvm.PairKeyFile), pairKey, 0o600)
 	spec := macvm.MachineSpec{CPUs: 4, MemoryBytes: 8 << 30, MinCPUs: 2, MinMemoryBytes: 4 << 30, HardwareModel: []byte("hw"),
 		MachineIdentifier: []byte("id"), DiskPath: filepath.Join(dir, macvm.DiskFile), AuxPath: filepath.Join(dir, macvm.AuxFile)}
 	type booted struct {

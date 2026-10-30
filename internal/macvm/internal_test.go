@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
 func testSpec(t *testing.T) MachineSpec {
@@ -272,14 +274,44 @@ func TestParsePmsetBatt(t *testing.T) {
 	}
 }
 
+// The guest agent keeps one idle connection per port and redials after a session, so the newest proven
+// connection replaces (and closes) the older one. The open byte follows the proof, never precedes it.
 func TestPairerNewestGuestConnWinsAndOpenByte(t *testing.T) {
-	p := newPairer([]byte{DesktopOpenByte})
+	key := bytes.Repeat([]byte{7}, 32)
+	p := newPairer(DesktopPort, key, []byte{DesktopOpenByte})
+	// Each proof finishes in its own goroutine, so wait for one to be idle before the next dials.
+	paired := make(chan struct{}, 2)
+	p.connected = func() { paired <- struct{}{} }
+	waitPaired := func() {
+		t.Helper()
+		select {
+		case <-paired:
+		case <-time.After(2 * time.Second):
+			t.Fatal("connection never paired")
+		}
+	}
 	l := &chanListener{ch: make(chan net.Conn)}
 	go p.acceptGuest(l)
-	oldHost, oldGuest := net.Pipe()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	oldHost, oldPipe := net.Pipe()
+	oldGuest, err := guestagent.PairedDial(func(context.Context) (net.Conn, error) { l.ch <- oldHost; return oldPipe, nil }, DesktopPort, key)(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitPaired()
+	// The newer connection answers by hand: the 40-byte frame, the proof, then the open byte.
 	newHost, newGuest := net.Pipe()
-	l.ch <- oldHost
 	l.ch <- newHost
+	frame := make([]byte, 40)
+	_ = newGuest.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := io.ReadFull(newGuest, frame); err != nil || string(frame[:8]) != "WDYNPAIR" {
+		t.Fatalf("challenge %q %v", frame, err)
+	}
+	if _, err := newGuest.Write(guestagent.PairProof(key, DesktopPort, frame[8:])); err != nil {
+		t.Fatal(err)
+	}
+	waitPaired()
 	// The stale idle connection was closed.
 	_ = oldGuest.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, err := oldGuest.Read(make([]byte, 1)); err == nil {
@@ -288,11 +320,10 @@ func TestPairerNewestGuestConnWinsAndOpenByte(t *testing.T) {
 	got := make(chan byte, 1)
 	go func() {
 		b := make([]byte, 1)
+		_ = newGuest.SetReadDeadline(time.Now().Add(2 * time.Second))
 		_, _ = newGuest.Read(b)
 		got <- b[0]
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
 	c, err := p.take(ctx)
 	if err != nil || c != newHost {
 		t.Fatalf("take = %v, %v", c, err)

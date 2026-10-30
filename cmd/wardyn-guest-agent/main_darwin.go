@@ -76,28 +76,35 @@ func run(out, plist string) error {
 	if err != nil {
 		return err
 	}
+	// Without the base's key the agent can pair on no port, so it does not start.
+	key, err := guestagent.ReadPairKey(guestagent.MacPairKeyPath)
+	if err != nil {
+		return err
+	}
 	slog.Info("wardyn-guest-agent serving", "version", version.String())
 	tools := &guestagent.Tools{Desktop: desktop, AgentBinary: self, AgentPlist: plist}
 	var wg sync.WaitGroup
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		_ = guestagent.ServeVsock(ctx, hostDialer(guestagent.VsockControlPort), h)
+		_ = guestagent.ServeVsock(ctx, hostDialer(guestagent.VsockControlPort, key), h)
 	}()
 	go func() {
 		defer wg.Done()
-		_ = guestagent.SpliceDesktop(ctx, hostDialer(guestagent.VsockDesktopPort), screenSharing, desktop.Track)
+		_ = guestagent.SpliceDesktop(ctx, hostDialer(guestagent.VsockDesktopPort, key), screenSharing, desktop.Track)
 	}()
 	go func() {
 		defer wg.Done()
-		_ = guestagent.ServeTools(ctx, hostDialer(guestagent.VsockToolsPort), tools.ToolsHandler(), dial)
+		_ = guestagent.ServeTools(ctx, hostDialer(guestagent.VsockToolsPort, key), tools.ToolsHandler(), dial)
 	}()
 	wg.Wait()
 	return nil
 }
 
-func hostDialer(port uint32) guestagent.DialFunc {
-	return func(ctx context.Context) (net.Conn, error) { return guestagent.DialHost(ctx, port) }
+// hostDialer dials the host on port and answers its pairing challenge with key, so every channel's
+// session, open byte or tools request starts only on a connection the helper has paired.
+func hostDialer(port uint32, key []byte) guestagent.DialFunc {
+	return guestagent.PairedDial(func(ctx context.Context) (net.Conn, error) { return guestagent.DialHost(ctx, port) }, port, key)
 }
 
 // screenSharing dials the guest's own Screen Sharing, the desktop tunnel's only destination.

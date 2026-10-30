@@ -197,10 +197,10 @@ func TestRunClaimsEntryAndStatusReportsIdentity(t *testing.T) {
 	layout := macvm.Layout{Root: filepath.Join(root, "vm")}
 	base := layout.BaseDir(0)
 	_ = os.MkdirAll(base, 0o700)
-	for n, b := range map[string]string{macvm.DiskFile: "d", macvm.AuxFile: "a", macvm.MachineIDFile: "base-id"} {
+	for n, b := range map[string]string{macvm.DiskFile: "d", macvm.AuxFile: "a", macvm.MachineIDFile: "base-id", macvm.PairKeyFile: "wardyn-test-pair-key-0123456789!"} {
 		_ = os.WriteFile(filepath.Join(base, n), []byte(b), 0o600)
 	}
-	_ = os.WriteFile(filepath.Join(base, macvm.ManifestFile), []byte(`{"format":1,"state":"ready","hardware_model":"aHc="}`), 0o600)
+	_ = os.WriteFile(filepath.Join(base, macvm.ManifestFile), []byte(`{"format":2,"state":"ready","hardware_model":"aHc="}`), 0o600)
 	const runID = "0a1b2c3d-4e5f-4061-8273-8495a6b7c8d9"
 	dir := layout.RunDir(runID)
 	cfg := macvm.RunConfig{RunID: runID, BaseDir: base, CPUs: 2, MemoryMiB: 4096, Identity: macvm.IdentityTravel,
@@ -248,10 +248,10 @@ func TestRunRefusedWithoutEntry(t *testing.T) {
 	layout := macvm.Layout{Root: root}
 	base := layout.BaseDir(0)
 	_ = os.MkdirAll(base, 0o700)
-	for n, b := range map[string]string{macvm.DiskFile: "d", macvm.AuxFile: "a", macvm.MachineIDFile: "id"} {
+	for n, b := range map[string]string{macvm.DiskFile: "d", macvm.AuxFile: "a", macvm.MachineIDFile: "id", macvm.PairKeyFile: "wardyn-test-pair-key-0123456789!"} {
 		_ = os.WriteFile(filepath.Join(base, n), []byte(b), 0o600)
 	}
-	_ = os.WriteFile(filepath.Join(base, macvm.ManifestFile), []byte(`{"format":1,"state":"ready","hardware_model":"aHc="}`), 0o600)
+	_ = os.WriteFile(filepath.Join(base, macvm.ManifestFile), []byte(`{"format":2,"state":"ready","hardware_model":"aHc="}`), 0o600)
 	dir := layout.RunDir("r")
 	_ = macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: "r", BaseDir: base, CPUs: 2, MemoryMiB: 4096, Identity: macvm.IdentityFresh,
 		SockRoot: macvmtest.SockRoot(t)})

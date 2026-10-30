@@ -45,7 +45,12 @@ function show(intent: RunIntent, offer: MacOSOffer) {
     </MemoryRouter>,
   );
 }
-const picker = () => screen.findByRole("combobox", { name: NR_HARNESSES.EYEBROW(1) });
+// The picker renders before the roster loads, so wait for an option only the loaded roster names.
+async function picker() {
+  const select = await screen.findByRole("combobox", { name: NR_HARNESSES.EYEBROW(1) });
+  await within(select).findByRole("option", { name: "Your own tools" });
+  return select;
+}
 
 describe("Harnesses step: macOS VM", () => {
   it("frame 9a: the picker keeps Your own tools and disables the harnesses the base cannot serve", async () => {

@@ -109,6 +109,9 @@ type BootstrapInput struct {
 	// liveness the helper has. Stage 1 counts a refused port 22 as Remote
 	// Login off only when the epoch is the same before and after.
 	GuestEpoch func() (uint64, error)
+	// PairKey is the base's new pairing key, which stage 1 writes root-only into the guest over its
+	// session's stdin; prepare keeps the same bytes as the base's PairKeyFile.
+	PairKey []byte
 }
 
 // ErrGuestStopped means the provisioning VM stopped.
@@ -554,7 +557,7 @@ func (p *prep) discardInterrupted() error {
 		return nil
 	}
 	p.Log.Warn("macvm: discarding an install that did not finish", "base", p.base)
-	for _, f := range []string{DiskFile, AuxFile, MachineIDFile, ManifestFile, ToolsRecordFile, installingMarker} {
+	for _, f := range []string{DiskFile, AuxFile, MachineIDFile, ManifestFile, PairKeyFile, ToolsRecordFile, installingMarker} {
 		if err := os.Remove(filepath.Join(p.base, f)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -734,6 +737,21 @@ func stage1Failed(err error, withCode bool) error {
 	return fmt.Errorf("macvm: stage 1: %w", err)
 }
 
+// bootstrap runs stage 1 with a fresh pairing key, which stage 1 writes into the guest, and then keeps
+// the same bytes as the base's host copy.
+func (p *prep) bootstrap(ctx context.Context, in BootstrapInput) (BootstrapResult, error) {
+	in.PairKey = newPairKey()
+	defer clear(in.PairKey)
+	res, err := p.Bootstrap.Bootstrap(ctx, in)
+	if err != nil {
+		return res, err
+	}
+	if err := writePairKey(p.base, in.PairKey); err != nil {
+		return res, fmt.Errorf("keep the base's pairing key: %w", err)
+	}
+	return res, nil
+}
+
 // provisionAndBootstrap runs the one first boot, waits for the guest's Remote
 // Login (provisioned, or by hand), runs stage 1 and shuts the VM down.
 func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (BootstrapResult, error) {
@@ -849,7 +867,7 @@ func (p *prep) provisionAndBootstrap(ctx context.Context, spec MachineSpec) (Boo
 	if replace != "" {
 		in.NewPassword, in.Replaced = replace, p.removeSetupCode
 	}
-	res, err := p.Bootstrap.Bootstrap(wctx, in)
+	res, err := p.bootstrap(wctx, in)
 	if err != nil {
 		if rerr := relayFailed(nil); rerr != nil {
 			return BootstrapResult{}, rerr

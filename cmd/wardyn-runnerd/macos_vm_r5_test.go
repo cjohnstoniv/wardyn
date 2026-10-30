@@ -114,6 +114,7 @@ func liveStage2JobOf(t *testing.T, r *macLedgerRig, m *macOSVMs, kind admission.
 	for _, f := range []string{macvm.DiskFile, macvm.AuxFile} {
 		_ = os.WriteFile(filepath.Join(dir, f), nil, 0o600)
 	}
+	_ = os.WriteFile(filepath.Join(dir, macvm.PairKeyFile), []byte("wardyn-test-pair-key-0123456789!"), 0o600)
 	spec := macvm.MachineSpec{CPUs: 4, MemoryBytes: 8 << 30, MinCPUs: 2, MinMemoryBytes: 4 << 30, HardwareModel: []byte("hw"),
 		MachineIdentifier: []byte("id"), DiskPath: filepath.Join(dir, macvm.DiskFile), AuxPath: filepath.Join(dir, macvm.AuxFile)}
 	boot := macvm.Stage2BootConfig{Engine: &macvmtest.Engine{}, SockRoot: m.sockRoot, SockKey: macvm.JobSockKey(e.ID), SockFstat: macvmtest.SockFstat,

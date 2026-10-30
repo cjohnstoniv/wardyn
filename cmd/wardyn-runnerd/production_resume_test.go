@@ -349,7 +349,7 @@ func TestResumeSendsCapsChangedWhileOffline(t *testing.T) {
 
 	// The base changes while the link is down. Three kicks are a barrier: the run loop takes the third only
 	// after the iteration for the first, with its resend, is done.
-	man := `{"format":1,"state":"ready","guest_os":"macOS 26.2","agent_version":"1.0.0","min_cpus":4,"min_memory_mib":8192,"desktop":"control","harnesses":["claude-code"]}`
+	man := `{"format":2,"state":"ready","guest_os":"macOS 26.2","agent_version":"1.0.0","min_cpus":4,"min_memory_mib":8192,"desktop":"control","harnesses":["claude-code"]}`
 	if err := os.WriteFile(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile), []byte(man), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +395,7 @@ func TestFreshSessionSendsCapsChangedBeforeOnline(t *testing.T) {
 	var once sync.Once
 	f.afterReplay = func() {
 		once.Do(func() {
-			man := `{"format":1,"state":"ready","guest_os":"macOS 26.2","agent_version":"1.0.0","min_cpus":4,"min_memory_mib":8192,"desktop":"control","harnesses":["claude-code"]}`
+			man := `{"format":2,"state":"ready","guest_os":"macOS 26.2","agent_version":"1.0.0","min_cpus":4,"min_memory_mib":8192,"desktop":"control","harnesses":["claude-code"]}`
 			if err := os.WriteFile(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile), []byte(man), 0o600); err != nil {
 				t.Error(err)
 			}
@@ -445,7 +445,7 @@ func TestMacOSCapsFallbackSendsLastCapsWithTheNewMacOSVM(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.sub.classesDown.Store(true)
-	man := `{"format":1,"state":"ready","guest_os":"macOS 26.3","agent_version":"1.0.0","min_cpus":4,"min_memory_mib":8192,"desktop":"control","harnesses":["claude-code"]}`
+	man := `{"format":2,"state":"ready","guest_os":"macOS 26.3","agent_version":"1.0.0","min_cpus":4,"min_memory_mib":8192,"desktop":"control","harnesses":["claude-code"]}`
 	if err := os.WriteFile(filepath.Join(m.layout.BaseDir(0), macvm.ManifestFile), []byte(man), 0o600); err != nil {
 		t.Fatal(err)
 	}
