@@ -39,6 +39,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"approvals_reauth.go:canSeeApproval":                       {1, "authz-only: approval read reach"},
 	"approvals_takeover.go:loadTakeover":                       {1, "authz-only: a takeover's reach and the deny_interactive door, as refuseAttachEntry's ticket lane"},
 	"attach.go:refuseAttachEntry":                              {1, "authz-only: a session door; traffic in the session is the dispatched proxy config"},
+	"attach_authority.go:attachAuthority":                      {1, "authz-only: an open terminal's deny_interactive re-check, with refuseNoTicketAttach's exemption; it admits no run policy"},
 	"attach_ticket.go:handleAttachTicket":                      {1, "authz-only: the ticket's reach stamp; its reach is admitRunEntry's"},
 	"base_images.go:handleDeleteBaseImage":                     {1, "authz-only: which kinds a delete reaches, and the admin-only force detach"},
 	"base_images.go:mayWriteBaseImageKind":                     {1, "authz-only: which catalog kinds a tier writes and lists"},

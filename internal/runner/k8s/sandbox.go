@@ -736,8 +736,9 @@ func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, ns, podName s
 
 // proxyStartFailure is non-nil once the proxy pod is in a state waiting cannot
 // fix: a terminal Waiting reason on its init or main container, a failed init,
-// or a main container that exited. The "proxy container stuck waiting (" shape
-// is what the control plane's stuckStartupFromFailureHint reads back.
+// a main container that exited, or a pod deleted under its containers. The
+// "proxy container stuck waiting (" shape is what the control plane's
+// stuckStartupFromFailureHint reads back.
 func proxyStartFailure(pod *corev1.Pod) error {
 	for _, cs := range slices.Concat(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses) {
 		if w := cs.State.Waiting; w != nil && terminalWaitingReasons[w.Reason] {
@@ -750,10 +751,28 @@ func proxyStartFailure(pod *corev1.Pod) error {
 		if cs.Name == proxyContainerName && t.ExitCode == proxyExitLapsed {
 			return proxyRenewFailure(t.Message)
 		}
+		if pod.DeletionTimestamp != nil {
+			// A pod deleted before it started carries the kubelet's placeholder status
+			// (ContainerStatusUnknown, 137), not an exit of the proxy's own.
+			return fmt.Errorf("proxy pod %s was deleted before the proxy was ready (container %s: %s, exit code %d)", pod.Name, cs.Name, t.Reason, t.ExitCode)
+		}
+		if cs.Name == proxyContainerName {
+			if m := unknownProxyConfigField.FindStringSubmatch(t.Message); m != nil {
+				return fmt.Errorf("the proxy image is older than this runner (it refused setting %s): have the organisation "+
+					"name this release's proxy image, or run setup with --proxy-image set to it; proxy container %s exited at config load (exit code %d, %s): %s",
+					m[1], cs.Name, t.ExitCode, t.Reason, t.Message)
+			}
+		}
 		return fmt.Errorf("proxy container %s exited before the proxy was ready (exit code %d, %s): %s", cs.Name, t.ExitCode, t.Reason, t.Message)
 	}
 	return nil
 }
+
+// unknownProxyConfigField reads the setting a proxy refused at config load from its termination
+// message (its log tail): the strict decode's `unknown field "x"`, with the quotes escaped inside a
+// log attribute. Reading it as "older proxy" assumes a release only ever adds proxy config fields.
+// It is the Docker runner's pattern (driver_proxy_revive.go), kept in step by hand.
+var unknownProxyConfigField = regexp.MustCompile(`unknown field \\?"([^"\\\n]{1,80})\\?"`)
 
 func protoPtr(p corev1.Protocol) *corev1.Protocol          { return &p }
 func intOrStrPtr(v intstr.IntOrString) *intstr.IntOrString { return &v }

@@ -610,32 +610,33 @@ func (s *Server) promoteSkipHosts(ctx context.Context, ws types.Workspace) map[s
 // serving hosts (a Bedrock runtime, a gateway): the same plumbing, spelled by
 // the site config rather than the ceiling. Record promotion only: the skip set
 // promoteSkipHosts returns is shared with approve·always, whose refusals stay
-// as they were.
-func (s *Server) recordPromoteSkipHosts(ctx context.Context, ws types.Workspace) map[string]struct{} {
+// as they were. providerHosts is modelProviderRowHostSet's, read once per promote.
+func (s *Server) recordPromoteSkipHosts(ctx context.Context, ws types.Workspace, providerHosts map[string]struct{}) map[string]struct{} {
 	skip := s.promoteSkipHosts(ctx, ws)
-	for h := range s.modelProviderRowHostSet(ctx) {
+	for h := range providerHosts {
 		skip[h] = struct{}{}
 	}
 	return skip
 }
 
 // modelProviderRowHostSet is every model provider row's serving host, lowercased,
-// from the stored site config; empty when it cannot be read.
-func (s *Server) modelProviderRowHostSet(ctx context.Context) map[string]struct{} {
+// from the stored site config. An unreadable site config is an error, never an
+// empty set: an empty set would let a promote write a provider's host as a need.
+func (s *Server) modelProviderRowHostSet(ctx context.Context) (map[string]struct{}, error) {
 	out := map[string]struct{}{}
 	if s.cfg.Store == nil {
-		return out
+		return out, nil
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		return out
+		return nil, err
 	}
 	for _, h := range modelProviderRowHosts(sc) {
 		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
 			out[h] = struct{}{}
 		}
 	}
-	return out
+	return out, nil
 }
 
 // skipCovers reports whether any skip ENTRY names or covers host.
@@ -751,7 +752,7 @@ func promotableHosts(obs *recordmode.Observations, selfHost string, skipHost map
 // set is ALLOW-SHAPED and shared with approveAlwaysRejects (approvals.go) —
 // only the two additions below are promotion-specific.
 func (s *Server) promotableRecordHosts(r *http.Request, ws types.Workspace, taskKey string,
-	res RecordTaskResult) (map[string]struct{}, string) {
+	res RecordTaskResult, providerHosts map[string]struct{}) (map[string]struct{}, string) {
 	if why := promoteEntryReject(taskKey, res); why != "" {
 		return nil, why
 	}
@@ -771,7 +772,7 @@ func (s *Server) promotableRecordHosts(r *http.Request, ws types.Workspace, task
 		return nil, "the control plane's own address is not configured, so the guard that keeps Wardyn's API " +
 			"off this workspace's allowlist cannot be evaluated — set WARDYN_CONTROL_PLANE_URL and retry"
 	}
-	skipHost := s.recordPromoteSkipHosts(r.Context(), ws)
+	skipHost := s.recordPromoteSkipHosts(r.Context(), ws, providerHosts)
 	// Fallback, and only ever a WIDENING of that exclusion: a deployment is often
 	// dialled by a name other than the configured one (host.docker.internal, the
 	// in-cluster service name, an ingress host), and an exact match sees none of
@@ -827,13 +828,21 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	// reason — a promotion is durable policy authored from observed traffic, so
 	// evidence that is incomplete, borrowed, plumbing, contradicted or shapeless
 	// must not reach the contract.
-	promotable, reject := s.promotableRecordHosts(r, ws, taskKey, res)
+	// The model provider rows' hosts, read once for the filter and the selection,
+	// and before anything is written: unreadable, the promote is refused, retryable.
+	providerHosts, err := s.modelProviderRowHostSet(r.Context())
+	if err != nil {
+		slog.ErrorContext(r.Context(), "api: get site config for record promote", slog.Any("err", err))
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRosterUnreadable, "Wardyn couldn't read its model providers just now, so nothing was promoted. Try again in a moment.")
+		return
+	}
+	promotable, reject := s.promotableRecordHosts(r, ws, taskKey, res, providerHosts)
 	if reject != "" {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRecordPromoteRejected, reject)
 		return
 	}
 
-	wantHosts, skipped, notPromotable := s.selectPromoteHosts(r.Context(), req.Hosts, promotable)
+	wantHosts, skipped, notPromotable := selectPromoteHosts(req.Hosts, promotable, providerHosts)
 	if notPromotable != "" {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRecordPromoteHostNotPromotable, "host "+notPromotable+" was not observed+allowed in this recording — cannot promote")
 		return
@@ -941,14 +950,13 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 // operator narrowed it to a subset. The console's bulk promote sends every checked host, plumbing included:
 // a model provider row's host is never promoted, and is skipped (and returned) rather than refused. The
 // third result is the first requested host outside the promotable set, "" when every host is fine.
-func (s *Server) selectPromoteHosts(ctx context.Context, requested []string, promotable map[string]struct{}) (want, skipped []string, notPromotable string) {
+func selectPromoteHosts(requested []string, promotable, providerHosts map[string]struct{}) (want, skipped []string, notPromotable string) {
 	if requested == nil {
 		for h := range promotable {
 			want = append(want, h)
 		}
 		return want, nil, ""
 	}
-	providerHosts := s.modelProviderRowHostSet(ctx)
 	for _, h := range requested {
 		h = strings.ToLower(strings.TrimSpace(h))
 		if h == "" {

@@ -277,7 +277,11 @@ func applyRunEgressOverrides(spec *types.RunPolicySpec, eg client.RunEgressOverr
 // the default), which a member reads with its secret references stripped.
 func (s *Server) applySecretOverrides(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, a client.AgentOverrides, e *overrideEdits, stored bool) *runRefusal {
 	for i, sec := range a.AddSecrets {
-		if !s.ownsSecretMemoized(ctx, s.secretOwnerFromRequest(r), sec.SecretName) {
+		own, err := s.ownsSecretChecked(ctx, s.secretOwnerFromRequest(r), sec.SecretName)
+		if err != nil {
+			return ownershipUnreadable()
+		}
+		if !own {
 			if ctx.Value(reviewDoorKey{}) != nil {
 				e.missingSecrets = append(e.missingSecrets, sec)
 				continue
@@ -304,9 +308,15 @@ func (s *Server) applySecretOverrides(ctx context.Context, r *http.Request, spec
 		// is not asked): matching the policy's grants before this would
 		// tell a person which operator secrets it pairs, which a member never
 		// reads (policy reads strip the references).
-		if !s.isOperator(r.Context()) && !s.ownsSecretMemoized(ctx, s.secretOwnerFromRequest(r), name) {
-			return runError(http.StatusUnprocessableEntity, reasonOverrideRefused, fmt.Sprintf(
-				"overrides.agent.remove_secrets[%d]: %s is not one of your stored secrets.", i, name))
+		if !s.isOperator(r.Context()) {
+			own, err := s.ownsSecretChecked(ctx, s.secretOwnerFromRequest(r), name)
+			if err != nil {
+				return ownershipUnreadable()
+			}
+			if !own {
+				return runError(http.StatusUnprocessableEntity, reasonOverrideRefused, fmt.Sprintf(
+					"overrides.agent.remove_secrets[%d]: %s is not one of your stored secrets.", i, name))
+			}
 		}
 		// Owning a secret of that name says nothing about a stored grant bound to
 		// another row under the same name, so on stored content a member removes

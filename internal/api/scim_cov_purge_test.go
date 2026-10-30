@@ -231,9 +231,11 @@ func TestSCIMCovAFailedPurgeStepStaysPendingWhileTheOthersRun(t *testing.T) {
 		name, method, step string
 		wantWrites         int
 		wantDeletes        int
+		wantReassigned     float64
 	}{
-		{"handing over workspaces", "SetWorkspaceOwner", jobStepWorkspaces, 1, 1},
-		{"deleting grants", "DeleteUserSubjectRows", jobStepGrants, 2, 1},
+		// The failed hand-over stops no other, so the retry hands over only the one left.
+		{"handing over workspaces", "SetWorkspaceOwner", jobStepWorkspaces, 2, 1, 1},
+		{"deleting grants", "DeleteUserSubjectRows", jobStepGrants, 2, 1, 2},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			st := newSCIMCovStore()
@@ -266,8 +268,8 @@ func TestSCIMCovAFailedPurgeStepStaysPendingWhileTheOthersRun(t *testing.T) {
 			if e.purgeRows() != 1 || len(st.pendingSteps(l.id, store.JobKindPurge)) != 0 {
 				t.Errorf("after the retry: purge rows %d pending %v", e.purgeRows(), st.pendingSteps(l.id, store.JobKindPurge))
 			}
-			if got := e.auditData(e.purgeRow())["workspaces_reassigned"]; got != float64(2) {
-				t.Errorf("workspaces_reassigned = %v, want 2 once the retry handed both over", got)
+			if got := e.auditData(e.purgeRow())["workspaces_reassigned"]; got != c.wantReassigned {
+				t.Errorf("workspaces_reassigned = %v, want %v: what the attempt that finished handed over", got, c.wantReassigned)
 			}
 		})
 	}
@@ -354,16 +356,17 @@ func TestSCIMCovReassignWorkspaces(t *testing.T) {
 			t.Errorf("err = %v owner writes %v", err, st.ownerWrites)
 		}
 	})
-	t.Run("a failed write stops after the ones already done", func(t *testing.T) {
+	t.Run("a failed write stops no other hand-over", func(t *testing.T) {
 		st := newSCIMCovStore()
 		scimCovSeedPurgee(st)
 		e := newSCIMCovEnv(t, st)
-		st.failNext("SetWorkspaceOwner", errSCIMCovBoom, -1)
+		st.failNext("SetWorkspaceOwner", errSCIMCovBoom, 1)
 		if _, err := e.srv.reassignWorkspaces(ctx, scimCovTargets); !errors.Is(err, errSCIMCovBoom) {
 			t.Errorf("err = %v, want the store's error", err)
 		}
-		if len(st.ownerWrites) != 1 || len(e.auditRows("workspace.reassign")) != 0 {
-			t.Errorf("owner writes %v, reassign rows %d: no row may claim a hand-over the store refused", st.ownerWrites, len(e.auditRows("workspace.reassign")))
+		rows := e.auditRows("workspace.reassign")
+		if len(st.ownerWrites) != 2 || len(rows) != 1 || rows[0].Target != scimCovWsEmail.String() {
+			t.Errorf("owner writes %v, reassign rows %+v: the second workspace is handed over, and no row claims the refused one", st.ownerWrites, rows)
 		}
 	})
 	t.Run("a name the operator already uses is suffixed, not a stopped purge", func(t *testing.T) {
@@ -387,6 +390,21 @@ func TestSCIMCovReassignWorkspaces(t *testing.T) {
 		}
 		if renamed != 1 {
 			t.Errorf("%d reassign rows name the rename, want 1", renamed)
+		}
+	})
+	t.Run("a suffixed name the operator also uses takes a counter", func(t *testing.T) {
+		st := newSCIMCovStore()
+		scimCovSeedPurgee(st)
+		suffixed := "one (" + scimCovWsSub.String()[:8] + ")"
+		st.workspaces = append(st.workspaces, types.Workspace{ID: uuid.New(), Name: "one"}, types.Workspace{ID: uuid.New(), Name: suffixed})
+		e := newSCIMCovEnv(t, st)
+		got, err := e.srv.reassignWorkspaces(ctx, scimCovTargets)
+		if err != nil || got["workspaces_reassigned"] != 2 {
+			t.Fatalf("got %v %v, want both of the person's workspaces reassigned", got, err)
+		}
+		want := "one (" + scimCovWsSub.String()[:8] + "-2)"
+		if i := slices.IndexFunc(st.workspaces, func(w types.Workspace) bool { return w.ID == scimCovWsSub }); st.workspaces[i].Name != want || st.workspaces[i].OwnedBy != "" {
+			t.Errorf("reassigned workspace = %q owned by %q, want %q owned by the operator", st.workspaces[i].Name, st.workspaces[i].OwnedBy, want)
 		}
 	})
 	t.Run("an owner matches in any case and an unowned workspace never", func(t *testing.T) {

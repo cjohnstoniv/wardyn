@@ -150,7 +150,7 @@
 
 | Header | Values |
 |---|---|
-| `X-Wardyn-Egress` | `denied` (permanently blocked) or `approval-pending` (raised for a human — retry after it is decided) |
+| `X-Wardyn-Egress` | `denied` (permanently blocked) or `approval-pending` (not yet allowed; the reason says if a person decides) |
 | `X-Wardyn-Host` | the host the decision applies to |
 | `X-Wardyn-Egress-Reason` | which rule decided it |
 | `X-Wardyn-Policy` | on a refusal the run's policy decided: `profile; name="<percent-encoded name>"` for a run launched under a governance profile, or `deployment` for the deployment's default |
@@ -164,6 +164,9 @@
 |---|---|---|
 | `policy:default-deny` | the host is simply not on the allowlist | ask the operator to add it |
 | `policy:denied` | it is on the **deny** list | it was refused on purpose; deny always wins |
+| `approval:pending` | an approval is open, undecided | retry once a person decides |
+| `approval:host-cap` | the run's approval table is full; nobody was asked | ask the operator to allow the host |
+| `approval:refused` | the control plane would not raise it; nobody was asked | ask the operator |
 | `approval:denied` | a human reviewed this host and said no | stop retrying |
 | `approval:expired` | the host's approval expired, or was cancelled, before anyone decided it | retry: the next request asks again, and a person still has to approve it |
 | `approval:stale` | the host was approved, but the control plane did not answer its re-check, two minutes or more after the last answered one | retry: the next request asks again, and a person has to approve it again |
@@ -171,6 +174,7 @@
 | `policy:port` | the host is allowed on ports 80 and 443 only (the port rule) | ask the operator for an allowlist entry that names the port, `host:port` |
 | `builtin:private-ip` | the target resolved to a private address | the SSRF guard; not policy-tunable |
 | `builtin:resolve-failed` | the target's name could not be resolved | the proxy could not look the host up (resolver outage, no such name, no address); not policy-tunable — check the sandbox's DNS, not the allowlist |
+| `builtin:tunnel-limit` | the run holds 1,024 open tunnels; a `503`, not `denied` | retry once one closes |
 | `policy:evaluator-error` | the policy could not be evaluated | fail-closed; an operator problem, not yours |
 
 - Those are the same static strings the decision log records, so nothing is

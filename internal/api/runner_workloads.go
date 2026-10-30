@@ -51,6 +51,9 @@ const (
 const workloadBindingInactiveMsg = "The namespace binding no longer carries authority: its service identity is suspended or retired, " +
 	"its sponsor changed since the binding was made, or the sponsor's access was revoked. Bind the namespace again."
 
+const workloadBindingGoneMsg = "No namespace binding binds this workload's namespace, on its pool, to its service identity any more. " +
+	"Bind the namespace again."
+
 // WorkloadFromRunner is the `workload` event. It runs on the runner's read loop, so it only decodes, finds
 // the binding and records; a launch, a run's end and every status push go on in the background, because
 // each of them may call this same runner. A report outside the wire's shape is refused for good; a
@@ -199,7 +202,7 @@ func (s *Server) applyWorkloadReport(ctx context.Context, ws store.WorkloadStore
 		})))
 	}
 	if wl.CurrentGeneration < wl.Generation {
-		s.goBackground(func() { s.launchBoundWorkload(ws, b, si, wl) })
+		s.goBackground(func() { s.launchBoundWorkload(ws, b, true, si, wl) })
 	}
 	return nil
 }
@@ -208,34 +211,68 @@ func (s *Server) applyWorkloadReport(ctx context.Context, ws store.WorkloadStore
 // binding still carries authority: the identity usable, its sponsor the one the binding was made under,
 // and the sponsor's access not revoked since (a sign-out that keeps tokens does not count). These are the
 // rules that end its tokens. A binding that no longer carries it is recorded as the launch's refusal, and the current run keeps running. Either way the
-// resource's status is pushed at once.
-func (s *Server) launchBoundWorkload(ws store.WorkloadStore, b store.WorkloadBinding, si types.ServiceIdentity, wl store.Workload) {
-	sr, cancel, err := serviceLaunchRequest(si, b.Sponsor)
+// resource's status is pushed at once. found is false when the binding was deleted since (launchUnderBinding).
+func (s *Server) launchBoundWorkload(ws store.WorkloadStore, b store.WorkloadBinding, found bool, si types.ServiceIdentity, wl store.Workload) {
+	sponsor := si.Sponsor
+	if found {
+		sponsor = b.Sponsor
+	}
+	sr, cancel, err := serviceLaunchRequest(si, sponsor)
 	if err != nil {
 		slog.Error("wardynd: launch a custom resource's workload", slog.String("workload", workloadTarget(wl)), slog.Any("err", err))
 		return
 	}
 	defer cancel()
 	ctx := sr.Context()
-	live, err := s.bindingLive(ctx, b, si)
-	switch {
-	case err != nil:
-		// Unknown standing launches nothing; the runner's next report of the resource tries again.
-	case !live:
-		var claimed store.Workload
-		var ok bool
-		if claimed, ok, err = ws.ClaimWorkloadLaunch(ctx, wl.ID); err == nil && ok {
-			_, err = s.refuseWorkloadLaunch(sr, ws, claimed, reasonWorkloadBindingInactive, workloadBindingInactiveMsg)
-		}
-	default:
-		_, err = s.launchWorkload(sr, ws, wl)
-	}
-	if err != nil {
+	// Unknown standing launches nothing; the runner's next report of the resource tries again.
+	if _, err := s.launchUnderBinding(sr, ws, b, found, si, wl); err != nil {
 		slog.ErrorContext(ctx, "wardynd: launch a custom resource's workload", slog.String("workload", workloadTarget(wl)), slog.Any("err", err))
 	}
 	if v, err := ws.GetWorkload(ctx, wl.Owner, wl.Name); err == nil {
 		s.pushWorkloadView(ctx, ws, v)
 	}
+}
+
+// launchUnderBinding launches wl's owed generation on sr, a request acting as the bound service si, while b,
+// its namespace binding (found: it still exists), carries authority. A binding deleted since, or one that
+// carries none, records the launch refused workload_binding_inactive, and the current run keeps running.
+// A standing that cannot be read launches nothing and is the error.
+func (s *Server) launchUnderBinding(sr *http.Request, ws store.WorkloadStore, b store.WorkloadBinding, found bool, si types.ServiceIdentity,
+	wl store.Workload,
+) (client.WorkloadLaunch, error) {
+	live := false
+	if found {
+		var err error
+		if live, err = s.bindingLive(sr.Context(), b, si); err != nil {
+			return client.WorkloadLaunch{}, err
+		}
+	}
+	if live {
+		return s.launchWorkload(sr, ws, wl)
+	}
+	msg := workloadBindingInactiveMsg
+	if !found {
+		msg = workloadBindingGoneMsg
+	}
+	claimed, ok, err := ws.ClaimWorkloadLaunch(sr.Context(), wl.ID)
+	if err != nil || !ok {
+		return client.WorkloadLaunch{State: client.WorkloadNoLaunch}, err
+	}
+	return s.refuseWorkloadLaunch(sr, ws, claimed, reasonWorkloadBindingInactive, msg)
+}
+
+// workloadBindingOf finds, in bindings, the one wl, a custom resource's workload, launches under now: the
+// binding of its namespace, on its pool, to its owner, as the runner's next report of the resource would
+// find it. None when that binding was deleted since or the pool row is gone.
+func workloadBindingOf(bindings []store.WorkloadBinding, wl store.Workload) (store.WorkloadBinding, bool) {
+	i := slices.IndexFunc(bindings, func(b store.WorkloadBinding) bool {
+		return wl.SourcePoolID != nil && b.PoolID == *wl.SourcePoolID && b.Namespace == wl.SourceNamespace &&
+			types.ServicePrincipalPrefix+b.Service == wl.Owner
+	})
+	if i < 0 {
+		return store.WorkloadBinding{}, false
+	}
+	return bindings[i], true
 }
 
 // syncWorkloadReport deletes the workloads the namespace's resources recorded on the binding's pool that
@@ -247,15 +284,15 @@ func (s *Server) syncWorkloadReport(ctx context.Context, ws store.WorkloadStore,
 		skipDeleteOfInactiveBinding(ctx, runnerID, b, rep.Namespace, err)
 		return err
 	}
-	views, err := ws.ListK8sWorkloadStatuses(ctx)
+	bound, err := ws.ListBoundK8sWorkloads(ctx, b.PoolID, rep.Namespace)
 	if err != nil {
 		return err
 	}
-	for _, v := range views {
-		if !boundK8sWorkload(v.Workload, b, rep.Namespace) || slices.Contains(rep.Names, v.Name) {
+	for _, wl := range bound {
+		if slices.Contains(rep.Names, wl.Name) {
 			continue
 		}
-		if err := s.dropK8sWorkload(ctx, ws, sr, runnerID, b, si, v.Workload, "", workloadViaK8sSync); err != nil {
+		if err := s.dropK8sWorkload(ctx, ws, sr, runnerID, b, si, wl, "", workloadViaK8sSync); err != nil {
 			return err
 		}
 	}
@@ -451,8 +488,49 @@ func (s *Server) pushRunnerWorkloadStatuses(ctx context.Context, runnerID uuid.U
 	}
 }
 
+// workloadLaunchRetries bounds the lapsed launches one pass of sweepWorkloadLaunches retries.
+const workloadLaunchRetries = 50
+
+// sweepWorkloadLaunches retries, in the background, the launch of each custom resource's workload whose
+// launch claim lapsed, rather than leave it to the runner's next full report of the resource. The retry is
+// that report's own launch (launchBoundWorkload): as the bound service, under the namespace binding that
+// holds now, so a binding deleted since, or one without authority, records the launch refused. A workload
+// whose service identity is gone is left. Each retry takes a fresh claim, so one workload is retried at
+// most once a store.WorkloadLaunchClaim, and a refused launch waits for its resource's next report.
+func (s *Server) sweepWorkloadLaunches(ctx context.Context) error {
+	ws, ok := s.cfg.Store.(store.WorkloadStore)
+	if !ok {
+		return nil
+	}
+	lapsed, err := ws.ListLapsedK8sWorkloadLaunches(ctx, workloadLaunchRetries)
+	if err != nil || len(lapsed) == 0 {
+		return err
+	}
+	bindings, err := ws.ListWorkloadBindings(ctx, store.Page{})
+	if err != nil {
+		return err
+	}
+	for _, wl := range lapsed {
+		name, ok := strings.CutPrefix(wl.Owner, types.ServicePrincipalPrefix)
+		if !ok {
+			continue
+		}
+		si, err := s.serviceRecord(ctx, name)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		b, found := workloadBindingOf(bindings, wl)
+		s.goBackground(func() { s.launchBoundWorkload(ws, b, found, si, wl) })
+	}
+	return nil
+}
+
 // startWorkloadStatusSweeper starts the status sweep, and with it the sweep of workload runs still owed
-// their end (sweepWorkloadRunEnds), for the life of the daemon, on a store that keeps workloads.
+// their end (sweepWorkloadRunEnds) and of lapsed launches (sweepWorkloadLaunches), for the life of the
+// daemon, on a store that keeps workloads.
 func (s *Server) startWorkloadStatusSweeper() {
 	if _, ok := s.cfg.Store.(store.WorkloadStore); ok && s.watcherBaseCtx() != nil {
 		s.goBackground(func() { s.workloadStatusSweeper(s.watcherBaseCtx(), workloadStatusEvery) })
@@ -482,6 +560,9 @@ func (s *Server) workloadStatusSweeper(ctx context.Context, every time.Duration)
 				}
 				if err := s.sweepWorkloadRunEnds(pctx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 					slog.WarnContext(ctx, "wardynd: workload run end sweep", slog.Any("err", err))
+				}
+				if err := s.sweepWorkloadLaunches(pctx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+					slog.WarnContext(ctx, "wardynd: workload launch sweep", slog.Any("err", err))
 				}
 			}()
 		}
