@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A dropped base image and an unbuilt SSH devcontainer are now recorded in the audit log.
 - A secret-store fault while proving that a person holds their own credential, for a run on their own runner, now
   refuses with the retryable 503 `store_unavailable` instead of reading the credential as the organisation's. At
   dispatch the run fails as unreadable rather than refused. The store is read once per person per request, fault or
