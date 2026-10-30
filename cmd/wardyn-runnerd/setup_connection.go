@@ -134,5 +134,5 @@ func (h setupHost) proxyCredentialFile(p setupPaths) string {
 }
 
 // proxyAuthFix is what a 407 asks of a person running setup.
-const proxyAuthFix = "the proxy's address with the credential it accepts in this shell (setup uses it for this check only and never prints it), " +
+const proxyAuthFix = "the proxy's address with the credential it accepts in this shell (setup uses it for this check and the registration only and never prints it), " +
 	"and give the service the same credential through a systemd drop-in: see docs/runner-registration.md#a-runner-behind-a-corporate-proxy"

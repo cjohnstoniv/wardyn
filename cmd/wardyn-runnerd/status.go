@@ -135,8 +135,8 @@ func (w *statusWriter) failed(stage, reason string, at time.Time, refusal bool) 
 }
 
 // startError records a start that failed with no stage (a bad flag): the error is the last one, and is kept
-// through the stop that follows like a refusal. A stage an earlier refusal left stays until a connect succeeds.
-// A nil writer records nothing.
+// through the stop that follows like a refusal. It replaces any earlier refusal, stage included: the stage's
+// fix would not mend this error. A nil writer records nothing.
 func (w *statusWriter) startError(reason string, at time.Time) {
 	if w == nil {
 		return
@@ -144,11 +144,8 @@ func (w *statusWriter) startError(reason string, at time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	at = at.UTC()
-	w.cur.LastError, w.cur.LastErrorAt = reason, &at
-	if w.refused == nil {
-		w.refused = &runnerStatus{}
-	}
-	w.refused.LastError, w.refused.LastErrorAt = reason, &at
+	w.cur.LastError, w.cur.LastErrorAt, w.cur.Stage, w.cur.StageAt = reason, &at, "", nil
+	w.refused = &runnerStatus{LastError: reason, LastErrorAt: &at}
 	w.cur.UpdatedAt = w.now()
 	w.write()
 }
