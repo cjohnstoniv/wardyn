@@ -123,6 +123,26 @@
 - It has no policy, no tool allowlist, and no view of third-party MCP traffic.
 - The L3 layer that would govern that is planned, not built.
 
+### An external AI gateway (for example agentgateway)
+
+- An AI gateway such as [agentgateway](https://agentgateway.dev) runs **beside** Wardyn, never instead of it.
+- The gateway sees only the traffic sent to it. Wardyn confines the run and sees every connection it makes, so `wardyn-proxy` stays the enforcement point.
+- **Model traffic.**
+  - Set a provider's `base_url` (Settings → Model providers) to the gateway's `https://` route for that provider. See [Internal model gateway](OPERATIONS.md#internal-model-gateway).
+  - For agentgateway and Claude Code, that is a route serving `/v1/messages`, with a passthrough for the other paths the harness calls.
+  - Wardyn still injects the person's credential, inspects the request and records the call. The gateway adds what an organisation sets once for every caller: provider routing and failover, rate limits and its own logs.
+- **MCP servers.**
+  - Wardyn has no MCP gateway (above). A gateway can put many remote MCP servers behind one host and sign in to each of them.
+  - Allow that host in the run's egress policy. Wardyn then governs whether a run reaches the gateway at all. The gateway decides which tools a caller gets.
+- **Before you set it up.**
+  - A Claude subscription provider's `base_url` sends each person's sign-in token to the gateway on every call. That makes the gateway a trust decision for the people who connect.
+  - The gateway sees `wardyn-proxy` as its caller. Wardyn forwards no run or person identity, so a per-person limit there can key only on the credential Wardyn injects, which is the person's own.
+  - Two policy points can disagree. Decide which one owns model choice and tool access, and keep the other permissive for that concern.
+- **When it is worth it.**
+  - It pays off when an organisation already sends all model and MCP traffic through one gateway.
+  - For a single team, a provider's settings in Wardyn are enough.
+- Wardyn's CI does not run against an external gateway. The model route is the same path as any internal gateway.
+
 ## 3. Blessed-default-vs-alternate matrix
 
 - `Shipped` = the out-of-box default that runs today.
