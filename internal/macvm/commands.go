@@ -10,6 +10,7 @@ import "path/filepath"
 const (
 	PrepareCommand     = "prepare"
 	UpdateToolsCommand = "update-tools"
+	EditBaseCommand    = "edit-base"
 
 	FlagRoot        = "root"         // the login's macos-vm.noindex
 	FlagCPUs        = "cpus"         // the runner's per-run CPU limit, never raised

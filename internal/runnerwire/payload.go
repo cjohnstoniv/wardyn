@@ -333,6 +333,10 @@ type MacVMBase struct {
 	// Guest is the guest's posture as it was read from the base when it was last prepared, updated or
 	// edited: not live, and never the Mac's own (RunnerPosture). State ready only.
 	Guest *MacVMGuest `json:"guest,omitempty"`
+	// EditedAt is when `macos-vm edit-base` last swapped in an edited base, which passed its recheck; absent:
+	// never edited. EditRecheck is the last edit's recheck: MacVMEditRecheck*, absent before one.
+	EditedAt    *time.Time `json:"edited_at,omitempty"`
+	EditRecheck string     `json:"edit_recheck,omitempty"`
 }
 
 // MacVMGuest is a macOS base's guest posture. Each field is absent when its read did not say; an unknown
@@ -404,6 +408,17 @@ const (
 	MacVMFailureTools    = "tools"
 	// MacVMFailureNoDesktop is a setup by hand the helper refused because it cannot reach the Mac's desktop.
 	MacVMFailureNoDesktop = "no_desktop"
+)
+
+// MacVMBase.EditRecheck values: the last edit passed, or why its copy was discarded (the base stayed as it
+// was). They are the helper's (macvm.EditRecheck*). The recheck is a tripwire, not prevention: the Mac's
+// person is root on the host.
+const (
+	MacVMEditRecheckPassed       = "passed"
+	MacVMEditRecheckDesktopOff   = "desktop_control_off"
+	MacVMEditRecheckExtraAccount = "extra_account"
+	MacVMEditRecheckRemoteLogin  = "remote_login"
+	MacVMEditRecheckSelftest     = "selftest_failed"
 )
 
 // MacVMBase.State values. Only ready serves a run; update_needed is a base whose guest agent no longer

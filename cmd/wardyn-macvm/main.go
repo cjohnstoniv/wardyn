@@ -35,6 +35,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
@@ -95,7 +96,7 @@ func mainDeps() deps {
 
 func run(ctx context.Context, args []string, d deps) int {
 	if len(args) == 0 {
-		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|update-tools|probe|ledger-setup|version [flags]")
+		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|update-tools|edit-base|probe|ledger-setup|version [flags]")
 		return 2
 	}
 	switch args[0] {
@@ -110,6 +111,8 @@ func run(ctx context.Context, args []string, d deps) int {
 		return cmdPrepare(ctx, args[1:], d)
 	case macvm.UpdateToolsCommand:
 		return cmdUpdateTools(ctx, args[1:], d)
+	case macvm.EditBaseCommand:
+		return cmdEditBase(ctx, args[1:], d)
 	case macvm.InstallCommand:
 		return cmdInstall(ctx, d)
 	case "probe":
@@ -521,6 +524,93 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 		return 1
 	}
 	return 0
+}
+
+// cmdEditBase is `wardyn-macvm edit-base`, which `wardyn-runnerd macos-vm edit-base` starts under an
+// edit_base ledger entry: macvm.EditBase, its two guest-agent boots on stage-2 boots whose network this
+// helper hands them itself (silentNet), its window on prepare's prep network. The person's lines go to
+// stdout; an error, a refusal or a discard is the last stderr line.
+func cmdEditBase(ctx context.Context, args []string, d deps) int {
+	fs := flag.NewFlagSet(macvm.EditBaseCommand, flag.ContinueOnError)
+	fs.SetOutput(d.stderr)
+	j := newJobFlags(fs)
+	if code := j.parse(fs, args, d); code != 0 {
+		return code
+	}
+	if *j.entry == "" {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: edit-base needs --%s: runnerd takes the admission entry before it starts edit-base\n", macvm.FlagLedgerEntry)
+		return 2
+	}
+	relayLog, closeLog, err := openRelayLog(*j.root)
+	if err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
+	defer closeLog()
+	eng, err := d.engine()
+	if err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
+	fb := d.firstBoot
+	if fb == nil {
+		fb = macvm.NewProvisioner()
+	}
+	boot := macvm.Stage2BootConfig{Engine: eng, SockRoot: *j.sockRoot, SockKey: macvm.JobSockKey(*j.entry), SockFstat: d.sockFstat,
+		Leaked: j.leaked(d), Log: relayLog}
+	o := macvm.EditOptions{
+		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, Admit: j.admit(macvm.EditBaseCommand, d),
+		Guest:     silentNet(boot.ToolsBoot(), macvm.JobControlSock(*j.sockRoot, *j.entry)),
+		FirstBoot: fb, PrepNet: func() (macvm.PrepNetwork, error) { return newPrepNet(relayLog) }, Leaked: j.leaked(d),
+		CPUs: *j.cpus, MemoryMiB: *j.memMiB, Out: d.stdout, Log: slog.New(slog.NewTextHandler(d.stderr, nil)),
+	}
+	if _, err := macvm.EditBase(ctx, o); err != nil {
+		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// silentNet gives boot's stage-2 boots their network itself: one end of a stream socket pair that carries
+// nothing, sent to the boot's ctl.sock as net_fd, as runnerd sends a prepare's. Nothing in an edit
+// downloads, so its guest-agent boots reach nothing, and edit-base needs no runnerd network for them.
+func silentNet(boot macvm.ToolsBoot, sock string) macvm.ToolsBoot {
+	return func(ctx context.Context, spec macvm.MachineSpec) (macvm.ToolsGuest, func(context.Context) error, error) {
+		fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+		if err != nil {
+			return nil, nil, fmt.Errorf("wardyn-macvm: socketpair: %w", err)
+		}
+		unix.CloseOnExec(fds[0])
+		unix.CloseOnExec(fds[1])
+		attach, peer := os.NewFile(uintptr(fds[0]), "edit-net"), os.NewFile(uintptr(fds[1]), "edit-net-peer")
+		sctx, cancel := context.WithCancel(ctx)
+		sent := make(chan struct{})
+		go func() { defer close(sent); defer attach.Close(); sendNet(sctx, sock, attach) }()
+		g, stop, err := boot(ctx, spec)
+		cancel()
+		<-sent
+		if err != nil {
+			_ = peer.Close()
+			return nil, nil, err
+		}
+		return g, func(c context.Context) error { defer peer.Close(); return stop(c) }, nil
+	}
+}
+
+// sendNet sends f to the stage-2 boot listening on sock, once it listens, until ctx ends.
+func sendNet(ctx context.Context, sock string, f *os.File) {
+	for {
+		if cc, err := macvm.DialControl(ctx, sock); err == nil {
+			_ = cc.SendNetFD(ctx, f)
+			_ = cc.Close()
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 // prepareDeps wires prepare's first-boot provisioner (macvm.NewProvisioner),

@@ -23,15 +23,30 @@ var macOSVMBaseFile = func() (string, error) {
 	return c.get("macos_vm_base_file"), nil
 }
 
-// baseFileArgs is the helper's install list flag for a prepare or a tools update: none without the setting.
-func (m *macOSVMs) baseFileArgs() ([]string, error) {
-	if m.baseFileErr != nil {
-		return nil, fmt.Errorf("macos_vm_base_file: %w", m.baseFileErr)
+// macOSVMItems is the install list's state: file is the setting (err: it could not be read, so neither a
+// prepare nor a tools update starts); asked is the list digest a tools update was last asked for.
+type macOSVMItems struct {
+	file  string
+	err   error
+	asked string
+}
+
+// openMacOSVMItems reads the setting once, when the runner opens its macOS VMs.
+func openMacOSVMItems() (it macOSVMItems) {
+	it.file, it.err = macOSVMBaseFile()
+	return it
+}
+
+// baseFileArgs appends the helper's install list flag for a prepare or a tools update to extra: none
+// without the setting.
+func (m *macOSVMs) baseFileArgs(extra []string) ([]string, error) {
+	if m.items.err != nil {
+		return nil, fmt.Errorf("macos_vm_base_file: %w", m.items.err)
 	}
-	if m.baseFile == "" {
-		return nil, nil
+	if m.items.file == "" {
+		return extra, nil
 	}
-	return []string{"--" + macvm.FlagBaseFile, m.baseFile}, nil
+	return append(extra, "--"+macvm.FlagBaseFile, m.items.file), nil
 }
 
 // checkItems is the install list trigger: a base built with another list than the one macos_vm_base_file
@@ -39,13 +54,13 @@ func (m *macOSVMs) baseFileArgs() ([]string, error) {
 // checkAgent's update, which installs the list too. A list that cannot be read is logged once per error,
 // and the base keeps serving.
 func (m *macOSVMs) checkItems(man macvm.Manifest) {
-	if m.baseFileErr != nil || (man.AgentVersion != "" && man.AgentVersion != m.version) {
+	if m.items.err != nil || (man.AgentVersion != "" && man.AgentVersion != m.version) {
 		return
 	}
 	var l macvm.BaseList
 	var err error
-	if m.baseFile != "" {
-		l, err = macvm.LoadBaseList(m.baseFile)
+	if m.items.file != "" {
+		l, err = macvm.LoadBaseList(m.items.file)
 	}
 	if err == nil && !macvm.ItemsChanged(m.layout.BaseDir(0), l.Digest()) {
 		return
@@ -55,8 +70,8 @@ func (m *macOSVMs) checkItems(man macvm.Manifest) {
 		key = err.Error()
 	}
 	m.mu.Lock()
-	asked := m.itemsAsked == key
-	m.itemsAsked = key
+	asked := m.items.asked == key
+	m.items.asked = key
 	m.mu.Unlock()
 	switch {
 	case asked:

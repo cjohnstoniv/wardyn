@@ -68,7 +68,7 @@ func TestMacOSVMJobsPassTheInstallList(t *testing.T) {
 	t.Cleanup(func() { prepareClaimWait, excludeFromBackups = prev, prevEx })
 	var args string
 	m.helper, args = fakeHelper(t, 0)
-	m.baseFile = "/Library/Org/items.json"
+	m.items.file = "/Library/Org/items.json"
 	man, _ := macvm.ReadManifest(m.layout.BaseDir(0))
 	_ = m.startToolsUpdate(context.Background(), man)
 	_ = m.startPrepare(context.Background(), prepareArgs{helper: m.helper, runnerID: "runner-a", cpus: 4, memoryMiB: 8192, newImage: true})
@@ -79,14 +79,14 @@ func TestMacOSVMJobsPassTheInstallList(t *testing.T) {
 			continue
 		}
 		jobs++
-		if i := slices.Index(f, "--"+macvm.FlagBaseFile); i < 0 || i+1 >= len(f) || f[i+1] != m.baseFile {
-			t.Errorf("%s has no --%s %s", f[0], macvm.FlagBaseFile, m.baseFile)
+		if i := slices.Index(f, "--"+macvm.FlagBaseFile); i < 0 || i+1 >= len(f) || f[i+1] != m.items.file {
+			t.Errorf("%s has no --%s %s", f[0], macvm.FlagBaseFile, m.items.file)
 		}
 	}
 	if jobs != 2 {
 		t.Fatalf("jobs: %q", calls(t, args))
 	}
-	m.baseFileErr = errors.New("managed preference unreadable")
+	m.items.err = errors.New("managed preference unreadable")
 	if err := m.startToolsUpdate(context.Background(), man); err == nil || !strings.Contains(err.Error(), "macos_vm_base_file") {
 		t.Fatalf("tools update: %v", err)
 	}
@@ -113,24 +113,24 @@ func TestMacOSVMInstallListChangeStartsAToolsUpdate(t *testing.T) {
 		t.Fatal("no list and no record asked for an update")
 	}
 	dir := t.TempDir()
-	m.baseFile = writeBaseList(t, dir, strings.Repeat("a", 64))
+	m.items.file = writeBaseList(t, dir, strings.Repeat("a", 64))
 	m.checkItems(man)
 	m.checkItems(man)
 	if asked != 1 {
 		t.Fatalf("a new list: %d updates", asked)
 	}
-	l, _ := macvm.LoadBaseList(m.baseFile)
+	l, _ := macvm.LoadBaseList(m.items.file)
 	writeToolsRecord(t, base, macvm.ToolsRecord{ItemsDigest: l.Digest()})
-	m.baseFile = writeBaseList(t, dir, strings.Repeat("b", 64))
+	m.items.file = writeBaseList(t, dir, strings.Repeat("b", 64))
 	m.checkItems(man)
 	if asked != 2 {
 		t.Fatalf("a changed list: %d updates", asked)
 	}
-	m.baseFile = writeBaseList(t, dir, "not-a-pin")
+	m.items.file = writeBaseList(t, dir, "not-a-pin")
 	m.checkItems(man)
 	drifted := man
 	drifted.AgentVersion = "0.0.1-old"
-	m.baseFile = writeBaseList(t, dir, strings.Repeat("c", 64))
+	m.items.file = writeBaseList(t, dir, strings.Repeat("c", 64))
 	m.checkItems(drifted)
 	if asked != 2 {
 		t.Fatalf("a bad list or a drifted agent: %d updates", asked)

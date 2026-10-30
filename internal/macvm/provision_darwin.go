@@ -34,7 +34,16 @@ func init() {
 	provisionPlatform = func() Provisioner { return provisionDarwin{} }
 }
 
-type provisionDarwin struct{}
+// provisionDarwin's screen is its boots' window text; the zero value is setup by hand's.
+type provisionDarwin struct{ screen ScreenText }
+
+var _ screenTexter = provisionDarwin{}
+
+// WithScreen is a provisioner whose boots' window shows text.
+func (p provisionDarwin) WithScreen(text ScreenText) FirstBooter {
+	p.screen = text
+	return p
+}
 
 func (provisionDarwin) Supported() error {
 	if m := C.wardynProvisionMissing(); m != nil {
@@ -84,7 +93,7 @@ func (p provisionDarwin) Boot(disk, aux string, hardwareModel, machineID []byte,
 		return FirstBoot{}, classifyProvisionStart(provisionCError("start", cErr))
 	}
 
-	vm := &provisionVM{h: h, done: make(chan error, 1), exited: make(chan struct{})}
+	vm := &provisionVM{h: h, text: p.screen, done: make(chan error, 1), exited: make(chan struct{})}
 	go vm.wait()
 	return FirstBoot{Done: vm.done, Stop: vm.stop, Screen: vm.screen}, nil
 }
@@ -93,6 +102,7 @@ func (p provisionDarwin) Boot(disk, aux string, hardwareModel, machineID []byte,
 type provisionVM struct {
 	mu     sync.Mutex
 	h      unsafe.Pointer
+	text   ScreenText
 	result error
 	done   chan error
 	exited chan struct{}
@@ -120,14 +130,15 @@ func (v *provisionVM) stop(ctx context.Context) error {
 	return v.result
 }
 
-// screen opens this VM's window (showScreen). The lock keeps the VM from being freed until its block holds it.
+// screen opens this VM's window (showScreen), with its text. The lock keeps the VM and its handle from
+// being freed until the window's block holds them.
 func (v *provisionVM) screen() (func(), error) {
 	v.mu.Lock()
 	if v.h == nil {
 		v.mu.Unlock()
 		return nil, ErrGuestStopped
 	}
-	return showScreen(C.wardynProvisionMachine(v.h), v.mu.Unlock)
+	return showScreen(C.wardynProvisionMachine(v.h), v.h, v.text, v.mu.Unlock)
 }
 
 func (v *provisionVM) call(f func(unsafe.Pointer)) {
