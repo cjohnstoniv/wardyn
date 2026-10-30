@@ -32,7 +32,7 @@ A credential therefore reaches a destination in one of four shapes:
   - inside a TLS connection it terminates with a per-run certificate authority, for the hosts its interception rule admits ([`internal/egress/proxy/mitm.go#Proxy.isMITMHost`](../internal/egress/proxy/mitm.go));
   - on a plain-HTTP forward request to a host that has an injection rule ([`internal/egress/proxy/inject.go#injector.apply`](../internal/egress/proxy/inject.go)).
 - An HTTPS connection to any other host is an opaque tunnel: the proxy sees the host name and adds nothing ([`internal/egress/proxy/inject.go#InjectionConfig`](../internal/egress/proxy/inject.go)).
-- Before it sets its own header, the proxy removes the credential headers the sandbox put on the request ([`internal/egress/proxy/inject.go#stripSandboxCredentials`](../internal/egress/proxy/inject.go)).
+- Before it sets its own header, the proxy removes the credential headers the sandbox put on the request ([`internal/egress/proxy/inject.go#stripSandboxCredentials`](../internal/egress/proxy/inject.go)). Where a rule fills a placeholder instead, the proxy replaces the placeholder in that rule's one header and leaves the request's other headers as the sandbox sent them ([`internal/egress/proxy/inject.go#fillPlaceholder`](../internal/egress/proxy/inject.go)).
 - The proxy asks the control plane for the value with the run's token, on a route that has no forward from the sandbox ([`internal/api/injection.go#Server.handleInternalInjection`](../internal/api/injection.go)).
 - The sandbox holds an inert placeholder where a tool insists on a value, and otherwise nothing; [the table](#every-kind-side-by-side) says which.
 
