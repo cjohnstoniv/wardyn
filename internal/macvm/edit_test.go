@@ -184,7 +184,7 @@ func TestEditBaseSwapsOnlyAPassingCopy(t *testing.T) {
 func TestEditBaseDiscardsOnEachFailedCheck(t *testing.T) {
 	for _, tc := range []struct {
 		name, recheck, line string
-		set              func(g *editGuest)
+		set                 func(g *editGuest)
 	}{
 		{"desktop control off", macvm.EditRecheckDesktopOff,
 			"The edited base was discarded: desktop control is off, because Screen Sharing was not turned on with control. Runs keep using the base from ",
