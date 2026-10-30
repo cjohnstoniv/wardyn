@@ -33,7 +33,7 @@ func splitMacDisks(drives []types.DriveMount) (disks, rest []types.DriveMount) {
 }
 
 // macDrives is a macOS VM run's folders and drives as the helper and the guest agent take them: its
-// folders and share drives as shared folders (macShares), its disk drives as disks (macDisks).
+// folders and share drives as shared folders (macShares), its disk drives as disks (macDiskDrives).
 func (d *Driver) macDrives(ctx context.Context, spec runner.SandboxSpec) ([]macvm.Share, []guestagent.Mount, []macvm.Disk, []guestagent.Disk, error) {
 	diskDrives, shareDrives := splitMacDisks(spec.Drives)
 	spec.Drives = shareDrives
@@ -41,14 +41,14 @@ func (d *Driver) macDrives(ctx context.Context, spec runner.SandboxSpec) ([]macv
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	disks, guest, err := d.macDisks(diskDrives)
+	disks, guest, err := d.macDiskDrives(diskDrives)
 	return shares, mounts, disks, guest, err
 }
 
-// macDisks is each disk drive of a macOS VM run as the helper attaches it and the guest agent mounts it.
+// macDiskDrives is each disk drive of a macOS VM run as the helper attaches it and the guest agent mounts it.
 // A disk another run on this Mac holds refuses the run here, before anything exists; the helper takes
 // the lock for the VM's life (macvm.LockDisk), so this check is the early answer, not the guard.
-func (d *Driver) macDisks(drives []types.DriveMount) ([]macvm.Disk, []guestagent.Disk, error) {
+func (d *Driver) macDiskDrives(drives []types.DriveMount) ([]macvm.Disk, []guestagent.Disk, error) {
 	c := d.macVMConfig()
 	var disks []macvm.Disk
 	var guest []guestagent.Disk
