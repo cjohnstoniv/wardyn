@@ -28,6 +28,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   say `unknown run` for both (#3508).
 - A UI relay connection now closes its sandbox side before it writes its `ui.close` row, and writes the row off the
   closing path. A stuck audit write held every closing relay connection open.
+- A run's second UI app now opens while the first app's idle relay connections fill the run's 8-connection cap: at the
+  cap the relay closes idle pooled connections and tries again. It used to answer a `503` at once, for up to 90
+  seconds (#3507).
 - An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
   edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
   terminal. They used to stay open until they closed or reached their time limit (#3398).
