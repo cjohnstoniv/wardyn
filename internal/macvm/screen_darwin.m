@@ -71,7 +71,9 @@ static NSString *const wardynScreenSteps =
 static NSTitlebarAccessoryViewController *wardynScreenAccessory(CGFloat width) {
 	NSTextField *label = [NSTextField wrappingLabelWithString:wardynScreenSteps];
 	label.font = [NSFont systemFontOfSize:12];
-	NSView *box = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, 66)];
+	// The strip is as tall as the steps are at this width (a narrow window wraps them).
+	NSSize fit = [label.cell cellSizeForBounds:NSMakeRect(0, 0, width - 20, CGFLOAT_MAX)];
+	NSView *box = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, ceil(fit.height) + 8)];
 	label.frame = NSInsetRect(box.bounds, 10, 4);
 	label.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
 	[box addSubview:label];

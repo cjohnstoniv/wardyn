@@ -153,8 +153,8 @@ func TestDialGuestOnlyInPrep(t *testing.T) {
 	}
 }
 
-// A preparation relay answers every DNS query REFUSED and keeps no name; a run relay's answers are unchanged,
-// byte for byte, on the same queries.
+// A preparation relay answers every DNS query REFUSED and keeps no name; a run relay still sends the same
+// queries to answer().
 func TestPrepDNSIsRefusedAndRunDNSIsUnchanged(t *testing.T) {
 	queries := []struct {
 		labels []string
@@ -178,7 +178,8 @@ func TestPrepDNSIsRefusedAndRunDNSIsUnchanged(t *testing.T) {
 		if err != nil || m.Header.RCode != dnsmessage.RCodeRefused || len(m.Answers) != 0 {
 			t.Fatalf("prep %v %v: reply %+v, %v; want REFUSED with no answer", q.labels, q.qtype, m, err)
 		}
-		// What the run relay answered before this change: answer() on a fresh table, the same question.
+		// This proves run mode still goes to answer() (a fresh table, the same question). TestAnswer and
+		// TestRelayRefusals are the pins on answer's bytes.
 		wire := []byte{0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0}
 		for _, l := range q.labels {
 			wire = append(append(wire, byte(len(l))), l...)
@@ -215,12 +216,12 @@ func TestPrepRefusesAllGuestEgress(t *testing.T) {
 	rl := newPrepRelay(t, &logs)
 	gs := stackGuest(t, rl.Serve)
 
-	// A name, a literal address, port 80, 443 and an arbitrary port: each is
+	// A literal address, port 80, 443 and an arbitrary port: each is
 	// reset at the SYN; none can complete.
 	for _, target := range []struct {
 		addr [4]byte
 		port uint16
-	}{{[4]byte{1, 1, 1, 1}, 443}, {[4]byte{93, 184, 216, 34}, 80}, {[4]byte{10, 0, 2, 2}, 3128}, {[4]byte{169, 254, 169, 254}, 80}} {
+	}{{[4]byte{1, 1, 1, 1}, 443}, {[4]byte{93, 184, 216, 34}, 80}, {[4]byte{10, 0, 2, 2}, 3128}, {[4]byte{169, 254, 169, 254}, 80}, {[4]byte{198, 18, 0, 1}, 443}} {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		c, err := gonet.DialContextTCP(ctx, gs, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4(target.addr), Port: target.port}, ipv4.ProtocolNumber)
 		cancel()

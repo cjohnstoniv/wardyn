@@ -5,7 +5,7 @@
 - A macOS VM sandbox (`machine_kind: macos_vm` on a run) is a macOS guest under Apple's Virtualization framework, started by a registered `wardyn-runnerd` on a Mac.
 - It is a preview and off by default, in two places: the organisation and the Mac.
 - Wardyn does not ship macOS. Each Mac downloads Apple's restore image and builds its own base image once.
-- This page is for the person or admin who runs the Mac. There is no console control in this release: a run asks for it through the API or the CLI request body.
+- This page is for the person or admin who runs the Mac. The console's New run page offers it (choose a virtual machine, then macOS), and the API and the CLI request body take it too.
 - The Linux counterpart is [Linux VM sandboxes](linux-vm-sandboxes.md).
 
 ## What a run gets
@@ -117,9 +117,9 @@
   - Just after, a new connection to port 22 must be refused outright. A timeout, or a network that cannot reach the guest, proves nothing: stage 1 keeps trying for 30 seconds, then fails.
   - A refusal counts only from a guest shown live on the same boot: port 5900 still sends its banner and no new DHCP request arrived. A stopped, rebooted or reset guest also refuses port 22, so that case stops stage 1 at once.
   - Any failure stops preparing and no base is published.
-- **The desktop.** Apple has said Screen Sharing turned on from the command line may let a viewer only watch. Preparing ends with a control check, and `status` reports whether the desktop is `control`, `observe` or `none`. With `observe`, macOS VMs still run agent-only, and the desktop is not offered until the base is prepared again with control turned on.
+- **The desktop.** Apple has said Screen Sharing turned on from the command line may let a viewer only watch. Preparing ends with a control check, and `status` reports whether the desktop is `control`, `observe` or `none`. With `observe`, macOS VMs still run agent-only, and the desktop is not offered until the base has control turned on (`edit-base`, below).
   - `status` says how, and the prepare log says why.
-  - To do it, run `wardyn-runnerd macos-vm remove`, then `prepare`, and turn Screen Sharing on with control in the setup window (step 5 of [Setup by hand](#setup-by-hand)).
+  - To do it, run `wardyn-runnerd macos-vm edit-base`, turn on Screen Sharing with "VNC viewers may control screen with password" in the guest, then close the window.
 - **Newer macOS.** Wardyn does not tell you that Apple has a newer image. To move to one, run `wardyn-runnerd macos-vm prepare --new-image` with the per-run flags; a plain `prepare` keeps a ready base and says there is nothing to prepare.
   - The new base is built beside the old one, which runs keep using until the new one is ready. Then the old one is replaced and deleted.
   - A re-prepare holds one of the two slots while it runs.

@@ -912,9 +912,23 @@ func TestPrepareLogReadsPastALongForeignLine(t *testing.T) {
 // A view-only desktop names how to get control, and stays "view only" up front.
 func TestDesktopModeObserveNamesTheFix(t *testing.T) {
 	got := desktopMode("observe")
-	if !strings.HasPrefix(got, "view only") || !strings.Contains(got, "macos-vm remove") || !strings.Contains(got, "macos-vm prepare") {
-		t.Fatalf("desktopMode(observe) = %q; want view only, then the remove and prepare that fix it", got)
+	if !strings.HasPrefix(got, "view only") || !strings.Contains(got, "macos-vm edit-base") {
+		t.Fatalf("desktopMode(observe) = %q; want view only, then the macos-vm edit-base that fixes it", got)
 	}
+}
+
+// isVersionString is the expression version.String().
+func isVersionString(e ast.Expr) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, isID := sel.X.(*ast.Ident)
+	return isID && pkg.Name == "version" && sel.Sel.Name == "String"
 }
 
 // Every macOSVMSetup the command line and the daemon build carries the runner's version, or `status` warns
@@ -931,7 +945,7 @@ func TestEveryMacOSVMSetupCarriesTheVersion(t *testing.T) {
 		}
 		tree, err := parser.ParseFile(token.NewFileSet(), f, nil, 0)
 		if err != nil {
-			continue // another platform's file
+			continue // a file that does not parse
 		}
 		ast.Inspect(tree, func(n ast.Node) bool {
 			lit, ok := n.(*ast.CompositeLit)
@@ -946,12 +960,12 @@ func TestEveryMacOSVMSetupCarriesTheVersion(t *testing.T) {
 			for _, e := range lit.Elts {
 				if kv, ok := e.(*ast.KeyValueExpr); ok {
 					if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "version" {
-						has = true
+						has = isVersionString(kv.Value)
 					}
 				}
 			}
 			if !has {
-				t.Errorf("%s: a macOSVMSetup with no version", f)
+				t.Errorf("%s: a macOSVMSetup without version: version.String()", f)
 			}
 			return true
 		})

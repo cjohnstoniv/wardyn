@@ -143,7 +143,7 @@ func TestStdioRelayReach(t *testing.T) {
 }
 
 // A preparation relay's scope is smaller: no proxy, so the guest reaches
-// nothing at all (a DNS name resolves to nothing: TestPrepDNSIsRefusedAndRunDNSIsUnchanged), and the only path is the host's
+// nothing at all (a DNS name gets a refusal: TestPrepDNSIsRefusedAndRunDNSIsUnchanged), and the only path is the host's
 // DialGuest to the guest's own address. A dial to the proxy address from a
 // preparation relay is a failure of that scope.
 func TestPrepRelayReach(t *testing.T) {

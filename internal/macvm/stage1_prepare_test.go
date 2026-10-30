@@ -141,6 +141,12 @@ func TestPrepareStage1PublishesTheBaseOnlyAfterRemoteLoginIsOff(t *testing.T) {
 	})
 }
 
+// isScreenSharingProbe is stage 1's `launchctl print` of the Screen Sharing service, under sudo or not.
+func isScreenSharingProbe(argv []string) bool {
+	probe := []string{"/bin/launchctl", "print", "system/com.apple.screensharing"}
+	return len(argv) >= len(probe) && slices.Equal(argv[len(argv)-len(probe):], probe)
+}
+
 func TestPrepareStage1FailureAtEachStepPublishesNoBase(t *testing.T) {
 	f, srv := stage1Prep(t)
 	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
@@ -149,10 +155,8 @@ func TestPrepareStage1FailureAtEachStepPublishesNoBase(t *testing.T) {
 	execs := srv.Execs()
 	steps := len(execs)
 	for n := 1; n <= steps+1; n++ {
-		// A probe that fails is its row's answer "not loaded", not a failed step.
-		if n <= steps && slices.Contains(execs[n-1].Argv, "print") {
-			continue
-		}
+		// A probe that fails is its row's answer "not loaded", not a failed step: the base is still published.
+		probe := n <= steps && isScreenSharingProbe(execs[n-1].Argv)
 		t.Run(fmt.Sprint(n), func(t *testing.T) {
 			f, srv := stage1Prep(t)
 			if n <= steps {
@@ -163,6 +167,12 @@ func TestPrepareStage1FailureAtEachStepPublishesNoBase(t *testing.T) {
 				srv.StaysOn = true // the last check: Remote Login did not go off
 			}
 			_, err := macvm.Prepare(context.Background(), f.opts)
+			if probe {
+				if _, rerr := macvm.ReadyBase(f.opts.Layout.BaseDir(0)); err != nil || rerr != nil {
+					t.Fatalf("a failed probe stopped stage 1: prepare %v, base %v", err, rerr)
+				}
+				return
+			}
 			var se *stage1.StepError
 			if !errors.As(err, &se) {
 				t.Fatalf("err = %v; want a stage-1 step error", err)
