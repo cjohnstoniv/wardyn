@@ -74,3 +74,12 @@ func TestMacOSVMOffer_BaseAge(t *testing.T) {
 		t.Fatalf("pool: %+v", got)
 	}
 }
+
+// One day reads "1 day ago", every other count "<n> days ago".
+func TestDaysAgoText(t *testing.T) {
+	for n, want := range map[int]string{0: "0 days ago", 1: "1 day ago", 2: "2 days ago", 41: "41 days ago"} {
+		if got := daysAgoText(n); got != want {
+			t.Errorf("daysAgoText(%d) = %q, want %q", n, got, want)
+		}
+	}
+}

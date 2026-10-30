@@ -43,7 +43,7 @@
                                              organisation has sent no per-run limit
     PerRunMemoryGB    flag per-run-memory       GB of memory one run may use; read as PerRunCPU is
 
-  lock_security_settings (profile only; add it as a boolean key beside the others) true makes OrgURL, ProxyImage,
+  lock_security_settings (profile only; a boolean, false here) true makes OrgURL, ProxyImage,
   TrustedCAFile, OrgCAFile and RecordingStore in this profile win over a flag or environment variable, and refuses
   one that disagrees. Default off.
 
@@ -98,6 +98,8 @@
       <string></string>
       <key>DiskEncrypted</key>
       <string></string>
+      <key>lock_security_settings</key>
+      <false/>
       <key>MaxRuns</key>
       <string></string>
       <key>TotalCPU</key>

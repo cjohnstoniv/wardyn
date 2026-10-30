@@ -347,6 +347,13 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 	if p != types.PlacementLocal || (!demands.IdlePause && !demands.LinuxVM && !demands.MacOSVM) {
 		return nil
 	}
+	var baseLimit macOSBaseLimit // read once for the whole pool, not once per runner
+	if demands.MacOSVM {
+		var err error
+		if baseLimit, err = s.macOSBaseLimitOf(ctx); err != nil {
+			return runServerError("read macOS VM capability", err)
+		}
+	}
 	for _, id := range runners {
 		pc, err := s.placementCapabilities(ctx, types.PlacementLocal, id)
 		var ref *placement.Refusal
@@ -358,7 +365,7 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 			ref = pc.unsupportedDemand(demands)
 			if ref == nil && demands.MacOSVM {
 				var rerr error
-				if ref, rerr = s.macOSVMRefusal(ctx, id, pc, ask, place.pooled && len(runners) > 1); rerr != nil {
+				if ref, rerr = s.macOSVMRefusal(ctx, id, pc, ask, place.pooled && len(runners) > 1, baseLimit); rerr != nil {
 					return runServerError("read macOS VM capability", rerr)
 				}
 			}
@@ -472,7 +479,7 @@ func macOSBaseRefusal(name string, b runnerwire.MacVMBase, limit []macOSBaseLimi
 	if days = max(0, int(limit[0].Now.Sub(created).Hours()/24)); days <= maxDays {
 		return nil, days
 	}
-	return macOSRefusal("machine_kind", fmt.Sprintf("%s's macOS base was prepared %d days ago, and your organisation allows %d. Its owner runs `wardyn-runnerd macos-vm prepare --new-image`.", name, days, maxDays)), days
+	return macOSRefusal("machine_kind", fmt.Sprintf("%s's macOS base was prepared %s, and your organisation allows %d. Its owner runs `wardyn-runnerd macos-vm prepare --new-image`.", name, daysAgoText(days), maxDays)), days
 }
 
 // macRunnerName is the name the console shows for a runner (runnerLabel in nav-copy.ts): its own, else
@@ -594,7 +601,7 @@ func macOSHostGate(rn types.Runner, operator bool) (evidence []string, refusal *
 
 // macOSVMRefusal is the refusal (placement_capability, or runner_posture_unmet from the gate) of a macOS VM run on runner id, or nil when the
 // Mac offers it and the run's harnesses and size fit what the Mac's base can give.
-func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementCaps, ask macOSVMAsk, pool bool) (*placement.Refusal, error) {
+func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementCaps, ask macOSVMAsk, pool bool, limit macOSBaseLimit) (*placement.Refusal, error) {
 	var caps runnerwire.Caps
 	var haveCaps bool
 	if rc, ok := pc.impl.(runnerCaps); ok {
@@ -619,10 +626,6 @@ func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementC
 			return nil, err
 		}
 		live = held[id]
-	}
-	limit, err := s.macOSBaseLimitOf(ctx)
-	if err != nil {
-		return nil, err
 	}
 	offer := macOSVMOffer(rn, caps, haveCaps, live, s.isSecurityOperator(ctx), limit)
 	if !offer.Offered {
@@ -866,4 +869,12 @@ func (c sizeCause) sentence(group []sizeLow) string {
 		return gets + ": this server's limits cap it. Ask an operator to raise them."
 	}
 	return fmt.Sprintf("%s, the default size %s. Ask for at least the minimum in the run's `resources`, or set it on Review.", gets, c.name)
+}
+
+// daysAgoText is "1 day ago" for one and "<n> days ago" for every other count.
+func daysAgoText(n int) string {
+	if n == 1 {
+		return "1 day ago"
+	}
+	return fmt.Sprintf("%d days ago", n)
 }

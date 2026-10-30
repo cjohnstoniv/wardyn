@@ -270,7 +270,7 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 	}
 	if st.State == runnerwire.MacVMBaseReady {
 		if at, err := time.Parse(time.RFC3339, st.PreparedAt); err == nil {
-			fmt.Fprintf(out, ", prepared %s (%d days ago)", at.Local().Format(time.DateOnly), max(0, int(statusNow().Sub(at).Hours()/24)))
+			fmt.Fprintf(out, ", prepared %s (%s)", at.Local().Format(time.DateOnly), daysAgo(max(0, int(statusNow().Sub(at).Hours()/24))))
 		}
 		if st.HostOS != "" {
 			fmt.Fprintf(out, "; this Mac: macOS %s", st.HostOS)
@@ -337,4 +337,12 @@ func macOSVMDoctorStages() []doctor.Stage {
 		return []doctor.Stage{doctor.SkipStage("macos-vm", "macOS asked for setup by hand in the window \""+macOSVMSetupWindow+"\"; the one-time code is in "+p)}
 	}
 	return nil
+}
+
+// daysAgo is "1 day ago" for one and "<n> days ago" for every other count.
+func daysAgo(n int) string {
+	if n == 1 {
+		return "1 day ago"
+	}
+	return fmt.Sprintf("%d days ago", n)
 }
