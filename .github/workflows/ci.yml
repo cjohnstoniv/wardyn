@@ -35,6 +35,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# A failed cache download leaves @actions/cache's segment timer running, and the
+# step does not exit until it fires: 10 minutes by default, the whole budget of a
+# ten-minute job. Three minutes bounds that wait; a 128 MB segment still has room.
+env:
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: "3"
+
 # Every job sets timeout-minutes. Unset, GitHub allows 360, so one hung job holds
 # a runner for six hours. Each value is at least twice the job's measured
 # maximum, with a ten-minute floor (docs/CI.md); raise it with the measurement.
