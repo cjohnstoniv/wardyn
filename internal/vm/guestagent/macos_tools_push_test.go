@@ -81,14 +81,11 @@ func TestReplaceFileRefusesALinkedParent(t *testing.T) {
 	}
 }
 
-// A sticky world-writable parent, a group-writable one of a trusted group, and an owner the walk
-// trusts are allowed; another group's write, or another owner, is refused.
+// A sticky world-writable parent of a trusted group (the guest's /private/tmp is root:wheel 1777), a
+// group-writable one of a trusted group, and an owner the walk trusts are allowed; another group's
+// write, or another owner, is refused.
 func TestReplaceFileParentOwnershipAndModes(t *testing.T) {
 	dir := t.TempDir()
-	sticky := mkdirMode(t, filepath.Join(dir, "sticky"), 0o1777)
-	if err := replaceFile(filepath.Join(sticky, "f"), 0o644, writeNew); err != nil {
-		t.Errorf("a 1777 parent: %v", err)
-	}
 	group := mkdirMode(t, filepath.Join(dir, "group"), 0o775)
 	fi, err := os.Stat(group)
 	if err != nil {
@@ -96,6 +93,10 @@ func TestReplaceFileParentOwnershipAndModes(t *testing.T) {
 	}
 	gid := fi.Sys().(*syscall.Stat_t).Gid
 	setVar(t, &trustedGroupGIDs, []uint32{0, gid})
+	sticky := mkdirMode(t, filepath.Join(dir, "sticky"), os.ModeSticky|0o777)
+	if err := replaceFile(filepath.Join(sticky, "f"), 0o644, writeNew); err != nil {
+		t.Errorf("a 1777 parent: %v", err)
+	}
 	if err := replaceFile(filepath.Join(group, "f"), 0o644, writeNew); err != nil {
 		t.Errorf("a 0775 parent of a trusted group: %v", err)
 	}

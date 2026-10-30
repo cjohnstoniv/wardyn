@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
 )
@@ -256,7 +257,11 @@ func (t *Tools) handlePush(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	err := replaceFile(dest, os.FileMode(mode), func(f *os.File) error {
+	var refused []string // a file item's dest is none of them by another name either
+	if ItemDestAllowed(dest) == nil {
+		refused = itemDestRefused
+	}
+	err := replaceFileOutside(dest, os.FileMode(mode), refused, func(f *os.File) error {
 		h := sha256.New()
 		if _, err := io.CopyN(io.MultiWriter(f, h), r.Body, size); err != nil {
 			return fmt.Errorf("the body is shorter than %d bytes: %w", size, err)
@@ -290,6 +295,14 @@ func (t *Tools) handleExec(w http.ResponseWriter, r *http.Request) {
 	if update && in.Argv[1] == "-i" && !t.cltWasListed(in.Argv[2]) {
 		http.Error(w, fmt.Sprintf("%v: softwareupdate -i %q, a label no softwareupdate -l of this boot listed",
 			ErrToolsRefused, in.Argv[2]), http.StatusForbidden)
+		return
+	}
+	if isItemDirForm(in.Argv) {
+		if err := makeDirAll(in.Argv[4], itemDestRefused); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSONAny(w, ToolsExecResult{})
 		return
 	}
 	run := t.run
@@ -457,27 +470,49 @@ func (c *capped) Write(p []byte) (int, error) {
 }
 
 // replaceFile writes dst through a temp file in dst's directory, created O_CREAT|O_EXCL|O_NOFOLLOW
-// with mode perm under a random name, filled by fill, fsynced and then renamed over dst. The agent
-// runs as root, so the file is root's. On any failure the temp file is removed and dst is unchanged.
-func replaceFile(dst string, perm os.FileMode, fill func(*os.File) error) (err error) {
+// with mode perm under a random name, filled by fill, fsynced and then renamed over dst. Both are done
+// on dst's directory as walkDir opened it, so no link, and no directory someone other than root can
+// change, among dst's parents redirects the write; a link at dst itself is replaced, not followed. The
+// agent runs as root, so the file is root's. On any failure the temp file is removed and dst is unchanged.
+func replaceFile(dst string, perm os.FileMode, fill func(*os.File) error) error {
+	return replaceFileOutside(dst, perm, nil, fill)
+}
+
+// replaceFileOutside is replaceFile that also refuses, with ErrItemDest, a dst that is, or whose walk
+// passes through, an existing path of refused, by its inode however dst spells it.
+func replaceFileOutside(dst string, perm os.FileMode, refused []string, fill func(*os.File) error) (err error) {
 	var r [8]byte
 	if _, err := rand.Read(r[:]); err != nil {
 		return err
 	}
-	tmp := filepath.Join(filepath.Dir(dst), "."+filepath.Base(dst)+".wardyn-"+hex.EncodeToString(r[:]))
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, perm)
+	inodes := refusedInodes(refused)
+	dir, base := filepath.Dir(dst), filepath.Base(dst)
+	dirFD, err := walkDir(dst, dir, false, inodes)
 	if err != nil {
 		return err
 	}
+	defer unix.Close(dirFD)
+	var st unix.Stat_t
+	if unix.Fstatat(dirFD, base, &st, unix.AT_SYMLINK_NOFOLLOW) == nil {
+		if err := refusedInode(&st, dst, inodes); err != nil {
+			return err
+		}
+	}
+	tmp := "." + base + ".wardyn-" + hex.EncodeToString(r[:])
+	fd, err := unix.Openat(dirFD, tmp, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, uint32(perm.Perm()))
+	if err != nil {
+		return &os.PathError{Op: "open", Path: filepath.Join(dir, tmp), Err: err}
+	}
+	f := os.NewFile(uintptr(fd), filepath.Join(dir, tmp))
 	defer func() {
 		if f != nil {
 			_ = f.Close()
 		}
 		if err != nil {
-			_ = os.Remove(tmp)
+			_ = unix.Unlinkat(dirFD, tmp, 0)
 		}
 	}()
-	if err = f.Chmod(perm); err != nil { // the umask narrows OpenFile's mode
+	if err = f.Chmod(perm); err != nil { // the umask narrows Openat's mode
 		return err
 	}
 	if err = fill(f); err != nil {
@@ -491,7 +526,122 @@ func replaceFile(dst string, perm os.FileMode, fill func(*os.File) error) (err e
 	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, dst)
+	if err = unix.Renameat(dirFD, tmp, dirFD, base); err != nil {
+		return &os.LinkError{Op: "rename", Old: filepath.Join(dir, tmp), New: dst, Err: err}
+	}
+	return nil
+}
+
+// makeDirAll is `mkdir -p -m 0755 dir` done by walkDir: each missing directory is made 0755 and root's,
+// and no link or unsafe directory on the way is followed.
+func makeDirAll(dir string, refused []string) error {
+	fd, err := walkDir(dir, dir, true, refusedInodes(refused))
+	if err != nil {
+		return err
+	}
+	return unix.Close(fd)
+}
+
+// ErrUnsafeParent is a directory on a root write's path that is a link, or that someone other than root
+// can change: another user's, writable by every user without the sticky bit, or writable by a group
+// not in trustedGroupGIDs.
+var ErrUnsafeParent = errors.New("a link or a directory not only root can change")
+
+// The owner and groups walkDir trusts besides root: wheel (0) and admin (80), whose write the stock
+// /Library directories allow (root:admin 0775). The agent user is not in admin: stage 1 creates it with
+// `sysadminctl -addUser` and no -admin (internal/macvm/stage1 commands.go). Tests set both.
+var (
+	trustedOwnerUID  uint32
+	trustedGroupGIDs = []uint32{0, 80}
+)
+
+// walkDir opens dir, absolute and clean, one component at a time from "/" with O_NOFOLLOW|O_DIRECTORY,
+// and returns its fd. Each directory opened must be safe (ErrUnsafeParent) and none an inode of refused
+// (ErrItemDest). With create, a missing component is made 0755 on its parent's fd. what names the write
+// in errors.
+func walkDir(what, dir string, create bool, refused map[devIno]string) (int, error) {
+	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
+		return -1, fmt.Errorf("%q: not an absolute, clean path", what)
+	}
+	const flags = unix.O_RDONLY | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC
+	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, err
+	}
+	at := ""
+	for _, comp := range strings.Split(dir, "/") {
+		if comp == "" {
+			continue
+		}
+		comp = filepath.Base(comp)
+		at += "/" + comp
+		made := false
+		next, err := unix.Openat(fd, comp, flags, 0)
+		if errors.Is(err, unix.ENOENT) && create {
+			if err = unix.Mkdirat(fd, comp, 0o755); err == nil {
+				made = true
+				next, err = unix.Openat(fd, comp, flags, 0)
+			}
+		}
+		_ = unix.Close(fd)
+		switch {
+		case errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR): // a link: darwin says ELOOP, Linux ENOTDIR
+			return -1, fmt.Errorf("%q: %q is a link or not a directory: %w", what, at, ErrUnsafeParent)
+		case err != nil:
+			return -1, fmt.Errorf("%q: %s: %w", what, at, err)
+		}
+		fd = next
+		if made {
+			err = unix.Fchmod(fd, 0o755) // the umask narrows Mkdirat's mode
+		}
+		if err == nil {
+			err = checkDir(fd, what, at, refused)
+		}
+		if err != nil {
+			_ = unix.Close(fd)
+			return -1, err
+		}
+	}
+	return fd, nil
+}
+
+// checkDir says whether the directory fd, at on what's path, is safe for a root write to pass through.
+func checkDir(fd int, what, at string, refused map[devIno]string) error {
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return fmt.Errorf("%q: %s: %w", what, at, err)
+	}
+	switch {
+	case st.Uid != 0 && st.Uid != trustedOwnerUID:
+		return fmt.Errorf("%q: %q is uid %d's: %w", what, at, st.Uid, ErrUnsafeParent)
+	case st.Mode&unix.S_IWOTH != 0 && st.Mode&unix.S_ISVTX == 0:
+		return fmt.Errorf("%q: %q is world-writable: %w", what, at, ErrUnsafeParent)
+	case st.Mode&unix.S_IWGRP != 0 && !slices.Contains(trustedGroupGIDs, st.Gid):
+		return fmt.Errorf("%q: %q is writable by gid %d: %w", what, at, st.Gid, ErrUnsafeParent)
+	}
+	return refusedInode(&st, what, refused)
+}
+
+type devIno struct{ dev, ino uint64 }
+
+// refusedInodes stats each path of refused that exists, by its inode.
+func refusedInodes(refused []string) map[devIno]string {
+	m := map[devIno]string{}
+	for _, p := range refused {
+		var st unix.Stat_t
+		if unix.Stat(p, &st) == nil {
+			m[devIno{uint64(st.Dev), st.Ino}] = p //nolint:unconvert // Dev is int32 on darwin
+		}
+	}
+	return m
+}
+
+// refusedInode is ErrItemDest when st is one of refused's inodes.
+func refusedInode(st *unix.Stat_t, what string, refused map[devIno]string) error {
+	if p, ok := refused[devIno{uint64(st.Dev), st.Ino}]; ok { //nolint:unconvert // Dev is int32 on darwin
+		return fmt.Errorf("%q is %s: %w", what, p, ErrItemDest)
+	}
+	return nil
 }
 
 // Base items are the operator's install list (internal/macvm customise.go), which stage 2 installs as
@@ -526,8 +676,9 @@ func ItemDir(name string) string { return MacItemStageDir + "/" + name }
 // itemDestRoots are where a file item may land (not /etc, whose files are the system's own), and
 // itemDestRefused the paths under them it may not: the
 // files a run's walls are made of, which a run's Init writes (macos_paths.go), Wardyn's own files, and the
-// System keychain, which only a ca item changes. Paths compare without case, as the guest's APFS volume
-// does.
+// System keychain, which only a ca item changes. ItemDestAllowed compares the paths' spelling without
+// ASCII case, as the guest's APFS volume does, and refuses any other byte, so no spelling it does not
+// know folds onto one; the write's walk then refuses each by its inode (replaceFileOutside, makeDirAll).
 var (
 	itemDestRoots   = []string{"/Library", "/usr/local", "/opt"}
 	itemDestRefused = []string{MacClaudeCodeManagedDir, MacCodexManagedDir, MacRunDir, MacItemStageDir, MacToolsBinDir,
@@ -538,10 +689,11 @@ var (
 var ErrItemDest = errors.New("not a place a base item may write")
 
 // ItemDestAllowed says whether a file item may write dest, or make dest as its directory: an absolute,
-// clean path strictly under an itemDestRoots entry and neither in nor above any itemDestRefused path.
-// Harness managed settings are refused because a run writes them; an organisation's own go in its rules.
+// ASCII, clean path strictly under an itemDestRoots entry and neither in nor above any itemDestRefused
+// path. The check is lexical. Harness managed settings are refused because a run writes them; an
+// organisation's own go in its rules.
 func ItemDestAllowed(dest string) error {
-	if !filepath.IsAbs(dest) || filepath.Clean(dest) != dest {
+	if !filepath.IsAbs(dest) || filepath.Clean(dest) != dest || strings.IndexFunc(dest, func(r rune) bool { return r >= utf8.RuneSelf }) >= 0 {
 		return fmt.Errorf("%q: %w", dest, ErrItemDest)
 	}
 	d := strings.ToLower(dest)
@@ -582,7 +734,7 @@ func itemPushAllowed(dest string) bool {
 // itemArgvAllowed says whether argv is one of the base items' forms:
 //
 //	/bin/mkdir -p -m 0700 S|S/<name>                  the stage directories
-//	/bin/mkdir -p -m 0755 D                           a file item's directory (ItemDestAllowed)
+//	/bin/mkdir -p -m 0755 D                           a file item's directory (ItemDestAllowed), made by the agent (makeDirAll)
 //	/bin/rm -rf S/<name>                              an item's stage directory, after its install
 //	/usr/sbin/installer -pkg S/<name>/item.pkg -target /
 //	/usr/bin/ditto -x -k S/<name>/item.zip /Applications
@@ -609,6 +761,12 @@ func itemArgvAllowed(argv []string) bool {
 	app := filepath.Base(argv[len(argv)-1])
 	return len(argv) == 3 && argv[0] == "/usr/bin/ditto" && ItemAppPattern.MatchString(app) &&
 		argv[1] == filepath.Dir(argv[1])+"/"+app && isItemFile(filepath.Dir(argv[1]), ItemMount) && argv[2] == MacApplications+"/"+app
+}
+
+// isItemDirForm says whether argv, an allowed item form, is a file item's directory's mkdir, which the
+// agent does itself (makeDirAll) because mkdir follows a link among the directory's parents.
+func isItemDirForm(argv []string) bool {
+	return len(argv) == 5 && argv[0] == "/bin/mkdir" && argv[1] == "-p" && argv[3] == "0755"
 }
 
 // itemForms checks each item form's whole argv, by its command and first argument.
