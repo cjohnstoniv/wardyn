@@ -69,7 +69,7 @@
 - A macOS VM runs only on a Mac that both of these hold for:
   - its trust class is `managed_device`, which only a security operator sets (`wardyn runner trust <runner-id> managed_device --reason "<why>"`), held for a second person under four-eyes;
   - its posture says `mdm_managed`, with the MDM's root-owned posture file as the evidence (`/Library/Application Support/Wardyn/posture.json`).
-- Both are assertions. Wardyn does not yet check the Mac's MDM device certificate; that arrives in the next patch.
+- Both are assertions. The Mac's MDM device certificate is not checked in this release.
 - A Mac not marked `managed_device` is refused `placement_capability`. A Mac whose posture is missing or unmet is refused `runner_posture_unmet`.
 - Posture is self-reported and does not constrain a root developer ([Resident credentials and posture](hybrid-laptops.md#resident-credentials-and-posture)).
 
@@ -268,6 +268,27 @@
   - After a setup by hand, the one-time code is the account's password until stage 1 replaces it as its first step. Its file on the Mac is deleted once the new password has signed in.
   - Remote Login is turned off, and proved off on a live guest, before the base is published. The setup account itself stays in the base.
 - The guest's `agent` user is a standard user, not an admin. Its login password is random for each prepare and sits in the guest only in the root-only `/etc/kcpassword`, which auto-login reads.
+
+## The guest and your Mac's controls
+
+- Your Mac may be managed: encrypted, patched, watched by an endpoint agent, and behind your network controls.
+- The guest is a separate machine on that Mac, so each control either reaches it, is replaced by a Wardyn control, or is a gap you close.
+- This table says which. A row marked "Added in this release" is completed when that work lands.
+
+| Mac control | In the guest | State |
+|---|---|---|
+| Network filtering | The guest's one NIC goes to the run's own relay and proxy, with no NAT or bridged device. The proxy allows, denies and audits each request | Today |
+| Trust in your organisation's certificate authority | Node, Python, git and curl are pointed at the run proxy's certificate. Tools that use the macOS keychain do not trust it (see Limits below) | Added in this release (base customisation); this row is completed when that work lands |
+| Endpoint security agent | None is installed in the base. Stage 2 installs the Command Line Tools, the harness CLIs and the guest agent only | Added in this release (base customisation); this row is completed when that work lands |
+| Privilege management | `agent` is a standard user. Stage 1 refuses to publish a base that holds any other account than it and the setup account, and no one holds the setup account's password after preparing | Today |
+| Disk encryption | The guest's disk is a file on the Mac's volume, so the Mac's disk encryption covers it when the volume has any. The run's clone is deleted at the end, which is not secure erasure | Today |
+| OS integrity (SIP, Gatekeeper) | Stage 1 changes neither, so the guest keeps macOS's defaults | Added in this release (guest posture); this row is completed when that work lands |
+| Firewall | Nothing connects in. The guest agent dials out over a virtual socket, and the desktop is reached only through the organisation's gateway | Today |
+| Screen lock and password policy | Stage 1 turns the screen lock and screen saver off, and the guest signs in as `agent` on its own. The guest has no console ([Threat model, B14](../../threatmodel/THREAT-MODEL.md#b14--macos-vm-guest-vs-the-mac-that-runs-it)) | Today |
+| Patch policy | Automatic updates are off, so a base stays at the macOS it was built with. Re-prepare to move to a newer one | Added in this release (base age); this row is completed when that work lands |
+| Device identity for sign-in checks | The guest is an unmanaged device, so a provider that requires a compliant device may refuse sign-ins from its browser | Added in this release (guest MDM); this row is completed when that work lands |
+| Managed application configuration | Wardyn delivers no organisation browser, editor or assistant settings into the guest | Added in this release (base customisation); this row is completed when that work lands |
+| Process-level audit | Wardyn audits the guest's network, credentials and lifecycle. It records no processes inside the guest | Today, in part |
 
 ## Limits in this release
 

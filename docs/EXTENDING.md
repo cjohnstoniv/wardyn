@@ -16,6 +16,23 @@
 | Broker and identity | `internal/broker`, `internal/identity`, `internal/secretstore` | Minting a credential for a run, run identity and the secret store | Hands the sandbox an `api_key` value: it stays at the proxy |
 | Audit and recording | `internal/audit`, `internal/recording` | The append-only audit chain and session recordings | Erases a row: only a partition drop removes one |
 
+Each box below is a row of the table above.
+
+```mermaid
+flowchart TD
+  CP["Control plane<br/>API, governance, sweeps"]
+  RN["Runners<br/>placement and lifecycle"]
+  SUB["Substrates<br/>Docker, Kubernetes, tmux,<br/>Linux VM, macOS VM"]
+  PX["Proxy<br/>one beside each run"]
+  BR["Broker and identity"]
+  AU["Audit and recording"]
+  CP -->|"places a run"| RN
+  RN -->|"isolates it in"| SUB
+  SUB -->|"egress only through"| PX
+  CP --> BR
+  CP --> AU
+```
+
 ## Extension points
 
 | Extension | You implement | Register or wire | Held to | Kind |
@@ -45,6 +62,17 @@
 3. Name the hosts it reaches in [`internal/api/runs_dispatch_ceiling.go#grantHosts`](../internal/api/runs_dispatch_ceiling.go), and, for a run on a local runner, prove where its value comes from in [`internal/api/run_placement_eligibility.go#Server.localGrantOrigin`](../internal/api/run_placement_eligibility.go).
 4. Grade its risk in [`internal/composer/risk.go#gradeGrant`](../internal/composer/risk.go), and deliver it in the proxy, `internal/egress/proxy`.
 5. State where the credential is while the run works in [CREDENTIALS.md](CREDENTIALS.md). Do not claim a credential never enters the sandbox unless the mint is brokered.
+
+## Where the macOS VM lane fits
+
+A macOS VM (`machine_kind: macos_vm`) is not a registered substrate. It is a machine kind of the Docker driver on a Mac, and only a registered `wardyn-runnerd` on that Mac starts one. Its operator page is [macOS VM sandboxes](operations/macos-vms.md).
+
+| Part | Code | Does |
+|---|---|---|
+| Driver | [`internal/runner/docker/macvm.go`](../internal/runner/docker/macvm.go) | Starts and destroys one VM per run, beside the run's usual network and proxy in Docker |
+| Helper | [`cmd/wardyn-macvm`](../cmd/wardyn-macvm) | One process per VM, the only Wardyn binary that uses Virtualization.framework. It starts in its own session, so the VM outlives a `wardyn-runnerd` restart |
+| Library | [`internal/macvm`](../internal/macvm) | Preparing the Mac's base image, its layout on disk, and the ledger that counts the VMs on the Mac |
+| Guest agent | [`internal/vm/guestagent`](../internal/vm/guestagent) | Runs in the guest, dials out to the runner over a virtual socket and serves terminals |
 
 ## Where a long-running workload plugs in
 
