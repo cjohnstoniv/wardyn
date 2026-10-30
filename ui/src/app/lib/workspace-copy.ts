@@ -86,3 +86,21 @@ export const WORKSPACE_DETAIL_EXTRA = {
 export const RECORD = {
   NEEDS_OWN_CONNECTION: "Record uses your own model connection — connect it in the user view.",
 } as const;
+
+// A local_dir folder on one of its owner's own runners (Add workspace, the detail's source row, the
+// run-start refusal). STATE_CHIP is the chip text; the refusal names the same state in lower case.
+export const FOLDER_RUNNER = {
+  WHERE: "Where is this folder?",
+  ON_SERVER: "On the Wardyn server (this host)",
+  ON_RUNNER: (runner: string) => `On my runner: ${runner}`,
+  HELPER: "The runner checks the folder when the run starts. The run then runs only on that runner.",
+  PATH_LABEL_SERVER: "Path on this host",
+  PATH_LABEL: (runner: string) => `Path on ${runner}`,
+  HINT: (runner: string) => `Mounted from ${runner} into the sandbox.`,
+  HINT_ROOT: (runner: string, root: string) => `Mounted from ${runner} into the sandbox. Must be under ${root} — your admin set this boundary.`,
+  NO_RUNNER: "You have no runner of your own. Add one in Settings → My runner with Add this computer.",
+  CHIP: (runner: string) => `on ${runner}`,
+  STATE_CHIP: { revoked: "Runner revoked", missing: "Runner removed", not_owner: "Not your runner" },
+  REFUSAL: (workspace: string, runner: string, state: string) =>
+    `The folder for ${workspace} is on ${runner}, which can't run it now (${state}). Add a new workspace with a folder on a runner you own or on the Wardyn server.`,
+} as const;

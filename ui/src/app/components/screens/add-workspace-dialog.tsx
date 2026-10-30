@@ -17,6 +17,8 @@ import { toast } from "sonner";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Checkbox } from "../ui/checkbox";
+import { Label } from "../ui/label";
+import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
 import { cn } from "../ui/utils";
 import {
   Dialog,
@@ -32,12 +34,17 @@ import { getErrorMessage } from "../../lib/format";
 import { adoRepoName } from "../../lib/scm-provider";
 import { MEMBER_WORKSPACE } from "../../lib/permissions-copy";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
-import { WORKSPACE_DETAIL_EXTRA as WORKSPACE_COPY_EXTRA } from "../../lib/workspace-copy";
+import { FOLDER_RUNNER, WORKSPACE_DETAIL_EXTRA as WORKSPACE_COPY_EXTRA } from "../../lib/workspace-copy";
+import { ADD_COMPUTER } from "../wardyn/copy/add-computer";
+import { useMyCapabilities } from "../../lib/capabilities";
+import { isFolderRunner, useMyRunners } from "../../lib/use-my-runners";
 import { workspaces as workspacesApi } from "../../lib/api/workspaces";
 import { useK8sRunner } from "../../lib/use-k8s-runner";
 import type { Workspace, WorkspaceSourceInput } from "../../lib/types";
 
 const DEFAULT_TARGET = "/home/agent/work";
+// The radio value of the control plane's own host (a runner option carries its id).
+const SERVER = "server";
 
 type SourceKind = "repo" | "local_dir" | "ephemeral";
 // F5-F6: "devcontainer" and "standard" would store byte-identical state
@@ -147,6 +154,8 @@ export function AddWorkspaceDialog({
   const [pinnedRef, setPinnedRef] = React.useState("");
   const [mountPath, setMountPath] = React.useState(DEFAULT_TARGET);
   const [writable, setWritable] = React.useState(false);
+  // "" is the control plane's host; otherwise the id of one of the member's own runners.
+  const [runnerId, setRunnerId] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
 
   // Name auto-derives from the source and stops tracking the instant the
@@ -155,6 +164,26 @@ export function AddWorkspaceDialog({
   React.useEffect(() => {
     if (!nameTouched) setName(derived);
   }, [derived, nameTouched]);
+
+  const localDirShown = kind === "local_dir" && !localDirUnavailable;
+  // Only a member binds a folder to their own runner: the server refuses a runner_id from an administrator.
+  const askWhere = localDirShown && memberClamped;
+  const { runners: myRunners, failed: readFailed } = useMyRunners(askWhere);
+  const caps = useMyCapabilities(askWhere);
+  // Unknown (not read yet, or the read failed) never takes the options away: only an explicit false does.
+  const selfHostOff = caps?.may_self_host_runner === false;
+  const folderRunners = React.useMemo(() => (selfHostOff ? [] : (myRunners ?? []).filter(isFolderRunner)), [myRunners, selfHostOff]);
+  const pickedRunner = folderRunners.find((r) => r.id === runnerId);
+  // A runner that a successful read no longer lists is dropped; a failed read keeps the last list, so the pick stays.
+  React.useEffect(() => {
+    if (runnerId && myRunners !== null && !readFailed && !pickedRunner) setRunnerId("");
+  }, [runnerId, myRunners, readFailed, pickedRunner]);
+  // The no-runner line says what to do, so it waits for both answers; a failed read says nothing, not "none".
+  const noRunnerLine = selfHostOff
+    ? ADD_COMPUTER.SELF_HOST_OFF
+    : caps !== null && myRunners !== null && !readFailed && folderRunners.length === 0
+      ? FOLDER_RUNNER.NO_RUNNER
+      : undefined;
 
   const sourceRequired = kind !== "ephemeral";
   // No path field renders when local directories are unavailable, so a value typed under another kind is not theirs to send.
@@ -178,6 +207,7 @@ export function AddWorkspaceDialog({
           ? {
               type: "local_dir",
               path: sourceValue.trim(),
+              runner_id: pickedRunner?.id,
               target,
               // The writable checkbox unmounts (not resets) for a
               // member-clamped caller — same condition as its render guard
@@ -278,14 +308,45 @@ export function AddWorkspaceDialog({
               {MEMBER_WORKSPACE.LOCAL_DIR_UNAVAILABLE_BODY}
             </p>
           )}
-          {kind === "local_dir" && !localDirUnavailable && (
+          {askWhere && (
+            <div className="space-y-2">
+              <Label id="aw-where-label">{FOLDER_RUNNER.WHERE}</Label>
+              <RadioGroup value={pickedRunner?.id ?? SERVER} onValueChange={(v) => setRunnerId(v === SERVER ? "" : v)} className="gap-2" aria-labelledby="aw-where-label" aria-describedby={pickedRunner || noRunnerLine ? "aw-where-note" : undefined}>
+                <label className="flex items-center gap-2 text-sm">
+                  <RadioGroupItem value={SERVER} id="aw-where-server" />
+                  {FOLDER_RUNNER.ON_SERVER}
+                </label>
+                {folderRunners.map((r) => (
+                  <label key={r.id} className="flex items-center gap-2 text-sm">
+                    <RadioGroupItem value={r.id} id={`aw-where-${r.id}`} />
+                    {FOLDER_RUNNER.ON_RUNNER(r.name)}
+                  </label>
+                ))}
+              </RadioGroup>
+              {pickedRunner && (
+                <p id="aw-where-note" className="text-meta leading-snug text-muted-foreground">
+                  {FOLDER_RUNNER.HELPER}
+                </p>
+              )}
+              {noRunnerLine && (
+                <p id="aw-where-note" className="rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-meta leading-snug text-muted-foreground">
+                  {noRunnerLine}
+                </p>
+              )}
+            </div>
+          )}
+          {localDirShown && (
             <Field
-              label="Path on this host"
+              label={pickedRunner ? FOLDER_RUNNER.PATH_LABEL(pickedRunner.name) : FOLDER_RUNNER.PATH_LABEL_SERVER}
               htmlFor="aw-source"
               hint={
-                memberClamped && memberLocalDirRoot
-                  ? MEMBER_WORKSPACE.ROOT_HINT(memberLocalDirRoot)
-                  : "Mounted from this machine into the sandbox."
+                pickedRunner
+                  ? memberClamped && memberLocalDirRoot
+                    ? FOLDER_RUNNER.HINT_ROOT(pickedRunner.name, memberLocalDirRoot)
+                    : FOLDER_RUNNER.HINT(pickedRunner.name)
+                  : memberClamped && memberLocalDirRoot
+                    ? MEMBER_WORKSPACE.ROOT_HINT(memberLocalDirRoot)
+                    : "Mounted from this machine into the sandbox."
               }
             >
               <Input
