@@ -11,6 +11,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- `wardyn-runnerd macos-vm edit-base` boots a copy of a Mac's macOS base for one attended session, then checks it before
+  runs use it: desktop control, accounts, Remote Login and the launcher's self-test. A copy that fails is discarded and
+  runs keep the old base. The runner reports when its base was last edited, and each run records it. See
+  [Editing a base](docs/operations/macos-vms.md#editing-a-base).
+
 ### Changed
 
 - Denying any Azure DevOps host now withdraws the person's Azure DevOps credential lane: its credentials and the hosts

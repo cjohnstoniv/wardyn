@@ -169,6 +169,26 @@
 
 - Stage 1's first step replaces the code with a random password, signs in again with that, and only then deletes the file. Preparing also deletes it when it discards the base or ends.
 
+## Editing a base
+
+`wardyn-runnerd macos-vm edit-base` boots the ready base once, in a window, for an attended session. Use it to turn on Screen Sharing with control when `status` says `view only`, or to change the guest by hand. Runs keep using the current base until the edited one passes its checks.
+
+1. Run `wardyn-runnerd macos-vm edit-base` in Terminal on the Mac, signed in at its desktop. Not over SSH, and not with sudo.
+2. Wardyn copies the base and, in a boot with no window, sets a fresh one-time code as the password of `wardyn-admin`. The command names the file that holds it, `setup-code.json`, as setup by hand does.
+3. The copy boots in a window. Sign in as `wardyn-admin` with the code. The guest has no internet during the session.
+4. Make your changes. For desktop control, open System Settings > General > Sharing and turn on Screen Sharing. Under its (i) button, turn on "VNC viewers may control screen with password".
+5. Leave Remote Login off and add no accounts. When you are done, shut the guest down from its Apple menu. The window closes once the guest has shut down.
+
+- **The recheck.** The copy boots once more with no window. First the code is replaced with a random password no process keeps, and the code file is deleted.
+  - Then, in order: the control check, the accounts, Remote Login, and the launcher's self-test for a command and for each harness the base offers.
+  - Only a copy that passes is swapped in, by the same atomic exchange as a tools update. A crash at any point leaves the old base ready.
+  - A failure discards the copy and says which check failed. Runs keep using the base from its last date.
+- **Accounts.** The recheck allows `wardyn-admin`, `agent` and macOS's own accounts: below uid 500, and named with a leading `_`, or `root`, `daemon` or `nobody`. Any other account, a Guest User included, discards the copy.
+- **A tripwire, not prevention.** The recheck of accounts and Remote Login is a tripwire, not prevention, because the Mac's person is root on the host. They can change a base's disk without `edit-base`.
+- **Refusals.** `edit-base` refuses while a prepare or tools update runs, without a ready base, without the Mac's desktop, and when both VM slots are in use. The edit holds one slot for all its boots.
+- **What the organisation sees.** The runner reports when its base was last edited and the last recheck's result. Each run records when the base it started from was last edited, as `base_edited_at` on its machine.
+- Built and unit-tested; not yet run on a real Mac.
+
 ## The prep proxy
 
 - Stage 2 runs on its own Docker network, made for the job. Its only way out is a prep-only `wardyn-proxy` that allows Apple's software-update hosts on port 443 and nothing else: `swscan.apple.com`, `swcdn.apple.com`, `swdist.apple.com`, `swdownload.apple.com`, `updates.cdn-apple.com`, `mesu.apple.com` and `gdmf.apple.com`.
