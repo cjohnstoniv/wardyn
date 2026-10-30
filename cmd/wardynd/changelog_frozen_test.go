@@ -81,6 +81,9 @@ var changelogPreexistingCorrections = map[string]string{
 	// fix(compose): correct the writable-member-mount claim, add /srv/src
 	// bind — authored as 3c64194c0 off main; this is the squash that landed it.
 	"0.7.2": "44df95c4483504a2001301e0abb42b16c0fcf17d", // docs(461): drop private-path citations from the 0.7.2 triage references
+	// rc.2 said a Mac can run two macOS VM sandboxes; that count was never run on a real Mac, so the line now
+	// says it is built for two and links the guide's untested list.
+	"0.10.0-rc.2": "0d17b871bdcb7b13fd6b356bfebfd342210fa0ea", // docs: a pending leaver purge is retried by the sweeper; link the macOS VM untested list
 }
 
 // changelogKnownGaps matches the spellings the #466 move unified into one
