@@ -21,6 +21,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- When a person's Azure DevOps sign-in lacks the permissions Wardyn needs to create tokens, Settings and Getting started
+  now agree: both say the administrator needs to finish setting up Azure DevOps, and both keep Connect, so the person
+  can sign in again once the permissions are granted. Settings offered no Connect, and Getting started left out the
+  administrator step (#3520).
 - Settings → Signed-in CLIs now says a file-stored sign-in ends after 7 days at most. It used to say 7 days for every
   such session, though a shorter configured session lifetime ends it sooner; the Ends column shows the real expiry
   (#3402, #3813).
