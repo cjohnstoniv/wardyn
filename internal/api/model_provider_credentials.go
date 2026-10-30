@@ -190,7 +190,7 @@ func (s *Server) providerForCredential(w http.ResponseWriter, r *http.Request, o
 	if !granted {
 		var err error
 		if holdsKey, err = s.ownsSecretChecked(r.Context(), owner, providerSecretName(p.UID, providerKeyPart)); err != nil {
-			writeErrorReason(w, http.StatusServiceUnavailable, reasonSinkStoreUnavailable, err.Error())
+			writeErrorReason(w, http.StatusServiceUnavailable, reasonSinkStoreUnavailable, loggedMsg(r.Context(), "the secret store is unavailable; try again", err))
 			return types.ModelProvider{}, false
 		}
 	}
