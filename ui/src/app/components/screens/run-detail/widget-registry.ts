@@ -289,13 +289,21 @@ function isWidgetId(id: string): id is WidgetId {
   return id in RUN_WIDGETS;
 }
 
-/** Where a service run's Service panel sits in the live layout: the top of the right column. */
+/** The Service panel's size, and the column it takes when the layout has no right column to read. */
 const SERVICE_AT = { x: 8, y: 0, w: 4, h: 5 };
 
-/** The layout with the Service panel at the top of the right column and everything in that column moved down to make room. */
+/** Where the right column starts: the left edge of the widgets that reach the grid's right edge, else the default column. */
+function rightColumnX(layout: RunLayoutWidget[]): number {
+  const reaching = layout.filter((w) => w.x + w.w >= GRID_COLS).map((w) => w.x);
+  return reaching.length > 0 ? Math.min(...reaching) : SERVICE_AT.x;
+}
+
+/** The layout with the Service panel at the top of the right column and everything under it moved down to make room. */
 export function withService(layout: RunLayoutWidget[]): RunLayoutWidget[] {
   if (layout.some((w) => w.widget === "service")) return layout;
-  return [...layout.map((w) => (w.x >= SERVICE_AT.x ? { ...w, y: w.y + SERVICE_AT.h } : w)), { widget: "service", ...SERVICE_AT }];
+  const x = Math.min(rightColumnX(layout), GRID_COLS - SERVICE_AT.w);
+  const under = (w: RunLayoutWidget) => w.x < x + SERVICE_AT.w && w.x + w.w > x;
+  return [...layout.map((w) => (under(w) ? { ...w, y: w.y + SERVICE_AT.h } : w)), { widget: "service", ...SERVICE_AT, x }];
 }
 
 /** A layout for one run: a service run's live layout has the Service panel, one saved before the panel existed included. */

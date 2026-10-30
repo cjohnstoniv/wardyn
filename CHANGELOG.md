@@ -104,6 +104,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Kubernetes run whose pinned proxy image is older than the runner now fails with the cause named: the proxy image is
   older than this runner and refused a setting at config load, so have the organisation name this release's proxy
   image, or run setup with `--proxy-image` set to it. It showed only a generic sidecar failure.
+- A service run's Service panel now takes the head of the cockpit's right column as the saved layout has it, not always the
+  column starting at 8, and moves down only the widgets under it (#3784).
 
 ### Security
 

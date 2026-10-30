@@ -40,6 +40,19 @@ describe("the Service widget's layout", () => {
     expect(forRun(saved, "finished", true)).toBe(saved);
   });
 
+  it("finds the right column in the layout rather than assuming it starts at 8", () => {
+    const saved = [
+      { widget: "terminal", x: 0, y: 0, w: 6, h: 12 },
+      { widget: "egress", x: 6, y: 0, w: 6, h: 4 },
+      { widget: "files", x: 6, y: 4, w: 6, h: 4 },
+    ];
+    const out = forRun(saved, "live", true);
+    expect(at(out, "service")).toMatchObject({ x: 6, y: 0 });
+    expect(at(out, "terminal")!.y).toBe(0);
+    expect(at(out, "egress")!.y).toBe(at(out, "service")!.h);
+    expect(at(out, "files")!.y).toBe(4 + at(out, "service")!.h);
+  });
+
   it("is available on a RUNNING service run only", () => {
     const avail = (c: WidgetContext) => RUN_WIDGETS.service.available?.(c);
     expect(avail(ctx({ service: { restart: "never" } }))).toBe(true);
