@@ -104,6 +104,8 @@ interface Open {
   status?: unknown;
   /** GET /me/drives, read only for a draft that keeps its work folder. */
   drives?: unknown;
+  /** GET /me/drives, one answer per read; wins over `drives`. */
+  drivesFn?: () => unknown;
 }
 function open(intent: RunIntent, o: Open = {}) {
   const loaders: SeedLoaders = {
@@ -112,7 +114,7 @@ function open(intent: RunIntent, o: Open = {}) {
   };
   wfetchMock.mockImplementation(async (path: string, init?: { method?: string }) => {
     if (path === "/setup/status" && o.status) return json(o.status);
-    if (path.startsWith("/me/drives")) return json(o.drives ?? { drives: [], pool_checked: true });
+    if (path.startsWith("/me/drives")) return json(o.drivesFn ? o.drivesFn() : o.drives ?? { drives: [], pool_checked: true });
     if (path === "/templates" && init?.method === "POST") return json({ id: "t9", kind: "template" });
     if (path === "/templates") return json({ templates: [], publish: { org: false, groups: [], groups_unverified: false } });
     if (path.startsWith("/templates/")) return o.templateRead ? o.templateRead() : json({ document: { needs_setup: o.needs ?? [] } });
@@ -162,6 +164,18 @@ describe("Review: a draft that keeps its work folder at the drive limit (#1991)"
     expect(launch()).toBeDisabled();
     await userEvent.click(link);
     expect(path()).toContain("step=files");
+  });
+
+  it("Check again reads the catalogue again, so a drive deleted since clears the limit", async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    open({ ...AGENT, keep_work_folder: true }, { drives: AT_LIMIT, drivesFn: () => (reads++ === 0 ? AT_LIMIT : { ...AT_LIMIT, create: { allowed: true, count: 2, limit: 3, keep_work_folder: true } }) });
+    await ready();
+    await within(blockerList()).findByRole("button", { name: NR_FILES.KEEP_LIMIT(3, 3) });
+    checks.current = answered(null);
+    await user.click(screen.getAllByRole("button", { name: NR_REVIEW.CHECK_AGAIN })[0]);
+    await waitFor(() => expect(within(blockerList()).queryByRole("button", { name: NR_FILES.KEEP_LIMIT(3, 3) })).toBeNull());
+    expect(reads).toBe(2);
   });
 
   it("says nothing of it for a draft that does not keep the folder, and reads no drives for it", async () => {

@@ -162,6 +162,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     void checks.preflight();
     void checks.preview.retry();
     gateway.recheck();
+    keepDrives.reload();
   };
 
   const [addingSecret, setAddingSecret] = React.useState<SetupItem | null>(null);
