@@ -292,3 +292,20 @@ func TestDoctorPrintsDriveRootsAndTheirSource(t *testing.T) {
 		t.Errorf("a bad managed root: %+v", s)
 	}
 }
+
+// doctor judges drive_root against the substrate the runner serves, as serve does: on a Kubernetes or folders
+// runner a drive_root from runnerd.json fails with serve's refusal, never reads as OK.
+func TestDoctorRefusesDriveRootOffDocker(t *testing.T) {
+	r := newRig(t)
+	r.writeRunnerJSON(t, runnerFile{DriveRoot: []string{"/srv/a"}})
+	for _, sub := range []string{"k8s", "folders"} {
+		opts := doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0", substrate: sub}
+		if s := stage(t, r.run(opts), "drive-roots"); s.Status != doctor.StatusFail || !strings.Contains(s.Detail, "applies only to --substrate=docker") {
+			t.Errorf("--substrate %s: %+v, want serve's docker-only refusal", sub, s)
+		}
+	}
+	opts := doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0", substrate: "docker"}
+	if s := stage(t, r.run(opts), "drive-roots"); s.Status != doctor.StatusOK {
+		t.Errorf("--substrate docker: %+v, want OK", s)
+	}
+}
