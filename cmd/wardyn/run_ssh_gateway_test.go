@@ -654,3 +654,21 @@ func TestRunEditor_RefusesARelativeDir(t *testing.T) {
 		t.Errorf("err = %v, want the absolute-path refusal", err)
 	}
 }
+
+// ssh separates a keyword from its argument with spaces, an "=", or both.
+func TestSSHConfigLine(t *testing.T) {
+	for ln, want := range map[string][2]string{
+		"Include ~/.wardyn/ssh_config":   {"Include", "~/.wardyn/ssh_config"},
+		"  Include=~/.wardyn/ssh_config": {"Include", "~/.wardyn/ssh_config"},
+		"Include = ~/.wardyn/ssh_config": {"Include", "~/.wardyn/ssh_config"},
+		"\tHost=other":                   {"Host", "other"},
+		"Match host other":               {"Match", "host other"},
+		"Include a b":                    {"Include", "a b"},
+		"":                               {"", ""},
+		"# Host other":                   {"#", "Host other"},
+	} {
+		if kw, arg := sshConfigLine(ln); kw != want[0] || arg != want[1] {
+			t.Errorf("sshConfigLine(%q) = %q, %q; want %q, %q", ln, kw, arg, want[0], want[1])
+		}
+	}
+}
