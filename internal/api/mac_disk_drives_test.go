@@ -172,7 +172,7 @@ func TestDiskDriveOffItsMacIsRefusedAsNotInPool(t *testing.T) {
 	mac := uuid.New()
 	disk := types.UserDrive{Name: "Notes", Backend: types.DriveBackendMacDisk, OwnerSubject: aliceSub, HomeRunnerID: &mac}
 	w := httptest.NewRecorder()
-	f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil),
+	f := &runFold{w: w, req: &createRunRequest{}, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil),
 		drives: []runDrive{{resolved: types.ResolvedDrive{Drive: disk}}}, mode: foldPreview}
 	if (&Server{}).stepDriveEligibility(f, &foldRecorder{}) || w.Code != http.StatusUnprocessableEntity ||
 		!strings.Contains(w.Body.String(), string(authz.ReasonDriveNotInPool)) || !strings.Contains(w.Body.String(), driveMacDiskElsewhereMsg("Notes", macDiskNoName)) {
