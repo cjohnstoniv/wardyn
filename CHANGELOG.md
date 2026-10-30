@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- Denying any Azure DevOps host now withdraws the person's Azure DevOps credential lane: its credentials and the hosts
+  it added; hosts your policy allows itself stay reachable without the credential. This holds at dispatch and on a
+  revive. A deny on `dev.azure.com` alone used to leave the person's credential on `<org>.visualstudio.com` and the
+  `vssps`, `vsrm`, `feeds`, `pkgs` and `almsearch` hosts. `run.ceiling.reassert` and `run.revive` name the lane
+  `azure_devops` in `dropped_broker_lanes`.
+
 ### Fixed
 
 - An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
@@ -21,14 +29,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   the refusal (#3775).
 - Page loads of an inbound app from a person's browser session, the run owner's included, no longer count against
   the per-caller inbound rate limit that inbound tokens use. They still count against the run's own limit (#3792).
-
-### Security
-
-- An upgraded connection an inbound token opened, a WebSocket say, is now re-checked every 15 seconds and closed at
-  most 45 seconds after the last check that confirmed its token (30 seconds unconfirmed, plus one re-check), even
-  while a check is still waiting on a store that does not answer. A hung check used to hold the connection open for good, and a store that kept
-  failing kept it open about a minute. The refusal's audit row is now written after the close, so a slow audit write
-  no longer delays it.
 - An egress approval-pending answer now carries `X-Wardyn-Egress-Reason` on every path: a CONNECT, a plain request, an
   organisation-forwarded request and the sign-in listener. An approval that expired or was cancelled answers
   `approval:expired`, a full host table `approval:host-cap` and a raise the control plane refused `approval:refused`,
@@ -42,16 +42,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   The next one is refused with a `503`, `Retry-After` and `X-Wardyn-Egress-Reason: builtin:tunnel-limit`, and a
   `builtin:tunnel-limit` deny row; it is admitted once a tunnel closes. Before, a process could hold any number of
   tunnels open (#3698).
-### Changed
-
-- Denying any Azure DevOps host now withdraws the person's Azure DevOps credential lane: its credentials and the hosts
-  it added; hosts your policy allows itself stay reachable without the credential. This holds at dispatch and on a
-  revive. A deny on `dev.azure.com` alone used to leave the person's credential on `<org>.visualstudio.com` and the
-  `vssps`, `vsrm`, `feeds`, `pkgs` and `almsearch` hosts. `run.ceiling.reassert` and `run.revive` name the lane
-  `azure_devops` in `dropped_broker_lanes`.
-
-### Fixed
-
 - With `WARDYN_FILE_SECRET_PLACEHOLDERS` on, a file named by two `file_secret` grants now holds the placeholder of the
   grant that delivered it. A later grant's placeholder replaced it, so requests to the delivering grant's host lost
   their credential.
@@ -114,6 +104,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Kubernetes run whose pinned proxy image is older than the runner now fails with the cause named: the proxy image is
   older than this runner and refused a setting at config load, so have the organisation name this release's proxy
   image, or run setup with `--proxy-image` set to it. It showed only a generic sidecar failure.
+
+### Security
+
+- An upgraded connection an inbound token opened, a WebSocket say, is now re-checked every 15 seconds and closed at
+  most 45 seconds after the last check that confirmed its token (30 seconds unconfirmed, plus one re-check), even
+  while a check is still waiting on a store that does not answer. A hung check used to hold the connection open for good, and a store that kept
+  failing kept it open about a minute. The refusal's audit row is now written after the close, so a slow audit write
+  no longer delays it.
 
 ## [0.10.0-rc.8] — 2026-10-29
 
