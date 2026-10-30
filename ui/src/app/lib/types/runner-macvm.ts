@@ -119,7 +119,11 @@ export interface MacVMCaps {
   sign_ins?: boolean;
   /** The runner shares a run's folders into its macOS VM. */
   folders?: boolean;
+  /** The runner carries a run's admin and team drives (a host folder) into its macOS VM as shared folders. */
+  drives?: boolean;
   base: MacVMBase;
+  /** The runner keeps a person's disk drives and kept work folders as disk images on this Mac, and deletes them. */
+  disk_drives?: boolean;
   /** The Mac's other bases, each derived from `base` (Standard), in name order; absent when it has none. */
   bases?: MacVMDerivedBase[];
   /** In words, why the runner offers no macOS VM. The runner inventory leaves it out: the console words `reason` itself. */

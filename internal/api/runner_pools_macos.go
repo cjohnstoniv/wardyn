@@ -26,8 +26,9 @@ type macOSCandidate struct {
 // self-hosted one's row and macos_vm runs from fits (runnerFits, read once per list) and its last caps
 // from this replica's endpoint, so it costs no query of its own. A remote-hosted target is no
 // candidate: placement never starts a macOS VM on one (macOSVMOnRemote, kindTargets). Nor is any of the
-// person's own when their profile denies them (denied, deny_placements), so such a pool offers none.
-func (s *Server) poolMacOSVMOf(ctx context.Context, eligible []poolTarget, fits map[string]runnerFit, denied []types.Placement) *client.PoolMacOSVM {
+// person's own when their profile denies them (denied, deny_placements), so such a pool offers none. ceiling is
+// the caller's: it marks the bases their profile does not let them pick (macOSBaseAllowedFor).
+func (s *Server) poolMacOSVMOf(ctx context.Context, eligible []poolTarget, fits map[string]runnerFit, denied []types.Placement, ceiling governanceCeiling) *client.PoolMacOSVM {
 	var cands []macOSCandidate
 	for _, t := range eligible {
 		if t.runnerID == nil || slices.Contains(denied, types.PlacementLocal) {
@@ -47,7 +48,15 @@ func (s *Server) poolMacOSVMOf(ctx context.Context, eligible []poolTarget, fits 
 	if len(cands) > 0 { // a pool with no self-hosted runner needs no read
 		limit, _ = s.macOSBaseLimitOf(ctx)
 	}
-	return poolMacOSVM(cands, s.isSecurityOperator(ctx), limit)
+	out := poolMacOSVM(cands, s.isSecurityOperator(ctx), limit)
+	// Only the caller's own answer per base goes out, from the rule create holds them to; never the list.
+	if out.Offered {
+		out.StandardNotAllowed = !s.macOSBaseAllowedFor(ctx, "", ceiling)
+		for i := range out.Bases {
+			out.Bases[i].NotAllowed = !s.macOSBaseAllowedFor(ctx, out.Bases[i].Name, ceiling)
+		}
+	}
+	return out
 }
 
 // poolMacOSVM is what a pool offers a macOS VM run now, by the rule placement holds a pooled one to
@@ -92,6 +101,10 @@ func poolMacOSVM(cands []macOSCandidate, operator bool, limit ...macOSBaseLimit)
 		}
 		out.Harnesses = slices.DeleteFunc(out.Harnesses, func(h string) bool { return !slices.Contains(mc.Harnesses, h) })
 		out.MinCPUs, out.MinMemoryMiB = max(out.MinCPUs, mc.MinCPUs), max(out.MinMemoryMiB, mc.MinMemoryMiB)
+		// The oldest Standard among the Macs, the rule poolMacOSBases holds a derived base's age to.
+		if c := mc.Base.CreatedAt; c != "" && (out.CreatedAt == "" || c < out.CreatedAt) {
+			out.CreatedAt = c
+		}
 	}
 	out.Bases = poolMacOSBases(offered)
 	return out

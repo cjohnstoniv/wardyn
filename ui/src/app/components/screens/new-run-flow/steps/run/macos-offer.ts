@@ -14,7 +14,7 @@ import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { MACVM_R } from "../../../../wardyn/copy/runner-macvm";
 import { belowMinimum, type MacOSMinimum } from "../../lenses/limits-lens";
 import type { RunIntent } from "../../draft/run-intent";
-import type { PoolMacOSVM, PoolMacOSVMRefusal } from "../../../../../lib/types/runner-pools";
+import type { PoolMacOSBase, PoolMacOSVM, PoolMacOSVMRefusal } from "../../../../../lib/types/runner-pools";
 
 /** Why a pool's Macs cannot take a macOS VM. `runner` names the Mac only when the pool has exactly one. */
 export type MacOSRefusal =
@@ -49,6 +49,13 @@ export type MacOSOffer =
       harnesses: readonly string[];
       /** Set when the pool has exactly one Mac: the harness refusal names it, else it speaks for the pool. */
       runner?: string;
+      /** The Macs' other bases besides Standard, by name; none when the pool has only Standard. */
+      bases?: readonly PoolMacOSBase[];
+      /** When Standard was prepared (the oldest Mac's), for display; never compared with the clock. */
+      createdAt?: string;
+      /** The caller's governance does not let them pick Standard, and the profile's name for MAC-B05. */
+      standardNotAllowed?: boolean;
+      profile?: string;
     }
   | { ok: false; refusal: MacOSRefusal };
 
@@ -119,7 +126,7 @@ function runnerRefusal(r: PoolMacOSVMRefusal): MacOSRefusal {
  * one Mac names it (`runner`) and gets that Mac's own refusal; a pool of several gets the pool form, MV-N05 when any
  * Mac does not offer macOS VMs at all, else MV-N14.
  */
-export function macOSOfferOf(pool: PoolMacOSVM | undefined): MacOSOffer | undefined {
+export function macOSOfferOf(pool: PoolMacOSVM | undefined, profile?: string): MacOSOffer | undefined {
   if (!pool) return undefined;
   if (pool.offered) {
     return {
@@ -129,11 +136,16 @@ export function macOSOfferOf(pool: PoolMacOSVM | undefined): MacOSOffer | undefi
       minMemoryMiB: pool.min_memory_mib ?? 0,
       harnesses: pool.harnesses?.includes("none") ? pool.harnesses : ["none", ...(pool.harnesses ?? [])],
       runner: pool.runner,
+      bases: pool.bases ?? [],
+      createdAt: pool.created_at,
+      standardNotAllowed: !!pool.standard_not_allowed,
+      profile,
     };
   }
   const refusals = pool.refusals ?? [];
   if (pool.runner && refusals.length === 1) return { ok: false, refusal: runnerRefusal(refusals[0]) };
   const notOffered = refusals.length === 0 || refusals.some((r) => r.why === "not_offered");
-  if (!notOffered && refusals[0].why === "base_too_old") return { ok: false, refusal: { why: "pool_base_too_old", max: refusals[0].need ?? 0 } };
+  const tooOld = refusals.find((r) => r.why === "base_too_old");
+  if (!notOffered && tooOld) return { ok: false, refusal: { why: "pool_base_too_old", max: tooOld.need ?? 0 } };
   return { ok: false, refusal: { why: notOffered ? "pool_not_offered" : "pool_cant_now" } };
 }

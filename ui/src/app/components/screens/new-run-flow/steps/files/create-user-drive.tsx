@@ -12,6 +12,7 @@
 
 import * as React from "react";
 import { createMyDrive, deleteMyDrive, type MeDrive } from "../../../../../lib/api/me-drives";
+import { MAC_DRIVES } from "../../../../wardyn/copy/mac-drives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { detachDrive } from "../../lenses/files-lens";
@@ -21,7 +22,8 @@ import { FILES_LINK, type AddDialogProps } from "./add-dialog";
 import { CreateDriveCard } from "./create-drive-card";
 import { DeleteDriveConfirm } from "./delete-drive-confirm";
 import { legacyIdOf } from "./file-items";
-import { createReasonText, useDriveCatalogue } from "./file-sources";
+import { useMacOSOffer } from "../run/macos-offer";
+import { createReasonText, useDriveCatalogue, useOwnMac } from "./file-sources";
 
 type ArmContext = Parameters<NonNullable<AddDialogProps["createUserDrive"]>>[0];
 
@@ -30,7 +32,12 @@ const CLOSED_LINK = "font-semibold text-muted-foreground opacity-70 disabled:cur
 export function CreateUserDrive({ choose, reload }: ArmContext) {
   const dispatch = useNewRunDispatch();
   const announce = useAnnounce();
-  const { catalogue, reload: reloadOwn } = useDriveCatalogue(useNewRunDraft().intent.runner_pool_id);
+  const { intent } = useNewRunDraft();
+  const { catalogue, reload: reloadOwn } = useDriveCatalogue(intent.runner_pool_id);
+  // A drive made for a macOS run is a disk kept on that run's Mac, so it is offered once the person's Mac is known.
+  const offer = useMacOSOffer();
+  const macOS = intent.machine_kind === "macos_vm";
+  const mac = useOwnMac(macOS && offer?.ok ? offer.runner : undefined);
   const [creating, setCreating] = React.useState(false);
   const [deleting, setDeleting] = React.useState<{ drive: MeDrive; opener: HTMLElement } | null>(null);
   const link = React.useRef<HTMLButtonElement>(null);
@@ -64,7 +71,7 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
   }, []);
   const door = catalogue?.create;
   // No door: not a person. Disabled: the switch is off, which is the default.
-  const offersCreate = !!door && door.reason !== "disabled";
+  const offersCreate = !!door && door.reason !== "disabled" && (!macOS || !!mac);
   const own = (catalogue?.drives ?? []).filter((d) => d.owned);
   if (!offersCreate && own.length === 0) return null;
   const reasonText = door && !door.allowed && door.reason ? createReasonText(door) : undefined;
@@ -85,7 +92,8 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
       ))}
       {creating && (
         <CreateDriveCard
-          create={createMyDrive}
+          create={(name) => createMyDrive(name, mac?.id)}
+          intro={mac ? MAC_DRIVES.D02(mac.name) : undefined}
           onClose={closeCard}
           onCreated={(drive) => {
             refresh();

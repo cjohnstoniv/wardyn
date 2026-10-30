@@ -52,6 +52,7 @@ import {
   teamWritable,
 } from "../../../lib/api/drives";
 import { DRIVES, PEOPLE } from "../../../lib/user-drives-copy";
+import { MAC_DRIVES } from "../../wardyn/copy/mac-drives";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import {
   AlertDialog,
@@ -84,6 +85,8 @@ const BACKEND_LABEL: Record<DriveBackend, string> = {
   host_path: DRIVES.BACKEND_HOST_PATH,
   k8s_pvc: DRIVES.BACKEND_K8S_PVC,
   k8s_pvc_static: DRIVES.BACKEND_K8S_PVC_STATIC,
+  // Never offered here (a person makes one on their own Mac); it names the backend if one is ever shown.
+  mac_disk: MAC_DRIVES.D16,
 };
 
 const HOME_OPTIONS: { value: HomeTemplate; label: string; hint: string }[] = [

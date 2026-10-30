@@ -231,7 +231,9 @@ type PoolCapacity struct {
 // Offered, GuestOS is the guest build they all hold (absent when they differ), MinCPUs and MinMemoryMiB
 // the largest minimum any of them asks, and Harnesses the harness ids all of them serve. Refusals names
 // each eligible runner that cannot take one now; a pool with no eligible runner of its own carries none.
-// Runner names the runner when the pool has exactly one eligible.
+// Runner names the runner when the pool has exactly one eligible. CreatedAt is Standard's oldest prepare among
+// the Macs (RFC 3339), for the console to show; it is never compared with the clock. StandardNotAllowed is
+// the caller's own answer: their governance does not let them pick Standard (MAC-B05); never the list itself.
 type PoolMacOSVM struct {
 	Offered      bool                 `json:"offered"`
 	GuestOS      string               `json:"guest_os,omitempty"`
@@ -241,21 +243,25 @@ type PoolMacOSVM struct {
 	Runner       string               `json:"runner,omitempty"`
 	Refusals     []PoolMacOSVMRefusal `json:"refusals,omitempty"`
 	// Bases is the Macs' other macOS bases (besides Standard), by name; Offered only.
-	Bases []PoolMacOSBase `json:"bases,omitempty"`
+	Bases              []PoolMacOSBase `json:"bases,omitempty"`
+	CreatedAt          string          `json:"created_at,omitempty"`
+	StandardNotAllowed bool            `json:"standard_not_allowed,omitempty"`
 }
 
 // PoolMacOSBase is one of the other macOS bases a pool's Macs hold, as a run picking it finds them. State is
 // MacOSBase*: ready on every eligible Mac; rebuilding from Standard on at least one, Progress the least done;
 // missing on at least one, or its rebuild there failed. Ready, GuestOS is the build every copy holds (absent
 // when they differ), Harnesses those every copy serves and CreatedAt the oldest copy's (RFC 3339): a derived
-// base keeps the prepare time of the Standard it was derived from.
+// base keeps the prepare time of the Standard it was derived from. NotAllowed is the caller's own answer:
+// their governance does not let them pick it (MAC-B05), whatever its State.
 type PoolMacOSBase struct {
-	Name      string   `json:"name"`
-	State     string   `json:"state"`
-	Progress  int      `json:"progress,omitempty"`
-	GuestOS   string   `json:"guest_os,omitempty"`
-	Harnesses []string `json:"harnesses,omitempty"`
-	CreatedAt string   `json:"created_at,omitempty"`
+	Name       string   `json:"name"`
+	State      string   `json:"state"`
+	Progress   int      `json:"progress,omitempty"`
+	GuestOS    string   `json:"guest_os,omitempty"`
+	Harnesses  []string `json:"harnesses,omitempty"`
+	CreatedAt  string   `json:"created_at,omitempty"`
+	NotAllowed bool     `json:"not_allowed,omitempty"`
 }
 
 // PoolMacOSBase.State values.

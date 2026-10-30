@@ -5,13 +5,16 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -205,6 +208,71 @@ func TestRevivePlacementDenied_MacOSBase(t *testing.T) {
 	} {
 		if rerr := s.revivePlacementDenied(context.Background(), tc.run, tc.c, types.ActorHuman, "owner"); rerr != nil {
 			t.Errorf("%s: revive refused: %+v", name, rerr)
+		}
+	}
+}
+
+// The pool list marks a base NotAllowed (MAC-B05) by the very rule create holds the caller to
+// (macOSBaseAllowedFor), so the picker never offers a base create then refuses: for a listed base, a denied
+// one, a profile narrowed by a restriction, Standard left off the list, no profile and an ungoverned
+// operator, each listed base agrees with macOSBaseDeniedRefusal, and the list itself never goes out.
+func TestMacOSBaseListingAgreesWithPlacement(t *testing.T) {
+	s := capsServer(&fakeRunner{})
+	ready := func(name string) runnerwire.MacVMDerivedBase {
+		return runnerwire.MacVMDerivedBase{Name: name, State: runnerwire.MacVMDerivedReady, Items: 1, Harnesses: []string{"none"}}
+	}
+	mac := macRunner(t, s, macWithBases(ready("xcode-16"), ready("security-tools")), nil)
+	fits := map[string]runnerFit{mac.String(): {runner: s.cfg.Store.(ownedRunners).rows[mac]}}
+	pool := []poolTarget{{id: mac.String(), runnerID: &mac}}
+	member := govMemberCtx([]string{"eng"}, false)
+	operator := operatorCtx("sam", "sam@corp.example", oidc.RoleAdmin)
+
+	profile := func(bases ...string) governanceCeiling {
+		return governanceCeiling{Unit: &ResolvedUnit{ID: uuid.New(), Name: "Platform"}, Limits: types.GovernanceLimits{AllowedMacOSBases: bases}}
+	}
+	all := []string{types.MacOSStandardBase, "xcode-16", "security-tools"}
+	narrowed, err := s.withRestrictions(member, profile(all...), []types.Restriction{{ID: uuid.New(), Name: "r",
+		Limits: types.RestrictionLimits{AllowedMacOSBases: &[]string{types.MacOSStandardBase, "xcode-16"}}}})
+	if err != nil {
+		t.Fatalf("withRestrictions: %v", err)
+	}
+	cases := []struct {
+		name      string
+		ctx       context.Context
+		ceiling   governanceCeiling
+		wantStd   bool            // Standard NotAllowed
+		wantBases map[string]bool // base -> NotAllowed
+	}{
+		{"an allowed base", member, profile(all...), false, map[string]bool{"xcode-16": false, "security-tools": false}},
+		{"a denied base", member, profile(types.MacOSStandardBase), false, map[string]bool{"xcode-16": true, "security-tools": true}},
+		// The narrowed ceiling keeps profile()'s Unit; with no Unit the helper would allow every base.
+		{"narrowed by a restriction", member, narrowed, false, map[string]bool{"xcode-16": false, "security-tools": true}},
+		{"Standard left off the list", member, profile("xcode-16"), true, map[string]bool{"xcode-16": false, "security-tools": true}},
+		{"an empty list", member, profile(), false, map[string]bool{"xcode-16": false, "security-tools": false}},
+		{"no profile", member, governanceCeiling{}, false, map[string]bool{"xcode-16": false, "security-tools": false}},
+		{"an ungoverned operator", operator, profile(types.MacOSStandardBase), false, map[string]bool{"xcode-16": false, "security-tools": false}},
+	}
+	for _, tc := range cases {
+		listing := s.poolMacOSVMOf(tc.ctx, pool, fits, nil, tc.ceiling)
+		if !listing.Offered || len(listing.Bases) != len(tc.wantBases) {
+			t.Fatalf("%s: listing %+v, want an offered pool with %d other bases", tc.name, listing, len(tc.wantBases))
+		}
+		if got := s.macOSBaseDeniedRefusal(tc.ctx, "", tc.ceiling) != nil; listing.StandardNotAllowed != got || got != tc.wantStd {
+			t.Errorf("%s: Standard NotAllowed %v, create refuses %v, want %v", tc.name, listing.StandardNotAllowed, got, tc.wantStd)
+		}
+		for _, b := range listing.Bases {
+			refused := s.macOSBaseDeniedRefusal(tc.ctx, b.Name, tc.ceiling)
+			if b.NotAllowed != (refused != nil) || b.NotAllowed != tc.wantBases[b.Name] {
+				t.Errorf("%s: %s NotAllowed %v, create refuses %v, want %v", tc.name, b.Name, b.NotAllowed, refused != nil, tc.wantBases[b.Name])
+			}
+			if refused != nil && !strings.Contains(refused.body.Error, "Platform doesn't allow the macOS base "+b.Name) {
+				t.Errorf("%s: %s refusal %q is not MAC-B09 for the profile", tc.name, b.Name, refused.body.Error)
+			}
+		}
+		// Only the caller's own answer per base goes out, never the list or another person's.
+		raw, err := json.Marshal(listing)
+		if err != nil || strings.Contains(string(raw), "allowed_macos_bases") {
+			t.Errorf("%s: the listing carries the allow list: %s (marshal err %v)", tc.name, raw, err)
 		}
 	}
 }

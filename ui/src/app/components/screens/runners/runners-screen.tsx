@@ -38,6 +38,7 @@ import { RunnerDrawer } from "./runner-drawer";
 import { sortRunners } from "./runner-display";
 import { RunnersSwitchDialog } from "./runners-switch";
 import { UnusedTokens } from "./unused-tokens";
+import { useMaxBaseAgeDays } from "./use-max-base-age";
 import { useRunnersData } from "./use-runners-data";
 import { WorkloadBindingsTab } from "./workload-bindings-tab";
 
@@ -102,6 +103,8 @@ type Tab = "runners" | "pools" | "bindings";
 export function RunnersScreen() {
   const superAdmin = useOperator();
   const { status, enabled, rows, remote, tokens, reload } = useRunnersData();
+  // One read of the organisation's maximum base age, for every Mac card and the drawer; asked only when a runner sends macOS VM caps.
+  const maxBaseAgeDays = useMaxBaseAgeDays(rows.some((r) => !!r.macos_vm));
   const [params, setParams] = useSearchParams();
   const tab: Tab = params.get("tab") === "pools" ? "pools" : params.get("tab") === "bindings" ? "bindings" : "runners";
   const openPoolId = params.get("pool");
@@ -185,7 +188,7 @@ export function RunnersScreen() {
       ) : (
         <ul aria-label={RUNNER_V6.LIST_LABEL} className="grid gap-3.5">
           {visible.map((f) => (
-            <RunnerCard key={`${f.kind}:${f.id}`} f={f} onOpen={(x: FleetRunner) => setSelected({ kind: x.kind, id: x.id })} onOpenPool={openPool} />
+            <RunnerCard key={`${f.kind}:${f.id}`} f={f} onOpen={(x: FleetRunner) => setSelected({ kind: x.kind, id: x.id })} onOpenPool={openPool} maxBaseAgeDays={maxBaseAgeDays} />
           ))}
         </ul>
       )}
@@ -255,7 +258,7 @@ export function RunnersScreen() {
       )}
       {body}
       {ready && tab === "runners" && <UnusedTokens tokens={tokens} onChanged={reload} />}
-      <RunnerDrawer runner={selectedRunner} onClose={() => setSelected(null)} onChanged={reload} onOpenPool={openPool} />
+      <RunnerDrawer runner={selectedRunner} onClose={() => setSelected(null)} onChanged={reload} onOpenPool={openPool} maxBaseAgeDays={maxBaseAgeDays} />
       <RemoteRunnerDrawer
         runner={selectedRemote}
         onClose={() => setSelected(null)}

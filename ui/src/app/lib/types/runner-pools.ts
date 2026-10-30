@@ -319,6 +319,10 @@ export interface PoolMacOSVM {
   refusals?: PoolMacOSVMRefusal[];
   /** The Macs' other macOS bases (besides Standard); offered only. */
   bases?: PoolMacOSBase[];
+  /** Standard's oldest prepare among the Macs, RFC 3339; display only, never compared with the clock. */
+  created_at?: string;
+  /** The caller's own answer: their governance does not let them pick Standard (MAC-B05). Never the list. */
+  standard_not_allowed?: boolean;
 }
 
 /** Go: client.MacOSBase*. */
@@ -335,6 +339,8 @@ export interface PoolMacOSBase {
   guest_os?: string;
   harnesses?: string[];
   created_at?: string;
+  /** The caller's own answer: their governance does not let them pick this base, whatever its state (MAC-B05). */
+  not_allowed?: boolean;
 }
 
 /** Go: client.MacOSVMWhy*. */

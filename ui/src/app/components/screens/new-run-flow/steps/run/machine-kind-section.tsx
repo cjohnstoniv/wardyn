@@ -8,6 +8,8 @@ import { Segmented } from "../../../../wardyn/segmented";
 import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import { isVMKind, macOSVMsEnabled, type MachineKind } from "../../../../../lib/types/machine-kind";
+import { MacOSBasePicker } from "./macos-base-picker";
+import { hasBaseChoice } from "./macos-bases";
 import { refusalText, useMacOSOffer, type MacOSOffer } from "./macos-offer";
 
 const note = "text-xs leading-snug text-muted-foreground";
@@ -19,9 +21,16 @@ const withCode = (text: string) => text.split("`").map((part, i) => (i % 2 ? <co
  * The first row of "Where should it run?" (mock M5-Revised): the machine kind, then for a VM its operating
  * system and the fixed barrier line, in place of the container barriers below the pool. Linux is always there;
  * macOS joins it while the organisation's switch is on (mock M-N1), disabled with its reason when the pool's
- * Macs cannot take one.
+ * Macs cannot take one. A macOS pool with several bases adds the base picker (board J6).
  */
-export function MachineKindSection({ kind, agents = [], onChoose }: { kind: MachineKind; agents?: readonly string[]; onChoose: (kind: MachineKind) => void }) {
+export function MachineKindSection({ kind, agents = [], macosBase, onChoose, onChooseBase }: {
+  kind: MachineKind;
+  agents?: readonly string[];
+  /** The draft's macOS base; absent is Standard. */
+  macosBase?: string;
+  onChoose: (kind: MachineKind) => void;
+  onChooseBase: (base: string | undefined) => void;
+}) {
   const labelId = React.useId();
   const { status } = useShellSetupStatus();
   const offer = useMacOSOffer();
@@ -60,6 +69,7 @@ export function MachineKindSection({ kind, agents = [], onChoose }: { kind: Mach
             {refused && <p className={note}>{withCode(refused)}</p>}
             <MacOSLines on={macOSOn} chosen={macOS} offer={offer} />
           </div>
+          {macOS && offer?.ok && hasBaseChoice(offer, macosBase) && <MacOSBasePicker offer={offer} value={macosBase} onChoose={onChooseBase} />}
           <dl data-testid="nr-vm-barrier" className="grid grid-cols-[96px_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
             <dt className="text-muted-foreground">{NR_MACHINE.BARRIER_LABEL}</dt>
             <dd className="font-medium">{NR_MACHINE.BARRIER_VM}</dd>

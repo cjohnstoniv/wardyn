@@ -5,6 +5,7 @@
 
 import type { Page } from "@playwright/test";
 import { test, expect, sql, gotoConsole, navToRoute } from "./fixtures";
+import { MAC_BASES } from "../src/app/components/wardyn/copy/mac-bases";
 import { NR_MACHINE } from "../src/app/components/wardyn/copy/new-run/machine";
 import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
@@ -91,6 +92,22 @@ test.describe("New Run: what the chosen pool's Macs offer", () => {
     await os.getByRole("button", { name: NR_MACHINE.OS_MACOS }).click();
     await expect(os.getByText(NR_MACHINE.MACOS_ABOUT("macOS 27.0.1 (26A434)"))).toBeVisible();
     await expect(os.getByText(NR_MACHINE.MACOS_SIZE("4", "8192"))).toBeVisible();
+  });
+
+  // Board J6: a pool with several bases adds the picker; a base still being rebuilt stays in the menu, greyed, with why.
+  test("a pool with several bases adds the macOS base picker, and a base being rebuilt cannot be picked", async ({ page }) => {
+    await macosSwitch(page, true);
+    await poolOffers(page, {
+      offered: true, guest_os: "macOS 27.0.1 (26A434)", min_cpus: 4, min_memory_mib: 8192, harnesses: ["none"], runner: "mac-studio-07",
+      bases: [{ name: "xcode-16", state: "ready", harnesses: ["none"] }, { name: "qa-profiles", state: "rebuilding", progress: 60 }],
+    });
+    const os = await openVMStep(page);
+    await os.getByRole("button", { name: NR_MACHINE.OS_MACOS }).click();
+    await page.getByRole("button", { name: MAC_BASES.B01 }).click();
+    await expect(page.getByRole("radio", { name: "qa-profiles" })).toBeDisabled();
+    await expect(page.getByText(MAC_BASES.B07(60))).toBeVisible();
+    await page.getByRole("radio", { name: "xcode-16" }).click();
+    await expect(page.getByRole("button", { name: MAC_BASES.B01 })).toHaveText(/xcode-16/);
   });
 
   test("a pool of one Mac that is still preparing disables macOS and names that Mac", async ({ page }) => {
