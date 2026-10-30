@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 // macOSVMLimitsName is the file in the runner's state directory that keeps the organisation's per-run
@@ -71,7 +72,8 @@ func writeLimits(path string, l savedLimits) error {
 }
 
 // prepareLimits is the per-run CPUs and memory (MiB) `macos-vm prepare` sizes its VM at: a flag that is
-// set wins, and an unset one comes from the limits the organisation last sent.
+// set wins, and an unset one comes from the limits the organisation last sent, else from the managed
+// preferences PerRunCPU and PerRunMemoryGB.
 func prepareLimits(file string, cpu float64, memGB int64) (cpus int, memMiB uint64, err error) {
 	cpus, mem := int(cpu), memGB<<10
 	known := false
@@ -85,6 +87,16 @@ func prepareLimits(file string, cpu float64, memGB int64) (cpus int, memMiB uint
 			if memGB < 1 {
 				mem = l.MemoryMiB // in MiB, as a run is sized
 			}
+		}
+	}
+	if cpus < 1 {
+		if v, perr := strconv.ParseFloat(managedPref("PerRunCPU"), 64); perr == nil && v >= 1 {
+			cpus = int(v)
+		}
+	}
+	if mem < 1<<10 {
+		if v, perr := strconv.ParseFloat(managedPref("PerRunMemoryGB"), 64); perr == nil && v >= 1 {
+			mem = int64(v) << 10
 		}
 	}
 	if cpus < 1 || mem < 1<<10 {

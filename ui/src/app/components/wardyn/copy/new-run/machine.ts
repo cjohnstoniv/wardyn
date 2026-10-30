@@ -44,6 +44,9 @@ export const NR_MACHINE = {
   MACOS_BELOW_MINIMUM: (cpu: string, mem: string) => `A macOS VM needs at least ${cpu} CPU and ${mem} MiB.`, // MV-N13
   MACOS_NO_BASE: (runner: string) => `${runner} has no macOS base image ready yet.`, // MV-E03
   MACOS_NO_BASE_ERROR: (runner: string, error: string) => `${runner} has no macOS base image ready yet: ${error}.`, // MV-E04
+  MACOS_BASE_TOO_OLD: (runner: string, days: number, max: number) => `${runner}'s macOS base was prepared ${days === 1 ? "1 day" : `${days} days`} ago, and your organisation allows ${max}. Its owner runs \`wardyn-runnerd macos-vm prepare --new-image\`.`, // MAC-P14
+  MACOS_BASE_TOO_OLD_POOL: (max: number) => `Every runner in this pool must have a macOS base prepared in the last ${max === 1 ? "1 day" : `${max} days`}, and at least one doesn't. Choose another pool, or ask the Mac's owner to prepare a new base.`, // MAC-P15
+  MACOS_BASE_NO_AGE: (runner: string) => `${runner} doesn't report its macOS base's age, and your organisation sets a maximum. Update the runner.`, // MAC-P16
   MACOS_NO_ROOM: (runner: string) => `${runner} has no room for another macOS VM right now.`, // MV-E05
   MACOS_NOT_OFFERED: (runner: string) => `${runner} doesn't offer macOS VMs: it is older than 0.10, or macOS VMs aren't turned on for it.`, // MV-E07
   MACOS_OFF: "macOS virtual machines are turned off in this organisation.", // MV-E01

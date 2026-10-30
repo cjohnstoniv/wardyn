@@ -42,14 +42,19 @@ func (s *Server) poolMacOSVMOf(ctx context.Context, eligible []poolTarget, fits 
 		c.caps, c.haveCaps = s.runnerLastCaps(*t.runnerID)
 		cands = append(cands, c)
 	}
-	return poolMacOSVM(cands, s.isSecurityOperator(ctx))
+	// A site config that cannot be read sets no maximum here; placement reads it again and refuses on the error.
+	var limit macOSBaseLimit
+	if len(cands) > 0 { // a pool with no self-hosted runner needs no read
+		limit, _ = s.macOSBaseLimitOf(ctx)
+	}
+	return poolMacOSVM(cands, s.isSecurityOperator(ctx), limit)
 }
 
 // poolMacOSVM is what a pool offers a macOS VM run now, by the rule placement holds a pooled one to
 // (placementCapabilityRefusalFor): the run lands on any of the pool's eligible runners, so it is offered
 // only when every one of them offers it (macOSVMOffer). Offered, a run must fit whichever runner takes
 // it: the largest minimum, and only the harnesses every base serves.
-func poolMacOSVM(cands []macOSCandidate, operator bool) *client.PoolMacOSVM {
+func poolMacOSVM(cands []macOSCandidate, operator bool, limit ...macOSBaseLimit) *client.PoolMacOSVM {
 	out := &client.PoolMacOSVM{}
 	if len(cands) == 0 {
 		return out
@@ -60,7 +65,7 @@ func poolMacOSVM(cands []macOSCandidate, operator bool) *client.PoolMacOSVM {
 	}
 	var offered []*runnerwire.MacVMCaps
 	for _, c := range cands {
-		offer := macOSVMOffer(c.rn, c.caps, c.haveCaps, c.live, operator)
+		offer := macOSVMOffer(c.rn, c.caps, c.haveCaps, c.live, operator, limit...)
 		if offer.Offered {
 			offered = append(offered, c.caps.MacOSVM)
 			continue

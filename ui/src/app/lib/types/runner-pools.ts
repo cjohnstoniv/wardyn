@@ -320,7 +320,7 @@ export interface PoolMacOSVM {
 }
 
 /** Go: client.MacOSVMWhy*. */
-export type PoolMacOSVMWhy = "not_offered" | "preparing" | "at_limit" | "no_room" | "not_managed" | "no_posture" | "no_base" | "runner_refused";
+export type PoolMacOSVMWhy = "not_offered" | "preparing" | "at_limit" | "no_room" | "not_managed" | "no_posture" | "no_base" | "runner_refused" | "base_too_old";
 
 /** Go: client.MacOSVMRefused*, the reason of a runner_refused refusal. */
 export type PoolMacOSVMRefusedReason = "below_min_memory" | "below_min_cpu" | "other";

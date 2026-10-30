@@ -403,6 +403,10 @@ func (m *macOSVMs) setPerRunLimits(cpuMillis, memoryMiB int64) {
 func (m *macOSVMs) base() (macvm.Manifest, runnerwire.MacVMBase) {
 	man, err := macvm.ReadManifest(m.layout.BaseDir(0))
 	b := runnerwire.MacVMBase{State: runnerwire.MacVMBaseNone, GuestOS: man.GuestOS}
+	if !man.CreatedAt.IsZero() {
+		b.CreatedAt = man.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	b.BuildVersion = man.BuildVersion
 	switch {
 	case err == nil && man.Format != macvm.BaseFormat:
 		b.State = runnerwire.MacVMBaseUpdateNeeded
@@ -574,44 +578,6 @@ func desktopMode(mode string) string {
 	return mode
 }
 
-// macOSVMArithmetic is setup's worked sum (design 3.10): a runner's macOS guests together get at most
-// its total memory, which cannot pass Docker's, while the host's budget for them is what Docker and
-// macOS leave. Bytes throughout.
-type macOSVMArithmetic struct {
-	host, docker, total, perRun uint64
-}
-
-// max is how many macOS VMs this Mac can run at once at the per-run memory: Apple's cap, the runner's
-// total and the host budget, whichever holds fewest.
-func (a macOSVMArithmetic) max() int {
-	if a.perRun == 0 {
-		return 0
-	}
-	n := min(admission.LicenceCap, int(a.total/a.perRun))
-	return min(n, int(a.budget()/(a.perRun+admission.DefaultOverheadBytes)))
-}
-
-func (a macOSVMArithmetic) budget() uint64 {
-	if a.host <= a.docker+admission.MacOSReserveBytes {
-		return 0
-	}
-	return a.host - a.docker - admission.MacOSReserveBytes
-}
-
-// lines are setup's words for the sum, with this Mac's numbers, and what to change when it holds none.
-func (a macOSVMArithmetic) lines() []string {
-	gb := func(b uint64) string { return strconv.FormatFloat(float64(b)/(1<<30), 'f', -1, 64) }
-	out := []string{
-		fmt.Sprintf("macOS VMs on this Mac: %s GB of memory, less %s GB for Docker and 4 GB for macOS, leaves %s GB for macOS guests.", gb(a.host), gb(a.docker), gb(a.budget())),
-		fmt.Sprintf("Each guest takes the per-run memory (%s GB) and about 1 GB more, and the runner's total memory (%s GB) holds all of them at once.", gb(a.perRun), gb(a.total)),
-		fmt.Sprintf("So this Mac runs at most %d macOS VM(s) at once (Apple's licence allows 2).", a.max()),
-	}
-	if a.max() == 0 {
-		out = append(out, "To run one: give Docker less memory, or lower --per-run-memory (a guest needs at least the macOS base's minimum, which prepare reports), or raise --total-memory up to what Docker has.")
-	}
-	return out
-}
-
 // excludeFromBackups runs `tmutil addexclusion` on Wardyn's own VM directory: a sticky exclusion that
 // follows the directory, so Time Machine does not copy bases and run disks to a backup disk. It touches
 // no other backup setting. (The .noindex suffix already keeps Spotlight out.)
@@ -635,6 +601,10 @@ type prepareArgs struct {
 	// ipsw is a restore image the operator downloaded, built from instead of Apple's download ("": download),
 	// and sha256 the SHA-256 it must have (required with ipsw; the helper checks it on a copy in the cache).
 	ipsw, sha256 string
+	// ipswURL is an HTTPS mirror the restore image is downloaded from instead of Apple's, with sha256 the hash
+	// it must have; it excludes ipsw. Neither given, the profile's MacOSVMImageURL and MacOSVMImageHash stand
+	// for them (setup's prepare has no flags).
+	ipswURL string
 	// newImage builds a new base from Apple's newest restore image even when one is ready (the helper's
 	// --reprepare); without it, a ready base needs no prepare.
 	newImage bool
@@ -719,7 +689,12 @@ type helperJob struct {
 // re-prepare; a ready base and no newImage starts nothing (errMacOSBaseReady). The helper's probe must
 // pass first.
 func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
-	sum, err := macvm.CheckIPSWFlags(a.ipsw, a.sha256)
+	if a.ipsw == "" && a.ipswURL == "" {
+		if a.ipswURL = managedPref("MacOSVMImageURL"); a.ipswURL != "" && a.sha256 == "" {
+			a.sha256 = managedPref("MacOSVMImageHash")
+		}
+	}
+	sum, err := macvm.CheckImageFlags(a.ipsw, a.ipswURL, a.sha256)
 	if err != nil {
 		return err
 	}
@@ -733,6 +708,9 @@ func (m *macOSVMs) startPrepare(ctx context.Context, a prepareArgs) error {
 			return err
 		}
 		extra = append(extra, "--"+macvm.FlagIPSW, path, "--"+macvm.FlagSHA256, sum)
+	}
+	if a.ipswURL != "" {
+		extra = append(extra, "--"+macvm.FlagIPSWURL, a.ipswURL, "--"+macvm.FlagSHA256, sum)
 	}
 	if _, err := macvm.ReadyBase(m.layout.BaseDir(0)); err == nil {
 		if !a.newImage {

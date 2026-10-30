@@ -390,13 +390,14 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 	j := newJobFlags(fs)
 	keep := fs.Bool(macvm.FlagKeepIPSW, false, "keep the downloaded restore image")
 	ipsw := fs.String(macvm.FlagIPSW, "", "build from this restore image (.ipsw) instead of downloading Apple's; needs --sha256. Ignored when a base is ready, unless --reprepare; with --reprepare it builds the new base from this file")
-	wantSHA := fs.String(macvm.FlagSHA256, "", "the SHA-256 (64 hex digits) the --ipsw file must have, from a source you trust; checked on a copy in the cache before anything uses it")
+	ipswURL := fs.String(macvm.FlagIPSWURL, "", "download the restore image from this HTTPS mirror (it must answer HTTP Range requests) instead of Apple's; needs --sha256, and Apple's image is never the fallback")
+	wantSHA := fs.String(macvm.FlagSHA256, "", "the SHA-256 (64 hex digits) the --ipsw file or the --ipsw-url image must have, from a source you trust; checked before anything uses it")
 	reprepare := fs.Bool(macvm.FlagReprepare, false, "build a new base even when one is ready (a newer restore image), and swap it in")
 	byHand := fs.Duration("setup-by-hand-wait", macvm.DefaultSetupByHandWait, "how long to wait for macOS's setup by hand (0: stop instead)")
 	if code := j.parse(fs, args, d); code != 0 {
 		return code
 	}
-	if _, err := macvm.CheckIPSWFlags(*ipsw, *wantSHA); err != nil {
+	if _, err := macvm.CheckImageFlags(*ipsw, *ipswURL, *wantSHA); err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 2
 	}
@@ -430,7 +431,7 @@ func cmdPrepare(ctx context.Context, args []string, d deps) int {
 	enc := json.NewEncoder(d.stdout)
 	o := macvm.PrepareOptions{
 		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, Power: d.power(),
-		CPUs: *j.cpus, MemoryMiB: *j.memMiB, KeepIPSW: *keep, IPSW: *ipsw, IPSWSHA256: *wantSHA, Reprepare: *reprepare, HelperVersion: version.String(),
+		CPUs: *j.cpus, MemoryMiB: *j.memMiB, KeepIPSW: *keep, IPSW: *ipsw, IPSWURL: *ipswURL, IPSWSHA256: *wantSHA, Reprepare: *reprepare, HelperVersion: version.String(),
 		SetupByHandWait: *byHand,
 		Progress:        func(ev macvm.PrepareEvent) { _ = enc.Encode(ev) },
 		Admit:           j.admit(macvm.PrepareCommand, d),

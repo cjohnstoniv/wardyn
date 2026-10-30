@@ -110,6 +110,10 @@ func startSetupPrepare(cmd *cobra.Command, m *macOSVMs, plan setupPlan, runnerID
 	out := cmd.OutOrStdout()
 	a := prepareArgs{helper: filepath.Join(filepath.Dir(plan.paths.installed), "wardyn-macvm"), runnerID: runnerID,
 		cpus: int(limits.PerRun.CPUMillis / 1000), memoryMiB: uint64(limits.PerRun.MemoryMiB), keepIPSW: plan.keepIPSW}
+	if managedPref("MacOSVMImageURL") == "" { // the profile's mirror wins, and startPrepare reads it; else runnerd.json's
+		f := plan.runnerFile()
+		a.ipswURL, a.sha256 = f.MacOSVMImageURL, f.MacOSVMImageHash
+	}
 	if err := m.startPrepare(cmd.Context(), a); err != nil {
 		fmt.Fprintf(out, "macOS VMs are on, but this Mac's macOS base did not start preparing: %v\n", err)
 		return

@@ -247,6 +247,7 @@ type PoolMacOSVM struct {
 // not_managed for a security operator only, who marks the Mac with it. Detail is the org's sentence.
 // Reason is set on runner_refused (MacOSVMRefused*), with Have and Need on a size below the base's
 // minimum: what the runner's per-run limit gives and what the base needs, in GB of memory or in CPUs.
+// On base_too_old, Have and Need are the base's age and the maximum, in days.
 type PoolMacOSVMRefusal struct {
 	Runner   string `json:"runner"`
 	RunnerID string `json:"runner_id,omitempty"`
@@ -268,6 +269,9 @@ const (
 	MacOSVMWhyNotManaged = "not_managed"
 	MacOSVMWhyNoPosture  = "no_posture"
 	MacOSVMWhyNoBase     = "no_base"
+	// MacOSVMWhyBaseTooOld: the organisation sets a maximum base age and this Mac's base is past it, or its
+	// runner reports no age. Have is the base's age in days (0: not reported) and Need the maximum.
+	MacOSVMWhyBaseTooOld = "base_too_old"
 	// MacOSVMWhyRunnerRefused: the runner sent caps that refuse macOS VMs itself. Its own text never
 	// reaches the console; Reason says why, as the organisation reads it.
 	MacOSVMWhyRunnerRefused = "runner_refused"

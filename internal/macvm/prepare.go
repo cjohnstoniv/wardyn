@@ -159,8 +159,13 @@ type PrepareOptions struct {
 	// before it is loaded or installed. The operator's file is never changed or deleted. A ready base
 	// still wins (the file is not read), unless Reprepare asks for a new one.
 	IPSW string
-	// IPSWSHA256 is the SHA-256 (64 hex digits) the operator says the IPSW file has. It goes with IPSW.
+	// IPSWSHA256 is the SHA-256 (64 hex digits) the operator says the IPSW file or the IPSWURL image has.
+	// It goes with IPSW or IPSWURL.
 	IPSWSHA256 string
+	// IPSWURL is an HTTPS mirror the restore image is downloaded from instead of Apple's (Range requests
+	// required), checked against IPSWSHA256 before anything uses it. Apple is never asked, and a mismatch is
+	// final. It excludes IPSW.
+	IPSWURL string
 	// Reprepare builds a whole new base even when one is ready (a newer
 	// restore image, or the operator asked) and swaps it in for the old one.
 	// Without it a ready base is returned as it is.
@@ -217,6 +222,18 @@ func (e *IPSWMismatchError) Error() string {
 		e.Path, e.Want, e.Got)
 }
 
+// MirrorMismatchError refuses an image downloaded from the --ipsw-url mirror whose hash is not the one given.
+// Nothing of it is kept, and Apple is not asked for another.
+type MirrorMismatchError struct {
+	URL       string
+	Want, Got string
+}
+
+func (e *MirrorMismatchError) Error() string {
+	return fmt.Sprintf("macvm: the image at %s has the SHA-256 %s, not the %s given with --sha256; it was deleted and Apple's restore image was not used instead",
+		e.URL, e.Got, e.Want)
+}
+
 // UnrecordedImageError refuses a restore image found in the download cache that no download of Wardyn's
 // recorded, or whose hash is no longer its record's. Prepare neither uses nor deletes it.
 type UnrecordedImageError struct {
@@ -236,17 +253,40 @@ func (e *UnrecordedImageError) Error() string {
 }
 
 // ErrSHA256NeedsIPSW is the usage error of a hash given with no file to check it against.
-var ErrSHA256NeedsIPSW = errors.New("macvm: --sha256 goes with --ipsw: it is the SHA-256 that file must have")
+var ErrSHA256NeedsIPSW = errors.New("macvm: --sha256 goes with --ipsw or --ipsw-url: it is the SHA-256 that file or image must have")
 
-// CheckIPSWFlags is the usage check of prepare's --ipsw and --sha256: both or neither, and the hash is 64
-// hex digits. It returns the hash in lower case.
-func CheckIPSWFlags(ipsw, sha string) (string, error) {
+// ErrIPSWURLNeedsSHA256 is the usage error of a mirror URL given without the hash its image must have.
+var ErrIPSWURLNeedsSHA256 = errors.New("macvm: --ipsw-url needs --sha256 <64 hex digits>: the SHA-256 of the image on the mirror, from a source you trust")
+
+// ErrIPSWAndURL is the usage error of both a file and a mirror.
+var ErrIPSWAndURL = errors.New("macvm: --ipsw and --ipsw-url are two ways to name one image: give one")
+
+// CheckIPSWFlags is CheckImageFlags for a prepare with no mirror.
+func CheckIPSWFlags(ipsw, sha string) (string, error) { return CheckImageFlags(ipsw, "", sha) }
+
+// CheckImageFlags is the usage check of prepare's --ipsw, --ipsw-url and --sha256: a file or a mirror, with
+// its hash, or neither and no hash, and the hash is 64 hex digits. The mirror is an HTTPS URL that names an
+// .ipsw and carries no credentials. It returns the hash in lower case.
+func CheckImageFlags(ipsw, ipswURL, sha string) (string, error) {
 	sha = strings.ToLower(strings.TrimSpace(sha))
 	switch {
+	case ipsw != "" && ipswURL != "":
+		return "", ErrIPSWAndURL
 	case ipsw != "" && !sha256Hex.MatchString(sha):
 		return "", ErrIPSWNeedsSHA256
-	case ipsw == "" && sha != "":
+	case ipswURL != "" && !sha256Hex.MatchString(sha):
+		return "", ErrIPSWURLNeedsSHA256
+	case ipsw == "" && ipswURL == "" && sha != "":
 		return "", ErrSHA256NeedsIPSW
+	}
+	if ipswURL != "" {
+		u, err := url.Parse(ipswURL)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+			return "", fmt.Errorf("macvm: --ipsw-url %q is not an https URL without a user name or password", ipswURL)
+		}
+		if _, err := ipswName(ipswURL); err != nil {
+			return "", err
+		}
 	}
 	return sha, nil
 }
@@ -290,7 +330,7 @@ func newPrep(o PrepareOptions) (*prep, error) {
 	if o.Engine == nil || o.Power == nil || o.FirstBoot == nil || o.Layout.Root == "" {
 		return nil, errors.New("macvm: prepare needs an engine, a first-boot provisioner, a power source and a root")
 	}
-	sha, err := CheckIPSWFlags(o.IPSW, o.IPSWSHA256)
+	sha, err := CheckImageFlags(o.IPSW, o.IPSWURL, o.IPSWSHA256)
 	if err != nil {
 		return nil, err
 	}
@@ -530,7 +570,7 @@ func (p *prep) download(ctx context.Context, u, final string) (string, error) {
 	var start time.Time
 	var startBytes int64 = -1
 	d := &downloader{
-		client: p.HTTP, power: p.Power, poll: p.PowerPoll, rng: p.DownloadRange,
+		client: p.HTTP, power: p.Power, poll: p.PowerPoll, rng: p.DownloadRange, mirror: p.IPSWURL != "",
 		paused: func(on bool) {
 			ev := PrepareEvent{Phase: PhaseDownload, Paused: on}
 			if on {
