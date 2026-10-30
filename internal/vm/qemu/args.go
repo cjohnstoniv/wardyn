@@ -148,6 +148,7 @@ func VirtiofsdArgs(n int, readOnly bool, uid, gid int) []string {
 	// Unprivileged, virtiofsd can create files only as its own user: the guest's agent user maps to
 	// it one to one both ways, so the agent's writes land as uid:gid and it owns uid:gid's files in
 	// the guest. A guest id equal to the runner's is forbidden, so no other guest id lands as it.
+	// Guest root (id 0) is forbidden as well, so only the agent user's ids pass.
 	for _, t := range []struct {
 		flag       string
 		agent, own int
@@ -155,6 +156,9 @@ func VirtiofsdArgs(n int, readOnly bool, uid, gid int) []string {
 		if t.own != t.agent {
 			a = append(a, t.flag+"map:"+strconv.Itoa(t.agent)+":"+strconv.Itoa(t.own)+":1",
 				t.flag+"forbid-guest:"+strconv.Itoa(t.own)+":1")
+		}
+		if t.own != 0 {
+			a = append(a, t.flag+"forbid-guest:0:1")
 		}
 	}
 	if readOnly {

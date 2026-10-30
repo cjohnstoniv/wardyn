@@ -11,6 +11,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A Linux VM sandbox's folder shares now refuse guest root. The share server maps only the agent user's ids, and guest
+  uid 0 and gid 0 are forbidden in its id translation, so a write by root in the guest is refused rather than passed on
+  to the host.
+
 ## [0.10.0-rc.8] — 2026-10-29
 
 ### Before you upgrade
