@@ -40,6 +40,10 @@ export interface MacVMBase {
   image_version?: string;
   /** The download rate; step download with no wait only. */
   bytes_per_sec?: number;
+  /** When the base was last edited (edit-base), RFC 3339; state ready only. */
+  edited_at?: string;
+  /** The last edit's recheck: "passed" or why it discarded the copy. */
+  edit_recheck?: string;
 }
 
 /** Go: runnerwire.MacVMReasonLedgerDamaged and its siblings, in priority order; MacVMCaps.reason. */
