@@ -45,7 +45,6 @@ import {
   type UserDrivesSnapshot,
 } from "../../../lib/api/drives";
 import { providers as providersApi } from "../../../lib/api/providers";
-import { runners as runnersApi } from "../../../lib/api/runners";
 import { getErrorMessage } from "../../../lib/format";
 import { ACCESS_STATE, DRIVES, PEOPLE } from "../../../lib/user-drives-copy";
 import {
@@ -64,11 +63,11 @@ import { Mono } from "../../wardyn/code-block";
 import { useOperator } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
 import { PageContainer } from "../../wardyn/page-container";
-import { MAC_DRIVES } from "../../wardyn/copy/mac-drives";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { EmptyState, TableSkeleton, loadFailStatus } from "../../wardyn/states";
 import { AllocationsBlock } from "./allocations";
 import { DriveEditor } from "./drive-editor";
+import { MemberDrives } from "./member-drives";
 import { Note, enforcementGloss, modeText, modeTone, noteClass, question, sizeText, withMono } from "./display";
 
 // A team drive's group names, as the Allocated to cell shows them: only when this
@@ -110,14 +109,6 @@ export function DrivesScreen() {
       .then((s) => setTeamDrives(!!s.providers.storage?.user_drive?.team_drives))
       .catch(() => setTeamDrives(false));
   }, []);
-
-  // The Macs that keep disk drives, by name: asked for only when the list holds one.
-  const [macs, setMacs] = React.useState<Record<string, string>>({});
-  const showMacs = snap.drives.some((d) => d.home_runner_id);
-  React.useEffect(() => {
-    if (!showMacs) return;
-    runnersApi.list("all").then((rs) => setMacs(Object.fromEntries(rs.map((r) => [r.id, r.name])))).catch(() => setMacs({}));
-  }, [showMacs]);
 
   // ponytail: no setStatus("loading") here. `load` is also the post-write
   // refresh, and flipping back to loading would unmount the add form under
@@ -273,8 +264,7 @@ export function DrivesScreen() {
                     <TableHeader>
                       <TableRow className="hover:bg-transparent">
                         <TableHead>{DRIVES.COL_NAME}</TableHead>
-                        <TableHead>{MAC_DRIVES.D15}</TableHead>
-                        {showMacs && <TableHead>{MAC_DRIVES.D09}</TableHead>}
+                        <TableHead>{DRIVES.COL_BACKEND}</TableHead>
                         <TableHead>{DRIVES.COL_MOUNTS_FROM}</TableHead>
                         <TableHead>{DRIVES.COL_SIZE}</TableHead>
                         <TableHead>{DRIVES.COL_MODE}</TableHead>
@@ -307,11 +297,10 @@ export function DrivesScreen() {
                               <Chip tone="neutral">
                                 {isManagedBackend(d.backend) ? DRIVES.KIND_MANAGED : DRIVES.KIND_SHARE}
                               </Chip>
-                              {d.backend === "mac_disk" ? <Chip tone="neutral">{MAC_DRIVES.D16}</Chip> : <Mono>{d.backend}</Mono>}
+                              <Mono>{d.backend}</Mono>
                               {team && d.single_host && <Chip tone="warning">{DRIVES.TEAM_ONE_HOST_CHIP}</Chip>}
                             </span>
                           </TableCell>
-                          {showMacs && <TableCell data-testid="drives-mac">{d.home_runner_id ? macs[d.home_runner_id] : undefined}</TableCell>}
                           {/* The server's phrase, as it is (M10): the console names no runner itself. */}
                           <TableCell data-testid="drives-mounts-from">{d.mounts_from}</TableCell>
                           <TableCell>
@@ -406,6 +395,10 @@ export function DrivesScreen() {
               />
             )}
           </section>
+
+          {/* The drives people made themselves (a disk kept on a Mac among them), read by the super admin only: GET /drives/member is
+              operatorOnly, and a security admin reading this page has no such read. */}
+          {operator && status === "ready" && <MemberDrives />}
 
           {/* Only once the read has landed AND there is something to allocate:
               "No allocations yet" over an unloaded snapshot is a confident

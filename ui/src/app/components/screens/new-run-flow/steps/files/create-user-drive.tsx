@@ -94,6 +94,7 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
         <CreateDriveCard
           create={(name) => createMyDrive(name, mac?.id)}
           intro={mac ? MAC_DRIVES.D02(mac.name) : undefined}
+          hint={macOS && door && door.limit > 0 ? NR_FILES.CREATE_LIMIT(door.count, door.limit) : undefined}
           onClose={closeCard}
           onCreated={(drive) => {
             refresh();
@@ -130,13 +131,14 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
           remove={() => deleteMyDrive(deleting.drive.id)}
           returnFocusTo={() => (deleted.current ? null : deleting.opener)}
           onClose={() => setDeleting(null)}
-          onDeleted={() => {
+          onDeleted={(result) => {
             deleted.current = true;
             setAfterDelete({ id: deleting.drive.id, name: deleting.drive.name, dialog: deleting.opener.closest<HTMLElement>('[role="dialog"]') });
             refresh();
             // A drive already attached to this run goes with it, and so does a start on it.
             dispatch({ type: "edit", apply: (i) => detachDrive(i, deleting.drive.id, legacyId) });
-            announce(NR_FILES.DRIVE_DELETED(deleting.drive.name));
+            // A partial result has its own live Notice; announcing "deleted" on top of it would say two things at once.
+            if (!result) announce(NR_FILES.DRIVE_DELETED(deleting.drive.name));
           }}
         />
       )}

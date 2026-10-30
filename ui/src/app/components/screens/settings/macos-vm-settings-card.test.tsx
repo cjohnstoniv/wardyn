@@ -9,6 +9,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expandCard } from "../../../lib/test-dom";
 import { expectActionBar } from "../../../../test/action-bar";
+import { FORM_ACTIONS } from "../../wardyn/copy/form-actions";
 import { MAC_SETTINGS as T } from "../../wardyn/copy/mac-settings";
 import { COMPONENTS_ADMIN as C } from "../../wardyn/copy/components-admin";
 
@@ -34,7 +35,7 @@ async function open() {
   return screen.getByTestId("macos-vm-settings-card");
 }
 const field = (card: HTMLElement) => within(card).getByRole("textbox", { name: T.P17 });
-const saveBtn = (card: HTMLElement) => within(card).getByRole("button", { name: T.SAVE });
+const saveBtn = (card: HTMLElement) => within(card).getByRole("button", { name: FORM_ACTIONS.SAVE });
 
 beforeEach(() => {
   toastSuccess.mockClear();

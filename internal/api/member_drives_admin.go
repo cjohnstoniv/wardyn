@@ -79,7 +79,7 @@ func (s *Server) handleListMemberDrives(w http.ResponseWriter, r *http.Request) 
 	for _, d := range drives {
 		mount, _ := memberDriveMount(d)
 		out.Drives = append(out.Drives, client.MemberDriveAdminItem{
-			ID: d.ID, Name: d.Name, Owner: d.OwnerSubject, Backend: d.Backend, SizeMiB: d.SizeMiB,
+			ID: d.ID, Name: d.Name, Owner: d.OwnerSubject, Backend: d.Backend, HomeRunnerID: d.HomeRunnerID, SizeMiB: d.SizeMiB,
 			StorageClass: d.StorageClass, Object: mount.ObjectName, CreatedAt: d.CreatedAt, Deleting: d.DeleteStartedAt != nil,
 		})
 	}

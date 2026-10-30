@@ -261,13 +261,26 @@ func TestAdminListAndDeleteMemberDrives(t *testing.T) {
 	st := newMemberDriveStore()
 	d := seedMemberDrive(st, aliceSub, "Notes")
 	seedMemberDrive(st, bobSub, "Logs")
+	mac := uuid.New()
+	disk := seedMemberDrive(st, bobSub, "Disk")
+	disk.Backend, disk.HomeRunnerID = types.DriveBackendMacDisk, &mac
+	st.drives[disk.ID] = disk
 	rn := &memberDriveRunner{reclaimRunner: reclaimRunner{outcome: runner.DriveReclaimDeleted}}
 	srv, rec := memberDriveServer(st, rn, "docker")
 	adminCtx := operatorCtx("sub-admin", "admin@corp.example", "admin")
 	w := memberCall(adminCtx, srv.handleListMemberDrives, http.MethodGet, "/api/v1/drives/member", "", nil)
 	var list client.MemberDriveList
-	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &list) != nil || list.Total != 2 || len(list.Drives) != 2 {
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &list) != nil || list.Total != 3 || len(list.Drives) != 3 {
 		t.Fatalf("list: %d %s", w.Code, w.Body.String())
+	}
+	// The Mac a disk drive is kept on rides with its row, and only its row.
+	for _, it := range list.Drives {
+		switch {
+		case it.ID == disk.ID && (it.HomeRunnerID == nil || *it.HomeRunnerID != mac || it.Backend != types.DriveBackendMacDisk):
+			t.Errorf("mac_disk row = %+v, want home_runner_id %s", it, mac)
+		case it.ID != disk.ID && it.HomeRunnerID != nil:
+			t.Errorf("row %s carries home_runner_id %s on backend %s", it.Name, it.HomeRunnerID, it.Backend)
+		}
 	}
 	w = memberCall(adminCtx, srv.handleDeleteMemberDriveAdmin, http.MethodDelete, "/x", "", map[string]string{"id": d.ID.String()})
 	var res client.MemberDriveDeleteResult

@@ -10,6 +10,7 @@
 // maximum left behind would refuse other specs' Mac runs.
 import { test, expect, consoleAPI, expandCard, gotoConsole, navToRoute } from "./fixtures";
 import { SERVER_OWNED_SITE_CONFIG_KEYS } from "../src/app/lib/types/site";
+import { FORM_ACTIONS } from "../src/app/components/wardyn/copy/form-actions";
 import { MAC_SETTINGS } from "../src/app/components/wardyn/copy/mac-settings";
 
 test.describe.configure({ mode: "serial" });
@@ -25,7 +26,7 @@ test("the oldest macOS base saves, reloads, and clears", async ({ page }) => {
   await navToRoute(page, "/admin/settings");
   await expandCard(page, MAC_SETTINGS.TITLE);
   const field = page.getByRole("textbox", { name: MAC_SETTINGS.P17 });
-  const save = page.getByRole("button", { name: MAC_SETTINGS.SAVE, exact: true });
+  const save = page.getByRole("button", { name: FORM_ACTIONS.SAVE, exact: true });
   try {
     await expect(page.getByText(MAC_SETTINGS.P18, { exact: true })).toBeVisible();
     await expect(field).toHaveValue("");
@@ -40,7 +41,7 @@ test("the oldest macOS base saves, reloads, and clears", async ({ page }) => {
     await expect(field).toHaveValue("30");
 
     await field.fill("0");
-    await expect(page.getByRole("alert")).toHaveText(MAC_SETTINGS.INVALID);
+    await expect(page.getByTestId("macos-vm-settings-card").getByRole("alert")).toHaveText(MAC_SETTINGS.INVALID);
     await expect(save).toBeDisabled();
 
     await field.fill("");

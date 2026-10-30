@@ -46,6 +46,8 @@ async function openRunners(page: Page) {
   await page.route("**/api/v1/runners/tokens**", (route) => route.fulfill({ json: [] }));
   await page.route("**/api/v1/remote-runners", (route) => route.fulfill({ json: [] }));
   await page.route(/\/api\/v1\/runners\?/, (route) => route.fulfill({ json: RUNNERS }));
+  // The live site config is shared with the Settings spec, which sets a maximum on it: no maximum here unless a test says so.
+  await page.route("**/api/v1/site-config", (route) => route.fulfill({ json: {} }));
   await gotoConsole(page, "admin");
   await page.goto("/admin/runners");
 }

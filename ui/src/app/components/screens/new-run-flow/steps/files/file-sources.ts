@@ -106,7 +106,7 @@ export function useOwnMac(name: string | undefined): { id: string; name: string 
     let current = true;
     runnersApi.listMine().then(
       (rs) => {
-        const r = rs.find((x) => x.name === name && x.macos_vm);
+        const r = rs.find((x) => x.name === name && x.macos_vm?.disk_drives);
         if (current && r) setMac({ id: r.id, name: r.name });
       },
       () => {},

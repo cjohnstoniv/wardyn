@@ -20,12 +20,14 @@ import { useEscapeClosesThis } from "./nested-escape";
 
 const NAME_ID = "nr-create-drive-name";
 
-export function CreateDriveCard({ create, onCreated, onClose, intro = NR_FILES.CREATE_INTRO }: {
+export function CreateDriveCard({ create, onCreated, onClose, intro = NR_FILES.CREATE_INTRO, hint }: {
   create: (name: string) => Promise<MeDrive>;
   onCreated: (drive: MeDrive) => void;
   onClose: () => void;
   /** The sentence above the field; a disk kept on a Mac says so. */
   intro?: string;
+  /** Under the field: how many drives the person has of how many (board J4, a macOS run). */
+  hint?: string;
 }) {
   const [name, setName] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -68,6 +70,7 @@ export function CreateDriveCard({ create, onCreated, onClose, intro = NR_FILES.C
           aria-describedby={failure ? errorId : undefined}
           onChange={(e) => setName(e.target.value)}
         />
+        {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
         {failure && <p id={errorId} role="alert" className="text-sm text-danger">{failure}</p>}
       </div>
       <div className="flex justify-end gap-2">
