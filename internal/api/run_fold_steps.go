@@ -356,7 +356,21 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 	if types.MachineKind(f.req.MachineKind).IsMacOSVM() {
 		ask = macOSVMAskOf(f.place, f.ceiling, f.harnesses, f.req.Agent)
 	}
-	return !s.placementCapabilityRefusalFor(f.r.Context(), *f.req, f.place, f.ceiling, mounts, ask).write(s, f.w, f.r)
+	if s.placementCapabilityRefusalFor(f.r.Context(), *f.req, f.place, f.ceiling, mounts, ask).write(s, f.w, f.r) {
+		return false
+	}
+	if !types.MachineKind(f.req.MachineKind).IsMacOSVM() {
+		return true
+	}
+	// A macOS VM is not recorded in this release: refused where recording is asked for, else said.
+	notice, refusal := s.macOSVMRecordingGate(f.r.Context(), f)
+	if refusal.write(s, f.w, f.r) {
+		return false
+	}
+	if notice != "" {
+		f.policyWarns = append(f.policyWarns, notice)
+	}
+	return true
 }
 
 // stepModelProvider makes the model-provider choice and refuses one whose
