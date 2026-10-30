@@ -112,6 +112,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   (#3415).
 - `wardyn runner list --no-limits` now filters every page of runners, not only the one it fetched, so a runner with
   no limits set past the first page is listed. `--limit` and `--offset` then cut the filtered list (#3811).
+- `wardyn runner install` on a computer that already runs a runner now says it is upgrading and ignores `--pool`,
+  `--default` and `--name`, instead of dropping them silently. `--artifact-base` is saved in `cli.json` only after the
+  release or runner downloaded from it has been verified, so a mirror that served something refused is no longer
+  remembered (#3551).
 
 ### Security
 
