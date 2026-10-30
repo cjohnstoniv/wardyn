@@ -45,6 +45,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - On the Approvals page, a decision the server refuses because the run owner's own walls deny the host now turns that
   request's Approve off and shows whose walls block it, as a request the walls already block does. It used to leave
   Approve live with no reason (#3781).
+- The Wardyn boundary page tells you to reload when the person signed in changed while a draft was open (#3406).
 - An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
   edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
   terminal. They used to stay open until they closed or reached their time limit (#3398).

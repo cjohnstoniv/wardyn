@@ -278,13 +278,21 @@ describe("a row where each person adds their own token", () => {
   });
 
   it("10: expiring counts the days and offers Replace token", async () => {
-    const soon = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
-    const day = `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, "0")}-${String(soon.getDate()).padStart(2, "0")}`;
-    renderCard({ ...own, state: "expiring", expires_on: day });
-    expect(screen.getByText(ADO_PAT.OWN_CHIP_EXPIRING(3))).toBeInTheDocument();
-    await expandCard("Azure DevOps");
-    expect(screen.getByText(/^Your token for wardyn-live-test expires on /)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toBeInTheDocument();
+    // A pinned clock and a calendar-day offset: 3 * 24 h of milliseconds lands on a different wall-clock
+    // day when a daylight-saving change falls inside the window, which made this test depend on the date it ran.
+    vi.useFakeTimers({ now: new Date("2026-06-15T12:00:00Z"), toFake: ["Date"] });
+    try {
+      const soon = new Date();
+      soon.setDate(soon.getDate() + 3);
+      const day = `${soon.getFullYear()}-${String(soon.getMonth() + 1).padStart(2, "0")}-${String(soon.getDate()).padStart(2, "0")}`;
+      renderCard({ ...own, state: "expiring", expires_on: day });
+      expect(screen.getByText(ADO_PAT.OWN_CHIP_EXPIRING(3))).toBeInTheDocument();
+      await expandCard("Azure DevOps");
+      expect(screen.getByText(/^Your token for wardyn-live-test expires on /)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: ADO_PAT.OWN_REPLACE })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("10: expired says runs cannot reach Azure DevOps, and offers Add", async () => {
