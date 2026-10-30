@@ -268,7 +268,7 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	// carries, not the pre-claim (nil) one it read before MarkRunEnded.
 	run.LostAt, run.LostReason = &now, types.LostEnded
 	data := map[string]any{"ends_at": run.EndsAt}
-	if _, canKeep := s.cfg.Runner.(runner.SandboxEnder); canKeep && s.cfg.EndedRunGrace > 0 && run.SandboxRef != "" {
+	if s.endKeepsRun(run) {
 		wipeFailed, err := s.endSandbox(ctx, run)
 		if !errors.Is(err, runner.ErrEndUnsupported) {
 			// Cancel/revoke only once the run is sure to be kept: on
@@ -297,6 +297,15 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	}
 	data["kept"] = false
 	s.stopKeptRun(ctx, leaser, run, types.RunStopped, "run.ended", data)
+}
+
+// endKeepsRun is whether endRun tries to keep run past its end, its files kept
+// for the grace: the runner can end a sandbox, there is a grace, and the run
+// has a sandbox. A router whose substrate for the run cannot keep one answers
+// only at the end itself (runner.ErrEndUnsupported).
+func (s *Server) endKeepsRun(run types.AgentRun) bool {
+	_, canKeep := s.cfg.Runner.(runner.SandboxEnder)
+	return canKeep && s.cfg.EndedRunGrace > 0 && run.SandboxRef != ""
 }
 
 // endSandbox is the runner half of the end. The caller has checked the runner
@@ -438,9 +447,10 @@ func (s *Server) warnRunEnding(ctx context.Context, leaser store.RunLeaser, run 
 		if applied {
 			// The files are kept for the grace only when the end KEEPS the run; one
 			// the lifetime kill tears down at its end (Background, or an end at or
-			// past the cap) has nothing kept (#2792).
+			// past the cap) has nothing kept (#2792), nor one endRun tears down at
+			// once (#3510).
 			var keptSec int64
-			if _, killed := lifetimeEndDue(run, *run.EndsAt); !killed {
+			if _, killed := lifetimeEndDue(run, *run.EndsAt); !killed && s.endKeepsRun(run) {
 				keptSec = int64(s.cfg.EndedRunGrace.Seconds())
 			}
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.ending_soon",

@@ -21,6 +21,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   finish, the workspace and record settlement and the cleared sandbox reference each get a budget of their own, so a
   workspace scan is no longer left in `scanning`. A replica that loses the run's lock during that tail now stops it,
   instead of running it beside the replica that took the lock and writing duplicate audit rows.
+- `run.ending_soon` no longer promises kept files (`files_kept_sec`) for a run its end tears down at once: one with no
+  sandbox recorded, on a runner that cannot keep a sandbox, or with no ended-run grace. It now reads the same decision
+  the end makes. A substrate that can say it cannot keep a sandbox only at the end itself is still reported as kept.
 
 ## [0.10.0-rc.8] — 2026-10-29
 

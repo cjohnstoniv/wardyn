@@ -936,12 +936,17 @@ func TestCancelTerminalRunApprovals_CountsTheIdleStop(t *testing.T) {
 
 // TestRunLease_EndingSoonFilesKeptOnlyForAKeptRun: run.ending_soon says the files
 // are kept for the grace only when the end keeps the run. A Background run is
-// killed at its end with nothing kept, so it reports 0 (#2792).
+// killed at its end with nothing kept, so it reports 0 (#2792); so does a run
+// endRun tears down at once: no sandbox recorded, a runner that cannot keep one,
+// or no grace (#3510).
 func TestRunLease_EndingSoonFilesKeptOnlyForAKeptRun(t *testing.T) {
-	keptSec := func(exp types.RunExperience) float64 {
+	keptSec := func(exp types.RunExperience, tweaks ...func(*leaseFixture)) float64 {
 		f := newLeaseFixture(t, 30*time.Minute)
 		f.srv.cfg.EndedRunGrace = 7 * 24 * time.Hour
 		f.st.run.Experience = exp
+		for _, tweak := range tweaks {
+			tweak(f)
+		}
 		f.sweep(t)
 		evs := f.audit.eventsFor(f.run.ID, "run.ending_soon")
 		if len(evs) != 1 {
@@ -954,5 +959,14 @@ func TestRunLease_EndingSoonFilesKeptOnlyForAKeptRun(t *testing.T) {
 	}
 	if got := keptSec(types.ExperienceBackground); got != 0 {
 		t.Errorf("background run files_kept_sec = %v, want 0 (nothing is kept)", got)
+	}
+	for name, tweak := range map[string]func(*leaseFixture){
+		"no sandbox":           func(f *leaseFixture) { f.st.run.SandboxRef = "" },
+		"a runner that cannot": func(f *leaseFixture) { f.srv.cfg.Runner = f.rn.finalizeTailRunner },
+		"no grace":             func(f *leaseFixture) { f.srv.cfg.EndedRunGrace = 0 },
+	} {
+		if got := keptSec(types.ExperienceInteractive, tweak); got != 0 {
+			t.Errorf("%s: interactive run files_kept_sec = %v, want 0 (the end tears it down)", name, got)
+		}
 	}
 }
