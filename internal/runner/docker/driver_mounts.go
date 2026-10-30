@@ -7,6 +7,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -40,6 +41,10 @@ import (
 //     read-write bind, the writable ceiling), but only for binds the MEMBER
 //     authored — checked right before the bind is appended, since a symlink
 //     benign at onboarding can be repointed before the run.
+//   - ON A RUNNER (Config.RunnerID set): only a member's folder bound to this
+//     runner binds (boundMountAllowed), always through the member gate, also
+//     held to the owner's --drive-root, and writable only under a ceiling
+//     (memberBindLimits). A folder bound to a runner never binds on wardynd's host.
 //   - DRIVES (spec.Drives): appended LAST by driveMount, each arriving as a
 //     types.DriveMount rather than a specMounts entry.
 //
@@ -82,12 +87,12 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 		if err := runner.ValidateAuthoredTarget(m.Target); err != nil {
 			return nil, fmt.Errorf("docker: denied workspace mount %q -> %q: %w", m.Source, m.Target, err)
 		}
-		if memberRoots != nil && m.MemberAuthored {
-			var writable *runner.UserWritableCeiling
-			if !m.ReadOnly {
-				writable = spec.UserWritable
-			}
-			if err := runner.ValidateUserMountSource(m.Source, memberRoots, writable); err != nil {
+		if err := d.boundMountAllowed(m); err != nil {
+			return nil, fmt.Errorf("docker: denied workspace mount %q -> %q: %w", m.Source, m.Target, err)
+		}
+		if onRunner := d.cfg.RunnerID != ""; onRunner || (memberRoots != nil && m.MemberAuthored) {
+			writable, ownRoots := d.memberBindLimits(spec, m)
+			if err := runner.ValidateUserMountSource(m.Source, memberRoots, writable, ownRoots); err != nil {
 				return nil, fmt.Errorf("docker: denied member workspace mount %q -> %q: %w", m.Source, m.Target, err)
 			}
 		}
@@ -118,6 +123,39 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 		mounts = append(mounts, driveMounts...)
 	}
 	return mounts, nil
+}
+
+// boundMountAllowed is the runner identity half of a member folder's bind. A folder bound to a runner is
+// a path on that machine, so it binds only on the driver serving that runner: never on wardynd's host,
+// whatever the control plane sent. On a runner every mount in the loop must be a member folder bound to
+// it: an operator mount, or a member folder with no binding, is refused, since the operator deny-list
+// alone does not cover a person's credential folders. Drives and the recording mount never come here.
+func (d *Driver) boundMountAllowed(m runner.Mount) error {
+	switch {
+	case m.BoundRunner != "" && m.BoundRunner != d.cfg.RunnerID:
+		return fmt.Errorf("the folder is on runner %s, not this one", m.BoundRunner)
+	case d.cfg.RunnerID != "" && (!m.MemberAuthored || m.BoundRunner == ""):
+		return errors.New("a runner binds only a member's folder bound to it")
+	}
+	return nil
+}
+
+// memberBindLimits is the writable ceiling and own roots a member folder is held to at bind. On a runner
+// a writable folder with no ceiling gets an empty one, which refuses it, and the folder must also lie in
+// the roots the runner's owner shares (--drive-root, UserDriveHostRoots in runner mode; none refuses). On
+// wardynd's host both are as before: the run's ceiling, and no own roots.
+func (d *Driver) memberBindLimits(spec runner.SandboxSpec, m runner.Mount) (*runner.UserWritableCeiling, []string) {
+	var writable *runner.UserWritableCeiling
+	if !m.ReadOnly {
+		writable = spec.UserWritable
+	}
+	if d.cfg.RunnerID == "" {
+		return writable, nil
+	}
+	if !m.ReadOnly && writable == nil {
+		writable = &runner.UserWritableCeiling{}
+	}
+	return writable, append([]string{}, d.cfg.UserDriveHostRoots...)
 }
 
 // driveMount converts one SandboxSpec.Drives entry into the ZERO OR ONE

@@ -168,6 +168,11 @@ type Mount struct {
 	// SandboxSpec.Drives. A LABEL, NEVER A GATE: WARDYN_USER_DRIVE_HOST_ROOTS
 	// runs on EVERY host_path drive regardless of this flag.
 	DriveAuthored bool `json:"drive_authored,omitempty"`
+	// BoundRunner is the id of the person's runner a member folder is bound to
+	// (types.WorkspaceSource.RunnerID): the folder is a path on that machine.
+	// A driver binds such a mount only when it serves that runner, and on a
+	// runner it binds no member folder that is not bound to it.
+	BoundRunner string `json:"bound_runner,omitempty"`
 }
 
 type ProxyConfig struct {

@@ -229,7 +229,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringArrayVar(&opts.folderRoots, "folder-root", nil, "folders: a folder this runner may share, with everything under it (repeatable; default: your home folder)")
 	cmd.Flags().StringVar(&opts.localModelPorts, "local-model-port", "", "docker: the port, or comma-separated ports, of a model server on this computer that runs here may use when the organisation allows it, "+
 		"such as 11434; default: none, so no run here uses this computer's model server")
-	cmd.Flags().StringArrayVar(&opts.driveRoots, "drive-root", nil, "docker: a folder a drive bound to this runner may mount from, with everything under it (repeatable; default: none, so no drive mounts here)")
+	cmd.Flags().StringArrayVar(&opts.driveRoots, "drive-root", nil, "docker: a folder a drive or a workspace folder bound to this runner may mount from, with everything under it (repeatable; default: none, so neither mounts here)")
 	cmd.Flags().StringArrayVar(&opts.runsNamespaces, "runs-namespace", nil, "k8s: a dedicated namespace runs are created in, never runnerd's own (repeatable; the first is where a run that names none goes)")
 	cmd.Flags().StringVar(&opts.relayService, "relay-service", "", "k8s: the relay Service's DNS name (<name>.<namespace>.svc.<cluster domain>), which must resolve to exactly one ClusterIP")
 	cmd.Flags().StringVar(&opts.arch, "arch", os.Getenv(archEnv), "k8s, required: the sandbox node architecture, amd64 or arm64, pinned as every run pod's kubernetes.io/arch node selector")

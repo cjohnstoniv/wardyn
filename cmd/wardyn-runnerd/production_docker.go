@@ -117,6 +117,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	extras.localAttach, extras.orgURL = local, opts.orgURL
 	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, sub.EndVM)
 	extras.driveRoots, extras.localModelRelay, extras.localModelPorts = driveRoots, true, modelPorts
+	extras.boundFolders = true
 	// The runtime first: its startup containment pass stops lapsed runs even when the check below fails.
 	rt, err := localRunnerRuntime(ctx, identity, stateDir, sub, docker.SandboxRef, relay, dockerCapacity, extras)
 	if err != nil {
@@ -415,6 +416,10 @@ type runtimeExtras struct {
 	localModelRelay bool
 	// localModelPorts are --local-model-port, advertised as the runner's local_model_ports.
 	localModelPorts []uint16
+	// boundFolders: the substrate binds a member's workspace folder bound to this runner and holds it to
+	// --drive-root (the Docker driver's agent mounts and macOS VM shares, which a Linux VM reuses), so the
+	// caps say bound_folders. Kubernetes binds no host folder and never says it.
+	boundFolders bool
 	// runsNamespaces are a k8s runner's --runs-namespace, advertised as its runs_namespaces.
 	runsNamespaces []string
 	// workloadStatus is the k8s runner's workload_status adapter (workloads_k8s.go); nil refuses the call.

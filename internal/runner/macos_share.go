@@ -25,9 +25,11 @@ func MacProtectedPaths(home string, runnerDirs ...string) []string {
 
 // CheckMacShareSource runs the container's source rules, and the macOS protected-path rule, on real,
 // which the caller resolved and will record. A member-authored share is also held to the member's
-// roots and, writable, to the writable ceiling. Each rule's own resolution must be real itself, and
-// so must a last one: a path swapped while the rules ran is refused, never recorded.
-func CheckMacShareSource(real string, member bool, roots []string, writable *UserWritableCeiling, protected []string) error {
+// roots, on a runner to its owner's own roots (ownRoots, --drive-root; nil on wardynd's host), and,
+// unless readOnly, to the writable ceiling, where an absent ceiling refuses. Each rule's own resolution
+// must be real itself, and so must a last one: a path swapped while the rules ran is refused, never
+// recorded.
+func CheckMacShareSource(real string, member, readOnly bool, roots, ownRoots []string, writable *UserWritableCeiling, protected []string) error {
 	if err := ValidateMountSourceLexical(real); err != nil {
 		return err
 	}
@@ -51,7 +53,14 @@ func CheckMacShareSource(real string, member bool, roots []string, writable *Use
 		if checked != real {
 			return errMacShareMoved(real)
 		}
-		if writable != nil {
+		if err := withinOwnRoots(real, checked, ownRoots); err != nil {
+			return err
+		}
+		if !readOnly {
+			// No ceiling never means "anything goes": an empty one refuses every writable share.
+			if writable == nil {
+				writable = &UserWritableCeiling{}
+			}
 			if err := writable.allows(real, checked); err != nil {
 				return err
 			}
