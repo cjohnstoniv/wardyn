@@ -311,7 +311,7 @@ func TestProfileItemsStagedForApproval(t *testing.T) {
 	base := t.TempDir()
 	res := runStage(t, s)
 	S := guestagent.MacItemStageDir
-	if slices.Contains(g.steps, "run /bin/rm -rf "+S+"/wifi") || !slices.Contains(g.steps, "push "+S+"/wifi/item.mobileconfig 600") {
+	if slices.Contains(g.steps, "run /bin/rm -rf "+S+"/wifi") || !slices.Contains(g.steps, "push "+S+"/wifi/item.mobileconfig 644") {
 		t.Fatalf("a profile is pushed to its stage dir and kept: %q", g.steps)
 	}
 	for _, r := range g.argvs {

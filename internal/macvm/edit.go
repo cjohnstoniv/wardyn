@@ -23,6 +23,7 @@ import (
 const (
 	EditStartLine    = "Editing this Mac's macOS base. Runs keep using the current base until the edited one passes its checks."
 	editCodeLine     = "Sign in as wardyn-admin with the one-time code in %s."
+	editProfileLine  = "To install the profile %s, open %s in the guest, then approve it in System Settings."
 	EditCheckingLine = "The window closed and the guest shut down. Checking the edited base: desktop control, accounts, Remote Login and the launcher's self-test."
 	editReadyLine    = "The edited base is ready, and runs now use it. Desktop: %s."
 )
@@ -181,6 +182,14 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 		HardwareModel: m.HardwareModel, MachineIdentifier: id.MachineIdentifier,
 		DiskPath: filepath.Join(staging, DiskFile), AuxPath: filepath.Join(staging, AuxFile),
 	}
+	// The copy carries the base's tools.json, which the recheck's read-back updates.
+	if err := copyToolsRecord(base, staging); err != nil {
+		return m, err
+	}
+	staged, err := StagedProfiles(staging)
+	if err != nil {
+		return m, err
+	}
 	codeFile := o.Layout.SetupCode()
 	removeCode := func() {
 		if err := os.Remove(codeFile); err != nil && !os.IsNotExist(err) {
@@ -188,17 +197,21 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 		}
 	}
 	defer removeCode()
-	if err := o.mintCode(ctx, spec, codeFile); err != nil {
+	offered, err := o.mintCode(ctx, spec, codeFile, staged)
+	if err != nil {
 		return m, err
 	}
 	fmt.Fprintf(o.Out, editCodeLine+"\n", codeFile)
+	for _, name := range offered {
+		fmt.Fprintf(o.Out, editProfileLine+"\n", name, guestagent.ProfileOffer(name))
+	}
 	if err := o.window(ctx, spec); err != nil {
 		return m, err
 	}
 	removeCode()
 	fmt.Fprintln(o.Out, EditCheckingLine)
 	last, _ := ReadEditRecord(base, m)
-	desktop, err := o.recheck(ctx, spec, m)
+	desktop, err := o.recheck(ctx, spec, m, staging, len(offered) > 0)
 	var discarded *EditDiscardedError
 	if errors.As(err, &discarded) {
 		discarded.Since = m.CreatedAt
@@ -212,9 +225,6 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 		return m, err
 	}
 	m.Desktop = desktop
-	if err := copyToolsRecord(base, staging); err != nil {
-		return m, err
-	}
 	if err := writeJSONAtomic(filepath.Join(staging, ManifestFile), m, 0o600); err != nil {
 		return m, err
 	}
@@ -270,18 +280,26 @@ func setAdminCode(ctx context.Context, g EditGuest, code []byte) error {
 	return nil
 }
 
-// mintCode sets a fresh one-time code in a headless boot and, once the boot has stopped, writes it to the
-// setup-code file (0600), which only the person at this Mac reads.
-func (o *EditOptions) mintCode(ctx context.Context, spec MachineSpec, path string) error {
+// mintCode sets a fresh one-time code in a headless boot, offers the staged profiles there (offerProfiles),
+// and, once the boot has stopped, writes the code to the setup-code file (0600), which only the person at
+// this Mac reads. It returns the profiles offered.
+func (o *EditOptions) mintCode(ctx context.Context, spec MachineSpec, path string, staged []string) (offered []string, err error) {
 	code, err := randomCode(8)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer clear(code)
-	if err := o.guest(ctx, spec, func(g EditGuest) error { return setAdminCode(ctx, g, code) }); err != nil {
+	err = o.guest(ctx, spec, func(g EditGuest) error {
+		if err := setAdminCode(ctx, g, code); err != nil {
+			return err
+		}
+		offered, err = offerProfiles(ctx, g, staged)
 		return err
+	})
+	if err != nil {
+		return nil, err
 	}
-	return writeSetupCode(path, SetupCodeRecord{Account: provisionUser, Code: string(code)})
+	return offered, writeSetupCode(path, SetupCodeRecord{Account: provisionUser, Code: string(code)})
 }
 
 // window boots spec plain in a window on this Mac, with the edit's text, and waits until the guest shuts
@@ -346,8 +364,10 @@ func (o *EditOptions) window(ctx context.Context, spec MachineSpec) error {
 
 // recheck boots the edited copy headless: it replaces the one-time code first, whatever follows, then
 // checks desktop control, the accounts, Remote Login and the launcher's self-test, in that order. The
-// first that fails is an *EditDiscardedError. It returns the desktop mode.
-func (o *EditOptions) recheck(ctx context.Context, spec MachineSpec, m Manifest) (desktop string, err error) {
+// first that fails is an *EditDiscardedError. Then it removes the profiles' offer (offered) and reads the
+// items back into staging's tools.json (ReadBackItems), a failure of either discarding the copy with no
+// line of its own. It returns the desktop mode.
+func (o *EditOptions) recheck(ctx context.Context, spec MachineSpec, m Manifest, staging string, offered bool) (desktop string, err error) {
 	err = o.guest(ctx, spec, func(g EditGuest) error {
 		reset, err := randomCode(24)
 		if err != nil {
@@ -388,6 +408,14 @@ func (o *EditOptions) recheck(ctx context.Context, spec MachineSpec, m Manifest)
 			if _, ok := res.Withheld[h]; ok {
 				return &EditDiscardedError{Recheck: EditRecheckSelftest, Detail: h}
 			}
+		}
+		if offered {
+			if err := runItem(ctx, g, "/bin/rm", "-rf", guestagent.MacProfileOffer); err != nil {
+				return fmt.Errorf("macvm: the profiles' offer: %w", err)
+			}
+		}
+		if err := ReadBackItems(ctx, g, staging); err != nil {
+			return fmt.Errorf("macvm: the edited base's items read-back: %w", err)
 		}
 		return nil
 	})
