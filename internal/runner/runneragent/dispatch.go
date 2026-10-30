@@ -164,8 +164,31 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 		return d.sweep(ctx, args)
 	case runnerwire.MethodSelftest:
 		return d.selftest(ctx, args)
+	case runnerwire.MethodReclaimDrive:
+		return d.reclaimDrive(ctx, args)
 	}
 	return d.refCall(ctx, method, args)
+}
+
+// reclaimDrive deletes a person's disk drive from this Mac. Only a disk drive is ever reclaimed over
+// the wire: every other backend's storage is the deployment's own, never a runner's.
+func (d *Dispatcher) reclaimDrive(ctx context.Context, args json.RawMessage) (any, error) {
+	var drive types.DriveMount
+	if err := runnerwire.Unmarshal(args, &drive); err != nil {
+		return nil, err
+	}
+	rc, ok := d.cfg.Substrate.(runner.DriveReclaimer)
+	if drive.Backend != types.DriveBackendMacDisk || !ok {
+		return nil, runnerwire.Refuse("this runner deletes only the disk drives it keeps")
+	}
+	outcome, err := rc.ReclaimDrive(ctx, drive)
+	switch {
+	case errors.Is(err, runner.ErrDriveInUse):
+		return runnerwire.ReclaimDriveResult{InUse: true}, nil
+	case err != nil:
+		return nil, err
+	}
+	return runnerwire.ReclaimDriveResult{Outcome: outcome}, nil
 }
 
 func (d *Dispatcher) local(ref string) (string, error) {

@@ -163,6 +163,20 @@ func (s *Server) handle(ctx context.Context, id uint32, method string, args json
 			return nil, err
 		}
 		return nil, ws.WorkloadStatus(ctx, a)
+	case runnerwire.MethodReclaimDrive:
+		rc, ok := s.sub.(runner.DriveReclaimer)
+		if !ok {
+			return nil, runnerwire.Refuse("this runner deletes no drives")
+		}
+		m, err := decode[types.DriveMount](args)
+		if err != nil {
+			return nil, err
+		}
+		outcome, err := rc.ReclaimDrive(ctx, m)
+		if errors.Is(err, runner.ErrDriveInUse) {
+			return runnerwire.ReclaimDriveResult{InUse: true}, nil
+		}
+		return runnerwire.ReclaimDriveResult{Outcome: outcome}, err
 	case runnerwire.MethodEnsureProxyImg:
 		rv, ok := s.sub.(runner.ProxyReviver)
 		if !ok {
