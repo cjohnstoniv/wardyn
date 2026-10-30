@@ -234,12 +234,14 @@ func (f *admissionFixture) runGate(path string) (int, string, error) {
 	return f.srv.validateWorkspaceSources(f.ctx, readOnlyMount(path), runCarrierRule{})
 }
 
-// wantRefusedNamed requires the run gate to refuse path by the stale-binding reason.
+// wantRefusedNamed requires the run gate to refuse path by the stale-binding reason, naming the folder's
+// workspace (seedBoundFolder names it after the path's base) as the console's copy does.
 func (f *admissionFixture) wantRefusedNamed(t *testing.T, when, path string) {
 	t.Helper()
 	code, reason, err := f.runGate(path)
-	if err == nil || code != http.StatusUnprocessableEntity || reason != "workspace_source_runner_unavailable" || !strings.Contains(err.Error(), path) {
-		t.Errorf("%s: run gate = %d %q %v, want 422 workspace_source_runner_unavailable naming %s", when, code, reason, err, path)
+	want := "The folder for " + filepath.Base(path) + " is on "
+	if err == nil || code != http.StatusUnprocessableEntity || reason != "workspace_source_runner_unavailable" || !strings.Contains(err.Error(), want) {
+		t.Errorf("%s: run gate = %d %q %v, want 422 workspace_source_runner_unavailable saying %q", when, code, reason, err, want)
 	}
 }
 
