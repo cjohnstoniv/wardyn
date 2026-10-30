@@ -99,6 +99,18 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Offboarding no longer stops handing a person's workspaces to the operator when the renamed fallback for a name
   collision is itself taken. The fallback now takes a counter until neither the person nor the operator holds the
   name, and one workspace that cannot be handed over no longer stops the others.
+- `wardyn-runnerd setup` now registers through the proxy its connection check used. The check went through the
+  settings setup installs for the service, but the registration followed this shell's environment, so a rerun from a
+  shell with no proxy could pass the check and then dial the organisation direct.
+- A Docker runner whose relay status failed to reach the organisation now sends it again at the next relay check. A
+  failed rebuild or send of the runner's capabilities was retried only on a reconnect or a further change of state.
+- A folders runner that resumes its session now sends the failure it recorded while the connection was down. Only a
+  fresh session sent it, so a stable resumed runner stayed connected without the organisation seeing it.
+- A `wardyn-runnerd serve` start that fails on a bad flag now records that error as the last error in the runner's
+  `status.json`. The file was rewritten as starting then stopped, which dropped the previous process's last error and
+  recorded nothing in its place.
+- `wardyn-runnerd doctor` no longer pulls the proxy image if it is removed from the engine between its image check and
+  its relay check. The relay check now fails on the missing image instead, as the page says doctor never pulls.
 
 ## [0.10.0-rc.8] — 2026-10-29
 

@@ -92,6 +92,12 @@ func probeSetupRelay(ctx context.Context, image, network string, eng dockerEngin
 	if err != nil {
 		return relayPair{}, err
 	}
+	if !pullsAllowed(ctx) {
+		// The driver's probe never pulls: an image that vanished since the caller looked fails it with the engine's answer.
+		ctx, cancel := context.WithTimeout(ctx, relayCheckBound)
+		defer cancel()
+		return findRelay(ctx, d.ProbeRelay, eng, want)
+	}
 	// Getting the image is told apart from the probe itself: an image setup cannot get may be one the
 	// organisation's answer replaces, but a probe that ran and failed never is.
 	if err := ensureProxyImage(ctx, d, image); err != nil {

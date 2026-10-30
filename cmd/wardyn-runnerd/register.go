@@ -5,6 +5,7 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"crypto/ed25519"
 	"crypto/x509"
 	"errors"
@@ -202,6 +203,15 @@ func registrationClient(a registerArgs) (*http.Client, error) {
 	return orgHTTPClient(bundle + orgOnly)
 }
 
+// registrationRoute is the route setup's connection check left on ctx, nil when there is none.
+func registrationRoute(ctx context.Context) func(*http.Request) (*url.URL, error) {
+	if ctx == nil {
+		return nil
+	}
+	route, _ := ctx.Value(registrationRouteKey{}).(func(*http.Request) (*url.URL, error))
+	return route
+}
+
 // dropUnsentKey removes the key made for this call when the failure was an unknown authority: nothing left
 // this computer, and the retry with --org-ca-file must not be refused for finding it.
 func dropUnsentKey(err error, a registerArgs, stateDir string) {
@@ -286,6 +296,15 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 	}}
 	if orgClient != nil {
 		client.HTTPClient.Transport = orgClient.Transport
+	}
+	// Setup's check has already chosen the route (the service's, not this shell's); a plain register has none.
+	if route := registrationRoute(cmd.Context()); route != nil {
+		tr, _ := client.HTTPClient.Transport.(*http.Transport)
+		if tr == nil {
+			tr = http.DefaultTransport.(*http.Transport).Clone()
+		}
+		tr.Proxy = route
+		client.HTTPClient.Transport = tr
 	}
 	arch := a.arch
 	if arch == "" && !a.noMeasure {

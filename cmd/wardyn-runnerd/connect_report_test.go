@@ -72,7 +72,8 @@ func TestRelayWatchReprobesOnTheIntervalAndNamesADownRelay(t *testing.T) {
 	changed := make(chan struct{}, 4)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
-	go func() { w.run(ctx, func() { changed <- struct{}{} }); close(done) }()
+	// A send that went out clears the latch, as ack does.
+	go func() { w.run(ctx, func() { w.sent(w.current()); changed <- struct{}{} }); close(done) }()
 	defer func() { cancel(); <-done }()
 
 	tick := func() {
@@ -109,6 +110,35 @@ func TestRelayWatchReprobesOnTheIntervalAndNamesADownRelay(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "warning_cleared=relay_unreachable") {
 		t.Fatalf("the warning did not clear: %s", logs.String())
+	}
+}
+
+// A state change whose caps send failed stays unsent, so the next tick sends again though the probe finds
+// nothing new; once a send goes out the ticks stop calling for one.
+func TestRelayWatchResendsAnUnsentStateOnTheNextTick(t *testing.T) {
+	w := newRelayWatch(func(context.Context) error { return errors.New("relay: connection refused") }, nil)
+	ticks := make(chan time.Time)
+	w.ticker = func(time.Duration) (<-chan time.Time, func()) { return ticks, func() {} }
+	changed := make(chan struct{}, 8)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { w.run(ctx, func() { changed <- struct{}{} }); close(done) }()
+	defer func() { cancel(); <-done }()
+	tick := func() {
+		ticks <- time.Now()
+		ticks <- time.Now() // the second send waits until the first tick's check and call returned
+	}
+	tick() // the relay goes down: a change, and its send fails (the hook never clears the latch)
+	tick() // the state is unchanged, but the organisation never received it
+	if got := len(changed); got < 2 {
+		t.Fatalf("%d sends asked for across two ticks with the first unsent, want at least 2", got)
+	}
+	st, _ := w.pending()
+	w.sent(st)
+	before := len(changed)
+	tick()
+	if got := len(changed) - before; got != 0 {
+		t.Fatalf("%d sends asked for once the state was received, want none", got)
 	}
 }
 
