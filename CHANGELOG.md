@@ -23,6 +23,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A `wardyn-runnerd serve` start that fails on a bad flag now records that error as the last error in the runner's
   `status.json`. The file was rewritten as starting then stopped, which dropped the previous process's last error and
   recorded nothing in its place.
+- `wardyn-runnerd doctor` no longer pulls the proxy image if it is removed from the engine between its image check and
+  its relay check. The relay check now fails on the missing image instead, as the page says doctor never pulls.
 
 ## [0.10.0-rc.8] — 2026-10-29
 
