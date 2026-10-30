@@ -140,7 +140,8 @@ func (g *goneAPIRig) awaitGoneEnd() {
 		if got, err = g.st.GetRun(g.t.Context(), g.run.ID); err != nil {
 			g.t.Fatal(err)
 		}
-		if got.State == types.RunFailed && len(g.lostEvents()) > 0 {
+		// run.lost is written before the teardown, and the hint after it: wait for both.
+		if got.State == types.RunFailed && len(g.lostEvents()) > 0 && got.FailureHint != "" {
 			break
 		}
 		if time.Now().After(deadline) {
