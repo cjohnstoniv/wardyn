@@ -19,7 +19,6 @@ import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { workspaces } from "../../../../../lib/api/workspaces";
 import { useK8sRunner } from "../../../../../lib/use-k8s-runner";
-import { useMyRunners } from "../../../../../lib/use-my-runners";
 import { intentToWire } from "../../draft/intent-to-wire";
 import type { RunAttachment } from "../../../../../lib/types/new-run-contract";
 import type { RunIntent } from "../../draft/run-intent";
@@ -86,9 +85,7 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
   const edit = React.useCallback((apply: (i: RunIntent) => RunIntent) => dispatch({ type: "edit", apply }), [dispatch]);
   const loaded = useLoaded(list);
   const rows = React.useMemo(() => (loaded.status === "ready" ? repoRows(loaded.value) : []), [loaded]);
-  const myRunners = useMyRunners();
-  const runnerNames = React.useMemo(() => new Map((myRunners ?? []).map((r) => [r.id, r.name])), [myRunners]);
-  const folders = React.useMemo(() => (loaded.status === "ready" ? folderSources(loaded.value, runnerNames) : []), [loaded, runnerNames]);
+  const folders = React.useMemo(() => (loaded.status === "ready" ? folderSources(loaded.value) : []), [loaded]);
 
   // Nothing is sent while a step's local issues are open; the size has no issue here, as an untouched prefill is not a request.
   const wire = React.useMemo(() => intentToWire(intent), [intent]);

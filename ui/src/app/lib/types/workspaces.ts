@@ -176,6 +176,9 @@ export interface WorkspaceSourceInput {
   // SERVER-OWNED, read-only, on a source with a runner_id: how that binding stands now.
   // Never sent on a write.
   runner_state?: WorkspaceSourceRunnerState;
+  // SERVER-OWNED, read-only, on a source with a runner_id: the bound runner's name; absent
+  // when the runner no longer exists. Never sent on a write.
+  runner_name?: string;
   // SERVER-OWNED, read-only: does this deployment's workspace-provider policy
   // admit this repo source today? Present on repo sources only, and ABSENT on a
   // deployment with no provider rows — so `admitted === false` is the ONLY value

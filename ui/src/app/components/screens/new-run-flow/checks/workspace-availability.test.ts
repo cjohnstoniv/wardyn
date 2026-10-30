@@ -50,14 +50,22 @@ describe("a pin the server hid (provider_unavailable)", () => {
 
 // A folder bound to a person's runner (runner_id) stays usable only while the server says the binding is claimed.
 describe("a folder bound to a runner", () => {
+  // The server projects runner_name while the runner exists; a removed runner has none.
   const bound = (runner_state: "claimed" | "revoked" | "missing" | "not_owner", over = {}) =>
     makeWorkspace({
       id: "ws-r",
       name: "payments",
-      sources: [{ type: "local_dir", path: "/Users/dana/work/payments", runner_id: "abcdef12-3456-7890-abcd-ef1234567890", runner_state }],
+      sources: [
+        {
+          type: "local_dir",
+          path: "/Users/dana/work/payments",
+          runner_id: "abcdef12-3456-7890-abcd-ef1234567890",
+          runner_state,
+          ...(runner_state === "missing" ? {} : { runner_name: "ec2-mac-rc9" }),
+        },
+      ],
       ...over,
     });
-  const names = new Map([["abcdef12-3456-7890-abcd-ef1234567890", "ec2-mac-rc9"]]);
 
   it.each([
     ["revoked", "runner revoked"],
@@ -67,21 +75,23 @@ describe("a folder bound to a runner", () => {
     const ws = bound(state);
     const runner = state === "missing" ? "abcdef12" : "ec2-mac-rc9";
     const refusal = `The folder for payments is on ${runner}, which can't run it now (${word}). Add a new workspace with a folder on a runner you own or on the Wardyn server.`;
-    expect(workspaceRunnerRefusal(ws, state === "missing" ? undefined : names)).toBe(refusal);
+    expect(workspaceRunnerRefusal(ws)).toBe(refusal);
     // The run's folder step lists the folder with the same reason, so it cannot be included.
-    expect(folderSources([ws], state === "missing" ? undefined : names)[0].unavailable).toBe(refusal);
+    expect(folderSources([ws])[0].unavailable).toBe(refusal);
   });
 
-  it("names a runner the caller cannot read by the first 8 characters of its id", () => {
-    expect(runnerLabel("abcdef12-3456-7890-abcd-ef1234567890", new Map())).toBe("abcdef12");
-    expect(runnerLabel("abcdef12-3456-7890-abcd-ef1234567890", names)).toBe("ec2-mac-rc9");
+  it("names the runner by runner_name, and by the first 8 characters of its id only when there is none", () => {
+    const id = "abcdef12-3456-7890-abcd-ef1234567890";
+    expect(runnerLabel({ runner_id: id, runner_name: "ec2-mac-rc9" })).toBe("ec2-mac-rc9");
+    expect(runnerLabel({ runner_id: id, runner_name: "" })).toBe("abcdef12");
+    expect(runnerLabel({ runner_id: id })).toBe("abcdef12");
   });
 
   it("a claimed runner blocks nothing, and a bound source is never blocked for not being scanned", () => {
     for (const status of ["pending_scan", "scanning", "scanned", "error"] as const) {
       const ws = bound("claimed", { status });
-      expect(workspaceRunnerRefusal(ws, names)).toBeUndefined();
-      expect(folderSources([ws], names)[0].unavailable).toBeUndefined();
+      expect(workspaceRunnerRefusal(ws)).toBeUndefined();
+      expect(folderSources([ws])[0].unavailable).toBeUndefined();
     }
   });
 

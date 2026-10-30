@@ -84,8 +84,8 @@ export function workspaceUnavailableToCaller(
   return workspaceOrProviderUnavailable || workspaceModelProviderUnavailable(ws, isAgent ? modelProviders : undefined);
 }
 
-/** A runner the server names only by id (removed, or not the caller's) is shown by its first 8 characters. */
-export const runnerLabel = (id: string, names?: ReadonlyMap<string, string>): string => names?.get(id) ?? id.slice(0, 8);
+/** The runner a source is bound to, by the name the server projects; a runner that no longer exists is shown by the first 8 characters of its id. */
+export const runnerLabel = (s: { runner_id: string; runner_name?: string }): string => s.runner_name || s.runner_id.slice(0, 8);
 
 /** The source whose runner can no longer run it: its runner_state is anything but claimed. */
 export function staleRunnerSource(ws: Workspace): (WorkspaceSourceInput & { runner_id: string; runner_state: "revoked" | "missing" | "not_owner" }) | undefined {
@@ -100,7 +100,7 @@ export function staleRunnerSource(ws: Workspace): (WorkspaceSourceInput & { runn
  * owner's. Undefined when no bound source is stale. A bound source is never refused for being unscanned: the
  * runner checks the folder when the run starts.
  */
-export function workspaceRunnerRefusal(ws: Workspace, names?: ReadonlyMap<string, string>): string | undefined {
+export function workspaceRunnerRefusal(ws: Workspace): string | undefined {
   const s = staleRunnerSource(ws);
-  return s ? FOLDER_RUNNER.REFUSAL(ws.name, runnerLabel(s.runner_id, names), FOLDER_RUNNER.STATE_CHIP[s.runner_state].toLowerCase()) : undefined;
+  return s ? FOLDER_RUNNER.REFUSAL(ws.name, runnerLabel(s), FOLDER_RUNNER.STATE_CHIP[s.runner_state].toLowerCase()) : undefined;
 }

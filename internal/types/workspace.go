@@ -112,6 +112,8 @@ type WorkspaceSource struct {
 	// now, one of the WorkspaceSourceRunner* values. Anything but claimed
 	// refuses a run by name until the source is rebound or removed.
 	RunnerState string `json:"runner_state,omitempty"`
+	// RunnerName is a server-owned read projection on a source with a RunnerID, never persisted or from a write body: the bound runner's name, empty when the runner no longer exists.
+	RunnerName string `json:"runner_name,omitempty"`
 }
 
 // The values of WorkspaceSource.RunnerState.

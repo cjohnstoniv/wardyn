@@ -22,7 +22,6 @@ import { EGRESS } from "../../wardyn/copy";
 import { usePoll } from "../../../lib/use-poll";
 import { hasLlmPath } from "../../../lib/readiness";
 import { FOLDER_RUNNER, WORKSPACE_DETAIL_EXTRA as WORKSPACE_COPY_EXTRA } from "../../../lib/workspace-copy";
-import { useMyRunners } from "../../../lib/use-my-runners";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { useMyCapabilities } from "../../../lib/capabilities";
 import { DENIED } from "../../../lib/permissions-copy";
@@ -94,8 +93,6 @@ export function WorkspaceDetailScreen() {
   // useMyCapabilities' own `enabled` gate.
   const operator = useOperator();
   const caps = useMyCapabilities(!operator);
-  const myRunners = useMyRunners();
-  const runnerNames = React.useMemo(() => new Map((myRunners ?? []).map((r) => [r.id, r.name])), [myRunners]);
   const { status: shellStatus } = useShellSetupStatus();
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   // F6-F3 (site 2): `null` means "don't know yet" (setup status unreachable),
@@ -378,7 +375,7 @@ export function WorkspaceDetailScreen() {
   const workspaceUnavailable = workspaceUnavailableToCaller(ws, caps, resolvedModelProviders(shellStatus), true);
   // A folder on a runner that can't run it: shown beside the path, and said once in full under the header.
   const boundSource = (ws.sources ?? []).find((s) => s.type === "local_dir" && s.runner_id);
-  const runnerRefusal = workspaceRunnerRefusal(ws, runnerNames);
+  const runnerRefusal = workspaceRunnerRefusal(ws);
   const staleState = staleRunnerSource(ws)?.runner_state;
   // The pinned provider's id is not this caller's to see: the server sent provider_unavailable in its place, or (for
   // a non-admin) their own list lacks it. An admin always sees the stored id, so a dead binding can be cleared.
@@ -415,7 +412,7 @@ export function WorkspaceDetailScreen() {
               {boundSource?.runner_id && (
                 <span className="inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-meta text-muted-foreground">
                   <Laptop className="size-3" aria-hidden />
-                  {FOLDER_RUNNER.CHIP(runnerLabel(boundSource.runner_id, runnerNames))}
+                  {FOLDER_RUNNER.CHIP(runnerLabel({ runner_id: boundSource.runner_id, runner_name: boundSource.runner_name }))}
                 </span>
               )}
               {staleState && (

@@ -7,7 +7,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { Workspace, WorkspaceSourceInput } from "../../../lib/types";
-import type { RunnerView } from "../../../lib/types/runners";
 import { OperatorProvider } from "../../wardyn/operator-context";
 
 const getWorkspaceMock = vi.fn();
@@ -28,8 +27,8 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.f
 import { WorkspaceDetailScreen } from "./workspace-detail";
 
 const RUNNER_ID = "abcdef12-3456-7890-abcd-ef1234567890";
-const MAC = { id: RUNNER_ID, name: "ec2-mac-rc9", state: "claimed", owner_kind: "person", kind: "self_hosted" } as RunnerView;
 
+// The server names the runner on the source (runner_name), so /me/runners is never the name's source.
 function folderWs(source: Partial<WorkspaceSourceInput>): Workspace {
   return {
     id: "ws-1",
@@ -60,12 +59,12 @@ const startRun = () => screen.getByRole("button", { name: "Start a run" });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  listMineMock.mockResolvedValue([MAC]);
+  listMineMock.mockResolvedValue([]);
 });
 
 describe("Workspace detail: a folder on a runner", () => {
   it("a claimed runner shows only the 'on <runner>' chip, with no warning and no refusal", async () => {
-    renderDetail(folderWs({ runner_id: RUNNER_ID, runner_state: "claimed" }));
+    renderDetail(folderWs({ runner_id: RUNNER_ID, runner_name: "ec2-mac-rc9", runner_state: "claimed" }));
     expect(await screen.findByText("on ec2-mac-rc9")).toBeInTheDocument();
     for (const chip of ["Runner revoked", "Runner removed", "Not your runner"]) expect(screen.queryByText(chip)).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -82,9 +81,10 @@ describe("Workspace detail: a folder on a runner", () => {
     ["revoked", "Runner revoked", "runner revoked"],
     ["not_owner", "Not your runner", "not your runner"],
   ] as const)("a %s runner shows its state chip and the refusal naming the runner", async (state, chip, word) => {
-    renderDetail(folderWs({ runner_id: RUNNER_ID, runner_state: state }));
+    renderDetail(folderWs({ runner_id: RUNNER_ID, runner_name: "ec2-mac-rc9", runner_state: state }));
     expect(await screen.findByText(chip)).toBeInTheDocument();
     expect(screen.getByText("on ec2-mac-rc9")).toBeInTheDocument();
+    expect(listMineMock).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toHaveTextContent(
       `The folder for payments is on ec2-mac-rc9, which can't run it now (${word}). Add a new workspace with a folder on a runner you own or on the Wardyn server.`,
     );
@@ -92,7 +92,6 @@ describe("Workspace detail: a folder on a runner", () => {
   });
 
   it("a removed runner is named by the first 8 characters of its id", async () => {
-    listMineMock.mockResolvedValue([]);
     renderDetail(folderWs({ runner_id: RUNNER_ID, runner_state: "missing" }));
     expect(await screen.findByText("Runner removed")).toBeInTheDocument();
     expect(screen.getByText("on abcdef12")).toBeInTheDocument();

@@ -341,10 +341,10 @@ describe("source parity — five more flat structs", () => {
     expect(omitted.sort()).toEqual(["attachments", "built_profile_hash", "egress_edited_at"].sort());
   });
 
-  it("WorkspaceSource: a folder's runner_id and its read-only runner_state are on both sides", () => {
+  it("WorkspaceSource: a folder's runner_id and its read-only runner_state and runner_name are on both sides", () => {
     const goTags = goJSONTags(workspaceGo, "WorkspaceSource");
     const tsKeys = tsInterfaceKeys(workspacesTs, "WorkspaceSourceInput");
-    for (const key of ["runner_id", "runner_state"]) {
+    for (const key of ["runner_id", "runner_state", "runner_name"]) {
       expect(goTags).toContain(key);
       expect(tsKeys).toContain(key);
     }
