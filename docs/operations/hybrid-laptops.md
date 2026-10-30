@@ -186,7 +186,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 ### Drive roots on a laptop runner
 
-- A drive bound to a person's own runner, or a folder bound to it, mounts only below a **drive root** the runner advertises. With none, the organisation refuses drives and bound folders on it.
+- A drive bound to a person's own runner mounts only below a **drive root** the runner advertises, and a folder bound to it only inside one, or the root itself. With none, the organisation refuses drives and bound folders on it.
 - The person gives the installed service its roots when they set it up: `wardyn-runnerd setup --drive-root /Volumes/team-share --drive-root /srv/x`. Setup writes them to `runnerd.json` as `drive_root`; a rerun with `--drive-root` replaces the list, and a rerun without it keeps it. The roots are not in the unit or the LaunchAgent.
 - A managed Mac can set them in the profile instead (`DriveRoot`, an array of strings), which outranks `WARDYN_DRIVE_ROOT` and `runnerd.json`; a `--drive-root` on `serve` outranks all three.
 - Each is an absolute, cleaned folder below `/`. A bad value refuses `serve` and `setup`, naming where it came from. `wardyn-runnerd doctor` prints the roots in effect and their source.
