@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { setField } from "../../../../../../test/set-field";
-import { MY_COMPONENTS, SAVED_SECRETS } from "../../../../../lib/new-run-fixtures/scenarios/catalogue";
+import { MY_COMPONENTS, ORG_KUBECTL, SAVED_SECRETS } from "../../../../../lib/new-run-fixtures/scenarios/catalogue";
 import { SCENARIO_PREFLIGHT } from "../../../../../lib/new-run-fixtures/scenarios/preflight";
 import { SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import { CLAUDE_UNGATED, CODEX, MCP_LOCAL, MCP_LOCAL_ENV, MODEL_PROVIDERS, PROVIDER_ACCESS, withFacts } from "../../../../../lib/new-run-fixtures/scenarios/tools-harness";
@@ -364,5 +364,14 @@ describe("Review", () => {
     expect(screen.getByText("DOCS_TOKEN")).toBeTruthy();
     expect(screen.getByText(NR_TOOLS.FOR_ROW("docs-search"))).toBeTruthy();
     expect(screen.getByText(NR_TOOLS.DELIVERY_ENV)).toBeTruthy();
+  });
+
+  it("never gives a local server's secret cluster wording, even when an organisation row has its id", async () => {
+    on();
+    h.mine.mockResolvedValue({ ...MY_COMPONENTS, org: [{ ...ORG_KUBECTL, id: "inline:0" }] });
+    render(<AccessGroup draft={draftOf(WITH_DOCS)} pre={pre} preview={null} docRows={[]} go={() => {}} dispatch={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_ACCESS}` }));
+    expect(screen.getByText("DOCS_TOKEN")).toBeTruthy();
+    expect(screen.queryByText(NR_TOOLS.KUBE_CREDENTIAL("staging"))).toBeNull();
   });
 });
