@@ -246,7 +246,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `js-base64` | 3.9.4 | BSD-3-Clause |
 | `js-tokens` | 4.0.0 | MIT |
 | `loose-envify` | 1.4.0 | MIT |
-| `lucide-react` | 1.57.0 | ISC |
+| `lucide-react` | 1.61.0 | ISC |
 | `object-assign` | 4.1.1 | MIT |
 | `prop-types` | 15.8.1 | MIT |
 | `react` | 19.3.1 | MIT |
