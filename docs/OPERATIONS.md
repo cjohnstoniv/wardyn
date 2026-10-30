@@ -1449,7 +1449,7 @@ erases one person's retained records by explicit scope, in one audited act
 |---|---|
 | Suspend | Completed first, if it is not already |
 | Erase | Credentials, masking copies, components, run setups and runner pools: see [Erase](#erase) |
-| Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, audited as `workspace.reassign`; `keep` leaves them |
+| Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, renamed when the operator already has one of that name, and audited as `workspace.reassign`; `keep` leaves them. A step that cannot finish keeps the purge pending until an admin resolves it |
 | Grants | User-subject grants and governance assignments: see [Grants](#grants) |
 | Runners | Revoked with their unused registration tokens (`DELETE /runners/...`). Their name is cleared as the revoker of any runner and as the minter of a token made for someone else |
 | Invitations, service identities | Invitations to the person deleted, their name cleared from the rest. A service identity they still sponsor keeps the purge pending until handed over (`PATCH /service-identities/{name}`) or retired |
