@@ -8,7 +8,7 @@
 // API, CLI, admin or portal token ever calls a port). From there both ride one pipeline: the session
 // re-assert, a per-run request bucket, one inbound.allow row per admitted request, then the relay. The
 // token never reaches the sandbox (uiStripInbound drops Authorization); X-Wardyn-Caller names the caller.
-// A WebSocket or other upgrade a token opens is admitted again every inboundResolveTTL while it lasts
+// A WebSocket or other upgrade a token opens is admitted again every half inboundResolveTTL while it lasts
 // (watchInboundStream), so a revoke reaches it as it reaches the token's next request.
 //
 // The host-mode cross-site check here binds every cookie session, inbound or not: the victim of a foreign
@@ -56,6 +56,9 @@ const (
 	// maxInboundEntries bounds each of uiInboundState's maps; past it a map is pruned wholesale, like
 	// uiReady's. The worst case is one extra token lookup, or one fresh bucket, per live caller.
 	maxInboundEntries = 1024
+	// inboundReadmitTimeout bounds one re-admission of an inbound-token stream, and the refusal row its close
+	// writes after (watchInboundStream).
+	inboundReadmitTimeout = 10 * time.Second
 )
 
 // The inbound.deny `reason` values the relay writes itself: audit data, never on the wire. A re-assert
@@ -151,22 +154,28 @@ func refill[K comparable](m *map[K]*inboundBucket, k K, now time.Time) *inboundB
 	return b
 }
 
-// take spends one request from runID's bucket and from principal's, recording ref as the run's sandbox when
-// it is known, and answers whether the request may go and the sandbox reference the run's bucket holds. A
-// request that either bucket refuses spends from neither, so a caller over its own limit takes nothing
-// from the run's callers.
+// take spends one request from runID's bucket and, unless principal is "", from principal's, recording ref
+// as the run's sandbox when it is known, and answers whether the request may go and the sandbox reference
+// the run's bucket holds. A request that either bucket refuses spends from neither, so a caller over its own
+// limit takes nothing from the run's callers.
 func (st *uiInboundState) take(runID uuid.UUID, principal string, now time.Time, ref string) (bool, string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	b, c := refill(&st.buckets, runID, now), refill(&st.callers, principal, now)
+	b := refill(&st.buckets, runID, now)
 	if ref != "" {
 		b.ref = ref
 	}
-	if b.tokens < 1 || c.tokens < 1 {
+	var c *inboundBucket
+	if principal != "" {
+		c = refill(&st.callers, principal, now)
+	}
+	if b.tokens < 1 || (c != nil && c.tokens < 1) {
 		return false, b.ref
 	}
 	b.tokens--
-	c.tokens--
+	if c != nil {
+		c.tokens--
+	}
 	return true, b.ref
 }
 
@@ -185,7 +194,8 @@ func (s *Server) uiRelayAnsweredEarly(w http.ResponseWriter, r *http.Request, ru
 	if raw, ok := bearerToken(r); ok && strings.HasPrefix(raw, apiTokenPrefix) {
 		if sess, ok := s.inboundTokenSession(w, r, runID, app, raw); ok {
 			// An upgrade this request becomes is admitted again while it lasts (watchInboundStream).
-			a := inboundReadmission{r: r.WithContext(context.WithoutCancel(r.Context())), runID: runID, app: app, raw: raw, principal: sess.Principal, tokenID: sess.tokenID}
+			a := inboundReadmission{r: r.WithContext(context.WithoutCancel(r.Context())), runID: runID, app: app, raw: raw,
+				principal: sess.Principal, tokenID: sess.tokenID, checked: time.Unix(sess.IssuedAt, 0)}
 			s.relayUISession(w, r.WithContext(context.WithValue(r.Context(), inboundReadmitCtxKey{}, a)), sess)
 		}
 		return true
@@ -268,7 +278,10 @@ func (s *Server) inboundTokenSession(w http.ResponseWriter, r *http.Request, run
 	if sess, ok := s.uiInbound.cached(key, now); ok {
 		return sess, true
 	}
-	sess, ok := s.admitInboundToken(w, r, runID, app, raw, "", uuid.Nil)
+	sess, refusal, ok := s.admitInboundToken(w, r, runID, app, raw, "", uuid.Nil)
+	if refusal != nil {
+		refusal(context.WithoutCancel(r.Context()))
+	}
 	if ok {
 		s.uiInbound.remember(key, sess, now)
 	}
@@ -279,36 +292,38 @@ func (s *Server) inboundTokenSession(w http.ResponseWriter, r *http.Request, run
 // 401 inbound_credential_invalid; a live one that may not call this app — no run, no such app, an app that
 // is not inbound, a holder who is neither the owner nor a caller — is 404 inbound_not_found, one answer for
 // all four; and one that may, on a run that is not running or is kept, is 409 ui_gateway_not_running. Each
-// refusal writes its inbound.deny row. A run or policy that cannot be read is 503 run_unreadable and no row:
-// no verdict on the caller (readmitInbound keeps a stream on it). ok=false when it has answered.
+// refusal returns the writer of its inbound.deny row, for the caller to run (a stream runs it after its
+// close); nil for no row. A run or policy that cannot be read is 503 run_unreadable and no row: no verdict on
+// the caller (readmitInbound keeps a stream on it). ok=false when it has answered.
 //
 // principal and tokenID are who the token proved to be when a stream was opened under it (inboundReadmission),
 // "" and uuid.Nil on a request: a token that no longer resolves cannot say, and its row then names them.
-func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID uuid.UUID, app, raw, principal string, tokenID uuid.UUID) (uiSession, bool) {
+func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID uuid.UUID, app, raw, principal string, tokenID uuid.UUID) (uiSession, func(context.Context), bool) {
 	v, r, verdict := s.verifyAPIToken(w, r, raw, true)
+	refused := func(principal string, tokenID uuid.UUID, reason string) func(context.Context) {
+		return func(ctx context.Context) { s.auditInboundRefused(ctx, r, runID, app, principal, tokenID, reason) }
+	}
 	switch verdict {
 	case tokenAnswered:
-		return uiSession{}, false
+		return uiSession{}, nil, false
 	case tokenRefused:
-		s.auditInboundRefused(r, runID, app, principal, tokenID, inboundDenyCredentialInvalid)
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeErrorReason(w, http.StatusUnauthorized, reasonInboundCredentialInvalid, inboundCredentialInvalidMsg)
-		return uiSession{}, false
+		return uiSession{}, refused(principal, tokenID, inboundDenyCredentialInvalid), false
 	}
 	sess, deny := s.inboundSessionFor(r.Context(), runID, app, v)
 	switch deny {
 	case "":
-		return sess, true
+		return sess, nil, true
 	case inboundDenyNotRunning:
-		s.auditInboundRefused(r, runID, app, v.Principal, v.ID, deny)
 		writeErrorReason(w, http.StatusConflict, reasonUIGatewayNotRunning, inboundNotRunningMsg)
 	case inboundDenyUnreadable:
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunUnreadable, uiSessionUnverifiableMsg)
+		return uiSession{}, nil, false
 	default:
-		s.auditInboundRefused(r, runID, app, v.Principal, v.ID, deny)
 		writeErrorReason(w, http.StatusNotFound, reasonInboundNotFound, inboundNotFoundMsg)
 	}
-	return uiSession{}, false
+	return uiSession{}, refused(v.Principal, v.ID, deny), false
 }
 
 // inboundReadmitCtxKey carries an inbound-token request's inboundReadmission to the upgrade it may become
@@ -316,44 +331,47 @@ func (s *Server) admitInboundToken(w http.ResponseWriter, r *http.Request, runID
 type inboundReadmitCtxKey struct{}
 
 // inboundReadmission is what a stream needs to admit its token again: the request that opened it, held past
-// its cancel, and the token and the principal and token id it proved.
+// its cancel, the token and the principal and token id it proved, and when that was last checked (the
+// session's issue time: a cached session's is its lookup's).
 type inboundReadmission struct {
 	r                   *http.Request
 	runID               uuid.UUID
 	app, raw, principal string
 	tokenID             uuid.UUID
+	checked             time.Time
 }
 
-// readmitInbound admits a's token again, uncached (admitInboundToken), then asks the run's profile what a
-// request's re-assert asks (uiInboundUnitDenies): a stream is admitted by the same arms a request is. Its
-// answers go nowhere: the stream has no response left to write them on. unavailable is the reason of a
+// readmitInbound admits a's token again on ctx, uncached (admitInboundToken), then asks the run's profile
+// what a request's re-assert asks (uiInboundUnitDenies): a stream is admitted by the same arms a request is.
+// Its answers go nowhere: the stream has no response left to write them on. unavailable is the reason of a
 // refusal that is no verdict on the token or the profile, and writes no inbound.deny row here: a lookup that
 // could not be made (verifyAPIToken's 503, reasonTokenLookupUnavailable), or a run, policy or profile that
-// could not be read (reasonRunUnreadable). It is "" for an admission and for a verdict.
-func (s *Server) readmitInbound(a inboundReadmission) (ok bool, unavailable string) {
+// could not be read (reasonRunUnreadable). It is "" for an admission and for a verdict, and a verdict
+// returns the writer of its inbound.deny row unrun, for the stream to run after its close.
+func (s *Server) readmitInbound(ctx context.Context, a inboundReadmission) (bool, string, func(context.Context)) {
 	w := &inboundReadmitWriter{healthzGateWriter: healthzGateWriter{h: http.Header{}}}
-	sess, ok := s.admitInboundToken(w, a.r, a.runID, a.app, a.raw, a.principal, a.tokenID)
+	sess, refusal, ok := s.admitInboundToken(w, a.r.WithContext(ctx), a.runID, a.app, a.raw, a.principal, a.tokenID)
 	if !ok {
 		if w.status != http.StatusServiceUnavailable {
-			return false, ""
+			return false, "", refusal
 		}
 		var body errorBody
 		if json.Unmarshal(w.body, &body) == nil && body.Reason == reasonRunUnreadable {
-			return false, reasonRunUnreadable
+			return false, reasonRunUnreadable, nil
 		}
-		return false, reasonTokenLookupUnavailable
+		return false, reasonTokenLookupUnavailable, nil
 	}
-	run, err := s.cfg.Store.GetRun(a.r.Context(), a.runID)
+	run, err := s.cfg.Store.GetRun(ctx, a.runID)
 	if err != nil {
-		return false, reasonRunUnreadable
+		return false, reasonRunUnreadable, nil
 	}
-	if de := s.uiInboundUnitDenies(a.r.Context(), sess, run); de != nil {
+	if de := s.uiInboundUnitDenial(ctx, sess, run); de != nil {
 		if de.status == http.StatusServiceUnavailable {
-			return false, reasonRunUnreadable
+			return false, reasonRunUnreadable, nil
 		}
-		return false, ""
+		return false, "", func(ctx context.Context) { s.auditInboundUnitDenies(ctx, sess) }
 	}
-	return true, ""
+	return true, "", nil
 }
 
 // inboundReadmitWriter is healthzGateWriter that keeps the status and the body of what was written.
@@ -371,16 +389,24 @@ func (w *inboundReadmitWriter) Write(b []byte) (int, error) {
 }
 
 // watchInboundStream holds an upgraded stream an inbound token opened to the authority that admitted it:
-// every inboundResolveTTL (uiInboundStreamEvery in tests) the token is admitted again, uncached, by
-// admitInboundToken, so the token's revoke or expiry, its service identity or sponsor going, its owner
+// every half inboundResolveTTL (a tick; uiInboundStreamEvery in tests) the token is admitted again, uncached,
+// by admitInboundToken, so the token's revoke or expiry, its service identity or sponsor going, its owner
 // losing the run or the app no longer naming its caller all reach the stream as they reach a request, as
 // does the run's profile coming to deny UI apps or interactive sessions (uiInboundUnitDenies). A
-// refusal writes the inbound.deny row a refused request writes and closes the stream. A lookup or read
-// that cannot be made keeps the stream and asks again next tick, so one store blip ends no stream; one that
-// stays unanswerable for inboundResolveTTL, the staleness the design allows, closes it with an inbound.deny
-// row naming what was unavailable (token_lookup_unavailable, or run_unreadable for the run, its policy or
-// its profile): fail closed, never a stream held open on a store that stays down. A browser session's stream carries no re-admission and is left as it was
-// (TestUIGateway_EstablishedConnectionOutlivesTheRevoke).
+// refusal closes the stream and then writes the inbound.deny row a refused request writes. A lookup or read
+// that cannot be made keeps the stream and asks again next tick, so one store blip between two good checks
+// ends no stream; but a stream whose authority no check has confirmed for inboundResolveTTL since the last
+// one that did, the staleness the design allows, is closed with an inbound.deny row naming what was
+// unavailable (token_lookup_unavailable, or run_unreadable for the run, its policy or its profile): fail
+// closed, never a stream held open on a store that stays down. Each check runs off the watch, on the
+// stream's own context and within inboundReadmitTimeout, so a check that never answers holds nothing up:
+// the tick closes the stream past the bound with the check still in flight (as token_lookup_unavailable,
+// unless an earlier check named what failed). So a stream ends at most inboundResolveTTL plus one tick
+// after its last good check, hung store or not. The first good check is the lookup of the session the
+// stream opened on, a cached session's included (inboundReadmission.checked), and the first re-check is
+// due one tick after it, or at once when the session is older than that. The close comes first; its row is written after it, off the watch and within
+// inboundReadmitTimeout, so an audit write that hangs delays no close. A browser session's stream carries
+// no re-admission and is left as it was (TestUIGateway_EstablishedConnectionOutlivesTheRevoke).
 func (s *Server) watchInboundStream(resp *http.Response) {
 	a, ok := resp.Request.Context().Value(inboundReadmitCtxKey{}).(inboundReadmission)
 	if !ok {
@@ -393,31 +419,74 @@ func (s *Server) watchInboundStream(resp *http.Response) {
 	stream := &inboundStream{ReadWriteCloser: body, done: make(chan struct{})}
 	resp.Body = stream
 	go func() {
-		tick := time.NewTicker(cmp.Or(s.uiInboundStreamEvery, inboundResolveTTL))
+		// ctx is the stream's: its end cancels a check still in flight.
+		ctx, cancel := context.WithCancel(a.r.Context())
+		defer cancel()
+		every := cmp.Or(s.uiInboundStreamEvery, inboundResolveTTL/2)
+		tick := time.NewTimer(max(0, every-s.cfg.Now().Sub(a.checked)))
 		defer tick.Stop()
-		var failingSince time.Time // the first of the unanswerable re-admissions in a row
+		type readmitted struct {
+			at          time.Time
+			ok          bool
+			unavailable string
+			refusal     func(context.Context)
+		}
+		results := make(chan readmitted, 1) // one check at a time, so its send never blocks
+		checking := false
+		confirmed := a.checked // when the last check that admitted the stream began
+		failing := ""          // what the last check to answer could not read, "" when it admitted
+		stale := func() bool { return s.cfg.Now().Sub(confirmed) >= inboundResolveTTL }
+		// end closes the stream, then writes refusal's row, if any, off the watch and within the timeout.
+		end := func(refusal func(context.Context)) {
+			_ = stream.Close() // the relay's copy ends, and the caller's connection with it
+			if refusal != nil {
+				go func() {
+					actx, acancel := context.WithTimeout(context.WithoutCancel(ctx), inboundReadmitTimeout)
+					defer acancel()
+					refusal(actx)
+				}()
+			}
+		}
+		unconfirmed := func(reason string) func(context.Context) {
+			return func(ctx context.Context) {
+				s.auditInboundRefused(ctx, a.r, a.runID, a.app, a.principal, a.tokenID, reason)
+			}
+		}
 		for {
 			select {
 			case <-stream.done:
 				return
 			case <-tick.C:
-				ok, unavailable := s.readmitInbound(a)
-				if ok {
-					failingSince = time.Time{}
-					continue
+				tick.Reset(every)
+				if (checking || failing != "") && stale() {
+					end(unconfirmed(cmp.Or(failing, reasonTokenLookupUnavailable)))
+					return
 				}
-				if unavailable != "" {
-					now := s.cfg.Now()
-					if failingSince.IsZero() {
-						failingSince = now
-					}
-					if now.Sub(failingSince) < inboundResolveTTL {
-						continue
-					}
-					s.auditInboundRefused(a.r, a.runID, a.app, a.principal, a.tokenID, unavailable)
+				if !checking {
+					checking = true
+					go func() {
+						at := s.cfg.Now()
+						cctx, ccancel := context.WithTimeout(ctx, inboundReadmitTimeout)
+						defer ccancel()
+						ok, unavailable, refusal := s.readmitInbound(cctx, a)
+						results <- readmitted{at: at, ok: ok, unavailable: unavailable, refusal: refusal}
+					}()
 				}
-				_ = stream.Close() // the relay's copy ends, and the caller's connection with it
-				return
+			case res := <-results:
+				checking = false
+				switch {
+				case res.ok:
+					confirmed, failing = res.at, ""
+				case res.unavailable == "":
+					end(res.refusal)
+					return
+				default:
+					failing = res.unavailable
+					if stale() {
+						end(unconfirmed(failing))
+						return
+					}
+				}
 			}
 		}
 	}()
@@ -554,6 +623,16 @@ func (s *Server) inboundCaller(ctx context.Context, run types.AgentRun, app type
 // ui.authorize denial; the arm also runs on the connection path (uiDial), where no request is in hand, so
 // the row names no method or path.
 func (s *Server) uiInboundUnitDenies(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
+	de := s.uiInboundUnitDenial(ctx, sess, run)
+	if de != nil && de.status == http.StatusForbidden {
+		s.auditInboundUnitDenies(context.WithoutCancel(ctx), sess)
+	}
+	return de
+}
+
+// uiInboundUnitDenial is uiInboundUnitDenies without the unit_denies row, for a stream that writes it after
+// its close (readmitInbound).
+func (s *Server) uiInboundUnitDenial(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
 	p, err := s.runUnit(ctx, run)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: ui gateway could not read the run's governance profile", "run_id", run.ID, "err", err)
@@ -562,25 +641,35 @@ func (s *Server) uiInboundUnitDenies(ctx context.Context, sess uiSession, run ty
 	if p == nil || (!p.Limits.DenyUIApps && !p.Limits.DenyInteractive) {
 		return nil
 	}
+	return &uiDialError{status: http.StatusForbidden, reason: string(authz.ReasonGovernanceUnit),
+		msg: fmt.Sprintf("Inbound apps are not allowed under the governance profile %q this run was launched under.", p.Name)}
+}
+
+// auditInboundUnitDenies writes sess's inbound.deny unit_denies row on ctx, within authFailedAllowed's bound.
+func (s *Server) auditInboundUnitDenies(ctx context.Context, sess uiSession) {
 	if s.authFailedAllowed() {
 		s.recordInbound(ctx, "", sess, sess.SandboxRef, "inbound.deny", "denied", map[string]any{"reason": inboundDenyUnitDenies})
 	}
-	return &uiDialError{status: http.StatusForbidden, reason: string(authz.ReasonGovernanceUnit),
-		msg: fmt.Sprintf("Inbound apps are not allowed under the governance profile %q this run was launched under.", p.Name)}
 }
 
 // admitInbound spends an inbound session's request from its run's bucket and its caller's, and writes its
 // inbound.allow row.
 // False when it has answered: 429 inbound_rate_limited with Retry-After, its denial rate-bound like auth.fail.
+//
+// A request the buckets admit then reads the run, for uiDial's state check, so a call it would refuse is
+// never admitted: a cookie session, or a token's session cached for inboundResolveTTL, may hold a run that
+// has since ended or been kept. That is 409 ui_gateway_not_running with the not_running inbound.deny row
+// inboundSessionFor's refusal writes, rate-bound like it; a run that is gone is uiDial's 404, and one that
+// cannot be read 503 run_unreadable, neither with a row. A request the buckets refuse reads nothing.
 func (s *Server) admitInbound(w http.ResponseWriter, r *http.Request, sess uiSession) bool {
-	ok, ref := s.uiInbound.take(sess.Run, sess.Principal, s.cfg.Now(), sess.SandboxRef)
-	if ref == "" {
-		// A cookie session holds no sandbox reference: read it once per bucket.
-		if run, err := s.cfg.Store.GetRun(r.Context(), sess.Run); err == nil && run.SandboxRef != "" {
-			ref = run.SandboxRef
-			s.uiInbound.setRef(sess.Run, ref)
-		}
+	// The caller bucket is the machine callers': a cookie session (a person through the entry rule, with no
+	// token and no callers entry) spends only the run's, so a page that loads many assets spends nothing an
+	// inbound token calls with (#3792).
+	caller := sess.Principal
+	if sess.tokenID == uuid.Nil && sess.Caller == "" {
+		caller = ""
 	}
+	ok, ref := s.uiInbound.take(sess.Run, caller, s.cfg.Now(), sess.SandboxRef)
 	if !ok {
 		if s.authFailedAllowed() {
 			s.auditInbound(r, sess, ref, "inbound.deny", "denied", map[string]any{"reason": inboundDenyRateLimited})
@@ -589,7 +678,27 @@ func (s *Server) admitInbound(w http.ResponseWriter, r *http.Request, sess uiSes
 		writeErrorReason(w, http.StatusTooManyRequests, reasonInboundRateLimited, inboundRateLimitedMsg)
 		return false
 	}
-	s.auditInbound(r, sess, ref, "inbound.allow", "success", map[string]any{})
+	run, err := s.cfg.Store.GetRun(r.Context(), sess.Run)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeErrorReason(w, http.StatusNotFound, reasonRunNotFound, "run not found")
+		return false
+	case err != nil:
+		slog.ErrorContext(r.Context(), "wardynd: ui gateway inbound run lookup failed", "run_id", sess.Run, "err", err)
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRunUnreadable, uiSessionUnverifiableMsg)
+		return false
+	case run.State != types.RunRunning || run.SandboxRef == "" || runIsKept(run):
+		if s.authFailedAllowed() {
+			s.auditInbound(r, sess, run.SandboxRef, "inbound.deny", "denied", map[string]any{"reason": inboundDenyNotRunning})
+		}
+		writeErrorReason(w, http.StatusConflict, reasonUIGatewayNotRunning, inboundNotRunningMsg)
+		return false
+	}
+	if ref != run.SandboxRef {
+		// The bucket keeps the run's sandbox for the 429 rows, which read no run; a cookie session holds none.
+		s.uiInbound.setRef(sess.Run, run.SandboxRef)
+	}
+	s.auditInbound(r, sess, run.SandboxRef, "inbound.allow", "success", map[string]any{})
 	return true
 }
 
@@ -598,10 +707,10 @@ func (s *Server) admitInbound(w http.ResponseWriter, r *http.Request, sess uiSes
 // so a remote runner's rows carry the relay.
 func (s *Server) auditInbound(r *http.Request, sess uiSession, ref, action, outcome string, data map[string]any) {
 	data["method"], data["path"] = r.Method, inboundPath(r, sess.Run, sess.App)
-	s.recordInbound(r.Context(), r.RemoteAddr, sess, ref, action, outcome, data)
+	s.recordInbound(context.WithoutCancel(r.Context()), r.RemoteAddr, sess, ref, action, outcome, data)
 }
 
-// recordInbound writes one inbound.* row of sess with data: the caller and the app. sourceIP is the
+// recordInbound writes one inbound.* row of sess with data, on ctx: the caller and the app. sourceIP is the
 // request's, "" where the row has no request (uiInboundUnitDenies).
 func (s *Server) recordInbound(ctx context.Context, sourceIP string, sess uiSession, ref, action, outcome string, data map[string]any) {
 	data["app"], data["port"] = sess.App, sess.Port
@@ -617,13 +726,13 @@ func (s *Server) recordInbound(ctx context.Context, sourceIP string, sess uiSess
 	}
 	ev := s.auditEvent(&sess.Run, uiActorType(sess), sess.Principal, action, sess.App, outcome, mustJSON(data))
 	ev.SourceIP = sourceIP
-	s.recordStreamAudit(s.uiAuditCtx(context.WithoutCancel(ctx), sess), ref, ev)
+	s.recordStreamAudit(s.uiAuditCtx(ctx, sess), ref, ev)
 }
 
-// auditInboundRefused writes the inbound.deny row of a token refused before it held a session, within
+// auditInboundRefused writes the inbound.deny row of a token refused before it held a session, on ctx, within
 // authFailedAllowed's bound. principal and tokenID are "" and uuid.Nil until the token proved them, or a
 // stream that did names them.
-func (s *Server) auditInboundRefused(r *http.Request, runID uuid.UUID, app, principal string, tokenID uuid.UUID, reason string) {
+func (s *Server) auditInboundRefused(ctx context.Context, r *http.Request, runID uuid.UUID, app, principal string, tokenID uuid.UUID, reason string) {
 	if !s.authFailedAllowed() {
 		return
 	}
@@ -637,7 +746,7 @@ func (s *Server) auditInboundRefused(r *http.Request, runID uuid.UUID, app, prin
 	}
 	ev := s.auditEvent(&runID, actorType, principal, "inbound.deny", app, "denied", mustJSON(data))
 	ev.SourceIP = r.RemoteAddr
-	s.recordAudit(context.WithoutCancel(r.Context()), ev)
+	s.recordAudit(ctx, ev)
 }
 
 // inboundPath is the path an app's request reaches it at: the relay prefix off, no query.

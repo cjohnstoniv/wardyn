@@ -34,13 +34,19 @@ type uiTokenStore struct {
 	// lookupErr, when set, fails every lookup (failed counts them): the store cannot answer.
 	lookupErr error
 	failed    int
+	// hang, when set, holds every lookup until it is closed (hung counts them): the store does not answer.
+	hang chan struct{}
+	hung int
 	// runErr and policyErr, when set, fail every read of the run and of its policy's audit events.
 	runErr, policyErr error
+	// runReads counts the reads of a run.
+	runReads int
 }
 
 func (s *uiTokenStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 	s.mu.Lock()
 	err := s.runErr
+	s.runReads++
 	s.mu.Unlock()
 	if err != nil {
 		return types.AgentRun{}, err
@@ -58,6 +64,13 @@ func (s *uiTokenStore) QueryAuditEvents(ctx context.Context, runID uuid.UUID, li
 	return s.uiMemStore.QueryAuditEvents(ctx, runID, limit)
 }
 
+// runReadCount is how many times a run has been read.
+func (s *uiTokenStore) runReadCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runReads
+}
+
 // failReads makes every read of the run and of its policy fail with err (nil answers again).
 func (s *uiTokenStore) failReads(err error) {
 	s.mu.Lock()
@@ -68,6 +81,12 @@ func (s *uiTokenStore) failReads(err error) {
 // GetAPITokenByRaw answers as the store's lookup does: a revoked or expired token is no token.
 func (s *uiTokenStore) GetAPITokenByRaw(_ context.Context, raw string) (types.APIToken, error) {
 	s.mu.Lock()
+	if hang := s.hang; hang != nil {
+		s.hung++
+		s.mu.Unlock()
+		<-hang
+		s.mu.Lock()
+	}
 	defer s.mu.Unlock()
 	if s.lookupErr != nil {
 		s.failed++
@@ -93,6 +112,22 @@ func (s *uiTokenStore) failedLookups() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.failed
+}
+
+// hangLookups holds every lookup from now until the test ends.
+func (s *uiTokenStore) hangLookups(t *testing.T) {
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hang = hang
+}
+
+// hungLookups is how many lookups have been held.
+func (s *uiTokenStore) hungLookups() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hung
 }
 
 // update changes the stored token raw, as a revoke or an expiry would.
@@ -275,6 +310,44 @@ func TestUIGateway_InboundRefusalsAreInboundDenies(t *testing.T) {
 		})
 	}
 
+	// A cookie session, and a token's session cached while the run was running, hold no state check of their
+	// own: the run's state is read before the call is admitted (#3775).
+	for name, end := range map[string]func(run *types.AgentRun){
+		"completed": func(run *types.AgentRun) { run.State = types.RunCompleted },
+		"kept":      func(run *types.AgentRun) { at := time.Now(); run.LostAt = &at },
+	} {
+		wantRefused := func(t *testing.T, h *uiHarness, rec *httptest.ResponseRecorder, allows int) {
+			t.Helper()
+			if rec.Code != http.StatusConflict || respondedReason(t, rec) != reasonUIGatewayNotRunning {
+				t.Fatalf("call = %d %s, want 409 %s", rec.Code, rec.Body.String(), reasonUIGatewayNotRunning)
+			}
+			if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner || !h.audit.hasDataValue("reason", inboundDenyNotRunning) {
+				t.Errorf("inbound.deny rows = %+v, want one not_running by %s", rows, h.owner)
+			}
+			if rows := h.audit.auditRows("inbound.allow", "success"); len(rows) != allows {
+				t.Errorf("inbound.allow rows = %+v, want %d", rows, allows)
+			}
+		}
+		t.Run("a cookie session to a "+name+" run is not_running", func(t *testing.T) {
+			h, _ := inboundHarness(t)
+			end(&h.run)
+			h.store.putRun(h.run)
+			now := h.clock.now()
+			cookie := &http.Cookie{Name: uiCookieName, Value: h.srv.encodeUISession(uiSession{Run: h.run.ID, App: "code", Port: uiTestPort,
+				Principal: h.owner, Expires: now.Add(time.Hour).Unix(), IssuedAt: now.Unix(), AuthorizedAt: now.Unix(), Inbound: true})}
+			wantRefused(t, h, h.relay("/", cookie, nil), 0)
+		})
+		t.Run("a cached token session to a run since "+name+" is not_running", func(t *testing.T) {
+			h, _ := inboundHarness(t)
+			if rec := h.call("wdn_alice", nil); rec.Code != http.StatusOK {
+				t.Fatalf("call while running = %d %s, want 200", rec.Code, rec.Body.String())
+			}
+			end(&h.run)
+			h.store.putRun(h.run)
+			wantRefused(t, h, h.call("wdn_alice", nil), 1)
+		})
+	}
+
 	t.Run("a profile denying interactive sessions is unit_denies", func(t *testing.T) {
 		h, _ := inboundHarness(t)
 		unit := types.GovernanceUnit{ID: uuid.New(), Name: "no-interactive", Limits: types.GovernanceLimits{DenyInteractive: true}}
@@ -371,6 +444,63 @@ func TestUIGateway_InboundCallerRateLimit(t *testing.T) {
 	h.clock.advance(time.Second)
 	if rec := h.call("wdn_bob", nil); rec.Code != http.StatusOK {
 		t.Fatalf("bob a second later = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUIGateway_InboundRateLimitReadsNoRun: a request the buckets refuse costs no store read; each one they
+// admit reads its run once, for the state check.
+func TestUIGateway_InboundRateLimitReadsNoRun(t *testing.T) {
+	h := inboundHarnessOn(t, okBackend())
+	ts := h.srv.cfg.Store.(*uiTokenStore)
+	req := httptest.NewRequest(http.MethodGet, uiRelayPrefix(h.run.ID, "code")+"/", nil)
+	sess := uiSession{Run: h.run.ID, App: "code", Port: uiTestPort, Principal: "bob", Inbound: true, tokenID: uuid.New(),
+		SandboxRef: h.run.SandboxRef}
+	from := ts.runReadCount()
+	for i := range int(inboundBurst) {
+		if !h.srv.admitInbound(httptest.NewRecorder(), req, sess) {
+			t.Fatalf("call %d within the burst was refused", i+1)
+		}
+	}
+	if got := ts.runReadCount() - from; got != int(inboundBurst) {
+		t.Fatalf("%d admitted calls read the run %d times, want once each", int(inboundBurst), got)
+	}
+	for range 10 {
+		if rec := httptest.NewRecorder(); h.srv.admitInbound(rec, req, sess) || rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("a call past the burst = %d %s, want 429", rec.Code, rec.Body.String())
+		}
+	}
+	if got := ts.runReadCount() - from; got != int(inboundBurst) {
+		t.Errorf("10 refused calls read the run %d times, want none", got-int(inboundBurst))
+	}
+}
+
+// TestUIGateway_InboundOwnerPageLoadsSpareTheCallerBucket: a cookie session (a person through the entry rule,
+// the owner here) is charged to its run's bucket only, not to the caller bucket inbound tokens share over
+// every run; a token caller, the same person's included, still is bound by it (#3792).
+func TestUIGateway_InboundOwnerPageLoadsSpareTheCallerBucket(t *testing.T) {
+	h := inboundHarnessOn(t, okBackend())
+	runs := [2]types.AgentRun{}
+	for i := range runs {
+		runs[i] = types.AgentRun{ID: uuid.New(), CreatedBy: h.owner, State: types.RunRunning, SandboxRef: "sandbox-other"}
+		h.store.putRun(runs[i])
+	}
+	req := httptest.NewRequest(http.MethodGet, uiRelayPrefix(h.run.ID, "code")+"/", nil)
+	page := uiSession{Run: h.run.ID, App: "code", Port: uiTestPort, Principal: h.owner, Inbound: true}
+	for i := range int(inboundBurst) {
+		if !h.srv.admitInbound(httptest.NewRecorder(), req, page) {
+			t.Fatalf("the owner's page load %d was refused within the run's burst", i+1)
+		}
+	}
+	token := uiSession{Run: runs[0].ID, App: "code", Port: uiTestPort, Principal: h.owner, Inbound: true, tokenID: uuid.New()}
+	for i := range int(inboundBurst) {
+		if !h.srv.admitInbound(httptest.NewRecorder(), req, token) {
+			t.Fatalf("the owner's token call %d on another run was refused: the page loads spent its bucket", i+1)
+		}
+	}
+	token.Run = runs[1].ID // a run whose own bucket is full: only the caller bucket can refuse
+	rec := httptest.NewRecorder()
+	if h.srv.admitInbound(rec, req, token) || rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("a token caller past its burst = %d %s, want 429", rec.Code, rec.Body.String())
 	}
 }
 
@@ -485,6 +615,43 @@ func (s *uiServiceTokenStore) GetServiceIdentity(context.Context, string) (types
 	return s.si, nil
 }
 
+// uiDenyGate is safeRecorder whose inbound.deny writes, once held, wait until the test ends: an audit sink
+// that has stopped answering, which a stream's close must not wait on.
+type uiDenyGate struct {
+	*safeRecorder
+	mu   sync.Mutex
+	held chan struct{}
+}
+
+func (g *uiDenyGate) Record(ctx context.Context, ev types.AuditEvent) error {
+	g.mu.Lock()
+	held := g.held
+	g.mu.Unlock()
+	if held != nil && ev.Action == "inbound.deny" {
+		<-held
+	}
+	return g.safeRecorder.Record(ctx, ev)
+}
+
+// hold holds every inbound.deny write from now until the test ends.
+func (g *uiDenyGate) hold(t *testing.T) {
+	held := make(chan struct{})
+	t.Cleanup(func() { close(held) })
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.held = held
+}
+
+// awaitDenies is h's inbound.deny rows once there is one, or after 5 s: a stream writes its refusal's row
+// after it closes.
+func awaitDenies(h *uiHarness) []types.AuditEvent {
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) > 0 || time.Now().After(deadline) {
+			return rows
+		}
+	}
+}
+
 // openInboundStream upgrades a connection to h's inbound app "code" with token and returns it with its
 // reader, past the 101.
 func openInboundStream(t *testing.T, h *uiHarness, gw *httptest.Server, token string) (net.Conn, *bufio.Reader) {
@@ -572,7 +739,7 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 				t.Fatal("the stream outlived its token")
 			}
 			// One row, naming who the stream was open for, though the token no longer proves it.
-			rows := h.audit.auditRows("inbound.deny", "denied")
+			rows := awaitDenies(h)
 			if len(rows) != 1 || rows[0].Actor != h.owner || !h.audit.hasDataValue("reason", inboundDenyCredentialInvalid) ||
 				!h.audit.hasDataValue("token_id", tok.ID.String()) {
 				t.Errorf("inbound.deny rows = %+v, want one credential_invalid by %s for token %s", rows, h.owner, tok.ID)
@@ -599,7 +766,7 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 		if !closes(conn, br) {
 			t.Fatal("the stream outlived its sponsor")
 		}
-		if !h.audit.hasDataValue("reason", inboundDenyCredentialInvalid) {
+		if awaitDenies(h); !h.audit.hasDataValue("reason", inboundDenyCredentialInvalid) {
 			t.Errorf("no inbound.deny credential_invalid; reasons: %s", h.audit.dataReasons())
 		}
 	})
@@ -630,7 +797,7 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 			if !closes(conn, br) {
 				t.Fatal("the stream outlived the profile that now denies it")
 			}
-			if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner ||
+			if rows := awaitDenies(h); len(rows) != 1 || rows[0].Actor != h.owner ||
 				!h.audit.hasDataValue("reason", inboundDenyUnitDenies) {
 				t.Errorf("inbound.deny rows = %+v, want one unit_denies by %s", rows, h.owner)
 			}
@@ -688,7 +855,7 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 		if !closes(conn, br) {
 			t.Fatal("the stream outlived re-admissions unanswerable past the bound")
 		}
-		if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner ||
+		if rows := awaitDenies(h); len(rows) != 1 || rows[0].Actor != h.owner ||
 			!h.audit.hasDataValue("reason", reasonRunUnreadable) || h.audit.hasDataValue("reason", inboundDenyNotFound) {
 			t.Errorf("inbound.deny rows = %+v, want one run_unreadable by %s and no not_found", rows, h.owner)
 		}
@@ -701,16 +868,110 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 		if !closes(conn, br) {
 			t.Fatal("the stream outlived re-admissions unanswerable past the bound")
 		}
-		if rows := h.audit.auditRows("inbound.deny", "denied"); len(rows) != 1 || rows[0].Actor != h.owner ||
+		if rows := awaitDenies(h); len(rows) != 1 || rows[0].Actor != h.owner ||
 			!h.audit.hasDataValue("reason", reasonTokenLookupUnavailable) {
 			t.Errorf("inbound.deny rows = %+v, want one token_lookup_unavailable by %s", rows, h.owner)
+		}
+	})
+
+	// The bound runs from the last check that confirmed the stream, here the lookup of the session it opened
+	// on (cached), not from the first that failed.
+	t.Run("lookups failing close the stream a bound after its last good check, not after the first failure", func(t *testing.T) {
+		h, gw := open(t)
+		if _, ok := h.srv.inboundTokenSession(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, uiRelayPrefix(h.run.ID, "code")+"/", nil),
+			h.run.ID, "code", "wdn_alice"); !ok {
+			t.Fatal("the token was not admitted")
+		}
+		h.clock.advance(inboundResolveTTL / 2)
+		ts := tokens(h)
+		from := ts.failLookups(errors.New("connection refused"))
+		conn, br := openInboundStream(t, h, gw, "wdn_alice") // on the cached session
+		for deadline := time.Now().Add(5 * time.Second); ts.failedLookups() < from+1; time.Sleep(every) {
+			if time.Now().After(deadline) {
+				t.Fatal("no re-admission was attempted while the store failed")
+			}
+		}
+		if !echoes(conn, br) {
+			t.Fatal("a failure inside the bound closed the stream")
+		}
+		h.clock.advance(inboundResolveTTL / 2) // the bound after the good check; half of it after the first failure
+		if !closes(conn, br) {
+			t.Fatal("the stream outlived its last good check by the bound")
+		}
+		if rows := awaitDenies(h); len(rows) != 1 || !h.audit.hasDataValue("reason", reasonTokenLookupUnavailable) {
+			t.Errorf("inbound.deny rows = %+v, want one token_lookup_unavailable", rows)
+		}
+	})
+
+	// A check that never answers holds no stream past the bound, inboundResolveTTL plus one tick after its last
+	// good check: the tick closes it with the check in flight. A tick costs nothing on the test clock, so here the
+	// bound is inboundResolveTTL to the second. The last good check is the lookup of the session the stream opened
+	// on, a cached session's included: a stream opened half a bound after that lookup still ends a bound after
+	// it, not a bound after the open.
+	for name, cachedFor := range map[string]time.Duration{"a fresh session": 0, "a session cached half a bound": inboundResolveTTL / 2} {
+		t.Run("a token lookup that never answers closes a stream on "+name+" a bound after its lookup", func(t *testing.T) {
+			h, gw := open(t)
+			ts := tokens(h)
+			var conn net.Conn
+			var br *bufio.Reader
+			if cachedFor > 0 {
+				if _, ok := h.srv.inboundTokenSession(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, uiRelayPrefix(h.run.ID, "code")+"/", nil),
+					h.run.ID, "code", "wdn_alice"); !ok {
+					t.Fatal("the token was not admitted")
+				}
+				h.clock.advance(cachedFor)
+				ts.hangLookups(t)
+				conn, br = openInboundStream(t, h, gw, "wdn_alice") // on the cached session: no lookup
+			} else {
+				conn, br = openInboundStream(t, h, gw, "wdn_alice")
+				if !echoes(conn, br) {
+					t.Fatal("the stream carried nothing before the store hung")
+				}
+				ts.hangLookups(t)
+			}
+			for deadline := time.Now().Add(5 * time.Second); ts.hungLookups() == 0; time.Sleep(every) {
+				if time.Now().After(deadline) {
+					t.Fatal("no re-admission was attempted while the store hung")
+				}
+			}
+			h.clock.advance(inboundResolveTTL - cachedFor - 2*time.Second)
+			time.Sleep(5 * every)
+			if !echoes(conn, br) {
+				t.Fatal("a check in flight inside the bound closed the stream")
+			}
+			h.clock.advance(2 * time.Second)
+			if !closes(conn, br) {
+				t.Fatal("the stream outlived its last good check by the bound")
+			}
+			if rows := awaitDenies(h); len(rows) != 1 || rows[0].Actor != h.owner ||
+				!h.audit.hasDataValue("reason", reasonTokenLookupUnavailable) {
+				t.Errorf("inbound.deny rows = %+v, want one token_lookup_unavailable by %s", rows, h.owner)
+			}
+		})
+	}
+
+	t.Run("a refusal closes the stream though the write of its row hangs", func(t *testing.T) {
+		h, gw := open(t)
+		gate := &uiDenyGate{safeRecorder: h.audit}
+		h.srv.cfg.Audit = gate
+		conn, br := openInboundStream(t, h, gw, "wdn_alice")
+		if !echoes(conn, br) {
+			t.Fatal("the stream carried nothing before the token was revoked")
+		}
+		gate.hold(t)
+		tokens(h).update("wdn_alice", func(tok *types.APIToken) { at := time.Now(); tok.RevokedAt = &at })
+		if !closes(conn, br) {
+			t.Fatal("the stream's close waited on its refusal's audit write")
 		}
 	})
 
 	t.Run("a stream whose token keeps its authority stays open", func(t *testing.T) {
 		h, gw := open(t)
 		conn, br := openInboundStream(t, h, gw, "wdn_alice")
-		time.Sleep(10 * every)
+		for range 4 { // two bounds' worth of time: each check that admits the stream moves its bound on
+			h.clock.advance(inboundResolveTTL / 2)
+			time.Sleep(5 * every)
+		}
 		if !echoes(conn, br) {
 			t.Fatal("a stream with a live token closed across the re-admissions")
 		}

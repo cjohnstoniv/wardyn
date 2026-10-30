@@ -11,6 +11,25 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
+  edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
+  terminal. They used to stay open until they closed or reached their time limit (#3398).
+- A browser session, or a recently checked inbound token, calling an inbound app on a run that has ended or been kept
+  is now refused with a `not_running` audit row and no `inbound.allow` row. It used to be recorded as allowed before
+  the refusal (#3775).
+- Page loads of an inbound app from a person's browser session, the run owner's included, no longer count against
+  the per-caller inbound rate limit that inbound tokens use. They still count against the run's own limit (#3792).
+
+### Security
+
+- An upgraded connection an inbound token opened, a WebSocket say, is now re-checked every 15 seconds and closed at
+  most 45 seconds after the last check that confirmed its token (30 seconds unconfirmed, plus one re-check), even
+  while a check is still waiting on a store that does not answer. A hung check used to hold the connection open for good, and a store that kept
+  failing kept it open about a minute. The refusal's audit row is now written after the close, so a slow audit write
+  no longer delays it.
+
 ## [0.10.0-rc.8] — 2026-10-29
 
 ### Before you upgrade
