@@ -465,6 +465,10 @@ that ceiling down; each run receives only the minimal subset its task needs.
 - **The boundary is Apple's hypervisor.** The guest's only NIC is wired to the run's own relay and proxy in Docker, with no NAT device. Egress, recording, the clipboard rules and audit are enforced outside the guest.
 - **What the guest can reach in our code.** Four bounded inputs: the guest agent session, the network bridge's frames, a strict RFB shim that ends the session on any server message it does not know, and a DHCP responder that answers one fixed lease. The helper runs as the logged-in user, never root, with one virtualization entitlement.
 - **Inside the guest.** The agent is a standard user, not an admin. The setup account and its random password stay in every run's guest. The helper held the password in memory only, so no one holds it after preparing, and Remote Login is proved off on a live guest before the base is published. Screen Sharing is reachable only through the helper, by a person who already holds that run's desktop ticket. Nothing here relies on the guest's own protections.
+- **Editing a base.** Rechecking the base's accounts and Remote Login detects a change but can't prevent one: whoever has admin rights on the host Mac can alter the base.
+- **Screen lock.** Stage 1 turns the guest's screen lock and screen saver off, and the guest signs in as `agent` on its own. The guest has no console, and its screen is reached only through the helper, by a person who holds that run's desktop ticket through the organisation's authenticated gateway. A person who holds that session sees an unlocked guest.
+- **Profiles.** A profile installed in `edit-base`, with its payload, stays in the base's System keychain or configuration, where any admin in the guest can reach it, and blocks of the deleted staged files may survive on the base image.
+- **A person's drive.** A person's disk drive on a Mac is an unencrypted APFS disk image in the runner login's Application Support/Wardyn/macos-vm.noindex/drives, readable by that macOS login and by root on the Mac, and kept until the drive is deleted (reclaim_drive); a run's VM attaches it only while it holds the drive's lock.
 - **Managed-Mac gate.** The run is placed only on a runner whose trust class is `managed_device` and whose posture says `mdm_managed` from the MDM's file. Both are assertions, and no device-certificate check exists yet (residuals #90 and #96).
 - **Licence and image.** The guest comes only from Apple's restore image, on the Mac that uses it. No macOS image is in a release, a registry or the organisation.
 
@@ -476,6 +480,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | Other local accounts ↔ the VM ledger | A root-owned, sticky ledger: it can deny service, never admit past the cap | #96 |
 | Other local accounts ↔ a run's sockets | A login-made `0700` folder under a root-owned sticky parent, checked on every use: a planted name denies that login's VMs, never access | #96 |
 | Guest secrets ↔ the Mac's volume | The run's clone disk is deleted at the end, which is not secure erasure | #96 |
+| A person's drive ↔ the Mac's volume | An APFS disk image under the runner login's folder, locked to one run at a time | #96 |
 
 ---
 
