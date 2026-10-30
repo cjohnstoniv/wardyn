@@ -74,7 +74,7 @@ func TestAppendMacOSBootDenials(t *testing.T) {
 				tc.edit(&spec)
 			}
 			before := slices.Clone(spec.DeniedDomains)
-			spec.DeniedDomains = appendMacOSBootDenials(spec)
+			spec.DeniedDomains = appendMacOSBootDenials(types.MachineMacOSVM, spec)
 			for _, h := range tc.wantDenied {
 				if v := bootVerdict(t, spec, h); v != egress.VerdictDeny {
 					t.Errorf("%s: verdict %q, want deny (no approval raised)", h, v)
@@ -109,13 +109,13 @@ func TestAppendMacOSBootDenials(t *testing.T) {
 // An allow-all run asks about nothing, so it is left as it is, and the argument is never written through.
 func TestAppendMacOSBootDenials_AllowAllAndNoAliasing(t *testing.T) {
 	open := types.RunPolicySpec{AllowAllEgress: true, DeniedDomains: []string{"evil.example"}}
-	if got := appendMacOSBootDenials(open); !slices.Equal(got, []string{"evil.example"}) {
+	if got := appendMacOSBootDenials(types.MachineMacOSVM, open); !slices.Equal(got, []string{"evil.example"}) {
 		t.Errorf("allow-all: denied = %q, want it unchanged", got)
 	}
 	backing := make([]string, 1, 16)
 	backing[0] = "evil.example"
 	spec := types.RunPolicySpec{DeniedDomains: backing}
-	_ = appendMacOSBootDenials(spec)
+	_ = appendMacOSBootDenials(types.MachineMacOSVM, spec)
 	if backing[:2][1] != "" {
 		t.Errorf("the caller's backing array was written through: %q", backing[:2])
 	}
@@ -136,7 +136,7 @@ func TestAppendMacOSBootDenials_NeverWidensEgress(t *testing.T) {
 	} {
 		allowed := slices.Clone(spec.AllowedDomains)
 		after := spec
-		after.DeniedDomains = appendMacOSBootDenials(spec)
+		after.DeniedDomains = appendMacOSBootDenials(types.MachineMacOSVM, spec)
 		if !slices.Equal(after.AllowedDomains, allowed) || after.AllowAllEgress != spec.AllowAllEgress {
 			t.Errorf("policy %+v: allowed domains or allow-all changed", spec)
 		}
@@ -153,15 +153,21 @@ func TestAppendMacOSBootDenials_NeverWidensEgress(t *testing.T) {
 	}
 }
 
-// Dispatch adds the denials for a macOS VM run and for no other kind: the call sits behind IsMacOSVM
-// and writes only DeniedDomains (read from the source, since dispatch itself needs a database).
+// Dispatch adds the denials for a macOS VM run and for no other kind, and writes only DeniedDomains
+// (read from the source, since dispatch itself needs a database).
 func TestDispatchDeniesBootHostsOnlyOnMacOSVM(t *testing.T) {
 	src, err := os.ReadFile("runs_dispatch.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	const gated = "if run.MachineKind.IsMacOSVM() {\n\t\tpolicy.DeniedDomains = appendMacOSBootDenials(policy)\n\t}"
-	if strings.Count(string(src), "appendMacOSBootDenials(") != 1 || !strings.Contains(string(src), gated) {
-		t.Fatal("dispatchRun must call appendMacOSBootDenials once, behind run.MachineKind.IsMacOSVM(), assigning policy.DeniedDomains alone")
+	const call = "policy.DeniedDomains = appendMacOSBootDenials(run.MachineKind, policy)"
+	if strings.Count(string(src), "appendMacOSBootDenials(") != 1 || !strings.Contains(string(src), call) {
+		t.Fatal("dispatchRun must call appendMacOSBootDenials once, with the run's kind, assigning policy.DeniedDomains alone")
+	}
+	spec := types.RunPolicySpec{DeniedDomains: []string{"evil.example"}}
+	for _, kind := range []types.MachineKind{types.MachineContainer, types.MachineLinuxVM, ""} {
+		if got := appendMacOSBootDenials(kind, spec); !slices.Equal(got, spec.DeniedDomains) {
+			t.Errorf("%q: denied %v, want the run's own %v", kind, got, spec.DeniedDomains)
+		}
 	}
 }

@@ -33,9 +33,10 @@ var macOSBootHosts = sync.OnceValue(func() []string {
 // candidate). It is a deny list only: it never touches the run's allowed domains, so nothing on it can
 // widen the run's egress, and a host an allowed domain already covers (exactly, or under a wildcard) is
 // left out, so a person's own allow gets the normal handling. A run that allows all egress asks about
-// nothing, so it is left as it is. The result is a new slice; the argument is not written through.
-func appendMacOSBootDenials(policy types.RunPolicySpec) []string {
-	if policy.AllowAllEgress {
+// nothing, so it is left as it is, and so is every run that is not a macOS VM. The result is a new slice;
+// the argument is not written through.
+func appendMacOSBootDenials(kind types.MachineKind, policy types.RunPolicySpec) []string {
+	if !kind.IsMacOSVM() || policy.AllowAllEgress {
 		return policy.DeniedDomains
 	}
 	have := map[string]bool{}
