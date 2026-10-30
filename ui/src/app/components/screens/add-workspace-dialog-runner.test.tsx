@@ -15,7 +15,8 @@ import { aheadByHours } from "../../lib/test-clock";
 const createWorkspaceMock = vi.fn();
 const listMineMock = vi.fn();
 const getMyCapabilitiesMock = vi.fn();
-vi.mock("../../lib/api/setup", () => ({ setup: { getSetupStatus: vi.fn().mockResolvedValue({ runner: { driver: "docker" } }) } }));
+const getSetupStatusMock = vi.fn();
+vi.mock("../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) } }));
 vi.mock("../../lib/api/workspaces", () => ({ workspaces: { createWorkspace: (...a: unknown[]) => createWorkspaceMock(...a) } }));
 vi.mock("../../lib/api/runners", () => ({ runners: { listMine: (...a: unknown[]) => listMineMock(...a) } }));
 vi.mock("../../lib/api/permissions", async () => {
@@ -48,6 +49,7 @@ beforeEach(() => {
   listMineMock.mockResolvedValue([]);
   getMyCapabilitiesMock.mockResolvedValue({ may_self_host_runner: true });
   createWorkspaceMock.mockResolvedValue({ id: "ws-1", name: "payments" });
+  getSetupStatusMock.mockResolvedValue({ runner: { driver: "docker" } });
 });
 
 describe("Add workspace: where is this folder", () => {
@@ -249,5 +251,71 @@ describe("Add workspace: where is this folder", () => {
     expect(screen.getByRole("radiogroup", { name: "Where is this folder?" })).toHaveAccessibleDescription(
       "You have no runner of your own. Add one in Settings → My runner with Add this computer.",
     );
+  });
+});
+
+// A k8s control plane can't mount the server's folders into a pod, but a member's folder on their own runner
+// never reaches the pod. A member sees runner.kubernetes only (the driver is blanked for them).
+describe("Add workspace on a Kubernetes control plane", () => {
+  const onK8s = () => getSetupStatusMock.mockResolvedValue({ runner: { driver: "", kubernetes: true } });
+
+  it("offers a member Local directory with their own runners and no server option", async () => {
+    onK8s();
+    listMineMock.mockResolvedValue([MAC]);
+    renderDialog();
+    await pickLocalDir();
+    expect(await screen.findByRole("radio", { name: "On my runner: ec2-mac-rc9" })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /wardyn server/i })).not.toBeInTheDocument();
+  });
+
+  it("shows no path field and refuses to submit until a runner is picked", async () => {
+    onK8s();
+    listMineMock.mockResolvedValue([MAC]);
+    renderDialog();
+    await pickLocalDir();
+    await screen.findByRole("radio", { name: "On my runner: ec2-mac-rc9" });
+    expect(screen.queryByLabelText("Path on this host")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^add workspace/i })).toBeDisabled();
+  });
+
+  it("sends the picked runner's id, and never a folder unbound to a runner", async () => {
+    onK8s();
+    listMineMock.mockResolvedValue([MAC]);
+    renderDialog();
+    await pickLocalDir();
+    await userEvent.click(await screen.findByRole("radio", { name: "On my runner: ec2-mac-rc9" }));
+    await userEvent.type(screen.getByLabelText("Path on ec2-mac-rc9"), "/Users/dana/work/payments");
+    await userEvent.click(screen.getByRole("button", { name: /^add workspace/i }));
+    await waitFor(() => expect(createWorkspaceMock).toHaveBeenCalled());
+    expect(createWorkspaceMock.mock.calls[0][0].sources[0]).toMatchObject({ type: "local_dir", runner_id: MAC.id, path: "/Users/dana/work/payments" });
+  });
+
+  it("keeps a member's runner pick when the k8s answer arrives after it", async () => {
+    let answer: (v: unknown) => void = () => {};
+    getSetupStatusMock.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    listMineMock.mockResolvedValue([MAC]);
+    renderDialog();
+    await pickLocalDir();
+    await userEvent.click(await screen.findByRole("radio", { name: "On my runner: ec2-mac-rc9" }));
+    answer({ runner: { driver: "", kubernetes: true } });
+    await waitFor(() => expect(screen.queryByRole("radio", { name: /wardyn server/i })).not.toBeInTheDocument());
+    expect(screen.getByRole("radio", { name: "On my runner: ec2-mac-rc9" })).toBeChecked();
+    expect(screen.getByLabelText("Path on ec2-mac-rc9")).toBeInTheDocument();
+  });
+
+  it("with no runner of their own, says how to add one and offers no path field", async () => {
+    onK8s();
+    renderDialog();
+    await pickLocalDir();
+    expect(await screen.findByText(/You have no runner of your own/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Path on this host")).not.toBeInTheDocument();
+  });
+
+  it("offers an administrator no Local directory, as before", async () => {
+    getSetupStatusMock.mockResolvedValue({ runner: { driver: "k8s", kubernetes: true } });
+    renderDialog({ operator: true, root: null });
+    await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^local directory/i })).not.toBeInTheDocument());
+    expect(listMineMock).not.toHaveBeenCalled();
   });
 });

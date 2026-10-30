@@ -140,12 +140,15 @@ export function AddWorkspaceDialog({
 
   const [kind, setKind] = React.useState<SourceKind>("repo");
   const k8s = useK8sRunner();
-  // If the runner turns out to be k8s while local_dir is selected (the probe
-  // resolves after mount), fall back rather than leaving an unsubmittable kind
-  // selected with no visible control.
+  // A k8s control plane can't mount this host's folders into a pod, but a member's folder on their own
+  // runner never touches the pod: on k8s, Local directory stays for a member, on their runners only.
+  const serverFolders = !k8s;
+  const localDirOffered = serverFolders || memberClamped;
+  // If the probe answers k8s after mount while an administrator has local_dir selected, fall back rather
+  // than leaving an unsubmittable kind selected with no visible control. A member's pick is kept.
   React.useEffect(() => {
-    if (k8s && kind === "local_dir") setKind("repo");
-  }, [k8s, kind]);
+    if (!localDirOffered && kind === "local_dir") setKind("repo");
+  }, [localDirOffered, kind]);
   const [sourceValue, setSourceValue] = React.useState("");
   const [name, setName] = React.useState("");
   const [nameTouched, setNameTouched] = React.useState(false);
@@ -187,7 +190,9 @@ export function AddWorkspaceDialog({
 
   const sourceRequired = kind !== "ephemeral";
   // No path field renders when local directories are unavailable, so a value typed under another kind is not theirs to send.
-  const canSubmit = (!sourceRequired || sourceValue.trim().length > 0) && !(kind === "local_dir" && localDirUnavailable);
+  const canSubmit =
+    (!sourceRequired || sourceValue.trim().length > 0) &&
+    !(kind === "local_dir" && (localDirUnavailable || (!serverFolders && !pickedRunner)));
 
   const mountPathOrDefault = mountPath.trim() || DEFAULT_TARGET;
   const summaryImage =
@@ -263,15 +268,16 @@ export function AddWorkspaceDialog({
         <div className="space-y-4">
           {/* A k8s control plane runs sandboxes as pods, where a host-directory
               mount is structurally impossible (internal/runner/substrate) — so
-              Local directory is not offered at all rather than accepted and then
-              failing at launch. */}
+              an administrator is not offered Local directory at all rather than
+              accepting it and then failing at launch; a member still is, for a
+              folder on their own runner. */}
           <div
-            className={cn("grid gap-2", k8s ? "grid-cols-2" : "grid-cols-3")}
+            className={cn("grid gap-2", localDirOffered ? "grid-cols-3" : "grid-cols-2")}
             role="group"
             aria-label="Source"
           >
             <OptionCard selected={kind === "repo"} onClick={() => setKind("repo")} title="Repository" />
-            {!k8s && (
+            {localDirOffered && (
               <OptionCard
                 selected={kind === "local_dir"}
                 onClick={() => setKind("local_dir")}
@@ -312,10 +318,12 @@ export function AddWorkspaceDialog({
             <div className="space-y-2">
               <Label id="aw-where-label">{FOLDER_RUNNER.WHERE}</Label>
               <RadioGroup value={pickedRunner?.id ?? SERVER} onValueChange={(v) => setRunnerId(v === SERVER ? "" : v)} className="gap-2" aria-labelledby="aw-where-label" aria-describedby={pickedRunner || noRunnerLine ? "aw-where-note" : undefined}>
-                <label className="flex items-center gap-2 text-sm">
-                  <RadioGroupItem value={SERVER} id="aw-where-server" />
-                  {FOLDER_RUNNER.ON_SERVER}
-                </label>
+                {serverFolders && (
+                  <label className="flex items-center gap-2 text-sm">
+                    <RadioGroupItem value={SERVER} id="aw-where-server" />
+                    {FOLDER_RUNNER.ON_SERVER}
+                  </label>
+                )}
                 {folderRunners.map((r) => (
                   <label key={r.id} className="flex items-center gap-2 text-sm">
                     <RadioGroupItem value={r.id} id={`aw-where-${r.id}`} />
@@ -335,7 +343,7 @@ export function AddWorkspaceDialog({
               )}
             </div>
           )}
-          {localDirShown && (
+          {localDirShown && (serverFolders || pickedRunner) && (
             <Field
               label={pickedRunner ? FOLDER_RUNNER.PATH_LABEL(pickedRunner.name) : FOLDER_RUNNER.PATH_LABEL_SERVER}
               htmlFor="aw-source"
