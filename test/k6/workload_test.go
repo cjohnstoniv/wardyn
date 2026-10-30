@@ -265,7 +265,7 @@ func caseWorkload(t *testing.T, o *orgEnv) {
 
 	// 5. Deleting the resource ends the run, and the workload row goes.
 	o.kubectl(t, "-n", wlNS, "delete", "wardynworkloads.wardyn.dev", name, "--wait=true", "--timeout=60s")
-	r := o.waitState(t, id, 3*time.Minute, "KILLED", "FAILED", "COMPLETED")
+	r := o.waitState(t, id, 3*time.Minute, "KILLED") // the delete's kill, not an end of its own
 	var code int
 	var raw string
 	waitFor(t, 3*time.Minute, func() string { return fmt.Sprintf("workload row still there: %d %s", code, raw) }, func() bool {
