@@ -22,6 +22,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   the pause between re-checks (#3416).
 - A model gateway host both vendors share that is also the run's own model endpoint is now inspected as that endpoint's
   vendor. Under fail-closed inspection its request bodies were refused as uninspected (#3819).
+- A run's container `CONNECT` tunnels are now capped at 1,024 open at once, the bound desktop VM tunnels already have.
+  The next one is refused with a `503`, `Retry-After` and `X-Wardyn-Egress-Reason: builtin:tunnel-limit`, and a
+  `builtin:tunnel-limit` deny row; it is admitted once a tunnel closes. Before, a process could hold any number of
+  tunnels open (#3698).
 
 ## [0.10.0-rc.8] — 2026-10-29
 

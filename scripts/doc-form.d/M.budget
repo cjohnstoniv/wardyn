@@ -83,7 +83,8 @@ docs/SSH.md=6961 share=35
 # docs/UI-SANDBOXES.md 7890 adds 75 over 7815, measured (rc.8 inbound review F5, F6: who the grant lets a caller name, and the shared connections).
 # docs/UI-SANDBOXES.md 7914 adds 24 over 7890, measured (a person mints their own inbound token in Settings → Your API tokens).
 # docs/UI-SANDBOXES.md 7922 adds 8 over 7914, measured (rc.8 cumulative review: only an upgraded connection an inbound token opened is re-checked).
-docs/UI-SANDBOXES.md=7922 share=35
+# docs/UI-SANDBOXES.md 7979 adds 57 over 7922, measured (rc.9 L11): the builtin:tunnel-limit, approval:pending, approval:host-cap and approval:refused reason rows.
+docs/UI-SANDBOXES.md=7979 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.
