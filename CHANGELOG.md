@@ -17,6 +17,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   runs use it: desktop control, accounts, Remote Login and the launcher's self-test. A copy that fails is discarded and
   runs keep the old base. The runner reports when its base was last edited, and each run records it. See
   [Editing a base](docs/operations/macos-vms.md#editing-a-base).
+- A Mac can hold more than one macOS base, each derived from Standard with its own install list, and a run picks one
+  with `macos_base`. A governance profile's `allowed_macos_bases` limits which a team may pick. See
+  [Several bases](docs/operations/macos-vms.md#several-bases).
 
 ### Changed
 

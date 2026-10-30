@@ -81,6 +81,7 @@
 | `WARDYN_RUNNER_MACOS_VM` | The Mac's runner | `1` offers macOS VMs from this Mac once its checks pass, else logs the fix. Off by default |
 | `MacOSVM` | The managed preferences profile | The same switch, from your MDM. Only a macOS profile sets it ([Managed preferences](hybrid-laptops.md#managed-preferences)) |
 | `macos_vm_base_file` | The Mac's runner, or `MacOSVMBaseFile` in the profile | The base's install list, a JSON file on the Mac. A changed list starts a tools update ([Customising the base](#customising-the-base)) |
+| `macos_vm_bases_dir` | The Mac's runner, or `MacOSVMBasesDir` in the profile | A directory of the Mac's other bases, one install list each ([Several bases](#several-bases)) |
 | `MDMManaged`, `DiskEncrypted` | The managed preferences profile | The posture, from your MDM, when no posture file exists |
 | `macos_vm.max_base_age_days` | The organisation's site config | The most days since a Mac's base was prepared that a run is accepted. Empty or 0: no maximum; a negative number is refused. A runner that reports no base age is refused while one is set |
 
@@ -283,6 +284,28 @@ Stage 2 and the `edit-base` recheck read the guest's posture. The caps carry it 
 - The posture is read when the base is prepared, updated or edited. It is not live.
 - Each read is tolerant: output Wardyn does not recognise leaves its field absent and fails nothing.
 - A guest is a clone. To sign-ins that require a compliant device, it is an unmanaged device, whatever it reports here.
+
+### Several bases
+
+A Mac can hold other bases beside its first, Standard. Each is derived from Standard and adds its own install list. Built and unit-tested; not yet run on a real Mac.
+
+- **The lists.** The runner setting `macos_vm_bases_dir` (in `runnerd.json`, or `MacOSVMBasesDir` from your MDM) names a directory on the Mac. Each `<name>.json` in it is the install list of the base `<name>`, in `macos_vm_base_file`'s form.
+  - A name is lowercase letters, digits, `.`, `_` and `-`. A list cannot hold a `profile` item, since `edit-base` edits Standard only.
+- **Derived.** A base is an APFS clone of Standard, booted once to install its own list. It keeps Standard's tools and Standard's prepare date, so the maximum base age reads the same date.
+- **Rebuilt.** When Standard changes (prepare, tools update or edit) or a list changes, each base is rebuilt from it.
+  - One at a time, in one of the 2 VM slots, and only while no prepare, tools update or edit runs.
+  - Never while a run on that base lives. The output is `derive-base.log` in the VM directory.
+  - A rebuild that fails is not retried until Standard or the list changes again. The base is not offered meanwhile.
+- **Picking one.** A run picks a base with `macos_base` on create: `Standard` (the default) or a base's name. The run's `vm_machine` records it.
+
+| Refusal | When |
+|---|---|
+| `placement_capability`, field `macos_base`: "No Mac in this pool has the macOS base <base>. Choose another base or another pool." | No eligible Mac has the base ready |
+| `placement_denied`, field `macos_base`: "<profile> doesn't allow the macOS base <base>. Choose another base." | The governance profile's `allowed_macos_bases` leaves the base out |
+
+- **Governance.** A profile's `allowed_macos_bases` lists the bases its people may pick, Standard included. Empty allows any base a Mac offers. A restriction narrows it the same way.
+- **The pool list.** A pool's `macos_vm.bases` lists the other bases: `ready` on every Mac, `rebuilding` with the least progress, or `missing` on at least one.
+- A directory that cannot be read, or a list that is refused, leaves Standard alone offered, and the runner logs why.
 
 ## Apple's boot-time hosts
 
