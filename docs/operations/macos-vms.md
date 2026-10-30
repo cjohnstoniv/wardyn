@@ -81,6 +81,7 @@
 | `WARDYN_RUNNER_MACOS_VM` | The Mac's runner | `1` offers macOS VMs from this Mac once its checks pass, else logs the fix. Off by default |
 | `MacOSVM` | The managed preferences profile | The same switch, from your MDM. Only a macOS profile sets it ([Managed preferences](hybrid-laptops.md#managed-preferences)) |
 | `MDMManaged`, `DiskEncrypted` | The managed preferences profile | The posture, from your MDM, when no posture file exists |
+| `macos_vm.max_base_age_days` | The organisation's site config | The most days since a Mac's base was prepared that a run is accepted. Empty: no maximum. A runner that reports no base age is refused while one is set |
 
 ## Which Macs qualify
 
@@ -139,7 +140,7 @@
 - **The desktop.** Apple has said Screen Sharing turned on from the command line may let a viewer only watch. Preparing ends with a control check, and `status` reports whether the desktop is `control`, `observe` or `none`. With `observe`, macOS VMs still run agent-only, and the desktop is not offered until the base has control turned on (`edit-base`, below).
   - `status` says how, and the prepare log says why.
   - To do it, run `wardyn-runnerd macos-vm edit-base`, turn on Screen Sharing with "VNC viewers may control screen with password" in the guest, then close the window.
-- **Newer macOS.** Wardyn does not tell you that Apple has a newer image. To move to one, run `wardyn-runnerd macos-vm prepare --new-image` with the per-run flags; a plain `prepare` keeps a ready base and says there is nothing to prepare.
+- **Newer macOS.** Wardyn does not tell you that Apple has a newer image, but `status` shows when the base was prepared and this Mac's macOS beside it. To move to a newer one, run `wardyn-runnerd macos-vm prepare --new-image` with the per-run flags; a plain `prepare` keeps a ready base and says there is nothing to prepare.
   - The new base is built beside the old one, which runs keep using until the new one is ready. Then the old one is replaced and deleted.
   - A re-prepare holds one of the two slots while it runs.
 - **Stopping stage 2.** Stopping a stage-2 boot, preparing's or a tools update's, through its control socket ends it at any point, even partway through an install.
@@ -333,7 +334,7 @@
 | Desktop | One fixed 1920 x 1080 display. An `observe` result (see above) leaves macOS VMs agent-only |
 | Clipboard | Paste in is allowed and copy out is blocked by default, as for other desktops, if Apple's Screen Sharing carries the standard clipboard messages. Otherwise nothing is copied either way |
 | Heat and battery | New VMs are refused at serious or critical thermal state. Battery use and lid-close sleep on MacBooks were not measured |
-| Guest patching | The guest's automatic updates are off, so a run's OS is predictable. Re-prepare to move to a newer macOS |
+| Guest patching | The guest's automatic updates are off, so a run's OS is predictable. Re-prepare to move to a newer macOS. `macos_vm.max_base_age_days` in the site config refuses runs on a Mac whose base is older |
 
 ### Folders
 

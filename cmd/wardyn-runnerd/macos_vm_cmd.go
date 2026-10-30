@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -172,9 +173,11 @@ func serviceOrgArg() string {
 // macOSVMStatus is `macos-vm status`: its JSON (--json) and, with the unexported fields, its text. The
 // one-time setup code is never in it: only the path of the file that holds it.
 type macOSVMStatus struct {
-	State         string   `json:"state"` // the base's state
-	Phase         string   `json:"phase"` // prepare's last phase, "setup_by_hand" while macOS waits for it
-	Base          string   `json:"base"`  // the base's macOS
+	State         string   `json:"state"`                 // the base's state
+	Phase         string   `json:"phase"`                 // prepare's last phase, "setup_by_hand" while macOS waits for it
+	Base          string   `json:"base"`                  // the base's macOS
+	PreparedAt    string   `json:"prepared_at,omitempty"` // when the base was prepared, RFC 3339; a ready base only
+	HostOS        string   `json:"host_os,omitempty"`     // this Mac's macOS, beside the base's
 	Desktop       string   `json:"desktop"`
 	Harnesses     []string `json:"harnesses"`
 	Thermal       string   `json:"thermal"` // the helper's probe's, "" when it reports none
@@ -210,6 +213,7 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 		st.Error = cmp.Or(st.Error, perr.Error())
 	}
 	if c.Base.State == runnerwire.MacVMBaseReady {
+		st.PreparedAt, st.HostOS = c.Base.CreatedAt, macProductVersion()
 		st.Desktop, st.Harnesses, st.minCPUs, st.minMemoryMiB = cmp.Or(c.Desktop, "none"), append(st.Harnesses, c.Harnesses...), c.MinCPUs, c.MinMemoryMiB
 		st.withheld = selftestWithheld(m.layout.BaseDir(0))
 	}
@@ -240,11 +244,22 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 	return st, nil
 }
 
+// statusNow is the clock the base's age is read against (tests replace it).
+var statusNow = time.Now
+
 // writeText prints the status for a person.
 func (st macOSVMStatus) writeText(out io.Writer) {
 	fmt.Fprintf(out, "base: %s", st.State)
 	if st.Base != "" {
 		fmt.Fprintf(out, ", %s", st.Base)
+	}
+	if st.State == runnerwire.MacVMBaseReady {
+		if at, err := time.Parse(time.RFC3339, st.PreparedAt); err == nil {
+			fmt.Fprintf(out, ", prepared %s (%d days ago)", at.Local().Format(time.DateOnly), max(0, int(statusNow().Sub(at).Hours()/24)))
+		}
+		if st.HostOS != "" {
+			fmt.Fprintf(out, "; this Mac: macOS %s", st.HostOS)
+		}
 	}
 	if st.State == runnerwire.MacVMBasePreparing {
 		fmt.Fprintf(out, ", %d%%", st.progress)

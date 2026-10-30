@@ -138,6 +138,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Mac's MDM can now attest posture (`MDMManaged`, `DiskEncrypted`) and set `register` and `setup` limits (`MaxRuns`,
   `TotalCPU`, `TotalMemoryGB`, `PerRunCPU`, `PerRunMemoryGB`) from the managed preferences profile, with no posture file to
   push. `macos-vm prepare` sizes its VM from the per-run keys when the organisation has sent no limit.
+- A Mac now reports when its macOS base was prepared and its build. `macos-vm status` shows the base's age and this Mac's
+  macOS, and a new site-config setting, `macos_vm.max_base_age_days`, refuses macOS VM runs on a Mac whose base is older
+  (or whose runner reports no age).
 
 ### Fixed
 

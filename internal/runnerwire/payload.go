@@ -327,6 +327,11 @@ type MacVMBase struct {
 	ImageVersion string `json:"image_version,omitempty"`
 	// BytesPerSec is the download rate; Step download with no Wait only.
 	BytesPerSec int64 `json:"bytes_per_sec,omitempty"`
+	// CreatedAt is when the base was prepared, RFC 3339 in UTC; absent from a runner that predates it, or
+	// when there is no base.
+	CreatedAt string `json:"created_at,omitempty"`
+	// BuildVersion is the base's macOS build, e.g. "25G83", or absent.
+	BuildVersion string `json:"build_version,omitempty"`
 }
 
 // MacVMBase.Step, Wait and Failure values. An unknown value is a newer runner's, and decodes as itself.

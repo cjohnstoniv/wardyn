@@ -401,6 +401,10 @@ func (m *macOSVMs) setPerRunLimits(cpuMillis, memoryMiB int64) {
 func (m *macOSVMs) base() (macvm.Manifest, runnerwire.MacVMBase) {
 	man, err := macvm.ReadManifest(m.layout.BaseDir(0))
 	b := runnerwire.MacVMBase{State: runnerwire.MacVMBaseNone, GuestOS: man.GuestOS}
+	if !man.CreatedAt.IsZero() {
+		b.CreatedAt = man.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	b.BuildVersion = man.BuildVersion
 	switch {
 	case err == nil && man.Format != macvm.BaseFormat:
 		b.State = runnerwire.MacVMBaseUpdateNeeded
