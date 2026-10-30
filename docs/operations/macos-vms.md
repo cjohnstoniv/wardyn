@@ -345,7 +345,12 @@
 - An admin or team drive in a folder on the Mac (a `host_path` share, or a second place bound to this runner) is shared into the guest as a folder. It mounts at the container's names: `/Users/agent/drive`, `/Users/agent/drives/<name>` and `/Users/agent/shared/<name>`. A read-only drive stays read-only.
 - It is held to its own folder and to the runner's drive roots, as in a container: a link out of either, or a folder macOS protects, is refused before the run starts.
 - A runner that predates drives refuses the run at create: update the runner, or run without drives. A Docker or cluster volume is refused too, because a macOS VM can't open it.
-- A person's own drive and a kept work folder are refused with a reason in this release.
+- A person's own drive can be a disk drive kept on one of their Macs (backend `mac_disk`): `POST /api/v1/me/drives` with `runner_id`, the Mac's runner id, whose runner must be online and up to date. It is a sparse disk image in `macos-vm.noindex/drives/`, 64 GiB unless the organisation sets a drive size, and takes room only as it fills.
+- Only a macOS VM run on that Mac attaches it, as a second disk at the drive's path (`/Users/agent/drive` or `/Users/agent/drives/<name>`). Its first run formats it as APFS. A run on another runner, or of another sandbox kind, is refused naming the Mac.
+- A disk drive is in one run at a time. A second run on the Mac that asks for it while another holds it is refused before its VM starts.
+- Keeping the work folder of a macOS VM run keeps `/Users/agent/work` as a disk drive on the Mac the run used. The run's pool must hold one Mac; with several, it is refused.
+- Deleting a disk drive asks its Mac to delete the image. While the Mac is offline the drive stays as deleting, and the image goes when the Mac reconnects. If the Mac is no longer registered, the image stays on it and only the record goes. A drive in a run is refused until that run ends.
+- Wardyn does not encrypt the image: the runner's macOS login and root on the Mac can read it. It stays until the drive is deleted, and deleting it is not secure erasure (see [Backups, Spotlight and removal](#backups-spotlight-and-removal)).
 
 ## Not yet tested on a real Mac
 

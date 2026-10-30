@@ -31,6 +31,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A macOS VM run can mount an admin or team drive that is a folder on the Mac. It is shared into the guest at the
   container's names under `/Users/agent`, read-only as granted, and a runner that predates this refuses it at create.
   See [Drives](docs/operations/macos-vms.md#drives).
+- A macOS VM run can mount a person's own disk drive, a disk image kept on one of their Macs (`POST /me/drives` with
+  `runner_id`), and keep its work folder as one. Only macOS VM runs on that Mac can use it, and deleting the drive
+  deletes the image there, at once or when the Mac reconnects. See [Drives](docs/operations/macos-vms.md#drives).
+- A disk drive is in one macOS VM run at a time: a second run on the Mac that asks for it while another holds it is
+  refused before its VM starts.
 - A macOS VM run is also refused at create and Review when a second harness has its own starting prompt, or when a tool
   rule, tool approvals, autonomy level L1 or the policy's inner walls would hold a tool call for approval. The launcher
   still refuses the same shapes as a backstop.
