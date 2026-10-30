@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,15 +19,34 @@ import (
 )
 
 // readBackGuest is the edit's guest whose verify-cert fails with verifyErr when it is set: a read-back that
-// cannot finish.
+// cannot finish. seq is the posture reads and the verify-certs in order, each with the codes set by then.
 type readBackGuest struct {
 	*editGuest
 	verifyErr error
+	seq       []string
+}
+
+func (g *readBackGuest) note(what string) {
+	g.editGuest.mu.Lock()
+	n := len(g.codes)
+	g.editGuest.mu.Unlock()
+	g.seq = append(g.seq, fmt.Sprintf("%s after %d codes", what, n))
+}
+
+func (g *readBackGuest) Posture(ctx context.Context) (guestagent.ToolsPosture, error) {
+	g.note("posture")
+	return g.editGuest.Posture(ctx)
 }
 
 func (g *readBackGuest) Run(ctx context.Context, argv []string) (string, int, error) {
-	if g.verifyErr != nil && len(argv) > 1 && argv[1] == "verify-cert" {
-		return "", 0, g.verifyErr
+	if argv[0] == "/bin/rm" {
+		g.note(strings.Join(argv, " "))
+	}
+	if len(argv) > 1 && argv[1] == "verify-cert" {
+		g.note("verify-cert")
+		if g.verifyErr != nil {
+			return "", 0, g.verifyErr
+		}
 	}
 	return g.editGuest.Run(ctx, argv)
 }
@@ -56,35 +76,23 @@ func newItemsEdit(t *testing.T) (*editFix, *readBackGuest) {
 	return e, g
 }
 
-// runAt is the index of argv in the guest's runs, -1 when it never ran.
-func runAt(e *editFix, argv ...string) int {
-	e.g.guest.mu.Lock()
-	defer e.g.guest.mu.Unlock()
-	return slices.IndexFunc(e.g.guest.runs, func(r []string) bool { return slices.Equal(r, argv) })
-}
-
-var (
-	offerArgv    = []string{"/usr/bin/ditto", guestagent.ItemDir("wifi") + "/" + guestagent.ItemProfile, guestagent.ProfileOffer("wifi")}
-	withdrawArgv = []string{"/bin/rm", "-rf", guestagent.MacProfileOffer}
-	verifyArgv   = []string{"/usr/bin/security", "verify-cert", "-L", "-p", "ssl", "-c", guestagent.ItemDir("orgca") + "/" + guestagent.ItemCert}
-)
-
-// The edit offers each staged profile before the window (StagedProfiles), names it to the person, then in
-// the recheck removes the offer and reads the items back (ReadBackItems) into the copy, whose tools.json
-// is swapped in with it.
-func TestEditBaseOffersProfilesThenReadsItemsBack(t *testing.T) {
-	e, _ := newItemsEdit(t)
+// The edit names each staged profile (StagedProfiles, of the base) by its path before the window. The
+// recheck's boot removes it (staged 0600 at prepare: TestProfileItemsStagedForApproval) and reads the items
+// back (ReadBackItems) after the accounts and Remote Login, into the copy, whose tools.json is swapped in
+// with it.
+func TestEditBaseNamesProfilesThenReadsItemsBack(t *testing.T) {
+	e, g := newItemsEdit(t)
 	if _, err := macvm.EditBase(context.Background(), e.opts); err != nil {
 		t.Fatal(err)
 	}
-	offer, withdraw, verify := runAt(e, offerArgv...), runAt(e, withdrawArgv...), runAt(e, verifyArgv...)
-	if offer < 0 || withdraw <= offer || verify <= withdraw {
-		t.Fatalf("offer %d, its removal %d, the read-back %d: want them in that order", offer, withdraw, verify)
-	}
 	lines := e.lines()
-	want := "To install the profile wifi, open /Users/Shared/Wardyn/wifi.mobileconfig in the guest, then approve it in System Settings."
+	want := "To install a staged profile: signed in as wardyn-admin, run sudo open /Library/Wardyn/stage/wifi/item.mobileconfig in Terminal, then approve it in System Settings."
 	if len(lines) != 5 || lines[2] != want || lines[3] != macvm.EditCheckingLine {
 		t.Fatalf("lines:\n%s", e.out.String())
+	}
+	want = "/bin/rm -rf /Library/Wardyn/stage/wifi after 2 codes"
+	if !slices.Equal(g.seq, []string{want, "posture after 2 codes", "verify-cert after 2 codes"}) {
+		t.Fatalf("the recheck's boot ran %q, want the profile removed, then the read-back after the posture", g.seq)
 	}
 	rec, err := macvm.ReadToolsRecord(e.base)
 	if err != nil {

@@ -372,24 +372,17 @@ func StagedProfiles(dir string) ([]string, error) {
 	return out, nil
 }
 
-// offerProfiles copies each staged profile (StagedProfiles' guest paths) to guestagent.MacProfileOffer,
-// where the person in edit-base's window opens it, and returns their names.
-func offerProfiles(ctx context.Context, g ToolsGuest, staged []string) ([]string, error) {
-	if len(staged) == 0 {
-		return nil, nil
-	}
-	if err := runItem(ctx, g, "/bin/mkdir", "-p", "-m", "0755", guestagent.MacProfileOffer); err != nil {
-		return nil, err
-	}
-	names := make([]string, 0, len(staged))
+// removeStagedProfiles removes each staged profile (StagedProfiles' guest paths) with its stage directory,
+// in edit-base's recheck: the first session in the guest after its window closes. A profile is installed
+// by then, or still staged in the record until a later prepare or tools update stages it again: no tools
+// session runs in the guest while the window is open to see an approval sooner.
+func removeStagedProfiles(ctx context.Context, g ToolsGuest, staged []string) error {
 	for _, p := range staged {
-		name := filepath.Base(filepath.Dir(p))
-		if err := runItem(ctx, g, "/usr/bin/ditto", p, guestagent.ProfileOffer(name)); err != nil {
-			return nil, err
+		if err := runItem(ctx, g, "/bin/rm", "-rf", filepath.Dir(p)); err != nil {
+			return err
 		}
-		names = append(names, name)
 	}
-	return names, nil
+	return nil
 }
 
 // ReadBackItems reads the base items' state and the guest posture again in g, a boot of the base in dir,
@@ -429,9 +422,8 @@ func installItem(ctx context.Context, g ToolsGuest, it BaseItem) (rec ItemRecord
 	switch it.Kind {
 	case ItemKindProfile:
 		// Kept staged for the person's approval in edit-base; readProfiles reads back whether it is installed.
-		// Readable (in a root-only directory) so the copy edit-base offers the person is.
 		rec.State = ItemStaged
-		return rec, pushItem(ctx, g, it.Path, it.SHA256, dir+"/"+guestagent.ItemProfile, 0o644)
+		return rec, pushItem(ctx, g, it.Path, it.SHA256, dir+"/"+guestagent.ItemProfile, 0o600)
 	case ItemKindCA:
 		return trustCA(ctx, g, it, rec)
 	}

@@ -251,13 +251,13 @@ The `ca` item trusts your organisation's root in the guest at prepare. It is sep
 3. It writes the saved rule back. This always runs, also when a step failed or the request was cancelled; a rule it cannot restore fails stage 2.
 4. `security verify-cert -p ssl` reads the trust back. `tools.json` records `trusted` or `not_trusted` with the certificate's SHA-256 and SHA-1 fingerprints.
 
-- `not_trusted` means macOS refused a trust without a person. In `edit-base`, open Keychain Access, import the staged certificate into the System keychain, and set it to Always Trust for SSL.
+- `not_trusted` means macOS refused a trust without a person. In `edit-base`, open Keychain Access, import the staged certificate into the System keychain, and set it to Always Trust for SSL. The staged certificate, `/Library/Wardyn/stage/<name>/item.cer`, opens only with `sudo`.
 - A tools update removes a CA the list no longer pins, with its trust settings, by its SHA-1.
 
 ### Configuration profiles
 
 - macOS installs a profile only with a person's approval, or from MDM. Prepare stages each `profile` item and reads `profiles list` back: `staged` until it is approved, then `installed`.
-- `edit-base` offers the staged profiles. Approve each in System Settings; its recheck reads them back.
+- `edit-base` prints each staged profile's path, `/Library/Wardyn/stage/<name>/item.mobileconfig`, before its window opens. Signed in as wardyn-admin, run `sudo open <path>` in Terminal, then approve the profile in System Settings. The recheck removes each staged file, then reads the profiles back.
 - Some payloads take effect only from MDM, whatever a person approves, so a guest never gets them from a staged profile.
   - These include Privacy Preferences Policy Control (TCC), system extension and kernel extension policies, and managed login items.
   - Approve a system extension by hand in `edit-base` instead.

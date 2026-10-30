@@ -523,13 +523,6 @@ var ItemAppPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,95}\.app$
 // ItemDir is item name's stage directory.
 func ItemDir(name string) string { return MacItemStageDir + "/" + name }
 
-// MacProfileOffer is where edit-base offers the staged profiles to the person in its window, who opens
-// each and approves it in System Settings: a copy of each, readable, removed by the recheck.
-const MacProfileOffer = "/Users/Shared/Wardyn"
-
-// ProfileOffer is the offered copy of the profile item name.
-func ProfileOffer(name string) string { return MacProfileOffer + "/" + name + ".mobileconfig" }
-
 // itemDestRoots are where a file item may land (not /etc, whose files are the system's own), and
 // itemDestRefused the paths under them it may not: the
 // files a run's walls are made of, which a run's Init writes (macos_paths.go), Wardyn's own files, and the
@@ -586,8 +579,7 @@ func itemPushAllowed(dest string) bool {
 	return ItemDestAllowed(dest) == nil
 }
 
-// itemArgvAllowed says whether argv is one of the base items' forms, S being MacItemStageDir and O
-// MacProfileOffer:
+// itemArgvAllowed says whether argv is one of the base items' forms:
 //
 //	/bin/mkdir -p -m 0700 S|S/<name>                  the stage directories
 //	/bin/mkdir -p -m 0755 D                           a file item's directory (ItemDestAllowed)
@@ -598,9 +590,6 @@ func itemPushAllowed(dest string) bool {
 //	/usr/bin/ditto S/<name>/mnt/<App>.app /Applications/<App>.app
 //	/usr/bin/hdiutil detach -force S/<name>/mnt
 //	/usr/bin/profiles list                            the profiles installed, read back
-//	/bin/mkdir -p -m 0755 O                           edit-base's offer of the staged profiles
-//	/usr/bin/ditto S/<name>/item.mobileconfig O/<name>.mobileconfig
-//	/bin/rm -rf O                                     the offer, removed by edit-base's recheck
 //	/usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain S/<name>/item.cer
 //	/usr/bin/security delete-certificate -t -Z <SHA-1> /Library/Keychains/System.keychain
 //	/usr/bin/security verify-cert -L -p ssl -c S/<name>/item.cer
@@ -617,24 +606,18 @@ func itemArgvAllowed(argv []string) bool {
 	if form, ok := itemForms[argv[0]+" "+argv[1]]; ok {
 		return form(argv)
 	}
-	if len(argv) != 3 || argv[0] != "/usr/bin/ditto" {
-		return false
-	}
-	if isItemFile(argv[1], ItemProfile) {
-		return argv[2] == ProfileOffer(filepath.Base(filepath.Dir(argv[1])))
-	}
-	app := filepath.Base(argv[2])
-	return ItemAppPattern.MatchString(app) && argv[1] == filepath.Dir(argv[1])+"/"+app && isItemFile(filepath.Dir(argv[1]), ItemMount) &&
-		argv[2] == MacApplications+"/"+app
+	app := filepath.Base(argv[len(argv)-1])
+	return len(argv) == 3 && argv[0] == "/usr/bin/ditto" && ItemAppPattern.MatchString(app) &&
+		argv[1] == filepath.Dir(argv[1])+"/"+app && isItemFile(filepath.Dir(argv[1]), ItemMount) && argv[2] == MacApplications+"/"+app
 }
 
 // itemForms checks each item form's whole argv, by its command and first argument.
 var itemForms = map[string]func(a []string) bool{
 	"/bin/mkdir -p": func(a []string) bool {
 		return len(a) == 5 && a[2] == "-m" &&
-			(a[3] == "0700" && (a[4] == MacItemStageDir || isItemDir(a[4])) || a[3] == "0755" && (ItemDestAllowed(a[4]) == nil || a[4] == MacProfileOffer))
+			(a[3] == "0700" && (a[4] == MacItemStageDir || isItemDir(a[4])) || a[3] == "0755" && ItemDestAllowed(a[4]) == nil)
 	},
-	"/bin/rm -rf": func(a []string) bool { return len(a) == 3 && (isItemDir(a[2]) || a[2] == MacProfileOffer) },
+	"/bin/rm -rf": func(a []string) bool { return len(a) == 3 && isItemDir(a[2]) },
 	"/usr/sbin/installer -pkg": func(a []string) bool {
 		return len(a) == 5 && isItemFile(a[2], ItemPkg) && a[3] == "-target" && a[4] == "/"
 	},

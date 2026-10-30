@@ -32,9 +32,6 @@ func TestToolsExecBaseItemForms(t *testing.T) {
 		{"/usr/bin/csrutil", "status"},
 		{"/usr/sbin/spctl", "--status"},
 		{"/usr/bin/profiles", "status", "-type", "enrollment"},
-		{"/bin/mkdir", "-p", "-m", "0755", MacProfileOffer},
-		{"/usr/bin/ditto", E + "/item.mobileconfig", MacProfileOffer + "/edr.mobileconfig"},
-		{"/bin/rm", "-rf", MacProfileOffer},
 	} {
 		if err := ToolsExecAllowed(argv, t.TempDir()); err != nil {
 			t.Errorf("%q refused: %v", argv, err)
@@ -64,12 +61,6 @@ func TestToolsExecBaseItemForms(t *testing.T) {
 		{"/usr/sbin/spctl", "--master-disable"},
 		{"/usr/bin/sw_vers"},
 		{"/usr/bin/profiles", "status", "-type", "bootstraptoken"},
-		{"/bin/mkdir", "-p", "-m", "0700", MacProfileOffer},
-		{"/usr/bin/ditto", E + "/item.mobileconfig", MacProfileOffer + "/other.mobileconfig"},
-		{"/usr/bin/ditto", E + "/item.mobileconfig", "/Library/LaunchDaemons/edr.plist"},
-		{"/usr/bin/ditto", E + "/item.pkg", MacProfileOffer + "/edr.mobileconfig"},
-		{"/usr/bin/ditto", "/etc/sudoers", MacProfileOffer + "/edr.mobileconfig"},
-		{"/bin/rm", "-rf", MacProfileOffer + "/.."},
 	} {
 		if err := ToolsExecAllowed(argv, t.TempDir()); err == nil {
 			t.Errorf("%q allowed", argv)
