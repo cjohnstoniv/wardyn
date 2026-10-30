@@ -350,7 +350,7 @@ func (s *Server) macOSVMRecordingHold(ctx context.Context, run *types.AgentRun, 
 // macOSVMRecordingGate is a macOS VM run's recording at create and Review: the refusal when recording is
 // required, the organisation's level is locked above off, or the caller's ceiling sets a level, else the
 // notice that it starts unrecorded. A deployment that keeps no recordings has nothing to say.
-func (s *Server) macOSVMRecordingGate(ctx context.Context, f *runFold) (notice string, refusal *runRefusal) {
+func (s *Server) macOSVMRecordingGate(ctx context.Context, place runPlacement, ceiling governanceCeiling) (notice string, refusal *runRefusal) {
 	if s.cfg.RecordingStore == nil || s.cfg.Store == nil {
 		return "", nil
 	}
@@ -360,17 +360,17 @@ func (s *Server) macOSVMRecordingGate(ctx context.Context, f *runFold) (notice s
 		if err != nil {
 			return "", runServerError("read runner pool defaults", err)
 		}
-		choice.Required = org.Recording == types.RecordingRequired || (f.place.pooled && f.place.row.Recording == types.RecordingRequired)
+		choice.Required = org.Recording == types.RecordingRequired || (place.pooled && place.row.Recording == types.RecordingRequired)
 	}
 	site, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		return "", runServerError("read site config", err)
 	}
 	choice.Org = site.Recording
-	if !f.ceiling.Operator {
-		choice.Ceiling = f.ceiling.Spec.Recording
-		if f.ceiling.Unit != nil {
-			choice.CeilingBy = f.ceiling.Unit.Name
+	if !ceiling.Operator {
+		choice.Ceiling = ceiling.Spec.Recording
+		if ceiling.Unit != nil {
+			choice.CeilingBy = ceiling.Unit.Name
 		}
 	}
 	if choice.FloorSource() != "" {

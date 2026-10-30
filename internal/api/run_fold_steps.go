@@ -366,7 +366,7 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 		return true
 	}
 	// A macOS VM is not recorded in this release: refused where recording is asked for, else said.
-	notice, refusal := s.macOSVMRecordingGate(f.r.Context(), f)
+	notice, refusal := s.macOSVMRecordingGate(f.r.Context(), f.place, f.ceiling)
 	if refusal.write(s, f.w, f.r) {
 		return false
 	}
