@@ -343,6 +343,19 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
       await screen.findByText("No services yet. Start one with Keep it running on an Automation / script run.");
     });
 
+    it.each([
+      ["Agent tasks", "environment", "No agent tasks yet. Start one with New run and choose Agent task."],
+      ["Environments", "agent_task", "No environments yet. Start one with New run and choose Environment."],
+      ["Apps & scripts", "agent_task", "No apps or scripts yet. Start one with New run and choose Application sandbox."],
+    ] as const)("%s with none reads a how-to-start line", async (label, otherShape, sentence) => {
+      listRunsFilteredMock.mockResolvedValue({ runs: [run({ shape: otherShape })], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
+      renderScreen();
+      await screen.findByText("Fix flaky auth tests");
+      fireEvent.click(screen.getByRole("button", { name: `${label} 0` }));
+      await screen.findByText(sentence);
+      expect(screen.queryByText("No runs match these filters")).not.toBeInTheDocument();
+    });
+
     it("a segment with no run under another active filter reads as no match, not as no services", async () => {
       listRunsFilteredMock.mockResolvedValue({ runs: [run({ shape: "agent_task" })], truncated: false, hiddenOlder: 0, hiddenKilled: 0 });
       renderScreen(undefined, "/runs?segment=services&status=failed");

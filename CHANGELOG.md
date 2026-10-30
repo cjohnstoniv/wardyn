@@ -21,6 +21,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- On the Runs page, the Agent tasks, Environments and Apps & scripts segments now say how to start one when you have
+  none, as Services does. They used to show "No runs match these filters" (#3782).
 - On the Approvals page, a decision the server refuses because the run owner's own walls deny the host now turns that
   request's Approve off and shows whose walls block it, as a request the walls already block does. It used to leave
   Approve live with no reason (#3781).
