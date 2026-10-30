@@ -174,7 +174,7 @@
 | 16 GiB | 4 GiB | `--total-memory 4 --per-run-memory 4` | 1: the budget is 8, one guest needs 5 and two need 10 |
 | 16 GiB | 8 GiB | Any | 0 if the base's minimum is over 3 GiB: the budget is 4 |
 
-- A runner whose per-run limit is below the base's minimum offers no macOS VMs at all. As a backstop, the organisation and then the runner each also refuse a run whose applied CPU or memory is below the minimum, saying the shortfall. The server keeps a run within the runner's per-run limits and never raises them.
+- A runner whose per-run limit is below the base's minimum offers no macOS VMs at all. As a backstop, the organisation and then the runner each also refuse a run whose applied CPU or memory is below the minimum, saying the shortfall and what lowered it: the governance profile's ceiling `resources` or its `limits.max_*`, the pool, or the server. The server keeps a run within the runner's per-run limits and never raises them.
 - A start is also refused when the Mac's available memory is under the guest's plus 2 GiB, and when the Mac is too hot.
 - **An idle login's Docker.** The ledger knows only logins that hold an entry. A second person's login that runs its own Docker with no macOS VM running is not subtracted from the budget. The live memory check above is the only guard in that case.
 

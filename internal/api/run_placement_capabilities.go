@@ -8,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -385,6 +387,19 @@ type macOSVMAsk struct {
 	MemoryMiB int
 	// Mounts is how many folders the run shares into the VM.
 	Mounts int
+	// CPU and Memory say how each size came to be, for the sentence of a size under the minimum; the
+	// zero value names no cause. Profile is the governance profile's own (leaf) name and Pool the run's
+	// pool's, "" for none.
+	CPU, Memory   macOSSizeWhy
+	Profile, Pool string
+}
+
+// macOSSizeWhy is one field of a run's size as the fold resolved it: what it asked for and got, the
+// limit that bound it, and, when governance's member cap did, the setting that cap came from.
+type macOSSizeWhy struct {
+	Applied client.AppliedAmount
+	Limit   types.EffectiveLimit
+	Knob    runnerpool.CapKnob
 }
 
 // macOSOffer is what one Mac runner offers for macOS VMs now: the one function placement, the runner
@@ -601,15 +616,27 @@ func macOSVMFit(mc *runnerwire.MacVMCaps, rn types.Runner, ask macOSVMAsk, pool 
 		return macOSRefusal("resources", macOSMemoryBelowMinimum(rn, mem/1024, (mc.MinMemoryMiB+1023)/1024))
 	}
 	if cpuLow || memLow {
-		return macOSRefusal("resources", fmt.Sprintf("A macOS VM needs at least %d CPU and %d MiB.", mc.MinCPUs, mc.MinMemoryMiB))
+		return macOSRefusal("resources", macOSSizeLow(mc, ask, cpuLow, memLow))
 	}
 	return nil
 }
 
 // macOSVMAskOf is the macOS VM ask of a run: its harness ids (the request's agent when it names no
-// harness set) and the size stepResources applied.
-func macOSVMAskOf(applied client.AppliedResources, harnesses []types.RunHarness, agent string) macOSVMAsk {
+// harness set) and the size stepResources applied, with how each field of it came to be.
+func macOSVMAskOf(place runPlacement, ceiling governanceCeiling, harnesses []types.RunHarness, agent string) macOSVMAsk {
+	applied := place.applied
 	ask := macOSVMAsk{CPUMillis: applied.CPUMillis.Applied, MemoryMiB: applied.MemoryMiB.Applied}
+	size := ceiling.authoredSize()
+	ask.CPU = macOSSizeWhy{Applied: applied.CPUMillis, Limit: place.limits.CPUMillis,
+		Knob: governanceKnob(place.limits.CPUMillis, size.CPUMillis, ceiling.Limits.MaxCPUMillis)}
+	ask.Memory = macOSSizeWhy{Applied: applied.MemoryMiB, Limit: place.limits.MemoryMiB,
+		Knob: governanceKnob(place.limits.MemoryMiB, size.MemoryMiB, ceiling.Limits.MaxMemoryMiB)}
+	if ceiling.Unit != nil {
+		ask.Profile = ceiling.Unit.Name
+	}
+	if place.pooled {
+		ask.Pool = place.row.Name
+	}
 	for _, h := range harnesses {
 		ask.Harnesses = append(ask.Harnesses, h.Harness)
 	}
@@ -617,4 +644,140 @@ func macOSVMAskOf(applied client.AppliedResources, harnesses []types.RunHarness,
 		ask.Harnesses = []string{agent}
 	}
 	return ask
+}
+
+// governanceKnob is the setting governance's member cap on l came from (runnerpool.MemberCapKnob), "" when
+// governance did not bound l.
+func governanceKnob(l types.EffectiveLimit, ceiling, profileMax int) runnerpool.CapKnob {
+	if l.CapSource != types.LimitSourceGovernance || l.Cap.Unlimited {
+		return ""
+	}
+	return runnerpool.MemberCapKnob(ceiling, profileMax, l.Cap.Value)
+}
+
+// sizeCauseKind is what lowered one field of a macOS VM's size under the base's minimum.
+type sizeCauseKind int
+
+const (
+	sizeOwn      sizeCauseKind = iota // the run asked for less itself, or the fold cannot say
+	sizeCeiling                       // governance's ceiling size
+	sizeLimits                        // governance's profile maximum
+	sizeBaseline                      // governance holds the run to the size its policy has
+	sizePool                          // the pool's per-run limit
+	sizeServer                        // the deployment's limits
+	sizeDefault                       // nothing capped it: the default size it got is under the minimum
+)
+
+// sizeCause is a kind with the name it is told in: the profile, the pool, or for sizeDefault the whole
+// "from ..." clause.
+type sizeCause struct {
+	kind sizeCauseKind
+	name string
+}
+
+// sizeLow is one field under the minimum: what the run gets of it, and the two settings its sentence
+// names (the ceiling's size and the profile's maximum).
+type sizeLow struct {
+	cause              sizeCause
+	got, resource, max string
+}
+
+// macOSSizeLow is the refusal of a size under the base's minimum when no runner limit is why (MAC-Z01 to
+// Z08): the minimum, what the run gets, what lowered it and the setting an admin raises. Fields with one
+// cause share a sentence; two causes get one each. A cause the fold cannot name leaves the plain minimum.
+func macOSSizeLow(mc *runnerwire.MacVMCaps, ask macOSVMAsk, cpuLow, memLow bool) string {
+	var lows []sizeLow
+	if cpuLow {
+		lows = append(lows, sizeLow{cause: ask.CPU.cause(ask, mc.MinCPUs, 1000), got: fmt.Sprintf("%g CPU", float64(ask.CPUMillis)/1000),
+			resource: "`resources.cpu_millis`", max: "`limits.max_cpu_millis`"})
+	}
+	if memLow {
+		lows = append(lows, sizeLow{cause: ask.Memory.cause(ask, mc.MinMemoryMiB, 1), got: fmt.Sprintf("%d MiB", ask.MemoryMiB),
+			resource: "`resources.memory_mib`", max: "`limits.max_memory_mib`"})
+	}
+	need := fmt.Sprintf("A macOS VM needs at least %d CPU and %d MiB.", mc.MinCPUs, mc.MinMemoryMiB)
+	var sentences []string
+	for len(lows) > 0 {
+		group, rest := []sizeLow{lows[0]}, []sizeLow(nil)
+		for _, o := range lows[1:] {
+			if o.cause == group[0].cause {
+				group = append(group, o)
+			} else {
+				rest = append(rest, o)
+			}
+		}
+		lows = rest
+		if group[0].cause.kind != sizeOwn {
+			sentences = append(sentences, group[0].cause.sentence(group))
+		}
+	}
+	if len(sentences) == 0 {
+		return need
+	}
+	return need + " " + strings.Join(sentences, " ")
+}
+
+// cause is why w is under least, in units of the minimum (a CPU is 1000 millis): the limit that capped it
+// when that cap is itself under the minimum, else the default it got when it asked for none.
+func (w macOSSizeWhy) cause(ask macOSVMAsk, least, unit int) sizeCause {
+	l := w.Limit
+	if l.CapSource != "" && !l.Cap.Unlimited && l.Cap.Value/unit < least {
+		switch {
+		case l.CapSource == types.LimitSourceGovernance && ask.Profile != "":
+			switch w.Knob {
+			case runnerpool.CapKnobCeiling:
+				return sizeCause{sizeCeiling, ask.Profile}
+			case runnerpool.CapKnobLimits:
+				return sizeCause{sizeLimits, ask.Profile}
+			case runnerpool.CapKnobBaseline:
+				return sizeCause{sizeBaseline, ask.Profile}
+			}
+		case l.CapSource == types.LimitSourcePool && ask.Pool != "":
+			return sizeCause{sizePool, ask.Pool}
+		case l.CapSource == types.LimitSourceDeployment:
+			return sizeCause{kind: sizeServer}
+		}
+		return sizeCause{}
+	}
+	if w.Applied.Requested > 0 {
+		return sizeCause{}
+	}
+	switch {
+	case w.Applied.Source == types.LimitSourceGovernance && ask.Profile != "":
+		return sizeCause{sizeDefault, "from your governance profile " + ask.Profile}
+	case w.Applied.Source == types.LimitSourcePool && ask.Pool != "":
+		return sizeCause{sizeDefault, "from the pool " + ask.Pool}
+	case w.Applied.Source == types.LimitSourceDeployment:
+		return sizeCause{sizeDefault, "on this server"}
+	}
+	return sizeCause{}
+}
+
+// sentence is the rest of the refusal for the fields of one cause: what the run gets, what lowered it
+// and the setting that raises it.
+func (c sizeCause) sentence(group []sizeLow) string {
+	var got, resources, maxes []string
+	for _, l := range group {
+		got, resources, maxes = append(got, l.got), append(resources, l.resource), append(maxes, l.max)
+	}
+	gets := "This run gets " + strings.Join(got, " and ")
+	that, only := "that", "lowers it"
+	if len(group) > 1 {
+		that, only = "those", "lower them"
+	}
+	switch c.kind {
+	case sizeCeiling:
+		return fmt.Sprintf("%s: your governance profile %s caps it with its ceiling's %s, set on it or on a profile it inherits from. An admin raises %s; %s only %s.",
+			gets, c.name, strings.Join(resources, " and "), that, strings.Join(maxes, " and "), only)
+	case sizeLimits:
+		return fmt.Sprintf("%s: your governance profile %s caps it with %s. An admin raises %s.", gets, c.name, strings.Join(maxes, " and "), that)
+	case sizeBaseline:
+		return fmt.Sprintf("%s: your governance profile %s keeps a run to the size its policy sets, or to the default size when it sets none. An admin raises %s with the policy's %s.",
+			gets, c.name, that, strings.Join(resources, " and "))
+	case sizePool:
+		return fmt.Sprintf("%s: the pool %s caps each run at that. An admin raises the pool's per-run limits.", gets, c.name)
+	case sizeServer:
+		return gets + ": this server's limits cap it. Ask an operator to raise them."
+	}
+	return fmt.Sprintf("%s, the default size %s. Ask for at least the minimum in the run's `resources`, or set it on Review.", gets, c.name)
 }

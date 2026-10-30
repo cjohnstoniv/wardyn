@@ -354,7 +354,7 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 	mounts := len(buildRunMounts(f.spec, s.userMountPosture(f.wsRefs))) // the folders the sandbox would get
 	var ask macOSVMAsk
 	if types.MachineKind(f.req.MachineKind).IsMacOSVM() {
-		ask = macOSVMAskOf(f.place.applied, f.harnesses, f.req.Agent)
+		ask = macOSVMAskOf(f.place, f.ceiling, f.harnesses, f.req.Agent)
 	}
 	return !s.placementCapabilityRefusalFor(f.r.Context(), *f.req, f.place, f.ceiling, mounts, ask).write(s, f.w, f.r)
 }
