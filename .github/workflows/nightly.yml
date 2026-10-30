@@ -1646,6 +1646,13 @@ jobs:
         kubelet: [v1.31.4, v1.35.0]
         suite: [org, inproc]
     steps:
+      # The harness builds the stack's images and then pulls a kindest/node image; one leg ran out of
+      # disk on that pull ("no space left on device"). Drop preinstalled toolchains this job never
+      # uses, and log what is left.
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
           command -v dockerd >/dev/null || exit 0
