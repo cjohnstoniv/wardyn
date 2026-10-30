@@ -25,10 +25,10 @@ export interface WireResult {
   unsupported: string[];
 }
 
-// machine_kind is excluded at "launch": a template never carries it, but each launch names it, and the
-// draft is a launch, so it sends it. Save as template drops it (save-as-dialog.model.ts). The other
+// machine_kind and macos_base are excluded at "launch": a template never carries them, but each launch names them, and the
+// draft is a launch, so it sends them. Save as template drops them (save-as-dialog.model.ts). The other
 // launch-excluded rows stay unsupported here, except local_folder (LAUNCH_CHOSEN below).
-const LAUNCH_CARRIED = new Set(["machine_kind"]);
+const LAUNCH_CARRIED = new Set(["machine_kind", "macos_base"]);
 const carried = (rows: readonly TemplateFieldRule[]) =>
   new Set(rows.filter((r) => (!r.excluded || (r.excluded === "launch" && LAUNCH_CARRIED.has(r.name))) && !r.pending).map((r) => r.name));
 

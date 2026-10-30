@@ -18,7 +18,7 @@ import { keepRunning, mayKeepRunning, setHealth, setPort, setRestart } from "../
 import { addApp, appsOf, chooseAppKind, commandOf, editApp, isServer, removeApp, setCommand } from "../../lenses/apps-lens";
 import type { MachineKind } from "../../../../../lib/types/machine-kind";
 import { dropMinimum, minimumFill, startAtMinimum } from "../../lenses/limits-lens";
-import { chooseBarrier, chooseMachineKind, chooseMode, choosePool } from "../../lenses/run-lens";
+import { chooseBarrier, chooseMacOSBase, chooseMachineKind, chooseMode, choosePool } from "../../lenses/run-lens";
 import { modeOf, type RunMode } from "../../lenses/shape-lens";
 import { flowSteps, StepShell } from "../step-shell";
 import { BarrierSection } from "./barrier-section";
@@ -112,7 +112,7 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
         </CommandSection>
       )}
       <QuestionBlock label={NR_RUN.WHERE_LABEL}>
-        <MachineKindSection kind={intent.machine_kind ?? "container"} agents={harnessIds(intent)} onChoose={chooseKind} />
+        <MachineKindSection kind={intent.machine_kind ?? "container"} agents={harnessIds(intent)} macosBase={intent.macos_base} onChoose={chooseKind} onChooseBase={(base) => edit((i) => chooseMacOSBase(i, base))} />
         <PoolSection state={pools} runType={runType} intent={intent} onChoose={(id) => edit((i) => choosePool(i, id))} />
         {!vm && <BarrierSection pool={chosen} chosen={intent.confinement_class} onChoose={(cc) => edit((i) => chooseBarrier(i, cc))} />}
       </QuestionBlock>

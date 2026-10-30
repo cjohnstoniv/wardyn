@@ -14,7 +14,7 @@ import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { MACVM_R } from "../../../../wardyn/copy/runner-macvm";
 import { belowMinimum, type MacOSMinimum } from "../../lenses/limits-lens";
 import type { RunIntent } from "../../draft/run-intent";
-import type { PoolMacOSVM, PoolMacOSVMRefusal } from "../../../../../lib/types/runner-pools";
+import type { PoolMacOSBase, PoolMacOSVM, PoolMacOSVMRefusal } from "../../../../../lib/types/runner-pools";
 
 /** Why a pool's Macs cannot take a macOS VM. `runner` names the Mac only when the pool has exactly one. */
 export type MacOSRefusal =
@@ -49,6 +49,8 @@ export type MacOSOffer =
       harnesses: readonly string[];
       /** Set when the pool has exactly one Mac: the harness refusal names it, else it speaks for the pool. */
       runner?: string;
+      /** The Macs' other bases besides Standard, by name; none when the pool has only Standard. */
+      bases?: readonly PoolMacOSBase[];
     }
   | { ok: false; refusal: MacOSRefusal };
 
@@ -129,6 +131,7 @@ export function macOSOfferOf(pool: PoolMacOSVM | undefined): MacOSOffer | undefi
       minMemoryMiB: pool.min_memory_mib ?? 0,
       harnesses: pool.harnesses?.includes("none") ? pool.harnesses : ["none", ...(pool.harnesses ?? [])],
       runner: pool.runner,
+      bases: pool.bases ?? [],
     };
   }
   const refusals = pool.refusals ?? [];

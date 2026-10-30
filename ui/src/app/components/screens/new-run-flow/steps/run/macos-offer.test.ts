@@ -5,7 +5,7 @@
 
 // The pool list's `macos_vm` read as the offer the OS row and the harness list use (mock M-N1).
 import { describe, expect, it } from "vitest";
-import type { PoolMacOSVM, PoolMacOSVMRefusal } from "../../../../../lib/types/runner-pools";
+import type { PoolMacOSBase, PoolMacOSVM, PoolMacOSVMRefusal } from "../../../../../lib/types/runner-pools";
 import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { harnessRefusal, macOSOfferOf, refusalText } from "./macos-offer";
 
@@ -22,9 +22,13 @@ describe("macOSOfferOf", () => {
   });
   it("offered: the guest, the smallest run and the harnesses, with Your own tools always among them", () => {
     expect(macOSOfferOf({ offered: true, guest_os: "macOS 27.0.1 (26A434)", min_cpus: 4, min_memory_mib: 8192, harnesses: ["claude-code"], runner: "mac-studio-07" })).toEqual({
-      ok: true, guestOS: "macOS 27.0.1 (26A434)", minCPUs: 4, minMemoryMiB: 8192, harnesses: ["none", "claude-code"], runner: "mac-studio-07",
+      ok: true, guestOS: "macOS 27.0.1 (26A434)", minCPUs: 4, minMemoryMiB: 8192, harnesses: ["none", "claude-code"], runner: "mac-studio-07", bases: [],
     });
     expect(macOSOfferOf({ offered: true, harnesses: ["none"] })).toMatchObject({ ok: true, guestOS: "", harnesses: ["none"], runner: undefined });
+  });
+  it("offered: the pool's other bases ride on the offer, as the pool sent them", () => {
+    const bases: PoolMacOSBase[] = [{ name: "xcode-16", state: "ready", guest_os: "macOS 27.0.1", harnesses: ["none"] }, { name: "qa", state: "rebuilding", progress: 60 }];
+    expect(macOSOfferOf({ offered: true, harnesses: ["none"], bases })).toMatchObject({ ok: true, bases });
   });
   it("a pool of one Mac gets that Mac's own refusal, by why", () => {
     expect(text(one({ why: "not_offered" }))).toBe("mac-studio-07 doesn't offer macOS VMs: it is older than 0.10, or macOS VMs aren't turned on for it.");

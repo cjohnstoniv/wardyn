@@ -127,6 +127,12 @@ describe("intentToWire unsupported fields (U2)", () => {
 });
 
 describe("launch-excluded rows", () => {
+  it("carries the chosen macOS base beside machine_kind", () => {
+    const { body, unsupported } = intentToWire({ machine_kind: "macos_vm", macos_base: "xcode-16" });
+    expect(body).toEqual({ mode_contract: "0.9", machine_kind: "macos_vm", macos_base: "xcode-16" });
+    expect(unsupported).toEqual([]);
+  });
+
   it("carries machine_kind and the chosen local_folder, and still reports max_wait_sec", () => {
     const folder = { name: "f", remote_dir: "/w" };
     const launch = { machine_kind: "linux_vm", local_folder: folder, max_wait_sec: 60 } as unknown as RunIntent;
