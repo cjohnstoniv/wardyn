@@ -20,6 +20,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - While the control plane cannot be reached, a minted credential's last-good header now stops at expiry plus the
   15-minute grace. A failed re-check just before that deadline could keep serving it for up to 30 seconds past it,
   the pause between re-checks (#3416).
+- A model gateway host both vendors share that is also the run's own model endpoint is now inspected as that endpoint's
+  vendor. Under fail-closed inspection its request bodies were refused as uninspected (#3819).
 
 ## [0.10.0-rc.8] — 2026-10-29
 
