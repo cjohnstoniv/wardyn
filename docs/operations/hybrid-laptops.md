@@ -84,7 +84,12 @@
 - Only a `credential_source: per_user` session qualifies. A shared AWS session is refused (`placement_credential`).
 - With proxy-inject off the sandbox would hold your real SSO token cache. A local `bedrock_sso` run is then refused at Review, preflight and create (`placement_credential`, naming `SandboxSpec.SecretEnv[WARDYN_AWS_SSO_CONFIG_B64]`), before Launch.
 - With proxy-inject on, `WARDYN_AWS_SSO_CONFIG_B64` is plain container env. `docker inspect` and a k8s pod spec show the SSO start URL, region, account id and role name, but no token or client secret.
-- The short-lived role credentials the SDK mints from it are still resident in the sandbox, because SigV4 signs in-process.
+- With `WARDYN_AWS_SIGV4_AT_PROXY` off, the short-lived role credentials the SDK mints from it are still resident in the sandbox, because SigV4 signs in-process.
+- With `WARDYN_AWS_SIGV4_AT_PROXY` on (off by default), the run's proxy on your runner re-signs instead, and the sandbox holds a placeholder key pair ([ENV.md](../ENV.md#wardyn_aws_sigv4_at_proxy)).
+- Role credentials the proxy has already redeemed keep signing until whichever comes first:
+  - 5 minutes before they expire, at most the permission set's session duration (set it to `PT1H`);
+  - about 1h5m after the runner loses its link.
+- Ending or killing the run, or revoking the runner, stops the proxy at once while the runner is connected.
 - The provider's sign-in and renewal: [AWS SSO per person](../OPERATIONS.md#aws-sso-per-person).
 
 ### Private endpoints and `internal_hosts`
