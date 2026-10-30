@@ -33,6 +33,7 @@ printf 'budget 10\n' >scripts/doc-form.d/A.budget
 printf 'shared\n' >g1.md
 printf 'shared\n' >'g[1].md'
 printf '\0one' >bin.dat
+printf '\0kept' >old.bin
 commit base
 BASEC="$(git rev-parse HEAD)"
 git tag v1.2.2
@@ -51,6 +52,7 @@ printf '# Notes\n\nshared line\nmain-only line\n- main-only bullet\n' >NOTES.md
 printf 'budget 12\n' >scripts/doc-form.d/A.budget
 printf 'shared\nmain-only g\n' >g1.md
 printf '\0two' >bin.dat
+printf '\0added' >main.bin
 commit "main-only content"
 MAIN="$(git rev-parse HEAD)"
 
@@ -86,6 +88,21 @@ branch binrev
 printf '\0one' >bin.dat
 commit binrev
 BINREV="$(git rev-parse HEAD)"
+
+branch bindel
+git rm -q main.bin
+commit bindel
+BINDEL="$(git rev-parse HEAD)"
+
+branch bindelchanged
+git rm -q bin.dat
+commit bindelchanged
+BINDELCHANGED="$(git rev-parse HEAD)"
+
+branch bindelsame
+git rm -q old.bin
+commit bindelsame
+BINDELSAME="$(git rev-parse HEAD)"
 
 branch binnew
 printf '\0three' >bin.dat
@@ -203,6 +220,11 @@ grep -qxF 'bin.dat: <binary reverted to PREV>' "$out" || fail "reverted binary n
 printf 'bin.dat\t<binary>\tthe release rebuilt it from the same source\n' | allow 1.2.3
 want_rc 0 "a listed reverted binary" -- --version 1.2.3 v1.2.2 "$MAIN" "$BINREV"
 noallow
+want_rc 1 "a binary main added, deleted by the port" -- v1.2.2 "$MAIN" "$BINDEL"
+grep -qxF 'main.bin: <binary reverted to PREV>' "$out" || fail "deleted main-only binary not named: $(cat "$out")"
+want_rc 1 "a binary main changed, deleted by the port" -- v1.2.2 "$MAIN" "$BINDELCHANGED"
+grep -qxF 'bin.dat: <binary reverted to PREV>' "$out" || fail "deleted changed binary not named: $(cat "$out")"
+want_rc 0 "a binary main left alone, deleted by the port" -- v1.2.2 "$MAIN" "$BINDELSAME"
 want_rc 0 "a binary changed to something new" -- v1.2.2 "$MAIN" "$BINNEW"
 
 # a filename with glob characters is a literal path
