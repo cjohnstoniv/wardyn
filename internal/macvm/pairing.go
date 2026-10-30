@@ -40,6 +40,12 @@ var pairDeadline = 5 * time.Second
 
 const pairPendingMax = 4
 
+// refusedLogEvery bounds the helper log's refusal lines per port: a guest dialing in a loop gets the first
+// line, then one a minute with the count held back. pairNow is the clock (tests replace it).
+const refusedLogEvery = time.Minute
+
+var pairNow = time.Now
+
 // pairer holds the guest's one idle connection on a vsock port. A connection is the guest agent's only
 // once it has proved the base's pairing key (guestagent.PairProof over this port and a fresh challenge);
 // until then it is neither idle nor closes the idle one, and one that fails is closed. The guest keeps
@@ -57,6 +63,8 @@ type pairer struct {
 	// connected is called when a guest connection has proved the key (for events).
 	connected func()
 	log       *slog.Logger
+	loggedAt  time.Time // the last refusal line
+	heldBack  int       // refusals since it, not logged
 }
 
 func newPairer(port uint32, key, open []byte) *pairer {
@@ -93,8 +101,8 @@ func (p *pairer) pair(c net.Conn) {
 	if !ok || p.closed {
 		p.mu.Unlock()
 		_ = c.Close()
-		if !ok && p.log != nil {
-			p.log.Warn("macvm: refused a guest connection without the pairing proof", "port", p.port)
+		if !ok {
+			p.refused()
 		}
 		return
 	}
@@ -109,6 +117,28 @@ func (p *pairer) pair(c net.Conn) {
 	if cb != nil {
 		cb()
 	}
+}
+
+// refused logs a failed proof, within refusedLogEvery.
+func (p *pairer) refused() {
+	if p.log == nil {
+		return
+	}
+	now := pairNow()
+	p.mu.Lock()
+	if !p.loggedAt.IsZero() && now.Sub(p.loggedAt) < refusedLogEvery {
+		p.heldBack++
+		p.mu.Unlock()
+		return
+	}
+	held := p.heldBack
+	p.loggedAt, p.heldBack = now, 0
+	p.mu.Unlock()
+	args := []any{"port", p.port}
+	if held > 0 {
+		args = append(args, "held_back", held)
+	}
+	p.log.Warn("macvm: refused a guest connection without the pairing proof", args...)
 }
 
 // proved sends c a challenge and checks its answer, all within pairDeadline, which it then clears.
