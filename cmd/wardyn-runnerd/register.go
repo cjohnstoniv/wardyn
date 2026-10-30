@@ -222,6 +222,28 @@ func dropUnsentKey(err error, a registerArgs, stateDir string) {
 }
 
 // registeredRunner is what a registration left on this host and with the organisation.
+// registrationSDK is the client registration spends the token through: no redirects, the org bundle's
+// transport when there is one, and the route setup's check chose.
+func registrationSDK(ctx context.Context, org string, orgClient *http.Client) *sdk.Client {
+	client := sdk.New(strings.TrimSpace(org), "")
+	client.HTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return errors.New("runner registration does not follow redirects")
+	}}
+	if orgClient != nil {
+		client.HTTPClient.Transport = orgClient.Transport
+	}
+	// Setup's check has already chosen the route (the service's, not this shell's); a plain register has none.
+	if route := registrationRoute(ctx); route != nil {
+		tr, _ := client.HTTPClient.Transport.(*http.Transport)
+		if tr == nil {
+			tr = http.DefaultTransport.(*http.Transport).Clone()
+		}
+		tr.Proxy = route
+		client.HTTPClient.Transport = tr
+	}
+	return client
+}
+
 type registeredRunner struct {
 	name, fingerprint string
 	limits            types.RunnerLimits
@@ -290,22 +312,7 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 	if err != nil {
 		return registeredRunner{}, err
 	}
-	client := sdk.New(strings.TrimSpace(org), "")
-	client.HTTPClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
-		return errors.New("runner registration does not follow redirects")
-	}}
-	if orgClient != nil {
-		client.HTTPClient.Transport = orgClient.Transport
-	}
-	// Setup's check has already chosen the route (the service's, not this shell's); a plain register has none.
-	if route := registrationRoute(cmd.Context()); route != nil {
-		tr, _ := client.HTTPClient.Transport.(*http.Transport)
-		if tr == nil {
-			tr = http.DefaultTransport.(*http.Transport).Clone()
-		}
-		tr.Proxy = route
-		client.HTTPClient.Transport = tr
-	}
+	client := registrationSDK(cmd.Context(), org, orgClient)
 	arch := a.arch
 	if arch == "" && !a.noMeasure {
 		arch = engineArch(cmd.Context())
