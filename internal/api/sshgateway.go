@@ -463,10 +463,14 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 	}
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
+		// The key's owner is known by now, so the row names them and spends their key's bucket, as
+		// every refusal after the key lookup does. A store fault is its own reason, not a missing run.
+		reason := "unknown run"
 		if !errors.Is(err, store.ErrNotFound) {
 			slog.ErrorContext(ctx, "api: ssh run lookup failed; refusing the connection", slog.String("run_id", runID.String()), slog.Any("err", err))
+			reason = "run lookup failed"
 		}
-		s.sshAuditAuthFailure(ctx, conn, &runID, "unknown", fp, "unknown run")
+		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, reason)
 		return nil, errors.New("ssh: unknown run")
 	}
 	override := run.CreatedBy != rec.Principal

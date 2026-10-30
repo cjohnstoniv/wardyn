@@ -738,6 +738,16 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 
 	release, ok := s.acquireUIConn(sess.Run)
 	if !ok {
+		// An idle pooled connection holds its slot until it closes (uiIdleConnTimeout), so one app's idle
+		// pool could refuse another app of the same run. Close the idle pool once and retry. The trade-off:
+		// it drops every run's idle connections, but only when a run hits its cap, and an idle connection
+		// simply redials, so a run at its cap is never wedged by its own idle pool.
+		if tr, isTransport := s.uiReverseProxy().Transport.(*http.Transport); isTransport {
+			tr.CloseIdleConnections() // each close releases its slot (uiConn.Close) before this returns
+			release, ok = s.acquireUIConn(sess.Run)
+		}
+	}
+	if !ok {
 		return nil, uiFail(ctx, http.StatusServiceUnavailable, reasonUIGatewayConnCapReached, uiConnCapMsg)
 	}
 	if sess.App == desktopSigninApp {
@@ -785,8 +795,11 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	return s.recordDesktopConn(run, sess, &uiConn{execConn: conn, closeFn: func() {
 		stopKeepalive()
 		release()
-		s.auditUISession(sess, "ui.close", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
-			map[string]any{"app": sess.App, "port": sess.Port, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())})
+		// Off the closing path, best-effort: a hung audit sink holds this goroutine, never the relay.
+		data := map[string]any{"app": sess.App, "port": sess.Port, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())}
+		s.goBackground(func() {
+			s.auditUISession(sess, "ui.close", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success", data)
+		})
 	}}, stopSignIn), nil
 }
 
