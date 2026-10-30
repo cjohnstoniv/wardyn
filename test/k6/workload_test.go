@@ -150,14 +150,16 @@ func me(t *testing.T, o *orgEnv, c *http.Client) (principal string, securityOper
 }
 
 // applyWorkload applies a WardynWorkload named name in ns whose intent is a long sleep under the org
-// cases' policy, and deletes it when t ends.
+// cases' policy, and deletes it when t ends. A workload's inline_policy is an overlay on the deployment
+// default, whose github_token grant a local runner refuses (placement_credential), so the intent names
+// an empty eligible_grants to drop it.
 func applyWorkload(t *testing.T, o *orgEnv, ns, name string) {
 	t.Helper()
 	doc := map[string]any{
 		"apiVersion": "wardyn.dev/v1alpha1", "kind": "WardynWorkload",
 		"metadata": map[string]any{"name": name, "namespace": ns},
 		"spec": map[string]any{"intent": map[string]any{
-			"agent": "claude-code", "task": "sleep 3000", "placement": "local", "inline_policy": orgPolicy(nil)}},
+			"agent": "claude-code", "task": "sleep 3000", "placement": "local", "inline_policy": orgPolicy([]map[string]any{})}},
 	}
 	b, err := json.Marshal(doc)
 	if err != nil {
