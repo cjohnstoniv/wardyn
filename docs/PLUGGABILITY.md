@@ -148,8 +148,10 @@
 
 ### A Kubernetes sandbox controller (for example agent-sandbox)
 
-- [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) (`agents.x-k8s.io/v1beta1`) is a Kubernetes controller for one stateful sandbox pod per agent: a stable name, storage that survives a restart, pause and resume, templates and warm pools.
-- It sits at the physical-sandbox layer only. It takes its isolation from a RuntimeClass (gVisor, Kata) and has no egress, credential, approval or audit controls.
+- [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) (`agents.x-k8s.io/v1beta1`) is a Kubernetes controller for one stateful sandbox pod per agent: a stable name, storage that survives a restart, and pause and resume. Its optional extensions add templates and warm pools.
+- It sits at the physical-sandbox layer. It takes its isolation from a RuntimeClass (gVisor, Kata).
+  - A sandbox template can carry a NetworkPolicy with coarse egress rules (by default, public Internet only).
+  - It has no per-domain egress decisions, and no credential, approval or audit controls.
 - Wardyn's `k8s` substrate creates its own pods, so it does not drive agent-sandbox today.
   - A backend that does is not built. It would create the controller's objects in place of pods, keep Wardyn's NetworkPolicy, proxy and managed files on them, and pass the same conformance contract.
 - A cluster can run both now, each in its own namespace.
@@ -160,7 +162,10 @@
 - Wardyn's inner walls give each run less. A narrower setting can only narrow, never widen:
   - a run's drive flag narrows the person's allocation ([who can change what](operations/admin-only-writes.md));
   - an egress decision's scope can hold a domain to one run ([decision scopes](operations/member-runs.md#decision-scopes-the-clamp-and-the-first-run)).
-- Going outward is an approval, held for a second person where the policy asks, never a setting a person changes alone.
+- Going outward is an approval, recorded per domain and per run, never a setting a person changes for good on their own:
+  - the run's owner may decide it for that run, or for a time;
+  - `always` is an administrator's;
+  - `WARDYN_EGRESS_SECOND_HUMAN` holds it for a second person.
 - Each wall has its own enforcer:
   - compute: the substrate, or a sandbox platform under it (above);
   - network, credentials, approvals and audit: `wardyn-proxy` and `wardynd`;
