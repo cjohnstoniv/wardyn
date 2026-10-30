@@ -40,6 +40,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Saving Settings → Runner credentials no longer fails with a 422 when the stored policy holds an older row with an
   empty posture requirement, such as Git tokens stored on the runner with `require_posture: {}`. Rows you did not
   edit now go back exactly as stored (#3502, #3816).
+- On the Runs page, the Agent tasks, Environments and Apps & scripts segments now say how to start one when you have
+  none, as Services does. They used to show "No runs match these filters" (#3782).
+- On the Approvals page, a decision the server refuses because the run owner's own walls deny the host now turns that
+  request's Approve off and shows whose walls block it, as a request the walls already block does. It used to leave
+  Approve live with no reason (#3781).
 - An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
   edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
   terminal. They used to stay open until they closed or reached their time limit (#3398).
@@ -135,6 +140,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - New Run checks a service health path's characters and length before launch, as the server does (#3776), and the Tools
   step's harness fields fit a 320 px viewport (#3818).
 - A credential refusal from Review's preflight refreshes the model-access banner at once instead of at its next poll.
+- A service run's Service panel now takes the head of the cockpit's right column as the saved layout has it, not always the
+  column starting at 8, and moves down only the widgets under it (#3784).
+- On a run's own Approvals tab, an approval the run owner's walls refuse now closes the way it does on the Approvals page:
+  the walls card, Approve off and Deny on. It stayed live with no reason (#3781).
 
 ### Security
 
