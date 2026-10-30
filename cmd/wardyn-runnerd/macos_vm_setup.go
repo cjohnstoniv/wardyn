@@ -20,6 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/runneridentity"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
 // macHostMemory is this Mac's memory (hw.memsize), swapped in tests.
@@ -99,7 +100,7 @@ func prepareMacOSVMBase(cmd *cobra.Command, plan setupPlan, limits *types.Runner
 		fmt.Fprintf(out, "macOS VMs: %v\n", err)
 		return
 	}
-	m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: id.RunnerID.String(), uid: os.Getuid(), host: admission.SystemHost(), owner: fileOwner})
+	m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: id.RunnerID.String(), version: version.String(), uid: os.Getuid(), host: admission.SystemHost(), owner: fileOwner})
 	startSetupPrepare(cmd, m, plan, id.RunnerID.String(), limits)
 }
 

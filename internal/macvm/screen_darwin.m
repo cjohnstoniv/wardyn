@@ -59,6 +59,30 @@ static NSSize wardynScreenSize(void) {
 	return s;
 }
 
+// The steps the person at the guest's screen follows. Before Remote Login there is no SSH and no guest agent,
+// so the host cannot drive the guest's settings: the window says what to do.
+static NSString *const wardynScreenSteps =
+	@"1. Create the account wardyn-admin. Its password is the one-time code.\n"
+	@"2. In System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on "
+	@"\"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n"
+	@"3. In the same pane, turn on Remote Login.";
+
+// wardynScreenAccessory is the strip of steps under the window's title bar.
+static NSTitlebarAccessoryViewController *wardynScreenAccessory(CGFloat width) {
+	NSTextField *label = [NSTextField wrappingLabelWithString:wardynScreenSteps];
+	label.font = [NSFont systemFontOfSize:12];
+	// The strip is as tall as the steps are at this width (a narrow window wraps them).
+	NSSize fit = [label.cell cellSizeForBounds:NSMakeRect(0, 0, width - 20, CGFLOAT_MAX)];
+	NSView *box = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, ceil(fit.height) + 8)];
+	label.frame = NSInsetRect(box.bounds, 10, 4);
+	label.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+	[box addSubview:label];
+	NSTitlebarAccessoryViewController *a = [[NSTitlebarAccessoryViewController alloc] init];
+	a.layoutAttribute = NSLayoutAttributeBottom;
+	a.view = box;
+	return a;
+}
+
 // wardynScreenShow opens the window on vm, a VZVirtualMachine; the block
 // keeps it until the window closes.
 void wardynScreenShow(void *vm) {
@@ -71,7 +95,8 @@ void wardynScreenShow(void *vm) {
 			                                            backing:NSBackingStoreBuffered
 			                                              defer:NO];
 			w.releasedWhenClosed = NO;
-			w.title = @"Wardyn: set up this macOS VM — create the account wardyn-admin; its password is the one-time code";
+			w.title = @"Wardyn: set up this macOS VM";
+			[w addTitlebarAccessoryViewController:wardynScreenAccessory(size.width)];
 			w.contentAspectRatio = NSMakeSize(16, 9);
 			VZVirtualMachineView *view = [[VZVirtualMachineView alloc] init];
 			view.virtualMachine = machine;
@@ -79,8 +104,18 @@ void wardynScreenShow(void *vm) {
 			[w center];
 			wardynScreenWindow = w;
 		}
+		// An accessory app's window opens behind the active app: macOS 14's activate is cooperative and is
+		// ignored while another app is active. So the window orders itself front regardless, follows the
+		// person to their Space and floats while setup waits (it closes when setup ends).
+		wardynScreenWindow.collectionBehavior |= NSWindowCollectionBehaviorMoveToActiveSpace;
+		wardynScreenWindow.level = NSFloatingWindowLevel;
 		[wardynScreenWindow makeKeyAndOrderFront:nil];
+		[wardynScreenWindow orderFrontRegardless];
 		[NSApp activate];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+		[NSApp activateIgnoringOtherApps:YES];
+#pragma clang diagnostic pop
 		atomic_store(&wardynScreenState, wardynScreenWindow != nil && wardynScreenWindow.contentView != nil ? 1 : -1);
 	});
 }
