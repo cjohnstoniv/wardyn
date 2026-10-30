@@ -387,6 +387,10 @@ type macOSVMAsk struct {
 	MemoryMiB int
 	// Mounts is how many folders the run shares into the VM.
 	Mounts int
+	// Drives is the run mounts a drive (or keeps its work folder); Prompts that a second harness has a
+	// starting prompt of its own; AskFirst that a tool rule asks first on a run that would hold tool
+	// calls for approval, and Holds that it would hold them for another reason. A macOS VM does none of these.
+	Drives, Prompts, AskFirst, Holds bool
 	// CPU and Memory say how each size came to be, for the sentence of a size under the minimum; the
 	// zero value names no cause. Profile is the governance profile's own (leaf) name and Pool the run's
 	// pool's, "" for none.
@@ -582,6 +586,16 @@ func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementC
 // cannot serve, or whose applied size is under the base's minimum guest; runnerd checks the harness and
 // size again at start, against its own manifest.
 func macOSVMFit(mc *runnerwire.MacVMCaps, rn types.Runner, ask macOSVMAsk, pool bool) *placement.Refusal {
+	switch {
+	case ask.Drives:
+		return macOSRefusal("drives", macOSVMNoDrives)
+	case ask.Prompts:
+		return macOSRefusal("tools", macOSVMOneAgent)
+	case ask.AskFirst:
+		return macOSRefusal("tools", macOSVMNoHoldAskFirst)
+	case ask.Holds:
+		return macOSRefusal("tools", macOSVMNoHold)
+	}
 	if ask.Mounts > 0 && !mc.Folders {
 		return macOSRefusal("workspaces", runner.MacVMNoFolderShare)
 	}
@@ -619,6 +633,36 @@ func macOSVMFit(mc *runnerwire.MacVMCaps, rn types.Runner, ask macOSVMAsk, pool 
 		return macOSRefusal("resources", macOSSizeLow(mc, ask, cpuLow, memLow))
 	}
 	return nil
+}
+
+// What a macOS VM does not do in this release, said at create and Review as the guest launcher says it at
+// start (MAC-F01, MAC-A05, MAC-A06). macOSVMNoHold is for a held lane with no Ask first rule to name.
+const (
+	macOSVMNoDrives       = "A macOS VM sandbox has no drives in this release."
+	macOSVMOneAgent       = "A macOS VM starts one agent per run in this release, and another harness in this run has its own starting prompt. Remove that prompt, or choose a container or a Linux VM."
+	macOSVMNoHoldAskFirst = "A macOS VM can't hold a tool call for approval in this release, and this run's tool rules include Ask first. Change those rules to Run it or Block it, or choose a container or a Linux VM."
+	macOSVMNoHold         = "A macOS VM can't hold a tool call for approval in this release, and this run's tool rules or tool approvals would. Change them, or choose a container or a Linux VM."
+)
+
+// macOSVMHolds reports, for a run that starts agents unattended, whether it would launch the hold lane
+// (WARDYN_TOOL_APPROVALS=hold), which the macOS guest launcher refuses: asksFirst when a tool rule asks
+// first, holds when the lane is held for any other reason. It is the trigger applyToolPosture uses for
+// the lane (tool approvals already hold, a person's tool rules, a policy rule that holds or blocks); a
+// hold only autonomy or the policy's inner walls derive, later in the fold, is the launcher's to refuse.
+// An interactive run, an exec run and one whose agents have no hold lane never reach it.
+func macOSVMHolds(req createRunRequest, spec types.RunPolicySpec) (asksFirst, holds bool) {
+	if requestIsInteractive(req) || req.TaskMode == "exec" || !slices.ContainsFunc(taskAgents(req), agentHasHoldLane) {
+		return false, false
+	}
+	asks := func(rules []types.ToolRule) bool {
+		return slices.ContainsFunc(rules, func(r types.ToolRule) bool { return r.Effect == types.ToolHold })
+	}
+	asksFirst = asks(spec.ToolRules) || slices.ContainsFunc(req.Tools, func(t client.IncludedTool) bool {
+		return t.DefaultEffect == types.ToolHold || asks(t.ToolRules)
+	})
+	holds = req.ToolApprovals == "hold" || slices.ContainsFunc(req.Tools, hasPersonalToolRules) ||
+		slices.ContainsFunc(spec.ToolRules, func(r types.ToolRule) bool { return r.Effect == types.ToolHold || r.Effect == types.ToolDeny })
+	return asksFirst && holds, holds && !asksFirst
 }
 
 // macOSVMAskOf is the macOS VM ask of a run: its harness ids (the request's agent when it names no
