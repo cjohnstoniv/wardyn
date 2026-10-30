@@ -26,7 +26,7 @@ docker.io/library/rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1
 # deploy/compose/docker-compose.yaml pins; postgres is also the CI service
 # container image (ghcr.io/cjohnstoniv/base-images@sha256:<this digest>).
 docker.io/library/postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
-docker.io/library/registry:3@sha256:3725021071ec9383eb3d87ddbdff9ed602439b3f7c958c9c2fb941049ea6531d
+docker.io/library/registry:3@sha256:d4032d4cc323c1731c707931ecada07a53076eac38e3b61ae57533f170f2c6c3
 
 # kind v0.33.0's default node image (helm/kind-action v1.15.1 installs kind
 # v0.33.0); bump with the action.
