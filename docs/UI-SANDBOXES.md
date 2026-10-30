@@ -171,6 +171,7 @@
 | `policy:port` | the host is allowed on ports 80 and 443 only (the port rule) | ask the operator for an allowlist entry that names the port, `host:port` |
 | `builtin:private-ip` | the target resolved to a private address | the SSRF guard; not policy-tunable |
 | `builtin:resolve-failed` | the target's name could not be resolved | the proxy could not look the host up (resolver outage, no such name, no address); not policy-tunable — check the sandbox's DNS, not the allowlist |
+| `builtin:tunnel-limit` | the run holds 1,024 open tunnels; a `503`, not `denied` | retry once one closes |
 | `policy:evaluator-error` | the policy could not be evaluated | fail-closed; an operator problem, not yours |
 
 - Those are the same static strings the decision log records, so nothing is

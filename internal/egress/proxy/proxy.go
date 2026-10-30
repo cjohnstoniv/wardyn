@@ -278,7 +278,22 @@ type Proxy struct {
 	channelHosts map[string]string
 
 	now func() time.Time
+
+	// openTunnels counts the run's opaque tunnels (openTunnel) from before the
+	// dial to the tunnel's end; maxTunnels bounds it (maxOpenTunnels; tests lower it).
+	openTunnels atomic.Int32
+	maxTunnels  int32
 }
+
+// maxOpenTunnels is the most opaque CONNECT tunnels a run's proxy holds at once,
+// failed and pending dials included: the desktop VM relay's maxOpaqueTunnels
+// (internal/vmnet/relay.go), so both egress paths bound a run the same way. A
+// tunnel past it is refused with ruleSourceTunnelLimit and a retry hint; it
+// never evicts an established one. Intercepted (MITM) tunnels are not counted.
+const maxOpenTunnels = 1024
+
+// ruleSourceTunnelLimit is the deny reason for a tunnel past maxOpenTunnels.
+const ruleSourceTunnelLimit = "builtin:tunnel-limit"
 
 // llmUpstream is one configured internal-gateway target: the bare host, port
 // (443 when the base URL carried none), and path prefix (empty when the base
@@ -397,6 +412,7 @@ func newProxy(opts Options) *Proxy {
 		dial:                 dial,
 		now:                  now,
 		viaOrgRoutes:         opts.ViaOrgRoutes,
+		maxTunnels:           maxOpenTunnels,
 	}
 	if l := policyref.Layered(opts.Attribution); p.sink != nil && l != nil && l.Layer != "" {
 		p.sink.layer = l.Layer
@@ -874,6 +890,21 @@ func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, 
 		http.Error(w, "hijacking unsupported", http.StatusInternalServerError)
 		return
 	}
+	// The slot is taken before the dial and given back on every return, which a
+	// tunnel reaches once either leg ends (a shutdown that closes it included).
+	if p.openTunnels.Add(1) > p.maxTunnels {
+		p.openTunnels.Add(-1)
+		if log != nil {
+			p.sink.emit(decisionLog(log.Request, egress.Deny, ruleSourceTunnelLimit))
+		}
+		// Temporary, so not X-Wardyn-Egress: denied: a retry succeeds once a tunnel closes.
+		w.Header().Set(egressHeaderReason, ruleSourceTunnelLimit)
+		w.Header().Set("Retry-After", "1")
+		w.Header().Set("X-Should-Retry", "true")
+		http.Error(w, "wardyn: the run holds the most open tunnels it may; retry once one closes", http.StatusServiceUnavailable)
+		return
+	}
+	defer p.openTunnels.Add(-1)
 
 	// Dial the destination: through the corp proxy (CONNECT <real-host>) when an
 	// upstream is configured and this host is not on its bypass list, else
