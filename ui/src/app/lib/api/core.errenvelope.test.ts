@@ -92,6 +92,15 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
     expect(new HttpError(422, "x").field).toBe("");
   });
 
+  it('{"error":"…","feature":"inbound"} -> an HttpError naming the capability feature the refusal is about', async () => {
+    const res = new Response(JSON.stringify({ error: "refused", reason: "capability_feature", feature: "inbound" }), { status: 403 });
+    const err = (await asJson(res).catch((e: unknown) => e)) as HttpError;
+    expect(err.feature).toBe("inbound");
+    const bad = new Response(JSON.stringify({ error: "refused", feature: 7 }), { status: 403 });
+    expect(((await asJson(bad).catch((e: unknown) => e)) as HttpError).feature).toBeUndefined();
+    expect(new HttpError(403, "x").feature).toBeUndefined();
+  });
+
   it("errText is the envelope's message, byte for byte", async () => {
     const res = new Response(JSON.stringify({ error: "x", reason: "model_credential" }), { status: 422 });
     expect(await errText(res)).toBe("x");

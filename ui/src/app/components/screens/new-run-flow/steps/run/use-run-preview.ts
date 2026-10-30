@@ -15,8 +15,10 @@ import { useLocalIssues } from "../../new-run-route";
 
 const NO_AUTO_PREFLIGHT = { local: false, backendArm: false, modelArm: false };
 
-/** The server's sentence for the inbound feature refusal (inboundDeclaredRefusal): its reason, capability_feature, is shared with the other feature doors, and the wire carries no target. */
-export const INBOUND_REFUSAL = "Inbound apps aren't turned on for you.";
+/** The preview refused an inbound port: capability_feature is shared by the feature doors, so the refusal's `feature` says which. */
+export function isInboundRefusal(inbound: boolean, error: unknown): boolean {
+  return inbound && error instanceof HttpError && error.reason === "capability_feature" && error.feature === "inbound";
+}
 
 export interface RunPreview {
   /** The server's policy preview says the service would be paused while it waits for requests. */
@@ -42,6 +44,6 @@ export function useRunPreview(intent: RunIntent): RunPreview {
   const error = checks.preview.error;
   return {
     pauses: !!intent.service && !!checks.preview.result?.warnings?.includes(SERVICE_PAUSE_WARNING),
-    inboundRefused: inbound && error instanceof HttpError && error.reason === "capability_feature" && error.message.startsWith(INBOUND_REFUSAL),
+    inboundRefused: isInboundRefusal(inbound, error),
   };
 }

@@ -22,7 +22,12 @@ func (s *Server) runCapabilityRefusal(r *http.Request, kind, value, target, msg 
 	if allowed {
 		return nil
 	}
-	return runDenied(authz.Deny(capKinds[kind].reason, target, msg))
+	d := authz.Deny(capKinds[kind].reason, target, msg)
+	if kind == capFeature {
+		// The same body refuse writes, plus the feature the refusal is about (value is the feature id).
+		return &runRefusal{status: d.Status, decision: &d, body: errorBody{Error: msg, Reason: string(d.Reason), Feature: value}}
+	}
+	return runDenied(d)
 }
 
 // inboundDeclaredRefusal is featureInbound at create, preflight and policy preview: asked when the REQUEST

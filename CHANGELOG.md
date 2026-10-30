@@ -21,6 +21,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- The error body of a `capability_feature` refusal now carries `feature`, the feature it names (such as `inbound` or
+  `custom_component`), and the New Run page reads it to tell an inbound-app refusal from the other feature refusals.
+  It used to match the wording of the message, so rewording the message would have turned the notice off (#3769).
 - An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
   edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
   terminal. They used to stay open until they closed or reached their time limit (#3398).
