@@ -33,6 +33,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -516,6 +517,13 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 	if err != nil {
 		fmt.Fprintf(d.stderr, "wardyn-macvm: %v\n", err)
 		return 1
+	}
+	// A derived base's list holds no profile item, as runnerd's LoadBaseVariants refuses: nothing would remove it.
+	if *variant != "" {
+		if i := slices.IndexFunc(st.Items.Items, func(it macvm.BaseItem) bool { return it.Kind == macvm.ItemKindProfile }); i >= 0 {
+			fmt.Fprintf(d.stderr, "wardyn-macvm %s: --%s %s: item %q is a profile, which only Standard's list can hold\n", fs.Name(), macvm.FlagVariant, *variant, st.Items.Items[i].Name)
+			return 2
+		}
 	}
 	enc := json.NewEncoder(d.stdout)
 	o := macvm.UpdateOptions{
