@@ -398,14 +398,20 @@ func (s *Server) stepModelProvider(f *runFold, rec *foldRecorder) bool {
 		}}
 		defer func() { f.w = w }()
 	}
+	// Create and Review's preflight renew alike, so the two give the same answer (the preview
+	// returned above). A renewal at Review says so on its audit row (preflightRenewal).
+	r := f.r
+	if f.mode == foldPreflight {
+		r = r.WithContext(withPreflightRenewal(r.Context()))
+	}
 	var choice runProviderChoice
-	if choice, ok = s.enforceRunModelProvider(f.w, f.r, *f.req, f.spec, f.wsRefs, f.mode == foldCreate, f.queued); !ok {
+	if choice, ok = s.enforceRunModelProvider(f.w, r, *f.req, f.spec, f.wsRefs, f.mode != foldPreview, f.queued); !ok {
 		return false
 	}
 	f.mpChoice = choice
 	f.modelCred = choice.modelCredential()
 	recordProviderHost(rec, choice, f.req.Agent)
-	f.harnessChoices, ok = s.judgeHarnessProviders(f.w, f.r, *f.req, f.spec, f.harnesses, rec, choice, false, f.mode == foldCreate, f.queued)
+	f.harnessChoices, ok = s.judgeHarnessProviders(f.w, r, *f.req, f.spec, f.harnesses, rec, choice, false, f.mode != foldPreview, f.queued)
 	grantHarnessProviders(f.harnesses, f.harnessChoices)
 	if len(f.harnessChoices) > 1 {
 		f.modelCred = mostResident(f.harnessChoices).modelCredential()
@@ -427,7 +433,7 @@ func (s *Server) stepAWSCLIProfile(f *runFold, _ *foldRecorder) bool {
 // judgeHarnessProviders is stepModelProvider's half for the harnesses of set
 // beside the primary (req.Agent), whose choice is primary: preview authorizes
 // the selection alone, the other doors also check the caller's own credential
-// (renew at create only, and never for a run that waits: queued), each as its own agent with its own requested
+// (renew at create and preflight only, and never for a run that waits: queued), each as its own agent with its own requested
 // provider and no workspace pin; an AWS sign-in serves the primary alone
 // (harnessProviderNeedsPrimary). Then the set is held to the one-lane
 // invariant (harnessProvidersConflict). It writes its own refusal.
