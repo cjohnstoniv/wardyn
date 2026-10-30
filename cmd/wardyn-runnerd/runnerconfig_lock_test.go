@@ -315,3 +315,25 @@ func TestSecurityLockPinsDriveRoot(t *testing.T) {
 		t.Errorf("drive_root without the lock = %+v, want the flag", got)
 	}
 }
+
+// The shipped profile sets DriveRoot to an empty array, its "unset". With the lock on, that pins nothing:
+// a --drive-root is not refused, and without one the runnerd.json roots are in effect, read from the file.
+func TestSecurityLockEmptyManagedDriveRootPinsNothing(t *testing.T) {
+	oldOS, oldExtract, oldJSON := prefsOS, prefsExtract, prefsExtractJSON
+	t.Cleanup(func() { prefsOS, prefsExtract, prefsExtractJSON = oldOS, oldExtract, oldJSON })
+	prefsOS = "darwin"
+	prefsExtract = func(_, key string) (string, error) { return map[string]string{lockSettingKey: "true"}[key], nil }
+	prefsExtractJSON = func(_, key string) (string, error) { return map[string]string{"DriveRoot": `[]`}[key], nil }
+	t.Setenv("WARDYN_DRIVE_ROOT", "")
+
+	if err := serveConfigErr(t, "--drive-root", "/f/root"); err != nil {
+		t.Errorf("--drive-root under the lock with an empty DriveRoot was refused: %v", err)
+	}
+	cfg, err := serveCmdConfig(t, `{"drive_root": ["/from/file"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.field("drive_root"); !slices.Equal(got.List, []string{"/from/file"}) || !strings.HasPrefix(got.Source, "file ") {
+		t.Errorf("drive_root under the lock with an empty DriveRoot = %+v, want the runnerd.json roots from the file", got)
+	}
+}
