@@ -18,6 +18,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   shell with no proxy could pass the check and then dial the organisation direct.
 - A Docker runner whose relay status failed to reach the organisation now sends it again at the next relay check. A
   failed rebuild or send of the runner's capabilities was retried only on a reconnect or a further change of state.
+- A folders runner that resumes its session now sends the failure it recorded while the connection was down. Only a
+  fresh session sent it, so a stable resumed runner stayed connected without the organisation seeing it.
 
 ## [0.10.0-rc.8] — 2026-10-29
 
