@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -23,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -38,6 +40,8 @@ import (
 //	POST /v1/tools/exec                 ToolsExec -> ToolsExecResult
 //	GET  /v1/tools/pointer              Pointer, read in the console user's session
 //	POST /v1/tools/desktop_password     DesktopPassword -> DesktopPasswordResult
+//	POST /v1/tools/admin_code           AdminCode -> AdminCodeResult (edit-base)
+//	GET  /v1/tools/posture              ToolsPosture (edit-base's recheck)
 const (
 	VsockToolsPort = 1026
 
@@ -54,6 +58,13 @@ const (
 	maxToolsPush = 1 << 30
 	// maxToolsOutput bounds an exec's combined output in its answer, under the client's MaxFrame.
 	maxToolsOutput = 32 << 10
+
+	// MacAdminUser is the base's setup admin, which prepare makes and edit-base's one-time code signs in as.
+	MacAdminUser = "wardyn-admin"
+	// dsclPath is the directory tool admin_code and posture run, with fixed argv only.
+	dsclPath = "/usr/bin/dscl"
+	// sshAddr is where Remote Login answers when it is on: launchd listens there for sshd.
+	sshAddr = "127.0.0.1:22"
 )
 
 // CLTGitArgv is the one argv of the Command Line Tools' git that tools mode runs: the CLT check.
@@ -83,6 +94,37 @@ func (DesktopPassword) GoString() string { return "guestagent.DesktopPassword{Pa
 // DesktopPasswordResult says only whether the password was set.
 type DesktopPasswordResult struct {
 	Set bool `json:"desktop_password_set"`
+}
+
+// AdminCode sets MacAdminUser's password: edit-base's one-time code before its window session, and a
+// fresh value no process keeps after it. It prints redacted.
+type AdminCode struct {
+	Code string `json:"code"`
+}
+
+func (AdminCode) String() string   { return "{code:***}" }
+func (AdminCode) GoString() string { return "guestagent.AdminCode{Code:***}" }
+
+// AdminCodeResult says only whether the password was set.
+type AdminCodeResult struct {
+	Set bool `json:"admin_code_set"`
+}
+
+// adminCodeForm is a code admin_code takes: letters and digits only, so it cannot end dscl's command line
+// or start another.
+var adminCodeForm = regexp.MustCompile(`^[A-Za-z0-9]{8,64}$`)
+
+// ToolsPosture is what edit-base's recheck reads of the guest: its local accounts, and whether Remote
+// Login answers. The host decides which accounts Wardyn made.
+type ToolsPosture struct {
+	Accounts    []GuestAccount `json:"accounts"`
+	RemoteLogin bool           `json:"remote_login"`
+}
+
+// GuestAccount is one local account, as `dscl . -list /Users UniqueID` lists it.
+type GuestAccount struct {
+	Name string `json:"name"`
+	UID  int    `json:"uid"`
 }
 
 // ErrToolsRefused is a push destination or an exec argv tools mode does not allow.
@@ -141,6 +183,9 @@ type Tools struct {
 
 	// run runs an allowed argv as root; nil is runCombined (tests record).
 	run func(ctx context.Context, argv []string) ([]byte, int, error)
+	// passwd sets an account's password; nil is setPassword (tests record). sshAddr is "" in use.
+	passwd  func(ctx context.Context, user, password string) error
+	sshAddr string
 
 	// cltListed is the Command Line Tools labels this process's own `softwareupdate -l` runs printed,
 	// in memory only, so a boot installs only what that boot listed; nil until a `-l` has run.
@@ -153,6 +198,8 @@ func (t *Tools) ToolsHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/tools/push", t.handlePush)
 	mux.HandleFunc("POST /v1/tools/exec", t.handleExec)
+	mux.HandleFunc("POST /v1/tools/admin_code", t.handleAdminCode)
+	mux.HandleFunc("GET /v1/tools/posture", t.handlePosture)
 	if t.Desktop != nil {
 		mux.HandleFunc("GET /v1/tools/pointer", t.Desktop.servePointer)
 		mux.HandleFunc("POST /v1/tools/desktop_password", t.handleDesktopPassword)
@@ -290,6 +337,82 @@ func (t *Tools) handleDesktopPassword(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("guest agent: tools mode: desktop password not set", "err", err)
 	}
 	writeJSONAny(w, DesktopPasswordResult{Set: err == nil})
+}
+
+func (t *Tools) handleAdminCode(w http.ResponseWriter, r *http.Request) {
+	var in AdminCode
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&in); err != nil || !adminCodeForm.MatchString(in.Code) {
+		http.Error(w, "bad admin_code request", http.StatusBadRequest)
+		return
+	}
+	passwd := t.passwd
+	if passwd == nil {
+		passwd = setPassword
+	}
+	err := passwd(r.Context(), MacAdminUser, in.Code)
+	if err != nil {
+		slog.Warn("guest agent: tools mode: admin code not set", "err", err)
+	}
+	writeJSONAny(w, AdminCodeResult{Set: err == nil})
+}
+
+func (t *Tools) handlePosture(w http.ResponseWriter, r *http.Request) {
+	run := t.run
+	if run == nil {
+		run = runCombined
+	}
+	out, code, err := run(r.Context(), []string{dsclPath, ".", "-list", "/Users", "UniqueID"})
+	if err == nil && code != 0 {
+		err = fmt.Errorf("exit %d", code)
+	}
+	var p ToolsPosture
+	if err == nil {
+		p.Accounts, err = parseAccounts(string(out))
+	}
+	if err != nil {
+		http.Error(w, "the guest's accounts were not read: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	d := net.Dialer{Timeout: 2 * time.Second}
+	if c, err := d.DialContext(r.Context(), "tcp", cmp.Or(t.sshAddr, sshAddr)); err == nil {
+		_ = c.Close()
+		p.RemoteLogin = true
+	}
+	writeJSONAny(w, p)
+}
+
+// parseAccounts reads `dscl . -list /Users UniqueID`: one "name uid" line per account.
+func parseAccounts(out string) ([]GuestAccount, error) {
+	accounts := []GuestAccount{}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		uid, err := strconv.Atoi(f[len(f)-1])
+		if len(f) != 2 || err != nil {
+			return nil, fmt.Errorf("an account line %q is not a name and a uid", line)
+		}
+		accounts = append(accounts, GuestAccount{Name: f[0], UID: uid})
+	}
+	return accounts, nil
+}
+
+// setPassword sets user's password as root through dscl's own command line on stdin, so the password is
+// in no argv. dscl's interactive mode exits 0 after a failed command, so its output decides; that output
+// is never returned, as it could hold the line it read.
+func setPassword(ctx context.Context, user, password string) error {
+	cmd := exec.CommandContext(ctx, dsclPath, ".")
+	cmd.Stdin = strings.NewReader("passwd /Users/" + user + " " + password + "\n")
+	out := &capped{max: maxToolsOutput}
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("dscl passwd: %w", err)
+	}
+	if strings.Contains(strings.ToLower(out.b.String()), "error") {
+		return errors.New("dscl passwd reported an error")
+	}
+	return nil
 }
 
 // runCombined runs argv as the agent's own user (root in a guest) and returns its combined output, at
