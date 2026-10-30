@@ -418,6 +418,7 @@ func TestRunEditor_AnIncludeUnderHostOrMatchIsNotTheGlobalOne(t *testing.T) {
 		"Host other\n  Include ~/.wardyn/ssh_config\n",
 		"Match host other\n  Include ~/.wardyn/ssh_config\n",
 		"Host a\n  User me\nInclude ~/.wardyn/ssh_config\n",
+		"Host=other\n  Include ~/.wardyn/ssh_config\n",
 	} {
 		home := homeWithKey(t, true)
 		codeLog := fakeCode(t)
