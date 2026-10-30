@@ -129,7 +129,12 @@ describe("the picker of a macOS run", () => {
     show({ ...MACOS, drives: [{ drive_id: DISK.id }] });
     const card = await screen.findByTestId("nr-attach-card");
     expect(card.querySelector("button[aria-expanded]")).toHaveAttribute("aria-expanded", "false");
-    expect(within(card).getByText(`${NR_FILES.STORED_ON}: ${MAC_DRIVES.D01(MAC)}`)).toBeInTheDocument();
+    const line = within(card).getByText(`${NR_FILES.STORED_ON}: ${MAC_DRIVES.D01(MAC)}`);
+    expect(line).toBeInTheDocument();
+    // It wraps at its spaces and is never cut with an ellipsis, so the Mac's name is not lost on a phone.
+    expect(line.className).toContain("whitespace-normal");
+    expect(line.className).not.toContain("truncate");
+    expect(line).toHaveAttribute("title", MAC_DRIVES.D01(MAC));
   });
   it("a drive's name wraps at words, is cut rather than split, carries its full name, and gives its room to the name on a phone", async () => {
     show({ ...MACOS, drives: [{ drive_id: DISK.id }] });
@@ -215,7 +220,7 @@ describe("creating a drive for a macOS run (MAC-D02)", () => {
 
 describe("deleting a disk drive (MAC-D10, D11, D12)", () => {
   const confirmDelete = async () => {
-    await userEvent.click(within(screen.getByTestId("nr-own-drives")).getAllByRole("button", { name: NR_FILES.DELETE_DRIVE })[0]);
+    await userEvent.click(dialogs()[0].querySelector<HTMLElement>("[data-own-delete]")!);
     await userEvent.click(within(top()).getByRole("button", { name: NR_FILES.DELETE_DRIVE }));
   };
   it("a Mac that is offline: the server's sentence stays up until the person closes it", async () => {

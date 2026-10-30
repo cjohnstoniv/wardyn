@@ -73,7 +73,7 @@ export function AttachCard({ item, open, onToggle, onEdit, onRemove }: {
           {/* One line, cut with an ellipsis, until the phone layout lets it wrap after "/". */}
           {item.path && <PathText path={item.path} className="whitespace-nowrap [&_wbr]:hidden max-[520px]:whitespace-normal max-[520px]:[&_wbr]:inline" />}
           {item.sharedWith && <small className="block truncate text-xs">{item.sharedWith}</small>}
-          {item.onMac && <small className="block truncate text-xs">{`${NR_FILES.STORED_ON}: ${item.onMac}`}</small>}
+          {item.onMac && <small title={item.onMac} className="block whitespace-normal text-xs">{`${NR_FILES.STORED_ON}: ${item.onMac}`}</small>}
         </span>
         <span className="min-w-0 whitespace-nowrap max-[760px]:justify-self-end max-[760px]:[grid-area:access]">{access}</span>
         <span className="flex items-center justify-end gap-0.5 max-[760px]:[grid-area:actions]">

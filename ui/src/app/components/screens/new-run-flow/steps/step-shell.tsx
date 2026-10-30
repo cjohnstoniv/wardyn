@@ -123,8 +123,11 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
       {lede && <p className="max-w-[620px] text-muted-foreground">{lede}</p>}
     </header>
   );
+  // Below sm a plain footer lets the primary take its own full-width row under Back: a long label ("Continue to tools and
+  // access →", 250 px) beside Back is wider than a 320 px screen. Footers with extras or a phone bar lay themselves out.
+  const wrapsOnPhone = !footerExtras && !phoneBar;
   const primaryButton = primary && (
-    <Button type="button" className={primary.className} disabled={primary.disabled} aria-disabled={primary.disabled || undefined} aria-describedby={primary.describedBy} onClick={() => activate.current()}>
+    <Button type="button" className={cn(primary.className, wrapsOnPhone && "max-sm:w-full")} disabled={primary.disabled} aria-disabled={primary.disabled || undefined} aria-describedby={primary.describedBy} onClick={() => activate.current()}>
       {primary.label}
       {primary.arrow !== false && <span aria-hidden="true">→</span>}
     </Button>
@@ -144,13 +147,14 @@ export function StepShell({ title, lede, eyebrow, progress, back, primary, issue
         data-testid={phoneBar ? "step-footer" : undefined}
         className={cn(
           "mt-1 flex items-center justify-between gap-3 border-t border-border",
+          wrapsOnPhone && "max-sm:flex-wrap",
           stickyFooter ? "sticky bottom-0 z-10 bg-background py-3" : "pt-[18px]",
           phoneBar && "max-sm:sticky max-sm:bottom-0 max-sm:z-10 max-sm:grid max-sm:grid-cols-[minmax(0,1fr)_auto] max-sm:gap-2 max-sm:bg-card max-sm:py-3",
         )}
       >
         {/* With extras the footer keeps one shape, so the primary is never remounted as an extra comes and goes. */}
         {footerExtras ? <div className={cn("flex flex-wrap gap-2", phoneBar && "max-sm:hidden")}>{footerExtras.start}</div>
-          : back ? <Button type="button" variant="ghost" onClick={back.onBack}>{back.label}</Button> : <span />}
+          : back ? <Button type="button" variant="ghost" onClick={back.onBack}>{back.label}</Button> : <span className={cn(wrapsOnPhone && "max-sm:hidden")} />}
         {footerExtras ? <div className={cn("flex flex-wrap gap-2", phoneBar && "max-sm:contents")}>{footerExtras.end}{primaryButton}</div> : primaryButton}
       </footer>
     </section>

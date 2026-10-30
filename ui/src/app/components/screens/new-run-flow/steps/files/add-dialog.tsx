@@ -72,6 +72,8 @@ interface PickOption {
   /** A team drive's groups and whether the others in them see what this run writes. */
   sharedWith?: string;
   othersSee?: boolean;
+  /** The person's own drive: its row carries "Delete drive". */
+  own?: boolean;
 }
 
 export const DIALOG_PATH_ID = "nr-mount-path";
@@ -96,6 +98,21 @@ const FIELD_LABEL = "text-xs font-semibold";
 const SELECT_CLASS =
   "h-[42px] w-full max-w-[220px] rounded-md border border-border-strong bg-input-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring";
 
+/**
+ * What the dialog hands the person-created-drives seam. The dialog owns two bits of its state so its own parts can follow:
+ * the create card being open hides the dialog's footer (the card has its own buttons), and "Delete drive" sits on each of
+ * the person's own rows in the list, so a request to delete one arrives from there.
+ */
+export interface UserDriveSeam {
+  choose: (driveId: string) => void;
+  reload: () => void;
+  creating: boolean;
+  setCreating: (creating: boolean) => void;
+  /** The own drive whose "Delete drive" was pressed, and the button to return focus to. */
+  deleting: { drive: { id: string; name: string }; opener: HTMLElement } | null;
+  setDeleting: (d: UserDriveSeam["deleting"]) => void;
+}
+
 export interface AddDialogProps {
   open: DialogOpen | null;
   onClose: () => void;
@@ -119,7 +136,7 @@ export interface AddDialogProps {
    * Seam for person-created drives: rendered under the user drives of the Choose step. `choose` selects a
    * drive by id once it is in the catalogue (`reload` re-reads it). Absent: nothing is offered.
    */
-  createUserDrive?: (ctx: { choose: (driveId: string) => void; reload: () => void }) => React.ReactNode;
+  createUserDrive?: (ctx: UserDriveSeam) => React.ReactNode;
   reloadDrives: () => void;
 }
 
@@ -139,7 +156,7 @@ function optionsFor(kind: AttachKind, src: ItemSources, macOS: boolean): PickOpt
     chips: d.team ? [NR_FILES.SOURCE_TEAM, d.writable ? NR_FILES.ACCESS_EDIT : NR_FILES.ACCESS_READ] : [...driveChips(d), ...(d.writable ? [] : [NR_FILES.ACCESS_READ])],
     shownPath: d.target, defaultPath: d.target, locked: !d.writable, reason: driveReason(d) ?? (macOS && noVolumeInMacOS(d) ? MAC_DRIVES.D03 : undefined), mounts: driveMountsLine(d),
     kept: d.kept_from_run ? { line: d.kept_from_run_title ? NR_FILES.DRIVE_KEPT_FROM(d.kept_from_run_title) : NR_FILES.DRIVE_KEPT_FROM_UNTITLED, unenforced: d.enforcement === "none" } : undefined,
-    sharedWith: driveSharedWith(d), othersSee: d.team === true && d.writable,
+    sharedWith: driveSharedWith(d), othersSee: d.team === true && d.writable, own: d.owned === true,
   }));
 }
 
@@ -181,6 +198,8 @@ export function AddDialog(props: AddDialogProps) {
 
 function DialogBody({ open, onClose, intent, src, items, folderReason, computerAllowed, driveReason: catalogueReason, operator, onSave, createUserDrive, reloadDrives, foldersAdded }: AddDialogProps & { open: DialogOpen }) {
   const [s, setS] = React.useState<State>(() => initial(open, intent));
+  const [creatingDrive, setCreatingDrive] = React.useState(false);
+  const [deletingDrive, setDeletingDrive] = React.useState<UserDriveSeam["deleting"]>(null);
   const editing = open.mode === "edit" ? open.item : undefined;
   // What an edit started from. It stays a choice even when no list carries it (a drive the catalogue does not
   // name, or the older single-drive switch with no catalogue drive behind it).
@@ -198,7 +217,10 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
   const error = editable || s.kind === "computer" ? pathError(s.path, items, editing?.key) : "";
   const errorId = React.useId();
 
-  const go = (step: Step) => setS((c) => ({ ...c, step, attempted: false }));
+  const go = (step: Step) => {
+    setCreatingDrive(false);
+    setS((c) => ({ ...c, step, attempted: false }));
+  };
   const choose = (o: PickOption) =>
     setS((c) => ({ ...c, sourceKey: o.key, branch: undefined, branchText: o.ref ?? "", refTyped: undefined, path: o.defaultPath ?? "", readOnly: o.locked, attempted: false }));
   // A source chosen by id from outside the list (the create form's new drive) is taken as the list's own pick
@@ -373,40 +395,62 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
               {options.map((o) => {
                 const reason = o.reason ?? (taken(choiceKey({ kind: attachKind, sourceKey: o.key })) ? NR_FILES.ALREADY_ADDED : undefined);
                 const selected = s.sourceKey === o.key;
+                const nameId = `nr-pick-${o.key}`;
                 return (
-                  <label
+                  <div
                     key={o.key}
-                    className={cn(
-                      "grid grid-cols-[18px_minmax(0,1fr)] items-start gap-2.5 border-b border-border px-[13px] py-[11px] text-sm last:border-b-0",
-                      selected && "bg-primary/10",
-                      reason ? "cursor-not-allowed text-muted-foreground" : "cursor-pointer",
-                    )}
+                    className={cn("flex items-start gap-2 border-b border-border text-sm last:border-b-0", selected && "bg-primary/10", reason && "text-muted-foreground")}
                   >
-                    <input type="radio" name="nr-pick-source" className="mt-0.5 size-4 accent-primary" checked={selected} disabled={!!reason} onChange={() => choose(o)} />
-                    <span className="grid min-w-0 gap-1">
-                      <span className="flex flex-wrap items-center gap-1.5">
-                        <strong className="font-semibold">{o.name}</strong>
-                        {o.chips.map((c) => <Chip key={c}>{c}</Chip>)}
-                        {o.kept?.unenforced && (
-                          <>
-                            <Chip tone="warning">{NR_FILES.DRIVE_SIZE_NOT_ENFORCED}</Chip>
-                            <InfoTip label={NR_FILES.DRIVE_SIZE_NOT_ENFORCED}>{NR_FILES.DRIVE_SIZE_NOT_ENFORCED_TIP}</InfoTip>
-                          </>
+                    <label
+                      className={cn(
+                        "grid min-w-0 flex-1 grid-cols-[18px_minmax(0,1fr)] items-start gap-2.5 py-[11px] pl-[13px]",
+                        !o.own && "pr-[13px]",
+                        reason ? "cursor-not-allowed" : "cursor-pointer",
+                      )}
+                    >
+                      <input type="radio" name="nr-pick-source" className="mt-0.5 size-4 accent-primary" checked={selected} disabled={!!reason} onChange={() => choose(o)} />
+                      <span className="grid min-w-0 gap-1">
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          <strong id={nameId} className="font-semibold">{o.name}</strong>
+                          {o.chips.map((c) => <Chip key={c}>{c}</Chip>)}
+                          {o.kept?.unenforced && (
+                            <>
+                              <Chip tone="warning">{NR_FILES.DRIVE_SIZE_NOT_ENFORCED}</Chip>
+                              <InfoTip label={NR_FILES.DRIVE_SIZE_NOT_ENFORCED}>{NR_FILES.DRIVE_SIZE_NOT_ENFORCED_TIP}</InfoTip>
+                            </>
+                          )}
+                        </span>
+                        {o.kept && <span className="text-xs text-muted-foreground">{o.kept.line}</span>}
+                        {o.shownPath && <PathText path={o.shownPath} className="text-muted-foreground" />}
+                        {o.mounts && <span className="text-xs text-muted-foreground" data-testid="nr-drive-mounts">{o.mounts}</span>}
+                        {o.sharedWith && <span className="text-xs">{o.sharedWith}</span>}
+                        {o.othersSee && <span className="text-xs text-warning">{NR_FILES.TEAM_OTHERS_SEE}</span>}
+                        {reason && (
+                          <span className="flex items-start gap-1.5 text-[13px]">
+                            <Lock className="mt-0.5 size-3 flex-none" aria-hidden="true" />
+                            {reason}
+                          </span>
                         )}
                       </span>
-                      {o.kept && <span className="text-xs text-muted-foreground">{o.kept.line}</span>}
-                      {o.shownPath && <PathText path={o.shownPath} className="text-muted-foreground" />}
-                      {o.mounts && <span className="text-xs text-muted-foreground" data-testid="nr-drive-mounts">{o.mounts}</span>}
-                      {o.sharedWith && <span className="text-xs">{o.sharedWith}</span>}
-                      {o.othersSee && <span className="text-xs text-warning">{NR_FILES.TEAM_OTHERS_SEE}</span>}
-                      {reason && (
-                        <span className="flex items-start gap-1.5 text-[13px]">
-                          <Lock className="mt-0.5 size-3 flex-none" aria-hidden="true" />
-                          {reason}
-                        </span>
-                      )}
-                    </span>
-                  </label>
+                    </label>
+                    {/* Beside the row's label, not inside it: pressing it deletes the drive and never picks the row, and the
+                        radio's own name stays the drive's. A person can delete every drive they own, whatever the create door says. */}
+                    {o.own && (
+                      <button
+                        type="button"
+                        className="mt-[11px] mr-[13px] flex-none text-[13px] font-semibold text-primary hover:underline"
+                        aria-describedby={nameId}
+                        data-own-delete={o.key}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setDeletingDrive({ drive: { id: o.key, name: o.name }, opener: e.currentTarget });
+                        }}
+                      >
+                        {NR_FILES.DELETE_DRIVE}
+                      </button>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -429,7 +473,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
           )}
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
             {s.kind === "repo" && <Link to="/workspaces" className={FILES_LINK}>{NR_FILES.ADD_REPOSITORY}</Link>}
-            {s.kind === "userDrive" && createUserDrive?.({ choose: chooseById, reload: reloadDrives })}
+            {s.kind === "userDrive" && createUserDrive?.({ choose: chooseById, reload: reloadDrives, creating: creatingDrive, setCreating: setCreatingDrive, deleting: deletingDrive, setDeleting: setDeletingDrive })}
             {s.kind === "sharedDrive" && operator && <Link to="/admin/drives" className={FILES_LINK}>{NR_FILES.MANAGE_DRIVES}</Link>}
           </div>
         </div>
@@ -481,6 +525,8 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
         </div>
       )}
 
+      {/* While the create card is open its own Cancel and Create are the buttons: a second Back / Cancel / Continue under it would be two sets. */}
+      {!(creatingDrive && s.step === 2 && s.kind === "userDrive") && (
       <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
         {s.step > 1 ? <Button type="button" variant="ghost" onClick={() => go((s.step - 1) as Step)}>{NR_SHARED.BACK}</Button> : <span />}
         <div className="flex gap-2">
@@ -496,6 +542,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
           {s.step === 3 && <Button id={EDIT_SAVE_ID} type="button" onClick={save}>{editing ? NR_FILES.SAVE : NR_FILES.ADD_CONFIRM}</Button>}
         </div>
       </div>
+      )}
     </>
   );
 }
