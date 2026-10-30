@@ -27,7 +27,7 @@ func testDiskDrive(target string) types.DriveMount {
 
 func TestMacDisksAreAttachedInTheirOrder(t *testing.T) {
 	r := newMacRig(t)
-	disks, guest, err := r.d.macDisks([]types.DriveMount{testDiskDrive(runner.DriveTarget), testDiskDrive(runner.ScratchWorkPath)})
+	disks, guest, err := r.d.macDiskDrives([]types.DriveMount{testDiskDrive(runner.DriveTarget), testDiskDrive(runner.ScratchWorkPath)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestMacDisksRefuseAHeldDiskInItsSentence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unlock()
-	_, _, err = r.d.macDisks([]types.DriveMount{testDiskDrive(runner.DriveTarget)})
+	_, _, err = r.d.macDiskDrives([]types.DriveMount{testDiskDrive(runner.DriveTarget)})
 	if err == nil || err.Error() != runner.MacVMDiskLocked("Notes") {
 		t.Fatalf("err = %v, want %q", err, runner.MacVMDiskLocked("Notes"))
 	}
@@ -67,7 +67,7 @@ func TestMacDisksRefusals(t *testing.T) {
 	} {
 		drive := testDiskDrive(runner.DriveTarget)
 		mod(&drive)
-		if _, _, err := r.d.macDisks([]types.DriveMount{drive}); err == nil {
+		if _, _, err := r.d.macDiskDrives([]types.DriveMount{drive}); err == nil {
 			t.Errorf("%s: the disk was attached", name)
 		}
 	}
