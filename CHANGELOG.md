@@ -26,6 +26,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - An SSH sign-in refused because its run could not be read now names the key's owner in its `ssh.authenticate` row,
   with reason `run lookup failed` for a store fault and `unknown run` for a missing run. It used to name `unknown` and
   say `unknown run` for both (#3508).
+- A UI relay connection now closes its sandbox side before it writes its `ui.close` row, and writes the row off the
+  closing path. A stuck audit write held every closing relay connection open.
 - An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
   edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
   terminal. They used to stay open until they closed or reached their time limit (#3398).

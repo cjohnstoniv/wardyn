@@ -785,8 +785,11 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	return s.recordDesktopConn(run, sess, &uiConn{execConn: conn, closeFn: func() {
 		stopKeepalive()
 		release()
-		s.auditUISession(sess, "ui.close", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
-			map[string]any{"app": sess.App, "port": sess.Port, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())})
+		// Off the closing path, best-effort: a hung audit sink holds this goroutine, never the relay.
+		data := map[string]any{"app": sess.App, "port": sess.Port, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())}
+		s.goBackground(func() {
+			s.auditUISession(sess, "ui.close", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success", data)
+		})
 	}}, stopSignIn), nil
 }
 

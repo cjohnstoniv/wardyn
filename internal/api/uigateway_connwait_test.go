@@ -9,8 +9,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // TestUIGateway_AWaitBehindHeldStreamsEndsInTheCapRefusal: behind maxUIConnsPerRun long-lived
@@ -93,4 +98,63 @@ func TestUIConnWait_BoundIsAtLeastFifteenSeconds(t *testing.T) {
 	if uiConnWait < 15*time.Second {
 		t.Errorf("uiConnWait = %v, want at least 15s", uiConnWait)
 	}
+}
+
+// hangingRecorder holds every write of one action until hung is closed: a stuck audit sink.
+type hangingRecorder struct {
+	audit.Recorder
+	action string
+	hung   <-chan struct{}
+}
+
+func (r hangingRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
+	if ev.Action == r.action {
+		<-r.hung
+	}
+	return r.Recorder.Record(ctx, ev)
+}
+
+// TestUIRelay_AHungCloseAuditNeverHoldsTheRelayOpen: a relay connection's exec is closed when the
+// connection closes, though its ui.close row cannot be written yet. The row was written first, so a
+// stuck audit sink held every closing relay open. The row still lands once the sink answers.
+func TestUIRelay_AHungCloseAuditNeverHoldsTheRelayOpen(t *testing.T) {
+	h := newUIHarness(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Connection", "close") // the transport closes the relay connection after this answer
+		_, _ = io.WriteString(w, "sandbox app")
+	}))
+	hung := make(chan struct{})
+	unhang := sync.OnceFunc(func() { close(hung) })
+	defer unhang()
+	h.srv.cfg.Audit = hangingRecorder{Recorder: h.audit, action: "ui.close", hung: hung}
+	execClosed := make(chan struct{})
+	var closedOnce sync.Once
+	h.runner.mu.Lock()
+	dial := h.runner.execFn
+	h.runner.execFn = func(spec runner.ExecSpec) (*runner.ExecSession, error) {
+		sess, err := dial(spec)
+		if err != nil || spec.Argv[0] != "socat" {
+			return sess, err
+		}
+		inner := sess.Close
+		sess.Close = func() error {
+			closedOnce.Do(func() { close(execClosed) })
+			return inner()
+		}
+		return sess, nil
+	}
+	h.runner.mu.Unlock()
+	cookie := h.openSession()
+
+	answered := make(chan int, 1)
+	go func() { answered <- h.relay("/ide", cookie, nil).Code }()
+	select {
+	case <-execClosed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the relay's exec was still open 5s after its connection closed, behind a hung ui.close write")
+	}
+	unhang()
+	if code := <-answered; code != http.StatusOK {
+		t.Errorf("relay = %d, want 200", code)
+	}
+	waitFor(t, "the ui.close row", func() bool { return len(h.audit.auditRows("ui.close", "success")) == 1 })
 }
