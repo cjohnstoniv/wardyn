@@ -170,6 +170,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   resource's workload. A prune, or a report of another uid, now counts only from the runner that last applied the
   workload, or from another once that runner has left the pool; a report from a runner session a newer one replaced
   writes nothing. A short-lived duplicate run can last until the reporting runner's delete arrives.
+- A runner that was refused events, then went quiet or was revoked, no longer leaves its refusal bookkeeping in the
+  organisation's memory for good. It is dropped a day after the window opened, and a summary of rows suppressed after
+  the bound is lost if the runner stays silent that long (#3663).
+- A run ended `gone` (its runner reported the sandbox gone with no exit code) now shows a failure hint saying so: the
+  container, pod or VM was removed, or its host restarted, including when the lease sweep finishes the end. It was
+  FAILED with no reason on its page (#3669).
+- A runner that resumes its session and keeps dying within seconds of READY with an event unacknowledged, five times in
+  a row, now starts a fresh session and logs a warning, instead of resuming for good against an organisation that
+  refuses that event. An agent exit or spool record is still replayed and keeps failing until the organisation is
+  upgraded (#3660).
 
 ### Security
 
