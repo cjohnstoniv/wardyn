@@ -298,7 +298,12 @@ func (t *Tools) handleExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if isItemDirForm(in.Argv) {
-		if err := makeDirAll(in.Argv[4], itemDestRefused); err != nil {
+		mode, _ := strconv.ParseUint(in.Argv[3], 8, 32) // 0700 or 0755: ToolsExecAllowed checked it
+		var refused []string                            // the stage directories are themselves refused paths
+		if in.Argv[3] == "0755" {
+			refused = itemDestRefused
+		}
+		if err := makeDirAll(in.Argv[4], uint32(mode), refused); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -487,7 +492,7 @@ func replaceFileOutside(dst string, perm os.FileMode, refused []string, fill fun
 	}
 	inodes := refusedInodes(refused)
 	dir, base := filepath.Dir(dst), filepath.Base(dst)
-	dirFD, err := walkDir(dst, dir, false, inodes)
+	dirFD, err := walkDir(dst, dir, 0, inodes)
 	if err != nil {
 		return err
 	}
@@ -532,10 +537,10 @@ func replaceFileOutside(dst string, perm os.FileMode, refused []string, fill fun
 	return nil
 }
 
-// makeDirAll is `mkdir -p -m 0755 dir` done by walkDir: each missing directory is made 0755 and root's,
-// and no link or unsafe directory on the way is followed.
-func makeDirAll(dir string, refused []string) error {
-	fd, err := walkDir(dir, dir, true, refusedInodes(refused))
+// makeDirAll is `mkdir -p -m mode dir` done by walkDir: each missing parent is made 0755 and dir itself
+// mode, root's, and no link or unsafe directory on the way is followed.
+func makeDirAll(dir string, mode uint32, refused []string) error {
+	fd, err := walkDir(dir, dir, mode, refusedInodes(refused))
 	if err != nil {
 		return err
 	}
@@ -557,9 +562,9 @@ var (
 
 // walkDir opens dir, absolute and clean, one component at a time from "/" with O_NOFOLLOW|O_DIRECTORY,
 // and returns its fd. Each directory opened must be safe (ErrUnsafeParent) and none an inode of refused
-// (ErrItemDest). With create, a missing component is made 0755 on its parent's fd. what names the write
-// in errors.
-func walkDir(what, dir string, create bool, refused map[devIno]string) (int, error) {
+// (ErrItemDest). With a mode, a missing component is made on its parent's fd, 0755 or, the last, mode
+// (mkdir -p -m); with 0, none is. what names the write in errors.
+func walkDir(what, dir string, mode uint32, refused map[devIno]string) (int, error) {
 	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
 		return -1, fmt.Errorf("%q: not an absolute, clean path", what)
 	}
@@ -575,10 +580,13 @@ func walkDir(what, dir string, create bool, refused map[devIno]string) (int, err
 		}
 		comp = filepath.Base(comp)
 		at += "/" + comp
-		made := false
+		made, perm := false, uint32(0o755)
+		if at == dir {
+			perm = mode
+		}
 		next, err := unix.Openat(fd, comp, flags, 0)
-		if errors.Is(err, unix.ENOENT) && create {
-			if err = unix.Mkdirat(fd, comp, 0o755); err == nil {
+		if errors.Is(err, unix.ENOENT) && mode != 0 {
+			if err = unix.Mkdirat(fd, comp, perm); err == nil {
 				made = true
 				next, err = unix.Openat(fd, comp, flags, 0)
 			}
@@ -592,7 +600,7 @@ func walkDir(what, dir string, create bool, refused map[devIno]string) (int, err
 		}
 		fd = next
 		if made {
-			err = unix.Fchmod(fd, 0o755) // the umask narrows Mkdirat's mode
+			err = unix.Fchmod(fd, perm) // the umask narrows Mkdirat's mode
 		}
 		if err == nil {
 			err = checkDir(fd, what, at, refused)
@@ -734,7 +742,7 @@ func itemPushAllowed(dest string) bool {
 // itemArgvAllowed says whether argv is one of the base items' forms:
 //
 //	/bin/mkdir -p -m 0700 S|S/<name>                  the stage directories
-//	/bin/mkdir -p -m 0755 D                           a file item's directory (ItemDestAllowed), made by the agent (makeDirAll)
+//	/bin/mkdir -p -m 0755 D                           a file item's directory (ItemDestAllowed)
 //	/bin/rm -rf S/<name>                              an item's stage directory, after its install
 //	/usr/sbin/installer -pkg S/<name>/item.pkg -target /
 //	/usr/bin/ditto -x -k S/<name>/item.zip /Applications
@@ -750,7 +758,8 @@ func itemPushAllowed(dest string) bool {
 //	/usr/sbin/spctl --status
 //	/usr/bin/profiles status -type enrollment
 //
-// The two that change the admin trust settings run only inside withTrustSettingsRight.
+// The agent does both mkdir forms itself (makeDirAll), without mkdir. The two that change the admin
+// trust settings run only inside withTrustSettingsRight.
 func itemArgvAllowed(argv []string) bool {
 	if len(argv) < 2 {
 		return false
@@ -763,10 +772,10 @@ func itemArgvAllowed(argv []string) bool {
 		argv[1] == filepath.Dir(argv[1])+"/"+app && isItemFile(filepath.Dir(argv[1]), ItemMount) && argv[2] == MacApplications+"/"+app
 }
 
-// isItemDirForm says whether argv, an allowed item form, is a file item's directory's mkdir, which the
-// agent does itself (makeDirAll) because mkdir follows a link among the directory's parents.
+// isItemDirForm says whether argv, an allowed item form, is a mkdir (a stage directory or a file item's
+// directory), which the agent does itself (makeDirAll) because mkdir follows a link among its parents.
 func isItemDirForm(argv []string) bool {
-	return len(argv) == 5 && argv[0] == "/bin/mkdir" && argv[1] == "-p" && argv[3] == "0755"
+	return len(argv) == 5 && argv[0] == "/bin/mkdir" && argv[1] == "-p"
 }
 
 // itemForms checks each item form's whole argv, by its command and first argument.
