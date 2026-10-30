@@ -13,3 +13,31 @@ const (
 	// MacAgentBinaryPath is where stage 1 installs the agent's binary.
 	MacAgentBinaryPath = "/usr/local/libexec/wardyn-guest-agent"
 )
+
+// Where a macOS guest's harnesses read the files a run's walls are made of. The runner's path table
+// (internal/runner/docker/macvm_guestpaths.go) maps each Linux path the dispatcher names to one of
+// these; a file it cannot map is refused, never written where no harness reads it.
+const (
+	// MacClaudeCodeManagedDir is where Claude Code reads managed-settings.json and managed-mcp.json on
+	// macOS: "/Library/Application Support/ClaudeCode/ on macOS, /etc/claude-code/ on Linux and WSL"
+	// (https://code.claude.com/docs/en/managed-settings, "Delivery mechanisms"). Confirmed on a real
+	// Mac: pending.
+	MacClaudeCodeManagedDir = "/Library/Application Support/ClaudeCode"
+	// MacClaudeCodeManagedSettingsPath holds a run's autonomy ceiling and tool rules.
+	MacClaudeCodeManagedSettingsPath = MacClaudeCodeManagedDir + "/managed-settings.json"
+	// MacClaudeCodeManagedMCPPath holds an interactive run's MCP servers.
+	MacClaudeCodeManagedMCPPath = MacClaudeCodeManagedDir + "/managed-mcp.json"
+	// MacClaudeMCPConfigPath is the MCP file the launcher passes an autonomous Claude Code run. Claude
+	// Code does not read it on its own; it sits beside the managed files so it is root's like them.
+	MacClaudeMCPConfigPath = MacClaudeCodeManagedDir + "/wardyn-mcp.json"
+	// MacCodexManagedDir is where Codex reads requirements.toml on macOS: "/etc/codex/requirements.toml
+	// on Unix systems, including Linux and macOS"
+	// (https://developers.openai.com/codex/enterprise/managed-configuration, "Locations"). Confirmed
+	// on a real Mac: pending.
+	MacCodexManagedDir = "/etc/codex"
+	// MacCodexRequirementsPath binds Codex to a run's sandbox mode.
+	MacCodexRequirementsPath = MacCodexManagedDir + "/requirements.toml"
+	// MacRunDir is the guest's counterpart of the Linux /run/wardyn, where a delivered secret lands: a
+	// macOS guest has no /run (its system volume is sealed).
+	MacRunDir = "/var/run/wardyn"
+)

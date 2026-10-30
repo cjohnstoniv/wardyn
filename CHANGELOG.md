@@ -11,6 +11,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- macOS VMs: the files a run's policy manages in the guest, such as a harness's managed settings and server list and
+  the cloud CLI's configuration, are now written where macOS reads them. A managed file with no macOS location stops the
+  run's start with a reason.
+
 ## [0.10.0-rc.8] — 2026-10-29
 
 ### Before you upgrade
