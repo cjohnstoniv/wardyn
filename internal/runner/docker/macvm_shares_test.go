@@ -17,6 +17,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
@@ -223,6 +224,90 @@ func TestMacVMSharesRefuseTheContainersDeniedMounts(t *testing.T) {
 		}
 		if _, terr := macShareTarget(m.Target); terr == nil && !strings.Contains(err.Error(), "denied workspace mount") {
 			t.Errorf("%s: %v, want the container's denied-mount refusal", tc.name, err)
+		}
+	}
+}
+
+// shareDriveAt is a share drive whose home is dir, mounted at target.
+func shareDriveAt(dir, target string, readOnly bool) types.DriveMount {
+	d := *hostPathDrive(dir)
+	d.HomeName, d.Target, d.ReadOnly = filepath.Base(dir), target, readOnly
+	return d
+}
+
+// A run's admin and team drives reach the helper's plan as shared folders at their canonical host
+// paths and the guest's Init at the container's names under /Users/agent, read-only as granted.
+func TestMacVMCreateSharesDrives(t *testing.T) {
+	r := newMacRig(t)
+	root, home := driveHostRoot(t)
+	team := filepath.Join(root, "team")
+	if err := os.Mkdir(team, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r.d.cfg.UserDriveHostRoots = []string{root}
+	spec := macSpec()
+	spec.Drives = []types.DriveMount{shareDriveAt(home, runner.DriveTarget, true), shareDriveAt(team, runner.SharedRoot+"/team", false)}
+	sb, err := r.d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.d.StopSandbox(context.Background(), sb.Ref) }()
+	want := []macvm.Share{{Tag: "wardyn0", HostPath: home, Target: "/Users/agent/drive", ReadOnly: true},
+		{Tag: "wardyn1", HostPath: team, Target: "/Users/agent/shared/team"}}
+	ms := r.eng.Machines()
+	if len(ms) != 1 || len(ms[0].Plan.Shares) != 2 || ms[0].Plan.Shares[0] != want[0] || ms[0].Plan.Shares[1] != want[1] {
+		t.Fatalf("plan shares %+v, want %+v", ms[0].Plan.Shares, want)
+	}
+	r.mu.Lock()
+	in := r.init
+	r.mu.Unlock()
+	wantMounts := []guestagent.Mount{{Tag: "wardyn0", Target: "/Users/agent/drive", ReadOnly: true}, {Tag: "wardyn1", Target: "/Users/agent/shared/team"}}
+	if in == nil || len(in.Mounts) != 2 || in.Mounts[0] != wantMounts[0] || in.Mounts[1] != wantMounts[1] {
+		t.Fatalf("Init mounts %+v, want %+v", in, wantMounts)
+	}
+}
+
+// A share drive is held to the container's containment, before the run directory, the network or the
+// ledger entry exists: a home linked out of the drive's tree or into another drive's, a root the runner
+// was not given, a drive that is not a host folder, and two drives at one target are all refused.
+func TestMacVMShareDrivesRefusalsComeFirst(t *testing.T) {
+	r := newMacRig(t)
+	root, home := driveHostRoot(t)
+	otherRoot, otherHome := driveHostRoot(t)
+	outside := t.TempDir()
+	escape := filepath.Join(root, "escape")
+	if err := os.Symlink(outside, escape); err != nil {
+		t.Fatal(err)
+	}
+	intoOther := filepath.Join(root, "bob")
+	if err := os.Symlink(otherHome, intoOther); err != nil {
+		t.Fatal(err)
+	}
+	r.d.cfg.UserDriveHostRoots = []string{root, otherRoot}
+	volume := shareDriveAt(home, runner.SharedRoot+"/vol", true)
+	volume.Backend = types.DriveBackendDockerVolume
+	for name, drives := range map[string][]types.DriveMount{
+		"a home linked out of every root":         {shareDriveAt(escape, runner.DriveTarget, true)},
+		"a home linked into another drive's root": {shareDriveAt(intoOther, runner.DriveTarget, true)},
+		"a root the runner was not given":         {shareDriveAt(filepath.Join(t.TempDir(), "alice"), runner.DriveTarget, true)},
+		"a docker volume":                         {volume},
+		"a target that is no drive's":             {shareDriveAt(home, "/home/agent/work", true)},
+		"two drives at one target": {shareDriveAt(home, runner.DriveTarget, true),
+			shareDriveAt(filepath.Join(root, "escape"), runner.DriveTarget, true)},
+	} {
+		spec := macSpec()
+		spec.Drives = drives
+		if _, err := r.d.CreateSandbox(context.Background(), spec); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+		if counted, err := r.c.Ledger.Counted(); err != nil || len(counted) != 0 {
+			t.Errorf("%s: ledger %+v %v", name, counted, err)
+		}
+		if runs, _ := os.ReadDir(r.c.Layout.RunsDir()); len(runs) != 0 {
+			t.Errorf("%s: run directories %v", name, runs)
+		}
+		if ms := r.eng.Machines(); len(ms) != 0 {
+			t.Errorf("%s: a machine was built", name)
 		}
 	}
 }

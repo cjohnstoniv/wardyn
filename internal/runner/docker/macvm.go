@@ -247,7 +247,8 @@ func (d *Driver) refuseMacVMSpec(spec runner.SandboxSpec) (macvm.Manifest, error
 	switch {
 	case c == nil:
 		return macvm.Manifest{}, errors.New("docker: this runner does not offer macOS VM sandboxes")
-	case len(spec.Drives) > 0:
+	case hasNonShareDrive(spec.Drives):
+		// A share drive is a shared folder (macShares); a personal or kept disk is not here yet.
 		//lint:ignore ST1005 the sentence the person reads, as written in the approved copy
 		return macvm.Manifest{}, errors.New("A macOS VM sandbox has no drives in this release.")
 	case spec.RecordWithin(d.cfg.Record):
