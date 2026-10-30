@@ -35,7 +35,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `runner_id`), and keep its work folder as one. Only macOS VM runs on that Mac can use it, and deleting the drive
   deletes the image there, at once or when the Mac reconnects. See [Drives](docs/operations/macos-vms.md#drives).
 - A disk drive is in one macOS VM run at a time: a second run on the Mac that asks for it while another holds it is
-  refused before its VM starts.
+  refused when that run starts, not at Review.
 - A macOS VM run is also refused at create and Review when a second harness has its own starting prompt, or when a tool
   rule, tool approvals, autonomy level L1 or the policy's inner walls would hold a tool call for approval. The launcher
   still refuses the same shapes as a backstop.
