@@ -21,6 +21,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- Settings → Signed-in CLIs now says a file-stored sign-in ends after 7 days at most. It used to say 7 days for every
+  such session, though a shorter configured session lifetime ends it sooner; the Ends column shows the real expiry
+  (#3402, #3813).
 - Saving Settings → Runner credentials no longer fails with a 422 when the stored policy holds an older row with an
   empty posture requirement, such as Git tokens stored on the runner with `require_posture: {}`. Rows you did not
   edit now go back exactly as stored (#3502).
