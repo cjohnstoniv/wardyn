@@ -34,7 +34,7 @@ import { useConsoleMode } from "../wardyn/console-view";
 import { RunsComposer } from "./runs/runs-composer";
 import { RunsFilterBar } from "./runs/runs-filter-bar";
 import { RunsSegmentBar } from "./runs/runs-segment-bar";
-import { filterBySegment, segmentCounts } from "./runs/runs-segment";
+import { filterBySegment, segmentCounts, type RunSegment } from "./runs/runs-segment";
 import { RunRowList } from "./runs/run-row";
 import { AdminOlderLimitsCard } from "./runs/admin-older-limits-card";
 import { FleetCapacityCard } from "./runs/fleet-capacity-card";
@@ -63,6 +63,13 @@ import {
   runsAgedNote,
   runsViewSaved,
 } from "../wardyn/copy/runs-landing";
+
+const SEGMENT_EMPTY: Record<RunSegment, string> = {
+  agent_tasks: RUNS_SEGMENTS.AGENT_TASKS_EMPTY,
+  environments: RUNS_SEGMENTS.ENVIRONMENTS_EMPTY,
+  apps: RUNS_SEGMENTS.APPS_EMPTY,
+  services: RUNS_SEGMENTS.SERVICES_EMPTY,
+};
 
 const POLL_MS = 3000;
 const SETUP_POLL_MS = 5000;
@@ -230,8 +237,9 @@ export function RunsScreen() {
   const firstLoad = status === "loading" && !loadedOnce;
   const refetching = status === "loading" && loadedOnce;
   const noMatch = status === "ready" && !trueEmpty && shownRuns.length === 0 && (nothingHidden || activeFilter || filters.segment !== "all");
-  // The approved Services empty state: no service, and no other filter or hidden run to blame.
-  const noServices = noMatch && filters.segment === "services" && !activeFilter && nothingHidden;
+  // A segment's own empty state (Services is the approved one): none of that shape, and no other filter or hidden
+  // run to blame.
+  const segmentEmpty = noMatch && filters.segment !== "all" && !activeFilter && nothingHidden ? SEGMENT_EMPTY[filters.segment] : undefined;
   const quiet =
     status === "ready" && !trueEmpty && !noMatch && isTopQuiet(sections) && runsFiltersAreDefault(effectiveFilters);
 
@@ -301,9 +309,9 @@ export function RunsScreen() {
 
           {refetching ? (
             <RunsLoadingSkeleton />
-          ) : noServices ? (
+          ) : segmentEmpty ? (
             <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
-              <EmptyState icon={HeartPulse} title={RUNS_SEGMENTS.SERVICES_EMPTY} />
+              <EmptyState icon={HeartPulse} title={segmentEmpty} />
             </div>
           ) : noMatch ? (
             <div className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
