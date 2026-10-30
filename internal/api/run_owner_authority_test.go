@@ -614,6 +614,11 @@ func TestPatchRunEnds_RechecksOwnerStillResolves(t *testing.T) {
 		st.run.Placement = types.PlacementLocal
 		st.profiles[0].Limits.DenyPlacements = []types.Placement{types.PlacementLocal}
 	}
+	macBaseDenied := func(_ *endWaitFixture, st *profileStore) {
+		st.run.MachineKind = types.MachineMacOSVM
+		st.run.VMMachine = &types.VMMachine{MacOSBase: "xcode-16"}
+		st.profiles[0].Limits.AllowedMacOSBases = []string{types.MacOSStandardBase}
+	}
 	for _, tc := range []struct {
 		name    string
 		as      func(*testing.T) *http.Cookie
@@ -630,7 +635,10 @@ func TestPatchRunEnds_RechecksOwnerStillResolves(t *testing.T) {
 		{"extend, policy denied", ownerSessionAs, week, policyDenied, http.StatusForbidden, "capability_policy"},
 		{"extend, placement denied", ownerSessionAs, week, placementDenied, http.StatusForbidden, "placement_denied"},
 		{"no end, placement denied", ownerSessionAs, noEnd, placementDenied, http.StatusForbidden, "placement_denied"},
+		{"extend, macOS base denied", ownerSessionAs, week, macBaseDenied, http.StatusForbidden, "placement_denied"},
+		{"no end, macOS base denied", ownerSessionAs, noEnd, macBaseDenied, http.StatusForbidden, "placement_denied"},
 		{"shorten, placement denied", ownerSessionAs, soon, placementDenied, http.StatusOK, ""},
+		{"shorten, macOS base denied", ownerSessionAs, soon, macBaseDenied, http.StatusOK, ""},
 		{"extend, still granted", ownerSessionAs, week, func(*endWaitFixture, *profileStore) {}, http.StatusOK, ""},
 		{"shorten, agent denied", ownerSessionAs, soon, agentDenied, http.StatusOK, ""},
 		{"shorten, model provider denied", ownerSessionAs, soon, providerDenied, http.StatusOK, ""},

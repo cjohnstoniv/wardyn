@@ -58,6 +58,23 @@ func macOSBaseOf(run types.AgentRun) string {
 	return run.VMMachine.MacOSBase
 }
 
+// macOSBaseDeniedMsg is MAC-B09 for a macOS VM run whose base some list in lists (the allowed_macos_bases of
+// the profile and restrictions that bind it; an empty list allows any) does not allow, said for profile;
+// "" when every list does, or the run is no macOS VM. It is the sentence of macOSBaseDeniedRefusal, for
+// the doors that re-judge a run already placed (revive, an end extension).
+func macOSBaseDeniedMsg(run types.AgentRun, profile string, lists [][]string) string {
+	if !run.MachineKind.IsMacOSVM() {
+		return ""
+	}
+	base := macOSBaseOf(run)
+	for _, l := range lists {
+		if !types.MacOSBaseAllowed(l, base) {
+			return fmt.Sprintf(macOSBaseDenied, profile, cmp.Or(base, types.MacOSStandardBase))
+		}
+	}
+	return ""
+}
+
 // macOSChosenBase is the base a run picked (limit's Base) on the Mac whose caps are mc, as macOSVMOffer
 // judges it: Standard's own facts, or a ready other base's, with the harnesses it serves. known is false
 // when the Mac has no ready base of that name.

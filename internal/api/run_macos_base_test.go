@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"slices"
 	"testing"
@@ -157,5 +158,53 @@ func TestMacOSBaseDeniedRefusal(t *testing.T) {
 	}
 	if f := s.macOSBaseDeniedRefusal(member, "xcode-16", governanceCeiling{}); f != nil {
 		t.Errorf("no profile refused: %+v", f)
+	}
+}
+
+// allowed_macos_bases binds a macOS VM run already placed, as deny_placements does: a revive of a run on a
+// base some list no longer allows is refused placement_denied with MAC-B09, whether the list is the
+// profile's or a restriction's (each non-empty list must allow the base). Other runs and listed bases pass.
+func TestRevivePlacementDenied_MacOSBase(t *testing.T) {
+	rec := &recRecorder{}
+	s := New(Config{Audit: rec})
+	run := newFinalizeRun()
+	run.MachineKind = types.MachineMacOSVM
+	run.VMMachine = &types.VMMachine{MacOSBase: "xcode-16"}
+	list := func(bases ...string) *[]string { return &bases }
+	restriction := func(l *[]string) types.Restriction {
+		return types.Restriction{ID: uuid.New(), Limits: types.RestrictionLimits{AllowedMacOSBases: l}}
+	}
+	profile := ownerCeiling{profile: "Interns", allowedMacOSBases: [][]string{{types.MacOSStandardBase}}}
+	bound := ownerCeiling{profile: "Interns"}.withRevivedRestrictions([]types.Restriction{
+		restriction(list("xcode-16", types.MacOSStandardBase)), restriction(list(types.MacOSStandardBase)), restriction(list()), restriction(nil)})
+	if len(bound.allowedMacOSBases) != 2 {
+		t.Fatalf("restriction lists folded = %v, want the two non-empty ones", bound.allowedMacOSBases)
+	}
+	const want = "Interns doesn't allow the macOS base xcode-16. Choose another base."
+	for name, c := range map[string]ownerCeiling{"profile": profile, "restrictions": bound} {
+		rerr := s.revivePlacementDenied(context.Background(), run, c, types.ActorHuman, "owner")
+		if rerr == nil || rerr.status != http.StatusForbidden || rerr.reason != "placement_denied" || rerr.msg != want {
+			t.Errorf("%s: revive = %+v, want 403 placement_denied %q", name, rerr, want)
+		}
+	}
+	if rows := rec.snapshot(); len(rows) != 2 || rows[0].Action != "run.revive" || rows[0].Outcome != "denied" {
+		t.Errorf("audit rows = %+v, want two denied run.revive rows", rows)
+	}
+	allowed := ownerCeiling{profile: "Interns", allowedMacOSBases: [][]string{{"xcode-16"}, {"xcode-16", types.MacOSStandardBase}}}
+	standard, linux := run, run
+	standard.VMMachine = nil // Standard
+	linux.MachineKind = types.MachineLinuxVM
+	for name, tc := range map[string]struct {
+		run types.AgentRun
+		c   ownerCeiling
+	}{
+		"every list allows the base": {run, allowed},
+		"no list":                    {run, ownerCeiling{profile: "Interns"}},
+		"Standard, listed":           {standard, ownerCeiling{allowedMacOSBases: [][]string{{types.MacOSStandardBase}}}},
+		"not a macOS VM":             {linux, profile},
+	} {
+		if rerr := s.revivePlacementDenied(context.Background(), tc.run, tc.c, types.ActorHuman, "owner"); rerr != nil {
+			t.Errorf("%s: revive refused: %+v", name, rerr)
+		}
 	}
 }
