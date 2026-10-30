@@ -330,7 +330,35 @@ type MacVMBase struct {
 	// Customisation is the operator's install list as the base holds it (macos_vm_base_file), in list
 	// order; state ready only.
 	Customisation []MacVMItem `json:"customisation,omitempty"`
+	// Guest is the guest's posture as it was read from the base when it was last prepared, updated or
+	// edited: not live, and never the Mac's own (RunnerPosture). State ready only.
+	Guest *MacVMGuest `json:"guest,omitempty"`
 }
+
+// MacVMGuest is a macOS base's guest posture. Each field is absent when its read did not say; an unknown
+// value is a newer runner's, and decodes as itself.
+type MacVMGuest struct {
+	// OSVersion and OSBuild are the guest's macOS, e.g. "26.6.2" and "25G83".
+	OSVersion string `json:"os_version,omitempty"`
+	OSBuild   string `json:"os_build,omitempty"`
+	// SIP (System Integrity Protection) and Gatekeeper are MacVMGuestOn or MacVMGuestOff.
+	SIP        string `json:"sip,omitempty"`
+	Gatekeeper string `json:"gatekeeper,omitempty"`
+	// Profiles is how many configuration profiles are installed (0 is none); absent when unread.
+	Profiles *int `json:"profiles,omitempty"`
+	// MDM is MacVMGuestEnrolled or MacVMGuestNotEnrolled.
+	MDM string `json:"mdm,omitempty"`
+	// OrgCA is MacVMItemTrusted or MacVMItemNotTrusted for the install list's CA; absent without one.
+	OrgCA string `json:"org_ca,omitempty"`
+}
+
+// MacVMGuest values.
+const (
+	MacVMGuestOn          = "on"
+	MacVMGuestOff         = "off"
+	MacVMGuestEnrolled    = "enrolled"
+	MacVMGuestNotEnrolled = "not_enrolled"
+)
 
 // MacVMItem is one install list item: Kind is MacVMItemKind*, Name the operator's, State MacVMItem*. An
 // unknown kind or state is a newer runner's, and decodes as itself.

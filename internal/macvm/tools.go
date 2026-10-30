@@ -205,6 +205,8 @@ type ToolsResult struct {
 	// Items are the install list's items as installed, and ItemsDigest the list's digest.
 	Items       []ItemRecord
 	ItemsDigest string
+	// Guest is the guest posture read at the end of stage 2.
+	Guest *GuestPosture
 }
 
 // PinRecord is a pin as stage 2 applied it.
@@ -303,6 +305,9 @@ func onGuest(ctx context.Context, g ToolsGuest, in Stage2Input, o ToolsOptions) 
 	res, err = installTools(ctx, g, o)
 	if err == nil {
 		err = installItems(ctx, g, o, in.Previous, &res)
+	}
+	if err == nil {
+		res.Guest = readPosture(ctx, g, res.Items)
 	}
 	if err == nil {
 		err = selftestBase(ctx, g, &res, o.Log)
@@ -706,6 +711,8 @@ type ToolsRecord struct {
 	// items.
 	ItemsDigest string       `json:"items_digest,omitempty"`
 	Items       []ItemRecord `json:"items,omitempty"`
+	// Guest is the guest posture read when the base was last prepared, updated or edited.
+	Guest *GuestPosture `json:"guest,omitempty"`
 }
 
 // ReadToolsRecord reads a base's tools.json.
@@ -720,7 +727,7 @@ func ReadToolsRecord(baseDir string) (ToolsRecord, error) {
 
 func writeToolsRecord(dir string, r ToolsResult, agentVersion string, at time.Time) error {
 	rec := ToolsRecord{AgentVersion: agentVersion, AgentRun: r.AgentRun, Pins: r.Pins, Harnesses: r.Harnesses, TriedAt: at.UTC(),
-		ItemsDigest: r.ItemsDigest, Items: r.Items}
+		ItemsDigest: r.ItemsDigest, Items: r.Items, Guest: r.Guest}
 	for id, err := range r.Withheld {
 		if rec.Withheld == nil {
 			rec.Withheld = map[string]WithheldRecord{}

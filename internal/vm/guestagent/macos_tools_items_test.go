@@ -27,6 +27,11 @@ func TestToolsExecBaseItemForms(t *testing.T) {
 		{"/usr/bin/ditto", E + "/mnt/Tool.app", "/Applications/Tool.app"},
 		{"/usr/bin/hdiutil", "detach", "-force", E + "/mnt"},
 		{"/usr/bin/profiles", "list"},
+		{"/usr/bin/sw_vers", "-productVersion"},
+		{"/usr/bin/sw_vers", "-buildVersion"},
+		{"/usr/bin/csrutil", "status"},
+		{"/usr/sbin/spctl", "--status"},
+		{"/usr/bin/profiles", "status", "-type", "enrollment"},
 	} {
 		if err := ToolsExecAllowed(argv, t.TempDir()); err != nil {
 			t.Errorf("%q refused: %v", argv, err)
@@ -52,6 +57,10 @@ func TestToolsExecBaseItemForms(t *testing.T) {
 		{"/usr/bin/profiles", "list", "-all"},
 		{"/usr/bin/profiles", "install", "-path", E + "/item.mobileconfig"},
 		{"/usr/bin/profiles", "remove", "-all"},
+		{"/usr/bin/csrutil", "disable"},
+		{"/usr/sbin/spctl", "--master-disable"},
+		{"/usr/bin/sw_vers"},
+		{"/usr/bin/profiles", "status", "-type", "bootstraptoken"},
 	} {
 		if err := ToolsExecAllowed(argv, t.TempDir()); err == nil {
 			t.Errorf("%q allowed", argv)

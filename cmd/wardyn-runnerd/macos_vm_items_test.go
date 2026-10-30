@@ -147,3 +147,21 @@ func TestMacOSVMCapsCarryTheBaseItems(t *testing.T) {
 		t.Fatalf("%+v", b.Customisation)
 	}
 }
+
+// The caps carry the guest posture tools.json records, as it is, beside the items.
+func TestMacOSVMCapsCarryTheGuestPosture(t *testing.T) {
+	r := newMacLedgerRig(t)
+	m := r.open(t)
+	two := 2
+	writeToolsRecord(t, m.layout.BaseDir(0), macvm.ToolsRecord{Guest: &macvm.GuestPosture{OSVersion: "26.6.2", OSBuild: "25G83", SIP: "on",
+		Gatekeeper: "off", Profiles: &two, MDM: "not_enrolled", OrgCA: "trusted"}})
+	_, b := m.base()
+	got, _ := json.Marshal(b.Guest)
+	if want := `{"os_version":"26.6.2","os_build":"25G83","sip":"on","gatekeeper":"off","profiles":2,"mdm":"not_enrolled","org_ca":"trusted"}`; string(got) != want {
+		t.Fatalf("%s", got)
+	}
+	writeToolsRecord(t, m.layout.BaseDir(0), macvm.ToolsRecord{})
+	if _, b := m.base(); b.Guest != nil {
+		t.Fatalf("a base with no posture read: %+v", b.Guest)
+	}
+}

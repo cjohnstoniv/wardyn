@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -494,5 +495,86 @@ func TestSecretFilesNeverLeak(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// postureGuest answers the posture reads from answers (argv joined by spaces); a missing one is a
+// transport error.
+type postureGuest struct {
+	*itemGuest
+	answers map[string]string
+}
+
+func (g *postureGuest) Run(ctx context.Context, argv []string) (string, int, error) {
+	if out, ok := g.answers[strings.Join(argv, " ")]; ok {
+		return out, 0, nil
+	}
+	if strings.HasPrefix(argv[0], "/usr/bin/sw_vers") || strings.HasPrefix(argv[0], "/usr/bin/csrutil") || argv[0] == "/usr/sbin/spctl" || argv[0] == "/usr/bin/profiles" {
+		return "", 0, errors.New("gone")
+	}
+	return g.itemGuest.Run(ctx, argv)
+}
+
+// The guest posture, read at the end of stage 2 and recorded; every read is tolerant: output it does not
+// know, or a read that fails, leaves its field empty and fails nothing.
+func TestGuestPostureReads(t *testing.T) {
+	two := 2
+	for name, tc := range map[string]struct {
+		answers map[string]string
+		want    macvm.GuestPosture
+	}{
+		"a managed-looking guest": {answers: map[string]string{
+			"/usr/bin/sw_vers -productVersion": "26.6.2\n", "/usr/bin/sw_vers -buildVersion": "25G83\n",
+			"/usr/bin/csrutil status":                   "System Integrity Protection status: enabled.\n",
+			"/usr/sbin/spctl --status":                  "assessments enabled\n",
+			"/usr/bin/profiles status -type enrollment": "Enrolled via DEP: No\nMDM enrollment: Yes (User Approved)\n",
+			"/usr/bin/profiles list": "_computerlevel[1] attribute: profileIdentifier: com.example.a\n" +
+				"_computerlevel[2] attribute: profileIdentifier: com.example.b\nThere are 2 system configuration profiles installed\n",
+		}, want: macvm.GuestPosture{OSVersion: "26.6.2", OSBuild: "25G83", SIP: "on", Gatekeeper: "on", MDM: "enrolled", Profiles: &two}},
+		"off and unenrolled": {answers: map[string]string{
+			"/usr/bin/csrutil status": "System Integrity Protection status: disabled.\n", "/usr/sbin/spctl --status": "assessments disabled\n",
+			"/usr/bin/profiles status -type enrollment": "Enrolled via DEP: No\nMDM enrollment: No\n",
+		}, want: macvm.GuestPosture{SIP: "off", Gatekeeper: "off", MDM: "not_enrolled"}},
+		"nothing it knows": {answers: map[string]string{
+			"/usr/bin/sw_vers -productVersion": "twenty-six; rm -rf /", "/usr/bin/sw_vers -buildVersion": "25G83 extra",
+			"/usr/bin/csrutil status":  "System Integrity Protection status: unknown (Custom Configuration).",
+			"/usr/sbin/spctl --status": "", "/usr/bin/profiles status -type enrollment": "Error",
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newTools(t)
+			f.opts.Tooling = macvm.Tooling{Version: 1}
+			g := &postureGuest{itemGuest: newItemGuest(), answers: tc.answers}
+			s := f.itemStage(g.itemGuest)
+			s.Boot = func(context.Context, macvm.MachineSpec) (macvm.ToolsGuest, func(context.Context) error, error) {
+				return g, func(context.Context) error { return nil }, nil
+			}
+			res := runStage(t, s)
+			got, _ := json.Marshal(res.Guest)
+			want, _ := json.Marshal(tc.want)
+			if string(got) != string(want) {
+				t.Fatalf("posture %s, want %s", got, want)
+			}
+		})
+	}
+}
+
+// edit-base's recheck reads the posture again; the organisation CA is trusted only when every ca item is.
+func TestReadBackItemsRecordsThePosture(t *testing.T) {
+	base := t.TempDir()
+	b, _ := json.Marshal(macvm.ToolsRecord{Items: []macvm.ItemRecord{
+		{Kind: "ca", Name: "root-a", SHA256: pin64, State: macvm.ItemTrusted}, {Kind: "ca", Name: "root-b", SHA256: pin64, State: macvm.ItemTrusted}}})
+	if err := os.WriteFile(filepath.Join(base, macvm.ToolsRecordFile), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := newItemGuest()
+	g.fail = func(argv []string) int {
+		return map[bool]int{true: 1}[slices.Contains(argv, guestagent.ItemDir("root-a")+"/"+guestagent.ItemCert)]
+	}
+	if err := macvm.ReadBackItems(context.Background(), g, base); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := macvm.ReadToolsRecord(base); rec.Guest == nil || rec.Guest.OrgCA != macvm.ItemNotTrusted {
+		t.Fatalf("%+v", rec.Guest)
 	}
 }

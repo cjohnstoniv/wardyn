@@ -470,8 +470,12 @@ func itemPushAllowed(dest string) bool {
 //	/usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain S/<name>/item.cer
 //	/usr/bin/security delete-certificate -t -Z <SHA-1> /Library/Keychains/System.keychain
 //	/usr/bin/security verify-cert -L -p ssl -c S/<name>/item.cer
+//	/usr/bin/sw_vers -productVersion|-buildVersion     the guest posture's reads
+//	/usr/bin/csrutil status
+//	/usr/sbin/spctl --status
+//	/usr/bin/profiles status -type enrollment
 //
-// The first two change the admin trust settings, so they run only inside withTrustSettingsRight.
+// The two that change the admin trust settings run only inside withTrustSettingsRight.
 func itemArgvAllowed(argv []string) bool {
 	if len(argv) < 2 {
 		return false
@@ -509,6 +513,11 @@ var itemForms = map[string]func(a []string) bool{
 	"/usr/bin/security delete-certificate": func(a []string) bool {
 		return len(a) == 6 && a[2] == "-t" && a[3] == "-Z" && sha1Hex.MatchString(a[4]) && a[5] == MacSystemKeychain
 	},
+	"/usr/bin/sw_vers -productVersion": func(a []string) bool { return len(a) == 2 },
+	"/usr/bin/sw_vers -buildVersion":   func(a []string) bool { return len(a) == 2 },
+	"/usr/bin/csrutil status":          func(a []string) bool { return len(a) == 2 },
+	"/usr/sbin/spctl --status":         func(a []string) bool { return len(a) == 2 },
+	"/usr/bin/profiles status":         func(a []string) bool { return len(a) == 4 && a[2] == "-type" && a[3] == "enrollment" },
 	"/usr/bin/security verify-cert": func(a []string) bool {
 		return len(a) == 7 && slices.Equal(a[2:6], []string{"-L", "-p", "ssl", "-c"}) && isItemFile(a[6], ItemCert)
 	},

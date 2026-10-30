@@ -417,7 +417,7 @@ func (m *macOSVMs) base() (macvm.Manifest, runnerwire.MacVMBase) {
 		if cause := toolsFailure(m.layout.BaseDir(0)); cause != "" {
 			b.Failure, b.Error = runnerwire.MacVMFailureTools, m.scrubError(cause)
 		}
-		b.Customisation = baseItems(m.layout.BaseDir(0))
+		b.Customisation, b.Guest = baseCustomisation(m.layout.BaseDir(0))
 	case m.preparing():
 		b.State, b.Progress = runnerwire.MacVMBasePreparing, prepareProgress(m.layout.PrepareLog())
 		scanPrepare(m.layout.PrepareLog()).apply(&b, true)
@@ -442,14 +442,20 @@ func (m *macOSVMs) base() (macvm.Manifest, runnerwire.MacVMBase) {
 	return man, b
 }
 
-// baseItems is the install list's items as the base in baseDir records them, for the caps.
-func baseItems(baseDir string) []runnerwire.MacVMItem {
+// baseCustomisation is the install list's items and the guest posture as the base in baseDir records
+// them, for the caps.
+func baseCustomisation(baseDir string) ([]runnerwire.MacVMItem, *runnerwire.MacVMGuest) {
 	rec, _ := macvm.ReadToolsRecord(baseDir)
 	var out []runnerwire.MacVMItem
 	for _, it := range rec.Items {
 		out = append(out, runnerwire.MacVMItem{Kind: it.Kind, Name: it.Name, State: it.State})
 	}
-	return out
+	if rec.Guest == nil {
+		return out, nil
+	}
+	p := rec.Guest
+	return out, &runnerwire.MacVMGuest{OSVersion: p.OSVersion, OSBuild: p.OSBuild, SIP: p.SIP, Gatekeeper: p.Gatekeeper,
+		Profiles: p.Profiles, MDM: p.MDM, OrgCA: p.OrgCA}
 }
 
 // checkAgent is the guest agent drift trigger: a base whose agent is not this runner's needs a tools

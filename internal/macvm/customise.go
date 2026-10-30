@@ -252,32 +252,105 @@ func installItems(ctx context.Context, g ToolsGuest, o ToolsOptions, previous []
 		}
 		res.Items = append(res.Items, rec)
 	}
-	return readProfiles(ctx, g, res.Items)
+	return nil
 }
 
-// readProfiles reads back which profile items `profiles list` names, marking each installed or staged.
-// A profile is staged at prepare and approved by the person in macos-vm edit-base: macOS installs one
-// only with that approval, or from MDM.
-func readProfiles(ctx context.Context, g ToolsGuest, items []ItemRecord) error {
-	if !slices.ContainsFunc(items, func(r ItemRecord) bool { return r.Kind == ItemKindProfile }) {
-		return nil
-	}
+// listProfiles is the identifiers `profiles list` names; ok is false when it did not answer.
+func listProfiles(ctx context.Context, g ToolsGuest) (installed map[string]bool, ok bool, err error) {
 	out, exit, err := g.Run(ctx, []string{"/usr/bin/profiles", "list"})
-	if err != nil {
-		return err
+	if err != nil || exit != 0 {
+		return nil, false, err
 	}
-	installed := map[string]bool{}
+	installed = map[string]bool{}
 	for _, line := range strings.Split(out, "\n") {
-		if _, id, ok := strings.Cut(line, "attribute: profileIdentifier:"); ok {
-			installed[strings.TrimSpace(id)] = exit == 0
+		if _, id, found := strings.Cut(line, "attribute: profileIdentifier:"); found {
+			installed[strings.TrimSpace(id)] = true
 		}
 	}
+	return installed, true, nil
+}
+
+// readProfiles marks each profile item installed when installed names it, else staged. A profile is
+// staged at prepare and approved by the person in macos-vm edit-base: macOS installs one only with that
+// approval, or from MDM.
+func readProfiles(items []ItemRecord, installed map[string]bool) {
 	for i, r := range items {
 		if r.Kind == ItemKindProfile {
 			items[i].State = map[bool]string{true: ItemInstalled, false: ItemStaged}[installed[r.Identifier]]
 		}
 	}
-	return nil
+}
+
+// GuestPosture is the guest's posture as stage 2, or edit-base's recheck, read it from the base: not live,
+// and never the Mac's own (RunnerPosture). A field is empty when its read did not say.
+type GuestPosture struct {
+	OSVersion string `json:"os_version,omitempty"`
+	OSBuild   string `json:"os_build,omitempty"`
+	// SIP and Gatekeeper are PostureOn or PostureOff.
+	SIP        string `json:"sip,omitempty"`
+	Gatekeeper string `json:"gatekeeper,omitempty"`
+	// Profiles is how many configuration profiles are installed; nil when unread.
+	Profiles *int `json:"profiles,omitempty"`
+	// MDM is PostureEnrolled or PostureNotEnrolled.
+	MDM string `json:"mdm,omitempty"`
+	// OrgCA is ItemTrusted when every ca item reads trusted, else ItemNotTrusted; empty with no ca item.
+	OrgCA string `json:"org_ca,omitempty"`
+}
+
+// GuestPosture values.
+const (
+	PostureOn          = "on"
+	PostureOff         = "off"
+	PostureEnrolled    = "enrolled"
+	PostureNotEnrolled = "not_enrolled"
+)
+
+var (
+	osVersionRe = regexp.MustCompile(`^[0-9]+(\.[0-9]+){0,2}$`)
+	osBuildRe   = regexp.MustCompile(`^[0-9A-Za-z]{1,16}$`)
+)
+
+// readPosture reads the guest's posture and the profile items' state. It is tolerant: a read that fails or
+// prints what it does not know leaves its field empty, and never fails stage 2.
+func readPosture(ctx context.Context, g ToolsGuest, items []ItemRecord) *GuestPosture {
+	read := func(argv ...string) string {
+		out, _, err := g.Run(ctx, argv)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(out)
+	}
+	match := func(out string, values map[string]string) string {
+		for k, v := range values {
+			if strings.Contains(out, k) {
+				return v
+			}
+		}
+		return ""
+	}
+	p := &GuestPosture{}
+	if v := read("/usr/bin/sw_vers", "-productVersion"); osVersionRe.MatchString(v) {
+		p.OSVersion = v
+	}
+	if v := read("/usr/bin/sw_vers", "-buildVersion"); osBuildRe.MatchString(v) {
+		p.OSBuild = v
+	}
+	p.SIP = match(read("/usr/bin/csrutil", "status"), map[string]string{"status: enabled": PostureOn, "status: disabled": PostureOff})
+	p.Gatekeeper = match(read("/usr/sbin/spctl", "--status"), map[string]string{"assessments enabled": PostureOn, "assessments disabled": PostureOff})
+	p.MDM = match(read("/usr/bin/profiles", "status", "-type", "enrollment"), map[string]string{"MDM enrollment: Yes": PostureEnrolled, "MDM enrollment: No": PostureNotEnrolled})
+	if installed, ok, _ := listProfiles(ctx, g); ok {
+		n := len(installed)
+		p.Profiles = &n
+		readProfiles(items, installed)
+	}
+	for _, r := range items {
+		if r.Kind == ItemKindCA {
+			if p.OrgCA = r.State; r.State != ItemTrusted {
+				break
+			}
+		}
+	}
+	return p
 }
 
 // StagedProfiles is the guest path of each profile item the base in dir holds staged and not yet
@@ -296,14 +369,12 @@ func StagedProfiles(dir string) ([]string, error) {
 	return out, nil
 }
 
-// ReadBackItems reads the base items' state again in g, a boot of the base in dir, and records it in dir's
-// tools.json: macos-vm edit-base's recheck calls it once the person has approved the staged profiles.
+// ReadBackItems reads the base items' state and the guest posture again in g, a boot of the base in dir,
+// and records them in dir's tools.json: macos-vm edit-base's recheck calls it once the person has approved
+// the staged profiles.
 func ReadBackItems(ctx context.Context, g ToolsGuest, dir string) error {
 	rec, err := ReadToolsRecord(dir)
 	if err != nil {
-		return err
-	}
-	if err := readProfiles(ctx, g, rec.Items); err != nil {
 		return err
 	}
 	for i, r := range rec.Items {
@@ -313,6 +384,7 @@ func ReadBackItems(ctx context.Context, g ToolsGuest, dir string) error {
 			}
 		}
 	}
+	rec.Guest = readPosture(ctx, g, rec.Items)
 	return writeJSONAtomic(filepath.Join(dir, ToolsRecordFile), rec, 0o600)
 }
 
@@ -331,6 +403,7 @@ func installItem(ctx context.Context, g ToolsGuest, it BaseItem) (rec ItemRecord
 	switch it.Kind {
 	case ItemKindProfile:
 		// Kept staged for the person's approval in edit-base; readProfiles reads back whether it is installed.
+		rec.State = ItemStaged
 		return rec, pushItem(ctx, g, it.Path, it.SHA256, dir+"/"+guestagent.ItemProfile, 0o600)
 	case ItemKindCA:
 		return trustCA(ctx, g, it, rec)
