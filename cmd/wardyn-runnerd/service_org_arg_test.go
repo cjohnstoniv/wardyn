@@ -50,3 +50,30 @@ func TestServiceOrgArgReadsAnEarlierLaunchAgentAndNotAModernOne(t *testing.T) {
 		t.Errorf("modern LaunchAgent: %q from %q, want none", got, from)
 	}
 }
+
+// #3870: prepare reads which runner the setup LaunchAgent runs from the agent itself, unescaped, and nothing
+// from a missing one.
+func TestServiceProgramReadsTheLaunchAgentsBinary(t *testing.T) {
+	const bin = "/Users/a&b/Library/Application Support/wardyn/bin/wardyn-runnerd"
+	f := filepath.Join(t.TempDir(), "com.wardyn.runnerd.plist")
+	p := setupPaths{plistFile: f}
+	if got := p.serviceProgram(); got != "" {
+		t.Fatalf("no LaunchAgent: %q", got)
+	}
+	plan := setupPlan{paths: setupPaths{installed: bin, cliProfile: "/cfg", logFile: "/log/runnerd.log"}}
+	if err := os.WriteFile(f, []byte(renderLaunchAgent(plan)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.serviceProgram(); got != bin {
+		t.Fatalf("setup's LaunchAgent runs %q, want %q", got, bin)
+	}
+	if err := os.WriteFile(f, []byte(strings.Replace(v090Plist, "%s", "https://org.example", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.serviceProgram(); got != "/Users/x/bin/wardyn-runnerd" {
+		t.Fatalf("an earlier LaunchAgent runs %q", got)
+	}
+	if got := (setupPaths{}).serviceProgram(); got != "" {
+		t.Fatalf("no plist path: %q", got)
+	}
+}

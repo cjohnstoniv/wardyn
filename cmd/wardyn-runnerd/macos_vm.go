@@ -56,6 +56,9 @@ const (
 // uid in a socket path as <uid>. The full text, with paths, stays on this Mac, in the log and prepare.log.
 const macOSVMLedgerDamaged = "This Mac's macOS VM ledger is missing or damaged. Reinstall the Wardyn runner package."
 
+// macOSVMNoHelper is why a runner with no helper beside it offers no macOS VM: its caps carry the code no_helper, and the words stay in the log and status.
+const macOSVMNoHelper = "This Mac's Wardyn runner has no macOS VM helper. Reinstall the Wardyn runner package."
+
 // macOSVMIdentity is the machine-identifier strategy every macOS VM run uses.
 const macOSVMIdentity = macvm.IdentityFresh
 
@@ -950,10 +953,26 @@ func macVMHelperPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return helperBeside(exe), nil
+}
+
+// helperBeside is the wardyn-macvm beside the wardyn-runnerd at exe, symlinks resolved: where that runner's
+// serve looks for its helper.
+func helperBeside(exe string) string {
 	if r, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = r
 	}
-	return filepath.Join(filepath.Dir(exe), "wardyn-macvm"), nil
+	return filepath.Join(filepath.Dir(exe), "wardyn-macvm")
+}
+
+// noHelperBeside is macOSVMNoHelper, with the setup that puts the helper there, when the wardyn-runnerd at exe
+// has none beside it: its serve then offers no macOS VM (enableMacOSVM, no_helper) and never hands a prepare's
+// stage 2 its network. nil when it has one.
+func noHelperBeside(exe string) error {
+	if _, err := os.Stat(helperBeside(exe)); err != nil {
+		return fmt.Errorf("%s Then run `wardyn-runnerd setup` again from the package, which installs the helper beside %s", macOSVMNoHelper, exe)
+	}
+	return nil
 }
 
 // remove deletes the bases and the download cache, never while this runner holds a VM. Prepare's log,
