@@ -347,6 +347,14 @@ func (r *RFBRecorder) ClipboardOmitted() int {
 	return r.stream.cutTexts
 }
 
+// StoppedMS is the playback's StoppedMS: when the recorder stopped at a message it could not follow,
+// or 0 when it never did.
+func (r *RFBRecorder) StoppedMS() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stopped
+}
+
 // Pause stops keeping frames and opens a gap; it reports false when already paused.
 func (r *RFBRecorder) Pause(reason string) bool {
 	r.mu.Lock()

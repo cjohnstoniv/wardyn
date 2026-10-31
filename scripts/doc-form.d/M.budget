@@ -14,7 +14,8 @@
 # API-5: USERS.md 4761 adds 13 over 4748 (back-channel logout in the sign-out bullet), measured.
 # PRIV-1: docs/USERS.md 4784 adds 23 over 4761, measured: an admin may replay your recordings, and each replay is audited.
 # SESS-M12: docs/USERS.md 4903 adds 119 over 4784, measured: the Session lifetime section.
-docs/USERS.md=4903 share=35
+# docs/USERS.md 4920 adds 17 over 4903, measured: a folder can sit on your own runner, checked there, not scanned.
+docs/USERS.md=4920 share=35
 # docs/SSH.md 5396 adds 84 (0.9 SSH lane): the wardyn-sync subsystem and its env, the sync cap, the configurable channel cap and the sync audit action.
 # docs/SSH.md 5508 adds 112 over 5396 (0.9 E-S1): the `wardyn sync` section (command, safety rules, the rsync alternative).
 # docs/SSH.md 5586 adds 78 over 5508 (0.9 E-S1 round 1): the pull byte limits, the plain-http refusal, the invisible-name and normalisation rules, the one-second mtime limit and the rsync caveat.
@@ -45,7 +46,8 @@ docs/USERS.md=4903 share=35
 # 0.10 HYB-C: docs/SSH.md 6721 adds 18 over 6703, measured: a Linux VM sandbox is held and synced the same way.
 # 0.10 EDITORS: docs/SSH.md 6876 adds 155 over 6721, measured: the editors table rows, how they are tested, the Mutagen link and the image needs.
 # 0.10 GW-HOME (#3549): docs/SSH.md 6924 adds 48 over 6876 at the merge of main onto the lane, measured: where a shell, a command and an sftp session start.
-docs/SSH.md=6924 share=35
+# 0.10 W5SMALL (#3555): docs/SSH.md 6961 adds 37 over 6924, measured: keep ENV HOME equal to the passwd home in the image contract.
+docs/SSH.md=6974 share=35 # +13 (0.10.0 final docs): the Include stays outside any Host or Match block, measured.
 # docs/UI-SANDBOXES.md 5341 measured after C-mode-doors merge.
 # docs/UI-SANDBOXES.md 5472 adds 131 over 5341 (0.9.3 lane B): the reasons table for a refusal an SDK reads.
 # docs/UI-SANDBOXES.md 5477 adds 5 (0.9.3 lane B review): the AWS no-credential 404 in the reasons table.
@@ -75,7 +77,15 @@ docs/SSH.md=6924 share=35
 # 0.10 CTL-C (#2972): docs/UI-SANDBOXES.md 5914 adds 261 over 5653, measured: the desktop sign-ins section and its image.
 # docs/UI-SANDBOXES.md 6622 = ours 6361 + theirs 5914 - base 5653 at the 0.10 W4c merge of CTL-C 6de42c110 onto the train.
 # docs/UI-SANDBOXES.md 6627 adds 5 (0.10 W4c seam, CTL-A x CTL-C): the clipboard filter names the sign-in display, measured.
-docs/UI-SANDBOXES.md=6627 share=35
+# docs/UI-SANDBOXES.md 7749 adds 1122 over 6627, measured (rc.8 inbound docs): the Inbound section, and the bearer, background-run and stream-lifetime lines in Open an app and Bounds.
+# docs/UI-SANDBOXES.md 7769 measured (rc.8 review): inbound wording made exact (groups refreshed at sign-in, rate-bound denials, burst, HEAD, session TTL).
+# docs/UI-SANDBOXES.md 7796 adds 27 over 7769, measured (rc.8 inbound review F1: the limit is per caller as well as per run).
+# docs/UI-SANDBOXES.md 7815 adds 19 over 7796, measured (rc.8 inbound review F3: a token stream is closed by the profile too).
+# docs/UI-SANDBOXES.md 7890 adds 75 over 7815, measured (rc.8 inbound review F5, F6: who the grant lets a caller name, and the shared connections).
+# docs/UI-SANDBOXES.md 7914 adds 24 over 7890, measured (a person mints their own inbound token in Settings → Your API tokens).
+# docs/UI-SANDBOXES.md 7922 adds 8 over 7914, measured (rc.8 cumulative review: only an upgraded connection an inbound token opened is re-checked).
+# docs/UI-SANDBOXES.md 7979 adds 57 over 7922, measured (rc.9 L11): the builtin:tunnel-limit, approval:pending, approval:host-cap and approval:refused reason rows.
+docs/UI-SANDBOXES.md=7979 share=35
 # docs/NEW-RUN.md 2905 measured (0.9 final docs pass): the New run guide.
 # docs/NEW-RUN.md 2914 adds 9 over 2905: 0.9 final docs pass 2, measured: the runner-limit wait reason and the runner pools links.
 # docs/NEW-RUN.md 2915 adds 1 over 2914: docs fix: run --file overlay; a policy's own * rule stays in force on a routed run, measured.
@@ -88,4 +98,6 @@ docs/UI-SANDBOXES.md=6627 share=35
 # docs/NEW-RUN.md 3072 = 3056 + 16, measured: a wait row for a required recording with no store
 # 0.9.4 W4-DOCS-1: docs/NEW-RUN.md 3073 adds 1 over 3072, measured: #2320: --max-wait among the run --file companion flags.
 # docs/NEW-RUN.md 3147 adds 74 over 3073 (0.10 FEAT-1APP-UI): the Application / server card, measured (#1994).
-docs/NEW-RUN.md=3147 share=35
+# docs/NEW-RUN.md 3163 adds 16 over 3147, measured (0.10 final docs): scheduling and Your computer described by their gates instead of Coming soon
+# docs/NEW-RUN.md 3273 adds 110 over 3163, measured (rc.8 E4, #2948): the Only the sites listed switch, the walls drop line and the walls warning.
+docs/NEW-RUN.md=3273 share=35

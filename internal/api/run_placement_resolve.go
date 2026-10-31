@@ -68,6 +68,9 @@ type runPlacement struct {
 	// noLocal: the run waits on the pool's remote-hosted runners and the local-eligibility step refuses
 	// it on the person's own (stepLocalEligibility records it on a launch that waits).
 	noLocal bool
+	// mountRunner is the one runner the run's workspace folders are bound to (boundMountsRunner), nil for
+	// none; a launch that waits keeps it for the queue's verdict.
+	mountRunner *uuid.UUID
 }
 
 // placementInput is what the fold knows of the run when it resolves where it goes.
@@ -91,6 +94,9 @@ type placementInput struct {
 	// it; driveRunner is the one runner every drive is bound to (drivesBoundRunner), nil for none.
 	drives      bool
 	driveRunner *uuid.UUID
+	// mountRunner is the one runner the run's workspace folders are bound to (boundMountsRunner), nil for
+	// none: the run goes to that runner or nowhere.
+	mountRunner *uuid.UUID
 	// noLocal: a waiting run the local-eligibility step refused on the person's own runners
 	// (queuedLaunch.NoLocal); set by the queue's verdict and by a promoted run's start, never by a launch.
 	noLocal bool
@@ -152,6 +158,12 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	demand.holdRunnerCapacity = !capped && !f.promoted
 	if demand.requireRecording, refusal = s.poolRecordingDemand(org, row.Pool); refusal != nil {
 		return runPlacement{}, refusal
+	}
+	// A macOS VM is not recorded in this release, so a requirement refuses it here, in its own words
+	// (macOSVMRecordingRefusal), rather than as a pool whose runners do not record.
+	if demand.requireRecording && types.MachineKind(f.req.MachineKind).IsMacOSVM() {
+		return runPlacement{}, placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind"},
+			macOSVMRecordingRefusal(types.RecordingChoice{Required: true}))
 	}
 	offered, offers, refusal := s.offerKinds(ctx, f, row.Pool, kinds, demand)
 	if refusal != nil {
@@ -285,8 +297,10 @@ func (s *Server) offerKinds(ctx context.Context, f placementInput, pool types.Ru
 // the pool keeps that runner alone of their own. Any other run with drives keeps only the remote-hosted
 // kind when the pool has it, as no other drive mounts on a person's own runner (a pin naming that runner is refused, not dropped); with none it stays on the person's own runners for
 // the drive step to refuse. A waiting run the local-eligibility step refused on the person's own runners
-// (noLocal) keeps only the remote-hosted kind the same way. A kind the pool has no runner of is the kind
-// mismatch, and a pool whose every kind is denied is the deny sentence for the first of them.
+// (noLocal) keeps only the remote-hosted kind the same way. A macOS VM run never keeps the remote-hosted
+// kind, so neither rule moves it off the person's own Macs. A kind the pool has no runner of is the kind
+// mismatch, and a pool whose every kind is denied is the deny sentence for the first of them. A run whose
+// workspace folders are bound to one runner keeps that runner alone (boundFolderTargets).
 func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.RunnerPool, targets []poolTarget) (map[types.Placement][]poolTarget, *runRefusal) {
 	kinds := map[types.Placement][]poolTarget{}
 	for _, t := range targets {
@@ -298,6 +312,15 @@ func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.R
 		}
 		kinds = map[types.Placement][]poolTarget{asked: kinds[asked]}
 	}
+	// A macOS VM runs only on a person's own Mac, so the remote-hosted kind is never a candidate: the run
+	// waits for its Mac or is refused for why it cannot have one, never sent where it cannot start. Left
+	// with no other kind, it is refused for that.
+	if _, remote := kinds[types.PlacementRemote]; remote && types.MachineKind(f.req.MachineKind).IsMacOSVM() {
+		delete(kinds, types.PlacementRemote)
+		if len(kinds) == 0 {
+			return nil, placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind"}, macOSVMOnRemote)
+		}
+	}
 	var refused types.Placement
 	for _, kind := range kindOrder {
 		if _, ok := kinds[kind]; ok && slices.Contains(s.deniedPlacements(ctx, f.ceiling), kind) {
@@ -307,6 +330,10 @@ func (s *Server) kindTargets(ctx context.Context, f placementInput, pool types.R
 	}
 	if len(kinds) == 0 {
 		return nil, s.placementDeniedRefusal(ctx, refused, f.ceiling)
+	}
+	// A run whose workspace folders are bound to one of the person's runners runs on that runner alone.
+	if f.mountRunner != nil {
+		return boundFolderTargets(f, kinds)
 	}
 	// A run whose every drive is bound to one of the person's own runners in this pool keeps that runner
 	// alone of their own (M10).
@@ -723,6 +750,13 @@ func (p runPlacement) auditFields(run types.AgentRun, runnerName string) map[str
 	if runnerName != "" {
 		data["runner_name"] = runnerName
 	}
+	if run.RunnerID != nil {
+		for _, t := range p.eligible {
+			if t.runnerID != nil && *t.runnerID == *run.RunnerID && t.runsNamespace != "" {
+				data["runs_namespace"] = t.runsNamespace
+			}
+		}
+	}
 	return data
 }
 
@@ -790,6 +824,11 @@ func eligibleTargets(targets []poolTarget, d placementDemand) ([]poolTarget, pla
 
 func (d placementDemand) refusal(t poolTarget) placement.Reason {
 	if t.offline {
+		return placement.ReasonRunnerOffline
+	}
+	// A runner that does not advertise the namespace its membership names cannot take the run, answered
+	// like an offline member: the pool has none eligible.
+	if !t.servesRunsNamespace() {
 		return placement.ReasonRunnerOffline
 	}
 	if d.reqCCOK {

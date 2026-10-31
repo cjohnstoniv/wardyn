@@ -120,11 +120,15 @@ func (e *injEntry) install(resolved types.ResolvedInjection, now time.Time) {
 // lastGood reports whether e may keep serving its header after a transient re-resolve failure,
 // while the header isn't already dropped and e is within lastGoodGrace of expiry. Caller holds reMu.
 func (e *injEntry) lastGood(err error, now time.Time) bool {
-	if !transientResolveFailure(err) || e.header.value == "" || e.expiresAt == 0 ||
-		!now.Before(time.UnixMilli(e.expiresAt).Add(lastGoodGrace)) {
+	deadline := time.UnixMilli(e.expiresAt).Add(lastGoodGrace)
+	if !transientResolveFailure(err) || e.header.value == "" || e.expiresAt == 0 || !now.Before(deadline) {
 		return false
 	}
+	// Paced, but never past the grace deadline: the fast path serves while now < retryAt.
 	e.retryAt = now.Add(lastGoodRetry)
+	if e.retryAt.After(deadline) {
+		e.retryAt = deadline
+	}
 	return true
 }
 

@@ -5,8 +5,9 @@
 
 // The run-create request/result shapes (POST /api/v1/runs).
 
-import type { Agent, AgentRun, ConfinementClass } from "./runs";
+import type { Agent, AgentRun, ConfinementClass, RunService } from "./runs";
 import type { AppliedResources } from "./new-run-contract";
+import type { MachineKind } from "./machine-kind";
 
 // The fields the New Run wizard composes into a POST /api/v1/runs body. policy_id
 // and inline_policy are MUTUALLY EXCLUSIVE (XOR); neither set => default policy.
@@ -29,8 +30,10 @@ export interface CreateRunInput {
   // One of the caller's units to run in, by id or exact name; absent runs in their home unit.
   run_in?: string;
   confinement_class?: ConfinementClass;
-  // pkg/client.CreateRunRequest.MachineKind: absent is a container; "linux_vm" a Linux desktop VM.
-  machine_kind?: "container" | "linux_vm";
+  // pkg/client.CreateRunRequest.MachineKind: absent is a container; otherwise a VM kind.
+  machine_kind?: MachineKind;
+  // pkg/client.CreateRunRequest.MacOSBase: a macos_vm run's base, "Standard" or another base's name; absent is Standard.
+  macos_base?: string;
   interactive?: boolean;
   // Bring Your Own Image: a user-supplied base image the backend WRAPS with the
   // runner tools (FROM <image> + COPY tools + cleared ENTRYPOINT) before use.
@@ -62,6 +65,8 @@ export interface CreateRunInput {
   // it. Neither takes the default end (#1319).
   ends_after_sec?: number;
   no_end?: boolean;
+  /** Keeps a background command running (pkg/client.CreateRunRequest.Service): the server fills the defaults. */
+  service?: RunService;
   /**
    * A folder on the person's computer (pkg/client.CreateRunRequest.LocalFolder, types.RunLocalFolder). With
    * `runner_id` it is held by their own folder-only runner, and Wardyn seeds it before the agent starts.

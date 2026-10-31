@@ -36,7 +36,7 @@
 # An ordinary and a release build leave it empty and download as before.
 FROM scratch AS gomodcache
 
-FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8 AS builder
 
 WORKDIR /build
 
@@ -87,7 +87,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-rec ./
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-scan ./cmd/wardyn-scan
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
-FROM node:24-trixie-slim@sha256:8ec5d7557396cfe32d21c3f9c13072355ceab22b584578ca4bb28af31120cffe
+FROM node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
 
 # Apache-2.0 s4(a) requires a copy of the Licence to accompany the distribution and
 # s4(d) requires the NOTICE contents to be carried. Publishing an image IS
@@ -193,6 +193,8 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi 
 # machine type (byte 18: 0x3e amd64, 0xb7 arm64), as claude-code's is. Anything else (not ELF, such as
 # a launcher script, or another machine type) installs as before.
 ARG TARGETARCH
+# npm bounds each registry request and its one retry (60 s, 5 s apart) inside the 180 s attempt; the fetch
+# log (--loglevel=http) and each attempt's duration aid diagnosis when an install still fails.
 COPY deploy/images/README.md deploy/images/codex-cli/codex-bin* /codex-stage/
 RUN set -eu; \
     if [ "$CODEX_INSTALL" = "native" ]; then \
@@ -206,7 +208,14 @@ RUN set -eu; \
         if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi; \
         if [ -n "$HTTP_PROXY" ]; then npm config set proxy "$HTTP_PROXY"; fi; \
         if [ -n "$HTTPS_PROXY" ]; then npm config set https-proxy "$HTTPS_PROXY"; fi; \
-        for i in 1 2 3; do timeout -k 10 180 npm install -g "@openai/codex@$CODEX_VERSION" && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done; \
+        for i in 1 2 3; do \
+            t0=$(date +%s); \
+            timeout -k 10 180 npm install -g "@openai/codex@$CODEX_VERSION" --loglevel=http \
+                --fetch-timeout=60000 --fetch-retries=1 --fetch-retry-mintimeout=5000 --fetch-retry-maxtimeout=5000 \
+                && { echo "codex install attempt $i: ok after $(($(date +%s) - t0)) s"; break; }; \
+            rc=$?; echo "codex install attempt $i: exit $rc after $(($(date +%s) - t0)) s" >&2; \
+            [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); \
+        done; \
         npm config delete proxy https-proxy; \
         echo "installed codex $CODEX_VERSION via npm"; \
     fi
@@ -218,9 +227,9 @@ RUN set -eu; \
 # a bump moves GH_VERSION and both digests together. gh gets no GitHub
 # credential here: a run with a GitHub CLI row gets an inert GH_TOKEN, and the
 # proxy adds the App token per request.
-ARG GH_VERSION=2.102.0
-ARG GH_SHA256_AMD64=7e54a307f90afdc59796c325ec0c49fb09e6c18537727207a8ac7513584ea5b0
-ARG GH_SHA256_ARM64=5006962696f01e1624b3fcf1f9d8e1a11547f24bf067dd2a0371b7b421945237
+ARG GH_VERSION=2.103.3
+ARG GH_SHA256_AMD64=e3bafef96328d1a67de3a968bdfe1cc2ffd58cf6aba8b5e201356897ed06bb3d
+ARG GH_SHA256_ARM64=cac3ff84b60b68e64cca69f31f303210c26320361cc3286b773655d4226b7b06
 ARG TARGETARCH
 RUN set -eu; \
     arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \

@@ -127,6 +127,12 @@ describe("intentToWire unsupported fields (U2)", () => {
 });
 
 describe("launch-excluded rows", () => {
+  it("carries the chosen macOS base beside machine_kind", () => {
+    const { body, unsupported } = intentToWire({ machine_kind: "macos_vm", macos_base: "xcode-16" });
+    expect(body).toEqual({ mode_contract: "0.9", machine_kind: "macos_vm", macos_base: "xcode-16" });
+    expect(unsupported).toEqual([]);
+  });
+
   it("carries machine_kind and the chosen local_folder, and still reports max_wait_sec", () => {
     const folder = { name: "f", remote_dir: "/w" };
     const launch = { machine_kind: "linux_vm", local_folder: folder, max_wait_sec: 60 } as unknown as RunIntent;
@@ -183,5 +189,33 @@ describe("intentToWire: a start later", () => {
 
   it("reports a start in the document as unsupported: the registry leaves it to each launch", () => {
     expect(intentToWire({ ...INTENT, start_at: "2026-10-21T02:00" } as RunIntent).unsupported).toContain("start_at");
+  });
+});
+
+describe("intentToWire: a service", () => {
+  const SCRIPT: RunIntent = { shape: "application", experience: "background", workload: { kind: "command", command: "./serve" } };
+  const service = { restart: "on_failure" as const, port: 8080, health: { path: "/healthz", interval_sec: 15, failure_threshold: 3 } };
+
+  it("sends it with a background command, and reports nothing unsupported", () => {
+    const { body, unsupported } = intentToWire({ ...SCRIPT, service });
+    expect(body.service).toEqual(service);
+    expect(unsupported).toEqual([]);
+  });
+
+  it("leaves a health check out while no port is named", () => {
+    const { body } = intentToWire({ ...SCRIPT, service: { restart: "on_failure", health: service.health } });
+    expect(body.service).toEqual({ restart: "on_failure" });
+  });
+
+  it("does not send one left over after the run became an agent task, an application server or a virtual machine", () => {
+    for (const intent of [
+      { ...SCRIPT, service, experience: "interactive", workload: undefined },
+      { ...SCRIPT, service, workload: { kind: "agent_task", task: "fix it" } },
+      { ...SCRIPT, service, machine_kind: "macos_vm" },
+    ] as RunIntent[]) {
+      const { body, unsupported } = intentToWire(intent);
+      expect(body).not.toHaveProperty("service");
+      expect(unsupported).toEqual([]);
+    }
   });
 });

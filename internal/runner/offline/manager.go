@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/retrylog"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
@@ -35,6 +36,11 @@ type Manager struct {
 	runnerID uuid.UUID
 	// pendingLogged is when each held run's containment-pending warning was last logged.
 	pendingLogged map[uuid.UUID]time.Time
+	// retryLogs spaces out the "will retry" lines of the containment and replay loops, which tick every second.
+	retryLogs retrylog.Dedupe
+	// containLogs is each run's logged containment failures by error text (logContainFailure): the
+	// attempts are never spaced out, only the identical lines between them.
+	containLogs   map[uuid.UUID]map[string]*containLog
 	dir           string
 	root          *os.Root
 	sub           substrate.Substrate
@@ -65,6 +71,15 @@ type Manager struct {
 	observer     runner.ProxyObserver
 	lastObserved time.Time
 	tick         func(context.Context)
+	// ticks replaces Run's 1 s ticker, a fake-clock test seam; nil is the real ticker.
+	ticks <-chan time.Time
+	// replayWaits holds each run whose replay failed until its next try (replay); guarded by mu.
+	replayWaits map[uuid.UUID]replayWait
+	// replayTicks and replaySend replace the replay loop's 1 s ticker and the peer's EventsAck, and
+	// replayTick runs at the start of each of its passes, as tick does for Run: test seams, nil in use.
+	replayTicks <-chan time.Time
+	replaySend  func(context.Context, []runnerwire.Event) error
+	replayTick  func()
 }
 
 // Options are the manager's substrate-specific behaviours.
@@ -164,6 +179,9 @@ func (m *Manager) Clock(h runnerwire.Hello, received time.Time) error {
 
 // beforeReadyContainBound bounds the containment BeforeReady runs before a session is ready.
 var beforeReadyContainBound = 30 * time.Second
+
+// replayPassBound bounds each replayLoop pass, its exit observation and audit replay together.
+var replayPassBound = 30 * time.Second
 
 // BeforeReady enables admission only after pending actions and fresh replay.
 // It does not write to peer; resumed peers have not started their read loop.
@@ -382,6 +400,7 @@ func (m *Manager) Created(ctx context.Context, spec runner.SandboxSpec, localRef
 	// The dispatcher binds the output writer before Created, so a run whose
 	// create captured output says so here, before its sandbox is used.
 	r.OutputCapture = spec.ExecOutput != nil
+	r.MachineKind = spec.MachineKind.Normalize()
 	m.state.Runs[spec.RunID] = r
 	m.publishActivity()
 	return m.save()
@@ -428,7 +447,7 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 				}
 				continue
 			}
-			errs = append(errs, fmt.Errorf("contain run %s: %w", id, err))
+			errs = append(errs, errContain{run: id, err: err})
 			continue
 		}
 		m.mu.Lock()
@@ -440,6 +459,8 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 		}
 		r = current
 		delete(m.pendingLogged, id)
+		texts, failed := m.containLogs[id]
+		delete(m.containLogs, id)
 		if r.ProxyStoppedAt == nil || (r.MutationFailure != nil && !r.MutationFailure.Contained) {
 			before := r
 			at := m.now().UTC()
@@ -458,8 +479,28 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 			}
 		}
 		m.mu.Unlock()
+		if failed {
+			repeated := 0
+			for _, l := range texts {
+				repeated += l.repeated
+			}
+			slog.InfoContext(ctx, "runner containment recovered", "run_id", id, "repeated", repeated)
+		}
 	}
+	m.forgetLeftContainLogs()
 	return errors.Join(errs...)
+}
+
+// forgetLeftContainLogs drops the containment log of each run that is gone or retired: it left the loop
+// without a success, so nothing will log it again.
+func (m *Manager) forgetLeftContainLogs() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id := range m.containLogs {
+		if r, ok := m.state.Runs[id]; !ok || r.Retired {
+			delete(m.containLogs, id)
+		}
+	}
 }
 
 // errContainmentSuperseded is a containment pass whose run changed under it (a concurrent exec or start):
@@ -472,6 +513,61 @@ type errContainmentSuperseded struct {
 
 func (e errContainmentSuperseded) Error() string {
 	return fmt.Sprintf("contain run %s: mutation changed during containment (%s changed; selected by %s)", e.run, e.changed, e.selectedBy)
+}
+
+// errContain is one run's failed containment attempt, kept typed so the containment loop logs it per run
+// (logContainFailure). Its text and its Unwrap are those of fmt.Errorf("contain run %s: %w").
+type errContain struct {
+	run uuid.UUID
+	err error
+}
+
+func (e errContain) Error() string { return fmt.Sprintf("contain run %s: %v", e.run, e.err) }
+func (e errContain) Unwrap() error { return e.err }
+
+// containSummaryEvery spaces out the repeats of one run's identical containment failure.
+const containSummaryEvery = time.Minute
+
+// containTextsPerRun bounds the error texts remembered for one run; past it the run starts over, so a
+// text that carries a changing value cannot grow the map.
+const containTextsPerRun = 16
+
+// containLog is one logged failure text of one run, and its repeats not logged since.
+type containLog struct {
+	next     time.Time
+	repeated int
+}
+
+// logContainFailure logs one run's failed containment attempt at ERROR: a text not yet seen for the run
+// at once; a seen one, however the texts interleave, as one summary line at most once per
+// containSummaryEvery, saying how many went unlogged. A success logs at once (CheckLapses). Only the line
+// is spaced out: every attempt still runs, and still fails its pass.
+func (m *Manager) logContainFailure(ctx context.Context, c errContain) {
+	m.mu.Lock()
+	now, text := m.now(), c.err.Error()
+	if m.containLogs == nil {
+		m.containLogs = map[uuid.UUID]map[string]*containLog{}
+	}
+	texts := m.containLogs[c.run]
+	if texts == nil || (texts[text] == nil && len(texts) >= containTextsPerRun) {
+		texts = map[string]*containLog{}
+		m.containLogs[c.run] = texts
+	}
+	l := texts[text]
+	log, repeated := true, 0
+	switch {
+	case l == nil:
+		texts[text] = &containLog{next: now.Add(containSummaryEvery)}
+	case now.Before(l.next):
+		l.repeated++
+		log = false
+	default:
+		repeated, l.repeated, l.next = l.repeated, 0, now.Add(containSummaryEvery)
+	}
+	m.mu.Unlock()
+	if log {
+		slog.ErrorContext(ctx, "runner containment will retry", "run_id", c.run, "error", c, "repeated", repeated)
+	}
 }
 
 // changedContainmentField is the first thing sameContainmentTarget saw differ.
@@ -507,9 +603,9 @@ func (m *Manager) selectedBy(id uuid.UUID, r localRun) string {
 	return "lease_lapsed"
 }
 
-// logContainmentErrors logs a tick's errors: a superseded pass at WARN, one line each, and everything
-// else at ERROR as one line, as before.
-func logContainmentErrors(ctx context.Context, err error) {
+// logContainmentErrors logs a tick's errors: a superseded pass at WARN, one line each, a run's failed
+// containment per run (logContainFailure), and everything else at ERROR as one line, through logRetry.
+func (m *Manager) logContainmentErrors(ctx context.Context, err error) {
 	var other []error
 	var walk func(error)
 	walk = func(e error) {
@@ -524,11 +620,16 @@ func logContainmentErrors(ctx context.Context, err error) {
 			slog.WarnContext(ctx, "runner containment superseded, re-checking", "run_id", sup.run, "changed", sup.changed, "selected_by", sup.selectedBy)
 			return
 		}
+		var c errContain
+		if errors.As(e, &c) {
+			m.logContainFailure(ctx, c)
+			return
+		}
 		other = append(other, e)
 	}
 	walk(err)
 	if len(other) > 0 {
-		slog.ErrorContext(ctx, "runner containment will retry", "error", errors.Join(other...))
+		m.logRetry(ctx, slog.LevelError, "runner containment will retry", errors.Join(other...))
 	}
 }
 
@@ -543,8 +644,14 @@ func (m *Manager) Run(ctx context.Context) error {
 	stopped := make(chan struct{})
 	go func() { defer close(stopped); m.replayLoop(replayCtx) }()
 	defer func() { cancel(); <-stopped }()
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	// Every tick runs the whole pass, whatever failed on the last: a failure adds no backoff to the
+	// containment of another run, or of itself. Only the repeated ERROR line is spaced out (logRetry).
+	ticks := m.ticks
+	if ticks == nil {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		ticks = ticker.C
+	}
 	for {
 		safety, done := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		m.mu.Lock()
@@ -556,36 +663,50 @@ func (m *Manager) Run(ctx context.Context) error {
 		err := errors.Join(m.observeProxiesDue(safety), m.CheckLapses(safety), m.eraseAssertedEvidence())
 		done()
 		if err != nil {
-			logContainmentErrors(ctx, err)
+			m.logContainmentErrors(ctx, err)
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-ticks:
 		}
 	}
 }
 func (m *Manager) replayLoop(ctx context.Context) {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	ticks := m.replayTicks
+	if ticks == nil {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		ticks = ticker.C
+	}
 	for {
-		observe, cancel := context.WithTimeout(ctx, 30*time.Second)
+		if m.replayTick != nil {
+			m.replayTick()
+		}
+		observe, cancel := context.WithTimeout(ctx, replayPassBound)
 		if err := m.observeExits(observe); err != nil {
-			slog.WarnContext(ctx, "runner lifecycle observation will retry", "error", err)
+			m.logRetry(ctx, slog.LevelWarn, "runner lifecycle observation will retry", err)
 		}
 		m.mu.Lock()
 		peer, ready := m.peer, m.online && m.replayReady
 		m.mu.Unlock()
 		if ready && peer != nil {
-			if err := m.Replay(observe, peer); err != nil {
-				slog.WarnContext(ctx, "runner audit replay will retry", "error", err)
+			send := m.replaySend
+			if send == nil {
+				send = peer.EventsAck
+			}
+			// One line per failing run, each spaced out on its own: the runs fail apart.
+			if err := m.replay(observe, send, true); err != nil {
+				for _, e := range joinedErrors(err) {
+					m.logRetry(ctx, slog.LevelWarn, "runner audit replay will retry", e)
+				}
 			}
 		}
 		cancel()
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-ticks:
 		}
 	}
 }
@@ -745,6 +866,26 @@ func (m *Manager) holdPendingLocked(id uuid.UUID, p *runner.ContainmentPendingEr
 	r.ContainmentPending = next
 	m.state.Runs[id] = r
 	return m.save()
+}
+
+// logRetry logs a loop's "will retry" line. It adds no backoff to the attempts (containment is retried
+// on every pass of its loop until it holds); the line is spaced out: an identical one is logged once per
+// retrylog interval, 5 s growing to 5 min, saying how many times it repeated unlogged.
+func (m *Manager) logRetry(ctx context.Context, level slog.Level, msg string, err error) {
+	m.mu.Lock()
+	log, repeated := m.retryLogs.Note(msg+": "+err.Error(), m.now())
+	m.mu.Unlock()
+	if log {
+		slog.Log(ctx, level, msg, "error", err, "repeated", repeated)
+	}
+}
+
+// joinedErrors is err's errors.Join parts, or err alone.
+func joinedErrors(err error) []error {
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		return j.Unwrap()
+	}
+	return []error{err}
 }
 
 // pendingLogEvery bounds the containment-pending warning, which CheckLapses would otherwise repeat

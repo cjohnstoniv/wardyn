@@ -231,8 +231,10 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	}
 	// Same server-side projection handleListRuns applies per page —
 	// a single run's own detail read must agree with what the list showed.
+	// The recording fields are always filled here: a default read that said
+	// has_recording false for a stored recording read as a lost one (#3705).
 	runs := []types.AgentRun{run}
-	s.projectRecordingMeta(r, runs)
+	s.fillRecordingMeta(r.Context(), runs)
 	s.projectStatusDetailFor(r, runs)
 	s.projectRunnerFacts(r, runs)
 	redactRunRepos(runs)
@@ -285,6 +287,11 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// ModelAllowlists (#3374) is the model allowlist each local model provider handed the run's proxy at
 		// its latest dispatch, {provider id: models}: what the run is held to, whatever the provider lists now.
 		ModelAllowlists map[string][]string `json:"model_allowlists,omitempty"`
+		// MacOS is a macOS VM run's desktop as its Mac offers it (run_macos_view.go); absent on every other run.
+		MacOS *runMacOSView `json:"macos,omitempty"`
+		// MacOSDisk is where a macOS VM run's disk stands on its Mac at the run's end (run_macos_disk.go);
+		// absent on every other run.
+		MacOSDisk *runMacOSDiskView `json:"macos_disk,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
@@ -296,6 +303,8 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		ComputerFolder:  s.computerFolderRunView(r.Context(), run.ID),
 		Agents:          s.runDetailAgents(r.Context(), run),
 		ModelAllowlists: s.runModelAllowlists(r.Context(), run.ID),
+		MacOS:           s.runMacOSView(run),
+		MacOSDisk:       s.runMacOSDiskView(r.Context(), run),
 	})
 }
 

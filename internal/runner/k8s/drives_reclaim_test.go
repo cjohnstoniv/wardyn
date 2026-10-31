@@ -24,7 +24,7 @@ import (
 // reclaimDriver is the driver over a fake apiserver holding seed.
 func reclaimDriver(seed ...runtime.Object) (*fake.Clientset, *Driver) {
 	cs := fake.NewClientset(seed...)
-	return cs, &Driver{clientset: cs, cfg: Config{Namespace: testNamespace}}
+	return cs, &Driver{clientset: cs, cfg: Config{Namespaces: []string{testNamespace}}}
 }
 
 // podMountingClaim is a pod whose spec references claim by name — the evidence

@@ -312,6 +312,12 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 	// Once the row names a cached wrap for this very base (the byoi key), the wrap
 	// exists and has a build record, so the row-derived `done` below answers
 	// instead: "no build involved" would be false, and the record would never show.
+	// A prewrapped base was checked at registration and runs as is on every host: nothing is built,
+	// wrapped or recorded for it.
+	if prewrappedBase(ws.BaseImage) {
+		return buildResponse{State: "nothing_to_build", Image: authoredImage(ws.BaseImage.Image),
+			Detail: "a prewrapped image runs as is — no build involved"}
+	}
 	key, keyed := s.workspaceBuiltImageKey(ws)
 	st := s.builds.get(ws.ID)
 	// A refresh's own entry answers before the explicit-image branch below: a refreshed base
@@ -455,7 +461,7 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	tier := s.workspaceReadTierFor(r, ws)
 	view := s.resolveBuildView(ws, tier)
-	if !refresh && (view.State == "nothing_to_build" || view.State == "done") {
+	if (!refresh || prewrappedBase(ws.BaseImage)) && (view.State == "nothing_to_build" || view.State == "done") {
 		writeJSON(w, http.StatusOK, s.withBuildRecord(r.Context(), view, ws, tier))
 		return
 	}

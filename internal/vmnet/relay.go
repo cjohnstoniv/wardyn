@@ -28,6 +28,8 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -52,9 +54,38 @@ var (
 )
 
 const (
-	nicID       = 1
-	linkMTU     = 1500
-	maxInFlight = 1024 // half-open guest SYNs the stack holds at once
+	nicID   = 1
+	linkMTU = 1500
+
+	// maxOpaqueTunnels is the most opaque guest tunnels a run's relay holds at
+	// once, pending ones included. It is a deliberate bound, cheap to raise if a
+	// real run ever hits it. Opaque is every granted port except 80, which takes
+	// the HTTP path (httpfwd.go) and is not counted. A tunnel past the bound is
+	// refused with reasonTunnelLimit; the bound never evicts an established one.
+	maxOpaqueTunnels = 1024
+
+	// reasonTunnelLimit is the refusal reason for a tunnel past the bound. The
+	// proxy's closed set of relay reasons (vmnetReasons) names it too.
+	reasonTunnelLimit = "tunnel-limit"
+)
+
+// inFlightBound is how many guest SYNs the stack's forwarder holds at once, for
+// a relay whose opaque bound is opaque. A forwarder entry lasts until the
+// handler completes the flow, and an opaque flow completes only after its proxy
+// ask, so every pending ask holds one. The bound is therefore twice the opaque
+// bound: with every slot pending, a further opaque SYN still reaches handleTCP
+// and gets the typed refusal instead of being dropped unseen, and port-80 and
+// refused flows have headroom. It stays finite.
+func inFlightBound(opaque int) int { return 2 * opaque }
+
+// A guest tunnel can outlive its peer without a FIN: a guest that was killed,
+// a NAT that dropped the flow. Keepalive probes on both legs notice it, so the
+// copy ends and the tunnel's slot frees. The guest leg is a gVisor endpoint and
+// takes the probes below; the proxy leg is a native socket (proxyDialer).
+const (
+	keepaliveIdle     = 60 * time.Second
+	keepaliveInterval = 30 * time.Second
+	keepaliveCount    = 4
 )
 
 // Config is how a relay reaches its proxy.
@@ -64,9 +95,20 @@ type Config struct {
 	// Log receives one JSON line per DNS addition, eviction, allow and
 	// refusal (refusals rate limited per kind).
 	Log *slog.Logger
+	// DHCP answers the guest's DHCPv4 with the link's one lease (dhcp.go). A
+	// macOS guest needs it; a Linux guest is static and leaves it off.
+	DHCP bool
+	// Prep makes this a base-image preparation relay: no run proxy, so every
+	// guest flow is refused at its SYN and nothing leaves the stack. The only
+	// traffic is the host dialling the guest's own address (DialGuest), and DHCP
+	// is on. Proxy and Dial are unused.
+	Prep bool
 	// Dial and Now are seams for tests; nil means net.Dialer and time.Now.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 	Now  func() time.Time
+
+	// maxOpaque overrides maxOpaqueTunnels; tests only.
+	maxOpaque int
 }
 
 // Relay is one VM's relay. It serves one QEMU connection at a time and keeps
@@ -79,6 +121,16 @@ type Relay struct {
 	rep   *reporter
 	log   *slog.Logger
 	stop  chan struct{}
+	dhcp  bool
+	prep  bool
+	// dhcpSeen counts the guest's DHCP requests: a reboot or a reset link
+	// asks for its lease again, so prepare's stage 1 reads it as the boot's
+	// epoch.
+	dhcpSeen atomic.Uint64
+	// opaque counts the opaque tunnels this relay holds, from before the
+	// proxy ask until both copy directions have ended; maxOpaque is its bound.
+	opaque    atomic.Int64
+	maxOpaque int64
 }
 
 // New builds a relay's stack. Close releases it.
@@ -97,8 +149,18 @@ func New(cfg Config) (*Relay, error) {
 		proxy: newProxyClient(cfg.Proxy, cfg.Dial),
 		log:   log,
 		stop:  make(chan struct{}),
+		dhcp:  cfg.DHCP || cfg.Prep,
+		prep:  cfg.Prep,
+
+		maxOpaque: maxOpaqueTunnels,
+	}
+	if cfg.maxOpaque > 0 {
+		rl.maxOpaque = int64(cfg.maxOpaque)
 	}
 	rl.rep = newReporter(now, log, func(r refusal) {
+		if rl.prep {
+			return // no proxy to report to; the relay's own log line has it
+		}
 		if err := rl.proxy.send(r); err != nil {
 			log.Warn("refusal report failed", "reason", r.Reason, "err", err.Error())
 		}
@@ -124,7 +186,7 @@ func New(cfg Config) (*Relay, error) {
 	if err := s.SetSpoofing(nicID, true); err != nil {
 		return nil, errors.New(err.String())
 	}
-	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcp.NewForwarder(s, 0, maxInFlight, rl.handleTCP).HandlePacket)
+	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcp.NewForwarder(s, 0, inFlightBound(int(rl.maxOpaque)), rl.handleTCP).HandlePacket)
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udp.NewForwarder(s, func(r *udp.ForwarderRequest) bool {
 		id := r.ID()
 		rl.rep.refuse(refusal{Reason: "udp", Host: id.LocalAddress.String(), Port: int(id.LocalPort)})
@@ -150,6 +212,28 @@ func New(cfg Config) (*Relay, error) {
 	return rl, nil
 }
 
+// ErrNotPrep is DialGuest on a relay that is not a preparation relay.
+var ErrNotPrep = errors.New("vmnet: DialGuest is for a preparation relay")
+
+// DialGuest opens a TCP connection from the relay's stack to the guest's own
+// address (10.0.2.15) on port. It is how the host reaches the guest while its
+// base image is prepared; only a Prep relay does it, and it can reach nothing
+// but that one address.
+func (rl *Relay) DialGuest(ctx context.Context, port uint16) (net.Conn, error) {
+	if !rl.prep {
+		return nil, ErrNotPrep
+	}
+	c, err := gonet.DialContextTCP(ctx, rl.stack, tcpip.FullAddress{NIC: nicID, Addr: guestIP, Port: port}, ipv4.ProtocolNumber)
+	if err != nil {
+		// gonet's nil *TCPConn would make a non-nil net.Conn whose Close panics.
+		return nil, err
+	}
+	return c, nil
+}
+
+// DHCPRequests is how many DHCP requests the guest has sent this relay.
+func (rl *Relay) DHCPRequests() uint64 { return rl.dhcpSeen.Load() }
+
 // Close stops the relay.
 func (rl *Relay) Close() {
 	close(rl.stop)
@@ -158,9 +242,19 @@ func (rl *Relay) Close() {
 
 // Serve carries one QEMU connection's frames until it ends. Open guest flows
 // survive a reconnect only as long as the guest's own retries do.
-func (rl *Relay) Serve(c net.Conn) error {
+func (rl *Relay) Serve(c net.Conn) error { return rl.ServeStream(c, c) }
+
+// ServeStream is Serve over separate directions, such as a process's stdin and
+// stdout (wardyn-vmnet -stdio). It ends when r does.
+func (rl *Relay) ServeStream(r io.Reader, w io.Writer) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	var wmu sync.Mutex // the stack's frames and DHCP replies share w
+	write := func(frame []byte) error {
+		wmu.Lock()
+		defer wmu.Unlock()
+		return writeFrame(w, frame)
+	}
 	go func() {
 		for {
 			pkt := rl.link.ReadContext(ctx)
@@ -168,7 +262,7 @@ func (rl *Relay) Serve(c net.Conn) error {
 				return
 			}
 			frame := pkt.ToView().AsSlice()
-			err := writeFrame(c, frame)
+			err := write(frame)
 			pkt.DecRef()
 			if err != nil {
 				return
@@ -177,7 +271,7 @@ func (rl *Relay) Serve(c net.Conn) error {
 	}()
 	buf := make([]byte, maxFrame)
 	for {
-		frame, err := readFrame(c, buf)
+		frame, err := readFrame(r, buf)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -188,10 +282,43 @@ func (rl *Relay) Serve(c net.Conn) error {
 			rl.rep.refuse(refusal{Reason: "dropped-frame", Detail: kind})
 			continue
 		}
+		if rl.dhcp && isDHCPRequest(frame) {
+			rl.dhcpSeen.Add(1)
+			if reply, ok := dhcpReply(frame); ok {
+				if err := write(reply); err != nil {
+					return err
+				}
+			} else if addr, msg, declined := dhcpDeclined(frame); declined {
+				rl.rep.refuseLocal("guest declined the DHCP lease as an address in use", "address", addr, "message", msg)
+			} else {
+				rl.rep.refuse(refusal{Reason: "dropped-frame", Detail: "dhcp_unanswered"})
+			}
+			continue
+		}
+		if !reachesStack(frame) {
+			continue
+		}
 		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(frame)})
 		rl.link.InjectInbound(header.Ethernet(frame).Type(), pkt)
 		pkt.DecRef()
 	}
+}
+
+// reachesStack reports whether a guest frame may go to the stack: anything but
+// an ARP request for an address other than the gateway. The stack spoofs, so it
+// would answer who-has for any address, the guest's own included: a macOS DHCP
+// client probes its offered address before taking it (RFC 5227), takes the
+// stack's answer as a conflict and declines the lease. The gateway is the
+// guest's only on-link peer; DNS answers are off-link (names.go).
+func reachesStack(frame []byte) bool {
+	if header.Ethernet(frame).Type() != header.ARPProtocolNumber {
+		return true
+	}
+	a := header.ARP(frame[header.EthernetMinimumSize:])
+	if !a.IsValid() || a.Op() != header.ARPRequest {
+		return true // the stack drops an invalid one; a reply resolves the guest for DialGuest
+	}
+	return tcpip.AddrFrom4Slice(a.ProtocolAddressTarget()) == gatewayIP
 }
 
 func (rl *Relay) serveDNS(c *gonet.UDPConn) {
@@ -200,6 +327,12 @@ func (rl *Relay) serveDNS(c *gonet.UDPConn) {
 		n, from, err := c.ReadFrom(buf)
 		if err != nil {
 			return
+		}
+		if rl.prep {
+			if resp, err := refuseAll(buf[:n]); err == nil {
+				_, _ = c.WriteTo(resp, from)
+			}
+			continue
 		}
 		resp, res, err := answer(rl.names, buf[:n])
 		if err != nil {
@@ -218,6 +351,12 @@ func (rl *Relay) serveDNS(c *gonet.UDPConn) {
 func (rl *Relay) handleTCP(r *tcp.ForwarderRequest) {
 	id := r.ID()
 	port := id.LocalPort
+	if rl.prep {
+		// Base preparation has no egress: reset at the SYN, whatever the target.
+		r.Complete(true)
+		rl.rep.refuse(refusal{Reason: "prep-egress", Host: id.LocalAddress.String(), Port: int(port)})
+		return
+	}
 	name, named := rl.names.lookup(id.LocalAddress.As4())
 	if !named {
 		// Not an address the relay handed out, so the flow has no name to put
@@ -240,6 +379,15 @@ func (rl *Relay) handleTCP(r *tcp.ForwarderRequest) {
 		}
 		return
 	}
+	// Every path from here is an opaque tunnel (see maxOpaqueTunnels). The slot
+	// is taken before the ask and given back when this flow ends, after both
+	// copy directions in splice have finished, or on any earlier return.
+	if !rl.admit() {
+		r.Complete(true)
+		rl.rep.refuse(refusal{Flow: flow, Reason: reasonTunnelLimit, Host: name, Port: int(port)})
+		return
+	}
+	defer rl.opaque.Add(-1)
 	t0 := time.Now()
 	ok, status, err := rl.proxy.ask(name, port, flow)
 	if !ok {
@@ -284,7 +432,21 @@ func (rl *Relay) handleTCP(r *tcp.ForwarderRequest) {
 	splice(gc, pc)
 }
 
-// accept completes the guest's handshake.
+// admit takes one opaque-tunnel slot, or reports that the run is at its bound.
+func (rl *Relay) admit() bool {
+	for {
+		n := rl.opaque.Load()
+		if n >= rl.maxOpaque {
+			return false
+		}
+		if rl.opaque.CompareAndSwap(n, n+1) {
+			return true
+		}
+	}
+}
+
+// accept completes the guest's handshake and turns on TCP keepalive for the
+// guest leg.
 func accept(r *tcp.ForwarderRequest) *gonet.TCPConn {
 	var wq waiter.Queue
 	ep, err := r.CreateEndpoint(&wq)
@@ -293,22 +455,42 @@ func accept(r *tcp.ForwarderRequest) *gonet.TCPConn {
 		return nil
 	}
 	r.Complete(false)
+	setKeepalive(ep)
 	return gonet.NewTCPConn(&wq, ep)
 }
 
-// splice copies both ways, half-closing each side when the other finishes.
+func setKeepalive(ep tcpip.Endpoint) {
+	idle, interval := tcpip.KeepaliveIdleOption(keepaliveIdle), tcpip.KeepaliveIntervalOption(keepaliveInterval)
+	ep.SocketOptions().SetKeepAlive(true)
+	_ = ep.SetSockOpt(&idle)
+	_ = ep.SetSockOpt(&interval)
+	_ = ep.SetSockOptInt(tcpip.KeepaliveCountOption, keepaliveCount)
+}
+
+// splice copies both ways, half-closing each side when the other finishes. A
+// copy that ends in an error (a reset, a read failure) is not a half-close: it
+// closes both ends, which unblocks the other direction, so the tunnel and its
+// slot do not wait on a peer that keeps its own half open.
 func splice(gc *gonet.TCPConn, pc net.Conn) {
 	done := make(chan struct{}, 2)
+	abort := func() {
+		_ = gc.Close()
+		_ = pc.Close()
+	}
 	go func() {
-		_, _ = io.Copy(pc, gc)
-		if cw, ok := pc.(interface{ CloseWrite() error }); ok {
+		if _, err := io.Copy(pc, gc); err != nil {
+			abort()
+		} else if cw, ok := pc.(interface{ CloseWrite() error }); ok {
 			_ = cw.CloseWrite()
 		}
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(gc, pc)
-		_ = gc.CloseWrite()
+		if _, err := io.Copy(gc, pc); err != nil {
+			abort()
+		} else {
+			_ = gc.CloseWrite()
+		}
 		done <- struct{}{}
 	}()
 	<-done
@@ -349,7 +531,11 @@ func (rl *Relay) Listen(ctx context.Context, path string) error {
 			return err
 		}
 		rl.log.Info("qemu_connected")
+		// A silent guest must not outlive the context: closing c ends Serve.
+		// AfterFunc also fires at once if ctx ended since Accept.
+		stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 		err = rl.Serve(c)
+		stop()
 		_ = c.Close()
 		rl.log.Info("qemu_disconnected", "err", errString(err))
 	}

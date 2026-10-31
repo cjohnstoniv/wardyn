@@ -49,6 +49,13 @@ type (
 		// to a run over the runner's local socket. Absent (an older organisation) or false: the runner
 		// opens no socket; an older runner ignores the field.
 		LocalAttach bool `json:"local_attach,omitempty"`
+		// PerRunCPUMillis and PerRunMemoryMiB are the most CPU (milli-CPU) and memory (MiB) one run may
+		// take on this runner, from the limits its owner or administrator declared (wardyn runner set), so
+		// a runner can size what it builds for one run (a macOS VM). Re-sent on every connect; 0 or absent
+		// (no limits declared, or an older organisation) means the runner sizes as it did before; an older
+		// runner ignores them.
+		PerRunCPUMillis int64 `json:"per_run_cpu_millis,omitempty"`
+		PerRunMemoryMiB int64 `json:"per_run_memory_mib,omitempty"`
 	}
 	// Reason is the payload of REVOKED and GOAWAY.
 	Reason struct {
@@ -76,10 +83,14 @@ const (
 	EventActionResult  = "action_result"
 	EventSpool         = "spool"
 	EventResidentErase = "resident_erase"
+	// EventWorkload carries a WorkloadReport: a WardynWorkload custom resource the runner saw
+	// change, or the names a namespace still holds. Only a runner that lists workload namespaces
+	// sends it.
+	EventWorkload = "workload"
 )
 
 // EventKinds is the closed list.
-var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase}
+var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase, EventWorkload}
 
 // Event is the EVENT payload. Call, when non-zero, names the in-flight CALL the
 // event belongs to (a waiting report), so the org can deliver it on that
@@ -140,10 +151,20 @@ type Caps struct {
 	// MethodLocalAttachTeeAck. The org sends them only to a runner that says so; an older runner
 	// reads as absent and the org refuses a local attach before any call.
 	LocalAttach bool `json:"local_attach,omitempty"`
+	// BoundFolders says the runner binds a member's workspace folder bound to it (runner.Mount.BoundRunner):
+	// it binds such a folder only when it is bound to this runner, holds it to its owner's --drive-root,
+	// and binds a writable one only under a writable ceiling. The org places a run with such a folder only
+	// on a runner that says so; an older runner reads as absent and the org refuses.
+	BoundFolders bool `json:"bound_folders,omitempty"`
 	// LinuxVM says the runner starts Linux VM sandboxes (create_vm) and names the virtual machine it
 	// gives them. Present only when its operator turned VMs on and its start-up probe passed; an older
 	// runner never sends it, and the org asks no runner without it for a VM.
 	LinuxVM *VMCaps `json:"linux_vm,omitempty"`
+	// MacOSVM says the runner starts macOS VM sandboxes (create_vm with machine_kind macos_vm) and what
+	// its Mac can serve now. Present only when its operator turned them on and the Mac passed its probe;
+	// it is resent when it changes, as Relay is. An older runner never sends it and the org never sends
+	// such a runner a macOS VM; an older org ignores it.
+	MacOSVM *MacVMCaps `json:"macos_vm,omitempty"`
 	// OfflineSummary is why the runner could not connect (or start) since its last session, sent once
 	// on the first connect after; Relay is a Docker runner's latest run relay check, sent again when it
 	// changes. Both 0.10 on; an older organisation ignores them, and an older runner sends neither.
@@ -153,6 +174,11 @@ type Caps struct {
 	// proxy (0.10 on). An older runner rebuilds the proxy config without them, so the org refuses a
 	// create that sets one the runner does not name; absent reads as none.
 	ProxySettings []string `json:"proxy_settings,omitempty"`
+	// RunsNamespaces are the Kubernetes namespaces a k8s runner places run pods in, the first being
+	// its default. The org sends a create naming a namespace only to a runner that lists it, and a
+	// pool member pinned to a namespace is eligible only on such a runner. Absent (an older runner,
+	// or a runner on another substrate) says nothing: the runner serves its one namespace as before.
+	RunsNamespaces []string `json:"runs_namespaces,omitempty"`
 }
 
 // The run proxy settings a runner names in Caps.ProxySettings, each its proxy.Config key.
@@ -214,6 +240,244 @@ type VMCaps struct {
 	// resume_agent) (#2972). A runner without it is never asked.
 	SignIns bool `json:"sign_ins,omitempty"`
 }
+
+// MacVMCaps is what a Mac runner's macOS VM sandboxes can be given right now. The org reads it through
+// one function (macOSVMOffer), so no surface keeps a readiness story of its own.
+type MacVMCaps struct {
+	// Max is this runner's allowance: its own live macOS VM runs plus the host's free headroom, the
+	// smallest of the licence cap (2) left, the VMs at the per-run limit that fit the memory budget and
+	// those that fit the disk reservation. Other logins' VMs, prepare and a leaked slot are already
+	// out of the headroom. The org compares it with the runner's own live count (placement refuses at
+	// live >= Max); the host ledger, not Max, is the authority at admission.
+	Max int `json:"max"`
+	// MinCPUs and MinMemoryMiB are the base image's minimum guest size; 0 when it has not said.
+	MinCPUs      int `json:"min_cpus,omitempty"`
+	MinMemoryMiB int `json:"min_memory_mib,omitempty"`
+	// Harnesses are the harness ids the base can serve now.
+	Harnesses []string `json:"harnesses,omitempty"`
+	// Desktop is MacVMDesktop*: whether the guest's screen can be controlled, only watched, or neither.
+	Desktop string `json:"desktop,omitempty"`
+	// SignIns says the runner keeps a macOS desktop's sign-ins and pauses its agent (pause_agent,
+	// resume_agent). A runner without it is never asked.
+	SignIns bool `json:"sign_ins,omitempty"`
+	// Folders says the runner shares a run's folders into its macOS VM. A runner without it is never
+	// sent a macOS VM run with a mount.
+	Folders bool `json:"folders,omitempty"`
+	// Drives says the runner carries a run's admin and team drives (a host folder as a second place)
+	// into its macOS VM as shared folders. A runner without it is never sent a macOS VM run with a drive.
+	Drives bool      `json:"drives,omitempty"`
+	Base   MacVMBase `json:"base"`
+	// DiskDrives says the runner keeps a person's disk drives and kept work folders as disk images on
+	// this Mac, attaches them to its macOS VM, and deletes them (reclaim_drive). A runner without it is
+	// never sent a macOS VM run with one.
+	DiskDrives bool `json:"disk_drives,omitempty"`
+	// Bases are the Mac's other bases, each derived from Base (Standard, MAC-B04) with its operator's own
+	// install list, in name order; absent when it has none. A run names one in its create's macos_base.
+	Bases []MacVMDerivedBase `json:"bases,omitempty"`
+	// Refusal is, in words, why the runner offers no macOS VM; empty when it offers them.
+	Refusal string `json:"refusal,omitempty"`
+	// Reason is why the runner offers no macOS VM, or can't start or prepare one now: MacVMReason*, the
+	// first that holds in the const order. Refusal keeps its words for placement.
+	Reason string `json:"reason,omitempty"`
+	// NoSession: the runner is not in a GUI login session, where Apple's framework runs. A boolean,
+	// nothing else.
+	NoSession bool `json:"no_session,omitempty"`
+	// HostOSVersion is this Mac's macOS, e.g. "26.4"; with Reason host_os_too_old only.
+	HostOSVersion string `json:"host_os_version,omitempty"`
+	// HostReason is MacVMHost*; with Reason host_unsupported only.
+	HostReason string `json:"host_reason,omitempty"`
+	// FreeGB and NeedGB are whole GiB: free disk (disk_short), or free and needed memory (low_memory).
+	// Absent is 0.
+	FreeGB int `json:"free_gb,omitempty"`
+	NeedGB int `json:"need_gb,omitempty"`
+}
+
+// MacVMCaps.Reason values, in priority order. An unknown value is a newer runner's, and decodes as itself.
+const (
+	MacVMReasonLedgerDamaged      = "ledger_damaged"
+	MacVMReasonNoHelper           = "no_helper"
+	MacVMReasonHostOSTooOld       = "host_os_too_old"
+	MacVMReasonHostUnsupported    = "host_unsupported"
+	MacVMReasonMemoryBelowMinimum = "memory_below_minimum"
+	MacVMReasonCPUBelowMinimum    = "cpu_below_minimum"
+	MacVMReasonDiskShort          = "disk_short"
+	MacVMReasonSlotLeaked         = "slot_leaked"
+	MacVMReasonLowMemory          = "low_memory"
+	MacVMReasonTooHot             = "too_hot"
+)
+
+// MacVMCaps.HostReason values.
+const (
+	MacVMHostNoVirtualization = "no_virtualization"
+	MacVMHostNoProvisioning   = "no_provisioning"
+	MacVMHostHelperBuild      = "helper_build"
+)
+
+// MacVMCaps.Desktop values.
+const (
+	MacVMDesktopControl = "control"
+	MacVMDesktopObserve = "observe"
+	MacVMDesktopNone    = "none"
+)
+
+// MacVMBase is the Mac's one base image: State is MacVMBase*, GuestOS the build it holds, Progress the
+// percent done while it prepares, Error the last failure. Error is the one free text: this login's home
+// is in it as "~", and with a Failure it holds the cause only.
+type MacVMBase struct {
+	State    string `json:"state"`
+	GuestOS  string `json:"guest_os,omitempty"`
+	Progress int    `json:"progress,omitempty"`
+	Error    string `json:"error,omitempty"`
+	// Step is MacVMStep*; state preparing or failed only.
+	Step string `json:"step,omitempty"`
+	// StepPercent is 0-100 within Step; download and install only. Absent is 0.
+	StepPercent int `json:"step_percent,omitempty"`
+	// Wait is MacVMWait*; state preparing only.
+	Wait string `json:"wait,omitempty"`
+	// Failure is MacVMFailure*: download, install or no_desktop with state failed, tools with state ready,
+	// format with state update_needed.
+	Failure string `json:"failure,omitempty"`
+	// DownloadBytes is the restore image's size, once this prepare knows it.
+	DownloadBytes int64 `json:"download_bytes,omitempty"`
+	// ImageVersion is its macOS, e.g. "27.0.1": digits and dots only (^\d+(\.\d+){0,2}$), or absent.
+	ImageVersion string `json:"image_version,omitempty"`
+	// BytesPerSec is the download rate; Step download with no Wait only.
+	BytesPerSec int64 `json:"bytes_per_sec,omitempty"`
+	// Customisation is the operator's install list as the base holds it (macos_vm_base_file), in list
+	// order; state ready only.
+	Customisation []MacVMItem `json:"customisation,omitempty"`
+	// Guest is the guest's posture as it was read from the base when it was last prepared, updated or
+	// edited: not live, and never the Mac's own (RunnerPosture). State ready only.
+	Guest *MacVMGuest `json:"guest,omitempty"`
+	// EditedAt is when `macos-vm edit-base` last swapped in an edited base, which passed its recheck; absent:
+	// never edited. EditRecheck is the last edit's recheck: MacVMEditRecheck*, absent before one.
+	EditedAt    *time.Time `json:"edited_at,omitempty"`
+	EditRecheck string     `json:"edit_recheck,omitempty"`
+	// CreatedAt is when the base was prepared, RFC 3339 in UTC; absent from a runner that predates it, or
+	// when there is no base.
+	CreatedAt string `json:"created_at,omitempty"`
+	// BuildVersion is the base's macOS build, e.g. "25G83", or absent.
+	BuildVersion string `json:"build_version,omitempty"`
+}
+
+// MacVMDerivedBase is one of a Mac's other bases: Name is the operator's, State MacVMDerived*, Items how
+// many items its own install list adds to Standard's, and Progress the percent done while it is rebuilt.
+// GuestOS, Harnesses, CreatedAt and BuildVersion are its own manifest's, read as Standard's are for the
+// caps; state ready only. CreatedAt is Standard's prepare, which a derived base's clone keeps.
+type MacVMDerivedBase struct {
+	Name         string   `json:"name"`
+	State        string   `json:"state"`
+	Items        int      `json:"items"`
+	Progress     int      `json:"progress,omitempty"`
+	GuestOS      string   `json:"guest_os,omitempty"`
+	Harnesses    []string `json:"harnesses,omitempty"`
+	CreatedAt    string   `json:"created_at,omitempty"`
+	BuildVersion string   `json:"build_version,omitempty"`
+}
+
+// MacVMDerivedBase.State values: ready to run on; rebuilding, from Standard, one at a time (stale since
+// Standard changed, or not built yet: queued or under way); failed, its last derivation from this
+// Standard. An unknown value is a newer runner's, and decodes as itself.
+const (
+	MacVMDerivedReady      = "ready"
+	MacVMDerivedRebuilding = "rebuilding"
+	MacVMDerivedFailed     = "failed"
+)
+
+// MacVMGuest is a macOS base's guest posture. Each field is absent when its read did not say; an unknown
+// value is a newer runner's, and decodes as itself.
+type MacVMGuest struct {
+	// OSVersion and OSBuild are the guest's macOS, e.g. "26.6.2" and "25G83".
+	OSVersion string `json:"os_version,omitempty"`
+	OSBuild   string `json:"os_build,omitempty"`
+	// SIP (System Integrity Protection) and Gatekeeper are MacVMGuestOn or MacVMGuestOff.
+	SIP        string `json:"sip,omitempty"`
+	Gatekeeper string `json:"gatekeeper,omitempty"`
+	// Profiles is how many configuration profiles are installed (0 is none); absent when unread.
+	Profiles *int `json:"profiles,omitempty"`
+	// MDM is MacVMGuestEnrolled or MacVMGuestNotEnrolled.
+	MDM string `json:"mdm,omitempty"`
+	// OrgCA is MacVMItemTrusted or MacVMItemNotTrusted for the install list's CA; absent without one.
+	OrgCA string `json:"org_ca,omitempty"`
+}
+
+// MacVMGuest values.
+const (
+	MacVMGuestOn          = "on"
+	MacVMGuestOff         = "off"
+	MacVMGuestEnrolled    = "enrolled"
+	MacVMGuestNotEnrolled = "not_enrolled"
+)
+
+// MacVMItem is one install list item: Kind is MacVMItemKind*, Name the operator's, State MacVMItem*. An
+// unknown kind or state is a newer runner's, and decodes as itself.
+type MacVMItem struct {
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+// MacVMItem kinds and states.
+const (
+	MacVMItemKindPkg     = "pkg"
+	MacVMItemKindApp     = "app"
+	MacVMItemKindFile    = "file"
+	MacVMItemKindProfile = "profile"
+	MacVMItemKindCA      = "ca"
+
+	MacVMItemInstalled = "installed"
+	// MacVMItemStaged is a profile waiting for the person's approval in macos-vm edit-base.
+	MacVMItemStaged = "staged"
+	// MacVMItemTrusted and MacVMItemNotTrusted are a CA's read-back trust; not_trusted is trusted by hand in
+	// macos-vm edit-base.
+	MacVMItemTrusted    = "trusted"
+	MacVMItemNotTrusted = "not_trusted"
+)
+
+// MacVMBase.Step, Wait and Failure values. An unknown value is a newer runner's, and decodes as itself.
+const (
+	MacVMStepCheck    = "check"
+	MacVMStepDownload = "download"
+	MacVMStepInstall  = "install"
+	MacVMStepSetup    = "setup"
+	MacVMStepTools    = "tools"
+
+	MacVMWaitACPower       = "ac_power"
+	MacVMWaitBattery       = "battery"
+	MacVMWaitDownloadRetry = "download_retry"
+	MacVMWaitSetupByHand   = "setup_by_hand"
+	MacVMWaitDocker        = "docker"
+
+	MacVMFailureDownload = "download"
+	MacVMFailureInstall  = "install"
+	MacVMFailureTools    = "tools"
+	// MacVMFailureNoDesktop is a setup by hand the helper refused because it cannot reach the Mac's desktop.
+	MacVMFailureNoDesktop = "no_desktop"
+	// MacVMFailureFormat is a base whose format differs from this runner's (state update_needed): only
+	// preparing it again makes it usable. update_needed with no failure is a tools update still to run.
+	MacVMFailureFormat = "format"
+)
+
+// MacVMBase.EditRecheck values: the last edit passed, or why its copy was discarded (the base stayed as it
+// was). They are the helper's (macvm.EditRecheck*). The recheck is a tripwire, not prevention: the Mac's
+// person is root on the host.
+const (
+	MacVMEditRecheckPassed       = "passed"
+	MacVMEditRecheckDesktopOff   = "desktop_control_off"
+	MacVMEditRecheckExtraAccount = "extra_account"
+	MacVMEditRecheckRemoteLogin  = "remote_login"
+	MacVMEditRecheckSelftest     = "selftest_failed"
+)
+
+// MacVMBase.State values. Only ready serves a run; update_needed is a base whose guest agent no longer
+// speaks the runner's session protocol.
+const (
+	MacVMBaseNone         = "none"
+	MacVMBasePreparing    = "preparing"
+	MacVMBaseReady        = "ready"
+	MacVMBaseUpdateNeeded = "update_needed"
+	MacVMBaseFailed       = "failed"
+)
 
 // Waiting is the `waiting` event's data.
 type Waiting struct {

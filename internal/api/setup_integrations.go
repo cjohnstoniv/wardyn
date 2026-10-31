@@ -498,6 +498,10 @@ type SetupHarnessTool struct {
 	// starts the harness on an autonomous run (an external tool-approval contract).
 	// False for codex-cli, "Your own tools" and custom agents.
 	ApprovalHold bool `json:"approval_hold"`
+	// DesktopSignInsOff is the roster row's "Sign-ins in a desktop: Not allowed" (#2972,
+	// types.AgentProvider.DesktopSignInsOff), so New Run can say before Launch that a macOS desktop,
+	// which cannot block them, is refused for this agent (macOSDesktopSignInsOff). False with no roster.
+	DesktopSignInsOff bool `json:"desktop_sign_ins_off,omitempty"`
 }
 
 // setupHarnessTools projects the static harness catalog for SetupStatus, folded
@@ -573,6 +577,7 @@ func setupHarnessTools(sc types.SiteConfig, agentImages map[string]string, grant
 		if configured {
 			row, ok := agentProviderFor(sc, d.ID)
 			tool.Enabled = ok && !row.Disabled
+			tool.DesktopSignInsOff = ok && row.DesktopSignInsOff
 		}
 		out[i] = tool
 	}
@@ -586,6 +591,7 @@ func setupHarnessTools(sc types.SiteConfig, agentImages map[string]string, grant
 				Enabled:            !row.Disabled,
 				ProvidersUngranted: serving[row.ID] && !grantedFor[row.ID],
 				Installed:          harnessInstalled(row.ID, agentImages),
+				DesktopSignInsOff:  row.DesktopSignInsOff,
 			})
 		}
 	}

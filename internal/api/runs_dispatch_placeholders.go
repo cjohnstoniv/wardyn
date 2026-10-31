@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net"
@@ -38,6 +39,15 @@ func (s *Server) placeholdersWanted(run types.AgentRun, policy types.RunPolicySp
 	})
 }
 
+// headerCredential is value without one trailing line break, "\n" or "\r\n": a value saved with echo
+// or an editor ends in one, and a request header cannot carry it. The api_key sink injects this form.
+func headerCredential(value []byte) []byte {
+	if v, ok := bytes.CutSuffix(value, []byte("\n")); ok {
+		return bytes.TrimSuffix(v, []byte("\r"))
+	}
+	return value
+}
+
 // authorSecretPlaceholder keeps a delivered env or file secret's value out of
 // the sandbox: it authors an injection grant for the scope's host whose rule
 // fills a placeholder with the value, and returns that placeholder, the grant
@@ -51,7 +61,7 @@ func (s *Server) placeholdersWanted(run types.AgentRun, policy types.RunPolicySp
 func (s *Server) authorSecretPlaceholder(ctx context.Context, run types.AgentRun, g types.GrantSpec, host, secretName, value string,
 	allowed func(string) bool, taken []runner.InjectionGrant, resident bool) (ph string, inj runner.InjectionGrant, mitm, why string) {
 	switch {
-	case strings.ContainsAny(value, "\r\n"):
+	case strings.ContainsAny(string(headerCredential([]byte(value))), "\r\n"):
 		return "", inj, "", "the value spans more than one line, so it cannot ride a request header"
 	case !allowed(host):
 		return "", inj, "", "the host is not an exact entry of the run's allowlist"
@@ -144,21 +154,15 @@ func (s *Server) placeEnvSecrets(ctx context.Context, run types.AgentRun, policy
 }
 
 // placeFileSecrets is WARDYN_FILE_SECRET_PLACEHOLDERS: placeEnvSecrets for
-// the file_secret grants whose file resolveFileSecretValues delivered.
-func (s *Server) placeFileSecrets(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec, rows []types.CredentialGrant,
+// the files resolveFileSecretValues delivered, each from by[i], the grant that
+// delivered files[i]: never another grant naming the same file.
+func (s *Server) placeFileSecrets(ctx context.Context, run types.AgentRun, by []types.GrantSpec, rows []types.CredentialGrant,
 	files []runner.ManagedFile, spec *runner.SandboxSpec) {
 	allowed := proxy.CompilePolicy(spec.ProxyConfig.Policy).AllowedExactHost
-	for _, g := range policy.EligibleGrants {
-		if g.Kind != types.GrantFileSecret {
-			continue
-		}
-		file, secretName, err := fileSecretScopeFields(g.Scope)
+	for i, g := range by {
+		_, secretName, err := fileSecretScopeFields(g.Scope)
 		host, herr := secretScopeHost(g.Scope)
 		if _, resident := residentGrantRow(rows, g); err != nil || herr != nil || host == "" || resident {
-			continue
-		}
-		i := slices.IndexFunc(files, func(f runner.ManagedFile) bool { return f.Path == runner.ComponentSecretDir+"/"+file })
-		if i < 0 {
 			continue
 		}
 		ph, inj, h, why := s.authorSecretPlaceholder(ctx, run, g, host, secretName, string(files[i].Content), allowed, spec.ProxyConfig.Injection, false)

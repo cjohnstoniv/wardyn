@@ -46,6 +46,9 @@ type preflightResponse struct {
 	// resolveRunPolicy's doc comment) so Review tells the member WHY their
 	// inline_policy differs from what they typed, before they launch.
 	Warnings []string `json:"warnings,omitempty"`
+	// WarningContext names, for each drop warning above, the policy the run is bound by and its contact
+	// (warningContexts); create's 201 carries the same.
+	WarningContext []warningContext `json:"warning_context,omitempty"`
 	// ModelCredential is WHERE this run's model credential will land and which
 	// provider serves it, graded from the model provider the run chose
 	// (runProviderChoice.modelCredential). The New Run rail states it verbatim,
@@ -399,6 +402,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &req, spec: spec, harnesses: f.harnesses, level: f.autonomy.Level,
 		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place}, bound)...)
 	warnings = append(warnings, f.fitWarnings...)
+	warnings = append(warnings, serviceWarnings(req.Service != nil, ceiling.Limits.PauseIdleAfterSec, f.end.capSec > 0)...)
 
 	// A zero residency means no provider was chosen (none serves the agent, or a
 	// non-model run) — omitted rather than published as a guess.
@@ -408,6 +412,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		RiskAssessment:           riskItems,
 		OverallRisk:              overallRisk,
 		Warnings:                 warnings,
+		WarningContext:           s.warningContexts(r.Context(), ceiling, warnings),
 		Provenance:               f.prov,
 		LocalPlacement:           []client.LocalPlacementFact{},
 		AllowedImages:            []client.AllowedImage{},

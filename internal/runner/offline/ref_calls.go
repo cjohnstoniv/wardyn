@@ -31,6 +31,16 @@ func (m *Manager) HoldsSandbox(localRef string) bool {
 	return ok && !r.Retired
 }
 
+// CoversRef is runneragent.Config.Covered: whether Status can observe localRef's sandbox now. A run this
+// runner holds is covered when the substrate covers its machine kind (coversKind); any other ref is, and
+// goes on to the dispatcher's ownership proof.
+func (m *Manager) CoversRef(localRef string) bool {
+	m.mu.Lock()
+	_, r, ok := m.findRef(localRef)
+	m.mu.Unlock()
+	return !ok || m.coversKind(r.MachineKind)
+}
+
 // refusesExecution is the one refusal an agent execution, start, proxy replacement, selftest and
 // local attach share: the runner offline or revoked, or the run failed, contained, quarantined,
 // mid-failure or past its lease. Callers hold m.mu.

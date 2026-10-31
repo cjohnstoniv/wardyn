@@ -116,6 +116,17 @@ export const RUN_STARTUP = {
     "This is taking longer than a start usually does. If nothing changes, kill the run and launch it again.",
 } as const;
 
+// A macOS VM's start (MV-D02 to MV-D07, MV-D16), beside RUN_STARTUP so its pin stays whole. Ids in the comments.
+export const RUN_STARTUP_MACOS = {
+  STEP_CLONE: "Cloning the macOS base", // MV-D02
+  STEP_START: "Starting macOS", // MV-D03
+  STEP_CONNECT: "Connecting to the VM", // MV-D04
+  STEP_CONNECT_FAILED: "Connecting to the VM — failed", // MV-D05
+  NO_AGENT: "The macOS VM started but its Wardyn agent did not connect within 3 minutes.", // MV-D06
+  DISK_SHORT: (reserved: string, free: string) => `Not enough free disk to start a macOS VM safely: it reserves ${reserved} GB and this Mac has ${free} GB free.`, // MV-D07
+  STEP_START_FAILED: "Starting macOS — failed", // MV-D16
+} as const;
+
 // The image-build stage line's reason token (`image: Building`), written by the
 // server while a run is PENDING. run-status-detail.test.ts reads the Go constant
 // and fails if the two drift.
@@ -137,6 +148,13 @@ export const RUN_POLL_SLOW_START_MS = 60_000;
 export const RUN_START_OVERDUE_MS = 270_000;
 export const RUN_START_OVERDUE_SLACK_MS = 90_000;
 export const RUN_PENDING_OVERDUE_MS = 1_800_000;
+
+// A macOS VM boots on a longer bound than a Linux one, so its overdue bound keeps the Linux ratio: 270 s over the
+// Linux VM's 3 minute BootTimeout (internal/runner/docker/vm.go:118-119) is 1.5, applied to the macOS VM's
+// 10 minute BootTimeout (internal/runner/docker/macvm.go:104-105), 15 minutes. Pinned by a parity test.
+export const LINUX_VM_BOOT_MS = 180_000;
+export const MACOS_VM_BOOT_MS = 600_000;
+export const RUN_START_OVERDUE_MACOS_MS = (RUN_START_OVERDUE_MS * MACOS_VM_BOOT_MS) / LINUX_VM_BOOT_MS;
 
 // How long a STARTING run may take before the startup view calls it overdue, from the
 // deadlines /setup/status reports (runner.sandbox_start): the start budget plus the
@@ -209,6 +227,9 @@ export function statusDetailSentence(raw: string | null | undefined, reason?: st
     return isTerminalStatusReason(d.reason) ? STARTING_RAW_PREFIX + d.reason : "";
   }
   const withMessage = (lead: string) => (d.message ? `${lead} ${stripCriWrapper(d.message)}` : lead);
+  const macOS = macOSStartOf(text, reason);
+  const macOSLine = macOS && macOSStartLine(macOS);
+  if (macOSLine) return macOSLine;
   switch (d.reason) {
     case "ContainerCreating":
     case "PodInitializing":
@@ -254,6 +275,9 @@ export function statusDetailChip(raw: string | null | undefined, reason?: string
   // Same defence as the sentence's: a terminal reason always gets a
   // chip, detail or no detail.
   if (!text && !isTerminalStatusReason(d.reason)) return "";
+  const macOS = macOSStartOf(text, reason);
+  const macOSLine = macOS && macOSStartLine(macOS, true);
+  if (macOSLine) return macOSLine;
   switch (d.reason) {
     case "Pulling":
       return CHIP_DOWNLOADING;
@@ -296,7 +320,7 @@ export type StartupMark = "done" | "active" | "pending" | "failed";
 // `stale`: the row that was active before the run went overdue (drawn without
 // its spinner but in the normal text colour, as the mock's stale row).
 export type StartupRow = {
-  key: "build" | "start" | "download" | "last";
+  key: "build" | "start" | "download" | "last" | "clone" | "connect";
   label: string;
   mark: StartupMark;
   stale?: boolean;
@@ -309,6 +333,79 @@ export type StartupView = {
   alert: string;
 };
 export type StartupLastStep = "terminal" | "task" | "command" | null;
+
+/** A macOS VM's start: the phase it is in, and the sentence that stopped it there (start or connect only). */
+export type MacOSStart = { phase: "clone" | "start" | "connect"; failure?: string };
+
+// Go's runner.MacOS* reason tokens (internal/runner/macos_start.go), by name and value: a macOS VM's start
+// phases, and the failures that stop one. Pinned by a parity test.
+export const MACOS_START = {
+  CLONING: "MacOSCloning",
+  STARTING: "MacOSStarting",
+  CONNECTING: "MacOSConnecting",
+  CLONE_FAILED: "MacOSCloneFailed",
+  START_FAILED: "MacOSStartFailed",
+  CONNECT_FAILED: "MacOSConnectFailed",
+  DISK_SHORT: "MacOSDiskShort",
+} as const;
+
+// MacOSDiskShort's message (Go: runner.MacOSDiskShortMessage).
+const MACOS_DISK_SHORT = /^(\d+) GB reserved, (\d+) GB free$/;
+
+/** The macOS VM start a run's status line names, or undefined for any other line. The disk refusal stops the
+ *  start at Starting macOS, as mock M-D1 frame 4 draws it. */
+export function macOSStartOf(raw: string | null | undefined, reason?: string | null): MacOSStart | undefined {
+  const d = parseStatusDetail(raw, reason);
+  switch (d.reason) {
+    case MACOS_START.CLONING: return { phase: "clone" };
+    case MACOS_START.STARTING: return { phase: "start" };
+    case MACOS_START.CONNECTING: return { phase: "connect" };
+    case MACOS_START.CLONE_FAILED: return { phase: "clone", failure: "" };
+    case MACOS_START.START_FAILED: return { phase: "start", failure: "" };
+    case MACOS_START.CONNECT_FAILED: return { phase: "connect", failure: "" };
+    case MACOS_START.DISK_SHORT: {
+      const m = MACOS_DISK_SHORT.exec(d.message);
+      return { phase: "start", failure: m ? RUN_STARTUP_MACOS.DISK_SHORT(m[1], m[2]) : "" };
+    }
+  }
+  return undefined;
+}
+
+/** A macOS VM start's line for the board (or, `chip`, the header's short register): its phase's row label, or the
+ *  sentence that stopped it. Undefined for a clone that failed with no sentence, whose row label would read as
+ *  still cloning. */
+function macOSStartLine(start: MacOSStart, chip = false): string | undefined {
+  if (start.failure && !chip) return start.failure;
+  const failed = start.failure !== undefined;
+  switch (start.phase) {
+    case "clone": return failed ? undefined : RUN_STARTUP_MACOS.STEP_CLONE;
+    case "start": return failed ? RUN_STARTUP_MACOS.STEP_START_FAILED : RUN_STARTUP_MACOS.STEP_START;
+    case "connect": return failed ? RUN_STARTUP_MACOS.STEP_CONNECT_FAILED : RUN_STARTUP_MACOS.STEP_CONNECT;
+  }
+}
+
+// A macOS VM's rows replace Starting the sandbox and Downloading the image (mock M-D1): the phases before the
+// current one are done, the current one runs or, with a failure, fails and says why, and the list stops there.
+// Past the overdue bound the running row loses its spinner and the overdue advice shows, as for any other start;
+// a failure is not stalled, so it keeps its own alert and no advice.
+function macOSStartup(start: MacOSStart, overdue: boolean, last: (mark: StartupMark) => StartupRow[]): StartupView {
+  const order = ["clone", "start", "connect"] as const;
+  const labels = { clone: RUN_STARTUP_MACOS.STEP_CLONE, start: RUN_STARTUP_MACOS.STEP_START, connect: RUN_STARTUP_MACOS.STEP_CONNECT };
+  const failedLabels = { clone: labels.clone, start: RUN_STARTUP_MACOS.STEP_START_FAILED, connect: RUN_STARTUP_MACOS.STEP_CONNECT_FAILED };
+  const at = order.indexOf(start.phase);
+  const failed = start.failure !== undefined;
+  const rows: StartupRow[] = order.map((key, i) => ({
+    key,
+    label: i === at && failed ? failedLabels[key] : labels[key],
+    mark: i < at ? "done" : i > at ? "pending" : failed ? "failed" : overdue ? "pending" : "active",
+    ...(i === at && !failed && overdue && { stale: true }),
+  }));
+  return {
+    rows: failed ? rows.slice(0, at + 1) : [...rows, ...last("pending")],
+    hint: overdue && !failed ? RUN_STARTUP.OVERDUE : "",
+    alert: start.failure ?? "",
+  };
+}
 
 // runStartupView derives the run page's startup steps from the run fields the
 // page already polls. null unless the run is PENDING or STARTING, so a caller
@@ -328,9 +425,10 @@ export function runStartupView(
     admitted_at?: string | null;
     status_detail?: string | null;
     status_reason?: string | null;
+    machine_kind?: string;
   },
   now: number,
-  opts: { lastStep: StartupLastStep; sawBuilding: boolean; startOverdueMs?: number },
+  opts: { lastStep: StartupLastStep; sawBuilding: boolean; startOverdueMs?: number; macOS?: MacOSStart },
 ): StartupView | null {
   const starting = run.state === "STARTING";
   if (!starting && run.state !== "PENDING") return null;
@@ -363,6 +461,8 @@ export function runStartupView(
         ]
       : [];
 
+  if (opts.macOS && starting) return macOSStartup(opts.macOS, elapsed >= RUN_START_OVERDUE_MACOS_MS, last);
+
   // A reason waiting cannot fix: the list stops at the step that failed.
   if (isTerminalStatusReason(stepReason)) {
     const sentence = statusDetailSentence(detail, stepReason);
@@ -384,7 +484,8 @@ export function runStartupView(
   }
 
   const pulling = stepReason === "Pulling";
-  const overdue = elapsed >= (starting ? (opts.startOverdueMs ?? RUN_START_OVERDUE_MS) : RUN_PENDING_OVERDUE_MS);
+  const startBound = run.machine_kind === "macos_vm" ? RUN_START_OVERDUE_MACOS_MS : (opts.startOverdueMs ?? RUN_START_OVERDUE_MS);
+  const overdue = elapsed >= (starting ? startBound : RUN_PENDING_OVERDUE_MS);
   // Past the overdue bound the active row loses its spinner: the substrate's
   // last word is no longer evidence that anything is happening.
   const active: StartupMark = overdue ? "pending" : "active";

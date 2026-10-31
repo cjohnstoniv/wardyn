@@ -82,6 +82,8 @@ export interface ApiToken {
   disposition?: TokenDisposition;
   /** The service identity an admin linked this token to; set with `disposition` on a token that was moved. */
   service_identity?: string;
+  /** An inbound token: it calls the inbound ports that name its owner, never the Wardyn API. */
+  inbound?: boolean;
   token?: string;
 }
 
@@ -95,4 +97,6 @@ export interface ClaimInvitationRequest {
 export interface MintServiceTokenRequest {
   name: string;
   ttl_seconds?: number;
+  /** Omitted means "api". */
+  kind?: "api" | "inbound";
 }

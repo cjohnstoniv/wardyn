@@ -28,7 +28,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Unset or empty (`docker run -e VAR` / compose `VAR=`) keeps the default quietly.
 - Every boolean `wardynd` and the runner substrates read goes through that one parser (`1`/`true`/`yes`/`on`, `0`/`false`/`no`/`off`, anything else exits 2 at boot).
 - The exception is `WARDYN_ENVBUILD_REGISTRY_INSECURE`: it takes Go's `strconv.ParseBool` forms (`1`/`t`/`true`, `0`/`f`/`false`, no `yes` or `on`) and fails the build on anything else.
-- The eight `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, `WARDYN_SCHEDULED_RUNS`, `WARDYN_MCP_LOCAL_SERVERS`) are also read once at boot so a bad value is refused there.
+- The nine `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, `WARDYN_SCHEDULED_RUNS`, `WARDYN_MCP_LOCAL_SERVERS`, `WARDYN_MACOS_VMS`) are also read once at boot so a bad value is refused there.
 - So are `WARDYN_COMPONENT_ENV_RESERVE_EDITORS` and `WARDYN_KUBECTL_CLI`, read on every component check.
 - Two `wardyn-proxy` parsers are kept on purpose.
 - `WARDYN_LLM_SCAN` is a kill switch that can only disable.
@@ -150,6 +150,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_INTERNAL_NETWORK` | string | `wardyn-internal` | the docker network the runner attaches each run's proxy sidecar to; must match the compose control-plane network name (both derive from the compose namespace) or the sidecar lands on the wrong bridge (or `runnerd.json` field `internal_network`) |
 | `WARDYN_RELAY_LISTEN` | string | (unset: probed) | **`wardyn-runnerd serve` and `setup`** (flag `--relay-listen`): the run relay's address. Only loopback, the native Docker bridge's gateway or Rancher Desktop's `veth-rd-wsl` address (`admitRelayBind`); setup writes it on a VM-backed engine (or `runnerd.json` field `relay_listen`) |
 | `WARDYN_LOCAL_MODEL_PORT` | string | (unset: none) | **`wardyn-runnerd serve`** (flag `--local-model-port`): the port, or comma-separated ports, of a model server on this computer that runs here may use when the organisation allows it (`local.allow_on_laptop_runners`); unset, none may (or `runnerd.json` field `local_model_port`) |
+| `WARDYN_DRIVE_ROOT` | path list | (unset: none) | **`wardyn-runnerd serve`** (flag `--drive-root`, profile key `DriveRoot`): the absolute, cleaned folders a drive bound to this runner may mount from, separated by the path-list separator; docker only (or `runnerd.json` field `drive_root`, a JSON array) |
 | `WARDYN_RELAY_HOST_TARGET` | string | (unset: probed) | **`wardyn-runnerd serve` and `setup`** (flag `--relay-host-target`): what a run's proxy reaches the relay at, `host-gateway` or an IP (`parseRelayTarget`); setup writes it on a VM-backed engine (or `runnerd.json` field `relay_host_target`) |
 | `WARDYN_RELAY_ALLOWED_SOURCES` | string (CIDR list) | (unset: every source) | **`wardyn-runnerd serve`, Docker substrate**: comma-separated prefixes or addresses; a local relay connection from outside them is closed unread. Narrows only. A list that refuses a run's proxy cuts that run off from decisions, approvals and token renewal; see [Requirements](runner-registration.md#requirements) |
 | `WARDYN_ORG_CA_FILE` | string (path) | (unset) | **`wardyn-runnerd serve`, `setup` and `register`** (flag `--org-ca-file`, profile key `OrgCAFile`): roots for the runner's own organisation connection only, never a sandbox or run proxy; refused when writable by others, expired or not a CA (or `runnerd.json` field `org_ca_file`). (lock: `lock_security_settings`) |
@@ -161,6 +162,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_RUNNERD_HARD_DENY_CIDRS` | CIDR list | (unset) | **`serve --substrate k8s`**, chart-set: further in-cluster CIDRs (pod and Service ranges) every proxy hard-denies |
 | `WARDYN_RUNNERD_POD_SELECTOR` | JSON object | (required) | **`serve --substrate k8s`**, chart-set: runnerd's own pod labels, which each run's proxy NetworkPolicy admits for the relay and sink ports |
 | `WARDYN_RUNNERD_ARCH` | `amd64` or `arm64` | (required for k8s) | **`register`, `serve --substrate k8s`**, `--arch`'s twin, chart `sandbox.arch`: run pods get this `kubernetes.io/arch` node selector and the runner reports it. Another selector arch refuses boot; Docker refuses it. Mixed clusters install one release per arch |
+| `WARDYN_RUNNERD_WORKLOAD_NAMESPACES` | namespace list | (unset) | **`serve --substrate k8s`**, chart-set from `workloads.namespaces`: comma-separated namespaces whose `WardynWorkload` resources runnerd watches and reports. Unset, it watches none. See [Workloads](operations/workloads.md) |
 | `WARDYN_DOCKER_PROXY_SANDBOX_PEERS_ONLY` | bool | on | **`wardynd` and `wardyn-runnerd`, Docker substrate**: each run's proxy serves only callers on the run's own network; others are closed before a byte is read. Proven on Docker; not tested on Podman. [Details](#wardyn_docker_proxy_sandbox_peers_only) |
 | `WARDYN_DOCKER_RUN_SUBNET_POOL` | IPv4 CIDR | (unset) | **`wardynd` and `wardyn-runnerd`, Docker substrate**: the range each run's network takes its own small subnet from, so runs stop using up the daemon's `default-address-pools`. Unset, the daemon picks each subnet. A full range refuses the run, naming this setting. [Details](OPERATIONS.md#docker-host-one-subnet-per-run) |
 | `WARDYN_DOCKER_RUN_SUBNET_SIZE` | int | `28` | **same**: the prefix length of each run's subnet in `WARDYN_DOCKER_RUN_SUBNET_POOL`, from the range's own length to `29`. Set without the pool, it refuses boot |
@@ -269,6 +271,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` | bool | `false` (**off**) | Opt in to the Bitbucket Server forge API door; with it off, a policy or governance write that sets it answers `400`. A garbage value exits 2 at boot. [Details](#wardyn_git_pat_api_bitbucket_server) |
 | `WARDYN_GIT_PAT_BROKER_HOSTS` | string (space-separated) | (set by dispatch) | **Sandbox-side, set by wardynd, never by an operator.** The hosts `agent-run` must route through the git_pat broker. Host names only — it carries no grant id, so it cannot be used to mint anything |
 | `WARDYN_ADO_LANE_DECLINED` | string | (set by dispatch) | **Sandbox-side, set by wardynd, never by an operator.** The reason code, set only when the run names an Azure DevOps repository but was not given the per-person credential. `agent-run` names it on a clone failure |
+| `WARDYN_MANAGED_FILES` | string (JSON) | (set by the runner) | **Guest-side, macOS VM runs only; set by `wardyn-runnerd`, never by an operator.** A JSON list of the managed files the run's start wrote into the guest. The launcher checks each before the run starts |
 | `WARDYN_ADO_LANE_DECLINED_HOSTS` | string | (set by dispatch) | **Sandbox-side, set by wardynd, never by an operator.** The lower-cased, space-separated hosts (never addresses) of the Azure DevOps repositories that went without the credential, set beside `WARDYN_ADO_LANE_DECLINED`. |
 | `WARDYN_GITHUB_REQUIRE_REF_RULESET` | bool | `false` (**off**) | Opt in to refusing a `github_token` mint whose repo is not confined by a GitHub repository ruleset; default off. No flag. [Details](#wardyn_github_require_ref_ruleset) |
 | `WARDYN_ENVBUILD` | bool | **binary: `false`**; compose: `true` | enable devcontainer image builds for create-run (`-tags docker`) (flag `-envbuild`). Gates BOTH the BYOI wrap and the devcontainer-build lane — see [OPERATIONS.md](operations/build-images.md) and [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) residual #13 |
@@ -291,6 +294,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_COMPONENT_ENV_RESERVE_EDITORS` | bool | off | reserves `EDITOR`, `VISUAL`, `PAGER`, `GIT_EDITOR`, `GIT_PAGER` and `GIT_SEQUENCE_EDITOR`: no component may set them. A stored component that does is refused at its next save or attach |
 | `WARDYN_ALLOW_USER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` and `file_secret` grants. Default-unset DROPS a member's `env_secret` or `file_secret` grant even when the operator's ceiling lists the exact pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`). [Details](#wardyn_allow_user_env_secret) |
 | `WARDYN_MCP_LOCAL_SERVERS` | bool | off | Sandboxed MCP servers (`transport: stdio`). **Each has the agent's access; the harness applies tool rules.** Off: saving one, a new run, a queued run's admission and a revive refuse it; a run already running keeps it until it ends. [Details](#wardyn_mcp_local_servers) |
+| `WARDYN_MACOS_VMS` | bool | off | Lets a run ask for a macOS virtual machine (`machine_kind: macos_vm`) on a registered, company-managed Mac. Off: create refuses the kind with `400` `machine_kind_unknown`. A Mac also needs its own opt-in. [Details](#wardyn_macos_vms) |
 | `WARDYN_EGRESS_SECOND_HUMAN` | bool | (unset) | four-eyes on egress approvals: the human who DECIDES an `egress_domain` approval must not be the human who created the run (`requireSecondHuman`, `approvals_second_human.go`). **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_egress_second_human) |
 | `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on Azure DevOps capability escalations: the human who DECIDES one must not be the human who created the run. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
 | `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a human's write to a governance profile, a capability grant, a key-domain assignment or `local_credential_delivery` is stored as a pending change. A second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
@@ -353,6 +357,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_RUNNER_LINUX_VM` | `1` | (unset, **off**) | **`wardyn-runnerd serve`**: `1` offers Linux VM sandboxes (`machine_kind: linux_vm`) once the start-up probe passes, else logs its fix. On Kubernetes the chart's `k8s.linuxVM` sets it and a `CC3` RuntimeClass pin must resolve. [Linux VM sandboxes](operations/linux-vm-sandboxes.md) |
 | `WARDYN_RUNNER_VM_QEMU_IMAGE` | string (image) | (unset) | **`wardyn-runnerd serve`**: the QEMU image (built from `deploy/runner/vm-qemu`) every VM container starts from; required with `WARDYN_RUNNER_LINUX_VM=1` |
 | `WARDYN_RUNNER_VM_CPU_MODEL` | string | `Haswell-v4` | **`wardyn-runnerd serve`**: the named QEMU CPU model every VM gets, started with `enforce`; recorded on each run |
+| `WARDYN_RUNNER_MACOS_VM` | `1` | (unset, **off**) | **`wardyn-runnerd serve`**, on a Mac (macOS 26 or later): `1` offers macOS VM sandboxes (`machine_kind: macos_vm`) once its checks pass, else logs the fix. The `MacOSVM` managed preference sets it too, and the organisation's [`WARDYN_MACOS_VMS`](#wardyn_macos_vms) must be on. [Details](operations/macos-vms.md) |
 | `WARDYN_DAEMON_PROXY_URL` | string (URL) | (unset = direct) | the forward proxy wardynd's own outbound HTTP calls traverse (flag `-daemon-proxy-url`; `installDaemonProxy`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a malformed value refuses boot. [Details](#wardyn_daemon_proxy_url) |
 | `WARDYN_DAEMON_NO_PROXY` | string (CSV) | (unset) | destinations `WARDYN_DAEMON_PROXY_URL` must not be used for, in `NO_PROXY` spelling (flag `-daemon-no-proxy`; `x/net/http/httpproxy` semantics). Wardynd appends `KUBERNETES_SERVICE_HOST`, any `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` or `WARDYN_OIDC_INTERNAL_ISSUER` host, and the AWS link-local credential endpoints. Ignored when the proxy URL is unset |
 | `WARDYN_DAEMON_PROXY_SECRET` | string (path) | (unset) | path to a file holding one forward-proxy URL that MAY embed `user:pass@` (flag `-daemon-proxy-secret-file`; `installDaemonProxySecret`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a group- or world-writable file refuses boot. [Details](#wardyn_daemon_proxy_secret) |
@@ -635,6 +640,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - On Kubernetes with recordings on there is no direct stdout to keep: once such a run ends, with `WARDYN_RUN_OUTPUT_PERSIST` on, the available recording is recovered into a masked tail marked `source` `recording` and always `incomplete`.
 - Or a `capture_gap` when the recording is missing, invalid or cannot be proven masked, and only the run's owner or an operator is served it.
 - A read while the run is live, with persistence off, or by a caller who may see the run but is neither, answers `409` (`run_output_not_captured`)).
+- With persistence off, the owner or an operator reading an ended run whose recording never arrived gets `409` (`run_output_not_kept`).
 - Readable through `GET /api/v1/runs/{id}/output` by the run's owner or an admin (flag `-exec-output-tail`).
 - Independent of `WARDYN_RECORDING_STORE`: it works with recordings `off`.
 - `off` (or any false value) keeps none and refuses rows stored earlier, and the route then answers `409` (`run_output_off`).
@@ -1035,6 +1041,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - And never if it is or traverses a credential dotfile path (`.ssh`, `.aws`, `.azure`, `.claude`, `.wardyn`, `.gnupg`, `.docker`, `.kube`, `.config/gh`, `.config/gcloud`, `.netrc`, `.git-credentials`, `.git/config`, `Library/Keychains`), even when a root is too wide.
 - The same list covers `.codex`, `.gemini`, `.npmrc` and `.pypirc`.
 - Checked at onboarding, again at run-create on the resolved spec, and a **third** time in the docker driver immediately before the bind.
+- A source bound to the member's runner (`runner_id`) is checked here by its text alone, and by [its runner](operations/hybrid-laptops.md#a-workspace-folder-on-your-runner) before the bind.
 - Unset (the default) fails closed: a member can still onboard repos and use operator-owned workspaces.
 - Use a dedicated projects directory — **never `$HOME` or `/`**; boot WARNs about `/` and the daemon's `$HOME`, not a person's, but permits
 - And never a tree `WARDYN_USER_DRIVE_HOST_ROOTS` names (see that row: the overlap lets a member bind a whole share one person's home at a time was the point of, and boot WARNs about the pair).
@@ -1442,6 +1449,23 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Default-unset SUPPRESSES it (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_TELEMETRY=1` in the sandbox env, `runs_dispatch_mounts.go`): the CLI's first-run phone-home is otherwise the FIRST pending egress approval a Confined pilot sees, before the host their task actually needs.
 - A value that is not a bool exits 2 at boot (`#202`; before that it was silently read as unset).
 
+### `WARDYN_MACOS_VMS`
+
+- Turns on macOS virtual machine sandboxes: a run with `machine_kind: macos_vm`, started by a registered runner on a Mac.
+- Off (the default): create refuses `macos_vm` with `400` `machine_kind_unknown`. Every other request and response reads as it did before the kind existed.
+- On, a run still lands only on a Mac runner that offers macOS VMs, has its own opt-in, and passes the managed-Mac gate:
+  - its trust class is `managed_device`, which only a security operator sets;
+  - its posture says `mdm_managed` from the MDM's posture file.
+- A Mac whose posture fails is refused with `runner_posture_unmet`; every other refusal here is `placement_capability`.
+- Placement refuses a Mac whose base image is not ready or that is at its limit of macOS VMs (at most 2).
+- macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.
+- It also refuses a harness the base cannot serve, and a CPU or memory below the base's minimum.
+- Older runners refuse a macOS VM's folders; a Kubernetes runner refuses the kind.
+- `GET /setup/status` publishes it as `features.macos_vms`, present only when on.
+- Needs migration `0234_macos_vm_kind`, which widens two CHECK constraints and changes no row.
+- [macOS VM sandboxes](operations/macos-vms.md) covers the Mac side: its switch, base image, limits and cleanup.
+- A value that is not a bool exits 2 at boot.
+
 ### `WARDYN_MCP_LOCAL_SERVERS`
 
 - Turns on MCP servers that run inside the run's sandbox: a component's `mcp` block with `transport: stdio` and a `launch` command (`command` and `args`, no shell) instead of a `url`.
@@ -1658,7 +1682,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The proxy terminates the lane's AWS hosts on port 443, checks each request and signs it again with role credentials it gets from the portal's `GetRoleCredentials` with the run's captured session. The session and the role's credentials never enter the sandbox of a lane the proxy re-signs.
 - It builds on the proxy-side session (`WARDYN_AWS_SSO_PROXY_INJECT`) and does nothing while `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` is set.
 - A lane is re-signed only when every one of its hosts is an exact AWS service host the proxy can sign for: `<service>.<region>.amazonaws.com`, a global `<service>.amazonaws.com`, or an S3 bucket host. Bedrock's runtime and control hosts qualify.
-- Not re-signed, so the whole lane keeps its old path and the role credentials stay in the sandbox. That is a wildcard host, a port other than 443, a dual-stack or PrivateLink host, S3 Control, GovCloud IAM, and hosts outside `amazonaws.com`.
+- So does a Bedrock PrivateLink endpoint by the name AWS generates for it, `vpce-<id>[-<suffix>].<service>.<region>.vpce.amazonaws.com`, for `bedrock`, `bedrock-runtime`, `bedrock-agent` and `bedrock-agent-runtime` in a commercial Region (not GovCloud). It is signed for its own host and that Region.
+- Not re-signed, so the whole lane keeps its old path and the role credentials stay in the sandbox. That is a wildcard host, a port other than 443, a dual-stack host, another service's PrivateLink host or your own endpoint service's (`vpce-svc-…`), S3 Control, GovCloud IAM, and hosts outside `amazonaws.com`.
+- While it is on, operator setup (`/setup/status`, `aws_sigv4_fallback:<provider>`) warns when new runs using an AWS sign-in model provider's current settings would keep role credentials in the sandbox, and names the host or setting responsible.
+- Each run records what dispatch chose: `aws_signing` on `run.bedrock.configure` and `run.aws_cli.configure`, with the reason and host when it is `sandbox` ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
 - On a re-signed host, the proxy refuses (`403`, reason in `X-Wardyn-Reason`, decision row `brokered:aws-sigv4:refused`) and never forwards:
   - a request not signed with the placeholder key, or not signed at all (`aws_sigv4_not_placeholder`), and a presigned URL (`aws_sigv4_presigned`);
   - SigV4a (`aws_sigv4_algorithm`), and a signature for another service or Region than the host's (`aws_sigv4_scope`);
@@ -1672,7 +1699,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Unsigned payloads (`UNSIGNED-PAYLOAD`, `STREAMING-UNSIGNED-PAYLOAD-TRAILER`) and streamed responses, such as `InvokeModelWithResponseStream`, are re-signed and relayed.
 - A session that lapses mid-run is not held while its owner signs in again, as `WARDYN_AWS_SSO_PROXY_INJECT` holds a sandbox's `GetRoleCredentials`. The request is refused with `aws_sigv4_credentials`; retry once the owner has signed in.
 - The role credentials live as long as the permission set's session duration, and the proxy renews them five minutes before they expire.
-- A run that re-signs cannot be placed on a person's own runner (`placement_credential`).
+- On a runner registered to the organisation, a person's own included, that runner's proxy re-signs the lane with the run owner's own AWS sign-in (`credential_source: per_user`, the only kind a model provider has).
+- A shared AWS session is refused there (`placement_credential`).
+- A runner whose `wardyn-runnerd` is older than 0.10 cannot re-sign, so its runs are refused, and operator setup names it (`aws_sigv4_refused:<runner>`).
+- Role credentials the proxy has already redeemed keep signing until whichever comes first:
+  - 5 minutes before they expire, at most the permission set's session duration (set it to `PT1H`);
+  - about 1h5m after the runner loses its link.
+- Ending or killing the run, or revoking the runner, stops the proxy at once while the runner is connected.
 - New dispatches only: a running sandbox keeps the lane it was authored with.
 - What the role may create or read, the sandbox can obtain through the proxy; the role's own policy bounds that, not this switch.
   - A token API the role may call (for example ECR or CodeArtifact GetAuthorizationToken) returns a usable credential into the sandbox.
@@ -1682,11 +1715,11 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_AWS_SSO_REFRESH_SKEW`
 
 - How long before a captured AWS SSO session's access token expires Wardyn renews it, with the stored refresh token (flag `-aws-sso-refresh-skew`, default `10m`).
-- It applies at dispatch and at create, to the proxy's resolve for a live run, and to the AWS SSO renewer.
-- A session AWS refused to renew reads `expiring` on the model-access grade inside the same window.
+- It applies at dispatch, at create and at Review's preflight, to the proxy's resolve for a live run, and to the AWS SSO renewer.
+- A session AWS refused to renew reads `expiring` on the model-access grade until its access token expires, then `expired_signin`.
 - The renewer runs on the sweeper leader every minute. It renews a live run's session inside this window while the token still works, so a quiet run never reaches the sign-in hold for a session a renewal could keep.
 - A live run is pending, starting, running or waiting, and not paused, lost or revoked. The broker would still mint its grant, and its provider or AWS CLI row is unchanged since dispatch.
-- Each renewal takes the person's cross-replica lock and writes one `harness.credential.refresh` row, with `trigger: renewer` when the renewer made it.
+- Each renewal takes the person's cross-replica lock and writes one `harness.credential.refresh` row, with `trigger: renewer` when the renewer made it and `trigger: preflight` when Review's preflight did.
 - A renewal that fails is retried on the next pass while the token is valid. A refresh token AWS refused or retired is not retried; the run's next request holds for a sign-in as before.
 - `5m` to `30m`; a value outside refuses boot. A skew near the token's own lifetime would renew on every pass.
 
@@ -2290,7 +2323,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Read-only checks of how the CLI reaches the organisation, one line per stage. They cover the URL (`--url`, `WARDYN_URL`, the profile) and its source, DNS and the proxy route (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`). They also cover the TLS issuer and trust store, `/healthz` and `/api/v1/me`.
 - It never prints a token or a proxy credential, writes nothing and exits 1 when a stage fails; `--json` gives the stages as data.
 - It reads `WARDYN_TRUSTED_CA_FILE` only to say whether that bundle would verify the server: the CLI trusts the system roots alone, and a runner trusts the bundle.
-- With a runner installed it appends that runner's stages ([details](runner-registration.md#check-a-runners-connection)).
+- With a runner installed it appends that runner's stages ([details](runner-registration.md#check-a-runners-connection)). Its `runner-exits` stage fails when the organisation parked one of that runner's exit receipts ([runner-offline.md](runner-offline.md)).
 
 ### `WARDYN_URL`
 
@@ -2345,6 +2378,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_INTERACTIVE_START` | string | (unset) | `agent` makes an INTERACTIVE run's attach shell open in the image's agent CLI in the prepared workspace; unset/`shell` is a bare shell. Only ever set for interactive runs. [Details](#wardyn_interactive_start) |
 | `WARDYN_INTERACTIVE_SEED` | string | (unset) | the run's optional boot seed, its `task`, exported verbatim for an interactive run only; fires once at sandbox boot. [Details](#wardyn_interactive_seed) |
 | `WARDYN_APPLICATION_RUN` | bool | (unset) | `1` marks an interactive application run, set by dispatch only. A revive then starts the seed again |
+| `WARDYN_SERVICE` | bool | `0` | `1` marks a service run (Keep it running), else `0`; set by dispatch only (`serviceEnv`, [`internal/api/run_service.go`](../internal/api/run_service.go)). `agent-run` then supervises the command and writes its state to `~/.wardyn/service.json`, which wardynd reads; `WARDYN_SERVICE_STATE_FILE` moves that file for [`scripts/test-service-supervisor.sh`](../scripts/test-service-supervisor.sh) only. See [Services](SERVICES.md) |
+| `WARDYN_SERVICE_RESTART` | `on-failure` or `never` | (unset) | a service's restart rule, set with `WARDYN_SERVICE` |
+| `WARDYN_SERVICE_PORT` | port | (unset) | the port a service's health check reaches on 127.0.0.1; unset, nothing is checked |
+| `WARDYN_SERVICE_HEALTH_PATH` | path | (unset) | the HTTP path the check GETs; unset with a port, the check is a TCP connect |
+| `WARDYN_SERVICE_HEALTH_INTERVAL` | seconds | (unset) | seconds between checks, set with a health block |
+| `WARDYN_SERVICE_HEALTH_THRESHOLD` | int | (unset) | failed checks in a row that make a service unhealthy, set with a health block |
 | `WARDYN_SEED_AUTO_TOOLS` | bool | (unset) | `1` starts the boot seed above with `--dangerously-skip-permissions` (opt-in, for that pre-attach span only); unset/absent is supervised. [Details](#wardyn_seed_auto_tools) |
 | `WARDYN_HARNESSES` | string | (unset) | the harnesses a run launched with the harness set carries, space-separated in set order (`applyHarnessSetEnv`, [`internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)). Unset for a run launched without the set |
 | `WARDYN_START_HARNESS` | string | (unset) | the one harness of `WARDYN_HARNESSES` that starts with the run; empty when none does. Set together with `WARDYN_HARNESSES`. `agent-run --tasks` passes each agent its own `WARDYN_TASK_PREPPED` mark, touched once its prep is done |
@@ -2660,6 +2699,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CODEX_BIN_URL` 🔒 | string (URL) | (unset) | `scripts/stage-agent-binary.sh codex-cli` only, build-time: the native `codex` binary to stage for `CODEX_INSTALL=native`. Codex has no Wardyn-verified public download contract, so this one is staged-only and refuses to guess a URL. [Details](#wardyn_codex_bin_url) |
 | `WARDYN_IDLE_PID` | int (pid) | (unset = falls back to pid 1) | [`deploy/images/common/agent-run-lib.sh`](../deploy/images/common/agent-run-lib.sh)'s `start_wardyn_session`: **exported** to the boot pane so `boot_seed_wait_for_prep` can bound its wait on the exact `--idle` process. Handed over via `tmux set-environment` on the respawn path since the tmux server differs from the one that created the session |
 | `WARDYN_NOVNC_GEOMETRY` | string (`WxHxDEPTH`) | `1280x800x24` | the `novnc` image's X display geometry (`deploy/images/novnc/wardyn-ui-novnc`) |
+| `WARDYN_PROXY_WAIT_SECS` | int | `10` | how many seconds an agent image's `agent-run` waits for `WARDYN_PROXY_URL` to accept a connection before it carries on with one stderr line; shell-only; no run sets it |
 | `WARDYN_REC_WRAP` | internal (bash array) | empty | `boot_seed_rec_wrap` (`agent-run-lib.sh`) fills this **same-process, never-exported** array with the `wardyn-rec` prefix a boot-seed pane's argv runs under when `WARDYN_RECORDING=1`; both agent images' `--boot-seed` branches share the one function rather than each keeping their own copy |
 | `WARDYN_SESSION_START` | internal (shell var) | empty | `start_wardyn_session`'s own return signal (`created` / `respawned`), read back by the same `agent-run` invocation that set it — never exported, never read by another process |
 | `WARDYN_SSH_AGENT_DIR` | internal (path) | per `ssh` | `wardyn-git-helper ssh-exec` ([`cmd/wardyn-git-helper/sshagent.go`](../cmd/wardyn-git-helper/sshagent.go)) sets it for its `ssh`: the `0700` directory of the agent sockets `agent-run`'s ssh config names; removed when `ssh` exits |

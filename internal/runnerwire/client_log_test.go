@@ -289,3 +289,61 @@ func TestOfflineLogSaysWhatItWaitsOn(t *testing.T) {
 		t.Fatalf("offline warning lacks the last failure or its age: %v", got)
 	}
 }
+
+// A resumed session that dies within seconds of READY with an EVENT at the head of the replay buffer, five times in a
+// row, is dropped: the next connect is fresh. Anything else in the run starts the count over.
+func TestClientDropsAResumeThatKeepsDyingAfterReady(t *testing.T) {
+	quick := func(c *Client) { c.noteSessionEnd(true, time.Second, true) }
+	c := &Client{session: "s1", ready: true}
+	for range resumeQuickDeaths - 1 {
+		quick(c)
+		if c.dropLivelockedResume() {
+			t.Fatal("resume dropped before the limit")
+		}
+	}
+	quick(c)
+	if !c.dropLivelockedResume() || c.session != "" || c.ready {
+		t.Fatalf("after %d quick deaths: session %q ready %v, want the resume dropped", resumeQuickDeaths, c.session, c.ready)
+	}
+	if c.dropLivelockedResume() {
+		t.Fatal("the count was not reset by the drop")
+	}
+	for name, end := range map[string]func(*Client){
+		"a session that lived":     func(c *Client) { c.noteSessionEnd(true, resumeQuickDeath, true) },
+		"a fresh session":          func(c *Client) { c.noteSessionEnd(false, time.Second, true) },
+		"no event at the head":     func(c *Client) { c.noteSessionEnd(true, time.Second, false) },
+		"a session never at READY": func(c *Client) { c.noteSessionEnd(false, 0, true) },
+	} {
+		c := &Client{session: "s1", ready: true}
+		for range resumeQuickDeaths - 1 {
+			quick(c)
+		}
+		end(c)
+		quick(c)
+		if c.dropLivelockedResume() {
+			t.Errorf("%s did not start the count over", name)
+		}
+	}
+}
+
+func TestReplayHeadIsEvent(t *testing.T) {
+	b := NewReplayBuffer()
+	if replayHeadIsEvent(b) {
+		t.Fatal("an empty buffer has no head")
+	}
+	for _, typ := range []Type{TypeEvent, TypeCall} {
+		if err := b.Reserve(t.Context(), 0); err != nil {
+			t.Fatal(err)
+		}
+		b.Assign(Frame{Type: typ})
+	}
+	if !replayHeadIsEvent(b) {
+		t.Fatal("the oldest frame is an EVENT")
+	}
+	if err := b.Ack(1); err != nil {
+		t.Fatal(err)
+	}
+	if replayHeadIsEvent(b) {
+		t.Fatal("the oldest frame is now a CALL")
+	}
+}

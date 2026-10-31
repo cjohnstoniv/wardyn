@@ -32,6 +32,8 @@ type doctorOptions struct {
 	// serverVersion and runnerOnly serve `wardyn doctor`, which has run the network stages itself.
 	serverVersion    string
 	json, runnerOnly bool
+	// substrate is --substrate, as serve's: what drive_root is judged against.
+	substrate string
 }
 
 // newDoctorCommand is `wardyn-runnerd doctor`: the connection checks `wardyn doctor` runs, then this runner's
@@ -64,6 +66,7 @@ func newDoctorCommand() *cobra.Command {
 	fl.StringVar(&o.relayListen, "relay-listen", "", "address the run relay listens on (default: the service's setting)")
 	fl.StringVar(&o.relayHostTarget, "relay-host-target", "", "what a run's proxy reaches the relay at (default: the service's setting)")
 	fl.StringVar(&o.trustedCAFile, "trusted-ca-file", "", "PEM bundle of extra roots (default: the service's setting)")
+	fl.StringVar(&o.substrate, "substrate", "docker", "where the runner's runs execute, as serve's --substrate: docker, k8s or folders")
 	fl.BoolVar(&o.json, "json", false, "print the stages as JSON")
 	fl.BoolVar(&o.runnerOnly, "runner-only", false, "run only the engine, proxy image and relay stages")
 	fl.StringVar(&o.serverVersion, "server-version", "", "the organisation's version, for the proxy image's skew check when --runner-only")
@@ -95,16 +98,54 @@ func (s doctorSettings) get(flagName, flag, key string) (value, source string) {
 		}
 		return "", ""
 	}
-	if !slices.Contains(f.env, key) {
-		f.env = append(slices.Clone(f.env), key) // WARDYN_RUNNER_ORG_URL, which serve has no variable for
+	return s.resolve(f, flagName, flag, key)
+}
+
+// org is the organisation's address and where it came from, resolved as serve does: --org, the OrgURL managed
+// preference, then org_url in runnerd.json. serve has no environment variable for it, so this shell's is never
+// read. An earlier install's unit passes --org ${WARDYN_RUNNER_ORG_URL} from its service definition (the env
+// file), and serve ranks that argument as a flag, so an installed definition that passes one is doctor's flag
+// when --org is not given. An environment file beside a unit that passes no --org is not read at all; only
+// with no installed definition does that file name the address.
+func (s doctorSettings) org(flag string) (value, source string) {
+	const legacy = "WARDYN_RUNNER_ORG_URL"
+	legacySource := ""
+	if v, from := s.paths.serviceOrgArg(); flag == "" && v != "" {
+		flag, legacySource = v, from
 	}
+	i := slices.IndexFunc(runnerFields, func(f runnerField) bool { return f.name == "org_url" })
+	if value, source = s.resolve(runnerFields[i], "org", flag, "org_url"); value != "" {
+		if legacySource != "" && source == "--org" {
+			source = legacySource
+		}
+		return value, source
+	}
+	if s.paths.installedService() == "" {
+		if v := s.paths.setting(legacy); v != "" {
+			return v, legacy + " in the service's settings"
+		}
+	}
+	return "", ""
+}
+
+// resolve is f's value and source; key names it in a source that is no flag or managed preference.
+func (s doctorSettings) resolve(f runnerField, flagName, flag, key string) (value, source string) {
+	return s.sourceOf(s.resolved(f, flag), f, flagName, key)
+}
+
+// resolved is f as the service resolves it.
+func (s doctorSettings) resolved(f runnerField, flag string) resolvedField {
 	in := runnerInputs{getenv: func(k string) string { return cmp.Or(s.paths.setting(k), s.getenv(k)) },
 		managed: managedPref, lockRead: managedLockRead, file: s.file, filePath: s.paths.configFile()}
 	if flag != "" {
 		in.flag = func(name string) (string, bool) { return flag, name == f.flag }
 	}
 	in.locked, _ = securityLocked(in)
-	r := f.resolve(in)
+	return f.resolve(in)
+}
+
+// sourceOf is resolve's value and source, in the words doctor names a source in.
+func (s doctorSettings) sourceOf(r resolvedField, f runnerField, flagName, key string) (value, source string) {
 	switch {
 	case r.Value == "" || r.Source == sourceDefault:
 		return "", ""
@@ -120,10 +161,28 @@ func (s doctorSettings) get(flagName, flag, key string) (value, source string) {
 	return r.Value, key + " in the service's settings"
 }
 
+// driveRootStage says which folders drives bound to this runner may mount from, and where that setting came
+// from, the way the other settings are named; a value serve would refuse on substrate fails it. With none set there is no
+// stage, so a runner that offers no drive mounts reports what it always did.
+func driveRootStage(s doctorSettings, substrate string) (doctor.Stage, bool) {
+	const setting, fix = "drive_root", "absolute, cleaned folders: `wardyn-runnerd setup --drive-root <dir>` (repeatable) writes runnerd.json's drive_root; the DriveRoot managed preference or WARDYN_DRIVE_ROOT overrides it"
+	i := slices.IndexFunc(runnerFields, func(f runnerField) bool { return f.name == setting })
+	f := runnerFields[i]
+	r := s.resolved(f, "")
+	if err := (runnerConfig{r}).checkDriveRoots(substrate); err != nil {
+		return doctor.FailStage("drive-roots", oneLine(err.Error()), setting, fix), true
+	}
+	if len(r.List) == 0 {
+		return doctor.Stage{}, false
+	}
+	_, source := s.sourceOf(r, f, "", setting)
+	return doctor.OKStage("drive-roots", strings.Join(r.List, ", ")+" (from "+source+")"), true
+}
+
 // fieldFor is the runnerd.json field the environment variable key stands for.
 func fieldFor(key string) (runnerField, bool) {
 	i := slices.IndexFunc(runnerFields, func(f runnerField) bool {
-		return slices.Contains(f.env, key) || (key == "WARDYN_RUNNER_ORG_URL" && f.name == "org_url")
+		return slices.Contains(f.env, key)
 	})
 	if i < 0 {
 		return runnerField{}, false
@@ -150,7 +209,7 @@ func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(st
 	s := doctorSettings{paths: paths, getenv: getenv}
 	var fileErr error
 	s.file, fileErr = loadRunnerFile(paths.configFile(), false)
-	org, orgSource := s.get("org", o.org, "WARDYN_RUNNER_ORG_URL")
+	org, orgSource := s.org(o.org)
 	conn := runnerConn{org: org, orgSource: orgSource}
 	conn.trustedCA, _ = s.get("trusted-ca-file", o.trustedCAFile, "WARDYN_TRUSTED_CA_FILE")
 	conn.orgCA, _ = s.get("", "", "WARDYN_ORG_CA_FILE")
@@ -169,6 +228,10 @@ func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(st
 		serverVersion = o.serverVersion
 	}
 	stages = append(stages, h.engineStages(ctx, s, o, org, serverVersion)...)
+	if st, ok := driveRootStage(s, cmp.Or(o.substrate, "docker")); ok {
+		stages = append(stages, st)
+	}
+	stages = append(stages, macOSVMDoctorStages()...)
 	if fileErr != nil {
 		bad := doctor.FailStage("config", oneLine(fileErr.Error()), "", "fix that field, or remove the file and run `wardyn-runnerd setup` again")
 		stages = append([]doctor.Stage{bad}, stages...)
@@ -228,7 +291,7 @@ func runnerNetwork(ctx context.Context, c runnerConn, net *doctor.Network) ([]do
 	if len(sources) > 0 {
 		net.ExtraCA, net.ExtraCASource = pool, strings.Join(sources, " and ")
 	}
-	net.OrgURL, net.Source, net.OrgSetting, net.Strict = c.org, c.orgSource, "WARDYN_RUNNER_ORG_URL", true
+	net.OrgURL, net.Source, net.OrgSetting, net.Strict = c.org, c.orgSource, orgSetting, true
 	if c.orgSource == "" {
 		net.Source = "nothing set"
 	}
@@ -261,12 +324,16 @@ func (h setupHost) serviceStage(ctx context.Context, p setupPaths) doctor.Stage 
 		"start it with `systemctl --user start "+serviceUnit+"`; `journalctl --user -u wardyn-runnerd` says why it stopped")
 }
 
+// orgSetting names where the organisation's address is set, for every hint that fixes it: the settings serve
+// reads, and no others.
+const orgSetting = "the organisation address (--org, the OrgURL managed preference, or org_url in runnerd.json)"
+
 // statusSetting is the setting, and what to set it to, that fixes a connection that failed at stage.
 var statusSetting = map[string][2]string{
-	types.RunnerStageDNS:        {"WARDYN_RUNNER_ORG_URL", "an address that resolves from this computer (or fix its DNS or VPN)"},
+	types.RunnerStageDNS:        {orgSetting, "an address that resolves from this computer (or fix its DNS or VPN)"},
 	types.RunnerStageProxy:      {"HTTPS_PROXY", "a proxy address the service environment can reach, or unset it (NO_PROXY lists hosts to reach directly)"},
 	types.RunnerStageTLS:        {"WARDYN_TRUSTED_CA_FILE", "a PEM file holding the root CA of the certificate the organisation presents"},
-	types.RunnerStageHealthz:    {"WARDYN_RUNNER_ORG_URL", "your organisation's public HTTPS address"},
+	types.RunnerStageHealthz:    {orgSetting, "your organisation's public HTTPS address"},
 	types.RunnerStageEngine:     {"DOCKER_HOST", "the engine's socket if it is not the default"},
 	types.RunnerStageProxyImage: {"WARDYN_PROXY_IMAGE", "an image this engine can pull for this computer's architecture"},
 	types.RunnerStageRelay:      {"WARDYN_RELAY_LISTEN", "an address of this host that the engine's containers reach"},
@@ -302,7 +369,7 @@ func statusStage(path string) doctor.Stage {
 			"register this runner again: the organisation refused the proof it signs with its stored key (revoked or unknown)")
 	}
 	if set[0] == "" {
-		set = [2]string{"WARDYN_RUNNER_ORG_URL", "your organisation's public HTTPS address"}
+		set = [2]string{orgSetting, "your organisation's public HTTPS address"}
 	}
 	return doctor.FailStage("status", fmt.Sprintf("%s since %s (stage %s)%s", st.State, since, cmp.Or(st.Stage, "none"), last), set[0], set[1])
 }
@@ -395,6 +462,15 @@ func proxyImageSkew(image string, pinned bool, serverVersion string) (doctor.Sta
 		image, imageReleaseTag(image), serverVersion), "WARDYN_PROXY_IMAGE", "the release the organisation runs, or remove the pin (WARDYN_PROXY_IMAGE_PINNED) to follow the organisation"), true
 }
 
+// noPullKey marks a context whose relay probe must not pull the proxy image: doctor's contract.
+type noPullKey struct{}
+
+func withoutPulling(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noPullKey{}, true)
+}
+
+func pullsAllowed(ctx context.Context) bool { return ctx.Value(noPullKey{}) == nil }
+
 // relayStage is setup's own relay check (findRelay, through h.relay) on a throwaway container, run only
 // when the image is already on the engine: doctor never pulls.
 func (h setupHost) relayStage(ctx context.Context, s doctorSettings, image, state string, eng dockerEngine, want relayPair, wantErr error, engineUp bool) doctor.Stage {
@@ -422,7 +498,7 @@ func (h setupHost) relayStage(ctx context.Context, s doctorSettings, image, stat
 		return doctor.FailStage("relay", fmt.Sprintf("the Docker network %s that run proxies attach to does not exist on this engine", network), "WARDYN_INTERNAL_NETWORK",
 			"the name of an existing network, or run `wardyn-runnerd setup` or restart the runner service, which creates "+network)
 	}
-	pair, err := h.relay(ctx, image, network, eng, want)
+	pair, err := h.relay(withoutPulling(ctx), image, network, eng, want)
 	if err != nil {
 		return doctor.FailStage("relay", oneLine(err.Error()), "WARDYN_RELAY_LISTEN", fix)
 	}

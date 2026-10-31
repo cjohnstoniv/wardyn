@@ -9,7 +9,7 @@
 
 ## 1. Register a public key
 
-- **SSO deployment (OIDC configured):** User view sidebar → **Your account**
+- **SSO deployment (OIDC configured):** User view sidebar → **Settings**
   (`/account`) → **Add key**.
 - Paste your public key (the console never asks
   for a private key; the paste field's own helper line says so, and pasting
@@ -120,7 +120,7 @@ For incident response or offboarding:
    - An unresolved email or ambiguous name is `422`;
      a lookup or deletion failure is `500`.
    - Owners can still remove individual
-     keys through **Your account** (`/account`), `wardyn ssh-key delete <fingerprint>`,
+     keys through **Settings** (`/account`), `wardyn ssh-key delete <fingerprint>`,
      or `DELETE /api/v1/me/ssh-keys/{fingerprint}`.
 4. End existing access with `wardyn run kill <run-id>` and verify teardown
    succeeded.
@@ -219,7 +219,7 @@ Host wardyn-<short-id>
   - Each word after `--` reaches the sandbox as one argument.
   - For a pipe or a redirect, run a shell: `wardyn run exec <run-id> -- sh -c 'make test | tail'`.
 - `wardyn run forward <run-id> [<local-port>:]<sandbox-port>...` is `ssh -L` to the sandbox's loopback ([section 4](#4--l-port-forwarding)), bound to `127.0.0.1` here.
-- `wardyn run editor <run-id>` writes the run's `Host` block to `~/.wardyn/ssh_config`, asks before adding `Include ~/.wardyn/ssh_config` at the top of `~/.ssh/config`, then opens VS Code Remote-SSH.
+- `wardyn run editor <run-id>` writes the run's `Host` block to `~/.wardyn/ssh_config`, asks before adding `Include ~/.wardyn/ssh_config` at the top of `~/.ssh/config`, then opens VS Code Remote-SSH. Keep that `Include` outside any `Host` or `Match` block, or ssh will not find the run's host.
   - `--dir` picks the sandbox folder (default `/home/agent/work`).
   - The setting in [VS Code Remote-SSH](#5-vs-code-remote-ssh) is still required.
 - All three need the gateway on and a key on your account.
@@ -558,7 +558,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   it.
 - `--path` picks a different keypair; the default is deliberately **not**
   `~/.ssh/id_ed25519` — a key an external tool dials sandboxes with should be
-  revocable from Your account (`/account`) without touching your everyday identity.
+  revocable from Settings (`/account`) without touching your everyday identity.
 - **`wardyn run wait-ready <run-id>`** ([`cmd/wardyn/run_wait_ready.go`](../cmd/wardyn/run_wait_ready.go)) blocks
   past what `run --wait` waits for.
 - `--wait` waits for a TERMINAL state (and is refused outright on an interactive run, which never reaches one on its own);
@@ -647,6 +647,8 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   path and touches neither binary.
 - Install both if you want full parity with
   the built-in images.
+- Keep the image's `ENV HOME` equal to the sandbox user's passwd home. An exec channel takes `$HOME` from the
+  sandbox environment and an sftp session takes the passwd home, so a mismatch starts them in different directories.
 
 ## Recording
 
@@ -794,7 +796,7 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
     - **log in again** (the ordinary path now — `oidc.Config.OnLogin` re-stamps both `role` and `role_checked_at` for every key that principal owns, no re-registration needed)
     - **or `DELETE`/`POST` the key again** (still supported, still immediate, useful when you want the refresh before your next login rather than after).
   - Which of your own keys carries the `admin` stamp is
-    visible without reading the database: Your account (`/account`) badges the
+    visible without reading the database: Settings (`/account`) badges the
     row **Admin override**.
   - That badge reflects the STORED `role` only — it does not
     currently show whether `role_checked_at` has aged past `WARDYN_SSH_ROLE_TTL`,

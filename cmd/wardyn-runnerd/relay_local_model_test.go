@@ -21,12 +21,27 @@ import (
 )
 
 // modelServer is an echo server on 127.0.0.2 standing in for the model server (on another loopback
-// address than the relay's 127.0.0.1 bind); accepted counts the connections that reached it.
+// address than the relay's 127.0.0.1 bind); accepted counts the connections that reached it. The relay
+// later binds 127.0.0.1 at the same port, so a port another process holds there is passed over (a
+// parallel package in the docker suite once held it: "bind: address already in use").
 func modelServer(t *testing.T) (port uint16, accepted *atomic.Int32) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.2:0")
-	if err != nil {
-		t.Skipf("no 127.0.0.2 on this host: %v", err)
+	var ln net.Listener
+	for range 20 {
+		l, err := net.Listen("tcp", "127.0.0.2:0")
+		if err != nil {
+			t.Skipf("no 127.0.0.2 on this host: %v", err)
+		}
+		probe, err := net.Listen("tcp", netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(l.Addr().(*net.TCPAddr).Port)).String())
+		if err == nil {
+			_ = probe.Close()
+			ln = l
+			break
+		}
+		_ = l.Close()
+	}
+	if ln == nil {
+		t.Fatal("no port free at both 127.0.0.2 and 127.0.0.1 in 20 tries")
 	}
 	t.Cleanup(func() { _ = ln.Close() })
 	accepted = new(atomic.Int32)

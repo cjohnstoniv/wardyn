@@ -291,6 +291,15 @@ export const runs = {
     return body.ticket;
   },
 
+  // POST /api/v1/runs/{id}/apps/{app}/ticket — a single-use ticket that opens one inbound app in a browser, for
+  // the run's owner or a person its callers name. Any other person, a run that is gone and an app that is not
+  // inbound all answer the same 404.
+  async appTicket(runId: string, app: string): Promise<string> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/apps/${encodeURIComponent(app)}/ticket`, { method: "POST" });
+    const body = await asJson<{ ticket: string }>(res);
+    return body.ticket;
+  },
+
   // New Run's three requests. Each sends the body intentToWire built, byte for byte, so
   // preflight, policy preview and create judge the same request.
   //

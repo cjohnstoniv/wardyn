@@ -28,6 +28,9 @@ func (s *Server) createDispatchGrant(ctx context.Context, run types.AgentRun, g 
 		return types.CredentialGrant{}, &placement.Refusal{Reason: placement.ReasonPlacementCredential, Field: "dispatch grant", Detail: "operator delivery is not implemented"}
 	}
 	origin, ref := s.localGrantOrigin(ctx, runIdentitySubject(ctx, run.CreatedBy), g.Spec)
+	if err := ownershipFault(ref); err != nil {
+		return types.CredentialGrant{}, err
+	}
 	if ref == nil && residentADOOrigin(origin) {
 		if r, err := s.residentADOAdmits(ctx, run, origin); err != nil || r != nil {
 			if r == nil {
@@ -110,7 +113,10 @@ func (s *Server) localCapturedGrantOrigin(ctx context.Context, owner string, g t
 	if err != nil {
 		return placement.CredentialOrigin{}, true, err
 	}
-	own := owner != "" && name != "" && s.ownsSecretMemoized(ctx, owner, name)
+	own, err := s.ownsSecretChecked(ctx, owner, name)
+	if err != nil {
+		return placement.CredentialOrigin{}, true, err
+	}
 	return placement.CredentialOrigin{GrantKind: g.Kind, Class: placement.ClassOwn, Delivery: placement.ClassAPIKey, Stored: true, OwnNamespace: own, OwnerOnly: own}, true, nil
 }
 
@@ -139,7 +145,10 @@ func (s *Server) localADOGrantOrigin(ctx context.Context, owner string, raw json
 		optIn := row.Entra != nil && !row.Disabled && row.Entra.RunnerResident && cmpTokenMode(row.Entra.TokenMode) == types.ADOTokenModeMintedPAT
 		return placement.CredentialOrigin{GrantKind: types.GrantAPIKey, Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT, ResidentOptIn: optIn}, true, nil
 	case types.ADOTokenModeOwnPAT:
-		origin := s.localADOOrigin(ctx, owner, adoEntraRun{rowID: sn.ProviderRowID, owner: sn.OwnerSubject, tokenMode: types.ADOTokenModeOwnPAT})
+		origin, err := s.localADOOrigin(ctx, owner, adoEntraRun{rowID: sn.ProviderRowID, owner: sn.OwnerSubject, tokenMode: types.ADOTokenModeOwnPAT})
+		if err != nil {
+			return placement.CredentialOrigin{}, true, err
+		}
 		if origin.Class != placement.ClassOwn {
 			return placement.CredentialOrigin{}, true, fmt.Errorf("ADO own PAT is not the run owner's")
 		}

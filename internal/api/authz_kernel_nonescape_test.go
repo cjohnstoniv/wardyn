@@ -48,6 +48,7 @@ var kernelDoors = map[string][]string{
 	"narrowUserInlinePolicy":    {"capEgressHost", "capSecret"},
 	"admittingCarrier":          {"capWorkspace"}, // narrowUserInlinePolicy's workspace bound, and the carrier the run then uses
 	"seededImageRefusal":        {"capImage"},
+	"inboundDeclaredRefusal":    {"capFeature"}, // an inbound ui_app the request itself declares
 	"workspaceProvidersRefusal": {"capWorkspaceProvider"},
 	"chooseRunModelProvider":    {"capModelProvider"},
 	// A desktop run's sign-in variant of the person's own image (#2972 M1):

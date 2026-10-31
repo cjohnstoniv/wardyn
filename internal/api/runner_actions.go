@@ -28,6 +28,13 @@ const maxActionResultBytes = runnerwire.MaxActionResultBytes
 
 var errRunnerEventUnsupported = errors.New("runner event kind has no org ingestion")
 
+// errRunnerIngestUnavailable is an organisation that cannot ingest runner events at all: a transient failure of
+// its own, never a verdict on the event (DR-0436).
+var errRunnerIngestUnavailable = errors.New("runner events: this organisation cannot ingest them (store or audit recorder not configured)")
+
+// errRunnerUnknownRun is an event naming a run this organisation no longer has.
+var errRunnerUnknownRun = errors.New("runner event names a run this organisation no longer has")
+
 // substrateRegistry is the orchestrator's runtime registration seam.
 type substrateRegistry interface {
 	Add(substrate.Substrate)
@@ -110,6 +117,7 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 	ep.sub = remote.New(id.String(), ep.link, remote.Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
 		return s.queueRunnerTeardown(ctx, id, kind, ref)
 	}, Dispatch: s.runnersEnabled, Relay: s.acceptRelay, OutputAccepted: s.runnerOutputAccepted,
+		MacOSVMDisks: func(ctx context.Context, reports []runner.MacOSVMDisk) { s.runnerMacOSVMDisks(ctx, id, reports) },
 		ExecutionGeneration: func(ctx context.Context, method, ref string) (uuid.UUID, error) {
 			return s.dispatchedGeneration(ctx, id, method, ref)
 		}})
@@ -143,6 +151,10 @@ func (s *Server) queueRunnerTeardown(ctx context.Context, runnerID uuid.UUID, ki
 		// The action waits for the runner; its receipt is runner.action.apply or runner.action.refuse.
 		s.recordAudit(ctx, s.auditEvent(&a.RunID, types.ActorSystem, "wardynd", placement.ActionRunnerActionRequest,
 			a.ID.String(), "success", mustJSON(map[string]any{"action": a.Kind, "runner_id": runnerID})))
+		// The runner's session may be on another replica: end it there, so the fresh one reads the action.
+		// Only for a new one: the lease sweep re-asserts a kept run's stop every pass, and ending the
+		// session for an action already queued or answered would reset all its streams each time.
+		s.announceRunnerGoaway(runnerID)
 	}
 	return err
 }
@@ -200,6 +212,7 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 			peer := ep.link.ReadyPeer()
 			sameSession := func() bool { return peer != nil && ep.link.ReadyPeer() == peer }
 			go s.sweepRunnerOrphansOnReady(s.cfg.BaseCtx, id, ep.sub, sameSession, readySweepRetries)
+			go s.pushRunnerWorkloadStatuses(s.cfg.BaseCtx, id)
 		},
 	}, nil
 }
@@ -212,7 +225,7 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 func (s *Server) BeginInventoryFromRunner(ctx context.Context, runnerID uuid.UUID, sessionID string) error {
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok {
-		return store.ErrRunnerExecutionRefused
+		return errRunnerIngestUnavailable
 	}
 	if _, err := st.ReissueDeferredAssertedRunnerActions(ctx, runnerID, sessionID); err != nil {
 		return err
@@ -231,27 +244,31 @@ func (s *Server) EventFromRunner(ctx context.Context, runnerID uuid.UUID, ev run
 }
 
 // eventFromRunner is EventFromRunner for the connection whose fresh session is session ("" when it has
-// none), so a caps event settles only that session's runner.connect row.
+// none), so a caps event settles only that session's runner.connect row. Its error is classified: a refusal
+// for good is recorded and becomes the EventRefusal the peer acknowledges (classifyRunnerEvent).
 func (s *Server) eventFromRunner(ctx context.Context, runnerID uuid.UUID, session string, ev runnerwire.Event) error {
+	var err error
 	switch ev.Kind {
 	case runnerwire.EventActionResult:
-		return s.ActionResultFromRunner(ctx, runnerID, ev)
+		err = s.ActionResultFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventAgentExit:
-		return s.ExitFromRunner(ctx, runnerID, ev)
+		err = s.ExitFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventSpool:
-		return s.DecisionIngestFromRunner(ctx, runnerID, ev)
+		err = s.DecisionIngestFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventPosture:
-		return s.PostureFromRunner(ctx, runnerID, ev)
+		err = s.PostureFromRunner(ctx, runnerID, ev)
 	case runnerwire.EventResidentErase:
-		return s.ResidentEraseFromRunner(ctx, runnerID, ev)
+		err = s.ResidentEraseFromRunner(ctx, runnerID, ev)
+	case runnerwire.EventWorkload:
+		// The session the frame came in on, resumed ones included: session above is a fresh session's only.
+		err = s.WorkloadFromRunner(ctx, runnerID, remote.EventSession(ctx), ev)
 	case runnerwire.EventCaps:
 		s.capsFromRunner(ctx, runnerID, session, ev)
-		return nil
 	case runnerwire.EventWaiting:
-		return nil
 	default:
-		return fmt.Errorf("%w: %s", errRunnerEventUnsupported, ev.Kind)
+		err = fmt.Errorf("%w: %s", errRunnerEventUnsupported, ev.Kind)
 	}
+	return s.classifyRunnerEvent(ctx, runnerID, ev, err)
 }
 
 // PendingFromRunner is the PENDING source of a fresh session: one bounded page
@@ -288,17 +305,20 @@ func (s *Server) PendingFromRunner(ctx context.Context, runnerID uuid.UUID) ([]r
 // and the action to it in the committing transaction.
 func (s *Server) ActionResultFromRunner(ctx context.Context, runnerID uuid.UUID, event runnerwire.Event) error {
 	st, ok := s.cfg.Store.(store.RunnerStore)
-	if !ok || event.Kind != runnerwire.EventActionResult || event.RunID == nil || len(event.Data) > maxActionResultBytes || s.cfg.RunnerAuditPrepare == nil {
-		return store.ErrRunnerActionRefused
+	if !ok || s.cfg.RunnerAuditPrepare == nil {
+		return errRunnerIngestUnavailable
+	}
+	if event.Kind != runnerwire.EventActionResult || event.RunID == nil || len(event.Data) > maxActionResultBytes {
+		return errActionResultShape
 	}
 	var result runnerwire.ActionResult
 	dec := json.NewDecoder(bytes.NewReader(event.Data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&result); err != nil {
-		return store.ErrRunnerActionRefused
+		return errActionResultShape
 	}
 	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
-		return store.ErrRunnerActionRefused
+		return errActionResultShape
 	}
 	_, _, err := st.RecordRunnerActionResult(ctx, runnerID, *event.RunID, result.ID, result.Outcome, result.Reason, result.ObservedAt, s.cfg.RunnerAuditPrepare)
 	return err

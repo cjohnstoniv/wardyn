@@ -397,7 +397,7 @@ func (n *Network) identityStage(ctx context.Context, u *url.URL, tr *http.Transp
 			setting = n.TokenSource
 		}
 		return FailStage("identity", fmt.Sprintf("/api/v1/me answered %d: %s", ae.Status, from), setting,
-			"a personal API token: sign in to the console and create one under Your account (a deployment with single sign-on and no admin token takes nothing else)")
+			"a personal API token: sign in to the console and create one in Settings (a deployment with single sign-on and no admin token takes nothing else)")
 	case err != nil:
 		return FailStage("identity", "/api/v1/me did not answer: "+unwrapURL(err).Error(), n.OrgSetting, "your organisation's Wardyn address")
 	}

@@ -23,6 +23,7 @@ import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled"
 import { usePoll } from "../../../lib/use-poll";
 import { LIST_LIMIT } from "../../../lib/api/core";
 import { withNewestEvents } from "./audit-window";
+import { macOSDiskPending } from "./macos-run-facts";
 
 // Live refresh cadence for a non-terminal run's detail.
 const DETAIL_POLL_MS = 4000;
@@ -286,7 +287,8 @@ export function useRunDetail(id: string) {
   const unconfirmedKill = run?.state === "KILLED" && !killSettled;
   if (unconfirmedKill && settleSince.current === null) settleSince.current = Date.now();
   const killSettling = unconfirmedKill && Date.now() - (settleSince.current ?? Date.now()) < KILL_SETTLE_MS;
-  usePoll(() => load(false), DETAIL_POLL_MS, terminal && !killSettling);
+  // …and a macOS VM run whose disk is still being removed
+  usePoll(() => load(false), DETAIL_POLL_MS, terminal && !killSettling && !macOSDiskPending(run));
 
   return {
     run, grants, egress, approvals, audit, auditGap, recordingAudit, status, tab, setTab,

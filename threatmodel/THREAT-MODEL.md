@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.9.8)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0-rc.9)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -55,6 +55,7 @@ coverage verdict pointing back into this document.
 | **Enrolled hybrid laptop (device, v0.8; deprecated in 0.9, removed in 1.0)** | Not a human — a member-mode laptop (topology m′) that has enrolled with an org control plane and holds a `wdd_`-prefixed device credential (issue #103). | 🟡 Authenticated, narrowly trusted, self-reporting. Trusted to submit ITS OWN audit rows under a chain the organisation verifies on ingest. |
 | | `deviceAuth` ([`internal/api/devices_auth.go`](../internal/api/devices_auth.go)) resolves that bearer to a device identity ONLY, scoped ONLY to `/api/v1/devices/{id}/*` (push its own audit rows, heartbeat) — it is never a caller `isOperator` or `isMember` admits anywhere else. | Not trusted for completeness of what it chose to send, and not an operator or member principal on any other route. Residuals #50–#52 state the limits. |
 | **Runner host (client mode, 0.9)** | A developer's laptop running `wardyn-runnerd`: it holds a runner key, dials out to the organisation and runs its owner's local runs. | 🟡 Authenticated by key possession; self-reporting, and its developer is root: [B12](#b12--runner-host-vs-the-organisation). |
+| **Mac runner with macOS VM sandboxes (0.10, off by default)** | A company-managed Mac whose `wardyn-runnerd` also starts macOS guests under Apple's hypervisor; it is a runner host, so its person is root there. | 🟡 Authenticated by key possession; self-reporting; its guest is untrusted and bounded by the hypervisor: [B14](#b14--macos-vm-guest-vs-the-mac-that-runs-it). |
 | **Organisation runner (Kubernetes, 0.9.3)** | `wardyn-runnerd` in a cluster, owned by the organisation rather than a person and claimed by a security operator; it runs any member's runs an organisation pool places on it. | 🟡 Authenticated by key possession; self-reporting; its cluster's admins are trusted with what its runs use: [B13](#b13--organisation-runner-vs-its-kubernetes-cluster). |
 
 ### Member on a member-mode desktop (topology m′)
@@ -253,6 +254,7 @@ coverage verdict pointing back into this document.
 | | | Refusals on each side audit distinctly (`authz.denied` `reason` `admin_surface` vs `security_admin_surface`) so a reader can tell WHICH tier a denial was measured against. Residual #14. |
 | **B12 — Runner host vs. the organisation** | 🟡 partial **[0.9]** | A developer-administered laptop runs what the organisation schedules, enforces and audits: [detail](#b12--runner-host-vs-the-organisation). |
 | **B13 — Organisation runner vs. its Kubernetes cluster** | 🟡 partial **[0.9.3]** | An organisation's runner in a cluster: outbound-only, ServiceAccount and NetworkPolicy isolation, and the cluster's admins trusted: [detail](#b13--organisation-runner-vs-its-kubernetes-cluster). |
+| **B14 — macOS VM guest vs. the Mac that runs it** | 🟡 partial **[0.10]** | A macOS guest under Apple's hypervisor on a company-managed Mac: one NIC to the run's own proxy, a managed-Mac gate that is two assertions, and a ledger any local account can starve: [detail](#b14--macos-vm-guest-vs-the-mac-that-runs-it). |
 
 On a single-operator machine the boundaries compose into a strict containment
 ladder — Wardyn never *adds* power beyond what the operating user already has:
@@ -456,6 +458,29 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | Proxy pod → runnerd | Ingress from proxy pods only; the relay admits only a live, unfenced proxy pod's address; the decision sink needs a per-run key (`DecisionSink`) | #89 |
 | Agent pod → runnerd, API server, in-cluster services | Egress to its own proxy only, then the proxy's hard deny | #89 |
 | Cluster admins → run material | None: choosing `org_cluster` trusts them | #89 |
+
+### B14 — macOS VM guest vs. the Mac that runs it
+
+- **[0.10, off by default]** A run with `machine_kind: macos_vm` is a macOS guest under Apple's Virtualization framework on a company-managed Mac ([`docs/operations/macos-vms.md`](../docs/operations/macos-vms.md)). B12 holds for it: the Mac's person is root there, and no control binds them.
+- **The boundary is Apple's hypervisor.** The guest's only NIC is wired to the run's own relay and proxy in Docker, with no NAT device. Egress, recording, the clipboard rules and audit are enforced outside the guest.
+- **What the guest can reach in our code.** Four bounded inputs: the guest agent session, the network bridge's frames, a strict RFB shim that ends the session on any server message it does not know, and a DHCP responder that answers one fixed lease. The helper runs as the logged-in user, never root, with one virtualization entitlement.
+- **Inside the guest.** The agent is a standard user, not an admin. The setup account and its random password stay in every run's guest. The helper held the password in memory only, so no one holds it after preparing, and Remote Login is proved off on a live guest before the base is published. Screen Sharing is reachable only through the helper, by a person who already holds that run's desktop ticket. Nothing here relies on the guest's own protections.
+- **Editing a base.** Rechecking the base's accounts and Remote Login detects a change but can't prevent one: whoever has admin rights on the host Mac can alter the base.
+- **Screen lock.** Stage 1 turns the guest's screen lock and screen saver off, and the guest signs in as `agent` on its own. The guest has no console, and its screen is reached only through the helper, by a person who holds that run's desktop ticket through the organisation's authenticated gateway. A person who holds that session sees an unlocked guest.
+- **Profiles.** A profile installed in `edit-base`, with its payload, stays in the base's System keychain or configuration, where any admin in the guest can reach it, and blocks of the deleted staged files may survive on the base image.
+- **A person's drive.** A person's disk drive on a Mac is an unencrypted APFS disk image in the runner login's Application Support/Wardyn/macos-vm.noindex/drives, readable by that macOS login and by root on the Mac, and kept until `reclaim_drive` deletes it on that Mac (a Mac no longer registered keeps the image); a run's VM attaches it only while it holds the drive's lock.
+- **Managed-Mac gate.** The run is placed only on a runner whose trust class is `managed_device` and whose posture says `mdm_managed` from the MDM's file. Both are assertions, and no device-certificate check exists yet (residuals #90 and #96).
+- **Licence and image.** The guest comes only from Apple's restore image, on the Mac that uses it. No macOS image is in a release, a registry or the organisation.
+
+| Crossing | Guard | Residual |
+|---|---|---|
+| Guest ↔ Mac network | One FileHandle NIC to the run's relay and proxy; no NAT; stage-one preparation has no egress at all | #96 |
+| Guest agent ↔ runner | Guest-initiated vsock; the same session parser as Linux VMs | #96 |
+| Desktop ↔ gateway | A runner-side RFB shim on a socket only the helper reaches; the existing ticket, clipboard filter and recording | #96 |
+| Other local accounts ↔ the VM ledger | A root-owned, sticky ledger: it can deny service, never admit past the cap | #96 |
+| Other local accounts ↔ a run's sockets | A login-made `0700` folder under a root-owned sticky parent, checked on every use: a planted name denies that login's VMs, never access | #96 |
+| Guest secrets ↔ the Mac's volume | The run's clone disk is deleted at the end, which is not secure erasure | #96 |
+| A person's drive ↔ the Mac's volume | An APFS disk image under the runner login's folder, locked to one run at a time | #96 |
 
 ---
 
@@ -1093,6 +1118,8 @@ ADMIN pre-authorized** —
 - The check runs at onboarding, again at run-create, and a THIRD time in the docker driver
   immediately before `ContainerCreate` (`agentMounts`, on `Mount.MemberAuthored` only), which
   makes a source repointed between onboarding and launch fail closed.
+- A folder bound to the member's runner (`runner_id`) is checked by text here, and by that
+  runner, inside its `--drive-root`, before the bind.
 - Gating on `MemberAuthored` rather than "this is a member run" is load-bearing: an
   operator-authored mount rides the same spec and lives outside every member root by
   construction.
@@ -1722,6 +1749,14 @@ hiding them would repeat the failure mode we are designed to avoid.
       - Set `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` to a per-run host (wildcard DNS + wildcard certificate) and each run gets its own origin, with an enter served on any other host refused outright.
       - That is the recommendation for any install with more than one user ([docs/OPERATIONS.md](../docs/OPERATIONS.md#ui-apps-with-more-than-one-user-use-host-mode), "UI apps with more than one user").
       - Which mode is running is published, not inferred — boot logs the shared-origin mode as a warning and `/healthz` carries `ui_sandbox.host_mode`.
+    - **Inbound apps (rc.8).**
+      - An app that names callers can be opened by a person who is not the run's owner, so in path mode the residual above would turn cross-user: a foreign app could script the caller's own apps.
+      - So a browser ticket for a named caller who is not the owner is refused `inbound_needs_host_mode` unless host mode is on (`handleAppTicket`, [`internal/api/inbound_ticket.go`](../internal/api/inbound_ticket.go)).
+      - The owner opens an app in either mode, and a caller with an inbound token works in either mode, because a bearer is never ambient and carries no cookie.
+      - Host mode adds a cross-site check to every cookie session, inbound or not (`uiCrossSite`, [`internal/api/uigateway_inbound.go`](../internal/api/uigateway_inbound.go)).
+      - A request must be same-origin, carry no fetch metadata, or be a top-level `GET` navigation, and an `Origin` it names must be its own.
+      - It closes a foreign app on a sibling run's origin driving the caller's own editor session: a same-site WebSocket carries the cookie, and CORS does not cover a WebSocket.
+      - Path mode serves every run from one origin, so the check is off there and the refusal above is the control.
     - **The console's own cookies (#1258).**
       - A relayed page is B1 code, and its `document.cookie` can set `Domain=<registrable domain>` cookies that the browser then sends to the console on any host under that domain.
       - Under secure cookies (TLS served directly, or `WARDYN_TLS_TERMINATED`) the console's session and sign-in cookies are `__Host-` cookies ([`internal/auth/oidc/cookies.go`](../internal/auth/oidc/cookies.go)).
@@ -1795,10 +1830,18 @@ hiding them would repeat the failure mode we are designed to avoid.
     - The relay deliberately sets no CSP or `X-Frame-Options` (`UIGatewayHandler`: "this origin serves the sandbox's own app, and the console's policy would break it"), and audit records only `ui.authorize`/`ui.open`/`ui.close` (residual #19).
     - **Operator acknowledgment:** opening a run's UI app runs that run's (agent-authored, possibly prompt-injected) code in your browser, with your browser's network reach.
     - A `Content-Security-Policy: connect-src 'self'` would narrow, not close, this — it stops in-page `fetch`/`XHR`/WebSocket egress but not navigation or a form submit — and is not implemented.
+    - **Inbound callers (rc.8).**
+      - A person an inbound app names opens it in their own browser, so the same acknowledgement holds for them: the app's code runs with that caller's network reach.
+      - That is why a named caller who is not the owner needs host mode (residual #18).
+      - The app's operator named its callers and each call is recorded: `inbound.allow` and `inbound.deny` rows carry the caller, the app, the method and the path, never the query.
+      - The `inbound` grant decides who may declare a port, not whom they may name: a granted person may name any person, group or service as a caller. An administrator limits the callers only by writing the app and its callers into a ceiling or a stored policy.
+      - The run's 8 gateway connections are shared by all its apps and callers, so callers holding them can make the owner's other apps on that run wait, or answer 503.
+      - A call keeps the run alive and thaws a paused one, which is intended for a service.
+      - The first connection may start the owner's launcher, which the owner declared.
 
 22. **The UI-relay's session cookie re-asserts ownership and revocation every 30 seconds; only a role demotion waits for the TTL.**
     - `uiSessionTTL` is 8 hours (`WARDYN_UI_SANDBOX_SESSION_TTL`); the cookie is minted once at `handleUIEnter` against the caller's role at that moment.
-    - Every 30 seconds (`uiReassertInterval`, `uiSessionStillAuthorized`) the relay re-checks, per request, that the principal may still enter the run, that no revocation postdates the session, and that a portal grant is live; an upgraded WebSocket is checked only at its start.
+    - Every 30 seconds (`uiReassertInterval`, `uiSessionStillAuthorized`) the relay re-checks, per request, that the principal may still enter the run, that no revocation postdates the session, and that a portal grant is live; an upgraded WebSocket is checked only at its start, except an inbound-token stream (rc.8: re-checked at most every 30 s; residual #98).
     - Demoting an admin does not end their cookie: its role is a login-time snapshot, so it keeps the admin's reach until the TTL lapses or the run stops.
 
 23. **The shipped default deployment collapses the audited insider into the trusted operator.**
@@ -2897,6 +2940,37 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Read-only enforcement moves to runnerd: it drops an observer's input and resizes. The organisation pushes every change of write authority, the lease fence included, and ends the session when runnerd does not acknowledge it in 2 s. Anyone sharing that tmux session is the same person or already on that host's Docker (#69).
     - This departs from "recordings record the attach exactly as they do today" in one respect: the cast, masker, key, head cap and audit rows are the same, but the bytes recorded are runnerd's copy, not bytes the organisation forwarded. Both are `runner_asserted` (#73), and the developer already has unrecorded `docker exec` on that host (#69). Rows carry `transport` `local` and `runner_id`.
     - The copy reaches the organisation at most 64 KiB or 2 s ahead of its acknowledgement, which is sent once the recorder accepts the bytes; so up to that much output can be shown before the organisation holds it. A stalled acknowledgement ends the session (`attach_tee_stalled`).
+
+96. **A macOS VM keeps the run's secrets and sign-ins on the Mac's disk, trusts an administrator's word that the Mac is managed, and can be starved by any local account [0.10; off by default].** ([`docs/operations/macos-vms.md`](../docs/operations/macos-vms.md).)
+    - Credentials: Wardyn brokers some kinds, and the proxy injects them in Docker, so those never enter the guest. A secret delivered as an environment variable or file, and an SSH key, do enter it. They sit in the guest's memory and on the run's clone disk, in the Mac user's home, until the run ends.
+    - Wardyn deletes the clone when the run ends. That is not secure erasure: the Mac's local APFS snapshots (Time Machine takes one about hourly and keeps it for 24 hours, and no folder can be excluded), freed blocks, and a backup tool that ignores Wardyn's Time Machine exclusion may keep a copy. Wardyn changes no backup or snapshot setting beyond excluding its own directory.
+    - Sign-ins in a macOS desktop are on the run's disk, not in memory as in a Linux VM. An agent set "Sign-ins in a desktop: Not allowed" is refused a macOS desktop. The Mac's own user can read a live run's disk (#69).
+    - The helper signs in to the guest's Screen Sharing with VNC's password scheme, DES of a challenge under the password, because the protocol requires it (RFC 6143 §7.2.2). Only the first 8 characters count: the desktop password is 8 characters from a 57-character alphabet, about 46 bits, and is per run, or per base where the guest cannot change it. The exchange never crosses a network. It goes over the VM's private channel to the guest's loopback port, so only the Mac's own root or the helper's user, or root in the guest, could capture it and attack it offline. The agent runs as a standard user.
+    - The gate is two assertions, `managed_device` (#90) and the MDM posture file, so it does not constrain a root developer. The MDM device-certificate proof is the next patch.
+    - Every local account can write the shared admission ledger. It can hold this Mac's macOS VM slots, memory or disk, or the lock, and so stop macOS VMs until it stops or the Mac restarts. It cannot admit a VM past the cap, and a runner refuses with a named reason after 10 seconds. An account that can do this can already exhaust the Mac directly. It can also make a package install fail closed by holding the lock for over 10 seconds.
+    - A runner frees its own ledger entry early in one stated case: a process-count heuristic that errs toward keeping the entry. Apple's cap of two is the backstop.
+    - Disk reserved per VM is its worst case on the live volume. Space that local snapshots hold is outside it, so macOS VMs can use more disk than they reserved.
+    - In the guest, tools that use the macOS keychain do not trust the run's proxy certificate, so hosts the proxy inspects show certificate errors there.
+    - The setup account and its random password stay in every run's guest. No one holds the password after preparing, and Remote Login is proved off. The guest may also hold it in its auto-login file until stage 1 overwrites that. A one-time code from a setup by hand is replaced by stage 1's first step.
+    - A Mac runner reports its macOS VM status to its own organisation as fixed codes and numbers: the preparing step, percent and download rate; a wait, failure or host-check code with free GB; and whether it runs in a GUI login session, as yes or no. No user or account name is sent. The base's error is the one free text: the runner replaces its login's home folder with `~`, but an error from Apple's framework, `softwareupdate` or the guest may still name another path.
+    - The macOS VM base's pinned guest tools are checked against SHA-256 values compiled into the runner, so the remaining trust is the supply chain at the time each pin was chosen.
+    - A macOS VM run's page says whether its disk was removed from the Mac, from its runner's report. The report is a state and a reason from closed code sets. It is kept only for that runner's own macOS VM runs and is shown as fixed console strings. It is the runner's word, so a compromised runner can claim a removal it did not make.
+
+97. **A runner can make its organisation write audit rows by sending events it will refuse; the rows are capped, and a refused event is acknowledged and not kept [0.10].** ([`internal/api/runner_event_refuse.go#Server.classifyRunnerEvent`](../internal/api/runner_event_refuse.go), [`internal/store/store_runner_event_refuse.go#PG.RefuseRunnerEvent`](../internal/store/store_runner_event_refuse.go).)
+    - The cap is 32 `runner.event.refuse` rows per runner per hour on each replica, then one `suppressed` row; it is held in memory, so a restart re-arms it.
+    - A refused event is acknowledged so the runner stops resending it, and only its SHA-256 and size are kept.
+    - A refused spool record next in its run's stream moves the run's spool cursor past it, as an accepted one would, so the records after it are not refused as a gap.
+    - A runner can close its own open actions as `refused` this way, which it could already do by answering `refused`.
+
+98. **A browser stream already open is not cut when its session ends; an inbound-token stream is [rc.8].**
+    - A UI-app session, the owner's or a named caller's, is re-checked every 30 seconds on a request, but an upgraded WebSocket is checked only at its start.
+    - So an owner's relayed socket that was open when their sessions were revoked keeps working until it closes or the run ends. Killing the run ends it.
+    - A stream an inbound token opened is the exception (rc.8: re-checked at most every 30 s): it is closed when the token is revoked, expires or its owner is suspended, or when the run's profile now denies UI apps or interactive sessions.
+    - The gateway also reuses a verified token's session for 30 seconds per token, run and app, so a new request after a revoke can still pass within that window.
+    - A named caller's browser session never re-checks the callers list, which is fixed for the run, or the caller's group membership.
+    - A person removed from a group keeps a session already open until `WARDYN_UI_SANDBOX_SESSION_TTL` (8 hours by default) bounds its later requests; a socket already upgraded is not cut by it. An inbound token carries the groups stamped at its mint, refreshed when its owner signs in again.
+    - Bounds: a caller can reach only the apps the run declared inbound, at most 8 relay connections and 50 requests a second per run and per caller, and the token never reaches the sandbox.
+    - No role reaches an inbound app: only the owner and the named callers can. A profile's `deny_ui_apps` or `deny_interactive` refuses a live call at the next re-check and closes an open inbound-token stream at its next tick; a browser stream already open is not cut by it.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 

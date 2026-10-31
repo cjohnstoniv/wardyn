@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -161,5 +162,26 @@ func TestHealthz_OmitsPolicyHelp(t *testing.T) {
 		if strings.Contains(w.Body.String(), leak) {
 			t.Errorf("/healthz body carries %q: %s", leak, w.Body.String())
 		}
+	}
+}
+
+// A unit as GET /governance returns it goes back as a PUT body: the server-set fields are accepted
+// and ignored, so GET, change one field, PUT the rest does not fail on "unknown field".
+func TestDecodeGovernanceUnitRequest_TakesTheReadOnlyFieldsGetReturns(t *testing.T) {
+	body := `{"id":"11111111-1111-1111-1111-111111111111","name":"p","ceiling":{"min_confinement_class":"CC2"},
+		"limits":{},"created_at":"NOW","updated_at":"NOW","created_by":"ann@example.com",
+		"kind":"unit","depth":1,"effective":{"ceiling":{}},"people":3,"path_provenance":{}}`
+	body = strings.ReplaceAll(body, "NOW", time.Now().UTC().Format(time.RFC3339))
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/governance/units/x", strings.NewReader(body))
+	req, msg := decodeGovernanceUnitRequest(httptest.NewRecorder(), r)
+	if msg != "" {
+		t.Fatalf("refused a GET-shaped unit: %s", msg)
+	}
+	if req.Name != "p" || req.Ceiling.MinConfinementClass != types.CC2 {
+		t.Fatalf("decoded %+v", req)
+	}
+	r = httptest.NewRequest(http.MethodPut, "/api/v1/governance/units/x", strings.NewReader(`{"name":"p","colour":"red"}`))
+	if _, msg := decodeGovernanceUnitRequest(httptest.NewRecorder(), r); !strings.Contains(msg, "unknown field") {
+		t.Fatalf("a field GET never returns must still be refused, got %q", msg)
 	}
 }

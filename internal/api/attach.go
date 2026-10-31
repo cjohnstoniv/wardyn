@@ -376,7 +376,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// not pretending it succeeded.
 	// A local socket sends its first frame once the runner has taken the grant (localAttach.run).
 	if la == nil {
-		wa.sendMode(ctx, !holder.canWrite())
+		wa.sendMode(ctx)
 	}
 
 	// Provenance: record this interactive session as a replayable
@@ -531,7 +531,8 @@ func (s *Server) refuseAttachEntry(w http.ResponseWriter, r *http.Request, run t
 		superAdmin := ta.role == oidc.RoleAdmin
 		// The sponsor arm: still the sponsor of the active identity since the ticket's authority time. A
 		// sponsor's ticket is member-stamped, so the door below always runs, a super admin sponsor included.
-		if !s.mayEnterRunOrSponsor(r.Context(), run, ta.principal, superAdmin, ta.authorizedAt) {
+		// A ticket minted for one app (inbound_ticket.go), a caller's above all, never opens a terminal.
+		if ta.caller != "" || ta.app != "" || !s.mayEnterRunOrSponsor(r.Context(), run, ta.principal, superAdmin, ta.authorizedAt) {
 			if superAdmin {
 				s.auditAttachRefused(r, id, ta.principal, "ticket", runOwnerOnlyReason, ta.via)
 				s.refuseRunOwnerOnly(w, r, run)

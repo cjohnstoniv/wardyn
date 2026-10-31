@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The one-line summary under the step, sticky at the bottom of the window,
+// The one-line summary under the step, sticky at the bottom of the window (in the page's flow on a phone, where it
+// would otherwise sit over the controls above it),
 // announced politely and only once it has held still for half a second, so
 // typing a size does not chatter. While nothing is chosen it is a prompt, and
 // after a held Continue an error, with the alert icon, never a check.
@@ -71,7 +72,7 @@ export function FilesSummary({ text, tone = "done" }: { text: string; tone?: Sum
       data-testid="nr-files-summary"
       data-tone={shown.tone}
       className={cn(
-        "sticky bottom-2.5 z-[8] flex items-start gap-2 rounded-[9px] border bg-card/95 px-3.5 py-3 shadow-floating",
+        "sticky bottom-2.5 z-[8] max-sm:static flex items-start gap-2 rounded-[9px] border bg-card/95 px-3.5 py-3 shadow-floating",
         shown.tone === "error" ? "border-[color-mix(in_srgb,var(--danger)_40%,var(--border))]" : "border-[color-mix(in_srgb,var(--primary)_35%,var(--border))]",
       )}
     >

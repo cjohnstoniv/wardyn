@@ -143,6 +143,33 @@ func (p UserMountPolicy) ValidateUserMount(principal, src string, writable bool)
 	return p.Writable().allows(src, real)
 }
 
+// ValidateUserMountLexical is the AUTHORING-time gate for a folder bound to a
+// person's runner: the folder lives on that machine, so nothing on this host is
+// read. Everything the path's text can show is still refused: the operator
+// deny-list's string half, a path outside every root of principal's, a
+// credential path, and, writable, a path outside the writable roots or over a
+// writable-deny entry in any letter case. The runner checks the folder itself
+// at bind (ValidateUserMountSource with its own roots).
+func (p UserMountPolicy) ValidateUserMountLexical(principal, src string, writable bool) error {
+	if err := ValidateMountSourceLexical(src); err != nil {
+		return err
+	}
+	roots := p.RootsFor(principal)
+	if len(roots) == 0 {
+		return fmt.Errorf("mount source %q is refused: this deployment configures no member workspace roots (WARDYN_USER_WORKSPACE_ROOTS / _MAP), so a member may not mount a host directory", src)
+	}
+	if !withinAnyCanon(src, roots, filepath.Clean) {
+		return fmt.Errorf("%w: mount source %q is outside every member workspace root (%s)", errMemberSourceRefused, src, strings.Join(roots, ", "))
+	}
+	if seg := DeniedUserSegment(src); seg != "" {
+		return fmt.Errorf("mount source %q is or traverses the credential path %q; denied", src, seg)
+	}
+	if !writable {
+		return nil
+	}
+	return p.Writable().allowsAt(src, src, filepath.Clean)
+}
+
 // UserWritableCeiling is the writable half of UserMountPolicy, carried on a
 // member run's spec (SandboxSpec.UserWritable) so the bind-time gate decides
 // writability again on the path it is about to bind.
@@ -159,19 +186,32 @@ func (p UserMountPolicy) Writable() UserWritableCeiling {
 // allows reports whether the ALREADY-RESOLVED real path of src may be bound
 // read-write under c.
 func (c UserWritableCeiling) allows(src, real string) error {
-	if withinAnyRoot(real, c.Deny) {
-		return fmt.Errorf("mount source %q may not be mounted writable: it is under a member writable-deny path (WARDYN_USER_WRITABLE_DENY)", src)
+	return c.allowsAt(src, real, resolveEntry)
+}
+
+// allowsAt is allows with each configured entry made comparable by canon:
+// resolveEntry on the host that binds, filepath.Clean where only the text is
+// known. The deny half compares names case-folded: on a Mac /r/APP and /r/app
+// are one folder, and EvalSymlinks keeps the spelling it was given, so a deny
+// holds whatever the spelling. It only ever denies more.
+func (c UserWritableCeiling) allowsAt(src, real string, canon func(string) string) error {
+	for _, entry := range c.Deny {
+		if foldWithin(canon(entry), real) {
+			return fmt.Errorf("mount source %q may not be mounted writable: it is under a member writable-deny path (WARDYN_USER_WRITABLE_DENY)", src)
+		}
 	}
 	// The other direction: a writable bind of a directory covers everything
 	// under it, the denied subtree included, and nothing downstream re-covers
 	// that subtree read-only.
-	if deny := denyPathUnder(real, c.Deny); deny != "" {
-		return fmt.Errorf("mount source %q may not be mounted writable: it contains the member writable-deny path %q (WARDYN_USER_WRITABLE_DENY)", src, deny)
+	for _, entry := range c.Deny {
+		if foldWithin(real, canon(entry)) {
+			return fmt.Errorf("mount source %q may not be mounted writable: it contains the member writable-deny path %q (WARDYN_USER_WRITABLE_DENY)", src, entry)
+		}
 	}
 	if len(c.Roots) == 0 {
 		return fmt.Errorf("mount source %q may not be mounted writable: no member writable roots are configured (WARDYN_USER_WRITABLE_ROOTS) — member mounts are read-only by default", src)
 	}
-	if !withinAnyRoot(real, c.Roots) {
+	if !withinAnyCanon(real, c.Roots, canon) {
 		return fmt.Errorf("mount source %q may not be mounted writable: it is outside every member writable root (WARDYN_USER_WRITABLE_ROOTS)", src)
 	}
 	return nil
@@ -184,12 +224,37 @@ func (c UserWritableCeiling) allows(src, real string) error {
 // source re-pointed since authoring is held to it on the path it resolves to
 // now. Nil skips that half, as a spec from a control plane that sends no
 // ceiling asks.
-func ValidateUserMountSource(src string, roots []string, writable *UserWritableCeiling) error {
+//
+// ownRoots, non-nil on a runner, are the roots its owner shares (--drive-root):
+// the resolved path must lie inside one of them as well, and none refuses. Nil
+// is wardynd's host, where the member's roots alone hold the bind.
+func ValidateUserMountSource(src string, roots []string, writable *UserWritableCeiling, ownRoots []string) error {
 	real, err := validateUserSource(src, roots)
-	if err != nil || writable == nil {
+	if err != nil {
 		return err
 	}
+	if err := withinOwnRoots(src, real, ownRoots); err != nil {
+		return err
+	}
+	if writable == nil {
+		return nil
+	}
 	return writable.allows(src, real)
+}
+
+// withinOwnRoots holds the ALREADY-RESOLVED real path of src to a runner's own
+// roots; nil roots (wardynd's host) hold nothing.
+func withinOwnRoots(src, real string, ownRoots []string) error {
+	switch {
+	case ownRoots == nil:
+		return nil
+	case len(ownRoots) == 0:
+		return fmt.Errorf("%w: mount source %q is refused: this runner shares no folder (start it with a --drive-root that covers it)", errMemberSourceRefused, src)
+	case !withinAnyRoot(real, ownRoots):
+		slog.Warn("runner: member mount source outside the runner's --drive-root", slog.String("source", src), slog.String("resolved", real))
+		return fmt.Errorf("%w: mount source %q must resolve inside a folder this runner shares (--drive-root: %s)", errMemberSourceRefused, src, strings.Join(ownRoots, ", "))
+	}
+	return nil
 }
 
 // validateUserSource runs the three additive checks and returns the resolved
@@ -281,28 +346,18 @@ func resolveEntry(entry string) string {
 // resolve), so a root behind a symlinked parent — /home -> /mnt/home — still
 // matches a resolved source under it.
 func withinAnyRoot(real string, roots []string) bool {
+	return withinAnyCanon(real, roots, resolveEntry)
+}
+
+// withinAnyCanon is withinAnyRoot with each root made comparable by canon.
+func withinAnyCanon(real string, roots []string, canon func(string) string) bool {
 	for _, root := range roots {
-		r := resolveEntry(root)
+		r := canon(root)
 		if real == r || strings.HasPrefix(real, r+string(filepath.Separator)) {
 			return true
 		}
 	}
 	return false
-}
-
-// denyPathUnder returns the first of deny that lies strictly under the
-// ALREADY-RESOLVED real path, as configured, or "" when real contains none of
-// them. It is withinAnyRoot read the other way, and canonicalizes each entry
-// exactly as that does, so the two can never disagree about where an entry is.
-func denyPathUnder(real string, deny []string) string {
-	prefix := strings.TrimSuffix(real, string(filepath.Separator)) + string(filepath.Separator)
-	for _, entry := range deny {
-		d := resolveEntry(entry)
-		if strings.HasPrefix(d, prefix) {
-			return entry
-		}
-	}
-	return ""
 }
 
 // DeniedUserSegment returns the offending path element when real IS or

@@ -238,3 +238,40 @@ func TestHubAuthenticationBeforeAdmission(t *testing.T) {
 		})
 	}
 }
+
+// Every event of a session, fresh or resumed, reaches Admission.Event with that session's id on its context
+// (EventSession): a resumed connection runs no BeginInventory, so the id is the one its session began with.
+func TestConfigureAdmission_EventsCarryTheirSession(t *testing.T) {
+	for _, resumed := range []bool{false, true} {
+		var got []string
+		a := Admission{Event: func(ctx context.Context, _ runnerwire.Event) error {
+			got = append(got, EventSession(ctx))
+			return nil
+		}}
+		var cfg runnerwire.PeerConfig
+		action := uuid.New()
+		pending := []runnerwire.PendingAction{{ID: action}}
+		if resumed {
+			pending = nil
+		}
+		configureAdmission(context.Background(), &cfg, resumed, pending, a, &hubSession{}, "sess-1", func() *runnerwire.Peer { return nil })
+		ev := runnerwire.Event{Kind: runnerwire.EventWorkload}
+		if !resumed {
+			// Before STATE a fresh session takes only its pending actions' results.
+			data, err := json.Marshal(runnerwire.ActionResult{ID: action})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ev = runnerwire.Event{Kind: runnerwire.EventActionResult, Data: data}
+		}
+		if err := cfg.OnEventChecked(ev); err != nil {
+			t.Fatalf("resumed=%v: event refused: %v", resumed, err)
+		}
+		if len(got) != 1 || got[0] != "sess-1" {
+			t.Fatalf("resumed=%v: Event saw sessions %q, want [sess-1]", resumed, got)
+		}
+	}
+	if s := EventSession(context.Background()); s != "" {
+		t.Fatalf("EventSession of a plain context = %q, want empty", s)
+	}
+}

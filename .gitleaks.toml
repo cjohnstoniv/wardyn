@@ -13,7 +13,7 @@
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 description = "Deliberate fake fixtures and prose false positives"
 regexTarget = "match"
 regexes = [
@@ -70,6 +70,13 @@ regexes = [
     # collection name) as an argument beside a token fixture, so the rule
     # parses the path as the key. Not a credential.
     '''"tfs/defaultcollection"''',
+    # internal/macvm/stage2boot_test.go's fake per-run socket key, a 0-9a-f run
+    # standing in for the random name a stage-2 boot gets. Not a credential.
+    '''SockKey: "0123456789ab"''',
+    # internal/macvm/rfbshim.go's desktop password alphabet: the set of
+    # characters a generated one-time desktop password is drawn from (no
+    # look-alikes), a source constant, never a password itself.
+    '''desktopPasswordAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"''',
 ]
 paths = [
     # The leaked-value detector's own tests: intentionally realistic-shaped
@@ -93,3 +100,14 @@ paths = [
     # with them, so the signer can be checked against them byte for byte.
     '''internal/egress/proxy/testdata/sigv4/''',
 ]
+
+# RFC 6455's sample WebSocket key, base64 of "the sample nonce": the UI-sandbox e2e sends it to open an upgrade, and
+# generic-api-key reads it as a secret. It is a published example value, never a credential. Scoped to that one rule,
+# that one file and that exact secret (all three must hold).
+[[allowlists]]
+description = "RFC 6455 sample WebSocket key in the UI-sandbox e2e"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^dGhlIHNhbXBsZSBub25jZQ==$''']
+paths = ['''^scripts/run-e2e-ui-sandbox\.sh$''']

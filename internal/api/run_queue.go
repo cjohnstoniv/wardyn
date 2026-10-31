@@ -110,6 +110,9 @@ type queuedLaunch struct {
 	// DriveRunner is the one runner every drive is bound to (drivesBoundRunner), nil for none: the
 	// verdict then keeps that runner of the person's own, as the start's fold does.
 	DriveRunner *uuid.UUID `json:"drive_runner,omitempty"`
+	// MountRunner is the one runner the run's workspace folders are bound to (boundMountsRunner), nil for
+	// none: the verdict then keeps that runner alone, as the start's fold does.
+	MountRunner *uuid.UUID `json:"mount_runner,omitempty"`
 	// NoLocal says the launch waits on the pool's remote-hosted runners and cannot run on the person's
 	// own (runPlacement.noLocal): the verdict and the start then keep it off them.
 	NoLocal bool `json:"no_local,omitempty"`
@@ -290,7 +293,8 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		created = runs[0]
 	}
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+created.ID.String())
-	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings, ResourcesApplied: &q.f.place.applied})
+	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings,
+		WarningContext: s.warningContexts(ctx, q.f.ceiling, warnings), ResourcesApplied: &q.f.place.applied})
 }
 
 // waitReason is why the launch waits: it is scheduled for later, the pool is at its own cap, or (a pool
@@ -320,7 +324,7 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		Repos: runRepos(types.AgentRun{Repo: q.req.Repo}, nil), LifetimeCapSec: q.f.end.capSec,
 		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources, Unbound: q.f.place.unbound,
 		Barrier: q.f.enforced, Drives: mountsDrives(q.f.drives, q.f.keep), DriveRunner: drivesBoundRunner(q.f.drives, q.f.keep),
-		NoLocal: q.f.place.noLocal,
+		NoLocal: q.f.place.noLocal, MountRunner: q.f.place.mountRunner,
 	}
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
 	if q.f.ceiling.Unit != nil {
@@ -391,6 +395,7 @@ func (q queuedCreate) warnings(s *Server, r *http.Request, created types.AgentRu
 	warnings = append(warnings, s.repoSourceWarnings(ctx, created.ID, q.f.spec, q.req)...)
 	warnings = append(warnings, q.f.fitWarnings...)
 	warnings = append(warnings, q.f.end.warnings(created)...)
+	warnings = append(warnings, queuedServiceWarnings(created, q.f.ceiling.Limits.RunLimits, q.f.end)...)
 	warnings, _ = appendCredentialConfinementAdvisory(warnings, q.f.spec, q.f.enforced, q.f.modelCred.Kind)
 	return append(warnings, noModelAccessWarning(q.req, q.f.mpChoice)...)
 }

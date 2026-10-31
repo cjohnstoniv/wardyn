@@ -67,8 +67,9 @@ func TestSecurityLockManagedOutranksFlagAndEnv(t *testing.T) {
 			locked = append(locked, f.name)
 		}
 	}
-	if !slices.Equal(locked, lockedNames) {
-		t.Fatalf("locked settings = %v, want %v", locked, lockedNames)
+	// drive_root, a list, is locked too; TestSecurityLockPinsDriveRoot holds it.
+	if want := append(slices.Clone(lockedNames), "drive_root"); !slices.Equal(locked, want) {
+		t.Fatalf("locked settings = %v, want %v", locked, want)
 	}
 	names := map[string]string{"org_url": "OrgURL", "proxy_image": "ProxyImage", "trusted_ca_file": "TrustedCAFile", "org_ca_file": "OrgCAFile", "recording_store": "RecordingStore"}
 	for _, in := range []runnerInputs{inputs(lockFlags, lockEnv, withLock("true"), runnerFile{}), inputs(nil, lockEnv, withLock("1"), runnerFile{})} {
@@ -277,5 +278,82 @@ func TestSecurityLockSetupRefusesDisagreeingFlag(t *testing.T) {
 		if err := c.Execute(); err == nil || !strings.Contains(err.Error(), lockSettingKey) {
 			t.Errorf("setup %v: %v; want a refusal naming %s", args, err, lockSettingKey)
 		}
+	}
+}
+
+// With the lock, a managed DriveRoot is the value over --drive-root and WARDYN_DRIVE_ROOT, as the other
+// security settings are: serve refuses a flag or variable that disagrees, naming the lock and the source
+// without the value, and takes one that agrees.
+func TestSecurityLockPinsDriveRoot(t *testing.T) {
+	oldOS, oldExtract, oldJSON := prefsOS, prefsExtract, prefsExtractJSON
+	t.Cleanup(func() { prefsOS, prefsExtract, prefsExtractJSON = oldOS, oldExtract, oldJSON })
+	prefsOS = "darwin"
+	prefsExtract = func(_, key string) (string, error) { return map[string]string{lockSettingKey: "true"}[key], nil }
+	prefsExtractJSON = func(_, key string) (string, error) { return map[string]string{"DriveRoot": `["/m/root"]`}[key], nil }
+	t.Setenv("WARDYN_DRIVE_ROOT", "")
+
+	if err := serveConfigErr(t, "--drive-root", "/f/root"); err == nil || !strings.Contains(err.Error(), lockSettingKey) ||
+		!strings.Contains(err.Error(), "--drive-root") || strings.Contains(err.Error(), "/f/root") {
+		t.Errorf("--drive-root: %v; want a refusal naming %s and the flag, without the value", err, lockSettingKey)
+	}
+	t.Setenv("WARDYN_DRIVE_ROOT", "/e/root")
+	if err := serveConfigErr(t); err == nil || !strings.Contains(err.Error(), lockSettingKey) || !strings.Contains(err.Error(), "WARDYN_DRIVE_ROOT") {
+		t.Errorf("WARDYN_DRIVE_ROOT: %v; want a refusal naming %s and the variable", err, lockSettingKey)
+	}
+	t.Setenv("WARDYN_DRIVE_ROOT", "")
+	if err := serveConfigErr(t, "--drive-root", "/m/root"); err != nil {
+		t.Errorf("a --drive-root that agrees with the profile was refused: %v", err)
+	}
+	m := withLock("true")
+	m["DriveRoot"] = `["/m/root"]`
+	if got := resolveRunnerConfig(inputs(map[string]string{"drive-root": "/f/root"}, nil, m, runnerFile{})).field("drive_root"); !slices.Equal(got.List, []string{"/m/root"}) || got.Source != "managed preference DriveRoot (locked)" {
+		t.Errorf("drive_root under the lock = %+v, want the managed value", got)
+	}
+	m = withLock("false")
+	m["DriveRoot"] = `["/m/root"]`
+	if got := resolveRunnerConfig(inputs(map[string]string{"drive-root": "/f/root"}, nil, m, runnerFile{})).field("drive_root"); !slices.Equal(got.List, []string{"/f/root"}) {
+		t.Errorf("drive_root without the lock = %+v, want the flag", got)
+	}
+}
+
+// The shipped profile sets DriveRoot to an empty array, its "unset". With the lock on, that pins nothing:
+// a --drive-root is not refused, and without one the runnerd.json roots are in effect, read from the file.
+func TestSecurityLockEmptyManagedDriveRootPinsNothing(t *testing.T) {
+	oldOS, oldExtract, oldJSON := prefsOS, prefsExtract, prefsExtractJSON
+	t.Cleanup(func() { prefsOS, prefsExtract, prefsExtractJSON = oldOS, oldExtract, oldJSON })
+	prefsOS = "darwin"
+	prefsExtract = func(_, key string) (string, error) { return map[string]string{lockSettingKey: "true"}[key], nil }
+	prefsExtractJSON = func(_, key string) (string, error) { return map[string]string{"DriveRoot": `[]`}[key], nil }
+	t.Setenv("WARDYN_DRIVE_ROOT", "")
+
+	if err := serveConfigErr(t, "--drive-root", "/f/root"); err != nil {
+		t.Errorf("--drive-root under the lock with an empty DriveRoot was refused: %v", err)
+	}
+	cfg, err := serveCmdConfig(t, `{"drive_root": ["/from/file"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.field("drive_root"); !slices.Equal(got.List, []string{"/from/file"}) || !strings.HasPrefix(got.Source, "file ") {
+		t.Errorf("drive_root under the lock with an empty DriveRoot = %+v, want the runnerd.json roots from the file", got)
+	}
+}
+
+// With the lock, a managed DriveRoot that is no array is refused even when --drive-root is given: the flag
+// never stands in for a profile that failed to say which roots it locks.
+func TestSecurityLockMalformedManagedDriveRootRefusesTheFlag(t *testing.T) {
+	oldOS, oldExtract, oldJSON := prefsOS, prefsExtract, prefsExtractJSON
+	t.Cleanup(func() { prefsOS, prefsExtract, prefsExtractJSON = oldOS, oldExtract, oldJSON })
+	prefsOS = "darwin"
+	prefsExtract = func(_, key string) (string, error) { return map[string]string{lockSettingKey: "true"}[key], nil }
+	prefsExtractJSON = func(_, key string) (string, error) { return map[string]string{"DriveRoot": `"/a/string"`}[key], nil }
+	cfg, err := serveCmdConfig(t, "", "--drive-root", "/f/root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.field("drive_root"); got.Err == nil || len(got.List) != 0 {
+		t.Errorf("drive_root under the lock with a string DriveRoot and --drive-root = %+v, want the managed preference refused", got)
+	}
+	if err := cfg.checkDriveRoots("docker"); err == nil || !strings.Contains(err.Error(), "DriveRoot") {
+		t.Errorf("checkDriveRoots = %v, want the malformed DriveRoot refused", err)
 	}
 }

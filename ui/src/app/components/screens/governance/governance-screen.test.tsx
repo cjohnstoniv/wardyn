@@ -719,8 +719,8 @@ describe("GovernanceScreen — the third limit is the user-drive door", () => {
     await userEvent.click(screen.getByRole("button", { name: `${GOV.EDIT} ${GREENFIELD.name}` }));
 
     const editor = await screen.findByTestId("governance-profile-editor");
-    // 4 doors (the member-drive door among them) + RL-14's two run-limit gates (allow_no_end, user_changes_limits).
-    expect(within(editor).getAllByRole("switch")).toHaveLength(6);
+    // 5 doors (the member-drive and UI-apps doors among them) + RL-14's two run-limit gates (allow_no_end, user_changes_limits).
+    expect(within(editor).getAllByRole("switch")).toHaveLength(7);
     const door = within(editor).getByRole("switch", { name: GOV.LIMIT_DRIVE_LABEL });
     expect(door).toHaveAttribute("aria-checked", "false");
     expect(within(editor).getByText(GOV.LIMIT_DRIVE_HINT)).toBeInTheDocument();

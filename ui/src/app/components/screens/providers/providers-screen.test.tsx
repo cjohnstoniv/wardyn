@@ -74,7 +74,7 @@ vi.mock("../../../lib/api/drives", async () => {
 });
 
 vi.mock("../../../lib/api/base-images", () => ({
-  baseImages: { list: () => Promise.resolve([]), add: vi.fn() },
+  baseImages: { list: () => Promise.resolve({ rows: [], imageBuilder: true }), add: vi.fn() },
 }));
 
 const { navigateMock } = vi.hoisted(() => ({ navigateMock: vi.fn() }));

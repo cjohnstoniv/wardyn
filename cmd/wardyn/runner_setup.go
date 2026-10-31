@@ -412,6 +412,7 @@ func resolveRunnerd(ctx context.Context, f runnerSetupFlags, org, advertised str
 	cleanup := func() { _ = os.RemoveAll(tmp) }
 	dst := filepath.Join(tmp, "wardyn-runnerd")
 	var got string
+	downloaded := src == ""
 	if src != "" {
 		got, err = copyHashed(dst, func() (io.ReadCloser, error) { return os.Open(src) })
 	} else {
@@ -429,6 +430,9 @@ func resolveRunnerd(ctx context.Context, f runnerSetupFlags, org, advertised str
 	}
 	if err == nil {
 		err = os.Chmod(dst, 0o700)
+	}
+	if err == nil && downloaded {
+		err = saveArtifactBase(f.artifactBase)
 	}
 	if err != nil {
 		cleanup()
@@ -475,9 +479,9 @@ func runnerdURL(flag, advertised string) (string, error) {
 	return fmt.Sprintf("%s/v%s/wardyn-runnerd-%s-%s", base, setupVersion(), setupGOOS, setupGOARCH), nil
 }
 
-// artifactBase is where release assets are downloaded from: --artifact-base (then saved in cli.json), the
-// managed preference ArtifactBase (macOS profile), the saved artifact_base, the organisation's advertised
-// mirror (/healthz.cli_artifact_base), else the release.
+// artifactBase is where release assets are downloaded from: --artifact-base (saved in cli.json by
+// saveArtifactBase once the download is verified), the managed preference ArtifactBase (macOS profile), the
+// saved artifact_base, the organisation's advertised mirror (/healthz.cli_artifact_base), else the release.
 func artifactBase(flag, advertised string) (string, error) {
 	dir, err := cliprofile.Dir()
 	if err != nil {
@@ -486,9 +490,6 @@ func artifactBase(flag, advertised string) (string, error) {
 	base := ""
 	if flag != "" {
 		if base, err = cliprofile.NormalizeArtifactBase(flag); err != nil {
-			return "", err
-		}
-		if err := cliprofile.WriteArtifactBase(dir, base); err != nil {
 			return "", err
 		}
 	} else if base, err = managedArtifactBase(); err != nil {
@@ -506,6 +507,19 @@ func artifactBase(flag, advertised string) (string, error) {
 		}
 	}
 	return strings.TrimSuffix(cmp.Or(base, releaseDownloadBase), "/"), nil
+}
+
+// saveArtifactBase keeps --artifact-base in cli.json for next time. It runs only after what was downloaded
+// from it has been verified, so a mirror that served something refused is not remembered.
+func saveArtifactBase(flag string) error {
+	if flag == "" {
+		return nil
+	}
+	dir, err := cliprofile.Dir()
+	if err != nil {
+		return err
+	}
+	return cliprofile.WriteArtifactBase(dir, flag)
 }
 
 // download GETs u through orgClient for each origin it is sent to. orgClient follows no redirect, and a

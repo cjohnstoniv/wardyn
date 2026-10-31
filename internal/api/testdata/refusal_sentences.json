@@ -30,6 +30,21 @@
     "sentence": "\"requires admin role\" (registry)"
   },
   {
+    "reason": "admin_surface",
+    "target": "r.URL.Path",
+    "sentence": "\"requires admin role\" (registry)"
+  },
+  {
+    "reason": "admin_surface",
+    "target": "r.URL.Path",
+    "sentence": "\"requires admin role\" (registry)"
+  },
+  {
+    "reason": "admin_surface",
+    "target": "r.URL.Path",
+    "sentence": "\"requires admin role\" (registry)"
+  },
+  {
     "reason": "admin_view",
     "target": "r.URL.Path",
     "sentence": "adminViewLaunchRefusal"
@@ -43,6 +58,11 @@
     "reason": "attach_ticket_foreign_run",
     "target": "run.ID.String()",
     "sentence": "\"approval not found\""
+  },
+  {
+    "reason": "attach_ticket_foreign_run",
+    "target": "run.ID.String()",
+    "sentence": "\"run not found\""
   },
   {
     "reason": "attach_ticket_foreign_run",
@@ -148,6 +168,11 @@
     "reason": "capKinds[capFeature].reason",
     "target": "\"runs.component\"",
     "sentence": "\"Custom components aren't turned on for you. Ask your admin.\""
+  },
+  {
+    "reason": "capKinds[capFeature].reason",
+    "target": "\"runs.ui_apps\"",
+    "sentence": "\"Inbound apps aren't turned on for you. Ask your admin, or declare the app without inbound.\""
   },
   {
     "reason": "capKinds[capFeature].reason",
@@ -265,6 +290,16 @@
     "sentence": "msg"
   },
   {
+    "reason": "drive_not_in_pool",
+    "target": "\"runs.drive\"",
+    "sentence": "msg"
+  },
+  {
+    "reason": "drive_not_in_pool",
+    "target": "\"runs.drive\"",
+    "sentence": "msg"
+  },
+  {
     "reason": "drive_target_conflict",
     "target": "\"runs.drive\"",
     "sentence": "msg"
@@ -313,6 +348,11 @@
     "reason": "governance_unit",
     "target": "\"runs.interactive_start\"",
     "sentence": "fmt.Sprintf(\"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.\", name)"
+  },
+  {
+    "reason": "governance_unit",
+    "target": "\"runs.placement\"",
+    "sentence": "fmt.Sprintf(macOSBaseDenied, ceiling.Unit.Name, cmp.Or(base, types.MacOSStandardBase))"
   },
   {
     "reason": "governance_unit",

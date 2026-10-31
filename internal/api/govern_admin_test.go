@@ -164,6 +164,12 @@ func governSites() []governSite {
 				warns := s.boundUIApps(ctx, governReq(ctx), &spec, walled(types.GovernanceLimits{DenyUIApps: true}), false)
 				return len(warns) > 0 && len(spec.UIApps) == 0
 			}},
+		{"governance_run_doors.go boundInboundApps", plain,
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				spec := types.RunPolicySpec{UIApps: []types.UIApp{{Name: "api", Port: 8080, Inbound: true}}}
+				warns := s.boundUIApps(ctx, governReq(ctx), &spec, walled(types.GovernanceLimits{DenyInteractive: true}), false)
+				return len(warns) > 0 && len(spec.UIApps) == 0
+			}},
 		{"capabilities.go newCapBatch", capSrv(&capStore{enf: map[string]bool{capAgent: true}}),
 			func(t *testing.T, s *Server, ctx context.Context) bool {
 				ok, err := s.newCapBatch(ctx).allowed(ctx, capAgent, "claude-code")
@@ -330,15 +336,18 @@ var governSiteElsewhere = map[string]string{
 	"boundaryEndPlan":         "row: run_end_wait.go handleSetRunEndAndWait (the end bound)",
 	"memberResources":         "row: runs_dispatch_ceiling.go boundResources",
 	"uiAppsDenied":            "row: governance_run_doors.go boundUIApps",
+	"inboundAppsDenied":       "row: governance_run_doors.go boundInboundApps",
 	"recordLaneVeto":          "row: workspace_admission.go laneVetoedBy",
 	"deniedPlacements":        "test: run_placement_capabilities_test.go",
 	"gitHubOwnTokenDecider":   "test: gh_own_pat_test.go",
 	"handleRecordGoverned":    "test: record_govern_admin_test.go",
 	"markGovernanceExempt":    "test: govern_admin_doors_test.go",
 	"meGovernanceContact":     "none: /me display read, no switch-on test",
+	"attachAuthority":         "test: attach_authority_test.go",
 	"refuseNoTicketAttach":    "none: attach entry door, no switch-on test",
 	"revivePATNarrowing":      "test: run_revive_test.go",
 	"unionDirectGitHubEgress": "none: direct GitHub egress union, no switch-on test",
+	"macOSBaseAllowedFor":     "none: a macOS base's allowance, shared by create and the pool list, no switch-on test",
 }
 
 // runUngovernedCallers is every function in dir's non-test sources that calls

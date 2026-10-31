@@ -242,6 +242,14 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 
+  // The macOS VM block of the site config: one tag today (max_base_age_days).
+  it("SiteMacOSVM (`macos_vm` in site config): full parity with the TS mirror", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "SiteMacOSVM");
+    expect(goTags).toEqual(["max_base_age_days"]);
+    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "SiteMacOSVM");
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+
   // withheld_scm_hosts rows: three tags, no Go struct beyond types.WithheldScmHost.
   it("WithheldScmHost (`withheld_scm_hosts` in site config): full parity with the TS mirror", () => {
     const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "WithheldScmHost");
@@ -320,9 +328,11 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["RunPolicySource", "runPolicySource", "RunPolicySource"],
     ["RunPolicyChange", "runPolicyChange", "RunPolicyChange"],
     ["StoredPolicyNow", "storedPolicyNow", "StoredPolicyNow"],
+    ["RunPolicyHostMarks", "hostMarks", "RunPolicyHostMarks"],
   ])("%s: full parity between pkg/client, the server struct and the TS mirror", (sdkName, serverName, tsName) => {
     const sdkGo = readFileSync(join(root, "pkg/client/run_policy.go"), "utf8");
-    const serverGo = readFileSync(join(root, "internal/api/run_policy_view.go"), "utf8");
+    const serverGo =
+      readFileSync(join(root, "internal/api/run_policy_view.go"), "utf8") + readFileSync(join(root, "internal/api/run_host_marks.go"), "utf8");
     const sdkTags = goJSONTags(sdkGo, sdkName);
     expect(sdkTags.length).toBeGreaterThanOrEqual(3);
     expect(new Set(goJSONTags(serverGo, serverName))).toEqual(new Set(sdkTags));
@@ -388,6 +398,35 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(goTags).toContain("multi_agent_tasks");
     const setupTs = readFileSync(join(root, "ui/src/app/lib/types/setup.ts"), "utf8");
     expect(new Set(tsInlineKeys(setupTs, "SetupStatus", "features"))).toEqual(new Set(goTags));
+  });
+
+  // internal/types/machine.go: AgentRun.vm_machine and machine_kind.
+  it("VMMachine: full parity with the TS VMMachine mirror", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/types/machine.go"), "utf8"), "VMMachine");
+    expect(goTags).toContain("guest_os");
+    const runsTs = readFileSync(join(root, "ui/src/app/lib/types/runs.ts"), "utf8");
+    expect(new Set(tsInterfaceTopKeys(runsTs, "VMMachine"))).toEqual(new Set(goTags));
+  });
+
+  it("MachineKind: the TS VMKind is exactly Go's non-container kinds", () => {
+    const machineGo = readFileSync(join(root, "internal/types/machine.go"), "utf8");
+    const consts = new Map([...machineGo.matchAll(/^\s*(Machine\w+)\s+MachineKind\s*=\s*"([a-z_]+)"/gm)].map((m) => [m[1], m[2]] as const));
+    // The kinds the server accepts are the case list in MachineKind.Validate, not the constants alone: a kind
+    // declared and left out of it (or listed and not declared) is refused or unknown at run time.
+    const cases = /func \(k MachineKind\) Validate\(\) error \{\s*switch k \{\s*case ([^:]+):/.exec(machineGo);
+    if (!cases) throw new Error("machine.go: no case list in MachineKind.Validate");
+    const goKinds = cases[1].split(",").map((c) => c.trim()).filter((c) => c !== '""').map((c) => {
+      const v = consts.get(c);
+      if (v === undefined) throw new Error(`machine.go: Validate lists ${c}, which is no MachineKind constant`);
+      return v;
+    });
+    expect(new Set(goKinds)).toEqual(new Set(consts.values()));
+    expect(goKinds).toContain("macos_vm");
+    const kindTs = readFileSync(join(root, "ui/src/app/lib/types/machine-kind.ts"), "utf8");
+    const vm = /export type VMKind = ([^;]+);/.exec(kindTs);
+    if (!vm) throw new Error("machine-kind.ts: no VMKind");
+    const tsVMKinds = [...vm[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+    expect(new Set(tsVMKinds)).toEqual(new Set(goKinds.filter((k) => k !== "container")));
   });
 
   // GET /runs/{id}/sign-in: RunSignIn mirrors runSignInResponse.
@@ -797,6 +836,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["internal/types/types.go", "RunQueue", "runs.ts", "RunQueue"],
     ["pkg/client/runner_pools.go", "PoolSlots", "runner-pools.ts", "PoolSlots"],
     ["pkg/client/runner_pools.go", "RunnerPoolCatalogueEntry", "runner-pools.ts", "RunnerPoolCatalogueEntry"],
+    ...["PoolMacOSVM", "PoolMacOSBase"].map((n): [string, string, string, string] => ["pkg/client/runner_pools.go", n, "runner-pools.ts", n]),
   ])("%s %s: full parity with the TS %s %s mirror", (goFile, goName, tsFile, tsName) => {
     const go = readFileSync(join(root, goFile), "utf8");
     const ts = readFileSync(join(root, "ui/src/app/lib/types", tsFile), "utf8");
@@ -916,6 +956,17 @@ describe("Restriction wire (GET /governance restrictions, POST/PUT /governance/r
     }
     const pol = readFileSync(join(root, "ui/src/app/lib/api/policies.ts"), "utf8");
     expect(tsInterfaceTopKeys(pol, "DefaultPolicyRestriction").sort()).toEqual(goJSONTags(policies, "defaultPolicyRestriction").sort());
+  });
+});
+
+describe("Your walls wire (GET/PUT /me/walls)", () => {
+  it("the walls DTOs' TypeScript keys are exactly the Go json tags", () => {
+    const root = repoRoot();
+    const go = readFileSync(join(root, "internal/types/personal_walls.go"), "utf8");
+    const ts = readFileSync(join(root, "ui/src/app/lib/api/walls.ts"), "utf8");
+    for (const name of ["PersonalWalls", "PersonalWallsSpec"]) {
+      expect(tsInterfaceTopKeys(ts, name).sort(), name).toEqual(goJSONTags(go, name).sort());
+    }
   });
 });
 

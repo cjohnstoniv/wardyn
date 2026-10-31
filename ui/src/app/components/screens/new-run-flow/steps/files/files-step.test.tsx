@@ -694,7 +694,7 @@ describe("mount map and summary", () => {
     checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), attachments: [{ ...REPO_ATTACHMENT, target: "/srv/checkout/payments", starts_here: true }] };
     show({ ...INTERACTIVE, workspaces: [{ workspace_id: "ws-payments", repos: [{ repo: "github.com/acme/payments" }] }], start_folder: { kind: "attachment", attachment: "ws-payments", repo: "github.com/acme/payments" } });
     const map = screen.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
-    expect(await within(map).findByText("└ /srv/checkout/payments")).toBeInTheDocument();
+    expect(await within(map).findByTitle("/srv/checkout/payments")).toBeInTheDocument();
     expect(within(map).getByText(`${NR_FILES.MOUNT_ITEM("payments")} ${NR_FILES.MOUNT_STARTS}`)).toBeInTheDocument();
     expect(within(map).getByText(NR_FILES.MOUNT_MAIN("4 GiB"))).toBeInTheDocument();
     expect(within(card("payments")).getByTitle("/srv/checkout/payments")).toBeInTheDocument();
@@ -710,32 +710,32 @@ describe("mount map and summary", () => {
     };
     show({ ...BACKGROUND, workspaces: [{ workspace_id: "ws-payments", repos: [{ repo: "github.com/acme/payments" }] }], drives: [{ drive_id: YOUR_DRIVE.id }], start_folder: { kind: "attachment", attachment: "ws-payments", repo: "github.com/acme/payments" } });
     const map = screen.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
-    await within(map).findByText("└ /home/agent/drive");
+    await within(map).findByTitle("/home/agent/drive");
     await screen.findByRole("button", { name: NR_FILES.EDIT_NAMED("payments") });
-    expect(within(map).getAllByRole("listitem").map((li) => li.querySelector("code")?.textContent)).toEqual(["/", "└ /home/agent/work/payments", "└ /home/agent/drive"]);
+    expect(within(map).getAllByRole("listitem").map((li) => li.querySelector("code")?.textContent)).toEqual(["/", "/home/agent/work/payments", "/home/agent/drive"]);
   });
 
   it("keeps the last server answer through an edit instead of guessing a map from the draft", async () => {
     checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), attachments: [REPO_ATTACHMENT, { kind: "drive", drive_id: "d1", name: "Notes", target: "/home/agent/drives/notes", read_only: false, starts_here: false }] };
     show({ ...INTERACTIVE, workspaces: [{ workspace_id: "ws-payments" }, { workspace_id: "ws-docs" }], start_folder: { kind: "attachment", attachment: "ws-payments" } });
     const map = screen.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
-    expect(await within(map).findByText("└ /home/agent/drives/notes")).toBeInTheDocument();
+    expect(await within(map).findByTitle("/home/agent/drives/notes")).toBeInTheDocument();
     // the next answer is not in yet: the hook has nothing current for this body
     checks.result = null;
     await userEvent.click(await screen.findByRole("button", { name: NR_FILES.REMOVE_NAMED("docs") }));
-    expect(within(map).getByText("└ /home/agent/drives/notes")).toBeInTheDocument();
-    expect(within(map).getByText("└ /home/agent/work/payments")).toBeInTheDocument();
+    expect(within(map).getByTitle("/home/agent/drives/notes")).toBeInTheDocument();
+    expect(within(map).getByTitle("/home/agent/work/payments")).toBeInTheDocument();
   });
 
   it("drops a kept answer when the person it was for is gone", async () => {
     checks.result = { ...filesPreflight(MAIN_DRIVE_FACTS.filesystem), attachments: [REPO_ATTACHMENT] };
     show({ ...INTERACTIVE, workspaces: [{ workspace_id: "ws-payments" }, { workspace_id: "ws-docs" }], start_folder: { kind: "attachment", attachment: "ws-payments" } });
     const map = screen.getByRole("region", { name: NR_FILES.MOUNT_TITLE });
-    expect(await within(map).findByText("└ /home/agent/work/payments")).toBeInTheDocument();
+    expect(await within(map).findByTitle("/home/agent/work/payments")).toBeInTheDocument();
     checks.principal = "bob";
     checks.result = null;
     await userEvent.click(await screen.findByRole("button", { name: NR_FILES.REMOVE_NAMED("docs") }));
-    expect(within(map).queryByText("└ /home/agent/work/payments")).toBeNull();
+    expect(within(map).queryByTitle("/home/agent/work/payments")).toBeNull();
   });
 
   it("the summary is a sticky status that names the start and the kept drives and folders as one list", async () => {

@@ -45,7 +45,7 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
 | Shape | Sub-line shown | Runs as |
 |---|---|---|
 | **Agent task** | Interactive · Autonomous · Repeat / schedule coming soon | A one-time coding task, driven by you or running on its own |
-| **Environment sandbox** | Interactive · Your drive is attached when you have one | A reusable workspace for development or analysis |
+| **Environment** | Interactive · Your drive is attached when you have one | A reusable workspace for development or analysis |
 | **Application sandbox** | Automation / script · Application / server | A sandboxed command that runs on its own, or a server you open in your browser |
 
 - Choosing a shape opens step 2. Choosing the shape a draft already has changes nothing: its starter, prompt and task stay.
@@ -55,7 +55,7 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
 
 - **How should it run?** (Agent task only): **Interactive** or **Autonomous**.
   - Interactive means you work in the sandbox, and one harness can start with it.
-  - Autonomous means an agent runs on its own, with no SSH or terminal. **When should it run?** offers **Run now**; **Schedule for later** is marked **Coming soon**.
+  - Autonomous means an agent runs on its own, with no SSH or terminal. **When should it run?** offers **Run now**, plus **Schedule for later** when [scheduled runs](ENV.md#wardyn_scheduled_runs) are on.
 - **What should run?** (Application sandbox only): **Automation / script** or **Application / server**.
 - **Command** is required for an automation. It runs verbatim, and the run ends when it exits.
 - An **Application / server** takes a required **Start command** and one to eight **Ports**, each with a name, a port and a path. The run is interactive and keeps going until you end it or it reaches its lifetime limit.
@@ -93,7 +93,7 @@ Press **+ Add** to open a dialog with three stages: **Type**, **Choose**, **Moun
 | **User drive** | An existing drive of yours |
 | **Shared drive** | An existing shared drive. You get your own folder on it |
 | **Folder on this machine** | A folder already onboarded in Workspaces, on the computer running Wardyn; with none it reads "No folders onboarded yet. Add one in Workspaces." Disabled when the server runs its sandboxes on Kubernetes |
-| **Your computer** | Marked **Coming soon** |
+| **Your computer** | A folder from your own folder-only runner, when the deployment [allows it](ENV.md#wardyn_computer_folders); otherwise disabled with its reason |
 
 - A drive that cannot attach is greyed with its reason, such as paused by your admin or not available in this pool's runners.
 - **Mount path** sits inside the sandbox user's home directory, and no two items may overlap. A drive's path is fixed. A repository's or folder's path is fixed too, unless it is its workspace's only item.
@@ -103,7 +103,7 @@ Press **+ Add** to open a dialog with three stages: **Type**, **Choose**, **Moun
 - **Remove** is disabled for a folder that comes with its workspace's repositories; remove those to remove it.
 - The first item you add is where the run starts. Change it under **Starting folder**, with an optional **Subfolder** inside that item. With nothing attached the run starts in the main drive.
 - With nothing added, choose **No extra files — only the main drive**. A held **Continue to tools and access** says "Add what it needs, or choose No extra files."
-- An Environment sandbox opens with your own drive attached when it can attach.
+- An Environment opens with your own drive attached when it can attach.
 
 ### Step 5: Tools and access
 
@@ -120,6 +120,10 @@ The step reads the server's policy preview for the draft ([the `access` block](s
 - A run that carries an Azure DevOps credential, on a connection that creates a token for each run, says so under **Credentials**: "Azure DevOps: a token for this run with …. It's revoked when the run ends."
 - If you have not connected, that card also reads "Connect Azure DevOps once before launching; Wardyn creates the run's token from that connection." beside **Connect Azure DevOps**.
 - Hosts read **Requested** until the server has answered this exact draft. Then each reads **Allowed**, **Needs approval** or **Not allowed** against the clamped policy.
+- When the preview says the run allows all egress, **Network** shows the switch **Only the sites listed**: "This run reaches only the listed sites and what its setup needs. Your organisation allows more."
+  - On sends `overrides.egress.allow_all_egress: false`. Hosts you add under **Allow a host** stay.
+  - It only narrows the run, so it is never refused. The run still reaches the hosts its own setup needs.
+- A host your own walls cut reads **Not allowed**, with "Your walls leave out {host}." You set walls in **Settings** ([Your walls](POLICIES.md#your-walls)).
 - A line under the host list says what happens to a host nothing lists: refused, held for review, or allowed. It follows your organisation's `first_use_approval` mode.
 - Each harness has a **Model provider** list. The server's default or only candidate stands in until you choose; when it needs your choice the field reads "Required before launch."
 - **When a tool has no rule** is **Run it**, **Ask first** or **Block it**. Your policy can set a floor; an option below it is disabled with the reason (`policy_stricter_default`).
@@ -160,6 +164,7 @@ Review shows what Wardyn will create and where each value came from. The **Prett
 
 Notices report a pool at its limit, a CPU or memory request that was narrowed, and the server's own warnings.
 
+- A warning "your walls narrowed `<knob>`" names a knob your walls cut, and the run's **Policy** tab heads that change **Your walls**.
 - A request narrowed by a named pool or profile is titled "Your request was narrowed by …".
 - The server's own limit reads "Not allowed on this server.", and your runners' limit reads "More than your runners can give."
 

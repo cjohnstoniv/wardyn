@@ -21,10 +21,16 @@ const subjectTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' THEN
 // subjectMatch builds the WHERE clause matching subject rows aliased row: $1 user
 // subjects, $2 groups, $3 the caller's single user type ("" matches nothing).
 func subjectMatch(row string) string {
+	return subjectMatchOf(row, "$1::text[]", "$2::text[]", "$3")
+}
+
+// subjectMatchOf is subjectMatch with the claims read from SQL expressions users and groups (text
+// arrays) and userType (text) in place of $1-$3.
+func subjectMatchOf(row, users, groups, userType string) string {
 	return fmt.Sprintf(`(%[1]s.subject_type = 'all'
-		   OR (%[1]s.subject_type = 'user'  AND %[1]s.subject = ANY($1::text[]))
-		   OR (%[1]s.subject_type = 'group' AND %[1]s.subject = ANY($2::text[]))
-		   OR (%[1]s.subject_type = 'user_type' AND %[1]s.subject = $3))`, row)
+		   OR (%[1]s.subject_type = 'user'  AND %[1]s.subject = ANY(%[2]s))
+		   OR (%[1]s.subject_type = 'group' AND %[1]s.subject = ANY(%[3]s))
+		   OR (%[1]s.subject_type = 'user_type' AND %[1]s.subject = %[4]s))`, row, users, groups, userType)
 }
 
 // subjectPrecedence is the ORDER BY ranking subject rows (row) joined to named rows
@@ -36,13 +42,19 @@ func subjectMatch(row string) string {
 //  4. subject ASC as a total-order floor — two rows can target the same profile/drive
 //     with different overrides, so a tie could otherwise silently drop an admin's narrowing.
 func subjectPrecedence(row, named string) string {
+	return subjectPrecedenceOf(row, named, "$1::text[]")
+}
+
+// subjectPrecedenceOf is subjectPrecedence with the user subjects read from SQL expression users (a
+// text array) in place of $1.
+func subjectPrecedenceOf(row, named, users string) string {
 	return subjectTierOrder + fmt.Sprintf(`,
 			CASE %[1]s.subject_type WHEN 'user'
-				THEN COALESCE(array_position($1::text[], %[1]s.subject), 2147483647)
+				THEN COALESCE(array_position(%[3]s, %[1]s.subject), 2147483647)
 				ELSE 0 END,
 			%[1]s.priority DESC,
 			%[2]s.name ASC,
-			%[1]s.subject ASC`, row, named)
+			%[1]s.subject ASC`, row, named, users)
 }
 
 // hasGroupTierRows gates the stale/truncated-snapshot refusal: it must fire only when

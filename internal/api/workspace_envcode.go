@@ -47,11 +47,18 @@ func (s *Server) handleWriteEnvAsCode(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	localDirs := workspaceSourcesOfType(ws, types.WorkspaceSourceTypeLocalDir)
+	all := workspaceSourcesOfType(ws, types.WorkspaceSourceTypeLocalDir)
+	// A folder bound to a runner lives on that machine; the same path on this host is some other folder
+	// or nothing, so nothing is ever written there.
+	localDirs := slices.DeleteFunc(slices.Clone(all), func(src types.WorkspaceSource) bool { return src.RunnerID != nil })
 	if len(localDirs) == 0 {
-		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceEnvcodeNoLocalDir,
-			"env-as-code can only be written to disk for a workspace with a local_dir source (a repo/ephemeral-only "+
-				"workspace has no host path — use GET /workspaces/{id}/env-as-code and commit the files yourself)")
+		msg := "env-as-code can only be written to disk for a workspace with a local_dir source (a repo/ephemeral-only " +
+			"workspace has no host path — use GET /workspaces/{id}/env-as-code and commit the files yourself)"
+		if len(all) > 0 {
+			msg = "env-as-code is written only into a folder on the Wardyn server, and this workspace's folders are on a runner " +
+				"— use GET /workspaces/{id}/env-as-code and commit the files yourself"
+		}
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceEnvcodeNoLocalDir, msg)
 		return
 	}
 	files, ok := s.envAsCodeFor(w, r, ws)

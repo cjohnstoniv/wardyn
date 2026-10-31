@@ -280,6 +280,20 @@ const (
 	reasonUIGatewayBindOriginNotConsole = "bind_origin_not_console"
 )
 
+// The UI gateway's inbound arm (uigateway_inbound.go): a call to an app declared inbound: true, and the
+// host-mode cross-site check every cookie request passes.
+const (
+	reasonInboundCredentialInvalid = "inbound_credential_invalid" // the bearer is not a live inbound token (401, WWW-Authenticate: Bearer)
+	reasonInboundNotFound          = "inbound_not_found"          // no run, no such app, an app that is not inbound, or a token holder who is not one of its callers: one answer
+	reasonInboundRateLimited       = "inbound_rate_limited"       // the run's inbound apps are past 50 requests a second, burst 100 (429, Retry-After: 1)
+	reasonUIGatewayCrossSite       = "ui_gateway_cross_site"      // host mode: a session request from another site that is not a top-level navigation, or naming another Origin
+)
+
+// An app's ticket (inbound_ticket.go): POST /runs/{id}/apps/{app}/ticket.
+const (
+	reasonInboundNeedsHostMode = "inbound_needs_host_mode" // a named caller who is not the owner, on a deployment serving apps from one shared host (403)
+)
+
 // Device federation (devices_auth.go): the forwarder's own auth chain and
 // audit-ingest door. Most values here are already the exact strings
 // s.auditAuthFailedAs/auditEnrolFailure/auditIngestFailure wrote before #656
@@ -491,6 +505,8 @@ const (
 	// `detail` names, the scan itself did not complete.
 	reasonSourceScanFailed   = "source_scan_failed"
 	reasonSourceScanNoRunner = "source_scan_no_runner"
+	// reasonSourceScanRunnerBound: the folder is bound to a runner, so Wardyn cannot read it here.
+	reasonSourceScanRunnerBound = "source_scan_runner_bound"
 )
 
 // POST /runs and POST /runs/preflight's policy resolution (inline_policy.go):
@@ -657,6 +673,18 @@ const (
 	reasonBaseImageWriteInvalid = "base_image_write_invalid" // validateBaseImageWrite's own bucket
 	reasonBaseImageInUse        = "base_image_in_use"
 	reasonBaseImageNotFound     = "base_image_not_found"
+	// A prewrapped image (base_images_prewrapped.go): registered by digest, checked on this control
+	// plane's own cluster, retried only from refused or interrupted.
+	reasonPrewrappedImageNotPinned   = "prewrapped_image_not_pinned"
+	reasonPrewrappedCheckUnavailable = "prewrapped_check_unavailable"
+	reasonPrewrappedCheckInProgress  = "prewrapped_check_in_progress"
+	reasonPrewrappedAlreadyReady     = "prewrapped_already_ready"
+	// A workspace write or a run named a prewrapped image with no ready row (sources.go, run doors).
+	reasonPrewrappedImageNotRegistered = "prewrapped_image_not_registered"
+	// A run of a prewrapped image refused at sandbox create (run_placement_dispatch.go): its runner's
+	// architecture is not one the image was checked on, or the runner reports none.
+	reasonPrewrappedPlatformMismatch = "prewrapped_platform_mismatch"
+	reasonPrewrappedPlatformUnknown  = "prewrapped_platform_unknown"
 )
 
 // DELETE /people/{principal}/credentials (credential_erase.go).

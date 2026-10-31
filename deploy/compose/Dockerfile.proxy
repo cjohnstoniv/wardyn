@@ -91,10 +91,15 @@ COPY LICENSE NOTICE THIRD-PARTY-NOTICES.md LICENSING.md /usr/share/doc/wardyn/
 # thing here that actually discharges the condition.
 COPY licenses/texts/ /usr/share/doc/wardyn/licenses/
 
+# io.wardyn.proxy.ready-marker: this proxy prints its ready line once :3128 is bound, which a runner
+# waits for before it starts the agent (internal/runner/docker proxyReadyLabel). An image without the
+# label is from a release that does not print it.
+#
 # org.opencontainers.image.licenses states what is ACTUALLY in this image, not what
 # Wardyn's own code is licensed under -- enterprise registries and scanners key off
 # it, and a bare "Apache-2.0" here would be a false declaration.
-LABEL org.opencontainers.image.title="wardyn-proxy" \
+LABEL io.wardyn.proxy.ready-marker="1" \
+      org.opencontainers.image.title="wardyn-proxy" \
       org.opencontainers.image.description="Wardyn egress proxy" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.source="https://github.com/cjohnstoniv/wardyn" \

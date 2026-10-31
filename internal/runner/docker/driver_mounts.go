@@ -7,6 +7,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -40,6 +41,10 @@ import (
 //     read-write bind, the writable ceiling), but only for binds the MEMBER
 //     authored — checked right before the bind is appended, since a symlink
 //     benign at onboarding can be repointed before the run.
+//   - ON A RUNNER (Config.RunnerID set): only a member's folder bound to this
+//     runner binds (boundMountAllowed), always through the member gate, also
+//     held to the owner's --drive-root, and writable only under a ceiling
+//     (memberBindLimits). A folder bound to a runner never binds on wardynd's host.
 //   - DRIVES (spec.Drives): appended LAST by driveMount, each arriving as a
 //     types.DriveMount rather than a specMounts entry.
 //
@@ -82,12 +87,12 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 		if err := runner.ValidateAuthoredTarget(m.Target); err != nil {
 			return nil, fmt.Errorf("docker: denied workspace mount %q -> %q: %w", m.Source, m.Target, err)
 		}
-		if memberRoots != nil && m.MemberAuthored {
-			var writable *runner.UserWritableCeiling
-			if !m.ReadOnly {
-				writable = spec.UserWritable
-			}
-			if err := runner.ValidateUserMountSource(m.Source, memberRoots, writable); err != nil {
+		if err := d.boundMountAllowed(m); err != nil {
+			return nil, fmt.Errorf("docker: denied workspace mount %q -> %q: %w", m.Source, m.Target, err)
+		}
+		if onRunner := d.cfg.RunnerID != ""; onRunner || (memberRoots != nil && m.MemberAuthored) {
+			writable, ownRoots := d.memberBindLimits(spec, m)
+			if err := runner.ValidateUserMountSource(m.Source, memberRoots, writable, ownRoots); err != nil {
 				return nil, fmt.Errorf("docker: denied member workspace mount %q -> %q: %w", m.Source, m.Target, err)
 			}
 		}
@@ -118,6 +123,39 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 		mounts = append(mounts, driveMounts...)
 	}
 	return mounts, nil
+}
+
+// boundMountAllowed is the runner identity half of a member folder's bind. A folder bound to a runner is
+// a path on that machine, so it binds only on the driver serving that runner: never on wardynd's host,
+// whatever the control plane sent. On a runner every mount in the loop must be a member folder bound to
+// it: an operator mount, or a member folder with no binding, is refused, since the operator deny-list
+// alone does not cover a person's credential folders. Drives and the recording mount never come here.
+func (d *Driver) boundMountAllowed(m runner.Mount) error {
+	switch {
+	case m.BoundRunner != "" && m.BoundRunner != d.cfg.RunnerID:
+		return fmt.Errorf("the folder is on runner %s, not this one", m.BoundRunner)
+	case d.cfg.RunnerID != "" && (!m.MemberAuthored || m.BoundRunner == ""):
+		return errors.New("a runner binds only a member's folder bound to it")
+	}
+	return nil
+}
+
+// memberBindLimits is the writable ceiling and own roots a member folder is held to at bind. On a runner
+// a writable folder with no ceiling gets an empty one, which refuses it, and the folder must also lie in
+// the roots the runner's owner shares (--drive-root, UserDriveHostRoots in runner mode; none refuses). On
+// wardynd's host both are as before: the run's ceiling, and no own roots.
+func (d *Driver) memberBindLimits(spec runner.SandboxSpec, m runner.Mount) (*runner.UserWritableCeiling, []string) {
+	var writable *runner.UserWritableCeiling
+	if !m.ReadOnly {
+		writable = spec.UserWritable
+	}
+	if d.cfg.RunnerID == "" {
+		return writable, nil
+	}
+	if !m.ReadOnly && writable == nil {
+		writable = &runner.UserWritableCeiling{}
+	}
+	return writable, append([]string{}, d.cfg.UserDriveHostRoots...)
 }
 
 // driveMount converts one SandboxSpec.Drives entry into the ZERO OR ONE
@@ -192,55 +230,17 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, runID 
 		}}, nil
 
 	case types.DriveBackendHostPath:
-		// The SHARE bind, converted here only. DriveAuthored is a driver-local
-		// provenance label only (never serialized, nothing gates on it) — the
-		// ceiling below runs on every host_path drive unconditionally.
-		m := runner.Mount{
-			Source:        drive.ObjectName, // resolver's already-derived <host_root>/<home>
-			Target:        drive.Target,
-			ReadOnly:      drive.ReadOnly,
-			DriveAuthored: true,
-		}
-		// ONE call: UserDriveMountSourceCheck already runs the host bind and
-		// dotfile deny-lists before resolving symlinks against the deployment's
-		// roots (calling ValidateMount too would run the source half twice).
-		// Uses the MOUNT check, not the authoring one: a bind's source must be
-		// a STRICT SUBDIRECTORY of a root, while an authored host_root
-		// legitimately IS one. Unset roots refuse every host_path drive inside
-		// the check itself, not a local `len(roots) > 0` test, so this and the
-		// API write boundary can't drift on what "no roots" means.
-		real, err := runner.UserDriveMountSourceCheck(d.cfg.UserDriveHostRoots)(m.Source)
-		if err != nil {
-			return nil, fmt.Errorf("docker: denied user drive mount -> %q: %w", m.Target,
-				runner.RefuseUserDriveBind(drive, m.Source, "", runner.DriveSourceRefused, err))
-		}
-		// AND inside THIS drive's own root, not merely some configured one:
-		// the deployment ceiling can't distinguish one share's tree from
-		// another's, so a home symlinked to a same-named home under a
-		// different root would otherwise bind the wrong drive. The env/MDM
-		// ceiling and the drive's own host_root are both load-bearing —
-		// dropping either opens a real hole. An absent host_root is a
-		// refusal, not a skip. Both bounds assert the symlink-resolved path
-		// AT CHECK TIME; ContainerCreate resolves again itself, so a
-		// host-side attacker repointing the home in between is a known TOCTOU
-		// (residual #25/#35) this check narrows but does not close.
-		if err := runner.UserDriveHomeWithinItsRoot(drive, real); err != nil {
-			return nil, fmt.Errorf("docker: denied user drive mount -> %q: %w", m.Target, err)
-		}
-		// Resolved path must also still be THIS person's home (base name, not
-		// full path — a share may nest homes in subdirectories): catches a
-		// link that stays inside the drive's tree but lands on somebody
-		// ELSE's home (`alice -> ../bob`), which the root check alone passes.
-		if filepath.Base(real) != drive.HomeName {
-			return nil, fmt.Errorf("docker: denied user drive mount -> %q: %w", m.Target,
-				runner.RefuseUserDriveBind(drive, m.Source, real, runner.DriveHomeNameRefused, nil))
+		// The SHARE bind, converted here only. Every check on its source is hostPathDriveReal's, which a
+		// macOS VM's shared folder runs too.
+		if _, err := d.hostPathDriveReal(drive); err != nil {
+			return nil, err
 		}
 		return []mount.Mount{{
 			Type:        mount.TypeBind,
-			Source:      m.Source,
-			Target:      m.Target,
-			ReadOnly:    m.ReadOnly,
-			BindOptions: driveBindOptions(drive, m.ReadOnly, rroSupported),
+			Source:      drive.ObjectName, // resolver's already-derived <host_root>/<home>
+			Target:      drive.Target,
+			ReadOnly:    drive.ReadOnly,
+			BindOptions: driveBindOptions(drive, drive.ReadOnly, rroSupported),
 		}}, nil
 
 	default:
@@ -250,6 +250,48 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, runID 
 			"(the docker runner mounts %q and %q; a Kubernetes-backed drive belongs to a Kubernetes deployment)",
 			runner.DriveSubject(drive), drive.Backend, types.DriveBackendDockerVolume, types.DriveBackendHostPath)
 	}
+}
+
+// hostPathDriveReal is the host_path (SHARE) arm's source checks, run for the container's bind and for a
+// macOS VM's shared folder alike, and the symlink-resolved real path they passed. The ceiling below runs
+// on every host_path drive unconditionally; no provenance label gates it.
+func (d *Driver) hostPathDriveReal(drive *types.DriveMount) (string, error) {
+	source := drive.ObjectName // resolver's already-derived <host_root>/<home>
+	// ONE call: UserDriveMountSourceCheck already runs the host bind and
+	// dotfile deny-lists before resolving symlinks against the deployment's
+	// roots (calling ValidateMount too would run the source half twice).
+	// Uses the MOUNT check, not the authoring one: a bind's source must be
+	// a STRICT SUBDIRECTORY of a root, while an authored host_root
+	// legitimately IS one. Unset roots refuse every host_path drive inside
+	// the check itself, not a local `len(roots) > 0` test, so this and the
+	// API write boundary can't drift on what "no roots" means.
+	real, err := runner.UserDriveMountSourceCheck(d.cfg.UserDriveHostRoots)(source)
+	if err != nil {
+		return "", fmt.Errorf("docker: denied user drive mount -> %q: %w", drive.Target,
+			runner.RefuseUserDriveBind(drive, source, "", runner.DriveSourceRefused, err))
+	}
+	// AND inside THIS drive's own root, not merely some configured one:
+	// the deployment ceiling can't distinguish one share's tree from
+	// another's, so a home symlinked to a same-named home under a
+	// different root would otherwise bind the wrong drive. The env/MDM
+	// ceiling and the drive's own host_root are both load-bearing —
+	// dropping either opens a real hole. An absent host_root is a
+	// refusal, not a skip. Both bounds assert the symlink-resolved path
+	// AT CHECK TIME; ContainerCreate resolves again itself, so a
+	// host-side attacker repointing the home in between is a known TOCTOU
+	// (residual #25/#35) this check narrows but does not close.
+	if err := runner.UserDriveHomeWithinItsRoot(drive, real); err != nil {
+		return "", fmt.Errorf("docker: denied user drive mount -> %q: %w", drive.Target, err)
+	}
+	// Resolved path must also still be THIS person's home (base name, not
+	// full path — a share may nest homes in subdirectories): catches a
+	// link that stays inside the drive's tree but lands on somebody
+	// ELSE's home (`alice -> ../bob`), which the root check alone passes.
+	if filepath.Base(real) != drive.HomeName {
+		return "", fmt.Errorf("docker: denied user drive mount -> %q: %w", drive.Target,
+			runner.RefuseUserDriveBind(drive, source, real, runner.DriveHomeNameRefused, nil))
+	}
+	return real, nil
 }
 
 // driveBindOptions decides whether the share bind asks for a recursively

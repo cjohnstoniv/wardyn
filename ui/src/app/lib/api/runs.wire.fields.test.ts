@@ -32,6 +32,7 @@ import { runs } from "./runs";
 import { TEMPLATE_REQUEST_FIELDS } from "../template-fields";
 import { intentToWire, POLICY_CARRIER } from "../../components/screens/new-run-flow/draft/intent-to-wire";
 import type { RunIntent } from "../../components/screens/new-run-flow/draft/run-intent";
+import { DISK_REASONS } from "../../components/screens/run-detail/macos-run-facts";
 
 // Shared fetch stub.
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -59,6 +60,8 @@ const workspaceEntry = { workspace_id: "ws-1", enabled_optional: ["egress:api.st
 function sampleIntent(): RunIntent {
   const intent: Record<string, unknown> = {};
   for (const r of TEMPLATE_REQUEST_FIELDS) if (!r.excluded && !r.pending) intent[r.name] = r.name === "inline_policy" ? {} : 1;
+  // A service is sent only beside a background command (mayKeepRunning), so the sample is one.
+  Object.assign(intent, { experience: "background", workload: { kind: "command", command: "serve" } });
   return intent as RunIntent;
 }
 
@@ -208,7 +211,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(omitted).toEqual([]);
   });
 
-  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the allowlists its proxy was handed, the pool's name, the ended run's kept_until, the run's policy, its open sync sessions, its computer folder and its agents over AgentRun — " +
+  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the allowlists its proxy was handed, the pool's name, the ended run's kept_until, the run's policy, its open sync sessions, its computer folder, its agents, a macOS VM's desktop and its disk over AgentRun — " +
     "the fields only GET /runs/{id} sends (handleGetRun's anonymous wrapper struct, runs_policy.go)", () => {
     const runDetailOwnKeys = tsInterfaceKeys(runsTs, "RunDetail");
     expect(runDetailOwnKeys).toEqual([
@@ -224,7 +227,25 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "sync",
       "computer_folder",
       "agents",
+      "macos",
+      "macos_disk",
     ]);
+  });
+
+  it("RunMacOSDisk's keys are exactly runMacOSDiskView's json tags (GET /runs/{id} macos_disk, run_macos_disk.go)", () => {
+    const diskGo = readFileSync(join(root, "internal/api/run_macos_disk.go"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "RunMacOSDisk").sort()).toEqual(goJSONTags(diskGo, "runMacOSDiskView").sort());
+  });
+
+  it("DISK_REASONS' codes are exactly the runner's kept reasons (internal/runner/macos_disk.go)", () => {
+    const diskGo = readFileSync(join(root, "internal/runner/macos_disk.go"), "utf8");
+    const code = (name: string) => new RegExp(`\\b${name}\\s*=\\s*"([^"]+)"`).exec(diskGo)?.[1];
+    expect([...DISK_REASONS.keys()]).toEqual([code("MacOSVMDiskHelperAlive"), code("MacOSVMDiskRemoveFailed")]);
+  });
+
+  it("RunMacOS's keys are exactly runMacOSView's json tags (GET /runs/{id} macos, run_macos_view.go)", () => {
+    const viewGo = readFileSync(join(root, "internal/api/run_macos_view.go"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "RunMacOS").sort()).toEqual(goJSONTags(viewGo, "runMacOSView").sort());
   });
 
   it("RunDetailAgent's keys are exactly runDetailAgent's json tags (GET /runs/{id} agents, run_multi_agent.go)", () => {
@@ -318,6 +339,18 @@ describe("source parity — five more flat structs", () => {
     // never read client-side. egress_edited_at: an internal heal marker
     // (ReconcileWorkspaceEgressDecisions) with no console consumer.
     expect(omitted.sort()).toEqual(["attachments", "built_profile_hash", "egress_edited_at"].sort());
+  });
+
+  it("WorkspaceSource: a folder's runner_id and its read-only runner_state and runner_name are on both sides", () => {
+    const goTags = goJSONTags(workspaceGo, "WorkspaceSource");
+    const tsKeys = tsInterfaceKeys(workspacesTs, "WorkspaceSourceInput");
+    for (const key of ["runner_id", "runner_state", "runner_name"]) {
+      expect(goTags).toContain(key);
+      expect(tsKeys).toContain(key);
+    }
+    // overrides: the per-attachment contract stance, set by the sources screens that went away; the console never reads it.
+    expect(goTags.filter((t) => !tsKeys.includes(t))).toEqual(["overrides"]);
+    expect(tsKeys.filter((k) => !goTags.includes(k))).toEqual([]);
   });
 
   it("CapabilityGrant: full parity with the BASE Go struct — `inert` is a known response-wrapper key", () => {

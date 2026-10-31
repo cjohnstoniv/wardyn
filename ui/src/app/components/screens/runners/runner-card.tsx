@@ -15,6 +15,7 @@ import { RES, RUNNER_KIND, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
 import { RUNNER, RUNNERS } from "../../wardyn/copy/runners";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
+import { MacVMBadge } from "./macvm-section";
 import { OfflineNote, ResourceTable } from "./resource-table";
 import { runnerRes } from "./resources";
 import { RunnerChip, TrustChip } from "./runner-chip";
@@ -80,7 +81,7 @@ function Fact({ label, children, ...rest }: { label: string; children: React.Rea
   );
 }
 
-export function RunnerCard({ f, onOpen, onOpenPool }: { f: FleetRunner; onOpen: (f: FleetRunner) => void; onOpenPool: (id: string) => void }) {
+export function RunnerCard({ f, onOpen, onOpenPool, maxBaseAgeDays }: { f: FleetRunner; onOpen: (f: FleetRunner) => void; onOpenPool: (id: string) => void; maxBaseAgeDays?: number }) {
   const self = f.kind === "self_hosted" ? f.runner : undefined;
   const shared = f.kind === "remote_hosted" ? f.remote : undefined;
   const { limits, usage, online, pools } = f.kind === "self_hosted" ? f.runner : f.remote;
@@ -98,6 +99,7 @@ export function RunnerCard({ f, onOpen, onOpenPool }: { f: FleetRunner; onOpen: 
           <Chip>{self ? RUNNER_KIND.SELF : RUNNER_KIND.REMOTE}</Chip>
           {self ? <RunnerChip runner={self} /> : <Chip dot>{online ? RUNNER.ONLINE : RUNNER.OFFLINE}</Chip>}
           {self && <TrustChip runner={self} />}
+          {self && <MacVMBadge caps={self.macos_vm} active={self.usage.in_use.macos_vm_runs ?? 0} perRun={self.limits?.per_run} maxBaseAgeDays={maxBaseAgeDays} />}
           {shared && !shared.configured && <Chip tone="warning">{RUNNER_KIND.NOT_CONFIGURED}</Chip>}
           {self && self.state === "claimed" && (online || self.last_seen_at) && (
             <span className="text-xs text-muted-foreground" title={self.last_seen_at ? absoluteTime(self.last_seen_at) : undefined}>

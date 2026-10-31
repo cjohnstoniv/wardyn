@@ -95,9 +95,18 @@ func buildRunMounts(policy types.RunPolicySpec, member userMountPosture) []runne
 			// owning workspace by — so a bind is member-authored here exactly when
 			// the run-create gate treated it as member-authored.
 			MemberAuthored: member.Sources[wm.Source],
+			BoundRunner:    boundRunnerOf(member, wm.Source),
 		})
 	}
 	return mounts
+}
+
+// boundRunnerOf is the runner member binds a folder at src to, "" for none.
+func boundRunnerOf(member userMountPosture, src string) string {
+	if rid, ok := member.Bound[src]; ok {
+		return rid.String()
+	}
+	return ""
 }
 
 // resolveRunUpstreamProxy resolves the operator-wide upstream/corp proxy
@@ -180,9 +189,14 @@ func envEnabled(env string) bool {
 // envAllowAgentTelemetry lets agent-CLI telemetry through; see buildBaseSandboxEnv.
 const envAllowAgentTelemetry = "WARDYN_ALLOW_AGENT_TELEMETRY"
 
+// envMacOSVMs turns on macOS VM sandboxes (machine_kind macos_vm). Off, the default, create refuses the
+// kind (machineKindRefusal) and the console is told the option is off (SetupFeatures.MacOSVMs), so
+// nothing else about a run changes.
+const envMacOSVMs = "WARDYN_MACOS_VMS"
+
 // envToggles names every switch this package reads with envEnabled.
 // TestEnvTogglesListEveryEnvEnabledRead fails when a call site is missing here.
-var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGovernanceSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry, envGitPATAPIBitbucketServer, envScheduledRuns, envMCPLocalServers}
+var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGovernanceSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry, envGitPATAPIBitbucketServer, envScheduledRuns, envMCPLocalServers, envMacOSVMs}
 
 // ValidateEnvToggles reads each envToggles switch once, so a value that is
 // neither truthy nor falsey exits 2 at boot, in every auth mode, rather than
@@ -382,6 +396,8 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	if p.TaskMode == "exec" {
 		sandboxEnv["WARDYN_TASK_MODE"] = "exec"
 	}
+	// A service: the supervisor's settings come from the spec frozen on the run (serviceEnv).
+	serviceEnv(sandboxEnv, run.Service)
 	// interactive_start=agent: the attach shell opens IN the image's agent CLI
 	// instead of a bare shell. Consumed by attach-bashrc.sh (the image's
 	// ~/.bashrc), which the tmux/bash attach chain sources — the same seam its
@@ -764,17 +780,36 @@ func (s *Server) recordStartedSandbox(ctx context.Context, run types.AgentRun, s
 		return err
 	}
 	s.recordDesktopVMSignIns(ctx, run, sb)
+	s.auditKeychainTrust(ctx, run, sb)
 	return nil
 }
 
+// keychainTrustNote is the note on a macOS VM run's row when its guest could not trust the run's proxy
+// CA in its System keychain.
+const keychainTrustNote = "This macOS VM's System keychain does not trust the run's proxy CA, so an app that checks only the keychain fails TLS through the proxy; the run goes on."
+
+// auditKeychainTrust writes a denied run.dispatch row when a macOS VM's guest could not trust the run's
+// proxy CA in its System keychain. The run goes on: the tools that read the CA bundle still trust it.
+// Only the fixed codes are written (runner.KeychainTrust.Known), never the guest's text. A trusted CA,
+// or none attempted (a container, a Linux guest, an older runner or guest), writes nothing. Denied, not
+// failure: the dispatch went ahead, and run get reads a failure row as the run's failure.
+func (s *Server) auditKeychainTrust(ctx context.Context, run types.AgentRun, sb runner.Sandbox) {
+	k := sb.KeychainTrust.Known()
+	if k == nil || k.Status == runner.KeychainTrusted {
+		return
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "denied",
+		mustJSON(map[string]any{"note": keychainTrustNote, "keychain_trust": k.Status, "keychain_trust_reason": k.Reason})))
+}
+
 // recordVMMachine writes the virtual hardware a VM run was started with (#2996). A VM whose machine is
-// missing from the runner's answer, or cannot be written, never runs: it could not later be checked
-// against a move or a restore. A container run writes nothing.
+// missing from the runner's answer, incomplete for its kind (CompleteFor) or cannot be written never
+// runs: it could not later be checked against a move or a restore. A container run writes nothing.
 func (s *Server) recordVMMachine(ctx context.Context, run types.AgentRun, sb runner.Sandbox) error {
 	if !run.MachineKind.IsVM() {
 		return nil
 	}
-	if !sb.Machine.Complete() {
+	if !sb.Machine.CompleteFor(run.MachineKind) {
 		return errors.New("the runner did not say which machine it started the VM on")
 	}
 	st, ok := s.cfg.Store.(interface {

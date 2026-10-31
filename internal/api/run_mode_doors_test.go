@@ -246,6 +246,42 @@ func TestUIGateway_BackgroundRunRefusedAtEnterAndRelay(t *testing.T) {
 		}
 	})
 
+	// An inbound app is the one door a background task keeps: entered, relayed and re-asserted like any
+	// session, while the non-inbound app beside it stays refused.
+	t.Run("an inbound app opens, and only it", func(t *testing.T) {
+		h := newUIHarness(t, okBackend())
+		background(h)
+		h.store.putEffectivePolicy(h.run.ID, types.RunPolicySpec{MinConfinementClass: types.CC2, UIApps: []types.UIApp{
+			{Name: "code", Port: uiTestPort, Inbound: true}, {Name: "ide", Port: uiTestPort + 1}}})
+		cookie := h.openSession()
+		if rec := h.relay("/", cookie, nil); rec.Code != http.StatusOK {
+			t.Fatalf("relay = %d %s, want 200", rec.Code, rec.Body.String())
+		}
+		if rows := h.audit.auditRows("inbound.allow", "success"); len(rows) != 1 {
+			t.Errorf("inbound.allow rows = %+v, want one", rows)
+		}
+		now := time.Now()
+		sess := uiSession{Run: h.run.ID, App: "code", Port: uiTestPort, Principal: h.owner, Inbound: true,
+			Expires: now.Add(time.Hour).Unix(), IssuedAt: 3, AuthorizedAt: now.Unix()}
+		if de := h.srv.uiReassertRelay(context.Background(), sess); de != nil {
+			t.Fatalf("uiReassertRelay of an inbound session = %+v, want nil", de)
+		}
+		rec := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"ide"}, "ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)}})
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), reasonRunBackgroundOnly) {
+			t.Fatalf("enter of the non-inbound app = %d %s, want 409 %s", rec.Code, rec.Body.String(), reasonRunBackgroundOnly)
+		}
+	})
+
+	// A caller's ticket (POST /runs/{id}/apps/{app}/ticket) is minted and spent on a background run's inbound
+	// app; the route has no background refusal of its own, since it mints for inbound apps only.
+	t.Run("a caller's ticket opens the inbound app", func(t *testing.T) {
+		h := inboundTicketHarness(t, "user:bob")
+		background(h)
+		if rec := h.enterOnRunHost("code", ticketOf(t, h.appTicketAs("code", "bob", nil))); rec.Code != http.StatusFound {
+			t.Fatalf("enter = %d %s, want 302", rec.Code, rec.Body.String())
+		}
+	})
+
 	for _, tc := range doorExperiences {
 		t.Run(tc.name+" runs still open", func(t *testing.T) {
 			h := newUIHarness(t, okBackend())

@@ -783,16 +783,16 @@ type Server struct {
 	recordingChainWalk sync.Mutex
 	// sshUnbound is set by MarkSSHGatewayUnbound when the SSH gateway could not bind at boot; /healthz then omits ssh.
 	sshUnbound atomic.Bool
-	// viaOrg is the organisation's via_org egress state (via_org_streams.go).
+	// viaOrg is the organisation's via_org egress state (via_org_streams.go); fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
 	viaOrg viaOrgState
-	// fleet is the 15-second capacity snapshot behind the /metrics capacity gauges (metrics_fleet.go).
-	fleet fleetSnapshot
-	// revokedEndRetry spaces out the queue sweep's retries of a run it could not end (runner_revoke.go).
+	fleet  fleetSnapshot
+	// revokedEndRetry and exitRetry space out the retries of the queue sweep (a run it could not end, runner_revoke.go) and of the runner exit sweep (each receipt, which it may park; runner_exits.go); eventRefusals bounds each runner's runner.event.refuse rows on this replica (runner_event_refuse.go).
 	revokedEndRetry revokedEndRetry
-	// inventoryHoldAudit spaces one runner's runner.inventory.hold rows (runner_state.go).
+	exitRetry       runnerExitRetry
+	eventRefusals   runnerEventRefusals
+	// inventoryHoldAudit spaces one runner's runner.inventory.hold rows (runner_state.go); privIPRefusals caches the private_ip_refusals row's audit read (setup_private_ip_refusals.go).
 	inventoryHoldAudit inventoryHoldAudit
-	// privIPRefusals caches the private_ip_refusals row's audit read (setup_private_ip_refusals.go).
-	privIPRefusals privateIPRefusalCache
+	privIPRefusals     privateIPRefusalCache
 	// capRowsScanned counts capability-grant rows compared inside capBatch (see capabilities.go). It is
 	// INSTRUMENTATION, read by nothing on any request path: the per-request cost of the capability seam is
 	// chosen partly by the member's own request body (spec.AllowedDomains), so "how much work did one request

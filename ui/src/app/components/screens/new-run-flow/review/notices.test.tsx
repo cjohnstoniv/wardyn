@@ -128,3 +128,61 @@ describe("Review notices", () => {
     expect(screen.getByText('confinement raised from "CC1" to operator minimum "CC2"')).toBeInTheDocument();
   });
 });
+
+// Mock packet rc.6 §5a: a drop warning whose policy publishes a way to ask names the policy and the ask under it.
+describe("the policy under a drop warning", () => {
+  const drop = "dropped 1 egress domain(s) not in operator allowlist: registry.npmjs.org";
+  const unit = { source: "unit", name: "Payments platform", owner: "Platform Security", request_url: "https://example.com/access", layer: "unit" };
+
+  it("names the unit and its owner's request link, keyed by the warning's own index", () => {
+    render(
+      <Notices poolName="General" askedByYou={false} warnings={["resources capped to operator maximum", drop]}
+        warningContext={[{ warning_index: 1, kind: "egress_policy_drop", policy: unit }]} />,
+    );
+    expect(screen.getByText(NR_REVIEW.DROPPED_HOST_ONE("registry.npmjs.org"))).toBeInTheDocument();
+    expect(screen.getByTestId("drop-warning-policy")).toHaveTextContent(NR_REVIEW.POLICY_CONTEXT("Payments platform"));
+    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Owned by Platform Security · Request access");
+    expect(screen.queryByText(/Set by/)).toBeNull();
+  });
+
+  it("names the deployment ceiling and its request text", () => {
+    render(
+      <Notices poolName="General" askedByYou={false} warnings={[drop]}
+        warningContext={[{ warning_index: 0, kind: "egress_policy_drop", policy: { source: "deployment", request_text: "Ask in #wardyn-access" } }]} />,
+    );
+    expect(screen.getByTestId("drop-warning-policy")).toHaveTextContent(NR_REVIEW.POLICY_CONTEXT_DEPLOYMENT);
+    expect(screen.getByTestId("policy-remedy")).toHaveTextContent("Ask in #wardyn-access");
+  });
+
+  it("leaves the warning as it is when the policy publishes no way to ask, or the context is for another warning", () => {
+    const { rerender } = render(
+      <Notices poolName="General" askedByYou={false} warnings={[drop]}
+        warningContext={[{ warning_index: 0, kind: "egress_policy_drop", policy: { source: "unit", name: "Infra", owner: "Infra team" } }]} />,
+    );
+    expect(screen.queryByTestId("drop-warning-policy")).toBeNull();
+    rerender(<Notices poolName="General" askedByYou={false} warnings={[drop]} warningContext={[{ warning_index: 3, kind: "egress_policy_drop", policy: unit }]} />);
+    expect(screen.queryByTestId("drop-warning-policy")).toBeNull();
+    expect(screen.getByText(NR_REVIEW.DROPPED_HOST_ONE("registry.npmjs.org"))).toBeInTheDocument();
+  });
+
+  describe("the walls' host warning", () => {
+    const warn = ["your walls narrowed allowed_domains", "your walls narrowed denied_domains"];
+
+    it("is left to the Access group's leave-out line when one is drawn (a host the person added)", () => {
+      const { container } = render(<Notices askedByYou={false} warnings={warn} wallsLeftOut={["allowed_domains", "denied_domains"]} />);
+      expect(container).toBeEmptyDOMElement();
+    });
+
+    it("drops only the list a leave-out line speaks for, and keeps the other's warning", () => {
+      render(<Notices askedByYou={false} warnings={warn} wallsLeftOut={["denied_domains"]} />);
+      expect(screen.getByText("Your walls narrowed allowed hosts.")).toBeInTheDocument();
+      expect(screen.queryByText("Your walls narrowed blocked hosts.")).toBeNull();
+    });
+
+    it("stays a notice when no leave-out line is drawn (a base-policy host the walls cut)", () => {
+      render(<Notices askedByYou={false} warnings={warn} />);
+      expect(screen.getByText("Your walls narrowed allowed hosts.")).toBeInTheDocument();
+      expect(screen.getByText("Your walls narrowed blocked hosts.")).toBeInTheDocument();
+    });
+  });
+});

@@ -410,6 +410,20 @@ describe("RunDetailScreen — Audit tab wording", () => {
     expect(within(row).getByTestId("run-audit-action")).toHaveTextContent("Denied egress to");
     expect(within(row).getByTestId("run-audit-target")).toHaveTextContent("an unknown host");
   });
+
+  // r15 T2-f: an inbound row says allow or deny and carries its request on a line of its own; no credential, no caller.
+  it("shows an inbound call's decision and request, and says no caller for a refusal that had no credential", async () => {
+    const [allow, deny] = await openAuditTab([
+      { ...base, id: "e4", action: "inbound.allow", target: "api", actor: "service:billing", data: { method: "GET", path: "/v1/invoices", via: "token", caller: "service:billing" } },
+      { ...base, id: "e5", action: "inbound.deny", target: "api", actor: "", outcome: "denied", data: { reason: "credential_invalid", via: "token", method: "POST", path: "/v1/refunds" } },
+    ]);
+    expect(within(allow).getByTestId("run-audit-outcome")).toHaveTextContent("allow");
+    expect(within(allow).getByTestId("run-audit-detail")).toHaveTextContent("GET /v1/invoices · via token · caller service:billing");
+    expect(within(allow).queryByText("no caller")).not.toBeInTheDocument();
+    expect(within(deny).getByTestId("run-audit-outcome")).toHaveTextContent("deny");
+    expect(within(deny).getByTestId("run-audit-detail")).toHaveTextContent("reason credential_invalid · via token · POST /v1/refunds");
+    expect(within(deny).getByText("no caller")).toBeInTheDocument();
+  });
 });
 
 // #2925: the empty card has the populated list's width, so the content does not jump between tabs.

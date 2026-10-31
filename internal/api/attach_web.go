@@ -71,10 +71,11 @@ func (wa *webAttach) audit(outcome string, data map[string]any) {
 		id.String(), outcome, mustJSON(withSponsorEntry(wa.run, data))))
 }
 
-// sendMode writes the attach-mode frame under modeMu (see webAttach).
-func (wa *webAttach) sendMode(ctx context.Context, readOnly bool) {
+// sendMode writes the attach-mode frame under modeMu, reading the mode inside it (see webAttach):
+// a mode read before the lock can be a promotion behind, and would be the frame that lands last.
+func (wa *webAttach) sendMode(ctx context.Context) {
 	wa.modeMu.Lock()
-	_ = writeAttachMode(ctx, wa.c, readOnly, wa.s.attachHolderFor(wa.run.ID))
+	_ = writeAttachMode(ctx, wa.c, !wa.holder.canWrite(), wa.s.attachHolderFor(wa.run.ID))
 	wa.modeMu.Unlock()
 }
 

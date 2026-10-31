@@ -1165,3 +1165,132 @@ func TestDecide_ApprovalRuleRidesTheDecideRow(t *testing.T) {
 		t.Fatalf("a person's decision carries a policy key: %s", st.audit[1].Data)
 	}
 }
+
+// indexStore refuses a second PENDING row for one run, kind and stored scope bytes, as the pending
+// index (migration 0213) does: jsonb_send keeps a number's spelling, so the key is the bytes.
+type indexStore struct{ *fakeStore }
+
+func (d indexStore) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
+	// The check and the append hold one lock, as the index makes them one step: two raises that both
+	// checked before either appended would otherwise both land.
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, existing := range d.records {
+		if existing.State == types.ApprovalPending && existing.RunID == a.RunID &&
+			existing.Kind == a.Kind && string(existing.RequestedScope) == string(a.RequestedScope) {
+			return types.ApprovalRequest{}, types.ErrDuplicatePendingApproval
+		}
+	}
+	d.records = append(d.records, a)
+	return a, nil
+}
+
+// barrierStore holds each raise's dedup read until every raise has read, so all of them reach the
+// insert having seen no pending row.
+type barrierStore struct {
+	indexStore
+	read   *sync.WaitGroup
+	waited bool
+}
+
+func (b *barrierStore) ListPendingApprovalsForRuns(ctx context.Context, runIDs []uuid.UUID) ([]types.ApprovalRequest, error) {
+	out, err := b.fakeStore.ListPendingApprovalsForRuns(ctx, runIDs)
+	if !b.waited {
+		b.waited = true
+		b.read.Done()
+		b.read.Wait()
+	}
+	return out, err
+}
+
+// Value-equal scopes that spell a number differently, raised together, leave one PENDING row: the
+// insert carries one spelling per value, so the index refuses every raise but the first.
+func TestRequestApproval_ValueEqualSpellingsRaceToOneRow(t *testing.T) {
+	spellings := []string{"443", "443.0", "4.43e2", "4430e-1", "443.00", "44300E-2"}
+	base := &fakeStore{}
+	runID := uuid.New()
+	var read sync.WaitGroup
+	read.Add(len(spellings))
+	ids := make([]uuid.UUID, len(spellings))
+	errs := make([]error, len(spellings))
+	var done sync.WaitGroup
+	for i, n := range spellings {
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			st := &barrierStore{indexStore: indexStore{base}, read: &read}
+			scope := json.RawMessage(`{"host":"example.com","port":` + n + `}`)
+			got, err := approval.RequestApproval(context.Background(), st, newReq(runID, types.ApprovalEgressDomain, scope))
+			ids[i], errs[i] = got.ID, err
+		}()
+	}
+	done.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("raise %d (%s): %v", i, spellings[i], err)
+		}
+		if ids[i] != ids[0] {
+			t.Errorf("raise %d (%s) got approval %s, want %s: one question, one row", i, spellings[i], ids[i], ids[0])
+		}
+	}
+	if n := len(base.records); n != 1 {
+		t.Errorf("rows persisted = %d, want 1", n)
+	}
+	if got := string(base.records[0].RequestedScope); got != `{"host":"example.com","port":443}` {
+		t.Errorf("stored scope = %s, want the canonical spelling", got)
+	}
+}
+
+// A PENDING row stored before inserts were canonical still dedups a value-equal raise.
+func TestRequestApproval_OldSpellingRowStillDedups(t *testing.T) {
+	runID := uuid.New()
+	old := types.ApprovalRequest{ID: uuid.New(), RunID: runID, Kind: types.ApprovalEgressDomain, State: types.ApprovalPending,
+		RequestedScope: json.RawMessage(`{"port": 443.0, "host": "example.com"}`)}
+	st := &fakeStore{records: []types.ApprovalRequest{old}}
+	got, err := approval.RequestApproval(context.Background(), st,
+		newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"example.com","port":443}`)))
+	if err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	if got.ID != old.ID || len(st.records) != 1 {
+		t.Errorf("got %s with %d rows, want the old row %s and no new one", got.ID, len(st.records), old.ID)
+	}
+}
+
+// Numbers that differ past float64's precision are different scopes: neither dedups to the other.
+func TestRequestApproval_NumbersAreNotRoundedThroughFloat(t *testing.T) {
+	st := &fakeStore{}
+	runID := uuid.New()
+	a, err := approval.RequestApproval(context.Background(), st,
+		newReq(runID, types.ApprovalToolCall, json.RawMessage(`{"n":9007199254740993}`)))
+	if err != nil {
+		t.Fatalf("first raise: %v", err)
+	}
+	b, err := approval.RequestApproval(context.Background(), st,
+		newReq(runID, types.ApprovalToolCall, json.RawMessage(`{"n":9007199254740992}`)))
+	if err != nil {
+		t.Fatalf("second raise: %v", err)
+	}
+	if a.ID == b.ID || len(st.records) != 2 {
+		t.Errorf("two scopes one apart past float64 precision gave ids %s and %s and %d rows, want two of each", a.ID, b.ID, len(st.records))
+	}
+}
+
+// Only numbers are respelled: a string that looks like one, and its escapes, are stored as written.
+func TestRequestApproval_StoresOneSpellingPerNumber(t *testing.T) {
+	for in, want := range map[string]string{
+		`{"cmd":"echo 1.0 \"2.50\"","n":1.50}`:   `{"cmd":"echo 1.0 \"2.50\"","n":1.5}`,
+		`[-0.0, 1e2, 0.0010, -12.5E1, 1e21]`:     `[0, 100, 0.001, -125, 1e21]`,
+		`{"a":1E-25,"b":1000e-3}`:                `{"a":1e-25,"b":1}`,
+		`{"big":123456789012345678901234567890}`: `{"big":123456789012345678901234567890}`,
+	} {
+		st := &fakeStore{}
+		got, err := approval.RequestApproval(context.Background(), st, newReq(uuid.New(), types.ApprovalToolCall, json.RawMessage(in)))
+		if err != nil {
+			t.Fatalf("%s: %v", in, err)
+		}
+		if string(got.RequestedScope) != want {
+			t.Errorf("%s stored as %s, want %s", in, got.RequestedScope, want)
+		}
+	}
+}

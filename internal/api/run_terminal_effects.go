@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -31,8 +32,10 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	if keep {
 		errs = append(errs, errComputerFolderResumes)
 	}
-	// Teardown and the writes after it run on a ctx of their own, which the steps before it
-	// cannot use up or cancel (#3466).
+	// Teardown runs on a ctx of its own, which the steps before it cannot use up or cancel
+	// (#3466); each write after it on a fresh one, so a stop that overruns its budget takes
+	// none of them with it (#3482). Both still end when the run-op lock ctx holds is lost:
+	// another replica may then be running this same tail (#3480).
 	tctx, cancel := teardownCtx(ctx)
 	defer cancel()
 	teardownOK := false
@@ -44,17 +47,19 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 				td[k] = v
 			}
 			td["teardown_error"] = serr.Error()
-			s.recordAudit(tctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
-				ref, "failure", mustJSON(td)))
+			settleAfterTeardown(ctx, func(sctx context.Context) {
+				s.recordAudit(sctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
+					ref, "failure", mustJSON(td)))
+			})
 		} else {
 			teardownOK = true
 		}
 	}
 	if finishAfterStop {
-		s.FinishRunOutput(tctx, runID)
+		settleAfterTeardown(ctx, func(sctx context.Context) { s.FinishRunOutput(sctx, runID) })
 	}
-	s.reconcileWorkspaceRun(tctx, runID)
-	s.reconcileRecordRun(tctx, runID)
+	settleAfterTeardown(ctx, func(sctx context.Context) { s.reconcileWorkspaceRun(sctx, runID) })
+	settleAfterTeardown(ctx, func(sctx context.Context) { s.reconcileRecordRun(sctx, runID) })
 	// Clear the ref LAST, and only when this call's own StopSandbox succeeded.
 	// LAST because reconcileRecordRun above still reads run.SandboxRef to tell
 	// "the sandbox never started" from "capture was empty". Success-only because
@@ -65,9 +70,9 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	// deliberately ignored: it degrades to the pre-clear behavior the boot
 	// sweep already retries.
 	if teardownOK && s.cfg.Store != nil {
-		errs = append(errs, s.clearSandboxRef(tctx, runID))
+		settleAfterTeardown(ctx, func(sctx context.Context) { errs = append(errs, s.clearSandboxRef(sctx, runID)) })
 	}
-	return errors.Join(append(errs, cmp.Or(ctx.Err(), tctx.Err()))...)
+	return errors.Join(append(errs, cmp.Or(ctx.Err(), context.Cause(tctx)))...)
 }
 
 // errComputerFolderResumes is finalizeRunEffects keeping a sandbox for its computer folder's pass
@@ -80,15 +85,28 @@ var errComputerFolderResumes = errors.New("the sandbox is kept: its computer fol
 // (bringComputerFolderBack).
 const runTeardownBudget = 15 * time.Second
 
-// teardownCtx is ctx's values with none of its cancellation, on a deadline of its own: ctx's
-// deadline or runTeardownBudget from now, whichever is later. A ctx with no deadline gets
+// teardownCtx is ctx's values with none of its cancellation but a lost lock's
+// (db.WithoutCancelUnlessLost), on a deadline of its own: ctx's deadline or
+// runTeardownBudget from now, whichever is later. A ctx with no deadline gets
 // reconcileFinalizeTimeout, the bound the sweeps give the whole finalize tail.
 func teardownCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 	d := reconcileFinalizeTimeout
 	if dl, ok := ctx.Deadline(); ok {
 		d = max(time.Until(dl), runTeardownBudget)
 	}
-	return context.WithTimeout(context.WithoutCancel(ctx), d)
+	fenced, release := db.WithoutCancelUnlessLost(ctx)
+	tctx, cancel := context.WithTimeout(fenced, d)
+	return tctx, func() { cancel(); release() }
+}
+
+// settleAfterTeardown runs one write after a run's teardown on a fresh runTeardownBudget of
+// its own, with teardownCtx's fencing and none of the stop's deadline.
+func settleAfterTeardown(ctx context.Context, write func(context.Context)) {
+	fenced, release := db.WithoutCancelUnlessLost(ctx)
+	defer release()
+	sctx, cancel := context.WithTimeout(fenced, runTeardownBudget)
+	defer cancel()
+	write(sctx)
 }
 
 // clearSandboxRef clears a terminal run's ref. On Postgres a runner run's

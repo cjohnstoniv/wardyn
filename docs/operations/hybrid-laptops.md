@@ -84,7 +84,12 @@
 - Only a `credential_source: per_user` session qualifies. A shared AWS session is refused (`placement_credential`).
 - With proxy-inject off the sandbox would hold your real SSO token cache. A local `bedrock_sso` run is then refused at Review, preflight and create (`placement_credential`, naming `SandboxSpec.SecretEnv[WARDYN_AWS_SSO_CONFIG_B64]`), before Launch.
 - With proxy-inject on, `WARDYN_AWS_SSO_CONFIG_B64` is plain container env. `docker inspect` and a k8s pod spec show the SSO start URL, region, account id and role name, but no token or client secret.
-- The short-lived role credentials the SDK mints from it are still resident in the sandbox, because SigV4 signs in-process.
+- With `WARDYN_AWS_SIGV4_AT_PROXY` off, the short-lived role credentials the SDK mints from it are still resident in the sandbox, because SigV4 signs in-process.
+- With `WARDYN_AWS_SIGV4_AT_PROXY` on (off by default), the run's proxy on your runner re-signs instead, and the sandbox holds a placeholder key pair ([ENV.md](../ENV.md#wardyn_aws_sigv4_at_proxy)).
+- Role credentials the proxy has already redeemed keep signing until whichever comes first:
+  - 5 minutes before they expire, at most the permission set's session duration (set it to `PT1H`);
+  - about 1h5m after the runner loses its link.
+- Ending or killing the run, or revoking the runner, stops the proxy at once while the runner is connected.
 - The provider's sign-in and renewal: [AWS SSO per person](../OPERATIONS.md#aws-sso-per-person).
 
 ### Private endpoints and `internal_hosts`
@@ -179,6 +184,14 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 - A proxy older than the organisation refuses a configuration that carries a field it does not know, because the proxy reads its configuration strictly. The run then fails to start rather than running with a rule dropped, so pin only an image from the organisation's own release.
 - To fix the image, run `wardyn-runnerd setup --proxy-image <image>`. Setup marks it pinned and `serve` then never replaces it. A mirror of your own that is not the registration image, and an image `serve` is given by flag, count as pinned too.
 
+### Drive roots on a laptop runner
+
+- A drive bound to a person's own runner mounts only below a **drive root** the runner advertises, and a folder bound to it only inside one, or the root itself. With none, the organisation refuses drives and bound folders on it.
+- The person gives the installed service its roots when they set it up: `wardyn-runnerd setup --drive-root /Volumes/team-share --drive-root /srv/x`. Setup writes them to `runnerd.json` as `drive_root`; a rerun with `--drive-root` replaces the list, and a rerun without it keeps it. The roots are not in the unit or the LaunchAgent.
+- A managed Mac can set them in the profile instead (`DriveRoot`, an array of strings), which outranks `WARDYN_DRIVE_ROOT` and `runnerd.json`; a `--drive-root` on `serve` outranks all three.
+- Each is an absolute, cleaned folder below `/`. A bad value refuses `serve` and `setup`, naming where it came from. `wardyn-runnerd doctor` prints the roots in effect and their source.
+- Docker runners only: a Kubernetes or folders runner refuses a drive root from any of these sources.
+
 ### The Docker engine setup and serve use
 
 - `wardyn-runnerd` reads `DOCKER_HOST` and the engine's default socket.
@@ -191,7 +204,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 2. An admin can mint one for a named person (`--owner`). It lasts 72 hours so MDM can deliver it, and needs no grant.
 3. On the laptop, `wardyn-runnerd setup --org <url> --token-file <file>` generates an Ed25519 key pair locally, installs the service and prints the key fingerprint.
 4. The org records an `unclaimed` runner. It is offered no run and relays nothing, and it expires after 24 hours.
-5. The owner, signed in as themselves, claims it in *Your account → My runner*, or locally with `WARDYN_TOKEN=<own API token> wardyn runner claim --pool NAME --default`. `wardyn runner setup` does every step.
+5. The owner, signed in as themselves, claims it in *Settings → My runner*, or locally with `WARDYN_TOKEN=<own API token> wardyn runner claim --pool NAME --default`. `wardyn runner setup` does every step.
 6. The runner is now `claimed` and takes runs owned by its owner, once it is in one of the owner's pools (`placement_unavailable` otherwise).
 
 - An admin can mint a token for a person but can never complete the claim.
@@ -215,6 +228,8 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `/Library/LaunchAgents/com.wardyn.runnerd.managed.plist` | starts the runner at login, like the agent `setup` writes |
 | `/usr/local/wardyn/bin/runnerd-managed-start` | the agent's launcher: idle until the person is registered |
 | `/usr/local/wardyn/share/wardyn-runnerd.mobileconfig` | the profile template |
+| `/usr/local/wardyn/bin/wardyn-macvm` | the macOS VM helper (the helper runs on Apple silicon only); unused unless [macOS VMs](macos-vms.md) are turned on |
+| `/Users/Shared/Wardyn/` | the shared macOS VM ledger the package creates, root-owned: see [The shared ledger](macos-vms.md#the-shared-ledger) |
 
 1. Fill in the profile template (`OrgURL`, two fresh UUIDs, your organisation name) and push it from your MDM as a **custom settings** profile.
 2. Push `wardyn-runnerd.pkg` with the same MDM, as a policy or script that runs `installer -pkg wardyn-runnerd.pkg -target /` as root (see above).
@@ -224,7 +239,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 
 - **Without MDM** install the package, then run [`wardyn runner setup`](../runner-registration.md#wardyn-runner-setup), or `wardyn-runnerd setup --token-file <file>` (`--org <url>` without a profile).
   - `setup` stops the managed agent, writes the agent `com.wardyn.runnerd` in the person's own `~/Library/LaunchAgents`, and the managed agent stays idle. `serve` also takes a lock in the runner state directory, so a second `serve` for one identity exits with a message.
-- Logs go to `~/Library/Logs/wardyn/runnerd.log` either way.
+- Logs go to `~/Library/Logs/wardyn/runnerd.log` either way; `serve --log-file` rotates it at 10 MiB, keeping `.1` to `.3`. A crash goes to `runnerd.crash.log` beside it. `serve` moves a crash log over 1 MiB to `runnerd.crash.log.1` when it starts, so the log is bounded at each start, not held to a hard cap.
 
 ### Managed preferences
 
@@ -238,16 +253,42 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `RelayListen` | `--relay-listen` | left out, found by a probe container |
 | `RelayHostTarget` | `--relay-host-target` | left out, found by a probe container |
 | `InternalNetwork` | `--internal-network` | default `wardyn-internal` |
-| `TrustedCAFile` | `--trusted-ca-file` | a PEM bundle path; deliver the file with a separate MDM file payload ([A corporate CA](#a-corporate-ca-on-a-laptop-runner)) |
+| `TrustedCAFile` | `--trusted-ca-file` | a PEM bundle path; deliver the file with a package or script your MDM runs ([A corporate CA](#a-corporate-ca-on-a-laptop-runner)) |
 | `OrgCAFile` | `--org-ca-file` | a PEM file of extra roots for the runner's own connection to the organisation only; root-owned, not writable by group or others |
 | `RecordingStore` | `--recording-store` | `pg`, `fs` or `off` |
+| `DriveRoot` | `--drive-root` | an array of strings: the folders drives and bound folders may mount from ([Drive roots](#drive-roots-on-a-laptop-runner)); left out, none |
 | `DockerHost` | `DOCKER_HOST` | the engine's socket, when it is not the default |
 | `ArtifactBase` | `wardyn runner install --artifact-base` | read by the `wardyn` CLI, not `serve`: the release mirror for `wardyn runner install`, `upgrade` and `setup`, ahead of the one saved in `cli.json` |
-| `lock_security_settings` | none: profile only | a boolean, off by default; `true` locks the five security keys, as the bullets below say |
+| `MacOSVM` | `WARDYN_RUNNER_MACOS_VM` | a boolean, off by default: offers [macOS VM sandboxes](macos-vms.md) from this Mac. The organisation's `WARDYN_MACOS_VMS` must be on as well |
+| `MacOSVMImageURL`, `MacOSVMImageHash` | `macos-vm prepare --ipsw-url`, `--sha256` | an https mirror of Apple's restore image and the SHA-256 its image must have; prepare never falls back to Apple |
+| `MDMManaged` | none: profile only | a boolean: this Mac is managed. The runner reports it with the posture file's evidence (`mdm_file`), only when the posture file below is absent |
+| `DiskEncrypted` | none: profile only | a boolean: the disk is encrypted, read with `MDMManaged`; left out, the runner's own probe answers |
+| `MaxRuns`, `TotalCPU`, `TotalMemoryGB`, `PerRunCPU`, `PerRunMemoryGB` | `--max-runs`, `--total-cpu`, `--total-memory`, `--per-run-cpu`, `--per-run-memory` | defaults for `register` and `setup` limits (a flag wins); `PerRunCPU` and `PerRunMemoryGB` also size `macos-vm prepare` when the organisation has sent no per-run limit |
+| `lock_security_settings` | none: profile only | a boolean, off by default; `true` locks the six security keys below |
 
-- With the lock on, `OrgURL`, `ProxyImage`, `TrustedCAFile`, `OrgCAFile` and `RecordingStore` in the profile win over a flag, and `serve` and `setup` refuse a flag or environment variable that disagrees, naming `lock_security_settings`.
+- With the lock on, `OrgURL`, `ProxyImage`, `TrustedCAFile`, `OrgCAFile`, `RecordingStore` and `DriveRoot` in the profile win over a flag, and `serve` and `setup` refuse a flag or environment variable that disagrees, naming `lock_security_settings`.
 - A value other than true, false, 1 or 0, or a profile that cannot be read, refuses start. Only a macOS profile can set it: there is no flag, variable or file twin.
 - A key the profile leaves empty, and every other key, keeps the order above.
+
+### macOS VM sandboxes on a managed Mac
+
+- A Mac can run macOS VM sandboxes (`machine_kind: macos_vm`) when both its switch and the organisation's are on. [macOS VM sandboxes](macos-vms.md) has the requirements, the base image and the limits.
+- The Mac must be company-managed in the two ways the page names: a security operator marks it `managed_device`, and your MDM delivers the posture file.
+
+1. Push the package as above. The VM helper runs on Apple silicon only, and macOS VMs need macOS 26 or later. On macOS 26 the first prepare needs [setup by hand](macos-vms.md#setup-by-hand) once.
+2. Add the `MacOSVM` key to the profile, set to `true`.
+3. Set `MDMManaged` and `DiskEncrypted` in the profile, or push the posture file with a script (the file wins when both exist). The file goes to `/Library/Application Support/Wardyn/posture.json`, owned by root, writable by root only and at most 4 KiB, and holds these two keys and no other; an unknown key makes the runner ignore the file:
+
+   ```json
+   {"mdm_managed": true, "disk_encrypted": true}
+   ```
+
+   Set `disk_encrypted` to the Mac's real FileVault state. The file decides both, and a key left out reads false.
+4. Have a security operator run `wardyn runner trust <runner-id> managed_device --reason "<why>"`.
+5. Ask the Mac's person to run `wardyn-runnerd macos-vm prepare` in Terminal on the Mac (it uses the runner's saved per-run limits) while on power, with Docker running.
+
+- The Mac offers macOS VMs only while someone is logged in. With FileVault on, that is after a login following each restart.
+- macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.
 
 ## A folder on your computer for a remote sandbox
 
@@ -298,6 +339,21 @@ What happens:
 Not yet: live sync, and **Pause sync**.
 For now this needs a single-replica deployment: with several replicas, a runner connected to another replica reads as
 offline.
+
+## A workspace folder on your runner
+
+A workspace folder can live on your computer: the `local_dir` source names your runner, and its runs run only there.
+
+1. Give the runner a [drive root](#drive-roots-on-a-laptop-runner) that covers the folder.
+2. Add the folder with **On my runner**, or `wardyn workspace create --runner <runner-id> --add dir:<path>`.
+3. Run it in a pool that holds that runner, with placement local.
+
+- Wardyn checks only the path's text; it never scans the folder.
+- The runner resolves links and checks the real path against your roots and its drive roots. A writable folder must also sit in the writable roots.
+- An older runner, without `bound_folders` in its caps, is refused the run until updated.
+- If the runner is revoked or removed, or the workspace changes owner, runs are refused (`workspace_source_runner_unavailable`); add a new workspace.
+- Record and verify refuse such a folder. The workspace scan and env-as-code skip it, and a scan of the source itself is refused (`source_scan_runner_bound`).
+- A `write:` requirement is checked against the server's own files, so one that names such a folder can be refused. Make the folder writable with the source's `--writable` instead.
 
 ## Offline and revocation
 

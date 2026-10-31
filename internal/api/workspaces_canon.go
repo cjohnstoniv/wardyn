@@ -65,7 +65,7 @@ func canonicalWorkspaceSource(src types.WorkspaceSource) types.WorkspaceSource {
 }
 
 // workspaceSourceContentEqual compares everything about a WorkspaceSource
-// EXCEPT Overrides: content — Type/Path/Source/Ref/Target/Writable — is what
+// EXCEPT Overrides: content — Type/Path/Source/Ref/Target/Writable/RunnerID — is what
 // "sourcesChanged" (handleUpdateWorkspace) means by "everything reviewed
 // against the old sources is stale". An Overrides edit changes which
 // requirement rows apply, never what's mounted, so it must not reset
@@ -77,7 +77,8 @@ func canonicalWorkspaceSource(src types.WorkspaceSource) types.WorkspaceSource {
 func workspaceSourceContentEqual(a, b types.WorkspaceSource) bool {
 	a, b = canonicalWorkspaceSource(a), canonicalWorkspaceSource(b)
 	return a.Type == b.Type && a.Path == b.Path && a.Source == b.Source &&
-		a.Ref == b.Ref && a.Target == b.Target && a.Writable == b.Writable
+		a.Ref == b.Ref && a.Target == b.Target && a.Writable == b.Writable &&
+		(a.RunnerID == nil) == (b.RunnerID == nil) && (a.RunnerID == nil || *a.RunnerID == *b.RunnerID)
 }
 
 // deadApprovedEgressHosts is the set of hosts a direct ApprovedEgress entry can

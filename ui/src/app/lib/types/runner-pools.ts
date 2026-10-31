@@ -168,6 +168,8 @@ export interface RunnerPoolMember {
   kind: RunnerKind;
   runner_id?: string;
   remote_runner_id?: string;
+  /** The Kubernetes namespace an organization runner serves the pool in; absent is the runner's default. */
+  runs_namespace?: string;
   added_at: string;
 }
 
@@ -298,6 +300,70 @@ export interface RunnerPoolCatalogueEntry extends RunnerPoolChoice {
   state?: RunnerPoolState;
   revision?: number;
   pool_limits?: RunnerPoolLimits;
+  /** What the pool's runners offer a macOS VM run now; absent on a manage-only row and while macOS VMs are switched off. */
+  macos_vm?: PoolMacOSVM;
+}
+
+/**
+ * Go: client.PoolMacOSVM. `offered` only when every eligible runner offers a macOS VM; then the guest build
+ * they all hold (absent when they differ), the largest minimum and the harnesses every base serves. `runner`
+ * names the runner when the pool has exactly one; `refusals` names each runner that cannot take one now.
+ */
+export interface PoolMacOSVM {
+  offered: boolean;
+  guest_os?: string;
+  min_cpus?: number;
+  min_memory_mib?: number;
+  harnesses?: string[];
+  runner?: string;
+  refusals?: PoolMacOSVMRefusal[];
+  /** The Macs' other macOS bases (besides Standard); offered only. */
+  bases?: PoolMacOSBase[];
+  /** Standard's oldest prepare among the Macs, RFC 3339; display only, never compared with the clock. */
+  created_at?: string;
+  /** The caller's own answer: their governance does not let them pick Standard (MAC-B05). Never the list. */
+  standard_not_allowed?: boolean;
+}
+
+/** Go: client.MacOSBase*. */
+export type PoolMacOSBaseState = "ready" | "rebuilding" | "missing";
+
+/**
+ * Go: client.PoolMacOSBase. `progress` is the least done while rebuilding; ready, `guest_os` is the build every
+ * copy holds (absent when they differ), `harnesses` those every copy serves, `created_at` the oldest copy's.
+ */
+export interface PoolMacOSBase {
+  name: string;
+  state: PoolMacOSBaseState;
+  progress?: number;
+  guest_os?: string;
+  harnesses?: string[];
+  created_at?: string;
+  /** The caller's own answer: their governance does not let them pick this base, whatever its state (MAC-B05). */
+  not_allowed?: boolean;
+}
+
+/** Go: client.MacOSVMWhy*. */
+export type PoolMacOSVMWhy = "not_offered" | "preparing" | "at_limit" | "no_room" | "not_managed" | "no_posture" | "no_base" | "runner_refused" | "base_too_old";
+
+/** Go: client.MacOSVMRefused*, the reason of a runner_refused refusal. */
+export type PoolMacOSVMRefusedReason = "below_min_memory" | "below_min_cpu" | "other";
+
+/**
+ * Go: client.PoolMacOSVMRefusal. `progress` is set for preparing, `error` for no_base when the runner said one,
+ * `runner_id` on not_managed for a security operator only; `detail` is the org's sentence. `reason` is set on
+ * runner_refused, with `have` and `need` for a size below the base's minimum (GB of memory, or CPUs).
+ */
+export interface PoolMacOSVMRefusal {
+  runner: string;
+  runner_id?: string;
+  why: PoolMacOSVMWhy;
+  progress?: number;
+  error?: string;
+  detail: string;
+  reason?: PoolMacOSVMRefusedReason;
+  have?: number;
+  need?: number;
 }
 
 /**
@@ -422,4 +488,6 @@ export interface RunnerPoolMemberView {
   runner?: RunnerView;
   limits: RunnerLimits | null;
   usage: RunnerUsage;
+  /** The Kubernetes namespace an organization runner serves the pool in; absent is the runner's default. */
+  runs_namespace?: string;
 }

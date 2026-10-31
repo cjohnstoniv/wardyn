@@ -89,7 +89,7 @@ func (s *Server) presetContractRefusal(req createRunRequest) *runRefusal {
 // template document is held to the same list when it is imported.
 var runContractShapeChecks = []func(createRunRequest) *runRefusal{
 	placementShapeRefusal, runnerPoolShapeRefusal, resourcesRefusal, allowedImageRefusal, workspaceTargetsRefusal, driveSelectionRefusal, runOverridesRefusal, builtinComponentsRefusal,
-	runModeShapeRefusal, runShapeRefusal, runEndShapeRefusal, repoURLUserinfoShapeRefusal,
+	runModeShapeRefusal, runShapeRefusal, serviceRefusal, runEndShapeRefusal, repoURLUserinfoShapeRefusal,
 }
 
 func placementShapeRefusal(req createRunRequest) *runRefusal {
@@ -294,9 +294,6 @@ func overridesShapeRefusal(o client.RunOverrides) *runRefusal {
 	if e := o.Egress; e != nil {
 		if e.FirstUseApproval != "" && !e.FirstUseApproval.Valid() {
 			return overrideInvalid("egress.first_use_approval: %q is not one of always_deny, deny_with_review, wait_for_review", e.FirstUseApproval)
-		}
-		if e.AllowAllEgress != nil && !*e.AllowAllEgress {
-			return overrideInvalid("egress.allow_all_egress: set it to true, or leave it out")
 		}
 	}
 	return pushRuleOverridesShape(o.PushRules)

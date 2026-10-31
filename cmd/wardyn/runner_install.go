@@ -61,6 +61,15 @@ func runnerInstallCmd(client clientFn, sess *sessionState) *cobra.Command {
 			if local, err := findRunnerIdentity(); err != nil {
 				return err
 			} else if local.dir != "" && fileExists(installedRunnerd()) {
+				var ignored []string
+				for _, name := range []string{"pool", "default", "name"} {
+					if cmd.Flags().Changed(name) {
+						ignored = append(ignored, "--"+name)
+					}
+				}
+				if len(ignored) > 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), copyUpgradeIgnores+"\n", strings.Join(ignored, ", "))
+				}
 				return runRunnerUpgrade(cmd, version, f.artifactBase)
 			}
 			f.release = version
@@ -139,6 +148,13 @@ func runRunnerUpgrade(cmd *cobra.Command, version, flagBase string) error {
 	if err != nil {
 		return err
 	}
+	prev := installed + ".previous"
+	// A .previous that cannot be examined is not "none before": the swap would then pick it up as one it kept.
+	// It is looked at first, so a refusal comes before anything is downloaded or announced.
+	prevBefore, err := os.Stat(prev)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf(errUpgradePreviousUnreadable, err)
+	}
 	var health struct {
 		ArtifactBase string `json:"cli_artifact_base"`
 	}
@@ -150,8 +166,6 @@ func runRunnerUpgrade(cmd *cobra.Command, version, flagBase string) error {
 	defer cleanup()
 	from := cmp.Or(current, copySetupOldVersion)
 	fmt.Fprintf(out, copyUpgradeSwapping+"\n", from, version)
-	prev := installed + ".previous"
-	prevBefore, _ := os.Stat(prev)
 	// The new setup moves the old one's settings out of the service files into runnerd.json, where an older
 	// setup does not look, so a rollback puts the files back as they are now.
 	kept, err := keepServiceFiles(serviceFiles())
@@ -171,18 +185,47 @@ func runRunnerUpgrade(cmd *cobra.Command, version, flagBase string) error {
 	if !sameFile(installed, bin) || !keptNow(prev, prevBefore) {
 		return fmt.Errorf(errUpgradeNotReplaced, version, failure)
 	}
+	// The rollback runs from a copy of .previous of its own: the old setup being run may keep the failed binary
+	// over .previous before it restores, and a restore that then failed would leave no copy of the old runner.
+	rollbackFrom := installed + ".rollback"
+	if err := keepRollbackCopy(prev, rollbackFrom); err != nil {
+		return fmt.Errorf(errUpgradeRollbackFailed, version, failure, from, fmt.Errorf(errUpgradeRollbackCopy, from, err), restoreLine(from, prev, org))
+	}
 	fmt.Fprintf(out, copyUpgradeRollingBack+"\n", version, failure, from)
 	if err := restoreServiceFiles(kept); err != nil {
-		return fmt.Errorf(errUpgradeRollbackFailed, version, failure, from, err, restoreLine(from, prev, org))
+		return fmt.Errorf(errUpgradeRollbackFailed, version, failure, from, err, restoreLine(from, rollbackFrom, org))
 	}
 	started = time.Now()
-	if err := runRunnerdSetup(cmd, prev, org, "", ""); err != nil {
-		return fmt.Errorf(errUpgradeRollbackFailed, version, failure, from, err, restoreLine(from, prev, org))
+	if err := runRunnerdSetup(cmd, rollbackFrom, org, "", ""); err != nil {
+		return fmt.Errorf(errUpgradeRollbackFailed, version, failure, from, err, restoreLine(from, rollbackFrom, org))
 	}
 	if err := waitStarted(ctx, local.dir, started); err != nil {
-		return fmt.Errorf(errUpgradeRollbackFailed, version, failure, from, err, restoreLine(from, prev, org))
+		return fmt.Errorf(errUpgradeRollbackFailed, version, failure, from, err, restoreLine(from, rollbackFrom, org))
 	}
+	_ = os.Remove(rollbackFrom)
 	return fmt.Errorf(errUpgradeRolledBack, version, failure, from)
+}
+
+// keepRollbackCopy writes the bytes of prev to dst, atomically and with prev's mode, and reads them back to
+// check them. A copy an earlier failed rollback left is replaced.
+func keepRollbackCopy(prev, dst string) error {
+	fi, err := os.Stat(prev)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(prev)
+	if err != nil {
+		return err
+	}
+	_ = os.Remove(dst)
+	if err := writeFileAtomic(dst, data, fi.Mode().Perm()); err != nil {
+		return err
+	}
+	if got, err := os.ReadFile(dst); err != nil || !bytes.Equal(got, data) {
+		_ = os.Remove(dst)
+		return errors.Join(errors.New(errUpgradeRollbackCopyDiffers), err)
+	}
+	return nil
 }
 
 // keptFile is a service file as it was before an upgrade: its bytes and mode, or that it was absent.
@@ -303,6 +346,10 @@ func signedRunnerd(ctx context.Context, f runnerSetupFlags, _, advertised string
 		err = os.Chmod(dst, 0o700)
 	}
 	if err != nil {
+		cleanup()
+		return "", none, err
+	}
+	if err := saveArtifactBase(f.artifactBase); err != nil {
 		cleanup()
 		return "", none, err
 	}

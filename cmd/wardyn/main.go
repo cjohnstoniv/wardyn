@@ -388,11 +388,13 @@ func rootCmd() *cobra.Command {
 		invitationCmd(client),
 		serviceIdentityCmd(client),
 		tokenCmd(client),
+		wallsCmd(client),
 		deviceCmd(client),
 		runnerCmd(client, sess),
 		supportBundleCmd(client),
 		caCmd(client),
 		doctorCmd(client),
+		workloadCmd(client), workloadApplyCmd(client), workloadDiffCmd(client), workloadDeleteCmd(client),
 	)
 	return root
 }

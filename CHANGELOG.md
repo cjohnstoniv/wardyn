@@ -11,6 +11,965 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.9] — 2026-10-30
+
+### Added
+
+- An installed runner can now be given the folders drives and workspace folders may use, with
+  `wardyn-runnerd setup --drive-root <dir>` (repeatable). Setup writes them to `runnerd.json` as `drive_root`, so
+  the service needs no change; a rerun with `--drive-root` replaces the list and one without keeps it. A managed Mac
+  can set them with the `DriveRoot` profile key, and `WARDYN_DRIVE_ROOT` also sets them; a `--drive-root` on `serve`
+  wins over all three. `wardyn-runnerd doctor` prints the roots in effect and where they came from. See
+  [Drive roots](docs/operations/hybrid-laptops.md#drive-roots-on-a-laptop-runner).
+- `wardyn-runnerd macos-vm edit-base` boots a copy of a Mac's macOS base for one attended session, then checks it
+  before runs use it: desktop control, accounts, Remote Login and the launcher's self-test. A copy that fails is
+  discarded and runs keep the old base. The runner reports when Standard was last edited, and each run records that
+  time, whichever base it uses. See [Editing a base](docs/operations/macos-vms.md#editing-a-base). Built and
+  unit-tested; not yet run on a real Mac.
+- A Mac can hold more than one macOS base, each derived from Standard with its own install list, and a run picks one
+  with `macos_base`. A derived base's list may not carry a configuration profile; profiles belong to Standard, which
+  every other base is derived from. A governance profile's `limits.allowed_macos_bases` limits which a team may pick.
+  See [Several bases](docs/operations/macos-vms.md#several-bases). Built and unit-tested; not yet run on a real Mac.
+- The console shows a disk drive's Mac in New Run and in a new list of people's drives on the admin Drives screen, with
+  delete, and says how a disk drive's delete ended. A Mac's runner drawer now shows its macOS base's guest posture, age
+  and last edit, and marks a base past the organisation's maximum age as not offered, as does its card in the runner
+  list. An admin sets that maximum in Settings, under macOS virtual machines, as the oldest macOS base in days; empty is
+  no maximum.
+- New Run offers a macOS base picker when the pool's Macs hold more than one base, and says why a base can't be
+  picked; Review names the chosen base. A Mac's runner drawer lists its bases, and a governance profile's macOS bases
+  limit has its own label and hint.
+- macOS VMs: a run's workload now starts in the guest. Each base carries the standard launcher (task, command and
+  self-test modes). A run that asks for several agents, held tool approvals or a service is refused by the launcher
+  with a reason. Built and unit-tested; not yet run on a real Mac.
+- Preparing a macOS VM base now ends with the launcher's self-test as the agent user. A harness that fails it is
+  withheld, and a base that cannot start a run is not published. Built and unit-tested; not yet run on a real Mac.
+- macOS VMs: the guest agent trusts the run's proxy certificate in the run's System keychain, for TLS only, before the
+  run starts, so tools that use only the keychain trust it too. If macOS refuses, the run goes on and its audit says
+  so. Built and unit-tested; not yet run on a real Mac.
+- macOS VMs: the runner setting `macos_vm_base_file` names a list of packages, apps and files, each pinned by its
+  SHA-256, that prepare and every tools update install into the base as admin. A changed list starts a tools update.
+  Built and unit-tested; not yet run on a real Mac.
+- macOS VMs: configuration profiles in the install list are staged in the base, approved once in `edit-base`, and read
+  back as installed. Built and unit-tested; not yet run on a real Mac.
+- macOS VMs: an organisation CA in the install list is trusted in the base for SSL only, then verified. A CA macOS
+  will not trust without a person reads `not_trusted`; trust it by hand in `edit-base`. Built and unit-tested; not yet
+  run on a real Mac.
+- macOS VMs: a package in the install list may take secret files, such as an EDR licence. A file's value is never in a
+  command line, a log, `tools.json` or the caps, and the file is removed after the install. Built and unit-tested; not
+  yet run on a real Mac.
+- macOS VMs: the runner reports the guest's posture (macOS version, SIP, Gatekeeper, profiles, MDM enrolment, the
+  organisation CA) beside the Mac's own. Built and unit-tested; not yet run on a real Mac.
+- A Mac's MDM can now attest posture (`MDMManaged`, `DiskEncrypted`) and set `register` and `setup` limits (`MaxRuns`,
+  `TotalCPU`, `TotalMemoryGB`, `PerRunCPU`, `PerRunMemoryGB`) from the managed preferences profile, with no posture
+  file to push. Posture is read from the device-wide profile only; a user-scoped profile does not attest it.
+  `macos-vm prepare` sizes its VM from the per-run keys when the organisation has sent no limit. Built and
+  unit-tested; not yet run on a real Mac.
+- A Mac now reports when its macOS base was prepared and its build. `macos-vm status` shows the base's age and this
+  Mac's macOS, and a new site-config setting, `macos_vm.max_base_age_days`, refuses macOS VM runs on a Mac whose base
+  is older (or whose runner reports no age). Built and unit-tested; not yet run on a real Mac.
+- `wardyn-runnerd macos-vm prepare --ipsw-url <https URL> --sha256 <hex>` builds the macOS base from an image on your
+  own mirror, which must answer HTTP Range requests, and never falls back to Apple. `MacOSVMImageURL` and
+  `MacOSVMImageHash` in the managed profile (or `macos_vm_image_url` and `macos_vm_image_sha256` in `runnerd.json`;
+  the profile wins) set it for setup too. With `--ipsw-url`, the hash is `--sha256` alone. Built and unit-tested; not
+  yet run on a real Mac.
+
+### Changed
+
+- The workloads guide now explains that a workload's policy is laid onto the deployment default, and how to launch on a local runner.
+- Denying any Azure DevOps host now withdraws the person's Azure DevOps credential lane: its credentials and the hosts
+  it added; hosts your policy allows itself stay reachable without the credential. This holds at dispatch and on a
+  revive. A deny on `dev.azure.com` alone used to leave the person's credential on `<org>.visualstudio.com` and the
+  `vssps`, `vsrm`, `feeds`, `pkgs` and `almsearch` hosts. `run.ceiling.reassert` and `run.revive` name the lane
+  `azure_devops` in `dropped_broker_lanes`.
+- A macOS VM that gets less than the base image's minimum size now says what cut it: your own request, the governance
+  profile's ceiling or `limits.max_*`, the pool, or the server. It names the setting that raises it. Built and
+  unit-tested; not yet run on a real Mac.
+- A macOS VM run is not recorded in this release, and says so at Review and when it is created. Where the
+  organisation, the pool, a locked organisation level or the run's own ceiling asks for recording, it is refused at
+  create and Review instead, and says which of them asked. Built and unit-tested; not yet run on a real Mac.
+- A macOS VM run now denies Apple's background boot-time hosts without an approval prompt. The list is deny-only: a
+  host your policy allows stays reachable, and nothing on it widens egress. See
+  [Apple's boot-time hosts](docs/operations/macos-vms.md#apples-boot-time-hosts). Built and unit-tested; not yet run
+  on a real Mac.
+- A macOS VM run that mounts a Docker or cluster volume drive, or a drive of no known place, is refused at create and
+  Review, before a Mac is asked to start the VM. So is a drive its Mac's runner cannot mount. Built and unit-tested;
+  not yet run on a real Mac.
+- A macOS VM run can mount an admin or team drive that is a folder on the Mac. It is shared into the guest at the
+  container's names under `/Users/agent`, read-only as granted, and a runner that predates this refuses it at create.
+  See [Drives](docs/operations/macos-vms.md#drives). Built and unit-tested; not yet run on a real Mac.
+- A macOS VM run can mount a person's own disk drive, a disk image kept on one of their Macs (`POST /me/drives` with
+  `runner_id`), and keep its work folder as one. Only macOS VM runs on that Mac can use it, and deleting the drive
+  deletes the image there, at once or when the Mac reconnects. See [Drives](docs/operations/macos-vms.md#drives).
+  Built and unit-tested; not yet run on a real Mac.
+- A disk drive is in one macOS VM run at a time: a second run on the Mac that asks for it while another holds it is
+  refused when that run starts, not at Review. Built and unit-tested; not yet run on a real Mac.
+- A macOS VM run is also refused at create and Review when a second harness has its own starting prompt. It is refused
+  too when a tool rule, tool approvals, autonomy level L1 or the policy's inner walls would hold a tool call for
+  approval. The launcher still refuses the same shapes as a backstop. Built and unit-tested; not yet run on a real Mac.
+- With `WARDYN_AWS_SIGV4_AT_PROXY` on, a run on a person's own runner now re-signs its AWS lane at that runner's
+  proxy, instead of being refused. Setup warns of each connected runner whose `wardyn-runnerd` cannot re-sign. This is
+  not yet verified end to end on a person's runner.
+- Docs: the macOS VM page compares a guest's controls with a managed Mac's. It says a guest is an unmanaged device to
+  compliant-device sign-ins, and that the Mac's MDM device certificate is not checked in this release. The
+  high-availability page covers running one replica.
+
+### Fixed
+
+- A process inside a macOS VM could pose as Wardyn's guest agent.
+- Installing a macOS base's file items no longer follows a symbolic link, or passes through a folder others can write
+  to, on the way to an item's destination.
+- The error body of a `capability_feature` refusal now carries `feature`, the feature it names (such as `inbound` or
+  `custom_component`), and the New Run page reads it to tell an inbound-app refusal from the other feature refusals.
+  It used to match the wording of the message, so rewording the message would have turned the notice off (#3769).
+- Retrying an AWS model sign-in no longer shows the new sandbox as waiting for AWS before it has shown a code. While
+  the retry launched, the old sandbox, still stopping, could put its device code on screen and move the new run's
+  progress to the waiting step (#3407).
+- Setup's Egress redirection step no longer records a redirect test for a target that is no longer configured. A test
+  still running when its redirect was saved with a new To used to land as the redirect's verdict and could open the
+  corporate-network gate; it is now dropped, and a test of an unchanged redirect still counts (#3517).
+- When a person's Azure DevOps sign-in lacks the permissions Wardyn needs to create tokens, Settings and Getting started
+  now agree: both say the administrator needs to finish setting up Azure DevOps, and both keep Connect, so the person
+  can sign in again once the permissions are granted. Settings offered no Connect, and Getting started left out the
+  administrator step (#3520).
+- Settings → Signed-in CLIs now says a file-stored sign-in ends after 7 days at most. It used to say 7 days for every
+  such session, though a shorter configured session lifetime ends it sooner; the Ends column shows the real expiry
+  (#3402, #3813).
+- Saving Settings → Runner credentials no longer fails with a 422 when the stored policy holds an older row with an
+  empty posture requirement, such as Git tokens stored on the runner with `require_posture: {}`. Rows you did not
+  edit now go back exactly as stored (#3502, #3816).
+- On the Runs page, the Agent tasks, Environments and Apps & scripts segments now say how to start one when you have
+  none, as Services does. They used to show "No runs match these filters" (#3782).
+- On the Approvals page, a decision the server refuses because the run owner's own walls deny the host now turns that
+  request's Approve off and shows whose walls block it, as a request the walls already block does. It used to leave
+  Approve live with no reason (#3781).
+- The Wardyn boundary page tells you to reload when the person signed in changed while a draft was open (#3406).
+- A terminal client promoted to writer while its attach was still opening is now shown as the writer. Its opening frame
+  could land after the promotion's and leave its terminal read-only until it reconnected (#3403).
+- An SSH sign-in refused because its run could not be read now names the key's owner in its `ssh.authenticate` row,
+  with reason `run lookup failed` for a store fault and `unknown run` for a missing run. It used to name `unknown` and
+  say `unknown run` for both (#3508).
+- A UI relay connection now closes its sandbox side before it writes its `ui.close` row, and writes the row off the
+  closing path. A stuck audit write held every closing relay connection open.
+- A run's second UI app now opens while the first app's idle relay connections fill the run's 8-connection cap: at the
+  cap the relay closes idle pooled connections and tries again. It used to answer a `503` at once, for up to 90
+  seconds (#3507).
+- A macOS VM's plain-HTTP relay refuses CONNECT and drops the relay's own flow and stage headers a guest sends, so a
+  guest can no longer raise approval asks under a flow it did not open. Built and unit-tested; not yet run on a real
+  Mac.
+- An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
+  edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
+  terminal. They used to stay open until they closed or reached their time limit (#3398).
+- A browser session, or a recently checked inbound token, calling an inbound app on a run that has ended or been kept
+  is now refused with a `not_running` audit row and no `inbound.allow` row. It used to be recorded as allowed before
+  the refusal (#3775).
+- Page loads of an inbound app from a person's browser session, the run owner's included, no longer count against
+  the per-caller inbound rate limit that inbound tokens use. They still count against the run's own limit (#3792).
+- An egress approval-pending answer now carries `X-Wardyn-Egress-Reason` on every path: a CONNECT, a plain request, an
+  organisation-forwarded request and the sign-in listener. An approval that expired or was cancelled answers
+  `approval:expired`, a full host table `approval:host-cap` and a raise the control plane refused `approval:refused`,
+  so a sandbox can tell them from `approval:pending`, an approval a person has yet to decide (#3815).
+- While the control plane cannot be reached, a minted credential's last-good header now stops at expiry plus the
+  15-minute grace. A failed re-check just before that deadline could keep serving it for up to 30 seconds past it,
+  the pause between re-checks (#3416).
+- A model gateway host both vendors share that is also the run's own model endpoint is now inspected as that endpoint's
+  vendor. Under fail-closed inspection its request bodies were refused as uninspected (#3819).
+- A run's container `CONNECT` tunnels are now capped at 1,024 open at once, the bound desktop VM tunnels already have.
+  The next one is refused with a `503`, `Retry-After`, `X-Wardyn-Host` and `X-Wardyn-Egress-Reason:
+  builtin:tunnel-limit`, and a `builtin:tunnel-limit` deny row; it is admitted once a tunnel closes. Before, a process
+  could hold any number of tunnels open (#3698). The person's sign-in tunnels count too. A desktop VM's tunnels count
+  only at its network relay, so a VM at its own bound still leaves room for the person to sign in.
+- With `WARDYN_FILE_SECRET_PLACEHOLDERS` on, a file named by two `file_secret` grants now holds the placeholder of the
+  grant that delivered it. A later grant's placeholder replaced it, so requests to the delivering grant's host lost
+  their credential.
+- Promoting a recording's hosts into a workspace's egress no longer promotes a model provider's host when the site
+  configuration can't be read. The promote now writes nothing and answers `503`, to retry; the provider hosts are read
+  once, for both the filter and the hosts a request names.
+- Two value-equal approval requests for one run that spell a number differently (`1` and `1.0`) no longer both open a
+  pending approval when they race: a request's scope is stored with one spelling per number. A pending request no
+  longer stands in for another whose numbers differ past floating-point precision.
+- Restarting a `WardynWorkload` custom resource's workload now needs the namespace binding that holds now, as the
+  runner's next report of the resource would. A restart after the binding was deleted could still launch the run on
+  the deleted binding's pool; it is now refused `workload_binding_inactive`, and the refusal is recorded on the
+  workload. The launch uses the binding's own sponsor and standing (#3758).
+- A `WardynWorkload` custom resource's launch whose claim lapsed (the replica that took it went away, or the launch
+  failed before it recorded a run or a refusal) is now retried by the daemon's 30-second workload sweep, instead of
+  waiting up to 10 minutes for the runner's next full report. The retry launches as the bound service under the
+  namespace binding that holds now; at most one retry per workload per claim (60 seconds), and a refused launch still
+  waits for the resource's next report (#3772).
+- A runner's full list of a bound namespace now reads only that namespace's workloads on the binding's pool, in the
+  database, instead of every custom-resource workload in the organization on every list (#3773).
+- A dropped base image and an unbuilt SSH devcontainer are now recorded in the audit log as a skipped part of the
+  build, with the reason. A run that later fails for its own reason is no longer shown as an image failure.
+- A secret-store fault while proving that a person holds their own credential, for a run on their own runner, now
+  refuses with the retryable 503 `store_unavailable` instead of reading the credential as the organisation's. At
+  dispatch the run fails as unreadable rather than refused. The store is read once per person per request, fault or
+  not. The same fault on any other check of a person's own secret that admits a run (an inline policy, an override,
+  a component, a model provider key) is the same 503, never "unknown secret", a dropped grant or a 500. A
+  component's save stays advisory and still lists that secret as missing.
+- A run's end no longer loses its settlement when the sandbox stop overruns: the teardown-error audit, the output
+  finish, the workspace and record settlement and the cleared sandbox reference each get a budget of their own, so a
+  workspace scan is no longer left in `scanning`. A replica that loses the run's lock during that tail now stops it,
+  instead of running it beside the replica that took the lock and writing duplicate audit rows.
+- `run.ending_soon` no longer promises kept files (`files_kept_sec`) for a run its end tears down at once: one with no
+  sandbox recorded, on a runner that cannot keep a sandbox, or with no ended-run grace. Behind the router it reads the
+  run's own runner or executor, and leaves `files_kept_sec` out when no fact says whether the end will keep the run.
+- A run Wardyn launches itself (a workspace scan or recording, a harness sign-in, a probe) no longer records its
+  placement as `remote` on a deployment where runner pools do not place runs: it is left empty there, as every other
+  run's is. The 0.9.1 note that `run.create` records the placement of every run holds only where pools place runs.
+- On Kubernetes, a run that keeps its work folder beside a shared drive is refused up front, at the preview,
+  preflight, create and queue replay, with `drive_share_beside_managed`. It was accepted and then refused at dispatch,
+  since the kept work folder is a managed drive the run adds only then.
+- Erasing a person no longer clears the author of a launch preset written by a different subject whose name only
+  matches after the database's lower-casing, such as a Kelvin sign in place of a K or a non-ASCII case variant. Only
+  an ASCII subject is matched case-insensitively, and only on its ASCII letters.
+- With second-person approval on, a held unit create or update now shows the approver the unit's mode, own walls or
+  pass-through, in its before and after.
+- Offboarding no longer stops handing a person's workspaces to the operator when the renamed fallback for a name
+  collision is itself taken. The fallback now takes a counter until neither the person nor the operator holds the
+  name, and one workspace that cannot be handed over no longer stops the others.
+- `wardyn-runnerd setup` now registers through the proxy its connection check used. The check went through the
+  settings setup installs for the service, but the registration followed this shell's environment, so a rerun from a
+  shell with no proxy could pass the check and then dial the organisation direct.
+- A Docker runner whose relay status failed to reach the organisation now sends it again at the next relay check. A
+  failed rebuild or send of the runner's capabilities was retried only on a reconnect or a further change of state.
+- A folders runner that resumes its session now sends the failure it recorded while the connection was down. Only a
+  fresh session sent it, so a stable resumed runner stayed connected without the organisation seeing it.
+- A `wardyn-runnerd serve` start that fails on a bad flag now records that error as the last error in the runner's
+  `status.json`. The file was rewritten as starting then stopped, which dropped the previous process's last error and
+  recorded nothing in its place.
+- `wardyn-runnerd doctor` no longer pulls the proxy image if it is removed from the engine between its image check and
+  its relay check. The relay check now fails on the missing image instead, as the page says doctor never pulls.
+- A Kubernetes run whose pinned proxy image is older than the runner now fails with the cause named: the proxy image is
+  older than this runner and refused a setting at config load, so have the organisation name this release's proxy
+  image, or run setup with `--proxy-image` set to it. It showed only a generic sidecar failure.
+- A Kubernetes runner no longer stops a run's proxy pod created while it lists its namespaces: the list read the pod
+  as gone, and the run failed with the proxy's config stage "exited" (exit code 137, `ContainerStatusUnknown`) (#3823).
+- New Run Review no longer calls a local MCP server's secret a Kubernetes service account when it shares an
+  organisation row with a cluster, and the Tools step's added local server card no longer shows another component's
+  command or secret name while a later preview is out (#3409).
+- Check again on New Run Review now reads the web app gateway and the drive catalogue again, so a gateway turned on or a
+  drive deleted since the page opened clears its blocker (#3410, #3420).
+- One "Your walls leave out" line on New Run Review no longer hides the walls' warning for the other host list (#3797).
+  The effective-policy card's Network row and the Access group's host count no longer count the hosts your walls take out (#3780).
+- New Run checks a service health path's characters and length before launch, as the server does (#3776), and the Tools
+  step's harness fields fit a 320 px viewport (#3818).
+- A credential refusal from Review's preflight refreshes the model-access banner at once instead of at its next poll.
+- A service run's Service panel now takes the head of the cockpit's right column as the saved layout has it, not always the
+  column starting at 8, and moves down only the widgets under it (#3784).
+- On a run's own Approvals tab, an approval the run owner's walls refuse now closes the way it does on the Approvals page:
+  the walls card, Approve off and Deny on. It stayed live with no reason (#3781).
+- The lease sweep no longer re-reads a healthy service's limits, sponsor and policy on every pass. It reads the
+  owner's authority to extend only once a `run.ending_soon` warning would be due, and the renewal re-checks it as
+  before (#3762).
+- An image whose own `ENV` sets `WARDYN_SERVICE=1` no longer turns a plain command run into a service that restarts
+  in a loop. Dispatch now sets `WARDYN_SERVICE=0` on every run that is no service, and the sandbox's env wins over the
+  image's (#3763).
+- A workload launch refused `placement_credential` for one of its policy's grants now says that the grant may come
+  from the default policy, which a workload's `inline_policy` is laid onto, and that `eligible_grants` (`[]` for none)
+  replaces it. The console's last refusal says so in plain words and, for a reader who may see it, adds the server's
+  sentence naming the grant.
+- With several Kubernetes runners serving one bound namespace, one runner's late full list no longer deletes a workload
+  another runner applied since, and a late report of a deleted resource's uid no longer overwrites the recreated
+  resource's workload. A prune, or a report of another uid, now counts only from the runner that last applied the
+  workload, or from another once that runner has left the pool; a report from a runner session a newer one replaced
+  writes nothing. A short-lived duplicate run can last until the reporting runner's delete arrives.
+- A runner that was refused events, then went quiet or was revoked, no longer leaves its refusal bookkeeping in the
+  organisation's memory for good. It is dropped a day after the window opened, and a summary of rows suppressed after
+  the bound is lost if the runner stays silent that long (#3663).
+- A run ended `gone` (its runner reported the sandbox gone with no exit code) now shows a failure hint saying so: the
+  container, pod or VM was removed, or its host restarted, including when the lease sweep finishes the end. It was
+  FAILED with no reason on its page (#3669).
+- A runner that resumes its session and keeps dying within seconds of READY with an event unacknowledged, five times in
+  a row, now starts a fresh session and logs a warning, instead of resuming for good against an organisation that
+  refuses that event. An agent exit or spool record is still replayed and keeps failing until the organisation is
+  upgraded (#3660).
+- `wardyn secret set` and `wardyn-aws-sso` no longer take standard input on `/dev/null` for a terminal. An unattended
+  run with input from `/dev/null` now reads it as piped input, or refuses, instead of offering the interactive prompt
+  (#3106).
+- `wardyn run --editor` no longer counts an `Include` under a `Host` or `Match` block in `~/.ssh/config` as the one it
+  needs. Only an `Include` above the first of those lines counts; otherwise it asks before adding its own at the top
+  (#3415).
+- `wardyn runner list --no-limits` now filters every page of runners, not only the one it fetched, so a runner with
+  no limits set past the first page is listed. `--limit` and `--offset` then cut the filtered list (#3811).
+- `wardyn runner install` on a computer that already runs a runner now says it is upgrading and ignores `--pool`,
+  `--default` and `--name`, instead of dropping them silently. `--artifact-base` is saved in `cli.json` only after the
+  release or runner downloaded from it has been verified, so a mirror that served something refused is no longer
+  remembered (#3551).
+- `wardyn doctor`'s `runner-exits` stage, when the organisation will not show the runner, now says a revoked runner is
+  not shown to its owner and points at the administrator's `runner.exit.park` audit rows. `docs/runner-offline.md`
+  no longer says doctor reports a revoked runner's parked receipts (#3614).
+- The proxy's decision log now masks the AWS access key id of the role credentials it re-signs with, as it already
+  masked their secret key and session token.
+- macOS VMs: a harness started in a macOS VM's terminal did not get the policy's managed settings, such as its
+  autonomy ceiling, tool rules and server list, or the cloud CLI's managed configuration. They are now written where
+  macOS reads them. A managed file with no macOS location stops the run's start with a reason. A run environment value
+  that names a Linux path with no place in the guest stops the start the same way. Built and unit-tested; not yet run
+  on a real Mac.
+- Preparing a macOS VM base no longer logs the guest's tools connection as `tools_dial: transport failure` while it is
+  still opening. Stage 2 reads the dial after its first tools request, and logs one still unclassified as `pending`.
+  Built and unit-tested; not yet run on a real Mac.
+- Preparing a macOS base no longer fails at stage 1 when Screen Sharing was already turned on during setup by hand:
+  stage 1 checks that the service is loaded and skips loading it again. A macOS base prepared with Screen Sharing on
+  view-only now says in `macos-vm status` how to get control. Built and unit-tested; not yet run on a real Mac.
+- During base preparation the guest's DNS lookups are refused instead of answered, so Setup Assistant's Screen Time
+  screen no longer waits minutes for a network that is not there. Run-time DNS is unchanged. Built and unit-tested;
+  not yet run on a real Mac.
+- The macOS setup window comes to the front, shows the three steps to follow, and `macos-vm status` no longer warns,
+  wrongly, that the base's guest agent is not this runner's. Built and unit-tested; not yet run on a real Mac.
+- Review's preflight now renews an expired AWS sign-in whose refresh token still lives, as launch does, so Review and
+  launch give the same answer. The renewal's `harness.credential.refresh` row carries `trigger: preflight`.
+- `scripts/ci-run.sh` now kills a run cancelled before its waiting line prints, reading the run id from `run.json`
+  first, and its run-id read works with BSD sed (#3519).
+- The `git_credential` workspace probe no longer passes when `docker exec` itself fails or the sandbox is not running;
+  a refused exec ends it in ERROR (#3521).
+- `scripts/verify-release.sh` no longer expects the Windows CLI binaries from a release older than 0.10.0, where they
+  first shipped (#3404).
+- On a run's Agents panel, an agent whose state has not arrived yet is now shown without a status badge, not as
+  Running.
+- A member's workspace folder that exists only on their own Mac or Linux computer can now be used there: a `local_dir`
+  source names one of the person's runners (`runner_id`, or `wardyn workspace create --runner`). Wardyn checks the
+  path's form when the workspace is saved and when a run starts, and places the run only on that runner, which checks
+  that the folder exists, resolves links, and holds it to the member's workspace roots, its own `--drive-root`, the
+  credential-path list and the writable roots before it binds or shares it. When that runner is later revoked or
+  removed, or the workspace passes to someone else, a run with the folder is refused by name
+  (`workspace_source_runner_unavailable`). Previously such a folder was refused when the workspace was saved, and no
+  workspace folder could run on a person's own runner (`placement_local_path`).
+
+### Security
+
+- `WARDYN_USER_WRITABLE_DENY` now matches a member's writable folder in any letter case, so an entry naming `.ssh`
+  also refuses a path that spells it `.SSH`, as a case-insensitive disk resolves both to one folder.
+- An upgraded connection an inbound token opened, a WebSocket say, is now re-checked every 15 seconds and closed at
+  most 45 seconds after the last check that confirmed its token (30 seconds unconfirmed, plus one re-check), even
+  while a check is still waiting on a store that does not answer. A hung check used to hold the connection open for good, and a store that kept
+  failing kept it open about a minute. The refusal's audit row is now written after the close, so a slow audit write
+  no longer delays it.
+
+### Before you upgrade
+
+- macOS bases prepared on 0.10.0-rc.8 or an earlier release candidate must be prepared again: run
+  `wardyn-runnerd macos-vm prepare` on each Mac. Until then the Mac's runner reports its base as needing an update
+  and offers no macOS VMs.
+- Migration `0246_user_drives_mac_disk` admits `mac_disk` in `user_drives.backend`'s CHECK and in the member-drive
+  rule, and adds `user_drives.home_runner_id`, the Mac a disk drive is kept on. It changes no row and adds no grant.
+  A downgrade with a disk drive present is unsupported.
+- Migration `0247_sources_runner_id` adds `sources.runner_id`, the runner a library folder is bound to, and makes it
+  part of a library source's identity. It changes no row and adds no grant. A downgrade with a bound folder present is
+  unsupported.
+- Runner owners: a workspace folder bound to your runner mounts only from inside its `--drive-root`, and only on a
+  runner updated to this release, which says `bound_folders` in its capabilities. A run with such a folder is refused
+  on an older runner (`placement_local_path`) until it is updated.
+
+## [0.10.0-rc.8] — 2026-10-29
+
+### Before you upgrade
+
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
+  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `workloads` and
+  `workload_bindings` (migration `0241_workloads`) and on `workload_run_ends` (migration `0244_workload_run_ends`).
+  Without it applying a workload and binding a namespace fail. An
+  upgrade from before 0.10.0-rc.3 also needs `SELECT, INSERT, UPDATE, DELETE` on `macos_vm_disks` (migration
+  `0236_macos_vm_disks`), and every grant the 0.10.0-rc.1 notes list: `SELECT, INSERT, UPDATE, DELETE` on
+  `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`,
+  `desktop_signin_runs`, `approval_rules`, `governance_restrictions`, `governance_restriction_members`,
+  `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`. Also grant it `SELECT, INSERT, UPDATE` on
+  `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`. If it turns on
+  `WARDYN_MULTI_AGENT_TASKS`, grant it `SELECT, INSERT, UPDATE` on `run_harnesses` as well.
+- A service needs the runner tools of this release in its image. An image wrapped or built before it runs the command
+  once, with no restart and no health check, and its health reads *Health unknown* after 10 minutes. Wrap or build the
+  image again with this release. See [Services](docs/SERVICES.md#images).
+- Migration `0239_inbound` restricts the `feature` value `inbound`, admits `inbound` in `api_tokens.kind`'s CHECK and
+  adds `caller` and `app` to `attach_tickets`. It inserts the `inbound` restriction row when absent, rewrites no token or ticket, and adds no grant. See
+  [OPERATIONS.md](docs/OPERATIONS.md).
+- A change to a runner pool's use policy that was held for a second person before the upgrade, on a pool that already
+  holds an organization runner, reads as stale when it is approved: the state it was proposed against now includes the
+  pool's organization runners. Propose it again. A held change on a pool with no organization runner is unaffected.
+- Migrations `0240_run_service`, `0242_runner_pool_member_namespace` and `0245_run_shape` add columns to `agent_runs`
+  and `runner_pool_members`; they change no grant.
+- On a Kubernetes chart upgrade, apply the `WardynWorkload` CRD again by hand:
+  `deploy/helm/wardyn-runnerd/crds/wardyn.dev_wardynworkloads.yaml`. Helm installs a chart's `crds/` once and never
+  upgrades it. A runner whose chart lists a namespace under `workloads.namespaces` refuses to start while that
+  namespace has no CRD. See [Workloads](docs/operations/workloads.md).
+
+### Added
+
+- The console's left bar leads with Runs, Workloads and Approvals (and Audit and Recordings in the Admin view), with no
+  heading; Getting started and Settings now sit under **Setup**. **Your account** is now **Settings**.
+- The Runs page filters by what a run was set up as: **All**, **Agent tasks**, **Environments**, **Apps & scripts** or
+  **Services**, each with its count. A run keeps the shape it was set up from (`shape` on the run, and on the
+  `run.create` audit row when the request names one); a run from before this release, or one whose request fits
+  several shapes, has none. New Run's **Environment sandbox** card is now **Environment**.
+- **Your API tokens**, under Settings: a person mints and revokes their own API tokens in the console, choosing what
+  the token is for under **Use**: **Wardyn API** or **Calling inbound ports**.
+- A background command can be kept running as a service. On New Run, an Automation / script has **Keep it running**
+  (`wardyn run --service`, or `service` on `POST /runs`): the command is restarted when it exits with an error, after a
+  pause that grows to 5 minutes, and checked on a port inside the sandbox by a TCP connect or an HTTP GET. The run list
+  and run page show *Starting*, *Healthy*, *Unhealthy* or *Health unknown* and the restart count. The supervisor runs
+  inside the sandbox, so health is the sandbox's own report (`source: sandbox` on `run.service.health` and
+  `run.service.restart`). A starting or healthy service has its lease renewed within its lifetime cap, as
+  `run.end.set` with reason `service_renewed`, but only when a cap applies: the pool's `background.lifetime.max_sec` or
+  `WARDYN_RUN_MAX_AGE`. With no cap, or when unhealthy, a service ends at its lease like any run, and New Run says so
+  before launch. See [Services](docs/SERVICES.md).
+- A port on a background run opens from the run page only when it is callable from outside; the run's owner is always
+  one of its callers. See [Services](docs/SERVICES.md#start-a-service).
+- Changing a service identity's sponsor stops lease renewal of the services it already runs: they end at their current
+  lease end. Relaunch or apply them again under the new sponsor.
+- Your walls: limits you set on every run you start, which only narrow what your organisation allows. Set them under
+  **Settings**, with `wardyn walls` (`wardyn walls set --file walls.yaml`, `wardyn walls clear`), or through
+  `GET`, `PUT` and `DELETE /api/v1/me/walls`. They name the sites a run may reach or never reach, what happens at a site
+  not listed, a barrier floor, the clipboard and file directions, and credentials kept out. They are private to you and
+  bind every run you start, a super admin's too. Your site list is not applied again at dispatch or revive, so the hosts
+  a run's own setup adds stay reachable; your denies, blocked directions and withheld credentials are applied again, at dispatch, at
+  revive and at the mint door. An egress approval for a host your walls deny is refused `personal_walls_host`. New reasons: `walls_invalid`,
+  `walls_need_person`, `walls_unavailable` and `personal_walls_host`; new audit actions `person.walls.set` and
+  `person.walls.delete`. See [Your walls](docs/POLICIES.md#your-walls).
+- `overrides.egress.allow_all_egress: false` is accepted on a run request, on any base policy, and turns open egress off
+  for that run; it reaches the base's listed hosts, the hosts you add and the hosts its own setup needs. New Run step 5
+  offers it as **Only the sites listed**. Before, `false` was refused.
+- A run's `ui_apps` entry can now be marked `inbound`, with a `callers` list, so the run's owner and the people, groups and
+  service identities it names can call that port through the app gateway on any run, a background run with no terminal
+  included. Each admitted call is recorded as `inbound.allow`, and refusals as `inbound.deny` under the `auth.fail` rate bound. It is HTTP and WebSocket only, and it travels the
+  same exec lane as any UI app, so docker, Kubernetes and remote runners need no change. Nobody but an operator may declare one until an
+  administrator allows the new `inbound` value of the `feature` permission (a run that only inherits an administrator's
+  inbound apps is not asked); a governance profile's `deny_ui_apps` or
+  `deny_interactive` removes inbound apps. See [UI sandboxes](docs/UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port).
+- An **inbound token** (`{"kind":"inbound"}` on `POST /me/tokens`, or on a service identity's token mint) calls the inbound
+  apps that name its holder as a caller, sent as `Authorization: Bearer wdn_…` on the gateway. It does nothing on the Wardyn
+  API, and the gateway takes no other token. It must expire, in at most 90 days, and token lists mark it `"inbound": true`.
+  See [API tokens](docs/operations/api-tokens.md#inbound-tokens).
+- `POST /runs/{id}/apps/{app}/ticket` mints the browser ticket that opens one inbound app for the run's owner or a person
+  its `callers` names. A named person who is not the owner needs per-run hosts (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`);
+  on one shared host it answers `403` `inbound_needs_host_mode`. `/healthz` gains `ui_sandbox.inbound_url_template`.
+- A UI-app call to a run whose runner is offline now answers `503` `runner_offline` on the gateway instead of `502`.
+- An inbound app's run page has **Copy link for people** and **Copy address for API clients**. The link is
+  `/open/{run}/{app}`: it mints the caller's ticket and opens the app in one step.
+- New Run warns that a service will be paused while it waits for requests when your admin pauses runs nobody is using;
+  a queued service's `201` carries the same warning.
+- Workloads: a named run Wardyn keeps declared. `wardyn apply -f FILE` stores a workload and starts its run; an apply that
+  changes nothing starts nothing, and a changed spec starts the new run before it ends the old one (`workload.replace`). A
+  launch your organisation refuses keeps the old run and is recorded as `last_refusal`. `wardyn diff`, `wardyn delete`,
+  `wardyn workload list|get|restart|delete` and `wardyn workload binding create|list|delete` complete the CLI. On a
+  Kubernetes organisation runner a `WardynWorkload` resource in a bound namespace launches as its service identity, and its
+  status shows the phase and reason. A binding names an organization pool only, and is refused `409`
+  `service_identity_inactive` while the identity's sponsor is not active; a restart after the sponsor's access is
+  revoked is refused too. See [Workloads](docs/operations/workloads.md).
+  - The console has a **Workloads** screen: each workload's state, and a drawer with its spec digest, its history and the
+    current run's inbound address. A run started from a workload shows a workload chip in its header, and Runners has a
+    **Workload bindings** tab.
+  - The API: `PUT`, `GET` and `DELETE /workloads/{name}`, `GET /workloads`, `GET /workloads/{name}/history` and
+    `POST /workloads/{name}/restart`. Audit actions: `workload.apply`, `workload.launch`, `workload.launch_refused`,
+    `workload.replace`, `workload.restart` and `workload.delete`.
+  - Migration `0243_workload_k8s_uid` records the `metadata.uid` of the resource a workload was reported from. A status
+    is written only to the resource with that uid, so one deleted and recreated under the same name never gets the old
+    one's status. No grant changes.
+- An organization runner on Kubernetes can place runs in several runs namespaces. List the extra ones under
+  `extraRunsNamespaces` in the runner chart, and add the runner to a pool with
+  `wardyn runner pool add POOL RUNNER --runs-namespace NAMESPACE`. The namespace is fixed when the runner joins the pool,
+  and a runner serves each named namespace for one pool. See
+  [Several runs namespaces](docs/operations/k8s-runners.md#several-runs-namespaces).
+- Removing an organization runner from a pool that carries a use policy is held for a super admin when second-human
+  governance is on, as a remote-hosted runner's removal already was.
+- With several wardynd replicas, a kill, end or stop queued on a replica that does not hold a runner's session now ends
+  that session, so the runner reads the action at once and not at its next reconnect. Setup status gains a warning row,
+  *Runners with several replicas*, while high availability and runners are both on: a launch, terminal or revive served by
+  another replica still finds the runner offline. See [High availability](docs/operations/high-availability.md).
+
+### Changed
+
+- With per-run hosts, every relay session request from a browser must now be same-origin, carry no fetch metadata, or be a
+  top-level `GET` or `HEAD` navigation, and an `Origin` it names must be its own; anything else is `403` `ui_gateway_cross_site`.
+  This holds for every app, inbound or not, so a page on another run's origin can no longer drive a person's own editor
+  session.
+- The gateway removes any `X-Wardyn-*` header a client sends before the request reaches the app. On an inbound app it adds
+  `X-Wardyn-Caller`, and `X-Wardyn-Caller-Email` when the credential carries an email.
+- An upgraded connection an inbound token opened is re-checked at most every 30 seconds and closed once its token is
+  revoked, has expired, its owner is suspended or the run's profile denies inbound.
+
+### Fixed
+
+- A macOS guest now gets its address on a macOS VM's network. The relay answered ARP for every address, the guest's own
+  included, so macOS's check of its offered address before taking it found it in use, declined it, and asked again
+  forever; preparing a base then waited out its hour without reaching the guest. The relay now answers ARP only for its
+  gateway, and a guest's DHCP decline is logged as one, with the guest's reason.
+- On a Mac that needs setup by hand, the setup window's title now names the account to create, `wardyn-admin`, and
+  says its password is the one-time code. If the guest then refuses that sign-in, preparing stops at once and says to
+  run prepare again, instead of ending on an SSH error.
+- A host removed from a workspace's allowed list is no longer added back when wardynd reapplies earlier "always" approvals
+  at start, if the workspace could not be read or its list changed while they were being reapplied.
+- Azure Key Vault: deleting and re-adding a secret while the cleanup of its replaced value was still running no longer
+  loses the new value. The cleanup now checks, under the secret's lock, that the object it removes is not in use again.
+- A runner retries removing a retired run's output after a failed attempt, at its next start and on each reconnect;
+  before, that output stayed on disk.
+- Folder sync no longer takes a different file of the same name and size for a rename, which kept the old bytes in the
+  sandbox. It compares contents before renaming there, and otherwise copies the file.
+- `wardyn-vmnet` in listen mode now exits on SIGTERM while a guest's connection is open but idle.
+- A run's egress proxy that is told to stop before its run opens now stops; it could wait forever.
+- A runner that reconnects at the moment its limits are rechecked no longer has the new session ended by that check.
+- New Run: the computer-folder card no longer shows the previous folder's file counts after **Change**.
+- Approvals: the Decided tab's load error now clears when the background refresh loads the list.
+- `wardyn site-config set` now treats an empty list written as `[ ]` or over several lines as empty, like `[]`.
+- wardynd no longer fails its first start after an upgrade whose migrations take longer than 30 seconds. The checks
+  after the migration had kept the connect deadline and stopped with "verify the audit append privileges: context
+  deadline exceeded".
+- Helm: with `basePath` set and `env.WARDYN_BASE_PATH` set to `""`, the probes and ServiceMonitor now follow the
+  empty value wardynd serves under, so the pod goes ready.
+- A placement refusal that names no field no longer begins with ": ".
+- VS Code in the browser could not open its workbench connection through the app gateway: the gateway now gives an app its
+  own origin on a request from its own page.
+
+### Security
+
+- The console's `seroval` and `seroval-plugins` move from 1.6.8 to 1.6.12 (GHSA-9wx9-5pv9-3349, GHSA-f86p-h4j2-7qgj).
+
+### Known issues
+
+- `agent-claude-code` stays on Claude Code 2.1.231. Its embedded runtime carries a Brotli decoder flaw
+  (CVE-2026-111497): a crafted Brotli response from a site a run reaches could run code as the agent, inside its
+  sandbox and its egress policy. Later Claude Code releases fix that runtime. In them, though, a repository's
+  `permissions.allow` still lets a tool run that managed settings with `allowManagedPermissionRulesOnly` ask about, and
+  Wardyn's strictest attended rule set (L0) depends on those settings. Wardyn keeps the pin until a release passes both.
+  Until then, keep a Claude Code run's allowed hosts to sites you trust.
+- A dead macOS VM's slot stays held while a later Virtualization process of the same user runs. Quitting that process
+  frees it.
+- A Kubernetes exec run still records no output and no recording (`run_output_not_captured`).
+- The macOS package is unsigned until the release workflow has the Apple Developer ID secrets; Gatekeeper refuses a
+  double-click. See [Installing with a macOS package and MDM](docs/operations/hybrid-laptops.md#installing-with-a-macos-package-and-mdm).
+- No macOS VM has been booted on a real Mac by this release's tests; the rows listed under
+  [Not yet tested on a real Mac](docs/operations/macos-vms.md#not-yet-tested-on-a-real-mac) stay untested.
+- A person other than a run's owner can open an inbound app only on per-run hosts; on one shared host the ticket is
+  refused `inbound_needs_host_mode`. Opening a code editor through an inbound port on per-run hosts has not been tested
+  end to end in this release.
+
+## [0.10.0-rc.7] — 2026-10-29
+
+### Before you upgrade
+
+- Migrations `0237_base_image_prewrapped` (admits `prewrapped` in `base_images.kind`'s CHECK and adds the check's
+  columns) and `0238_run_image_arches` (adds a column to `agent_runs`) change no row and no grant. See
+  [OPERATIONS.md](docs/OPERATIONS.md).
+
+### Added
+
+- A run's Policy tab now marks each allowed host **Inspected** or **Tunnel only**, with a line saying what each means, and `wardyn run policy` prints the same marks above the YAML. Inspected means Wardyn opens that traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate; Tunnel only passes through unread. Hosts Wardyn opens on a port no allowlist entry names are listed too, as Inspected; under allow-all, every host Wardyn opens is. The mark comes from the run's own proxy config at launch, and `GET /api/v1/runs/{id}/policy` returns it as `host_marks`. A run from before this change, or one restarted since, shows no marks. See [OPERATIONS.md](docs/OPERATIONS.md#the-policy-a-run-got).
+- A Kubernetes control plane, which has no image builder, can now run a pre-wrapped image: one built `FROM` agent-base and
+  pinned by digest. Add it under Images with *How it runs* → *Pre-wrapped: runs as is*, or `POST /base-images` with
+  `kind: "prewrapped"`. The control plane checks it on the cluster first, with one short pod per node architecture and no
+  network, and offers it to workspaces and runs only once it is ready; its runs go only to the architectures that passed.
+  A refused or cut-short check gets *Check again* (`POST /base-images/{id}/check`), and each verdict is audited as
+  `base_image.admit`. A security admin now has an Images page and lists, adds, checks and removes pre-wrapped images only. See
+  [deploy/images/README.md](deploy/images/README.md#pre-wrapped-image).
+- A macOS VM run now shares its workspace's folders. Each is shared into the guest at `/Users/agent/…` (a workspace's
+  `/home/agent/…` path), with the same rules and read-only or writable choice as a container. A folder macOS protects
+  (Desktop, Documents, Downloads, iCloud Drive, removable volumes) needs the runner allowed under Privacy & Security →
+  Files and Folders first. A whole home folder, /Users or /private/var can't be shared, because each holds files Wardyn
+  protects; share a project folder inside it. A runner older than this release can't take such a run: it is refused
+  before it starts, naming the runner to update. Sharing is not yet tested on a real Mac; see
+  [macOS VM sandboxes](docs/operations/macos-vms.md#not-yet-tested-on-a-real-mac).
+
+### Fixed
+
+- A runner that the organisation sends away or revokes while it waits for its pending work now acts on that. It could take
+  it for a dropped connection and log `context canceled`: a revoked runner then kept its state, including the credentials
+  delivered to it, until it next got through to the organisation.
+- A header credential Wardyn adds at the proxy from a stored secret is now sent without one trailing line break, which a
+  secret saved with `echo` or an editor ends in; the request carried an invalid header before. A secret that is under
+  8 bytes once that line break is dropped is refused instead (`secret_value_too_short`), since output masking could not
+  cover it.
+
+### Security
+
+- With `WARDYN_ENV_SECRET_PLACEHOLDERS`, `WARDYN_FILE_SECRET_PLACEHOLDERS` or `WARDYN_RUNNER_SECRET_PLACEHOLDERS` on, a
+  secret whose stored value ends in one line break, as one saved with `echo` or an editor does, now gets a placeholder.
+  It went into the sandbox as its value, and only the run's audit log said so.
+- The agent images now carry GitHub CLI 2.103.3, built with Go 1.27.3. Earlier images carried 2.102.0, built with
+  Go 1.27.1, which image scanners flag for CVE-2026-56857. That flaw affects Windows only, so it can't be reached in
+  the Linux images.
+
+## [0.10.0-rc.6] — 2026-10-28
+
+### Added
+
+- With `WARDYN_AWS_SIGV4_AT_PROXY` on, a Bedrock lane through a PrivateLink endpoint is now re-signed at the proxy, so its
+  role credentials stay out of the sandbox. Only Bedrock's own services under the name AWS generates for the endpoint qualify;
+  your own endpoint service and other services' PrivateLink hosts keep the old path.
+- With `WARDYN_AWS_SIGV4_AT_PROXY` on, operator setup now warns when new runs using an AWS sign-in model provider's current
+  settings would keep role credentials in the sandbox, and names the host or setting responsible.
+- A run's Audit tab now says whether the run was set up to sign its AWS requests at the proxy or to get role credentials in
+  the sandbox, and why not at the proxy, for a Bedrock sign-in run and for an AWS CLI component. It is recorded at
+  dispatch (`run.bedrock.configure` gains `aws_signing`, and the new `run.aws_cli.configure` row carries the same fields).
+- When a policy's allowlist drops a host from a run, New Run's Review step now names the policy the run is bound by
+  under the warning, with the way to ask its owner when that policy publishes one. Create and preflight carry it as
+  `warning_context`.
+
+### Fixed
+
+- When AWS refuses to renew an AWS sign-in, the run's refusal now says how long after signing in it came, and that a
+  refusal that soon after every sign-in can be the IAM Identity Center session duration or the identity provider's
+  sign-in session. The `harness.credential.refresh` failure row carries `signed_in_sec`.
+- `PUT /governance/units/{id}` now takes a unit as `GET /governance` returns it, so GET, change one field and PUT the
+  rest works. It refused the body with `unknown field "id"` (`governance_unit_request_invalid`); the server-set fields
+  are now ignored, and a field GET never returns is still refused.
+- A macOS VM prepare or start on a Mac in ordinary use is no longer refused for memory macOS can reclaim within
+  seconds. The live check counted only free, inactive and speculative pages, which on a 32 GiB Mac in use stayed
+  under the VM's memory plus the 2 GiB margin while macOS's own memory pressure reported nearly half of memory free. It
+  now takes the larger of that page sum and the share of memory the kernel's memory-pressure level calls free.
+- The runner no longer finds its macOS VM directory under a relative `$HOME`. `wardyn-runnerd macos-vm remove`
+  and the staging sweep delete under that directory, so a relative one would resolve against the working directory;
+  the runner now refuses it and says why.
+
+## [0.10.0-rc.5] — 2026-10-28
+
+### Fixed
+
+- A failed macOS VM start no longer keeps its VM in the helper until the helper exits (#3708). Each failed attempt
+  kept one, and a first boot's retries on the auxiliary storage lock can make several.
+- After a change of the Mac's clock, a macOS VM run whose helper stopped no longer ends with "The Mac restarted, so
+  the macOS VM was lost." (#3709). The runner tells a restart by the boot session the ledger records, as the ledger
+  does, so a run whose entry has no session, from an earlier release, says its helper stopped.
+
+### Security
+
+- The agent images now build on Node.js 24.22.1, and `agent-vscode` on code-server 4.141.1, which bundles Node.js
+  24.22.1. Earlier images carried Node.js 24.21.0, and `agent-vscode` ran code-server on Node.js 24.20.0. Both
+  versions decode Brotli data with a decoder that a crafted stream can make write out of bounds (CVE-2026-111497).
+  A Node.js program in a sandbox that decompressed Brotli data from an untrusted source could crash, leak its
+  memory or run the sender's code with that program's rights. Rebuild locally built agent images.
+
+## [0.10.0-rc.4] — 2026-10-26
+
+### Before you upgrade
+
+- A slot that 0.10.0-rc.3 recorded for a macOS VM prepare or tools update, and never freed, lacks the boot session
+  and start order this release reads, so the upgraded runner frees it only once no macOS VM, helper or Docker engine
+  of that user runs (#3700). Keep the runner running and quit Docker Desktop while no macOS VM runs. The runner
+  checks about every 15 seconds; start Docker again once `wardyn-runnerd macos-vm status` no longer counts the VM. A
+  leaked slot that an earlier release recorded, and an entry file that does not parse, stay until their owner
+  removes them, as the shared ledger section of `docs/operations/macos-vms.md` says.
+- A Kubernetes run that an earlier release left stopping (#3537) still has its proxy pod, both NetworkPolicies and a
+  Secret holding the proxy's config, the run's secret values and its managed files in the runs namespace. Its stop is
+  retried when its runner, upgraded to this release, next reconnects, and finished when the pod shows the proxy never
+  started; the pod, the policies and the Secret are then removed. Upgrade the runner first. A run still held after
+  that keeps its fence; `docs/operations/k8s-runners.md` ("A stop still held after the upgrade") says how it may be
+  released.
+- A macOS VM restore image in `macos-vm.noindex/cache` that this release has no record of, placed by hand or kept by
+  an earlier release after a failed prepare, now stops `macos-vm prepare` (#3706). Prepare names the file and neither
+  uses nor deletes it. Delete it, so prepare downloads the image again, or move it out of the cache and pass it with
+  `--ipsw <file> --sha256 <hex>`, taking the hash from a source you trust.
+
+### Added
+
+- `wardyn-runnerd macos-vm prepare --ipsw <file> --sha256 <hex>` builds a Mac's base from a restore image downloaded
+  elsewhere, for a Mac whose network refuses Apple's pinned update host. `--sha256` is required: prepare copies the
+  file into its cache, checks the copy's hash before anything loads or installs it, refuses a mismatch naming both
+  hashes, and never changes or deletes the file given. The pinning error now names `--ipsw` (#3701).
+
+### Changed
+
+- A macOS VM's prepare reuses a restore image from its download cache only when a previous prepare's download wrote a
+  record of its SHA-256 beside it and the file still matches. A file with no record, or a different hash, stops
+  prepare with an error naming the file and what to do; it is never deleted. The record is written only for an image
+  Wardyn downloaded over the pinned connection in a download it started, resumed only from its own partial file (the
+  one with the marker Wardyn wrote for it), or copied with `--ipsw` after its hash matched. It guards against
+  hand-placed or damaged files, not against someone with the runner user's write access (#3706).
+- A macOS VM's prepare behind a proxy that inspects TLS now fails at the first range of the restore image, not after
+  three retries, when the error is Apple's certificate-pinning refusal of `updates.cdn-apple.com`. The error says the
+  host's certificate chain failed Apple's pinning check, that a proxy inspecting TLS is the likely cause and to exempt
+  the host from it, and prints the image URL; the requirements table in
+  `docs/operations/macos-vms.md` lists the uninspected path (#3701).
+- The macOS VM start refusal "this Mac does not have enough free memory right now" now gives the free memory (free,
+  inactive and speculative pages) and the memory needed (the VM's plus the margin) in GiB, and names lowering Docker's memory allowance as the
+  usual fix; `macos-vm status` and `prepare` on a runner with no `runnerd.json` now say none was found at its path and
+  to run `wardyn-runnerd setup` or write `org_url` into it, and use the `--org` an earlier service definition passes
+  `serve` (#3702).
+- Upgrade note: a hand-installed macOS LaunchAgent does not get `--log-file`, so its log is not rotated until someone
+  adds the flag to its `ProgramArguments`. `wardyn runner upgrade` to a newer release writes it; on a runner already on the
+  current release, upgrade stops before setup, so run `wardyn-runnerd setup` again or add the flag by hand (#3702).
+- A macOS VM's prepare now refuses a base that holds another local account than `wardyn-admin` and `agent`, and names
+  the extra one, so an account made by hand during setup no longer ships in every VM cloned from the base (#3687).
+- `wardyn-runnerd macos-vm status --json` has a `failure` key when the base has one, and a setup by hand the helper
+  refused because it cannot reach the Mac's desktop (over SSH, under sudo, or with no one signed in) is
+  `no_desktop`, with the state `failed`; before, only the error text said so. A console that does not know the code
+  shows the error text as before.
+- A Linux or macOS VM run now refuses a new connection on a granted port other than 80 once it has 1,024 such
+  connections open at once, and reports the refusal through its denial report with the reason `tunnel-limit`; the cap
+  does not evict existing connections, and lower process or container resource limits can bind first. The relay now
+  sends TCP keepalive probes toward both the guest and the proxy, so a peer that vanished is noticed; the
+  proxy-to-origin leg is unchanged (#3489).
+- The runner inventory's macOS VM capabilities no longer carry the runner's own `refusal` sentence. Read `reason`
+  (with `min_cpus` and `min_memory_mib`) instead; the console words the refusal from those.
+
+### Fixed
+
+- A Linux VM whose guest agent never becomes ready before the boot timeout now reports the last error the agent
+  gave (for example a refusal) instead of only the context deadline (#3495).
+- The host's connection to a desktop VM's guest agent no longer keeps every connection it has ever redialled, and
+  reads at most 64 KiB of response headers from the guest; a frame cut off after its header now reads as an unexpected
+  end of stream rather than a clean one (#3388).
+- `wardyn-runnerd serve --log-file` now bounds the crash log beside it: at start, a `runnerd.crash.log` over 1 MiB moves
+  to `runnerd.crash.log.1` and is emptied in place, so a runner that panics at every start no longer grows it without
+  limit (#3633).
+- A first macOS VM prepare no longer fails right after the install with "Failed to lock auxiliary storage" (#3699). The
+  helper now runs the install in a process of its own, whose exit lets go of the installer's VM and its auxiliary
+  storage before the first boot, and retries that boot for a few seconds on exactly that refusal.
+- A macOS VM that ended without reporting its stop, such as a failed prepare, no longer keeps its slot until Docker
+  stops (#3700). The runner frees it once no Virtualization or helper process of the user created after the VM's helper
+  remains, other than another macOS VM's own helper, so Docker's Linux VM, started earlier, no longer counts as that
+  VM. Which came first is read from the time since the Mac started, so a change of the clock cannot make that VM look
+  older than its helper. A process it cannot prove is not that VM still keeps the slot, and a slot recorded by an
+  earlier release frees once no macOS VM, helper or Docker engine of that user runs.
+- A finished tools update of the macOS VM base no longer keeps one of the Mac's two VM slots until the Mac restarts
+  (#3700). The runner now frees its entry once its helper has exited, as it does for a finished prepare.
+- A change of the Mac's clock no longer makes the macOS VM ledger take its live VMs for an earlier boot's. The ledger
+  told boots apart by `kern.boottime`, which macOS moves with the clock, so a clock change could stop counting a live
+  VM, refuse its helper and delete its runner's entries. Each entry now records the boot's session, and only a
+  different session means a restart. An entry with none, from an earlier release, is never taken for an earlier
+  boot's, and an entry file that does not parse now counts until its owner removes it, whatever its time.
+- A Kubernetes run whose proxy container is running but never becomes ready now fails at the start deadline with a line
+  naming the readiness probe and the proxy image, and saying to check the proxy's log and connectivity; on a runner it
+  adds that the proxy may be waiting for its first run-token renewal with the organisation (#3612).
+- The audit trail now records the end of a desktop sign-in or take-over pause that was still open when the run ended,
+  after the person had closed the desktop (#3583). Its `desktop.recording.resume` row is written once, marked
+  `end_reason` `run_ended`, and the server stops holding the pause. Before, the pause stayed open with no end row.
+- A Linux VM run whose agent was paused for a desktop sign-in, then lost to a control-plane outage and its agent
+  stopped, now has the pause ended once the stop is confirmed (#3629). Its `desktop.sign_in.pause` row is written once,
+  ended at the stop, and a recorded desktop's `desktop.recording.resume` row says `end_reason` `run_ended`. Before, the
+  pause stayed open with no row. A pause whose stop failed, or is not yet made, still stands.
+- `wardyn-runnerd doctor` on a host whose service definition is still an earlier install's, which passes `--org`, now
+  checks the organisation that service uses, as `serve` does, instead of the one in `runnerd.json`.
+- `wardyn-runnerd macos-vm status` and the runner no longer lose a failed prepare's reason when a long line in
+  `prepare.log` comes before the helper's error; a read that stops early says so (#3690).
+- The macOS runner package's install script sets its own `PATH` instead of relying on the installer's (#3646).
+- A macOS VM run's disk-removed report is no longer lost when the report prune runs as the report is stored (#3682).
+- On macOS, a base-image download that resumes a partial file now continues after the bytes already on disk instead of
+  overwriting its start, so a restarted preparation no longer re-downloads the whole image after the check rejects
+  it (#3684).
+- On macOS, a base preparation whose network relay stops on a virtual network device failure now fails with the relay's
+  error, instead of waiting for a guest that has no network and leaving the reason only in `prep-relay.log` (#3643).
+- On macOS, a base preparation or a tools update whose VM macOS refuses to start for its VM limit now records the leaked
+  VM slot, as a run already did, so the slot is counted at once instead of when a run next hits it (#3659).
+- A macOS VM runner's stage-2 network is now removed when the job's VM goes away before its control socket appears, and
+  is no longer torn down when handing it to the helper fails after the helper already took it (#3641, #3642).
+- The macOS VM ledger setup (`wardyn-macvm ledger-setup`, run by the runner package's postinstall) no longer fails on a
+  directory that a login made in the entries directory under an entry's name: the directory moves to a root-only
+  quarantine beside the base and the setup finishes (#3675). An entry file with the immutable flag still stops it.
+- A Kubernetes runner's proxy now logs `wardyn-proxy: listening` when it has bound its port, after its first run-token
+  renewal, not while it is still waiting for that renewal (#3632).
+- The server no longer warns every minute that re-asserting a kept run's stop failed while the run's runner is offline
+  and the stop is already queued for it (#3703). It warns once, and logs once when the re-assert succeeds after the
+  runner reconnects; any other failure still warns on every pass, and the stop is still re-asserted on every pass.
+- While the Docker engine is down or restarting, a runner's log no longer repeats `runner containment will retry` every
+  second or two (#3704). Each error a run's containment fails with is logged once, and its repeats as a summary line
+  about once a minute saying how many went unlogged, even when two errors take turns; a new error, or the run's
+  containment succeeding, logs at once. Containment is still tried on every pass, and a failed pass still refuses the runner's ready state as
+  before.
+- A Kubernetes runner now finishes stopping a run whose proxy pod was deleted after its setup step finished and before
+  the proxy started, such as a run cancelled at that moment (#3537). The kubelet reports that pod as failed with the
+  proxy never started, which the runner did not accept as proof that it stopped. The pod, both NetworkPolicies and the
+  Secret holding the proxy's config, the run's secret values and its managed files stayed in the runs namespace until
+  removed by hand.
+- A recorded run that ends within its first five minutes, such as a short command on a laptop's Docker runner, uploads
+  its whole recording once, at exit. That upload is now retried when it gets no answer or a 502, 503 or 504 (the run's
+  proxy cannot record the request yet, or the runner's link to the organisation is down), with new attempts starting
+  for up to 30 seconds (an attempt already sending may finish later), so the run keeps its recording (#3705). Before,
+  one such refusal lost the whole recording.
+- A single run's own read (`wardyn runs get <id> --json`, `GET /api/v1/runs/{id}`) now reports `has_recording`,
+  `recording_bytes` and `recording_duration_sec` without `?include=recording_meta` (#3705). Before, it said
+  `has_recording: false` for every run, including one whose recording was stored. Run lists report the recording
+  fields only with `?include=recording_meta`; without it a listed run says `has_recording: false` whatever is stored.
+
+## [0.10.0-rc.3] — 2026-10-25
+
+### Before you upgrade
+
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
+  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `macos_vm_disks`
+  (migration `0236_macos_vm_disks`). Without it a macOS VM run's page never says whether its disk was removed from the
+  Mac. An upgrade from 0.9.x also needs every grant the 0.10.0-rc.1 notes list: `SELECT, INSERT, UPDATE, DELETE` on
+  `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`, `desktop_signins`, `desktop_signin_shares`,
+  `desktop_signin_runs`, `approval_rules`, `governance_restrictions`, `governance_restriction_members`,
+  `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`. Also grant it `SELECT, INSERT, UPDATE` on
+  `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`. If it turns on
+  `WARDYN_MULTI_AGENT_TASKS`, grant it `SELECT, INSERT, UPDATE` on `run_harnesses` as well.
+
+### Added
+
+- A macOS VM run's page says when the run's disk was removed from the Mac, or why it could not be. It needs this
+  release's wardyn-runnerd. With an older one the page says "Removing…" for 10 minutes after the run ends, then nothing
+  about the disk. A saved "Finished" arrangement of the run page gains the "Attach from your terminal" tile at its
+  bottom, once, where the disk line shows.
+- macOS VMs run on a Mac on macOS 26 as well as 27. macOS 26 has no unattended guest setup, so on a 26 Mac each
+  `wardyn-runnerd macos-vm prepare` stops after the install for setup by hand, once per base, about 10 minutes at the
+  Mac; `status` says so beforehand. Started over SSH or with sudo, it refuses at once and says to run it in Terminal
+  at the Mac's desktop. On macOS 27 nothing changes. Setup by hand now opens the guest's window on the Mac,
+  "Wardyn: set up this macOS VM"; before, its instructions pointed at a window that did not exist, even on 27. The
+  helper is built for macOS 26, and the release checks that no binary in the package asks for a newer macOS.
+
+### Fixed
+
+- A macOS VM start that failed after its helper had started deleted the run's directory even when the helper
+  outlived its kill. The teardown and the orphan sweep need that directory to end the VM later, so it now stays,
+  with the run's capacity held, until the helper has exited.
+- A macOS VM run whose policy keeps no desktop sign-ins now starts agent-only. Its guest turns the desktop off and
+  sets no desktop password, and the runner took that as the desktop password failure and ended the run.
+- A run on a runner could be refused with "no eligible runner" at the moment the runner was busy recording an idle
+  signal, though the runner was connected and ready. The runner now reads as connected throughout.
+- Stopping a run on a Docker runner no longer stops half-way when the organisation gives up on a slow stop and resets
+  the call. The stop finishes on its own time budget, so the run's proxy and network are not left for the clean-up
+  sweep.
+- A runner upgrade that failed to start and was being rolled back no longer overwrites the kept copy of the old runner
+  with the broken one first, so a full disk at that moment cannot leave the computer with no copy of the old runner. A
+  rollback also keeps its own copy of the old runner to restore from.
+  An upgrade also stops, with the runner untouched, when it cannot tell whether a previous copy is there (for example
+  a permissions error), rather than assuming there is none.
+- A desktop recording that stopped early, because the desktop sent a message the recorder could not follow, was saved
+  as an ordinary success. Its save record now says how far in the recording ends, and wardynd logs a warning.
+- A desktop recording's audit chain check passed when the oldest rows of the audit log had been deleted and nothing
+  came before the recording's own rows. It now fails there, as the whole-log check does.
+- In local mode with the second-admin switch on, the boundary editor no longer says "Submit for approval" for a save
+  that is refused. The save is refused in local mode, so the editor now words it as a plain save.
+- Over the SSH gateway, a command run in a bring-your-own image whose `HOME` is relative (resolved through `CDPATH`)
+  or is `-` no longer starts its output with a stray directory line. The output is the command's alone, as under
+  OpenSSH.
+- `wardyn-runnerd doctor` finds the organisation address the way the service does: `--org`, the managed `OrgURL`
+  setting, then `org_url` in `runnerd.json`. It no longer reads a `WARDYN_RUNNER_ORG_URL` exported in your shell, which
+  the service never reads, so a check that passed on that variable no longer hides an address the service would not
+  find. The variable is read only from an earlier install's service settings, where its unit passes it to `--org`.
+  Its hints name the settings that work.
+- An admin's successful check of the audit chain over another person's desktop recording now leaves a `recording.read`
+  row in that run's audit, marked `chain_check`. The check reads only the recording's metadata, not its content. A check
+  of your own run still leaves nothing, and who may ask, and what a refused caller sees, are unchanged.
+- A macOS VM run stuck in one start phase, such as connecting to the VM, now shows the same overdue advice as any
+  other start once the macOS start time has passed. Before, the phase row kept its spinner and said nothing. A start
+  that failed still shows its failure.
+- Choosing Linux again after macOS in New Run no longer drops a CPU or memory value you had set to exactly the Mac
+  minimum before choosing macOS. Only the figures that choosing macOS filled in are taken back, and only while they are
+  still at the minimum.
+- In New Run, a Mac pool that was preparing or at capacity when the page opened offers macOS once it recovers, when
+  you move to another step. Before, it stayed unavailable until the page was reloaded, and the draft is kept either way.
+- A run on a runner whose sandbox disappears without an exit code now ends. When two reports at least 30 seconds
+  apart find the sandbox gone, the run is marked lost (`gone`) and ends FAILED, and its slot frees at once (#3667).
+  Before, it stayed running and held the runner's capacity until its token lapsed. Migration
+  `0235_run_sandbox_absent_at` adds a column to `agent_runs`; no grant changes.
+- An interrupted or failed reinstall of the runner package on a Mac no longer leaves it counting fewer running macOS
+  VMs than it has. The installer also stops, with the count untouched, when it cannot read the count's files, where
+  it used to start the count empty.
+- A brief database error while a runner replays its saved audit events no longer drops one of them from the audit
+  log. The event is kept for the next replay.
+
+## [0.10.0-rc.2] — 2026-10-25
+
+### Before you upgrade
+
+- 0.10 can't be rolled back by redeploying 0.9.x: its migrations rename tables and change constraints. Take a database backup first.
+- **Upgrade wardyn-runnerd and rebuild the Linux VM guest image (`vm-linux`) to order a desktop sign-in's pause and
+  resume.** A run on an older wardyn-runnerd or guest image is not refused: its pause and resume work as before, its
+  `desktop.sign_in.pause` row says `fenced` false, and a continue that reaches its guest late can still run the agent
+  while the run page says paused. Migration `0231_desktop_vm_pause_generation` adds a column to `desktop_vm_sign_ins`;
+  no grant changes.
+- During a rolling control-plane upgrade, a desktop sign-in pause can stay paused until it is resumed from an upgraded server.
+- A Kubernetes runner (wardyn-runnerd) gets the short-run recording fix below only with a proxy image of this release.
+  The Helm chart pins the proxy tag to the runner's. A runner started without Helm and not pinned uses the proxy image
+  the organisation named at registration: when that is an older release, its runs keep working as before, without the
+  fix, and the runner logs a warning once. Have the organisation name this release's proxy image, or run setup with
+  `--proxy-image` set to it.
+  A proxy image named by digest or by a tag that is not a release number starts its runs as before, whatever its
+  release: this release's proxy gets the fix that way too, and an older one keeps working without it. The runner
+  cannot read such an image's release, so it logs no warning for it; name a release tag to have it checked.
+- The proxy-ready fix on Docker spans three pieces: wardyn-runnerd, the wardyn-proxy image and the agent images.
+  Upgrade the organisation before its runners, as always. A runner that follows an older organisation's proxy image
+  keeps starting runs as before and logs once that the image does not announce when it is listening, so the fix does not
+  reach those runs until the organisation is upgraded. The agent images wait for the proxy on their own and need no
+  runner change.
+
+### Changed
+
+- Changing a runner's per-run CPU or memory now ends its connected session, so the runner reconnects with the new
+  pair. Before, it kept the old pair until it next reconnected. A runner offline at the time reads the pair when it
+  next connects. Other limit changes leave the session alone.
+- On `agent-base`, an exec-mode run (`workload.kind: command`) that clones a repository or names a starting folder
+  now gets the same workspace prep a harness run does: the repos are cloned into `/home/agent/work` and the git
+  credential helper is ready, where the clone was skipped and the folder left empty unless the run also had a
+  starting folder. A run with neither is unchanged.
+- A failing retry no longer floods the logs. The organisation retries a runner exit receipt after 5 seconds, doubling
+  to 5 minutes, and logs an identical error once per interval with a `repeated` count; a receipt refused on 8 tries in
+  a row as a foreign, stale or incomplete incarnation is parked (migration `0232_runner_exit_parked`): kept, audited as
+  `runner.exit.park`, no longer retried, and failed by `wardyn doctor`'s new `runner-exits` stage. The runner backs off
+  each run's failing replay on its own, without holding up the others, logs its containment and replay retries the
+  same way (containment is still tried on every pass), and on macOS writes `~/Library/Logs/wardyn/runnerd.log` itself, rotated
+  at 10 MiB with three older files kept (a crash goes to `runnerd.crash.log`); `wardyn runner upgrade` rewrites the LaunchAgent to pass `--log-file`.
+
+### Added
+
+- macOS virtual machines (preview, off by default). A Mac on macOS 27 or later is built to run up to two macOS VM
+  sandboxes ([not yet tested on a real Mac](docs/operations/macos-vms.md#not-yet-tested-on-a-real-mac)),
+  installed on that Mac from Apple's own restore image. Wardyn does not ship macOS. Turn it on with `WARDYN_MACOS_VMS`
+  in the organisation and, on the Mac, `WARDYN_RUNNER_MACOS_VM=1`, the managed preference `MacOSVM` or
+  `wardyn-runnerd setup --macos-vm on`. `wardyn-runnerd macos-vm prepare`, `status` (`--json` for one JSON object) and
+  `remove` build, show and delete the Mac's macOS base; `prepare --new-image` builds a new one from Apple's newest
+  restore image. The runner offers macOS VMs only when its helper's `wardyn-macvm probe` passes, offers as many as the
+  Mac's shared ledger and memory leave room for, and ends its newest one when the disk drops below 5 GiB free. Migration
+  `0234_macos_vm_kind` lets a run record the `macos_vm` kind. `wardyn-runnerd setup --keep-ipsw` keeps Apple's
+  restore image, as `prepare --keep-ipsw` does.
+
+### Fixed
+
+- A unit admin deciding a held membership change no longer sees, in its diff, the other units the person holds
+  memberships under (`belongs_by`). Super admins and security admins still see them; the decision's recheck is
+  unchanged.
+- A headless run on a runner could be marked lost (reboot) when a check landed between its agent's exit and the
+  runner's exit receipt; the receipt was then refused and the run never recorded `run.complete`. The runner's exit
+  receipt now ends such a run (#3665).
+- An SSH key approval's title now says what happens: "Sign Git's SSH sign-in for <host>", where it said "Write an
+  SSH key for <host>". The proxy signs the sign-in and no key file enters the sandbox.
+- The desktop replay shows where a screen recording stopped, at its size cap or at a stream the recorder could not
+  follow. Before, it froze on the last frame with no notice.
+- A VM run lost to an outage keeps its desktop sign-in pause, since its agent may still be running. A run lost because
+  its lease ended or its agent's container exited ends the pause and its recording hold.
+- The image launcher split each `WARDYN_REPOS` clone record with a tab as whitespace, so an empty field moved the
+  fields after it up a place. This control plane never sends such a record. A control plane that sends only the
+  single-repository variables (`WARDYN_REPO_URL`, `WARDYN_REPO_SLUG`) got no git broker rewrite, and a record with
+  an empty middle field lost its branch. Empty fields now stay in place.
+- A unit delete, move or rename no longer scans every membership per affected person (migration
+  `0233_governance_memberships_subject` adds an index on the membership subject).
+- A continue that reaches a Linux VM's guest agent after a later "Pause the agent to sign in", as one delayed past a
+  lost run lock can, no longer runs the agent while the person signs in. Each pause takes the run's next pause
+  generation, kept in the database (migration `0231_desktop_vm_pause_generation`), and every stop and continue carries
+  one to the guest agent, which drops a request out of order and answers `409`: one older than the newest it has
+  seen, or a stop after its own generation's continue. The order outlives a restart of the guest agent's service. Each
+  pause-to-resume's `desktop.sign_in.pause` row records `fenced`, false when the run's wardyn-runnerd or guest image
+  predates it.
+- A short command run on a Kubernetes runner (wardyn-runnerd) no longer loses its recording. The run's proxy refuses
+  every request until its first token renew succeeds, but its pod read as ready once it listened, so the agent could
+  start, finish and have its recording upload refused inside that window. The proxy now listens only once its first
+  renew has succeeded, so its pod is ready only once it serves.
+- A run on a Kubernetes runner (wardyn-runnerd) whose proxy cannot renew its run token, for example because a
+  firewall blocks the organisation, now fails naming the cause: "the run's proxy could not renew its run token with
+  the organisation:" and the proxy's last renew error, without the token or the URL's path and query. Before, its
+  start waited out the start timeout and said only that the proxy pod never became ready. A proxy that has never
+  renewed now gives up about a minute after it starts; a refused renew still ends it at once, with the same sentence.
+- `GET /runs/{id}/output` no longer points the run's owner or an operator at a recording that was never received.
+  With run output persistence off, an ended run on a runner that does not capture output, and whose recording never
+  arrived, answers `409` `run_output_not_kept`.
+- On Docker, a run's agent can no longer start before its proxy is listening. The runner now holds the agent back until
+  the proxy reports it has bound its port, and fails the run if it does not within 10 seconds. The
+  agent images also wait up to 10 seconds for the proxy before they run the task, and carry on with one stderr line if
+  it never answers. Before, an exec run's first requests, or a very short run's recording upload, could be refused with
+  "connection refused".
+- A Linux VM run that ends while its agent is paused to sign in now writes its `desktop.sign_in.pause` audit row, marked
+  `ended_paused` with the run's own end time and no `resumed_at`. Before, the pause had no row at all, because a resume
+  is refused once the run is not running.
+- A desktop recording's replay no longer shows a failed clipboard or file action read as an empty action log. It shows
+  the replay's load failure with its retry.
+- Retrying a team drive save that stored one group's allocation and failed on another now also removes a group the
+  admin took out of the editor since. Before, that group's allocation stayed.
+- The setup checklist's model-access row now reports `resident_file` for a run served by an AWS sign-in, whose session
+  file is held in the sandbox, instead of `proxy_injected`, so it agrees with the `model_credential` the same
+  response carries.
+- A runner whose event the organisation refused for good no longer reconnects and drops every second: the refusal is
+  acknowledged and audited (`runner.event.refuse`), and a refused action result closes its action (#3648).
+
+## [0.10.0-rc.1] — 2026-10-24
+
 ### Before you upgrade
 
 - New, off by default: `storage.user_drive.member_create.keep_main_drive` (#1991). Turned on, a run can keep its work
@@ -506,6 +1465,25 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The Recording tab and the take over strip say "Recording off" for a run its policy, its organisation or its runner did
   not record, instead of naming a level. A take over on a run whose runner declined still says it is recorded: the
   console and SSH sessions it opens are.
+
+## [0.9.9] — 2026-10-28
+
+### Security
+
+- The agent images now build on Node.js 24.22.1, and `agent-vscode` on code-server 4.141.1, which bundles Node.js
+  24.22.1. Earlier images carried Node.js 24.21.0, and `agent-vscode` ran code-server on Node.js 24.20.0. Both
+  versions decode Brotli data with a decoder that a crafted stream can make write out of bounds (CVE-2026-111497).
+  A Node.js program in a sandbox that decompressed Brotli data from an untrusted source could crash, leak its
+  memory or run the sender's code with that program's rights. Rebuild locally built agent images.
+
+### Known issues
+
+- **The Claude Code CLI in `agent-claude-code` is not yet updated.** The pinned 2.1.231 runs on its own embedded
+  runtime, whose Brotli decoder has the same flaw; rebuilding the image on Node.js 24.22.1 does not change that runtime.
+  The tested update, 2.1.308, carries the fixed runtime, but its folder-trust prompt defaults to exiting and it failed
+  Wardyn's managed-permission check, so it is not in this patch. Until it is, keep a Claude Code run's allowed hosts to
+  sites you trust: a crafted Brotli response from an allowed site could run code as the agent, inside its sandbox and
+  its egress policy.
 
 ## [0.9.8] — 2026-10-21
 

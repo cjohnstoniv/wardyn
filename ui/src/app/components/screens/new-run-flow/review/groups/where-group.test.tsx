@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MAC_BASES } from "../../../../wardyn/copy/mac-bases";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { SCENARIO_POOLS } from "../../../../../lib/new-run-fixtures/scenarios/pools";
 import { SCENARIO_PREFLIGHT } from "../../../../../lib/new-run-fixtures/scenarios/preflight";
@@ -68,5 +69,24 @@ describe("Review: where it runs with no pool", () => {
   it("says nothing while no blocker points here (the read is still pending)", () => {
     view(false);
     expect(screen.queryByText("No pool chosen yet")).toBeNull();
+  });
+});
+
+// Board J6, "Review row": a macOS VM on another base names it under Where it runs; Standard names nothing.
+describe("Review: where it runs on a macOS base", () => {
+  const view = (intent: RunIntent) =>
+    render(<WhereGroup draft={{ ...initialDraft("alice"), intent }} pre={SCENARIO_PREFLIGHT.member} preview={null} docRows={[]} go={vi.fn()} dispatch={vi.fn()} />);
+
+  it("puts MAC-B16 on its own line under the pool's detail for a chosen base", () => {
+    view({ ...AGENT, machine_kind: "macos_vm", macos_base: "xcode-16" });
+    const line = screen.getByText(MAC_BASES.B16("xcode-16"));
+    expect(line.tagName).toBe("SPAN");
+    expect(line.parentElement?.textContent).toMatch(/\S.*macOS base · xcode-16$/);
+    expect(line.parentElement?.textContent).not.toBe(MAC_BASES.B16("xcode-16"));
+  });
+  it("names no base for Standard, or for a draft that is no longer a macOS VM", () => {
+    view({ ...AGENT, machine_kind: "macos_vm" });
+    view({ ...AGENT, machine_kind: "linux_vm", macos_base: "xcode-16" });
+    expect(screen.queryByText((t) => t.includes("macOS base ·"))).toBeNull();
   });
 });

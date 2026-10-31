@@ -104,6 +104,8 @@ interface Open {
   status?: unknown;
   /** GET /me/drives, read only for a draft that keeps its work folder. */
   drives?: unknown;
+  /** GET /me/drives, one answer per read; wins over `drives`. */
+  drivesFn?: () => unknown;
 }
 function open(intent: RunIntent, o: Open = {}) {
   const loaders: SeedLoaders = {
@@ -112,7 +114,8 @@ function open(intent: RunIntent, o: Open = {}) {
   };
   wfetchMock.mockImplementation(async (path: string, init?: { method?: string }) => {
     if (path === "/setup/status" && o.status) return json(o.status);
-    if (path.startsWith("/me/drives")) return json(o.drives ?? { drives: [], pool_checked: true });
+    if (path.startsWith("/me/drives")) return json(o.drivesFn ? o.drivesFn() : o.drives ?? { drives: [], pool_checked: true });
+    if (path === "/me/walls") return json({ spec: {} });
     if (path === "/templates" && init?.method === "POST") return json({ id: "t9", kind: "template" });
     if (path === "/templates") return json({ templates: [], publish: { org: false, groups: [], groups_unverified: false } });
     if (path.startsWith("/templates/")) return o.templateRead ? o.templateRead() : json({ document: { needs_setup: o.needs ?? [] } });
@@ -162,6 +165,18 @@ describe("Review: a draft that keeps its work folder at the drive limit (#1991)"
     expect(launch()).toBeDisabled();
     await userEvent.click(link);
     expect(path()).toContain("step=files");
+  });
+
+  it("Check again reads the catalogue again, so a drive deleted since clears the limit", async () => {
+    const user = userEvent.setup();
+    let reads = 0;
+    open({ ...AGENT, keep_work_folder: true }, { drives: AT_LIMIT, drivesFn: () => (reads++ === 0 ? AT_LIMIT : { ...AT_LIMIT, create: { allowed: true, count: 2, limit: 3, keep_work_folder: true } }) });
+    await ready();
+    await within(blockerList()).findByRole("button", { name: NR_FILES.KEEP_LIMIT(3, 3) });
+    checks.current = answered(null);
+    await user.click(screen.getAllByRole("button", { name: NR_REVIEW.CHECK_AGAIN })[0]);
+    await waitFor(() => expect(within(blockerList()).queryByRole("button", { name: NR_FILES.KEEP_LIMIT(3, 3) })).toBeNull());
+    expect(reads).toBe(2);
   });
 
   it("says nothing of it for a draft that does not keep the folder, and reads no drives for it", async () => {
@@ -414,6 +429,29 @@ describe("Review blockers", () => {
     expect(group("where").getByText(NR_REVIEW.BADGE_ATTENTION)).toBeInTheDocument();
   });
 
+  // The server names the field (errorBody.field): the machine kind links to the Run step, a harness to Harnesses,
+  // and the run's size stays on Review, under Limits, with no link away. Without the field, placement_capability
+  // would send all three to Tools.
+  it.each<[field: string, step: string | null, group: string | null]>([
+    ["machine_kind", "step=run", "where"],
+    ["harness", "step=harnesses", null],
+    ["resources", null, "limits"],
+  ])("routes a macOS VM placement refusal naming %s to where that field is changed", async (field, step, group) => {
+    const user = userEvent.setup();
+    const text = "This Mac has no room for another macOS VM right now.";
+    checks.current = answered(SCENARIO_PREFLIGHT.member, 1000, { preflightError: text, preflightReason: "placement_capability", preflightField: field });
+    open(AGENT);
+    await ready();
+    await waitFor(() => expect(within(blockerList()).getAllByRole("listitem")).toHaveLength(1));
+    const blocked = Array.from(document.querySelectorAll("[data-review-group][data-blocked]")).map((g) => g.getAttribute("data-review-group"));
+    // A harness has no Review field of its own: its blocker marks the groups the Harnesses step edits.
+    expect(blocked).toEqual(group ? [group] : ["run", "tools"]);
+    const link = within(blockerList()).queryByRole("button", { name: text });
+    if (!step) return expect(link).toBeNull();
+    await user.click(link!);
+    await waitFor(() => expect(path()).toContain(step));
+  });
+
   it("holds Launch for harnesses no one image carries together, and links to the Harnesses step", async () => {
     const user = userEvent.setup();
     const status = {
@@ -595,6 +633,16 @@ describe("Review groups", () => {
   });
 });
 
+describe("Review: the person's walls", () => {
+  it("are read once for the Access group and the policy card together, so their counts cannot differ", async () => {
+    open(AGENT);
+    await ready();
+    await screen.findByLabelText(NR_REVIEW.POLICY_TITLE);
+    await waitFor(() => expect(wfetchMock.mock.calls.some(([p]) => p === "/me/walls")).toBe(true));
+    expect(wfetchMock.mock.calls.filter(([p]) => p === "/me/walls")).toHaveLength(1);
+  });
+});
+
 describe("Review: an application server (#1994)", () => {
   const SERVER: RunIntent = {
     shape: "application", experience: "interactive", no_repositories_or_drives: true, runner_pool_id: "pool-general",
@@ -635,6 +683,42 @@ describe("Review: an application server (#1994)", () => {
     expect(blocked).toEqual(["run"]);
     await user.click(within(blockerList()).getByRole("button", { name: NR_REVIEW.BLOCKER_GATEWAY_OFF }));
     await waitFor(() => expect(path()).toContain("step=run"));
+  });
+
+  it("Check again reads /healthz again, so a gateway turned on since clears the blocker", async () => {
+    const spy = gatewayIs();
+    const user = userEvent.setup();
+    open(SERVER);
+    await ready();
+    await waitFor(() => expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF));
+    expect(spy).toHaveBeenCalledTimes(1);
+    gatewayIs({ enabled: true });
+    await user.click(screen.getAllByRole("button", { name: NR_REVIEW.CHECK_AGAIN })[0]);
+    await waitFor(() => expect(blockerList()).not.toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF));
+  });
+
+  it("Check again keeps the blocker while /healthz still says off", async () => {
+    const spy = gatewayIs();
+    const user = userEvent.setup();
+    open(SERVER);
+    await ready();
+    await waitFor(() => expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF));
+    await user.click(screen.getAllByRole("button", { name: NR_REVIEW.CHECK_AGAIN })[0]);
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF);
+    expect(launch()).toBeDisabled();
+  });
+
+  it("Check again does not take a failed /healthz read for off or for on: the blocker state is unchanged", async () => {
+    const spy = gatewayIs();
+    const user = userEvent.setup();
+    open(SERVER);
+    await ready();
+    await waitFor(() => expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF));
+    spy.mockResolvedValue({});
+    await user.click(screen.getAllByRole("button", { name: NR_REVIEW.CHECK_AGAIN })[0]);
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    expect(blockerList()).toHaveTextContent(NR_REVIEW.BLOCKER_GATEWAY_OFF);
   });
 
   it("does not call the gateway off before /healthz has answered, and never for a script", async () => {

@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import type { AuditEvent, ActorType, AgentRun } from "../../lib/types";
 import { isNetworkFault, runHeadline } from "../../lib/types";
-import { describeEvent } from "../../lib/audit-copy";
+import { describeEvent, hasNoCaller, inboundDetail, isInbound, serviceSource } from "../../lib/audit-copy";
 import { RunRef } from "../wardyn/run-ref";
 import { AUDIT } from "./audit-copy";
 import { audit as api } from "../../lib/api/audit";
@@ -48,6 +48,7 @@ import {
 } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
+import { InboundOutcome, NoCaller, SourceLabel } from "../wardyn/audit-inbound";
 import { AuditDecision, ErasedFields, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
 import { PageHeader } from "../wardyn/page-header";
 import { PageContainer } from "../wardyn/page-container";
@@ -110,7 +111,8 @@ function eventKind(e: AuditEvent): EventKind {
   // approval route, not on the wire. Bucketing it under Egress hides it from
   // the one facet an operator would look in.
   if (toolRuleDecision(e)) return "tool";
-  if (action.startsWith("egress.") || action.startsWith("llm.scan.")) return "egress";
+  // An inbound call is network traffic the run answers: the egress facet's counterpart.
+  if (action.startsWith("egress.") || action.startsWith("llm.scan.") || action.startsWith("inbound.")) return "egress";
   if (action.startsWith("kernel.") || action === "run.exec") return "tool";
   if (
     action.startsWith("credential.") ||
@@ -633,6 +635,9 @@ function EventOutcome({ e }: { e: AuditEvent }) {
       decision === "allow" ? "text-success" : decision === "deny" ? "text-danger" : "text-warning";
     return <span className={cn("font-mono text-xs font-semibold", tone)}>{decision}</span>;
   }
+  if (isInbound(e)) return <InboundOutcome allowed={e.action === "inbound.allow"} />;
+  const source = serviceSource(e);
+  if (source) return <SourceLabel source={source} />;
   if (e.action === "credential.mint" && e.outcome === "success") {
     return <span className="font-mono text-xs font-semibold text-info">brokered</span>;
   }
@@ -697,6 +702,7 @@ function EventRow({
   // its host, so "Allowed egress to …" would be false on the row.
   const ruled = toolRuleDecision(event);
   const Icon = KIND_META[kind].Icon;
+  const detail = inboundDetail(event, true);
   // Below sm the row is up to three lines: time, actor, icon and outcome, then the description, then the run reference (#3036).
   // `order` moves the outcome up without touching the DOM order; from sm up it is the one line it always was (#2849).
   return (
@@ -709,16 +715,27 @@ function EventRow({
       </span>
       {/* Fixed-width cells so the description and the run chip start at the same x on every row (#2852). */}
       <span data-testid="audit-actor-cell" className="w-[88px] shrink-0">
-        <ActorTypeChip type={event.actor_type} />
+        {hasNoCaller(event) ? <NoCaller /> : <ActorTypeChip type={event.actor_type} />}
       </span>
       <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       {ruled ? (
         <AuditDecision event={event} className="order-2 flex min-w-[12rem] flex-1 items-center gap-2 text-sm sm:order-none sm:min-w-0" />
       ) : (
         <span className="order-2 flex min-w-[12rem] flex-1 items-center gap-2 sm:order-none sm:min-w-0">
-          <span className="flex-1 truncate sm:min-w-[10rem] text-sm text-foreground" title={describeEvent(event)}>
-            {describeEvent(event)}
-          </span>
+          {detail ? (
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5 sm:min-w-[10rem]">
+              <span className="truncate text-sm text-foreground" title={describeEvent(event)}>
+                {describeEvent(event)}
+              </span>
+              <span data-testid="audit-detail" className="truncate font-mono text-xs text-muted-foreground" title={detail}>
+                {detail}
+              </span>
+            </span>
+          ) : (
+            <span className="flex-1 truncate sm:min-w-[10rem] text-sm text-foreground" title={describeEvent(event)}>
+              {describeEvent(event)}
+            </span>
+          )}
           <RuleSourceChip event={event} />
           <ErasedFields event={event} className="shrink-0 text-xs" />
         </span>

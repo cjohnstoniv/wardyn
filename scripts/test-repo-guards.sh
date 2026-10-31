@@ -96,6 +96,8 @@
 #      `if`, its `with.push`, or its own DRY_RUN/PUBLISH env that its script reads; never by job env.
 #  30. no workflow job runs on `ubuntu-latest`: that label moved to ubuntu-26.04 under a green main and
 #      broke every PR's compose job, so each job names the image its runs were proven on.
+#  31. release.yml's runner-pkg job reads the release stamp back from the packaged guest agent with
+#      scripts/check-release-stamp.sh, and that script's test refuses an unstamped binary (#3636).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -127,6 +129,10 @@ ok()  { echo "ok: $*"; }
 # and kind-acceptance-walks were exempt here until each had gone green on a real scheduled run
 # (39782025578) and green-by-tree.sh could watch a matrix job's legs (#3439). They are in
 # notify-new-lanes.needs and release.yml's watched= now (guard 13), and run under scope=candidate.
+# k6-workload-e2e (#3804) is in notify-new-lanes.needs and release.yml's watched= from day one, without
+# the green real scheduled run the rule above asks for: the 0.10.0 final is gated on it, so a train and a
+# release candidate must run it (scope=candidate, train-gate) before it has a scheduled green. A deliberate
+# exception to that convention, not a precedent.
 # provider-subscription-docker-pg (#677 T-17) went green on its first real
 # nightly run (workflow_dispatch, 2026-09-28, run 36393687863) and is now in
 # notify-new-lanes.needs + release.yml's watched= (guard 13) instead of here.
@@ -962,13 +968,13 @@ fi
 # and the new systemd failed test-desktop-profile.sh on every PR. A job names the image instead.
 floating="$(grep -nE '^[[:space:]]*runs-on:.*ubuntu-latest' .github/workflows/*.yml || true)"
 if [ -n "$floating" ]; then
-    bad "workflow jobs on the moving ubuntu-latest label (name the image, e.g. ubuntu-24.04):
+    bad "workflow jobs on the moving ubuntu-latest label (name the image, e.g. ubuntu-26.04):
 ${floating}"
 else
     ok "every workflow job names its runner image (no ubuntu-latest)"
 fi
 
-# Guards 26-29 (release.yml and nightly.yml) are in test-repo-guards-release.sh, sourced so they
+# Guards 26-29 and 31 (release.yml and nightly.yml) are in test-repo-guards-release.sh, sourced so they
 # share this file's fail, bad, ok, REL, NIGHTLY and NOTIFY_EXEMPT.
 . "$ROOT/scripts/test-repo-guards-release.sh"
 

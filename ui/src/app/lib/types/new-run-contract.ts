@@ -122,13 +122,14 @@ export interface RunHostOverrides {
 
 /**
  * Run-wide egress choices on top of the chosen base policy: how an unlisted
- * destination is handled, and "request all other egress". Both widen and are
- * clamped by the ceiling. `allow_all_egress` is only ever true; leave it out
- * rather than send false.
+ * destination is handled, and "request all other egress". `allow_all_egress: true`
+ * widens and is clamped by the ceiling. `false` turns open egress off for this
+ * run, so it reaches only the base's listed hosts, the hosts added and the hosts
+ * its own setup needs; it only narrows, so it is always allowed.
  */
 export interface RunEgressOverrides {
   first_use_approval?: "always_deny" | "deny_with_review" | "wait_for_review";
-  allow_all_egress?: true;
+  allow_all_egress?: boolean;
 }
 
 /**

@@ -127,18 +127,10 @@ type httpResult struct {
 }
 
 // (a) expired access, live refresh: create renews, stores the pair, and only
-// then makes the run. Review renews nothing.
+// then makes the run.
 func TestCreateRenewal_ExpiredAccessLiveRefreshLaunches(t *testing.T) {
 	srv := createRenewalFixture(t)
 	calls := renewedOIDC(t)
-
-	w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", providerAdminToken(srv, createRenewalOwner), createRenewalBody)
-	if w.Code >= 500 || calls.Load() != 0 {
-		t.Fatalf("preflight = %d with %d CreateToken calls, want a dry check that spends nothing", w.Code, calls.Load())
-	}
-	if got, _ := createRenewalStored(t, srv); got.RefreshToken != "old-refresh-token-1234567890" {
-		t.Fatalf("preflight changed the stored pair: %+v", got)
-	}
 
 	if res := postCreate(t, srv); res.code != http.StatusCreated {
 		t.Fatalf("create = %d %s, want 201", res.code, res.body)

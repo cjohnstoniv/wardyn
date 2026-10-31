@@ -102,7 +102,8 @@ func (s *Server) routes() chi.Router {
 			//   adminRoutes            (this file)  one per group, plus
 			//       mountUserTypeRoutes (user_types.go) securityOps, and
 			//       mountKeyDomainRoutes (key_domains.go) securityOps
-			//   mountLibraryRoutes     (sources.go) operatorOnly (+ member reads on r)
+			//   mountLibraryRoutes     (sources.go) operatorOnly; /base-images securityOps,
+			//       prewrapped rows only for a security admin (+ member reads on r)
 			//   mountSetupMutationRoutes            operatorOnly
 			//   mountAccessRoutes      (access.go)  operatorOnly
 			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps
@@ -161,8 +162,9 @@ func (s *Server) routes() chi.Router {
 			// comment.
 			//
 			// WHY THE OPERATOR-TOPOLOGY READS ARE NOT HERE. GET /site-config,
-			// /sources, /sources/{id} and /base-images are operatorOnly, not
-			// securityOps. The tier argument for widening them is real — a security
+			// /sources and /sources/{id} are operatorOnly, not securityOps, and
+			// GET /base-images, which is here so a security admin can register a
+			// prewrapped image, serves that tier the prewrapped rows only. The tier argument for widening them is real — a security
 			// admin holds the org allow/denylist, so scm_hosts is arguably theirs —
 			// but it does not survive what those documents actually carry: an
 			// upstream-proxy PASSWORD ref, a database-password requirement key, and
@@ -173,21 +175,22 @@ func (s *Server) routes() chi.Router {
 			// carries a proxy password — and such an endpoint has no caller today, so
 			// it is not built on spec.
 			//
-			// One rule, and it is not "these four routes". The tier does not reach
+			// One rule, and it is not "these routes". The tier does not reach
 			// the host axis — local_dir paths, the operator's registry coordinate,
-			// stored secret NAMES — on ANY route, and there are two ways for a route
-			// to honour that. These four stay narrowed because they serve whole
-			// operator documents nobody projects. GET
-			// /workspaces{,/{id},/build,/observed-egress} instead WITHHOLD that axis
-			// per reader (helpers.go's workspaceReadSecurity: paths and
-			// base_image.image blanked, the secret:/write: requirement keys and the
-			// scanned profile's host keys dropped) while keeping the EGRESS axis,
-			// which is the input to the decision this tier is widened to make.
+			// stored secret NAMES — on ANY route, and there are three ways for a route
+			// to honour that. These three stay narrowed because they serve whole
+			// operator documents nobody projects. GET /base-images serves the tier
+			// only the prewrapped rows, the one kind it registers itself. GET
+			// /workspaces{,/{id},/build,/observed-egress} and /workloads{,/{name}} instead WITHHOLD that
+			// axis per reader (helpers.go's workspaceReadSecurity: paths and base_image.image blanked,
+			// the secret:/write: requirement keys and the scanned profile's host keys dropped; for a
+			// workload, redactWorkloadIntentForRead) while keeping the EGRESS axis, which is the input
+			// to the decision this tier is widened to make.
 			//
 			// Said here because the asymmetry is what a reader notices first: a
 			// security_admin is answered 403 by /sources and 200 by
 			// /workspaces/{id} on what looks like the same datum, and the
-			// tempting resolution — widen these four to match — is the wrong
+			// tempting resolution — widen these three to match — is the wrong
 			// one. The workspace read is not wider; it is projected. Pinned
 			// field by field by TestSecurityAdminForeignWorkspaceFieldByField
 			// (security_admin_workspace_read_test.go), and this paragraph is
@@ -270,7 +273,7 @@ func (s *Server) routes() chi.Router {
 			// docs/sdk.md "Renamed in 0.8") are factored out of this already-long
 			// function into mountRenamedRunRoutes, called once, below.
 			s.mountRenamedRunRoutes(r)
-
+			s.mountInboundTicketRoutes(r) // a browser's ticket to one inbound app, for its owner or a named caller (inbound_ticket.go)
 			// Approvals: reading the queue is a member act (own runs only — see
 			// handleListApprovals), DECIDING is OWNER-OR-ADMIN rather than
 			// operator-only: the decision IS the live authorization over an
@@ -295,11 +298,11 @@ func (s *Server) routes() chi.Router {
 			// Uncapped NDJSON bulk export beside the capped, paginated read above —
 			// per-principal evidence ("everything developer X did") in one request.
 			r.Get("/audit/export", s.handleExportAudit)
-			// Tamper-evidence sweep over the audit hash chain (migration 0047),
-			// plus the sandbox sweep — one on each tier, hence two routers.
+			// Tamper-evidence sweep over the audit hash chain (migration 0047), plus the sandbox sweep: one per tier.
 			s.adminRoutes(operatorOnly, securityOps)
 			s.mountRunnerRevokeRoutes(r, securityOps)             // runner_revoke.go: the security tier, or the runner's own owner
 			s.mountRunnerPoolRoutes(r, operatorOnly, securityOps) // runner_pools.go: 501 until the pool storage lands
+			s.mountWorkloadRoutes(r, securityOps)                 // workloads.go: the caller's own workloads; the bindings are the security tier's
 			s.mountRunnerInventoryRoutes(r, operatorOnly, securityOps)
 			s.mountOrgRunnerRoutes(securityOps) // runner_registration.go: org runner mint, claim and trust
 			s.mountTemplateRoutes(r, operatorOnly)
@@ -437,7 +440,7 @@ func (s *Server) routes() chi.Router {
 			// profile + status.
 			// Tier-1 source library + tier-2 base-image catalog routes —
 			// mounted from sources.go, same posture as the workspaces block.
-			s.mountLibraryRoutes(r, operatorOnly)
+			s.mountLibraryRoutes(r, operatorOnly, securityOps)
 
 			r.Post("/workspaces", s.handleCreateWorkspace)
 			r.Get("/workspaces", s.handleListWorkspaces)
@@ -769,14 +772,14 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	s.mountInvitationRoutes(r, securityOps)
 	s.mountServiceIdentityRoutes(r, securityOps)
 	s.mountSCIMStatusRoute(securityOps)
-	// Run-detail widget layout: per-user, per-preset, server-synced so a
-	// layout survives a new machine (localStorage would not). Scoped to
-	// the caller's OWN principal at the store, exactly like the ssh-keys
-	// block above — never a principal taken from the body.
+	// Run-detail widget layout: per-user, per-preset, server-synced so a layout survives a new
+	// machine (localStorage would not). Scoped to the caller's OWN principal at the store, exactly
+	// like the ssh-keys block above — never a principal taken from the body.
 	r.Get("/me/run-layout", s.handleGetRunLayout)
 	// The caller's own kept launch setups, newest first (launch_intent.go).
 	r.Get("/me/launch-intents", s.handleListLaunchIntents)
 	r.Put("/me/run-layout", s.handlePutRunLayout)
+	s.mountPersonalWallsRoutes(r) // the caller's own walls, keyed by their session (personal_walls.go)
 	// Per-user Azure DevOps sign-in (ado_entra.go): two browser doors that
 	// capture ONE PERSON'S Azure DevOps refresh token. It belongs in this
 	// self-service block and nowhere else — both doors refuse a caller with no

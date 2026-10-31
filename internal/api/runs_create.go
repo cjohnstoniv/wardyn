@@ -190,6 +190,13 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 		return workspaceSeed{}, seedErr(http.StatusBadRequest, reasonWorkspaceSeedNoBaseImage, fmt.Errorf(
 			"workspace %s has no base image to run a command in: pass --image or --agent", ids[0]))
 	}
+	// A folder seeded from a source bound to a runner is on that machine: only its text is checked.
+	onRunner := map[int]bool{}
+	for i, m := range newMounts {
+		if rid, ok := mountBinding(seed.mountOwners[i:i+1], m.Source); ok && rid != nil {
+			onRunner[i] = true
+		}
+	}
 	// The seed mutated an ALREADY-validated spec, so re-run the one invariant it
 	// can break: the unique in-container target across workspace_mounts +
 	// workspace_repos (policy.go). Without this, a workspace whose target
@@ -197,7 +204,7 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	// (opaque dispatch failure) — or a repo clone targets the EXACT path of a
 	// writable bind. Equal or nested targets across workspaces, defaults
 	// included, are the overlap check's, over every resolved target.
-	if verr := validatePolicyWorkspaces(*spec, true); verr != nil {
+	if verr := validatePolicyWorkspaces(*spec, true, onRunner); verr != nil {
 		return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedPolicyConflict, fmt.Errorf("workspace %s conflicts with the policy: %w", ids[0], verr))
 	}
 	return seed, nil
@@ -551,9 +558,9 @@ func warnCeilingDeniedWorkspaceEgress(ceiling governanceCeiling, wsRefs []types.
 // still carries build events). Extracted verbatim from handleCreateRun; ctx is
 // already detached from client cancellation. run is the created run: its bound runner's
 // architecture picks the default image's `@arch` variant (run_image_arch.go).
-func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest, run types.AgentRun, wsRefs []types.Workspace) (string, bool) {
+func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest, run types.AgentRun, wsRefs []types.Workspace) (image string, arches []string, failed bool) {
 	runID := run.ID
-	image := agentImage(req.Agent, s.cfg.AgentImages)
+	image = agentImage(req.Agent, s.cfg.AgentImages)
 	var fact client.ImageFact
 	if req.UsesRunMode() {
 		// The set's image (the fold already refused a set no image carries), so a
@@ -596,22 +603,36 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		return buildCtx, end, live
 	}
 
+	pw, refusal := s.prewrappedRunImage(ctx, req.Image)
+	if refusal != nil {
+		buildFailed(map[string]any{"base_image": req.Image, "error": refusal.body.Error})
+		return "", nil, true
+	}
 	switch {
-	case req.Image != "": // validated up front: ImageBuilder is non-nil, not XOR'd
+	case pw != nil:
+		// A ready prewrapped image runs as is: no wrap and no wardyn-byoi/ tag, so no selftest exec
+		// (design final §3).
+		image, arches = pw.Image, pw.Check.AcceptedArches
+	case req.Image != "" && s.cfg.ImageBuilder == nil:
+		// Validation let this through as a ready prewrapped image, and its row is gone since: with no
+		// builder nothing else may run it.
+		buildFailed(map[string]any{"base_image": req.Image, "error": errPrewrappedNotRegistered.Error()})
+		return "", nil, true
+	case req.Image != "": // validated up front: not XOR'd
 		// The wardyn-byoi/ output tag is also the discriminator dispatch keys the
 		// runtime selftest preflight off (a wrapped arbitrary image may still lack a
 		// shell or the harness binary).
 		outTag := "wardyn-byoi/" + runID.String() + ":latest"
 		buildCtx, endBuild, ok := startBuild(map[string]any{"byoi_base": req.Image})
 		if !ok {
-			return "", true
+			return "", nil, true
 		}
 		s.announceImageBuild(ctx, runID)()
 		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, req.Image, outTag, nil, false)
 		endBuild()
 		if berr != nil {
 			buildFailed(map[string]any{"byoi_base": req.Image, "error": berr.Error()})
-			return "", true
+			return "", nil, true
 		}
 		image = built.Ref
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
@@ -622,14 +643,14 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		outTag := "wardyn-devcontainer/" + runID.String() + ":latest"
 		buildCtx, endBuild, ok := startBuild(map[string]any{"devcontainer_repo": req.DevcontainerRepo})
 		if !ok {
-			return "", true
+			return "", nil, true
 		}
 		s.announceImageBuild(ctx, runID)()
 		built, berr := s.cfg.ImageBuilder.BuildDevcontainer(buildCtx, req.DevcontainerRepo, req.DevcontainerRef, outTag, nil)
 		endBuild()
 		if berr != nil {
 			buildFailed(map[string]any{"devcontainer_repo": req.DevcontainerRepo, "error": berr.Error()})
-			return "", true
+			return "", nil, true
 		}
 		image = built.Ref
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
@@ -652,23 +673,23 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		// creates). resolveWorkspaceImage is fail-open by design (shared with the
 		// wizard/record paths), so the fail-closed decision for the CHOSEN base image
 		// lives here, on the create door, not in it.
-		if b := imageWS.BaseImage; b != nil && b.Kind != "recommended" &&
+		if b := imageWS.BaseImage; b != nil && b.Kind != "recommended" && !prewrappedBase(b) &&
 			strings.TrimSpace(b.Image) != "" && s.cfg.ImageBuilder == nil {
 			buildFailed(map[string]any{
 				"base_image": b.Image,
 				"error": "no image builder is wired, so the workspace's chosen base image cannot be wrapped with the " +
 					"agent runtime; refusing to silently substitute the convention image (wire an image builder or drop the base image)",
 			})
-			return "", true
+			return "", nil, true
 		}
 		buildCtx, endBuild, ok := startBuild(map[string]any{"workspace_id": imageWS.ID.String()})
 		if !ok {
-			return "", true
+			return "", nil, true
 		}
 		res := s.resolveWorkspaceImageWith(buildCtx, runID, imageWS, nil, s.announceImageBuild(ctx, runID), imageResolveOpts{})
 		endBuild()
 		if res.OK {
-			image = res.Image
+			image, arches = res.Image, res.ImageArches
 		} else if res.BaseErr != nil {
 			// The chosen base image failed to wrap (the builder is wired): the same fail-closed answer as
 			// the workspace_id door, not the convention image under a 201. The resolver already wrote the one
@@ -678,7 +699,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 			// A fixed hint: the builder's error text is driver text; it goes to the log, and the resolver's
 			// run.build row carries it for the operator.
 			s.failAndRevoke(failCtx, runID, types.RunPending, loggedMsg(ctx, "the run's sandbox image could not be built", res.BaseErr))
-			return "", true
+			return "", nil, true
 		}
 	}
 
@@ -688,5 +709,13 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		slog.ErrorContext(ctx, "wardynd: persist run image failed",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
-	return image, false
+	// A prewrapped image's architectures are NOT provenance: dispatch, a retry and a revive place the run by
+	// them, so a run whose admission cannot be recorded fails rather than run unpinned.
+	if arches != nil {
+		if err := s.cfg.Store.SetRunImageArches(ctx, runID, arches); err != nil {
+			buildFailed(map[string]any{"base_image": image, "error": "record the prewrapped image's architectures: " + err.Error()})
+			return "", nil, true
+		}
+	}
+	return image, arches, false
 }

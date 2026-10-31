@@ -579,15 +579,13 @@ test.describe("drives — the door is a governance limit, not a drives control",
 //    authorization is Go's (the operatorOnly route group).
 // ---------------------------------------------------------------------------
 
-test.describe("drives — the registry is SUPER's, and no super admin's nav lists it", () => {
-  test("an admin reaches it from Workspaces and from the Settings card — and never from the sidebar", async ({
+test.describe("drives — the registry is SUPER's, reached from Setup, Workspaces and Settings", () => {
+  test("an admin reaches it from the Setup nav, from Workspaces and from the Settings card", async ({
     page,
   }) => {
     await gotoConsole(page, "admin");
-    // No Drives nav entry for a super admin, in either view (§6): the two entry
-    // points below are the whole door. Only a security admin's Admin view
-    // lists it, for its grants and preview (packet M-A, view-switch.spec.ts).
-    await expect(page.getByRole("link", { name: new RegExp(`^${DRIVES.TITLE}`) })).toHaveCount(0);
+    // rc.8 nav (owner ruling q8): a super admin's Setup lists User drives too, as a security admin's does.
+    await expect(page.getByRole("link", { name: new RegExp(`^${DRIVES.TITLE}`) })).toHaveCount(1);
 
     await navTo(page, "Workspaces");
     // `outline`, never teal: the teal stays on Add workspace, because a drive

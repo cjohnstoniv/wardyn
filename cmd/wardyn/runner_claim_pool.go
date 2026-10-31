@@ -19,7 +19,7 @@ import (
 func claimIntoPool(cmd *cobra.Command, c *sdk.Client, runnerID uuid.UUID, arg string, makeDefault bool) error {
 	pool, fresh, err := ownPoolNamed(cmd, c, arg)
 	if err == nil {
-		err = poolMembers(cmd, c, pool, []string{runnerID.String()}, true, fresh)
+		err = poolMembers(cmd, c, pool, []string{runnerID.String()}, true, fresh, "")
 	}
 	if err == nil && makeDefault {
 		err = makePoolDefault(cmd, c, pool)

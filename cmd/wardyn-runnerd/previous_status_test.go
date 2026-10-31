@@ -108,3 +108,31 @@ func TestStatusFileHoldsTheLinkStateAndNoSecret(t *testing.T) {
 		}
 	}
 }
+
+// A rollback installs from the .previous it restores. The failed binary must not be kept over that file
+// first: a write that then failed would leave no copy of the old runner.
+func TestSetupRollbackLeavesThePreviousBinaryAlone(t *testing.T) {
+	clearProxyEnv(t)
+	f := newSetupFixture(t, "linux")
+	p := mustPaths(t, f)
+	prev := p.installed + ".previous"
+	f.flagless = true
+	for _, version := range []string{"v1", "v2"} {
+		if err := os.WriteFile(f.host.exe, []byte(version), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+	}
+	f.host.exe = prev
+	if out, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := f.read(p.installed); got != "v1" {
+		t.Errorf("installed binary = %q, want the restored v1", got)
+	}
+	if got := f.read(prev); got != "v1" {
+		t.Errorf("rollback copy = %q, want v1: the failed v2 was kept over it", got)
+	}
+}

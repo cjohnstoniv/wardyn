@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { AuditEvent } from "../../../lib/types";
+import { clockTime } from "../../../lib/format";
 
 const getDesktopRecording = vi.fn();
 const verifyChain = vi.fn();
@@ -16,7 +17,8 @@ vi.mock("../../../lib/api/recordings", () => ({
     verifyChain: (...a: unknown[]) => verifyChain(...a),
   },
 }));
-vi.mock("../../../lib/api/audit", () => ({ audit: { listAudit: async () => [] } }));
+const listAudit = vi.hoisted(() => vi.fn());
+vi.mock("../../../lib/api/audit", () => ({ audit: { listAudit: (...a: unknown[]) => listAudit(...a) } }));
 // Stands in for noVNC's RFB: records what reaches the display through the channel it was handed.
 const decoders = vi.hoisted(() => [] as { target: HTMLElement; got: number[]; gone: boolean }[]);
 const rfbThrows = vi.hoisted(() => ({ on: false }));
@@ -35,6 +37,7 @@ vi.mock("@novnc/novnc", () => ({
 }));
 
 import { RUN_RECORDING } from "../../wardyn/copy/runners";
+import { RECORDING_REPLAY } from "../../wardyn/copy/recording-level";
 import { RecordingTab } from "./recording-tab";
 
 const RUN = "11111111-1111-4111-8111-111111111111";
@@ -52,6 +55,8 @@ function tab(props: Partial<React.ComponentProps<typeof RecordingTab>>) {
 }
 
 describe("RecordingTab levels (#2968, M7 RunStrip, Replay, States 8)", () => {
+  beforeEach(() => listAudit.mockResolvedValue([]));
+
   it("names the level the run is recorded at", () => {
     tab({ level: "screen_actions" });
     expect(screen.getByTestId("recording-level-strip")).toHaveTextContent("Recording · Screen and actions");
@@ -172,6 +177,31 @@ describe("RecordingTab levels (#2968, M7 RunStrip, Replay, States 8)", () => {
     }
   });
 
+  it("a truncated or stopped recording says where the screen ends, and a whole one says nothing", async () => {
+    verifyChain.mockResolvedValue({ ok: true, first_seq: 1, last_seq: 2, checked: 2, marks: [] });
+    const audit = [ev("desktop.recording.write", { key: KEY }, KEY)];
+    const doc = (extra: Record<string, unknown>) => ({
+      raw: "{}",
+      playback: { version: 1, format: "novnc-playback", encoding: "base64", started_at: "2026-10-20T10:40:00Z", frames: ["{0{AA==", "{60000{AA=="], ...extra },
+    });
+    const clock = (ms: number) => clockTime(new Date(Date.parse("2026-10-20T10:40:00Z") + ms).toISOString());
+
+    getDesktopRecording.mockResolvedValue(doc({ truncated: true }));
+    const first = tab({ level: "screen_actions", recordingAudit: audit, selected: KEY });
+    expect(await screen.findByTestId("desktop-replay-stopped")).toHaveTextContent(`Screen recording stopped at ${clock(60_000)}; the action log continues.`);
+    first.unmount();
+
+    getDesktopRecording.mockResolvedValue(doc({ stopped_ms: 30_000 }));
+    const second = tab({ level: "screen_actions", recordingAudit: audit, selected: KEY });
+    expect(await screen.findByTestId("desktop-replay-stopped")).toHaveTextContent(`Screen recording stopped at ${clock(30_000)};`);
+    second.unmount();
+
+    getDesktopRecording.mockResolvedValue(doc({}));
+    tab({ level: "screen_actions", recordingAudit: audit, selected: KEY });
+    await screen.findByTestId("desktop-replay");
+    expect(screen.queryByTestId("desktop-replay-stopped")).toBeNull();
+  });
+
   it("a broken range says which entry does not verify", async () => {
     getDesktopRecording.mockResolvedValue({
       raw: "{}",
@@ -182,5 +212,24 @@ describe("RecordingTab levels (#2968, M7 RunStrip, Replay, States 8)", () => {
     const chain = await screen.findByTestId("desktop-replay-chain");
     expect(await within(chain).findByText("Chain broken")).toBeInTheDocument();
     expect(within(chain).getByTestId("desktop-replay-chain-verdict")).toHaveTextContent("Entry 4,820 does not verify: row_hash does not match.");
+  });
+
+  it("a failed clipboard or file feed is a failed load with a retry, not an empty action log", async () => {
+    getDesktopRecording.mockResolvedValue({
+      raw: "{}",
+      playback: { version: 1, format: "novnc-playback", encoding: "base64", started_at: "2026-10-20T10:40:00Z", frames: ["{0{AA=="] },
+    });
+    verifyChain.mockResolvedValue({ ok: true, first_seq: 1, last_seq: 2, checked: 2, marks: [] });
+    listAudit.mockImplementation(async (_run: string, o: { actionPrefix: string }) => {
+      if (o.actionPrefix === "desktop.file") throw new Error("503");
+      return [];
+    });
+    tab({ level: "screen_actions", recordingAudit: [ev("desktop.recording.write", { key: KEY }, KEY)], selected: KEY });
+    expect(await screen.findByText(RECORDING_REPLAY.LOAD_FAILED)).toBeInTheDocument();
+    expect(screen.queryByTestId("desktop-replay")).toBeNull();
+
+    listAudit.mockResolvedValue([]);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByTestId("desktop-replay")).toBeInTheDocument();
   });
 });

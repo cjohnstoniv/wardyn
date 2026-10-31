@@ -56,6 +56,16 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 	}
 	actorType, actor := actorFromRequest(r)
 
+	// A folder bound to a runner lives on that machine, and the same path on this host is some other
+	// folder or nothing: the library door reads none of it and leaves the source's status as it is.
+	if src.RunnerID != nil {
+		detail := sourceScanRunnerBoundMsg(*src.RunnerID)
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
+			"source.scan", id.String(), "failure", mustJSON(map[string]any{"detail": detail})))
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonSourceScanRunnerBound, detail)
+		return
+	}
+
 	switch src.Kind {
 	case types.SourceLocalDir:
 		profile, aiRan, aiChanged, detail, ok := s.scanLocalDirSource(r.Context(), src)
@@ -447,10 +457,16 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 	// it, only the unrelated failure of source Y.
 	launched := []uuid.UUID{}
 	scanned := []uuid.UUID{}
+	// skipped is every folder bound to a runner: it lives on that machine, never read here (its runner
+	// checks it when a run starts), so it is named in the audit row rather than scanned.
+	skipped := []uuid.UUID{}
 	partialAudit := func(failedSourceID uuid.UUID, detail string) {
 		data := map[string]any{"detail": detail, "failed_source_id": failedSourceID}
 		if len(scanned) > 0 {
 			data["scanned_source_ids"] = scanned
+		}
+		if len(skipped) > 0 {
+			data["skipped_runner_bound_source_ids"] = skipped
 		}
 		if len(launched) > 0 {
 			data["scan_run_ids"] = launched
@@ -467,6 +483,23 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 		}
 		switch src.Kind {
 		case types.SourceLocalDir:
+			if src.RunnerID != nil {
+				// A binding that no longer holds refuses by name, as a run would; a live one is skipped.
+				rn, state, err := s.boundRunnerState(r.Context(), *src.RunnerID, ws.OwnedBy)
+				if err != nil {
+					partialAudit(id, err.Error())
+					writeServerError(w, r, "read the folder's runner", err)
+					return
+				}
+				if state != types.WorkspaceSourceRunnerClaimed {
+					msg := runnerUnavailableMsg(ws.Name, *src.RunnerID, rn, state)
+					partialAudit(id, msg)
+					writeErrorReason(w, http.StatusUnprocessableEntity, reasonWorkspaceSourceRunnerUnavailable, msg)
+					return
+				}
+				skipped = append(skipped, id)
+				continue
+			}
 			// The member mount gate the run door re-runs (validateWorkspaceSources):
 			// a scan reads the directory host-side, so roots narrowed after
 			// onboarding, or a source repointed since, refuse it here too.
@@ -512,10 +545,12 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 	}
 
 	if len(launched) > 0 {
+		data := map[string]any{"sources": len(sourceIDs), "scan_run_ids": launched}
+		if len(skipped) > 0 {
+			data["skipped_runner_bound_source_ids"] = skipped
+		}
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
-			"workspace.scan", ws.ID.String(), "success", auditWorkspaceData(r, ws.OwnedBy, map[string]any{
-				"sources": len(sourceIDs), "scan_run_ids": launched,
-			})))
+			"workspace.scan", ws.ID.String(), "success", auditWorkspaceData(r, ws.OwnedBy, data)))
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"scan_run_ids": launched, "workspace_id": ws.ID,
 			"detail": "governed scan run(s) launched; the workspace profile updates as each source's scan completes",
@@ -529,7 +564,11 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 		writeServerError(w, r, "reload workspace", err)
 		return
 	}
+	data := map[string]any{"sources": len(sourceIDs)}
+	if len(skipped) > 0 {
+		data["skipped_runner_bound_source_ids"] = skipped
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,
-		"workspace.scan", ws.ID.String(), "success", auditWorkspaceData(r, ws.OwnedBy, map[string]any{"sources": len(sourceIDs)})))
+		"workspace.scan", ws.ID.String(), "success", auditWorkspaceData(r, ws.OwnedBy, data)))
 	writeJSON(w, http.StatusOK, json.RawMessage(fresh.Profile))
 }

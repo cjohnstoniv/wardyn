@@ -52,7 +52,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.PATGrant]():             strings.Fields("GrantID Username Repos Access Forge API"),
 	reflect.TypeFor[runner.InjectionGrant]():      strings.Fields("GrantID Rule"),
 	reflect.TypeFor[runner.ManagedFile]():         strings.Fields("Path Mode AgentOwned WipeAfterRead Content"),
-	reflect.TypeFor[runner.Mount]():               strings.Fields("Source Target ReadOnly MemberAuthored DriveAuthored"),
+	reflect.TypeFor[runner.Mount]():               strings.Fields("Source Target ReadOnly MemberAuthored DriveAuthored BoundRunner"),
 	reflect.TypeFor[runner.UserWritableCeiling](): strings.Fields("Roots Deny"),
 	reflect.TypeFor[runner.Resources]():           strings.Fields("CPUMillis MemoryMiB CPURequestMillis MemoryRequestMiB PidsLimit DiskMiB DiskMiBSoft LifetimeCap ProxyAzure"),
 	reflect.TypeFor[types.DriveMount]():           strings.Fields("DriveID Backend ObjectName HostRoot DriveName StorageClass HomeName SubjectHash Target ReadOnly SizeMiB Enforcement Team RunnerID"),
@@ -69,7 +69,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.HarnessCredential](): strings.Fields("Harness SHA256"),
 	reflect.TypeFor[types.HarnessInnerWalls](): strings.Fields("SandboxMode Approvals"),
 	reflect.TypeFor[types.DesktopControls]():   strings.Fields("PasteIn CopyOut Upload Download"),
-	reflect.TypeFor[types.UIApp]():             strings.Fields("Name Port Path"),
+	reflect.TypeFor[types.UIApp]():             strings.Fields("Name Port Path Inbound Callers"),
 	reflect.TypeFor[types.WorkspaceMount]():    strings.Fields("Source Target ReadOnly"),
 	reflect.TypeFor[types.WorkspaceRepo]():     strings.Fields("Repo Target Ref"),
 }

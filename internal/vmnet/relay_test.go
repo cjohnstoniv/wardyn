@@ -5,11 +5,14 @@ package vmnet
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -92,7 +95,8 @@ func startFakeProxy(t *testing.T, allowed ...string) *fakeProxy {
 				}
 				_, _ = io.WriteString(c, banner)
 			}
-			_ = c.SetReadDeadline(time.Now().Add(time.Second))
+			// The guest's close normally ends the read; the deadline only stops a hang, so it allows a loaded runner.
+			_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
 			b, _ := io.ReadAll(brw)
 			f.tunnel <- b
 		case r.URL.Path == refusalsPath && r.URL.Host == "":
@@ -227,7 +231,10 @@ func TestRelayTLSFlows(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer c.Close()
-		_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+		// The banner comes after the relay's one-second wait, the tunnel request and the fake proxy's
+		// 200 ms check; on a loaded macOS runner a proxy request alone has taken a second. The deadline
+		// only stops a hang: the banner ends the read as soon as it arrives.
+		_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
 		line, err := bufio.NewReader(c).ReadString('\n')
 		if err != nil || line != "SSH-2.0-origin\r\n" {
 			t.Fatalf("banner %q, %v", line, err)
@@ -250,8 +257,10 @@ func TestRelayRefusals(t *testing.T) {
 			c.Close()
 			t.Fatal("connected to a refused name")
 		}
+		// Every event is an ask for the refused name. There may be two: an ask slower than the guest's 1s
+		// SYN retransmit lets the retransmitted SYN reach the relay after the first reset, as a new flow.
 		ev, _ := f.snapshot()
-		if len(ev) != 1 || !strings.HasPrefix(ev[0], "ask denied.test:443") {
+		if len(ev) == 0 || slices.ContainsFunc(ev, func(e string) bool { return !strings.HasPrefix(e, "ask denied.test:443") }) {
 			t.Fatalf("events %q", ev)
 		}
 	})
@@ -327,5 +336,36 @@ func TestRelayDropsOversizedFrames(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("an oversized frame length did not end the connection")
+	}
+}
+
+// A guest that connects and goes silent must not keep Listen alive once its
+// context ends.
+func TestListenReturnsOnCancelWithIdleGuest(t *testing.T) {
+	rl, err := New(Config{Proxy: "127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(rl.Close)
+	path := filepath.Join(t.TempDir(), "vmnet.sock")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- rl.Listen(ctx, path) }()
+	var c net.Conn
+	waitFor(t, "listen socket", func() bool {
+		c, err = net.Dial("unix", path)
+		return err == nil
+	})
+	defer c.Close()
+	time.Sleep(200 * time.Millisecond) // let Listen accept and start serving
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Listen = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Listen still serving an idle guest after cancel")
 	}
 }

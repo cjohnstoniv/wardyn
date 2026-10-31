@@ -20,6 +20,7 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/root"
 
 	"github.com/cjohnstoniv/wardyn/internal/certbundle"
+	"github.com/cjohnstoniv/wardyn/internal/cliprofile"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/releasesig"
 	"github.com/cjohnstoniv/wardyn/internal/releasesig/releasesigtest"
@@ -152,6 +153,34 @@ func TestRunnerUpgradeRollsBackAFailedStart(t *testing.T) {
 	}
 	if calls := r.record("calls"); calls != "0.10.1 setup --org "+r.srv.URL+"\n0.10.0 setup --org "+r.srv.URL+"\n" {
 		t.Fatalf("calls = %q, want the new setup then the previous one's", calls)
+	}
+	if _, serr := os.Stat(installedRunnerd() + ".rollback"); !errors.Is(serr, os.ErrNotExist) {
+		t.Fatalf("a rollback that worked left its copy behind (%v)", serr)
+	}
+}
+
+// The rollback runs from a copy of .previous. An older runner's setup keeps the binary it replaces over
+// .previous before it restores, so if that setup then fails, the copy is the only old runner left, and the
+// restore line names it. A rollback that works leaves no copy.
+func TestRunnerUpgradeRollbackRunsFromItsOwnCopy(t *testing.T) {
+	r := newInstallRig(t)
+	// This fake old setup overwrites .previous with the failed binary (as the fake does for every setup), then fails.
+	old, broken := append(r.fakeRunner("0.10.0", true), "exit 1\n"...), r.fakeRunner("0.10.1", false)
+	r.installed(old)
+	r.publish("0.10.1", broken, releaseSigner("0.10.1"), nil)
+	out, err := r.cli("upgrade", "--version", "0.10.1")
+	rollbackCopy := installedRunnerd() + ".rollback"
+	if err == nil || !strings.Contains(err.Error(), restoreLine("0.10.0", rollbackCopy, r.srv.URL)) {
+		t.Fatalf("a rollback that failed: err = %v, want the restore line to name %s\n%s", err, rollbackCopy, out)
+	}
+	if got, rerr := os.ReadFile(rollbackCopy); rerr != nil || string(got) != string(old) {
+		t.Fatalf("the rollback copy = %q (%v), want the old runner", got, rerr)
+	}
+	if st, serr := os.Stat(rollbackCopy); serr != nil || st.Mode().Perm()&0o100 == 0 {
+		t.Fatalf("the rollback copy cannot run: %v %v", st, serr)
+	}
+	if got, _ := os.ReadFile(installedRunnerd() + ".previous"); string(got) != string(broken) {
+		t.Fatalf(".previous = %q, want the failed binary the old setup kept over it, or the test proves nothing", got)
 	}
 }
 
@@ -329,6 +358,48 @@ func TestRunnerUpgradeRefusals(t *testing.T) {
 	}
 }
 
+// --artifact-base reaches cli.json only once the release it names has been verified: a refused one is not
+// remembered, a verified one is.
+func TestRunnerUpgradeSavesArtifactBaseOnlyOnceVerified(t *testing.T) {
+	for name, tc := range map[string]struct {
+		edit      func(map[string][]byte)
+		wantSaved bool
+	}{
+		"tampered asset": {func(f map[string][]byte) { f["wardyn-runnerd-linux-amd64"] = []byte("#!/bin/sh\n") }, false},
+		"verified":       {nil, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newInstallRig(t)
+			r.installed(r.fakeRunner("0.10.0", true))
+			r.publish("0.10.1", r.fakeRunner("0.10.1", true), releaseSigner("0.10.1"), tc.edit)
+			base := r.srv.URL + "/release"
+			out, err := r.cli("upgrade", "--version", "0.10.1", "--artifact-base", base)
+			if (err == nil) != tc.wantSaved {
+				t.Fatalf("upgrade: err = %v\n%s", err, out)
+			}
+			saved, _ := cliprofile.ReadArtifactBase(filepath.Join(r.home, ".config", "wardyn"))
+			if want := map[bool]string{true: base, false: ""}[tc.wantSaved]; saved != want {
+				t.Fatalf("saved artifact base = %q, want %q", saved, want)
+			}
+		})
+	}
+}
+
+// install on a computer that already runs a runner is an upgrade, and says so when it was given the setup
+// flags it does not use.
+func TestRunnerInstallOnAnUpgradeNamesTheSetupFlagsItIgnores(t *testing.T) {
+	r := newInstallRig(t)
+	r.installed(r.fakeRunner("0.10.0", true))
+	r.publish("0.10.1", r.fakeRunner("0.10.1", true), releaseSigner("0.10.1"), nil)
+	out, err := r.cli("install", "--version", "0.10.1", "--pool", "team", "--name", "box")
+	if err != nil {
+		t.Fatalf("install: %v\n%s", err, out)
+	}
+	if want := fmt.Sprintf(copyUpgradeIgnores, "--pool, --name"); !strings.Contains(out, want) {
+		t.Fatalf("output lacks %q:\n%s", want, out)
+	}
+}
+
 // On a computer with no runner, install is setup with the signed release's runner.
 func TestRunnerInstallSetsUpWithTheSignedRunner(t *testing.T) {
 	r := newInstallRig(t)
@@ -358,5 +429,25 @@ func TestRunnerOfferLine(t *testing.T) {
 	}
 	if got := runnerOfferLine(context.Background(), "0.10.0"); got != "" {
 		t.Fatalf("a current runner was offered an upgrade: %q", got)
+	}
+}
+
+// A .previous that cannot be examined (a link that loops answers ELOOP, not "no such file") is not "none
+// before": the upgrade is refused with the runner as it was, not run on a guess.
+func TestRunnerUpgradeRefusesAPreviousItCannotExamine(t *testing.T) {
+	r := newInstallRig(t)
+	old, next := r.fakeRunner("0.10.0", true), r.fakeRunner("0.10.1", true)
+	r.installed(old)
+	prev := installedRunnerd() + ".previous"
+	if err := os.Symlink(prev, prev); err != nil {
+		t.Fatal(err)
+	}
+	r.publish("0.10.1", next, releaseSigner("0.10.1"), nil)
+	out, err := r.cli("upgrade", "--version", "0.10.1")
+	if err == nil || !strings.Contains(err.Error(), "could not check for a previous runner") {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if got := r.called("GET /release"); len(got) != 0 || strings.Contains(out, "Replacing the runner") || !r.installedIs(old) || r.record("calls") != "" {
+		t.Fatalf("the upgrade went on past a .previous it could not examine: downloaded %v, calls %q\n%s", got, r.record("calls"), out)
 	}
 }

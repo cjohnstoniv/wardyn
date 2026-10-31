@@ -5,6 +5,7 @@ package api
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -53,8 +54,9 @@ type runProviderChoice struct {
 	// these, never choice.provider, which is the zero value on every refusal.
 	providerID string
 	kind       types.ModelProviderKind
-	// renewAtLaunch: Review's dry check found the chosen AWS session expired
-	// but renewable, so launch will renew it (mpBRRenewAtLaunch).
+	// renewAtLaunch: a check that did not renew (Review's for a run that will
+	// wait in a queue) found the chosen AWS session expired but renewable, so
+	// the start will renew it (mpBRRenewAtLaunch).
 	renewAtLaunch bool
 	// loginHost is the nonsecret destination resolved from the already-read
 	// own AWS session. Preview does not read that session and leaves it empty.
@@ -254,12 +256,12 @@ func (s *Server) writeProviderChoiceRefusal(w http.ResponseWriter, r *http.Reque
 // makes no model call. Neither is a choice, and callers must not treat a zero
 // provider.ID as one.
 //
-// renew is create's alone: it lets the Bedrock check renew an expired AWS
-// sign-in whose refresh token is live (withCreateRenewal), so no run is
-// created that dispatch could not boot. Review passes false: a dry check never
-// spends a one-use refresh token. A run that waits in a pool's queue (queued)
-// renews nothing either: nothing is minted, renewed or delivered while it waits,
-// and the start does the renewing.
+// renew is create's and Review's preflight's: it lets the Bedrock check renew an
+// expired AWS sign-in whose refresh token is live (withCreateRenewal), so no run
+// is created that dispatch could not boot, and Review gives the answer create
+// would. The policy preview never renews. A run that waits in a pool's queue
+// (queued) renews nothing either: nothing is minted, renewed or delivered while
+// it waits, and the start does the renewing.
 func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request, req createRunRequest,
 	spec types.RunPolicySpec, wsRefs []types.Workspace, renew, queued bool,
 ) (runProviderChoice, bool) {
@@ -268,6 +270,19 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		return runProviderChoice{}, false
 	}
 	return s.enforceChosenModelProvider(w, r, req, spec, choice, renew, queued)
+}
+
+type preflightRenewalKey struct{}
+
+// withPreflightRenewal marks ctx as Review's preflight, whose renewal's
+// harness.credential.refresh row names it (auditAWSSSORefresh).
+func withPreflightRenewal(ctx context.Context) context.Context {
+	return context.WithValue(ctx, preflightRenewalKey{}, true)
+}
+
+func preflightRenewal(ctx context.Context) bool {
+	v, _ := ctx.Value(preflightRenewalKey{}).(bool)
+	return v
 }
 
 // enforceChosenModelProvider is enforceRunModelProvider after the choice: the
@@ -305,7 +320,7 @@ func (s *Server) enforceChosenModelProvider(w http.ResponseWriter, r *http.Reque
 			s.writeProviderChoiceRefusal(w, r, choice, d)
 			return runProviderChoice{}, false
 		}
-		// A dry check passes an expired AWS session only when it is renewable.
+		// A check that does not renew passes an expired AWS session only when it is renewable.
 		choice.renewAtLaunch = !refresh && choice.provider.Kind == types.ModelProviderBedrockSSO && blob.expired(s.cfg.Now())
 		if choice.provider.Kind == types.ModelProviderBedrockSSO {
 			choice.loginHost = ssoPortalHost(blob.Region, s.cfg.AWSSSOEndpointOverride)
@@ -338,7 +353,8 @@ func providerLLMAccess(agent string, mp runProviderChoice) *composeLLMAccess {
 		if mp.provider.Kind == types.ModelProviderBedrockSSO {
 			note = mpAccessAWSSignIn
 		}
-		return &composeLLMAccess{Provisioned: true, Note: fmt.Sprintf(note, agent, mp.provider.ID)}
+		return &composeLLMAccess{Provisioned: true, Note: fmt.Sprintf(note, agent, mp.provider.ID),
+			sandboxResident: kindResidency(mp.provider.Kind) == residencySandbox}
 	}
 	return &composeLLMAccess{Note: fmt.Sprintf(mpAccessNoProvider, agent)}
 }

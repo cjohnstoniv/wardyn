@@ -64,7 +64,7 @@ const (
 
 	uiTicketInvalidMsg = "Invalid, expired, or already-used attach ticket"
 	uiNoSessionMsg     = "No valid UI session for this run — open the app again from its run page"
-	uiNoDesktopMsg     = "This run has no desktop: only a Linux desktop VM run has one"
+	uiNoDesktopMsg     = "This run has no desktop: only a desktop VM run has one"
 )
 
 // The desktop stream's close codes (RFC 6455 private range): the viewer tells an ended session or
@@ -199,6 +199,12 @@ func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run type
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayAppNotDeclared, uiNoDesktopMsg)
 		return
 	}
+	if s.macOSDesktopSignInsOff(r.Context(), run) {
+		s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", uiDesktopAppName, "denied",
+			ta.withVia(map[string]any{"reason": "the agent does not allow sign-ins in a desktop, which a macOS desktop cannot block"}))
+		writeErrorReason(w, http.StatusForbidden, reasonDesktopSignInsOff, macOSDesktopSignInsOffMsg(run.Agent))
+		return
+	}
 	if (!superAdmin || !s.adminDoorExempt(run)) && s.refuseInteractiveAttach(w, r.WithContext(withTicketActor(r.Context(), ta)), run) {
 		return
 	}
@@ -230,11 +236,17 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 	}
 	switch {
 	case rest == "/" && r.Method == http.MethodGet:
-		s.serveDesktopViewer(w, r, runID, map[string]any{
+		boot := map[string]any{
 			"state": "open", "expires": sess.Expires,
 			"rfb":   s.uiBasePath() + uiRelayPrefix(runID, uiDesktopAppName) + uiDesktopRFB,
 			"close": s.uiBasePath() + uiRelayPrefix(runID, uiDesktopAppName) + uiDesktopClose,
-		}, http.StatusOK)
+		}
+		// The run's machine kind, so the viewer names a macOS desktop while it starts. A run that
+		// cannot be read is served without it: the viewer then says what it says of any desktop.
+		if run, err := s.cfg.Store.GetRun(r.Context(), runID); err == nil && run.MachineKind != "" {
+			boot["machine_kind"] = string(run.MachineKind)
+		}
+		s.serveDesktopViewer(w, r, runID, boot, http.StatusOK)
 	case rest == uiDesktopRFB:
 		s.serveDesktopRFB(w, r, sess)
 	case rest == uiDesktopClose && r.Method == http.MethodPost:

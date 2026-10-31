@@ -10,7 +10,8 @@
 // put the list on "Waiting for AWS" rather than on step 1.
 import * as React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 vi.mock("../../attach-terminal", () => ({
   AttachTerminal: React.forwardRef(function FakeTerminal(_props: unknown, ref: React.ForwardedRef<{ sendText: (t: string) => void }>) {
@@ -18,8 +19,9 @@ vi.mock("../../attach-terminal", () => ({
     return <div data-testid="fake-terminal" />;
   }),
 }));
+const startSignInMock = vi.fn();
 vi.mock("../../../lib/api/model-provider-signin", () => ({
-  modelProviderSignIn: { startSignIn: () => Promise.resolve({ runId: "run-123", state: "PENDING" }), captureSignIn: vi.fn() },
+  modelProviderSignIn: { startSignIn: (...a: unknown[]) => startSignInMock(...a), captureSignIn: vi.fn() },
 }));
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: vi.fn(), getRun: vi.fn() } }));
 vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: vi.fn() } }));
@@ -55,6 +57,7 @@ function mark(label: string) {
 
 describe("HarnessLoginPane — the starting step list follows the dialog's own witnesses (#3235)", () => {
   beforeEach(() => {
+    startSignInMock.mockReset().mockResolvedValue({ runId: "run-123", state: "PENDING" });
     vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
     // The run read stays stale for the whole wait: it never says RUNNING.
     vi.mocked(runsApiMocked.getRun).mockReset().mockResolvedValue(makeRun({ id: "run-123", state: "PENDING" }));
@@ -93,5 +96,52 @@ describe("HarnessLoginPane — the starting step list follows the dialog's own w
     expect(mark(SIGNIN_PROGRESS.STEP_START)).toBe("done");
     expect(mark(SIGNIN_PROGRESS.STEP_DOWNLOAD_ACTIVE)).toBe("active");
     expect(mark(SIGNIN_PROGRESS.STEP_WAIT("AWS"))).toBe("pending");
+  });
+});
+
+// A retry kills the old sandbox without waiting, and the old run's id stays current until the new start answers.
+// The old run can still answer "waiting" in that window: its code is never the new run's (#3407).
+describe("HarnessLoginPane — a retry's progress follows the new run only (#3407)", () => {
+  beforeEach(() => {
+    startSignInMock.mockReset().mockResolvedValue({ runId: "run-old", state: "PENDING" });
+    vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
+    listAuditMock.mockReset().mockResolvedValue([]);
+    vi.mocked(runsApiMocked.getRun)
+      .mockReset()
+      .mockImplementation(async (id: string) =>
+        id === "run-old"
+          ? makeRun({ id, state: "STARTING", status_detail: "agent: ImagePullBackOff", status_reason: "ImagePullBackOff" })
+          : makeRun({ id, state: "PENDING", status_reason: "Pulling" }),
+      );
+  });
+
+  // Fails the old run on its image, retries with the new start held, lets the old run answer "waiting", then lets
+  // the new run's id land.
+  async function retryWhileOldRunWaits(newRunSignIn: object) {
+    vi.mocked(runSignIn.get).mockReset().mockImplementation(async (id: string) => (id === "run-old" ? WAITING : newRunSignIn) as never);
+    startAws();
+    const retry = await screen.findByRole("button", { name: SIGNIN_PROGRESS.RETRY });
+    let land!: (v: { runId: string; state: string }) => void;
+    startSignInMock.mockReturnValueOnce(new Promise((r) => (land = r)));
+    await userEvent.click(retry);
+    expect(await screen.findByTestId("login-sandbox-starting")).toBeInTheDocument();
+    // The launching window: the step list is not on the old run's code.
+    await act(async () => {});
+    expect(mark(SIGNIN_PROGRESS.STEP_WAIT("AWS"))).toBe("pending");
+    await act(async () => land({ runId: "run-new", state: "PENDING" }));
+  }
+
+  it("the new run pulling holds the list on the download step, with no code from the old run", async () => {
+    await retryWhileOldRunWaits({ state: "not_waiting" });
+    expect(await screen.findByText(SIGNIN_PROGRESS.DOWNLOAD_HINT)).toBeInTheDocument();
+    expect(mark(SIGNIN_PROGRESS.STEP_DOWNLOAD_ACTIVE)).toBe("active");
+    expect(mark(SIGNIN_PROGRESS.STEP_WAIT("AWS"))).toBe("pending");
+    expect(screen.queryByTestId("signin-device-code")).not.toBeInTheDocument();
+  });
+
+  it("the new run's own code still moves the list to the waiting step", async () => {
+    await retryWhileOldRunWaits(WAITING);
+    await waitFor(() => expect(mark(SIGNIN_PROGRESS.STEP_WAIT("AWS"))).toBe("active"));
+    expect(screen.getByTestId("signin-device-code")).toHaveTextContent("KHDW-PQRS");
   });
 });

@@ -6,10 +6,11 @@
 import { asJson, wfetch } from "./core";
 
 /** GET /runs/{id}/desktop/sign-ins and the pause and resume answers (mirrors Go's desktopSignInsView).
- *  `store` is "memory" (sign-ins kept in the machine's memory), "none" (the admin set Not allowed, so the
+ *  `store` is "memory" (sign-ins kept in the machine's memory), "run_disk" (a macOS VM's: kept on the run's
+ *  virtual disk), "none" (the admin set Not allowed, so the
  *  desktop keeps none) or "" (the run's guest predates the store: say nothing). */
 export interface DesktopSignInsView {
-  store: "memory" | "none" | "";
+  store: "memory" | "run_disk" | "none" | "";
   paused: boolean;
   paused_at?: string;
   can_pause: boolean;

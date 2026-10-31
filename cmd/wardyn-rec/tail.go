@@ -86,11 +86,11 @@ func (t *tailUploader) loop() {
 }
 
 // finish stops the tail and uploads everything still unsent, a last line with
-// no newline included.
+// no newline included, retrying a part that may yet pass (retryFinal).
 func (t *tailUploader) finish() error {
 	close(t.stop)
 	<-t.done
-	return t.flush(true)
+	return retryFinal(func() error { return t.flush(true) })
 }
 
 // flush uploads the parts that are due: every waiting byte when final, else a

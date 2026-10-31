@@ -97,6 +97,12 @@ type setupPaths struct {
 
 func (p setupPaths) identity() string { return filepath.Join(p.stateDir, "runner.json") }
 
+// crashLogFile is beside the log: the LaunchAgent's stdout and stderr, which take only what serve prints
+// outside its own rotated log (a panic, or a failure before it opens the log).
+func (p setupPaths) crashLogFile() string {
+	return crashLogPath(p.logFile)
+}
+
 // configFile is runnerd.json, where every setting the service runs with lives; the service definition
 // names only this path and the binary.
 func (p setupPaths) configFile() string { return filepath.Join(p.cliProfile, runnerConfigName) }
@@ -205,13 +211,24 @@ func (h setupHost) installBinary(ctx context.Context, dst string, stopService bo
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	if err := keepPrevious(dst, h.exe); err != nil {
-		return fmt.Errorf("keep the previous %s: %w", dst, err)
+	// A rollback installs from the .previous it restores: keeping the binary it replaces would overwrite that
+	// file with the failed one, and a write that then failed would leave no copy of the old runner.
+	if !isSameFile(h.exe, dst+".previous") {
+		if err := keepPrevious(dst, h.exe); err != nil {
+			return fmt.Errorf("keep the previous %s: %w", dst, err)
+		}
 	}
 	if err := writeAtomic(dst, 0o755, func(w io.Writer) error { _, err := io.Copy(w, src); return err }); err != nil {
 		return fmt.Errorf("install %s: %w", dst, err)
 	}
 	return nil
+}
+
+// isSameFile reports whether a and b are both there and are one file.
+func isSameFile(a, b string) bool {
+	sa, errA := os.Stat(a)
+	sb, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(sa, sb)
 }
 
 // keepPrevious keeps the binary an upgrade is about to replace as dst+".previous", a hard link taken
@@ -279,7 +296,8 @@ func shellUnquote(s string) string {
 }
 
 // runnerFile is runnerd.json as setup settled it: what setup owns, over what the file already held (the
-// mirror, the proxies and the recording store are edited by hand and kept). The image is written only when
+// mirror, the proxies and the recording store are edited by hand and kept; so are the drive roots a setup
+// without --drive-root leaves). The image is written only when
 // someone named it: an image that follows the organisation or this release is derived again at every start,
 // so replacing the binary alone moves the proxy with it.
 func (p setupPlan) runnerFile() runnerFile {
@@ -291,6 +309,15 @@ func (p setupPlan) runnerFile() runnerFile {
 	}
 	f.RelayListen, f.RelayHostTarget, f.TrustedCAFile, f.OrgCAFile = p.relayListen, p.relayHostTarget, p.trustedCAFile, p.orgCAFile
 	f.RunnerProxy, f.RunnerNoProxy = carriedValue(p.proxy, "HTTPS_PROXY", "https_proxy"), carriedValue(p.proxy, "NO_PROXY", "no_proxy")
+	if len(p.driveRoots) > 0 {
+		f.DriveRoot = p.driveRoots
+	}
+	switch p.macOSVM {
+	case "on":
+		f.MacOSVM = "1"
+	case "off":
+		f.MacOSVM = ""
+	}
 	return f
 }
 
@@ -363,6 +390,33 @@ func (p setupPaths) installedService() string {
 	}
 	return ""
 }
+
+// serviceOrgArg is the organisation the installed service definition really passes serve as --org, "" when
+// it passes none, and how to name where it came from: an earlier install's LaunchAgent names it in
+// ProgramArguments, an earlier Linux unit passes ${WARDYN_RUNNER_ORG_URL} from its environment file. A
+// definition that passes only --config consumes neither, so a stale environment file beside it names nothing.
+func (p setupPaths) serviceOrgArg() (org, source string) {
+	if p.plistFile != "" {
+		if plist, err := os.ReadFile(p.plistFile); err == nil {
+			if m := plistOrgArg.FindSubmatch(plist); m != nil {
+				return html.UnescapeString(strings.TrimSpace(string(m[1]))), "the LaunchAgent's --org argument"
+			}
+			return "", ""
+		}
+	}
+	unit, err := os.ReadFile(p.unitFile)
+	if err != nil {
+		return "", ""
+	}
+	for _, line := range strings.Split(string(unit), "\n") {
+		if strings.HasPrefix(line, "ExecStart=") && strings.Contains(line, "--org ${WARDYN_RUNNER_ORG_URL}") {
+			return p.setting("WARDYN_RUNNER_ORG_URL"), "WARDYN_RUNNER_ORG_URL in the service's settings"
+		}
+	}
+	return "", ""
+}
+
+var plistOrgArg = regexp.MustCompile(`<string>--org</string>\s*<string>([^<]*)</string>`)
 
 // noServiceEnvFile is the environment file a Linux service read before runnerd.json, and on macOS, which
 // had no such file, the one --no-service wrote beside the identity's directory.
@@ -447,6 +501,7 @@ func renderLaunchAgent(plan setupPlan) string {
 		"__WARDYN_RUNNERD__", html.EscapeString(plan.paths.installed),
 		"__WARDYN_CONFIG__", html.EscapeString(plan.paths.configFile()),
 		"__WARDYN_LOG__", html.EscapeString(plan.paths.logFile),
+		"__WARDYN_CRASH_LOG__", html.EscapeString(plan.paths.crashLogFile()),
 	).Replace(tpl)
 }
 

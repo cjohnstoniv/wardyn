@@ -14,7 +14,9 @@ import (
 )
 
 // releaseVersion is a release (X.Y.Z) or a release candidate (X.Y.Z-rc.N). A development build's
-// version carries +<commit>, so it never matches.
+// version carries +<commit>, so it never matches. It is the same pattern as releaseTagRE in
+// internal/runner/k8s (sandbox.go), kept apart on purpose: change one and change the other.
+// TestReleaseVersionTable and the same table in internal/runner/k8s pin the pair.
 var releaseVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`)
 
 // buildVersion is this binary's version, swapped in tests.

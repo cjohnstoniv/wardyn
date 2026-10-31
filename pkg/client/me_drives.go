@@ -123,6 +123,8 @@ type MeDrive struct {
 	// MountedFrom is set when the pool read is one of the caller's own runners the drive's second place is
 	// bound to: that runner's name and the share's path on it.
 	MountedFrom *MeDriveMountedFrom `json:"mounted_from,omitempty"`
+	// Mac is the name of the Mac a disk drive (backend mac_disk) is kept on; "" on any other drive.
+	Mac string `json:"mac,omitempty"`
 }
 
 // MeDriveMountedFrom is the second place a run in the pool read mounts the drive from.
@@ -137,6 +139,17 @@ type MemberDriveCreateRequest struct {
 	// Name is 1 to 128 characters with at least one letter or digit, unique
 	// among the drives the caller can use.
 	Name string `json:"name"`
+	// RunnerID, when set, makes the drive a disk kept on that Mac (backend mac_disk): one of the caller's
+	// own runners, online, that keeps disk drives. Only macOS VM runs on that Mac can use it.
+	RunnerID string `json:"runner_id,omitempty"`
+}
+
+// MyDriveDeleteResult is the body of a disk drive's delete that did not finish on its Mac: 202
+// member_drive_delete_deferred while the Mac is offline, 200 member_drive_record_only once it is no
+// longer registered. A delete that finished answers 204 with no body.
+type MyDriveDeleteResult struct {
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
 }
 
 // CreateMyDrive creates the caller's own drive (POST /api/v1/me/drives).

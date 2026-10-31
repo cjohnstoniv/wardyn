@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
@@ -126,7 +127,7 @@ func (s *Server) refuseUIAppsDenied(w http.ResponseWriter, r *http.Request, run 
 // security admin, never an operator. Audited as a drop unless dryRun.
 func (s *Server) boundUIApps(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, ceiling governanceCeiling, dryRun bool) []string {
 	if !s.uiAppsDenied(r, *spec, ceiling) {
-		return nil
+		return s.boundInboundApps(ctx, r, spec, ceiling, dryRun)
 	}
 	dropped := make([]string, 0, len(spec.UIApps))
 	for _, a := range spec.UIApps {
@@ -140,17 +141,51 @@ func (s *Server) boundUIApps(ctx context.Context, r *http.Request, spec *types.R
 		len(dropped), ceiling.Unit.Name, strings.Join(dropped, ","))}
 }
 
+// boundInboundApps is deny_interactive at create for the inbound apps in ui_apps, the half of boundUIApps
+// that runs when deny_ui_apps has not already stripped them all: a service port can serve a shell, so an
+// inbound app under a no-shell profile would make the wall advisory. It drops the inbound apps whole and
+// keeps the rest, audited as a drop unless dryRun, like deny_ui_apps.
+func (s *Server) boundInboundApps(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, ceiling governanceCeiling, dryRun bool) []string {
+	if !s.inboundAppsDenied(r, *spec, ceiling) {
+		return nil
+	}
+	var dropped []string
+	kept := make([]types.UIApp, 0, len(spec.UIApps))
+	for _, a := range spec.UIApps {
+		if a.Inbound {
+			dropped = append(dropped, fmt.Sprintf("%s:%d", a.Name, a.Port))
+			continue
+		}
+		kept = append(kept, a)
+	}
+	spec.UIApps = kept
+	if !dryRun {
+		s.recordRefusal(ctx, r, authz.Drop(authz.ReasonGovernanceUnit, "runs.ui_apps", dropped))
+	}
+	return []string{fmt.Sprintf("dropped %d inbound ui_app(s) denied by governance profile %q, which denies interactive sessions: %s",
+		len(dropped), ceiling.Unit.Name, strings.Join(dropped, ","))}
+}
+
+// inboundAppsDenied is the one predicate for deny_interactive binding this run's inbound ui_apps, read by
+// boundInboundApps and applicationUIAppsRefusal alike, as uiAppsDenied is for deny_ui_apps.
+func (s *Server) inboundAppsDenied(r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling) bool {
+	return ceiling.Unit != nil && ceiling.Limits.DenyInteractive && !s.runUngoverned(r.Context()) &&
+		slices.ContainsFunc(spec.UIApps, func(a types.UIApp) bool { return a.Inbound })
+}
+
 // uiAppsDenied is the one predicate for deny_ui_apps binding this run's ui_apps: boundUIApps strips by it and an
 // application's create refusal reads it, so the two cannot disagree. It binds whoever the ceiling's limits bind.
 func (s *Server) uiAppsDenied(r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling) bool {
 	return ceiling.Unit != nil && ceiling.Limits.DenyUIApps && len(spec.UIApps) > 0 && !s.runUngoverned(r.Context())
 }
 
-// applicationUIAppsDeniedMsg and applicationUIAppsNotAllowedMsg are the two sentences of the refusal below, one
-// reason: a person has to tell a profile that denies every UI app from an allowed-apps list that lacks theirs.
+// applicationUIAppsDeniedMsg, applicationUIAppsNotAllowedMsg and applicationInboundDeniedMsg are the three sentences of
+// the refusal below, one reason: a person has to tell a profile that denies every UI app, an allowed-apps list that
+// lacks theirs and a profile that denies interactive sessions to an inbound app apart.
 const (
 	applicationUIAppsDeniedMsg     = "This profile does not allow UI apps, so an application can't declare one."
 	applicationUIAppsNotAllowedMsg = "This profile's list of allowed apps does not include the app this application declares, so it can't be created."
+	applicationInboundDeniedMsg    = "This profile does not allow interactive sessions, so an application can't declare an inbound app."
 )
 
 // applicationUIAppsRefusal refuses a shape-application run that would be created without the app it declared:
@@ -164,9 +199,12 @@ func (s *Server) applicationUIAppsRefusal(r *http.Request, req createRunRequest,
 	if req.Shape != client.RunShapeApplication || !applicationServer(req) {
 		return nil
 	}
+	declared, _ := requestPolicyRules(req)
 	switch {
 	case s.uiAppsDenied(r, spec, ceiling):
 		return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationUIAppsDeniedMsg)
+	case s.inboundAppsDenied(r, *declared, ceiling): // an inherited inbound app is boundInboundApps' to strip
+		return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationInboundDeniedMsg)
 	case len(spec.UIApps) == 0: // declared, and none left without deny_ui_apps: the ceiling's allowed list took it
 		return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationUIAppsNotAllowedMsg)
 	}

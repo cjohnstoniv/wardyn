@@ -9,7 +9,9 @@
 // no client-side class clamp. A field it cannot carry is reported, never dropped.
 
 import type { StartWire } from "../../../../lib/schedule";
+import type { RunService } from "../../../../lib/types/runs";
 import { TEMPLATE_POLICY_FIELDS, TEMPLATE_REQUEST_FIELDS, type TemplateFieldRule } from "../../../../lib/template-fields";
+import { mayKeepRunning, serviceWire } from "../lenses/service-lens";
 import type { RunIntent } from "./run-intent";
 
 /** The request field the intent's policy overlay travels in (`inline_policy` in the document). */
@@ -23,10 +25,10 @@ export interface WireResult {
   unsupported: string[];
 }
 
-// machine_kind is excluded at "launch": a template never carries it, but each launch names it, and the
-// draft is a launch, so it sends it. Save as template drops it (save-as-dialog.model.ts). The other
+// machine_kind and macos_base are excluded at "launch": a template never carries them, but each launch names them, and the
+// draft is a launch, so it sends them. Save as template drops them (save-as-dialog.model.ts). The other
 // launch-excluded rows stay unsupported here, except local_folder (LAUNCH_CHOSEN below).
-const LAUNCH_CARRIED = new Set(["machine_kind"]);
+const LAUNCH_CARRIED = new Set(["machine_kind", "macos_base"]);
 const carried = (rows: readonly TemplateFieldRule[]) =>
   new Set(rows.filter((r) => (!r.excluded || (r.excluded === "launch" && LAUNCH_CARRIED.has(r.name))) && !r.pending).map((r) => r.name));
 
@@ -62,6 +64,9 @@ export function wireSerializer(requestRows: readonly TemplateFieldRule[], policy
     const body: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(intent)) {
       if (value === undefined) continue;
+      // A service rides only a background command on a container. One left from an earlier choice (the run became an
+      // agent task or a VM) is not sent: the server would refuse the whole run for it.
+      if (key === "service" && !mayKeepRunning(intent)) continue;
       const overlay = key === "inline_policy";
       if (overlay ? !overlayCarried : !REQUEST.has(key) && !LAUNCH_CHOSEN.has(key)) {
         unsupported.push(key);
@@ -69,7 +74,7 @@ export function wireSerializer(requestRows: readonly TemplateFieldRule[], policy
       }
       if (overlay && value !== null && typeof value === "object") {
         body[POLICY_CARRIER] = policyOverlay(value as Record<string, unknown>, unsupported);
-      } else body[key] = value;
+      } else body[key] = key === "service" ? serviceWire(value as RunService) : value;
     }
     body.mode_contract = "0.9";
     if (launch) {

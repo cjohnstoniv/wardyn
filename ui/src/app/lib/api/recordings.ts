@@ -128,4 +128,8 @@ export interface DesktopPlayback {
   frames: string[];
   gaps?: DesktopGap[];
   truncated?: boolean;
+  /** Clipboard messages the desktop sent that the frames leave out. */
+  clipboard_omitted?: number;
+  /** When the stream stopped being one the recorder could follow; nothing after it is kept. */
+  stopped_ms?: number;
 }

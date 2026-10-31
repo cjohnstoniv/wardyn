@@ -1090,3 +1090,16 @@ func TestRun_WarnsWhenTheSessionCannotRenew(t *testing.T) {
 		}
 	}
 }
+
+// /dev/null is a character device but not a terminal: an unattended run with stdin on it must refuse,
+// not offer the chooser.
+func TestIsTerminal_DevNullIsNotATerminal(t *testing.T) {
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if isTerminal(f) {
+		t.Fatal("isTerminal(/dev/null) = true, want false")
+	}
+}

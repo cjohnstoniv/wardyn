@@ -15,6 +15,8 @@ import (
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
@@ -52,6 +54,33 @@ func TestRunnerObserveProxiesPreCreate(t *testing.T) {
 	}
 	if seen, err = h.d.ObserveProxies(ctx, []uuid.UUID{h.runID}); err != nil || seen[h.runID] != runner.ProxyNotFound {
 		t.Fatalf("created proxy, pod gone: %q %v", seen[h.runID], err)
+	}
+}
+
+// TestRunnerObserveProxiesCreatedMidList: a proxy created while its namespace is listed (its UID
+// recorded after the list read it) is left for the next tick, not reported not_found and stopped
+// while CreateSandbox still waits on it (#3823).
+func TestRunnerObserveProxiesCreatedMidList(t *testing.T) {
+	h := newRunnerHarness(t)
+	tr := h.cs.Tracker()
+	h.cs.PrependReactor("list", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		// The tracker, not the clientset: a reactor runs under the fake's lock.
+		listed, err := tr.List(podsGVR, corev1.SchemeGroupVersion.WithKind("Pod"), a.GetNamespace())
+		if err != nil {
+			return true, nil, err
+		}
+		pod := h.proxyPod("n1")
+		if err := tr.Add(pod); err != nil {
+			return true, nil, err
+		}
+		return true, listed, (&bracket{d: h.d, runID: h.runID, component: componentProxy}).created(pod)
+	})
+	seen, err := h.d.ObserveProxies(context.Background(), []uuid.UUID{h.runID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o, ok := seen[h.runID]; ok {
+		t.Fatalf("a proxy created during the list was observed as %q, want it left for the next tick", o)
 	}
 }
 

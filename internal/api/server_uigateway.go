@@ -37,11 +37,16 @@ type uiGatewayState struct {
 	uiReassert   map[string]time.Time
 	uiProxyOnce  sync.Once
 	uiProxy      *httputil.ReverseProxy
+	// uiInbound is the inbound arm's token sessions and per-run request buckets (uigateway_inbound.go).
+	uiInbound uiInboundState
 	// uiDesktop caches the desktop sessions their person closed and holds this process's live desktop
 	// streams, by uiReassertKey (uigateway_desktop.go). The Closed set itself is in the store.
 	uiDesktop uiDesktopSessions
 	// uiDesktopClosedEvery, when set, replaces uiDesktopClosedRecheck (tests shorten it).
 	uiDesktopClosedEvery time.Duration
+	// uiInboundStreamEvery, when set, replaces inboundResolveTTL/2 as an inbound-token stream's re-admission
+	// interval (watchInboundStream; tests shorten it).
+	uiInboundStreamEvery time.Duration
 	// vmSignInTick, when set, replaces a recorded VM desktop stream's vmSignInRecheck ticker (tests):
 	// each channel sent on it is one recheck of the run's sign-in mark, closed once it is done
 	// (vmSignInWatch.recheck).

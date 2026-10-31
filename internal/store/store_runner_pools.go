@@ -30,15 +30,15 @@ type RunnerPoolStore interface {
 	// every person's user pools too, for oversight.
 	ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool) ([]RunnerPoolCatalogueRow, error)
 	GetRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, error)
-	// ListRunnerPoolMembers is every member of a pool: only the admission fold reads it, and only through
-	// runnerpool.OwnRunnerCandidates.
+	// ListRunnerPoolMembers is every member of a pool: the admission fold reads it, through
+	// runnerpool.OwnRunnerCandidates and for an organization runner's runs namespace, and so does dispatch.
 	ListRunnerPoolMembers(ctx context.Context, id uuid.UUID) ([]types.RunnerPoolMember, error)
 	CreateRunnerPool(ctx context.Context, p types.RunnerPool, by string) (types.RunnerPool, error)
 	UpdateRunnerPool(ctx context.Context, id uuid.UUID, revision int64, name *string, state *types.RunnerPoolState, limits *types.RunnerPoolLimits, recording *types.RecordingRequirement) (types.RunnerPool, error)
 	DeleteRunnerPool(ctx context.Context, id uuid.UUID) (RunnerPoolDeletion, error)
 	DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]RunnerPoolDeletion, error)
 
-	AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (m types.RunnerPoolMember, added bool, revision int64, err error)
+	AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string, refuseGoverned bool) (m types.RunnerPoolMember, added bool, revision int64, err error)
 	RemoveRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string, refuseGoverned bool) (removed bool, revision int64, err error)
 	AddOwnRunnerToPool(ctx context.Context, id, runnerID uuid.UUID, owner, orgURLSHA256 string) (m types.RunnerPoolMember, added bool, revision int64, err error)
 	RemoveOwnRunnerFromPool(ctx context.Context, id, runnerID uuid.UUID, owner string) (removed bool, revision int64, err error)
@@ -60,7 +60,8 @@ var _ RunnerPoolStore = PG{}
 var (
 	// ErrRunnerPoolStale: the caller's revision is not the pool's.
 	ErrRunnerPoolStale = errors.New("store: runner pool revision is stale")
-	// ErrRunnerPoolGoverned: a detach that was decided as direct met a use policy under the locks.
+	// ErrRunnerPoolGoverned: a detach or attach that was decided as direct met a use policy under the
+	// locks (the pool's own for a detach, another pool's holding the executor for an attach).
 	ErrRunnerPoolGoverned = errors.New("store: runner pool now has a use policy, so the detach must be held")
 	// ErrRunnerPoolLimit: the organisation is at RunnerPoolsMax pools, or the owner at RunnerPoolsPerOwnerMax.
 	ErrRunnerPoolLimit = errors.New("store: too many runner pools")
@@ -85,12 +86,13 @@ const (
 
 // RunnerPoolCatalogueRow is one live pool with what the API needs to decide who may use it and
 // whether it can take a run right now: its use policy, its remote-hosted members (ExecutorIDs, their
-// ids), how many of the caller's own claimed runners it holds, and which of the caller's own runners
-// (in any state) are its members.
+// ids), its organization runners (OrgRunnerIDs, their ids as text, sorted), how many of the caller's own
+// claimed runners it holds, and which of the caller's own runners (in any state) are its members.
 type RunnerPoolCatalogueRow struct {
 	Pool         types.RunnerPool
 	Policy       *types.RunnerPoolUsePolicy
 	ExecutorIDs  []string
+	OrgRunnerIDs []string
 	OwnRunners   int
 	OwnRunnerIDs []uuid.UUID
 }
@@ -179,10 +181,10 @@ func (s PG) GetRunnerPool(ctx context.Context, id uuid.UUID) (types.RunnerPool, 
 
 func (s PG) ListRunnerPoolMembers(ctx context.Context, id uuid.UUID) ([]types.RunnerPoolMember, error) {
 	return collect(ctx, s.Pool, "list", "runner pool members",
-		`SELECT pool_id, kind, runner_id, COALESCE(remote_runner_id, ''), added_at FROM runner_pool_members WHERE pool_id = $1 ORDER BY runner_id, remote_runner_id`,
+		`SELECT pool_id, kind, runner_id, COALESCE(remote_runner_id, ''), runs_namespace, added_at FROM runner_pool_members WHERE pool_id = $1 ORDER BY runner_id, remote_runner_id`,
 		[]any{id}, func(row pgx.Row) (types.RunnerPoolMember, error) {
 			var m types.RunnerPoolMember
-			if err := row.Scan(&m.PoolID, &m.Kind, &m.RunnerID, &m.RemoteRunnerID, &m.AddedAt); err != nil {
+			if err := row.Scan(&m.PoolID, &m.Kind, &m.RunnerID, &m.RemoteRunnerID, &m.RunsNamespace, &m.AddedAt); err != nil {
 				return m, fmt.Errorf("store: scan runner pool member: %w", err)
 			}
 			return m, nil
@@ -198,6 +200,8 @@ func (s PG) ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool)
 		       u.subjects, u.revision, u.updated_by, u.updated_at,
 		       COALESCE((SELECT array_agg(m.remote_runner_id ORDER BY m.remote_runner_id) FROM runner_pool_members m
 		                 WHERE m.pool_id = p.id AND m.remote_runner_id IS NOT NULL), '{}'),
+		       COALESCE((SELECT array_agg(m.runner_id::text ORDER BY m.runner_id::text) FROM runner_pool_members m JOIN runners r ON r.id = m.runner_id
+		                 WHERE m.pool_id = p.id AND r.owner_kind = 'org'), '{}'),
 		       (SELECT count(*) FROM runner_pool_members m JOIN runners r ON r.id = m.runner_id
 		         WHERE m.pool_id = p.id AND r.owner = $1 AND r.state = 'claimed'),
 		       COALESCE((SELECT array_agg(m.runner_id ORDER BY m.runner_id) FROM runner_pool_members m JOIN runners r ON r.id = m.runner_id
@@ -217,7 +221,7 @@ func (s PG) ListRunnerPoolCatalogue(ctx context.Context, owner string, all bool)
 		var polBy *string
 		var polAt *time.Time
 		if err := row.Scan(&r.Pool.ID, &r.Pool.Name, &scope, &r.Pool.Owner, &state, &r.Pool.Revision, &limits, &r.Pool.CreatedAt, &r.Pool.UpdatedAt, &recording,
-			&subjects, &polRev, &polBy, &polAt, &r.ExecutorIDs, &r.OwnRunners, &r.OwnRunnerIDs); err != nil {
+			&subjects, &polRev, &polBy, &polAt, &r.ExecutorIDs, &r.OrgRunnerIDs, &r.OwnRunners, &r.OwnRunnerIDs); err != nil {
 			return r, fmt.Errorf("store: scan runner pool catalogue: %w", err)
 		}
 		r.Pool.Scope, r.Pool.State, r.Pool.Recording = types.RunnerPoolScope(scope), types.RunnerPoolState(state), types.RecordingRequirement(recording)
@@ -364,6 +368,10 @@ func deleteRunnerPoolQ(ctx context.Context, q Querier, id uuid.UUID) (RunnerPool
 	if _, err := q.Exec(ctx, `DELETE FROM runner_pool_members WHERE pool_id = $1`, id); err != nil {
 		return out, err
 	}
+	// The pool row stays as a tombstone, so the cascade on its bindings does not fire.
+	if _, err := q.Exec(ctx, `DELETE FROM workload_bindings WHERE pool_id = $1`, id); err != nil {
+		return out, err
+	}
 	if err := clearOrgDefaultSlotsQ(ctx, q, id, &out); err != nil {
 		return out, err
 	}
@@ -377,7 +385,8 @@ func deleteRunnerPoolQ(ctx context.Context, q Querier, id uuid.UUID) (RunnerPool
 // as DeleteRunnerPool deletes one, and then every pool of theirs, the tombstones included, forgets them
 // (owner and created_by cleared). It holds the lock every create takes, so a pool the person creates
 // meanwhile is either deleted here or made after it. The person's stored preferences are deleted in the
-// same transaction. Returns the deletions, in pool id order.
+// same transaction, and so are their workloads; the owed ends of runs their workloads let go of forget
+// them. Returns the deletions, in pool id order.
 func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]RunnerPoolDeletion, error) {
 	var out []RunnerPoolDeletion
 	err := s.inTx(ctx, func(q Querier) error {
@@ -409,7 +418,15 @@ func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]Runne
 		if _, err = q.Exec(ctx, `DELETE FROM principal_prefs WHERE principal = $1`, owner); err != nil {
 			return err
 		}
-		_, err = q.Exec(ctx, `DELETE FROM ui_run_layouts WHERE principal = $1`, owner)
+		if _, err = q.Exec(ctx, `DELETE FROM ui_run_layouts WHERE principal = $1`, owner); err != nil {
+			return err
+		}
+		// So do the workloads they own. The runs those workloads let go of stay owed their end (erasure
+		// ends none of the person's runs), but no longer name them.
+		if _, err = q.Exec(ctx, `DELETE FROM workloads WHERE owner = $1`, owner); err != nil {
+			return err
+		}
+		_, err = q.Exec(ctx, `UPDATE workload_run_ends SET owner = '' WHERE owner = $1`, owner)
 		return err
 	})
 	return out, err
@@ -441,8 +458,10 @@ func clearOrgDefaultSlotsQ(ctx context.Context, q Querier, id uuid.UUID, out *Ru
 // AddRunnerPoolExecutor adds a remote-hosted runner (executor is its id) to a live organization pool;
 // added is false when it was already a member (no revision change). revision is the pool's revision
 // after the call, read under the pool lock. ErrNotFound: no such live organization pool, or no such
-// remote-hosted runner row.
-func (s PG) AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string) (types.RunnerPoolMember, bool, int64, error) {
+// remote-hosted runner row. The caller decided on a catalogue read taken before the locks whether the
+// attach is held; refuseGoverned says it decided "not held", and ErrRunnerPoolGoverned answers a use
+// policy on another pool holding the executor that was approved in between (executorGovernedElsewhereQ).
+func (s PG) AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string, refuseGoverned bool) (types.RunnerPoolMember, bool, int64, error) {
 	var m types.RunnerPoolMember
 	var added bool
 	var rev int64
@@ -451,11 +470,58 @@ func (s PG) AddRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor st
 		if err := LockGovernanceTarget(ctx, q, types.GovernanceTargetRunnerPoolUsePolicy, id.String()); err != nil {
 			return err
 		}
+		if err := LockRemoteRunnerPoolMembershipQ(ctx, q, executor); err != nil {
+			return err
+		}
+		if refuseGoverned {
+			governed, err := executorGovernedElsewhereQ(ctx, q, id, executor)
+			if err != nil {
+				return err
+			}
+			if governed {
+				return ErrRunnerPoolGoverned
+			}
+		}
 		var err error
 		m, added, rev, err = AddRunnerPoolExecutorQ(ctx, q, id, executor)
 		return err
 	})
 	return m, added, rev, err
+}
+
+// remoteRunnerPoolMembershipLock is the lock kind of LockRemoteRunnerPoolMembershipQ.
+const remoteRunnerPoolMembershipLock = "remote_runner_pool_membership"
+
+// LockRemoteRunnerPoolMembershipQ takes the transaction-scoped lock on remote-hosted runner executor's
+// pool memberships. Every attach and detach of it, direct or held, takes it after its pool's target
+// lock and before any pool row lock, so each reads the pools holding executor after the one before it
+// committed: two attaches to different pools cannot each miss the other's member row. q must be a pgx.Tx.
+func LockRemoteRunnerPoolMembershipQ(ctx context.Context, q Querier, executor string) error {
+	return LockGovernanceTarget(ctx, q, remoteRunnerPoolMembershipLock, executor)
+}
+
+// executorGovernedElsewhereQ reports whether a live pool other than id that holds remote-hosted runner
+// executor carries a use policy, read under the row locks of pool id and of every other pool holding
+// it. A use-policy write or approval takes its pool's row lock (LockLivePoolQ) before it reads or
+// writes the policy, so one in flight on such a pool commits before this read, and none starts until
+// the attach commits. The rows are locked in one statement in id order, FOR UPDATE throughout: two
+// attaches that each find the other's pool holding their executor take them in the same order, where a
+// share lock later raised on the pool's own row could deadlock.
+func executorGovernedElsewhereQ(ctx context.Context, q Querier, id uuid.UUID, executor string) (bool, error) {
+	if _, err := q.Exec(ctx, `SELECT p.id FROM runner_pools p
+		WHERE p.id = $1 OR p.id IN (SELECT pool_id FROM runner_pool_members WHERE remote_runner_id = $2)
+		ORDER BY p.id FOR UPDATE`, id, executor); err != nil {
+		return false, fmt.Errorf("store: lock the pools holding a remote-hosted runner: %w", err)
+	}
+	var governed bool
+	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_pool_members m
+		JOIN runner_pools p ON p.id = m.pool_id
+		JOIN runner_pool_use_policies u ON u.pool_id = p.id
+		WHERE m.remote_runner_id = $2 AND p.id <> $1 AND p.state <> 'deleted')`, id, executor).Scan(&governed)
+	if err != nil {
+		return false, fmt.Errorf("store: read the use policies over a remote-hosted runner: %w", err)
+	}
+	return governed, nil
 }
 
 // AddRunnerPoolExecutorQ is AddRunnerPoolExecutor's statement on q (a pgx.Tx), which a held change
@@ -504,6 +570,9 @@ func errOrNotFound(err error) error {
 func (s PG) RemoveRunnerPoolExecutor(ctx context.Context, id uuid.UUID, executor string, refuseGoverned bool) (removed bool, rev int64, err error) {
 	err = s.inTx(ctx, func(q Querier) error {
 		if err := LockGovernanceTarget(ctx, q, types.GovernanceTargetRunnerPoolUsePolicy, id.String()); err != nil {
+			return err
+		}
+		if err := LockRemoteRunnerPoolMembershipQ(ctx, q, executor); err != nil {
 			return err
 		}
 		if refuseGoverned {

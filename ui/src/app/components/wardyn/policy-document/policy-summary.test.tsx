@@ -3,9 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import type { RunPolicySpec } from "../../../lib/types";
+import { SUMMARY } from "../../screens/run-detail/policy-tab-copy";
 import { PolicySummary, specIsRedacted, type PolicyChangeMarks } from "./policy-summary";
 
 // Every key a RunPolicySpec has, each carrying something the Summary shows.
@@ -283,5 +286,108 @@ describe("PolicySummary — push limits (#2601)", () => {
     expect(row("Tools and pushes", "Largest file")).toHaveTextContent("5 MiB");
     expect(row("Tools and pushes", "Hold waits")).toHaveTextContent("300 seconds");
     expect(row("Tools and pushes", "Largest push inspected")).toHaveTextContent("32 MiB");
+  });
+});
+
+// The host marks (#2956, mock R13). The five strings are the approved copy, character for
+// character; cmd/wardyn/run_policy.go prints the same five, so that file is read here too.
+describe("PolicySummary host marks", () => {
+  const INSPECTED = "Inspected";
+  const TUNNEL = "Tunnel only";
+  const INSPECTED_MEANING =
+    "Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate.";
+  const TUNNEL_MEANING =
+    "Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here.";
+  const ALLOW_ALL_LINE = "Hosts not listed as Inspected pass through unread.";
+  const ALLOW_ALL_TEXT = "Allow-all egress (block-list only)";
+  const spec = { allowed_domains: ["artifacts.corp.example", "pypi.org"] } as RunPolicySpec;
+  const row = (host: string) => screen.getByText(host).closest("li") as HTMLElement;
+
+  it("pins the five strings verbatim, in the console copy and in the CLI", () => {
+    expect(SUMMARY.inspected).toBe(INSPECTED);
+    expect(SUMMARY.tunnelOnly).toBe(TUNNEL);
+    expect(SUMMARY.inspectedMeaning).toBe(INSPECTED_MEANING);
+    expect(SUMMARY.tunnelOnlyMeaning).toBe(TUNNEL_MEANING);
+    expect(SUMMARY.tunnelOnlyAllowAll).toBe(ALLOW_ALL_LINE);
+    const cli = readFileSync(join(__dirname, "../../../../../../cmd/wardyn/run_policy.go"), "utf8");
+    for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING, ALLOW_ALL_LINE]) expect(cli).toContain(`"${s}"`);
+  });
+
+  it("puts each chip on its own host, and one meaning line per mark present", () => {
+    render(<PolicySummary spec={spec} hostMarks={{ inspected: ["artifacts.corp.example"], terminated: ["artifacts.corp.example"], outside: [] }} />);
+    expect(within(row("artifacts.corp.example")).getByText(INSPECTED)).toBeInTheDocument();
+    expect(within(row("artifacts.corp.example")).queryByText(TUNNEL)).toBeNull();
+    expect(within(row("pypi.org")).getByText(TUNNEL)).toBeInTheDocument();
+    expect(within(row("pypi.org")).queryByText(INSPECTED)).toBeNull();
+    expect(screen.getByText(INSPECTED_MEANING)).toBeInTheDocument();
+    expect(screen.getByText(TUNNEL_MEANING)).toBeInTheDocument();
+  });
+
+  it("explains only the marks present", () => {
+    render(<PolicySummary spec={spec} hostMarks={{ inspected: [], terminated: [], outside: [] }} />);
+    expect(screen.getAllByText(TUNNEL)).toHaveLength(3); // two hosts and the meaning line's chip
+    expect(screen.queryByText(INSPECTED)).toBeNull();
+    expect(screen.queryByText(INSPECTED_MEANING)).toBeNull();
+  });
+
+  it("shows no marks without host_marks", () => {
+    render(<PolicySummary spec={spec} />);
+    for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING, ALLOW_ALL_LINE]) expect(screen.queryByText(s)).toBeNull();
+  });
+
+  it("lists a host the proxy opens outside the allowlist after the allowlist rows, as Inspected", () => {
+    render(
+      <PolicySummary
+        spec={spec}
+        hostMarks={{ inspected: ["artifacts.corp.example"], terminated: ["api.github.com", "artifacts.corp.example"], outside: ["api.github.com"] }}
+      />,
+    );
+    const items = within(screen.getByText("artifacts.corp.example").closest("ul") as HTMLElement).getAllByRole("listitem");
+    expect(items.map((li) => li.textContent)).toEqual([
+      `artifacts.corp.example${INSPECTED}`,
+      `pypi.org${TUNNEL}`,
+      `api.github.com${INSPECTED}`,
+    ]);
+    expect(screen.getByText(INSPECTED_MEANING)).toBeInTheDocument();
+    expect(screen.getByText(TUNNEL_MEANING)).toBeInTheDocument();
+  });
+
+  it("explains Inspected for an outside host even when every listed host is Tunnel only", () => {
+    render(<PolicySummary spec={spec} hostMarks={{ inspected: [], terminated: ["api.github.com"], outside: ["api.github.com"] }} />);
+    expect(within(row("api.github.com")).getByText(INSPECTED)).toBeInTheDocument();
+    expect(screen.getByText(INSPECTED_MEANING)).toBeInTheDocument();
+  });
+
+  it("allow-all: the line, each opened host as Inspected, the Inspected meaning, then the allow-all line with no chip", () => {
+    const { container } = render(
+      <PolicySummary
+        spec={{ ...spec, allow_all_egress: true } as RunPolicySpec}
+        hostMarks={{ inspected: [], terminated: ["api.github.com", "api.anthropic.com", "api.openai.com"], outside: ["api.github.com", "api.anthropic.com"] }}
+      />,
+    );
+    expect(screen.queryByText("pypi.org")).toBeNull();
+    expect(screen.queryByText("api.openai.com")).toBeNull(); // terminated, but the proxy refuses it: not outside
+    const text = container.textContent ?? "";
+    const at = [ALLOW_ALL_TEXT, "api.github.com", "api.anthropic.com", INSPECTED_MEANING, ALLOW_ALL_LINE].map((s) => text.indexOf(s));
+    expect(at.every((i) => i >= 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(within(row("api.github.com")).getByText(INSPECTED)).toBeInTheDocument();
+    expect(screen.queryByText(TUNNEL)).toBeNull();
+    expect(screen.queryByText(TUNNEL_MEANING)).toBeNull();
+    const line = screen.getByText(ALLOW_ALL_LINE);
+    expect(line.closest("p")?.children).toHaveLength(1); // the text only, no chip beside it
+  });
+
+  it("a null allowlist with an outside host still shows that host's Inspected row", () => {
+    render(<PolicySummary spec={{ allowed_domains: null } as unknown as RunPolicySpec} hostMarks={{ inspected: [], terminated: ["api.github.com"], outside: ["api.github.com"] }} />);
+    expect(within(row("api.github.com")).getByText(INSPECTED)).toBeInTheDocument();
+    expect(screen.getByText(INSPECTED_MEANING)).toBeInTheDocument();
+  });
+
+  it("allow-all with nothing opened: the line and the allow-all line only", () => {
+    render(<PolicySummary spec={{ ...spec, allow_all_egress: true } as RunPolicySpec} hostMarks={{ inspected: [], terminated: [], outside: [] }} />);
+    expect(screen.getByText(ALLOW_ALL_TEXT)).toBeInTheDocument();
+    expect(screen.getByText(ALLOW_ALL_LINE)).toBeInTheDocument();
+    for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING]) expect(screen.queryByText(s)).toBeNull();
   });
 });

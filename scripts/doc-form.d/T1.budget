@@ -111,7 +111,16 @@
 # threatmodel/THREAT-MODEL.md 66966 = ours 66034 + theirs 66530 - base 65598 at the merge of main into FEAT-2TEAM-UI.
 # threatmodel/THREAT-MODEL.md 67489 = ours 67053 + theirs 66966 - base 66530 at the 0.10 W4d merge of FEAT-2TEAM-UI onto the train.
 # threatmodel/THREAT-MODEL.md 69027 = ours 68068 + theirs 67723 - base 66764 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
-threatmodel/THREAT-MODEL.md=69027
+# threatmodel/THREAT-MODEL.md 70589 adds 535 over 70054, measured (rc.8 inbound docs): residuals #18, #21 and #22 name inbound apps, and the new residual #98.
+# threatmodel/THREAT-MODEL.md 70607 measured (rc.8 review): inbound wording made exact (groups refreshed at sign-in, rate-bound denials, burst, HEAD, session TTL).
+# threatmodel/THREAT-MODEL.md 70610 adds 3 over 70607, measured (rc.8 inbound review F1: the limit is per caller as well as per run).
+# threatmodel/THREAT-MODEL.md 70642 adds 32 over 70610, measured (rc.8 inbound review F3: a token stream is closed by the profile too).
+# threatmodel/THREAT-MODEL.md 70719 adds 77 over 70642, measured (rc.8 inbound review F5, F6: who the grant lets a caller name, and the shared connections).
+# threatmodel/THREAT-MODEL.md 70780 adds 61 over 70719, measured (rc.9 Mac docs): the B14 screen-lock line.
+# threatmodel/THREAT-MODEL.md 70925 adds 145 over 70780, measured (rc.9 Mac docs): the B14 base-edit, profile and drive lines and the drive crossing.
+# threatmodel/THREAT-MODEL.md 70934 adds 9, measured: a drive image outlives its record on a Mac no longer registered.
+# threatmodel/THREAT-MODEL.md 70957 adds 23 over 70934, measured: a runner-bound folder is checked by its runner inside --drive-root.
+threatmodel/THREAT-MODEL.md=70957
 # 0.10 HYB-C: threatmodel/THREAT-MODEL.md 66573 adds 43 over 66530, measured: the Linux VM's virtiofs shares are the container's binds (same folders, targets, mode, no other host path).
 # threatmodel/THREAT-MODEL.md 66596 adds 23 over 66573 (0.10 HYB-C review): VM state reaches the guest only as its disk; a guest write lands as the runner's user.
 # threatmodel/THREAT-MODEL.md 65311 adds 222 over 65089 (0.10 FEAT-1MCP), measured: item (r), a local MCP server's access, secrets, egress, off switch and refusals.

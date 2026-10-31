@@ -102,7 +102,7 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request, ado adoHosts
 		req.Sources = []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: defaultEphemeralTarget}}
 	}
 
-	// `admitted` and `clone_target` are the server's OWN read projections (types.WorkspaceSource), so a
+	// `admitted`, `clone_target`, `runner_state` and `runner_name` are the server's OWN read projections, so a
 	// body carrying it is dropped rather than stored: a client round-tripping a GET
 	// must not be able to persist a provider verdict, and the read path recomputes
 	// it on every response anyway.
@@ -115,6 +115,7 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request, ado adoHosts
 	adoServerHosts, hostsErr := ado.forAddresses(repos...)
 	for i := range req.Sources {
 		req.Sources[i].Admitted, req.Sources[i].CloneTarget = nil, ""
+		req.Sources[i].RunnerState, req.Sources[i].RunnerName = "", ""
 		if req.Sources[i].Type == types.WorkspaceSourceTypeRepo {
 			req.Sources[i].Source = canonicalRepoAddress(req.Sources[i].Source, adoServerHosts)
 		}
@@ -210,12 +211,21 @@ func legacyWorkspaceSource(req workspaceRequest) (types.WorkspaceSource, *types.
 // — the AUTHORED variant, so a source can no more name the reserved user-drive
 // target than a policy mount can.
 func validateWorkspaceSource(src types.WorkspaceSource, adoServerHosts []string) string {
+	if src.RunnerID != nil && src.Type != types.WorkspaceSourceTypeLocalDir {
+		return sourceRunnerOnlyFolder
+	}
 	switch src.Type {
 	case types.WorkspaceSourceTypeLocalDir:
 		if strings.TrimSpace(src.Path) == "" {
 			return "path is required for a local_dir source"
 		}
-		if err := runner.ValidateMountSource(src.Path); err != nil {
+		// A folder bound to a runner is a path on that machine: only its text is checked here, never
+		// whatever this host has at the same path.
+		check := runner.ValidateMountSource
+		if src.RunnerID != nil {
+			check = runner.ValidateMountSourceLexical
+		}
+		if err := check(src.Path); err != nil {
 			return "invalid path: " + err.Error()
 		}
 	case types.WorkspaceSourceTypeRepo:
@@ -280,9 +290,9 @@ func validateWorkspaceBaseImage(b *types.WorkspaceBaseImage) string {
 		return ""
 	}
 	switch b.Kind {
-	case "recommended", "registry", "custom", "byo":
+	case "recommended", "registry", "custom", "byo", types.BaseImageKindPrewrapped:
 	default:
-		return `base_image.kind must be "recommended", "registry", "custom", or "byo"`
+		return `base_image.kind must be "recommended", "registry", "custom", "byo" or "prewrapped"`
 	}
 	if b.Kind != "recommended" {
 		if strings.TrimSpace(b.Image) == "" {
@@ -357,6 +367,7 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	// capBatch every row's call asks through, installed by withCapBatch above.
 	availStamp := s.availabilityStamper(r.Context())
 	pinStamp := s.pinStamper(r.Context())
+	runnerStamp := s.runnerStateStamper(r.Context())
 	redact := func(rows []types.Workspace, err error) ([]types.Workspace, error) {
 		if err != nil {
 			return nil, err
@@ -367,7 +378,7 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 			if stamp != nil {
 				ws = stamp(ws)
 			}
-			ws = pinStamp(availStamp(ws))
+			ws = pinStamp(availStamp(runnerStamp(ws)))
 			out = append(out, ws)
 		}
 		return out, nil
@@ -480,6 +491,7 @@ func (s *Server) workspaceForResponse(r *http.Request, ws types.Workspace) types
 	if stamp := s.admissionStamper(r.Context()); stamp != nil {
 		out = stamp(out)
 	}
+	out = s.runnerStateStamper(r.Context())(out)
 	return s.pinStamper(r.Context())(s.availabilityStamper(r.Context())(out))
 }
 
@@ -606,8 +618,7 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// A member's own local_dir sources must clear the member-safe mount gate
 	// (root allowlist + canonicalized real path + credential-dotfile deny +
 	// the writable allowlist). An operator's are unaffected.
-	if msg := s.userSourcesAllowed(r, owner, req.Sources); msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceSourcesNotAllowed, msg)
+	if s.refuseUserSources(w, r, owner, req.Sources) {
 		return
 	}
 	now := s.cfg.Now().UTC()
@@ -637,6 +648,10 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, nil)
+	if errors.Is(aerr, errPrewrappedNotRegistered) {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPrewrappedImageNotRegistered, aerr.Error())
+		return
+	}
 	if aerr != nil {
 		writeServerError(w, r, "attach sources", aerr)
 		return
@@ -663,34 +678,6 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// Over req.Sources — exactly the locators admission read.
 	writeJSON(w, http.StatusCreated, workspaceResponse{Workspace: created,
 		Warnings: s.legacyHostAdmissionWarnings(r.Context(), repoSourceLocators(req.Sources)...)})
-}
-
-// userSourcesAllowed gates a MEMBER-owned workspace's local_dir sources
-// through the member-safe mount rules (internal/runner's UserMountPolicy):
-// the operator/MDM root allowlist matched on the CANONICALIZED real path, the
-// credential-dotfile deny-list, and — only for a source asking to be writable —
-// the separate writable allowlist minus its deny carve-out. It returns "" (fine)
-// or a 400-worthy message.
-//
-// owner=="" means OPERATOR-owned, and returns "" immediately: an operator's
-// mounts keep exactly the reach they have today (runner.ValidateMountSource
-// alone, already run by validateWorkspaceSource). This function only ever
-// NARROWS, never widens — it is additive on top of that deny-list, matching
-// SandboxSpec.UserMountRoots' nil-means-today's-behavior contract at the
-// other end of the same path.
-func (s *Server) userSourcesAllowed(r *http.Request, owner string, sources []types.WorkspaceSource) string {
-	if owner == "" {
-		return ""
-	}
-	for i, src := range sources {
-		if src.Type != types.WorkspaceSourceTypeLocalDir {
-			continue
-		}
-		if err := s.cfg.UserMounts.ValidateUserMount(owner, src.Path, src.Writable); err != nil {
-			return fmt.Sprintf("sources[%d]: %s", i, err.Error())
-		}
-	}
-	return ""
 }
 
 // workspaceEditAttempts bounds how often handleUpdateWorkspace redoes an edit
@@ -732,8 +719,13 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceSSHSourcesNotReady, msg)
 		return
 	}
-	if msg := s.userSourcesAllowed(r, ws.OwnedBy, req.Sources); msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceSourcesNotAllowed, msg)
+	// An operator editing a member's workspace binds no folder to the member's runner: only a binding the
+	// workspace already has, unchanged, passes.
+	if principal := principalFromRequest(r); (ws.OwnedBy == "" || principal != ws.OwnedBy) && newBinding(ws.Sources, req.Sources) {
+		writeErrorReason(w, http.StatusBadRequest, reasonWorkspaceSourcesNotAllowed, operatorRunnerIDMsg)
+		return
+	}
+	if s.refuseUserSources(w, r, ws.OwnedBy, req.Sources) {
 		return
 	}
 	// Over the INCOMING sources, not the stored ones: an edit is how a member
@@ -777,6 +769,10 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		// SourceID — must be read before the next line overwrites
 		// ws.Attachments.
 		atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, ws.Attachments)
+		if errors.Is(aerr, errPrewrappedNotRegistered) {
+			writeErrorReason(w, http.StatusUnprocessableEntity, reasonPrewrappedImageNotRegistered, aerr.Error())
+			return
+		}
 		if aerr != nil {
 			writeServerError(w, r, "attach sources", aerr)
 			return

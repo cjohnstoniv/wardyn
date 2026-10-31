@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
-import { reviewWarningText } from "./drop-warnings";
+import { reviewWarningText, wallsHostKnob } from "./drop-warnings";
 
 describe("reviewWarningText", () => {
   it("says one dropped host in the ceiling's words", () => {
@@ -33,5 +33,19 @@ describe("reviewWarningText", () => {
     for (const w of ['confinement raised from "CC1" to operator minimum "CC2"', "resources capped to operator maximum", "dropped 1 ui_app(s) not in operator allowlist: web:3000"]) {
       expect(reviewWarningText(w)).toBe(w);
     }
+  });
+
+  it("names the knob your walls narrowed in the console's words, and a knob it has no words for as sent", () => {
+    expect(reviewWarningText("your walls narrowed allowed_domains")).toBe("Your walls narrowed allowed hosts.");
+    expect(reviewWarningText("your walls narrowed desktop")).toBe("Your walls narrowed clipboard and files.");
+    expect(reviewWarningText("your walls narrowed min_confinement_class")).toBe("Your walls narrowed barrier.");
+    expect(reviewWarningText("your walls narrowed limits.max_end_ahead_sec")).toBe("Your walls narrowed limits.max_end_ahead_sec.");
+  });
+
+  it("leaves the host-list narrowing to the Access group's note, and no other knob", () => {
+    expect(wallsHostKnob("your walls narrowed allowed_domains")).toBe("allowed_domains");
+    expect(wallsHostKnob("your walls narrowed denied_domains")).toBe("denied_domains");
+    expect(wallsHostKnob("your walls narrowed desktop")).toBeUndefined();
+    expect(wallsHostKnob("dropped 1 egress domain(s) not in operator allowlist: a.example")).toBeUndefined();
   });
 });

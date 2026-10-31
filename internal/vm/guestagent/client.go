@@ -14,8 +14,10 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // Client is runnerd's side of one guest agent. It speaks HTTP/2 over the connections dial makes (the
@@ -37,19 +39,39 @@ func NewClient(dial func(ctx context.Context) (net.Conn, error)) *Client {
 	c.tr = &http.Transport{
 		Protocols:       &protocols,
 		MaxConnsPerHost: 1,
+		// The agent's answers are small JSON; the default (10 MB of headers) lets a guest make the host buffer far more.
+		MaxResponseHeaderBytes: maxResponseHeader,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			conn, err := dialSession(ctx, dial, hostHello)
 			if err != nil {
 				return nil, err
 			}
+			tc := &dialedConn{Conn: conn, c: c}
 			c.mu.Lock()
-			c.conns = append(c.conns, conn)
+			c.conns = append(c.conns, tc)
 			c.mu.Unlock()
-			return conn, nil
+			return tc, nil
 		},
 	}
 	c.hc = &http.Client{Transport: c.tr}
 	return c
+}
+
+// maxResponseHeader bounds the response headers the host reads from a guest.
+const maxResponseHeader = 64 << 10
+
+// dialedConn removes itself from Client.conns when closed, so redials (a guest can force them with an
+// HTTP/2 protocol error) do not grow the list for the run's life.
+type dialedConn struct {
+	net.Conn
+	c *Client
+}
+
+func (t *dialedConn) Close() error {
+	t.c.mu.Lock()
+	t.c.conns = slices.DeleteFunc(t.c.conns, func(x net.Conn) bool { return x == net.Conn(t) })
+	t.c.mu.Unlock()
+	return t.Conn.Close()
 }
 
 // Close closes every connection the client made, in use or not.
@@ -78,6 +100,37 @@ func (c *Client) Ready(ctx context.Context) (Ready, error) {
 	return r, c.do(ctx, http.MethodGet, "/v1/ready", nil, &r)
 }
 
+// ErrStopped is what WaitReady returns when its stopped check says the VM is gone.
+var ErrStopped = errors.New("guestagent: the VM stopped while waiting for the agent")
+
+// WaitReady calls Ready, each try bounded by attempt, until one answers, stopped reports the VM gone
+// (ErrStopped), or ctx ends. When ctx ends it returns the last error that was not a deadline or a
+// cancel, so the cause a guest agent gave on an earlier try (refusing, not answering the host)
+// survives a last try that the deadline cut short; with no such error it returns ctx's.
+func (c *Client) WaitReady(ctx context.Context, attempt time.Duration, stopped func() bool) error {
+	var cause error
+	for {
+		actx, stop := context.WithTimeout(ctx, attempt)
+		_, err := c.Ready(actx)
+		stop()
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+			cause = err
+		}
+		if stopped() {
+			return ErrStopped
+		}
+		if ctx.Err() != nil {
+			if cause != nil {
+				return cause
+			}
+			return err
+		}
+	}
+}
+
 // Init hands the agent the sandbox's env, files and mounts; the agent refuses a second one. The
 // answer says what it made of the sign-in store.
 func (c *Client) Init(ctx context.Context, in Init) (InitResult, error) {
@@ -85,14 +138,22 @@ func (c *Client) Init(ctx context.Context, in Init) (InitResult, error) {
 	return r, c.do(ctx, http.MethodPost, "/v1/init", in, &r)
 }
 
-// PauseAgent stops the latest detached exec's process group; ErrNoExec when none is running.
-func (c *Client) PauseAgent(ctx context.Context) error {
-	return c.do(ctx, http.MethodPost, "/v1/agent/pause", nil, nil)
+// PauseAgent stops the latest detached exec's process group; ErrNoExec when none is running. gen is
+// the pause's generation (AgentSignal), and fenced says the agent ordered the request by it: false from
+// an agent that predates it, which signals every request as it arrives.
+func (c *Client) PauseAgent(ctx context.Context, gen int64) (fenced bool, err error) {
+	return c.signalAgent(ctx, "/v1/agent/pause", gen)
 }
 
-// ResumeAgent continues it; ErrNoExec when none is running.
-func (c *Client) ResumeAgent(ctx context.Context) error {
-	return c.do(ctx, http.MethodPost, "/v1/agent/resume", nil, nil)
+// ResumeAgent continues it; see PauseAgent.
+func (c *Client) ResumeAgent(ctx context.Context, gen int64) (fenced bool, err error) {
+	return c.signalAgent(ctx, "/v1/agent/resume", gen)
+}
+
+func (c *Client) signalAgent(ctx context.Context, path string, gen int64) (bool, error) {
+	var res AgentSignalResult
+	err := c.do(ctx, http.MethodPost, path, AgentSignal{Generation: gen}, &res)
+	return res.FencedPause, err
 }
 
 // State is a detached exec's state.

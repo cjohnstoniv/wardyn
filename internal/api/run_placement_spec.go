@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -96,7 +97,7 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, self
 		TrustedOutput: localTrustedOutputRun(run), SelfDefinedComponents: selfDefinedSnapshotNames(comps),
 	}
 	if run.RunnerID != nil {
-		p.VerifiedLocalPaths = s.drivePathsOn(*run.RunnerID, spec.Drives)
+		p.VerifiedLocalPaths = mergePaths(s.drivePathsOn(*run.RunnerID, spec.Drives), s.mountPathsOn(*run.RunnerID, spec.Mounts))
 	}
 	owner := runIdentitySubject(ctx, run.CreatedBy)
 	byID := map[uuid.UUID]types.CredentialGrant{}
@@ -106,11 +107,21 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, self
 		}
 		byID[g.ID] = g
 	}
-	s.localPolicyGrantOrigins(ctx, owner, rows, &p)
-	s.localProxyGrantOrigins(ctx, owner, byID, &p)
-	s.localResidentOrigins(ctx, owner, rows, llm, &p)
+	// A store fault during an ownership proof is an unreadable plan, never a
+	// credential stamped as having no provenance.
+	if err := s.localPolicyGrantOrigins(ctx, owner, rows, &p); err != nil {
+		return placement.LocalPlan{}, err
+	}
+	if err := s.localProxyGrantOrigins(ctx, owner, byID, &p); err != nil {
+		return placement.LocalPlan{}, err
+	}
+	if err := s.localResidentOrigins(ctx, owner, rows, llm, &p); err != nil {
+		return placement.LocalPlan{}, err
+	}
 	ado, azure := localIdentityLanes(ctx, run, sc, spec, owner)
-	s.localIdentityOrigins(ctx, owner, ado, azure, &p)
+	if err := s.localIdentityOrigins(ctx, owner, ado, azure, &p); err != nil {
+		return placement.LocalPlan{}, err
+	}
 	return p, s.localPlanFacts(ctx, &p, egressBaselineOf(sc), run.RunnerID)
 }
 
@@ -191,7 +202,7 @@ func selfDefinedSnapshotNames(comps []types.RunComponent) []string {
 // localPolicyGrantOrigins stamps the policy copy with the persisted OwnerOnly
 // value, never a request's unstamped version. Every match is to the exact
 // kind+scope of this run.
-func (s *Server) localPolicyGrantOrigins(ctx context.Context, owner string, rows []types.CredentialGrant, p *placement.LocalPlan) {
+func (s *Server) localPolicyGrantOrigins(ctx context.Context, owner string, rows []types.CredentialGrant, p *placement.LocalPlan) error {
 	p.Spec.ProxyConfig.Policy = p.Spec.ProxyConfig.Policy.Clone()
 	for i, g := range p.Spec.ProxyConfig.Policy.EligibleGrants {
 		for _, row := range rows {
@@ -199,6 +210,9 @@ func (s *Server) localPolicyGrantOrigins(ctx context.Context, owner string, rows
 				continue
 			}
 			origin, ref := s.localGrantOrigin(ctx, owner, row.Spec)
+			if err := ownershipFault(ref); err != nil {
+				return err
+			}
 			if ref != nil {
 				continue
 			}
@@ -208,17 +222,22 @@ func (s *Server) localPolicyGrantOrigins(ctx context.Context, owner string, rows
 			break
 		}
 	}
+	return nil
 }
 
 // localProxyGrantOrigins binds each actual proxy route to the stored grant
 // that produced it; a route whose grant is missing or differs keeps no
 // provenance and so refuses.
-func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID map[uuid.UUID]types.CredentialGrant, p *placement.LocalPlan) {
+func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID map[uuid.UUID]types.CredentialGrant, p *placement.LocalPlan) error {
 	spec := p.Spec
 	rows := slices.Collect(maps.Values(byID))
+	var fault error
 	stamp := func(path string, row types.CredentialGrant) {
 		origin, ref := s.localGrantOrigin(ctx, owner, row.Spec)
 		if ref != nil {
+			if fault == nil {
+				fault = ownershipFault(ref)
+			}
 			return
 		}
 		origin.OwnerOnly = row.Spec.OwnerOnly
@@ -241,6 +260,11 @@ func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID 
 			continue
 		}
 		stamp(placementCredentialIndex("ProxyConfig.Injection", i), row)
+	}
+	if c := spec.ProxyConfig.AWSSigV4; c != nil {
+		if row, found := byID[c.GrantID]; found && awsSigV4GrantMatches(c, row) {
+			stamp("ProxyConfig.AWSSigV4", row)
+		}
 	}
 	for host, pat := range spec.ProxyConfig.PATGrants {
 		row, found := byID[pat.GrantID]
@@ -268,6 +292,20 @@ func (s *Server) localProxyGrantOrigins(ctx context.Context, owner string, byID 
 			stamp(placementCredentialIndex("ProxyConfig.ResidentMints", i), row)
 		}
 	}
+	return fault
+}
+
+// awsSigV4GrantMatches binds a re-signed AWS lane to the grant dispatch wrote for it: the same portal, the
+// same account and role, and the same set of hosts it signs (authorAWSSSOGrant).
+func awsSigV4GrantMatches(c *proxy.AWSSigV4Config, row types.CredentialGrant) bool {
+	if row.Spec.Kind != types.GrantAPIKey {
+		return false
+	}
+	rule, e := injectionRuleFromScope(row.Spec.Scope)
+	hosts := grantHosts(row.Spec)
+	hostSet := func(h []string) []string { return slices.Compact(slices.Sorted(slices.Values(h))) }
+	return e == nil && len(hosts) > 0 && hostEqual(rule.Host, c.PortalHost) &&
+		maps.Equal(rule.PinQuery, awsSSOPinQuery(c.AccountID, c.RoleName)) && slices.Equal(hostSet(hosts[1:]), hostSet(c.Hosts))
 }
 
 // localIdentityLanes is the Azure DevOps lane and the Azure Foundry lane a local run's identity
@@ -293,31 +331,42 @@ func localIdentityLanes(ctx context.Context, run types.AgentRun, sc types.SiteCo
 // it: the same organisation, capabilities within the row's ceiling and hosts within the lane for Azure
 // DevOps; the same endpoint host, route and deployments for an Azure Foundry gate. Anything else (the
 // lane gone, or the provider or its row changed since dispatch) is left without an origin, which refuses.
-func (s *Server) localIdentityOrigins(ctx context.Context, owner string, ado adoEntraRun, azure *providerAzureLane, p *placement.LocalPlan) {
+func (s *Server) localIdentityOrigins(ctx context.Context, owner string, ado adoEntraRun, azure *providerAzureLane, p *placement.LocalPlan) error {
 	spec := p.Spec
 	if g := spec.ProxyConfig.ADOGrant; g != nil && ado.rowID != "" && g.Organization == ado.org &&
 		subsetOf(g.Capabilities, ado.ceiling) && subsetOf(g.Hosts, ado.laneHosts()) {
-		p.Origins["ProxyConfig.ADOGrant"] = s.localADOOrigin(ctx, owner, ado)
+		origin, err := s.localADOOrigin(ctx, owner, ado)
+		if err != nil {
+			return err
+		}
+		p.Origins["ProxyConfig.ADOGrant"] = origin
 	}
 	if azure != nil && azure.owner == owner {
-		own := s.ownsSecretMemoized(ctx, owner, providerSecretName(azure.provider.UID, providerEntraPart))
+		own, err := s.ownsSecretChecked(ctx, owner, providerSecretName(azure.provider.UID, providerEntraPart))
+		if err != nil {
+			return err
+		}
 		for i, g := range spec.ProxyConfig.AzureGates {
 			if g.Host == azure.host && g.Route == azure.route && subsetOf(g.Models, azure.models()) {
 				p.Origins[placementCredentialIndex("ProxyConfig.AzureGates", i)] = placement.CredentialOrigin{Class: placement.ClassOwn, Stored: true, OwnNamespace: own, OwnerOnly: own}
 			}
 		}
 	}
+	return nil
 }
 
 func placementCredentialIndex(path string, i int) string { return path + "[" + strconv.Itoa(i) + "]" }
 
-func (s *Server) localResidentOrigins(ctx context.Context, owner string, rows []types.CredentialGrant, llm llmTransport, p *placement.LocalPlan) {
+func (s *Server) localResidentOrigins(ctx context.Context, owner string, rows []types.CredentialGrant, llm llmTransport, p *placement.LocalPlan) error {
 	for _, row := range rows {
 		name, _, _, covered, e := storedSecretGrantPairing(row.Spec)
 		if e != nil || !covered {
 			continue
 		}
 		origin, ref := s.localGrantOrigin(ctx, owner, row.Spec)
+		if err := ownershipFault(ref); err != nil {
+			return err
+		}
 		if ref != nil {
 			continue
 		}
@@ -340,14 +389,18 @@ func (s *Server) localResidentOrigins(ctx context.Context, owner string, rows []
 		p.Origins["SandboxSpec.SecretEnv["+codexMCPEnv+"]"] = placement.CredentialOrigin{Class: placement.ClassPlatform}
 	}
 	if llm.provider == nil || llm.provider.owner != owner || llm.provider.provider.Kind != types.ModelProviderBedrockSSO {
-		return
+		return nil
 	}
-	own := s.ownsSecretMemoized(ctx, owner, providerSecretName(llm.provider.provider.UID, providerSSOPart))
+	own, err := s.ownsSecretChecked(ctx, owner, providerSecretName(llm.provider.provider.UID, providerSSOPart))
+	if err != nil {
+		return err
+	}
 	for _, key := range llm.secretEnvKeys {
 		if _, exists := p.Spec.SecretEnv[key]; exists {
 			p.Origins["SandboxSpec.SecretEnv["+key+"]"] = bedrockSSOSecretEnvOrigin(own)
 		}
 	}
+	return nil
 }
 
 // dispatchTrustRefusal is dispatch's trust door (grantModesRefusal) over the run's stored grants, at the
@@ -365,10 +418,18 @@ func (s *Server) dispatchTrustRefusal(ctx context.Context, run types.AgentRun, p
 		_, fill := residentFillClass(p.Spec, all, g)
 		return fill
 	})
-	return grantModesRefusal(p, rows, func(g types.CredentialGrant) (string, bool) {
+	var fault error
+	refusal := grantModesRefusal(p, rows, func(g types.CredentialGrant) (string, bool) {
 		origin, ref := s.localGrantOrigin(ctx, owner, g.Spec)
+		if fault == nil {
+			fault = ownershipFault(ref)
+		}
 		return origin.Delivery, ref == nil
-	}), nil
+	})
+	if fault != nil {
+		return nil, fault
+	}
+	return refusal, nil
 }
 
 func localTrustedOutputRun(run types.AgentRun) bool {

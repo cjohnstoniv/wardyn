@@ -37,6 +37,7 @@
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives, ApplyDrivesResult, and people's own
 //     drives: ListMemberDrives, DeleteMemberDrive (/api/v1/drives/member, super admin) and the caller's
 //     CreateMyDrive, DeleteMyDrive (/api/v1/me/drives)
+//   - walls (/api/v1/me/walls):          GetMyWalls, PutMyWalls, ClearMyWalls — the caller's own narrow-only walls
 //   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
 //   - templates (/api/v1/templates):     ListTemplates, GetTemplate, SaveTemplate, DeleteTemplate, CopyTemplate,
 //     ImportTemplate — and, on /api/v1/admin/template-group-admins, ListTemplateGroupAdmins, GrantTemplateGroupAdmin,
@@ -71,7 +72,11 @@
 //   - service identities (/api/v1/service-identities, /api/v1/me/service-identities): CreateServiceIdentity, ListServiceIdentities,
 //     ListServiceIdentitiesPage, GetServiceIdentity, UpdateServiceIdentity, RetireServiceIdentity, ListMyServiceIdentities, and the
 //     sponsor's token routes MintServiceToken (a signed-in session only), ListServiceTokens, ListServiceTokensPage, RevokeServiceToken;
-//     with MoveToken (POST /api/v1/tokens/{id}/move)
+//     with MoveToken (POST /api/v1/tokens/{id}/move), and the caller's own tokens CreateAPIToken (a signed-in session only) and
+//     RevokeAPIToken (/api/v1/me/tokens)
+//   - workloads (/api/v1/workloads, /api/v1/workload-bindings): ApplyWorkload, ListWorkloads, ListWorkloadsPage, GetWorkload,
+//     WorkloadHistory, DeleteWorkload, RestartWorkload, and the namespace bindings CreateWorkloadBinding (a signed-in person),
+//     ListWorkloadBindings, ListWorkloadBindingsPage, DeleteWorkloadBinding (security tier)
 //   - components (/api/v1/components):   ListComponents, PutComponent, DeleteComponent (the organisation's, admin) — and, on
 //     /api/v1/me/components, the caller's own: MyComponents, SaveMyComponent, UpdateMyComponent, DeleteMyComponent
 //
@@ -88,7 +93,7 @@
 //   - /api/v1/permissions    — capability grants and per-kind enforcement (0.7)
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
 //   - /api/v1/tokens         — admin-tier API tokens (0.7), but for MoveToken (0.9); /api/v1/me/tokens is the
-//     self-service half, also unwrapped
+//     self-service half, wrapped only for CreateAPIToken and RevokeAPIToken (listing stays unwrapped)
 //   - /api/v1/token          — the portal token exchange (POST, 0.9): a portal presents its client credential and a person's
 //     identity-provider token for a delegated token. Unwrapped: it is a portal's door, not an operator's
 //   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding); its invitations are wrapped above

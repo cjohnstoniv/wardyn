@@ -117,3 +117,24 @@ func (e *Error) Err() error {
 	}
 	return e
 }
+
+// EventRefusal is the organisation's verdict that an EVENT can never be accepted: the same bytes would get the same
+// answer, and the refusal is already recorded durably. The org peer acknowledges the frame and keeps the session;
+// any other error from a checked handler still ends the link, so a transient failure is replayed (DR-0436, #3648).
+type EventRefusal struct {
+	Code string // one of the Refusal* codes
+	Err  error  // the ingest's own sentinel, for logs
+}
+
+func (e *EventRefusal) Error() string {
+	return fmt.Sprintf("runnerwire: event refused (%s): %v", e.Code, e.Err)
+}
+func (e *EventRefusal) Unwrap() error { return e.Err }
+
+// Refusal codes: the closed set an audit row's `code` carries.
+const (
+	RefusalShape           = "shape"            // undecodable, unknown field, trailing data, size, RunID presence
+	RefusalUnsupportedKind = "unsupported_kind" // a kind this organisation has no ingestion for
+	RefusalStoreRefused    = "store_refused"    // ownership, generation, hash, run state, grant, or a changed repeat
+	RefusalUnknownRun      = "unknown_run"      // the run (or its execution) no longer exists
+)

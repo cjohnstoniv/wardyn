@@ -26,6 +26,7 @@ import { ArchText, MachineText, PoolLinks } from "./runner-card";
 import { RunnerChip, TrustChip } from "./runner-chip";
 import { barrierNames, postureLines } from "./runner-display";
 import { ConfirmDialog } from "./confirm-dialog";
+import { MacVMSection } from "./macvm-section";
 import { RunnerTrust } from "./runner-trust";
 
 function Section({ label, reported, children, ...rest }: { label: string; reported?: string; children: React.ReactNode } & React.HTMLAttributes<HTMLElement>) {
@@ -68,12 +69,15 @@ export function RunnerDrawer({
   onClose,
   onChanged,
   onOpenPool,
+  maxBaseAgeDays,
 }: {
   runner: RunnerView | null;
   onClose: () => void;
   /** The runner was revoked, or turned out to be already: re-read the list. */
   onChanged: () => void;
   onOpenPool: (id: string) => void;
+  /** The organisation's maximum macOS base age in days; absent is none. */
+  maxBaseAgeDays?: number;
 }) {
   const [confirming, setConfirming] = React.useState(false);
   const securityAdmin = useSecurityOperator();
@@ -147,6 +151,16 @@ export function RunnerDrawer({
                     </Hint>
                   )}
                 </Section>
+                {/* Nothing without caps: a Mac that is off and one older than 0.10 both send none, so "off" is not told apart. */}
+                <MacVMSection
+                  caps={runner.macos_vm}
+                  mac={false}
+                  active={runner.usage.in_use.macos_vm_runs ?? 0}
+                  perRun={runner.limits?.per_run}
+                  runner={runner.name}
+                  hostOS={runner.posture?.os === "darwin" ? runner.posture.os_version : undefined}
+                  maxBaseAgeDays={maxBaseAgeDays}
+                />
                 {trust}
                 <Section label={RUNNER_V6.POOLS} data-pools>
                   <PoolLinks pools={runner.pools} onOpenPool={onOpenPool} />

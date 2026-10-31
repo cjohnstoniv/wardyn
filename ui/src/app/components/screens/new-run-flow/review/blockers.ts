@@ -15,11 +15,12 @@ import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_SHAPE } from "../../../wardyn/copy/new-run/shape";
 import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
 import { NR_TEMPLATES } from "../../../wardyn/copy/new-run/templates";
+import { SERVICE_FORM_ERRORS as SE } from "../../../wardyn/copy/run-service";
 import { DRIVE_REFUSAL_REASON } from "../../../../lib/drive-refusals";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { TemplateSetupNeed } from "../../../../lib/types/templates";
 import {
-  FIELD_HOME_OVERRIDES, FIELD_OF_REASON, groupOfPath, homeOfPath, homeOfReason, REVIEW_GROUP_OF_FIELD, type FieldHome, type ReviewGroupId,
+  FIELD_HOME_OVERRIDES, FIELD_OF_REASON, groupOfPath, homeOfPath, homeOfRefusal, REVIEW_GROUP_OF_FIELD, type FieldHome, type ReviewGroupId,
 } from "../draft/field-homes";
 import type { NewRunLocation } from "../draft/new-run-url";
 import type { RunIntent } from "../draft/run-intent";
@@ -58,6 +59,10 @@ const ISSUE_TEXT: Record<Exclude<StepIssueCode, AppProblemCode>, string> = {
   command_required: NR_RUN.COMMAND_REQUIRED,
   pool_required: NR_RUN.POOL_HELP,
   app_required: NR_RUN.PORT_REQUIRED,
+  service_port_invalid: SE.PORT_INVALID,
+  service_path_invalid: SE.PATH_INVALID,
+  service_interval_invalid: SE.EVERY_INVALID,
+  service_failures_invalid: SE.FAILURES_INVALID,
   main_drive_size_required: NR_FILES.SIZE_ERROR,
   files_choice_required: NR_FILES.CHOOSE_FILES,
   starts_here_required: NR_FILES.STARTS_HERE_REQUIRED,
@@ -86,11 +91,13 @@ export interface BlockerInput {
   unsupported: readonly string[];
   /** The refusal for harnesses no one declared image carries together (combinationReason), when the draft has them. */
   combination?: string;
+  /** A macOS VM's CPU or memory ask is under the base's minimum: the sentence, which names the minimum. */
+  macOSMinimum?: string;
   templateNeeds: readonly TemplateSetupNeed[];
   /** The template's needs are unread or could not be read: fail closed with the stale line. */
   templateUnread?: boolean;
-  /** The server's refusal of this draft: its own sentence and reason. */
-  refusal: { text: string; reason: string } | null;
+  /** The server's refusal of this draft: its own sentence and reason, and the request field it names, if any. */
+  refusal: { text: string; reason: string; field?: string } | null;
   setupItems: readonly SetupItem[];
   /** A local MCP server on for a harness that cannot apply the rules it is under: the run would be refused. */
   localMcp?: readonly { harness: string; server: string }[];
@@ -108,6 +115,7 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     out.push({ id: `local:${i.code}`, kind: "local", text: isAppProblem(i.code) ? appIssueText({ ...i, code: i.code }) : ISSUE_TEXT[i.code], to: locationOfHome(i.home) });
   }
   if (input.combination) out.push({ id: "local:combination", kind: "local", text: input.combination, to: locationOfHome("harnesses") });
+  if (input.macOSMinimum) out.push({ id: "local:macos_minimum", kind: "local", text: input.macOSMinimum, field: "resources" });
   if (input.keepLimit) out.push({ id: "keep:limit", kind: "local", ...input.keepLimit, to: locationOfHome("files"), field: "keep_work_folder" });
   for (const path of input.unsupported) {
     out.push({ id: `unsupported:${path}`, kind: "unsupported", text: NR_REVIEW.BLOCKER_UNSUPPORTED(path), to: locationOfHome(homeOfPath(path) ?? "document"), field: path });
@@ -127,8 +135,10 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     !(input.localMcp?.length && input.refusal.reason === "request_field_unavailable") &&
     !(input.keepLimit && input.refusal.reason === DRIVE_REFUSAL_REASON.MEMBER_LIMIT_REACHED)
   ) {
-    const field = (FIELD_OF_REASON as Record<string, string | undefined>)[input.refusal.reason];
-    out.push({ id: "refusal", kind: "refusal", text: input.refusal.text, to: locationOfHome(homeOfReason(input.refusal.reason)), ...(field && { field }) });
+    const { reason, field: named = "" } = input.refusal;
+    // The field the refusal names marks its Review group when Review shows that field (machine_kind, resources).
+    const field = (groupOfPath(named) && named) || (FIELD_OF_REASON as Record<string, string | undefined>)[reason];
+    out.push({ id: "refusal", kind: "refusal", text: input.refusal.text, to: locationOfHome(homeOfRefusal(reason, named)), ...(field && { field }) });
   }
   for (const item of input.setupItems) {
     out.push({ id: `setup:${item.id}`, kind: "setup_item", text: item.detail || item.label, to: { screen: "step", step: "tools" }, ...(setupDoor(item) === "add" && { addSecret: item }) });

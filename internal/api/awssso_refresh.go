@@ -836,6 +836,8 @@ func (s *Server) auditAWSSSORefresh(ctx context.Context, scope awsSSOScope, outc
 	data["credential_source"] = awsSSOCredentialSourceLabel(scope)
 	if renewerRenewal(ctx) {
 		data["trigger"] = "renewer"
+	} else if preflightRenewal(ctx) {
+		data["trigger"] = "preflight"
 	}
 	// Detached: the context is the renewal lock's, cancelled when the lock is
 	// lost, and the row describing that renewal must still be written.

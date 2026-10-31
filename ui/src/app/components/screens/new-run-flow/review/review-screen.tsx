@@ -30,6 +30,7 @@ import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
 import { isServer } from "../lenses/apps-lens";
 import { useLocalIssues, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../new-run-route";
 import { combinationReason, loadRoster } from "../steps/harnesses/roster";
+import { macOSMinimumSentence, useMacOSOffer } from "../steps/run/macos-offer";
 import { useDriveCatalogue } from "../steps/files/file-sources";
 import { templateSource } from "../steps/shape/shape-sources";
 import { useLoaded } from "../steps/shape/use-loaded";
@@ -39,6 +40,7 @@ import { buildBlockers, groupsBlockedBy, missingSetup } from "./blockers";
 import { localMcpConflicts, useHarnessNames } from "../steps/tools/local-mcp";
 import { AddTokenDialog, DISABLED_FILL } from "../steps/tools/setup-needed";
 import { EffectivePolicyCard } from "./effective-policy-card";
+import { useWallsSpec } from "./use-walls-spec";
 import { AccessGroup } from "./groups/access-group";
 import { LimitsGroup } from "./groups/limits-group";
 import { RunGroup } from "./groups/run-group";
@@ -118,9 +120,12 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   const template = useTemplateNeeds(draft.origin, draft.intent);
   const harnessNames = useHarnessNames();
   const gateway = useUIGateway();
+  // One read of the person's walls for the Access group and the policy card, so their host counts always agree.
+  const walls = useWallsSpec();
   // Harnesses no declared image carries together: the Harnesses step refuses them, and a draft that got here another way is held too.
   const roster = useLoaded(loadRoster);
   const ids = harnessIds(draft.intent);
+  const macOSOffer = useMacOSOffer();
   const combination = roster.status === "ready" ? combinationReason(roster.value, ids, ids[0]) : undefined;
 
   const gate = (blockers: number) =>
@@ -134,11 +139,12 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     keepLimit: keepAsked && create?.reason === "limit_reached" ? { text: NR_FILES.KEEP_LIMIT(create.count, create.limit), hint: NR_FILES.KEEP_LIMIT_HINT } : undefined,
     unsupported: wire.unsupported,
     combination,
+    macOSMinimum: macOSMinimumSentence(draft.intent, macOSOffer),
     templateNeeds: template.needs,
     templateUnread: template.unread,
     // A credential refusal is not a blocker: Launch's own refusal opens the provider's sign-in door.
-    refusal: checks.preflightError === null || checks.preflightRefusal ? null : { text: checks.preflightError, reason: checks.preflightReason },
-    gatewayOff: isServer(draft.intent) && gateway === false,
+    refusal: checks.preflightError === null || checks.preflightRefusal ? null : { text: checks.preflightError, reason: checks.preflightReason, field: checks.preflightField },
+    gatewayOff: isServer(draft.intent) && gateway.on === false,
     setupItems: missingSetup(pre ?? (checks.preflightRefusal && { setup_items: checks.preflightRefusal.setupItems }), checks.preview.result),
     localMcp: localMcpConflicts(pre?.access ?? checks.preview.result?.access, draft.intent),
     harnessLabel: (id: string) => harnessNames.get(id) ?? id,
@@ -158,11 +164,15 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     if (template.unread) template.retry();
     void checks.preflight();
     void checks.preview.retry();
+    gateway.recheck();
+    keepDrives.reload();
   };
 
   const [addingSecret, setAddingSecret] = React.useState<SetupItem | null>(null);
   const [saveKind, setSaveKind] = React.useState<TemplateKind | null>(null);
   const [publish, setPublish] = React.useState<TemplatePublish | null>(null);
+  // Which host lists of the walls the Access group draws a leave-out line for; the warning of any other list stays a notice.
+  const [wallsLeftOut, setWallsLeftOut] = React.useState<readonly string[]>([]);
   const openSave = (kind: TemplateKind) => {
     setSaveKind(kind);
     templateSource.list().then((l) => setPublish(l.publish), () => setPublish(ONLY_ME));
@@ -215,7 +225,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
         ),
       }}
     >
-      <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} diskCut={!!pre?.main_drive?.clamped_by && pre.main_drive.clamped_by !== "policy"} />
+      <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} warningContext={pre?.warning_context} diskCut={!!pre?.main_drive?.clamped_by && pre.main_drive.clamped_by !== "policy"} wallsLeftOut={wallsLeftOut} />
       <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} onCheckAgain={issues.length ? undefined : checkAgain} onAdd={setAddingSecret} />
       {addingSecret && (
         <AddTokenDialog
@@ -241,11 +251,11 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
               <WhereGroup {...group} docRows={docRows.where} />
               <WorkGroup {...group} docRows={docRows.work} />
               <ToolsGroup {...group} docRows={docRows.tools} />
-              <AccessGroup {...group} docRows={docRows.access} />
+              <AccessGroup {...group} docRows={docRows.access} onLeftOut={setWallsLeftOut} walls={walls} />
               <LimitsGroup {...group} docRows={docRows.limits} />
             </BlockedGroups.Provider>
           </StepSection>
-          <EffectivePolicyCard draft={draft} pre={pre} preview={checks.preview.result} />
+          <EffectivePolicyCard draft={draft} pre={pre} preview={checks.preview.result} walls={walls} />
         </div>
       ) : (
         <RawView intent={draft.intent} format={view} go={go} />

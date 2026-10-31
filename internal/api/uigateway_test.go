@@ -1103,6 +1103,46 @@ func TestUIGateway_RelayStripsWardynCredentialsInbound(t *testing.T) {
 	}
 }
 
+// TestUIGateway_RelayGivesTheAppItsOwnOrigin: the app is sent a loopback Host, so a request from its own
+// page, whose Origin is the gateway's, reaches it with its own origin, as an app that checks Origin against
+// Host (code-server's workbench WebSocket) needs. A foreign Origin reaches it as it came.
+func TestUIGateway_RelayGivesTheAppItsOwnOrigin(t *testing.T) {
+	seen := make(chan *http.Request, 1)
+	h := newUIHarness(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Clone(context.Background())
+		_, _ = io.WriteString(w, "ok")
+	}))
+	cookie := h.openSession()
+	const own = "own" // the app's own origin, http://<the Host it is sent>
+	for _, tc := range []struct{ name, origin, want string }{
+		{"own page", "https://ui.example.com", own},
+		{"own page, host in another case", "https://UI.example.com", own},
+		{"foreign page", "https://evil.example", "https://evil.example"},
+		{"own host by another scheme", "http://ui.example.com", "http://ui.example.com"},
+		{"own host on another port", "https://ui.example.com:8443", "https://ui.example.com:8443"},
+		{"null", "null", "null"},
+		{"no Origin", "", ""},
+	} {
+		rec := h.relay("/", cookie, func(r *http.Request) {
+			r.Host = "ui.example.com" // the advertised gateway (UIAdvertiseURL)
+			if tc.origin != "" {
+				r.Header.Set("Origin", tc.origin)
+			}
+		})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: relay %d %s", tc.name, rec.Code, rec.Body.String())
+		}
+		got := <-seen
+		want := tc.want
+		if want == own {
+			want = "http://" + got.Host
+		}
+		if o := got.Header.Get("Origin"); o != want {
+			t.Fatalf("%s: the app saw Origin %q (Host %q), want %q", tc.name, o, got.Host, want)
+		}
+	}
+}
+
 // TestUIGateway_RelayKeepsNonConformingAppCookies: the inbound strip is a
 // pass-through for everything that is not a wardyn_* credential, INCLUDING a
 // cookie net/http's own parser refuses to read. Rebuilding the header from

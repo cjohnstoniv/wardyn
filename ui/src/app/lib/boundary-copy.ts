@@ -135,6 +135,9 @@ export const BOUNDARY_DRY_RUN = {
   /** not on the boards. */
   FAILED_BODY: "Nothing was changed. You can't submit until the report loads.",
   RETRY: "Try again",
+  /** not on the boards: small string on a shipped surface. */
+  SIGNED_IN_CHANGED_BODY: "This page was opened as a different person than the one now signed in. Reload the page, then try again.",
+  RELOAD: "Reload page",
   // A knob the report names, by its wire name. One the console predates shows its raw name.
   KNOB: {
     allowed_domains: "Allowed hosts",

@@ -316,6 +316,48 @@ func TestSiteConfigSet_EmptyListWithoutClearStaysUnsentAndSaysSo(t *testing.T) {
 	}
 }
 
+// TestSiteConfigSet_EmptyListSpellings pins that `[ ]` and a multi-line empty
+// list are the empty list, not a value: same note without --clear, no conflict
+// with --clear.
+func TestSiteConfigSet_EmptyListSpellings(t *testing.T) {
+	for _, field := range []string{"internal_hosts", "upstream_proxy_no_proxy"} {
+		for name, empty := range map[string]string{"compact": "[]", "spaced": "[ ]", "multiline": "[\n\n  ]"} {
+			t.Run(field+"/"+name, func(t *testing.T) {
+				var body []byte
+				srv := rawBodyServer(t, &body)
+				doc := `{"` + field + `":` + empty + `}`
+
+				stderr, err := runSiteConfigSetArgs(t, srv.URL, doc)
+				if err != nil {
+					t.Fatalf("apply without --clear: %v", err)
+				}
+				if strings.Contains(string(body), field) {
+					t.Errorf("wire body = %s, want %s absent without --clear", body, field)
+				}
+				if !strings.Contains(stderr, field+" empty") {
+					t.Errorf("stderr = %q, want the empty-not-sent note naming %s", stderr, field)
+				}
+
+				body = nil
+				stderr, err = runSiteConfigSetArgs(t, srv.URL, doc, "--clear", field)
+				if err != nil {
+					t.Fatalf("apply with --clear: %v", err)
+				}
+				var wire map[string]json.RawMessage
+				if err := json.Unmarshal(body, &wire); err != nil {
+					t.Fatalf("wire body %q: %v", body, err)
+				}
+				if string(wire[field]) != "[]" {
+					t.Errorf("wire[%s] = %q, want [] (body %s)", field, wire[field], body)
+				}
+				if strings.Contains(stderr, field) {
+					t.Errorf("stderr = %q, want no note for a field --clear handled", stderr)
+				}
+			})
+		}
+	}
+}
+
 func TestSiteConfigSet_ClearRefusesUnknownFieldAndConflictingValue(t *testing.T) {
 	var body []byte
 	srv := rawBodyServer(t, &body)
@@ -373,7 +415,7 @@ func TestSiteConfigSet_NoOmittedFieldsNoteIsSilent(t *testing.T) {
 
 	_, stderr, err := runSiteConfigSet(t, srv.URL,
 		`{"scm_hosts":["gitlab.corp"],"upstream_proxy_no_proxy":[],"internal_hosts":[],"workspace_providers":{},"agent_providers":{},`+
-			`"model_providers":{},"sign_in_help_text":"","sign_in_help_url":"","branding":{},"policy_help":{},"components":{},"recording":{},"governance_max_depth":16}`)
+			`"model_providers":{},"sign_in_help_text":"","sign_in_help_url":"","branding":{},"policy_help":{},"components":{},"recording":{},"governance_max_depth":16,"macos_vm":{}}`)
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}

@@ -24,6 +24,9 @@ const ACTION_VERB: Record<string, string> = {
   "run.revoke": "revoked the run's identity",
   "run.autostop": "auto-stopped the idle run",
   "run.reconcile": "reconciled run state",
+  // A service's health read from inside the sandbox, and a restart of its command (rows written by wardynd).
+  "run.service.health": "service health changed",
+  "run.service.restart": "restarted the service",
   // The EFFECTIVE policy the sandbox was actually given, recorded after every
   // widening phase, so this is what the proxy enforces, not what was asked for.
   "run.policy.resolve": "resolved the policy this run was given",
@@ -39,6 +42,7 @@ const ACTION_VERB: Record<string, string> = {
   "identity.mint": "minted a workload identity",
   "identity.revoke": "revoked a workload identity",
   "run.bedrock.configure": "configured Bedrock model access for the run",
+  "run.aws_cli.configure": "configured the AWS CLI for the run",
   // Deliberately NOT "the managed subscription credential": the same action
   // fires for source="subscription" (the operator's own resident Anthropic
   // OAuth token) as for source="managed" (the Wardyn-captured one), and only
@@ -77,6 +81,7 @@ const ACTION_VERB: Record<string, string> = {
   "source.delete": "removed a source",
   "source.scan": "scanned a source",
   "base_image.write": "added a base image",
+  "base_image.admit": "checked a prewrapped image",
   "base_image.delete": "removed a base image",
   "integration.write": "stored an integration",
   "integration.delete": "deleted an integration",
@@ -86,6 +91,11 @@ const ACTION_VERB: Record<string, string> = {
   "authz.denied": "was refused access to",
   "auth.fail": "failed to sign in to",
 };
+
+// A run.build failure row the run carried on past (a dropped base image, an unbuilt SSH devcontainer): its reason is
+// the row's detail line (inboundDetail), and the failure badge stays.
+const SKIPPED_BUILD = "Skipped part of the sandbox image build";
+const isSkippedBuild = (e: AuditEvent): boolean => e.action === "run.build" && e.data?.skipped === true;
 
 function capitalize(s: string): string {
   return s.length ? s[0].toUpperCase() + s.slice(1) : s;
@@ -122,7 +132,14 @@ function describeParts(e: AuditEvent): AuditParts {
   if (e.action.startsWith("llm.scan.")) {
     return { lead: `LLM content scan (${e.action.slice("llm.scan.".length)}) for`, sep: " ", object: e.target || "an unknown host" };
   }
+  if (e.action === "inbound.allow" || e.action === "inbound.deny") {
+    const verb = e.action === "inbound.allow" ? AUDIT.INBOUND_ALLOW : AUDIT.INBOUND_DENY;
+    return { lead: `${verb} to`, sep: " ", object: e.target || AUDIT.INBOUND_NO_APP };
+  }
   if (e.action === "credential.revoke") return whole(AUDIT.REVOKE_RUN_CREDENTIALS);
+  if (e.action === "run.end.set" && e.data?.reason === "service_renewed") {
+    return { lead: capitalize(AUDIT.SERVICE_RENEWED), sep: " — ", object: e.target ?? "" };
+  }
   // "Removed" only on a row whose deletion happened; a failure row says what
   // was not removed. Any other outcome reads as the raw line.
   if (e.action === "credential.expired.delete" && (e.outcome === "success" || e.outcome === "failure")) {
@@ -136,6 +153,7 @@ function describeParts(e: AuditEvent): AuditParts {
     }
     if (reason === "expired") return whole(ok ? AUDIT.EXPIRED_DELETE_EXPIRED : AUDIT.EXPIRED_DELETE_EXPIRED_FAILED);
   }
+  if (isSkippedBuild(e)) return { lead: SKIPPED_BUILD, sep: " — ", object: e.target ?? "" };
   if (e.action === "run.build" && e.data?.cache_hit === true) {
     return { lead: AUDIT.REUSED_IMAGE, sep: " — ", object: e.target ?? "" };
   }
@@ -156,4 +174,71 @@ export function describeAction(e: AuditEvent): string {
 /** The target for its own column: the row's target as it is, or the sentence's stand-in ("an unknown host"). */
 export function describeObject(e: AuditEvent): string {
   return e.target || describeParts(e).object;
+}
+
+export const isInbound = (e: AuditEvent): boolean => e.action === "inbound.allow" || e.action === "inbound.deny";
+
+/** An inbound.deny that carries no actor: the request showed no valid credential, so there is no caller to name. */
+export const hasNoCaller = (e: AuditEvent): boolean => e.action === "inbound.deny" && !e.actor;
+
+/** Where a service row's fact came from: "sandbox" for what wardynd read inside the run, "server" for a lease it renewed itself. Null for any other row. */
+export function serviceSource(e: AuditEvent): string | null {
+  if (e.action === "run.service.health" || e.action === "run.service.restart") return AUDIT.SOURCE_SANDBOX;
+  return e.action === "run.end.set" && e.data?.reason === "service_renewed" ? AUDIT.SOURCE_SERVER : null;
+}
+
+// inboundDetail is the second line of an inbound.allow / inbound.deny row, from what the row recorded: the request
+// (method and path, never the query), how the caller came (a token or a session) and who they matched, or why they
+// were refused. `withRun` ends the line with the run's short id, for the Audit page, which lists several runs; a run's
+// own Audit tab leaves it off. A skipped run.build row's line is its recorded reason. Null for any other row; a field
+// the row lacks is left out, never guessed.
+export function inboundDetail(e: AuditEvent, withRun = false): string | null {
+  if (isSkippedBuild(e)) return typeof e.data?.reason === "string" && e.data.reason ? e.data.reason : null;
+  if (!isInbound(e)) return null;
+  const d = e.data ?? {};
+  const text = (k: string) => (typeof d[k] === "string" && d[k] ? (d[k] as string) : "");
+  const request = [text("method"), text("path")].filter(Boolean).join(" ");
+  const via = text("via") && `via ${text("via")}`;
+  const parts =
+    e.action === "inbound.allow"
+      ? [request, via, text("caller") && `caller ${text("caller")}`]
+      : [text("reason") && `reason ${text("reason")}`, via, request];
+  const line = parts.filter(Boolean);
+  if (line.length && withRun && e.run_id) line.push(e.run_id.replace(/^run_/, "").slice(0, 8));
+  return line.join(" · ") || null;
+}
+
+const BEDROCK_SIGNING: Record<string, "proxy" | "role" | "session"> = {
+  "sso-sigv4-proxy": "proxy",
+  "sso-inject-proxy": "role",
+  "sso-inject": "session",
+};
+
+// awsSigningLine is how dispatch set a run's AWS sign-in lane up, from its run.bedrock.configure or
+// run.aws_cli.configure row, or null for any other row. A Bedrock row is read by its recorded mode (an
+// older row carries no aws_signing), so only the three sign-in modes get a line; bearer and an unknown
+// mode get none. Where the sign-in session sits comes from the mode, never from the reason.
+export function awsSigningLine(e: AuditEvent): { text: string; sandbox: boolean } | null {
+  const d = e.data ?? {};
+  let where: "proxy" | "role" | "session" | null = null;
+  if (e.action === "run.bedrock.configure") {
+    where = Object.prototype.hasOwnProperty.call(BEDROCK_SIGNING, String(d.mode)) ? BEDROCK_SIGNING[String(d.mode)] : null;
+  } else if (e.action === "run.aws_cli.configure") {
+    where = d.aws_signing === "proxy" ? "proxy" : d.aws_signing === "sandbox" ? "role" : null;
+  }
+  if (where === null) return null;
+  if (where === "proxy") return { text: AUDIT.AWS_SIGNING_PROXY, sandbox: false };
+  const code = typeof d.aws_signing_reason === "string" ? d.aws_signing_reason : "";
+  const host = typeof d.aws_signing_host === "string" ? d.aws_signing_host : "";
+  const reason =
+    code === ""
+      ? AUDIT.AWS_SIGNING_NOT_RECORDED
+      : code === "port"
+        ? AUDIT.AWS_SIGNING_PORT(host)
+        : code === "unsigned_host"
+          ? AUDIT.AWS_SIGNING_UNSIGNED_HOST(host)
+          : Object.prototype.hasOwnProperty.call(AUDIT.AWS_SIGNING_REASON, code)
+            ? AUDIT.AWS_SIGNING_REASON[code]
+            : code;
+  return { text: where === "session" ? AUDIT.AWS_SIGNING_SANDBOX_SESSION(reason) : AUDIT.AWS_SIGNING_SANDBOX(reason), sandbox: true };
 }

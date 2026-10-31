@@ -10,10 +10,12 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { setField } from "../../../../../../test/set-field";
 import { SCENARIO_POOLS, SHARED, TEAM_LAPTOPS, barrierOptions, effectiveLimits, unavailablePool } from "../../../../../lib/new-run-fixtures/scenarios/pools";
+import { HttpError } from "../../../../../lib/api/core";
 import { RUNNER_POOL_REFUSAL } from "../../../../../lib/runner-pool-refusals";
 import type { RunnerPoolCatalogueEntry, RunnerPoolList } from "../../../../../lib/types/runner-pools";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
+import { SERVICE_FORM, SERVICE_FORM_ERRORS, SERVICE_PAUSE_WARNING } from "../../../../wardyn/copy/run-service";
 import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { ModelAccessProvider } from "../../../../wardyn/model-access-context";
 import { browserZone, scheduleDaysAhead, todayDate, type StartChoice } from "../../../../../lib/schedule";
@@ -22,6 +24,14 @@ import type { RunIntent } from "../../draft/run-intent";
 import { poolScope } from "../../lenses/run-lens";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import { RunStep } from "./run-step";
+
+// The Run step asks the policy preview about a service through the shared checks hook; what it answered is the test's to say.
+const checks = vi.hoisted(() => ({ warnings: [] as string[], error: null as unknown }));
+vi.mock("../../draft/use-intent-checks", async (orig) => ({
+  ...(await orig<typeof import("../../draft/use-intent-checks")>()),
+  useDraftIdentity: () => ({ principal: "alice", resolved: true, revision: 1, authGeneration: 0 }),
+  useIntentChecks: () => ({ preview: { result: { warnings: checks.warnings }, error: checks.error } }),
+}));
 
 const AGENT: RunIntent = { shape: "agent_task", experience: "interactive" };
 const MEMBER = SCENARIO_POOLS.member;
@@ -772,5 +782,140 @@ describe("Run step: Schedule for later", () => {
     await userEvent.click(screen.getByRole("radio", { name: NR_RUN.TIMING_NOW }));
     expect(scheduleNow()).toBeNull();
     expect(screen.queryByLabelText(NR_RUN.START_DATE)).not.toBeInTheDocument();
+  });
+});
+
+// Mock r15 T1-a: "Keep it running" under an Automation / script's command.
+describe("Run step: Keep it running", () => {
+  const SCRIPT: RunIntent = { shape: "application", experience: "background", workload: { kind: "command", command: "./serve --port 8080" } };
+  const toggle = () => screen.getByRole("switch", { name: SERVICE_FORM.LABEL });
+
+  it("is off by default, says what it does, and sends no service until it is turned on", async () => {
+    show(SCRIPT);
+    await poolSelect();
+    expect(toggle()).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(SERVICE_FORM.HELP)).toBeInTheDocument();
+    expect(screen.queryByText(SERVICE_FORM.RESTART_LABEL)).not.toBeInTheDocument();
+    expect(intentNow()).not.toHaveProperty("service");
+  });
+
+  it("turns on with a restart on failure, then names a port with the check's defaults and a path", async () => {
+    show(SCRIPT);
+    await poolSelect();
+    await userEvent.click(toggle());
+    expect(intentNow().service).toEqual({ restart: "on_failure" });
+    expect(screen.getByLabelText(SERVICE_FORM.PATH_LABEL)).toBeDisabled();
+    expect(screen.getByText(SERVICE_FORM.PORT_HELP)).toBeInTheDocument();
+    expect(screen.getByText(SERVICE_FORM.PATH_HELP)).toBeInTheDocument();
+    setField(screen.getByLabelText(SERVICE_FORM.PORT_LABEL), "8080");
+    expect(intentNow().service).toEqual({ restart: "on_failure", port: 8080, health: { interval_sec: 15, failure_threshold: 3 } });
+    setField(screen.getByLabelText(SERVICE_FORM.PATH_LABEL), "/healthz");
+    setField(screen.getByLabelText(SERVICE_FORM.EVERY_LABEL), "30");
+    setField(screen.getByLabelText(SERVICE_FORM.FAILURES_LABEL), "5");
+    expect(intentNow().service).toEqual({ restart: "on_failure", port: 8080, health: { path: "/healthz", interval_sec: 30, failure_threshold: 5 } });
+    expect(screen.getByText(SERVICE_FORM.SECONDS)).toBeInTheDocument();
+    expect(screen.getByText(SERVICE_FORM.FAILED_CHECKS)).toBeInTheDocument();
+  });
+
+  it("chooses Don't restart, and clearing the port keeps the typed check for the next port", async () => {
+    const health = { path: "/ready", interval_sec: 30, failure_threshold: 5 };
+    show({ ...SCRIPT, service: { restart: "on_failure", port: 8080, health } });
+    await poolSelect();
+    await userEvent.click(screen.getByRole("button", { name: SERVICE_FORM.RESTART_NEVER }));
+    expect(intentNow().service?.restart).toBe("never");
+    expect(screen.getByRole("button", { name: SERVICE_FORM.RESTART_ON_FAILURE })).toHaveAttribute("aria-pressed", "false");
+    setField(screen.getByLabelText(SERVICE_FORM.PORT_LABEL), "");
+    expect(intentNow().service).toEqual({ restart: "never", health });
+    expect(screen.getByLabelText(SERVICE_FORM.PATH_LABEL)).toBeDisabled();
+    setField(screen.getByLabelText(SERVICE_FORM.PORT_LABEL), "9090");
+    expect(intentNow().service).toEqual({ restart: "never", port: 9090, health });
+    expect(screen.getByLabelText(SERVICE_FORM.PATH_LABEL)).toHaveValue("/ready");
+  });
+
+  it("says which field is out of range, beside the field", async () => {
+    show({ ...SCRIPT, service: { restart: "on_failure", port: 8080, health: { interval_sec: 15, failure_threshold: 3 } } });
+    await poolSelect();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const cases: [string, string, string][] = [
+      [SERVICE_FORM.PORT_LABEL, "70000", SERVICE_FORM_ERRORS.PORT_INVALID],
+      [SERVICE_FORM.PATH_LABEL, "healthz", SERVICE_FORM_ERRORS.PATH_INVALID],
+      [SERVICE_FORM.EVERY_LABEL, "4", SERVICE_FORM_ERRORS.EVERY_INVALID],
+      [SERVICE_FORM.FAILURES_LABEL, "11", SERVICE_FORM_ERRORS.FAILURES_INVALID],
+    ];
+    for (const [label, typed, text] of cases) {
+      setField(screen.getByLabelText(label), typed);
+      expect(screen.getByLabelText(label)).toHaveAttribute("aria-invalid", "true");
+      expect(screen.getByText(text)).toHaveAttribute("role", "alert");
+    }
+    setField(screen.getByLabelText(SERVICE_FORM.PORT_LABEL), "8080");
+    setField(screen.getByLabelText(SERVICE_FORM.PATH_LABEL), "/healthz");
+    setField(screen.getByLabelText(SERVICE_FORM.EVERY_LABEL), "30");
+    setField(screen.getByLabelText(SERVICE_FORM.FAILURES_LABEL), "5");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("says the service will be paused when the checks' warnings carry the server's sentence, and not otherwise", async () => {
+    checks.warnings = [SERVICE_PAUSE_WARNING];
+    show({ ...SCRIPT, service: { restart: "on_failure" } });
+    await poolSelect();
+    expect(screen.getByText(SERVICE_PAUSE_WARNING)).toBeInTheDocument();
+    cleanup();
+    checks.warnings = [];
+    show({ ...SCRIPT, service: { restart: "on_failure" } });
+    await poolSelect();
+    expect(screen.queryByText(SERVICE_PAUSE_WARNING)).not.toBeInTheDocument();
+    cleanup();
+    checks.warnings = [SERVICE_PAUSE_WARNING];
+    show(SCRIPT);
+    await poolSelect();
+    expect(screen.queryByText(SERVICE_PAUSE_WARNING)).not.toBeInTheDocument();
+    checks.warnings = [];
+  });
+
+  it("draws Ports as an Optional section once it is on, and takes them away when it is turned off", async () => {
+    show({ ...SCRIPT, service: { restart: "on_failure" } });
+    await poolSelect();
+    const ports = screen.getByRole("group", { name: NR_RUN.PORTS_LABEL });
+    expect(within(ports.closest("section") as HTMLElement).getByText(NR_SHARED.OPTIONAL)).toBeInTheDocument();
+    expect(screen.queryByText(NR_RUN.PORT_REQUIRED)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: NR_RUN.PORT_ADD }));
+    await userEvent.click(screen.getByRole("checkbox", { name: NR_RUN.PORT_INBOUND_LABEL }));
+    expect(intentNow().inline_policy?.ui_apps).toEqual([{ name: "app1", port: 0, path: "/", inbound: true }]);
+    await userEvent.click(toggle());
+    expect(screen.queryByText(NR_RUN.PORTS_LABEL)).not.toBeInTheDocument();
+    expect(intentNow()).not.toHaveProperty("inline_policy");
+  });
+
+  it("says the organisation has not turned on inbound access when the server refuses the inbound port", async () => {
+    const inbound: RunIntent = { ...SCRIPT, service: { restart: "on_failure" }, inline_policy: { ui_apps: [{ name: "api", port: 8080, path: "/", inbound: true }] } };
+    show(inbound);
+    await poolSelect();
+    expect(screen.queryByText(NR_RUN.PORT_INBOUND_REFUSED)).not.toBeInTheDocument();
+    cleanup();
+    // The wire's reason is shared by the feature doors: the envelope's feature says which one.
+    checks.error = new HttpError(403, "Custom components aren't turned on for you. Ask your admin.", "capability_feature", "", "", "", undefined, "", "", "", "custom_component");
+    show(inbound);
+    await poolSelect();
+    expect(screen.queryByText(NR_RUN.PORT_INBOUND_REFUSED)).not.toBeInTheDocument();
+    cleanup();
+    checks.error = new HttpError(403, "Inbound apps aren't turned on for you. Ask your admin, or declare the app without inbound.", "capability_feature", "", "", "", undefined, "", "", "", "inbound");
+    show(inbound);
+    await poolSelect();
+    expect(screen.getByText(NR_RUN.PORT_INBOUND_REFUSED)).toHaveAttribute("role", "alert");
+    checks.error = null;
+  });
+
+  it("is not offered for an agent task, an application server, or a virtual machine", async () => {
+    show({ shape: "application", experience: "interactive", startup: { kind: "command", command: "npm run dev" }, inline_policy: { ui_apps: [{ name: "web", port: 3000, path: "/" }] } });
+    await poolSelect();
+    expect(screen.queryByRole("switch", { name: SERVICE_FORM.LABEL })).not.toBeInTheDocument();
+    cleanup();
+    show({ ...SCRIPT, workload: { kind: "agent_task", task: "x" } });
+    await poolSelect();
+    expect(screen.queryByRole("switch", { name: SERVICE_FORM.LABEL })).not.toBeInTheDocument();
+    cleanup();
+    show({ ...SCRIPT, machine_kind: "linux_vm" });
+    await poolSelect();
+    expect(screen.queryByRole("switch", { name: SERVICE_FORM.LABEL })).not.toBeInTheDocument();
   });
 });

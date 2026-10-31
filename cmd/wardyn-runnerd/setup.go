@@ -49,6 +49,12 @@ type setupOptions struct {
 	orgFrom string
 	pool    string
 	limits  registerLimits
+	// macOSVM is --macos-vm: on or off; "" asks at a terminal on an Apple silicon Mac, else keeps the earlier answer.
+	macOSVM string
+	// keepIPSW is --keep-ipsw: the prepare setup starts keeps Apple's restore image.
+	keepIPSW bool
+	// driveRoots is --drive-root: written to runnerd.json as drive_root, replacing the earlier list; none keeps it.
+	driveRoots []string
 }
 
 // newSetupCommand is the one command a person or device management runs to turn a downloaded
@@ -68,7 +74,14 @@ func newSetupCommand() *cobra.Command {
 			}
 			return ""
 		}
-		if err := checkSecurityLock(runnerInputs{flag: changedFlags(cmd), getenv: setupEnv, managed: managedPref, lockRead: managedLockRead}); err != nil {
+		if err := checkSecurityLock(runnerInputs{flag: changedFlags(cmd), flagList: changedFlagLists(cmd), getenv: setupEnv, managed: managedPref, lockRead: managedLockRead}); err != nil {
+			return err
+		}
+		// A drive root that serve would refuse is refused here, before the token is spent.
+		if _, err := parseDriveRoots(o.driveRoots); err != nil {
+			return err
+		}
+		if err := resolveRunnerConfig(runnerInputs{getenv: func(string) string { return "" }, managed: managedPref}).checkDriveRoots("docker"); err != nil {
 			return err
 		}
 		// On a Mac with the configuration profile, --org is optional.
@@ -80,6 +93,9 @@ func newSetupCommand() *cobra.Command {
 		}
 		host, err := osSetupHost()
 		if err != nil {
+			return err
+		}
+		if err := checkMacOSVMFlag(o.macOSVM, host.goos); err != nil {
 			return err
 		}
 		return runSetup(cmd, host, o)
@@ -99,6 +115,9 @@ func newSetupCommand() *cobra.Command {
 	fl.BoolVar(&o.claim, "claim", false, "claim the runner for yourself now; needs WARDYN_TOKEN, your own personal API token")
 	fl.StringVar(&o.pool, "pool", "", "with --claim, also put the runner in your user pool of this name (made if you have none by it)")
 	fl.BoolVar(&o.makeDefault, "default", false, "with --claim and --pool, also make that pool your default")
+	fl.StringVar(&o.macOSVM, "macos-vm", "", "on or off: macOS VM sandboxes on this Apple silicon Mac, whose base image it then starts to prepare (asked at a terminal when left out)")
+	fl.StringArrayVar(&o.driveRoots, "drive-root", nil, "a folder a drive bound to this runner may mount from, with everything under it (repeatable; written to runnerd.json as drive_root, replacing the earlier list; kept when setup runs again without it)")
+	fl.BoolVar(&o.keepIPSW, "keep-ipsw", false, "keep Apple's restore image after the base is ready")
 	o.limits.register(cmd)
 	return cmd
 }
@@ -150,6 +169,7 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 		return err
 	}
 	sayNoDiskCap(cmd.Context(), out)
+	var registered *types.RunnerLimits
 	if !plan.registered {
 		fmt.Fprintln(out, "Registering this computer. At a terminal it asks for the runner's limits (Enter takes each suggestion); otherwise it registers with the limits it suggests.")
 		done, err := registerRunner(cmd, registerArgs{org: plan.org, tokenFile: plan.tokenFile, token: plan.token, stateDir: plan.paths.stateDir, name: plan.name, limits: &plan.limits, proxyImage: plan.proxyImage,
@@ -158,6 +178,7 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 			return err
 		}
 		fmt.Fprintf(out, "registered %s; key fingerprint %s\n  %s\n", done.name, done.fingerprint, limitsLine(done.limits))
+		registered = &done.limits
 		if !plan.flagged {
 			if err := h.settleImageAfterRegistering(cmd, &plan, done.proxyImage); err != nil {
 				return err
@@ -167,12 +188,18 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 		// A rerun keeps the identity, and with it the runner's run state and its queue at the organisation.
 		fmt.Fprintf(out, "This computer is already registered, so the token in %s was not used.\n", plan.tokenFile)
 	}
+	if err := askMacOSVM(cmd, h.goos, &plan, registered); err != nil {
+		return err
+	}
 	start := h.startService
 	if plan.noService {
 		start = func(_ context.Context, plan setupPlan, out io.Writer) error { return h.writeRunConfig(plan, out) }
 	}
 	if err := start(cmd.Context(), plan, out); err != nil {
 		return err
+	}
+	if macOSVMOn(plan.runnerFile().MacOSVM) {
+		prepareMacOSVMBase(cmd, plan, registered)
 	}
 	identity, err := runneridentity.Load(plan.paths.stateDir, plan.org)
 	if err != nil {

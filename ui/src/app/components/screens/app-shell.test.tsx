@@ -579,22 +579,22 @@ describe("SidebarNav (member role)", () => {
     );
   });
 
-  // #460 (Q460-1): Settings joined the sidebar (#217) as an admin-only entry
-  // — a member's own three-item nav stays exactly as small as B3 pins above.
-  // The account menu keeps its own entry for BOTH roles (Q460-2, TopBar's own
-  // describe block below has the general Demos-gating precedent for that
-  // menu) — this is Settings's own pin that it didn't move.
-  it("Settings sits last in the admin sidebar", async () => {
+  // #460 (Q460-1): Settings is an admin-only entry in the Admin view, last in its Setup group (after
+  // Getting started), right before Access. The account menu keeps its own entry for BOTH roles (Q460-2,
+  // TopBar's own describe block below has the general Demos-gating precedent for that menu).
+  it("Settings ends the Setup group in the admin sidebar", async () => {
     const user = userEvent.setup();
     renderMobileNav("admin");
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
-    const links = screen.getAllByRole("link");
-    expect(links.at(-1)!.textContent).toMatch(/^Settings/);
+    const links = screen.getAllByRole("link").map((el) => el.textContent ?? "");
+    const at = links.findIndex((t) => /^Settings/.test(t));
+    expect(links[at - 1]).toMatch(/^Getting started/);
+    expect(links[at + 1]).toMatch(/^People/);
   });
 
-  // #2872: Providers, Components and Drives are reached from Settings' cards and
+  // #2872: Providers and Components are reached from Settings' cards and
   // have no nav entry, so Settings stays lit on them instead of nothing.
-  it.each(["/admin/providers", "/admin/components", "/admin/drives"])("Settings stays lit on %s", async (path) => {
+  it.each(["/admin/providers", "/admin/components"])("Settings stays lit on %s", async (path) => {
     const user = userEvent.setup();
     renderMobileNav("admin", false, path);
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
@@ -608,11 +608,21 @@ describe("SidebarNav (member role)", () => {
     expect(screen.getByRole("link", { name: /^Settings/ })).not.toHaveClass("bg-sidebar-accent");
   });
 
-  it("Settings is absent from a member's sidebar", async () => {
+  // User drives has its own item now, so it is lit on /admin/drives and Settings is not.
+  it("User drives is lit on its page and Settings is not", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("admin", false, "/admin/drives");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    expect(screen.getByRole("link", { name: /^User drives/ })).toHaveClass("bg-sidebar-accent");
+    expect(screen.getByRole("link", { name: /^Settings/ })).not.toHaveClass("bg-sidebar-accent");
+  });
+
+  // The User view's Settings is the person's own page (/account), not the deployment's.
+  it("a member's Settings opens their own page", async () => {
     const user = userEvent.setup();
     renderMobileNav("user");
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
-    expect(screen.queryByRole("link", { name: /^Settings/ })).toBeNull();
+    expect(screen.getByRole("link", { name: /^Settings/ })).toHaveAttribute("href", "/account");
   });
 
   // #460 review (M13) — `role`'s own fail-open default is "admin"
@@ -669,6 +679,8 @@ describe("SidebarNav (member role)", () => {
 
 // M-2 (packet M-A): two nav sets, the security-admin filter, the eyebrow and
 // the lower slot, and the switch at the top of the sheet.
+const USER_LABELS = ["Runs", "Workloads", "Approvals", "Workspaces", "Templates", "Getting started", "Settings"];
+
 describe("SidebarNav — per view (M-2)", () => {
   async function open(role: Role, memberMode = false) {
     renderMobileNav(role, memberMode);
@@ -680,37 +692,44 @@ describe("SidebarNav — per view (M-2)", () => {
     return { sheet, labels };
   }
 
-  it("an admin's Admin view: the eyebrow, fourteen items under five headings, then Getting started and Settings", async () => {
+  it("an admin's Admin view: the eyebrow, then Runs (no heading), Setup, Access, Limits and Keys", async () => {
     const { sheet, labels } = await open("admin");
     expect(within(sheet).getByText("Admin view", { selector: ".label-eyebrow" })).toBeInTheDocument();
     expect(labels).toEqual([
-      "Runs", "Approvals", "Audit", "Recordings", "Workspaces", "Templates", "Runners", "People", "User types", "Permissions",
-      "Policies", "Governance", "Credentials", "Secrets", "Getting started", "Settings",
+      "Runs", "Workloads", "Approvals", "Audit", "Recordings",
+      "Workspaces", "Templates", "Runners", "User drives", "Images", "Getting started", "Settings",
+      "People", "User types", "Permissions", "Policies", "Governance", "Credentials", "Secrets",
     ]);
+    // The top group has no heading; each later heading sits right before its group's first item.
     expect(within(sheet).getAllByTestId(/^nav-group-/).map((el) => el.textContent)).toEqual([
-      "Activity", "Build", "Access", "Limits", "Keys",
+      "Setup", "Access", "Limits", "Keys",
     ]);
-    // Each heading sits right before its group's first item.
-    for (const [group, first] of [["activity", "Runs"], ["build", "Workspaces"], ["access", "People"], ["limits", "Policies"], ["keys", "Credentials"]]) {
+    expect(within(sheet).queryByTestId("nav-group-runs")).toBeNull();
+    for (const [group, first] of [["setup", "Workspaces"], ["access", "People"], ["limits", "Policies"], ["keys", "Credentials"]]) {
       expect(within(sheet).getByTestId(`nav-group-${group}`).nextElementSibling).toBe(
         within(sheet).getByRole("link", { name: new RegExp(`^${first}`) }),
       );
     }
     expect(within(sheet).getByRole("link", { name: /^Runs/ })).toHaveAttribute("href", "/admin/runs");
+    expect(within(sheet).getByRole("link", { name: /^Workloads/ })).toHaveAttribute("href", "/admin/workloads");
+    expect(within(sheet).getByRole("link", { name: /^Settings/ })).toHaveAttribute("href", "/admin/settings");
   });
 
-  it("a security admin's Admin view: Credentials, User types and User drives join; Secrets, Recordings, Getting started and Settings do not", async () => {
-    const { labels } = await open("security_admin");
+  it("a security admin's Admin view: the same groups; Secrets, Recordings, Getting started and Settings do not appear", async () => {
+    const { sheet, labels } = await open("security_admin");
     expect(labels).toEqual([
-      "Runs", "Approvals", "Audit", "Workspaces", "Templates", "Runners", "User drives", "People", "User types", "Permissions", "Policies",
-      "Governance", "Credentials",
+      "Runs", "Workloads", "Approvals", "Audit", "Workspaces", "Templates", "Runners", "User drives", "Images",
+      "People", "User types", "Permissions", "Policies", "Governance", "Credentials",
+    ]);
+    expect(within(sheet).getAllByTestId(/^nav-group-/).map((el) => el.textContent)).toEqual([
+      "Setup", "Access", "Limits", "Keys",
     ]);
   });
 
   it("Templates (0.9): the shared items keep one order in both views (#3056), both admin tiers", async () => {
-    const shared = ["Runs", "Approvals", "Workspaces", "Templates"];
+    const shared = ["Runs", "Workloads", "Approvals", "Workspaces", "Templates"];
     const member = await open("user");
-    expect(member.labels.slice(0, 4)).toEqual(shared);
+    expect(member.labels.slice(0, 5)).toEqual(shared);
     expect(within(member.sheet).getByRole("link", { name: /^Templates/ })).toHaveAttribute("href", "/templates");
     cleanup();
     for (const role of ["admin", "security_admin"] as const) {
@@ -736,7 +755,7 @@ describe("SidebarNav — per view (M-2)", () => {
     expect(within(userView.sheet).queryByRole("link", { name: /^People/ })).toBeNull();
   });
 
-  it("Runners (0.9): under Build, after Templates, for both admin tiers; not for a member or an admin in the User view", async () => {
+  it("Runners (0.9): under Setup, after Templates, for both admin tiers; not for a member or an admin in the User view", async () => {
     for (const role of ["admin", "security_admin"] as const) {
       const { sheet, labels } = await open(role);
       expect(labels.indexOf("Runners")).toBe(labels.indexOf("Templates") + 1);
@@ -750,17 +769,23 @@ describe("SidebarNav — per view (M-2)", () => {
     expect(within(userView.sheet).queryByRole("link", { name: /^Runners/ })).toBeNull();
   });
 
-  it("a user: no eyebrow, four items, then Getting started and Your account", async () => {
+  it("a user: no eyebrow, Runs (no heading) then Setup ending in Getting started and Settings", async () => {
     const { sheet, labels } = await open("user");
     expect(within(sheet).queryByText("Admin view", { selector: ".label-eyebrow" })).toBeNull();
-    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Templates", "Getting started", "Your account"]);
-    expect(within(sheet).queryAllByTestId(/^nav-group-/)).toHaveLength(0);
+    expect(labels).toEqual(USER_LABELS);
+    expect(within(sheet).getAllByTestId(/^nav-group-/).map((el) => el.textContent)).toEqual(["Setup"]);
+    expect(within(sheet).getByTestId("nav-group-setup").nextElementSibling).toBe(
+      within(sheet).getByRole("link", { name: /^Workspaces/ }),
+    );
+    expect(within(sheet).getByRole("link", { name: /^Workloads/ })).toHaveAttribute("href", "/workloads");
+    expect(within(sheet).getByRole("link", { name: /^Settings/ })).toHaveAttribute("href", "/account");
+    expect(within(sheet).queryByText("Your account")).toBeNull();
     expect(within(sheet).queryByRole("group", { name: "Console view" })).toBeNull();
   });
 
   it("an admin in the User view gets the user's nav, and the switch tops the sheet", async () => {
     const { sheet, labels } = await open("user", true);
-    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Templates", "Getting started", "Your account"]);
+    expect(labels).toEqual(USER_LABELS);
     const group = within(sheet).getByRole("group", { name: "Console view" });
     expect(within(group).getByRole("button", { name: "User view" })).toHaveAttribute("aria-pressed", "true");
   });

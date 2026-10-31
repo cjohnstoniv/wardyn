@@ -43,6 +43,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [High availability](#high-availability)
 - [Kubernetes: known gaps](operations/kubernetes-known-gaps.md#kubernetes-known-gaps)
 - Task pages under [`docs/operations/`](operations/): [Managed laptops: client-mode runners](operations/hybrid-laptops.md), [Runner pools](operations/runner-pools.md#runner-pools-where-a-run-goes), [Launch presets](operations/launch-presets.md#launch-presets), [Console branding](operations/console-branding.md#console-branding), [The Wardyn boundary](operations/boundary.md#the-wardyn-boundary-the-outermost-layer-of-every-run), [Approval rules](operations/approval-rules.md#approval-rules-a-security-admins-rule-approves-a-service-identitys-held-call), [Unit admins](operations/unit-admins.md#unit-admins-governing-one-part-of-the-tree)
+- [Workloads](operations/workloads.md): keep a run declared with `wardyn apply` or a WardynWorkload resource, bind a namespace, read its status, and the Argo CD health check.
 
 </details>
 
@@ -57,7 +58,7 @@ copy is permanent.
 | Postgres | volume `<project>_postgres_data` | runs, approvals, workspaces, policies, encrypted secrets, the append-only audit log — and, under the default `pg` recording store, the PTY asciicasts too | everything |
 | Recordings | volume `${WARDYN_NS:-wardyn}-recordings` (`WARDYN_RECORDING_DIR=/data/recordings`) | PTY asciicasts for Replay — **only with `WARDYN_RECORDING_STORE=fs`**; the shipped default (`pg`) keeps them in Postgres and leaves this volume empty | every session replay it holds; nothing reconstructs them |
 | Age key | `WARDYN_AGE_KEY` in `deploy/compose/.env` | the X25519 identity the `local` key-encryption key is derived from — the key that wraps every stored secret's data key | every secret in Postgres becomes undecryptable ciphertext |
-| User drives | one object per person, per drive, on a deployment that registered one — a Docker volume or a PVC, both named `wardyn-drive-<drive-slug>-<home>`, or a subdirectory of the share YOU mounted (`host_path` — `<host_root>/<home>`) | each person's own files, written by their own runs at `/home/agent/drive`. Postgres holds the drive rows and the allocations, never the bytes, so `pg_dump` never carried this | that person's work; nothing reconstructs it |
+| User drives | one object per person, per drive, on a deployment that registered one — a Docker volume or a PVC, both named `wardyn-drive-<drive-slug>-<home>`, or a subdirectory of the share YOU mounted (`host_path` — `<host_root>/<home>`), or a person's disk drive, a disk image on the Mac it is kept on (`wardyn-drive-<drive-id-hex>-<home>`, with `.img` added, in `macos-vm.noindex/drives/` under the runner login's `Application Support/Wardyn`) | each person's own files, written by their own runs at `/home/agent/drive`. Postgres holds the drive rows and the allocations, never the bytes, so `pg_dump` never carried this | that person's work; nothing reconstructs it |
 | Audit fallback | `WARDYN_AUDIT_SPOOL` and its `.consumed` / `.quarantine` sidecars; Compose mounts their directory on `<project>_audit` | pending failed-Postgres writes, their replay cursor, and permanently refused events | audit events absent from the database backup |
 
 - `postgres_data`, `registry_data` and `audit` carry no explicit `name:` in
@@ -107,8 +108,8 @@ copy is permanent.
   - A run on a runner that keeps a tail (Docker, on a laptop or on this deployment) reads `source: "stdout"`.
   - A recorded run on a Kubernetes runner under the session recorder, this deployment's or an organisation's, reads
     `source: "recording"`.
-  - A run that is not recorded (`not_recorded` set) reads its tail, unless its runner predates per-run recording and
-    records it anyway.
+  - A run not recorded (`not_recorded` set; macOS VMs are) reads its tail, unless a runner older than per-run recording
+    records anyway.
   - When the run's own runner cannot be asked (offline, or connected to another replica), this deployment's runner
     answers: a recorded run keeps the recording path, and a run that is not recorded keeps its tail.
   - A pooled run asks the substrate its pool named.
@@ -750,6 +751,11 @@ commands are the ones in "Back them up" and "Restore them", and in
   - The spool replays at least once for this reason (a crash between the store write and the trim).
   - This widens that window in exchange for not fsyncing the whole backlog once per batch onto the volume the database
     is recovering on.
+
+- A runner's event the organisation can never accept is acknowledged only after its `runner.event.refuse` row commits,
+  so the runner stops resending it and nothing it sent is dropped without a row; a refused action result also closes
+  its action as `refused`; at most 32 such rows an hour are written per runner on one replica before one `suppressed`
+  row stands for the rest.
 
 ### The hash chain — what a rewritten row looks like
 
@@ -1443,7 +1449,7 @@ erases one person's retained records by explicit scope, in one audited act
 |---|---|
 | Suspend | Completed first, if it is not already |
 | Erase | Credentials, masking copies, components, run setups and runner pools: see [Erase](#erase) |
-| Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, audited as `workspace.reassign`; `keep` leaves them |
+| Workspaces | With `WARDYN_SCIM_LEAVER_WORKSPACES` set to `reassign` (the default), each workspace the person owns goes to the operator, renamed when the operator already has one of that name, and audited as `workspace.reassign`; `keep` leaves them. A step that cannot finish keeps the purge pending, and the sweeper retries it |
 | Grants | User-subject grants and governance assignments: see [Grants](#grants) |
 | Runners | Revoked with their unused registration tokens (`DELETE /runners/...`). Their name is cleared as the revoker of any runner and as the minter of a token made for someone else |
 | Invitations, service identities | Invitations to the person deleted, their name cleared from the rest. A service identity they still sponsor keeps the purge pending until handed over (`PATCH /service-identities/{name}`) or retired |
@@ -1866,6 +1872,13 @@ enforces, not a re-derivation:
   record existed can only say the policy was updated after launch, which a rename
   alone also does.
 
+**Host marks.** `host_marks` marks each allowed host from the proxy config the runner was sent, after secret placeholders and placement, and `terminated` lists every host that proxy terminates once admitted. Hosts it opens on a port no entry names (under allow-all, all of them) are listed too, marked Inspected (`outside`): admitted, or held for first-use approval.
+
+| Mark | Meaning |
+|---|---|
+| Inspected | Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate. |
+| Tunnel only | Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here. |
+
 **Who can read it.**
 
 - Whoever can read the run (`GET /runs/{id}`): its creator or an admin.
@@ -2114,6 +2127,7 @@ predates it.
 - Every control a source or workspace can carry — a secret by name, an egress host, write access to a directory, a named integration — is a row with ONE axis.
 - **Required** rides along with every run that attaches the workspace, **Optional** is a per-run opt-in.
 - `PUT /api/v1/workspaces/{id}/requirements` writes the workspace's own overlay rows (`handleSetWorkspaceRequirements`, [`internal/api/workspace_requirements.go`](../internal/api/workspace_requirements.go)); the workspace detail page is the surface that writes them.
+  - A `write:<path>` key is checked against the server's own files. For a folder on a person's runner, use the source's `--writable` instead: such a key can be refused ([A workspace folder on your runner](operations/hybrid-laptops.md#a-workspace-folder-on-your-runner)).
 - Launch and preflight both read `effectiveRequirements(ws)` — the same fold — so Review can never predict something launch won't do.
 - A `scan_seeded` requirement can never auto-grant a secret on its own: the scanner reads untrusted repo content, so only an operator's direct declaration attaches a credential (the fail-closed provenance rule above).
 
@@ -2755,7 +2769,7 @@ The residuals an operator should plan for:
   - Take the SSO hosts out of the profile's `denied_domains` rather than widening `allowed_domains`.
 - **Launch with a lapsed session.**
   - `POST /runs` refuses a run whose own session for the chosen provider is missing, or expired with no refresh token that could renew it, BEFORE any run exists (`422`, with `"reason":"model_credential"`).
-  - Neither Review nor create spends a one-use refresh token; dispatch renews an expired session whose refresh token still lives, and a renewal AWS refuses fails the run naming AWS's answer and opens the sign-in door (0.9.1).
+  - Review's preflight and create renew an expired session whose refresh token still lives, the same way, so both give the same answer. The policy preview never does, nor does a run that waits in a pool's queue. A renewal AWS refuses refuses the run, naming AWS's answer, and opens the sign-in door.
   - Launch is never pre-checked on the console's cached status — the server is the gate.
 - **What the sign-in sandbox is, and what it is not.**
   - It is the AWS CLI and nothing else: no LLM harness, no repo, no mounts.
@@ -2979,6 +2993,15 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 
 > [!WARNING]
 > Residual: a run whose teardown failed after it reached a terminal state is not counted, though its pods may still exist; `POST /admin/sandboxes/sweep` reaps those.
+
+### A runner's run whose sandbox is gone
+
+- A registered runner reports each run's sandbox when it connects, and while it stays connected the server checks each running run's sandbox every few seconds. When two of these reports, at least 30 seconds apart with none between that found it there, find a `RUNNING` run's sandbox gone with no exit code (its container removed, its pod lost, its macOS VM stopped or the Mac restarted), the run is ended `FAILED`, lost with reason `gone`. Its slot frees at once, and a runner held back on connecting comes back online.
+- With several server replicas, only the one holding the runner's connection can check its runs, so a run there may take a few minutes longer to end.
+- A runner with macOS VMs turned off reports its macOS VM runs as unknown, not gone, both on connecting and to the server's checks, and they are not ended. Reviving one lost to an outage answers `revive_agent_status_unreadable` until macOS VMs are back on.
+
+> [!WARNING]
+> Accepted: a runner started against a different Docker daemon than the one holding its sandboxes (another `DOCKER_HOST`) finds every sandbox gone, and its running runs end `FAILED`. No setting turns this off.
 
 ### Docker host: one subnet per run
 
@@ -3224,7 +3247,7 @@ Naming these is the point of the walk, not a caveat on it:
 - The proxy's own resolve renews too, but only when the sandbox asks; the renewer covers a run that is quiet through the window.
 - So the hold is for a session that could not be renewed: its refresh token was refused or is gone, or AWS failed until it expired.
 - A refused refresh token is remembered in `aws_sso_refused_tokens` (migration `0194_aws_sso_refused_tokens`), so every replica grades it alike until a sign-in or a renewal replaces it.
-- Each renewal writes one `harness.credential.refresh` row; the renewer's carry `trigger: renewer`, and its passes are the `aws_sso_renewal` sweep in [sweep health](operations/monitoring.md#substrate-and-sweep-health).
+- Each renewal writes one `harness.credential.refresh` row; the renewer's carry `trigger: renewer`, and Review's carry `trigger: preflight`. The renewer's passes are the `aws_sso_renewal` sweep in [sweep health](operations/monitoring.md#substrate-and-sweep-health).
 - It skips a paused, lost or revoked run; the proxy's own resolve still renews for any run it serves.
 
 **What the operator sees.**
@@ -4049,11 +4072,23 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0222` (`0222_agent_runs_model_allowlists`) adds `model_allowlists` to `agent_runs` (`0001`'s table): the model allowlist each local model provider handed the run's proxy at its latest dispatch.
 - `0223` (`0223_governance_boundary_seed`) adds `governance_boundary.seeded_at` and the boundary's one row in `no_limits`, so an upgrade keeps its boundary as it was. Only a fresh install's first boot then moves that row to `hard_limits` with floor `CC1` and nothing listed, which reaches what `no_limits` does, and writes `governance.boundary.seed`.
 - `0224` (`0224_approval_rules`) creates `approval_rules`, the security tier's approval rules ([approval-rules.md](operations/approval-rules.md)); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `approval_rules`.
-- `0225` (`0225_user_drives_second_place`) adds `alt_backend`, `alt_host_root` and `alt_runner_id` to `user_drives` (`0054`'s table; the runner references `runners`): a share's second place, the same share as one person's own runner sees it. All three are NULL on every existing drive, which mounts exactly as before. Before you upgrade: a drive becomes reachable on a person's own runner only once an admin binds it to that runner and the runner's owner starts `wardyn-runnerd` with a `--drive-root` covering the path; nothing else changes reach.
+- `0225` (`0225_user_drives_second_place`) adds `alt_backend`, `alt_host_root` and `alt_runner_id` to `user_drives` (`0054`'s table; the runner references `runners`): a share's second place, the same share as one person's own runner sees it. All three are NULL on every existing drive, which mounts exactly as before. Before you upgrade: a drive becomes reachable on a person's own runner only once an admin binds it to that runner and the runner's owner runs `wardyn-runnerd setup --drive-root <dir>` covering it; nothing else changes reach.
 - `0226` (`0226_governance_change_tree_ops`) admits held-change ops `move` and `promote`; no row or grant changes.
 - `0227` (`0227_governance_restrictions`): a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_restrictions` and `governance_restriction_members`.
 - `0228` (`0228_governance_unit_admins`) creates `governance_unit_admins` (the people and IdP groups who administer a unit and the units below it) and adds `locked_knobs` to `governance_units` and `governance_boundary` (a constant-default array, so no row is rewritten); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `governance_unit_admins`.
 - `0229` (`0229_oidc_session_sids`) creates `oidc_session_sids`, the identity provider's `sid` of each sign-in while `WARDYN_OIDC_FRONTCHANNEL_LOGOUT` is on; a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `oidc_session_sids`.
+- `0231` (`0231_desktop_vm_pause_generation`) adds `pause_generation` to `desktop_vm_sign_ins` (`0230`'s table): the count of a VM run's sign-in pauses, which orders each stop and continue in its guest. A constant default, so no row is rewritten and no grant changes.
+- `0234` (`0234_macos_vm_kind`) admits `macos_vm` in `agent_runs.machine_kind`'s CHECK (`0001`'s table) and `run_disk` in `desktop_vm_sign_ins.store`'s CHECK; no row or grant changes.
+- `0235` (`0235_run_sandbox_absent_at`) adds `agent_runs.sandbox_absent_at` (`0001`'s table): when a runner first reported a RUNNING run's sandbox absent with no exit code, on connecting or to a status check. A later report that it is still absent, at least 30 seconds on, ends the run lost (`gone`) and `FAILED`. No row or grant changes.
+- `0236` (`0236_macos_vm_disks`) creates `macos_vm_disks`, one row per macOS VM run whose runner reported what became of its disk on the Mac; a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `macos_vm_disks`. It also appends the `ssh` tile to each saved non-empty `finished` row of `ui_run_layouts` (`0037`'s table) that lacks one; no grant changes for that.
+- `0237` (`0237_base_image_prewrapped`) admits `prewrapped` in `base_images.kind`'s CHECK (`0031`'s table) and adds the registration check's columns (`check_status`, `check_attempt`, `check_deadline`, `check_reason`, `accepted_arches`, `checked_at`), NULL or empty on every existing row; no row or grant changes.
+- `0238` (`0238_run_image_arches`) adds `agent_runs.image_arches` (`0001`'s table): the architectures a run's pre-wrapped image was checked on, which place the run. NULL on every existing row; no grant changes.
+- `0239` (`0239_inbound`) adds the restricted `feature` value `inbound` to `capability_restrictions` (so nobody may declare an inbound app until an admin allows it), admits `inbound` in `api_tokens.kind`'s CHECK (`0199`'s column), and adds `caller` and `app` to `attach_tickets` (`0026`'s table), empty on every existing ticket; no row or grant changes.
+- `0240` (`0240_run_service`) adds `agent_runs.service` and `agent_runs.service_status` (`0001`'s table): a service run's frozen spec and its last health. NULL on every existing row; no grant changes.
+- `0241` (`0241_workloads`) creates `workloads` (a named run request Wardyn keeps running, and the run it started) and `workload_bindings` (a Kubernetes namespace on a runner pool bound to a service identity); a split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on both.
+- `0242` (`0242_runner_pool_member_namespace`) adds `runner_pool_members.runs_namespace` (`0152`'s table): the Kubernetes namespace an organization runner serves a pool in, empty (the runner's default) on every existing row; no grant changes.
+- `0245` (`0245_run_shape`) adds `agent_runs.shape` (`0001`'s table): the New Run shape a run was set up from, empty on every existing row; no grant changes.
+- `0247` (`0247_sources_runner_id`) adds `sources.runner_id` (`0031`'s table): the runner a library folder is bound to, part of its identity, NULL on every existing row; no grant changes.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4814,6 +4849,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 - The folder mounts at `/home/agent/shared/<name-slug>`, read-only unless the allocation says `members_can_write`. A run asking to write a read-only one is refused.
 - Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-<home>` (`id` scheme; under `slug` the drive's name-slug stands in for the id, see `object_scheme`) with that home. `POST /api/v1/drives/preview` for any group member prints it.
 - People outside the allocated groups never get the mount.
+- A team drive in a host folder also mounts in a macOS VM, shared at the same `/Users/agent/shared/<name-slug>`, read-only as allocated; a runner that predates drives refuses the run at create.
 - `GET /api/v1/me/drives` marks the row `team: true` and lists in `shared_with` the caller's own groups that carry the allocation, never anyone else's.
 - Every run's mount writes `run.drive.mount` with `team: true` and `mounted_by`, the person whose run mounted it.
 
@@ -5302,6 +5338,13 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
   - a driver that takes no size option (`vfs`, `fuse-overlayfs`) runs the request UNCAPPED with a warning,
   - while overlay2 over a non-xfs backing filesystem is handed the option anyway and the daemon REFUSES the create, so that run fails closed instead.
 
+### Pre-wrapped images
+
+- A Kubernetes control plane has no image builder, so an image it runs must already carry Wardyn's runner tools.
+- Build one `FROM` agent-base, pin it by digest and add it under Images; the control plane checks it on the cluster
+  before offering it. The recipe and what the check proves are in
+  [deploy/images/README.md](../deploy/images/README.md#pre-wrapped-image).
+
 ## High availability
 
 - `ha.enabled` runs two or more wardynd replicas on Kubernetes so that the loss of a
@@ -5314,6 +5357,7 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
   is **not zero-downtime upgrades**.
 - The Deployment strategy stays `Recreate`, so an
   upgrade stops the old replicas before it starts the new ones.
+- With registered runners keep one replica: [High availability: what a second replica still hits](operations/high-availability.md).
 
 ### Turning it on
 

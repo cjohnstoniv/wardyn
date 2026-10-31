@@ -278,7 +278,23 @@ type Proxy struct {
 	channelHosts map[string]string
 
 	now func() time.Time
+
+	// openTunnels counts the run's opaque tunnels (openTunnel) from before the
+	// dial to the tunnel's end; maxTunnels bounds it (maxOpenTunnels; tests lower it).
+	openTunnels atomic.Int32
+	maxTunnels  int32
 }
+
+// maxOpenTunnels is the most opaque CONNECT tunnels a run's proxy holds at once,
+// failed and pending dials included: the desktop VM relay's maxOpaqueTunnels
+// (internal/vmnet/relay.go), so both egress paths bound a run the same way. A
+// tunnel past it is refused with ruleSourceTunnelLimit and a retry hint; it
+// never evicts an established one. Intercepted (MITM) tunnels are not counted,
+// nor a relay flow resumed from its ask, which already holds the relay's slot.
+const maxOpenTunnels = 1024
+
+// ruleSourceTunnelLimit is the deny reason for a tunnel past maxOpenTunnels.
+const ruleSourceTunnelLimit = "builtin:tunnel-limit"
 
 // llmUpstream is one configured internal-gateway target: the bare host, port
 // (443 when the base URL carried none), and path prefix (empty when the base
@@ -321,17 +337,11 @@ func newProxy(opts Options) *Proxy {
 	if evaluator == nil {
 		evaluator = builtinEvaluator{p: opts.Policy} // default: builtin RunPolicySpec verdict
 	}
-	mitmHosts, mitmPorts, mitmPlaintext := compileMITMHosts(opts.MITMHosts)
 	gitGrants := canonicalGitGrants(opts.GitGrants)
 	// Same canonicalisation as the repo keys above: a host is matched
 	// case-insensitively, so the map key is lowercased once here rather than at
 	// every lookup.
-	patGrants := make(map[string]PATGrant, len(opts.PATGrants))
-	for k, g := range opts.PATGrants {
-		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && g.GrantID != uuid.Nil {
-			patGrants[k] = g
-		}
-	}
+	patGrants := canonicalPATGrants(opts.PATGrants)
 	internalHosts := compileInternalHosts(opts.InternalHosts)
 	// Compile the LLM-gateway table + its reverse lookup. LLMUpstreams is
 	// already validated (api.ValidateLLMGateways at boot, applyDefaultsAndValidate
@@ -356,9 +366,7 @@ func newProxy(opts Options) *Proxy {
 		llmUpstreams[vendor] = llmUpstream{host: host, port: port, prefix: strings.TrimSuffix(u.Path, "/")}
 		gatewayVendor[hostKey(host)] = vendor
 	}
-	// A git_pat grant with api: true terminates its own host on 443 and nothing else, so the
-	// forge API is reached only through the door. An entry the operator already authored keeps its own scope.
-	patAPI := newPATAPIGrants(patGrants, mitmHosts, mitmPorts)
+	mitm := buildMITMTables(opts.MITMHosts, patGrants, opts.GitHubAPI, opts.AzureARM, opts.AWSSigV4, opts.KubeAPI)
 	p := &Proxy{
 		runID:                opts.RunID,
 		policy:               opts.Policy,
@@ -369,20 +377,20 @@ func newProxy(opts Options) *Proxy {
 		res:                  res,
 		scanner:              opts.Scanner,
 		ca:                   opts.CA,
-		mitmHosts:            mitmHosts,
-		mitmPorts:            mitmPorts,
-		mitmPlaintext:        mitmPlaintext,
+		mitmHosts:            mitm.hosts,
+		mitmPorts:            mitm.ports,
+		mitmPlaintext:        mitm.plaintext,
 		mitmLLM:              opts.MITMLLM,
 		gitGrants:            gitGrants,
 		patGrants:            patGrants,
 		brokeredPATGrantIDs:  opts.BrokeredPATGrantIDs,
 		adoGrants:            opts.ADOGrants,
 		azure:                newAzureGates(opts.AzureGates),
-		patAPI:               patAPI,
-		ghAPI:                newGitHubAPIDoor(opts.GitHubAPI, mitmHosts, mitmPorts),
-		arm:                  newAzureARMDoor(opts.AzureARM, mitmHosts, mitmPorts),
-		sigv4:                newAWSSigV4Door(opts.AWSSigV4, mitmHosts, mitmPorts),
-		kube:                 newKubeAPIDoor(opts.KubeAPI, mitmHosts, mitmPorts),
+		patAPI:               mitm.patAPI,
+		ghAPI:                mitm.ghAPI,
+		arm:                  mitm.arm,
+		sigv4:                mitm.sigv4,
+		kube:                 mitm.kube,
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      controlPlaneEndpoint(opts.ControlPlaneURL, ""),
 		runToken:             opts.RunToken,
@@ -405,6 +413,7 @@ func newProxy(opts Options) *Proxy {
 		dial:                 dial,
 		now:                  now,
 		viaOrgRoutes:         opts.ViaOrgRoutes,
+		maxTunnels:           maxOpenTunnels,
 	}
 	if l := policyref.Layered(opts.Attribution); p.sink != nil && l != nil && l.Layer != "" {
 		p.sink.layer = l.Layer
@@ -619,15 +628,15 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		return egress.Deny, "", &log
 	}
 
-	// 1. Policy host verdict (deny beats allow, default-deny) — delegated to the
-	// pluggable Evaluator (default: builtin RunPolicySpec). An evaluator error
-	// fails closed. The IP guard (step 0), first-use approval (step 2), and IP
-	// vetting (step 4) stay HARDWIRED around this verdict regardless of engine.
-	verdict, verr := p.evaluator.EvaluateHost(ctx, req)
-	if verr != nil {
-		log := decisionLog(req, egress.Deny, "policy:evaluator-error")
+	// 1-2. The part of the decision the config alone makes (connect_gate.go): the policy host verdict,
+	// the port rule and the method restriction, in that order. The IP guard (step 0), first-use approval
+	// (step 3), and IP vetting (step 4) stay HARDWIRED around it regardless of engine.
+	gate := gateConnect(ctx, req, p.evaluator, p.policy, p.portRule)
+	if gate.refusal != "" {
+		log := decisionLog(req, egress.Deny, gate.refusal)
 		return egress.Deny, "", &log
 	}
+	verdict, portDryRun := gate.verdict, gate.portDryRun
 	// approvalID records whether (and via which approval) this request's verdict
 	// was RELEASED by the first-use approval flow, so the eventual Allow decision
 	// below can attribute to "approval:<id>" instead of "policy:allowed" — a
@@ -636,48 +645,6 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// who approved the egress. Zero == this request never went
 	// through approval (a direct policy allow).
 	var approvalID uuid.UUID
-
-	if verdict == egress.VerdictDeny {
-		log := decisionLog(req, egress.Deny, "policy:denied")
-		return egress.Deny, "", &log
-	}
-	// The port rule (port_rule.go) sits below policy:denied and above the method
-	// check and the approval raise: an approval is host-wide and never opens a
-	// port, so asking for one the rule refuses is a question the answer cannot
-	// change.
-	portDryRun := false
-	if p.portRuleRefuses(host, port) {
-		if p.portRule == PortRuleOn {
-			log := decisionLog(req, egress.Deny, ruleSourcePort)
-			return egress.Deny, "", &log
-		}
-		portDryRun = true
-	}
-
-	// 2. Method restriction (CONNECT counts as method "CONNECT"), applied BEFORE
-	// the first-use approval flow below.
-	//
-	// The method check runs BEFORE the first-use approval raise because it
-	// depends on nothing the approval produces, so refusing first is free. If it
-	// ran after the raise, a request whose method can NEVER pass —
-	// allowed_methods=["GET"] and the sandbox sends POST — would still POST an
-	// egress_domain ApprovalRequest to the control plane, and under
-	// wait_for_review would PARK the connection in ResolveWait until a human
-	// answered or the hold deadline passed: a human asked to decide egress for a
-	// request the very next step refuses unconditionally. Since the SANDBOX picks
-	// the method, it also picks how many approval rows and hold slots it can
-	// create — N POSTs to N unknown hosts under a GET-only policy would fill the
-	// operator's queue and saturate max_holds, stalling the run's legitimate
-	// first-use approvals. Running the check first also stops a method-denied
-	// request from SPENDING a scope=once grant (the trade-off approvals.go
-	// documents for the already-granted half of this ordering).
-	//
-	// Order against policy:denied is unchanged: a host the policy denies outright
-	// still logs policy:denied, never policy:method.
-	if !p.evaluator.MethodAllowed(req.Method) {
-		log := decisionLog(req, egress.Deny, "policy:method")
-		return egress.Deny, "", &log
-	}
 
 	// B6, and it sits HERE — above the first-use approval flow, below
 	// policy:denied/policy:method — for the reason privateIPMemoHit's own doc
@@ -832,7 +799,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// stage resumes the decision the ask parked, so one flow is decided, held
 	// and dialled once.
 	flow, stage := p.vmnetStage(r)
-	decision, target, log := p.decideConnect(r.Context(), flow, stage, host, port)
+	decision, target, log, resumed := p.decideConnect(r.Context(), flow, stage, host, port)
 	// Deny/Pending are emitted now. The ALLOW decision is deferred until the
 	// tunnel is actually established (E3): emitting it before the dial would
 	// over-report an allow when the dial then fails.
@@ -849,7 +816,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if log != nil {
 			p.sink.emit(*log)
 		}
-		setEgressRefusalHeaders(w, egressRefusalPending, host)
+		setEgressRefusalHeadersWithReason(w, egressRefusalPending, host, decisionReason(log))
 		writeApprovalPending(w, log)
 		return
 	}
@@ -912,17 +879,37 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			p.emitLLMBlindOnce(host, port, http.MethodConnect)
 		}
 	}
-	p.openTunnel(w, r, host, port, target, log, p.countActivity)
+	p.openTunnel(w, r, host, port, target, log, p.countActivity, resumed)
 }
 
 // openTunnel dials an allowed CONNECT's destination and pipes the client leg
 // to it opaquely. count wraps the client leg (the activity counter on the
-// agent's listener; the sign-in lane passes none).
-func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, port int, target string, log *egress.DecisionLog, count func(net.Conn) net.Conn) {
+// agent's listener; the sign-in lane passes none). relayed is a relay flow
+// resumed from its ask (decideConnect), never the stage header alone.
+func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, port int, target string, log *egress.DecisionLog, count func(net.Conn) net.Conn, relayed bool) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking unsupported", http.StatusInternalServerError)
 		return
+	}
+	// The slot is taken before the dial and given back on every return, which a
+	// tunnel reaches once either leg ends (a shutdown that closes it included).
+	// A relayed flow takes none: the relay counted it before its ask.
+	if !relayed {
+		if p.openTunnels.Add(1) > p.maxTunnels {
+			p.openTunnels.Add(-1)
+			if log != nil {
+				p.sink.emit(decisionLog(log.Request, egress.Deny, ruleSourceTunnelLimit))
+			}
+			// Temporary, so not X-Wardyn-Egress: denied: a retry succeeds once a tunnel closes.
+			w.Header().Set(egressHeaderReason, ruleSourceTunnelLimit)
+			w.Header().Set(egressHeaderHost, host)
+			w.Header().Set("Retry-After", "1")
+			w.Header().Set("X-Should-Retry", "true")
+			http.Error(w, "wardyn: the run holds the most open tunnels it may; retry once one closes", http.StatusServiceUnavailable)
+			return
+		}
+		defer p.openTunnels.Add(-1)
 	}
 
 	// Dial the destination: through the corp proxy (CONNECT <real-host>) when an
@@ -979,4 +966,16 @@ func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, 
 	}
 	first, err := tunnel(client, watch)
 	p.tunnelEnded(log, host, watch, first, err)
+}
+
+// canonicalPATGrants keys the git_pat grants by lower-cased host and drops an entry with no
+// host or no grant id. The proxy and Config.TerminatesTLS read the same set.
+func canonicalPATGrants(in map[string]PATGrant) map[string]PATGrant {
+	out := make(map[string]PATGrant, len(in))
+	for k, g := range in {
+		if k = strings.ToLower(strings.TrimSpace(k)); k != "" && g.GrantID != uuid.Nil {
+			out[k] = g
+		}
+	}
+	return out
 }

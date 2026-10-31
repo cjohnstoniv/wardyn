@@ -685,11 +685,12 @@ func runRepos(run types.AgentRun, cfg *proxy.Config) []string {
 // extendRefusal re-checks the owner's authority before a run's end moves
 // later or is removed: extending keeps a sandbox and its credentials alive,
 // so it needs the authority a revive needs, less the proxy rebuild (the
-// profile's deny_placements included). The
+// profile's deny_placements and allowed_macos_bases included). The
 // repos come from the run's stored proxy config where there is one
 // (run_proxy_config.go); a run without one leaves the legacy repo field alone.
-func (s *Server) extendRefusal(r *http.Request, run types.AgentRun) *ownerRefusal {
-	ctx := r.Context()
+// callerIsOwner is ownerCapabilityRefusal's: false for a renewal wardynd makes
+// itself, which knows the owner only by the run row.
+func (s *Server) extendRefusal(ctx context.Context, run types.AgentRun, callerIsOwner bool) *ownerRefusal {
 	prof, ref := s.ownerUnit(ctx, run)
 	if ref != nil {
 		return ref
@@ -698,6 +699,9 @@ func (s *Server) extendRefusal(r *http.Request, run types.AgentRun) *ownerRefusa
 		if p, denied := deniedRunPlacement(run, prof.Limits.DenyPlacements); denied {
 			return &ownerRefusal{status: placement.ReasonPlacementDenied.Status(), reason: string(placement.ReasonPlacementDenied),
 				msg: placementDeniedMsg(p, prof.Name)}
+		}
+		if msg := macOSBaseDeniedMsg(run, prof.Name, [][]string{prof.Limits.AllowedMacOSBases}); msg != "" {
+			return &ownerRefusal{status: placement.ReasonPlacementDenied.Status(), reason: string(placement.ReasonPlacementDenied), msg: msg}
 		}
 	}
 	var cfg *proxy.Config
@@ -713,7 +717,7 @@ func (s *Server) extendRefusal(r *http.Request, run types.AgentRun) *ownerRefusa
 				msg: "the run's proxy config does not load: " + err.Error()}
 		}
 	}
-	ref, err = s.ownerCapabilityRefusal(ctx, run, principalFromRequest(r) == run.CreatedBy, runRepos(run, cfg))
+	ref, err = s.ownerCapabilityRefusal(ctx, run, callerIsOwner, runRepos(run, cfg))
 	if err == nil && ref == nil {
 		ref, err = s.modelProviderRefusal(ctx, run)
 	}

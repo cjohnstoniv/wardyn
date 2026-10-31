@@ -32,6 +32,8 @@ var isOperatorCensus = map[string]int{
 	"helpers.go:ownsWorkspaceOrAdmin":     1,
 	"helpers.go:ownsRunOrSuperAdmin":      1,
 	"helpers.go:workspaceReadTierFor":     1,
+	"workloads.go:workloadReadTier":       1, // an operator reads another owner's workload in full, as workspaceReadTierFor reads a workspace
+	"workloads.go:workloadOwnerOf":        1, // reach: an operator restarts another owner's workload (launches); the launch is the owner's own run create
 	"attach_ticket.go:handleAttachTicket": 1, // the ticket's reach stamp; its reach is admitRunEntry's
 	"desktop_files.go:desktopRun":         1, // the entry rule (mayEnterRun) and the deny_ui_apps skip, as the ticket's
 	"attach.go:refuseAttachEntry":         1,
@@ -47,6 +49,10 @@ var isOperatorCensus = map[string]int{
 	// keyed on the role the ticket it leads to is stamped with (refuseAttachEntry's ticket
 	// lane); the governed-admin answer is adminDoorExempt's, as there.
 	"approvals_takeover.go:loadTakeover": 1,
+	// Base images (design final §3): the security tier writes prewrapped rows only, and a delete
+	// authorizes the stored kind (and force) before naming any workspace.
+	"base_images.go:mayWriteBaseImageKind": 1,
+	"base_images.go:handleDeleteBaseImage": 1,
 	// Reach: organisation templates are written with the effective role, so the
 	// User view publishes to the organisation as the member it is.
 	"template_list.go:templateCallerOf": 1,

@@ -114,6 +114,16 @@ describe("RunDetailScreen Approvals tab — a request the server refuses the vie
     expect(within(region).getByText(DENIED.APPROVE_BODY("registry.example.test"))).toBeInTheDocument();
   });
 
+  // The run owner's own walls deny the host: the same walls_block card the Approvals page draws.
+  it("a personal_walls_host refusal turns Approve off, keeps Deny, and says whose walls block the host", async () => {
+    approveMock.mockRejectedValueOnce(new HttpError(403, "the owner's walls deny registry.example.test", "personal_walls_host"));
+    const region = await decideFromTab();
+    expect(within(region).getByRole("button", { name: /^approve$/i })).toBeDisabled();
+    expect(within(region).getByRole("button", { name: /^deny$/i })).not.toBeDisabled();
+    expect(await within(region).findByTestId("approval-walls-block")).toHaveTextContent("registry.example.test");
+    expect(within(region).queryByText(DENIED.APPROVE_CHIP)).not.toBeInTheDocument();
+  });
+
   // A 403 with another reason (the Always scope is admin-only) must not read as the host being withheld.
   it.each([
     [409, "approval_not_pending"],

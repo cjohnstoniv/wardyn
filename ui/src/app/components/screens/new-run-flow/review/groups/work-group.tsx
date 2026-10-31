@@ -8,6 +8,7 @@ import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { RunAttachment } from "../../../../../lib/types/new-run-contract";
+import { guestPath } from "../../steps/files/file-items";
 import { mainDriveMiB } from "../../lenses/files-lens";
 import { sizeWords } from "../../steps/files/size-words";
 import { readMainDrive, type FilesPreflight } from "../../steps/files/files-seams";
@@ -25,12 +26,12 @@ const ENFORCEMENT: Record<MainDriveEnforcement, string | undefined> = {
 
 const FILE_PATHS = ["workspaces", "drive", "drives", "start_folder", "no_repositories_or_drives", "keep_work_folder", "resources.disk_mib"];
 
-export function AttachmentRow({ a, refNotChecked }: { a: RunAttachment; /** The ref was typed, not picked from a listed response (#2107). */ refNotChecked?: boolean }) {
+export function AttachmentRow({ a, refNotChecked, macOS = false }: { a: RunAttachment; /** The ref was typed, not picked from a listed response (#2107). */ refNotChecked?: boolean; /** A macOS VM run: the path reads as its guest has it, on screen only. */ macOS?: boolean }) {
   return (
     <div>
       <div className="grid min-w-0 grid-cols-[minmax(110px,1fr)_minmax(140px,1.2fr)_auto] items-center gap-2 text-sm max-[520px]:grid-cols-1 max-[520px]:items-start">
         <strong className="font-medium">{a.name}</strong>
-        <code className="font-mono text-xs break-all text-muted-foreground">{a.target}</code>
+        <code className="font-mono text-xs break-all text-muted-foreground">{guestPath(a.target, macOS)}</code>
         <span className="flex flex-wrap justify-end gap-1.5 max-[520px]:justify-start">
           {a.ref && <Chip>{a.ref}</Chip>}
           <Chip>{a.read_only ? NR_FILES.ACCESS_READ : NR_FILES.ACCESS_EDIT}</Chip>
@@ -85,6 +86,7 @@ export function WorkGroup({ draft, pre, preview, docRows, go }: GroupProps) {
             <AttachmentRow
               key={`${a.kind}:${a.workspace_id ?? a.drive_id ?? a.name}:${a.repo ?? ""}`}
               a={a}
+              macOS={intent.machine_kind === "macos_vm"}
               refNotChecked={a.kind === "repository" && isTypedRef(draft.guided, intent, a.workspace_id, a.repo)}
             />
           ))}

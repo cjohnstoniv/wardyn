@@ -911,9 +911,11 @@ describe("PermissionsScreen, who may register a runner of their own", () => {
       value: "self_host_runner",
     });
 
+  const selfHost = () => screen.findByTestId("self-host-runner-row");
+
   it("on a fresh install nobody is granted and the switch is off", async () => {
     renderScreen();
-    expect(await screen.findByText("By grant only")).toBeInTheDocument();
+    expect(await within(await selfHost()).findByText("By grant only")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: SWITCH })).not.toBeChecked();
   });
 
@@ -931,7 +933,7 @@ describe("PermissionsScreen, who may register a runner of their own", () => {
         effect: "allow",
       }),
     );
-    expect(await screen.findByText("Granted to everyone")).toBeInTheDocument();
+    expect(await within(await selfHost()).findByText("Granted to everyone")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: SWITCH })).toBeChecked();
   });
 
@@ -940,16 +942,16 @@ describe("PermissionsScreen, who may register a runner of their own", () => {
     deleteGrantMock.mockResolvedValue(undefined);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
-    expect(await screen.findByText("Granted to everyone")).toBeInTheDocument();
+    expect(await within(await selfHost()).findByText("Granted to everyone")).toBeInTheDocument();
     await user.click(screen.getByRole("switch", { name: SWITCH }));
     await waitFor(() => expect(deleteGrantMock).toHaveBeenCalledWith("55555555-5555-5555-5555-555555555555"));
-    expect(await screen.findByText("By grant only")).toBeInTheDocument();
+    expect(await within(await selfHost()).findByText("By grant only")).toBeInTheDocument();
     expect(screen.getByText("*.github.com")).toBeInTheDocument();
   });
 
   it("an allow for one person is not an allow for everyone", async () => {
     getPermissionsMock.mockResolvedValue({ grants: [{ ...allowRow(), subject_type: "user", subject: "alice@corp.example" }], enforcement: {} });
     renderScreen();
-    expect(await screen.findByText("By grant only")).toBeInTheDocument();
+    expect(await within(await selfHost()).findByText("By grant only")).toBeInTheDocument();
   });
 });

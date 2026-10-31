@@ -135,12 +135,19 @@ func (s *Server) filterUserGrants(ctx context.Context, owner string, allowedDoma
 			// Admitted on ownership alone, the grant reads that row alone
 			// (owner_only): a row deleted after launch must not fall back to
 			// an operator secret of the same name the operator never paired.
-			if s.isModelProviderHost(host) && domainAllowedExact(allowedDomains, host) && s.ownsSecretMemoized(ctx, owner, secretRef) {
-				if !storedSecretPairingInCeiling(g, ceiling) {
-					g.OwnerOnly = true
+			// A store fault is the fixed retryable 503, never a dropped grant.
+			if s.isModelProviderHost(host) && domainAllowedExact(allowedDomains, host) {
+				own, oerr := s.ownsSecretChecked(ctx, owner, secretRef)
+				if oerr != nil {
+					return nil, nil, http.StatusServiceUnavailable, oerr
 				}
-				kept = append(kept, g)
-				continue
+				if own {
+					if !storedSecretPairingInCeiling(g, ceiling) {
+						g.OwnerOnly = true
+					}
+					kept = append(kept, g)
+					continue
+				}
 			}
 		}
 		// env_secret is ADMIN-ONLY by default, ahead of the pairing check — a
@@ -401,7 +408,11 @@ func (s *Server) validateRunSecretRefs(ctx context.Context, owner, subject strin
 		// only the row the mint reads. An operator-owned run's own row is the
 		// operator's, which the check below finds.
 		if n.ownerOnly && !operatorOwnedRequest(ctx) {
-			if !s.ownsSecretMemoized(ctx, subject, n.name) {
+			own, oerr := s.ownsSecretChecked(ctx, subject, n.name)
+			if oerr != nil {
+				return http.StatusServiceUnavailable, oerr
+			}
+			if !own {
 				return http.StatusUnprocessableEntity, fmt.Errorf(ownerOnlyMissingRefusal, n.kind, n.name)
 			}
 			continue
@@ -410,7 +421,15 @@ func (s *Server) validateRunSecretRefs(ctx context.Context, owner, subject strin
 		// accepted too — this is what lets a member's inline_policy name their
 		// own model key with no operator row of that name at all (6c). Never
 		// widens: an operator-only name still 422s below.
-		if !known[n.name] && !s.ownsSecretMemoized(ctx, owner, n.name) {
+		if known[n.name] {
+			continue
+		}
+		// A store fault is the fixed retryable 503: a held secret never reads as unknown.
+		own, oerr := s.ownsSecretChecked(ctx, owner, n.name)
+		if oerr != nil {
+			return http.StatusServiceUnavailable, oerr
+		}
+		if !own {
 			return http.StatusUnprocessableEntity, fmt.Errorf(
 				"%s grant references unknown secret %q (set it first via the secrets API)", n.kind, n.name)
 		}

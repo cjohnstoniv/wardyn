@@ -17,7 +17,7 @@ cd "$ROOT"
 
 DOCS=(README.md docs/README.md docs/DESKTOP.md ARCHITECTURE.md threatmodel/THREAT-MODEL.md docs/AZURE-DEVOPS.md
       docs/operations/monitoring.md docs/operations/run-lifetime.md
-      docs/operations/kubernetes-known-gaps.md docs/operations/secrets-and-keys.md
+      docs/operations/kubernetes-known-gaps.md docs/operations/secrets-and-keys.md docs/EXTENDING.md
       RELEASING.md)
 RENDER_DIR=""
 [ "${1:-}" = "--render-png" ] && RENDER_DIR="${2:?--render-png needs a dir}"
@@ -189,7 +189,7 @@ agent-run --idle	internal/runner/docker/driver_network.go	threatmodel/THREAT-MOD
 wardyn-proxy:	internal/runner/docker/driver_network.go	threatmodel/THREAT-MODEL.md
 HTTP_PROXY	internal/api/runs_dispatch_mounts.go	threatmodel/THREAT-MODEL.md
 # doc half only: the code half is pinned harder by TestRequiredTools_CanonicalUnion.
-agent-run-lib.sh	internal/envbuild/builder.go	docs/ENVBUILD.md
+agent-run-lib.sh	internal/types/workspace_contract.go	docs/ENVBUILD.md
 PROSE
 
 # ── style rules: a diagram nobody can read is worse than the table it replaced ─

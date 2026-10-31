@@ -236,14 +236,16 @@ test-race: cover-check ## Alias: race coverage now rides along inside the test-r
 # two-server exactly-once PAT mint, the leader and sweeper proofs) are named on the lines below; the
 # guard selects them with scripts/pg-test-select.sh, whatever they are called.
 test-race-pg: ## Race-detector pass over the Postgres-gated concurrency proofs (needs WARDYN_TEST_PG)
+# -timeout 30m, not go's 10m per-package default: internal/store's proofs alone take 6-7 minutes under
+# -race on a hosted runner, and a slow runner took them past 10 (a -timeout panic discards every verdict).
 	@echo "Running the Postgres-gated concurrency proofs under the race detector (requires WARDYN_TEST_PG)..."
-	go test -race -p 1 -count=1 -run 'TestPG_|TestGeneration_' ./internal/maskstore/... ./internal/secretmask/... ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
-	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)|TestPG_WriteBegunBeforeAnErase|TestPG_CreateWait_|TestPG_MaskErasure|TestRecordingOutputPG_|TestPG_TokenEventStreamOutlivesABrowserSignOutAndEndsOnARevoke|TestPG_ServiceTokenEventStreamEndsOnItsSponsorsRevokeUnderABackwardClockStep|TestPG_ServiceTokenMintBehindAnInFlightRevokeOfItsSponsorIsRefused|TestPG_GovernanceChanges_(RenameSeesAnAssignmentApprovedWhileItWaits|AssignmentWritesWaitForTheProfileGraph)|TestComponents_ConcurrentOrgMCPKeyCollisionSavesOne|TestHALivePG_|TestInvitation_ConcurrentClaimsMintOneToken|TestMaskManifest_Fence|TestMaskPipe_PG_AnAttachRelaysAtBandwidthNotAtTheReadRate|TestPGUploadRecording_|TestRelay_RecordingUploadReadDeadline|TestRunOutputPG_|TestRecoverRunOutputPG_|TestSCIM(GroupRemovalSweeperWaitsForAnAddInFlight|SweeperPurgesOnceAcrossInstances|OwedRefusalRowLandsOnceForTwoDrainers)|TestServiceIdentity_TokenCapHoldsInTheStore|TestViaOrg_|TestRunnerAdmissionPG_LossClaimHoldsNoRunnerLockWhileItWaitsForTheRun|TestCredentialDeliveryWrite_DirectSaveStaleAgainstAConcurrentWrite|TestUnitAdminDecisionSerializesScopeWrites' ./internal/api/...
-	go test -race -p 1 -count=1 -run 'TestPG_AuditPartition_.*Contiguous|TestSweeperLeader_|TestPGLocker_LockHeldIsBoundedWhileANestedLockWaits|TestNestedAcquireGuard_' ./internal/db/...
-	go test -race -p 1 -count=1 -run 'TestPG_RevocationBeforeCookiePoolWaitDoesNotLoseCutoff|TestPG_Issue(Waits|Racing)|TestLeaderGo_(AuditEnsureRunsOnOneReplica|RecordingSweepRunsOnOneReplica)|TestBootKeyCreate_TwoConcurrentBootsEndOnOneKey|TestLoadHopTLS_TwoConcurrentFirstBootsEndOnOneCA|TestStampLoginGroups_GivesUpOnAHeldAssignmentLock|TestTwoBootsEndOnOneKey|TestDefaultPool_ReaperTickBesideLifetimeLocks|TestRehearse_OnePostgresBackendOnTheTargetThroughoutARun' ./cmd/wardynd/...
-	go test -race -p 1 -count=1 -run 'TestWorker_(TwoWorkersDeliver100RowsExactlyOnce|ExpiredLeaseIsReclaimedAndAStaleFinaliserLoses)' ./internal/notify/...
-	go test -race -p 1 -count=1 -run 'TestPGStore_(EraseWithAPausedStreamAndAnInMemoryWriter|InMemorySaveDoesNotWaitBehindUploads)' ./internal/recording/...
-	go test -race -p 1 -count=1 -run 'TestStoreMode_|TestMigrate_ToLocal|TestRecordLoginGroups_WaitsForAnAssignmentWrite|TestDelete_IfRevisionKeepsARowReplacedWhileItWaited' ./internal/secretstore/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestPG_|TestGeneration_' ./internal/maskstore/... ./internal/secretmask/... ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestPG_.*(Concurrent|Supersede)|TestPG_WriteBegunBeforeAnErase|TestPG_CreateWait_|TestPG_MaskErasure|TestRecordingOutputPG_|TestPG_TokenEventStreamOutlivesABrowserSignOutAndEndsOnARevoke|TestPG_ServiceTokenEventStreamEndsOnItsSponsorsRevokeUnderABackwardClockStep|TestPG_ServiceTokenMintBehindAnInFlightRevokeOfItsSponsorIsRefused|TestPG_GovernanceChanges_(RenameSeesAnAssignmentApprovedWhileItWaits|AssignmentWritesWaitForTheProfileGraph)|TestComponents_ConcurrentOrgMCPKeyCollisionSavesOne|TestHALivePG_|TestInvitation_ConcurrentClaimsMintOneToken|TestMaskManifest_Fence|TestMaskPipe_PG_AnAttachRelaysAtBandwidthNotAtTheReadRate|TestPGUploadRecording_|TestRelay_RecordingUploadReadDeadline|TestRunOutputPG_|TestRecoverRunOutputPG_|TestSCIM(GroupRemovalSweeperWaitsForAnAddInFlight|SweeperPurgesOnceAcrossInstances|OwedRefusalRowLandsOnceForTwoDrainers)|TestServiceIdentity_TokenCapHoldsInTheStore|TestViaOrg_|TestRunnerAdmissionPG_LossClaimHoldsNoRunnerLockWhileItWaitsForTheRun|TestCredentialDeliveryWrite_DirectSaveStaleAgainstAConcurrentWrite|TestUnitAdminDecisionSerializesScopeWrites|TestPG_OrgRunnerRemovalWaitsOnTheTargetLockAndRefusesAGovernedPool|TestPG_WorkloadSweep_RetriesALapsedLaunch' ./internal/api/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestPG_AuditPartition_.*Contiguous|TestSweeperLeader_|TestPGLocker_LockHeldIsBoundedWhileANestedLockWaits|TestNestedAcquireGuard_' ./internal/db/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestPG_RevocationBeforeCookiePoolWaitDoesNotLoseCutoff|TestPG_Issue(Waits|Racing)|TestLeaderGo_(AuditEnsureRunsOnOneReplica|RecordingSweepRunsOnOneReplica)|TestBootKeyCreate_TwoConcurrentBootsEndOnOneKey|TestLoadHopTLS_TwoConcurrentFirstBootsEndOnOneCA|TestStampLoginGroups_GivesUpOnAHeldAssignmentLock|TestTwoBootsEndOnOneKey|TestDefaultPool_ReaperTickBesideLifetimeLocks|TestRehearse_OnePostgresBackendOnTheTargetThroughoutARun' ./cmd/wardynd/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestWorker_(TwoWorkersDeliver100RowsExactlyOnce|ExpiredLeaseIsReclaimedAndAStaleFinaliserLoses)' ./internal/notify/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestPGStore_(EraseWithAPausedStreamAndAnInMemoryWriter|InMemorySaveDoesNotWaitBehindUploads)' ./internal/recording/...
+	go test -race -p 1 -count=1 -timeout 30m -run 'TestStoreMode_|TestMigrate_ToLocal|TestRecordLoginGroups_WaitsForAnAssignmentWrite|TestDelete_IfRevisionKeepsARowReplacedWhileItWaited' ./internal/secretstore/...
 
 test-docker: ## Run all Go tests with -tags docker
 	@echo "Running Go tests (-tags docker)..."
@@ -664,6 +666,8 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	@echo "Running Helm template-file gate (scripts/check-helm-templates.sh)..."
 	./scripts/check-helm-templates.sh
 	./scripts/check-helm-templates.sh deploy/helm/wardyn-runnerd
+	@echo "Running macOS VM selector gate (scripts/check-macvm-selectors.sh)..."
+	./scripts/check-macvm-selectors.sh --selftest
 	@echo "Running migration-numbering gate (scripts/check-migration-numbers.sh)..."
 	./scripts/check-migration-numbers.sh
 	@echo "Running actionlint $(ACTIONLINT_VERSION) (workflow YAML)..."
@@ -706,7 +710,9 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-runner-units.sh
 	./scripts/test-runner-pkg.sh
 	./scripts/test-runner-pkg-dry-run.sh
+	./scripts/test-pkg-postinstall.sh
 	./scripts/test-runner-limits.sh
+	./scripts/test-service-supervisor.sh
 	./scripts/test-stage-agent-binary.sh
 	./scripts/test-doc-form.sh
 	./scripts/test-doc-links.sh
@@ -860,7 +866,10 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn); \
 	echo "$$out" | grep -A1 "name: WARDYN_BASE_PATH" | grep -q 'value: "/wardyn"' || { echo "basePath did not reach wardynd as WARDYN_BASE_PATH"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'path: /wardyn/healthz')" = "2" ] || { echo "basePath: liveness + startup probes are not under it — wardynd 404s /healthz outside the base path"; exit 1; }; \
-	echo "$$out" | grep -q 'path: "/wardyn/readyz"' || { echo "basePath: readinessProbe is not under it"; exit 1; }
+	echo "$$out" | grep -q 'path: "/wardyn/readyz"' || { echo "basePath: readinessProbe is not under it"; exit 1; }; \
+	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn --set-string env.WARDYN_BASE_PATH= --set metrics.serviceMonitor.enabled=true --set metrics.serviceMonitor.bearerTokenSecret.name=wardyn-metrics --set metrics.serviceMonitor.bearerTokenSecret.key=token); \
+	echo "$$out" | grep -A1 "name: WARDYN_BASE_PATH" | grep -q 'value: ""' || { echo "an empty env.WARDYN_BASE_PATH no longer reaches wardynd as empty"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'path: /healthz')" = "2" ] && echo "$$out" | grep -q 'path: "/readyz"' && echo "$$out" | grep -q 'path: "/metrics"' || { echo "an empty env.WARDYN_BASE_PATH serves wardynd at the root, but its probes or ServiceMonitor still use basePath"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
 	echo "$$out" | grep -A20 "startupProbe:" | grep -q 'failureThreshold: 90$$' || { echo "default startupProbe window is not 90 periods (30s connect + 5m WARDYN_MIGRATE_TIMEOUT + 120s slack, 5s each)"; exit 1; }; \
 	out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_MIGRATE_TIMEOUT=30m); \

@@ -35,12 +35,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# A failed cache download leaves @actions/cache's segment timer running, and the
+# step does not exit until it fires: 10 minutes by default, the whole budget of a
+# ten-minute job. Three minutes bounds that wait; a 128 MB segment still has room.
+env:
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: "3"
+
 # Every job sets timeout-minutes. Unset, GitHub allows 360, so one hung job holds
 # a runner for six hours. Each value is at least twice the job's measured
 # maximum, with a ten-minute floor (docs/CI.md); raise it with the measurement.
 jobs:
   # ── which jobs a change can affect (#932) ─────────────────────────────────
-  # Classifies the changed paths once. Five outputs, each 'true' or 'false':
+  # Classifies the changed paths once. Six outputs, each 'true' or 'false':
   #   code    — something outside the docs changed. The docs are docs/**,
   #             threatmodel/** and the *.md files at the repository root, less
   #             LICENSING.md. A .md anywhere else is classed by its directory.
@@ -51,6 +57,7 @@ jobs:
   #             image compiles Go from this tree (`COPY . .`), so only a test
   #             file cannot change what trivy finds in one
   #   notices — images, or a UI dependency manifest, or THIRD-PARTY-NOTICES.md
+  #   macos   — a path the macOS VM helper, its guest agent or the macOS runner package builds from
   # Push, merge_group and train/* pull requests are always 'true': they run
   # everything. The rules fail closed: a path in no class counts as backend, so
   # a new directory runs every job until someone decides otherwise. The Go
@@ -84,7 +91,7 @@ jobs:
   # eight two-minute scans (run 37403763766: conformance queued 98 s, go
   # (unit) 90 s).
   changes:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     outputs:
       code: ${{ steps.classify.outputs.code }}
@@ -92,6 +99,7 @@ jobs:
       ui: ${{ steps.classify.outputs.ui }}
       images: ${{ steps.classify.outputs.images }}
       notices: ${{ steps.classify.outputs.notices }}
+      macos: ${{ steps.classify.outputs.macos }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -108,14 +116,14 @@ jobs:
           set -euo pipefail
           if [ "$EVENT" != pull_request ] || [[ "$HEAD_REF" == train/* ]] || [[ "$BASE_REF" == release/* ]]; then
             echo "$EVENT${HEAD_REF:+ from $HEAD_REF}: running everything"
-            printf 'code=true\nbackend=true\nui=true\nimages=true\nnotices=true\n' >> "$GITHUB_OUTPUT"
+            printf 'code=true\nbackend=true\nui=true\nimages=true\nnotices=true\nmacos=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # An assignment, not `< <(git diff …)`: set -e ignores a failing
           # process substitution, which would read an unreadable diff as
           # "nothing changed" and skip everything.
           changed="$(git diff --name-only --no-renames HEAD^1 HEAD)"
-          code=false backend=false ui=false images=false notices=false
+          code=false backend=false ui=false images=false notices=false macos=false
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             # Where a file lives decides its class before its extension does.
@@ -135,6 +143,9 @@ jobs:
             case "$f" in
               Makefile|.github/workflows/ci.yml) ui=true ;;
             esac
+            case "$f" in
+              internal/macvm/*|internal/vmnet/*|cmd/wardyn-macvm/*|internal/vm/guestagent/*|cmd/wardyn-guest-agent/*|cmd/wardyn-runnerd/*|test/conformance/macvm/*|deploy/runner/macos/*|deploy/macos-guest/*|scripts/build-runner-pkg.sh|scripts/check-macvm-selectors.sh|go.mod|go.sum|.github/workflows/ci.yml) macos=true ;;
+            esac
             if [ "$class" = backend ]; then
               case "$f" in *_test.go) ;; *) images=true ;; esac
             fi
@@ -144,8 +155,8 @@ jobs:
             echo "$class  $f"
           done <<< "$changed"
           if [ "$images" = true ]; then notices=true; fi
-          echo "code=$code backend=$backend ui=$ui images=$images notices=$notices"
-          printf 'code=%s\nbackend=%s\nui=%s\nimages=%s\nnotices=%s\n' "$code" "$backend" "$ui" "$images" "$notices" >> "$GITHUB_OUTPUT"
+          echo "code=$code backend=$backend ui=$ui images=$images notices=$notices macos=$macos"
+          printf 'code=%s\nbackend=%s\nui=%s\nimages=%s\nnotices=%s\nmacos=%s\n' "$code" "$backend" "$ui" "$images" "$notices" "$macos" >> "$GITHUB_OUTPUT"
 
   # ── image-scope: which of the ten trivy scans does this change need? ──────
   # `changes` sets images=true for any non-test backend path, which is nearly
@@ -172,7 +183,7 @@ jobs:
   # needs `changes` would queue behind the long jobs that became ready with it
   # (see `changes`). Nothing here reads the classification.
   image-scope:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     outputs:
       wardynd: ${{ steps.scope.outputs.wardynd }}
@@ -244,7 +255,7 @@ jobs:
     name: go (${{ matrix.suite }})
     needs: changes
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -378,7 +389,7 @@ jobs:
     name: go (lint)
     needs: changes
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -439,7 +450,7 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: pnpm
@@ -481,7 +492,7 @@ jobs:
   build:
     needs: [changes, go, go-lint, image-scope]
     if: ${{ always() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Every go leg passed
@@ -509,6 +520,8 @@ jobs:
           GOOS=windows GOARCH=amd64 go vet ./cmd/wardyn/
           # wardyn-runnerd is not shipped for Windows, but its tests must still compile there (#3424).
           GOOS=windows GOARCH=amd64 go vet ./cmd/wardyn-runnerd/
+          # The macOS VM admission ledger is unix-only; its constraints must still leave the package vettable here (#3622).
+          GOOS=windows GOARCH=amd64 go vet ./internal/macvm/admission/
       - name: Download the three suites' profiles
         if: needs.changes.outputs.backend != 'false'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -555,7 +568,7 @@ jobs:
         if: >-
           needs.changes.outputs.code == 'true' && needs.changes.outputs.backend == 'true' &&
           needs.changes.outputs.ui == 'true' && needs.changes.outputs.images == 'true' &&
-          needs.changes.outputs.notices == 'true' &&
+          needs.changes.outputs.notices == 'true' && needs.changes.outputs.macos == 'true' &&
           needs.image-scope.outputs.wardynd == 'true' &&
           needs.image-scope.outputs.wardynd-fips == 'true' &&
           needs.image-scope.outputs.wardyn-proxy == 'true' &&
@@ -589,7 +602,7 @@ jobs:
   # Validate every fenced mermaid diagram in the public docs (syntax + label-
   # truth). Needs the ui node_modules (mermaid-cli), so it installs UI deps first.
   diagrams:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -598,7 +611,7 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: pnpm
@@ -642,14 +655,14 @@ jobs:
   ui:
     needs: changes
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: pnpm
@@ -755,7 +768,7 @@ jobs:
     name: ui-e2e (${{ matrix.shard }}/2)
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -803,7 +816,7 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: pnpm
@@ -912,7 +925,7 @@ jobs:
   helm:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
@@ -983,7 +996,7 @@ jobs:
   helm-install-test:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1234,7 +1247,7 @@ jobs:
   conformance-k8s:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # 35, not 25: the Makefile recipe's own `-timeout` is 25m since the eviction case
     # gained its second fill target AND a margin for the rest of the suite
     # (TestEphemeralCaseBudgetFitsTheMakefileTimeout), and a job timeout at or below it
@@ -1355,7 +1368,7 @@ jobs:
 
   # ── deploy: docker-compose config validation ──────────────────────────────
   compose:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
@@ -1386,7 +1399,7 @@ jobs:
   runner-units:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
@@ -1467,7 +1480,7 @@ jobs:
   conformance:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # Two image builds (one of them a trixie + node + `npm install -g` layer)
     # in front of a suite whose own `go test -timeout` is 20m, plus the ~6m
     # key-service leg.
@@ -1573,7 +1586,7 @@ jobs:
           key: go-conformance-docker-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # ── Linux VM sandboxes (machine_kind=linux_vm) under real QEMU/KVM ──
-  # NOT a required check. Hosted ubuntu-24.04 exposes /dev/kvm; GitHub's documented udev rule
+  # NOT a required check. Hosted ubuntu-26.04 exposes /dev/kvm; GitHub's documented udev rule
   # opens it to the runner's user, and the QEMU container gets it as an unprivileged user. Builds
   # the QEMU image and the reference guest image, then boots the guest through the real Docker
   # driver (test/conformance/vm: probe, boot, exec, terminal, shared folder, the network relay and
@@ -1581,7 +1594,7 @@ jobs:
   vm:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -1619,7 +1632,7 @@ jobs:
   # a live daemon (validates the pushedBaseRef assumption in builder.go). The
   # target provisions its own throwaway registry + runner-tools dir. The build
   # container reaches the test's host-loopback git daemon + published registry
-  # only via HOST networking, and only because ubuntu-24.04 runs a host-native
+  # only via HOST networking, and only because ubuntu-26.04 runs a host-native
   # dockerd that shares the host network namespace. The test already defaults to
   # "host"; the env below is set explicitly to document the requirement. This job
   # requires a host-native dockerd — it cannot pass against a VM-based daemon like
@@ -1627,7 +1640,7 @@ jobs:
   envbuild-integration:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1695,7 +1708,7 @@ jobs:
   vm-conformance:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1719,6 +1732,243 @@ jobs:
         env:
           WARDYN_TEST_VM: '1'
         run: go test -tags vm -count=1 -timeout 25m -v ./test/vmconformance/
+
+  # ── macOS VM helper and guest agent on a hosted Mac (not a required check) ─────
+  # The Linux jobs cross-build the darwin runnerd with CGO_ENABLED=0 and cannot compile the cgo helper
+  # (Virtualization.framework) or run the darwin guest agent's tests. This job does, on macos-26. No VM boots
+  # on a hosted Mac (nested virtualization is unsupported), so the engine tests use the fake engine and the
+  # packaged suite skips; only the rented Mac proves a real guest.
+  #   - cgo build, vet and tests of the helper, its library and the guest agent, darwin-native tests included
+  #   - the darwin runnerd build
+  #   - the helper signed ad hoc with its one entitlement, read back with codesign
+  #   - the packaged live suite command, once test/conformance/macvm exists
+  # It runs when one of those paths changes (the `macos` output of `changes`) and always on push, merge_group,
+  # train/* and release/* pull requests. Not a required check and not in `gates`.
+  macos:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' }}
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      CGO_ENABLED: '1'
+      # clang stamps a cgo binary with the image's own macOS as its floor; the helper must load on macOS 26.
+      MACOSX_DEPLOYMENT_TARGET: '26.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          go version
+      # Bounded retry of the module fetch only; go.sum verifies each module.
+      - run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
+      # Each package on its own, and every later step runs after a failure: one run lists every darwin error.
+      - name: cgo build and vet
+        run: |
+          fail=0
+          pkgs=$(go list ./internal/macvm/... ./internal/vmnet/... ./cmd/wardyn-macvm/ ./internal/vm/guestagent/ ./cmd/wardyn-guest-agent/) || fail=1
+          [ -n "$pkgs" ] || fail=1
+          for p in $pkgs; do
+            go build -o /dev/null "$p" || fail=1
+            go vet "$p" || fail=1
+          done
+          exit "$fail"
+      - name: Tests
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          # The ledger walks every directory from / without following a link, and the runner's TMPDIR
+          # (/var/folders/...) goes through the /var link: test under /private/tmp, as user and as root.
+          export TMPDIR=/private/tmp
+          go test -race -count=1 -timeout 15m ./internal/macvm/... ./internal/vmnet/... ./cmd/wardyn-macvm/ ./cmd/wardyn-guest-agent/
+          # The lock-open refusal again as root, the installer's uid: its socket case is one root still hits.
+          go test -c -o "$RUNNER_TEMP/admission.test" ./internal/macvm/admission/
+          sudo env TMPDIR="$TMPDIR" "$RUNNER_TEMP/admission.test" -test.count=1 -test.v -test.run '^TestSetupLockOpenErrorFailsClosed$' | tee "$RUNNER_TEMP/admission-root.out"
+          grep -q -- '--- PASS: TestSetupLockOpenErrorFailsClosed/socket' "$RUNNER_TEMP/admission-root.out"
+          # -v: prove the darwin-native guest agent tests (server_darwin_test.go) ran, not just compiled.
+          go test -count=1 -timeout 10m -v ./internal/vm/guestagent/ | tee "$RUNNER_TEMP/guestagent.out"
+          grep -q -- '^--- PASS: TestDarwin' "$RUNNER_TEMP/guestagent.out"
+          # The pairing key's root-only mode, proven with a sudo-made file: a skip here is a failure.
+          grep -q -- '^--- PASS: TestDarwinPairKeyIsReadableByRootOnly' "$RUNNER_TEMP/guestagent.out"
+      - name: Live suite self-tests (its P-rows skip on a hosted Mac)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          export TMPDIR=/private/tmp
+          go test -count=1 -tags macvm_live ./test/conformance/macvm/
+      - name: Build the darwin runnerd
+        if: ${{ !cancelled() }}
+        run: CGO_ENABLED=0 go build -tags docker -trimpath -o "$RUNNER_TEMP/wardyn-runnerd" ./cmd/wardyn-runnerd
+      - name: Sign the helper ad hoc with its entitlement and read it back
+        id: sign
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          helper="$RUNNER_TEMP/wardyn-macvm"
+          go build -trimpath -o "$helper" ./cmd/wardyn-macvm
+          codesign --force --sign - --entitlements deploy/runner/macos/wardyn-macvm.entitlements "$helper"
+          codesign --verify --strict "$helper"
+          info="$(codesign -dv "$helper" 2>&1)"
+          grep -q 'Signature=adhoc' <<<"$info"
+          codesign -d --entitlements :- "$helper" 2>/dev/null | plutil -convert json -o - - \
+            | jq -e '. == {"com.apple.security.virtualization": true}'
+          # The signed binary starts: a bad signature or a missing entitlement would not get this far.
+          "$helper" version
+          # Not a gate on support: a hosted Mac cannot run a macOS guest, so probe may exit 1 with its reason.
+          # It must still print JSON and report the Virtualization engine linked, and exit 0 or 1, not crash.
+          rc=0
+          "$helper" probe >"$RUNNER_TEMP/probe.json" || rc=$?
+          cat "$RUNNER_TEMP/probe.json"
+          echo "probe exit status: $rc"
+          [ "$rc" -le 1 ]
+          jq -e '.vz == true and (.host | type == "string")' "$RUNNER_TEMP/probe.json"
+      # The helper installs this into the guest and labels it with its own version; nothing at run time reads the
+      # agent's. Neither is stamped here, so both read the same checkout's commit from the build info.
+      # The postinstall check below needs only this build, so it is gated on it and not on the read-back after it.
+      - name: Build the guest agent and sign it ad hoc with no entitlement
+        id: agent
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          agent="$RUNNER_TEMP/wardyn-guest-agent"
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o "$agent" ./cmd/wardyn-guest-agent
+          codesign --force --sign - "$agent"
+      - name: Read the guest agent's signature back (ad hoc, no entitlement)
+        if: ${{ !cancelled() && steps.agent.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          agent="$RUNNER_TEMP/wardyn-guest-agent"
+          codesign --verify --strict "$agent"
+          grep -q 'Signature=adhoc' <<<"$(codesign -dv "$agent" 2>&1)"
+          [ -z "$(codesign -d --entitlements :- "$agent" 2>/dev/null)" ]
+      # The release package asserts the same floor on what it ships (release.yml, runner-pkg).
+      - name: Every darwin binary loads on macOS 26 (minos 26.0 or lower)
+        if: ${{ !cancelled() && steps.sign.outcome == 'success' && steps.agent.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          above26() { awk -v m="$1" 'BEGIN { split(m, v, "."); exit !(v[1] + 0 > 26 || (v[1] + 0 == 26 && v[2] + 0 > 0)) }'; }
+          for f in "$RUNNER_TEMP/wardyn-macvm" "$RUNNER_TEMP/wardyn-guest-agent" "$RUNNER_TEMP/wardyn-runnerd"; do
+            mins="$(otool -arch all -l "$f" | awk '$1 == "minos" { print $2 }')"
+            echo "$f: minos $mins"
+            [ -n "$mins" ] || { echo "::error::$f has no LC_BUILD_VERSION"; exit 1; }
+            for m in $mins; do if above26 "$m"; then echo "::error::$f needs macOS $m; the floor is 26.0"; exit 1; fi; done
+          done
+      # The real postinstall, and the signed helper's ledger-setup it runs, under the runner's passwordless
+      # sudo against a temp root, read back with BSD stat. %Mp%Lp, not %Lp alone: %Lp drops the sticky bit.
+      # The roots sit under /private/tmp, so every directory the helper walks from / is root-owned.
+      # It runs the signed helper as root: only once the sign step proved that helper.
+      - name: Package postinstall makes the admission ledger (real root, BSD tools)
+        if: ${{ !cancelled() && steps.sign.outcome == 'success' && steps.agent.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          post=deploy/runner/macos/pkg-scripts/postinstall
+          ledger() {
+            b="$1/Users/Shared/Wardyn"
+            [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b")" = 'root:wheel 0755 Directory' ]
+            [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b/admission.lock")" = 'root:wheel 0644 Regular File' ]
+            [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b/macos-vm-admission")" = 'root:wheel 1777 Directory' ]
+            [ "$(stat -f '%Su:%Sg %Mp%Lp %HT' "$b/sock")" = 'root:wheel 1777 Directory' ]
+          }
+          fresh() {
+            r="$(sudo mktemp -d /private/tmp/wardyn-pkgroot.XXXXXX)"
+            sudo chmod 0755 "$r"
+            sudo mkdir -p "$r/Users/Shared" "$r/usr/local/wardyn/bin"
+            sudo chmod 1777 "$r/Users/Shared"
+            sudo install -m 0755 "$RUNNER_TEMP/wardyn-macvm" "$r/usr/local/wardyn/bin/wardyn-macvm"
+            sudo install -m 0755 "$RUNNER_TEMP/wardyn-guest-agent" "$r/usr/local/wardyn/bin/wardyn-guest-agent"
+          }
+          fresh
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
+          # The guest agent is where the helper reads it, executable and still validly signed after the install.
+          installed="$r/usr/local/wardyn/bin/wardyn-guest-agent"
+          [ -x "$installed" ]
+          codesign --verify --strict "$installed"
+          # The helper refuses an agent of another version, so the pair must carry the same stamp: the commit
+          # and ldflags in each binary's build info (not cgo, which differs on purpose). Empty would match vacuously.
+          stamp() { go version -m "$1" | grep -E '^[[:space:]]+build[[:space:]]+(-ldflags|vcs\.revision|vcs\.modified)=' || true; }
+          want="$(stamp "$r/usr/local/wardyn/bin/wardyn-macvm")"
+          grep -q 'vcs.revision=' <<<"$want"
+          [ "$(stamp "$installed")" = "$want" ]
+          # A second install changes nothing: the lock keeps its inode.
+          lock="$r/Users/Shared/Wardyn/admission.lock"
+          ino="$(stat -f %i "$lock")"
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
+          [ "$(stat -f %i "$lock")" = "$ino" ]
+          # A 0444 lock (the old helper rule accepted it) is replaced by an exact one.
+          sudo chmod 0444 "$lock"
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
+          [ "$(stat -f %i "$lock")" != "$ino" ]
+          # sock/ keeps a login's own u<uid> (0700) and moves anything else aside, such as a u<N> another uid made.
+          sock="$r/Users/Shared/Wardyn/sock"
+          own="$sock/u$(id -u)"
+          mkdir -m 0700 "$own"
+          mkdir -m 0700 "$sock/u4242"
+          own_ino="$(stat -f %i "$own")"
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
+          [ "$(stat -f %i "$own")" = "$own_ino" ]
+          [ "$(ls -A "$sock")" = "u$(id -u)" ]
+          # A login's own Wardyn directory, with a link at macos-vm-admission: replaced, and the target untouched.
+          fresh
+          b="$r/Users/Shared/Wardyn"
+          mkdir -m 0777 "$b" "$RUNNER_TEMP/victim"
+          chmod 0700 "$RUNNER_TEMP/victim"
+          ln -s "$RUNNER_TEMP/victim" "$b/macos-vm-admission"
+          before="$(stat -f '%Su:%Sg %Mp%Lp' "$RUNNER_TEMP/victim")"
+          sudo env WARDYN_PKG_ROOT="$r" sh "$post"
+          ledger "$r"
+          [ "$(stat -f '%Su:%Sg %Mp%Lp' "$RUNNER_TEMP/victim")" = "$before" ]
+          [ -z "$(ls -A "$RUNNER_TEMP/victim")" ]
+          sudo ls -la "$r/Users/Shared"
+          sudo sh -c 'ls -d "$1"/.wardyn-quarantine.*/Wardyn' _ "$r/Users/Shared"
+      - name: Packaged live suite (it skips, since no VM boots on a hosted Mac)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          if [ ! -d test/conformance/macvm ]; then
+            echo "::notice::test/conformance/macvm does not exist on this tree yet, so the packaged suite command was not run"
+            exit 0
+          fi
+          go test -c -tags macvm_live -o "$RUNNER_TEMP/macvm_live.test" ./test/conformance/macvm
+          # Go's own test2json converts the raw output; the testing package has no -test.json flag.
+          rc=0
+          # From /, as an operator on the rented Mac would run it: the suite must not lean on the checkout.
+          (cd / && "$RUNNER_TEMP/macvm_live.test" -test.v=test2json) >"$RUNNER_TEMP/suite.raw" 2>"$RUNNER_TEMP/suite.err" || rc=$?
+          cat "$RUNNER_TEMP/suite.err"
+          # On a failure, show which test failed: its output is in suite.raw, not on the console.
+          [ "$rc" -eq 0 ] || { tail -n 200 "$RUNNER_TEMP/suite.raw"; echo "::error::the packaged suite exited $rc"; exit 1; }
+          go tool test2json <"$RUNNER_TEMP/suite.raw" >"$RUNNER_TEMP/suite.json"
+          jq -es 'length > 0' "$RUNNER_TEMP/suite.json"
+
+  # The macOS 27 SDK check for provision_darwin.m's run-time lookups (scripts/check-macvm-selectors.sh):
+  # every class and selector it names must be declared in the Virtualization headers of a macOS 27 SDK.
+  # `xcode-27` is a public-preview image, so this is its own job: a preview-image outage must not turn the
+  # macos job red. Informational: continue-on-error keeps a red here out of the run's conclusion, so it is
+  # never release evidence (green-by-tree reads that conclusion). Not a required check.
+  macos-xcode-27:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.macos != 'false' }}
+    runs-on: xcode-27
+    continue-on-error: true
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: The SDK is macOS 27 or later
+        run: |
+          ver="$(xcrun --sdk macosx --show-sdk-version)"
+          echo "macOS SDK $ver"
+          [ "${ver%%.*}" -ge 27 ]
+      - name: Selector check against the SDK headers
+        run: |
+          scripts/check-macvm-selectors.sh --selftest
+          scripts/check-macvm-selectors.sh --sdk
 
   # ── Postgres-backed invariant proofs (approval-mint + audit invariants) ───
   # Runs the WARDYN_TEST_PG-gated suite (store/db/secretstore/broker/api +
@@ -1745,7 +1995,7 @@ jobs:
     name: test-pg-shard (${{ matrix.shard }})
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       packages: read
@@ -1754,9 +2004,11 @@ jobs:
     # fail-fast: one red shard cancels the others, so a red run stops spending
     # about 48 runner-minutes on a result that is already a failure. test-pg
     # still reports: legs cancelled by fail-fast do not cancel the run, so its
-    # `!cancelled()` holds and it fails on the matrix result `failure`.
+    # `!cancelled()` holds and it fails on the matrix result `failure`. A train
+    # or a release candidate runs every shard to the end: each red there needs
+    # its own cause before the next push, and a cancelled shard has none.
     strategy:
-      fail-fast: true
+      fail-fast: ${{ !startsWith(github.head_ref || github.ref_name, 'train/') && !startsWith(github.head_ref || github.ref_name, 'chore/release-') }}
       matrix:
         include:
           - shard: api-1
@@ -1878,7 +2130,7 @@ jobs:
   test-pg:
     needs: [changes, test-pg-shard]
     if: ${{ always() && needs.changes.outputs.backend != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Every Postgres shard passed
@@ -1945,7 +2197,7 @@ jobs:
     name: trivy (wardynd)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardynd != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2062,7 +2314,7 @@ jobs:
     name: trivy (wardynd-fips)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardynd-fips != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2075,7 +2327,7 @@ jobs:
     name: trivy (wardyn-proxy)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardyn-proxy != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2088,7 +2340,7 @@ jobs:
     name: trivy (wardyn-runnerd)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.wardyn-runnerd != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2101,7 +2353,7 @@ jobs:
     name: trivy (agent-base)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-base != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2114,7 +2366,7 @@ jobs:
     name: trivy (agent-codex-cli)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-codex-cli != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2127,7 +2379,7 @@ jobs:
     name: trivy (agent-aws-sso)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-aws-sso != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2140,7 +2392,7 @@ jobs:
     name: trivy (agent-vscode)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-vscode != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2153,7 +2405,7 @@ jobs:
     name: trivy (agent-novnc)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-novnc != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2166,7 +2418,7 @@ jobs:
     name: trivy (agent-novnc-signin)
     needs: [changes, diagrams, image-scope] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.images != 'false' && needs.image-scope.outputs.agent-novnc-signin != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 50
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -2218,7 +2470,7 @@ jobs:
   notices:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() && needs.changes.outputs.notices != 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -2258,7 +2510,7 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: pnpm
@@ -2278,8 +2530,9 @@ jobs:
   gates:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    runs-on: ubuntu-26.04
+    # A cold staticcheck ran past 15 min on main (no cache entry), and only a success saves one.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -2338,7 +2591,7 @@ jobs:
 
   # ── supply-chain: DCO sign-off ─────────────────────────────────────────────
   dco:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -2438,7 +2691,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.actor != 'dependabot[bot]'
       && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write
@@ -2461,7 +2714,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.actor != 'dependabot[bot]'
       && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write
@@ -2475,7 +2728,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.actor != 'dependabot[bot]'
       && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write
@@ -2489,7 +2742,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.actor != 'dependabot[bot]'
       && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write
@@ -2503,7 +2756,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.actor != 'dependabot[bot]'
       && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write
@@ -2517,7 +2770,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.actor != 'dependabot[bot]'
       && !startsWith(github.head_ref, 'train/') && !startsWith(github.head_ref, 'prep/') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write
@@ -2529,7 +2782,7 @@ jobs:
   # as Expected on such a pull request instead. It does nothing else.
   ci-ran:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: The pull_request workflow ran
@@ -2558,7 +2811,7 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       (startsWith(github.head_ref, 'train/') || startsWith(github.head_ref, 'prep/'))
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 180
     permissions:
       actions: write
@@ -2586,14 +2839,21 @@ jobs:
           done
           [ -n "$id" ] || { echo "::error::no dispatched nightly run appeared on $HEAD_SHA"; exit 1; }
           echo "nightly run: $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$id"
-          gh run watch "$id" --interval 60 >/dev/null || true
-          conclusion="$(gh run view "$id" --json conclusion --jq .conclusion)"
+          # Poll rather than `gh run watch`: one API 502 ended a watch early and
+          # read an in-progress run's empty conclusion. A failed read is retried;
+          # the job timeout bounds the wait.
+          until [ "$(gh run view "$id" --json status --jq .status 2>/dev/null)" = completed ]; do sleep 60; done
+          conclusion=
+          for _ in 1 2 3 4 5; do
+            conclusion="$(gh run view "$id" --json conclusion --jq .conclusion 2>/dev/null)" && break
+            sleep 15
+          done
           [ "$conclusion" = success ] || { echo "::error::nightly run $id concluded '$conclusion'"; exit 1; }
 
   train-gate:
     needs: train-suites
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: A train head needs the candidate suites green
@@ -2625,7 +2885,7 @@ jobs:
       && (needs.ui-e2e.outputs.flaky_1 != 'false' || needs.ui-e2e.outputs.flaky_2 != 'false')
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     continue-on-error: true
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       issues: write
@@ -2713,7 +2973,7 @@ jobs:
       - gates
       - dco
     if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       issues: write
@@ -2748,7 +3008,7 @@ jobs:
   # seconds of download in the jobs that run them.
   go-modules:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     outputs:
       saved: ${{ steps.saved.outputs.key }}
@@ -2791,7 +3051,7 @@ jobs:
   # never marks a `gotools-` entry as superseded, so it leaves these alone.
   go-gate-tools:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -2837,7 +3097,7 @@ jobs:
   go-cache-prune:
     needs: [go-modules, go, go-lint, ui-e2e, conformance-k8s, conformance, envbuild-integration, test-pg-shard, notices, gates]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       actions: write

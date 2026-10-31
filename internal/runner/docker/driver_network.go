@@ -31,6 +31,9 @@ import (
 //
 //nolint:funlen // Deliberate: one linear container-assembly sequence whose teardown-on-failure compensations must stay in one scope; low branching, just long.
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	if spec.MachineKind.IsMacOSVM() {
+		return d.createMacVM(ctx, spec)
+	}
 	if spec.MachineKind.Normalize() != "" {
 		return d.createVM(ctx, spec)
 	}
@@ -355,9 +358,18 @@ func (d *Driver) daemonSubnet(ctx context.Context, name string, opts client.Netw
 	return netip.Prefix{}, fmt.Errorf("the daemon gave network %s no IPv4 subnet", name)
 }
 
+// stopSandboxBudget bounds a StopSandbox, which runs apart from the call that asked for it: the agent's
+// stop, the proxy's drain and stop, and the removals. It is 60 s, the bound the local callers put on a
+// teardown (boundedTeardown, teardownCtx), which the detached context would otherwise drop.
+const stopSandboxBudget = 60 * time.Second
+
 // StopSandbox is the graceful path: SIGTERM, then SIGKILL after the timeout,
-// then remove. Idempotent on a missing sandbox.
+// then remove. Idempotent on a missing sandbox. It runs on a context cut loose from the call's,
+// which the organisation cancels when it gives up on a slow call, and bounded by stopSandboxBudget
+// instead: a stop cancelled half-way would leave the proxy sidecar and the relay for the orphan sweep.
 func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
+	ctx, done := context.WithTimeout(context.WithoutCancel(ctx), stopSandboxBudget)
+	defer done()
 	if v := d.vmFor(ctx, ref); v != nil {
 		d.vmPowerdown(ctx, v, ref)
 	}

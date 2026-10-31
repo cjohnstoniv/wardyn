@@ -32,7 +32,7 @@ A credential therefore reaches a destination in one of four shapes:
   - inside a TLS connection it terminates with a per-run certificate authority, for the hosts its interception rule admits ([`internal/egress/proxy/mitm.go#Proxy.isMITMHost`](../internal/egress/proxy/mitm.go));
   - on a plain-HTTP forward request to a host that has an injection rule ([`internal/egress/proxy/inject.go#injector.apply`](../internal/egress/proxy/inject.go)).
 - An HTTPS connection to any other host is an opaque tunnel: the proxy sees the host name and adds nothing ([`internal/egress/proxy/inject.go#InjectionConfig`](../internal/egress/proxy/inject.go)).
-- Before it sets its own header, the proxy removes the credential headers the sandbox put on the request ([`internal/egress/proxy/inject.go#stripSandboxCredentials`](../internal/egress/proxy/inject.go)).
+- Before it sets its own header, the proxy removes the credential headers the sandbox put on the request ([`internal/egress/proxy/inject.go#stripSandboxCredentials`](../internal/egress/proxy/inject.go)). Where a rule fills a placeholder instead, the proxy replaces the placeholder in that rule's one header and leaves the request's other headers as the sandbox sent them ([`internal/egress/proxy/inject.go#fillPlaceholder`](../internal/egress/proxy/inject.go)).
 - The proxy asks the control plane for the value with the run's token, on a route that has no forward from the sandbox ([`internal/api/injection.go#Server.handleInternalInjection`](../internal/api/injection.go)).
 - The sandbox holds an inert placeholder where a tool insists on a value, and otherwise nothing; [the table](#every-kind-side-by-side) says which.
 
@@ -78,12 +78,13 @@ What Wardyn does for a delivered value:
 - It writes a file under `/run/wardyn/secrets` ([`internal/runner/managed_files.go#ComponentSecretDir`](../internal/runner/managed_files.go)).
   - On Docker the file is mode `0400`, owned by the workload's user ([`internal/runner/docker/managed_files.go#managedFilesTar`](../internal/runner/docker/managed_files.go)).
   - On Kubernetes an init container running as the workload's user copies it into a memory-backed volume, at mode `0400` and owned by that user. The Secret volume is not mounted in the workload's containers ([`internal/runner/k8s/agent_secrets.go#agentSecretVolumes`](../internal/runner/k8s/agent_secrets.go)).
-  - On Kubernetes a `file_secret` or component file is deleted after its first read, so a tool that reads it twice finds it gone; copy it on first read if it is needed again ([`internal/runner/k8s/agent_secrets.go#wipeAfterReadScript`](../internal/runner/k8s/agent_secrets.go)).
+  - On Kubernetes a `file_secret` or component file is deleted after its first read; a tool that needs it twice must copy it ([`internal/runner/k8s/agent_secrets.go#wipeAfterReadScript`](../internal/runner/k8s/agent_secrets.go)).
 - A `file_secret` grant on a runner that cannot deliver a file fails the run ([`internal/api/runs_dispatch_files.go#Server.fileSecretRunnerDelivers`](../internal/api/runs_dispatch_files.go)).
 - On Kubernetes, a delivered file beside a shared drive is refused ([`internal/runner/k8s/managed_files.go#errAgentSecretBesideShare`](../internal/runner/k8s/managed_files.go)).
 - With `WARDYN_ENV_SECRET_PLACEHOLDERS` or `WARDYN_FILE_SECRET_PLACEHOLDERS` on, a grant whose scope names a `host` puts a placeholder in the sandbox instead of the value. Both are off by default in 0.10.0.
+  - One trailing line break is dropped. A value with a line break inside goes in as it is, audited as a `run.secret_placeholder.resolve` failure.
   - The proxy replaces the placeholder with the value in the `Authorization` header of requests to that host ([`internal/api/runs_dispatch_placeholders.go#Server.authorSecretPlaceholder`](../internal/api/runs_dispatch_placeholders.go)).
-  - A program that signs locally, or uses the value any other way, holds only the placeholder and fails.
+  - A program that uses the value any other way, such as signing locally, fails.
   - Without `WARDYN_PROXY_RESPONSE_SCRUB`, a host that echoes the request header back returns the value to the sandbox.
   - `WARDYN_RUNNER_SECRET_PLACEHOLDERS`, also off by default, does the same for a `runner_resident` grant: the runner gets the placeholder, and the organisation's egress fills it ([`internal/api/runs_dispatch_placeholders.go#Server.placeResidentEnvSecrets`](../internal/api/runs_dispatch_placeholders.go)).
 - It skips a grant it cannot honour, and leaves the variable or file absent; it does not set a blank ([`internal/api/runs_dispatch_files.go#Server.resolveFileSecretGrants`](../internal/api/runs_dispatch_files.go)).
@@ -115,7 +116,8 @@ One mode places a Git credential inside the sandbox:
 
 - On a `bedrock_sso` model provider, the AWS SDK inside the sandbox exchanges the sign-in session for short-lived role credentials and signs each request with them.
 - The signature is computed in the workload's process, so by default those role credentials are inside the sandbox on every such run ([`internal/api/credential_residency.go#kindResidency`](../internal/api/credential_residency.go)).
-- With `WARDYN_AWS_SIGV4_AT_PROXY=on` (off by default) the role's credentials never enter the sandbox of a lane the proxy re-signs. The sandbox's profile gets a placeholder key pair in place of the SSO session, and the proxy signs each request again with role credentials it gets itself ([`internal/egress/proxy/aws_sigv4.go`](../internal/egress/proxy/aws_sigv4.go)).
+- With `WARDYN_AWS_SIGV4_AT_PROXY=on` (off by default) the role's credentials never enter the sandbox of a lane the proxy re-signs on an organisation's runner. The sandbox's profile gets a placeholder key pair in place of the SSO session, and the proxy signs each request again with role credentials it gets itself ([`internal/egress/proxy/aws_sigv4.go`](../internal/egress/proxy/aws_sigv4.go)).
+- On a person's own runner, the run's proxy on that computer re-signs the lane the same way ([`internal/placement/classify.go`](../internal/placement/classify.go)). This release has not yet verified it end to end on a person's runner.
 - It applies to a lane only when the proxy can re-sign every one of its hosts: exact `<service>.<region>.amazonaws.com` hosts on port 443.
   - One host it cannot re-sign keeps the whole lane on its old path, with the role credentials in the sandbox ([`internal/api/runs_dispatch_aws_sigv4.go#Server.awsSigV4Hosts`](../internal/api/runs_dispatch_aws_sigv4.go)).
   - Such a host is a wildcard, a private endpoint such as `vpce`, a dual-stack host, a port other than 443, GovCloud IAM or a test endpoint.

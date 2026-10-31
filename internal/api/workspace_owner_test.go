@@ -11,12 +11,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -134,6 +136,86 @@ func (s *ownerStore) put(ws types.Workspace) uuid.UUID {
 func ownerHarness(t *testing.T, mounts runner.UserMountPolicy) (*Server, *ownerStore, *harness) {
 	t.Helper()
 	st := newOwnerStore()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, st)
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.Secrets = getErrStore{getErr: secretstore.ErrNotFound}
+	cfg.UserMounts = mounts
+	return New(cfg), st, h
+}
+
+// boundRunners is a store.RunnerStore over rows, for the doors that read the
+// runner a local_dir source is bound to. Only the reads are real; a door that
+// writes a runner reaches the nil interface and fails loudly.
+type boundRunners struct {
+	store.RunnerStore
+	rows map[uuid.UUID]types.Runner
+}
+
+func (b boundRunners) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
+	r, ok := b.rows[id]
+	if !ok {
+		return types.Runner{}, store.ErrNotFound
+	}
+	return r, nil
+}
+
+func (b boundRunners) ListRunners(context.Context) ([]types.Runner, error) {
+	out := make([]types.Runner, 0, len(b.rows))
+	for _, r := range b.rows {
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+func (b boundRunners) ListRunnersByOwner(_ context.Context, owner string) ([]types.Runner, error) {
+	var out []types.Runner
+	for _, r := range b.rows {
+		if r.Owner == owner {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// GetCredentialDeliveryPolicy answers the empty document, the policy a store
+// without one reads as (storedDeliveryPolicy).
+func (b boundRunners) GetCredentialDeliveryPolicy(context.Context) (types.CredentialDeliveryPolicyDoc, error) {
+	return types.CredentialDeliveryPolicyDoc{Policy: json.RawMessage(`{}`)}, nil
+}
+
+// add stores a runner of kind for owner in state and returns its id.
+func (b boundRunners) add(owner string, kind types.RunnerOwnerKind, state types.RunnerState) uuid.UUID {
+	id := uuid.New()
+	r := types.Runner{ID: id, Owner: owner, OwnerKind: kind, Name: "laptop", State: state}
+	if state == types.RunnerRevoked {
+		at := time.Now().UTC()
+		r.RevokedAt = &at
+	}
+	b.rows[id] = r
+	return id
+}
+
+// ownerRunnerStore is ownerStore with the runners a source can be bound to.
+// Opt-in: ownerHarness keeps no runner store, so every test above reads as
+// before. upserted is every library row the workspace doors wrote.
+type ownerRunnerStore struct {
+	*ownerStore
+	boundRunners
+	upserted []types.Source
+}
+
+func (s *ownerRunnerStore) UpsertSource(ctx context.Context, src types.Source) (types.Source, error) {
+	s.mu.Lock()
+	s.upserted = append(s.upserted, src)
+	s.mu.Unlock()
+	return s.ownerStore.UpsertSource(ctx, src)
+}
+
+// ownerRunnerHarness is ownerHarness over ownerRunnerStore.
+func ownerRunnerHarness(t *testing.T, mounts runner.UserMountPolicy) (*Server, *ownerRunnerStore, *harness) {
+	t.Helper()
+	st := &ownerRunnerStore{ownerStore: newOwnerStore(), boundRunners: boundRunners{rows: map[uuid.UUID]types.Runner{}}}
 	h := newHarness(t)
 	cfg := baseTestConfig(h, st)
 	cfg.OIDC = &oidc.Authenticator{}

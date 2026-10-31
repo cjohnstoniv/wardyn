@@ -57,7 +57,7 @@ import (
 //
 //nolint:funlen // Deliberate: one linear provision → CAS → compensate sequence whose phase ORDER is the security contract (see above). Each phase already lives in its own helper; splitting the sequence would hide the ordering behind a call graph and make it unauditable in one scope. Low branching — passes gocyclo/gocognit, just long.
 func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, p dispatchParams) {
-	if !s.dispatchAdmitted(ctx, run, ceiling) {
+	if !s.dispatchStartable(ctx, run, ceiling, p) {
 		return
 	}
 	// Only the values a phase below REBINDS get a local alias; everything else is
@@ -265,6 +265,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			sandboxEnv["WARDYN_ARTIFACT_CONFIG_B64"] = artifactPlan.configB64
 		}
 	}
+	// Apple's background boot hosts are denied quietly on a macOS VM, so the guest's first minutes raise
+	// no approval (run_macos_egress.go). A deny only: no allowed domain is added.
+	policy.DeniedDomains = appendMacOSBootDenials(run.MachineKind, policy)
 	artifactInject := len(artifactPlan.injections) > 0
 
 	// LLM transport resolution (precedence: host-staged subscription > managed >
@@ -336,6 +339,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	layers := s.sealRunPolicy(ctx, run, &policy, p.Provenance)
 	signsBedrock := llm.signsBedrock()
 	grantRows = s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, layers, grantRows, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts, &p.Components.MITMHosts)
+	withdrawADOLane(withholding{deny: ceiling.deny, layers: layers}, &ado, &policy, p.Policy.AllowedDomains) // no gate or interception entry ships for a withdrawn lane
 	plan.withdrawSigV4(signsBedrock, llm)
 	azureARM := plan.azureCLI.closeWithheld(&policy, injections) // the door, decided once; one the ceiling withheld takes its hosts with it
 	kubeAPI := plan.kubectlCLI.closeWithheld(&policy, injections)
@@ -412,6 +416,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		Image:            p.Image,
 		ConfinementClass: run.ConfinementClass,
 		MachineKind:      run.MachineKind,
+		MacOSBase:        macOSBaseOf(run),
 		// "Sign-ins in a desktop" for the run's agent (run_desktop_vm_signin.go); only a VM reads it.
 		DesktopSignInsOff: desktopSignInsOff(siteCfg, siteCfgErr, run.Agent),
 		Env:               sandboxEnv,
@@ -553,7 +558,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Authorization envelope — the append-only answer to "what was this agent
 	// actually allowed to do?". The run row cannot answer it: agent_runs.policy_id
 	// has no FK and no spec column, run_policies.spec is overwritten in place, and
-	// an inline/default policy has no stored row at all. Recorded HERE, at the one
+	// an inline/default policy has no stored row at all. Snapshotted HERE, at the one
 	// funnel every dispatch flavour (agent/scan/verify/record/compose/exec) passes
 	// through, and AFTER every widening phase above (artifact substitution, LLM
 	// transport, subscription/Bedrock injection, the inspection gate) — so this is
@@ -565,11 +570,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// field's own doc comment says NEVER logged, so the audited copy is a
 	// Clone with the values replaced by a count; the live `policy` the ProxyConfig
 	// snapshot below references still carries the real values.
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
-		run.ID.String(), "success", mustJSON(effectivePolicyDatum{
-			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskSoft, DiskMiBBasis: p.MainDrive.basis(), DiskMiBDefaultSource: p.MainDrive.defaultSource(),
-			Provenance: p.Provenance,
-		})))
+	// The snapshot is taken here, with the policy as it stands; it is recorded below, once the
+	// proxy config is final, so the host marks it carries describe the config the runner is sent.
+	envelope := effectivePolicyDatum{
+		RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskSoft, DiskMiBBasis: p.MainDrive.basis(), DiskMiBDefaultSource: p.MainDrive.defaultSource(),
+		Provenance: p.Provenance,
+	}
 
 	// Held BEFORE CreateSandbox, not after: the row still carries the
 	// heartbeat it was born with, which any image build/pull longer than the
@@ -614,6 +620,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p) {
 		return
 	}
+	// Recorded now, not at the snapshot: the file_secret placeholders and the placement
+	// classification are the last writers of the proxy config, and the host marks must describe
+	// the config the runner is sent. Nothing between the snapshot and here reads the envelope.
+	envelope.HostMarks = hostMarksOf(spec.ProxyConfig, envelope.AllowedDomains)
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
+		run.ID.String(), "success", mustJSON(envelope)))
 	if !s.applyRunRecording(ctx, &run, &spec, recordingChoice(run, policy, ceiling, siteCfg, siteCfgErr)) {
 		return
 	}

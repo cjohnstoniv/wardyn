@@ -178,19 +178,20 @@ func TestVMFlowStaging(t *testing.T) {
 	t.Run("refusal reports are closed and sanitised", func(t *testing.T) {
 		buf.Reset()
 		for body, want := range map[string]int{
-			`{"reason":"made-up"}`:                        http.StatusBadRequest,
-			`{"reason":"udp","port":70000}`:               http.StatusBadRequest,
-			`{"reason":"udp","extra":1}`:                  http.StatusBadRequest,
-			`{"reason":"udp","host":"8.8.8.8","port":53}`: http.StatusNoContent,
-			`{"reason":"udp","host":"a\r\nb","repeat":4}`: http.StatusNoContent,
-			`{"reason":"dropped-frame","detail":"ipv6"}`:  http.StatusNoContent,
-			`{"reason":"literal-ip","host":"1.1.1.1"}`:    http.StatusNoContent,
+			`{"reason":"made-up"}`:                                       http.StatusBadRequest,
+			`{"reason":"udp","port":70000}`:                              http.StatusBadRequest,
+			`{"reason":"udp","extra":1}`:                                 http.StatusBadRequest,
+			`{"reason":"udp","host":"8.8.8.8","port":53}`:                http.StatusNoContent,
+			`{"reason":"udp","host":"a\r\nb","repeat":4}`:                http.StatusNoContent,
+			`{"reason":"dropped-frame","detail":"ipv6"}`:                 http.StatusNoContent,
+			`{"reason":"literal-ip","host":"1.1.1.1"}`:                   http.StatusNoContent,
+			`{"reason":"tunnel-limit","host":"origin.test","port":2100}`: http.StatusNoContent,
 		} {
 			if st := postRefusal(t, srv.URL, body); st != want {
 				t.Errorf("%s = %d, want %d", body, st, want)
 			}
 		}
-		for _, r := range waitRows(t, buf, 4) {
+		for _, r := range waitRows(t, buf, 5) {
 			if strings.ContainsAny(r.Request.Host, "\r\n") || !strings.HasPrefix(r.RuleSource, "vmnet:") {
 				t.Fatalf("row %+v", r)
 			}

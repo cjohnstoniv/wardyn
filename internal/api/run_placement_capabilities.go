@@ -8,15 +8,19 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // errNoRemoteExecutor is the remote placement's answer when no runner.Runner is
@@ -255,15 +259,22 @@ type placementDemands struct {
 	// VMFolders is a Linux VM run that carries a folder mount: its runner must share it into the
 	// guest (virtiofs), exactly as a container's bind.
 	VMFolders bool
+	// MacOSVM is machine_kind macos_vm: only a registered Mac runner whose caps offer it, and that the
+	// managed-Mac gate admits, starts one (macOSVMOffer).
+	MacOSVM bool
 }
 
 func requestDemands(req createRunRequest, ceiling governanceCeiling, mounts int) placementDemands {
-	vm := types.MachineKind(req.MachineKind).IsVM()
-	return placementDemands{IdlePause: ceiling.Limits.PauseIdleAfterSec > 0, LinuxVM: vm, VMFolders: vm && mounts > 0}
+	kind := types.MachineKind(req.MachineKind)
+	linux := kind == types.MachineLinuxVM
+	return placementDemands{IdlePause: ceiling.Limits.PauseIdleAfterSec > 0, LinuxVM: linux, VMFolders: linux && mounts > 0, MacOSVM: kind.IsMacOSVM()}
 }
 
 // linuxVMOnRemote is the refusal of a Linux VM on the deployment's own executor.
 const linuxVMOnRemote = "Linux VM sandboxes run only on a registered runner that offers them"
+
+// macOSVMOnRemote is the refusal of a macOS VM on the deployment's own executor.
+const macOSVMOnRemote = "macOS VMs run only on a registered runner that offers them."
 
 // linuxVMAgentStart is the refusal of interactive_start: agent on a Linux VM, whose terminal is a
 // plain shell in this release (no shared session to open in the agent CLI or to take over).
@@ -311,6 +322,13 @@ func (c placementCaps) unsupportedDemand(d placementDemands) *placement.Refusal 
 // lands on the placement its pool decided and on one of its eligible runners, so
 // every one of them must meet the demand; an unpooled one on the runner it names.
 func (s *Server) placementCapabilityRefusal(ctx context.Context, req createRunRequest, place runPlacement, ceiling governanceCeiling, mounts int) *runRefusal {
+	return s.placementCapabilityRefusalFor(ctx, req, place, ceiling, mounts, macOSVMAsk{})
+}
+
+// placementCapabilityRefusalFor is placementCapabilityRefusal with the run's own ask of a macOS VM:
+// the harnesses it starts and the size it was given. A zero ask checks neither.
+func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRunRequest, place runPlacement, ceiling governanceCeiling, mounts int, ask macOSVMAsk) *runRefusal {
+	ask.Mounts = mounts
 	runners := []uuid.UUID{requestRunnerID(req)}
 	p := requestPlacement(req)
 	if place.pooled {
@@ -320,11 +338,25 @@ func (s *Server) placementCapabilityRefusal(ctx context.Context, req createRunRe
 	if demands.LinuxVM && p != types.PlacementLocal {
 		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMOnRemote)
 	}
+	if demands.MacOSVM && p != types.PlacementLocal {
+		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind"}, macOSVMOnRemote)
+	}
 	if demands.LinuxVM && requestIsInteractive(req) && req.InteractiveStart == "agent" {
 		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMAgentStart)
 	}
-	if p != types.PlacementLocal || (!demands.IdlePause && !demands.LinuxVM) {
+	if p != types.PlacementLocal || (!demands.IdlePause && !demands.LinuxVM && !demands.MacOSVM) {
 		return nil
+	}
+	var baseLimit macOSBaseLimit // read once for the whole pool, not once per runner
+	if demands.MacOSVM {
+		var err error
+		if baseLimit, err = s.macOSBaseLimitOf(ctx); err != nil {
+			return runServerError("read macOS VM capability", err)
+		}
+		if f := s.macOSBaseDeniedRefusal(ctx, req.MacOSBase, ceiling); f != nil {
+			return f
+		}
+		baseLimit.Base = req.MacOSBase
 	}
 	for _, id := range runners {
 		pc, err := s.placementCapabilities(ctx, types.PlacementLocal, id)
@@ -335,10 +367,576 @@ func (s *Server) placementCapabilityRefusal(ctx context.Context, req createRunRe
 			return runServerError("read runner capabilities", err)
 		default:
 			ref = pc.unsupportedDemand(demands)
+			if ref == nil && demands.MacOSVM {
+				var rerr error
+				if ref, rerr = s.macOSVMRefusal(ctx, id, pc, ask, place.pooled && len(runners) > 1, baseLimit); rerr != nil {
+					return runServerError("read macOS VM capability", rerr)
+				}
+			}
 		}
 		if ref != nil {
-			return runError(ref.Reason.Status(), string(ref.Reason), ref.Error())
+			// The field travels in errorBody.Field, so the sentence is the detail alone.
+			return placementRunRefusal(ref, ref.Detail)
 		}
 	}
 	return nil
 }
+
+// placementRunRefusal is a placement refusal as the run's refusal, saying msg and naming the request
+// field it is about (errorBody.Field) when it names one, so the console takes the person to where
+// that field is changed.
+func placementRunRefusal(ref *placement.Refusal, msg string) *runRefusal {
+	f := runError(ref.Reason.Status(), string(ref.Reason), msg)
+	f.body.Field = ref.Field
+	return f
+}
+
+// macOSVMAsk is what one run asks of a Mac beyond its kind: the harnesses it starts and the CPU and
+// memory it was given (stepResources). A zero field is not checked.
+type macOSVMAsk struct {
+	Harnesses []string
+	CPUMillis int
+	MemoryMiB int
+	// Mounts is how many folders the run shares into the VM.
+	Mounts int
+	// ShareDrives is the run mounts an admin or team drive whose place is a host folder, which a macOS VM
+	// takes as a shared folder; a runner without MacVMCaps.Drives is never asked. DiskDrives is the run
+	// mounts a person's disk drive or keeps its work folder, which a macOS VM attaches as a disk; a runner
+	// without MacVMCaps.DiskDrives is never asked. Drives is a drive of no place a macOS VM knows.
+	// VolumeDrive names a drive that is a Docker or cluster volume (ClusterVolume), which a macOS VM can
+	// never open.
+	ShareDrives, DiskDrives, Drives, ClusterVolume bool
+	VolumeDrive                                    string
+	// Prompts is that a second harness has a starting prompt of its own; Holds that it would hold tool
+	// calls for approval. A macOS VM does neither.
+	Prompts, Holds bool
+	// CPU and Memory say how each size came to be, for the sentence of a size under the minimum; the
+	// zero value names no cause. Profile is the governance profile's own (leaf) name and Pool the run's
+	// pool's, "" for none.
+	CPU, Memory   macOSSizeWhy
+	Profile, Pool string
+}
+
+// macOSSizeWhy is one field of a run's size as the fold resolved it: what it asked for and got, the
+// limit that bound it, and, when governance's member cap did, the setting that cap came from.
+type macOSSizeWhy struct {
+	Applied client.AppliedAmount
+	Limit   types.EffectiveLimit
+	Knob    runnerpool.CapKnob
+}
+
+// macOSOffer is what one Mac runner offers for macOS VMs now: the one function placement, the runner
+// drawer and New Run read, so no surface keeps its own readiness story. Refusal is nil exactly when
+// Offered.
+type macOSOffer struct {
+	Offered   bool
+	Refusal   *placement.Refusal
+	Max       int
+	Harnesses []string
+	Desktop   string
+	// Why is the refusal's client.MacOSVMWhy* code, for the pool list; "" when Offered. On runner_refused,
+	// Refused is its client.MacOSVMRefused* reason, with Have and Need for a size below the minimum.
+	Why        string
+	Refused    string
+	Have, Need int
+	// Evidence is what the managed-Mac gate rested on, for the run page's "Where it ran".
+	Evidence []string
+	// Pool is what a pool of several Macs is told instead of Refusal when this runner is why it cannot
+	// take a macOS VM (macOSPoolNotOffered, macOSPoolCannotTake); "" when Refusal stands for a pool too.
+	Pool string
+}
+
+// What a pool of several Macs is told: a pooled run lands on any eligible runner, so every one of them
+// must take it, and the one that cannot is named in its own drawer, not here.
+const (
+	macOSPoolNotOffered = "Every runner in this pool must offer macOS VMs, and at least one doesn't. Choose a pool of Macs that offer them, or ask an admin to make one."
+	macOSPoolCannotTake = "Every runner in this pool must be able to take a macOS VM, and at least one can't right now. Try again later, or choose another pool."
+)
+
+// macOSBaseLimit is the organisation's maximum macOS base age (site config macos_vm.max_base_age_days) and the
+// clock to read it against. The zero value sets no maximum.
+type macOSBaseLimit struct {
+	MaxDays int
+	Now     time.Time
+	// Base is the base the run picked (CreateRunRequest.MacOSBase), whose age is the one read; "" is Standard.
+	Base string
+}
+
+// macOSBaseLimitOf is the organisation's maximum base age now, none when the site config sets none.
+func (s *Server) macOSBaseLimitOf(ctx context.Context) (macOSBaseLimit, error) {
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return macOSBaseLimit{}, err
+	}
+	if sc.MacOSVM == nil || sc.MacOSVM.MaxBaseAgeDays <= 0 {
+		return macOSBaseLimit{}, nil
+	}
+	return macOSBaseLimit{MaxDays: sc.MacOSVM.MaxBaseAgeDays, Now: time.Now()}, nil
+}
+
+// macOSPoolBaseTooOld is what a pool of several Macs is told when a base is too old, or reports no age.
+const macOSPoolBaseTooOld = "Every runner in this pool must have a macOS base prepared in the last %s, and at least one doesn't. Choose another pool, or ask the Mac's owner to prepare a new base."
+
+// macOSBaseRefusal is the refusal of a ready base under limit's maximum age, with the base's age in days; nil
+// when no maximum is set or the base is young enough. A runner that reports no age (days 0) is refused: with
+// a maximum set, an age nobody can read is not a young one.
+func macOSBaseRefusal(name string, b runnerwire.MacVMBase, limit []macOSBaseLimit) (ref *placement.Refusal, days int) {
+	if len(limit) == 0 || limit[0].MaxDays <= 0 {
+		return nil, 0
+	}
+	maxDays := limit[0].MaxDays
+	created, err := time.Parse(time.RFC3339, b.CreatedAt)
+	if err != nil {
+		return macOSRefusal("machine_kind", name+" doesn't report its macOS base's age, and your organisation sets a maximum. Update the runner."), 0
+	}
+	if days = max(0, int(limit[0].Now.Sub(created).Hours()/24)); days <= maxDays {
+		return nil, days
+	}
+	return macOSRefusal("machine_kind", fmt.Sprintf("%s's macOS base was prepared %s, and your organisation allows %d. Its owner runs `wardyn-runnerd macos-vm prepare --new-image`.", name, daysAgoText(days), maxDays)), days
+}
+
+// macRunnerName is the name the console shows for a runner (runnerLabel in nav-copy.ts): its own, else
+// "Runner" and the first 8 characters of its id.
+func macRunnerName(rn types.Runner) string {
+	if rn.Name != "" {
+		return rn.Name
+	}
+	return "Runner " + rn.ID.String()[:8]
+}
+
+// macOSVMHarnessNone is the harness id for "Your own tools": the base serves it whenever it is ready.
+const macOSVMHarnessNone = "none"
+
+func macOSRefusal(field, detail string) *placement.Refusal {
+	return &placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: field, Detail: detail}
+}
+
+// macOSVMOffer turns a runner's last caps, the managed-Mac gate and the macOS VMs already running on it
+// into one answer. haveCaps is false for a runner that never sent caps; live is the macos_vm runs the
+// org counts on it, a best-effort guard (the runner's own ledger is the authority); operator is whether
+// the asker is a security operator, who is told the command that fixes the trust refusal. limit, when given,
+// is the organisation's maximum base age: an older base, or one whose runner reports no age, is refused.
+func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int, operator bool, limit ...macOSBaseLimit) macOSOffer {
+	mc := caps.MacOSVM
+	if !haveCaps || mc == nil {
+		return macOSOffer{Refusal: macOSRefusal("machine_kind", remote.MacOSVMNotOffered(macRunnerName(rn))), Why: client.MacOSVMWhyNotOffered, Pool: macOSPoolNotOffered}
+	}
+	out := macOSOffer{Max: mc.Max, Harnesses: mc.Harnesses, Desktop: mc.Desktop}
+	if mc.Refusal != "" {
+		out.Why = client.MacOSVMWhyRunnerRefused
+		out.Refused, out.Have, out.Need, out.Refusal = macOSRunnerRefused(rn, mc)
+		return out
+	}
+	evidence, refusal := macOSHostGate(rn, operator)
+	if refusal != nil {
+		out.Refusal, out.Why = refusal, client.MacOSVMWhyNotManaged
+		if refusal.Reason == placement.ReasonRunnerPostureUnmet {
+			out.Why = client.MacOSVMWhyNoPosture
+		}
+		return out
+	}
+	out.Evidence = evidence
+	name := macRunnerName(rn)
+	base, harnesses, known := macOSChosenBase(mc, limit)
+	out.Harnesses = harnesses
+	ageRefusal, days := macOSBaseRefusal(name, base, limit)
+	switch {
+	case mc.Base.State == runnerwire.MacVMBasePreparing:
+		out.Refusal, out.Why = macOSRefusal("machine_kind", fmt.Sprintf("%s is still preparing macOS (%d%%).", name, mc.Base.Progress)), client.MacOSVMWhyPreparing
+	case mc.Base.State != runnerwire.MacVMBaseReady:
+		detail := name + " has no macOS base image ready yet."
+		if mc.Base.Error != "" {
+			detail = fmt.Sprintf("%s has no macOS base image ready yet: %s.", name, mc.Base.Error)
+		}
+		out.Refusal, out.Why = macOSRefusal("machine_kind", detail), client.MacOSVMWhyNoBase
+	case !known:
+		out.Refusal, out.Why = macOSBaseNotFound(limit[0].Base), client.MacOSVMWhyNoBase
+	case ageRefusal != nil:
+		out.Refusal, out.Why, out.Have, out.Need = ageRefusal, client.MacOSVMWhyBaseTooOld, days, limit[0].MaxDays
+	case live >= mc.Max && mc.Max >= 2:
+		out.Refusal, out.Why = macOSRefusal("machine_kind", name+" already runs 2 macOS VMs, the most Apple's licence allows."), client.MacOSVMWhyAtLimit
+	case live >= mc.Max:
+		out.Refusal, out.Why = macOSRefusal("machine_kind", name+" has no room for another macOS VM right now."), client.MacOSVMWhyNoRoom
+	}
+	if out.Refusal != nil {
+		out.Pool = macOSPoolCannotTake
+		if out.Why == client.MacOSVMWhyBaseTooOld {
+			out.Pool = fmt.Sprintf(macOSPoolBaseTooOld, daysText(out.Need))
+		}
+		if !known {
+			out.Pool = "" // MAC-B08 says it of the pool already
+		}
+	}
+	out.Offered = out.Refusal == nil
+	return out
+}
+
+// macOSRunnerRefused is why a runner refuses macOS VMs itself, as the organisation reads it from the
+// runner's per-run limits and the base's minimums its caps carry, never from the runner's own text:
+// memory below the minimum (MV-R47), CPU below it (MV-R48), else MV-N14's "can't right now".
+func macOSRunnerRefused(rn types.Runner, mc *runnerwire.MacVMCaps) (reason string, have, need int, ref *placement.Refusal) {
+	if rn.Limits != nil {
+		perRun := rn.Limits.PerRun
+		if mc.MinMemoryMiB > 0 && int(perRun.MemoryMiB) < mc.MinMemoryMiB {
+			have, need = int(perRun.MemoryMiB/1024), (mc.MinMemoryMiB+1023)/1024
+			return client.MacOSVMRefusedBelowMinMemory, have, need, macOSRefusal("machine_kind", macOSMemoryBelowMinimum(rn, have, need))
+		}
+		if mc.MinCPUs > 0 && int(perRun.CPUMillis/1000) < mc.MinCPUs {
+			have, need = int(perRun.CPUMillis/1000), mc.MinCPUs
+			return client.MacOSVMRefusedBelowMinCPU, have, need, macOSRefusal("machine_kind", macOSCPUBelowMinimum(rn, have, need))
+		}
+	}
+	return client.MacOSVMRefusedOther, 0, 0, macOSRefusal("machine_kind", macOSPoolCannotTake)
+}
+
+// macOSCPUBelowMinimum is MV-R48: the runner's per-run CPU is under the base's minimum, which only its
+// owner raises.
+func macOSCPUBelowMinimum(rn types.Runner, have, need int) string {
+	return fmt.Sprintf("Per-run CPU on this runner is %d CPUs; a macOS VM needs at least %d. Its owner raises it to %d or more in Settings → My runner, or with `wardyn runner set %s --per-run-cpu %d`.", have, need, need, macRunnerName(rn), need)
+}
+
+// macOSMemoryBelowMinimum is MV-R47, in whole GB.
+func macOSMemoryBelowMinimum(rn types.Runner, haveGB, needGB int) string {
+	return fmt.Sprintf("Per-run memory on this runner is %d GB; a macOS VM needs at least %d GB. Its owner raises it to %d GB or more in Settings → My runner, or with `wardyn runner set %s --per-run-memory %d`.", haveGB, needGB, needGB, macRunnerName(rn), needGB)
+}
+
+// macOSHostGate is the managed-Mac gate (design 3.9): the runner's trust class is managed_device, which
+// only a security operator sets, and its posture says mdm_managed from the MDM's file. It returns what
+// the pass rested on, or the first check that failed. No device-certificate check exists in 0.10.0.
+func macOSHostGate(rn types.Runner, operator bool) (evidence []string, refusal *placement.Refusal) {
+	if rn.TrustClass != types.RunnerTrustManagedDevice {
+		detail := macRunnerName(rn) + " is not marked as company-managed. Ask a security operator to mark it."
+		if operator {
+			detail = fmt.Sprintf("%s is not marked as company-managed. Mark it with `wardyn runner trust %s managed_device`.", macRunnerName(rn), rn.ID)
+		}
+		return nil, macOSRefusal("machine_kind", detail)
+	}
+	if !rn.Posture.MDMManaged || rn.Posture.Evidence != types.PostureEvidenceMDMFile {
+		// runner_posture_unmet, not placement_capability: the console keys its copy by reason code.
+		return nil, &placement.Refusal{Reason: placement.ReasonRunnerPostureUnmet, Field: "machine_kind",
+			Detail: macRunnerName(rn) + " has no MDM posture file saying it is managed (`/Library/Application Support/Wardyn/posture.json`)."}
+	}
+	return []string{"managed_device (set by an administrator)", "MDM posture file", "no MDM device-certificate check yet"}, nil
+}
+
+// macOSVMRefusal is the refusal (placement_capability, or runner_posture_unmet from the gate) of a macOS VM run on runner id, or nil when the
+// Mac offers it and the run's harnesses and size fit what the Mac's base can give.
+func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementCaps, ask macOSVMAsk, pool bool, limit macOSBaseLimit) (*placement.Refusal, error) {
+	var caps runnerwire.Caps
+	var haveCaps bool
+	if rc, ok := pc.impl.(runnerCaps); ok {
+		caps, haveCaps = rc.Caps()
+	}
+	var rn types.Runner
+	if st, ok := s.cfg.Store.(interface {
+		GetRunner(context.Context, uuid.UUID) (types.Runner, error)
+	}); ok {
+		var err error
+		if rn, err = st.GetRunner(ctx, id); err != nil {
+			return nil, err
+		}
+	}
+	rn.ID = id
+	var live int
+	if st, ok := s.cfg.Store.(interface {
+		RunnerMacOSVMHolders(context.Context, []uuid.UUID) (map[uuid.UUID]int, error)
+	}); ok && haveCaps {
+		held, err := st.RunnerMacOSVMHolders(ctx, []uuid.UUID{id})
+		if err != nil {
+			return nil, err
+		}
+		live = held[id]
+	}
+	offer := macOSVMOffer(rn, caps, haveCaps, live, s.isSecurityOperator(ctx), limit)
+	if !offer.Offered {
+		if pool && offer.Pool != "" {
+			return macOSRefusal(offer.Refusal.Field, offer.Pool), nil
+		}
+		return offer.Refusal, nil
+	}
+	fit := *caps.MacOSVM
+	fit.Harnesses = offer.Harnesses // the picked base's
+	return macOSVMFit(&fit, rn, ask, pool), nil
+}
+
+// macOSVMFit refuses a run that shares a folder or a drive on a runner that cannot, whose harness the
+// Mac's base cannot serve, or whose applied size is under the base's minimum guest; runnerd checks the
+// harness and size again at start, against its own manifest.
+func macOSVMFit(mc *runnerwire.MacVMCaps, rn types.Runner, ask macOSVMAsk, pool bool) *placement.Refusal {
+	switch {
+	case ask.VolumeDrive != "" && ask.ClusterVolume:
+		return macOSRefusal("drives", driveMacOSClusterVolumeMsg(ask.VolumeDrive))
+	case ask.VolumeDrive != "":
+		return macOSRefusal("drives", driveMacOSDockerVolumeMsg(ask.VolumeDrive))
+	case ask.Drives:
+		return macOSRefusal("drives", macOSVMNoDrives)
+	case ask.ShareDrives && !mc.Drives, ask.DiskDrives && !mc.DiskDrives:
+		return macOSRefusal("drives", macOSVMNoDriveShare)
+	case ask.Prompts:
+		return macOSRefusal("tools", macOSVMOneAgent)
+	case ask.Holds:
+		return macOSRefusal("tools", macOSVMNoHold)
+	}
+	if ask.Mounts > 0 && !mc.Folders {
+		return macOSRefusal("workspaces", runner.MacVMNoFolderShare)
+	}
+	for _, h := range ask.Harnesses {
+		if h == macOSVMHarnessNone || slices.Contains(mc.Harnesses, h) {
+			continue
+		}
+		display := h
+		if def, ok := harnessByID(h); ok {
+			display = def.Display
+		}
+		if !slices.ContainsFunc(mc.Harnesses, func(o string) bool { return o != macOSVMHarnessNone }) {
+			if pool {
+				return macOSRefusal("harness", fmt.Sprintf("Every runner in this pool must offer %s in a macOS VM. Until Apple's Command Line Tools finish installing on each Mac, choose Your own tools.", display))
+			}
+			return macOSRefusal("harness", fmt.Sprintf("macOS VMs on %s offer only Your own tools until Apple's Command Line Tools finish installing.", macRunnerName(rn)))
+		}
+		return macOSRefusal("harness", fmt.Sprintf("This Mac's macOS base can't run %s right now.", display))
+	}
+	cpuLow := ask.CPUMillis > 0 && ask.CPUMillis/1000 < mc.MinCPUs
+	memLow := ask.MemoryMiB > 0 && ask.MemoryMiB < mc.MinMemoryMiB
+	// The runner's per-run limit is the cause when it too is under the minimum, or unknown: only its owner
+	// raises it. Otherwise the run's own ask was lowered under the minimum, and the run raises it.
+	cpus, mem := ask.CPUMillis/1000, ask.MemoryMiB
+	if rn.Limits != nil {
+		cpus, mem = int(rn.Limits.PerRun.CPUMillis/1000), int(rn.Limits.PerRun.MemoryMiB)
+	}
+	if cpuLow && (rn.Limits == nil || cpus < mc.MinCPUs) {
+		return macOSRefusal("resources", macOSCPUBelowMinimum(rn, cpus, mc.MinCPUs))
+	}
+	if memLow && (rn.Limits == nil || mem < mc.MinMemoryMiB) {
+		return macOSRefusal("resources", macOSMemoryBelowMinimum(rn, mem/1024, (mc.MinMemoryMiB+1023)/1024))
+	}
+	if cpuLow || memLow {
+		return macOSRefusal("resources", macOSSizeLow(mc, ask, cpuLow, memLow))
+	}
+	return nil
+}
+
+// What a macOS VM does not do in this release, said at create and Review as the guest launcher says it at
+// start (MAC-F01, MAC-A05, MAC-A06). Every rule that reaches the hold lane holds, Run it and Block it
+// included, so macOSVMNoHold names no rule to change to.
+const (
+	macOSVMNoDrives = "A macOS VM sandbox has no drives in this release."
+	macOSVMOneAgent = "A macOS VM starts one agent per run in this release, and another harness in this run has its own starting prompt. Remove that prompt, or choose a container or a Linux VM."
+	macOSVMNoHold   = "A macOS VM can't hold a tool call for approval in this release, and this run's tool rules or tool approvals would. Change them, or choose a container or a Linux VM."
+)
+
+// macOSVMNoDriveShare is MAC-D13: the runner predates drives in a macOS VM. A Docker or cluster volume's
+// refusal is driveMacOSDockerVolumeMsg's and driveMacOSClusterVolumeMsg's.
+const macOSVMNoDriveShare = "This runner's version can't attach drives to a macOS VM. Update the runner, or run without drives."
+
+// askDrives sorts a run's drives into what a macOS VM asks of its Mac: an admin or team drive in a host
+// folder is a shared folder (ShareDrives), a person's disk drive and the kept work folder are disks
+// (DiskDrives), a Docker or cluster volume is never opened (VolumeDrive, the first), whoever owns it,
+// and a drive of no known place is refused (Drives). A drive with a second place mounts from it on the
+// runner the second place is bound to.
+func (a *macOSVMAsk) askDrives(drives []runDrive, keep *keptWorkFolder) {
+	a.DiskDrives = keep != nil
+	for _, d := range drives {
+		drive := d.resolved.Drive
+		if drive.AltRunnerID != nil {
+			drive = drive.SecondPlace()
+		}
+		switch {
+		case drive.Backend == types.DriveBackendMacDisk:
+			a.DiskDrives = true
+		case drive.Backend.RunnerTarget() == "k8s" || drive.Backend == types.DriveBackendDockerVolume:
+			if a.VolumeDrive == "" {
+				a.VolumeDrive, a.ClusterVolume = drive.Name, drive.Backend.RunnerTarget() == "k8s"
+			}
+		case drive.Backend == types.DriveBackendHostPath:
+			a.ShareDrives = true
+		default:
+			a.Drives = true
+		}
+	}
+}
+
+// macOSVMHolds reports, for a run that starts agents unattended, whether it would launch the hold lane
+// (WARDYN_TOOL_APPROVALS=hold), which the macOS guest launcher refuses. It is the trigger applyToolPosture uses for
+// the lane (tool approvals already hold, a person's tool rules, a policy rule that holds or blocks); a
+// hold only autonomy or the policy's inner walls derive is stepMacOSHold's, later in the fold.
+// An interactive run, an exec run and one whose agents have no hold lane never reach it.
+func macOSVMHolds(req createRunRequest, spec types.RunPolicySpec) bool {
+	if requestIsInteractive(req) || req.TaskMode == "exec" || !slices.ContainsFunc(taskAgents(req), agentHasHoldLane) {
+		return false
+	}
+	return req.ToolApprovals == "hold" || slices.ContainsFunc(req.Tools, hasPersonalToolRules) ||
+		slices.ContainsFunc(spec.ToolRules, func(r types.ToolRule) bool { return r.Effect == types.ToolHold || r.Effect == types.ToolDeny })
+}
+
+// macOSVMAskOf is the macOS VM ask of a run: its harness ids (the request's agent when it names no
+// harness set) and the size stepResources applied, with how each field of it came to be.
+func macOSVMAskOf(place runPlacement, ceiling governanceCeiling, harnesses []types.RunHarness, agent string) macOSVMAsk {
+	applied := place.applied
+	ask := macOSVMAsk{CPUMillis: applied.CPUMillis.Applied, MemoryMiB: applied.MemoryMiB.Applied}
+	size := ceiling.authoredSize()
+	ask.CPU = macOSSizeWhy{Applied: applied.CPUMillis, Limit: place.limits.CPUMillis,
+		Knob: governanceKnob(place.limits.CPUMillis, size.CPUMillis, ceiling.Limits.MaxCPUMillis)}
+	ask.Memory = macOSSizeWhy{Applied: applied.MemoryMiB, Limit: place.limits.MemoryMiB,
+		Knob: governanceKnob(place.limits.MemoryMiB, size.MemoryMiB, ceiling.Limits.MaxMemoryMiB)}
+	if ceiling.Unit != nil {
+		ask.Profile = ceiling.Unit.Name
+	}
+	if place.pooled {
+		ask.Pool = place.row.Name
+	}
+	for _, h := range harnesses {
+		ask.Harnesses = append(ask.Harnesses, h.Harness)
+	}
+	if len(ask.Harnesses) == 0 && agent != "" {
+		ask.Harnesses = []string{agent}
+	}
+	return ask
+}
+
+// governanceKnob is the setting governance's member cap on l came from (runnerpool.MemberCapKnob), "" when
+// governance did not bound l.
+func governanceKnob(l types.EffectiveLimit, ceiling, profileMax int) runnerpool.CapKnob {
+	if l.CapSource != types.LimitSourceGovernance || l.Cap.Unlimited {
+		return ""
+	}
+	return runnerpool.MemberCapKnob(ceiling, profileMax, l.Cap.Value)
+}
+
+// sizeCauseKind is what lowered one field of a macOS VM's size under the base's minimum.
+type sizeCauseKind int
+
+const (
+	sizeOwn      sizeCauseKind = iota // the run asked for less itself, or the fold cannot say
+	sizeCeiling                       // governance's ceiling size
+	sizeLimits                        // governance's profile maximum
+	sizeBaseline                      // governance holds the run to the size its policy has
+	sizePool                          // the pool's per-run limit
+	sizeServer                        // the deployment's limits
+	sizeDefault                       // nothing capped it: the default size it got is under the minimum
+)
+
+// sizeCause is a kind with the name it is told in: the profile, the pool, or for sizeDefault the whole
+// "from ..." clause.
+type sizeCause struct {
+	kind sizeCauseKind
+	name string
+}
+
+// sizeLow is one field under the minimum: what the run gets of it, and the two settings its sentence
+// names (the ceiling's size and the profile's maximum).
+type sizeLow struct {
+	cause              sizeCause
+	got, resource, max string
+}
+
+// macOSSizeLow is the refusal of a size under the base's minimum when no runner limit is why (MAC-Z01 to
+// Z08): the minimum, what the run gets, what lowered it and the setting an admin raises. Fields with one
+// cause share a sentence; two causes get one each. A cause the fold cannot name leaves the plain minimum.
+func macOSSizeLow(mc *runnerwire.MacVMCaps, ask macOSVMAsk, cpuLow, memLow bool) string {
+	var lows []sizeLow
+	if cpuLow {
+		lows = append(lows, sizeLow{cause: ask.CPU.cause(ask, mc.MinCPUs, 1000), got: fmt.Sprintf("%g CPU", float64(ask.CPUMillis)/1000),
+			resource: "`resources.cpu_millis`", max: "`limits.max_cpu_millis`"})
+	}
+	if memLow {
+		lows = append(lows, sizeLow{cause: ask.Memory.cause(ask, mc.MinMemoryMiB, 1), got: fmt.Sprintf("%d MiB", ask.MemoryMiB),
+			resource: "`resources.memory_mib`", max: "`limits.max_memory_mib`"})
+	}
+	need := fmt.Sprintf("A macOS VM needs at least %d CPU and %d MiB.", mc.MinCPUs, mc.MinMemoryMiB)
+	var sentences []string
+	for len(lows) > 0 {
+		group, rest := []sizeLow{lows[0]}, []sizeLow(nil)
+		for _, o := range lows[1:] {
+			if o.cause == group[0].cause {
+				group = append(group, o)
+			} else {
+				rest = append(rest, o)
+			}
+		}
+		lows = rest
+		if group[0].cause.kind != sizeOwn {
+			sentences = append(sentences, group[0].cause.sentence(group))
+		}
+	}
+	if len(sentences) == 0 {
+		return need
+	}
+	return need + " " + strings.Join(sentences, " ")
+}
+
+// cause is why w is under least, in units of the minimum (a CPU is 1000 millis): the limit that capped it
+// when that cap is itself under the minimum, else the default it got when it asked for none.
+func (w macOSSizeWhy) cause(ask macOSVMAsk, least, unit int) sizeCause {
+	l := w.Limit
+	if l.CapSource != "" && !l.Cap.Unlimited && l.Cap.Value/unit < least {
+		switch {
+		case l.CapSource == types.LimitSourceGovernance && ask.Profile != "":
+			switch w.Knob {
+			case runnerpool.CapKnobCeiling:
+				return sizeCause{sizeCeiling, ask.Profile}
+			case runnerpool.CapKnobLimits:
+				return sizeCause{sizeLimits, ask.Profile}
+			case runnerpool.CapKnobBaseline:
+				return sizeCause{sizeBaseline, ask.Profile}
+			}
+		case l.CapSource == types.LimitSourcePool && ask.Pool != "":
+			return sizeCause{sizePool, ask.Pool}
+		case l.CapSource == types.LimitSourceDeployment:
+			return sizeCause{kind: sizeServer}
+		}
+		return sizeCause{}
+	}
+	if w.Applied.Requested > 0 {
+		return sizeCause{}
+	}
+	switch {
+	case w.Applied.Source == types.LimitSourceGovernance && ask.Profile != "":
+		return sizeCause{sizeDefault, "from your governance profile " + ask.Profile}
+	case w.Applied.Source == types.LimitSourcePool && ask.Pool != "":
+		return sizeCause{sizeDefault, "from the pool " + ask.Pool}
+	case w.Applied.Source == types.LimitSourceDeployment:
+		return sizeCause{sizeDefault, "on this server"}
+	}
+	return sizeCause{}
+}
+
+// sentence is the rest of the refusal for the fields of one cause: what the run gets, what lowered it
+// and the setting that raises it.
+func (c sizeCause) sentence(group []sizeLow) string {
+	var got, resources, maxes []string
+	for _, l := range group {
+		got, resources, maxes = append(got, l.got), append(resources, l.resource), append(maxes, l.max)
+	}
+	gets := "This run gets " + strings.Join(got, " and ")
+	that, only := "that", "lowers it"
+	if len(group) > 1 {
+		that, only = "those", "lower them"
+	}
+	switch c.kind {
+	case sizeCeiling:
+		return fmt.Sprintf("%s: your governance profile %s caps it with its ceiling's %s, set on it or on a profile it inherits from. An admin raises %s; %s only %s.",
+			gets, c.name, strings.Join(resources, " and "), that, strings.Join(maxes, " and "), only)
+	case sizeLimits:
+		return fmt.Sprintf("%s: your governance profile %s caps it with %s. An admin raises %s.", gets, c.name, strings.Join(maxes, " and "), that)
+	case sizeBaseline:
+		return fmt.Sprintf("%s: your governance profile %s keeps a run to the size its policy sets, or to the default size when it sets none. An admin raises %s with the policy's %s.",
+			gets, c.name, that, strings.Join(resources, " and "))
+	case sizePool:
+		return fmt.Sprintf("%s: the pool %s caps each run at that. An admin raises the pool's per-run limits.", gets, c.name)
+	case sizeServer:
+		return gets + ": this server's limits cap it. Ask an operator to raise them."
+	}
+	return fmt.Sprintf("%s, the default size %s. Ask for at least the minimum in the run's `resources`, or set it on Review.", gets, c.name)
+}
+
+// daysText is "1 day" for one and "<n> days" for every other count.
+func daysText(n int) string {
+	if n == 1 {
+		return "1 day"
+	}
+	return fmt.Sprintf("%d days", n)
+}
+
+// daysAgoText is "1 day ago" for one and "<n> days ago" for every other count.
+func daysAgoText(n int) string { return daysText(n) + " ago" }

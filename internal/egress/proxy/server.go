@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -47,6 +48,10 @@ type Server struct {
 	allowedPeers []netip.Prefix
 	// signinListen is Config.SigninListen: the person's sign-in lane, "" = none.
 	signinListen string
+	// onListening, when set, runs once the main listener is bound (see OnListening).
+	onListening func()
+	// stopped closes when the HTTP server is shut down, whenever ListenAndServe gets to look.
+	stopped chan struct{}
 }
 
 // NewServer wires a Proxy from a validated Config and dependencies. It mints
@@ -364,6 +369,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ConnContext: signinConnContext,
 	}
 	out := &Server{proxy: p, http: srv, sink: sink, allowedPeers: cfg.AllowedPeers, signinListen: cfg.SigninListen}
+	out.watchShutdown()
 
 	// Start the run-token renewer, which keeps this sidecar's short-TTL token
 	// fresh for the life of the run and, alongside it, the activity reporter
@@ -400,6 +406,9 @@ func startRunTokenRenewer(out *Server, p *Proxy, ts *tokenSource, cfg *Config, c
 
 // ListenAndServe starts serving and blocks until the server stops.
 func (s *Server) ListenAndServe() error {
+	if !s.awaitOpen() {
+		return nil
+	}
 	// The sign-in lane listens first, so a port it cannot have fails the start.
 	if s.signinListen != "" {
 		ln, err := s.listen(s.signinListen)
@@ -414,6 +423,9 @@ func (s *Server) ListenAndServe() error {
 	}
 	ln, err := s.listen(cmp.Or(s.http.Addr, ":http"))
 	if err == nil {
+		if s.onListening != nil {
+			s.onListening()
+		}
 		err = s.http.Serve(ln)
 	}
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -422,6 +434,17 @@ func (s *Server) ListenAndServe() error {
 	return nil
 }
 
+// ReadyMarker is the line a sidecar prints on stdout once its listener is bound. A runner reads it off
+// the container's attach stream, which works on any engine, to know the agent may start. It means
+// "listening", nothing more. A self-lapsing proxy (Config self_lapse) binds only after its first token
+// renewal (awaitOpen), so its marker already follows that renewal and the agent never starts behind a
+// proxy that will refuse it.
+const ReadyMarker = "wardyn-proxy: ready"
+
+// OnListening sets fn to run once the main listener is bound, before the first connection is
+// accepted. Call it before ListenAndServe.
+func (s *Server) OnListening(fn func()) { s.onListening = fn }
+
 // listen opens addr, serving only AllowedPeers when they are set.
 func (s *Server) listen(addr string) (net.Listener, error) {
 	ln, err := net.Listen("tcp", addr)
@@ -429,6 +452,30 @@ func (s *Server) listen(addr string) (net.Listener, error) {
 		return ln, err
 	}
 	return &peerListener{Listener: ln, allowed: s.allowedPeers}, nil
+}
+
+// awaitOpen holds a self-lapsing proxy (k8s runner) off its listeners until its first renew: it
+// refuses every request until then, so it listens only once it serves, and a connect to it (the
+// runner's readiness probe) is proof of that for this proxy and an older one alike. False when
+// Shutdown comes first, which a lapse before that renew ends in too. A gate-less proxy goes on at once.
+func (s *Server) awaitOpen() bool {
+	g := s.proxy.lapse
+	if g == nil {
+		return true
+	}
+	select {
+	case <-g.open:
+		return true
+	case <-s.stopped:
+		return false
+	}
+}
+
+// watchShutdown arms s.stopped. net/http runs only the hooks registered before Shutdown, so this is
+// done where the Server is built, not in awaitOpen, which a Shutdown may complete before.
+func (s *Server) watchShutdown() {
+	s.stopped = make(chan struct{})
+	s.http.RegisterOnShutdown(sync.OnceFunc(func() { close(s.stopped) }))
 }
 
 // shutdownDrainReserve is the most of Shutdown's deadline held back for the sink drain.

@@ -82,6 +82,13 @@ var keepRebootedRunTimeout = reconcileFinalizeTimeout
 // caller's finalize as before. A substrate that cannot keep it (Kubernetes)
 // tears it down in the state the exit code says, as the finalize would have.
 func (s *Server) keepRebootedRun(ctx context.Context, run types.AgentRun, st runner.Status) bool {
+	// A headless run on a runner ends by its runner's generation-bound exit
+	// receipt (runner_exits.go): the runner observes the same exit code, a
+	// reboot's among them (#3665). A reboot mark here would get that receipt
+	// refused (AcceptRunnerExit), so the run would never record its end.
+	if !run.Interactive && run.Placement == types.PlacementLocal && run.RunnerID != nil {
+		return true
+	}
 	// F2 (Fable review): a revive already in flight owns this run — a watcher
 	// sweep that lands mid-revive (its claim cleared lost_at, but the new proxy
 	// or agent is not up yet) must leave it alone, never lose it again.

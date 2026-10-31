@@ -20,6 +20,7 @@ import type { RunIntent } from "../../draft/run-intent";
 import { useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
 import type { MainDriveFacts, MainDriveView } from "./files-seams";
 import { keepDoor, KeepWorkFolder, type KeepDoor } from "./keep-work-folder";
+import { MAC_DRIVES } from "../../../../wardyn/copy/mac-drives";
 import { FilesGroup } from "./kind-visuals";
 import { sizeWords } from "./size-words";
 
@@ -177,7 +178,7 @@ export function MainDriveSection({ view, size, keep = keepDoor(undefined, false)
   const life = lifecycleText(lifecycleOf(draft.intent, view), draft.intent.keep_work_folder === true);
 
   return (
-    <FilesGroup titleId="nr-main-title" title={NR_FILES.MAIN_TITLE} body={NR_FILES.MAIN_BODY} marker={NR_SHARED.REQUIRED}>
+    <FilesGroup titleId="nr-main-title" title={NR_FILES.MAIN_TITLE} body={draft.intent.machine_kind === "macos_vm" ? MAC_DRIVES.D19 : NR_FILES.MAIN_BODY} marker={NR_SHARED.REQUIRED}>
       <div className="grid gap-3 px-[15px] py-3.5">
         <div className="grid grid-cols-[70px_125px_minmax(175px,1fr)_auto] items-center gap-2.5 text-sm max-[520px]:grid-cols-[1fr_auto]">
           <Label htmlFor={SIZE_INPUT_ID} className="font-medium text-muted-foreground max-[520px]:col-span-full">{NR_FILES.SIZE_LABEL}</Label>
