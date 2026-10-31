@@ -50,8 +50,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - macOS VMs: configuration profiles in the install list are staged in the base, approved once in `edit-base`, and read
   back as installed. Built and unit-tested; not yet run on a real Mac.
 - macOS VMs: an organisation CA in the install list is trusted in the base for SSL only, then verified. A CA macOS
-  will not trust without a person reads `not_trusted`; trust it by hand in `edit-base`. Built and unit-tested; not yet
-  run on a real Mac.
+  will not trust without a person reads `not_trusted`; trust it by hand in `edit-base`. On macOS 26 expect Apple to
+  ask a person to approve the trust: the CA then reads `not_trusted` and preparing goes on
+  ([#3878](https://github.com/cjohnstoniv/wardyn/issues/3878)). On macOS 26, expect removing or rotating a CA to stop
+  the tools update; to drop or replace a CA, change the list and run `prepare --reprepare`. Built and unit-tested; not yet run on a real Mac.
 - macOS VMs: a package in the install list may take secret files, such as an EDR licence. A file's value is never in a
   command line, a log, `tools.json` or the caps, and the file is removed after the install. Built and unit-tested; not
   yet run on a real Mac.
