@@ -184,6 +184,14 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 - A proxy older than the organisation refuses a configuration that carries a field it does not know, because the proxy reads its configuration strictly. The run then fails to start rather than running with a rule dropped, so pin only an image from the organisation's own release.
 - To fix the image, run `wardyn-runnerd setup --proxy-image <image>`. Setup marks it pinned and `serve` then never replaces it. A mirror of your own that is not the registration image, and an image `serve` is given by flag, count as pinned too.
 
+### Drive roots on a laptop runner
+
+- A drive bound to a person's own runner mounts only below a **drive root** the runner advertises, and a folder bound to it only inside one, or the root itself. With none, the organisation refuses drives and bound folders on it.
+- The person gives the installed service its roots when they set it up: `wardyn-runnerd setup --drive-root /Volumes/team-share --drive-root /srv/x`. Setup writes them to `runnerd.json` as `drive_root`; a rerun with `--drive-root` replaces the list, and a rerun without it keeps it. The roots are not in the unit or the LaunchAgent.
+- A managed Mac can set them in the profile instead (`DriveRoot`, an array of strings), which outranks `WARDYN_DRIVE_ROOT` and `runnerd.json`; a `--drive-root` on `serve` outranks all three.
+- Each is an absolute, cleaned folder below `/`. A bad value refuses `serve` and `setup`, naming where it came from. `wardyn-runnerd doctor` prints the roots in effect and their source.
+- Docker runners only: a Kubernetes or folders runner refuses a drive root from any of these sources.
+
 ### The Docker engine setup and serve use
 
 - `wardyn-runnerd` reads `DOCKER_HOST` and the engine's default socket.
@@ -248,6 +256,7 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `TrustedCAFile` | `--trusted-ca-file` | a PEM bundle path; deliver the file with a package or script your MDM runs ([A corporate CA](#a-corporate-ca-on-a-laptop-runner)) |
 | `OrgCAFile` | `--org-ca-file` | a PEM file of extra roots for the runner's own connection to the organisation only; root-owned, not writable by group or others |
 | `RecordingStore` | `--recording-store` | `pg`, `fs` or `off` |
+| `DriveRoot` | `--drive-root` | an array of strings: the folders drives and bound folders may mount from ([Drive roots](#drive-roots-on-a-laptop-runner)); left out, none |
 | `DockerHost` | `DOCKER_HOST` | the engine's socket, when it is not the default |
 | `ArtifactBase` | `wardyn runner install --artifact-base` | read by the `wardyn` CLI, not `serve`: the release mirror for `wardyn runner install`, `upgrade` and `setup`, ahead of the one saved in `cli.json` |
 | `MacOSVM` | `WARDYN_RUNNER_MACOS_VM` | a boolean, off by default: offers [macOS VM sandboxes](macos-vms.md) from this Mac. The organisation's `WARDYN_MACOS_VMS` must be on as well |
@@ -255,9 +264,9 @@ The bundle is read when `serve` starts; a bad file stops it and is named.
 | `MDMManaged` | none: profile only | a boolean: this Mac is managed. The runner reports it with the posture file's evidence (`mdm_file`), only when the posture file below is absent |
 | `DiskEncrypted` | none: profile only | a boolean: the disk is encrypted, read with `MDMManaged`; left out, the runner's own probe answers |
 | `MaxRuns`, `TotalCPU`, `TotalMemoryGB`, `PerRunCPU`, `PerRunMemoryGB` | `--max-runs`, `--total-cpu`, `--total-memory`, `--per-run-cpu`, `--per-run-memory` | defaults for `register` and `setup` limits (a flag wins); `PerRunCPU` and `PerRunMemoryGB` also size `macos-vm prepare` when the organisation has sent no per-run limit |
-| `lock_security_settings` | none: profile only | a boolean, off by default; `true` locks the five security keys, as the bullets below say |
+| `lock_security_settings` | none: profile only | a boolean, off by default; `true` locks the six security keys below |
 
-- With the lock on, `OrgURL`, `ProxyImage`, `TrustedCAFile`, `OrgCAFile` and `RecordingStore` in the profile win over a flag, and `serve` and `setup` refuse a flag or environment variable that disagrees, naming `lock_security_settings`.
+- With the lock on, `OrgURL`, `ProxyImage`, `TrustedCAFile`, `OrgCAFile`, `RecordingStore` and `DriveRoot` in the profile win over a flag, and `serve` and `setup` refuse a flag or environment variable that disagrees, naming `lock_security_settings`.
 - A value other than true, false, 1 or 0, or a profile that cannot be read, refuses start. Only a macOS profile can set it: there is no flag, variable or file twin.
 - A key the profile leaves empty, and every other key, keeps the order above.
 
@@ -330,6 +339,21 @@ What happens:
 Not yet: live sync, and **Pause sync**.
 For now this needs a single-replica deployment: with several replicas, a runner connected to another replica reads as
 offline.
+
+## A workspace folder on your runner
+
+A workspace folder can live on your computer: the `local_dir` source names your runner, and its runs run only there.
+
+1. Give the runner a [drive root](#drive-roots-on-a-laptop-runner) that covers the folder.
+2. Add the folder with **On my runner**, or `wardyn workspace create --runner <runner-id> --add dir:<path>`.
+3. Run it in a pool that holds that runner, with placement local.
+
+- Wardyn checks only the path's text; it never scans the folder.
+- The runner resolves links and checks the real path against your roots and its drive roots. A writable folder must also sit in the writable roots.
+- An older runner, without `bound_folders` in its caps, is refused the run until updated.
+- If the runner is revoked or removed, or the workspace changes owner, runs are refused (`workspace_source_runner_unavailable`); add a new workspace.
+- Record and verify refuse such a folder. The workspace scan and env-as-code skip it, and a scan of the source itself is refused (`source_scan_runner_bound`).
+- A `write:` requirement is checked against the server's own files, so one that names such a folder can be refused. Make the folder writable with the source's `--writable` instead.
 
 ## Offline and revocation
 

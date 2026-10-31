@@ -105,6 +105,8 @@
       <string></string>
       <key>DiskEncrypted</key>
       <string></string>
+      <key>DriveRoot</key>
+      <array/>
       <key>lock_security_settings</key>
       <false/>
       <key>MaxRuns</key>

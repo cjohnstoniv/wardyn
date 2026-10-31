@@ -151,6 +151,11 @@ type Caps struct {
 	// MethodLocalAttachTeeAck. The org sends them only to a runner that says so; an older runner
 	// reads as absent and the org refuses a local attach before any call.
 	LocalAttach bool `json:"local_attach,omitempty"`
+	// BoundFolders says the runner binds a member's workspace folder bound to it (runner.Mount.BoundRunner):
+	// it binds such a folder only when it is bound to this runner, holds it to its owner's --drive-root,
+	// and binds a writable one only under a writable ceiling. The org places a run with such a folder only
+	// on a runner that says so; an older runner reads as absent and the org refuses.
+	BoundFolders bool `json:"bound_folders,omitempty"`
 	// LinuxVM says the runner starts Linux VM sandboxes (create_vm) and names the virtual machine it
 	// gives them. Present only when its operator turned VMs on and its start-up probe passed; an older
 	// runner never sends it, and the org asks no runner without it for a VM.

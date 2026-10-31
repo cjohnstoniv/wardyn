@@ -1118,6 +1118,8 @@ ADMIN pre-authorized** —
 - The check runs at onboarding, again at run-create, and a THIRD time in the docker driver
   immediately before `ContainerCreate` (`agentMounts`, on `Mount.MemberAuthored` only), which
   makes a source repointed between onboarding and launch fail closed.
+- A folder bound to the member's runner (`runner_id`) is checked by text here, and by that
+  runner, inside its `--drive-root`, before the bind.
 - Gating on `MemberAuthored` rather than "this is a member run" is load-bearing: an
   operator-authored mount rides the same spec and lives outside every member root by
   construction.

@@ -129,7 +129,9 @@ func (d *Driver) macShares(ctx context.Context, spec runner.SandboxSpec) ([]macv
 	var shares []macvm.Share
 	var mounts []guestagent.Mount
 	for i, m := range spec.Mounts {
-		member := spec.UserMountRoots != nil && m.MemberAuthored
+		// On a runner every share goes through the member rules, as a container's bind does
+		// (boundMountAllowed refuses anything but a member folder bound to it).
+		member := d.cfg.RunnerID != "" || (spec.UserMountRoots != nil && m.MemberAuthored)
 		denied := func(err error) error {
 			if member {
 				return fmt.Errorf("docker: denied member workspace mount %q -> %q: %w", m.Source, m.Target, err)
@@ -146,12 +148,12 @@ func (d *Driver) macShares(ctx context.Context, spec runner.SandboxSpec) ([]macv
 		if err := runner.ValidateMountSourceLexical(m.Source); err != nil {
 			return nil, nil, denied(err)
 		}
-		var writable *runner.UserWritableCeiling
-		if !m.ReadOnly {
-			writable = spec.UserWritable
+		if err := d.boundMountAllowed(m); err != nil {
+			return nil, nil, denied(err)
 		}
+		writable, ownRoots := d.memberBindLimits(spec, m)
 		real, err := macShareProbes.run(ctx, func() (string, error) {
-			return checkMacShare(m.Source, member, spec.UserMountRoots, writable, protected)
+			return checkMacShare(m.Source, member, m.ReadOnly, spec.UserMountRoots, ownRoots, writable, protected)
 		})
 		switch {
 		case errors.Is(err, errShareUnreadable):
@@ -214,7 +216,7 @@ func (d *Driver) macDriveShare(ctx context.Context, drive *types.DriveMount, pro
 		// The folder-share rules name the path they refused: it goes to the operator's log, as the
 		// container's source refusals do, and the person reads the drive and a reason only. A path that
 		// resolves differently the second time never passed the drive's own root check.
-		got, err := checkMacShare(real, false, nil, nil, protected)
+		got, err := checkMacShare(real, false, drive.ReadOnly, nil, nil, nil, protected)
 		if err == nil && got != real {
 			err = errors.New("the drive's folder changed while it was being checked")
 		}
@@ -240,7 +242,7 @@ func (d *Driver) macDriveShare(ctx context.Context, drive *types.DriveMount, pro
 // require a folder, run the rules on that path (runner.CheckMacShareSource), then open it and read
 // one entry, as the helper will. A privacy refusal is errShareUnreadable; the descriptor is closed
 // here, however late.
-func checkMacShare(src string, member bool, roots []string, writable *runner.UserWritableCeiling, protected []string) (string, error) {
+func checkMacShare(src string, member, readOnly bool, roots, ownRoots []string, writable *runner.UserWritableCeiling, protected []string) (string, error) {
 	real, err := filepath.EvalSymlinks(src)
 	if err != nil {
 		if errors.Is(err, os.ErrPermission) {
@@ -251,7 +253,7 @@ func checkMacShare(src string, member bool, roots []string, writable *runner.Use
 	if fi, err := os.Stat(real); err != nil || !fi.IsDir() {
 		return "", fmt.Errorf("mount source %q is not a folder", src)
 	}
-	if err := runner.CheckMacShareSource(real, member, roots, writable, protected); err != nil {
+	if err := runner.CheckMacShareSource(real, member, readOnly, roots, ownRoots, writable, protected); err != nil {
 		return "", err
 	}
 	f, err := os.OpenFile(real, os.O_RDONLY|syscall.O_DIRECTORY, 0)

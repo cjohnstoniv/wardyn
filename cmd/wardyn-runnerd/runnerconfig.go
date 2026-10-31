@@ -71,6 +71,9 @@ type runnerFile struct {
 	// MacOSVMBasesDir is the Mac's other macOS bases: a directory of <name>.json install lists, one per base,
 	// each derived from Standard (macvm.LoadBaseVariants); none when unset.
 	MacOSVMBasesDir string `json:"macos_vm_bases_dir,omitempty"`
+	// DriveRoot lists the folders a drive bound to this runner may mount from, with everything under each:
+	// a JSON array of absolute, cleaned folder paths (parseDriveRoots). None when unset, so no drive mounts here.
+	DriveRoot []string `json:"drive_root,omitempty"`
 }
 
 // Where each setting is read from, in the order serve consults them. A managed preference outranks the
@@ -90,15 +93,18 @@ const (
 const lockSettingKey = "lock_security_settings"
 
 // runnerField names one setting everywhere it can come from. The zero flag, env or managed is "none". locked
-// marks a security setting the managed profile pins when it sets lockSettingKey.
+// marks a security setting the managed profile pins when it sets lockSettingKey. A list setting has fileList
+// and no file: its flag is repeatable, its managed preference an array of strings, its environment variable
+// a list separated by os.PathListSeparator, and its runnerd.json field a JSON array.
 type runnerField struct {
-	name    string
-	flag    string
-	env     []string
-	managed string
-	def     string
-	locked  bool
-	file    func(*runnerFile) *string
+	name     string
+	flag     string
+	env      []string
+	managed  string
+	def      string
+	locked   bool
+	file     func(*runnerFile) *string
+	fileList func(*runnerFile) *[]string
 }
 
 var runnerFields = []runnerField{
@@ -124,6 +130,7 @@ var runnerFields = []runnerField{
 	{name: "macos_vm_image_sha256", flag: "sha256", managed: "MacOSVMImageHash", file: func(f *runnerFile) *string { return &f.MacOSVMImageHash }},
 	// No flag or environment variable sets it, as macos_vm_base_file.
 	{name: "macos_vm_bases_dir", managed: "MacOSVMBasesDir", file: func(f *runnerFile) *string { return &f.MacOSVMBasesDir }},
+	{name: "drive_root", flag: "drive-root", env: []string{"WARDYN_DRIVE_ROOT"}, managed: "DriveRoot", locked: true, fileList: func(f *runnerFile) *[]string { return &f.DriveRoot }},
 }
 
 // profileOnlyKeys are the managed preferences no serve setting stands for: the posture a Mac's MDM attests
@@ -162,12 +169,31 @@ func parseLocalModelPorts(s string) ([]uint16, error) {
 	return out, nil
 }
 
+// parseDriveRoots checks --drive-root, and the other sources of drive_root: each an absolute, cleaned folder. The docker driver binds a drive
+// only strictly below one of them, after resolving symlinks (runner.UserDriveMountSourceCheck).
+func parseDriveRoots(raw []string) ([]string, error) { return parseDriveRootsFrom(raw, "--drive-root") }
+
+// parseDriveRootsFrom is parseDriveRoots for a value from source, which the refusal names: --drive-root, or
+// the managed preference, environment variable or runnerd.json field that gave it.
+func parseDriveRootsFrom(raw []string, source string) ([]string, error) {
+	for _, r := range raw {
+		if !filepath.IsAbs(r) || filepath.Clean(r) != r || r == "/" {
+			return nil, fmt.Errorf("%s %q: give an absolute, cleaned folder below /", source, r)
+		}
+	}
+	return raw, nil
+}
+
 // resolvedField is one setting's effective value and where it came from, for serve and for any command
 // that has to name the field to change.
 type resolvedField struct {
 	Name, Value string
 	// Source reads "flag --org", "managed preference OrgURL", "environment DOCKER_HOST", "file <path>" or "default".
 	Source string
+	// List is a list setting's values (Value joins them with os.PathListSeparator), and Err a source that
+	// could not be read as a list; serve refuses it (checkDriveRoots).
+	List []string
+	Err  error
 }
 
 type runnerConfig []resolvedField
@@ -186,7 +212,9 @@ func (c runnerConfig) field(name string) resolvedField {
 // runnerInputs is everything resolution reads, so a test runs it without a process environment.
 type runnerInputs struct {
 	// flag is the command-line value of a flag the person gave, if they gave it.
-	flag     func(name string) (string, bool)
+	flag func(name string) (string, bool)
+	// flagList is flag for a repeatable flag: its values, if the person gave it; nil means none.
+	flagList func(name string) ([]string, bool)
 	getenv   func(string) string
 	managed  func(key string) string
 	file     runnerFile
@@ -233,6 +261,12 @@ func checkSecurityLock(in runnerInputs) error {
 		return err
 	}
 	for _, f := range runnerFields {
+		if f.fileList != nil {
+			if err := f.listLockRefusal(in); err != nil {
+				return err
+			}
+			continue
+		}
 		want := ""
 		if f.locked && f.managed != "" {
 			want = in.managed(f.managed)
@@ -240,9 +274,7 @@ func checkSecurityLock(in runnerInputs) error {
 		if want == "" {
 			continue
 		}
-		refuse := func(how string) error {
-			return fmt.Errorf("%s disagrees with the managed preference %s, and the managed profile sets %s: remove it, or ask your administrator to change the profile", how, f.managed, lockSettingKey)
-		}
+		refuse := func(how string) error { return lockRefusal(how, f.managed) }
 		if f.flag != "" && in.flag != nil {
 			if v, ok := in.flag(f.flag); ok && strings.TrimSpace(v) != "" && strings.TrimSpace(v) != want {
 				return refuse("--" + f.flag)
@@ -257,6 +289,49 @@ func checkSecurityLock(in runnerInputs) error {
 	return nil
 }
 
+// lockRefusal refuses how, a flag or environment variable, for disagreeing with the locked managed preference
+// managed.
+func lockRefusal(how, managed string) error {
+	return fmt.Errorf("%s disagrees with the managed preference %s, and the managed profile sets %s: remove it, or ask your administrator to change the profile", how, managed, lockSettingKey)
+}
+
+// listLockRefusal is checkSecurityLock for a locked list setting: a given flag or environment variable that
+// is not the managed list is refused. A managed list that is empty or not an array locks nothing here; the
+// resolve reports a bad one.
+func (f runnerField) listLockRefusal(in runnerInputs) error {
+	want, ok := f.managedList(in)
+	if !f.locked || !ok || len(want) == 0 {
+		return nil
+	}
+	if f.flag != "" && in.flagList != nil {
+		if v, given := in.flagList(f.flag); given && len(v) > 0 && !slices.Equal(v, want) {
+			return lockRefusal("--"+f.flag, f.managed)
+		}
+	}
+	for _, name := range f.env {
+		if v := strings.TrimSpace(in.getenv(name)); v != "" && !slices.Equal(filepath.SplitList(v), want) {
+			return lockRefusal("environment variable "+name, f.managed)
+		}
+	}
+	return nil
+}
+
+// managedList is the list setting's managed preference, ok false when there is none or it is not an array.
+func (f runnerField) managedList(in runnerInputs) ([]string, bool) {
+	if f.managed == "" || in.managed == nil {
+		return nil, false
+	}
+	raw := in.managed(f.managed)
+	if raw == "" {
+		return nil, false
+	}
+	var v []string
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		return nil, false
+	}
+	return v, true
+}
+
 // resolveRunnerConfig applies flag > managed preference > environment > file > default to every field. While
 // the managed profile sets lockSettingKey, a security field's managed value outranks the flag too.
 func resolveRunnerConfig(in runnerInputs) runnerConfig {
@@ -269,6 +344,9 @@ func resolveRunnerConfig(in runnerInputs) runnerConfig {
 }
 
 func (f runnerField) resolve(in runnerInputs) resolvedField {
+	if f.fileList != nil {
+		return f.resolveList(in)
+	}
 	got := func(value, source string) resolvedField {
 		return resolvedField{Name: f.name, Value: value, Source: source}
 	}
@@ -297,6 +375,76 @@ func (f runnerField) resolve(in runnerInputs) resolvedField {
 		return got(v, sourceFile+" "+in.filePath)
 	}
 	return got(f.def, sourceDefault)
+}
+
+// resolveList is resolve for a list setting, in the same order: flag > managed preference > environment > file.
+func (f runnerField) resolveList(in runnerInputs) resolvedField {
+	got := func(list []string, source string) resolvedField {
+		return resolvedField{Name: f.name, Value: strings.Join(list, string(os.PathListSeparator)), List: list, Source: source}
+	}
+	var managed []string
+	malformed := false
+	if f.managed != "" && in.managed != nil {
+		if raw := in.managed(f.managed); raw != "" {
+			malformed = json.Unmarshal([]byte(raw), &managed) != nil
+		}
+	}
+	refuse := func() resolvedField {
+		bad := got(nil, sourceManaged+" "+f.managed)
+		bad.Err = fmt.Errorf("managed preference %s: must be an array of folders", f.managed)
+		return bad
+	}
+	// Under the lock a malformed managed list is refused before a flag can stand in for it.
+	if in.locked && f.locked {
+		if malformed {
+			return refuse()
+		}
+		if len(managed) > 0 {
+			return got(managed, sourceManaged+" "+f.managed+" (locked)")
+		}
+	}
+	if f.flag != "" && in.flagList != nil {
+		if v, ok := in.flagList(f.flag); ok && len(v) > 0 {
+			return got(v, sourceFlag+" --"+f.flag)
+		}
+	}
+	if malformed {
+		return refuse()
+	}
+	if len(managed) > 0 {
+		return got(managed, sourceManaged+" "+f.managed)
+	}
+	for _, name := range f.env {
+		if v := strings.TrimSpace(in.getenv(name)); v != "" {
+			return got(filepath.SplitList(v), sourceEnv+" "+name)
+		}
+	}
+	file := in.file
+	if v := *f.fileList(&file); len(v) > 0 {
+		return got(v, sourceFile+" "+in.filePath)
+	}
+	return got(nil, sourceDefault)
+}
+
+// checkDriveRoots refuses the effective drive_root when its source could not be read, holds a folder
+// parseDriveRoots refuses, or is not the flag while the substrate is not docker (checkSubstrateFlags refuses the
+// flag), naming the source.
+func (c runnerConfig) checkDriveRoots(substrate string) error {
+	f := c.field("drive_root")
+	if f.Err != nil {
+		return f.Err
+	}
+	label, isFlag := "--drive-root", strings.HasPrefix(f.Source, sourceFlag)
+	if !isFlag {
+		label = "drive_root (" + f.Source + ")"
+	}
+	if _, err := parseDriveRootsFrom(f.List, label); err != nil {
+		return err
+	}
+	if substrate != "docker" && len(f.List) > 0 && !isFlag {
+		return fmt.Errorf("%s applies only to --substrate=docker", label)
+	}
+	return nil
 }
 
 // defaultRunnerConfigPath is <UserConfigDir>/wardyn/runnerd.json, the file serve reads when --config is not given.
@@ -371,6 +519,9 @@ func checkRunnerFile(f runnerFile) error {
 		return errors.New("recording_store: must be pg, fs or off")
 	}
 	if _, err := parseLocalModelPorts(f.LocalModelPort); err != nil {
+		return err
+	}
+	if _, err := parseDriveRootsFrom(f.DriveRoot, "drive_root"); err != nil {
 		return err
 	}
 	if err := checkMacOSVMImage(f.MacOSVMImageURL, f.MacOSVMImageHash); err != nil {
@@ -471,6 +622,11 @@ func mirroredProxyImageHook(mirror string, pinned bool, follow func(string)) fun
 // change): the file at path ("" is the default one), the process environment and the managed preferences.
 // flag reports a flag the person gave; nil means none.
 func effectiveRunnerConfig(path string, flag func(string) (string, bool)) (runnerConfig, error) {
+	return effectiveRunnerConfigWith(path, flag, nil)
+}
+
+// effectiveRunnerConfigWith is effectiveRunnerConfig that also reads a repeatable flag (flagList).
+func effectiveRunnerConfigWith(path string, flag func(string) (string, bool), flagList func(string) ([]string, bool)) (runnerConfig, error) {
 	explicit := path != ""
 	var err error
 	if path, err = cmpOrDefaultPath(path); err != nil {
@@ -480,7 +636,7 @@ func effectiveRunnerConfig(path string, flag func(string) (string, bool)) (runne
 	if err != nil {
 		return nil, err
 	}
-	in := runnerInputs{flag: flag, getenv: os.Getenv, managed: managedPref, lockRead: managedLockRead, file: file, filePath: path}
+	in := runnerInputs{flag: flag, flagList: flagList, getenv: os.Getenv, managed: managedPref, lockRead: managedLockRead, file: file, filePath: path}
 	if err := checkSecurityLock(in); err != nil {
 		return nil, err
 	}

@@ -103,7 +103,8 @@
 # threatmodel/THREAT-MODEL.md 70780 adds 61 over 70719, measured (rc.9 Mac docs): the B14 screen-lock line.
 # threatmodel/THREAT-MODEL.md 70925 adds 145 over 70780, measured (rc.9 Mac docs): the B14 base-edit, profile and drive lines and the drive crossing.
 # threatmodel/THREAT-MODEL.md 70934 adds 9, measured: a drive image outlives its record on a Mac no longer registered.
-threatmodel/THREAT-MODEL.md=70934 share=20
+# threatmodel/THREAT-MODEL.md 70957 adds 23 over 70934, measured: a runner-bound folder is checked by its runner inside --drive-root.
+threatmodel/THREAT-MODEL.md=70957 share=20
 # 0.10 HYB-C: threatmodel/THREAT-MODEL.md 66573 adds 43 over 66530, measured: the Linux VM's virtiofs shares are the container's binds (same folders, targets, mode, no other host path).
 # threatmodel/THREAT-MODEL.md 66596 adds 23 over 66573 (0.10 HYB-C review): VM state reaches the guest only as its disk; a guest write lands as the runner's user.
 # threatmodel/THREAT-MODEL.md 65311 adds 222 over 65089 (0.10 FEAT-1MCP), measured: item (r), a local MCP server's access, secrets, egress, off switch and refusals.

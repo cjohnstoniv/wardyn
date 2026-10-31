@@ -1171,16 +1171,18 @@ func TestDecide_ApprovalRuleRidesTheDecideRow(t *testing.T) {
 type indexStore struct{ *fakeStore }
 
 func (d indexStore) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
+	// The check and the append hold one lock, as the index makes them one step: two raises that both
+	// checked before either appended would otherwise both land.
 	d.mu.Lock()
+	defer d.mu.Unlock()
 	for _, existing := range d.records {
 		if existing.State == types.ApprovalPending && existing.RunID == a.RunID &&
 			existing.Kind == a.Kind && string(existing.RequestedScope) == string(a.RequestedScope) {
-			d.mu.Unlock()
 			return types.ApprovalRequest{}, types.ErrDuplicatePendingApproval
 		}
 	}
-	d.mu.Unlock()
-	return d.fakeStore.CreateApproval(ctx, a)
+	d.records = append(d.records, a)
+	return a, nil
 }
 
 // barrierStore holds each raise's dedup read until every raise has read, so all of them reach the

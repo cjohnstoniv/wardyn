@@ -27,14 +27,14 @@ import (
 // Sources (tier 1)
 
 const sourceCols = `id, kind, locator, ref, name, requirements, profile, status, ` +
-	`active_run_id, created_at, updated_at`
+	`active_run_id, created_at, updated_at, runner_id`
 
 func scanSource(row pgx.Row) (types.Source, error) {
 	var src types.Source
 	var kind, status string
 	var reqRaw, profileRaw []byte
 	err := row.Scan(&src.ID, &kind, &src.Locator, &src.Ref, &src.Name,
-		&reqRaw, &profileRaw, &status, &src.ActiveRunID, &src.CreatedAt, &src.UpdatedAt)
+		&reqRaw, &profileRaw, &status, &src.ActiveRunID, &src.CreatedAt, &src.UpdatedAt, &src.RunnerID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Source{}, ErrNotFound
 	}
@@ -60,19 +60,21 @@ func sourceRequirementsParam(m map[string]types.WorkspaceRequirement) []byte {
 }
 
 // UpsertSource inserts a library source or returns the existing row with the
-// same identity (kind, locator, ref) — ONE statement, no read-then-write race:
-// the UNIQUE constraint IS the dedupe rule. Identity fields must arrive
+// same identity (kind, locator, ref, runner_id) — ONE statement, no
+// read-then-write race: the unique index IS the dedupe rule (0247: a NULL
+// runner_id is the nil uuid in it, so an unbound path stays one row). Identity fields must arrive
 // CANONICALIZED (the api layer owns that) — the store stores what it is given.
 func (s PG) UpsertSource(ctx context.Context, src types.Source) (types.Source, error) {
 	q := `
 		INSERT INTO sources (` + sourceCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-		ON CONFLICT (kind, locator, ref) DO UPDATE SET updated_at = now()
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		ON CONFLICT (kind, locator, ref, (COALESCE(runner_id, '00000000-0000-0000-0000-000000000000'::uuid)))
+		DO UPDATE SET updated_at = now()
 		RETURNING ` + sourceCols
 	return scanSource(s.Pool.QueryRow(ctx, q,
 		src.ID, string(src.Kind), src.Locator, src.Ref, src.Name,
 		sourceRequirementsParam(src.Requirements), workspaceProfileParam(src.Profile), string(src.Status),
-		src.ActiveRunID, src.CreatedAt, src.UpdatedAt,
+		src.ActiveRunID, src.CreatedAt, src.UpdatedAt, src.RunnerID,
 	))
 }
 
@@ -680,7 +682,7 @@ func hydrateWorkspace(ws *types.Workspace, sources map[uuid.UUID]types.Source, i
 		switch src.Kind {
 		case types.SourceLocalDir:
 			derived = append(derived, types.WorkspaceSource{
-				Type: types.WorkspaceSourceTypeLocalDir, Path: src.Locator,
+				Type: types.WorkspaceSourceTypeLocalDir, Path: src.Locator, RunnerID: src.RunnerID,
 				Target: att.Target, Writable: att.Writable, Overrides: att.Overrides,
 			})
 		case types.SourceRepo:

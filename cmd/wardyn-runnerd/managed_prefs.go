@@ -5,6 +5,7 @@ package main
 
 import (
 	"runtime"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/managedprefs"
 )
@@ -16,8 +17,13 @@ var (
 	prefsOS      = runtime.GOOS
 	prefsRoot    = "/Library/Managed Preferences"
 	prefsExtract = plutilExtract
-	plutilPath   = "/usr/bin/plutil"
+	// prefsExtractJSON reads a key whose value is a plist array (managedListKeys), as a JSON array.
+	prefsExtractJSON = plutilExtractJSON
+	plutilPath       = "/usr/bin/plutil"
 )
+
+// managedListKeys are the preferences that hold an array of strings, which managedPref returns as a JSON array.
+var managedListKeys = []string{"DriveRoot"}
 
 // managedPref is the string MDM set for key in the profile's preference domain, or "" when this is not
 // a Mac, no profile is installed or the key is unset or empty. A profile that cannot be read reads as unset
@@ -29,9 +35,17 @@ func managedPref(key string) string {
 
 // managedPrefErr is managedPref that also reports a profile that is there but cannot be read.
 func managedPrefErr(key string) (string, error) {
-	return managedprefs.Read(prefsOS, prefsRoot, prefsDomain, key, prefsExtract)
+	extract := prefsExtract
+	if slices.Contains(managedListKeys, key) {
+		extract = prefsExtractJSON
+	}
+	return managedprefs.Read(prefsOS, prefsRoot, prefsDomain, key, extract)
 }
 
 func plutilExtract(file, key string) (string, error) {
 	return managedprefs.PlutilExtract(plutilPath, file, key)
+}
+
+func plutilExtractJSON(file, key string) (string, error) {
+	return managedprefs.PlutilExtractJSON(plutilPath, file, key)
 }

@@ -831,10 +831,22 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	if f.mode == foldPreflight { // preflight parses the class inside stepConfinement, after this step
 		in.reqCC, in.reqCCOK = parseConfinementClass(f.req.ConfinementClass)
 	}
+	// A folder bound to one of the person's runners holds the run to that runner (kindTargets), and every
+	// door refuses the run anywhere else, unpooled and headless runs too.
+	mounts := buildRunMounts(f.spec, s.userMountPosture(f.wsRefs))
+	mountRunner, refusal := boundMountsRunner(mounts)
+	if refusal.write(s, f.w, f.r) {
+		return false
+	}
+	in.mountRunner = mountRunner
 	plan, refusal := s.resolvePlacement(f.r.Context(), in)
 	if refusal.write(s, f.w, f.r) {
 		return false
 	}
+	if s.boundFolderPlacementRefusal(mountRunner, plan.placement, mounts).write(s, f.w, f.r) {
+		return false
+	}
+	plan.mountRunner = mountRunner
 	f.place = plan
 	// A scheduled run waits in its pool's queue for its time; with no pool there is no queue to hold it.
 	if f.schedule != nil && !plan.pooled {

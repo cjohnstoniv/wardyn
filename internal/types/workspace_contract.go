@@ -41,7 +41,11 @@ type Source struct {
 	// canonical repo slug/clone URL (repo, lowercased); with Ref, unique in the store.
 	Locator string `json:"locator"`
 	// Ref is an optional git ref (repo only); part of identity, so the same repo at two refs is two sources with two contracts.
-	Ref          string                          `json:"ref,omitempty"`
+	Ref string `json:"ref,omitempty"`
+	// RunnerID is the person's runner a local_dir folder lives on (nil = the
+	// control plane's host); part of identity, so one path on two machines is
+	// two sources.
+	RunnerID     *uuid.UUID                      `json:"runner_id,omitempty"`
 	Name         string                          `json:"name"`
 	Requirements map[string]WorkspaceRequirement `json:"requirements,omitempty"` // this source's own contract; see the type doc above
 	// Profile is this source's scan result, opaque here (never interpreted, only

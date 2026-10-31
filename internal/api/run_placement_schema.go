@@ -48,7 +48,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[llmTransport]():         strings.Fields("bedrock bedrockReady injectBedrockBearer injectBedrockSSO azure provider secretEnvKeys bedrockAudit"),
 	reflect.TypeFor[providerAzureLane]():    strings.Fields("provider owner harness endpoint host route audience model fast"),
 	reflect.TypeFor[toolchainNeeds]():       strings.Fields("goTools jvmTools"),
-	reflect.TypeFor[userMountPosture]():     strings.Fields("Roots Sources Writable"),
+	reflect.TypeFor[userMountPosture]():     strings.Fields("Roots Sources Writable Bound"),
 	reflect.TypeFor[policyref.Contact]():    strings.Fields("Owner Email RequestURL RequestText"),
 	reflect.TypeFor[policyref.Provenance](): strings.Fields("Layer Name Contact Locked"),
 	reflect.TypeFor[types.ADOEntraConfig](): strings.Fields("TenantID ClientID CapabilityCeiling DefaultProfile TokenMode PATMaxHours PATMaxDays RESTAPI RunnerResident RunnerResidentSandbox"),

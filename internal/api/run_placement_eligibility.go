@@ -190,6 +190,14 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		// A bound drive's runner is the run's (kindTargets holds the run to it).
 		VerifiedLocalPaths: s.drivePathsOn(boundMountRunner(drives), drives),
 	}
+	// A bound folder's runner is the run's too (kindTargets holds the run to it).
+	mountRunner, refusal := boundMountsRunner(p.Spec.Mounts)
+	if refusal != nil {
+		return placement.LocalPlan{}, refusal
+	}
+	if mountRunner != nil {
+		p.VerifiedLocalPaths = mergePaths(p.VerifiedLocalPaths, s.mountPathsOn(*mountRunner, p.Spec.Mounts))
+	}
 	for _, c := range comps.attached {
 		if !c.snapshot.SelfDefined && c.snapshot.Definition.LocalMCP() {
 			return placement.LocalPlan{}, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), localMCPOrgServerMsg)
@@ -253,8 +261,9 @@ type boundLocalPath struct {
 // when its stored runner binding is the candidate runner and the path lies
 // inside one of that runner's allowed roots. bound is keyed by the plan path
 // ("SandboxSpec.Mounts[0]", "SandboxSpec.Drives[0]"). A drive's second place is
-// bound to one runner (drivePathsOn); local_dir sources carry no runner column
-// yet, so every local mount still refuses placement_local_path.
+// bound to one runner (drivePathsOn), and so is a local_dir source that names
+// its owner's runner (mountPathsOn); every other local mount still refuses
+// placement_local_path.
 func verifiedLocalPaths(candidate uuid.UUID, roots []string, bound map[string]boundLocalPath) map[string]bool {
 	out := map[string]bool{}
 	for key, b := range bound {

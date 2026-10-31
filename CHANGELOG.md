@@ -13,6 +13,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- An installed runner can now be given the folders drives and workspace folders may use, with
+  `wardyn-runnerd setup --drive-root <dir>` (repeatable). Setup writes them to `runnerd.json` as `drive_root`, so
+  the service needs no change; a rerun with `--drive-root` replaces the list and one without keeps it. A managed Mac
+  can set them with the `DriveRoot` profile key, and `WARDYN_DRIVE_ROOT` also sets them; a `--drive-root` on `serve`
+  wins over all three. `wardyn-runnerd doctor` prints the roots in effect and where they came from. See
+  [Drive roots](docs/operations/hybrid-laptops.md#drive-roots-on-a-laptop-runner).
 - `wardyn-runnerd macos-vm edit-base` boots a copy of a Mac's macOS base for one attended session, then checks it
   before runs use it: desktop control, accounts, Remote Login and the launcher's self-test. A copy that fails is
   discarded and runs keep the old base. The runner reports when Standard was last edited, and each run records that
@@ -195,8 +201,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A secret-store fault while proving that a person holds their own credential, for a run on their own runner, now
   refuses with the retryable 503 `store_unavailable` instead of reading the credential as the organisation's. At
   dispatch the run fails as unreadable rather than refused. The store is read once per person per request, fault or
-  not. The same fault on any other check of a person's own secret (an inline policy, an override, a component, a
-  model provider key) is the same 503, never "unknown secret", a dropped grant or a 500.
+  not. The same fault on any other check of a person's own secret that admits a run (an inline policy, an override,
+  a component, a model provider key) is the same 503, never "unknown secret", a dropped grant or a 500. A
+  component's save stays advisory and still lists that secret as missing.
 - A run's end no longer loses its settlement when the sandbox stop overruns: the teardown-error audit, the output
   finish, the workspace and record settlement and the cleared sandbox reference each get a budget of their own, so a
   workspace scan is no longer left in `scanning`. A replica that loses the run's lock during that tail now stops it,
@@ -317,9 +324,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   first shipped (#3404).
 - On a run's Agents panel, an agent whose state has not arrived yet is now shown without a status badge, not as
   Running.
+- A member's workspace folder that exists only on their own Mac or Linux computer can now be used there: a `local_dir`
+  source names one of the person's runners (`runner_id`, or `wardyn workspace create --runner`). Wardyn checks the
+  path's form when the workspace is saved and when a run starts, and places the run only on that runner, which checks
+  that the folder exists, resolves links, and holds it to the member's workspace roots, its own `--drive-root`, the
+  credential-path list and the writable roots before it binds or shares it. When that runner is later revoked or
+  removed, or the workspace passes to someone else, a run with the folder is refused by name
+  (`workspace_source_runner_unavailable`). Previously such a folder was refused when the workspace was saved, and no
+  workspace folder could run on a person's own runner (`placement_local_path`).
 
 ### Security
 
+- `WARDYN_USER_WRITABLE_DENY` now matches a member's writable folder in any letter case, so an entry naming `.ssh`
+  also refuses a path that spells it `.SSH`, as a case-insensitive disk resolves both to one folder.
 - An upgraded connection an inbound token opened, a WebSocket say, is now re-checked every 15 seconds and closed at
   most 45 seconds after the last check that confirmed its token (30 seconds unconfirmed, plus one re-check), even
   while a check is still waiting on a store that does not answer. A hung check used to hold the connection open for good, and a store that kept
@@ -334,6 +351,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Migration `0246_user_drives_mac_disk` admits `mac_disk` in `user_drives.backend`'s CHECK and in the member-drive
   rule, and adds `user_drives.home_runner_id`, the Mac a disk drive is kept on. It changes no row and adds no grant.
   A downgrade with a disk drive present is unsupported.
+- Migration `0247_sources_runner_id` adds `sources.runner_id`, the runner a library folder is bound to, and makes it
+  part of a library source's identity. It changes no row and adds no grant. A downgrade with a bound folder present is
+  unsupported.
+- Runner owners: a workspace folder bound to your runner mounts only from inside its `--drive-root`, and only on a
+  runner updated to this release, which says `bound_folders` in its capabilities. A run with such a folder is refused
+  on an older runner (`placement_local_path`) until it is updated.
 
 ## [0.10.0-rc.8] — 2026-10-29
 

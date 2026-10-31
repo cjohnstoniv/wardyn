@@ -97,7 +97,7 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, self
 		TrustedOutput: localTrustedOutputRun(run), SelfDefinedComponents: selfDefinedSnapshotNames(comps),
 	}
 	if run.RunnerID != nil {
-		p.VerifiedLocalPaths = s.drivePathsOn(*run.RunnerID, spec.Drives)
+		p.VerifiedLocalPaths = mergePaths(s.drivePathsOn(*run.RunnerID, spec.Drives), s.mountPathsOn(*run.RunnerID, spec.Mounts))
 	}
 	owner := runIdentitySubject(ctx, run.CreatedBy)
 	byID := map[uuid.UUID]types.CredentialGrant{}

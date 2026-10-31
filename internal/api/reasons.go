@@ -197,6 +197,8 @@ const (
 	reasonWorkspaceSourcesListUnavailable      = "workspace_sources_list_unavailable"       // the workspace list could not be read to resolve sources against
 	reasonWorkspaceSourceNotOnboarded          = "workspace_source_not_onboarded"           // the source is not onboarded — SHARED, see the doc comment above
 	reasonWorkspaceSourceMountNotAllowed       = "workspace_source_mount_not_allowed"       // the source IS onboarded, but the member-safe mount gate refuses this caller
+	reasonWorkspaceSourceRunnerUnavailable     = "workspace_source_runner_unavailable"      // a folder is bound to a runner that is revoked, gone, or not the workspace owner's
+	reasonWorkspaceSessionRunnerBound          = "workspace_session_runner_bound"           // record/verify runs on Wardyn's own executor, which never binds a folder on a runner
 	reasonRunnerCapabilitiesUnavailable        = "runner_capabilities_unavailable"          // the runner's advertised capabilities could not be read
 	reasonConfinementClassConflict             = "confinement_class_conflict"               // the requested confinement_class conflicts with the resolved policy
 	reasonConfinementClassUnsupported          = "confinement_class_unsupported"            // the runner does not advertise the enforced confinement class

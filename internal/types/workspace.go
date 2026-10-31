@@ -88,6 +88,11 @@ type WorkspaceSource struct {
 	// Writable opts a local_dir source into read-write (default false =
 	// read-only; a plain bool since false is already the safe default).
 	Writable bool `json:"writable,omitempty"`
+	// RunnerID binds a local_dir source to one of its owner's own runners: the
+	// folder lives on that machine, so the control plane checks its path by text
+	// alone and places a run with it only on that runner. nil is a folder on
+	// the control plane's host, checked there as before.
+	RunnerID *uuid.UUID `json:"runner_id,omitempty"`
 	// Overrides is this attachment's stance on requirement keys its source
 	// declares: reqKey -> off|optional|required (workspace_contract.go's
 	// AttachmentOverride* constants). nil means "say nothing" (server carries
@@ -102,7 +107,29 @@ type WorkspaceSource struct {
 	// default (Target, else /home/agent/work/<name>). A run's own selection
 	// target, when it sets one, wins over it.
 	CloneTarget string `json:"clone_target,omitempty"`
+	// RunnerState is a server-owned read projection on a source with a
+	// RunnerID, never persisted or from a write body: how the binding stands
+	// now, one of the WorkspaceSourceRunner* values. Anything but claimed
+	// refuses a run by name until the source is rebound or removed.
+	RunnerState string `json:"runner_state,omitempty"`
+	// RunnerName is a server-owned read projection on a source with a RunnerID, never persisted or from a write body: the bound runner's name, empty when the runner no longer exists.
+	RunnerName string `json:"runner_name,omitempty"`
 }
+
+// The values of WorkspaceSource.RunnerState.
+const (
+	// WorkspaceSourceRunnerClaimed: the bound runner is the workspace owner's,
+	// claimed and not revoked.
+	WorkspaceSourceRunnerClaimed = "claimed"
+	// WorkspaceSourceRunnerRevoked: the bound runner was revoked, or is no
+	// longer claimed.
+	WorkspaceSourceRunnerRevoked = "revoked"
+	// WorkspaceSourceRunnerMissing: no runner has the bound id.
+	WorkspaceSourceRunnerMissing = "missing"
+	// WorkspaceSourceRunnerNotOwner: the bound runner is not a person-owned
+	// runner of the workspace's current owner.
+	WorkspaceSourceRunnerNotOwner = "not_owner"
+)
 
 // WorkspaceBaseImage is a Workspace's base-image choice: what the sandbox's
 // container image is built FROM, independent of its Sources.

@@ -37,6 +37,32 @@ func (s *Server) unsupportedLocalDispatch(ctx context.Context, run types.AgentRu
 	return true
 }
 
+// boundFolderOffItsRunner fails, before anything is claimed or written, a run with a workspace folder
+// bound to a runner that is not dispatched to that runner: the organisation's executor never binds such a
+// folder, whatever placement the run row says, and neither does another runner.
+func (s *Server) boundFolderOffItsRunner(ctx context.Context, run types.AgentRun, p dispatchParams) bool {
+	for _, m := range buildRunMounts(p.Policy, p.UserMounts) {
+		rid, err := uuid.Parse(m.BoundRunner)
+		if m.BoundRunner == "" || (err == nil && run.Placement == types.PlacementLocal && run.RunnerID != nil && *run.RunnerID == rid) {
+			continue
+		}
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch", run.ID.String(), "failure", mustJSON(map[string]any{"reason": placement.ReasonPlacementLocalPath})))
+		msg := "This run's folder is bound to a runner it was not sent to, so it was not started."
+		if err == nil {
+			msg = boundFolderElsewhereMsg(rid)
+		}
+		s.failAndRevoke(context.WithoutCancel(ctx), run.ID, types.RunPending, msg)
+		return true
+	}
+	return false
+}
+
+// dispatchStartable is dispatchAdmitted and then boundFolderOffItsRunner: every refusal made before
+// anything is claimed or written.
+func (s *Server) dispatchStartable(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, p dispatchParams) bool {
+	return s.dispatchAdmitted(ctx, run, ceiling) && !s.boundFolderOffItsRunner(ctx, run, p)
+}
+
 // dispatchPlacementDenied fails, before anything is claimed or written, a run whose placement its
 // dispatch ceiling's deny_placements denies: a lane that did not pass the create doors, or a profile that
 // changed between create and dispatch.

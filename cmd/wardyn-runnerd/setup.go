@@ -53,6 +53,8 @@ type setupOptions struct {
 	macOSVM string
 	// keepIPSW is --keep-ipsw: the prepare setup starts keeps Apple's restore image.
 	keepIPSW bool
+	// driveRoots is --drive-root: written to runnerd.json as drive_root, replacing the earlier list; none keeps it.
+	driveRoots []string
 }
 
 // newSetupCommand is the one command a person or device management runs to turn a downloaded
@@ -72,7 +74,14 @@ func newSetupCommand() *cobra.Command {
 			}
 			return ""
 		}
-		if err := checkSecurityLock(runnerInputs{flag: changedFlags(cmd), getenv: setupEnv, managed: managedPref, lockRead: managedLockRead}); err != nil {
+		if err := checkSecurityLock(runnerInputs{flag: changedFlags(cmd), flagList: changedFlagLists(cmd), getenv: setupEnv, managed: managedPref, lockRead: managedLockRead}); err != nil {
+			return err
+		}
+		// A drive root that serve would refuse is refused here, before the token is spent.
+		if _, err := parseDriveRoots(o.driveRoots); err != nil {
+			return err
+		}
+		if err := resolveRunnerConfig(runnerInputs{getenv: func(string) string { return "" }, managed: managedPref}).checkDriveRoots("docker"); err != nil {
 			return err
 		}
 		// On a Mac with the configuration profile, --org is optional.
@@ -107,6 +116,7 @@ func newSetupCommand() *cobra.Command {
 	fl.StringVar(&o.pool, "pool", "", "with --claim, also put the runner in your user pool of this name (made if you have none by it)")
 	fl.BoolVar(&o.makeDefault, "default", false, "with --claim and --pool, also make that pool your default")
 	fl.StringVar(&o.macOSVM, "macos-vm", "", "on or off: macOS VM sandboxes on this Apple silicon Mac, whose base image it then starts to prepare (asked at a terminal when left out)")
+	fl.StringArrayVar(&o.driveRoots, "drive-root", nil, "a folder a drive bound to this runner may mount from, with everything under it (repeatable; written to runnerd.json as drive_root, replacing the earlier list; kept when setup runs again without it)")
 	fl.BoolVar(&o.keepIPSW, "keep-ipsw", false, "keep Apple's restore image after the base is ready")
 	o.limits.register(cmd)
 	return cmd

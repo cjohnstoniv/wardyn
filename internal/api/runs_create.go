@@ -190,6 +190,13 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 		return workspaceSeed{}, seedErr(http.StatusBadRequest, reasonWorkspaceSeedNoBaseImage, fmt.Errorf(
 			"workspace %s has no base image to run a command in: pass --image or --agent", ids[0]))
 	}
+	// A folder seeded from a source bound to a runner is on that machine: only its text is checked.
+	onRunner := map[int]bool{}
+	for i, m := range newMounts {
+		if rid, ok := mountBinding(seed.mountOwners[i:i+1], m.Source); ok && rid != nil {
+			onRunner[i] = true
+		}
+	}
 	// The seed mutated an ALREADY-validated spec, so re-run the one invariant it
 	// can break: the unique in-container target across workspace_mounts +
 	// workspace_repos (policy.go). Without this, a workspace whose target
@@ -197,7 +204,7 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	// (opaque dispatch failure) — or a repo clone targets the EXACT path of a
 	// writable bind. Equal or nested targets across workspaces, defaults
 	// included, are the overlap check's, over every resolved target.
-	if verr := validatePolicyWorkspaces(*spec, true); verr != nil {
+	if verr := validatePolicyWorkspaces(*spec, true, onRunner); verr != nil {
 		return workspaceSeed{}, seedErr(http.StatusUnprocessableEntity, reasonWorkspaceSeedPolicyConflict, fmt.Errorf("workspace %s conflicts with the policy: %w", ids[0], verr))
 	}
 	return seed, nil

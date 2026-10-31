@@ -123,6 +123,57 @@
 - It has no policy, no tool allowlist, and no view of third-party MCP traffic.
 - The L3 layer that would govern that is planned, not built.
 
+### An external AI gateway (for example agentgateway)
+
+- An AI gateway such as [agentgateway](https://agentgateway.dev) runs **beside** Wardyn, never instead of it.
+- The gateway sees only the traffic sent to it. Wardyn confines the run and sees every connection it makes, so `wardyn-proxy` stays the enforcement point.
+- **Model traffic.**
+  - Set a provider's `base_url` (Settings → Model providers) to the gateway's `https://` route for that provider, and add the gateway host to the policy's `allowed_domains`. See [Internal model gateway](OPERATIONS.md#internal-model-gateway).
+  - For agentgateway and Claude Code, that is a route serving `/v1/messages`, with a passthrough for the other paths the harness calls.
+  - Wardyn still injects the person's credential, inspects the request on the endpoints it covers (above) and records the call.
+  - A gateway that holds its own provider key replaces that credential on the way out. A subscription sign-in token passes through.
+  - The gateway adds what an organisation sets once for every caller: provider routing and failover, rate limits and its own logs.
+- **MCP servers.**
+  - Wardyn has no MCP gateway (above). A gateway can put many remote MCP servers behind one host, and hold or exchange a credential for each of them.
+  - Allow that host in the run's egress policy. A gateway on a private address named by hostname also needs an `internal_hosts` entry in site config; an exact literal IP in `allowed_domains` is honoured on its own. Wardyn then governs whether a run reaches the gateway at all. The gateway decides which tools a caller gets.
+- **Before you set it up.**
+  - A Claude subscription provider's `base_url` sends each person's sign-in token to the gateway on every call. That makes the gateway a trust decision for the people who connect.
+  - The gateway sees `wardyn-proxy` as its caller. Wardyn adds no run or person identity. The harness's own headers pass through, except credential-shaped ones, which Wardyn strips before it injects the credential.
+  - So a per-person limit there can key only on what the gateway still sees: a person's sign-in token for a subscription provider, and nothing per person once the gateway swaps in its own key.
+  - Two policy points can disagree. Decide which one owns model choice and tool access, and keep the other permissive for that concern.
+- **When it is worth it.**
+  - It pays off when an organisation already sends all model and MCP traffic through one gateway.
+  - For a single team, a provider's settings in Wardyn are enough.
+- Wardyn's CI does not run against an external gateway. The model route is the same path as any internal gateway.
+
+### A Kubernetes sandbox controller (for example agent-sandbox)
+
+- [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) (`agents.x-k8s.io/v1beta1`) is a Kubernetes controller for one stateful sandbox pod per agent: a stable name, storage that survives a restart, and pause and resume. Its optional extensions add templates and warm pools.
+- It sits at the physical-sandbox layer. It takes its isolation from a RuntimeClass (gVisor, Kata).
+  - A sandbox template can carry a NetworkPolicy with coarse egress rules (by default, public Internet only).
+  - It has no per-domain egress decisions, and no credential, approval or audit controls.
+- Wardyn's `k8s` substrate creates its own pods, so it does not drive agent-sandbox today.
+  - A backend that does is not built. It would create the controller's objects in place of pods, keep Wardyn's NetworkPolicy, proxy and managed files on them, and pass the same conformance contract.
+- A cluster can run both now, each in its own namespace.
+
+### Inner walls: narrowing an organisation's access per person, machine and run
+
+- An organisation's outer wall (identity provider, cloud IAM, network, exemptions) sets the most any run may do.
+- Wardyn's inner walls give each run less. A narrower setting can only narrow, never widen:
+  - a run's drive flag narrows the person's allocation ([who can change what](operations/admin-only-writes.md));
+  - an egress decision's scope can hold a domain to one run ([decision scopes](operations/member-runs.md#decision-scopes-the-clamp-and-the-first-run)).
+- Going outward is an approval, recorded per domain and per run, never a setting a person changes for good on their own:
+  - the run's owner may decide it for that run, or for a time;
+  - `always` is an administrator's;
+  - `WARDYN_EGRESS_SECOND_HUMAN` holds it for a second person.
+- Each wall has its own enforcer:
+  - compute: the substrate, or a sandbox platform under it (above);
+  - network, credentials, approvals and audit: `wardyn-proxy` and `wardynd`;
+  - model and tool access: an AI gateway (above), inside what Wardyn lets the run reach.
+- Two gaps today:
+  - the gateway gets no person or run identity (above), so its per-person rules cannot follow a Wardyn run;
+  - stored policies are an administrator's ([who can change what](operations/admin-only-writes.md)), so a person or a machine cannot yet save its own narrower policy.
+
 ## 3. Blessed-default-vs-alternate matrix
 
 - `Shipped` = the out-of-box default that runs today.
