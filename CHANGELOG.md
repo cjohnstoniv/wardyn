@@ -113,6 +113,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- The macOS VM setup window, and the edit-base window, show all three of their steps under the title. Before, only
+  the first step showed.
 - A process inside a macOS VM could pose as Wardyn's guest agent.
 - Installing a macOS base's file items no longer follows a symbolic link, or passes through a folder others can write
   to, on the way to an item's destination.
