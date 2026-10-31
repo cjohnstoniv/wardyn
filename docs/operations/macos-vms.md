@@ -580,6 +580,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | No Mac in the pool offers macOS VMs | No runner in the pool has a ready base, or the pool mixes runners that do not. Run `status` on each Mac |
 | Not offered after a restart | Nobody has logged in since the restart, and FileVault is on |
 | The runner says the ledger is missing or damaged | Reinstall the runner package |
+| The runner says it has no macOS VM helper | It was set up with `wardyn-runnerd setup` from an older package, or the package is missing. Install the runner package, then run `wardyn-runnerd setup` again from it. `prepare` refuses with the same words until then |
 | The runner refuses macOS VMs and names a socket folder | Something other than the login's own `0700` folder is at that name under `/Users/Shared/Wardyn/sock/`. Remove it as root ([The shared ledger](#the-shared-ledger)) |
 | Installing the package failed and macOS VMs stay off | A login held the admission lock for over 10 seconds. Reinstall the package |
 | The runner says the ledger is busy | Another account holds the lock, or the ledger is crowded with entries. See [The shared ledger](#the-shared-ledger) |

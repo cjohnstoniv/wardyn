@@ -908,6 +908,73 @@ func TestSetupRendersTheLaunchAgent(t *testing.T) {
 	}
 }
 
+// #3870: on a Mac, setup installs the package's macOS VM helper and guest agent beside the runner it installs,
+// where serve looks for the one and the helper for the other, and a rerun from a newer package replaces them.
+// A runner downloaded alone installs neither, and on Linux setup never does.
+func TestSetupInstallsTheMacOSVMHelpersBesideTheRunner(t *testing.T) {
+	clearProxyEnv(t)
+	ship := func(f *setupFixture, version string) {
+		t.Helper()
+		for _, name := range macVMHelpers {
+			if err := os.WriteFile(filepath.Join(filepath.Dir(f.host.exe), name), []byte(name+" "+version), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	setup := func(f *setupFixture) setupPaths {
+		t.Helper()
+		if out, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return mustPaths(t, f)
+	}
+	installed := func(p setupPaths, name string) string {
+		t.Helper()
+		path := filepath.Join(filepath.Dir(p.installed), name)
+		b, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return ""
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o755 {
+			t.Errorf("%s mode: %v %v", name, st, err)
+		}
+		return string(b)
+	}
+
+	mac := newSetupFixture(t, "darwin")
+	mac.desktop = true
+	for _, version := range []string{"v1", "v2"} {
+		ship(mac, version)
+		p := setup(mac)
+		for _, name := range macVMHelpers {
+			if got := installed(p, name); got != name+" "+version {
+				t.Errorf("after setup from the %s package, %s beside the runner = %q", version, name, got)
+			}
+		}
+	}
+
+	alone := newSetupFixture(t, "darwin")
+	alone.desktop = true
+	p := setup(alone)
+	for _, name := range macVMHelpers {
+		if got := installed(p, name); got != "" {
+			t.Errorf("a runner downloaded alone installed %s: %q", name, got)
+		}
+	}
+
+	linux := newSetupFixture(t, "linux")
+	ship(linux, "v1")
+	p = setup(linux)
+	for _, name := range macVMHelpers {
+		if got := installed(p, name); got != "" {
+			t.Errorf("setup on Linux installed %s: %q", name, got)
+		}
+	}
+}
+
 func TestSetupWithoutClaimLeavesTheClaimToThePerson(t *testing.T) {
 	f := newSetupFixture(t, "linux")
 	t.Setenv("WARDYN_TOKEN", "wdn_secret")
