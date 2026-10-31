@@ -375,12 +375,15 @@ func TestCAItemTrustVerifyAndRotation(t *testing.T) {
 		{Kind: "ca", Name: "org-ca", SHA256: pin64, State: macvm.ItemTrusted, Fingerprint: strings.Repeat("0", 64), SHA1: strings.Repeat("0A", 20)},
 		{Kind: "profile", Name: "gone", SHA256: pin64, State: macvm.ItemStaged},
 	}
-	for name, verifyExit := range map[string]int{"trusted": 0, "not trusted": 1} {
+	// A trust macOS refuses (non-zero add-trusted-cert) is not an error and reads not_trusted.
+	for name, exit := range map[string]struct{ add, verify int }{"trusted": {0, 0}, "not trusted": {0, 1}, "refused": {1, 1}} {
 		t.Run(name, func(t *testing.T) {
 			f := newTools(t)
 			f.opts.Items = macvm.BaseList{Version: 1, Items: []macvm.BaseItem{{Kind: "ca", Name: "org-ca", Path: ca, SHA256: caPin}}}
 			g := newItemGuest()
-			g.fail = func(argv []string) int { return map[bool]int{true: verifyExit}[argv[1] == "verify-cert"] }
+			g.fail = func(argv []string) int {
+				return map[string]int{"add-trusted-cert": exit.add, "verify-cert": exit.verify}[argv[1]]
+			}
 			res, err := f.itemStage(g).Run(context.Background(), macvm.Stage2Input{Previous: old})
 			if err != nil {
 				t.Fatal(err)
@@ -402,7 +405,7 @@ func TestCAItemTrustVerifyAndRotation(t *testing.T) {
 					t.Errorf("the guest refuses %q: %v", r, err)
 				}
 			}
-			wantState := map[int]string{0: macvm.ItemTrusted, 1: macvm.ItemNotTrusted}[verifyExit]
+			wantState := map[int]string{0: macvm.ItemTrusted, 1: macvm.ItemNotTrusted}[exit.verify]
 			if r := res.Items[0]; r.State != wantState || r.Fingerprint != fp || r.SHA1 != fp1 {
 				t.Fatalf("%+v", r)
 			}

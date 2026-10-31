@@ -224,6 +224,41 @@ func (h setupHost) installBinary(ctx context.Context, dst string, stopService bo
 	return nil
 }
 
+// macVMHelpers are the macOS VM files the package installs beside wardyn-runnerd: serve runs the helper from
+// beside its own binary (macVMHelperPath), and the helper runs the guest agent from beside itself.
+var macVMHelpers = []string{"wardyn-macvm", "wardyn-guest-agent"}
+
+// installHelpers puts each of macVMHelpers that is beside this binary (the package's directory) beside the
+// installed one at dst too, atomically, so the runner setup installs runs with its helper; on a Mac only. One
+// that is not beside this binary (a runner downloaded alone, which then offers no macOS VM: no_helper) is
+// skipped, and one that already is the installed file (setup run from the install directory, or a rollback's
+// copy there) is left alone. No .previous is kept: a rollback runs setup from that directory, which leaves
+// these files as they are.
+func (h setupHost) installHelpers(dst string) error {
+	if h.goos != "darwin" {
+		return nil
+	}
+	for _, name := range macVMHelpers {
+		src, to := filepath.Join(filepath.Dir(h.exe), name), filepath.Join(filepath.Dir(dst), name)
+		if isSameFile(src, to) {
+			continue
+		}
+		f, err := os.Open(src)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		err = writeAtomic(to, 0o755, func(w io.Writer) error { _, err := io.Copy(w, f); return err })
+		_ = f.Close()
+		if err != nil {
+			return fmt.Errorf("install %s: %w", to, err)
+		}
+	}
+	return nil
+}
+
 // isSameFile reports whether a and b are both there and are one file.
 func isSameFile(a, b string) bool {
 	sa, errA := os.Stat(a)
@@ -417,6 +452,24 @@ func (p setupPaths) serviceOrgArg() (org, source string) {
 }
 
 var plistOrgArg = regexp.MustCompile(`<string>--org</string>\s*<string>([^<]*)</string>`)
+
+// serviceProgram is the binary the installed LaunchAgent runs, the first of its ProgramArguments, as written
+// there; "" when none is installed (Linux, --no-service, or the package's managed agent alone).
+func (p setupPaths) serviceProgram() string {
+	if p.plistFile == "" {
+		return ""
+	}
+	plist, err := os.ReadFile(p.plistFile)
+	if err != nil {
+		return ""
+	}
+	if m := plistProgram.FindSubmatch(plist); m != nil {
+		return html.UnescapeString(strings.TrimSpace(string(m[1])))
+	}
+	return ""
+}
+
+var plistProgram = regexp.MustCompile(`<key>ProgramArguments</key>\s*<array>\s*<string>([^<]*)</string>`)
 
 // noServiceEnvFile is the environment file a Linux service read before runnerd.json, and on macOS, which
 // had no such file, the one --no-service wrote beside the identity's directory.

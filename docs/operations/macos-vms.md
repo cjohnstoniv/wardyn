@@ -236,7 +236,7 @@ What Wardyn automates, and what the operator does by hand in `wardyn-runnerd mac
 | Item kind | Done by |
 |---|---|
 | `pkg`, `app`, `file`, `secret_files` | Automated at prepare and tools update |
-| `ca` | Automated (authorizationdb, add-trusted-cert, verified). By hand in edit only when it reads `not_trusted` |
+| `ca` | Automated (add-trusted-cert, verified). By hand in edit when it reads `not_trusted` |
 | `profile` | Staged automatically. Approved by hand in edit. Wardyn reads back `installed` |
 | System-extension or helper approval (EDR) | By hand in edit (or by MDM, outside Wardyn) |
 | Screen Sharing control | Setup by hand at prepare; otherwise in edit |
@@ -251,13 +251,13 @@ What Wardyn automates, and what the operator does by hand in `wardyn-runnerd mac
 
 The `ca` item trusts your organisation's root in the guest at prepare. It is separate from the per-run proxy CA ([Credentials and sign-ins](#credentials-and-sign-ins)).
 
-1. The guest agent saves the `com.apple.trust-settings.admin` authorization rule, then sets it to allow, so root can change the admin trust settings without a password.
-2. It runs `security add-trusted-cert -d -r trustRoot -p ssl` on the certificate: SSL only, never every policy.
-3. It writes the saved rule back. This always runs, also when a step failed or the request was cancelled; a rule it cannot restore fails stage 2.
-4. `security verify-cert -p ssl` reads the trust back. `tools.json` records `trusted` or `not_trusted` with the certificate's SHA-256 and SHA-1 fingerprints.
+1. The guest agent runs `security add-trusted-cert -d -r trustRoot -p ssl` on the certificate as root: SSL only, never every policy. It does not change the `com.apple.trust-settings.admin` authorization rule; macOS 26 refuses root that change.
+2. `security verify-cert -p ssl` reads the trust back. `tools.json` records `trusted` or `not_trusted` with the certificate's SHA-256 and SHA-1 fingerprints.
+3. Stage 2 goes on either way: a CA that reads `not_trusted` does not stop preparing.
 
-- `not_trusted` means macOS refused a trust without a person. Trust it by hand in `edit-base`: in Terminal, run `sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain /Library/Wardyn/stage/<name>/item.cer` and answer macOS's prompt.
+- `not_trusted` means macOS refused a trust without a person. On macOS 26 expect this: Apple asks a person to approve a new admin trust. Trust it by hand in `edit-base`: in Terminal, run `sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain /Library/Wardyn/stage/<name>/item.cer` and answer macOS's prompt.
 - A tools update removes a CA the list no longer pins, with its trust settings, by its SHA-1.
+- On macOS 26, expect removing or rotating a CA to stop the tools update: Apple asks a person to remove an admin trust. The old base stays ready and still trusts the old CA. To drop or replace a CA, change the list and run `prepare --reprepare`: the new base trusts only the CAs the list holds.
 
 ### Configuration profiles
 
@@ -580,6 +580,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | No Mac in the pool offers macOS VMs | No runner in the pool has a ready base, or the pool mixes runners that do not. Run `status` on each Mac |
 | Not offered after a restart | Nobody has logged in since the restart, and FileVault is on |
 | The runner says the ledger is missing or damaged | Reinstall the runner package |
+| The runner says it has no macOS VM helper | It was set up with `wardyn-runnerd setup` from an older package, or the package is missing. Install the runner package, then run `wardyn-runnerd setup` again from it. `prepare` refuses with the same words until then |
 | The runner refuses macOS VMs and names a socket folder | Something other than the login's own `0700` folder is at that name under `/Users/Shared/Wardyn/sock/`. Remove it as root ([The shared ledger](#the-shared-ledger)) |
 | Installing the package failed and macOS VMs stay off | A login held the admission lock for over 10 seconds. Reinstall the package |
 | The runner says the ledger is busy | Another account holds the lock, or the ledger is crowded with entries. See [The shared ledger](#the-shared-ledger) |

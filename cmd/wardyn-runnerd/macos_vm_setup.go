@@ -95,6 +95,12 @@ func prepareMacOSVMBase(cmd *cobra.Command, plan setupPlan, limits *types.Runner
 		fmt.Fprintln(out, "macOS VMs are on. To build this Mac's macOS base: wardyn-runnerd macos-vm prepare --per-run-cpu <CPUs> --per-run-memory <GB>"+keep+" (the runner's per-run limits).")
 		return
 	}
+	// serve offers no macOS VM without the helper beside the runner setup installed (enableMacOSVM, no_helper),
+	// so it would never hand this prepare's stage 2 its network: refused before anything is written.
+	if err := noHelperBeside(plan.paths.installed); err != nil {
+		fmt.Fprintf(out, "macOS VMs are on, but this Mac's macOS base did not start preparing: %v\n", err)
+		return
+	}
 	id, err := runneridentity.Load(plan.paths.stateDir, plan.org)
 	if err != nil {
 		fmt.Fprintf(out, "macOS VMs: %v\n", err)

@@ -50,8 +50,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - macOS VMs: configuration profiles in the install list are staged in the base, approved once in `edit-base`, and read
   back as installed. Built and unit-tested; not yet run on a real Mac.
 - macOS VMs: an organisation CA in the install list is trusted in the base for SSL only, then verified. A CA macOS
-  will not trust without a person reads `not_trusted`; trust it by hand in `edit-base`. Built and unit-tested; not yet
-  run on a real Mac.
+  will not trust without a person reads `not_trusted`; trust it by hand in `edit-base`. On macOS 26 expect Apple to
+  ask a person to approve the trust: the CA then reads `not_trusted` and preparing goes on
+  ([#3878](https://github.com/cjohnstoniv/wardyn/issues/3878)). On macOS 26, expect removing or rotating a CA to stop
+  the tools update; to drop or replace a CA, change the list and run `prepare --reprepare`. Built and unit-tested; not yet run on a real Mac.
 - macOS VMs: a package in the install list may take secret files, such as an EDR licence. A file's value is never in a
   command line, a log, `tools.json` or the caps, and the file is removed after the install. Built and unit-tested; not
   yet run on a real Mac.
@@ -113,6 +115,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- The macOS VM setup window, and the edit-base window, show all three of their steps under the title. Before, only
+  the first step showed.
 - A process inside a macOS VM could pose as Wardyn's guest agent.
 - Installing a macOS base's file items no longer follows a symbolic link, or passes through a folder others can write
   to, on the way to an item's destination.
@@ -333,6 +337,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   (`workspace_source_runner_unavailable`). Previously such a folder was refused when the workspace was saved, and no
   workspace folder could run on a person's own runner (`placement_local_path`).
 
+- On a Mac set up with `wardyn-runnerd setup`, the runner now has its macOS VM helper and guest agent beside it, so
+  it offers macOS VMs and can prepare a base. Before, it served with macOS VMs off (`no_helper`), and a prepare failed
+  at its second stage after the setup by hand. `prepare` now refuses at once when the serving runner has no helper.
+
 ### Security
 
 - `WARDYN_USER_WRITABLE_DENY` now matches a member's writable folder in any letter case, so an entry naming `.ssh`
@@ -343,8 +351,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   failing kept it open about a minute. The refusal's audit row is now written after the close, so a slow audit write
   no longer delays it.
 
+### Known issues
+
+- On a Mac runner using Docker Desktop, a macOS VM slot can stay busy for a few minutes after a run if Docker Desktop
+  started during that run. It frees when Docker Desktop goes idle; quitting Docker Desktop with no runs going frees it at
+  once ([#3871](https://github.com/cjohnstoniv/wardyn/issues/3871)).
+- If the macOS VM setup is given the wrong one-time code, preparing stops after about two minutes with `handshake failed:
+  EOF` instead of saying the code was wrong. Each prepare makes a new code: use the one from that prepare's window
+  ([#3874](https://github.com/cjohnstoniv/wardyn/issues/3874)).
+
 ### Before you upgrade
 
+- Macs already set up with `wardyn-runnerd setup` must run setup again after installing this package, so the runner
+  gets its macOS VM helper beside it. `wardyn runner upgrade` alone does not do this.
 - macOS bases prepared on 0.10.0-rc.8 or an earlier release candidate must be prepared again: run
   `wardyn-runnerd macos-vm prepare` on each Mac. Until then the Mac's runner reports its base as needing an update
   and offers no macOS VMs.
