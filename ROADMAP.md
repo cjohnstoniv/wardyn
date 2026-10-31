@@ -61,6 +61,7 @@
 | **v0.10.0-rc.6** | rc.6: a macOS VM memory check by macOS's own memory pressure, Bedrock PrivateLink endpoints signed at the proxy, AWS signing shown on Run Detail, and policy context beside host warnings on New Run. | **Shipped (pre-alpha)** — `v0.10.0-rc.6`, 2026-10-28 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.7** | rc.7: each allowed host marked Inspected or Tunnel only on a run's Policy tab and in the CLI, folders shared into a macOS VM, and pre-wrapped images on Kubernetes without an image builder. | **Shipped (pre-alpha)** — `v0.10.0-rc.7`, 2026-10-29 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.8** | rc.8: commands kept running as services, inbound apps that people and API clients can call, workloads Wardyn keeps declared, your own walls, and a macOS VM guest that gets its network address. | **Shipped (pre-alpha)** — `v0.10.0-rc.8`, 2026-10-29 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.9** | rc.9: macOS VM runs that start their workload, take drives, and use bases an operator customises, edits and ages (built and unit-tested; not yet run on a real Mac), workspace folders that live on a person's own Mac or Linux runner, a macOS VM guest that only Wardyn's own agent can pair with, plus AWS re-signing on a person's own runner (not yet verified end to end on a person's runner). | **Shipped (pre-alpha)** — `v0.10.0-rc.9`, 2026-10-30 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 

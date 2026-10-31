@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.9] — 2026-10-30
+
 ### Added
 
 - An installed runner can now be given the folders drives and workspace folders may use, with
