@@ -54,10 +54,10 @@ func (c *Client) ToolsDesktopPassword(ctx context.Context, pw string) (bool, err
 	return r.Set, err
 }
 
-// ToolsAdminCode sets the setup admin's password (MacAdminUser) and says whether it was set.
-func (c *Client) ToolsAdminCode(ctx context.Context, code string) (bool, error) {
+// ToolsAdminCode changes the setup admin's password (MacAdminUser) from old to code and says whether it changed.
+func (c *Client) ToolsAdminCode(ctx context.Context, old, code string) (bool, error) {
 	var r AdminCodeResult
-	err := c.do(ctx, http.MethodPost, "/v1/tools/admin_code", AdminCode{Code: code}, &r)
+	err := c.do(ctx, http.MethodPost, "/v1/tools/admin_code", AdminCode{Old: old, Code: code}, &r)
 	return r.Set, err
 }
 

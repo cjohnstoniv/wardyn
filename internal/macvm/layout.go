@@ -200,12 +200,16 @@ const (
 	ManifestFile  = "manifest.json"
 	// PairKeyFile is the base's pairing key: the host copy, 0600, of the 32 bytes stage 1 wrote root-only
 	// into the guest (guestagent.MacPairKeyPath). A clone of the base carries its own copy.
-	PairKeyFile   = "pair.key"
-	RunConfigFile = "run.json"
-	ControlSock   = "ctl.sock"
-	AgentSock     = "agent.sock"
-	DesktopSock   = "desktop.sock"
-	HelperLog     = "helper.log"
+	PairKeyFile = "pair.key"
+	// AdminPasswordFile is the setup admin's (wardyn-admin's) password: the host copy, 0600, of the one the
+	// guest disk beside it holds. Prepare writes it, edit-base changes the password from it, and a swap
+	// carries it with its disk. A run's clone and a derived base never get it.
+	AdminPasswordFile = "admin-password"
+	RunConfigFile     = "run.json"
+	ControlSock       = "ctl.sock"
+	AgentSock         = "agent.sock"
+	DesktopSock       = "desktop.sock"
+	HelperLog         = "helper.log"
 	// installingMarker sits in a base dir from the install's start until the
 	// base is ready; finding it means an install was cut short.
 	installingMarker = "installing"

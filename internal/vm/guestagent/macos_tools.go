@@ -98,21 +98,24 @@ type DesktopPasswordResult struct {
 	Set bool `json:"desktop_password_set"`
 }
 
-// AdminCode sets MacAdminUser's password: edit-base's one-time code before its window session, and a
-// fresh value no process keeps after it. It prints redacted.
+// AdminCode changes MacAdminUser's password from Old to Code: from the password the host keeps to
+// edit-base's one-time code before its window session, and from the code to a fresh value after it.
+// macOS refuses root a change without the old password for an account holding a SecureToken, as Setup
+// Assistant's does. It prints redacted.
 type AdminCode struct {
+	Old  string `json:"old"`
 	Code string `json:"code"`
 }
 
-func (AdminCode) String() string   { return "{code:***}" }
-func (AdminCode) GoString() string { return "guestagent.AdminCode{Code:***}" }
+func (AdminCode) String() string   { return "{old:*** code:***}" }
+func (AdminCode) GoString() string { return "guestagent.AdminCode{Old:***, Code:***}" }
 
 // AdminCodeResult says only whether the password was set.
 type AdminCodeResult struct {
 	Set bool `json:"admin_code_set"`
 }
 
-// adminCodeForm is a code admin_code takes: letters and digits only, so it cannot end dscl's command line
+// adminCodeForm is a password admin_code takes, old or new: letters and digits only, so it cannot end dscl's command line
 // or start another.
 var adminCodeForm = regexp.MustCompile(`^[A-Za-z0-9]{8,64}$`)
 
@@ -188,8 +191,8 @@ type Tools struct {
 
 	// run runs an allowed argv as root; nil is runCombined (tests record).
 	run func(ctx context.Context, argv []string) ([]byte, int, error)
-	// passwd sets an account's password; nil is setPassword (tests record). sshAddr is "" in use.
-	passwd  func(ctx context.Context, user, password string) error
+	// passwd changes an account's password from old; nil is setPassword (tests record). sshAddr is "" in use.
+	passwd  func(ctx context.Context, user, old, password string) error
 	sshAddr string
 
 	// cltListed is the Command Line Tools labels this process's own `softwareupdate -l` runs printed,
@@ -364,7 +367,7 @@ func (t *Tools) handleDesktopPassword(w http.ResponseWriter, r *http.Request) {
 
 func (t *Tools) handleAdminCode(w http.ResponseWriter, r *http.Request) {
 	var in AdminCode
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&in); err != nil || !adminCodeForm.MatchString(in.Code) {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&in); err != nil || !adminCodeForm.MatchString(in.Old) || !adminCodeForm.MatchString(in.Code) {
 		http.Error(w, "bad admin_code request", http.StatusBadRequest)
 		return
 	}
@@ -372,7 +375,7 @@ func (t *Tools) handleAdminCode(w http.ResponseWriter, r *http.Request) {
 	if passwd == nil {
 		passwd = setPassword
 	}
-	err := passwd(r.Context(), MacAdminUser, in.Code)
+	err := passwd(r.Context(), MacAdminUser, in.Old, in.Code)
 	if err != nil {
 		slog.Warn("guest agent: tools mode: admin code not set", "err", err)
 	}
@@ -421,12 +424,12 @@ func parseAccounts(out string) ([]GuestAccount, error) {
 	return accounts, nil
 }
 
-// setPassword sets user's password as root through dscl's own command line on stdin, so the password is
-// in no argv. dscl's interactive mode exits 0 after a failed command, so its output decides; that output
-// is never returned, as it could hold the line it read.
-func setPassword(ctx context.Context, user, password string) error {
+// setPassword changes user's password from old to password as root through dscl's own command line on stdin,
+// so neither is in an argv. dscl's interactive mode exits 0 after a failed command, so its output decides;
+// that output is never returned, as it could hold the line it read.
+func setPassword(ctx context.Context, user, old, password string) error {
 	cmd := exec.CommandContext(ctx, dsclPath, ".")
-	cmd.Stdin = strings.NewReader("passwd /Users/" + user + " " + password + "\n")
+	cmd.Stdin = strings.NewReader("passwd /Users/" + user + " " + old + " " + password + "\n")
 	out := &capped{max: maxToolsOutput}
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Run(); err != nil {

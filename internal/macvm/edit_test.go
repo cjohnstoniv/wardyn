@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -27,15 +29,18 @@ type editGuest struct {
 	*guest
 	mu      sync.Mutex
 	codes   []string
+	olds    []string
+	refuse  bool
 	posture guestagent.ToolsPosture
 	control bool
 }
 
-func (g *editGuest) AdminCode(_ context.Context, code []byte) (bool, error) {
+func (g *editGuest) AdminCode(_ context.Context, old, code []byte) (bool, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.olds = append(g.olds, string(old))
 	g.codes = append(g.codes, string(code))
-	return true, nil
+	return !g.refuse, nil
 }
 
 func (g *editGuest) Posture(context.Context) (guestagent.ToolsPosture, error) { return g.posture, nil }
@@ -72,6 +77,8 @@ type editFix struct {
 	codeSeen macvm.SetupCodeRecord
 	base     string
 	screen   macvm.ScreenText
+	log      bytes.Buffer
+	sealed   string // the admin password the base kept at prepare
 }
 
 func newEdit(t *testing.T) *editFix {
@@ -82,6 +89,7 @@ func newEdit(t *testing.T) *editFix {
 		t.Fatal(err)
 	}
 	e := &editFix{f: f, base: f.opts.Layout.BaseDir(0)}
+	e.sealed = adminPassword(t, e.base)
 	m.Desktop, m.Harnesses = macvm.DesktopObserve, []string{macvm.HarnessNone, macvm.HarnessClaudeCode}
 	b, _ := json.Marshal(m)
 	if err := os.WriteFile(filepath.Join(e.base, macvm.ManifestFile), b, 0o600); err != nil {
@@ -91,6 +99,7 @@ func newEdit(t *testing.T) *editFix {
 		{Name: "root", UID: 0}, {Name: "nobody", UID: -2}, {Name: "_spotlight", UID: 89}, {Name: "wardyn-admin", UID: 501}, {Name: "agent", UID: 502}}}}
 	e.opts = macvm.EditOptions{
 		Engine: f.eng, Layout: f.opts.Layout, FirstBoot: textFirstBoot{f.fb, &e.screen}, PrepNet: f.opts.PrepNet, CPUs: 4, MemoryMiB: 8192, Out: &e.out,
+		Log: slog.New(slog.NewJSONHandler(&e.log, nil)),
 		Guest: func(context.Context, macvm.MachineSpec) (macvm.ToolsGuest, func(context.Context) error, error) {
 			e.boots++
 			return e.g, func(context.Context) error { return nil }, nil
@@ -177,6 +186,20 @@ func TestEditBaseSwapsOnlyAPassingCopy(t *testing.T) {
 	}
 	if strings.Contains(e.out.String(), e.g.codes[0]) {
 		t.Error("the code was printed")
+	}
+	if !slices.Equal(e.g.olds, []string{e.sealed, e.g.codes[0]}) {
+		t.Errorf("the guest was asked to change from %q, want the kept password then the code", e.g.olds)
+	}
+	if got := adminPassword(t, e.base); got != e.g.codes[1] {
+		t.Error("the swapped-in base does not keep the reset")
+	}
+	if _, err := os.Lstat(filepath.Join(e.base, macvm.AdminPasswordFile+".next")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the write-ahead copy came along: %v", err)
+	}
+	for _, pw := range []string{e.sealed, e.g.codes[0], e.g.codes[1]} {
+		if strings.Contains(e.out.String(), pw) || strings.Contains(e.log.String(), pw) {
+			t.Error("a password reached the output or the log")
+		}
 	}
 	if at := macvm.BaseEditedAt(e.base, got); at == nil || !at.Equal(e.opts.Now()) {
 		t.Errorf("edited at %v", at)
@@ -271,6 +294,9 @@ func TestEditBaseDiscardsOnEachFailedCheck(t *testing.T) {
 				t.Fatalf("line %q, want %q", err.Error(), want)
 			}
 			e.oldBaseKept(t)
+			if got := adminPassword(t, e.base); got != e.sealed {
+				t.Error("a discarded edit changed the base's password file")
+			}
 			if strings.Contains(e.out.String(), "is ready") {
 				t.Error("a discarded edit said it is ready")
 			}
@@ -289,14 +315,71 @@ func TestEditBaseDiscardsOnEachFailedCheck(t *testing.T) {
 
 // A copy whose swap fails leaves the old base as it was: a base is never half swapped.
 func TestEditBaseFailedSwapKeepsOldBase(t *testing.T) {
+	for _, stray := range []string{"stray", macvm.AdminPasswordFile + ".next"} {
+		t.Run(stray, func(t *testing.T) {
+			e := newEdit(t)
+			defer macvm.SetSwapHook(func() { _ = os.WriteFile(filepath.Join(e.base+".update", stray), nil, 0o600) })()
+			if _, err := macvm.EditBase(context.Background(), e.opts); err == nil {
+				t.Fatal("an edit whose new base held a stray file was swapped in")
+			}
+			e.oldBaseKept(t)
+			if m, _ := macvm.ReadyBase(e.base); macvm.BaseEditedAt(e.base, m) != nil {
+				t.Error("a failed swap was recorded as an edit")
+			}
+			if got := adminPassword(t, e.base); got != e.sealed {
+				t.Error("a failed swap changed the base's password file")
+			}
+		})
+	}
+}
+
+// A guest that does not take the old password fails the edit before any window opens, and the old base is
+// kept with its password file.
+func TestEditBaseRefusedOldPasswordOpensNoWindow(t *testing.T) {
 	e := newEdit(t)
-	defer macvm.SetSwapHook(func() { _ = os.WriteFile(filepath.Join(e.base+".update", "stray"), nil, 0o600) })()
-	if _, err := macvm.EditBase(context.Background(), e.opts); err == nil {
-		t.Fatal("an edit whose new base held a stray file was swapped in")
+	e.g.refuse = true
+	opened0, _ := e.f.fb.Windows()
+	_, err := macvm.EditBase(context.Background(), e.opts)
+	if want := "macvm: the setup admin's one-time code: the guest did not take it"; err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+	if opened, _ := e.f.fb.Windows(); opened != opened0 {
+		t.Error("a window opened")
 	}
 	e.oldBaseKept(t)
-	if m, _ := macvm.ReadyBase(e.base); macvm.BaseEditedAt(e.base, m) != nil {
-		t.Error("a failed swap was recorded as an edit")
+	if got := adminPassword(t, e.base); got != e.sealed {
+		t.Error("a refused edit changed the base's password file")
+	}
+}
+
+// A crash leaves a staging dir with whatever password files it had reached; the next edit sweeps it and
+// starts from the base's own file.
+func TestEditBaseSweepsACutShortEdit(t *testing.T) {
+	for name, files := range map[string]map[string]string{
+		"the file":          {macvm.AdminPasswordFile: "Stray234Stray"},
+		"the file and next": {macvm.AdminPasswordFile: "Stray234Stray", macvm.AdminPasswordFile + ".next": "Ahead234Ahead"},
+		"only next":         {macvm.AdminPasswordFile + ".next": "Ahead234Ahead"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEdit(t)
+			if err := os.Mkdir(e.base+".update", 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for f, pw := range files {
+				if err := os.WriteFile(filepath.Join(e.base+".update", f), []byte(pw), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := macvm.EditBase(context.Background(), e.opts); err != nil {
+				t.Fatal(err)
+			}
+			if len(e.g.olds) == 0 || e.g.olds[0] != e.sealed {
+				t.Fatalf("the first old password was %q, want the base's", e.g.olds)
+			}
+			if got := adminPassword(t, e.base); got != e.g.codes[1] {
+				t.Error("the swapped-in base does not keep the reset")
+			}
+		})
 	}
 }
 
@@ -330,6 +413,13 @@ func TestEditBaseRefusals(t *testing.T) {
 	restore()
 	if !errors.Is(err, macvm.ErrEditNoDesktop) {
 		t.Fatalf("root: %v", err)
+	}
+	if err := os.Remove(filepath.Join(e.base, macvm.AdminPasswordFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := macvm.EditBase(context.Background(), e.opts); !errors.Is(err, macvm.ErrEditNoAdminPassword) ||
+		err.Error() != "This macOS base was prepared before Wardyn kept its admin password, so edit-base cannot open it. Run `wardyn-runnerd macos-vm prepare --new-image`, then edit-base again." {
+		t.Fatalf("no admin password: %v", err)
 	}
 	if e.boots != 0 || e.f.fb.Boots() != e.fbBoots || e.out.Len() != 0 {
 		t.Fatalf("a refused edit booted (%d, %d) or printed %q", e.boots, e.f.fb.Boots()-e.fbBoots, e.out.String())
