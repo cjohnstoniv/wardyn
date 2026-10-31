@@ -25,6 +25,8 @@ func TestSetupWindowTextUnchanged(t *testing.T) {
 	@"3. In the same pane, turn on Remote Login.";`,
 		`NSString *t = title == NULL ? @"Wardyn: set up this macOS VM" : `,
 		`NSString *s = steps == NULL ? wardynScreenSteps : `,
+		// The strip keeps the height of all its steps (#3869).
+		"a.automaticallyAdjustsSize = NO;\n\ta.view = box;",
 	} {
 		if !strings.Contains(m, want) {
 			t.Errorf("screen_darwin.m lost setup's window text:\n%s", want)
