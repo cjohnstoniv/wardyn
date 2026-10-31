@@ -455,8 +455,8 @@ func installItem(ctx context.Context, g ToolsGuest, it BaseItem) (rec ItemRecord
 
 // trustCA stages a ca item's certificate (kept, for a trust by hand in edit-base), trusts it as a root
 // in the System keychain for SSL only, never every policy, and then verifies it. The guest agent runs
-// the trust inside the authorization bracket (guestagent withTrustSettingsRight), whose restore always
-// runs. A trust Apple refuses without a person is not an error: the CA reads not_trusted.
+// the trust as root without touching the authorization rule (macOS 26 refuses root that rewrite). A
+// trust Apple refuses without a person is not an error: the CA reads not_trusted.
 func trustCA(ctx context.Context, g ToolsGuest, it BaseItem, rec ItemRecord) (ItemRecord, error) {
 	b, err := os.ReadFile(it.Path)
 	if err != nil {
