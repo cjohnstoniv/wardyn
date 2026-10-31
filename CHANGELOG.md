@@ -22,8 +22,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `wardyn-runnerd macos-vm edit-base` boots a copy of a Mac's macOS base for one attended session, then checks it
   before runs use it: desktop control, accounts, Remote Login and the launcher's self-test. A copy that fails is
   discarded and runs keep the old base. The runner reports when Standard was last edited, and each run records that
-  time, whichever base it uses. See [Editing a base](docs/operations/macos-vms.md#editing-a-base). Built and
-  unit-tested; not yet run on a real Mac.
+  time, whichever base it uses. A base now keeps its setup account's password on the Mac, readable by the Mac's user
+  only, because macOS will not let root change it without the old one. A base prepared before this release cannot be
+  edited until `wardyn-runnerd macos-vm prepare --new-image`
+  ([#3881](https://github.com/cjohnstoniv/wardyn/issues/3881)). See
+  [Editing a base](docs/operations/macos-vms.md#editing-a-base). Built and unit-tested; not yet run on a real Mac.
 - A Mac can hold more than one macOS base, each derived from Standard with its own install list, and a run picks one
   with `macos_base`. A derived base's list may not carry a configuration profile; profiles belong to Standard, which
   every other base is derived from. A governance profile's `limits.allowed_macos_bases` limits which a team may pick.
@@ -53,7 +56,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   will not trust without a person reads `not_trusted`; trust it by hand in `edit-base`. On macOS 26 expect Apple to
   ask a person to approve the trust: the CA then reads `not_trusted` and preparing goes on
   ([#3878](https://github.com/cjohnstoniv/wardyn/issues/3878)). On macOS 26, expect removing or rotating a CA to stop
-  the tools update; to drop or replace a CA, change the list and run `prepare --reprepare`. Built and unit-tested; not yet run on a real Mac.
+  the tools update; to drop or replace a CA, change the list and run `wardyn-runnerd macos-vm prepare --new-image`.
+  Built and unit-tested; not yet run on a real Mac.
 - macOS VMs: a package in the install list may take secret files, such as an EDR licence. A file's value is never in a
   command line, a log, `tools.json` or the caps, and the file is removed after the install. Built and unit-tested; not
   yet run on a real Mac.
