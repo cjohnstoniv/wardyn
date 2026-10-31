@@ -352,6 +352,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - On a Mac runner using Docker Desktop, a macOS VM slot can stay busy for a few minutes after a run if Docker Desktop
   started during that run. It frees when Docker Desktop goes idle; quitting Docker Desktop with no runs going frees it at
   once ([#3871](https://github.com/cjohnstoniv/wardyn/issues/3871)).
+- If the macOS VM setup is given the wrong one-time code, preparing stops after about two minutes with `handshake failed:
+  EOF` instead of saying the code was wrong. Each prepare makes a new code: use the one from that prepare's window
+  ([#3874](https://github.com/cjohnstoniv/wardyn/issues/3874)).
 
 ### Before you upgrade
 
