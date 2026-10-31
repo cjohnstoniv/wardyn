@@ -91,6 +91,9 @@ func TestSetupByHandCodeLivesOnlyInItsFile(t *testing.T) {
 		t.Fatalf("stage 1 got password=code %v, a new password %v, file after replace %v",
 			b.in.Password == seen.Code, len(b.in.NewPassword) >= 32, b.fileAfter)
 	}
+	if got := adminPassword(t, f.opts.Layout.BaseDir(0)); got != b.in.NewPassword {
+		t.Fatal("the base does not keep the password stage 1 changed the code to")
+	}
 	var got bool
 	for _, ev := range f.ev.evs {
 		if ev.Phase == macvm.PhaseSetupByHand {

@@ -407,10 +407,10 @@ func (g *toolsGuest) DesktopPassword(ctx context.Context, pw []byte) (bool, erro
 	return g.tools.ToolsDesktopPassword(ctx, string(pw))
 }
 
-func (g *toolsGuest) AdminCode(ctx context.Context, code []byte) (bool, error) {
+func (g *toolsGuest) AdminCode(ctx context.Context, old, code []byte) (bool, error) {
 	ctx, done := g.bound(ctx)
 	defer done()
-	return g.tools.ToolsAdminCode(ctx, string(code))
+	return g.tools.ToolsAdminCode(ctx, string(old), string(code))
 }
 
 func (g *toolsGuest) Posture(ctx context.Context) (guestagent.ToolsPosture, error) {

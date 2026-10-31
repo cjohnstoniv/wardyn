@@ -14,32 +14,37 @@ import (
 	"testing"
 )
 
-// admin_code sets the setup admin's password through passwd only (never an argv), takes letters and digits
-// only, so a code cannot end dscl's command line, and prints redacted.
+// admin_code changes the setup admin's password through passwd only (never an argv), takes letters and digits
+// only, old and new both, so neither can end dscl's command line, and prints redacted.
 func TestToolsAdminCode(t *testing.T) {
 	rig := newToolsRig(t)
-	var set [][2]string
-	rig.t.passwd = func(_ context.Context, user, pw string) error { set = append(set, [2]string{user, pw}); return nil }
-	if w := rig.do("POST", "/v1/tools/admin_code", `{"code":"Abcd2345"}`); w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"admin_code_set":true}` {
+	var set [][3]string
+	rig.t.passwd = func(_ context.Context, user, old, pw string) error {
+		set = append(set, [3]string{user, old, pw})
+		return nil
+	}
+	if w := rig.do("POST", "/v1/tools/admin_code", `{"old":"Abcd2345","code":"Efgh6789"}`); w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"admin_code_set":true}` {
 		t.Fatalf("admin_code = %d %s", w.Code, w.Body)
 	}
-	if !slices.Equal(set, [][2]string{{MacAdminUser, "Abcd2345"}}) {
+	if !slices.Equal(set, [][3]string{{MacAdminUser, "Abcd2345", "Efgh6789"}}) {
 		t.Fatalf("passwd calls = %v", set)
 	}
-	for _, bad := range []string{`{"code":"Abcd2345\nquit"}`, `{"code":"Abcd 2345"}`, `{"code":"Abc"}`, `{}`} {
+	for _, bad := range []string{`{"old":"Abcd2345","code":"Abcd2345\nquit"}`, `{"old":"Abcd2345","code":"Abcd 2345"}`, `{"old":"Abcd2345","code":"Abc"}`, `{"old":"Abcd2345"}`,
+		`{"old":"Abcd 2345","code":"Efgh6789"}`, `{"old":"Abcd2345\nquit","code":"Efgh6789"}`, `{"old":"Abc","code":"Efgh6789"}`, `{"code":"Efgh6789"}`} {
 		if w := rig.do("POST", "/v1/tools/admin_code", bad); w.Code != 400 {
 			t.Errorf("admin_code %s = %d, want 400", bad, w.Code)
 		}
 	}
 	if len(set) != 1 || len(rig.ran) != 0 {
-		t.Fatalf("a refused code reached passwd (%v) or an argv ran (%v)", set, rig.ran)
+		t.Fatalf("a refused password reached passwd (%v) or an argv ran (%v)", set, rig.ran)
 	}
-	rig.t.passwd = func(context.Context, string, string) error { return errors.New("dscl failed") }
-	if w := rig.do("POST", "/v1/tools/admin_code", `{"code":"Abcd2345"}`); strings.TrimSpace(w.Body.String()) != `{"admin_code_set":false}` {
+	rig.t.passwd = func(context.Context, string, string, string) error { return errors.New("dscl failed") }
+	if w := rig.do("POST", "/v1/tools/admin_code", `{"old":"Abcd2345","code":"Efgh6789"}`); strings.TrimSpace(w.Body.String()) != `{"admin_code_set":false}` {
 		t.Errorf("a failed passwd = %s", w.Body)
 	}
-	if s := fmt.Sprintf("%v %+v %#v %s", AdminCode{"Abcd2345"}, AdminCode{"Abcd2345"}, AdminCode{"Abcd2345"}, AdminCode{"Abcd2345"}); strings.Contains(s, "Abcd2345") {
-		t.Errorf("AdminCode prints its code: %s", s)
+	v := AdminCode{Old: "Abcd2345", Code: "Efgh6789"}
+	if s := fmt.Sprintf("%v %+v %#v %s", v, v, v, v); strings.Contains(s, "Abcd2345") || strings.Contains(s, "Efgh6789") {
+		t.Errorf("AdminCode prints a password: %s", s)
 	}
 }
 

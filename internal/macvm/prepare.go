@@ -4,9 +4,8 @@
 package macvm
 
 import (
+	"cmp"
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -87,16 +86,16 @@ type PrepNetwork interface {
 
 // BootstrapInput is what stage 1 gets: a dialer into the running
 // provisioned guest and its one-time admin account. Password is generated
-// per prepare, held in this process's memory only, never written or logged,
-// and useless once stage 1 has turned Remote Login off.
+// per prepare and never logged. The password stage 1 leaves the account with
+// (NewPassword when set, else Password) is kept as the base's AdminPasswordFile, for edit-base.
 type BootstrapInput struct {
 	Dial     func(ctx context.Context, port int) (net.Conn, error)
 	Username string
 	Password string
 	// NewPassword, when set, means Password is the one-time code the Mac's
 	// person gave the account in Setup Assistant (setup by hand): stage 1's
-	// first SSH step replaces it with NewPassword (a random 32-byte one held
-	// in memory only) and then calls Replaced, before anything else.
+	// first SSH step replaces it with NewPassword (the random one
+	// prepare made) and then calls Replaced, before anything else.
 	NewPassword string
 	Replaced    func()
 	// Progress reports each stage-1 step as a PhaseBootstrap event. Its
@@ -557,7 +556,7 @@ func (p *prep) discardInterrupted() error {
 		return nil
 	}
 	p.Log.Warn("macvm: discarding an install that did not finish", "base", p.base)
-	for _, f := range []string{DiskFile, AuxFile, MachineIDFile, ManifestFile, PairKeyFile, ToolsRecordFile, installingMarker} {
+	for _, f := range []string{DiskFile, AuxFile, MachineIDFile, ManifestFile, PairKeyFile, AdminPasswordFile, ToolsRecordFile, installingMarker} {
 		if err := os.Remove(filepath.Join(p.base, f)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -738,7 +737,8 @@ func stage1Failed(err error, withCode bool) error {
 }
 
 // bootstrap runs stage 1 with a fresh pairing key, which stage 1 writes into the guest, and then keeps
-// the same bytes as the base's host copy.
+// the same bytes as the base's host copy, and the setup admin's password stage 1 left the guest with as
+// the base's AdminPasswordFile.
 func (p *prep) bootstrap(ctx context.Context, in BootstrapInput) (BootstrapResult, error) {
 	in.PairKey = newPairKey()
 	defer clear(in.PairKey)
@@ -748,6 +748,11 @@ func (p *prep) bootstrap(ctx context.Context, in BootstrapInput) (BootstrapResul
 	}
 	if err := writePairKey(p.base, in.PairKey); err != nil {
 		return res, fmt.Errorf("keep the base's pairing key: %w", err)
+	}
+	held := []byte(cmp.Or(in.NewPassword, in.Password))
+	defer clear(held)
+	if err := writeAdminPassword(p.base, AdminPasswordFile, held); err != nil {
+		return res, fmt.Errorf("keep the base's admin password: %w", err)
 	}
 	return res, nil
 }
@@ -910,14 +915,14 @@ func waitPort(ctx context.Context, nw PrepNetwork, port int, wait time.Duration)
 	}
 }
 
-// randomPassword is 32 random bytes, base64: the provisioned admin's password,
-// held in memory only.
+// randomPassword is 43 characters of codeAlphabet, about 249 bits: the setup admin's password, which the
+// base keeps as its AdminPasswordFile. Letters and digits only, as the guest agent's admin_code takes.
 func randomPassword() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
+	b, err := randomCode(43)
+	if err != nil {
 		return "", err
 	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+	return string(b), nil
 }
 
 // ipswNameVersion matches the restore image names Apple publishes: UniversalMac_<version>_<build>_Restore.ipsw.
