@@ -188,9 +188,6 @@ type Tools struct {
 
 	// run runs an allowed argv as root; nil is runCombined (tests record).
 	run func(ctx context.Context, argv []string) ([]byte, int, error)
-	// authdb runs `security authorizationdb` with args and stdin and returns its stdout; nil is
-	// runAuthorizationDB (tests record).
-	authdb func(ctx context.Context, args []string, stdin []byte) ([]byte, error)
 	// passwd sets an account's password; nil is setPassword (tests record). sshAddr is "" in use.
 	passwd  func(ctx context.Context, user, password string) error
 	sshAddr string
@@ -313,9 +310,6 @@ func (t *Tools) handleExec(w http.ResponseWriter, r *http.Request) {
 	run := t.run
 	if run == nil {
 		run = runCombined
-	}
-	if trustSettingsForm(in.Argv) {
-		run = t.withTrustSettingsRight(run)
 	}
 	out, code, err := run(r.Context(), in.Argv)
 	if err != nil {
@@ -760,7 +754,8 @@ func itemPushAllowed(dest string) bool {
 //	/usr/bin/profiles status -type enrollment
 //
 // The agent does both mkdir forms itself (makeDirAll), without mkdir. The two that change the admin
-// trust settings run only inside withTrustSettingsRight.
+// trust settings run as root like the rest: macOS 26 refuses root a rewrite of the authorization rule, so a
+// trust Apple will not make without a person reads not_trusted, for a trust by hand in edit-base.
 func itemArgvAllowed(argv []string) bool {
 	if len(argv) < 2 {
 		return false
@@ -815,59 +810,6 @@ var itemForms = map[string]func(a []string) bool{
 }
 
 var sha1Hex = regexp.MustCompile(`^[0-9A-F]{40}$`)
-
-// trustSettingsRight is the authorization right `security add-trusted-cert -d` and `delete-certificate -t`
-// need for the admin trust settings: without a person to type a password, only its rule set to allow
-// lets root change them.
-const trustSettingsRight = "com.apple.trust-settings.admin"
-
-// trustSettingsForm says whether argv is an item form that changes the admin trust settings.
-func trustSettingsForm(argv []string) bool {
-	return len(argv) > 1 && argv[0] == "/usr/bin/security" && (argv[1] == "add-trusted-cert" || argv[1] == "delete-certificate") &&
-		itemArgvAllowed(argv)
-}
-
-// withTrustSettingsRight wraps run for one trust-settings form: it saves trustSettingsRight's rule, sets
-// it to allow, runs the form, and then always writes the saved rule back, even when the form or the
-// allow failed or the request was cancelled. No form sets the rule on its own, so it is never left open.
-// A rule that could not be restored is an error, logged.
-func (t *Tools) withTrustSettingsRight(run func(context.Context, []string) ([]byte, int, error)) func(context.Context, []string) ([]byte, int, error) {
-	authdb := t.authdb
-	if authdb == nil {
-		authdb = runAuthorizationDB
-	}
-	return func(ctx context.Context, argv []string) (out []byte, code int, err error) {
-		saved, err := authdb(ctx, []string{"read", trustSettingsRight}, nil)
-		if err != nil || !bytes.Contains(saved, []byte("<plist")) {
-			return nil, 0, fmt.Errorf("authorizationdb read %s: %v; nothing was changed", trustSettingsRight, err)
-		}
-		defer func() {
-			if _, rerr := authdb(context.WithoutCancel(ctx), []string{"write", trustSettingsRight}, saved); rerr != nil {
-				slog.Error("guest agent: tools mode: the trust settings right was not restored", "right", trustSettingsRight, "err", rerr)
-				out, code, err = nil, 0, fmt.Errorf("authorizationdb write %s (restore): %w", trustSettingsRight, rerr)
-			}
-		}()
-		if _, err := authdb(ctx, []string{"write", trustSettingsRight, "allow"}, nil); err != nil {
-			return nil, 0, fmt.Errorf("authorizationdb write %s allow: %w", trustSettingsRight, err)
-		}
-		return run(ctx, argv)
-	}
-}
-
-// runAuthorizationDB runs `/usr/bin/security authorizationdb args...` with stdin and returns its stdout;
-// a non-zero exit is an error with its stderr.
-func runAuthorizationDB(ctx context.Context, args []string, stdin []byte) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "/usr/bin/security", append([]string{"authorizationdb"}, args...)...)
-	cmd.Stdin = bytes.NewReader(stdin)
-	var stderr capped
-	stderr.max = 1 << 10
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.b.String()))
-	}
-	return out, nil
-}
 
 // MacAdminProfileDir is where edit-base gives wardyn-admin its own copy of each profile it staged for the
 // window, to open from the desktop session: wardyn-admin's alone (0700, its files 0600), removed by the
