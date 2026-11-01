@@ -104,18 +104,18 @@ func RequestApproval(ctx context.Context, st Store, req types.ApprovalRequest) (
 // RejoinStamper is the optional store method behind Rejoin. A store without it
 // leaves every bounded hold measured from requested_at.
 type RejoinStamper interface {
-	StampApprovalRejoin(ctx context.Context, id, runID uuid.UUID, kind types.ApprovalKind, at time.Time) (types.ApprovalRequest, bool, error)
+	StampApprovalRejoin(ctx context.Context, id, runID uuid.UUID, kind types.ApprovalKind) (types.ApprovalRequest, bool, error)
 }
 
 // Rejoin records that a held request re-entered the hold on approval id, which
 // must be a PENDING row of runID and kind, so Hold measures the bounded hold
-// from now. ok is false when there is no such row, or the store cannot stamp one.
+// from the store's clock. ok is false when there is no such row, or the store cannot stamp one.
 func Rejoin(ctx context.Context, st Store, id, runID uuid.UUID, kind types.ApprovalKind) (types.ApprovalRequest, bool, error) {
 	rs, can := st.(RejoinStamper)
 	if !can {
 		return types.ApprovalRequest{}, false, nil
 	}
-	ap, ok, err := rs.StampApprovalRejoin(ctx, id, runID, kind, time.Now().UTC())
+	ap, ok, err := rs.StampApprovalRejoin(ctx, id, runID, kind)
 	if err != nil {
 		return types.ApprovalRequest{}, false, fmt.Errorf("approval: stamp rejoin: %w", err)
 	}
