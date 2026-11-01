@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.10] — 2026-11-01
+
 ### Before you upgrade
 
 - 0.10 can't be rolled back by redeploying 0.9.x. Boot refuses a database that records a migration the binary does not
