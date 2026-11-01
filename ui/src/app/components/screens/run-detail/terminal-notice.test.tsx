@@ -145,7 +145,7 @@ describe("TerminalPane — the Watch link needs a recording", () => {
   const paneFor = (over: Record<string, unknown>) =>
     render(
       <OperatorProvider operator principal="me">
-        <TerminalPane run={makeRun({ id: "run-1", created_by: "me", interactive: false, ...over })} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
+        <TerminalPane onGoOutput={vi.fn()} run={makeRun({ id: "run-1", created_by: "me", interactive: false, ...over })} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
       </OperatorProvider>,
     );
 
@@ -158,7 +158,7 @@ describe("TerminalPane — the Watch link needs a recording", () => {
   it("a STARTING run the person cannot enter, without a recording, has no link", () => {
     render(
       <OperatorProvider operator={false} principal="me">
-        <TerminalPane run={makeRun({ id: "run-1", state: "STARTING", created_by: "priya", interactive: true, has_recording: false })} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
+        <TerminalPane onGoOutput={vi.fn()} run={makeRun({ id: "run-1", state: "STARTING", created_by: "priya", interactive: true, has_recording: false })} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
       </OperatorProvider>,
     );
     expect(screen.getByText(/Only priya/)).toBeInTheDocument();
@@ -176,7 +176,7 @@ describe("TerminalPane — Watch desktop", () => {
   const paneFor = (over: Record<string, unknown>, principal = "me") =>
     render(
       <OperatorProvider operator={false} principal={principal}>
-        <TerminalPane run={makeRun({ id: "run-1", state: "RUNNING", created_by: "me", interactive: false, machine_kind: "macos_vm", macos: { desktop: "observe" }, ...over } as Partial<RunDetail>) as RunDetail} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
+        <TerminalPane onGoOutput={vi.fn()} run={makeRun({ id: "run-1", state: "RUNNING", created_by: "me", interactive: false, machine_kind: "macos_vm", macos: { desktop: "observe" }, ...over } as Partial<RunDetail>) as RunDetail} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
       </OperatorProvider>,
     );
   beforeEach(() => {
