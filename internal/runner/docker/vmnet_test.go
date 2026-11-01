@@ -131,12 +131,12 @@ func TestVMRelayArgvIsPinnedForTheDefaultProxy(t *testing.T) {
 func TestVMRelayFollowsTheSandboxProxyURLOverride(t *testing.T) {
 	r := newVMRig(t)
 	spec := vmSpec()
-	spec.Env["WARDYN_PROXY_URL"] = "http://relay-proxy.internal:8080"
+	spec.Env["WARDYN_PROXY_URL"] = "http://relay-proxy.internal:3128"
 	if _, err := r.d.CreateSandbox(context.Background(), spec); err != nil {
 		t.Fatal(err)
 	}
 	c := r.container(t, vmnetName(spec.RunID))
-	want := []string{"-listen", "/vm/net/net.sock", "-proxy", "relay-proxy.internal:8080"}
+	want := []string{"-listen", "/vm/net/net.sock", "-proxy", "relay-proxy.internal:3128"}
 	if !slices.Equal([]string(c.cfg.Cmd), want) {
 		t.Fatalf("relay argv = %q, want %q", c.cfg.Cmd, want)
 	}

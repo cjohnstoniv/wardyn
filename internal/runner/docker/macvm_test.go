@@ -290,7 +290,7 @@ func TestMacVMRelayArgvDefaultAndOverride(t *testing.T) {
 		want []string
 	}{
 		"default":  {"", []string{"-stdio", "-proxy", "wardyn-proxy:3128"}},
-		"override": {"http://relay-proxy.internal:8080", []string{"-stdio", "-proxy", "relay-proxy.internal:8080"}},
+		"override": {"http://relay-proxy.internal:3128", []string{"-stdio", "-proxy", "relay-proxy.internal:3128"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newMacRig(t)

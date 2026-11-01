@@ -15,7 +15,8 @@ func TestGuestProxyAddr(t *testing.T) {
 	}{
 		{"unset is the default name", "", "wardyn-proxy:3128", false},
 		{"the default URL is the default name", "http://wardyn-proxy:3128", "wardyn-proxy:3128", false},
-		{"an override is followed", "http://relay-proxy.internal:8080", "relay-proxy.internal:8080", false},
+		{"an override is followed", "http://relay-proxy.internal:3128", "relay-proxy.internal:3128", false},
+		{"another port is refused", "http://relay-proxy.internal:8080", "", true},
 		{"a trailing slash is fine", "http://relay-proxy:3128/", "relay-proxy:3128", false},
 		{"an IPv6 literal keeps its brackets", "http://[fd00::5]:3128", "[fd00::5]:3128", false},
 		{"https is refused", "https://relay-proxy:3128", "", true},
