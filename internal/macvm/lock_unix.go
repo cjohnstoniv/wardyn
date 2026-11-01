@@ -19,9 +19,16 @@ import (
 // user's and not a symlink: a slot lock in a directory someone else can write
 // would let them stall the helper. It waits until ctx ends.
 func lockFile(ctx context.Context, path string, exclusive bool) (unlock func(), err error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|unix.O_NOFOLLOW, 0o600)
+	_, unlock, err = lockFileHeld(ctx, path, exclusive)
+	return unlock, err
+}
+
+// lockFileHeld is lockFile that also returns the open lock file, so a caller can tell whether the
+// path still names it (a lock file that is removed leaves its holders on an unlinked inode).
+func lockFileHeld(ctx context.Context, path string, exclusive bool) (f *os.File, unlock func(), err error) {
+	f, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("macvm: slot lock: %w", err)
+		return nil, nil, fmt.Errorf("macvm: slot lock: %w", err)
 	}
 	fi, err := f.Stat()
 	if err == nil {
@@ -29,7 +36,7 @@ func lockFile(ctx context.Context, path string, exclusive bool) (unlock func(), 
 	}
 	if err != nil {
 		_ = f.Close()
-		return nil, fmt.Errorf("macvm: slot lock %s: %w", path, err)
+		return nil, nil, fmt.Errorf("macvm: slot lock %s: %w", path, err)
 	}
 	how := unix.LOCK_SH
 	if exclusive {
@@ -38,16 +45,16 @@ func lockFile(ctx context.Context, path string, exclusive bool) (unlock func(), 
 	for {
 		err := unix.Flock(int(f.Fd()), how|unix.LOCK_NB)
 		if err == nil {
-			return func() { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN); _ = f.Close() }, nil
+			return f, func() { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN); _ = f.Close() }, nil
 		}
 		if !errors.Is(err, unix.EWOULDBLOCK) {
 			_ = f.Close()
-			return nil, fmt.Errorf("macvm: slot lock %s: %w", path, err)
+			return nil, nil, fmt.Errorf("macvm: slot lock %s: %w", path, err)
 		}
 		select {
 		case <-ctx.Done():
 			_ = f.Close()
-			return nil, ctx.Err()
+			return nil, nil, ctx.Err()
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
