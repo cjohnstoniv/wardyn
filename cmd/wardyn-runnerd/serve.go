@@ -225,7 +225,7 @@ func newServeCommand(build runnerHooksBuilder) *cobra.Command {
 	cmd.Flags().StringVar(&opts.recording, "recording-store", "", "organisation recording mode: pg, fs or off (off disables local capture; default pg)")
 	cmd.Flags().StringVar(&opts.localAttach, "local-attach", "on", "on lets a person's CLI on this computer attach to its runs over a per-user socket when the organisation allows it; off never opens the socket")
 	cmd.Flags().StringVar(&opts.substrate, "substrate", "docker", "where runs execute: docker (this host's engine) or k8s (a runs namespace of the cluster runnerd runs in); "+
-		"folders runs nothing and only shares folders on this computer with runs elsewhere")
+		"folders runs nothing and only shares folders on this computer with runs elsewhere (default: substrate in runnerd.json, else docker)")
 	cmd.Flags().StringArrayVar(&opts.folderRoots, "folder-root", nil, "folders: a folder this runner may share, with everything under it (repeatable; default: your home folder)")
 	cmd.Flags().StringVar(&opts.localModelPorts, "local-model-port", "", "docker: the port, or comma-separated ports, of a model server on this computer that runs here may use when the organisation allows it, "+
 		"such as 11434; default: none, so no run here uses this computer's model server")
@@ -290,4 +290,5 @@ func (c runnerConfig) applyTo(org, stateDir *string, o *serveOptions) {
 	o.orgCAFile, o.localModelPorts = c.get("org_ca_file"), c.get("local_model_port")
 	o.macOSVM = macOSVMOn(c.get("macos_vm"))
 	o.driveRoots = c.field("drive_root").List
+	o.substrate = c.get("substrate")
 }
