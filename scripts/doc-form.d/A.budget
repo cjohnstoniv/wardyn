@@ -369,7 +369,7 @@
 # docs/AUDIT-ACTIONS.md 55593, measured after the rc.9 Mac base merge (M1 M2 M3 M4 over the W1 train): 2 words over the per-side sum, from rows git merged word-wise.
 # docs/AUDIT-ACTIONS.md 55594 adds 1 over 55593: the withheld list names source.write's runner_id.
 # docs/AUDIT-ACTIONS.md=55645 adds 51 over 55594, measured (rc.10 service lease, #3760): the run.end.set row says a refused or unanswerable renewal writes a denied row.
-# docs/AUDIT-ACTIONS.md 55698 adds 53 over 55645, measured: the ui.input.dropped row and view_only on the desktop's ui.authorize, ui.open and ui.close rows.
+# docs/AUDIT-ACTIONS.md 55698 adds 53 over 55645, measured: the ui.input.drop row and view_only on the desktop's ui.authorize, ui.open and ui.close rows.
 # docs/AUDIT-ACTIONS.md 55629 = 55594 + 35, measured: Azure DevOps push rules read the Git REST API (#3921)
 # docs/AUDIT-ACTIONS.md 55733 = ours 55698 + theirs 55629 - base 55594 at the 0.10 W7 merge of ado-push-paths.
 docs/AUDIT-ACTIONS.md=55733 share=8
