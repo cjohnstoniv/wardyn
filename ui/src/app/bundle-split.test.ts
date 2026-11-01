@@ -186,7 +186,7 @@ describe("New Run copy and flow stay out of the eager chunks", () => {
 });
 
 // Vite inlines an asset under assetsInlineLimit (4096 B) as a data: URI, and the CSP's default-src 'self'
-// blocks data: images. Only the 128 and 256 px art may ship; smaller files use the SVG BarrierMark.
+// blocks data: images. Only the 128 and 256 px art may ship; smaller files use the SVG TierIllustration.
 describe("barrier art ships as files, never inlined", () => {
   it("emits no data:image/png in any chunk or asset of the app build", async () => {
     const inlined = (await buildOnce())
