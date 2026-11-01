@@ -55,7 +55,11 @@ export const DESKTOP = {
   kindMacOS: "macOS desktop VM", // MV-D01
   signInsNoteRunDisk:
     "Sign-ins you make in this desktop are kept on this run's virtual disk and removed from this Mac when the run ends. The Mac's own snapshots or backups may keep a copy for a while. While the run goes on, the agent can use them too. Closing this tab doesn't remove them.", // MV-D08
-  observeOnlyMacOS: "The macOS desktop isn't available on this Mac yet: macOS turned Screen Sharing on for viewing only.", // MV-D09
+  observeOnlyMacOS: "macOS 26 doesn't keep control here. You can watch this desktop, but not type or click in it.", // MAC-V03, replaces MV-D09
+  viewOnlyChip: "View only", // MAC-V01
+  watch: "Watch desktop", // MAC-V02
+  viewOnlyTitle: "View only", // MAC-V05
+  viewOnlyBody: "macOS 26 doesn't keep control here. Typing and clicking don't reach this desktop.", // MAC-V06
   diskRemoving: "Removing the macOS VM's disk from this Mac…", // MV-D10
   diskRemoved: (time: string) => `The macOS VM and its disk were removed from this Mac at ${time}.`, // MV-D11
   diskRemoveFailed: (reason: string) => `The macOS VM's disk could not be removed from this Mac: ${reason}.`, // MV-D12

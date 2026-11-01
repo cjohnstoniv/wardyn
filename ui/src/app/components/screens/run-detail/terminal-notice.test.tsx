@@ -4,14 +4,18 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { HttpError } from "../../../lib/api/core";
-import type { RunOutput } from "../../../lib/types";
+import { health } from "../../../lib/api/health";
+import type { RunDetail, RunOutput } from "../../../lib/types";
 import { RUN_WAIT, RUN_WAIT_REASON } from "../../../lib/runner-pool-refusals";
 import { makeMacOSVMRun, makeRun } from "../../../../test/factories";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { RUN_COCKPIT, RUN_OUTPUT } from "../../wardyn/copy";
+import { RUN_COCKPIT, RUN_MODE, RUN_OUTPUT } from "../../wardyn/copy";
+import { DESKTOP } from "../../wardyn/copy/desktop";
 import { TerminalPane } from "./terminal-notice";
+
+vi.mock("../../../lib/api/health", () => ({ health: { health: vi.fn().mockResolvedValue({}) } }));
 
 vi.mock("../../attach-terminal", () => ({ AttachTerminal: () => null }));
 vi.mock("../../../lib/api/runner-pools", () => ({
@@ -116,6 +120,12 @@ describe("TerminalPane — a run on an offline computer", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
+  it("offers no replay link on a run with no recording", () => {
+    renderPane(live({ has_recording: false }));
+    expect(screen.getByText(/laptop-7 is offline/)).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
   it("an online computer, an unknown one, and a remote run keep their terminal", () => {
     for (const over of [{ runner_online: true }, { runner_online: undefined }, { placement: "remote" }]) {
       const { unmount } = render(
@@ -126,6 +136,79 @@ describe("TerminalPane — a run on an offline computer", () => {
       expect(screen.queryByText(/can't be reached/)).toBeNull();
       unmount();
     }
+  });
+});
+
+// #3922: on an unrecorded run the link opened an empty Recording tab.
+describe("TerminalPane — the Watch link needs a recording", () => {
+  const paneFor = (over: Record<string, unknown>) =>
+    render(
+      <OperatorProvider operator principal="me">
+        <TerminalPane run={makeRun({ id: "run-1", created_by: "me", interactive: false, ...over })} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
+      </OperatorProvider>,
+    );
+
+  it("a task run without a recording has no link", () => {
+    paneFor({ state: "WAITING_FOR_CONFIRMATION", has_recording: false });
+    expect(screen.queryByText(RUN_MODE.autonomous.blurb)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Watch the captured session/ })).toBeNull();
+  });
+
+  it("a STARTING run the person cannot enter, without a recording, has no link", () => {
+    render(
+      <OperatorProvider operator={false} principal="me">
+        <TerminalPane run={makeRun({ id: "run-1", state: "STARTING", created_by: "priya", interactive: true, has_recording: false })} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(/Only priya/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Watch the captured session/ })).toBeNull();
+  });
+
+  it("a run with a recording keeps it", () => {
+    paneFor({ state: "WAITING_FOR_CONFIRMATION", has_recording: true });
+    expect(screen.getByRole("button", { name: /Watch the captured session/ })).toBeInTheDocument();
+  });
+});
+
+// Board F-hero: Watch desktop on the hero of a running macOS VM run whose desktop is view only.
+describe("TerminalPane — Watch desktop", () => {
+  const paneFor = (over: Record<string, unknown>, principal = "me") =>
+    render(
+      <OperatorProvider operator={false} principal={principal}>
+        <TerminalPane run={makeRun({ id: "run-1", state: "RUNNING", created_by: "me", interactive: false, machine_kind: "macos_vm", macos: { desktop: "observe" }, ...over } as Partial<RunDetail>) as RunDetail} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
+      </OperatorProvider>,
+    );
+  beforeEach(() => {
+    vi.mocked(health.health).mockClear();
+    vi.mocked(health.health).mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true, enter_post_url: "http://ui.local/__wardyn/enter" } } as never);
+  });
+
+  it("a task run's own person gets the button", async () => {
+    paneFor({});
+    expect(await screen.findByRole("button", { name: DESKTOP.watch })).toBeInTheDocument();
+  });
+
+  it("is not offered to someone who may not enter the run", async () => {
+    paneFor({}, "priya");
+    await waitFor(() => expect(screen.getByTestId("run-pane-frame")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: DESKTOP.watch })).toBeNull();
+    expect(health.health).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ["a Mac with control", { macos: { desktop: "control" } }],
+    ["a run that isn't running", { state: "WAITING_FOR_CONFIRMATION" }],
+  ])("is not offered on %s", async (_name, over) => {
+    paneFor(over);
+    await waitFor(() => expect(screen.getByTestId("run-pane-frame")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: DESKTOP.watch })).toBeNull();
+  });
+
+  it("stays away while the gateway is off", async () => {
+    vi.mocked(health.health).mockResolvedValue({ status: "ok", ui_sandbox: { enabled: false } } as never);
+    paneFor({});
+    await waitFor(() => expect(health.health).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: DESKTOP.watch })).toBeNull();
   });
 });
 

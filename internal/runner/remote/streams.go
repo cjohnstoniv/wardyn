@@ -91,10 +91,11 @@ func offersSignIns(c runnerwire.Caps, k types.MachineKind) bool {
 }
 
 // offersDesktop says the runner opens the display of a VM of kind k: a Linux VM's by its Linux caps, a
-// macOS VM's only when its Mac's Screen Sharing can be controlled (observe-only or absent offers none).
+// macOS VM's when its Mac's Screen Sharing can be controlled or watched (the gateway and the helper keep
+// a watcher's input from the guest). A Mac with no Screen Sharing offers none.
 func offersDesktop(c runnerwire.Caps, k types.MachineKind) bool {
 	linux := c.LinuxVM != nil && c.LinuxVM.Desktop
-	mac := c.MacOSVM != nil && c.MacOSVM.Desktop == runnerwire.MacVMDesktopControl
+	mac := c.MacOSVM != nil && (c.MacOSVM.Desktop == runnerwire.MacVMDesktopControl || c.MacOSVM.Desktop == runnerwire.MacVMDesktopObserve)
 	return byKind(k, linux, mac)
 }
 

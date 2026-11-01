@@ -875,6 +875,60 @@ func TestDesktopEnterRefusesAMacOSDesktopWhoseSignInsAreOff(t *testing.T) {
 	}
 }
 
+// A macOS VM whose runner does not say it can be controlled is watched only: the viewer is told, the
+// sessions are audited as view only, and no key, pointer move or paste reaches the display.
+func TestDesktopStreamOnAViewOnlyMacKeepsInputFromTheDisplay(t *testing.T) {
+	h, dr := newDesktopHarness(t)
+	h.srv.cfg.Store = &desktopSiteStore{desktopClosedStore: h.srv.cfg.Store.(*desktopClosedStore)}
+	h.run.Agent, h.run.MachineKind = "claude-code", types.MachineMacOSVM
+	h.store.putRun(h.run)
+	request := []byte{3, 1, 0, 0, 0, 0, 7, 128, 4, 56}
+	reached := make(chan []byte, 1)
+	dr.after = func(b net.Conn) {
+		got := make([]byte, len(request))
+		if _, err := io.ReadFull(b, got); err == nil {
+			reached <- got
+		}
+	}
+	srv := httptest.NewServer(h.gateway)
+	t.Cleanup(srv.Close)
+	c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+	if got := uiGet(h, desktopPath(h, "/"), c); !strings.Contains(got.Body.String(), `&#34;view_only&#34;:true`) {
+		t.Fatalf("viewer = %d %s, want view_only in its boot data", got.Code, got.Body.String())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := dialDesktop(t, ctx, h, srv.URL, c)
+	<-dr.dialled
+	v.handshake()
+	var input []byte
+	input = append(input, 4, 1, 0, 0, 0, 0, 0, 'a')
+	input = append(input, 5, 1, 0, 10, 0, 20)
+	input = append(input, rfbCut(6, pasteSentinel)...)
+	v.write(append(input, request...))
+	select {
+	case got := <-reached:
+		if string(got) != string(request) {
+			t.Fatalf("the VM got %q, want only the update request", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("the update request never reached the VM")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(h.audit.auditRows("ui.input.dropped", "denied")) < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if rows := h.audit.auditRows("ui.input.dropped", "denied"); len(rows) != 2 {
+		t.Fatalf("ui.input.dropped rows = %+v, want one each for key and pointer", rows)
+	}
+	for _, action := range []string{"ui.authorize", "ui.open"} {
+		rows := h.audit.auditRows(action, "success")
+		if len(rows) == 0 || !strings.Contains(string(rows[len(rows)-1].Data), `"view_only":true`) {
+			t.Fatalf("%s rows = %+v, want view_only", action, rows)
+		}
+	}
+}
+
 // The viewer's boot data names the run's machine kind, so a macOS desktop that is still starting is
 // named as one.
 func TestDesktopViewerBootNamesTheMachineKind(t *testing.T) {

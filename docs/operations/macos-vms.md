@@ -142,9 +142,10 @@
   - Just after, a new connection to port 22 must be refused outright. A timeout, or a network that cannot reach the guest, proves nothing: stage 1 keeps trying for 30 seconds, then fails.
   - A refusal counts only from a guest shown live on the same boot: port 5900 still sends its banner and no new DHCP request arrived. A stopped, rebooted or reset guest also refuses port 22, so that case stops stage 1 at once.
   - Any failure stops preparing and no base is published.
-- **The desktop.** Apple has said Screen Sharing turned on from the command line may let a viewer only watch. Preparing ends with a control check, and `status` reports whether the desktop is `control`, `observe` or `none`. With `observe`, macOS VMs still run agent-only, and the desktop is not offered until the base has control turned on (`edit-base`, below).
+- **The desktop.** Apple has said Screen Sharing turned on from the command line may let a viewer only watch. Preparing ends with a control check, and `status` reports whether the desktop is `control`, `observe` or `none`. With `observe`, a run's desktop can be watched from the run page (Watch desktop), not acted in.
+  - The UI gateway and the Mac's helper each drop keys, pointer moves and paste, so that input never reaches the guest. Built and unit-tested; not yet run on a real Mac.
   - `status` says how, and the prepare log says why.
-  - To do it, run `wardyn-runnerd macos-vm edit-base`, turn on Screen Sharing with "VNC viewers may control screen with password" in the guest, then close the window.
+  - To turn control on, run `wardyn-runnerd macos-vm edit-base`, turn on Screen Sharing with "VNC viewers may control screen with password" in the guest, then close the window. On a macOS 26 base the desktop stays view only even so ([#3901](https://github.com/cjohnstoniv/wardyn/issues/3901)).
 - **Newer macOS.** Wardyn does not tell you that Apple has a newer image, but `status` shows when the base was prepared and this Mac's macOS beside it. To move to a newer one, run `wardyn-runnerd macos-vm prepare --new-image` with the per-run flags; a plain `prepare` keeps a ready base and says there is nothing to prepare.
   - The new base is built beside the old one, which runs keep using until the new one is ready. Then the old one is replaced and deleted.
   - A re-prepare holds one of the two slots while it runs.
@@ -494,7 +495,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | Proxy certificate | On macOS 26 the run's System keychain does not trust it, so apps that use only the system trust store fail on inspected hosts ([System trust store](#apps-that-use-only-the-system-trust-store)). Node, Python, git and curl are pointed at it |
 | Harnesses | Claude Code, Codex CLI and "Your own tools", depending on what the base installed and what passed the launcher's self-test. If Apple's Command Line Tools cannot install, only "Your own tools" is offered |
 | Folders | Shared into the guest; see [Folders](#folders) |
-| Desktop | One fixed 1920 x 1080 display. An `observe` result (see above) leaves macOS VMs agent-only |
+| Desktop | One fixed 1920 x 1080 display. An `observe` result (see above) can be watched, not controlled |
 | Clipboard | Paste in is allowed and copy out is blocked by default, as for other desktops, if Apple's Screen Sharing carries the standard clipboard messages. Otherwise nothing is copied either way |
 | Heat and battery | New VMs are refused at serious or critical thermal state. Battery use and lid-close sleep on MacBooks were not measured |
 | Guest patching | The guest's automatic updates are off, so a run's OS is predictable. Re-prepare to move to a newer macOS. `macos_vm.max_base_age_days` in the site config refuses runs on a Mac whose base is older |

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -177,6 +178,27 @@ func TestMainDepsProbeProvisioning(t *testing.T) {
 func TestPlatformEngineOffMac(t *testing.T) {
 	if _, err := platformEngine(); err == nil {
 		t.Skip("a real engine is linked")
+	}
+}
+
+// The run's shim takes view only from the run's base, not from anything sent to it.
+func TestRunShimFollowsTheBase(t *testing.T) {
+	pw, err := macvm.NewDesktopSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for desktop, want := range map[string]bool{macvm.DesktopControl: false, macvm.DesktopObserve: true} {
+		const runID = "0a1b2c3d-4e5f-4061-8273-8495a6b7c8d9"
+		base, dir := t.TempDir(), macvm.Layout{Root: t.TempDir()}.RunDir(runID)
+		if err := os.WriteFile(filepath.Join(base, macvm.ManifestFile), []byte(`{"format":`+strconv.Itoa(macvm.BaseFormat)+`,"state":"ready","desktop":"`+desktop+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: runID, BaseDir: base}); err != nil {
+			t.Fatal(err)
+		}
+		if got := runShim(dir, pw, nil).ViewOnly; got != want {
+			t.Errorf("%s base: view only %v, want %v", desktop, got, want)
+		}
 	}
 }
 

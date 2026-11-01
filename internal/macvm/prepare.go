@@ -69,8 +69,8 @@ type PrepareEvent struct {
 }
 
 // ObserveDesktopDetail is the detail event stage 2 emits when its control check reads observe: the
-// base is ready and runs agent-only, and the person did not turn Screen Sharing on with control during setup by hand.
-const ObserveDesktopDetail = "Screen Sharing was not turned on with control during setup"
+// base is ready and runs agent-only. It does not say setup went wrong: a macOS 26 base reads observe with control turned on (#3901).
+const ObserveDesktopDetail = "macOS 26 doesn't keep Screen Sharing control here, so this base's desktop is view only"
 
 // InstallFailurePrefix starts the error an install that failed ends with; the cause follows it.
 const InstallFailurePrefix = "macvm: install: "

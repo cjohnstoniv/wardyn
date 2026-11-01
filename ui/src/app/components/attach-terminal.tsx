@@ -124,6 +124,8 @@ export interface AttachTerminalProps {
    * height of its own collapses the terminal to nothing.
    */
   fill?: boolean;
+  /** Shown in the title bar, before the terminal's own controls (the run page's Watch desktop). */
+  barAction?: React.ReactNode;
   /**
    * The run's creator (AgentRun.created_by), for a mount site that has a run
    * object to read it from. Compared against the signed-in principal so a
@@ -149,7 +151,7 @@ export interface AttachTerminalHandle {
 }
 
 export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTerminalProps>(function AttachTerminal(
-  { runId, onClose, autoRun, onOutput, ptyCols, heightClass = "h-[70vh]", fill, createdBy, operatorOwned, policy },
+  { runId, onClose, autoRun, onOutput, ptyCols, heightClass = "h-[70vh]", fill, barAction, createdBy, operatorOwned, policy },
   ref,
 ) {
   // Attach is owner-or-admin, not operator-only: the WS's cookie lane is
@@ -501,6 +503,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
+          {barAction}
           {/* Live geometry — the grid this client actually has, post-refit. */}
           {geom && (
             <span className="font-mono text-meta text-muted-foreground">
