@@ -184,6 +184,7 @@
 2. Wardyn copies the base and, in a boot with no window, changes the password of `wardyn-admin` from the one the base keeps to a fresh one-time code. The command names the file that holds the code, `setup-code.json`, as setup by hand does.
 3. The copy boots in a window. Sign in as `wardyn-admin` with the code. The guest has no internet during the session.
 4. Make your changes. For desktop control, open System Settings > General > Sharing and turn on Screen Sharing. Under its (i) button, turn on "VNC viewers may control screen with password".
+   - For folder shares, open System Settings > Privacy & Security > Full Disk Access, click +, press Command-Shift-G, type `/usr/local/libexec/wardyn-guest-agent`, and turn it on.
 5. Leave Remote Login off and add no accounts. When you are done, close the window: Wardyn asks the guest to shut down. The window closes once the guest has shut down.
 
 - **The recheck.** The copy boots once more with no window. First the code is replaced with a fresh random password, which the copy keeps for the next edit, and the code file is deleted.
@@ -242,6 +243,7 @@ What Wardyn automates, and what the operator does by hand in `wardyn-runnerd mac
 | `profile` | Staged automatically. Approved by hand in edit. Wardyn reads back `installed` |
 | System-extension or helper approval (EDR) | By hand in edit (or by MDM, outside Wardyn) |
 | Screen Sharing control | Setup by hand at prepare; otherwise in edit |
+| Folder shares | By hand in edit: Full Disk Access for the guest agent |
 
 - **Refused destinations.** A `file` item may not write a harness's managed settings (`/Library/Application Support/ClaudeCode`, `/etc/codex`), because a run writes those per run. Your own agent rules go in your policy instead.
   - Nor may it write Wardyn's own files, the stage directory, `/var/run/wardyn` or `/Library/Keychains`. Paths compare without case, as APFS does.
@@ -474,7 +476,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | Disk encryption | The guest's disk is a file on the Mac's volume, so the Mac's disk encryption covers it when the volume has any. The run's clone is deleted at the end, which is not secure erasure | Today |
 | OS integrity (SIP, Gatekeeper) | Stage 1 changes neither, so the guest keeps macOS's defaults | Today: the runner reports the base's `os_version`, `os_build`, `sip` and `gatekeeper` in the caps, as read at prepare, update or edit. They are not live ([Guest posture](#guest-posture)) |
 | Firewall | Nothing connects in. The guest agent dials out over a virtual socket, and the desktop is reached only through the organisation's gateway | Today |
-| Screen lock and password policy | Stage 1 turns the screen lock and screen saver off, and the guest signs in as `agent` on its own. The guest has no console ([Threat model, B14](../../threatmodel/THREAT-MODEL.md#b14--macos-vm-guest-vs-the-mac-that-runs-it)) | Today |
+| Screen lock and password policy | Stage 1 sets `agent`'s own screen saver idle time to 0 and keeps the display awake, and the guest signs in as `agent` on its own. The guest has no console ([Threat model, B14](../../threatmodel/THREAT-MODEL.md#b14--macos-vm-guest-vs-the-mac-that-runs-it)) | Today. macOS ignores these settings when written for the whole system, so a base prepared before 0.10.0-rc.9 needs `wardyn-runnerd macos-vm prepare --new-image`
 | Patch policy | Automatic updates are off, so a base stays at the macOS it was built with. Re-prepare to move to a newer one | Today: the caps carry the base's macOS build and when it was prepared. `macos_vm.max_base_age_days` refuses a run on a Mac whose base is older, or whose runner reports no age ([Settings](#settings)) |
 | Device identity for sign-in checks | The guest is an unmanaged device, so a provider that requires a compliant device may refuse sign-ins from its browser | Today, in part: the caps report whether the guest is `enrolled` in MDM and how many profiles it holds. A `profile` item is approved by hand, and MDM-only payloads never take effect from it ([Configuration profiles](#configuration-profiles)) |
 | Managed application configuration | Wardyn delivers no organisation browser, editor or assistant settings into the guest | Today, if you list them: a `file` item pushes a settings file under `/Library`, `/usr/local` or `/opt`. One at a harness's managed settings path is refused, as are Wardyn's own files ([Customising the base](#customising-the-base)) |
@@ -495,6 +497,10 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 ### Folders
 
 - Shared into the guest at `/Users/agent/…` (a workspace's `/home/agent/…` path), with the same rules and read-only or writable choice as a container.
+- A run reads a shared folder only once the guest agent has Full Disk Access in the base. macOS asks a privacy question for each network volume, and nobody can answer it inside a run. Grant it once in `edit-base` ([Editing a base](#editing-a-base)).
+  - Without it, a run with a shared folder stops before it starts, within 10 seconds, and names this fix.
+  - A guest agent signed ad hoc, as in a package built without a Developer ID, loses the grant at each tools update, so grant it again in `edit-base`. One signed with a Developer ID keeps it.
+  - Full Disk Access lifts macOS's privacy prompts for every process a run starts in the guest. POSIX permissions still apply, and each run's guest is its own clone.
 - A folder macOS protects (Desktop, Documents, Downloads, iCloud Drive, removable volumes) needs the runner allowed under Privacy & Security → Files and Folders first.
 - A whole home folder, /Users or /private/var can't be shared, because each holds files Wardyn protects; share a project folder inside it.
 - A workspace folder on this Mac is bound to its runner ([A workspace folder on your runner](hybrid-laptops.md#a-workspace-folder-on-your-runner)). The runner shares only a folder bound to it, inside its `--drive-root`, and a writable one only inside the writable roots.
@@ -521,6 +527,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | Apple's Screen Sharing answers port 5900 with an RFB banner on the provisioning boot, before any VNC password is set | Stage 1's proof that the guest is live. Without the banner stage 1 fails closed |
 | Port 22 is refused with a reset, not a dropped connection, once Remote Login is off | The proof that Remote Login is off. A silent drop reads as not refused and fails closed |
 | Each stage-1 command and setting name, and the auto-login password file format, on macOS 26 and 27 guests | Stage 1 as a whole. A wrong name fails the step and publishes no base |
+| `defaults -currentHost write com.apple.screensaver idleTime` run as `agent` through sudo, before `agent` has ever signed in | The run desktop without the lock screen. Whether this alone ends the lock screen is not yet known. A refusal fails stage 1 and publishes no base |
 | The setup window opens on the Mac, comes to the front over other apps and shows its three steps, shows the guest and takes its keyboard and mouse, on macOS 26 and 27 | Setup by hand. Without it nobody can finish the setup, and preparing stops after its hour |
 | Prepare refused over SSH while someone is signed in at the Mac's desktop (the runner's launchctl session check) | The refusal before the download. Without it, a prepare over SSH reaches setup by hand and cannot show the window |
 | The helper's desktop check (CoreGraphics' session) refuses on a Mac with nobody signed in at its desktop | The helper's own refusal before AppKit starts. Over SSH while someone is signed in, it likely passes |
@@ -540,6 +547,8 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | The guest's `mount -t virtiofs` accepts `nosuid`, `nodev`, `noowners` and `rdonly` | Every shared folder. A refused option fails the run before it starts |
 | With `noowners`, the agent can read and write files on a shared folder that belong to the Mac's login | Writable folders, and reading a folder whose files are not world-readable |
 | A folder shared read-only refuses writes from the guest | Read-only folders |
+| Without Full Disk Access for the guest agent, its listing of a share as `agent` waits as a run's read of a file does, and with it the listing answers | Folder shares: the refusal that names the fix. If the listing does not wait, a run can still hang on its first read |
+| A Full Disk Access grant made in `edit-base` survives the recheck and reaches each run's clone | Folder shares on every run |
 | The runner refuses a share of a whole home folder, /Users or /private/var on a real Mac, before the VM starts | Folders: what a run may share |
 | The VM's share is allowed into a folder macOS protects once the runner is allowed into it | Protected folders. The runner's own check passes, and the share could still read empty |
 | Removable volumes and iCloud Drive are allowed in the same Files and Folders pane | The fix the refusal names |
