@@ -160,12 +160,12 @@
 - When the wait begins, preparing writes a fresh 8-character one-time code to `~/Library/Application Support/Wardyn/macos-vm.noindex/setup-code.json`, readable by you only. `status` and `doctor` name the file and never print the code. No log or event carries it.
 - It opens a window on the Mac, "Wardyn: set up this macOS VM", with the guest's screen in it and the three steps below its title.
   - The steps: create the account `wardyn-admin` with the one-time code as its password, turn on Screen Sharing with control, and turn on Remote Login.
-  - The window comes to the front, over other apps and on the Space you are using. It has no close button and closes by itself when the wait ends.
+  - The window comes to the front, over other apps and on the Space you are using. It has no close button and closes by itself when the wait ends. The code is hidden until you click Show code, and Hide code hides it again.
 - Preparing waits up to an hour for the guest's Remote Login, then stops and publishes no base. Run `prepare` again to retry.
 - The window needs the Mac's desktop. On macOS 26, `prepare`, and the prepare that `setup` starts, refuse at once, before any download, when started over SSH, outside the signed-in desktop, or with sudo. They say: run prepare in Terminal on the Mac, signed in at its desktop, not over SSH and not with sudo.
 
 1. Run `wardyn-runnerd macos-vm prepare`, or `wardyn-runnerd setup`, in Terminal on the Mac, signed in at its desktop. Not over SSH, and not with sudo.
-2. Wait for the download and install. The window has no Dock icon. When it opens, read the code: `cat ~/Library/Application\ Support/Wardyn/macos-vm.noindex/setup-code.json`. The password is the `code` value; the account is `wardyn-admin`.
+2. Wait for the download and install. The window has no Dock icon. When it opens, click Show code in the window and read the code. The account is `wardyn-admin`.
 3. In the window, choose a country and language. The guest has no internet while preparing: when asked for a network, continue without one, and skip Migration Assistant and Apple Account. Setup Assistant's Screen Time screen may take a minute to give up waiting for the network: wait, then continue.
 4. Create the account: any full name, account name exactly `wardyn-admin`, and the code as its password. Do not turn on FileVault in the guest. Skip the remaining screens.
    Create no other account and add no SSH keys; only `wardyn-admin`. Prepare refuses a base that holds another account, and names it.
@@ -182,7 +182,7 @@
 
 1. Run `wardyn-runnerd macos-vm edit-base` in Terminal on the Mac, signed in at its desktop. Not over SSH, and not with sudo.
 2. Wardyn copies the base and, in a boot with no window, changes the password of `wardyn-admin` from the one the base keeps to a fresh one-time code. The command names the file that holds the code, `setup-code.json`, as setup by hand does.
-3. The copy boots in a window. Sign in as `wardyn-admin` with the code. The guest has no internet during the session.
+3. The copy boots in a window. Click Show code in the window, then sign in as `wardyn-admin` with the code. The guest has no internet during the session.
 4. Make your changes. For desktop control, open System Settings > General > Sharing and turn on Screen Sharing. Under its (i) button, turn on "VNC viewers may control screen with password".
    - For folder shares, open System Settings > Privacy & Security > Full Disk Access, click +, press Command-Shift-G, type `/usr/local/libexec/wardyn-guest-agent`, and turn it on.
 5. Leave Remote Login off and add no accounts. When you are done, close the window: Wardyn asks the guest to shut down. The window closes once the guest has shut down.
@@ -624,7 +624,7 @@ The runner drawer shows most of these from fixed codes and numbers the runner re
 | `/Users/Shared/Wardyn/sock/u<uid>/<run-key>/` (control, agent and desktop sockets) | The logged-in user only (mode `0700`) |
 | `macos-vm.noindex/bases/` and `cache/` | The logged-in user only |
 | `macos-vm.noindex/prepare.log` | The logged-in user. No password or secret value is logged |
-| `macos-vm.noindex/setup-code.json` | The logged-in user only (mode `0600`). It exists only while macOS waits for setup by hand |
+| `macos-vm.noindex/setup-code.json` | The logged-in user only (mode `0600`). It exists only while macOS waits for setup by hand or an `edit-base` session. The window can show its code on a click |
 
 - The helper runs as the logged-in user, never root, with one entitlement: to use Apple's virtualization. It has no networking entitlement.
 - The VM listens on no TCP port on the Mac, and the proxy's credential injection never leaves Docker.

@@ -14,6 +14,11 @@
 // Setup's window has no close button: it closes when setup by hand ends.
 // The edit's window has one, which asks the guest to shut down; it closes
 // once the guest has.
+//
+// The strip can carry a Show code control for the one-time code. The window is given only the code file's
+// path; a click reads the file then (wardynScreenReadCode), shows the code in a readout that cannot be selected,
+// and a second click clears it. The code is never in argv, the environment, an event or a log, and there is no
+// copy control: a clipboard can leave the Mac.
 
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
@@ -69,16 +74,163 @@ static NSString *const wardynScreenSteps =
 	@"\"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n"
 	@"3. In the same pane, turn on Remote Login.";
 
-// wardynScreenAccessory is the strip of steps under the window's title bar.
-static NSTitlebarAccessoryViewController *wardynScreenAccessory(CGFloat width, NSString *steps) {
-	NSTextField *label = [NSTextField wrappingLabelWithString:steps];
-	label.font = [NSFont systemFontOfSize:12];
+// The Show code control's texts.
+static NSString *const wardynScreenShowCode = @"Show code";
+static NSString *const wardynScreenHideCode = @"Hide code";
+static NSString *const wardynScreenCodeUnreadable = @"Can't read the code file. In Terminal, stop the command and run it again.";
+
+// wardynScreenReadCode reads the one-time code from the setup-code file at path ({"account":..., "code":...}, as
+// setupcode.go writes it), or returns nil when the file is gone, unreadable or not that record. Only a click calls
+// it, on every click: nothing is read before one and nothing is kept between clicks.
+static NSString *wardynScreenReadCode(NSString *path) {
+	NSData *data = [NSData dataWithContentsOfFile:path];
+	if (data == nil) {
+		return nil;
+	}
+	id record = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+	if (![record isKindOfClass:[NSDictionary class]]) {
+		return nil;
+	}
+	id code = ((NSDictionary *)record)[@"code"];
+	if (![code isKindOfClass:[NSString class]] || [(NSString *)code length] == 0) {
+		return nil;
+	}
+	return code;
+}
+
+// WardynScreenStrip is the strip of steps under the title bar. With a code file, line 1 gives up the right of
+// its row to a Show code button and, while the code (or why it cannot be read) shows, a readout beside it; the
+// other lines keep the strip's full width. The strip is as tall as its text, so every change of the readout
+// fits it again. Main thread only.
+@interface WardynScreenStrip : NSObject
+@property(strong) NSView *box;
+@property(strong) NSTextField *first;   // line 1 (with a code file) or all the steps (without)
+@property(strong) NSTextField *rest;    // lines 2 on (with a code file)
+@property(strong) NSTextField *readout; // the code, or the unreadable message; empty while hidden
+@property(strong) NSButton *button;     // nil without a code file
+@property(copy) NSString *codeFile;     // the file's path, not the code
+@property BOOL shown;
+- (instancetype)initWithBox:(NSView *)box steps:(NSString *)steps codeFile:(NSString *)codeFile;
+- (void)toggle:(id)sender;
+- (void)hide;
+- (void)fit;
+@end
+
+@implementation WardynScreenStrip
+- (instancetype)initWithBox:(NSView *)box steps:(NSString *)steps codeFile:(NSString *)codeFile {
+	self = [super init];
+	if (self == nil) {
+		return nil;
+	}
+	self.box = box;
+	self.codeFile = codeFile;
+	NSString *line1 = steps;
+	NSString *others = @"";
+	NSRange nl = [steps rangeOfString:@"\n"];
+	if (codeFile != nil && nl.location != NSNotFound) {
+		line1 = [steps substringToIndex:nl.location];
+		others = [steps substringFromIndex:nl.location + 1];
+	}
+	self.first = [NSTextField wrappingLabelWithString:line1];
+	self.first.font = [NSFont systemFontOfSize:12];
+	self.first.autoresizingMask = NSViewWidthSizable;
+	[box addSubview:self.first];
+	if (codeFile != nil) {
+		self.rest = [NSTextField wrappingLabelWithString:others];
+		self.rest.font = [NSFont systemFontOfSize:12];
+		self.rest.autoresizingMask = NSViewWidthSizable;
+		[box addSubview:self.rest];
+		// The readout is not selectable: there is no way to copy the code out of the window.
+		self.readout = [NSTextField wrappingLabelWithString:@""];
+		self.readout.selectable = NO;
+		self.readout.autoresizingMask = NSViewMinXMargin;
+		[box addSubview:self.readout];
+		self.button = [NSButton buttonWithTitle:wardynScreenShowCode target:self action:@selector(toggle:)];
+		self.button.controlSize = NSControlSizeSmall;
+		self.button.font = [NSFont systemFontOfSize:[NSFont systemFontSizeForControlSize:NSControlSizeSmall]];
+		self.button.autoresizingMask = NSViewMinXMargin;
+		[box addSubview:self.button];
+	}
+	[self hide];
+	return self;
+}
+
+// toggle is the button's click: the one place the code file is read.
+- (void)toggle:(id)sender {
+	if (self.shown) {
+		[self hide];
+		return;
+	}
+	NSString *code = wardynScreenReadCode(self.codeFile);
+	if (code == nil) {
+		self.readout.font = [NSFont systemFontOfSize:12];
+		self.readout.textColor = NSColor.systemRedColor;
+		self.readout.stringValue = wardynScreenCodeUnreadable;
+		self.button.title = wardynScreenShowCode; // a click tries again
+	} else {
+		// Bigger than the steps, and monospaced: the code's alphabet keeps pairs such as c/C and s/S.
+		self.readout.font = [NSFont monospacedSystemFontOfSize:16 weight:NSFontWeightMedium];
+		self.readout.textColor = NSColor.labelColor;
+		self.readout.stringValue = code;
+		self.button.title = wardynScreenHideCode;
+		self.shown = YES;
+	}
+	[self fit];
+}
+
+// hide clears the readout (and with it the code) and fits the strip to the steps.
+- (void)hide {
+	self.shown = NO;
+	self.readout.stringValue = @"";
+	self.button.title = wardynScreenShowCode;
+	[self fit];
+}
+
+// fit lays the strip out at the box's width and sets the box's height to what the text needs. The controller
+// observes a bottom accessory's view frame (NSTitlebarAccessoryViewController: "you can change the view's
+// height when layoutAttribute is bottom"), so the new height takes effect. The origin is left alone.
+- (void)fit {
+	const CGFloat pad = 10, gap = 8, readoutMax = 190;
+	CGFloat w = self.box.bounds.size.width;
+	CGFloat avail = w - 2 * pad;
+	CGFloat control = 0; // what the button and readout take of line 1's row
+	NSSize bs = NSZeroSize, rs = NSZeroSize;
+	if (self.button != nil) {
+		[self.button sizeToFit];
+		bs = self.button.frame.size;
+		control = gap + bs.width;
+		if (self.readout.stringValue.length > 0) {
+			rs.width = MIN(ceil([self.readout.attributedStringValue size].width) + 8, readoutMax);
+			rs.height = ceil([self.readout.cell cellSizeForBounds:NSMakeRect(0, 0, rs.width, CGFLOAT_MAX)].height);
+			control += gap + rs.width;
+		}
+	}
+	CGFloat firstW = MAX(avail - control, 40);
+	CGFloat firstH = ceil([self.first.cell cellSizeForBounds:NSMakeRect(0, 0, firstW, CGFLOAT_MAX)].height);
+	CGFloat restH = 0;
+	if (self.rest != nil && self.rest.stringValue.length > 0) {
+		restH = ceil([self.rest.cell cellSizeForBounds:NSMakeRect(0, 0, avail, CGFLOAT_MAX)].height);
+	}
+	CGFloat rowH = MAX(firstH, MAX(rs.height, bs.height));
+	[self.box setFrameSize:NSMakeSize(w, rowH + restH + 8)];
+	// Unflipped: y runs up from the box's bottom.
+	self.rest.frame = NSMakeRect(pad, 4, avail, restH);
+	CGFloat rowY = 4 + restH;
+	self.first.frame = NSMakeRect(pad, rowY + rowH - firstH, firstW, firstH);
+	self.button.frame = NSMakeRect(w - pad - bs.width, rowY + (rowH - bs.height) / 2, bs.width, bs.height);
+	self.readout.frame = NSMakeRect(w - pad - bs.width - gap - rs.width, rowY + (rowH - rs.height) / 2, rs.width, rs.height);
+	self.readout.hidden = rs.width == 0;
+}
+@end
+
+static WardynScreenStrip *wardynScreenStrip; // main thread only; the button's target is weak
+
+// wardynScreenAccessory is the strip of steps under the window's title bar, with the Show code control when
+// codeFile is not nil.
+static NSTitlebarAccessoryViewController *wardynScreenAccessory(CGFloat width, NSString *steps, NSString *codeFile) {
 	// The strip is as tall as the steps are at this width (a narrow window wraps them).
-	NSSize fit = [label.cell cellSizeForBounds:NSMakeRect(0, 0, width - 20, CGFLOAT_MAX)];
-	NSView *box = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, ceil(fit.height) + 8)];
-	label.frame = NSInsetRect(box.bounds, 10, 4);
-	label.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-	[box addSubview:label];
+	NSView *box = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, 0)];
+	wardynScreenStrip = [[WardynScreenStrip alloc] initWithBox:box steps:steps codeFile:codeFile];
 	NSTitlebarAccessoryViewController *a = [[NSTitlebarAccessoryViewController alloc] init];
 	a.layoutAttribute = NSLayoutAttributeBottom;
 	// Else the controller resizes the strip to one title-bar line when given the view (macOS 26: 36 pt, one step).
@@ -111,12 +263,14 @@ static WardynScreenCloser *wardynScreenCloser; // main thread only; the window's
 // wardynScreenShow opens the window on vm, a VZVirtualMachine; the block
 // keeps it until the window closes. title and steps NULL are setup by
 // hand's. stop, the VM's provision handle, gives the window a close button
-// that asks the guest to shut down; NULL gives it none.
-void wardynScreenShow(void *vm, void *stop, const char *title, const char *steps) {
+// that asks the guest to shut down; NULL gives it none. codeFile, the setup-code file's path, gives the strip
+// a Show code control; NULL gives it none (a window that is not setup's or the edit's must pass NULL).
+void wardynScreenShow(void *vm, void *stop, const char *title, const char *steps, const char *codeFile) {
 	VZVirtualMachine *machine = (__bridge VZVirtualMachine *)vm;
 	id handle = (__bridge id)stop;
 	NSString *t = title == NULL ? @"Wardyn: set up this macOS VM" : [[NSString alloc] initWithUTF8String:title];
 	NSString *s = steps == NULL ? wardynScreenSteps : [[NSString alloc] initWithUTF8String:steps];
+	NSString *cf = codeFile == NULL ? nil : [[NSString alloc] initWithUTF8String:codeFile];
 	dispatch_async(dispatch_get_main_queue(), ^{
 		if (wardynScreenWindow == nil) {
 			NSSize size = wardynScreenSize();
@@ -135,7 +289,7 @@ void wardynScreenShow(void *vm, void *stop, const char *title, const char *steps
 				wardynScreenCloser.handle = handle;
 				w.delegate = wardynScreenCloser;
 			}
-			[w addTitlebarAccessoryViewController:wardynScreenAccessory(size.width, s)];
+			[w addTitlebarAccessoryViewController:wardynScreenAccessory(size.width, s, cf)];
 			w.contentAspectRatio = NSMakeSize(16, 9);
 			VZVirtualMachineView *view = [[VZVirtualMachineView alloc] init];
 			view.virtualMachine = machine;
@@ -165,6 +319,8 @@ int wardynScreenUp(void) { return atomic_load(&wardynScreenState); }
 // wardynScreenClose closes the window and lets go of its VM.
 void wardynScreenClose(void) {
 	dispatch_async(dispatch_get_main_queue(), ^{
+		[wardynScreenStrip hide]; // no code is left in the label
+		wardynScreenStrip = nil;
 		[wardynScreenWindow orderOut:nil];
 		wardynScreenWindow.contentView = nil;
 		wardynScreenWindow.delegate = nil;

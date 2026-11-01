@@ -236,6 +236,7 @@ func TestEditBaseSwapsOnlyAPassingCopy(t *testing.T) {
 			"For desktop control: in System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on \"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n" +
 			"Leave Remote Login off and add no accounts: the check refuses a base with either.",
 		Closable: true,
+		CodeFile: e.f.opts.Layout.SetupCode(),
 	}
 	if e.screen != wantText {
 		t.Errorf("the edit window's text:\n%+v\nwant\n%+v", e.screen, wantText)
