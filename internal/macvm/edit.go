@@ -88,7 +88,7 @@ func (e *EditDiscardedError) Error() string {
 	since := e.Since.Local().Format("2 Jan")
 	switch e.Recheck {
 	case EditRecheckDesktopOff:
-		return "The edited base was discarded: desktop control is off, because Screen Sharing was not turned on with control. Runs keep using the base from " + since + "."
+		return "The edited base was discarded: desktop control was lost: the base had it and the copy does not. Runs keep using the base from " + since + "."
 	case EditRecheckExtraAccount:
 		return "The edited base was discarded: it has an account Wardyn didn't make, " + e.Detail + ". Runs keep using the base from " + since + "."
 	case EditRecheckRemoteLogin:
@@ -375,8 +375,8 @@ func (o *EditOptions) window(ctx context.Context, spec MachineSpec) error {
 }
 
 // recheck boots the edited copy headless: it replaces the one-time code first, whatever follows, then
-// checks desktop control, the accounts, Remote Login and the launcher's self-test, in that order. The
-// first that fails is an *EditDiscardedError. Right after the code it removes the profiles' copies
+// checks that desktop control the base had is kept, then the accounts, Remote Login and the launcher's
+// self-test, in that order. The first that fails is an *EditDiscardedError. Right after the code it removes the profiles' copies
 // (removeProfiles: copied, and staged), and after Remote Login it reads the items back into staging's
 // tools.json (ReadBackItems), a failure of either discarding the copy with no line of its own. The reset is
 // what staging's AdminPasswordFile holds after it, and what a passing copy's swap carries into the base. It
@@ -401,7 +401,8 @@ func (o *EditOptions) recheck(ctx context.Context, spec MachineSpec, m Manifest,
 		if desktop, err = controlCheck(ctx, g, probe); err != nil {
 			return err
 		}
-		if desktop != DesktopControl {
+		// An edit must not lose control the base had; a base that never had it keeps its mode.
+		if m.Desktop == DesktopControl && desktop != DesktopControl {
 			return &EditDiscardedError{Recheck: EditRecheckDesktopOff}
 		}
 		p, err := g.Posture(ctx)

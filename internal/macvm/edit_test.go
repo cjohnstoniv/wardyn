@@ -79,6 +79,7 @@ type editFix struct {
 	screen   macvm.ScreenText
 	log      bytes.Buffer
 	sealed   string // the admin password the base kept at prepare
+	desktop  string // the desktop mode the base has before the edit
 }
 
 func newEdit(t *testing.T) *editFix {
@@ -88,13 +89,10 @@ func newEdit(t *testing.T) *editFix {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &editFix{f: f, base: f.opts.Layout.BaseDir(0)}
+	e := &editFix{f: f, base: f.opts.Layout.BaseDir(0), desktop: macvm.DesktopObserve}
 	e.sealed = adminPassword(t, e.base)
-	m.Desktop, m.Harnesses = macvm.DesktopObserve, []string{macvm.HarnessNone, macvm.HarnessClaudeCode}
-	b, _ := json.Marshal(m)
-	if err := os.WriteFile(filepath.Join(e.base, macvm.ManifestFile), b, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	m.Desktop, m.Harnesses = e.desktop, []string{macvm.HarnessNone, macvm.HarnessClaudeCode}
+	e.writeManifest(t, m)
 	e.g = &editGuest{guest: newGuest(), control: true, posture: guestagent.ToolsPosture{Accounts: []guestagent.GuestAccount{
 		{Name: "root", UID: 0}, {Name: "nobody", UID: -2}, {Name: "_spotlight", UID: 89}, {Name: "wardyn-admin", UID: 501}, {Name: "agent", UID: 502}}}}
 	e.opts = macvm.EditOptions{
@@ -132,13 +130,32 @@ func newEdit(t *testing.T) *editFix {
 	return e
 }
 
+func (e *editFix) writeManifest(t *testing.T, m macvm.Manifest) {
+	t.Helper()
+	b, _ := json.Marshal(m)
+	if err := os.WriteFile(filepath.Join(e.base, macvm.ManifestFile), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// baseDesktop gives the base the desktop mode before the edit starts.
+func (e *editFix) baseDesktop(t *testing.T, mode string) {
+	t.Helper()
+	m, err := macvm.ReadyBase(e.base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Desktop, e.desktop = mode, mode
+	e.writeManifest(t, m)
+}
+
 func (e *editFix) lines() []string { return strings.Split(strings.TrimSpace(e.out.String()), "\n") }
 
 // The base the edit started from is still the base, its staging copy and code file are gone, and no
 // window or boot is left.
 func (e *editFix) oldBaseKept(t *testing.T) {
 	t.Helper()
-	if m, err := macvm.ReadyBase(e.base); err != nil || m.Desktop != macvm.DesktopObserve {
+	if m, err := macvm.ReadyBase(e.base); err != nil || m.Desktop != e.desktop {
 		t.Fatalf("the old base was not kept: %+v %v", m, err)
 	}
 	for _, p := range []string{e.base + ".update", e.f.opts.Layout.SetupCode()} {
@@ -246,8 +263,8 @@ func TestEditBaseDiscardsOnEachFailedCheck(t *testing.T) {
 		name, recheck, line string
 		set                 func(g *editGuest)
 	}{
-		{"desktop control off", macvm.EditRecheckDesktopOff,
-			"The edited base was discarded: desktop control is off, because Screen Sharing was not turned on with control. Runs keep using the base from ",
+		{"desktop control lost", macvm.EditRecheckDesktopOff,
+			"The edited base was discarded: desktop control was lost: the base had it and the copy does not. Runs keep using the base from ",
 			func(g *editGuest) { g.control = false }},
 		{"extra account", macvm.EditRecheckExtraAccount,
 			"The edited base was discarded: it has an account Wardyn didn't make, tester. Runs keep using the base from ",
@@ -283,6 +300,9 @@ func TestEditBaseDiscardsOnEachFailedCheck(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newEdit(t)
+			if tc.recheck == macvm.EditRecheckDesktopOff {
+				e.baseDesktop(t, macvm.DesktopControl) // only a control base can lose control
+			}
 			tc.set(e.g)
 			before, _ := macvm.ReadyBase(e.base)
 			_, err := macvm.EditBase(context.Background(), e.opts)
@@ -308,6 +328,50 @@ func TestEditBaseDiscardsOnEachFailedCheck(t *testing.T) {
 			}
 			if len(e.g.codes) != 2 {
 				t.Errorf("the one-time code was not replaced: %d codes", len(e.g.codes))
+			}
+		})
+	}
+}
+
+// The desktop recheck discards an edit only for losing the control the base had: a view-only base keeps its
+// mode, and nothing but the control check reading control makes a base control.
+func TestEditBaseKeepsTheBasesDesktopMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, base string
+		control    bool
+		discarded  bool
+		want       string
+	}{
+		{"observe base, copy observe", macvm.DesktopObserve, false, false, macvm.DesktopObserve},
+		{"control base, copy observe", macvm.DesktopControl, false, true, macvm.DesktopControl},
+		{"control base, copy control", macvm.DesktopControl, true, false, macvm.DesktopControl},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEdit(t)
+			e.baseDesktop(t, tc.base)
+			e.g.control = tc.control
+			_, err := macvm.EditBase(context.Background(), e.opts)
+			if tc.discarded {
+				var d *macvm.EditDiscardedError
+				if !errors.As(err, &d) || d.Recheck != macvm.EditRecheckDesktopOff {
+					t.Fatalf("err = %v", err)
+				}
+				e.oldBaseKept(t)
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			got, err := macvm.ReadyBase(e.base)
+			if err != nil || got.Desktop != tc.want {
+				t.Fatalf("the base reads %+v %v, want desktop %s", got, err, tc.want)
+			}
+			if tc.discarded {
+				return
+			}
+			if rec, ok := macvm.ReadEditRecord(e.base, got); !ok || rec.Recheck != macvm.EditRecheckPassed {
+				t.Errorf("record %+v %v", rec, ok)
+			}
+			if ready := "The edited base is ready, and runs now use it. Desktop: " + tc.want + "."; !slices.Contains(e.lines(), ready) {
+				t.Errorf("lines:\n%s", e.out.String())
 			}
 		})
 	}
