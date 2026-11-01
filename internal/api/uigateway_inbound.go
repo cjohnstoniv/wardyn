@@ -401,10 +401,9 @@ type inboundReadmission struct {
 // what a request's re-assert asks (uiInboundUnitDenies): a stream is admitted by the same arms a request is.
 // Its answers go nowhere: the stream has no response left to write them on. unavailable is the reason of a
 // refusal that is no verdict on the token or the profile, and writes no inbound.deny row here: a lookup that
-// could not be made (verifyAPIToken's 503, reasonTokenLookupUnavailable), a run or policy that could not be
-// read (reasonRunUnreadable) or a profile that could not (reasonProfileLookupUnavailable). It is "" for an
-// admission and for a verdict, and a verdict returns the writer of its inbound.deny row unrun, for the stream
-// to run after its close.
+// could not be made (verifyAPIToken's 503, reasonTokenLookupUnavailable), or a run, policy or profile that
+// could not be read (reasonRunUnreadable). It is "" for an admission and for a verdict, and a verdict
+// returns the writer of its inbound.deny row unrun, for the stream to run after its close.
 func (s *Server) readmitInbound(ctx context.Context, a inboundReadmission) (bool, string, func(context.Context)) {
 	w := &inboundReadmitWriter{healthzGateWriter: healthzGateWriter{h: http.Header{}}}
 	sess, refusal, ok := s.admitInboundToken(w, a.r.WithContext(ctx), a.runID, a.app, a.raw, a.principal, a.tokenID)
@@ -424,7 +423,7 @@ func (s *Server) readmitInbound(ctx context.Context, a inboundReadmission) (bool
 	}
 	if de := s.uiInboundUnitDenial(ctx, sess, run); de != nil {
 		if de.status == http.StatusServiceUnavailable {
-			return false, reasonProfileLookupUnavailable, nil
+			return false, reasonRunUnreadable, nil
 		}
 		return false, "", func(ctx context.Context) { s.auditInboundUnitDenies(ctx, sess) }
 	}
@@ -454,9 +453,9 @@ func (w *inboundReadmitWriter) Write(b []byte) (int, error) {
 // that cannot be made keeps the stream and asks again next tick, so one store blip between two good checks
 // ends no stream; but a stream whose authority no check has confirmed for inboundResolveTTL since the last
 // one that did, the staleness the design allows, is closed with an inbound.deny row naming what was
-// unavailable (token_lookup_unavailable, run_unreadable for the run or its policy, or
-// profile_lookup_unavailable for its profile): fail closed, never a stream held open on a store that stays
-// down. Each check runs off the watch, on the stream's own context and within inboundReadmitTimeout, so a check that never answers holds nothing up:
+// unavailable (token_lookup_unavailable, or run_unreadable for the run, its policy or its profile): fail
+// closed, never a stream held open on a store that stays down. Each check runs off the watch, on the
+// stream's own context and within inboundReadmitTimeout, so a check that never answers holds nothing up:
 // the tick closes the stream past the bound with the check still in flight (as token_lookup_unavailable,
 // unless an earlier check named what failed). So a stream ends at most inboundResolveTTL plus one tick
 // after its last good check, hung store or not. The first good check is the lookup of the session the

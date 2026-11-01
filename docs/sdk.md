@@ -863,7 +863,6 @@ start.
 | `cli_session_invalid` | `401` from `POST /cli/sessions/{id}/refresh`: the session is unknown, ended, expired or idle, was cut or reused, or the proof is bad. Sign in again. |
 | `cli_session_not_found` | `404` from `DELETE /me/cli-sessions/{id}`: no live CLI session of the caller has that id. |
 | `token_lookup_unavailable` | The API-token and delegated-token authentication middlewares' shared shape: the revocation store could not be read to authenticate the bearer. |
-| `profile_lookup_unavailable` | Audit-only, on an `inbound.deny` row: an inbound-token stream was closed because its run's governance profile stayed unreadable past the staleness bound. |
 | `invitation_target_invalid` / `invitation_target_unknown` / `invitation_replaces_invalid` / `invitation_ttl_invalid` / `invitation_cap_reached` | `POST /people/{principal}/invitations`: the target is reserved or unknown, `replaces_token_id` is not their admin-minted token, a lifetime is out of range, or ten are pending. |
 | `invitation_list_param_invalid` | `GET /invitations`: `state` is not `pending`, `claimed`, `expired` or `revoked`. |
 | `invitation_not_found` / `invitation_not_pending` | `POST /me/invitations/{id}/claim`: someone else's or a missing id (one body); `invitation_not_pending` is the target's own, with `state`. `DELETE /invitations/{id}` answers `invitation_not_found` unless pending. |

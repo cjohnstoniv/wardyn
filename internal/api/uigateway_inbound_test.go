@@ -875,7 +875,7 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 		}
 	})
 
-	t.Run("reads of the run's profile failing past the bound close the stream with a profile_lookup_unavailable row", func(t *testing.T) {
+	t.Run("reads of the run's profile failing past the bound close the stream with a run_unreadable row", func(t *testing.T) {
 		h, gw := open(t)
 		unit := types.GovernanceUnit{ID: uuid.New(), Name: "walled"}
 		h.store.profiles = []types.GovernanceUnit{unit}
@@ -897,8 +897,8 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 			t.Fatal("the stream outlived re-admissions unanswerable past the bound")
 		}
 		if rows := awaitDenies(h); len(rows) != 1 || rows[0].Actor != h.owner ||
-			!h.audit.hasDataValue("reason", reasonProfileLookupUnavailable) || h.audit.hasDataValue("reason", reasonTokenLookupUnavailable) {
-			t.Errorf("inbound.deny rows = %+v, want one profile_lookup_unavailable by %s and no token_lookup_unavailable", rows, h.owner)
+			!h.audit.hasDataValue("reason", reasonRunUnreadable) || h.audit.hasDataValue("reason", reasonTokenLookupUnavailable) {
+			t.Errorf("inbound.deny rows = %+v, want one run_unreadable by %s and no token_lookup_unavailable", rows, h.owner)
 		}
 	})
 
