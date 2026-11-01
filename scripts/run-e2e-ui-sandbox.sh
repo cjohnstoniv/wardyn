@@ -127,13 +127,10 @@ fail() { note "[FAIL]" "$1"; FAILED=1; }
 teardown() {
   local rc=$?
   # A failed walk keeps the daemon's own account of it: printed so the job log (and the uploaded
-  # ui-sandbox-e2e.log) carries it, and copied beside that log. Taken before compose down removes the container.
+  # ui-sandbox-e2e.log) carries it. Taken before compose down removes the container.
   if [[ "${rc}" -ne 0 ]]; then
     log "wardynd log (last 300 lines) follows"
     compose logs --no-color --tail 300 wardynd 2>&1 || true
-    if [[ -d "${ROOT}/test/reports/e2e" ]]; then
-      compose logs --no-color wardynd >"${ROOT}/test/reports/e2e/ui-sandbox-wardynd.log" 2>&1 || true
-    fi
   fi
   for r in "${RUN_ID:-}" "${RUN_B_ID:-}" "${RUN_BG_ID:-}" "${RUN_HM_ID:-}"; do
     [[ -n "${r}" ]] || continue
