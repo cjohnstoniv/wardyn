@@ -1200,8 +1200,22 @@ jobs:
   # quickstart-kind-config.yaml's own comment on why the walk's precedent is
   # NodePort-on-loopback, not node-IP routing.
   #
-  # WARDYN_KIND_SSO_REBUILD=1: certify the tip this workflow checked out, not
-  # whatever quickstart.sh's own image builds happened to cache.
+  # No WARDYN_KIND_SSO_REBUILD here: on this fresh runner every image the walk
+  # judges is already built from this checkout before the walk starts, so the
+  # walk's own five-image rebuild only repeated those builds (about 4-6 min a
+  # leg, and its images were byte-identical: created at the earlier build's
+  # time). Built from this checkout, in order: `make agent-images` builds
+  # agent-aws-sso:local and agent-claude-code:local (plus agent-base:local);
+  # `make kind-quickstart` builds wardynd:quickstart and wardyn-proxy:quickstart
+  # unconditionally (it reuses only the claude-code tag, which is the one just
+  # built); `make kind-sso` builds awsssofake:local unconditionally. Every one
+  # is a `COPY . .` Go (or UI) build from the checked-out tree on digest-pinned
+  # bases; the job has no buildx, no --cache-from and no actions/cache for
+  # images (the pnpm store cache holds npm tarballs only), and the runner has
+  # no wardyn/* image before the job. The cluster then gets exactly those tags:
+  # quickstart.sh and overlay.sh `kind load` them, and the walk serves a
+  # derived copy of agent-aws-sso:local from its local registry. The assert step
+  # below checks that the node holds the host daemon's digest for the other four.
   # WARDYN_KIND_SSO_SKIP_REAUTH_HOLD=1: sso-reauth-hold.spec.ts's case K holds
   # a credential for about ten minutes of wall clock by design — every other
   # case in the walk does not, and that is too long for something nobody is
@@ -1286,7 +1300,6 @@ jobs:
         env:
           WARDYN_TEST_K8S: "1"
           WARDYN_KIND_SSO_LEG: ${{ matrix.leg }}
-          WARDYN_KIND_SSO_REBUILD: "1"
           WARDYN_KIND_SSO_SKIP_REAUTH_HOLD: "1"
           WARDYN_KIND_SSO_EVIDENCE: ${{ github.workspace }}/test/reports/e2e/kind-sso
         shell: bash
@@ -1359,6 +1372,17 @@ jobs:
               exit 1
             fi
           }
+          # The walk no longer rebuilds, so check what it recorded (images.txt, written
+          # by scripts/lib/kind-sso-walk-image-provenance.sh before any spec runs): the
+          # kind node holds exactly the digest the host daemon holds, for the four
+          # `kind load`ed images. agent-aws-sso reaches the node through the walk's
+          # registry under a fresh tag, so it has no row to compare.
+          for img in wardyn/wardynd:quickstart wardyn/wardyn-proxy:quickstart wardyn/agent-claude-code:local wardyn/awsssofake:local; do
+            if ! awk -v i="$img" '$1==i && $NF=="yes" {f=1} END {exit !f}' "$evidence/images.txt"; then
+              echo "::error::$evidence/images.txt: the node does not hold the host daemon's $img — see the uploaded images.txt"
+              exit 1
+            fi
+          done
           expect_per_spec_summaries "$evidence/walk.log" "$WALK_SPECS"
           if [ "$WITH_ROLES" = "1" ]; then
             expect_summary "$evidence/roles-sso.log" 1
@@ -1392,8 +1416,9 @@ jobs:
   # one pinned callback — see overlay.sh and the walk script's own checks) so
   # this job can never collide with kind-sso-walk above.
   #
-  # WARDYN_KIND_SSO_REBUILD=1: same reasoning as the default profile's job —
-  # certify the tip this workflow checked out. overlay.sh's ado branch already
+  # WARDYN_KIND_SSO_REBUILD=1: certify the tip this workflow checked out. The
+  # default-profile job above dropped it (its builds are all from this checkout,
+  # see there); this job keeps it until the same is shown for the ado overlay. overlay.sh's ado branch already
   # rebuilds wardynd/proxy/the fake unconditionally, so this is belt-and-
   # suspenders, not load-bearing, here.
   #
