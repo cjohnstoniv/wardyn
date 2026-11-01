@@ -147,6 +147,33 @@ func keptDriveMixRefusal(drives []runDrive, kept types.UserDrive) *runRefusal {
 	return driveKindMixRefusal(append(slices.Clone(drives), runDrive{resolved: types.ResolvedDrive{Drive: kept}}))
 }
 
+// macVMOneDiskMsg refuses a macOS VM run that names two disks, a and b.
+func macVMOneDiskMsg(a, b string) string {
+	return fmt.Sprintf("%s and %s are both disks, and a macOS VM run attaches one disk drive; a kept work folder counts as one. Choose one of them.", a, b)
+}
+
+// macVMOneDiskRefusal refuses a macOS VM run that names more than one disk drive, the kept work folder
+// counting as one, at every door (#3897). The guest finds a disk by its size and refuses two of one size
+// when the run starts; this holds the rule whatever the sizes, and before the run is made.
+func macVMOneDiskRefusal(drives []runDrive, keep *keptWorkFolder, macOS bool) *runRefusal {
+	if !macOS {
+		return nil
+	}
+	var disks []string
+	for _, d := range drives {
+		if d.resolved.Drive.Backend == types.DriveBackendMacDisk {
+			disks = append(disks, d.resolved.Drive.Name)
+		}
+	}
+	if keep.onMac() {
+		disks = append(disks, "the kept work folder")
+	}
+	if len(disks) < 2 {
+		return nil
+	}
+	return runError(http.StatusUnprocessableEntity, reasonDriveOneDisk, macVMOneDiskMsg(disks[0], disks[1]))
+}
+
 // seedRequestDrives resolves the request's drives into the mounts the runner
 // will execute, writing its own HTTP error and returning ok=false once it has
 // responded. Every drive mounts or the run is refused: one that cannot is

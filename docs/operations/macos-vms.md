@@ -516,9 +516,12 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 - Only a macOS VM run on that Mac attaches it, as a second disk at the drive's path (`/Users/agent/drive` or `/Users/agent/drives/<name>`). Its first run formats it as Mac OS Extended (journaled): a later run's VM did not mount an APFS one. A run on another runner, or of another sandbox kind, is refused naming the Mac.
 - Turn on FileVault on a Mac that keeps disk drives: the guest does not encrypt them.
 - A disk drive is in one run at a time. A second run on the Mac that asks for it while another holds it is refused when that run starts, not at Review.
-- The guest finds a disk drive by its size, apart from the boot disk, because a macOS guest does not show the disk's identifier. A macOS VM run attaches one disk drive, and a kept work folder counts as one. A person's disk drives all have one size, so a second is refused when the run starts.
-- Keeping the work folder of a macOS VM run keeps `/Users/agent/work` as a disk drive on the Mac the run used. The run's pool must hold one Mac; with several, it is refused.
+- A run's VM holds its disk drive for about half a minute after the run shows as ended. A run that asks for the drive then is refused as one the drive is still being released by: try again in a minute.
+- The guest finds a disk drive by its size, apart from the boot disk, because a macOS guest does not show the disk's identifier. It refuses two disks of one size.
+- A macOS VM run attaches one disk drive, and a kept work folder counts as one. A run that names two is refused at Review and at create (`drive_one_disk`), whatever their sizes.
+- Keeping the work folder of a macOS VM run keeps `/Users/agent/work` as a disk drive on the Mac the run used. The run's pool must hold one Mac; with several, it is refused. A run its Mac refused when it started removes its kept work folder drive.
 - Deleting a disk drive asks its Mac to delete the image. While the Mac is offline the drive stays as deleting, and the image goes when the Mac reconnects. If the Mac is no longer registered, the image stays on it and only the record goes. A drive in a run is refused until that run ends.
+- For up to 90 seconds after a person's last macOS VM run ends, deleting their disk drive is refused as a drive still being released: try again in two minutes.
 - Wardyn does not encrypt the image: the runner's macOS login and root on the Mac can read it. It stays until the drive is deleted, and deleting it is not secure erasure (see [Backups, Spotlight and removal](#backups-spotlight-and-removal)).
 
 ## Not yet tested on a real Mac
