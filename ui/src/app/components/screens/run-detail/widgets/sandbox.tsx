@@ -22,6 +22,10 @@
 // disk_used_bytes counts the bytes that cap counts. Same rule, same reason: an
 // unenforced number is not a denominator. With no disk_used_bytes at all, the
 // row falls back to disk_written_bytes, labeled as written.
+//
+// A macOS VM guest has neither cgroups nor procfs; the backend reads it another
+// way and fills the same fields (#3924). Those numbers are the guest's own word
+// for the whole VM, so the card says so, shows memory in GB and warns on nothing.
 import * as React from "react";
 import { Box } from "lucide-react";
 import { runs as runsApi } from "../../../../lib/api/runs";
@@ -46,7 +50,7 @@ type SandboxState =
   | { kind: "error" }
   | { kind: "ready"; data: RunResources };
 
-export function SandboxWidget({ runId, live }: { runId: string; live: boolean }) {
+export function SandboxWidget({ runId, live, macOS = false }: { runId: string; live: boolean; macOS?: boolean }) {
   const [state, setState] = React.useState<SandboxState>({ kind: "loading" });
 
   const load = React.useCallback(
@@ -70,10 +74,10 @@ export function SandboxWidget({ runId, live }: { runId: string; live: boolean })
   }, [load]);
   usePoll(() => load(false), POLL_MS, !live);
 
-  return <WidgetCard title="Sandbox" Icon={Box}>{renderBody(state, live)}</WidgetCard>;
+  return <WidgetCard title="Sandbox" Icon={Box}>{renderBody(state, live, macOS)}</WidgetCard>;
 }
 
-function renderBody(state: SandboxState, live: boolean): React.ReactNode {
+function renderBody(state: SandboxState, live: boolean, macOS: boolean): React.ReactNode {
   switch (state.kind) {
     case "loading":
       return (
@@ -94,14 +98,22 @@ function renderBody(state: SandboxState, live: boolean): React.ReactNode {
     case "error":
       return <p className="text-xs text-muted-foreground">{RUN_COCKPIT.loadError}</p>;
     case "ready":
-      return <Metrics data={state.data} />;
+      return <Metrics data={state.data} macOS={macOS} />;
   }
 }
 
-function Metrics({ data }: { data: RunResources }) {
+function Metrics({ data, macOS }: { data: RunResources; macOS: boolean }) {
   const cpu = cpuMetric(data.cpu_percent);
-  const memory = memoryMetric(data.memory_used_bytes, data.memory_limit_bytes);
+  const memory = memoryMetric(data.memory_used_bytes, data.memory_limit_bytes, macOS ? fmtGB : fmtBytes);
   const disk = diskMetric(data.disk_used_bytes, data.disk_cap_bytes, data.disk_written_bytes);
+  // The line attributes numbers, so it needs one to attribute.
+  const hasReading = [
+    data.cpu_percent,
+    data.memory_used_bytes,
+    data.disk_used_bytes,
+    data.disk_written_bytes,
+    data.process_count,
+  ].some((v) => v !== undefined);
   return (
     <div className="grid grid-cols-2 gap-x-3 gap-y-2">
       <Metric label="CPU" value={cpu.value} barPercent={cpu.barPercent} />
@@ -111,6 +123,7 @@ function Metrics({ data }: { data: RunResources }) {
         label="Processes"
         value={data.process_count !== undefined ? String(data.process_count) : RUN_COCKPIT.metricUnavailable}
       />
+      {macOS && hasReading && <p className="col-span-2 text-meta text-muted-foreground">{RUN_COCKPIT.sandboxGuestReported}</p>}
     </div>
   );
 }
@@ -121,13 +134,22 @@ function cpuMetric(pct?: number): { value: string; barPercent?: number } {
   return { value: `${Math.round(clamped)}%`, barPercent: clamped };
 }
 
-function memoryMetric(used?: number, limit?: number): { value: string; barPercent?: number } {
+// fmtBytes stops at MB, and a VM's memory reads better in GB. Local to this card (#3924).
+function fmtGB(n: number): string {
+  return `${(n / 1024 ** 3).toFixed(1)} GB`;
+}
+
+function memoryMetric(
+  used: number | undefined,
+  limit: number | undefined,
+  fmt: (n: number) => string,
+): { value: string; barPercent?: number } {
   if (used === undefined) return { value: RUN_COCKPIT.metricUnavailable };
   // limit<=0 is degenerate (no real denominator) — treat like absent rather
   // than divide toward Infinity/NaN.
-  if (limit === undefined || limit <= 0) return { value: fmtBytes(used) };
+  if (limit === undefined || limit <= 0) return { value: fmt(used) };
   const pct = Math.max(0, Math.min(100, (used / limit) * 100));
-  return { value: `${fmtBytes(used)} / ${fmtBytes(limit)}`, barPercent: pct };
+  return { value: `${fmt(used)} / ${fmt(limit)}`, barPercent: pct };
 }
 
 // diskMetric is memoryMetric's shape plus RL-13's warn flag. `cap` absent
