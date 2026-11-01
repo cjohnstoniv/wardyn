@@ -201,11 +201,12 @@ func TestRequestApproval_Dedup(t *testing.T) {
 // rejoinStore is fakeStore with the optional rejoin stamp.
 type rejoinStore struct{ *fakeStore }
 
-func (r rejoinStore) StampApprovalRejoin(_ context.Context, id, runID uuid.UUID, kind types.ApprovalKind, at time.Time) (types.ApprovalRequest, bool, error) {
+func (r rejoinStore) StampApprovalRejoin(_ context.Context, id, runID uuid.UUID, kind types.ApprovalKind) (types.ApprovalRequest, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i, a := range r.records {
 		if a.ID == id && a.RunID == runID && a.Kind == kind && a.State == types.ApprovalPending {
+			at := time.Now().UTC()
 			r.records[i].LastRejoinedAt = &at
 			return r.records[i], true, nil
 		}
