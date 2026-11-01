@@ -1017,6 +1017,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 
 ### 7.12 Templates
 
+Columns: Name, Available to, Owner, Updated, Actions. `COL_OWNER` and the Includes sub-line on the Name cell come from the approved board `rc10-templates-2026-11-01`. An Only me row's Owner reads `You` (`WORKLOADS.OWNER_YOU`).
+
 | Key | Source | Frozen string |
 |---|---|---|
 | `TITLE` | mock | Templates |
@@ -1037,6 +1039,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `NOTE` | mock | Save a template from a run's review page with Save as template or Save as policy. A policy holds only network, credential and access rules, and anything it leaves out comes from your organization's defaults. |
 | `COL_NAME` | mock | Name |
 | `COL_AVAILABLE` | mock | Available to |
+| `COL_OWNER` | mock | Owner |
 | `COL_INCLUDES` | mock | Includes |
 | `COL_UPDATED` | mock | Updated |
 | `COL_ACTIONS` | mock | Actions |
