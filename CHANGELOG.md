@@ -20,11 +20,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   wins over all three. `wardyn-runnerd doctor` prints the roots in effect and where they came from. See
   [Drive roots](docs/operations/hybrid-laptops.md#drive-roots-on-a-laptop-runner).
 - `wardyn-runnerd macos-vm edit-base` boots a copy of a Mac's macOS base for one attended session, then checks it
-  before runs use it: desktop control (a base that had it must keep it), accounts, Remote Login and the launcher's self-test. A copy that fails is
-  discarded and runs keep the old base. The runner reports when Standard was last edited, and each run records that
-  time, whichever base it uses. A base now keeps its setup account's password on the Mac, readable by the Mac's user
-  only, because macOS will not let root change it without the old one. A base prepared before this release cannot be
-  edited until `wardyn-runnerd macos-vm prepare --new-image`
+  before runs use it: desktop control (a base that had it must keep it), accounts, Remote Login and the launcher's
+  self-test. A copy that fails is discarded and runs keep the old base. The runner reports when Standard was last
+  edited, and each run records that time, whichever base it uses. A base now keeps its setup account's password on the
+  Mac, readable by the Mac's user only, because macOS will not let root change it without the old one. A base prepared
+  before this release cannot be edited until `wardyn-runnerd macos-vm prepare --new-image`
   ([#3881](https://github.com/cjohnstoniv/wardyn/issues/3881)). See
   [Editing a base](docs/operations/macos-vms.md#editing-a-base). Built and unit-tested; not yet run on a real Mac.
 - A Mac can hold more than one macOS base, each derived from Standard with its own install list, and a run picks one
@@ -104,15 +104,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A macOS VM run can mount a person's own disk drive, a disk image kept on one of their Macs (`POST /me/drives` with
   `runner_id`), and keep its work folder as one. Only macOS VM runs on that Mac can use it, and deleting the drive
   deletes the image there, at once or when the Mac reconnects. See [Drives](docs/operations/macos-vms.md#drives).
-  Built and unit-tested; not yet run on a real Mac.
 - A disk drive is in one macOS VM run at a time: a second run on the Mac that asks for it while another holds it is
   refused when that run starts, not at Review. Built and unit-tested; not yet run on a real Mac.
 - A disk drive is found in the guest by its size, apart from the boot disk. A macOS VM run attaches one disk drive, and
   a kept work folder counts as one: a person's disk drives all have one size, so a second is refused when the run
-  starts. Built and unit-tested; not yet run on a real Mac.
+  starts.
 - A disk drive is formatted Mac OS Extended (journaled), not APFS: an APFS volume made in one macOS VM run was not
-  mounted by the next run's VM, so the drive kept nothing between runs. Built and unit-tested; not yet run on a real
-  Mac.
+  mounted by the next run's VM, so the drive kept nothing between runs.
 - A macOS VM run is also refused at create and Review when a second harness has its own starting prompt. It is refused
   too when a tool rule, tool approvals, autonomy level L1 or the policy's inner walls would hold a tool call for
   approval. The launcher still refuses the same shapes as a backstop. Built and unit-tested; not yet run on a real Mac.
@@ -140,11 +138,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   shared folder now stops before it starts, within 10 seconds, and names that fix
   ([#3889](https://github.com/cjohnstoniv/wardyn/issues/3889)). See
   [Folders](docs/operations/macos-vms.md#folders). Built and unit-tested; not yet run on a real Mac.
-- Stage 1 of a macOS VM base now sets the agent's own screen saver idle time to 0, where macOS reads it; macOS
-  ignored the system-wide settings stage 1 wrote before, and display sleep stays off
-  ([#3890](https://github.com/cjohnstoniv/wardyn/issues/3890)). A base prepared before this release keeps the old
-  settings until `wardyn-runnerd macos-vm prepare --new-image`. Built and unit-tested; not yet run on a real Mac,
-  so whether the lock screen is gone is not yet known.
 - Installing a macOS base's file items no longer follows a symbolic link, or passes through a folder others can write
   to, on the way to an item's destination.
 - The error body of a `capability_feature` refusal now carries `feature`, the feature it names (such as `inbound` or
@@ -390,6 +383,23 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - If the macOS VM setup is given the wrong one-time code, preparing stops after about two minutes with `handshake failed:
   EOF` instead of saying the code was wrong. Each prepare makes a new code: use the one from that prepare's window
   ([#3874](https://github.com/cjohnstoniv/wardyn/issues/3874)).
+- A macOS VM run's desktop shows the lock screen. Stage 1 turns the screen saver off for the base's machine identity,
+  and each run starts with a new one, so the setting does not reach the run
+  ([#3890](https://github.com/cjohnstoniv/wardyn/issues/3890)).
+- On a macOS 26 base, a macOS VM run's desktop is view only: a person can watch it but not act in it
+  ([#3901](https://github.com/cjohnstoniv/wardyn/issues/3901)).
+- A macOS VM run refused for its size when the cap comes from the Default governance unit says only the minimum it
+  needs, not which limit applied. Assign the person a governance profile that allows at least the CPUs and memory the
+  refusal names ([#3885](https://github.com/cjohnstoniv/wardyn/issues/3885)).
+- Each macOS VM run writes a second `run.complete` audit row with outcome `failure` and a teardown deadline error,
+  about 30 seconds after the real one. The run's state and exit code are right
+  ([#3886](https://github.com/cjohnstoniv/wardyn/issues/3886)).
+- A macOS VM run attaches one disk drive; a second one, or a drive plus a kept work folder, is refused when the run
+  starts, not at create; the refused run still creates its kept work folder drive, which can be deleted
+  ([#3897](https://github.com/cjohnstoniv/wardyn/issues/3897),
+  [#3900](https://github.com/cjohnstoniv/wardyn/issues/3900)).
+- Wardyn's macOS runner package is not yet signed with a Developer ID, so each upgrade removes the guest agent's Full
+  Disk Access: grant it again in `edit-base` before runs that share folders.
 
 ### Before you upgrade
 

@@ -178,7 +178,7 @@
 
 ## Editing a base
 
-`wardyn-runnerd macos-vm edit-base` boots the ready base once, in a window, for an attended session. Use it to turn on Screen Sharing with control when `status` says `view only`, or to change the guest by hand. Runs keep using the current base until the edited one passes its checks.
+`wardyn-runnerd macos-vm edit-base` boots the ready base once, in a window, for an attended session. Use it to turn on Screen Sharing with control when `status` says `view only` (on a macOS 26 base the desktop stays view only, [#3901](https://github.com/cjohnstoniv/wardyn/issues/3901)), or to change the guest by hand. Runs keep using the current base until the edited one passes its checks.
 
 1. Run `wardyn-runnerd macos-vm edit-base` in Terminal on the Mac, signed in at its desktop. Not over SSH, and not with sudo.
 2. Wardyn copies the base and, in a boot with no window, changes the password of `wardyn-admin` from the one the base keeps to a fresh one-time code. The command names the file that holds the code, `setup-code.json`, as setup by hand does.
@@ -298,6 +298,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 
 - **The lists.** The runner setting `macos_vm_bases_dir` (in `runnerd.json`, or `MacOSVMBasesDir` from your MDM) names a directory on the Mac. Each `<name>.json` in it is the install list of the base `<name>`, in `macos_vm_base_file`'s form.
   - A name is lowercase letters, digits, `.`, `_` and `-`. A list cannot hold a `profile` item, since `edit-base` edits Standard only.
+  - A list runnerd can't read (for example one without `"version": 1`) leaves only Standard offered; the reason is in `runnerd.log`, not in the console ([#3887](https://github.com/cjohnstoniv/wardyn/issues/3887)).
 - **Derived.** A base is an APFS clone of Standard, booted once to install its own list. It keeps Standard's tools and Standard's prepare date, so the maximum base age reads the same date.
 - **Rebuilt.** When Standard changes (prepare, tools update or edit) or a list changes, each base is rebuilt from it.
   - One at a time, in one of the 2 VM slots, and only while no prepare, tools update or edit runs.
@@ -500,7 +501,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 - Shared into the guest at `/Users/agent/…` (a workspace's `/home/agent/…` path), with the same rules and read-only or writable choice as a container.
 - A run reads a shared folder only once the guest agent has Full Disk Access in the base. macOS asks a privacy question for each network volume, and nobody can answer it inside a run. Grant it once in `edit-base` ([Editing a base](#editing-a-base)).
   - Without it, a run with a shared folder stops before it starts, within 10 seconds, and names this fix.
-  - A guest agent signed ad hoc, as in a package built without a Developer ID, loses the grant at each tools update, so grant it again in `edit-base`. One signed with a Developer ID keeps it.
+  - A guest agent signed ad hoc, as in a package built without a Developer ID, loses the grant at each tools update, so grant it again in `edit-base`. One signed with a Developer ID keeps it. Wardyn's released package is currently built without one.
   - Full Disk Access lifts macOS's privacy prompts for every process a run starts in the guest. POSIX permissions still apply, and each run's guest is its own clone.
 - A folder macOS protects (Desktop, Documents, Downloads, iCloud Drive, removable volumes) needs the runner allowed under Privacy & Security → Files and Folders first.
 - A whole home folder, /Users or /private/var can't be shared, because each holds files Wardyn protects; share a project folder inside it.
@@ -513,6 +514,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 - A runner that predates drives refuses the run at create: update the runner, or run without drives. A Docker or cluster volume is refused too, because a macOS VM can't open it.
 - A person's own drive can be a disk drive kept on one of their Macs (backend `mac_disk`): `POST /api/v1/me/drives` with `runner_id`, the Mac's runner id, whose runner must be online and up to date. It is a sparse disk image in `macos-vm.noindex/drives/`, 64 GiB unless the organisation sets a drive size, and takes room only as it fills.
 - Only a macOS VM run on that Mac attaches it, as a second disk at the drive's path (`/Users/agent/drive` or `/Users/agent/drives/<name>`). Its first run formats it as Mac OS Extended (journaled): a later run's VM did not mount an APFS one. A run on another runner, or of another sandbox kind, is refused naming the Mac.
+- Turn on FileVault on a Mac that keeps disk drives: the guest does not encrypt them.
 - A disk drive is in one run at a time. A second run on the Mac that asks for it while another holds it is refused when that run starts, not at Review.
 - The guest finds a disk drive by its size, apart from the boot disk, because a macOS guest does not show the disk's identifier. A macOS VM run attaches one disk drive, and a kept work folder counts as one. A person's disk drives all have one size, so a second is refused when the run starts.
 - Keeping the work folder of a macOS VM run keeps `/Users/agent/work` as a disk drive on the Mac the run used. The run's pool must hold one Mac; with several, it is refused.
