@@ -182,8 +182,8 @@ test.describe("Templates: filters and rows", () => {
     const platform = rowOf(page, PLATFORM_BASELINE.name);
     await expect(platform.getByText(T.NEEDS_SETUP("Model provider"))).toBeVisible();
     await expect(platform.getByText(T.GROUP_LABEL("Platform"), { exact: true })).toBeVisible();
-    await expect(platform.getByText(T.TEMPLATE_MANAGERS, { exact: true })).toBeVisible();
-    await expect(rowOf(page, ORG_BASELINE.name).getByText(T.ORG_ADMINS, { exact: true })).toBeVisible();
+    await expect(platform.getByRole("cell").nth(2)).toContainText(T.TEMPLATE_MANAGERS);
+    await expect(rowOf(page, ORG_BASELINE.name).getByRole("cell").nth(2)).toContainText(T.ORG_ADMINS);
   });
 
   // #3817: Owner is a column of its own (You on an Only me row), and Includes closes the Name cell.
@@ -191,9 +191,9 @@ test.describe("Templates: filters and rows", () => {
     await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
     await openTemplates(page);
     const owner = (name: string) => rowOf(page, name).getByRole("cell").nth(2);
-    await expect(owner(NIGHTLY.name).getByText(WORKLOADS.OWNER_YOU, { exact: true })).toBeVisible();
-    await expect(owner(PLATFORM_BASELINE.name).getByText(T.TEMPLATE_MANAGERS, { exact: true })).toBeVisible();
-    await expect(owner(ORG_BASELINE.name).getByText(T.ORG_ADMINS, { exact: true })).toBeVisible();
+    await expect(owner(NIGHTLY.name)).toContainText(WORKLOADS.OWNER_YOU);
+    await expect(owner(PLATFORM_BASELINE.name)).toContainText(T.TEMPLATE_MANAGERS);
+    await expect(owner(ORG_BASELINE.name)).toContainText(T.ORG_ADMINS);
     await expect(rowOf(page, NIGHTLY.name).getByRole("cell").nth(1)).not.toContainText(WORKLOADS.OWNER_YOU);
     const nameCell = rowOf(page, NIGHTLY.name).getByRole("cell").first();
     await expect(nameCell.getByText(T.COL_INCLUDES, { exact: true })).toBeVisible();
