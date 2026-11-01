@@ -474,7 +474,7 @@ that ceiling down; each run receives only the minimal subset its task needs.
 
 | Crossing | Guard | Residual |
 |---|---|---|
-| Guest ↔ Mac network | One FileHandle NIC to the run's relay and proxy; no NAT; stage-one preparation has no egress at all | #96 |
+| Guest ↔ Mac network | One FileHandle NIC to the run's relay and proxy; no NAT; stage-one preparation has no egress at all. The guest's connection to the proxy itself (`HTTPS_PROXY`) goes unchanged to the agent port and is decided as a container's, with no TLS server-name check. The relay's own requests use a separate proxy port the guest cannot open | #96 |
 | Guest agent ↔ runner | Guest-initiated vsock; the same session parser as Linux VMs | #96 |
 | Desktop ↔ gateway | A runner-side RFB shim on a socket only the helper reaches; the existing ticket, clipboard filter and recording | #96 |
 | Other local accounts ↔ the VM ledger | A root-owned, sticky ledger: it can deny service, never admit past the cap | #96 |

@@ -15,10 +15,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
 
-// wardyn-vmnet's contract with the proxy, honoured on a VM run only (Config.VM).
-// A desktop VM's only network is the relay (internal/vmnet); the relay is the
-// proxy's only client, holds no token and no policy, and asks the proxy about
-// every guest TCP flow in two stages so the proxy decides, holds and dials once:
+// wardyn-vmnet's contract with the proxy, honoured on a VM run only (Config.VM)
+// and only on the relay's own listener (vmnetListen). A desktop VM's only
+// network is the relay (internal/vmnet); the relay holds no token and no
+// policy, and asks the proxy about every guest TCP flow in two stages so the
+// proxy decides, holds and dials once. The guest's own connection to the agent
+// listener (its HTTPS_PROXY, spliced by the relay) is a container's: the
+// headers below mean nothing there and the refusal route is not found. The
+// two stages:
 //
 //  1. ask, at the guest's SYN: CONNECT name:port with the flow and stage headers.
 //     The whole of evaluate() runs; a deny or hold is answered and logged as
@@ -49,6 +53,51 @@ const (
 	maxVMNetRefusalBody = 4 << 10
 	maxVMNetDetail      = 253
 )
+
+// vmnetListen is the relay's listener on a VM run (wardyn-vmnet relayPort;
+// the two must match). The relay's splice of a guest flow opens only the
+// agent listener, so a connection accepted here is the relay's own.
+const vmnetListen = ":3130"
+
+// vmnetListener marks every accepted connection as the relay's.
+type vmnetListener struct{ net.Listener }
+
+func (l vmnetListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &vmnetConn{c}, nil
+}
+
+// vmnetConn marks a connection accepted on the relay's listener.
+type vmnetConn struct{ net.Conn }
+
+// CloseWrite keeps a tunnel's half-close reaching the relay's socket
+// (readerConn forwards it here; the embedded net.Conn does not carry it).
+func (c *vmnetConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+type vmnetLaneKey struct{}
+
+// laneConnContext is the server's ConnContext: the relay's listener marks
+// its connections, and the sign-in listener its own (signinConnContext).
+func laneConnContext(ctx context.Context, c net.Conn) context.Context {
+	if _, ok := c.(*vmnetConn); ok {
+		return context.WithValue(ctx, vmnetLaneKey{}, true)
+	}
+	return signinConnContext(ctx, c)
+}
+
+// onVMNetLane reports whether a request came in on the relay's listener.
+func onVMNetLane(ctx context.Context) bool {
+	on, _ := ctx.Value(vmnetLaneKey{}).(bool)
+	return on
+}
 
 // vmnetReasons are the refusals only the relay sees, each logged as rule_source
 // "vmnet:<reason>" with this sentence as its cause. Closed: a report naming any
@@ -127,9 +176,10 @@ func validFlowID(s string) bool {
 }
 
 // vmnetStage returns the relay's flow id and stage for a CONNECT, both empty
-// unless this is a VM run and the id is well formed.
+// unless this is a VM run, the request came in on the relay's listener, and the
+// id is well formed.
 func (p *Proxy) vmnetStage(r *http.Request) (flow, stage string) {
-	if !p.vm {
+	if !p.vm || !onVMNetLane(r.Context()) {
 		return "", ""
 	}
 	flow = r.Header.Get(vmnetFlowHeader)

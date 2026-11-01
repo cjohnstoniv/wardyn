@@ -48,6 +48,8 @@ type Server struct {
 	allowedPeers []netip.Prefix
 	// signinListen is Config.SigninListen: the person's sign-in lane, "" = none.
 	signinListen string
+	// vm is Config.VM: open the relay's listener (vmnetListen).
+	vm bool
 	// onListening, when set, runs once the main listener is bound (see OnListening).
 	onListening func()
 	// stopped closes when the HTTP server is shut down, whenever ListenAndServe gets to look.
@@ -365,10 +367,10 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ReadTimeout:       0, // streaming/tunnels: no whole-request deadline
 		WriteTimeout:      0,
 		IdleTimeout:       90 * time.Second,
-		// Marks the sign-in listener's connections (desktop_signin_lane.go).
-		ConnContext: signinConnContext,
+		// Marks the sign-in and relay listeners' connections (desktop_signin_lane.go, vmnet_flows.go).
+		ConnContext: laneConnContext,
 	}
-	out := &Server{proxy: p, http: srv, sink: sink, allowedPeers: cfg.AllowedPeers, signinListen: cfg.SigninListen}
+	out := &Server{proxy: p, http: srv, sink: sink, allowedPeers: cfg.AllowedPeers, signinListen: cfg.SigninListen, vm: cfg.VM}
 	out.watchShutdown()
 
 	// Start the run-token renewer, which keeps this sidecar's short-TTL token
@@ -418,6 +420,19 @@ func (s *Server) ListenAndServe() error {
 		go func() {
 			if err := s.http.Serve(signinListener{ln}); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				slog.Error("wardyn-proxy: the sign-in listener stopped", slog.Any("err", err))
+			}
+		}()
+	}
+	// A VM run's relay has its own listener (vmnet_flows.go), bound before the
+	// agent's, so a port it cannot have fails the start.
+	if s.vm {
+		ln, err := s.listen(vmnetListen)
+		if err != nil {
+			return err
+		}
+		go func() {
+			if err := s.http.Serve(vmnetListener{ln}); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("wardyn-proxy: the relay listener stopped", slog.Any("err", err))
 			}
 		}()
 	}
