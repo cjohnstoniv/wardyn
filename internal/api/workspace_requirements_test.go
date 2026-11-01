@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
@@ -329,4 +331,46 @@ type notFoundRequirementsStore struct{ *requirementsStoreFake }
 
 func (n notFoundRequirementsStore) SetWorkspaceRequirements(context.Context, uuid.UUID, map[string]types.WorkspaceRequirement) (types.Workspace, error) {
 	return types.Workspace{}, store.ErrNotFound
+}
+
+// A write: key naming a folder bound to a person's runner is checked by its text alone: the path
+// lives on that runner, so what this host has at it (here a link into a denied folder) is not the
+// folder's to answer for. The same key on an unbound folder still gets the host check.
+func TestSetWorkspaceRequirements_WriteKeyOnRunnerBoundFolder(t *testing.T) {
+	link := filepath.Join(t.TempDir(), "src")
+	if err := os.Symlink("/etc", link); err != nil {
+		t.Fatal(err)
+	}
+	runnerID := uuid.New()
+	body := `{"requirements":{"write:` + link + `":{"level":"required","provenance":"operator_set"}}}`
+	for _, c := range []struct {
+		name string
+		src  types.WorkspaceSource
+		want int
+	}{
+		{"bound to a runner", boundSource(link, runnerID), http.StatusOK},
+		{"on this host", types.WorkspaceSource{Type: types.WorkspaceSourceTypeLocalDir, Path: link}, http.StatusBadRequest},
+		{"bound, other folder", boundSource(link+"-other", runnerID), http.StatusBadRequest},
+	} {
+		h := newHarness(t)
+		id := uuid.New()
+		fake := &requirementsStoreFake{ws: types.Workspace{ID: id, Name: "w", Sources: []types.WorkspaceSource{c.src}}}
+		srv := New(baseTestConfig(h, fake))
+		w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+id.String()+"/requirements", adminToken, body)
+		if w.Code != c.want {
+			t.Errorf("%s: code = %d, want %d; body=%s", c.name, w.Code, c.want, w.Body.String())
+		}
+	}
+}
+
+// A runner-bound folder is still held to the text deny-list.
+func TestSetWorkspaceRequirements_WriteKeyOnRunnerBoundFolderDenied(t *testing.T) {
+	h := newHarness(t)
+	id := uuid.New()
+	fake := &requirementsStoreFake{ws: types.Workspace{ID: id, Name: "w", Sources: []types.WorkspaceSource{boundSource("/etc/ssh", uuid.New())}}}
+	srv := New(baseTestConfig(h, fake))
+	body := `{"requirements":{"write:/etc/ssh":{"level":"required","provenance":"operator_set"}}}`
+	if w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+id.String()+"/requirements", adminToken, body); w.Code != http.StatusBadRequest {
+		t.Errorf("code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
 }

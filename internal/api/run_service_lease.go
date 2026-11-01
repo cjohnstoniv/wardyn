@@ -142,8 +142,8 @@ func serviceRenewsLater(run types.AgentRun, now time.Time) bool {
 // owner still has the authority a renewal needs (extendRefusal). A unit of an hour or less opens the
 // warning window before the half-life, and every renewal would warn.
 // The write is the PATCH route's compare-and-set, so a person's edit, a re-clamp or a lost
-// race leaves the end alone and writes no audit row, as does an owner whose authority to extend
-// is refused or whose service identity has lost its authority.
+// race leaves the end alone and writes no audit row. An owner whose authority to extend is
+// refused, or whose service identity has lost its authority, writes the denied row.
 func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, now time.Time) (types.AgentRun, bool) {
 	// The boundary can only shrink the unit, so a run declined without it is declined with it:
 	// the boundary is read only for a run that is about to renew.
@@ -168,15 +168,21 @@ func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, 
 	}
 	// A service identity that is retired or suspended, or whose sponsor is no longer live, has lost
 	// the authority that started the run: the rule that ends its tokens and a binding's launch
-	// (serviceRunLive). A refusal, or a check that cannot be answered, renews nothing and audits nothing.
+	// (serviceRunLive). A refusal, or a check that cannot be answered, renews nothing and writes one
+	// denied row (auditRenewalRefused).
 	if live, err := s.serviceRunLive(ctx, run); err != nil || !live {
 		slog.WarnContext(ctx, "wardynd: a service's lease is not renewed: its service identity or sponsor is not live",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		reason := reasonOwnerUnverifiable
+		if err == nil {
+			reason = "service_not_live"
+		}
+		s.auditRenewalRefused(ctx, run, reason, now)
 		return run, false
 	}
 	// A later end keeps a sandbox and its credentials alive, so a renewal needs the authority a
 	// PATCH moving the end later does (extendRefusal), as the owner the run row names. A refusal,
-	// or a check that cannot be answered, renews nothing and writes no audit row: the run ends at
+	// or a check that cannot be answered, renews nothing and writes one denied row: the run ends at
 	// its lease with the usual warnings.
 	if ref := s.extendRefusal(ctx, run, false); ref != nil {
 		// A check that could not be answered was logged where it failed (loggedMsg).
@@ -184,6 +190,7 @@ func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, 
 			slog.WarnContext(ctx, "wardynd: a service's lease is not renewed: its owner's authority is refused",
 				slog.String("run_id", run.ID.String()), slog.String("reason", ref.reason))
 		}
+		s.auditRenewalRefused(ctx, run, ref.reason, now)
 		return run, false
 	}
 	applied, err := leaser.SetRunEndAndWait(ctx, run.ID, run.RunLimits, run.EndsAt, run.WaitBudgetSec,
@@ -200,6 +207,7 @@ func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, 
 	if run.Placement == types.PlacementLocal {
 		s.renewLeaseAfterEndChange(ctx, run.ID)
 	}
+	s.renewalRefused.Delete(run.ID)
 	data := map[string]any{
 		"reason": "service_renewed", "from": run.EndsAt, "to": renewal.target, "max": renewal.unit,
 		"health": string(renewal.health),
@@ -211,6 +219,30 @@ func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, 
 		"success", mustJSON(data)))
 	run.EndsAt, run.EndTightenedAt = &renewal.target, nil
 	return run, true
+}
+
+// renewalRefusedEvery is how often a renewal refused for the same reason is audited again.
+const renewalRefusedEvery = time.Hour
+
+// renewalRefusal is what the sweep last audited for a service run: the reason, and when.
+type renewalRefusal struct {
+	reason string
+	at     time.Time
+}
+
+// auditRenewalRefused writes the run.end.set denied row for a renewal that was due and refused, or
+// whose check could not be answered, so the run's end at its lease has a reason in the trail. The
+// sweep retries every pass, so the row is written when the reason is new and then at most once per
+// renewalRefusedEvery; a renewal that lands clears the memory.
+func (s *Server) auditRenewalRefused(ctx context.Context, run types.AgentRun, reason string, now time.Time) {
+	if v, ok := s.renewalRefused.Load(run.ID); ok {
+		if last := v.(renewalRefusal); last.reason == reason && now.Sub(last.at) < renewalRefusedEvery {
+			return
+		}
+	}
+	s.renewalRefused.Store(run.ID, renewalRefusal{reason: reason, at: now})
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.end.set", run.ID.String(),
+		"denied", mustJSON(map[string]any{"subject": run.CreatedBy, "reason": reason})))
 }
 
 // endingSoonDue is whether warnRunEnding has a warning for run now: its end is inside the closest

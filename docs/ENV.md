@@ -1957,6 +1957,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Beside `ui_sandbox.bind_url`, the pre-enter bind step.
 - Must be the same site as the console ([docs/UI-SANDBOXES.md](UI-SANDBOXES.md) §3).
 - Purely advisory copy — the gateway binds `WARDYN_UI_SANDBOX_LISTEN`, not this; unset falls back to the raw bind address and logs a boot warning.
+- Its scheme (or the origin template's) is how the gateway recognises an app's own page.
+- Unset behind TLS, or written without a scheme, the scheme is unknown and boot logs a warning.
 - Under secure cookies, a host equal to the console's (the host of `WARDYN_OIDC_REDIRECT_URL`) also logs a boot warning.
 - Cookies ignore ports, so a path-mode gateway there can be made to set a host-only `__Host-wardyn_session` for the console.
 - Give the gateway its own hostname, or set `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` ([`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) residual 18).
@@ -2800,6 +2802,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_QUICKSTART_IMAGE_TAG` | string | `quickstart` (`kind-ado` for the Azure DevOps profile) | Tag `quickstart.sh`, `overlay.sh` and the SSO walk build and load the images under; give each kind cluster its own so building one never retags another cluster's images. [Details](#wardyn_quickstart_image_tag) |
 | `WARDYN_KIND_SSO_SERVICE_CIDR` | string (CIDR) | (unset = read off the apiserver's `--service-cluster-ip-range`) | Overrides the Service CIDR the walk lifts past the proxy sidecar's SSRF guard for the fake AWS endpoint Service; set it when the apiserver read fails. [Details](#wardyn_kind_sso_service_cidr) |
 | `WARDYN_KIND_SSO_REBUILD` | bool | (unset) | `1` rebuilds all five images the walk judges from this tree instead of reusing the quickstart's images, and retags the two `:local` agent images on that Docker daemon. [Details](#wardyn_kind_sso_rebuild) |
+| `WARDYN_KIND_SSO_LEG` | string | (unset = the whole walk) | `member` or `concurrency` runs that one leg, so the nightly can split the walk across two clusters; any other value stops the walk |
 | `WARDYN_KIND_SSO_REGISTRY` | string | `kind-sso-registry` | Name of the throwaway local registry container the walk runs on the kind network to serve the aws-sso image; the walk's own EXIT trap removes it. [Details](#wardyn_kind_sso_registry) |
 | `WARDYN_KIND_SSO_REGISTRY_PORT` | int | `5001` | Host port that registry container publishes on `127.0.0.1` |
 | `WARDYN_KIND_SSO_DEX_PORT` | int | `5557` | Host port `overlay.sh` port-forwards Dex onto, rendered into `dex.yaml`'s issuer and the chart's `WARDYN_OIDC_ISSUER`, for the browser leg of the split-horizon OIDC flow. [Details](#wardyn_kind_sso_dex_port) |
