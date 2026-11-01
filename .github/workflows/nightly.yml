@@ -1203,8 +1203,8 @@ jobs:
   # No WARDYN_KIND_SSO_REBUILD here: on this fresh runner every image the walk
   # judges is already built from this checkout before the walk starts, so the
   # walk's own five-image rebuild only repeated those builds (about 4-6 min a
-  # leg, and its images were byte-identical: created at the earlier build's
-  # time). Built from this checkout, in order: `make agent-images` builds
+  # leg, and it rebuilt images from the same sources, so it certified nothing
+  # new). Built from this checkout, in order: `make agent-images` builds
   # agent-aws-sso:local and agent-claude-code:local (plus agent-base:local);
   # `make kind-quickstart` builds wardynd:quickstart and wardyn-proxy:quickstart
   # unconditionally (it reuses only the claude-code tag, which is the one just
