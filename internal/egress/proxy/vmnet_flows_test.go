@@ -298,7 +298,7 @@ func TestVMFlowAgentListenerIsAContainers(t *testing.T) {
 // are opened by a port entry, and an internal_hosts entry declares it, so the
 // private-address lift is offered; the address still sits on the proxy's own
 // subnet, which onOwnSubnetOrControlPlane refuses and nothing declared lifts
-// (egress_target.go:473-491, :553). No ask parks, no tunnel resumes, nothing is
+// (vetHost, onOwnSubnetOrControlPlane). No ask parks, no tunnel resumes, nothing is
 // dialled, and an ordinary CONNECT on the agent listener is refused the same way.
 func TestVMFlowRelayAskToProxyOwnPortsRefused(t *testing.T) {
 	_, ownSubnet, err := net.ParseCIDR("10.40.0.0/24")
