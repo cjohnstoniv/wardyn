@@ -787,6 +787,9 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
     in your browser, but host mode is the boundary the browser itself enforces.
   - Set `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` for any install with more than one
     user, wherever wildcard DNS is available.
+  - An app's own `Origin` check is not a per-run barrier in path mode.
+    - Every run's page carries the same `Origin` there.
+    - So the app cannot tell one run's page from another's.
 
 ## Native clients (exploratory)
 

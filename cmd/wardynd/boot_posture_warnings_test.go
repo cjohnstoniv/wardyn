@@ -222,3 +222,36 @@ func TestValidateBootPostureRefusesMemberBeforeMigrations(t *testing.T) {
 		t.Errorf("a role map with no issuer was refused: %v", err)
 	}
 }
+
+// TestBootPostureUIGatewayUnknownScheme pins #3799: a gateway whose scheme cannot be known (no advertise URL
+// and no origin template behind TLS, or either one without a scheme) warns and names the variable; a URL
+// with its scheme, the gateway off, and a plain-HTTP deployment stay quiet.
+func TestBootPostureUIGatewayUnknownScheme(t *testing.T) {
+	for _, tc := range []struct {
+		name, uiListen, advertise, template string
+		posture                             tlsPosture
+		want                                string
+	}{
+		{name: "nothing set behind TLS", uiListen: ":8081", posture: tlsServed, want: "WARDYN_UI_SANDBOX_ADVERTISE"},
+		{name: "advertise without a scheme", uiListen: ":8081", advertise: "ui.example.com", posture: tlsServed, want: "WARDYN_UI_SANDBOX_ADVERTISE"},
+		{name: "template without a scheme", uiListen: ":8081", template: "run-{run}.ui.example.com", posture: tlsServed, want: "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE"},
+		{name: "template without a scheme over plain http", uiListen: ":8081", template: "run-{run}.ui.example.com", want: "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE"},
+		{name: "advertise with its scheme is quiet", uiListen: ":8081", advertise: "https://ui.example.com", posture: tlsServed},
+		{name: "template with its scheme is quiet", uiListen: ":8081", template: "https://run-{run}.ui.example.com", posture: tlsServed},
+		{name: "nothing set over plain http is quiet", uiListen: ":8081"},
+		{name: "gateway off is quiet", posture: tlsServed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := uiGatewayUnknownSchemeWarning(tc.uiListen, tc.advertise, tc.template, tc.posture)
+			if tc.want == "" {
+				if w != "" {
+					t.Fatalf("warned on a good config: %q", w)
+				}
+				return
+			}
+			if !strings.Contains(w, tc.want) || !strings.Contains(w, "scheme") {
+				t.Fatalf("warning %q does not name %s and the scheme", w, tc.want)
+			}
+		})
+	}
+}
