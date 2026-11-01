@@ -475,7 +475,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | Mac control | In the guest | State |
 |---|---|---|
 | Network filtering | The guest's one NIC goes to the run's own relay and proxy, with no NAT or bridged device. The proxy allows, denies and audits each request | Today |
-| Trust in your organisation's certificate authority | Node, Python, git and curl are pointed at the run proxy's certificate, and it is trusted in the run's System keychain for TLS before the run starts (see Limits below) | Today for your own CA: a `ca` item is trusted in the guest's System keychain for SSL at prepare, and the caps report `org_ca` as `trusted` or `not_trusted` ([The organisation CA](#the-organisation-ca)) |
+| Trust in your organisation's certificate authority | Node, Python, git and curl are pointed at the run proxy's certificate. On macOS 26 the run's System keychain does not trust it ([System trust store](#apps-that-use-only-the-system-trust-store)) | Today for your own CA: a `ca` item is trusted in the guest's System keychain for SSL, on macOS 26 by hand in `edit-base`, and the caps report `org_ca` as `trusted` or `not_trusted` ([The organisation CA](#the-organisation-ca)) |
 | Endpoint security agent | None is installed in the base. Stage 2 installs the Command Line Tools, the harness CLIs and the guest agent only | Today, in part: a `pkg` item installs your agent's package into the base as admin, with its licence as a `secret_files` entry. A system-extension or helper approval is by hand in `edit-base`, or from your MDM ([Customising the base](#customising-the-base)) |
 | Privilege management | `agent` is a standard user. Stage 1 refuses to publish a base that holds any other account than it and the setup account, and only the Mac's user can read the setup account's password, kept for `edit-base` | Today |
 | Disk encryption | The guest's disk is a file on the Mac's volume, so the Mac's disk encryption covers it when the volume has any. The run's clone is deleted at the end, which is not secure erasure | Today |
@@ -491,13 +491,28 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 
 | Limit | Detail |
 |---|---|
-| Proxy certificate | Trusted in the run's System keychain for TLS before the run starts. If macOS refuses, the run goes on, its audit says so, and keychain-only tools (Safari, `gh`, `kubectl`) fail TLS. Node, Python, git and curl are pointed at it |
+| Proxy certificate | On macOS 26 the run's System keychain does not trust it, so apps that use only the system trust store fail on inspected hosts ([System trust store](#apps-that-use-only-the-system-trust-store)). Node, Python, git and curl are pointed at it |
 | Harnesses | Claude Code, Codex CLI and "Your own tools", depending on what the base installed and what passed the launcher's self-test. If Apple's Command Line Tools cannot install, only "Your own tools" is offered |
 | Folders | Shared into the guest; see [Folders](#folders) |
 | Desktop | One fixed 1920 x 1080 display. An `observe` result (see above) leaves macOS VMs agent-only |
 | Clipboard | Paste in is allowed and copy out is blocked by default, as for other desktops, if Apple's Screen Sharing carries the standard clipboard messages. Otherwise nothing is copied either way |
 | Heat and battery | New VMs are refused at serious or critical thermal state. Battery use and lid-close sleep on MacBooks were not measured |
 | Guest patching | The guest's automatic updates are off, so a run's OS is predictable. Re-prepare to move to a newer macOS. `macos_vm.max_base_age_days` in the site config refuses runs on a Mac whose base is older |
+
+### Apps that use only the system trust store
+
+Before a run starts, Wardyn asks the guest to trust the run's proxy certificate in its System keychain, for TLS only. macOS 26 refuses this without a person ([#3923](https://github.com/cjohnstoniv/wardyn/issues/3923)). The run goes on, and its `run.dispatch` audit row says `keychain_trust` `not_trusted`, reason `refused`.
+
+| App or tool | Host marked Inspected | Host marked Tunnel only | Tunnel only, behind a TLS-inspecting proxy |
+|---|---|---|---|
+| Uses only the system trust store: Safari, Electron apps, and Go or Swift tools with no CA file of their own (`gh` and `kubectl` not yet run on a real Mac) | Fails TLS | Works | Fails TLS until your organisation's root is trusted |
+| Reads a CA variable: Node, Python, git, curl and the AWS CLI | Works | Works | Works, with your organisation's root in the [runner's CA bundle](hybrid-laptops.md#a-corporate-ca-on-a-laptop-runner) |
+
+- **The CA variables.** `SSL_CERT_FILE`, `GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `AWS_CA_BUNDLE` and `CURL_CA_BUNDLE` are set for every process a run starts.
+- **Your organisation's root.** Trust it by hand in `edit-base` ([The organisation CA](#the-organisation-ca)). That reaches a Tunnel only host.
+- **The run's proxy certificate.** Trusting it by hand can't help: the certificate is new for each run.
+- **Which hosts are which.** The run's Policy tab and `wardyn run policy` mark each host.
+- **`kubectl`.** A kubeconfig that names a CA may not use the system trust store. The one a kubectl component writes names the run's proxy certificate.
 
 ### Folders
 
@@ -559,6 +574,8 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | A folder shared read-only refuses writes from the guest | Read-only folders |
 | Without Full Disk Access for the guest agent, its listing of a share as `agent` waits as a run's read of a file does, and with it the listing answers | Folder shares: the refusal that names the fix. If the listing does not wait, a run can still hang on its first read |
 | A Full Disk Access grant made in `edit-base` survives the recheck and reaches each run's clone | Folder shares on every run |
+| `gh` and `kubectl` against a host marked Inspected, in a macOS VM run | Whether they fail TLS as [the table](#apps-that-use-only-the-system-trust-store) says |
+| A `ca` item trusted by hand in `edit-base` stays trusted in each run's clone | Apps that use only the system trust store, on Tunnel only hosts behind a TLS-inspecting proxy |
 | The runner refuses a share of a whole home folder, /Users or /private/var on a real Mac, before the VM starts | Folders: what a run may share |
 | The VM's share is allowed into a folder macOS protects once the runner is allowed into it | Protected folders. The runner's own check passes, and the share could still read empty |
 | Removable volumes and iCloud Drive are allowed in the same Files and Folders pane | The fix the refusal names |
