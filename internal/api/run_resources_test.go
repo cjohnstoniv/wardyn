@@ -473,6 +473,12 @@ func TestRunResources_MacOSGuest_UnparsableIsAbsentNeverZero(t *testing.T) {
 		"cpu_percent=Inf\n",
 		"cpu_percent=29.5\n",
 		"memory_current=99999999999999999999999\n",
+		"memory_current=-1\nmemory_max=-1\ncpu_percent=-5\nproc_count=-1\ndisk_root_used_kb=-1\n",
+		"disk_wbytes=-1\n",
+		// Parses as a number, then turns negative when scaled from KB to bytes.
+		"disk_root_used_kb=9223372036854775807\n",
+		// The Linux script's CPU keys, run backwards: a negative rate from positive numbers.
+		"nproc=1\ncpu_usage_usec_1=100\ncpu_usage_usec_2=1\nuptime_1=1\nuptime_2=2\n",
 	} {
 		srv, ast, _ := newResourcesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return kvExecSession(out), nil })
 		id := seedMacOSResourcesRun(ast, 0)
@@ -483,6 +489,20 @@ func TestRunResources_MacOSGuest_UnparsableIsAbsentNeverZero(t *testing.T) {
 		if got := strings.TrimSpace(w.Body.String()); got != "{}" {
 			t.Errorf("output %q: body = %s, want {}", out, got)
 		}
+	}
+}
+
+// Dropping negatives is the macOS arm's rule alone: a Linux run's answer is as it was.
+func TestRunResources_LinuxGuest_KeepsNegatives(t *testing.T) {
+	srv, ast, _ := newResourcesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
+		return kvExecSession("memory_current=-1\nproc_count=-1\n"), nil
+	})
+	got, _ := getResourcesOK(t, srv, seedResourcesRun(ast, "alice"))
+	if got.MemoryUsedBytes == nil || *got.MemoryUsedBytes != -1 {
+		t.Errorf("MemoryUsedBytes = %v, want -1", got.MemoryUsedBytes)
+	}
+	if got.ProcessCount == nil || *got.ProcessCount != -1 {
+		t.Errorf("ProcessCount = %v, want -1", got.ProcessCount)
 	}
 }
 

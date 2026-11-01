@@ -334,8 +334,23 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 			pct := float64(v)
 			resp.CPUPercent = &pct
 		}
+		dropNegativeReadings(&resp)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// dropNegativeReadings leaves absent what a macOS guest reported below zero, which no real reading is.
+// It works on the parsed response, not the raw lines, because a large disk_root_used_kb only turns
+// negative when diskReading scales it to bytes.
+func dropNegativeReadings(r *runResourcesResponse) {
+	for _, f := range []**int64{&r.MemoryUsedBytes, &r.MemoryLimitBytes, &r.DiskWrittenBytes, &r.DiskUsedBytes, &r.ProcessCount} {
+		if *f != nil && **f < 0 {
+			*f = nil
+		}
+	}
+	if r.CPUPercent != nil && *r.CPUPercent < 0 {
+		r.CPUPercent = nil
+	}
 }
 
 // runAgentStoppedReader is the OPTIONAL store capability that reads a kept run's persisted stop
