@@ -22,7 +22,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A large recording store can need a longer migration timeout. Migration `0216_recordings_size_tail` reads every stored
   recording once, and the whole migration run is bounded by `WARDYN_MIGRATE_TIMEOUT` (default 5 minutes). A timeout rolls
   that migration back, and every later boot starts it again and fails the same way until the timeout is long enough. Raise
-  it before you upgrade, in `h`, `m` and `s` units only. Compose does not pass the variable on from `.env`: put
+  it before you upgrade; the chart takes `h`, `m` and `s` units only. Compose does not pass the variable on from `.env`: put
   `WARDYN_MIGRATE_TIMEOUT: 30m` under `services.wardynd.environment` in a `docker-compose.override.yaml`. Helm: use
   `--set env.WARDYN_MIGRATE_TIMEOUT=30m` or an `extraEnv` entry, and give `helm upgrade --timeout` more than the migration
   needs ([#3908](https://github.com/cjohnstoniv/wardyn/issues/3908)).

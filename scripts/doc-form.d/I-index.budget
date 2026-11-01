@@ -32,4 +32,5 @@ docs/README.md=958 share=35 # +20 (macOS VM sandboxes row); +19 (0.10 Linux VM):
 # docs/TRY-IT.md 3254 adds 11: the default policy's model access goes through a model provider, not an authored grant.
 # docs/TRY-IT.md 3309 adds 55 over 3254 (setup sets the server runner's limits): make setup sets the server runner's limits; measured.
 # 0.9.4 L8: docs/TRY-IT.md 3371 adds 62 over 3309: the brokered-repo note, the setup-token wording and the rc-safe tag.
-docs/TRY-IT.md=3414 share=35 # +37 (rc.10), measured: the Claude Code image row, the local-mode setting for the SSO step and two pointers.
+# docs/TRY-IT.md 3421 adds 7 over 3414, measured: Setup's image row does not flag the install's pin.
+docs/TRY-IT.md=3421 share=35 # +37 (rc.10), measured: the Claude Code image row, the local-mode setting for the SSO step and two pointers.

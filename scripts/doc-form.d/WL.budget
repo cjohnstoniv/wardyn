@@ -11,4 +11,5 @@
 # docs/operations/workloads.md 2866 adds 39 over 2827: the Invalid status the runner writes for a resource it cannot report, the Ready message, and the unknown-health message.
 # docs/operations/workloads.md 2997 = ours 2866 + theirs 2958 - base 2827 at the 0.10 W7 merge of tester-docs-truth.
 # docs/operations/workloads.md 3041 adds 44 over 2997: both sides' apply rows kept when merging the queued-replacement table, measured.
-docs/operations/workloads.md=3041 share=10
+# docs/operations/workloads.md 3058 adds 17 over 3041, measured: a queued replacement's order, in place of a pointer to the table.
+docs/operations/workloads.md=3058 share=10
