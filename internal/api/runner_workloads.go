@@ -406,8 +406,10 @@ func (s *Server) answerWorkloadReport(runnerID uuid.UUID, rep runnerwire.Workloa
 }
 
 // workloadStatusOf is the status a resource's stored workload reads as: the refusal of its current spec's
-// launch when there is one, else its run's state with the run's service health.
-func workloadStatusOf(v store.WorkloadView) runnerwire.WorkloadStatusArgs {
+// launch when there is one, else its run's state with the run's service health as the run routes serve it
+// at now: a paused run's, or one not observed lately, reads unknown, never the health it last had, and the
+// message says when it was last seen.
+func workloadStatusOf(v store.WorkloadView, now time.Time) runnerwire.WorkloadStatusArgs {
 	a := runnerwire.WorkloadStatusArgs{Namespace: v.SourceNamespace, Name: v.Name, UID: v.K8sUID}
 	if v.K8sGeneration != nil {
 		a.ObservedGeneration = *v.K8sGeneration
@@ -423,6 +425,11 @@ func workloadStatusOf(v store.WorkloadView) runnerwire.WorkloadStatusArgs {
 		a.Reason, a.Message = clipUTF8(f.Reason, runnerwire.MaxRefusalReason), clipUTF8(f.Message, runnerwire.MaxWorkloadMessage)
 		return a
 	}
+	health := types.ServiceHealthState(v.ServiceHealth)
+	st := viewServiceStatus(v, now)
+	if st != nil {
+		health = st.Health
+	}
 	switch {
 	case v.CurrentGeneration < v.Generation || v.RunState == "":
 		a.Phase = runnerwire.WorkloadPhasePending // the current spec has no run yet
@@ -434,12 +441,31 @@ func workloadStatusOf(v store.WorkloadView) runnerwire.WorkloadStatusArgs {
 		a.Phase = runnerwire.WorkloadPhaseCompleted
 	case v.RunState.IsTerminal():
 		a.Phase = runnerwire.WorkloadPhaseEnded
-	case v.ServiceHealth == string(types.ServiceHealthUnhealthy):
+	case health == types.ServiceHealthUnhealthy:
 		a.Phase = runnerwire.WorkloadPhaseUnhealthy
 	default:
 		a.Phase = runnerwire.WorkloadPhaseRunning
+		// Only a health the projection replaced says when it was seen: a stored one is rewritten by every
+		// refresh, and a time that moved with it would make the sweep push the status each time.
+		if st != nil && st.Health != types.ServiceHealthState(v.ServiceHealth) {
+			a.Message = fmt.Sprintf("service health unknown (%s): last checked %s", st.Reason, st.ObservedAt.UTC().Format(time.RFC3339))
+		}
 	}
 	return a
+}
+
+// viewServiceStatus is v's run's service health as the run routes serve it at now (workloadOut): unknown
+// while paused or stale, with the observation time kept. Nil when the run has no health yet.
+func viewServiceStatus(v store.WorkloadView, now time.Time) *types.RunServiceStatus {
+	if v.RunState == "" || v.ServiceHealth == "" {
+		return nil
+	}
+	run := []types.AgentRun{{PausedAt: v.RunPausedAt, ServiceStatus: &types.RunServiceStatus{Health: types.ServiceHealthState(v.ServiceHealth)}}}
+	if v.ServiceObservedAt != nil {
+		run[0].ServiceStatus.ObservedAt = *v.ServiceObservedAt
+	}
+	projectServiceHealth(run, now)
+	return run[0].ServiceStatus
 }
 
 // workloadStatusHash is what workloads.status_pushed holds for a status sent.
@@ -469,7 +495,7 @@ func (s *Server) pushWorkloadView(ctx context.Context, ws store.WorkloadStore, v
 	mu, _ := workloadPushMu.LoadOrStore(v.ID, &sync.Mutex{})
 	mu.(*sync.Mutex).Lock()
 	defer mu.(*sync.Mutex).Unlock()
-	a := workloadStatusOf(v)
+	a := workloadStatusOf(v, time.Now())
 	pctx, cancel := context.WithTimeout(ctx, workloadStatusTimeout)
 	err := s.runnerEndpoint(*v.SourceRunnerID).sub.WorkloadStatus(pctx, a)
 	cancel()
@@ -511,7 +537,7 @@ func (s *Server) pushWorkloadStatuses(ctx context.Context, push func(store.Workl
 // pushed by the replica that holds its runner's session.
 func (s *Server) sweepWorkloadStatuses(ctx context.Context) error {
 	return s.pushWorkloadStatuses(ctx, func(v store.WorkloadView) bool {
-		return s.runnerOnline(*v.SourceRunnerID) && workloadStatusHash(workloadStatusOf(v)) != v.StatusPushed
+		return s.runnerOnline(*v.SourceRunnerID) && workloadStatusHash(workloadStatusOf(v, time.Now())) != v.StatusPushed
 	})
 }
 

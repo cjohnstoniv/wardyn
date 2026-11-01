@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,6 +49,9 @@ const (
 	// and informer relists do not starve behind it.
 	workloadClientQPS   = 50
 	workloadClientBurst = 100
+	// invalidWorkloadReason is the status reason of a resource the runner itself finds invalid; the
+	// organisation's own token for a workload it refuses (internal/api reasonWorkloadInvalid).
+	invalidWorkloadReason = "workload_invalid"
 )
 
 // workloadPeer is the session's event sender, a *runnerwire.Peer.
@@ -248,7 +252,7 @@ func (w *workloadWatcher) applied(ns string, obj any) {
 	w.sendMu.Lock()
 	defer w.sendMu.Unlock()
 	if p := w.currentPeer(); p != nil {
-		_ = w.emit(p, applyReport(u))
+		_ = w.emitApply(p, u)
 	}
 }
 
@@ -295,7 +299,7 @@ func (w *workloadWatcher) report(ns string) {
 		if runnerwire.ValidWorkloadName(u.GetName()) {
 			names = append(names, u.GetName())
 		}
-		if w.emit(p, applyReport(u)) != nil {
+		if w.emitApply(p, u) != nil {
 			return
 		}
 	}
@@ -315,6 +319,51 @@ func applyReport(u *unstructured.Unstructured) runnerwire.WorkloadReport {
 		}
 	}
 	return runnerwire.WorkloadReport{Op: runnerwire.WorkloadOpApply, Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID()), Generation: u.GetGeneration(), Spec: spec}
+}
+
+// emitApply sends u's apply. A resource the wire cannot carry (an oversize spec, a name no workload can
+// have) is not sent, and its status says why (markInvalid), so kubectl shows it rather than nothing.
+func (w *workloadWatcher) emitApply(p workloadPeer, u *unstructured.Unstructured) error {
+	rep := applyReport(u)
+	if err := rep.Validate(); err != nil {
+		w.markInvalid(u, err)
+		return nil
+	}
+	return w.emit(p, rep)
+}
+
+// markInvalid writes the Invalid status of u, a resource its report cannot carry, unless that status is
+// already there for this generation: the resync reports every resource again.
+func (w *workloadWatcher) markInvalid(u *unstructured.Unstructured, cause error) {
+	msg := strings.TrimPrefix(cause.Error(), runnerwire.ErrBadFrame.Error()+": ")
+	if !runnerwire.ValidWorkloadName(u.GetName()) {
+		msg = fmt.Sprintf("%q is not a name a workload can have", u.GetName())
+	}
+	slog.WarnContext(w.ctx, "workload not reported", "namespace", u.GetNamespace(), "name", u.GetName(), "error", cause)
+	phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
+	seen, _, _ := unstructured.NestedFieldNoCopy(u.Object, "status", "observedGeneration")
+	shown, _, _ := unstructured.NestedString(u.Object, "status", "message")
+	if phase == runnerwire.WorkloadPhaseInvalid && observed(seen) == u.GetGeneration() && shown == msg {
+		return
+	}
+	ctx, cancel := context.WithTimeout(w.ctx, workloadSendTimeout)
+	defer cancel()
+	err := w.status(ctx, runnerwire.WorkloadStatusArgs{Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID()),
+		ObservedGeneration: u.GetGeneration(), Phase: runnerwire.WorkloadPhaseInvalid, Reason: invalidWorkloadReason, Message: msg})
+	if err != nil {
+		slog.WarnContext(w.ctx, "workload invalid status not written; the next full report will write it", "namespace", u.GetNamespace(), "name", u.GetName(), "error", err)
+	}
+}
+
+// observed is a status.observedGeneration as the decoder left it: an int64, or a float64 after a patch.
+func observed(v any) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	}
+	return 0
 }
 
 // emit sends one report with sendMu held. A report outside the wire's bounds is logged and not sent
@@ -377,6 +426,10 @@ func (w *workloadWatcher) status(ctx context.Context, a runnerwire.WorkloadStatu
 		if st, at := readyCondition(u); st == string(ready) && at != "" {
 			since = at
 		}
+		cond := map[string]any{"type": "Ready", "status": string(ready), "reason": a.Phase, "lastTransitionTime": since}
+		if a.Message != "" {
+			cond["message"] = a.Message
+		}
 		body, err := json.Marshal(map[string]any{
 			"metadata": map[string]any{"uid": a.UID, "resourceVersion": u.GetResourceVersion()},
 			"status": map[string]any{
@@ -385,9 +438,7 @@ func (w *workloadWatcher) status(ctx context.Context, a runnerwire.WorkloadStatu
 				"runID":              a.RunID,
 				"reason":             a.Reason,
 				"message":            a.Message,
-				"conditions": []map[string]any{{
-					"type": "Ready", "status": string(ready), "reason": a.Phase, "lastTransitionTime": since,
-				}},
+				"conditions":         []map[string]any{cond},
 			}})
 		if err != nil {
 			return err
