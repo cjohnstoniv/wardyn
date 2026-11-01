@@ -80,7 +80,7 @@ func TestWorkloadFromRunner_RefusesAReportOutsideItsShape(t *testing.T) {
 	}
 }
 
-var statusNow = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+var statusNow = time.Now().UTC()
 
 // The status a stored workload reads as: a refusal of its current spec first, then its run's state.
 func TestWorkloadStatusOf(t *testing.T) {
