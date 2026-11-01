@@ -86,6 +86,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -137,6 +143,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -203,6 +215,12 @@ jobs:
       RUNSC_SHA512: ea985c4a505a37c50726b35fa5d48fdb8058dce36833d7710d49be035e08623b425869f91deb9133c1c5b35a33a77aed5ddcbc6926801a2dc49ddb0805aed7dc
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -297,6 +315,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -345,6 +369,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -467,6 +497,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -529,6 +565,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -783,6 +825,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1545,6 +1593,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1847,6 +1901,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1914,6 +1974,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -2057,6 +2123,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -2167,6 +2239,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
