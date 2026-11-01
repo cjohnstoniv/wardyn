@@ -39,11 +39,12 @@ var pRows = []string{
 	"TestP08_Throughput", "TestP09_Desktop", "TestP09b_LocalWindow", "TestP10_CleanupBoundary", "TestP11_CAAndTools",
 	"TestP12_CapSlotsAndLogins", "TestP13_RunnerRestart", "TestP14_PkgUpgrade", "TestP15_HostSleep",
 	"TestP16_WedgedGuest", "TestP17_DiskBound", "TestP18_ThermalAndPower", "TestP19_TeardownHygiene",
-	"TestP20_ManagedGate", "TestP21_GuestClock", "TestP22_DistinctIdentities",
+	"TestP20_ManagedGate", "TestP21_GuestClock", "TestP22_DistinctIdentities", "TestP23_DesktopObserve",
 }
 
 // blockItems are the tests whose failure is BLOCK: macOS VMs do not ship until it passes. A listed
-// test covers its subtests. Rows not listed fail as FAIL (a limit or a decision), never BLOCK.
+// test covers its subtests. Rows not listed fail as FAIL (a limit or a decision), never BLOCK. These are
+// the security rows too: one of them NOT_RUN, or not started before the stop time, makes the run incomplete.
 var blockItems = map[string]bool{
 	"TestP05_AgentSession":                      true,
 	"TestP06_NetworkPositive":                   true,
@@ -60,6 +61,7 @@ var blockItems = map[string]bool{
 	"TestP19_TeardownHygiene":                   true,
 	"TestP20_ManagedGate":                       true,
 	"TestP22_DistinctIdentities/two_concurrent": true,
+	"TestP23_DesktopObserve":                    true,
 }
 
 func isBlock(name string) bool {
@@ -110,6 +112,25 @@ type detail struct {
 type rowResult struct {
 	Row, Outcome, Reason string
 	BlockNotRun          bool
+	Secs                 int // wall seconds run.sh measured for the row; 0 when it never started
+}
+
+// stoppedReason is the reason of a row the stop time kept from starting.
+const stoppedReason = "stopped: out of time"
+
+// fileExists says whether <dir>/<name> exists: run.sh's .stopped marker.
+func fileExists(dir, name string) bool {
+	_, err := os.Stat(filepath.Join(dir, name))
+	return err == nil
+}
+
+// rowSecs is the seconds run.sh wrote to <dir>/<row>.secs; a missing or unreadable file is 0.
+func rowSecs(dir, row string) int {
+	b, err := os.ReadFile(filepath.Join(dir, row+".secs"))
+	if n, err2 := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && err2 == nil && n > 0 {
+		return n
+	}
+	return 0
 }
 
 func clean(s string) string {
@@ -120,10 +141,19 @@ func clean(s string) string {
 	return s
 }
 
-// summarizeRow reads <dir>/<row>.json (test2json) and <dir>/<row>.exit.
+// summarizeRow reads <dir>/<row>.json (test2json), <dir>/<row>.exit and run.sh's .secs and .stopped.
 func summarizeRow(dir, row string) (rowResult, []detail) {
+	r, ds := summarizeEvents(dir, row)
+	r.Secs = rowSecs(dir, row)
+	return r, ds
+}
+
+func summarizeEvents(dir, row string) (rowResult, []detail) {
 	f, err := os.Open(filepath.Join(dir, row+".json"))
 	if err != nil {
+		if fileExists(dir, row+".stopped") {
+			return rowResult{Row: row, Outcome: "NOT_RUN", Reason: stoppedReason, BlockNotRun: hasBlock(row)}, nil
+		}
 		return rowResult{Row: row, Outcome: "NOT_RUN", Reason: "no output: not run", BlockNotRun: hasBlock(row)}, nil
 	}
 	defer f.Close()
@@ -250,11 +280,29 @@ func summarizeRow(dir, row string) (rowResult, []detail) {
 	return r, ds
 }
 
-// runSummary writes summary.tsv (one row per P-row) and detail.tsv (every test and subtest) into
-// dir and prints the counts. Its status: 2 when any row is BLOCK, 1 when any is FAIL, else 0.
+// budgets names the settings that bound how long a run takes, as the summary's environment holds them, so
+// a report says which defaults it ran under (P21 samples for an hour and P4 boots 25 VMs by default).
+func budgets() string {
+	return fmt.Sprintf("budgets: WARDYN_MACVM_TIMEOUT=%s WARDYN_MACVM_CLOCK_FOR=%s WARDYN_MACVM_CLOCK_EVERY=%s WARDYN_MACVM_WARM_TRAVEL=%d WARDYN_MACVM_WARM_FRESH=%d WARDYN_MACVM_P19_RESERVE=%s",
+		env("WARDYN_MACVM_TIMEOUT", "5h"), cfg.clockFor, cfg.clockEvery, cfg.warmTravel, cfg.warmFresh, env("WARDYN_MACVM_P19_RESERVE", "600")+"s")
+}
+
+// runSummary writes summary.tsv (one row per P-row, the row's wall seconds last), detail.tsv (every test and
+// subtest) and result.txt into dir. It prints the counts, the BLOCK NOT RUN line, "result: complete" or
+// "result: incomplete" and the budgets first, then the rows. A run is incomplete when no row PASSed or a
+// security row (any in blockItems, P23 among them) is NOT_RUN or was not started before the stop time. Its status:
+//
+//	0  every row PASS, or NOT_RUN on non-security rows only
+//	1  a FAIL
+//	2  a BLOCK
+//	3  the summary itself could not be written, or its counts do not add up
+//	4  incomplete: no FAIL or BLOCK, but no row PASSed or a security row is NOT_RUN
+//
+// A BLOCK outranks a FAIL, and either outranks incomplete; the result line still says incomplete when a
+// security row did not run beside them.
 func runSummary(dir string, w io.Writer) int {
 	var sum, det strings.Builder
-	sum.WriteString("row\toutcome\treason\n")
+	sum.WriteString("row\toutcome\treason\tseconds\n")
 	det.WriteString("test\tstatus\tblock\treason\n")
 	n := map[string]int{}
 	blockNotRun := 0
@@ -270,22 +318,20 @@ func runSummary(dir string, w io.Writer) int {
 		if r.BlockNotRun {
 			blockNotRun++
 		}
-		fmt.Fprintf(&sum, "%s\t%s\t%s\n", r.Row, r.Outcome, r.Reason)
+		fmt.Fprintf(&sum, "%s\t%s\t%s\t%d\n", r.Row, r.Outcome, r.Reason, r.Secs)
 		for _, d := range ds {
 			fmt.Fprintf(&det, "%s\t%s\t%v\t%s\n", d.Test, d.Status, d.Block, d.Reason)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "summary.tsv"), []byte(sum.String()), 0o600); err != nil {
-		fmt.Fprintln(w, "summary:", err)
-		return 3
+	result := "result: complete"
+	if blockNotRun > 0 || n["PASS"] == 0 {
+		result = "result: incomplete"
 	}
-	if err := os.WriteFile(filepath.Join(dir, "detail.tsv"), []byte(det.String()), 0o600); err != nil {
-		fmt.Fprintln(w, "summary:", err)
-		return 3
-	}
-	fmt.Fprint(w, sum.String())
-	if len(untested) > 0 {
-		fmt.Fprintf(w, "Listed untested (never a pass, not an outcome):\n%s\n", strings.Join(untested, "\n"))
+	for name, body := range map[string]string{"summary.tsv": sum.String(), "detail.tsv": det.String(), "result.txt": result + "\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			fmt.Fprintln(w, "summary:", err)
+			return 3
+		}
 	}
 	fmt.Fprintf(w, "PASS %d FAIL %d BLOCK %d NOT_RUN %d of %d P-rows\n", n["PASS"], n["FAIL"], n["BLOCK"], n["NOT_RUN"], len(pRows))
 	if n["PASS"]+n["FAIL"]+n["BLOCK"]+n["NOT_RUN"] != len(pRows) {
@@ -295,11 +341,22 @@ func runSummary(dir string, w io.Writer) int {
 	if blockNotRun > 0 {
 		fmt.Fprintf(w, "%d BLOCK NOT RUN\n", blockNotRun)
 	}
+	if n["PASS"] == 0 {
+		fmt.Fprintln(w, "summary: no row PASSed")
+	}
+	fmt.Fprintln(w, result)
+	fmt.Fprintln(w, budgets())
+	fmt.Fprint(w, sum.String())
+	if len(untested) > 0 {
+		fmt.Fprintf(w, "Listed untested (never a pass, not an outcome):\n%s\n", strings.Join(untested, "\n"))
+	}
 	switch {
 	case n["BLOCK"] > 0:
 		return 2
 	case n["FAIL"] > 0:
 		return 1
+	case result == "result: incomplete":
+		return 4
 	}
 	return 0
 }
@@ -331,12 +388,12 @@ func declaredRows(t *testing.T) []string {
 	return got
 }
 
-// TestSummaryRowsMatchTests pins pRows to the package's TestP functions: 20 rows, no more, no less.
+// TestSummaryRowsMatchTests pins pRows to the package's TestP functions: 21 rows, no more, no less.
 func TestSummaryRowsMatchTests(t *testing.T) {
 	got := declaredRows(t)
 	want := slices.Sorted(slices.Values(pRows))
-	if !slices.Equal(got, want) || len(pRows) != 20 {
-		t.Fatalf("TestP functions %v\npRows %v (want the same 20)", got, want)
+	if !slices.Equal(got, want) || len(pRows) != 21 {
+		t.Fatalf("TestP functions %v\npRows %v (want the same 21)", got, want)
 	}
 	for k := range blockItems {
 		row, _, _ := strings.Cut(k, "/")
@@ -451,8 +508,8 @@ func TestSummaryMapping(t *testing.T) {
 	if !strings.Contains(out.String(), "BLOCK NOT RUN") {
 		t.Errorf("the BLOCK NOT RUN line is missing:\n%s", out.String())
 	}
-	// The listed-untested section: after the rows, exactly the two items, never in summary.tsv.
-	sec := "Listed untested (never a pass, not an outcome):\nUNTESTED " + nic + ": tok-p07u\nUNTESTED " + stop + ": tok-p12u\nPASS "
+	// The listed-untested section: after the rows (the summary leads with its counts), exactly the two items, never in summary.tsv.
+	sec := "Listed untested (never a pass, not an outcome):\nUNTESTED " + nic + ": tok-p07u\nUNTESTED " + stop + ": tok-p12u\n"
 	if i, j := strings.Index(out.String(), sec), strings.Index(out.String(), p22+"\t"); i < 0 || i < j {
 		t.Errorf("the listed-untested section is missing, wrong or before the rows:\n%s", out.String())
 	}
@@ -510,12 +567,14 @@ func TestRunSh(t *testing.T) {
 if [ -n "$WARDYN_MACVM_SUMMARIZE" ]; then exec "$REAL" -test.run '^$'; fi
 while [ $# -gt 0 ]; do
   case "$1" in
-    -test.list) [ "$2" = "^TestP" ] && printf 'TestP19_TeardownHygiene\nTestP04_WarmStartAndIdentity\nTestP08_Throughput\nTestP13_RunnerRestart\n'; exit 0 ;;
+    -test.list) [ "$2" = "^TestP" ] && printf 'TestP19_TeardownHygiene\nTestP04_WarmStartAndIdentity\nTestP08_Throughput\nTestP13_RunnerRestart\nTestP23_DesktopObserve\n'; exit 0 ;;
     -test.run) name=$(printf %s "$2" | tr -d '^$'); shift ;;
+    -test.timeout) limit=$2; shift ;;
   esac
   shift
 done
 echo "$name" >> "$ORDER"
+echo "$name $limit" >> "$ORDER.timeouts"
 echo "=== RUN   $name"
 case "$name" in
   TestP08_Throughput) echo "    x.go:1: LIMIT: slow"; echo "--- FAIL: $name (0.00s)"; echo FAIL; exit 1 ;;
@@ -534,14 +593,18 @@ echo "--- PASS: $name (0.00s)"; echo PASS
 	if err := os.WriteFile(runShFile, runShSrc, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	runSh := func(live string, args ...string) (int, string) {
+	runShEnv := func(live string, extra []string, args ...string) (int, string) {
+		_ = os.Remove(filepath.Join(dir, "order"))
+		_ = os.Remove(filepath.Join(dir, "order.timeouts"))
 		c := exec.Command("bash", append([]string{runShFile, fake}, args...)...)
-		// An inherited WARDYN_MACVM_SUMMARIZE must not turn the test runs into summaries.
+		// An inherited WARDYN_MACVM_SUMMARIZE (or stop time) must not turn the test runs into summaries.
 		c.Env = append(os.Environ(), "REAL="+real, "ORDER="+filepath.Join(dir, "order"), "WARDYN_MACVM_LIVE="+live,
-			"WARDYN_MACVM_SUMMARIZE="+filepath.Join(dir, "inherited"))
+			"WARDYN_MACVM_SUMMARIZE="+filepath.Join(dir, "inherited"), "WARDYN_MACVM_STOP_AT=", "WARDYN_MACVM_P19_RESERVE=", "WARDYN_MACVM_TIMEOUT=")
+		c.Env = append(c.Env, extra...)
 		b, _ := c.CombinedOutput()
 		return c.ProcessState.ExitCode(), string(b)
 	}
+	runSh := func(live string, args ...string) (int, string) { return runShEnv(live, nil, args...) }
 	if code, out := runSh("", filepath.Join(dir, "a")); code != 2 || !strings.Contains(out, "WARDYN_MACVM_LIVE is not 1") {
 		t.Errorf("run.sh without WARDYN_MACVM_LIVE: exit %d, want 2 with the reason:\n%s", code, out)
 	}
@@ -567,20 +630,177 @@ echo "--- PASS: $name (0.00s)"; echo PASS
 		t.Fatalf("run.sh exited %d, want 1 (FAILs, no BLOCK):\n%s", code, out)
 	}
 	order, _ := os.ReadFile(filepath.Join(dir, "order"))
-	if lines := strings.Fields(string(order)); len(lines) != 4 || lines[3] != "TestP19_TeardownHygiene" {
-		t.Errorf("run order %v, want the 4 listed with P19 last", lines)
+	if lines := strings.Fields(string(order)); len(lines) != 5 || lines[0] != "TestP23_DesktopObserve" || lines[4] != "TestP19_TeardownHygiene" {
+		t.Errorf("run order %v, want the 5 listed with the security row P23 first and P19 last", lines)
 	}
 	if b, _ := os.ReadFile(filepath.Join(c, "TestP13_RunnerRestart.exit")); strings.TrimSpace(string(b)) != "3" {
 		t.Errorf("TestP13's .exit is %q, want its own status 3", b)
 	}
 	rows := readTSV(t, filepath.Join(c, "summary.tsv"))
-	if len(rows) != 20 || rows["TestP04_WarmStartAndIdentity"][0] != "PASS" || rows["TestP08_Throughput"][0] != "FAIL" ||
+	if len(rows) != len(pRows) || rows["TestP04_WarmStartAndIdentity"][0] != "PASS" || rows["TestP08_Throughput"][0] != "FAIL" ||
 		rows["TestP13_RunnerRestart"][0] != "FAIL" || !strings.Contains(rows["TestP13_RunnerRestart"][1], "exit 3") ||
 		rows["TestP19_TeardownHygiene"][0] != "PASS" || rows["TestP05_AgentSession"][0] != "NOT_RUN" {
 		t.Errorf("summary rows %v", rows)
 	}
-	if !strings.Contains(out, "PASS 2 FAIL 2 BLOCK 0 NOT_RUN 16 of 20 P-rows") {
+	if !strings.Contains(out, "PASS 3 FAIL 2 BLOCK 0 NOT_RUN 16 of 21 P-rows") {
 		t.Errorf("run.sh output lacks the counts:\n%s", out)
+	}
+	// P05 and the other security rows did not run, so a FAIL run still reads incomplete.
+	if r, _ := os.ReadFile(filepath.Join(c, "result.txt")); !strings.Contains(out, "\nresult: incomplete\n") || strings.TrimSpace(string(r)) != "result: incomplete" {
+		t.Errorf("run.sh output lacks result: incomplete (result.txt %q):\n%s", r, out)
+	}
+	if !strings.HasPrefix(out[strings.Index(out, "PASS "):], "PASS 3 FAIL 2") || strings.Index(out, "BLOCK NOT RUN") > strings.Index(out, "row\toutcome") {
+		t.Errorf("the summary does not lead with its counts and the BLOCK NOT RUN line:\n%s", out)
+	}
+	if !strings.Contains(out, "budgets: WARDYN_MACVM_TIMEOUT=5h WARDYN_MACVM_CLOCK_FOR=1h0m0s") {
+		t.Errorf("the summary does not name its budgets:\n%s", out)
+	}
+	if s := readTSV(t, filepath.Join(c, "summary.tsv")); len(s["TestP04_WarmStartAndIdentity"]) != 3 {
+		t.Errorf("summary.tsv rows %v lack the seconds column", s["TestP04_WarmStartAndIdentity"])
+	}
+
+	// A stop time that has passed, or is not RFC 3339 in UTC, runs nothing.
+	past := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
+	for name, c := range map[string]struct{ stop, want string }{
+		"passed": {past, "has passed"}, "offset": {"2026-11-02T16:03:00+00:00", "must be like"}, "junk": {"soon", "must be like"},
+	} {
+		code, out := runShEnv("1", []string{"WARDYN_MACVM_STOP_AT=" + c.stop}, filepath.Join(dir, "stop-"+name))
+		if _, err := os.Stat(filepath.Join(dir, "order")); code != 2 || err == nil || !strings.Contains(out, c.want) {
+			t.Errorf("stop time %s: exit %d, want 2 with %q and no test run (order file err %v):\n%s", name, code, c.want, err, out)
+		}
+	}
+	if code, out := runShEnv("1", []string{"WARDYN_MACVM_TIMEOUT=soon"}, filepath.Join(dir, "badtimeout")); code != 2 || !strings.Contains(out, "WARDYN_MACVM_TIMEOUT") {
+		t.Errorf("a bad timeout: exit %d, want 2 with the reason:\n%s", code, out)
+	}
+
+	// 30 s left and the 10 minute P19 reserve: no other test starts, P19 starts and keeps its full timeout (the
+	// stop time decides only between rows), and the rows not started are NOT_RUN "stopped: out of time". A
+	// security row not started makes the run incomplete (4).
+	soon := time.Now().UTC().Add(30 * time.Second).Format(time.RFC3339)
+	d := filepath.Join(dir, "d")
+	code, out = runShEnv("1", []string{"WARDYN_MACVM_STOP_AT=" + soon}, d)
+	order, _ = os.ReadFile(filepath.Join(dir, "order.timeouts"))
+	if f := strings.Fields(string(order)); len(f) != 2 || f[0] != "TestP19_TeardownHygiene" || f[1] != "18000s" {
+		t.Errorf("with 30 s left and the reserve held for P19, tests run: %v, want only P19 with its 5h timeout", f)
+	}
+	rows = readTSV(t, filepath.Join(d, "summary.tsv"))
+	if p := rows["TestP23_DesktopObserve"]; len(p) < 2 || p[0] != "NOT_RUN" || p[1] != "stopped: out of time" || rows["TestP19_TeardownHygiene"][0] != "PASS" {
+		t.Errorf("rows %v: want P23 NOT_RUN stopped and P19 PASS", rows)
+	}
+	if code != 4 || !strings.Contains(out, "\nresult: incomplete\n") {
+		t.Errorf("a security row not started: exit %d, want 4 and result: incomplete\n%s", code, out)
+	}
+
+	// An hour left, no reserve: every test starts.
+	hour := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	runShEnv("1", []string{"WARDYN_MACVM_STOP_AT=" + hour, "WARDYN_MACVM_P19_RESERVE=1"}, filepath.Join(dir, "e"))
+	if order, _ = os.ReadFile(filepath.Join(dir, "order")); len(strings.Fields(string(order))) != 5 {
+		t.Errorf("with an hour left every test starts, ran %q", order)
+	}
+}
+
+// passRow writes a passing row, and exitCases pins the summary's status for each shape of run.
+func passRow(t *testing.T, dir, row string) {
+	t.Helper()
+	writeEvents(t, dir, row, 0, event{Action: "run", Test: row}, event{Action: "pass", Test: row})
+}
+
+// TestSummaryExitCodes pins the shared contract: 0 PASS or NOT_RUN on non-security rows only, 1 a FAIL,
+// 2 a BLOCK, 4 incomplete (no PASS, or a security row NOT_RUN or not started); and the result line.
+func TestSummaryExitCodes(t *testing.T) {
+	var security, other []string
+	for _, r := range pRows {
+		if hasBlock(r) {
+			security = append(security, r)
+		} else {
+			other = append(other, r)
+		}
+	}
+	for _, r := range []string{"TestP23_DesktopObserve"} {
+		if !slices.Contains(security, r) {
+			t.Fatalf("%s is not a security row: it must be in blockItems", r)
+		}
+	}
+	touch := func(dir, name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// secure makes every security row PASS except the ones named.
+	secure := func(dir string, except ...string) {
+		t.Helper()
+		for _, r := range security {
+			if !slices.Contains(except, r) {
+				passRow(t, dir, r)
+			}
+		}
+	}
+	p23, p04, p08 := "TestP23_DesktopObserve", "TestP04_WarmStartAndIdentity", "TestP08_Throughput"
+	for name, c := range map[string]struct {
+		build  func(dir string)
+		code   int
+		result string
+		reason string // the reason of p23 in summary.tsv, when it is checked
+	}{
+		"every row passes": {func(d string) {
+			secure(d)
+			for _, r := range other {
+				passRow(t, d, r)
+			}
+		}, 0, "complete", ""},
+		"non-security rows not run, security rows pass": {func(d string) { secure(d) }, 0, "complete", ""},
+		"a non-security row stopped":                    {func(d string) { secure(d); touch(d, p04+".stopped", "x") }, 0, "complete", ""},
+		"a security row with no output":                 {func(d string) { secure(d, p23) }, 4, "incomplete", "no output: not run"},
+		"a security row stopped":                        {func(d string) { secure(d, p23); touch(d, p23+".stopped", "x") }, 4, "incomplete", "stopped: out of time"},
+		"a FAIL beside a security row not run": {func(d string) {
+			secure(d, p23)
+			writeEvents(t, d, p08, 1, event{Action: "run", Test: p08}, event{Action: "fail", Test: p08})
+		}, 1, "incomplete", ""},
+		"a FAIL with every security row run": {func(d string) {
+			secure(d)
+			writeEvents(t, d, p08, 1, event{Action: "run", Test: p08}, event{Action: "fail", Test: p08})
+		}, 1, "complete", ""},
+		"a BLOCK": {func(d string) {
+			secure(d, p23)
+			writeEvents(t, d, p23, 1, event{Action: "run", Test: p23}, event{Action: "fail", Test: p23})
+		}, 2, "complete", "x"},
+		"nothing ran": {func(d string) {}, 4, "incomplete", "no output: not run"},
+		"no row PASSed, a non-security row failed to start": {func(d string) { touch(d, p04+".stopped", "x") }, 4, "incomplete", ""},
+	} {
+		d := t.TempDir()
+		c.build(d)
+		var out strings.Builder
+		if code := runSummary(d, &out); code != c.code {
+			t.Errorf("%s: status %d, want %d\n%s", name, code, c.code, out.String())
+		}
+		if !strings.Contains(out.String(), "\nresult: "+c.result+"\n") {
+			t.Errorf("%s: output lacks result: %s\n%s", name, c.result, out.String())
+		}
+		if b, _ := os.ReadFile(filepath.Join(d, "result.txt")); strings.TrimSpace(string(b)) != "result: "+c.result {
+			t.Errorf("%s: result.txt %q, want result: %s", name, b, c.result)
+		}
+		if c.reason != "" && c.reason != "x" {
+			if row := readTSV(t, filepath.Join(d, "summary.tsv"))[p23]; row[0] != "NOT_RUN" || row[1] != c.reason {
+				t.Errorf("%s: P23 %v, want NOT_RUN %q", name, row, c.reason)
+			}
+		}
+	}
+	// The seconds column: the row's .secs, 0 when the row never started.
+	d := t.TempDir()
+	passRow(t, d, p04)
+	touch(d, p04+".secs", "7\n")
+	var out strings.Builder
+	runSummary(d, &out)
+	rows := readTSV(t, filepath.Join(d, "summary.tsv"))
+	if r := rows[p04]; len(r) != 3 || r[2] != "7" {
+		t.Errorf("P04 row %v, want 7 seconds last", r)
+	}
+	if r := rows[p08]; len(r) != 3 || r[2] != "0" {
+		t.Errorf("P08 row %v, want 0 seconds (never started)", r)
+	}
+	if h := "row\toutcome\treason\tseconds\n"; !strings.Contains(out.String(), "\n"+h) {
+		t.Errorf("summary lacks the header %q:\n%s", h, out.String())
 	}
 }
 
