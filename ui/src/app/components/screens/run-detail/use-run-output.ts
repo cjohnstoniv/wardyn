@@ -38,6 +38,8 @@ export function useRunOutput(runId: string, live: boolean, state: string, endedA
   const [out, setOut] = React.useState<RunOutput | null>(null);
   const [refusal, setRefusal] = React.useState<Refusal | null>(null);
   const [loaded, setLoaded] = React.useState(false);
+  // The `live` the answer was read under: a read from while the run lived is not the ended run's answer.
+  const [readLive, setReadLive] = React.useState(live);
   const [attempt, setAttempt] = React.useState(0);
   const [saving, setSaving] = React.useState(false);
   const [retrying, setRetrying] = React.useState(false);
@@ -61,6 +63,7 @@ export function useRunOutput(runId: string, live: boolean, state: string, endedA
         hadRead.current = true;
         failures = 0;
         setOut(o);
+        setReadLive(live);
         setRefusal(null);
         setSaving(false);
         setRetrying(false);
@@ -77,6 +80,7 @@ export function useRunOutput(runId: string, live: boolean, state: string, endedA
           return;
         }
         setOut(null);
+        setReadLive(live);
         setRefusal(r);
         setRetrying(false);
         setLoaded(true);
@@ -102,5 +106,5 @@ export function useRunOutput(runId: string, live: boolean, state: string, endedA
     setRetrying(true);
     setAttempt((n) => n + 1);
   };
-  return { out, refusal, loaded, saving, retrying, retry };
+  return { out, refusal, loaded, readLive, saving, retrying, retry };
 }

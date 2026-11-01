@@ -64,10 +64,16 @@ export function TerminalPane({
   // A run with no recording to replay shows the bytes the Output tab reads: a macOS VM run while it lives (a
   // macOS VM is not recorded), any other non-interactive run once the recording read found none. A read that
   // fails or is refused leaves the notices below as they were.
-  const comingUp = run.state === "PENDING" || run.state === "STARTING" || (run.state === "QUEUED" && !!run.queue);
-  const wantsKept = !run.interactive && (terminal ? recState === "ready" && !recording : isMacOSVM(run) && !comingUp);
+  const comingUp = run.state === "PENDING" || run.state === "STARTING" || run.state === "QUEUED";
+  // A macOS VM run is never recorded, so its recording read cannot change the answer: the pane stays on Output
+  // while that read is still out, rather than flashing the Recording frame as the run ends.
+  const recordingPending = recState === "idle" || recState === "loading";
+  const wantsKept =
+    !run.interactive && (terminal ? (recState === "ready" && !recording) || (isMacOSVM(run) && recordingPending) : isMacOSVM(run) && !comingUp);
   const kept = useRunOutput(run.id, !terminal, run.state, run.ended_at, wantsKept);
-  const keptOut = wantsKept && kept.out?.source === "stdout" ? kept.out : null;
+  // An answer read while the run lived is not shown once it has ended; the re-read replaces it.
+  const keptFresh = kept.loaded && kept.readLive === !terminal;
+  const keptOut = wantsKept && keptFresh && kept.out?.source === "stdout" ? kept.out : null;
 
   // 0.9 (M-RN-3 RS6): a live run on a computer that is offline cannot be reached, so the terminal and the
   // attach controls give way to a sentence naming it. The captured replay is still offered; it is a file the
@@ -95,7 +101,7 @@ export function TerminalPane({
     return <AttachTerminal fill runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} policy={run.policy} />;
   }
 
-  if (wantsKept && (keptOut || !kept.loaded)) {
+  if (wantsKept && (keptOut || !keptFresh)) {
     return (
       <PaneFrame title="Output" chip={execMode ? RUN_COCKPIT.execNoHarness : RUN_COCKPIT.autonomous}>
         {keptOut ? <KeptOutput out={keptOut} onGoOutput={onGoOutput} /> : <div aria-busy="true" className="min-h-0 flex-1" />}

@@ -250,6 +250,41 @@ describe("TerminalPane — a run with no recording shows its kept output", () =>
     expect(getOutput).not.toHaveBeenCalled();
   });
 
+  // A live macOS VM run ends before its recording read answers: the pane stays on Output and never shows the
+  // live read as the final one.
+  it("a macOS VM run that ends keeps the Output pane through the recording read and drops the live read", async () => {
+    getOutput.mockResolvedValueOnce(kept({ complete: false, captured_at: undefined, output: "live line" }));
+    const ui = (state: string, terminal: boolean, recState: "idle" | "loading" | "ready") => (
+      <OperatorProvider operator principal="me">
+        <TerminalPane run={mac({ state })} terminal={terminal} recording={null} recState={recState} recordingDisabled={false} onGoRecording={vi.fn()} onGoOutput={vi.fn()} execMode={false} />
+      </OperatorProvider>
+    );
+    const { rerender } = render(ui("RUNNING", false, "idle"));
+    await act(async () => {});
+    expect(screen.getByTestId("run-pane-output")).toHaveTextContent("live line");
+
+    let finish!: (o: RunOutput) => void;
+    getOutput.mockReturnValueOnce(new Promise<RunOutput>((r) => (finish = r)));
+    for (const recState of ["idle", "loading"] as const) {
+      rerender(ui("COMPLETED", true, recState));
+      await act(async () => {});
+      expect(screen.queryByText("Recording", { selector: ".label-eyebrow" })).toBeNull();
+      expect(screen.queryByText(RUN_COCKPIT.recordingLoading)).toBeNull();
+      expect(screen.getByText("Output", { selector: ".label-eyebrow" })).toBeInTheDocument();
+      // The read from while the run lived is not shown as the ended run's output.
+      expect(screen.queryByTestId("run-pane-output")).toBeNull();
+    }
+    rerender(ui("COMPLETED", true, "ready"));
+    await act(async () => finish(kept({ output: "final line" })));
+    expect(screen.getByTestId("run-pane-output")).toHaveTextContent("final line");
+    expect(screen.getByText(RUN_OUTPUT.final)).toBeInTheDocument();
+  });
+
+  it("a QUEUED macOS VM run reads nothing, with or without a queue on the wire", async () => {
+    await mount(mac({ state: "QUEUED" }), false, "idle");
+    expect(getOutput).not.toHaveBeenCalled();
+  });
+
   it("a macOS VM run still starting shows its startup steps, not output", async () => {
     await mount(mac({ state: "STARTING" }), false, "idle");
     expect(getOutput).not.toHaveBeenCalled();
