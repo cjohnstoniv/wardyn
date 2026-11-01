@@ -6,7 +6,7 @@
 // The barrier illustration. Imported as modules so Vite emits hashed files: only
 // the 128 and 256 px art is shipped, because a smaller file falls under Vite's
 // inline limit and would become a data: URI, which the CSP blocks. Below 56 px
-// use BarrierMark's SVG instead.
+// use TierIllustration (an SVG) instead.
 import fence128 from "./barrier-art/barrier-fence-128.png";
 import fence256 from "./barrier-art/barrier-fence-256.png";
 import wall128 from "./barrier-art/barrier-wall-128.png";
