@@ -19,8 +19,22 @@ import (
 
 	macosguest "github.com/cjohnstoniv/wardyn/deploy/macos-guest"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/vmnet/prepproxy"
 )
+
+// startMacVMNet starts the guest's relay as startVMNet does, but serving its frames on stdin and stdout
+// (-stdio) instead of a socket, and answers the attach connection's descriptor. It attaches before the
+// start, so nothing is buffered on the connection that the helper would miss.
+func (d *Driver) startMacVMNet(ctx context.Context, spec runner.SandboxSpec, proxyIP string) (*os.File, error) {
+	labels := d.labels(spec.RunID, componentVMNet, spec.Labels)
+	labels[labelMachineKind] = string(types.MachineMacOSVM)
+	guestProxy, err := guestProxyAddr(spec.Env)
+	if err != nil {
+		return nil, err
+	}
+	return d.startMacRelay(ctx, spec.RunID, labels, proxyIP, guestProxy)
+}
 
 // componentMacPrep labels a macOS base job's stage-2 network, prep proxy and relay. It is none of the
 // components the orphan sweeps key on: a job is not a run, and the organisation's isOrphan would call its

@@ -597,19 +597,6 @@ func macDesktopOff(dir string) bool {
 	return err == nil
 }
 
-// startMacVMNet starts the guest's relay as startVMNet does, but serving its frames on stdin and stdout
-// (-stdio) instead of a socket, and answers the attach connection's descriptor. It attaches before the
-// start, so nothing is buffered on the connection that the helper would miss.
-func (d *Driver) startMacVMNet(ctx context.Context, spec runner.SandboxSpec, proxyIP string) (*os.File, error) {
-	labels := d.labels(spec.RunID, componentVMNet, spec.Labels)
-	labels[labelMachineKind] = string(types.MachineMacOSVM)
-	guestProxy, err := guestProxyAddr(spec.Env)
-	if err != nil {
-		return nil, err
-	}
-	return d.startMacRelay(ctx, spec.RunID, labels, proxyIP, guestProxy)
-}
-
 // startMacRelay is startMacVMNet's relay on id's internal network, -proxy at proxyIP: a run's, or a
 // base job's stage-2 one (StartMacPrepNet). guestProxy is the proxy as the guest's variables name it.
 func (d *Driver) startMacRelay(ctx context.Context, id uuid.UUID, labels map[string]string, proxyIP, guestProxy string) (*os.File, error) {
