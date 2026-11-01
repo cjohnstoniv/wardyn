@@ -110,6 +110,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A disk drive is found in the guest by its size, apart from the boot disk. A macOS VM run attaches one disk drive, and
   a kept work folder counts as one: a person's disk drives all have one size, so a second is refused when the run
   starts. Built and unit-tested; not yet run on a real Mac.
+- A disk drive is formatted Mac OS Extended (journaled), not APFS: an APFS volume made in one macOS VM run was not
+  mounted by the next run's VM, so the drive kept nothing between runs. Built and unit-tested; not yet run on a real
+  Mac.
 - A macOS VM run is also refused at create and Review when a second harness has its own starting prompt. It is refused
   too when a tool rule, tool approvals, autonomy level L1 or the policy's inner walls would hold a tool call for
   approval. The launcher still refuses the same shapes as a backstop. Built and unit-tested; not yet run on a real Mac.

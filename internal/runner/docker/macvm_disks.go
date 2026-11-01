@@ -85,7 +85,7 @@ func (d *Driver) macDiskDrives(drives []types.DriveMount) ([]macvm.Disk, []guest
 	return disks, guest, nil
 }
 
-// macDiskLabel is the name of a disk drive's APFS volume: the same on every run, and different for every
+// macDiskLabel is the name of a disk drive's volume: the same on every run, and different for every
 // drive, since macOS mounts a volume at /Volumes/<name> before the guest agent moves it.
 func macDiskLabel(driveID string) string { return "Wardyn-" + driveID[:8] }
 

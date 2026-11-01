@@ -91,7 +91,7 @@ func TestMacDisksFormatsANewDiskThenMountsItAtItsTarget(t *testing.T) {
 	want := [][]string{
 		{"/usr/sbin/ioreg", "-r", "-c", "IOBlockStorageDevice", "-l", "-w", "0"},
 		{"/usr/sbin/diskutil", "info", "-plist", "/"},
-		{"/usr/sbin/diskutil", "eraseDisk", "APFS", "Wardyn-1a2b3c4d", "GPT", "disk0"},
+		{"/usr/sbin/diskutil", "eraseDisk", "JHFS+", "Wardyn-1a2b3c4d", "GPT", "disk0"},
 		{"/usr/sbin/diskutil", "info", "/Volumes/Wardyn-1a2b3c4d"},
 		{"/usr/sbin/diskutil", "unmount", "disk7s1"},
 		{"/usr/sbin/diskutil", "mount", "-mountOptions", "nosuid,nodev", "-mountPoint", target, "disk7s1"},

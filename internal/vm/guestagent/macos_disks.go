@@ -51,7 +51,7 @@ var (
 const macDiskVolumeReads = 10
 
 // Attach mounts disk d at its target. A disk that holds nothing yet (a new drive's first run) is
-// given an APFS volume named d.Label first; a read-only one never is. The volume macOS mounted under
+// given a Mac OS Extended volume named d.Label first; a read-only one never is. The volume macOS mounted under
 // /Volumes is unmounted and mounted again at the target, nosuid and nodev, read-only when asked, with
 // its root the agent's when writable.
 func (m MacDisks) Attach(ctx context.Context, d Disk) error {
@@ -73,7 +73,7 @@ func (m MacDisks) Attach(ctx context.Context, d Disk) error {
 		if d.ReadOnly {
 			return fmt.Errorf("disk %s has no volume yet, and a read-only drive is never formatted", d.ID)
 		}
-		if _, err := m.Run.Run(ctx, "/usr/sbin/diskutil", "eraseDisk", "APFS", d.Label, "GPT", dev); err != nil {
+		if _, err := m.Run.Run(ctx, "/usr/sbin/diskutil", "eraseDisk", "JHFS+", d.Label, "GPT", dev); err != nil {
 			return fmt.Errorf("disk %s: format: %w", d.ID, err)
 		}
 	}

@@ -170,7 +170,7 @@ type Mount struct {
 }
 
 // Disk is one disk drive of a macOS run: the guest's block device that is not the boot disk and is
-// SizeBytes long (ID names it in errors), given an APFS volume named Label when it holds none yet (its
+// SizeBytes long (ID names it in errors), given a Mac OS Extended volume named Label when it holds none yet (its
 // first attach), and mounted at Target.
 type Disk struct {
 	ID        string `json:"id"`
