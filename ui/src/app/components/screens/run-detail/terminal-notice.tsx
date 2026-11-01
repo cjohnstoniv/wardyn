@@ -24,9 +24,12 @@ import { useOperator, useOperatorResolved, usePrincipal } from "../../wardyn/ope
 import { mayEnterRunOrUnknown, runEntryRefusalLine } from "../../../lib/run-entry";
 import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
 import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
+import { isMacOSVM } from "../../../lib/types/machine-kind";
 import type { StartupLastStep } from "../run-status-detail";
 import { StartupProgress } from "./startup-progress";
 import { QueuedWait } from "./queued-wait";
+import { KeptOutput } from "./output-pane";
+import { useRunOutput } from "./use-run-output";
 
 export function TerminalPane({
   run,
@@ -35,6 +38,7 @@ export function TerminalPane({
   recState,
   recordingDisabled,
   onGoRecording,
+  onGoOutput,
   execMode,
 }: {
   run: RunDetail;
@@ -43,6 +47,7 @@ export function TerminalPane({
   recState: "idle" | "loading" | "error" | "ready";
   recordingDisabled: boolean;
   onGoRecording: () => void;
+  onGoOutput: () => void;
   // run.create's task_mode said "exec" — a shell command ran, no agent harness.
   execMode: boolean;
 }) {
@@ -55,6 +60,14 @@ export function TerminalPane({
   // (#1476: the run's person, or an admin on a run no person owns).
   const canAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
   const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
+
+  // A run with no recording to replay shows the bytes the Output tab reads: a macOS VM run while it lives (a
+  // macOS VM is not recorded), any other non-interactive run once the recording read found none. A read that
+  // fails or is refused leaves the notices below as they were.
+  const comingUp = run.state === "PENDING" || run.state === "STARTING" || (run.state === "QUEUED" && !!run.queue);
+  const wantsKept = !run.interactive && (terminal ? recState === "ready" && !recording : isMacOSVM(run) && !comingUp);
+  const kept = useRunOutput(run.id, !terminal, run.state, run.ended_at, wantsKept);
+  const keptOut = wantsKept && kept.out?.source === "stdout" ? kept.out : null;
 
   // 0.9 (M-RN-3 RS6): a live run on a computer that is offline cannot be reached, so the terminal and the
   // attach controls give way to a sentence naming it. The captured replay is still offered; it is a file the
@@ -80,6 +93,14 @@ export function TerminalPane({
     // fill: the pane owns the height. h-[70vh] was a guess that predates this
     // layout and stays the default for every other mount site.
     return <AttachTerminal fill runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} policy={run.policy} />;
+  }
+
+  if (wantsKept && (keptOut || !kept.loaded)) {
+    return (
+      <PaneFrame title="Output" chip={execMode ? RUN_COCKPIT.execNoHarness : RUN_COCKPIT.autonomous}>
+        {keptOut ? <KeptOutput out={keptOut} onGoOutput={onGoOutput} /> : <div aria-busy="true" className="min-h-0 flex-1" />}
+      </PaneFrame>
+    );
   }
 
   // Finished run: the pane becomes the replay surface in place rather than a
