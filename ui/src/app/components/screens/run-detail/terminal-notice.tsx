@@ -55,6 +55,8 @@ export function TerminalPane({
   // (#1476: the run's person, or an admin on a run no person owns).
   const canAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
   const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
+  // The Watch link leads to this run's recording, so it needs one: has_recording is on every single-run read.
+  const watchable = !recordingDisabled && run.has_recording !== false;
 
   // 0.9 (M-RN-3 RS6): a live run on a computer that is offline cannot be reached, so the terminal and the
   // attach controls give way to a sentence naming it. The captured replay is still offered; it is a file the
@@ -65,7 +67,7 @@ export function TerminalPane({
         <PaneNotice
           text={LOCAL_RUN.TERMINAL_OFFLINE(runnerLabel(run))}
           action={
-            recordingDisabled ? undefined : (
+            !watchable ? undefined : (
               <button onClick={onGoRecording} className="text-xs font-medium text-info hover:underline">
                 Watch the captured session →
               </button>
@@ -157,7 +159,7 @@ export function TerminalPane({
           {lastStep === null && (
             <div className="flex flex-col items-center gap-2 pt-2 text-center">
               <p className="text-sm text-muted-foreground">{runEntryRefusalLine(run)}</p>
-              {!recordingDisabled && (
+              {watchable && (
                 <button onClick={onGoRecording} className="text-xs font-medium text-info hover:underline">
                   Watch the captured session →
                 </button>
@@ -191,7 +193,7 @@ export function TerminalPane({
         <PaneNotice
           text={run.interactive ? runEntryRefusalLine(run) : RUN_MODE.autonomous.blurb}
           action={
-            recordingDisabled ? undefined : (
+            !watchable ? undefined : (
               <button onClick={onGoRecording} className="text-xs font-medium text-info hover:underline">
                 Watch the captured session →
               </button>

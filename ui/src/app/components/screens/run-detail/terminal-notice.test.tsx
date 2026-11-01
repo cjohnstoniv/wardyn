@@ -8,7 +8,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { RUN_WAIT, RUN_WAIT_REASON } from "../../../lib/runner-pool-refusals";
 import { makeRun } from "../../../../test/factories";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { RUN_COCKPIT } from "../../wardyn/copy";
+import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
 import { TerminalPane } from "./terminal-notice";
 
 vi.mock("../../attach-terminal", () => ({ AttachTerminal: () => null }));
@@ -93,6 +93,12 @@ describe("TerminalPane — a run on an offline computer", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
+  it("offers no replay link on a run with no recording", () => {
+    renderPane(live({ has_recording: false }));
+    expect(screen.getByText(/laptop-7 is offline/)).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
   it("an online computer, an unknown one, and a remote run keep their terminal", () => {
     for (const over of [{ runner_online: true }, { runner_online: undefined }, { placement: "remote" }]) {
       const { unmount } = render(
@@ -103,6 +109,37 @@ describe("TerminalPane — a run on an offline computer", () => {
       expect(screen.queryByText(/can't be reached/)).toBeNull();
       unmount();
     }
+  });
+});
+
+// #3922: on an unrecorded run the link opened an empty Recording tab.
+describe("TerminalPane — the Watch link needs a recording", () => {
+  const paneFor = (over: Record<string, unknown>) =>
+    render(
+      <OperatorProvider operator principal="me">
+        <TerminalPane run={makeRun({ id: "run-1", created_by: "me", interactive: false, ...over })} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
+      </OperatorProvider>,
+    );
+
+  it("a task run without a recording has no link", () => {
+    paneFor({ state: "WAITING_FOR_CONFIRMATION", has_recording: false });
+    expect(screen.queryByText(RUN_MODE.autonomous.blurb)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Watch the captured session/ })).toBeNull();
+  });
+
+  it("a STARTING run the person cannot enter, without a recording, has no link", () => {
+    render(
+      <OperatorProvider operator={false} principal="me">
+        <TerminalPane run={makeRun({ id: "run-1", state: "STARTING", created_by: "priya", interactive: true, has_recording: false })} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(/Only priya/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Watch the captured session/ })).toBeNull();
+  });
+
+  it("a run with a recording keeps it", () => {
+    paneFor({ state: "WAITING_FOR_CONFIRMATION", has_recording: true });
+    expect(screen.getByRole("button", { name: /Watch the captured session/ })).toBeInTheDocument();
   });
 });
 

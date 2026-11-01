@@ -930,11 +930,11 @@ func TestMacOSVMStatusSelftestWithheld(t *testing.T) {
 	}
 }
 
-// A view-only desktop names how to get control, and stays "view only" up front.
+// A view-only desktop says what macOS 26 does, never that setup was wrong, and stays "view only" up front.
 func TestDesktopModeObserveNamesTheFix(t *testing.T) {
 	got := desktopMode("observe")
-	if !strings.HasPrefix(got, "view only") || !strings.Contains(got, "macos-vm edit-base") {
-		t.Fatalf("desktopMode(observe) = %q; want view only, then the macos-vm edit-base that fixes it", got)
+	if !strings.HasPrefix(got, "view only") || !strings.Contains(got, "macos-vm edit-base") || !strings.Contains(got, "macOS 26") || strings.Contains(got, "not turned on") {
+		t.Fatalf("desktopMode(observe) = %q; want view only, macOS 26 named, the macos-vm edit-base step, and no \"not turned on\"", got)
 	}
 }
 

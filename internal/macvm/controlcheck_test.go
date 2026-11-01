@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
@@ -119,6 +120,13 @@ func TestControlCheckFallsBackToObserveOnlyForThePointer(t *testing.T) {
 	}
 	if !slices.ContainsFunc(f.ev.evs, func(ev macvm.PrepareEvent) bool { return ev.Detail == macvm.ObserveDesktopDetail }) {
 		t.Fatalf("no detail event names why the desktop is view only: %+v", f.ev.evs)
+	}
+}
+
+// The detail says what macOS does, and does not blame the person who set the base up (#3922).
+func TestObserveDetailDoesNotBlameSetup(t *testing.T) {
+	if !strings.Contains(macvm.ObserveDesktopDetail, "macOS 26") || strings.Contains(macvm.ObserveDesktopDetail, "not turned on") {
+		t.Fatalf("ObserveDesktopDetail = %q; want macOS 26 named, and no \"not turned on\"", macvm.ObserveDesktopDetail)
 	}
 }
 
