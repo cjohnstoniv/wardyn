@@ -45,6 +45,9 @@ Swapouts:                                     0.
 	psCPUSample = "  12.3\n   0.0\n 100.0\n   3.7\n"
 )
 
+// macOSResourcesPATHLine is the line the script fixes its tools' directories with.
+const macOSResourcesPATHLine = "export PATH=/usr/bin:/bin:/usr/sbin:/sbin\n"
+
 // runMacOSResourcesScript runs the script with stand-ins for the four macOS tools first on PATH. A
 // tool's output of "" makes it print nothing and fail, as a missing or broken tool would.
 func runMacOSResourcesScript(t *testing.T, vmStat, df, ps, memsize, ncpu string) map[string]string {
@@ -75,8 +78,12 @@ func runMacOSResourcesScript(t *testing.T, vmStat, df, ps, memsize, ncpu string)
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command("/bin/sh", "-c", MacOSResourcesScript, "wardyn-resources")
-	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// The script fixes its own PATH, so the stand-ins can only reach it through this test's edit of that line.
+	if strings.Count(MacOSResourcesScript, macOSResourcesPATHLine) != 1 {
+		t.Fatalf("script does not set PATH with exactly one %q", macOSResourcesPATHLine)
+	}
+	script := strings.Replace(MacOSResourcesScript, macOSResourcesPATHLine, "export PATH='"+dir+"':\"$PATH\"\n", 1)
+	cmd := exec.Command("/bin/sh", "-c", script, "wardyn-resources")
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("script: %v", err)
@@ -88,6 +95,30 @@ func runMacOSResourcesScript(t *testing.T, vmStat, df, ps, memsize, ncpu string)
 		}
 	}
 	return kv
+}
+
+// A tool planted earlier on the guest's PATH must not run: the console polls this script every few seconds.
+func TestMacOSResourcesScript_IgnoresTheCallersPATH(t *testing.T) {
+	if _, err := exec.LookPath("/bin/sh"); err != nil {
+		t.Skip("needs /bin/sh")
+	}
+	if strings.Contains(MacOSResourcesScript, "$PATH") {
+		t.Error("script reads the caller's PATH")
+	}
+	dir := t.TempDir()
+	ran := filepath.Join(dir, "ran")
+	for _, name := range []string{"vm_stat", "sysctl", "ps", "df", "awk"} {
+		body := "#!/bin/sh\necho " + name + " >> '" + ran + "'\n"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil { //nolint:gosec // a test stand-in must be executable
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("/bin/sh", "-c", MacOSResourcesScript, "wardyn-resources")
+	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	_ = cmd.Run() // its exit code says nothing here: most macOS tools are absent off a Mac
+	if got, err := os.ReadFile(ran); err == nil {
+		t.Errorf("planted tools ran: %q", got)
+	}
 }
 
 func TestMacOSResourcesScript_ReadsEveryMetric(t *testing.T) {

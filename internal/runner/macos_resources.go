@@ -16,11 +16,12 @@ package runner
 //   - disk_root_used_kb is df's Size - Available, not its Used: / is the sealed system snapshot, whose
 //     Used leaves out the data volume, while every APFS volume shares the container's free space.
 //
-// LC_ALL=C because ps prints %cpu with the locale's decimal separator. The tools' directories are
-// appended because a guest agent's PATH need not hold /usr/sbin, where sysctl lives.
+// LC_ALL=C because ps prints %cpu with the locale's decimal separator. PATH is fixed, the caller's
+// dropped: a tool planted earlier on it would otherwise run on every poll, and a guest agent's PATH
+// need not hold /usr/sbin, where sysctl lives.
 const MacOSResourcesScript = `
 export LC_ALL=C
-PATH="$PATH:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
 vm_stat 2>/dev/null | awk '
 /page size of/ {for(i=1;i<=NF;i++) if($i=="of") size=$(i+1)+0}
