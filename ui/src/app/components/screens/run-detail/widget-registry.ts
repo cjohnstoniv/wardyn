@@ -342,7 +342,7 @@ export function normalizeLayout(
   const seen = new Set<string>();
   const out: RunLayoutWidget[] = [];
   for (const w of layout) {
-    if (!isWidgetId(w.widget) || seen.has(w.widget)) continue;
+    if (!isWidgetId(w.widget) || seen.has(w.widget) || isServiceRemoved(w)) continue;
     seen.add(w.widget);
     out.push({ widget: w.widget, x: w.x, y: w.y, w: w.w, h: w.h });
   }
