@@ -112,6 +112,7 @@ intent:
 - A custom resource's workload restarts under the namespace binding that holds now. A binding deleted since, or one without authority, refuses it `workload_binding_inactive`: a `200` with that `launch.reason`, kept as `last_refusal`.
 - The daemon's 30-second sweep retries a launch whose claim lapsed, as the bound service under the same binding rule, at most once every 60 seconds. A refused launch waits for the resource's next report.
 - Deleting a workload removes the row, then ends its run with reason `workload_deleted`. The owner, the service identity's sponsor, a super admin or a `security_admin` may delete.
+- Every read of a workload carries `can_restart`: whether the caller may restart it by the rule above. The console hides Restart when it is `false`. `GET /workloads?run_id=<id>` lists only the workload whose current run that is, to a caller who may list it.
 - `GET /workloads/{name}/history[?owner=]` returns the workload's `workload.*` audit rows, newest first: `time`, `action` (`apply`, `launch`, `replace`, `launch_refused`, `restart` or `delete`), `generation`, `run_id`, `ended_run_id` and `reason`. The same callers read it as `GET /workloads/{name}`; a service identity's token does not. A name applied again after a delete shares the old history. The console's drawer lists it.
 
 ## Kubernetes: the WardynWorkload resource

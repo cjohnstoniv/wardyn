@@ -929,6 +929,112 @@ func TestPG_Workload_AdminRestartChecksTheSponsorSinceTheSpec(t *testing.T) {
 	}
 }
 
+// TestPG_Workload_ListByRunFindsTheWorkloadOfThatRun: GET /workloads?run_id= answers the one workload whose
+// current run that is, whatever else is listed, and only to a reader who could list it.
+func TestPG_Workload_ListByRunFindsTheWorkloadOfThatRun(t *testing.T) {
+	e := newSvcEnv(t)
+	pol := e.plainPolicy(t, "wl-pol")
+	var runs [2]uuid.UUID
+	for i, name := range []string{"web-a", "web-b"} {
+		runs[i] = launchedRun(t, decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/"+name, e.mem, workloadBody(pol, name, "")), http.StatusCreated))
+	}
+	names := func(c *http.Cookie, query string) []string {
+		t.Helper()
+		w := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/workloads"+query, c, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /workloads%s: %d %s, want 200", query, w.Code, w.Body.String())
+		}
+		var page []client.Workload
+		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		out := []string{}
+		for _, wl := range page {
+			out = append(out, wl.Name)
+		}
+		return out
+	}
+	if got := names(e.mem, "?run_id="+runs[1].String()); !slices.Equal(got, []string{"web-b"}) {
+		t.Errorf("owner by run = %v, want [web-b]", got)
+	}
+	if got := names(e.sec, "?run_id="+runs[0].String()); !slices.Equal(got, []string{"web-a"}) {
+		t.Errorf("security tier by run = %v, want [web-a]", got)
+	}
+	if got := names(e.other, "?run_id="+runs[0].String()); len(got) != 0 {
+		t.Errorf("another member by run = %v, want none", got)
+	}
+	if got := names(e.mem, "?run_id="+uuid.NewString()); len(got) != 0 {
+		t.Errorf("a run no workload has = %v, want none", got)
+	}
+	if w := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/workloads?run_id=nope", e.mem, ""); w.Code != http.StatusBadRequest || respReason(w) != reasonInvalidRunIDParam {
+		t.Errorf("run_id=nope: %d %s, want 400 %s", w.Code, w.Body.String(), reasonInvalidRunIDParam)
+	}
+}
+
+// TestPG_Workload_CanRestartFollowsTheRestartRule: every read of a workload says whether the caller may
+// restart it, by the rule POST /workloads/{name}/restart enforces: the owner, the service's sponsor and a
+// super admin may; a security_admin, who may read and stop it, may not.
+func TestPG_Workload_CanRestartFollowsTheRestartRule(t *testing.T) {
+	e := newSvcEnv(t)
+	e.mustCreate(t, svcName, svcSponsor)
+	tok := e.mustMint(t, e.sponsor, svcName)
+	pol := e.plainPolicy(t, "wl-pol")
+	decodeApply(t, e.as(t, tok.Token, http.MethodPut, "/api/v1/workloads/svc-web", workloadBody(pol, "t", "")), http.StatusCreated)
+	decodeApply(t, doSSO(t, e.h.srv, http.MethodPut, "/api/v1/workloads/mem-web", e.mem, workloadBody(pol, "t", "")), http.StatusCreated)
+
+	getOne := func(c *http.Cookie, name, owner string) bool {
+		t.Helper()
+		w := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/workloads/"+name+"?owner="+owner, c, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", name, w.Code, w.Body.String())
+		}
+		var wl client.Workload
+		if err := json.Unmarshal(w.Body.Bytes(), &wl); err != nil {
+			t.Fatal(err)
+		}
+		return wl.CanRestart
+	}
+	listed := func(c *http.Cookie) map[string]bool {
+		t.Helper()
+		w := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/workloads", c, "")
+		var page []client.Workload
+		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]bool{}
+		for _, wl := range page {
+			out[wl.Name] = wl.CanRestart
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		who         string
+		c           *http.Cookie
+		name, owner string
+		want        bool
+	}{
+		{"owner", e.mem, "mem-web", "mem", true},
+		{"sponsor", e.sponsor, "svc-web", svcPrin, true},
+		{"super admin on a person's", e.super, "mem-web", "mem", true},
+		{"super admin on a service's", e.super, "svc-web", svcPrin, true},
+		{"security_admin on a person's", e.sec, "mem-web", "mem", false},
+		{"security_admin on a service's", e.sec, "svc-web", svcPrin, false},
+	} {
+		if got := getOne(tc.c, tc.name, tc.owner); got != tc.want {
+			t.Errorf("%s: GET can_restart = %v, want %v", tc.who, got, tc.want)
+		}
+	}
+	if got := listed(e.sec); got["mem-web"] || got["svc-web"] || len(got) != 2 {
+		t.Errorf("security_admin list can_restart = %v, want both false", got)
+	}
+	if got := listed(e.super); !got["mem-web"] || !got["svc-web"] {
+		t.Errorf("super admin list can_restart = %v, want both true", got)
+	}
+	if got := listed(e.sponsor); !got["svc-web"] || len(got) != 1 {
+		t.Errorf("sponsor list can_restart = %v, want svc-web true", got)
+	}
+}
+
 // TestPG_Workload_SecurityAdminDeletesButCannotLaunch: a security_admin and a super admin both delete a
 // service's workload (the containment power), and the delete ends its run.
 func TestPG_Workload_SecurityAdminDeletesButCannotLaunch(t *testing.T) {

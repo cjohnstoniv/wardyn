@@ -12,6 +12,7 @@ const base = (over: Partial<Workload>): Workload => ({
   owner: "me",
   source: "api",
   intent: {},
+  can_restart: true,
   generation: 2,
   current_generation: 2,
   run_id: "7c41e0a9-0000-0000-0000-000000000000",

@@ -41,6 +41,8 @@ export interface Workload {
   /** The current run's state with its service health when it has one: `RUNNING` or `RUNNING/unhealthy`. */
   state?: string;
   last_refusal?: WorkloadRefusal;
+  /** Whether the caller who read this may restart it: the owner, the service's sponsor or a super admin. */
+  can_restart: boolean;
   created_at: string;
   updated_at: string;
 }

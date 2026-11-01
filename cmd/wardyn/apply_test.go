@@ -205,6 +205,33 @@ func TestApplyRefusesAFileBeforeSendingAnything(t *testing.T) {
 	}
 }
 
+// TestApplyAndDeleteUsageErrorsExitTwo: a mistake in how apply or delete was given (an unknown flag, a missing
+// -f, a stray argument, a flag clash, a file that cannot be read) exits 2, not the 1 of a refused launch, and
+// sends nothing.
+func TestApplyAndDeleteUsageErrorsExitTwo(t *testing.T) {
+	rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){})
+	good := writeTemplateFile(t, "w.yaml", webYAML)
+	for name, args := range map[string][]string{
+		"apply unknown flag":    {"apply", "-f", good, "--bogus"},
+		"apply no file":         {"apply"},
+		"apply stray argument":  {"apply", "-f", good, "extra"},
+		"apply flag clash":      {"apply", "-f", good, "--dry-run", "--wait"},
+		"apply unreadable file": {"apply", "-f", good + ".missing"},
+		"apply bad document":    {"apply", "-f", writeTemplateFile(t, "bad.yaml", webYAML+"colour: red\n")},
+		"delete unknown flag":   {"delete", "-f", good, "--bogus"},
+		"delete no file":        {"delete"},
+		"delete stray argument": {"delete", "-f", good, "extra"},
+		"delete unreadable":     {"delete", "-f", good + ".missing"},
+	} {
+		if _, err := rig.run(t, args...); err == nil || exitCodeFor(err) != 2 {
+			t.Errorf("%s = %v (exit %d), want exit 2", name, err, exitCodeFor(err))
+		}
+	}
+	for key, bodies := range rig.bodies {
+		t.Errorf("%s was requested: %q", key, bodies)
+	}
+}
+
 // doorRoutes answers the import door as the server does for a document that decodes: the
 // document it was given.
 func doorRoutes(t *testing.T, routes map[string]func(http.ResponseWriter, []byte)) map[string]func(http.ResponseWriter, []byte) {

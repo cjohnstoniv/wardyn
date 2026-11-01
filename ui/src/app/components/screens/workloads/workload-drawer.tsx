@@ -4,7 +4,7 @@
  */
 
 // The Workloads screen's detail drawer (mock r16 T3-a): the spec, its generation, the current run and the last
-// refusal, with Restart and Delete. A custom resource's workload has one writer, Git: Delete is hidden and the
+// refusal, with Restart (hidden from a reader the server would refuse it to) and Delete. A custom resource's workload has one writer, Git: Delete is hidden and the
 // drawer says where to change it. The last refusal is a plain sentence with its code in small print (owner
 // answer q12). Digest, Inbound address and History are the rows owner answer q3 adopted: the address is the
 // current run's own, built as the run page builds it, and it changes when a new run replaces the old one.
@@ -244,9 +244,11 @@ export function WorkloadDrawer({
               </div>
             )}
             <div className="flex flex-wrap items-center gap-2">
-              <Button variant="outline" size="sm" disabled={busy} onClick={() => void restart()}>
-                <RotateCcw className="size-4" /> {W.RESTART}
-              </Button>
+              {w.can_restart && (
+                <Button variant="outline" size="sm" disabled={busy} onClick={() => void restart()}>
+                  <RotateCcw className="size-4" /> {W.RESTART}
+                </Button>
+              )}
               {k8s ? (
                 <span className="text-xs text-muted-foreground">{W.DELETE_HIDDEN}</span>
               ) : (

@@ -40,6 +40,7 @@ const wl = (over: Partial<Workload>): Workload => ({
   owner: "me",
   source: "api",
   intent: { experience: "background" },
+  can_restart: true,
   generation: 1,
   current_generation: 1,
   created_at: ago(9 * D),
