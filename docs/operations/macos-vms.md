@@ -5,7 +5,7 @@
 - A macOS VM sandbox (`machine_kind: macos_vm` on a run) is a macOS guest under Apple's Virtualization framework, started by a registered `wardyn-runnerd` on a Mac.
 - It is a preview and off by default, in two places: the organisation and the Mac.
 - Wardyn does not ship macOS. Each Mac downloads Apple's restore image and builds its own base image once.
-- This page is for the person or admin who runs the Mac. The console's New run page offers it (choose a virtual machine, then macOS), and the API and the CLI request body take it too.
+- This page is for the person or admin who runs the Mac. The console's New run page offers it (choose a virtual machine, then macOS), `POST /api/v1/runs` takes it too, and `wardyn run --machine-kind macos_vm` asks for it (`--macos-base <name>` picks a base other than Standard). A Run document for `--file` cannot carry either; the flags stand beside it.
 - The Linux counterpart is [Linux VM sandboxes](linux-vm-sandboxes.md).
 
 ## What a run gets
