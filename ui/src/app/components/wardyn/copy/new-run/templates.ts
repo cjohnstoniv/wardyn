@@ -28,6 +28,7 @@ export const NR_TEMPLATES = {
     "Save a template from a run's review page with Save as template or Save as policy. A policy holds only network, credential and access rules, and anything it leaves out comes from your organization's defaults.",
   COL_NAME: "Name",
   COL_AVAILABLE: "Available to",
+  COL_OWNER: "Owner",
   COL_INCLUDES: "Includes",
   COL_UPDATED: "Updated",
   COL_ACTIONS: "Actions",

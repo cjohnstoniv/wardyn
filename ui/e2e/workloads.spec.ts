@@ -15,6 +15,7 @@ const CLI_APPLIED: Workload = {
   owner: "admin",
   source: "api",
   intent: { shape: "automation", experience: "background" },
+  can_restart: true,
   generation: 1,
   current_generation: 0,
   created_at: aheadByHours(-1),
@@ -34,4 +35,14 @@ test("list shows a CLI-applied workload", async ({ page }) => {
   await expect(drawer.getByText("Spec")).toBeVisible();
   await expect(drawer.getByRole("button", { name: "Restart" })).toBeVisible();
   await expect(drawer.getByRole("button", { name: "Delete" })).toBeVisible();
+});
+
+test("the drawer hides Restart from a reader the server would refuse it to", async ({ page }) => {
+  await page.route("**/api/v1/workloads?*", (route) => route.fulfill({ json: [{ ...CLI_APPLIED, can_restart: false }] }));
+  await gotoConsole(page);
+  await navTo(page, "Workloads");
+  await page.getByTestId("workload-row").filter({ hasText: "triage-bot" }).getByRole("button", { name: "triage-bot" }).click();
+  const drawer = page.getByRole("dialog");
+  await expect(drawer.getByRole("button", { name: "Delete" })).toBeVisible();
+  await expect(drawer.getByRole("button", { name: "Restart" })).toHaveCount(0);
 });

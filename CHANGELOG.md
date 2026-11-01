@@ -11,6 +11,22 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- 0.10 can't be rolled back by redeploying 0.9.x. Boot refuses a database that records a migration the binary does not
+  ship. Even past that refusal, a 0.9.9 binary can't add a library source, with or without a bound folder, because
+  migration `0247` drops the unique constraint its save relies on. This corrects the 0.10.0-rc.9 note. Take a database
+  backup first; to go back, restore it ([#3909](https://github.com/cjohnstoniv/wardyn/issues/3909)).
+- An upgrade stops the old replicas first, because the chart uses Recreate, so older notes that say "rolling upgrade" mean
+  an older server still running while the new one starts ([#3909](https://github.com/cjohnstoniv/wardyn/issues/3909)).
+- A large recording store can need a longer migration timeout. Migration `0216_recordings_size_tail` reads every stored
+  recording once, and the whole migration run is bounded by `WARDYN_MIGRATE_TIMEOUT` (default 5 minutes). A timeout rolls
+  that migration back, and every later boot starts it again and fails the same way until the timeout is long enough. Raise
+  it before you upgrade; the chart takes `h`, `m` and `s` units only. Compose does not pass the variable on from `.env`: put
+  `WARDYN_MIGRATE_TIMEOUT: 30m` under `services.wardynd.environment` in a `docker-compose.override.yaml`. Helm: use
+  `--set env.WARDYN_MIGRATE_TIMEOUT=30m` or an `extraEnv` entry, and give `helm upgrade --timeout` more than the migration
+  needs ([#3908](https://github.com/cjohnstoniv/wardyn/issues/3908)).
+
 ### Added
 
 - macOS VMs: a run on a view-only base can be watched from the run page with Watch desktop. Keys, pointer moves and
@@ -101,6 +117,33 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   ([#3857](https://github.com/cjohnstoniv/wardyn/issues/3857)).
 - `wardyn workspace create --runner` no longer rebinds a library folder that is bound to another runner. It refuses,
   naming both runners and the folder ([#3858](https://github.com/cjohnstoniv/wardyn/issues/3858)).
+- The run page finds its workload chip by run id instead of listing up to 1000 workloads, and the workload drawer hides
+  Restart from readers the server would refuse ([#3789](https://github.com/cjohnstoniv/wardyn/issues/3789), [#3794](https://github.com/cjohnstoniv/wardyn/issues/3794)).
+- `wardyn apply` and `wardyn delete` exit 2 on a flag, argument or file mistake, not the 1 of a refused launch
+  ([#3774](https://github.com/cjohnstoniv/wardyn/issues/3774)).
+- An application shape that names a stored policy is read against that policy's UI apps, instead of being refused for
+  carrying none ([#3796](https://github.com/cjohnstoniv/wardyn/issues/3796)).
+- Erasing a person now ends their workloads' current runs, as deleting the workload does ([#3771](https://github.com/cjohnstoniv/wardyn/issues/3771)).
+- A queued service's start records the advisory as the started run stands, on the `run.queue.start` audit row. The run's
+  visible advisory can still be the one from when it was queued ([#3764](https://github.com/cjohnstoniv/wardyn/issues/3764)).
+- An invalid Workload resource now gets a status saying so, and the Kubernetes status push sends the run's current health,
+  not the stored one ([#3779](https://github.com/cjohnstoniv/wardyn/issues/3779), [#3770](https://github.com/cjohnstoniv/wardyn/issues/3770)).
+- Walls refusals and the Why card name the run's owner by display name, a saved Runs view keeps its name instead of reading
+  Custom, and a Service panel a person removed stays removed after a reload
+  ([#3785](https://github.com/cjohnstoniv/wardyn/issues/3785), [#3783](https://github.com/cjohnstoniv/wardyn/issues/3783), [#3777](https://github.com/cjohnstoniv/wardyn/issues/3777)).
+- The Templates list has its own Owner column, with Includes under the name ([#3817](https://github.com/cjohnstoniv/wardyn/issues/3817)).
+- The docs wrongly called the released macOS runner package signed. It is unsigned until the Apple Developer ID secrets
+  are added, and the install steps now tell you to check it against the signed `SHA256SUMS`.
+- The one-line install pins `claude-code` to the published `agent-base`, which ships no coding agent. TRY-IT and the README
+  now say so, and what a real Claude Code run or the Claude sign-in needs.
+- TRY-IT's single-sign-on step now also turns local mode off, as `wardynd` refuses to start with local mode and an issuer
+  together.
+- The workloads page now says that `wardyn diff` and `wardyn apply --dry-run` are refused for a service identity's token,
+  that a queued replacement can end the old run first and that an unchanged apply launches again after a refused one
+  ([#3795](https://github.com/cjohnstoniv/wardyn/issues/3795)). It also says an idle binding shows the run's phase until a launch is owed, `NotBound` means no pool binds
+  the namespace, and the CRD is applied before the chart upgrade.
+- The docs said an inbound token's upgraded connection is re-checked every 30 seconds. It is every 15, and a revoked
+  inbound token can still call a UI-sandbox port for up to 30 seconds.
 
 ### Security
 

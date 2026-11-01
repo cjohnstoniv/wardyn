@@ -73,11 +73,11 @@ function buildControls(p: ControlProps, sheet: boolean) {
   const size = sheet ? "default" : "sm";
   // Indexed by position, not by its own search string — "Default" is itself
   // the empty query string, and a Radix SelectItem's value may never be "".
-  // matchesSavedView ignores `owner` in the Admin view: applySavedViewOwner
-  // (runs.tsx) reapplies the CURRENT Everyone/Mine onto a picked view's own
-  // search, so the URL right after a pick carries `owner=me` under Mine even
-  // though no built-in view ever stores that param.
-  const selectedIndex = savedViews.findIndex((v) => matchesSavedView(v.search, currentSearch, adminView));
+  // matchesSavedView ignores `owner`: applySavedViewOwner (runs.tsx) reapplies
+  // the CURRENT Everyone/Mine onto a picked view's own search, so the URL right
+  // after a pick carries `owner=me` under Mine even though no built-in view
+  // ever stores that param, and a view saved under Mine stores it.
+  const selectedIndex = savedViews.findIndex((v) => matchesSavedView(v.search, currentSearch));
   const selectedView = selectedIndex >= 0 ? String(selectedIndex) : CUSTOM_VIEW_VALUE;
 
   const status = (

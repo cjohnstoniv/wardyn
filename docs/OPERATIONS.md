@@ -3884,6 +3884,25 @@ done
 - CI does not catch this — `helm-install-test` and
   the kind quickstart both build `wardynd` from source.
 
+### Before you upgrade: a large recording store
+
+- Migration `0216` reads every stored recording once, so a large recording store in Postgres can need more than the default `WARDYN_MIGRATE_TIMEOUT` of 5 minutes.
+- Each migration file is one transaction: a timeout rolls `0216` back, and the next boot starts it again, so boot keeps failing until the timeout is long enough.
+- Raise it before you upgrade. The chart takes `h`, `m` and `s` units only.
+
+| Install | How |
+|---|---|
+| Compose | Compose does not pass the variable on from `.env`: add the override file below beside `docker-compose.yaml`, and name it with a second `-f` if you pass `-f` yourself |
+| Helm | `--set env.WARDYN_MIGRATE_TIMEOUT=30m`, or an `extraEnv` entry of that name. The startup probe follows it. Give `helm upgrade --timeout` more than the migration needs |
+
+```yaml
+# docker-compose.override.yaml
+services:
+  wardynd:
+    environment:
+      WARDYN_MIGRATE_TIMEOUT: 30m
+```
+
 ### Upgrading a one-line install
 
 - The recipe above assumes a checkout.

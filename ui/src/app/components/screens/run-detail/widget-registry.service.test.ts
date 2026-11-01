@@ -5,7 +5,7 @@
 
 // The Service widget's place: the head of the live right column for a service run, and nowhere else.
 import { describe, it, expect } from "vitest";
-import { RUN_WIDGETS, forRun, presetLayout, type WidgetContext } from "./widget-registry";
+import { RUN_WIDGETS, SERVICE_REMOVED, forRun, normalizeLayout, presetLayout, type WidgetContext } from "./widget-registry";
 import type { RunDetail } from "../../../lib/types";
 
 const at = (layout: ReturnType<typeof presetLayout>, id: string) => layout.find((w) => w.widget === id);
@@ -68,5 +68,12 @@ describe("the Service widget's layout", () => {
     expect(avail(ctx({ service: { restart: "never" } }))).toBe(true);
     expect(avail(ctx({}))).toBe(false);
     expect(avail(ctx({ service: { restart: "never" }, state: "COMPLETED" }))).toBe(false);
+  });
+
+  it("never lets the removed-panel marker through normalizeLayout, so no reader can render it", () => {
+    const saved = [{ widget: "terminal", x: 0, y: 0, w: 8, h: 12 }, SERVICE_REMOVED];
+    expect(normalizeLayout(saved, "live").map((w) => w.widget)).toEqual(["terminal"]);
+    const real = { widget: "service", x: 8, y: 0, w: 4, h: 5 };
+    expect(normalizeLayout([...saved, real], "live")).toContainEqual(real);
   });
 });

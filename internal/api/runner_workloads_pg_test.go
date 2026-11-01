@@ -481,6 +481,73 @@ func TestPG_WorkloadFromRunner_DeleteEndsTheCurrentRun(t *testing.T) {
 	}
 }
 
+// A full list that omits a resource ends its workload's current run, as a delete does: the run is killed
+// workload_deleted, and the workload.delete row (via k8s_sync) is the run's and names it as ended_run_id.
+func TestPG_WorkloadFromRunner_SyncPruneEndsTheCurrentRun(t *testing.T) {
+	e := newCREnv(t)
+	_, run := e.k8sWorkloadWithRun(t, "web", "uid-web")
+	e.report(t, runnerwire.WorkloadReport{Op: runnerwire.WorkloadOpSync, Namespace: "team-a", Names: []string{}})
+	if got := killReason(t, e.svcEnv, run); got != workloadKillDeleted {
+		t.Fatalf("run.kill reason = %q, want %q", got, workloadKillDeleted)
+	}
+	if r, err := e.st.GetRun(context.Background(), run); err != nil || r.State != types.RunKilled {
+		t.Fatalf("run state = %q (%v), want KILLED", r.State, err)
+	}
+	var deletes []types.AuditEvent
+	for _, ev := range e.h.audit.snapshot() {
+		if ev.Action == "workload.delete" {
+			deletes = append(deletes, ev)
+		}
+	}
+	if len(deletes) != 1 || deletes[0].RunID == nil || *deletes[0].RunID != run {
+		t.Fatalf("workload.delete rows %+v, want one on run %s", deletes, run)
+	}
+	var d map[string]any
+	if err := json.Unmarshal(deletes[0].Data, &d); err != nil || d["ended_run_id"] != run.String() || d["via"] != workloadViaK8sSync {
+		t.Fatalf("workload.delete data %s (%v), want ended_run_id %s via %s", deletes[0].Data, err, run, workloadViaK8sSync)
+	}
+}
+
+// The status a running resource's workload is sent follows its run's health now, not the health at the last
+// report: Running while the service is healthy; Running, with the time it was last seen, once the
+// observation is stale (the health sweep skips a run whose runner is offline, so nothing rewrites it); and
+// Unhealthy when the service fails.
+func TestPG_WorkloadStatus_FollowsTheRunsCurrentHealth(t *testing.T) {
+	e := newCREnv(t)
+	ctx := context.Background()
+	_, run := e.k8sWorkloadWithRun(t, "web", "uid-web")
+	e.placeRunsOnTheRunner(t)
+	if _, err := e.pool.Exec(ctx, `UPDATE agent_runs SET state = 'RUNNING' WHERE id = $1`, run); err != nil {
+		t.Fatal(err)
+	}
+	pushed := func(health types.ServiceHealthState, at time.Time) runnerwire.WorkloadStatusArgs {
+		t.Helper()
+		if ok, err := e.st.SetRunServiceStatus(ctx, run, types.RunServiceStatus{Health: health, ObservedAt: at}); err != nil || !ok {
+			t.Fatalf("set service status: applied=%v err=%v", ok, err)
+		}
+		before := len(e.fake.WorkloadStatuses())
+		if err := e.h.srv.sweepWorkloadStatuses(ctx); err != nil {
+			t.Fatal(err)
+		}
+		got := e.fake.WorkloadStatuses()
+		if len(got) != before+1 {
+			t.Fatalf("the sweep sent %d statuses for health %s at %v, want one", len(got)-before, health, at)
+		}
+		return got[len(got)-1]
+	}
+	now := time.Now().UTC()
+	if a := pushed(types.ServiceHealthHealthy, now); a.Phase != runnerwire.WorkloadPhaseRunning || a.Message != "" || a.RunID != run.String() {
+		t.Fatalf("healthy: status %+v, want Running with no message on run %s", a, run)
+	}
+	seen := now.Add(-time.Hour)
+	if a := pushed(types.ServiceHealthHealthy, seen); a.Phase != runnerwire.WorkloadPhaseRunning || a.Message != "service health unknown (unreachable): last checked "+seen.Format(time.RFC3339) {
+		t.Fatalf("stale: status %+v, want Running saying when the health was last seen", a)
+	}
+	if a := pushed(types.ServiceHealthUnhealthy, now); a.Phase != runnerwire.WorkloadPhaseUnhealthy {
+		t.Fatalf("unhealthy: status %+v, want Unhealthy", a)
+	}
+}
+
 // A restart of a custom resource's workload launches under the namespace binding that holds now. Once the
 // binding is deleted, the sponsor's restart is refused workload_binding_inactive, the refusal is recorded on
 // the workload, and no run goes to the deleted binding's pool. While the binding stands it is not refused so.

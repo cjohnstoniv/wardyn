@@ -210,6 +210,7 @@ type WorkloadStore interface {
 	RestartWorkload(ctx context.Context, id uuid.UUID) (Workload, error)
 	SetWorkloadStatusPushed(ctx context.Context, id uuid.UUID, hash string) error
 	GetWorkload(ctx context.Context, owner, name string) (WorkloadView, error)
+	GetWorkloadByRun(ctx context.Context, runID uuid.UUID) (WorkloadView, error)
 	ListWorkloads(ctx context.Context, p Page) ([]WorkloadView, error)
 	ListWorkloadsOf(ctx context.Context, owners []string, p Page) ([]WorkloadView, error)
 	ListK8sWorkloadStatuses(ctx context.Context) ([]WorkloadView, error)
@@ -537,6 +538,11 @@ func (s PG) SetWorkloadStatusPushed(ctx context.Context, id uuid.UUID, hash stri
 // GetWorkload returns one owner's workload by name, with its run's state, or ErrNotFound.
 func (s PG) GetWorkload(ctx context.Context, owner, name string) (WorkloadView, error) {
 	return scanWorkloadView(s.Pool.QueryRow(ctx, `SELECT `+workloadViewCols+workloadViewFrom+` WHERE w.owner = $1 AND w.name = $2`, owner, name))
+}
+
+// GetWorkloadByRun returns the workload whose current run is runID, or ErrNotFound.
+func (s PG) GetWorkloadByRun(ctx context.Context, runID uuid.UUID) (WorkloadView, error) {
+	return scanWorkloadView(s.Pool.QueryRow(ctx, `SELECT `+workloadViewCols+workloadViewFrom+` WHERE w.current_run_id = $1`, runID))
 }
 
 // ListWorkloads returns every owner's workloads, by owner then name.

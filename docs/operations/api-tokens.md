@@ -159,7 +159,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
 - Lists mark it: `GET /me/tokens`, `GET /tokens` and a service identity's token list carry `"inbound": true` on its row.
 - **Every call is re-checked** against the token's owner as an API call is: revocation, expiry, a person's sign-in, and for a service identity its live record and sponsor.
   - The gateway reuses the result for 30 seconds per token, run and app.
-  - A WebSocket or other upgraded connection an inbound token opened is re-checked at most every 30 seconds (rc.8) and closed when the token no longer holds.
+  - A WebSocket or other upgraded connection an inbound token opened is re-checked every 15 seconds (rc.8) and closed within 30 seconds of its last admitting check once the token no longer holds.
   - A person's inbound token also answers `401` `role_stamp_stale` once `WARDYN_ROLE_STAMP_TTL` has passed since its owner last signed in.
 - **Groups are the ones stamped on the token.** A `group:` caller entry matches a person's token by its stored groups: those of the mint, refreshed each time its owner signs in again. A group change reaches the token at that sign-in, not at once.
 - Revoking a person's sessions revokes their inbound tokens with the rest. Changing a service identity's sponsor revokes its tokens, inbound ones included.
@@ -414,7 +414,7 @@ A service identity is automation that runs under its own name. It is not a perso
 | Event | Effect |
 |---|---|
 | The sponsor changes | Every live token of the identity is revoked in the same transaction. |
-| The sponsor's sessions are revoked in full | Their sponsored tokens stop at once and are marked revoked. |
+| The sponsor's sessions are revoked in full | Their sponsored tokens are marked revoked and stop at once, except that an inbound token still calls a UI-sandbox port for up to 30 seconds. |
 | The sponsor is suspended through SCIM | State `sponsor_inactive`; tokens refused; live runs continue. |
 | The sponsor's sign-in identity is unbound | Refused `409` `identity_principal_in_use` while they sponsor an identity or hold a pending invitation. |
 | An admin suspends it | Tokens refused; live runs continue until killed. |
