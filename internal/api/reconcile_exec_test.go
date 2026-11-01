@@ -98,7 +98,7 @@ func (s *bootReconcileStore) ListRuns(context.Context) ([]types.AgentRun, error)
 // nothing. Adoption now runs through this claim, not the ListRuns scan. The
 // sandbox_ref guard mirrors the real query — a run that never dispatched has
 // nothing to watch and is the boot pass's business, not the sweep's.
-func (s *bootReconcileStore) ClaimStaleRunWatchers(context.Context, string, time.Duration) ([]types.AgentRun, error) {
+func (s *bootReconcileStore) ClaimStaleRunWatchers(context.Context, string, time.Duration, []uuid.UUID) ([]types.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.claims++

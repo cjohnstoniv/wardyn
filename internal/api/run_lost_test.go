@@ -82,7 +82,7 @@ func (s *lostStore) MarkRunLost(_ context.Context, _ uuid.UUID, reason types.Los
 	return true, nil
 }
 
-func (s *lostStore) ClaimStaleRunWatchers(ctx context.Context, _ string, _ time.Duration) ([]types.AgentRun, error) {
+func (s *lostStore) ClaimStaleRunWatchers(ctx context.Context, _ string, _ time.Duration, _ []uuid.UUID) ([]types.AgentRun, error) {
 	run, _ := s.GetRun(ctx, s.run.ID)
 	s.mu.Lock()
 	defer s.mu.Unlock()

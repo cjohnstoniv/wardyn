@@ -505,7 +505,8 @@ func (s *Server) finalizeUndispatchedRuns(ctx context.Context) error {
 // sweepRunWatchers claims the watcher lease on every non-terminal run whose lease
 // has gone stale (see store.ClaimStaleRunWatchers — the claim is a conditional
 // UPDATE ... RETURNING, so concurrent sweeps on two replicas cannot both adopt
-// the same run) and re-derives the state of each run it claimed.
+// the same run; a runner's runs go to the replica holding its session, the only
+// one that can probe them) and re-derives the state of each run it claimed.
 //
 // Claimed runs are exactly those with a sandbox and no live watcher: a pod that
 // died mid-run, an interactive run (which never had a completion watcher), or a
@@ -515,7 +516,7 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	runs, err := leaser.ClaimStaleRunWatchers(ctx, watcherOwner, watcherLeaseStaleAfter)
+	runs, err := leaser.ClaimStaleRunWatchers(ctx, watcherOwner, watcherLeaseStaleAfter, s.heldRunnerSessions())
 	if err != nil {
 		return err
 	}
@@ -555,8 +556,8 @@ func (s *Server) sweepRunWatchers(ctx context.Context) error {
 		}
 		st, serr := s.probeAgent(ctx, run.SandboxRef, run.AgentExecID)
 		if errors.Is(serr, runner.ErrRunnerOffline) && onRunner(run.SandboxRef) {
-			// No live session to the run's runner here (another replica may hold it). Attach no
-			// watcher: the claim's lease goes stale, and a later sweep, maybe on that replica, adopts it.
+			// The session to the run's runner ended after the claim. Attach no watcher: the claim's
+			// lease goes stale, and a later sweep, on whichever replica then holds it, adopts it.
 			continue
 		}
 		// A genuinely-gone sandbox/agent reports a terminal STATE (RunStopped), not

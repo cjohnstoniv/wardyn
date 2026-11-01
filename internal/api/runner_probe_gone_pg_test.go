@@ -71,6 +71,13 @@ func goneProbeFixture(t *testing.T, base context.Context) *goneProbe {
 	return &goneProbe{goneAPIRig: g, gp: gp, srv: srv, ref: g.gone.Ref}
 }
 
+// holdSession gives g.srv a live session to the rig's runner, as the hub does on admission.
+func (g *goneProbe) holdSession() {
+	g.t.Helper()
+	org, _ := runnerwire.Loopback()
+	g.srv.runnerEndpoint(g.rn.ID).link.Attach(g.t.Context(), org)
+}
+
 func (g *goneProbe) getRun() types.AgentRun {
 	g.t.Helper()
 	run, err := g.st.GetRun(g.t.Context(), g.run.ID)
@@ -295,6 +302,35 @@ func TestRunnerProbePG_SweepEndsAConfirmedRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.exec(`UPDATE agent_runs SET sandbox_absent_at=now()-interval '31 seconds', watcher_heartbeat=now()-interval '1 hour' WHERE id=$1`)
+	g.holdSession()
+	if err := g.srv.sweepRunWatchers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	g.checkGoneEnd(g.getRun())
+}
+
+// TestRunnerProbePG_ThreeReplicasOnlyTheHolderClaims is #3671's acceptance: with three replicas, the
+// two with no session to the runner neither claim nor probe a run with a stale lease, so its lease
+// stays stale, and the replica holding the session ends a gone run at its first sweep.
+func TestRunnerProbePG_ThreeReplicasOnlyTheHolderClaims(t *testing.T) {
+	g := goneProbeFixture(t, t.Context())
+	ctx := t.Context()
+	if err := g.st.SetRunAgentExecID(ctx, g.run.ID, "exec-1"); err != nil {
+		t.Fatal(err)
+	}
+	g.exec(`UPDATE agent_runs SET sandbox_absent_at=now()-interval '31 seconds', watcher_heartbeat=now()-interval '1 hour' WHERE id=$1`)
+	g.holdSession()
+	for range 2 {
+		if err := New(g.cfg).sweepRunWatchers(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := g.gp.calls(); n != 0 {
+		t.Fatalf("replicas with no session made %d status checks of the run's sandbox, want 0", n)
+	}
+	if fresh, err := g.st.RunWatcherFresh(ctx, g.run.ID, time.Minute); err != nil || fresh {
+		t.Fatalf("lease after the sweeps of replicas with no session: fresh=%v err=%v, want stale", fresh, err)
+	}
 	if err := g.srv.sweepRunWatchers(ctx); err != nil {
 		t.Fatal(err)
 	}

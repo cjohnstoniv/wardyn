@@ -77,7 +77,7 @@ func TestPG_RunLease(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET watcher_heartbeat = now() - interval '1 hour' WHERE id=$1`, due.ID); err != nil {
 		t.Fatalf("age the lease: %v", err)
 	}
-	claimed, err := pg.ClaimStaleRunWatchers(ctx, "lease-test", time.Minute)
+	claimed, err := pg.ClaimStaleRunWatchers(ctx, "lease-test", time.Minute, nil)
 	if err != nil {
 		t.Fatalf("ClaimStaleRunWatchers: %v", err)
 	}

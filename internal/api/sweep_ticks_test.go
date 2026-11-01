@@ -60,7 +60,7 @@ func TestSweepExpiredCredentials_ReturnsTheStoreError(t *testing.T) {
 // leaseFailStore fails the run watcher's claim, the first sub-pass of the tick.
 type leaseFailStore struct{ store.Store }
 
-func (leaseFailStore) ClaimStaleRunWatchers(context.Context, string, time.Duration) ([]types.AgentRun, error) {
+func (leaseFailStore) ClaimStaleRunWatchers(context.Context, string, time.Duration, []uuid.UUID) ([]types.AgentRun, error) {
 	return nil, errors.New("claim failed")
 }
 func (leaseFailStore) HeartbeatRunWatcher(context.Context, uuid.UUID, string) error { return nil }
