@@ -494,9 +494,17 @@ func TestCAItemTrustVerifyAndRotation(t *testing.T) {
 			}
 		})
 	}
+	// A removal macOS refuses stops the update with what to do.
 	f := newTools(t)
-	f.opts.Items = macvm.BaseList{Version: 1, Items: []macvm.BaseItem{{Kind: "ca", Name: "leaf", Path: leaf, SHA256: leafPin}}}
+	f.opts.Items = macvm.BaseList{Version: 1, Items: []macvm.BaseItem{{Kind: "ca", Name: "org-ca", Path: ca, SHA256: caPin}}}
 	g := newItemGuest()
+	g.fail = func(argv []string) int { return map[string]int{"delete-certificate": 1}[argv[1]] }
+	if _, err := f.itemStage(g).Run(context.Background(), macvm.Stage2Input{Previous: old}); err == nil || !strings.Contains(err.Error(), "prepare --reprepare") {
+		t.Fatalf("a refused CA removal: %v", err)
+	}
+	f = newTools(t)
+	f.opts.Items = macvm.BaseList{Version: 1, Items: []macvm.BaseItem{{Kind: "ca", Name: "leaf", Path: leaf, SHA256: leafPin}}}
+	g = newItemGuest()
 	if _, err := f.itemStage(g).Run(context.Background(), macvm.Stage2Input{}); err == nil || !strings.Contains(err.Error(), "not a CA certificate") {
 		t.Fatalf("a leaf: %v", err)
 	}

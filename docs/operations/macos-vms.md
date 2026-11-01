@@ -160,6 +160,7 @@
 - When the wait begins, preparing writes a fresh 8-character one-time code to `~/Library/Application Support/Wardyn/macos-vm.noindex/setup-code.json`, readable by you only. `status` and `doctor` name the file and never print the code. No log or event carries it.
 - It opens a window on the Mac, "Wardyn: set up this macOS VM", with the guest's screen in it and the three steps below its title.
   - The steps: create the account `wardyn-admin` with the one-time code as its password, turn on Screen Sharing with control, and turn on Remote Login.
+  - Every prepare writes a new code. Type the code shown for this prepare: an earlier prepare's code, a mistyped character or a lost Shift key makes stage 1 stop within seconds, saying the account's password does not match the one-time code. Delete the VM and prepare again.
   - The window comes to the front, over other apps and on the Space you are using. It has no close button and closes by itself when the wait ends.
 - Preparing waits up to an hour for the guest's Remote Login, then stops and publishes no base. Run `prepare` again to retry.
 - The window needs the Mac's desktop. On macOS 26, `prepare`, and the prepare that `setup` starts, refuse at once, before any download, when started over SSH, outside the signed-in desktop, or with sudo. They say: run prepare in Terminal on the Mac, signed in at its desktop, not over SSH and not with sudo.
@@ -613,6 +614,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | `prepare` says setup by hand needs this Mac's desktop | It ran over SSH, outside the signed-in desktop, or with sudo. Run it in Terminal on the Mac, signed in at its desktop |
 | Preparing stopped at the Remote Login check | Port 22 did not refuse, or the guest was not shown live on the same boot. No base was published; run `prepare` again |
 | `edit-base` says the base was prepared before Wardyn kept its admin password | The base comes from an older release, and macOS will not let root change its setup account's password without the old one. Run `wardyn-runnerd macos-vm prepare --new-image`, then `edit-base` again |
+| A tools update stops removing a CA, saying macOS 26 can refuse that | The update stops, and the old base stays ready and still trusts the old CA. Change the list as you want it and run `prepare --reprepare`, which builds a base from it |
 | `edit-base` says the guest did not take the one-time code | The setup account's password in the guest is not the one Wardyn keeps, or was changed in the session. Runs keep the old base. If it fails again before the window opens, run `prepare --new-image` |
 | The runner logs that it offers none and names `--per-run-memory` or `--per-run-cpu` | A per-run limit is below the base's minimum. Raise it ([How many VMs a Mac offers](#how-many-vms-a-mac-offers)) |
 
