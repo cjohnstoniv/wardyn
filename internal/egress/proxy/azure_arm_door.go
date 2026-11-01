@@ -171,9 +171,7 @@ func (p *Proxy) refuseAzureARM(w http.ResponseWriter, r *http.Request, host stri
 	if patAPIHost(host) == AzureLoginHost {
 		body = map[string]any{"wardyn": code, "error": "access_denied", "error_description": message}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(body)
+	writeJSONStatus(w, http.StatusForbidden, "application/json", body)
 }
 
 // refuseAzureARMCredential answers a request the gate admitted whose token

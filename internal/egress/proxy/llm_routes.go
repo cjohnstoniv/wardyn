@@ -630,9 +630,7 @@ func writeScanBlockedShaped(w http.ResponseWriter, shape errShape, findings int,
 		writeProviderError(w, shape, http.StatusForbidden, reasonContentBlocked, msg, extra)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(b)
+	writeJSONStatus(w, http.StatusForbidden, "application/json", b)
 }
 
 // emitLLMDecision emits a decision log for an LLM or MITM route carrying a
