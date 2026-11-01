@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
@@ -47,6 +48,7 @@ const (
 	// inboundResolveTTL is how long a verified token's session for one run and app is reused: the token
 	// lookup, the run and its effective apps are read once per window, so a revoked token, or one whose
 	// owner lost the run, stops calling within it. The session's own re-assert runs on top (uiReassertRelay).
+	// A policy, profile or grant write ends the window at once (dropInboundOnWrite).
 	inboundResolveTTL = 30 * time.Second
 	// inboundRatePerSec and inboundBurst bound the requests to one run's inbound apps, all callers together,
 	// and again the requests of one caller, all runs together: each admitted request is an audit row, and
@@ -122,6 +124,60 @@ func (st *uiInboundState) cached(key string, now time.Time) (uiSession, bool) {
 	defer st.mu.Unlock()
 	c, ok := st.sessions[key]
 	return c.sess, ok && now.Sub(c.at) < inboundResolveTTL
+}
+
+// dropInboundSessions forgets every inbound token's cached session, and the re-assert debounce the next one
+// would ride: a session minted in the same second as the one it replaces has the same debounce key, and
+// would skip the profile arm the write may have changed. The worst case is one extra lookup per live caller,
+// as for a wholesale prune.
+func (s *Server) dropInboundSessions() {
+	s.uiInbound.mu.Lock()
+	clear(s.uiInbound.sessions)
+	s.uiInbound.mu.Unlock()
+	s.uiReassertMu.Lock()
+	clear(s.uiReassert)
+	s.uiReassertMu.Unlock()
+}
+
+// inboundDropRoots are the /api/v1 families whose writes can change what a cached inbound session was
+// admitted under: the run's policy (policies), its governance profile with the memberships, restrictions and
+// boundary that bind it (governance), and the capability grants (permissions).
+var inboundDropRoots = []string{"policies", "governance", "permissions"}
+
+// inboundReadOnlyPosts are the POSTs under inboundDropRoots that write nothing.
+var inboundReadOnlyPosts = []string{
+	"policies/grade", "governance/check", "governance/dry-run", "governance/approval-rules/dry-run",
+}
+
+// inboundDropsOn reports whether r is a write under inboundDropRoots.
+func inboundDropsOn(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+	default:
+		return false
+	}
+	rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/")
+	root, _, _ := strings.Cut(rest, "/")
+	return ok && slices.Contains(inboundDropRoots, root) && !slices.Contains(inboundReadOnlyPosts, strings.TrimSuffix(rest, "/"))
+}
+
+// dropInboundOnWrite drops the inbound session cache (dropInboundSessions) once a write under inboundDropRoots
+// has answered below 400, so a policy, profile or grant change reaches a live caller's next request instead of
+// its next lookup. It runs after the handler, so after the write has committed: a session admitted meanwhile
+// is the one the write is racing, and ends with the window. Every such route is covered here, a held change's
+// approval and a unit admin's scoped write included, rather than at each place the store is written.
+func (s *Server) dropInboundOnWrite(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !inboundDropsOn(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		next.ServeHTTP(ww, r)
+		if ww.Status() < http.StatusBadRequest {
+			s.dropInboundSessions()
+		}
+	})
 }
 
 func (st *uiInboundState) remember(key string, sess uiSession, now time.Time) {
