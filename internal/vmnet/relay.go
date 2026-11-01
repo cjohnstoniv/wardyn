@@ -13,10 +13,12 @@
 // named by that DNS answer, asked before the guest's handshake completes (a
 // refusal is a reset, an approval hold is a held SYN) and tunnelled only after
 // the first flight passed the TLS server-name check (firstflight.go); port 80
-// goes as forward-proxy requests (httpfwd.go). A flow to any other address, UDP
-// other than DNS, and every frame that is not ARP, IPv4/TCP or IPv4/UDP are
-// dropped and reported (report.go). The relay holds no token and no policy: the
-// proxy decides, and its decision log carries the relay's refusals too.
+// goes as forward-proxy requests (httpfwd.go). A flow to the proxy the guest's
+// proxy variables name is spliced to it unchanged (proxyDirect). A flow to any
+// other address, UDP other than DNS, and every frame that is not ARP, IPv4/TCP
+// or IPv4/UDP are dropped and reported (report.go). The relay holds no token
+// and no policy: the proxy decides, and its decision log carries the relay's
+// refusals too.
 package vmnet
 
 import (
@@ -28,6 +30,8 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -92,6 +96,10 @@ const (
 type Config struct {
 	// Proxy is the run's wardyn-proxy, host:port.
 	Proxy string
+	// GuestProxy is the proxy as the guest's proxy variables name it, host:port
+	// (wardyn-proxy:3128). A guest flow to exactly that name and port is spliced
+	// to it unchanged (proxyDirect); "" turns that off.
+	GuestProxy string
 	// Log receives one JSON line per DNS addition, eviction, allow and
 	// refusal (refusals rate limited per kind).
 	Log *slog.Logger
@@ -131,6 +139,11 @@ type Relay struct {
 	// proxy ask until both copy directions have ended; maxOpaque is its bound.
 	opaque    atomic.Int64
 	maxOpaque int64
+	// guestProxy is Config.GuestProxy, and proxyName and proxyPort its host and
+	// port (proxyDirect).
+	guestProxy string
+	proxyName  string
+	proxyPort  uint16
 }
 
 // New builds a relay's stack. Close releases it.
@@ -156,6 +169,12 @@ func New(cfg Config) (*Relay, error) {
 	}
 	if cfg.maxOpaque > 0 {
 		rl.maxOpaque = int64(cfg.maxOpaque)
+	}
+	if h, p, err := net.SplitHostPort(cfg.GuestProxy); err == nil {
+		if n, err := strconv.ParseUint(p, 10, 16); err == nil {
+			rl.guestProxy = cfg.GuestProxy
+			rl.proxyName, rl.proxyPort = strings.TrimSuffix(strings.ToLower(h), "."), uint16(n)
+		}
 	}
 	rl.rep = newReporter(now, log, func(r refusal) {
 		if rl.prep {
@@ -366,6 +385,10 @@ func (rl *Relay) handleTCP(r *tcp.ForwarderRequest) {
 		return
 	}
 	flow := newFlowID()
+	if name == rl.proxyName && port == rl.proxyPort {
+		rl.proxyDirect(r, flow, name, port)
+		return
+	}
 	if port == 80 {
 		gc := accept(r)
 		if gc == nil {
@@ -429,6 +452,35 @@ func (rl *Relay) handleTCP(r *tcp.ForwarderRequest) {
 			return
 		}
 	}
+	splice(gc, pc)
+}
+
+// proxyDirect carries a guest flow to the proxy the guest's proxy variables
+// name. It is spliced to that address unchanged, with no ask and no
+// first-flight check: the guest is the proxy's explicit client, as a
+// container is. It holds an opaque-tunnel slot like any other.
+func (rl *Relay) proxyDirect(r *tcp.ForwarderRequest, flow, name string, port uint16) {
+	if !rl.admit() {
+		r.Complete(true)
+		rl.rep.refuse(refusal{Flow: flow, Reason: reasonTunnelLimit, Host: name, Port: int(port)})
+		return
+	}
+	defer rl.opaque.Add(-1)
+	ctx, cancel := context.WithTimeout(context.Background(), dialBudget)
+	pc, err := rl.proxy.dial(ctx, "tcp", rl.guestProxy)
+	cancel()
+	if err != nil {
+		r.Complete(true)
+		rl.log.Info("tcp_deny", "flow", flow, "host", name, "port", port, "err", err.Error())
+		return
+	}
+	defer pc.Close()
+	gc := accept(r)
+	if gc == nil {
+		return
+	}
+	defer gc.Close()
+	rl.log.Info("proxy-direct", "flow", flow, "host", name, "port", port)
 	splice(gc, pc)
 }
 

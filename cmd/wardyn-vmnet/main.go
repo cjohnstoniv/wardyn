@@ -38,7 +38,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	rl, err := vmnet.New(vmnet.Config{Proxy: *proxyAddr, Log: log, DHCP: *stdio, Prep: *prep})
+	rl, err := vmnet.New(vmnet.Config{Proxy: *proxyAddr, GuestProxy: *proxyAddr, Log: log, DHCP: *stdio, Prep: *prep})
 	if err != nil {
 		log.Error("wardyn-vmnet: fatal", "err", err.Error())
 		os.Exit(1)
