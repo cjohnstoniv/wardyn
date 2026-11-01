@@ -16,6 +16,7 @@ import { cn } from "../ui/utils";
 import type { PolicyRef } from "../../lib/api/health";
 import { POLICY_REMEDY } from "../../lib/governance-copy";
 import { WHY_CARD } from "../../lib/why-card-copy";
+import { useOwnerName } from "../../lib/use-owner-name";
 import { usePrincipal } from "./operator-context";
 
 const MAX_HREF = 2048;
@@ -51,9 +52,9 @@ export const personalOwn = (policy: PolicyRef, principal: string): boolean => !p
 // setByLabel names the wall that set the limit, from a refusal's own layer. A run's policy reference carries no
 // layer and a proxy refusal cannot know it, so without one the Set by row is not drawn at all: naming a wall
 // there would be a guess.
-function setByLabel(policy: PolicyRef, principal: string): string | null {
+function setByLabel(policy: PolicyRef, principal: string, ownerName: string): string | null {
   if (!policy.layer) return null;
-  if (policy.layer === "personal") return personalOwn(policy, principal) ? WHY_CARD.PERSONAL : WHY_CARD.PERSONAL_OTHER(policy.owner ?? "");
+  if (policy.layer === "personal") return personalOwn(policy, principal) ? WHY_CARD.PERSONAL : WHY_CARD.PERSONAL_OTHER(ownerName);
   if (policy.overridden) return WHY_CARD.RUN_POLICY;
   if (policy.layer === "deployment") return WHY_CARD.BOUNDARY;
   return policy.name ? WHY_CARD.TEAM(policy.name) : WHY_CARD.TEAM_FALLBACK;
@@ -74,6 +75,7 @@ export interface PolicyRemedyProps {
 
 export function PolicyRemedy({ policy, className, enforced, canChange, copyable, line }: PolicyRemedyProps) {
   const principal = usePrincipal();
+  const ownerName = useOwnerName(policy?.owner, policy?.layer === "personal" && !!policy && !personalOwn(policy, principal));
   const [copied, setCopied] = React.useState(false);
   const resetTimer = React.useRef<number>(undefined);
   React.useEffect(() => () => window.clearTimeout(resetTimer.current), []);
@@ -118,9 +120,9 @@ export function PolicyRemedy({ policy, className, enforced, canChange, copyable,
       </span>
     );
   }
-  const setBy = setByLabel(policy, principal);
+  const setBy = setByLabel(policy, principal, ownerName);
   const changeBy = personal ? (personalOwn(policy, principal) ? WHY_CARD.CAN_CHANGE_PERSONAL : WHY_CARD.CAN_CHANGE_NOT_HERE) : canChange;
-  const rows: Array<[string, React.ReactNode]> = [[WHY_CARD.OWNER, policy.owner || WHY_CARD.NOT_LISTED]];
+  const rows: Array<[string, React.ReactNode]> = [[WHY_CARD.OWNER, (policy.layer === "personal" ? ownerName : policy.owner) || WHY_CARD.NOT_LISTED]];
   if (setBy) rows.unshift([WHY_CARD.SET_BY, setBy]);
   if (enforced) rows.push([WHY_CARD.ENFORCED, enforced]);
   if (changeBy) rows.push([WHY_CARD.CAN_CHANGE, changeBy]);
