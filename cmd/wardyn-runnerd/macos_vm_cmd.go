@@ -344,8 +344,8 @@ const runToolsDialFile = "run-tools-dial"
 
 // lastToolsDial is how the newest tools-port dial ended, when it is one of the five classes, else "". The
 // candidates are the run boot's record and the last one prepare logged (a prepare's stage 2 boots the guest
-// too), and the later of the two wins: a run boot's record is not rewritten by a prepare, so reading it alone
-// kept a failure from before a prepare that reached ready.
+// too; its event carries when it was reported), and the later of the two wins. A prepare does not rewrite a
+// run boot's record, so reading that alone kept a failure from before a prepare that reached ready.
 func lastToolsDial(root string) string {
 	var class string
 	var at time.Time
@@ -356,7 +356,7 @@ func lastToolsDial(root string) string {
 			at = fi.ModTime()
 		}
 	}
-	if pc, pat := lastPrepareToolsDial(macvm.Layout{Root: root}.PrepareLog()); pc != "" && pat.After(at) {
+	if pc, pat, err := lastPrepareToolsDial(macvm.Layout{Root: root}.PrepareLog()); err == nil && pc != "" && pat.After(at) {
 		class = pc
 	}
 	if macvm.ValidToolsDial(class) {

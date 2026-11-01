@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -356,16 +355,28 @@ func TestMacOSVMStatusSetupByHandNamesScreenSharing(t *testing.T) {
 	}
 }
 
-// `macos-vm status` shows the newest tools-port dial: a prepare's, logged after a run boot's record, replaces
-// it, and a run boot after the prepare replaces that. Events after the tools phase do not hide the dial.
+// `macos-vm status` shows the newest tools-port dial: a prepare's, reported after a run boot's record,
+// replaces it, and a run boot after the prepare replaces that. The log's lines are what the helper writes
+// (macvm.PrepareEvent as JSON, no clock of their own), and events after the tools phase do not hide the dial.
 func TestMacOSVMStatusToolsDialIsTheNewest(t *testing.T) {
 	r := newMacLedgerRig(t)
 	m := r.open(t)
 	m.helper, _ = fakeHelper(t, 0)
 	base := time.Now().Add(-time.Hour).Truncate(time.Second)
-	line := func(at time.Time, phase, dial string) string {
-		return fmt.Sprintf(`{"time":%q,"level":"INFO","msg":"macvm: prepare","phase":%q,"tools_dial":%q}`+"\n", at.Format(time.RFC3339Nano), phase, dial)
+	line := func(ev macvm.PrepareEvent, at time.Time) string {
+		if ev.ToolsDial != "" {
+			ev.ToolsDialAt = at.UnixNano()
+		}
+		b, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b) + "\n"
 	}
+	dial := func(class string, at time.Time) string {
+		return line(macvm.PrepareEvent{Phase: macvm.PhaseTools}, at) + line(macvm.PrepareEvent{Phase: macvm.PhaseTools, ToolsDial: class}, at)
+	}
+	ready := line(macvm.PrepareEvent{Phase: macvm.PhaseReady, Fraction: 1}, base)
 	runRecord := filepath.Join(r.root, runToolsDialFile)
 	write := func(path, content string, at time.Time) {
 		t.Helper()
@@ -380,12 +391,14 @@ func TestMacOSVMStatusToolsDialIsTheNewest(t *testing.T) {
 		want      string
 	}{
 		{"a later prepare replaces an older run record", "transport failure\n", base,
-			line(base.Add(time.Minute), "tools", "transport failure") + line(base.Add(2*time.Minute), "tools", "connected") + line(base.Add(3*time.Minute), "ready", ""), "connected"},
+			dial("transport failure", base.Add(time.Minute)) + dial("connected", base.Add(2*time.Minute)) + ready, "connected"},
 		{"a later run boot replaces the prepare's", "refused\n", base.Add(10 * time.Minute),
-			line(base.Add(time.Minute), "tools", "connected") + line(base.Add(2*time.Minute), "ready", ""), "refused"},
+			dial("connected", base.Add(time.Minute)) + ready, "refused"},
+		{"an older prepare in an appended log does not beat a later run boot", "refused\n", base.Add(10 * time.Minute),
+			dial("connected", base.Add(time.Minute)) + ready + line(macvm.PrepareEvent{Phase: macvm.PhaseCheck}, base.Add(time.Hour)), "refused"},
 		{"a prepare's dial still pending shows no older class", "transport failure\n", base,
-			line(base.Add(time.Minute), "tools", "pending"), ""},
-		{"no run record", "", base, line(base.Add(time.Minute), "tools", "connected"), "connected"},
+			dial("pending", base.Add(time.Minute)), ""},
+		{"no run record", "", base, dial("connected", base.Add(time.Minute)), "connected"},
 	} {
 		_ = os.Remove(runRecord)
 		if c.run != "" {

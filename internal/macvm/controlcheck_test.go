@@ -100,6 +100,11 @@ func TestControlCheckUsesAFreshPasswordThenResetsIt(t *testing.T) {
 	for _, ev := range f.ev.evs {
 		if ev.ToolsDial != "" {
 			dial = ev.ToolsDial
+			if ev.ToolsDialAt == 0 {
+				t.Errorf("the tools_dial event carries no time: %+v", ev)
+			}
+		} else if ev.ToolsDialAt != 0 {
+			t.Errorf("an event with no tools_dial carries a time: %+v", ev)
 		}
 	}
 	if dial != macvm.ToolsDialConnected || !bytes.Contains(f.logs.Bytes(), []byte(`"tools_dial":"connected"`)) {

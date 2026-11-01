@@ -55,6 +55,10 @@ type PrepareEvent struct {
 	// ToolsDial is the guest agent's classified tools-port dial, recorded
 	// once per stage-2 boot.
 	ToolsDial string `json:"tools_dial,omitempty"`
+	// ToolsDialAt is when the dial was reported, in Unix nanoseconds, set by
+	// emit: the log is appended to by every prepare, and `macos-vm status`
+	// orders this dial against a run boot's by it.
+	ToolsDialAt int64 `json:"tools_dial_at,omitempty"`
 	// Retry marks a download event for a range that failed and is fetched
 	// again; Bytes is that range's start.
 	Retry bool `json:"retry,omitempty"`
@@ -362,6 +366,9 @@ func newPrep(o PrepareOptions) (*prep, error) {
 }
 
 func (p *prep) emit(ev PrepareEvent) {
+	if ev.ToolsDial != "" {
+		ev.ToolsDialAt = time.Now().UnixNano()
+	}
 	p.Log.Info("macvm: prepare", "phase", ev.Phase, "fraction", ev.Fraction, "bytes", ev.Bytes, "total", ev.Total, "paused", ev.Paused, "detail", ev.Detail, "tools_dial", ev.ToolsDial)
 	p.Progress(ev)
 }
