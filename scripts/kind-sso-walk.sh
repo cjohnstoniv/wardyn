@@ -821,6 +821,32 @@ specs=(sso-member sso-member-recovery sso-concurrency sso-reauth-hold)
 if [[ "${WARDYN_KIND_SSO_SKIP_REAUTH_HOLD:-}" == "1" ]]; then
   specs=(sso-member sso-member-recovery sso-concurrency)
 fi
+# WARDYN_KIND_SSO_LEG splits this walk across two clusters (nightly.yml runs one
+# leg per job). It only SELECTS from the list above, in the same order:
+#   member       sso-member + sso-member-recovery, the pair that must share a
+#                cluster (recovery inherits what sso-member leaves); no role walk.
+#   concurrency  sso-concurrency (+ sso-reauth-hold when not skipped) and the
+#                role walk. sso-concurrency re-pins the provider itself and the
+#                role walk changes nothing the AWS specs depend on, so neither
+#                needs sso-member's leftovers.
+# Unset runs everything, as before. The two legs together are exactly that set.
+run_roles=1
+case "${WARDYN_KIND_SSO_LEG:-}" in
+  "") ;;
+  member | concurrency)
+    leg_specs=()
+    for spec in "${specs[@]}"; do
+      case "${WARDYN_KIND_SSO_LEG}:${spec}" in
+        member:sso-member | member:sso-member-recovery | concurrency:sso-concurrency | concurrency:sso-reauth-hold)
+          leg_specs+=("${spec}") ;;
+      esac
+    done
+    specs=("${leg_specs[@]}")
+    [[ "${WARDYN_KIND_SSO_LEG}" == "member" ]] && run_roles=0
+    ;;
+  *) die "WARDYN_KIND_SSO_LEG must be unset, 'member' or 'concurrency' (got '${WARDYN_KIND_SSO_LEG}')" ;;
+esac
+step "walk leg '${WARDYN_KIND_SSO_LEG:-all}': specs ${specs[*]}, role walk $([[ "${run_roles}" == 1 ]] && echo yes || echo no)"
 # ONE run-ui-e2e.sh CALL PER SPEC (#804), not the three-argument call this used
 # to be. run-ui-e2e.sh's own per-spec loop shells out to a SEPARATE `playwright
 # test` process per spec file, and Playwright clears its outputDir
@@ -972,6 +998,7 @@ roles_leg() { # <render>
   WARDYN_WALK_ROLES_RENDER="$1" ./scripts/run-ui-e2e.sh sso-roles 2>&1 | tee "${EVIDENCE_DIR}/roles-$1.log"
   [[ "${PIPESTATUS[0]}" -eq 0 ]] || roles_rc=1
 }
+if [[ "${run_roles}" == 1 ]]; then
 step "role walk, render: SSO + admin token"
 roles_leg sso
 step "role walk, render: auth.ssoOnly=true, no admin token"
@@ -985,6 +1012,7 @@ fi
 step "restoring the SSO + admin token render"
 set_render sso || die "could not restore the SSO + admin token render (see ${EVIDENCE_DIR}/helm-render-sso.log)"
 SSO_ONLY_APPLIED=""
+fi
 
 if [[ "${walk_rc}" -ne 0 || "${roles_rc}" -ne 0 ]]; then
   echo "kind-sso-walk: FAILED (walk rc=${walk_rc}, roles rc=${roles_rc}; see ${EVIDENCE_DIR}/walk.log and roles-*.log)" >&2

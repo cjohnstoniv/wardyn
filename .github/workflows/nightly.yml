@@ -1214,11 +1214,34 @@ jobs:
   # after this one asserts on that exit code directly, plus that the walk
   # actually reached its own PASS line and reported at least one executed
   # spec file — belt and suspenders, neither one a grep of the skip message.
+  #
+  # TWO LEGS, each on its own runner with its own kind cluster, so the walk's
+  # wall clock is the slower leg and not the sum (measured on two green runs:
+  # sso-member ~85 s, sso-member-recovery ~270 s, sso-concurrency ~165 s, the
+  # two role renders ~70 s). Specs inside a leg stay serial: they share one
+  # cluster's org-wide state, and sso-member-recovery inherits what sso-member
+  # leaves, so that pair is one leg. WARDYN_KIND_SSO_LEG makes
+  # scripts/kind-sso-walk.sh run its half; the legs together are exactly the
+  # set the single job ran (reauth-hold still excluded), and `specs` / `roles`
+  # below are each leg's expected counts for the executed-specs assertion.
+  # Each leg reports as "kind-sso-walk (<leg>)", which release.yml's watched=
+  # entry `kind-sso-walk` covers by prefix (green-by-tree.sh): both must pass.
   kind-sso-walk:
+    name: kind-sso-walk (${{ matrix.leg }})
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: member
+            specs: 2
+            roles: "0"
+          - leg: concurrency
+            specs: 1
+            roles: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
@@ -1259,9 +1282,10 @@ jobs:
           WARDYN_QUICKSTART_HTTP_PORT: "8280"
           WARDYN_QUICKSTART_SSH_PORT: "2322"
         run: make kind-sso
-      - name: Live kind AWS SSO walk (member + recovery; reauth-hold excluded — see job comment above)
+      - name: Live kind AWS SSO walk (${{ matrix.leg }} leg; reauth-hold excluded — see job comment above)
         env:
           WARDYN_TEST_K8S: "1"
+          WARDYN_KIND_SSO_LEG: ${{ matrix.leg }}
           WARDYN_KIND_SSO_REBUILD: "1"
           WARDYN_KIND_SSO_SKIP_REAUTH_HOLD: "1"
           WARDYN_KIND_SSO_EVIDENCE: ${{ github.workspace }}/test/reports/e2e/kind-sso
@@ -1277,6 +1301,9 @@ jobs:
       # the walk actually ran specs and reached its own closing PASS line.
       - name: Assert the walk actually executed specs (not a self-skip)
         shell: bash
+        env:
+          WALK_SPECS: ${{ matrix.specs }}
+          WITH_ROLES: ${{ matrix.roles }}
         run: |
           set -euo pipefail
           log=test/reports/e2e/kind-sso-walk.log
@@ -1295,7 +1322,10 @@ jobs:
           # calls, read from the file each one tees ALONE: $log interleaves all
           # three summaries, and its last one is always a roles leg's.
           # WARDYN_KIND_SSO_SKIP_REAUTH_HOLD=1 above fixes the AWS walk to exactly
-          # sso-member + sso-member-recovery + sso-concurrency; each roles leg runs sso-roles alone.
+          # sso-member + sso-member-recovery + sso-concurrency, of which this matrix
+          # leg runs WALK_SPECS (member: the first two; concurrency: the last, then
+          # both roles renders, each running sso-roles alone). WITH_ROLES=1 marks the
+          # leg that runs them.
           # Every one of those specs' WARDYN_TEST_K8S guard is satisfied here, so
           # "0 failed, 0 skipped" is what this job's own configuration implies.
           evidence=test/reports/e2e/kind-sso
@@ -1329,9 +1359,11 @@ jobs:
               exit 1
             fi
           }
-          expect_per_spec_summaries "$evidence/walk.log" 3
-          expect_summary "$evidence/roles-sso.log" 1
-          expect_summary "$evidence/roles-sso-only.log" 1
+          expect_per_spec_summaries "$evidence/walk.log" "$WALK_SPECS"
+          if [ "$WITH_ROLES" = "1" ]; then
+            expect_summary "$evidence/roles-sso.log" 1
+            expect_summary "$evidence/roles-sso-only.log" 1
+          fi
           # Shared with kind-sso-ado-walk below (scripts/test-kind-sso-walk-log.sh
           # proves it profile-aware, red on self-skip, green on PASS) — the
           # per-spec counts above are this job's own extra rigor (T-08/G9),
@@ -1341,7 +1373,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: kind-sso-walk-results
+          name: kind-sso-walk-results-${{ matrix.leg }}
           path: |
             test/reports/e2e/kind-sso-walk.log
             test/reports/e2e/kind-sso/**
