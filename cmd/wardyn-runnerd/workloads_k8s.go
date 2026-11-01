@@ -83,6 +83,8 @@ type workloadWatcher struct {
 	kick chan struct{}
 	// sendMu orders the events of one report, and keeps a live event from landing inside it.
 	sendMu sync.Mutex
+	// invalidWriting holds the namespace/name of each resource whose Invalid status is being written.
+	invalidWriting sync.Map
 }
 
 // newClusterWorkloadWatcher watches namespaces through runnerd's own ServiceAccount; with none it
@@ -333,7 +335,8 @@ func (w *workloadWatcher) emitApply(p workloadPeer, u *unstructured.Unstructured
 }
 
 // markInvalid writes the Invalid status of u, a resource its report cannot carry, unless that status is
-// already there for this generation: the resync reports every resource again.
+// already there for this generation: the resync reports every resource again. The write is off the
+// caller's path (it holds the send lock inside an informer handler), one at a time per resource.
 func (w *workloadWatcher) markInvalid(u *unstructured.Unstructured, cause error) {
 	msg := strings.TrimPrefix(cause.Error(), runnerwire.ErrBadFrame.Error()+": ")
 	if !runnerwire.ValidWorkloadName(u.GetName()) {
@@ -346,13 +349,20 @@ func (w *workloadWatcher) markInvalid(u *unstructured.Unstructured, cause error)
 	if phase == runnerwire.WorkloadPhaseInvalid && observed(seen) == u.GetGeneration() && shown == msg {
 		return
 	}
-	ctx, cancel := context.WithTimeout(w.ctx, workloadSendTimeout)
-	defer cancel()
-	err := w.status(ctx, runnerwire.WorkloadStatusArgs{Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID()),
-		ObservedGeneration: u.GetGeneration(), Phase: runnerwire.WorkloadPhaseInvalid, Reason: invalidWorkloadReason, Message: msg})
-	if err != nil {
-		slog.WarnContext(w.ctx, "workload invalid status not written; the next full report will write it", "namespace", u.GetNamespace(), "name", u.GetName(), "error", err)
+	key := u.GetNamespace() + "/" + u.GetName()
+	if _, busy := w.invalidWriting.LoadOrStore(key, struct{}{}); busy {
+		return // the write in flight is for this resource; the next full report finds it done or writes again
 	}
+	a := runnerwire.WorkloadStatusArgs{Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID()),
+		ObservedGeneration: u.GetGeneration(), Phase: runnerwire.WorkloadPhaseInvalid, Reason: invalidWorkloadReason, Message: msg}
+	go func() {
+		defer w.invalidWriting.Delete(key)
+		ctx, cancel := context.WithTimeout(w.ctx, workloadSendTimeout)
+		defer cancel()
+		if err := w.status(ctx, a); err != nil {
+			slog.WarnContext(w.ctx, "workload invalid status not written; the next full report will write it", "namespace", a.Namespace, "name", a.Name, "error", err)
+		}
+	}()
 }
 
 // observed is a status.observedGeneration as the decoder left it: an int64, or a float64 after a patch.

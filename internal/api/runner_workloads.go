@@ -454,20 +454,6 @@ func workloadStatusOf(v store.WorkloadView, now time.Time) runnerwire.WorkloadSt
 	return a
 }
 
-// viewServiceStatus is v's run's service health as the run routes serve it at now (workloadOut): unknown
-// while paused or stale, with the observation time kept. Nil when the run has no health yet.
-func viewServiceStatus(v store.WorkloadView, now time.Time) *types.RunServiceStatus {
-	if v.RunState == "" || v.ServiceHealth == "" {
-		return nil
-	}
-	run := []types.AgentRun{{PausedAt: v.RunPausedAt, ServiceStatus: &types.RunServiceStatus{Health: types.ServiceHealthState(v.ServiceHealth)}}}
-	if v.ServiceObservedAt != nil {
-		run[0].ServiceStatus.ObservedAt = *v.ServiceObservedAt
-	}
-	projectServiceHealth(run, now)
-	return run[0].ServiceStatus
-}
-
 // workloadStatusHash is what workloads.status_pushed holds for a status sent.
 func workloadStatusHash(a runnerwire.WorkloadStatusArgs) string {
 	b, _ := json.Marshal(a) //nolint:errcheck // a struct of strings and an int always marshals

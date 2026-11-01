@@ -189,6 +189,20 @@ func (s *Server) answerWorkload(w http.ResponseWriter, r *http.Request, ws store
 	writeJSON(w, status, client.WorkloadApplyResult{Workload: workloadOut(v, s.workloadReadTier(r, wl.Owner), s.cfg.Now()), Outcome: outcome, Launch: launch})
 }
 
+// viewServiceStatus is v's run's service health as the run routes serve it at now: unknown
+// while paused or stale, with the observation time kept. Nil when the run has no health yet.
+func viewServiceStatus(v store.WorkloadView, now time.Time) *types.RunServiceStatus {
+	if v.RunState == "" || v.ServiceHealth == "" {
+		return nil
+	}
+	run := []types.AgentRun{{PausedAt: v.RunPausedAt, ServiceStatus: &types.RunServiceStatus{Health: types.ServiceHealthState(v.ServiceHealth)}}}
+	if v.ServiceObservedAt != nil {
+		run[0].ServiceStatus.ObservedAt = *v.ServiceObservedAt
+	}
+	projectServiceHealth(run, now)
+	return run[0].ServiceStatus
+}
+
 func workloadTarget(wl store.Workload) string { return wl.Owner + "/" + wl.Name }
 
 // workloadOut is a stored workload as the API reports it at now to a reader of tier (workloadReadTier).
@@ -196,14 +210,8 @@ func workloadOut(v store.WorkloadView, tier workspaceReadTier, now time.Time) cl
 	out := client.Workload{Name: v.Name, Owner: v.Owner, Source: client.WorkloadSource(v.Source), Namespace: v.SourceNamespace,
 		Description: v.Description, RunIn: v.RunIn, RestartKey: v.RestartKey, Generation: v.Generation,
 		CurrentGeneration: v.CurrentGeneration, RunID: v.CurrentRunID, State: string(v.RunState), CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
-	if v.RunState != "" && v.ServiceHealth != "" {
-		// The run's health as the run routes serve it: unknown while paused or stale.
-		run := []types.AgentRun{{PausedAt: v.RunPausedAt, ServiceStatus: &types.RunServiceStatus{Health: types.ServiceHealthState(v.ServiceHealth)}}}
-		if v.ServiceObservedAt != nil {
-			run[0].ServiceStatus.ObservedAt = *v.ServiceObservedAt
-		}
-		projectServiceHealth(run, now)
-		out.State += "/" + string(run[0].ServiceStatus.Health)
+	if st := viewServiceStatus(v, now); st != nil {
+		out.State += "/" + string(st.Health)
 	}
 	if tier == workspaceReadFull { // the digest of an intent whose host axis is withheld would let a reader test guesses at it
 		out.Digest = v.Digest

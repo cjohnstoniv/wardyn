@@ -172,6 +172,7 @@ func TestWorkloadWatcherMarksAnInvalidResource(t *testing.T) {
 			t.Fatalf("%s: condition %v, want Ready False, reason Invalid, carrying the message", name, c)
 		}
 	}
+	waitWorkload(t, "the Invalid status", func() bool { return status("huge") != nil })
 	invalid("huge")
 	if st := status("fine"); st != nil {
 		t.Fatalf("a valid resource got status %v from the runner", st)
