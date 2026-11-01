@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -80,6 +81,9 @@ func newSetupFixture(t *testing.T, goos string) *setupFixture {
 	f.host = setupHost{goos: goos, home: filepath.Join(root, "home"), uid: 501, exe: exe,
 		run: func(_ context.Context, name string, args ...string) ([]byte, error) {
 			f.commands = append(f.commands, name+" "+strings.Join(args, " "))
+			if name == "launchctl" && len(args) > 0 && args[0] == "print" {
+				return nil, errors.New("exit status 113") // the label is gone
+			}
 			if name == "systemctl" && len(args) > 1 {
 				switch args[1] {
 				case "stop":
@@ -905,6 +909,71 @@ func TestSetupRendersTheLaunchAgent(t *testing.T) {
 	}
 	if st, err := os.Stat(p.installed); err != nil || st.Mode().Perm() != 0o755 {
 		t.Errorf("installed binary mode: %v %v", st, err)
+	}
+}
+
+// #3892: bootout returns before launchd has unloaded the old agent, and a bootstrap of a label still unloading
+// fails with 5, so setup polls launchctl print until the label is gone.
+func TestSetupWaitsForTheOldLaunchAgentToUnloadBeforeBootstrap(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		err        error
+		wantPrints int
+	}{{"gone after three polls", errors.New("exit status 113"), 4}, {"any other error ends the wait", errors.New("exit status 1"), 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			launchAgentUnloadWait, launchAgentUnloadPoll = 5*time.Second, time.Millisecond
+			t.Cleanup(func() { launchAgentUnloadWait, launchAgentUnloadPoll = 10*time.Second, 200*time.Millisecond })
+			f := newSetupFixture(t, "darwin")
+			f.desktop = true
+			prints := 0
+			f.host.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+				f.commands = append(f.commands, name+" "+strings.Join(args, " "))
+				if len(args) > 1 && args[0] == "print" && args[1] == "gui/501/com.wardyn.runnerd" {
+					if prints++; prints < 4 && tc.wantPrints == 4 {
+						return []byte("service = com.wardyn.runnerd"), nil
+					}
+					return nil, tc.err
+				}
+				if len(args) > 1 && args[0] == "print" {
+					return nil, errors.New("exit status 113")
+				}
+				return nil, nil
+			}
+			if out, err := f.run(setupOptions{tokenFile: f.tokenFile}); err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			p, _ := f.host.paths()
+			boot, last := slices.Index(f.commands, "launchctl bootstrap gui/501 "+p.plistFile), -1
+			for i, c := range f.commands {
+				if c == "launchctl print gui/501/com.wardyn.runnerd" {
+					last = i
+				}
+			}
+			if prints != tc.wantPrints || boot < 0 || boot < last {
+				t.Errorf("want %d polls then one bootstrap, got %d polls, bootstrap at %d, last poll at %d: %v", tc.wantPrints, prints, boot, last, f.commands)
+			}
+		})
+	}
+}
+
+// #3892: when the bootstrap still fails, the runner is stopped, so the error names the command that starts it.
+func TestSetupBootstrapFailureNamesTheStartCommand(t *testing.T) {
+	f := newSetupFixture(t, "darwin")
+	f.desktop = true
+	run := f.host.run
+	f.host.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if _, err := run(ctx, name, args...); err != nil {
+			return nil, err
+		}
+		if len(args) > 0 && args[0] == "bootstrap" {
+			return []byte("Bootstrap failed: 5: Input/output error"), errors.New("exit status 5")
+		}
+		return nil, nil
+	}
+	_, err := f.run(setupOptions{tokenFile: f.tokenFile})
+	p, _ := f.host.paths()
+	if err == nil || !strings.Contains(err.Error(), "start it with launchctl bootstrap gui/501 "+p.plistFile) || !strings.Contains(err.Error(), "Input/output error") {
+		t.Errorf("the bootstrap failure does not name the start command: %v", err)
 	}
 }
 
