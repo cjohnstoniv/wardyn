@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
@@ -47,6 +48,7 @@ const (
 	// inboundResolveTTL is how long a verified token's session for one run and app is reused: the token
 	// lookup, the run and its effective apps are read once per window, so a revoked token, or one whose
 	// owner lost the run, stops calling within it. The session's own re-assert runs on top (uiReassertRelay).
+	// A policy, profile or grant write ends the window at once (dropInboundOnWrite).
 	inboundResolveTTL = 30 * time.Second
 	// inboundRatePerSec and inboundBurst bound the requests to one run's inbound apps, all callers together,
 	// and again the requests of one caller, all runs together: each admitted request is an audit row, and
@@ -122,6 +124,60 @@ func (st *uiInboundState) cached(key string, now time.Time) (uiSession, bool) {
 	defer st.mu.Unlock()
 	c, ok := st.sessions[key]
 	return c.sess, ok && now.Sub(c.at) < inboundResolveTTL
+}
+
+// dropInboundSessions forgets every inbound token's cached session, and the re-assert debounce the next one
+// would ride: a session minted in the same second as the one it replaces has the same debounce key, and
+// would skip the profile arm the write may have changed. The worst case is one extra lookup per live caller,
+// as for a wholesale prune.
+func (s *Server) dropInboundSessions() {
+	s.uiInbound.mu.Lock()
+	clear(s.uiInbound.sessions)
+	s.uiInbound.mu.Unlock()
+	s.uiReassertMu.Lock()
+	clear(s.uiReassert)
+	s.uiReassertMu.Unlock()
+}
+
+// inboundDropRoots are the /api/v1 families whose writes can change what a cached inbound session was
+// admitted under: the run's policy (policies), its governance profile with the memberships, restrictions and
+// boundary that bind it (governance), and the capability grants (permissions).
+var inboundDropRoots = []string{"policies", "governance", "permissions"}
+
+// inboundReadOnlyPosts are the POSTs under inboundDropRoots that write nothing.
+var inboundReadOnlyPosts = []string{
+	"policies/grade", "governance/check", "governance/dry-run", "governance/approval-rules/dry-run",
+}
+
+// inboundDropsOn reports whether r is a write under inboundDropRoots.
+func inboundDropsOn(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+	default:
+		return false
+	}
+	rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/")
+	root, _, _ := strings.Cut(rest, "/")
+	return ok && slices.Contains(inboundDropRoots, root) && !slices.Contains(inboundReadOnlyPosts, strings.TrimSuffix(rest, "/"))
+}
+
+// dropInboundOnWrite drops the inbound session cache (dropInboundSessions) once a write under inboundDropRoots
+// has answered below 400, so a policy, profile or grant change reaches a live caller's next request instead of
+// its next lookup. It runs after the handler, so after the write has committed: a session admitted meanwhile
+// is the one the write is racing, and ends with the window. Every such route is covered here, a held change's
+// approval and a unit admin's scoped write included, rather than at each place the store is written.
+func (s *Server) dropInboundOnWrite(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !inboundDropsOn(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		next.ServeHTTP(ww, r)
+		if ww.Status() < http.StatusBadRequest {
+			s.dropInboundSessions()
+		}
+	})
 }
 
 func (st *uiInboundState) remember(key string, sess uiSession, now time.Time) {
@@ -345,9 +401,10 @@ type inboundReadmission struct {
 // what a request's re-assert asks (uiInboundUnitDenies): a stream is admitted by the same arms a request is.
 // Its answers go nowhere: the stream has no response left to write them on. unavailable is the reason of a
 // refusal that is no verdict on the token or the profile, and writes no inbound.deny row here: a lookup that
-// could not be made (verifyAPIToken's 503, reasonTokenLookupUnavailable), or a run, policy or profile that
-// could not be read (reasonRunUnreadable). It is "" for an admission and for a verdict, and a verdict
-// returns the writer of its inbound.deny row unrun, for the stream to run after its close.
+// could not be made (verifyAPIToken's 503, reasonTokenLookupUnavailable), a run or policy that could not be
+// read (reasonRunUnreadable) or a profile that could not (reasonProfileLookupUnavailable). It is "" for an
+// admission and for a verdict, and a verdict returns the writer of its inbound.deny row unrun, for the stream
+// to run after its close.
 func (s *Server) readmitInbound(ctx context.Context, a inboundReadmission) (bool, string, func(context.Context)) {
 	w := &inboundReadmitWriter{healthzGateWriter: healthzGateWriter{h: http.Header{}}}
 	sess, refusal, ok := s.admitInboundToken(w, a.r.WithContext(ctx), a.runID, a.app, a.raw, a.principal, a.tokenID)
@@ -367,7 +424,7 @@ func (s *Server) readmitInbound(ctx context.Context, a inboundReadmission) (bool
 	}
 	if de := s.uiInboundUnitDenial(ctx, sess, run); de != nil {
 		if de.status == http.StatusServiceUnavailable {
-			return false, reasonRunUnreadable, nil
+			return false, reasonProfileLookupUnavailable, nil
 		}
 		return false, "", func(ctx context.Context) { s.auditInboundUnitDenies(ctx, sess) }
 	}
@@ -397,9 +454,9 @@ func (w *inboundReadmitWriter) Write(b []byte) (int, error) {
 // that cannot be made keeps the stream and asks again next tick, so one store blip between two good checks
 // ends no stream; but a stream whose authority no check has confirmed for inboundResolveTTL since the last
 // one that did, the staleness the design allows, is closed with an inbound.deny row naming what was
-// unavailable (token_lookup_unavailable, or run_unreadable for the run, its policy or its profile): fail
-// closed, never a stream held open on a store that stays down. Each check runs off the watch, on the
-// stream's own context and within inboundReadmitTimeout, so a check that never answers holds nothing up:
+// unavailable (token_lookup_unavailable, run_unreadable for the run or its policy, or
+// profile_lookup_unavailable for its profile): fail closed, never a stream held open on a store that stays
+// down. Each check runs off the watch, on the stream's own context and within inboundReadmitTimeout, so a check that never answers holds nothing up:
 // the tick closes the stream past the bound with the check still in flight (as token_lookup_unavailable,
 // unless an earlier check named what failed). So a stream ends at most inboundResolveTTL plus one tick
 // after its last good check, hung store or not. The first good check is the lookup of the session the

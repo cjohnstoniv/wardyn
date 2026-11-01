@@ -407,6 +407,7 @@ const (
 	// authentication middlewares: both answer the SAME shape (the revocation
 	// store could not be read to authenticate the bearer) with a 503.
 	reasonTokenLookupUnavailable     = "token_lookup_unavailable"
+	reasonProfileLookupUnavailable   = "profile_lookup_unavailable"     // an inbound-token stream's re-admission could not read the run's governance profile
 	reasonAPITokenNoHuman            = "api_token_no_human"             // an API token belongs to a signed-in human
 	reasonAPITokenFromDelegatedToken = "api_token_from_delegated_token" // a delegated (portal) token cannot mint an API token
 	reasonAPITokenMemberModeMint     = "api_token_member_mode_mint"     // a member-mode session cannot mint a token that would outlive the view
