@@ -14,6 +14,7 @@ import { expectNoOwnCopy } from "../../../lib/test-fixtures";
 import type { TemplateList, TemplateSummary } from "../../../lib/types/templates";
 import { NR_SAVE } from "../../wardyn/copy/new-run/save";
 import { NR_TEMPLATES as T } from "../../wardyn/copy/new-run/templates";
+import { WORKLOADS as W } from "../../wardyn/copy/workloads";
 import { NR_RUN } from "../../wardyn/copy/new-run/run";
 import { TemplatesScreen } from "./templates-screen";
 
@@ -124,7 +125,7 @@ describe("Templates screen: rows", () => {
     mount({ templates: [MINE, ORG], publish: MEMBER });
     const table = await screen.findByRole("table", { name: T.LIST_ARIA });
     const headers = within(table).getAllByRole("columnheader", { hidden: true });
-    expect(headers.map((h) => h.textContent)).toEqual([T.COL_NAME, T.COL_AVAILABLE, T.COL_INCLUDES, T.COL_UPDATED, T.COL_ACTIONS]);
+    expect(headers.map((h) => h.textContent)).toEqual([T.COL_NAME, T.COL_AVAILABLE, T.COL_OWNER, T.COL_UPDATED, T.COL_ACTIONS]);
     const dataRows = within(table).getAllByRole("row", { hidden: true }).filter((r) => within(r).queryAllByRole("cell", { hidden: true }).length > 0);
     expect(dataRows).toHaveLength(2);
     for (const r of dataRows) expect(within(r).getAllByRole("cell", { hidden: true })).toHaveLength(headers.length);
@@ -145,6 +146,21 @@ describe("Templates screen: rows", () => {
     expect(group.getByText(T.GROUP_LABEL("Platform"))).toBeInTheDocument();
     expect(group.getByText(T.TEMPLATE_MANAGERS)).toBeInTheDocument();
     expect(within(rowOf("Nightly tests")).queryByText(T.TEMPLATE_MANAGERS)).toBeNull();
+  });
+
+  // #3817: the owner has a column of its own, and Includes is the last line of the Name cell.
+  it("puts the owner in its own column and Includes under the name", async () => {
+    mount({ templates: [MINE, ORG, GROUP], publish: MEMBER });
+    await screen.findByText("Nightly tests");
+    const cells = (name: string) => within(rowOf(name)).getAllByRole("cell", { hidden: true });
+    expect(cells("Organisation baseline")[2]).toHaveTextContent(T.ORG_ADMINS);
+    expect(cells("Package registries")[2]).toHaveTextContent(T.TEMPLATE_MANAGERS);
+    expect(cells("Nightly tests")[2]).toHaveTextContent(W.OWNER_YOU);
+    expect(cells("Nightly tests")[1]).not.toHaveTextContent(W.OWNER_YOU);
+    const name = cells("Nightly tests")[0];
+    expect(name).toHaveTextContent(`${T.COL_INCLUDES}${T.PART_RUN}`);
+    expect(name.lastElementChild).toHaveTextContent(T.PART_RUN);
+    expect(within(name).queryAllByText(T.COL_INCLUDES)).toHaveLength(1);
   });
 
   it("Use opens New run at review with the template and the revision the row showed", async () => {

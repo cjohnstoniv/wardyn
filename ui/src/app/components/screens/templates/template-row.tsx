@@ -17,9 +17,9 @@ import { Chip } from "../../wardyn/primitives";
 import { NEW_RUN_PATH } from "../new-run-flow/draft/new-run-url";
 import { includedGroups, needsSetupLabel, ownerLine, scopeLabel, whyReadOnly } from "./template-display";
 
-// The five columns of the list at md and up; below that the cells stack, each under its own label.
+// The five columns of the list at md and up (Name, Available to, Owner, Updated, Actions); below that the cells stack, each under its own label.
 // The actions column is fixed so a row with a reason tip lines up with one without, and with the header.
-export const ROW_GRID = "md:grid-cols-[minmax(0,2.2fr)_minmax(0,1.2fr)_minmax(0,1.6fr)_minmax(0,1fr)_15rem]";
+export const ROW_GRID = "md:grid-cols-[minmax(0,2.6fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,1fr)_15rem]";
 
 const startHref = (t: TemplateSummary) =>
   `${NEW_RUN_PATH}?${new URLSearchParams({ template: t.id, rev: String(t.revision) })}`;
@@ -46,7 +46,6 @@ export function TemplateRow({
   const nameId = React.useId();
   const whyId = React.useId();
   const needs = needsSetupLabel(t);
-  const owner = ownerLine(t);
   const why = t.writable ? null : whyReadOnly(t);
   // aria-disabled, not disabled: the control stays focusable and describes itself by the reason. Sighted readers
   // open the same reason from the info tip beside the actions, on tap, click or keyboard (tooltips open on tap).
@@ -73,19 +72,20 @@ export function TemplateRow({
           )}
         </div>
         {t.description && <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">{t.description}</p>}
-      </div>
-      <div role="cell" className="min-w-0 space-y-1">
-        <CellLabel>{T.COL_AVAILABLE}</CellLabel>
-        <Chip>{scopeLabel(t)}</Chip>
-        {owner && <p className="text-xs text-muted-foreground">{owner}</p>}
-      </div>
-      <div role="cell" className="min-w-0">
-        <CellLabel>{T.COL_INCLUDES}</CellLabel>
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="mr-1 text-xs text-muted-foreground">{T.COL_INCLUDES}</span>
           {includedGroups(t).map((g) => (
             <Chip key={g}>{g}</Chip>
           ))}
         </div>
+      </div>
+      <div role="cell" className="min-w-0 space-y-1">
+        <CellLabel>{T.COL_AVAILABLE}</CellLabel>
+        <Chip>{scopeLabel(t)}</Chip>
+      </div>
+      <div role="cell" className="min-w-0 text-sm text-foreground">
+        <CellLabel>{T.COL_OWNER}</CellLabel>
+        {ownerLine(t)}
       </div>
       <div role="cell" className="min-w-0 text-sm text-muted-foreground tabular-nums">
         <CellLabel>{T.COL_UPDATED}</CellLabel>

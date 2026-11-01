@@ -20,6 +20,7 @@ import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
 import { NR_SHARED } from "../src/app/components/wardyn/copy/new-run/shared";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { NR_TEMPLATES as T } from "../src/app/components/wardyn/copy/new-run/templates";
+import { WORKLOADS } from "../src/app/components/wardyn/copy/workloads";
 import { SCENARIO_PREFLIGHT } from "../src/app/lib/new-run-fixtures/scenarios/preflight";
 import { TEMPLATE_REFUSAL } from "../src/app/lib/template-refusals";
 import type { Template, TemplateList, TemplatePublish, TemplateSummary } from "../src/app/lib/types/templates";
@@ -133,7 +134,7 @@ test.describe("Templates: filters and rows", () => {
     await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
     await openTemplates(page);
     const table = list(page).getByRole("table", { name: T.LIST_ARIA });
-    await expect(table.getByRole("columnheader")).toHaveText([T.COL_NAME, T.COL_AVAILABLE, T.COL_INCLUDES, T.COL_UPDATED, T.COL_ACTIONS]);
+    await expect(table.getByRole("columnheader")).toHaveText([T.COL_NAME, T.COL_AVAILABLE, T.COL_OWNER, T.COL_UPDATED, T.COL_ACTIONS]);
     await expect(table.getByRole("row").filter({ has: page.getByRole("cell") })).toHaveCount(CATALOGUE.length);
     await expect(rowOf(page, NIGHTLY.name).getByRole("cell")).toHaveCount(5);
   });
@@ -183,6 +184,20 @@ test.describe("Templates: filters and rows", () => {
     await expect(platform.getByText(T.GROUP_LABEL("Platform"), { exact: true })).toBeVisible();
     await expect(platform.getByText(T.TEMPLATE_MANAGERS, { exact: true })).toBeVisible();
     await expect(rowOf(page, ORG_BASELINE.name).getByText(T.ORG_ADMINS, { exact: true })).toBeVisible();
+  });
+
+  // #3817: Owner is a column of its own (You on an Only me row), and Includes closes the Name cell.
+  test("the owner has its own column and Includes is the last line of the Name cell", async ({ page }) => {
+    await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
+    await openTemplates(page);
+    const owner = (name: string) => rowOf(page, name).getByRole("cell").nth(2);
+    await expect(owner(NIGHTLY.name).getByText(WORKLOADS.OWNER_YOU, { exact: true })).toBeVisible();
+    await expect(owner(PLATFORM_BASELINE.name).getByText(T.TEMPLATE_MANAGERS, { exact: true })).toBeVisible();
+    await expect(owner(ORG_BASELINE.name).getByText(T.ORG_ADMINS, { exact: true })).toBeVisible();
+    await expect(rowOf(page, NIGHTLY.name).getByRole("cell").nth(1)).not.toContainText(WORKLOADS.OWNER_YOU);
+    const nameCell = rowOf(page, NIGHTLY.name).getByRole("cell").first();
+    await expect(nameCell.getByText(T.COL_INCLUDES, { exact: true })).toBeVisible();
+    await expect(nameCell.getByText(T.PART_WHERE, { exact: true })).toBeVisible();
   });
 
   test("an empty catalogue and a search with no match say so, and the header offers the way on", async ({ page }) => {
