@@ -122,6 +122,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The macOS VM setup window, and the edit-base window, show all three of their steps under the title. Before, only
   the first step showed.
 - A process inside a macOS VM could pose as Wardyn's guest agent.
+- A run in a macOS VM no longer hangs on its first read of a shared folder. macOS asks a privacy question for
+  each network volume, and nobody can answer it inside a run, so the guest agent needs Full Disk Access in
+  the base: approve `/usr/local/libexec/wardyn-guest-agent` by hand in `edit-base`. Without it, a run with a
+  shared folder now stops before it starts, within 10 seconds, and names that fix
+  ([#3889](https://github.com/cjohnstoniv/wardyn/issues/3889)). See
+  [Folders](docs/operations/macos-vms.md#folders). Built and unit-tested; not yet run on a real Mac.
+- Stage 1 of a macOS VM base now sets the agent's own screen saver idle time to 0, where macOS reads it; macOS
+  ignored the system-wide settings stage 1 wrote before, and display sleep stays off
+  ([#3890](https://github.com/cjohnstoniv/wardyn/issues/3890)). A base prepared before this release keeps the old
+  settings until `wardyn-runnerd macos-vm prepare --new-image`. Built and unit-tested; not yet run on a real Mac,
+  so whether the lock screen is gone is not yet known.
 - Installing a macOS base's file items no longer follows a symbolic link, or passes through a folder others can write
   to, on the way to an item's destination.
 - The error body of a `capability_feature` refusal now carries `feature`, the feature it names (such as `inbound` or

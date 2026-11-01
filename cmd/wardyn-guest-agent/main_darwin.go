@@ -59,9 +59,10 @@ func run(out, plist string) error {
 	}
 	desktop := &guestagent.Desktop{Run: runner, Console: guestagent.ConsoleOwner{}}
 	dial := &guestagent.ToolsDialRecord{}
+	cred := &syscall.Credential{Uid: ids.UID, Gid: ids.GID, Groups: ids.Groups}
 	srv := &guestagent.Server{
 		Version:    version.String(),
-		Cred:       &syscall.Credential{Uid: ids.UID, Gid: ids.GID, Groups: ids.Groups},
+		Cred:       cred,
 		Home:       guestagent.MacAgentHome,
 		User:       guestagent.MacAgentUser,
 		OutDir:     out,
@@ -69,7 +70,7 @@ func run(out, plist string) error {
 		Desktop:    desktop,
 		ToolsDial:  dial,
 		TrustRunCA: guestagent.MacKeychain{Run: runner, Dir: out}.TrustRunCA,
-		Mount:      guestagent.MacShares{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID)}.Mount,
+		Mount:      guestagent.MacShares{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID), Probe: guestagent.ShareProbe{Cred: cred}.Read}.Mount,
 		Disk:       guestagent.MacDisks{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID)}.Attach,
 	}
 	h, err := srv.Handler()
