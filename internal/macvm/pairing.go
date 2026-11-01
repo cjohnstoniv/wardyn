@@ -169,7 +169,13 @@ func (p *pairer) take(ctx context.Context) (net.Conn, error) {
 		p.mu.Unlock()
 		if c != nil {
 			if len(p.open) > 0 {
-				if _, err := c.Write(p.open); err != nil {
+				// A peer that stopped reading must not hold take past the deadline.
+				_ = c.SetWriteDeadline(time.Now().Add(pairDeadline))
+				_, err := c.Write(p.open)
+				if err == nil {
+					err = c.SetWriteDeadline(time.Time{})
+				}
+				if err != nil {
 					_ = c.Close()
 					continue
 				}

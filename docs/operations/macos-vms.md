@@ -5,7 +5,7 @@
 - A macOS VM sandbox (`machine_kind: macos_vm` on a run) is a macOS guest under Apple's Virtualization framework, started by a registered `wardyn-runnerd` on a Mac.
 - It is a preview and off by default, in two places: the organisation and the Mac.
 - Wardyn does not ship macOS. Each Mac downloads Apple's restore image and builds its own base image once.
-- This page is for the person or admin who runs the Mac. The console's New run page offers it (choose a virtual machine, then macOS), and the API and the CLI request body take it too.
+- This page is for the person or admin who runs the Mac. The console's New run page offers it (choose a virtual machine, then macOS), `POST /api/v1/runs` takes it too, and `wardyn run --machine-kind macos_vm` asks for it (`--macos-base <name>` picks a base other than Standard). A Run document for `--file` cannot carry either; the flags stand beside it.
 - The Linux counterpart is [Linux VM sandboxes](linux-vm-sandboxes.md).
 
 ## What a run gets
@@ -142,9 +142,10 @@
   - Just after, a new connection to port 22 must be refused outright. A timeout, or a network that cannot reach the guest, proves nothing: stage 1 keeps trying for 30 seconds, then fails.
   - A refusal counts only from a guest shown live on the same boot: port 5900 still sends its banner and no new DHCP request arrived. A stopped, rebooted or reset guest also refuses port 22, so that case stops stage 1 at once.
   - Any failure stops preparing and no base is published.
-- **The desktop.** Apple has said Screen Sharing turned on from the command line may let a viewer only watch. Preparing ends with a control check, and `status` reports whether the desktop is `control`, `observe` or `none`. With `observe`, macOS VMs still run agent-only, and the desktop is not offered until the base has control turned on (`edit-base`, below).
+- **The desktop.** Apple has said Screen Sharing turned on from the command line may let a viewer only watch. Preparing ends with a control check, and `status` reports whether the desktop is `control`, `observe` or `none`. With `observe`, a run's desktop can be watched from the run page (Watch desktop), not acted in.
+  - The UI gateway and the Mac's helper each drop keys, pointer moves and paste, so that input never reaches the guest. Built and unit-tested; not yet run on a real Mac.
   - `status` says how, and the prepare log says why.
-  - To do it, run `wardyn-runnerd macos-vm edit-base`, turn on Screen Sharing with "VNC viewers may control screen with password" in the guest, then close the window.
+  - To turn control on, run `wardyn-runnerd macos-vm edit-base`, turn on Screen Sharing with "VNC viewers may control screen with password" in the guest, then close the window. On a macOS 26 base the desktop stays view only even so ([#3901](https://github.com/cjohnstoniv/wardyn/issues/3901)).
 - **Newer macOS.** Wardyn does not tell you that Apple has a newer image, but `status` shows when the base was prepared and this Mac's macOS beside it. To move to a newer one, run `wardyn-runnerd macos-vm prepare --new-image` with the per-run flags; a plain `prepare` keeps a ready base and says there is nothing to prepare.
   - The new base is built beside the old one, which runs keep using until the new one is ready. Then the old one is replaced and deleted.
   - A re-prepare holds one of the two slots while it runs.
@@ -160,12 +161,13 @@
 - When the wait begins, preparing writes a fresh 8-character one-time code to `~/Library/Application Support/Wardyn/macos-vm.noindex/setup-code.json`, readable by you only. `status` and `doctor` name the file and never print the code. No log or event carries it.
 - It opens a window on the Mac, "Wardyn: set up this macOS VM", with the guest's screen in it and the three steps below its title.
   - The steps: create the account `wardyn-admin` with the one-time code as its password, turn on Screen Sharing with control, and turn on Remote Login.
-  - The window comes to the front, over other apps and on the Space you are using. It has no close button and closes by itself when the wait ends.
+  - Every prepare writes a new code. Type the code shown for this prepare: an earlier prepare's code, a mistyped character or a lost Shift key makes stage 1 stop within seconds, saying the account's password does not match the one-time code. Delete the VM and prepare again.
+  - The window comes to the front, over other apps and on the Space you are using. It has no close button and closes by itself when the wait ends. The code is hidden until you click Show code, and Hide code hides it again.
 - Preparing waits up to an hour for the guest's Remote Login, then stops and publishes no base. Run `prepare` again to retry.
 - The window needs the Mac's desktop. On macOS 26, `prepare`, and the prepare that `setup` starts, refuse at once, before any download, when started over SSH, outside the signed-in desktop, or with sudo. They say: run prepare in Terminal on the Mac, signed in at its desktop, not over SSH and not with sudo.
 
 1. Run `wardyn-runnerd macos-vm prepare`, or `wardyn-runnerd setup`, in Terminal on the Mac, signed in at its desktop. Not over SSH, and not with sudo.
-2. Wait for the download and install. The window has no Dock icon. When it opens, read the code: `cat ~/Library/Application\ Support/Wardyn/macos-vm.noindex/setup-code.json`. The password is the `code` value; the account is `wardyn-admin`.
+2. Wait for the download and install. The window has no Dock icon. When it opens, click Show code in the window and read the code. The account is `wardyn-admin`.
 3. In the window, choose a country and language. The guest has no internet while preparing: when asked for a network, continue without one, and skip Migration Assistant and Apple Account. Setup Assistant's Screen Time screen may take a minute to give up waiting for the network: wait, then continue.
 4. Create the account: any full name, account name exactly `wardyn-admin`, and the code as its password. Do not turn on FileVault in the guest. Skip the remaining screens.
    Create no other account and add no SSH keys; only `wardyn-admin`. Prepare refuses a base that holds another account, and names it.
@@ -182,7 +184,7 @@
 
 1. Run `wardyn-runnerd macos-vm edit-base` in Terminal on the Mac, signed in at its desktop. Not over SSH, and not with sudo.
 2. Wardyn copies the base and, in a boot with no window, changes the password of `wardyn-admin` from the one the base keeps to a fresh one-time code. The command names the file that holds the code, `setup-code.json`, as setup by hand does.
-3. The copy boots in a window. Sign in as `wardyn-admin` with the code. The guest has no internet during the session.
+3. The copy boots in a window. Click Show code in the window, then sign in as `wardyn-admin` with the code. The guest has no internet during the session.
 4. Make your changes. For desktop control, open System Settings > General > Sharing and turn on Screen Sharing. Under its (i) button, turn on "VNC viewers may control screen with password".
    - For folder shares, open System Settings > Privacy & Security > Full Disk Access, click +, press Command-Shift-G, type `/usr/local/libexec/wardyn-guest-agent`, and turn it on.
 5. Leave Remote Login off and add no accounts. When you are done, close the window: Wardyn asks the guest to shut down. The window closes once the guest has shut down.
@@ -233,7 +235,7 @@ An operator can have prepare install packages, apps, files, configuration profil
 | `app` | `.zip` of the bundle, or `.dmg` | `ditto` into `/Applications`; a `.dmg` is attached read-only first | `app`: the bundle in the `.dmg` (`Name.app`) |
 | `file` | any | pushed to `dest`, root's, mode 0644 | `dest`: under `/Library`, `/usr/local` or `/opt` |
 | `profile` | `.mobileconfig` | staged for approval in `edit-base` | `identifier`: its `PayloadIdentifier` |
-| `ca` | one CA certificate, `.pem`, `.cer`, `.crt` or `.der` | trusted in the System keychain for SSL | none |
+| `ca` | one X.509 v3 CA certificate (`CA:TRUE`), `.pem`, `.cer`, `.crt` or `.der` | trusted in the System keychain for SSL | none |
 
 What Wardyn automates, and what the operator does by hand in `wardyn-runnerd macos-vm edit-base`:
 
@@ -255,6 +257,8 @@ What Wardyn automates, and what the operator does by hand in `wardyn-runnerd mac
 ### The organisation CA
 
 The `ca` item trusts your organisation's root in the guest at prepare. It is separate from the per-run proxy CA ([Credentials and sign-ins](#credentials-and-sign-ins)).
+
+The file must be an X.509 v3 CA certificate: its `basicConstraints` say `CA:TRUE`. Wardyn reads each `ca` file when it reads the list, and a file that is not one stops `prepare` and a tools update before anything downloads, saying why. A v1 certificate has no `basicConstraints`, so it is refused. macOS's own `openssl req -x509` writes a v1 certificate unless you give it a v3 extensions section that sets `basicConstraints = CA:TRUE`.
 
 1. The guest agent runs `security add-trusted-cert -d -r trustRoot -p ssl` on the certificate as root: SSL only, never every policy. It does not change the `com.apple.trust-settings.admin` authorization rule; macOS 26 refuses root that change.
 2. `security verify-cert -p ssl` reads the trust back. `tools.json` records `trusted` or `not_trusted` with the certificate's SHA-256 and SHA-1 fingerprints.
@@ -298,7 +302,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 
 - **The lists.** The runner setting `macos_vm_bases_dir` (in `runnerd.json`, or `MacOSVMBasesDir` from your MDM) names a directory on the Mac. Each `<name>.json` in it is the install list of the base `<name>`, in `macos_vm_base_file`'s form.
   - A name is lowercase letters, digits, `.`, `_` and `-`. A list cannot hold a `profile` item, since `edit-base` edits Standard only.
-  - A list runnerd can't read (for example one without `"version": 1`) leaves only Standard offered; the reason is in `runnerd.log`, not in the console ([#3887](https://github.com/cjohnstoniv/wardyn/issues/3887)).
+  - A list runnerd can't read (for example one without `"version": 1`) shows its base as `failed` with the reason, in `wardyn-runnerd macos-vm status` and on the runner's page; the other bases are unaffected and the failed one is not offered.
 - **Derived.** A base is an APFS clone of Standard, booted once to install its own list. It keeps Standard's tools and Standard's prepare date, so the maximum base age reads the same date.
 - **Rebuilt.** When Standard changes (prepare, tools update or edit) or a list changes, each base is rebuilt from it.
   - One at a time, in one of the 2 VM slots, and only while no prepare, tools update or edit runs.
@@ -472,7 +476,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | Mac control | In the guest | State |
 |---|---|---|
 | Network filtering | The guest's one NIC goes to the run's own relay and proxy, with no NAT or bridged device. The proxy allows, denies and audits each request | Today |
-| Trust in your organisation's certificate authority | Node, Python, git and curl are pointed at the run proxy's certificate, and it is trusted in the run's System keychain for TLS before the run starts (see Limits below) | Today for your own CA: a `ca` item is trusted in the guest's System keychain for SSL at prepare, and the caps report `org_ca` as `trusted` or `not_trusted` ([The organisation CA](#the-organisation-ca)) |
+| Trust in your organisation's certificate authority | Node, Python, git and curl are pointed at the run proxy's certificate. On macOS 26 the run's System keychain does not trust it ([System trust store](#apps-that-use-only-the-system-trust-store)) | Today for your own CA: a `ca` item is trusted in the guest's System keychain for SSL, on macOS 26 by hand in `edit-base`, and the caps report `org_ca` as `trusted` or `not_trusted` ([The organisation CA](#the-organisation-ca)) |
 | Endpoint security agent | None is installed in the base. Stage 2 installs the Command Line Tools, the harness CLIs and the guest agent only | Today, in part: a `pkg` item installs your agent's package into the base as admin, with its licence as a `secret_files` entry. A system-extension or helper approval is by hand in `edit-base`, or from your MDM ([Customising the base](#customising-the-base)) |
 | Privilege management | `agent` is a standard user. Stage 1 refuses to publish a base that holds any other account than it and the setup account, and only the Mac's user can read the setup account's password, kept for `edit-base` | Today |
 | Disk encryption | The guest's disk is a file on the Mac's volume, so the Mac's disk encryption covers it when the volume has any. The run's clone is deleted at the end, which is not secure erasure | Today |
@@ -488,13 +492,28 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 
 | Limit | Detail |
 |---|---|
-| Proxy certificate | Trusted in the run's System keychain for TLS before the run starts. If macOS refuses, the run goes on, its audit says so, and keychain-only tools (Safari, `gh`, `kubectl`) fail TLS. Node, Python, git and curl are pointed at it |
+| Proxy certificate | On macOS 26 the run's System keychain does not trust it, so apps that use only the system trust store fail on inspected hosts ([System trust store](#apps-that-use-only-the-system-trust-store)). Node, Python, git and curl are pointed at it |
 | Harnesses | Claude Code, Codex CLI and "Your own tools", depending on what the base installed and what passed the launcher's self-test. If Apple's Command Line Tools cannot install, only "Your own tools" is offered |
 | Folders | Shared into the guest; see [Folders](#folders) |
-| Desktop | One fixed 1920 x 1080 display. An `observe` result (see above) leaves macOS VMs agent-only |
+| Desktop | One fixed 1920 x 1080 display. An `observe` result (see above) can be watched, not controlled |
 | Clipboard | Paste in is allowed and copy out is blocked by default, as for other desktops, if Apple's Screen Sharing carries the standard clipboard messages. Otherwise nothing is copied either way |
 | Heat and battery | New VMs are refused at serious or critical thermal state. Battery use and lid-close sleep on MacBooks were not measured |
 | Guest patching | The guest's automatic updates are off, so a run's OS is predictable. Re-prepare to move to a newer macOS. `macos_vm.max_base_age_days` in the site config refuses runs on a Mac whose base is older |
+
+### Apps that use only the system trust store
+
+Before a run starts, Wardyn asks the guest to trust the run's proxy certificate in its System keychain, for TLS only. macOS 26 refuses this without a person ([#3923](https://github.com/cjohnstoniv/wardyn/issues/3923)). The run goes on, and its `run.dispatch` audit row says `keychain_trust` `not_trusted`, reason `refused`.
+
+| App or tool | Host marked Inspected | Host marked Tunnel only | Tunnel only, behind a TLS-inspecting proxy |
+|---|---|---|---|
+| Uses only the system trust store: Safari, Electron apps, and Go or Swift tools with no CA file of their own (`gh` and `kubectl` not yet run on a real Mac) | Fails TLS | Works | Fails TLS until your organisation's root is trusted |
+| Reads a CA variable: Node, Python, git, curl and the AWS CLI | Works | Works | Works, with your organisation's root in the [runner's CA bundle](hybrid-laptops.md#a-corporate-ca-on-a-laptop-runner) |
+
+- **The CA variables.** `SSL_CERT_FILE`, `GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `AWS_CA_BUNDLE` and `CURL_CA_BUNDLE` are set for every process a run starts.
+- **Your organisation's root.** Trust it by hand in `edit-base` ([The organisation CA](#the-organisation-ca)). That reaches a Tunnel only host.
+- **The run's proxy certificate.** Trusting it by hand can't help: the certificate is new for each run.
+- **Which hosts are which.** The run's Policy tab and `wardyn run policy` mark each host.
+- **`kubectl`.** A kubeconfig that names a CA may not use the system trust store. The one a kubectl component writes names the run's proxy certificate.
 
 ### Folders
 
@@ -516,9 +535,12 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 - Only a macOS VM run on that Mac attaches it, as a second disk at the drive's path (`/Users/agent/drive` or `/Users/agent/drives/<name>`). Its first run formats it as Mac OS Extended (journaled): a later run's VM did not mount an APFS one. A run on another runner, or of another sandbox kind, is refused naming the Mac.
 - Turn on FileVault on a Mac that keeps disk drives: the guest does not encrypt them.
 - A disk drive is in one run at a time. A second run on the Mac that asks for it while another holds it is refused when that run starts, not at Review.
-- The guest finds a disk drive by its size, apart from the boot disk, because a macOS guest does not show the disk's identifier. A macOS VM run attaches one disk drive, and a kept work folder counts as one. A person's disk drives all have one size, so a second is refused when the run starts.
-- Keeping the work folder of a macOS VM run keeps `/Users/agent/work` as a disk drive on the Mac the run used. The run's pool must hold one Mac; with several, it is refused.
+- A run's VM holds its disk drive for up to about 80 seconds after the run shows as ended, usually half a minute. A run that asks for the drive then is refused as one the drive is still being released by: try again in two minutes.
+- The guest finds a disk drive by its size, apart from the boot disk, because a macOS guest does not show the disk's identifier. It refuses two disks of one size.
+- A macOS VM run attaches one disk drive, and a kept work folder counts as one. A run that names two is refused at Review and at create (`drive_one_disk`), whatever their sizes.
+- Keeping the work folder of a macOS VM run keeps `/Users/agent/work` as a disk drive on the Mac the run used. The run's pool must hold one Mac; with several, it is refused. A run its Mac refused when it started removes its kept work folder drive.
 - Deleting a disk drive asks its Mac to delete the image. While the Mac is offline the drive stays as deleting, and the image goes when the Mac reconnects. If the Mac is no longer registered, the image stays on it and only the record goes. A drive in a run is refused until that run ends.
+- For up to 90 seconds after a person's last macOS VM run ends, deleting their disk drive is refused as a drive still being released: try again in two minutes.
 - Wardyn does not encrypt the image: the runner's macOS login and root on the Mac can read it. It stays until the drive is deleted, and deleting it is not secure erasure (see [Backups, Spotlight and removal](#backups-spotlight-and-removal)).
 
 ## Not yet tested on a real Mac
@@ -553,6 +575,8 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | A folder shared read-only refuses writes from the guest | Read-only folders |
 | Without Full Disk Access for the guest agent, its listing of a share as `agent` waits as a run's read of a file does, and with it the listing answers | Folder shares: the refusal that names the fix. If the listing does not wait, a run can still hang on its first read |
 | A Full Disk Access grant made in `edit-base` survives the recheck and reaches each run's clone | Folder shares on every run |
+| `gh` and `kubectl` against a host marked Inspected, in a macOS VM run | Whether they fail TLS as [the table](#apps-that-use-only-the-system-trust-store) says |
+| A `ca` item trusted by hand in `edit-base` stays trusted in each run's clone | Apps that use only the system trust store, on Tunnel only hosts behind a TLS-inspecting proxy |
 | The runner refuses a share of a whole home folder, /Users or /private/var on a real Mac, before the VM starts | Folders: what a run may share |
 | The VM's share is allowed into a folder macOS protects once the runner is allowed into it | Protected folders. The runner's own check passes, and the share could still read empty |
 | Removable volumes and iCloud Drive are allowed in the same Files and Folders pane | The fix the refusal names |
@@ -580,6 +604,8 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 ## Upgrades
 
 - An upgrade of the runner package does not repeat the macOS install.
+- A runner set up with `wardyn-runnerd setup` keeps its own copies of `wardyn-macvm` and `wardyn-guest-agent` beside it. `wardyn runner upgrade` replaces only `wardyn-runnerd` and says so; to update all three, install the new `wardyn-runnerd.pkg` and run `/usr/local/wardyn/bin/wardyn-runnerd setup` again with the same flags. `install.sh --uninstall` removes all three.
+  - A LaunchAgent of your own that runs `/usr/local/wardyn/bin/wardyn-runnerd` needs no rerun. The package installs the helper and guest agent in that folder, and the runner looks beside its own binary.
 - When the guest agent in the base differs from the runner's, the runner runs a tools update: it clones the base, boots it, applies the new agent and pins, and keeps the result. It takes one slot like any VM, for minutes.
 - A base the new runner cannot accept is marked "update needed", and the Mac offers no macOS VMs until it is re-prepared (`prepare --new-image`).
 
@@ -611,6 +637,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | `prepare` says setup by hand needs this Mac's desktop | It ran over SSH, outside the signed-in desktop, or with sudo. Run it in Terminal on the Mac, signed in at its desktop |
 | Preparing stopped at the Remote Login check | Port 22 did not refuse, or the guest was not shown live on the same boot. No base was published; run `prepare` again |
 | `edit-base` says the base was prepared before Wardyn kept its admin password | The base comes from an older release, and macOS will not let root change its setup account's password without the old one. Run `wardyn-runnerd macos-vm prepare --new-image`, then `edit-base` again |
+| A tools update stops removing a CA, saying macOS 26 can refuse that | The update stops, and the old base stays ready and still trusts the old CA. Change the list as you want it and run `prepare --reprepare`, which builds a base from it |
 | `edit-base` says the guest did not take the one-time code | The setup account's password in the guest is not the one Wardyn keeps, or was changed in the session. Runs keep the old base. If it fails again before the window opens, run `prepare --new-image` |
 | The runner logs that it offers none and names `--per-run-memory` or `--per-run-cpu` | A per-run limit is below the base's minimum. Raise it ([How many VMs a Mac offers](#how-many-vms-a-mac-offers)) |
 
@@ -624,7 +651,7 @@ The runner drawer shows most of these from fixed codes and numbers the runner re
 | `/Users/Shared/Wardyn/sock/u<uid>/<run-key>/` (control, agent and desktop sockets) | The logged-in user only (mode `0700`) |
 | `macos-vm.noindex/bases/` and `cache/` | The logged-in user only |
 | `macos-vm.noindex/prepare.log` | The logged-in user. No password or secret value is logged |
-| `macos-vm.noindex/setup-code.json` | The logged-in user only (mode `0600`). It exists only while macOS waits for setup by hand |
+| `macos-vm.noindex/setup-code.json` | The logged-in user only (mode `0600`). It exists only while macOS waits for setup by hand or an `edit-base` session. The window can show its code on a click |
 
 - The helper runs as the logged-in user, never root, with one entitlement: to use Apple's virtualization. It has no networking entitlement.
 - The VM listens on no TCP port on the Mac, and the proxy's credential injection never leaves Docker.

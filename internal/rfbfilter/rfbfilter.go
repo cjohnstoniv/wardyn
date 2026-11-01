@@ -42,18 +42,28 @@ const (
 	CopyOut Direction = "copy_out"
 )
 
-// Rules says which clipboard directions the relay lets through.
-type Rules struct{ PasteIn, CopyOut bool }
+// Rules says which clipboard directions the relay lets through. ViewOnly also keeps every
+// input message from the desktop: keys and pointer moves are dropped, paste in is blocked
+// whatever PasteIn says, and any other control message ends the connection.
+type Rules struct{ PasteIn, CopyOut, ViewOnly bool }
 
 func (r Rules) allows(d Direction) bool {
 	if d == PasteIn {
-		return r.PasteIn
+		return r.PasteIn && !r.ViewOnly
 	}
 	return r.CopyOut
 }
 
-// Event is one cut text the relay saw. It carries no content by design.
+// Input kinds a view-only relay drops (Event.Input).
+const (
+	InputKey     = "key"
+	InputPointer = "pointer"
+)
+
+// Event is one cut text the relay saw, or the first input message of a kind a view-only relay
+// dropped (Input set, nothing else). It carries no content by design.
 type Event struct {
+	Input     string
 	Direction Direction
 	Bytes     int64
 	SHA256    string
@@ -403,9 +413,10 @@ func appendFrame(dst []byte, f frame, p []byte) []byte {
 // session is the RFB state the two directions share.
 type session struct {
 	rules   Rules
-	version int  // 33, 37 or 38 once the browser has chosen
-	secType byte // 1 (None) or 2 (VNC auth) once known
-	bpp     int  // bytes per pixel: ServerInit's, then SetPixelFormat's
+	version int             // 33, 37 or 38 once the browser has chosen
+	secType byte            // 1 (None) or 2 (VNC auth) once known
+	bpp     int             // bytes per pixel: ServerInit's, then SetPixelFormat's
+	dropped map[string]bool // the input kinds a view-only relay has reported
 }
 
 type step func(piece []byte) error
@@ -506,6 +517,25 @@ func (p *parser) cutText(d Direction, hdr []byte) error {
 	p.cut, p.sum = &Event{Direction: d, Bytes: size, Allowed: allowed}, sha256.New()
 	p.stream(size, !allowed, p.msgNext)
 	return nil
+}
+
+// input forwards a key or pointer message, or under ViewOnly drops it. Each kind is reported
+// once: a browser sends pointer moves by habit, and one row per move would flood the audit trail.
+func (p *parser) input(kind string) step {
+	return func(b []byte) error {
+		if !p.s.rules.ViewOnly {
+			return p.fixed(b)
+		}
+		if !p.s.dropped[kind] {
+			if p.s.dropped == nil {
+				p.s.dropped = map[string]bool{}
+			}
+			p.s.dropped[kind] = true
+			*p.events = append(*p.events, Event{Input: kind})
+		}
+		p.msgNext()
+		return nil
+	}
 }
 
 func u16(b []byte) int   { return int(binary.BigEndian.Uint16(b)) }

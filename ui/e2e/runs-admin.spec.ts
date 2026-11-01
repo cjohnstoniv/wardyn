@@ -267,6 +267,12 @@ test.describe("Entry to another person's run (#1476)", () => {
 
   test("a super admin on a person's run: the owner line, no terminal or Attach card, Kill stays, and a ticket is refused", async ({ page }) => {
     const id = await seedRun(page, `entry foreign ${Date.now()}`, { owner: "priya@e2e.wardyn.invalid", operatorOwned: false });
+    // The Watch link needs a recording; this seeded run has none, so its read says it does.
+    await page.route(`**/api/v1/runs/${id}`, async (route: Route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      const res = await route.fetch();
+      await route.fulfill({ response: res, json: { ...((await res.json()) as Record<string, unknown>), has_recording: true } });
+    });
     await page.goto(`runs/${id}`);
     await expect(page.getByText("Only priya@e2e.wardyn.invalid can open this run's terminal, apps and SSH.")).toBeVisible();
     await expect(page.getByText(/Watch the captured session/)).toBeVisible();

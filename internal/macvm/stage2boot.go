@@ -395,10 +395,22 @@ func (g *toolsGuest) Push(ctx context.Context, dest string, mode fs.FileMode, r 
 	return g.tools.ToolsPush(ctx, dest, mode, io.LimitReader(rs, size), size, hex.EncodeToString(h.Sum(nil)))
 }
 
+// toolsExecDeadline bounds one guest command. It is long enough for an installer, and ends a command that
+// waits for a person, such as a macOS authorization prompt nobody can answer.
+var toolsExecDeadline = 30 * time.Minute
+
+var errExecDeadline = errors.New("guest command deadline")
+
 func (g *toolsGuest) Run(ctx context.Context, argv []string) (string, int, error) {
 	ctx, done := g.bound(ctx)
 	defer done()
-	return g.tools.ToolsRun(ctx, argv)
+	ctx, stop := context.WithTimeoutCause(ctx, toolsExecDeadline, errExecDeadline)
+	defer stop()
+	out, exit, err := g.tools.ToolsRun(ctx, argv)
+	if err != nil && errors.Is(context.Cause(ctx), errExecDeadline) {
+		return out, exit, fmt.Errorf("macvm: the guest command %s did not finish within %s; macOS may be waiting for a person to answer a prompt in the guest: %w", filepath.Base(argv[0]), toolsExecDeadline, err)
+	}
+	return out, exit, err
 }
 
 func (g *toolsGuest) DesktopPassword(ctx context.Context, pw []byte) (bool, error) {

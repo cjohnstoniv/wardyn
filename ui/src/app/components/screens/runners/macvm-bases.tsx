@@ -44,7 +44,11 @@ export function MacVMBases({ caps }: { caps: MacVMCaps }) {
           <li key={b.name} className="flex items-center justify-between gap-3 px-3 py-1.5">
             <span>
               <span className="font-medium">{b.name}</span>
-              <span className="text-meta text-muted-foreground"> · {MAC_BASES.B11(b.items)}</span>
+              {b.reason ? (
+                <span className="block text-meta text-danger">{b.reason}</span>
+              ) : (
+                <span className="text-meta text-muted-foreground"> · {MAC_BASES.B11(b.items)}</span>
+              )}
             </span>
             <StateChip base={b} />
           </li>

@@ -597,18 +597,9 @@ func macDesktopOff(dir string) bool {
 	return err == nil
 }
 
-// startMacVMNet starts the guest's relay as startVMNet does, but serving its frames on stdin and stdout
-// (-stdio) instead of a socket, and answers the attach connection's descriptor. It attaches before the
-// start, so nothing is buffered on the connection that the helper would miss.
-func (d *Driver) startMacVMNet(ctx context.Context, spec runner.SandboxSpec, proxyIP string) (*os.File, error) {
-	labels := d.labels(spec.RunID, componentVMNet, spec.Labels)
-	labels[labelMachineKind] = string(types.MachineMacOSVM)
-	return d.startMacRelay(ctx, spec.RunID, labels, proxyIP)
-}
-
 // startMacRelay is startMacVMNet's relay on id's internal network, -proxy at proxyIP: a run's, or a
-// base job's stage-2 one (StartMacPrepNet).
-func (d *Driver) startMacRelay(ctx context.Context, id uuid.UUID, labels map[string]string, proxyIP string) (*os.File, error) {
+// base job's stage-2 one (StartMacPrepNet). guestProxy is the proxy as the guest's variables name it.
+func (d *Driver) startMacRelay(ctx context.Context, id uuid.UUID, labels map[string]string, proxyIP, guestProxy string) (*os.File, error) {
 	info, err := d.cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("docker: info: %w", err)
@@ -616,12 +607,12 @@ func (d *Driver) startMacRelay(ctx context.Context, id uuid.UUID, labels map[str
 	host := hardenedHostConfig(internalNetName(id), "", runner.Resources{MemoryMiB: 256, PidsLimit: vmPidsLimit}, info.Info)
 	host.ReadonlyRootfs = true
 	host.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyDisabled}
-	host.ExtraHosts = []string{"wardyn-proxy:" + proxyIP}
+	host.ExtraHosts = relayProxyHosts(guestProxy, proxyIP)
 	uid, gid := vmUser(os.Getuid(), os.Getgid())
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: vmnetName(id),
 		Config: &container.Config{Image: d.proxyImage(), User: strconv.Itoa(uid) + ":" + strconv.Itoa(gid), Entrypoint: []string{vmnetEntrypoint},
-			Cmd:       []string{"-stdio", "-proxy", "wardyn-proxy:" + strconv.Itoa(runner.ProxyListenPort)},
+			Cmd:       []string{"-stdio", "-proxy", guestProxy},
 			OpenStdin: true, AttachStdin: true, AttachStdout: true, AttachStderr: true, Labels: labels},
 		HostConfig: host,
 	})

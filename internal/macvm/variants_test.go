@@ -107,16 +107,26 @@ func TestLoadBaseVariants(t *testing.T) {
 	if err != nil || len(vs) != 2 || vs[0].Name != "security-tools" || vs[1].Name != "xcode-16" || len(vs[1].List.Items) != 1 {
 		t.Fatalf("variants %+v %v", vs, err)
 	}
-	for name, body := range map[string][]byte{
-		"Standard.json": listJSON(t),
-		"xcode.json":    listJSON(t, map[string]any{"kind": "profile", "name": "wifi", "path": p, "sha256": pin, "identifier": "org.example.wifi"}),
-	} {
-		bad := t.TempDir()
-		if err := os.WriteFile(filepath.Join(bad, name), body, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := macvm.LoadBaseVariants(bad); err == nil {
-			t.Errorf("%s was accepted", name)
+	// A base with no name is not loaded at all.
+	bad := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bad, "Standard.json"), listJSON(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := macvm.LoadBaseVariants(bad); err == nil {
+		t.Error("Standard.json was accepted")
+	}
+	// A list that cannot be used leaves its base with the reason and the others loaded.
+	wifi, wifiPin := itemFile(t, t.TempDir(), "wifi.mobileconfig", "profile")
+	write("wifi.json", listJSON(t, map[string]any{"kind": "profile", "name": "wifi", "path": wifi, "sha256": wifiPin, "identifier": "org.example.wifi"}))
+	write("old.json", []byte(`{"items":[]}`))
+	vs, err = macvm.LoadBaseVariants(dir)
+	if err != nil || len(vs) != 4 {
+		t.Fatalf("variants %+v %v", vs, err)
+	}
+	for _, v := range vs {
+		want := map[string]string{"old": "version 0 is not 1", "wifi": "is a profile"}[v.Name]
+		if (v.Err == nil) != (want == "") || v.Err != nil && !strings.Contains(v.Err.Error(), want) {
+			t.Errorf("%s: err %v, want %q", v.Name, v.Err, want)
 		}
 	}
 }

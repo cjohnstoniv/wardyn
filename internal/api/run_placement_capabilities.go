@@ -813,6 +813,7 @@ const (
 	sizeBaseline                      // governance holds the run to the size its policy has
 	sizePool                          // the pool's per-run limit
 	sizeServer                        // the deployment's limits
+	sizeDefUnit                       // governance's Default unit, of everyone in no profile
 	sizeDefault                       // nothing capped it: the default size it got is under the minimum
 )
 
@@ -880,6 +881,9 @@ func (w macOSSizeWhy) cause(ask macOSVMAsk, least, unit int) sizeCause {
 			case runnerpool.CapKnobBaseline:
 				return sizeCause{sizeBaseline, ask.Profile}
 			}
+		case l.CapSource == types.LimitSourceGovernance:
+			// No profile: the person is in the Default unit, whose cap is the deployment's default (#3885).
+			return sizeCause{kind: sizeDefUnit}
 		case l.CapSource == types.LimitSourcePool && ask.Pool != "":
 			return sizeCause{sizePool, ask.Pool}
 		case l.CapSource == types.LimitSourceDeployment:
@@ -893,6 +897,8 @@ func (w macOSSizeWhy) cause(ask macOSVMAsk, least, unit int) sizeCause {
 	switch {
 	case w.Applied.Source == types.LimitSourceGovernance && ask.Profile != "":
 		return sizeCause{sizeDefault, "from your governance profile " + ask.Profile}
+	case w.Applied.Source == types.LimitSourceGovernance:
+		return sizeCause{sizeDefault, "from the Default governance unit"}
 	case w.Applied.Source == types.LimitSourcePool && ask.Pool != "":
 		return sizeCause{sizeDefault, "from the pool " + ask.Pool}
 	case w.Applied.Source == types.LimitSourceDeployment:
@@ -926,6 +932,9 @@ func (c sizeCause) sentence(group []sizeLow) string {
 		return fmt.Sprintf("%s: the pool %s caps each run at that. An admin raises the pool's per-run limits.", gets, c.name)
 	case sizeServer:
 		return gets + ": this server's limits cap it. Ask an operator to raise them."
+	case sizeDefUnit:
+		return gets + ": the Default governance unit, which holds everyone in no governance profile, caps it at this server's default size. " +
+			"Assign the person a governance profile that allows at least the CPUs and memory the refusal names."
 	}
 	return fmt.Sprintf("%s, the default size %s. Ask for at least the minimum in the run's `resources`, or set it on Review.", gets, c.name)
 }

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 )
@@ -42,4 +43,25 @@ func lastHelperLines(path string) (ev macvm.PrepareEvent, haveEvent bool, last s
 		}
 	}
 	return ev, haveEvent, last, sc.Err()
+}
+
+// lastPrepareToolsDial is the tools_dial of the last progress event in the log at path that carries one, and
+// when the helper reported it: "" and the zero time when none does. An event without one, such as the phases
+// after the tools phase, does not hide it. err is why the scan stopped before the end of the log: the lines
+// after it are unknown, so the dial is not known to be the newest.
+func lastPrepareToolsDial(path string) (class string, at time.Time, err error) {
+	f, openErr := os.Open(path)
+	if openErr != nil {
+		return "", time.Time{}, nil
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(nil, prepareLogLineMax)
+	for sc.Scan() {
+		var e macvm.PrepareEvent
+		if l := strings.TrimSpace(sc.Text()); strings.HasPrefix(l, "{") && json.Unmarshal([]byte(l), &e) == nil && e.Phase != "" && e.ToolsDial != "" {
+			class, at = e.ToolsDial, time.Unix(0, e.ToolsDialAt)
+		}
+	}
+	return class, at, sc.Err()
 }

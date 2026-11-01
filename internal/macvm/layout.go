@@ -78,19 +78,37 @@ func (l Layout) DriveImage(object string) (string, error) {
 var ErrDiskInUse = errors.New("macvm: the disk drive is attached to another run on this Mac")
 
 // LockDisk takes the exclusive lock of the disk image at path, the lock file beside it, in one try:
-// ErrDiskInUse when another holds it. The lock file is never removed, so two holders can never lock
-// two files of one name.
+// ErrDiskInUse when another holds it. The lock file is removed only by a reclaim that holds it, after
+// the image is gone (RemoveDiskImage), and a later LockDisk makes it again. A lock taken on a file
+// that was removed meanwhile is dropped and taken again on the file the path names now, so two
+// holders can never lock two files of one name.
 func LockDisk(path string) (unlock func(), err error) {
-	if err := mkdirPrivate(filepath.Dir(path)); err != nil {
-		return nil, err
-	}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // lockFile tries once before it waits on ctx
-	unlock, err = lockFile(ctx, path+".lock", true)
+	cancel() // lockDisk tries once before it waits on ctx
+	unlock, err = lockDisk(ctx, path)
 	if errors.Is(err, context.Canceled) {
 		return nil, ErrDiskInUse
 	}
 	return unlock, err
+}
+
+// lockDisk is LockDisk that waits until ctx ends.
+func lockDisk(ctx context.Context, path string) (unlock func(), err error) {
+	if err := mkdirPrivate(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	for {
+		f, unlock, err := lockFileHeld(ctx, path+".lock", true)
+		if err != nil {
+			return nil, err
+		}
+		held, herr := f.Stat()
+		now, nerr := os.Stat(path + ".lock")
+		if herr == nil && nerr == nil && os.SameFile(held, now) {
+			return unlock, nil
+		}
+		unlock()
+	}
 }
 
 // MakeDiskImage creates the disk image at path, sparse, sizeBytes long, unless it is there already,
@@ -125,21 +143,26 @@ func MakeDiskImage(path string, sizeBytes int64) error {
 	return f.Close()
 }
 
-// RemoveDiskImage deletes the disk image at path under its lock: ErrDiskInUse while a run holds it,
-// and false with no error when there is no image.
+// RemoveDiskImage deletes the disk image at path, then its lock file, under the lock: ErrDiskInUse
+// while a run holds it, and false with no error when there is no image.
 func RemoveDiskImage(path string) (bool, error) {
 	unlock, err := LockDisk(path)
 	if err != nil {
 		return false, err
 	}
 	defer unlock()
+	gone := true
 	switch err := os.Remove(path); {
 	case errors.Is(err, os.ErrNotExist):
-		return false, nil
+		gone = false
 	case err != nil:
 		return false, fmt.Errorf("macvm: disk image: %w", err)
 	}
-	return true, nil
+	// The image is gone (or was), so the lock file has nothing left to guard. It goes while this holds it.
+	if err := os.Remove(path + ".lock"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return gone, fmt.Errorf("macvm: disk image lock: %w", err)
+	}
+	return gone, nil
 }
 
 // VariantDir is the derived base name's dir; name is a ValidBaseName.

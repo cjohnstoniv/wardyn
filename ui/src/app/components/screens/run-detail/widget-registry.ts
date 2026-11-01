@@ -201,7 +201,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
   sandbox: {
     label: "Sandbox",
     Icon: Box,
-    component: (ctx) => React.createElement(SandboxWidget, { runId: ctx.run.id, live: !ctx.finished }),
+    component: (ctx) => React.createElement(SandboxWidget, { runId: ctx.run.id, live: !ctx.finished, macOS: isMacOSVM(ctx.run) }),
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
     presets: { live: { x: 8, y: 8, w: 4, h: 4 } },
   },

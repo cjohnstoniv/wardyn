@@ -177,6 +177,7 @@ func runRunnerUpgrade(cmd *cobra.Command, version, flagBase string) error {
 	if failure == nil {
 		if failure = waitStarted(ctx, local.dir, started); failure == nil {
 			fmt.Fprintf(out, copyUpgradeDone+"\n", version)
+			noteMacVMHelper(out, installed, version, org)
 			return nil
 		}
 	}
@@ -204,6 +205,17 @@ func runRunnerUpgrade(cmd *cobra.Command, version, flagBase string) error {
 	}
 	_ = os.Remove(rollbackFrom)
 	return fmt.Errorf(errUpgradeRolledBack, version, failure, from)
+}
+
+// noteMacVMHelper tells a Mac whose setup installed wardyn-macvm beside the runner that the upgrade left that
+// helper and its guest agent behind: only the package carries new copies, and its setup installs all three.
+func noteMacVMHelper(out io.Writer, installed, version, org string) {
+	if setupGOOS != "darwin" {
+		return
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(installed), "wardyn-macvm")); err == nil {
+		fmt.Fprintf(out, copyUpgradeMacVM+"\n", version, org)
+	}
 }
 
 // keepRollbackCopy writes the bytes of prev to dst, atomically and with prev's mode, and reads them back to

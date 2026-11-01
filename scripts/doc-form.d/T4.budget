@@ -110,7 +110,12 @@
 # threatmodel/THREAT-MODEL.md 71073 adds 25 over 71048, measured: a person's disk drive is a Mac OS Extended image the guest does not encrypt.
 # threatmodel/THREAT-MODEL.md 71079 adds 6 over 71073, measured: the Mac's disk encryption protects a disk drive only when FileVault is on.
 # threatmodel/THREAT-MODEL.md 71088 adds 9 over 71079, measured: stage 1's screen saver setting is written for the prepare's host identity, not a run.
-threatmodel/THREAT-MODEL.md=71088 share=20
+# threatmodel/THREAT-MODEL.md 71126 = 71079 + 47, measured: Azure DevOps push rules read the Git REST API (#3921)
+# threatmodel/THREAT-MODEL.md 71159 = 71126 + 33, measured: the unattended cut and the git-printed refusal (#3921)
+# threatmodel/THREAT-MODEL.md 71185 = 71159 + 26, measured: deletions at a review path are not held (#3921)
+# threatmodel/THREAT-MODEL.md 71194 = ours 71088 + theirs 71185 - base 71079 at the 0.10 W7 merge of ado-push-paths.
+# threatmodel/THREAT-MODEL.md 71233 over 71194: measured, review-path removals named at the rc.10 W2+ merge.
+threatmodel/THREAT-MODEL.md=71233 share=20
 # 0.10 HYB-C: threatmodel/THREAT-MODEL.md 66573 adds 43 over 66530, measured: the Linux VM's virtiofs shares are the container's binds (same folders, targets, mode, no other host path).
 # threatmodel/THREAT-MODEL.md 66596 adds 23 over 66573 (0.10 HYB-C review): VM state reaches the guest only as its disk; a guest write lands as the runner's user.
 # threatmodel/THREAT-MODEL.md 65311 adds 222 over 65089 (0.10 FEAT-1MCP), measured: item (r), a local MCP server's access, secrets, egress, off switch and refusals.

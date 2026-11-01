@@ -2950,7 +2950,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     - Every local account can write the shared admission ledger. It can hold this Mac's macOS VM slots, memory or disk, or the lock, and so stop macOS VMs until it stops or the Mac restarts. It cannot admit a VM past the cap, and a runner refuses with a named reason after 10 seconds. An account that can do this can already exhaust the Mac directly. It can also make a package install fail closed by holding the lock for over 10 seconds.
     - A runner frees its own ledger entry early in one stated case: a process-count heuristic that errs toward keeping the entry. Apple's cap of two is the backstop.
     - Disk reserved per VM is its worst case on the live volume. Space that local snapshots hold is outside it, so macOS VMs can use more disk than they reserved.
-    - In the guest, tools that use the macOS keychain do not trust the run's proxy certificate, so hosts the proxy inspects show certificate errors there.
+    - In the guest, tools that use the macOS keychain do not trust the run's proxy certificate, so [hosts the proxy inspects](../docs/operations/macos-vms.md#apps-that-use-only-the-system-trust-store) show certificate errors there.
     - The setup account and its random password stay in every run's guest. Its file in the base's folder is readable by the Mac's user only, not in a run's copy; Remote Login is proved off. The guest may also hold it in its auto-login file until stage 1 overwrites that. A one-time code from a setup by hand is replaced by stage 1's first step.
     - A Mac runner reports its macOS VM status to its own organisation as fixed codes and numbers: the preparing step, percent and download rate; a wait, failure or host-check code with free GB; and whether it runs in a GUI login session, as yes or no. No user or account name is sent. The base's error is the one free text: the runner replaces its login's home folder with `~`, but an error from Apple's framework, `softwareupdate` or the guest may still name another path.
     - The macOS VM base's pinned guest tools are checked against SHA-256 values compiled into the runner, so the remaining trust is the supply chain at the time each pin was chosen.
@@ -3578,7 +3578,12 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
   - One at or above a path a deny pattern could match refuses the push.
   - Every mode git does not check out as a regular file counts.
 - **Removals are invisible.** These rules judge what a push introduces. A push
-  that deletes a denied path is not a rule match.
+  that deletes a denied path is not a rule match, and one that removes a file at a
+  `require_review_paths` path is not held, on any forge: deleting it, renaming it out,
+  or replacing a directory or parent directory at or above the pattern with a file.
+  The forge's own branch policy is what protects that file. On GitHub, a force-push
+  that rewinds a branch also drops review-path content without a hold; Azure DevOps
+  refuses it.
 - **Root-level files are always reported.**
   - The root tree is always in the pack, so every file at the repository root is named whether or not the push touched it.
   - One the pack does not carry is compared with the commit the push builds on like any other entry, so a pattern naming a root-level file refuses only a push that changes it
@@ -3648,8 +3653,10 @@ The residuals particular to holding:
       - so while held packs fill that budget other buffered scans on the run's sidecar (an LLM request body, another push) cannot retain theirs and fail closed (refused, never forwarded unread) until the hold ends.
 - **The Azure DevOps Entra lane runs the rules before its capability gate.**
   - `Proxy.serveADOGit` inspects a push that moves a ref (`applyPushRules`) before `awaitADOCapability`, so nobody is asked for `code_write` on a push the rules refuse, and a review hold is decided before any capability hold.
-  - Its refusals are the plain `403` the other lanes give, not the lane's receive-pack-status refusal, so git prints `HTTP 403` there as elsewhere.
-  - Azure DevOps' trees cannot be read (the forge comparison reads GitHub only), so what the pack does not carry keeps the strict reading on this lane, as on any non-GitHub forge.
+  - Its refusals are the plain `403` the other lanes give, so git prints `HTTP 403`, with two exceptions the agent can act on.
+  - A push whose paths could not be worked out, and a review match on an unattended run, take the lane's receive-pack-status refusal, so git prints the reason.
+  - For `require_review_paths`, `deny_paths`, `max_file_size_mib` and `deny_new_executables`, what the pack does not carry is compared through the Azure DevOps Git REST API ([`internal/egress/proxy/push_forge_ado.go`](../internal/egress/proxy/push_forge_ado.go)): the receive-pack is read before Azure DevOps has its objects, so the base commit's trees are all it can show, in the repository the push names, with the lane's credential.
+  - Any failure, a paged or partial answer, a commit the server does not know, or a branch moved other than forward keeps the strict reading, as on a forge with no reader.
 - **The Azure DevOps REST door is governed too, and fails closed.**
   - The same per-person credential writes content through REST: Git Pushes - Create carries files inline.
   - Until this was closed a REST push adding `.github/workflows/exfil.yml` under `deny_paths: [".github/**"]` answered `201`, and its protected-ref escalation was one the run's owner may decide.

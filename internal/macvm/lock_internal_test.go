@@ -5,6 +5,7 @@ package macvm
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -186,5 +187,43 @@ func TestLockPathsOfBaseAndStagingDiffer(t *testing.T) {
 			t.Fatalf("the %s and the %s are both %s", name, other, p)
 		}
 		seen[p] = name
+	}
+}
+
+// A run that waited on a disk's lock file while a reclaim removed it holds a lock on an unlinked
+// file; it must take the lock again on the file the path names now, or a second run could lock that
+// one too and attach the disk twice.
+func TestLockDiskAfterTheLockFileIsRemovedLocksTheNewFile(t *testing.T) {
+	img := filepath.Join(t.TempDir(), "d.img")
+	unlockFirst, err := LockDisk(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		unlock func()
+		err    error
+	}
+	got := make(chan result, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() {
+		u, err := lockDisk(ctx, img)
+		got <- result{u, err}
+	}()
+	time.Sleep(200 * time.Millisecond) // the waiter has the old lock file open and is trying its lock
+	if err := os.Remove(img + ".lock"); err != nil {
+		t.Fatal(err)
+	}
+	unlockFirst()
+	r := <-got
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	defer r.unlock()
+	if u, err := LockDisk(img); !errors.Is(err, ErrDiskInUse) {
+		if u != nil {
+			u()
+		}
+		t.Fatalf("a second lock beside the waiter's: %v, want ErrDiskInUse", err)
 	}
 }

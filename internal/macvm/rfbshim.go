@@ -26,7 +26,9 @@ import (
 // password, and only then presents runnerd plain RFB 3.8 with security None, which the gateway's
 // rfbfilter relays as it relays QEMU's display. Past the handshake it passes only the standard
 // messages it can frame and ends the session on any other, so a message it does not know never
-// crosses. Coordinates pass unchanged: RFB's origin is the top left on both sides.
+// crosses. Coordinates pass unchanged: RFB's origin is the top left on both sides. On a base whose
+// desktop is view only the shim also drops every key, pointer and paste message (RFBShim.ViewOnly),
+// whatever the gateway in front of it sent.
 
 // shimHandshakeWait bounds both handshakes and the credential request together.
 const shimHandshakeWait = 30 * time.Second
@@ -121,8 +123,21 @@ type RFBShim struct {
 	// Credential returns the run's VNC password (DesktopSecret.Credential). An error refuses the
 	// session before either side's handshake.
 	Credential func(ctx context.Context) (string, error)
+	// ViewOnly keeps every input message from the guest (BaseViewOnly).
+	ViewOnly bool
 	// Log gets one line per refused or ended session, never the password; nil is slog.Default().
 	Log *slog.Logger
+}
+
+// BaseViewOnly says whether the run in runDir boots a base without desktop control, from the base's
+// own manifest rather than anything the gateway said. A run or base it cannot read counts as view only.
+func BaseViewOnly(runDir string) bool {
+	cfg, err := ReadRunConfig(runDir)
+	if err != nil {
+		return true
+	}
+	m, err := ReadManifest(cfg.BaseDir)
+	return err != nil || m.Desktop != DesktopControl
 }
 
 var _ DesktopShim = (*RFBShim)(nil)
@@ -166,7 +181,7 @@ func (s *RFBShim) ServeDesktop(client, guest net.Conn) {
 	_ = guest.SetDeadline(time.Time{})
 	_ = client.SetDeadline(time.Time{})
 
-	r := &rfbRelay{}
+	r := &rfbRelay{viewOnly: s.ViewOnly}
 	r.bpp.Store(int32(serverInit[4]))
 	var once sync.Once
 	var first error
@@ -182,7 +197,7 @@ func (s *RFBShim) ServeDesktop(client, guest net.Conn) {
 	end(r.serverMsgs(gr, bufio.NewWriter(client)))
 	<-done
 	log.Info("macvm: desktop session ended", "err", errText(first),
-		"client_cut_texts", r.clientCuts.Load(), "server_cut_texts", r.serverCuts.Load())
+		"client_cut_texts", r.clientCuts.Load(), "server_cut_texts", r.serverCuts.Load(), "input_dropped", r.inputDropped.Load())
 }
 
 func errText(err error) string {
@@ -339,6 +354,34 @@ func rfbBytesPerPixel(bitsPerPixel byte) (int64, error) {
 type rfbRelay struct {
 	bpp                    atomic.Int32 // bits per pixel of the server's rectangles, as the viewer last set
 	clientCuts, serverCuts atomic.Int64
+	viewOnly               bool
+	inputDropped           atomic.Int64 // key, pointer and paste messages kept from a view-only guest
+}
+
+// dropInput reads and discards an input message of type t, and says whether t is one.
+func (x *rfbRelay) dropInput(r *bufio.Reader, t byte) (bool, error) {
+	var n int64
+	switch t {
+	case 4: // KeyEvent
+		n = 7
+	case 5: // PointerEvent
+		n = 5
+	case 6: // ClientCutText
+		h := make([]byte, 8)
+		h[0] = t
+		if _, err := io.ReadFull(r, h[1:]); err != nil {
+			return true, err
+		}
+		var err error
+		if n, err = rfbCutLength(h); err != nil {
+			return true, err
+		}
+	default:
+		return false, nil
+	}
+	x.inputDropped.Add(1)
+	_, err := io.CopyN(io.Discard, r, n)
+	return true, err
 }
 
 // rfbPass reads n bytes from r into w, and the message header it already holds before them.
@@ -367,6 +410,13 @@ func (x *rfbRelay) clientMsgs(r *bufio.Reader, w *bufio.Writer) error {
 		t, err := r.ReadByte()
 		if err != nil {
 			return err
+		}
+		if x.viewOnly {
+			if input, err := x.dropInput(r, t); err != nil {
+				return err
+			} else if input {
+				continue
+			}
 		}
 		head := []byte{t}
 		switch t {

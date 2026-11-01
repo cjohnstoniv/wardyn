@@ -568,6 +568,8 @@ const (
 	// reasons (authz.ReasonDrive*): each is also an authz.denied row.
 	// reasonDriveShareBesideManaged: a shared and a managed Kubernetes drive in one run.
 	reasonDriveShareBesideManaged = "drive_share_beside_managed"
+	// reasonDriveOneDisk: a macOS VM run naming a second disk drive, a kept work folder counting as one.
+	reasonDriveOneDisk = "drive_one_disk"
 )
 
 // Member drives (member_drives.go, member_drives_admin.go): a person's own

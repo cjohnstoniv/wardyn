@@ -387,6 +387,135 @@ func TestRunResources_DiskReading_PerEnforcement(t *testing.T) {
 	}
 }
 
+func seedMacOSResourcesRun(ast *authzStore, diskMiB int) uuid.UUID {
+	id := uuid.New()
+	ast.mu.Lock()
+	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1", DiskMiB: diskMiB, MachineKind: types.MachineMacOSVM}
+	ast.mu.Unlock()
+	return id
+}
+
+// The script is the server's choice from the run's machine kind. No guest output picks it: a Linux run
+// whose guest prints the macOS keys still gets the Linux script, and its cpu_percent line is ignored.
+func TestRunResources_ScriptFollowsMachineKind(t *testing.T) {
+	var scripts []string
+	srv, ast, _ := newResourcesHarness(t, func(spec runner.ExecSpec) (*runner.ExecSession, error) {
+		scripts = append(scripts, spec.Argv[2])
+		return kvExecSession("cpu_percent=99\n"), nil
+	})
+	mac, _ := getResourcesOK(t, srv, seedMacOSResourcesRun(ast, 0))
+	linux, _ := getResourcesOK(t, srv, seedResourcesRun(ast, "alice"))
+
+	if len(scripts) != 2 || scripts[0] != runner.MacOSResourcesScript || scripts[1] != runResourcesScript {
+		t.Fatalf("a macOS run then a Linux run did not get their own scripts (%d execs)", len(scripts))
+	}
+	if mac.CPUPercent == nil || *mac.CPUPercent != 99 {
+		t.Errorf("macOS CPUPercent = %v, want 99", mac.CPUPercent)
+	}
+	if linux.CPUPercent != nil {
+		t.Errorf("Linux CPUPercent = %v, want absent: that key is not its script's", *linux.CPUPercent)
+	}
+}
+
+// Every macOS metric lands in the field the card already reads, and disk carries no cap whatever the
+// deployment's driver enforces: nothing about a guest's df is measured the way that cap counts.
+func TestRunResources_MacOSGuest_FillsTheSameFields(t *testing.T) {
+	kv := "memory_current=3915776000\nmemory_max=8589934592\ncpu_percent=29\nproc_count=412\ndisk_root_used_kb=200954040\n"
+	srv, ast, _ := newResourcesHarnessWithDisk(t,
+		func(runner.ExecSpec) (*runner.ExecSession, error) { return kvExecSession(kv), nil },
+		types.StorageEnforcementFilesystem)
+
+	got, _ := getResourcesOK(t, srv, seedMacOSResourcesRun(ast, 4096))
+	if got.MemoryUsedBytes == nil || *got.MemoryUsedBytes != 3915776000 {
+		t.Errorf("MemoryUsedBytes = %v", got.MemoryUsedBytes)
+	}
+	if got.MemoryLimitBytes == nil || *got.MemoryLimitBytes != 8589934592 {
+		t.Errorf("MemoryLimitBytes = %v", got.MemoryLimitBytes)
+	}
+	if got.CPUPercent == nil || *got.CPUPercent != 29 {
+		t.Errorf("CPUPercent = %v", got.CPUPercent)
+	}
+	if got.ProcessCount == nil || *got.ProcessCount != 412 {
+		t.Errorf("ProcessCount = %v", got.ProcessCount)
+	}
+	if got.DiskUsedBytes == nil || *got.DiskUsedBytes != 200954040<<10 {
+		t.Errorf("DiskUsedBytes = %v", got.DiskUsedBytes)
+	}
+	if got.DiskCapBytes != nil {
+		t.Errorf("DiskCapBytes = %d, want absent", *got.DiskCapBytes)
+	}
+}
+
+// A guest's df is read on every poll: the root walk's cache is not for it.
+func TestRunResources_MacOSGuest_DiskIsNotCached(t *testing.T) {
+	used := []string{"disk_root_used_kb=100\n", "disk_root_used_kb=200\n"}
+	srv, ast, _ := newResourcesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
+		out := used[0]
+		used = used[1:]
+		return kvExecSession(out), nil
+	})
+	id := seedMacOSResourcesRun(ast, 0)
+	getResourcesOK(t, srv, id)
+	got, _ := getResourcesOK(t, srv, id)
+	if got.DiskUsedBytes == nil || *got.DiskUsedBytes != 200<<10 {
+		t.Errorf("DiskUsedBytes = %v, want the second read's %d", got.DiskUsedBytes, 200<<10)
+	}
+}
+
+// The guest's output is untrusted. A missing or unparsable field comes back ABSENT, never 0, and the
+// JSON encoder never sees a NaN or Inf: those would cost the whole answer.
+func TestRunResources_MacOSGuest_UnparsableIsAbsentNeverZero(t *testing.T) {
+	for _, out := range []string{
+		"",
+		"garbage with no equals sign\n",
+		"memory_current=12abc\nmemory_max=8GB\ncpu_percent=NaN\nproc_count=many\ndisk_root_used_kb=1.5\n",
+		"memory_current=\nmemory_max=\ncpu_percent=\nproc_count=\ndisk_root_used_kb=\n",
+		"cpu_percent=Inf\n",
+		"cpu_percent=29.5\n",
+		"memory_current=99999999999999999999999\n",
+		"memory_current=-1\nmemory_max=-1\ncpu_percent=-5\nproc_count=-1\ndisk_root_used_kb=-1\n",
+		"disk_wbytes=-1\n",
+		// Parses as a number, then turns negative when scaled from KB to bytes.
+		"disk_root_used_kb=9223372036854775807\n",
+		// The Linux script's CPU keys, run backwards: a negative rate from positive numbers.
+		"nproc=1\ncpu_usage_usec_1=100\ncpu_usage_usec_2=1\nuptime_1=1\nuptime_2=2\n",
+	} {
+		srv, ast, _ := newResourcesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return kvExecSession(out), nil })
+		id := seedMacOSResourcesRun(ast, 0)
+		w := do(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/resources", adminToken, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("output %q: code = %d; body=%s", out, w.Code, w.Body.String())
+		}
+		if got := strings.TrimSpace(w.Body.String()); got != "{}" {
+			t.Errorf("output %q: body = %s, want {}", out, got)
+		}
+	}
+}
+
+// Dropping negatives is the macOS arm's rule alone: a Linux run's answer is as it was.
+func TestRunResources_LinuxGuest_KeepsNegatives(t *testing.T) {
+	srv, ast, _ := newResourcesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
+		return kvExecSession("memory_current=-1\nproc_count=-1\n"), nil
+	})
+	got, _ := getResourcesOK(t, srv, seedResourcesRun(ast, "alice"))
+	if got.MemoryUsedBytes == nil || *got.MemoryUsedBytes != -1 {
+		t.Errorf("MemoryUsedBytes = %v, want -1", got.MemoryUsedBytes)
+	}
+	if got.ProcessCount == nil || *got.ProcessCount != -1 {
+		t.Errorf("ProcessCount = %v, want -1", got.ProcessCount)
+	}
+}
+
+// Same bound as the Linux script: a replaced tool cannot stream past the cap into wardynd.
+func TestRunResources_MacOSGuest_OutputIsCapped(t *testing.T) {
+	huge := "cpu_percent=29\n" + strings.Repeat("x", 2*runResourcesMaxOutput) + "\nproc_count=7\n"
+	srv, ast, _ := newResourcesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) { return kvExecSession(huge), nil })
+	got, _ := getResourcesOK(t, srv, seedMacOSResourcesRun(ast, 0))
+	if got.ProcessCount != nil {
+		t.Errorf("ProcessCount = %d, read from past the output cap", *got.ProcessCount)
+	}
+}
+
 // TestRunResources_DiskFilesystem_FreshContainerDoesNotWarn is the review's
 // baseline case. The numbers are a real fresh container under
 // --storage-opt size=1024m on overlay2 over xfs mounted pquota: df -kP / said

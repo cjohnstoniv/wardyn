@@ -11,8 +11,78 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- macOS VMs: a run on a view-only base can be watched from the run page with Watch desktop. Keys, pointer moves and
+  paste never reach the guest; a new `ui.input.drop` audit row records the first dropped key and pointer move of a
+  session. Built and unit-tested; not yet run on a real Mac ([#3922](https://github.com/cjohnstoniv/wardyn/issues/3922)).
+- `wardyn run` has `--machine-kind` (`container`, `linux_vm` or `macos_vm`) and `--macos-base`, so the command line can
+  start a macOS or Linux VM run. They work beside `--file`, since a Run document cannot carry the kind of sandbox
+  ([#3882](https://github.com/cjohnstoniv/wardyn/issues/3882)).
+
+### Changed
+
+- macOS VMs: on macOS 26, apps that use only the system trust store, such as Safari and Electron apps, can't use
+  inspected hosts, and behind a TLS-inspecting proxy also fail on tunnel-only hosts until the organisation's root is
+  trusted by hand in `edit-base`. Tools that read a CA variable work. `gh` and `kubectl` have not yet been run on a real
+  Mac. This qualifies the 0.10.0-rc.9 entry on the base's keychain ([#3923](https://github.com/cjohnstoniv/wardyn/issues/3923)).
+- The macOS VM setup window and the edit-base window now have a Show code button, so the one-time code can be read in
+  the window instead of with `cat`. It stays hidden until you click, a second click hides it, and it cannot be copied
+  from the window. Not yet run on a real Mac ([#3906](https://github.com/cjohnstoniv/wardyn/issues/3906)).
+- On a Mac set up with `wardyn-runnerd setup`, `wardyn runner upgrade` now says it replaced only the runner and tells
+  you to install the new `wardyn-runnerd.pkg` and rerun `wardyn-runnerd setup`. Upgrading all three files in one step is
+  planned for 0.10.x ([#3873](https://github.com/cjohnstoniv/wardyn/issues/3873)). Rerun `setup` only on Macs set up with `setup`: a LaunchAgent of your own that runs
+  `/usr/local/wardyn/bin/wardyn-runnerd` needs no rerun ([#3925](https://github.com/cjohnstoniv/wardyn/issues/3925)).
+- When a disk drive is still held by a macOS VM run that just ended, starting another run with it, or deleting it, now
+  says the drive is still being released and to try again shortly ([#3899](https://github.com/cjohnstoniv/wardyn/issues/3899)).
+- When a tools update cannot remove a CA from an existing macOS base, it now says why and that `prepare --reprepare` is
+  the way to drop it ([#3879](https://github.com/cjohnstoniv/wardyn/issues/3879)).
+- The status strip's Sandbox tile reads "Not available" on a macOS VM run; the guest's numbers are on the Sandbox card
+  ([#3924](https://github.com/cjohnstoniv/wardyn/issues/3924)).
+- On the Azure DevOps Entra lane, git now prints why a push was refused when its paths could not be worked out, or when
+  a review path matches on an unattended run, including what to do next ([#3921](https://github.com/cjohnstoniv/wardyn/issues/3921)).
+- A push that removes content from a review path is not held on any forge: deleting a file, renaming it out, or
+  replacing a directory or parent at or above the pattern with a file. The forge's own branch policy is what protects
+  that file ([#3921](https://github.com/cjohnstoniv/wardyn/issues/3921), [#3928](https://github.com/cjohnstoniv/wardyn/issues/3928)).
+- A review-path match on an unattended run stays refused and cannot be approved later. Every macOS VM run is unattended
+  ([#3921](https://github.com/cjohnstoniv/wardyn/issues/3921), [#3926](https://github.com/cjohnstoniv/wardyn/issues/3926)).
+
 ### Fixed
 
+- On Azure DevOps, `require_review_paths`, `deny_paths`, `max_file_size_mib` and `deny_new_executables` now compare what
+  a push does not carry with its base commit through the Git REST API, so a push is held or refused only for what it
+  changes. Tested against a fake Azure DevOps server only ([#3921](https://github.com/cjohnstoniv/wardyn/issues/3921)).
+- macOS VMs: on a view-only base, the prepare log and `macos-vm status` now say that macOS 26 doesn't keep Screen Sharing
+  control, not that setup was wrong. The run page offers "Watch the captured session" only on a run with a recording
+  ([#3922](https://github.com/cjohnstoniv/wardyn/issues/3922)).
+- macOS VM runs: Files changed reads the VM's work folder (`/Users/agent/work`) instead of reporting "No git repository
+  at /home/agent/work". The Overview Output pane shows the run's kept output when there is no recording to replay, live
+  on a macOS VM run and on any ended run without a recording. The Sandbox card shows CPU, memory, disk and processes as
+  reported by the guest, for the whole VM. Not yet run on a real Mac ([#3924](https://github.com/cjohnstoniv/wardyn/issues/3924)).
+- `wardyn-runnerd macos-vm status` lists all three setup steps while macOS waits for setup by hand, and no longer keeps
+  showing a `tools_dial` failure from an earlier run after a later prepare connected ([#3925](https://github.com/cjohnstoniv/wardyn/issues/3925)).
+- A macOS VM run no longer writes a second `run.complete` audit row with outcome `failure` and a teardown deadline error
+  ([#3886](https://github.com/cjohnstoniv/wardyn/issues/3886)).
+- A macOS VM run refused for its size when the cap comes from the Default governance unit now names that unit and says
+  to assign the person a governance profile that allows at least the CPUs and memory the refusal names ([#3885](https://github.com/cjohnstoniv/wardyn/issues/3885)).
+- Setting up a macOS VM by hand with the wrong password for the one-time code now fails within seconds and says the
+  password does not match the code, instead of ending in "handshake failed: EOF" ([#3874](https://github.com/cjohnstoniv/wardyn/issues/3874)).
+- A single command in the macOS VM guest that waits for a person, such as a macOS permission prompt, now fails the step
+  after 30 minutes with a clear message ([#3879](https://github.com/cjohnstoniv/wardyn/issues/3879)).
+- A macOS base `ca` item that is not an X.509 v3 CA certificate is now refused with the reason when the list is read,
+  before the restore image downloads ([#3876](https://github.com/cjohnstoniv/wardyn/issues/3876)).
+- A macOS bases file that cannot be read now shows its base as failed, with the reason, in `macos-vm status` and on the
+  runner's page, and no longer hides the other bases ([#3887](https://github.com/cjohnstoniv/wardyn/issues/3887)).
+- A macOS VM run that names two disk drives, or a disk drive and a kept work folder, is refused at Review and create
+  (`drive_one_disk`) instead of when it starts on the Mac ([#3897](https://github.com/cjohnstoniv/wardyn/issues/3897)). One its Mac refused at start no longer leaves an
+  empty kept work folder drive counting against your limit ([#3900](https://github.com/cjohnstoniv/wardyn/issues/3900)).
+- Deleting a disk drive on a Mac now removes its `.img.lock` file as well ([#3895](https://github.com/cjohnstoniv/wardyn/issues/3895)). A macOS VM run now mounts an existing
+  disk drive even when the size limit was lowered after the drive was made ([#3898](https://github.com/cjohnstoniv/wardyn/issues/3898)).
+- `deploy/runner/install.sh --uninstall` on a Mac now also removes the macOS VM helper and guest agent that
+  `wardyn-runnerd setup` installed ([#3872](https://github.com/cjohnstoniv/wardyn/issues/3872)).
+- A Linux or macOS VM run now reaches its proxy when `WARDYN_SANDBOX_PROXY_URL` is set. The value must be
+  `http://host:3128`; any other form or port is refused for VM runs, with a message naming it ([#3888](https://github.com/cjohnstoniv/wardyn/issues/3888)).
+- A release dry run on a branch whose name contains a slash no longer fails every image build ([#3877](https://github.com/cjohnstoniv/wardyn/issues/3877)).
 - A run that Amazon Bedrock refused with any other HTTP 4xx or 5xx now names, in its failure hint, the status and the
   error class AWS answered with. Wardyn does not record AWS's message; the agent's own output, in the run's
   recording, says what was refused ([#3891](https://github.com/cjohnstoniv/wardyn/issues/3891)).
