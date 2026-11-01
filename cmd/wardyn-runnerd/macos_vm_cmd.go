@@ -311,7 +311,7 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 	}
 	fmt.Fprintln(out)
 	if st.setupCode != "" {
-		fmt.Fprintf(out, "macOS asked for setup by hand. In the window %q on this Mac, create the account wardyn-admin with the one-time code in %s as its password, and turn on Remote Login.\n", macOSVMSetupWindow, st.setupCode)
+		fmt.Fprintf(out, "macOS asked for setup by hand. In the window %q on this Mac, create the account wardyn-admin with the one-time code in %s as its password, turn on Screen Sharing with control, and turn on Remote Login.\n", macOSVMSetupWindow, st.setupCode)
 	} else if st.byHand && st.State != runnerwire.MacVMBaseReady {
 		fmt.Fprintf(out, "This Mac's macOS has no guest provisioning (macOS %d has it), so preparing its base needs setup by hand once: after the install, the window %q opens on this Mac.\n", macvm.ProvisionHostMajor, macOSVMSetupWindow)
 	}
@@ -351,11 +351,25 @@ const macOSVMSetupWindow = "Wardyn: set up this macOS VM"
 // dial of the tools port ended (docker.MacVMConfig.ToolsDialFile).
 const runToolsDialFile = "run-tools-dial"
 
-// lastToolsDial is that record when it names one of the five classes, else "".
+// lastToolsDial is how the newest tools-port dial ended, when it is one of the five classes, else "". The
+// candidates are the run boot's record and the last one prepare logged (a prepare's stage 2 boots the guest
+// too; its event carries when it was reported), and the later of the two wins. A prepare does not rewrite a
+// run boot's record, so reading that alone kept a failure from before a prepare that reached ready.
 func lastToolsDial(root string) string {
+	var class string
+	var at time.Time
 	b, err := os.ReadFile(filepath.Join(root, runToolsDialFile))
 	if s := strings.TrimSpace(string(b)); err == nil && macvm.ValidToolsDial(s) {
-		return s
+		class = s
+		if fi, err := os.Stat(filepath.Join(root, runToolsDialFile)); err == nil {
+			at = fi.ModTime()
+		}
+	}
+	if pc, pat, err := lastPrepareToolsDial(macvm.Layout{Root: root}.PrepareLog()); err == nil && pc != "" && pat.After(at) {
+		class = pc
+	}
+	if macvm.ValidToolsDial(class) {
+		return class
 	}
 	return ""
 }

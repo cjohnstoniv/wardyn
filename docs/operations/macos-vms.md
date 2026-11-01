@@ -587,6 +587,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 
 - An upgrade of the runner package does not repeat the macOS install.
 - A runner set up with `wardyn-runnerd setup` keeps its own copies of `wardyn-macvm` and `wardyn-guest-agent` beside it. `wardyn runner upgrade` replaces only `wardyn-runnerd` and says so; to update all three, install the new `wardyn-runnerd.pkg` and run `/usr/local/wardyn/bin/wardyn-runnerd setup` again with the same flags. `install.sh --uninstall` removes all three.
+  - A LaunchAgent of your own that runs `/usr/local/wardyn/bin/wardyn-runnerd` needs no rerun. The package installs the helper and guest agent in that folder, and the runner looks beside its own binary.
 - When the guest agent in the base differs from the runner's, the runner runs a tools update: it clones the base, boots it, applies the new agent and pins, and keeps the result. It takes one slot like any VM, for minutes.
 - A base the new runner cannot accept is marked "update needed", and the Mac offers no macOS VMs until it is re-prepared (`prepare --new-image`).
 
