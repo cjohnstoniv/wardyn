@@ -740,6 +740,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-kind-follow-main.sh
 	./scripts/test-kind-sso-walk-log.sh
 	./scripts/test-lane-preflight.sh
+	./scripts/test-macos-vm-check.sh
 	./scripts/test-migration-numbers.sh
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-nightly-migration-merge-check.sh
