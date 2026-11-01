@@ -876,6 +876,8 @@ func (c *Client) ApplyDrivesResult(ctx context.Context, doc DrivesDocument) (Dri
 			Name: d.Name, Backend: d.Backend, HostRoot: d.HostRoot,
 			StorageClass: d.StorageClass, HomeTemplate: d.HomeTemplate,
 			SizeMiB: d.SizeMiB, Writable: d.Writable, Reclaim: d.Reclaim, Team: d.Team,
+			// The PUT replaces the whole row, so a second place left out here is cleared.
+			AltBackend: d.AltBackend, AltHostRoot: d.AltHostRoot, AltRunnerID: d.AltRunnerID,
 		}
 		var saved UserDrive
 		var err error

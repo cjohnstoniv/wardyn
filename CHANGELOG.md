@@ -122,6 +122,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- `wardyn drive set` now keeps a drive's second place (`alt_backend`, `alt_host_root`, `alt_runner_id`). Before, it
+  dropped it, and re-applying a document cleared one set in the console
+  ([#3894](https://github.com/cjohnstoniv/wardyn/issues/3894)).
 - Re-running `wardyn-runnerd setup` on a Mac whose runner is running no longer fails with `launchctl bootstrap` exit 5
   and leaves the runner stopped: setup waits for the old LaunchAgent to unload, and on a failure prints the command
   that starts it ([#3892](https://github.com/cjohnstoniv/wardyn/issues/3892)).
