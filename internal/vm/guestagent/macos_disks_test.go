@@ -130,13 +130,13 @@ func TestMacDisksRefusals(t *testing.T) {
 	}{
 		"a disk this VM does not have": {make([]byte, 4096), func(h string) Disk {
 			return Disk{ID: "wardyn-disk3", Label: "Wardyn-1a2b3c4d", Target: filepath.Join(h, "x"), SizeBytes: 1 << 30}
-		}, "not attached"},
+		}, "no disk of 1073741824 bytes beside the boot disk (attached: disk0 2147483648)"},
 		"a disk whose size an older runner did not send": {make([]byte, 4096), func(h string) Disk {
 			return Disk{ID: "wardyn-disk0", Label: "Wardyn-1a2b3c4d", Target: filepath.Join(h, "x")}
-		}, "not attached"},
+		}, "the runner sent no size"},
 		"the boot disk's size, which only the boot disk has": {make([]byte, 4096), func(h string) Disk {
 			return Disk{ID: "wardyn-disk0", Label: "Wardyn-1a2b3c4d", Target: filepath.Join(h, "x"), SizeBytes: 53687091200}
-		}, "not attached"},
+		}, "no disk of 53687091200 bytes beside the boot disk (attached: disk0 2147483648)"},
 		"an identifier that is not a drive's": {make([]byte, 4096), func(h string) Disk {
 			return Disk{ID: "disk0", Label: "Wardyn-1a2b3c4d", Target: filepath.Join(h, "x")}
 		}, "not a Wardyn disk drive"},

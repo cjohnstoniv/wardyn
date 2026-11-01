@@ -120,26 +120,30 @@ func (m MacDisks) device(ctx context.Context, d Disk) (string, error) {
 	if boot == nil {
 		return "", fmt.Errorf("disk %s: find the boot disk: no APFS physical store for /", d.ID)
 	}
-	var found []string
 	if d.SizeBytes <= 0 {
-		return "", fmt.Errorf("disk %s is not attached to this VM", d.ID)
+		return "", fmt.Errorf("disk %s is not attached to this VM: the runner sent no size to find it by", d.ID)
 	}
+	var found, seen []string
 	// With -r each device's subtree starts at a "+-o" line in the first column.
 	for _, dev := range strings.Split("\n"+string(out), "\n+-o ")[1:] {
 		b, n := macDiskBSDRe.FindStringSubmatch(dev), macDiskSizeRe.FindStringSubmatch(dev)
-		if b == nil || n == nil || b[1] == string(boot[1]) || n[1] != strconv.FormatInt(d.SizeBytes, 10) {
+		if b == nil || n == nil || b[1] == string(boot[1]) {
 			continue
 		}
-		found = append(found, b[1])
+		seen = append(seen, b[1]+" "+n[1])
+		if n[1] == strconv.FormatInt(d.SizeBytes, 10) {
+			found = append(found, b[1])
+		}
 	}
 	switch len(found) {
 	case 0:
-		return "", fmt.Errorf("disk %s is not attached to this VM", d.ID)
+		return "", fmt.Errorf("disk %s is not attached to this VM: no disk of %d bytes beside the boot disk (attached: %s)",
+			d.ID, d.SizeBytes, cmp.Or(strings.Join(seen, ", "), "none"))
 	case 1:
 		return found[0], nil
 	}
 	return "", fmt.Errorf("disk %s: %d disks of its size are attached to this VM, and a run cannot tell them apart; "+
-		"give each disk drive in one run a different size", d.ID, len(found))
+		"a macOS VM run attaches one disk drive, and a kept work folder counts as one", d.ID, len(found))
 }
 
 // blank reports whether the disk's first 4 KiB are all zero: an image the runner just made, which

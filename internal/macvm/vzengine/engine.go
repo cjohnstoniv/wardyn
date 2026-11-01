@@ -178,7 +178,7 @@ func (*Engine) NewMachine(p macvm.Plan) (macvm.Machine, error) {
 		if err != nil {
 			return nil, err
 		}
-		// A disk drive is found in the guest by this identifier (guestagent.MacDisks).
+		// The identifier names the disk on the host only: a macOS guest does not show it, and finds the disk by its size.
 		if s.Identifier != "" {
 			if err := blk.SetBlockDeviceIdentifier(s.Identifier); err != nil {
 				return nil, fmt.Errorf("disk %s: %w", s.Identifier, err)
