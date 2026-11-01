@@ -31,6 +31,8 @@ export const RUN_OUTPUT = {
     "This is the last screen of this session, not a full record. Wardyn captured it just before stopping the run, and the sandbox draws it, so read it as the sandbox's account.",
   loading: "Loading output…",
   cliHint: "Also from the CLI:",
+  // The Overview pane keeps the Copy button, the agent filter and the source details in the tab.
+  openTab: "Open the Output tab →",
   offTitle: "Run output is off on this deployment",
   // The env var renders mono at the call site: offDescPre + offEnvVar + offDescPost.
   offDescPre: "No run on this server keeps its output — set ",

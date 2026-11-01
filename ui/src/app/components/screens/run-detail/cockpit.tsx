@@ -58,6 +58,7 @@ export function Cockpit({
   onGoAudit,
   onGoPolicy,
   onGoRecording,
+  onGoOutput,
   onGoApprovals,
 }: {
   run: RunDetail;
@@ -82,6 +83,7 @@ export function Cockpit({
   onGoAudit: () => void;
   onGoPolicy: () => void;
   onGoRecording: () => void;
+  onGoOutput: () => void;
   onGoApprovals: () => void;
 }) {
   const principal = usePrincipal();
@@ -133,6 +135,7 @@ export function Cockpit({
         recState={recState}
         recordingDisabled={recordingDisabled}
         onGoRecording={onGoRecording}
+        onGoOutput={onGoOutput}
         execMode={execMode}
       />
     </>
