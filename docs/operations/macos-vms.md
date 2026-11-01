@@ -233,7 +233,7 @@ An operator can have prepare install packages, apps, files, configuration profil
 | `app` | `.zip` of the bundle, or `.dmg` | `ditto` into `/Applications`; a `.dmg` is attached read-only first | `app`: the bundle in the `.dmg` (`Name.app`) |
 | `file` | any | pushed to `dest`, root's, mode 0644 | `dest`: under `/Library`, `/usr/local` or `/opt` |
 | `profile` | `.mobileconfig` | staged for approval in `edit-base` | `identifier`: its `PayloadIdentifier` |
-| `ca` | one CA certificate, `.pem`, `.cer`, `.crt` or `.der` | trusted in the System keychain for SSL | none |
+| `ca` | one X.509 v3 CA certificate (`CA:TRUE`), `.pem`, `.cer`, `.crt` or `.der` | trusted in the System keychain for SSL | none |
 
 What Wardyn automates, and what the operator does by hand in `wardyn-runnerd macos-vm edit-base`:
 
@@ -255,6 +255,8 @@ What Wardyn automates, and what the operator does by hand in `wardyn-runnerd mac
 ### The organisation CA
 
 The `ca` item trusts your organisation's root in the guest at prepare. It is separate from the per-run proxy CA ([Credentials and sign-ins](#credentials-and-sign-ins)).
+
+The file must be an X.509 v3 CA certificate: its `basicConstraints` say `CA:TRUE`. Wardyn reads each `ca` file when it reads the list, and a file that is not one stops `prepare` and a tools update before anything downloads, saying why. A v1 certificate has no `basicConstraints`, so it is refused. macOS's own `openssl req -x509` writes a v1 certificate unless you give it a v3 extensions section that sets `basicConstraints = CA:TRUE`.
 
 1. The guest agent runs `security add-trusted-cert -d -r trustRoot -p ssl` on the certificate as root: SSL only, never every policy. It does not change the `com.apple.trust-settings.admin` authorization rule; macOS 26 refuses root that change.
 2. `security verify-cert -p ssl` reads the trust back. `tools.json` records `trusted` or `not_trusted` with the certificate's SHA-256 and SHA-1 fingerprints.
@@ -298,7 +300,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 
 - **The lists.** The runner setting `macos_vm_bases_dir` (in `runnerd.json`, or `MacOSVMBasesDir` from your MDM) names a directory on the Mac. Each `<name>.json` in it is the install list of the base `<name>`, in `macos_vm_base_file`'s form.
   - A name is lowercase letters, digits, `.`, `_` and `-`. A list cannot hold a `profile` item, since `edit-base` edits Standard only.
-  - A list runnerd can't read (for example one without `"version": 1`) leaves only Standard offered; the reason is in `runnerd.log`, not in the console ([#3887](https://github.com/cjohnstoniv/wardyn/issues/3887)).
+  - A list runnerd can't read (for example one without `"version": 1`) shows its base as `failed` with the reason, in `wardyn-runnerd macos-vm status` and on the runner's page; the other bases are unaffected and the failed one is not offered.
 - **Derived.** A base is an APFS clone of Standard, booted once to install its own list. It keeps Standard's tools and Standard's prepare date, so the maximum base age reads the same date.
 - **Rebuilt.** When Standard changes (prepare, tools update or edit) or a list changes, each base is rebuilt from it.
   - One at a time, in one of the 2 VM slots, and only while no prepare, tools update or edit runs.

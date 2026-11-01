@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,6 +122,33 @@ func TestMacOSVMDerivedBases(t *testing.T) {
 	state(runnerwire.MacVMDerivedRebuilding)
 	if n := <-started; n != "xcode-16" {
 		t.Fatalf("derived %s", n)
+	}
+}
+
+// A bases file runnerd cannot read leaves a failed entry for its base, with why, in the caps and in
+// `macos-vm status`; it no longer hides the other bases, and nothing is derived for it.
+func TestMacOSVMUnreadableBasesFileIsFailedWithReason(t *testing.T) {
+	r := newMacLedgerRig(t)
+	m := r.open(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "rc9.json"), []byte(`{"items":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.bases.once.Do(func() {})
+	m.bases.dir = dir
+	m.bases.start = func(v macvm.BaseVariant, _ macvm.Manifest) error {
+		t.Errorf("a derivation of %s started", v.Name)
+		return nil
+	}
+	man, _ := macvm.ReadManifest(m.layout.BaseDir(0))
+	got := m.derivedBases(man)
+	if len(got) != 1 || got[0].Name != "rc9" || got[0].State != runnerwire.MacVMDerivedFailed || !strings.Contains(got[0].Reason, "version 0 is not 1") {
+		t.Fatalf("bases %+v", got)
+	}
+	var out strings.Builder
+	macOSVMStatus{State: runnerwire.MacVMBaseReady, Bases: got}.writeText(&out)
+	if !strings.Contains(out.String(), "other base rc9: failed: ") || !strings.Contains(out.String(), "version 0 is not 1") {
+		t.Fatalf("status text:\n%s", out.String())
 	}
 }
 

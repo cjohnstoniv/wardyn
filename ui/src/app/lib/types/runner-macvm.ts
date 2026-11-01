@@ -64,6 +64,8 @@ export interface MacVMDerivedBase {
   items: number;
   /** Percent done while it is rebuilt. */
   progress?: number;
+  /** Why a failed base failed, when its install list cannot be read. */
+  reason?: string;
   guest_os?: string;
   harnesses?: string[];
   created_at?: string;

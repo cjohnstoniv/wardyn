@@ -227,6 +227,8 @@ type macOSVMStatus struct {
 	ToolsDial     string   `json:"tools_dial"`      // how the last run boot's tools-port dial ended, "" before one
 	Error         string   `json:"error"`
 	Failure       string   `json:"failure,omitempty"` // runnerwire.MacVMFailure*, when the base has one
+	// Bases are the Mac's other bases (macos_vm_bases_dir), with a failed one's reason.
+	Bases []runnerwire.MacVMDerivedBase `json:"bases,omitempty"`
 
 	progress, counted, minCPUs, minMemoryMiB int
 	setupCode                                string
@@ -247,7 +249,7 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 	m.recompute()
 	c := m.current()
 	st.State, st.Base, st.Max, st.progress, st.Error = c.Base.State, c.Base.GuestOS, c.Max, c.Base.Progress, c.Base.Error
-	st.Failure = c.Base.Failure
+	st.Failure, st.Bases = c.Base.Failure, c.Bases
 	if perr != nil {
 		st.Error = cmp.Or(st.Error, perr.Error())
 	}
@@ -318,6 +320,13 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 		for _, l := range st.withheld {
 			fmt.Fprintln(out, l)
 		}
+	}
+	for _, b := range st.Bases {
+		fmt.Fprintf(out, "other base %s: %s", b.Name, b.State)
+		if b.Reason != "" {
+			fmt.Fprintf(out, ": %s", b.Reason)
+		}
+		fmt.Fprintln(out)
 	}
 	if st.Thermal != "" {
 		fmt.Fprintf(out, "thermal: %s\n", st.Thermal)

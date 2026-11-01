@@ -362,6 +362,8 @@ type MacVMBase struct {
 
 // MacVMDerivedBase is one of a Mac's other bases: Name is the operator's, State MacVMDerived*, Items how
 // many items its own install list adds to Standard's, and Progress the percent done while it is rebuilt.
+// Reason is, for a base that failed because its install list cannot be read, why, scrubbed as the base's
+// error is; absent otherwise.
 // GuestOS, Harnesses, CreatedAt and BuildVersion are its own manifest's, read as Standard's are for the
 // caps; state ready only. CreatedAt is Standard's prepare, which a derived base's clone keeps.
 type MacVMDerivedBase struct {
@@ -369,6 +371,7 @@ type MacVMDerivedBase struct {
 	State        string   `json:"state"`
 	Items        int      `json:"items"`
 	Progress     int      `json:"progress,omitempty"`
+	Reason       string   `json:"reason,omitempty"`
 	GuestOS      string   `json:"guest_os,omitempty"`
 	Harnesses    []string `json:"harnesses,omitempty"`
 	CreatedAt    string   `json:"created_at,omitempty"`
