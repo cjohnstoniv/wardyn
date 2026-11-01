@@ -12,7 +12,8 @@
 //
 // ponytail: cgroup v2 + procfs via one exec, not a per-substrate Runner method.
 // Upgrade path is a Runner.Resources seam if some substrate ever needs a
-// non-exec read (a substrate with no exec at all, say).
+// non-exec read (a substrate with no exec at all, say). A macOS VM guest has
+// neither, so its run gets a second script over the same exec.
 package api
 
 import (
@@ -162,6 +163,11 @@ esac
 // owns the sandbox's CPU right now (pauseClocks.beginWalk).
 const diskArmSkip types.StorageEnforcement = "skip"
 
+// diskArmMacOS selects runner.MacOSResourcesScript. It is chosen from the run's machine kind alone,
+// never from anything the guest prints. That script's disk reading is one df: no walk to hold off or
+// cache, and no driver's cap it could be measured against.
+const diskArmMacOS types.StorageEnforcement = "macos"
+
 // runResourcesResponse is the Sandbox widget's payload.
 //
 // HONESTY (the whole point of this file): every field is a POINTER, never a
@@ -261,7 +267,9 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 	defer func() { s.pause.endWalk(id, ctx.Err() != nil) }()
 	enforced := enforcedDiskWord(ctx, s.cfg.Runner, run.DiskMiB)
 	arm, cachedKB := enforced, ""
-	if enforced != types.StorageEnforcementFilesystem { // the other two arms walk a tree
+	if run.MachineKind.IsMacOSVM() {
+		enforced, arm = "", diskArmMacOS
+	} else if enforced != types.StorageEnforcementFilesystem { // the other two arms walk a tree
 		now := s.cfg.Now()
 		if enforced == "" {
 			if kb, fresh := s.pause.rootSample(id, now); fresh {
@@ -309,6 +317,7 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
+	case arm == diskArmMacOS: // nothing to remember: see diskArmMacOS
 	case arm == diskArmSkip:
 		if cachedKB != "" {
 			kv["disk_root_used_kb"] = cachedKB
@@ -320,6 +329,12 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := parseRunResourcesKV(kv)
 	resp.DiskUsedBytes, resp.DiskCapBytes = diskReading(kv, enforced, run.DiskMiB)
+	if arm == diskArmMacOS {
+		if v, ok := kvInt64(kv, "cpu_percent"); ok {
+			pct := float64(v)
+			resp.CPUPercent = &pct
+		}
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -468,6 +483,9 @@ func diskReading(kv map[string]string, enforced types.StorageEnforcement, diskMi
 // points its $2..): see the script's disk section.
 func (s *Server) execRunResourcesScript(ctx context.Context, run types.AgentRun, enforced types.StorageEnforcement) (map[string]string, error) {
 	argv := []string{"/bin/sh", "-c", runResourcesScript, "wardyn-resources", string(enforced)}
+	if enforced == diskArmMacOS {
+		argv = []string{"/bin/sh", "-c", runner.MacOSResourcesScript, "wardyn-resources"}
+	}
 	if enforced == types.StorageEnforcementEviction {
 		argv = append(argv, runner.ScratchTmpPath, runner.ScratchWorkPath, runner.ScratchCachePath)
 	}

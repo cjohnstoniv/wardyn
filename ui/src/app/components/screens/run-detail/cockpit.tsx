@@ -28,6 +28,7 @@ import { deriveTitle } from "../approvals";
 import { viewerBlockedOnDecision } from "./viewer-blocked";
 import { RunCanvas } from "./canvas";
 import { RunStatusStrip, useEvidenceFacts } from "./status-strip";
+import { isMacOSVM } from "../../../lib/types/machine-kind";
 import { RunFailureBlock } from "./failure-block";
 import { LocalModelsCard } from "./local-models-card";
 import { LoginSandboxNote } from "./login-sandbox-note";
@@ -170,7 +171,7 @@ export function Cockpit({
     </>
   );
 
-  const evidence = useEvidenceFacts(run.id, !terminal);
+  const evidence = useEvidenceFacts(run.id, !terminal, isMacOSVM(run));
   const ctx: WidgetContext = {
     run,
     finished: terminal,
