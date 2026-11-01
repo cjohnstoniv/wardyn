@@ -9,7 +9,8 @@
 // walls take out is the server's own answer. The preflight is stubbed, as the other New Run specs stub it
 // (the seeded backend runs no barrier runtime); it carries the walls step's own warning sentence.
 import type { Page } from "@playwright/test";
-import { test, expect, asRealMember, gotoConsole, navToRoute, MEMBER_TOKEN } from "./fixtures";
+import { randomUUID } from "node:crypto";
+import { test, expect, asRealMember, asRealOpenEgressMember, gotoConsole, navToRoute, ADMIN_TOKEN, MEMBER_TOKEN, OPEN_EGRESS_PRINCIPAL } from "./fixtures";
 import { NR_DOCUMENT } from "../src/app/components/wardyn/copy/new-run/document";
 import { NR_REVIEW } from "../src/app/components/wardyn/copy/new-run/review";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
@@ -107,29 +108,56 @@ test.describe("Your walls", () => {
     page.on("request", (req) => {
       if (req.method() === "POST" && new URL(req.url()).pathname === "/api/v1/runs/policy-preview") bodies.push(req.postData() ?? "");
     });
-    // The seeded member's runs never allow all egress, so the real preview would never offer the switch. Until the
-    // draft narrows egress, the preview answers that this run allows all of it; after, the server's answer passes as is.
-    await page.route("**/api/v1/runs/policy-preview", async (route) => {
-      const res = await route.fetch();
-      const json = (await res.json()) as { access?: { unlisted?: { allow_all?: boolean } } };
-      const narrowed = JSON.parse(route.request().postData() ?? "{}")?.overrides?.egress?.allow_all_egress === false;
-      if (!narrowed && json.access?.unlisted) json.access.unlisted.allow_all = true;
-      await route.fulfill({ response: res, json });
+    // The seeded member's ceiling never allows all egress, so its real preview would never offer the switch.
+    // This person's ceiling does, and the preview is the server's own answer throughout.
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const unit = await page.request.post("/api/v1/governance/units", {
+      headers: auth,
+      data: {
+        name: `open-egress-${randomUUID().slice(0, 8)}`,
+        ceiling: {
+          allow_all_egress: true,
+          allowed_domains: [],
+          denied_domains: [],
+          first_use_approval: "deny_with_review",
+          min_confinement_class: "CC1",
+          auto_stop_after_sec: 3600,
+          eligible_grants: [],
+          tool_rules: [{ tool: "*", effect: "allow" }],
+        },
+        limits: {},
+      },
     });
-    await asRealMember(page);
-    await gotoConsole(page);
-    await navToRoute(page, "/runs/new");
-    await press(page, NR_START.DOC_YAML);
-    await page.getByRole("textbox", { name: NR_DOCUMENT.EDITOR_ARIA("YAML") }).fill(DOCUMENT);
-    await press(page, NR_DOCUMENT.CONTINUE_REVIEW);
-    await press(page, `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_ACCESS}`);
-    await press(page, NR_REVIEW.EDIT_TOOLS_ACCESS);
-    // The switch is offered only while the preview says this run allows all egress.
-    const only = page.getByRole("switch", { name: NR_WALLS.ONLY_LISTED });
-    await expect(only).toBeVisible();
-    await only.click();
-    await expect(only).toHaveAttribute("aria-checked", "true");
-    await expect.poll(() => bodies.some((b) => JSON.parse(b)?.overrides?.egress?.allow_all_egress === false)).toBe(true);
-    await expect(page.getByText(NR_TOOLS.NET_POLICY_ALLOW_ALL)).toHaveCount(0);
+    expect(unit.status(), await unit.text()).toBe(201);
+    const unitID = (await unit.json()).unit.id;
+    try {
+      const assigned = await page.request.post("/api/v1/governance/memberships", {
+        headers: auth,
+        data: { subject_type: "user", subject: OPEN_EGRESS_PRINCIPAL, unit_id: unitID, priority: 0 },
+      });
+      expect(assigned.ok(), await assigned.text()).toBeTruthy();
+
+      await asRealOpenEgressMember(page);
+      await gotoConsole(page);
+      await navToRoute(page, "/runs/new");
+      await press(page, NR_START.DOC_YAML);
+      await page.getByRole("textbox", { name: NR_DOCUMENT.EDITOR_ARIA("YAML") }).fill(DOCUMENT);
+      await press(page, NR_DOCUMENT.CONTINUE_REVIEW);
+      await press(page, `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_ACCESS}`);
+      await press(page, NR_REVIEW.EDIT_TOOLS_ACCESS);
+      // The switch is offered only while the preview says this run allows all egress.
+      const only = page.getByRole("switch", { name: NR_WALLS.ONLY_LISTED });
+      await expect(only).toBeVisible();
+      await only.click();
+      await expect(only).toHaveAttribute("aria-checked", "true");
+      await expect.poll(() => bodies.some((b) => JSON.parse(b)?.overrides?.egress?.allow_all_egress === false)).toBe(true);
+      await expect(page.getByText(NR_TOOLS.NET_POLICY_ALLOW_ALL)).toHaveCount(0);
+    } finally {
+      const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
+      for (const a of snap.memberships ?? []) {
+        if (a.unit_id === unitID) await page.request.delete(`/api/v1/governance/memberships/${a.id}`, { headers: auth });
+      }
+      await page.request.delete(`/api/v1/governance/units/${unitID}`, { headers: auth });
+    }
   });
 });
