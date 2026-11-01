@@ -114,6 +114,9 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 		if r.Marker {
 			fields["suppressed"] = true
 		}
+		if r.Spool != nil && r.Spool.Seq == 0 && r.Spool.Count > 0 { // an overflow summary: how far the mark moved
+			fields["count"], fields["drop_end"] = r.Spool.Count, r.Spool.DropEnd
+		}
 		if claimed != "" {
 			fields["claimed_run_id"] = claimed
 		}
