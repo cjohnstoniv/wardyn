@@ -1145,8 +1145,8 @@ func TestUIGateway_RelayGivesTheAppItsOwnOrigin(t *testing.T) {
 
 // TestUIGateway_RelayGivesTheAppItsOwnOriginInHostMode: the same rewrite in host mode, where the gateway is
 // reached on the run's own host and the scheme comes from the origin template, not the advertised URL (https
-// in the harness). The template's scheme on the run's host is the app's own origin; the other scheme, another
-// run's host and a missing Origin reach the app as they came.
+// in the harness). The template's scheme on the run's host is the app's own origin, and a missing Origin reaches
+// the app as it came. The other scheme and another run's host never reach it: they are cross-site in host mode.
 func TestUIGateway_RelayGivesTheAppItsOwnOriginInHostMode(t *testing.T) {
 	for _, scheme := range []string{"http", "https"} {
 		t.Run(scheme, func(t *testing.T) {
@@ -1164,8 +1164,6 @@ func TestUIGateway_RelayGivesTheAppItsOwnOriginInHostMode(t *testing.T) {
 			for _, tc := range []struct{ name, origin, want string }{
 				{"own page", scheme + "://" + host, own},
 				{"own page, host in another case", scheme + "://" + strings.ToUpper(host), own},
-				{"own host by the other scheme", otherScheme + "://" + host, otherScheme + "://" + host},
-				{"another run's host", otherRun, otherRun},
 				{"no Origin", "", ""},
 			} {
 				rec := h.relay("/", cookie, func(r *http.Request) {
@@ -1185,6 +1183,21 @@ func TestUIGateway_RelayGivesTheAppItsOwnOriginInHostMode(t *testing.T) {
 				if o := got.Header.Get("Origin"); o != want {
 					t.Fatalf("%s: the app saw Origin %q (Host %q), want %q", tc.name, o, got.Host, want)
 				}
+			}
+			for name, origin := range map[string]string{
+				"own host by the other scheme": otherScheme + "://" + host,
+				"another run's host":           otherRun,
+			} {
+				rec := h.relay("/", cookie, func(r *http.Request) {
+					r.Host = host
+					r.Header.Set("Origin", origin)
+				})
+				if rec.Code != http.StatusForbidden || respondedReason(t, rec) != reasonUIGatewayCrossSite {
+					t.Fatalf("%s: relay %d %s, want 403 %s", name, rec.Code, rec.Body.String(), reasonUIGatewayCrossSite)
+				}
+			}
+			if len(seen) != 0 {
+				t.Fatal("a cross-site request reached the app")
 			}
 		})
 	}
