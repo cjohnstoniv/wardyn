@@ -1200,8 +1200,8 @@ So an entry a pattern matches is judged one of two ways:
   - A run with a task and nobody driving it (not `interactive`) has nobody to ask, so a review match is refused at once (`brokered:git:push-held-unattended`) and no approval is raised.
   - The control plane refuses such a raise as well.
   - **It cannot be approved later.** A real match on an unattended run stays refused, on every lane and on macOS VM runs too. To land it, remove those paths from the push or run the task interactively so an admin can approve it.
-- **A push that deletes a file at a review path is not held, on any forge.**
-  - These rules judge what a push introduces, so the deletion goes through.
+- **A push that removes a file at a review path is not held, on any forge.** That means deleting it, renaming it out, or replacing a directory or parent at or above the pattern with a file.
+  - These rules judge what a push introduces, so the push goes through. A `**` pattern does hold a push that replaces the directory itself with a file.
   - The forge's own branch policy is what protects that file.
 - **On Azure DevOps a review pattern holds only a push that touches a matching path.**
   - What the pack does not carry is compared through the Git REST API, so a new branch that touches no matching path goes through, on an unattended run too.
