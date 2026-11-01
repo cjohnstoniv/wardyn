@@ -16,6 +16,7 @@ package store_test
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ func watchedRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, state typ
 // sweepClaims runs one sweep as owner and reports whether it claimed runID.
 func sweepClaims(t *testing.T, st store.PG, owner string, staleAfter time.Duration, runID uuid.UUID) bool {
 	t.Helper()
-	runs, err := st.ClaimStaleRunWatchers(context.Background(), owner, staleAfter)
+	runs, err := st.ClaimStaleRunWatchers(context.Background(), owner, staleAfter, nil)
 	if err != nil {
 		t.Fatalf("sweep as %s: %v", owner, err)
 	}
@@ -118,7 +119,7 @@ func TestPG_RunWatcherLease_TwoProcessAdoption(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			runs, err := st.ClaimStaleRunWatchers(context.Background(), owner, stale)
+			runs, err := st.ClaimStaleRunWatchers(context.Background(), owner, stale, nil)
 			if err != nil {
 				t.Errorf("concurrent sweep as %s: %v", owner, err)
 				return
@@ -148,7 +149,7 @@ func TestPG_RunWatcherLease_TwoProcessAdoption(t *testing.T) {
 	// And the adopted run carries what the adopter probes with (ref + exec id),
 	// so a claim is enough to re-derive state without a second read.
 	stopHeartbeating(t, pool, run.ID, 5*time.Minute)
-	runs, err := st.ClaimStaleRunWatchers(ctx, "D", stale)
+	runs, err := st.ClaimStaleRunWatchers(ctx, "D", stale, nil)
 	if err != nil {
 		t.Fatalf("sweep as D: %v", err)
 	}
@@ -211,5 +212,59 @@ func TestPG_RunWatcherLease_LeavesUpdatedAtAlone(t *testing.T) {
 	if !after.UpdatedAt.Equal(before.UpdatedAt) {
 		t.Fatalf("the watcher lease moved updated_at (%s -> %s); the idle reaper reads that column, so a 30s heartbeat would exempt every watched run from auto-stop",
 			before.UpdatedAt, after.UpdatedAt)
+	}
+}
+
+// TestPG_RunWatcherLease_RunnerRunGoesToItsSessionHolder pins the claim of a run on a registered
+// runner: only a replica holding that runner's session takes it, however stale the lease, and nobody
+// does while the runner has no session. A run never exec'd is the exception: the sweep's strand guard
+// ends it without a probe, so any replica takes it, and a runner that never returns cannot strand it.
+func TestPG_RunWatcherLease_RunnerRunGoesToItsSessionHolder(t *testing.T) {
+	pool := runsPGPool(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	const stale = 90 * time.Second
+	held, other := uuid.New(), uuid.New()
+	claims := func(owner string, runID uuid.UUID, holds ...uuid.UUID) bool {
+		t.Helper()
+		stopHeartbeating(t, pool, runID, 5*time.Minute)
+		runs, err := st.ClaimStaleRunWatchers(ctx, owner, stale, holds)
+		if err != nil {
+			t.Fatalf("sweep as %s: %v", owner, err)
+		}
+		return slices.ContainsFunc(runs, func(r types.AgentRun) bool { return r.ID == runID })
+	}
+	onRunner := func(task string, interactive bool) types.AgentRun {
+		t.Helper()
+		r := newRun(types.RunRunning)
+		r.SandboxRef, r.Task, r.Interactive = "runner:"+held.String()+"/sbx", task, interactive
+		return persistRun(t, ctx, pool, r)
+	}
+
+	running := onRunner("a task", false)
+	if err := st.SetRunAgentExecID(ctx, running.ID, "exec-1"); err != nil {
+		t.Fatal(err)
+	}
+	interactive := onRunner("", true)
+	for _, run := range []types.AgentRun{running, interactive} {
+		if claims("no-session", run.ID) {
+			t.Errorf("run %s was claimed by a replica holding no session", run.ID)
+		}
+		if claims("other-session", run.ID, other) {
+			t.Errorf("run %s was claimed by a replica holding another runner's session", run.ID)
+		}
+		if !claims("holder", run.ID, other, held) {
+			t.Errorf("run %s was not claimed by the replica holding its runner's session", run.ID)
+		}
+		if owner := leaseOwner(t, pool, run.ID); owner != "holder" {
+			t.Errorf("watcher_owner of run %s = %q, want the holder", run.ID, owner)
+		}
+	}
+
+	if neverExeced := onRunner("a task", false); !claims("no-session", neverExeced.ID) {
+		t.Error("a run on a runner, never exec'd, was left to a session that may never return")
+	}
+	if onContainer := watchedRun(t, ctx, pool, types.RunRunning); !claims("no-session", onContainer.ID) {
+		t.Error("a run on no runner was not claimed by a replica holding no session")
 	}
 }

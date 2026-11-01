@@ -25,7 +25,7 @@ import (
 // goroutine, whose recover() would swallow the panic and kill it silently.
 // The api layer type-asserts and skips leasing when a store lacks this; PG always has it.
 type RunWatcherLeaser interface {
-	ClaimStaleRunWatchers(ctx context.Context, owner string, staleAfter time.Duration) ([]types.AgentRun, error)
+	ClaimStaleRunWatchers(ctx context.Context, owner string, staleAfter time.Duration, heldRunners []uuid.UUID) ([]types.AgentRun, error)
 	HeartbeatRunWatcher(ctx context.Context, id uuid.UUID, owner string) error
 	// RunWatcherFresh reports whether id's lease heartbeat is younger than
 	// staleAfter (a live process owns it). The undispatched-run reaper checks
@@ -72,12 +72,23 @@ const nonTerminalRunStates = `'QUEUED','PENDING','STARTING','RUNNING','WAITING_F
 // is stopped on purpose, and a watcher would read that as exit and finalize
 // the run, tearing down files it's kept for. updated_at is deliberately not
 // touched: it's the idle reaper's activity signal, and a lease write isn't activity.
-func (s PG) ClaimStaleRunWatchers(ctx context.Context, owner string, staleAfter time.Duration) ([]types.AgentRun, error) {
+//
+// A run on a registered runner is claimed only with its runner in heldRunners, the
+// runners whose session this replica holds: no other replica can probe its sandbox,
+// so a claim there would only delay the holder's by one stale window. The ref names
+// the runner (a pool's run routes by it too, whatever its placement). The exception
+// is the sweep's strand guard, a run never exec'd, which needs no probe and is ended
+// with its runner offline, so a runner that never returns does not strand it.
+func (s PG) ClaimStaleRunWatchers(ctx context.Context, owner string, staleAfter time.Duration, heldRunners []uuid.UUID) ([]types.AgentRun, error) {
 	if staleAfter < 0 {
 		// Duration.String() renders "-1m30s" but ::interval binds the sign only
 		// to the first field (-1m +30s = -30s): clamp, or a negative window
 		// silently becomes a shorter positive one that claims live leases.
 		staleAfter = 0
+	}
+	held := make([]string, len(heldRunners))
+	for i, id := range heldRunners {
+		held[i] = "runner:" + id.String()
 	}
 	const q = `
 		UPDATE agent_runs SET watcher_owner=$1, watcher_heartbeat=now()
@@ -85,8 +96,11 @@ func (s PG) ClaimStaleRunWatchers(ctx context.Context, owner string, staleAfter 
 		  AND sandbox_ref <> ''
 		  AND watcher_heartbeat < now() - $2::interval
 		  AND lost_at IS NULL
+		  AND (sandbox_ref NOT LIKE 'runner:%'
+		       OR split_part(sandbox_ref, '/', 1) = ANY($3::text[])
+		       OR (NOT interactive AND task <> '' AND agent_exec_id = ''))
 		RETURNING ` + runCols
-	return collect(ctx, s.Pool, "claim", "stale run watchers", q, []any{owner, staleAfter.String()}, scanRun)
+	return collect(ctx, s.Pool, "claim", "stale run watchers", q, []any{owner, staleAfter.String(), held}, scanRun)
 }
 
 // ReleaseUncreatedRunWatcher clears id's lease owner while no sandbox is recorded for it: the
