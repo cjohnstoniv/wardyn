@@ -396,7 +396,7 @@ func (s *Server) killSignInRunAfterCapture(ctx context.Context, runID uuid.UUID,
 			// but a shutdown stops the loop between passes: a second and third pass
 			// started after it would run past the budget on a slow store.
 			if s.cfg.BaseCtx.Err() != nil {
-				slog.WarnContext(detached, "wardynd: shutdown stopped ending a captured sign-in sandbox; its idle cap and the next boot's reconcile still end it",
+				slog.WarnContext(detached, "wardynd: shutdown stopped ending a captured sign-in sandbox; its idle cap ends it",
 					slog.String("run_id", runID.String()), slog.Int("attempt", attempt))
 				return
 			}

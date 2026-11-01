@@ -52,8 +52,8 @@ func (s *Server) GoBackground(fn func()) {
 // pass under way finish and starts no further one: the goroutine outlives
 // shutdown by at most one pass, which this budget covers. A pass that loses its
 // swap to the launch moving the run forward tears nothing down, so the retries
-// the shutdown skips are the cheap ones; the run is then ended by its idle cap
-// or ReconcileOnBoot. A single pass whose store calls all ran to their full
+// the shutdown skips are the cheap ones; the run is then ended by its 30-minute
+// idle cap (harnessLoginIdleCap). A single pass whose store calls all ran to their full
 // timeouts can still pass the budget and is abandoned with the WARN below. The
 // budget is not sized to 105s because HTTPShutdownTimeout, this budget and the audit
 // flush must fit the 70s termination grace (TestShutdownGraceCoversTheBudget).
