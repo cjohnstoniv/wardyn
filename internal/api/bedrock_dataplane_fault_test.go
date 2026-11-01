@@ -142,6 +142,32 @@ func TestBedrockDataPlaneFault_ThrottleExhaustedNamesThrottling(t *testing.T) {
 	}
 }
 
+// Any other refusal the proxy names ("<status> <class>") reaches the run's
+// failure hint with that status and class, and a clean call clears it.
+func TestBedrockDataPlaneFault_OtherRefusalNamesStatusAndClass(t *testing.T) {
+	f := newFaultRun(t, 1)
+	f.post("400 ValidationException")
+	f.end(types.RunFailed)
+	if h := f.hint(); !strings.Contains(h, "HTTP 400 ValidationException") {
+		t.Fatalf("hint = %q, want the status and class named", h)
+	}
+
+	g := newFaultRun(t, 0)
+	g.post("500")
+	if h := g.st.FailureHint(); !strings.Contains(h, "HTTP 500)") {
+		t.Fatalf("stored hint = %q, want the bare status named", h)
+	}
+	g.post("recovered")
+	if h := g.st.FailureHint(); h != "" {
+		t.Fatalf("stored hint after recovery = %q, want cleared", h)
+	}
+
+	g.post("400 not a class") // not the proxy's shape: ignored
+	if h := g.st.FailureHint(); h != "" {
+		t.Fatalf("stored hint = %q for a malformed fault, want none", h)
+	}
+}
+
 // The row can land after the watcher's FAILED CAS but before the revoke that
 // follows it kills the run token (the agent exits the instant it reads the
 // 403; the sidecar posts asynchronously). A FAILED run with no reason of its
