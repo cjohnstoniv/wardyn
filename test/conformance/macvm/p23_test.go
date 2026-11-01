@@ -233,7 +233,7 @@ func inputDropped(log []byte) (n int, ok bool) {
 type guestPointer struct{ X, Y float64 }
 
 const (
-	pointerRead = `osascript -l JavaScript -e 'ObjC.import("AppKit"); JSON.stringify($.NSEvent.mouseLocation)'`
+	pointerRead = `osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); JSON.stringify($.CGEventGetLocation($.CGEventCreate(null)))'`
 	// pointerWarp is the guest moving its own pointer, the control that shows the reading can change.
 	pointerWarp = `osascript -l JavaScript -e 'ObjC.import("CoreGraphics"); $.CGWarpMouseCursorPosition($.CGPointMake(%d, %d)); "ok"'`
 )
@@ -353,7 +353,12 @@ func TestP23_DesktopObserve(t *testing.T) {
 	moved := false
 	if readable {
 		after, ok := readPointer(t, id)
-		moved = !ok || !after.near(before)
+		if !ok {
+			after, ok = readPointer(t, id)
+		}
+		// A reading that failed is not a pointer that moved.
+		readable = ok
+		moved = ok && !after.near(before)
 	}
 	_ = c.Close()
 	dropped := -1
