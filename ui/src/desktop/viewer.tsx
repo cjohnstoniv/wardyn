@@ -15,7 +15,8 @@ import { keysymOf } from "./keysym";
 import { RfbClient, type RfbDisplay } from "./rfb";
 
 // `machine_kind` is the run's (types.MachineKind); absent when the gateway could not read the run.
-export type Boot = { state: "open"; expires: number; rfb: string; close: string; machine_kind?: string } | { state: "refused"; said: string };
+// `view_only`: the gateway keeps this session's input from the desktop.
+export type Boot = { state: "open"; expires: number; rfb: string; close: string; machine_kind?: string; view_only?: boolean } | { state: "refused"; said: string };
 
 /** What the gateway wrote on the page, or null when it wrote nothing usable. */
 export function readBoot(el: HTMLElement = document.documentElement): Boot | null {
@@ -49,7 +50,7 @@ type Phase = "starting" | "connected" | "closed" | "expired" | "run_ended" | "re
 
 export function DesktopViewer({ boot, connect = openSocket, small }: { boot: Boot; connect?: (path: string) => DesktopSocket; small?: boolean }) {
   if (boot.state === "refused") return <LinkRefused said={boot.said} />;
-  return <Desktop boot={boot} connect={connect} viewOnly={small ?? window.matchMedia?.("(max-width: 640px)").matches ?? false} />;
+  return <Desktop boot={boot} connect={connect} viewOnly={boot.view_only === true || (small ?? window.matchMedia?.("(max-width: 640px)").matches ?? false)} />;
 }
 
 function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "open" }>; connect: (path: string) => DesktopSocket; viewOnly: boolean }) {
@@ -152,7 +153,8 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
       )}
       {viewOnly && (
         <p className="border-b border-border px-4 py-2 text-xs">
-          <span className="font-medium">{DESKTOP.phoneTitle}</span> <span className="text-muted-foreground">{DESKTOP.phoneBody}</span>
+          <span className="font-medium">{boot.view_only ? DESKTOP.viewOnlyTitle : DESKTOP.phoneTitle}</span>{" "}
+          <span className="text-muted-foreground">{boot.view_only ? DESKTOP.viewOnlyBody : DESKTOP.phoneBody}</span>
         </p>
       )}
       <main className={fit ? "relative flex min-h-0 flex-1 items-center justify-center bg-black" : "relative min-h-0 flex-1 overflow-auto bg-black"}>

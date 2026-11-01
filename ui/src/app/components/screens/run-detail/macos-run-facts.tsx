@@ -12,7 +12,7 @@ import type { RunDetail } from "../../../lib/types";
 import { DESKTOP } from "../../wardyn/copy/desktop";
 
 export interface MacOSRunFacts {
-  /** The Mac's Screen Sharing is view only: the run is agent-only, with no Open desktop. */
+  /** The Mac's Screen Sharing is view only: the desktop is watched, with no Open desktop and no sign-ins. */
   desktop?: "observe";
   /** The helper's word on the VM's disk; absent while the run goes on. */
   disk?: { state: "removing" } | { state: "removed"; at: string } | { state: "failed"; reason: string };

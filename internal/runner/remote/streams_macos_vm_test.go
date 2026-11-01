@@ -15,15 +15,15 @@ import (
 )
 
 // A runner that offers macOS VMs alone is asked to pause the agent when its caps keep sign-ins, and to
-// open the desktop only when its Mac's Screen Sharing can be controlled: an observe-only Mac, or one
-// with no Screen Sharing, offers no desktop and is asked nothing.
+// open the desktop when its Mac's Screen Sharing can be controlled or watched: one with no Screen
+// Sharing offers no desktop and is asked nothing.
 func TestPauseAndDesktopFollowTheMacOSVMCaps(t *testing.T) {
 	for name, tc := range map[string]struct {
 		caps           runnerwire.MacVMCaps
 		pause, desktop bool
 	}{
 		"no sign-ins, no desktop": {caps: runnerwire.MacVMCaps{Max: 2, Desktop: runnerwire.MacVMDesktopNone}},
-		"observe only":            {caps: runnerwire.MacVMCaps{Max: 2, Desktop: runnerwire.MacVMDesktopObserve, SignIns: true}, pause: true},
+		"observe only":            {caps: runnerwire.MacVMCaps{Max: 2, Desktop: runnerwire.MacVMDesktopObserve, SignIns: true}, pause: true, desktop: true},
 		"control":                 {caps: runnerwire.MacVMCaps{Max: 2, Desktop: runnerwire.MacVMDesktopControl, SignIns: true}, pause: true, desktop: true},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -62,7 +62,7 @@ func TestDesktopAndPauseGatedByTheRefsKind(t *testing.T) {
 		macPause     bool
 	}{
 		"linux desktop, mac observe": {linux: runnerwire.VMCaps{Desktop: true, SignIns: true}, mac: runnerwire.MacVMCaps{Max: 2, Desktop: runnerwire.MacVMDesktopObserve},
-			linuxDesktop: true, linuxPause: true},
+			linuxDesktop: true, macDesktop: true, linuxPause: true},
 		"mac control, linux none": {mac: runnerwire.MacVMCaps{Max: 2, Desktop: runnerwire.MacVMDesktopControl, SignIns: true},
 			macDesktop: true, macPause: true},
 	} {

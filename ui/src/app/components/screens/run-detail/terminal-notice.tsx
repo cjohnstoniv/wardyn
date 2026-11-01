@@ -19,6 +19,7 @@ import { SquareTerminal } from "lucide-react";
 import type { Recording, RunDetail } from "../../../lib/types";
 import { AttachTerminal } from "../../attach-terminal";
 import { TerminalPlayer } from "../../wardyn/terminal-player";
+import { WatchDesktopButton } from "./watch-desktop";
 import { Chip } from "../../wardyn/primitives";
 import { useOperator, useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
 import { mayEnterRunOrUnknown, runEntryRefusalLine } from "../../../lib/run-entry";
@@ -57,6 +58,8 @@ export function TerminalPane({
   const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
   // The Watch link leads to this run's recording, so it needs one: has_recording is on every single-run read.
   const watchable = !recordingDisabled && run.has_recording !== false;
+  // Mock F-hero: a desktop the Mac lets be watched alone is offered here too, for whoever may enter the run.
+  const watchDesktop = run.state === "RUNNING" && canAttach && run.macos?.desktop === "observe" ? <WatchDesktopButton run={run} /> : undefined;
 
   // 0.9 (M-RN-3 RS6): a live run on a computer that is offline cannot be reached, so the terminal and the
   // attach controls give way to a sentence naming it. The captured replay is still offered; it is a file the
@@ -81,7 +84,7 @@ export function TerminalPane({
   if (attachable) {
     // fill: the pane owns the height. h-[70vh] was a guess that predates this
     // layout and stays the default for every other mount site.
-    return <AttachTerminal fill runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} policy={run.policy} />;
+    return <AttachTerminal fill barAction={watchDesktop} runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} policy={run.policy} />;
   }
 
   // Finished run: the pane becomes the replay surface in place rather than a
@@ -181,6 +184,7 @@ export function TerminalPane({
     // drive this one); an autonomous run has none to type into at all, which
     // is why that tile tails output instead of offering a prompt.
     <PaneFrame
+      action={watchDesktop}
       title={run.interactive ? "Terminal" : "Output"}
       chip={run.interactive ? undefined : execMode ? RUN_COCKPIT.execNoHarness : RUN_COCKPIT.autonomous}
     >
@@ -210,10 +214,12 @@ export function TerminalPane({
 function PaneFrame({
   title,
   chip,
+  action,
   children,
 }: {
   title: string;
   chip?: string;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -227,6 +233,7 @@ function PaneFrame({
             {chip}
           </Chip>
         )}
+        {action && <div className="ml-auto flex min-w-0 items-center gap-2">{action}</div>}
       </div>
       {children}
     </div>

@@ -120,7 +120,7 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
   const [openingApp, setOpeningApp] = React.useState<string | null>(null);
   const [appError, setAppError] = React.useState<{ app: string; message: string } | null>(null);
   // #2972: a VM desktop's sign-ins, once the gateway can open it.
-  const signIns = useDesktopSignIns(run.id, mayAttach && running && isVMKind(run.machine_kind) && !!uiSandbox?.enabled);
+  const signIns = useDesktopSignIns(run.id, mayAttach && running && isVMKind(run.machine_kind) && !!uiSandbox?.enabled && macOS?.desktop !== "observe");
 
   React.useEffect(() => {
     if (!mayAttach || !running) return; // nothing to show either way — skip the fetch
@@ -224,8 +224,10 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
   // token at whatever else owns the host root). It rides `wardyn login <url>`;
   // the attach command itself carries no prefix.
   const consoleURL = typeof window !== "undefined" ? window.location.origin + basePath() : "";
-  // A macOS VM whose desktop is view only, or whose disk the Mac is removing, has no desktop to open.
-  const macOff = macOS?.desktop === "observe" || !!macOS?.disk;
+  // A macOS VM whose disk the Mac is removing has no desktop to open. One whose desktop is view only is
+  // watched: nobody can sign in without typing, so it has no sign-ins.
+  const macOff = !!macOS?.disk;
+  const viewOnly = macOS?.desktop === "observe" && running;
   const desktopOn = uiSandboxOn && !macOff;
   const syncLane = sshOn && run.placement !== "local" && !!run.agent_exec_id;
 
@@ -245,14 +247,16 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs font-medium text-foreground">{DESKTOP.title}</p>
             {(healthAnswered || macOff) &&
-              (desktopOn && signIns.view?.paused ? (
+              (desktopOn && viewOnly ? (
+                <Chip tone="neutral">{DESKTOP.viewOnlyChip}</Chip>
+              ) : desktopOn && signIns.view?.paused ? (
                 <Chip tone="warning">{DESKTOP.agentPaused}</Chip>
               ) : (
                 <Chip tone={desktopOn ? "success" : "neutral"}>{desktopOn ? DESKTOP.ready : DESKTOP.statusOff}</Chip>
               ))}
           </div>
           <p className="mt-0.5 text-meta text-muted-foreground">{isMacOSVM(run) ? DESKTOP.kindMacOS : DESKTOP.kind}</p>
-          {macOS?.desktop === "observe" && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{DESKTOP.observeOnlyMacOS}</p>}
+          {viewOnly && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{DESKTOP.observeOnlyMacOS}</p>}
           {healthAnswered && !uiSandboxOn && !macOff && (
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{monoTokens(DESKTOP.off, "WARDYN_UI_SANDBOX_LISTEN")}</p>
           )}
@@ -262,14 +266,14 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
               <DesktopPausedNote s={signIns} />
               <div className="mt-2 flex flex-wrap gap-2">
                 <Button size="sm" disabled={openingApp === DESKTOP_APP.name} onClick={() => openApp(DESKTOP_APP)}>
-                  {openingApp === DESKTOP_APP.name ? UI_APPS_LANE.ctaBusy : UI_APPS_LANE.cta("desktop")}
+                  {openingApp === DESKTOP_APP.name ? UI_APPS_LANE.ctaBusy : viewOnly ? DESKTOP.watch : UI_APPS_LANE.cta("desktop")}
                 </Button>
                 <DesktopSignInButton s={signIns} />
               </div>
               {appError?.app === DESKTOP_APP.name && (
                 <p role="alert" className="mt-2 font-mono text-meta leading-relaxed text-muted-foreground">{appError.message}</p>
               )}
-              <p className="mt-2 text-meta leading-relaxed text-muted-foreground sm:hidden">{DESKTOP.phoneBefore}</p>
+              {!viewOnly && <p className="mt-2 text-meta leading-relaxed text-muted-foreground sm:hidden">{DESKTOP.phoneBefore}</p>}
               <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
               <DesktopSignInsNote s={signIns} />
             </>
@@ -489,7 +493,7 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
 
 // DESKTOP_APP is the gateway's built-in desktop app (internal/api/uigateway_desktop.go uiDesktopApp):
 // no policy declares it and no declared app can share its name.
-const DESKTOP_APP: UIApp = { name: "__desktop", port: 0 };
+export const DESKTOP_APP: UIApp = { name: "__desktop", port: 0 };
 
 // monoTokens renders one frozen copy string with its env-var / policy-field /
 // file-path tokens in <Mono>, per the mock's visual rule §6 (and matching the

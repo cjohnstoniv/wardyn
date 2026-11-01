@@ -3,13 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { health } from "../../../lib/api/health";
+import type { RunDetail } from "../../../lib/types";
 import { RUN_WAIT, RUN_WAIT_REASON } from "../../../lib/runner-pool-refusals";
 import { makeRun } from "../../../../test/factories";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
+import { DESKTOP } from "../../wardyn/copy/desktop";
 import { TerminalPane } from "./terminal-notice";
+
+vi.mock("../../../lib/api/health", () => ({ health: { health: vi.fn().mockResolvedValue({}) } }));
 
 vi.mock("../../attach-terminal", () => ({ AttachTerminal: () => null }));
 vi.mock("../../../lib/api/runner-pools", () => ({
@@ -140,6 +145,48 @@ describe("TerminalPane — the Watch link needs a recording", () => {
   it("a run with a recording keeps it", () => {
     paneFor({ state: "WAITING_FOR_CONFIRMATION", has_recording: true });
     expect(screen.getByRole("button", { name: /Watch the captured session/ })).toBeInTheDocument();
+  });
+});
+
+// Board F-hero: Watch desktop on the hero of a running macOS VM run whose desktop is view only.
+describe("TerminalPane — Watch desktop", () => {
+  const paneFor = (over: Record<string, unknown>, principal = "me") =>
+    render(
+      <OperatorProvider operator={false} principal={principal}>
+        <TerminalPane run={makeRun({ id: "run-1", state: "RUNNING", created_by: "me", interactive: false, machine_kind: "macos_vm", macos: { desktop: "observe" }, ...over } as Partial<RunDetail>) as RunDetail} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
+      </OperatorProvider>,
+    );
+  beforeEach(() => {
+    vi.mocked(health.health).mockClear();
+    vi.mocked(health.health).mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true, enter_post_url: "http://ui.local/__wardyn/enter" } } as never);
+  });
+
+  it("a task run's own person gets the button", async () => {
+    paneFor({});
+    expect(await screen.findByRole("button", { name: DESKTOP.watch })).toBeInTheDocument();
+  });
+
+  it("is not offered to someone who may not enter the run", async () => {
+    paneFor({}, "priya");
+    await waitFor(() => expect(screen.getByTestId("run-pane-frame")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: DESKTOP.watch })).toBeNull();
+    expect(health.health).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ["a Mac with control", { macos: { desktop: "control" } }],
+    ["a run that isn't running", { state: "WAITING_FOR_CONFIRMATION" }],
+  ])("is not offered on %s", async (_name, over) => {
+    paneFor(over);
+    await waitFor(() => expect(screen.getByTestId("run-pane-frame")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: DESKTOP.watch })).toBeNull();
+  });
+
+  it("stays away while the gateway is off", async () => {
+    vi.mocked(health.health).mockResolvedValue({ status: "ok", ui_sandbox: { enabled: false } } as never);
+    paneFor({});
+    await waitFor(() => expect(health.health).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: DESKTOP.watch })).toBeNull();
   });
 });
 

@@ -13,6 +13,9 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -99,6 +102,11 @@ type shimRig struct {
 
 func newShimRig(t *testing.T, cred func(context.Context) (string, error)) *shimRig {
 	t.Helper()
+	return newShim(t, &macvm.RFBShim{Credential: cred})
+}
+
+func newShim(t *testing.T, shim *macvm.RFBShim) *shimRig {
+	t.Helper()
 	viewer, client := net.Pipe()
 	guest, apple := net.Pipe()
 	r := &shimRig{viewer: viewer, apple: apple, done: make(chan struct{})}
@@ -106,7 +114,7 @@ func newShimRig(t *testing.T, cred func(context.Context) (string, error)) *shimR
 	_ = viewer.SetDeadline(deadline)
 	_ = apple.SetDeadline(deadline)
 	go func() {
-		(&macvm.RFBShim{Credential: cred}).ServeDesktop(client, guest)
+		shim.ServeDesktop(client, guest)
 		close(r.done)
 	}()
 	t.Cleanup(func() {
@@ -218,6 +226,57 @@ func TestRFBShimLogsInAndRelaysPlainRFB(t *testing.T) {
 		if got := readFull(t, r.viewer, len(msg)); !bytes.Equal(got, msg) {
 			t.Fatalf("server message %d reached the viewer as %v, want %v", msg[0], got, msg)
 		}
+	}
+}
+
+// A view-only shim keeps key, pointer and paste messages from Screen Sharing, and goes on relaying
+// the rest: the update request behind them is the first thing Apple's server reads.
+func TestRFBShimViewOnlyKeepsInputFromTheGuest(t *testing.T) {
+	r := newShim(t, &macvm.RFBShim{Credential: password, ViewOnly: true})
+	r.handshake(t)
+	go func() {
+		for _, msg := range [][]byte{
+			{4, 1, 0, 0, 0, 0, 0, 0x61},        // KeyEvent
+			{5, 1, 0, 10, 0, 20},               // PointerEvent
+			{6, 0, 0, 0, 0, 0, 0, 2, 'h', 'i'}, // ClientCutText
+		} {
+			_, _ = r.viewer.Write(msg)
+		}
+		_, _ = r.viewer.Write([]byte{3, 1, 0, 0, 0, 0, 7, 128, 4, 56})
+	}()
+	if got := readFull(t, r.apple, 10); got[0] != 3 {
+		t.Fatalf("Screen Sharing read %v first, want the update request", got)
+	}
+}
+
+func TestBaseViewOnly(t *testing.T) {
+	for _, tc := range []struct {
+		manifest string
+		want     bool
+	}{
+		{`{"format":FMT,"state":"ready","desktop":"control"}`, false},
+		{`{"format":FMT,"state":"ready","desktop":"observe"}`, true},
+		{`{"format":FMT,"state":"ready","desktop":"none"}`, true},
+		{`{"format":FMT,"state":"ready"}`, true},
+		{`not json`, true},
+		{"", true}, // no manifest
+	} {
+		const runID = "0a1b2c3d-4e5f-4061-8273-8495a6b7c8d9"
+		base, run := t.TempDir(), macvm.Layout{Root: t.TempDir()}.RunDir(runID)
+		if tc.manifest != "" {
+			if err := os.WriteFile(filepath.Join(base, macvm.ManifestFile), []byte(strings.ReplaceAll(tc.manifest, "FMT", strconv.Itoa(macvm.BaseFormat))), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := macvm.WriteRunConfig(run, macvm.RunConfig{RunID: runID, BaseDir: base}); err != nil {
+			t.Fatal(err)
+		}
+		if got := macvm.BaseViewOnly(run); got != tc.want {
+			t.Errorf("manifest %q: view only %v, want %v", tc.manifest, got, tc.want)
+		}
+	}
+	if !macvm.BaseViewOnly(t.TempDir()) {
+		t.Error("a run directory with no run.json is not view only")
 	}
 }
 
