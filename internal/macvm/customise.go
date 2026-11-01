@@ -108,6 +108,15 @@ func LoadBaseList(path string) (BaseList, error) {
 	if err != nil {
 		return BaseList{}, fmt.Errorf("macvm: the macOS base install list %s: %w", path, err)
 	}
+	// A ca item is read now, so a file that is not a CA stops a prepare before the restore image downloads.
+	for i, it := range l.Items {
+		if it.Kind != ItemKindCA {
+			continue
+		}
+		if _, _, err := readCA(it.Path); err != nil {
+			return BaseList{}, fmt.Errorf("macvm: the macOS base install list %s: item %d (%q): %w", path, i+1, it.Name, err)
+		}
+	}
 	return l, nil
 }
 
@@ -453,22 +462,38 @@ func installItem(ctx context.Context, g ToolsGuest, it BaseItem) (rec ItemRecord
 	return rec, err
 }
 
-// trustCA stages a ca item's certificate (kept, for a trust by hand in edit-base), trusts it as a root
-// in the System keychain for SSL only, never every policy, and then verifies it. The guest agent runs
-// the trust as root without touching the authorization rule (macOS 26 refuses root that rewrite). A
-// trust Apple refuses without a person is not an error: the CA reads not_trusted.
-func trustCA(ctx context.Context, g ToolsGuest, it BaseItem, rec ItemRecord) (ItemRecord, error) {
-	b, err := os.ReadFile(it.Path)
+// readCA reads the certificate at path, PEM or DER, and refuses one that is not a CA, saying why. Go reports
+// IsCA false for every X.509 v1 certificate, which has no basicConstraints; macOS's own openssl writes one
+// unless it is given a v3 extensions section.
+func readCA(path string) (*x509.Certificate, []byte, error) {
+	b, err := os.ReadFile(path)
 	if err != nil {
-		return rec, err
+		return nil, nil, err
 	}
 	der := b
 	if blk, _ := pem.Decode(b); blk != nil {
 		der = blk.Bytes
 	}
 	cert, err := x509.ParseCertificate(der)
-	if err != nil || !cert.IsCA {
-		return rec, fmt.Errorf("%s is not a CA certificate", it.Path)
+	switch {
+	case err != nil:
+		return nil, nil, fmt.Errorf("%s is not a CA certificate: it does not parse as an X.509 certificate", path)
+	case cert.Version < 3:
+		return nil, nil, fmt.Errorf("%s is not a CA certificate: it is an X.509 v%d certificate, which has no basicConstraints; make a v3 certificate with CA:TRUE", path, cert.Version)
+	case !cert.IsCA:
+		return nil, nil, fmt.Errorf("%s is not a CA certificate: its basicConstraints do not say CA:TRUE", path)
+	}
+	return cert, der, nil
+}
+
+// trustCA stages a ca item's certificate (kept, for a trust by hand in edit-base), trusts it as a root
+// in the System keychain for SSL only, never every policy, and then verifies it. The guest agent runs
+// the trust as root without touching the authorization rule (macOS 26 refuses root that rewrite). A
+// trust Apple refuses without a person is not an error: the CA reads not_trusted.
+func trustCA(ctx context.Context, g ToolsGuest, it BaseItem, rec ItemRecord) (ItemRecord, error) {
+	_, der, err := readCA(it.Path)
+	if err != nil {
+		return rec, err
 	}
 	s256, s1 := sha256.Sum256(der), sha1.Sum(der)
 	rec.Fingerprint, rec.SHA1 = hex.EncodeToString(s256[:]), strings.ToUpper(hex.EncodeToString(s1[:]))

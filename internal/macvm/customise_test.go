@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -358,6 +359,88 @@ func caPEM(t *testing.T, dir, name string, isCA bool) (string, string, []byte) {
 	}
 	p, pin := itemFile(t, dir, name+".pem", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})))
 	return p, pin, der
+}
+
+// v1PEM writes a self-signed X.509 v1 certificate (no version field, no extensions), as macOS's own openssl
+// writes one without a v3 extensions section, and returns its path and pin. Go's x509 only creates v3.
+func v1PEM(t *testing.T, dir, name string) (string, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spki, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subj, err := asn1.Marshal(pkix.Name{CommonName: name}.ToRDNSequence())
+	if err != nil {
+		t.Fatal(err)
+	}
+	alg := pkix.AlgorithmIdentifier{Algorithm: asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 2}} // ecdsa-with-SHA256
+	type validity struct{ NotBefore, NotAfter time.Time }
+	tbs, err := asn1.Marshal(struct {
+		Serial   *big.Int
+		Alg      pkix.AlgorithmIdentifier
+		Issuer   asn1.RawValue
+		Validity validity
+		Subject  asn1.RawValue
+		SPKI     asn1.RawValue
+	}{big.NewInt(1), alg, asn1.RawValue{FullBytes: subj}, validity{time.Now().UTC().Truncate(time.Second), time.Now().Add(time.Hour).UTC().Truncate(time.Second)},
+		asn1.RawValue{FullBytes: subj}, asn1.RawValue{FullBytes: spki}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := sha256.Sum256(tbs)
+	sig, err := ecdsa.SignASN1(rand.Reader, key, h[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := asn1.Marshal(struct {
+		TBS asn1.RawValue
+		Alg pkix.AlgorithmIdentifier
+		Sig asn1.BitString
+	}{asn1.RawValue{FullBytes: tbs}, alg, asn1.BitString{Bytes: sig, BitLength: 8 * len(sig)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, err := x509.ParseCertificate(der); err != nil || c.Version != 1 {
+		t.Fatalf("the v1 certificate: %v %v", c, err)
+	}
+	return itemFile(t, dir, name+".pem", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})))
+}
+
+// The install list is read before anything downloads: a ca item that is not a CA certificate is refused
+// with its reason, an X.509 v1 certificate (which Go reads as IsCA false) apart from a v3 one without
+// CA:TRUE, and an unreadable file too. A real CA loads.
+func TestLoadBaseListRefusesACAThatIsNotACA(t *testing.T) {
+	dir := t.TempDir()
+	ok, okPin, _ := caPEM(t, dir, "org-ca", true)
+	leaf, leafPin, _ := caPEM(t, dir, "leaf", false)
+	v1, v1Pin := v1PEM(t, dir, "v1")
+	junk, junkPin := itemFile(t, dir, "junk.pem", "not a certificate")
+	load := func(path, pin string) error {
+		list := filepath.Join(dir, "list.json")
+		if err := os.WriteFile(list, listJSON(t, map[string]any{"kind": "ca", "name": "rc9-ca", "path": path, "sha256": pin}), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := macvm.LoadBaseList(list)
+		return err
+	}
+	if err := load(ok, okPin); err != nil {
+		t.Fatalf("a CA: %v", err)
+	}
+	for name, c := range map[string]struct{ path, pin, why string }{
+		"x509 v1":    {v1, v1Pin, "X.509 v1"},
+		"no CA:TRUE": {leaf, leafPin, "CA:TRUE"},
+		"not a cert": {junk, junkPin, "does not parse"},
+		"a missing":  {filepath.Join(dir, "none.pem"), pin64, "no such file"},
+	} {
+		err := load(c.path, c.pin)
+		if err == nil || !strings.Contains(err.Error(), c.why) || !strings.Contains(err.Error(), `item 1 ("rc9-ca")`) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
 }
 
 // A ca item: staged and kept, trusted for SSL in the System keychain, then verified; its fingerprints are
