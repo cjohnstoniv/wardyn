@@ -11,6 +11,7 @@ const (
 	copyUpgradeIgnores     = "wardyn: this computer already runs a runner, so this upgrades it and ignores %s: they apply when a runner is first set up." // the flags given
 	copyUpgradeSwapping    = "Replacing the runner (%s) with v%s and restarting its service."
 	copyUpgradeDone        = "The runner is v%s, started and connected."
+	copyUpgradeMacVM       = "This Mac's macOS VM helper and guest agent (wardyn-macvm, wardyn-guest-agent) are still the old version: this upgrade replaces only the runner. To update all three, install wardyn-runnerd.pkg from the v%s release, then run `/usr/local/wardyn/bin/wardyn-runnerd setup --org %s`." // version, organisation; a setup-installed Mac keeps its own copies
 	copyUpgradeRollingBack = "v%s did not start (%v): putting %s back."
 	// The offer, printed after the version notice (design ATTACH 11.7): runner version, organisation release twice.
 	copyNoticeRunnerOlder = "this computer's runner is %s and the organisation runs %s: upgrade it with `wardyn runner upgrade --version %s`"
