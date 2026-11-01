@@ -11,6 +11,35 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A run that Amazon Bedrock refused with any other HTTP 4xx or 5xx now names, in its failure hint, the status and the
+  error class AWS answered with. Wardyn does not record AWS's message; the agent's own output, in the run's
+  recording, says what was refused ([#3891](https://github.com/cjohnstoniv/wardyn/issues/3891)).
+- A service whose lease renewal was due but refused, or whose authority check went unanswered, now writes a denied
+  `run.end.set` audit row with the reason when that starts, then at most hourly. Before, it ended at its lease with
+  nothing in the audit trail ([#3760](https://github.com/cjohnstoniv/wardyn/issues/3760)).
+- `wardyn-runnerd doctor` judged a folders or Kubernetes runner's drive roots as a Docker runner's, so a root it
+  passed could still be refused by `serve`. `runnerd.json` now takes an optional `substrate` key that `doctor` and
+  `serve` read when `--substrate` is not given; the flag still wins, and a file without the key means Docker
+  ([#3856](https://github.com/cjohnstoniv/wardyn/issues/3856)).
+- The UI gateway now warns at boot when it cannot know its own scheme: behind TLS with no advertise URL or origin
+  template, or with one written without a scheme. Before, an app that checks Origin against Host refused its own
+  WebSocket with no sign why ([#3799](https://github.com/cjohnstoniv/wardyn/issues/3799)).
+- Saving a workspace's requirements no longer reads a `write:` path on the server when the workspace binds that
+  folder to a person's runner; such a key gets the text-only check
+  ([#3857](https://github.com/cjohnstoniv/wardyn/issues/3857)).
+- `wardyn workspace create --runner` no longer rebinds a library folder that is bound to another runner. It refuses,
+  naming both runners and the folder ([#3858](https://github.com/cjohnstoniv/wardyn/issues/3858)).
+
+### Security
+
+- A change to a policy, a governance profile or a permission grant now reaches a live inbound caller at once. A
+  successful write under `/policies`, `/governance` or `/permissions`, or a revive that changes a run's restrictions,
+  ends the session an inbound token holds, instead of letting it run out its 30 seconds
+  ([#3768](https://github.com/cjohnstoniv/wardyn/issues/3768)).
+- The console's development toolchain now uses minimatch 11.0.1 (GHSA-g3hv-75wg-m249). Nothing shipped changes.
+
 ## [0.10.0-rc.9] — 2026-11-01
 
 ### Added
