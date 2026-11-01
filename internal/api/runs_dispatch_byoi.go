@@ -65,7 +65,7 @@ func (s *Server) byoiSelftest(ctx context.Context, run types.AgentRun, ref strin
 		// check does not run, and the row says so; the outcome CHECK has no value for a check not run.
 		if !failClosed && execution.operation == "" {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.selftest",
-				run.ID.String(), "success", mustJSON(map[string]any{"detail": "not run: interactive, no task"})))
+				run.ID.String(), "success", mustJSON(map[string]any{"ran": false, "detail": "not run: interactive, no task"})))
 			return false
 		}
 		st, ok := s.cfg.Runner.(runner.Selftester)
