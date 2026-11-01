@@ -3648,8 +3648,9 @@ The residuals particular to holding:
       - so while held packs fill that budget other buffered scans on the run's sidecar (an LLM request body, another push) cannot retain theirs and fail closed (refused, never forwarded unread) until the hold ends.
 - **The Azure DevOps Entra lane runs the rules before its capability gate.**
   - `Proxy.serveADOGit` inspects a push that moves a ref (`applyPushRules`) before `awaitADOCapability`, so nobody is asked for `code_write` on a push the rules refuse, and a review hold is decided before any capability hold.
-  - Its refusals are the plain `403` the other lanes give, not the lane's receive-pack-status refusal, so git prints `HTTP 403` there as elsewhere.
-  - What the pack does not carry is compared through the Azure DevOps Git REST API ([`internal/egress/proxy/push_forge_ado.go`](../internal/egress/proxy/push_forge_ado.go)): the receive-pack is read before Azure DevOps has its objects, so the base commit's trees are all it can show, in the repository the push names, with the lane's credential.
+  - Its refusals are the plain `403` the other lanes give, so git prints `HTTP 403`, with two exceptions the agent can act on.
+  - A push whose paths could not be worked out, and a review match on an unattended run, take the lane's receive-pack-status refusal, so git prints the reason.
+  - For `require_review_paths`, `deny_paths`, `max_file_size_mib` and `deny_new_executables`, what the pack does not carry is compared through the Azure DevOps Git REST API ([`internal/egress/proxy/push_forge_ado.go`](../internal/egress/proxy/push_forge_ado.go)): the receive-pack is read before Azure DevOps has its objects, so the base commit's trees are all it can show, in the repository the push names, with the lane's credential.
   - Any failure, a paged or partial answer, a commit the server does not know, or a branch moved other than forward keeps the strict reading, as on a forge with no reader.
 - **The Azure DevOps REST door is governed too, and fails closed.**
   - The same per-person credential writes content through REST: Git Pushes - Create carries files inline.

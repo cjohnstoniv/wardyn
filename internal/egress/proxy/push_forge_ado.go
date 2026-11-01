@@ -42,6 +42,21 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/gitpack"
 )
 
+// adoClears says which rules may have Azure DevOps clear what a pack leaves out.
+// Setting one false puts that rule back on the strict reading on this forge: every
+// entry the pack does not carry refuses. A var so a test can show exactly that.
+var adoClears = struct{ reviewPaths, denyPaths, maxFileSize, newExecutables, noObjects bool }{
+	reviewPaths: true, denyPaths: true, maxFileSize: true, newExecutables: true, noObjects: true,
+}
+
+// forRule is f, or no reader at all where allowed is false on Azure DevOps.
+func (f *forgeRepo) forRule(allowed bool) *forgeRepo {
+	if f != nil && f.ado != nil && !allowed {
+		return nil
+	}
+	return f
+}
+
 // adoForge is what makes a forgeRepo read Azure DevOps.
 type adoForge struct {
 	host string

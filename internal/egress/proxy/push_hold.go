@@ -87,7 +87,13 @@ var pushHoldSecond = time.Second
 // pushTarget is what a held push's approval names besides its paths and
 // commits: the repository as the run's grant names it, and the credential the
 // forwarded push authenticates with.
-type pushTarget struct{ repo, actsAs string }
+type pushTarget struct {
+	repo, actsAs string
+	// writeToGit, when set, answers a refusal the agent can act on in git's own
+	// terms, because git does not print a 403's body: paths that could not be
+	// worked out, and a match on a run with nobody to ask.
+	writeToGit func(w http.ResponseWriter, msg string)
+}
 
 // appPushTarget is the GitHub App lane's target.
 func appPushTarget(orgRepo string, grantID uuid.UUID) pushTarget {
@@ -148,6 +154,27 @@ func (rv pushReview) deniedHeadline() string {
 		return "an admin denied this push, whose changed paths could not be worked out on this lane"
 	}
 	return "an admin denied this push, which touches paths that need review"
+}
+
+// maxRefusalLine keeps a refusal inside one side-band packet of the smaller
+// band git may ask for (writeADOGitRefusal), with room for its framing.
+const maxRefusalLine = 900
+
+// refusalLine is one report-status line: git's "ng" reason ends at a newline.
+// The paths go last, so a long list is what the cap cuts.
+func refusalLine(headline, why, remedy string, paths []string) string {
+	line := "wardyn: " + headline + ". "
+	if why != "" {
+		line += why + ". "
+	}
+	line += remedy + ". Paths: " + strings.Join(sampleOf(paths), ", ")
+	line = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, line)
+	return strings.ToValidUTF8(line[:min(len(line), maxRefusalLine)], "")
 }
 
 // pushHolds is the per-run held-push state. The zero value (plus unattended)
@@ -257,13 +284,17 @@ func (p *Proxy) holdPush(w http.ResponseWriter, r *http.Request, rules *pushRule
 	}
 	refuse := func(src, headline, remedy string) bool {
 		deny(src)
+		if target.writeToGit != nil && (rv.unresolved || p.pushHolds.unattended) {
+			target.writeToGit(w, refusalLine(headline, rv.why, remedy, paths))
+			return false
+		}
 		http.Error(w, pathsBody("wardyn: "+headline, paths, noun, rv.why, remedy), http.StatusForbidden)
 		return false
 	}
 	if p.pushHolds.unattended {
-		remedy := "remove these paths from the push, or run the task interactively"
+		remedy := "remove these paths from the push, or run the task interactively so an admin can approve it"
 		if rv.unresolved {
-			remedy = "retry the push, build it directly on the branch it updates or on the default branch, or run the task interactively"
+			remedy = "retry the push, build it directly on the branch it updates or on the default branch, or run the task interactively so an admin can approve it"
 		}
 		return refuse(ruleSourceGitPushHeldUnattended, rv.headline()+", and this run is unattended, so nobody can be asked", remedy)
 	}

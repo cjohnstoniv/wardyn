@@ -1199,9 +1199,10 @@ So an entry a pattern matches is judged one of two ways:
 - **An unattended run does not hold.**
   - A run with a task and nobody driving it (not `interactive`) has nobody to ask, so a review match is refused at once (`brokered:git:push-held-unattended`) and no approval is raised.
   - The control plane refuses such a raise as well.
+  - **It cannot be approved later.** A real match on an unattended run stays refused, on every lane and on macOS VM runs too. To land it, remove those paths from the push or run the task interactively so an admin can approve it.
 - **On Azure DevOps a review pattern holds only a push that touches a matching path.**
   - What the pack does not carry is compared through the Git REST API, so a new branch that touches no matching path goes through, on an unattended run too.
-  - When the comparison cannot be made, the push is still held or refused. The refusal says the paths could not be worked out on this lane, and why, rather than that the push touches them; the listed paths are what could not be cleared. The audit row is the same `brokered:git:push-held-unattended` or `brokered:git:push-held`.
+  - When the comparison cannot be made, the push is still held or refused. Git prints the refusal as a remote rejection. It says the paths could not be worked out on this lane, and why, rather than that the push touches them. The listed paths are what could not be cleared. The audit row is the same `brokered:git:push-held-unattended` or `brokered:git:push-held`.
 - **The hold lasts `hold_seconds`** (default 120, at most 600).
   - git waits on the open request — it only gives up early if `http.lowSpeedLimit` and `http.lowSpeedTime` are set.
   - Past the hold the push is refused and the request stays in the console; pushing the same commits again waits on that same request rather than raising another.

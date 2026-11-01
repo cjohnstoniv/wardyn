@@ -485,7 +485,7 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 		// the forge already holds every commit it points a ref at (forgeRepo.held).
 		// The branch rules ran before this; the content rules have nothing to read.
 		fctx, fcancel := context.WithTimeout(r.Context(), forgeReadWait)
-		why := forge.held(fctx, absent.Commands)
+		why := forge.forRule(adoClears.noObjects).held(fctx, absent.Commands)
 		fcancel()
 		if forge != nil && forge.reads > 0 {
 			p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: forge.apiHost(), Port: 443,
@@ -509,7 +509,7 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 				" every object it deltifies against")
 		return nil, pushReview{}, noRelease, false
 	}
-	denied, why, err := p.matchedPaths(r, rules.deny, res, forge, subject)
+	denied, why, err := p.matchedPaths(r, rules.deny, res, forge.forRule(adoClears.denyPaths), subject)
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
@@ -529,14 +529,14 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 	}
 	if rules.maxFileBytes > 0 && !p.refuseLargeFiles(w, r, func(cs []gitpack.Change) ([]string, []gitpack.Change, error) {
 		return oversize(rules.maxFileBytes, cs)
-	}, res, forge, subject, deny) {
+	}, res, forge.forRule(adoClears.maxFileSize), subject, deny) {
 		return nil, pushReview{}, noRelease, false
 	}
-	if rules.denyNewExec && !p.refuseNewExecutables(w, r, res, forge, subject, deny) {
+	if rules.denyNewExec && !p.refuseNewExecutables(w, r, res, forge.forRule(adoClears.newExecutables), subject, deny) {
 		return nil, pushReview{}, noRelease, false
 	}
 	review := pushReview{cmds: res.Commands}
-	if review.paths, review.why, err = p.matchedPaths(r, rules.review, res, forge, subject); err != nil {
+	if review.paths, review.why, err = p.matchedPaths(r, rules.review, res, forge.forRule(adoClears.reviewPaths), subject); err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
 				"\nask an operator to shorten push_rules.require_review_paths")

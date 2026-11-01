@@ -65,7 +65,8 @@
 # docs/POLICIES.md 20858 adds 72 over the measured 20786, measured (rc.8): the ui_apps `inbound` and `callers` field rows.
 # docs/POLICIES.md 20895 adds 37 over 20858, measured: a desktop VM's connection to its own proxy is checked as a container's.
 # docs/POLICIES.md 21087 = 20895 + 192, measured: Azure DevOps push rules read the Git REST API (#3921)
-docs/POLICIES.md=21087 share=12
+# docs/POLICIES.md 21137 = 21087 + 50, measured: the unattended cut and the git-printed refusal (#3921)
+docs/POLICIES.md=21137 share=12
 # docs/POLICIES.md 19597 = ours 19378 + theirs 19511 - base 19292 at the 0.10 W4b merge of the CTL-B fix onto the train.
 # docs/POLICIES.md 19511 adds 219 (0.10 CTL-B): the recording knob (#2968).
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.

@@ -21,6 +21,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/gitpack"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/test/adofake"
 )
 
 const adoAPIPrefix = "/acme/proj/_apis/git/repositories/app"
@@ -228,10 +229,14 @@ func (r *adoPushRun) wantPassed(t *testing.T, rec *httptest.ResponseRecorder) {
 // forwarded, and the sentences an honest refusal needs.
 func (r *adoPushRun) wantHeld(t *testing.T, rec *httptest.ResponseRecorder, wants []string, unwanted string) {
 	t.Helper()
-	if rec.Code != http.StatusForbidden || r.rest.packs.Load() != 0 {
-		t.Fatalf("status %d, %d pack(s) forwarded, want refused and none:\n%s", rec.Code, r.rest.packs.Load(), rec.Body)
+	// A refusal the agent can act on is answered in git's own terms.
+	if rec.Code != http.StatusOK || r.rest.packs.Load() != 0 {
+		t.Fatalf("status %d, %d pack(s) forwarded, want a rejected ref and none:\n%s", rec.Code, r.rest.packs.Load(), rec.Body)
 	}
 	body := rec.Body.String()
+	if !strings.Contains(body, "ng refs/heads/") {
+		t.Errorf("refusal rejects no ref:\n%s", body)
+	}
 	for _, w := range wants {
 		if !strings.Contains(body, w) {
 			t.Errorf("refusal does not say %q:\n%s", w, body)
@@ -277,7 +282,8 @@ func TestADOPushReviewPathHoldsOnlyWhatItMatches(t *testing.T) {
 	t.Run("a file at a review path stays held", func(t *testing.T) {
 		r := newADOPushRun(t, adoReview(), true)
 		body := r.record(t, map[string]string{".github/workflows/ci.yml": "on: changed\n"})
-		r.wantHeld(t, postEntraPush(t, r.p, body), []string{adoTouches, ".github/workflows/ci.yml"}, adoWorkedOut)
+		r.wantHeld(t, postEntraPush(t, r.p, body), []string{adoTouches, ".github/workflows/ci.yml",
+			"remove these paths from the push, or run the task interactively so an admin can approve it"}, adoWorkedOut)
 	})
 	t.Run("a directory moved onto a review path, which the pack does not carry, stays held", func(t *testing.T) {
 		r := newADOPushRun(t, adoReview(), true)
@@ -307,38 +313,87 @@ func TestADOPushReviewPathHoldsOnlyWhatItMatches(t *testing.T) {
 // on the real rewrite, creating a branch that changes nothing a review pattern
 // could match, on an unattended run, lands. The credential stays in the proxy.
 func TestADOPushThroughTheBroker(t *testing.T) {
-	rest := &adoREST{}
-	h := newADOGitHarnessFront(t, func(p *Proxy, _ string) {
-		p.policy = CompilePolicy(adoReview())
-		p.pushHolds.unattended = true
-	}, func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.Contains(r.URL.Path, "/_apis/") {
-				rest.ServeHTTP(w, r)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}, adoscope.CapCodeRead, adoscope.CapCodeWrite)
-	rest.dir.Store(&h.bare)
-	auth := "Bearer " + h.bearer
-	rest.wantAuth.Store(&auth)
-	dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
-	if out, err := h.push(t, dir, h.runBranch()); err != nil {
-		t.Fatalf("push: %v\n%s", err, out)
+	newRun := func(t *testing.T) (*adoGitHarness, *adoREST) {
+		t.Helper()
+		rest := &adoREST{}
+		h := newADOGitHarnessFront(t, func(p *Proxy, _ string) {
+			p.policy = CompilePolicy(adoReview())
+			p.pushHolds.unattended = true
+		}, func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.Contains(r.URL.Path, "/_apis/") {
+					rest.ServeHTTP(w, r)
+					return
+				}
+				next.ServeHTTP(w, r)
+			})
+		}, adoscope.CapCodeRead, adoscope.CapCodeWrite)
+		rest.dir.Store(&h.bare)
+		auth := "Bearer " + h.bearer
+		rest.wantAuth.Store(&auth)
+		return h, rest
 	}
-	if rest.reads.Load() == 0 {
-		t.Error("the broker read nothing, so nothing vouched for this push")
-	}
-	if s := rest.strayed.Load(); s != nil {
-		t.Errorf("read outside the push's repository: %s", *s)
-	}
-	if s := rest.badAuth.Load(); s != nil {
-		t.Errorf("a read carried Authorization %q", *s)
-	}
-	if log := h.finish(t); !strings.Contains(log, ruleSourceGitForgeRead) {
-		t.Errorf("no %s row:\n%s", ruleSourceGitForgeRead, log)
-	}
+	t.Run("a push the REST API clears lands", func(t *testing.T) {
+		h, rest := newRun(t)
+		dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
+		if out, err := h.push(t, dir, h.runBranch()); err != nil {
+			t.Fatalf("push: %v\n%s", err, out)
+		}
+		if rest.reads.Load() == 0 {
+			t.Error("the broker read nothing, so nothing vouched for this push")
+		}
+		if s := rest.strayed.Load(); s != nil {
+			t.Errorf("read outside the push's repository: %s", *s)
+		}
+		if s := rest.badAuth.Load(); s != nil {
+			t.Errorf("a read carried Authorization %q", *s)
+		}
+		if log := h.finish(t); !strings.Contains(log, ruleSourceGitForgeRead) {
+			t.Errorf("no %s row:\n%s", ruleSourceGitForgeRead, log)
+		}
+	})
+	t.Run("git prints what to do about a real match on an unattended run", func(t *testing.T) {
+		h, _ := newRun(t)
+		dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
+		if out, err := h.git(t, "-C", dir, "checkout", "-B", h.runBranch()); err != nil {
+			t.Fatalf("checkout: %v\n%s", err, out)
+		}
+		writeFiles(t, dir, map[string]string{".github/workflows/x.yml": "x\n"})
+		if out, err := h.git(t, "-C", dir, "add", "-A"); err != nil {
+			t.Fatalf("add: %v\n%s", err, out)
+		}
+		if out, err := h.git(t, "-C", dir, "commit", "-qm", "workflow"); err != nil {
+			t.Fatalf("commit: %v\n%s", err, out)
+		}
+		out, err := h.git(t, "-C", dir, "push", "origin", h.runBranch())
+		for _, want := range []string{"remote rejected", adoTouches, "run the task interactively so an admin can approve it"} {
+			mustBeGitRefusal(t, out, err, want)
+		}
+		if n := h.countEndpoint(adofake.EndpointGitReceivePack, ""); n != 0 {
+			t.Errorf("Azure DevOps saw %d pack uploads, want none", n)
+		}
+	})
+	t.Run("git prints why a push it could not clear is refused", func(t *testing.T) {
+		h, rest := newRun(t)
+		fail := func(w http.ResponseWriter, _ *http.Request) bool {
+			return writeJSONStatus(w, http.StatusInternalServerError, `{}`)
+		}
+		rest.hook.Store(&fail)
+		dir := h.clone(t, "https://dev.azure.com/acme/proj/_git/app")
+		out, err := h.push(t, dir, h.runBranch())
+		for _, want := range []string{"remote rejected", adoWorkedOut, whyUnread, "this run is unattended"} {
+			mustBeGitRefusal(t, out, err, want)
+		}
+		if strings.Contains(out, adoTouches) {
+			t.Errorf("git printed %q:\n%s", adoTouches, out)
+		}
+		if n := h.countEndpoint(adofake.EndpointGitReceivePack, ""); n != 0 {
+			t.Errorf("Azure DevOps saw %d pack uploads, want none", n)
+		}
+		if log := h.finish(t); !strings.Contains(log, ruleSourceGitPushHeldUnattended) {
+			t.Errorf("no %s row:\n%s", ruleSourceGitPushHeldUnattended, log)
+		}
+	})
 }
 
 func writeJSONStatus(w http.ResponseWriter, status int, body string) bool {
@@ -458,7 +513,7 @@ func TestADOPushReviewPathFailsClosed(t *testing.T) {
 		r.rest.hook.Store(&fail)
 		body := r.record(t, map[string]string{"lib/b.txt": "b\n"})
 		rec := postEntraPush(t, r.p, body)
-		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "whose changed paths could not be worked out") {
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "whose changed paths could not be worked out") {
 			t.Fatalf("status %d, want the denial to say the paths could not be worked out:\n%s", rec.Code, rec.Body)
 		}
 	})
@@ -537,4 +592,59 @@ func TestPATForgeReadsAzureDevOps(t *testing.T) {
 	if f := p.patForge("gitlab.com", "/group/app/git-receive-pack", PATGrant{}); f != nil {
 		t.Errorf("patForge on another forge = %+v, want none", f)
 	}
+}
+
+func TestRefusalLineIsOneBoundedLine(t *testing.T) {
+	paths := []string{strings.Repeat("a", 4096) + "/"}
+	line := refusalLine("headline", "why\nsecond line", "remedy", paths)
+	if strings.ContainsAny(line, "\r\n") || len(line) > maxRefusalLine {
+		t.Errorf("refusal line of %d bytes holds a line break or runs over %d:\n%s", len(line), maxRefusalLine, line)
+	}
+	if !strings.Contains(line, "why second line. remedy.") {
+		t.Errorf("the cap cut the reason:\n%s", line)
+	}
+}
+
+// TestADOClearsRestoresEachRuleToStrict: with its switch off, a rule refuses what
+// the pack does not carry on Azure DevOps, whatever the REST API would have shown.
+func TestADOClearsRestoresEachRuleToStrict(t *testing.T) {
+	const pattern = ".github/workflows/**"
+	for _, tc := range []struct {
+		name string
+		off  func()
+		spec types.PushRulesSpec
+		want string
+	}{
+		{"require_review_paths", func() { adoClears.reviewPaths = false }, types.PushRulesSpec{RequireReviewPaths: []string{pattern}, HoldSeconds: 1}, whyNoForgeReader},
+		{"deny_paths", func() { adoClears.denyPaths = false }, types.PushRulesSpec{DenyPaths: []string{pattern}}, whyNoForgeReader},
+		{"max_file_size_mib", func() { adoClears.maxFileSize = false }, types.PushRulesSpec{MaxFileSizeMiB: 1}, whyNoForgeReader},
+		{"deny_new_executables", func() { adoClears.newExecutables = false }, types.PushRulesSpec{DenyNewExecutables: true}, whyNoForgeReader},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := tc.spec
+			on := newADOPushRun(t, types.RunPolicySpec{PushRules: &spec}, true)
+			on.wantPassed(t, postEntraPush(t, on.p, on.record(t, map[string]string{"lib/b.txt": "b\n"})))
+
+			prev := adoClears
+			t.Cleanup(func() { adoClears = prev })
+			tc.off()
+			off := newADOPushRun(t, types.RunPolicySpec{PushRules: &spec}, true)
+			rec := postEntraPush(t, off.p, off.record(t, map[string]string{"lib/b.txt": "b\n"}))
+			if off.rest.packs.Load() != 0 || off.rest.reads.Load() != 0 || !strings.Contains(rec.Body.String(), tc.want) {
+				t.Errorf("%d pack(s), %d read(s), want none, refused for %q:\n%s", off.rest.packs.Load(), off.rest.reads.Load(), tc.want, rec.Body)
+			}
+		})
+	}
+	t.Run("a push with no objects", func(t *testing.T) {
+		prev := adoClears
+		t.Cleanup(func() { adoClears = prev })
+		adoClears.noObjects = false
+		r := newADOPushRun(t, adoReview(), true)
+		tip := gitOut(t, r.work, "rev-parse", "HEAD")
+		f := r.p.adoEntraForge("dev.azure.com", "/acme/proj/_git/app/git-receive-pack", ADOGrant{Organization: "acme"})
+		cmds := []gitpack.Command{{Ref: "refs/heads/new", Old: strings.Repeat("0", 40), New: tip}}
+		if got := f.forRule(adoClears.noObjects).held(context.Background(), cmds); got != whyHeldNoForgeReader {
+			t.Errorf("held = %q, want %q", got, whyHeldNoForgeReader)
+		}
+	})
 }
