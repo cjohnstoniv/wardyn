@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -135,6 +136,73 @@ func TestWorkloadWatcherReportsEverythingAfterSync(t *testing.T) {
 		t.Fatalf("third report %+v, want a sync of alpha, beta, huge", s)
 	}
 	events.none(t)
+}
+
+// TestWorkloadWatcherMarksAnInvalidResource: a resource the wire cannot carry, found in the first list or
+// added later, gets an Invalid status with the reason, so kubectl shows it. A later full report finds the
+// status in place and writes nothing; a valid resource's status is left to the organisation.
+func TestWorkloadWatcherMarksAnInvalidResource(t *testing.T) {
+	huge := map[string]any{"intent": strings.Repeat("x", runnerwire.MaxWorkloadSpecBytes+1)}
+	client := fakeWorkloadClient(workloadCR("team-a", "huge", 1, huge), workloadCR("team-a", "fine", 1, intentSpec("./fine")))
+	var patches atomic.Int32
+	client.PrependReactor("patch", "wardynworkloads", func(k8stesting.Action) (bool, runtime.Object, error) {
+		patches.Add(1)
+		return false, nil, nil
+	})
+	events := newWorkloadEvents()
+	w := startWorkloadWatcher(t, client, time.Hour, events, "team-a")
+	events.next(t) // fine's apply
+	events.next(t) // the sync, which names huge
+	status := func(name string) map[string]any {
+		got, err := client.Resource(workloadGVR).Namespace("team-a").Get(context.Background(), name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, _ := got.Object["status"].(map[string]any)
+		return st
+	}
+	invalid := func(name string) {
+		t.Helper()
+		st := status(name)
+		cs, _ := st["conditions"].([]any)
+		if st["phase"] != "Invalid" || st["reason"] != "workload_invalid" || !strings.Contains(fmt.Sprint(st["message"]), "at most") || fmt.Sprint(st["observedGeneration"]) != "1" || len(cs) != 1 {
+			t.Fatalf("%s: status %v, want Invalid with the reason, the message and generation 1", name, st)
+		}
+		if c := cs[0].(map[string]any); c["type"] != "Ready" || c["status"] != "False" || c["reason"] != "Invalid" || c["message"] != st["message"] {
+			t.Fatalf("%s: condition %v, want Ready False, reason Invalid, carrying the message", name, c)
+		}
+	}
+	waitWorkload(t, "the Invalid status", func() bool { return status("huge") != nil })
+	invalid("huge")
+	if st := status("fine"); st != nil {
+		t.Fatalf("a valid resource got status %v from the runner", st)
+	}
+
+	// A resource added after the sync is marked on its apply.
+	if _, err := client.Resource(workloadGVR).Namespace("team-a").Create(context.Background(), workloadCR("team-a", "late", 1, huge), metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitWorkload(t, "the live resource's status", func() bool { return status("late") != nil })
+	invalid("late")
+
+	// The next full report finds both marked and writes nothing.
+	waitWorkload(t, "the informer to see the statuses", func() bool {
+		for _, name := range []string{"huge", "late"} {
+			o, ok, _ := w.informers["team-a"].GetStore().GetByKey("team-a/" + name)
+			if !ok {
+				return false
+			}
+			if p, _, _ := unstructured.NestedString(o.(*unstructured.Unstructured).Object, "status", "phase"); p != "Invalid" {
+				return false
+			}
+		}
+		return true
+	})
+	before := patches.Load()
+	w.report("team-a")
+	if n := patches.Load() - before; n != 0 {
+		t.Fatalf("a full report wrote %d more statuses, want none", n)
+	}
 }
 
 // TestWorkloadWatcherLiveEvents: an add, a changed generation and a changed uid apply, a status-only update says

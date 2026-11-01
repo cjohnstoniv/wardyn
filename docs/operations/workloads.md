@@ -178,7 +178,7 @@ The runner writes `status` and nothing else, only to the resource named by the a
 | `phase` | One of the phases below |
 | `runID` | The current run, when there is one |
 | `reason`, `message` | A Wardyn reason token and its sentence, on a refusal. Up to 512 bytes of message |
-| `conditions` | One `Ready` condition: `True` only in phase `Running`, `reason` the phase, and `lastTransitionTime` moves only when `Ready` flips |
+| `conditions` | One `Ready` condition: `True` only in phase `Running`, `reason` the phase, `message` when set, and `lastTransitionTime` moves only when `Ready` flips |
 
 `kubectl get wardynworkloads` shows `Phase`, `Run` and `Age`.
 
@@ -186,7 +186,7 @@ The runner writes `status` and nothing else, only to the resource named by the a
 |---|---|
 | `Pending` | The current spec has no run yet, or its run is starting |
 | `Queued` | The run is waiting in the queue |
-| `Running` | The run is live and its service, if any, is not unhealthy |
+| `Running` | The run is live and its service, if any, is not unhealthy. A paused run or a stale check reads "service health unknown" in `message`, with the last check |
 | `Unhealthy` | The run's service health is unhealthy |
 | `Completed` | The run completed |
 | `Ended` | The run ended another way: failed, killed or stopped |
@@ -198,6 +198,7 @@ The runner writes `status` and nothing else, only to the resource named by the a
 | `reason` | Phase | Cause |
 |---|---|---|
 | `workload_invalid` | `Invalid` | The spec has an unknown field, or the intent fails the run-document door. The message names the first problem |
+| `workload_invalid` | `Invalid` | The runner cannot report it: the spec is over 256 KiB or the name is not valid |
 | `workload_pool_mismatch` | `Refused` | The intent names a `runner_pool_id` other than the pool the namespace is bound on. Nothing is recorded |
 | `workload_binding_inactive` | `BindingInactive` | See [Bind a namespace](#bind-a-namespace) |
 | `workload_source_conflict` | `Refused` | The service identity already holds a workload of that name from the API or another namespace or pool |
