@@ -160,6 +160,34 @@ func TestRunFiles_JoinsNumstatAndStatus(t *testing.T) {
 	}
 }
 
+// TestRunFiles_MacOSVMReadsTheGuestWorkFolder: a macOS guest has no /home, so
+// the workspace dir handed to the script is /Users/agent/work; a Linux sandbox
+// keeps /home/agent/work.
+func TestRunFiles_MacOSVMReadsTheGuestWorkFolder(t *testing.T) {
+	for _, tc := range []struct {
+		kind types.MachineKind
+		want string
+	}{
+		{types.MachineMacOSVM, "/Users/agent/work"},
+		{types.MachineLinuxVM, "/home/agent/work"},
+		{"", "/home/agent/work"},
+	} {
+		srv, fr, _, run := newRunFilesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
+			return fakeExecSession("path="+tc.want+"\n", "", 3), nil
+		})
+		run.MachineKind = tc.kind
+		srv.cfg.Store = runFilesStore{run: run}
+		resp := decodeRunFiles(t, doRunFiles(srv, run.ID, nil))
+		_, env := fr.lastCall()
+		if len(env) != 2 || env[0] != "W="+tc.want {
+			t.Errorf("%q: env = %q, want W=%s", tc.kind, env, tc.want)
+		}
+		if resp.VCS != runFilesVCSNone {
+			t.Errorf("%q: vcs = %q, want none", tc.kind, resp.VCS)
+		}
+	}
+}
+
 // TestRunFiles_BinaryIsNotZeroZero: git prints "-\t-" for a file it declined to
 // count. Reporting that as +0/−0 would claim a rewritten binary asset changed by
 // nothing — it must come back binary:true with the count fields ABSENT.
