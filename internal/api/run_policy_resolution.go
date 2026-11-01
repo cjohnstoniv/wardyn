@@ -193,6 +193,9 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		}
 		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runServerError("resolve policy", err)
 	}
+	if refusal := storedPolicyApplicationRefusal(*req, spec); refusal != nil {
+		return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, refusal
+	}
 	// The starting policy, before the env-secret posture and the member clamp
 	// below change it: a stored row, or the caller's own ceiling.
 	source := newPolicySourceRecord(origin.kind, policyID, origin.name, origin.updatedAt, !ceiling.Operator, spec)

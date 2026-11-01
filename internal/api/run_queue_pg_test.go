@@ -359,3 +359,30 @@ func TestPG_QueueStartRecordsTheSizeItApplied(t *testing.T) {
 		t.Errorf("resources_applied.cpu_millis = %+v; want 3000 asked, 2000 applied, capped by the pool", got)
 	}
 }
+
+// A service that waited reads its advisory again at the start: run.queue.start carries the sentences as
+// the started run stands, not the ones the 201 read before its limits were captured (#3764).
+func TestPG_QueueStartRecordsTheServiceAdvisory(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 1)
+	occupant := e.occupy(pool)
+	waiting := e.queuedLaunch(nil, pool, `"workload":{"kind":"command","command":"make serve"},"tools":[],"service":{"port":8080}`)
+	e.free(occupant)
+	rows := e.waitAudit(waiting.ID, "run.queue.start")
+	if len(rows) != 1 || rows[0].Outcome != "success" {
+		t.Fatalf("run.queue.start rows = %+v; want one success", rows)
+	}
+	want := serviceCreateWarnings(e.run(waiting.ID))
+	if len(want) == 0 {
+		t.Fatal("the started service draws no advisory, so the fixture proves nothing")
+	}
+	var data struct {
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(rows[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(data.Warnings, want) {
+		t.Errorf("run.queue.start warnings = %q, want %q", data.Warnings, want)
+	}
+}

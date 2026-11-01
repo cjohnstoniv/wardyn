@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -20,6 +21,8 @@ func runShapeConflictMsg(shape, detail string) string {
 // runShapeRefusal checks the New Run shape against the carriers it names. Each
 // shape has one rule, and a shape needs the experience it is read against. It
 // reads only carriers, so it holds after projection and in a partial document.
+// A stored policy_id is not one: the apps it declares are read once the policy
+// resolves (storedPolicyApplicationRefusal).
 func runShapeRefusal(req createRunRequest) *runRefusal {
 	if req.Shape == "" {
 		return nil
@@ -37,7 +40,7 @@ func runShapeRefusal(req createRunRequest) *runRefusal {
 		return runModeInvalid("shape: %q is not one of agent_task, environment, application", string(req.Shape))
 	case req.Experience == "":
 		return conflict("it needs experience, which says whether the run is background or interactive")
-	case req.Shape == client.RunShapeApplication && !(background && kind == client.WorkloadCommand) && !applicationServer(req):
+	case req.Shape == client.RunShapeApplication && !(background && kind == client.WorkloadCommand) && !applicationServer(req) && !applicationOnStoredPolicy(req):
 		return conflict("an application is a background run of a command, or an interactive run that starts a command and declares its app: " +
 			"set experience background and workload kind command, or experience interactive with startup kind command and ui_apps")
 	case req.Shape == client.RunShapeEnvironment && background:
@@ -60,6 +63,7 @@ func storedRunShape(req createRunRequest) client.RunShape {
 		return req.Shape
 	}
 	var fit client.RunShape
+	req.PolicyID = nil // an unnamed shape is never read off a policy the check cannot see
 	for _, shape := range []client.RunShape{client.RunShapeAgentTask, client.RunShapeEnvironment, client.RunShapeApplication} {
 		req.Shape = shape
 		if runShapeRefusal(req) != nil {
@@ -79,6 +83,28 @@ func storedRunShape(req createRunRequest) client.RunShape {
 // says which choice it was set up from.
 func applicationServer(req createRunRequest) bool {
 	pol, _ := requestPolicyRules(req)
-	return req.Experience == client.ExperienceInteractive && req.Startup != nil &&
-		req.Startup.Kind == client.StartupCommand && pol != nil && len(pol.UIApps) > 0
+	return interactiveCommand(req) && pol != nil && len(pol.UIApps) > 0
+}
+
+// applicationOnStoredPolicy is an interactive command run that names a stored
+// policy_id: its ui_apps are the policy's, which only resolving it can read
+// (#3796). The shape check lets it through, and storedPolicyApplicationRefusal
+// holds the policy to declaring an app.
+func applicationOnStoredPolicy(req createRunRequest) bool {
+	return req.Shape == client.RunShapeApplication && req.PolicyID != nil && interactiveCommand(req)
+}
+
+func interactiveCommand(req createRunRequest) bool {
+	return req.Experience == client.ExperienceInteractive && req.Startup != nil && req.Startup.Kind == client.StartupCommand
+}
+
+// storedPolicyApplicationRefusal is the shape check's other half for an
+// application that names a stored policy: the policy as stored must declare
+// the app the application is opened through.
+func storedPolicyApplicationRefusal(req createRunRequest, stored types.RunPolicySpec) *runRefusal {
+	if !applicationOnStoredPolicy(req) || len(stored.UIApps) > 0 {
+		return nil
+	}
+	return runError(http.StatusUnprocessableEntity, reasonRunShapeConflict, runShapeConflictMsg(string(req.Shape),
+		"the policy it names declares no ui_apps, and an interactive application is opened through the app it declares"))
 }

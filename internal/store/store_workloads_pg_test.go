@@ -815,6 +815,46 @@ func TestPG_Workload_ErasureDeletesTheOwnersWorkloads(t *testing.T) {
 	}
 }
 
+// A person's erasure owes the current run of each workload they own its end, as a delete does, and a run
+// that waited on it ends at once. Another person's workload is left as it is.
+func TestPG_Workload_ErasureOwesTheCurrentRunsEnd(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := t.Context()
+	mine := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	other := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	older := persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	for owner, run := range map[string]uuid.UUID{"sub-a": mine, "sub-b": other} {
+		w := mustPutWorkload(t, st, workloadPut(owner, "web", "d"))
+		if _, err := st.SetWorkloadRun(ctx, w.ID, mustClaim(t, st, w.ID), 1, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.OweWorkloadRunEnd(ctx, store.WorkloadRunEnd{RunID: older, Owner: "sub-a", Name: "web", Generation: 1, Reason: store.WorkloadEndReplaced, AfterRunID: &mine}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DeleteRunnerPoolsByOwner(ctx, "sub-a"); err != nil {
+		t.Fatal(err)
+	}
+	ends, err := st.ListWorkloadRunEnds(ctx, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[uuid.UUID]store.WorkloadRunEnd{}
+	for _, e := range ends {
+		got[e.RunID] = e
+	}
+	if e, ok := got[mine]; !ok || e.Owner != "" || e.Name != "web" || e.AfterRunID != nil || e.Reason != store.WorkloadEndDeleted {
+		t.Errorf("owed end of the erased person's current run = %+v (owed %v), want owed at once, naming no one", e, ok)
+	}
+	if e, ok := got[older]; !ok || e.AfterRunID != nil || e.Reason != store.WorkloadEndDeleted {
+		t.Errorf("owed end of the run that waited on it = %+v (owed %v), want owed at once", e, ok)
+	}
+	if _, ok := got[other]; ok {
+		t.Errorf("another person's current run is owed its end: %+v", got[other])
+	}
+}
+
 // A person's erasure leaves the runs their workloads let go of owed their end, but no longer naming them.
 func TestPG_Workload_ErasureForgetsTheOwnerOfOwedEnds(t *testing.T) {
 	pool := runsPGPoolIsolated(t)

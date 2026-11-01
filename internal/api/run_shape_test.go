@@ -5,8 +5,12 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
 	"testing"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -34,5 +38,40 @@ func TestStoredRunShape(t *testing.T) {
 		if got := storedRunShape(tc.req); got != tc.want {
 			t.Errorf("%s: stored shape %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// An application that names a stored policy_id is read against that policy's own
+// ui_apps (#3796): the shape check lets it through, the policy must declare an app
+// once it resolves, and an unnamed shape is never read off a policy the check
+// cannot see.
+func TestApplicationOnStoredPolicy(t *testing.T) {
+	id := uuid.New()
+	app := createRunRequest{Shape: client.RunShapeApplication, Experience: client.ExperienceInteractive, PolicyID: &id,
+		Startup: &client.RunStartup{Kind: client.StartupCommand, Command: "npm run dev"}}
+
+	if got := runShapeRefusal(app); got != nil {
+		t.Errorf("an interactive command on a stored policy_id was refused before the policy could be read: %+v", got)
+	}
+	noCommand := app
+	noCommand.Startup = nil
+	if got := runShapeRefusal(noCommand); got == nil || got.body.Reason != reasonRunShapeConflict {
+		t.Errorf("a stored policy_id with no startup command = %+v, want %s", got, reasonRunShapeConflict)
+	}
+
+	withApp := types.RunPolicySpec{UIApps: []types.UIApp{{Name: "web", Port: 3000}}}
+	if got := storedPolicyApplicationRefusal(app, withApp); got != nil {
+		t.Errorf("a policy that declares an app was refused: %+v", got)
+	}
+	got := storedPolicyApplicationRefusal(app, types.RunPolicySpec{})
+	if got == nil || got.status != http.StatusUnprocessableEntity || got.body.Reason != reasonRunShapeConflict {
+		t.Errorf("a policy with no app = %+v, want 422 %s", got, reasonRunShapeConflict)
+	}
+	app.Shape = ""
+	if got := storedPolicyApplicationRefusal(app, types.RunPolicySpec{}); got != nil {
+		t.Errorf("a run that names no shape was held to declaring an app: %+v", got)
+	}
+	if got := storedRunShape(app); got != client.RunShapeEnvironment {
+		t.Errorf("an unnamed shape on a stored policy_id stores %q, want environment", got)
 	}
 }
