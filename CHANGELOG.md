@@ -165,7 +165,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   ([#3901](https://github.com/cjohnstoniv/wardyn/issues/3901)).
 - A macOS VM run's desktop shows the lock screen ([#3890](https://github.com/cjohnstoniv/wardyn/issues/3890)).
 - On a Mac runner using Docker Desktop, a macOS VM slot can stay busy for a few minutes after a run if Docker Desktop
-  started during that run ([#3871](https://github.com/cjohnstoniv/wardyn/issues/3871)).
+  started during that run. It frees when Docker Desktop goes idle; quitting Docker Desktop with no runs going frees it at
+  once ([#3871](https://github.com/cjohnstoniv/wardyn/issues/3871)).
 - Wardyn's macOS runner package is not yet signed with a Developer ID.
 
 ## [0.10.0-rc.9] — 2026-11-01
