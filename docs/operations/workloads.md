@@ -58,7 +58,7 @@ intent:
 | Command | What it does |
 |---|---|
 | `wardyn apply -f FILE` | Stores each workload the file names, and starts a run when it is new or changed |
-| `wardyn diff -f FILE` | Prints a unified diff of the stored workload against the file. Writes nothing |
+| `wardyn diff -f FILE` | Prints a unified diff of the stored workload against the file. Writes nothing. A service identity's token gets `403` `service_scope` (exit `2`) |
 | `wardyn delete -f FILE` | Ends each workload's run and deletes the workload |
 | `wardyn workload list` | Lists `NAME`, `OWNER`, `SOURCE`, `STATE`, `GENERATION` (current/latest), `RUN` and `REFUSED` (the last refusal's reason) |
 | `wardyn workload get NAME` | Prints the workload, its document and status, as JSON |
@@ -74,7 +74,7 @@ intent:
 
 | Flag | Meaning |
 |---|---|
-| `--dry-run` | Writes nothing. Prints the diff and the setup checklist the run would get. Excludes `--wait` |
+| `--dry-run` | Writes nothing. Prints the diff and the setup checklist the run would get. Excludes `--wait`. A service identity's token gets the same `403` as `diff` |
 | `--wait` | Follows each launched run: until it is running for a service, until it ends for any other workload |
 | `--timeout` | Gives up waiting after this long, `30m` by default. The run keeps going |
 | `--json` | Prints the results as a JSON array, with progress on stderr |
@@ -99,10 +99,12 @@ intent:
 | A new name | `created` (`201`) | A run starts |
 | The same intent, `run_in` and `restart_key` | `unchanged` | Nothing starts. A changed `description` is stored; no `workload.apply` audit row is written |
 | A changed intent, `run_in` or `restart_key` | `updated` | The new run starts, then the old run is killed with `run.kill` reason `workload_replaced`. The audit row is `workload.replace` |
+| A changed spec whose new run waits in its pool's queue | `updated` | The old run ends only once the new one is running. If the new run ends first, the old run is taken back and a refusal is recorded |
+| A changed spec whose old run holds a slot the new run needs | `updated` | The old run ends at once, so the service is down until the new run starts |
 | An unchanged spec whose last launch, or queued replacement, was refused | `unchanged` | Launched again, like a restart: the spec is ahead of its run |
 | An unchanged spec whose run has ended | `unchanged` | Nothing. An ended run is restarted with `wardyn workload restart`, never relaunched by an apply |
 
-- The new run is created before the old one is ended, so a change never leaves a workload without a run.
+- The new run is created before the old one is ended, except where the table above says otherwise.
 - A refused launch is a `200`, not an error. The spec is stored at its new generation, and the old run keeps running.
 - The answer carries `launch.state` `refused`, with the create path's own `reason` and sentence. The ceiling, a pool's limits and the unit walls all refuse here as they refuse `POST /runs`.
 - The workload records `last_refusal` (`generation`, `reason`, `message`, `at`) until a launch succeeds. A `security_admin` reading another owner's workload gets the `reason` without the `message`. The audit row is `workload.launch_refused`.
@@ -130,8 +132,8 @@ A binding says: the resources of namespace N, on the runners of pool P, launch a
 Anyone who can create or update a WardynWorkload in a bound namespace launches runs as the bound service identity, under its ceiling and with its credentials, while its sponsor is active. Every runner in the bound pool can apply, replace and delete that service identity's Kubernetes workloads, so bind a namespace only to a pool whose runners you trust as much as the service.
 
 1. Make the service identity, with a sponsor ([Service identities](api-tokens.md#service-identities)).
-2. Set `workloads.namespaces` in the runner chart to the namespaces to watch. The chart adds a Role and RoleBinding per namespace: `get`, `list` and `watch` on `wardynworkloads`, and `patch` on `wardynworkloads/status`. No Secret, nothing cluster-wide.
-3. Apply the CRD, [`wardyn.dev_wardynworkloads.yaml`](../../deploy/helm/wardyn-runnerd/crds/wardyn.dev_wardynworkloads.yaml). Helm installs it once from `crds/` and never upgrades it, so apply the file again by hand on a chart upgrade.
+2. Apply the CRD, [`wardyn.dev_wardynworkloads.yaml`](../../deploy/helm/wardyn-runnerd/crds/wardyn.dev_wardynworkloads.yaml). Helm installs it once from `crds/` and never upgrades it, so apply it by hand before the `helm upgrade` in step 3 (the runner refuses to boot without it) and on each chart upgrade.
+3. Set `workloads.namespaces` in the runner chart to the namespaces to watch. The chart adds a Role and RoleBinding per namespace: `get`, `list` and `watch` on `wardynworkloads`, and `patch` on `wardynworkloads/status`. No Secret, nothing cluster-wide.
 4. Bind the namespace:
 
 ```sh
@@ -151,7 +153,7 @@ The binding stops being authority when any of these happens. The spec is still r
 
 | Cause | Result |
 |---|---|
-| The service identity is suspended | Phase `BindingInactive`, reason `workload_binding_inactive` |
+| The service identity is suspended | The next owed launch is refused: phase `BindingInactive`, reason `workload_binding_inactive`. Until a launch is owed the phase follows the run, for example `Running` |
 | The identity's sponsor changed since the binding was made | The same |
 | The sponsor's access is revoked (a sign-out that keeps their tokens does not count) | The same |
 | The identity is retired | Its bindings are deleted |
@@ -192,7 +194,7 @@ The runner writes `status` and nothing else, only to the resource named by the a
 | `Ended` | The run ended another way: failed, killed or stopped |
 | `Refused` | The launch of this spec was refused. The previous run keeps running |
 | `Invalid` | The spec is not a workload Wardyn accepts |
-| `NotBound` | No binding names this namespace on this runner's pools. `reason` is empty |
+| `NotBound` | No binding names this namespace on any pool. `reason` is empty. A namespace bound only on a pool this runner is not in gets no status |
 | `BindingInactive` | The namespace's binding no longer carries authority |
 
 | `reason` | Phase | Cause |
