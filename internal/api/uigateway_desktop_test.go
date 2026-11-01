@@ -915,11 +915,11 @@ func TestDesktopStreamOnAViewOnlyMacKeepsInputFromTheDisplay(t *testing.T) {
 		t.Fatal("the update request never reached the VM")
 	}
 	deadline := time.Now().Add(5 * time.Second)
-	for len(h.audit.auditRows("ui.input.dropped", "denied")) < 2 && time.Now().Before(deadline) {
+	for len(h.audit.auditRows("ui.input.drop", "denied")) < 2 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if rows := h.audit.auditRows("ui.input.dropped", "denied"); len(rows) != 2 {
-		t.Fatalf("ui.input.dropped rows = %+v, want one each for key and pointer", rows)
+	if rows := h.audit.auditRows("ui.input.drop", "denied"); len(rows) != 2 {
+		t.Fatalf("ui.input.drop rows = %+v, want one each for key and pointer", rows)
 	}
 	for _, action := range []string{"ui.authorize", "ui.open"} {
 		rows := h.audit.auditRows(action, "success")

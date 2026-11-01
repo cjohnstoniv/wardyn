@@ -14,7 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - macOS VMs: a run on a view-only base can be watched from the run page with Watch desktop. Keys, pointer moves and
-  paste never reach the guest; a new `ui.input.dropped` audit row records the first dropped key and pointer move of a
+  paste never reach the guest; a new `ui.input.drop` audit row records the first dropped key and pointer move of a
   session. Built and unit-tested; not yet run on a real Mac ([#3922](https://github.com/cjohnstoniv/wardyn/issues/3922)).
 - `wardyn run` has `--machine-kind` (`container`, `linux_vm` or `macos_vm`) and `--macos-base`, so the command line can
   start a macOS or Linux VM run. They work beside `--file`, since a Run document cannot carry the kind of sandbox

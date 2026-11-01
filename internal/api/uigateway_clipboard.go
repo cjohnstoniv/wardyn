@@ -99,7 +99,7 @@ func (s *Server) uiFilterUpgrade(resp *http.Response, sess uiSession) error {
 // filter does not hand the content over.
 func (s *Server) auditUIClipboard(sess uiSession, ev rfbfilter.Event) {
 	if ev.Input != "" {
-		s.auditUISession(sess, "ui.input.dropped", ev.Input, "denied", map[string]any{"app": sess.App, "input": ev.Input})
+		s.auditUISession(sess, "ui.input.drop", ev.Input, "denied", map[string]any{"app": sess.App, "input": ev.Input})
 		return
 	}
 	outcome := "success"
