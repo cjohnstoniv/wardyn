@@ -57,7 +57,7 @@ export default defineConfig({
     video: process.env.CI ? "on-first-retry" : "retain-on-failure",
   },
   projects: [
-    { name: "chromium", testIgnore: ["screenshots/**", "demo/**", "walk/**", "live-local/**"], use: { ...devices["Desktop Chrome"] } },
+    { name: "chromium", testIgnore: ["screenshots/**", "demo/**", "walk/**", "live-local/**", "macos-vm/**"], use: { ...devices["Desktop Chrome"] } },
     {
       // walk: the kind SSO walk (e2e/walk/*.spec.ts) — specs that drive a REAL,
       // already-running Wardyn rather than the hermetic `-runner none` backend.
