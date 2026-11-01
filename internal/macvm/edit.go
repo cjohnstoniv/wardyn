@@ -376,7 +376,8 @@ func (o *EditOptions) window(ctx context.Context, spec MachineSpec) error {
 
 // recheck boots the edited copy headless: it replaces the one-time code first, whatever follows, then
 // checks that desktop control the base had is kept, then the accounts, Remote Login and the launcher's
-// self-test, in that order. The first that fails is an *EditDiscardedError. Right after the code it removes the profiles' copies
+// self-test, in that order. The first that fails is an *EditDiscardedError. Right after the code it
+// removes the profiles' copies
 // (removeProfiles: copied, and staged), and after Remote Login it reads the items back into staging's
 // tools.json (ReadBackItems), a failure of either discarding the copy with no line of its own. The reset is
 // what staging's AdminPasswordFile holds after it, and what a passing copy's swap carries into the base. It

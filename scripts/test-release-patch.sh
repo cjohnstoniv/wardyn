@@ -475,6 +475,17 @@ W1=$(grep -c '^workflow run nightly' "$FIX/gh.log")
 runs_json "$NEWTS" >"$FIX/api_repos_acme_wardyn_actions_workflows_nightly.yml_runs.json"
 rp V=0.8.4 PHASE=prepare
 check "S: a green nightly from now is not dispatched again" bash -c "[ \"\$(grep -c '^workflow run nightly' '$FIX/gh.log')\" = $W1 ]"
+# a matrix job reports one row per leg: "w1 (member)" and "w1 (concurrency)" stand for the watched w1
+W4=$(grep -c '^workflow run nightly' "$FIX/gh.log")
+runs_json "$NEWTS" >"$FIX/api_repos_acme_wardyn_actions_workflows_nightly.yml_runs.json"
+printf '{"jobs":[{"name":"w1 (member)","conclusion":"success"},{"name":"w1 (concurrency)","conclusion":"success"},{"name":"w2","conclusion":"success"},{"name":"w3","conclusion":"success"},{"name":"multi-arch build (x)","conclusion":"success"}]}' >"$FIX/api_repos_acme_wardyn_actions_runs_9_jobs.json"
+rp V=0.8.4 PHASE=prepare
+check "S: a nightly whose watched job ran as two green legs is not dispatched again" bash -c "[ \"\$(grep -c '^workflow run nightly' '$FIX/gh.log')\" = $W4 ]"
+printf '{"jobs":[{"name":"w1 (member)","conclusion":"success"},{"name":"w1 (concurrency)","conclusion":"failure"},{"name":"w2","conclusion":"success"},{"name":"w3","conclusion":"success"},{"name":"multi-arch build (x)","conclusion":"success"}]}' >"$FIX/api_repos_acme_wardyn_actions_runs_9_jobs.json"
+rp V=0.8.4 PHASE=prepare
+check "S: a nightly with one red leg of a watched job is dispatched afresh" bash -c "[ \"\$(grep -c '^workflow run nightly' '$FIX/gh.log')\" = $((W4 + 1)) ]"
+printf '{"jobs":[{"name":"w1","conclusion":"success"},{"name":"w2","conclusion":"success"},{"name":"w3","conclusion":"success"},{"name":"multi-arch build (x)","conclusion":"success"}]}' >"$FIX/api_repos_acme_wardyn_actions_runs_9_jobs.json"
+W1=$(grep -c '^workflow run nightly' "$FIX/gh.log")
 runs_json "$OLDTS" >"$FIX/api_repos_acme_wardyn_actions_workflows_nightly.yml_runs.json"
 rp V=0.8.4 PHASE=prepare
 check "S: a green nightly 30 hours old is dispatched afresh" bash -c "[ \"\$(grep -c '^workflow run nightly' '$FIX/gh.log')\" = $((W1 + 1)) ]"
