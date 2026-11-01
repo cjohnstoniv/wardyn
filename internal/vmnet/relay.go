@@ -14,11 +14,12 @@
 // refusal is a reset, an approval hold is a held SYN) and tunnelled only after
 // the first flight passed the TLS server-name check (firstflight.go); port 80
 // goes as forward-proxy requests (httpfwd.go). A flow to the proxy the guest's
-// proxy variables name is spliced to it unchanged (proxyDirect). A flow to any
-// other address, UDP other than DNS, and every frame that is not ARP, IPv4/TCP
-// or IPv4/UDP are dropped and reported (report.go). The relay holds no token
-// and no policy: the proxy decides, and its decision log carries the relay's
-// refusals too.
+// proxy variables name is spliced to it unchanged (proxyDirect); the relay's
+// own requests use the proxy's relay listener, which that splice never opens. A
+// flow to any other address, UDP other than DNS, and every frame that is not
+// ARP, IPv4/TCP or IPv4/UDP are dropped and reported (report.go). The relay
+// holds no token and no policy: the proxy decides, and its decision log carries
+// the relay's refusals too.
 package vmnet
 
 import (
@@ -94,7 +95,9 @@ const (
 
 // Config is how a relay reaches its proxy.
 type Config struct {
-	// Proxy is the run's wardyn-proxy, host:port.
+	// Proxy is the run's wardyn-proxy at its relay listener, host:port: the
+	// relay's asks, tunnels, port-80 requests and refusal reports go there, and
+	// the guest's splice never opens it.
 	Proxy string
 	// GuestProxy is the proxy as the guest's proxy variables name it, host:port
 	// (wardyn-proxy:3128). A guest flow to exactly that name and port is spliced

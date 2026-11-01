@@ -181,10 +181,10 @@ func TestTunnelCap_ResumedRelayFlowsLeaveTheSigninLane(t *testing.T) {
 	})
 	for i := range maxOpenTunnels {
 		flow := fmt.Sprintf("%016x", i+1)
-		if st, _, _ := stagedConnect(t, rig.agentAddr, "relay.test:443", flow, vmnetStageAsk); st != http.StatusNoContent {
+		if st, _, _ := stagedConnect(t, rig.relayAddr, "relay.test:443", flow, vmnetStageAsk); st != http.StatusNoContent {
 			t.Fatalf("relay ask %d = %d, want 204", i+1, st)
 		}
-		if st, _, _ := stagedConnect(t, rig.agentAddr, "relay.test:443", flow, vmnetStageTunnel); st != http.StatusOK {
+		if st, _, _ := stagedConnect(t, rig.relayAddr, "relay.test:443", flow, vmnetStageTunnel); st != http.StatusOK {
 			t.Fatalf("relay tunnel %d = %d, want 200", i+1, st)
 		}
 	}

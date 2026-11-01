@@ -28,7 +28,7 @@ import (
 func vmRun(t *testing.T, spec types.RunPolicySpec, upstream string) (*vmnettest.Guest, *syncBuf) {
 	t.Helper()
 	p, buf := newRuleTestProxy(t, spec, upstream, true, "", nil)
-	srv := httptest.NewServer(p)
+	srv := relayServer(p)
 	t.Cleanup(srv.Close)
 	rl, err := vmnet.New(vmnet.Config{Proxy: strings.TrimPrefix(srv.URL, "http://")})
 	if err != nil {

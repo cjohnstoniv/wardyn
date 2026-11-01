@@ -49,6 +49,7 @@ func (l *lockedBuf) String() string {
 // person's sign-in listener, with a control plane that accepts goodCred only.
 type signinLaneRig struct {
 	agentAddr, signinAddr string
+	relayAddr             string // the relay's listener, on a VM run
 	goodCred              string
 	caPEM                 []byte
 	logs                  *lockedBuf // decision rows, slog and the server's error log
@@ -111,7 +112,7 @@ func newSigninLaneRigFor(t *testing.T, vm bool, with ...func(*Options)) *signinL
 	slog.SetDefault(slog.New(slog.NewTextHandler(rig.logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	srv := &http.Server{Handler: p, ConnContext: signinConnContext, ReadHeaderTimeout: 5 * time.Second,
+	srv := &http.Server{Handler: p, ConnContext: laneConnContext, ReadHeaderTimeout: 5 * time.Second,
 		ErrorLog: log.New(rig.logs, "", 0)}
 	agentLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -124,6 +125,14 @@ func newSigninLaneRigFor(t *testing.T, vm bool, with ...func(*Options)) *signinL
 	rig.agentAddr, rig.signinAddr = agentLn.Addr().String(), signinLn.Addr().String()
 	go func() { _ = srv.Serve(agentLn) }()
 	go func() { _ = srv.Serve(signinListener{signinLn}) }()
+	if vm {
+		relayLn, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		rig.relayAddr = relayLn.Addr().String()
+		go func() { _ = srv.Serve(vmnetListener{relayLn}) }()
+	}
 	t.Cleanup(func() { _ = srv.Close() })
 	return rig
 }
