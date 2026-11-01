@@ -6,6 +6,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { HttpError } from "../../../lib/api/core";
+import { aheadByHours } from "../../../lib/test-clock";
 import { health } from "../../../lib/api/health";
 import type { RunDetail, RunOutput } from "../../../lib/types";
 import { RUN_WAIT, RUN_WAIT_REASON } from "../../../lib/runner-pool-refusals";
@@ -35,7 +36,7 @@ const kept = (o: Partial<RunOutput> = {}): RunOutput => ({
   incomplete: false,
   capture_gap: false,
   mask_scope: "run",
-  captured_at: "2026-10-03T14:02:00Z",
+  captured_at: aheadByHours(-1),
   ...o,
 });
 const notKept = () => getOutput.mockRejectedValue(new HttpError(409, "refused", "run_output_not_kept"));
