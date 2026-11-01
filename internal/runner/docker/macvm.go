@@ -603,12 +603,16 @@ func macDesktopOff(dir string) bool {
 func (d *Driver) startMacVMNet(ctx context.Context, spec runner.SandboxSpec, proxyIP string) (*os.File, error) {
 	labels := d.labels(spec.RunID, componentVMNet, spec.Labels)
 	labels[labelMachineKind] = string(types.MachineMacOSVM)
-	return d.startMacRelay(ctx, spec.RunID, labels, proxyIP)
+	guestProxy, err := guestProxyAddr(spec.Env)
+	if err != nil {
+		return nil, err
+	}
+	return d.startMacRelay(ctx, spec.RunID, labels, proxyIP, guestProxy)
 }
 
 // startMacRelay is startMacVMNet's relay on id's internal network, -proxy at proxyIP: a run's, or a
-// base job's stage-2 one (StartMacPrepNet).
-func (d *Driver) startMacRelay(ctx context.Context, id uuid.UUID, labels map[string]string, proxyIP string) (*os.File, error) {
+// base job's stage-2 one (StartMacPrepNet). guestProxy is the proxy as the guest's variables name it.
+func (d *Driver) startMacRelay(ctx context.Context, id uuid.UUID, labels map[string]string, proxyIP, guestProxy string) (*os.File, error) {
 	info, err := d.cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("docker: info: %w", err)
@@ -616,12 +620,12 @@ func (d *Driver) startMacRelay(ctx context.Context, id uuid.UUID, labels map[str
 	host := hardenedHostConfig(internalNetName(id), "", runner.Resources{MemoryMiB: 256, PidsLimit: vmPidsLimit}, info.Info)
 	host.ReadonlyRootfs = true
 	host.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyDisabled}
-	host.ExtraHosts = []string{"wardyn-proxy:" + proxyIP}
+	host.ExtraHosts = relayProxyHosts(guestProxy, proxyIP)
 	uid, gid := vmUser(os.Getuid(), os.Getgid())
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: vmnetName(id),
 		Config: &container.Config{Image: d.proxyImage(), User: strconv.Itoa(uid) + ":" + strconv.Itoa(gid), Entrypoint: []string{vmnetEntrypoint},
-			Cmd:       []string{"-stdio", "-proxy", "wardyn-proxy:" + strconv.Itoa(runner.ProxyListenPort)},
+			Cmd:       []string{"-stdio", "-proxy", guestProxy},
 			OpenStdin: true, AttachStdin: true, AttachStdout: true, AttachStderr: true, Labels: labels},
 		HostConfig: host,
 	})

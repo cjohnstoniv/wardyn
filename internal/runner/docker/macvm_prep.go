@@ -100,7 +100,7 @@ func (d *Driver) StartMacPrepNet(ctx context.Context, entryID string) (*os.File,
 	rollback = append(rollback, func() {
 		_, _ = d.cli.ContainerRemove(context.Background(), vmnetName(id), client.ContainerRemoveOptions{Force: true})
 	})
-	attach, err := d.startMacRelay(ctx, id, labels, proxyIP.String())
+	attach, err := d.startMacRelay(ctx, id, labels, proxyIP.String(), defaultGuestProxy)
 	if err != nil {
 		return fail(err)
 	}

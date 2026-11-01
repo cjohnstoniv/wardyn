@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -279,6 +280,35 @@ func macSpec() runner.SandboxSpec {
 	s.Env["WARDYN_HARNESSES"] = "claude-code"
 	runner.SetSandboxCATrustVars(s.Env, false) // as the dispatcher fills them, with the Linux paths
 	return s
+}
+
+// The macOS relay's argv for a run that sets no proxy URL override, byte for byte, and with one: the
+// relay follows the name the guest's proxy variables carry.
+func TestMacVMRelayArgvDefaultAndOverride(t *testing.T) {
+	for name, c := range map[string]struct {
+		url  string
+		want []string
+	}{
+		"default":  {"", []string{"-stdio", "-proxy", "wardyn-proxy:3128"}},
+		"override": {"http://relay-proxy.internal:8080", []string{"-stdio", "-proxy", "relay-proxy.internal:8080"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newMacRig(t)
+			spec := macSpec()
+			if c.url != "" {
+				spec.Env["WARDYN_PROXY_URL"] = c.url
+			}
+			if _, err := r.d.CreateSandbox(context.Background(), spec); err != nil {
+				t.Fatal(err)
+			}
+			r.f.fakeDocker.mu.Lock()
+			relay := r.f.fakeDocker.containers[vmnetName(spec.RunID)]
+			r.f.fakeDocker.mu.Unlock()
+			if relay == nil || !slices.Equal([]string(relay.cfg.Cmd), c.want) {
+				t.Fatalf("relay = %+v, want argv %q", relay, c.want)
+			}
+		})
+	}
 }
 
 // A macOS VM run: the ledger entry is taken before the helper starts, the relay is the guest's network
