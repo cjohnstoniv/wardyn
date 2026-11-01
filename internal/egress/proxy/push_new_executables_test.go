@@ -172,7 +172,7 @@ func TestPushRulesDenyNewExecutablesRefusalText(t *testing.T) {
 		if _, err := r.push(); err == nil {
 			t.Fatal("git push succeeded, want a refusal")
 		}
-		want := headline + "  tool.sh\n" + whyNotGitHub + "\n" +
+		want := headline + "  tool.sh\n" + whyNoForgeReader + "\n" +
 			"clear the executable bit on these files (git update-index --chmod=-x), " +
 			"or ask an operator to set push_rules.deny_new_executables to false. " +
 			"Wardyn can't read this repository's history here, so it can't tell which files are new.\n"

@@ -102,7 +102,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 			rules, entryErr := p.rulesForRemote(host, rest)
 			inspected, release, ok := p.applyPushRules(w, r, body, slog.String("host", host),
 				func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) },
-				nil, p.adoPushTarget(host, adoGitRepoKeys(r)), rules, entryErr)
+				p.adoEntraForge(host, rest, grant), p.adoPushTarget(host, adoGitRepoKeys(r)), rules, entryErr)
 			defer release()
 			if !ok {
 				return

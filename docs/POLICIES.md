@@ -1117,7 +1117,8 @@ So an entry a pattern matches is judged one of two ways:
 
 - **An entry the pack carries is refused from the pack alone.** It is content the push adds or changes.
 - **An entry the pack does not carry is compared with the commit the push builds on.**
-  - The broker reads that commit's trees from GitHub's REST API — trees only, never file contents — with the run's own credential for the lane.
+  - The broker reads that commit's trees from the forge's REST API — trees only, never file contents — with the run's own credential for the lane, in the repository the push names.
+  - That is GitHub's API, or the Azure DevOps Git API at version 7.1.
   - It compares the mode and object id at the same path.
   - Object ids are content addresses, so a match means the push left that path, and everything beneath it, exactly as that commit held it, and the entry passes.
   - With `deny_paths: [".github/workflows/**"]`, a repository that already has workflows can push an edit to `src/`; a push that adds, changes, moves or restores anything under `.github/workflows/` is refused.
@@ -1138,19 +1139,22 @@ So an entry a pattern matches is judged one of two ways:
 - So it re-sends its history — its shallow boundary commit, or everything — and the first commit of that history would read as though the push added every file the repository has.
 - Those commits are put to the same question: the ones GitHub places in the current history of the default branch or an updated branch are taken out, and the push is judged against them.
 
-- **When the comparison cannot be made, the entry refuses the push, and the refusal says why:** the forge is not GitHub (a `git_pat` grant for another host, or the Azure DevOps Entra lane).
-- No parent counts; or a read fails, answers other than `200`, comes back truncated, needs more than 64 reads, or takes longer than 20 seconds.
+- **When the comparison cannot be made, the entry refuses the push, and the refusal says why:** the broker has no reader for the forge.
+- That is a `git_pat` grant for a host that is neither GitHub nor Azure DevOps Services, or an Azure DevOps remote whose repository it cannot name.
+- No parent counts; or a read fails, answers other than `200`, comes back truncated or paged, needs more than 64 reads, or takes longer than 20 seconds.
+- On Azure DevOps, a push that moves a branch other than forward from the tip it states is not compared either: the commit it builds on does not show what the branch loses.
 - The reads happen only for a push the pack alone would refuse, while it holds the sidecar's inspection slot, and the credential is normally the one the push's own discovery request already minted.
 - In the refusal, a path ending in `/` names a directory the push does not carry, and `/` alone names the whole tree.
 
 **A push that adds no commits.**
 
 - Creating a branch at a commit the forge already has, or rolling a branch back, sends no objects, so the rules have nothing to read.
-- The broker asks GitHub, with the run's own credential, whether each commit the push points a ref at is in the current history of the default branch or of a branch the push updates.
+- The broker asks the forge, with the run's own credential, whether each commit the push points a ref at is in the current history of the default branch or of a branch the push updates.
 - When every one is, the push goes through as carrying no new content; the branch-namespace rules still apply.
   - That includes a commit whose tree still holds a path `deny_paths` now names: the forge already has it in that history.
   - Under `git_push_any_branch`, a lightweight tag at such a commit passes too; an annotated tag is still refused.
-- Otherwise it is refused: "This push adds no new commits; the remote already has them.", with the reason (the forge is not GitHub, a commit sits only on another branch, or the read failed).
+- Azure DevOps also requires each branch to move forward from the tip the push states, so rolling a branch back there is refused.
+- Otherwise it is refused: "This push adds no new commits; the remote already has them.", with the reason (no reader for the forge, a commit only on another branch, or a failed read).
 - A push that carries objects but points a ref at a commit it does not carry is still refused, naming that ref.
 
 > [!WARNING]
@@ -1195,6 +1199,9 @@ So an entry a pattern matches is judged one of two ways:
 - **An unattended run does not hold.**
   - A run with a task and nobody driving it (not `interactive`) has nobody to ask, so a review match is refused at once (`brokered:git:push-held-unattended`) and no approval is raised.
   - The control plane refuses such a raise as well.
+- **On Azure DevOps a review pattern holds only a push that touches a matching path.**
+  - What the pack does not carry is compared through the Git REST API, so a new branch that touches no matching path goes through, on an unattended run too.
+  - When the comparison cannot be made, the push is still held or refused. The refusal says the paths could not be worked out on this lane, and why, rather than that the push touches them; the listed paths are what could not be cleared. The audit row is the same `brokered:git:push-held-unattended` or `brokered:git:push-held`.
 - **The hold lasts `hold_seconds`** (default 120, at most 600).
   - git waits on the open request — it only gives up early if `http.lowSpeedLimit` and `http.lowSpeedTime` are set.
   - Past the hold the push is refused and the request stays in the console; pushing the same commits again waits on that same request rather than raising another.
@@ -1233,8 +1240,8 @@ So an entry a pattern matches is judged one of two ways:
 - The Azure DevOps REST door refuses every content push while it is on: a REST push names no file modes.
 - `max_file_size_mib` decides with `gitpack.Change.Size()`, which returns `(bytes, known)`, so a bare comparison against a limit does not compile.
 - A size the pack does not carry (a submodule pointer, an unchanged file on a second push) is cleared against the forge or refused.
-- The forge can be read only on github.com:
-  - on Azure DevOps and any other `git_pat` host the rule refuses every push that builds on history, because every file the push did not itself change has no size the broker can learn,
+- The forge can be read only on github.com and Azure DevOps:
+  - on any other `git_pat` host the rule refuses every push that builds on history, because every file the push did not itself change has no size the broker can learn,
   - and a size-only rule also refuses the Azure DevOps REST content routes that name no paths.
 
 > [!NOTE]

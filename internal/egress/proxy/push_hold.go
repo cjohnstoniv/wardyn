@@ -131,6 +131,23 @@ type pushReview struct {
 	paths []string // every matched path, in match order
 	why   string   // why the forge did not clear some, when it was asked
 	cmds  []gitpack.Command
+	// unresolved: the forge could not answer, so these paths may be nothing the
+	// push changed. A refusal must not say the push touches them.
+	unresolved bool
+}
+
+func (rv pushReview) headline() string {
+	if rv.unresolved {
+		return "the paths this push changes could not be worked out on this lane, so a review pattern may apply to them and it needs an admin's review"
+	}
+	return "this push touches paths that need an admin's review"
+}
+
+func (rv pushReview) deniedHeadline() string {
+	if rv.unresolved {
+		return "an admin denied this push, whose changed paths could not be worked out on this lane"
+	}
+	return "an admin denied this push, which touches paths that need review"
 }
 
 // pushHolds is the per-run held-push state. The zero value (plus unattended)
@@ -232,29 +249,35 @@ func (p *Proxy) holdPush(w http.ResponseWriter, r *http.Request, rules *pushRule
 		slog.Any("paths", sampleOf(paths)),
 		slog.Any("commits", scope.Commits),
 		slog.String("reason", rv.why),
+		slog.Bool("unresolved", rv.unresolved),
 		slog.Bool("unattended", p.pushHolds.unattended))
+	noun := "matched"
+	if rv.unresolved {
+		noun = "unresolved"
+	}
 	refuse := func(src, headline, remedy string) bool {
 		deny(src)
-		http.Error(w, pathsBody("wardyn: "+headline, paths, "matched", rv.why, remedy), http.StatusForbidden)
+		http.Error(w, pathsBody("wardyn: "+headline, paths, noun, rv.why, remedy), http.StatusForbidden)
 		return false
 	}
 	if p.pushHolds.unattended {
-		return refuse(ruleSourceGitPushHeldUnattended,
-			"this push touches paths that need an admin's review, and this run is unattended, so nobody can be asked",
-			"remove these paths from the push, or run the task interactively")
+		remedy := "remove these paths from the push, or run the task interactively"
+		if rv.unresolved {
+			remedy = "retry the push, build it directly on the branch it updates or on the default branch, or run the task interactively"
+		}
+		return refuse(ruleSourceGitPushHeldUnattended, rv.headline()+", and this run is unattended, so nobody can be asked", remedy)
 	}
 	id, state, why := p.pushHolds.admit(key)
 	switch {
 	case state == apApproved:
 		return true
 	case state == apDenied:
-		return refuse(ruleSourceGitPushHeld, "an admin denied this push, which touches paths that need review",
-			"remove these paths from the push")
+		return refuse(ruleSourceGitPushHeld, rv.deniedHeadline(), "remove these paths from the push")
 	case why != "":
 		return refuse(ruleSourceGitPushHeld, why, "retry the push later")
 	}
 	defer p.pushHolds.leave()
-	return p.awaitPushDecision(w, r, rules.hold, id, scope, types.NewPushPathList(paths), key, refuse)
+	return p.awaitPushDecision(w, r, rules.hold, id, scope, types.NewPushPathList(paths), key, rv, refuse)
 }
 
 // admit files key and takes an active slot. A push already decided comes back
@@ -308,8 +331,8 @@ func (h *pushHolds) record(key string, id uuid.UUID, state approvalState) {
 // awaitPushDecision raises (or rejoins) the push's approval and polls it until
 // it is decided or the hold runs out.
 func (p *Proxy) awaitPushDecision(w http.ResponseWriter, r *http.Request, hold time.Duration, id uuid.UUID,
-	scope types.PushContentScope, list types.PushPathList, key string, refuse func(src, headline, remedy string) bool) bool {
-	const headline = "this push touches paths that need an admin's review"
+	scope types.PushContentScope, list types.PushPathList, key string, rv pushReview, refuse func(src, headline, remedy string) bool) bool {
+	headline := rv.headline()
 	if p.approval == nil {
 		return refuse(ruleSourceGitPushHeld, headline+", and this proxy has no way to ask for one", "retry the push")
 	}
@@ -357,8 +380,7 @@ func (p *Proxy) awaitPushDecision(w http.ResponseWriter, r *http.Request, hold t
 				return true
 			case types.ApprovalDenied:
 				p.pushHolds.record(key, id, apDenied)
-				return refuse(ruleSourceGitPushHeld, "an admin denied this push, which touches paths that need review",
-					"remove these paths from the push")
+				return refuse(ruleSourceGitPushHeld, rv.deniedHeadline(), "remove these paths from the push")
 			case types.ApprovalExpired, types.ApprovalCancelled:
 				p.pushHolds.record(key, id, apNone)
 				return refuse(ruleSourceGitPushHeld, headline+", and the request closed without a decision",

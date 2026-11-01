@@ -10,4 +10,5 @@
 # docs/AZURE-DEVOPS.md 11319 adds 34 over 11285 (0.10 MINT-L round 2), measured: a person's own runner, the second person only under WARDYN_GOVERNANCE_SECOND_HUMAN, the 15-minute re-judge with its drift revoke, and the outage bound from the last fetch.
 # docs/AZURE-DEVOPS.md 11382 adds 63 over 11319 (0.10 CREDPATH, #2140), measured: the access-token cache a resolve hits without reading the sign-in, its one-hour bound, and what drops it.
 # docs/AZURE-DEVOPS.md 11389 adds 7 over 11382 (0.10 W7 review), measured: a cache-served resolve still writes the injected token's secret.read row, only no ado-refresh read.
-docs/AZURE-DEVOPS.md=11389 share=35
+# docs/AZURE-DEVOPS.md 11456 = 11389 + 67, measured: Azure DevOps push rules read the Git REST API (#3921)
+docs/AZURE-DEVOPS.md=11456 share=35
