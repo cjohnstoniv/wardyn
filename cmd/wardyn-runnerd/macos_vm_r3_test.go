@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -341,6 +342,62 @@ func TestMacOSVMStatusShowsTheRunBootToolsDial(t *testing.T) {
 		if st.ToolsDial != want || strings.Contains(text.String(), "tools_dial: refused") != (want != "") ||
 			strings.Contains(string(js), `"tools_dial":"refused"`) != (want != "") {
 			t.Fatalf("record %q: %q\n%s\n%s", content, st.ToolsDial, text.String(), js)
+		}
+	}
+}
+
+// While macOS waits for setup by hand, status lists the window's three steps: the account, Screen Sharing
+// with control, and Remote Login.
+func TestMacOSVMStatusSetupByHandNamesScreenSharing(t *testing.T) {
+	var text strings.Builder
+	macOSVMStatus{setupCode: "/x/setup-code.json"}.writeText(&text)
+	if !strings.Contains(text.String(), "turn on Screen Sharing with control, and turn on Remote Login") {
+		t.Fatalf("setup by hand's steps:\n%s", text.String())
+	}
+}
+
+// `macos-vm status` shows the newest tools-port dial: a prepare's, logged after a run boot's record, replaces
+// it, and a run boot after the prepare replaces that. Events after the tools phase do not hide the dial.
+func TestMacOSVMStatusToolsDialIsTheNewest(t *testing.T) {
+	r := newMacLedgerRig(t)
+	m := r.open(t)
+	m.helper, _ = fakeHelper(t, 0)
+	base := time.Now().Add(-time.Hour).Truncate(time.Second)
+	line := func(at time.Time, phase, dial string) string {
+		return fmt.Sprintf(`{"time":%q,"level":"INFO","msg":"macvm: prepare","phase":%q,"tools_dial":%q}`+"\n", at.Format(time.RFC3339Nano), phase, dial)
+	}
+	runRecord := filepath.Join(r.root, runToolsDialFile)
+	write := func(path, content string, at time.Time) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil || os.Chtimes(path, at, at) != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		name, run string
+		runAt     time.Time
+		prepare   string
+		want      string
+	}{
+		{"a later prepare replaces an older run record", "transport failure\n", base,
+			line(base.Add(time.Minute), "tools", "transport failure") + line(base.Add(2*time.Minute), "tools", "connected") + line(base.Add(3*time.Minute), "ready", ""), "connected"},
+		{"a later run boot replaces the prepare's", "refused\n", base.Add(10 * time.Minute),
+			line(base.Add(time.Minute), "tools", "connected") + line(base.Add(2*time.Minute), "ready", ""), "refused"},
+		{"a prepare's dial still pending shows no older class", "transport failure\n", base,
+			line(base.Add(time.Minute), "tools", "pending"), ""},
+		{"no run record", "", base, line(base.Add(time.Minute), "tools", "connected"), "connected"},
+	} {
+		_ = os.Remove(runRecord)
+		if c.run != "" {
+			write(runRecord, c.run, c.runAt)
+		}
+		write(m.layout.PrepareLog(), c.prepare, base.Add(time.Hour))
+		st, err := m.status(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.ToolsDial != c.want {
+			t.Errorf("%s: tools_dial %q, want %q", c.name, st.ToolsDial, c.want)
 		}
 	}
 }
