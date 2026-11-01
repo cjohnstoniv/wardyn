@@ -327,7 +327,7 @@ func (s *shutdownOnLostSwapStore) UpdateRunStateIf(ctx context.Context, id uuid.
 // TestKillSignInRunAfterCapture_ShutdownStopsTheRetries pins #3592: WaitBackground's budget covers one pass of the
 // kill's retry loop, so a shutdown that lands after a lost swap must stop the loop, not leave later passes to run
 // past the budget on a slow store. The pass under way finishes; no further pass starts, the stop is logged, and the
-// run is left to its idle cap and the next boot's reconcile.
+// run is left to its idle cap.
 func TestKillSignInRunAfterCapture_ShutdownStopsTheRetries(t *testing.T) {
 	runID := uuid.New()
 	baseCtx, shutdown := context.WithCancel(context.Background())
