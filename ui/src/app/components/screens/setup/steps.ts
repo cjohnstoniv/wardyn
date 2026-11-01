@@ -469,10 +469,9 @@ export function stepBadges(
   status: SetupStatus,
   r: Readiness,
   workspaces: Workspace[],
-  // Count of connected integrations (any category) — see
-  // lib/api/integrations.ts's allRows(). The orchestrator owns fetching the
-  // integrations data (siteConfig + secret names) this count derives from;
-  // this pure function only needs the resulting number.
+  // Count of connected integrations (any category). The orchestrator derives
+  // it from setup status (modelProviderCount); this pure function only needs
+  // the resulting number.
   integrationsCount: number,
   corpNetwork: CorpNetworkState = CORP_NETWORK_UNSET,
   // The SAME list corpNetworkGate/stepDone already take (below) — corpNetworkBadge
