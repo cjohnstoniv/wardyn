@@ -230,7 +230,9 @@ export interface AgentRun {
   // without fetching every run's cast just to answer "does one exist, how
   // big, how long". has_recording is the ONLY "no recording" signal: a zero
   // (or absent) recording_duration_sec is a real, header-only cast that
-  // captured no output, not "unknown" or "none" — never gate on it.
+  // captured no output, not "unknown" or "none" — never gate on it. A list
+  // without include=recording_meta omits all three keys; absent means "not
+  // asked", not "no recording". The single-run read always sets has_recording.
   has_recording?: boolean;
   recording_bytes?: number;
   recording_duration_sec?: number;
