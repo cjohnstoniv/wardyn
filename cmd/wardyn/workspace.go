@@ -54,8 +54,8 @@ func parseWorkspaceSourceArg(s string) (sdk.WorkspaceSource, error) {
 
 // bindDirSources binds every dir folder of req to runner (--runner, none when empty): each one is on that
 // runner, which checks it when a run starts. A legacy --kind local_dir source becomes the one composition source, as
-// the server would fold it, so it can carry the binding. The server answers whether the runner is the
-// caller's own.
+// the server would fold it, so it can carry the binding. A folder already bound to another runner (an attached
+// library folder) is refused, not moved. The server answers whether the runner is the caller's own.
 func bindDirSources(req *sdk.WorkspaceRequest, runner string) error {
 	if runner == "" {
 		return nil
@@ -71,6 +71,9 @@ func bindDirSources(req *sdk.WorkspaceRequest, runner string) error {
 	bound := false
 	for i := range req.Sources {
 		if req.Sources[i].Type == sdk.WorkspaceSourceTypeLocalDir {
+			if have := req.Sources[i].RunnerID; have != nil && *have != id {
+				return fmt.Errorf("--runner %s differs from the runner %s that folder %s is already bound to; drop --runner, or attach a folder on %s", id, *have, req.Sources[i].Path, id)
+			}
 			req.Sources[i].RunnerID, bound = &id, true
 		}
 	}

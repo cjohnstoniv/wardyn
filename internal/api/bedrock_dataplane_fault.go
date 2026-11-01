@@ -42,6 +42,29 @@ var bedrockFaultHints = map[string]string{
 		"for a higher Bedrock quota.",
 }
 
+// bedrockRefusalFault matches the proxy's "<status> <class>" for any other
+// refusal (bedrockRefusal): a 4xx/5xx and an optional error class.
+var bedrockRefusalFault = regexp.MustCompile(`^([45]\d\d)(?: ([A-Za-z0-9_.]{1,64}))?$`)
+
+// bedrockRefusalHintLead opens the hint written for such a refusal, and marks
+// it as this file's own.
+const bedrockRefusalHintLead = "Amazon Bedrock refused the model call ("
+
+// bedrockRefusalHint names the status and class AWS answered with. Wardyn does
+// not record the response body, so the message itself is the agent's output.
+func bedrockRefusalHint(fault string) (string, bool) {
+	m := bedrockRefusalFault.FindStringSubmatch(fault)
+	if m == nil {
+		return "", false
+	}
+	what := "HTTP " + m[1]
+	if m[2] != "" {
+		what += " " + m[2]
+	}
+	return bedrockRefusalHintLead + what + "). Wardyn did not record AWS's message; the agent's own output, in the " +
+		"run's recording, says what it refused.", true
+}
+
 // noteBedrockDataPlaneFault records fault (a class, or "recovered") on the
 // run's failure_hint. Best-effort, like every other hint write.
 func (s *Server) noteBedrockDataPlaneFault(ctx context.Context, runID uuid.UUID, fault string) {
@@ -54,7 +77,11 @@ func (s *Server) noteBedrockDataPlaneFault(ctx context.Context, runID uuid.UUID,
 		return
 	}
 	_, ours := bedrockFaultHintSet[run.FailureHint]
+	ours = ours || strings.HasPrefix(run.FailureHint, bedrockRefusalHintLead)
 	hint, known := bedrockFaultHints[fault]
+	if !known {
+		hint, known = bedrockRefusalHint(fault)
+	}
 	switch {
 	case fault == "recovered":
 		if !ours {

@@ -240,6 +240,133 @@ func TestAttach_ObserverDoesNotClampTheWriterWindow(t *testing.T) {
 	})
 }
 
+// termGrid replays a client's output onto a character grid, following what a
+// terminal does with the cursor (absolute and relative moves, CR, LF, BS, erase).
+// The test reads the marker's column off that grid because tmux may reach a cell
+// by a short move and a few plain characters, so no single move sequence names it.
+type termGrid struct {
+	rows     map[int][]rune
+	row, col int
+}
+
+func (g *termGrid) put(r rune) {
+	line := g.rows[g.row]
+	for len(line) <= g.col {
+		line = append(line, ' ')
+	}
+	line[g.col] = r
+	g.rows[g.row] = line
+	g.col++
+}
+
+// blank erases cells [from, to) of the cursor's row.
+func (g *termGrid) blank(from, to int) {
+	line := g.rows[g.row]
+	for k := from; k < to && k < len(line); k++ {
+		line[k] = ' '
+	}
+}
+
+// csi applies one control sequence by its final byte and numeric parameters.
+func (g *termGrid) csi(final rune, nums []int) {
+	arg := func(k, def int) int {
+		if k < len(nums) && nums[k] > 0 {
+			return nums[k]
+		}
+		return def
+	}
+	switch final {
+	case 'H', 'f':
+		g.row, g.col = arg(0, 1)-1, arg(1, 1)-1
+	case 'G':
+		g.col = arg(0, 1) - 1
+	case 'd':
+		g.row = arg(0, 1) - 1
+	case 'A':
+		g.row = max(g.row-arg(0, 1), 0)
+	case 'B':
+		g.row += arg(0, 1)
+	case 'C':
+		g.col += arg(0, 1)
+	case 'D':
+		g.col = max(g.col-arg(0, 1), 0)
+	case 'X':
+		g.blank(g.col, g.col+arg(0, 1))
+	case 'K':
+		switch arg(0, 0) {
+		case 1:
+			g.blank(0, g.col+1)
+		case 2:
+			g.blank(0, len(g.rows[g.row]))
+		default:
+			g.blank(g.col, len(g.rows[g.row]))
+		}
+	case 'J':
+		if n := arg(0, 0); n == 2 || n == 3 {
+			g.rows = map[int][]rune{}
+		}
+	}
+}
+
+func (g *termGrid) feed(out string) {
+	in := []rune(out)
+	for i := 0; i < len(in); i++ {
+		switch r := in[i]; {
+		case r == '\r':
+			g.col = 0
+		case r == '\n':
+			g.row++
+		case r == '\b':
+			g.col = max(g.col-1, 0)
+		case r == 0x1b && i+1 < len(in) && in[i+1] == '[':
+			j := i + 2
+			for j < len(in) && (in[j] < 0x40 || in[j] > 0x7e) {
+				j++
+			}
+			if j >= len(in) {
+				return
+			}
+			var nums []int
+			for _, p := range strings.Split(string(in[i+2:j]), ";") {
+				n, _ := strconv.Atoi(strings.TrimLeft(p, "?>"))
+				nums = append(nums, n)
+			}
+			g.csi(in[j], nums)
+			i = j
+		case r == 0x1b && i+1 < len(in) && in[i+1] == ']':
+			j := i + 2
+			for j < len(in) && in[j] != 0x07 && !(in[j] == 0x1b && j+1 < len(in) && in[j+1] == '\\') {
+				j++
+			}
+			if j < len(in) && in[j] == 0x1b {
+				j++
+			}
+			i = j
+		case r == 0x1b:
+			// A charset selection takes one more byte; other escapes are two bytes.
+			i++
+			if i < len(in) && strings.ContainsRune("()*+", in[i]) {
+				i++
+			}
+		case r >= ' ':
+			g.put(r)
+		}
+	}
+}
+
+// renderedMarkerColumn is the 1-based column of "MKR100" on the grid the output
+// draws, or 0 if the grid does not hold it.
+func renderedMarkerColumn(out string) int {
+	g := &termGrid{rows: map[int][]rune{}}
+	g.feed(out)
+	for _, line := range g.rows {
+		if k := strings.Index(string(line), "MKR100"); k >= 0 {
+			return len([]rune(string(line)[:k])) + 1
+		}
+	}
+	return 0
+}
+
 // An 80x24 observer of a 120x40 writer is attached at the writer's 120x40 and
 // sees a marker the writer printed at column 100; when the writer resizes to
 // 140x50 and the observer's PTY follows, the observer is 140x50. An observer
@@ -263,15 +390,8 @@ func TestAttach_ObserverAtTheWritersSizeSeesColumn100AndFollowsResizes(t *testin
 	// The read holds the cursor beside the marker, so the narrow observer's view
 	// pans to it whatever width the shell prompt that follows would have.
 	writer.write(`printf '\033[3;101H%s%s' MKR 100; read -r _` + "\r")
-	// markerColumn is the 1-based column a client was told to draw the marker at.
-	markerColumn := func(c *tmuxClient) int {
-		m := regexp.MustCompile(`\x1b\[3;([0-9]+)H(?:\x1b\[[0-9;?]*[A-Za-z])*MKR100`).FindStringSubmatch(c.output())
-		if m == nil {
-			return 0
-		}
-		n, _ := strconv.Atoi(m[1])
-		return n
-	}
+	// markerColumn is the 1-based column of the marker on the client's rendered grid.
+	markerColumn := func(c *tmuxClient) int { return renderedMarkerColumn(c.output()) }
 	deadline = time.Now().Add(15 * time.Second)
 	for markerColumn(follower) == 0 || markerColumn(narrow) == 0 {
 		if time.Now().After(deadline) {
