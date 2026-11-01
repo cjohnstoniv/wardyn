@@ -53,6 +53,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
+import { PollPauseContext } from "../../../lib/use-poll";
 import { aheadByHours } from "../../../lib/test-clock";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { MyRunnerCard } from "./my-runner-card";
@@ -113,13 +114,15 @@ const WAITING = runner({
   allowed_roots: undefined,
   usage: usageWith(0),
 });
-function renderCard(hash = "", admin = false) {
+function renderCard(hash = "", admin = false, signedOut = false) {
   return render(
-    <MemoryRouter initialEntries={[`/account${hash}`]}>
-      <OperatorProvider operator={admin} securityOperator={admin} operatorResolved principal="alice">
-        <MyRunnerCard />
-      </OperatorProvider>
-    </MemoryRouter>,
+    <PollPauseContext.Provider value={signedOut}>
+      <MemoryRouter initialEntries={[`/account${hash}`]}>
+        <OperatorProvider operator={admin} securityOperator={admin} operatorResolved principal="alice">
+          <MyRunnerCard />
+        </OperatorProvider>
+      </MemoryRouter>
+    </PollPauseContext.Provider>,
   );
 }
 
@@ -460,6 +463,24 @@ describe("My runner card: Add this computer and the 5 second poll", () => {
       expect(await screen.findByText("desk-2", { selector: "h4" })).toBeInTheDocument();
       // A poll is silent: no live region announces it.
       expect(screen.queryByRole("status")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not poll while the console is signed out", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      listMineMock.mockResolvedValue([]);
+      const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+      renderCard("", false, true);
+      await expand(user);
+      await screen.findByRole("heading", { name: "Add this computer" });
+      const reads = listMineMock.mock.calls.length;
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+      expect(listMineMock.mock.calls.length).toBe(reads);
     } finally {
       vi.useRealTimers();
     }
