@@ -1143,6 +1143,82 @@ func TestUIGateway_RelayGivesTheAppItsOwnOrigin(t *testing.T) {
 	}
 }
 
+// TestUIGateway_RelayGivesTheAppItsOwnOriginInHostMode: the same rewrite in host mode, where the gateway is
+// reached on the run's own host and the scheme comes from the origin template, not the advertised URL (https
+// in the harness). The template's scheme on the run's host is the app's own origin; the other scheme, another
+// run's host and a missing Origin reach the app as they came.
+func TestUIGateway_RelayGivesTheAppItsOwnOriginInHostMode(t *testing.T) {
+	for _, scheme := range []string{"http", "https"} {
+		t.Run(scheme, func(t *testing.T) {
+			seen := make(chan *http.Request, 1)
+			h := newUIHarness(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				seen <- r.Clone(context.Background())
+				_, _ = io.WriteString(w, "ok")
+			}))
+			cookie := h.openSession() // enter on the path-mode gateway; host mode is switched on for the relay below
+			h.srv.cfg.UIOriginTemplate = scheme + "://run-{run}.ui.example.com"
+			host := "run-" + h.run.ID.String() + ".ui.example.com"
+			otherScheme := map[string]string{"http": "https", "https": "http"}[scheme]
+			otherRun := scheme + "://run-" + uuid.NewString() + ".ui.example.com"
+			const own = "own" // the app's own origin, http://<the Host it is sent>
+			for _, tc := range []struct{ name, origin, want string }{
+				{"own page", scheme + "://" + host, own},
+				{"own page, host in another case", scheme + "://" + strings.ToUpper(host), own},
+				{"own host by the other scheme", otherScheme + "://" + host, otherScheme + "://" + host},
+				{"another run's host", otherRun, otherRun},
+				{"no Origin", "", ""},
+			} {
+				rec := h.relay("/", cookie, func(r *http.Request) {
+					r.Host = host
+					if tc.origin != "" {
+						r.Header.Set("Origin", tc.origin)
+					}
+				})
+				if rec.Code != http.StatusOK {
+					t.Fatalf("%s: relay %d %s", tc.name, rec.Code, rec.Body.String())
+				}
+				got := <-seen
+				want := tc.want
+				if want == own {
+					want = "http://" + got.Host
+				}
+				if o := got.Header.Get("Origin"); o != want {
+					t.Fatalf("%s: the app saw Origin %q (Host %q), want %q", tc.name, o, got.Host, want)
+				}
+			}
+		})
+	}
+}
+
+// TestUIGateway_OwnOriginSchemeSource: the scheme an Origin must carry to be the app's own is the origin
+// template's in host mode (on the run's host) and the advertised URL's in path mode. With neither, or
+// either one scheme-less, it is http (or never matches), so an https page is not the app's own: the case
+// boot warns about.
+func TestUIGateway_OwnOriginSchemeSource(t *testing.T) {
+	runID := uuid.New()
+	for _, tc := range []struct {
+		name, template, advertise, host, origin string
+		want                                    bool
+	}{
+		{"host mode, template scheme and run host", "https://run-{run}.ui.example.com", "", "run-" + runID.String() + ".ui.example.com", "https://run-" + runID.String() + ".ui.example.com", true},
+		{"host mode, template wins over the advertised URL", "https://run-{run}.ui.example.com", "http://ui.example.com", "run-" + runID.String() + ".ui.example.com", "https://run-" + runID.String() + ".ui.example.com", true},
+		{"host mode, another scheme", "https://run-{run}.ui.example.com", "", "run-" + runID.String() + ".ui.example.com", "http://run-" + runID.String() + ".ui.example.com", false},
+		{"host mode, another run's host", "https://run-{run}.ui.example.com", "", "run-" + runID.String() + ".ui.example.com", "https://run-" + uuid.NewString() + ".ui.example.com", false},
+		{"path mode, advertised scheme", "", "https://ui.example.com", "ui.example.com", "https://ui.example.com", true},
+		{"path mode, no advertised URL is http", "", "", "ui.example.com", "http://ui.example.com", true},
+		{"path mode, no advertised URL, https page", "", "", "ui.example.com", "https://ui.example.com", false},
+		{"scheme-less template", "run-{run}.ui.example.com", "", "run-" + runID.String() + ".ui.example.com", "https://run-" + runID.String() + ".ui.example.com", false},
+	} {
+		srv := New(Config{UIOriginTemplate: tc.template, UIAdvertiseURL: tc.advertise})
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.Host = tc.host
+		r.Header.Set("Origin", tc.origin)
+		if got := srv.uiOwnOrigin(r); got != tc.want {
+			t.Errorf("%s: uiOwnOrigin(Host %q, Origin %q) = %v, want %v", tc.name, tc.host, tc.origin, got, tc.want)
+		}
+	}
+}
+
 // TestUIGateway_RelayKeepsNonConformingAppCookies: the inbound strip is a
 // pass-through for everything that is not a wardyn_* credential, INCLUDING a
 // cookie net/http's own parser refuses to read. Rebuilding the header from

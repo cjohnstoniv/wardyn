@@ -1957,6 +1957,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Beside `ui_sandbox.bind_url`, the pre-enter bind step.
 - Must be the same site as the console ([docs/UI-SANDBOXES.md](UI-SANDBOXES.md) §3).
 - Purely advisory copy — the gateway binds `WARDYN_UI_SANDBOX_LISTEN`, not this; unset falls back to the raw bind address and logs a boot warning.
+- Its scheme (or the origin template's) is how the gateway recognises an app's own page.
+- Unset behind TLS, or written without a scheme, the scheme is unknown and boot logs a warning.
 - Under secure cookies, a host equal to the console's (the host of `WARDYN_OIDC_REDIRECT_URL`) also logs a boot warning.
 - Cookies ignore ports, so a path-mode gateway there can be made to set a host-only `__Host-wardyn_session` for the console.
 - Give the gateway its own hostname, or set `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` ([`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) residual 18).
