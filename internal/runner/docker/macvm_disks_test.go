@@ -35,7 +35,7 @@ func TestMacDisksAreAttachedInTheirOrder(t *testing.T) {
 	if len(disks) != 2 || disks[0] != (macvm.Disk{ID: "wardyn-disk0", Path: img, SizeBytes: 1 << 30}) || disks[1].ID != "wardyn-disk1" {
 		t.Fatalf("disks = %+v", disks)
 	}
-	want := guestagent.Disk{ID: "wardyn-disk0", Label: "Wardyn-1a2b3c4d", Target: guestagent.MacAgentHome + "/drive"}
+	want := guestagent.Disk{ID: "wardyn-disk0", Label: "Wardyn-1a2b3c4d", Target: guestagent.MacAgentHome + "/drive", SizeBytes: 1 << 30}
 	if len(guest) != 2 || guest[0] != want || guest[1].Target != guestagent.MacAgentHome+"/work" {
 		t.Fatalf("guest disks = %+v", guest)
 	}

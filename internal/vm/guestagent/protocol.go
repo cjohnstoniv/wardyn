@@ -169,13 +169,15 @@ type Mount struct {
 	ReadOnly bool   `json:"read_only,omitempty"`
 }
 
-// Disk is one disk drive of a macOS run: the guest's block device whose identifier is ID, given an
-// APFS volume named Label when it holds none yet (its first attach), and mounted at Target.
+// Disk is one disk drive of a macOS run: the guest's block device that is not the boot disk and is
+// SizeBytes long (ID names it in errors), given an APFS volume named Label when it holds none yet (its
+// first attach), and mounted at Target.
 type Disk struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	Target   string `json:"target"`
-	ReadOnly bool   `json:"read_only,omitempty"`
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Target    string `json:"target"`
+	ReadOnly  bool   `json:"read_only,omitempty"`
+	SizeBytes int64  `json:"size_bytes"`
 }
 
 // ExecRequest is the first frame of POST /v1/exec. Detach starts a process that outlives the
