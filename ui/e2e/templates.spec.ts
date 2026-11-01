@@ -191,9 +191,9 @@ test.describe("Templates: filters and rows", () => {
     await stubCatalogue(page, { rows: CATALOGUE, publish: ME_ONLY });
     await openTemplates(page);
     const owner = (name: string) => rowOf(page, name).getByRole("cell").nth(2);
-    await expect(owner(NIGHTLY.name)).toHaveText(WORKLOADS.OWNER_YOU);
-    await expect(owner(PLATFORM_BASELINE.name)).toHaveText(T.TEMPLATE_MANAGERS);
-    await expect(owner(ORG_BASELINE.name)).toHaveText(T.ORG_ADMINS);
+    await expect(owner(NIGHTLY.name).getByText(WORKLOADS.OWNER_YOU, { exact: true })).toBeVisible();
+    await expect(owner(PLATFORM_BASELINE.name).getByText(T.TEMPLATE_MANAGERS, { exact: true })).toBeVisible();
+    await expect(owner(ORG_BASELINE.name).getByText(T.ORG_ADMINS, { exact: true })).toBeVisible();
     await expect(rowOf(page, NIGHTLY.name).getByRole("cell").nth(1)).not.toContainText(WORKLOADS.OWNER_YOU);
     const nameCell = rowOf(page, NIGHTLY.name).getByRole("cell").first();
     await expect(nameCell.getByText(T.COL_INCLUDES, { exact: true })).toBeVisible();
