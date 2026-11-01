@@ -265,7 +265,7 @@ func TestPG_RefuseRunnerEventRacesTheReceipt(t *testing.T) {
 
 // A refused spool record moves its run's cursor only when it is next in this runner's own stream (DR-0436): the
 // first record makes the cursor as ingest would, and nothing moves for a run that is not the runner's, past a gap,
-// over a repeat, on another spool, for an overflow summary or with no hash a receipt could name.
+// over a repeat, on another spool, for a sequence 0 record that reports no refusals or with no hash a receipt could name.
 func TestPG_RefuseRunnerEventMovesOnlyItsOwnNextSpoolCursor(t *testing.T) {
 	f := newActionFixture(t)
 	ctx := t.Context()
@@ -325,5 +325,71 @@ func TestPG_RefuseRunnerEventMovesOnlyItsOwnNextSpoolCursor(t *testing.T) {
 	refuse(store.RunnerEventRefusalSpool{RunID: run.ID, SpoolID: spoolID, Seq: 2, Hash: second})
 	if seq, at := cursor(run.ID); seq != 2 || at != second {
 		t.Fatalf("next record refused: cursor %d %q, want 2 %q", seq, at, second)
+	}
+}
+
+// A refused overflow summary moves its run's overflow mark only when its interval starts at the mark, in this runner's
+// own stream: the first makes the cursor as ingest would, and the next one ingest accepts follows on from it.
+func TestPG_RefuseRunnerEventMovesOnlyItsOwnNextOverflowMark(t *testing.T) {
+	f := newActionFixture(t)
+	ctx := t.Context()
+	run := f.run(t)
+	other := claimed(t, f.st, ctx, "action-owner-2")
+	foreign := f.localRun(t, other, other.Owner)
+	spoolID, hash := uuid.New(), strings.Repeat("a", 64)
+	refuse := func(sp store.RunnerEventRefusalSpool) {
+		t.Helper()
+		r := store.RunnerEventRefusal{Kind: runnerwire.EventSpool, Code: runnerwire.RefusalStoreRefused, RunID: &sp.RunID, Spool: &sp}
+		if _, err := f.st.RefuseRunnerEvent(ctx, f.rn.ID, r, prepareSpoolTest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mark := func(runID uuid.UUID) (string, string, int) {
+		t.Helper()
+		var end, at string
+		var seq int
+		err := f.pool.QueryRow(ctx, `SELECT overflow_end::text, overflow_hash, last_seq FROM runner_spool_cursors WHERE run_id=$1`, runID).Scan(&end, &at, &seq)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "none", "", 0
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return end, at, seq
+	}
+	refuse(store.RunnerEventRefusalSpool{RunID: foreign.ID, SpoolID: spoolID, Hash: hash, Count: 2, DropEnd: 2})
+	if end, _, _ := mark(foreign.ID); end != "none" {
+		t.Fatalf("a refusal made another runner's run a cursor at %s", end)
+	}
+	for _, sp := range []store.RunnerEventRefusalSpool{
+		{RunID: run.ID, SpoolID: spoolID, Hash: hash, Count: 2, DropEnd: 5}, // starts past the mark
+		{RunID: run.ID, SpoolID: spoolID, Hash: hash, Count: 3, DropEnd: 2}, // ends before it starts
+		{RunID: run.ID, SpoolID: spoolID, Hash: hash},                       // reports nothing
+		{RunID: run.ID, SpoolID: spoolID, Hash: "short", Count: 2, DropEnd: 2},
+		{RunID: run.ID, SpoolID: spoolID, Seq: -1, Hash: hash, Count: 2, DropEnd: 2},
+	} {
+		refuse(sp)
+		if end, _, _ := mark(run.ID); end != "none" {
+			t.Fatalf("%+v made a cursor at %s", sp, end)
+		}
+	}
+	refuse(store.RunnerEventRefusalSpool{RunID: run.ID, SpoolID: spoolID, Hash: hash, Count: 2, DropEnd: 2})
+	if end, at, seq := mark(run.ID); end != "2" || at != hash || seq != 0 {
+		t.Fatalf("first summary refused: mark %s %q seq %d, want 2 %q seq 0", end, at, seq, hash)
+	}
+	second := strings.Repeat("b", 64)
+	for _, sp := range []store.RunnerEventRefusalSpool{
+		{RunID: run.ID, SpoolID: spoolID, Hash: second, Count: 2, DropEnd: 2},    // a repeat
+		{RunID: run.ID, SpoolID: spoolID, Hash: second, Count: 1, DropEnd: 4},    // a gap
+		{RunID: run.ID, SpoolID: uuid.New(), Hash: second, Count: 3, DropEnd: 5}, // another spool
+	} {
+		refuse(sp)
+		if end, at, _ := mark(run.ID); end != "2" || at != hash {
+			t.Fatalf("%+v moved the mark to %s %q", sp, end, at)
+		}
+	}
+	refuse(store.RunnerEventRefusalSpool{RunID: run.ID, SpoolID: spoolID, Hash: second, Count: 3, DropEnd: 5})
+	if end, at, _ := mark(run.ID); end != "5" || at != second {
+		t.Fatalf("next summary refused: mark %s %q, want 5 %q", end, at, second)
 	}
 }

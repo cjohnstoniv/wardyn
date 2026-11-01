@@ -104,3 +104,44 @@ func TestSealRequiresDrainedWriterAndExactReceipt(t *testing.T) {
 		t.Fatal("lost seal acknowledgement not idempotent")
 	}
 }
+
+// The organisation acknowledges an overflow summary it refuses for good, so the runner's mark moves as if accepted. The
+// retirement receipt seals only when the organisation's mark reached the summary's DropEnd too: its cursor is the
+// receipt, and a mark left behind defers the retirement until it is abandoned.
+func TestSealNeedsTheMarkARefusedOverflowSummaryReaches(t *testing.T) {
+	s, _, _ := testSpool(t)
+	ctx := t.Context()
+	var org types.RunnerSpoolReceipt
+	var summaries []Record
+	for _, refused := range []int{2, 3} {
+		for range refused {
+			if err := s.Refuse(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// Refused or not, send returning nil is the acknowledgement the runner sees.
+		if err := s.Replay(ctx, func(_ context.Context, rows []Record) error {
+			summaries = append(summaries, rows...)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(summaries) != 2 {
+		t.Fatalf("summaries = %+v, want 2", summaries)
+	}
+	org.SpoolID = summaries[0].SpoolID
+	if sealed, err := s.Seal(ctx, org); err != nil || sealed {
+		t.Fatalf("a mark left behind: sealed=%v err=%v, want deferred", sealed, err)
+	}
+	// Each interval starts where the last ended, the place the organisation moves its mark from.
+	for _, r := range summaries {
+		if r.Seq != 0 || r.DropEnd-r.Count != org.ReportedDrops {
+			t.Fatalf("summary %+v does not start at the mark %d", r, org.ReportedDrops)
+		}
+		org.ReportedDrops = r.DropEnd
+	}
+	if sealed, err := s.Seal(ctx, org); err != nil || !sealed {
+		t.Fatalf("mark moved to %d: sealed=%v err=%v, want sealed", org.ReportedDrops, sealed, err)
+	}
+}

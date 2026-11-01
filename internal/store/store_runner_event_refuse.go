@@ -35,6 +35,7 @@ type RunnerEventRefusalSpool struct {
 	RunID, SpoolID uuid.UUID
 	Seq            int64
 	Hash           string
+	Count, DropEnd uint64 // an overflow summary's (Seq 0): how many refusals it reports, and the total they reach
 }
 
 // RunnerEventRefusalSummary is how many refusals a previous window left without a row of their own.
@@ -46,8 +47,8 @@ type RunnerEventRefusalSummary struct {
 // RefuseRunnerEvent records, in one READ COMMITTED transaction, an event the organisation refused for good, before
 // the event is acknowledged (DR-0436): an action_result's open action of this runner is settled as refused with its
 // runner.action.refuse receipt (reason org_refused:<code>), a spool record next in its run's stream moves the run's
-// cursor past it, then the summary row the caller owes, then the event's own runner.event.refuse row unless the
-// caller's bound suppressed it. It takes the shared order runner, run, action (lockRunnerActionRun), the spool cursor
+// cursor past it (an overflow summary, the run's overflow mark), then the summary row the caller owes, then the
+// event's own runner.event.refuse row unless the caller's bound suppressed it. It takes the shared order runner, run, action (lockRunnerActionRun), the spool cursor
 // (as IngestRunnerDecision takes it after the run), then the audit chain. It reports whether it settled an action;
 // with nothing to write, settle or move it returns (false, nil) without a transaction.
 func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerEventRefusal, prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, error) {
@@ -137,15 +138,29 @@ func (s PG) RefuseRunnerEvent(ctx context.Context, runnerID uuid.UUID, r RunnerE
 // runner's run and spool; a gap, a repeat, a hash with no place in a receipt or another spool's record moves nothing.
 // A missing cursor is made as ingest makes it (lockRunnerSpool), only for the stream's first record (the one next
 // after none) and a run that is this runner's.
+//
+// An overflow summary (Seq 0) moves the overflow mark the same way, to the total the runner's own mark reaches when it
+// acknowledges the summary: only a summary whose interval starts at the mark, as accept requires of one it ingests.
+// Its hash is kept so that a replay of it is a duplicate there too.
 func advanceRefusedSpoolCursorTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID, sp RunnerEventRefusalSpool) error {
-	if sp.Seq <= 0 || len(sp.Hash) != 64 {
+	if sp.Seq < 0 || len(sp.Hash) != 64 {
 		return nil
 	}
-	if sp.Seq == 1 {
+	overflow := sp.Seq == 0
+	if overflow && (sp.Count == 0 || sp.DropEnd < sp.Count) {
+		return nil
+	}
+	if sp.Seq == 1 || (overflow && sp.Count == sp.DropEnd) {
 		if _, err := tx.Exec(ctx, `INSERT INTO runner_spool_cursors(run_id,runner_id,spool_id) SELECT $1::uuid,$2::uuid,$3::uuid
  WHERE EXISTS (SELECT 1 FROM agent_runs WHERE id=$1::uuid AND runner_id=$2::uuid) ON CONFLICT(run_id) DO NOTHING`, sp.RunID, runnerID, sp.SpoolID); err != nil {
 			return err
 		}
+	}
+	if overflow {
+		_, err := tx.Exec(ctx, `UPDATE runner_spool_cursors SET overflow_end=$4::text::numeric,overflow_hash=$5::text
+ WHERE run_id=$1::uuid AND runner_id=$2::uuid AND spool_id=$3::uuid AND overflow_end=$6::text::numeric`,
+			sp.RunID, runnerID, sp.SpoolID, strconv.FormatUint(sp.DropEnd, 10), sp.Hash, strconv.FormatUint(sp.DropEnd-sp.Count, 10))
+		return err
 	}
 	_, err := tx.Exec(ctx, `UPDATE runner_spool_cursors SET last_seq=$4::bigint,recent_hashes=recent_hashes||jsonb_build_object($5::text,$6::text)
  WHERE run_id=$1::uuid AND runner_id=$2::uuid AND spool_id=$3::uuid AND last_seq=$7::bigint`,
