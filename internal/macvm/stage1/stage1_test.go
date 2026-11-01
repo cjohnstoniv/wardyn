@@ -424,6 +424,34 @@ func TestKeyboardInteractiveSignIn(t *testing.T) {
 	}
 }
 
+// A PAM sshd asks again after a wrong password until its login grace time ends. Stage 1 answers once
+// and reports the refusal at the second challenge, not an EOF two minutes later.
+func TestKeyboardInteractiveAskedTwiceIsARefusal(t *testing.T) {
+	f := newFixture(t, provPass)
+	f.srv.KeyboardOnly, f.srv.AskAgain = true, true
+	in := f.input(false)
+	in.Password = "not-the-password"
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := f.b.Bootstrap(ctx, in)
+	if !errors.Is(err, ErrSignInRefused) || !strings.Contains(err.Error(), "does not match the one-time code") {
+		t.Fatalf("err = %v; want ErrSignInRefused naming the one-time code", err)
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Fatalf("the refusal took %s", time.Since(start))
+	}
+}
+
+// The first challenge still gets the password: a correct one signs in on a PAM sshd that asks again.
+func TestKeyboardInteractiveAnsweredOnceSignsIn(t *testing.T) {
+	f := newFixture(t, provPass)
+	f.srv.KeyboardOnly, f.srv.AskAgain = true, true
+	if _, err := f.b.Bootstrap(context.Background(), f.input(false)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Interactive dscl exits 0 when its passwd fails: the code file stays until
 // the new password has signed in, and stage 1 stops at the rotation.
 func TestD1cRotationThatFailsWithExitZeroKeepsTheCode(t *testing.T) {
