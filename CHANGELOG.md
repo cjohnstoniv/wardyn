@@ -34,9 +34,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Security
 
-- A change to a policy, a governance profile or a permission grant now reaches a live inbound caller at once. A
-  successful write under `/policies`, `/governance` or `/permissions`, or a revive that changes a run's restrictions,
-  ends the session an inbound token holds, instead of letting it run out its 30 seconds
+- A change to a policy, a governance profile or a permission grant now reaches a live inbound caller at once on the
+  replica that served the write, and on other replicas within the existing 30 seconds. A successful write under
+  `/policies`, `/governance` or `/permissions`, or a revive that changes a run's restrictions, ends the session an
+  inbound token holds on that replica, instead of letting it run out its 30 seconds
   ([#3768](https://github.com/cjohnstoniv/wardyn/issues/3768)).
 - The console's development toolchain now uses minimatch 11.0.1 (GHSA-g3hv-75wg-m249). Nothing shipped changes.
 
