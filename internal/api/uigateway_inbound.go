@@ -48,7 +48,8 @@ const (
 	// inboundResolveTTL is how long a verified token's session for one run and app is reused: the token
 	// lookup, the run and its effective apps are read once per window, so a revoked token, or one whose
 	// owner lost the run, stops calling within it. The session's own re-assert runs on top (uiReassertRelay).
-	// A policy, profile or grant write ends the window at once (dropInboundOnWrite).
+	// A policy, profile or grant write ends the window at once on the replica that served it
+	// (dropInboundOnWrite); another replica's cache lasts out its window.
 	inboundResolveTTL = 30 * time.Second
 	// inboundRatePerSec and inboundBurst bound the requests to one run's inbound apps, all callers together,
 	// and again the requests of one caller, all runs together: each admitted request is an audit row, and
