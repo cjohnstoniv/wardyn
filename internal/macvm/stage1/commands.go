@@ -54,6 +54,11 @@ type command struct {
 
 var sudoArgv = []string{"/usr/bin/sudo", "-k", "-S", "-p", "", "--"}
 
+// asAgent is argv run as the agent user, inside a root row's sudo: root needs no password for it.
+func asAgent(argv ...string) []string {
+	return append([]string{"/usr/bin/sudo", "-H", "-u", agentUser, "--"}, argv...)
+}
+
 const (
 	agentUser    = "agent"
 	kcpasswdPath = "/etc/kcpassword"
@@ -103,8 +108,8 @@ var commands = []command{
 
 	// d. never sleep, no screen lock, no automatic software updates (§3.4 step 7d).
 	{ID: "power-never-sleep", Step: "7d", Event: "setting power, screen lock and updates", Root: true, Argv: []string{"/usr/bin/pmset", "-a", "sleep", "0", "displaysleep", "0", "disksleep", "0"}},
-	{ID: "screenlock-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.screensaver", "askForPassword", "-int", "0"}},
-	{ID: "screensaver-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.screensaver", "idleTime", "-int", "0"}},
+	// The agent's own screen saver idle time: macOS reads it per user and ignores the system domain.
+	{ID: "screensaver-off", Step: "7d", Root: true, Argv: asAgent("/usr/bin/defaults", "-currentHost", "write", "com.apple.screensaver", "idleTime", "-int", "0")},
 	{ID: "updates-check-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticCheckEnabled", "-bool", "false"}},
 	{ID: "updates-download-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticDownload", "-bool", "false"}},
 	{ID: "updates-macos-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticallyInstallMacOSUpdates", "-bool", "false"}},
