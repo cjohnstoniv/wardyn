@@ -191,7 +191,7 @@ curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v<version>/in
 
 ## Set up a runner
 
-`wardyn-runnerd setup` is the one command: it registers this computer, creates the proxy bridge, installs the binary and a per-user service, and starts it. It is idempotent, so running it again is safe: an existing identity is never registered again, and the service files are rewritten and restarted.
+`wardyn-runnerd setup` is the one command: it registers this computer, creates the proxy bridge, installs the binary and a per-user service, and starts it. It is idempotent, so running it again is safe: an existing identity is never registered again, and the service files are rewritten and restarted. On a Mac, setup waits up to 10 seconds for the running LaunchAgent to stop before it starts the new one. If it still cannot start it, it says so and prints the `launchctl bootstrap` command that starts it.
 
 The service is per user, not a root service: the runner identity sits in the person's own configuration directory, where `wardyn runner claim` looks for it. A managed fleet installs the macOS `.pkg` for the whole computer ([Installing with a macOS package and MDM](operations/hybrid-laptops.md#installing-with-a-macos-package-and-mdm)), where each person registers with `wardyn-runnerd register` instead of `setup`.
 
