@@ -74,8 +74,17 @@ else
   fi
   log "starting a host-mode wardynd (logs: ${WARDYND_LOG})"
   # Ensure compose Postgres is up (run-host.sh expects 127.0.0.1:5432).
-  docker compose -f deploy/compose/docker-compose.yaml up -d postgres >/dev/null 2>&1 || true
-  [[ -d ui/dist ]] || { log "building the UI (ui/dist absent)"; (cd ui && pnpm install --frozen-lockfile >/dev/null 2>&1 && pnpm build >/dev/null 2>&1) || true; }
+  docker compose -f deploy/compose/docker-compose.yaml up -d postgres || die "compose up postgres failed"
+  # wardynd pings the database once at start and exits if it is not there; on a fresh runner the
+  # volume is initialised on first start. -h 127.0.0.1 asks over TCP, which opens only after init
+  # (the init-time server listens on the socket alone).
+  pg_ready=""
+  for _ in $(seq 1 60); do
+    if docker compose -f deploy/compose/docker-compose.yaml exec -T postgres pg_isready -h 127.0.0.1 -U wardyn -d wardyn >/dev/null 2>&1; then pg_ready=1; break; fi
+    sleep 2
+  done
+  [[ -n "${pg_ready}" ]] || { docker compose -f deploy/compose/docker-compose.yaml logs --tail 40 postgres; die "postgres did not accept connections within 120s"; }
+  [[ -d ui/dist ]] || { log "building the UI (ui/dist absent)"; (cd ui && pnpm install --frozen-lockfile && pnpm build) || log "WARNING: UI build failed (output above); wardynd starts without ui/dist"; }
   nohup ./scripts/run-host.sh >"${WARDYND_LOG}" 2>&1 &
   STARTED_WARDYND=$!
   wait_healthy "${BASE}" 30 || { tail -20 "${WARDYND_LOG}"; die "wardynd did not become healthy"; }

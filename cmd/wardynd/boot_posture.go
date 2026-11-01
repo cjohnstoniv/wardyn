@@ -613,6 +613,9 @@ func bootPostureWarnings(f *bootFlags, posture tlsPosture) []string {
 	if w := uiGatewaySharesConsoleHostWarning(*f.uiListen, *f.uiAdvertise, *f.uiOriginTemplate, *f.oidcRedirectURL, posture); w != "" {
 		out = append(out, w)
 	}
+	if w := uiGatewayUnknownSchemeWarning(*f.uiListen, *f.uiAdvertise, *f.uiOriginTemplate, posture); w != "" {
+		out = append(out, w)
+	}
 	return out
 }
 
@@ -702,6 +705,32 @@ func uiGatewaySharesConsoleHostWarning(uiListen, advertise, originTemplate, redi
 	return fmt.Sprintf("wardynd: WARDYN_UI_SANDBOX_ADVERTISE host %q is the console's own host (from WARDYN_OIDC_REDIRECT_URL) and cookies ignore ports — "+
 		"a sandboxed app's page served there can set a host-only __Host-wardyn_session for the console; "+
 		"give the UI gateway its own hostname (e.g. a wardyn-ui.<domain> name) or set WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE for per-run hosts", a.Hostname())
+}
+
+// uiGatewayUnknownSchemeWarning is #3799: the relay hands an app the origin of its own page only when the
+// Origin's scheme is the gateway's, and the gateway's scheme is read from the origin template, else the
+// advertised URL. With neither (behind TLS) or one with no scheme, an https page is not taken for the app's
+// own, and an app that checks Origin against Host, as code-server does for its editor's WebSocket, refuses
+// it. A warning rather than a refusal: an install that never sets either is working today for every app that
+// does not check, and refusing its boot would be the upgrade's cost.
+func uiGatewayUnknownSchemeWarning(uiListen, advertise, originTemplate string, posture tlsPosture) string {
+	if uiListen == "" {
+		return ""
+	}
+	base, name := originTemplate, "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE"
+	if base == "" {
+		base, name = advertise, "WARDYN_UI_SANDBOX_ADVERTISE"
+	}
+	switch {
+	case base == "" && posture.secureCookies:
+		return "wardynd: the UI-sandbox gateway's scheme is unknown — neither WARDYN_UI_SANDBOX_ADVERTISE nor WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE is set, " +
+			"so it is taken as http while the console is served over TLS, and an app that checks the Origin of its own page " +
+			"(code-server's editor WebSocket) will refuse it; set WARDYN_UI_SANDBOX_ADVERTISE to the gateway's https:// URL"
+	case base != "" && !strings.Contains(base, "://"):
+		return fmt.Sprintf("wardynd: %s %q has no scheme, so the UI-sandbox gateway's own origin is never matched and an app that checks the Origin of its own page "+
+			"(code-server's editor WebSocket) will refuse it; write it with its scheme, e.g. \"https://wardyn-ui.example.com\"", name, base)
+	}
+	return ""
 }
 
 // parseMountCeilings parses the TWO operator/MDM-set mount ceilings at boot and
