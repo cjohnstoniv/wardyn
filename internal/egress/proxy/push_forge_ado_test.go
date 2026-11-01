@@ -142,7 +142,7 @@ type adoPushRun struct {
 	auth string
 }
 
-var adoSeed = map[string]string{".github/workflows/ci.yml": "on: push\n", "lib/a.txt": "a\n", "README.md": "hello\n"}
+var adoSeed = map[string]string{".github/workflows/ci.yml": "on: push\n", ".github/workflows/other.yml": "on: push\n", "lib/a.txt": "a\n", "README.md": "hello\n"}
 
 func newADOPushRun(t *testing.T, spec types.RunPolicySpec, unattended bool) *adoPushRun {
 	t.Helper()
@@ -290,6 +290,15 @@ func TestADOPushReviewPathHoldsOnlyWhatItMatches(t *testing.T) {
 		runGit(t, r.work, "mv", "lib", ".github/workflows/lib")
 		body := r.record(t, nil)
 		r.wantHeld(t, postEntraPush(t, r.p, body), []string{adoTouches, ".github/workflows/lib", whyChanged}, adoWorkedOut)
+	})
+	// Pins the shipped behaviour, the same on GitHub: a deletion is no rule match, and
+	// the forge's own branch policy protects the file. #3928 tracks holding it, and a
+	// fix for that changes this row knowingly.
+	t.Run("deleting a file at a review path beside a sibling is forwarded", func(t *testing.T) {
+		r := newADOPushRun(t, adoReview(), true)
+		runGit(t, r.work, "rm", "-q", ".github/workflows/ci.yml")
+		r.wantPassed(t, postEntraPush(t, r.p, r.record(t, nil)))
+		r.finish(t)
 	})
 	t.Run("a forward move of the run's branch passes", func(t *testing.T) {
 		r := newADOPushRun(t, adoReview(), true)

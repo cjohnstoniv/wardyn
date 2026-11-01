@@ -1074,8 +1074,8 @@ The match is exact, so it would never fire and would silently read as enforcemen
 | | | | A body in a non-identity `Content-Encoding`, a malformed pack, a `deny_paths` list too long to evaluate, and a `deny_paths` entry the broker cannot read (one that bypassed write-time validation) land here too. |
 | A ref is set to a commit the request does not carry (for example a branch created at a commit the forge already has) | `415` | `brokered:git:push-uninspectable` | Leave the named refs out of the push, or point them at commits it carries. A complete clone (`git fetch --unshallow`) does not help, and one new commit need not fix every ref. |
 | The sidecar was busy inspecting other requests for longer than it waits | `503` | `brokered:git:push-uninspectable` | Retry the push. Inspection takes the sidecar's one inspection slot, shared with LLM request scanning, because a small compressed push can inflate to over a hundred MiB inside a sidecar capped at 256 MiB. |
-| A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked | `403` | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
-| A path matched `require_review_paths` on an **unattended** run | `403` | `brokered:git:push-held-unattended` | Take those paths out of the push, or run the task interactively. No approval is raised. |
+| A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked | `403`; on the Azure DevOps Entra lane, a push whose paths could not be worked out is instead a rejected ref whose reason git prints | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
+| A path matched `require_review_paths` on an **unattended** run | `403`; on the Azure DevOps Entra lane, a rejected ref whose reason git prints | `brokered:git:push-held-unattended` | Take those paths out of the push, or run the task interactively. No approval is raised. |
 
 
 - A refused push is **never forwarded**, and the refused request mints nothing itself — but it does not prevent a credential being issued.
@@ -1200,6 +1200,9 @@ So an entry a pattern matches is judged one of two ways:
   - A run with a task and nobody driving it (not `interactive`) has nobody to ask, so a review match is refused at once (`brokered:git:push-held-unattended`) and no approval is raised.
   - The control plane refuses such a raise as well.
   - **It cannot be approved later.** A real match on an unattended run stays refused, on every lane and on macOS VM runs too. To land it, remove those paths from the push or run the task interactively so an admin can approve it.
+- **A push that deletes a file at a review path is not held, on any forge.**
+  - These rules judge what a push introduces, so the deletion goes through.
+  - The forge's own branch policy is what protects that file.
 - **On Azure DevOps a review pattern holds only a push that touches a matching path.**
   - What the pack does not carry is compared through the Git REST API, so a new branch that touches no matching path goes through, on an unattended run too.
   - When the comparison cannot be made, the push is still held or refused. Git prints the refusal as a remote rejection. It says the paths could not be worked out on this lane, and why, rather than that the push touches them. The listed paths are what could not be cleared. The audit row is the same `brokered:git:push-held-unattended` or `brokered:git:push-held`.

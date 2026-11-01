@@ -12,4 +12,5 @@
 # docs/AZURE-DEVOPS.md 11389 adds 7 over 11382 (0.10 W7 review), measured: a cache-served resolve still writes the injected token's secret.read row, only no ado-refresh read.
 # docs/AZURE-DEVOPS.md 11456 = 11389 + 67, measured: Azure DevOps push rules read the Git REST API (#3921)
 # docs/AZURE-DEVOPS.md 11483 = 11456 + 27, measured: the unattended cut and the git-printed refusal (#3921)
-docs/AZURE-DEVOPS.md=11483 share=35
+# docs/AZURE-DEVOPS.md 11512 = 11483 + 29, measured: deletions at a review path are not held (#3921)
+docs/AZURE-DEVOPS.md=11512 share=35

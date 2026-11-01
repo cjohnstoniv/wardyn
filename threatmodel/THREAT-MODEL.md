@@ -3578,7 +3578,9 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
   - One at or above a path a deny pattern could match refuses the push.
   - Every mode git does not check out as a regular file counts.
 - **Removals are invisible.** These rules judge what a push introduces. A push
-  that deletes a denied path is not a rule match.
+  that deletes a denied path is not a rule match, and one that deletes a file at a
+  `require_review_paths` path is not held, on any forge. The forge's own branch policy
+  is what protects that file.
 - **Root-level files are always reported.**
   - The root tree is always in the pack, so every file at the repository root is named whether or not the push touched it.
   - One the pack does not carry is compared with the commit the push builds on like any other entry, so a pattern naming a root-level file refuses only a push that changes it
