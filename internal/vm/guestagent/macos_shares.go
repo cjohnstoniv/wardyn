@@ -20,11 +20,14 @@ type MacShares struct {
 	Home string
 	// UID and GID are the agent user's, who owns each folder made for a target.
 	UID, GID int
+	// Probe reads a mounted share as the agent (ShareProbe.Read); nil reads nothing (tests only).
+	Probe func(ctx context.Context, dir string) error
 }
 
 // Mount mounts share s at its target: the folders up to it are made first, as the agent's, and
 // mount(8) gets nosuid, nodev and noowners, and rdonly when asked. noowners shows every file on the
-// share as the accessing user's, since the host's owner ids mean nothing in the guest.
+// share as the accessing user's, since the host's owner ids mean nothing in the guest. Then Probe reads
+// the share as the agent, so a share that macOS would hang a run's reads on refuses the Init instead.
 func (m MacShares) Mount(ctx context.Context, s Mount) error {
 	if n, ok := strings.CutPrefix(s.Tag, "wardyn"); !ok || n == "" || strings.Trim(n, "0123456789") != "" {
 		return fmt.Errorf("share tag %q is not a Wardyn share", s.Tag)
@@ -35,8 +38,13 @@ func (m MacShares) Mount(ctx context.Context, s Mount) error {
 	if err := m.makeTarget(s.Target); err != nil {
 		return err
 	}
-	_, err := m.Run.Run(ctx, "/sbin/mount", macShareMountArgs(s)...)
-	return err
+	if _, err := m.Run.Run(ctx, "/sbin/mount", macShareMountArgs(s)...); err != nil {
+		return err
+	}
+	if m.Probe != nil {
+		return m.Probe(ctx, s.Target)
+	}
+	return nil
 }
 
 // checkMacShareTarget refuses a target that is not a clean path strictly inside home, or that is
