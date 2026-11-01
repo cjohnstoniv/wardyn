@@ -259,6 +259,8 @@ type placementDemands struct {
 	// VMFolders is a Linux VM run that carries a folder mount: its runner must share it into the
 	// guest (virtiofs), exactly as a container's bind.
 	VMFolders bool
+	// VMDrives is a Linux VM run that carries a drive: its runner must say it shares one into the guest.
+	VMDrives bool
 	// MacOSVM is machine_kind macos_vm: only a registered Mac runner whose caps offer it, and that the
 	// managed-Mac gate admits, starts one (macOSVMOffer).
 	MacOSVM bool
@@ -304,6 +306,9 @@ func (c placementCaps) unsupportedDemand(d placementDemands) *placement.Refusal 
 		if d.VMFolders && !caps.LinuxVM.Virtiofs {
 			return &placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind", Detail: remote.VMNoFolderShare}
 		}
+		if d.VMDrives && !caps.LinuxVM.Drives {
+			return &placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "drives", Detail: remote.VMNoDriveShare}
+		}
 	}
 	if !d.IdlePause {
 		return nil
@@ -335,6 +340,7 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 		p, runners = place.placement, place.eligibleRunners()
 	}
 	demands := requestDemands(req, ceiling, mounts)
+	demands.VMDrives = demands.LinuxVM && ask.MountsDrives
 	if demands.LinuxVM && p != types.PlacementLocal {
 		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMOnRemote)
 	}
@@ -399,6 +405,9 @@ type macOSVMAsk struct {
 	MemoryMiB int
 	// Mounts is how many folders the run shares into the VM.
 	Mounts int
+	// MountsDrives is that the run mounts a drive. Only a Linux VM reads it (placementDemands.VMDrives);
+	// the rest of this ask is a macOS VM's.
+	MountsDrives bool
 	// ShareDrives is the run mounts an admin or team drive whose place is a host folder, which a macOS VM
 	// takes as a shared folder; a runner without MacVMCaps.Drives is never asked. DiskDrives is the run
 	// mounts a person's disk drive or keeps its work folder, which a macOS VM attaches as a disk; a runner

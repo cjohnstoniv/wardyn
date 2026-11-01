@@ -212,10 +212,12 @@ func (d *Driver) refuseVMSpec(spec runner.SandboxSpec) error {
 	if spec.MachineKind != types.MachineLinuxVM {
 		return fmt.Errorf("docker: unknown machine kind %q", spec.MachineKind)
 	}
-	if len(spec.Drives) > 0 {
-		return errors.New("docker: a Linux VM sandbox has no drives in this release")
+	for i := range spec.Drives {
+		if drive := &spec.Drives[i]; drive.Backend != types.DriveBackendHostPath {
+			return fmt.Errorf("docker: a Linux VM sandbox takes only a drive bound to this runner, not user drive (%s) with backend %q", runner.DriveSubject(drive), drive.Backend)
+		}
 	}
-	if len(spec.Mounts) > 0 && !d.vmConfig().Virtiofs {
+	if (len(spec.Mounts) > 0 || len(spec.Drives) > 0) && !d.vmConfig().Virtiofs {
 		return errors.New(errVMNoFolderShare)
 	}
 	if spec.RecordWithin(d.cfg.Record) {
@@ -249,13 +251,19 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 			return runner.Sandbox{}, err
 		}
 	}
-	mounts, err := d.agentMounts(ctx, spec, false)
+	// A read-only drive's bind asks to be recursive. A runtime that cannot do that takes it plain: virtiofsd's
+	// --readonly and the guest's read-only mount still hold under a submount, so there is nothing to warn of.
+	mounts, err := d.agentMounts(ctx, spec, true)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
+	rro := runtimeSupportsRecursiveReadOnly(infoRes.Info, "")
 	shares := mounts[:0]
 	for _, m := range mounts {
 		if m.Target != RecordingMountTarget { // recording is refused above; its mount means nothing here
+			if !rro {
+				m.BindOptions = nil
+			}
 			shares = append(shares, m)
 		}
 	}

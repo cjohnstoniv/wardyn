@@ -239,6 +239,9 @@ type VMCaps struct {
 	// SignIns says the runner hands each VM its sign-in store and pauses its agent (pause_agent,
 	// resume_agent) (#2972). A runner without it is never asked.
 	SignIns bool `json:"sign_ins,omitempty"`
+	// Drives says the runner shares a drive bound to it into a VM, by virtiofs (#3846). A runner
+	// without it (older, or a Kubernetes one) takes no VM run that carries a drive.
+	Drives bool `json:"drives,omitempty"`
 }
 
 // MacVMCaps is what a Mac runner's macOS VM sandboxes can be given right now. The org reads it through
