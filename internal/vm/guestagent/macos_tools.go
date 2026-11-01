@@ -98,21 +98,24 @@ type DesktopPasswordResult struct {
 	Set bool `json:"desktop_password_set"`
 }
 
-// AdminCode sets MacAdminUser's password: edit-base's one-time code before its window session, and a
-// fresh value no process keeps after it. It prints redacted.
+// AdminCode changes MacAdminUser's password from Old to Code: from the password the host keeps to
+// edit-base's one-time code before its window session, and from the code to a fresh value after it.
+// macOS refuses root a change without the old password for an account holding a SecureToken, as Setup
+// Assistant's does. It prints redacted.
 type AdminCode struct {
+	Old  string `json:"old"`
 	Code string `json:"code"`
 }
 
-func (AdminCode) String() string   { return "{code:***}" }
-func (AdminCode) GoString() string { return "guestagent.AdminCode{Code:***}" }
+func (AdminCode) String() string   { return "{old:*** code:***}" }
+func (AdminCode) GoString() string { return "guestagent.AdminCode{Old:***, Code:***}" }
 
 // AdminCodeResult says only whether the password was set.
 type AdminCodeResult struct {
 	Set bool `json:"admin_code_set"`
 }
 
-// adminCodeForm is a code admin_code takes: letters and digits only, so it cannot end dscl's command line
+// adminCodeForm is a password admin_code takes, old or new: letters and digits only, so it cannot end dscl's command line
 // or start another.
 var adminCodeForm = regexp.MustCompile(`^[A-Za-z0-9]{8,64}$`)
 
@@ -188,11 +191,8 @@ type Tools struct {
 
 	// run runs an allowed argv as root; nil is runCombined (tests record).
 	run func(ctx context.Context, argv []string) ([]byte, int, error)
-	// authdb runs `security authorizationdb` with args and stdin and returns its stdout; nil is
-	// runAuthorizationDB (tests record).
-	authdb func(ctx context.Context, args []string, stdin []byte) ([]byte, error)
-	// passwd sets an account's password; nil is setPassword (tests record). sshAddr is "" in use.
-	passwd  func(ctx context.Context, user, password string) error
+	// passwd changes an account's password from old; nil is setPassword (tests record). sshAddr is "" in use.
+	passwd  func(ctx context.Context, user, old, password string) error
 	sshAddr string
 
 	// cltListed is the Command Line Tools labels this process's own `softwareupdate -l` runs printed,
@@ -314,9 +314,6 @@ func (t *Tools) handleExec(w http.ResponseWriter, r *http.Request) {
 	if run == nil {
 		run = runCombined
 	}
-	if trustSettingsForm(in.Argv) {
-		run = t.withTrustSettingsRight(run)
-	}
 	out, code, err := run(r.Context(), in.Argv)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -370,7 +367,7 @@ func (t *Tools) handleDesktopPassword(w http.ResponseWriter, r *http.Request) {
 
 func (t *Tools) handleAdminCode(w http.ResponseWriter, r *http.Request) {
 	var in AdminCode
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&in); err != nil || !adminCodeForm.MatchString(in.Code) {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&in); err != nil || !adminCodeForm.MatchString(in.Old) || !adminCodeForm.MatchString(in.Code) {
 		http.Error(w, "bad admin_code request", http.StatusBadRequest)
 		return
 	}
@@ -378,7 +375,7 @@ func (t *Tools) handleAdminCode(w http.ResponseWriter, r *http.Request) {
 	if passwd == nil {
 		passwd = setPassword
 	}
-	err := passwd(r.Context(), MacAdminUser, in.Code)
+	err := passwd(r.Context(), MacAdminUser, in.Old, in.Code)
 	if err != nil {
 		slog.Warn("guest agent: tools mode: admin code not set", "err", err)
 	}
@@ -427,12 +424,12 @@ func parseAccounts(out string) ([]GuestAccount, error) {
 	return accounts, nil
 }
 
-// setPassword sets user's password as root through dscl's own command line on stdin, so the password is
-// in no argv. dscl's interactive mode exits 0 after a failed command, so its output decides; that output
-// is never returned, as it could hold the line it read.
-func setPassword(ctx context.Context, user, password string) error {
+// setPassword changes user's password from old to password as root through dscl's own command line on stdin,
+// so neither is in an argv. dscl's interactive mode exits 0 after a failed command, so its output decides;
+// that output is never returned, as it could hold the line it read.
+func setPassword(ctx context.Context, user, old, password string) error {
 	cmd := exec.CommandContext(ctx, dsclPath, ".")
-	cmd.Stdin = strings.NewReader("passwd /Users/" + user + " " + password + "\n")
+	cmd.Stdin = strings.NewReader("passwd /Users/" + user + " " + old + " " + password + "\n")
 	out := &capped{max: maxToolsOutput}
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Run(); err != nil {
@@ -760,7 +757,8 @@ func itemPushAllowed(dest string) bool {
 //	/usr/bin/profiles status -type enrollment
 //
 // The agent does both mkdir forms itself (makeDirAll), without mkdir. The two that change the admin
-// trust settings run only inside withTrustSettingsRight.
+// trust settings run as root like the rest: macOS 26 refuses root a rewrite of the authorization rule, so a
+// trust Apple will not make without a person reads not_trusted, for a trust by hand in edit-base.
 func itemArgvAllowed(argv []string) bool {
 	if len(argv) < 2 {
 		return false
@@ -815,59 +813,6 @@ var itemForms = map[string]func(a []string) bool{
 }
 
 var sha1Hex = regexp.MustCompile(`^[0-9A-F]{40}$`)
-
-// trustSettingsRight is the authorization right `security add-trusted-cert -d` and `delete-certificate -t`
-// need for the admin trust settings: without a person to type a password, only its rule set to allow
-// lets root change them.
-const trustSettingsRight = "com.apple.trust-settings.admin"
-
-// trustSettingsForm says whether argv is an item form that changes the admin trust settings.
-func trustSettingsForm(argv []string) bool {
-	return len(argv) > 1 && argv[0] == "/usr/bin/security" && (argv[1] == "add-trusted-cert" || argv[1] == "delete-certificate") &&
-		itemArgvAllowed(argv)
-}
-
-// withTrustSettingsRight wraps run for one trust-settings form: it saves trustSettingsRight's rule, sets
-// it to allow, runs the form, and then always writes the saved rule back, even when the form or the
-// allow failed or the request was cancelled. No form sets the rule on its own, so it is never left open.
-// A rule that could not be restored is an error, logged.
-func (t *Tools) withTrustSettingsRight(run func(context.Context, []string) ([]byte, int, error)) func(context.Context, []string) ([]byte, int, error) {
-	authdb := t.authdb
-	if authdb == nil {
-		authdb = runAuthorizationDB
-	}
-	return func(ctx context.Context, argv []string) (out []byte, code int, err error) {
-		saved, err := authdb(ctx, []string{"read", trustSettingsRight}, nil)
-		if err != nil || !bytes.Contains(saved, []byte("<plist")) {
-			return nil, 0, fmt.Errorf("authorizationdb read %s: %v; nothing was changed", trustSettingsRight, err)
-		}
-		defer func() {
-			if _, rerr := authdb(context.WithoutCancel(ctx), []string{"write", trustSettingsRight}, saved); rerr != nil {
-				slog.Error("guest agent: tools mode: the trust settings right was not restored", "right", trustSettingsRight, "err", rerr)
-				out, code, err = nil, 0, fmt.Errorf("authorizationdb write %s (restore): %w", trustSettingsRight, rerr)
-			}
-		}()
-		if _, err := authdb(ctx, []string{"write", trustSettingsRight, "allow"}, nil); err != nil {
-			return nil, 0, fmt.Errorf("authorizationdb write %s allow: %w", trustSettingsRight, err)
-		}
-		return run(ctx, argv)
-	}
-}
-
-// runAuthorizationDB runs `/usr/bin/security authorizationdb args...` with stdin and returns its stdout;
-// a non-zero exit is an error with its stderr.
-func runAuthorizationDB(ctx context.Context, args []string, stdin []byte) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "/usr/bin/security", append([]string{"authorizationdb"}, args...)...)
-	cmd.Stdin = bytes.NewReader(stdin)
-	var stderr capped
-	stderr.max = 1 << 10
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.b.String()))
-	}
-	return out, nil
-}
 
 // MacAdminProfileDir is where edit-base gives wardyn-admin its own copy of each profile it staged for the
 // window, to open from the desktop session: wardyn-admin's alone (0700, its files 0600), removed by the

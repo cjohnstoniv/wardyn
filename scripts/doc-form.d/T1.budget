@@ -120,7 +120,10 @@
 # threatmodel/THREAT-MODEL.md 70925 adds 145 over 70780, measured (rc.9 Mac docs): the B14 base-edit, profile and drive lines and the drive crossing.
 # threatmodel/THREAT-MODEL.md 70934 adds 9, measured: a drive image outlives its record on a Mac no longer registered.
 # threatmodel/THREAT-MODEL.md 70957 adds 23 over 70934, measured: a runner-bound folder is checked by its runner inside --drive-root.
-threatmodel/THREAT-MODEL.md=70957
+# threatmodel/THREAT-MODEL.md 71048 adds 54 over 70994, measured: Full Disk Access for the guest agent (B14), and the screen-lock bullet says stage 1 does not turn the lock off.
+# threatmodel/THREAT-MODEL.md 71073 adds 25 over 71048, measured: a person's disk drive is a Mac OS Extended image the guest does not encrypt.
+# threatmodel/THREAT-MODEL.md 71079 adds 6 over 71073, measured: the Mac's disk encryption protects a disk drive only when FileVault is on.
+threatmodel/THREAT-MODEL.md=71079
 # 0.10 HYB-C: threatmodel/THREAT-MODEL.md 66573 adds 43 over 66530, measured: the Linux VM's virtiofs shares are the container's binds (same folders, targets, mode, no other host path).
 # threatmodel/THREAT-MODEL.md 66596 adds 23 over 66573 (0.10 HYB-C review): VM state reaches the guest only as its disk; a guest write lands as the runner's user.
 # threatmodel/THREAT-MODEL.md 65311 adds 222 over 65089 (0.10 FEAT-1MCP), measured: item (r), a local MCP server's access, secrets, egress, off switch and refusals.

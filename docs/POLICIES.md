@@ -617,6 +617,7 @@ What the check does and does not settle:
 > - It is **off by default for container runs** (today's every-port behaviour) and `dry_run` marks, without refusing, each allow it would refuse.
 > - The proxy turns it **on for every run dispatched as a desktop VM** (`vm` in its config). For such a run, every connection the desktop makes goes through Wardyn's network relay, which hands allowed ones to the proxy and drops the rest.
 > - The relay checks the TLS server name only when a connection opens with TLS. On a granted port it carries without that check plain HTTP (except on port 80), a protocol whose server speaks first, and a STARTTLS-style protocol (cleartext first, TLS later).
+> - A connection to the run's proxy itself, which the desktop's `HTTPS_PROXY` names, is carried through unchanged and checked as a container's: a `CONNECT` is decided on its host name, and the TLS server name is not checked.
 
 - An unrecognised `decision_scope` is rejected at write time, same as `first_use_approval` above — `Valid()` only accepts empty or one of the four values in the table.
 - The one place an unrecognised value can still appear is a proxy reading a decision made by a *newer* control plane.

@@ -89,6 +89,9 @@ func newMacOSVMCommand() *cobra.Command {
 	var ipsw, ipswURL, sha256 string
 	prepare := &cobra.Command{Use: "prepare", Short: "Build this Mac's macOS base image from Apple's restore image (hours; it continues in the background)", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := checkServingHelper(); err != nil {
+				return err
+			}
 			m, runnerID, err := open(cmd)
 			if err != nil {
 				return err
@@ -184,6 +187,26 @@ func serviceOrgArg() string {
 	}
 	org, _ := p.serviceOrgArg()
 	return org
+}
+
+// checkServingHelper refuses a prepare the runner this person's setup LaunchAgent runs could not finish: that
+// runner hands the prepare's stage 2 its network, and offers no macOS VM without the helper beside its own
+// binary (enableMacOSVM, no_helper). It looks where that serve looks, before anything is written or downloaded.
+// No setup agent is not refused: the package's managed agent then runs the package's runnerd, beside its helper
+// (runnerd-managed-start stays idle while a setup agent is installed).
+func checkServingHelper() error {
+	h, err := osSetupHost()
+	if err != nil {
+		return nil
+	}
+	p, err := h.paths()
+	if err != nil {
+		return nil
+	}
+	if bin := p.serviceProgram(); bin != "" {
+		return noHelperBeside(bin)
+	}
+	return nil
 }
 
 // macOSVMStatus is `macos-vm status`: its JSON (--json) and, with the unexported fields, its text. The

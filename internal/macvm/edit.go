@@ -63,6 +63,10 @@ const (
 	ErrEditSlots     EditRefusal = "Editing uses one of this Mac's 2 macOS VM slots, and both are in use. Try again when a run ends."
 )
 
+// ErrEditNoAdminPassword refuses a base that keeps no AdminPasswordFile. Only the helper checks it,
+// before anything boots.
+const ErrEditNoAdminPassword EditRefusal = "This macOS base was prepared before Wardyn kept its admin password, so edit-base cannot open it. Run `wardyn-runnerd macos-vm prepare --new-image`, then edit-base again."
+
 // An edit's recheck result (EditRecord.Recheck): passed, or why the edited copy was discarded.
 const (
 	EditRecheckPassed       = "passed"
@@ -84,7 +88,7 @@ func (e *EditDiscardedError) Error() string {
 	since := e.Since.Local().Format("2 Jan")
 	switch e.Recheck {
 	case EditRecheckDesktopOff:
-		return "The edited base was discarded: desktop control is off, because Screen Sharing was not turned on with control. Runs keep using the base from " + since + "."
+		return "The edited base was discarded: desktop control was lost: the base had it and the copy does not. Runs keep using the base from " + since + "."
 	case EditRecheckExtraAccount:
 		return "The edited base was discarded: it has an account Wardyn didn't make, " + e.Detail + ". Runs keep using the base from " + since + "."
 	case EditRecheckRemoteLogin:
@@ -97,8 +101,9 @@ func (e *EditDiscardedError) Error() string {
 // stage-2 boot's guest (stage2boot.go).
 type EditGuest interface {
 	ToolsGuest
-	// AdminCode sets the setup admin's password and says whether it was set. It is never logged.
-	AdminCode(ctx context.Context, code []byte) (set bool, err error)
+	// AdminCode changes the setup admin's password from old to code and says whether it changed. Neither is
+	// ever logged.
+	AdminCode(ctx context.Context, old, code []byte) (set bool, err error)
 	Posture(ctx context.Context) (guestagent.ToolsPosture, error)
 }
 
@@ -134,12 +139,13 @@ type EditOptions struct {
 
 // EditBase is `wardyn-macvm edit-base`: one attended session on a copy of the ready base, checked before
 // runs use it. It clones the base to the update's staging dir under the update lock (a prepare or tools
-// update holding it refuses the edit), sets a one-time code as the setup admin's password in a headless
-// boot and writes it to the setup-code file, boots the copy in a window until the guest shuts down, then
-// rechecks it in a second headless boot: the code is replaced by a value no process keeps, then the
-// control check, the accounts, Remote Login and the launcher's self-test. Only a copy that passes is swapped
-// in, by the tools update's one atomic exchange; any failure discards it, so runs keep the old base. The
-// code is in no log and its file goes when the window closes, or when the edit ends.
+// update holding it refuses the edit), changes the setup admin's password from the one the base keeps
+// (AdminPasswordFile) to a one-time code in a headless boot and writes it to the setup-code file, boots the
+// copy in a window until the guest shuts down, then rechecks it in a second headless boot: the code is
+// replaced by a fresh value the copy keeps, then the control check, the accounts, Remote Login and the
+// launcher's self-test. Only a copy that passes is swapped in, by the tools update's one atomic exchange,
+// with the copy's AdminPasswordFile; any failure discards it, so runs keep the old base. The code is in no
+// log and its file goes when the window closes, or when the edit ends.
 func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 	if o.Engine == nil || o.Guest == nil || o.FirstBoot == nil || o.PrepNet == nil || o.Layout.Root == "" {
 		return Manifest{}, errors.New("macvm: an edit needs an engine, its boots, a prep network and a root")
@@ -153,6 +159,11 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 	base := o.Layout.BaseDir(o.Slot)
 	if _, err := ReadyBase(base); err != nil {
 		return Manifest{}, ErrEditNoBase
+	}
+	pw, err := readAdminPassword(base, AdminPasswordFile)
+	clear(pw)
+	if err != nil {
+		return Manifest{}, ErrEditNoAdminPassword
 	}
 	// One try at the update lock: a prepare or a tools update holds it for its whole run.
 	try, cancel := context.WithCancel(ctx)
@@ -176,7 +187,7 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 		}
 	}
 	fmt.Fprintln(o.Out, EditStartLine)
-	id, err := cloneRun(o.Engine, base, staging, IdentityTravel)
+	id, err := cloneStaging(o.Engine, base, staging)
 	if err != nil {
 		return m, err
 	}
@@ -271,21 +282,19 @@ func (o *EditOptions) guest(ctx context.Context, spec MachineSpec, f func(EditGu
 	return err
 }
 
-// setAdminCode sets code as the setup admin's password; a guest that did not take it fails.
-func setAdminCode(ctx context.Context, g EditGuest, code []byte) error {
-	set, err := g.AdminCode(ctx, code)
-	if err == nil && !set {
-		err = errors.New("the guest did not take it")
-	}
-	if err != nil {
+// setAdminCode changes the setup admin's password to code from the one staging keeps (rotateAdmin), so
+// staging then keeps code; a guest that did not take it fails.
+func setAdminCode(ctx context.Context, g EditGuest, staging string, code []byte) error {
+	if err := rotateAdmin(ctx, g, staging, code); err != nil {
 		return fmt.Errorf("macvm: the setup admin's one-time code: %w", err)
 	}
 	return nil
 }
 
-// mintCode sets a fresh one-time code in a headless boot, offers the waiting profiles there
-// (offerProfiles, from staging's tools.json) and, once the boot has stopped, writes the code to the
-// setup-code file (0600), which only the person at this Mac reads. It returns wardyn-admin's copies' paths.
+// mintCode changes the setup admin's password to a fresh one-time code in a headless boot, which staging's
+// AdminPasswordFile then holds, offers the waiting profiles there (offerProfiles, from staging's tools.json)
+// and, once the boot has stopped, writes the code to the setup-code file (0600), which only the person at
+// this Mac reads. It returns wardyn-admin's copies' paths.
 func (o *EditOptions) mintCode(ctx context.Context, spec MachineSpec, path, staging string) (offered []string, err error) {
 	code, err := randomCode(8)
 	if err != nil {
@@ -293,7 +302,7 @@ func (o *EditOptions) mintCode(ctx context.Context, spec MachineSpec, path, stag
 	}
 	defer clear(code)
 	err = o.guest(ctx, spec, func(g EditGuest) error {
-		if err := setAdminCode(ctx, g, code); err != nil {
+		if err := setAdminCode(ctx, g, staging, code); err != nil {
 			return err
 		}
 		offered, err = offerProfiles(ctx, g, staging, o.Items, o.Log)
@@ -366,11 +375,12 @@ func (o *EditOptions) window(ctx context.Context, spec MachineSpec) error {
 }
 
 // recheck boots the edited copy headless: it replaces the one-time code first, whatever follows, then
-// checks desktop control, the accounts, Remote Login and the launcher's self-test, in that order. The
-// first that fails is an *EditDiscardedError. Right after the code it removes the profiles' copies
+// checks that desktop control the base had is kept, then the accounts, Remote Login and the launcher's
+// self-test, in that order. The first that fails is an *EditDiscardedError. Right after the code it removes the profiles' copies
 // (removeProfiles: copied, and staged), and after Remote Login it reads the items back into staging's
-// tools.json (ReadBackItems), a failure of either discarding the copy with no line of its own. It returns
-// the desktop mode.
+// tools.json (ReadBackItems), a failure of either discarding the copy with no line of its own. The reset is
+// what staging's AdminPasswordFile holds after it, and what a passing copy's swap carries into the base. It
+// returns the desktop mode.
 func (o *EditOptions) recheck(ctx context.Context, spec MachineSpec, m Manifest, staging string, copied bool, staged []string) (desktop string, err error) {
 	err = o.guest(ctx, spec, func(g EditGuest) error {
 		reset, err := randomCode(24)
@@ -378,7 +388,7 @@ func (o *EditOptions) recheck(ctx context.Context, spec MachineSpec, m Manifest,
 			return err
 		}
 		defer clear(reset)
-		if err := setAdminCode(ctx, g, reset); err != nil {
+		if err := setAdminCode(ctx, g, staging, reset); err != nil {
 			return err
 		}
 		if err := removeProfiles(ctx, g, copied, staged); err != nil {
@@ -391,7 +401,8 @@ func (o *EditOptions) recheck(ctx context.Context, spec MachineSpec, m Manifest,
 		if desktop, err = controlCheck(ctx, g, probe); err != nil {
 			return err
 		}
-		if desktop != DesktopControl {
+		// An edit must not lose control the base had; a base that never had it keeps its mode.
+		if m.Desktop == DesktopControl && desktop != DesktopControl {
 			return &EditDiscardedError{Recheck: EditRecheckDesktopOff}
 		}
 		p, err := g.Posture(ctx)

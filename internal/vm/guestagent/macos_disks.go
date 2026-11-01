@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -33,11 +34,14 @@ type MacDisks struct {
 	Wait time.Duration
 }
 
-// The guest's block devices are listed by ioreg; a disk drive's identifier (the VZ block device
-// identifier) is its "Serial Number" there, and its whole disk is the first "BSD Name" under it.
+// The guest's block devices are listed by ioreg: each one's whole disk is the first "BSD Name" under
+// it and its length the first "Size". A macOS guest shows no trace of the VZ block device identifier,
+// and every block device sits at the same registry location, so a disk drive is the one disk that is
+// not the boot disk and has the drive's size. The boot disk is the APFS physical store of /.
 var (
-	macDiskSerialRe = regexp.MustCompile(`"Serial Number" ?= ?"([^"]*)"`)
 	macDiskBSDRe    = regexp.MustCompile(`"BSD Name" ?= ?"(disk[0-9]+)"`)
+	macDiskSizeRe   = regexp.MustCompile(`"Size" ?= ?([0-9]+)`)
+	macDiskBootRe   = regexp.MustCompile(`<key>APFSPhysicalStore</key>\s*<string>(disk[0-9]+)s[0-9]+</string>`)
 	macDiskVolumeRe = regexp.MustCompile(`(?m)^\s*Device Identifier:\s*(disk[0-9]+s[0-9]+)\s*$`)
 	macDiskIDRe     = regexp.MustCompile(`^wardyn-disk[0-9]+$`)
 	macDiskLabelRe  = regexp.MustCompile(`^[A-Za-z0-9-]{1,32}$`)
@@ -47,7 +51,7 @@ var (
 const macDiskVolumeReads = 10
 
 // Attach mounts disk d at its target. A disk that holds nothing yet (a new drive's first run) is
-// given an APFS volume named d.Label first; a read-only one never is. The volume macOS mounted under
+// given a Mac OS Extended volume named d.Label first; a read-only one never is. The volume macOS mounted under
 // /Volumes is unmounted and mounted again at the target, nosuid and nodev, read-only when asked, with
 // its root the agent's when writable.
 func (m MacDisks) Attach(ctx context.Context, d Disk) error {
@@ -57,7 +61,7 @@ func (m MacDisks) Attach(ctx context.Context, d Disk) error {
 	if err := checkMacShareTarget(m.Home, d.Target); err != nil {
 		return err
 	}
-	dev, err := m.device(ctx, d.ID)
+	dev, err := m.device(ctx, d)
 	if err != nil {
 		return err
 	}
@@ -69,7 +73,7 @@ func (m MacDisks) Attach(ctx context.Context, d Disk) error {
 		if d.ReadOnly {
 			return fmt.Errorf("disk %s has no volume yet, and a read-only drive is never formatted", d.ID)
 		}
-		if _, err := m.Run.Run(ctx, "/usr/sbin/diskutil", "eraseDisk", "APFS", d.Label, "GPT", dev); err != nil {
+		if _, err := m.Run.Run(ctx, "/usr/sbin/diskutil", "eraseDisk", "JHFS+", d.Label, "GPT", dev); err != nil {
 			return fmt.Errorf("disk %s: format: %w", d.ID, err)
 		}
 	}
@@ -101,22 +105,45 @@ func macDiskMountArgs(d Disk, vol string) []string {
 	return append(args, "-mountOptions", "nosuid,nodev", "-mountPoint", d.Target, vol)
 }
 
-// device is the whole disk (diskN) whose block device identifier is id.
-func (m MacDisks) device(ctx context.Context, id string) (string, error) {
+// device is the whole disk (diskN) of disk drive d: the one block device that is not the boot disk
+// and is d.SizeBytes long. Two such disks are refused rather than told apart by a guess.
+func (m MacDisks) device(ctx context.Context, d Disk) (string, error) {
 	out, err := m.Run.Run(ctx, "/usr/sbin/ioreg", "-r", "-c", "IOBlockStorageDevice", "-l", "-w", "0")
 	if err != nil {
-		return "", fmt.Errorf("disk %s: list the block devices: %w", id, err)
+		return "", fmt.Errorf("disk %s: list the block devices: %w", d.ID, err)
 	}
+	info, err := m.Run.Run(ctx, "/usr/sbin/diskutil", "info", "-plist", "/")
+	if err != nil {
+		return "", fmt.Errorf("disk %s: find the boot disk: %w", d.ID, err)
+	}
+	boot := macDiskBootRe.FindSubmatch(info)
+	if boot == nil {
+		return "", fmt.Errorf("disk %s: find the boot disk: no APFS physical store for /", d.ID)
+	}
+	if d.SizeBytes <= 0 {
+		return "", fmt.Errorf("disk %s is not attached to this VM: the runner sent no size to find it by", d.ID)
+	}
+	var found, seen []string
 	// With -r each device's subtree starts at a "+-o" line in the first column.
-	for _, dev := range strings.Split("\n"+string(out), "\n+-o ") {
-		if s := macDiskSerialRe.FindStringSubmatch(dev); s == nil || s[1] != id {
+	for _, dev := range strings.Split("\n"+string(out), "\n+-o ")[1:] {
+		b, n := macDiskBSDRe.FindStringSubmatch(dev), macDiskSizeRe.FindStringSubmatch(dev)
+		if b == nil || n == nil || b[1] == string(boot[1]) {
 			continue
 		}
-		if b := macDiskBSDRe.FindStringSubmatch(dev); b != nil {
-			return b[1], nil
+		seen = append(seen, b[1]+" "+n[1])
+		if n[1] == strconv.FormatInt(d.SizeBytes, 10) {
+			found = append(found, b[1])
 		}
 	}
-	return "", fmt.Errorf("disk %s is not attached to this VM", id)
+	switch len(found) {
+	case 0:
+		return "", fmt.Errorf("disk %s is not attached to this VM: no disk of %d bytes beside the boot disk (attached: %s)",
+			d.ID, d.SizeBytes, cmp.Or(strings.Join(seen, ", "), "none"))
+	case 1:
+		return found[0], nil
+	}
+	return "", fmt.Errorf("disk %s: %d disks of its size are attached to this VM, and a run cannot tell them apart; "+
+		"a macOS VM run attaches one disk drive, and a kept work folder counts as one", d.ID, len(found))
 }
 
 // blank reports whether the disk's first 4 KiB are all zero: an image the runner just made, which

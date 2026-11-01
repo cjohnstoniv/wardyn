@@ -165,6 +165,9 @@ func runSetup(cmd *cobra.Command, h setupHost, o setupOptions) error {
 	if err := h.installBinary(cmd.Context(), plan.paths.installed, !plan.noService); err != nil {
 		return err
 	}
+	if err := h.installHelpers(plan.paths.installed); err != nil {
+		return err
+	}
 	if err := h.seedCLIProfile(plan.paths, plan.org, out); err != nil {
 		return err
 	}

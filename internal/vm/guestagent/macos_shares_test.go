@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -32,6 +33,30 @@ func TestMacSharesMountsWithItsOptionsAndMakesTheTarget(t *testing.T) {
 	}
 	if fi, err := os.Stat(target); err != nil || !fi.IsDir() {
 		t.Fatalf("target not made: %v", err)
+	}
+}
+
+func TestMacSharesProbesEachShareAfterItsMount(t *testing.T) {
+	home := t.TempDir()
+	r := &fakeRunner{}
+	var probed []string
+	m := MacShares{Run: r, Home: home, UID: os.Getuid(), GID: os.Getgid(), Probe: func(_ context.Context, dir string) error {
+		if len(r.calls) != len(probed)+1 {
+			t.Errorf("probed %s before its mount", dir)
+		}
+		probed = append(probed, dir)
+		return nil
+	}}
+	target := filepath.Join(home, "work")
+	if err := m.Mount(context.Background(), Mount{Tag: "wardyn0", Target: target}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(probed, []string{target}) {
+		t.Fatalf("probed %q, want the target once", probed)
+	}
+	m.Probe = func(context.Context, string) error { return errors.New("no answer in 10s") }
+	if err := m.Mount(context.Background(), Mount{Tag: "wardyn1", Target: filepath.Join(home, "out")}); err == nil || !strings.Contains(err.Error(), "no answer") {
+		t.Fatalf("a failed probe: err = %v, want its error", err)
 	}
 }
 

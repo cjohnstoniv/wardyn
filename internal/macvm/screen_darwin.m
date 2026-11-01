@@ -81,6 +81,8 @@ static NSTitlebarAccessoryViewController *wardynScreenAccessory(CGFloat width, N
 	[box addSubview:label];
 	NSTitlebarAccessoryViewController *a = [[NSTitlebarAccessoryViewController alloc] init];
 	a.layoutAttribute = NSLayoutAttributeBottom;
+	// Else the controller resizes the strip to one title-bar line when given the view (macOS 26: 36 pt, one step).
+	a.automaticallyAdjustsSize = NO;
 	a.view = box;
 	return a;
 }

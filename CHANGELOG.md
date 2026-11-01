@@ -20,10 +20,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   wins over all three. `wardyn-runnerd doctor` prints the roots in effect and where they came from. See
   [Drive roots](docs/operations/hybrid-laptops.md#drive-roots-on-a-laptop-runner).
 - `wardyn-runnerd macos-vm edit-base` boots a copy of a Mac's macOS base for one attended session, then checks it
-  before runs use it: desktop control, accounts, Remote Login and the launcher's self-test. A copy that fails is
-  discarded and runs keep the old base. The runner reports when Standard was last edited, and each run records that
-  time, whichever base it uses. See [Editing a base](docs/operations/macos-vms.md#editing-a-base). Built and
-  unit-tested; not yet run on a real Mac.
+  before runs use it: desktop control (a base that had it must keep it), accounts, Remote Login and the launcher's
+  self-test. A copy that fails is discarded and runs keep the old base. The runner reports when Standard was last
+  edited, and each run records that time, whichever base it uses. A base now keeps its setup account's password on the
+  Mac, readable by the Mac's user only, because macOS will not let root change it without the old one. A base prepared
+  before this release cannot be edited until `wardyn-runnerd macos-vm prepare --new-image`
+  ([#3881](https://github.com/cjohnstoniv/wardyn/issues/3881)). See
+  [Editing a base](docs/operations/macos-vms.md#editing-a-base). Built and unit-tested; not yet run on a real Mac.
 - A Mac can hold more than one macOS base, each derived from Standard with its own install list, and a run picks one
   with `macos_base`. A derived base's list may not carry a configuration profile; profiles belong to Standard, which
   every other base is derived from. A governance profile's `limits.allowed_macos_bases` limits which a team may pick.
@@ -50,8 +53,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - macOS VMs: configuration profiles in the install list are staged in the base, approved once in `edit-base`, and read
   back as installed. Built and unit-tested; not yet run on a real Mac.
 - macOS VMs: an organisation CA in the install list is trusted in the base for SSL only, then verified. A CA macOS
-  will not trust without a person reads `not_trusted`; trust it by hand in `edit-base`. Built and unit-tested; not yet
-  run on a real Mac.
+  will not trust without a person reads `not_trusted`; trust it by hand in `edit-base`. On macOS 26 expect Apple to
+  ask a person to approve the trust: the CA then reads `not_trusted` and preparing goes on
+  ([#3878](https://github.com/cjohnstoniv/wardyn/issues/3878)). On macOS 26, expect removing or rotating a CA to stop
+  the tools update; to drop or replace a CA, change the list and run `wardyn-runnerd macos-vm prepare --new-image`.
+  Built and unit-tested; not yet run on a real Mac.
 - macOS VMs: a package in the install list may take secret files, such as an EDR licence. A file's value is never in a
   command line, a log, `tools.json` or the caps, and the file is removed after the install. Built and unit-tested; not
   yet run on a real Mac.
@@ -98,9 +104,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A macOS VM run can mount a person's own disk drive, a disk image kept on one of their Macs (`POST /me/drives` with
   `runner_id`), and keep its work folder as one. Only macOS VM runs on that Mac can use it, and deleting the drive
   deletes the image there, at once or when the Mac reconnects. See [Drives](docs/operations/macos-vms.md#drives).
-  Built and unit-tested; not yet run on a real Mac.
 - A disk drive is in one macOS VM run at a time: a second run on the Mac that asks for it while another holds it is
   refused when that run starts, not at Review. Built and unit-tested; not yet run on a real Mac.
+- A disk drive is found in the guest by its size, apart from the boot disk. A macOS VM run attaches one disk drive, and
+  a kept work folder counts as one: a person's disk drives all have one size, so a second is refused when the run
+  starts.
+- A disk drive is formatted Mac OS Extended (journaled), not APFS: an APFS volume made in one macOS VM run was not
+  mounted by the next run's VM, so the drive kept nothing between runs.
 - A macOS VM run is also refused at create and Review when a second harness has its own starting prompt. It is refused
   too when a tool rule, tool approvals, autonomy level L1 or the policy's inner walls would hold a tool call for
   approval. The launcher still refuses the same shapes as a backstop. Built and unit-tested; not yet run on a real Mac.
@@ -113,7 +123,21 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- `wardyn drive set` now keeps a drive's second place (`alt_backend`, `alt_host_root`, `alt_runner_id`). Before, it
+  dropped it, and re-applying a document cleared one set in the console
+  ([#3894](https://github.com/cjohnstoniv/wardyn/issues/3894)).
+- Re-running `wardyn-runnerd setup` on a Mac whose runner is running no longer fails with `launchctl bootstrap` exit 5
+  and leaves the runner stopped: setup waits for the old LaunchAgent to unload, and on a failure prints the command
+  that starts it ([#3892](https://github.com/cjohnstoniv/wardyn/issues/3892)).
+- The macOS VM setup window, and the edit-base window, show all three of their steps under the title. Before, only
+  the first step showed.
 - A process inside a macOS VM could pose as Wardyn's guest agent.
+- A run in a macOS VM no longer hangs on its first read of a shared folder. macOS asks a privacy question for
+  each network volume, and nobody can answer it inside a run, so the guest agent needs Full Disk Access in
+  the base: approve `/usr/local/libexec/wardyn-guest-agent` by hand in `edit-base`. Without it, a run with a
+  shared folder now stops before it starts, within 10 seconds, and names that fix
+  ([#3889](https://github.com/cjohnstoniv/wardyn/issues/3889)). See
+  [Folders](docs/operations/macos-vms.md#folders). Built and unit-tested; not yet run on a real Mac.
 - Installing a macOS base's file items no longer follows a symbolic link, or passes through a folder others can write
   to, on the way to an item's destination.
 - The error body of a `capability_feature` refusal now carries `feature`, the feature it names (such as `inbound` or
@@ -152,8 +176,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   cap the relay closes idle pooled connections and tries again. It used to answer a `503` at once, for up to 90
   seconds (#3507).
 - A macOS VM's plain-HTTP relay refuses CONNECT and drops the relay's own flow and stage headers a guest sends, so a
-  guest can no longer raise approval asks under a flow it did not open. Built and unit-tested; not yet run on a real
-  Mac.
+  guest can no longer raise approval asks under a flow it did not open. A desktop VM's connection to its own proxy,
+  the one its `HTTPS_PROXY` names, now reaches the proxy unchanged, so tools that honour the variable, and the run's
+  repo clones, work ([#3884](https://github.com/cjohnstoniv/wardyn/issues/3884)). The proxy decides what is sent on it
+  as for a container; the relay's own requests use a proxy port of their own, which the guest cannot open. Built and
+  unit-tested; not yet run on a real Mac.
 - An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
   edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
   terminal. They used to stay open until they closed or reached their time limit (#3398).
@@ -174,8 +201,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run's container `CONNECT` tunnels are now capped at 1,024 open at once, the bound desktop VM tunnels already have.
   The next one is refused with a `503`, `Retry-After`, `X-Wardyn-Host` and `X-Wardyn-Egress-Reason:
   builtin:tunnel-limit`, and a `builtin:tunnel-limit` deny row; it is admitted once a tunnel closes. Before, a process
-  could hold any number of tunnels open (#3698). The person's sign-in tunnels count too. A desktop VM's tunnels count
-  only at its network relay, so a VM at its own bound still leaves room for the person to sign in.
+  could hold any number of tunnels open (#3698). The person's sign-in tunnels count too. A desktop VM's tunnels through
+  its network relay count only there, so a VM at its own bound still leaves room for the person to sign in; tunnels
+  the guest opens through its `HTTPS_PROXY` count at the proxy too, as a container's do.
 - With `WARDYN_FILE_SECRET_PLACEHOLDERS` on, a file named by two `file_secret` grants now holds the placeholder of the
   grant that delivered it. A later grant's placeholder replaced it, so requests to the delivering grant's host lost
   their credential.
@@ -333,6 +361,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   (`workspace_source_runner_unavailable`). Previously such a folder was refused when the workspace was saved, and no
   workspace folder could run on a person's own runner (`placement_local_path`).
 
+- On a Mac set up with `wardyn-runnerd setup`, the runner now has its macOS VM helper and guest agent beside it, so
+  it offers macOS VMs and can prepare a base. Before, it served with macOS VMs off (`no_helper`), and a prepare failed
+  at its second stage after the setup by hand. `prepare` now refuses at once when the serving runner has no helper.
+
 ### Security
 
 - `WARDYN_USER_WRITABLE_DENY` now matches a member's writable folder in any letter case, so an entry naming `.ssh`
@@ -343,8 +375,36 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   failing kept it open about a minute. The refusal's audit row is now written after the close, so a slow audit write
   no longer delays it.
 
+### Known issues
+
+- On a Mac runner using Docker Desktop, a macOS VM slot can stay busy for a few minutes after a run if Docker Desktop
+  started during that run. It frees when Docker Desktop goes idle; quitting Docker Desktop with no runs going frees it at
+  once ([#3871](https://github.com/cjohnstoniv/wardyn/issues/3871)).
+- If the macOS VM setup is given the wrong one-time code, preparing stops after about two minutes with `handshake failed:
+  EOF` instead of saying the code was wrong. Each prepare makes a new code: use the one from that prepare's window
+  ([#3874](https://github.com/cjohnstoniv/wardyn/issues/3874)).
+- A macOS VM run's desktop shows the lock screen. Stage 1 turns the screen saver off for the base's machine identity,
+  and each run starts with a new one, so the setting does not reach the run
+  ([#3890](https://github.com/cjohnstoniv/wardyn/issues/3890)).
+- On a macOS 26 base, a macOS VM run's desktop is view only: a person can watch it but not act in it
+  ([#3901](https://github.com/cjohnstoniv/wardyn/issues/3901)).
+- A macOS VM run refused for its size when the cap comes from the Default governance unit says only the minimum it
+  needs, not which limit applied. Assign the person a governance profile that allows at least the CPUs and memory the
+  refusal names ([#3885](https://github.com/cjohnstoniv/wardyn/issues/3885)).
+- Each macOS VM run writes a second `run.complete` audit row with outcome `failure` and a teardown deadline error,
+  about 30 seconds after the real one. The run's state and exit code are right
+  ([#3886](https://github.com/cjohnstoniv/wardyn/issues/3886)).
+- A macOS VM run attaches one disk drive; a second one, or a drive plus a kept work folder, is refused when the run
+  starts, not at create; the refused run still creates its kept work folder drive, which can be deleted
+  ([#3897](https://github.com/cjohnstoniv/wardyn/issues/3897),
+  [#3900](https://github.com/cjohnstoniv/wardyn/issues/3900)).
+- Wardyn's macOS runner package is not yet signed with a Developer ID, so each upgrade removes the guest agent's Full
+  Disk Access: grant it again in `edit-base` before runs that share folders.
+
 ### Before you upgrade
 
+- Macs already set up with `wardyn-runnerd setup` must run setup again after installing this package, so the runner
+  gets its macOS VM helper beside it. `wardyn runner upgrade` alone does not do this.
 - macOS bases prepared on 0.10.0-rc.8 or an earlier release candidate must be prepared again: run
   `wardyn-runnerd macos-vm prepare` on each Mac. Until then the Mac's runner reports its base as needing an update
   and offers no macOS VMs.

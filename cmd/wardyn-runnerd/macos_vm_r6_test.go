@@ -98,6 +98,56 @@ func TestSetupRerunPrintsPrepareWithKeepIPSW(t *testing.T) {
 	}
 }
 
+// #3870: setup's prepare is refused with the no-helper words, before the VM directory is made, when no helper is
+// beside the runner setup installed.
+func TestSetupPrepareRefusesWithNoHelperBesideTheInstalledRunner(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	cmd.SetContext(context.Background())
+	var plan setupPlan
+	plan.paths.installed = filepath.Join(t.TempDir(), "wardyn-runnerd")
+	prepareMacOSVMBase(cmd, plan, &types.RunnerLimits{PerRun: types.RunnerAmounts{CPUMillis: 4000, MemoryMiB: 8192}})
+	if !strings.Contains(out.String(), macOSVMNoHelper) {
+		t.Fatalf("no refusal with the no-helper words: %q", out.String())
+	}
+	root, err := macvm.DefaultRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(root); err == nil {
+		t.Fatalf("the refused prepare made %s", root)
+	}
+}
+
+// #3870: prepare looks for the serving runner's helper where that runner's serve does: beside its binary,
+// symlinks resolved.
+func TestNoHelperBesideLooksWhereServeLooks(t *testing.T) {
+	pkg, link := t.TempDir(), t.TempDir()
+	bin := filepath.Join(pkg, "wardyn-runnerd")
+	if err := os.WriteFile(bin, []byte("runnerd"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	onPath := filepath.Join(link, "wardyn-runnerd")
+	if err := os.Symlink(bin, onPath); err != nil {
+		t.Fatal(err)
+	}
+	for _, exe := range []string{bin, onPath} {
+		if err := noHelperBeside(exe); err == nil || !strings.Contains(err.Error(), macOSVMNoHelper) || !strings.Contains(err.Error(), "wardyn-runnerd setup") {
+			t.Fatalf("%s with no helper: %v", exe, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "wardyn-macvm"), []byte("helper"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, exe := range []string{bin, onPath} {
+		if err := noHelperBeside(exe); err != nil {
+			t.Fatalf("%s with its helper: %v", exe, err)
+		}
+	}
+}
+
 // Seam audit X4: every phase the helper's prepare reports (internal/macvm's Phase constants, read from
 // its source) is in prepareOrder, but ready, which ends it; and progress never falls back through
 // stage 2.

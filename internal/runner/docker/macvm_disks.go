@@ -79,12 +79,13 @@ func (d *Driver) macDiskDrives(drives []types.DriveMount) ([]macvm.Disk, []guest
 		unlock()
 		id := macvm.DiskID(i)
 		disks = append(disks, macvm.Disk{ID: id, Path: img, ReadOnly: drive.ReadOnly, SizeBytes: int64(drive.SizeMiB) << 20})
-		guest = append(guest, guestagent.Disk{ID: id, Label: macDiskLabel(drive.DriveID.String()), Target: target, ReadOnly: drive.ReadOnly})
+		guest = append(guest, guestagent.Disk{ID: id, Label: macDiskLabel(drive.DriveID.String()), Target: target, ReadOnly: drive.ReadOnly,
+			SizeBytes: int64(drive.SizeMiB) << 20})
 	}
 	return disks, guest, nil
 }
 
-// macDiskLabel is the name of a disk drive's APFS volume: the same on every run, and different for every
+// macDiskLabel is the name of a disk drive's volume: the same on every run, and different for every
 // drive, since macOS mounts a volume at /Volumes/<name> before the guest agent moves it.
 func macDiskLabel(driveID string) string { return "Wardyn-" + driveID[:8] }
 
