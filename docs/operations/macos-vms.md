@@ -189,6 +189,7 @@
 
 - **The recheck.** The copy boots once more with no window. First the code is replaced with a fresh random password, which the copy keeps for the next edit, and the code file is deleted.
   - Then, in order: the control check, the accounts, Remote Login, and the launcher's self-test for a command and for each harness the base offers.
+    - The control check discards the copy only when the base had desktop control and the copy lost it. A view-only base stays view only after an edit.
   - Only a copy that passes is swapped in, by the same atomic exchange as a tools update. A crash at any point leaves the old base ready.
   - A failure discards the copy and says which check failed. Runs keep using the base from its last date.
   - Keep `wardyn-admin`'s password as the code during the session. If you change it, the recheck cannot replace it and discards the copy, saying the guest did not take the one-time code.

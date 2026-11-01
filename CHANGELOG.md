@@ -20,7 +20,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   wins over all three. `wardyn-runnerd doctor` prints the roots in effect and where they came from. See
   [Drive roots](docs/operations/hybrid-laptops.md#drive-roots-on-a-laptop-runner).
 - `wardyn-runnerd macos-vm edit-base` boots a copy of a Mac's macOS base for one attended session, then checks it
-  before runs use it: desktop control, accounts, Remote Login and the launcher's self-test. A copy that fails is
+  before runs use it: desktop control (a base that had it must keep it), accounts, Remote Login and the launcher's self-test. A copy that fails is
   discarded and runs keep the old base. The runner reports when Standard was last edited, and each run records that
   time, whichever base it uses. A base now keeps its setup account's password on the Mac, readable by the Mac's user
   only, because macOS will not let root change it without the old one. A base prepared before this release cannot be
