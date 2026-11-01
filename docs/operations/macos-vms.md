@@ -17,6 +17,7 @@
 | The agent | The Wardyn guest agent in the guest serves terminals and starts the run through the launcher, `/usr/local/bin/agent-run` ([What starts in a guest](#what-starts-in-a-guest)). It dials out to the runner over a virtual socket; nothing connects in |
 | Tools | Apple's Command Line Tools (git, clang, python3) and the pinned harness CLIs, installed once into the base. A Mac offers only the harnesses its base can run |
 | Network | One virtual NIC, wired to the run's own network relay and proxy in Docker. The guest has no other way out |
+| Proxy variables | `HTTPS_PROXY`, `HTTP_PROXY` and `WARDYN_PROXY_URL` name the run's proxy. The relay carries a connection to the proxy itself unchanged, and the proxy checks what is sent on it as it checks a container's |
 | Open connections | The relay holds at most 1,024 per run on granted ports other than 80. One past that is refused and reported as `tunnel-limit`; the cap does not evict existing connections; lower process or container resource limits can bind first |
 | Desktop | The guest's own Screen Sharing, reached only through the runner and the organisation's gateway. The clipboard rules apply as for a Linux VM desktop. The desktop is not recorded in this release |
 | Confinement | The VM boundary, which the runner treats as the `CC3` family. The run's recorded `confinement_class` stays the one it asked for |

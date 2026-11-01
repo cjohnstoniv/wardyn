@@ -156,8 +156,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   cap the relay closes idle pooled connections and tries again. It used to answer a `503` at once, for up to 90
   seconds (#3507).
 - A macOS VM's plain-HTTP relay refuses CONNECT and drops the relay's own flow and stage headers a guest sends, so a
-  guest can no longer raise approval asks under a flow it did not open. Built and unit-tested; not yet run on a real
-  Mac.
+  guest can no longer raise approval asks under a flow it did not open. A desktop VM's connection to its own proxy,
+  the one its `HTTPS_PROXY` names, now reaches the proxy unchanged, so tools that honour the variable, and the run's
+  repo clones, work ([#3884](https://github.com/cjohnstoniv/wardyn/issues/3884)). The proxy decides what is sent on it
+  as for a container; the relay's own requests use a proxy port of their own, which the guest cannot open. Built and
+  unit-tested; not yet run on a real Mac.
 - An open UI app, desktop or terminal session now ends at its next re-check once the run's governance profile is
   edited to refuse a new one: `deny_ui_apps` ends an app or desktop session, and `deny_interactive` a desktop or a
   terminal. They used to stay open until they closed or reached their time limit (#3398).
@@ -178,8 +181,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run's container `CONNECT` tunnels are now capped at 1,024 open at once, the bound desktop VM tunnels already have.
   The next one is refused with a `503`, `Retry-After`, `X-Wardyn-Host` and `X-Wardyn-Egress-Reason:
   builtin:tunnel-limit`, and a `builtin:tunnel-limit` deny row; it is admitted once a tunnel closes. Before, a process
-  could hold any number of tunnels open (#3698). The person's sign-in tunnels count too. A desktop VM's tunnels count
-  only at its network relay, so a VM at its own bound still leaves room for the person to sign in.
+  could hold any number of tunnels open (#3698). The person's sign-in tunnels count too. A desktop VM's tunnels through
+  its network relay count only there, so a VM at its own bound still leaves room for the person to sign in; tunnels
+  the guest opens through its `HTTPS_PROXY` count at the proxy too, as a container's do.
 - With `WARDYN_FILE_SECRET_PLACEHOLDERS` on, a file named by two `file_secret` grants now holds the placeholder of the
   grant that delivered it. A later grant's placeholder replaced it, so requests to the delivering grant's host lost
   their credential.
