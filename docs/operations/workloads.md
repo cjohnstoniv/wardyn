@@ -99,10 +99,10 @@ intent:
 | A new name | `created` (`201`) | A run starts |
 | The same intent, `run_in` and `restart_key` | `unchanged` | Nothing starts. A changed `description` is stored; no `workload.apply` audit row is written |
 | A changed intent, `run_in` or `restart_key` | `updated` | The new run starts, then the old run is killed with `run.kill` reason `workload_replaced`. The audit row is `workload.replace` |
-| An unchanged spec whose last launch was refused | `unchanged` | The launch is tried again, because the spec is still ahead of its run |
+| An unchanged spec whose last launch, or queued replacement, was refused | `unchanged` | Launched again, like a restart: the spec is ahead of its run |
 | An unchanged spec whose run has ended | `unchanged` | Nothing. An ended run is restarted with `wardyn workload restart`, never relaunched by an apply |
 
-- The new run is created before the old one is ended. A workload is never without a run because of a change.
+- The new run is created before the old one is ended, so a change never leaves a workload without a run.
 - A refused launch is a `200`, not an error. The spec is stored at its new generation, and the old run keeps running.
 - The answer carries `launch.state` `refused`, with the create path's own `reason` and sentence. The ceiling, a pool's limits and the unit walls all refuse here as they refuse `POST /runs`.
 - The workload records `last_refusal` (`generation`, `reason`, `message`, `at`) until a launch succeeds. A `security_admin` reading another owner's workload gets the `reason` without the `message`. The audit row is `workload.launch_refused`.
