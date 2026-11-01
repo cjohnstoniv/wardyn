@@ -3678,7 +3678,7 @@ Moved, with the sections that followed it here, to [secrets-and-keys.md](operati
 - A rollback to an older wardynd against a migrated database is unsupported, and wardynd itself refuses it.
 - A boot that finds a `schema_migrations` row it does not ship stops before writing anything, naming the newest unknown file.
 - That covers `helm rollback` and a pinned older image, not only `install.sh`.
-- Restore the dump: [`scripts/rollback-drill.sh`](../scripts/rollback-drill.sh).
+- Restore the dump ([rehearsal](../scripts/rollback-drill.sh)).
 - `WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true` is the break-glass past the refusal; it does not make the older binary understand the newer schema.
 - One name is a known exception, not a downgrade.
 - 0.7.12 databases record `0065_secret_envelope_v1.sql` (this tree ships the byte-identical file as `0069_secret_envelope_v1.sql`, freeing

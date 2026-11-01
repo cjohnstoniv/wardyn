@@ -154,6 +154,7 @@ wait_exited() {
   local timeout_s="$1" waited=0
   while [ "$waited" -lt "$timeout_s" ]; do
     if ! kill -0 "$wardynd_pid" 2>/dev/null; then
+      # wait still holds this background job's status after kill -0 sees it gone.
       wait "$wardynd_pid" 2>/dev/null
       return $?
     fi
