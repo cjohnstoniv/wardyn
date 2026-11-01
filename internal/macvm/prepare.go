@@ -720,7 +720,7 @@ func (p *prep) firstBoot(ctx context.Context, spec MachineSpec, nic *os.File, us
 	var fb FirstBoot
 	err := retryAuxLocked(ctx, p.Log, func() error {
 		var err error
-		fb, err = p.FirstBoot.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
+		fb, err = p.codeWindowBooter().Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
 			uint(spec.CPUs), spec.MemoryBytes, nic, user, pass)
 		return err
 	})

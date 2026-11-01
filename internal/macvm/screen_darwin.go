@@ -12,7 +12,7 @@ package macvm
 
 int wardynScreenSession(void);
 void wardynScreenRun(void);
-void wardynScreenShow(void *vm, void *stop, const char *title, const char *steps);
+void wardynScreenShow(void *vm, void *stop, const char *title, const char *steps, const char *codeFile);
 int wardynScreenUp(void);
 void wardynScreenClose(void);
 */
@@ -78,14 +78,15 @@ func screenReady() error {
 
 // showScreen opens the window on vm (a VZVirtualMachine the caller keeps alive until unlock), with
 // text, and returns its close. When text is Closable, the window's close button asks the guest to shut
-// down through stop, vm's provision handle. It refuses before AppKit starts when screenReady does. The
+// down through stop, vm's provision handle. text.CodeFile is only a path: the window reads the code from
+// it on a click, and the code never crosses this call. It refuses before AppKit starts when screenReady does. The
 // window is made on the main thread once AppKit runs there, and showScreen returns once it is up.
 func showScreen(vm, stop unsafe.Pointer, text ScreenText, unlock func()) (func(), error) {
 	if err := screenReady(); err != nil {
 		unlock()
 		return nil, err
 	}
-	var title, steps *C.char // NULL: setup by hand's text
+	var title, steps, codeFile *C.char // NULL: setup by hand's text; no Show code control
 	if text.Title != "" {
 		title = C.CString(text.Title)
 		defer C.free(unsafe.Pointer(title))
@@ -94,10 +95,14 @@ func showScreen(vm, stop unsafe.Pointer, text ScreenText, unlock func()) (func()
 		steps = C.CString(text.Steps)
 		defer C.free(unsafe.Pointer(steps))
 	}
+	if text.CodeFile != "" {
+		codeFile = C.CString(text.CodeFile)
+		defer C.free(unsafe.Pointer(codeFile))
+	}
 	if !text.Closable {
 		stop = nil
 	}
-	C.wardynScreenShow(vm, stop, title, steps)
+	C.wardynScreenShow(vm, stop, title, steps, codeFile)
 	unlock() // the window's block holds vm and stop now
 	screenStartOnce.Do(func() { close(screenStart) })
 	var once sync.Once

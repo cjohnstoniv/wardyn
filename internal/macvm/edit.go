@@ -29,11 +29,13 @@ const (
 )
 
 // ScreenText is a first boot's window text: its title and the strip of steps under the title bar.
-// Closable gives the window a close button that asks the guest to shut down. The zero value is setup
-// by hand's window, whose text lives in screen_darwin.m.
+// Closable gives the window a close button that asks the guest to shut down. CodeFile, the setup-code
+// file's path (not secret), gives the strip a Show code control that reads the code from it on a click;
+// empty gives none. The zero value is setup by hand's window, whose text lives in screen_darwin.m.
 type ScreenText struct {
 	Title, Steps string
 	Closable     bool
+	CodeFile     string
 }
 
 // editScreen is the edit window's text.
@@ -321,7 +323,9 @@ func (o *EditOptions) window(ctx context.Context, spec MachineSpec) error {
 	if !ok {
 		return errors.New("macvm: the edit needs the guest's window, and this build cannot open one")
 	}
-	booter := texter.WithScreen(editScreen)
+	text := editScreen
+	text.CodeFile = o.Layout.SetupCode()
+	booter := texter.WithScreen(text)
 	nw, err := o.PrepNet()
 	if err != nil {
 		return err
