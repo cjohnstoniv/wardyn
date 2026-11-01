@@ -277,16 +277,18 @@ func (s *ownerChainLeaseStore) GetGovernanceUnitChain(context.Context, uuid.UUID
 }
 
 // A renewal moves the end later, so it meets the owner re-check a PATCH extending the end meets;
-// a refusal, and a check that cannot be answered, renew nothing and audit nothing.
+// a refusal, and a check that cannot be answered, renew nothing and write one denied row with the
+// reason, however many passes retry it.
 func TestRunLease_ARenewalNeedsTheOwnersAuthorityToExtend(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		chainErr  error
 		grantsErr error
+		reason    string
 	}{
-		{name: "the captured unit is deleted", chainErr: store.ErrNotFound},
-		{name: "the captured unit cannot be read", chainErr: errors.New("connection refused")},
-		{name: "the run's grants cannot be read", grantsErr: errors.New("connection refused")},
+		{name: "the captured unit is deleted", chainErr: store.ErrNotFound, reason: "unit_gone"},
+		{name: "the captured unit cannot be read", chainErr: errors.New("connection refused"), reason: "unit_unreadable"},
+		{name: "the run's grants cannot be read", grantsErr: errors.New("connection refused"), reason: "owner_unverifiable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newServiceLeaseFixture(t, 30*time.Minute)
@@ -302,8 +304,13 @@ func TestRunLease_ARenewalNeedsTheOwnersAuthorityToExtend(t *testing.T) {
 			if got := f.endsAt(); !got.Equal(end) {
 				t.Errorf("ends_at moved to %v, want %v", got, end)
 			}
-			if n := len(f.audit.eventsFor(f.run.ID, "run.end.set")); n != 0 {
-				t.Errorf("%d run.end.set rows, want none", n)
+			f.sweep(t)
+			evs := f.audit.eventsFor(f.run.ID, "run.end.set")
+			if len(evs) != 1 || evs[0].Outcome != "denied" || evs[0].ActorType != types.ActorSystem {
+				t.Fatalf("run.end.set events = %+v, want one system denied row after two passes", evs)
+			}
+			if data := leaseAuditData(t, evs[0]); data["reason"] != tc.reason || data["subject"] != f.run.CreatedBy {
+				t.Errorf("audit data = %v, want reason %q and subject %q", data, tc.reason, f.run.CreatedBy)
 			}
 			if n := len(f.audit.eventsFor(f.run.ID, "run.ending_soon")); n != 1 {
 				t.Errorf("%d run.ending_soon rows, want the normal warning", n)
@@ -334,8 +341,8 @@ func (s *serviceIdentityLeaseStore) ServiceStillSponsored(_ context.Context, nam
 	return s.svc.Usable() && s.svc.Sponsor == sponsor, nil
 }
 
-// A service whose identity is retired or suspended is not renewed, and nothing is audited: its tokens
-// are gone or refused, so a renewal would keep a run alive nobody can act for. An active identity renews.
+// A service whose identity is retired or suspended is not renewed, and one denied row says why: its
+// tokens are gone or refused, so a renewal would keep a run alive nobody can act for. An active identity renews.
 func TestRunLease_AServiceWithoutALiveIdentityIsNotRenewed(t *testing.T) {
 	then := time.Now().Add(-time.Hour)
 	for _, tc := range []struct {
@@ -355,17 +362,42 @@ func TestRunLease_AServiceWithoutALiveIdentityIsNotRenewed(t *testing.T) {
 			f.srv.cfg.SessionRevocations = fakeAuthzSessionRevocations{}
 			end := f.endsAt()
 			f.sweep(t)
-			want, wantRows := end, 0
+			want, wantOutcome := end, "denied"
 			if tc.renewed {
-				want, wantRows = f.now.Add(2*time.Hour), 1
+				want, wantOutcome = f.now.Add(2*time.Hour), "success"
 			}
 			if got := f.endsAt(); !got.Equal(want) {
 				t.Errorf("ends_at = %v, want %v", got, want)
 			}
-			if n := len(f.audit.eventsFor(f.run.ID, "run.end.set")); n != wantRows {
-				t.Errorf("%d run.end.set rows, want %d", n, wantRows)
+			evs := f.audit.eventsFor(f.run.ID, "run.end.set")
+			if len(evs) != 1 || evs[0].Outcome != wantOutcome {
+				t.Fatalf("run.end.set events = %+v, want one %s row", evs, wantOutcome)
+			}
+			if reason := leaseAuditData(t, evs[0])["reason"]; !tc.renewed && reason != "service_not_live" {
+				t.Errorf("reason = %v, want service_not_live", reason)
 			}
 		})
+	}
+}
+
+// A renewal refused the same way is audited once an hour, a new reason at once, and a renewal that
+// lands clears the memory so a later refusal is audited again.
+func TestAuditRenewalRefused_IsRateLimitedPerReason(t *testing.T) {
+	f := newServiceLeaseFixture(t, 30*time.Minute)
+	ctx := context.Background()
+	rows := func() int { return len(f.audit.eventsFor(f.run.ID, "run.end.set")) }
+	f.srv.auditRenewalRefused(ctx, f.run, "unit_gone", f.now)
+	f.srv.auditRenewalRefused(ctx, f.run, "unit_gone", f.now.Add(renewalRefusedEvery-time.Minute))
+	if n := rows(); n != 1 {
+		t.Fatalf("%d rows inside the hour, want 1", n)
+	}
+	f.srv.auditRenewalRefused(ctx, f.run, "owner_unverifiable", f.now.Add(time.Minute))
+	if n := rows(); n != 2 {
+		t.Fatalf("%d rows after a new reason, want 2", n)
+	}
+	f.srv.auditRenewalRefused(ctx, f.run, "owner_unverifiable", f.now.Add(time.Minute+renewalRefusedEvery))
+	if n := rows(); n != 3 {
+		t.Fatalf("%d rows after the hour, want 3", n)
 	}
 }
 

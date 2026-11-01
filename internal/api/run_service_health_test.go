@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -499,5 +500,45 @@ func TestServiceHealthSweep_LeaderReadsShareTheBudget(t *testing.T) {
 	}
 	if begins, ends := lease.counts(); begins != 3 || ends != 3 {
 		t.Errorf("lease begins %d ends %d, want 3 and 3", begins, ends)
+	}
+}
+
+// TestServiceHealthSweep_ASmallBudgetStillReadsEveryRun: a pass cut short after a few reads leaves
+// the rest to the next. The queue is least recently observed first and a due read moves its run to
+// the back, so a fleet eight times a pass's reads is all read within eight passes, never the same
+// few runs each time.
+func TestServiceHealthSweep_ASmallBudgetStillReadsEveryRun(t *testing.T) {
+	now := time.Date(2020, 10, 29, 12, 0, 0, 0, time.UTC)
+	const perPass = serviceProbeWorkers
+	runs := make([]types.AgentRun, 8*perPass)
+	for i := range runs {
+		r := serviceRun(now, fmt.Sprintf("ref-%d", i), time.Hour)
+		// Every run is past its refresh, the later ones the least recently heard from.
+		r.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthHealthy,
+			ObservedAt: now.Add(-serviceStatusRefresh - time.Duration(i+1)*time.Minute)}
+		runs[i] = r
+	}
+	var cancel context.CancelFunc
+	var started atomic.Int32
+	healthy := textPane(stateFileJSON("healthy", "", 0, "null"), 0)
+	f := newServiceHealthFixture(t, func(string) (*runner.ExecSession, error) {
+		if started.Add(1) == perPass {
+			cancel() // the budget ends with perPass reads started
+		}
+		return healthy(runner.ExecSpec{})
+	}, nil, runs...)
+	for range 8 {
+		var ctx context.Context
+		ctx, cancel = context.WithCancel(context.Background())
+		started.Store(0)
+		if err := f.srv.sweepServiceHealth(ctx); err != nil {
+			t.Fatalf("sweepServiceHealth: %v", err)
+		}
+		cancel()
+	}
+	for i, r := range runs {
+		if s := f.st.status(r.ID); s == nil || !s.ObservedAt.Equal(f.now) {
+			t.Errorf("run %d was not read in eight passes: status %+v", i, s)
+		}
 	}
 }

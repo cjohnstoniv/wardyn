@@ -309,3 +309,28 @@ func TestDoctorRefusesDriveRootOffDocker(t *testing.T) {
 		t.Errorf("--substrate docker: %+v, want OK", s)
 	}
 }
+
+// A substrate in runnerd.json is the one doctor and serve both judge drive_root against when --substrate is not
+// given, and the flag still wins over it.
+func TestDoctorAndServeReadTheSubstrateFromRunnerJSON(t *testing.T) {
+	r := newRig(t)
+	r.writeRunnerJSON(t, runnerFile{DriveRoot: []string{"/srv/a"}, Substrate: "folders"})
+	opts := doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}
+	if s := stage(t, r.run(opts), "drive-roots"); s.Status != doctor.StatusFail || !strings.Contains(s.Detail, "applies only to --substrate=docker") {
+		t.Errorf("doctor with substrate folders in runnerd.json: %+v, want serve's docker-only refusal", s)
+	}
+	opts.substrate = "docker"
+	if s := stage(t, r.run(opts), "drive-roots"); s.Status != doctor.StatusOK {
+		t.Errorf("doctor --substrate docker over the file: %+v, want OK", s)
+	}
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("WARDYN_DRIVE_ROOT", "")
+	cmd := newServeCommand(nil)
+	cmd.SetArgs([]string{"--config", writeConfig(t, `{"substrate": "folders", "drive_root": ["/srv/a"]}`), "--org", "https://wardyn.example.com", "--state-dir", t.TempDir()})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "applies only to --substrate=docker") {
+		t.Errorf("serve with substrate folders in runnerd.json = %v, want the docker-only refusal", err)
+	}
+	if _, err := loadRunnerFile(writeConfig(t, `{"substrate": "podman"}`), true); err == nil || !strings.Contains(err.Error(), "substrate") {
+		t.Errorf("an unknown substrate: %v; want a refusal naming it", err)
+	}
+}

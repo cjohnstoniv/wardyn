@@ -702,6 +702,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-ci-cache-prune.sh
 	./scripts/test-ci-pick-dispatched-run.sh
 	./scripts/test-ci-run-isolation.sh
+	./scripts/test-ci-wait-run.sh
 	./scripts/test-claims-match-code.sh
 	./scripts/test-compose-cap-drop.sh
 	./scripts/test-compose-ns-registry-port.sh
@@ -745,6 +746,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-overlay-proof.sh
 	./scripts/test-release-check.sh
 	./scripts/test-release-commit.sh
+	./scripts/test-release-image-tag.sh
 	./scripts/test-test-report.sh
 	./scripts/test-test-drive.sh
 	./scripts/test-release-patch.sh

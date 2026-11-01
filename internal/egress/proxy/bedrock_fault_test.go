@@ -118,24 +118,47 @@ func TestBedrockDataPlaneFault_DecisionRowNamesTheAWSClass(t *testing.T) {
 	}
 }
 
-// Only the class the header names, on the status AWS documents for it: a 403
-// that is an ExpiredTokenException, or a 429 that is ModelNotReadyException,
-// is some other failure and must not be reported as a policy deny or throttle.
-func TestBedrockDataPlaneFault_OtherClassesAreNotReported(t *testing.T) {
+// Only the two named classes keep their bare class, on the status AWS documents
+// for them: a 403 that is an ExpiredTokenException, or a 429 that is
+// ModelNotReadyException, is some other refusal and is named with its status
+// instead of being reported as a policy deny or throttle. A path that is not a
+// model call is never a data-plane refusal.
+func TestBedrockDataPlaneFault_OtherRefusalsNameStatusAndClass(t *testing.T) {
 	p, _ := newLocalRouteProxy(t, "http://cp.invalid", "RUNTOK", "127.0.0.1:1", &injector{}, nil)
 	for _, tc := range []struct {
 		status  int
 		errType string
 		path    string
+		want    string
 	}{
-		{403, "ExpiredTokenException", "/model/m/converse"},
-		{429, "ModelNotReadyException", "/model/m/converse"},
-		{400, "ThrottlingException", "/model/m/converse"},
-		{403, "AccessDeniedException", "/federation/credentials"},
+		{403, "ExpiredTokenException:http://internal.amazon.com/coral/", "/model/m/converse", "403 ExpiredTokenException"},
+		{429, "ModelNotReadyException", "/model/m/converse", "429 ModelNotReadyException"},
+		{400, "ThrottlingException", "/model/m/converse", "400 ThrottlingException"},
+		{400, "ValidationException:http://internal.amazon.com/coral/", "/model/m/invoke-with-response-stream", "400 ValidationException"},
+		{500, "", "/model/m/converse", "500"},
+		{400, "not a class!", "/model/m/converse", "400"},
+		{403, "AccessDeniedException", "/federation/credentials", ""},
+		{400, "ValidationException", "/federation/credentials", ""},
 	} {
 		resp := &http.Response{StatusCode: tc.status, Header: http.Header{"X-Amzn-Errortype": {tc.errType}}}
-		if got := p.bedrockUpstreamFault(faultBedrockHost, tc.path, resp); got != "" {
-			t.Errorf("%d %s %s: upstream_fault = %q, want none", tc.status, tc.errType, tc.path, got)
+		if got := p.bedrockUpstreamFault(faultBedrockHost, tc.path, resp); got != tc.want {
+			t.Errorf("%d %q %s: upstream_fault = %q, want %q", tc.status, tc.errType, tc.path, got, tc.want)
+		}
+	}
+}
+
+// A refusal of any status arms "recovered" the same way a throttle does.
+func TestBedrockDataPlaneFault_OtherRefusalRecovers(t *testing.T) {
+	p, _ := newLocalRouteProxy(t, "http://cp.invalid", "RUNTOK", "127.0.0.1:1", &injector{}, nil)
+	refused := &http.Response{StatusCode: 400, Header: http.Header{"X-Amzn-Errortype": {"ValidationException"}}}
+	ok := &http.Response{StatusCode: 200, Header: http.Header{}}
+	for i, want := range []string{"400 ValidationException", "recovered", ""} {
+		resp := ok
+		if i == 0 {
+			resp = refused
+		}
+		if got := p.bedrockUpstreamFault(faultBedrockHost, "/model/m/converse", resp); got != want {
+			t.Errorf("call %d: upstream_fault = %q, want %q", i, got, want)
 		}
 	}
 }

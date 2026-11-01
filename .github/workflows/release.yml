@@ -523,7 +523,9 @@ jobs:
         id: tag
         env:
           REF_NAME: ${{ github.ref_name }}
-        run: echo "tag=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          tag="${REF_NAME#v}"
+          echo "tag=${tag//\//-}" >> "$GITHUB_OUTPUT"
       # W30-S1-2: docker/build-push-action's `tags:` accepts a newline-
       # separated list — push the semver tag always, plus `:latest` on the
       # float-latest rows (see the matrix comment above for why), never for a
@@ -733,7 +735,9 @@ jobs:
         id: tag
         env:
           REF_NAME: ${{ github.ref_name }}
-        run: echo "tag=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          tag="${REF_NAME#v}"
+          echo "tag=${tag//\//-}" >> "$GITHUB_OUTPUT"
       - name: Compute the image tags
         id: tags
         env:
@@ -960,6 +964,7 @@ jobs:
         run: |
           set -euo pipefail
           RELEASE_TAG="${REF_NAME#v}"
+          RELEASE_TAG="${RELEASE_TAG//\//-}"
           export RELEASE_TAG
           promote_one() {
             local NAME="$1" DIGEST FLOAT IMAGE_REF tag got work sbom latest=0
