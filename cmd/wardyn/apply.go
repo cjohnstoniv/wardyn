@@ -121,14 +121,14 @@ func workloadApplyCmd(client clientFn) *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if dryRun && wait {
-				return errors.New("--dry-run and --wait are mutually exclusive (a dry run starts nothing)")
+				return usageError(errors.New("--dry-run and --wait are mutually exclusive (a dry run starts nothing)"))
 			}
 			if wait && timeout <= 0 {
 				return errNonPositiveTimeout(timeout) // before any workload is stored, not after
 			}
 			docs, err := readWorkloadDocs(cmd, file)
 			if err != nil {
-				return err
+				return usageError(err)
 			}
 			if dryRun {
 				return workloadDryRun(cmd, client(), docs, asJSON)
@@ -173,6 +173,7 @@ func workloadApplyCmd(client clientFn) *cobra.Command {
 	cmd.Flags().BoolVar(&wait, "wait", false, "follow each launched run until it completes (until it is running, for a service); exit with the run's outcome")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "give up waiting after this long (with --wait; exit 124). The run keeps going")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the results as a JSON array (progress goes to stderr)")
+	usageExitsTwo(cmd)
 	return cmd
 }
 
@@ -317,9 +318,32 @@ func workloadDiffCmd(client clientFn) *cobra.Command {
 // spec the door refuses) exits 2, and an API or connection error keeps its own code.
 func diffError(err error) error {
 	if exitCodeFor(err) == 1 {
-		return &exitError{code: 2, err: err}
+		return usageError(err)
 	}
 	return err
+}
+
+// usageError is a mistake in how the command was given: exit 2, so a script can tell it from the 1 of a
+// refused launch.
+func usageError(err error) error { return &exitError{code: 2, err: err} }
+
+// usageExitsTwo makes a flag, an argument or a missing required flag of cmd exit 2. Cobra checks the
+// required flags after PreRunE, so PreRunE asks first.
+func usageExitsTwo(cmd *cobra.Command) {
+	cmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageError(err) })
+	args := cmd.Args
+	cmd.Args = func(c *cobra.Command, a []string) error {
+		if err := args(c, a); err != nil {
+			return usageError(err)
+		}
+		return nil
+	}
+	cmd.PreRunE = func(c *cobra.Command, _ []string) error {
+		if err := c.ValidateRequiredFlags(); err != nil {
+			return usageError(err)
+		}
+		return nil
+	}
 }
 
 func workloadDeleteCmd(client clientFn) *cobra.Command {
@@ -331,7 +355,7 @@ func workloadDeleteCmd(client clientFn) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			docs, err := readWorkloadDocs(cmd, file)
 			if err != nil {
-				return err
+				return usageError(err)
 			}
 			c := client()
 			for _, d := range docs {
@@ -344,6 +368,7 @@ func workloadDeleteCmd(client clientFn) *cobra.Command {
 		},
 	}
 	fileFlag(cmd, &file)
+	usageExitsTwo(cmd)
 	return cmd
 }
 

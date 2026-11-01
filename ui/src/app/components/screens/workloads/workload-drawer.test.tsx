@@ -32,6 +32,7 @@ const workload = (over: Partial<Workload> = {}): Workload => ({
   owner: "me",
   source: "api",
   intent: {},
+  can_restart: true,
   generation: 4,
   current_generation: 4,
   run_id: RUN,
@@ -72,6 +73,21 @@ describe("WorkloadDrawer digest", () => {
     open(workload());
     await screen.findByText(/started/);
     expect(screen.queryByText(W.DIGEST)).toBeNull();
+  });
+});
+
+describe("WorkloadDrawer restart", () => {
+  it("offers Restart to a reader who may restart", async () => {
+    open(workload({ can_restart: true }));
+    await screen.findByText(/started/);
+    expect(screen.getByRole("button", { name: new RegExp(W.RESTART) })).toBeInTheDocument();
+  });
+
+  it("hides Restart from a reader the server would refuse it to, and keeps Delete", async () => {
+    open(workload({ can_restart: false }));
+    await screen.findByText(/started/);
+    expect(screen.queryByRole("button", { name: new RegExp(W.RESTART) })).toBeNull();
+    expect(screen.getByRole("button", { name: new RegExp(W.DELETE) })).toBeInTheDocument();
   });
 });
 
