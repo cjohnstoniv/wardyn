@@ -5,14 +5,22 @@ package macvm_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
@@ -96,7 +104,7 @@ func TestEditBasePrintsOnlyTheUntrustedCertificates(t *testing.T) {
 	out := e.out.String()
 	for _, want := range []string{
 		"Not yet trusted in this base. Run each command in the admin Terminal, check that the subject and SHA-256 are the ones you expect, then confirm macOS's prompt.\nacme-proxy\n",
-		"  subject  CN=acme-proxy\n",
+		"  subject  \"CN=acme-proxy\"\n",
 		"  SHA-256  " + strings.Join(colon, ":") + "\n",
 		"  sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain /Library/Wardyn/stage/acme-proxy/item.cer\n",
 	} {
@@ -134,7 +142,7 @@ func TestEditBaseCertificateBlockIgnoresAListFileThatChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := e.out.String()
-	if strings.Contains(out, "CN=acme-proxy") || !strings.Contains(out, "  subject  not available: the install list's file is not the one this base was built from\n") {
+	if strings.Contains(out, "acme-proxy\"") || !strings.Contains(out, "  subject  not available: the install list's file is not the one this base was built from\n") {
 		t.Errorf("the subject came from a file the base was not built from:\n%s", out)
 	}
 	rec, _ := macvm.ReadToolsRecord(e.base)
@@ -200,5 +208,47 @@ func TestEditBaseDiscardKeepsTheLastRead(t *testing.T) {
 	got, _ := macvm.ReadEditRecord(e.base, m)
 	if got.Recheck != macvm.EditRecheckRemoteLogin || got.FullDiskAccess != "refused" || !got.ReadAt.Equal(first.ReadAt) || got.Certs["acme-proxy"] != macvm.ItemNotTrusted {
 		t.Errorf("record %+v, want the first edit's read under the second's recheck", got)
+	}
+}
+
+// A certificate's subject can carry a newline or an escape sequence, which the person's Terminal would act
+// on: the block prints it quoted, with both escaped, on one line.
+func TestEditBaseCertificateBlockEscapesTheSubject(t *testing.T) {
+	e, _, _ := ebwEdit(t)
+	cn := "Evil\nSHA-256  00:11\x1b[31m"
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: cn}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, pin := itemFile(t, t.TempDir(), "evil.pem", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})))
+	e.opts.Items.Items[1].Path, e.opts.Items.Items[1].SHA256 = path, pin
+	rec, _ := macvm.ReadToolsRecord(e.base)
+	rec.Items[1].SHA256 = pin
+	b, _ := json.Marshal(rec)
+	if err := os.WriteFile(filepath.Join(e.base, macvm.ToolsRecordFile), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := macvm.EditBase(context.Background(), e.opts); err != nil {
+		t.Fatal(err)
+	}
+	out := e.out.String()
+	if strings.Contains(out, "\x1b") {
+		t.Errorf("an escape byte reached the output: %q", out)
+	}
+	var subjects, hashes int
+	for _, l := range e.lines() {
+		subjects += strings.Count(l, "  subject  ")
+		if strings.HasPrefix(l, "  SHA-256  ") {
+			hashes++
+		}
+	}
+	if subjects != 1 || hashes != 1 || !strings.Contains(out, `  subject  "CN=Evil\nSHA-256  00:11\x1b[31m"`) {
+		t.Errorf("the subject was not printed escaped on one line:\n%s", out)
 	}
 }

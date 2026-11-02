@@ -237,8 +237,8 @@ func TestEditBaseSwapsOnlyAPassingCopy(t *testing.T) {
 	wantText := macvm.ScreenText{
 		Title: "Wardyn: edit this macOS VM base",
 		Steps: "Sign in as wardyn-admin with the one-time code. Click Show code to see it. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
-			"The first time, macOS may ask setup questions. Skip each one, add no Apple account, and sign in. What you click stays for every run.\n" +
-			"You are signed in as agent. For administrator steps open Terminal, under Finder > Go > Utilities (Spotlight is off here), and run su wardyn-admin.\n" +
+			"The first time, macOS may ask setup questions. Finish them without adding an Apple account, then sign in. What you click stays for every run.\n" +
+			"You are signed in as agent. For administrator steps open Terminal. If Spotlight doesn't answer, use Finder > Go > Utilities. Then run su wardyn-admin.\n" +
 			"Full Disk Access, for folder shares: System Settings > Privacy & Security > Full Disk Access, add /usr/local/libexec/wardyn-guest-agent. It lets every program a run starts in this VM read protected folders, in every run.\n" +
 			"Certificates that are not trusted are listed in the Terminal where you started edit-base. Trust each one in the admin Terminal.\n" +
 			"For desktop control: in System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on \"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n" +

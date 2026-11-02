@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,8 +48,8 @@ type ScreenText struct {
 var editScreen = ScreenText{
 	Title: "Wardyn: edit this macOS VM base",
 	Steps: "Sign in as wardyn-admin with the one-time code. Click Show code to see it. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
-		"The first time, macOS may ask setup questions. Skip each one, add no Apple account, and sign in. What you click stays for every run.\n" +
-		"You are signed in as agent. For administrator steps open Terminal, under Finder > Go > Utilities (Spotlight is off here), and run su wardyn-admin.\n" +
+		"The first time, macOS may ask setup questions. Finish them without adding an Apple account, then sign in. What you click stays for every run.\n" +
+		"You are signed in as agent. For administrator steps open Terminal. If Spotlight doesn't answer, use Finder > Go > Utilities. Then run su wardyn-admin.\n" +
 		"Full Disk Access, for folder shares: System Settings > Privacy & Security > Full Disk Access, add " + guestagent.MacAgentBinaryPath + ". It lets every program a run starts in this VM read protected folders, in every run.\n" +
 		"Certificates that are not trusted are listed in the Terminal where you started edit-base. Trust each one in the admin Terminal.\n" +
 		"For desktop control: in System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on \"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n" +
@@ -545,7 +546,8 @@ func (o *EditOptions) printUntrusted(base string) {
 				break
 			}
 			if cert, der, err := readCA(it.Path); err == nil {
-				subject, sum = cert.Subject.String(), sum256(der)
+				// A DN can carry a newline or an escape sequence; the person's Terminal reads what is printed.
+				subject, sum = strconv.Quote(cert.Subject.String()), sum256(der)
 			}
 		}
 		fmt.Fprintf(o.Out, "%s\n  subject  %s\n  SHA-256  %s\n  sudo security add-trusted-cert -d -r trustRoot -p ssl -k %s %s/%s\n",
