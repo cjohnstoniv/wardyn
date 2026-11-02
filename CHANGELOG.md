@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- A Linux VM run can mount a drive bound to its runner. An older runner and a Kubernetes runner are refused at Review. A file lock held in one VM does not stop another VM or the host taking it.
+- A Linux VM run can mount a drive bound to its runner. An older runner and a Kubernetes runner are refused at Review. Do not rely on a file lock across two VMs.
 
 ### Changed
 
