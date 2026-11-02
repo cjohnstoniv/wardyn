@@ -394,6 +394,10 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 			unionAllowedDomains(policy, []string{lane.key.host})
 		}
 		prov.addLocalModel(lane.key)
+		if other := prov.gatewayRouteClash(lane.key); other != "" {
+			s.refuseProviderDispatch(ctx, lr, lane.chosen.provider.Kind, providerDenial{msg: fmt.Sprintf(mpRunGatewayClash, lane.chosen.provider.ID, other)}, nil)
+			return nil, nil, injections, providerDispatch{}, false
+		}
 		if !prov.addGatewayRoute(lane.key) {
 			s.refuseProviderDispatch(ctx, lr, lane.chosen.provider.Kind, providerDenial{msg: fmt.Sprintf(mpRunGatewayAddress, lane.chosen.provider.ID)}, nil)
 			return nil, nil, injections, providerDispatch{}, false
@@ -442,6 +446,11 @@ func (s *Server) harnessLanes(ctx context.Context, run types.AgentRun, pairs []t
 }
 
 // mpRunGatewayAddress is the refusal of a provider sending gateway identity whose stored address no route can hold.
+// mpRunGatewayClash refuses a run whose two providers sign for one gateway path: the
+// proxy could not tell which token a call there carries.
+const mpRunGatewayClash = "Model providers %s and %s both send a signed identity to one gateway address and path, so nothing was started. " +
+	"Give each its own path on the gateway, or turn identity off for one."
+
 const mpRunGatewayAddress = "Model provider %s sends a signed identity to its gateway, but its address can't carry one, so nothing was started. " +
 	"Ask an admin to correct the provider's base URL."
 

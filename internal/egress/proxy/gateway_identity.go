@@ -55,7 +55,7 @@ type GatewayIdentityRoute struct {
 }
 
 // validate checks a route against the ones before it. A provider has one
-// audience, and a host and port serve one provider, as dispatch authors them.
+// audience, and two providers on one host and port need paths apart (Clashes).
 func (rt GatewayIdentityRoute) validate(earlier []GatewayIdentityRoute) error {
 	switch {
 	case rt.Host == "" || strings.ContainsAny(rt.Host, "/ "):
@@ -73,11 +73,22 @@ func (rt GatewayIdentityRoute) validate(earlier []GatewayIdentityRoute) error {
 		if o.ProviderID == rt.ProviderID && o.Audience != rt.Audience {
 			return fmt.Errorf("provider %q has two audiences", rt.ProviderID)
 		}
-		if hostKey(o.Host) == hostKey(rt.Host) && o.Port == rt.Port && o.ProviderID != rt.ProviderID {
-			return fmt.Errorf("%s:%d serves two providers", rt.Host, rt.Port)
+		if rt.Clashes(o) {
+			return fmt.Errorf("%s:%d serves two providers under one path", rt.Host, rt.Port)
 		}
 	}
 	return nil
+}
+
+// Clashes reports whether rt and o are two providers a request could match both
+// of: one host and port, and a path under both prefixes. The proxy could not tell
+// which provider's token to send, so a run with both is refused.
+func (rt GatewayIdentityRoute) Clashes(o GatewayIdentityRoute) bool {
+	if hostKey(o.Host) != hostKey(rt.Host) || o.Port != rt.Port || o.ProviderID == rt.ProviderID {
+		return false
+	}
+	a, b := strings.TrimSuffix(rt.PathPrefix, "/"), strings.TrimSuffix(o.PathPrefix, "/")
+	return a == "" || b == "" || a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
 }
 
 // covers reports whether a request for path falls under the route's prefix. The

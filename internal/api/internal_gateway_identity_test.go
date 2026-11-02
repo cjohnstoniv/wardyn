@@ -936,6 +936,19 @@ func TestGatewayDispatchRoute(t *testing.T) {
 	if len(d.gatewayRoutes) != 1 || d.gatewayRoutes[0] != want {
 		t.Errorf("routes %+v", d.gatewayRoutes)
 	}
+	// A second provider on the same gateway path clashes; one on a path apart does not.
+	same := testGatewayProvider()
+	same.ID, same.UID, same.BaseURL = "corp-gw-2", "uid-2", "https://gw.corp.example:8443/llm/v1"
+	if got := d.gatewayRouteClash(providerKeyLane{provider: same}); got != "corp-gw" {
+		t.Errorf("clash = %q, want corp-gw", got)
+	}
+	same.BaseURL = "https://gw.corp.example:8443/other"
+	if got := d.gatewayRouteClash(providerKeyLane{provider: same}); got != "" {
+		t.Errorf("a path apart clashed with %q", got)
+	}
+	if got := d.gatewayRouteClash(providerKeyLane{provider: on}); got != "" {
+		t.Errorf("a provider clashed with itself: %q", got)
+	}
 	bad := testGatewayProvider()
 	bad.BaseURL = "https://gw.corp.example/a/../b"
 	if d.addGatewayRoute(providerKeyLane{provider: bad}) {

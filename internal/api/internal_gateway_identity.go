@@ -437,6 +437,21 @@ func (s *Server) gatewayIdentityRefusal(ctx context.Context, cfg *proxy.Config) 
 	return nil, nil
 }
 
+// gatewayRouteClash is the id of a provider already on the run whose route a call
+// to l's could also match, or "" (proxy.GatewayIdentityRoute.Clashes).
+func (d *providerDispatch) gatewayRouteClash(l providerKeyLane) string {
+	rt, ok := gatewayRouteOf(l.provider)
+	if !ok {
+		return ""
+	}
+	for _, o := range d.gatewayRoutes {
+		if rt.Clashes(o) {
+			return o.ProviderID
+		}
+	}
+	return ""
+}
+
 // addGatewayRoute records a lane's route. A provider two harnesses share has one.
 // ok is false when identity is on and no route can be written: such a run is
 // refused, because it would otherwise call the gateway unsigned.
