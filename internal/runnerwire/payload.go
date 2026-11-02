@@ -56,10 +56,6 @@ type (
 		// runner ignores them.
 		PerRunCPUMillis int64 `json:"per_run_cpu_millis,omitempty"`
 		PerRunMemoryMiB int64 `json:"per_run_memory_mib,omitempty"`
-		// AllowDirectDriveMount says the organisation lets a person mount a disk drive on this Mac itself
-		// (site config macos_vm.allow_direct_drive_mount). Re-sent on every connect; absent (off, not a
-		// Mac, or an older organisation) refuses the mount; an older runner ignores it.
-		AllowDirectDriveMount bool `json:"allow_direct_drive_mount,omitempty"`
 	}
 	// Reason is the payload of REVOKED and GOAWAY.
 	Reason struct {

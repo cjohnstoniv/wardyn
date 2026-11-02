@@ -529,6 +529,4 @@ export interface SiteMacOSVM {
   max_base_age_days?: number;
   /** A person may watch a background macOS run's desktop, view only. Absent reads allowed; only false turns it off. */
   allow_background_watch?: boolean;
-  /** A person may mount a disk drive on a Mac itself (drive open --direct). Absent reads off. */
-  allow_direct_drive_mount?: boolean;
 }

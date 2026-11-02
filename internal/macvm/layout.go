@@ -44,7 +44,7 @@ func DefaultRoot() (string, error) {
 //	<root>/variants/<name>/ a derived base's files, as a base's (variants.go)
 //	<root>/cache/          <build>.ipsw(.part)
 //	<root>/runs/<run-key>/ disk.img aux.img machine-id run.json helper.log
-//	<root>/drives/         <object>.img <object>.img.lock <object>.img.mounted (a person's disk drives kept on this Mac)
+//	<root>/drives/         <object>.img <object>.img.lock (a person's disk drives kept on this Mac)
 //	<root>/prepare.log
 //	<root>/setup-code.json (only while macOS waits for its setup by hand)
 //
@@ -78,7 +78,7 @@ func (l Layout) DriveImage(object string) (string, error) {
 var ErrDiskInUse = errors.New("macvm: the disk drive is attached to another run on this Mac")
 
 // LockDisk takes the exclusive lock of the disk image at path, the lock file beside it, in one try:
-// ErrDiskInUse when another holds it, and a *DiskMountedError while the disk's mount marker is there. The lock file is removed only by a reclaim that holds it, after
+// ErrDiskInUse when another holds it. The lock file is removed only by a reclaim that holds it, after
 // the image is gone (RemoveDiskImage), and a later LockDisk makes it again. A lock taken on a file
 // that was removed meanwhile is dropped and taken again on the file the path names now, so two
 // holders can never lock two files of one name.
@@ -92,22 +92,8 @@ func LockDisk(path string) (unlock func(), err error) {
 	return unlock, err
 }
 
-// lockDisk is LockDisk that waits until ctx ends. The marker is read under the lock, so a mount that
-// began before this lock was taken is always seen.
+// lockDisk is LockDisk that waits until ctx ends.
 func lockDisk(ctx context.Context, path string) (unlock func(), err error) {
-	unlock, err = lockDiskFile(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-	if err := refuseMountedDisk(path); err != nil {
-		unlock()
-		return nil, err
-	}
-	return unlock, nil
-}
-
-// lockDiskFile takes the lock file, whatever the mount marker says.
-func lockDiskFile(ctx context.Context, path string) (unlock func(), err error) {
 	if err := mkdirPrivate(filepath.Dir(path)); err != nil {
 		return nil, err
 	}

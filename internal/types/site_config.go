@@ -174,22 +174,11 @@ type SiteMacOSVM struct {
 	// so an explicit false survives omitempty: absent reads allowed, only false turns it off for the
 	// whole install. A governance profile can still deny it (GovernanceLimits.DenyBackgroundDesktopWatch).
 	AllowBackgroundWatch *bool `json:"allow_background_watch,omitempty"`
-	// AllowDirectDriveMount lets a person mount a disk drive on a Mac itself (wardyn-runnerd drive open
-	// --direct), where the Mac's own system parses a disk an agent wrote. It can't stop anyone who can run
-	// hdiutil on that Mac. A pointer so a write can leave it out: absent from a stored block reads off,
-	// and absent from a body that names the block keeps what is stored (carryForwardSiteMacOSVM), so an
-	// older client's round trip can't turn it off or on.
-	AllowDirectDriveMount *bool `json:"allow_direct_drive_mount,omitempty"`
 }
 
 // BackgroundWatchAllowed reads the switch: a nil block or an absent field is allowed.
 func (m *SiteMacOSVM) BackgroundWatchAllowed() bool {
 	return m == nil || m.AllowBackgroundWatch == nil || *m.AllowBackgroundWatch
-}
-
-// DirectDriveMountAllowed reads the switch: a nil block or an absent field is not allowed.
-func (m *SiteMacOSVM) DirectDriveMountAllowed() bool {
-	return m != nil && m.AllowDirectDriveMount != nil && *m.AllowDirectDriveMount
 }
 
 // SiteEgress is SiteConfig.Egress.

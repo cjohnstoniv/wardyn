@@ -50,9 +50,6 @@ type RunnerHooks struct {
 	// PerRunLimits, when set, is told on every connect the per-run CPU (milli-CPU) and memory (MiB) the
 	// organisation's AUTH_OK names for this runner (0, 0 from an organisation that names none).
 	PerRunLimits func(cpuMillis, memoryMiB int64)
-	// DirectDriveMount, when set, is told on every connect whether the organisation's AUTH_OK allows a
-	// direct drive mount on this Mac (false from an organisation that does not say).
-	DirectDriveMount func(allowed bool)
 	// StreamOffline releases per-connection PTY/exec resources, not sandboxes.
 	StreamOffline func(*Peer)
 	// ConnectFailed, when set, is told each error that ended a connection attempt or a session, except
@@ -296,9 +293,6 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 	if c.cfg.Hooks.PerRunLimits != nil {
 		c.cfg.Hooks.PerRunLimits(ok.PerRunCPUMillis, ok.PerRunMemoryMiB)
-	}
-	if c.cfg.Hooks.DirectDriveMount != nil {
-		c.cfg.Hooks.DirectDriveMount(ok.AllowDirectDriveMount)
 	}
 	c.session, c.ready = ok.SessionID, false
 	return c.serve(ctx, conn, cfg, ok)

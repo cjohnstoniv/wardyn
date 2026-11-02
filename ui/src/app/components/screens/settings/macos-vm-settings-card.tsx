@@ -5,9 +5,7 @@
 
 // Settings card: the macOS VM settings of the site config, `macos_vm` (types.SiteMacOSVM). The oldest base a run may
 // use (`max_base_age_days`, empty is no maximum; the server stores 0 as the same) and the switch for watching
-// background runs (`allow_background_watch`, absent reads on, sent explicitly on every save), and the switch for
-// mounting a drive directly on a Mac (`allow_direct_drive_mount`, absent reads off, sent explicitly on every save).
-// One Save covers every field; to add a field, add
+// background runs (`allow_background_watch`, absent reads on, sent explicitly on every save). One Save covers every field; to add a field, add
 // its state beside `watch`, its input below, its key in macosVMBody and its term in `dirty`.
 //
 // Saved through PUT /site-config with the GET's ETag as If-Match, the way the Custom components card does, so a
@@ -37,18 +35,17 @@ export const parseMaxBaseAge = (text: string): number | "" | null => {
   return Number.isSafeInteger(n) ? n : null;
 };
 
-// The block to send: the stored block with the days set (removed when the field is empty) and both switches
+// The block to send: the stored block with the days set (removed when the field is empty) and the watch switch
 // written explicitly, true or false, every time. The server keeps a stored switch when a body names the block
 // without it, so only an explicit value can change it. A block with no days still goes out (it names `macos_vm`),
 // because an absent block is carried forward by the server.
-export function macosVMBody(stored: SiteMacOSVM | undefined, days: number | "", watch = true, direct = false): SiteMacOSVM {
-  const { max_base_age_days: _days, allow_background_watch: _watch, allow_direct_drive_mount: _direct, ...rest } = stored ?? {};
-  return { ...rest, ...(days !== "" && { max_base_age_days: days }), allow_background_watch: watch, allow_direct_drive_mount: direct };
+export function macosVMBody(stored: SiteMacOSVM | undefined, days: number | "", watch = true): SiteMacOSVM {
+  const { max_base_age_days: _days, allow_background_watch: _watch, ...rest } = stored ?? {};
+  return { ...rest, ...(days !== "" && { max_base_age_days: days }), allow_background_watch: watch };
 }
 
 const textOf = (m?: SiteMacOSVM) => (m?.max_base_age_days ? String(m.max_base_age_days) : "");
 const watchOf = (m?: SiteMacOSVM) => m?.allow_background_watch !== false;
-const directOf = (m?: SiteMacOSVM) => m?.allow_direct_drive_mount === true;
 
 export function MacOSVMSettingsCard() {
   const [base, setBase] = React.useState<SiteConfig | null>(null);
@@ -57,8 +54,6 @@ export function MacOSVMSettingsCard() {
   const [draft, setDraft] = React.useState("");
   const [savedWatch, setSavedWatch] = React.useState(true);
   const [watch, setWatch] = React.useState(true);
-  const [savedDirect, setSavedDirect] = React.useState(false);
-  const [direct, setDirect] = React.useState(false);
   const [state, setState] = React.useState<"loading" | "ready" | "failed">("loading");
   const [saving, setSaving] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
@@ -76,8 +71,6 @@ export function MacOSVMSettingsCard() {
         setDraft(next);
         setSavedWatch(watchOf(siteConfig.macos_vm));
         setWatch(watchOf(siteConfig.macos_vm));
-        setSavedDirect(directOf(siteConfig.macos_vm));
-        setDirect(directOf(siteConfig.macos_vm));
         setState("ready");
       })
       .catch(() => setState("failed"));
@@ -88,7 +81,7 @@ export function MacOSVMSettingsCard() {
 
   const parsed = parseMaxBaseAge(draft);
   const invalid = parsed === null;
-  const dirty = draft.trim() !== saved || watch !== savedWatch || direct !== savedDirect;
+  const dirty = draft.trim() !== saved || watch !== savedWatch;
 
   const save = async () => {
     if (!base || parsed === null) return;
@@ -96,7 +89,7 @@ export function MacOSVMSettingsCard() {
     setRefused(null);
     setSavedElsewhere(false);
     try {
-      const result = await health.putSiteConfig({ ...base, macos_vm: macosVMBody(base.macos_vm, parsed, watch, direct) }, etag);
+      const result = await health.putSiteConfig({ ...base, macos_vm: macosVMBody(base.macos_vm, parsed, watch) }, etag);
       const next = textOf(result.siteConfig.macos_vm);
       setBase(result.siteConfig);
       setEtag(result.etag);
@@ -104,8 +97,6 @@ export function MacOSVMSettingsCard() {
       setDraft(next);
       setSavedWatch(watchOf(result.siteConfig.macos_vm));
       setWatch(watchOf(result.siteConfig.macos_vm));
-      setSavedDirect(directOf(result.siteConfig.macos_vm));
-      setDirect(directOf(result.siteConfig.macos_vm));
       toast.success(T.SAVED_TOAST);
     } catch (e) {
       if (e instanceof HttpError && e.status === 412) {
@@ -165,12 +156,6 @@ export function MacOSVMSettingsCard() {
             <span className="text-body font-medium text-foreground">{T.WATCH_LABEL}</span>
           </div>
           <p className="mt-1.5 text-xs text-muted-foreground">{T.WATCH_HINT}</p>
-          <div className="mt-5 flex items-center gap-2.5">
-            <Switch checked={direct} onChange={setDirect} label={T.DIRECT_LABEL} />
-            <span className="text-body font-medium text-foreground">{T.DIRECT_LABEL}</span>
-          </div>
-          <p className="mt-1.5 text-xs text-muted-foreground">{T.DIRECT_HINT}</p>
-          <p className="mt-1.5 text-xs text-muted-foreground">{T.DIRECT_LIMIT}</p>
           {savedElsewhere && (
             <p role="status" className="my-3 rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
               {C.SETTINGS_SAVED_ELSEWHERE}

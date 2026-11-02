@@ -8,7 +8,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -53,23 +52,6 @@ func TestHubAuthOKCarriesThePerRunLimits(t *testing.T) {
 			}
 			if _, ok, _ := f.open(t, nil); ok.PerRunCPUMillis != cpu || ok.PerRunMemoryMiB != mem {
 				t.Fatalf("AUTH_OK named %d milli-CPU and %d MiB, want %d and %d", ok.PerRunCPUMillis, ok.PerRunMemoryMiB, cpu, mem)
-			}
-		}
-	})
-}
-
-// AUTH_OK carries what the hub's hook says of the direct drive mount, and a failed read says no.
-func TestHubAuthOKCarriesTheDirectDriveMountAnswer(t *testing.T) {
-	eachTransport(t, func(t *testing.T, realWire bool) {
-		for _, c := range []struct {
-			allowed bool
-			err     error
-			want    bool
-		}{{true, nil, true}, {false, nil, false}, {true, errors.New("no store"), false}} {
-			f := newInventoryFixture(t, realWire)
-			f.hub.cfg.DirectDriveMount = func(context.Context, types.Runner) (bool, error) { return c.allowed, c.err }
-			if _, ok, _ := f.open(t, nil); ok.AllowDirectDriveMount != c.want {
-				t.Fatalf("AUTH_OK said %v, want %v", ok.AllowDirectDriveMount, c.want)
 			}
 		}
 	})
@@ -135,72 +117,5 @@ func TestHubGoawayThenReconnectDeliversTheNewPerRunLimits(t *testing.T) {
 	awaitValue(t, ctx, online)
 	if got := awaitValue(t, ctx, heard); got != [2]int64{4000, 8192} {
 		t.Fatalf("session after the GOAWAY heard %v, want the new limits", got)
-	}
-}
-
-// A changed direct mount answer reaches a connected runner by a GOAWAY and a fresh session, as limits do, and
-// a failed read of it ends nothing.
-func TestHubGoawayThenReconnectDeliversTheDirectDriveMountAnswer(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	pub, key, _ := ed25519.GenerateKey(rand.Reader)
-	row := types.Runner{ID: uuid.New(), PublicKey: pub, State: types.RunnerClaimed, OrgURLSHA256: federation.OrgURLSHA256("https://org.example")}
-	var allowed, failing atomic.Bool
-	link := &Link{}
-	sub := New(row.ID.String(), link, Options{})
-	hub := NewHub(ctx, HubConfig{OrgURL: "https://org.example",
-		Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return row, nil },
-		DirectDriveMount: func(context.Context, types.Runner) (bool, error) {
-			if failing.Load() {
-				return true, errors.New("no store")
-			}
-			return allowed.Load(), nil
-		},
-		Admit: func(context.Context, types.Runner) (Admission, error) {
-			return Admission{Substrate: sub, Link: link,
-				Pending:        func(context.Context) ([]runnerwire.PendingAction, error) { return nil, nil },
-				BeginInventory: func(context.Context, string) error { return nil },
-				StatePage:      func(context.Context, string, runnerwire.StatePage) error { return nil },
-				Event:          func(context.Context, runnerwire.Event) error { return nil },
-			}, nil
-		}})
-	defer hub.Close()
-	online, resumed := make(chan *runnerwire.Peer, 2), make(chan bool, 2)
-	heard := make(chan bool, 4)
-	hooks := sessionHooks(online, resumed)
-	hooks.DirectDriveMount = func(on bool) { heard <- on }
-	var serving sync.WaitGroup
-	client, err := runnerwire.NewClient(runnerwire.ClientConfig{OrgURL: "https://org.example", RunnerID: row.ID.String(), PrivateKey: key, Hooks: hooks,
-		Dial: func(context.Context) (runnerwire.Conn, error) {
-			org, run := runnerwire.Loopback()
-			serving.Go(func() { _ = hub.Serve(ctx, org, row.ID) })
-			return run, nil
-		}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 2)
-	go func() { done <- client.Connect(ctx) }()
-	awaitValue(t, ctx, online)
-	waitOnline(t, ctx, link)
-	if awaitValue(t, ctx, heard) {
-		t.Fatal("first session heard allowed, want off")
-	}
-	failing.Store(true)
-	select {
-	case err := <-done:
-		t.Fatalf("a failed read ended the session with %v", err)
-	case <-time.After(3 * storedRowRecheck):
-	}
-	failing.Store(false)
-	allowed.Store(true)
-	if err := awaitValue(t, ctx, done); !errors.Is(err, runnerwire.ErrGoaway) {
-		t.Fatalf("the recheck ended the session with %v, want a GOAWAY", err)
-	}
-	serving.Wait()
-	go func() { done <- client.Connect(ctx) }()
-	awaitValue(t, ctx, online)
-	if !awaitValue(t, ctx, heard) {
-		t.Fatal("session after the GOAWAY heard off, want allowed")
 	}
 }
