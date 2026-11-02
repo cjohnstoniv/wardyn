@@ -637,7 +637,9 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drives []types.DriveMount) 
 
 // auditDriveMount records run.drive.mount, one row per drive dispatch attached
 // to this sandbox, in the run's order. Silent when no drive was attached — an audit action
-// that fires on every run is noise an operator learns to skip past.
+// that fires on every run is noise an operator learns to skip past. A macOS VM
+// run's `target` is the guest's path (runner.MacGuestPath); the mount keeps the
+// container path.
 //
 // Called AFTER CreateSandbox has returned, never beside the spec assembly: the
 // driver re-runs the drive's ceiling and deny matrix at bind time and can still
@@ -688,9 +690,13 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drives []types.DriveMount) 
 // The nil test lives HERE rather than at the assembly site for a mechanical
 // reason worth stating: dispatchRun sits at its gocyclo ceiling, so one more
 // branch there is a lint failure. It belongs with the payload anyway.
-func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy string, drives []types.DriveMount) {
+func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy string, machine types.MachineKind, drives []types.DriveMount) {
 	for i := range drives {
 		drive := &drives[i]
+		target := drive.Target
+		if machine.IsMacOSVM() {
+			target = runner.MacGuestPath(target)
+		}
 		data := map[string]any{
 			"backend":     drive.Backend,
 			"drive":       drive.HomeName,
@@ -698,7 +704,7 @@ func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy
 			"enforcement": drive.Enforcement,
 			"mode":        driveAuditMode(drive.ReadOnly),
 			"object":      driveAuditTarget(drive),
-			"target":      drive.Target,
+			"target":      target,
 		}
 		if drive.Team {
 			data["team"], data["mounted_by"] = true, mountedBy

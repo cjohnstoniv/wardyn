@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
 // Host bind-mount guardrails (SECURITY-CRITICAL).
@@ -103,6 +104,18 @@ func ValidateDriveTarget(drive *types.DriveMount) error {
 		return nil
 	}
 	return fmt.Errorf("%q is not a drive path (%s, or one folder under %s)", target, DriveTarget, root)
+}
+
+// MacGuestPath is target as a person on a macOS VM run finds it: a path under
+// /home/agent is the same path under /Users/agent in that guest. It is for
+// what a person reads (a response, an audit row), never for a stored or
+// compared target, which stays the container path every overlap check reads.
+// Any other path is returned as it came.
+func MacGuestPath(target string) string {
+	if rest, ok := strings.CutPrefix(target, guestagent.AgentHome+"/"); ok {
+		return guestagent.MacAgentHome + "/" + rest
+	}
+	return target
 }
 
 // ScratchTmpPath, ScratchWorkPath and ScratchCachePath are where the
