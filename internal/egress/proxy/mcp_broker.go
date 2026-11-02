@@ -446,8 +446,16 @@ func jsonRPCError(id json.RawMessage, code int, msg string) map[string]any {
 }
 
 func writeJSONRPC(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	writeJSONStatus(w, http.StatusOK, "application/json", v)
+}
+
+// writeJSONStatus is the proxy's one JSON refusal writer: the Content-Type,
+// then the status, then v as a newline-terminated JSON document. A failed
+// encode is dropped, as the doors always did. Writers that need another
+// header, a raw body or no trailing newline keep their own.
+func writeJSONStatus(w http.ResponseWriter, status int, contentType string, v any) {
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
