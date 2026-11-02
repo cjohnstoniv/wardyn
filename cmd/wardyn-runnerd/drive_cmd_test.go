@@ -362,11 +362,11 @@ func TestDriveOpenFindsTheDriveByItsName(t *testing.T) {
 	if object, _, err := m.driveOpenFind(driveOpenTestObject); err != nil || object != driveOpenTestObject {
 		t.Fatalf("by object name = %q %v", object, err)
 	}
-	if _, _, err := m.driveOpenFind("Other"); err == nil || !strings.Contains(err.Error(), "does not know a drive named \"Other\"") {
+	if _, _, err := m.driveOpenFind("Other"); err == nil || err.Error() != `Wardyn does not know a drive named "Other" on this Mac. drive open opens only a drive that a run on this Mac has used.` {
 		t.Fatalf("unknown = %v", err)
 	}
 	put("wardyn-drive-aaaa", `{"label":"Wardyn-aaaaaaaa","name":"Notes"}`, true)
-	if _, _, err := m.driveOpenFind("Notes"); err == nil || !strings.Contains(err.Error(), "More than one drive") {
+	if _, _, err := m.driveOpenFind("Notes"); err == nil || err.Error() != `More than one drive on this Mac is named "Notes". Use one of these names instead: `+driveOpenTestObject+`, wardyn-drive-aaaa.` {
 		t.Fatalf("twice = %v", err)
 	}
 	// A name file with no image beside it, a record with no label, and junk are not drives.

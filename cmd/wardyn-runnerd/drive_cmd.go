@@ -206,6 +206,7 @@ func (m *macOSVMs) driveOpenRun(ctx context.Context, a driveOpenArgs) (err error
 	}
 	man, err := macvm.ReadyBase(m.layout.BaseDir(0))
 	if err != nil {
+		//lint:ignore ST1005 the sentence the person reads at the terminal, as written
 		return errors.New("This Mac has no ready macOS base to open the drive with. `wardyn-runnerd macos-vm status` shows what it is doing.")
 	}
 	dest, err := m.openDriveDest(a.name)
@@ -274,8 +275,10 @@ func (m *macOSVMs) driveOpenFind(name string) (object, label string, err error) 
 	case 1:
 		return object, label, nil
 	case 0:
+		//lint:ignore ST1005 the sentence the person reads at the terminal, as written
 		return "", "", fmt.Errorf("Wardyn does not know a drive named %q on this Mac. drive open opens only a drive that a run on this Mac has used.", name)
 	}
+	//lint:ignore ST1005 the sentence the person reads at the terminal, as written
 	return "", "", fmt.Errorf("More than one drive on this Mac is named %q. Use one of these names instead: %s.", name, strings.Join(found, ", "))
 }
 
@@ -342,10 +345,12 @@ func (m *macOSVMs) openDriveDest(name string) (*driveOpenDest, error) {
 		return r
 	}, name)
 	if leaf = strings.TrimSpace(leaf); leaf == "" || leaf == "." || leaf == ".." || len(leaf) > driveOpenMaxName-12 {
+		//lint:ignore ST1005 the sentence the person reads at the terminal, as written
 		return nil, fmt.Errorf("The drive's name %q cannot be a folder name.", name)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || !filepath.IsAbs(home) {
+		//lint:ignore ST1005 the sentence the person reads at the terminal, as written
 		return nil, errors.New("This account's home folder is not known, so there is nowhere to copy the drive to.")
 	}
 	free, err := m.host.FreeDiskBytes(home)
@@ -353,6 +358,7 @@ func (m *macOSVMs) openDriveDest(name string) (*driveOpenDest, error) {
 		return nil, err
 	}
 	if free-macOSVMDiskFloor <= 0 {
+		//lint:ignore ST1005 the sentence the person reads at the terminal, as written
 		return nil, fmt.Errorf("This Mac has %s free, too little to copy a drive onto.", driveOpenSize(free))
 	}
 	top, err := os.OpenRoot(home)
@@ -371,6 +377,7 @@ func (m *macOSVMs) openDriveDest(name string) (*driveOpenDest, error) {
 	if err == nil {
 		if err = unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 			_ = lock.Close()
+			//lint:ignore ST1005 the sentence the person reads at the terminal, as written
 			err = fmt.Errorf("Another drive open of %q is running on this Mac and has %s. Finish it, or press Ctrl-C there, then run drive open again.", name, shown)
 		}
 	}
@@ -388,6 +395,7 @@ func (m *macOSVMs) openDriveDest(name string) (*driveOpenDest, error) {
 		limits: driveOpenLimits{entries: driveOpenMaxEntries, bytes: free - macOSVMDiskFloor}}
 	if left, _ := fs.ReadDir(root.FS(), "."); len(left) > 0 {
 		d.close()
+		//lint:ignore ST1005 the sentence the person reads at the terminal, as written
 		return nil, fmt.Errorf("%s already holds files. Move or delete them, then run drive open again: Wardyn copies a drive only into an empty folder.", shown)
 	}
 	return d, nil
@@ -406,8 +414,10 @@ func driveOpenSubRoot(r *os.Root, name, shown string) (sub *os.Root, created boo
 	case err != nil:
 		return nil, false, err
 	case fi.Mode()&fs.ModeSymlink != 0:
+		//lint:ignore ST1005 the sentence the person reads at the terminal, as written
 		return nil, false, fmt.Errorf("%s is a link. Wardyn copies a drive only into a folder it can see is a real one: remove the link or move it away, then run drive open again.", shown)
 	case !fi.IsDir():
+		//lint:ignore ST1005 the sentence the person reads at the terminal, as written
 		return nil, false, fmt.Errorf("%s is not a folder. Move it away, then run drive open again.", shown)
 	}
 	sub, err = r.OpenRoot(name)

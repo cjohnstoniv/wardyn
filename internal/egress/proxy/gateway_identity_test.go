@@ -113,13 +113,12 @@ type gwidMint struct {
 }
 
 type gwidRig struct {
-	p          *Proxy
-	buf        *bytes.Buffer
-	gw, other  *gwidUpstream
-	mint       *gwidMint
-	nowMu      sync.Mutex
-	nowV       time.Time
-	mitmTarget string
+	p         *Proxy
+	buf       *bytes.Buffer
+	gw, other *gwidUpstream
+	mint      *gwidMint
+	nowMu     sync.Mutex
+	nowV      time.Time
 }
 
 func (g *gwidRig) now() time.Time { g.nowMu.Lock(); defer g.nowMu.Unlock(); return g.nowV }
