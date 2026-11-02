@@ -224,9 +224,11 @@ type macOSVMStatus struct {
 	Identity      string   `json:"identity"`
 	HeldDiskBytes int64    `json:"held_disk_bytes"` // disk held for ended logins' VMs
 	Leaked        int      `json:"leaked"`          // framework slots held until a restart
-	ToolsDial     string   `json:"tools_dial"`      // how the last run boot's tools-port dial ended, "" before one
-	Error         string   `json:"error"`
-	Failure       string   `json:"failure,omitempty"` // runnerwire.MacVMFailure*, when the base has one
+	ToolsDial     string   `json:"tools_dial"`      // how the newest tools-port dial ended, "" before one
+	// ToolsDialRead says where ToolsDial was read from and when, and any log that could not be read to its end.
+	ToolsDialRead string `json:"tools_dial_read,omitempty"`
+	Error         string `json:"error"`
+	Failure       string `json:"failure,omitempty"` // runnerwire.MacVMFailure*, when the base has one
 	// Bases are the Mac's other bases (macos_vm_bases_dir), with a failed one's reason.
 	Bases []runnerwire.MacVMDerivedBase `json:"bases,omitempty"`
 
@@ -265,7 +267,7 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 	if p := setupCodeWaiting(m.layout.Root); p != "" && !editsCode(m.layout.Root) {
 		st.setupCode, st.Phase = p, "setup_by_hand"
 	}
-	st.ToolsDial = lastToolsDial(m.layout.Root)
+	st.ToolsDial, st.ToolsDialRead = lastToolsDial(m.layout.Root)
 	counted, err := m.ledger.Counted()
 	if err != nil {
 		return st, err
@@ -332,9 +334,10 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 		fmt.Fprintf(out, "thermal: %s\n", st.Thermal)
 	}
 	if st.ToolsDial != "" {
-		fmt.Fprintf(out, "tools_dial: %s\n", st.ToolsDial)
+		fmt.Fprintf(out, "tools_dial: %s (read from %s)\n", st.ToolsDial, st.ToolsDialRead)
 	}
 	fmt.Fprintf(out, "macOS VMs on this Mac (every login): %d; this runner offers %d at once\n", st.counted, st.Max)
+	fmt.Fprintln(out, "That number is this Mac's own sum (Apple's cap, memory, free disk). It does not read the organisation's limits (Runs at once, the CPU, memory and disk totals, other runs' reservations), which can hold fewer.")
 	if st.Leaked > 0 {
 		fmt.Fprintf(out, "VM slots macOS holds until this Mac restarts: %d\n", st.Leaked)
 	}
@@ -351,27 +354,68 @@ const macOSVMSetupWindow = "Wardyn: set up this macOS VM"
 // dial of the tools port ended (docker.MacVMConfig.ToolsDialFile).
 const runToolsDialFile = "run-tools-dial"
 
-// lastToolsDial is how the newest tools-port dial ended, when it is one of the five classes, else "". The
-// candidates are the run boot's record and the last one prepare logged (a prepare's stage 2 boots the guest
-// too; its event carries when it was reported), and the later of the two wins. A prepare does not rewrite a
-// run boot's record, so reading that alone kept a failure from before a prepare that reached ready.
-func lastToolsDial(root string) string {
-	var class string
-	var at time.Time
-	b, err := os.ReadFile(filepath.Join(root, runToolsDialFile))
-	if s := strings.TrimSpace(string(b)); err == nil && macvm.ValidToolsDial(s) {
-		class = s
-		if fi, err := os.Stat(filepath.Join(root, runToolsDialFile)); err == nil {
-			at = fi.ModTime()
+// lastToolsDial is how the newest tools-port dial ended, when it is one of the five classes, else "", and
+// where it was read from (read). The candidates are the run boot's record, the last dial prepare logged and
+// the last one a tools update logged (both stage 2 boots reach the guest agent); the latest of the three
+// wins. A prepare or an update does not rewrite a run boot's record, so reading that alone kept a failure
+// from before a tools update that reached ready. The tools update's events carry no clock of their own, so
+// the time of such an event is when its log was last written, which read says. A log that could not be read
+// to its end is named, since a later dial may sit past the stop.
+func lastToolsDial(root string) (class, read string) {
+	type candidate struct {
+		class, source string
+		at            time.Time
+		logTime       bool
+	}
+	var best candidate
+	var unread []string
+	if b, err := os.ReadFile(filepath.Join(root, runToolsDialFile)); err == nil {
+		if s := strings.TrimSpace(string(b)); macvm.ValidToolsDial(s) {
+			best = candidate{class: s, source: "the last run boot's record"}
+			if fi, err := os.Stat(filepath.Join(root, runToolsDialFile)); err == nil {
+				best.at = fi.ModTime()
+			}
 		}
 	}
-	if pc, pat, err := lastPrepareToolsDial(macvm.Layout{Root: root}.PrepareLog()); err == nil && pc != "" && pat.After(at) {
-		class = pc
+	for _, l := range []struct{ path, source string }{
+		{macvm.Layout{Root: root}.PrepareLog(), "the prepare log"},
+		{filepath.Join(root, toolsUpdateLog), "the tools update log"},
+	} {
+		pc, pat, err := lastPrepareToolsDial(l.path)
+		if err != nil {
+			unread = append(unread, l.source)
+			continue
+		}
+		if pc == "" {
+			continue
+		}
+		c := candidate{class: pc, source: l.source, at: pat}
+		if pat.UnixNano() == 0 {
+			fi, err := os.Stat(l.path)
+			if err != nil {
+				continue
+			}
+			c.at, c.logTime = fi.ModTime(), true
+		}
+		if c.at.After(best.at) {
+			best = c
+		}
 	}
-	if macvm.ValidToolsDial(class) {
-		return class
+	if !macvm.ValidToolsDial(best.class) {
+		return "", ""
 	}
-	return ""
+	read = best.source
+	if !best.at.IsZero() {
+		verb := "reported "
+		if best.logTime {
+			verb = "last written "
+		}
+		read += ", " + verb + best.at.Local().Format("2006-01-02 15:04 MST")
+	}
+	for _, u := range unread {
+		read += "; " + u + " could not be read to its end, so a later dial may be missing"
+	}
+	return best.class, read
 }
 
 // editsCode: the one-time code file at root is an edit's, not setup by hand's. An edit writes its log
