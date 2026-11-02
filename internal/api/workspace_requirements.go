@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -165,9 +166,10 @@ func (s *Server) handleSetWorkspaceRequirements(w http.ResponseWriter, r *http.R
 }
 
 // runnerBoundPath answers, for the workspace named by r's path, whether a path is
-// a folder bound to a runner. The workspace is read on the first question only,
-// and a failed read answers no: the path then gets the full check on this host,
-// as before.
+// a folder bound to a runner, or lies under one by path segment. The workspace is
+// read on the first question only, and a failed read answers no: the path then
+// gets the full check on this host, as before. It answers no too when the path is
+// also a folder on this host, or the folders it is under disagree about the runner.
 func (s *Server) runnerBoundPath(r *http.Request) func(string) bool {
 	var ws types.Workspace
 	var read, loaded bool
@@ -182,8 +184,26 @@ func (s *Server) runnerBoundPath(r *http.Request) func(string) bool {
 		if !read {
 			return false
 		}
-		rid, agree := mountBinding([]types.Workspace{ws}, path)
-		return agree && rid != nil
+		var rid *uuid.UUID
+		for _, src := range ws.Sources {
+			if src.Type != types.WorkspaceSourceTypeLocalDir {
+				continue
+			}
+			if src.RunnerID == nil {
+				if src.Path == path {
+					return false
+				}
+				continue
+			}
+			if src.Path != path && !strings.HasPrefix(path, src.Path+"/") {
+				continue
+			}
+			if rid != nil && *rid != *src.RunnerID {
+				return false
+			}
+			rid = src.RunnerID
+		}
+		return rid != nil
 	}
 }
 

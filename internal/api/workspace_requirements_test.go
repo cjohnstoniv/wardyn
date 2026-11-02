@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -372,5 +373,93 @@ func TestSetWorkspaceRequirements_WriteKeyOnRunnerBoundFolderDenied(t *testing.T
 	body := `{"requirements":{"write:/etc/ssh":{"level":"required","provenance":"operator_set"}}}`
 	if w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+id.String()+"/requirements", adminToken, body); w.Code != http.StatusBadRequest {
 		t.Errorf("code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// boundFolderSubPathLayout is a bound folder dir/proj with a host-side link to a denied folder inside
+// it (proj/link) and beside it (proj2, other): what this host has at those paths tells a text-only
+// answer (200) from a host check (400).
+func boundFolderSubPathLayout(t *testing.T) (dir string) {
+	t.Helper()
+	dir = t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "proj"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range []string{"proj/link", "proj2", "other"} {
+		if err := os.Symlink("/etc", filepath.Join(dir, l)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// boundFolderPut is a PUT of one write: key against a workspace holding srcs, whose store reads with getErr.
+func boundFolderPut(t *testing.T, srcs []types.WorkspaceSource, path string, getErr error) int {
+	t.Helper()
+	h := newHarness(t)
+	id := uuid.New()
+	fake := &requirementsStoreFake{ws: types.Workspace{ID: id, Name: "w", Sources: srcs}}
+	var st store.Store = fake
+	if getErr != nil {
+		st = boundFolderFailingStore{fake, getErr}
+	}
+	srv := New(baseTestConfig(h, st))
+	body := `{"requirements":{"write:` + path + `":{"level":"required","provenance":"operator_set"}}}`
+	return do(t, srv, http.MethodPut, "/api/v1/workspaces/"+id.String()+"/requirements", adminToken, body).Code
+}
+
+// boundFolderFailingStore reads no workspace.
+type boundFolderFailingStore struct {
+	*requirementsStoreFake
+	err error
+}
+
+func (f boundFolderFailingStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
+	return types.Workspace{}, f.err
+}
+
+// A write: key under a folder bound to a runner is checked by its text alone, like the folder itself;
+// nothing outside the folder gets that, and a path the folders disagree about does not either.
+func TestSetWorkspaceRequirements_boundFolderSubPath(t *testing.T) {
+	dir := boundFolderSubPathLayout(t)
+	proj := filepath.Join(dir, "proj")
+	a, b := uuid.New(), uuid.New()
+	local := func(p string) types.WorkspaceSource {
+		return types.WorkspaceSource{Type: types.WorkspaceSourceTypeLocalDir, Path: p}
+	}
+	for _, c := range []struct {
+		name string
+		srcs []types.WorkspaceSource
+		path string
+		want int
+	}{
+		{"sub-path of a bound folder", []types.WorkspaceSource{boundSource(proj, a)}, proj + "/link", http.StatusOK},
+		{"deeper sub-path", []types.WorkspaceSource{boundSource(proj, a)}, proj + "/sub/deeper", http.StatusOK},
+		{"the folder itself", []types.WorkspaceSource{boundSource(proj, a)}, proj, http.StatusOK},
+		{"sibling sharing the name's prefix", []types.WorkspaceSource{boundSource(proj, a)}, dir + "/proj2", http.StatusBadRequest},
+		{"dot-dot out of the folder, as written", []types.WorkspaceSource{boundSource(proj, a)}, proj + "/../other", http.StatusBadRequest},
+		{"dot-dot out of the folder, cleaned", []types.WorkspaceSource{boundSource(proj, a)}, dir + "/other", http.StatusBadRequest},
+		{"dot-dot inside a sub-path", []types.WorkspaceSource{boundSource(proj, a)}, proj + "/sub/../link", http.StatusBadRequest},
+		{"relative", []types.WorkspaceSource{boundSource(proj, a)}, "proj/link", http.StatusBadRequest},
+		{"absolute, denied, outside", []types.WorkspaceSource{boundSource(proj, a)}, "/etc/ssh", http.StatusBadRequest},
+		{"denied by name, under a bound folder", []types.WorkspaceSource{boundSource(proj, a)}, proj + "/docker.sock", http.StatusBadRequest},
+		{"under a folder on this host only", []types.WorkspaceSource{local(proj)}, proj + "/link", http.StatusBadRequest},
+		{"also a folder on this host", []types.WorkspaceSource{boundSource(proj, a), local(proj + "/link")}, proj + "/link", http.StatusBadRequest},
+		{"also bound to another runner", []types.WorkspaceSource{boundSource(proj, a), boundSource(proj+"/link", b)}, proj + "/link", http.StatusBadRequest},
+		{"under folders bound to two runners", []types.WorkspaceSource{boundSource(proj, a), boundSource(dir, b)}, proj + "/link", http.StatusBadRequest},
+		{"under folders bound to one runner", []types.WorkspaceSource{boundSource(proj, a), boundSource(dir, a)}, proj + "/link", http.StatusOK},
+	} {
+		if got := boundFolderPut(t, c.srcs, c.path, nil); got != c.want {
+			t.Errorf("%s: code = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// A workspace that cannot be read answers no for a sub-path too: the host check runs.
+func TestSetWorkspaceRequirements_boundFolderSubPathReadFails(t *testing.T) {
+	dir := boundFolderSubPathLayout(t)
+	proj := filepath.Join(dir, "proj")
+	if got := boundFolderPut(t, []types.WorkspaceSource{boundSource(proj, uuid.New())}, proj+"/link", errors.New("read failed")); got != http.StatusBadRequest {
+		t.Errorf("code = %d, want 400", got)
 	}
 }
