@@ -16,15 +16,24 @@ import { MODEL_PROVIDERS as M, PROVIDER_EDITOR as E } from "../../../lib/model-p
 import type { ModelProvider } from "../../../lib/types/site";
 import { setField } from "../../../../test/set-field";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { AVAILABILITY } from "../../../lib/availability-copy";
+import { refusedField } from "./model-provider-draft";
 import { ModelProviderEditor } from "./model-provider-editor";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const putMock = vi.fn();
+const availabilityMock = vi.fn();
+vi.mock("../../wardyn/availability-control", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../wardyn/availability-control")>()),
+  writeAvailability: (...a: unknown[]) => availabilityMock(...a),
+}));
 vi.mock("../../../lib/api/model-providers", () => ({
   modelProviders: { putModelProviders: (...a: unknown[]) => putMock(...a) },
 }));
 
 const G = E.GATEWAY;
+const MOVED = (id: string) =>
+  `model_providers: "${id}": moved to a new address, so gateway_identity.audience can't stay the same: use a different one, or save with identity off first`;
 const HARNESSES = [
   { id: "claude-code", display: "Claude Code" },
   { id: "codex-cli", display: "Codex CLI" },
@@ -85,6 +94,7 @@ async function addKind(kind: string) {
 beforeEach(() => {
   putMock.mockReset().mockImplementation((doc) => Promise.resolve({ providers: doc, etag: '"e2"' }));
   vi.mocked(toast.error).mockReset();
+  availabilityMock.mockReset().mockResolvedValue(undefined);
 });
 
 describe("the switch, off", () => {
@@ -265,10 +275,8 @@ describe("a refused save", () => {
     expect(screen.getByLabelText(E.ROUTE_THROUGH)).not.toBeInvalid();
   });
 
-  it("a refusal naming base_url and the audience outlines the audience, not Base URL", async () => {
-    putMock.mockRejectedValue(
-      new HttpError(400, 'model_providers: "corp-gateway": base_url changed, so gateway_identity.audience must be entered again'),
-    );
+  it("a refusal for a moved address with the same audience outlines the audience, not Base URL", async () => {
+    putMock.mockRejectedValue(new HttpError(400, MOVED("corp-gateway")));
     const { user } = renderEditor(CORP_ON);
     await user.click(screen.getByRole("button", { name: E.SAVE }));
     await screen.findByRole("alert");
@@ -282,5 +290,44 @@ describe("a refused save", () => {
     await user.click(screen.getByRole("button", { name: E.SAVE }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("The signing key is unavailable, so this wasn't saved."));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+});
+
+describe("a create whose list write is refused", () => {
+  it("keeps the editor open on the saved provider, with identity read as saved", async () => {
+    availabilityMock.mockRejectedValue(new Error("grant refused"));
+    const { user } = await addKind(M.KIND.custom_endpoint);
+    setField(screen.getByLabelText(/^Base URL/), "https://gateway.example.com");
+    for (const path of screen.getAllByLabelText(E.PATH)) setField(path, "/v1");
+    await user.click(sw());
+    setField(audience(), "wardyn-corp-gateway");
+    expect(screen.getByText(new RegExp(G.KEY_ADDRESS_UNSAVED))).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    expect(await screen.findByText(AVAILABILITY.CREATE_PARTIAL_TITLE)).toBeInTheDocument();
+    // Saved with identity on: the key address no longer waits, and turning it off is a change from saved.
+    expect(screen.queryByText(new RegExp(G.KEY_ADDRESS_UNSAVED))).not.toBeInTheDocument();
+    setField(screen.getByLabelText(/^Base URL/), "https://new-gateway.example.com");
+    expect(audience()).toHaveValue("");
+    await user.click(sw());
+    expect(screen.getByText(G.OFF_NOTE)).toBeInTheDocument();
+  });
+});
+
+describe("which field a refusal is about", () => {
+  // The provider id is quoted first and may spell any field's name.
+  it.each([
+    ['model_providers: "audience": gateway_identity needs a base_url, or the token would go to the vendor', "base_url"],
+    ['model_providers: "gateway_identity.audience": base_url: must be https:// (got "http://x")', "base_url"],
+    ['model_providers: "base_url": gateway_identity: audience is required', "gateway_audience"],
+    ['model_providers: "base_url": gateway_identity is not available for anthropic_subscription providers', null],
+    ['model_providers: "local.models": local.max_output: must be between 1 and 99', "max_output"],
+    ['model_providers: "local.models": gateway_identity is not available for anthropic_subscription providers', null],
+    [MOVED("audience"), "gateway_audience"],
+    [MOVED("base_url"), "gateway_audience"],
+    // The duplicate refusal quotes what the admin typed, which may spell base_url.
+    ['model_providers: "q": gateway_identity.audience "base_url" is already used by provider "p" for a different address; use a different one for each', "gateway_audience"],
+    ['invalid model providers: model_providers: "q": gateway_identity: audience must be at most 256 bytes, with no control characters', "gateway_audience"],
+  ])("%s", (message, field) => {
+    expect(refusedField(message)).toBe(field);
   });
 });

@@ -176,7 +176,15 @@ export function ModelProviderEditor({
       } catch (e) {
         const provider = snap.providers.providers?.find((p) => p.id === next.id) ?? next;
         setPartial({ list: { ...list, ...snap }, provider, message: getErrorMessage(e) });
-        setBaseline(edited);
+        // The row is saved now, with identity as the draft has it: later edits compare against that.
+        const kept: ProviderDraft = {
+          ...draft!,
+          gatewaySaved: provider.gateway_identity
+            ? { baseUrl: provider.base_url ?? "", audience: provider.gateway_identity.audience }
+            : null,
+        };
+        setDraft(kept);
+        setBaseline(editedText(kept, audience));
         return;
       }
     }

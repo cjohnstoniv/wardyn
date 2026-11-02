@@ -305,12 +305,15 @@ export type RefusedField = "base_url" | "gateway_audience" | "models" | "max_con
 
 export function refusedField(message: string | null): RefusedField | null {
   if (!message) return null;
-  if (message.includes("model must be one of local.models")) return null; // a harness's, see refusedHarness
-  // Before base_url: "base_url changed, so gateway_identity.audience must be entered again" is the audience's.
-  if (message.includes("gateway_identity") && message.includes("audience")) return "gateway_audience";
-  if (message.includes("base_url")) return "base_url";
-  if (message.includes("local.models")) return "models";
-  return (["max_context", "max_output", "keep_alive_seconds"] as const).find((f) => message.includes(`local.${f}`)) ?? null;
+  // The provider id is quoted at the sentence's start and may spell a field's name ("audience", "local.models"),
+  // so only what follows it is read. A refusal without that opening is read whole.
+  const rest = message.replace(/^.*?model_providers: "[a-z0-9._-]*": /s, "");
+  if (rest.includes("model must be one of local.models")) return null; // a harness's, see refusedHarness
+  // The audience's refusals, matched at their fixed opening: the duplicate one quotes what the admin typed.
+  if (/^(gateway_identity[.:] ?audience|moved to a new address, so gateway_identity\.audience)/.test(rest)) return "gateway_audience";
+  if (rest.includes("base_url")) return "base_url";
+  if (rest.includes("local.models")) return "models";
+  return (["max_context", "max_output", "keep_alive_seconds"] as const).find((f) => rest.includes(`local.${f}`)) ?? null;
 }
 
 // The agent whose Model the server refused ("codex-cli: model must be one of local.models").
