@@ -6,9 +6,13 @@
 package docker
 
 import (
+	"context"
 	"errors"
 	"os"
+	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -27,7 +31,7 @@ func testDiskDrive(target string) types.DriveMount {
 
 func TestMacDisksAreAttachedInTheirOrder(t *testing.T) {
 	r := newMacRig(t)
-	disks, guest, err := r.d.macDiskDrives([]types.DriveMount{testDiskDrive(runner.DriveTarget), testDiskDrive(runner.ScratchWorkPath)})
+	disks, guest, err := r.d.macDiskDrives(t.Context(), []types.DriveMount{testDiskDrive(runner.DriveTarget), testDiskDrive(runner.ScratchWorkPath)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +53,7 @@ func TestMacDiskSizeIsTheExistingImagesAndTheRunsOnlyForANewOne(t *testing.T) {
 	if err := macvm.MakeDiskImage(img, 2<<20); err != nil {
 		t.Fatal(err)
 	}
-	disks, guest, err := r.d.macDiskDrives([]types.DriveMount{testDiskDrive(runner.DriveTarget)}) // asks for 1 GiB
+	disks, guest, err := r.d.macDiskDrives(t.Context(), []types.DriveMount{testDiskDrive(runner.DriveTarget)}) // asks for 1 GiB
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +62,65 @@ func TestMacDiskSizeIsTheExistingImagesAndTheRunsOnlyForANewOne(t *testing.T) {
 	}
 }
 
-func TestMacDisksRefuseAHeldDiskInItsSentence(t *testing.T) {
+// A disk a live run of this driver holds (its run config names the image, as a started run's does) is
+// refused at once, in the one sentence.
+func TestMacDisksRefuseAtOnceADiskALiveRunHolds(t *testing.T) {
+	r := newMacRig(t)
+	img, _ := r.c.Layout.DriveImage(testDiskObject)
+	runID := uuid.MustParse("5a5a5a5a-0000-4000-8000-0000000000aa")
+	dir := r.c.runDir(runID)
+	if err := macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: runID.String(), BaseDir: "/base", Disks: []macvm.Disk{{ID: "wardyn-disk0", Path: img}}}); err != nil {
+		t.Fatal(err)
+	}
+	r.d.vms.Store("live", &vmRun{runID: runID, dir: dir, mac: true})
+	unlock, err := macvm.LockDisk(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		_, _, err := r.d.macDiskDrives(t.Context(), []types.DriveMount{testDiskDrive(runner.DriveTarget)})
+		if err == nil || err.Error() != runner.MacVMDiskLocked("Notes") {
+			t.Fatalf("err = %v, want %q", err, runner.MacVMDiskLocked("Notes"))
+		}
+		if waited := time.Since(start); waited != 0 {
+			t.Fatalf("a disk a live run holds was waited for, %v", waited)
+		}
+	})
+	if gone, err := r.d.ReclaimDrive(t.Context(), testDiskDrive(runner.DriveTarget)); gone != "" || !errors.Is(err, runner.ErrDriveInUse) {
+		t.Fatalf("reclaim of a held disk = %q, %v", gone, err)
+	}
+}
+
+// A disk held by nothing this driver keeps live (the run that has just ended, still being released, or
+// another login's VM) is waited for: three seconds at a time, for ninety.
+func TestMacDisksWaitForADiskReleasedWithinNinetySeconds(t *testing.T) {
+	r := newMacRig(t)
+	img, _ := r.c.Layout.DriveImage(testDiskObject)
+	held, err := macvm.LockDisk(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock := sync.OnceFunc(held)
+	defer unlock()
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		go func() {
+			time.Sleep(10 * time.Second)
+			unlock()
+		}()
+		disks, _, err := r.d.macDiskDrives(t.Context(), []types.DriveMount{testDiskDrive(runner.DriveTarget)})
+		if err != nil || len(disks) != 1 {
+			t.Fatalf("disks = %+v, err = %v, want the disk once it was released", disks, err)
+		}
+		if waited := time.Since(start); waited != 12*time.Second {
+			t.Fatalf("waited %v, want 12s: the first poll after the release at 10s", waited)
+		}
+	})
+}
+
+func TestMacDisksNeverReleasedFailAtNinetySecondsInTheSameSentence(t *testing.T) {
 	r := newMacRig(t)
 	img, _ := r.c.Layout.DriveImage(testDiskObject)
 	unlock, err := macvm.LockDisk(img)
@@ -66,13 +128,40 @@ func TestMacDisksRefuseAHeldDiskInItsSentence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unlock()
-	_, _, err = r.d.macDiskDrives([]types.DriveMount{testDiskDrive(runner.DriveTarget)})
-	if err == nil || err.Error() != runner.MacVMDiskLocked("Notes") {
-		t.Fatalf("err = %v, want %q", err, runner.MacVMDiskLocked("Notes"))
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		_, _, err := r.d.macDiskDrives(t.Context(), []types.DriveMount{testDiskDrive(runner.DriveTarget)})
+		want := "Waited 90 seconds for the drive to be released. " + runner.MacVMDiskLocked("Notes")
+		if err == nil || err.Error() != want || !runner.IsMacVMDiskLocked(err.Error()) {
+			t.Fatalf("err = %v, want %q", err, want)
+		}
+		if waited := time.Since(start); waited != 90*time.Second {
+			t.Fatalf("waited %v, want 90s", waited)
+		}
+	})
+}
+
+func TestMacDisksWaitEndsWithTheCreate(t *testing.T) {
+	r := newMacRig(t)
+	img, _ := r.c.Layout.DriveImage(testDiskObject)
+	unlock, err := macvm.LockDisk(img)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if gone, err := r.d.ReclaimDrive(t.Context(), testDiskDrive(runner.DriveTarget)); gone != "" || !errors.Is(err, runner.ErrDriveInUse) {
-		t.Fatalf("reclaim of a held disk = %q, %v", gone, err)
-	}
+	defer unlock()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		start := time.Now()
+		time.AfterFunc(10*time.Second, cancel)
+		_, _, err := r.d.macDiskDrives(ctx, []types.DriveMount{testDiskDrive(runner.DriveTarget)})
+		if !errors.Is(err, context.Canceled) || runner.IsMacVMDiskLocked(err.Error()) {
+			t.Fatalf("err = %v, want the create's cancel", err)
+		}
+		if waited := time.Since(start); waited != 10*time.Second {
+			t.Fatalf("waited %v, want 10s", waited)
+		}
+	})
 }
 
 func TestMacDisksRefusals(t *testing.T) {
@@ -84,7 +173,7 @@ func TestMacDisksRefusals(t *testing.T) {
 	} {
 		drive := testDiskDrive(runner.DriveTarget)
 		mod(&drive)
-		if _, _, err := r.d.macDiskDrives([]types.DriveMount{drive}); err == nil {
+		if _, _, err := r.d.macDiskDrives(t.Context(), []types.DriveMount{drive}); err == nil {
 			t.Errorf("%s: the disk was attached", name)
 		}
 	}
