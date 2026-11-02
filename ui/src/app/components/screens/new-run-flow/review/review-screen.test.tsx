@@ -106,6 +106,8 @@ interface Open {
   drives?: unknown;
   /** GET /me/drives, one answer per read; wins over `drives`. */
   drivesFn?: () => unknown;
+  /** GET /me/walls: the spec the person saved, or "fail" for a read that fails. */
+  walls?: Record<string, unknown> | "fail";
 }
 function open(intent: RunIntent, o: Open = {}) {
   const loaders: SeedLoaders = {
@@ -115,7 +117,8 @@ function open(intent: RunIntent, o: Open = {}) {
   wfetchMock.mockImplementation(async (path: string, init?: { method?: string }) => {
     if (path === "/setup/status" && o.status) return json(o.status);
     if (path.startsWith("/me/drives")) return json(o.drivesFn ? o.drivesFn() : o.drives ?? { drives: [], pool_checked: true });
-    if (path === "/me/walls") return json({ spec: {} });
+    if (path === "/me/walls" && o.walls === "fail") throw new Error("walls unavailable");
+    if (path === "/me/walls") return json({ spec: o.walls ?? {} });
     if (path === "/templates" && init?.method === "POST") return json({ id: "t9", kind: "template" });
     if (path === "/templates") return json({ templates: [], publish: { org: false, groups: [], groups_unverified: false } });
     if (path.startsWith("/templates/")) return o.templateRead ? o.templateRead() : json({ document: { needs_setup: o.needs ?? [] } });
@@ -640,6 +643,27 @@ describe("Review: the person's walls", () => {
     await screen.findByLabelText(NR_REVIEW.POLICY_TITLE);
     await waitFor(() => expect(wfetchMock.mock.calls.some(([p]) => p === "/me/walls")).toBe(true));
     expect(wfetchMock.mock.calls.filter(([p]) => p === "/me/walls")).toHaveLength(1);
+  });
+});
+
+describe("Review: Your walls apply (G4a)", () => {
+  it("says which walls apply above the groups, not inside the Access group", async () => {
+    open(AGENT, { walls: { denied_domains: ["x.example"], first_use_approval: "always_deny" } });
+    await ready();
+    const line = await screen.findByTestId("walls-apply");
+    expect(line).toHaveTextContent("Your walls apply: 1 site never reached. Change your walls");
+    expect(screen.getByRole("link", { name: "Change your walls" })).toHaveAttribute("target", "_blank");
+    expect(document.querySelectorAll("[data-testid=walls-apply]")).toHaveLength(1);
+    expect(group("access").queryByTestId("walls-apply")).toBeNull();
+    expect(line.compareDocumentPosition(document.querySelector("[data-review-group=run]") as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("says nothing for walls that name nothing, or when they could not be read", async () => {
+    open(AGENT, { walls: "fail" });
+    await ready();
+    await screen.findByLabelText(NR_REVIEW.POLICY_TITLE);
+    await waitFor(() => expect(wfetchMock.mock.calls.some(([p]) => p === "/me/walls")).toBe(true));
+    expect(screen.queryByTestId("walls-apply")).toBeNull();
   });
 });
 
