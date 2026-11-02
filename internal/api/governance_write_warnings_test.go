@@ -123,7 +123,8 @@ func TestGovernanceControlWarnings(t *testing.T) {
 
 	t.Run("limit false names the local run it refuses", func(t *testing.T) {
 		got := governanceOmissionWarnings(deployment, deployment, types.GovernanceLimits{})
-		if !has(got, "local_self_defined_components off") || !has(got, "cannot start a local run with a component they define themselves") {
+		if !has(got, "local_self_defined_components off") || !has(got, "cannot start a local run with a component they define themselves") ||
+			!has(got, "Leaving it off is fine if that is intended") || !has(got, "(an overlay cannot turn it on)") {
 			t.Errorf("warnings = %q, want the local_self_defined_components sentence", got)
 		}
 		if got := governanceOmissionWarnings(deployment, deployment, types.GovernanceLimits{LocalSelfDefinedComponents: true}); len(got) != 0 {
@@ -142,7 +143,7 @@ func TestGovernanceControlWarnings(t *testing.T) {
 			"desktop rules allow download, which the deployment default blocks",
 			`recording level "off" is LOWER than the deployment default's "screen_actions"`,
 			"omits 1 tool rule(s) the deployment default carries (WebFetch)",
-			"no auto_stop_after_sec while the deployment default stops idle sandboxes after 900 s",
+			"no auto_stop_after_sec while the deployment default stops idle sandboxes after 900 s — this profile sets no idle cap, so a run stops only if its own policy or pool says so",
 			`llm_inspection mode "alert" is WEAKER than the deployment default's "block"`,
 		} {
 			if !has(got, want) {
@@ -151,6 +152,19 @@ func TestGovernanceControlWarnings(t *testing.T) {
 		}
 		if has(got, "copy_out") {
 			t.Errorf("warnings %q name copy_out, which the deployment default allows too", got)
+		}
+	})
+	t.Run("a profile with no recording level says it sets no minimum", func(t *testing.T) {
+		profile := deployment
+		profile.Recording = ""
+		got := governanceOmissionWarnings(profile, deployment, types.GovernanceLimits{LocalSelfDefinedComponents: true})
+		if !has(got, `sets no recording level while the deployment default's is "screen_actions" — it sets no minimum`) || has(got, "LOWER") {
+			t.Errorf("warnings = %q, want only the unset recording sentence", got)
+		}
+		off := deployment
+		off.Recording = types.RecordingOff
+		if got := governanceControlWarnings(profile, off, types.GovernanceLimits{LocalSelfDefinedComponents: true}); has(got, "recording") {
+			t.Errorf("warnings = %q, want no recording warning when the default's level is off", got)
 		}
 	})
 	t.Run("a profile at least as strict warns about none of them", func(t *testing.T) {
