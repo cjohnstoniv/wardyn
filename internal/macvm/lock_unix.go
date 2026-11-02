@@ -75,7 +75,8 @@ func checkOwner(fi os.FileInfo) error {
 // holds the disk's lock while it does, but a flock dies with its holder and a mount doesn't. So the
 // command writes <image>.mounted under the lock before hdiutil starts and removes it only once it has
 // seen the image detached. Any marker at all refuses LockDisk: the attach may even still be finishing,
-// and only a person's recovery, which proves otherwise, clears it.
+// and only a person's recovery clears it, once hdiutil lists the image detached and no hdiutil names it.
+// That is all recovery can see: it proves no hdiutil, not that no attach is pending in the system.
 const diskMountSuffix = ".mounted"
 
 // The phases a DiskMount records.

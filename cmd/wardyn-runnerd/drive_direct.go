@@ -20,11 +20,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
-	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -36,7 +34,8 @@ import (
 // wrote. It is off unless the organisation's macos_vm.allow_direct_drive_mount is on, and it can't stop a
 // person who runs hdiutil themselves. The disk's lock is held while the drive is mounted; a killed command
 // loses the lock and leaves the mount, so a marker (macvm.WriteDiskMount) keeps refusing runs until
-// `--recover` has proved the image detached with no hdiutil still working on it.
+// `--recover` has seen the image detached and no hdiutil naming it. That is what it proves: not that no attach
+// is pending anywhere in the system.
 
 const (
 	// driveDirectSettingName is the file in the runner's state directory that says the organisation allows
@@ -78,13 +77,15 @@ type driveDirectArgs struct {
 // driveDirect is `drive open --direct`. The setting is read first, so a refusal says nothing about the drive.
 // Recovery needs no setting: turning the setting off must not strand a drive.
 func (m *macOSVMs) driveDirect(ctx context.Context, f *driveDirectFlags, a driveDirectArgs) error {
+	typed := a.name
+	a.name = driveOpenSafe(typed) // every line, refusal, marker and log entry below says this form
 	if !f.direct {
 		return errors.New("--recover goes with --direct: drive open --direct --recover " + a.name)
 	}
 	if !f.recover && !driveDirectAllowed(driveDirectSettingFile(m.limitsFile)) {
 		return fmt.Errorf("Mounting a drive directly is off on this install. An admin can turn it on in Settings, under macOS virtual machines. To open the drive in a throwaway VM instead, run drive open %s. The setting can't stop anyone who can run hdiutil on this Mac.", a.name)
 	}
-	object, _, err := m.driveOpenFind(a.name)
+	object, _, err := m.driveOpenFind(typed)
 	if err != nil {
 		return err
 	}
@@ -115,7 +116,8 @@ func driveDirectMount(ctx context.Context, image string, a driveDirectArgs, logF
 	if _, found, _ := macvm.ReadDiskMount(image); found {
 		return &macvm.DiskMountedError{Name: a.name}
 	}
-	// From here a signal waits its turn: it must not cut an attach or a detach short.
+	// From here a signal waits its turn, however many arrive: it must not cut an attach or a detach short,
+	// so this route doesn't take `drive open`'s second Ctrl-C. driveDirectRun's waits bound both.
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(stop)
@@ -141,7 +143,7 @@ func driveDirectMount(ctx context.Context, image string, a driveDirectArgs, logF
 	}
 	where := make([]string, len(points))
 	for i, p := range points {
-		where[i] = driveDirectClean(p)
+		where[i] = driveOpenSafe(p)
 	}
 	fmt.Fprintf(a.out, "Mounted %q at %s with noexec, nosuid and nodev. This Mac's system reads the disk an agent wrote, so open it only if you trust that agent's work.\n", a.name, strings.Join(where, ", "))
 	fmt.Fprintf(a.out, "Files you write here use your Mac user's ownership and permissions. drive open %s writes files back as the agent.\n", a.name)
@@ -178,7 +180,7 @@ func driveDirectRecover(image string, a driveDirectArgs, logFile string) error {
 	// A marker that can't be read says nothing, so the image's own path is what's checked. One that names
 	// another image is not this drive's to clear.
 	if rerr == nil && mark.Image != image {
-		return fmt.Errorf("the marker stays: it names the image %s, not %s", driveDirectClean(mark.Image), image)
+		return fmt.Errorf("the marker stays: it names the image %s, not %s", driveOpenSafe(mark.Image), image)
 	}
 	if err := driveDirectDetachClear(image, a.out); err != nil {
 		return fmt.Errorf("the marker stays, so runs on %q stay refused: %w", a.name, err)
@@ -190,7 +192,7 @@ func driveDirectRecover(image string, a driveDirectArgs, logFile string) error {
 	return nil
 }
 
-// driveDirectDetachClear proves the image detached and no hdiutil at work on it, detaching it if it is still
+// driveDirectDetachClear checks that hdiutil lists the image as detached and that no hdiutil names it, detaching it if it is still
 // attached, and only then removes the marker. Anything uncertain is an error and leaves the marker: an hdiutil
 // that can't be read, an output that can't be parsed, a detach that failed, an attach still running.
 func driveDirectDetachClear(image string, out io.Writer) error {
@@ -203,15 +205,15 @@ func driveDirectDetachClear(image string, out io.Writer) error {
 	}
 	if len(devs) > 0 {
 		dev := slices.MinFunc(devs, func(a, b string) int { return len(a) - len(b) }) // the whole disk
-		fmt.Fprintf(out, "Detaching %s.\n", driveDirectClean(dev))
+		fmt.Fprintf(out, "Detaching %s.\n", driveOpenSafe(dev))
 		if _, err := driveDirectRun(driveDirectToolWait, "hdiutil", "detach", dev); err != nil {
-			return fmt.Errorf("hdiutil could not detach %s: %w", driveDirectClean(dev), err)
+			return fmt.Errorf("hdiutil could not detach %s: %w", driveOpenSafe(dev), err)
 		}
 		if devs, err = driveDirectAttached(image); err != nil {
 			return err
 		}
 		if len(devs) > 0 {
-			return fmt.Errorf("the image is still attached as %s after hdiutil detached it", driveDirectClean(strings.Join(devs, ", ")))
+			return fmt.Errorf("the image is still attached as %s after hdiutil detached it", driveOpenSafe(strings.Join(devs, ", ")))
 		}
 	}
 	if err := driveDirectNoLiveTool(image); err != nil { // an attach that began between the reads
@@ -241,7 +243,7 @@ func driveDirectAttach(image string) (points []string, err error) {
 	}
 	for _, p := range points {
 		if !driveDirectFlagsHeld(string(table), p) {
-			return nil, fmt.Errorf("%s is not mounted with %s, so it was detached", driveDirectClean(p), strings.Join(driveDirectMountFlags, ", "))
+			return nil, fmt.Errorf("%s is not mounted with %s, so it was detached", driveOpenSafe(p), strings.Join(driveDirectMountFlags, ", "))
 		}
 	}
 	return points, nil
@@ -321,7 +323,8 @@ func driveDirectEntryStrings(list any, key string) []string {
 }
 
 // driveDirectNoLiveTool is nil only when ps ran and lists no hdiutil naming the image: an hdiutil outlives a
-// killed command, so a negative `hdiutil info` alone doesn't prove an attach won't finish later.
+// killed command, so a negative `hdiutil info` alone doesn't prove an attach won't finish later. This proves
+// no hdiutil, not that no attach is pending: work a dead hdiutil handed to a system helper wouldn't show here.
 func driveDirectNoLiveTool(image string) error {
 	out, err := driveDirectRun(driveDirectToolWait, "ps", "-axww", "-o", "pid=", "-o", "command=")
 	if err != nil {
@@ -335,7 +338,7 @@ func driveDirectNoLiveTool(image string) error {
 			continue
 		}
 		if slices.ContainsFunc(strings.Fields(line), func(word string) bool { return filepath.Base(word) == "hdiutil" }) {
-			return fmt.Errorf("an hdiutil is still working on this image (%s). Wait for it to end, then try again", driveDirectClean(strings.TrimSpace(line)))
+			return fmt.Errorf("an hdiutil is still working on this image (%s). Wait for it to end, then try again", driveOpenSafe(strings.TrimSpace(line)))
 		}
 	}
 	return nil
@@ -358,20 +361,11 @@ func driveDirectRun(wait time.Duration, name string, args ...string) ([]byte, er
 	}
 	if err != nil {
 		if text := strings.TrimSpace(stderr.String()); text != "" {
-			return nil, fmt.Errorf("%w: %s", err, driveDirectClean(text))
+			return nil, fmt.Errorf("%w: %s", err, driveOpenSafe(text))
 		}
 		return nil, err
 	}
 	return stdout.Bytes(), nil
-}
-
-// driveDirectClean makes a string fit for the person's terminal. A volume's name is the agent's to choose
-// and becomes its mount point, so anything but printing characters is shown quoted, never sent raw.
-func driveDirectClean(s string) string {
-	if strings.IndexFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) < 0 {
-		return s
-	}
-	return strconv.QuoteToGraphic(s)
 }
 
 // driveDirectParsePlist reads the XML property list hdiutil writes: its top dictionary, with dictionaries,
@@ -381,7 +375,7 @@ func driveDirectParsePlist(data []byte) (map[string]any, error) {
 	for {
 		tok, err := d.Token()
 		if err != nil {
-			return nil, fmt.Errorf("its output is not a property list: %w", err)
+			return nil, fmt.Errorf("its output is not a property list: %s", driveOpenSafe(err.Error()))
 		}
 		start, ok := tok.(xml.StartElement)
 		if !ok || start.Name.Local == "plist" {
@@ -389,7 +383,7 @@ func driveDirectParsePlist(data []byte) (map[string]any, error) {
 		}
 		v, err := driveDirectPlistValue(d, start)
 		if err != nil {
-			return nil, fmt.Errorf("its output is not a property list: %w", err)
+			return nil, fmt.Errorf("its output is not a property list: %s", driveOpenSafe(err.Error()))
 		}
 		top, ok := v.(map[string]any)
 		if !ok {

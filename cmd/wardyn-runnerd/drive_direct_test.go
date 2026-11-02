@@ -33,6 +33,8 @@ const (
 // of a killed command does, and then attaches.
 const driveDirectFakeHdiutil = `#!/bin/sh
 echo "$*" >> "$FAKE/calls"
+POINT=/Volumes/scratch
+[ -e "$FAKE/point" ] && POINT=$(cat "$FAKE/point")
 plist_head='<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>framework</key><string>1</string>'
 case "$1" in
 attach)
@@ -41,13 +43,16 @@ attach)
 		i=0
 		while [ -e "$FAKE/attach-wait" ] && [ $i -lt 150 ]; do sleep 0.2; i=$((i+1)); done
 	fi
-	if [ -e "$FAKE/attach-fail" ]; then echo "attach failed" >&2; exit 1; fi
+	if [ -e "$FAKE/attach-fail" ]; then
+		if [ -e "$FAKE/attach-fail-text" ]; then cat "$FAKE/attach-fail-text" >&2; else echo "attach failed" >&2; fi
+		exit 1
+	fi
 	touch "$FAKE/attached"
 	if [ -e "$FAKE/attach-garbage" ]; then echo "not a plist"; exit 0; fi
 	echo "$plist_head<key>system-entities</key><array>"
 	echo "<dict><key>dev-entry</key><string>/dev/disk9</string></dict>"
 	echo "<dict><key>dev-entry</key><string>/dev/disk9s1</string></dict>"
-	echo "<dict><key>dev-entry</key><string>/dev/disk9s2</string><key>mount-point</key><string>/Volumes/scratch</string></dict>"
+	echo "<dict><key>dev-entry</key><string>/dev/disk9s2</string><key>mount-point</key><string>$POINT</string></dict>"
 	echo "</array></dict></plist>"
 	;;
 info)
@@ -70,11 +75,13 @@ esac
 
 // driveDirectFakeMount is mount on PATH.
 const driveDirectFakeMount = `#!/bin/sh
+POINT=/Volumes/scratch
+[ -e "$FAKE/point" ] && POINT=$(cat "$FAKE/point")
 if [ -e "$FAKE/mount-no-flags" ]; then
 	echo "/dev/disk9s2 on /Volumes/scratch (hfs, local, journaled)"
 else
 	echo "/dev/disk3s1 on / (apfs, local)"
-	echo "/dev/disk9s2 on /Volumes/scratch (hfs, local, nodev, nosuid, noexec, journaled, noowners, mounted by ana)"
+	echo "/dev/disk9s2 on $POINT (hfs, local, nodev, nosuid, noexec, journaled, noowners, mounted by ana)"
 fi
 `
 
@@ -525,17 +532,44 @@ func TestDriveDirectFailedAttach(t *testing.T) {
 	})
 }
 
-// A volume's name is the agent's: control characters in a mount point never reach the terminal raw.
-func TestDriveDirectCleanQuotesWhatIsNotPrintable(t *testing.T) {
-	if got := driveDirectClean("/Volumes/My Drive é"); got != "/Volumes/My Drive é" {
-		t.Errorf("clean = %q", got)
-	}
-	if got := driveDirectClean("/Volumes/x\x1b]0;owned\x07"); strings.ContainsAny(got, "\x1b\x07") {
-		t.Errorf("clean = %q", got)
-	}
-	if got := driveDirectClean("/Volumes/a\u202eb"); strings.ContainsRune(got, '\u202e') {
-		t.Errorf("clean = %q", got)
-	}
+// What reaches the terminal is escaped as `drive open` escapes it: a volume's name is the agent's to choose and
+// becomes its mount point, and a tool's error text can carry it.
+func TestDriveDirectEscapesWhatItPrints(t *testing.T) {
+	t.Run("a mount point", func(t *testing.T) {
+		f := newDriveDirectFixture(t)
+		f.allow(t)
+		if err := os.WriteFile(filepath.Join(f.fake, "point"), []byte("/Volumes/a\u202eb"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		if err := f.open(strings.NewReader("\n"), &out); err != nil {
+			t.Fatal(err)
+		}
+		if strings.ContainsRune(out.String(), '\u202e') || !strings.Contains(out.String(), "Mounted ") {
+			t.Fatalf("output = %q", out.String())
+		}
+	})
+	t.Run("a tool's error text", func(t *testing.T) {
+		f := newDriveDirectFixture(t)
+		f.allow(t)
+		if err := os.WriteFile(filepath.Join(f.fake, "attach-fail-text"), []byte("bad\x1b]0;owned\x07volume"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f.steer(t, "attach-fail")
+		err := f.open(strings.NewReader("\n"), io.Discard)
+		if err == nil || strings.ContainsAny(err.Error(), "\x1b\x07") || !strings.Contains(err.Error(), "volume") {
+			t.Fatalf("open = %q", err)
+		}
+	})
+	t.Run("the typed name", func(t *testing.T) {
+		f := newDriveDirectFixture(t)
+		a := f.args(strings.NewReader("\n"), io.Discard)
+		a.name = "x\x1b[2Jy"
+		err := f.m.driveDirect(context.Background(), &driveDirectFlags{direct: true}, a)
+		if err == nil || strings.Contains(err.Error(), "\x1b") || !strings.Contains(err.Error(), "is off on this install") {
+			t.Fatalf("refusal = %q", err)
+		}
+	})
 }
 
 // Only the line of that mount point counts, and a volume named to look like it has the flags doesn't pass.
