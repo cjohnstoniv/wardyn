@@ -35,6 +35,7 @@ import { OpenInUserView, runPath, useConsoleMode } from "../wardyn/console-view"
 import { PUSH } from "../wardyn/copy/push";
 import { APPROVAL_WALLS } from "../wardyn/copy/personal-walls";
 import { PolicyRemedy, personalOwn } from "../wardyn/policy-remedy";
+import { useOwnerName } from "../../lib/use-owner-name";
 import { APPROVAL, APPROVAL_BANNER_LABEL, SECURITY_ONLY_REASON, approvalScopeBadge } from "../wardyn/copy";
 import { APPROVAL_ASKED, APPROVAL_ESCALATION } from "../wardyn/copy/approvals";
 import { useAgentName } from "../wardyn/use-agent-name";
@@ -172,6 +173,7 @@ export function ApprovalCard({
   // on the wire), a plain identity comparison, not the model-access door's
   // own audience predicate.
   const principal = usePrincipal();
+  const wallsOwnerName = useOwnerName(wallsPolicy.owner, wallsBlocked && !personalOwn(wallsPolicy, principal));
   // "approve" | "deny" while that decision is in flight, else null (#458) —
   // see AdoCapabilityCard's own `busy` doc for why a single boolean isn't
   // enough to spin only the pressed button. The push card follows the same rule.
@@ -388,7 +390,7 @@ export function ApprovalCard({
       {wallsBlocked && host && run && (
         <div className="mt-2.5 space-y-2" data-testid="approval-walls-block">
           <p className="text-sm text-foreground">
-            {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_BEFORE : APPROVAL_WALLS.OTHER_BEFORE(wallsPolicy.owner ?? "")}
+            {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_BEFORE : APPROVAL_WALLS.OTHER_BEFORE(wallsOwnerName)}
             <span className="font-mono">{host}</span>
             {personalOwn(wallsPolicy, principal) ? APPROVAL_WALLS.OWN_AFTER : APPROVAL_WALLS.OTHER_AFTER}
           </p>

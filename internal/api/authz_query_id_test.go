@@ -137,6 +137,11 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityPrincipal, readers: []string{"workloadListOwners", "workloadOwnerOf"},
 		ownAdmitted: true, pinnedBy: "TestPG_Workload_SponsorReadsAndDeletes",
 	},
+	// A foreign run answers the same empty 200 as an unknown one, as ?owner= lists do.
+	"GET /api/v1/workloads?run_id": {
+		entity: entityRun, readers: []string{"handleListWorkloads"},
+		ownAdmitted: true, pinnedBy: "TestPG_Workload_ListByRunFindsTheWorkloadOfThatRun",
+	},
 	"GET /api/v1/workloads/{name}?owner": {
 		entity: entityPrincipal, readers: []string{"workloadOwnerOf"},
 		ownAdmitted: true, pinnedBy: "TestPG_Workload_SponsorReadsAndDeletes",

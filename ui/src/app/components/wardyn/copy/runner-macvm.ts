@@ -75,8 +75,8 @@ export const MACVM_R = {
   R38: "macOS asked for setup by hand. Open the macOS window on this Mac and finish setup once.",
   /** MV-R39, macOS asked for setup by hand (only if D1(c)): hint (conditional copy: ships only under its owner option) */
   R39: "The account name and its one-time password show on the Mac, never here.",
-  /** MV-R40, desktop observe-only (D2) (conditional copy: ships only under its owner option) */
-  R40: "The macOS desktop isn't available on this Mac yet: macOS turned Screen Sharing on for viewing only.",
+  /** MAC-V07, desktop observe-only; replaces MV-R40 */
+  R40: "On this Mac the macOS desktop is view only: macOS 26 doesn't keep Screen Sharing control here.",
   /** MV-R41, desktop observe-only: fix (only if D2(a)) (conditional copy: ships only under its owner option) */
   R41: "Open the macOS window on this Mac and turn on Screen Sharing control once. Until then, macOS VMs run without a desktop.",
   /** MV-R43, update needed */

@@ -57,7 +57,7 @@ func (s *Server) sweepRunLeases(ctx context.Context) error {
 		s.leaseRun(ctx, leaser, run)
 	}
 	// A run the sweep no longer lists (torn down, killed) needs no entry.
-	for _, m := range []*sync.Map{&s.leaseEnded, &s.containmentFailed, &s.containmentPending} {
+	for _, m := range []*sync.Map{&s.leaseEnded, &s.containmentFailed, &s.containmentPending, &s.renewalRefused} {
 		m.Range(func(id, _ any) bool {
 			if !listed[id.(uuid.UUID)] {
 				m.Delete(id)

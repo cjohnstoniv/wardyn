@@ -167,7 +167,7 @@ Install the CLI with the line under *Get the CLI* in the console. Managed Macs: 
 | Rank | Path | For | What checks it |
 |---|---|---|---|
 | 1 | `install-cli.sh` (macOS, Linux, WSL2) or `install-cli.ps1` (Windows), release assets | every person | A checksum from the same place, which catches a broken download and not a tampered release, and cosign when it is on `PATH`. [What it checks](VERIFY.md#what-install-cli-checks) |
-| 2 | `wardyn-runnerd.pkg` | managed Macs (MDM) | Apple's signature check at install |
+| 2 | `wardyn-runnerd.pkg` | managed Macs (MDM) | You, until the release is signed: the released package is unsigned, so check its hash against the signed `SHA256SUMS` ([VERIFY.md](VERIFY.md#5-verify-the-release-assets)) |
 | 3 | The raw `wardyn-<os>-<arch>` with `SHA256SUMS` (and `.sig`, `.pem`) | CI and air-gapped hosts | You, by [VERIFY.md](VERIFY.md#5-verify-the-release-assets) |
 
 ```sh
@@ -276,7 +276,7 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 - A mirror must carry `SHA256SUMS`, its bundle and this platform's runner. A mirror without the runner fails with "asset missing on mirror". The pinned identity means a mirror cannot substitute a binary.
 - A runner already at `--version` is left alone, and nothing is downloaded.
 - `wardyn login` and `wardyn whoami` say once a day when this computer's runner is older than its organisation, and name the `upgrade` line.
-- The first CLI has no pin of its own yet: install it from the signed macOS package, or over TLS from the release with the `SHA256SUMS` check above. A later pin change, such as a renamed workflow, ships in the next CLI release.
+- The first CLI has no pin of its own yet: install it from the macOS package after checking it against the signed `SHA256SUMS` (the package is unsigned until the release is signed), or over TLS from the release with the `SHA256SUMS` check above. A later pin change, such as a renamed workflow, ships in the next CLI release.
 
 ### Upgrading a runner
 
@@ -304,9 +304,11 @@ A hand-installed macOS LaunchAgent does not get `--log-file`, so its log is not 
 | `recording_store` | `pg` | `WARDYN_RECORDING_STORE` | `--recording-store` |
 | `local_model_port` | none | `WARDYN_LOCAL_MODEL_PORT` | `--local-model-port` |
 | `drive_root` | none | `WARDYN_DRIVE_ROOT` | `--drive-root` (also `setup --drive-root`) |
+| `substrate` | `docker` | | `--substrate` (on `serve` and `doctor`) |
 
 - A setting comes from the first of these that has it: the flag, the managed preference (macOS profile), the environment, the file, the default.
 - `drive_root` lists the folders a drive bound to this runner, or a bound folder, may mount from, with everything under each. Unset, the runner advertises no `allowed_roots` and the organisation refuses drives on it. Each is an absolute, cleaned path below `/`. In `runnerd.json` it is a JSON array, `"drive_root": ["/Volumes/team-share", "/srv/x"]`; the `DriveRoot` managed preference is an array of strings; `WARDYN_DRIVE_ROOT` separates paths with the OS path-list separator (`:` on Linux and macOS); `--drive-root` is repeatable and, when given, wins over the other three. `serve` refuses a bad value from any of them, naming it. It applies to the Docker substrate only. See [User drives](operations/user-drives.md).
+- `substrate` is where runs execute: `docker`, `k8s` or `folders`. A file from before the key, or one that leaves it out, means `docker`. `serve` and `doctor` read it when `--substrate` is not given, so a `drive_root` on a folders or Kubernetes runner fails in `doctor` as it does in `serve`. Setup does not write it and keeps what you added.
 - `local_model_port` lists the ports, comma-separated, of a model server on this computer that runs here may use, such as `11434`. Unset, no run uses it. See [Local model server](OPERATIONS.md#on-a-persons-own-runner).
 - A `proxy_image` in the file is a pin: `serve` keeps it. `proxy_image_mirror` is a repository without a tag, such as `registry.example/wardyn-proxy`: `serve` pulls the tag the organisation names from it.
 - The file never holds a credential. A proxy URL with a user name or password is refused where it is read, with the variable to set instead.
@@ -333,7 +335,7 @@ An install from before the file keeps working: its environment file or LaunchAge
 | `engine` | The engine answers at `DOCKER_HOST`, and its version | `DOCKER_HOST` |
 | `proxy-image` | The image is on the engine or in its registry; a pinned image of another release than the organisation's is a version-skew failure | `WARDYN_PROXY_IMAGE` |
 | `relay` | The relay address is allowed and a probe container reaches it, through `setup`'s own check; the proxy network exists | `WARDYN_RELAY_LISTEN`, `WARDYN_INTERNAL_NETWORK` (missing network) |
-| `drive-roots` | Shown only when set: the drive roots in effect and where they came from (`--drive-root` is not read by `doctor`; the managed preference, the environment or `runnerd.json` is), or the refusal `serve` would give | `drive_root` |
+| `drive-roots` | Shown only when set: the drive roots in effect and where they came from (`--drive-root` is not read by `doctor`; the managed preference, the environment or `runnerd.json` is), or the refusal `serve` would give for the substrate in `runnerd.json` or `doctor --substrate` | `drive_root` |
 | `service` | The installed service, and on Linux whether systemd reports it running | |
 | `status` | The state and last error the service recorded in `status.json`, and the stage it stopped at | `WARDYN_RUNNER_STATE_DIR`, or the setting of that stage |
 

@@ -78,6 +78,15 @@ describe("RunStatusStrip (#3038)", () => {
 });
 
 describe("useEvidenceFacts (#3038)", () => {
+  // The tile has no room for the card's line saying the number is the guest's own (#3924).
+  it("does not read a macOS VM guest's CPU for the tile, and still reads its files", async () => {
+    getFiles.mockResolvedValue({ vcs: "git", files: [{ path: "a" }] });
+    getResources.mockResolvedValue({ cpu_percent: 12.4 });
+    const mac = renderHook(() => useEvidenceFacts("run-1", false, true));
+    await waitFor(() => expect(mac.result.current).toEqual({ files: 1, sandbox: null }));
+    expect(getResources).not.toHaveBeenCalled();
+  });
+
   it("reads the file count and the CPU, and reads anything else as nothing to show", async () => {
     getFiles.mockResolvedValue({ vcs: "git", files: [{ path: "a" }, { path: "b" }] });
     getResources.mockResolvedValue({ cpu_percent: 12.4 });

@@ -98,6 +98,10 @@ func (s *Server) uiFilterUpgrade(resp *http.Response, sess uiSession) error {
 // auditUIClipboard records one cut text by direction, size and hash. Never its content: the
 // filter does not hand the content over.
 func (s *Server) auditUIClipboard(sess uiSession, ev rfbfilter.Event) {
+	if ev.Input != "" {
+		s.auditUISession(sess, "ui.input.drop", ev.Input, "denied", map[string]any{"app": sess.App, "input": ev.Input})
+		return
+	}
 	outcome := "success"
 	if !ev.Allowed {
 		outcome = "denied"

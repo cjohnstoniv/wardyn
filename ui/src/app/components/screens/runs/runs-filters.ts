@@ -136,9 +136,13 @@ export function applySavedViewOwner(
   return params.toString();
 }
 
-function withoutOwner(search: string): string {
+// A search string reduced to what identifies a view: `owner` is who is asking, not part of a view, and the
+// order the params were written in is no part of it either (a view saved from a shared link, or by an earlier
+// build, need not list them the way serializeRunsFilters does).
+function viewKey(search: string): string {
   const params = new URLSearchParams(search);
   params.delete("owner");
+  params.sort();
   return params.toString();
 }
 
@@ -147,10 +151,9 @@ function withoutOwner(search: string): string {
 // picking "Failed this week" under Mine is the view's own search PLUS
 // `owner=me` — comparing that verbatim against the view's stored search
 // (which never carries `owner`) always misses, reading as Custom even though
-// a real view IS selected. In the Admin view, `owner` is compared away on
-// both sides; the User view never carries it, so an exact match there is
-// already the same comparison.
-export function matchesSavedView(viewSearch: string, currentSearch: string, adminView: boolean): boolean {
-  if (!adminView) return viewSearch === currentSearch;
-  return withoutOwner(viewSearch) === withoutOwner(currentSearch);
+// a real view IS selected. The same holds the other way: a view saved under
+// Mine stores `owner=me`, and picking it in the User view (which never carries
+// `owner`) must still match, so `owner` is compared away in both views.
+export function matchesSavedView(viewSearch: string, currentSearch: string): boolean {
+  return viewKey(viewSearch) === viewKey(currentSearch);
 }

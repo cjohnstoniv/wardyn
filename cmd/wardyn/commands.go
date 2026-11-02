@@ -124,6 +124,7 @@ func runCmd(client clientFn) *cobra.Command {
 	var where runPlacementFlags
 	var ends runEndFlags
 	var sched runScheduleFlags
+	var machine runMachineFlags
 	cmd := &cobra.Command{
 		Use:     "run",
 		Aliases: []string{"runs"},
@@ -184,6 +185,7 @@ func runCmd(client clientFn) *cobra.Command {
 					return fmt.Errorf("--wait and the document's interactive: true are mutually exclusive (an interactive run never finishes on its own)")
 				}
 			}
+			machine.apply(&body)
 			if err := setLocalFolder(&body, localFolder, localFolderRemote, createJSON); err != nil {
 				return err
 			}
@@ -242,7 +244,9 @@ func runCmd(client clientFn) *cobra.Command {
 			return seedThenWait(cmd, client(), run.ID, localFolder, localFolderRemote, wait, timeout)
 		},
 	}
-	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; only --title, --description, --wait, --timeout, --max-wait, --start-at, --time-zone, --json and --dry-run go with it. A document's inline_policy is sent as an overlay on your default policy, not as a replacement")
+	cmd.Flags().StringVar(&file, "file", "", "launch a kind: Run document (JSON or YAML, or '-' for stdin) instead of the flags below; "+
+		"only --title, --description, --wait, --timeout, --max-wait, --start-at, --time-zone, --machine-kind, --macos-base, --json and --dry-run go with it. "+
+		"A document's inline_policy is sent as an overlay on your default policy, not as a replacement")
 	cmd.Flags().StringVar(&repo, "repo", "", "repository (org/name; optional — omit for an ephemeral scratch run)")
 	cmd.Flags().StringVar(&agent, "agent", "", "agent name (e.g. claude-code)")
 	cmd.Flags().StringVar(&task, "task", "", "human task description")
@@ -250,6 +254,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&description, "description", "", "optional free-text note: why this run exists")
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy id (optional; uses the default policy if unset)")
 	where.register(cmd)
+	machine.register(cmd)
 	ends.register(cmd)
 	cmd.Flags().StringVar(&workspaceID, "workspace", "", "onboarded workspace id to launch against (optional; seeds its source, egress, image and bound model creds — composes with --policy/--policy-file)")
 	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON or YAML RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")

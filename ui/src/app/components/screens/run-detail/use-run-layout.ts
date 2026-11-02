@@ -26,7 +26,7 @@ import {
   type RunLayoutPreset,
   type RunLayoutWidget,
 } from "../../../lib/api/run-layout";
-import { forRun, normalizeLayout, presetLayout } from "./widget-registry";
+import { forRun, isServiceRemoved, normalizeLayout, presetLayout, SERVICE_REMOVED } from "./widget-registry";
 
 // Long enough that a drag across the canvas is one PUT, short enough that a
 // human who drags and immediately closes the tab keeps the arrangement (and
@@ -74,6 +74,9 @@ export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayou
   // disagreed until the next page load. The load now drops its own answer the
   // same way it already drops it after unmount.
   const dirty = React.useRef(false);
+  // The person took the Service panel out of this preset's saved layout. A saved layout with no Service entry reads
+  // as one that predates the panel, which gets it, so the removal is stored as SERVICE_REMOVED and kept out of `layout`.
+  const serviceRemoved = React.useRef(false);
 
   const commit = (next: RunLayoutWidget[]) => {
     layoutRef.current = next;
@@ -94,7 +97,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayou
     async (body: RunLayoutWidget[]): Promise<SaveResult> => {
       if (!persistRef.current) return "unsupported";
       try {
-        await runLayoutApi.putLayout(preset, body);
+        await runLayoutApi.putLayout(preset, serviceRemoved.current ? [...body, SERVICE_REMOVED] : body);
         return "ok";
       } catch (err) {
         if (err instanceof HttpError && err.status === 501) {
@@ -119,6 +122,8 @@ export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayou
     (next: RunLayoutWidget[]) => {
       const norm = normalizeLayout(next, preset);
       dirty.current = true;
+      // A service run's live layout always shows the panel until it is taken out; a run with no panel says nothing.
+      if (service && preset === "live") serviceRemoved.current = !norm.some((w) => w.widget === "service");
       commit(norm);
       cancelPending();
       timer.current = setTimeout(() => {
@@ -126,7 +131,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayou
         void put(norm);
       }, SAVE_DEBOUNCE_MS);
     },
-    [preset, put],
+    [preset, service, put],
   );
 
   const save = React.useCallback(async (): Promise<SaveResult> => {
@@ -137,6 +142,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayou
   const reset = React.useCallback(() => {
     cancelPending();
     dirty.current = true;
+    serviceRemoved.current = false;
     commit(presetLayout(preset, service));
     // PUT [] is the reset: there is no DELETE route, and storing today's
     // default as a personal choice would freeze this human out of every future
@@ -150,6 +156,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayou
     // against THIS load yet, so a gesture made under the previous preset must
     // not suppress this one's answer.
     dirty.current = false;
+    serviceRemoved.current = false;
     setLoaded(false);
     runLayoutApi
       .getLayout(preset)
@@ -158,7 +165,10 @@ export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayou
           if (alive) setLoaded(true);
           return;
         }
-        commit(res.layout.length > 0 ? forRun(normalizeLayout(res.layout, preset), preset, service) : presetLayout(preset, service));
+        serviceRemoved.current = res.layout.some(isServiceRemoved);
+        const saved = res.layout.filter((w) => !isServiceRemoved(w));
+        const shown = normalizeLayout(saved, preset);
+        commit(saved.length === 0 ? presetLayout(preset, service && !serviceRemoved.current) : serviceRemoved.current ? shown : forRun(shown, preset, service));
         setLoaded(true);
       })
       .catch(() => {

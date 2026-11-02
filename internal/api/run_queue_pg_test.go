@@ -359,3 +359,45 @@ func TestPG_QueueStartRecordsTheSizeItApplied(t *testing.T) {
 		t.Errorf("resources_applied.cpu_millis = %+v; want 3000 asked, 2000 applied, capped by the pool", got)
 	}
 }
+
+// A service that waited reads its advisory again at the start: run.queue.start carries the sentences as
+// the started run stands, not the ones the 201 read before its limits were captured (#3764).
+func TestPG_QueueStartRecordsTheServiceAdvisory(t *testing.T) {
+	e := newQueueEnv(t)
+	// No lifetime cap, so the started service draws the no-cap sentence.
+	w := e.admin(http.MethodPost, "/api/v1/runner-pools", `{"name":"Busy","limits":{"background":{"cpu_millis":{"default":500,"cap":4000},`+
+		`"memory_mib":{"default":512,"cap":8192},"lifetime":{"default_sec":3600,"unlimited":true}},"barriers":["CC1","CC2","CC3"],"max_concurrent_runs":1}}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create pool = %d %s", w.Code, w.Body)
+	}
+	created := decodeJSON[types.RunnerPool](t, w)
+	e.addExecutors(created.ID, "alpha")
+	pool := e.reread(created)
+	occupant := e.occupy(pool)
+	// Not endBody: its agent workload would merge into this one, field by field.
+	w = e.admin(http.MethodPost, "/api/v1/runs", `{"title":"t","experience":"background","workload":{"kind":"command","command":"make serve"},`+
+		noRepos+`,"runner_pool_id":"`+pool.ID.String()+`","service":{"port":8080}}`)
+	var waiting queuedLaunchAnswer
+	_ = json.Unmarshal(w.Body.Bytes(), &waiting)
+	if w.Code != http.StatusCreated || waiting.State != types.RunQueued {
+		t.Fatalf("launch into a full pool = %d %s; want 201 QUEUED", w.Code, w.Body)
+	}
+	e.free(occupant)
+	rows := e.waitAudit(waiting.ID, "run.queue.start")
+	if len(rows) != 1 || rows[0].Outcome != "success" {
+		t.Fatalf("run.queue.start rows = %+v; want one success", rows)
+	}
+	want := serviceCreateWarnings(e.run(waiting.ID))
+	if !slices.Equal(want, []string{serviceNoCapWarning}) {
+		t.Fatalf("the started service draws %q, want the no-cap sentence, or the fixture proves nothing", want)
+	}
+	var data struct {
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(rows[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(data.Warnings, want) {
+		t.Errorf("run.queue.start warnings = %q, want %q", data.Warnings, want)
+	}
+}

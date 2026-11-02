@@ -101,6 +101,21 @@ func TestRemoveDiskImage(t *testing.T) {
 	if _, err := os.Stat(img); !os.IsNotExist(err) {
 		t.Fatal("the image is still there")
 	}
+	if _, err := os.Stat(img + ".lock"); !os.IsNotExist(err) {
+		t.Fatalf("the lock file is still there: %v", err)
+	}
+	// A lock file left by an earlier run of a drive whose image is gone goes too, and the lock comes back.
+	again, err := macvm.LockDisk(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again()
+	if gone, err := macvm.RemoveDiskImage(img); gone || err != nil {
+		t.Fatalf("absent image: %v %v", gone, err)
+	}
+	if _, err := os.Stat(img + ".lock"); !os.IsNotExist(err) {
+		t.Fatalf("the lock file of an absent image is still there: %v", err)
+	}
 }
 
 // diskSpec is a run's machine spec, with no disk drive yet.

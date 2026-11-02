@@ -158,20 +158,29 @@ describe("matchesSavedView — the Saved view select's own 'which option is this
   it("Admin view, Mine: the URL right after picking a view (which carries owner=me) still matches it", () => {
     // Exactly what applySavedViewOwner produces for a built-in view picked
     // under Mine — matchesSavedView must see through the owner it added.
-    expect(matchesSavedView("status=failed", "status=failed&owner=me", true)).toBe(true);
+    expect(matchesSavedView("status=failed", "status=failed&owner=me")).toBe(true);
   });
 
   it("Admin view, Everyone: a view with no owner param matches a bare URL", () => {
-    expect(matchesSavedView("", "", true)).toBe(true);
+    expect(matchesSavedView("", "")).toBe(true);
   });
 
   it("Admin view: a genuinely different view (different status) does not match", () => {
-    expect(matchesSavedView("status=failed", "status=killed&owner=me", true)).toBe(false);
+    expect(matchesSavedView("status=failed", "status=killed&owner=me")).toBe(false);
   });
 
-  it("User view: owner is never in play, so this is a plain equality check", () => {
-    expect(matchesSavedView("status=failed", "status=failed", false)).toBe(true);
-    expect(matchesSavedView("status=failed", "status=killed", false)).toBe(false);
+  it("a view saved under Mine (owner=me) still matches in the User view, which carries no owner (#3783)", () => {
+    expect(matchesSavedView("status=failed&owner=me", "status=failed")).toBe(true);
+  });
+
+  it("params in another order are the same view (#3783)", () => {
+    expect(matchesSavedView("status=failed&q=cart+test", "q=cart+test&status=failed")).toBe(true);
+    expect(matchesSavedView("status=failed&q=cart+test", "q=cart+test&status=killed")).toBe(false);
+  });
+
+  it("plain equality otherwise", () => {
+    expect(matchesSavedView("status=failed", "status=failed")).toBe(true);
+    expect(matchesSavedView("status=failed", "status=killed")).toBe(false);
   });
 });
 

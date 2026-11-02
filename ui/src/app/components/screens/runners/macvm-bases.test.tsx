@@ -56,6 +56,13 @@ describe("drawer bases list (J6-b)", () => {
     expect(within(list()).getByText(MACVM_R.R15)).toBeInTheDocument();
   });
 
+  it("shows why a base failed when its install list cannot be read, in place of the item count", () => {
+    const reason = "macvm: the macOS base install list ~/bases/rc9.json: version 0 is not 1";
+    show(caps([{ name: "rc9", state: "failed", items: 0, reason }]));
+    const row = within(list()).getAllByRole("listitem")[1];
+    expect(row.textContent).toBe(`rc9${reason}${MACVM_R.R15}`);
+  });
+
   it("shows nothing for a Mac with no other base, so its drawer is as it was", () => {
     show(caps(undefined));
     expect(screen.queryByText(MAC_BASES.B10)).toBeNull();

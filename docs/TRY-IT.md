@@ -9,7 +9,7 @@
 > [!NOTE]
 > **If you installed with the one-liner** (`curl … install.sh | sh`) you have no
 > clone — no `Makefile`, no `examples/` tree, and no `demo-admin-token`.
-> Everything below still works; these are the substitutions.
+> Level 1 below works with these substitutions. Level 2 and the Claude sign-in need a Claude Code image you supply (the `agent-images-core` row).
 >
 > - **The admin token.** `demo-admin-token` is the compose dev stack's default
 >   ([`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)'s
@@ -24,7 +24,7 @@
 >   | `make setup` | the installer already did it; `docker compose up -d` re-ups |
 >   | `make compose-down` | `docker compose down` |
 >   | `make reset` | `docker compose down -v && docker compose up -d` — wipes runs, audit and recordings; leaves `.env`, and so the age key |
->   | `make agent-images-core` | nothing to build: `.env` pins published agent images, pulled on first use |
+>   | `make agent-images-core` | the installer pins `claude-code` to `agent-base`, which ships no coding agent, and Setup's image row won't flag it. Build `wardyn/agent-claude-code:local` from a clone or [your own](operations/build-images.md#claude-sign-in-image), repoint that `WARDYN_AGENT_IMAGES` entry in `.env`, then `docker compose up -d` |
 >   | `make doctor`, `make test-drive` | clone-only (`scripts/up.sh doctor`, [`scripts/test-drive.sh`](../scripts/test-drive.sh)); the console's Getting-started rail runs the same capability probes |
 >
 > - **`--policy-file examples/policies/<name>`** needs a file you do not have.
@@ -82,7 +82,7 @@ make test-drive          # ARGS defaults to --up, which brings the compose stack
 
 - The UI is at http://localhost:8080. The demo stack configures no OIDC, so the SSO button is disabled and the admin token below is the way in;
   - bring up the `sso` compose profile (`docker compose -f deploy/compose/docker-compose.yaml
-    --profile sso up -d dex`, then set `WARDYN_OIDC_ISSUER=http://localhost:5556` and restart `wardynd` — see [deploy/compose/README.md](../deploy/compose/README.md)) and the role split appears with two real identities already seeded in Dex:
+    --profile sso up -d dex`, then set `WARDYN_OIDC_ISSUER=http://localhost:5556` and `WARDYN_LOCAL_MODE=false` and restart `wardynd` — see [deploy/compose/README.md](../deploy/compose/README.md)) and the role split appears with two real identities already seeded in Dex:
     - sign in as `demo@wardyn.local` for **admin**, `member@wardyn.local` for an owner-scoped **member** —
     - on a **fresh** stack, [`deploy/compose/.env.example`](../deploy/compose/.env.example) already maps them that way (`WARDYN_OIDC_ROLE_MAP`);
     - an existing `.env` predating this pair keeps whatever it already had, so add the row by hand if you're on one.
@@ -150,6 +150,8 @@ What you can verify live, even without keys:
 
 ## Level 2 — real Claude Code run (bring your own model credential)
 
+- On the one-line install, first see [Before you start](#before-you-start).
+
 ```sh
 # 1. An admin adds an Anthropic model provider (Settings → Model providers), then
 #    you connect your own key for it from Getting started (write-only; no API
@@ -213,7 +215,7 @@ subscription` is gone, `wardyn secret set` refuses the model-credential names, a
   - a short-lived sign-in sandbox runs `claude
   setup-token` and the captured token is stored age-encrypted in that person's own namespace, injected proxy-side as `Authorization: Bearer`.
   - The sandbox holds only an inert sentinel (`docker exec … env | grep -i key` is empty).
-  - It needs the Claude sign-in image pinned in `WARDYN_AGENT_IMAGES` (`make agent-images-core`).
+  - It needs a Claude Code image pinned in `WARDYN_AGENT_IMAGES` (`make agent-images-core`); the one-line install's `agent-base` is not one.
 
 > [!WARNING]
 > - **Security note (honest):** a `claude setup-token` is **long-lived (~1 year)** and does **not** auto-rotate — it sits age-encrypted at rest in the secret store, masked from all streams, host-pinned to `api.anthropic.com`, and never enters a run's sandbox. It exists only in the short-lived sign-in sandbox that captures it, which stops when idle.

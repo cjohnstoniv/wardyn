@@ -596,6 +596,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// member-drive delete would read as a create still in flight until the heartbeat aged out.
 	// Deferred first, so it runs after the create lease's ticker has stopped.
 	created := false
+	defer s.dropUncreatedMacKeptDrive(ctx, run, &created) // after the lease release below: defers run last-in first-out
 	defer s.releaseUncreatedRunLease(ctx, run.ID, &created)
 	defer stopCreateLease()
 

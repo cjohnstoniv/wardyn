@@ -79,6 +79,13 @@ func memberDriveInUseMsg() string {
 	return "A run is still using this drive. End that run, or delete a run kept after its end, then try again."
 }
 
+// memberDriveReleasingOnMacMsg is memberDriveInUseMsg for a disk drive: a macOS VM run records no
+// sandbox, so the owner's last run counts until its lease is stale (watcherLeaseStaleAfter), up to 90
+// seconds after it already shows as ended (#3899).
+func memberDriveReleasingOnMacMsg(name string) string {
+	return fmt.Sprintf("A run is still using %s, or a macOS VM run that just ended is still releasing it. Try again in two minutes, or end that run first.", name)
+}
+
 func memberDriveBusyMsg() string { return "This drive is already being deleted." }
 
 func memberDriveDeleteFailedMsg() string {
@@ -402,7 +409,11 @@ func (s *Server) handleDeleteMyDrive(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if refused {
-			writeErrorReason(w, http.StatusConflict, reasonMemberDriveInUse, memberDriveInUseMsg())
+			msg := memberDriveInUseMsg()
+			if d.Backend == types.DriveBackendMacDisk {
+				msg = memberDriveReleasingOnMacMsg(d.Name)
+			}
+			writeErrorReason(w, http.StatusConflict, reasonMemberDriveInUse, msg)
 			return
 		}
 	}

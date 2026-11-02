@@ -261,8 +261,12 @@ type Workload struct {
 	// State is the current run's state, with its service health when it has one.
 	State       string           `json:"state,omitempty"`
 	LastRefusal *WorkloadRefusal `json:"last_refusal,omitempty"`
-	CreatedAt   time.Time        `json:"created_at"`
-	UpdatedAt   time.Time        `json:"updated_at"`
+	// CanRestart is whether the caller who read this may restart it: the owner, the current sponsor of a
+	// service-identity owner, or a super admin. A reader who may only read or stop it (the security tier)
+	// gets false.
+	CanRestart bool      `json:"can_restart"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // WorkloadEvent is one row of a workload's history: a workload.* audit row without its actor and hashes.

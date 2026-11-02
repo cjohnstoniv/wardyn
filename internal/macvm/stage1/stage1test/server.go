@@ -54,6 +54,9 @@ type Server struct {
 	// KeyboardOnly takes the password through keyboard-interactive (PAM)
 	// only, as one hidden prompt.
 	KeyboardOnly bool
+	// AskAgain, with KeyboardOnly, asks for the password again after a wrong
+	// answer until the client gives up, as a PAM sshd does.
+	AskAgain bool
 
 	mu       sync.Mutex
 	sharing  bool // Screen Sharing loaded: port 5900 sends its RFB banner
@@ -225,11 +228,16 @@ func (s *Server) serve(c net.Conn) {
 	cfg := &ssh.ServerConfig{}
 	if s.KeyboardOnly {
 		cfg.KeyboardInteractiveCallback = func(m ssh.ConnMetadata, ask ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
-			a, err := ask(m.User(), "", []string{"Password:"}, []bool{false})
-			if err != nil || len(a) != 1 {
-				return nil, errors.New("no answer")
+			for {
+				a, err := ask(m.User(), "", []string{"Password:"}, []bool{false})
+				if err != nil || len(a) != 1 {
+					return nil, errors.New("no answer")
+				}
+				perm, err := check(m.User(), a[0])
+				if err == nil || !s.AskAgain {
+					return perm, err
+				}
 			}
-			return check(m.User(), a[0])
 		}
 	} else {
 		cfg.PasswordCallback = func(m ssh.ConnMetadata, pw []byte) (*ssh.Permissions, error) { return check(m.User(), string(pw)) }

@@ -200,6 +200,9 @@ func (p *parser) serverMsg(b []byte) error {
 
 // Client-to-server message types the relay frames.
 func (p *parser) clientMsg(b []byte) error {
+	if p.s.rules.ViewOnly && (b[0] == 250 || b[0] == 251 || b[0] == 255) {
+		return fmt.Errorf("rfb relay: view only: client message type %d", b[0])
+	}
 	switch b[0] {
 	case 0: // SetPixelFormat
 		return p.more(20, func(h []byte) error {
@@ -213,9 +216,9 @@ func (p *parser) clientMsg(b []byte) error {
 	case 3: // FramebufferUpdateRequest
 		return p.more(10, p.fixed, b)
 	case 4: // KeyEvent
-		return p.more(8, p.fixed, b)
+		return p.more(8, p.input(InputKey), b)
 	case 5: // PointerEvent
-		return p.more(6, p.fixed, b)
+		return p.more(6, p.input(InputPointer), b)
 	case 6: // ClientCutText
 		return p.more(8, func(h []byte) error { return p.cutText(PasteIn, h) }, b)
 	case 150: // EnableContinuousUpdates

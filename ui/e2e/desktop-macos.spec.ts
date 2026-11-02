@@ -148,7 +148,7 @@ test.describe("Run detail: a macOS desktop", () => {
     await expect(desk.getByText(DESKTOP.signInsNote, { exact: true })).toHaveCount(0);
   });
 
-  test("a Mac whose Screen Sharing is view only: the run's macos field turns the desktop Off, with no Open desktop", async ({ page }) => {
+  test("a Mac whose Screen Sharing is view only: the run's macos field offers Watch desktop, with no sign-ins", async ({ page }) => {
     const id = runIdByTask(RUN_TASK);
     await page.route(`**/api/v1/runs/${id}`, async (route) => {
       const res = await route.fetch();
@@ -164,7 +164,8 @@ test.describe("Run detail: a macOS desktop", () => {
     await desk.scrollIntoViewIfNeeded();
     await expect(desk.getByText(DESKTOP.kindMacOS)).toBeVisible();
     await expect(desk.getByText(DESKTOP.observeOnlyMacOS)).toBeVisible();
-    await expect(desk.getByText(DESKTOP.statusOff)).toBeVisible();
-    await expect(desk.getByRole("button")).toHaveCount(0);
+    await expect(desk.getByText(DESKTOP.viewOnlyChip)).toBeVisible();
+    await expect(desk.getByRole("button", { name: DESKTOP.watch })).toBeVisible();
+    await expect(desk.getByRole("button")).toHaveCount(1);
   });
 });

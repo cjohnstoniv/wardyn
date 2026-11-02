@@ -7,6 +7,7 @@ package docker
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/moby/moby/client"
@@ -73,5 +74,38 @@ func TestStopSandbox_FinishesWhenTheCallIsCancelled(t *testing.T) {
 	}
 	if _, ok := f.networks[internalNetName(runID)]; ok {
 		t.Error("the internal network is still there after a cancelled StopSandbox")
+	}
+}
+
+// relayRemovingDocker is a daemon on which another teardown of the run is already removing its network relay:
+// the relay's removal answers Docker's 409, and the relay is gone once that other removal ends.
+type relayRemovingDocker struct{ *fakeDocker }
+
+func (c *relayRemovingDocker) ContainerRemove(ctx context.Context, id string, o client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
+	if !strings.HasPrefix(id, "wardyn-vmnet-") {
+		return c.fakeDocker.ContainerRemove(ctx, id, o)
+	}
+	_, _ = c.fakeDocker.ContainerRemove(ctx, id, o)
+	return client.ContainerRemoveResult{}, fakeConflict{msg: "removal of container " + id + " is already in progress"}
+}
+
+// Two teardowns of one run race on its network relay: the one that finds the relay's removal already in
+// progress waits it out and goes on to the network, instead of failing the stop (#3886).
+func TestStopSandbox_WaitsOutARelayRemovalAlreadyInProgress(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newWithClient(&relayRemovingDocker{fakeDocker: f}, Config{ProxyImage: "wardyn-proxy:dev"})
+
+	sb, err := d.CreateSandbox(context.Background(), testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	runID := testSpec().RunID
+	f.containers[vmnetName(runID)] = &createdContainer{name: vmnetName(runID)}
+	if err := d.StopSandbox(context.Background(), sb.Ref); err != nil {
+		t.Fatalf("StopSandbox with the relay's removal already in progress: %v", err)
+	}
+	if _, ok := f.networks[internalNetName(runID)]; ok {
+		t.Error("the internal network is still there after the relay's removal was waited out")
 	}
 }

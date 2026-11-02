@@ -85,7 +85,7 @@ describe("M-R1 runner drawer section", () => {
   it("11: desktop observe-only", () => {
     section({ ...ready, desktop: "observe" });
     expect(screen.getByText("Desktop: view only")).toBeInTheDocument();
-    expect(screen.getByText("The macOS desktop isn't available on this Mac yet: macOS turned Screen Sharing on for viewing only.")).toBeInTheDocument();
+    expect(screen.getByText("On this Mac the macOS desktop is view only: macOS 26 doesn't keep Screen Sharing control here.")).toBeInTheDocument();
     expect(screen.queryByText("Opens from the run page")).not.toBeInTheDocument();
     expect(screen.queryByText(/Apple's licence/)).not.toBeInTheDocument();
   });

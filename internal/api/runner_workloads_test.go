@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -79,6 +80,8 @@ func TestWorkloadFromRunner_RefusesAReportOutsideItsShape(t *testing.T) {
 	}
 }
 
+var statusNow = time.Now().UTC()
+
 // The status a stored workload reads as: a refusal of its current spec first, then its run's state.
 func TestWorkloadStatusOf(t *testing.T) {
 	runner := uuid.New()
@@ -91,7 +94,7 @@ func TestWorkloadStatusOf(t *testing.T) {
 	oldRefusal := k8sView("web", runner, types.RunRunning)
 	oldRefusal.LastRefusal = &store.WorkloadRefusal{Generation: 1, Reason: "policy_ceiling_exceeded"}
 	unhealthy := k8sView("web", runner, types.RunRunning)
-	unhealthy.ServiceHealth = string(types.ServiceHealthUnhealthy)
+	unhealthy.ServiceHealth, unhealthy.ServiceObservedAt = string(types.ServiceHealthUnhealthy), &statusNow
 	owed := k8sView("web", runner, types.RunRunning)
 	owed.Generation = 3
 	noRun := k8sView("web", runner, "")
@@ -113,7 +116,7 @@ func TestWorkloadStatusOf(t *testing.T) {
 		{"completed", k8sView("web", runner, types.RunCompleted), runnerwire.WorkloadPhaseCompleted},
 		{"killed", k8sView("web", runner, types.RunKilled), runnerwire.WorkloadPhaseEnded},
 	} {
-		a := workloadStatusOf(tc.v)
+		a := workloadStatusOf(tc.v, statusNow)
 		if a.Phase != tc.phase {
 			t.Errorf("%s: phase %q, want %q", tc.name, a.Phase, tc.phase)
 		}
@@ -123,6 +126,45 @@ func TestWorkloadStatusOf(t *testing.T) {
 		if a.ObservedGeneration != 4 || a.Namespace != "team-a" || a.Name != "web" || a.UID != "uid-web" {
 			t.Errorf("%s: status %+v, want team-a/web (uid-web) at observed generation 4", tc.name, a)
 		}
+	}
+}
+
+// A run's health reads in the status as the run routes serve it: one not observed lately, or a paused run's,
+// is unknown, so the phase is never the health it last had, and the message says when it was last seen. A
+// fresh observation says nothing, so the sweep does not push on every refresh.
+func TestWorkloadStatusOf_HealthIsCurrent(t *testing.T) {
+	runner := uuid.New()
+	seen := statusNow.Add(-2 * serviceStatusStale)
+	withHealth := func(health types.ServiceHealthState, at time.Time) store.WorkloadView {
+		v := k8sView("web", runner, types.RunRunning)
+		v.ServiceHealth, v.ServiceObservedAt = string(health), &at
+		return v
+	}
+	paused := withHealth(types.ServiceHealthHealthy, statusNow)
+	paused.RunPausedAt = &seen
+	for _, tc := range []struct {
+		name    string
+		v       store.WorkloadView
+		phase   string
+		message string
+	}{
+		{"healthy and fresh", withHealth(types.ServiceHealthHealthy, statusNow), runnerwire.WorkloadPhaseRunning, ""},
+		{"unhealthy and fresh", withHealth(types.ServiceHealthUnhealthy, statusNow), runnerwire.WorkloadPhaseUnhealthy, ""},
+		{"healthy, not observed lately", withHealth(types.ServiceHealthHealthy, seen), runnerwire.WorkloadPhaseRunning,
+			"service health unknown (unreachable): last checked " + seen.Format(time.RFC3339)},
+		{"unhealthy, not observed lately", withHealth(types.ServiceHealthUnhealthy, seen), runnerwire.WorkloadPhaseRunning,
+			"service health unknown (unreachable): last checked " + seen.Format(time.RFC3339)},
+		{"paused", paused, runnerwire.WorkloadPhaseRunning, "service health unknown (paused): last checked " + statusNow.Format(time.RFC3339)},
+	} {
+		a := workloadStatusOf(tc.v, statusNow)
+		if a.Phase != tc.phase || a.Message != tc.message {
+			t.Errorf("%s: phase %q message %q, want %q %q", tc.name, a.Phase, a.Message, tc.phase, tc.message)
+		}
+	}
+	// The same observation, a minute on, is the same status: the sweep stays quiet.
+	stale := withHealth(types.ServiceHealthHealthy, seen)
+	if workloadStatusOf(stale, statusNow) != workloadStatusOf(stale, statusNow.Add(time.Minute)) {
+		t.Error("a stale health's status moved with the clock")
 	}
 }
 
@@ -137,7 +179,7 @@ func TestWorkloadStatusSweep_PushesWhatMovedToItsOnlineRunner(t *testing.T) {
 
 	moved := k8sView("moved", online, types.RunRunning)
 	same := k8sView("same", online, types.RunRunning)
-	same.StatusPushed = workloadStatusHash(workloadStatusOf(same))
+	same.StatusPushed = workloadStatusHash(workloadStatusOf(same, time.Now()))
 	away := k8sView("away", offline, types.RunRunning)
 	unnamed := k8sView("unnamed", online, types.RunRunning)
 	unnamed.K8sUID = "" // recorded before the uid column: waits for its resource's next report
@@ -147,7 +189,7 @@ func TestWorkloadStatusSweep_PushesWhatMovedToItsOnlineRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := fake.WorkloadStatuses()
-	if len(got) != 1 || got[0] != workloadStatusOf(moved) {
+	if len(got) != 1 || got[0] != workloadStatusOf(moved, time.Now()) {
 		t.Fatalf("the sweep sent %+v, want only %q's status", got, moved.Name)
 	}
 	if f.pushed[moved.ID] != workloadStatusHash(got[0]) {

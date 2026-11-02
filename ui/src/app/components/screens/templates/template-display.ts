@@ -8,6 +8,7 @@
 import { templateFieldRule } from "../../../lib/template-fields";
 import type { TemplatePart, TemplateSummary } from "../../../lib/types/templates";
 import { NR_TEMPLATES as T } from "../../wardyn/copy/new-run/templates";
+import { WORKLOADS as W } from "../../wardyn/copy/workloads";
 
 // The six "Includes" badges, in the order the screen shows them.
 const GROUPS = ["PART_RUN", "PART_WHERE", "PART_TOOLS", "PART_FILES", "PART_ACCESS", "PART_LIMITS"] as const;
@@ -71,10 +72,10 @@ export function scopeLabel(s: Audience): string {
   return T.GROUP_LABEL(s.group_label || s.group_id || "");
 }
 
-/** The second line of "Available to": the organisation's admins or the group's managers, never a person. */
-export function ownerLine(s: Audience): string | null {
+/** The Owner column: the organisation's admins, the group's managers, or You on a row only the caller sees. */
+export function ownerLine(s: Audience): string {
   if (s.scope === "org") return T.ORG_ADMINS;
-  return s.scope === "group" ? T.TEMPLATE_MANAGERS : null;
+  return s.scope === "group" ? T.TEMPLATE_MANAGERS : W.OWNER_YOU;
 }
 
 /** Why Rename and Delete are unavailable on a row the caller cannot write. */

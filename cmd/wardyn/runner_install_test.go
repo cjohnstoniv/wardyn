@@ -451,3 +451,31 @@ func TestRunnerUpgradeRefusesAPreviousItCannotExamine(t *testing.T) {
 		t.Fatalf("the upgrade went on past a .previous it could not examine: downloaded %v, calls %q\n%s", got, r.record("calls"), out)
 	}
 }
+
+// A Mac whose setup installed wardyn-macvm beside the runner is told the upgrade left it behind; a Mac with
+// the runner alone, and any other OS, are not.
+func TestNoteMacVMHelper(t *testing.T) {
+	oldGOOS := setupGOOS
+	t.Cleanup(func() { setupGOOS = oldGOOS })
+	dir := t.TempDir()
+	installed := filepath.Join(dir, "wardyn-runnerd")
+	note := func(goos string) string {
+		setupGOOS = goos
+		var out strings.Builder
+		noteMacVMHelper(&out, installed, "0.10.1", "https://org.example")
+		return out.String()
+	}
+	want := fmt.Sprintf(copyUpgradeMacVM+"\n", "0.10.1", "https://org.example")
+	if got := note("darwin"); got != "" {
+		t.Fatalf("no helper beside the runner, but darwin printed %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "wardyn-macvm"), []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := note("darwin"); got != want {
+		t.Fatalf("darwin with a helper printed %q, want %q", got, want)
+	}
+	if got := note("linux"); got != "" {
+		t.Fatalf("linux printed %q", got)
+	}
+}

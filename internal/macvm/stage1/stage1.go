@@ -257,6 +257,9 @@ func (s *session) hostKey(_ string, _ net.Addr, key ssh.PublicKey) error {
 	return nil
 }
 
+// errAskedAgain ends the keyboard-interactive method on a second challenge.
+var errAskedAgain = errors.New("stage 1: the guest asked for the password a second time")
+
 // connect opens the SSH connection as the admin account with its current
 // password.
 func (s *session) connect(ctx context.Context) error {
@@ -268,17 +271,27 @@ func (s *session) connect(ctx context.Context) error {
 		_ = conn.SetDeadline(dl)
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	challenges := 0
 	cfg := &ssh.ClientConfig{
 		User: s.username,
 		Auth: []ssh.AuthMethod{
 			ssh.PasswordCallback(func() (string, error) { return string(s.admin), nil }),
 			// macOS's sshd may ask through PAM instead: the password answers
 			// its hidden prompts. UNVERIFIED (external): which one it uses.
+			// It answers once: a PAM sshd that keeps asking after a wrong
+			// password would otherwise hold the sign-in until its login grace
+			// time ends, and the caller would see only EOF.
 			ssh.KeyboardInteractive(func(_, _ string, qs []string, echos []bool) ([]string, error) {
 				a := make([]string, len(qs))
+				hidden := false
 				for i := range qs {
 					if !echos[i] {
-						a[i] = string(s.admin)
+						a[i], hidden = string(s.admin), true
+					}
+				}
+				if hidden { // a round of notices only is not a challenge
+					if challenges++; challenges > 1 {
+						return nil, errAskedAgain
 					}
 				}
 				return a, nil
@@ -292,6 +305,9 @@ func (s *session) connect(ctx context.Context) error {
 		_ = conn.Close()
 		if errors.Is(err, ErrHostKeyChanged) {
 			return ErrHostKeyChanged
+		}
+		if challenges > 1 {
+			return fmt.Errorf("%w (%s): the guest asked for the password again: the account's password does not match the one-time code; delete the VM and prepare again, typing the code shown for this prepare", ErrSignInRefused, s.username)
 		}
 		if strings.Contains(err.Error(), "unable to authenticate") { // x/crypto has no typed error for it
 			return fmt.Errorf("%w (%s): %w", ErrSignInRefused, s.username, err)

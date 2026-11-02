@@ -115,7 +115,7 @@ departed person: sessions, tokens, keys, runs, credentials, workspaces and drive
     1. Disable the person in the identity provider, so no new sign-in succeeds.
     2. `POST /sessions/revoke` with their subject or email:
        - ends their console sessions, refuses a UI-app session at its next re-check (an attach ticket minted before the revoke is refused at redemption)
-       - and revokes every `wdn_` API token they hold (its `tokens_revoked` count is the receipt; see "[Per-user API tokens: stop sharing the admin token](api-tokens.md#per-user-api-tokens-stop-sharing-the-admin-token)").
+       - and revokes every `wdn_` API token they hold, though an inbound token still calls a UI-sandbox port for up to 30 seconds (its `tokens_revoked` count is the receipt; see "[Per-user API tokens: stop sharing the admin token](api-tokens.md#per-user-api-tokens-stop-sharing-the-admin-token)").
     3. Remove their registered SSH keys and end established SSH connections: [SSH access revocation](../SSH.md#revoking-access-during-an-incident).
     4. Kill their running runs (`POST /runs/{id}/kill`).
     5. Revoke their runners (`DELETE /runners/{id}`) and unused registration tokens (`GET /runners/tokens?owner=`, `DELETE /runners/tokens/{id}`).

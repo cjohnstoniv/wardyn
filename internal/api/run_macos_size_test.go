@@ -83,8 +83,13 @@ func TestPlacementCapability_MacOSVMSizeNamesItsCause(t *testing.T) {
 			CPU: macOSSizeWhy{Applied: client.AppliedAmount{Requested: 2000, Applied: 2000}, Limit: types.EffectiveLimit{Cap: types.LimitAmount{Value: 8000}, CapSource: types.LimitSourceGovernance}}},
 			"A macOS VM needs at least 4 CPU and 8192 MiB."},
 		{"no cause known", macOSVMAsk{CPUMillis: 2000, MemoryMiB: 8192}, "A macOS VM needs at least 4 CPU and 8192 MiB."},
-		{"governance cap with no profile name", macOSVMAsk{CPUMillis: 1000, MemoryMiB: 8192, CPU: capped(8000, 1000, types.LimitSourceGovernance, runnerpool.CapKnobCeiling)},
-			"A macOS VM needs at least 4 CPU and 8192 MiB."},
+		// No profile name: the person is in the Default unit, whatever the knob (#3885).
+		{"the Default unit caps both", macOSVMAsk{CPUMillis: 1000, MemoryMiB: 2048,
+			CPU: capped(2000, 1000, types.LimitSourceGovernance, runnerpool.CapKnobCeiling), Memory: capped(4096, 2048, types.LimitSourceGovernance, "")},
+			sizeNeed + "This run gets 1 CPU and 2048 MiB: the Default governance unit, which holds everyone in no governance profile, caps it at this server's default size. " +
+				"Assign the person a governance profile that allows at least the CPUs and memory the refusal names."},
+		{"a default under the minimum, from the Default unit", macOSVMAsk{CPUMillis: 1000, MemoryMiB: 8192, CPU: defaulted(1000, types.LimitSourceGovernance)},
+			sizeNeed + "This run gets 1 CPU, the default size from the Default governance unit. Ask for at least the minimum in the run's `resources`, or set it on Review."},
 		{"governance cap of no known setting", macOSVMAsk{CPUMillis: 1000, MemoryMiB: 8192, Profile: "Platform", CPU: capped(8000, 1000, types.LimitSourceGovernance, "")},
 			"A macOS VM needs at least 4 CPU and 8192 MiB."},
 	} {
