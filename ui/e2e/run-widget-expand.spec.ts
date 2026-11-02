@@ -89,7 +89,7 @@ test("keyboard: Enter opens it, focus lands in the dialog, Tab stays inside, Esc
   await expect(dialog.locator("[data-widget-body]")).toBeFocused();
   const top = await dialog.locator("[data-widget-body]").evaluate((el) => el.scrollTop);
   await page.keyboard.press("PageDown");
-  expect(await dialog.locator("[data-widget-body]").evaluate((el) => el.scrollTop)).toBeGreaterThan(top);
+  await expect.poll(() => dialog.locator("[data-widget-body]").evaluate((el) => el.scrollTop)).toBeGreaterThan(top);
   for (let i = 0; i < 6; i++) {
     await page.keyboard.press("Tab");
     expect(await page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]'))).toBe(true);
@@ -108,7 +108,7 @@ test("a click in the moved widget does not close it, and the dialog starts 64px 
   const box = (await dialog.boundingBox())!;
   expect(box.y).toBeGreaterThanOrEqual(63);
   expect(box.y + box.height).toBeLessThanOrEqual(900 - 43);
-  await dialog.getByRole("button").filter({ hasText: /copy/i }).first().click().catch(() => undefined);
+  await dialog.locator("[data-widget-body]").click();
   await expect(dialog).toBeVisible();
 });
 
