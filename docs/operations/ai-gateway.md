@@ -131,9 +131,19 @@ The setup was checked against the pinned image in a one-container trial. These a
 Wardyn makes a fresh call id for every attempt to a model gateway route and sends it as `X-Wardyn-Call-Id`. The gateway's access log and the run's audit row then carry the same value.
 
 1. Log the header on the gateway. In agentgateway, add `request.headers["x-wardyn-call-id"]` to `frontendPolicies.accessLog.add`, as the setup above does.
-2. Read the run's `egress.allow` rows (`wardyn audit <run id> --json`) and take `data.gateway_call_id`.
+2. Read the run's `egress.allow` and `egress.deny` rows (`wardyn audit <run id> --json`) and take `data.gateway_call_id`.
 3. Search the gateway's log for that value. The line is that attempt's, with the token's subject and run id beside it when the gateway logs `jwt.sub` and `jwt.wardyn_run`.
 
 - Only a gateway log line that passed the token check is trustworthy. A sandbox that reaches the gateway through an opaque tunnel can send any `X-Wardyn-Call-Id`, so run the gateway's `jwtAuth` in `strict` mode.
 - A refused or failed attempt has a row with the id too, and no gateway line when nothing was sent.
 - The id is Wardyn's own. It is not a request id the gateway made.
+- MCP has a call id and no identity token.
+
+## Defaults on a route that carries the token
+
+| Default | Effect |
+|---|---|
+| The response scrub is forced on | `WARDYN_PROXY_RESPONSE_SCRUB=off` does not turn it off here, so a gateway that echoes the token back cannot hand it to the sandbox |
+| `Accept-Encoding` is deleted from the request | The answer arrives in bytes the scrub can read |
+| A compressed answer gets a `502` | The proxy refuses bytes it cannot scrub rather than relay them |
+| A running run keeps the routes it started with | Changing a provider does not change a run in flight. Create a new run to pick the change up |

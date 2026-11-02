@@ -2,7 +2,7 @@
 # Copyright 2026 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# An external AI gateway, tested: the unmodified agentgateway image (pinned by digest in
+# An external AI gateway, run: the unmodified agentgateway image (pinned by digest in
 # deploy/kind/gateway/gateway.yaml) in front of test/gatewayfake, on the `make kind-quickstart`
 # cluster, with two real Wardyn runs through it.
 #
@@ -344,7 +344,11 @@ kubectl --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/llm-gw" "${GW
 GW_PF_PID=$!
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 openssl ecparam -name prime256v1 -genkey -noout -out "${TMPDIR}/other.key" 2>/dev/null || die "could not make a second signing key"
-header="$(printf '%s' '{"alg":"ES256","typ":"JWT","kid":"another-key"}' | b64url)"
+# The header names the key set's real kid, so the gateway has the right public key to check against
+# and the 401 comes from the signature, not from an unknown key.
+real_kid="$(jq -r '.keys[0].kid // empty' "${EVIDENCE_DIR}/jwks.json")"
+[[ -n "${real_kid}" ]] || die "the key set at ${JWKS_PATH} names no kid"
+header="$(jq -cn --arg k "${real_kid}" '{alg:"ES256",typ:"JWT",kid:$k}' | b64url)"
 payload="$(jq -cn --arg iss "${ISSUER}" --arg aud "${AUDIENCE}" --argjson exp "$(($(date +%s) + 300))" \
   '{iss:$iss,aud:$aud,sub:"admin-token",wardyn_run:"not-a-run",exp:$exp}' | b64url)"
 # openssl signs in DER; a JWT's ES256 signature is r and s as two 32-byte integers.
