@@ -76,6 +76,7 @@ type LimitsOverlay struct {
 	DenyTaskModeExec           *bool           `json:"deny_task_mode_exec,omitempty"`
 	DenyInteractive            *bool           `json:"deny_interactive,omitempty"`
 	DenyUIApps                 *bool           `json:"deny_ui_apps,omitempty"`
+	DenyBackgroundDesktopWatch *bool           `json:"deny_background_desktop_watch,omitempty"`
 	MaxConcurrentRuns          *int            `json:"max_concurrent_runs,omitempty"`
 	DenyUserDrive              *bool           `json:"deny_user_drive,omitempty"`
 	DenyMemberDrives           *bool           `json:"deny_member_drives,omitempty"`

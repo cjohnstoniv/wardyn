@@ -527,4 +527,6 @@ export interface SiteRecording {
 export interface SiteMacOSVM {
   /** Runs are refused on a Mac whose base was prepared more days ago than this. Absent or 0: no maximum. */
   max_base_age_days?: number;
+  /** A person may watch a background macOS run's desktop, view only. Absent reads allowed; only false turns it off. */
+  allow_background_watch?: boolean;
 }

@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Settings field for the oldest macOS base: the site config's `macos_vm.max_base_age_days`.
+// The Settings fields of the macOS virtual machines card: the site config's `macos_vm.max_base_age_days` and
+// `macos_vm.allow_background_watch`.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -57,6 +58,11 @@ describe("parseMaxBaseAge / macosVMBody", () => {
     expect(macosVMBody(undefined, 30)).toEqual({ max_base_age_days: 30 });
     expect(macosVMBody({ max_base_age_days: 30 }, "")).toEqual({});
   });
+  it("writes the watch switch only when off, and keeps each field when the other changes", () => {
+    expect(macosVMBody(undefined, 30, false)).toEqual({ max_base_age_days: 30, allow_background_watch: false });
+    expect(macosVMBody({ allow_background_watch: false }, 30)).toEqual({ max_base_age_days: 30 });
+    expect(macosVMBody({ max_base_age_days: 30, allow_background_watch: false }, "", false)).toEqual({ allow_background_watch: false });
+  });
 });
 
 describe("MacOSVMSettingsCard", () => {
@@ -67,6 +73,30 @@ describe("MacOSVMSettingsCard", () => {
     expect(within(card).getByText(T.UNIT)).toBeInTheDocument();
     expect(saveBtn(card)).toBeDisabled();
     expectActionBar(saveBtn(card));
+  });
+
+  it("shows the watch switch on when nothing is stored, and saving it off sends allow_background_watch false", async () => {
+    const card = await open();
+    const watch = within(card).getByRole("switch", { name: T.WATCH_LABEL });
+    expect(watch).toHaveAttribute("aria-checked", "true");
+    expect(within(card).getByText(T.WATCH_HINT)).toBeInTheDocument();
+    expect(saveBtn(card)).toBeDisabled();
+    await userEvent.click(watch);
+    await userEvent.click(saveBtn(card));
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ upstream_proxy_url: "http://p", macos_vm: { allow_background_watch: false } }, '"v1"');
+    expect(toastSuccess).toHaveBeenCalledWith("macOS settings saved.");
+    expect(saveBtn(card)).toBeDisabled();
+  });
+
+  it("reads a stored false as off, and turning it on again drops the key with one Save beside the days", async () => {
+    snapshotMock.mockResolvedValue({ siteConfig: { macos_vm: { max_base_age_days: 30, allow_background_watch: false } }, etag: '"v1"' });
+    const card = await open();
+    const watch = within(card).getByRole("switch", { name: T.WATCH_LABEL });
+    expect(watch).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(watch);
+    await userEvent.type(field(card), "0");
+    await userEvent.click(saveBtn(card));
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ macos_vm: { max_base_age_days: 300 } }, '"v1"');
   });
 
   it("loads the stored maximum", async () => {

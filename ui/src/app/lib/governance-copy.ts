@@ -492,6 +492,13 @@ export const MEMBER_DRIVE_DOOR = {
   LABEL: "Can't create drives",
 } as const;
 
+// The background-watch door: the profile limit that refuses watching a background macOS run's desktop
+// (deny_background_desktop_watch). Words from the field-report board F9; also not in the frozen tables.
+export const BACKGROUND_WATCH_DOOR = {
+  LABEL: "Deny watching background desktops",
+  HINT: "Stops people watching a background macOS run's desktop. A watch that is open ends within a minute. Deny interactive runs and Deny UI apps stop it too.",
+} as const;
+
 // §7.6-§7.7 — MEMBER
 
 // §7.6's two moments render ONLY when a profile is assigned. With no
