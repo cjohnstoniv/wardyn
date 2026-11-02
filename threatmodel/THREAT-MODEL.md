@@ -3852,8 +3852,9 @@ The labelled series, every label, and where its values come from:
 
 **Off changes nothing.**
 
-- With no provider on, no key row exists and no proxy config holds a route, so nothing is requested, signed or stripped.
-- The mint and the key set answer as paths no route holds, and a sandbox's own `X-Wardyn-Identity` passes as any other header does.
+- On an install that never turned identity on, no key row exists. A run started with it off holds no route, so nothing is requested, signed or stripped.
+- Turning it off later keeps the key row and the routes of runs already started, and refuses new mints (`gatewayProviderOn`). A run already holding a token keeps stripping the gateway headers and signing with it until it expires, within 10 minutes; its calls on that route are then refused. Runs started afterwards hold no route for it.
+- With no provider on, the mint and the key set answer as paths no route holds, and on a run with no route a sandbox's own `X-Wardyn-Identity` passes as any other header does.
 - A gateway verifying that header still refuses a forged value by its signature.
 
 **A sandbox reading the token.**
@@ -3864,7 +3865,11 @@ The labelled series, every label, and where its values come from:
 - So an echo arrives in bytes the masker can read, the proxy deletes `Accept-Encoding`, `Range` and `If-Range` on a route. It refuses an answer that still carries a `Content-Encoding` other than `identity`, with a 502.
 - Every end of the answer counts as a cut: a trailing run that begins a held token is replaced too, because a token missing its last characters can be recovered.
 - A header value's end counts the same way from eight bytes up. Shorter ones pass, because an ordinary value such as `true` ends in the letter every token starts with.
-- **Residual: masking matches exact bytes.** A gateway that transforms an echo, by re-lining, changing case or base64, returns a form that is not masked. A fragment with other bytes after it is not masked either. Both need a gateway or upstream that echoes.
+- **Residual: masking matches exact bytes.** Both need a gateway or upstream that echoes.
+  - An echo that holds a token's signature from its first character through its twentieth has those 20 characters masked, which leaves it 120 bits short of a signature.
+  - A truncated echo can still show the token's claims (person, run, runner) with fewer than 20 signature characters, or the signature's later characters around the masked head.
+  - An echo that starts inside the first 20 signature characters matches nothing and passes whole. So a gateway that slices a token, like one that transforms it (re-lining, case, base64), can show all of its signature across two answers. Slicing and transforms by the gateway are out of scope.
+  - Under eight bytes of a held value's start may pass at the very end of an answer or header value.
 
 **A sandbox spending the identity.**
 
@@ -3922,7 +3927,7 @@ The labelled series, every label, and where its values come from:
 - The proxy keeps a held token to `exp` while mints fail, with no grace past it, and then refuses the call without sending it (`Proxy.attachGatewayIdentity`).
 - That is sooner than other credentials, which keep a 15-minute last-good grace (`lastGoodGrace`). A long outage stops model calls on these routes, deliberately.
 - A route configured to sign never sends unsigned, because a lenient gateway would take the call as anonymous.
-- Each replica reads "is any provider on" at most every 30 seconds. A run started inside that window has one refused call.
+- Each replica reads "is any provider on" at most every 30 seconds (`gatewayOnWindow`). A run started inside that window can have calls refused for up to about a minute: those 30 seconds, then up to 30 more before its proxy asks for a token again (`lastGoodRetry`).
 
 **The key set.**
 
@@ -3939,11 +3944,11 @@ The labelled series, every label, and where its values come from:
 - The mint compares the live provider's UID, normalized destination (host, port, path) and audience with what was sealed at dispatch in `run_proxy_configs`, which `localStoredSpec` carries through revive and admin restart.
 - On a difference it refuses, and the message says to create a new run. Editing back to the original values passes.
 - A revive after such an edit is refused with the same step, rather than reviving a run that would fail closed.
-- Turning a provider's identity off ends gateway calls for runs started with it on, within one token lifetime. Create new runs.
 
 **A person offboarded mid-run.**
 
 - Suspension's `killStep` ends their runs, and the mint refuses a suspended person independently of that kill. A retired or suspended service identity, or its sponsor, is refused the same way.
+- **Residual:** a person whose email form is shared with another principal gets no cutoff under that form (`shared` in the suspension plan, `store.HeldEmails`), so such a run stops only when the kill ends it.
 - **Residual:** tokens already issued live to `exp`.
 
 **A hostile address on a provider.**
@@ -3955,7 +3960,8 @@ The labelled series, every label, and where its values come from:
 **Clock skew and replicas.**
 
 - The token has no `nbf`. A proxy clock ahead drops the token early, and one behind gets a 401 at the gateway, so both fail closed.
-- Several replicas sign with one row (`lockCreate`). A replica without the route answers 404 and the call is refused, so finish the rollout before turning identity on.
+- Several replicas sign with one row (`lockCreate`). A replica without the route answers as an unregistered path and the call is refused, so finish the rollout before turning identity on.
+- The first-mint audit row is kept per replica, in memory, for at most 4096 run and provider pairs (`gatewayFirstMintsKept`). A restart or a second replica writes another `first` row for the same run; a first mint is never missed.
 
 **Runs on a runner.**
 

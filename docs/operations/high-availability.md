@@ -29,11 +29,11 @@
 
 | Still on the older version | What happens |
 |---|---|
-| A `wardynd` replica | It has no mint route, so it answers 404 and that call is refused. |
+| A `wardynd` replica | It has no mint route, so it answers as an unregistered path and that call is refused. |
 | The `wardyn-proxy` image | It refuses the config's new key, so the run fails at start. |
 | A remote executor's `wardyn-runnerd` | It does not report the setting, so the run is refused rather than called unsigned. |
 
-- Each replica notices the change within 30 seconds. A run started in that window has one refused call.
+- Each replica notices the change within 30 seconds. A run started in that window can have calls refused for up to about a minute: those 30 seconds, then up to 30 more before its proxy asks for a token again.
 - Rotating the key stops every replica, so plan it as downtime: [Rotating the key](secrets-and-keys.md#rotating-the-key).
 
 ## Running one replica

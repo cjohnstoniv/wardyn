@@ -210,7 +210,7 @@ One mode places a Git credential inside the sandbox:
 - A gateway receives this token and the model credential the provider sends. This is a credential reaching a third party, by the admin's choice.
 - A gateway cannot learn of a kill, so a token already issued stays valid for up to 10 minutes ([`internal/gatewayidentity/signer.go#tokenLifetime`](../internal/gatewayidentity/signer.go)).
 - Pausing a run does not stop its proxy asking for tokens. Killing it does.
-- A gateway that transforms an echo, by re-lining, changing case or base64, returns a form that is not masked.
+- A gateway that slices or transforms an echo (re-lining, case, base64) returns a form that is not masked. A truncated echo can still show the claims and part of the signature, and under eight bytes of a held value's start may pass at the end of an answer.
 - A run that needs this is refused on an older executor, rather than sending the call unsigned.
 
 **An `ssh_key` grant can be used, not read, while its agent is open.**
