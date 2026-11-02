@@ -395,3 +395,38 @@ func TestDarwinExecTTYRunsAShell(t *testing.T) {
 		t.Fatalf("tty exec = %q, exit %v", out.String(), exit)
 	}
 }
+
+// A resize after the parent has closed its slave end still reaches the shell, and an exec with no size
+// (what `wardyn attach` opens before its first resize) gets a terminal too.
+func TestDarwinExecTTYResizeReachesTheShell(t *testing.T) {
+	_, _, h := newDarwinServer(t)
+	spec, _ := json.Marshal(ExecRequest{Argv: []string{"sh", "-c", `read _; stty size`}, TTY: true})
+	var body bytes.Buffer
+	for _, f := range []struct {
+		typ byte
+		p   []byte
+	}{{FrameSpec, spec}, {FrameResize, uint16Pair(120, 40)}, {FrameStdin, []byte("go\n")}} {
+		if err := WriteFrame(&body, f.typ, f.p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/exec", &body))
+	var out strings.Builder
+	rd := bytes.NewReader(w.Body.Bytes())
+	for {
+		typ, p, err := ReadFrame(rd)
+		if err != nil {
+			break
+		}
+		switch typ {
+		case FrameStdout:
+			out.Write(p)
+		case FrameError:
+			t.Fatalf("the guest errored at once: %s", p)
+		}
+	}
+	if !strings.Contains(out.String(), "40 120") {
+		t.Fatalf("after a resize to 120x40, the shell printed %q", out.String())
+	}
+}
