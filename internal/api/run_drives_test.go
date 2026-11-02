@@ -654,3 +654,25 @@ func TestDriveGuestPaths_MacOSRunShowsTheGuestPath(t *testing.T) {
 		t.Errorf("a folder inside a drive on a macOS VM run was not refused as overlapping")
 	}
 }
+
+// TestDriveGuestPaths_MountAuditRowNamesTheGuestPath: run.drive.mount gives a
+// macOS VM run's drive at /Users/agent/..., a container run's at /home/agent/...,
+// and leaves the mount's own target alone.
+func TestDriveGuestPaths_MountAuditRowNamesTheGuestPath(t *testing.T) {
+	for kind, want := range map[types.MachineKind]string{
+		types.MachineMacOSVM:   "/Users/agent/drives/x",
+		types.MachineContainer: "/home/agent/drives/x",
+		types.MachineLinuxVM:   "/home/agent/drives/x",
+	} {
+		rec := &recRecorder{}
+		srv := New(Config{BaseCtx: testBaseCtx(t), Audit: rec, LocalMode: true})
+		mounts := []types.DriveMount{{DriveID: uuid.New(), Backend: types.DriveBackendMacDisk, ObjectName: "x", Target: runner.DrivesRoot + "/x"}}
+		srv.auditDriveMount(context.Background(), uuid.New(), "sub-alice", kind, mounts)
+		if got := driveAuditData(t, rec, "run.drive.mount")["target"]; got != want {
+			t.Errorf("%s: run.drive.mount target = %v, want %s", kind, got, want)
+		}
+		if mounts[0].Target != runner.DrivesRoot+"/x" {
+			t.Errorf("%s: the mount's target changed to %q", kind, mounts[0].Target)
+		}
+	}
+}
