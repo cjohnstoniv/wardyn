@@ -11,13 +11,20 @@
 #   2. an exec run that makes one MCP tool call through the gateway's MCP hostname (mcp-gw). The
 #      call comes from a curl in the sandbox, not from a model.
 #
+# The model route also verifies Wardyn's run identity: the provider has gateway_identity on, the run's
+# proxy sends the signed token in X-Wardyn-Identity, and the gateway (jwtAuth, strict) checks it against
+# the key set wardynd serves. The gateway's access log carries the token's subject and run id and the
+# call id Wardyn sent in X-Wardyn-Call-Id. The MCP route reads no token.
+#
 # Why two hostnames: a component may not reach a host that serves a model
 # (internal/api/components_run.go), so MCP federation lives on a host of its own.
 #
 # What the asserts read, never a run's exit code alone (claude-code's exit says nothing about the
 # gateway): the runs' audit rows (the proxy let each call through), the gateway's own access log
-# (a line for each route), and the fake's /_seen (the made-up credential arrived on the model route
-# and the tool was called once).
+# (a line for each route, the model line naming the run's subject and run id, and the call id the
+# audit row carries), and the fake's /_seen (the made-up credential arrived on the model route, the
+# identity header did not, and the tool was called once). Two direct calls to the model route, one with
+# no token and one with a token another key signed, must be answered 401.
 #
 # No provider key exists anywhere in this job: the fake sits behind the gateway, and the one
 # credential is a value this script makes up. The gateway image is public and pulled anonymously.
@@ -49,7 +56,7 @@ wardyn_pick_docker_host
 die() { echo "ERROR: $*" >&2; exit 1; }
 step() { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 
-for bin in docker kind kubectl helm curl jq go openssl; do
+for bin in docker kind kubectl helm curl jq go openssl python3; do
   command -v "${bin}" >/dev/null 2>&1 || die "${bin} not found on PATH"
 done
 
@@ -67,6 +74,7 @@ GATEWAY="ai-gateway"
 LLM_HOST="llm-gw.${NAMESPACE}.svc.cluster.local"
 MCP_HOST="mcp-gw.${NAMESPACE}.svc.cluster.local"
 GATEWAY_PORT=8443
+AUDIENCE="wardyn-ai-gateway-job"
 PROVIDER_ID="ai-gateway"
 MODEL="claude-sonnet-4-5"
 CREDENTIAL="made-up-gateway-credential-not-a-secret"
@@ -75,7 +83,8 @@ EVIDENCE_DIR="${WARDYN_KIND_GATEWAY_EVIDENCE:-${ROOT}/local/evidence/kind-gatewa
 mkdir -p "${EVIDENCE_DIR}"
 TMPDIR="$(mktemp -d /tmp/wardyn-kind-gateway-run.XXXXXX)"
 PF_PID=""
-trap '[[ -n "${PF_PID}" ]] && kill "${PF_PID}" 2>/dev/null; rm -rf "${TMPDIR}"' EXIT
+GW_PF_PID=""
+trap 'for p in "${PF_PID}" "${GW_PF_PID}"; do [[ -n "${p}" ]] && kill "${p}" 2>/dev/null; done; rm -rf "${TMPDIR}"' EXIT
 
 step "checking the cluster is up (never created or deleted here)"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment "${RELEASE}" >/dev/null 2>&1 \
@@ -128,27 +137,7 @@ helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn -n "${N
   || { tail -30 "${EVIDENCE_DIR}/helm-upgrade.log" >&2; die "helm upgrade failed"; }
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status "deployment/${RELEASE}" --timeout=240s || die "wardynd did not come back after the upgrade"
 
-# ── 2. the fake and the gateway, on the cluster ─────────────────────────────
-step "building and loading the fake (${FAKE_IMAGE}, test/gatewayfake)"
-docker build -f test/gatewayfake/Dockerfile -t "${FAKE_IMAGE}" . >"${EVIDENCE_DIR}/fake-build.log" 2>&1 \
-  || { tail -20 "${EVIDENCE_DIR}/fake-build.log" >&2; die "docker build of the fake failed"; }
-kind load docker-image "${FAKE_IMAGE}" --name "${CLUSTER}" >/dev/null || die "kind load of the fake failed"
-
-step "deploying the gateway and the fake (${MANIFEST})"
-kubectl --context "${CONTEXT}" -n "${NAMESPACE}" create secret tls ai-gateway-tls \
-  --cert="${CERTS}/tls.crt" --key="${CERTS}/tls.key" --dry-run=client -o yaml \
-  | kubectl --context "${CONTEXT}" apply -f - >/dev/null || die "could not create Secret ai-gateway-tls"
-kubectl --context "${CONTEXT}" apply -f "${MANIFEST}" >/dev/null || die "could not apply ${MANIFEST}"
-for d in "${FAKE_SVC}" "${GATEWAY}"; do
-  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status "deployment/${d}" --timeout=240s \
-    || {
-      kubectl --context "${CONTEXT}" -n "${NAMESPACE}" describe "deployment/${d}" >&2
-      kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "deployment/${d}" --tail=100 >"${EVIDENCE_DIR}/${d}-rollout.log" 2>&1
-      die "${d} did not become ready (its last 100 log lines are in ${EVIDENCE_DIR}/${d}-rollout.log)"
-    }
-done
-
-# ── 3. internal_hosts: the private-address refusal, lifted for the MCP host only ─
+# ── 2. internal_hosts: the private-address refusal, lifted for the MCP host only ─
 SERVICE_CIDR="$(kubectl --context "${CONTEXT}" -n kube-system get pod \
   -l component=kube-apiserver -o jsonpath='{.items[0].spec.containers[0].command}' 2>/dev/null \
   | jq -r '.[] | select(startswith("--service-cluster-ip-range=")) | sub("^--service-cluster-ip-range=";"")' 2>/dev/null | head -1)"
@@ -164,14 +153,62 @@ merged="$(jq --arg h "${MCP_HOST}" --arg c "${SERVICE_CIDR}" \
   '.internal_hosts = ((.internal_hosts // []) | map(select(.host_suffix != $h)) + [{host_suffix:$h, cidrs:[$c]}])' <<<"${current}")"
 must 200 "PUT /site-config" PUT /site-config "${merged}"
 
-# ── 4. the provider, and the caller's own credential ────────────────────────
-step "seeding the model provider (${PROVIDER_ID}: custom_endpoint -> https://${LLM_HOST}:${GATEWAY_PORT}) and its made-up credential"
-must 200 "PUT /model-providers" PUT /model-providers "$(jq -cn --arg id "${PROVIDER_ID}" --arg u "https://${LLM_HOST}:${GATEWAY_PORT}" --arg m "${MODEL}" \
-  '{providers:[{id:$id,name:"AI gateway",kind:"custom_endpoint",base_url:$u,harnesses:[{harness:"claude-code",model:$m}]}]}')"
+# ── 3. the provider, with run identity on, and the caller's own credential ────────────────────────
+step "seeding the model provider (${PROVIDER_ID}: custom_endpoint -> https://${LLM_HOST}:${GATEWAY_PORT}, gateway identity audience ${AUDIENCE}) and its made-up credential"
+must 200 "PUT /model-providers" PUT /model-providers "$(jq -cn --arg id "${PROVIDER_ID}" --arg u "https://${LLM_HOST}:${GATEWAY_PORT}" --arg m "${MODEL}" --arg a "${AUDIENCE}" \
+  '{providers:[{id:$id,name:"AI gateway",kind:"custom_endpoint",base_url:$u,gateway_identity:{audience:$a},harnesses:[{harness:"claude-code",model:$m}]}]}')"
 must 200 "PUT /agent-providers" PUT /agent-providers "$(jq -cn --arg id "${PROVIDER_ID}" '{agents:[{id:"claude-code",default_provider:$id}]}')"
 code="$(api DELETE "/model-providers/${PROVIDER_ID}/credential")"
 [[ "${code}" == "204" || "${code}" == "404" ]] || die "could not clear a stale credential for ${PROVIDER_ID} (DELETE answered ${code})"
 must 204 "PUT /model-providers/${PROVIDER_ID}/credential" PUT "/model-providers/${PROVIDER_ID}/credential" "$(jq -cn --arg v "${CREDENTIAL}" '{value:$v}')"
+
+# ── 4. the fake and the gateway, on the cluster ─────────────────────────────
+# After the provider: saving it with gateway_identity on is what makes wardynd create the signing key
+# and serve the key set, and the gateway does not start without the key set.
+step "reading the issuer and key set address wardynd reports"
+must 200 "GET /model-providers" GET /model-providers
+ISSUER="$(jq -r '.gateway_identity_issuer // empty' "${TMPDIR}/resp.json")"
+JWKS_PATH="$(jq -r '.gateway_jwks_path // empty' "${TMPDIR}/resp.json")"
+[[ -n "${ISSUER}" && -n "${JWKS_PATH}" ]] || die "GET /model-providers did not report gateway_identity_issuer and gateway_jwks_path: $(cat "${TMPDIR}/resp.json")"
+CP_PORT="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get svc "${RELEASE}" -o jsonpath='{.spec.ports[?(@.name=="http")].port}' 2>/dev/null)"
+[[ -n "${CP_PORT}" ]] || die "could not read the http port of Service ${RELEASE}"
+# The in-cluster address the gateway's pod uses. The console shows the same path under the browser's
+# own origin; a gateway that reaches wardynd elsewhere uses that address with the same path.
+JWKS_URL="http://${RELEASE}.${NAMESPACE}.svc.cluster.local:${CP_PORT}${JWKS_PATH}"
+step "waiting for wardynd to serve the key set (${JWKS_PATH})"
+jwks_ok=0
+for _ in $(seq 1 40); do
+  if curl -sf --max-time "${CURL_MAX_TIME}" -o "${EVIDENCE_DIR}/jwks.json" "${BASE_URL}${JWKS_PATH}" && jq -e '(.keys | length) >= 1' "${EVIDENCE_DIR}/jwks.json" >/dev/null 2>&1; then
+    jwks_ok=1
+    break
+  fi
+  sleep 3
+done
+[[ "${jwks_ok}" -eq 1 ]] || die "wardynd never served a key set at ${JWKS_PATH} — saving the provider with gateway_identity should have created the key"
+
+step "building and loading the fake (${FAKE_IMAGE}, test/gatewayfake)"
+docker build -f test/gatewayfake/Dockerfile -t "${FAKE_IMAGE}" . >"${EVIDENCE_DIR}/fake-build.log" 2>&1 \
+  || { tail -20 "${EVIDENCE_DIR}/fake-build.log" >&2; die "docker build of the fake failed"; }
+kind load docker-image "${FAKE_IMAGE}" --name "${CLUSTER}" >/dev/null || die "kind load of the fake failed"
+
+step "deploying the gateway and the fake (${MANIFEST})"
+kubectl --context "${CONTEXT}" -n "${NAMESPACE}" create secret tls ai-gateway-tls \
+  --cert="${CERTS}/tls.crt" --key="${CERTS}/tls.key" --dry-run=client -o yaml \
+  | kubectl --context "${CONTEXT}" apply -f - >/dev/null || die "could not create Secret ai-gateway-tls"
+# The manifest names its three run-specific values as placeholders; fill them in as it is applied.
+RENDERED="${TMPDIR}/gateway.rendered.yaml"
+sed -e "s|__GATEWAY_ISSUER__|${ISSUER}|g" -e "s|__GATEWAY_AUDIENCE__|${AUDIENCE}|g" -e "s|__GATEWAY_JWKS_URL__|${JWKS_URL}|g" "${MANIFEST}" >"${RENDERED}"
+! grep -q '__GATEWAY_' "${RENDERED}" || die "a placeholder in ${MANIFEST} was left unfilled"
+cp "${RENDERED}" "${EVIDENCE_DIR}/gateway.rendered.yaml"
+kubectl --context "${CONTEXT}" apply -f "${RENDERED}" >/dev/null || die "could not apply ${MANIFEST}"
+for d in "${FAKE_SVC}" "${GATEWAY}"; do
+  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status "deployment/${d}" --timeout=240s \
+    || {
+      kubectl --context "${CONTEXT}" -n "${NAMESPACE}" describe "deployment/${d}" >&2
+      kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "deployment/${d}" --tail=100 >"${EVIDENCE_DIR}/${d}-rollout.log" 2>&1
+      die "${d} did not become ready (its last 100 log lines are in ${EVIDENCE_DIR}/${d}-rollout.log)"
+    }
+done
 
 # ── 5. the runs ─────────────────────────────────────────────────────────────
 step "building the wardyn CLI"
@@ -255,6 +292,26 @@ check "gateway log: the model route served /v1/messages with 200" $?
 [[ "$(grep 'route=default/mcp ' "${EVIDENCE_DIR}/gateway.log" | grep 'mcp.method.name=tools/call' | grep -c 'http.status=200')" -ge 1 ]]
 check "gateway log: the MCP route served a tools/call with 200" $?
 
+# The fields wardyn_sub, wardyn_run and wardyn_call are added by the gateway's config
+# (deploy/kind/gateway/gateway.yaml) from the validated token and the request. A value may print
+# quoted or bare, so both are accepted.
+RUN_ID="$(jq -r '.id // empty' "${MODEL_OUT}/run.json" 2>/dev/null)"
+[[ -n "${RUN_ID}" ]]; check "the model run has an id to look for in the gateway's log" $?
+model_lines="$(grep 'route=default/llm ' "${EVIDENCE_DIR}/gateway.log" | grep -E 'http\.path=/v1/messages(\?[^ ]*)?( |$)' | grep 'http.status=200' || true)"
+[[ -n "${RUN_ID}" ]] && grep -E "wardyn_sub=\"?admin-token\"?([[:space:]]|\$)" <<<"${model_lines}" | grep -qE "wardyn_run=\"?${RUN_ID}\"?([[:space:]]|\$)"
+check "gateway log: the model line carries the validated token's subject (admin-token) and the run id ${RUN_ID}" $?
+
+# The call id: Wardyn made it, sent it as X-Wardyn-Call-Id and recorded it on the audit row, and the
+# gateway logged the header it received. At least one id must be on both.
+call_ids="$(jq -r --arg h "${LLM_HOST}" '[.[] | select(.action == "egress.allow" and .data.host == $h) | .data.gateway_call_id // empty] | unique | .[]' "${MODEL_OUT}/audit.json" 2>/dev/null)"
+[[ -n "${call_ids}" ]]; check "audit: the model run's egress.allow rows carry a gateway_call_id ($(wc -l <<<"${call_ids}" | tr -d ' ') distinct)" $?
+joined=0
+while IFS= read -r id; do
+  [[ -n "${id}" ]] || continue
+  if grep 'route=default/llm ' "${EVIDENCE_DIR}/gateway.log" | grep -qE "wardyn_call=\"?${id}\"?([[:space:]]|\$)"; then joined=$((joined + 1)); fi
+done <<<"${call_ids}"
+[[ "${joined}" -ge 1 ]]; check "the gateway's X-Wardyn-Call-Id equals the audit row's gateway_call_id (${joined} id(s) on both)" $?
+
 step "reading the fake's counters (/_seen)"
 PF_PORT="$(pick_free_port)"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/${FAKE_SVC}" "${PF_PORT}:8080" >/dev/null 2>&1 &
@@ -272,9 +329,43 @@ jq -e --arg c "${CREDENTIAL}" '.model_calls >= 1 and any(.requests[]; .route == 
 check "the fake received a model call carrying the made-up credential ($(jq -c '{model_calls}' <<<"${seen}"))" $?
 jq -e '.tool_calls == 1' <<<"${seen}" >/dev/null
 check "the fake's tool was called exactly once ($(jq -c '{tool_calls}' <<<"${seen}"))" $?
+jq -e '[.requests[] | select(.route == "model")] | length >= 1 and all(.headers | has("x-wardyn-identity") | not)' <<<"${seen}" >/dev/null
+check "the fake received no x-wardyn-identity header: the gateway consumed it" $?
 # The paths a harness reached beyond the model route's own: the evidence for what the gateway
 # does with them (docs/operations/ai-gateway.md).
 echo "  paths the fake saw outside its two routes: $(jq -c '[.requests[] | select(.route == "other") | .path] | unique' <<<"${seen}")"
+
+# ── 7. the gateway refuses a call that carries no valid token ───────────────
+# Direct calls to the model route from this machine, through a port-forward: the Host header names
+# the route, and the throwaway CA is the trust anchor.
+step "calling the model route directly: no token, and a token another key signed"
+GW_PF_PORT="$(pick_free_port)"
+kubectl --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/llm-gw" "${GW_PF_PORT}:${GATEWAY_PORT}" >/dev/null 2>&1 &
+GW_PF_PID=$!
+b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+openssl ecparam -name prime256v1 -genkey -noout -out "${TMPDIR}/other.key" 2>/dev/null || die "could not make a second signing key"
+header="$(printf '%s' '{"alg":"ES256","typ":"JWT","kid":"another-key"}' | b64url)"
+payload="$(jq -cn --arg iss "${ISSUER}" --arg aud "${AUDIENCE}" --argjson exp "$(($(date +%s) + 300))" \
+  '{iss:$iss,aud:$aud,sub:"admin-token",wardyn_run:"not-a-run",exp:$exp}' | b64url)"
+# openssl signs in DER; a JWT's ES256 signature is r and s as two 32-byte integers.
+sig="$(printf '%s.%s' "${header}" "${payload}" | openssl dgst -sha256 -sign "${TMPDIR}/other.key" \
+  | python3 -I -c 'import sys; d=sys.stdin.buffer.read(); i=3 if d[1]<128 else 4; rl=d[i]; r=d[i+1:i+1+rl]; j=i+1+rl; sl=d[j+1]; s=d[j+2:j+2+sl]; sys.stdout.buffer.write(r.lstrip(b"\0").rjust(32,b"\0")+s.lstrip(b"\0").rjust(32,b"\0"))' \
+  | b64url)"
+[[ -n "${sig}" ]] || die "could not sign the second key's token"
+direct() { # [HEADER...] -> HTTP code
+  curl -sS --max-time "${CURL_MAX_TIME}" -o /dev/null -w '%{http_code}' --cacert "${CERTS}/ca.crt" \
+    --resolve "${LLM_HOST}:${GW_PF_PORT}:127.0.0.1" -H "Host: ${LLM_HOST}" -H 'Content-Type: application/json' "$@" \
+    -d '{"model":"x","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' "https://${LLM_HOST}:${GW_PF_PORT}/v1/messages" 2>/dev/null
+}
+no_token=""
+for _ in $(seq 1 15); do
+  no_token="$(direct)" && [[ "${no_token}" != "000" ]] && break
+  sleep 1
+done
+[[ "${no_token}" == "401" ]]; check "a direct call with no x-wardyn-identity header is answered 401 (got ${no_token})" $?
+other_key="$(direct -H "x-wardyn-identity: ${header}.${payload}.${sig}")"
+[[ "${other_key}" == "401" ]]; check "a direct call with a token another key signed is answered 401 (got ${other_key})" $?
+kill "${GW_PF_PID}" 2>/dev/null
 
 [[ "${fail}" -eq 0 ]] || die "the gateway path was not proven — see the FAIL lines above and ${EVIDENCE_DIR}"
 echo "kind-gateway-run: PASS"

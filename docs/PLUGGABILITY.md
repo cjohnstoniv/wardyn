@@ -138,8 +138,9 @@
   - Allow that host in the run's egress policy. A gateway on a private address named by hostname also needs an `internal_hosts` entry in site config; an exact literal IP in `allowed_domains` is honoured on its own. Wardyn then governs whether a run reaches the gateway at all. The gateway decides which tools a caller gets.
 - **Before you set it up.**
   - A Claude subscription provider's `base_url` sends each person's sign-in token to the gateway on every call. That makes the gateway a trust decision for the people who connect.
-  - The gateway sees `wardyn-proxy` as its caller. Wardyn adds no run or person identity. The harness's own headers pass through, except credential-shaped ones, which Wardyn strips before it injects the credential.
-  - So a per-person limit there can key only on what the gateway still sees: a person's sign-in token for a subscription provider, and nothing per person once the gateway swaps in its own key.
+  - The gateway sees `wardyn-proxy` as its caller. Unless a provider opts in, Wardyn adds no run or person identity. The harness's own headers pass through, except credential-shaped ones, which Wardyn strips before it injects the credential.
+  - A provider can opt in to run identity: a signed token in `X-Wardyn-Identity` naming the person, the run and the runner, and a call id in `X-Wardyn-Call-Id` that joins the gateway's log to the run's audit rows. Both are experimental until 0.11. The [claims and the join](operations/ai-gateway.md#the-claims-a-gateway-receives) are on the setup page.
+  - Without it, a per-person limit can key only on what the gateway still sees: a person's sign-in token for a subscription provider, and nothing per person once the gateway swaps in its own key. With it, a rule can key on the token's `sub`, `wardyn_run` and `wardyn_runner`.
   - Two policy points can disagree. Decide which one owns model choice and tool access, and keep the other permissive for that concern.
 - **When it is worth it.**
   - It pays off when an organisation already sends all model and MCP traffic through one gateway.

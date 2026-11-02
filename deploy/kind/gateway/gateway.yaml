@@ -13,6 +13,13 @@
 #
 # The Secret ai-gateway-tls (a throwaway CA's server certificate for both hostnames) is made
 # by the script; the CA reaches wardynd through the chart's trustedCA value.
+#
+# RUN IDENTITY. The model route verifies the signed token wardyn-proxy sends in X-Wardyn-Identity
+# (jwtAuth, strict), against the key set wardynd serves, and the access log adds the token's
+# subject and run id and the call id Wardyn sent. The MCP route reads no token. The three
+# __PLACEHOLDERS__ below are the issuer and key set address wardynd reports, and the audience the
+# script gives the provider; scripts/kind-gateway-run.sh fills them in when it applies this file,
+# after wardynd serves the key set (the gateway does not start without it).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -20,6 +27,13 @@ metadata:
   namespace: wardyn
 data:
   config.yaml: |
+    # Added to every access-log line. jwt.* is empty on the MCP route, which verifies nothing.
+    frontendPolicies:
+      accessLog:
+        add:
+          wardyn_sub: jwt.sub
+          wardyn_run: jwt.wardyn_run
+          wardyn_call: 'request.headers["x-wardyn-call-id"]'
     binds:
     - port: 8443
       listeners:
@@ -34,6 +48,19 @@ data:
         - name: llm
           hostnames: ["llm-gw.wardyn.svc.cluster.local"]
           policies:
+            # Strict: a call with no token, or a token from another key, issuer or audience, is
+            # refused with a 401. preserveToken is left unset, so the header is consumed here and
+            # the fake never sees it.
+            jwtAuth:
+              mode: strict
+              location:
+                header:
+                  name: x-wardyn-identity
+              providers:
+              - issuer: "__GATEWAY_ISSUER__"
+                audiences: ["__GATEWAY_AUDIENCE__"]
+                jwks:
+                  url: "__GATEWAY_JWKS_URL__"
             ai:
               routes:
                 "/v1/messages": messages
