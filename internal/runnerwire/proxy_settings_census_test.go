@@ -50,6 +50,9 @@ var proxySettingOfField = map[string]string{
 // proxyFieldExemptions maps each post-v0.9.8 field left ungated to why a runner
 // dropping it fails closed.
 var proxyFieldExemptions = map[string]string{
+	"GatewayIdentity": "placement refuses it at every local door (internal/placement enforce.go gates), so a person's runner " +
+		"never receives it set; dropped by an older remote-hosted executor, its proxy attaches no token and the model call " +
+		"reaches the gateway unsigned, which a gateway in the documented strict mode refuses",
 	"DesktopSignins": "the org sets it only when signinTarget holds, which is false for a run with a runner or a pool " +
 		"(internal/api run_desktop_signin.go signinTarget; remote.Substrate is no runner.SigninExecer either), so a " +
 		"wardyn-runnerd never receives it set; dropped, " +

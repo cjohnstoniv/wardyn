@@ -250,6 +250,10 @@ type Proxy struct {
 	// localModels is each local_model upstream's route gate, keyed by
 	// localModelKey (local_model.go). Empty == no local model route.
 	localModels map[string]*localModel
+	// gatewayRoutes is Options.GatewayIdentity and gatewayHolders each route
+	// provider's token (gateway_identity.go). Empty == off.
+	gatewayRoutes  []GatewayIdentityRoute
+	gatewayHolders map[string]*gatewayTokenHolder
 	// pushHolds is the held-push state (push_hold.go).
 	pushHolds pushHolds
 	// attribution is Options.Attribution: the policy named in a policy-decided
@@ -410,6 +414,8 @@ func newProxy(opts Options) *Proxy {
 		attribution:          opts.Attribution,
 		gatewayVendor:        gatewayVendor,
 		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
+		gatewayRoutes:        opts.GatewayIdentity,
+		gatewayHolders:       map[string]*gatewayTokenHolder{},
 		dial:                 dial,
 		now:                  now,
 		viaOrgRoutes:         opts.ViaOrgRoutes,
@@ -487,6 +493,9 @@ func newProxy(opts Options) *Proxy {
 	})
 	p.offerHTTP2(egressDial, opts.TLSClientConfig)
 	p.kube.bindTransport(p.transport)
+	for _, rt := range opts.GatewayIdentity {
+		p.gatewayHolders[rt.ProviderID] = &gatewayTokenHolder{providerID: rt.ProviderID, audience: rt.Audience, timeout: 15 * time.Second}
+	}
 	p.controlTransport = mkTransport(directDial)
 	if opts.ControlTLS == nil {
 		opts.ControlTLS, _ = hoptls.ClientConfig("")

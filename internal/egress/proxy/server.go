@@ -316,6 +316,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		LLMChannelHosts:      cfg.LLMChannelHosts,
 		LLMUnavailableDetail: cfg.LLMUnavailableDetail,
 		LocalModels:          cfg.LocalModels,
+		GatewayIdentity:      cfg.GatewayIdentity,
 		RunnerLocalModels:    cfg.RunnerLocalModels,
 		Unattended:           cfg.Unattended,
 		ScrubResponses:       cfg.ScrubResponses,

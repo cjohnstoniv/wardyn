@@ -137,6 +137,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		outReq.Body = io.NopCloser(bodyOverride)
 	}
 	removeHopByHop(outReq.Header)
+	p.stripGatewayHeaders(outReq.Header)
 
 	// Credential injection: plain HTTP only, exact-allow host only, and only on a transport
 	// that may carry the credential — see injectableTransport.
