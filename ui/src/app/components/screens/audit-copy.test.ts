@@ -25,6 +25,20 @@ describe("audit sentences", () => {
     expect(inboundDetail(failed)).toBeNull();
   });
 
+  it("words a gateway token mint row on both tables, and leaves an outcome it does not know as the raw action", () => {
+    const signed = ev("gateway_identity.mint", "corp-gateway");
+    const refused = ev("gateway_identity.mint", "old-gateway", { outcome: "denied" });
+    expect(describeEvent(signed)).toBe("Signed a gateway token for corp-gateway");
+    expect(describeEvent(refused)).toBe("Refused a gateway token for old-gateway");
+    expect(describeAction(signed)).toBe("Signed a gateway token");
+    expect(describeTabEvent(signed)).toBe("Signed a gateway token for corp-gateway");
+    expect(describeTabEvent(refused)).toBe("Refused a gateway token for old-gateway");
+    expect(describeTabAction(refused)).toBe("Refused a gateway token for");
+    expect(describeTabEvent(ev("gateway_identity.mint", ""))).toBe("Signed a gateway token for an unknown provider");
+    expect(describeEvent(ev("gateway_identity.mint", "p", { outcome: "failure" }))).toBe("gateway_identity.mint — p");
+    expect(describeTabEvent(ev("gateway_identity.mint", "p", { outcome: "failure" }))).toBe("gateway_identity.mint — p");
+  });
+
   it("joins the target to the sentence for the whole line, and leaves it off the action", () => {
     expect(describeEvent(ev("run.create", "r1"))).toBe("Created the run — r1");
     expect(describeAction(ev("run.create", "r1"))).toBe("Created the run");
