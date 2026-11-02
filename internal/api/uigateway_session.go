@@ -389,9 +389,16 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 	return nil
 }
 
+// uiAppIsDesktopSession is whether app puts a person on a desktop, by name: a VM's desktop, a declared noVNC
+// desktop or the sign-in display. deny_interactive closes all three. sess.Desktop marks a VM's alone, and its
+// other readers set that session's lifetime and close, so it is not the question asked here.
+func uiAppIsDesktopSession(app string) bool {
+	return app == uiDesktopAppName || uiDesktopApp(app)
+}
+
 // uiSessionUnitDenies is the re-check's profile arm for a session that is not inbound: the run's profile as it
-// stands now refuses what its door would refuse a new one, deny_ui_apps (uiEnterCommon) and, for a desktop,
-// deny_interactive too (uiEnterDesktop, the harness sign-in run exempt as interactiveDeniedBy exempts it),
+// stands now refuses what its door would refuse a new one, deny_ui_apps (uiEnterCommon) and, for a desktop
+// (uiAppIsDesktopSession), deny_interactive too (the harness sign-in run exempt as interactiveDeniedBy exempts it),
 // with the doors' super-admin exemption. A profile that cannot be read is unverifiable: fail closed.
 func (s *Server) uiSessionUnitDenies(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
 	if sess.Role == oidc.RoleAdmin && s.adminDoorExempt(run) {
@@ -408,7 +415,7 @@ func (s *Server) uiSessionUnitDenies(ctx context.Context, sess uiSession, run ty
 	case p.Limits.DenyUIApps:
 		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden,
 			fmt.Sprintf("UI apps are not allowed under the governance profile %q this run was launched under.", p.Name))
-	case sess.Desktop && p.Limits.DenyInteractive && run.Task != harnessLoginTask:
+	case uiAppIsDesktopSession(sess.App) && p.Limits.DenyInteractive && run.Task != harnessLoginTask:
 		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden,
 			fmt.Sprintf("A desktop is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.", p.Name))
 	}

@@ -36,9 +36,12 @@ var isOperatorCensus = map[string]int{
 	"workloads.go:mayReachWorkloadsOf":    1, // reach: an operator restarts another owner's workload (workloadOwnerOf, launches), and canRestartWorkload's display flag reads the same rule and grants nothing; the launch is the owner's own run create
 	"attach_ticket.go:handleAttachTicket": 1, // the ticket's reach stamp; its reach is admitRunEntry's
 	"desktop_files.go:desktopRun":         1, // the entry rule (mayEnterRun) and the skip of deny_ui_apps and deny_interactive, as the ticket's
-	"attach.go:refuseAttachEntry":         1,
-	"run_entry.go:getRunForEntry":         1,
-	"sshkeys.go:handleAddSSHKey":          1,
+	// A desktop sign-in's begin and share: the skip of deny_ui_apps and deny_interactive, as the ticket's.
+	"run_desktop_signin.go:handleBeginDesktopSignin": 1,
+	"run_desktop_signin.go:handleShareDesktopSignin": 1,
+	"attach.go:refuseAttachEntry":                    1,
+	"run_entry.go:getRunForEntry":                    1,
+	"sshkeys.go:handleAddSSHKey":                     1,
 	// A VM desktop's agent pause and resume: the entry rule (mayEnterRun) and the super admin's
 	// 403 on a run that is not theirs. The pause then holds deny_ui_apps and deny_interactive for every caller.
 	"run_desktop_vm_signin.go:mayPauseDesktopAgent": 1,
