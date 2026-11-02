@@ -19,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -290,7 +291,30 @@ func TestPlacementCapability_MacOSVMHonoursItsLiveCount(t *testing.T) {
 			if (tc.want == "") != (ref == nil) || (ref != nil && !strings.Contains(ref.body.Error, tc.want)) {
 				t.Fatalf("refusal = %+v, want %q", ref, tc.want)
 			}
+			// A promoted run's start asks the same question of the same count.
+			ref = s.placementCapabilityRefusal(withPromotedStart(capsCtx, uuid.New(), &id, "", false), macReq(id), runPlacement{}, governanceCeiling{}, 0)
+			if (tc.want == "") != (ref == nil) || (ref != nil && !strings.Contains(ref.body.Error, tc.want)) {
+				t.Fatalf("at promotion: refusal = %+v, want %q", ref, tc.want)
+			}
 		})
+	}
+}
+
+// A Mac that offers another VM says nothing about the organisation's limits: the two are separate
+// counts, so the offer stands while Runs at once holds the run, and the wait names Runs at once.
+func TestMacOSVMOfferOfTwoLeavesRunsAtOnceToHoldTheRun(t *testing.T) {
+	s := capsServer(&fakeRunner{})
+	mc := readyMac()
+	mc.Max = 2
+	id := macRunner(t, s, mc, nil)
+	s.cfg.Store = macLiveStore{ownedRunners: s.cfg.Store.(ownedRunners), held: map[uuid.UUID]int{id: 1}}
+	if ref := s.placementCapabilityRefusal(capsCtx, macReq(id), runPlacement{}, governanceCeiling{}, 0); ref != nil {
+		t.Fatalf("a Mac offering 2 with 1 live refused: %+v", ref)
+	}
+	limits := &types.RunnerLimits{RunsAtOnce: 1, Total: types.RunnerAmounts{CPUMillis: 8000, MemoryMiB: 32768, DiskMiB: 102400},
+		PerRun: types.RunnerAmounts{CPUMillis: 4000, MemoryMiB: 8192, DiskMiB: 51200}}
+	if got, want := runnerpool.NoRoomReason(limits, types.RunnerTally{Runs: 1}, types.RunnerAmounts{CPUMillis: 4000, MemoryMiB: 8192, DiskMiB: 51200}), "Runs at once: 1 running of 1"; got != want {
+		t.Fatalf("the wait names %q, want %q", got, want)
 	}
 }
 
