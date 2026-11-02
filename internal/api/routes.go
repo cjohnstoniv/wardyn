@@ -268,12 +268,12 @@ func (s *Server) routes() chi.Router {
 			// only for a run with no personal owner (mayEnterRun); on a person's run
 			// they get 403 run_owner_only (#1476).
 			r.Post("/runs/{id}/attach-ticket", s.handleAttachTicket)
-			// The three lines above are each issue #658's pre-0.8 alias; their
-			// 0.8 names (mounted alongside, same handlers, kept one minor —
-			// docs/sdk.md "Renamed in 0.8") are factored out of this already-long
-			// function into mountRenamedRunRoutes, called once, below.
+			// The three lines above are each issue #658's pre-0.8 alias; their 0.8 names (mounted alongside,
+			// same handlers, kept one minor — docs/sdk.md "Renamed in 0.8") are factored out of this
+			// already-long function into mountRenamedRunRoutes, called once, below.
 			s.mountRenamedRunRoutes(r)
-			s.mountInboundTicketRoutes(r) // a browser's ticket to one inbound app, for its owner or a named caller (inbound_ticket.go)
+			s.mountInboundTicketRoutes(r)   // a browser's ticket to one inbound app, for its owner or a named caller (inbound_ticket.go)
+			s.mountBackgroundWatchRoutes(r) // the ticket to watch a background macOS run's desktop, view only (run_background_watch.go)
 			// Approvals: reading the queue is a member act (own runs only — see
 			// handleListApprovals), DECIDING is OWNER-OR-ADMIN rather than
 			// operator-only: the decision IS the live authorization over an

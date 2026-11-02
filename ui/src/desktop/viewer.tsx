@@ -16,7 +16,8 @@ import { RfbClient, type RfbDisplay } from "./rfb";
 
 // `machine_kind` is the run's (types.MachineKind); absent when the gateway could not read the run.
 // `view_only`: the gateway keeps this session's input from the desktop.
-export type Boot = { state: "open"; expires: number; rfb: string; close: string; machine_kind?: string; view_only?: boolean } | { state: "refused"; said: string };
+// `background`: this session is a watch of a background run's desktop; it always comes with view_only.
+export type Boot = { state: "open"; expires: number; rfb: string; close: string; machine_kind?: string; view_only?: boolean; background?: boolean } | { state: "refused"; said: string };
 
 /** What the gateway wrote on the page, or null when it wrote nothing usable. */
 export function readBoot(el: HTMLElement = document.documentElement): Boot | null {
@@ -45,8 +46,9 @@ const openSocket = (path: string): DesktopSocket => new WebSocket(originWS(path)
 const SESSION_ENDED = 4001;
 const RUN_ENDED = 4002;
 const NOT_AUTHORIZED = 4003;
+const WATCH_ENDED = 4005;
 
-type Phase = "starting" | "connected" | "closed" | "expired" | "run_ended" | "refused";
+type Phase = "starting" | "connected" | "closed" | "expired" | "run_ended" | "watch_ended" | "refused";
 
 export function DesktopViewer({ boot, connect = openSocket, small }: { boot: Boot; connect?: (path: string) => DesktopSocket; small?: boolean }) {
   if (boot.state === "refused") return <LinkRefused said={boot.said} />;
@@ -90,6 +92,7 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
         if (closing.current || ev.code === NOT_AUTHORIZED) setPhase("closed");
         else if (ev.code === SESSION_ENDED) setPhase("expired");
         else if (ev.code === RUN_ENDED) setPhase("run_ended");
+        else if (ev.code === WATCH_ENDED) setPhase("watch_ended");
         else {
           // Booting, restarting or briefly unreachable: the same tab connects on its own. A browser hides a
           // refused handshake's status, so a socket that never opened asks the gateway once whether it was 403.
@@ -154,7 +157,8 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
       {viewOnly && (
         <p className="border-b border-border px-4 py-2 text-xs">
           <span className="font-medium">{boot.view_only ? DESKTOP.viewOnlyTitle : DESKTOP.phoneTitle}</span>{" "}
-          <span className="text-muted-foreground">{boot.view_only ? DESKTOP.viewOnlyBody : DESKTOP.phoneBody}</span>
+          <span className="text-muted-foreground">{boot.background ? DESKTOP.backgroundWatchBody : boot.view_only ? DESKTOP.viewOnlyBody : DESKTOP.phoneBody}</span>
+          {boot.view_only && <span className="block text-muted-foreground">{DESKTOP.loginWindowNote}</span>}
         </p>
       )}
       <main className={fit ? "relative flex min-h-0 flex-1 items-center justify-center bg-black" : "relative min-h-0 flex-1 overflow-auto bg-black"}>
@@ -178,6 +182,7 @@ function Notice({ phase, macOS }: { phase: Exclude<Phase, "connected">; macOS: b
     phase === "starting" ? [macOS ? DESKTOP.startingMacOS : DESKTOP.starting, DESKTOP.startingBody]
     : phase === "expired" ? [DESKTOP.sessionEnded, DESKTOP.sessionEndedBody]
     : phase === "run_ended" ? [DESKTOP.runEnded, undefined]
+    : phase === "watch_ended" ? [DESKTOP.sessionEnded, DESKTOP.watchEndedBody]
     : phase === "refused" ? [DESKTOP.sessionEnded, DESKTOP.refusedBody]
     : [DESKTOP.sessionEnded, undefined];
   return (

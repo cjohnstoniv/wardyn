@@ -77,6 +77,10 @@ func TestRecordVMMachineKeepsThisBootsForcedViewOnly(t *testing.T) {
 		if c.run.DesktopForcedViewOnly() != c.want {
 			t.Errorf("%s: the run reads %v, want %v", c.name, c.run.DesktopForcedViewOnly(), c.want)
 		}
+		// The ask is the dispatch's own, whatever the runner answered: a background macOS run's boot always has it.
+		if wantAsked := c.run.MachineKind.IsMacOSVM() && c.run.BackgroundOnly(); got.DesktopViewOnlyAsked != wantAsked {
+			t.Errorf("%s: asked %v, want %v", c.name, got.DesktopViewOnlyAsked, wantAsked)
+		}
 	}
 	if !claims.DesktopForcedViewOnly || mac.DesktopForcedViewOnly {
 		t.Fatal("recording changed the Sandbox's own machine")

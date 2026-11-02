@@ -289,6 +289,10 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		ModelAllowlists map[string][]string `json:"model_allowlists,omitempty"`
 		// MacOS is a macOS VM run's desktop as its Mac offers it (run_macos_view.go); absent on every other run.
 		MacOS *runMacOSView `json:"macos,omitempty"`
+		// BackgroundWatch is whether this caller may watch a running background macOS VM run's desktop, and
+		// if not why (run_background_watch.go); absent on every other run. Beside macos, which an offline
+		// runner leaves absent.
+		BackgroundWatch *backgroundWatchView `json:"background_watch,omitempty"`
 		// MacOSDisk is where a macOS VM run's disk stands on its Mac at the run's end (run_macos_disk.go);
 		// absent on every other run.
 		MacOSDisk *runMacOSDiskView `json:"macos_disk,omitempty"`
@@ -304,6 +308,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		Agents:          s.runDetailAgents(r.Context(), run),
 		ModelAllowlists: s.runModelAllowlists(r.Context(), run.ID),
 		MacOS:           s.runMacOSView(run),
+		BackgroundWatch: s.backgroundWatchViewFor(r.Context(), run, principalFromRequest(r)),
 		MacOSDisk:       s.runMacOSDiskView(r.Context(), run),
 	})
 }
