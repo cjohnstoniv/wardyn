@@ -145,6 +145,12 @@ created, _ := c.CreatePolicy(ctx, client.PolicyRequest{Name: "default", Spec: sp
 _ = created
 ```
 
+The recording fields of an `AgentRun` are derived, not stored:
+
+- `GetRun` (`GET /api/v1/runs/{id}`) always sets `HasRecording`, `RecordingBytes` and `RecordingDurationSec`.
+- `ListRuns` sets them only with `?include=recording_meta`; otherwise `HasRecording` is `nil` and the key is absent, so a listed run never reads as "no recording".
+- `RecordingBytes` and `RecordingDurationSec` are omitted at zero; `HasRecording` is the only "no recording" signal.
+
 ## Reading the policy a run got
 
 `GetRunPolicy` returns `GET /api/v1/runs/{id}/policy`: the resolved policy, where
