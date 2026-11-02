@@ -358,9 +358,9 @@ const runToolsDialFile = "run-tools-dial"
 // where it was read from (read). The candidates are the run boot's record, the last dial prepare logged and
 // the last one a tools update logged (both stage 2 boots reach the guest agent); the latest of the three
 // wins. A prepare or an update does not rewrite a run boot's record, so reading that alone kept a failure
-// from before a tools update that reached ready. The tools update's events carry no clock of their own, so
-// the time of such an event is when its log was last written, which read says. A log that could not be read
-// to its end is named, since a later dial may sit past the stop.
+// from before a tools update that reached ready. A tools update stamps its dial (macvm.PrepareEvent.ToolsDialAt);
+// an event from a helper that did not has no clock of its own, so its time is when its log was last written, which
+// read says. A log that could not be read to its end is named, since a later dial may sit past the stop.
 func lastToolsDial(root string) (class, read string) {
 	type candidate struct {
 		class, source string

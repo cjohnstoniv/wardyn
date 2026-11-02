@@ -415,8 +415,8 @@ func TestMacOSVMStatusToolsDialIsTheNewest(t *testing.T) {
 	}
 }
 
-// A tools update's dial is in tools-update.log, not prepare.log or the run boot's record, and its events carry
-// no clock (the helper's update path does not stamp them), so the log's last write dates it. `macos-vm status`
+// A tools update's dial is in tools-update.log, not prepare.log or the run boot's record. An event from a helper
+// that did not stamp it carries no clock, so the log's last write dates it. `macos-vm status`
 // shows the newest of the three, says which one it read and when, and says so when a log could not be read to
 // its end.
 func TestMacOSVMStatusToolsDialReadsTheToolsUpdateLog(t *testing.T) {
@@ -460,6 +460,43 @@ func TestMacOSVMStatusToolsDialReadsTheToolsUpdateLog(t *testing.T) {
 			!strings.Contains(text.String(), "tools_dial: "+c.want+" (read from ") || !strings.Contains(text.String(), c.readHas) {
 			t.Errorf("%s: tools_dial %q read %q, want %q read from %q\n%s", c.name, st.ToolsDial, st.ToolsDialRead, c.want, c.readHas, text.String())
 		}
+	}
+}
+
+// A tools update's dial that carries its own clock is ranked by it, not by the log's mtime. Update A dials
+// connected; a run boot then records a failure; update B appends to the same log before it dials. The log
+// is newer than the run record, but A's dial is older, so the failure is the newest dial.
+func TestMacOSVMStatusToolsDialUsesTheUpdateEventsOwnClock(t *testing.T) {
+	r := newMacLedgerRig(t)
+	m := r.open(t)
+	m.helper, _ = fakeHelper(t, 0)
+	base := time.Now().Add(-time.Hour).Truncate(time.Second)
+	line := func(ev macvm.PrepareEvent) string {
+		b, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b) + "\n"
+	}
+	runRecord, updateLog := filepath.Join(r.root, runToolsDialFile), filepath.Join(r.root, toolsUpdateLog)
+	// Update A's dial at base+1m; update B has appended its first line (no dial yet) at base+30m.
+	content := line(macvm.PrepareEvent{Phase: macvm.PhaseTools, ToolsDial: "connected", ToolsDialAt: base.Add(time.Minute).UnixNano()}) +
+		line(macvm.PrepareEvent{Phase: macvm.PhaseTools})
+	for path, c := range map[string]struct {
+		text string
+		at   time.Time
+	}{runRecord: {"refused\n", base.Add(10 * time.Minute)}, updateLog: {content, base.Add(30 * time.Minute)}} {
+		if err := os.WriteFile(path, []byte(c.text), 0o600); err != nil || os.Chtimes(path, c.at, c.at) != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = os.Remove(m.layout.PrepareLog())
+	st, err := m.status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "the last run boot's record, reported " + base.Add(10*time.Minute).Local().Format("2006-01-02 15:04 MST"); st.ToolsDial != "refused" || !strings.Contains(st.ToolsDialRead, want) {
+		t.Fatalf("tools_dial %q read %q, want refused read from %q", st.ToolsDial, st.ToolsDialRead, want)
 	}
 }
 
