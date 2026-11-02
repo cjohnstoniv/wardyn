@@ -401,7 +401,16 @@ func (s *Server) checkEffective(ctx context.Context, q contextQuery, choice cont
 // a security-tier caller only.
 func contextWalls(deployment, base, c governanceCeiling, b types.Boundary, tier specReadTier) (*checkEffective, error) {
 	prov := startProvenance(deploymentProvenance)
-	prov.setBy(base.provenance(), deployment.Spec, base.Spec)
+	if u := base.Unit; u != nil && u.StandaloneRoot && !base.Operator {
+		// A standalone unit's walls do not follow the deployment default, so each is the unit's even
+		// where it equals the deployment's; only a size the unit omits is the deployment's.
+		prov = startProvenance(base.provenance())
+		if u.AuthoredResources == (types.ResourceLimits{}) {
+			prov["resources"] = deploymentProvenance
+		}
+	} else {
+		prov.setBy(base.provenance(), deployment.Spec, base.Spec)
+	}
 	path := startProvenance(deploymentProvenance)
 	if base.Unit != nil && base.Unit.PathProvenance != nil {
 		path = maps.Clone(base.Unit.PathProvenance)

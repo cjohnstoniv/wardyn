@@ -422,6 +422,7 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 	if posture := s.rubricPostureAdvisory(r.Context(), effective); posture != "" {
 		warns = append(warns, posture)
 	}
+	warns = append(warns, s.governanceADOCeilingWarnings(r.Context(), effective)...)
 	writeJSON(w, status, governanceUnitResponse{Unit: newUnitView(saved, effective, nil, s.specReadTierFor(r.Context())), Warnings: warns})
 }
 

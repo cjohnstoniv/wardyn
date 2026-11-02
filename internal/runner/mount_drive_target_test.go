@@ -102,3 +102,22 @@ func TestValidateDriveTarget_WorkFolderManagedOnly(t *testing.T) {
 		}
 	}
 }
+
+// TestMacGuestPath: a drive's container path is the macOS guest's path under
+// /Users/agent; a path outside /home/agent, or the home itself, is unchanged.
+func TestMacGuestPath(t *testing.T) {
+	for in, want := range map[string]string{
+		DrivesRoot + "/x":     "/Users/agent/drives/x",
+		SharedRoot + "/x":     "/Users/agent/shared/x",
+		DriveTarget:           "/Users/agent/drive",
+		ScratchWorkPath:       "/Users/agent/work",
+		"/home/agent":         "/home/agent",
+		"/home/agentx/drives": "/home/agentx/drives",
+		"/work/drives/x":      "/work/drives/x",
+		"":                    "",
+	} {
+		if got := MacGuestPath(in); got != want {
+			t.Errorf("MacGuestPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

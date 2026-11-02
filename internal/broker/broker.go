@@ -740,6 +740,8 @@ var reservedBrokerSecretNames = map[string]bool{
 	"wardyn-ssh-host-key":      true,
 	"wardyn-internal-ca":       true,
 	"bedrock-api-key":          true,
+	// The AI gateway token's signing key (cmd/wardynd's gatewayIdentity).
+	"wardyn-gateway-identity-key": true,
 	// The hybrid device credential: no grant may hand it into a sandbox.
 	"wardyn-org-device-credential": true,
 	// internal/api's writeProbeSecretName: a store write probe's row, never a grant's value.

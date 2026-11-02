@@ -1,0 +1,161 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/gatewayidentity"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// maintenance runs -rotate-gateway-identity-key when asked, ahead of every other
+// maintenance mode (rotateGatewayIdentityKeyMode refuses them beside it), and
+// maintenanceMode otherwise.
+func (f *bootFlags) maintenance() (bool, error) {
+	if *f.rotateGatewayIdentityKey || *f.rotateGatewayIdentityRetirePrevious {
+		return true, withBootTransport(f, rotateGatewayIdentityKeyMode)
+	}
+	return maintenanceMode(f)
+}
+
+// rotateGatewayIdentityKeyMode is `wardynd -rotate-gateway-identity-key`: a
+// maintenance mode that replaces the key an AI gateway's run identity token is
+// signed with, writes a secret.rekey row and exits. It never opens a listener.
+//
+// Every replica must be stopped: a serving one keeps signing with the key it
+// loaded. Without WARDYN_HA the single-instance lock shows a serving daemon and
+// this refuses; with it no lock can, so stopping them is the operator's step.
+func rotateGatewayIdentityKeyMode(f *bootFlags) error {
+	if !*f.rotateGatewayIdentityKey {
+		return errors.New("refusing to run: -retire-previous is a mode of -rotate-gateway-identity-key; run `wardynd -rotate-gateway-identity-key -retire-previous`")
+	}
+	for _, other := range []bool{
+		strings.TrimSpace(*f.rotateAgeKey) != "", *f.rewrap, *f.rewrapRetirePlatformKey, *f.rewrapAdoptBootKeys, *f.rewrapPrincipalKeys,
+		*f.migrateOnly, *f.migrateSecrets, *f.reconcile, *f.auditSplitLegacy,
+		*f.recoveryInventory, *f.recoveryManifest, *f.recoveryVerify, *f.recoveryRehearse,
+	} {
+		if other {
+			return errors.New("refusing to run: -rotate-gateway-identity-key is a mode of its own; run it with no other maintenance mode")
+		}
+	}
+	if strings.TrimSpace(*f.dsn) == "" {
+		return errors.New("refusing to rotate: -rotate-gateway-identity-key needs the secret store's database; set WARDYN_PG_DSN")
+	}
+
+	// The key service (buildStoreClients) keeps its Vault token alive until ctx ends.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	connCtx, cancelConn := context.WithTimeout(ctx, rekeyConnectTimeout)
+	defer cancelConn()
+	pool, err := db.Connect(connCtx, *f.dsn)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer pool.Close()
+
+	releaseInstance, ok, err := db.TryAdvisoryLock(ctx, pool, db.SingleInstanceLockKey)
+	if err != nil {
+		return fmt.Errorf("take the single-instance lock: %w", err)
+	}
+	if !ok {
+		return errors.New("refusing to rotate: a wardynd is serving this database, and it would keep signing with the key it loaded; stop it first")
+	}
+	defer releaseInstance()
+	releaseRekey, ok, err := db.TryAdvisoryLock(ctx, pool, db.SecretRekeyLockKey)
+	if err != nil {
+		return fmt.Errorf("take the rekey lock: %w", err)
+	}
+	if !ok {
+		return errors.New("refusing to rotate: another maintenance mode holds the rekey advisory lock on this database; wait for it to finish")
+	}
+	defer releaseRekey()
+
+	rec, fan, _, _, err := buildAuditChain(ctx, *f.auditSinks, *f.auditSpool, *f.auditSource, pool, secretmask.NewRegistry(), newAuditSealSource(audit.SealOff))
+	if err != nil {
+		return err
+	}
+	if fan != nil {
+		defer func() { _ = fan.Close() }()
+	}
+	platform, err := readPlatformKey(*f.platformKeyFile, *f.ageKey)
+	if err != nil {
+		return err
+	}
+	clients, err := buildStoreClients(ctx, f)
+	if err != nil {
+		return err
+	}
+	secrets, err := buildSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, clients, rec)
+	if err != nil {
+		return err
+	}
+	return newBootKeyStore(secrets, pool, true).rotateGatewayIdentity(ctx, rec, *f.rotateGatewayIdentityRetirePrevious, time.Now())
+}
+
+// rotateGatewayIdentity writes the row that follows the stored one and its audit
+// row. No row is a refusal: identity was never turned on, and a rotation is not
+// how a key gets made. A row that cannot be read or parsed is a refusal too, and
+// nothing is written over it. The audit row names the kids, which are public, so
+// a person can tell which key was replaced and whether the old ones were retired.
+func (secrets bootKeyStore) rotateGatewayIdentity(ctx context.Context, rec audit.Recorder, retirePrevious bool, now time.Time) error {
+	raw, ok, err := loadBootKey(ctx, secrets, secretGatewayIdentityKey, func([]byte) bool { return true })
+	if err != nil {
+		return fmt.Errorf("refusing to rotate: %w", err)
+	}
+	if !ok {
+		return errors.New("refusing to rotate: this install has no AI gateway identity key, so identity was never turned on and there is nothing to rotate")
+	}
+	old, err := gatewayidentity.New(raw)
+	if err != nil {
+		return fmt.Errorf("refusing to rotate: %w", err)
+	}
+	next, err := gatewayidentity.Rotate(raw, retirePrevious, now)
+	if err != nil {
+		return fmt.Errorf("refusing to rotate: %w", err)
+	}
+	rotated, err := gatewayidentity.New(next)
+	if err != nil {
+		return fmt.Errorf("refusing to rotate: %w", err)
+	}
+	if err := secrets.Put(ctx, secretGatewayIdentityKey, next); err != nil {
+		return fmt.Errorf("store the rotated key: %w", err)
+	}
+
+	fields := map[string]any{"kid": rotated.KeyID(), "replaced_kid": old.KeyID(), "retired_previous": retirePrevious}
+	if !retirePrevious {
+		fields["previous_retire_at"] = rotated.RetireAt()
+	}
+	data, _ := json.Marshal(fields)
+	ev := types.AuditEvent{
+		ID:        uuid.New(),
+		Time:      now.UTC(),
+		ActorType: types.ActorSystem,
+		Actor:     "wardyn/rotate-gateway-identity-key",
+		Action:    "secret.rekey",
+		Target:    secretGatewayIdentityKey,
+		Outcome:   "success",
+		Data:      json.RawMessage(data),
+	}
+	if err := rec.Record(ctx, ev); err != nil {
+		audit.LogWriteFailure(ctx, ev, err)
+	}
+	slog.Info("wardynd: AI gateway identity key rotated. Start wardynd, then restart each gateway: a gateway reads the key set when it loads its config and does not start if that read fails.",
+		slog.String("kid", rotated.KeyID()),
+		slog.String("replaced_kid", old.KeyID()),
+		slog.Bool("retired_previous", retirePrevious),
+	)
+	return nil
+}

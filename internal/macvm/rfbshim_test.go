@@ -449,3 +449,47 @@ func rfbClientRecordGuest(r *shimRig) <-chan []byte {
 	}()
 	return got
 }
+
+// A forced session drops the guest's clipboard on its way to the viewer and carries what follows it. A
+// run on a view-only base that isn't forced keeps its cut text, as it always has.
+func TestRFBShimForcedKeepsCutTextFromTheViewer(t *testing.T) {
+	cut := []byte{3, 0, 0, 0, 0, 0, 0, 2, 'h', 'i'}
+	for name, shim := range map[string]*macvm.RFBShim{
+		"forced":    {Credential: password, ViewOnly: true, ForceViewOnly: true},
+		"view only": {Credential: password, ViewOnly: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newShim(t, shim)
+			r.handshake(t)
+			go func() {
+				_, _ = r.apple.Write(cut)
+				_, _ = r.apple.Write([]byte{2}) // Bell
+			}()
+			if shim.ForceViewOnly {
+				if got := readFull(t, r.viewer, 1); got[0] != 2 {
+					t.Fatalf("the viewer read %v, want the bell with no cut text before it", got)
+				}
+				return
+			}
+			if got := readFull(t, r.viewer, len(cut)+1); !bytes.Equal(got, append(cut[:len(cut):len(cut)], 2)) {
+				t.Fatalf("the viewer read %v, want the cut text and the bell", got)
+			}
+		})
+	}
+}
+
+// The report is what a session's filter does: both halves, so a base that is merely view only, or a
+// setting the input filter didn't take, isn't forced.
+func TestRFBShimDesktopForcedViewOnly(t *testing.T) {
+	for _, c := range []struct{ viewOnly, force, want bool }{
+		{true, true, true},
+		{true, false, false},
+		{false, true, false},
+		{false, false, false},
+	} {
+		s := &macvm.RFBShim{ViewOnly: c.viewOnly, ForceViewOnly: c.force}
+		if got := s.DesktopForcedViewOnly(); got != c.want {
+			t.Errorf("%+v: %v", c, got)
+		}
+	}
+}

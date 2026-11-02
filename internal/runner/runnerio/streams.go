@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"sync"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -137,6 +138,8 @@ func (s *Server) serveSession(ctx context.Context, peer *runnerwire.Peer, id uin
 	go func() {
 		_, err := io.Copy(st, readerFunc(sess.Read))
 		if err != nil {
+			// The peer sees only "serving it failed"; the cause (a guest exec that errored at once) stays here.
+			slog.Warn("runnerio: session read failed, resetting its stream", slog.String("kind", kind), slog.String("ref", ref), slog.Any("err", err))
 			_ = st.Reset(runnerwire.ResetInternal)
 		} else {
 			_ = st.CloseWrite()
