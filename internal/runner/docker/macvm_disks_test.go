@@ -141,6 +141,43 @@ func TestMacDisksNeverReleasedFailAtNinetySecondsInTheSameSentence(t *testing.T)
 	})
 }
 
+// The ninety seconds are the run's, not each drive's: a first drive released after 40 s leaves a second,
+// never released, 50 s, so the run fails at 90 s in all and "Waited 90 seconds" is what the run waited.
+func TestMacDisksShareOneNinetySecondWaitAcrossDrives(t *testing.T) {
+	r := newMacRig(t)
+	second := testDiskDrive(runner.ScratchWorkPath)
+	second.ObjectName = "wardyn-drive-0123456789abcdef0123456789abcdef-d-fedcba9876543210"
+	second.DriveName = "Other"
+	var held [2]func()
+	for i, d := range []types.DriveMount{testDiskDrive(runner.DriveTarget), second} {
+		img, err := r.c.Layout.DriveImage(d.ObjectName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		unlock, err := macvm.LockDisk(img)
+		if err != nil {
+			t.Fatal(err)
+		}
+		held[i] = sync.OnceFunc(unlock)
+		defer held[i]()
+	}
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		go func() {
+			time.Sleep(40 * time.Second)
+			held[0]()
+		}()
+		_, _, err := r.d.macDiskDrives(t.Context(), []types.DriveMount{testDiskDrive(runner.DriveTarget), second})
+		want := "Waited 90 seconds for the drive to be released. " + runner.MacVMDiskLocked("Other")
+		if err == nil || err.Error() != want || !runner.IsMacVMDiskLocked(err.Error()) {
+			t.Fatalf("err = %v, want %q", err, want)
+		}
+		if waited := time.Since(start); waited != 90*time.Second {
+			t.Fatalf("waited %v in all, want 90s: the second drive gets what the first left, not a fresh 90s", waited)
+		}
+	})
+}
+
 func TestMacDisksWaitEndsWithTheCreate(t *testing.T) {
 	r := newMacRig(t)
 	img, _ := r.c.Layout.DriveImage(testDiskObject)

@@ -54,11 +54,13 @@ func (d *Driver) macDrives(ctx context.Context, spec runner.SandboxSpec) ([]macv
 // A disk a live run of this runner holds refuses the run here at once, before anything exists; one held by
 // anything else (a run that has just ended and is still releasing it, or another login's VM) is waited for
 // (lockMacDiskDrive). The helper takes the lock for the VM's life (macvm.LockDisk), so this check is the
-// early answer, not the guard.
+// early answer, not the guard. The wait is one budget for the run's drives, not one per drive: it starts
+// when the first drive has to wait and ends ninety seconds later whichever drive is then being waited for.
 func (d *Driver) macDiskDrives(ctx context.Context, drives []types.DriveMount) ([]macvm.Disk, []guestagent.Disk, error) {
 	c := d.macVMConfig()
 	var disks []macvm.Disk
 	var guest []guestagent.Disk
+	var deadline time.Time // zero until a drive has to wait (lockMacDiskDrive)
 	for i := range drives {
 		drive := &drives[i]
 		if err := runner.ValidateDriveTarget(drive); err != nil {
@@ -76,7 +78,7 @@ func (d *Driver) macDiskDrives(ctx context.Context, drives []types.DriveMount) (
 		if !drive.ReadOnly && drive.SizeMiB <= 0 {
 			return nil, nil, fmt.Errorf("docker: denied user drive (%s): a disk drive needs a size", runner.DriveSubject(drive))
 		}
-		unlock, err := d.lockMacDiskDrive(ctx, img, drive)
+		unlock, err := d.lockMacDiskDrive(ctx, img, drive, &deadline)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -96,10 +98,11 @@ func (d *Driver) macDiskDrives(ctx context.Context, drives []types.DriveMount) (
 // lockMacDiskDrive takes a disk drive's lock for the size check. A disk held when it asks is waited for,
 // polling every three seconds for at most ninety (the VM of a run that has just ended holds it for up to
 // about eighty after the run shows as ended), unless a live run of this runner has it: that one stays, so
-// it is refused at once. The wait ends with the caller's ctx. Past the ninety seconds the refusal is the
-// same sentence (runner.MacVMDiskLocked) with the wait said before it. The lock is a flock the kernel frees
+// it is refused at once. The ninety seconds are the run's, shared by its drives through deadline: the first
+// wait sets it, and a later drive waits only for what is left. The wait ends with the caller's ctx. Past the
+// deadline the refusal is the same sentence (runner.MacVMDiskLocked) with the wait said before it. The lock is a flock the kernel frees
 // when its holder dies, so waiting can never be on a stale lock.
-func (d *Driver) lockMacDiskDrive(ctx context.Context, img string, drive *types.DriveMount) (func(), error) {
+func (d *Driver) lockMacDiskDrive(ctx context.Context, img string, drive *types.DriveMount, deadline *time.Time) (func(), error) {
 	const (
 		poll = 3 * time.Second
 		wait = 90 * time.Second
@@ -113,8 +116,11 @@ func (d *Driver) lockMacDiskDrive(ctx context.Context, img string, drive *types.
 		return nil, errors.New(refusal)
 	}
 	log := slog.With(slog.String("drive", runner.DriveSubject(drive)))
-	log.Info("docker: a macOS VM disk drive is held; waiting for its release", slog.Duration("up_to", wait))
-	waitCtx, cancel := context.WithTimeout(ctx, wait)
+	if deadline.IsZero() {
+		*deadline = time.Now().Add(wait)
+	}
+	log.Info("docker: a macOS VM disk drive is held; waiting for its release", slog.Duration("up_to", time.Until(*deadline)))
+	waitCtx, cancel := context.WithDeadline(ctx, *deadline)
 	defer cancel()
 	tick := time.NewTicker(poll)
 	defer tick.Stop()
