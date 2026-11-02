@@ -257,3 +257,46 @@ describe("Your walls leave out {host} (T4-b)", () => {
     expect(screen.queryByTestId("walls-leave-out")).not.toBeInTheDocument();
   });
 });
+
+describe("Your walls apply (G4a)", () => {
+  const line = () => screen.queryByTestId("walls-apply");
+
+  it("says every knob the walls name, in the board's words, and links to Settings", () => {
+    render(<Totals names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} answered walls={{
+      allowed_domains: ["a.example", "b.example", "c.example", "d.example"],
+      denied_domains: ["x.example", "y.example"],
+      min_confinement_class: "CC2",
+      desktop: { copy_out: "blocked", download: "blocked" },
+      withheld_grants: [{ kind: "github_token" }, { kind: "api_key" }],
+    }} />);
+    expect(line()).toHaveTextContent("Your walls apply: 4 listed sites, plus what the run's setup needs, 2 sites never reached, barrier at least Wall, no copy out or download, 2 kinds of credentials kept out. Change your walls");
+    expect(screen.getByRole("link", { name: NR_WALLS.CHANGE_WALLS })).toHaveAttribute("href", "/account");
+  });
+
+  it("says one knob alone, and never claims 'only' for a listed allowlist", () => {
+    render(<Totals names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} answered walls={{ desktop: { copy_out: "blocked" } }} />);
+    expect(line()).toHaveTextContent("Your walls apply: no copy out.");
+    cleanup();
+    render(<Totals names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} answered walls={{ allowed_domains: ["a.example"] }} />);
+    expect(line()).toHaveTextContent("Your walls apply: 1 listed site, plus what the run's setup needs.");
+    expect(line()).not.toHaveTextContent(/only 1/i);
+  });
+
+  it("says an empty allowlist leaves the run its setup's sites, and a new site's handling", () => {
+    render(<Totals names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} answered walls={{ allowed_domains: [], first_use_approval: "wait_for_review" }} />);
+    expect(line()).toHaveTextContent("Your walls apply: only the sites the run's setup needs, a new site is held for review.");
+  });
+
+  it("draws nothing for walls that name nothing, empty lists, or a failed read", () => {
+    render(<Totals names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} answered walls={{ denied_domains: [], withheld_grants: [], desktop: {}, allow_all_egress: false }} />);
+    expect(line()).toBeNull();
+    cleanup();
+    render(<Totals names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} answered walls={undefined} />);
+    expect(line()).toBeNull();
+  });
+
+  it("counts a credential kind once however many scopes name it", () => {
+    render(<Totals names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} answered walls={{ withheld_grants: [{ kind: "github_token" }, { kind: "github_token", scope: { repo: "org/x" } }] }} />);
+    expect(line()).toHaveTextContent("Your walls apply: 1 kind of credentials kept out.");
+  });
+});
