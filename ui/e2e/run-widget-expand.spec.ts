@@ -13,7 +13,6 @@ import { DESKTOP } from "../src/app/components/wardyn/copy/desktop";
 // a large view. The unit tests pin the moves; this is what only a real browser can read: the scroll offsets, the
 // scrollbar, the focus order, the gutter above the dialog and the approvals under it.
 test.use({ colorScheme: "dark" });
-test.describe.configure({ mode: "serial" });
 
 const PATHS = (n: number) =>
   Array.from({ length: n }, (_, i) => ({
@@ -31,11 +30,12 @@ async function stubFiles(page: Page) {
 }
 
 async function openRun(page: Page, viewport = { width: 1440, height: 900 }): Promise<string> {
-  await page.setViewportSize(viewport);
   const id = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
   sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${id}'`);
   await stubFiles(page);
+  // Load the console at the default size: below the sidebar's breakpoint the "Runs" link gotoConsole waits for is hidden.
   await gotoConsole(page);
+  await page.setViewportSize(viewport);
   await page.goto(`/runs/${id}`);
   return id;
 }
@@ -116,24 +116,28 @@ test("a held approval is not covered by the dialog and Approve works from it, at
   paths = 60;
   const id = await openRun(page);
   const CMD = "bash.exec --run the-nightly-integration-suite-with-extra-long-name";
-  if (sql(`SELECT count(*) FROM approvals WHERE run_id = '${id}' AND state = 'PENDING'`) === "0") {
-    sql(`INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at)
-         VALUES ('${randomUUID()}', '${id}', 'tool_call', '${JSON.stringify({ tool: "bash.exec", cmd: CMD })}'::jsonb, 'PENDING', now() - interval '5 min')`);
-  }
-  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
-    await page.setViewportSize(viewport);
-    await page.goto(`/runs/${id}`);
-    await page.getByRole("button", { name: RUN_COCKPIT.expandWidget("Egress") }).click();
-    const dialog = page.getByRole("dialog", { name: "Egress" });
-    const approve = dialog.getByRole("button", { name: "Approve", exact: true });
-    await expect(approve).toBeVisible();
-    const [x, y] = await approve.evaluate((el) => {
-      const r = el.getBoundingClientRect();
-      return [r.x + r.width / 2, r.y + r.height / 2];
-    });
-    expect(await page.evaluate(([px, py]) => document.elementFromPoint(px, py)?.closest("button")?.textContent?.trim(), [x, y])).toContain("Approve");
-    await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
+  // Its own approval, removed after, so a later test on the same run sees one Deny, not two.
+  const approvalId = randomUUID();
+  sql(`INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at)
+       VALUES ('${approvalId}', '${id}', 'tool_call', '${JSON.stringify({ tool: "bash.exec", cmd: CMD })}'::jsonb, 'PENDING', now() - interval '5 min')`);
+  try {
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      await page.goto(`/runs/${id}`);
+      await page.getByRole("button", { name: RUN_COCKPIT.expandWidget("Egress") }).click();
+      const dialog = page.getByRole("dialog", { name: "Egress" });
+      const approve = dialog.getByRole("button", { name: "Approve", exact: true });
+      await expect(approve).toBeVisible();
+      const [x, y] = await approve.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return [r.x + r.width / 2, r.y + r.height / 2];
+      });
+      expect(await page.evaluate(([px, py]) => document.elementFromPoint(px, py)?.closest("button")?.textContent?.trim(), [x, y])).toContain("Approve");
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+    }
+  } finally {
+    sql(`DELETE FROM approvals WHERE id = '${approvalId}'`);
   }
 });
 
