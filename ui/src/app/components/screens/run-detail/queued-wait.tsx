@@ -36,7 +36,7 @@ export function QueuedWait({ queue, run }: { queue: RunQueue; run?: RunDetail })
 
 function PoolWait({ queue }: { queue: RunQueue }) {
   const pool = useWaitingPool(queue.pool_id);
-  const body = waitingBody(queue.reason, pool);
+  const body = waitingBody(queue.reason, pool, queue.limit_sentence);
   const now = Date.now();
   const since = waitingSince(queue.queued_at, now);
   const gives = givesUp(queue.deadline_at, now);
