@@ -144,6 +144,7 @@
   - Any failure stops preparing and no base is published.
 - **The desktop.** Apple has said Screen Sharing turned on from the command line may let a viewer only watch. Preparing ends with a control check, and `status` reports whether the desktop is `control`, `observe` or `none`. With `observe`, a run's desktop can be watched from the run page (Watch desktop), not acted in.
   - The UI gateway and the Mac's helper each drop keys, pointer moves and paste, so that input never reaches the guest. Built and unit-tested; not yet run on a real Mac.
+  - View only covers keys, pointer moves and paste. Uploads from the run's Files panel still go to `~/Transfers` in the guest unless policy blocks them.
   - `status` says how, and the prepare log says why.
   - To turn control on, run `wardyn-runnerd macos-vm edit-base`, turn on Screen Sharing with "VNC viewers may control screen with password" in the guest, then close the window. On a macOS 26 base the desktop stays view only even so ([#3901](https://github.com/cjohnstoniv/wardyn/issues/3901)).
 - **Newer macOS.** Wardyn does not tell you that Apple has a newer image, but `status` shows when the base was prepared and this Mac's macOS beside it. To move to a newer one, run `wardyn-runnerd macos-vm prepare --new-image` with the per-run flags; a plain `prepare` keeps a ready base and says there is nothing to prepare.

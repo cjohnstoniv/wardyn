@@ -353,8 +353,11 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	}
 	// superAdmin is true past this point only on the admin's own run or an
 	// operator-owned one, so the governance exemption below cannot reach a
-	// person's run.
-	if (!superAdmin || !s.adminDoorExempt(run)) && s.refuseUIAppsDenied(w, r.WithContext(withTicketActor(r.Context(), ta)), run) {
+	// person's run. The sign-in display and a declared noVNC desktop answer to
+	// deny_interactive too, as a VM's desktop does (uiEnterDesktop, which keeps
+	// its own door); any other declared app is deny_ui_apps' alone.
+	rt := r.WithContext(withTicketActor(r.Context(), ta))
+	if (!superAdmin || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, rt, run) || (uiDesktopApp(app) && s.refuseInteractiveAttach(w, rt, run))) {
 		return
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {
