@@ -445,6 +445,7 @@ func TestSetWorkspaceRequirements_boundFolderSubPath(t *testing.T) {
 		{"denied by name, under a bound folder", []types.WorkspaceSource{boundSource(proj, a)}, proj + "/docker.sock", http.StatusBadRequest},
 		{"under a folder on this host only", []types.WorkspaceSource{local(proj)}, proj + "/link", http.StatusBadRequest},
 		{"also a folder on this host", []types.WorkspaceSource{boundSource(proj, a), local(proj + "/link")}, proj + "/link", http.StatusBadRequest},
+		{"under a folder on this host inside a bound one", []types.WorkspaceSource{boundSource(proj, a), local(proj + "/link")}, proj + "/link/passwd", http.StatusBadRequest},
 		{"also bound to another runner", []types.WorkspaceSource{boundSource(proj, a), boundSource(proj+"/link", b)}, proj + "/link", http.StatusBadRequest},
 		{"under folders bound to two runners", []types.WorkspaceSource{boundSource(proj, a), boundSource(dir, b)}, proj + "/link", http.StatusBadRequest},
 		{"under folders bound to one runner", []types.WorkspaceSource{boundSource(proj, a), boundSource(dir, a)}, proj + "/link", http.StatusOK},

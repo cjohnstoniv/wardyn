@@ -169,7 +169,8 @@ func (s *Server) handleSetWorkspaceRequirements(w http.ResponseWriter, r *http.R
 // a folder bound to a runner, or lies under one by path segment. The workspace is
 // read on the first question only, and a failed read answers no: the path then
 // gets the full check on this host, as before. It answers no too when the path is
-// also a folder on this host, or the folders it is under disagree about the runner.
+// equal to or under a folder on this host, or the folders it is under disagree
+// about the runner.
 func (s *Server) runnerBoundPath(r *http.Request) func(string) bool {
 	var ws types.Workspace
 	var read, loaded bool
@@ -189,14 +190,11 @@ func (s *Server) runnerBoundPath(r *http.Request) func(string) bool {
 			if src.Type != types.WorkspaceSourceTypeLocalDir {
 				continue
 			}
-			if src.RunnerID == nil {
-				if src.Path == path {
-					return false
-				}
-				continue
-			}
 			if src.Path != path && !strings.HasPrefix(path, src.Path+"/") {
 				continue
+			}
+			if src.RunnerID == nil {
+				return false
 			}
 			if rid != nil && *rid != *src.RunnerID {
 				return false
