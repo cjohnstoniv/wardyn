@@ -520,7 +520,13 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 && resp.StatusCode != http.StatusNotModified {
-		x.deny(w, ruleSourceMCPRedirect, "the MCP server answered with a redirect, which Wardyn does not follow", http.StatusBadGateway)
+		// The server was sent the id, so its log and this row join on it.
+		if p.sink != nil {
+			denied := decisionLog(x.req, egress.Deny, ruleSourceMCPRedirect)
+			denied.GatewayCallID = callID
+			p.sink.emit(denied)
+		}
+		http.Error(w, "the MCP server answered with a redirect, which Wardyn does not follow", http.StatusBadGateway)
 		return
 	}
 	allow := decisionLog(x.req, egress.Allow, ruleSourceMCP)

@@ -135,7 +135,7 @@ Wardyn makes a fresh call id for every attempt to a model gateway route and send
 3. Search the gateway's log for that value. The line is that attempt's, with the token's subject and run id beside it when the gateway logs `jwt.sub` and `jwt.wardyn_run`.
 
 - Only a gateway log line that passed the token check is trustworthy. A sandbox that reaches the gateway through an opaque tunnel can send any `X-Wardyn-Call-Id`, so run the gateway's `jwtAuth` in `strict` mode.
-- A refused or failed attempt has a row with the id too, and no gateway line when nothing was sent.
+- An attempt refused or failed after the proxy made its id has a row with the id, and no gateway line when nothing was sent. A call refused before that has no id.
 - The id is Wardyn's own. It is not a request id the gateway made.
 - MCP has a call id and no identity token.
 

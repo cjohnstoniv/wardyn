@@ -270,3 +270,28 @@ func TestGatewayCallID_MCPDialFailedRowCarriesIt(t *testing.T) {
 		t.Errorf("dial-failed row call id %q: %v", id, err)
 	}
 }
+
+// An MCP server that answers with a redirect was sent the id, so the refusal's row names it too.
+func TestGatewayCallID_MCPRedirectDenyRowCarriesTheSentID(t *testing.T) {
+	seen := make(chan http.Header, 1)
+	f := newMCPFixture(t, types.RunPolicySpec{AllowedDomains: []string{"mcp.github.test"}}, nil, nil)
+	f.p.mcp = newMCPBroker([]MCPServerConfig{{Key: "github", URL: "https://mcp.github.test/mcp"}}, []MCPBinding{mcpBindingFor("claude-code", "github")})
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Clone()
+		w.Header().Set("Location", "https://mcp.github.test/elsewhere")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(backend.Close)
+	f.p.dial = redirectDial(upstreamAddr(backend))
+	f.p.gatewayRoutes = gwidRoutes()
+	if rec := f.post(t, mcpToken("claude-code"), "github", mcpInit); rec.Code != http.StatusBadGateway {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	sent := (<-seen).Get(gatewayCallIDHeader)
+	if _, err := uuid.Parse(sent); err != nil {
+		t.Fatalf("the MCP server was sent call id %q", sent)
+	}
+	if got, _ := gwcidOf(t, gwcidRows(t, f.buf), egress.Deny, ruleSourceMCPRedirect).(string); got != sent {
+		t.Errorf("deny row call id = %q, want the sent %q", got, sent)
+	}
+}
