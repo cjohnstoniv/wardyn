@@ -57,21 +57,20 @@ var driveDirectMountFlags = []string{"noexec", "nosuid", "nodev"}
 // driveDirectFlags is `drive open`'s two flags of this route.
 type driveDirectFlags struct{ direct, recover bool }
 
-// addDriveDirectFlags gives `drive open` the flags of this route.
-func addDriveDirectFlags(open *cobra.Command) *driveDirectFlags {
-	f := &driveDirectFlags{}
+// register gives `drive open` the flags of this route. --delete belongs to the throwaway VM's write back.
+func (f *driveDirectFlags) register(open *cobra.Command) {
 	open.Flags().BoolVar(&f.direct, "direct", false, "mount the drive on this Mac, if an admin allows it, instead of opening it in a throwaway VM")
 	open.Flags().BoolVar(&f.recover, "recover", false, "with --direct: check that a drive left mounted is detached, and clear its marker")
-	return f
+	open.MarkFlagsMutuallyExclusive("delete", "direct")
+	open.MarkFlagsMutuallyExclusive("delete", "recover")
 }
 
 // wanted says this `drive open` belongs to this route.
 func (f *driveDirectFlags) wanted() bool { return f.direct || f.recover }
 
-// driveDirectArgs is one `drive open --direct`. find turns the name a person typed into the drive's object name.
+// driveDirectArgs is one `drive open --direct`.
 type driveDirectArgs struct {
 	name string
-	find func(name string) (object string, err error)
 	in   io.Reader
 	out  io.Writer
 }
@@ -85,7 +84,7 @@ func (m *macOSVMs) driveDirect(ctx context.Context, f *driveDirectFlags, a drive
 	if !f.recover && !driveDirectAllowed(driveDirectSettingFile(m.limitsFile)) {
 		return fmt.Errorf("Mounting a drive directly is off on this install. An admin can turn it on in Settings, under macOS virtual machines. To open the drive in a throwaway VM instead, run drive open %s. The setting can't stop anyone who can run hdiutil on this Mac.", a.name)
 	}
-	object, err := a.find(a.name)
+	object, _, err := m.driveOpenFind(a.name)
 	if err != nil {
 		return err
 	}

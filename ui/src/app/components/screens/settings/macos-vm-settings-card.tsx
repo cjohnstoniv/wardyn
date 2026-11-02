@@ -5,8 +5,9 @@
 
 // Settings card: the macOS VM settings of the site config, `macos_vm` (types.SiteMacOSVM). The oldest base a run may
 // use (`max_base_age_days`, empty is no maximum; the server stores 0 as the same) and the switch for watching
-// background runs (`allow_background_watch`, absent reads on) and for mounting a drive directly on a Mac
-// (`allow_direct_drive_mount`, absent reads off). One Save covers every field; to add a field, add
+// background runs (`allow_background_watch`, absent reads on, sent explicitly on every save), and the switch for
+// mounting a drive directly on a Mac (`allow_direct_drive_mount`, absent reads off, sent explicitly on every save).
+// One Save covers every field; to add a field, add
 // its state beside `watch`, its input below, its key in macosVMBody and its term in `dirty`.
 //
 // Saved through PUT /site-config with the GET's ETag as If-Match, the way the Custom components card does, so a
@@ -36,18 +37,13 @@ export const parseMaxBaseAge = (text: string): number | "" | null => {
   return Number.isSafeInteger(n) ? n : null;
 };
 
-// The block to send: the stored block with the days set (removed when the field is empty), the watch switch
-// written only when off, since an absent field reads allowed, and the direct mount switch always, on or off, since
-// the server keeps the stored value when a block leaves it out. An empty block still goes out (it names
-// `macos_vm`), because an absent block is carried forward by the server.
+// The block to send: the stored block with the days set (removed when the field is empty) and both switches
+// written explicitly, true or false, every time. The server keeps a stored switch when a body names the block
+// without it, so only an explicit value can change it. A block with no days still goes out (it names `macos_vm`),
+// because an absent block is carried forward by the server.
 export function macosVMBody(stored: SiteMacOSVM | undefined, days: number | "", watch = true, direct = false): SiteMacOSVM {
   const { max_base_age_days: _days, allow_background_watch: _watch, allow_direct_drive_mount: _direct, ...rest } = stored ?? {};
-  return {
-    ...rest,
-    ...(days !== "" && { max_base_age_days: days }),
-    ...(!watch && { allow_background_watch: false }),
-    allow_direct_drive_mount: direct,
-  };
+  return { ...rest, ...(days !== "" && { max_base_age_days: days }), allow_background_watch: watch, allow_direct_drive_mount: direct };
 }
 
 const textOf = (m?: SiteMacOSVM) => (m?.max_base_age_days ? String(m.max_base_age_days) : "");

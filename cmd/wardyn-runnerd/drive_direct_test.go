@@ -19,8 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 )
 
@@ -105,10 +103,19 @@ func newDriveDirectFixture(t *testing.T) *driveDirectFixture {
 	if err := os.WriteFile(f.image, []byte("image"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := driveDirectTestNameFile(f.m); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	t.Setenv("FAKE", fake)
 	t.Setenv("IMG", f.image)
 	return f
+}
+
+// driveDirectTestNameFile is what the runner's driver leaves beside an image a run has attached: `drive open`'s
+// name lookup (driveOpenFind) reads it, and this route takes the same lookup.
+func driveDirectTestNameFile(m *macOSVMs) error {
+	return os.WriteFile(filepath.Join(m.layout.DrivesDir(), driveDirectTestObject+driveOpenNameFile), []byte(`{"name":"scratch","label":"Scratch"}`), 0o600)
 }
 
 func (f *driveDirectFixture) allow(t *testing.T) {
@@ -152,13 +159,7 @@ func (f *driveDirectFixture) calls(t *testing.T) string {
 }
 
 func (f *driveDirectFixture) args(in io.Reader, out io.Writer) driveDirectArgs {
-	return driveDirectArgs{name: "scratch", in: in, out: out,
-		find: func(name string) (string, error) {
-			if name != "scratch" {
-				return "", errors.New("no such drive")
-			}
-			return driveDirectTestObject, nil
-		}}
+	return driveDirectArgs{name: "scratch", in: in, out: out}
 }
 
 func (f *driveDirectFixture) open(in io.Reader, out io.Writer) error {
@@ -268,7 +269,7 @@ func TestDriveDirectHoldsTheLockWhileMounted(t *testing.T) {
 	f.wantRunAllowed(t)
 }
 
-// Off, absent, unreadable and malformed all refuse, before any tool runs and without looking the drive up.
+// Off, absent, unreadable and malformed all refuse, before any tool runs.
 func TestDriveDirectRefusedUnlessTheSettingIsPlainlyOn(t *testing.T) {
 	for name, setup := range map[string]func(t *testing.T, file string){
 		"never heard": func(*testing.T, string) {},
@@ -309,9 +310,7 @@ func TestDriveDirectRefusedUnlessTheSettingIsPlainlyOn(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newDriveDirectFixture(t)
 			setup(t, filepath.Join(f.state, driveDirectSettingName))
-			a := f.args(strings.NewReader("\n"), io.Discard)
-			a.find = func(string) (string, error) { t.Error("the drive was looked up"); return "", errors.New("no") }
-			err := f.m.driveDirect(context.Background(), &driveDirectFlags{direct: true}, a)
+			err := f.open(strings.NewReader("\n"), io.Discard)
 			want := "Mounting a drive directly is off on this install. An admin can turn it on in Settings, under macOS virtual machines. To open the drive in a throwaway VM instead, run drive open scratch. The setting can't stop anyone who can run hdiutil on this Mac."
 			if err == nil || err.Error() != want {
 				t.Fatalf("refusal = %v", err)
@@ -586,18 +585,45 @@ func TestDriveDirectAttachedParsing(t *testing.T) {
 	}
 }
 
-// The merge seam: the two flags parse, and only one of them chooses this route.
-func TestDriveDirectFlagsChooseTheRoute(t *testing.T) {
-	cmd := &cobra.Command{Use: "open"}
-	f := addDriveDirectFlags(cmd)
+// `drive open` carries the route: the two flags parse, only they choose it, and --delete can't come with them.
+func TestDriveDirectFlagsOnTheCommand(t *testing.T) {
+	cmd := newDriveCommand()
+	open, _, err := cmd.Find([]string{"open"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"direct", "recover", "delete"} {
+		if open.Flags().Lookup(flag) == nil {
+			t.Fatalf("drive open has no --%s", flag)
+		}
+	}
+	cmd.SetArgs([]string{"open", "--direct", "--delete", "scratch"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "delete") {
+		t.Fatalf("--direct with --delete = %v", err)
+	}
+	f := &driveDirectFlags{}
 	if f.wanted() {
 		t.Fatal("no flags chose this route")
 	}
-	if err := cmd.ParseFlags([]string{"--direct", "--recover"}); err != nil {
-		t.Fatal(err)
+	if f.recover = true; !f.wanted() {
+		t.Fatal("--recover alone must reach the route, which refuses it")
 	}
-	if !f.direct || !f.recover || !f.wanted() {
-		t.Fatalf("flags = %+v", f)
+}
+
+// An unknown name gets the lookup's own refusal, once the setting allows it.
+func TestDriveDirectUsesTheNameLookup(t *testing.T) {
+	f := newDriveDirectFixture(t)
+	f.allow(t)
+	a := f.args(strings.NewReader("\n"), io.Discard)
+	a.name = "nobody"
+	err := f.m.driveDirect(context.Background(), &driveDirectFlags{direct: true}, a)
+	if err == nil || !strings.Contains(err.Error(), "does not know a drive named") {
+		t.Fatalf("open = %v", err)
+	}
+	if c := f.calls(t); c != "" {
+		t.Fatalf("hdiutil ran: %s", c)
 	}
 }
 
@@ -610,7 +636,7 @@ func TestDriveDirectChildCommand(t *testing.T) {
 	in, _ := io.Pipe()
 	state := os.Getenv("STATE")
 	m := &macOSVMs{layout: macvm.Layout{Root: os.Getenv("ROOT")}, limitsFile: macOSVMLimitsFile(state)}
-	a := driveDirectArgs{name: "scratch", in: in, out: os.Stdout, find: func(string) (string, error) { return driveDirectTestObject, nil }}
+	a := driveDirectArgs{name: "scratch", in: in, out: os.Stdout}
 	if err := m.driveDirect(context.Background(), &driveDirectFlags{direct: true}, a); err != nil {
 		fmt.Println("child:", err)
 		os.Exit(3)

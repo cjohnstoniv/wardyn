@@ -68,6 +68,9 @@ func TestDriveDirectRealImage(t *testing.T) {
 	if err := os.Truncate(image, 64<<20); err != nil {
 		t.Fatal(err)
 	}
+	if err := driveDirectTestNameFile(m); err != nil {
+		t.Fatal(err)
+	}
 	blank, err := exec.Command("hdiutil", "attach", "-nomount", "-imagekey", "diskimage-class=CRawDiskImage", image).CombinedOutput()
 	if err != nil {
 		t.Skipf("NOT RUN: this machine refuses hdiutil attach: %v: %s", err, blank)
@@ -93,7 +96,7 @@ func TestDriveDirectRealImage(t *testing.T) {
 	defer press.Close()
 	out := &driveDirectLockedBuffer{}
 	done := make(chan error, 1)
-	a := driveDirectArgs{name: "scratch", in: in, out: out, find: func(string) (string, error) { return driveDirectTestObject, nil }}
+	a := driveDirectArgs{name: "scratch", in: in, out: out}
 	go func() { done <- m.driveDirect(context.Background(), &driveDirectFlags{direct: true}, a) }()
 	deadline := time.Now().Add(2 * time.Minute)
 	for !strings.Contains(out.String(), "Press Return") {
