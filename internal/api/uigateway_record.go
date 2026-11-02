@@ -118,7 +118,7 @@ func (s *Server) trackDesktopRecording(run types.AgentRun, sess uiSession, rec *
 }
 
 // desktopRecorded reports whether run's desktop screen is recorded: the run records screen_actions and
-// the organisation keeps recordings. A macOS VM's is not, whatever its level: macOSVMUnrecordedNotice told
+// the organisation keeps recordings. A macOS VM's is not, whatever its level: macOSVMDesktopNotice told
 // the person so at Review.
 func (s *Server) desktopRecorded(run types.AgentRun) bool {
 	return !run.MachineKind.IsMacOSVM() &&
