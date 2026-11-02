@@ -90,7 +90,7 @@ func TestProjectRecordingMeta_ListAndGet(t *testing.T) {
 		if !ok {
 			t.Fatalf("run with a recording missing from the list")
 		}
-		if !got.HasRecording {
+		if !hasRecording(got) {
 			t.Errorf("has_recording = false, want true")
 		}
 		if got.RecordingBytes != int64(len(cast)) {
@@ -104,7 +104,7 @@ func TestProjectRecordingMeta_ListAndGet(t *testing.T) {
 		if !ok {
 			t.Fatalf("run with no recording missing from the list")
 		}
-		if got2.HasRecording || got2.RecordingBytes != 0 || got2.RecordingDurationSec != 0 {
+		if got2.HasRecording == nil || *got2.HasRecording || got2.RecordingBytes != 0 || got2.RecordingDurationSec != 0 {
 			t.Errorf("run with no recording = %+v, want all three fields zero/false", got2)
 		}
 	})
@@ -118,7 +118,7 @@ func TestProjectRecordingMeta_ListAndGet(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		if !got.HasRecording || got.RecordingBytes != int64(len(cast)) || got.RecordingDurationSec != 2.5 {
+		if !hasRecording(got) || got.RecordingBytes != int64(len(cast)) || got.RecordingDurationSec != 2.5 {
 			t.Errorf("GET /runs/{id} = %+v, want has_recording/bytes/duration set", got)
 		}
 
@@ -130,7 +130,7 @@ func TestProjectRecordingMeta_ListAndGet(t *testing.T) {
 		if err := json.Unmarshal(w2.Body.Bytes(), &got2); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		if got2.HasRecording || got2.RecordingBytes != 0 || got2.RecordingDurationSec != 0 {
+		if got2.HasRecording == nil || *got2.HasRecording || got2.RecordingBytes != 0 || got2.RecordingDurationSec != 0 {
 			t.Errorf("GET /runs/{id} (no recording) = %+v, want all three fields zero/false", got2)
 		}
 	})
@@ -146,7 +146,7 @@ func TestProjectRecordingMeta_ListAndGet(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		if !got.HasRecording || got.RecordingBytes != int64(len(cast)) || got.RecordingDurationSec != 2.5 {
+		if !hasRecording(got) || got.RecordingBytes != int64(len(cast)) || got.RecordingDurationSec != 2.5 {
 			t.Errorf("GET /runs/{id} with no include = %+v, want has_recording/bytes/duration set", got)
 		}
 	})
@@ -175,7 +175,7 @@ func TestProjectRecordingMeta_NilStoreIsNoop(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	for _, r := range runs {
-		if r.ID == run.ID && r.HasRecording {
+		if r.ID == run.ID && hasRecording(r) {
 			t.Errorf("has_recording = true with no RecordingStore configured")
 		}
 	}
@@ -248,7 +248,7 @@ func TestProjectRecordingMeta_StoreOutageDoesNot500(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	for _, r := range runs {
-		if r.ID == run.ID && r.HasRecording {
+		if r.ID == run.ID && hasRecording(r) {
 			t.Errorf("has_recording = true despite a store outage")
 		}
 	}
@@ -294,7 +294,7 @@ func TestProjectRecordingMeta_GarbageTailStillReportsHasRecording(t *testing.T) 
 		if r.ID != run.ID {
 			continue
 		}
-		if !r.HasRecording {
+		if !hasRecording(r) {
 			t.Errorf("has_recording = false for a stored (if unparseable) cast, want true")
 		}
 		if r.RecordingBytes != int64(len(garbage)) {
@@ -303,5 +303,82 @@ func TestProjectRecordingMeta_GarbageTailStillReportsHasRecording(t *testing.T) 
 		if r.RecordingDurationSec != 0 {
 			t.Errorf("recording_duration_sec = %v, want 0 (garbage tail, no derivable event)", r.RecordingDurationSec)
 		}
+	}
+}
+
+// hasRecording reads the pointer field: absent (never projected) and false both mean "no recording found".
+func hasRecording(r types.AgentRun) bool { return r.HasRecording != nil && *r.HasRecording }
+
+// TestProjectRecordingMeta_ListWithoutIncludeOmitsFields pins the wire shape (#3715): a list that did not ask
+// for recording_meta must not carry has_recording at all (false would read as "no recording" for a stored
+// one), while the single-run read always carries it, false included.
+func TestProjectRecordingMeta_ListWithoutIncludeOmitsFields(t *testing.T) {
+	ast := newAuthzStore()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, ast)
+	rs, err := recording.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	cfg.RecordingStore = rs
+	srv := New(cfg)
+	ctx := context.Background()
+
+	withRec, err := ast.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedBy: "alice", State: types.RunCompleted})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	withoutRec, err := ast.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedBy: "alice", State: types.RunCompleted})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	cast := "{\"version\":2,\"width\":80,\"height\":24}\n" + `[2.5,"o","world"]` + "\n"
+	if err := rs.SaveCast(ctx, withRec.ID.String(), strings.NewReader(cast)); err != nil {
+		t.Fatalf("SaveCast: %v", err)
+	}
+
+	listKeys := func(path string) map[string]map[string]any {
+		t.Helper()
+		w := do(t, srv, http.MethodGet, path, adminToken, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d, body=%s", path, w.Code, w.Body.String())
+		}
+		var rows []map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		byID := map[string]map[string]any{}
+		for _, row := range rows {
+			byID[row["id"].(string)] = row
+		}
+		return byID
+	}
+
+	for id, row := range listKeys("/api/v1/runs") {
+		for _, k := range []string{"has_recording", "recording_bytes", "recording_duration_sec"} {
+			if _, ok := row[k]; ok {
+				t.Errorf("list without include: run %s carries %q, want it omitted", id, k)
+			}
+		}
+	}
+
+	withMeta := listKeys("/api/v1/runs?include=recording_meta")
+	if v, ok := withMeta[withRec.ID.String()]["has_recording"]; !ok || v != true {
+		t.Errorf("list with include: run with a recording has_recording = %v (present=%v), want true", v, ok)
+	}
+	if v, ok := withMeta[withoutRec.ID.String()]["has_recording"]; !ok || v != false {
+		t.Errorf("list with include: run without a recording has_recording = %v (present=%v), want an explicit false", v, ok)
+	}
+
+	w := do(t, srv, http.MethodGet, "/api/v1/runs/"+withoutRec.ID.String(), adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /runs/{id} = %d, body=%s", w.Code, w.Body.String())
+	}
+	var single map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &single); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if v, ok := single["has_recording"]; !ok || v != false {
+		t.Errorf("single-run read of a run without a recording: has_recording = %v (present=%v), want an explicit false", v, ok)
 	}
 }

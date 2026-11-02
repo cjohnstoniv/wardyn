@@ -4,7 +4,7 @@
 
 - A Linux VM sandbox (`machine_kind: linux_vm` on a run) is a Linux guest under QEMU/KVM, started by a registered `wardyn-runnerd` that offers it.
 - It is off by default. The runner's operator turns it on, and the runner offers it only after its start-up probe passes.
-- This page is for the operator of a Linux runner host. There is no console control in this release: a run asks for it through the API or the CLI request body.
+- This page is for the operator of a Linux runner host. A run asks for it in New Run, or through the API or the CLI request body.
 
 ## What a run gets
 
@@ -16,6 +16,7 @@
 | The agent | The Wardyn guest agent in the guest starts the harness and serves terminals, as `agent` (uid 1000). It accepts the run's setup once per boot, even after it restarts |
 | Shared folders | The folders a container on this runner would get, at the same paths and mode, one unprivileged `virtiofsd` container each. No other host folder is shared, and a guest write lands as the runner's user |
 | Bound folders | A workspace folder bound to this runner, inside its `--drive-root` ([more](hybrid-laptops.md#a-workspace-folder-on-your-runner)) |
+| Drives | An admin or team drive bound to this runner, shared the way a folder is ([Drives](#drives)) |
 | Synced folders | A folder synced from another computer lands in the guest as in a container: through the guest agent and the image's `sftp-server`, as `agent`. The agent waits for the first sync |
 | Confinement | The VM boundary, which the runner treats as the `CC3` family (hardware virtualisation). The run's recorded `confinement_class` stays the one it asked for |
 | Network | On a Docker runner, QEMU's only link is the network relay (`wardyn-vmnet`), which hands connections to allowed hosts to the run's proxy. A Kubernetes VM pod has no relay yet |
@@ -24,9 +25,30 @@
 | Refused traffic | A port or host not allowed, a raw IP or an outside DNS resolver: a deny decision each. Dropped IPv6 and ICMP frames: one row a second per kind, with a repeat count. Global IPv6 connects find no route |
 | Sign-ins | The desktop's keychain and browser profiles are kept in the guest's memory and are gone when the guest shuts down ([Sign-ins in the desktop](#sign-ins-in-the-desktop)) |
 
-- Not in this release: drives, session recording, reviving a stopped VM, replacing its proxy, and recovering its output after the VM is gone. Each is refused with a reason.
+- Not in this release: session recording, reviving a stopped VM, replacing its proxy, and recovering its output after the VM is gone. Each is refused with a reason.
 - Linux VMs need a pool where every runner offers them; a mixed pool refuses them.
 - A VM's terminal is a plain shell. Opening it in the agent CLI (`interactive_start: agent`) and watching or taking over the agent's terminal are refused too.
+
+## Drives
+
+- A drive bound to this runner mounts in a VM at the same path and mode as in a container, after the same checks on its folder.
+- The runner's version must offer it: an older runner, or a Kubernetes one, is refused at Review.
+- Only the person's own folder on the share is served, by its own `virtiofsd` container.
+- A read-only drive is read-only three times: in that container's bind, in `virtiofsd --readonly`, and in the guest's mount.
+
+| A Linux VM run asks for | Answer |
+|---|---|
+| A drive bound to this runner | Mounts |
+| The same, on a runner too old to share one, or a Kubernetes runner | Refused at Review: update the runner, or run without drives |
+| A person's own Docker or cluster volume, or a drive with no binding | Refused at Review, as in a container on this runner |
+| A disk drive kept on a Mac | Refused at Review, naming the Mac |
+
+- **Who a write lands as.** A guest write lands as the runner's user; a container's lands as the image's agent (uid 1000).
+  - If the runner's uid is not 1000, a VM and a container on one drive may fail to change each other's files.
+- **Two runs at once.** Two VM runs may use one drive, and no rule holds it to one. A file lock held in one VM does not stop another VM or the host taking it. Do not rely on seeing another VM's write at once: a delete took about a second to show.
+- **A size limit.** None is enforced on a drive in a VM, as in a container.
+- **A hard link on the host.** One planted inside a person's folder, at a file outside it, reads and writes through to that file, in a VM as in a container.
+  - The checks see names, and a hard link has no name to refuse. Keep shell access to the share as tight as the share's contents need.
 
 ## Sign-ins in the desktop
 
@@ -104,7 +126,7 @@
 
 - The reason is a missing `CC3` pin or a RuntimeClass that does not exist. The runner then offers no VM, and a `linux_vm` run is refused before anything is created.
 - The machine recorded on the run is `runtimeclass:<handler>` in every field, so two runs compare equal only when the same handler started both.
-- Drives and recording are refused, as on a Docker runner.
+- Drives are refused at Review. Recording is refused, as on a Docker runner.
 
 ## When the organisation is unreachable
 

@@ -20,7 +20,6 @@ package proxy
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -182,9 +181,7 @@ func (p *Proxy) serveGitHubAPI(w http.ResponseWriter, r *http.Request, host stri
 // again") whose JSON carries the code and the sentence.
 func (p *Proxy) refuseGitHubAPI(w http.ResponseWriter, r *http.Request, host string, port int, message string) {
 	p.emitPATAPIDecision(r, host, port, egress.Deny, ruleSourceGitHubAPIRefused)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(map[string]string{
+	writeJSONStatus(w, http.StatusForbidden, "application/json", map[string]string{
 		"wardyn":  gitHubAPIRefused,
 		"message": message,
 	})

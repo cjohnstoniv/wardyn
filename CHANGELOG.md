@@ -11,6 +11,25 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- A Linux VM run can mount a drive bound to its runner. An older runner and a Kubernetes runner are refused at Review. A file lock held in one VM does not stop another VM or the host taking it.
+
+### Changed
+
+- API: a run list without `include=recording_meta` leaves `has_recording`, `recording_bytes` and `recording_duration_sec` off each run. It used to say `has_recording: false` for a run that has a recording. A single-run read and an opted-in list always carry `has_recording`. In the Go SDK `has_recording` is now a `*bool`.
+- A `pass_through` governance unit written with `overlay: {}` and no parent is refused, as the same write with no `overlay` already was. A pass-through unit already under Default still saves.
+
+### Fixed
+
+- The membership-move dry run counts a live run whose owner a membership names by a verified alias.
+- A BYOI selftest that did not run says so, in the run and in its audit row, on an interactive run with no task.
+- A shutdown no longer leaves a sign-in run's stop retrying past its wait on a slow store. The pass under way finishes, no further one starts, and the run's idle cap ends a run left behind.
+- A Linux VM managed file with no mode is delivered at the default mode.
+- The runner and Azure DevOps token reads in the console stop polling when signed out and no longer stack requests.
+- A macOS VM helper logs a refused pairing before closing the connection.
+- Docs: what a policy's `github_token` grant needs before a runner's first run.
+
 ## [0.10.0-rc.10] — 2026-11-01
 
 ### Before you upgrade

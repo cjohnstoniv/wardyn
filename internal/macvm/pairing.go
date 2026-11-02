@@ -100,10 +100,11 @@ func (p *pairer) pair(c net.Conn) {
 	p.pending--
 	if !ok || p.closed {
 		p.mu.Unlock()
-		_ = c.Close()
+		// Log first: a dialer sees the close, and the line must already be written by then.
 		if !ok {
 			p.refused()
 		}
+		_ = c.Close()
 		return
 	}
 	if p.idle != nil {

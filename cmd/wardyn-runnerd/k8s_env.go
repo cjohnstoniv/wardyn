@@ -5,7 +5,6 @@ package main
 
 import (
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -298,15 +298,11 @@ func orgHTTPClient(bundle string) (*http.Client, error) {
 	if bundle == "" {
 		return nil, nil
 	}
-	pool, err := x509.SystemCertPool()
-	if err != nil || pool == nil {
-		pool = x509.NewCertPool()
-	}
-	pool = pool.Clone()
-	if !pool.AppendCertsFromPEM([]byte(bundle)) {
+	pool, err := hoptls.SystemPoolWith([]byte(bundle))
+	if err != nil {
 		return nil, errors.New("trusted CA bundle holds no certificate")
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: hoptls.MinClientTLSVersion}
 	return &http.Client{Transport: tr}, nil
 }

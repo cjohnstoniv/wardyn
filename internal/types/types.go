@@ -262,8 +262,10 @@ type AgentRun struct {
 	// CreatedVia is the registered portal this run was launched through on the person's behalf; nil when self-launched. The owner is still the person.
 	CreatedVia *uuid.UUID `json:"created_via,omitempty"`
 	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored: projected on every single-run read,
-	// and on a list only with ?include=recording_meta. HasRecording is the only "no recording" signal.
-	HasRecording         bool          `json:"has_recording"`
+	// and on a list only with ?include=recording_meta. HasRecording is the only "no recording" signal. It is a pointer
+	// so a list that did not ask is silent (nil, key omitted) rather than saying false for a stored recording; a
+	// projected run always carries it, true or false.
+	HasRecording         *bool         `json:"has_recording,omitempty"`
 	RecordingBytes       int64         `json:"recording_bytes,omitempty"`
 	RecordingDurationSec float64       `json:"recording_duration_sec,omitempty"`
 	DiskMiB              int           `json:"disk_mib,omitempty"`  // effective ephemeral disk cap MiB; 0 = no cap resolved

@@ -232,6 +232,16 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     ]);
   });
 
+  it("AgentRun.has_recording is a pointer omitted when unprojected, optional in TS (#3715)", () => {
+    expect(typesGo).toMatch(/HasRecording\s+\*bool\s+`json:"has_recording,omitempty"`/);
+    expect(typesGo).toMatch(/RecordingBytes\s+int64\s+`json:"recording_bytes,omitempty"`/);
+    expect(typesGo).toMatch(/RecordingDurationSec\s+float64\s+`json:"recording_duration_sec,omitempty"`/);
+    const body = /export\s+interface\s+AgentRun\b[^{]*\{([\s\S]*?)\n\}/.exec(runsTs)?.[1] ?? "";
+    for (const k of ["has_recording", "recording_bytes", "recording_duration_sec"]) {
+      expect(body).toMatch(new RegExp(`\\b${k}\\?:`));
+    }
+  });
+
   it("RunMacOSDisk's keys are exactly runMacOSDiskView's json tags (GET /runs/{id} macos_disk, run_macos_disk.go)", () => {
     const diskGo = readFileSync(join(root, "internal/api/run_macos_disk.go"), "utf8");
     expect(tsInterfaceKeys(runsTs, "RunMacOSDisk").sort()).toEqual(goJSONTags(diskGo, "runMacOSDiskView").sort());

@@ -256,6 +256,7 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 - On Windows it refuses: run it inside your WSL2 distribution.
 - A failed run leaves nothing to undo: run it again. An unused token expires within the hour; an unclaimed runner lapses after 24 hours.
 - To upgrade, see [Upgrading a runner](#upgrading-a-runner).
+- Before the first run, check [the policy's `github_token` grant](#before-the-first-run): on a fresh install it is refused on a person's runner until the delivery policy or the grant changes.
 - Org runners keep the operator's `--token-file` path.
 
 ### `wardyn runner install` and `wardyn runner upgrade`
@@ -283,6 +284,21 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 Upgrade the organisation before its runners. A runner installed with `setup` upgrades by running `wardyn runner setup` again, or the new release's `wardyn-runnerd setup` with the same flags: it renames a new file over its own copy and restarts the service. Installing a new `wardyn-runnerd.pkg` upgrades only a runner the package's managed agent runs (one set up with `register`); it stops that agent first. A `setup`-installed runner keeps its own copy, so a new package alone leaves it on the old version. Never copy a new binary over the running one: on macOS the system can stop a process whose binary is overwritten in place.
 
 A hand-installed macOS LaunchAgent does not get `--log-file`, so its log is not rotated until someone adds `--log-file` to its `ProgramArguments`. `wardyn runner upgrade` to a newer release writes it. On a runner already on the current release, upgrade stops before setup, so run `wardyn-runnerd setup` again or add the flag by hand.
+
+### Before the first run
+
+The shipped default policy ([`examples/policies/default.json`](../examples/policies/default.json), which the wardynd image sets as `WARDYN_DEFAULT_POLICY`; `demo.json` has the same grant) carries an eligible `github_token` grant. The organisation's credential delivery policy (`local_credential_delivery`) holds no row for `github_token` until an administrator writes one, and a class with no row is refused. A run on a person's own runner is then refused at create with `placement_credential` (`422`), for example:
+
+```
+ProxyConfig.Policy.EligibleGrants[0]: github_token credential is not delivered to a local runner of trust class personal (delivery policy: refuse)
+```
+
+The runner is fine; the run's policy asks for something the organisation does not deliver to it. Either fix lets the run start:
+
+| Fix | Who | How |
+|---|---|---|
+| Deliver the token through the organisation | A security administrator | In *Governance → Runner credentials* (or `PUT /governance/credential-delivery`) set `github_token` to `via_org`. The token stays in the organisation, which uses it through its egress for the run ([the delivery table](operations/hybrid-laptops.md#resident-credentials-and-posture)). A deployment that holds changes for a second person holds this one too |
+| Drop the grant | Whoever owns the policy | Remove the `github_token` entry from `eligible_grants` in the policy the run uses. For the deployment default, edit the file `WARDYN_DEFAULT_POLICY` names and restart `wardynd`, which reads it once at boot. The run then has no GitHub token |
 
 ## The runner's settings file
 

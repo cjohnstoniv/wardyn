@@ -20,7 +20,6 @@ package proxy
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
@@ -326,9 +325,7 @@ func (p *Proxy) emitPATAPIDecision(r *http.Request, host string, port int, d egr
 // another credential") whose JSON carries the code and the sentence.
 func (p *Proxy) refusePATAPI(w http.ResponseWriter, r *http.Request, host string, port int, why string) {
 	p.emitPATAPIDecision(r, host, port, egress.Deny, ruleSourcePATAPIDenied)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(map[string]string{
+	writeJSONStatus(w, http.StatusForbidden, "application/json", map[string]string{
 		"wardyn":  patAPIRefused,
 		"message": "Wardyn refused this forge API request: " + why + ".",
 	})
