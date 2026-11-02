@@ -373,7 +373,8 @@
 # docs/AUDIT-ACTIONS.md 55629 = 55594 + 35, measured: Azure DevOps push rules read the Git REST API (#3921)
 # docs/AUDIT-ACTIONS.md 55733 = ours 55698 + theirs 55629 - base 55594 at the 0.10 W7 merge of ado-push-paths.
 # docs/AUDIT-ACTIONS.md 55753 adds 11 over 55742, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
-docs/AUDIT-ACTIONS.md=55753 share=8
+# docs/AUDIT-ACTIONS.md 55754 adds 1 over 55753, measured (0.10 rc.11 wave 2): a person's deny for a host and what a rule does after it.
+docs/AUDIT-ACTIONS.md=55754 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
