@@ -263,7 +263,8 @@ export const LOCAL_RUN = {
     `This run was killed ${elapsed} in while ${name} was offline. Its credentials were revoked at once, and ${name} was told to remove the sandbox when it next connects.`,
   KILL_QUEUED_FILES: (name: string) => `Until ${name} reconnects, the sandbox and anything the run wrote stay there.`,
   TERMINAL_OFFLINE: (name: string) => `${name} is offline, so its terminal can't be reached. The session keeps running there.`,
-  SPOOLED: (when: string) => `Recorded offline at ${when}`,
+  REACHED_LATER: "Reached Wardyn later",
+  REACHED_LATER_TIP: (decided: string, recorded: string) => `Decided on the runner at ${decided}. Recorded here at ${recorded}.`,
   SPOOL_FULL: "Refused — the runner's offline log was full",
 } as const;
 

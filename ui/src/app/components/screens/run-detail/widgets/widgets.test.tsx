@@ -137,6 +137,16 @@ describe("SandboxWidget on a macOS VM run (#3924)", () => {
     expect(screen.getByText("412")).toBeInTheDocument();
   });
 
+  it("shows a guest's disk in GB from 1 GiB, with no invented total, and leaves a small disk alone", async () => {
+    getResourcesMock.mockResolvedValue({ disk_used_bytes: 27739.5 * 1024 ** 2 });
+    const { unmount } = render(<SandboxWidget runId="r1" live={true} macOS />);
+    expect(await screen.findByText("27.1 GB")).toBeInTheDocument();
+    unmount();
+    getResourcesMock.mockResolvedValue({ disk_used_bytes: 500 * 1024 ** 2 });
+    render(<SandboxWidget runId="r1" live={true} macOS />);
+    expect(await screen.findByText("500.0 MB")).toBeInTheDocument();
+  });
+
   it("raises no warning from a guest's numbers, however full", async () => {
     getResourcesMock.mockResolvedValue({ memory_used_bytes: 8 * GiB, memory_limit_bytes: 8 * GiB, disk_used_bytes: 999 * GiB });
     render(<SandboxWidget runId="r1" live={true} macOS />);
@@ -369,19 +379,26 @@ describe("EgressWidget", () => {
     expect(screen.queryByText(/held/)).not.toBeInTheDocument();
   });
 
-  // 0.9 (M-RN-3 RS7): a decision a runner made while it was offline shows when it made it, not when it reached us;
-  // the refusal a full offline log forces says so.
-  it("shows a spooled row's own time and the full-log reason, and an ordinary row's age", () => {
+  // A decision that came through the spool shows its own time; only a row that reached Wardyn 60 s or more later
+  // says so. The refusal a full offline log forces says so.
+  it("marks a row that reached Wardyn later, and keeps the full-log reason", () => {
+    const now = new Date().toISOString();
     const observed = aheadByHours(-5);
     const egress: SpooledEgressDecision[] = [
-      { id: "e1", time: new Date().toISOString(), domain: "api.example.com", decision: "allow", spooled_at: observed },
-      { id: "e2", time: new Date().toISOString(), domain: "blocked.example.com", decision: "deny", spooled_at: observed, spool_full: true },
-      { id: "e3", time: new Date().toISOString(), domain: "plain.example.com", decision: "allow" },
+      { id: "e1", time: now, domain: "api.example.com", decision: "allow", spooled_at: observed },
+      { id: "e2", time: now, domain: "blocked.example.com", decision: "deny", spooled_at: observed, spool_full: true },
+      { id: "e3", time: now, domain: "plain.example.com", decision: "allow" },
+      { id: "e4", time: now, domain: "quick.example.com", decision: "allow", spooled_at: new Date(Date.now() - 30_000).toISOString() },
+      { id: "e5", time: now, domain: "bad.example.com", decision: "allow", spooled_at: "not a time" },
     ];
     render(<EgressWidget egress={egress} />);
-    expect(screen.getAllByText(/^Recorded offline at /)).toHaveLength(2);
+    expect(screen.getAllByText(/^Reached Wardyn later/)).toHaveLength(2);
+    expect(screen.queryByText(/offline at/)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/^Reached Wardyn later/)[0]).toHaveAttribute("title", expect.stringMatching(/^Decided on the runner at .+\. Recorded here at .+\.$/));
     expect(screen.getByText("Refused — the runner's offline log was full")).toBeInTheDocument();
     expect(screen.getByText("plain.example.com").parentElement).toHaveTextContent("just now");
+    expect(screen.getByText("quick.example.com").parentElement).not.toHaveTextContent("Reached");
+    expect(screen.getByText("bad.example.com").parentElement).not.toHaveTextContent("Reached");
   });
 });
 
