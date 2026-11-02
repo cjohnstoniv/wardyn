@@ -138,6 +138,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	}
 	removeHopByHop(outReq.Header)
 	p.stripGatewayHeaders(outReq.Header)
+	p.stripGatewayHeaders(outReq.Trailer) // r.Clone keeps the sandbox's trailers
 
 	// Credential injection: plain HTTP only, exact-allow host only, and only on a transport
 	// that may carry the credential — see injectableTransport.
