@@ -280,18 +280,21 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		created = got
 	}
 	if created.State == types.RunQueued {
+		runs := []types.AgentRun{created}
+		s.projectStatusDetailFor(r, runs) // the 201 carries the same wait reason and place a GET does
+		created = runs[0]
 		sentence := runnerpool.WaitAtCapacityMsg(pool.Name, capMax)
 		switch {
 		case q.f.schedule != nil:
 			sentence = scheduledWaitMsg(q.f.schedule)
+		case created.Queue != nil && created.Queue.LimitSentence != "":
+			// The sentence the run's own read gives, so the answer and the run page never differ.
+			sentence = created.Queue.LimitSentence
 		case q.f.place.waitsForRoom || created.StatusDetail == statusDetailQueuePrefix+string(runnerpool.WaitRunnersAtCapacity):
 			// The second test is a capped pool with room whose runners are full: the promotion's token says so.
 			sentence = q.runnerLimitSentence(s, ctx)
 		}
 		warnings = append(warnings, sentence)
-		runs := []types.AgentRun{created}
-		s.projectStatusDetailFor(r, runs) // the 201 carries the same wait reason and place a GET does
-		created = runs[0]
 	}
 	w.Header().Set("Location", s.cfg.BasePath+"/api/v1/runs/"+created.ID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings,
@@ -310,46 +313,99 @@ func (q queuedCreate) waitReason() runnerpool.WaitReason {
 	return runnerpool.WaitAtCapacity
 }
 
-// runnerLimitSentence is the wait sentence of a launch its runners hold back: it names the limit, by the
-// same size the promotion holds each runner to (queueRunnerFree). With several runners it names the one
-// holding the fewest runs. A read that fails, or runners that have found room since, leave the sentence
-// that names no limit: this is the answer's wording, and the promotion decides.
+// runnerLimitSentence is the wait sentence of a launch its runners hold back, from the placement's own
+// eligible runners. A read that fails, or runners that have found room since, leave the sentence that names
+// no limit: this is the answer's wording when the run's own read gave none, and the promotion decides.
 func (q queuedCreate) runnerLimitSentence(s *Server, ctx context.Context) string {
-	pool, eligible := q.f.place.pool.Name, q.f.place.eligible
+	pool := q.f.place.pool.Name
 	fits, err := s.runnerFits(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: read runner limits for the wait sentence", slog.Any("err", err))
 		return runnerpool.WaitRunnersAtCapacityMsg(pool)
 	}
-	var nearest poolTarget
+	if sentence := s.waitLimitSentence(ctx, pool, q.f.place.eligible, fits, q.f.place.unbound); sentence != "" {
+		return sentence
+	}
+	return runnerpool.WaitRunnersAtCapacityMsg(pool)
+}
+
+// waitLimitSentence is the wait sentence of a run its runners hold back: it names the limit, by the same
+// size the promotion holds each runner to (queueRunnerFree). With several runners it gives, as an example,
+// the one holding the fewest runs, the first by id on a tie. "" when no runner is short of room by a limit.
+func (s *Server) waitLimitSentence(ctx context.Context, pool string, eligible []poolTarget, fits map[string]runnerFit, unbound *types.RunnerAmounts) string {
+	var shown poolTarget
 	limit := ""
 	for _, t := range eligible {
 		f := fits[t.id]
 		var need types.RunnerAmounts
-		if u := q.f.place.unbound; u != nil && f.limits != nil {
-			need = startSizeOn(*u, f.limits)
+		if unbound != nil && f.limits != nil {
+			need = startSizeOn(*unbound, f.limits)
 		}
 		reason := runnerpool.NoRoomReason(f.limits, f.used, need)
-		if reason != "" && (limit == "" || f.used.Runs < fits[nearest.id].used.Runs) {
-			nearest, limit = t, reason
+		if reason != "" && (limit == "" || f.used.Runs < fits[shown.id].used.Runs || (f.used.Runs == fits[shown.id].used.Runs && t.id < shown.id)) {
+			shown, limit = t, reason
 		}
 	}
 	if limit == "" {
-		return runnerpool.WaitRunnersAtCapacityMsg(pool)
+		return ""
 	}
-	name := fits[nearest.id].runner.Name
-	if rs, ok := s.cfg.Store.(store.RemoteRunnerStore); ok && nearest.runnerID == nil {
-		if got, err := rs.GetRemoteRunner(ctx, nearest.id); err == nil {
+	name := fits[shown.id].runner.Name
+	if rs, ok := s.cfg.Store.(store.RemoteRunnerStore); ok && shown.runnerID == nil {
+		if got, err := rs.GetRemoteRunner(ctx, shown.id); err == nil {
 			name = got.Runner.Name
 		}
 	}
 	if name == "" {
-		name = nearest.id
+		name = shown.id
 	}
 	if len(eligible) == 1 {
 		return runnerpool.WaitRunnerAtLimitMsg(name, limit)
 	}
 	return runnerpool.WaitRunnersAtLimitMsg(pool, name, limit)
+}
+
+// projectQueueLimit fills Queue.LimitSentence of the one run a single-run route serves, when the run waits
+// because its runners are at a limit and the reader is its owner or an admin: the sentence is worked out
+// from the runners' limits as they stand now, for the size the promotion holds the run to, so it stays
+// true as the wait changes. It is never done for a list, which would cost a read of every runner per row.
+// A read that fails leaves the field off, and the console says the sentence its reason alone gives.
+func (s *Server) projectQueueLimit(r *http.Request, run *types.AgentRun) {
+	if run.Queue == nil || run.Queue.Reason != string(runnerpool.WaitRunnersAtCapacity) || !s.ownsRunOrAdmin(r, *run) {
+		return
+	}
+	qs, ok := s.queueStore()
+	if !ok {
+		return
+	}
+	e, err := qs.GetRunQueueEntry(r.Context(), run.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return // the run left the queue between the two reads
+	}
+	var launch queuedLaunch
+	if err == nil {
+		err = json.Unmarshal(e.Launch, &launch)
+	}
+	if err != nil {
+		slog.WarnContext(r.Context(), "wardynd: read the queue entry for the wait sentence", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return
+	}
+	// Judged as the owner, on the daemon's own context as the promotion is: the reader's identity never reaches it.
+	base := s.cfg.BaseCtx
+	if base == nil {
+		base = context.Background()
+	}
+	pctx, cancel := context.WithTimeout(inheritQueuePass(context.WithoutCancel(base), r.Context()), queueEnqueueBound)
+	defer cancel()
+	var auth queueAuthority
+	_ = json.Unmarshal(e.Authority, &auth) //nolint:errcheck // an unreadable authority fails the start's own checks
+	room, err := s.queueRunnerFree(withQueueOwner(auth.context(pctx), e.Owner, e.Authority), types.RunnerPool{ID: e.PoolID}, launch)
+	if err != nil {
+		slog.WarnContext(r.Context(), "wardynd: read runner limits for the wait sentence", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return
+	}
+	if room.wait == runnerpool.WaitRunnersAtCapacity {
+		run.Queue.LimitSentence = s.waitLimitSentence(pctx, room.pool, room.candidates, room.fits, launch.Unbound)
+	}
 }
 
 // entry is the run_queue row a launch is stored with.

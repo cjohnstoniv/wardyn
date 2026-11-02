@@ -143,9 +143,44 @@ func TestPG_CappedPoolWithRoomNamesTheRunnersLimit(t *testing.T) {
 	occupyRunner(e, p, b)
 	got := e.queuedLaunch(e.person, p, "")
 	if !slices.ContainsFunc(got.Warnings, func(w string) bool {
-		return strings.HasPrefix(w, "Every runner in Laptops is at a limit. The nearest, ") && strings.Contains(w, "is at its Runs at once: 1 running of 1.")
+		return strings.HasPrefix(w, "Every runner in Laptops is at a limit. For example, ") && strings.Contains(w, ": Runs at once: 1 running of 1.")
 	}) {
 		t.Fatalf("warnings %q do not name Runs at once", got.Warnings)
+	}
+}
+
+// The owner's read of a run that waits on its runners' limits carries the sentence the create answered with,
+// as one field, and follows the runners as they change; a list carries none.
+func TestPG_QueuedRunReadCarriesTheLimitSentence(t *testing.T) {
+	e := newQueueEnv(t)
+	p, a, b := cappedLaptops(e, 1)
+	occupyRunner(e, p, a)
+	occupyRunner(e, p, b)
+	got := e.queuedLaunch(e.person, p, "")
+	one := func() types.AgentRun {
+		w := e.call(e.person, http.MethodGet, "/api/v1/runs/"+got.ID.String(), "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("get run = %d %s", w.Code, w.Body)
+		}
+		return decodeJSON[types.AgentRun](t, w)
+	}
+	read := one()
+	if read.Queue == nil || read.Queue.LimitSentence == "" || !slices.Contains(got.Warnings, read.Queue.LimitSentence) {
+		t.Fatalf("queue %+v does not carry the sentence of the create warnings %q", read.Queue, got.Warnings)
+	}
+	if !strings.Contains(read.Queue.LimitSentence, ": Runs at once: 1 running of 1.") {
+		t.Errorf("sentence %q does not name Runs at once", read.Queue.LimitSentence)
+	}
+	if w := e.call(e.person, http.MethodGet, "/api/v1/runs", ""); strings.Contains(w.Body.String(), "limit_sentence") {
+		t.Errorf("a list carried the sentence: %s", w.Body)
+	}
+	// The runners find room before any promotion pass: the stored reason is still the runners', but the
+	// sentence that names a limit would now be untrue, so the read gives none.
+	if _, err := e.pool.Exec(context.Background(), `UPDATE runners SET max_runs = 2 WHERE id = ANY($1)`, []uuid.UUID{a, b}); err != nil {
+		t.Fatal(err)
+	}
+	if later := one(); later.Queue != nil && later.Queue.LimitSentence != "" {
+		t.Errorf("sentence %q names a limit no runner is at", later.Queue.LimitSentence)
 	}
 }
 

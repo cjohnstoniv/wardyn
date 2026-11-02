@@ -125,6 +125,8 @@ export interface RunQueue {
   /** A scheduled run's start time and the IANA zone it was given in; absent for any other waiting run. */
   start_at?: string;
   time_zone?: string;
+  /** The whole wait sentence of a run its runners' limits hold back, naming the limit as the runners stand now. Present only on a single-run read by the run's owner or an admin; absent, the sentence is the one the reason gives. */
+  limit_sentence?: string;
 }
 
 export interface AgentRun {

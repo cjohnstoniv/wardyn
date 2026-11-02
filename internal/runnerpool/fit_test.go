@@ -85,7 +85,7 @@ func TestWaitLimitSentences(t *testing.T) {
 	if got, want := WaitRunnerAtLimitMsg("mac-1", limit), "mac-1 is at its memory total: 16 GB held of 16 GB, this run needs 8 GB. This run starts when it has room."; got != want {
 		t.Errorf("one runner: %q, want %q", got, want)
 	}
-	if got, want := WaitRunnersAtLimitMsg("Laptops", "mac-1", limit), "Every runner in Laptops is at a limit. The nearest, mac-1, is at its memory total: 16 GB held of 16 GB, this run needs 8 GB. This run starts when one has room."; got != want {
+	if got, want := WaitRunnersAtLimitMsg("Laptops", "mac-1", limit), "Every runner in Laptops is at a limit. For example, mac-1: memory total: 16 GB held of 16 GB, this run needs 8 GB. This run starts when one has room."; got != want {
 		t.Errorf("several runners: %q, want %q", got, want)
 	}
 }
