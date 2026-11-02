@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 )
 
 const (
@@ -150,7 +151,7 @@ func (p *Proxy) attachGatewayIdentity(w http.ResponseWriter, r *http.Request, h 
 // of the answer, clean or failed, is a cut: a trailing run that begins a held value
 // is replaced too, because a token missing its last characters can be recovered, and
 // a short Content-Length ends cleanly with no read error to tell it from a whole answer.
-func (p *Proxy) relayGatewayRoute(w http.ResponseWriter, r *http.Request, host string, port int, resp *http.Response, ruleSource string) {
+func (p *Proxy) relayGatewayRoute(w http.ResponseWriter, r *http.Request, host string, port int, resp *http.Response, ruleSource, sentToken string) {
 	refuse := func(cause string) {
 		if p.sink != nil {
 			log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSource)
@@ -164,13 +165,57 @@ func (p *Proxy) relayGatewayRoute(w http.ResponseWriter, r *http.Request, host s
 		refuse("the gateway answered with a Content-Encoding the proxy cannot scrub")
 		return
 	}
+	// A call can wait longer than the holder keeps a value in the mask set, and no
+	// timeout bounds how long, so the token this call sent goes back in before its
+	// answer is read. The masker is read once, so the rest of the answer is covered too.
+	procMaskFor(p.maskKey, []byte(sentToken))
 	out, ok := p.scrubbedAlways(w)
 	if !ok {
 		refuse("the proxy holds no value to scrub this answer with")
 		return
 	}
+	out.cutHeaders = true
 	defer func() { _ = out.mw.CloseCut() }()
 	flushRelay(out, resp)
+}
+
+// maskValuesCut masks one header name's values on a route. A value's end that begins
+// a held value is replaced as a body's is. If a held value crosses from one value to
+// the next, every value of the name becomes the placeholder.
+func (s *scrubbedWriter) maskValuesCut(vs []string) {
+	each := make([]string, len(vs))
+	for i, v := range vs {
+		each[i] = s.maskValueCut(v)
+	}
+	if len(vs) > 1 && s.maskValueCut(strings.Join(vs, "")) != strings.Join(each, "") {
+		for i := range each {
+			each[i] = string(s.m.Mask(s.m.Secrets()[0]))
+		}
+	}
+	copy(vs, each)
+}
+
+// maskValueCut masks one header value. Its end counts only from eight bytes up. A
+// JWT starts "e", so with no floor every "true", "false" and "no-cache" would lose
+// its last letter, and a client reading x-should-retry would misread it.
+func (s *scrubbedWriter) maskValueCut(v string) string {
+	const floor = 8
+	cut := slices.ContainsFunc(s.m.Secrets(), func(secret []byte) bool {
+		for k := min(len(secret)-1, len(v)); k >= floor; k-- {
+			if strings.HasSuffix(v, string(secret[:k])) {
+				return true
+			}
+		}
+		return false
+	})
+	if !cut {
+		return string(s.m.Mask([]byte(v)))
+	}
+	var out strings.Builder
+	mw := secretmask.NewMaskingWriter(&out, s.m)
+	_, _ = mw.Write([]byte(v))
+	_ = mw.CloseCut()
+	return out.String()
 }
 
 // gatewayTokenHolder is one provider's current token. Requests share one mint
@@ -205,6 +250,13 @@ func (h *gatewayTokenHolder) current(ctx context.Context, p *Proxy) (string, err
 		}
 		h.mu.Unlock()
 		return token, nil
+	}
+	// A refused or failed mint is asked again once per interval, not once per
+	// request: a sandbox retrying must not turn into a mint, and an audit row, each time.
+	if h.flight == nil && h.lastErr != nil && now.Before(h.nextAsk) {
+		err := h.lastErr
+		h.mu.Unlock()
+		return "", err
 	}
 	flight := h.startMintLocked(p)
 	h.mu.Unlock()
@@ -260,7 +312,7 @@ func (h *gatewayTokenHolder) settleLocked(p *Proxy, token string, exp time.Time,
 		procRegistry.DropRunValue(p.maskKey, []byte(h.priorMinted))
 	}
 	h.priorMinted, h.lastMinted = h.lastMinted, token
-	h.token, h.expires, h.refreshAt, h.lastErr = token, exp, now.Add(exp.Sub(now)/2), nil
+	h.token, h.expires, h.refreshAt, h.lastErr, h.nextAsk = token, exp, now.Add(exp.Sub(now)/2), nil, time.Time{}
 }
 
 // mint asks the control plane for a token. drop says the answer was definite,
