@@ -40,7 +40,7 @@ func TestPG_PromotedMacOSVMDoesNotCountItself(t *testing.T) {
 		now := time.Now().UTC()
 		if _, err := e.pg.CreateRun(ctx, types.AgentRun{ID: id, CreatedAt: now, UpdatedAt: now, CreatedBy: e.personP, Agent: "claude-code",
 			ConfinementClass: types.CC1, State: state, SPIFFEID: "spiffe://wardyn.local/agent-run/" + id.String(), RunnerTarget: "docker", MachineKind: types.MachineMacOSVM,
-			RunnerID: &mac, RunnerPoolID: &p.ID, RunnerPoolRevision: p.Revision, RunnerPoolSelection: types.RunnerPoolSelectedExplicit}); err != nil {
+			RunnerID: &mac, RunnerPoolID: &p.ID, RunnerPoolRevision: e.revision(p.ID), RunnerPoolSelection: types.RunnerPoolSelectedExplicit}); err != nil {
 			t.Fatalf("create a %s macOS VM run: %v", state, err)
 		}
 		return id
