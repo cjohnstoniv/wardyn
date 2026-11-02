@@ -146,3 +146,4 @@ At most one `run.service.health` and one `run.service.restart` row are written p
 - A runner that goes offline leaves the supervisor running. Its last reading stays; once that is 15 minutes old, Health reads unknown and renewal stops.
 - A paused or lost service is not renewed.
 - Nothing in Wardyn renews a lease except a healthy service's own sweep and the owner's `PATCH`.
+- A service is one run. There are no replicas and no autoscaling, and no check from outside the sandbox. A service that must run in several copies, or whose health must not rest on the sandbox's word, belongs on the sandbox controller directly.
