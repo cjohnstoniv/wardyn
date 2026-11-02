@@ -25,7 +25,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Saved run-page layouts gain the Desktop tile when they load. Removing it is remembered.
 - Added: Every widget on the run page except the Terminal now has an Expand button in its header that shows the same live widget in a large view, and a widget with more to scroll shows its scrollbar and an edge tint (#3940).
 - Added: the audit rows for a model call through an AI gateway, and for an MCP call on the same run, now record `gateway_call_id`, the id Wardyn sent as `X-Wardyn-Call-Id`, so a run's audit row can be matched to the gateway's access log line (#3864). With no gateway route nothing is sent or recorded.
-- The Audit screen and a run's Audit tab show a gateway call id on an egress row that went to a gateway with identity on, with a copy button. The same id appears in the gateway's log (#3864).
+- The Audit screen and a run's Audit tab show a gateway call id, with a copy button, on a model call or MCP call row of a run whose gateway has identity on. The same id appears in the gateway's log (#3864).
 - Gateway token rows read "Signed a gateway token for <provider>" or "Refused a gateway token for <provider>" and appear under the Credentials filter.
 - Added: an external AI gateway can now check Wardyn's run identity token. The setup page lists every claim and how to join a run's audit rows to the gateway's log by call id. The token format and key-set address are experimental until 0.11.
 - The signing keys publish at `/.well-known/wardyn-experimental/gateway-jwks.json`, rotated with `wardynd -rotate-gateway-identity-key`; both experimental until 0.11.
