@@ -10,7 +10,7 @@ import { aheadByHours } from "../src/app/lib/test-clock";
 
 // ============================================================================
 // A finished macOS VM run's disk line (mock M-D1 frames 9 to 11, MV-D10/D11/D12): GET /runs/{id}'s macos_disk
-// onto the Desktop block of "Attach from your terminal". The `none` runner behind this backend has no Mac, so
+// onto the run page's Desktop tile. The `none` runner behind this backend has no Mac, so
 // the COMPLETED seeded run is patched into a macOS VM on the wire; the server's own side is pinned in the Go
 // tests (run_macos_disk_test.go, run_macos_disk_pg_test.go).
 // ============================================================================

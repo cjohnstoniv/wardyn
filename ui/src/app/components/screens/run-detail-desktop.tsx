@@ -133,7 +133,8 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
         <p className="mt-2 text-meta text-muted-foreground">{mac ? DESKTOP.kindMacOS : DESKTOP.kind}</p>
         {noDoor && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{RUN_MODE_REFUSAL.BACKGROUND_ONLY("desktop")}</p>}
         {watchRefusal && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{watchRefusal}</p>}
-        {watchable && (
+        {/* What a person can do on this desktop is only said while the gateway can open it; with it off, the Off sentence is the one claim. */}
+        {watchable && desktopOn && (
           <>
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{DESKTOP.backgroundWatchTile}</p>
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{DESKTOP.backgroundWatchExposure}</p>

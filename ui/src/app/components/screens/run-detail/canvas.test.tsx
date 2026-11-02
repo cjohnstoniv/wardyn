@@ -768,3 +768,22 @@ describe("the Service widget", () => {
     expect(widgetHeading("Service")).not.toBeInTheDocument();
   });
 });
+
+// The default live rail leaves no gap where a tile this viewer can't see would have been (the Desktop and Attach tiles on a
+// run they did not start): Effective policy sits straight under Identity, as Identity sits under Credentials.
+describe("the default live rail, with the Desktop and Attach tiles out of sight", () => {
+  const audit = [{ id: "a1", action: "run.create", data: { clamp_warnings: [] } }] as unknown as WidgetContext["audit"];
+  const stride = () => tileY(widgetHeading("Identity")) - tileY(widgetHeading("Credentials"));
+  const below = () => tileY(widgetHeading("Effective policy")) - tileY(widgetHeading("Identity"));
+
+  it.each<[string, Record<string, unknown>]>([
+    ["a VM run someone else started", { machine_kind: "linux_vm" }],
+    ["a container run someone else started", {}],
+  ])("closes the rows of the hidden tiles on %s", async (_name, over) => {
+    render(<RunCanvas ctx={ctx({ run: { ...RUN, ...over } as unknown as WidgetContext["run"], audit })} />);
+    await screen.findByRole("heading", { name: "Effective policy" });
+    expect(widgetHeading("Desktop")).not.toBeInTheDocument();
+    expect(widgetHeading("Attach from your terminal")).not.toBeInTheDocument();
+    expect(below()).toBe(stride());
+  });
+});

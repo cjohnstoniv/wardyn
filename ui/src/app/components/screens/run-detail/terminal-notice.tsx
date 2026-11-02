@@ -22,7 +22,7 @@ import { TerminalPlayer } from "../../wardyn/terminal-player";
 import { WatchDesktopButton } from "./watch-desktop";
 import { Chip } from "../../wardyn/primitives";
 import { useOperator, useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
-import { mayEnterRunOrUnknown, runEntryRefusalLine } from "../../../lib/run-entry";
+import { isBackgroundRun, mayEnterRunOrUnknown, runEntryRefusalLine } from "../../../lib/run-entry";
 import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
 import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
 import { isMacOSVM } from "../../../lib/types/machine-kind";
@@ -63,8 +63,10 @@ export function TerminalPane({
   const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
   // The Watch link leads to this run's recording, so it needs one: has_recording is on every single-run read.
   const watchable = !recordingDisabled && run.has_recording !== false;
-  // Mock F-hero: a desktop the Mac lets be watched alone is offered here too, for whoever may enter the run.
-  const watchDesktop = run.state === "RUNNING" && canAttach && run.macos?.desktop === "observe" ? <WatchDesktopButton run={run} /> : undefined;
+  // Mock F-hero: a desktop the Mac lets be watched alone is offered here too, for whoever may enter the run. Never on a
+  // background run: its watch has its own ticket and lives in the Desktop tile, and this button's attach ticket refuses it.
+  const watchDesktop =
+    run.state === "RUNNING" && canAttach && !isBackgroundRun(run) && run.macos?.desktop === "observe" ? <WatchDesktopButton run={run} /> : undefined;
 
   // A run with no recording to replay shows the bytes the Output tab reads: a macOS VM run while it lives (a
   // macOS VM is not recorded), any other non-interactive run once the recording read found none. A read that
