@@ -715,6 +715,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	// Fresh run state on EVERY connection (not just at enter): a killed or
 	// stopped run must stop serving, and this is the cheapest place that sees
 	// every new connection.
+	gen := s.uiInbound.drops.Load() // before the reads the pass rests on (markUIReasserted)
 	run, err := s.cfg.Store.GetRun(ctx, sess.Run)
 	if err != nil {
 		return nil, uiFail(ctx, http.StatusNotFound, reasonRunNotFound, "run not found")
@@ -733,7 +734,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 		return nil, uiFail(ctx, de.status, de.reason, de.msg)
 	}
 	sess.SandboxRef = run.SandboxRef
-	s.markUIReasserted(sess, s.cfg.Now())
+	s.markUIReasserted(sess, s.cfg.Now(), gen)
 	// A paused run is thawed before the execs below (run_pause.go).
 	if err := s.thawForExec(ctx, run, uiActorType(sess), sess.Principal, "presence"); err != nil {
 		return nil, uiFail(ctx, http.StatusBadGateway, reasonUIGatewayResumeFailed, "run is paused and could not be resumed; try again")

@@ -463,6 +463,7 @@ func (s *Server) uiReassertRelay(ctx context.Context, sess uiSession) *uiDialErr
 	if !s.uiReassertDue(sess, now) {
 		return nil
 	}
+	gen := s.uiInbound.drops.Load() // before the reads the pass rests on (markUIReasserted)
 	run, err := s.cfg.Store.GetRun(ctx, sess.Run)
 	if err != nil {
 		// Fail CLOSED, for the same reason the revocation arm does: "the check
@@ -474,7 +475,7 @@ func (s *Server) uiReassertRelay(ctx context.Context, sess uiSession) *uiDialErr
 	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {
 		return de
 	}
-	s.markUIReasserted(sess, now)
+	s.markUIReasserted(sess, now, gen)
 	return nil
 }
 
@@ -494,10 +495,15 @@ func (s *Server) uiReassertDue(sess uiSession, now time.Time) bool {
 
 // markUIReasserted records a CLEAN pass only. A refused or unverifiable check
 // leaves the window open, so the next request re-checks instead of being waved
-// through for the rest of the interval.
-func (s *Server) markUIReasserted(sess uiSession, now time.Time) {
+// through for the rest of the interval. A pass read before a governance write is not recorded either: gen is
+// the drop count (uiInboundState.drops) read before the check's first read, and a drop since then means the
+// write would otherwise be skipped for up to uiReassertInterval (dropInboundSessions).
+func (s *Server) markUIReasserted(sess uiSession, now time.Time, gen uint64) {
 	s.uiReassertMu.Lock()
 	defer s.uiReassertMu.Unlock()
+	if s.uiInbound.drops.Load() != gen {
+		return
+	}
 	if s.uiReassert == nil {
 		s.uiReassert = map[string]time.Time{}
 	} else if len(s.uiReassert) > 1024 {
