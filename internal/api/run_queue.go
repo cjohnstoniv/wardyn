@@ -284,8 +284,9 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		switch {
 		case q.f.schedule != nil:
 			sentence = scheduledWaitMsg(q.f.schedule)
-		case q.f.place.waitsForRoom:
-			sentence = runnerpool.WaitRunnersAtCapacityMsg(pool.Name)
+		case q.f.place.waitsForRoom || created.StatusDetail == statusDetailQueuePrefix+string(runnerpool.WaitRunnersAtCapacity):
+			// The second test is a capped pool with room whose runners are full: the promotion's token says so.
+			sentence = q.runnerLimitSentence(s, ctx)
 		}
 		warnings = append(warnings, sentence)
 		runs := []types.AgentRun{created}
@@ -307,6 +308,48 @@ func (q queuedCreate) waitReason() runnerpool.WaitReason {
 		return runnerpool.WaitRunnersAtCapacity
 	}
 	return runnerpool.WaitAtCapacity
+}
+
+// runnerLimitSentence is the wait sentence of a launch its runners hold back: it names the limit, by the
+// same size the promotion holds each runner to (queueRunnerFree). With several runners it names the one
+// holding the fewest runs. A read that fails, or runners that have found room since, leave the sentence
+// that names no limit: this is the answer's wording, and the promotion decides.
+func (q queuedCreate) runnerLimitSentence(s *Server, ctx context.Context) string {
+	pool, eligible := q.f.place.pool.Name, q.f.place.eligible
+	fits, err := s.runnerFits(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: read runner limits for the wait sentence", slog.Any("err", err))
+		return runnerpool.WaitRunnersAtCapacityMsg(pool)
+	}
+	var nearest poolTarget
+	limit := ""
+	for _, t := range eligible {
+		f := fits[t.id]
+		var need types.RunnerAmounts
+		if u := q.f.place.unbound; u != nil && f.limits != nil {
+			need = startSizeOn(*u, f.limits)
+		}
+		reason := runnerpool.NoRoomReason(f.limits, f.used, need)
+		if reason != "" && (limit == "" || f.used.Runs < fits[nearest.id].used.Runs) {
+			nearest, limit = t, reason
+		}
+	}
+	if limit == "" {
+		return runnerpool.WaitRunnersAtCapacityMsg(pool)
+	}
+	name := fits[nearest.id].runner.Name
+	if rs, ok := s.cfg.Store.(store.RemoteRunnerStore); ok && nearest.runnerID == nil {
+		if got, err := rs.GetRemoteRunner(ctx, nearest.id); err == nil {
+			name = got.Runner.Name
+		}
+	}
+	if name == "" {
+		name = nearest.id
+	}
+	if len(eligible) == 1 {
+		return runnerpool.WaitRunnerAtLimitMsg(name, limit)
+	}
+	return runnerpool.WaitRunnersAtLimitMsg(pool, name, limit)
 }
 
 // entry is the run_queue row a launch is stored with.
