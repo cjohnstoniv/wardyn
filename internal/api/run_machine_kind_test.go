@@ -141,6 +141,45 @@ func TestPlacementCapability_LinuxVMWithAFolderNeedsVirtiofs(t *testing.T) {
 	}
 }
 
+// A Linux VM run that carries a drive goes only to a runner that says it shares one into the guest:
+// an older or Kubernetes runner is refused at Review with the sentence that says what to do, on the
+// drives field. The same run without a drive, or as a container, or on a runner that says so is not.
+func TestStepPlacementCapability_LinuxVMWithADriveNeedsTheCap(t *testing.T) {
+	s := capsServer(&fakeRunner{})
+	with, without := laptopCaps(types.CC1), laptopCaps(types.CC1)
+	with.LinuxVM = &runnerwire.VMCaps{MachineType: "pc-q35-10.0", CPUModel: "Haswell-v4", QEMUVersion: "10.0.13", Virtiofs: true, Drives: true}
+	without.LinuxVM = &runnerwire.VMCaps{MachineType: "pc-q35-10.0", CPUModel: "Haswell-v4", QEMUVersion: "10.0.13", Virtiofs: true}
+	offers, older := installRunner(t, s, true, with), installRunner(t, s, true, without)
+	team := []runDrive{{resolved: types.ResolvedDrive{Drive: types.UserDrive{Name: "Team", Backend: types.DriveBackendHostPath}}}}
+
+	for _, tc := range []struct {
+		name   string
+		runner uuid.UUID
+		kind   string
+		drives []runDrive
+		want   bool
+	}{
+		{name: "a drive on a runner that lacks the cap", runner: older, kind: "linux_vm", drives: team, want: true},
+		{name: "a drive on a runner that has it", runner: offers, kind: "linux_vm", drives: team},
+		{name: "no drive on a runner that lacks it", runner: older, kind: "linux_vm"},
+		{name: "a container with a drive", runner: older, drives: team},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := createRunRequest{Placement: types.PlacementLocal, RunnerID: tc.runner.String(), MachineKind: tc.kind}
+			w := httptest.NewRecorder()
+			f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(capsCtx), req: &req, drives: tc.drives}
+			ok := s.stepPlacementCapability(f, nil)
+			if ok == tc.want {
+				t.Fatalf("ok = %v, %d %s", ok, w.Code, w.Body.String())
+			}
+			if tc.want && (w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `"placement_capability"`) ||
+				!strings.Contains(w.Body.String(), `"drives"`) || !strings.Contains(w.Body.String(), "Update the runner, or run without drives.")) {
+				t.Fatalf("%d %s, want 422 placement_capability on drives saying to update the runner", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 // The create fold counts the folders the sandbox would get from the resolved policy, so a VM run
 // whose policy mounts a folder is refused at create on a runner without virtiofs.
 func TestStepPlacementCapability_CountsThePolicysFolders(t *testing.T) {

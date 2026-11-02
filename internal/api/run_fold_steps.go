@@ -362,6 +362,7 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 		ask.Prompts = slices.ContainsFunc(f.harnesses, func(h types.RunHarness) bool { return h.Task != "" })
 		ask.Holds = macOSVMHolds(*f.req, f.spec)
 	}
+	ask.MountsDrives = mountsDrives(f.drives, f.keep)
 	if s.placementCapabilityRefusalFor(f.r.Context(), *f.req, f.place, f.ceiling, mounts, ask).write(s, f.w, f.r) {
 		return false
 	}
