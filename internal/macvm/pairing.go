@@ -110,14 +110,15 @@ func (p *pairer) pair(c net.Conn) {
 	if p.idle != nil {
 		_ = p.idle.Close()
 	}
+	// Announce before c can be taken: take reads idle under p.mu, so a host that used the guest finds the event
+	// already published, never one lost to a stop that closed the event hub first.
+	if p.connected != nil {
+		p.connected()
+	}
 	p.idle = c
 	close(p.gen)
 	p.gen = make(chan struct{})
-	cb := p.connected
 	p.mu.Unlock()
-	if cb != nil {
-		cb()
-	}
 }
 
 // refused logs a failed proof, within refusedLogEvery.
