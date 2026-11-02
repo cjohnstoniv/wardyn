@@ -4,7 +4,10 @@
 package macvm
 
 import (
+	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,8 +24,8 @@ import (
 
 // The lines `wardyn-runnerd macos-vm edit-base` prints, from the helper's edit-base (approved copy).
 const (
-	EditStartLine    = "Editing this Mac's macOS base. Runs keep using the current base until the edited one passes its checks."
-	editCodeLine     = "Sign in as wardyn-admin with the one-time code in %s."
+	EditStartLine    = "This edits a copy of the macOS base your VMs start from, not this Mac. Runs keep using the current base until the copy passes its checks."
+	editCodeLine     = "Sign in as wardyn-admin with the one-time code: click Show code in the window, or read it in %s."
 	editProfileLine  = "While signed in as wardyn-admin, open %s, then review and install the staged profile in System Settings."
 	EditCheckingLine = "The window closed and the guest shut down. Checking the edited base: desktop control, accounts, Remote Login and the launcher's self-test."
 	editReadyLine    = "The edited base is ready, and runs now use it. Desktop: %s."
@@ -38,10 +41,16 @@ type ScreenText struct {
 	CodeFile     string
 }
 
-// editScreen is the edit window's text.
+// editScreen is the edit window's text. Its lines run in the order a person needs them: the code, the
+// setup questions, who they are and where Terminal is, Full Disk Access, the certificates, then the two
+// checks the recheck makes.
 var editScreen = ScreenText{
 	Title: "Wardyn: edit this macOS VM base",
-	Steps: "Sign in as wardyn-admin with the one-time code. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
+	Steps: "Sign in as wardyn-admin with the one-time code. Click Show code to see it. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
+		"The first time, macOS may ask setup questions. Skip each one, add no Apple account, and sign in. What you click stays for every run.\n" +
+		"You are signed in as agent. For administrator steps open Terminal, under Finder > Go > Utilities (Spotlight is off here), and run su wardyn-admin.\n" +
+		"Full Disk Access, for folder shares: System Settings > Privacy & Security > Full Disk Access, add " + guestagent.MacAgentBinaryPath + ". It lets every program a run starts in this VM read protected folders, in every run.\n" +
+		"Certificates that are not trusted are listed in the Terminal where you started edit-base. Trust each one in the admin Terminal.\n" +
 		"For desktop control: in System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on \"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n" +
 		"Leave Remote Login off and add no accounts: the check refuses a base with either.",
 	Closable: true,
@@ -213,6 +222,7 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 		}
 	}
 	defer removeCode()
+	fmt.Fprintln(o.Out, "Starting the copy in a window. This takes about 2 minutes.")
 	offered, err := o.mintCode(ctx, spec, codeFile, staging)
 	if err != nil {
 		return m, err
@@ -221,13 +231,14 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 	for _, p := range offered {
 		fmt.Fprintf(o.Out, editProfileLine+"\n", p)
 	}
+	o.printUntrusted(base)
 	if err := o.window(ctx, spec); err != nil {
 		return m, err
 	}
 	removeCode()
 	fmt.Fprintln(o.Out, EditCheckingLine)
 	last, _ := ReadEditRecord(base, m)
-	desktop, err := o.recheck(ctx, spec, m, staging, len(offered) > 0, staged)
+	desktop, read, err := o.recheck(ctx, spec, m, staging, len(offered) > 0, staged)
 	var discarded *EditDiscardedError
 	if errors.As(err, &discarded) {
 		discarded.Since = m.CreatedAt
@@ -247,8 +258,9 @@ func EditBase(ctx context.Context, o EditOptions) (Manifest, error) {
 	if err := swapBase(ctx, staging, base); err != nil {
 		return m, err
 	}
-	o.writeRecord(base, m, EditRecord{EditedAt: o.Now().UTC(), Recheck: EditRecheckPassed})
-	fmt.Fprintf(o.Out, editReadyLine+"\n", desktop)
+	read.EditedAt, read.Recheck = o.Now().UTC(), EditRecheckPassed
+	o.writeRecord(base, m, read)
+	fmt.Fprintf(o.Out, editReadyLine+"\n", o.desktopWords(desktop))
 	return m, nil
 }
 
@@ -385,8 +397,9 @@ func (o *EditOptions) window(ctx context.Context, spec MachineSpec) error {
 // (removeProfiles: copied, and staged), and after Remote Login it reads the items back into staging's
 // tools.json (ReadBackItems), a failure of either discarding the copy with no line of its own. The reset is
 // what staging's AdminPasswordFile holds after it, and what a passing copy's swap carries into the base. It
-// returns the desktop mode.
-func (o *EditOptions) recheck(ctx context.Context, spec MachineSpec, m Manifest, staging string, copied bool, staged []string) (desktop string, err error) {
+// returns the desktop mode and, in an EditRecord, what the boot read of the certificates and Full Disk Access
+// (reportRead prints it as the boot read it; a read that failed is empty, never trusted or allowed).
+func (o *EditOptions) recheck(ctx context.Context, spec MachineSpec, m Manifest, staging string, copied bool, staged []string) (desktop string, read EditRecord, err error) {
 	err = o.guest(ctx, spec, func(g EditGuest) error {
 		reset, err := randomCode(24)
 		if err != nil {
@@ -423,6 +436,7 @@ func (o *EditOptions) recheck(ctx context.Context, spec MachineSpec, m Manifest,
 		if err := ReadBackItems(ctx, g, staging); err != nil {
 			return fmt.Errorf("macvm: the edited base's items read-back: %w", err)
 		}
+		read = o.reportRead(staging, desktop, p.FullDiskAccess)
 		res := ToolsResult{Harnesses: slices.Clone(m.Harnesses), Withheld: map[string]error{}, Pins: map[string]PinRecord{}}
 		var be *BaseSelftestError
 		if err := selftestBase(ctx, g, &res, o.Log); errors.As(err, &be) {
@@ -437,7 +451,106 @@ func (o *EditOptions) recheck(ctx context.Context, spec MachineSpec, m Manifest,
 		}
 		return nil
 	})
-	return desktop, err
+	return desktop, read, err
+}
+
+// desktopWords is a desktop mode as the person reads it: observe is "view only".
+func (o *EditOptions) desktopWords(mode string) string {
+	if mode == DesktopObserve {
+		return "view only"
+	}
+	return mode
+}
+
+// reportRead prints what the recheck's boot read: each ca item in staging's tools.json (ReadBackItems has
+// just rewritten it), Full Disk Access as the guest agent answered, and the desktop mode. It returns the
+// same as an EditRecord for the status. A certificate that reads neither trusted nor not trusted, and a
+// Full Disk Access answer that is neither allowed nor refused, are "could not be read".
+func (o *EditOptions) reportRead(staging, desktop, fda string) EditRecord {
+	rec, err := ReadToolsRecord(staging)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		o.Log.Warn("macvm: the edited base's tools record was not read for the report", "err", err.Error())
+	}
+	read := EditRecord{ReadAt: o.Now().UTC(), Certs: map[string]string{}}
+	row := func(what, state string) {
+		words := map[string]string{ItemTrusted: "trusted", ItemNotTrusted: "not trusted", "allowed": "allowed", "refused": "refused"}[state]
+		fmt.Fprintf(o.Out, "  %-27s %s\n", what, cmp.Or(words, "could not be read"))
+	}
+	fmt.Fprintln(o.Out, "Read from the edited base in this boot:")
+	for _, r := range rec.Items {
+		if r.Kind != ItemKindCA {
+			continue
+		}
+		if r.State == ItemTrusted || r.State == ItemNotTrusted {
+			read.Certs[r.Name] = r.State
+		} else {
+			read.Certs[r.Name] = ""
+		}
+		row("certificate "+r.Name, read.Certs[r.Name])
+	}
+	if fda == "allowed" || fda == "refused" {
+		read.FullDiskAccess = fda
+	}
+	row("Full Disk Access", read.FullDiskAccess)
+	fmt.Fprintf(o.Out, "  %-27s %s\n", "desktop", o.desktopWords(desktop))
+	return read
+}
+
+// printUntrusted prints, for each ca item the base's tools.json reads as not trusted, its name, subject and
+// SHA-256 and the command that trusts it once a person signed in as wardyn-admin runs it. Nothing runs it
+// for them. With no such item it prints nothing. The subject and hash come from the install list's file for
+// that item when the file is the one the base was built from; otherwise the base's recorded fingerprint
+// and no subject.
+func (o *EditOptions) printUntrusted(base string) {
+	rec, err := ReadToolsRecord(base)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			o.Log.Warn("macvm: the base's tools record was not read for the certificate list", "err", err.Error())
+		}
+		return
+	}
+	colons := func(h string) string {
+		if h == "" {
+			return "not recorded"
+		}
+		var b strings.Builder
+		for i, c := range strings.ToUpper(h) {
+			if i > 0 && i%2 == 0 {
+				b.WriteByte(':')
+			}
+			b.WriteRune(c)
+		}
+		return b.String()
+	}
+	sum256 := func(b []byte) string {
+		h := sha256.Sum256(b)
+		return hex.EncodeToString(h[:])
+	}
+	header := false
+	for _, r := range rec.Items {
+		if r.Kind != ItemKindCA || r.State != ItemNotTrusted {
+			continue
+		}
+		if !header {
+			fmt.Fprintln(o.Out)
+			fmt.Fprintln(o.Out, "Not yet trusted in this base. Run each command in the admin Terminal, check that the subject and SHA-256 are the ones you expect, then confirm macOS's prompt.")
+			header = true
+		}
+		subject, sum := "not available: the install list's file is not the one this base was built from", r.Fingerprint
+		for _, it := range o.Items.Items {
+			if it.Kind != ItemKindCA || it.Name != r.Name || it.SHA256 != r.SHA256 {
+				continue
+			}
+			if b, err := os.ReadFile(it.Path); err != nil || sum256(b) != r.SHA256 {
+				break
+			}
+			if cert, der, err := readCA(it.Path); err == nil {
+				subject, sum = cert.Subject.String(), sum256(der)
+			}
+		}
+		fmt.Fprintf(o.Out, "%s\n  subject  %s\n  SHA-256  %s\n  sudo security add-trusted-cert -d -r trustRoot -p ssl -k %s %s/%s\n",
+			r.Name, subject, colons(sum), guestagent.MacSystemKeychain, guestagent.ItemDir(r.Name), guestagent.ItemCert)
+	}
 }
 
 // macOSAccounts are macOS's own accounts below uid 500 that have no leading "_".
@@ -479,6 +592,15 @@ type EditRecord struct {
 	EditedAt time.Time `json:"edited_at,omitzero"`
 	// Recheck is the last edit's recheck: EditRecheckPassed, or why its copy was discarded.
 	Recheck string `json:"recheck"`
+	// ReadAt is when the last passing edit's recheck read the two fields below, in that boot (zero: none
+	// has, or the record predates them).
+	ReadAt time.Time `json:"read_at,omitzero"`
+	// Certs is each ca item's state as that boot read it: ItemTrusted, ItemNotTrusted, or "" for one it
+	// could not read.
+	Certs map[string]string `json:"certs,omitempty"`
+	// FullDiskAccess is "allowed" or "refused" for the guest agent as that boot read it, "" when it could
+	// not be read (a guest agent that predates the probe included).
+	FullDiskAccess string `json:"full_disk_access,omitempty"`
 }
 
 func editRecordPath(baseDir string) string { return baseDir + ".edit.json" }

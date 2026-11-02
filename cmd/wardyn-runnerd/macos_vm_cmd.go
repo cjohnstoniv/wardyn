@@ -12,8 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -235,6 +237,7 @@ type macOSVMStatus struct {
 	progress, counted, minCPUs, minMemoryMiB int
 	setupCode                                string
 	withheld                                 []string // selftestWithheld's lines, for a ready base
+	editRead                                 []string // the last edit's recheck read (editReadLines), for a ready base that has one
 	// byHand: the helper's probe says this Mac has no guest provisioning, so its prepare needs setup by hand.
 	byHand bool
 }
@@ -259,6 +262,7 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 		st.PreparedAt, st.HostOS = c.Base.CreatedAt, macProductVersion()
 		st.Desktop, st.Harnesses, st.minCPUs, st.minMemoryMiB = cmp.Or(c.Desktop, "none"), append(st.Harnesses, c.Harnesses...), c.MinCPUs, c.MinMemoryMiB
 		st.withheld = selftestWithheld(m.layout.BaseDir(0))
+		st.editRead = m.editReadLines()
 	}
 	if ev, ok, _, _ := lastHelperLines(m.layout.PrepareLog()); ok {
 		st.Phase = ev.Phase
@@ -286,6 +290,32 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 		st.HeldDiskBytes += e.DiskReserve
 	}
 	return st, nil
+}
+
+// editReadLines are the status lines for what the last passing edit's recheck read in its boot: each
+// certificate and Full Disk Access, with the time that boot read them. A read that failed says it could
+// not be read, never trusted or allowed. None when the base has no edit record, or one that predates the
+// read.
+func (m *macOSVMs) editReadLines() []string {
+	man, err := macvm.ReadManifest(m.layout.BaseDir(0))
+	if err != nil {
+		return nil
+	}
+	rec, ok := macvm.ReadEditRecord(m.layout.BaseDir(0), man)
+	if !ok || rec.ReadAt.IsZero() {
+		return nil
+	}
+	when := rec.ReadAt.Local().Format("2 Jan 15:04")
+	var lines []string
+	if len(rec.Certs) > 0 {
+		var certs []string
+		for _, name := range slices.Sorted(maps.Keys(rec.Certs)) {
+			state := map[string]string{macvm.ItemTrusted: "trusted", macvm.ItemNotTrusted: "not trusted"}[rec.Certs[name]]
+			certs = append(certs, name+" "+cmp.Or(state, "could not be read"))
+		}
+		lines = append(lines, fmt.Sprintf("certificates, read at the last edit (%s): %s", when, strings.Join(certs, ", ")))
+	}
+	return append(lines, fmt.Sprintf("Full Disk Access for the guest agent, read at the last edit (%s): %s", when, cmp.Or(rec.FullDiskAccess, "could not be read")))
 }
 
 // statusNow is the clock the base's age is read against (tests replace it).
@@ -320,6 +350,9 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 	if st.State == runnerwire.MacVMBaseReady {
 		fmt.Fprintf(out, "harnesses: %s; desktop: %s; guest minimum: %d CPUs, %d MiB\n", strings.Join(st.Harnesses, ", "), desktopMode(st.Desktop), st.minCPUs, st.minMemoryMiB)
 		for _, l := range st.withheld {
+			fmt.Fprintln(out, l)
+		}
+		for _, l := range st.editRead {
 			fmt.Fprintln(out, l)
 		}
 	}
