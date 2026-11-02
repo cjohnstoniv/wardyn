@@ -45,9 +45,10 @@ func testGatewayUIDir(t *testing.T) string {
 	return dir
 }
 
-func testGatewayGet(srv *Server, method, path string) *httptest.ResponseRecorder {
+func testGatewayGet(t *testing.T, srv *Server, method, path string) *httptest.ResponseRecorder {
+	t.Helper()
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, httptest.NewRequest(method, path, nil))
+	panicFails(t, srv.Handler()).ServeHTTP(w, httptest.NewRequest(method, path, nil))
 	return w
 }
 
@@ -67,8 +68,8 @@ func TestGatewayJWKSOffEqualsAnUnregisteredPath(t *testing.T) {
 				srv := testGatewayServer(t, ui, base, id)
 				for _, method := range methods {
 					t.Run(fmt.Sprintf("ui=%v base=%q %s %s", ui != "", base, signerName, method), func(t *testing.T) {
-						got := testGatewayGet(srv, method, base+testGatewayJWKSPath)
-						want := testGatewayGet(srv, method, base+testGatewaySibling)
+						got := testGatewayGet(t, srv, method, base+testGatewayJWKSPath)
+						want := testGatewayGet(t, srv, method, base+testGatewaySibling)
 						if got.Code != want.Code || got.Body.String() != want.Body.String() || !reflect.DeepEqual(got.Header(), want.Header()) {
 							t.Errorf("route: %d %v %q\nsibling: %d %v %q", got.Code, got.Header(), got.Body, want.Code, want.Header(), want.Body)
 						}
@@ -110,10 +111,10 @@ func TestGatewayJWKSServesTheKeysThatVerifyAToken(t *testing.T) {
 		askedToCreate = askedToCreate || create
 		return signer, nil
 	})
-	if w := testGatewayGet(srv, http.MethodGet, testGatewayJWKSPath); w.Code != http.StatusNotFound {
+	if w := testGatewayGet(t, srv, http.MethodGet, testGatewayJWKSPath); w.Code != http.StatusNotFound {
 		t.Errorf("outside the base path: %d, want 404", w.Code)
 	}
-	w := testGatewayGet(srv, http.MethodGet, "/wardyn"+testGatewayJWKSPath)
+	w := testGatewayGet(t, srv, http.MethodGet, "/wardyn"+testGatewayJWKSPath)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", w.Code, w.Body)
 	}
@@ -149,7 +150,7 @@ func TestGatewayJWKSUnreadableKeyIs503(t *testing.T) {
 	srv := testGatewayServer(t, "", "", func(context.Context, bool) (*gatewayidentity.Signer, error) {
 		return nil, errors.New("decrypt failed: row wardyn-gateway-identity-key")
 	})
-	w := testGatewayGet(srv, http.MethodGet, testGatewayJWKSPath)
+	w := testGatewayGet(t, srv, http.MethodGet, testGatewayJWKSPath)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status %d", w.Code)
 	}
