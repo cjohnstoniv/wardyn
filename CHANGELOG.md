@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.11] — 2026-11-02
+
 ### Added
 
 - A Linux VM run can mount a drive bound to its runner. An older runner and a Kubernetes runner are refused at Review. Do not rely on a file lock across two VMs.
