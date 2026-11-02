@@ -129,6 +129,29 @@ func TestUnitAdminOutsideSubtreeAdd(t *testing.T) {
 	}
 }
 
+// TestRouteAuditMembershipAddUserTypeIsNoProbe: a unit admin adding a user type nobody in their units
+// belongs to gets the same answer whether the type exists or not, so the add cannot list the
+// deployment's user types. The admin token, who governs everything, still hears about a missing type.
+func TestRouteAuditMembershipAddUserTypeIsNoProbe(t *testing.T) {
+	e := newUnitAdminEnv(t, false)
+	if _, err := e.pg.CreateUserType(context.Background(), types.UserType{ID: "route-audit-real", Name: "Route audit"}); err != nil {
+		t.Fatal(err)
+	}
+	add := func(userType string) string {
+		return `{"subject_type":"user_type","subject":"` + userType + `","unit_id":"` + e.a1.ID.String() + `","priority":1}`
+	}
+	path := "/api/v1/governance/memberships"
+	for _, ut := range []string{"route-audit-real", "route-audit-missing"} {
+		if w := e.call(e.adminA, http.MethodPost, path, add(ut)); !scopeRefused(t, w) {
+			t.Errorf("unit admin adds user type %q = %d %s, want 403 unit_scope_denied", ut, w.Code, w.Body)
+		}
+	}
+	w := e.admin(http.MethodPost, path, add("route-audit-missing"))
+	if w.Code != http.StatusBadRequest || wireReason(t, w) != reasonAccessUnknownUserType {
+		t.Errorf("admin adds a missing user type = %d %s, want 400 %s", w.Code, w.Body, reasonAccessUnknownUserType)
+	}
+}
+
 // addedTo reports whether subject holds a membership in unit u.
 func (e *unitAdminEnv) addedTo(subject string, u types.GovernanceUnit) bool {
 	e.t.Helper()
