@@ -66,7 +66,10 @@ func rotateGatewayIdentityKeyMode(f *bootFlags) error {
 	}
 	defer pool.Close()
 
-	releaseInstance, ok, err := db.TryAdvisoryLock(ctx, pool, db.SingleInstanceLockKey)
+	// Each lock on a session of its own, as claimSingleInstance holds it: the mode's work below asks
+	// this pool for connections while both are held, and a hold on a pooled connection is the nested
+	// acquire the pool guard refuses.
+	_, releaseInstance, ok, err := db.TryAdvisoryLockDedicated(ctx, pool, db.SingleInstanceLockKey)
 	if err != nil {
 		return fmt.Errorf("take the single-instance lock: %w", err)
 	}
@@ -74,7 +77,7 @@ func rotateGatewayIdentityKeyMode(f *bootFlags) error {
 		return errors.New("refusing to rotate: a wardynd is serving this database, and it would keep signing with the key it loaded; stop it first")
 	}
 	defer releaseInstance()
-	releaseRekey, ok, err := db.TryAdvisoryLock(ctx, pool, db.SecretRekeyLockKey)
+	_, releaseRekey, ok, err := db.TryAdvisoryLockDedicated(ctx, pool, db.SecretRekeyLockKey)
 	if err != nil {
 		return fmt.Errorf("take the rekey lock: %w", err)
 	}

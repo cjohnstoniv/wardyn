@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
@@ -15,8 +16,9 @@ import (
 
 // The whole mode against a real Postgres: a rotation and a -retire-previous through the
 // store a serving daemon reads, each leaving its secret.rekey row; a serving
-// non-HA daemon's lock refuses; and an install with no key is refused and gets
-// none. Guarded by WARDYN_TEST_PG, through rotateDatabase.
+// non-HA daemon's lock refuses, and so does another maintenance mode's; and an
+// install with no key is refused and gets none. Guarded by WARDYN_TEST_PG, through
+// rotateDatabase.
 func TestRotateGatewayIdentityKeyMode_EndToEnd(t *testing.T) {
 	dsn, pool := rotateDatabase(t)
 	id := newIdentity(t)
@@ -54,16 +56,25 @@ func TestRotateGatewayIdentityKeyMode_EndToEnd(t *testing.T) {
 		return signer
 	}
 
-	release, ok, err := db.TryAdvisoryLock(ctx, pool, db.SingleInstanceLockKey)
-	if err != nil || !ok {
-		t.Fatalf("hold the single-instance lock: %v, %v", ok, err)
-	}
-	if err := rotateGatewayIdentityKeyMode(f); err == nil {
-		t.Error("rotated while the single-instance lock was held")
-	}
-	release()
-	if read().KeyID() != first.KeyID() {
-		t.Fatal("the refused rotation changed the key")
+	for _, c := range []struct {
+		name string
+		key  int64
+		want string
+	}{
+		{"a serving daemon's single-instance lock", db.SingleInstanceLockKey, "a wardynd is serving this database"},
+		{"another maintenance mode's rekey lock", db.SecretRekeyLockKey, "another maintenance mode holds the rekey advisory lock"},
+	} {
+		release, ok, err := db.TryAdvisoryLock(ctx, pool, c.key)
+		if err != nil || !ok {
+			t.Fatalf("hold %s: %v, %v", c.name, ok, err)
+		}
+		if err := rotateGatewayIdentityKeyMode(f); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("under %s: err = %v, want %q", c.name, err, c.want)
+		}
+		release()
+		if read().KeyID() != first.KeyID() {
+			t.Fatalf("the rotation refused under %s changed the key", c.name)
+		}
 	}
 
 	if err := rotateGatewayIdentityKeyMode(f); err != nil {
