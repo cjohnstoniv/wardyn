@@ -11,7 +11,6 @@ import { Chip } from "../../../../wardyn/primitives";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_WALLS } from "../../../../wardyn/copy/personal-walls";
-import { WallsApplyLine } from "../../steps/tools/totals";
 import { reachedHosts, wallsLeaveOut, wallsLeaveOutKnobs, type WallsHostKnob } from "../../lenses/tools-lens";
 import { ReviewGroup } from "../review-group";
 import { AccessCredentials } from "./access-credentials";
@@ -54,7 +53,6 @@ export function AccessGroup({ draft, pre, preview, docRows, go, onLeftOut, walls
         </>
       )}
     >
-      <WallsApplyLine walls={walls} />
       {leftOut.map((host) => (
         <p key={host} data-testid="walls-leave-out" className="flex items-center gap-2 rounded-md border border-border bg-muted px-3 py-2 text-xs text-foreground">
           <Grid3x3 aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />

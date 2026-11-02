@@ -271,6 +271,8 @@ describe("Your walls apply (G4a)", () => {
     }} />);
     expect(line()).toHaveTextContent("Your walls apply: 4 listed sites, plus what the run's setup needs, 2 sites never reached, barrier at least Wall, no copy out or download, 2 kinds of credentials kept out. Change your walls");
     expect(screen.getByRole("link", { name: NR_WALLS.CHANGE_WALLS })).toHaveAttribute("href", "/account");
+    // A new tab: the draft lives in the route's state, so leaving the page would drop it.
+    expect(screen.getByRole("link", { name: NR_WALLS.CHANGE_WALLS })).toHaveAttribute("target", "_blank");
   });
 
   it("says one knob alone, and never claims 'only' for a listed allowlist", () => {

@@ -8,7 +8,6 @@
 // this exact body; only then does its verdict show.
 
 import { Grid3x3 } from "lucide-react";
-import { Link, useInRouterContext } from "react-router-dom";
 import { AdoLaunchNote, AdoOwnTokenNote, AdoRunTokenLine, adoLaunchNoteKind, ownTokenNoteOrgs } from "../../../../wardyn/ado-run-token-line";
 import { Switch } from "../../../../wardyn/form-primitives";
 import { Chip } from "../../../../wardyn/primitives";
@@ -16,6 +15,7 @@ import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
 import { CC_META } from "../../../../wardyn/cc-meta";
 import { NR_WALLS, YOUR_WALLS } from "../../../../wardyn/copy/personal-walls";
 import type { PersonalWallsSpec } from "../../../../../lib/api/walls";
+import { appURL } from "../../../../../lib/base-path";
 import type { SCMAccessPAT } from "../../../../../lib/types/ado-pat";
 import type { AccessCredential, AccessFacts, AccessUnlisted } from "../../../../../lib/types/new-run-access";
 import { hostBadge, rowLabel, wallsLeaveOut, type HarnessNames, type HostBadge } from "../../lenses/tools-lens";
@@ -60,16 +60,15 @@ export function wallsApplyClauses(walls: PersonalWallsSpec | undefined): string[
  * Tools step draw it. Nothing for walls that name nothing, and nothing when the walls could not be read (`walls` is then undefined).
  */
 export function WallsApplyLine({ walls }: { walls: PersonalWallsSpec | undefined }) {
-  const routed = useInRouterContext();
   const clauses = wallsApplyClauses(walls);
   if (clauses.length === 0) return null;
-  const LINK = "font-semibold text-primary hover:underline";
   return (
     <p data-testid="walls-apply" title={walls?.allowed_domains ? YOUR_WALLS.SITES_ONLY_HINT : undefined} className="flex items-start gap-2 rounded-md border border-border bg-muted px-3 py-2 text-xs text-foreground">
       <Grid3x3 aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 [overflow-wrap:anywhere]">
         {NR_WALLS.APPLY_BEFORE}{clauses.join(NR_WALLS.APPLY_JOIN)}{NR_WALLS.APPLY_AFTER}{" "}
-        {routed ? <Link to="/account" className={LINK}>{NR_WALLS.CHANGE_WALLS}</Link> : <a href="/account" className={LINK}>{NR_WALLS.CHANGE_WALLS}</a>}
+        {/* A new tab: the draft lives in the New Run route's state, so leaving this page for Settings would drop it. */}
+        <a href={appURL("/account")} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary hover:underline">{NR_WALLS.CHANGE_WALLS}</a>
       </span>
     </p>
   );

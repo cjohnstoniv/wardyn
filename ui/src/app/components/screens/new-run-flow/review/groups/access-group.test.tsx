@@ -90,23 +90,4 @@ describe("Review: Access", () => {
       expect(screen.queryByTestId("walls-leave-out")).toBeNull();
     });
   });
-
-  describe("Your walls apply (G4a)", () => {
-    const showWith = (walls?: PersonalWallsSpec) =>
-      render(<AccessGroup draft={initialDraft("alice")} pre={{ access } as unknown as ReviewPreflight} preview={null} docRows={[]} go={vi.fn()} dispatch={vi.fn()} walls={walls} />);
-
-    it("says which walls apply whenever they name anything, even when no host is cut", () => {
-      showWith({ min_confinement_class: "CC3", first_use_approval: "always_deny" });
-      expect(screen.getByTestId("walls-apply")).toHaveTextContent("Your walls apply: a new site is blocked, barrier at least Vault.");
-      expect(screen.queryByTestId("walls-leave-out")).toBeNull();
-    });
-
-    it("says nothing when the walls were not read or name nothing", () => {
-      showWith(undefined);
-      expect(screen.queryByTestId("walls-apply")).toBeNull();
-      cleanup();
-      showWith({});
-      expect(screen.queryByTestId("walls-apply")).toBeNull();
-    });
-  });
 });
