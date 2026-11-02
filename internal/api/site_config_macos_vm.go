@@ -21,13 +21,14 @@ func validateSiteMacOSVM(m *types.SiteMacOSVM) error {
 // block: an older client cannot name it, and its round trip must not drop the organisation's base-age limit. A body
 // that names the block but not allow_background_watch keeps the stored switch, so an older client or a re-applied
 // managed config cannot turn a stored false back into allowed. A JSON null decodes to nil, the same as an omitted
-// key, and is carried the same way. A stored nil stays nil, which reads allowed.
+// key, and is carried the same way. A stored nil stays nil, which reads allowed. allow_direct_drive_mount is kept
+// the same way, so such a body can't turn a stored true off or a stored false on; its stored nil reads off.
 func carryForwardSiteMacOSVM(cfg *types.SiteConfig, existing types.SiteConfig, present map[string]bool) {
 	if !present["macos_vm"] {
 		cfg.MacOSVM = existing.MacOSVM
 		return
 	}
-	if existing.MacOSVM == nil || existing.MacOSVM.AllowBackgroundWatch == nil {
+	if existing.MacOSVM == nil || (existing.MacOSVM.AllowBackgroundWatch == nil && existing.MacOSVM.AllowDirectDriveMount == nil) {
 		return
 	}
 	if cfg.MacOSVM == nil {
@@ -35,5 +36,8 @@ func carryForwardSiteMacOSVM(cfg *types.SiteConfig, existing types.SiteConfig, p
 	}
 	if cfg.MacOSVM.AllowBackgroundWatch == nil {
 		cfg.MacOSVM.AllowBackgroundWatch = existing.MacOSVM.AllowBackgroundWatch
+	}
+	if cfg.MacOSVM.AllowDirectDriveMount == nil {
+		cfg.MacOSVM.AllowDirectDriveMount = existing.MacOSVM.AllowDirectDriveMount
 	}
 }

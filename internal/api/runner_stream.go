@@ -267,6 +267,19 @@ func (s *Server) runnerLocalAttach(rn types.Runner) bool {
 	return s.cfg.AttachLocal && rn.OwnerKind == types.RunnerOwnerPerson
 }
 
+// runnerDirectDriveMount is AUTH_OK's allow_direct_drive_mount for rn: the site switch, for a runner that has
+// reported it is a Mac. Others are never told, so turning the switch reconnects only Macs.
+func (s *Server) runnerDirectDriveMount(ctx context.Context, rn types.Runner) (bool, error) {
+	if rn.Posture.OS != "darwin" || s.cfg.Store == nil {
+		return false, nil
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return false, err
+	}
+	return sc.MacOSVM.DirectDriveMountAllowed(), nil
+}
+
 // runnerHub builds the one Hub lazily. Callbacks not injected are the durable
 // org composition: admitRunner and the asynchronous offline sweep.
 func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
@@ -303,6 +316,9 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 		}
 		if cfg.LocalAttach == nil {
 			cfg.LocalAttach = s.runnerLocalAttach
+		}
+		if cfg.DirectDriveMount == nil {
+			cfg.DirectDriveMount = s.runnerDirectDriveMount
 		}
 		// The Hub reports Disconnected only for a session it reported Connected,
 		// and calls both under the runner's session slot, Disconnected even inside

@@ -1785,6 +1785,8 @@ jobs:
           # (/var/folders/...) goes through the /var link: test under /private/tmp, as user and as root.
           export TMPDIR=/private/tmp
           go test -race -count=1 -timeout 15m ./internal/macvm/... ./internal/vmnet/... ./cmd/wardyn-macvm/ ./cmd/wardyn-guest-agent/
+          # A direct drive mount of a real image. A runner that refuses the attach logs SKIP: on the Mac run sheet then.
+          go test -count=1 -timeout 5m -v -run '^TestDriveDirectRealImage$' ./cmd/wardyn-runnerd/
           # The lock-open refusal again as root, the installer's uid: its socket case is one root still hits.
           go test -c -o "$RUNNER_TEMP/admission.test" ./internal/macvm/admission/
           sudo env TMPDIR="$TMPDIR" "$RUNNER_TEMP/admission.test" -test.count=1 -test.v -test.run '^TestSetupLockOpenErrorFailsClosed$' | tee "$RUNNER_TEMP/admission-root.out"

@@ -55,13 +55,13 @@ describe("parseMaxBaseAge / macosVMBody", () => {
     for (const bad of ["0", "-5", "1.5", "30d", "1e3", "007x", "99999999999999999999"]) expect(parseMaxBaseAge(bad)).toBeNull();
   });
   it("sets the days, or drops them, and always names the watch switch", () => {
-    expect(macosVMBody(undefined, 30)).toEqual({ max_base_age_days: 30, allow_background_watch: true });
-    expect(macosVMBody({ max_base_age_days: 30 }, "")).toEqual({ allow_background_watch: true });
+    expect(macosVMBody(undefined, 30)).toEqual({ max_base_age_days: 30, allow_background_watch: true, allow_direct_drive_mount: false });
+    expect(macosVMBody({ max_base_age_days: 30 }, "")).toEqual({ allow_background_watch: true, allow_direct_drive_mount: false });
   });
   it("writes the switch true or false, whatever is stored, and keeps each field when the other changes", () => {
-    expect(macosVMBody(undefined, 30, false)).toEqual({ max_base_age_days: 30, allow_background_watch: false });
-    expect(macosVMBody({ allow_background_watch: false }, 30)).toEqual({ max_base_age_days: 30, allow_background_watch: true });
-    expect(macosVMBody({ max_base_age_days: 30, allow_background_watch: false }, "", false)).toEqual({ allow_background_watch: false });
+    expect(macosVMBody(undefined, 30, false)).toEqual({ max_base_age_days: 30, allow_background_watch: false, allow_direct_drive_mount: false });
+    expect(macosVMBody({ allow_background_watch: false, allow_direct_drive_mount: false }, 30)).toEqual({ max_base_age_days: 30, allow_background_watch: true, allow_direct_drive_mount: false });
+    expect(macosVMBody({ max_base_age_days: 30, allow_background_watch: false, allow_direct_drive_mount: false }, "", false)).toEqual({ allow_background_watch: false, allow_direct_drive_mount: false });
   });
 });
 
@@ -83,7 +83,7 @@ describe("MacOSVMSettingsCard", () => {
     expect(saveBtn(card)).toBeDisabled();
     await userEvent.click(watch);
     await userEvent.click(saveBtn(card));
-    expect(putSiteConfigMock).toHaveBeenCalledWith({ upstream_proxy_url: "http://p", macos_vm: { allow_background_watch: false } }, '"v1"');
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ upstream_proxy_url: "http://p", macos_vm: { allow_background_watch: false, allow_direct_drive_mount: false } }, '"v1"');
     expect(toastSuccess).toHaveBeenCalledWith("macOS settings saved.");
     expect(saveBtn(card)).toBeDisabled();
   });
@@ -96,7 +96,33 @@ describe("MacOSVMSettingsCard", () => {
     await userEvent.click(watch);
     await userEvent.type(field(card), "0");
     await userEvent.click(saveBtn(card));
-    expect(putSiteConfigMock).toHaveBeenCalledWith({ macos_vm: { max_base_age_days: 300, allow_background_watch: true } }, '"v1"');
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ macos_vm: { max_base_age_days: 300, allow_background_watch: true, allow_direct_drive_mount: false } }, '"v1"');
+  });
+
+  it("shows the direct mount switch off with both sentences, and saving it on sends true", async () => {
+    const card = await open();
+    const direct = within(card).getByRole("switch", { name: T.DIRECT_LABEL });
+    expect(direct).toHaveAttribute("aria-checked", "false");
+    expect(within(card).getByText(T.DIRECT_HINT)).toBeInTheDocument();
+    expect(within(card).getByText(T.DIRECT_LIMIT)).toBeInTheDocument();
+    expect(saveBtn(card)).toBeDisabled();
+    await userEvent.click(direct);
+    expect(within(card).getByText(T.DIRECT_LIMIT)).toBeInTheDocument();
+    await userEvent.click(saveBtn(card));
+    expect(putSiteConfigMock).toHaveBeenCalledWith(
+      { upstream_proxy_url: "http://p", macos_vm: { allow_background_watch: true, allow_direct_drive_mount: true } },
+      '"v1"',
+    );
+  });
+
+  it("reads a stored true as on, and saving it off sends an explicit false, since the server keeps a value left out", async () => {
+    snapshotMock.mockResolvedValue({ siteConfig: { macos_vm: { allow_direct_drive_mount: true } }, etag: '"v1"' });
+    const card = await open();
+    const direct = within(card).getByRole("switch", { name: T.DIRECT_LABEL });
+    expect(direct).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(direct);
+    await userEvent.click(saveBtn(card));
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ macos_vm: { allow_background_watch: true, allow_direct_drive_mount: false } }, '"v1"');
   });
 
   it("loads the stored maximum", async () => {
@@ -110,7 +136,7 @@ describe("MacOSVMSettingsCard", () => {
     const card = await open();
     await userEvent.type(field(card), "30");
     await userEvent.click(saveBtn(card));
-    expect(putSiteConfigMock).toHaveBeenCalledWith({ upstream_proxy_url: "http://p", macos_vm: { max_base_age_days: 30, allow_background_watch: true } }, '"v1"');
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ upstream_proxy_url: "http://p", macos_vm: { max_base_age_days: 30, allow_background_watch: true, allow_direct_drive_mount: false } }, '"v1"');
     expect(toastSuccess).toHaveBeenCalledWith(T.SAVED_TOAST);
     expect(saveBtn(card)).toBeDisabled();
   });
@@ -120,7 +146,7 @@ describe("MacOSVMSettingsCard", () => {
     const card = await open();
     await userEvent.clear(field(card));
     await userEvent.click(saveBtn(card));
-    expect(putSiteConfigMock).toHaveBeenCalledWith({ macos_vm: { allow_background_watch: true } }, '"v1"');
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ macos_vm: { allow_background_watch: true, allow_direct_drive_mount: false } }, '"v1"');
     expect(field(card)).toHaveValue("");
   });
 

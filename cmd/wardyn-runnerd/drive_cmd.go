@@ -70,11 +70,17 @@ const (
 func newDriveCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "drive", Short: "Open the disk drives that runs on this Mac have used", Args: cobra.NoArgs}
 	var deleteGone bool
+	direct := &driveDirectFlags{}
 	open := &cobra.Command{Use: "open <name>", Short: "Copy a drive's files out of a throwaway macOS VM, change them, and write the changes back", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			m, err := driveOpenHandle(cmd)
 			if err != nil {
 				return err
+			}
+			// Before the signal handling below: a direct mount keeps its own (driveDirectMount), since a signal
+			// there waits for the attach or detach in progress and must never cut one short.
+			if direct.wanted() {
+				return m.driveDirect(cmd.Context(), direct, driveDirectArgs{name: args[0], in: cmd.InOrStdin(), out: cmd.OutOrStdout()})
 			}
 			// The first Ctrl-C ends the soft ctx (nothing more is written back before Return, and a copy in
 			// progress is removed); a second ends hard, which every long wait watches, so the command ends
@@ -104,6 +110,7 @@ func newDriveCommand() *cobra.Command {
 			return m.driveOpen(ctx, driveOpenArgs{name: args[0], deleteGone: deleteGone, in: cmd.InOrStdin(), out: cmd.OutOrStdout(), hard: hard})
 		}}
 	open.Flags().BoolVar(&deleteGone, "delete", false, "also delete from the drive the files you deleted from the copy")
+	direct.register(open)
 	cmd.AddCommand(open)
 	return cmd
 }

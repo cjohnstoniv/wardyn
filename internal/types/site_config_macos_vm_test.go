@@ -40,3 +40,20 @@ func TestSiteMacOSVMBackgroundWatchAllowed(t *testing.T) {
 		t.Fatal("true must read allowed")
 	}
 }
+
+// macos_vm.allow_direct_drive_mount: absent or a nil block reads off, and an explicit false survives the round trip.
+func TestSiteMacOSVMDirectDriveMountAllowed(t *testing.T) {
+	var absent *SiteMacOSVM
+	if absent.DirectDriveMountAllowed() || (&SiteMacOSVM{MaxBaseAgeDays: 7}).DirectDriveMountAllowed() {
+		t.Fatal("no direct mount switch stored must read off")
+	}
+	var sc SiteConfig
+	if err := json.Unmarshal([]byte(`{"macos_vm":{"allow_direct_drive_mount":true}}`), &sc); err != nil || !sc.MacOSVM.DirectDriveMountAllowed() {
+		t.Fatalf("decoded %+v, %v, want allowed", sc.MacOSVM, err)
+	}
+	off := false
+	raw, err := json.Marshal(SiteConfig{MacOSVM: &SiteMacOSVM{AllowDirectDriveMount: &off}})
+	if err != nil || string(raw) != `{"macos_vm":{"allow_direct_drive_mount":false}}` {
+		t.Fatalf("encoded %s, %v, want the explicit false kept", raw, err)
+	}
+}

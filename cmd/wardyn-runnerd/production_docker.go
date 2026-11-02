@@ -576,6 +576,8 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		LocalAttach: local.Set,
 		// The organisation's per-run limits, on every connect: each macOS guest is sized at them.
 		PerRunLimits: extra.macOSVM.setPerRunLimits,
+		// Whether the organisation allows `drive open --direct`, saved for that command on every connect.
+		DirectDriveMount: driveDirectSettingSaver(stateDir),
 		StreamOffline: func(peer *runnerwire.Peer) {
 			caps.online.CompareAndSwap(peer, nil)
 			streams.Offline(peer)
