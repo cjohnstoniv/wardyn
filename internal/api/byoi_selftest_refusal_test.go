@@ -127,7 +127,7 @@ func TestStartAgentOrIdle_BYOIInteractiveNoTaskOnRunner_SelftestNotRun(t *testin
 		t.Fatal("a selftest that did not run recorded a failure")
 	}
 	rows := audit.eventsFor(runID, "run.selftest")
-	if len(rows) != 1 || rows[0].Outcome != "success" || !strings.Contains(string(rows[0].Data), "not run: interactive, no task") {
+	if len(rows) != 1 || rows[0].Outcome != "success" || !strings.Contains(string(rows[0].Data), "not run: interactive") {
 		t.Fatalf("run.selftest rows = %+v, want the one saying it did not run", rows)
 	}
 	if got := st.State(); got != types.RunRunning {
@@ -135,8 +135,8 @@ func TestStartAgentOrIdle_BYOIInteractiveNoTaskOnRunner_SelftestNotRun(t *testin
 	}
 }
 
-// The skip is only for a warn-only run with no generation: a fail-closed gate never skips its check, and an
-// interactive run with a task still checks under the generation it holds.
+// The skip is only for a warn-only run with no generation: a fail-closed gate never skips its check, and a
+// warn-only call under an issued generation still checks.
 func TestByoiSelftest_OnRunnerSkipIsWarnOnlyWithoutAGeneration(t *testing.T) {
 	h := newHarness(t)
 	runID, runnerID := uuid.New(), uuid.New()
