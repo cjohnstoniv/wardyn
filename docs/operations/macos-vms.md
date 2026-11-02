@@ -527,7 +527,7 @@ A background run has no terminal, SSH or web door. This is the one exception: th
 - **The exposure.** A background run has no terminal, so what a person sees of it is its logs and audit trail. A screen can show what those keep out: a secret in a GUI app, a document, anything the run puts on screen.
   - Turn the site switch off, or set the profile limit, where that is not acceptable.
   - On macOS 26 the viewer may show the guest's login window, not its apps ([#3890](https://github.com/cjohnstoniv/wardyn/issues/3890)). Whether what it shows is useful is not yet witnessed.
-- **Recording.** A watch is recorded exactly when the run's desktop is: the run's recording level is Screen and actions and the organisation keeps recordings. A watch goes through the same recorder as any desktop view, and nothing about a watch changes that. No test pins a recorded watch.
+- **Recording.** A watch is not recorded, because a macOS VM run's desktop is not recorded in this release.
   - The audit log shows `ui.open` and `ui.close` with `view_only` and `background`, never the picture.
 
 | A watch is refused when | What you see |

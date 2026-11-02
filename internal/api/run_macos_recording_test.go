@@ -233,3 +233,19 @@ func TestMacOSVMRecordingHold(t *testing.T) {
 		}
 	}
 }
+
+// Review told the person a macOS VM run is unrecorded, so a level that resolves to Screen and actions
+// doesn't record its desktop. The same level on a Linux VM does.
+func TestMacOSVMDesktopIsNotRecordedAtAnyLevel(t *testing.T) {
+	s := &Server{cfg: Config{RecordingStore: fsRecordingStore(t)}}
+	for kind, want := range map[types.MachineKind]bool{types.MachineMacOSVM: false, types.MachineLinuxVM: true} {
+		run := types.AgentRun{ID: uuid.New(), MachineKind: kind, RecordingLevel: types.RecordingScreenActions,
+			NotRecorded: types.NotRecordedRunnerDeclined}
+		if kind == types.MachineLinuxVM {
+			run.NotRecorded = ""
+		}
+		if got := s.desktopRecorded(run); got != want {
+			t.Errorf("%s: desktopRecorded = %v, want %v", kind, got, want)
+		}
+	}
+}

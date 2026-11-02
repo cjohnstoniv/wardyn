@@ -49,6 +49,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A background run shows no Take over button, no Attach tile, and no Watch button in the terminal notice. A background run's takeover request shows no Take over in the approval card, the toast or the runs list. Decline and the toast itself stay.
 
 ### Fixed
+- A macOS VM run's desktop is no longer recorded when the organisation's level is Screen and actions, as Review already said.
 
 - The membership-move dry run counts a live run whose owner a membership names by a verified alias.
 - A BYOI selftest that did not run says so, in the run and in its audit row, on an interactive run with no task.
