@@ -824,7 +824,11 @@ func (s *Server) recordVMMachine(ctx context.Context, run types.AgentRun, sb run
 	if !ok {
 		return errors.New("this store cannot record a VM's machine")
 	}
-	return st.SetRunVMMachine(ctx, run.ID, *sb.Machine)
+	// One write with the machine, so a later boot's report replaces an earlier one's and a lost write
+	// ends the boot. The report is taken from the Sandbox field, never what the runner put in Machine.
+	m := *sb.Machine
+	m.DesktopForcedViewOnly = run.MachineKind.IsMacOSVM() && run.BackgroundOnly() && sb.DesktopForcedViewOnly
+	return st.SetRunVMMachine(ctx, run.ID, m)
 }
 
 // abortUnrecordedSandbox ends a dispatch whose sandbox ref could not be recorded, while this dispatch
