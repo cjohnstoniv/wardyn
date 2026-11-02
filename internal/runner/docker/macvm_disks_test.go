@@ -242,30 +242,57 @@ func TestReclaimMacDiskRemovesOnlyItsImage(t *testing.T) {
 }
 
 // A run whose disk drive another VM on this Mac holds is refused at its start: no helper starts, the
-// ledger holds nothing for it, and the run that holds the disk keeps its lock.
+// ledger holds nothing for it, and the run that holds the disk keeps its lock. A live run of this runner
+// is the holder that stays, so that refusal comes at once; any other holder is waited for first, and the
+// same sentence says so (lockMacDiskDrive).
 func TestARunRefusedForAHeldDiskAttachesNothing(t *testing.T) {
-	r := newMacRig(t)
-	img, _ := r.c.Layout.DriveImage(testDiskObject)
-	unlock, err := macvm.LockDisk(img)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer unlock()
-	spawned := 0
-	r.c.spawn = func(string) error { spawned++; return nil }
-	spec := macSpec()
-	spec.Drives = []types.DriveMount{testDiskDrive(runner.DriveTarget)}
-	if _, err := r.d.CreateSandbox(t.Context(), spec); err == nil || err.Error() != runner.MacVMDiskLocked("Notes") {
-		t.Fatalf("err = %v, want %q", err, runner.MacVMDiskLocked("Notes"))
-	}
-	if spawned != 0 || len(r.held(t)) != 0 {
-		t.Fatalf("the refused run started %d helpers and holds %d ledger entries", spawned, len(r.held(t)))
-	}
-	if again, err := macvm.LockDisk(img); !errors.Is(err, macvm.ErrDiskInUse) {
-		if again != nil {
-			again()
-		}
-		t.Fatalf("the holder lost the disk's lock: %v", err)
+	for name, c := range map[string]struct {
+		liveRun bool
+		want    string
+		waited  time.Duration
+	}{
+		"held by a live run of this runner": {true, runner.MacVMDiskLocked("Notes"), 0},
+		"held by anything else":             {false, "Waited 90 seconds for the drive to be released. " + runner.MacVMDiskLocked("Notes"), 90 * time.Second},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newMacRig(t)
+			img, _ := r.c.Layout.DriveImage(testDiskObject)
+			if c.liveRun {
+				runID := uuid.MustParse("5a5a5a5a-0000-4000-8000-0000000000aa")
+				dir := r.c.runDir(runID)
+				if err := macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: runID.String(), BaseDir: "/base", Disks: []macvm.Disk{{ID: "wardyn-disk0", Path: img}}}); err != nil {
+					t.Fatal(err)
+				}
+				r.d.vms.Store("live", &vmRun{runID: runID, dir: dir, mac: true})
+			}
+			unlock, err := macvm.LockDisk(img)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer unlock()
+			spawned := 0
+			r.c.spawn = func(string) error { spawned++; return nil }
+			spec := macSpec()
+			spec.Drives = []types.DriveMount{testDiskDrive(runner.DriveTarget)}
+			synctest.Test(t, func(t *testing.T) {
+				start := time.Now()
+				if _, err := r.d.CreateSandbox(t.Context(), spec); err == nil || err.Error() != c.want {
+					t.Fatalf("err = %v, want %q", err, c.want)
+				}
+				if waited := time.Since(start); waited != c.waited {
+					t.Fatalf("waited %v, want %v", waited, c.waited)
+				}
+			})
+			if spawned != 0 || len(r.held(t)) != 0 {
+				t.Fatalf("the refused run started %d helpers and holds %d ledger entries", spawned, len(r.held(t)))
+			}
+			if again, err := macvm.LockDisk(img); !errors.Is(err, macvm.ErrDiskInUse) {
+				if again != nil {
+					again()
+				}
+				t.Fatalf("the holder lost the disk's lock: %v", err)
+			}
+		})
 	}
 }
 
