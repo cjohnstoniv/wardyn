@@ -88,6 +88,10 @@
   Playwright `storageState`).
 - `POST .../desktop-signin/end` closes the display and resumes the agent. A
   sign-in ends by itself after 30 minutes.
+- `deny_interactive` and `deny_ui_apps` refuse the begin and the share, and a
+  refused begin leaves the agent running. End stays open.
+- A limit set during a sign-in stops new entry. An open display stays until it
+  ends, and the agent comes back at End or within 30 minutes.
 - The person's browser is a different uid in the same sandbox, not a
   sandbox of its own: [THREAT-MODEL §5.1a](../threatmodel/THREAT-MODEL.md)
   states what that holds and what it does not. After a share the agent holds
@@ -309,7 +313,8 @@ export WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 
 ## 3. Open an app
 
-- A background task's UI apps cannot be opened (`409 run_background_only`), except an [inbound](#inbound-let-named-callers-reach-a-port) app.
+- A background task's UI apps cannot be opened (`409 run_background_only`), except an [inbound](#inbound-let-named-callers-reach-a-port) app. One more door opens: the built-in desktop of a background macOS VM run opens as a view-only watch for the person who started the run ([Watching a background run's desktop](operations/macos-vms.md#watching-a-background-runs-desktop)). A declared noVNC app, a terminal and the desktop's files stay refused.
+- A screen can show what a background run keeps out of its logs, such as a secret in a GUI app or a document. The site switch `macos_vm.allow_background_watch` and the profile limit `deny_background_desktop_watch` turn watching off.
 - Three calls:
   1. Mint a single-use attach ticket (the **same** ticket the browser terminal uses — there is no second ticket type); `?purpose=ui` skips the terminal session cap at the mint, since a UI session holds no terminal slot,
   2. **bind** it to the browser that will use it,
@@ -628,7 +633,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 | `ui.open` | a relay connection opened | app, port |
 | `ui.close` | that connection closed | app, port, `duration_sec` |
 | `ui.clipboard.transfer` | a desktop clipboard transfer, relayed or dropped; or a desktop closed for not speaking RFB | app, direction, bytes, sha256 (never the text); or app, reason |
-| `ui.input.drop` | a view-only desktop's relay dropped the session's first key or first pointer move | app, input (never the input itself) |
+| `ui.input.drop` | a view-only desktop's relay dropped the first key and the first pointer move on a desktop socket (once for each socket a viewer opens) | app, input (never the input itself) |
 
 - These are deliberately **not** `session.attach`: there is no PTY and no holder,
   and a relay session must never appear in the run detail page's Recording tab as

@@ -260,6 +260,12 @@ type Config struct {
 	// because an older proxy refuses a key it does not know. Empty (the
 	// default) => no local model route, byte-identical to today.
 	LocalModels map[string]types.LocalModelSettings `json:"local_models,omitempty"`
+	// GatewayIdentity lists the routes that carry the run's signed identity
+	// (gateway_identity.go). Control-plane-authored, same trust boundary as
+	// LLMUpstreams; it holds no token and no key. Empty (the default) => off,
+	// byte-identical to before; omitempty because an older proxy refuses a key
+	// it does not know.
+	GatewayIdentity []GatewayIdentityRoute `json:"gateway_identity,omitempty"`
 	// RunnerLocalModels names the LocalModels entries (each AllowOnLaptopRunners) whose server is
 	// on the runner's own computer: the runner relays that one port from its relay address, the
 	// address the control plane resolves to on a runner, and vetTrustedHost admits that address
@@ -436,6 +442,11 @@ func LoadConfigBytes(b []byte) (*Config, error) {
 	}
 	if err := validPATGrants(c.PATGrants); err != nil {
 		return nil, err
+	}
+	for i, rt := range c.GatewayIdentity {
+		if err := rt.validate(c.GatewayIdentity[:i]); err != nil {
+			return nil, fmt.Errorf("config: gateway_identity[%d]: %w", i, err)
+		}
 	}
 	if err := validResidentMints(c.ResidentMints); err != nil {
 		return nil, err

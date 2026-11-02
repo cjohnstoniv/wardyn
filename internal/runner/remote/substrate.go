@@ -34,6 +34,10 @@ import (
 // shares one into the guest (virtiofs): the org's placement says it at create, and here at dispatch.
 const VMNoFolderShare = "this runner cannot share a folder into a Linux VM sandbox: its version predates folder shares into VMs, or its QEMU image has no working virtiofsd"
 
+// VMNoDriveShare refuses a Linux VM run that carries a drive on a runner whose caps do not say it can
+// share one into the guest.
+const VMNoDriveShare = "This runner's version can't attach drives to a Linux VM. Update the runner, or run without drives."
+
 // MacOSVMNotOffered refuses a macOS VM run on a runner whose caps carry no MacOSVM; runner is how the
 // sentence names it.
 func MacOSVMNotOffered(runner string) string {
@@ -222,6 +226,9 @@ func (s *Substrate) checkVMCaps(spec runner.SandboxSpec) error {
 	// Nor a VM that carries a folder of a runner that cannot share one into the guest.
 	if len(spec.Mounts) > 0 && !c.LinuxVM.Virtiofs {
 		return runnerwire.Refuse(VMNoFolderShare)
+	}
+	if len(spec.Drives) > 0 && !c.LinuxVM.Drives {
+		return runnerwire.Refuse(VMNoDriveShare)
 	}
 	return nil
 }

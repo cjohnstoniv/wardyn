@@ -84,6 +84,10 @@ REGISTRY_PORT=15011
 # on a shared daemon the mutable wardyn/*:local tag can be re-pointed by another
 # job between the image check and the run actually launching.
 AGENT_IMAGE="wardynv06uisbx/agent-vscode:pinned"
+# The background command run has no harness, so it starts from the "base" image. Mapping base too keeps it on
+# the local image: unmapped, it falls back to the published agent-base tagged with the daemon's version, and a
+# release candidate's version has no such tag until it is cut.
+AGENT_IMAGES="$(jq -nc --arg img "${AGENT_IMAGE}" '{"claude-code":$img, base:$img}')"
 # Same reason, for the two images the stack itself runs: reusing wardyn/*:local
 # meant this lane graded whatever another job on the daemon last built.
 # docker-compose.yaml takes these overrides and defaults to the :local names,
@@ -100,16 +104,13 @@ ECHO_PORT=9099
 # this moves with it.
 UI_MAX_CONNS=8
 
-# The background command run has no harness, so it starts from the "base" image. Mapping base too keeps it on
-# the local image: unmapped, it falls back to the published agent-base tagged with the daemon's version, and a
-# release candidate's version has no such tag until it is cut.
 compose() {
   COMPOSE_PROJECT_NAME="${PROJECT}" WARDYN_NS="${PROJECT}" \
     WARDYN_UP_PORT="${API_PORT}" WARDYN_PG_PORT="${PG_PORT}" WARDYN_SSH_PORT="${SSH_PORT}" \
     WARDYN_REGISTRY_PORT="${REGISTRY_PORT}" WARDYN_UI_SANDBOX_PORT="${UI_PORT}" \
     WARDYN_WARDYND_IMAGE="${WARDYND_IMAGE}" WARDYN_PROXY_IMAGE="${PROXY_IMAGE}" \
     WARDYN_UI_SANDBOX_LISTEN=":8081" WARDYN_UI_SANDBOX_ADVERTISE="http://127.0.0.1:${UI_PORT}" \
-    WARDYN_AGENT_IMAGES="$(jq -nc --arg img "${AGENT_IMAGE}" '{"claude-code":$img, base:$img}')" \
+    WARDYN_AGENT_IMAGES="${AGENT_IMAGES}" \
     WARDYN_AGE_KEY="${AGE_KEY:-}" \
     docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" "$@"
 }
@@ -124,6 +125,13 @@ pass() { note "[pass]" "$1"; }
 fail() { note "[FAIL]" "$1"; FAILED=1; }
 
 teardown() {
+  local rc=$?
+  # A failed walk keeps the daemon's own account of it: printed so the job log (and the uploaded
+  # ui-sandbox-e2e.log) carries it. Taken before compose down removes the container.
+  if [[ "${rc}" -ne 0 ]]; then
+    log "wardynd log (last 300 lines) follows"
+    compose logs --no-color --tail 300 wardynd 2>&1 || true
+  fi
   for r in "${RUN_ID:-}" "${RUN_B_ID:-}" "${RUN_BG_ID:-}" "${RUN_HM_ID:-}"; do
     [[ -n "${r}" ]] || continue
     curl -sS -X POST "${BASE}/api/v1/runs/${r}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1 || true
@@ -213,6 +221,12 @@ bind_cookie() {
   sed -n 's/^[Ss]et-[Cc]ookie: *\(wardyn_ui_bind_[^;]*\).*/\1/p' "${TMPDIR}/bind.h" | tr -d '\r' | head -1
 }
 
+# run_detail -> the status detail of the run last read into resp.json, so a run that stops short
+# of RUNNING says why (an image pull failure, a refused placement) instead of only its state.
+run_detail() {
+  jq -r '.status_detail // .status_reason // "" | if . == "" then "(no status detail)" else . end' "${TMPDIR}/resp.json" 2>/dev/null || echo "(no status detail)"
+}
+
 # launch_json BODY -> prints the run id once the run is RUNNING.
 launch_json() {
   local st rid state
@@ -225,10 +239,10 @@ launch_json() {
     [[ "${st}" == "200" ]] || { sleep 2; continue; }
     state="$(jq -r '.state' "${TMPDIR}/resp.json")"
     [[ "${state}" == "RUNNING" ]] && { echo "${rid}"; return 0; }
-    [[ "${state}" =~ ^(FAILED|KILLED|STOPPED)$ ]] && { echo "run ${rid} reached ${state}" >&2; return 1; }
+    [[ "${state}" =~ ^(FAILED|KILLED|STOPPED)$ ]] && { echo "run ${rid} reached ${state}: $(run_detail)" >&2; return 1; }
     sleep 2
   done
-  echo "run ${rid} never reached RUNNING" >&2
+  echo "run ${rid} never reached RUNNING: $(run_detail)" >&2
   return 1
 }
 

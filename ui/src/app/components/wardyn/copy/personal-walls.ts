@@ -64,6 +64,21 @@ export const NR_WALLS = {
   // Not on the board: the walls step's own warning on Review for a knob the board draws no note for, with the knob
   // in the Policy tab's field words. A host the walls leave out has the board's LEAVE_OUT note instead.
   NARROWED: (knob: string | number) => `Your walls narrowed ${knob}.`,
+  // The one neutral line above Review's groups and the Tools totals: each knob the person's saved walls name, as a
+  // clause. A listed-sites clause says the run still reaches what its setup needs (YOUR_WALLS.SITES_ONLY_HINT is the
+  // longer form, shown on hover).
+  APPLY_BEFORE: "Your walls apply: ",
+  APPLY_AFTER: ".",
+  APPLY_JOIN: ", ",
+  APPLY_SITES_LISTED: (n: string | number) => `${n} listed ${n === 1 ? "site" : "sites"}, plus what the run's setup needs`,
+  APPLY_SITES_SETUP_ONLY: "only the sites the run's setup needs",
+  APPLY_SITES_NEVER: (n: string | number) => `${n} ${n === 1 ? "site" : "sites"} never reached`,
+  APPLY_BARRIER: (cls: string) => `barrier at least ${cls}`,
+  APPLY_NO_TRANSFER: (what: string) => `no ${what}`,
+  APPLY_TRANSFERS: { paste_in: "paste in", copy_out: "copy out", upload: "upload", download: "download" } as Record<string, string>,
+  APPLY_OR: " or ",
+  APPLY_CREDENTIAL_LIMITS: (n: string | number) => `${n} credential ${n === 1 ? "restriction" : "restrictions"}`,
+  CHANGE_WALLS: "Change your walls",
 } as const;
 
 // T4-c's approval refusal (board R16): shown on a request whose host the run owner's walls deny, with the Why card

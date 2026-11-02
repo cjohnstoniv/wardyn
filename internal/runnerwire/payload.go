@@ -183,13 +183,14 @@ type Caps struct {
 
 // The run proxy settings a runner names in Caps.ProxySettings, each its proxy.Config key.
 const (
-	ProxySettingAWSSigV4       = "aws_sigv4"
-	ProxySettingScrubResponses = "scrub_responses"
-	ProxySettingVM             = "vm"
-	ProxySettingPortRule       = "port_rule"
-	ProxySettingLocalModels    = "local_models"
-	ProxySettingKubeAPI        = "kube_api"
-	ProxySettingCanonicalRepos = "canonical_push_repos"
+	ProxySettingAWSSigV4        = "aws_sigv4"
+	ProxySettingScrubResponses  = "scrub_responses"
+	ProxySettingVM              = "vm"
+	ProxySettingPortRule        = "port_rule"
+	ProxySettingLocalModels     = "local_models"
+	ProxySettingKubeAPI         = "kube_api"
+	ProxySettingCanonicalRepos  = "canonical_push_repos"
+	ProxySettingGatewayIdentity = "gateway_identity"
 )
 
 // ProxySettingLocalModelRelay is no proxy.Config field: a Docker runner names it when it relays a
@@ -211,13 +212,13 @@ func LocalModelRelayNeeded(pc runner.ProxyConfig) bool {
 
 // ProxySettings is every run proxy setting this build's runner carries through to its proxy, in the
 // order ProxySettingsSet tests them.
-var ProxySettings = []string{ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels, ProxySettingKubeAPI, ProxySettingCanonicalRepos}
+var ProxySettings = []string{ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels, ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity}
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
 // Nothing sets VM yet (the Docker driver will, where the desktop relay starts), so the org leaves it false; its gate stays.
 func ProxySettingsSet(pc runner.ProxyConfig) []string {
 	var out []string
-	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil, pc.CanonicalPushRepos} {
+	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil, pc.CanonicalPushRepos, len(pc.GatewayIdentity) != 0} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}
@@ -239,6 +240,9 @@ type VMCaps struct {
 	// SignIns says the runner hands each VM its sign-in store and pauses its agent (pause_agent,
 	// resume_agent) (#2972). A runner without it is never asked.
 	SignIns bool `json:"sign_ins,omitempty"`
+	// Drives says the runner shares a drive bound to it into a VM, by virtiofs (#3846). A runner
+	// without it (older, or a Kubernetes one) takes no VM run that carries a drive.
+	Drives bool `json:"drives,omitempty"`
 }
 
 // MacVMCaps is what a Mac runner's macOS VM sandboxes can be given right now. The org reads it through

@@ -346,15 +346,18 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketRunMismatch, "attach ticket does not authorize this run")
 		return
 	}
-	// After the ownership check (a foreign caller learns nothing), before any cookie. An inbound app is a background run's one door.
-	if rf := backgroundOnlyRefusal(run, "web application gateway"); rf != nil && !s.uiAppIsInbound(r.Context(), runID, app) {
-		s.uiRefuseBackground(w, r, rf, runID, app, ta)
+	// After the ownership check (a foreign caller learns nothing), before any cookie. An inbound app is a background
+	// run's one door for an app; the watch door's ticket, on the built-in desktop alone, answers to its own checks.
+	if rf := backgroundOnlyRefusal(run, "web application gateway"); rf != nil && s.uiBackgroundDoorRefused(w, r, rf, run, app, ta) {
 		return
 	}
 	// superAdmin is true past this point only on the admin's own run or an
 	// operator-owned one, so the governance exemption below cannot reach a
-	// person's run.
-	if (!superAdmin || !s.adminDoorExempt(run)) && s.refuseUIAppsDenied(w, r.WithContext(withTicketActor(r.Context(), ta)), run) {
+	// person's run. The sign-in display and a declared noVNC desktop answer to
+	// deny_interactive too, as a VM's desktop does (uiEnterDesktop, which keeps
+	// its own door); any other declared app is deny_ui_apps' alone.
+	rt := r.WithContext(withTicketActor(r.Context(), ta))
+	if (!superAdmin || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, rt, run) || (uiDesktopApp(app) && s.refuseInteractiveAttach(w, rt, run))) {
 		return
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {
@@ -712,6 +715,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	// Fresh run state on EVERY connection (not just at enter): a killed or
 	// stopped run must stop serving, and this is the cheapest place that sees
 	// every new connection.
+	gen := s.uiInbound.drops.Load() // before the reads the pass rests on (markUIReasserted)
 	run, err := s.cfg.Store.GetRun(ctx, sess.Run)
 	if err != nil {
 		return nil, uiFail(ctx, http.StatusNotFound, reasonRunNotFound, "run not found")
@@ -730,7 +734,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 		return nil, uiFail(ctx, de.status, de.reason, de.msg)
 	}
 	sess.SandboxRef = run.SandboxRef
-	s.markUIReasserted(sess, s.cfg.Now())
+	s.markUIReasserted(sess, s.cfg.Now(), gen)
 	// A paused run is thawed before the execs below (run_pause.go).
 	if err := s.thawForExec(ctx, run, uiActorType(sess), sess.Principal, "presence"); err != nil {
 		return nil, uiFail(ctx, http.StatusBadGateway, reasonUIGatewayResumeFailed, "run is paused and could not be resumed; try again")

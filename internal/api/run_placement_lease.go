@@ -344,14 +344,15 @@ func (s *Server) dispatchedGeneration(ctx context.Context, runnerID uuid.UUID, m
 }
 
 // leaseRunOnRunner is dispatch's lease for a run bound to a runner, before its sandbox is asked for: a
-// task run is issued its first generation, for the Exec that starts its agent. A run on the organisation's
-// own executors is not leased.
+// task run is issued its first generation, for the Exec that starts its agent. An interactive run's task is
+// its boot seed, which no Exec starts (startAgentsOrIdle), so it is issued none: a generation it never spent
+// would refuse every later one, its revive's included. A run on the organisation's own executors is not leased.
 func (s *Server) leaseRunOnRunner(ctx context.Context, run types.AgentRun) (runnerExecution, error) {
 	if run.RunnerID == nil {
 		return runnerExecution{}, nil
 	}
 	operation := ""
-	if run.Task != "" {
+	if run.Task != "" && !run.Interactive {
 		operation = runnerwire.MethodExec
 	}
 	e, err := s.leaseRunnerExecution(ctx, run, uuid.Nil, operation)

@@ -125,6 +125,8 @@ export interface RunQueue {
   /** A scheduled run's start time and the IANA zone it was given in; absent for any other waiting run. */
   start_at?: string;
   time_zone?: string;
+  /** The whole wait sentence of a run its runners' limits hold back, naming the limit as the runners stand now. Present only on a single-run read by the run's owner or an admin; absent, the sentence is the one the reason gives. */
+  limit_sentence?: string;
 }
 
 export interface AgentRun {
@@ -230,7 +232,9 @@ export interface AgentRun {
   // without fetching every run's cast just to answer "does one exist, how
   // big, how long". has_recording is the ONLY "no recording" signal: a zero
   // (or absent) recording_duration_sec is a real, header-only cast that
-  // captured no output, not "unknown" or "none" — never gate on it.
+  // captured no output, not "unknown" or "none" — never gate on it. A list
+  // without include=recording_meta omits all three keys; absent means "not
+  // asked", not "no recording". The single-run read always sets has_recording.
   has_recording?: boolean;
   recording_bytes?: number;
   recording_duration_sec?: number;
@@ -420,6 +424,10 @@ export interface VMMachine {
   base_edited_at?: string;
   // A macOS VM's base: the one the run picked ("Standard" or another of the Mac's), then the one it started on.
   macos_base?: string;
+  // What this boot's helper reported: its desktop filter is forced view only. Absent reads as not forced.
+  desktop_forced_view_only?: boolean;
+  // The dispatch that recorded this boot asked its helper to force that. Absent on a background macOS run: an older boot.
+  desktop_view_only_asked?: boolean;
 }
 
 export interface RunAttention {
@@ -573,6 +581,8 @@ export interface RunDetail extends AgentRun {
   agents?: RunDetailAgent[];
   // A macOS VM run's desktop as its Mac offers it (GET /runs/{id} only); see RunMacOS.
   macos?: RunMacOS;
+  // Whether this caller may watch a running background macOS VM run's desktop (GET /runs/{id} only); see RunBackgroundWatch.
+  background_watch?: RunBackgroundWatch;
   // Where a macOS VM run's disk stands on its Mac at the run's end (GET /runs/{id} only); see RunMacOSDisk.
   macos_disk?: RunMacOSDisk;
 }
@@ -582,6 +592,14 @@ export interface RunDetail extends AgentRun {
 // and while the runner's caps are unknown.
 export interface RunMacOS {
   desktop: "control" | "observe";
+}
+
+// GET /runs/{id}'s background_watch (backgroundWatchView, internal/api/run_background_watch.go): "open" is the only
+// state with a button; every other is the door's refusal, with its sentence, except "not_run_owner", which has none.
+// Absent on every run but a running background macOS VM run.
+export interface RunBackgroundWatch {
+  state: "open" | "site_off" | "governance" | "sign_ins_off" | "old_boot" | "unconfirmed" | "offline" | "control" | "paused" | "not_run_owner";
+  message?: string;
 }
 
 // GET /runs/{id}'s macos_disk (runMacOSDiskView, internal/api/run_macos_disk.go): "removing" while no report

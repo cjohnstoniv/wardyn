@@ -59,6 +59,7 @@ The run list and the run page show the service's health in place of "Running", t
 | Unhealthy | `probe_failing` | The health check failed `failure_threshold` times in a row |
 | Health unknown | `supervisor_missing` | No state file after 10 minutes: the image has no supervisor. See [Images](#images) |
 | Health unknown | `unreachable` | Wardyn could not read the file. The runner may be offline |
+| Health unknown | `paused` | The run is paused. The last check time is kept |
 
 The run page's **Service** panel adds **Restart**, **Health check**, **Health** ("checked 40 s ago"), **Restarts** (with the last exit code) and **Lease**.
 
@@ -145,3 +146,4 @@ At most one `run.service.health` and one `run.service.restart` row are written p
 - A runner that goes offline leaves the supervisor running. Its last reading stays; once that is 15 minutes old, Health reads unknown and renewal stops.
 - A paused or lost service is not renewed.
 - Nothing in Wardyn renews a lease except a healthy service's own sweep and the owner's `PATCH`.
+- A service is one run. There are no replicas and no autoscaling, and no check from outside the sandbox. A service that must run in several copies, or whose health must not rest on the sandbox's word, belongs on the sandbox controller directly.

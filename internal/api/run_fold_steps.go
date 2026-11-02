@@ -362,13 +362,17 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 		ask.Prompts = slices.ContainsFunc(f.harnesses, func(h types.RunHarness) bool { return h.Task != "" })
 		ask.Holds = macOSVMHolds(*f.req, f.spec)
 	}
+	// The kept work folder is its own ask: counting it as a drive worded its refusal for drives, and a runner
+	// that shares drives passed it at Review only for the start to refuse it.
+	ask.MountsDrives, ask.KeepsWorkFolder = len(f.drives) > 0, f.keep != nil
 	if s.placementCapabilityRefusalFor(f.r.Context(), *f.req, f.place, f.ceiling, mounts, ask).write(s, f.w, f.r) {
 		return false
 	}
 	if !types.MachineKind(f.req.MachineKind).IsMacOSVM() {
 		return true
 	}
-	// A macOS VM is not recorded in this release: refused where recording is asked for, else said.
+	// A macOS VM keeps no recording of its own and its desktop is not recorded: refused where recording is asked
+	// for, else its desktop is said not to be recorded.
 	notice, refusal := s.macOSVMRecordingGate(f.r.Context(), f.place, f.ceiling)
 	if refusal.write(s, f.w, f.r) {
 		return false

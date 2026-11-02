@@ -49,7 +49,7 @@ func askMacOSVM(cmd *cobra.Command, goos string, plan *setupPlan, limits *types.
 	}
 	out := cmd.OutOrStdout()
 	if plan.macOSVM == "" && !macOSVMOn(plan.existing.MacOSVM) && asksAt(cmd.InOrStdin(), out) {
-		fmt.Fprint(out, "Turn on macOS VM sandboxes on this Mac? Preparing their base downloads Apple's macOS (about 25 GB) and needs about 85 GB free. [y/N] ")
+		fmt.Fprint(out, "Turn on macOS VM sandboxes on this Mac? Preparing their base downloads Apple's macOS (about 25 GB) and needs about 81 GB free. [y/N] ")
 		line, _ := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
 		plan.macOSVM = "off"
 		if a := strings.ToLower(strings.TrimSpace(line)); a == "y" || a == "yes" {

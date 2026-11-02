@@ -39,7 +39,7 @@ import (
 const dexPassword = "password"
 
 // notBoundMsg is the org's answer to a resource in a namespace no binding names (runner_workloads.go).
-const notBoundMsg = "No Wardyn workload binding names this namespace on this runner's pools. A security admin binds it to a service identity."
+const notBoundMsg = "No Wardyn workload binding names this namespace. A security admin binds it to a service identity."
 
 var formAction = regexp.MustCompile(`<form[^>]*action="([^"]*)"`)
 

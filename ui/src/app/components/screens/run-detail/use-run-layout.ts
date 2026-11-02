@@ -26,7 +26,7 @@ import {
   type RunLayoutPreset,
   type RunLayoutWidget,
 } from "../../../lib/api/run-layout";
-import { forRun, isServiceRemoved, normalizeLayout, presetLayout, SERVICE_REMOVED } from "./widget-registry";
+import { DESKTOP_REMOVED, forRun, forVMRun, isDesktopRemoved, isServiceRemoved, normalizeLayout, presetLayout, SERVICE_REMOVED } from "./widget-registry";
 
 // Long enough that a drag across the canvas is one PUT, short enough that a
 // human who drags and immediately closes the tab keeps the arrangement (and
@@ -54,12 +54,12 @@ export type RunLayoutState = {
   reset: () => void;
 };
 
-/** `service`: the run is a service, so its live layout carries the Service panel. */
-export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayoutState {
+/** `service`: the run is a service, so its live layout carries the Service panel. `vm`: the run is a VM run, so a saved layout carries the Desktop tile. */
+export function useRunLayout(preset: RunLayoutPreset, service = false, vm = false): RunLayoutState {
   // Seeded with the preset default rather than empty: the canvas can paint the
   // machine's arrangement immediately and swap once a saved one arrives, which
   // beats one round-trip of empty canvas for the majority who never saved one.
-  const [layout, setLayout] = React.useState<RunLayoutWidget[]>(() => presetLayout(preset, service));
+  const [layout, setLayout] = React.useState<RunLayoutWidget[]>(() => presetLayout(preset, service, vm));
   const [loaded, setLoaded] = React.useState(false);
   const [persistable, setPersistable] = React.useState(true);
 
@@ -77,6 +77,9 @@ export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayou
   // The person took the Service panel out of this preset's saved layout. A saved layout with no Service entry reads
   // as one that predates the panel, which gets it, so the removal is stored as SERVICE_REMOVED and kept out of `layout`.
   const serviceRemoved = React.useRef(false);
+  // The same for the Desktop tile, which a saved layout from before the tile has no entry for: stored as DESKTOP_REMOVED,
+  // kept out of `layout`, and kept in the saved row by every write (also from a run with no desktop to show).
+  const desktopRemoved = React.useRef(false);
 
   const commit = (next: RunLayoutWidget[]) => {
     layoutRef.current = next;
@@ -97,7 +100,8 @@ export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayou
     async (body: RunLayoutWidget[]): Promise<SaveResult> => {
       if (!persistRef.current) return "unsupported";
       try {
-        await runLayoutApi.putLayout(preset, serviceRemoved.current ? [...body, SERVICE_REMOVED] : body);
+        const markers = [...(serviceRemoved.current ? [SERVICE_REMOVED] : []), ...(desktopRemoved.current ? [DESKTOP_REMOVED] : [])];
+        await runLayoutApi.putLayout(preset, [...body, ...markers]);
         return "ok";
       } catch (err) {
         if (err instanceof HttpError && err.status === 501) {
@@ -124,6 +128,8 @@ export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayou
       dirty.current = true;
       // A service run's live layout always shows the panel until it is taken out; a run with no panel says nothing.
       if (service && preset === "live") serviceRemoved.current = !norm.some((w) => w.widget === "service");
+      // A VM run's saved layout shows the tile until it is taken out; a run with no desktop says nothing.
+      if (vm) desktopRemoved.current = !norm.some((w) => w.widget === "desktop");
       commit(norm);
       cancelPending();
       timer.current = setTimeout(() => {
@@ -131,7 +137,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayou
         void put(norm);
       }, SAVE_DEBOUNCE_MS);
     },
-    [preset, service, put],
+    [preset, service, vm, put],
   );
 
   const save = React.useCallback(async (): Promise<SaveResult> => {
@@ -143,12 +149,13 @@ export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayou
     cancelPending();
     dirty.current = true;
     serviceRemoved.current = false;
-    commit(presetLayout(preset, service));
+    desktopRemoved.current = false;
+    commit(presetLayout(preset, service, vm));
     // PUT [] is the reset: there is no DELETE route, and storing today's
     // default as a personal choice would freeze this human out of every future
     // improvement to it. An empty saved layout reads as "never saved" on load.
     void put([]);
-  }, [preset, service, put]);
+  }, [preset, service, vm, put]);
 
   React.useEffect(() => {
     let alive = true;
@@ -157,6 +164,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayou
     // not suppress this one's answer.
     dirty.current = false;
     serviceRemoved.current = false;
+    desktopRemoved.current = false;
     setLoaded(false);
     runLayoutApi
       .getLayout(preset)
@@ -166,9 +174,12 @@ export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayou
           return;
         }
         serviceRemoved.current = res.layout.some(isServiceRemoved);
-        const saved = res.layout.filter((w) => !isServiceRemoved(w));
+        desktopRemoved.current = res.layout.some(isDesktopRemoved);
+        const saved = res.layout.filter((w) => !isServiceRemoved(w) && !isDesktopRemoved(w));
         const shown = normalizeLayout(saved, preset);
-        commit(saved.length === 0 ? presetLayout(preset, service && !serviceRemoved.current) : serviceRemoved.current ? shown : forRun(shown, preset, service));
+        const base = saved.length === 0 ? presetLayout(preset, service && !serviceRemoved.current, vm) : serviceRemoved.current ? shown : forRun(shown, preset, service);
+        // Saved with the tile taken out: the preset's own tile (nothing saved but the marker) goes too.
+        commit(desktopRemoved.current ? base.filter((w) => w.widget !== "desktop") : saved.length === 0 ? base : forVMRun(base, vm));
         setLoaded(true);
       })
       .catch(() => {
@@ -176,13 +187,13 @@ export function useRunLayout(preset: RunLayoutPreset, service = false): RunLayou
           if (alive) setLoaded(true);
           return;
         }
-        commit(presetLayout(preset, service));
+        commit(presetLayout(preset, service, vm));
         setLoaded(true);
       });
     return () => {
       alive = false;
     };
-  }, [preset, service]);
+  }, [preset, service, vm]);
 
   // Finish a debounced write the human never saw land — on unmount (they
   // navigated away mid-debounce) and on a preset switch, where the cleanup

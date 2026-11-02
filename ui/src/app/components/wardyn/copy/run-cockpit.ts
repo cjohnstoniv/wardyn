@@ -70,6 +70,10 @@ export const RUN_COCKPIT = {
   recordingDisabled: "Session recording is disabled on this deployment",
   recordingMissing:
     "This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox.",
+  // A macOS VM run: the agent's own process makes no cast there (SandboxSpec.Record is false), only a console
+  // or SSH terminal session does, and its cast is saved when the session ends, only if it showed output.
+  recordingMissingMacOS:
+    "This run has no captured terminal session. A recording appears here after a console or SSH terminal on this run closes, if it showed any output.",
   // The THIRD fact: a fetch that FAILED establishes nothing about the run, so
   // it must not be reported as "this run has no recording". Same sentence the
   // Recording tab already shows
@@ -180,6 +184,8 @@ export const RUN_COCKPIT = {
   dock: "Widget dock",
   closeDock: "Close the widget dock",
   showWidget: (label: string) => `Show ${label}`,
+  // The control in a tile's header that opens the same widget in a large view (aria-label and tooltip).
+  expandWidget: (label: string) => `Expand ${label}`,
   // Bottom strip. The three counts are the SAME facts the Egress and
   // Credentials widgets state, said as text you can read without opening
   // anything — which is the whole point of the strip on this board.

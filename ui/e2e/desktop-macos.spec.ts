@@ -14,7 +14,7 @@ import { SCENARIO_POOLS } from "../src/app/lib/new-run-fixtures/scenarios/pools"
 import type { PoolMacOSVM } from "../src/app/lib/types/runner-pools";
 
 // ============================================================================
-// A macOS VM (mocks M-N1, M-N2, M-D1): the New Run OS row with the organisation switch on, the changes panel
+// A macOS VM: the New Run OS row with the organisation switch on, the changes panel
 // for macOS, and the run page's Desktop block for a macOS run. The `none` runner behind this backend has no
 // Mac, so the setup status carries the switch and the seeded RUNNING run is shown as a macOS VM on the wire;
 // the Mac's offer, base phases and disk removal are the runner's words and are pinned in the unit tests.
@@ -164,7 +164,8 @@ test.describe("Run detail: a macOS desktop", () => {
     await desk.scrollIntoViewIfNeeded();
     await expect(desk.getByText(DESKTOP.kindMacOS)).toBeVisible();
     await expect(desk.getByText(DESKTOP.observeOnlyMacOS)).toBeVisible();
-    await expect(desk.getByText(DESKTOP.viewOnlyChip)).toBeVisible();
+    // The chip is in the tile's header, which holds the region.
+    await expect(desk.locator("xpath=ancestor::section[1]").getByText(DESKTOP.viewOnlyChip)).toBeVisible();
     await expect(desk.getByRole("button", { name: DESKTOP.watch })).toBeVisible();
     await expect(desk.getByRole("button")).toHaveCount(1);
   });

@@ -231,6 +231,9 @@ func runnerDecisionEvents(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.U
 	if d.UpstreamFault != "" {
 		data["upstream_fault"] = d.UpstreamFault
 	}
+	if d.GatewayCallID != "" {
+		data["gateway_call_id"] = d.GatewayCallID
+	}
 	d.Refusal.AuditFields(data)
 	b, err := json.Marshal(data)
 	if err != nil {

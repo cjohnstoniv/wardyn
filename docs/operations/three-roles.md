@@ -117,7 +117,7 @@ derives its role.
 
 | `GovernanceLimits` field | Unset means | Meet |
 |---|---|---|
-| `deny_task_mode_exec`, `deny_interactive`, `deny_ui_apps`, `deny_user_drive`, `deny_member_drives` | false | OR |
+| `deny_task_mode_exec`, `deny_interactive`, `deny_ui_apps`, `deny_user_drive`, `deny_member_drives`, `deny_background_desktop_watch` | false | OR |
 | `local_self_defined_components` | false | AND |
 | `deny_placements` | none denied: every placement is permitted | union of the denied placements |
 | `max_concurrent_runs`, `max_ephemeral_disk_mib`, `max_drive_size_mib`, `max_cpu_millis`, `max_memory_mib` | 0 is unlimited | smaller positive |
@@ -205,8 +205,11 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - An empty ceiling `ui_apps` is still no opinion, so a profile without the limit behaves as before.
   - So emptying a profile's own `ui_apps` is not a narrowing: the update waits for a second approver where one is required. An overlay's `ui_apps: []` denies UI apps instead.
   - A super admin is exempt from both at every door, as at create; a security admin is bound.
-  - A limit set later reaches new sessions but does not sever ones already open: a terminal, SSH session or UI-app session opened before the limit was set runs until it ends.
+  - A limit set later reaches new sessions and later requests on an open UI-app session, which get a `403`. It does not sever a socket already open: a terminal, an SSH session or an open UI-app socket runs until it ends.
+  - A limit set during a desktop sign-in stops new entry. An open display stays until it ends, and the agent comes back at End or within 30 minutes.
   - `deny_ui_apps` does not close an SSH port forward to the app; `deny_interactive` does.
+  - `deny_background_desktop_watch` refuses watching a background macOS run's desktop, view only, under the profile as it stands now. `deny_ui_apps` and `deny_interactive` refuse it too.
+  - No role is exempt from a watch, a super admin included, because its ticket is stamped as a member's. An open watch is re-checked every 30 seconds and ends within a minute of a change, unlike the open sockets above. The refusal at the door is `governance_unit` at `runs.desktop_watch`; the re-check that ends an open watch writes a `ui.authorize` row, `denied`, with `data.reason` `governance_unit`.
 - **The autonomy rubric (0.8, #77).**
   - A profile may also carry `limits.autonomy_rubric`, nine closed fields — three egress postures (`egress_open`, `egress_reviewed`, `egress_sealed`), three secret postures (`secrets_powerful`, `secrets_baseline`, `secrets_none`) and three enforced confinement classes (`confinement_cc1`, `confinement_cc2`, `confinement_cc3`).
     - Each is unset or one of four autonomy levels:

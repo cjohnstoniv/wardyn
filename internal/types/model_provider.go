@@ -34,6 +34,10 @@ type ModelProvidersRead struct {
 	ConnectedPeople      map[string]int      `json:"connected_people,omitempty"`
 	EntraLoginConfigured bool                `json:"entra_login_configured"`
 	KindsAvailable       []ModelProviderKind `json:"kinds_available"`
+	// GatewayIdentityIssuer is the iss of every gateway token, and GatewayJWKSPath the key set's path under
+	// this deployment's origin, base path included: what an admin tells a gateway.
+	GatewayIdentityIssuer string `json:"gateway_identity_issuer,omitempty"`
+	GatewayJWKSPath       string `json:"gateway_jwks_path"`
 }
 
 // Empty reports whether p carries no provider — the shape a PUT uses to CLEAR the block, normalized back
@@ -118,6 +122,9 @@ type ModelProvider struct {
 	Bedrock *BedrockSettings    `json:"bedrock,omitempty"` // region, address and sign-in setup for a Bedrock kind
 	Azure   *AzureSettings      `json:"azure,omitempty"`   // endpoint and route for azure_foundry
 	Local   *LocalModelSettings `json:"local,omitempty"`   // model allowlist and request bounds for local_model
+	// GatewayIdentity turns on a signed token, naming the person, the run and the runner, on each model call
+	// to this provider's gateway. Absent is off, and off changes nothing a run sends.
+	GatewayIdentity *ModelProviderGatewayIdentity `json:"gateway_identity,omitempty"`
 	// Harnesses are the harnesses this provider serves, with per-pairing settings.
 	Harnesses []ProviderHarness `json:"harnesses,omitempty"`
 }
@@ -125,6 +132,12 @@ type ModelProvider struct {
 // Serves reports whether harness is enabled for this provider; says nothing about Disabled.
 func (p ModelProvider) Serves(harness string) bool {
 	return slices.ContainsFunc(p.Harnesses, func(h ProviderHarness) bool { return h.Harness == harness })
+}
+
+// ModelProviderGatewayIdentity is a provider's opt-in to run identity. Audience is the token's aud: the value
+// this provider's gateway looks for, and no other destination's.
+type ModelProviderGatewayIdentity struct {
+	Audience string `json:"audience"`
 }
 
 // ProviderAuth is how a custom endpoint expects each person's token: header and value format ("Bearer %s").

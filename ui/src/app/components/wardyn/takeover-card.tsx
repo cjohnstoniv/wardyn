@@ -26,11 +26,14 @@ export function TakeoverCard({
   busy,
   onTakeOver,
   onDecline,
+  canTakeOver = true,
 }: {
   item: ApprovalRequest;
   busy: boolean;
   onTakeOver: () => void;
   onDecline: () => void;
+  // False for a background run, which has no console to take over.
+  canTakeOver?: boolean;
 }) {
   const reason = String(item.requested_scope.reason ?? "");
   return (
@@ -44,9 +47,11 @@ export function TakeoverCard({
       <p className="mt-2 text-sm text-muted-foreground">{NEEDS_YOU.card.blast}</p>
       {item.state === "PENDING" && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button size="sm" disabled={busy} onClick={onTakeOver}>
-            {NEEDS_YOU.banner.takeOver}
-          </Button>
+          {canTakeOver && (
+            <Button size="sm" disabled={busy} onClick={onTakeOver}>
+              {NEEDS_YOU.banner.takeOver}
+            </Button>
+          )}
           <Button size="sm" variant="outline" disabled={busy} onClick={onDecline}>
             {NEEDS_YOU.banner.decline}
           </Button>

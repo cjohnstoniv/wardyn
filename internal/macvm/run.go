@@ -48,6 +48,8 @@ type RunOptions struct {
 	// extraPorts are vsock ports this boot registers beyond a run's (tests
 	// of the listener check).
 	extraPorts []uint32
+	// drive is DriveOpen's; nil on every run.
+	drive *driveBoot
 }
 
 // DefaultStopTimeout is the graceful stop allowance when none is given.
@@ -105,6 +107,7 @@ func Run(ctx context.Context, o RunOptions) error {
 		return err
 	}
 	defer os.RemoveAll(sockDir)
+	shim, _ := o.Desktop.(interface{ DesktopForcedViewOnly() bool })
 	r := &runner{
 		o: o, cfg: cfg, sockDir: sockDir,
 		netCh:   make(chan *os.File, 1),
@@ -113,10 +116,18 @@ func Run(ctx context.Context, o RunOptions) error {
 		st: Status{
 			Proto: ControlProto, RunID: cfg.RunID, State: StateStopped, HelperPID: os.Getpid(),
 			Identity: cfg.Identity, CPUs: cfg.CPUs, MemoryMiB: cfg.MemoryMiB, Network: NetWaiting,
-			Display: Display{Width: DisplayWidth, Height: DisplayHeight, PPI: DisplayPPI},
+			Display:               Display{Width: DisplayWidth, Height: DisplayHeight, PPI: DisplayPPI},
+			DesktopForcedViewOnly: shim != nil && shim.DesktopForcedViewOnly(),
 		},
 	}
 	defer r.events.close()
+	if o.drive != nil {
+		peer, err := r.noReachNet()
+		if err != nil {
+			return err
+		}
+		defer peer.Close()
+	}
 	return r.run(ctx)
 }
 
@@ -136,7 +147,7 @@ func (r *runner) lockDisks() (unlock func(), err error) {
 			return nil, fmt.Errorf("macvm: disk %s: %w", d.ID, err)
 		}
 		held = append(held, u)
-		if !d.ReadOnly {
+		if !d.ReadOnly && r.o.drive == nil {
 			if err := MakeDiskImage(d.Path, d.SizeBytes); err != nil {
 				unlock()
 				return nil, err
@@ -278,6 +289,7 @@ func (r *runner) run(ctx context.Context) error {
 	if r.o.HoldIdleSleep != nil {
 		defer r.o.HoldIdleSleep(os.Getpid())()
 	}
+	defer r.initDriveGuest(ctx)()
 
 	select {
 	case <-m.Done():

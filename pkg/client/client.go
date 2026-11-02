@@ -133,6 +133,8 @@
 //   - /api/v1/branding       — console branding (#1125): the sign-in page's anonymous
 //     read and logo, and the Admin view Branding card's save; a console surface
 //   - /metrics, /readyz      — the operator's scrape and readiness probes
+//   - /.well-known/wardyn-experimental/gateway-jwks.json — the public keys an AI
+//     gateway fetches; a gateway reads it, not an SDK caller
 //   - the console SPA at /   — static assets
 //
 // (The AI Run Composer's /runs/compose* used to be listed here; those routes

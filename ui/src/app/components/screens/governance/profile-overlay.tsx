@@ -16,7 +16,7 @@
 // are the field names themselves (wire keys, rendered mono) and On/Off.
 import * as React from "react";
 import type { CeilingOverlay, GovernanceLimits, GovernanceUnit } from "../../../lib/api/governance";
-import { GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR } from "../../../lib/governance-copy";
+import { BACKGROUND_WATCH_DOOR, GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR } from "../../../lib/governance-copy";
 import type { ConfinementClass } from "../../../lib/types";
 import { CC_ORDER } from "../../../lib/types";
 import { Input } from "../../ui/input";
@@ -162,6 +162,7 @@ export const LIMIT_FIELDS: Field[] = [
   // durations are seconds on the wire), so the wire key names the row, mono,
   // as the ceiling rows do. The autonomy rubric has its own section.
   { key: "deny_ui_apps", kind: "true", label: LIMITS_CHIP.UI_APPS, mono: false },
+  { key: "deny_background_desktop_watch", kind: "true", label: BACKGROUND_WATCH_DOOR.LABEL, mono: false, hint: BACKGROUND_WATCH_DOOR.HINT },
   ceilingField("deny_placements", "list"),
   { key: "allowed_macos_bases", kind: "list", label: MAC_BASES.B14, mono: false, hint: MAC_BASES.B15 },
   ceilingField("local_self_defined_components", "false"),

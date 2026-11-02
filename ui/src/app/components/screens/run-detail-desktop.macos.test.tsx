@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Desktop block of the attach card for a macOS VM run (mock M-D1 frames 5, 6, 7, 9, 10 and 11).
+// The Desktop tile for a macOS VM run.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -12,7 +12,6 @@ import type { MacOSRunFacts } from "./run-detail/macos-run-facts";
 
 const healthMock = vi.fn();
 vi.mock("../../lib/api/health", () => ({ health: { health: (...a: unknown[]) => healthMock(...a) } }));
-vi.mock("../../lib/api/ssh-keys", () => ({ sshKeys: { listKeys: async () => [] } }));
 vi.mock("../../lib/api/runs", () => ({ runs: { attachTicket: vi.fn() } }));
 const signInsGet = vi.fn();
 const signInsPause = vi.fn();
@@ -20,7 +19,7 @@ vi.mock("../../lib/api/desktop-sign-ins", () => ({
   desktopSignIns: { get: (...a: unknown[]) => signInsGet(...a), pause: (...a: unknown[]) => signInsPause(...a), resume: vi.fn() },
 }));
 
-import { ConnectSSHCard } from "./run-detail-ssh";
+import { DesktopCard } from "./run-detail-desktop";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { UI_APPS_LANE } from "../wardyn/copy";
 import { DESKTOP } from "../wardyn/copy/desktop";
@@ -51,11 +50,14 @@ const renderCard = (macOS?: MacOSRunFacts, over: Partial<RunDetail> = {}) =>
   render(
     <MemoryRouter>
       <OperatorProvider operator={false} principal={OWNER}>
-        <ConnectSSHCard run={{ ...run, ...over }} macOS={macOS} />
+        <DesktopCard run={{ ...run, ...over }} macOS={macOS} />
       </OperatorProvider>
     </MemoryRouter>,
   );
 const desk = () => screen.findByRole("region", { name: DESKTOP.title });
+
+// The chip is in the tile's header, a sibling of the region that holds the body.
+const tile = (region: HTMLElement) => region.parentElement!.parentElement!;
 
 beforeEach(() => {
   healthMock.mockReset();
@@ -65,12 +67,12 @@ beforeEach(() => {
   signInsGet.mockResolvedValue(runDisk);
 });
 
-describe("ConnectSSHCard: macOS desktop", () => {
-  it("frame 5: Ready, the macOS kind line, the same Open and pause buttons, and the run-disk note last", async () => {
+describe("DesktopCard: macOS desktop", () => {
+  it("Ready, the macOS kind line, the same Open and pause buttons, and the run-disk note last", async () => {
     renderCard();
     const d = await desk();
     expect(await within(d).findByRole("button", { name: DESKTOP.pauseToSignIn })).toBeEnabled();
-    expect(within(d).getByText(DESKTOP.ready)).toBeInTheDocument();
+    expect(within(tile(d)).getByText(DESKTOP.ready)).toBeInTheDocument();
     expect(within(d).getByText(DESKTOP.kindMacOS)).toBeInTheDocument();
     expect(within(d).queryByText(DESKTOP.kind)).toBeNull();
     expect(within(d).getByRole("button", { name: UI_APPS_LANE.cta("desktop") })).toBeInTheDocument();
@@ -79,11 +81,11 @@ describe("ConnectSSHCard: macOS desktop", () => {
     expect(within(d).queryByText(DESKTOP.signInsNote)).toBeNull();
   });
 
-  it("frame 6: while paused the chip says Agent paused, with today's pause words and the macOS note", async () => {
+  it("while paused the chip says Agent paused, with today's pause words and the macOS note", async () => {
     signInsGet.mockResolvedValue({ ...runDisk, paused: true });
     renderCard();
     const d = await desk();
-    expect(await within(d).findByText(DESKTOP.agentPaused)).toBeInTheDocument();
+    expect(await within(tile(d)).findByText(DESKTOP.agentPaused)).toBeInTheDocument();
     expect(within(d).getByText(DESKTOP.pausedNote)).toBeInTheDocument();
     expect(within(d).getByRole("button", { name: DESKTOP.resume })).toBeInTheDocument();
     expect(within(d).getByText(DESKTOP.signInsNoteRunDisk)).toBeInTheDocument();
@@ -95,7 +97,7 @@ describe("ConnectSSHCard: macOS desktop", () => {
   ])("board F-block: a view-only desktop says so and offers Watch desktop, with no sign-ins (from %s)", async (_from, facts, over) => {
     renderCard(facts, over);
     const d = await desk();
-    expect(await within(d).findByText(DESKTOP.viewOnlyChip)).toBeInTheDocument();
+    expect(await within(tile(d)).findByText(DESKTOP.viewOnlyChip)).toBeInTheDocument();
     expect(within(d).getByText(DESKTOP.kindMacOS)).toBeInTheDocument();
     expect(within(d).getByText(DESKTOP.observeOnlyMacOS)).toBeInTheDocument();
     expect(within(d).getAllByRole("button").map((b) => b.textContent)).toEqual([DESKTOP.watch]);
@@ -107,7 +109,7 @@ describe("ConnectSSHCard: macOS desktop", () => {
     healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: false } });
     renderCard({ desktop: "observe" });
     const d = await desk();
-    expect(await within(d).findByText(DESKTOP.statusOff)).toBeInTheDocument();
+    expect(await within(tile(d)).findByText(DESKTOP.statusOff)).toBeInTheDocument();
     expect(within(d).getByText(DESKTOP.observeOnlyMacOS)).toBeInTheDocument();
     expect(within(d).queryByRole("button")).toBeNull();
     expect(within(d).getByText(/Off on this deployment/)).toBeInTheDocument();
@@ -127,7 +129,7 @@ describe("ConnectSSHCard: macOS desktop", () => {
   ])("frame %s: at the run's end the block is Off and carries the disk line alone", async (_frame, disk, line) => {
     renderCard({ disk }, { state: "COMPLETED" });
     const d = await desk();
-    expect(within(d).getByText(DESKTOP.statusOff)).toBeInTheDocument();
+    expect(within(tile(d)).getByText(DESKTOP.statusOff)).toBeInTheDocument();
     expect(within(d).getByText(DESKTOP.kindMacOS)).toBeInTheDocument();
     expect(within(d).getByText(line)).toBeInTheDocument();
     expect(within(d).queryByRole("button")).toBeNull();
@@ -140,7 +142,7 @@ describe("ConnectSSHCard: macOS desktop", () => {
   ])("frame %s: the disk line comes from the run's own macos_disk, with no prop", async (_frame, disk, line) => {
     renderCard(undefined, { state: "COMPLETED", macos_disk: disk });
     const d = await desk();
-    expect(within(d).getByText(DESKTOP.statusOff)).toBeInTheDocument();
+    expect(within(tile(d)).getByText(DESKTOP.statusOff)).toBeInTheDocument();
     expect(within(d).getByText(line)).toBeInTheDocument();
     expect(within(d).queryByRole("button")).toBeNull();
   });

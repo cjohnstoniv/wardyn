@@ -92,6 +92,9 @@ var SlotHoldingRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWa
 // how many runs are ahead of it in that pool (a count, never whose) and the wait reason token
 // (runner_pool_at_capacity, runner_pool_no_runner_free, runner_pool_runners_at_capacity, runner_pool_recording_store_off,
 // scheduled or owner_sign_in). A scheduled run also carries its start time and the time zone it was given in.
+// LimitSentence is the wait sentence of a run held back by its runners' limits, naming the limit as the
+// runners stand now; set only on a single-run read by the run's owner or an admin, and absent when it
+// cannot be worked out, which leaves the sentence the reason alone gives.
 type RunQueue struct {
 	PoolID     uuid.UUID  `json:"pool_id"`
 	QueuedAt   time.Time  `json:"queued_at"`
@@ -100,6 +103,8 @@ type RunQueue struct {
 	Reason     string     `json:"reason"`
 	StartAt    *time.Time `json:"start_at,omitempty"`
 	TimeZone   string     `json:"time_zone,omitempty"`
+
+	LimitSentence string `json:"limit_sentence,omitempty"`
 }
 
 // PauseReason says why a run's agent is frozen (AgentRun.PausedReason).
@@ -262,8 +267,10 @@ type AgentRun struct {
 	// CreatedVia is the registered portal this run was launched through on the person's behalf; nil when self-launched. The owner is still the person.
 	CreatedVia *uuid.UUID `json:"created_via,omitempty"`
 	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored: projected on every single-run read,
-	// and on a list only with ?include=recording_meta. HasRecording is the only "no recording" signal.
-	HasRecording         bool          `json:"has_recording"`
+	// and on a list only with ?include=recording_meta. HasRecording is the only "no recording" signal. It is a pointer
+	// so a list that did not ask is silent (nil, key omitted) rather than saying false for a stored recording; a
+	// projected run always carries it, true or false.
+	HasRecording         *bool         `json:"has_recording,omitempty"`
 	RecordingBytes       int64         `json:"recording_bytes,omitempty"`
 	RecordingDurationSec float64       `json:"recording_duration_sec,omitempty"`
 	DiskMiB              int           `json:"disk_mib,omitempty"`  // effective ephemeral disk cap MiB; 0 = no cap resolved

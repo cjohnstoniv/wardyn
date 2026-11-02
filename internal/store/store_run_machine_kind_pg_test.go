@@ -82,9 +82,13 @@ func TestPG_MacOSVMKindAndHolders(t *testing.T) {
 	if first.MachineKind != types.MachineMacOSVM {
 		t.Fatalf("macos_vm run read back as %q", first.MachineKind)
 	}
-	held, err := pg.RunnerMacOSVMHolders(ctx, []uuid.UUID{mac.ID, other.ID, uuid.New()})
+	held, err := pg.RunnerMacOSVMHolders(ctx, []uuid.UUID{mac.ID, other.ID, uuid.New()}, uuid.Nil)
 	if err != nil || len(held) != 2 || held[mac.ID] != 2 || held[other.ID] != 1 {
 		t.Fatalf("holders = %v (%v), want 2 on the Mac, 1 on the other and nothing for an unknown runner", held, err)
+	}
+	// A promoted run's start leaves out the run itself, and only that run.
+	if without, err := pg.RunnerMacOSVMHolders(ctx, []uuid.UUID{mac.ID, other.ID}, first.ID); err != nil || without[mac.ID] != 1 || without[other.ID] != 1 {
+		t.Fatalf("holders without the first run = %v (%v), want 1 on the Mac and 1 on the other", without, err)
 	}
 	// RunnerUsage counts the same macos_vm runs among each runner's slot-holders, in its one query.
 	used, err := pg.RunnerUsage(ctx, []uuid.UUID{mac.ID, other.ID}, nil, uuid.Nil)

@@ -430,6 +430,9 @@ func TestDevices_DeviceTokenRefusedOnEveryHumanRoute(t *testing.T) {
 		method, pattern, _ := strings.Cut(key, " ")
 		swept++
 		t.Run(key, func(t *testing.T) {
+			if pattern == gatewayMintPath {
+				testGatewayIdentityOn(srv) // off, it answers as a path no route holds, before any credential is read
+			}
 			w := do(t, srv, method, buildPath(pattern, uuid.NewString()), tok, bodyFor(method, rc))
 			if w.Code != http.StatusUnauthorized {
 				t.Fatalf("device token on %s = %d, want 401: %s", key, w.Code, w.Body.String())

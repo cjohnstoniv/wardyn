@@ -870,7 +870,7 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	prev, _ := ReadToolsRecord(base)
 	res, err := o.Stage.Run(ctx, Stage2Input{Spec: spec, Dir: nb, Previous: prev.Items})
 	if res.ToolsDial != "" {
-		o.Progress(PrepareEvent{Phase: PhaseTools, ToolsDial: res.ToolsDial})
+		o.Progress(PrepareEvent{Phase: PhaseTools, ToolsDial: res.ToolsDial, ToolsDialAt: time.Now().UnixNano()})
 	}
 	if err != nil {
 		return m, false, err

@@ -66,8 +66,8 @@ func (s *Server) refuseRunUnitError(w http.ResponseWriter, r *http.Request, targ
 }
 
 // interactiveDeniedUnit names the profile whose deny_interactive closes a
-// live session into run — a terminal attach or an SSH connection — or ""
-// when none does. The create path already refuses an interactive run under
+// live session into run — a terminal attach, an SSH connection, the desktop, whether a VM's or a
+// declared noVNC app, the desktop's file transfers or a desktop sign-in — or "" when none does. The create path already refuses an interactive run under
 // the limit; this closes the shell a person could still open in a task or exec
 // run. The harness sign-in run is exempt, as harnessLoginGovernance exempts it
 // at create: its terminal is a device-code step, not the member's session.

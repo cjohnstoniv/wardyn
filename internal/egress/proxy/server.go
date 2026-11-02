@@ -12,7 +12,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -103,14 +102,11 @@ func egressTLSConfig(pemBundle string) (*tls.Config, error) {
 	if pemBundle == "" {
 		return nil, nil
 	}
-	pool, perr := x509.SystemCertPool()
-	if perr != nil || pool == nil {
-		pool = x509.NewCertPool()
-	}
-	if !pool.AppendCertsFromPEM([]byte(pemBundle)) {
+	pool, err := hoptls.SystemPoolWith([]byte(pemBundle))
+	if err != nil {
 		return nil, fmt.Errorf("trusted ca: no valid PEM certificates in trusted_ca_pem")
 	}
-	return &tls.Config{RootCAs: pool}, nil
+	return &tls.Config{RootCAs: pool, MinVersion: hoptls.MinClientTLSVersion}, nil
 }
 
 // controlPlaneClient returns the client every control-plane caller rides.
@@ -320,6 +316,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		LLMChannelHosts:      cfg.LLMChannelHosts,
 		LLMUnavailableDetail: cfg.LLMUnavailableDetail,
 		LocalModels:          cfg.LocalModels,
+		GatewayIdentity:      cfg.GatewayIdentity,
 		RunnerLocalModels:    cfg.RunnerLocalModels,
 		Unattended:           cfg.Unattended,
 		ScrubResponses:       cfg.ScrubResponses,

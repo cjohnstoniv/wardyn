@@ -15,6 +15,13 @@ import (
 // (a super admin included: this is the run's shape, not a permission). Logs,
 // audit, status and the authorised lifecycle controls (kill, stop, approve) stay.
 //
+// One exception, on a macOS VM's built-in desktop alone: a view-only watch
+// (run_background_watch.go). It opens only by its own ticket and answers to
+// backgroundWatchRefusal, at the mint, at the enter, at the stream and at every
+// re-check; nothing reaches the display but read requests, and no clipboard moves
+// either way. A declared noVNC, a Linux VM's desktop, the Files panel, sign-ins,
+// the terminal, exec and SSH refuse as ever.
+//
 // The stored field is agent_runs.experience (types.AgentRun.Experience), written
 // once at create from the request. The single predicate is
 // types.AgentRun.BackgroundOnly, and every door asks it through
@@ -81,7 +88,8 @@ var backgroundDoors = []backgroundDoor{
 	// (#2972): signinRun is the one read every sign-in route makes before it acts.
 	// A VM desktop's pause and resume (#2972) refuse in mayPauseDesktopAgent.
 	{Door: "desktop", Owner: "CTL-A (desktop Files panel), CTL-C (desktop sign-ins)", Symbols: []string{"desktopRun", "signinRun", "mayPauseDesktopAgent"},
-		Routes: []string{"GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}",
+		// POST .../desktop/watch-ticket is the contract's one exception, asked in uiEnterCommon and uiSessionStillAuthorized.
+		Routes: []string{"POST /runs/{id}/desktop/watch-ticket", "GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}",
 			"POST /runs/{id}/desktop-signin", "POST /runs/{id}/desktop-signin/shares", "POST /runs/{id}/desktop-signin/end",
 			"POST /runs/{id}/desktop/sign-ins/pause", "POST /runs/{id}/desktop/sign-ins/resume"}, Enforced: true},
 }

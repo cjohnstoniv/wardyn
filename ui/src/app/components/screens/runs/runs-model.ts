@@ -17,6 +17,7 @@
 // needing to know about ceilings at all.
 import type { AgentRun, RunState } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
+import { isBackgroundRun } from "../../../lib/run-entry";
 import { waitingAdoConsent, waitingReauth } from "../../../lib/reauth-waiting-copy";
 import { RUN_HEADER } from "../../wardyn/copy/run-header";
 import { RUN_WAIT } from "../../wardyn/copy/run-wait";
@@ -97,7 +98,8 @@ export function rowPresentation(run: AgentRun, adminView = false): RowPresentati
         return {
           hue: "amber",
           word: you ? RUNS_ROW_WORD.NEEDS_TAKEOVER : RUNS_ROW_WORD.WAITING_FOR_TAKEOVER,
-          action: you ? "take-over" : null,
+          // A background run has no door to take over: its desktop is watched, never driven.
+          action: you && !isBackgroundRun(run) ? "take-over" : null,
           needsYou: you,
         };
       case "reauth":

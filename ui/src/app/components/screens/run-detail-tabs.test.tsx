@@ -52,6 +52,7 @@ const auditMocks = vi.hoisted(() => ({
 vi.mock("../../lib/api/audit", async (importOriginal) => ({
   audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
   egressFromAudit: () => [],
+  gatewayCallId: (await importOriginal<typeof import("../../lib/api/audit")>()).gatewayCallId,
   // attachSessions (run-detail.tsx) canonicalizes before comparing — the
   // REAL mapping, as in run-detail.test.tsx's mock (C-02).
   canonicalAuditAction: (await importOriginal<typeof import("../../lib/api/audit")>()).canonicalAuditAction,
@@ -423,6 +424,26 @@ describe("RunDetailScreen — Audit tab wording", () => {
     expect(within(deny).getByTestId("run-audit-outcome")).toHaveTextContent("deny");
     expect(within(deny).getByTestId("run-audit-detail")).toHaveTextContent("reason credential_invalid · via token · POST /v1/refunds");
     expect(within(deny).getByText("no caller")).toBeInTheDocument();
+  });
+
+  // The call id a row went to a gateway under: a line under the sentence, copied whole; a row without it is as it was.
+  it("shows the gateway call id on an egress row with a copy button, and nothing on a row without one", async () => {
+    const id = "3f2a1c70-8e4b-4d19-a6f2-5b0c7de19a44";
+    const rows = await openAuditTab([
+      { ...base, id: "e6", action: "egress.allow", target: "gateway.example.com", actor_type: "agent", data: { gateway_call_id: id } },
+      { ...base, id: "e7", action: "egress.deny", target: "gateway.example.com", actor_type: "agent", outcome: "denied", data: {} },
+      { ...base, id: "e8", action: "egress.allow", target: "evil.example.com", actor_type: "agent", data: { gateway_call_id: "<img src=x onerror=alert(1)>" } },
+      { ...base, id: "e9", action: "run.create", target: "run-1", data: { gateway_call_id: id } },
+    ]);
+    const [withId, without, hostile, other] = rows;
+    expect(within(withId).getByTestId("run-audit-call-id")).toHaveTextContent(`Call id ${id}`);
+    for (const row of [without, hostile, other]) expect(within(row).queryByTestId("run-audit-call-id")).not.toBeInTheDocument();
+    expect(hostile.querySelector("img")).toBeNull();
+    expect(without.className).toContain("sm:flex-nowrap");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    await userEvent.click(within(withId).getByRole("button", { name: "Copy call id" }));
+    expect(writeText).toHaveBeenCalledWith(id);
   });
 });
 

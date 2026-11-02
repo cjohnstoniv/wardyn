@@ -360,6 +360,9 @@ type RunConfig struct {
 	// Disks are the disk drives' images, which the helper locks before the VM is built and holds
 	// until it ends.
 	Disks []Disk `json:"disks,omitempty"`
+	// DesktopViewOnly is runner.SandboxSpec.DesktopViewOnly: the helper's shim forces this boot's desktop
+	// view only (RFBShim.ForceViewOnly), whatever the base's manifest says.
+	DesktopViewOnly bool `json:"desktop_view_only,omitempty"`
 }
 
 // toolsModeField is the helper's stage-2 boot-configuration field. Only

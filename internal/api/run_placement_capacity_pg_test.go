@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,13 @@ func TestPG_RunnerAtItsMaxRunsWaits(t *testing.T) {
 	w := e.call(e.person, http.MethodPost, "/api/v1/runs", runBody(""))
 	if w.Code != http.StatusCreated || decodeJSON[types.AgentRun](t, w).State != types.RunQueued {
 		t.Fatalf("launch on a full runner = %d %s, want 201 QUEUED, never runner_at_capacity", w.Code, w.Body)
+	}
+	row, err := e.pg.GetRunner(context.Background(), awake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := runnerpool.WaitRunnerAtLimitMsg(row.Name, "Runs at once: 1 running of 1"); !strings.Contains(w.Body.String(), want) {
+		t.Fatalf("launch on a full runner = %s, want the sentence %q", w.Body, want)
 	}
 	if strings.Contains(w.Body.String(), string(placement.ReasonRunnerAtCapacity)) {
 		t.Fatalf("a waiting launch answered %s", w.Body)
@@ -124,6 +132,58 @@ func launchThroughQueue(e *queueEnv, p types.RunnerPool, runners ...uuid.UUID) (
 		}
 	}
 	return atCreate, got
+}
+
+// A capped pool with room whose runners are all full says so, naming the limit on one of them, not the
+// pool's own cap: the sentence follows the wait reason the promotion recorded.
+func TestPG_CappedPoolWithRoomNamesTheRunnersLimit(t *testing.T) {
+	e := newQueueEnv(t)
+	p, a, b := cappedLaptops(e, 1)
+	occupyRunner(e, p, a)
+	occupyRunner(e, p, b)
+	got := e.queuedLaunch(e.person, p, "")
+	if !slices.ContainsFunc(got.Warnings, func(w string) bool {
+		return strings.HasPrefix(w, "Every runner in Laptops is at a limit. For example, ") && strings.Contains(w, ": Runs at once: 1 running of 1.")
+	}) {
+		t.Fatalf("warnings %q do not name Runs at once", got.Warnings)
+	}
+}
+
+// The owner's read of a run that waits on its runners' limits carries the sentence the create answered with,
+// as one field, and follows the runners as they change; a list carries none.
+func TestPG_QueuedRunReadCarriesTheLimitSentence(t *testing.T) {
+	e := newQueueEnv(t)
+	p, a, b := cappedLaptops(e, 1)
+	occupyRunner(e, p, a)
+	occupyRunner(e, p, b)
+	got := e.queuedLaunch(e.person, p, "")
+	one := func() types.AgentRun {
+		w := e.call(e.person, http.MethodGet, "/api/v1/runs/"+got.ID.String(), "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("get run = %d %s", w.Code, w.Body)
+		}
+		return decodeJSON[types.AgentRun](t, w)
+	}
+	read := one()
+	if read.Queue == nil || read.Queue.LimitSentence == "" || !slices.Contains(got.Warnings, read.Queue.LimitSentence) {
+		t.Fatalf("queue %+v does not carry the sentence of the create warnings %q", read.Queue, got.Warnings)
+	}
+	if !strings.Contains(read.Queue.LimitSentence, ": Runs at once: 1 running of 1.") {
+		t.Errorf("sentence %q does not name Runs at once", read.Queue.LimitSentence)
+	}
+	for _, path := range []string{"/api/v1/runs", "/api/v1/runs?limit=1"} {
+		if w := e.call(e.person, http.MethodGet, path, ""); !strings.Contains(w.Body.String(), got.ID.String()) || strings.Contains(w.Body.String(), "limit_sentence") {
+			t.Errorf("%s: want the run listed with no sentence, got %s", path, w.Body)
+		}
+	}
+	// The runners find room before any promotion pass: the stored reason is still the runners', but the
+	// sentence that names a limit would now be untrue, so the read gives none.
+	if _, err := e.pool.Exec(context.Background(), `UPDATE runners SET max_runs = 2 WHERE id = ANY($1)`, []uuid.UUID{a, b}); err != nil {
+		t.Fatal(err)
+	}
+	if later := one(); later.Queue != nil && later.Queue.LimitSentence != "" {
+		t.Errorf("sentence %q names a limit no runner is at", later.Queue.LimitSentence)
+	}
 }
 
 // A queued run starts on the runner its promotion found room on and is never ended for one full runner
@@ -229,10 +289,14 @@ func TestPG_RunnerDiskTotalSpentWaits(t *testing.T) {
 	if w := e.call(e.person, http.MethodPost, "/api/v1/runs/preflight", body); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"verdict":"waits"`) {
 		t.Fatalf("preflight with the disk total spent = %d %s, want 200 and a wait", w.Code, w.Body)
 	}
+	row, err := e.pg.GetRunner(context.Background(), awake)
+	if err != nil {
+		t.Fatal(err)
+	}
 	w := e.call(e.person, http.MethodPost, "/api/v1/runs", body)
 	if w.Code != http.StatusCreated || decodeJSON[types.AgentRun](t, w).State != types.RunQueued ||
-		!strings.Contains(w.Body.String(), string(runnerpool.WaitRunnersAtCapacity)) || !strings.Contains(w.Body.String(), runnerpool.WaitRunnersAtCapacityMsg("Laptops")) {
-		t.Fatalf("launch with the disk total spent = %d %s, want 201 QUEUED for runner_pool_runners_at_capacity", w.Code, w.Body)
+		!strings.Contains(w.Body.String(), string(runnerpool.WaitRunnersAtCapacity)) || !strings.Contains(w.Body.String(), row.Name+" is at a limit: disk total: 4 GB held of 4 GB") {
+		t.Fatalf("launch with the disk total spent = %d %s, want 201 QUEUED for runner_pool_runners_at_capacity naming the disk total", w.Code, w.Body)
 	}
 	// Once the runner has disk to spare (enough for the waiting run and one more), a launch starts at once.
 	if _, err := e.pool.Exec(context.Background(), `UPDATE runners SET total_disk_mib = 16384 WHERE id = $1`, awake); err != nil {

@@ -31,9 +31,11 @@ import (
 // asked not to record and marked policy_off, unless the organisation keeps no recordings at all, which
 // stays org_off whatever the level: WARDYN_RECORDING_STORE=off is the hard off.
 //
-// A macOS VM is a target that does not record: it is asked not to, and marked runner_declined, unless a
-// requirement or a floor (types.RecordingChoice.Floor) asks for a recording, which holds it here as
-// create refused it.
+// A macOS VM's runner keeps no recording of its own and its desktop is not recorded: the runner is asked
+// not to record, and the run is marked runner_declined, unless a requirement or a floor
+// (types.RecordingChoice.Floor) asks for a recording, which holds it here as create refused it. The
+// console and SSH terminal sessions the organisation opens on it are still recorded at its level
+// (newSessionRecorder).
 func (s *Server) applyRunRecording(ctx context.Context, run *types.AgentRun, spec *runner.SandboxSpec, choice types.RecordingChoice) bool {
 	orgOn := s.cfg.RecordingStore != nil
 	macOS := run.MachineKind.IsMacOSVM()
@@ -304,9 +306,10 @@ func (s *Server) targetRecords(ctx context.Context, run types.AgentRun) (records
 	return false, true
 }
 
-// macOSVMUnrecordedNotice is the notice of a macOS VM run that starts unrecorded (MAC-U01), at Review and
-// in the 201's warnings.
-const macOSVMUnrecordedNotice = "A macOS VM run isn't recorded in this release, so this run starts unrecorded. The audit log still shows what happened."
+// macOSVMDesktopNotice is the notice of a macOS VM run, at Review and in the 201's warnings: its desktop
+// is not recorded, and its console and SSH terminal sessions are recorded at the run's recording level
+// (newSessionRecorder).
+const macOSVMDesktopNotice = "This run's desktop is not recorded. Console and SSH terminal sessions are recorded at this run's recording level."
 
 // macOSVMRecordingRefusal is the sentence for a macOS VM run that something requires recording for
 // (MAC-U02 to U04): the cause, then the way out.
@@ -349,7 +352,7 @@ func (s *Server) macOSVMRecordingHold(ctx context.Context, run *types.AgentRun, 
 
 // macOSVMRecordingGate is a macOS VM run's recording at create and Review: the refusal when recording is
 // required, the organisation's level is locked above off, or the caller's ceiling sets a level, else the
-// notice that it starts unrecorded. A deployment that keeps no recordings has nothing to say.
+// notice that its desktop is not recorded. A deployment that keeps no recordings has nothing to say.
 func (s *Server) macOSVMRecordingGate(ctx context.Context, place runPlacement, ceiling governanceCeiling) (notice string, refusal *runRefusal) {
 	if s.cfg.RecordingStore == nil || s.cfg.Store == nil {
 		return "", nil
@@ -376,5 +379,5 @@ func (s *Server) macOSVMRecordingGate(ctx context.Context, place runPlacement, c
 	if choice.FloorSource() != "" {
 		return "", placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind"}, macOSVMRecordingRefusal(choice))
 	}
-	return macOSVMUnrecordedNotice, nil
+	return macOSVMDesktopNotice, nil
 }

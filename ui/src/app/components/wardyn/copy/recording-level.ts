@@ -45,6 +45,9 @@ export const RECORDING_STRIP = {
   ON: (level: string) => `Recording · ${level}`,
   TERMINAL_ONLY: "Recording · Terminal only",
   TERMINAL_ONLY_NOTE: "The screen is not recorded.",
+  // A macOS VM run: its runner keeps no desktop recording, but the console and SSH terminal sessions opened on it are recorded.
+  MACOS_TERMINAL: "Terminal sessions recorded",
+  MACOS_TERMINAL_NOTE: "The desktop is not recorded.",
   OFF: "Recording off",
   OFF_NOTE: "Nothing is captured. The audit log still shows what happened.",
   UNAVAILABLE: "Recording unavailable",

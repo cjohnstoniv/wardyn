@@ -211,8 +211,11 @@ func TestMacGuestInitTurnsTheAutoUpdaterOff(t *testing.T) {
 // the run.json a create writes holds only the run boot's own keys. A field added to RunConfig fails
 // this test, so tools mode can reach a run boot only by a reviewed change here. disks is the run's disk
 // drives (macvm.Disk: id, path, read_only, size_bytes), which a prepare or tools-update boot refuses.
+// desktop_view_only is the one key written for one kind of run: present and true on a background run's
+// boot, whose desktop the helper forces to view only, and absent on an interactive one's.
 func TestMacVMRunBootCarriesNoToolsMode(t *testing.T) {
-	want := []string{"base_dir", "cpus", "disks", "identity", "ledger_dir", "ledger_entry", "memory_mib", "run_id", "runner_id", "shares", "sock_root"}
+	const viewOnly = "desktop_view_only"
+	want := []string{"base_dir", "cpus", viewOnly, "disks", "identity", "ledger_dir", "ledger_entry", "memory_mib", "run_id", "runner_id", "shares", "sock_root"}
 	var got []string
 	rt := reflect.TypeFor[macvm.RunConfig]()
 	for i := range rt.NumField() {
@@ -222,26 +225,34 @@ func TestMacVMRunBootCarriesNoToolsMode(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("run.json fields %v, want exactly %v", got, want)
 	}
-	r := newMacRig(t)
-	spec := macSpec()
-	sb, err := r.d.CreateSandbox(context.Background(), spec)
-	if err != nil {
-		t.Fatal(err)
+	for name, background := range map[string]bool{"an interactive boot": false, "a background boot": true} {
+		t.Run(name, func(t *testing.T) {
+			r := newMacRig(t)
+			spec := macSpec()
+			spec.DesktopViewOnly = background
+			sb, err := r.d.CreateSandbox(context.Background(), spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := os.ReadFile(filepath.Join(r.c.runDir(spec.RunID), macvm.RunConfigFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var written map[string]any
+			if err := json.Unmarshal(b, &written); err != nil {
+				t.Fatal(err)
+			}
+			for k := range written {
+				if !slices.Contains(want, k) || strings.Contains(strings.ToLower(k), "tool") {
+					t.Fatalf("run.json carries %q", k)
+				}
+			}
+			if v, present := written[viewOnly]; present != background || (background && v != true) {
+				t.Fatalf("run.json's %s = %v (present %v) on a boot with background = %v", viewOnly, v, present, background)
+			}
+			_ = r.d.StopSandbox(context.Background(), sb.Ref)
+		})
 	}
-	b, err := os.ReadFile(filepath.Join(r.c.runDir(spec.RunID), macvm.RunConfigFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var written map[string]any
-	if err := json.Unmarshal(b, &written); err != nil {
-		t.Fatal(err)
-	}
-	for k := range written {
-		if !slices.Contains(want, k) || strings.Contains(strings.ToLower(k), "tool") {
-			t.Fatalf("run.json carries %q", k)
-		}
-	}
-	_ = r.d.StopSandbox(context.Background(), sb.Ref)
 }
 
 // A macOS VM's start says each phase as it enters it, and a failure says the phase it stopped in: the

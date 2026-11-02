@@ -95,6 +95,10 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.PortRule != "" {
 		fields["port_rule"] = dl.PortRule
 	}
+	// The id the gateway's access log shares with this row; absent on a run with no gateway route.
+	if dl.GatewayCallID != "" {
+		fields["gateway_call_id"] = dl.GatewayCallID
+	}
 	// Whose refusal a deny was ("refusal", egress.Refusal); absent on an unclassified row.
 	dl.Refusal.AuditFields(fields)
 	if dl.MatchedRule != "" {

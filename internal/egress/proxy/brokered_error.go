@@ -129,7 +129,7 @@ func shapeOfVendor(vendor string) errShape {
 func (p *Proxy) gatewayVendorOf(host string) (vendor string, ok bool) {
 	h := strings.TrimSuffix(strings.ToLower(host), ".")
 	for v, u := range p.llmUpstreams {
-		if !sameHost(u.host, h) {
+		if !sameHostIP(u.host, h) {
 			continue
 		}
 		if ok && vendor != v {
@@ -140,10 +140,10 @@ func (p *Proxy) gatewayVendorOf(host string) (vendor string, ok bool) {
 	return vendor, ok
 }
 
-// sameHost compares two host names, as parsed addresses when both are IP
+// sameHostIP compares two host names, as parsed addresses when both are IP
 // literals so that every spelling of one address (zero-compressed, mixed-case,
 // IPv4-mapped, bracketed) is the same host.
-func sameHost(a, b string) bool {
+func sameHostIP(a, b string) bool {
 	if a == b {
 		return true
 	}
