@@ -449,7 +449,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 ### User drives (`drives.enabled`)
 
 - Renamed from `userDrives.enabled` in 0.8 (issue #658), a clean break with no alias — a `--reuse-values` upgrade from an older release must set `drives` explicitly; see [docs/sdk.md](../../../docs/sdk.md)'s "Renamed in 0.8" table.
-- The chart refuses to render while the old `userDrives.enabled` is `true`, since nothing reads it any more: set `drives.enabled=true` and `userDrives.enabled=false` (or delete the `userDrives` block from your values file).
+- With `k8s.enabled`, the chart refuses to render while the old `userDrives.enabled` is `true`, since nothing reads it any more: set `drives.enabled=true` and `userDrives.enabled=false` (or delete the `userDrives` block from your values file).
 - A **user drive** is per-person storage a run mounts at `/home/agent/drive`.
 - An admin registers a drive and allocates it in the console; a member ticks a box on a run.
 - Two Kubernetes backends, both claim-based — a pod cannot bind a host path, and Pod Security Standards forbids `hostPath` at Baseline and Restricted alike:
@@ -715,7 +715,7 @@ helm upgrade --install wardyn ./deploy/helm/wardyn -n wardyn \
 
 ## Split SSH exposure
 
-- `ssh.enabled` adds an SSH port to wardynd's EXISTING Service (no second Service object), so by default SSH shares whatever exposure HTTP has (`service.type`, `networkPolicy.ingress.from`).
+- `ssh.enabled` adds an SSH port to wardynd's EXISTING Service (no second Service object), so by default SSH shares whatever exposure HTTP has (`service.type`, `networkPolicy.ingress.from`). Run pods are excluded from the same-namespace peers for the SSH port.
 - To expose SSH differently — e.g. its own `LoadBalancer` while HTTP stays internal `ClusterIP` — bring your own minimal Service targeting the same pods:
 
 ```yaml

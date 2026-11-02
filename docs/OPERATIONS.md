@@ -681,8 +681,8 @@ commands are the ones in "Back them up" and "Restore them", and in
   and the only `/tmp` volume is an `emptyDir`
   ([`deploy/helm/wardyn/templates/deployment.yaml`](../deploy/helm/wardyn/templates/deployment.yaml), which says so
   itself: "durable across a container restart, not a reschedule").
-- A rolling deploy — which is what `helm upgrade` does to a Deployment — or a pod reschedule gives the new Pod a new
-  empty directory.
+- A redeploy — `helm upgrade` recreates the pod, the chart's `Recreate` strategy — or a pod reschedule
+  gives the new Pod a new empty directory.
 - So the counter reads 0 again and the permanently-refused events it accounted for are gone with it.
 - wardynd says so at every boot rather than leaving it to be inferred from a counter that silently reset.
 - It WARNs `the audit

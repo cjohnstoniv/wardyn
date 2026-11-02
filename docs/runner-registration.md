@@ -244,7 +244,7 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 |---|---|
 | Runner binary | `--runnerd <file>`, else a `wardyn-runnerd` beside the CLI or on `PATH`, else a download. Each is checked against the SHA-256 this CLI pins, and refused on a mismatch |
 | Package runner | The macOS package's `/usr/local/wardyn/bin/wardyn-runnerd` needs no hash while it and its directory are root-owned and nobody else can write them |
-| Download | `<base>/v<version>/wardyn-runnerd-<os>-<arch>`. The base is `--artifact-base` (then saved in `cli.json`), the saved one, `/healthz.cli_artifact_base`, else the release |
+| Download | `<base>/v<version>/wardyn-runnerd-<os>-<arch>`. The base is `--artifact-base` (then saved in `cli.json`), the macOS managed preference `ArtifactBase`, the saved one, `/healthz.cli_artifact_base`, else the release |
 | Registration token | Minted only when this computer has no runner identity: single use, 1 hour, yours only. It reaches `wardyn-runnerd setup --token-file /dev/fd/3` over a pipe: never on disk, in an argument or in an environment variable |
 | Service | `wardyn-runnerd setup --org <url>`, with `--org-ca-file` when `wardyn ca` holds a root for the organisation. Your shell's environment goes along without `WARDYN_TOKEN`, `WARDYN_ADMIN_TOKEN` and `ANTHROPIC_API_KEY` |
 | Claim and pool | The CLI claims the runner with your own credential, then applies `--pool` and `--default` |
@@ -261,7 +261,7 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 
 ### `wardyn runner install` and `wardyn runner upgrade`
 
-`wardyn runner install` is `wardyn runner setup` with the runner taken from a signed release instead of the copy this CLI pins. It takes setup's flags and `--version` (this CLI's own release when left out). On a computer that already runs a runner it is `upgrade`, so running it again with a newer `--version` upgrades.
+`wardyn runner install` is `wardyn runner setup` with the runner taken from a signed release instead of the copy this CLI pins. It takes `--version` (this CLI's own release when left out), `--pool`, `--default`, `--name` and `--artifact-base`, but not `--runnerd`. On a computer that already runs a runner it ignores `--pool`, `--default` and `--name` and says so; `wardyn runner upgrade` takes `--version` and `--artifact-base` only. On a computer that already runs a runner it is `upgrade`, so running it again with a newer `--version` upgrades.
 
 | Step | What it does |
 |---|---|
