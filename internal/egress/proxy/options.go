@@ -104,6 +104,8 @@ type Options struct {
 	LLMUnavailableDetail string
 	// LocalModels is Config.LocalModels, forwarded verbatim. See Proxy.localModels.
 	LocalModels map[string]types.LocalModelSettings
+	// GatewayIdentity is Config.GatewayIdentity, forwarded verbatim. Empty == off.
+	GatewayIdentity []GatewayIdentityRoute
 	// RunnerLocalModels is Config.RunnerLocalModels, forwarded verbatim.
 	RunnerLocalModels []string
 	// Unattended is Config.Unattended: a review-path push is refused, not held.

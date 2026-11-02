@@ -434,6 +434,7 @@ func rearmBodyDeadline(w http.ResponseWriter) {
 // port is the REAL CONNECT port — the dial below must use it, not assume 443, or the operator's
 // credential reaches whatever answers at the wrong port.
 func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host string, port int) {
+	p.stripGatewayHeaders(r.Header)
 	// A via_org destination: the inner request's own Host goes to the
 	// organisation, which refuses one that is not the grant's destination.
 	if route, ok := p.viaOrgRouteForHost(host); ok {
