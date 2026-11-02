@@ -19,7 +19,7 @@ import (
 )
 
 // path_provenance (the policy tree's admin reads): which unit on a context's path changed each
-// knob, beside the leaf-only provenance a run gets. pathTree (governance_provenance_golden_test.go)
+// knob, beside check's leaf-only provenance. pathTree (governance_provenance_golden_test.go)
 // is the tree every pin reads.
 
 // checkWalls is POST /governance/check's two provenances for one user subject.

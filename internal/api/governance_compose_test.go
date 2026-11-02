@@ -160,7 +160,7 @@ func TestStandaloneProfilesResolveByteForByte(t *testing.T) {
 }
 
 // TestStandaloneProvenanceNamesTheUnitAndChangesNoValue: a standalone unit whose walls equal the
-// deployment's still sets them (they stay put when the deployment default changes), so provenance
+// deployment's still sets them (a change to the deployment default does not reach them; a redeploy can still drop a grant), so provenance
 // and path_provenance name the unit for them; only a size it omits is the deployment's. A
 // default-rooted unit follows the deployment, so its equal walls stay the deployment's. None of it
 // changes a value: the resolved ceiling and limits are the 0.8.5 body's, and a standalone unit's

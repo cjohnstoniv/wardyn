@@ -285,8 +285,10 @@ func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, erro
 	// The path's provenance, step by step. A default-rooted or base-less chain starts from the
 	// deployment's walls with its own size filled in: that fill-in is the deployment's (Default's
 	// root changes nothing), and each step's changes are its unit's. A standalone root's walls are
-	// the root's whether or not they equal the deployment's, since they stay put when the deployment
-	// default changes; only a size it omits follows the deployment.
+	// the root's whether or not they equal the deployment's, since a change to the deployment default
+	// does not reach them; only a size it omits follows the deployment. The exception is the root's
+	// grants, which standaloneAuthority re-intersects against the deployment's, so a redeploy can drop
+	// one; they are still the root's to state.
 	deployment := s.deploymentAuthority().Ceiling
 	last := policyref.Provenance{Layer: policyref.LayerUnit, Name: chain[root].Name}
 	if out.StandaloneRoot {
