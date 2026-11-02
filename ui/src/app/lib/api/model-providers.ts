@@ -32,17 +32,33 @@ export interface ModelProvidersSnapshot {
 // carries no count — re-read GET after a save that may have purged some.
 export interface ModelProvidersList extends ModelProvidersSnapshot {
   connected: Record<string, number>;
+  // What an admin tells an AI gateway: every gateway token's real iss, and the key set's path with the
+  // base path. Display only, like `connected`: neither rides back on a PUT.
+  gatewayIssuer?: string;
+  gatewayJwksPath?: string;
 }
 
 export const modelProviders = {
   // GET /api/v1/model-providers — operatorOnly, like GET /agent-providers.
   async getModelProviders(): Promise<ModelProvidersList> {
     const res = await wfetch("/model-providers");
-    // The read-only server facts (counts, entra_login_configured, kinds_available) never ride back on a PUT,
-    // whose strict decode refuses them.
-    const { connected_people, entra_login_configured: _entra, kinds_available: _kinds, ...providers } =
-      await asJson<ModelProvidersRead>(res);
-    return { providers, connected: connected_people ?? {}, etag: res.headers.get("ETag") };
+    // The read-only server facts (counts, entra_login_configured, kinds_available, the gateway issuer and
+    // key set path) never ride back on a PUT, whose strict decode refuses them.
+    const {
+      connected_people,
+      entra_login_configured: _entra,
+      kinds_available: _kinds,
+      gateway_identity_issuer,
+      gateway_jwks_path,
+      ...providers
+    } = await asJson<ModelProvidersRead>(res);
+    return {
+      providers,
+      connected: connected_people ?? {},
+      gatewayIssuer: gateway_identity_issuer,
+      gatewayJwksPath: gateway_jwks_path,
+      etag: res.headers.get("ETag"),
+    };
   },
 
   // PUT /api/v1/model-providers — replaces the WHOLE document; there is no

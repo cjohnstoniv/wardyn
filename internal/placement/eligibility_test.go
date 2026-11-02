@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -96,6 +97,19 @@ func TestLocalEligibilityApprovalGrantAndUnknownKind(t *testing.T) {
 	p.Origins[path] = CredentialOrigin{Class: ClassOwn, Stored: true, OwnNamespace: true, OwnerOnly: true, GrantKind: "future_key"}
 	if _, r := LocalEligibility(p); r == nil {
 		t.Fatal("unknown grant kind admitted")
+	}
+}
+
+// A run carrying signed identity for a gateway is refused on a local placement: the mint is the
+// organisation's, and no runner relays it.
+func TestLocalEligibilityRefusesAGatewayIdentityRoute(t *testing.T) {
+	p := LocalPlan{Spec: runner.SandboxSpec{ProxyConfig: runner.ProxyConfig{GatewayIdentity: []proxy.GatewayIdentityRoute{{Host: "gw.corp.example", Port: 443, ProviderID: "p", Audience: "a"}}}}}
+	if _, r := LocalEligibility(p); r == nil || r.Reason != ReasonPlacementCredential || r.Field != "ProxyConfig.GatewayIdentity" {
+		t.Fatalf("refusal %v, want placement_credential on ProxyConfig.GatewayIdentity", r)
+	}
+	p.Spec.ProxyConfig.GatewayIdentity = nil
+	if _, r := LocalEligibility(p); r != nil {
+		t.Fatalf("a plan with no route was refused: %v", r)
 	}
 }
 

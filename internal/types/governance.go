@@ -29,6 +29,8 @@ import (
 //     design, so tool_rules can't express "supervised" there either.
 //   - DenyUIApps: a UI app is relay access into the sandbox that no
 //     tool_rules ceiling sees.
+//   - DenyBackgroundDesktopWatch: a screen can show what a background run keeps
+//     out of its logs, and no tool_rules ceiling sees a viewer.
 //   - DenyUserDrive: a drive OUTLIVES the run, so no tool_rules ceiling
 //     describes the escape — the storage itself is the escape.
 //   - DenyPlacements: a placement the people under this profile may not run on;
@@ -63,6 +65,11 @@ type GovernanceLimits struct {
 	// rather than an empty ceiling ui_apps, which stays "no opinion" so
 	// existing profiles keep their behaviour (#1391).
 	DenyUIApps bool `json:"deny_ui_apps,omitempty"`
+	// DenyBackgroundDesktopWatch refuses watching the desktop of a background macOS run created
+	// under this profile, view only. A DOOR with no zero-value opinion: absent means allowed (the
+	// watch is on by default), and the site switch (SiteMacOSVM.AllowBackgroundWatch) can turn it
+	// off for everyone. It adds to DenyInteractive and DenyUIApps, which close the desktop too.
+	DenyBackgroundDesktopWatch bool `json:"deny_background_desktop_watch,omitempty"`
 	// MaxConcurrentRuns caps how many NON-TERMINAL runs a member under this
 	// profile may hold at once. 0 is unlimited.
 	MaxConcurrentRuns int `json:"max_concurrent_runs,omitempty"`

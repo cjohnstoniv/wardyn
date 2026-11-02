@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,8 +14,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -24,8 +27,8 @@ const macOSNoRecording = ", and a macOS VM run isn't recorded in this release. C
 // The sentences a macOS VM run is refused with, and the notice it starts under, are the canon's (MAC-U01
 // to U04), naming the cause that asks for the recording.
 func TestMacOSVMRecordingSentences(t *testing.T) {
-	if macOSVMUnrecordedNotice != "A macOS VM run isn't recorded in this release, so this run starts unrecorded. The audit log still shows what happened." {
-		t.Errorf("notice = %q", macOSVMUnrecordedNotice)
+	if macOSVMDesktopNotice != "This run's desktop is not recorded. Console and SSH terminal sessions are recorded at this run's recording level." {
+		t.Errorf("notice = %q", macOSVMDesktopNotice)
 	}
 	locked := func(l types.RecordingLevel) *types.SiteRecording { return &types.SiteRecording{Level: l, Locked: true} }
 	for _, tc := range []struct {
@@ -139,7 +142,7 @@ func TestStepPlacementCapability_MacOSVMRecording(t *testing.T) {
 			// The notice rides the fold's warnings, which Review and the 201 both carry.
 			var notices int
 			for _, warn := range f.policyWarns {
-				if warn == macOSVMUnrecordedNotice {
+				if warn == macOSVMDesktopNotice {
 					notices++
 				}
 			}
@@ -231,5 +234,80 @@ func TestMacOSVMRecordingHold(t *testing.T) {
 		if held != (tc.want != "") || msg != tc.want {
 			t.Errorf("%s: (%q, %v), want (%q, %v)", tc.name, msg, held, tc.want, tc.want != "")
 		}
+	}
+}
+
+// Review told the person a macOS VM run is unrecorded, so a level that resolves to Screen and actions
+// doesn't record its desktop. The same level on a Linux VM does.
+func TestMacOSVMDesktopIsNotRecordedAtAnyLevel(t *testing.T) {
+	s := &Server{cfg: Config{RecordingStore: fsRecordingStore(t)}}
+	for kind, want := range map[types.MachineKind]bool{types.MachineMacOSVM: false, types.MachineLinuxVM: true} {
+		run := types.AgentRun{ID: uuid.New(), MachineKind: kind, RecordingLevel: types.RecordingScreenActions,
+			NotRecorded: types.NotRecordedRunnerDeclined}
+		if kind == types.MachineLinuxVM {
+			run.NotRecorded = ""
+		}
+		if got := s.desktopRecorded(run); got != want {
+			t.Errorf("%s: desktopRecorded = %v, want %v", kind, got, want)
+		}
+	}
+}
+
+// A macOS VM run's console and SSH terminal sessions are recorded at the run's recording level, masked,
+// as any run's are: its mark says the runner keeps no cast of its own, not that the organisation
+// keeps none. At a level of off they are not.
+func TestMacOSVMTerminalSessionsAreRecordedAboveOff(t *testing.T) {
+	const secret = "macos-vm-secret-token-1234"
+	for _, tc := range []struct {
+		level    types.RecordingLevel
+		notRec   types.RunNotRecorded
+		recorded bool
+	}{
+		{types.RecordingTerminal, types.NotRecordedRunnerDeclined, true},
+		{types.RecordingScreenActions, types.NotRecordedRunnerDeclined, true},
+		{types.RecordingOff, types.NotRecordedPolicyOff, false},
+	} {
+		t.Run(string(tc.level), func(t *testing.T) {
+			runID := uuid.New()
+			reg := secretmask.NewRegistry()
+			reg.Add(runID, []byte(secret))
+			casts, audit := fsRecordingStore(t), &recRecorder{}
+			srv := New(Config{RecordingStore: casts, MaskRegistry: reg, Audit: audit, AdminToken: adminToken})
+			run := types.AgentRun{ID: runID, MachineKind: types.MachineMacOSVM, RecordingLevel: tc.level, NotRecorded: tc.notRec}
+			tee, finish := srv.newSessionRecorder(run, "console-1", runner.AttachOptions{Cols: 80, Rows: 24})
+			if (tee != nil) != tc.recorded {
+				t.Fatalf("tee non-nil = %v, want %v", tee != nil, tc.recorded)
+			}
+			if tee != nil {
+				_, _ = tee.Write([]byte("token is " + secret + "\r\n"))
+			}
+			finish(context.Background(), types.ActorHuman, "alice@example.com")
+
+			key := recording.CastKey(runID.String(), "console-1")
+			rc, err := casts.OpenCast(context.Background(), key)
+			if err == nil {
+				defer rc.Close()
+			}
+			if (err == nil) != tc.recorded {
+				t.Fatalf("OpenCast error = %v, want a cast stored = %v", err, tc.recorded)
+			}
+			var rows int
+			for _, ev := range audit.snapshot() {
+				if ev.Action == "session.recording.write" && ev.Outcome == "success" && ev.Target == key {
+					rows++
+				}
+			}
+			if want := map[bool]int{true: 1, false: 0}[tc.recorded]; rows != want {
+				t.Errorf("session.recording.write rows = %d, want %d", rows, want)
+			}
+			if !tc.recorded {
+				return
+			}
+			body, _ := io.ReadAll(rc)
+			assertCastHasNoSecret(t, string(body), secret, "macOS VM console session")
+			if !strings.Contains(decodeCastOutput(t, string(body)), "<secret-hidden>") {
+				t.Errorf("the cast lacks the mask placeholder:\n%s", body)
+			}
+		})
 	}
 }

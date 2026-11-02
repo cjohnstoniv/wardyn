@@ -19,12 +19,12 @@
 | Network | One virtual NIC, wired to the run's own network relay and proxy in Docker. The guest has no other way out |
 | Proxy variables | `HTTPS_PROXY`, `HTTP_PROXY` and `WARDYN_PROXY_URL` name the run's proxy. The relay carries a connection to the proxy itself unchanged, and the proxy checks what is sent on it as it checks a container's |
 | Open connections | The relay holds at most 1,024 per run on granted ports other than 80. One past that is refused and reported as `tunnel-limit`; the cap does not evict existing connections; lower process or container resource limits can bind first |
-| Desktop | The guest's own Screen Sharing, reached only through the runner and the organisation's gateway. The clipboard rules apply as for a Linux VM desktop. The desktop is not recorded in this release |
+| Desktop | The guest's own Screen Sharing, reached only through the runner and the organisation's gateway. The clipboard rules apply as for a Linux VM desktop. The desktop is not recorded |
 | Confinement | The VM boundary, which the runner treats as the `CC3` family. The run's recorded `confinement_class` stays the one it asked for |
 | Sign-ins | Kept on the run's virtual disk, not in memory ([Credentials and sign-ins](#credentials-and-sign-ins)) |
 
 - Not in this release: Linux VMs on a Mac and reviving a stopped VM. Each is refused with a reason.
-- Recording is not in this release either. A macOS VM run starts unrecorded, with a notice at Review. It is refused at create when recording is required, the organisation's level is locked above off, or the governance ceiling sets a level.
+- A macOS VM run's desktop is not recorded, and Review says so. Its console and SSH terminal sessions are recorded at this run's recording level, as any run's are. A run is refused at create when recording is required, the organisation's level is locked above off, or the governance ceiling sets a level.
 - macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.
 - A Kubernetes runner refuses the kind.
 
@@ -51,7 +51,7 @@
 | The Mac | Apple silicon, macOS 26 or later. On macOS 26 each prepare, `--new-image` too, needs [setup by hand](#setup-by-hand) once per base, about 10 minutes at the Mac. macOS 27 sets the guest up unattended |
 | Docker | A running engine on the Mac. The guest's network relay and proxy run in it, and the runner needs it to start ([Docker on the Mac](#docker-on-the-mac)) |
 | Network | An uninspected path to `updates.cdn-apple.com`, which Apple pins: a TLS-inspecting proxy fails the image download at once, and the error prints the image URL and names `--ipsw`. The same exemption covers [stage 2](#the-prep-proxy)'s opaque tunnels |
-| Disk | About 85 GiB free to prepare, then about 107 GiB free to start a second VM ([Disk](#disk)) |
+| Disk | About 81 GiB free to prepare, then about 107 GiB free to start a second VM ([Disk](#disk)) |
 | Power | On AC power to start preparing ([Preparing the base image](#preparing-the-base-image)) |
 | A login | Someone logged in on the Mac ([Logins, FileVault and restarts](#logins-filevault-and-restarts)) |
 | Company-managed | The Mac's trust class is `managed_device` and its posture file says `mdm_managed` ([Which Macs qualify](#which-macs-qualify)) |
@@ -85,6 +85,9 @@
 | `macos_vm_bases_dir` | The Mac's runner, or `MacOSVMBasesDir` in the profile | A directory of the Mac's other bases, one install list each ([Several bases](#several-bases)) |
 | `MDMManaged`, `DiskEncrypted` | The managed preferences profile | The posture, from your MDM, when no posture file exists |
 | `macos_vm.max_base_age_days` | The organisation's site config | The most days since a Mac's base was prepared that a run is accepted. Empty or 0: no maximum; a negative number is refused. A runner that reports no base age is refused while one is set |
+| `macos_vm.allow_background_watch` | The organisation's site config (Settings, macOS virtual machines) | Whether a person may watch a background macOS run's desktop, view only. Absent or `true`: allowed. `false`: no one may. A governance profile's `deny_background_desktop_watch` denies it for that profile's runs. |
+
+- **A write that leaves the switch out keeps it.** A site config write that leaves out `allow_background_watch`, whether or not it names `macos_vm`, keeps the stored value. A stored `false` stays off.
 
 ## Which Macs qualify
 
@@ -122,7 +125,7 @@
 
 | Step | What happens |
 |---|---|
-| 1. Check | The host, Docker, free disk (the 85 GB above) and AC power. A failed check stops with the fix |
+| 1. Check | The host, Docker, free disk (the 81 GiB above) and AC power. A failed check stops with the fix |
 | 2. Download | Apple's current restore image, about 25 GB, in resumable 64 MiB ranges. The SHA-256 is recorded |
 | 3. Validate | The image is loaded and checked against what this Mac supports. A bad image is deleted and fetched once more |
 | 4. Install | macOS is installed into a sparse 50 GB disk |
@@ -142,8 +145,9 @@
   - Just after, a new connection to port 22 must be refused outright. A timeout, or a network that cannot reach the guest, proves nothing: stage 1 keeps trying for 30 seconds, then fails.
   - A refusal counts only from a guest shown live on the same boot: port 5900 still sends its banner and no new DHCP request arrived. A stopped, rebooted or reset guest also refuses port 22, so that case stops stage 1 at once.
   - Any failure stops preparing and no base is published.
-- **The desktop.** Apple has said Screen Sharing turned on from the command line may let a viewer only watch. Preparing ends with a control check, and `status` reports whether the desktop is `control`, `observe` or `none`. With `observe`, a run's desktop can be watched from the run page (Watch desktop), not acted in.
+- **The desktop.** Apple has said Screen Sharing turned on from the command line may let a viewer only watch. Preparing ends with a control check, and `status` reports whether the desktop is `control`, `view only` or `none`. With `view only`, a run's desktop can be watched from the run page (Watch desktop), not acted in.
   - The UI gateway and the Mac's helper each drop keys, pointer moves and paste, so that input never reaches the guest. Built and unit-tested; not yet run on a real Mac.
+  - View only covers keys, pointer moves and paste. Uploads from the run's Files panel still go to `~/Transfers` in the guest unless policy blocks them.
   - `status` says how, and the prepare log says why.
   - To turn control on, run `wardyn-runnerd macos-vm edit-base`, turn on Screen Sharing with "VNC viewers may control screen with password" in the guest, then close the window. On a macOS 26 base the desktop stays view only even so ([#3901](https://github.com/cjohnstoniv/wardyn/issues/3901)).
 - **Newer macOS.** Wardyn does not tell you that Apple has a newer image, but `status` shows when the base was prepared and this Mac's macOS beside it. To move to a newer one, run `wardyn-runnerd macos-vm prepare --new-image` with the per-run flags; a plain `prepare` keeps a ready base and says there is nothing to prepare.
@@ -184,9 +188,16 @@
 
 1. Run `wardyn-runnerd macos-vm edit-base` in Terminal on the Mac, signed in at its desktop. Not over SSH, and not with sudo.
 2. Wardyn copies the base and, in a boot with no window, changes the password of `wardyn-admin` from the one the base keeps to a fresh one-time code. The command names the file that holds the code, `setup-code.json`, as setup by hand does.
-3. The copy boots in a window. Click Show code in the window, then sign in as `wardyn-admin` with the code. The guest has no internet during the session.
+3. The command's first line says it edits a copy of the VM base, not this Mac. It then prints that the copy takes about 2 minutes to start, and the copy boots in a window. Click Show code in the window.
+   - The copy is meant to have no internet during the session; that has not been seen on a real Mac.
+   - **Who you are signed in as.** The base turns on auto-login for `agent`, so the copy may open at `agent`'s desktop, not at a login window. One Mac did, with `agent` unlocked. As `agent` you have no `sudo` and cannot read `/Library/Wardyn/stage`.
+   - **Administrator steps.** Open Terminal. Spotlight may not answer in the guest (one Mac showed "Indexing Paused"), so use Finder > Go > Utilities. Run `su wardyn-admin` and give the one-time code as the password.
+   - **If the window opens on macOS's setup pages.** One Mac showed "How Do You Connect?" on a base that had finished setup by hand. Which answer to give has not been witnessed. The steps of setup by hand continue without a network, and the recheck refuses any account Wardyn did not make, so make none.
+   - Seen on one Mac: what was clicked on those pages stayed in `agent`'s settings and reached later runs. Wardyn has not tested it.
 4. Make your changes. For desktop control, open System Settings > General > Sharing and turn on Screen Sharing. Under its (i) button, turn on "VNC viewers may control screen with password".
    - For folder shares, open System Settings > Privacy & Security > Full Disk Access, click +, press Command-Shift-G, type `/usr/local/libexec/wardyn-guest-agent`, and turn it on.
+   - The grant is meant to stay in the base and reach every run's guest, where Full Disk Access lifts macOS's privacy prompts for every process the run starts. That it survives the recheck and reaches each run is not yet witnessed. Wardyn gives no button for it.
+   - A certificate that still reads `not_trusted` is listed in the Terminal where you started `edit-base`, with its name, subject, SHA-256 and the exact `sudo security add-trusted-cert` command. Nothing runs it for you: run each in the admin Terminal, check the subject and SHA-256, and confirm macOS's prompt.
 5. Leave Remote Login off and add no accounts. When you are done, close the window: Wardyn asks the guest to shut down. The window closes once the guest has shut down.
 
 - **The recheck.** The copy boots once more with no window. First the code is replaced with a fresh random password, which the copy keeps for the next edit, and the code file is deleted.
@@ -199,6 +210,11 @@
 - **A tripwire, not prevention.** The recheck of accounts and Remote Login is a tripwire, not prevention, because the Mac's person is root on the host. They can change a base's disk without `edit-base`.
 - **Refusals.** `edit-base` refuses while a prepare or tools update runs, without a ready base, without the Mac's desktop, and when both VM slots are in use. It also refuses a base prepared before Wardyn kept its admin password: run `wardyn-runnerd macos-vm prepare --new-image` first. The edit holds one slot for all its boots.
 - **What the organisation sees.** The runner reports when its base was last edited and the last recheck's result. Each run records when the base it started from was last edited, as `base_edited_at` on its machine.
+- **What `status` shows.** After a passing edit, `wardyn-runnerd macos-vm status` prints what the recheck read in its boot, and when.
+  - Each `ca` item reads trusted, not trusted or could not be read. Full Disk Access for the guest agent reads allowed, refused or could not be read.
+  - The edit prints the same lines, with the desktop mode, when the recheck finishes.
+  - They record that boot. They are not live, and a read that failed says it could not be read, never trusted or allowed.
+  - The Full Disk Access read is one open of macOS's protected TCC database by the guest agent. It reads nothing from the file and writes nothing.
 - Built and unit-tested; not yet run on a real Mac.
 
 ## The prep proxy
@@ -265,6 +281,10 @@ The file must be an X.509 v3 CA certificate: its `basicConstraints` say `CA:TRUE
 3. Stage 2 goes on either way: a CA that reads `not_trusted` does not stop preparing.
 
 - `not_trusted` means macOS refused a trust without a person. On macOS 26 expect this: Apple asks a person to approve a new admin trust. Trust it by hand in `edit-base`: in Terminal, run `sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain /Library/Wardyn/stage/<name>/item.cer` and answer macOS's prompt.
+  - `edit-base` prints this command for each such item, with its subject and SHA-256, and runs nothing itself.
+  - Seen on one macOS 26.7 Mac: the command took effect with no prompt, the recheck passed, `tools.json` moved the item to `trusted`, and the next run's clone trusted it. Wardyn's own checks have not run this on a Mac.
+  - On that Mac a certificate trusted by hand reached hosts that need only the system trust store. A host marked Inspected still needs the run's proxy certificate.
+  - The list is a file on the Mac ([Customising the base](#customising-the-base)). Whoever can write that file decides which certificates `edit-base` offers; the console does not edit it.
 - A tools update removes a CA the list no longer pins, with its trust settings, by its SHA-1.
 - On macOS 26, expect removing or rotating a CA to stop the tools update: Apple asks a person to remove an admin trust. The old base stays ready and still trusts the old CA. To drop or replace a CA, change the list and run `wardyn-runnerd macos-vm prepare --new-image`: the new base trusts only the CAs the list holds.
 
@@ -351,24 +371,33 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 ## How many VMs a Mac offers
 
 - The Mac offers a number, `max`, of at most 2. It is the runner's own live macOS VM runs plus how many more the Mac's ledger can admit now. The runner recomputes it every 15 seconds.
-- Two limits apply, and both can set it to 0:
-  - The runner's declared memory totals. Docker's memory setting decides them: a total cannot pass the memory Docker reports, and a per-run limit cannot pass its total.
+- Three limits apply to `max`, and each can set it to 0:
+  - Apple's cap: 2 less the macOS VMs the ledger already holds.
   - The Mac's memory budget: its memory, minus what Docker reports, minus 4 GiB for macOS. Each VM costs its guest memory plus about 1 GiB of host overhead.
-  - To run two VMs, lower Docker's memory allowance in its settings. On a 32 GiB Mac, Docker at 20 GiB leaves a budget of 8 GiB, enough for one guest; at 12 GiB it leaves 16, as in the first row below.
+  - The Mac's free disk, less what running VMs have reserved and a floor, divided by one run's disk reservation.
+- The runner's declared totals (`--total-memory`, `--total-cpu`) do not enter `max`. They bound what the organisation lets the runner's runs hold, so a run they hold back waits. A total cannot pass the memory Docker reports, and a per-run limit cannot pass its total.
+- To run two VMs, lower Docker's memory allowance in its settings. On a 32 GiB Mac, Docker at 20 GiB leaves a budget of 8 GiB, enough for one guest; at 12 GiB it leaves 16, as in the first row below.
 - Left at the defaults, a runner's total is half of Docker's memory, shared among its runs. That is usually below one macOS guest's minimum, so set the limits when you register (`--total-memory`, `--per-run-memory`, `--total-cpu`, `--per-run-cpu`).
-- `wardyn-runnerd setup` shows this arithmetic with the Mac's own numbers and names what to change.
+- `wardyn-runnerd setup` shows a worked sum with the Mac's own numbers, which includes the runner's total, and names what to change.
+- **`status` is this Mac's own sum.** Its `max` comes from Apple's cap, the Mac's memory and its free disk. It does not read the organisation's limits for the runner: Runs at once, the CPU, memory and disk totals, and what other runs reserve. Those can hold fewer.
+  - A run those limits hold back waits in the queue, and the run names the limit ([The queue](runner-pools.md#the-queue)).
+  - A run the Mac's own `max` leaves no room for is refused at create and when it is promoted, not queued. The sentence depends on the case:
+  - A Mac that already runs 2 macOS VMs: "`<name>` already runs 2 macOS VMs, the most Apple's licence allows."
+  - A Mac whose `max` is below 2, outside a pool of several runners: "`<name>` has no room for another macOS VM right now."
+  - A pool of several runners, where the Mac cannot take the run: "Every runner in this pool must be able to take a macOS VM, and at least one can't right now. Try again later, or choose another pool."
 - **Per-run limits.** The organisation sends the runner's per-run CPUs and memory on every connect, and the runner then recomputes `max`.
   - A runner with no per-run limits sends 0 CPUs and 0 memory, which means unset. Each guest then gets the base's minimum.
   - A per-run memory or CPU count that is set but below the base's minimum makes this runner offer no macOS VMs while it stays so. The runner logs the reason and names the flag to raise, `--per-run-memory` or `--per-run-cpu`. The base stays ready.
   - `status` shows the base's minimum CPUs and memory.
 
-| Mac memory | Docker memory | Limits (GiB) | `max` |
+| Mac memory | Docker memory | Limits (GiB) | `setup` says |
 |---|---|---|---|
 | 32 GiB | 12 GiB | `--total-memory 12 --per-run-memory 6` | 2: the runner's total holds 2 x 6, and the budget (32 - 12 - 4 = 16) holds 2 x (6 + 1) |
 | 16 GiB | 4 GiB | `--total-memory 4 --per-run-memory 4` | 1: the budget is 8, one guest needs 5 and two need 10 |
 | 16 GiB | 8 GiB | Any | 0 if the base's minimum is over 3 GiB: the budget is 4 |
 
 - A runner whose per-run limit is below the base's minimum offers no macOS VMs at all.
+- The sums in the table are `setup`'s. `status` reads the ledger's three limits above, so it leaves out the runner's totals.
 - The organisation and then the runner each also refuse a run whose applied CPU or memory is below the minimum. The refusal says the shortfall and what lowered it: the profile's ceiling `resources`, its `limits.max_*`, the pool, or the server.
 - The server keeps a run within the runner's per-run limits and never raises them.
 - A start is also refused when the Mac's available memory is under the guest's plus 2 GiB, and when the Mac is too hot.
@@ -376,7 +405,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 
 ## Disk
 
-- Preparing needs about 85 GiB free. Starting a VM reserves its disk's logical size plus 1 GiB (51 GiB), and needs that much free plus a 5 GiB floor. A second VM therefore needs about 107 GiB free when it starts.
+- Preparing needs about 81 GiB free (the 25 GiB restore image, the 50 GiB base disk, 1 GiB extra and the 5 GiB floor). Starting a VM reserves its disk's logical size plus 1 GiB (51 GiB), and needs that much free plus a 5 GiB floor. A second VM therefore needs about 107 GiB free when it starts.
 - The reservation bounds each VM's growth on the live volume, because a clone's private blocks cannot pass the disk's logical size.
 - **What it does not bound.** Space held by the Mac's own APFS snapshots, such as Time Machine's hourly local snapshots, is outside the reservation.
   - While a snapshot keeps a clone's earlier blocks, rewriting them uses new space, and a deleted run's blocks stay allocated until the snapshot goes.
@@ -402,7 +431,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | `/Users/Shared/Wardyn/sock/` | `root:wheel` `1777`, sticky | One folder per login, `u<uid>/`, made by that login with mode `0700`; each run's sockets sit in a folder inside it |
 
 - The package's installer creates these. A runner never creates them: if they are missing or not owned by root, the Mac offers no macOS VMs and says to reinstall the package.
-- **A pre-planted name is moved, not changed.** A path that is already there and not exactly as above is moved into a new root-only `.wardyn-quarantine.*` folder beside `/Users/Shared/Wardyn`.
+- **A pre-planted name is moved, not changed.** A path that is already there and not exactly as above is moved into a new root-only `.wardyn-quarantine.*` folder. For `/Users/Shared/Wardyn` itself the folder sits beside it; for anything inside it, the folder sits inside `/Users/Shared/Wardyn`.
   - The installer makes the path again and moves the entries across. It never changes the owner or mode of what it found, and never deletes it.
   - An admin can inspect and delete a quarantine folder as root.
 - **The installer waits for the lock.** If any login holds the admission lock for more than 10 seconds, the installation fails closed: macOS VMs stay off. Reinstall the package to retry once nobody holds it.
@@ -488,6 +517,39 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | Managed application configuration | Wardyn delivers no organisation browser, editor or assistant settings into the guest | Today, if you list them: a `file` item pushes a settings file under `/Library`, `/usr/local` or `/opt`. One at a harness's managed settings path is refused, as are Wardyn's own files ([Customising the base](#customising-the-base)) |
 | Process-level audit | Wardyn audits the guest's network, credentials and lifecycle. It records no processes inside the guest | Today, in part |
 
+## Watching a background run's desktop
+
+A background run has no terminal, SSH or web door. This is the one exception: the person who started a background macOS VM run can watch its desktop from the run page, view only. Built and unit-tested; not yet run on a real Mac.
+
+- **What a watch can do.** It shows the picture and nothing else. Keys, pointer moves, paste and clipboard copy are dropped by three separate things: the helper for that boot, the Mac's desktop mode and the gateway's own filter.
+  - A watch does not wake a paused run, mark the run as in use or keep it alive.
+  - It opens through `POST /runs/{id}/desktop/watch-ticket`. A declared noVNC app, the desktop's files, a sign-in and a terminal stay refused ([Errors](../sdk.md#reason-branch-on-this-never-on-errors-prose)).
+- **The exposure.** A background run has no terminal, so what a person sees of it is its logs and audit trail. A screen can show what those keep out: a secret in a GUI app, a document, anything the run puts on screen.
+  - Turn the site switch off, or set the profile limit, where that is not acceptable.
+  - On macOS 26 the viewer may show the guest's login window, not its apps ([#3890](https://github.com/cjohnstoniv/wardyn/issues/3890)). Whether what it shows is useful is not yet witnessed.
+- **Recording.** A watch is not recorded, because a macOS VM run's desktop is not recorded.
+  - The audit log shows `ui.open` and `ui.close` with `view_only` and `background`, never the picture.
+
+| A watch is refused when | What you see |
+|---|---|
+| The caller is a member, a sponsor or a security admin, and did not start the run | `404`, as for any run they cannot see |
+| The caller is a super admin | `403` `run_owner_only`, on another's run and on a run with no personal owner |
+| The run is not running, or has ended | `409` `attach_not_running` or `attach_run_kept` |
+| The run is not a background run | `409` `run_background_watch_not_background` |
+| The run is a background run that is not a macOS VM | `409` `run_background_only` |
+| `macos_vm.allow_background_watch` is `false` | `403`, "Watching background desktops is turned off for this install. An admin can turn it on." |
+| The run's profile sets `deny_background_desktop_watch`, `deny_ui_apps` or `deny_interactive` | `403` `governance_unit`, target `runs.desktop_watch` ([Denials](denials.md)). No role is exempt |
+| The run's profile cannot be resolved because its overlay cannot be satisfied | `403` `governance_overlay_unsatisfiable`, target `runs.desktop_watch`, with the overlay's own sentence |
+| The agent's sign-ins in a desktop are "Not allowed" | `403` `desktop_sign_ins_off`, "Your admin doesn't allow sign-ins in a desktop while `<agent>` runs, and a macOS desktop can't block them yet." |
+| The run began before the upgrade, or its helper has not reported that this boot's desktop is forced view only | `409`. A run started before the upgrade has no watch |
+| The Mac's runner is offline, or its desktop mode is not `observe` (view only), including a Mac that offers control | `409`. Wardyn checks again when the runner reconnects |
+| The run is paused | `409`, "This run is paused. You can watch it once it is running again." |
+
+- **An open watch is re-checked every 30 seconds.** Each check reads the site switch, the profile and the Mac again, and ends the view when any of them now refuses. A read that fails ends it too. An open view ends within a minute of a change; closing it does not stop the run.
+- **Where it shows.** `GET /runs/{id}` carries `background_watch`, beside `macos`, on a running background macOS VM run. Its `state` is `open`, `site_off`, `governance`, `sign_ins_off`, `old_boot`, `unconfirmed`, `offline`, `control`, `paused` or `not_run_owner`.
+  - The run's owner also gets the refusal's sentence. Anyone else who can read the run gets `not_run_owner` and no sentence.
+  - The run page shows its Watch button only when the state is `open`.
+
 ## Limits in this release
 
 | Limit | Detail |
@@ -495,7 +557,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | Proxy certificate | On macOS 26 the run's System keychain does not trust it, so apps that use only the system trust store fail on inspected hosts ([System trust store](#apps-that-use-only-the-system-trust-store)). Node, Python, git and curl are pointed at it |
 | Harnesses | Claude Code, Codex CLI and "Your own tools", depending on what the base installed and what passed the launcher's self-test. If Apple's Command Line Tools cannot install, only "Your own tools" is offered |
 | Folders | Shared into the guest; see [Folders](#folders) |
-| Desktop | One fixed 1920 x 1080 display. An `observe` result (see above) can be watched, not controlled |
+| Desktop | One fixed 1920 x 1080 display. A `view only` result (see above) can be watched, not controlled |
 | Clipboard | Paste in is allowed and copy out is blocked by default, as for other desktops, if Apple's Screen Sharing carries the standard clipboard messages. Otherwise nothing is copied either way |
 | Heat and battery | New VMs are refused at serious or critical thermal state. Battery use and lid-close sleep on MacBooks were not measured |
 | Guest patching | The guest's automatic updates are off, so a run's OS is predictable. Re-prepare to move to a newer macOS. `macos_vm.max_base_age_days` in the site config refuses runs on a Mac whose base is older |
@@ -513,6 +575,7 @@ Before a run starts, Wardyn asks the guest to trust the run's proxy certificate 
 - **Your organisation's root.** Trust it by hand in `edit-base` ([The organisation CA](#the-organisation-ca)). That reaches a Tunnel only host.
 - **The run's proxy certificate.** Trusting it by hand can't help: the certificate is new for each run.
 - **Which hosts are which.** The run's Policy tab and `wardyn run policy` mark each host.
+- **Testing with `nscurl`.** Reported on one Mac: `nscurl` printed a TLS failure (`-9802`) against a Tunnel only host behind a TLS-inspecting proxy and still exited 0. Read its output, not its exit code. `curl` with the CA variables set answered 200 on the same hosts.
 - **`kubectl`.** A kubeconfig that names a CA may not use the system trust store. The one a kubectl component writes names the run's proxy certificate.
 
 ### Folders
@@ -525,6 +588,10 @@ Before a run starts, Wardyn asks the guest to trust the run's proxy certificate 
 - A folder macOS protects (Desktop, Documents, Downloads, iCloud Drive, removable volumes) needs the runner allowed under Privacy & Security → Files and Folders first.
 - A whole home folder, /Users or /private/var can't be shared, because each holds files Wardyn protects; share a project folder inside it.
 - A workspace folder on this Mac is bound to its runner ([A workspace folder on your runner](hybrid-laptops.md#a-workspace-folder-on-your-runner)). The runner shares only a folder bound to it, inside its `--drive-root`, and a writable one only inside the writable roots.
+  - **Who sets which root.** On a managed Mac, whoever runs the MDM sets the runner's drive roots with `DriveRoot`. With `lock_security_settings` in that profile they outrank a flag, an environment variable and `runnerd.json`, so the Mac's person cannot override them through the runner.
+  - On a Mac with no managed profile, the person sets them: `wardyn-runnerd setup --drive-root <dir>`.
+  - The operator of the organisation's server sets the member workspace roots (`WARDYN_USER_WORKSPACE_ROOTS`, or a member's entry in `WARDYN_USER_WORKSPACE_ROOTS_MAP`) and the writable roots (`WARDYN_USER_WRITABLE_ROOTS`, less `WARDYN_USER_WRITABLE_DENY`, where deny wins). A folder refused for being outside the workspace roots names the first setting.
+  - A member's folder has to pass both: the server's roots when the run is made, and the runner's own at the bind.
 
 ### Drives
 
@@ -535,13 +602,43 @@ Before a run starts, Wardyn asks the guest to trust the run's proxy certificate 
 - Only a macOS VM run on that Mac attaches it, as a second disk at the drive's path (`/Users/agent/drive` or `/Users/agent/drives/<name>`). Its first run formats it as Mac OS Extended (journaled): a later run's VM did not mount an APFS one. A run on another runner, or of another sandbox kind, is refused naming the Mac.
 - Turn on FileVault on a Mac that keeps disk drives: the guest does not encrypt them.
 - A disk drive is in one run at a time. A second run on the Mac that asks for it while another holds it is refused when that run starts, not at Review.
-- A run's VM holds its disk drive for up to about 80 seconds after the run shows as ended, usually half a minute. A run that asks for the drive then is refused as one the drive is still being released by: try again in two minutes.
+- A run's VM holds its disk drive for up to about 80 seconds after the run shows as ended, usually half a minute. A run that asks for the drive meanwhile waits for it on the Mac.
+  - The runner tries every 3 seconds for at most 90 seconds in all, and the run goes on as soon as the drive is free.
+  - A drive held by a live run of the same runner is refused at once. Anything else holding it is waited for: a run that just ended, another login's VM, or a `drive open` ([Opening a drive on the Mac](#opening-a-drive-on-the-mac)).
+  - After 90 seconds the run fails with "Waited 90 seconds for the drive to be released." and the sentence below.
+  - The sentence: "`<drive>` is in another macOS VM on this Mac. If it is open there with drive open, close it there, then start the run again. Otherwise a run that just ended may still be releasing it: a disk drive is in one run at a time, so try again in a minute, or when that run ends."
 - The guest finds a disk drive by its size, apart from the boot disk, because a macOS guest does not show the disk's identifier. It refuses two disks of one size.
 - A macOS VM run attaches one disk drive, and a kept work folder counts as one. A run that names two is refused at Review and at create (`drive_one_disk`), whatever their sizes.
 - Keeping the work folder of a macOS VM run keeps `/Users/agent/work` as a disk drive on the Mac the run used. The run's pool must hold one Mac; with several, it is refused. A run its Mac refused when it started removes its kept work folder drive.
 - Deleting a disk drive asks its Mac to delete the image. While the Mac is offline the drive stays as deleting, and the image goes when the Mac reconnects. If the Mac is no longer registered, the image stays on it and only the record goes. A drive in a run is refused until that run ends.
 - For up to 90 seconds after a person's last macOS VM run ends, deleting their disk drive is refused as a drive still being released: try again in two minutes.
 - Wardyn does not encrypt the image: the runner's macOS login and root on the Mac can read it. It stays until the drive is deleted, and deleting it is not secure erasure (see [Backups, Spotlight and removal](#backups-spotlight-and-removal)).
+
+### Opening a drive on the Mac
+
+An agent wrote a disk drive's files, so treat them as untrusted. `wardyn-runnerd drive open <name>` opens a drive through a throwaway VM. It finds only a drive that a run on this Mac has attached: the runner keeps the drive's name beside its image when a run attaches it.
+
+The Mac never mounts, checks or repairs the volume. It hands the file to the VM as a raw disk and reads a tar stream back, writing plain files. Opening the image yourself, by double-click in Finder or with `hdiutil`, makes this Mac's own system read a volume an agent could have crafted. Do neither with a drive an agent wrote.
+
+1. Run `wardyn-runnerd drive open <name>` in Terminal as the Mac's user. A name the Mac does not know is refused. A name two drives share is refused with the object names to use instead.
+2. Wait about a minute. The VM starts from the ready base with the drive and nothing else: no environment, secret, file or CA, and no agent.
+3. The files are copied to `~/Wardyn Drives/<name>`. The command prints how many files and bytes it copied, and what it skipped.
+4. Change the files. Press Return to write the changes back, or Ctrl-C to discard them. A second Ctrl-C stops at once.
+5. The next run that uses the drive sees the written-back files, owned by `agent`.
+
+- **Network.** The VM's network device is wired to one end of a socket pair that carries nothing, so the guest has nothing to reach by design. The command says the VM has no internet. That has not been seen on a real Mac.
+- **What reaches the Mac.** Regular files and folders only. Links of both kinds, devices, pipes and set-id files are skipped and never followed. The closing line counts them, for example "Skipped 3: 2 links, 1 device."
+  - Every file is written with mode 0644, so none can execute.
+  - Wardyn sets the `com.apple.quarantine` attribute on every file and folder, which is what macOS reads to treat a file as downloaded. What macOS then does with it is not yet witnessed.
+- **Limits on a copy.** At most 250,000 files and folders, and no more bytes than the Mac has free less 5 GiB. A name part over 255 bytes, a path over 1,024 bytes, an absolute name or a `..` ends the copy and removes it.
+- **The folder.** A copy goes only into an empty folder, which the command makes private (mode 0700) under your home. A link in its place is refused. The folder stays after the command ends.
+  - A lock file, `.<name>.lock`, beside the folder keeps a second `drive open` of the same name out while the first runs. The lock goes with the command that holds it, even if that command is killed.
+- **A partial copy.** If the VM's `tar` could not read some items, the copy is kept and the command says how many are missing and what the VM said. Write back then replaces nothing, and `--delete` removes nothing, that the copy does not hold.
+  - A damaged listing, a limit passed or Ctrl-C before the copy ends removes the copy and writes nothing.
+- **Writing back.** New and changed files go back through the VM as `agent`. A name the copy never held is never overwritten. `--delete` also removes from the drive the copied files you deleted, and no other file. Links you made in the folder are skipped.
+- **A slot and the lock.** The VM takes one of the Mac's VM slots and the drive's lock while it is open. A run that wants the drive waits, then fails as above. A run the Mac then has no VM room for is refused, not queued: "has no room for another macOS VM right now".
+- **Record.** A drive open leaves no row in the organisation's audit log. The command logs when a drive opens and closes, with its result, in `drive-open-cli.log` in `macos-vm.noindex/`, beside the helper's `drive-open.log`.
+- Built and unit-tested; not yet run on a real Mac. The first runs must still show that the drive mounts in the VM, that the copy arrives, that `xattr` reads the quarantine attribute back, and that the VM's slot frees when it ends.
 
 ## Not yet tested on a real Mac
 
@@ -587,6 +684,11 @@ Before a run starts, Wardyn asks the guest to trust the run's proxy certificate 
 | `wardyn-macvm probe` reporting the guest agent as `ok` on a release build | That the agent beside the helper is the release's own. Probe compares the two builds' commit and module version; a release build records no stamp to compare, so `ok` there means same commit, not same release stamp |
 | A macOS VM run's Inspected and Tunnel only marks match what its proxy does, checked host by host from inside the guest | The run's Policy tab and `wardyn run policy` on a macOS VM run |
 | A run's VM boots the installed guest, and two VMs run on one Mac at once | Running a macOS VM, and the two-VM count |
+| A throwaway VM mounts a drive an agent wrote, its `tar` copies the files out, and its slot frees when it ends | `drive open <name>` |
+| The attribute `drive open` sets (`com.apple.quarantine`) reads back with `xattr`, and macOS treats the file as downloaded | Whether a file copied from a drive is flagged on the Mac |
+| The throwaway VM reaches no network, and neither does the `edit-base` copy | The "no internet" lines of `drive open` and `edit-base` |
+| A background run's helper drops all input in a boot started with the forced view, on a real macOS guest | Watching a background run's desktop |
+| The Full Disk Access probe answers allowed and refused correctly, and `su wardyn-admin` works from the auto-login session in the edit window | `edit-base`'s Full Disk Access read, and its administrator steps |
 
 - **Every other check that needs a real Mac** has also not run:
   - the signed helper running from the package;
@@ -606,6 +708,7 @@ Before a run starts, Wardyn asks the guest to trust the run's proxy certificate 
 - An upgrade of the runner package does not repeat the macOS install.
 - A runner set up with `wardyn-runnerd setup` keeps its own copies of `wardyn-macvm` and `wardyn-guest-agent` beside it. `wardyn runner upgrade` replaces only `wardyn-runnerd` and says so; to update all three, install the new `wardyn-runnerd.pkg` and run `/usr/local/wardyn/bin/wardyn-runnerd setup` again with the same flags. `install.sh --uninstall` removes all three.
   - A LaunchAgent of your own that runs `/usr/local/wardyn/bin/wardyn-runnerd` needs no rerun. The package installs the helper and guest agent in that folder, and the runner looks beside its own binary.
+  - If that LaunchAgent's plist sets `WARDYN_PROXY_IMAGE`, reload it with `launchctl bootout` and then `launchctl bootstrap` after you change the value. Reported on one Mac: `launchctl kickstart -k` keeps launchd's cached environment, so the run proxy stays on the old image.
 - When the guest agent in the base differs from the runner's, the runner runs a tools update: it clones the base, boots it, applies the new agent and pins, and keeps the result. It takes one slot like any VM, for minutes.
 - A base the new runner cannot accept is marked "update needed", and the Mac offers no macOS VMs until it is re-prepared (`prepare --new-image`).
 
@@ -628,7 +731,7 @@ Before a run starts, Wardyn asks the guest to trust the run's proxy certificate 
 | Installing the package failed and macOS VMs stay off | A login held the admission lock for over 10 seconds. Reinstall the package |
 | The runner says the ledger is busy | Another account holds the lock, or the ledger is crowded with entries. See [The shared ledger](#the-shared-ledger) |
 | A third VM refused | The Mac already runs two, or preparing holds one |
-| `max` is 0 | Docker's memory or the runner's limits leave no room ([How many VMs a Mac offers](#how-many-vms-a-mac-offers)) |
+| `max` is 0 | Docker's memory leaves no budget, the Mac has too little free disk, or a per-run limit is below the base's minimum ([How many VMs a Mac offers](#how-many-vms-a-mac-offers)) |
 | A run ended because the Mac ran low on disk | Free space fell below 5 GiB, possibly held by snapshots ([Disk](#disk)) |
 | The runner says the Mac needs a restart | The framework still holds a slot. Restart the Mac |
 | A newer macOS is out | Run `wardyn-runnerd macos-vm prepare --new-image` ([Preparing the base image](#preparing-the-base-image)) |
@@ -661,4 +764,4 @@ The runner drawer shows most of these from fixed codes and numbers the runner re
 - Migration `0234_macos_vm_kind` widens `agent_runs.machine_kind` to allow `macos_vm`, and the desktop sign-in `store` column to allow `run_disk`. It changes no row.
 - A run records its guest macOS build (`guest_os`) and the Mac's (`host_os`) in `vm_machine`.
 - A run's page says whether the Mac removed the run's directory, with the VM's disk and clone, or why it could not. The runner sends fixed codes, which migration `0236_macos_vm_disks` stores.
-- A runner older than this release sends no such report. Its run's page says "Removing…" for 10 minutes after the run ends, then nothing about the disk.
+- A runner older than this release sends no such report. Its run's page says "Removing the macOS VM's disk from this Mac…" for 10 minutes after the run ends, then nothing about the disk.

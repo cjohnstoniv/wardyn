@@ -211,6 +211,7 @@ TENANT_ID=<tenant> CLIENT_ID=<app> deploy/azure-entra-sso/06-kind-follow-main.sh
    - The assertion here is that the run **launches** (`201`, pod scheduled), proving the member path works end to end, not just authenticates.
    - It won't necessarily *complete*: an actual agent turn needs a model credential this runbook doesn't provision (an admin adds a model provider under Settings → Model providers),
    - and the member connects their own credential for it, if you want to watch a full run.
+   - To see what a member gets while signed in as `wardyn-admin`, use the **User view** and look through the member type. An admin run outside that view, such as one from the admin token, is not governed like a member's. To bind admin runs to a profile, see [Constrained-admin mode](../../docs/operations/member-mode.md#constrained-admin-mode); it is off by default.
 4. **`wardyn-outsider` — the two-gate demo.** `wardyn-outsider` has no group and no App Role assignment (`03-people.sh`).
    - Use a fresh browser profile / incognito window, or sign out of Entra first, for **both** sign-ins below.
    - A live `wardyn-admin` or `wardyn-member` (or even a prior `wardyn-outsider`) session in the same tab is silently reused instead of prompting for credentials, and the step then "passes" without testing anything.

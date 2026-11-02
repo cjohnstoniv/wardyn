@@ -64,6 +64,11 @@ const RECONNECT_MAX_DELAY_MS = 5000;
 // patience.
 const CONNECT_TIMEOUT_MS = 15_000;
 
+// The daemon accepts the socket and sends the attach-mode frame before the guest has started the shell, so an open
+// proves nothing about the terminal. The reconnect budget comes back only once the socket has carried a terminal
+// byte, or has stayed open this long (a quiet shell is still a shell).
+const SETTLED_OPEN_MS = 15_000;
+
 // The displacement contract (internal/api/attach_holder.go): a take-over
 // closes the displaced client's socket with code 1008 (StatusPolicyViolation)
 // and a reason of exactly `taken over by <principal>`. That close must not
@@ -486,6 +491,18 @@ export function useAttachSession(args: UseAttachSessionArgs) {
         }
       };
 
+      // A successful attach resets the budget: the first terminal byte, or SETTLED_OPEN_MS open.
+      let settleTimer: ReturnType<typeof setTimeout> | null = null;
+      let settled = false;
+      const settle = () => {
+        if (settleTimer) clearTimeout(settleTimer);
+        settleTimer = null;
+        if (settled || disposed || wsRef.current !== ws) return;
+        settled = true;
+        reconnectAttempts = 0;
+        setReconnectAttempt(0);
+      };
+
       ws.onopen = () => {
         opened = true;
         wasOpen = true;
@@ -495,8 +512,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
         }
         clearConnectTimer();
         // #216 — was `term.writeln([reconnected])`; the open dot below says so.
-        reconnectAttempts = 0; // a successful attach resets the budget
-        setReconnectAttempt(0);
+        // The budget is NOT reset here: see SETTLED_OPEN_MS.
+        settleTimer = setTimeout(settle, SETTLED_OPEN_MS);
         setReconnectExhausted(false);
         setConnState("open");
         // Fit + send the real size once the PTY is attached (deduped per socket).
@@ -516,6 +533,7 @@ export function useAttachSession(args: UseAttachSessionArgs) {
       ws.onmessage = (ev) => {
         if (ev.data instanceof ArrayBuffer) {
           const bytes = new Uint8Array(ev.data);
+          if (bytes.length > 0) settle();
           outFlow.write(bytes);
           // Mirror the decoded text to the optional observer (token detection).
           const cb = onOutputRef.current;
@@ -565,6 +583,8 @@ export function useAttachSession(args: UseAttachSessionArgs) {
 
       ws.onclose = (ev) => {
         clearConnectTimer();
+        if (settleTimer) clearTimeout(settleTimer);
+        settleTimer = null;
         writerWs = null;
         copyGate.reset();
         if (disposed) return;

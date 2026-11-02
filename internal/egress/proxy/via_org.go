@@ -127,6 +127,7 @@ func (p *Proxy) forwardViaOrg(w http.ResponseWriter, r *http.Request, route ViaO
 	}
 	out.ContentLength = r.ContentLength
 	out.Header = r.Header.Clone()
+	p.stripGatewayHeaders(out.Header)
 	removeHopByHop(out.Header)
 	out.Header.Del(ViaOrgAuthorizationHeader)
 	for _, v := range r.Header.Values("Authorization") {

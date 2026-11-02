@@ -228,8 +228,19 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "computer_folder",
       "agents",
       "macos",
+      "background_watch",
       "macos_disk",
     ]);
+  });
+
+  it("AgentRun.has_recording is a pointer omitted when unprojected, optional in TS (#3715)", () => {
+    expect(typesGo).toMatch(/HasRecording\s+\*bool\s+`json:"has_recording,omitempty"`/);
+    expect(typesGo).toMatch(/RecordingBytes\s+int64\s+`json:"recording_bytes,omitempty"`/);
+    expect(typesGo).toMatch(/RecordingDurationSec\s+float64\s+`json:"recording_duration_sec,omitempty"`/);
+    const body = /export\s+interface\s+AgentRun\b[^{]*\{([\s\S]*?)\n\}/.exec(runsTs)?.[1] ?? "";
+    for (const k of ["has_recording", "recording_bytes", "recording_duration_sec"]) {
+      expect(body).toMatch(new RegExp(`\\b${k}\\?:`));
+    }
   });
 
   it("RunMacOSDisk's keys are exactly runMacOSDiskView's json tags (GET /runs/{id} macos_disk, run_macos_disk.go)", () => {
@@ -246,6 +257,15 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
   it("RunMacOS's keys are exactly runMacOSView's json tags (GET /runs/{id} macos, run_macos_view.go)", () => {
     const viewGo = readFileSync(join(root, "internal/api/run_macos_view.go"), "utf8");
     expect(tsInterfaceKeys(runsTs, "RunMacOS").sort()).toEqual(goJSONTags(viewGo, "runMacOSView").sort());
+  });
+
+  it("RunBackgroundWatch's keys and states are exactly backgroundWatchView's json tags and the door's states (GET /runs/{id} background_watch, run_background_watch.go)", () => {
+    const watchGo = readFileSync(join(root, "internal/api/run_background_watch.go"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "RunBackgroundWatch").sort()).toEqual(goJSONTags(watchGo, "backgroundWatchView").sort());
+    const goStates = [...watchGo.matchAll(/^\s*backgroundWatch\w+\s*=\s*"([a-z_]+)"$/gm)].map((m) => m[1]).sort();
+    const tsStates = [...(/state: ([^;]+);/.exec(runsTs.slice(runsTs.indexOf("interface RunBackgroundWatch")))?.[1] ?? "").matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
+    expect(goStates.length).toBeGreaterThan(0);
+    expect(tsStates).toEqual(goStates);
   });
 
   it("RunDetailAgent's keys are exactly runDetailAgent's json tags (GET /runs/{id} agents, run_multi_agent.go)", () => {

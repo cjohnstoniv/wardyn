@@ -11,6 +11,74 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.11] — 2026-11-02
+
+### Added
+
+- A Linux VM run can mount a drive bound to its runner. An older runner and a Kubernetes runner are refused at Review. Do not rely on a file lock across two VMs.
+- New Run now says which of your own walls apply to the run, in one line on Review above the setup groups and above the Tools step totals, with a link to change them (opens in a new tab).
+- Governance profiles have a new limit, "Deny watching background desktops" (`deny_background_desktop_watch`), and Settings has an "Allow watching background runs" switch for macOS virtual machines. The switch is on by default.
+- A governance profile write now warns, without refusing, when its Azure DevOps capability list reaches past a provider row's capability ceiling (a member who asks for one of those is refused at launch). It also warns when a standalone profile leaves out the local-run component limit, or sets desktop, recording, tool rules, auto-stop or LLM inspection weaker than the deployment default.
+- macOS VMs: `wardyn-runnerd drive open <name>` opens a disk drive in a throwaway virtual machine meant to run with no network and copies its files to ~/Wardyn Drives/<name>, so this Mac never reads a disk an agent wrote. Press Return to write your changes back as the agent, or Ctrl-C to discard them. Links, devices and set-id files are skipped, and every file is marked as downloaded with no execute permission. Built and unit-tested; not yet run on a real Mac.
+- Experimental: an admin can turn on run identity per model provider. Each model call to that provider's gateway then carries a short-lived signed token naming the person, the run and the runner. Off changes nothing a run sends. A run with identity on is refused on an older remote runner rather than calling the gateway unsigned.
+- Added: The model provider editor can send each model call's person, run and runner to a gateway you name, for Anthropic API key, OpenAI API key and own-endpoint providers (experimental until 0.11). It shows the issuer and key address to give your gateway (#3861).
+- The run page has its own Desktop tile for a VM run. The Open desktop button sits at the top, and sign-ins and the Files panel stay with it.
+- A background macOS run you may watch gets Watch desktop from that tile. It is view only, and each refusal shows the server's sentence.
+- Saved run-page layouts gain the Desktop tile when they load. Removing it is remembered.
+- Added: Every widget on the run page except the Terminal now has an Expand button in its header that shows the same live widget in a large view, and a widget with more to scroll shows its scrollbar and an edge tint (#3940).
+- Added: the audit rows for a model call through an AI gateway, and for an MCP call on the same run, now record `gateway_call_id`, the id Wardyn sent as `X-Wardyn-Call-Id`, so a run's audit row can be matched to the gateway's access log line (#3864). With no gateway route nothing is sent or recorded.
+- The Audit screen and a run's Audit tab show a gateway call id, with a copy button, on a model call or MCP call row of a run whose gateway has identity on. The same id appears in the gateway's log (#3864).
+- Gateway token rows read "Signed a gateway token for <provider>" or "Refused a gateway token for <provider>" and appear under the Credentials filter.
+- Added: an external AI gateway can now check Wardyn's run identity token. The setup page lists every claim and how to join a run's audit rows to the gateway's log by call id. The token format and key-set address are experimental until 0.11.
+- The signing keys publish at `/.well-known/wardyn-experimental/gateway-jwks.json`, rotated with `wardynd -rotate-gateway-identity-key`; both experimental until 0.11.
+- A watch of a background macOS VM run is refused with `desktop_sign_ins_off` when the agent's desktop sign-ins are not allowed.
+
+### Changed
+
+- API: a run list without `include=recording_meta` leaves `has_recording`, `recording_bytes` and `recording_duration_sec` off each run. It used to say `has_recording: false` for a run that has a recording. A single-run read and an opted-in list always carry `has_recording`. In the Go SDK `has_recording` is now a `*bool`.
+- A `pass_through` governance unit written with `overlay: {}` and no parent is refused, as the same write with no `overlay` already was. A pass-through unit already under Default still saves.
+- `deny_interactive` also refuses a desktop's file transfers and `novnc`: a person watching a `novnc` desktop on a run whose profile denies interactive sessions is refused after upgrade, at entry and at the session's next check.
+- Beginning a desktop sign-in or sharing a login from one is refused under `deny_interactive` or `deny_ui_apps`. A refused begin leaves the agent running, and ending a sign-in stays available.
+- Opening a desktop's Files panel on a paused run no longer wakes it. Only a transfer the rules allow does.
+- A BYOI interactive run with a task on a runner skips its warn-only selftest, as one with no task does, so it shows fewer selftest rows.
+- Setup and Claude sign-in no longer accept Wardyn's `agent-base` image as a sign-in image. A one-line install shows Claude sign-in as not ready until you supply a Claude Code image; [the steps](docs/operations/build-images.md#claude-sign-in-image) are in the docs.
+- macOS VMs: a run on a view-only base can be watched from the run page with Watch desktop. Keys, pointer moves and paste never reach the guest. The console's viewer sends no input on a view-only desktop; a new `ui.input.drop` audit row records the first dropped key and pointer move each time the desktop socket opens, and a paste is recorded as a denied `ui.clipboard.transfer`. Built and unit-tested; not yet run on a real Mac ([#3922](https://github.com/cjohnstoniv/wardyn/issues/3922)).
+- macOS VMs: a background run's desktop can now be watched, view only, from its run page. Typing, clicking, pasting and clipboard copy are disabled, and watching neither wakes a run nor keeps it alive. A screen can show what the run keeps out of its logs. It's on by default; a site switch or the governance limit `deny_background_desktop_watch` turns it off, and an open view ends within a minute. A run started before the upgrade can't be watched. Built and unit-tested; not yet run on a real Mac.
+- A run's memory and disk on the sandbox card read in GB from 1 GiB, as MB below that. An egress row no longer says "Recorded offline"; a decision that reached Wardyn a minute or more after the runner made it shows "Reached Wardyn later" and the time it was decided.
+- When a member's folder mount is refused for being outside the member workspace roots, the message now names `WARDYN_USER_WORKSPACE_ROOTS` and says an operator sets it.
+- macOS VMs: `edit-base` now says on its first line that the edit is of a copy of the VM base, not this Mac, and that the copy takes about 2 minutes to start. Its window lists, in order, the code, the setup questions, who you are signed in as and where Terminal is, Full Disk Access and the certificates; a certificate the base reads as not trusted prints with its subject, SHA-256 and the command. The recheck prints what it read (each certificate, Full Disk Access and the desktop), a guest that cannot answer reads "could not be read" and never "allowed", and `status` prints the last edit's read with its time. Built and unit-tested; not yet run on a real Mac.
+- macOS VMs: `wardyn-runnerd macos-vm status` now reads the newest tools-port dial from the run boot, the prepare log and the tools update log, says where each line came from, and says that its number is this Mac's own sum and does not read the organisation's limits. A tools update now stamps the dial it reports, so an older connected dial can no longer out-rank a newer failure. Built and unit-tested; not yet run on a real Mac.
+- A background run shows no Take over button, no Attach tile, and no Watch button in the terminal notice. A background run's takeover request shows no Take over in the approval card, the toast or the runs list. Decline and the toast itself stay.
+
+### Fixed
+- A macOS VM run's desktop is no longer recorded, as Review already said. Earlier 0.10.0 prereleases may have stored its screen frames, unmasked, at the Screen and actions level; `desktop.recording.write` on a macOS VM run shows whether they did. Recordings already stored are kept forever by default, unless `WARDYN_RECORDING_RETENTION_DAYS` is set.
+- Review and the docs now say that console and SSH terminal sessions on a macOS VM run are recorded at this run's recording level, as they always were (`session.recording.write`).
+
+- The membership-move dry run counts a live run whose owner a membership names by a verified alias.
+- A BYOI selftest that did not run says so, in the run and in its audit row, on an interactive run with no task.
+- A shutdown no longer leaves a sign-in run's stop retrying past its wait on a slow store. The pass under way finishes, no further one starts, and the run's idle cap ends a run left behind.
+- A Linux VM managed file with no mode is delivered at the default mode.
+- The runner and Azure DevOps token reads in the console stop polling when signed out and no longer stack requests.
+- A macOS VM helper logs a refused pairing before closing the connection.
+- An interactive run with a task on a runner no longer takes an execution generation it never spends, which refused its revive. A run from before the upgrade stays unrevivable: start a new run.
+- A unit admin's membership add checks scope first, so someone outside the unit can't tell which user types exist.
+- A Linux VM's kept work folder is refused at Review, naming the folder.
+- A service with no end time and no lifetime cap says it runs until stopped, at New Run, in preflight and in the create response.
+- Compose passes `WARDYN_MIGRATE_TIMEOUT` on from `.env`.
+- Docs: what a policy's `github_token` grant needs before a runner's first run.
+- A governance write that clears the UI gateway's caches is no longer undone by a check already in flight: the next request on that replica, warm connections included, meets the change, and the caches clear before the write's success reaches the client. Other replicas keep their existing 30 seconds.
+- A run waiting on its runners' limits now names the same limit on the Launched screen and on the run page, and the sentence follows the runners as they change. With several runners it gives an example runner instead of calling one the nearest, and a single runner reads "<runner> is at a limit: <limit>." It names the limit that holds the run: Runs at once, or the CPU, memory or disk total. A launch into a capped pool with room whose runners were full named the pool's limit; it now names the runner's. The wait reason token is unchanged.
+- A macOS VM run that asks for a disk drive still being released now waits up to 90 seconds in total for all its drives, and the failure after the wait states the wait. A drive held by a live run still refuses at once.
+- A macOS VM run's drives now show at the guest's path under `/Users/agent` in the `run.create`, `drive.member.create` and `run.drive.mount` audit rows and in the mount map the dry runs return, instead of the container path under `/home/agent`.
+- The console's terminal reconnect budget is no longer reset by a socket that opens and says nothing: the first terminal byte, or 15 seconds open, resets it. The runner no longer logs an ordinary detach as a "session read failed" warning, and names which side failed when it does warn.
+- The governance admin view no longer says the deployment default set a wall that a standalone profile sets itself. A size the profile omits still follows, and is credited to, the deployment default. No resolved value changes.
+- A run that Amazon Bedrock refused with any other HTTP 4xx or 5xx now names, in its failure hint, the status and the error class AWS answered with. Wardyn does not record AWS's message; the agent's own output may hold AWS's explanation, and so may the run's recording if the run has one ([#3891](https://github.com/cjohnstoniv/wardyn/issues/3891)).
+- Fixed: The Service panel on the run page is no longer clipped on a short tile (#3940).
+
+### Security
+
+- An approval rule no longer approves a host a person denied on that run after the run's proxy is replaced. The approval waits for a person, and a person's later allow undoes the deny.
+
 ## [0.10.0-rc.10] — 2026-11-01
 
 ### Before you upgrade

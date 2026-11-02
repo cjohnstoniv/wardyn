@@ -25,7 +25,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -251,9 +250,7 @@ func (p *Proxy) serveKubeAPI(w http.ResponseWriter, r *http.Request, host string
 // prints. Never 401, which kubectl reads as "sign in again".
 func (p *Proxy) refuseKubeAPI(w http.ResponseWriter, r *http.Request, host string, port int, code, message string) {
 	p.emitPATAPIDecision(r, host, port, egress.Deny, ruleSourceKubeAPIRefused)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	writeJSONStatus(w, http.StatusForbidden, "application/json", map[string]any{
 		"kind": "Status", "apiVersion": "v1", "metadata": map[string]any{}, "status": "Failure",
 		"message": message, "reason": "Forbidden", "code": http.StatusForbidden, "wardyn": code,
 	})

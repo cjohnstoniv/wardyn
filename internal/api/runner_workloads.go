@@ -163,7 +163,7 @@ func (s *Server) workloadUnbound(ctx context.Context, ws store.WorkloadStore, ru
 	}
 	if !slices.ContainsFunc(bindings, func(b store.WorkloadBinding) bool { return b.Namespace == rep.Namespace }) {
 		s.answerWorkloadReport(runnerID, rep, runnerwire.WorkloadPhaseNotBound, "",
-			"No Wardyn workload binding names this namespace on this runner's pools. A security admin binds it to a service identity.")
+			"No Wardyn workload binding names this namespace. A security admin binds it to a service identity.")
 	}
 	return nil
 }

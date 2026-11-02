@@ -35,8 +35,19 @@ func (s *Server) mountUI(r chi.Router) {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = fmt.Fprintf(w, fallbackStatusPage, s.cfg.BasePath)
 		})
+		// Not a route here: chi answers 405 to a method a route lacks, where an
+		// unheld path answers 404, and with no GET /* to share that 405 another
+		// method would show the JWKS exists. Every other path gets chi's own answer.
+		r.NotFound(func(w http.ResponseWriter, req *http.Request) {
+			if req.URL.Path == gatewayJWKSRoute && req.Method == http.MethodGet {
+				s.handleGatewayJWKS(w, req)
+				return
+			}
+			http.NotFound(w, req)
+		})
 		return
 	}
+	r.Get(gatewayJWKSRoute, s.handleGatewayJWKS)
 	dir := s.cfg.UIDir
 	fs := http.FileServer(http.Dir(dir))
 	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {

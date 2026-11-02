@@ -127,8 +127,10 @@ type macRig struct {
 	// whether the guest says it set it.
 	secret      *macvm.DesktopSecret
 	setPassword bool
-	runs        sync.WaitGroup
-	stop        context.CancelFunc
+	// desktop is the helper's shim (nil: none, which is also what a helper that predates the report says).
+	desktop macvm.DesktopShim
+	runs    sync.WaitGroup
+	stop    context.CancelFunc
 }
 
 func newMacRig(t *testing.T) *macRig {
@@ -210,7 +212,7 @@ func (r *macRig) helper(ctx context.Context, dir string) {
 	go func() {
 		defer r.runs.Done()
 		defer r.host.gone(macHelperPID)
-		_ = macvm.Run(ctx, macvm.RunOptions{Engine: r.eng, RunDir: dir, NetWait: 10 * time.Second, DesktopPassword: r.secret, SockFstat: macvmtest.SockFstat, Claim: func(cfg macvm.RunConfig) error {
+		_ = macvm.Run(ctx, macvm.RunOptions{Engine: r.eng, RunDir: dir, NetWait: 10 * time.Second, Desktop: r.desktop, DesktopPassword: r.secret, SockFstat: macvmtest.SockFstat, Claim: func(cfg macvm.RunConfig) error {
 			_, err := r.c.Ledger.ClaimHelper(cfg.LedgerEntry, macHelperPID, 7)
 			return err
 		}})

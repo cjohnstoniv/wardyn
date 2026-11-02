@@ -139,6 +139,10 @@ type SandboxSpec struct {
 	// DesktopSignInsOff makes a VM's sign-in store read-only, so its desktop keeps no sign-ins: the
 	// admin set "Not allowed" for the run's agent (#2972). A container ignores it.
 	DesktopSignInsOff bool `json:"desktop_sign_ins_off,omitempty"`
+	// DesktopViewOnly makes a macOS VM's helper force its desktop view only for this boot, whatever
+	// the base allows. Only dispatch sets it, from the run's stored mode (types.AgentRun.BackgroundOnly),
+	// never from a request or a run token. Every other sandbox ignores it.
+	DesktopViewOnly bool `json:"desktop_view_only,omitempty"`
 }
 
 // RecordWithin is whether this run is recorded on a substrate whose own setting is ceiling.
@@ -243,8 +247,8 @@ type ProxyConfig struct {
 	// the person's sign-in browser; see SandboxSpec.DesktopSignins.
 	DesktopSignins bool `json:"desktop_signins,omitempty"`
 
-	// LocalModels: local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels).
-	LocalModels map[string]types.LocalModelSettings
+	LocalModels     map[string]types.LocalModelSettings // local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels)
+	GatewayIdentity []proxy.GatewayIdentityRoute        `json:"gateway_identity,omitempty"` // routes carrying the run's signed identity (proxy.Config.GatewayIdentity)
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).
@@ -391,45 +395,10 @@ type Sandbox struct {
 	// keychain; nil when nothing was attempted (a container, a Linux guest, a run with no proxy CA,
 	// or a guest or runner that predates it). Read it through Known.
 	KeychainTrust *KeychainTrust `json:",omitempty"`
-}
-
-// KeychainTrust is a macOS guest's answer to trusting the run's proxy CA: a status and, when not
-// trusted, a fixed reason code. It never carries the guest's own output.
-type KeychainTrust struct {
-	Status string `json:"status"`
-	Reason string `json:"reason,omitempty"`
-}
-
-// The KeychainTrust codes. The guest agent sends the same strings (guestagent.KeychainTrusted and
-// its siblings).
-const (
-	KeychainTrusted    = "trusted"
-	KeychainNotTrusted = "not_trusted"
-	// KeychainRefused: macOS refused the trust change.
-	KeychainRefused = "refused"
-	// KeychainFailed: the security command failed for another reason.
-	KeychainFailed = "failed"
-	// KeychainUnavailable: the command could not run, the CA was not one certificate, or the guest
-	// sent a code this host does not know.
-	KeychainUnavailable = "unavailable"
-)
-
-// Known is k with any code this host does not know read as not trusted, unavailable. Nil stays nil:
-// absent means not attempted, never failed.
-func (k *KeychainTrust) Known() *KeychainTrust {
-	if k == nil {
-		return nil
-	}
-	if k.Status == KeychainTrusted && k.Reason == "" {
-		return &KeychainTrust{Status: KeychainTrusted}
-	}
-	switch k.Reason {
-	case KeychainRefused, KeychainFailed, KeychainUnavailable:
-		if k.Status == KeychainNotTrusted {
-			return &KeychainTrust{Status: KeychainNotTrusted, Reason: k.Reason}
-		}
-	}
-	return &KeychainTrust{Status: KeychainNotTrusted, Reason: KeychainUnavailable}
+	// DesktopForcedViewOnly is what a macOS VM helper's running desktop filter reported in this boot
+	// (macvm.RFBShim.DesktopForcedViewOnly), not an echo of SandboxSpec.DesktopViewOnly. False from
+	// anything else, or a runner or helper that predates it.
+	DesktopForcedViewOnly bool `json:",omitempty"`
 }
 
 // Status reports observed sandbox state.

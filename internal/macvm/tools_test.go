@@ -859,6 +859,37 @@ func TestUpdateToolsReportsWaitingForAC(t *testing.T) {
 	}
 }
 
+// The tools update stamps the dial it reports, so `macos-vm status` can order it against a run boot's
+// record by the dial's own clock instead of by when the update's log was last appended to.
+func TestUpdateToolsStampsTheDialItReports(t *testing.T) {
+	f, tf, _ := stage2Prep(t)
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	ev := &events{}
+	o := updateOpts(f, tf, newGuest(), "")
+	o.Force, o.Progress = true, ev.add
+	before := time.Now().UnixNano()
+	if _, _, err := macvm.UpdateTools(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	ev.mu.Lock()
+	defer ev.mu.Unlock()
+	n := 0
+	for _, e := range ev.evs {
+		if e.ToolsDial == "" {
+			continue
+		}
+		n++
+		if e.ToolsDialAt < before || e.ToolsDialAt > time.Now().UnixNano() {
+			t.Errorf("dial %q stamped %d, want a time from this update (>= %d)", e.ToolsDial, e.ToolsDialAt, before)
+		}
+	}
+	if n != 1 {
+		t.Fatalf("dial events = %d, want 1: %+v", n, ev.evs)
+	}
+}
+
 // A download never follows a redirect off https.
 func TestDownloadRefusesRedirectToHTTP(t *testing.T) {
 	var plainHits atomic.Int64

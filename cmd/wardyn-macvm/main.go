@@ -11,6 +11,8 @@
 //	                                     build this Mac's macOS base image
 //	wardyn-macvm update-tools --root <dir> --cpus N --memory-mib M
 //	                                     bring the base up to the shipped tool pins
+//	wardyn-macvm drive-open --root <dir> --cpus N --memory-mib M --runner-id R --ledger-entry E --drive O --drive-label L
+//	                                     boot a throwaway guest with one disk drive; stops when stdin ends
 //	wardyn-macvm probe                   say (JSON) whether this Mac and build can run macOS VMs
 //	wardyn-macvm version
 //
@@ -97,7 +99,7 @@ func mainDeps() deps {
 
 func run(ctx context.Context, args []string, d deps) int {
 	if len(args) == 0 {
-		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|update-tools|edit-base|probe|ledger-setup|version [flags]")
+		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|update-tools|edit-base|drive-open|probe|ledger-setup|version [flags]")
 		return 2
 	}
 	switch args[0] {
@@ -114,6 +116,8 @@ func run(ctx context.Context, args []string, d deps) int {
 		return cmdUpdateTools(ctx, args[1:], d)
 	case macvm.EditBaseCommand:
 		return cmdEditBase(ctx, args[1:], d)
+	case macvm.DriveOpenCommand:
+		return cmdDriveOpen(ctx, args[1:], d)
 	case macvm.InstallCommand:
 		return cmdInstall(ctx, d)
 	case "probe":
@@ -148,9 +152,13 @@ func cmdLedgerSetup(args []string, d deps) int {
 }
 
 // runShim is the run's desktop shim: view only unless the run's base has desktop control, read here so
-// the rule holds whatever the gateway in front of the runner lets through.
+// the rule holds whatever the gateway in front of the runner lets through. A run the control plane forces
+// view only (macvm.RunConfig.DesktopViewOnly) is so whatever its base says; a run.json it cannot read
+// forces nothing, and BaseViewOnly then keeps the desktop view only.
 func runShim(dir string, pw *macvm.DesktopSecret, log *slog.Logger) *macvm.RFBShim {
-	return &macvm.RFBShim{Credential: pw.Credential, ViewOnly: macvm.BaseViewOnly(dir), Log: log}
+	cfg, err := macvm.ReadRunConfig(dir)
+	forced := err == nil && cfg.DesktopViewOnly
+	return &macvm.RFBShim{Credential: pw.Credential, ViewOnly: forced || macvm.BaseViewOnly(dir), ForceViewOnly: forced, Log: log}
 }
 
 func cmdRun(ctx context.Context, args []string, d deps) int {

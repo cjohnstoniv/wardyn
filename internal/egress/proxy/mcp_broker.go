@@ -446,8 +446,16 @@ func jsonRPCError(id json.RawMessage, code int, msg string) map[string]any {
 }
 
 func writeJSONRPC(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	writeJSONStatus(w, http.StatusOK, "application/json", v)
+}
+
+// writeJSONStatus is the proxy's one JSON refusal writer: the Content-Type,
+// then the status, then v as a newline-terminated JSON document. A failed
+// encode is dropped, as the doors always did. Writers that need another
+// header, a raw body or no trailing newline keep their own.
+func writeJSONStatus(w http.ResponseWriter, status int, contentType string, v any) {
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
@@ -489,6 +497,8 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	copyHeader(out.Header, x.r.Header)
 	removeHopByHop(out.Header)
 	stripSandboxCredentials(out.Header, "")
+	// An MCP server gets the call id on a run with a gateway route, and no identity token.
+	p.stripGatewayHeaders(out.Header)
 	if s.grantID != nil {
 		hdr, err := p.mcpCredential(x.r.Context(), s)
 		if err != nil {
@@ -498,17 +508,30 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		}
 		out.Header.Set(hdr.name, hdr.value)
 	}
+	callID := ""
+	if len(p.gatewayRoutes) > 0 {
+		callID = uuid.NewString()
+		out.Header.Set(gatewayCallIDHeader, callID)
+	}
 	resp, err := p.roundTripUpstream(out)
 	if err != nil {
-		p.failUpstream(w, err, &egress.DecisionLog{Request: x.req}, s.host, "MCP upstream error")
+		p.failUpstream(w, err, &egress.DecisionLog{Request: x.req, GatewayCallID: callID}, s.host, "MCP upstream error")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 && resp.StatusCode != http.StatusNotModified {
-		x.deny(w, ruleSourceMCPRedirect, "the MCP server answered with a redirect, which Wardyn does not follow", http.StatusBadGateway)
+		// The server was sent the id, so its log and this row join on it.
+		if p.sink != nil {
+			denied := decisionLog(x.req, egress.Deny, ruleSourceMCPRedirect)
+			denied.GatewayCallID = callID
+			p.sink.emit(denied)
+		}
+		http.Error(w, "the MCP server answered with a redirect, which Wardyn does not follow", http.StatusBadGateway)
 		return
 	}
-	p.emitDialledAllow(decisionLog(x.req, egress.Allow, ruleSourceMCP), s.host)
+	allow := decisionLog(x.req, egress.Allow, ruleSourceMCP)
+	allow.GatewayCallID = callID
+	p.emitDialledAllow(allow, s.host)
 	p.relayStreaming(w, resp)
 }
 
@@ -517,6 +540,11 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 func (p *Proxy) relayStreaming(w http.ResponseWriter, resp *http.Response) {
 	w, done := p.scrubbed(w)
 	defer done()
+	flushRelay(w, resp)
+}
+
+// flushRelay writes resp to w, flushing each chunk as it arrives.
+func flushRelay(w http.ResponseWriter, resp *http.Response) {
 	dst := w.Header()
 	copyHeader(dst, resp.Header)
 	removeHopByHop(dst)

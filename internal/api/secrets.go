@@ -52,6 +52,8 @@ var reservedSecretNames = map[string]bool{
 	"wardyn-run-config-key":    true,
 	"wardyn-audit-pending-key": true,
 	"wardyn-internal-ca":       true,
+	// The AI gateway token's signing key (cmd/wardynd's gatewayIdentity).
+	"wardyn-gateway-identity-key": true,
 	// The hybrid device credential (cmd/wardynd's bootHybrid): overwriting it
 	// would swap which organisation identity this laptop pushes its audit as.
 	"wardyn-org-device-credential": true,

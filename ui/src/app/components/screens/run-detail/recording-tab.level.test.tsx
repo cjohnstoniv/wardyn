@@ -81,6 +81,30 @@ describe("RecordingTab levels (#2968, M7 RunStrip, Replay, States 8)", () => {
     expect(strip).not.toHaveTextContent("Terminal only");
   });
 
+  it.each(["terminal", "screen_actions"] as const)(
+    "a macOS VM run declined by its runner at %s says its terminal sessions are recorded", (level) => {
+      tab({ level, notRecorded: "runner_declined", macOS: true });
+      const strip = screen.getByTestId("recording-level-strip");
+      expect(strip).toHaveTextContent("Terminal sessions recorded");
+      expect(strip).toHaveTextContent("The desktop is not recorded.");
+      expect(strip).not.toHaveTextContent("Recording off");
+      expect(strip).not.toHaveTextContent(RUN_RECORDING.runner_declined);
+    });
+
+  it("the empty state of a macOS VM run says a console or SSH session makes its recording; Linux keeps the agent-process sentence", () => {
+    const { unmount } = tab({ level: "terminal", notRecorded: "runner_declined", macOS: true });
+    expect(screen.getByText("This run has no captured terminal session. A recording appears here after a console or SSH terminal on this run closes, if it showed any output.")).toBeInTheDocument();
+    expect(screen.queryByText(/once an agent process runs/)).not.toBeInTheDocument();
+    unmount();
+    tab({ level: "terminal", notRecorded: "runner_declined" });
+    expect(screen.getByText("This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox.")).toBeInTheDocument();
+  });
+
+  it("a macOS VM run at off still says it is not recorded", () => {
+    tab({ level: "off", notRecorded: "policy_off", macOS: true });
+    expect(screen.getByTestId("recording-level-strip")).toHaveTextContent("Recording off");
+  });
+
   it("a desktop recording marks its gap, jumps from the action log and shows the chain verdict", async () => {
     getDesktopRecording.mockResolvedValue({
       raw: "{}",

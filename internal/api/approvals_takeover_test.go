@@ -248,6 +248,44 @@ func TestTakeover_UnrecordedRunHasNothingToPause(t *testing.T) {
 	}
 }
 
+// TestTakeover_MacOSVMKeepsTheTerminalGapButHoldsNoDesktop: a macOS VM run's desktop is not recorded at
+// Screen and actions, so a take over holds no desktop recording, while the terminal's gap rows stay
+// (its console and SSH sessions are recorded). A Linux VM at the same level holds its desktop.
+func TestTakeover_MacOSVMKeepsTheTerminalGapButHoldsNoDesktop(t *testing.T) {
+	for _, tc := range []struct {
+		kind               types.MachineKind
+		desktopPauses, res int
+	}{{types.MachineMacOSVM, 0, 0}, {types.MachineLinuxVM, 1, 1}} {
+		t.Run(string(tc.kind), func(t *testing.T) {
+			f := newTakeoverFixture(t, true)
+			ast := f.srv.cfg.Store.(*authzStore)
+			ast.mu.Lock()
+			run := ast.runs[f.run]
+			run.MachineKind, run.RecordingLevel = tc.kind, types.RecordingScreenActions
+			ast.runs[f.run] = run
+			ast.mu.Unlock()
+			id := f.seed(types.ApprovalHumanTakeover, types.ApprovalPending, "")
+			for _, verb := range []string{"/take-over", "/hand-back"} {
+				if w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+verb, f.owner, ""); w.Code != http.StatusOK {
+					t.Fatalf("%s: %d %s", verb, w.Code, w.Body.String())
+				}
+			}
+			want := [][2]string{
+				{"takeover.begin/human:" + takeoverOwnerSub, "after_ms,approval_id,surface"},
+				{"recording.pause/system:wardyn", "approval_id,reason"},
+				{"recording.resume/system:wardyn", "approval_id,gap_ms,reason"},
+				{"takeover.close/human:" + takeoverOwnerSub, "approval_id,held_ms"},
+			}
+			if got := takeoverRows(t, f.audit); !slices.Equal(got, want) {
+				t.Fatalf("audit rows =\n%v\nwant\n%v", got, want)
+			}
+			if p, r := desktopRows(f.audit); p != tc.desktopPauses || r != tc.res {
+				t.Errorf("desktop.recording rows: %d pause, %d resume, want %d and %d", p, r, tc.desktopPauses, tc.res)
+			}
+		})
+	}
+}
+
 // TestTakeover_Refusals: a takeover request is never approved or denied (every tier), the verbs
 // refuse another kind and a stranger, only the holder hands back, and decline is a recorded DENIED.
 func TestTakeover_Refusals(t *testing.T) {

@@ -38,6 +38,11 @@ function Where() {
   return <p data-testid="where">{l.pathname + l.search}</p>;
 }
 
+function RunPage() {
+  const carried = (useLocation().state as { launchWarnings?: string[] } | null)?.launchWarnings ?? [];
+  return <><p>run page</p><p data-testid="carried">{JSON.stringify(carried)}</p></>;
+}
+
 function Typed() {
   const dispatch = useNewRunDispatch();
   const { launch } = useNewRunDraft();
@@ -53,7 +58,7 @@ function open(state?: LaunchedState) {
           <Typed />
           <Routes>
             <Route path="/runs/new" element={<LaunchedScreen location={{ screen: "launched", runId: ID }} go={go} startFromScratch={() => {}} />} />
-            <Route path="/runs/:id" element={<p>run page</p>} />
+            <Route path="/runs/:id" element={<RunPage />} />
           </Routes>
           <Where />
         </NewRunDraftProvider>
@@ -151,6 +156,30 @@ describe("Launched: Starting", () => {
     expect(go).toHaveBeenCalledWith({ screen: "start" });
     await userEvent.click(link);
     expect(screen.getByText("run page")).toBeInTheDocument();
+  });
+});
+
+describe("Launched: a run its runners hold back", () => {
+  const named = "Every runner in CI jobs is at a limit. For example, mac-1: Runs at once: 1 running of 1. This run starts when one has room.";
+  const held = (over: Partial<RunQueue> = {}) => queue({ reason: "runner_pool_runners_at_capacity", ...over });
+
+  it("says the limit the server named, and the run page carries no second copy of it", async () => {
+    const created = run({ state: "QUEUED", queue: held({ limit_sentence: named }), warnings: ["another run uses this folder", named] }) as LaunchedState["created"];
+    getRun.mockResolvedValue(created);
+    open({ created, owner: "alice" });
+    expect(await screen.findByText(named)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: NR_LAUNCH.VIEW_RUN }));
+    expect(screen.getByTestId("carried")).toHaveTextContent(JSON.stringify(["another run uses this folder"]));
+  });
+
+  it("follows the wait when it has changed since the create: the read's words win and the stale copy is not carried", async () => {
+    const created = run({ state: "QUEUED", queue: held({ limit_sentence: named }), warnings: [named] }) as LaunchedState["created"];
+    getRun.mockResolvedValue(run({ state: "QUEUED", queue: queue({ reason: "runner_pool_no_runner_free" }) }));
+    open({ created, owner: "alice" });
+    expect(await screen.findByText("None of your runners in CI jobs is online. This run starts when one is.")).toBeInTheDocument();
+    expect(screen.queryByText(named)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: NR_LAUNCH.VIEW_RUN }));
+    expect(screen.getByTestId("carried")).toHaveTextContent("[]");
   });
 });
 

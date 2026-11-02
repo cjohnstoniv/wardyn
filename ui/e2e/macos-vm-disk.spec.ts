@@ -9,8 +9,8 @@ import { DESKTOP } from "../src/app/components/wardyn/copy/desktop";
 import { aheadByHours } from "../src/app/lib/test-clock";
 
 // ============================================================================
-// A finished macOS VM run's disk line (mock M-D1 frames 9 to 11, MV-D10/D11/D12): GET /runs/{id}'s macos_disk
-// onto the Desktop block of "Attach from your terminal". The `none` runner behind this backend has no Mac, so
+// A finished macOS VM run's disk line: GET /runs/{id}'s macos_disk
+// onto the run page's Desktop tile. The `none` runner behind this backend has no Mac, so
 // the COMPLETED seeded run is patched into a macOS VM on the wire; the server's own side is pinned in the Go
 // tests (run_macos_disk_test.go, run_macos_disk_pg_test.go).
 // ============================================================================
@@ -49,25 +49,26 @@ const localTime = (page: Page, iso: string) =>
   page.evaluate((s) => new Date(s).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }), iso);
 
 test.describe("Run detail: a finished macOS VM run's disk", () => {
-  test("frame 9: removing, with the desktop Off and no buttons", async ({ page }) => {
+  test("removing, with the desktop Off and no buttons", async ({ page }) => {
     const id = runIdByTask(RUN_TASK);
     await patchRun(page, id, () => ({ machine_kind: "macos_vm", macos_disk: { state: "removing" } }));
     await openRun(page, id);
     const desk = desktop(page);
     await desk.scrollIntoViewIfNeeded();
     await expect(desk.getByText(DESKTOP.diskRemoving)).toBeVisible();
-    await expect(desk.getByText(DESKTOP.statusOff)).toBeVisible();
+    // The chip is in the tile's header, which holds the region.
+    await expect(desk.locator("xpath=ancestor::section[1]").getByText(DESKTOP.statusOff)).toBeVisible();
     await expect(desk.getByRole("button")).toHaveCount(0);
   });
 
-  test("frame 10: removed, at the browser's local time", async ({ page }) => {
+  test("removed, at the browser's local time", async ({ page }) => {
     const id = runIdByTask(RUN_TASK);
     await patchRun(page, id, () => ({ machine_kind: "macos_vm", macos_disk: { state: "removed", at: AT } }));
     await openRun(page, id);
     await expect(desktop(page).getByText(DESKTOP.diskRemoved(await localTime(page, AT)))).toBeVisible();
   });
 
-  test("frame 11: kept because the helper is alive, as an alert naming the files in use", async ({ page }) => {
+  test("kept because the helper is alive, as an alert naming the files in use", async ({ page }) => {
     const id = runIdByTask(RUN_TASK);
     await patchRun(page, id, () => ({ machine_kind: "macos_vm", macos_disk: { state: "kept", reason: "helper_alive" } }));
     await openRun(page, id);

@@ -18,8 +18,9 @@ import (
 // putOwned: the daemon's own boot keys, written into the operator namespace, which no erase
 // reaches. A person's credential is never written from here. Keys are "file:function".
 var operatorNamespaceWriters = map[string]bool{
-	"cmd/wardynd/boot_keys.go:loadOrCreateSecret": true,
-	"cmd/wardynd/boot_hybrid.go:bootHybrid":       true,
+	"cmd/wardynd/boot_keys.go:loadOrCreateSecret":                      true,
+	"cmd/wardynd/boot_hybrid.go:bootHybrid":                            true,
+	"cmd/wardynd/rotate_gateway_identity_key.go:rotateGatewayIdentity": true,
 }
 
 // TestCredentialWritersRouteThroughPutOwned pins the one-path rule of #1511:

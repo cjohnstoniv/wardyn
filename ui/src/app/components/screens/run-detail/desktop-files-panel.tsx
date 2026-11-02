@@ -9,6 +9,7 @@
 import * as React from "react";
 import { desktopFiles, type DesktopFilesView } from "../../../lib/api/desktop-files";
 import { HttpError } from "../../../lib/api/core";
+import { usePoll } from "../../../lib/use-poll";
 import { Button } from "../../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import { Mono } from "../../wardyn/code-block";
@@ -32,6 +33,9 @@ export function transferSize(n: number): string {
   return `${(n / 1024 ** 3).toFixed(1)} GB`;
 }
 
+// A paused run's folder cannot be read. A look never wakes it, so the panel looks again until it has woken.
+const PAUSED_POLL_MS = 4000;
+
 const clock = () => new Date().toTimeString().slice(0, 5);
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -47,6 +51,7 @@ function Blocked({ title }: { title: string }) {
 export function DesktopFilesPanel({ runId }: { runId: string }) {
   const [view, setView] = React.useState<DesktopFilesView | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [paused, setPaused] = React.useState<string | null>(null);
   const [uploads, setUploads] = React.useState<UploadRow[]>([]);
   const [marks, setMarks] = React.useState<Record<string, DownloadMark>>({});
   const nextKey = React.useRef(0);
@@ -56,13 +61,22 @@ export function DesktopFilesPanel({ runId }: { runId: string }) {
     try {
       setView(await desktopFiles.list(runId));
       setLoadError(null);
+      setPaused(null);
     } catch (e) {
-      setLoadError(message(e));
+      if (e instanceof HttpError && e.status === 409 && e.reason === "run_inspect_paused") {
+        // Not a failure: the rules already on screen still hold, and an upload they allow wakes the run.
+        setPaused(e.message);
+        setLoadError(null);
+      } else {
+        setLoadError(message(e));
+        setPaused(null);
+      }
     }
   }, [runId]);
   React.useEffect(() => {
     void load();
   }, [load]);
+  usePoll(load, PAUSED_POLL_MS, paused === null);
 
   const patch = (key: number, next: Partial<UploadRow>) =>
     setUploads((rows) => rows.map((r) => (r.key === key ? { ...r, ...next } : r)));
@@ -105,7 +119,17 @@ export function DesktopFilesPanel({ runId }: { runId: string }) {
       </section>
     );
   }
-  if (!view) return null;
+  if (!view) {
+    if (paused === null) return null;
+    return (
+      <section aria-label={C.title} data-testid="desktop-files" className="mt-4">
+        <p className="text-xs font-medium text-foreground">{C.title}</p>
+        <p data-testid="desktop-files-paused" className="mt-1 text-meta text-muted-foreground">
+          {paused}
+        </p>
+      </section>
+    );
+  }
   const { rules } = view;
   const status = { sending: C.sending, delivered: C.delivered, too_large: C.tooLarge, failed: C.notSent };
 
@@ -174,7 +198,12 @@ export function DesktopFilesPanel({ runId }: { runId: string }) {
             </>
           ) : (
             <>
-              {view.files.length === 0 && <p className="mt-2 text-meta text-muted-foreground">{C.emptyFolder}</p>}
+              {paused !== null && (
+                <p data-testid="desktop-files-paused" className="mt-2 text-meta text-muted-foreground">
+                  {paused}
+                </p>
+              )}
+              {paused === null && view.files.length === 0 && <p className="mt-2 text-meta text-muted-foreground">{C.emptyFolder}</p>}
               <ul className="mt-2 space-y-1.5">
                 {view.files.map((f) => {
                   const mark = marks[f.name];

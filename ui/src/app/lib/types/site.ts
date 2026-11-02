@@ -268,6 +268,10 @@ export interface ModelProvidersRead extends ModelProviders {
   connected_people?: Record<string, number>;
   entra_login_configured: boolean;
   kinds_available: ModelProviderKind[];
+  // Every gateway token's iss, and the key set's path under this deployment's
+  // origin with its base path: what an admin tells a gateway.
+  gateway_identity_issuer?: string;
+  gateway_jwks_path: string;
 }
 
 // Closed set, server-validated.
@@ -279,6 +283,12 @@ export type ModelProviderKind =
   | "bedrock_bearer"
   | "custom_endpoint"
   | "local_model";
+
+// A provider's opt-in to run identity. audience is the token's aud: what this
+// provider's gateway looks for, and no other address's.
+export interface ModelProviderGatewayIdentity {
+  audience: string;
+}
 
 // One provider. No credential lives here — each person supplies their own.
 export interface ModelProvider {
@@ -296,6 +306,10 @@ export interface ModelProvider {
   // custom_endpoint and local_model: required. Anthropic/OpenAI kinds: an optional
   // route-through gateway. Bedrock kinds: never (see bedrock.base_url).
   base_url?: string;
+  // Absent is off. On, each model call to this gateway carries a signed token
+  // naming the person, the run and the runner. custom_endpoint, or an Anthropic
+  // or OpenAI key kind with a base_url.
+  gateway_identity?: ModelProviderGatewayIdentity;
   // custom_endpoint, or local_model when its server wants a token: how each
   // person's token is sent. The server fills Authorization / "Bearer %s" when
   // absent; a local_model with no auth has no token at all.
@@ -527,4 +541,6 @@ export interface SiteRecording {
 export interface SiteMacOSVM {
   /** Runs are refused on a Mac whose base was prepared more days ago than this. Absent or 0: no maximum. */
   max_base_age_days?: number;
+  /** A person may watch a background macOS run's desktop, view only. Absent reads allowed; only false turns it off. */
+  allow_background_watch?: boolean;
 }

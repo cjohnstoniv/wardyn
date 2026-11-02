@@ -70,6 +70,14 @@ const (
 	mp400LocalBound       = "model_providers: %q: local.%s must be between 0 (the default, %d) and %d"
 	mp400LocalLaptopHost  = "model_providers: %q: local.allow_on_laptop_runners needs base_url on " + types.LaptopModelHost + " — the model server on the runner's own computer"
 	mp400LocalHarness     = "model_providers: %q: %s: model must be one of local.models — it is the model this agent asks for"
+	// The gateway identity rules.
+	mp400GatewayKind          = "model_providers: %q: gateway_identity is not available for %s providers"
+	mp400GatewayBaseURL       = "model_providers: %q: gateway_identity needs a base_url, or the token would go to the vendor"
+	mp400GatewayAddress       = "model_providers: %q: gateway_identity needs a base_url with a valid port and no dot segment in its path"
+	mp400GatewayAudience      = "model_providers: %q: gateway_identity: audience is required"
+	mp400GatewayAudienceForm  = "model_providers: %q: gateway_identity: audience must be at most %d bytes, with no control characters"
+	mp400GatewayAudienceDup   = "model_providers: %q: gateway_identity.audience %q is already used by provider %q for a different address; use a different one for each"
+	mp400GatewayAudienceMoved = "model_providers: %q: moved to a new address, so gateway_identity.audience can't stay the same: use a different one, or save with identity off first"
 )
 
 // maxLocalModels bounds a local_model provider's allowlist; maxLocalBound
@@ -193,6 +201,9 @@ func normalizeModelProviders(p *types.ModelProviders) *types.ModelProviders {
 			mp.Auth.Header = cmp.Or(strings.TrimSpace(mp.Auth.Header), defaultEndpointAuthHeader)
 			mp.Auth.Format = cmp.Or(strings.TrimSpace(mp.Auth.Format), defaultEndpointAuthFormat)
 		}
+		if mp.GatewayIdentity != nil {
+			mp.GatewayIdentity.Audience = strings.TrimSpace(mp.GatewayIdentity.Audience)
+		}
 		if mp.Local != nil {
 			for j := range mp.Local.Models {
 				mp.Local.Models[j] = strings.TrimSpace(mp.Local.Models[j])
@@ -270,7 +281,7 @@ func validateModelProviders(p *types.ModelProviders, env providerWriteEnv) ([]st
 			return nil, err
 		}
 		for _, check := range []func(types.ModelProvider) error{
-			validateProviderAddress, validateProviderAuth, validateProviderLocal, validateProviderHarnesses,
+			validateProviderAddress, validateProviderAuth, validateProviderLocal, validateProviderHarnesses, validateProviderGatewayIdentity,
 		} {
 			if err := check(mp); err != nil {
 				return nil, err
@@ -279,6 +290,9 @@ func validateModelProviders(p *types.ModelProviders, env providerWriteEnv) ([]st
 		if err := validateProviderBedrock(mp, env.AllowTestEndpoints); err != nil {
 			return nil, err
 		}
+	}
+	if err := validateGatewayAudiences(p); err != nil {
+		return nil, err
 	}
 	return azureEndpointWarnings(p, env), nil
 }

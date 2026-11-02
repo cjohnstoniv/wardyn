@@ -34,9 +34,12 @@ import { clockTime } from "../../../lib/format";
 import { DesktopReplay, desktopSessions } from "./desktop-replay";
 
 // The level the run is recorded at, in the run strip's words (M7-RunStrip states 1, 3, 4 and 5).
-function LevelStrip({ level, notRecorded, storeOff }: { level?: RecordingLevel; notRecorded?: RunNotRecorded; storeOff: boolean }) {
+// A macOS VM run is marked runner_declined whenever it has a store, yet its terminal sessions are recorded.
+function LevelStrip({ level, notRecorded, storeOff, macOS }: { level?: RecordingLevel; notRecorded?: RunNotRecorded; storeOff: boolean; macOS: boolean }) {
   const [title, note] = storeOff
     ? [RECORDING_STRIP.UNAVAILABLE, RECORDING_DISABLED_TITLE]
+    : macOS && notRecorded === "runner_declined" && level !== "off"
+      ? [RECORDING_STRIP.MACOS_TERMINAL, RECORDING_STRIP.MACOS_TERMINAL_NOTE]
     : notRecorded
       ? [RECORDING_STRIP.OFF, notRecorded === "policy_off" ? RECORDING_STRIP.OFF_NOTE : RUN_RECORDING[notRecorded]]
       : level === "screen_actions"
@@ -61,6 +64,7 @@ export function RecordingTab({
   onRetry,
   level,
   notRecorded,
+  macOS = false,
   recordingAudit = [],
   onGoAudit,
 }: {
@@ -78,6 +82,8 @@ export function RecordingTab({
   /** The run's level and why it is not recorded (AgentRun.recording_level, not_recorded). */
   level?: RecordingLevel;
   notRecorded?: RunNotRecorded;
+  /** The run is a macOS VM (machine_kind): not_recorded runner_declined then leaves its terminal sessions recorded. */
+  macOS?: boolean;
   /** The run's session.recording and desktop.recording rows, for the desktop recordings and gaps. */
   recordingAudit?: AuditEvent[];
   /** Opens the run's Audit tab (the desktop replay's "Open in Audit"). */
@@ -91,7 +97,7 @@ export function RecordingTab({
   const desktopSelected = desktop.some((e) => e.target === selected);
   return (
     <div className="max-w-4xl">
-      <LevelStrip level={level} notRecorded={notRecorded} storeOff={recordingDisabled} />
+      <LevelStrip level={level} notRecorded={notRecorded} storeOff={recordingDisabled} macOS={macOS} />
       {/* The picker sits ABOVE the body on purpose: a run whose OWN cast is
           missing still has to be able to reach its attach sessions. */}
       {sessions.length + desktop.length > 0 && (
@@ -151,7 +157,9 @@ export function RecordingTab({
                   ? RECORDING_REPLAY.OFF_BY_POLICY
                 : selected !== runId
                   ? RECORDING_MISSING_SESSION_BODY
-                  : "This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox."
+                  : macOS
+                    ? RUN_COCKPIT.recordingMissingMacOS
+                    : RUN_COCKPIT.recordingMissing
             }
           />
         </div>

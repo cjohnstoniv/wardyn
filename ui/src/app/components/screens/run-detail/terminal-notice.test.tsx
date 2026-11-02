@@ -171,7 +171,7 @@ describe("TerminalPane — the Watch link needs a recording", () => {
   });
 });
 
-// Board F-hero: Watch desktop on the hero of a running macOS VM run whose desktop is view only.
+// Watch desktop on the hero of a running macOS VM run whose desktop is view only.
 describe("TerminalPane — Watch desktop", () => {
   const paneFor = (over: Record<string, unknown>, principal = "me") =>
     render(
@@ -203,6 +203,17 @@ describe("TerminalPane — Watch desktop", () => {
     paneFor(over);
     await waitFor(() => expect(screen.getByTestId("run-pane-frame")).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: DESKTOP.watch })).toBeNull();
+  });
+
+  it("is not offered on a background run, whose Watch is the Desktop tile's, and asks for no ticket", async () => {
+    paneFor({ experience: "background", background_watch: { state: "open" } });
+    await waitFor(() => expect(screen.getByTestId("run-pane-frame")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: DESKTOP.watch })).toBeNull();
+  });
+
+  it("is still offered on a run that says it is interactive, and on one from before the field", async () => {
+    paneFor({ experience: "interactive" });
+    expect(await screen.findByRole("button", { name: DESKTOP.watch })).toBeInTheDocument();
   });
 
   it("stays away while the gateway is off", async () => {

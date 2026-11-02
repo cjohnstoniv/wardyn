@@ -117,6 +117,9 @@ A launch waits, stored `QUEUED`, when its pool is running its Runs at once or wh
 | `runner_pool_recording_store_off` | Recording is required (by the organisation or the pool) and the organisation keeps no session recordings. | "Recording is required, and this organisation keeps no session recordings. This run starts when the organisation's recording store is on." |
 | `runner_pool_no_runner_free` | No runner the run could start on is usable yet: each is offline, declares no limits or cannot enforce the run's barrier. | "None of your runners in {pool} is online. This run starts when one is." |
 
+- A run waiting because every runner is at a limit says which. The run page, the Launched screen, a single-run read (`queue.limit_sentence`) and the create answer name the limit: "`<runner>` is at a limit: Runs at once: 2 running of 2. This run starts when it has room."
+  - A total reads "memory total: 16 GB held of 16 GB, this run needs 8 GB", and CPU and disk read alike. With several runners the sentence gives one as an example, the runner holding the fewest runs. It is worked out when the run is read, from the limits as they stand, for the size the start would hold.
+  - If it cannot be worked out, the run says only "Every runner in {pool} is at its limit." A Mac's own `max` is a separate sum that does not read these limits ([How many VMs a Mac offers](macos-vms.md#how-many-vms-a-mac-offers)).
 - The oldest waiting run that can be placed starts first, after its owner's access, role and user type are checked again. A run that cannot be placed yet keeps its place.
 - A waiting run starts only on a runner its launch could use (`queueRunnerFree`, [`internal/api/run_queue_promote.go`](../../internal/api/run_queue_promote.go)): one that enforces the barrier the run was queued at, and the kind or the runner the launch named.
 - It never starts on one of your own runners when it has drives or could not have been launched there.

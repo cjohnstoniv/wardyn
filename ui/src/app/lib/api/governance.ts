@@ -40,6 +40,9 @@ export interface GovernanceLimits extends RunLimits {
   // types.GovernanceLimits.DenyUIApps (#1391). The editor has no row for it
   // yet; it rides the limits object it saves back unchanged.
   deny_ui_apps?: boolean;
+  // types.GovernanceLimits.DenyBackgroundDesktopWatch: refuses watching a background macOS run's
+  // desktop. Absent means allowed (the watch is on by default); the profile editor's row writes it.
+  deny_background_desktop_watch?: boolean;
   // types.GovernanceLimits.DenyUserDrive (0.7 user drives) — the door the
   // profile editor's third LimitRow writes. A run under this profile mounts no
   // user drive even when one is allocated to the person; denyUserDrive's 403
