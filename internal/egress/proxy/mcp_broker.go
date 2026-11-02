@@ -499,8 +499,10 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	stripSandboxCredentials(out.Header, "")
 	// An MCP server gets the call id on a run with a gateway route, and no identity token.
 	p.stripGatewayHeaders(out.Header)
+	callID := ""
 	if len(p.gatewayRoutes) > 0 {
-		out.Header.Set(gatewayCallIDHeader, uuid.NewString())
+		callID = uuid.NewString()
+		out.Header.Set(gatewayCallIDHeader, callID)
 	}
 	if s.grantID != nil {
 		hdr, err := p.mcpCredential(x.r.Context(), s)
@@ -521,7 +523,9 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		x.deny(w, ruleSourceMCPRedirect, "the MCP server answered with a redirect, which Wardyn does not follow", http.StatusBadGateway)
 		return
 	}
-	p.emitDialledAllow(decisionLog(x.req, egress.Allow, ruleSourceMCP), s.host)
+	allow := decisionLog(x.req, egress.Allow, ruleSourceMCP)
+	allow.GatewayCallID = callID
+	p.emitDialledAllow(allow, s.host)
 	p.relayStreaming(w, resp)
 }
 

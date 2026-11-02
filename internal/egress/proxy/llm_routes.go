@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
@@ -275,9 +277,19 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 	gatewayRoute, gatewayToken := p.gatewayRouteFor(host, port, "/"+rest), ""
 	// send forwards one attempt carrying hdr and records its allow. On false it has answered.
 	send := func(body io.Reader, hdr *injectedHeader) (*http.Response, bool) {
+		// A fresh id for each attempt, made here and never taken from the sandbox: the
+		// gateway's log line and this attempt's rows join on it.
+		callID := ""
+		if gatewayRoute != nil {
+			callID = uuid.NewString()
+		}
 		outReq, err := http.NewRequestWithContext(context.WithValue(r.Context(), vettedIPKey{}, target), r.Method, upstreamURL.String(), body)
 		if err != nil {
-			p.emitLLMDecision(r, host, port, egress.Deny, ruleSource, nil)
+			if p.sink != nil {
+				log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSource)
+				log.GatewayCallID = callID
+				p.sink.emit(log)
+			}
 			p.httpErrorShaped(w, p.shapeOf(r, host), host, "build llm request", err, http.StatusBadGateway,
 				brokeredFault{port: port, ruleSource: ruleSource, reason: reasonUpstreamError})
 			return nil, false
@@ -288,6 +300,9 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		applyCredential(outReq.Header, ownedHeader, hdr)
 		if gatewayRoute != nil && !p.attachGatewayIdentity(w, r, outReq.Header, gatewayRoute, host, port, ruleSource) {
 			return nil, false
+		}
+		if callID != "" {
+			outReq.Header.Set(gatewayCallIDHeader, callID)
 		}
 		gatewayToken = outReq.Header.Get(gatewayIdentityHeader)
 		outReq.Host = hostport
@@ -302,14 +317,16 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 				return nil, false
 			}
 			if p.sink != nil {
-				p.sink.emit(p.denyDialFailed("builtin:dial-failed", p.reqOf(r, host, port), host, err, scanSummary))
+				dl := p.denyDialFailed("builtin:dial-failed", p.reqOf(r, host, port), host, err, scanSummary)
+				dl.GatewayCallID = callID
+				p.sink.emit(dl)
 			}
 			// No reason: classified from err, and the message ends with the decision log's Cause above.
 			p.httpErrorShaped(w, p.shapeOf(r, host), host, "llm upstream error", err, http.StatusBadGateway,
 				brokeredFault{port: port, ruleSource: "builtin:dial-failed"})
 			return nil, false
 		}
-		p.emitLLMAllowWithFault(r, host, port, ruleSource, scanSummary, "/"+rest, resp)
+		p.emitLLMAllowWithFault(r, host, port, ruleSource, scanSummary, "/"+rest, callID, resp)
 		if nsOff { // once, however many times a credential heal sends
 			p.emitLLMDecision(r, host, port, egress.Allow, ruleSourceGitNSOff, nil)
 			nsOff = false

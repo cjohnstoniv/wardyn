@@ -376,7 +376,8 @@
 # docs/AUDIT-ACTIONS.md 55754 adds 1 over 55753, measured (0.10 rc.11 wave 2): a person's deny for a host and what a rule does after it.
 # docs/AUDIT-ACTIONS.md 55774 = ours 55754 + theirs 55773 - base 55753 at the 0.10 rc.11 merge of gateway-signer.
 # docs/AUDIT-ACTIONS.md 55846 adds 72 over 55774, measured (0.10 rc.11 gateway identity): the gateway_identity.mint row and its model_provider.write datum.
-docs/AUDIT-ACTIONS.md=55846 share=8
+# docs/AUDIT-ACTIONS.md 55952 adds 106 over 55846, measured (joined logs): the gateway_call_id field on the egress.* row.
+docs/AUDIT-ACTIONS.md=55952 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
