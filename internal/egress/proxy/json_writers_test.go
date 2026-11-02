@@ -62,8 +62,8 @@ func TestJSONWriters_StatusContentTypeAndBodyPerDoor(t *testing.T) {
 			200, plain, `{"decided_by":"policy","state":"APPROVED"}` + "\n"},
 		{"resident mint", func(w http.ResponseWriter) {
 			p.answerResidentMint(w, r, ResidentMint{GrantID: uuid.Nil, Kind: types.GrantGitPAT, Token: "t", Username: "u",
-				ExpiresAt: time.Unix(3600, 0)})
-		}, 200, plain, `{"kind":"` + string(types.GrantGitPAT) + `","token":"t","username":"u","expires_at":"1970-01-01T01:00:00Z"}` + "\n"},
+				ExpiresAt: time.Unix(3600, 0).UTC()})
+		}, 200, plain, `{"kind":"` + string(types.GrantGitPAT) + `","token":"t","username":"u","expires_at":"` + time.Unix(3600, 0).UTC().Format(time.RFC3339) + `"}` + "\n"},
 		// The sites below keep their own writers: they differ in body bytes
 		// (no trailing newline), headers or status handling.
 		{"approval pending", func(w http.ResponseWriter) { writeApprovalPending(w, nil) },
