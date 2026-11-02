@@ -48,6 +48,8 @@ type driveOpenGuest struct {
 	tarExit int
 	tarErr  string
 	during  func(argv []string) // called as a call starts
+	// failing maps a program to the stderr it writes before it exits 1 (tar -c has tarExit and tarErr).
+	failing map[string]string
 }
 
 func (g *driveOpenGuest) handle(w http.ResponseWriter, r *http.Request) {
@@ -74,6 +76,9 @@ func (g *driveOpenGuest) handle(w http.ResponseWriter, r *http.Request) {
 			_ = guestagent.WriteFrame(w, guestagent.FrameStderr, []byte(g.tarErr))
 		}
 		code = g.tarExit
+	} else if text, bad := g.failing[req.Argv[0]]; bad {
+		_ = guestagent.WriteFrame(w, guestagent.FrameStderr, []byte(text))
+		code = 1
 	} else {
 		for {
 			typ, payload, err := guestagent.ReadFrame(r.Body)
@@ -541,5 +546,75 @@ func TestDriveOpenReturnStopsWithItsContext(t *testing.T) {
 	cancel()
 	if driveOpenReturn(ctx, pr) {
 		t.Fatal("a cancelled wait reported Return")
+	}
+}
+
+// driveOpenHostile is what a compromised guest writes to try to rewrite this terminal.
+const driveOpenHostile = "tar failed\n\x1b[2J\x1b[HRun this other command\r"
+
+// driveOpenClean fails the test if text carries a byte that moves a terminal or starts a new line.
+func driveOpenClean(t *testing.T, what, text string) {
+	t.Helper()
+	if strings.ContainsAny(text, "\x1b\r\x00\x07\x08") || strings.Contains(strings.TrimSuffix(text, "\n"), "\n") {
+		t.Fatalf("%s carries a control byte or an extra line: %q", what, text)
+	}
+}
+
+// Everything a guest, a stream's names or the helper can put into an error or a line is escaped: no ESC, CR
+// or injected newline reaches the terminal.
+func TestDriveOpenGuestTextIsEscaped(t *testing.T) {
+	t.Run("tar stderr", func(t *testing.T) {
+		r := newDriveOpenRig(t, driveOpenReadyHelper, driveOpenEntry{name: "./a", body: "1"})
+		r.g.tarExit, r.g.tarErr = 1, driveOpenHostile
+		var out bytes.Buffer
+		err := r.m.driveOpen(t.Context(), driveOpenArgs{name: "Notes", in: strings.NewReader(""), out: &out})
+		if err == nil || !strings.Contains(err.Error(), `tar failed\n\x1b[2J\x1b[HRun this other command`) {
+			t.Fatalf("err = %q", err)
+		}
+		driveOpenClean(t, "error", err.Error())
+		driveOpenClean(t, "output", out.String())
+	})
+	t.Run("sync stderr", func(t *testing.T) {
+		r := newDriveOpenRig(t, driveOpenReadyHelper, driveOpenEntry{name: "./a", body: "1"})
+		r.g.failing = map[string]string{"/bin/sync": driveOpenHostile}
+		var out bytes.Buffer
+		if err := r.m.driveOpen(t.Context(), driveOpenArgs{name: "Notes", in: strings.NewReader(""), out: &out}); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), "did not confirm") {
+			t.Fatalf("output:\n%s", out.String())
+		}
+		driveOpenClean(t, "output", strings.ReplaceAll(out.String(), "\n", " "))
+		for _, line := range strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n") {
+			driveOpenClean(t, "line", line)
+		}
+	})
+	t.Run("names in the stream", func(t *testing.T) {
+		bad := "x\x1b[2Jy\nRun this"
+		for name, entries := range map[string][]driveOpenEntry{
+			"refused":  {{name: "../" + bad, body: "1"}},
+			"repeated": {{name: "./" + bad, body: "1"}, {name: "./" + bad, body: "2"}},
+		} {
+			r := newDriveOpenRig(t, driveOpenReadyHelper, entries...)
+			err := r.m.driveOpen(t.Context(), driveOpenArgs{name: "Notes", in: strings.NewReader(""), out: io.Discard})
+			if err == nil {
+				t.Fatalf("%s: copied", name)
+			}
+			driveOpenClean(t, name, err.Error())
+		}
+	})
+	t.Run("helper refusal", func(t *testing.T) {
+		r := newDriveOpenRig(t, "printf 'wardyn-macvm: the guest said \\033[2J\\033[Hhi\\r\\n' >&2\nexit 1\n")
+		err := r.m.driveOpen(t.Context(), driveOpenArgs{name: "Notes", in: strings.NewReader(""), out: io.Discard})
+		if err == nil || !strings.Contains(err.Error(), `the guest said \x1b[2J\x1b[Hhi`) {
+			t.Fatalf("err = %q", err)
+		}
+		driveOpenClean(t, "error", err.Error())
+	})
+	if got := driveOpenSafe("ok text, \"quoted\" ünï \xff"); got != `ok text, "quoted" ünï \xff` {
+		t.Fatalf("safe = %q", got)
+	}
+	if got := driveOpenSafe(strings.Repeat("a", 1000)); len(got) != 603 {
+		t.Fatalf("not bounded: %d", len(got))
 	}
 }

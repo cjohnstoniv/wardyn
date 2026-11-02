@@ -25,6 +25,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -117,6 +119,50 @@ type driveOpenArgs struct {
 // driveOpen is `drive open`: it copies the drive's files to ~/Wardyn Drives/<name>, waits for Return, and writes
 // what changed back. Ctrl-C (ctx ending) before Return writes nothing. The folder stays either way.
 func (m *macOSVMs) driveOpen(ctx context.Context, a driveOpenArgs) error {
+	err := m.driveOpenRun(ctx, a)
+	if err == nil {
+		return nil
+	}
+	return driveOpenError{text: driveOpenSafe(err.Error()), err: err}
+}
+
+// driveOpenError is an error whose text is safe to print: whatever a guest, a stream's names or the helper put
+// into the original is escaped (driveOpenSafe). The original stays reachable for errors.Is.
+type driveOpenError struct {
+	text string
+	err  error
+}
+
+func (e driveOpenError) Error() string { return e.text }
+func (e driveOpenError) Unwrap() error { return e.err }
+
+// driveOpenSafe is s with every control byte, escape, CR, newline and invalid byte written out as \x1b-style
+// text, cut at 600 characters. The guest is hostile: its stderr, its protocol errors and the names in its stream
+// must not reach this terminal as terminal commands or as extra lines.
+func driveOpenSafe(s string) string {
+	var b strings.Builder
+	n := 0
+	for i := 0; i < len(s); {
+		if n++; n > 600 {
+			b.WriteString("...")
+			break
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && size == 1:
+			fmt.Fprintf(&b, `\x%02x`, s[i])
+		case unicode.IsPrint(r):
+			b.WriteRune(r)
+		default:
+			q := strconv.QuoteToASCII(string(r))
+			b.WriteString(q[1 : len(q)-1])
+		}
+		i += size
+	}
+	return b.String()
+}
+
+func (m *macOSVMs) driveOpenRun(ctx context.Context, a driveOpenArgs) error {
 	if m.ledger == nil {
 		return errors.New(cmp.Or(m.refusal, m.why))
 	}
@@ -455,7 +501,7 @@ func (t *driveOpenTail) last() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	lines := strings.Split(strings.TrimSpace(string(t.buf)), "\n")
-	return strings.TrimPrefix(lines[len(lines)-1], helperFailurePrefix)
+	return driveOpenSafe(strings.TrimPrefix(lines[len(lines)-1], helperFailurePrefix))
 }
 
 // driveOpenJob is what the guest session needs.
@@ -476,7 +522,7 @@ func driveOpenWork(ctx context.Context, j driveOpenJob) error {
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveOpenSyncWait)
 		defer cancel()
 		if err := j.run(sctx, nil, "/bin/sync"); err != nil {
-			fmt.Fprintf(j.out, "The throwaway VM did not confirm it had written the drive (%v).\n", err)
+			fmt.Fprintf(j.out, "The throwaway VM did not confirm it had written the drive (%s).\n", driveOpenSafe(err.Error()))
 		}
 	}()
 	c, err := j.copyOut(ctx)
@@ -599,7 +645,7 @@ func driveOpenDrain(r io.Reader) <-chan string {
 		b, _ := io.ReadAll(io.LimitReader(r, 2048))
 		_, _ = io.Copy(io.Discard, r)
 		if text := string(bytes.TrimSpace(b)); text != "" {
-			out <- ": " + text
+			out <- ": " + driveOpenSafe(text)
 		}
 		close(out)
 	}()
