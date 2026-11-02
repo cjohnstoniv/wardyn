@@ -86,6 +86,7 @@ export const PROVIDER_EDITOR = {
     ISSUER_DEFAULT: "This is the default name. Two Wardyn installs that both use it look the same to one gateway.",
     KEY_ADDRESS: "Key address",
     KEY_ADDRESS_HINT: "Your gateway reads the public key here to check each token.",
+    KEY_ADDRESS_OTHER: "If your gateway reaches Wardyn at another address, use that address with this path.",
     KEY_ADDRESS_UNSAVED: "Available after identity is saved; it can take up to 30 seconds.",
     COPY: "Copy",
     COPY_ISSUER: "Copy issuer",

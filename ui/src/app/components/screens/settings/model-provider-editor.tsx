@@ -761,7 +761,7 @@ function GatewayIdentity({
                 </Field>
               )}
               {keyAddress && (
-                <Field label={g.KEY_ADDRESS} hint={saved ? g.KEY_ADDRESS_HINT : `${g.KEY_ADDRESS_HINT} ${g.KEY_ADDRESS_UNSAVED}`}>
+                <Field label={g.KEY_ADDRESS} hint={`${g.KEY_ADDRESS_HINT} ${g.KEY_ADDRESS_OTHER}${saved ? "" : ` ${g.KEY_ADDRESS_UNSAVED}`}`}>
                   <CopyValue text={keyAddress} label={g.COPY_KEY_ADDRESS} />
                 </Field>
               )}

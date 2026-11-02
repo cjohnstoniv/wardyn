@@ -162,6 +162,7 @@ describe("the switch, on", () => {
     expect(screen.getByRole("button", { name: G.COPY_ISSUER })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: G.COPY_KEY_ADDRESS })).toBeInTheDocument();
     expect(screen.getByText(G.MAY_CHANGE)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(G.KEY_ADDRESS_HINT + " " + G.KEY_ADDRESS_OTHER))).toBeInTheDocument();
     // Not yet saved: the key address says when it starts answering.
     expect(screen.getByText(new RegExp(G.KEY_ADDRESS_UNSAVED))).toBeInTheDocument();
     expect(screen.queryByText(G.OFF_NOTE)).not.toBeInTheDocument();
@@ -176,6 +177,13 @@ describe("the switch, on", () => {
     renderEditor(CORP_ON, list([CORP_ON], null));
     expect(screen.queryByText(G.ISSUER)).not.toBeInTheDocument();
     expect(screen.getByText(G.KEY_ADDRESS)).toBeInTheDocument();
+  });
+
+  it("says another address may serve the key path only where an address is shown", async () => {
+    const l = { ...list([CORP_ON]), gatewayJwksPath: undefined };
+    renderEditor(CORP_ON, l);
+    expect(screen.queryByText(G.KEY_ADDRESS)).not.toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(G.KEY_ADDRESS_OTHER))).not.toBeInTheDocument();
   });
 
   it("saves the audience trimmed, and a saved row's key address no longer says it is unsaved", async () => {
