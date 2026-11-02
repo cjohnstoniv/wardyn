@@ -553,11 +553,12 @@ jobs:
           path: ci-artifacts-model-fake/
           if-no-files-found: error
 
-  # An external AI gateway, tested (scripts/kind-gateway-run.sh): the unmodified agentgateway
+  # An external AI gateway, run (scripts/kind-gateway-run.sh): the unmodified agentgateway
   # image, pinned by digest in deploy/kind/gateway/gateway.yaml, in front of test/gatewayfake, on
   # the `make kind-quickstart` cluster. A claude-code run's model call goes through the gateway's
   # model hostname and an exec run's one MCP tool call through its MCP hostname; the assertions
-  # read the audit rows, the gateway's access log and the fake's /_seen.
+  # read the audit rows, the gateway's access log and the fake's /_seen. The job has no green run
+  # yet, so nothing in this repo calls the setup tested until it has one.
   #
   # NO SECRET: the fake sits behind the gateway, so no provider key exists in this job, and the one
   # credential is a value the script makes up. The gateway image is public and pulled anonymously.

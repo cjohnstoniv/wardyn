@@ -111,6 +111,12 @@ type DecisionLog struct {
 	// policy:tool-deny row: the tool or "*", prefixed "<harness>:" under
 	// per-harness rules. Empty on every other row.
 	MatchedRule string `json:"matched_rule,omitempty"`
+	// GatewayCallID is the id the proxy sent in X-Wardyn-Call-Id on one attempt to a
+	// model gateway route (or to an MCP server on a run that has such a route), so
+	// the gateway's access log and this row join on it. Made by the proxy for every
+	// attempt, never taken from the sandbox. Empty on every row of a run with no
+	// gateway route, and on every row for a host that is neither.
+	GatewayCallID string `json:"gateway_call_id,omitempty"`
 }
 
 // ScanSummary is the CONTENT-FREE summary of one LLM content-inspection pass.

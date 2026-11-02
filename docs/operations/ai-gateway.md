@@ -13,6 +13,7 @@
 | Gateway | The unmodified agentgateway image, one pod, one HTTPS listener on 8443 |
 | Model hostname | `llm-gw`: serves the Anthropic Messages API for a `custom_endpoint` provider |
 | MCP hostname | `mcp-gw`: serves MCP federation, with one target |
+| Key set | The gateway fetches wardynd's key set from the in-cluster Service address, so wardynd must serve it before the gateway starts |
 | Behind it | [`test/gatewayfake`](../../test/gatewayfake): a canned model reply, one MCP tool and a `/_seen` listing of what reached it |
 | Credential | A value the job makes up. The fake sits behind the gateway, so no provider key exists in the job |
 
@@ -40,6 +41,8 @@
 | `"*": passthrough` | Every other path is forwarded to the provider's host untouched |
 | `ai.hostOverride` | Where the provider's calls go: the fake here, a vendor's host in a real setup |
 | `mcp.targets` | The servers behind the one MCP endpoint a client sees |
+| `policies.jwtAuth` on the model route: `mode: strict`, `location.header.name: x-wardyn-identity`, `providers[].issuer`, `audiences`, `jwks.url` | Verifies the run's identity token (below). `preserveToken` is left unset, so the gateway consumes the header and the upstream never receives it |
+| `frontendPolicies.accessLog.add`: `jwt.sub`, `jwt.wardyn_run`, `request.headers["x-wardyn-call-id"]` | Puts the subject, the run id and Wardyn's call id on each access-log line |
 
 ## What the gateway does with a request
 
@@ -63,12 +66,16 @@ The setup was checked against the pinned image in a one-container trial. These a
 | The proxy let the tool call through to the MCP hostname | The run's audit rows: `egress.allow` on that host |
 | The gateway served each route | Its access log: a `route=default/llm` and a `route=default/mcp` line |
 | The made-up credential reached the model route, and the tool ran once | The fake's `/_seen` |
+| The gateway validated the token from the live key set: its model line names the run's subject (`admin-token`) and run id | The gateway's access log: `wardyn_sub` and `wardyn_run` |
+| The identity header did not reach the fake: the gateway consumed it | The fake's `/_seen`: no `x-wardyn-identity` on a model request |
+| The gateway refuses a call with no token, and a call with a token another key signed | A direct `401` for each |
+| Wardyn's call id is on both logs | A `gateway_call_id` on the model run's `egress.allow` row equals a `wardyn_call` in the gateway's log, at least once |
 | The job reached its own closing line | `kind-gateway-run: PASS`, gated on exit codes |
 
 - A run's exit code is not an assertion for the model run: Claude Code's exit says nothing about the gateway.
 - The tool call comes from a `curl` in an exec run, not from a model.
 - The job attaches no component, so it does not exercise the `component_host_serves_model` refusal above.
-- The job carries no token and no person's data. Run it by hand on a disposable quickstart cluster with `WARDYN_TEST_K8S=1 WARDYN_ACK_SHARED_QUICKSTART=1 scripts/kind-gateway-run.sh` ([the script](../../scripts/kind-gateway-run.sh)).
+- The model provider has run identity on, with the audience `wardyn-ai-gateway-job`. The job holds no person's data: the subject is the quickstart's fixed admin-token seat. Run it by hand on a disposable quickstart cluster with `WARDYN_TEST_K8S=1 WARDYN_ACK_SHARED_QUICKSTART=1 scripts/kind-gateway-run.sh` ([the script](../../scripts/kind-gateway-run.sh)).
 
 ## The image
 
@@ -88,3 +95,55 @@ The setup was checked against the pinned image in a one-container trial. These a
 | Default refresh (`JWKS_TTL`) | 15 minutes |
 | A `Cache-Control: max-age` or `Expires` header | Replaces the default, with a floor of 60 seconds |
 | A failed refresh | Retried after 15 seconds |
+
+## The claims a gateway receives
+
+- Experimental until 0.11. The token format (`wardyn_format` is `experimental-1`) and the key set's address may change before then.
+- With a provider's run identity on, `wardyn-proxy` sends a signed token in the `X-Wardyn-Identity` header on that provider's gateway route only. It never uses `Authorization`, which carries a person's own credential.
+- The token is ES256 with the key's `kid` in its header, and lives 10 minutes. No claim comes from the request or the sandbox. Every claim is in the table.
+
+| Claim | Value | Notes |
+|---|---|---|
+| `iss` | The trust domain, as `spiffe://<trust domain>` | `GET /api/v1/model-providers` reports it as `gateway_identity_issuer`. Two Wardynds on the default `wardyn.local` domain behind one gateway present one issuer, so set `WARDYN_TRUST_DOMAIN` on each |
+| `aud` | The provider's `gateway_identity.audience` | Set by an admin. A gateway accepts only the audiences it lists |
+| `sub` | The run's subject: a person, or a service identity on a service run | A local install gives a fixed seat. A run started with the admin token gives `admin-token` |
+| `wardyn_run` | The run id | Flat, so a gateway rule needs no SPIFFE parsing |
+| `wardyn_runner` | The executor's id, else the runner target | An operator-chosen slug, possibly a hostname, or `docker` |
+| `wardyn_provider` | The model provider's id | |
+| `sponsor` | The accountable person of a service identity | Present only on a service run |
+| `jti` | A fresh UUID per token | |
+| `iat` | When the token was issued | Unix seconds |
+| `exp` | `iat` plus 10 minutes | A gateway cannot learn that a run was killed, so a killed run's token is spendable until `exp` |
+| `wardyn_format` | `experimental-1` | |
+| `act` | `{"sub": "spiffe://<trust domain>/agent-run/<run id>"}` | The agent run acting for `sub`, in the run token's shape |
+
+- There is no `nbf`. A Wardyn clock ahead of the gateway's drops a token early and one behind gets a `401`: both fail closed.
+- A test holds this table equal to the signer's claim struct.
+
+## The key set's address
+
+- The key set is the anonymous `GET /.well-known/wardyn-experimental/gateway-jwks.json` on wardynd, under `WARDYN_BASE_PATH` when that is set.
+- The console shows the address built from the browser's own origin. A gateway that reaches wardynd by another address, such as a cluster Service name, uses that address with the same path.
+- The gateway reads the key set when it loads its config and does not start if the read fails. Start wardynd first, and save a provider with run identity on, which creates the key.
+
+## Joining a run's audit rows to the gateway's log
+
+Wardyn makes a fresh call id for every attempt to a model gateway route and sends it as `X-Wardyn-Call-Id`. The gateway's access log and the run's audit row then carry the same value.
+
+1. Log the header on the gateway. In agentgateway, add `request.headers["x-wardyn-call-id"]` to `frontendPolicies.accessLog.add`, as the setup above does.
+2. Read the run's `egress.allow` and `egress.deny` rows (`wardyn audit <run id> --json`) and take `data.gateway_call_id`.
+3. Search the gateway's log for that value. The line is that attempt's, with the token's subject and run id beside it when the gateway logs `jwt.sub` and `jwt.wardyn_run`.
+
+- Only a gateway log line that passed the token check is trustworthy. A sandbox that reaches the gateway through an opaque tunnel can send any `X-Wardyn-Call-Id`, so run the gateway's `jwtAuth` in `strict` mode.
+- A refused or failed attempt has a row with the id too, and no gateway line when nothing was sent.
+- The id is Wardyn's own. It is not a request id the gateway made.
+- MCP has a call id and no identity token.
+
+## Defaults on a route that carries the token
+
+| Default | Effect |
+|---|---|
+| The response scrub is forced on | `WARDYN_PROXY_RESPONSE_SCRUB=off` does not turn it off here, so a gateway that echoes the token back cannot hand it to the sandbox |
+| `Accept-Encoding` is deleted from the request | The answer arrives in bytes the scrub can read |
+| A compressed answer gets a `502` | The proxy refuses bytes it cannot scrub rather than relay them |
+| A running run keeps the routes it started with | Changing a provider does not change a run in flight. Create a new run to pick the change up |
