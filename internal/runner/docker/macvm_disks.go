@@ -6,8 +6,10 @@
 package docker
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -86,6 +88,24 @@ func (d *Driver) macDiskDrives(ctx context.Context, drives []types.DriveMount) (
 		unlock()
 		if err != nil {
 			return nil, nil, err
+		}
+		// `wardyn-runnerd drive open <name>` finds the drive by this file, which holds its name and volume
+		// label (the runner's driveOpenNameFile). Best effort: a run never fails for it, and drive open
+		// then says it cannot find the name.
+		if drive.DriveName != "" {
+			record, _ := json.Marshal(map[string]string{"name": drive.DriveName, "label": macDiskLabel(drive.DriveID.String())})
+			nameFile := img + ".name"
+			if old, rerr := os.ReadFile(nameFile); rerr != nil || !bytes.Equal(old, record) {
+				tmp := nameFile + "." + strconv.Itoa(os.Getpid()) + ".tmp"
+				werr := os.WriteFile(tmp, record, 0o600)
+				if werr == nil {
+					werr = os.Rename(tmp, nameFile)
+				}
+				if werr != nil {
+					_ = os.Remove(tmp)
+					slog.Warn("docker: could not record a disk drive's name for drive open", slog.String("drive", runner.DriveSubject(drive)), slog.Any("err", werr))
+				}
+			}
 		}
 		id := macvm.DiskID(i)
 		disks = append(disks, macvm.Disk{ID: id, Path: img, ReadOnly: drive.ReadOnly, SizeBytes: size})

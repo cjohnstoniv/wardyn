@@ -506,11 +506,12 @@ func (m *macOSVMs) vmGone(e admission.Entry) bool {
 	return err != nil || got != start
 }
 
-// reconcilePrepare releases this runner's prepare and tools-update entries whose helper has exited
-// (the helper releases nothing, startJob): neither job has a run directory, and the ledger itself
-// refuses while a VM process of this user could still be its VM.
+// reconcilePrepare releases this runner's prepare, tools-update, edit and drive open entries whose helper has
+// exited (the helper releases nothing, startJob): none has a run directory, and the ledger itself refuses
+// while a VM process of this user could still be its VM. A drive open's CLI releases its own entry; this is
+// for the one whose CLI was killed, so it cannot hold one of the two VM slots until someone runs it again.
 func (m *macOSVMs) reconcilePrepare() {
-	for _, k := range []admission.Kind{admission.KindPrepare, admission.KindToolsUpdate, kindEditBase} {
+	for _, k := range []admission.Kind{admission.KindPrepare, admission.KindToolsUpdate, kindEditBase, kindDriveOpen} {
 		for _, e := range m.own(k) {
 			if !m.vmGone(e) {
 				continue
