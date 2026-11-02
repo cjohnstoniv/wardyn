@@ -700,15 +700,13 @@ func openPTY(cols, rows uint16) (*os.File, *os.File, error) {
 		return nil, nil, err
 	}
 	fd := master.Fd()
-	if err = ptyIoctl(fd, unix.TIOCPTYGRANT, 0); err == nil {
-		err = ptyIoctl(fd, unix.TIOCPTYUNLK, 0)
-	}
 	var name [128]byte
-	if err == nil {
-		err = ptyIoctl(fd, unix.TIOCPTYGNAME, uintptr(unsafe.Pointer(&name[0])))
-	}
-	if err == nil && cols > 0 && rows > 0 {
-		err = setWinsize(master, cols, rows)
+	if err = ptyIoctl(fd, unix.TIOCPTYGRANT, 0); err != nil {
+		err = fmt.Errorf("pty grant: %w", err)
+	} else if err = ptyIoctl(fd, unix.TIOCPTYUNLK, 0); err != nil {
+		err = fmt.Errorf("pty unlock: %w", err)
+	} else if err = ptyIoctl(fd, unix.TIOCPTYGNAME, uintptr(unsafe.Pointer(&name[0]))); err != nil {
+		err = fmt.Errorf("pty name: %w", err)
 	}
 	if err != nil {
 		master.Close()
@@ -717,7 +715,16 @@ func openPTY(cols, rows uint16) (*os.File, *os.File, error) {
 	slave, err := os.OpenFile(unix.ByteSliceToString(name[:]), os.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		master.Close()
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("pty open slave: %w", err)
+	}
+	// The size goes on the slave, once it is open: the master of a pair with no open slave has no terminal
+	// behind it yet.
+	if cols > 0 && rows > 0 {
+		if err := setWinsize(slave, cols, rows); err != nil {
+			slave.Close()
+			master.Close()
+			return nil, nil, fmt.Errorf("pty size: %w", err)
+		}
 	}
 	return master, slave, nil
 }

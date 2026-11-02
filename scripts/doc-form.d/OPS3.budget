@@ -107,7 +107,7 @@ docs/operations/admin-only-writes.md=3933 share=35 # tightened from 3738 to the 
 # docs/operations/three-roles.md 4772 = ours 4734 + theirs 4720 - base 4682 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
 # docs/operations/three-roles.md 4788 = 4772 + 16, measured: a unit PUT takes the unit as GET returns it.
 # docs/operations/three-roles.md 4826 adds 38 over 4788, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
-docs/operations/three-roles.md=4826 share=35
+docs/operations/three-roles.md=4827 share=35 # +1 (rc.11, measured 4827: the background-watch limit in the meet table)
 # docs/operations/provider-policy.md 1362 adds 84 over 1278, measured (0.10.0 GHPAT): the GitHub per_user row that takes each person's own token.
 # docs/operations/provider-policy.md 1382 adds 20 over 1362, measured (0.10.0 GHPAT r2): a run cannot mix a shared and a personal-token GitHub row.
 docs/operations/provider-policy.md=1382 share=35
@@ -125,7 +125,7 @@ docs/operations/ownership-and-offboarding.md=2428 share=35 # +14 (rc.10), measur
 # docs/operations/governance-writes.md 3572 adds 8 over 3564, measured (#2967 DESK-LOCKS row 5): the recording level row in the covered-writes table.
 # docs/operations/governance-writes.md 3574 adds 2 over 3572, measured: the held-removal row covers an organization runner.
 # docs/operations/governance-writes.md 3588 adds 14 over 3574, measured (rc.8 E5): the super-admin tier names an organization runner's held removal.
-docs/operations/governance-writes.md=3588 share=35
+docs/operations/governance-writes.md=3669 share=35 # +81 (rc.11): rows a release cannot build, measured.
 # 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
 # docs/operations/member-runs.md=1054 share=35
 # 0.10.0-rc.6: member-runs 1086 adds 32 over 1054, measured: a no-policy member run's default is the ceiling.
@@ -188,7 +188,8 @@ docs/operations/api-tokens.md=6550 share=35 # +86 (lane SI-DOCS), measured; +17 
 # docs/operations/denials.md 5579 adds 19 over 5560, measured (0.10 MDL-LAPTOP, #2957): runner_local_model_port_not_allowed.
 # docs/operations/denials.md 5629 adds 50 over 5579, measured (0.10 rc.6): POST /runs and preflight warning_context.
 # docs/operations/denials.md 5640 adds 11 over 5629, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
-docs/operations/denials.md=5640 share=35
+# docs/operations/denials.md 5659 adds 19 over 5640, measured (0.10 rc.11 wave 3): the governance_unit row's runs.desktop_watch cause.
+docs/operations/denials.md=5659 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

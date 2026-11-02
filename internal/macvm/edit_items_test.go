@@ -154,7 +154,9 @@ func TestEditBaseNamesProfilesThenReadsItemsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := e.lines()
-	if len(lines) != 5 || lines[2] != wifiLine || lines[3] != macvm.EditCheckingLine {
+	// The start, the boot line, the code line, the profile's path, the untrusted certificate's block (a blank
+	// line, a header and four lines), the checking line, the report (a header and three rows) and the ready line.
+	if len(lines) != 16 || lines[3] != wifiLine || lines[10] != macvm.EditCheckingLine {
 		t.Fatalf("lines:\n%s", e.out.String())
 	}
 	var want []string

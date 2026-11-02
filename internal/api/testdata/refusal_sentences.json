@@ -316,6 +316,11 @@
   },
   {
     "reason": "governance_overlay_unsatisfiable",
+    "target": "\"runs.desktop_watch\"",
+    "sentence": "u.Error()"
+  },
+  {
+    "reason": "governance_overlay_unsatisfiable",
     "target": "target",
     "sentence": "u.Error()"
   },
@@ -333,6 +338,16 @@
     "reason": "governance_unit",
     "target": "\"runs.attach\"",
     "sentence": "fmt.Sprintf(\"attaching is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.\", p.Name)"
+  },
+  {
+    "reason": "governance_unit",
+    "target": "\"runs.desktop_watch\"",
+    "sentence": "\"Your organisation's governance profile doesn't allow watching a background run's desktop.\""
+  },
+  {
+    "reason": "governance_unit",
+    "target": "\"runs.desktop_watch\"",
+    "sentence": "backgroundWatchProfileMsg"
   },
   {
     "reason": "governance_unit",

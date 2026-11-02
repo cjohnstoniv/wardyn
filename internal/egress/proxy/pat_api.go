@@ -279,6 +279,7 @@ func (p *Proxy) forwardAPIDoor(w http.ResponseWriter, r *http.Request, host stri
 	out.ContentLength = r.ContentLength
 	copyHeader(out.Header, r.Header)
 	removeHopByHop(out.Header)
+	p.stripGatewayHeaders(out.Header)
 	stripSandboxCredentials(out.Header, "")
 	if d.credential != nil {
 		out.Header.Set(name, value)

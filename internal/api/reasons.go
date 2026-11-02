@@ -237,6 +237,16 @@ const (
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run ended or kept moving between the read and the write
 	reasonRunMaxWaitInvalid                    = "run_max_wait_invalid"                     // max_wait_sec is below 1
 	reasonRunQueued                            = "run_queued"                               // the run is waiting for a slot in its pool: its end is set when it starts
+	// Watching a background macOS run's desktop (run_background_watch.go, run_background_watch_limit.go). A
+	// profile's deny_background_desktop_watch answers as governance_unit. Kept out of the run-mode block above.
+	reasonRunBackgroundWatchSiteOff       = "run_background_watch_site_off"       // macos_vm.allow_background_watch is false: no one may watch a background desktop on this install
+	reasonRunBackgroundWatchNotBackground = "run_background_watch_not_background" // the run is not a background task: its desktop has its own door
+	reasonRunBackgroundWatchOldBoot       = "run_background_watch_old_boot"       // the run's boot predates asking its helper to force the desktop view only
+	reasonRunBackgroundWatchUnconfirmed   = "run_background_watch_unconfirmed"    // no report that this boot's desktop is forced view only, or the Mac's caps don't say observe
+	reasonRunBackgroundWatchOffline       = "run_background_watch_offline"        // the run's runner is not connected, so its caps can't be read
+	reasonRunBackgroundWatchControl       = "run_background_watch_control"        // the run's Mac offers desktop control, which a watch does not open
+	reasonRunBackgroundWatchPaused        = "run_background_watch_paused"         // the run is paused, and a watch never wakes it
+
 	// One-time scheduled runs (run_schedule.go): start_at on a create. Kept out of the run-mode block above,
 	// which ui/src/app/lib/run-mode-refusals.test.ts reads as the run-mode set.
 	reasonScheduledRunsOff         = "scheduled_runs_off"         // start_at sent while WARDYN_SCHEDULED_RUNS is off
@@ -340,6 +350,7 @@ const (
 	reasonApprovalRuleChanged       = "approval_rule_changed"        // the rule was written after it matched, so it decides nothing
 	reasonApprovalRuleNotApplicable = "approval_rule_not_applicable" // an approval rule never decides this approval: the kind, an Azure DevOps escalation, a run no service identity created, or a match that no longer holds
 	reasonApprovalRuleHost          = "approval_rule_host"           // a rule's host is outside the Wardyn boundary in hard_limits
+	reasonApprovalRuleHostDenied    = "approval_rule_host_denied"    // a person's deny for this host still stands on this run, so a rule does not decide it
 
 	// PUT /governance/credential-delivery.
 	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds or one the server cannot build (422), or require_posture without runner_resident

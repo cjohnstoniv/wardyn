@@ -193,9 +193,13 @@ func TestEditBaseSwapsOnlyAPassingCopy(t *testing.T) {
 		t.Fatalf("codes %q, the file held %+v", e.g.codes, e.codeSeen)
 	}
 	want := []string{
-		"Editing this Mac's macOS base. Runs keep using the current base until the edited one passes its checks.",
-		"Sign in as wardyn-admin with the one-time code in " + e.f.opts.Layout.SetupCode() + ".",
+		"This edits a copy of the macOS base your VMs start from, not this Mac. Runs keep using the current base until the copy passes its checks.",
+		"Starting the copy in a window. This takes about 2 minutes.",
+		"Sign in as wardyn-admin with the one-time code: click Show code in the window, or read it in " + e.f.opts.Layout.SetupCode() + ".",
 		"The window closed and the guest shut down. Checking the edited base: desktop control, accounts, Remote Login and the launcher's self-test.",
+		"Read from the edited base in this boot:",
+		"  Full Disk Access            could not be read",
+		"  desktop                     control",
 		"The edited base is ready, and runs now use it. Desktop: control.",
 	}
 	if !slices.Equal(e.lines(), want) {
@@ -232,7 +236,11 @@ func TestEditBaseSwapsOnlyAPassingCopy(t *testing.T) {
 	}
 	wantText := macvm.ScreenText{
 		Title: "Wardyn: edit this macOS VM base",
-		Steps: "Sign in as wardyn-admin with the one-time code. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
+		Steps: "Sign in as wardyn-admin with the one-time code. Click Show code to see it. Make your changes, then close this window. Wardyn checks the base before runs use it.\n" +
+			"The first time, macOS may ask setup questions. Finish them without adding an Apple account, then sign in. What you click stays for every run.\n" +
+			"You are signed in as agent. For administrator steps open Terminal. If Spotlight doesn't answer, use Finder > Go > Utilities. Then run su wardyn-admin.\n" +
+			"Full Disk Access, for folder shares: System Settings > Privacy & Security > Full Disk Access, add /usr/local/libexec/wardyn-guest-agent. It lets every program a run starts in this VM read protected folders, in every run.\n" +
+			"Certificates that are not trusted are listed in the Terminal where you started edit-base. Trust each one in the admin Terminal.\n" +
 			"For desktop control: in System Settings > General > Sharing, turn on Screen Sharing. Under its (i) button, turn on \"VNC viewers may control screen with password\" (any password; Wardyn replaces it).\n" +
 			"Leave Remote Login off and add no accounts: the check refuses a base with either.",
 		Closable: true,
@@ -371,7 +379,8 @@ func TestEditBaseKeepsTheBasesDesktopMode(t *testing.T) {
 			if rec, ok := macvm.ReadEditRecord(e.base, got); !ok || rec.Recheck != macvm.EditRecheckPassed {
 				t.Errorf("record %+v %v", rec, ok)
 			}
-			if ready := "The edited base is ready, and runs now use it. Desktop: " + tc.want + "."; !slices.Contains(e.lines(), ready) {
+			words := map[string]string{macvm.DesktopObserve: "view only", macvm.DesktopControl: "control"}[tc.want]
+			if ready := "The edited base is ready, and runs now use it. Desktop: " + words + "."; !slices.Contains(e.lines(), ready) {
 				t.Errorf("lines:\n%s", e.out.String())
 			}
 		})

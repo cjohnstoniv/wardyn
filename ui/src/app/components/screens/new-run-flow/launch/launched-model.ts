@@ -36,9 +36,11 @@ export function givesUp(deadlineAt: string, now: number): string {
 }
 
 /** Why the run waits, in the server's own sentence for that reason. Undefined until the pool is known. A scheduled
- *  run's two waits are not a pool's: the run page and the Launched screen say them (scheduled-lines.ts). */
-export function waitingBody(reason: string, pool: { name: string; max?: number } | undefined): string | undefined {
-  // This sentence names no pool, so it needs none.
+ *  run's two waits are not a pool's: the run page and the Launched screen say them (scheduled-lines.ts). A run its
+ *  runners' limits hold back says the limit the server named (RunQueue.limit_sentence) when it sent one. */
+export function waitingBody(reason: string, pool: { name: string; max?: number } | undefined, limitSentence?: string): string | undefined {
+  // These sentences name no pool of their own, so they need none.
+  if (reason === RUN_WAIT_REASON.RUNNERS_AT_CAPACITY && limitSentence) return limitSentence;
   if (reason === RUN_WAIT_REASON.RECORDING_STORE_OFF) return RUN_WAIT.RECORDING_STORE_OFF();
   if (!pool || reason === RUN_WAIT_REASON.SCHEDULED || reason === RUN_WAIT_REASON.OWNER_SIGN_IN) return undefined;
   if (reason === RUN_WAIT_REASON.NO_RUNNER_FREE) return RUN_WAIT.NO_RUNNER_FREE(pool.name);

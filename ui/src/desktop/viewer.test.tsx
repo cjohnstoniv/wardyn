@@ -221,6 +221,8 @@ describe("DesktopViewer", () => {
     sockets[0].serve(HANDSHAKE);
     expect(screen.getByText(DESKTOP.viewOnlyTitle)).toBeInTheDocument();
     expect(screen.getByText(DESKTOP.viewOnlyBody)).toBeInTheDocument();
+    expect(screen.getByText(DESKTOP.loginWindowNote)).toBeInTheDocument();
+    expect(screen.queryByText(DESKTOP.backgroundWatchBody)).toBeNull();
     expect(screen.queryByText(DESKTOP.phoneBody)).toBeNull();
     const canvas = screen.getByTestId("desktop-canvas");
     expect(canvas).toHaveAttribute("tabindex", "-1");
@@ -236,5 +238,36 @@ describe("DesktopViewer", () => {
     for (const s of [DESKTOP.linkRefused, DESKTOP.linkBody, DESKTOP.whyWallBody, DESKTOP.whySetByBody, DESKTOP.whyEnforcedBody, DESKTOP.whyCanChangeBody, DESKTOP.gatewaySaid])
       expect(within(card).getByText(s)).toBeInTheDocument();
     expect(within(card).getByTestId("desktop-refused-said")).toHaveTextContent("Invalid, expired, or already-used attach ticket");
+  });
+
+  it("a background watch says so, sends no input, and a re-check's end has its own words and doesn't retry", () => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    const connect = vi.fn(() => {
+      const s = new FakeSocket();
+      sockets.push(s);
+      return s;
+    });
+    render(<DesktopViewer boot={{ ...OPEN, machine_kind: "macos_vm", view_only: true, background: true }} connect={connect} small={false} />);
+    sockets[0].opened();
+    sockets[0].serve(HANDSHAKE);
+    expect(screen.getByText(DESKTOP.viewOnlyTitle)).toBeInTheDocument();
+    expect(screen.getByText(DESKTOP.backgroundWatchBody)).toBeInTheDocument();
+    expect(screen.getByText(DESKTOP.loginWindowNote)).toBeInTheDocument();
+    expect(screen.queryByText(DESKTOP.viewOnlyBody)).toBeNull();
+    const canvas = screen.getByTestId("desktop-canvas");
+    expect(canvas).toHaveAttribute("tabindex", "-1");
+    const sent = sockets[0].sent.length;
+    fireEvent.pointerMove(canvas, { clientX: 5, clientY: 5 });
+    expect(sockets[0].sent.length).toBe(sent);
+
+    sockets[0].end(4005);
+    expect(screen.getByText(DESKTOP.sessionEnded)).toBeInTheDocument();
+    expect(screen.getByText(DESKTOP.watchEndedBody)).toBeInTheDocument();
+    expect(screen.queryByText(DESKTOP.sessionEndedBody)).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(connect).toHaveBeenCalledTimes(1);
   });
 });

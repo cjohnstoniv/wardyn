@@ -46,9 +46,9 @@ export function canonicalAuditAction(a: string): string {
   return LEGACY_AUDIT_ACTIONS[a] ?? a;
 }
 
-// An egress row replayed from a runner's offline spool (0.9, M-RN-3 RS7): the decision was made on the
-// runner while it was disconnected, so its own time is `observed_at` (spooled_at), not the arrival time the
-// chain records; and a `builtin:spool-full` denial is the runner refusing because its offline log was full
+// An egress row that came through a runner's spool (0.9, M-RN-3 RS7), which carries every decision, not only
+// those made while the runner was disconnected: its own time is `observed_at` (spooled_at), not the arrival
+// time the chain records; and a `builtin:spool-full` denial is the runner refusing because its offline log was full
 // (spool_full), not a policy decision. Both are absent on every other row.
 // A run ending, with the one fact a runner's revocation adds: the runner was revoked, and was connected or
 // not when it happened (the run.kill row's runner_online). Absent on every other ending.

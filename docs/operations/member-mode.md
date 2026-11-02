@@ -82,6 +82,24 @@ no admin route opens whatever the type.
   - A run launched in the view takes the picked type's grants, governance profile, drives and run limits, and records that type.
   - Turn the switch on when an admin's own stamped type must bound the runs they launch.
 
+### Testing what members get
+
+Test in the **User view**, looking through the member type. Do not judge it from
+an admin's run outside the view.
+
+- With the switch off, a run from the admin token, local mode or an admin-role
+  personal token is ungoverned. It gets the deployment default, not a member's
+  profile.
+- A browser sign-in cannot launch in the Admin view (`409` `admin_view`). In the
+  User view the effective role is lowered, so the run takes the picked type's
+  profile and grants.
+- A security admin is never ungoverned. Its runs resolve against its stamped type.
+- To make an admin's own runs member-bound everywhere, turn on
+  `WARDYN_GOVERN_ADMIN_RUNS` with the steps under
+  [Constrained-admin mode](#constrained-admin-mode). It refuses Record Mode. It
+  also governs admin-role personal tokens, so check CI first. Do not turn it on by
+  default.
+
 ## The no-credential preview — "Preview as a new user"
 
 The Permissions page header offers **Preview as a new user**. It's the

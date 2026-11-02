@@ -106,3 +106,12 @@ describe("any other queued run", () => {
     expect(screen.queryByRole("heading", { name: SCHEDULED_RUN.WORD })).not.toBeInTheDocument();
   });
 });
+
+describe("a run its runners hold back", () => {
+  const named = "Every runner in Laptops is at a limit. For example, mac-1: Runs at once: 1 running of 1. This run starts when one has room.";
+
+  it("says the limit the server named, the same sentence the Launched screen shows", () => {
+    show(scheduled("runner_pool_runners_at_capacity", {}, { start_at: undefined, time_zone: undefined, limit_sentence: named }));
+    expect(screen.getByTestId("run-queued-wait")).toHaveTextContent(named);
+  });
+});

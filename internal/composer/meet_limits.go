@@ -30,6 +30,7 @@ func (m *meeter) meetLimits(o types.LimitsOverlay) {
 		{&l.DenyUIApps, o.DenyUIApps},
 		{&l.DenyUserDrive, o.DenyUserDrive},
 		{&l.DenyMemberDrives, o.DenyMemberDrives},
+		{&l.DenyBackgroundDesktopWatch, o.DenyBackgroundDesktopWatch},
 	} {
 		if f.ov != nil {
 			*f.base = *f.base || *f.ov

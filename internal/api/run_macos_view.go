@@ -49,3 +49,27 @@ func (s *Server) macOSDesktopViewOnly(run types.AgentRun) bool {
 	v := s.runMacOSView(run)
 	return v == nil || v.Desktop != runnerwire.MacVMDesktopControl
 }
+
+// macOSLiveDesktop is a macOS VM run's Mac's desktop offer as its connected runner states it now, for the
+// question that opens a door, where no answer is never a yes: connected is false on no runner, a runner this
+// replica holds no session for, or one that is offline, whose remembered caps say nothing. The offer is ""
+// when a connected runner's caps name no macOS VM.
+func (s *Server) macOSLiveDesktop(run types.AgentRun) (offer string, connected bool) {
+	if !run.MachineKind.IsMacOSVM() || run.RunnerID == nil {
+		return "", false
+	}
+	s.runnerStreams.subsMu.Lock()
+	ep, live := s.runnerStreams.subs[*run.RunnerID]
+	s.runnerStreams.subsMu.Unlock()
+	if !live {
+		return "", false
+	}
+	if _, online := ep.sub.Advertised(); !online {
+		return "", false
+	}
+	caps, ok := ep.sub.Caps()
+	if !ok || caps.MacOSVM == nil {
+		return "", true
+	}
+	return caps.MacOSVM.Desktop, true
+}

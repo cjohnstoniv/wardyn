@@ -60,6 +60,10 @@ export const DESKTOP = {
   watch: "Watch desktop", // MAC-V02
   viewOnlyTitle: "View only", // MAC-V05
   viewOnlyBody: "macOS 26 doesn't keep control here. Typing and clicking don't reach this desktop.", // MAC-V06
+  backgroundWatchBody: "This is a background run. Typing, clicking, pasting and clipboard copy are disabled.",
+  loginWindowNote: "You may see a macOS login window instead of the agent's screen. The run keeps going either way.",
+  // The gateway's own close code: a re-check ended a watch of a background run. Never the hour's words.
+  watchEndedBody: "Watching this run's desktop is no longer allowed, so this view closed. Closing this view does not stop the run.",
   diskRemoving: "Removing the macOS VM's disk from this Mac…", // MV-D10
   diskRemoved: (time: string) => `The macOS VM and its disk were removed from this Mac at ${time}.`, // MV-D11
   diskRemoveFailed: (reason: string) => `The macOS VM's disk could not be removed from this Mac: ${reason}.`, // MV-D12

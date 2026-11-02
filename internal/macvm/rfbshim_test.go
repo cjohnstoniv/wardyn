@@ -358,3 +358,138 @@ func TestNewDesktopSecret(t *testing.T) {
 		t.Errorf("50 passwords made %d distinct", len(seen))
 	}
 }
+
+// A full RFB client against a view-only shim with no gateway in front: every byte Screen Sharing reads
+// after the handshake is a pixel format, encodings or an update request, whether the messages come whole
+// or a byte at a time. The same client against a shim that is not view only delivers all of it, so this
+// recording would show a leak.
+func TestRFBClientViewOnlyShimPassesOnlyReadRequests(t *testing.T) {
+	pixelFormat := []byte{0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0}
+	encodings := []byte{2, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 16, 0xc0, 0xa1, 0xe5, 0xce} // raw, ZRLE, Extended Clipboard
+	kept := []byte{2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 16}
+	update := []byte{3, 0, 0, 0, 0, 0, 5, 0, 3, 32}
+	input := [][]byte{
+		{4, 1, 0, 0, 0, 0, 0, 'a'},
+		{5, 1, 0, 10, 0, 20},
+		{6, 0, 0, 0, 0, 0, 0, 5, 'p', 'a', 's', 't', 'e'},
+		{4, 0, 0, 0, 0, 0, 0, 'a'},
+		{5, 0, 0, 11, 0, 21},
+	}
+	lastUpdate := []byte{3, 1, 0, 0, 0, 0, 7, 128, 4, 56}
+	var sent, read, all []byte
+	sent = append(append(append(sent, pixelFormat...), encodings...), update...)
+	read = append(append(append(read, pixelFormat...), kept...), update...)
+	all = append(all, read...)
+	for _, msg := range input {
+		sent, all = append(sent, msg...), append(all, msg...)
+	}
+	sent = append(sent, lastUpdate...)
+	read, all = append(read, lastUpdate...), append(all, lastUpdate...)
+
+	for _, tc := range []struct {
+		name     string
+		viewOnly bool
+		chunk    int
+		want     []byte
+	}{
+		{"view only, whole", true, len(sent), read},
+		{"view only, a byte at a time", true, 1, read},
+		{"with control, whole", false, len(sent), all},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newShim(t, &macvm.RFBShim{Credential: password, ViewOnly: tc.viewOnly})
+			r.handshake(t)
+			got := rfbClientRecordGuest(r)
+			for rest := sent; len(rest) > 0; rest = rest[min(tc.chunk, len(rest)):] {
+				if _, err := r.viewer.Write(rest[:min(tc.chunk, len(rest))]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_ = r.viewer.Close()
+			if b := <-got; !bytes.Equal(b, tc.want) {
+				t.Fatalf("Screen Sharing read %v, want %v", b, tc.want)
+			}
+		})
+	}
+}
+
+// A view-only shim ends the session on a control message it never relays, and on the extended clipboard
+// form, which a plain text paste is not: nothing of it or after it reaches Screen Sharing.
+func TestRFBClientViewOnlyShimEndsTheSessionOnAnythingElse(t *testing.T) {
+	update := []byte{3, 0, 0, 0, 0, 0, 5, 0, 3, 32}
+	for name, msg := range map[string][]byte{
+		"xvp":                {250, 0, 1, 2},
+		"SetDesktopSize":     {251, 0, 7, 128, 4, 56, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 128, 4, 56, 0, 0, 0, 0},
+		"QEMU extended key":  {255, 0, 0, 1, 0, 0, 0, 'a', 0, 0, 0, 30},
+		"extended clipboard": {6, 0, 0, 0, 0xff, 0xff, 0xff, 0xfb, 'p', 'a', 's', 't', 'e'},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newShim(t, &macvm.RFBShim{Credential: password, ViewOnly: true})
+			r.handshake(t)
+			got := rfbClientRecordGuest(r)
+			if _, err := r.viewer.Write(update); err != nil {
+				t.Fatal(err)
+			}
+			go func() { _, _ = r.viewer.Write(append(append([]byte(nil), msg...), update...)) }()
+			if b := <-got; !bytes.Equal(b, update) {
+				t.Fatalf("Screen Sharing read %v, want only the first update request", b)
+			}
+			ended(t, r.viewer, "the viewer")
+		})
+	}
+}
+
+// rfbClientRecordGuest records every byte Screen Sharing reads from here on, and hands them over when
+// the shim closes its side.
+func rfbClientRecordGuest(r *shimRig) <-chan []byte {
+	got := make(chan []byte, 1)
+	go func() {
+		b, _ := io.ReadAll(r.apple)
+		got <- b
+	}()
+	return got
+}
+
+// A forced session drops the guest's clipboard on its way to the viewer and carries what follows it. A
+// run on a view-only base that isn't forced keeps its cut text, as it always has.
+func TestRFBShimForcedKeepsCutTextFromTheViewer(t *testing.T) {
+	cut := []byte{3, 0, 0, 0, 0, 0, 0, 2, 'h', 'i'}
+	for name, shim := range map[string]*macvm.RFBShim{
+		"forced":    {Credential: password, ViewOnly: true, ForceViewOnly: true},
+		"view only": {Credential: password, ViewOnly: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newShim(t, shim)
+			r.handshake(t)
+			go func() {
+				_, _ = r.apple.Write(cut)
+				_, _ = r.apple.Write([]byte{2}) // Bell
+			}()
+			if shim.ForceViewOnly {
+				if got := readFull(t, r.viewer, 1); got[0] != 2 {
+					t.Fatalf("the viewer read %v, want the bell with no cut text before it", got)
+				}
+				return
+			}
+			if got := readFull(t, r.viewer, len(cut)+1); !bytes.Equal(got, append(cut[:len(cut):len(cut)], 2)) {
+				t.Fatalf("the viewer read %v, want the cut text and the bell", got)
+			}
+		})
+	}
+}
+
+// The report is what a session's filter does: both halves, so a base that is merely view only, or a
+// setting the input filter didn't take, isn't forced.
+func TestRFBShimDesktopForcedViewOnly(t *testing.T) {
+	for _, c := range []struct{ viewOnly, force, want bool }{
+		{true, true, true},
+		{true, false, false},
+		{false, true, false},
+		{false, false, false},
+	} {
+		s := &macvm.RFBShim{ViewOnly: c.viewOnly, ForceViewOnly: c.force}
+		if got := s.DesktopForcedViewOnly(); got != c.want {
+			t.Errorf("%+v: %v", c, got)
+		}
+	}
+}

@@ -117,7 +117,7 @@ derives its role.
 
 | `GovernanceLimits` field | Unset means | Meet |
 |---|---|---|
-| `deny_task_mode_exec`, `deny_interactive`, `deny_ui_apps`, `deny_user_drive`, `deny_member_drives` | false | OR |
+| `deny_task_mode_exec`, `deny_interactive`, `deny_ui_apps`, `deny_user_drive`, `deny_member_drives`, `deny_background_desktop_watch` | false | OR |
 | `local_self_defined_components` | false | AND |
 | `deny_placements` | none denied: every placement is permitted | union of the denied placements |
 | `max_concurrent_runs`, `max_ephemeral_disk_mib`, `max_drive_size_mib`, `max_cpu_millis`, `max_memory_mib` | 0 is unlimited | smaller positive |

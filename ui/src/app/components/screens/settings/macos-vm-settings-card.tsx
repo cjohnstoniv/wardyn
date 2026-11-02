@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Settings card: the macOS VM settings of the site config, `macos_vm` (types.SiteMacOSVM). Today that is one
-// field, the oldest base a run may use (`max_base_age_days`). Empty is no maximum; the server stores 0 as the same.
+// Settings card: the macOS VM settings of the site config, `macos_vm` (types.SiteMacOSVM). The oldest base a run may
+// use (`max_base_age_days`, empty is no maximum; the server stores 0 as the same) and the switch for watching
+// background runs (`allow_background_watch`, absent reads on, sent explicitly on every save). One Save covers every field; to add a field, add
+// its state beside `watch`, its input below, its key in macosVMBody and its term in `dirty`.
 //
 // Saved through PUT /site-config with the GET's ETag as If-Match, the way the Custom components card does, so a
 // save can't spread a stale document over a newer one. Super-admin only, by being mounted from AdminSettingsScreen.
@@ -22,6 +24,7 @@ import { COMPONENTS_ADMIN as C } from "../../wardyn/copy/components-admin";
 import { FORM_ACTIONS } from "../../wardyn/copy/form-actions";
 import { MAC_SETTINGS as T } from "../../wardyn/copy/mac-settings";
 import { INLINE_ACTIONS } from "../../wardyn/form-actions";
+import { Switch } from "../../wardyn/form-primitives";
 
 // What the field holds: empty, or a positive whole number of days. Anything else is not sent.
 export const parseMaxBaseAge = (text: string): number | "" | null => {
@@ -32,20 +35,25 @@ export const parseMaxBaseAge = (text: string): number | "" | null => {
   return Number.isSafeInteger(n) ? n : null;
 };
 
-// The block to send: the stored block with the one field set, or removed when the field is empty. An empty
-// block still goes out (it names `macos_vm`), because an absent block is carried forward by the server.
-export function macosVMBody(stored: SiteMacOSVM | undefined, days: number | ""): SiteMacOSVM {
-  const { max_base_age_days: _dropped, ...rest } = stored ?? {};
-  return days === "" ? rest : { ...rest, max_base_age_days: days };
+// The block to send: the stored block with the days set (removed when the field is empty) and the watch switch
+// written explicitly, true or false, every time. The server keeps a stored switch when a body names the block
+// without it, so only an explicit value can change it. A block with no days still goes out (it names `macos_vm`),
+// because an absent block is carried forward by the server.
+export function macosVMBody(stored: SiteMacOSVM | undefined, days: number | "", watch = true): SiteMacOSVM {
+  const { max_base_age_days: _days, allow_background_watch: _watch, ...rest } = stored ?? {};
+  return { ...rest, ...(days !== "" && { max_base_age_days: days }), allow_background_watch: watch };
 }
 
 const textOf = (m?: SiteMacOSVM) => (m?.max_base_age_days ? String(m.max_base_age_days) : "");
+const watchOf = (m?: SiteMacOSVM) => m?.allow_background_watch !== false;
 
 export function MacOSVMSettingsCard() {
   const [base, setBase] = React.useState<SiteConfig | null>(null);
   const [etag, setEtag] = React.useState<string | null>(null);
   const [saved, setSaved] = React.useState("");
   const [draft, setDraft] = React.useState("");
+  const [savedWatch, setSavedWatch] = React.useState(true);
+  const [watch, setWatch] = React.useState(true);
   const [state, setState] = React.useState<"loading" | "ready" | "failed">("loading");
   const [saving, setSaving] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
@@ -61,6 +69,8 @@ export function MacOSVMSettingsCard() {
         setEtag(tag);
         setSaved(next);
         setDraft(next);
+        setSavedWatch(watchOf(siteConfig.macos_vm));
+        setWatch(watchOf(siteConfig.macos_vm));
         setState("ready");
       })
       .catch(() => setState("failed"));
@@ -71,7 +81,7 @@ export function MacOSVMSettingsCard() {
 
   const parsed = parseMaxBaseAge(draft);
   const invalid = parsed === null;
-  const dirty = draft.trim() !== saved;
+  const dirty = draft.trim() !== saved || watch !== savedWatch;
 
   const save = async () => {
     if (!base || parsed === null) return;
@@ -79,12 +89,14 @@ export function MacOSVMSettingsCard() {
     setRefused(null);
     setSavedElsewhere(false);
     try {
-      const result = await health.putSiteConfig({ ...base, macos_vm: macosVMBody(base.macos_vm, parsed) }, etag);
+      const result = await health.putSiteConfig({ ...base, macos_vm: macosVMBody(base.macos_vm, parsed, watch) }, etag);
       const next = textOf(result.siteConfig.macos_vm);
       setBase(result.siteConfig);
       setEtag(result.etag);
       setSaved(next);
       setDraft(next);
+      setSavedWatch(watchOf(result.siteConfig.macos_vm));
+      setWatch(watchOf(result.siteConfig.macos_vm));
       toast.success(T.SAVED_TOAST);
     } catch (e) {
       if (e instanceof HttpError && e.status === 412) {
@@ -139,6 +151,11 @@ export function MacOSVMSettingsCard() {
               {T.INVALID}
             </p>
           )}
+          <div className="mt-5 flex items-center gap-2.5">
+            <Switch checked={watch} onChange={setWatch} label={T.WATCH_LABEL} />
+            <span className="text-body font-medium text-foreground">{T.WATCH_LABEL}</span>
+          </div>
+          <p className="mt-1.5 text-xs text-muted-foreground">{T.WATCH_HINT}</p>
           {savedElsewhere && (
             <p role="status" className="my-3 rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
               {C.SETTINGS_SAVED_ELSEWHERE}

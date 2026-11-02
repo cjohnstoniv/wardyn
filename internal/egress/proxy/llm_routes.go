@@ -272,6 +272,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		Path:     "/" + rest,
 		RawQuery: r.URL.RawQuery,
 	}
+	gatewayRoute, gatewayToken := p.gatewayRouteFor(host, port, "/"+rest), ""
 	// send forwards one attempt carrying hdr and records its allow. On false it has answered.
 	send := func(body io.Reader, hdr *injectedHeader) (*http.Response, bool) {
 		outReq, err := http.NewRequestWithContext(context.WithValue(r.Context(), vettedIPKey{}, target), r.Method, upstreamURL.String(), body)
@@ -283,7 +284,12 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		}
 		copyHeader(outReq.Header, r.Header)
 		removeHopByHop(outReq.Header)
+		p.stripGatewayHeaders(outReq.Header)
 		applyCredential(outReq.Header, ownedHeader, hdr)
+		if gatewayRoute != nil && !p.attachGatewayIdentity(w, r, outReq.Header, gatewayRoute, host, port, ruleSource) {
+			return nil, false
+		}
+		gatewayToken = outReq.Header.Get(gatewayIdentityHeader)
 		outReq.Host = hostport
 		outReq.Header.Del("Host")
 
@@ -345,6 +351,10 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 			p.refuseLocalModel(w, r, host, port, http.StatusBadGateway, reasonUpstreamError, err.Error())
 			return
 		}
+	}
+	if gatewayRoute != nil {
+		p.relayGatewayRoute(w, r, host, port, resp, ruleSource, gatewayToken)
+		return
 	}
 	p.relayUpstream(w, r, host, port, resp, ruleSource)
 }

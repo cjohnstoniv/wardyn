@@ -217,9 +217,13 @@ var routeMatrix = map[string]classifiedRoute{
 	// mounted on the TOP-LEVEL router, outside every auth group and after the
 	// whole /api/v1 tree, so it can shadow nothing; mountUI's rooted clean of
 	// the path is what keeps it from serving outside the directory.
-	"GET /*":             {class: classAnonymous},
-	"GET /healthz":       {class: classAnonymous},
-	"GET /readyz":        {class: classAnonymous},
+	"GET /*":       {class: classAnonymous},
+	"GET /healthz": {class: classAnonymous},
+	"GET /readyz":  {class: classAnonymous},
+	// Public keys only, fetched by an AI gateway that holds no Wardyn credential;
+	// with no key it answers as a path no route holds (handleGatewayJWKS). Walked on
+	// the console's router; a headless one serves it from mountUI's NotFound.
+	"GET /.well-known/wardyn-experimental/gateway-jwks.json": {class: classAnonymous},
 	"GET /auth/login":    {class: classAnonymous},
 	"GET /auth/callback": {class: classAnonymous},
 	// Hybrid enrolment: a laptop's first boot holds no credential yet, only the
@@ -886,6 +890,8 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/desktop/sign-ins":         {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"POST /api/v1/runs/{id}/desktop/sign-ins/pause":  {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"POST /api/v1/runs/{id}/desktop/sign-ins/resume": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	// The ticket to watch a background macOS run's desktop, view only (run_background_watch.go).
+	"POST /api/v1/runs/{id}/desktop/watch-ticket": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
 	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
@@ -1785,9 +1791,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// (tierEntry); 45 since 0.10 added POST
 		// /runs/{id}/computer-folder/bring-back; 46 since 0.10 (#2968) added GET
 		// /runs/{id}/recording-chain; 49 since 0.10 (#2972) added GET
-		// /runs/{id}/desktop/sign-ins and POST .../pause and .../resume.
-		if probed != 49 {
-			t.Errorf("probed %d classOwner routes, want 49 — a route that left classOwner takes its tier "+
+		// /runs/{id}/desktop/sign-ins and POST .../pause and .../resume; 50 since
+		// 0.10 added POST /runs/{id}/desktop/watch-ticket (tierEntry).
+		if probed != 50 {
+			t.Errorf("probed %d classOwner routes, want 50 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

@@ -497,6 +497,11 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	copyHeader(out.Header, x.r.Header)
 	removeHopByHop(out.Header)
 	stripSandboxCredentials(out.Header, "")
+	// An MCP server gets the call id on a run with a gateway route, and no identity token.
+	p.stripGatewayHeaders(out.Header)
+	if len(p.gatewayRoutes) > 0 {
+		out.Header.Set(gatewayCallIDHeader, uuid.NewString())
+	}
 	if s.grantID != nil {
 		hdr, err := p.mcpCredential(x.r.Context(), s)
 		if err != nil {
@@ -525,6 +530,11 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 func (p *Proxy) relayStreaming(w http.ResponseWriter, resp *http.Response) {
 	w, done := p.scrubbed(w)
 	defer done()
+	flushRelay(w, resp)
+}
+
+// flushRelay writes resp to w, flushing each chunk as it arrives.
+func flushRelay(w http.ResponseWriter, resp *http.Response) {
 	dst := w.Header()
 	copyHeader(dst, resp.Header)
 	removeHopByHop(dst)

@@ -419,7 +419,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		MacOSBase:        macOSBaseOf(run),
 		// "Sign-ins in a desktop" for the run's agent (run_desktop_vm_signin.go); only a VM reads it.
 		DesktopSignInsOff: desktopSignInsOff(siteCfg, siteCfgErr, run.Agent),
-		Env:               sandboxEnv,
+		// The stored mode alone, not p.Interactive; only a macOS VM reads it.
+		DesktopViewOnly: run.BackgroundOnly(),
+		Env:             sandboxEnv,
 		// The credential half (SandboxSpec.SecretEnv states the driver
 		// obligations). Nil for a run with no env_secret grant and no resident
 		// Bedrock credential, which is most of them.
@@ -663,7 +665,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// that the very next event — `run.create` `failure` — contradicted. Nothing
 	// downstream of here can refuse the drive, so this row is now true when it
 	// is written.
-	s.auditDriveMount(ctx, run.ID, run.CreatedBy, p.Drives)
+	s.auditDriveMount(ctx, run.ID, run.CreatedBy, run.MachineKind, p.Drives)
 	auditAgentPolicy := func() { s.auditAgentPolicy(ctx, run, agentPolicy, spec) }
 	if !agentPolicy.execLess {
 		auditAgentPolicy()

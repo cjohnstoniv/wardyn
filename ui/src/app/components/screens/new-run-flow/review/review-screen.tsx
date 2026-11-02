@@ -38,6 +38,7 @@ import { StepShell, useAnnounce } from "../steps/step-shell";
 import { BLOCKERS_ID, BlockerList } from "./blocker-list";
 import { buildBlockers, groupsBlockedBy, missingSetup } from "./blockers";
 import { localMcpConflicts, useHarnessNames } from "../steps/tools/local-mcp";
+import { WallsApplyLine } from "../steps/tools/totals";
 import { AddTokenDialog, DISABLED_FILL } from "../steps/tools/setup-needed";
 import { EffectivePolicyCard } from "./effective-policy-card";
 import { useWallsSpec } from "./use-walls-spec";
@@ -235,6 +236,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
           onSaved={() => { announce(NR_TOOLS.TOKEN_SAVED); setAddingSecret(null); checkAgain(); }}
         />
       )}
+      {view === "pretty" && <WallsApplyLine walls={walls} />}
       {view === "pretty" ? (
         <div className="grid items-start gap-3.5 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
           {/* #3044: Review's groups are flat rows in the one section card the guided steps use. A blocker that names a
