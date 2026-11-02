@@ -23,7 +23,7 @@ import { isNetworkFault, runHeadline } from "../../lib/types";
 import { describeEvent, hasNoCaller, inboundDetail, isInbound, serviceSource } from "../../lib/audit-copy";
 import { RunRef } from "../wardyn/run-ref";
 import { AUDIT } from "./audit-copy";
-import { audit as api } from "../../lib/api/audit";
+import { audit as api, gatewayCallId } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { health as healthApi } from "../../lib/api/health";
 import { runs as runsApi } from "../../lib/api/runs";
@@ -688,15 +688,6 @@ function GroundTruthChip({ value }: { value?: { state?: string; reason?: string 
       Ground truth · {state}
     </Chip>
   );
-}
-
-// The call id a row was sent to the gateway under (data.gateway_call_id), on an egress.allow or egress.deny row only.
-// It is text the proxy wrote, so a value that is not a UUID is not shown, and it is only ever rendered as text.
-const CALL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function gatewayCallId(e: AuditEvent): string | null {
-  if (e.action !== "egress.allow" && e.action !== "egress.deny") return null;
-  const id = e.data?.gateway_call_id;
-  return typeof id === "string" && CALL_ID.test(id) ? id : null;
 }
 
 function EventRow({

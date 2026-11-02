@@ -21,10 +21,12 @@ import { aheadByHours } from "../../lib/test-clock";
 const listAuditMock = vi.fn();
 const getRunMock = vi.fn();
 const listRunsMock = vi.fn();
-vi.mock("../../lib/api/audit", () => ({
+vi.mock("../../lib/api/audit", async (importOriginal) => ({
   audit: {
     listAudit: (...a: unknown[]) => listAuditMock(...a),
   },
+  // The real reading of a row's call id, not a stub.
+  gatewayCallId: (await importOriginal<typeof import("../../lib/api/audit")>()).gatewayCallId,
 }));
 vi.mock("../../lib/api/runs", () => ({
   runs: {

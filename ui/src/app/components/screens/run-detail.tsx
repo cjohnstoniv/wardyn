@@ -34,7 +34,7 @@ import {
 import { ERASED_VALUE } from "../../lib/types";
 import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
-import { canonicalAuditAction, exitCodeFromAudit } from "../../lib/api/audit";
+import { canonicalAuditAction, exitCodeFromAudit, gatewayCallId } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { appURL } from "../../lib/base-path";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
@@ -52,6 +52,7 @@ import {
   toolRuleDecision,
 } from "../wardyn/audit-decision";
 import { PolicyRemedy } from "../wardyn/policy-remedy";
+import { CopyButton } from "../wardyn/copy-button";
 import { newRunHref } from "./new-run-flow/draft/new-run-url";
 import { AUDIT } from "./audit-copy";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
@@ -527,9 +528,10 @@ function AuditTab({
             {events.map((e) => {
               const signing = awsSigningLine(e);
               const inbound = inboundDetail(e);
+              const callId = gatewayCallId(e);
               return (
                 // One line from sm up; below sm the target drops to a second line of its own (#2917).
-                <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${(isAttributedRefusal(e) && !toolRuleDecision(e)) || signing || inbound ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
+                <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${(isAttributedRefusal(e) && !toolRuleDecision(e)) || signing || inbound || callId ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
                   <span
                     data-testid="run-audit-time"
                     className="w-[84px] shrink-0 whitespace-nowrap font-mono text-meta text-muted-foreground"
@@ -577,6 +579,20 @@ function AuditTab({
                   {inbound && (
                     <span data-testid="run-audit-detail" className="min-w-0 basis-full truncate font-mono text-xs text-muted-foreground sm:pl-[208px]" title={inbound}>
                       {inbound}
+                    </span>
+                  )}
+                  {callId && (
+                    // Cut at a narrow width, and Copy still takes the whole value.
+                    <span data-testid="run-audit-call-id" className="flex min-w-0 basis-full items-center gap-1 font-mono text-xs text-muted-foreground sm:pl-[208px]">
+                      <span className="min-w-0 truncate" title={callId}>
+                        {AUDIT.CALL_ID_LINE(callId)}
+                      </span>
+                      <CopyButton
+                        text={callId}
+                        label={AUDIT.COPY_CALL_ID}
+                        iconClassName="size-3"
+                        className="shrink-0 rounded-sm p-0.5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      />
                     </span>
                   )}
                   {!toolRuleDecision(e) && isAttributedRefusal(e) && <PolicyRemedy policy={policy} className="basis-full" />}
