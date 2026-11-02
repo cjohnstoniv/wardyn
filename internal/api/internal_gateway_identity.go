@@ -194,8 +194,8 @@ func (s *Server) handleInternalGatewayIdentity(w http.ResponseWriter, r *http.Re
 		return
 	}
 	expires := time.Unix(signed.ExpiresAt, 0).UTC().Format(time.RFC3339)
-	// One row for a proxy's first token, not one per mint: about twelve an hour per
-	// provider is the volume the run token's own signer was rejected for.
+	// One row for a run's first token per provider on this replica, not one per mint:
+	// a proxy mints several times an hour for as long as the run lasts.
 	if s.gatewayFirstMint(claims.RunID.String(), p.ID) {
 		record("success", map[string]any{"provider": p.ID, "jti": signed.ID, "expires_at": expires, "first": true})
 	}
@@ -408,7 +408,7 @@ func gatewayRouteOf(p types.ModelProvider) (_ proxy.GatewayIdentityRoute, ok boo
 
 // gatewayBindingHolds is the one predicate a mint and a revive share: the live
 // provider is on, is the provider that was dispatched (the UID, so one deleted and
-// recreated under the same id fails, as injection_provider_key's does), and would
+// recreated under the same id fails, as a provider key's UID check does), and would
 // be dispatched today with the sealed route. So a provider edited and edited back
 // passes, and neither a base_url nor an audience edit can send a token for one
 // gateway to another: the proxy's route is fixed for the run's life.
@@ -454,10 +454,9 @@ func (d *providerDispatch) addGatewayRoute(l providerKeyLane) (ok bool) {
 	return true
 }
 
-// validateProviderGatewayIdentity holds one row's opt-in to the kinds that may
-// carry a token: a key row with a base_url, or an endpoint row. A subscription row
-// is refused because it runs on a person's runner today, where no token can go. The
-// others are not gateways, or sign in a way this version does not cover.
+// validateProviderGatewayIdentity holds one row's opt-in to the kinds that may carry
+// a token: a key row with a base_url, or an endpoint row. Every other kind, a
+// subscription row included, is refused: it has no gateway of an admin's to name.
 func validateProviderGatewayIdentity(mp types.ModelProvider) error {
 	gi := mp.GatewayIdentity
 	if gi == nil {
