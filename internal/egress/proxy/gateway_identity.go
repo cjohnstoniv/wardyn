@@ -152,9 +152,10 @@ func (p *Proxy) attachGatewayIdentity(w http.ResponseWriter, r *http.Request, h 
 // sandbox defeats the point of holding it here, and always flushed, so forcing
 // the scrub leaves a stream's timing alone. It refuses bytes the masker cannot
 // read rather than relay unmasked. Every end
-// of the answer, clean or failed, is a cut: a trailing run that begins a held value
-// is replaced too, because a token missing its last characters can be recovered, and
-// a short Content-Length ends cleanly with no read error to tell it from a whole answer.
+// of the answer, clean or failed, is a cut: a trailing run of gatewayCutFloor bytes or
+// more that begins a held value is replaced too, because a token missing its last
+// characters can be recovered, and a short Content-Length ends cleanly with no read
+// error to tell it from a whole answer.
 func (p *Proxy) relayGatewayRoute(w http.ResponseWriter, r *http.Request, host string, port int, resp *http.Response, ruleSource, sentToken string) {
 	refuse := func(cause string) {
 		if p.sink != nil {
@@ -176,16 +177,24 @@ func (p *Proxy) relayGatewayRoute(w http.ResponseWriter, r *http.Request, host s
 	values := slices.Clone(procRegistry.Masker(p.maskKey).Secrets())
 	m := secretmask.NewMasker(append(values, gatewayMaskValues(sentToken)...))
 	out := &scrubbedWriter{ResponseWriter: w, m: m, mw: secretmask.NewMaskingWriter(w, m), cutHeaders: true}
-	defer func() { _ = out.mw.CloseCut() }()
+	defer func() { _ = out.mw.CloseCutFrom(gatewayCutFloor) }()
 	flushRelay(out, resp)
 }
 
 // gatewaySignatureHeadLen is how much of a token's signature the mask set holds as a
 // value of its own: 120 bits. An echo of the token cut short and followed by more bytes
-// matches no whole token and is no end of an answer, but once it reaches this far into
-// the signature these characters go, and no usable token is left. Short of it, the claims
-// and under this many signature characters pass, which is too little signature to use.
+// matches no whole token and is no end of an answer, but if it holds the signature from
+// its first character through this far, these characters go and it is 120 bits short.
+// Short of that, the claims and under this many signature characters pass. An echo that
+// starts inside the head matches neither value and passes whole: a gateway slicing a
+// token, like one transforming it, can show all of its signature across two answers.
 const gatewaySignatureHeadLen = 20
+
+// gatewayCutFloor is the shortest end of an answer or header value that counts as a held
+// value's start. A JWT starts "e", so with no floor "true", "no-cache" and "Service
+// Unavailable" would each lose a last letter, and a client reading x-should-retry would
+// misread it. What passes is under eight bytes of a held value's start at the very end.
+const gatewayCutFloor = 8
 
 // gatewayMaskValues is what the mask set holds for one token, which check has accepted.
 // The head lies inside the token, and overlapping matches join, so a whole token is
@@ -211,26 +220,12 @@ func (s *scrubbedWriter) maskValuesCut(vs []string) {
 	copy(vs, each)
 }
 
-// maskValueCut masks one header value. Its end counts only from eight bytes up. A
-// JWT starts "e", so with no floor every "true", "false" and "no-cache" would lose
-// its last letter, and a client reading x-should-retry would misread it.
+// maskValueCut masks one header value, ending as an answer on the route does.
 func (s *scrubbedWriter) maskValueCut(v string) string {
-	const floor = 8
-	cut := slices.ContainsFunc(s.m.Secrets(), func(secret []byte) bool {
-		for k := min(len(secret)-1, len(v)); k >= floor; k-- {
-			if strings.HasSuffix(v, string(secret[:k])) {
-				return true
-			}
-		}
-		return false
-	})
-	if !cut {
-		return string(s.m.Mask([]byte(v)))
-	}
 	var out strings.Builder
 	mw := secretmask.NewMaskingWriter(&out, s.m)
 	_, _ = mw.Write([]byte(v))
-	_ = mw.CloseCut()
+	_ = mw.CloseCutFrom(gatewayCutFloor)
 	return out.String()
 }
 
