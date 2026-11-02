@@ -64,6 +64,18 @@ func WaitRunnersAtCapacityMsg(pool string) string {
 	return fmt.Sprintf("Every runner in %s is at its limit. This run starts when one has room.", pool)
 }
 
+// WaitRunnerAtLimitMsg is the sentence of a queued run with one runner to go to, naming the limit that
+// holds it back (NoRoomReason).
+func WaitRunnerAtLimitMsg(runner, limit string) string {
+	return fmt.Sprintf("%s is at its %s. This run starts when it has room.", runner, limit)
+}
+
+// WaitRunnersAtLimitMsg is the sentence of a queued run with several runners to go to, naming the limit
+// that holds back the one with the fewest runs (NoRoomReason).
+func WaitRunnersAtLimitMsg(pool, nearest, limit string) string {
+	return fmt.Sprintf("Every runner in %s is at a limit. The nearest, %s, is at its %s. This run starts when one has room.", pool, nearest, limit)
+}
+
 // WaitNoRunnerFreeMsg is the sentence of a queued run no runner of its owner can take yet.
 func WaitNoRunnerFreeMsg(pool string) string {
 	return fmt.Sprintf("None of your runners in %s is online. This run starts when one is.", pool)
