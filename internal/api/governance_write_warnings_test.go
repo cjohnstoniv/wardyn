@@ -5,11 +5,13 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -166,4 +168,35 @@ func TestGovernanceControlWarnings(t *testing.T) {
 			t.Errorf("warnings = %q, want none", got)
 		}
 	})
+}
+
+// govWarnSiteHoldStore is the held-write fake store with a site config of its own.
+type govWarnSiteHoldStore struct {
+	*govCovStore
+	site types.SiteConfig
+}
+
+func (s *govWarnSiteHoldStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.site, nil
+}
+
+// A held profile write carries the same ceiling note a direct write returns, so the proposer and the
+// approver read it too.
+func TestGovernanceHeldWriteCarriesTheRowCeilingNote(t *testing.T) {
+	t.Setenv(envGovernanceSecondHuman, "true")
+	super := govCovSession(t, "sub-super", "super@corp.example", oidc.RoleAdmin)
+	inner := &govCovStore{proposeSaved: types.GovernanceChange{ID: govCovChangeID, State: types.GovernanceChangePending}}
+	st := &govWarnSiteHoldStore{govCovStore: inner, site: types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{
+		Git: []types.GitProvider{govWarnRow("narrow-row", 1)},
+	}}}
+	s, _ := govCovServer(t, st, func(c *Config) { c.GovernanceUnitPutCreates = true })
+	body := `{"name":"held","ceiling":{"min_confinement_class":"CC2","allowed_domains":["pypi.org"],` +
+		`"azure_devops_capabilities":["code_read","code_write","pr"]}}`
+	w := doSSO(t, s, http.MethodPut, "/api/v1/governance/units/"+govCovPID.String(), super, body)
+	d := govCovDiff(t, govCovHoldAnswer(t, w, inner))
+	if !slices.ContainsFunc(d.Notes, func(n string) bool {
+		return strings.Contains(n, `"narrow-row"`) && strings.Contains(n, "lists 2 Azure DevOps")
+	}) {
+		t.Errorf("notes = %q, want the narrow-row ceiling note", d.Notes)
+	}
 }
