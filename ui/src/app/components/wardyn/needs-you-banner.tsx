@@ -13,7 +13,7 @@ import type { ApprovalRequest, RunDetail } from "../../lib/types";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import { health as healthApi } from "../../lib/api/health";
 import { getErrorMessage, shortTime } from "../../lib/format";
-import { mayEnterRunOrUnknown } from "../../lib/run-entry";
+import { isBackgroundRun, mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { enterUIApp } from "../screens/run-detail-ssh";
@@ -105,6 +105,8 @@ export function NeedsYouBanner({
   if (!ap) return null;
 
   const mayEnter = mayEnterRunOrUnknown(run, principal, operator, resolved);
+  // A background run has no console to enter: the server refuses its attach ticket, so no Take over is offered.
+  const mayTake = mayEnter && !isBackgroundRun(run);
   const reason = String(ap.requested_scope.reason ?? "");
   const surface = surfaceOf(run);
 
@@ -175,9 +177,11 @@ export function NeedsYouBanner({
 
   const actions = mayEnter && (
     <div className="flex shrink-0 items-center gap-2">
-      <Button size="sm" disabled={busy !== null} onClick={() => void takeOver()}>
-        {NEEDS_YOU.banner.takeOver}
-      </Button>
+      {mayTake && (
+        <Button size="sm" disabled={busy !== null} onClick={() => void takeOver()}>
+          {NEEDS_YOU.banner.takeOver}
+        </Button>
+      )}
       {ap.state === "PENDING" && (
         <>
           <DropdownMenu>
@@ -216,7 +220,7 @@ export function NeedsYouBanner({
     return (
       <section data-testid="needs-you-snoozed" className="mx-4 mt-3 flex items-center gap-3 rounded-lg border border-warning/30 px-4 py-1.5 text-sm">
         <span className="text-muted-foreground">{NEEDS_YOU.banner.snoozedUntil(shortTime(new Date(snoozedUntil).toISOString()))}</span>
-        {mayEnter && (
+        {mayTake && (
           <Button size="sm" variant="outline" className="ml-auto" disabled={busy !== null} onClick={() => void takeOver()}>
             {NEEDS_YOU.banner.takeOver}
           </Button>

@@ -264,7 +264,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // everything; the console adds this tile to a saved layout itself, withDesktop.)
     presets: { live: { x: 8, y: 20, w: 4, h: 4 }, finished: { x: 6, y: 12, w: 6, h: 5 } },
     // DesktopCard's own gate, so the grid never holds an empty tile: a VM run the person may enter, while it runs or,
-    // for a macOS VM, while the Mac's report of its disk has something to say (mock M-D1 9-11). The admin monitor has
+    // for a macOS VM, while the Mac's report of its disk has something to say. The admin monitor has
     // no door at all, even on the admin's own run (admin-member-modes-design.md §4.6, §6).
     available: (ctx) =>
       ctx.view === "user" &&

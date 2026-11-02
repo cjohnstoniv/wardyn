@@ -5,7 +5,7 @@
 
 // The "Attach from your terminal" tile (a running run the person may enter, never a background one: it has no terminal)
 // and the Desktop tile that took the desktop block out of it. A finished macOS VM run keeps the Desktop tile while
-// its disk line has something to say (mock M-D1 frames 9 to 11), at the place the Attach tile held it.
+// its disk line has something to say, at the place the Attach tile held it.
 import { describe, it, expect } from "vitest";
 import { RUN_WIDGETS, WIDGET_IDS, addWidget, presetLayout, type WidgetContext } from "./widget-registry";
 import type { RunDetail } from "../../../lib/types";
