@@ -151,10 +151,11 @@ func (p *Proxy) attachGatewayIdentity(w http.ResponseWriter, r *http.Request, h 
 // scrubbed, whatever Config.ScrubResponses says, because a token echoed to the
 // sandbox defeats the point of holding it here, and always flushed, so forcing
 // the scrub leaves a stream's timing alone. It refuses bytes the masker cannot
-// read, and a masker with nothing to mask, rather than relay unmasked. Every end
-// of the answer, clean or failed, is a cut: a trailing run that begins a held value
-// is replaced too, because a token missing its last characters can be recovered, and
-// a short Content-Length ends cleanly with no read error to tell it from a whole answer.
+// read rather than relay unmasked. Every end
+// of the answer, clean or failed, is a cut: a trailing run of gatewayCutFloor bytes or
+// more that begins a held value is replaced too, because a token missing its last
+// characters can be recovered, and a short Content-Length ends cleanly with no read
+// error to tell it from a whole answer.
 func (p *Proxy) relayGatewayRoute(w http.ResponseWriter, r *http.Request, host string, port int, resp *http.Response, ruleSource, sentToken string) {
 	refuse := func(cause string) {
 		if p.sink != nil {
@@ -170,17 +171,37 @@ func (p *Proxy) relayGatewayRoute(w http.ResponseWriter, r *http.Request, host s
 		return
 	}
 	// A call can wait longer than the holder keeps a value in the mask set, and no
-	// timeout bounds how long, so the token this call sent goes back in before its
-	// answer is read. The masker is read once, so the rest of the answer is covered too.
-	procMaskFor(p.maskKey, []byte(sentToken))
-	out, ok := p.scrubbedAlways(w)
-	if !ok {
-		refuse("the proxy holds no value to scrub this answer with")
-		return
-	}
-	out.cutHeaders = true
-	defer func() { _ = out.mw.CloseCut() }()
+	// timeout bounds how long, so this answer's masker holds the token the call sent
+	// whatever a refresh has dropped by now or drops while the answer is read, and the
+	// shared set does not keep it.
+	values := slices.Clone(procRegistry.Masker(p.maskKey).Secrets())
+	m := secretmask.NewMasker(append(values, gatewayMaskValues(sentToken)...))
+	out := &scrubbedWriter{ResponseWriter: w, m: m, mw: secretmask.NewMaskingWriter(w, m), cutHeaders: true}
+	defer func() { _ = out.mw.CloseCutFrom(gatewayCutFloor) }()
 	flushRelay(out, resp)
+}
+
+// gatewaySignatureHeadLen is how much of a token's signature the mask set holds as a
+// value of its own: 120 bits. An echo of the token cut short and followed by more bytes
+// matches no whole token and is no end of an answer, but if it holds the signature from
+// its first character through this far, these characters go and it is 120 bits short.
+// Short of that, the claims and under this many signature characters pass. An echo that
+// starts inside the head matches neither value and passes whole: a gateway slicing a
+// token, like one transforming it, can show all of its signature across two answers.
+const gatewaySignatureHeadLen = 20
+
+// gatewayCutFloor is the shortest end of an answer or header value that counts as a held
+// value's start. A JWT starts "e", so with no floor "true", "no-cache" and "Service
+// Unavailable" would each lose a last letter, and a client reading x-should-retry would
+// misread it. What passes is under eight bytes of a held value's start at the very end.
+const gatewayCutFloor = 8
+
+// gatewayMaskValues is what the mask set holds for one token, which check has accepted.
+// The head lies inside the token, and overlapping matches join, so a whole token is
+// still one placeholder.
+func gatewayMaskValues(token string) [][]byte {
+	signature := token[strings.LastIndexByte(token, '.')+1:]
+	return [][]byte{[]byte(token), []byte(signature[:gatewaySignatureHeadLen])}
 }
 
 // maskValuesCut masks one header name's values on a route. A value's end that begins
@@ -199,35 +220,21 @@ func (s *scrubbedWriter) maskValuesCut(vs []string) {
 	copy(vs, each)
 }
 
-// maskValueCut masks one header value. Its end counts only from eight bytes up. A
-// JWT starts "e", so with no floor every "true", "false" and "no-cache" would lose
-// its last letter, and a client reading x-should-retry would misread it.
+// maskValueCut masks one header value, ending as an answer on the route does.
 func (s *scrubbedWriter) maskValueCut(v string) string {
-	const floor = 8
-	cut := slices.ContainsFunc(s.m.Secrets(), func(secret []byte) bool {
-		for k := min(len(secret)-1, len(v)); k >= floor; k-- {
-			if strings.HasSuffix(v, string(secret[:k])) {
-				return true
-			}
-		}
-		return false
-	})
-	if !cut {
-		return string(s.m.Mask([]byte(v)))
-	}
 	var out strings.Builder
 	mw := secretmask.NewMaskingWriter(&out, s.m)
 	_, _ = mw.Write([]byte(v))
-	_ = mw.CloseCut()
+	_ = mw.CloseCutFrom(gatewayCutFloor)
 	return out.String()
 }
 
 // gatewayTokenHolder is one provider's current token. Requests share one mint
 // at a time. From half-life on, a mint runs behind requests that keep using the
 // held token; a failed mint keeps it to exp, with no grace past that. The mask
-// set holds the two most recent values: a new one is registered before it is
-// used, then the one before last is dropped, so the set does not grow for the
-// run's life.
+// set holds the two most recent tokens, each with its signature head: a new one
+// is registered before it is used, then the one before last is dropped, so the
+// set does not grow for the run's life.
 type gatewayTokenHolder struct {
 	providerID, audience string
 	// timeout bounds one mint. A request with no usable token waits at most this long.
@@ -311,9 +318,13 @@ func (h *gatewayTokenHolder) settleLocked(p *Proxy, token string, exp time.Time,
 		}
 		return
 	}
-	procMaskFor(p.maskKey, []byte(token))
+	for _, v := range gatewayMaskValues(token) {
+		procMaskFor(p.maskKey, v)
+	}
 	if h.priorMinted != "" {
-		procRegistry.DropRunValue(p.maskKey, []byte(h.priorMinted))
+		for _, v := range gatewayMaskValues(h.priorMinted) {
+			procRegistry.DropRunValue(p.maskKey, v)
+		}
 	}
 	h.priorMinted, h.lastMinted = h.lastMinted, token
 	h.token, h.expires, h.refreshAt, h.lastErr, h.nextAsk = token, exp, now.Add(exp.Sub(now)/2), nil, time.Time{}
@@ -364,9 +375,9 @@ func (h *gatewayTokenHolder) mint(ctx context.Context, p *Proxy) (token string, 
 // a gateway; half of it, the refresh point, is how long an outage is tolerated.
 func (h *gatewayTokenHolder) check(token string, expiresAt, now time.Time) (time.Time, error) {
 	const lifetime = 10 * time.Minute
-	unusable := errors.New("the control plane's gateway identity token could not be read")
+	unusable := errors.New("the control plane's gateway identity token is malformed")
 	parts := strings.Split(token, ".")
-	if len(parts) != 3 || parts[0] == "" || parts[2] == "" {
+	if len(parts) != 3 || parts[0] == "" || len(parts[2]) < gatewaySignatureHeadLen {
 		return time.Time{}, unusable
 	}
 	for _, part := range []string{parts[0], parts[2]} {

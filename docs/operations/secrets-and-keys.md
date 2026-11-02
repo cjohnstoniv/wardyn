@@ -263,13 +263,15 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn \
 
 The key that signs the short-lived token an AI gateway verifies to learn which person, run and runner a model call belongs to. The token format and the key set's address are experimental until 0.11, and either may change before then.
 
-An admin turns identity on per model provider, by setting `gateway_identity` with an `audience`. With no provider on, the key row does not exist and everything below stays off.
+An admin turns identity on per model provider, by setting `gateway_identity` with an `audience`. On an install that has never turned it on, the key row does not exist and everything below stays off. A run started with identity off sends what it always did.
 
-- **Which providers.** A `custom_endpoint` row, or an `anthropic_api_key` or `openai_api_key` row with a `base_url`. Every other kind is refused at save, a subscription row included. So is one audience on two addresses, and a `base_url` change that keeps the audience.
-- **Turning it on.** The first save that turns identity on makes the key. If the key can't be made, nothing is saved. Each replica notices a change within 30 seconds, so the key set can take that long to answer, and a run started in that window has its first call refused.
-- **Turning it off.** Within 10 minutes, runs started with it on stop starting new gateway calls. Create new runs to use the provider with identity off.
+- **Which providers.** A `custom_endpoint` row, or an `anthropic_api_key` or `openai_api_key` row with a `base_url`. Every other kind is refused at save, a subscription row included. So is one audience on two addresses, and a `base_url` change that keeps the audience: use a different one, or save with identity off first.
+- **Turning it on.** The first save that turns identity on makes the key. If the key can't be made, nothing is saved. Each replica notices a change within 30 seconds, so the key set can take that long to answer.
+- **A run started in that window.** Its gateway calls can be refused for up to about a minute: those 30 seconds, then up to 30 more before its proxy asks for a token again.
+- **Turning it off.** The key row stays, and so do the routes of runs already started. Those runs are refused new tokens, so within 10 minutes they stop starting new gateway calls. With no provider on, each replica also stops serving the key set within 30 seconds. Create new runs to use the provider with identity off.
 - **Edits during a run.** A run keeps the provider, address and audience it started with. If any of them changes, or the provider is removed and added again, its token requests are refused and a revive is refused too, and it says to create a new run. Editing the provider back to the original values lets the run go on.
 - **A suspended person.** No new token is issued once the person is suspended, whether or not the kill of their runs has finished. A token already issued is valid until it expires.
+- **An email form shared with another principal.** That form gets no cutoff, so a run owned under it stops only when the kill ends it.
 - **Pause and kill.** Pausing a run does not stop its proxy asking for tokens. Killing it does.
 - **Where it runs.** A run with a route is refused on a person's own runner. It goes to a remote executor only if that executor's `wardyn-runnerd` reports this setting, so an older one refuses the run rather than call the gateway unsigned.
 

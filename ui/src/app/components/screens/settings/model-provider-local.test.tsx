@@ -320,12 +320,11 @@ describe("the provider list", () => {
   });
 });
 
-// The server's words, from internal/api/model_providers.go. Audience comes first:
-// the re-entry refusal names base_url too, and it is the audience the person fixes.
+// The server's words, from internal/api/model_providers.go.
 describe("a gateway identity refusal", () => {
   it.each([
     ['model_providers: "p": gateway_identity: audience is required', "gateway_audience"],
-    ['model_providers: "p": base_url changed, so gateway_identity.audience must be entered again', "gateway_audience"],
+    [`model_providers: "p": moved to a new address, so gateway_identity.audience can't stay the same: use a different one, or save with identity off first`, "gateway_audience"],
     ['model_providers: "q": gateway_identity.audience "a" is already used by provider "p" for a different address; use a different one for each', "gateway_audience"],
     ['model_providers: "p": gateway_identity needs a base_url, or the token would go to the vendor', "base_url"],
     ['model_providers: "p": gateway_identity is not available for anthropic_subscription providers', null],

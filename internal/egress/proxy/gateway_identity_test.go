@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -45,7 +46,11 @@ const (
 func gwidToken(aud any, exp time.Time, n int64) string {
 	enc := base64.RawURLEncoding.EncodeToString
 	payload, _ := json.Marshal(map[string]any{"aud": aud, "exp": exp.Unix(), "jti": fmt.Sprintf("jti-%d-%s", n, uuid.NewString())})
-	return enc([]byte(`{"alg":"ES256"}`)) + "." + enc(payload) + "." + enc([]byte("signature-bytes"))
+	// An ES256-sized signature, its own for each token. The leading 0xff makes it start
+	// "_", so no test's benign answer ends in the first byte of a random signature.
+	signature := sha512.Sum512(payload)
+	signature[0] = 0xff
+	return enc([]byte(`{"alg":"ES256"}`)) + "." + enc(payload) + "." + enc(signature[:])
 }
 
 // gwidUpstream records every request, and by default echoes all its headers back in
@@ -566,7 +571,7 @@ func TestGatewayIdentity_SpoolHoldsNoToken(t *testing.T) {
 
 // Many callers with no token share one mint, and the mask set stays at two values however
 // many times it rotates, so the set does not grow for the run's life.
-func TestGatewayIdentity_SingleMintAndMaskSetStaysAtTwo(t *testing.T) {
+func TestGatewayIdentity_SingleMintAndMaskSetStaysAtTwoTokens(t *testing.T) {
 	g := newGwidRig(t, gwidRoutes(), false)
 	release := make(chan struct{})
 	base := g.mint.answer
@@ -594,12 +599,14 @@ func TestGatewayIdentity_SingleMintAndMaskSetStaysAtTwo(t *testing.T) {
 		all = append(all, g.lastMinted(t))
 	}
 	set := procRegistry.Snapshot(g.p.maskKey)
-	if len(set) != 2 {
-		t.Fatalf("mask set holds %d values, want 2", len(set))
+	if len(set) != 4 {
+		t.Fatalf("mask set holds %d values, want two tokens and their signature heads", len(set))
 	}
-	for _, want := range all[len(all)-2:] {
-		if !slices.ContainsFunc(set, func(v []byte) bool { return string(v) == want }) {
-			t.Errorf("a recent token is not in the mask set")
+	for _, token := range all[len(all)-2:] {
+		for _, want := range gatewayMaskValues(token) {
+			if !slices.ContainsFunc(set, func(v []byte) bool { return bytes.Equal(v, want) }) {
+				t.Errorf("a recent token's value is not in the mask set")
+			}
 		}
 	}
 }
@@ -782,15 +789,6 @@ func TestGatewayIdentity_UnreadableAnswerRefused(t *testing.T) {
 		}
 		gwidNotIn(t, lane, rec.Body.String(), g.lastMinted(t))
 	}
-	g.gw.respond = gwidEcho
-	gwidLanes(g, t)["brokered"]()
-	procRegistry.Evict(g.p.maskKey)
-	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("unmasked-bytes"))}
-	rec := httptest.NewRecorder()
-	g.p.relayGatewayRoute(rec, mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"m", nil), gwidHost, 443, resp, ruleSourceLLM, "")
-	if rec.Code != http.StatusBadGateway || strings.Contains(rec.Body.String(), "unmasked-bytes") {
-		t.Fatalf("an empty masker relayed: %d %s", rec.Code, rec.Body)
-	}
 }
 
 // The same on the HTTP/2 fallback: the token goes, gzip is negotiated by the transport
@@ -903,8 +901,10 @@ func TestGatewayIdentity_AnswerEndingInTheTokensStart(t *testing.T) {
 			func(string) string { return hidden }},
 		{"clean short body, eight bytes", func(w http.ResponseWriter, tok string) { short(w, 8, tok[:8]) },
 			func(string) string { return hidden }},
-		{"clean short body, one byte", func(w http.ResponseWriter, tok string) { short(w, 1, tok[:1]) },
-			func(string) string { return hidden }},
+		{"under the floor, seven bytes pass", func(w http.ResponseWriter, tok string) { short(w, 7, tok[:7]) },
+			func(tok string) string { return tok[:7] }},
+		{"under the floor, one byte passes", func(w http.ResponseWriter, tok string) { short(w, 1, tok[:1]) },
+			func(tok string) string { return tok[:1] }},
 		{"cut by Content-Length, far short", func(w http.ResponseWriter, tok string) { short(w, len(tok), tok[:30]) },
 			func(string) string { return hidden }},
 		{"a start split across chunks, at the very end of a stream", func(w http.ResponseWriter, tok string) {
@@ -917,9 +917,9 @@ func TestGatewayIdentity_AnswerEndingInTheTokensStart(t *testing.T) {
 			func(string) string { return hidden + " then " + hidden }},
 		{"a body ending in other bytes is untouched", func(w http.ResponseWriter, _ string) { short(w, 0, `{"ok":true}`) },
 			func(string) string { return `{"ok":true}` }},
-		// What a benign answer looks like: JWTs start "e", so text ending in "e" loses it.
-		{"a benign end equal to the token's first byte", func(w http.ResponseWriter, _ string) { short(w, 0, "the same type") },
-			func(string) string { return "the same typ" + hidden }},
+		// JWTs start "e", and the floor keeps text ending in "e" whole.
+		{"a benign end equal to the token's first byte", func(w http.ResponseWriter, _ string) { short(w, 0, "Service Unavailable") },
+			func(string) string { return "Service Unavailable" }},
 	}
 	for lane := range map[string]bool{"brokered": true, "mitm": true} {
 		for _, tc := range cases {
@@ -935,6 +935,166 @@ func TestGatewayIdentity_AnswerEndingInTheTokensStart(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// An echo cut short with more bytes after it ends in no held value's start and holds no whole
+// token, so the signature head is what stops it. What still passes is the residual: the claims
+// and under twenty signature characters, never a usable token.
+func TestGatewayIdentity_TruncatedEchoFollowedByMoreBytes(t *testing.T) {
+	const hidden = "<secret-hidden>"
+	// tok up to where its signature starts, the signature, and the head that is masked.
+	split := func(tok string) (claims, sig, rest string) {
+		at := strings.LastIndexByte(tok, '.') + 1
+		return tok[:at], tok[at:], tok[at+gatewaySignatureHeadLen:]
+	}
+	cases := []struct {
+		name string
+		echo func(tok string) string
+		want func(tok string) string
+	}{
+		{"json, token less a byte", func(tok string) string { return `{"echo":"` + tok[:len(tok)-1] + `"}` }, func(tok string) string {
+			claims, _, rest := split(tok)
+			return `{"echo":"` + claims + hidden + rest[:len(rest)-1] + `"}`
+		}},
+		{"token less a byte, more bytes", func(tok string) string { return tok[:len(tok)-1] + " x" }, func(tok string) string {
+			claims, _, rest := split(tok)
+			return claims + hidden + rest[:len(rest)-1] + " x"
+		}},
+		{"cut at 20 signature characters", func(tok string) string {
+			claims, sig, _ := split(tok)
+			return claims + sig[:20] + " x"
+		}, func(tok string) string {
+			claims, _, _ := split(tok)
+			return claims + hidden + " x"
+		}},
+		{"cut at 19 signature characters passes: the residual", func(tok string) string {
+			claims, sig, _ := split(tok)
+			return claims + sig[:19] + " x"
+		}, func(tok string) string {
+			claims, sig, _ := split(tok)
+			return claims + sig[:19] + " x"
+		}},
+		{"signature head alone", func(tok string) string {
+			_, sig, _ := split(tok)
+			return "a " + sig[:20] + " x"
+		}, func(string) string { return "a " + hidden + " x" }},
+		{"the whole token is one placeholder", func(tok string) string { return "a " + tok + " x" }, func(string) string { return "a " + hidden + " x" }},
+	}
+	// The same values with nothing after them: an answer's end, cut as a whole.
+	ending := []struct {
+		name string
+		echo func(tok string) string
+	}{
+		{"cut at 19, at the end", func(tok string) string {
+			claims, sig, _ := split(tok)
+			return claims + sig[:19]
+		}},
+		{"cut at 20, at the end", func(tok string) string {
+			claims, sig, _ := split(tok)
+			return claims + sig[:20]
+		}},
+		{"signature head alone, at the end", func(tok string) string {
+			_, sig, _ := split(tok)
+			return sig[:20]
+		}},
+		{"signature head's first eight, at the end", func(tok string) string {
+			_, sig, _ := split(tok)
+			return sig[:8]
+		}},
+	}
+	for lane := range map[string]bool{"brokered": true, "mitm": true} {
+		for _, tc := range cases {
+			t.Run(lane+"/"+tc.name, func(t *testing.T) {
+				g := newGwidRig(t, gwidRoutes(), false)
+				g.gw.respond = func(w http.ResponseWriter, r *http.Request) {
+					echo := tc.echo(r.Header.Get(gatewayIdentityHeader))
+					w.Header().Set("X-Echo", echo)
+					// Across two writes, the short echoes with the head split between them.
+					at := len(echo) / 2
+					_, _ = io.WriteString(w, echo[:at])
+					w.(http.Flusher).Flush()
+					_, _ = io.WriteString(w, echo[at:]+"\n")
+				}
+				rec := gwidLanes(g, t)[lane]()
+				want := tc.want(g.lastMinted(t))
+				if got := rec.Body.String(); got != want+"\n" {
+					t.Errorf("body %q, want %q", got, want+"\n")
+				}
+				if got := rec.Header().Get("X-Echo"); got != want {
+					t.Errorf("header %q, want %q", got, want)
+				}
+			})
+		}
+		for _, tc := range ending {
+			t.Run(lane+"/"+tc.name, func(t *testing.T) {
+				g := newGwidRig(t, gwidRoutes(), false)
+				g.gw.respond = func(w http.ResponseWriter, r *http.Request) {
+					echo := tc.echo(r.Header.Get(gatewayIdentityHeader))
+					w.Header().Set("X-Echo", echo)
+					_, _ = io.WriteString(w, echo)
+				}
+				rec := gwidLanes(g, t)[lane]()
+				if got := rec.Body.String(); got != hidden {
+					t.Errorf("body %q, want the placeholder", got)
+				}
+				if got := rec.Header().Get("X-Echo"); got != hidden {
+					t.Errorf("header %q, want the placeholder", got)
+				}
+			})
+		}
+	}
+}
+
+// Under the floor the end of an answer passes, and that is all that does: seven bytes of a
+// signature head with nothing before them are what the floor costs.
+func TestGatewayIdentity_FloorPassesSevenSignatureBytes(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	var seven string
+	g.gw.respond = func(w http.ResponseWriter, r *http.Request) {
+		tok := r.Header.Get(gatewayIdentityHeader)
+		seven = tok[strings.LastIndexByte(tok, '.')+1:][:7]
+		_, _ = io.WriteString(w, "a "+seven)
+	}
+	if got := gwidLanes(g, t)["brokered"]().Body.String(); got != "a "+seven {
+		t.Errorf("%q", got)
+	}
+}
+
+// A token whose signature cannot give a head is refused as malformed, on any lane, and no
+// call goes out. Twenty characters is enough; nineteen is not.
+func TestGatewayIdentity_TokenWithoutASignatureHeadRefused(t *testing.T) {
+	short := func(token string, n int) string {
+		at := strings.LastIndexByte(token, '.') + 1
+		return token[:at] + token[at:at+n]
+	}
+	cases := []struct {
+		name  string
+		shape func(token string) string
+		sent  bool
+	}{
+		{"no signature segment", func(tok string) string { return tok[:strings.LastIndexByte(tok, '.')] }, false},
+		{"an empty signature", func(tok string) string { return short(tok, 0) }, false},
+		{"nineteen characters", func(tok string) string { return short(tok, 19) }, false},
+		{"twenty characters", func(tok string) string { return short(tok, 20) }, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newGwidRig(t, gwidRoutes(), false)
+			g.mint.answer = func(w http.ResponseWriter, _ *http.Request, n int64) {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"token":      tc.shape(gwidToken(gwidAudience, g.now().Add(10*time.Minute), n)),
+					"expires_at": g.now().Add(10 * time.Minute).Format(time.RFC3339),
+				})
+			}
+			rec := gwidLanes(g, t)["brokered"]()
+			if sent := g.gw.count() == 1; sent != tc.sent {
+				t.Fatalf("sent %v, want %v: %d %s", sent, tc.sent, rec.Code, rec.Body)
+			}
+			if !tc.sent && rec.Code != http.StatusBadGateway {
+				t.Fatalf("%d %s, want a refusal", rec.Code, rec.Body)
+			}
+		})
 	}
 }
 
@@ -1042,8 +1202,10 @@ func TestGatewayIdentity_PendingCallKeepsItsTokenMasked(t *testing.T) {
 			close(seen)
 			<-release
 		}
-		w.Header().Set("X-Echo", r.Header.Get(gatewayIdentityHeader))
-		_, _ = io.WriteString(w, r.Header.Get(gatewayIdentityHeader))
+		tok := r.Header.Get(gatewayIdentityHeader)
+		w.Header().Set("X-Echo", tok)
+		w.Header().Set("X-Echo-Short", tok[:len(tok)-1]+" x")
+		_, _ = io.WriteString(w, tok)
 	}
 	send := gwidLanes(g, t)["brokered"]
 	pending := make(chan *httptest.ResponseRecorder, 1)
@@ -1062,9 +1224,59 @@ func TestGatewayIdentity_PendingCallKeepsItsTokenMasked(t *testing.T) {
 	rec := <-pending
 	gwidNotIn(t, "the late body", rec.Body.String(), slow)
 	gwidNotIn(t, "the late header", rec.Header().Get("X-Echo"), slow)
+	gwidNotIn(t, "the late short echo", rec.Header().Get("X-Echo-Short"), string(gatewayMaskValues(slow)[1]))
 	if rec.Body.String() != "<secret-hidden>" {
 		t.Errorf("late body %q", rec.Body)
 	}
+	if set := procRegistry.Snapshot(g.p.maskKey); len(set) != 4 || slices.ContainsFunc(set, func(v []byte) bool { return string(v) == slow }) {
+		t.Errorf("the slow call left %d values in the shared mask set, or its token among them", len(set))
+	}
+}
+
+// The token leaves the shared set at each moment a refresh can land around the answer: before the
+// relay reads the set, and with the answer part read. Each masks, since the answer's own masker
+// holds the token whatever the set does.
+func TestGatewayIdentity_RefreshLandingDuringTheAnswer(t *testing.T) {
+	const hidden = "<secret-hidden>"
+	token := gwidToken(gwidAudience, time.Now().Add(10*time.Minute), 1)
+	relay := func(t *testing.T, g *gwidRig, body io.Reader) *httptest.ResponseRecorder {
+		t.Helper()
+		resp := &http.Response{StatusCode: 200, Header: http.Header{"X-Echo": {token}}, Body: io.NopCloser(body)}
+		rec := httptest.NewRecorder()
+		g.p.relayGatewayRoute(rec, mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"m", nil), gwidHost, 443, resp, ruleSourceLLM, token)
+		return rec
+	}
+	t.Run("dropped before the set is read", func(t *testing.T) {
+		g := newGwidRig(t, gwidRoutes(), false)
+		for _, v := range gatewayMaskValues(token) {
+			procRegistry.DropRunValue(g.p.maskKey, v)
+		}
+		rec := relay(t, g, strings.NewReader(token+"\n"))
+		if rec.Body.String() != hidden+"\n" || rec.Header().Get("X-Echo") != hidden {
+			t.Errorf("%q, X-Echo %q", rec.Body, rec.Header().Get("X-Echo"))
+		}
+	})
+	t.Run("dropped with the answer part read", func(t *testing.T) {
+		g := newGwidRig(t, gwidRoutes(), false)
+		for _, v := range gatewayMaskValues(token) {
+			procMaskFor(g.p.maskKey, v)
+		}
+		pr, pw := io.Pipe()
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() { done <- relay(t, g, pr) }()
+		_, _ = io.WriteString(pw, "first\n") // returns once the relay has read it, so its masker is built
+		for _, v := range gatewayMaskValues(token) {
+			procRegistry.DropRunValue(g.p.maskKey, v)
+		}
+		_, _ = io.WriteString(pw, token+"\n")
+		_ = pw.Close()
+		if rec := <-done; rec.Body.String() != "first\n"+hidden+"\n" {
+			t.Errorf("%q", rec.Body)
+		}
+		if slices.ContainsFunc(procRegistry.Snapshot(g.p.maskKey), func(v []byte) bool { return string(v) == token }) {
+			t.Error("the relay put the token back in the shared set")
+		}
+	})
 }
 
 // The other lanes that forward a sandbox's headers: both names go on a run with a route, and
@@ -1088,6 +1300,15 @@ func TestGatewayIdentity_BrokerLanesStrip(t *testing.T) {
 			}
 			p.ServeHTTP(httptest.NewRecorder(), forged(mustLocalReq(t, http.MethodGet, "/wardyn/git/gitlab.com/org/repo.git/info/refs?service=git-upload-pack", nil)))
 			return up.gitHeaders
+		},
+		"via org": func(t *testing.T, on bool, forged func(*http.Request) *http.Request) http.Header {
+			f := newLaptopFixture(t)
+			if on {
+				f.p.gatewayRoutes = gwidRoutes()
+			}
+			req, _ := http.NewRequest(http.MethodGet, "http://api.corp.example/v1/models", nil)
+			_ = readAll(t, proxyDoHandler(t, f.p, forged(req)))
+			return f.cpReq.Header
 		},
 		"pat api door": func(t *testing.T, on bool, forged func(*http.Request) *http.Request) http.Header {
 			h := newAPIHarness(t, types.PATForgeGitLab, apiGrants[types.PATForgeGitLab])

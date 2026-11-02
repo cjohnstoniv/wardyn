@@ -510,22 +510,23 @@ func validateGatewayAudiences(p *types.ModelProviders) error {
 
 // validateGatewayIdentityEdit refuses a save that re-points a provider with identity
 // on and keeps its audience: the audience names one gateway, so a new address needs
-// one entered for it. Turning identity off and saving is the other way to change
-// both. It needs the stored block, so it is not in validateModelProviders.
+// its own. A retyped value can't be told from a kept one, so the same audience is
+// refused however it arrived; saving with identity off first is the way to keep it.
+// It needs the stored block, so it is not in validateModelProviders.
 func validateGatewayIdentityEdit(block, stored *types.ModelProviders) error {
 	if block == nil {
 		return nil
 	}
 	for _, p := range block.Providers {
 		prior, ok := modelProviderByID(stored, p.ID)
-		if !ok || p.GatewayIdentity == nil || prior.GatewayIdentity == nil || prior.Kind != p.Kind ||
+		if !ok || p.GatewayIdentity == nil || prior.GatewayIdentity == nil ||
 			prior.GatewayIdentity.Audience != p.GatewayIdentity.Audience {
 			continue
 		}
 		before, _ := gatewayDestinationOf(prior.BaseURL)
 		after, _ := gatewayDestinationOf(p.BaseURL)
 		if before != after {
-			return atField("gateway_identity.audience", fmt.Errorf(mp400GatewayAudienceAgain, p.ID))
+			return atField("gateway_identity.audience", fmt.Errorf(mp400GatewayAudienceMoved, p.ID))
 		}
 	}
 	return nil
