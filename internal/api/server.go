@@ -20,6 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/directory"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/gatewayidentity"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/livebus"
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
@@ -40,21 +41,20 @@ import (
 // collaborators. All interface fields except Runner are required; Runner may be
 // nil for headless API-only operation (runs stay PENDING with a clear message).
 type Config struct {
-	// SweeperLease, when set, gates the sweeps that must run on one replica (the
-	// run pause) to the elected leader and fences them by lease epoch. Nil means
-	// this process is the only one sweeping: every pass runs and no fence applies.
+	// SweeperLease, when set, gates the one-replica sweeps (the run pause) to the elected
+	// leader and fences them by lease epoch. Nil: this process alone sweeps, unfenced.
 	SweeperLease SweeperLease
-	// SweepHealth records each background sweep's ticks in the shared sweep_ticks
-	// record and reads them back for the sweep gauges and the substrate_health
-	// setup row. Nil records nothing and reports no sweep.
+	// SweepHealth records each sweep's ticks in the shared sweep_ticks record and reads them
+	// back for the gauges and the substrate_health setup row. Nil records and reports nothing.
 	SweepHealth *sweephealth.Tracker
-	// Store is the abstract persistence seam (run/policy/grant/approval/audit
-	// CRUD + reads). The control plane talks to this instead of *pgxpool.Pool
-	// directly, so a future pure-Go backend can be swapped in. Defaults to a
-	// store.NewPG(Pool) adapter when wired from wardynd.
+	// Store is the abstract persistence seam (run/policy/grant/approval/audit CRUD + reads),
+	// used instead of *pgxpool.Pool so a future pure-Go backend can be swapped in. Defaults
+	// to a store.NewPG(Pool) adapter when wired from wardynd.
 	Store store.Store
 	// Identity mints/verifies/revokes per-run identities (embedded by default).
 	Identity identity.Provider
+	// GatewayIdentity returns the AI gateway token's signer (contract: handleGatewayJWKS).
+	GatewayIdentity func(ctx context.Context, create bool) (*gatewayidentity.Signer, error)
 	// Approvals is the approval FSM service.
 	Approvals ApprovalService
 	// ApprovalExpiryAfter mirrors WARDYN_APPROVAL_EXPIRY_AFTER, the deployment's

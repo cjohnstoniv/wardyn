@@ -259,6 +259,56 @@ docker exec -i wardyn-postgres psql -U wardyn -d wardyn \
 - With `WARDYN_PLATFORM_KEY_FILE` set (below), the rotation moves only the rows under the age key — the boot keys under the platform key stay as they are.
 - Rows sealed under Vault Transit (below) hold nothing under the age key either, and a rotation leaves them alone.
 
+## The AI gateway identity key
+
+The key that signs the short-lived token an AI gateway verifies to learn which person, run and runner a model call belongs to. The token format and the key set's address are experimental until 0.11, and either may change before then.
+
+No provider setting turns identity on in this build. Until one does, the key row does not exist and everything below stays off.
+
+| | |
+|---|---|
+| Holder | `wardynd` only. Never in the proxy, its config or a sandbox. |
+| Algorithm | ES256 on P-256, with a `kid` in each token's header. |
+| Storage | One secret-store row, `wardyn-gateway-identity-key`, holding the current key and the previous key's public half with its retire time. It is separate from `wardyn-signing-key`, so a gateway token can never authenticate to the internal API. |
+| Created | At the first save that turns identity on, not at boot. |
+| Token lifetime | 10 minutes. There is no `nbf`. |
+| Key set | Anonymous `GET /.well-known/wardyn-experimental/gateway-jwks.json`, under `WARDYN_BASE_PATH` when set, with `Cache-Control: public, max-age=60`. |
+
+**Off answers as nothing.** With identity off the key set's address answers exactly as a path no route holds. A gateway configured with `jwtAuth` against it therefore cannot start until identity is on.
+
+**A key row that fails to decrypt or parse fails closed.** It is never made again, so the mint and the key set answer 503 until a person restores the row. The server still starts, and runs on other providers are untouched.
+
+### What a gateway does with the key set
+
+Read from agentgateway v1.7.0's source, not run:
+
+- It reads the key set when it loads its config, and does not start if that read fails. So start `wardynd` before you restart a gateway.
+- It refetches every 15 minutes by default, and a `Cache-Control` `max-age` overrides that with a floor of 60 seconds. A failed refresh retries after 15 seconds.
+
+`wardynd` sends the 60-second `max-age` because both windows below last until the gateway refetches. The cost is one small anonymous request a minute from each gateway.
+
+### Rotating the key
+
+`wardynd -rotate-gateway-identity-key` is a **maintenance mode, not a server start**, with no environment pair.
+
+1. Stop every replica. Without `WARDYN_HA` the mode refuses while a daemon holds the single-instance lock. With it no lock can tell, so this step is yours: a replica left serving keeps signing with the key it loaded.
+2. Run the mode. It writes the new key, writes a `secret.rekey` audit row and exits. With no key row it refuses, and it never makes a first key.
+3. Start `wardynd`, then restart each gateway.
+
+The old key stays published until 15 minutes after the rotation: the 10-minute token lifetime plus a 5-minute overlap for refetches and clock skew. The key set stops publishing it then, restart or not.
+
+Signing moves to the new key at once, so a gateway that has not refetched answers 401 until it does. Restarting it ends that. A second rotation inside those 15 minutes removes the older key early, and calls carrying its tokens fail until they mint again.
+
+### If the key is stolen
+
+`wardynd -rotate-gateway-identity-key -retire-previous` is the same mode, and publishes the new key alone from that moment. Neither the replaced key nor an older previous key stays in the key set.
+
+- **What a thief can do.** A stolen key forges a token naming any person, with any `exp`, at every gateway that trusts this key set, until the key is retired and the gateway has refetched. The 10-minute lifetime bounds nothing here.
+- **The limit.** A gateway accepts a retired key until it refetches, and that interval is the gateway's own. So the procedure restarts each gateway, and everything forged stays valid until then.
+- **The outage.** The rotation stops every replica, so a recovery is an outage. Gateway calls stay refused until the replicas are back and the gateways have reloaded.
+
+To find the row, read the audit log for action `secret.rekey` with target `wardyn-gateway-identity-key`. Its `actor` is `wardyn/rotate-gateway-identity-key`. Its data holds `kid`, `replaced_kid`, `retired_previous`, and `previous_retire_at` on a planned rotation.
+
 ## Separating the platform keys
 
 - By default one age key protects everything the `secrets` table holds: people's credentials, and wardynd's own signing, session, UI-session and SSH host keys.
