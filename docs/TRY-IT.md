@@ -1,7 +1,7 @@
 # Try Wardyn in 10 minutes
 
 - The guided walkthrough.
-- It picks up where the [README quickstart](../README.md) stops: `make setup` has finished, the UI is open at <http://localhost:8080>, and `wardyn setup status` says what model access is still missing.
+- It picks up where the [README quickstart](../README.md) stops: `make setup` has finished, the UI is open at <http://localhost:8080>, and `wardyn setup status` says whether model access is set up (optional: only agent-harness runs need it).
 - Easiest first: a **governance demo** (no keys), a **real Claude Code run** (bring an Anthropic API key), and **record, then replay confined** to onboard your own work.
 
 ## Before you start
