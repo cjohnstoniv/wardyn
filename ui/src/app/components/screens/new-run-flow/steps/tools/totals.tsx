@@ -39,19 +39,18 @@ export const BADGE: Record<HostBadge, { text: string; tone: "neutral" | "success
 const TOTAL_CLASS = "flex min-w-0 flex-col gap-2.5 rounded-lg border border-border bg-surface-2 p-3.5";
 const POLICY_CLASS = "border-t border-dashed border-border pt-2.5 text-sm text-muted-foreground";
 
-/** The knobs the person's saved walls name, each as the clause the walls line says it in; none for walls that name nothing. */
+/** The knobs the person's saved walls name, each as the clause (first use of a new site is left out: it is inert on an allow-all run and a stricter ceiling changes it, which the walls alone cannot tell); the walls line says it in; none for walls that name nothing. */
 export function wallsApplyClauses(walls: PersonalWallsSpec | undefined): string[] {
   if (!walls) return [];
   const clauses: string[] = [];
   if (walls.allowed_domains) clauses.push(walls.allowed_domains.length > 0 ? NR_WALLS.APPLY_SITES_LISTED(walls.allowed_domains.length) : NR_WALLS.APPLY_SITES_SETUP_ONLY);
   if (walls.denied_domains?.length) clauses.push(NR_WALLS.APPLY_SITES_NEVER(walls.denied_domains.length));
-  const mode = walls.first_use_approval && NR_WALLS.APPLY_NEW_SITE_MODES[walls.first_use_approval];
-  if (mode) clauses.push(NR_WALLS.APPLY_NEW_SITE(mode));
   if (walls.min_confinement_class) clauses.push(NR_WALLS.APPLY_BARRIER(CC_META[walls.min_confinement_class]?.label ?? walls.min_confinement_class));
   const blocked = Object.entries(walls.desktop ?? {}).flatMap(([dir, rule]) => (rule === "blocked" && NR_WALLS.APPLY_TRANSFERS[dir] ? [NR_WALLS.APPLY_TRANSFERS[dir]] : []));
   if (blocked.length > 0) clauses.push(NR_WALLS.APPLY_NO_TRANSFER(blocked.length === 1 ? blocked[0] : `${blocked.slice(0, -1).join(NR_WALLS.APPLY_JOIN)}${NR_WALLS.APPLY_OR}${blocked[blocked.length - 1]}`));
-  const kinds = new Set((walls.withheld_grants ?? []).map((g) => g.kind)).size;
-  if (kinds > 0) clauses.push(NR_WALLS.APPLY_KINDS_OUT(kinds));
+  // Each entry is one restriction: a scoped entry (one host or key) leaves the kind's other credentials allowed, so kinds are not counted.
+  const limits = walls.withheld_grants?.length ?? 0;
+  if (limits > 0) clauses.push(NR_WALLS.APPLY_CREDENTIAL_LIMITS(limits));
   return clauses;
 }
 

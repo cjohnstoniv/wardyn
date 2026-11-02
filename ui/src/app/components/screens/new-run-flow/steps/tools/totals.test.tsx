@@ -265,11 +265,12 @@ describe("Your walls apply (G4a)", () => {
     render(<Totals names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} answered walls={{
       allowed_domains: ["a.example", "b.example", "c.example", "d.example"],
       denied_domains: ["x.example", "y.example"],
+      first_use_approval: "deny_with_review",
       min_confinement_class: "CC2",
       desktop: { copy_out: "blocked", download: "blocked" },
       withheld_grants: [{ kind: "github_token" }, { kind: "api_key" }],
     }} />);
-    expect(line()).toHaveTextContent("Your walls apply: 4 listed sites, plus what the run's setup needs, 2 sites never reached, barrier at least Wall, no copy out or download, 2 kinds of credentials kept out. Change your walls");
+    expect(line()).toHaveTextContent("Your walls apply: 4 listed sites, plus what the run's setup needs, 2 sites never reached, barrier at least Wall, no copy out or download, 2 credential restrictions. Change your walls");
     expect(screen.getByRole("link", { name: NR_WALLS.CHANGE_WALLS })).toHaveAttribute("href", "/account");
     // A new tab: the draft lives in the route's state, so leaving the page would drop it.
     expect(screen.getByRole("link", { name: NR_WALLS.CHANGE_WALLS })).toHaveAttribute("target", "_blank");
@@ -284,9 +285,15 @@ describe("Your walls apply (G4a)", () => {
     expect(line()).not.toHaveTextContent(/only 1/i);
   });
 
-  it("says an empty allowlist leaves the run its setup's sites, and a new site's handling", () => {
+  it("says an empty allowlist leaves the run its setup's sites, and never claims a first-use effect", () => {
     render(<Totals names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} answered walls={{ allowed_domains: [], first_use_approval: "wait_for_review" }} />);
-    expect(line()).toHaveTextContent("Your walls apply: only the sites the run's setup needs, a new site is held for review.");
+    expect(line()).toHaveTextContent("Your walls apply: only the sites the run's setup needs.");
+    expect(line()).not.toHaveTextContent(/new site/);
+  });
+
+  it("draws no line for a wall that names only first use of a new site", () => {
+    render(<Totals names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} answered walls={{ first_use_approval: "always_deny" }} />);
+    expect(line()).toBeNull();
   });
 
   it("draws nothing for walls that name nothing, empty lists, or a failed read", () => {
@@ -297,8 +304,16 @@ describe("Your walls apply (G4a)", () => {
     expect(line()).toBeNull();
   });
 
-  it("counts a credential kind once however many scopes name it", () => {
-    render(<Totals names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} answered walls={{ withheld_grants: [{ kind: "github_token" }, { kind: "github_token", scope: { repo: "org/x" } }] }} />);
-    expect(line()).toHaveTextContent("Your walls apply: 1 kind of credentials kept out.");
+  it("counts each credential entry as a restriction, so a scoped wall never reads as a whole kind kept out", () => {
+    const scoped = { kind: "ssh_key", scope: { host: "git.example", key_secret_ref: "k1" } };
+    render(<Totals names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} answered walls={{ withheld_grants: [scoped] }} />);
+    expect(line()).toHaveTextContent("Your walls apply: 1 credential restriction.");
+    expect(line()).not.toHaveTextContent(/kept out/);
+    cleanup();
+    render(<Totals names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} answered walls={{ withheld_grants: [{ kind: "api_key" }] }} />);
+    expect(line()).toHaveTextContent("Your walls apply: 1 credential restriction.");
+    cleanup();
+    render(<Totals names={HARNESS_NAMES} access={SCENARIO_ACCESS.member} answered walls={{ withheld_grants: [{ kind: "api_key" }, scoped, { kind: "ssh_key", scope: { host: "other.example" } }] }} />);
+    expect(line()).toHaveTextContent("Your walls apply: 3 credential restrictions.");
   });
 });

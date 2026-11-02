@@ -651,7 +651,7 @@ describe("Review: Your walls apply (G4a)", () => {
     open(AGENT, { walls: { denied_domains: ["x.example"], first_use_approval: "always_deny" } });
     await ready();
     const line = await screen.findByTestId("walls-apply");
-    expect(line).toHaveTextContent("Your walls apply: 1 site never reached, a new site is blocked. Change your walls");
+    expect(line).toHaveTextContent("Your walls apply: 1 site never reached. Change your walls");
     expect(screen.getByRole("link", { name: "Change your walls" })).toHaveAttribute("target", "_blank");
     expect(document.querySelectorAll("[data-testid=walls-apply]")).toHaveLength(1);
     expect(group("access").queryByTestId("walls-apply")).toBeNull();

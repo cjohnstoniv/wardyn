@@ -73,17 +73,11 @@ export const NR_WALLS = {
   APPLY_SITES_LISTED: (n: string | number) => `${n} listed ${n === 1 ? "site" : "sites"}, plus what the run's setup needs`,
   APPLY_SITES_SETUP_ONLY: "only the sites the run's setup needs",
   APPLY_SITES_NEVER: (n: string | number) => `${n} ${n === 1 ? "site" : "sites"} never reached`,
-  APPLY_NEW_SITE: (mode: string) => `a new site is ${mode}`,
-  APPLY_NEW_SITE_MODES: {
-    always_deny: "blocked",
-    deny_with_review: "blocked, with a request for review",
-    wait_for_review: "held for review",
-  } as Record<string, string>,
   APPLY_BARRIER: (cls: string) => `barrier at least ${cls}`,
   APPLY_NO_TRANSFER: (what: string) => `no ${what}`,
   APPLY_TRANSFERS: { paste_in: "paste in", copy_out: "copy out", upload: "upload", download: "download" } as Record<string, string>,
   APPLY_OR: " or ",
-  APPLY_KINDS_OUT: (n: string | number) => `${n} ${n === 1 ? "kind" : "kinds"} of credentials kept out`,
+  APPLY_CREDENTIAL_LIMITS: (n: string | number) => `${n} credential ${n === 1 ? "restriction" : "restrictions"}`,
   CHANGE_WALLS: "Change your walls",
 } as const;
 
