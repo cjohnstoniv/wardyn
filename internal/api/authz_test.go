@@ -3039,22 +3039,22 @@ type authzCLIRoute struct {
 // authzCLIRoutes is keyed as routeMatrix is. Every expected answer is the handler's, read with the
 // store shim below answering "not found" to every read:
 //
-//   - POST /cli/sign-ins: an empty request is refused by cliSignInRequestRefusal (cli_sign_in.go:161),
-//     400 cli_sign_in_invalid_request (cli_sign_in.go:199-202).
+//   - POST /cli/sign-ins: an empty request is refused by cliSignInRequestRefusal,
+//     400 cli_sign_in_invalid_request (handleCreateCLISignIn).
 //   - POST /cli/sign-ins/{id}/token: an id the store does not know is cliSignInInvalid, 401
-//     cli_sign_in_invalid (cli_sign_in.go:401-403, 429-434). That 401 is the handler's, not a gate.
+//     cli_sign_in_invalid. That 401 is the handler's, not a gate.
 //   - POST /cli/sessions/{id}/refresh: an unknown session is cliSessionInvalid, 401
-//     cli_session_invalid (cli_sessions.go:170-172, 226-229). Also the handler's.
+//     cli_session_invalid. Also the handler's.
 //   - /me/cli-sign-ins/{id} (get, approve, deny): pendingCLISignIn answers 404 cli_sign_in_not_found
-//     (cli_sign_in.go:243-246). Approve first runs mintGuards (apitokens.go:296), which admits a
+//     (pendingCLISignIn). Approve first runs mintGuards, which admits a
 //     member the way POST /me/tokens does (routeMatrix: classMember).
-//   - GET /me/cli-sessions: 200 with the caller's (here no) sessions (cli_sessions.go:350-371).
+//   - GET /me/cli-sessions: 200 with the caller's (here no) sessions (handleListCLISessions).
 //   - DELETE /me/cli-sessions/{id}: EndCLISession's not-found is 404 cli_session_not_found
-//     (cli_sessions.go:377-396).
+//     (handleEndCLISession).
 //   - The two logout routes carry no credential of the caller's: the back-channel one reads a signed
-//     logout token (a missing one is 400 invalid_request, auth/oidc/backchannel.go:45-47, 75-76) and
+//     logout token (a missing one is 400 invalid_request, auth/oidc/backchannel.go) and
 //     the front-channel one an iss and sid query (400 invalid_request without them,
-//     auth/oidc/frontchannel.go:83-85).
+//     auth/oidc/frontchannel.go).
 var authzCLIRoutes = map[string]authzCLIRoute{
 	"POST /api/v1/cli/sign-ins":                 {classAnonymous, "{}", http.StatusBadRequest, reasonCLISignInInvalidRequest},
 	"POST /api/v1/cli/sign-ins/{id}/token":      {classAnonymous, "{}", http.StatusUnauthorized, reasonCLISignInInvalid},
