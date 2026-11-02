@@ -861,6 +861,58 @@ func TestPG_RunnerLease_ReviveThroughTheDoor(t *testing.T) {
 	}
 }
 
+// #3917: an interactive run's task is its boot seed, which no Exec starts. It is issued no generation at
+// dispatch, its warn-only selftest does not run, and its revive takes the run's first generation. A generation
+// issued for the task would stay unspent, and BeginRunnerExecution would refuse the revive's.
+func TestPG_RunnerLease_InteractiveRunWithATaskRevives(t *testing.T) {
+	f := newRunnerLeaseFixture(t)
+	run := f.localRun(t, 0)
+	if _, err := f.st.Pool.Exec(f.ctx, `UPDATE agent_runs SET interactive = true WHERE id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	run.Interactive = true
+	if run.Task == "" {
+		t.Fatal("the fixture run has no task")
+	}
+	e, err := f.srv.leaseRunOnRunner(f.ctx, run)
+	if err != nil || e.generation != uuid.Nil || e.operation != "" {
+		t.Fatalf("lease of an interactive run with a task = %+v, %v, want no generation", e, err)
+	}
+	if cur, err := f.st.RunnerExecutionOf(f.ctx, run.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("execution = %+v, %v; want no row", cur, err)
+	}
+	if err := f.create(t, &run); err != nil {
+		t.Fatalf("create of the leased run: %v", err)
+	}
+	f.running(t, &run, nil)
+
+	f.srv.startAgentOrIdle(f.ctx, run, run.SandboxRef, byoiImage, true, e, nil)
+	rows := f.srv.cfg.Audit.(*syncAudit).eventsFor(run.ID, "run.selftest")
+	if len(rows) != 1 || rows[0].Outcome != "success" || !strings.Contains(string(rows[0].Data), "not run: interactive") {
+		t.Fatalf("selftest rows = %+v, want the one saying it did not run", rows)
+	}
+	if n := f.execs.Load(); n != 0 {
+		t.Fatalf("Exec frames = %d, want none", n)
+	}
+
+	if err := f.srv.keepRunProxyConfig(f.ctx, run.ID, runner.ProxyConfig{RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081"}); err != nil {
+		t.Fatal(err)
+	}
+	if lost, err := f.st.MarkRunLost(f.ctx, run.ID, types.LostReboot, time.Now(), 0); err != nil || !lost {
+		t.Fatalf("mark lost = %v, %v", lost, err)
+	}
+	stored, err := f.st.GetRun(f.ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, rerr := f.srv.reviveRunProxy(f.ctx, stored, types.ActorSystem, "test", true); rerr != nil || !res.AgentStarted {
+		t.Fatalf("revive = %+v, %+v; want the agent started", res, rerr)
+	}
+	if cur := f.execution(t, run); cur.Operation != runnerwire.MethodStart || cur.ExecID != runner.MainProcessExecID {
+		t.Fatalf("execution after revive = %+v, want a Start generation bound", cur)
+	}
+}
+
 // fix-r2 N5: a runner's new session re-leases every live run on it, a run held for a confirmation included.
 func TestPG_RunnerLease_LiveRunsIncludeHeldRuns(t *testing.T) {
 	f := newRunnerLeaseFixture(t)

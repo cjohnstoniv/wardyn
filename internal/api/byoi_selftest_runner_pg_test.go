@@ -237,7 +237,7 @@ func TestPG_RunnerBYOI_InteractiveNoTask_NoGenerationNoFailure(t *testing.T) {
 		t.Fatalf("selftest rows = %+v, want no failure", audit.eventsFor(run.ID, "run.selftest"))
 	}
 	rows := audit.eventsFor(run.ID, "run.selftest")
-	if len(rows) != 1 || rows[0].Outcome != "success" || !strings.Contains(string(rows[0].Data), "not run: interactive, no task") {
+	if len(rows) != 1 || rows[0].Outcome != "success" || !strings.Contains(string(rows[0].Data), "not run: interactive") {
 		t.Fatalf("selftest rows = %+v, want the one saying it did not run", rows)
 	}
 	if !audit.has(run.ID, "run.interactive.start", "success") {
