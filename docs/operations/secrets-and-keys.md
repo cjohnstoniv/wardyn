@@ -265,7 +265,7 @@ The key that signs the short-lived token an AI gateway verifies to learn which p
 
 An admin turns identity on per model provider, by setting `gateway_identity` with an `audience`. On an install that has never turned it on, the key row does not exist and everything below stays off. A run started with identity off sends what it always did.
 
-- **Which providers.** A `custom_endpoint` row, or an `anthropic_api_key` or `openai_api_key` row with a `base_url`. Every other kind is refused at save, a subscription row included. So is one audience on two addresses, and a `base_url` change that keeps the audience.
+- **Which providers.** A `custom_endpoint` row, or an `anthropic_api_key` or `openai_api_key` row with a `base_url`. Every other kind is refused at save, a subscription row included. So is one audience on two addresses, and a `base_url` change that keeps the audience: use a different one, or save with identity off first.
 - **Turning it on.** The first save that turns identity on makes the key. If the key can't be made, nothing is saved. Each replica notices a change within 30 seconds, so the key set can take that long to answer.
 - **A run started in that window.** Its gateway calls can be refused for up to about a minute: those 30 seconds, then up to 30 more before its proxy asks for a token again.
 - **Turning it off.** The key row stays, and so do the routes of runs already started. Those runs are refused new tokens, so within 10 minutes they stop starting new gateway calls. With no provider on, each replica also stops serving the key set within 30 seconds. Create new runs to use the provider with identity off.

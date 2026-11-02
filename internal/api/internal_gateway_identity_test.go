@@ -842,7 +842,7 @@ func TestGatewayIdentityEditMustReenterTheAudience(t *testing.T) {
 	moved := testGatewayProvider()
 	moved.BaseURL = "https://other.corp.example/llm"
 	err := validateGatewayIdentityEdit(&types.ModelProviders{Providers: []types.ModelProvider{moved}}, stored)
-	if err == nil || !strings.Contains(err.Error(), "base_url changed, so gateway_identity.audience must be entered again") {
+	if err == nil || !strings.Contains(err.Error(), "moved to a new address, so gateway_identity.audience can't stay the same: use a different one, or save with identity off first") {
 		t.Fatalf("got %v", err)
 	}
 	if refusalField(err) != "gateway_identity.audience" {
