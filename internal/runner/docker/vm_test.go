@@ -854,8 +854,9 @@ func TestVMDriveShareIsReadOnlyAtEveryLayer(t *testing.T) {
 			root, home := driveHostRoot(t)
 			r := newVMRig(t)
 			r.d.cfg.UserDriveHostRoots = []string{root}
-			if rro {
-				r.f.info = infoWithRuntimes()
+			if !rro {
+				r.f.info = infoWithRuntimes(runtimeRunsc)
+				r.f.info.DefaultRuntime = runtimeRunsc
 			}
 			spec := vmSpec()
 			spec.Drives = []types.DriveMount{*hostPathDrive(home)}

@@ -33,7 +33,7 @@
 
 - A drive bound to this runner mounts in a VM at the same path and mode as in a container, after the same checks on its folder.
 - The runner's version must offer it: an older runner, or a Kubernetes one, is refused at Review.
-- Only the person's own folder on the share is served, by its own `virtiofsd` container. A link in it is read in the guest, so it names nothing on the host.
+- Only the person's own folder on the share is served, by its own `virtiofsd` container.
 - A read-only drive is read-only three times: in that container's bind, in `virtiofsd --readonly`, and in the guest's mount.
 
 | A Linux VM run asks for | Answer |
@@ -44,7 +44,7 @@
 | A disk drive kept on a Mac | Refused at Review, naming the Mac |
 
 - **Who a write lands as.** A guest write lands as the runner's user; a container's lands as the image's agent (uid 1000).
-  - If the runner's uid is not 1000, a VM and a container on one drive can read each other's files but not change them.
+  - If the runner's uid is not 1000, a VM and a container on one drive may fail to change each other's files.
 - **Two runs at once.** Two VM runs may use one drive, and no rule holds it to one. Do not rely on a file lock across two VMs, or on seeing another VM's write at once.
 - **A size limit.** None is enforced on a drive in a VM, as in a container.
 - **A hard link on the host.** One planted inside a person's folder, at a file outside it, reads and writes through to that file, in a VM as in a container.
