@@ -174,6 +174,8 @@ func TestStandaloneProvenanceNamesTheUnitAndChangesNoValue(t *testing.T) {
 	equal := &types.GovernanceUnit{ID: uuid.New(), Name: "same-as-deployment", Ceiling: govDeployment()}
 	sized := &types.GovernanceUnit{ID: uuid.New(), Name: "sized", Ceiling: govDeployment()}
 	sized.Ceiling.Resources = &types.ResourceLimits{CPUMillis: 500}
+	diskOnly := &types.GovernanceUnit{ID: uuid.New(), Name: "disk-only", Ceiling: govDeployment()}
+	diskOnly.Ceiling.Resources = &types.ResourceLimits{DiskMiB: 4096}
 	child := types.GovernanceUnit{ID: uuid.New(), Name: "child", ParentID: &equal.ID, Overlay: &types.CeilingOverlay{MaxHolds: &eight}}
 	def := types.GovernanceUnit{ID: store.DefaultUnitID, Name: "Default", Kind: types.UnitKindDefault}
 	underDefault := types.GovernanceUnit{ID: uuid.New(), Name: "under-default", ParentID: &def.ID, Overlay: &types.CeilingOverlay{MaxHolds: &eight}}
@@ -203,6 +205,7 @@ func TestStandaloneProvenanceNamesTheUnitAndChangesNoValue(t *testing.T) {
 		{"standalone equal to the deployment, size omitted", []types.GovernanceUnit{*equal}, unitRec("same-as-deployment"),
 			map[string]policyref.Provenance{"resources": deploymentProvenance}},
 		{"standalone with its own size", []types.GovernanceUnit{*sized}, unitRec("sized"), nil},
+		{"standalone with only a disk of its own", []types.GovernanceUnit{*diskOnly}, unitRec("disk-only"), nil},
 		{"composed on a standalone root", []types.GovernanceUnit{child, *equal}, unitRec("same-as-deployment"),
 			map[string]policyref.Provenance{"resources": deploymentProvenance, "max_holds": unitRec("child")}},
 		{"composed on Default", []types.GovernanceUnit{underDefault, def}, deploymentProvenance,
@@ -240,7 +243,7 @@ func TestStandaloneProvenanceNamesTheUnitAndChangesNoValue(t *testing.T) {
 				if r := walls.Provenance["allowed_domains"]; r != leaf {
 					t.Errorf("check provenance[allowed_domains] = %+v, want %+v: the unit's wall equals the deployment's", r, leaf)
 				}
-				if r := walls.Provenance["resources"]; (r == deploymentProvenance) != (tc.name != "standalone with its own size") {
+				if r := walls.Provenance["resources"]; (r == deploymentProvenance) != (tc.other["resources"] == deploymentProvenance) {
 					t.Errorf("check provenance[resources] = %+v for %q", r, tc.name)
 				}
 			}

@@ -53,9 +53,10 @@ type ResolvedUnit struct {
 	Chain   []unitLink
 	Ceiling types.RunPolicySpec
 	Limits  types.GovernanceLimits
-	// AuthoredResources is the CPU, memory and PIDs limit the chain's own rows set, before Ceiling inherits the
-	// deployment's size: a zero field is one no row set. The member cap reads it (#1949), so a
-	// maximum with no size of its own is the size.
+	// AuthoredResources is the CPU, memory, PIDs limit and disk the chain's own rows set, before Ceiling inherits
+	// the deployment's size: a zero field is one no row set. The member cap reads its CPU and memory (#1949),
+	// so a maximum with no size of its own is the size; provenance reads all of it, so a row that sets only
+	// a disk is credited for its size.
 	AuthoredResources types.ResourceLimits
 	// Warnings name the LEAF only and never a base's name, id, overlay or contact: they reach a
 	// member's 201 clamp_warnings.
@@ -274,7 +275,7 @@ func (s *Server) composeChain(chain []types.GovernanceUnit) (*ResolvedUnit, erro
 		base, warns = s.standaloneAuthority(chain[root])
 		out.StandaloneRoot = true
 		if r := chain[root].Ceiling.Resources; r != nil {
-			out.AuthoredResources = types.ResourceLimits{CPUMillis: r.CPUMillis, MemoryMiB: r.MemoryMiB, PidsLimit: r.PidsLimit}
+			out.AuthoredResources = *r
 		}
 		out.AdminWarnings = append(out.AdminWarnings, warns...)
 		if root == 0 {
