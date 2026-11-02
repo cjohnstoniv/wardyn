@@ -46,6 +46,10 @@ describe("modelProviders.getModelProviders() — connected_people", () => {
     }));
     const snap = await modelProviders.getModelProviders();
     expect(snap.providers).toEqual({ providers });
+    // Shown to the admin, never part of the document PUT sends back.
+    expect(snap.gatewayIssuer).toBe("spiffe://wardyn.local");
+    expect(snap.gatewayJwksPath).toBe("/.well-known/wardyn-experimental/gateway-jwks.json");
+    expect(JSON.stringify(snap.providers)).not.toMatch(/issuer|jwks/);
   });
 
   it("reads a never-configured install ({}) as no counts", async () => {

@@ -71,6 +71,39 @@ export const PROVIDER_EDITOR = {
   ADDRESS_BODY_KEY: (n: number) =>
     `The keys ${n} people added were given for the old address, so they are deleted. Everyone who connected adds theirs again.`,
   ADDRESS_BODY_KEY_ONE: "The key 1 person added was given for the old address, so it is deleted. They add it again.",
+  // Run identity on a gateway (mock boards M1 and M2, their verdicts of 2026-11-02 winning over the
+  // frames). Not in the canon doc: model-providers-copy.test.ts pins only the frozen rows.
+  GATEWAY: {
+    SWITCH: "Send the person and run to this gateway",
+    DISCLOSURE:
+      "When on, each model call to this gateway carries a signed token naming the person, the run and the runner.",
+    CHIP: "Experimental until 0.11",
+    MAY_CHANGE: "The token format and the key address may change before 0.11.",
+    AUDIENCE: "Token audience",
+    AUDIENCE_HINT: "The value your gateway looks for in each token. Use a different one for each provider.",
+    ISSUER: "Issuer",
+    ISSUER_HINT: "Your gateway checks that each token came from here.",
+    ISSUER_DEFAULT: "This is the default name. Two Wardyn installs that both use it look the same to one gateway.",
+    KEY_ADDRESS: "Key address",
+    KEY_ADDRESS_HINT: "Your gateway reads the public key here to check each token.",
+    KEY_ADDRESS_UNSAVED: "Available after identity is saved; it can take up to 30 seconds.",
+    COPY: "Copy",
+    COPY_ISSUER: "Copy issuer",
+    COPY_KEY_ADDRESS: "Copy key address",
+    OFF_NOTE:
+      "After you save this, existing runs stop starting new gateway calls within 10 minutes. Create new runs to use this provider with identity off.",
+    NEEDS_ADDRESS: (host: string) =>
+      `Add a gateway address above to turn this on. Without one, calls go straight to ${host}.`,
+    ADDRESS_CLEARED: "This needs a gateway address. Add one, or turn this off.",
+    ADDRESS_CHANGED:
+      "You changed where this provider sends requests. Enter the audience again for the new address. After saving, existing runs cannot refresh their gateway tokens. Create new runs to use the new address.",
+    NOT_AVAILABLE: {
+      anthropic_subscription: "Not available for Claude subscriptions yet.",
+      bedrock_sso: "Not available for Amazon Bedrock yet.",
+      bedrock_bearer: "Not available for Amazon Bedrock yet.",
+      local_model: "Not available for a local model server, which is not a gateway.",
+    },
+  },
 } as const;
 
 export const PROVIDERS = {

@@ -26,7 +26,7 @@ import { getErrorMessage } from "../../../lib/format";
 import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
 import { LOCAL_MODEL_EDITOR } from "../../../lib/local-model-copy";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR, PROVIDERS } from "../../../lib/model-providers-copy";
-import { LOCAL_MODEL_DEFAULTS, type ModelProvider } from "../../../lib/types/site";
+import { LOCAL_MODEL_DEFAULTS, type ModelProvider, type ModelProviderKind } from "../../../lib/types/site";
 import { AGENTS, AGENTS_EXTRA } from "../../../lib/workspace-providers-copy";
 import {
   AlertDialog,
@@ -50,7 +50,10 @@ import {
   type AvailabilityDraftValue,
 } from "../../wardyn/availability-control";
 import { Mono } from "../../wardyn/code-block";
+import { CopyButton } from "../../wardyn/copy-button";
+import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
 import { Field, Switch } from "../../wardyn/form-primitives";
+import { useOperator } from "../../wardyn/operator-context";
 import { Chip } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { useDiscardReload } from "../../wardyn/use-discard-reload";
@@ -172,7 +175,7 @@ export function ModelProviderEditor({
         await writeAvailability("model_provider", next.id, audience);
       } catch (e) {
         const provider = snap.providers.providers?.find((p) => p.id === next.id) ?? next;
-        setPartial({ list: { ...snap, connected: list.connected }, provider, message: getErrorMessage(e) });
+        setPartial({ list: { ...list, ...snap }, provider, message: getErrorMessage(e) });
         setBaseline(edited);
         return;
       }
@@ -239,7 +242,14 @@ export function ModelProviderEditor({
                 <span>{AVAILABILITY.CREATE_PARTIAL_EVERYONE}</span>
               </div>
             )}
-            <ProviderFields draft={draft} setDraft={setDraft} harnesses={harnesses} refused={refused} />
+            <ProviderFields
+              draft={draft}
+              setDraft={setDraft}
+              harnesses={harnesses}
+              refused={refused}
+              gatewayIssuer={list.gatewayIssuer}
+              gatewayJwksPath={list.gatewayJwksPath}
+            />
             {/* After Use with, above the footer (#923 editors.html section 2). An
                 existing provider's list writes at once, never through Save. */}
             <div className="border-t border-border pt-4">
@@ -371,14 +381,24 @@ function ProviderFields({
   setDraft,
   harnesses,
   refused,
+  gatewayIssuer,
+  gatewayJwksPath,
 }: {
   draft: ProviderDraft;
   setDraft: React.Dispatch<React.SetStateAction<ProviderDraft | null>>;
   harnesses: HarnessRow[];
   // The last refused save's sentence: the field it is about is outlined.
   refused: string | null;
+  gatewayIssuer?: string;
+  gatewayJwksPath?: string;
 }) {
   const set = (patch: Partial<ProviderDraft>) => setDraft((d) => d && { ...d, ...patch });
+  // A new address needs its audience entered again (the server refuses a kept one), so an edit that
+  // leaves the saved address clears it, and one that returns to it restores it.
+  const setBaseUrl = (baseUrl: string) => {
+    const saved = draft.gatewaySaved;
+    set(saved ? { baseUrl, gatewayAudience: sameAddress(baseUrl, saved.baseUrl) ? saved.audience : "" } : { baseUrl });
+  };
   const endpoint = isEndpoint(draft.kind);
   const local = isLocal(draft.kind);
   const badField = refusedField(refused);
@@ -387,6 +407,8 @@ function ProviderFields({
   const sso = draft.kind === "bedrock_sso";
   const routeThrough = draft.kind === "anthropic_api_key" || draft.kind === "openai_api_key";
   const host = vendorHost(draft.kind);
+  // A key kind's gateway address cleared while identity is still on: the server refuses it, so say so first.
+  const addressCleared = routeThrough && draft.gatewayOn && !draft.baseUrl.trim();
   const [before, after] = PROVIDER_EDITOR.ROUTE_THROUGH_HINT(host).split(host);
   const rows = Object.keys(draft.harnesses).map((id) => harnesses.find((h) => h.id === id) ?? { id, display: id });
   // E3's "How people sign in" toggle — the ONE field that reaches bedrock_bearer
@@ -570,8 +592,9 @@ function ProviderFields({
               required
               className="font-mono"
               placeholder="https://"
+              aria-invalid={badField === "base_url" || undefined}
               value={draft.baseUrl}
-              onChange={(e) => set({ baseUrl: e.target.value })}
+              onChange={(e) => setBaseUrl(e.target.value)}
             />
           </Field>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -600,12 +623,22 @@ function ProviderFields({
               id="mp-base-url"
               className="font-mono"
               placeholder="https://"
+              aria-invalid={badField === "base_url" || addressCleared || undefined}
               value={draft.baseUrl}
-              onChange={(e) => set({ baseUrl: e.target.value })}
+              onChange={(e) => setBaseUrl(e.target.value)}
             />
           </Field>
         )
       )}
+
+      <GatewayIdentity
+        draft={draft}
+        set={set}
+        issuer={gatewayIssuer}
+        jwksPath={gatewayJwksPath}
+        addressCleared={addressCleared}
+        invalid={badField === "gateway_audience"}
+      />
 
       <fieldset className="space-y-2">
         <legend className="text-sm font-medium">{PROVIDER_EDITOR.USE_WITH}</legend>
@@ -622,6 +655,138 @@ function ProviderFields({
         ))}
       </fieldset>
     </>
+  );
+}
+
+// The kinds that may send run identity to a gateway: each needs a base_url, or the token would go to the vendor.
+const GATEWAY_KINDS: readonly ModelProviderKind[] = ["anthropic_api_key", "openai_api_key", "custom_endpoint"];
+const sameAddress = (a: string, b: string) => a.trim().replace(/\/$/, "") === b.trim().replace(/\/$/, "");
+// The issuer an install gets when it never names its own trust domain.
+const DEFAULT_ISSUER = "spiffe://wardyn.local";
+
+// "Send the person and run to this gateway" (gateway_identity), drawn by the gateway-identity boards M1 and M2.
+// Kinds that can't use it show the switch off with the reason, as Use with does for an agent.
+function GatewayIdentity({
+  draft,
+  set,
+  issuer,
+  jwksPath,
+  addressCleared,
+  invalid,
+}: {
+  draft: ProviderDraft;
+  set: (patch: Partial<ProviderDraft>) => void;
+  issuer?: string;
+  jwksPath?: string;
+  addressCleared: boolean;
+  invalid: boolean;
+}) {
+  const g = PROVIDER_EDITOR.GATEWAY;
+  const operator = useOperator();
+  const root = React.useRef<HTMLDivElement>(null);
+  const noteId = React.useId();
+  const reasonId = React.useId();
+  const refusedKind = !GATEWAY_KINDS.includes(draft.kind);
+  const needsAddress = !refusedKind && !draft.gatewayOn && !draft.baseUrl.trim() && draft.kind !== "custom_endpoint";
+  const reason = refusedKind
+    ? g.NOT_AVAILABLE[draft.kind as keyof typeof g.NOT_AVAILABLE]
+    : needsAddress
+      ? g.NEEDS_ADDRESS(vendorHost(draft.kind))
+      : undefined;
+  const disabled = !operator || !!reason;
+  // Switch takes no aria-describedby, so the sentence is attached to the control here, to be read with it.
+  const describedBy = reason ? reasonId : [noteId, !operator && reasonId].filter(Boolean).join(" ");
+  React.useEffect(() => {
+    root.current?.querySelector('[role="switch"]')?.setAttribute("aria-describedby", describedBy);
+  }, [describedBy]);
+  const saved = draft.gatewaySaved;
+  const moved = !!saved && !sameAddress(draft.baseUrl, saved.baseUrl);
+  const keyAddress = jwksPath ? `${window.location.origin}${jwksPath}` : "";
+
+  return (
+    <div ref={root} className="space-y-2">
+      <div className="flex items-center gap-2.5">
+        <Switch checked={draft.gatewayOn} onChange={(gatewayOn) => set({ gatewayOn })} disabled={disabled} label={g.SWITCH} />
+        <span className="text-body">{g.SWITCH}</span>
+      </div>
+      {reason ? (
+        <p id={reasonId} className="text-xs leading-snug text-muted-foreground">
+          {reason}
+        </p>
+      ) : (
+        <>
+          {draft.gatewayOn && <Chip tone="warning">{g.CHIP}</Chip>}
+          {addressCleared && (
+            <p role="alert" className="text-xs leading-snug text-danger">
+              {g.ADDRESS_CLEARED}
+            </p>
+          )}
+          <p id={noteId} className="text-body">
+            {g.DISCLOSURE}
+          </p>
+          {!operator && (
+            <p id={reasonId} className="text-xs leading-snug text-muted-foreground">
+              {OPERATOR_ONLY_REASON}
+            </p>
+          )}
+          {!draft.gatewayOn && saved && <p className="text-xs leading-snug text-muted-foreground">{g.OFF_NOTE}</p>}
+          {draft.gatewayOn && (
+            <div className="space-y-4 rounded-lg border border-border p-3">
+              <Field
+                label={g.AUDIENCE}
+                htmlFor="mp-gateway-audience"
+                required
+                hint={moved ? <span className="text-danger">{g.ADDRESS_CHANGED}</span> : g.AUDIENCE_HINT}
+              >
+                <Input
+                  id="mp-gateway-audience"
+                  required
+                  className="font-mono"
+                  aria-invalid={invalid || (moved && !draft.gatewayAudience.trim()) || undefined}
+                  value={draft.gatewayAudience}
+                  onChange={(e) => set({ gatewayAudience: e.target.value })}
+                />
+              </Field>
+              {issuer && (
+                <Field
+                  label={g.ISSUER}
+                  hint={
+                    <>
+                      {g.ISSUER_HINT}
+                      {issuer === DEFAULT_ISSUER && <span className="mt-1 block text-warning">{g.ISSUER_DEFAULT}</span>}
+                    </>
+                  }
+                >
+                  <CopyValue text={issuer} label={g.COPY_ISSUER} />
+                </Field>
+              )}
+              {keyAddress && (
+                <Field label={g.KEY_ADDRESS} hint={saved ? g.KEY_ADDRESS_HINT : `${g.KEY_ADDRESS_HINT} ${g.KEY_ADDRESS_UNSAVED}`}>
+                  <CopyValue text={keyAddress} label={g.COPY_KEY_ADDRESS} />
+                </Field>
+              )}
+              <p className="text-xs leading-snug text-muted-foreground">{g.MAY_CHANGE}</p>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// A value the admin copies into their gateway: shown whole, with a Copy control beside it.
+function CopyValue({ text, label }: { text: string; label: string }) {
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-input-background px-3 py-2">
+      <code className="min-w-0 break-all font-mono text-xs">{text}</code>
+      <CopyButton
+        text={text}
+        label={label}
+        className="shrink-0 gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring"
+      >
+        {PROVIDER_EDITOR.GATEWAY.COPY}
+      </CopyButton>
+    </div>
   );
 }
 

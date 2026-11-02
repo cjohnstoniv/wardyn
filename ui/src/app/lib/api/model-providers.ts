@@ -32,6 +32,10 @@ export interface ModelProvidersSnapshot {
 // carries no count — re-read GET after a save that may have purged some.
 export interface ModelProvidersList extends ModelProvidersSnapshot {
   connected: Record<string, number>;
+  // What an admin tells an AI gateway: every gateway token's real iss, and the key set's path with the
+  // base path. Display only, like `connected`: neither rides back on a PUT.
+  gatewayIssuer?: string;
+  gatewayJwksPath?: string;
 }
 
 export const modelProviders = {
@@ -44,11 +48,17 @@ export const modelProviders = {
       connected_people,
       entra_login_configured: _entra,
       kinds_available: _kinds,
-      gateway_identity_issuer: _issuer,
-      gateway_jwks_path: _jwks,
+      gateway_identity_issuer,
+      gateway_jwks_path,
       ...providers
     } = await asJson<ModelProvidersRead>(res);
-    return { providers, connected: connected_people ?? {}, etag: res.headers.get("ETag") };
+    return {
+      providers,
+      connected: connected_people ?? {},
+      gatewayIssuer: gateway_identity_issuer,
+      gatewayJwksPath: gateway_jwks_path,
+      etag: res.headers.get("ETag"),
+    };
   },
 
   // PUT /api/v1/model-providers — replaces the WHOLE document; there is no
