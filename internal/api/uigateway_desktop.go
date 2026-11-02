@@ -53,10 +53,13 @@ const (
 	uiDesktopSessionTTL = time.Hour
 	// uiDesktopRecheck is how often an open desktop stream re-checks its person and its run.
 	uiDesktopRecheck = 30 * time.Second
-	uiDesktopViewer  = "desktop.html"
-	uiDesktopRFB     = "/__rfb"
-	uiDesktopClose   = "/__close"
-	uiDesktopAssets  = "/assets/"
+	// uiDesktopRecheckWait bounds one re-check's reads, so a store that hangs can't leave a stream relaying
+	// unchecked up to its session's bound while the check waits.
+	uiDesktopRecheckWait = 10 * time.Second
+	uiDesktopViewer      = "desktop.html"
+	uiDesktopRFB         = "/__rfb"
+	uiDesktopClose       = "/__close"
+	uiDesktopAssets      = "/assets/"
 
 	// uiDesktopClosedRecheck is how often an open desktop stream re-reads the Closed set, so a Close
 	// on another replica ends it within this bound.
@@ -87,6 +90,8 @@ type uiDesktopSessions struct {
 	next   uint64
 	// recheckEvery replaces uiDesktopRecheck: tests only, so a re-check can be observed without its wait.
 	recheckEvery time.Duration
+	// recheckWait replaces uiDesktopRecheckWait: tests only, the same.
+	recheckWait time.Duration
 }
 
 func (s *Server) uiSessionTTLFor(sess uiSession) time.Duration {
@@ -119,23 +124,29 @@ func (s *Server) uiDesktopClosedHere(sess uiSession, now time.Time) bool {
 // uiDesktopClosed reports whether sess was closed on any replica. Only a closed answer is cached: an
 // open one is read from the store every time, and a store that cannot answer counts as closed.
 func (s *Server) uiDesktopClosed(ctx context.Context, sess uiSession, now time.Time) bool {
+	closed, unread := s.uiDesktopClosedRead(ctx, sess, now)
+	return closed || unread
+}
+
+// uiDesktopClosedRead is uiDesktopClosed with its two answers apart: sess was closed, or the store couldn't say.
+func (s *Server) uiDesktopClosedRead(ctx context.Context, sess uiSession, now time.Time) (closed, unread bool) {
 	if s.uiDesktopClosedHere(sess, now) {
-		return true
+		return true, false
 	}
 	st, ok := s.cfg.Store.(store.UIDesktopClosedStore)
 	if !ok {
 		slog.WarnContext(ctx, "wardynd: desktop session refused: this store keeps no Closed set", "run_id", sess.Run)
-		return true
+		return false, true
 	}
 	closed, err := st.UIDesktopClosed(ctx, uiDesktopClosedKey(sess), now)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: desktop session refused: the Closed set could not be read", "run_id", sess.Run, "err", err)
-		return true
+		return false, true
 	}
 	if closed {
 		s.cacheDesktopClosed(sess)
 	}
-	return closed
+	return closed, false
 }
 
 func (s *Server) cacheDesktopClosed(sess uiSession) {
@@ -374,7 +385,7 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		return
 	}
 
-	run, code, why := s.desktopRunCheck(ctx, sess)
+	run, code, why := s.desktopBoundedRunCheck(ctx, sess)
 	if code != 0 {
 		_ = c.Close(code, why)
 		return
@@ -439,12 +450,12 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 			return
 		case <-closedTick.C:
 			// A Close on another replica, or a Closed set that cannot be read, ends the stream.
-			if s.uiDesktopClosed(ctx, sess, s.cfg.Now()) {
-				_ = c.Close(desktopCloseSessionEnded, "this desktop session ended")
+			if code, why := s.desktopBoundedClosedCheck(ctx, sess); code != 0 {
+				_ = c.Close(code, why)
 				return
 			}
 		case <-tick.C:
-			if _, code, why := s.desktopRunCheck(ctx, sess); code != 0 {
+			if _, code, why := s.desktopBoundedRunCheck(ctx, sess); code != 0 {
 				_ = c.Close(code, why)
 				return
 			}
@@ -478,11 +489,37 @@ func (d desktopSocket) Close(code websocket.StatusCode, why string) error {
 	return d.Conn.Close(code, why)
 }
 
+// desktopBoundedRunCheck is desktopRunCheck under uiDesktopRecheckWait: a read that runs out of it is a read that failed.
+func (s *Server) desktopBoundedRunCheck(ctx context.Context, sess uiSession) (types.AgentRun, websocket.StatusCode, string) {
+	ctx, cancel := context.WithTimeout(ctx, cmp.Or(s.uiDesktop.recheckWait, uiDesktopRecheckWait))
+	defer cancel()
+	return s.desktopRunCheck(ctx, sess)
+}
+
+// desktopBoundedClosedCheck is an open stream's read of the Closed set under uiDesktopRecheckWait, answering the
+// close code and words that end it, or 0 while it may go on. A watch that can't be verified ends as any re-check
+// ends a watch; a session its person closed says so, and any other session keeps the one answer it has.
+func (s *Server) desktopBoundedClosedCheck(ctx context.Context, sess uiSession) (websocket.StatusCode, string) {
+	ctx, cancel := context.WithTimeout(ctx, cmp.Or(s.uiDesktop.recheckWait, uiDesktopRecheckWait))
+	defer cancel()
+	closed, unread := s.uiDesktopClosedRead(ctx, sess, s.cfg.Now())
+	switch {
+	case unread && sess.backgroundWatch():
+		return desktopCloseWatchEnded, backgroundWatchEndedMsg
+	case closed || unread:
+		return desktopCloseSessionEnded, "this desktop session ended"
+	}
+	return 0, ""
+}
+
 // desktopRunCheck loads the session's run fresh and answers the close code and words that end its
-// stream, or 0 while it may go on.
+// stream, or 0 while it may go on. On a watch, a run that can't be read ends the view rather than retry it.
 func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.AgentRun, websocket.StatusCode, string) {
 	run, err := s.cfg.Store.GetRun(ctx, sess.Run)
 	if err != nil {
+		if sess.backgroundWatch() {
+			return run, desktopCloseWatchEnded, backgroundWatchEndedMsg
+		}
 		return run, desktopCloseUnreachable, "run not found"
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" || runIsKept(run) {

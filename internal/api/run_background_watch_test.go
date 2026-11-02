@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -783,4 +784,99 @@ func TestBgWatchChangeInTheStoreEndsAnOpenStream(t *testing.T) {
 			}
 		})
 	}
+}
+
+// bgWatchHungStore blocks one armed read until its context ends, as a store that stopped answering does.
+type bgWatchHungStore struct {
+	*desktopSiteStore
+	armed atomic.Value // the read's name, a string
+}
+
+func (s *bgWatchHungStore) hang(ctx context.Context, read string) error {
+	if name, _ := s.armed.Load().(string); name != read {
+		return nil
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (s *bgWatchHungStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if err := s.hang(ctx, "run"); err != nil {
+		return types.AgentRun{}, err
+	}
+	return s.desktopSiteStore.GetRun(ctx, id)
+}
+
+func (s *bgWatchHungStore) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
+	if err := s.hang(ctx, "site"); err != nil {
+		return types.SiteConfig{}, err
+	}
+	return s.desktopSiteStore.GetSiteConfig(ctx)
+}
+
+func (s *bgWatchHungStore) UIDesktopClosed(ctx context.Context, key string, now time.Time) (bool, error) {
+	if err := s.hang(ctx, "closed"); err != nil {
+		return false, err
+	}
+	return s.desktopSiteStore.UIDesktopClosed(ctx, key, now)
+}
+
+// A re-check's read that hangs ends an already open stream within the wait, with the display still alive: a watch
+// always by its own code, any other session as a failed read of that kind always has. The test's own deadline is
+// what a stream with no bound would run into.
+func TestBgWatchHungReadEndsAnOpenStream(t *testing.T) {
+	if uiDesktopRecheckWait != 10*time.Second {
+		t.Fatalf("uiDesktopRecheckWait = %s, want 10 s: with the 30 s tick, an open view ends within a minute", uiDesktopRecheckWait)
+	}
+	for _, c := range []struct {
+		name, read string
+		rig        func(*testing.T) *rfbClientRig
+		wantCode   websocket.StatusCode
+		wantWhy    string
+	}{
+		{"a watch, the run", "run", bgWatchRig, desktopCloseWatchEnded, backgroundWatchEndedMsg},
+		{"a watch, the site config", "site", bgWatchRig, desktopCloseWatchEnded, backgroundWatchEndedMsg},
+		{"a watch, the Closed set", "closed", bgWatchRig, desktopCloseWatchEnded, backgroundWatchEndedMsg},
+		{"an interactive session, the run", "run", bgWatchInteractiveRig, desktopCloseUnreachable, "run not found"},
+		{"an interactive session, the Closed set", "closed", bgWatchInteractiveRig, desktopCloseSessionEnded, "this desktop session ended"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := c.rig(t)
+			hung := &bgWatchHungStore{desktopSiteStore: r.h.srv.cfg.Store.(*desktopSiteStore)}
+			r.h.srv.cfg.Store = hung
+			r.h.srv.uiDesktop.recheckWait = 50 * time.Millisecond
+			// Only the armed read's own ticker runs, so nothing else can end the stream first.
+			r.h.srv.uiDesktop.recheckEvery, r.h.srv.uiDesktopClosedEvery = time.Hour, time.Hour
+			if c.read == "closed" {
+				r.h.srv.uiDesktopClosedEvery = 10 * time.Millisecond
+			} else {
+				r.h.srv.uiDesktop.recheckEvery = 10 * time.Millisecond
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			v, d := r.open(ctx, t)
+			if got := v.read(len(rfbClientFrame)); !bytes.Equal(got, rfbClientFrame) {
+				t.Fatalf("the client got %v, want the display's frame", got)
+			}
+			select {
+			case <-d.ended:
+				t.Fatal("the display ended before any read hung")
+			default:
+			}
+			hung.armed.Store(c.read)
+			defer hung.armed.Store("")
+			_, _, err := v.ws.Read(ctx)
+			var ce websocket.CloseError
+			// The display's own end closes with desktopCloseUnreachable and other words, so the words say it lived.
+			if !errors.As(err, &ce) || ce.Code != c.wantCode || ce.Reason != c.wantWhy {
+				t.Fatalf("the open stream with a hung %s read = %v, want close %d %q", c.read, err, c.wantCode, c.wantWhy)
+			}
+		})
+	}
+}
+
+// bgWatchInteractiveRig is the same Mac and stream with an interactive session, the rig's own.
+func bgWatchInteractiveRig(t *testing.T) *rfbClientRig {
+	t.Helper()
+	return rfbClientNewRig(t, runnerwire.MacVMDesktopObserve)
 }
