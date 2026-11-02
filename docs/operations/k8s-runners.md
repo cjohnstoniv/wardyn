@@ -91,7 +91,7 @@
 9. Confirm in *Admin → Runners* that the runner is Online, reports its architecture and shows the trust class "Organization cluster". Runnerd boots only on an `enforced` canary verdict, so a running pod has passed it.
 10. Delete the registration Secret. The chart mounts it optional, so restarts keep working.
 
-- The chart is not published to a registry in 0.9.3. Install it from a checkout of the release tag, where the default `image.tag` is that release.
+- The chart is not published to a registry. Install it from a checkout of the release tag, where the default `image.tag` is that release.
 - The registration token already fixes `owner_kind` as organisation, so the runner is `org_cluster` from registration. The claim records who bound it and when.
 - A break-glass mint (an admin API token under four-eyes) is audited `governance.change.bypass` and never counts as the second human. Claiming it is audited `runner.claim` with `break_glass` true.
 - The init container runs `wardyn-runnerd register --substrate k8s --if-unregistered`. The Ed25519 key is generated on the volume and never leaves it.
@@ -161,7 +161,7 @@
 ### RBAC order
 
 1. Helm applies RBAC kinds before the Deployment on install and upgrade, so a default install needs nothing.
-2. With `rbac.create=false`, apply the ClusterRole, ClusterRoleBinding, both Roles and both RoleBindings before the image starts, and again before any upgrade that adds a verb.
+2. With `rbac.create=false`, apply the ClusterRole, ClusterRoleBinding and every Role and RoleBinding before the image starts, and again before any upgrade that adds a verb. The Roles are one per runs namespace, one in runnerd's own namespace and one per `workloads.namespaces` entry.
 3. Render what the chart would apply: `helm template wardyn-runner deploy/helm/wardyn-runnerd -n wardyn-runner -f values.yaml --set rbac.create=true --show-only templates/rbac.yaml`.
 4. Runnerd's boot access review refuses to start while any verb is missing, and names the missing verbs.
 
@@ -203,7 +203,7 @@
 4. Runs survive the restart only if runnerd is READY again and each proxy renews before its deadline: see [Self-lapse](#self-lapse-and-outages).
 
 - The state volume holds the runner's identity. Losing it is identity loss: mint a new token, use a fresh volume and revoke the old runner.
-- There is no re-key in 0.9.3.
+- There is no re-key.
 - Upgrade the control plane first. Runnerd N-1 keeps working against it.
 
 ## Self-lapse and outages
@@ -219,7 +219,7 @@
 - A run survives a runnerd outage if and only if runnerd is READY again, so that the relay forwards, and the proxy's next renew succeeds before its deadline. Boot counts against the budget.
 - With healthy renewals the last success is at most about 11 minutes before the crash, so a runner READY again within about 48 minutes keeps its runs. That is an example, not a guarantee.
 - Renewals that were already failing shorten the budget: last success at minute 0, runnerd down from minute 40 to 61, and the run lapses at minute 60.
-- After the deadline the agent stays up without network until runnerd returns, then is contained and the run is lost with reason `outage`. There is no revive on Kubernetes in 0.9.3.
+- After the deadline the agent stays up without network until runnerd returns, then is contained and the run is lost with reason `outage`. There is no revive on Kubernetes.
 - During an outage new requests are refused once the grant is used. Approvals and brokered internal routes fail while the relay is down; the run itself is not ended.
 - The deadline runs on the boot clock, which counts suspended time, so a paused node does not extend it.
 - Identity renewals are audited as `identity.renew`: on a Kubernetes runner a run writes 6 rows an hour, not 2.

@@ -1,2 +1,3 @@
 # 0.10 SI-POLICY: docs/operations/approval-rules.md 639, measured: the approval-rules task page.
-docs/operations/approval-rules.md=639 share=35
+# docs/operations/approval-rules.md 662 adds 23 over 639, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
+docs/operations/approval-rules.md=662 share=35

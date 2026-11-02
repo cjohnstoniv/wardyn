@@ -13,12 +13,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- A Linux VM run can mount a drive bound to its runner. An older runner and a Kubernetes runner are refused at Review. A file lock held in one VM does not stop another VM or the host taking it.
+- A Linux VM run can mount a drive bound to its runner. An older runner and a Kubernetes runner are refused at Review. Do not rely on a file lock across two VMs.
 
 ### Changed
 
 - API: a run list without `include=recording_meta` leaves `has_recording`, `recording_bytes` and `recording_duration_sec` off each run. It used to say `has_recording: false` for a run that has a recording. A single-run read and an opted-in list always carry `has_recording`. In the Go SDK `has_recording` is now a `*bool`.
 - A `pass_through` governance unit written with `overlay: {}` and no parent is refused, as the same write with no `overlay` already was. A pass-through unit already under Default still saves.
+- `deny_interactive` also refuses a desktop's file transfers and `novnc`: a person watching a `novnc` desktop on a run whose profile denies interactive sessions is refused after upgrade, at entry and at the session's next check.
+- Beginning a desktop sign-in or sharing a login from one is refused under `deny_interactive` or `deny_ui_apps`. A refused begin leaves the agent running, and ending a sign-in stays available.
+- Opening a desktop's Files panel on a paused run no longer wakes it. Only a transfer the rules allow does.
+- A BYOI interactive run with a task on a runner skips its warn-only selftest, as one with no task does, so it shows fewer selftest rows.
+- Setup and Claude sign-in no longer accept Wardyn's `agent-base` image as a sign-in image. A one-line install shows Claude sign-in as not ready until you supply a Claude Code image; [the steps](docs/operations/build-images.md#claude-sign-in-image) are in the docs.
 
 ### Fixed
 
@@ -28,6 +33,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A Linux VM managed file with no mode is delivered at the default mode.
 - The runner and Azure DevOps token reads in the console stop polling when signed out and no longer stack requests.
 - A macOS VM helper logs a refused pairing before closing the connection.
+- An interactive run with a task on a runner no longer takes an execution generation it never spends, which refused its revive. A run from before the upgrade stays unrevivable: start a new run.
+- A unit admin's membership add checks scope first, so someone outside the unit can't tell which user types exist.
+- A Linux VM's kept work folder is refused at Review, naming the folder.
+- A service with no end time and no lifetime cap says it runs until stopped, at New Run, in preflight and in the create response.
+- Compose passes `WARDYN_MIGRATE_TIMEOUT` on from `.env`.
 - Docs: what a policy's `github_token` grant needs before a runner's first run.
 
 ## [0.10.0-rc.10] — 2026-11-01

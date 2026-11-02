@@ -42,10 +42,11 @@
 | The same, on a runner too old to share one, or a Kubernetes runner | Refused at Review: update the runner, or run without drives |
 | A person's own Docker or cluster volume, or a drive with no binding | Refused at Review, as in a container on this runner |
 | A disk drive kept on a Mac | Refused at Review, naming the Mac |
+| A kept work folder | Refused at Review, naming the folder |
 
 - **Who a write lands as.** A guest write lands as the runner's user; a container's lands as the image's agent (uid 1000).
   - If the runner's uid is not 1000, a VM and a container on one drive may fail to change each other's files.
-- **Two runs at once.** Two VM runs may use one drive, and no rule holds it to one. A file lock held in one VM does not stop another VM or the host taking it. Do not rely on seeing another VM's write at once: a delete took about a second to show.
+- **Two runs at once.** Two VM runs may use one drive; no rule holds it to one. Do not rely on a file lock across two VMs: in one run on one kernel, a held lock did not stop another VM or the host taking it. Nor on seeing another VM's write at once: its delete took about a second.
 - **A size limit.** None is enforced on a drive in a VM, as in a container.
 - **A hard link on the host.** One planted inside a person's folder, at a file outside it, reads and writes through to that file, in a VM as in a container.
   - The checks see names, and a hard link has no name to refuse. Keep shell access to the share as tight as the share's contents need.

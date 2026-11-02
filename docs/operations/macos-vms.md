@@ -51,7 +51,7 @@
 | The Mac | Apple silicon, macOS 26 or later. On macOS 26 each prepare, `--new-image` too, needs [setup by hand](#setup-by-hand) once per base, about 10 minutes at the Mac. macOS 27 sets the guest up unattended |
 | Docker | A running engine on the Mac. The guest's network relay and proxy run in it, and the runner needs it to start ([Docker on the Mac](#docker-on-the-mac)) |
 | Network | An uninspected path to `updates.cdn-apple.com`, which Apple pins: a TLS-inspecting proxy fails the image download at once, and the error prints the image URL and names `--ipsw`. The same exemption covers [stage 2](#the-prep-proxy)'s opaque tunnels |
-| Disk | About 85 GiB free to prepare, then about 107 GiB free to start a second VM ([Disk](#disk)) |
+| Disk | About 81 GiB free to prepare, then about 107 GiB free to start a second VM ([Disk](#disk)) |
 | Power | On AC power to start preparing ([Preparing the base image](#preparing-the-base-image)) |
 | A login | Someone logged in on the Mac ([Logins, FileVault and restarts](#logins-filevault-and-restarts)) |
 | Company-managed | The Mac's trust class is `managed_device` and its posture file says `mdm_managed` ([Which Macs qualify](#which-macs-qualify)) |
@@ -122,7 +122,7 @@
 
 | Step | What happens |
 |---|---|
-| 1. Check | The host, Docker, free disk (the 85 GB above) and AC power. A failed check stops with the fix |
+| 1. Check | The host, Docker, free disk (the 81 GiB above) and AC power. A failed check stops with the fix |
 | 2. Download | Apple's current restore image, about 25 GB, in resumable 64 MiB ranges. The SHA-256 is recorded |
 | 3. Validate | The image is loaded and checked against what this Mac supports. A bad image is deleted and fetched once more |
 | 4. Install | macOS is installed into a sparse 50 GB disk |
@@ -142,8 +142,9 @@
   - Just after, a new connection to port 22 must be refused outright. A timeout, or a network that cannot reach the guest, proves nothing: stage 1 keeps trying for 30 seconds, then fails.
   - A refusal counts only from a guest shown live on the same boot: port 5900 still sends its banner and no new DHCP request arrived. A stopped, rebooted or reset guest also refuses port 22, so that case stops stage 1 at once.
   - Any failure stops preparing and no base is published.
-- **The desktop.** Apple has said Screen Sharing turned on from the command line may let a viewer only watch. Preparing ends with a control check, and `status` reports whether the desktop is `control`, `observe` or `none`. With `observe`, a run's desktop can be watched from the run page (Watch desktop), not acted in.
+- **The desktop.** Apple has said Screen Sharing turned on from the command line may let a viewer only watch. Preparing ends with a control check, and `status` reports whether the desktop is `control`, `view only` or `none`. With `view only`, a run's desktop can be watched from the run page (Watch desktop), not acted in.
   - The UI gateway and the Mac's helper each drop keys, pointer moves and paste, so that input never reaches the guest. Built and unit-tested; not yet run on a real Mac.
+  - View only covers keys, pointer moves and paste. Uploads from the run's Files panel still go to `~/Transfers` in the guest unless policy blocks them.
   - `status` says how, and the prepare log says why.
   - To turn control on, run `wardyn-runnerd macos-vm edit-base`, turn on Screen Sharing with "VNC viewers may control screen with password" in the guest, then close the window. On a macOS 26 base the desktop stays view only even so ([#3901](https://github.com/cjohnstoniv/wardyn/issues/3901)).
 - **Newer macOS.** Wardyn does not tell you that Apple has a newer image, but `status` shows when the base was prepared and this Mac's macOS beside it. To move to a newer one, run `wardyn-runnerd macos-vm prepare --new-image` with the per-run flags; a plain `prepare` keeps a ready base and says there is nothing to prepare.
@@ -376,7 +377,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 
 ## Disk
 
-- Preparing needs about 85 GiB free. Starting a VM reserves its disk's logical size plus 1 GiB (51 GiB), and needs that much free plus a 5 GiB floor. A second VM therefore needs about 107 GiB free when it starts.
+- Preparing needs about 81 GiB free (the 25 GiB restore image, the 50 GiB base disk, 1 GiB extra and the 5 GiB floor). Starting a VM reserves its disk's logical size plus 1 GiB (51 GiB), and needs that much free plus a 5 GiB floor. A second VM therefore needs about 107 GiB free when it starts.
 - The reservation bounds each VM's growth on the live volume, because a clone's private blocks cannot pass the disk's logical size.
 - **What it does not bound.** Space held by the Mac's own APFS snapshots, such as Time Machine's hourly local snapshots, is outside the reservation.
   - While a snapshot keeps a clone's earlier blocks, rewriting them uses new space, and a deleted run's blocks stay allocated until the snapshot goes.
@@ -402,7 +403,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | `/Users/Shared/Wardyn/sock/` | `root:wheel` `1777`, sticky | One folder per login, `u<uid>/`, made by that login with mode `0700`; each run's sockets sit in a folder inside it |
 
 - The package's installer creates these. A runner never creates them: if they are missing or not owned by root, the Mac offers no macOS VMs and says to reinstall the package.
-- **A pre-planted name is moved, not changed.** A path that is already there and not exactly as above is moved into a new root-only `.wardyn-quarantine.*` folder beside `/Users/Shared/Wardyn`.
+- **A pre-planted name is moved, not changed.** A path that is already there and not exactly as above is moved into a new root-only `.wardyn-quarantine.*` folder. For `/Users/Shared/Wardyn` itself the folder sits beside it; for anything inside it, the folder sits inside `/Users/Shared/Wardyn`.
   - The installer makes the path again and moves the entries across. It never changes the owner or mode of what it found, and never deletes it.
   - An admin can inspect and delete a quarantine folder as root.
 - **The installer waits for the lock.** If any login holds the admission lock for more than 10 seconds, the installation fails closed: macOS VMs stay off. Reinstall the package to retry once nobody holds it.
@@ -495,7 +496,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | Proxy certificate | On macOS 26 the run's System keychain does not trust it, so apps that use only the system trust store fail on inspected hosts ([System trust store](#apps-that-use-only-the-system-trust-store)). Node, Python, git and curl are pointed at it |
 | Harnesses | Claude Code, Codex CLI and "Your own tools", depending on what the base installed and what passed the launcher's self-test. If Apple's Command Line Tools cannot install, only "Your own tools" is offered |
 | Folders | Shared into the guest; see [Folders](#folders) |
-| Desktop | One fixed 1920 x 1080 display. An `observe` result (see above) can be watched, not controlled |
+| Desktop | One fixed 1920 x 1080 display. A `view only` result (see above) can be watched, not controlled |
 | Clipboard | Paste in is allowed and copy out is blocked by default, as for other desktops, if Apple's Screen Sharing carries the standard clipboard messages. Otherwise nothing is copied either way |
 | Heat and battery | New VMs are refused at serious or critical thermal state. Battery use and lid-close sleep on MacBooks were not measured |
 | Guest patching | The guest's automatic updates are off, so a run's OS is predictable. Re-prepare to move to a newer macOS. `macos_vm.max_base_age_days` in the site config refuses runs on a Mac whose base is older |
@@ -661,4 +662,4 @@ The runner drawer shows most of these from fixed codes and numbers the runner re
 - Migration `0234_macos_vm_kind` widens `agent_runs.machine_kind` to allow `macos_vm`, and the desktop sign-in `store` column to allow `run_disk`. It changes no row.
 - A run records its guest macOS build (`guest_os`) and the Mac's (`host_os`) in `vm_machine`.
 - A run's page says whether the Mac removed the run's directory, with the VM's disk and clone, or why it could not. The runner sends fixed codes, which migration `0236_macos_vm_disks` stores.
-- A runner older than this release sends no such report. Its run's page says "Removing…" for 10 minutes after the run ends, then nothing about the disk.
+- A runner older than this release sends no such report. Its run's page says "Removing the macOS VM's disk from this Mac…" for 10 minutes after the run ends, then nothing about the disk.

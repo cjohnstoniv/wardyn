@@ -72,7 +72,9 @@ func validDesktopFileName(name string) bool {
 
 // desktopRun loads the run for a transfer: the person who may enter it, while it runs, with a
 // desktop declared. It mirrors handleAttachTicket's entry rule (mayEnterRun) without the sponsor arm,
-// and it is the desktop door: a background-only run has no desktop to move files to.
+// and it is the desktop door: a background-only run has no desktop to move files to, and deny_ui_apps
+// and deny_interactive close it as they close the desktop itself (uiEnterDesktop). It never thaws a
+// paused run: only a transfer the rules allow does, just before its exec.
 func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.AgentRun, types.DesktopControls, bool) {
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
@@ -91,7 +93,7 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 		}
 		return run, types.DesktopControls{}, false
 	}
-	if !superAdmin && s.refuseUIAppsDenied(w, r, run) {
+	if (!superAdmin || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, r, run) || s.refuseInteractiveAttach(w, r, run)) {
 		return run, types.DesktopControls{}, false
 	}
 	if s.refuseBackgroundOnly(w, r, run, "desktop") {
@@ -116,11 +118,6 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 	}
 	if len(apps) == 0 {
 		writeErrorReason(w, http.StatusConflict, reasonDesktopTransferUnavailable, "this run's policy declares no UI app, so it has no desktop to move files to")
-		return run, types.DesktopControls{}, false
-	}
-	at, principal := actorFromRequest(r)
-	if err := s.thawForExec(r.Context(), run, at, principal, "presence"); err != nil {
-		writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "run is paused and could not be resumed; try again")
 		return run, types.DesktopControls{}, false
 	}
 	return run, rules, true
@@ -175,6 +172,12 @@ func (s *Server) handleListDesktopFiles(w http.ResponseWriter, r *http.Request) 
 	}
 	view := desktopFilesView{Folder: desktopTransferFolder, Rules: rules, Files: []desktopFile{}}
 	if rules.Download == types.TransferAllowed {
+		// Reading the folder is an exec, which a paused run refuses, and a look is not a person, so it
+		// never thaws (runPausedReadMsg). With download blocked no exec runs and the rules still answer.
+		if run.PausedAt != nil {
+			writeErrorReason(w, http.StatusConflict, reasonRunInspectPaused, runPausedReadMsg)
+			return
+		}
 		var listing bytes.Buffer
 		if code, err := s.desktopExec(r.Context(), run, desktopListScript, nil, func(o io.Reader) error {
 			_, err := io.Copy(&listing, io.LimitReader(o, 64<<10))
@@ -224,6 +227,11 @@ func (s *Server) handleUploadDesktopFile(w http.ResponseWriter, r *http.Request)
 			fmt.Sprintf("the file is over the %d MiB limit for a desktop upload. Nothing was sent.", maxDesktopUploadBytes>>20))
 		return
 	}
+	at, principal := actorFromRequest(r)
+	if err := s.thawForExec(r.Context(), run, at, principal, "presence"); err != nil {
+		writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "run is paused and could not be resumed; try again")
+		return
+	}
 	sum := sha256.New()
 	body := io.TeeReader(io.LimitReader(r.Body, r.ContentLength), sum)
 	code, err := s.desktopExec(r.Context(), run, desktopUploadScript, body, nil, name, strconv.FormatInt(r.ContentLength, 10))
@@ -255,6 +263,11 @@ func (s *Server) handleDownloadDesktopFile(w http.ResponseWriter, r *http.Reques
 	case rules.Download != types.TransferAllowed:
 		s.auditDesktopTransfer(r, run, "download", "denied", -1, "")
 		writeErrorReason(w, http.StatusForbidden, reasonDesktopTransferBlocked, "this run's desktop rules block downloading files. Nothing was sent.")
+		return
+	}
+	at, principal := actorFromRequest(r)
+	if err := s.thawForExec(r.Context(), run, at, principal, "presence"); err != nil {
+		writeErrorReason(w, http.StatusBadGateway, reasonDesktopTransferFailed, "run is paused and could not be resumed; try again")
 		return
 	}
 	var sent int64

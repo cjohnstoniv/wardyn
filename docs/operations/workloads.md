@@ -105,12 +105,13 @@ intent:
 | An unchanged spec whose run has ended | `unchanged` | Nothing. An ended run is restarted with `wardyn workload restart`, never relaunched by an apply |
 
 - The new run is created before the old one is ended. A queued replacement lets the old run serve until the new one runs, unless the old run holds the slot the new one needs.
-- A refused launch is a `200`, not an error. The spec is stored at its new generation, and the old run keeps running.
+- A refused launch is not an error: the answer is a `201` when the apply created the workload and a `200` otherwise. The spec is stored at its new generation, and the old run keeps running.
 - The answer carries `launch.state` `refused`, with the create path's own `reason` and sentence. The ceiling, a pool's limits and the unit walls all refuse here as they refuse `POST /runs`.
 - The workload records `last_refusal` (`generation`, `reason`, `message`, `at`) until a launch succeeds. A `security_admin` reading another owner's workload gets the `reason` without the `message`. The audit row is `workload.launch_refused`.
 - Two applies that race leave one run: the launch that loses is ended with reason `workload_replaced`.
 - With several runners serving one bound namespace, the runner that last applied a workload is the one whose removals count. If that runner is down but still in the pool, remove it from the pool so another can take over.
-- `workload restart` is recorded as `workload.restart`. Only the owner, the service identity's sponsor or a super admin may restart; a `security_admin` gets `404`, because a restart launches as the service. When it is not the owner's own request it launches only for a service identity whose sponsor's session is live; a person's workload then starts at their next apply.
+- `workload restart` is recorded as `workload.restart`. Only the owner, the service identity's sponsor or a super admin may restart; a `security_admin` gets `404`, because a restart launches as the service. A person's workload starts at their next apply.
+- A restart that is not the owner's own request launches only while the service identity is not suspended or retired, its sponsor is unchanged and the sponsor's access is not revoked.
 - A custom resource's workload restarts under the namespace binding that holds now. A binding deleted since, or one without authority, refuses it `workload_binding_inactive`: a `200` with that `launch.reason`, kept as `last_refusal`.
 - The daemon's 30-second sweep retries a launch whose claim lapsed, as the bound service under the same binding rule, at most once every 60 seconds. A refused launch waits for the resource's next report.
 - Deleting a workload removes the row, then ends its run with reason `workload_deleted`. The owner, the service identity's sponsor, a super admin or a `security_admin` may delete.
@@ -259,7 +260,7 @@ Do not use the `Ready` condition for health: a completed workload is `Ready=Fals
 > [!WARNING]
 > A resource the runner cannot send gets no status. The runner logs `workload not reported` at warn level, with the namespace, name, operation and error, and sends nothing to the organisation. The resource shows no error.
 
-- That covers a spec over 256 KiB and a name that does not start with a letter. Read the runner's log, not the resource.
+- That covers a spec over 256 KiB and a name that is not a lowercase DNS label starting with a letter, of at most 63 characters. Read the runner's log, not the resource.
 - A resource that grows past the cap after it was reported keeps its last recorded spec running. Its status stays as it was, so the Argo check above reads it as Progressing.
 - A namespace holding more than 1000 resources sends no full-list sync. The runner logs `workload sync not sent`, and a resource deleted while the runner was down is not pruned.
 - The schema leaves `intent` open on purpose, so `kubectl apply` accepts a spec that Wardyn then marks `Invalid`. Read the status after an apply.

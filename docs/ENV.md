@@ -1592,7 +1592,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Constrained-admin mode: govern every run an SSO admin or an admin-role personal API token launches.
 - Like a member's, at every run seam (the governance profile, capability grants, quotas, the drive and workspace-provider doors, owner revalidation, preset launch).
-- And at the run doors (`deny_interactive` refuses the terminal attach and SSH, `deny_ui_apps` the UI gateway, on the admin's own run).
+- And at the run doors (`deny_interactive` refuses the terminal attach, SSH, the desktop, `novnc`, desktop sign-ins and desktop file transfers, `deny_ui_apps` the UI gateway, desktop sign-ins and those file transfers, on the admin's own run).
 - Route tiers, the credential namespace, run reach and recording reads are unchanged.
 - **The admin token and local mode stay break-glass**: neither carries a person to resolve a profile for, so their launches stay ungoverned and each `run.create` row carries `governance_exempt: true` while the switch is on.
 - **With OIDC unset the switch binds nobody** (local mode and admin-token-only mode have no signed-in person): every launch is ungoverned and marked, and boot WARNs it (`warnGovernAdminRunsUnbound`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)).

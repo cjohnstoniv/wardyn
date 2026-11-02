@@ -157,8 +157,9 @@ func TestServiceCreateWarnings(t *testing.T) {
 	}{
 		{"a capped service under an idle pause", types.AgentRun{Service: svc, RunLimits: paused, LifetimeCapAt: &capAt}, []string{servicePauseWarning}},
 		{"a capped service with no idle pause", types.AgentRun{Service: svc, LifetimeCapAt: &capAt}, nil},
-		{"an uncapped service", types.AgentRun{Service: svc}, []string{serviceNoCapWarning}},
-		{"an uncapped service under an idle pause", types.AgentRun{Service: svc, RunLimits: paused}, []string{servicePauseWarning, serviceNoCapWarning}},
+		{"an uncapped service", types.AgentRun{Service: svc, EndsAt: &capAt}, []string{serviceNoCapWarning}},
+		{"an uncapped service under an idle pause", types.AgentRun{Service: svc, RunLimits: paused, EndsAt: &capAt}, []string{servicePauseWarning, serviceNoCapWarning}},
+		{"a service with no end and no cap", types.AgentRun{Service: svc}, []string{serviceNoEndWarning}},
 		{"a run that is not a service", types.AgentRun{RunLimits: paused}, nil},
 	} {
 		if got := serviceCreateWarnings(tc.run); !slices.Equal(got, tc.want) {
@@ -175,21 +176,27 @@ func TestServiceNoCapWarning(t *testing.T) {
 		t.Fatalf("serviceNoCapWarning = %q, want %q", serviceNoCapWarning, want)
 	}
 	for _, c := range []struct {
-		name            string
-		service, capped bool
-		want            []string
+		name                    string
+		service, capped, hasEnd bool
+		want                    []string
 	}{
-		{"service, no cap", true, false, []string{want}},
-		{"service, capped", true, true, nil},
-		{"no service, no cap", false, false, nil},
+		{"service, no cap", true, false, true, []string{want}},
+		{"service, capped", true, true, true, nil},
+		{"no service, no cap", false, false, true, nil},
+		{"service, no cap and no end", true, false, false, []string{serviceNoEndWarning}},
+		{"service, capped and no end", true, true, false, nil},
 	} {
-		if got := serviceWarnings(c.service, 0, c.capped); !slices.Equal(got, c.want) {
+		if got := serviceWarnings(c.service, 0, c.capped, c.hasEnd); !slices.Equal(got, c.want) {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
 	}
 	queued := types.AgentRun{State: types.RunQueued, Service: &types.RunService{Restart: types.ServiceRestartOnFailure}}
-	if got := queuedServiceWarnings(queued, types.RunLimits{}, createEnd{}); !slices.Equal(got, []string{want}) {
+	hasEnd := 3600
+	if got := queuedServiceWarnings(queued, types.RunLimits{}, createEnd{endSec: &hasEnd}); !slices.Equal(got, []string{want}) {
 		t.Errorf("queued, no cap: %q, want the no-cap sentence", got)
+	}
+	if got := queuedServiceWarnings(queued, types.RunLimits{}, createEnd{}); !slices.Equal(got, []string{serviceNoEndWarning}) {
+		t.Errorf("queued, no cap and no end: %q, want the no-end sentence", got)
 	}
 	if got := queuedServiceWarnings(queued, types.RunLimits{}, createEnd{capSec: 3600}); got != nil {
 		t.Errorf("queued, capped: %q, want none", got)
