@@ -23,7 +23,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Beginning a desktop sign-in or sharing a login from one is refused under `deny_interactive` or `deny_ui_apps`. A refused begin leaves the agent running, and ending a sign-in stays available.
 - Opening a desktop's Files panel on a paused run no longer wakes it. Only a transfer the rules allow does.
 - A BYOI interactive run with a task on a runner skips its warn-only selftest, as one with no task does, so it shows fewer selftest rows.
-- Setup and Claude sign-in no longer accept the `agent-base` image as a sign-in image. A one-line install shows Claude sign-in as not ready until you supply a Claude Code image; [the steps](docs/operations/build-images.md#claude-sign-in-image) are in the docs.
+- Setup and Claude sign-in no longer accept Wardyn's `agent-base` image as a sign-in image. A one-line install shows Claude sign-in as not ready until you supply a Claude Code image; [the steps](docs/operations/build-images.md#claude-sign-in-image) are in the docs.
 
 ### Fixed
 

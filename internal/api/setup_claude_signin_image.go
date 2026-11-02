@@ -43,6 +43,24 @@ type claudeSignInImageState struct {
 	noCLI    bool   // ref is Wardyn's agent-base image, which ships no vendor CLI: it can never sign in
 }
 
+// wardynBaseImageRepos are the repositories install.sh and compose name for agent-base.
+var wardynBaseImageRepos = map[string]bool{
+	"ghcr.io/cjohnstoniv/agent-base": true,
+	"wardyn/agent-base":              true,
+	"agent-base":                     true,
+}
+
+// imageRepository is ref without its digest or tag.
+func imageRepository(ref string) string {
+	if i := strings.IndexByte(ref, '@'); i >= 0 {
+		ref = ref[:i]
+	}
+	if i := strings.LastIndexByte(ref, ':'); i > strings.LastIndexByte(ref, '/') {
+		ref = ref[:i]
+	}
+	return ref
+}
+
 // resolveClaudeSignInImage is the one place that decides whether the Claude
 // sign-in image resolves — shared by the setup check (informational) and the
 // anthropic_subscription write-time refusal (E4, model_providers.go).
@@ -53,16 +71,9 @@ func resolveClaudeSignInImage(ctx context.Context, images map[string]string, rnr
 	}
 	// install.sh pins claude-code to the published agent-base image, which
 	// ships no coding agent, so the login sandbox built from it cannot run
-	// `claude`. Present or not, it is not a sign-in image.
-	name := ref
-	if i := strings.IndexByte(name, '@'); i >= 0 {
-		name = name[:i]
-	}
-	name = name[strings.LastIndexByte(name, '/')+1:]
-	if i := strings.IndexByte(name, ':'); i >= 0 {
-		name = name[:i]
-	}
-	if name == "agent-base" {
+	// `claude`. Present or not, it is not a sign-in image. Only Wardyn's own
+	// names count: someone else's repository called agent-base may carry the CLI.
+	if wardynBaseImageRepos[imageRepository(ref)] {
 		return claudeSignInImageState{ref: ref, noCLI: true}
 	}
 	ic, ok := rnr.(runner.ImageChecker)

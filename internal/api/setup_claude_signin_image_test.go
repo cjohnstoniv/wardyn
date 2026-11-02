@@ -86,7 +86,7 @@ func TestClaudeSignInImageResolves(t *testing.T) {
 var signInImageBaseRefs = []string{
 	"ghcr.io/cjohnstoniv/agent-base:0.10.0",
 	"wardyn/agent-base:local",
-	"registry.example/wardyn/agent-base@sha256:0123456789abcdef",
+	"ghcr.io/cjohnstoniv/agent-base@sha256:0123456789abcdef",
 	"agent-base",
 }
 
@@ -125,9 +125,9 @@ func TestClaudeSignInImageAgentBaseIsNotASignInImage(t *testing.T) {
 		}
 	}
 	// Lookalikes that merely contain the name are real sign-in images.
-	for _, ref := range []string{"wardyn/agent-base-claude:local", "wardyn/agent-claude-code:local", "example.com/agent-base/claude:1"} {
+	for _, ref := range []string{"wardyn/agent-base-claude:local", "wardyn/agent-claude-code:local", "example.com/agent-base/claude:1", "registry.corp.example/platform/agent-base:with-claude", "registry.example:5000/agent-base"} {
 		if !claudeSignInImageResolves(ctx, map[string]string{"claude-code": ref}, &fakeRunner{}) {
-			t.Errorf("%s: only the agent-base image itself is excluded", ref)
+			t.Errorf("%s: only Wardyn's own agent-base is excluded", ref)
 		}
 	}
 }
