@@ -15,7 +15,9 @@
 //   - the terminal is the hero and is ABOVE THE FOLD: it carries
 //     data-testid="run-terminal-pane" and both presets place it at y=0 (e2e
 //     asserts that geometrically, not just that a terminal rendered);
-//   - the terminal cannot be arranged away — see widget-registry's `required`.
+//   - the terminal cannot be arranged away — see widget-registry's `required`;
+//   - every other widget lives in ONE host element per run, as the terminal does, and Expand moves that element from
+//     its tile into a dialog (#3940). Same instance, so its state, polling and focus-free work survive the move.
 //
 // Grid engine: react-grid-layout v2 (`noCompactor`, so a tile stays where it
 // was dropped instead of being sucked upward). Nothing already installed does
@@ -29,6 +31,7 @@ import { Check, Expand, GripVertical, LayoutGrid, Pencil, Plus, RotateCcw, X } f
 import { toast } from "sonner";
 import type { RunLayoutPreset } from "../../../lib/api/run-layout";
 import { isVMKind } from "../../../lib/types/machine-kind";
+import { Dialog, DialogContent, DialogTitle } from "../../ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { cn } from "../../ui/utils";
 import { RUN_COCKPIT } from "../../wardyn/copy";
@@ -38,6 +41,7 @@ import { useRunLayout } from "./use-run-layout";
 import { fitRows, measureTile, settleItems } from "./fit-layout";
 import { WidgetSlot } from "./widget-slot";
 import { ErrorBoundary } from "../../wardyn/error-boundary";
+import { WidgetExpandContext } from "../../wardyn/primitives";
 import {
   GRID_COLS,
   GRID_ROWS,
@@ -132,6 +136,44 @@ function TerminalSlot({ host, className = "flex min-h-0 flex-1 flex-col" }: { ho
   return <div ref={attach} className={className} />;
 }
 
+// Scroll offsets of a widget's host, read when its box lets go of it and written back when the next box takes it.
+const HOST_SCROLL = new WeakMap<HTMLElement, [Element, number, number][]>();
+
+/** Where a widget shows right now: its tile or the large view. Like TerminalSlot it renders only an empty box and moves
+ *  the widget's one host element into it, so the widget is never remounted. Moving an element resets the scroll offset
+ *  of everything inside it, and by the time the next box attaches, React has already removed the old one and the host is
+ *  disconnected (every offset reads 0). So the offsets are read when the old box detaches, while the host is still in
+ *  the page, and written back on attach (the browser clamps them to the new size). */
+function WidgetBox({ host }: { host: HTMLElement }) {
+  const attach = React.useCallback(
+    (box: HTMLDivElement | null) => {
+      if (!box) {
+        const kept: [Element, number, number][] = [];
+        host.querySelectorAll("*").forEach((el) => {
+          if (el.scrollTop || el.scrollLeft) kept.push([el, el.scrollTop, el.scrollLeft]);
+        });
+        HOST_SCROLL.set(host, kept);
+        return;
+      }
+      box.appendChild(host);
+      for (const [el, top, left] of HOST_SCROLL.get(host) ?? []) {
+        el.scrollTop = top;
+        el.scrollLeft = left;
+      }
+      HOST_SCROLL.delete(host);
+    },
+    [host],
+  );
+  return <div ref={attach} className="flex min-h-0 flex-1 flex-col" />;
+}
+
+// The large view's own box: 64px from the top of the window and 44px from the bottom, so a one-line or two-line daemon
+// banner stays whole above it. It grows with its widget up to that height and scrolls inside it. No exit animation:
+// the widget is back in its tile in the commit that closes the view, and a fade would show an empty box.
+// --expand-min is the tallest it has been (set below); min-h can't outgrow the window, so a smaller window wins.
+const EXPAND_DIALOG =
+  "top-16 flex h-auto max-h-[calc(100dvh-6.75rem)] min-h-[min(var(--expand-min,0px),calc(100dvh-6.75rem))] translate-y-0 flex-col gap-0 overflow-hidden p-0 data-[state=closed]:animate-none sm:max-w-5xl";
+
 const sameLayout = (a: { widget: string; x: number; y: number; w: number; h: number }[], b: typeof a) =>
   a.length === b.length && a.every((w, n) => w.widget === b[n].widget && w.x === b[n].x && w.y === b[n].y && w.w === b[n].w && w.h === b[n].h);
 
@@ -156,6 +198,9 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   }, [situational, editing]);
 
   const [catalogOpen, setCatalogOpen] = React.useState(false);
+  // The widget the person asked to see large; what is actually shown is `expandedId` below.
+  const [expanded, setExpanded] = React.useState<WidgetId | null>(null);
+  const [expandDialog, setExpandDialog] = React.useState<HTMLElement | null>(null);
   // The tile under the cursor, for the size readout. Only updated when its
   // dimensions actually change, so a drag is not a re-render per frame.
   const [active, setActive] = React.useState<{ i: string; w: number; h: number } | null>(null);
@@ -196,14 +241,6 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
     return el;
   }, [runId]);
   React.useEffect(() => () => decisionHost.remove(), [decisionHost]);
-  const slotCtx = React.useMemo(
-    () => ({
-      ...ctx,
-      terminalPane: <TerminalSlot host={host} />,
-      decisionPane: <TerminalSlot host={decisionHost} className="shrink-0" />,
-    }),
-    [ctx, host, decisionHost],
-  );
   const terminalPortal = createPortal(
     <ErrorBoundary region={RUN_WIDGETS.terminal.label} resetKey={runId}>
       {ctx.terminalPane}
@@ -216,6 +253,23 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
     </ErrorBoundary>,
     decisionHost,
   );
+  // Every other widget gets a host of its own, made when first needed. The run page is keyed by run, so a canvas never
+  // changes run while mounted.
+  const widgetHosts = React.useMemo(() => {
+    void runId; // a new run (never while mounted, in practice) starts with no hosts
+    return new Map<WidgetId, HTMLElement>();
+  }, [runId]);
+  React.useEffect(() => () => widgetHosts.forEach((el) => el.remove()), [widgetHosts]);
+  const hostOf = (id: WidgetId) => {
+    let el = widgetHosts.get(id);
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "flex min-h-0 flex-1 flex-col";
+      el.dataset.widgetHost = id;
+      widgetHosts.set(id, el);
+    }
+    return el;
+  };
 
   // A row is one twelfth of the visible pane, so a preset that adds up to
   // GRID_ROWS fills the cockpit exactly and nothing scrolls. Floors keep the
@@ -235,6 +289,45 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   const renderable = (id: WidgetId) => RUN_WIDGETS[id].available?.(ctx) ?? true;
   const visible = layout.filter((w) => renderable(w.widget as WidgetId));
   const hidden = layout.filter((w) => !visible.includes(w));
+  // The widget shown in the large view. Derived, never stored or persisted: it can only be a widget that has a tile
+  // right now (the same `visible` gate as the grid, which is what keeps a door the registry hides, such as the admin
+  // monitor's SSH, shut when expanded), and never in focus mode or while arranging.
+  const expandedId =
+    !focus && !editing && expanded && expanded !== "terminal" && visible.some((w) => w.widget === expanded) ? expanded : null;
+  // A widget that stops being expandable must not reopen on its own when it comes back.
+  React.useEffect(() => {
+    if (expanded && !expandedId) setExpanded(null);
+  }, [expanded, expandedId]);
+  const slotCtx = React.useMemo(
+    () => ({
+      ...ctx,
+      terminalPane: <TerminalSlot host={host} />,
+      // The dialog seats the decision row itself while a widget is expanded, so the held approvals are never behind it.
+      decisionPane: expandedId ? null : <TerminalSlot host={decisionHost} className="shrink-0" />,
+    }),
+    [ctx, host, decisionHost, expandedId],
+  );
+  // One portal per tile that is not the terminal, only in this (non-focus) return, so focus mode unmounts them as it
+  // does the grid and the dock keeps its own instance.
+  const widgetPortals = visible
+    .filter((w) => w.widget !== "terminal")
+    .map((w) => {
+      const id = w.widget as WidgetId;
+      const def = RUN_WIDGETS[id];
+      return createPortal(
+        <WidgetExpandContext.Provider
+          value={{ mode: id === expandedId ? "expanded" : editing ? "editing" : "tile", onExpand: () => setExpanded(id) }}
+        >
+          {/* WidgetSlot, not a bare div: the FILL stretch and the per-widget boundary are shared with focus mode's
+              dock, which renders this same def.component(ctx). */}
+          <WidgetSlot region={def.label} resetKey={ctx.run.id}>
+            {def.component(slotCtx)}
+          </WidgetSlot>
+        </WidgetExpandContext.Provider>,
+        hostOf(id),
+        id,
+      );
+    });
 
   const items: Layout = visible.map((w) => ({
     i: w.widget,
@@ -256,7 +349,8 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   const [fitted, setFitted] = React.useState<Record<string, number>>({});
   const visibleKey = visible.map((w) => w.widget).join();
   React.useLayoutEffect(() => {
-    if (!fitOn || !node) return;
+    // While a widget is in the large view its tile is empty and would measure 0: leave `fitted` as it was.
+    if (!fitOn || !node || expandedId) return;
     const measure = () => {
       const next: Record<string, number> = {};
       node.querySelectorAll<HTMLElement>("[data-widget]").forEach((tile) => {
@@ -270,7 +364,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
     const mo = new MutationObserver(measure);
     mo.observe(node, { childList: true, subtree: true, characterData: true });
     return () => mo.disconnect();
-  }, [fitOn, node, rowHeight, gridWidth, visibleKey]);
+  }, [fitOn, node, rowHeight, gridWidth, visibleKey, expandedId]);
   const laid = fitOn ? settleItems(items, fitted, ["terminal"]) : settleOn ? settleItems(items, {}, []) : items;
 
   const commit = (next: Layout) => {
@@ -303,6 +397,21 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
     });
   };
 
+  // The large view never shrinks while it is open, so a poll that shortens the widget cannot move Close or the content
+  // under the pointer. It remembers the tallest it has been, and still gives way to a window smaller than that.
+  React.useEffect(() => {
+    if (!expandDialog || typeof ResizeObserver === "undefined") return;
+    let tallest = 0;
+    const ro = new ResizeObserver(() => {
+      const h = expandDialog.offsetHeight;
+      if (h <= tallest) return;
+      tallest = h;
+      expandDialog.style.setProperty("--expand-min", `${h}px`);
+    });
+    ro.observe(expandDialog);
+    return () => ro.disconnect();
+  }, [expandDialog]);
+
   if (focus) {
     return (
       <>
@@ -317,6 +426,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
     <>
       {terminalPortal}
       {decisionPortal}
+      {widgetPortals}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div
           ref={ref}
@@ -368,12 +478,17 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
                       onRemove={def.required ? undefined : () => toggleWidget(id)}
                     />
                   )}
-                  {/* WidgetSlot, not a bare div: the FILL stretch and the
-                      per-widget boundary are shared with focus mode's dock, which
-                      renders this same def.component(ctx). */}
-                  <WidgetSlot region={def.label} resetKey={ctx.run.id}>
-                    {def.component(slotCtx)}
-                  </WidgetSlot>
+                  {/* The terminal is mounted here as before. Any other widget is rendered once into its host (the
+                      portals above) and this box takes the host in; while the widget is expanded the dialog's box has
+                      it and the tile is empty. WidgetSlot (the FILL stretch and the per-widget boundary, shared with
+                      focus mode's dock) is inside the host. */}
+                  {id === "terminal" ? (
+                    <WidgetSlot region={def.label} resetKey={ctx.run.id}>
+                      {def.component(slotCtx)}
+                    </WidgetSlot>
+                  ) : (
+                    expandedId !== id && <WidgetBox host={hostOf(id)} />
+                  )}
                 </div>
               );
             })}
@@ -462,6 +577,44 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
           )}
         </div>
       </div>
+
+      {/* #3940: the expanded widget, the same live instance moved here from its tile. */}
+      <Dialog open={expandedId !== null} onOpenChange={(open) => !open && setExpanded(null)}>
+        {expandedId && (
+          <DialogContent
+            ref={setExpandDialog}
+            aria-describedby={undefined}
+            className={EXPAND_DIALOG}
+            // Radix decides "inside" from the React tree, and the widget's React parent is the canvas, so every click in
+            // it would read as outside and close the dialog. Only the overlay dismisses by pointer.
+            onPointerDownOutside={(event) => {
+              if (!(event.target instanceof Element && event.target.closest('[data-slot="dialog-overlay"]'))) event.preventDefault();
+            }}
+            // Land on the card's body, not on a button in it: arrow and page keys scroll at once, and nothing is
+            // pressed by accident.
+            onOpenAutoFocus={(event) => {
+              event.preventDefault();
+              const content = event.currentTarget as HTMLElement | null;
+              (content?.querySelector<HTMLElement>("[data-widget-body]") ?? content)?.focus();
+            }}
+            // Explicit: Safari does not focus a clicked button, so the opener cannot be trusted to be remembered.
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              (
+                document.querySelector<HTMLElement>(`[data-widget="${expandedId}"] [data-widget-expand]`) ??
+                document.getElementById("main-content")
+              )?.focus();
+            }}
+          >
+            <DialogTitle className="sr-only">{RUN_WIDGETS[expandedId].label}</DialogTitle>
+            <WidgetBox host={hostOf(expandedId)} />
+            {/* The approvals that hold the run stay reachable: the same persistent host focus mode uses. */}
+            <div className="max-h-[40dvh] shrink-0 overflow-y-auto">
+              <TerminalSlot host={decisionHost} className="shrink-0" />
+            </div>
+          </DialogContent>
+        )}
+      </Dialog>
     </>
   );
 }
@@ -471,6 +624,8 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
 // prop — and they are not this lane's to edit — so the canvas puts the handle
 // in a strip of its own above the card. It exists only in edit mode, which also
 // makes "which tiles can I move" answerable at a glance.
+// The Expand control is the opposite case: it belongs in the card's own header, so WidgetCard draws it, from the
+// WidgetExpandContext the portals above provide.
 function TileHandle({
   def,
   size,

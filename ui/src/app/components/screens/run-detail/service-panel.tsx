@@ -46,43 +46,42 @@ export function ServicePanel({ run, now = Date.now() }: { run: RunDetail; now?: 
   // The server renews a service's lease only under a lifetime cap (planServiceRenewal), so an uncapped one ends at its lease.
   const uncapped = !!run.ends_at && !run.lifetime_cap_at;
   return (
-    <div data-testid="service-panel">
-      <WidgetCard title={T.TITLE} Icon={HeartPulse} bodyClassName="space-y-3 px-3 py-2.5 text-body">
-        <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5">
-          <dt className="text-muted-foreground">{T.RESTART}</dt>
-          <dd>{s.restart === "never" ? T.RESTART_NEVER : T.RESTART_ON_FAILURE}</dd>
-          <dt className="text-muted-foreground">{T.CHECK}</dt>
-          <dd className="font-mono text-xs leading-5">{checkText(s)}</dd>
-          <dt className="text-muted-foreground">{T.HEALTH}</dt>
-          <dd>
-            <Chip tone={health.tone} dot>
-              {health.word}
-            </Chip>{" "}
-            <span className="text-muted-foreground">· {st && st.health !== "starting" ? T.CHECKED(agoText(st.observed_at, now)) : T.WAITING_FIRST_CHECK}</span>
-          </dd>
-          <dt className="text-muted-foreground">{T.RESTARTS}</dt>
-          <dd>{st?.last_exit_code !== undefined ? T.RESTARTS_WITH_EXIT(restarts, st.last_exit_code) : restarts}</dd>
-          <dt className="text-muted-foreground">{T.LEASE}</dt>
-          <dd>{!run.ends_at ? T.LEASE_NONE : uncapped ? keptUntilText(run.ends_at, now) : T.LEASE_RENEWED(keptUntilText(run.ends_at, now))}</dd>
-        </dl>
-        {reason && (
-          <p
-            role="note"
-            className={cn(
-              "rounded-lg border px-2.5 py-2",
-              reason.failing ? "border-warning/25 bg-warning-subtle text-foreground" : "border-border bg-muted/40 text-foreground",
-            )}
-          >
-            {reason.text}
-          </p>
-        )}
-        {uncapped && (
-          <p role="note" className="rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-foreground">
-            {T.NO_CAP}
-          </p>
-        )}
-        <p className="text-xs text-muted-foreground">{T.FOOTNOTE}</p>
-      </WidgetCard>
-    </div>
+    // The card is the root (not a wrapper div), so the tile's fill rule reaches it and the footnote is never clipped.
+    <WidgetCard title={T.TITLE} Icon={HeartPulse} data-testid="service-panel" bodyClassName="space-y-3 px-3 py-2.5 text-body">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5">
+        <dt className="text-muted-foreground">{T.RESTART}</dt>
+        <dd>{s.restart === "never" ? T.RESTART_NEVER : T.RESTART_ON_FAILURE}</dd>
+        <dt className="text-muted-foreground">{T.CHECK}</dt>
+        <dd className="font-mono text-xs leading-5">{checkText(s)}</dd>
+        <dt className="text-muted-foreground">{T.HEALTH}</dt>
+        <dd>
+          <Chip tone={health.tone} dot>
+            {health.word}
+          </Chip>{" "}
+          <span className="text-muted-foreground">· {st && st.health !== "starting" ? T.CHECKED(agoText(st.observed_at, now)) : T.WAITING_FIRST_CHECK}</span>
+        </dd>
+        <dt className="text-muted-foreground">{T.RESTARTS}</dt>
+        <dd>{st?.last_exit_code !== undefined ? T.RESTARTS_WITH_EXIT(restarts, st.last_exit_code) : restarts}</dd>
+        <dt className="text-muted-foreground">{T.LEASE}</dt>
+        <dd>{!run.ends_at ? T.LEASE_NONE : uncapped ? keptUntilText(run.ends_at, now) : T.LEASE_RENEWED(keptUntilText(run.ends_at, now))}</dd>
+      </dl>
+      {reason && (
+        <p
+          role="note"
+          className={cn(
+            "rounded-lg border px-2.5 py-2",
+            reason.failing ? "border-warning/25 bg-warning-subtle text-foreground" : "border-border bg-muted/40 text-foreground",
+          )}
+        >
+          {reason.text}
+        </p>
+      )}
+      {uncapped && (
+        <p role="note" className="rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-foreground">
+          {T.NO_CAP}
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">{T.FOOTNOTE}</p>
+    </WidgetCard>
   );
 }
