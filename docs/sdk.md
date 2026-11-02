@@ -843,6 +843,7 @@ start.
 | `approval_rule_host` | `PUT /governance/approval-rules/{name}` (409): a `hard_limits` boundary does not allow one of `approve.hosts`. |
 | `approval_rule_changed` | An `approval.policy.skip` reason, never sent to a client: the rule changed after it matched. |
 | `approval_rule_not_applicable` | An `approval.policy.skip` reason, never sent to a client: no rule decides that approval. |
+| `approval_rule_host_denied` | An `approval.policy.skip` reason, never sent to a client: a person's deny for that host still stands on the run. |
 | `boundary_host` | `POST /approvals/{id}/approve` (403): the Wardyn boundary is in `hard_limits` and denies the egress host, or does not allow it. |
 | `restriction_invalid` / `restriction_not_found` / `restriction_host` / `workspace_owning_unit_default` | The restriction routes, an egress approval, and `PUT /workspaces/{id}/owning-unit`. |
 | `walls_invalid` / `walls_need_person` / `walls_unavailable` | `/me/walls` ([Your walls](#your-walls)): `400` walls that name a wider value, a bad site or a list over its cap; `400` a caller who is no signed-in person (the admin token, local mode, a service identity); `501` a store that keeps no personal settings. |
