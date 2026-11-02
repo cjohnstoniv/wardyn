@@ -350,6 +350,12 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 	if demands.LinuxVM && requestIsInteractive(req) && req.InteractiveStart == "agent" {
 		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMAgentStart)
 	}
+	if demands.LinuxVM && ask.KeepsWorkFolder {
+		// A kept work folder is a Docker or cluster volume, which a Linux VM can never open (it takes only a drive bound to its
+		// runner), so this answers at Review for every runner, whatever it reports, rather than failing the start.
+		const msg = "A Linux VM sandbox can't keep its work folder as a drive in this release. Turn off keep_work_folder, or choose a container."
+		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "keep_work_folder"}, msg)
+	}
 	if p != types.PlacementLocal || (!demands.IdlePause && !demands.LinuxVM && !demands.MacOSVM) {
 		return nil
 	}
@@ -405,9 +411,10 @@ type macOSVMAsk struct {
 	MemoryMiB int
 	// Mounts is how many folders the run shares into the VM.
 	Mounts int
-	// MountsDrives is that the run mounts a drive. Only a Linux VM reads it (placementDemands.VMDrives);
+	// MountsDrives is that the run names a drive of its own; KeepsWorkFolder that it keeps its work folder, which is
+	// not one a Linux VM can mount. Only a Linux VM reads these two (placementDemands.VMDrives, the kept-folder refusal);
 	// the rest of this ask is a macOS VM's.
-	MountsDrives bool
+	MountsDrives, KeepsWorkFolder bool
 	// ShareDrives is the run mounts an admin or team drive whose place is a host folder, which a macOS VM
 	// takes as a shared folder; a runner without MacVMCaps.Drives is never asked. DiskDrives is the run
 	// mounts a person's disk drive or keeps its work folder, which a macOS VM attaches as a disk; a runner

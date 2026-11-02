@@ -362,7 +362,9 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 		ask.Prompts = slices.ContainsFunc(f.harnesses, func(h types.RunHarness) bool { return h.Task != "" })
 		ask.Holds = macOSVMHolds(*f.req, f.spec)
 	}
-	ask.MountsDrives = mountsDrives(f.drives, f.keep)
+	// The kept work folder is its own ask: counting it as a drive worded its refusal for drives, and a runner
+	// that shares drives passed it at Review only for the start to refuse it.
+	ask.MountsDrives, ask.KeepsWorkFolder = len(f.drives) > 0, f.keep != nil
 	if s.placementCapabilityRefusalFor(f.r.Context(), *f.req, f.place, f.ceiling, mounts, ask).write(s, f.w, f.r) {
 		return false
 	}

@@ -180,6 +180,54 @@ func TestStepPlacementCapability_LinuxVMWithADriveNeedsTheCap(t *testing.T) {
 	}
 }
 
+// A kept work folder on a Linux VM is refused at Review in its own words, on the keep_work_folder field,
+// whatever the runner reports: it is a Docker or cluster volume, which a Linux VM never opens, so a runner
+// that shares drives must not pass it only for the start to refuse it, and one that does not must not be
+// told about drives the run never named. A container keeping its folder, and a VM with a drive and no
+// kept folder, are not refused by it.
+func TestStepPlacementCapability_LinuxVMKeptFolderIsRefusedAtReview(t *testing.T) {
+	s := capsServer(&fakeRunner{})
+	with, without := laptopCaps(types.CC1), laptopCaps(types.CC1)
+	with.LinuxVM = &runnerwire.VMCaps{MachineType: "pc-q35-10.0", CPUModel: "Haswell-v4", QEMUVersion: "10.0.13", Virtiofs: true, Drives: true}
+	without.LinuxVM = &runnerwire.VMCaps{MachineType: "pc-q35-10.0", CPUModel: "Haswell-v4", QEMUVersion: "10.0.13", Virtiofs: true}
+	offers, older := installRunner(t, s, true, with), installRunner(t, s, true, without)
+	keptFolder := &keptWorkFolder{row: types.UserDrive{Backend: types.DriveBackendDockerVolume}}
+	keptFolderTeam := []runDrive{{resolved: types.ResolvedDrive{Drive: types.UserDrive{Name: "Team", Backend: types.DriveBackendHostPath}}}}
+
+	for _, tc := range []struct {
+		name   string
+		runner uuid.UUID
+		kind   string
+		keep   *keptWorkFolder
+		drives []runDrive
+		want   bool
+	}{
+		{name: "a kept folder on a runner that lacks the drive cap", runner: older, kind: "linux_vm", keep: keptFolder, want: true},
+		{name: "a kept folder on a runner that has it", runner: offers, kind: "linux_vm", keep: keptFolder, want: true},
+		{name: "a kept folder beside a team drive", runner: offers, kind: "linux_vm", keep: keptFolder, drives: keptFolderTeam, want: true},
+		{name: "a team drive and no kept folder", runner: offers, kind: "linux_vm", drives: keptFolderTeam},
+		{name: "a container keeping its folder", runner: older, keep: keptFolder},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := createRunRequest{Placement: types.PlacementLocal, RunnerID: tc.runner.String(), MachineKind: tc.kind, KeepWorkFolder: tc.keep != nil}
+			w := httptest.NewRecorder()
+			f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(capsCtx), req: &req, keep: tc.keep, drives: tc.drives}
+			ok := s.stepPlacementCapability(f, nil)
+			if ok == tc.want {
+				t.Fatalf("ok = %v, %d %s", ok, w.Code, w.Body.String())
+			}
+			if !tc.want {
+				return
+			}
+			body := w.Body.String()
+			if w.Code != http.StatusUnprocessableEntity || !strings.Contains(body, `"placement_capability"`) || !strings.Contains(body, `"keep_work_folder"`) ||
+				!strings.Contains(body, "can't keep its work folder as a drive") || strings.Contains(body, "Update the runner") {
+				t.Fatalf("%d %s, want 422 placement_capability on keep_work_folder naming the kept folder", w.Code, body)
+			}
+		})
+	}
+}
+
 // The create fold counts the folders the sandbox would get from the resolved policy, so a VM run
 // whose policy mounts a folder is refused at create on a runner without virtiofs.
 func TestStepPlacementCapability_CountsThePolicysFolders(t *testing.T) {
