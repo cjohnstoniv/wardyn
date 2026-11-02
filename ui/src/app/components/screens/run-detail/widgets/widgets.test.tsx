@@ -115,7 +115,7 @@ describe("SandboxWidget", () => {
     });
     render(<SandboxWidget runId="r1" live={true} />);
     await screen.findByText("Disk");
-    expect(screen.getByText(`${fmtBytes(2_000_000_000)} ${RUN_COCKPIT.diskWrittenSuffix}`)).toBeInTheDocument();
+    expect(screen.getByText(`1.9 GB ${RUN_COCKPIT.diskWrittenSuffix}`)).toBeInTheDocument();
     expect(screen.queryByText(RUN_COCKPIT.diskNearCap)).not.toBeInTheDocument();
   });
 });
@@ -185,10 +185,10 @@ describe("SandboxWidget on a macOS VM run (#3924)", () => {
     expect(screen.queryByText(RUN_COCKPIT.sandboxGuestReported)).not.toBeInTheDocument();
   });
 
-  it("changes nothing on any other run", async () => {
+  it("shows memory in GB on any other run too, and still raises no guest line", async () => {
     getResourcesMock.mockResolvedValue({ memory_used_bytes: GiB, memory_limit_bytes: 8 * GiB });
     render(<SandboxWidget runId="r1" live={true} />);
-    expect(await screen.findByText(`${fmtBytes(GiB)} / ${fmtBytes(8 * GiB)}`)).toBeInTheDocument();
+    expect(await screen.findByText("1.0 GB / 8.0 GB")).toBeInTheDocument();
     expect(screen.queryByText(RUN_COCKPIT.sandboxGuestReported)).not.toBeInTheDocument();
   });
 });
