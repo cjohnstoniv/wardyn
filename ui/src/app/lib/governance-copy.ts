@@ -493,7 +493,7 @@ export const MEMBER_DRIVE_DOOR = {
 } as const;
 
 // The background-watch door: the profile limit that refuses watching a background macOS run's desktop
-// (deny_background_desktop_watch). Words from the field-report board F9; also not in the frozen tables.
+// (deny_background_desktop_watch). Also not in the frozen tables.
 export const BACKGROUND_WATCH_DOOR = {
   LABEL: "Deny watching background desktops",
   HINT: "Stops people watching a background macOS run's desktop. A watch that is open ends within a minute. Deny interactive runs and Deny UI apps stop it too.",
