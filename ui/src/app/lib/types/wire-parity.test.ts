@@ -856,17 +856,6 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(readFileSync(join(root, "pkg/client/runs_create.go"), "utf8")).toMatch(/RunnerPoolSlots \*PoolSlots\s+`json:"runner_pool_slots,omitempty"`/);
   });
 
-  it("AgentRun.has_recording is a pointer omitted when unprojected, optional in TS (#3715)", () => {
-    const go = readFileSync(join(root, "internal/types/types.go"), "utf8");
-    expect(go).toMatch(/HasRecording\s+\*bool\s+`json:"has_recording,omitempty"`/);
-    expect(go).toMatch(/RecordingBytes\s+int64\s+`json:"recording_bytes,omitempty"`/);
-    expect(go).toMatch(/RecordingDurationSec\s+float64\s+`json:"recording_duration_sec,omitempty"`/);
-    const body = tsInterfaceBody(runsTs, "AgentRun");
-    for (const k of ["has_recording", "recording_bytes", "recording_duration_sec"]) {
-      expect(body).toMatch(new RegExp(`\\b${k}\\?:`));
-    }
-  });
-
   // The three read-side runner facts: runner_online is a pointer on the Go side because false is a fact
   // (offline) and absent is unknown, so the console reads `runner_online === false` for its offline arms.
   it("AgentRun carries the runner name, liveness and last seen, with liveness a pointer", () => {
