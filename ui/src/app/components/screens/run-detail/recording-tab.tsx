@@ -157,7 +157,9 @@ export function RecordingTab({
                   ? RECORDING_REPLAY.OFF_BY_POLICY
                 : selected !== runId
                   ? RECORDING_MISSING_SESSION_BODY
-                  : "This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox."
+                  : macOS
+                    ? RUN_COCKPIT.recordingMissingMacOS
+                    : RUN_COCKPIT.recordingMissing
             }
           />
         </div>

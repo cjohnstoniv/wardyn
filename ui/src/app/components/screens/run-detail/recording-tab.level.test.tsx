@@ -37,6 +37,7 @@ vi.mock("@novnc/novnc", () => ({
 }));
 
 import { RUN_RECORDING } from "../../wardyn/copy/runners";
+import { RUN_COCKPIT } from "../../wardyn/copy";
 import { RECORDING_REPLAY } from "../../wardyn/copy/recording-level";
 import { RecordingTab } from "./recording-tab";
 
@@ -90,6 +91,15 @@ describe("RecordingTab levels (#2968, M7 RunStrip, Replay, States 8)", () => {
       expect(strip).not.toHaveTextContent("Recording off");
       expect(strip).not.toHaveTextContent(RUN_RECORDING.runner_declined);
     });
+
+  it("the empty state of a macOS VM run says a console or SSH session makes its recording; Linux keeps the agent-process sentence", () => {
+    const { unmount } = tab({ level: "terminal", notRecorded: "runner_declined", macOS: true });
+    expect(screen.getByText(RUN_COCKPIT.recordingMissingMacOS)).toBeInTheDocument();
+    expect(screen.queryByText(/once an agent process runs/)).not.toBeInTheDocument();
+    unmount();
+    tab({ level: "terminal", notRecorded: "runner_declined" });
+    expect(screen.getByText("This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox.")).toBeInTheDocument();
+  });
 
   it("a macOS VM run at off still says it is not recorded", () => {
     tab({ level: "off", notRecorded: "policy_off", macOS: true });
