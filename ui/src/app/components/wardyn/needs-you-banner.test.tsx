@@ -6,7 +6,7 @@
 // #2963 "Needs you" banner (mock M8 Option A): the request, the takeover strip, the one-click hand
 // back and its confirmation — the strings are the boards', through copy/needs-you.ts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { ApprovalRequest, RunDetail } from "../../lib/types";
@@ -69,6 +69,23 @@ describe("NeedsYouBanner", () => {
     expect(api.takeOver).toHaveBeenCalledWith("ap-1");
     expect(cb.onOpenTerminal).toHaveBeenCalled();
     expect(cb.onChanged).toHaveBeenCalled();
+  });
+
+  it("a background run offers no Take over, in the banner, the in-use row or the snoozed line", async () => {
+    const bg = { ...run, experience: "background" } as unknown as RunDetail;
+    mount([request()], bg);
+    const b = screen.getByTestId("needs-you-banner");
+    expect(within(b).queryByRole("button", { name: NEEDS_YOU.banner.takeOver })).toBeNull();
+    expect(within(b).getByRole("button", { name: new RegExp(NEEDS_YOU.banner.decline) })).toBeInTheDocument();
+    cleanup();
+    mount([request({ state: "APPROVED", takeover_holder: "someone-else", decided_at: new Date().toISOString() })], bg);
+    expect(screen.queryByRole("button", { name: NEEDS_YOU.banner.takeOver })).toBeNull();
+    cleanup();
+    window.localStorage.setItem("wardyn.needs-you.snooze.ap-1", String(Date.now() + 600_000));
+    mount([request()], bg);
+    expect(screen.getByTestId("needs-you-snoozed")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: NEEDS_YOU.banner.takeOver })).toBeNull();
+    expect(api.takeOver).not.toHaveBeenCalled();
   });
 
   it("while you have control: the strip claims no recording pause, and Hand back is one click to the confirmation", async () => {

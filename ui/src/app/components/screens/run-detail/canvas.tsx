@@ -28,6 +28,7 @@ import "react-grid-layout/css/styles.css";
 import { Check, Expand, GripVertical, LayoutGrid, Pencil, Plus, RotateCcw, X } from "lucide-react";
 import { toast } from "sonner";
 import type { RunLayoutPreset } from "../../../lib/api/run-layout";
+import { isVMKind } from "../../../lib/types/machine-kind";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { cn } from "../../ui/utils";
 import { RUN_COCKPIT } from "../../wardyn/copy";
@@ -159,7 +160,8 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   // dimensions actually change, so a drag is not a re-render per frame.
   const [active, setActive] = React.useState<{ i: string; w: number; h: number } | null>(null);
 
-  const { layout, persistable, apply, save, reset } = useRunLayout(preset, !!ctx.run.service);
+  const vm = isVMKind(ctx.run.machine_kind);
+  const { layout, persistable, apply, save, reset } = useRunLayout(preset, !!ctx.run.service, vm);
   const { ref, node, width, height } = useCanvasSize();
 
   // Focus mode (design board 2c). The shell learns about it through
@@ -247,7 +249,10 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   // #3038: a finished run nobody has rearranged reads at its content's size: each tile is as tall as what it holds, so
   // Identity is never cut off and an emptier tile is shorter. The terminal keeps its rows, and an arrangement the
   // person made, or one being edited, is shown exactly as stored.
-  const fitOn = ctx.finished && !editing && sameLayout(layout, presetLayout("finished"));
+  const fitOn = ctx.finished && !editing && sameLayout(layout, presetLayout("finished", false, vm));
+  // The default rail, unarranged, closes the rows of a tile this viewer can't see (Desktop and Attach on a run they did
+  // not start). An arrangement the person made, or one being edited, is shown exactly as stored.
+  const settleOn = !fitOn && !editing && sameLayout(layout, presetLayout(preset, !!ctx.run.service, vm));
   const [fitted, setFitted] = React.useState<Record<string, number>>({});
   const visibleKey = visible.map((w) => w.widget).join();
   React.useLayoutEffect(() => {
@@ -266,7 +271,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
     mo.observe(node, { childList: true, subtree: true, characterData: true });
     return () => mo.disconnect();
   }, [fitOn, node, rowHeight, gridWidth, visibleKey]);
-  const laid = fitOn ? settleItems(items, fitted, ["terminal"]) : items;
+  const laid = fitOn ? settleItems(items, fitted, ["terminal"]) : settleOn ? settleItems(items, {}, []) : items;
 
   const commit = (next: Layout) => {
     apply([...next.map((it) => ({ widget: it.i, x: it.x, y: it.y, w: it.w, h: it.h })), ...hidden]);
