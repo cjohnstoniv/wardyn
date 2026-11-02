@@ -412,6 +412,24 @@ describe("RunCanvas — Expand and the approvals that hold the run", () => {
   });
 });
 
+describe("RunCanvas — Escape, topmost first", () => {
+  it("closes a Deny confirm over the expanded view first, and the view on the next press", async () => {
+    const user = userEvent.setup();
+    listApprovalsMock.mockResolvedValue([
+      makeApproval({ id: "t1", run_id: "run-1", kind: "tool_call", requested_scope: { tool: "bash.exec", cmd: "ls" }, state: "PENDING", requested_at: "" }),
+    ]);
+    render(<RunCanvas ctx={ctx({ decisionPane: <LiveApprovals runId="run-1" /> })} />);
+    const dialog = await open(user, "Egress");
+    await user.click(await within(dialog).findByRole("button", { name: "Deny" }));
+    const confirm = await screen.findByRole("alertdialog");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(confirm).not.toBeInTheDocument());
+    expect(screen.getByRole("dialog", { name: "Egress" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+});
+
 describe("RunCanvas — the large view never shrinks while it is open", () => {
   it("holds the tallest height it has reached, however short the widget gets after", async () => {
     const user = userEvent.setup();
