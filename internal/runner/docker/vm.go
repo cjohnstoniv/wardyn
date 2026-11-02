@@ -731,14 +731,22 @@ func (d *Driver) bootVM(ctx context.Context, v *vmRun, ref string, spec runner.S
 		return "", err
 	}
 	in := guestagent.Init{Env: spec.Env, SecretEnv: spec.SecretEnv, Mounts: mounts, SignInsOff: spec.DesktopSignInsOff}
-	for _, f := range spec.ManagedFiles {
-		in.Files = append(in.Files, guestagent.File{Path: f.Path, Mode: f.Mode, AgentOwned: f.AgentOwned, Content: f.Content})
-	}
+	in.Files = vmGuestFiles(spec.ManagedFiles)
 	res, err := v.agent.Init(ctx, in)
 	if err != nil {
 		return "", fmt.Errorf("docker: hand the VM its sandbox: %w", err)
 	}
 	return res.SignIns, nil
+}
+
+// vmGuestFiles is the run's managed files for the guest, each at its resolved mode (the guest writes
+// exactly the mode it is handed, so an unset mode must not reach it as 0000).
+func vmGuestFiles(files []runner.ManagedFile) []guestagent.File {
+	var out []guestagent.File
+	for _, f := range files {
+		out = append(out, guestagent.File{Path: f.Path, Mode: f.FileMode(), AgentOwned: f.AgentOwned, Content: f.Content})
+	}
+	return out
 }
 
 // vmUnderKVM asks the running VM's QMP whether KVM backs it: a VM never runs under emulation.

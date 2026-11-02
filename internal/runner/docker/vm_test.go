@@ -1121,3 +1121,20 @@ func TestVMEndVMConvergesAfterAPartialEnd(t *testing.T) {
 		})
 	}
 }
+
+// A managed file with no mode reaches the guest at the default, never 0000; a set mode is kept.
+func TestVMGuestFilesResolveAnUnsetMode(t *testing.T) {
+	got := vmGuestFiles([]runner.ManagedFile{
+		{Path: "/etc/claude-code/managed-settings.json", Content: []byte("{}")},
+		{Path: "/etc/claude-code/other.json", Mode: 0o600, AgentOwned: true},
+	})
+	if len(got) != 2 {
+		t.Fatalf("files = %d, want 2", len(got))
+	}
+	if got[0].Mode != runner.DefaultManagedFileMode {
+		t.Errorf("unset mode reached the guest as %04o, want %04o", got[0].Mode, runner.DefaultManagedFileMode)
+	}
+	if got[1].Mode != 0o600 || !got[1].AgentOwned {
+		t.Errorf("a set mode or owner was changed: %+v", got[1])
+	}
+}
