@@ -24,7 +24,7 @@
 | Sign-ins | Kept on the run's virtual disk, not in memory ([Credentials and sign-ins](#credentials-and-sign-ins)) |
 
 - Not in this release: Linux VMs on a Mac and reviving a stopped VM. Each is refused with a reason.
-- A macOS VM run's desktop is not recorded, and Review says so. Its console and SSH terminal sessions are recorded at the organisation's level, as any run's are. A run is refused at create when recording is required, the organisation's level is locked above off, or the governance ceiling sets a level.
+- A macOS VM run's desktop is not recorded, and Review says so. Its console and SSH terminal sessions are recorded at this run's recording level, as any run's are. A run is refused at create when recording is required, the organisation's level is locked above off, or the governance ceiling sets a level.
 - macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.
 - A Kubernetes runner refuses the kind.
 

@@ -307,9 +307,9 @@ func (s *Server) targetRecords(ctx context.Context, run types.AgentRun) (records
 }
 
 // macOSVMDesktopNotice is the notice of a macOS VM run, at Review and in the 201's warnings: its desktop
-// is not recorded, and its console and SSH terminal sessions are recorded at the organisation's level
+// is not recorded, and its console and SSH terminal sessions are recorded at the run's recording level
 // (newSessionRecorder).
-const macOSVMDesktopNotice = "This run's desktop is not recorded. Console and SSH terminal sessions are recorded at your organisation's level."
+const macOSVMDesktopNotice = "This run's desktop is not recorded. Console and SSH terminal sessions are recorded at this run's recording level."
 
 // macOSVMRecordingRefusal is the sentence for a macOS VM run that something requires recording for
 // (MAC-U02 to U04): the cause, then the way out.

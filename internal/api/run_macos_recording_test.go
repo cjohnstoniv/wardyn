@@ -27,7 +27,7 @@ const macOSNoRecording = ", and a macOS VM run isn't recorded in this release. C
 // The sentences a macOS VM run is refused with, and the notice it starts under, are the canon's (MAC-U01
 // to U04), naming the cause that asks for the recording.
 func TestMacOSVMRecordingSentences(t *testing.T) {
-	if macOSVMDesktopNotice != "This run's desktop is not recorded. Console and SSH terminal sessions are recorded at your organisation's level." {
+	if macOSVMDesktopNotice != "This run's desktop is not recorded. Console and SSH terminal sessions are recorded at this run's recording level." {
 		t.Errorf("notice = %q", macOSVMDesktopNotice)
 	}
 	locked := func(l types.RecordingLevel) *types.SiteRecording { return &types.SiteRecording{Level: l, Locked: true} }
@@ -253,7 +253,7 @@ func TestMacOSVMDesktopIsNotRecordedAtAnyLevel(t *testing.T) {
 	}
 }
 
-// A macOS VM run's console and SSH terminal sessions are recorded at the organisation's level, masked,
+// A macOS VM run's console and SSH terminal sessions are recorded at the run's recording level, masked,
 // as any run's are: its mark says the runner keeps no cast of its own, not that the organisation
 // keeps none. At a level of off they are not.
 func TestMacOSVMTerminalSessionsAreRecordedAboveOff(t *testing.T) {

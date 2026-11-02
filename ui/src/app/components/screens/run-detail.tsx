@@ -32,6 +32,7 @@ import {
   type RunDetail,
 } from "../../lib/types";
 import { ERASED_VALUE } from "../../lib/types";
+import { isMacOSVM } from "../../lib/types/machine-kind";
 import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import { canonicalAuditAction, exitCodeFromAudit, gatewayCallId } from "../../lib/api/audit";
@@ -421,6 +422,7 @@ function RunDetailPage({ id }: { id: string }) {
               recordingAudit={recordingAudit}
               level={run.recording_level}
               notRecorded={run.not_recorded}
+              macOS={isMacOSVM(run)}
               selected={recKey || id}
               onSelect={(key) => {
                 setRecKey(key);
