@@ -518,7 +518,7 @@ func validateGatewayIdentityEdit(block, stored *types.ModelProviders) error {
 	}
 	for _, p := range block.Providers {
 		prior, ok := modelProviderByID(stored, p.ID)
-		if !ok || p.GatewayIdentity == nil || prior.GatewayIdentity == nil || prior.Kind != p.Kind ||
+		if !ok || p.GatewayIdentity == nil || prior.GatewayIdentity == nil ||
 			prior.GatewayIdentity.Audience != p.GatewayIdentity.Audience {
 			continue
 		}

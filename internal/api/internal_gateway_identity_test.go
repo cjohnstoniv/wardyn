@@ -266,31 +266,47 @@ func TestGatewayMintNamesThePersonRunAndRunner(t *testing.T) {
 	}
 }
 
-// wardyn_runner is the executor, or the target of a run with none, exactly: not a
-// person's runner id, which placement refuses before a route can reach one.
+// wardyn_runner is the run's executor exactly, or the target of a run with none. A
+// run on a person's runner reaches neither: placement refuses its route, and the
+// same run's relayed request is refused here before any claim is read.
 func TestGatewayMintRunnerClaim(t *testing.T) {
-	f := newGatewayFixture(t)
-	f.st.set(func(s *gatewayStore) { s.run.RunnerPoolExecutor = "" })
-	w := f.mint(t)
-	if w.Code != http.StatusOK {
-		t.Fatalf("mint = %d %s", w.Code, w.Body)
-	}
-	var body struct {
-		Token string `json:"token"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	parsed, err := jwt.ParseSigned(body.Token, []jose.SignatureAlgorithm{jose.ES256})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var c gatewayidentity.Claims
-	if err := parsed.Claims(testGatewayKeySet(t, f.signer), &c); err != nil {
-		t.Fatal(err)
-	}
-	if c.Runner != "docker" {
-		t.Errorf("wardyn_runner = %q, want the target", c.Runner)
+	for _, tc := range []struct{ name, executor, want string }{
+		{"remote executor", "remote.gpu-fleet", "remote.gpu-fleet"},
+		{"no executor", "", "docker"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGatewayFixture(t)
+			f.st.set(func(s *gatewayStore) { s.run.RunnerPoolExecutor = tc.executor })
+			w := f.mint(t)
+			if w.Code != http.StatusOK {
+				t.Fatalf("mint = %d %s", w.Code, w.Body)
+			}
+			var body struct {
+				Token string `json:"token"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := jwt.ParseSigned(body.Token, []jose.SignatureAlgorithm{jose.ES256})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var c gatewayidentity.Claims
+			if err := parsed.Claims(testGatewayKeySet(t, f.signer), &c); err != nil {
+				t.Fatal(err)
+			}
+			if c.Runner != tc.want {
+				t.Errorf("wardyn_runner = %q, want %q", c.Runner, tc.want)
+			}
+			req := httptest.NewRequest(http.MethodPost, gatewayMintPath, strings.NewReader(`{"provider_id":"corp-gw"}`))
+			req.Header.Set("Authorization", "Bearer "+f.token)
+			req = req.WithContext(relayConnContext(req.Context(), relayedConn{runner: uuid.New()}))
+			relayed := httptest.NewRecorder()
+			f.srv.relayRoutes(f.srv.router).ServeHTTP(relayed, req)
+			if relayed.Code != http.StatusForbidden || reasonOf(t, relayed) != string(placement.ReasonRelayRouteRefused) {
+				t.Fatalf("relayed mint = %d %s", relayed.Code, relayed.Body)
+			}
+		})
 	}
 }
 
@@ -556,27 +572,35 @@ func TestGatewayMintOffEqualsAnUnregisteredPath(t *testing.T) {
 	const sibling = "/api/v1/internal/not-a-route"
 	uiDir := testGatewayUIDir(t)
 	methods := []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions}
-	for _, ui := range []string{"", uiDir} {
-		for _, base := range []string{"", "/wardyn"} {
-			for _, bearer := range []string{"", "not-a-token"} {
-				srv := testGatewayServer(t, ui, base, nil)
-				for _, method := range methods {
-					ask := func(path string) *httptest.ResponseRecorder {
-						r := httptest.NewRequest(method, base+path, strings.NewReader(`{"provider_id":"p"}`))
-						if bearer != "" {
-							r.Header.Set("Authorization", "Bearer "+bearer)
-						}
-						w := httptest.NewRecorder()
-						srv.Handler().ServeHTTP(w, r)
-						return w
+	// Under the /api/v1 mount no method reaches a console route, so the answer is 404 in all four.
+	for _, conf := range []struct {
+		ui, base string
+		status   int
+	}{
+		{"", "", http.StatusNotFound},
+		{"", "/wardyn", http.StatusNotFound},
+		{uiDir, "", http.StatusNotFound},
+		{uiDir, "/wardyn", http.StatusNotFound},
+	} {
+		ui, base := conf.ui, conf.base
+		for _, bearer := range []string{"", "not-a-token"} {
+			srv := testGatewayServer(t, ui, base, nil)
+			for _, method := range methods {
+				ask := func(path string) *httptest.ResponseRecorder {
+					r := httptest.NewRequest(method, base+path, strings.NewReader(`{"provider_id":"p"}`))
+					if bearer != "" {
+						r.Header.Set("Authorization", "Bearer "+bearer)
 					}
-					got, want := ask(gatewayMintPath), ask(sibling)
-					if got.Code != want.Code || got.Body.String() != want.Body.String() || !reflect.DeepEqual(got.Header(), want.Header()) {
-						t.Errorf("ui=%v base=%q %s: route %d %v %q\nsibling %d %v %q", ui != "", base, method, got.Code, got.Header(), got.Body, want.Code, want.Header(), want.Body)
-					}
-					if got.Code == http.StatusUnauthorized || got.Code == http.StatusOK && method == http.MethodPost {
-						t.Errorf("ui=%v base=%q %s: off answered %d", ui != "", base, method, got.Code)
-					}
+					w := httptest.NewRecorder()
+					srv.Handler().ServeHTTP(w, r)
+					return w
+				}
+				got, want := ask(gatewayMintPath), ask(sibling)
+				if got.Code != want.Code || got.Body.String() != want.Body.String() || !reflect.DeepEqual(got.Header(), want.Header()) {
+					t.Errorf("ui=%v base=%q %s: route %d %v %q\nsibling %d %v %q", ui != "", base, method, got.Code, got.Header(), got.Body, want.Code, want.Header(), want.Body)
+				}
+				if got.Code != conf.status {
+					t.Errorf("ui=%v base=%q %s: off answered %d, want %d", ui != "", base, method, got.Code, conf.status)
 				}
 			}
 		}
@@ -828,6 +852,16 @@ func TestGatewayIdentityEditMustReenterTheAudience(t *testing.T) {
 	block := &types.ModelProviders{Providers: []types.ModelProvider{moved}}
 	if err := validateGatewayIdentityEdit(block, stored); err != nil {
 		t.Errorf("new audience refused: %v", err)
+	}
+	// A kind change does not excuse it: the audience still names the old address.
+	rekinded := testGatewayProvider()
+	rekinded.Kind, rekinded.BaseURL = types.ModelProviderAnthropicAPIKey, "https://other.corp.example/llm"
+	if err := validateGatewayIdentityEdit(&types.ModelProviders{Providers: []types.ModelProvider{rekinded}}, stored); err == nil {
+		t.Error("a kind and base_url change that keeps the audience passed")
+	}
+	rekinded.BaseURL = testGatewayProvider().BaseURL
+	if err := validateGatewayIdentityEdit(&types.ModelProviders{Providers: []types.ModelProvider{rekinded}}, stored); err != nil {
+		t.Errorf("a kind change at the same address refused: %v", err)
 	}
 	back := &types.ModelProviders{Providers: []types.ModelProvider{testGatewayProvider()}}
 	if err := validateGatewayIdentityEdit(back, block); err != nil {
