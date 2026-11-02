@@ -289,7 +289,7 @@ export type RefusedField = "base_url" | "gateway_audience" | "models" | "max_con
 export function refusedField(message: string | null): RefusedField | null {
   if (!message) return null;
   if (message.includes("model must be one of local.models")) return null; // a harness's, see refusedHarness
-  // Before base_url: "base_url changed, so gateway_identity.audience must be entered again" is the audience's.
+  // Before base_url, so a refusal naming both is the audience's.
   if (message.includes("gateway_identity") && message.includes("audience")) return "gateway_audience";
   if (message.includes("base_url")) return "base_url";
   if (message.includes("local.models")) return "models";
