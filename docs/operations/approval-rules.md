@@ -46,7 +46,8 @@ The dry run writes nothing, not even an audit row.
 - A rule only approves. A deny already wins before an approval row exists: `tool_rules` deny, `policy:denied` and `always_deny` raise nothing.
   - A person's deny for a host holds for the run, across a replaced proxy: a rule leaves a later approval for that host `PENDING` for a person (`approval.policy.skip`, `approval_rule_host_denied`), and it expires as any other.
   - A `once` deny or a lapsed `until` deny does not stop a rule.
-  - A person's later allow at `run`, `always` or an unexpired `until` undoes the deny. A `once` allow releases one connection and leaves the deny standing.
+  - A person's later allow that replaces the standing decision undoes the deny: `run`, `always` or an unexpired `until`. A `once` allow releases that one connection, and the deny stands.
+  - A person's deny covers its run. A new run starts without it, so a rule may approve the same host there. To close a host, an admin removes it from `approve.hosts` or denies it by policy (`denied_domains`).
 
 ## What bounds a rule
 
