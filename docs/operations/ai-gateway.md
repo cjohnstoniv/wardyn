@@ -68,7 +68,7 @@ The setup was checked against the pinned image in a one-container trial. These a
 - A run's exit code is not an assertion for the model run: Claude Code's exit says nothing about the gateway.
 - The tool call comes from a `curl` in an exec run, not from a model.
 - The job attaches no component, so it does not exercise the `component_host_serves_model` refusal above.
-- The job carries no token and no person's data. Run it by hand on a disposable quickstart cluster with `WARDYN_TEST_K8S=1 WARDYN_ACK_SHARED_QUICKSTART=1 scripts/kind-gateway-run.sh` ([the script](../../scripts/kind-gateway-run.sh)).
+- The job carries no gateway identity token and no person's data. Run it by hand on a disposable quickstart cluster with `WARDYN_TEST_K8S=1 WARDYN_ACK_SHARED_QUICKSTART=1 scripts/kind-gateway-run.sh` ([the script](../../scripts/kind-gateway-run.sh)).
 
 ## The image
 
