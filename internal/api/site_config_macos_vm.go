@@ -18,9 +18,14 @@ func validateSiteMacOSVM(m *types.SiteMacOSVM) error {
 }
 
 // carryForwardSiteMacOSVM keeps the stored block when the body does not name it: an older client cannot,
-// and its round trip must not drop the organisation's base-age limit.
+// and its round trip must not drop the organisation's base-age limit. A body that names the block without
+// the direct mount switch keeps the stored switch the same way; only an explicit value changes it.
 func carryForwardSiteMacOSVM(cfg *types.SiteConfig, existing types.SiteConfig, present map[string]bool) {
 	if !present["macos_vm"] {
 		cfg.MacOSVM = existing.MacOSVM
+		return
+	}
+	if cfg.MacOSVM != nil && cfg.MacOSVM.AllowDirectDriveMount == nil && existing.MacOSVM != nil {
+		cfg.MacOSVM.AllowDirectDriveMount = existing.MacOSVM.AllowDirectDriveMount
 	}
 }

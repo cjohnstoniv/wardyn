@@ -53,4 +53,30 @@ func TestHandlePutSiteConfig_MacOSVM(t *testing.T) {
 			t.Errorf("stored macos_vm = %+v, want 7 days", got)
 		}
 	})
+	t.Run("a body naming the block without the direct mount switch keeps it, and only an explicit value changes it", func(t *testing.T) {
+		on, off := true, false
+		cases := []struct {
+			stored *bool
+			body   string
+			want   bool
+		}{
+			{&on, `{"macos_vm":{"max_base_age_days":7}}`, true},
+			{&on, `{"macos_vm":{}}`, true},
+			{&on, `{}`, true},
+			{&on, `{"macos_vm":{"allow_direct_drive_mount":false}}`, false},
+			{&off, `{"macos_vm":{"allow_direct_drive_mount":true}}`, true},
+			{&off, `{"macos_vm":{"max_base_age_days":7}}`, false},
+			{nil, `{"macos_vm":{"max_base_age_days":7}}`, false},
+			{nil, `{"macos_vm":{"allow_direct_drive_mount":true}}`, true},
+		}
+		for _, c := range cases {
+			fake := &fakeSiteConfigStore{cfg: types.SiteConfig{MacOSVM: &types.SiteMacOSVM{AllowDirectDriveMount: c.stored}}}
+			if code := put(t, fake, c.body); code != http.StatusOK {
+				t.Fatalf("%s: code = %d, want 200", c.body, code)
+			}
+			if got := fake.putSeen.MacOSVM.DirectDriveMountAllowed(); got != c.want {
+				t.Errorf("stored %v, body %s: allowed = %v, want %v", c.stored, c.body, got, c.want)
+			}
+		}
+	})
 }

@@ -20,6 +20,9 @@ func newMacOSVMCommand() *cobra.Command {
 		RunE: func(*cobra.Command, []string) error { return errors.New("macOS VM sandboxes run only on a Mac") }}
 }
 
+// driveDirectSettingSaver is nothing where there are no macOS VM drives.
+func driveDirectSettingSaver(string) func(bool) { return nil }
+
 // Setup's macOS VM steps, where there are none.
 func checkMacOSVMFlag(v, _ string) error {
 	if v == "on" {

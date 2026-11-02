@@ -74,6 +74,10 @@ type HubConfig struct {
 	// LocalAttach, when set, says whether AUTH_OK tells a claimed runner the organisation allows local
 	// attach (runnerwire.AuthOK.LocalAttach). Nil says false.
 	LocalAttach func(types.Runner) bool
+	// DirectDriveMount, when set, says whether AUTH_OK tells a claimed runner the organisation allows a
+	// direct drive mount (runnerwire.AuthOK.AllowDirectDriveMount). Nil says false; an error reads false
+	// at a connect and changes nothing at a recheck.
+	DirectDriveMount func(context.Context, types.Runner) (bool, error)
 }
 
 type hubSession struct {
@@ -93,6 +97,9 @@ type hubSession struct {
 	// perRun is the per-run pair the session's AUTH_OK carried, which recheck compares with the stored
 	// row: a limits change committed through another replica ends the session. Nil before the first AUTH_OK.
 	perRun atomic.Pointer[perRunLimits]
+	// directDriveMount is the answer the session's AUTH_OK carried, which recheck compares the same way.
+	// Stored before perRun, whose being set says this one is.
+	directDriveMount atomic.Bool
 	// activityPeer is the peer a current-activity check has verified under mu, set while that check
 	// holds mu across its store lookups: Online reads it instead of reading the held mu as a session
 	// in transition. Nil whenever no check runs.
@@ -286,7 +293,7 @@ const reasonOwnerInactive = "runner_owner_inactive"
 var errOwnerInactive = errors.New("runner hub: the runner's owner is deactivated")
 
 // recheck ends the session with REVOKED once the stored row says so, and with
-// GOAWAY once its owner is deactivated or its per-run limits differ from the pair AUTH_OK carried. A failed read is retried at the next
+// GOAWAY once its owner is deactivated or its per-run limits or direct-mount answer differ from what AUTH_OK carried. A failed read is retried at the next
 // tick: the store already refuses a revoked runner's writes, so this only
 // bounds the session's lifetime.
 func (h *Hub) recheck(ctx context.Context, id uuid.UUID, s *hubSession, peer *runnerwire.Peer) {
@@ -311,6 +318,12 @@ func (h *Hub) recheck(ctx context.Context, id uuid.UUID, s *hubSession, peer *ru
 	if sent := s.perRun.Load(); sent != nil && *sent != perRunOf(current) {
 		// The pair is the one peer's AUTH_OK carried: a reconnect since then has its own, so end only peer's session.
 		_ = h.endWithControl(ctx, id, runnerwire.TypeGoaway, "fresh_session_required", peer, "")
+		return
+	}
+	if s.perRun.Load() != nil && h.cfg.DirectDriveMount != nil {
+		if now, err := h.cfg.DirectDriveMount(ctx, current); err == nil && now != s.directDriveMount.Load() {
+			_ = h.endWithControl(ctx, id, runnerwire.TypeGoaway, "fresh_session_required", peer, "")
+		}
 	}
 }
 
@@ -364,7 +377,8 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 		}
 	}
 	ok := runnerwire.AuthOK{SessionID: s.id, Resumed: resumed, PingInterval: runnerwire.PingInterval, LastSeq: cfg.LastReceived}
-	h.orgChoices(&ok, current)
+	h.orgChoices(ctx, &ok, current)
+	s.directDriveMount.Store(ok.AllowDirectDriveMount)
 	s.perRun.Store(&perRunLimits{ok.PerRunCPUMillis, ok.PerRunMemoryMiB})
 	if err := runnerwire.WriteControl(ctx, conn, runnerwire.TypeAuthOK, ok); err != nil {
 		return nil, err
@@ -596,12 +610,16 @@ func (h *Hub) Close() {
 }
 
 // orgChoices fills the fields of AUTH_OK the organisation chooses for the claimed runner current.
-func (h *Hub) orgChoices(ok *runnerwire.AuthOK, current types.Runner) {
+func (h *Hub) orgChoices(ctx context.Context, ok *runnerwire.AuthOK, current types.Runner) {
 	if h.cfg.ProxyImage != nil {
 		ok.ProxyImage = h.cfg.ProxyImage(current)
 	}
 	if h.cfg.LocalAttach != nil {
 		ok.LocalAttach = h.cfg.LocalAttach(current)
+	}
+	if h.cfg.DirectDriveMount != nil {
+		allowed, err := h.cfg.DirectDriveMount(ctx, current)
+		ok.AllowDirectDriveMount = err == nil && allowed
 	}
 	p := perRunOf(current)
 	ok.PerRunCPUMillis, ok.PerRunMemoryMiB = p.cpuMillis, p.memoryMiB

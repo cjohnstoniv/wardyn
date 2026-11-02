@@ -245,7 +245,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
   // The macOS VM block of the site config: max_base_age_days and the background-watch switch.
   it("SiteMacOSVM (`macos_vm` in site config): full parity with the TS mirror", () => {
     const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "SiteMacOSVM");
-    expect(goTags).toEqual(["max_base_age_days", "allow_background_watch"]);
+    expect(goTags).toEqual(["max_base_age_days", "allow_background_watch", "allow_direct_drive_mount"]);
     const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "SiteMacOSVM");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
