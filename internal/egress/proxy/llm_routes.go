@@ -298,7 +298,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		removeHopByHop(outReq.Header)
 		p.stripGatewayHeaders(outReq.Header)
 		applyCredential(outReq.Header, ownedHeader, hdr)
-		if gatewayRoute != nil && !p.attachGatewayIdentity(w, r, outReq.Header, gatewayRoute, host, port, ruleSource) {
+		if gatewayRoute != nil && !p.attachGatewayIdentity(w, r, outReq.Header, gatewayRoute, host, port, ruleSource, callID) {
 			return nil, false
 		}
 		if callID != "" {

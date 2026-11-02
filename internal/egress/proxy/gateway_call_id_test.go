@@ -205,6 +205,30 @@ func TestGatewayCallID_RelayRefusalRowCarriesIt(t *testing.T) {
 	}
 }
 
+// A refused token attach never reaches the gateway, yet its deny row still names the attempt's id.
+func TestGatewayCallID_TokenUnavailableDenyRowCarriesIt(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	g.answerStatus(http.StatusInternalServerError)
+	for lane, send := range gwidLanes(g, t) {
+		g.buf.Reset()
+		if rec := send(); rec.Code < 400 {
+			t.Fatalf("%s: status %d, want a refusal", lane, rec.Code)
+		}
+		var got []any
+		for _, row := range gwcidRows(t, g.buf) {
+			if row["decision"] == string(egress.Deny) && strings.Contains(fmt.Sprint(row["cause"]), "gateway identity unavailable") {
+				got = append(got, row["gateway_call_id"])
+			}
+		}
+		if len(got) != 1 {
+			t.Fatalf("%s: %d unavailable rows, want 1", lane, len(got))
+		}
+		if id, _ := got[0].(string); uuid.Validate(id) != nil {
+			t.Errorf("%s: deny row call id %v, want a uuid", lane, got[0])
+		}
+	}
+}
+
 // The two shared failure arms stamp the id of the attempt they were handed, and a caller
 // with none leaves the field out.
 func TestGatewayCallID_SharedFailureArmsStampIt(t *testing.T) {
