@@ -14,6 +14,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - A Linux VM run can mount a drive bound to its runner. An older runner and a Kubernetes runner are refused at Review. Do not rely on a file lock across two VMs.
+- New Run now says which of your own walls apply to the run, in one line on Review above the setup groups and above the Tools step totals, with a link to change them (opens in a new tab).
+- Governance profiles have a new limit, "Deny watching background desktops" (`deny_background_desktop_watch`), and Settings has an "Allow watching background runs" switch for macOS virtual machines. The switch is on by default.
+- A governance profile write now warns, without refusing, when its Azure DevOps capability list reaches past a provider row's capability ceiling (a member who asks for one of those is refused at launch). It also warns when a standalone profile leaves out the local-run component limit, or sets desktop, recording, tool rules, auto-stop or LLM inspection weaker than the deployment default.
+- macOS VMs: `wardyn-runnerd drive open <name>` opens a disk drive in a throwaway virtual machine with no network and copies its files to ~/Wardyn Drives/<name>, so this Mac never reads a disk an agent wrote. Press Return to write your changes back as the agent, or Ctrl-C to discard them. Links, devices and set-id files are skipped, and every file is marked as downloaded with no execute permission. Built and unit-tested; not yet run on a real Mac.
+- macOS VMs: `wardyn-runnerd drive open --direct <name>` mounts a run's disk drive on the Mac itself, with noexec, nosuid and nodev. It is off unless an admin turns on "Allow mounting a drive directly on the Mac" in Settings. Mounting leaves no row in your organisation's audit log, and the setting can't stop anyone who can run hdiutil on a Mac. While a drive may still be mounted on a Mac, runs on it are refused until `drive open --direct --recover <name>` checks and clears it. Built and unit-tested; not yet run on a real Mac.
 
 ### Changed
 
@@ -24,6 +29,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Opening a desktop's Files panel on a paused run no longer wakes it. Only a transfer the rules allow does.
 - A BYOI interactive run with a task on a runner skips its warn-only selftest, as one with no task does, so it shows fewer selftest rows.
 - Setup and Claude sign-in no longer accept Wardyn's `agent-base` image as a sign-in image. A one-line install shows Claude sign-in as not ready until you supply a Claude Code image; [the steps](docs/operations/build-images.md#claude-sign-in-image) are in the docs.
+- macOS VMs: a run on a view-only base can be watched from the run page with Watch desktop. Keys, pointer moves and paste never reach the guest. The console's viewer sends no input on a view-only desktop; a new `ui.input.drop` audit row records the first dropped key and pointer move each time the desktop socket opens, and a paste is recorded as a denied `ui.clipboard.transfer`. Built and unit-tested; not yet run on a real Mac ([#3922](https://github.com/cjohnstoniv/wardyn/issues/3922)). This
+- macOS VMs: a background run's desktop can now be watched, view only, from its run page. Typing, clicking, pasting and clipboard copy are disabled, and watching neither wakes a run nor keeps it alive. A screen can show what the run keeps out of its logs. It's on by default; a site switch or the governance limit `deny_background_desktop_watch` turns it off, and an open view ends within a minute. A run started before the upgrade can't be watched. Built and unit-tested; not yet run on a real Mac.
+- A run's memory and disk on the sandbox card read in GB from 1 GiB, as MB below that. An egress row no longer says "Recorded offline"; a decision that reached Wardyn a minute or more after the runner made it shows "Reached Wardyn later" and the time it was decided.
+- When a member's folder mount is refused for being outside the member workspace roots, the message now names `WARDYN_USER_WORKSPACE_ROOTS` and says an operator sets it.
+- macOS VMs: `edit-base` now says on its first line that the edit is of a copy of the VM base, not this Mac, and that the copy takes about 2 minutes to start. Its window lists, in order, the code, the setup questions, who you are signed in as and where Terminal is, Full Disk Access and the certificates; a certificate the base reads as not trusted prints with its subject, SHA-256 and the command. The recheck prints what it read (each certificate, Full Disk Access and the desktop), a guest that cannot answer reads "could not be read" and never "allowed", and `status` prints the last edit's read with its time. Built and unit-tested; not yet run on a real Mac.
+- macOS VMs: `wardyn-runnerd macos-vm status` now reads the newest tools-port dial from the run boot, the prepare log and the tools update log, says where each line came from, and says that its number is this Mac's own sum and does not read the organisation's limits. A tools update now stamps the dial it reports, so an older connected dial can no longer out-rank a newer failure. Built and unit-tested; not yet run on a real Mac.
 
 ### Fixed
 
@@ -39,6 +50,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A service with no end time and no lifetime cap says it runs until stopped, at New Run, in preflight and in the create response.
 - Compose passes `WARDYN_MIGRATE_TIMEOUT` on from `.env`.
 - Docs: what a policy's `github_token` grant needs before a runner's first run.
+- A governance write that clears the UI gateway's caches is no longer undone by a check already in flight: the next request on that replica, warm connections included, meets the change, and the caches clear before the write's success reaches the client. Other replicas keep their existing 30 seconds.
+- A run waiting on its runners' limits now names the same limit on the Launched screen and on the run page, and the sentence follows the runners as they change. With several runners it gives an example runner instead of calling one the nearest, and a single runner reads "<runner> is at a limit: <limit>." It names the limit that holds the run: Runs at once, or the CPU, memory or disk total. A launch into a capped pool with room whose runners were full named the pool's limit; it now names the runner's. The wait reason token is unchanged.
+- A macOS VM run that asks for a disk drive still being released now waits up to 90 seconds in total for all its drives, and the failure after the wait states the wait. A drive held by a live run still refuses at once.
+- A macOS VM run's drives now show at the guest's path under `/Users/agent` in the `run.create`, `drive.member.create` and `run.drive.mount` audit rows and in the mount map the dry runs return, instead of the container path under `/home/agent`.
+- The console's terminal reconnect budget is no longer reset by a socket that opens and says nothing: the first terminal byte, or 15 seconds open, resets it. The runner no longer logs an ordinary detach as a "session read failed" warning, and names which side failed when it does warn.
+- The governance admin view no longer says the deployment default set a wall that a standalone profile sets itself. A size the profile omits still follows, and is credited to, the deployment default. No resolved value changes.
+- A run that Amazon Bedrock refused with any other HTTP 4xx or 5xx now names, in its failure hint, the status and the error class AWS answered with. Wardyn does not record AWS's message; the agent's own output may hold AWS's explanation, and so may the run's recording if the run has one ([#3891](https://github.com/cjohnstoniv/wardyn/issues/3891)).
+
+### Security
+
+- An approval rule no longer approves a host a person denied on that run after the run's proxy is replaced. The approval waits for a person, and a person's later allow undoes the deny.
 
 ## [0.10.0-rc.10] — 2026-11-01
 
