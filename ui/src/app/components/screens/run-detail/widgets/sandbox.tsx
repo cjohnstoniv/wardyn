@@ -104,8 +104,8 @@ function renderBody(state: SandboxState, live: boolean, macOS: boolean): React.R
 
 function Metrics({ data, macOS }: { data: RunResources; macOS: boolean }) {
   const cpu = cpuMetric(data.cpu_percent);
-  const memory = memoryMetric(data.memory_used_bytes, data.memory_limit_bytes, macOS ? fmtGB : fmtBytes);
-  const disk = diskMetric(data.disk_used_bytes, data.disk_cap_bytes, data.disk_written_bytes, macOS ? diskGB : fmtBytes);
+  const memory = memoryMetric(data.memory_used_bytes, data.memory_limit_bytes, diskGB);
+  const disk = diskMetric(data.disk_used_bytes, data.disk_cap_bytes, data.disk_written_bytes, diskGB);
   // The line attributes numbers, so it needs one to attribute.
   const hasReading = [
     data.cpu_percent,
@@ -139,7 +139,7 @@ function fmtGB(n: number): string {
   return `${(n / 1024 ** 3).toFixed(1)} GB`;
 }
 
-// A macOS guest's disk reads in GB from 1 GiB up, as its memory does; below that fmtBytes stands.
+// A guest's memory and disk read in GB from 1 GiB up; below that fmtBytes stands.
 function diskGB(n: number): string {
   return n >= 1024 ** 3 ? fmtGB(n) : fmtBytes(n);
 }
@@ -172,7 +172,7 @@ function diskMetric(
   if (used === undefined) {
     return written === undefined
       ? { value: RUN_COCKPIT.metricUnavailable }
-      : { value: `${fmtBytes(written)} ${RUN_COCKPIT.diskWrittenSuffix}` };
+      : { value: `${fmt(written)} ${RUN_COCKPIT.diskWrittenSuffix}` };
   }
   if (cap === undefined || cap <= 0) return { value: fmt(used) };
   const pct = Math.max(0, Math.min(100, (used / cap) * 100));

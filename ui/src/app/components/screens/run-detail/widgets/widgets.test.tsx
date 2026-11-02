@@ -147,6 +147,22 @@ describe("SandboxWidget on a macOS VM run (#3924)", () => {
     expect(await screen.findByText("500.0 MB")).toBeInTheDocument();
   });
 
+  it("shows a Linux sandbox's memory and disk in GB from 1 GiB, MB below, and the written total too", async () => {
+    getResourcesMock.mockResolvedValue({
+      memory_used_bytes: 512 * 1024 ** 2,
+      memory_limit_bytes: 2 * GiB,
+      disk_used_bytes: 2.1 * GiB,
+      disk_cap_bytes: 10 * GiB,
+    });
+    const { unmount } = render(<SandboxWidget runId="r1" live={true} />);
+    expect(await screen.findByText("2.1 GB / 10.0 GB")).toBeInTheDocument();
+    expect(screen.getByText("512.0 MB / 2.0 GB")).toBeInTheDocument();
+    unmount();
+    getResourcesMock.mockResolvedValue({ disk_written_bytes: 3 * GiB });
+    render(<SandboxWidget runId="r1" live={true} />);
+    expect(await screen.findByText(new RegExp(`^3\\.0 GB ${RUN_COCKPIT.diskWrittenSuffix}`))).toBeInTheDocument();
+  });
+
   it("raises no warning from a guest's numbers, however full", async () => {
     getResourcesMock.mockResolvedValue({ memory_used_bytes: 8 * GiB, memory_limit_bytes: 8 * GiB, disk_used_bytes: 999 * GiB });
     render(<SandboxWidget runId="r1" live={true} macOS />);
