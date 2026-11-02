@@ -797,6 +797,71 @@ func TestGatewayIdentity_HTTP2FallbackEcho(t *testing.T) {
 	}
 }
 
+// A sandbox's range never reaches a route: a gateway that echoes headers and honours it would
+// split the token across responses, past exact-byte masking. Two ranges over the echo prove the
+// split a kept header allows. Off the route, and with no route, the headers pass as before.
+func TestGatewayIdentity_RangeDroppedOnRoute(t *testing.T) {
+	ranged := func(g *gwidRig) {
+		g.gw.respond = func(w http.ResponseWriter, r *http.Request) {
+			echo := r.Header.Get(gatewayIdentityHeader)
+			var from, to int
+			if _, err := fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-%d", &from, &to); err == nil && to < len(echo) {
+				w.WriteHeader(http.StatusPartialContent)
+				_, _ = io.WriteString(w, echo[from:to+1])
+				return
+			}
+			_, _ = io.WriteString(w, echo)
+		}
+	}
+	withRange := func(r *http.Request, spec string) *http.Request {
+		r.Header.Set("Range", spec)
+		r.Header.Set("If-Range", `"etag"`)
+		return gwidForge(r)
+	}
+	for lane, send := range map[string]func(*gwidRig, string) *httptest.ResponseRecorder{
+		"brokered": func(g *gwidRig, spec string) *httptest.ResponseRecorder {
+			rec := httptest.NewRecorder()
+			g.p.handleLocalRoute(rec, withRange(mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"messages", strings.NewReader("x")), spec))
+			return rec
+		},
+		"mitm": func(g *gwidRig, spec string) *httptest.ResponseRecorder {
+			rec := httptest.NewRecorder()
+			g.p.serveMITMRequest(rec, withRange(httptest.NewRequest(http.MethodPost, "https://"+gwidHost+"/v1/messages", strings.NewReader("x")), spec), gwidHost, 443)
+			return rec
+		},
+	} {
+		t.Run(lane, func(t *testing.T) {
+			g := newGwidRig(t, gwidRoutes(), false)
+			ranged(g)
+			first, second := send(g, "bytes=0-19"), send(g, "bytes=20-39")
+			token := g.lastMinted(t)
+			for _, h := range []string{"Range", "If-Range"} {
+				if got := g.gw.last(t).Header.Get(h); got != "" {
+					t.Errorf("%s reached the gateway: %q", h, got)
+				}
+			}
+			if first.Code != http.StatusOK || second.Code != http.StatusOK {
+				t.Errorf("status %d, %d, want whole answers", first.Code, second.Code)
+			}
+			for _, piece := range []string{token[:20], token[20:40]} {
+				gwidNotIn(t, "answer", first.Body.String()+second.Body.String(), piece)
+			}
+		})
+	}
+	g := newGwidRig(t, gwidRoutes(), false)
+	rec := httptest.NewRecorder()
+	g.p.serveMITMRequest(rec, withRange(httptest.NewRequest(http.MethodGet, "https://"+gwidHost+"/other", nil), "bytes=0-1"), gwidHost, 443)
+	if got := g.gw.last(t).Header.Get("Range"); got != "bytes=0-1" {
+		t.Errorf("off the route, Range = %q, want it kept", got)
+	}
+	off := newGwidRig(t, nil, false)
+	rec = httptest.NewRecorder()
+	off.p.handleLocalRoute(rec, withRange(mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"messages", strings.NewReader("x")), "bytes=0-1"))
+	if seen := off.gw.last(t); seen.Header.Get("Range") != "bytes=0-1" || seen.Header.Get("If-Range") != `"etag"` {
+		t.Errorf("no route, the sandbox's range changed: %v", seen.Header)
+	}
+}
+
 // A route is matched by host, exact port and path prefix at a segment boundary.
 func TestGatewayRouteFor(t *testing.T) {
 	p := &Proxy{gatewayRoutes: gwidRoutes()}

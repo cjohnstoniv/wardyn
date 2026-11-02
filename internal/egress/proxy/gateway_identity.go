@@ -116,8 +116,12 @@ func (p *Proxy) stripGatewayHeaders(h http.Header) {
 // answers the sandbox with a refusal and returns false: a route configured to
 // sign never sends unsigned, since a lenient gateway would take the call as
 // anonymous. Accept-Encoding goes too, so an echo arrives in bytes the masker
-// can read: Go's transport then negotiates gzip and decompresses by itself.
+// can read: Go's transport then negotiates gzip and decompresses by itself. Range
+// and If-Range go first: a gateway that echoes headers and honours a range could
+// otherwise split the token across responses, and masking matches exact bytes.
 func (p *Proxy) attachGatewayIdentity(w http.ResponseWriter, r *http.Request, h http.Header, rt *GatewayIdentityRoute, host string, port int, ruleSource string) bool {
+	h.Del("Range")
+	h.Del("If-Range")
 	token, err := p.gatewayHolders[rt.ProviderID].current(r.Context(), p)
 	if err != nil {
 		if r.Context().Err() != nil {
