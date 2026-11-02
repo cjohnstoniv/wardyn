@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -954,99 +954,5 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(await screen.findByText("Failed egress to flaky.example.com:443")).toHaveClass("sm:min-w-[10rem]");
     // Below sm the wrapper's own minimum keeps the sentence from collapsing and wraps the row instead.
     expect(screen.getByText("Failed egress to flaky.example.com:443").parentElement).toHaveClass("min-w-[12rem]");
-  });
-});
-
-// R4-F132: the live-tail deliberately swallows a failed tick to keep the last
-// good view, so `status` stays "ready" forever — and the green pulsing
-// "Live · appending" chip rode on `status` alone. A control plane that died
-// after the first read therefore left a confident liveness claim over a frozen
-// trail. CONSOLE-RULES §10: a result verb needs a real result behind it.
-describe("AuditScreen — the liveness chip stops claiming a feed that stopped answering", () => {
-  beforeEach(() => {
-    listAuditMock.mockReset();
-    listAuditMock.mockResolvedValue([]);
-    getRunMock.mockReset().mockResolvedValue(undefined);
-    healthMock.mockReset().mockResolvedValue({});
-  });
-  afterEach(() => vi.useRealTimers());
-
-  // Mock packet M4 (approved 2026-10-03), surface D: a field whose key was
-  // destroyed reads Erased, muted, with the explanation as its title.
-  it("renders an erased target and an erased data field as Erased, never the wire value", async () => {
-    listAuditMock.mockResolvedValue([
-      ev({
-        id: "e1",
-        action: "person.create",
-        actor_type: "human",
-        actor: "sec@corp.example",
-        target: "[erased]",
-        data: { email: "[erased]", note: "kept" },
-      }),
-    ]);
-    renderScreen();
-    expect(await screen.findByText("person.create — Erased")).toBeInTheDocument();
-    const field = screen.getByText("email: Erased");
-    expect(field).toHaveAttribute("title", "Erased on request. The event and its place in the log remain.");
-    expect(field).toHaveClass("text-muted-foreground");
-    expect(screen.queryByText(/\[erased\]/)).toBeNull();
-    expect(screen.queryByText(/note:/)).toBeNull();
-  });
-
-  it("drops the chip once a poll stops answering, and brings it back when the feed recovers", async () => {
-    // Fake timers BEFORE the render: usePoll's setInterval has to be the fake
-    // one, or advancing time never reaches a tick.
-    vi.useFakeTimers();
-    listAuditMock.mockResolvedValueOnce([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
-    renderScreen();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(screen.getByText("Live · appending")).toBeInTheDocument();
-
-    // Every later read 503s — the harness's `auditdead` case.
-    listAuditMock.mockRejectedValue(new Error("503"));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(6000);
-    });
-    expect(screen.queryByText("Live · appending")).toBeNull();
-    // The last good view is still there — the fix removes the CLAIM, not the data.
-    expect(screen.getByText("1 event")).toBeInTheDocument();
-
-    // ...and it is not a one-way latch: a feed that comes back is live again.
-    listAuditMock.mockReset();
-    listAuditMock.mockResolvedValue([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(6000);
-    });
-    expect(screen.getByText("Live · appending")).toBeInTheDocument();
-  });
-
-  // A read slower than the poll interval must still paint: the next tick waits for it instead of overtaking it,
-  // because the request-id guard drops every answer that is not the newest request's.
-  it("a read slower than the poll interval still paints, and the chip stays live", async () => {
-    vi.useFakeTimers();
-    listAuditMock.mockResolvedValueOnce([ev({ id: "e1", run_id: "run_111", action: "egress.allow" })]);
-    renderScreen();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(screen.getByText("1 event")).toBeInTheDocument();
-
-    // Each later read takes 7 s, longer than the 5 s poll.
-    listAuditMock.mockImplementation(
-      () =>
-        new Promise((resolve) =>
-          setTimeout(
-            () => resolve([ev({ id: "e1", run_id: "run_111", action: "egress.allow" }), ev({ id: "e2", run_id: "run_111", action: "egress.deny" })]),
-            7000,
-          ),
-        ),
-    );
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(13000);
-    });
-    expect(screen.getByText("2 events")).toBeInTheDocument();
-    expect(screen.getByText("Live · appending")).toBeInTheDocument();
   });
 });

@@ -273,7 +273,7 @@ An admin turns identity on per model provider, by setting `gateway_identity` wit
 - **A suspended person.** No new token is issued once the person is suspended, whether or not the kill of their runs has finished. A token already issued is valid until it expires.
 - **An email form shared with another principal.** That form gets no cutoff, so a run owned under it stops only when the kill ends it.
 - **Pause and kill.** Pausing a run does not stop its proxy asking for tokens. Killing it does.
-- **Where it runs.** A run with a route is refused on a person's own runner. It goes to a remote executor only if that executor's `wardyn-runnerd` reports this setting, so an older one refuses the run rather than call the gateway unsigned.
+- **Where it runs.** A run with a route is refused on a person's own runner. It goes to a remote runner only if that runner's `wardyn-runnerd` reports this setting, so an older one refuses the run rather than call the gateway unsigned.
 
 | | |
 |---|---|

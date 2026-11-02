@@ -203,7 +203,7 @@ func TestSignVerifiesAgainstThePublishedKeySet(t *testing.T) {
 // another issuer. It has no nbf, so a gateway clock a little behind wardynd's does
 // not refuse a token that has just been issued.
 func TestAGatewayVerifierEnforcesExpiryAndAudience(t *testing.T) {
-	issued := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	issued := time.Now().UTC().Truncate(time.Second)
 	s := testSigner(t, testRotate(t, nil, false), issued)
 	token, signed, err := s.Sign(testClaims())
 	if err != nil {

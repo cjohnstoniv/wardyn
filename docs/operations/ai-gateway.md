@@ -108,7 +108,7 @@ The setup was checked against the pinned image in a one-container trial. These a
 | `aud` | The provider's `gateway_identity.audience` | Set by an admin. A gateway accepts only the audiences it lists |
 | `sub` | The run's subject: a person, or a service identity on a service run | A local install gives a fixed seat. A run started with the admin token gives `admin-token` |
 | `wardyn_run` | The run id | Flat, so a gateway rule needs no SPIFFE parsing |
-| `wardyn_runner` | The executor's id, else the runner target | An operator-chosen slug, possibly a hostname, or `docker` |
+| `wardyn_runner` | The runner's id, else the runner target | An operator-chosen slug, possibly a hostname, or `docker` |
 | `wardyn_provider` | The model provider's id | |
 | `sponsor` | The accountable person of a service identity | Present only on a service run |
 | `jti` | A fresh UUID per token | |

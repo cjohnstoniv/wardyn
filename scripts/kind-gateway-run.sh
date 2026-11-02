@@ -298,7 +298,7 @@ check "gateway log: the MCP route served a tools/call with 200" $?
 RUN_ID="$(jq -r '.id // empty' "${MODEL_OUT}/run.json" 2>/dev/null)"
 [[ -n "${RUN_ID}" ]]; check "the model run has an id to look for in the gateway's log" $?
 model_lines="$(grep 'route=default/llm ' "${EVIDENCE_DIR}/gateway.log" | grep -E 'http\.path=/v1/messages(\?[^ ]*)?( |$)' | grep 'http.status=200' || true)"
-[[ -n "${RUN_ID}" ]] && grep -E "wardyn_sub=\"?admin-token\"?([[:space:]]|\$)" <<<"${model_lines}" | grep -qE "wardyn_run=\"?${RUN_ID}\"?([[:space:]]|\$)"
+[[ -n "${RUN_ID}" ]] && grep -E "wardyn_sub=\"?admin-token\"?([[:space:]]|\$)" <<<"${model_lines}" | grep -E "wardyn_run=\"?${RUN_ID}\"?([[:space:]]|\$)" >/dev/null
 check "gateway log: the model line carries the validated token's subject (admin-token) and the run id ${RUN_ID}" $?
 
 # The call id: Wardyn made it, sent it as X-Wardyn-Call-Id and recorded it on the audit row, and the
@@ -308,7 +308,7 @@ call_ids="$(jq -r --arg h "${LLM_HOST}" '[.[] | select(.action == "egress.allow"
 joined=0
 while IFS= read -r id; do
   [[ -n "${id}" ]] || continue
-  if grep 'route=default/llm ' "${EVIDENCE_DIR}/gateway.log" | grep -qE "wardyn_call=\"?${id}\"?([[:space:]]|\$)"; then joined=$((joined + 1)); fi
+  if grep 'route=default/llm ' "${EVIDENCE_DIR}/gateway.log" | grep -E "wardyn_call=\"?${id}\"?([[:space:]]|\$)" >/dev/null; then joined=$((joined + 1)); fi
 done <<<"${call_ids}"
 [[ "${joined}" -ge 1 ]]; check "the gateway's X-Wardyn-Call-Id equals the audit row's gateway_call_id (${joined} id(s) on both)" $?
 
