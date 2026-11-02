@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -194,6 +195,57 @@ func TestSignVerifiesAgainstThePublishedKeySet(t *testing.T) {
 		if !k.IsPublic() || k.Algorithm != "ES256" || k.Use != "sig" {
 			t.Errorf("published key: public=%v alg=%q use=%q", k.IsPublic(), k.Algorithm, k.Use)
 		}
+	}
+}
+
+// A gateway's own verifier, not a reading of the fields: the token is good at its
+// audience for its lifetime, and refused past exp, at another audience and from
+// another issuer. It has no nbf, so a gateway clock a little behind wardynd's does
+// not refuse a token that has just been issued.
+func TestAGatewayVerifierEnforcesExpiryAndAudience(t *testing.T) {
+	issued := time.Now().UTC().Truncate(time.Second)
+	s := testSigner(t, testRotate(t, nil, false), issued)
+	token, signed, err := s.Sign(testClaims())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := time.Unix(signed.ExpiresAt, 0).UTC(); !got.Equal(issued.Add(tokenLifetime)) {
+		t.Fatalf("exp = %s", got)
+	}
+	parsed, err := jwt.ParseSigned(token, []jose.SignatureAlgorithm{jose.ES256})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var std jwt.Claims
+	if err := parsed.Claims(testKeySet(t, s), &std); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if std.NotBefore != nil {
+		t.Errorf("nbf = %v, want none", std.NotBefore)
+	}
+	want := jwt.Expected{Issuer: "spiffe://wardyn.local", AnyAudience: jwt.Audience{"gw-audience"}}
+	at := func(when time.Time, e jwt.Expected) error {
+		e.Time = when
+		return std.ValidateWithLeeway(e, 0)
+	}
+	if err := at(issued, want); err != nil {
+		t.Errorf("at issue: %v", err)
+	}
+	if err := at(issued.Add(tokenLifetime-time.Second), want); err != nil {
+		t.Errorf("just inside its lifetime: %v", err)
+	}
+	if err := at(issued.Add(tokenLifetime+time.Second), want); !errors.Is(err, jwt.ErrExpired) {
+		t.Errorf("past exp: %v, want ErrExpired", err)
+	}
+	other := want
+	other.AnyAudience = jwt.Audience{"another-gateway"}
+	if err := at(issued, other); !errors.Is(err, jwt.ErrInvalidAudience) {
+		t.Errorf("another audience: %v, want ErrInvalidAudience", err)
+	}
+	wrong := want
+	wrong.Issuer = "wardyn.local"
+	if err := at(issued, wrong); !errors.Is(err, jwt.ErrInvalidIssuer) {
+		t.Errorf("the bare trust domain as issuer: %v, want ErrInvalidIssuer", err)
 	}
 }
 

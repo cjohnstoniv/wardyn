@@ -48,10 +48,14 @@ type GatewayIdentityRoute struct {
 	// Audience is what this route expects in a token's aud. A token for any
 	// other audience is refused here, whatever the control plane minted.
 	Audience string `json:"audience"`
+	// ProviderUID is the provider's UID at dispatch. The proxy never reads it: it is
+	// here because this config is what is sealed, and a mint compares it to the live
+	// provider's, so one deleted and recreated under the same id fails closed.
+	ProviderUID string `json:"provider_uid,omitempty"`
 }
 
 // validate checks a route against the ones before it. A provider has one
-// audience, and a host and port serve one provider, as dispatch authors them.
+// audience, and two providers on one host and port need paths apart (Clashes).
 func (rt GatewayIdentityRoute) validate(earlier []GatewayIdentityRoute) error {
 	switch {
 	case rt.Host == "" || strings.ContainsAny(rt.Host, "/ "):
@@ -69,11 +73,22 @@ func (rt GatewayIdentityRoute) validate(earlier []GatewayIdentityRoute) error {
 		if o.ProviderID == rt.ProviderID && o.Audience != rt.Audience {
 			return fmt.Errorf("provider %q has two audiences", rt.ProviderID)
 		}
-		if hostKey(o.Host) == hostKey(rt.Host) && o.Port == rt.Port && o.ProviderID != rt.ProviderID {
-			return fmt.Errorf("%s:%d serves two providers", rt.Host, rt.Port)
+		if rt.Clashes(o) {
+			return fmt.Errorf("%s:%d serves two providers under one path", rt.Host, rt.Port)
 		}
 	}
 	return nil
+}
+
+// Clashes reports whether rt and o are two providers a request could match both
+// of: one host and port, and a path under both prefixes. The proxy could not tell
+// which provider's token to send, so a run with both is refused.
+func (rt GatewayIdentityRoute) Clashes(o GatewayIdentityRoute) bool {
+	if hostKey(o.Host) != hostKey(rt.Host) || o.Port != rt.Port || o.ProviderID == rt.ProviderID {
+		return false
+	}
+	a, b := strings.TrimSuffix(rt.PathPrefix, "/"), strings.TrimSuffix(o.PathPrefix, "/")
+	return a == "" || b == "" || a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
 }
 
 // covers reports whether a request for path falls under the route's prefix. The
@@ -120,7 +135,7 @@ func (p *Proxy) stripGatewayHeaders(h http.Header) {
 // can read: Go's transport then negotiates gzip and decompresses by itself. Range
 // and If-Range go first: a gateway that echoes headers and honours a range could
 // otherwise split the token across responses, and masking matches exact bytes.
-func (p *Proxy) attachGatewayIdentity(w http.ResponseWriter, r *http.Request, h http.Header, rt *GatewayIdentityRoute, host string, port int, ruleSource string) bool {
+func (p *Proxy) attachGatewayIdentity(w http.ResponseWriter, r *http.Request, h http.Header, rt *GatewayIdentityRoute, host string, port int, ruleSource, callID string) bool {
 	h.Del("Range")
 	h.Del("If-Range")
 	token, err := p.gatewayHolders[rt.ProviderID].current(r.Context(), p)
@@ -130,6 +145,7 @@ func (p *Proxy) attachGatewayIdentity(w http.ResponseWriter, r *http.Request, h 
 		}
 		if p.sink != nil {
 			log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSource)
+			log.GatewayCallID = callID
 			log.Cause = "gateway identity unavailable: " + p.dialFailureCause(err)
 			p.sink.emit(log)
 		}
@@ -152,11 +168,12 @@ func (p *Proxy) attachGatewayIdentity(w http.ResponseWriter, r *http.Request, h 
 // more that begins a held value is replaced too, because a token missing its last
 // characters can be recovered, and a short Content-Length ends cleanly with no read
 // error to tell it from a whole answer.
-func (p *Proxy) relayGatewayRoute(w http.ResponseWriter, r *http.Request, host string, port int, resp *http.Response, ruleSource, sentToken string) {
+func (p *Proxy) relayGatewayRoute(w http.ResponseWriter, r *http.Request, host string, port int, resp *http.Response, ruleSource, sentToken, callID string) {
 	refuse := func(cause string) {
 		if p.sink != nil {
 			log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSource)
 			log.Cause = cause
+			log.GatewayCallID = callID
 			p.sink.emit(log)
 		}
 		p.httpErrorShaped(w, p.shapeOf(r, host), host, "the model gateway's answer was not relayed", errors.New(cause), http.StatusBadGateway,

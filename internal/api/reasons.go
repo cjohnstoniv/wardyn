@@ -655,6 +655,14 @@ const (
 // carry (sandboxCreateFailure, remote.ProxySettingError): the run.create failure row's reason.
 const reasonRunnerProxySetting = "runner_proxy_setting_unsupported"
 
+// A run's gateway identity (internal_gateway_identity.go): the provider no longer matches what the run was
+// dispatched with, so the mint or the revive is refused and a new run is the way on; and a check or the
+// signing key that could not be read just now, on a mint or on the save that turns identity on.
+const (
+	reasonGatewayIdentityChanged     = "gateway_identity_changed"
+	reasonGatewayIdentityUnavailable = "gateway_identity_unavailable"
+)
+
 // A run refused at create because its laptop local model is on a port the runner's person has not allowed
 // (sandboxCreateFailure, remote.LocalModelPortError): the run.create failure row's reason.
 const reasonRunnerLocalModelPort = "runner_local_model_port_not_allowed"

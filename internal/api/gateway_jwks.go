@@ -11,6 +11,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/gatewayidentity"
 )
 
+// gatewayJWKSRoute is the key set's path. Experimental until 0.11.
+const gatewayJWKSRoute = "/.well-known/wardyn-experimental/gateway-jwks.json"
+
 // handleGatewayJWKS serves the public keys an AI gateway verifies a run identity
 // token with. Anonymous by design: the gateway holds no Wardyn credential, and
 // the set holds public keys only. mountUI registers it.
@@ -21,7 +24,9 @@ import (
 //
 // With identity off it answers exactly as a path no route holds, so an install
 // that never turned it on shows nothing new (a gateway with jwtAuth therefore
-// cannot start against it).
+// cannot start against it). Off means no enabled provider has identity on
+// (gatewayIdentityOn), asked before the signer, which a replica keeps for its life:
+// a key row left after the last provider turned off does not publish.
 //
 // The max-age is 60 seconds, the shortest a gateway on agentgateway v1.7.0
 // honours (read from its source: it defaults to 15 minutes and floors a
@@ -29,9 +34,13 @@ import (
 // refetches, and until it refetches it answers 401 to a token from a new key, so
 // both windows are worth one small anonymous request a minute.
 func (s *Server) handleGatewayJWKS(w http.ResponseWriter, r *http.Request) {
+	on, err := s.gatewayIdentityOn(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "error"})
+		return
+	}
 	var signer *gatewayidentity.Signer
-	if s.cfg.GatewayIdentity != nil {
-		var err error
+	if on && s.cfg.GatewayIdentity != nil {
 		if signer, err = s.cfg.GatewayIdentity(r.Context(), false); err != nil {
 			slog.Error("gateway identity: load the signing key for the JWKS", slog.Any("err", err))
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "error"})

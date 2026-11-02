@@ -499,9 +499,6 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	stripSandboxCredentials(out.Header, "")
 	// An MCP server gets the call id on a run with a gateway route, and no identity token.
 	p.stripGatewayHeaders(out.Header)
-	if len(p.gatewayRoutes) > 0 {
-		out.Header.Set(gatewayCallIDHeader, uuid.NewString())
-	}
 	if s.grantID != nil {
 		hdr, err := p.mcpCredential(x.r.Context(), s)
 		if err != nil {
@@ -511,17 +508,30 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 		}
 		out.Header.Set(hdr.name, hdr.value)
 	}
+	callID := ""
+	if len(p.gatewayRoutes) > 0 {
+		callID = uuid.NewString()
+		out.Header.Set(gatewayCallIDHeader, callID)
+	}
 	resp, err := p.roundTripUpstream(out)
 	if err != nil {
-		p.failUpstream(w, err, &egress.DecisionLog{Request: x.req}, s.host, "MCP upstream error")
+		p.failUpstream(w, err, &egress.DecisionLog{Request: x.req, GatewayCallID: callID}, s.host, "MCP upstream error")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 && resp.StatusCode != http.StatusNotModified {
-		x.deny(w, ruleSourceMCPRedirect, "the MCP server answered with a redirect, which Wardyn does not follow", http.StatusBadGateway)
+		// The server was sent the id, so its log and this row join on it.
+		if p.sink != nil {
+			denied := decisionLog(x.req, egress.Deny, ruleSourceMCPRedirect)
+			denied.GatewayCallID = callID
+			p.sink.emit(denied)
+		}
+		http.Error(w, "the MCP server answered with a redirect, which Wardyn does not follow", http.StatusBadGateway)
 		return
 	}
-	p.emitDialledAllow(decisionLog(x.req, egress.Allow, ruleSourceMCP), s.host)
+	allow := decisionLog(x.req, egress.Allow, ruleSourceMCP)
+	allow.GatewayCallID = callID
+	p.emitDialledAllow(allow, s.host)
 	p.relayStreaming(w, resp)
 }
 

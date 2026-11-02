@@ -23,7 +23,7 @@ import { isNetworkFault, runHeadline } from "../../lib/types";
 import { describeEvent, hasNoCaller, inboundDetail, isInbound, serviceSource } from "../../lib/audit-copy";
 import { RunRef } from "../wardyn/run-ref";
 import { AUDIT } from "./audit-copy";
-import { audit as api } from "../../lib/api/audit";
+import { audit as api, gatewayCallId } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { health as healthApi } from "../../lib/api/health";
 import { runs as runsApi } from "../../lib/api/runs";
@@ -47,6 +47,7 @@ import {
   SectionLabel,
 } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
+import { CopyButton } from "../wardyn/copy-button";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { InboundOutcome, NoCaller, SourceLabel } from "../wardyn/audit-inbound";
 import { AuditDecision, ErasedFields, RuleSourceChip, toolRuleDecision } from "../wardyn/audit-decision";
@@ -118,6 +119,8 @@ function eventKind(e: AuditEvent): EventKind {
     action.startsWith("credential.") ||
     action.startsWith("identity.") ||
     action.startsWith("secret.") ||
+    // A run's gateway token mint is a credential event, as identity.mint is.
+    action.startsWith("gateway_identity.") ||
     // DEADCODE-4: an integration IS credential material by reference (hosts/
     // header/credentials) — writing, deleting or adopting one belongs beside
     // secret.*/credential.*, not lumped into the lifecycle catch-all.
@@ -703,6 +706,7 @@ function EventRow({
   const ruled = toolRuleDecision(event);
   const Icon = KIND_META[kind].Icon;
   const detail = inboundDetail(event, true);
+  const callId = gatewayCallId(event);
   // Below sm the row is up to three lines: time, actor, icon and outcome, then the description, then the run reference (#3036).
   // `order` moves the outcome up without touching the DOM order; from sm up it is the one line it always was (#2849).
   return (
@@ -722,14 +726,29 @@ function EventRow({
         <AuditDecision event={event} className="order-2 flex min-w-[12rem] flex-1 items-center gap-2 text-sm sm:order-none sm:min-w-0" />
       ) : (
         <span className="order-2 flex min-w-[12rem] flex-1 items-center gap-2 sm:order-none sm:min-w-0">
-          {detail ? (
+          {detail || callId ? (
             <span className="flex min-w-0 flex-1 flex-col gap-0.5 sm:min-w-[10rem]">
               <span className="truncate text-sm text-foreground" title={describeEvent(event)}>
                 {describeEvent(event)}
               </span>
-              <span data-testid="audit-detail" className="truncate font-mono text-xs text-muted-foreground" title={detail}>
-                {detail}
-              </span>
+              {detail ? (
+                <span data-testid="audit-detail" className="truncate font-mono text-xs text-muted-foreground" title={detail}>
+                  {detail}
+                </span>
+              ) : (
+                // Cut at a narrow width, and Copy still takes the whole value.
+                <span data-testid="audit-call-id" className="flex min-w-0 items-center gap-1 font-mono text-xs text-muted-foreground">
+                  <span className="min-w-0 truncate" title={callId!}>
+                    {AUDIT.CALL_ID_LINE(callId!)}
+                  </span>
+                  <CopyButton
+                    text={callId!}
+                    label={AUDIT.COPY_CALL_ID}
+                    iconClassName="size-3"
+                    className="shrink-0 rounded-sm p-0.5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                </span>
+              )}
             </span>
           ) : (
             <span className="flex-1 truncate sm:min-w-[10rem] text-sm text-foreground" title={describeEvent(event)}>

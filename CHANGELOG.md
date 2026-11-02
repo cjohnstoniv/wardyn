@@ -18,6 +18,18 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Governance profiles have a new limit, "Deny watching background desktops" (`deny_background_desktop_watch`), and Settings has an "Allow watching background runs" switch for macOS virtual machines. The switch is on by default.
 - A governance profile write now warns, without refusing, when its Azure DevOps capability list reaches past a provider row's capability ceiling (a member who asks for one of those is refused at launch). It also warns when a standalone profile leaves out the local-run component limit, or sets desktop, recording, tool rules, auto-stop or LLM inspection weaker than the deployment default.
 - macOS VMs: `wardyn-runnerd drive open <name>` opens a disk drive in a throwaway virtual machine meant to run with no network and copies its files to ~/Wardyn Drives/<name>, so this Mac never reads a disk an agent wrote. Press Return to write your changes back as the agent, or Ctrl-C to discard them. Links, devices and set-id files are skipped, and every file is marked as downloaded with no execute permission. Built and unit-tested; not yet run on a real Mac.
+- Experimental: an admin can turn on run identity per model provider. Each model call to that provider's gateway then carries a short-lived signed token naming the person, the run and the runner. Off changes nothing a run sends. A run with identity on is refused on an older remote runner rather than calling the gateway unsigned.
+- Added: The model provider editor can send each model call's person, run and runner to a gateway you name, for Anthropic API key, OpenAI API key and own-endpoint providers (experimental until 0.11). It shows the issuer and key address to give your gateway (#3861).
+- The run page has its own Desktop tile for a VM run. The Open desktop button sits at the top, and sign-ins and the Files panel stay with it.
+- A background macOS run you may watch gets Watch desktop from that tile. It is view only, and each refusal shows the server's sentence.
+- Saved run-page layouts gain the Desktop tile when they load. Removing it is remembered.
+- Added: Every widget on the run page except the Terminal now has an Expand button in its header that shows the same live widget in a large view, and a widget with more to scroll shows its scrollbar and an edge tint (#3940).
+- Added: the audit rows for a model call through an AI gateway, and for an MCP call on the same run, now record `gateway_call_id`, the id Wardyn sent as `X-Wardyn-Call-Id`, so a run's audit row can be matched to the gateway's access log line (#3864). With no gateway route nothing is sent or recorded.
+- The Audit screen and a run's Audit tab show a gateway call id, with a copy button, on a model call or MCP call row of a run whose gateway has identity on. The same id appears in the gateway's log (#3864).
+- Gateway token rows read "Signed a gateway token for <provider>" or "Refused a gateway token for <provider>" and appear under the Credentials filter.
+- Added: an external AI gateway can now check Wardyn's run identity token. The setup page lists every claim and how to join a run's audit rows to the gateway's log by call id. The token format and key-set address are experimental until 0.11.
+- The signing keys publish at `/.well-known/wardyn-experimental/gateway-jwks.json`, rotated with `wardynd -rotate-gateway-identity-key`; both experimental until 0.11.
+- A watch of a background macOS VM run is refused with `desktop_sign_ins_off` when the agent's desktop sign-ins are not allowed.
 
 ### Changed
 
@@ -34,8 +46,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - When a member's folder mount is refused for being outside the member workspace roots, the message now names `WARDYN_USER_WORKSPACE_ROOTS` and says an operator sets it.
 - macOS VMs: `edit-base` now says on its first line that the edit is of a copy of the VM base, not this Mac, and that the copy takes about 2 minutes to start. Its window lists, in order, the code, the setup questions, who you are signed in as and where Terminal is, Full Disk Access and the certificates; a certificate the base reads as not trusted prints with its subject, SHA-256 and the command. The recheck prints what it read (each certificate, Full Disk Access and the desktop), a guest that cannot answer reads "could not be read" and never "allowed", and `status` prints the last edit's read with its time. Built and unit-tested; not yet run on a real Mac.
 - macOS VMs: `wardyn-runnerd macos-vm status` now reads the newest tools-port dial from the run boot, the prepare log and the tools update log, says where each line came from, and says that its number is this Mac's own sum and does not read the organisation's limits. A tools update now stamps the dial it reports, so an older connected dial can no longer out-rank a newer failure. Built and unit-tested; not yet run on a real Mac.
+- A background run shows no Take over button, no Attach tile, and no Watch button in the terminal notice. A background run's takeover request shows no Take over in the approval card, the toast or the runs list. Decline and the toast itself stay.
 
 ### Fixed
+- A macOS VM run's desktop is no longer recorded, as Review already said. Earlier 0.10.0 prereleases may have stored its screen frames, unmasked, at the Screen and actions level; `desktop.recording.write` on a macOS VM run shows whether they did. Recordings already stored are kept forever by default, unless `WARDYN_RECORDING_RETENTION_DAYS` is set.
+- Review and the docs now say that console and SSH terminal sessions on a macOS VM run are recorded at this run's recording level, as they always were (`session.recording.write`).
 
 - The membership-move dry run counts a live run whose owner a membership names by a verified alias.
 - A BYOI selftest that did not run says so, in the run and in its audit row, on an interactive run with no task.
@@ -56,6 +71,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The console's terminal reconnect budget is no longer reset by a socket that opens and says nothing: the first terminal byte, or 15 seconds open, resets it. The runner no longer logs an ordinary detach as a "session read failed" warning, and names which side failed when it does warn.
 - The governance admin view no longer says the deployment default set a wall that a standalone profile sets itself. A size the profile omits still follows, and is credited to, the deployment default. No resolved value changes.
 - A run that Amazon Bedrock refused with any other HTTP 4xx or 5xx now names, in its failure hint, the status and the error class AWS answered with. Wardyn does not record AWS's message; the agent's own output may hold AWS's explanation, and so may the run's recording if the run has one ([#3891](https://github.com/cjohnstoniv/wardyn/issues/3891)).
+- Fixed: The Service panel on the run page is no longer clipped on a short tile (#3940).
 
 ### Security
 

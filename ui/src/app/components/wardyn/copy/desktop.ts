@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Open desktop (mock M6: M6-RunDetail, M6-Desktop, M6-States, M6-Phone). Byte for byte from the boards.
+// Open desktop: the words are byte for byte from the approved mocks.
 // The button itself is UI_APPS_LANE.cta("desktop"), so the "Open …" pattern holds.
 
 export const DESKTOP = {
@@ -60,6 +60,8 @@ export const DESKTOP = {
   watch: "Watch desktop", // MAC-V02
   viewOnlyTitle: "View only", // MAC-V05
   viewOnlyBody: "macOS 26 doesn't keep control here. Typing and clicking don't reach this desktop.", // MAC-V06
+  backgroundWatchTile: "You can watch this desktop. Typing, clicking, pasting and clipboard copy are disabled.",
+  backgroundWatchExposure: "A screen can show what the run keeps out of its logs, such as an app's secrets, open documents or anything else it puts on screen.",
   backgroundWatchBody: "This is a background run. Typing, clicking, pasting and clipboard copy are disabled.",
   loginWindowNote: "You may see a macOS login window instead of the agent's screen. The run keeps going either way.",
   // The gateway's own close code: a re-check ended a watch of a background run. Never the hour's words.

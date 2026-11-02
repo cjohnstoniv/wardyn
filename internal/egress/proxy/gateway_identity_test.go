@@ -1242,7 +1242,7 @@ func TestGatewayIdentity_RefreshLandingDuringTheAnswer(t *testing.T) {
 		t.Helper()
 		resp := &http.Response{StatusCode: 200, Header: http.Header{"X-Echo": {token}}, Body: io.NopCloser(body)}
 		rec := httptest.NewRecorder()
-		g.p.relayGatewayRoute(rec, mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"m", nil), gwidHost, 443, resp, ruleSourceLLM, token)
+		g.p.relayGatewayRoute(rec, mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"m", nil), gwidHost, 443, resp, ruleSourceLLM, token, "")
 		return rec
 	}
 	t.Run("dropped before the set is read", func(t *testing.T) {
@@ -1423,7 +1423,7 @@ func TestGatewayIdentityConfig(t *testing.T) {
 	for f := range rt.Fields() {
 		keys = append(keys, f.Tag.Get("json"))
 	}
-	if want := []string{"host", "port", "path_prefix,omitempty", "provider_id", "audience"}; !slices.Equal(keys, want) {
+	if want := []string{"host", "port", "path_prefix,omitempty", "provider_id", "audience", "provider_uid,omitempty"}; !slices.Equal(keys, want) {
 		t.Fatalf("route keys %v: a route holds no token and no key, want %v", keys, want)
 	}
 	good := map[string]any{"host": gwidHost, "port": 443, "path_prefix": "/v1", "provider_id": "p", "audience": "a"}
@@ -1447,10 +1447,25 @@ func TestGatewayIdentityConfig(t *testing.T) {
 	for name, second := range map[string]map[string]any{
 		"two audiences for a provider": {"host": gwidOther, "port": 443, "provider_id": "p", "audience": "b"},
 		"two providers on a host":      {"host": gwidHost, "port": 443, "provider_id": "q", "audience": "b"},
+		"two providers on one path":    {"host": gwidHost, "port": 443, "provider_id": "q", "audience": "b", "path_prefix": "/v1/"},
+		"a path under the other's":     {"host": gwidHost, "port": 443, "provider_id": "q", "audience": "b", "path_prefix": "/v1/messages"},
 	} {
 		if _, err := LoadConfigBytes(baseConfigJSON(t, map[string]any{"gateway_identity": []any{good, second}})); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+	// One gateway serving two providers on paths apart: each request matches one route.
+	apart := map[string]any{"host": gwidHost, "port": 443, "path_prefix": "/v10", "provider_id": "q", "audience": "b"}
+	cfg, err = LoadConfigBytes(baseConfigJSON(t, map[string]any{"gateway_identity": []any{good, apart}}))
+	if err != nil {
+		t.Fatalf("two providers on paths apart: %v", err)
+	}
+	p := &Proxy{gatewayRoutes: cfg.GatewayIdentity}
+	if rt := p.gatewayRouteFor(gwidHost, 443, "/v10/chat"); rt == nil || rt.ProviderID != "q" {
+		t.Errorf("/v10/chat matched %+v, want q", rt)
+	}
+	if rt := p.gatewayRouteFor(gwidHost, 443, "/v1/messages"); rt == nil || rt.ProviderID != "p" {
+		t.Errorf("/v1/messages matched %+v, want p", rt)
 	}
 	unset, err := LoadConfigBytes(baseConfigJSON(t, nil))
 	if err != nil {

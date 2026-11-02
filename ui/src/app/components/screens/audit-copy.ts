@@ -60,6 +60,14 @@ export const AUDIT = {
   // Where a service row's fact came from (r15 T2-f): read inside the sandbox, or decided by the server.
   SOURCE_SANDBOX: "sandbox",
   SOURCE_SERVER: "server",
+  // The call id on an egress.allow / egress.deny row that went to a gateway with identity on (data.gateway_call_id),
+  // the value a line in the gateway's log carries. "Call id", not "Gateway call id": a row to an MCP server has one too.
+  CALL_ID_LINE: (id: string) => `Call id ${id}`,
+  COPY_CALL_ID: "Copy call id",
+  // gateway_identity.mint: a run's proxy asked for a gateway token. A mint row carries no call id.
+  MINT_SIGNED: "Signed a gateway token",
+  MINT_REFUSED: "Refused a gateway token",
+  MINT_NO_PROVIDER: "an unknown provider",
   OUTCOME_ALLOW: "allow",
   OUTCOME_DENY: "deny",
 } as const;
@@ -179,6 +187,9 @@ function describe(e: AuditEvent): Described {
   }
   if (e.action === "inbound.allow" || e.action === "inbound.deny") {
     return { head: e.action === "inbound.allow" ? AUDIT.INBOUND_ALLOW : AUDIT.INBOUND_DENY, join: { sep: " to ", fallback: AUDIT.INBOUND_NO_APP } };
+  }
+  if (e.action === "gateway_identity.mint" && (e.outcome === "success" || e.outcome === "denied")) {
+    return { head: e.outcome === "success" ? AUDIT.MINT_SIGNED : AUDIT.MINT_REFUSED, join: { sep: " for ", fallback: AUDIT.MINT_NO_PROVIDER } };
   }
   if (e.action === "credential.revoke") return { head: AUDIT.REVOKE_RUN_CREDENTIALS };
   if (e.action === "run.end.set" && e.data?.reason === "service_renewed") return { head: capitalize(AUDIT.SERVICE_RENEWED), join: { sep: " — " } };

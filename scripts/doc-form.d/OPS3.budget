@@ -107,7 +107,7 @@ docs/operations/admin-only-writes.md=3933 share=35 # tightened from 3738 to the 
 # docs/operations/three-roles.md 4772 = ours 4734 + theirs 4720 - base 4682 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
 # docs/operations/three-roles.md 4788 = 4772 + 16, measured: a unit PUT takes the unit as GET returns it.
 # docs/operations/three-roles.md 4826 adds 38 over 4788, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
-docs/operations/three-roles.md=4827 share=35 # +1 (rc.11, measured 4827: the background-watch limit in the meet table)
+docs/operations/three-roles.md=4914 share=35 # +87 (rc.11, measured 4914: the background watch exception and its re-check row)
 # docs/operations/provider-policy.md 1362 adds 84 over 1278, measured (0.10.0 GHPAT): the GitHub per_user row that takes each person's own token.
 # docs/operations/provider-policy.md 1382 adds 20 over 1362, measured (0.10.0 GHPAT r2): a run cannot mix a shared and a personal-token GitHub row.
 docs/operations/provider-policy.md=1382 share=35
@@ -141,7 +141,7 @@ docs/operations/user-drives.md=4984 share=35
 # docs/operations/capabilities.md 4205 adds 36: the withdrawn component grant line (0.9.3 FIN-B2).
 # docs/operations/capabilities.md 4383 = 4205 + 178, measured: a restricted value is closed whatever the switch says, the explain cross-reference and the exact self_host_runner grant.
 # docs/operations/capabilities.md 4586 adds 193 over 4393, measured (rc.8 inbound docs): the inbound feature value.
-docs/operations/capabilities.md=4586 share=35
+docs/operations/capabilities.md=4617 share=35 # +31 (rc.11, measured 4617: a watch is not a capability kind)
 # docs/operations/custom-components.md 1365 adds 181 over 1184, measured: the credential confinement floor on a CC1-only estate (0.9.3 ASK-6).
 # docs/operations/custom-components.md 1269, measured: the credential-floor section trimmed from 181 to 85 added words over 1184 (0.9.3 ASK-6 review).
 docs/operations/custom-components.md=1269 share=35
@@ -189,7 +189,10 @@ docs/operations/api-tokens.md=6550 share=35 # +86 (lane SI-DOCS), measured; +17 
 # docs/operations/denials.md 5629 adds 50 over 5579, measured (0.10 rc.6): POST /runs and preflight warning_context.
 # docs/operations/denials.md 5640 adds 11 over 5629, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
 # docs/operations/denials.md 5659 adds 19 over 5640, measured (0.10 rc.11 wave 3): the governance_unit row's runs.desktop_watch cause.
-docs/operations/denials.md=5659 share=35
+# docs/operations/denials.md 5641 adds 1 over 5640, measured (0.10 rc.11 gateway identity): the setting on runner_proxy_setting_unsupported.
+# docs/operations/denials.md 5660 = ours 5659 + theirs 5641 - base 5640 at the 0.10 W7 merge of rc11-w4.
+# docs/operations/denials.md 5702 = ours 5660 + theirs 5682 - base 5640 at the 0.10 W7 merge of rc11-w4.
+docs/operations/denials.md=5702 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

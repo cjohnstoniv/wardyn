@@ -986,6 +986,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/internal/approvals/{id}/expire":          {class: classInternal},
 	"POST /api/v1/internal/credentials/mint":               {class: classInternal},
 	"POST /api/v1/internal/desktop-signin/check":           {class: classInternal},
+	"POST /api/v1/internal/gateway-identity":               {class: classInternal},
 	"POST /api/v1/internal/decisions":                      {class: classInternal},
 	"POST /api/v1/internal/activity":                       {class: classInternal},
 	"POST /api/v1/internal/groundtruth":                    {class: classInternal},
@@ -1363,6 +1364,10 @@ func TestAuthzMatrix(t *testing.T) {
 				}
 
 			case classInternal:
+				if pattern == gatewayMintPath {
+					// Off, this door answers as a path no route holds, before any credential is read.
+					testGatewayIdentityOn(srv)
+				}
 				p := buildPath(pattern, "x1") // CF: OLD probe
 				if w := do(t, srv, method, p, "", body); w.Code != http.StatusUnauthorized {
 					t.Errorf("no token: status = %d, want 401; body=%s", w.Code, w.Body.String())

@@ -30,6 +30,7 @@ import { isTakeoverRequest, TakeoverCard } from "../wardyn/takeover-card";
 import { REAUTH_ROW, reauthAudience } from "../wardyn/model-access-copy";
 import { useClaimModelAccessDoor, useModelAccessDoor, useShellSetupStatus } from "../wardyn/model-access-context";
 import { resolveDoor } from "../../lib/model-access";
+import { isBackgroundRun } from "../../lib/run-entry";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { OpenInUserView, runPath, useConsoleMode } from "../wardyn/console-view";
 import { PUSH } from "../wardyn/copy/push";
@@ -227,6 +228,7 @@ export function ApprovalCard({
         <TakeoverCard
           item={item}
           busy={takeoverBusy}
+          canTakeOver={!(run && isBackgroundRun(run))}
           onTakeOver={() => (onTakeOver ? onTakeOver() : void navigate(runPath(view, item.run_id)))}
           onDecline={async () => {
             setTakeoverBusy(true);

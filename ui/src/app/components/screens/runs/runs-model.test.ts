@@ -403,6 +403,11 @@ describe("rowPresentation — a takeover request (#2963, M8-Banner-A runs list)"
     expect(p).toMatchObject({ hue: "amber", word: "Needs you to take over", action: "take-over", needsYou: true });
   });
 
+  it("a background run offers no Take over, even by=you", () => {
+    const p = rowPresentation(run({ experience: "background", attention: { kind: "takeover", by: "you", pending: 1 } }), false);
+    expect(p.action).toBeNull();
+  });
+
   it("by=owner: no action and not this viewer's to clear", () => {
     const p = rowPresentation(run({ attention: { kind: "takeover", by: "owner", pending: 1 } }), true);
     expect(p).toMatchObject({ action: null, needsYou: false });

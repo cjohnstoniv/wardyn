@@ -68,6 +68,13 @@ export interface ProviderDraft {
   maxContext: string;
   maxOutput: string;
   keepAlive: string;
+  // gateway_identity: the "Send the person and run to this gateway" switch and its Token audience. Named
+  // apart from the editor's own `audience`, which is who the provider is available to.
+  gatewayOn: boolean;
+  gatewayAudience: string;
+  // The address and audience the stored row sends identity with, or null when it does not: what a Base
+  // URL edit compares against, and what turning it off is a change from.
+  gatewaySaved: { baseUrl: string; audience: string } | null;
   harnesses: Record<string, HarnessDraft>;
 }
 
@@ -129,6 +136,9 @@ export function newDraft(kind: EditorKind, harnesses: HarnessRow[]): ProviderDra
     maxContext: "",
     maxOutput: "",
     keepAlive: "",
+    gatewayOn: false,
+    gatewayAudience: "",
+    gatewaySaved: null,
     harnesses: Object.fromEntries(
       harnesses.map((h) => [h.id, { ticked: !incompatibleReason(kind, h.id), model: "", path: "" }]),
     ),
@@ -157,6 +167,9 @@ export function draftFrom(p: ModelProvider, harnesses: HarnessRow[]): ProviderDr
     maxContext: p.local?.max_context ? String(p.local.max_context) : "",
     maxOutput: p.local?.max_output ? String(p.local.max_output) : "",
     keepAlive: p.local?.keep_alive_seconds ? String(p.local.keep_alive_seconds) : "",
+    gatewayOn: !!p.gateway_identity,
+    gatewayAudience: p.gateway_identity?.audience ?? "",
+    gatewaySaved: p.gateway_identity ? { baseUrl: p.base_url ?? "", audience: p.gateway_identity.audience } : null,
     harnesses: rows,
   };
 }
@@ -204,6 +217,10 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
     name,
     kind: draft.kind,
     base_url: draft.baseUrl.trim() || undefined,
+    // Absent is off; a stored field the editor doesn't show rides along inside it.
+    gateway_identity: draft.gatewayOn
+      ? { ...base?.gateway_identity, audience: draft.gatewayAudience.trim() }
+      : undefined,
     auth:
       endpoint || (local && draft.useToken)
         ? { header: draft.authHeader.trim() || undefined, format: toWireFormat(draft.authFormat.trim()) || undefined }
@@ -284,14 +301,19 @@ export function addressChanged(a: ModelProvider, b: ModelProvider): boolean {
 // Which field a refused save's own sentence is about (M9: the field it names is
 // outlined beside the red card). Read off the server's wording, so a refusal the
 // editor doesn't recognise outlines nothing and the card still says all of it.
-export type RefusedField = "base_url" | "models" | "max_context" | "max_output" | "keep_alive_seconds";
+export type RefusedField = "base_url" | "gateway_audience" | "models" | "max_context" | "max_output" | "keep_alive_seconds";
 
 export function refusedField(message: string | null): RefusedField | null {
   if (!message) return null;
-  if (message.includes("model must be one of local.models")) return null; // a harness's, see refusedHarness
-  if (message.includes("base_url")) return "base_url";
-  if (message.includes("local.models")) return "models";
-  return (["max_context", "max_output", "keep_alive_seconds"] as const).find((f) => message.includes(`local.${f}`)) ?? null;
+  // The provider id is quoted at the sentence's start and may spell a field's name ("audience", "local.models"),
+  // so only what follows it is read. A refusal without that opening is read whole.
+  const rest = message.replace(/^.*?model_providers: "[a-z0-9._-]*": /s, "");
+  if (rest.includes("model must be one of local.models")) return null; // a harness's, see refusedHarness
+  // The audience's refusals, matched at their fixed opening: the duplicate one quotes what the admin typed.
+  if (/^(gateway_identity[.:] ?audience|moved to a new address, so gateway_identity\.audience)/.test(rest)) return "gateway_audience";
+  if (rest.includes("base_url")) return "base_url";
+  if (rest.includes("local.models")) return "models";
+  return (["max_context", "max_output", "keep_alive_seconds"] as const).find((f) => rest.includes(`local.${f}`)) ?? null;
 }
 
 // The agent whose Model the server refused ("codex-cli: model must be one of local.models").

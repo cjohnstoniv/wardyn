@@ -236,7 +236,8 @@ personal token. Their own runs are bounded by the governance profile and the
 capability grants that apply to them. That holds at every run seam: quotas, the
 drive and workspace-provider doors, owner revalidation and preset launch.
 `deny_interactive` and `deny_ui_apps` also bind the terminal, SSH and UI gateway
-on their own run.
+on their own run, and a watch of a background macOS run's desktop. Only the person
+who started that run can watch it.
 **Record Mode is refused** (`403` `recording_governed`), because that lane builds
 its own allow-all, credentialed sandbox and skips the member clamp on purpose.
 Setting `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` to `recording` restores it for that lane

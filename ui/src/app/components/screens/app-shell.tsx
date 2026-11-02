@@ -505,12 +505,12 @@ export function AppShell({
     [focus],
   );
 
-  // The z-50 banners stay above focus mode's overlay, so the overlay starts below them: their bottom edge,
-  // published as --shell-banner-h for as long as focus is on (focus-mode.tsx reads it).
+  // The z-50 banners stay above focus mode's overlay, so the overlay starts below them: their bottom edge, published
+  // as --shell-banner-h (focus-mode.tsx and the run page's expanded widget read it).
   const bannerStackRef = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
     const el = bannerStackRef.current;
-    if (!focus || !el) return;
+    if (!el) return;
     const root = document.documentElement;
     const sync = () => root.style.setProperty("--shell-banner-h", `${Math.round(el.getBoundingClientRect().bottom)}px`);
     sync();
