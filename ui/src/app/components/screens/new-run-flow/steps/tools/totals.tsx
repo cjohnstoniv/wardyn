@@ -39,7 +39,7 @@ export const BADGE: Record<HostBadge, { text: string; tone: "neutral" | "success
 const TOTAL_CLASS = "flex min-w-0 flex-col gap-2.5 rounded-lg border border-border bg-surface-2 p-3.5";
 const POLICY_CLASS = "border-t border-dashed border-border pt-2.5 text-sm text-muted-foreground";
 
-/** The knobs the person's saved walls name, each as the clause (first use of a new site is left out: it is inert on an allow-all run and a stricter ceiling changes it, which the walls alone cannot tell); the walls line says it in; none for walls that name nothing. */
+/** The knobs the person's saved walls name, each as the clause the walls line says it in; none for walls that name nothing. First use of a new site is left out: it is inert on an allow-all run and a stricter ceiling changes it, which the walls alone cannot tell. */
 export function wallsApplyClauses(walls: PersonalWallsSpec | undefined): string[] {
   if (!walls) return [];
   const clauses: string[] = [];
