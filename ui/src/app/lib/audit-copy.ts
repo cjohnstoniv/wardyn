@@ -136,6 +136,9 @@ function describeParts(e: AuditEvent): AuditParts {
     const verb = e.action === "inbound.allow" ? AUDIT.INBOUND_ALLOW : AUDIT.INBOUND_DENY;
     return { lead: `${verb} to`, sep: " ", object: e.target || AUDIT.INBOUND_NO_APP };
   }
+  if (e.action === "gateway_identity.mint" && (e.outcome === "success" || e.outcome === "denied")) {
+    return { lead: `${e.outcome === "success" ? AUDIT.MINT_SIGNED : AUDIT.MINT_REFUSED} for`, sep: " ", object: e.target || AUDIT.MINT_NO_PROVIDER };
+  }
   if (e.action === "credential.revoke") return whole(AUDIT.REVOKE_RUN_CREDENTIALS);
   if (e.action === "run.end.set" && e.data?.reason === "service_renewed") {
     return { lead: capitalize(AUDIT.SERVICE_RENEWED), sep: " — ", object: e.target ?? "" };

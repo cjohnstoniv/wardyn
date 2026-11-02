@@ -364,6 +364,15 @@ export type AuditListFilter = {
   newest?: boolean;
 };
 
+// The call id a row was sent to the gateway under (data.gateway_call_id), on an egress.allow or egress.deny row only.
+// It is text the proxy wrote, so a value that is not a UUID is not returned, and callers render it only as text.
+const CALL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function gatewayCallId(e: AuditEvent): string | null {
+  if (e.action !== "egress.allow" && e.action !== "egress.deny") return null;
+  const id = e.data?.gateway_call_id;
+  return typeof id === "string" && CALL_ID.test(id) ? id : null;
+}
+
 export const audit = {
   // GET /api/v1/audit?run_id=&action=|action_prefix=   (all optional;
   // server-side filter — see parseAuditFilter, internal/api/audit.go). Either
