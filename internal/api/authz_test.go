@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	gooidctest "github.com/coreos/go-oidc/v3/oidc/oidctest"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
@@ -3009,5 +3010,204 @@ func TestPathProvenanceIsSecurityTierOnly(t *testing.T) {
 	}
 	if want := []string{"governance_check.go", "governance_unit_write.go"}; !slices.Equal(carriers, want) {
 		t.Errorf("path_provenance is declared in %v, want only %v (checkEffective, governanceUnitView)", carriers, want)
+	}
+}
+
+// ── CLI sign-in and identity-provider logout routes ──
+//
+// routeMatrix is walked from a server with no CLI sign-in and no logout flags, so chi.Walk never
+// sees these ten routes: the CLI sign-in set needs a store that can hold it (mountCLISignInRoutes,
+// cli_sign_in.go) and the logout pair needs WARDYN_OIDC_BACKCHANNEL_LOGOUT / _FRONTCHANNEL_LOGOUT
+// (routes.go, signin_denied.go). They are classified here instead, in a table of their own, and
+// TestAuthzCLIRoutes walks a server that mounts them and fails on any route that is in neither
+// table, so a new CLI or logout route cannot join the router unlisted.
+
+// authzCLIHuman is the class of the /me CLI routes: humanOrAdminAuth admits the caller, and the
+// handler then refuses anything that is not a signed-in person (oidcHumanFromContext is empty for
+// the admin bearer), so the admin token gets 403 api_token_no_human where classMember admits it.
+const authzCLIHuman routeClass = "signed_in_human"
+
+// authzCLIRoute is one row: the class, the body to send, and the handler's own answer to a caller the
+// gate admits (status, and the reason or error code in the body; empty when the answer carries none).
+type authzCLIRoute struct {
+	class  routeClass
+	body   string
+	status int
+	answer string
+}
+
+// authzCLIRoutes is keyed as routeMatrix is. Every expected answer is the handler's, read with the
+// store shim below answering "not found" to every read:
+//
+//   - POST /cli/sign-ins: an empty request is refused by cliSignInRequestRefusal (cli_sign_in.go:161),
+//     400 cli_sign_in_invalid_request (cli_sign_in.go:199-202).
+//   - POST /cli/sign-ins/{id}/token: an id the store does not know is cliSignInInvalid, 401
+//     cli_sign_in_invalid (cli_sign_in.go:401-403, 429-434). That 401 is the handler's, not a gate.
+//   - POST /cli/sessions/{id}/refresh: an unknown session is cliSessionInvalid, 401
+//     cli_session_invalid (cli_sessions.go:170-172, 226-229). Also the handler's.
+//   - /me/cli-sign-ins/{id} (get, approve, deny): pendingCLISignIn answers 404 cli_sign_in_not_found
+//     (cli_sign_in.go:243-246). Approve first runs mintGuards (apitokens.go:296), which admits a
+//     member the way POST /me/tokens does (routeMatrix: classMember).
+//   - GET /me/cli-sessions: 200 with the caller's (here no) sessions (cli_sessions.go:350-371).
+//   - DELETE /me/cli-sessions/{id}: EndCLISession's not-found is 404 cli_session_not_found
+//     (cli_sessions.go:377-396).
+//   - The two logout routes carry no credential of the caller's: the back-channel one reads a signed
+//     logout token (a missing one is 400 invalid_request, auth/oidc/backchannel.go:45-47, 75-76) and
+//     the front-channel one an iss and sid query (400 invalid_request without them,
+//     auth/oidc/frontchannel.go:83-85).
+var authzCLIRoutes = map[string]authzCLIRoute{
+	"POST /api/v1/cli/sign-ins":                 {classAnonymous, "{}", http.StatusBadRequest, reasonCLISignInInvalidRequest},
+	"POST /api/v1/cli/sign-ins/{id}/token":      {classAnonymous, "{}", http.StatusUnauthorized, reasonCLISignInInvalid},
+	"POST /api/v1/cli/sessions/{id}/refresh":    {classAnonymous, "{}", http.StatusUnauthorized, reasonCLISessionInvalid},
+	"POST /auth/backchannel-logout":             {classAnonymous, "", http.StatusBadRequest, "invalid_request"},
+	"GET /auth/frontchannel-logout":             {classAnonymous, "", http.StatusBadRequest, "invalid_request"},
+	"GET /api/v1/me/cli-sign-ins/{id}":          {authzCLIHuman, "", http.StatusNotFound, reasonCLISignInNotFound},
+	"POST /api/v1/me/cli-sign-ins/{id}/approve": {authzCLIHuman, "{}", http.StatusNotFound, reasonCLISignInNotFound},
+	"POST /api/v1/me/cli-sign-ins/{id}/deny":    {authzCLIHuman, "{}", http.StatusNotFound, reasonCLISignInNotFound},
+	"GET /api/v1/me/cli-sessions":               {authzCLIHuman, "", http.StatusOK, ""},
+	"DELETE /api/v1/me/cli-sessions/{id}":       {authzCLIHuman, "", http.StatusNotFound, reasonCLISessionNotFound},
+}
+
+// authzCLIStore is the matrix store with the CLI sign-in half added: every read finds nothing and no
+// write is kept, which is all the gate probes need. The other store methods are authzStore's.
+type authzCLIStore struct{ *authzStore }
+
+var _ store.CLISignInStore = authzCLIStore{}
+
+func (authzCLIStore) CreateCLISignIn(context.Context, store.CLISignIn, int, time.Time) (bool, error) {
+	return true, nil
+}
+func (authzCLIStore) GetCLISignIn(context.Context, uuid.UUID) (store.CLISignIn, error) {
+	return store.CLISignIn{}, store.ErrNotFound
+}
+func (authzCLIStore) DecideCLISignIn(context.Context, uuid.UUID, store.CLISignInDecision) (store.CLISignIn, error) {
+	return store.CLISignIn{}, store.ErrNotFound
+}
+func (authzCLIStore) RedeemCLISignIn(context.Context, uuid.UUID, string, time.Time) (store.CLISignIn, error) {
+	return store.CLISignIn{}, store.ErrNotFound
+}
+func (authzCLIStore) CreateCLISession(context.Context, store.CLISessionRow, string, types.APIToken, string) (types.APIToken, error) {
+	return types.APIToken{}, store.ErrNotFound
+}
+func (authzCLIStore) GetCLISession(context.Context, uuid.UUID) (store.CLISessionRow, error) {
+	return store.CLISessionRow{}, store.ErrNotFound
+}
+func (authzCLIStore) RotateCLISession(context.Context, uuid.UUID, int64, string, time.Time, types.APIToken, string) (types.APIToken, error) {
+	return types.APIToken{}, store.ErrNotFound
+}
+func (authzCLIStore) CreateCLIAdminToken(context.Context, uuid.UUID, types.APIToken, string) (types.APIToken, error) {
+	return types.APIToken{}, store.ErrNotFound
+}
+func (authzCLIStore) EndCLISession(context.Context, uuid.UUID, string, string, time.Time) (store.CLISessionRow, error) {
+	return store.CLISessionRow{}, store.ErrNotFound
+}
+func (authzCLIStore) ListCLISessions(context.Context, string, time.Time) ([]store.CLISessionRow, error) {
+	return nil, nil
+}
+func (authzCLIStore) CountLiveCLISessions(context.Context, string) (int, error) { return 0, nil }
+
+// authzCLIAuthenticator is a real authenticator with both logout routes on, over a throwaway
+// discovery server. Its sessions are signed with accessTestHMACKey (accessSession), not the empty key
+// ssoSession uses for the zero-value authenticator the matrix server carries.
+func authzCLIAuthenticator(t *testing.T) *oidc.Authenticator {
+	t.Helper()
+	idp := &gooidctest.Server{}
+	httpSrv := httptest.NewServer(idp)
+	idp.SetIssuer(httpSrv.URL)
+	t.Cleanup(httpSrv.Close)
+	auth, err := oidc.New(context.Background(), oidc.Config{
+		IssuerURL: httpSrv.URL, ClientID: "wardyn-client", ClientSecret: "secret", RedirectURL: "http://localhost/auth/callback",
+		Revocations: fakeAuthzSessionRevocations{}, BackchannelLogout: true, FrontchannelLogout: true,
+		SessionSIDs: &memSessionSIDs{rows: map[string]string{}},
+	}, accessTestHMACKey)
+	if err != nil {
+		t.Fatalf("oidc.New: %v", err)
+	}
+	return auth
+}
+
+// authzCLIAnswer is the reason in a response body, or its error code when it has no reason (the
+// logout routes answer in the OAuth shape).
+func authzCLIAnswer(w *httptest.ResponseRecorder) string {
+	var b errorBody
+	_ = json.Unmarshal(w.Body.Bytes(), &b)
+	if b.Reason != "" {
+		return b.Reason
+	}
+	return b.Error
+}
+
+// TestAuthzCLIRoutes holds the CLI sign-in and identity-provider logout routes to the gates the
+// handlers' code states: anonymous routes answer the same to every caller, the /me routes admit a
+// signed-in person only. Per-person scoping of the session list and of ending a session is the store's
+// (principal is passed down) and is pinned against Postgres in cli_sign_in_pg_test.go.
+func TestAuthzCLIRoutes(t *testing.T) {
+	srv, _, _, _ := newAuthzMatrixServer(t, func(c *Config) {
+		c.OIDC = authzCLIAuthenticator(t)
+		c.Store = authzCLIStore{c.Store.(*authzStore)}
+		c.CLISignIn = CLISignInConfig{Enabled: true}
+	})
+	// The probes send far more requests from one address than the limiters allow a real caller.
+	srv.cliPeerLimiter = principalLimiter{rate: 1e6, burst: 1e6, max: 1}
+	srv.cliRefreshPeerLimiter = principalLimiter{rate: 1e6, burst: 1e6, max: 1}
+	srv.cliRefreshSessionLimiter = principalLimiter{rate: 1e6, burst: 1e6, max: 1}
+	srv.backchannelLimiter = principalLimiter{rate: 1e6, burst: 1e6, max: 1}
+	srv.frontchannelLimiter = principalLimiter{rate: 1e6, burst: 1e6, max: 1}
+
+	walked := map[string]bool{}
+	if err := chi.Walk(srv.router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		walked[method+" "+route] = true
+		return nil
+	}); err != nil {
+		t.Fatalf("chi.Walk: %v", err)
+	}
+	for key := range walked {
+		_, inMatrix := routeMatrix[key]
+		_, inCLI := authzCLIRoutes[key]
+		if !inMatrix && !inCLI {
+			t.Errorf("UNCLASSIFIED route %q — add it to authzCLIRoutes (or routeMatrix, if the matrix server now mounts it)", key)
+		}
+	}
+	for key := range authzCLIRoutes {
+		if !walked[key] {
+			t.Errorf("STALE authzCLIRoutes entry %q — the router no longer registers this route; remove it", key)
+		}
+		if _, ok := routeMatrix[key]; ok {
+			t.Errorf("authzCLIRoutes entry %q is also in routeMatrix — keep it in one table", key)
+		}
+	}
+
+	adminSess := accessSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin, nil)
+	memberSess := accessSession(t, "sub-member", "member@corp.example", oidc.RoleUser, nil)
+	for key, rc := range authzCLIRoutes {
+		method, pattern, _ := strings.Cut(key, " ")
+		t.Run(key, func(t *testing.T) {
+			p := buildPath(pattern, uuid.NewString())
+			// want is the handler's own answer: status and reason both, so a 401 that is the
+			// handler's (cli_sign_in_invalid) cannot be mistaken for the gate's.
+			want := func(who string, w *httptest.ResponseRecorder, status int, answer string) {
+				t.Helper()
+				if w.Code != status || authzCLIAnswer(w) != answer {
+					t.Errorf("%s: %d %q, want %d %q; body=%s", who, w.Code, authzCLIAnswer(w), status, answer, w.Body.String())
+				}
+			}
+			switch rc.class {
+			case classAnonymous:
+				// No credential is read, so none changes the answer.
+				want("no credential", doSSO(t, srv, method, p, nil, rc.body), rc.status, rc.answer)
+				want("admin token", do(t, srv, method, p, adminToken, rc.body), rc.status, rc.answer)
+				want("admin session", doSSO(t, srv, method, p, adminSess, rc.body), rc.status, rc.answer)
+				want("member session", doSSO(t, srv, method, p, memberSess, rc.body), rc.status, rc.answer)
+			case authzCLIHuman:
+				if w := doSSO(t, srv, method, p, nil, rc.body); w.Code != http.StatusUnauthorized {
+					t.Errorf("no credential: %d, want 401; body=%s", w.Code, w.Body.String())
+				}
+				want("admin token", do(t, srv, method, p, adminToken, rc.body), http.StatusForbidden, reasonAPITokenNoHuman)
+				want("admin session", doSSO(t, srv, method, p, adminSess, rc.body), rc.status, rc.answer)
+				want("member session", doSSO(t, srv, method, p, memberSess, rc.body), rc.status, rc.answer)
+			default:
+				t.Fatalf("route %q has no recognized class %q", key, rc.class)
+			}
+		})
 	}
 }
