@@ -19,7 +19,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +31,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/sys/unix"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
@@ -55,6 +58,8 @@ const (
 	driveOpenNameFile = ".img.name"
 	// driveOpenHelperLog is where wardyn-macvm drive-open logs, in the VM directory.
 	driveOpenHelperLog = "drive-open.log"
+	// driveOpenCLILog is the CLI's own log, beside it.
+	driveOpenCLILog = "drive-open-cli.log"
 
 	driveOpenBackWait = 30 * time.Minute // the write back, once Return is pressed
 	driveOpenStopWait = 2 * time.Minute  // the helper's graceful stop, before SIGTERM
@@ -71,7 +76,32 @@ func newDriveCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return m.driveOpen(cmd.Context(), driveOpenArgs{name: args[0], deleteGone: deleteGone, in: cmd.InOrStdin(), out: cmd.OutOrStdout()})
+			// The first Ctrl-C ends the soft ctx (nothing more is written back before Return, and a copy in
+			// progress is removed); a second ends hard, which every long wait watches, so the command ends
+			// and its closed stdin pipe makes the helper stop the VM on its own. main's own handler swallows
+			// signals, so this one is the way out.
+			ctx, soft := context.WithCancel(cmd.Context())
+			defer soft()
+			hard, stop := context.WithCancel(context.WithoutCancel(cmd.Context()))
+			defer stop()
+			sigs, done := make(chan os.Signal, 2), make(chan struct{})
+			signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+			defer func() { signal.Stop(sigs); close(done) }()
+			go func() {
+				select {
+				case <-sigs:
+				case <-done:
+					return
+				}
+				soft()
+				fmt.Fprintln(cmd.ErrOrStderr(), "Stopping. Press Ctrl-C again to stop now.")
+				select {
+				case <-sigs:
+					stop()
+				case <-done:
+				}
+			}()
+			return m.driveOpen(ctx, driveOpenArgs{name: args[0], deleteGone: deleteGone, in: cmd.InOrStdin(), out: cmd.OutOrStdout(), hard: hard})
 		}}
 	open.Flags().BoolVar(&deleteGone, "delete", false, "also delete from the drive the files you deleted from the copy")
 	cmd.AddCommand(open)
@@ -114,6 +144,8 @@ type driveOpenArgs struct {
 	deleteGone bool
 	in         io.Reader
 	out        io.Writer
+	// hard ends the waits that the first Ctrl-C leaves running; nil is never.
+	hard context.Context
 }
 
 // driveOpen is `drive open`: it copies the drive's files to ~/Wardyn Drives/<name>, waits for Return, and writes
@@ -162,10 +194,11 @@ func driveOpenSafe(s string) string {
 	return b.String()
 }
 
-func (m *macOSVMs) driveOpenRun(ctx context.Context, a driveOpenArgs) error {
+func (m *macOSVMs) driveOpenRun(ctx context.Context, a driveOpenArgs) (err error) {
 	if m.ledger == nil {
 		return errors.New(cmp.Or(m.refusal, m.why))
 	}
+	hard := cmp.Or(a.hard, context.WithoutCancel(ctx))
 	m.reconcileDriveOpen()
 	object, label, err := m.driveOpenFind(a.name)
 	if err != nil {
@@ -180,20 +213,45 @@ func (m *macOSVMs) driveOpenRun(ctx context.Context, a driveOpenArgs) error {
 		return err
 	}
 	defer dest.close()
+	// One line when the drive opens and one when it closes, on this Mac only: they name the drive and the
+	// result, beside the helper's own drive-open.log in the VM directory (drive-open-cli.log, rotated the
+	// same way). No row reaches the organisation's audit log.
+	log, closeLog := m.driveOpenLogger()
+	defer closeLog()
+	result := "failed"
+	defer func() {
+		if err != nil {
+			result = "failed: " + driveOpenSafe(err.Error())
+		}
+		log.Info("drive open: closed", "drive", a.name, "result", result)
+	}()
 	fmt.Fprintf(a.out, "Starting a throwaway macOS VM with the drive %q. It has no internet and runs no agent. This takes about a minute.\n", a.name)
-	h, ready, err := m.startDriveOpen(ctx, man, object, label)
+	h, ready, err := m.startDriveOpen(ctx, hard, man, object, label)
 	if err != nil {
 		dest.undo()
 		if ctx.Err() != nil {
+			result = "stopped before the drive opened"
 			return nil
 		}
 		return err
 	}
-	defer func() { h.stop(); m.driveOpenRelease(h.entry) }()
+	defer func() { h.stop(hard); m.driveOpenRelease(hard, h.entry) }()
+	log.Info("drive open: opened", "drive", a.name, "object", object)
 	var nd net.Dialer
 	agent := guestagent.NewClient(func(ctx context.Context) (net.Conn, error) { return nd.DialContext(ctx, "unix", ready.AgentSock) })
 	defer agent.Close()
-	return driveOpenWork(ctx, driveOpenJob{agent: agent, dest: dest, limits: dest.limits, deleteGone: a.deleteGone, mark: driveOpenMark, in: a.in, out: a.out})
+	result, err = driveOpenWork(ctx, driveOpenJob{agent: agent, dest: dest, limits: dest.limits, deleteGone: a.deleteGone, mark: driveOpenMark, in: a.in, out: a.out, hard: hard})
+	return err
+}
+
+// driveOpenLogger is the local log of drive opens, beside the helper's: JSON lines in the VM directory's
+// drive-open-cli.log. A log that cannot be opened is no reason to refuse the drive, so it falls back to none.
+func (m *macOSVMs) driveOpenLogger() (*slog.Logger, func()) {
+	f, err := macvm.OpenRotatingLog(filepath.Join(m.layout.Root, driveOpenCLILog), macvm.HelperLogMax)
+	if err != nil {
+		return slog.New(slog.NewJSONHandler(io.Discard, nil)), func() {}
+	}
+	return slog.New(slog.NewJSONHandler(f, nil)), func() { _ = f.Close() }
 }
 
 // driveOpenFind is the image and volume label of the drive named name (or whose object name it is): only
@@ -248,6 +306,7 @@ func (m *macOSVMs) driveOpenRecord(obj string) map[string]string {
 // do when the copy fails. Nothing in it or above it is followed if it is a link.
 type driveOpenDest struct {
 	root, parent *os.Root
+	lock         *os.File // flock on the destination's lock file in the parent, held for the session
 	leaf, shown  string
 	created      bool
 	limits       driveOpenLimits
@@ -256,9 +315,13 @@ type driveOpenDest struct {
 func (d *driveOpenDest) close() {
 	_ = d.root.Close()
 	_ = d.parent.Close()
+	if d.lock != nil {
+		_ = d.lock.Close() // the flock goes with the file
+	}
 }
 
-// undo removes what a failed copy left: the folder's contents, and the folder if the copy made it.
+// undo removes what this run's failed copy left: the folder's contents, which this run alone can have
+// written (it holds the lock and found the folder empty), and the folder if this run made it.
 func (d *driveOpenDest) undo() {
 	left, _ := fs.ReadDir(d.root.FS(), ".")
 	for _, e := range left {
@@ -278,7 +341,7 @@ func (m *macOSVMs) openDriveDest(name string) (*driveOpenDest, error) {
 		}
 		return r
 	}, name)
-	if leaf = strings.TrimSpace(leaf); leaf == "" || leaf == "." || leaf == ".." || len(leaf) > driveOpenMaxName {
+	if leaf = strings.TrimSpace(leaf); leaf == "" || leaf == "." || leaf == ".." || len(leaf) > driveOpenMaxName-12 {
 		return nil, fmt.Errorf("The drive's name %q cannot be a folder name.", name)
 	}
 	home, err := os.UserHomeDir()
@@ -302,12 +365,26 @@ func (m *macOSVMs) openDriveDest(name string) (*driveOpenDest, error) {
 		return nil, err
 	}
 	shown := filepath.Join(home, driveOpenFolder, leaf)
-	root, created, err := driveOpenSubRoot(parent, leaf, shown)
+	// Two drive opens of one name must not meet: the second would find the folder empty while the first
+	// boots, and its failure would remove the first's files. The lock lives beside the folder, not in it.
+	lock, err := parent.OpenFile("."+leaf+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	if err == nil {
+		if err = unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+			_ = lock.Close()
+			err = fmt.Errorf("Another drive open of %q is running on this Mac and has %s. Finish it, or press Ctrl-C there, then run drive open again.", name, shown)
+		}
+	}
 	if err != nil {
 		_ = parent.Close()
 		return nil, err
 	}
-	d := &driveOpenDest{root: root, parent: parent, leaf: leaf, shown: shown, created: created,
+	root, created, err := driveOpenSubRoot(parent, leaf, shown)
+	if err != nil {
+		_ = lock.Close()
+		_ = parent.Close()
+		return nil, err
+	}
+	d := &driveOpenDest{root: root, parent: parent, lock: lock, leaf: leaf, shown: shown, created: created,
 		limits: driveOpenLimits{entries: driveOpenMaxEntries, bytes: free - macOSVMDiskFloor}}
 	if left, _ := fs.ReadDir(root.FS(), "."); len(left) > 0 {
 		d.close()
@@ -348,7 +425,7 @@ type driveOpenHelper struct {
 // startDriveOpen takes a ledger entry, starts the helper in its own session with a pipe on its stdin, and
 // waits for its ready line. The helper stops when that pipe ends. Without a ready line it answers the
 // helper's last stderr line (a refusal, a drive in use among them) and releases the entry.
-func (m *macOSVMs) startDriveOpen(ctx context.Context, man macvm.Manifest, object, label string) (*driveOpenHelper, macvm.DriveOpenReady, error) {
+func (m *macOSVMs) startDriveOpen(ctx, hard context.Context, man macvm.Manifest, object, label string) (*driveOpenHelper, macvm.DriveOpenReady, error) {
 	var ready macvm.DriveOpenReady
 	if _, err := m.ledger.Sweep(); err != nil {
 		return nil, ready, err
@@ -412,27 +489,31 @@ func (m *macOSVMs) startDriveOpen(ctx context.Context, man macvm.Manifest, objec
 	case ready = <-lines:
 		return h, ready, nil
 	case <-h.exited:
-		m.driveOpenRelease(e.ID)
+		m.driveOpenRelease(hard, e.ID)
 		return nil, ready, errors.New(cmp.Or(tail.last(), "the macOS VM helper ended without opening the drive; see "+filepath.Join(m.layout.Root, driveOpenHelperLog)))
 	case <-ctx.Done():
-		h.stop()
-		m.driveOpenRelease(e.ID)
+		h.stop(hard)
+		m.driveOpenRelease(hard, e.ID)
 		return nil, ready, ctx.Err()
 	}
 }
 
 // stop ends the helper: stdin's end makes it stop the VM gracefully; a helper still there after
-// driveOpenStopWait gets SIGTERM, and a kill 30 seconds after that.
-func (h *driveOpenHelper) stop() {
+// driveOpenStopWait gets SIGTERM, and a kill 30 seconds after that. The waits end with hard, the second
+// Ctrl-C: the helper then stops on its own, as its stdin is closed.
+func (h *driveOpenHelper) stop(hard context.Context) {
 	_ = h.stdin.Close()
 	select {
 	case <-h.exited:
+		return
+	case <-hard.Done():
 		return
 	case <-time.After(driveOpenStopWait):
 	}
 	_ = h.cmd.Process.Signal(syscall.SIGTERM)
 	select {
 	case <-h.exited:
+	case <-hard.Done():
 	case <-time.After(30 * time.Second):
 		_ = h.cmd.Process.Kill()
 		<-h.exited
@@ -442,16 +523,12 @@ func (h *driveOpenHelper) stop() {
 // driveOpenRelease frees a finished drive open's ledger entry: an entry its helper claimed through
 // ReclaimOwn (which waits out a VM process still going down), one it never claimed through Release. A
 // failure is logged; the next drive open's reconcileDriveOpen tries again.
-func (m *macOSVMs) driveOpenRelease(id string) {
+func (m *macOSVMs) driveOpenRelease(hard context.Context, id string) {
 	counted, err := m.ledger.Counted()
-	claimed := err == nil && func() bool {
-		for _, e := range counted {
-			if e.ID == id {
-				return e.HelperPID != 0
-			}
-		}
-		return false
-	}()
+	if err == nil && !slices.ContainsFunc(counted, func(e admission.Entry) bool { return e.ID == id }) {
+		return // serve's reconcile got there first
+	}
+	claimed := slices.ContainsFunc(counted, func(e admission.Entry) bool { return e.ID == id && e.HelperPID != 0 })
 	if !claimed {
 		if err := m.ledger.Release(id, admission.Destroyed{Stopped: true}); err != nil {
 			slog.Warn("macOS VM ledger: release a drive open that never started", "error", err.Error())
@@ -466,7 +543,11 @@ func (m *macOSVMs) driveOpenRelease(id string) {
 			slog.Warn("macOS VM ledger: release a finished drive open", "error", err.Error())
 			return
 		}
-		time.Sleep(time.Second)
+		select {
+		case <-hard.Done():
+			return
+		case <-time.After(time.Second):
+		}
 	}
 }
 
@@ -504,7 +585,7 @@ func (t *driveOpenTail) last() string {
 	return driveOpenSafe(strings.TrimPrefix(lines[len(lines)-1], helperFailurePrefix))
 }
 
-// driveOpenJob is what the guest session needs.
+// driveOpenJob is what the guest session needs. hard is the second Ctrl-C's ctx (nil: never).
 type driveOpenJob struct {
 	agent      *guestagent.Client
 	dest       *driveOpenDest
@@ -513,13 +594,30 @@ type driveOpenJob struct {
 	mark       func(*os.File) error
 	in         io.Reader
 	out        io.Writer
+	hard       context.Context
 }
 
+// The session's results, as the local log says them.
+const (
+	driveOpenCopyFailed    = "copy failed"
+	driveOpenStopped       = "stopped before the copy finished"
+	driveOpenDiscarded     = "discarded"
+	driveOpenWrittenBack   = "written back"
+	driveOpenBackFailed    = "write back failed"
+	driveOpenNamesShown    = 10
+	driveOpenUnreadShown   = 5
+	driveOpenStderrKept    = 64 << 10
+	driveOpenStderrMessage = 2048
+)
+
 // driveOpenWork copies the drive out, waits for Return, and writes the changes back through the guest
-// agent's Exec. A guest that has the drive is synced before it returns, so the caller can end the VM.
-func driveOpenWork(ctx context.Context, j driveOpenJob) error {
+// agent's Exec; the result is for the log. A guest that has the drive is synced before it returns, so the
+// caller can end the VM. A copy the guest's tar could not finish reading (an unreadable file) is kept, and
+// the person is told how many items are missing.
+func driveOpenWork(ctx context.Context, j driveOpenJob) (result string, err error) {
+	j.hard = cmp.Or(j.hard, context.WithoutCancel(ctx))
 	defer func() {
-		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveOpenSyncWait)
+		sctx, cancel := context.WithTimeout(j.hard, driveOpenSyncWait)
 		defer cancel()
 		if err := j.run(sctx, nil, "/bin/sync"); err != nil {
 			fmt.Fprintf(j.out, "The throwaway VM did not confirm it had written the drive (%s).\n", driveOpenSafe(err.Error()))
@@ -530,19 +628,29 @@ func driveOpenWork(ctx context.Context, j driveOpenJob) error {
 		j.dest.undo()
 		if ctx.Err() != nil {
 			fmt.Fprintln(j.out, "Stopped before the copy finished. Nothing was kept and nothing was written back.")
-			return nil
+			return driveOpenStopped, nil
 		}
-		return err
+		return driveOpenCopyFailed, err
 	}
 	fmt.Fprintln(j.out, strings.TrimSpace(fmt.Sprintf("Copied %s (%s) to %s. %s", driveOpenCount(c.files, "file", "files"), driveOpenSize(c.bytes), j.dest.shown, c.skipped.text())))
+	if c.unread > 0 {
+		fmt.Fprintf(j.out, "%s could not be read from the drive and %s not in this copy. The throwaway VM said:\n", driveOpenCount(c.unread, "item", "items"), map[bool]string{true: "is", false: "are"}[c.unread == 1])
+		for _, line := range c.unreadText {
+			fmt.Fprintf(j.out, "  %s\n", line)
+		}
+		fmt.Fprintln(j.out, "Write back will not replace, and --delete will not remove, anything this copy does not hold.")
+	}
 	fmt.Fprintln(j.out, "Every file is marked as downloaded and has no execute permission.")
 	fmt.Fprintln(j.out)
 	fmt.Fprintln(j.out, "Change the files, then press Return to write them back, or press Ctrl-C to discard your changes.")
 	if !driveOpenReturn(ctx, j.in) {
 		fmt.Fprintln(j.out, "Discarded: nothing was written back.")
-		return nil
+		return driveOpenDiscarded, nil
 	}
-	return j.writeBack(ctx, c)
+	if err := j.writeBack(c); err != nil {
+		return driveOpenBackFailed, err
+	}
+	return driveOpenWrittenBack, nil
 }
 
 // driveOpenReturn waits for a line on in. Ctrl-C (ctx ending) or an input that ends first is false.
@@ -557,7 +665,8 @@ func driveOpenReturn(ctx context.Context, in io.Reader) bool {
 	}
 }
 
-// copyOut runs tar in the guest as the agent user and extracts its stream.
+// copyOut runs tar in the guest as the agent user and extracts its stream. A tar that read the drive's
+// listing to its end but exited with an error left some items unread; the copy is kept, with the count.
 func (j driveOpenJob) copyOut(ctx context.Context) (*driveOpenCopy, error) {
 	s, err := j.agent.Exec(ctx, guestagent.ExecRequest{Argv: []string{"/usr/bin/tar", "-C", macvm.DriveOpenTarget, "-cf", "-", "."}, Env: []string{"COPYFILE_DISABLE=1"}})
 	if err != nil {
@@ -573,44 +682,83 @@ func (j driveOpenJob) copyOut(ctx context.Context) (*driveOpenCopy, error) {
 	if n, _ := io.Copy(io.Discard, io.LimitReader(s.Stdout, 1<<20)); n == 1<<20 {
 		return nil, errors.New("the throwaway VM kept sending after the drive's listing ended")
 	}
-	if code, err := s.Wait(); err != nil || code != 0 {
-		return nil, fmt.Errorf("the throwaway VM could not read the whole drive (%w%s)", cmp.Or(err, fmt.Errorf("tar ended with code %d", code)), <-stderr)
+	code, err := s.Wait()
+	said := <-stderr
+	if err != nil {
+		return nil, fmt.Errorf("the throwaway VM could not read the whole drive (%w%s)", err, said.msg())
+	}
+	if code != 0 {
+		c.unread, c.unreadText = max(len(said.lines), 1), said.shown(driveOpenUnreadShown)
+		if len(said.lines) == 0 {
+			c.unreadText = []string{fmt.Sprintf("tar ended with code %d without saying why", code)}
+		}
 	}
 	return c, nil
 }
 
 // writeBack sends the new and changed files to the guest, where tar writes them as the agent user. The
-// archive is made whole first, so an error while it is made writes nothing; with deleteGone, the files
-// deleted from the copy are removed from the drive.
-func (j driveOpenJob) writeBack(ctx context.Context, c *driveOpenCopy) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), driveOpenBackWait)
+// archives are made whole first, so an error while they are made writes nothing. Files the copy held go in
+// one stream that overwrites; files and folders it did not hold go in another that never overwrites (tar
+// -k), so a name the copy never held, an unreadable item among them, is never replaced. With deleteGone,
+// the copied files deleted here are removed from the drive, and no other name is. An error says which
+// changes did not go back.
+func (j driveOpenJob) writeBack(c *driveOpenCopy) error {
+	ctx, cancel := context.WithTimeout(j.hard, driveOpenBackWait)
 	defer cancel()
-	archive, err := os.CreateTemp("", "wardyn-drive-*.tar")
-	if err != nil {
-		return err
+	var archives [2]*os.File
+	for i := range archives {
+		f, err := os.CreateTemp("", "wardyn-drive-*.tar")
+		if err != nil {
+			return err
+		}
+		archives[i] = f
+		defer func() { _ = f.Close(); _ = os.Remove(f.Name()) }()
 	}
-	defer func() { _ = archive.Close(); _ = os.Remove(archive.Name()) }()
-	back, err := driveOpenPack(j.dest.root, c, archive)
+	back, err := driveOpenPack(j.dest.root, c, archives[0], archives[1])
 	if err != nil {
 		return fmt.Errorf("read the changed files: %w", err)
 	}
-	if back.changed+back.newDirs > 0 {
-		if _, err := archive.Seek(0, io.SeekStart); err != nil {
+	send := func(f *os.File, names []string, argv ...string) error {
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			return err
 		}
-		if err := j.run(ctx, archive, "/usr/bin/tar", "-C", macvm.DriveOpenTarget, "-xf", "-"); err != nil {
-			return fmt.Errorf("write the changed files back: %w", err)
+		if err := j.run(ctx, f, argv...); err != nil {
+			return fmt.Errorf("write the changed files back: %w. These changes did not go back, or are not confirmed: %s", err, driveOpenNames(names))
+		}
+		return nil
+	}
+	if len(back.known) > 0 {
+		if err := send(archives[0], slices.Concat(back.known, back.fresh), "/usr/bin/tar", "-C", macvm.DriveOpenTarget, "-xf", "-"); err != nil {
+			return err
+		}
+	}
+	if len(back.fresh)+back.newDirs > 0 {
+		if err := send(archives[1], back.fresh, "/usr/bin/tar", "-C", macvm.DriveOpenTarget, "-k", "-xf", "-"); err != nil {
+			return err
 		}
 	}
 	if gone := back.gone; j.deleteGone && len(gone) > 0 {
 		names := "./" + strings.Join(gone, "\x00./") + "\x00"
 		if err := j.run(ctx, strings.NewReader(names), "/bin/sh", "-c", `cd "$1" && exec /usr/bin/xargs -0 /bin/rm -f --`, "sh", macvm.DriveOpenTarget); err != nil {
-			return fmt.Errorf("delete the removed files from the drive: %w", err)
+			return fmt.Errorf("delete the removed files from the drive: %w. These deletions did not go through, or are not confirmed: %s", err, driveOpenNames(gone))
 		}
 	}
 	fmt.Fprintln(j.out, strings.TrimSpace(fmt.Sprintf("Wrote back %s. The next run that uses this drive sees them, owned by the agent. %s",
-		driveOpenCount(back.changed, "changed file", "changed files"), back.skipped.text())))
+		driveOpenCount(back.changed(), "changed file", "changed files"), back.skipped.text())))
 	return nil
+}
+
+// driveOpenNames lists up to driveOpenNamesShown names, each quoted, and how many more there are.
+func driveOpenNames(names []string) string {
+	var quoted []string
+	for _, n := range names[:min(len(names), driveOpenNamesShown)] {
+		quoted = append(quoted, strconv.Quote(n))
+	}
+	list := strings.Join(quoted, ", ")
+	if more := len(names) - len(quoted); more > 0 {
+		list += fmt.Sprintf(" and %d more", more)
+	}
+	return list
 }
 
 // run is one command in the guest as the agent user, with stdin from in (nil: none), and its failure
@@ -632,21 +780,51 @@ func (j driveOpenJob) run(ctx context.Context, in io.Reader, argv ...string) err
 	_ = s.Stdin.Close()
 	code, err := s.Wait()
 	if err != nil || code != 0 {
-		return fmt.Errorf("%w%s", cmp.Or(err, fmt.Errorf("%s ended with code %d", argv[0], code)), <-stderr)
+		return fmt.Errorf("%w%s", cmp.Or(err, fmt.Errorf("%s ended with code %d", argv[0], code)), (<-stderr).msg())
 	}
 	return sendErr
 }
 
-// driveOpenDrain reads r to its end, which a session needs or its demux stalls, and answers the first 2 KiB as
-// ": text" for an error message ("" when there is none).
-func driveOpenDrain(r io.Reader) <-chan string {
-	out := make(chan string, 1)
+// driveOpenStderr is what a guest command wrote to stderr: the first part of it, the non-empty lines in that
+// part, and whether there was more.
+type driveOpenStderr struct {
+	text  string
+	lines []string
+	more  bool
+}
+
+// msg is ": <text>" for an error message, escaped and bounded, "" when the guest said nothing.
+func (e driveOpenStderr) msg() string {
+	text := strings.TrimSpace(e.text)
+	if text == "" {
+		return ""
+	}
+	return ": " + driveOpenSafe(text[:min(len(text), driveOpenStderrMessage)])
+}
+
+// shown is the first n lines, escaped.
+func (e driveOpenStderr) shown(n int) []string {
+	var out []string
+	for _, l := range e.lines[:min(len(e.lines), n)] {
+		out = append(out, driveOpenSafe(l))
+	}
+	return out
+}
+
+// driveOpenDrain reads r to its end, which a session needs or its demux stalls, keeping the first 64 KiB. Its
+// lines leave out tar's own closing complaint, so their count is the items it could not read.
+func driveOpenDrain(r io.Reader) <-chan driveOpenStderr {
+	out := make(chan driveOpenStderr, 1)
 	go func() {
-		b, _ := io.ReadAll(io.LimitReader(r, 2048))
-		_, _ = io.Copy(io.Discard, r)
-		if text := string(bytes.TrimSpace(b)); text != "" {
-			out <- ": " + driveOpenSafe(text)
+		b, _ := io.ReadAll(io.LimitReader(r, driveOpenStderrKept))
+		n, _ := io.Copy(io.Discard, r)
+		e := driveOpenStderr{text: string(bytes.TrimSpace(b)), more: n > 0}
+		for line := range strings.SplitSeq(e.text, "\n") {
+			if line = strings.TrimSpace(line); line != "" && !strings.Contains(line, "Error exit delayed from previous errors") {
+				e.lines = append(e.lines, line)
+			}
 		}
+		out <- e
 		close(out)
 	}()
 	return out

@@ -136,7 +136,8 @@ func TestDriveOpenExtractSkipsWhatItMustNotMake(t *testing.T) {
 			t.Fatalf("%s was made: %v", name, err)
 		}
 	}
-	if c.files != 3 || c.bytes != int64(len("alpha")+len("no")+len("beta")) || len(marked) != 3 {
+	// Three files, and the folders notes and out: each is marked once.
+	if c.files != 3 || c.bytes != int64(len("alpha")+len("no")+len("beta")) || len(marked) != 5 {
 		t.Fatalf("files %d bytes %d marked %v", c.files, c.bytes, marked)
 	}
 }
@@ -177,6 +178,7 @@ func TestDriveOpenExtractLimitsAndDamage(t *testing.T) {
 		{"bytes by header", driveOpenLimits{entries: 10, bytes: 8}, driveOpenStream(t, driveOpenEntry{name: "a", body: "1", size: 1 << 40}), ok},
 		{"repeated", driveOpenRoomy, driveOpenStream(t, driveOpenEntry{name: "a", body: "1"}, driveOpenEntry{name: "./a", body: "2"}), ok},
 		{"folder over file", driveOpenRoomy, driveOpenStream(t, driveOpenEntry{name: "a", body: "1"}, driveOpenEntry{name: "a/b", body: "2"}), ok},
+		{"mark fails on a folder", driveOpenRoomy, driveOpenStream(t, driveOpenEntry{name: "./d/", typeflag: tar.TypeDir}), func(*os.File) error { return errors.New("no xattr here") }},
 		{"mark fails", driveOpenRoomy, driveOpenStream(t, driveOpenEntry{name: "a", body: "1"}), func(*os.File) error { return errors.New("no xattr here") }},
 		{"cut short", driveOpenRoomy, driveOpenStream(t, driveOpenEntry{name: "a", body: "12345"})[:512+3], ok},
 	}
@@ -236,12 +238,12 @@ func TestDriveOpenPackSendsOnlyChangesAndNoLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var out bytes.Buffer
-	back, err := driveOpenPack(root, c, &out)
+	var out, fresh bytes.Buffer
+	back, err := driveOpenPack(root, c, &out, &fresh)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if back.changed != 2 || back.newDirs != 1 || len(back.gone) != 1 || back.gone[0] != "gone.txt" {
+	if back.changed() != 2 || len(back.known) != 1 || len(back.fresh) != 1 || back.newDirs != 1 || len(back.gone) != 1 || back.gone[0] != "gone.txt" {
 		t.Fatalf("back = %+v", back)
 	}
 	// same.txt and hard-same share an inode, so both are links; the other skips are one each.
@@ -251,22 +253,28 @@ func TestDriveOpenPackSendsOnlyChangesAndNoLinks(t *testing.T) {
 	if bytes.Contains(out.Bytes(), []byte("do not send")) {
 		t.Fatal("a link's target reached the stream")
 	}
-	sent := map[string]*tar.Header{}
-	bodies := map[string]string{}
-	tr := tar.NewReader(&out)
-	for {
-		h, err := tr.Next()
-		if err != nil {
-			break
+	if bytes.Contains(fresh.Bytes(), []byte("v2 edited")) || bytes.Contains(out.Bytes(), []byte("fresh/")) {
+		t.Fatal("a changed file and a new one were sent in the same stream")
+	}
+	read := func(b *bytes.Buffer) (map[string]*tar.Header, map[string]string) {
+		sent, bodies := map[string]*tar.Header{}, map[string]string{}
+		tr := tar.NewReader(b)
+		for {
+			h, err := tr.Next()
+			if err != nil {
+				return sent, bodies
+			}
+			body, _ := io.ReadAll(tr)
+			sent[h.Name], bodies[h.Name] = h, string(body)
 		}
-		b, _ := io.ReadAll(tr)
-		sent[h.Name], bodies[h.Name] = h, string(b)
 	}
-	if len(sent) != 3 || sent["fresh/"] == nil || bodies["bin/tool"] != "v2 edited" || bodies["fresh/new.txt"] != "new" {
-		t.Fatalf("sent %v %v", sent, bodies)
+	known, knownBodies := read(&out)
+	fresh2, freshBodies := read(&fresh)
+	if len(known) != 1 || knownBodies["bin/tool"] != "v2 edited" || known["bin/tool"].Mode != 0o755 {
+		t.Fatalf("known stream %v %v", known, knownBodies)
 	}
-	if sent["bin/tool"].Mode != 0o755 || sent["fresh/new.txt"].Mode != 0o644 {
-		t.Fatalf("modes: tool %o, new %o", sent["bin/tool"].Mode, sent["fresh/new.txt"].Mode)
+	if len(fresh2) != 2 || fresh2["fresh/"] == nil || freshBodies["fresh/new.txt"] != "new" || fresh2["fresh/new.txt"].Mode != 0o644 {
+		t.Fatalf("fresh stream %v %v", fresh2, freshBodies)
 	}
 }
 
