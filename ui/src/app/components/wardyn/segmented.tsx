@@ -30,6 +30,8 @@ export function Segmented<T extends string>({
      *  dirty chip beside its label, the tab's own "title". Optional: only
      *  providers-screen.tsx's Git/Storage/Agents options set it today. */
     dirty?: boolean;
+    /** Compact size only: this option alone cannot be chosen (the control's `disabled` is all of them). */
+    disabled?: boolean;
   }[];
   onChange: (v: T) => void;
   disabled?: boolean;
@@ -59,7 +61,7 @@ export function Segmented<T extends string>({
             key={o.value}
             type="button"
             aria-pressed={value === o.value}
-            disabled={disabled}
+            disabled={disabled || o.disabled}
             onClick={() => onChange(o.value)}
             className={cn(
               "flex min-w-[65px] items-center justify-center gap-1.5 rounded-md px-3 py-[7px] text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50",

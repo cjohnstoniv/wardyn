@@ -12,6 +12,9 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -261,6 +264,30 @@ func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPol
 			return http.StatusUnprocessableEntity, reasonWorkspaceSourceNotOnboarded, fmt.Errorf(
 				"mount source %q is not an onboarded local directory (onboard it first via the workspaces API)", wm.Source)
 		}
+		// Where the folder is: the run's own holders (the attached workspaces that carry it, else the
+		// index's one) decide together. They must agree, and a folder bound to a runner is checked by its
+		// text against every holder's binding, never looked up on this host.
+		holders := localDirHolders(rule.attached, wm.Source)
+		if len(holders) == 0 {
+			holders = []types.Workspace{ws}
+		}
+		rid, agree := mountBinding(holders, wm.Source)
+		if !agree {
+			return http.StatusUnprocessableEntity, string(placement.ReasonPlacementLocalPath), errors.New(mountPlacesMsg(wm.Source))
+		}
+		if rid != nil {
+			for _, h := range holders {
+				if code, reason, err := s.boundMountAllowed(ctx, h, *rid, wm); err != nil {
+					return code, reason, err
+				}
+			}
+			// A person's own allowance from a workspace the run does not use binds nothing: the path is
+			// held to the host check for them.
+			if err := rule.personMountAllowed(s.cfg.UserMounts, all, ws, wm); err != nil {
+				return http.StatusUnprocessableEntity, reasonWorkspaceSourceMountNotAllowed, err
+			}
+			continue
+		}
 		// MEMBER-OWNED source (0048): re-run the member-safe mount gate on the
 		// RESOLVED spec, not only at onboarding — the same reason the onboarding
 		// gate itself lives here rather than in one handler. It closes the case
@@ -349,8 +376,8 @@ func (s *Server) requirementWriteRefusal(ctx context.Context, attached []types.W
 	var stored []types.Workspace // read once, and only for a mount no attached workspace holds
 	for k, wm := range widened {
 		for _, ws := range supplied[k] {
-			if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, wm); err != nil {
-				return refuse(reasonWorkspaceSourceMountNotAllowed, err)
+			if code, reason, err := s.heldMountAllowed(ctx, ws, wm); err != nil {
+				return &sourceRefusal{status: code, reason: reason, err: err}
 			}
 		}
 		holders := localDirHolders(attached, wm.Source)
@@ -370,13 +397,28 @@ func (s *Server) requirementWriteRefusal(ctx context.Context, attached []types.W
 			return refuse(reasonWorkspaceSourceNotOnboarded, fmt.Errorf(
 				"mount source %q is not an onboarded local directory (onboard it first via the workspaces API)", wm.Source))
 		}
+		if _, agree := mountBinding(holders, wm.Source); !agree {
+			return refuse(string(placement.ReasonPlacementLocalPath), errors.New(mountPlacesMsg(wm.Source)))
+		}
 		for _, ws := range holders {
-			if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, wm); err != nil {
-				return refuse(reasonWorkspaceSourceMountNotAllowed, err)
+			if code, reason, err := s.heldMountAllowed(ctx, ws, wm); err != nil {
+				return &sourceRefusal{status: code, reason: reason, err: err}
 			}
 		}
 	}
 	return nil
+}
+
+// heldMountAllowed is the member gate on wm for one workspace that holds its path: a folder ws binds to a
+// runner is checked as one (boundMountAllowed); any other on this host, as before (userMountAllowed).
+func (s *Server) heldMountAllowed(ctx context.Context, ws types.Workspace, wm types.WorkspaceMount) (int, string, error) {
+	if rid, ok := mountBinding([]types.Workspace{ws}, wm.Source); ok && rid != nil {
+		return s.boundMountAllowed(ctx, ws, *rid, wm)
+	}
+	if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, wm); err != nil {
+		return http.StatusUnprocessableEntity, reasonWorkspaceSourceMountNotAllowed, err
+	}
+	return 0, "", nil
 }
 
 // localDirHolders is the workspaces of list that carry path as a local_dir source.
@@ -410,6 +452,11 @@ type userMountPosture struct {
 	// Writable is runner.SandboxSpec.UserWritable: the writable ceiling a
 	// read-write member bind is held to again at bind time. Nil for an operator run.
 	Writable *runner.UserWritableCeiling
+	// Bound is each folder path the run's workspaces bind to one runner, every
+	// holder agreeing (mountBinding), so buildRunMounts stamps
+	// runner.Mount.BoundRunner. A path whose holders disagree binds none, and
+	// the run gate has already refused it.
+	Bound map[string]uuid.UUID
 }
 
 // userMountPosture resolves a run's member-mount posture, or the zero value
@@ -447,6 +494,20 @@ func (s *Server) userMountPosture(wsRefs []types.Workspace) userMountPosture {
 		for _, src := range ws.Sources {
 			if src.Type == types.WorkspaceSourceTypeLocalDir {
 				p.Sources[src.Path] = true
+			}
+		}
+	}
+	// Over every workspace of the run, an operator's too: a binding must hold for every holder.
+	for _, ws := range wsRefs {
+		for _, src := range ws.Sources {
+			if src.Type != types.WorkspaceSourceTypeLocalDir || src.RunnerID == nil {
+				continue
+			}
+			if rid, ok := mountBinding(wsRefs, src.Path); ok && rid != nil {
+				if p.Bound == nil {
+					p.Bound = map[string]uuid.UUID{}
+				}
+				p.Bound[src.Path] = *rid
 			}
 		}
 	}

@@ -45,6 +45,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/cjohnstoniv/wardyn/internal/sidecar"
 )
 
@@ -181,11 +183,13 @@ var (
 	// terminal in the real login sandbox; in CI, in a piped shell, and under
 	// `go test` it is not, and a prompt nobody can answer must become a
 	// refusal rather than a hang.
-	stdinIsTerminal = func() bool {
-		info, err := os.Stdin.Stat()
-		return err == nil && info.Mode()&os.ModeCharDevice != 0
-	}
+	stdinIsTerminal = func() bool { return isTerminal(os.Stdin) }
 )
+
+// isTerminal is whether f is a real terminal. A character-device mode check is
+// not enough: /dev/null is a character device too, and an unattended run with
+// stdin on /dev/null must take the refusal branch, not the chooser.
+func isTerminal(f *os.File) bool { return term.IsTerminal(int(f.Fd())) }
 
 // failMarker is the FAILURE counterpart of successMarker, and it exists because
 // its absence was a bug: a refused upload logged to stderr and printed nothing

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DESKTOP } from "../app/components/wardyn/copy/desktop";
 import { DesktopViewer, readBoot, type Boot, type DesktopSocket } from "./viewer";
@@ -73,6 +73,19 @@ describe("DesktopViewer", () => {
     expect(screen.getByRole("button", { name: DESKTOP.fit })).toHaveAttribute("aria-pressed", "true");
     act(() => screen.getByRole("button", { name: DESKTOP.actualSize }).click());
     expect(screen.getByRole("button", { name: DESKTOP.actualSize })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("names a macOS desktop that is still starting, from the run's machine kind in the boot data", () => {
+    const el = document.createElement("html");
+    el.dataset.wardynDesktop = JSON.stringify({ ...OPEN, machine_kind: "macos_vm" });
+    const boot = readBoot(el);
+    expect(boot).toEqual({ ...OPEN, machine_kind: "macos_vm" });
+    render(<DesktopViewer boot={boot!} connect={() => new FakeSocket()} />);
+    expect(screen.getByRole("status")).toHaveTextContent(DESKTOP.startingMacOS);
+    expect(screen.getByText(DESKTOP.startingBody)).toBeInTheDocument();
+    cleanup();
+    render(<DesktopViewer boot={{ ...OPEN, machine_kind: "linux_vm" }} connect={() => new FakeSocket()} />);
+    expect(screen.getByRole("status")).toHaveTextContent(DESKTOP.starting);
   });
 
   it("retries a desktop that is not reachable yet, on its own", () => {
@@ -195,6 +208,26 @@ describe("DesktopViewer", () => {
     expect(screen.getByText(DESKTOP.phoneTitle)).toBeInTheDocument();
     expect(screen.getByText(DESKTOP.phoneBody)).toBeInTheDocument();
     expect(screen.getByTestId("desktop-canvas")).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("a view-only session says so on any screen, takes no input, and doesn't send people to a larger screen", () => {
+    const sockets: FakeSocket[] = [];
+    const connect = vi.fn(() => {
+      const s = new FakeSocket();
+      sockets.push(s);
+      return s;
+    });
+    render(<DesktopViewer boot={{ ...OPEN, machine_kind: "macos_vm", view_only: true }} connect={connect} small={false} />);
+    sockets[0].serve(HANDSHAKE);
+    expect(screen.getByText(DESKTOP.viewOnlyTitle)).toBeInTheDocument();
+    expect(screen.getByText(DESKTOP.viewOnlyBody)).toBeInTheDocument();
+    expect(screen.queryByText(DESKTOP.phoneBody)).toBeNull();
+    const canvas = screen.getByTestId("desktop-canvas");
+    expect(canvas).toHaveAttribute("tabindex", "-1");
+    const sent = sockets[0].sent.length;
+    fireEvent.pointerMove(canvas, { clientX: 5, clientY: 5 });
+    fireEvent.keyDown(canvas, { key: "a" });
+    expect(sockets[0].sent.length).toBe(sent);
   });
 
   it("a used link gets the refusal card with the gateway's words", () => {

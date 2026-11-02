@@ -144,6 +144,8 @@ export interface SiteConfig {
   // types.SiteConfig.Recording: the organisation's recording level (absent: terminal) and whether
   // it is a locked minimum no policy goes under.
   recording?: SiteRecording;
+  // types.SiteConfig.MacOSVM: the organisation's macOS VM sandbox settings.
+  macos_vm?: SiteMacOSVM;
   // RESPONSE-ONLY, never-PUT: the git hosts this deployment actually admits —
   // scm_hosts MINUS every host a provider row claims, UNION every enabled row's
   // hosts (internal/api/workspace_providers.go's effectiveScmHosts). ONE
@@ -519,4 +521,10 @@ export interface EgressBaseline {
 export interface SiteRecording {
   level?: RecordingLevel;
   locked?: boolean;
+}
+
+/** Go: types.SiteMacOSVM (SiteConfig.macos_vm). */
+export interface SiteMacOSVM {
+  /** Runs are refused on a Mac whose base was prepared more days ago than this. Absent or 0: no maximum. */
+  max_base_age_days?: number;
 }

@@ -81,6 +81,7 @@ func uiConnWaitDone(ctx context.Context) {
 
 // uiConn is an execConn that releases its per-run slot and writes the ui.close
 // audit exactly once, whichever of net/http's read or write loop closes first.
+// The exec is closed first: closeFn's audit write must never hold a relay open.
 type uiConn struct {
 	*execConn
 	once    sync.Once
@@ -88,8 +89,9 @@ type uiConn struct {
 }
 
 func (c *uiConn) Close() error {
+	err := c.execConn.Close()
 	c.once.Do(c.closeFn)
-	return c.execConn.Close()
+	return err
 }
 
 // acquireUIConn takes one of the run's connection slots, returning a release

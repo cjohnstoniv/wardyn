@@ -64,7 +64,7 @@ test("a second tab never clamps the writer's window, and a promotion sizes it to
   test.setTimeout(10 * 60_000);
   await walkSignIn(page, MEMBER_EMAIL);
   await page.goto("/runs/new");
-  // An Environment sandbox is the terminal: interactive, no agent.
+  // An Environment is the terminal: interactive, no agent.
   await walkNewRunToReview(page, { shape: "environment" });
   await launchFromReview(page, "two tab walk");
   await viewLaunchedRun(page);

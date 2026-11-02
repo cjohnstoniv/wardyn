@@ -173,7 +173,7 @@ func TestMemberDriveNeverOnSelfHosted(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil),
+	f := &runFold{w: w, req: &createRunRequest{}, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil),
 		drives: []runDrive{{resolved: types.ResolvedDrive{Drive: member}, target: d.target()}},
 		place:  runPlacement{pooled: true, placement: types.PlacementLocal}}
 	if (&Server{}).stepDriveEligibility(f, &foldRecorder{}) || w.Code != http.StatusUnprocessableEntity ||

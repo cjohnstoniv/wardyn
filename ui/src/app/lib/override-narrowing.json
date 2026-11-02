@@ -118,5 +118,11 @@
     "op": "set",
     "direction": "widen",
     "rule": "ceiling_clamped"
+  },
+  {
+    "kind": "allow_all_egress",
+    "op": "narrow",
+    "direction": "tighten",
+    "rule": "allowed"
   }
 ]

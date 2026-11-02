@@ -48,3 +48,35 @@ func TestClientTellsTheHookTheOrganisationsProxyImage(t *testing.T) {
 		})
 	}
 }
+
+// The per-run limits the organisation names in AUTH_OK reach the runner's hook on every connect; an
+// organisation that names none tells it 0, 0.
+func TestClientTellsTheHookThePerRunLimits(t *testing.T) {
+	for _, ok := range []AuthOK{{PerRunCPUMillis: 4000, PerRunMemoryMiB: 8192}, {}} {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pub, key, _ := ed25519.GenerateKey(rand.Reader)
+		const orgURL = "https://org.example"
+		row := types.Runner{ID: uuid.New(), PublicKey: pub, OrgURLSHA256: federation.OrgURLSHA256(orgURL), State: types.RunnerClaimed}
+		org, run := Loopback()
+		go func() {
+			defer org.Close()
+			if _, err := AuthenticateRunner(ctx, org, row, orgURL); err == nil {
+				ok.SessionID, ok.PingInterval = uuid.NewString(), PingInterval
+				_ = WriteControl(ctx, org, TypeAuthOK, ok)
+			}
+		}()
+		var got [][2]int64
+		hooks := idleHooks()
+		hooks.PerRunLimits = func(cpu, mem int64) { got = append(got, [2]int64{cpu, mem}) }
+		client, err := NewClient(ClientConfig{OrgURL: orgURL, RunnerID: row.ID.String(), PrivateKey: key, Hooks: hooks,
+			Dial: func(context.Context) (Conn, error) { return run, nil }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = client.Connect(ctx)
+		cancel()
+		if want := [][2]int64{{ok.PerRunCPUMillis, ok.PerRunMemoryMiB}}; len(got) != 1 || got[0] != want[0] {
+			t.Fatalf("hook saw %v, want %v", got, want)
+		}
+	}
+}

@@ -48,6 +48,10 @@ func (d *Driver) CanManageDrives(context.Context) error { return nil }
 // host_path drive's object is a directory on the OPERATOR'S OWN FILESYSTEM. Wardyn never
 // created it and must never delete it: there is no rm -rf here, at any privilege, for any backend.
 func (d *Driver) ReclaimDrive(ctx context.Context, drive types.DriveMount) (runner.DriveReclaimOutcome, error) {
+	// A Mac disk is a disk image this runner made in its own drives folder (reclaimMacDisk).
+	if drive.Backend == types.DriveBackendMacDisk {
+		return d.reclaimMacDisk(drive)
+	}
 	if drive.Backend != types.DriveBackendDockerVolume {
 		return "", fmt.Errorf("docker: drive: backend %q allocates no object this substrate may destroy "+
 			"(a host_path drive's home is a directory on your own filesystem): %w", drive.Backend, runner.ErrDriveNotReclaimable)

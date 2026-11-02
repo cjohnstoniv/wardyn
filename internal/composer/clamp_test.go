@@ -755,6 +755,65 @@ func TestClamp_UIApps(t *testing.T) {
 	}
 }
 
+// TestClamp_UIAppsInboundCallers pins the inbound declaration: a ceiling that lists no
+// apps has no opinion on it, and one that lists the app lets inbound survive only where its
+// own entry is inbound, with callers cut to its own.
+func TestClamp_UIAppsInboundCallers(t *testing.T) {
+	ana, bo, svc := "user:ana@example.com", "group:payments", "service:billing"
+	proposal := func(inbound bool, callers ...string) types.RunPolicySpec {
+		return types.RunPolicySpec{UIApps: []types.UIApp{{Name: "api", Port: 8080, Inbound: inbound, Callers: callers}}}
+	}
+	ceilingOf := func(inbound bool, callers ...string) types.RunPolicySpec {
+		c := operatorCeiling(t)
+		c.UIApps = []types.UIApp{{Name: "api", Port: 8080, Inbound: inbound, Callers: callers}}
+		return c
+	}
+
+	t.Run("a ceiling with no apps has no opinion", func(t *testing.T) {
+		got, warns := Clamp(proposal(true, ana, svc), operatorCeiling(t), types.GovernanceLimits{})
+		if !sameUIApps(got.UIApps, proposal(true, ana, svc).UIApps) || hasWarn(warns, "ui_app") {
+			t.Errorf("ui_apps = %+v, warns %v; want the proposal untouched", got.UIApps, warns)
+		}
+	})
+	t.Run("an inbound ceiling entry keeps inbound and the callers it names", func(t *testing.T) {
+		got, warns := Clamp(proposal(true, ana, bo), ceilingOf(true, ana, bo, svc), types.GovernanceLimits{})
+		if !sameUIApps(got.UIApps, proposal(true, ana, bo).UIApps) || hasWarn(warns, "ui_app") {
+			t.Errorf("ui_apps = %+v, warns %v; want the proposal untouched", got.UIApps, warns)
+		}
+	})
+	t.Run("callers the ceiling does not name are dropped with a warning", func(t *testing.T) {
+		got, warns := Clamp(proposal(true, ana, bo, svc), ceilingOf(true, ana), types.GovernanceLimits{})
+		if !sameUIApps(got.UIApps, proposal(true, ana).UIApps) || !hasWarn(warns, "dropped callers not in operator allowlist") {
+			t.Errorf("ui_apps = %+v, warns %v; want only %s and a callers warning", got.UIApps, warns, ana)
+		}
+	})
+	t.Run("an inbound ceiling entry naming no callers admits none", func(t *testing.T) {
+		got, warns := Clamp(proposal(true, ana), ceilingOf(true), types.GovernanceLimits{})
+		if len(got.UIApps) != 1 || !got.UIApps[0].Inbound || len(got.UIApps[0].Callers) != 0 || !hasWarn(warns, "dropped callers") {
+			t.Errorf("ui_apps = %+v, warns %v; want inbound with no callers", got.UIApps, warns)
+		}
+	})
+	t.Run("a non-inbound ceiling entry strips inbound and callers with a warning", func(t *testing.T) {
+		got, warns := Clamp(proposal(true, ana), ceilingOf(false), types.GovernanceLimits{})
+		if !sameUIApps(got.UIApps, proposal(false).UIApps) || !hasWarn(warns, "dropped inbound from 1 ui_app") {
+			t.Errorf("ui_apps = %+v, warns %v; want the app kept, not inbound", got.UIApps, warns)
+		}
+	})
+	t.Run("a non-inbound proposal is left alone", func(t *testing.T) {
+		got, warns := Clamp(proposal(false), ceilingOf(true, ana), types.GovernanceLimits{})
+		if !sameUIApps(got.UIApps, proposal(false).UIApps) || hasWarn(warns, "ui_app") {
+			t.Errorf("ui_apps = %+v, warns %v; want the proposal untouched", got.UIApps, warns)
+		}
+	})
+	t.Run("the proposal's own callers are not edited", func(t *testing.T) {
+		p := proposal(true, ana, bo, svc)
+		Clamp(p, ceilingOf(true, ana), types.GovernanceLimits{})
+		if !slices.Equal(p.UIApps[0].Callers, []string{ana, bo, svc}) {
+			t.Errorf("the caller's proposal was mutated: %v", p.UIApps[0].Callers)
+		}
+	})
+}
+
 // TestClamp_Resources is HIGH-2: each field caps at the ceiling's when the
 // ceiling sets one; an unset (<=0) proposed field is the PERMISSIVE state here
 // (filled in by the driver's own default later) and is set to the ceiling exactly

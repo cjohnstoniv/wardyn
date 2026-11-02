@@ -327,7 +327,7 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 		return err
 	}
 	if err := cmp.Or(validateSignInHelp(cfg.SignInHelpText, cfg.SignInHelpURL), validatePolicyHelp(cfg.PolicyHelp), validateComponentSettings(cfg.Components),
-		validateSiteRecording(cfg.Recording), validGovernanceMaxDepth(cfg.GovernanceMaxDepth)); err != nil {
+		validateSiteRecording(cfg.Recording), validGovernanceMaxDepth(cfg.GovernanceMaxDepth), validateSiteMacOSVM(cfg.MacOSVM)); err != nil {
 		return err
 	}
 	// The workspace-provider block, when the body carries one: ONE validator for
@@ -523,7 +523,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
 	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help", "components",
-	"recording", "governance_max_depth",
+	"recording", "governance_max_depth", "macos_vm",
 }
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
@@ -588,6 +588,7 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	carryForwardPolicyHelp(cfg, existing, present) // same terms as the sign-in help pair
 	carryForwardComponentSettings(cfg, existing, present)
 	carryForwardSiteRecording(cfg, existing, present)
+	carryForwardSiteMacOSVM(cfg, existing, present)
 	// branding (#1215), on the same terms: a file written before the key existed
 	// must not drop the logo_path the org named (an absent key also leaves the
 	// stored logo untouched — only a body that names the block acts on it).

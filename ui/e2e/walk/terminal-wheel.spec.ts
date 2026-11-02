@@ -28,7 +28,7 @@ test.use({ storageState: ENTRA_STORAGE_STATE });
 test("the wheel scrolls tmux history and does not recall bash history", async ({ page }) => {
   await walkSignIn(page, MEMBER_EMAIL);
   await page.goto("/runs/new");
-  // An Environment sandbox is the terminal: interactive, no agent.
+  // An Environment is the terminal: interactive, no agent.
   await walkNewRunToReview(page, { shape: "environment" });
   await launchFromReview(page, "terminal wheel walk");
   await viewLaunchedRun(page);

@@ -204,4 +204,7 @@ func (s *Server) isModelProviderRejectHost(ctx context.Context, h string) bool {
 type composeLLMAccess struct {
 	Provisioned bool   `json:"provisioned"`
 	Note        string `json:"note"`
+	// sandboxResident: the chosen provider's credential lands inside the sandbox
+	// (kindResidency), so the checklist row must not call it proxy-held.
+	sandboxResident bool
 }

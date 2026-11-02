@@ -35,13 +35,19 @@ type doctorRig struct {
 	imageAt   string
 	relayErr  error
 	relayRan  bool
-	noNet     bool
-	netErr    error
-	orgPool   *x509.CertPool
-	cert      *x509.Certificate
+	// relayPulls is whether the relay probe was allowed to pull the proxy image.
+	relayPulls bool
+	noNet      bool
+	netErr     error
+	orgPool    *x509.CertPool
+	cert       *x509.Certificate
 	// routed leaves the route to the settings doctor resolves, instead of a direct one.
 	routed bool
 	org    string
+	// t is the test the rig was made for, and fileOrg the org_url runnerd.json carries: the only place a
+	// doctor run reads the organisation from when no flag is given.
+	t       *testing.T
+	fileOrg string
 	// stripUpgrade makes the organisation see the stream route's request without its upgrade headers, the way
 	// a gateway that strips them does.
 	stripUpgrade bool
@@ -72,8 +78,15 @@ func newRig(t *testing.T) *doctorRig {
 	pool := x509.NewCertPool()
 	pool.AddCert(srv.Certificate())
 	rig.cert = srv.Certificate()
-	rig.env, rig.orgPool, rig.org = map[string]string{"WARDYN_RUNNER_ORG_URL": srv.URL}, pool, srv.URL
+	rig.env, rig.orgPool, rig.org, rig.t, rig.fileOrg = map[string]string{}, pool, srv.URL, t, srv.URL
+	rig.writeRunnerJSON(t, runnerFile{})
 	return rig
+}
+
+// setOrg records org as runnerd.json's org_url, "" for none.
+func (r *doctorRig) setOrg(org string) {
+	r.fileOrg = org
+	r.writeRunnerJSON(r.t, runnerFile{})
 }
 
 // installUnit puts the service's unit file where setup would have.
@@ -102,8 +115,8 @@ func (r *doctorRig) run(o doctorOptions) doctor.Report {
 		},
 		image:      func(context.Context, string) (string, error) { return r.imageAt, r.imageErr },
 		hasNetwork: func(context.Context, string) (bool, error) { return !r.noNet && r.netErr == nil, r.netErr },
-		relay: func(context.Context, string, string, dockerEngine, relayPair) (relayPair, error) {
-			r.relayRan = true
+		relay: func(ctx context.Context, _, _ string, _ dockerEngine, _ relayPair) (relayPair, error) {
+			r.relayRan, r.relayPulls = true, pullsAllowed(ctx)
 			return relayPair{bind: netip.MustParseAddr("172.17.0.1"), target: hostGateway}, r.relayErr
 		}}
 	net := doctor.Network{LookupHost: func(context.Context, string) ([]string, error) { return []string{"203.0.113.7"}, nil },
@@ -177,9 +190,9 @@ func TestRunnerDoctorStagesNameTheirSetting(t *testing.T) {
 		{"organisation certificate no root signed", func(r *doctorRig) { r.orgPool = x509.NewCertPool() }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "tls", "WARDYN_TRUSTED_CA_FILE", "no trusted root signed"},
 		{"proxy network missing", func(r *doctorRig) { r.noNet = true }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "relay", "WARDYN_INTERNAL_NETWORK", "wardyn-internal that run proxies attach to does not exist"},
 		{"proxy network lookup fails", func(r *doctorRig) { r.netErr = errors.New("permission denied") }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "relay", "DOCKER_HOST", "could not look for the Docker network wardyn-internal: permission denied"},
-		{"organisation URL not https", func(r *doctorRig) { r.env["WARDYN_RUNNER_ORG_URL"] = "http://wardyn.example.com" }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "org-url", "WARDYN_RUNNER_ORG_URL", "https://"},
-		{"no organisation set", func(r *doctorRig) { delete(r.env, "WARDYN_RUNNER_ORG_URL") }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "org-url", "WARDYN_RUNNER_ORG_URL", "no organisation"},
-		{"gateway strips the WebSocket upgrade", func(r *doctorRig) { r.stripUpgrade = true }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "wire", "WARDYN_RUNNER_ORG_URL", "answered 426 instead of switching to a WebSocket"},
+		{"organisation URL not https", func(*doctorRig) {}, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0", org: "http://wardyn.example.com"}, "org-url", orgSetting, "https://"},
+		{"no organisation set", func(r *doctorRig) { r.setOrg("") }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "org-url", orgSetting, "no organisation"},
+		{"gateway strips the WebSocket upgrade", func(r *doctorRig) { r.stripUpgrade = true }, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}, "wire", orgSetting, "answered 426 instead of switching to a WebSocket"},
 		{"CA bundle unreadable", func(*doctorRig) {}, doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0", trustedCAFile: "/nonexistent/ca.pem"}, "trusted-ca", "WARDYN_TRUSTED_CA_FILE", "/nonexistent/ca.pem"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -226,6 +239,15 @@ func TestDoctorNeverPullsOrStartsAProbeForAnImageNotOnTheEngine(t *testing.T) {
 	}
 	if s := stage(t, rep, "proxy-image"); s.Status != doctor.StatusOK || !strings.Contains(s.Detail, "registry") {
 		t.Errorf("proxy-image = %s %q", s.Status, s.Detail)
+	}
+}
+
+// The image can vanish between doctor's look at it and the probe: the probe is told not to pull it.
+func TestDoctorsRelayProbeIsNotAllowedToPull(t *testing.T) {
+	r := newRig(t)
+	r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"})
+	if !r.relayRan || r.relayPulls {
+		t.Errorf("relay probe ran=%v, pulls allowed=%v; want it run with pulling off", r.relayRan, r.relayPulls)
 	}
 }
 
@@ -346,7 +368,7 @@ func TestDoctorReadsWhatSetupRecordedInRunnerJSON(t *testing.T) {
 		stage string
 		in    string
 	}{
-		{"org_url", func(org, _ string) runnerFile { return runnerFile{OrgURL: org} }, false, "org-url", "WARDYN_RUNNER_ORG_URL in the service's settings"},
+		{"org_url", func(org, _ string) runnerFile { return runnerFile{OrgURL: org} }, false, "org-url", "org_url in the service's settings"},
 		{"trusted_ca_file", func(_, ca string) runnerFile { return runnerFile{TrustedCAFile: ca} }, true, "trusted-ca", "1 certificate(s) from ca.pem"},
 		{"org_ca_file", func(_, ca string) runnerFile { return runnerFile{OrgCAFile: ca} }, true, "org-ca", "1 certificate(s) from ca.pem"},
 	} {
@@ -356,10 +378,6 @@ func TestDoctorReadsWhatSetupRecordedInRunnerJSON(t *testing.T) {
 				r.orgPool = x509.NewCertPool() // only the recorded bundle trusts the certificate
 			}
 			ca := writeFile(t, filepath.Join(t.TempDir(), "ca.pem"), string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: r.cert.Raw})))
-			if !tc.shell {
-				// The organisation is only in runnerd.json, and the system pool trusts its certificate.
-				delete(r.env, "WARDYN_RUNNER_ORG_URL")
-			}
 			p, err := (setupHost{goos: "linux", home: r.home}).paths()
 			if err != nil {
 				t.Fatal(err)
@@ -367,7 +385,11 @@ func TestDoctorReadsWhatSetupRecordedInRunnerJSON(t *testing.T) {
 			if err := os.MkdirAll(filepath.Dir(p.configFile()), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			raw, err := json.Marshal(tc.file(r.org, ca))
+			f := tc.file(r.org, ca)
+			if f.OrgURL == "" {
+				f.OrgURL = r.org
+			}
+			raw, err := json.Marshal(f)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -388,6 +410,9 @@ func TestDoctorReadsWhatSetupRecordedInRunnerJSON(t *testing.T) {
 // writeRunnerJSON records f where setup does, for the rig's home.
 func (r *doctorRig) writeRunnerJSON(t *testing.T, f runnerFile) {
 	t.Helper()
+	if f.OrgURL == "" {
+		f.OrgURL = r.fileOrg
+	}
 	p, err := (setupHost{goos: "linux", home: r.home}).paths()
 	if err != nil {
 		t.Fatal(err)
@@ -423,7 +448,7 @@ func TestDoctorRoutesThroughTheRecordedRunnerProxy(t *testing.T) {
 	r := newRig(t)
 	r.routed = true
 	proxy := newConnectProxy(t, strings.TrimPrefix(r.org, "https://"), false)
-	r.env["WARDYN_RUNNER_ORG_URL"] = "https://example.com:" + strings.Split(r.org, ":")[2]
+	r.setOrg("https://example.com:" + strings.Split(r.org, ":")[2])
 	r.writeRunnerJSON(t, runnerFile{RunnerProxy: proxy.URL.String()})
 	rep := r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"})
 	if s := stage(t, rep, "proxy"); s.Status != doctor.StatusOK || !strings.Contains(s.Detail, "via proxy "+proxy.URL.Host) {
@@ -453,5 +478,155 @@ func TestDoctorFailsAnUnreadableRunnerJSON(t *testing.T) {
 	rep := r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"})
 	if s := stage(t, rep, "config"); s.Status != doctor.StatusFail || !strings.Contains(s.Detail, "bogus_field") || rep.OK() {
 		t.Errorf("config = %s %q, report ok %v; want a failure naming the field", s.Status, s.Detail, rep.OK())
+	}
+}
+
+// Doctor resolves the organisation as serve does, and serve has no environment variable for it: a stray
+// WARDYN_RUNNER_ORG_URL in the shell is ignored, and the file's org_url is what the stages check.
+func TestDoctorIgnoresAnExportedOrgURLWhenTheFileSetsOne(t *testing.T) {
+	r := newRig(t)
+	r.env["WARDYN_RUNNER_ORG_URL"] = "https://stray.example.com"
+	s := stage(t, r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}), "org-url")
+	if s.Status != doctor.StatusOK || strings.Contains(s.Detail, "stray.example.com") || !strings.Contains(s.Detail, r.org) || !strings.Contains(s.Detail, "org_url in the service's settings") {
+		t.Errorf("org-url = %s %q, want the file's address and no trace of the export", s.Status, s.Detail)
+	}
+}
+
+func TestDoctorReportsNoOrganisationWhenOnlyAnExportNamesOne(t *testing.T) {
+	r := newRig(t)
+	r.setOrg("")
+	r.env["WARDYN_RUNNER_ORG_URL"] = r.org
+	s := stage(t, r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}), "org-url")
+	if s.Status != doctor.StatusFail || !strings.Contains(s.Detail, "no organisation") || s.Setting != orgSetting || strings.Contains(s.Fix, "WARDYN_RUNNER_ORG_URL") {
+		t.Errorf("org-url = %s %q setting %q fix %q, want FAIL: serve would not see the export either", s.Status, s.Detail, s.Setting, s.Fix)
+	}
+}
+
+func TestDoctorFlagOutranksTheFilesOrganisation(t *testing.T) {
+	r := newRig(t)
+	r.setOrg("https://file.example.com")
+	rep := r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0", org: r.org})
+	if s := stage(t, rep, "org-url"); s.Status != doctor.StatusOK || !strings.Contains(s.Detail, r.org) || !strings.Contains(s.Detail, "from --org") {
+		t.Errorf("org-url = %s %q, want the flag's address", s.Status, s.Detail)
+	}
+}
+
+func TestDoctorManagedLockOutranksTheFlagAndTheFile(t *testing.T) {
+	r := newRig(t)
+	withManagedPrefs(t, "darwin", map[string]string{lockSettingKey: "true", "OrgURL": r.org})
+	r.setOrg("https://file.example.com")
+	rep := r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0", org: "https://flag.example.com"})
+	if s := stage(t, rep, "org-url"); s.Status != doctor.StatusOK || !strings.Contains(s.Detail, r.org) || !strings.Contains(s.Detail, "the OrgURL managed preference") {
+		t.Errorf("org-url = %s %q, want the locked managed address", s.Status, s.Detail)
+	}
+}
+
+// An earlier Linux install's unit runs `serve --org ${WARDYN_RUNNER_ORG_URL}` from its env file, with no
+// runnerd.json: the service definition names the organisation, so doctor reads it there (and not in the shell).
+func TestDoctorReadsTheOrganisationOfAnEarlierInstallsServiceDefinition(t *testing.T) {
+	r := newRig(t)
+	r.setOrg("")
+	p, err := (setupHost{goos: "linux", home: r.home}).paths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p.noServiceEnvFile()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.noServiceEnvFile(), []byte("WARDYN_RUNNER_ORG_URL="+r.org+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := stage(t, r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}), "org-url")
+	if s.Status != doctor.StatusOK || !strings.Contains(s.Detail, r.org) || !strings.Contains(s.Detail, "WARDYN_RUNNER_ORG_URL in the service's settings") {
+		t.Errorf("org-url = %s %q, want the service definition's address", s.Status, s.Detail)
+	}
+}
+
+// installUnitText puts text where the service's unit file is, as a setup would have left it.
+func (r *doctorRig) installUnitText(t *testing.T, text string) setupPaths {
+	t.Helper()
+	r.installUnit(t)
+	p, err := (setupHost{goos: "linux", home: r.home}).paths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.unitFile, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// writeLegacyEnv writes the environment file an earlier setup's unit read.
+func writeLegacyEnv(t *testing.T, p setupPaths, org string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(p.noServiceEnvFile()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.noServiceEnvFile(), []byte("WARDYN_RUNNER_ORG_URL="+org+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const (
+	legacyUnit = "[Service]\nExecStart=/bin/wardyn-runnerd serve --org ${WARDYN_RUNNER_ORG_URL} --state-dir ${WARDYN_RUNNER_STATE_DIR}\n"
+	modernUnit = "[Service]\nExecStart=/bin/wardyn-runnerd serve --config /home/x/.config/wardyn/runnerd.json\n"
+)
+
+// An earlier unit passes its stored value as a real --org, which serve ranks above runnerd.json, so a
+// conflicting file (setup writes it before it replaces the unit) never changes the address doctor checks.
+func TestDoctorRanksAnEarlierUnitsOrgArgumentAboveTheFile(t *testing.T) {
+	r := newRig(t)
+	r.setOrg("https://file.example.com")
+	writeLegacyEnv(t, r.installUnitText(t, legacyUnit), r.org)
+	s := stage(t, r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}), "org-url")
+	if s.Status != doctor.StatusOK || !strings.Contains(s.Detail, r.org) || strings.Contains(s.Detail, "file.example.com") || !strings.Contains(s.Detail, "WARDYN_RUNNER_ORG_URL in the service's settings") {
+		t.Errorf("org-url = %s %q, want the unit's address", s.Status, s.Detail)
+	}
+}
+
+// A unit that passes only --config consumes no environment file: a stale one beside it names nothing.
+func TestDoctorIgnoresAStaleEnvFileBesideAModernUnit(t *testing.T) {
+	r := newRig(t)
+	writeLegacyEnv(t, r.installUnitText(t, modernUnit), "https://stale.example.com")
+	s := stage(t, r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}), "org-url")
+	if s.Status != doctor.StatusOK || strings.Contains(s.Detail, "stale.example.com") || !strings.Contains(s.Detail, r.org) {
+		t.Errorf("org-url = %s %q, want the file's address", s.Status, s.Detail)
+	}
+}
+
+func TestDoctorReadsAnEarlierUnitsOrgWhenThereIsNoFile(t *testing.T) {
+	r := newRig(t)
+	r.setOrg("")
+	writeLegacyEnv(t, r.installUnitText(t, legacyUnit), r.org)
+	s := stage(t, r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}), "org-url")
+	if s.Status != doctor.StatusOK || !strings.Contains(s.Detail, r.org) || !strings.Contains(s.Detail, "WARDYN_RUNNER_ORG_URL in the service's settings") {
+		t.Errorf("org-url = %s %q, want the unit's address", s.Status, s.Detail)
+	}
+}
+
+// Doctor's own --org and the locked managed OrgURL still outrank an earlier unit's argument.
+func TestDoctorFlagAndManagedLockOutrankAnEarlierUnitsOrgArgument(t *testing.T) {
+	r := newRig(t)
+	writeLegacyEnv(t, r.installUnitText(t, legacyUnit), "https://unit.example.com")
+	rep := r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0", org: r.org})
+	if s := stage(t, rep, "org-url"); s.Status != doctor.StatusOK || !strings.Contains(s.Detail, "from --org") || strings.Contains(s.Detail, "unit.example.com") {
+		t.Errorf("org-url = %s %q, want the flag's address", s.Status, s.Detail)
+	}
+	withManagedPrefs(t, "darwin", map[string]string{lockSettingKey: "true", "OrgURL": r.org})
+	rep = r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"})
+	if s := stage(t, rep, "org-url"); s.Status != doctor.StatusOK || !strings.Contains(s.Detail, "the OrgURL managed preference") || strings.Contains(s.Detail, "unit.example.com") {
+		t.Errorf("org-url = %s %q, want the locked managed address", s.Status, s.Detail)
+	}
+}
+
+// A unit that passes only --config consumes no environment file: with runnerd.json naming no organisation,
+// a stale file beside it is not the organisation either, and doctor says there is none.
+func TestDoctorReportsNoOrganisationForAStaleEnvFileBesideAModernUnitAndNoOrg(t *testing.T) {
+	r := newRig(t)
+	r.setOrg("")
+	writeLegacyEnv(t, r.installUnitText(t, modernUnit), "https://stale.example.com")
+	s := stage(t, r.run(doctorOptions{proxyImage: releaseProxyRepo + ":0.10.0"}), "org-url")
+	if s.Status != doctor.StatusFail || !strings.Contains(s.Detail, "no organisation") || strings.Contains(s.Detail, "stale.example.com") {
+		t.Errorf("org-url = %s %q, want FAIL with no organisation and no trace of the stale file", s.Status, s.Detail)
 	}
 }

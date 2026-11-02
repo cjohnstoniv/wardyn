@@ -45,7 +45,7 @@ A build is two stages:
    - After the push, ENVBUILDER_INIT_SCRIPT="exit 0" makes the container exit (otherwise envbuilder execs its default init, "sleep infinity", and runs forever — the wait-for-exit would hang until the build timeout).
 2. FINALIZE (a host-daemon build: FROM the pushed image + COPY, no untrusted RUN) layers Wardyn's runner tools onto PATH and clears ENTRYPOINT, producing the local image tag the runner exec's/verifies/records into.
    - The finalize stage COPYs everything in the tools dir, so extra tools (e.g. wardyn-scan) may ride along.
-   - Only these four are contractually required — agent-run, agent-run-lib.sh, wardyn-rec, wardyn-git-helper — and a tools dir missing any of them fails the build closed (requiredTools / validateToolsDir in [`internal/envbuild/builder.go`](../internal/envbuild/builder.go)).
+   - Only these four are contractually required — agent-run, agent-run-lib.sh, wardyn-rec, wardyn-git-helper — and a tools dir missing any of them fails the build closed (validateToolsDir in [`internal/envbuild/builder.go`](../internal/envbuild/builder.go), listed in [`internal/types/workspace_contract.go`](../internal/types/workspace_contract.go)).
    - Without this the built image lacks Wardyn's binaries and the runner cannot drive it.
    - Build returns this local tag.
 
@@ -169,6 +169,8 @@ wardyn workspace build <workspace-id> --refresh
 - Pinning is honored end-to-end — a pre-pulled digest base matches without a registry round-trip — and is the recommended operator practice, but it is NOT enforced.
 - A tag is resolved at wrap time, so what it points at is the operator's call.
 - What the base's content cannot reach is the host: it only ever executes later, inside the run's confinement tier.
+- A pre-wrapped image is the other way round: not wrapped, pinned by digest, and checked on the cluster
+  before it runs. See [deploy/images/README.md](../deploy/images/README.md#pre-wrapped-image).
 - See [threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 (residual 13).
 
 A generated recipe is deterministic, not a lock: the base tag, the `:1` feature tags and the claude-code `/stable` channel resolve at build time, and a kept image is not refreshed. What the cache key identifies, and when an image is reused or rebuilt, is in [build-images.md](operations/build-images.md#every-generated-image-carries-claude-code-nothing-bakes-codex-cli); see [threatmodel/THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md) §5 (residual 13).

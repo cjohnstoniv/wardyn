@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { RunIntent } from "../draft/run-intent";
-import { addApp, appIssues, appsOf, chooseAppKind, commandOf, editApp, isServer, MAX_APPS, portProblems, removeApp, setApps, setCommand } from "./apps-lens";
+import { addApp, appIssues, appsOf, chooseAppKind, commandOf, editApp, hasPorts, isServer, MAX_APPS, portProblems, removeApp, setApps, setCommand } from "./apps-lens";
 import { stepIssues } from "./local-issues";
 import { chooseShape } from "./shape-lens";
 
@@ -134,5 +134,13 @@ describe("Application / server issues", () => {
     const none = removeApp(SERVER, 0);
     expect(appIssues(none).map((i) => i.code)).toEqual(["app_required"]);
     expect(stepIssues("run", setCommand(none, " ")).map((i) => i.code)).toEqual(["command_required", "app_required"]);
+  });
+
+  it("draws ports for a server and for a script that keeps running, and asks one of a server only", () => {
+    const service: RunIntent = { ...SCRIPT, service: { restart: "on_failure" } };
+    expect([SERVER, service, SCRIPT].map(hasPorts)).toEqual([true, true, false]);
+    expect(appIssues(service)).toEqual([]);
+    expect(appIssues(setApps(service, [{ name: "Bad", port: 0 }]))[0]).toMatchObject({ code: "app_name_invalid", focus: "nr-app-name-0" });
+    expect(appIssues(setApps(SCRIPT, [{ name: "Bad", port: 0 }]))).toEqual([]);
   });
 });

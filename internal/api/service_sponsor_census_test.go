@@ -82,8 +82,11 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 	}
 	// mayEnterRunOrSponsor admits a sponsor on a redeemed ticket or an open UI session without a delegation
 	// check of its own: the portal refusal holds because the one ticket mint refuses. A new redemption site
-	// is a new way in, and has to be classified here.
-	wantRedeem := map[string]int{"refuseAttachEntry": 1, "uiEnterCommon": 1, "uiSessionStillAuthorized": 1}
+	// is a new way in, and has to be classified here. uiTicketMayEnter is the gateway enter's redemption
+	// (uiEnterCommon's, moved there beside the inbound caller's ticket, which never takes this arm).
+	// inboundCaller redeems an inbound token, with no role (superAdmin false); a portal's delegated token
+	// cannot mint one (mintGuards' delegation refusal, on both token mints), so the portal refusal holds there too.
+	wantRedeem := map[string]int{"refuseAttachEntry": 1, "uiTicketMayEnter": 1, "uiSessionStillAuthorized": 1, "inboundCaller": 1}
 	if !maps.Equal(redeem, wantRedeem) {
 		t.Errorf("mayEnterRunOrSponsor is asked by %v, want %v", redeem, wantRedeem)
 	}

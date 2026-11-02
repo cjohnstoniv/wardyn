@@ -1,0 +1,83 @@
+# The WardynWorkload CRD. It lives in crds/ so two arch releases do not fight over it; Helm installs it once
+# and never upgrades it, so re-apply this file by hand on a chart upgrade. runnerd watches the namespaces in
+# workloads.namespaces and forwards each object to the organisation, which validates it: the schema keeps
+# intent open on purpose. Status is written by runnerd from the organisation's answer only.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: wardynworkloads.wardyn.dev
+spec:
+  group: wardyn.dev
+  scope: Namespaced
+  names:
+    kind: WardynWorkload
+    listKind: WardynWorkloadList
+    plural: wardynworkloads
+    singular: wardynworkload
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Run
+          type: string
+          jsonPath: .status.runID
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [intent]
+              properties:
+                description:
+                  type: string
+                  maxLength: 200
+                run_in:
+                  type: string
+                restart_key:
+                  type: string
+                  maxLength: 64
+                intent:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                phase:
+                  type: string
+                runID:
+                  type: string
+                reason:
+                  type: string
+                message:
+                  type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, status]
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time

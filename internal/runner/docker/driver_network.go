@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
@@ -31,6 +32,9 @@ import (
 //
 //nolint:funlen // Deliberate: one linear container-assembly sequence whose teardown-on-failure compensations must stay in one scope; low branching, just long.
 func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	if spec.MachineKind.IsMacOSVM() {
+		return d.createMacVM(ctx, spec)
+	}
 	if spec.MachineKind.Normalize() != "" {
 		return d.createVM(ctx, spec)
 	}
@@ -355,9 +359,18 @@ func (d *Driver) daemonSubnet(ctx context.Context, name string, opts client.Netw
 	return netip.Prefix{}, fmt.Errorf("the daemon gave network %s no IPv4 subnet", name)
 }
 
+// stopSandboxBudget bounds a StopSandbox, which runs apart from the call that asked for it: the agent's
+// stop, the proxy's drain and stop, and the removals. It is 60 s, the bound the local callers put on a
+// teardown (boundedTeardown, teardownCtx), which the detached context would otherwise drop.
+const stopSandboxBudget = 60 * time.Second
+
 // StopSandbox is the graceful path: SIGTERM, then SIGKILL after the timeout,
-// then remove. Idempotent on a missing sandbox.
+// then remove. Idempotent on a missing sandbox. It runs on a context cut loose from the call's,
+// which the organisation cancels when it gives up on a slow call, and bounded by stopSandboxBudget
+// instead: a stop cancelled half-way would leave the proxy sidecar and the relay for the orphan sweep.
 func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
+	ctx, done := context.WithTimeout(context.WithoutCancel(ctx), stopSandboxBudget)
+	defer done()
 	if v := d.vmFor(ctx, ref); v != nil {
 		d.vmPowerdown(ctx, v, ref)
 	}
@@ -585,8 +598,10 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	if err := d.removeProxy(ctx, id); err != nil {
 		return err
 	}
-	// A VM's network relay is on the run's network, which Docker removes only once it is gone.
-	if _, err := d.cli.ContainerRemove(ctx, vmnetName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+	// A VM's network relay is on the run's network, which Docker removes only once it is gone. A removal of it
+	// that another teardown of the run already has in progress is waited out, not failed (#3886).
+	if _, err := d.cli.ContainerRemove(ctx, vmnetName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) &&
+		!d.removedElsewhere(ctx, vmnetName(id), err) {
 		return fmt.Errorf("docker: remove the VM's network relay: %w", err)
 	}
 	if _, err := d.cli.NetworkRemove(ctx, internalNetName(id), client.NetworkRemoveOptions{}); err != nil && !isNotFound(err) {
@@ -598,6 +613,23 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 		return fmt.Errorf("docker: remove drive seed: %w", err)
 	}
 	return nil
+}
+
+// removedElsewhere reports whether err is Docker refusing to remove the container name because another call
+// is already removing it, and that removal then ended within ctx with the container gone.
+func (d *Driver) removedElsewhere(ctx context.Context, name string, err error) bool {
+	if !errdefs.IsConflict(err) || !strings.Contains(err.Error(), "already in progress") {
+		return false
+	}
+	wait := d.cli.ContainerWait(ctx, name, client.ContainerWaitOptions{Condition: container.WaitConditionRemoved})
+	select {
+	case <-wait.Result:
+		return true
+	case werr := <-wait.Error:
+		return isNotFound(werr)
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // sweepDriveSeeds removes drive seed containers (seedDriveVolume) older than

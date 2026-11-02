@@ -22,6 +22,7 @@ import { firstInvalidStep, localIssues } from "./lenses/local-issues";
 import { NEW_RUN_STEPS, type NewRunStep } from "./lenses/step-issues";
 import { usePendingLaunch, type PendingLaunch } from "./launch/use-launch-run";
 import { seedLoaders } from "./steps/shape/seed-loaders";
+import { MacOSOfferProvider } from "./steps/run/macos-offer-provider";
 import { AnnounceContext } from "./steps/step-shell";
 
 const DraftContext = React.createContext<NewRunDraft | null>(null);
@@ -250,9 +251,11 @@ export function NewRunRoute({ loaders = seedLoaders, screens = NEW_RUN_SCREENS }
     <NewRunDraftProvider owner={operatorResolved ? principal : ""}>
       <PendingLaunchContext.Provider value={pending}>
         <AnnounceContext.Provider value={setMessage}>
-          <React.Suspense fallback={<RouteFallback />}>
-            <NewRunFlow loaders={loaders} screens={screens} />
-          </React.Suspense>
+          <MacOSOfferProvider>
+            <React.Suspense fallback={<RouteFallback />}>
+              <NewRunFlow loaders={loaders} screens={screens} />
+            </React.Suspense>
+          </MacOSOfferProvider>
           <div role="status" aria-live="polite" className="sr-only">{message}</div>
         </AnnounceContext.Provider>
       </PendingLaunchContext.Provider>

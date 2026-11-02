@@ -85,6 +85,9 @@ export interface ApprovalRequest {
   // (kind, ownership, and the egress_host grant for a member's egress_domain row). Absent when the server did not
   // compute it, then canDecideApproval's role-and-kind guess is all there is. Four-eyes is not folded in.
   decidable?: boolean;
+  // walls_block: the requesting run owner's own walls deny this PENDING egress_domain row's host, so no approver
+  // can admit it (personal_walls_host). Absent otherwise; the server never sends false.
+  walls_block?: boolean;
 }
 
 // canDecideApproval mirrors the ROLE and KIND checks of internal/api/approvals.go's decide(): an

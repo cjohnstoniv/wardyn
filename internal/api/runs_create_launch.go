@@ -138,10 +138,11 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 	// Resolve the sandbox image (BYOI wrap > devcontainer build > workspace
 	// profile > convention image) and persist it for provenance. A failed
 	// BYOI/devcontainer build has already marked the run FAILED.
-	image, failed := s.resolveCreateRunImage(ctx, l.req, l.created, l.wsRefs)
+	image, arches, failed := s.resolveCreateRunImage(ctx, l.req, l.created, l.wsRefs)
 	if failed {
 		return
 	}
+	l.created.ImageArches = arches
 
 	// Dispatch the sandbox if a runner is wired; otherwise stay PENDING.
 	if s.cfg.Runner != nil {

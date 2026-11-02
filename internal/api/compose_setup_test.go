@@ -569,6 +569,27 @@ func TestDeriveSetupItems_BackendRowForAMemberHoldsNoOperatorDetail(t *testing.T
 	}
 }
 
+// An AWS sign-in's session lands in the sandbox, so its model-access row must not
+// say proxy_injected; it agrees with the model_credential fact (kindResidency).
+func TestDeriveSetupItems_AWSSignInLLMAccessIsResident(t *testing.T) {
+	srv := newSetupTestServer()
+	run := composer.RunInput{Agent: "claude-code", Repo: "ephemeral"}
+	for kind, want := range map[types.ModelProviderKind]string{
+		types.ModelProviderBedrockSSO:    "resident_file",
+		types.ModelProviderBedrockBearer: "proxy_injected",
+	} {
+		mp := runProviderChoice{chosen: true, provider: types.ModelProvider{ID: "p1", Kind: kind}}
+		items := srv.deriveSetupItems(context.Background(), "", run, types.RunPolicySpec{}, secretsWith(), providerLLMAccess("claude-code", mp))
+		it, ok := findItem(items, "llm_access:claude-code")
+		if !ok || it.Residency != want {
+			t.Errorf("%s llm_access residency = %+v (ok=%v), want %s", kind, it, ok, want)
+		}
+		if got := mp.modelCredential().Residency; (got == residencySandbox) != (it.Residency == "resident_file") {
+			t.Errorf("%s: checklist residency %q disagrees with model_credential %q", kind, it.Residency, got)
+		}
+	}
+}
+
 func TestDeriveSetupItems_Residency(t *testing.T) {
 	srv := newSetupTestServer()
 

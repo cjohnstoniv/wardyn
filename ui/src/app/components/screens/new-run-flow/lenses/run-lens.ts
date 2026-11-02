@@ -6,12 +6,14 @@
 // Owns experience, workload.kind, runner_pool_id, machine_kind and confinement_class (a command
 // and the ports of an application server are apps-lens).
 
+import type { MachineKind } from "../../../../lib/types/machine-kind";
 import type { ConfinementClass } from "../../../../lib/types/runs";
 import type { RunnerPoolScope } from "../../../../lib/types/runner-pools";
 import type { RunIntent } from "../draft/run-intent";
 import { appIssues, commandOf } from "./apps-lens";
 import { withKeys } from "./lens-keys";
 import { shapeCarriers, type RunMode } from "./shape-lens";
+import { serviceIssues } from "./service-lens";
 import { issue, type StepIssue, type StepValidator } from "./step-issues";
 
 export function chooseMode(intent: RunIntent, mode: RunMode): RunIntent {
@@ -27,10 +29,15 @@ export const choosePool = (intent: RunIntent, poolId: string): RunIntent => with
 
 /**
  * The machine kind. A container is the default, so it is the absent key; a VM is its own barrier, so a
- * barrier chosen for a container is dropped with the switch.
+ * barrier chosen for a container is dropped with the switch. A macOS base belongs to a macOS VM and goes with it.
  */
-export const chooseMachineKind = (intent: RunIntent, kind: "container" | "linux_vm"): RunIntent =>
-  kind === "linux_vm" ? withKeys(intent, { machine_kind: "linux_vm", confinement_class: undefined }) : withKeys(intent, { machine_kind: undefined });
+export const chooseMachineKind = (intent: RunIntent, kind: MachineKind): RunIntent =>
+  kind === "container"
+    ? withKeys(intent, { machine_kind: undefined, macos_base: undefined })
+    : withKeys(intent, { machine_kind: kind, confinement_class: undefined, ...(kind !== "macos_vm" && { macos_base: undefined }) });
+
+/** The macOS VM's base. Standard is the default, so it is the absent key. */
+export const chooseMacOSBase = (intent: RunIntent, base: string | undefined): RunIntent => withKeys(intent, { macos_base: base });
 
 /** Called only when the person changes the barrier: an untouched draft lets the server choose. */
 export const chooseBarrier = (intent: RunIntent, cc: ConfinementClass): RunIntent => withKeys(intent, { confinement_class: cc });
@@ -40,5 +47,5 @@ export const runIssues: StepValidator = (intent, ctx) => {
   const command = intent.shape === "application" || intent.workload?.kind === "command";
   if (command && !commandOf(intent)?.trim()) out.push(issue("run", "command_required"));
   if (!intent.runner_pool_id && ctx.poolDefault === false) out.push(issue("run", "pool_required"));
-  return [...out, ...appIssues(intent)];
+  return [...out, ...appIssues(intent), ...serviceIssues(intent)];
 };

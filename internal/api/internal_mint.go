@@ -283,7 +283,7 @@ func (s *Server) liveGrantWithheld(ctx context.Context, runID, grantID uuid.UUID
 }
 
 // liveWithholding is a running run's withholding: its captured profile's current denies and the
-// outer layers as the seal reads them now.
+// outer layers as the seal reads them now, the run owner's walls among them.
 func (s *Server) liveWithholding(ctx context.Context, run types.AgentRun) (withholding, error) {
 	p, err := s.runUnit(ctx, run)
 	if err != nil {
@@ -292,6 +292,10 @@ func (s *Server) liveWithholding(ctx context.Context, run types.AgentRun) (withh
 	// An unread boundary is answered 503 here, retried by the caller, rather than the seal's
 	// fail-closed layer, whose 403 would say the credential is no longer given.
 	if _, err := s.governanceBoundary(ctx); err != nil {
+		return withholding{}, err
+	}
+	// The run owner's walls the same way (personalWallsSealLayer would seal instead).
+	if _, err := s.personalWalls(ctx, run.CreatedBy); err != nil {
 		return withholding{}, err
 	}
 	w := withholding{layers: s.outerLayers(ctx, run)}
@@ -327,12 +331,12 @@ func (s *Server) refuseWithheldGrant(w http.ResponseWriter, r *http.Request, cla
 			"reason":   reasonGrantWithheld,
 		})))
 	writeErrorReason(w, http.StatusForbidden, reasonGrantWithheld,
-		"wardyn: this run is no longer given this credential: the run's governance profile or the Wardyn boundary withholds it or a host it reaches")
+		"wardyn: this run is no longer given this credential: the run's governance profile, the Wardyn boundary or the run owner's walls withhold it or a host it reaches")
 	return nil, true
 }
 
 // withheldUnreadMsg is the logged text of a withheld check that could not be read.
-const withheldUnreadMsg = "read the run's grants, profile or Wardyn boundary to check the credential"
+const withheldUnreadMsg = "read the run's grants, profile, Wardyn boundary or owner's walls to check the credential"
 
 // mintWithheldUnread is the mint door's answer to an unread withheld check: 503
 // credential_withheld_unread, retried by the caller.

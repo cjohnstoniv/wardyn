@@ -60,6 +60,17 @@ func (r runnerRef) in(members []sdk.RunnerPoolMemberView) bool {
 	return false
 }
 
+// sameNamespace reports whether an organization runner's membership in the pool already serves runsNamespace;
+// any other runner has no namespace, so its membership always matches.
+func (r runnerRef) sameNamespace(members []sdk.RunnerPoolMemberView, runsNamespace string) bool {
+	for _, m := range members {
+		if m.ID == r.id() {
+			return r.org == nil || m.RunsNamespace == runsNamespace
+		}
+	}
+	return false
+}
+
 // id is the runner id the pool's members are matched by: a runner's own id, or a remote-hosted runner's.
 func (r runnerRef) id() string {
 	switch {

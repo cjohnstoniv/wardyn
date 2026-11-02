@@ -82,7 +82,7 @@ func (s *Server) memberDriveCreateState(r *http.Request) *client.MemberDriveCrea
 		return out
 	}
 	out.Count = len(mine)
-	row, policy, refusal := s.memberDriveCreateDoors(r)
+	row, policy, refusal := s.memberDriveCreateDoors(r, false)
 	out.Limit = policy.MaxPerPerson
 	switch {
 	case refusal == nil && out.Count >= out.Limit:

@@ -76,11 +76,11 @@ export function scmAccessCause(cause?: string): string {
       return ADO.CAUSE_ENDED;
     case "consent_needed":
       return ADO.CAUSE_CONSENT_NEEDED;
-    // The per-person token rows' causes (#1428, #1430), in the mock's words.
-    case "permissions_missing":
-      return ADO_PAT.SIGN_IN_AGAIN_BODY;
+    // The per-person token rows' causes (#1428, #1430), in the mock's words. Missing token permissions are the
+    // administrator's to grant, then the person signs in again: Settings' sentence, with Connect kept.
     case "blocked":
       return ADO_PAT.BLOCKED_BODY;
+    case "permissions_missing":
     case "ado_pat_needs_console_app":
       return ADO_PAT.MEMBER_NEEDS_ADMIN;
     case "token_expired":

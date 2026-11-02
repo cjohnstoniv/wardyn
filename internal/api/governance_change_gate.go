@@ -84,8 +84,9 @@ func isAdminTokenCaller(r *http.Request) bool {
 
 // governanceSaveHeld reports whether a covered write by this caller would be held for a second human: the
 // switch is on and the caller is not the admin token, which governanceWriteMode lets through as govBypass.
-func governanceSaveHeld(r *http.Request) bool {
-	return envEnabled(envGovernanceSecondHuman) && !isAdminTokenCaller(r)
+// Local mode never holds a write: governanceWriteMode refuses it there, so the editor must not word it as held.
+func (s *Server) governanceSaveHeld(r *http.Request) bool {
+	return envEnabled(envGovernanceSecondHuman) && !isAdminTokenCaller(r) && !s.cfg.LocalMode
 }
 
 // unitWriteMode is governanceWriteMode for the routes a unit admin may use (governance_scope.go): a
@@ -211,7 +212,7 @@ var governanceChangeKinds = map[string]govKind{
 }
 
 // forChange is the kind as it decides one held change. A remote-hosted runner add to or removal from an
-// organization pool is held under the use-policy kind but written on the operatorOnly tier, so only a
+// organization pool, or an organization runner's removal from one, is held under the use-policy kind but written on the operatorOnly tier, so only a
 // super admin decides it; a payload that does not decode is given the stricter tier. So is a profile
 // change whose payload names a mount's host path (a kept mount is held as the sentinel, so only a
 // change that adds a mount, changes a host path or makes a kept mount writable names one).
@@ -222,7 +223,7 @@ func (k govKind) forChange(ch types.GovernanceChange) govKind {
 	switch ch.TargetKind {
 	case govKindRunnerPoolUsePolicy:
 		var held runnerPoolHeldChange
-		if decodeHeldPayload(ch.Payload, &held) != nil || held.Executor != "" {
+		if decodeHeldPayload(ch.Payload, &held) != nil || held.Executor != "" || held.RunnerID != "" {
 			k.approver = operatorApprover
 		}
 	case govKindUnit:

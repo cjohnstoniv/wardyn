@@ -62,8 +62,9 @@ require_sandbox() {
         printf "  SANDBOX_REF=wardyn-agent-<run-id> bash probes.sh\n" >&2
         exit 1
     fi
-    if ! docker inspect "$SANDBOX_REF" >/dev/null 2>&1; then
-        printf "ERROR: container %q not found. Is the sandbox still running?\n" "$SANDBOX_REF" >&2
+    # A stopped container still inspects, so ask whether it is running.
+    if [[ "$(docker inspect -f '{{.State.Running}}' "$SANDBOX_REF" 2>/dev/null)" != true ]]; then
+        printf "ERROR: container %q not found or not running. Is the sandbox still running?\n" "$SANDBOX_REF" >&2
         exit 1
     fi
 }
@@ -178,11 +179,22 @@ probe_git_credential() {
     require_sandbox
 
     info "Invoking wardyn-git-helper get (git credential protocol format)"
+    cred_rc=0
     cred_output=$(docker exec "$SANDBOX_REF" \
         sh -c 'printf "protocol=https\nhost=github.com\n\n" | wardyn-git-helper get' \
-        2>&1 || true)
+        2>&1) || cred_rc=$?
 
     printf "Output:\n%s\n" "$cred_output"
+
+    # An exec that docker itself refused is not the helper's answer, and its error text must not reach the
+    # generic "error|fail" arm below: 125-127 are docker's own exit codes; a daemon refusal can also be exit 1
+    # (the container stopped between require_sandbox and the exec).
+    if [[ "$cred_rc" -ge 125 && "$cred_rc" -le 127 ]] || { [[ "$cred_rc" -ne 0 ]] && {
+        [[ "$(docker inspect -f '{{.State.Running}}' "$SANDBOX_REF" 2>/dev/null)" != true ]] ||
+        echo "$cred_output" | grep -E "Error response from daemon|OCI runtime exec failed|Error: No such container" >/dev/null; }; }; then
+        printf "ERROR: docker exec could not run wardyn-git-helper (exit %s)\n" "$cred_rc" >&2
+        return 1
+    fi
 
     if echo "$cred_output" | grep "is brokered through wardyn-proxy" >/dev/null; then
         pass "Helper refused to mint into the sandbox -- GitHub access is brokered through wardyn-proxy"

@@ -61,7 +61,12 @@ type SandboxSpec struct {
 	RunnerID string
 	// RunnerMaxRuns is that runner's max_runs when the create was sent: the runner refuses a create past
 	// it, a backstop to the control plane's own count. 0 sets no bound.
-	RunnerMaxRuns    int
+	RunnerMaxRuns int
+	// Namespace is the Kubernetes namespace a k8s runner creates the run in, from the run's pool
+	// membership; empty is the runner's default (first) namespace. A runner that does not serve it
+	// refuses the create (runs_namespace_not_served). Other substrates ignore it. Omitted when empty, so a
+	// runner that predates it gets the bytes it always did.
+	Namespace        string `json:"namespace,omitempty"`
 	Image            string // resolved agent/workspace OCI image
 	ConfinementClass types.ConfinementClass
 	// Env is non-secret environment. Credential material NEVER passes through
@@ -125,6 +130,12 @@ type SandboxSpec struct {
 	// MachineKind is the sandbox's kind; empty is a container. A substrate that cannot start the kind
 	// refuses the create before creating anything, never falls back to a container.
 	MachineKind types.MachineKind `json:"machine_kind,omitempty"`
+	// MacOSBase is the macOS base a macos_vm run is started on: a Mac's other base's name, or "" for its
+	// Standard base. A Mac that has no ready base of that name refuses the create.
+	MacOSBase string `json:"macos_base,omitempty"`
+	// ImageArches, when set, are the only architectures Image runs on: a prewrapped image's accepted
+	// set (design final §3). A Kubernetes substrate places the agent pod on a node of one of them.
+	ImageArches []string `json:"image_arches,omitempty"`
 	// DesktopSignInsOff makes a VM's sign-in store read-only, so its desktop keeps no sign-ins: the
 	// admin set "Not allowed" for the run's agent (#2972). A container ignores it.
 	DesktopSignInsOff bool `json:"desktop_sign_ins_off,omitempty"`
@@ -157,6 +168,9 @@ type Mount struct {
 	// SandboxSpec.Drives. A LABEL, NEVER A GATE: WARDYN_USER_DRIVE_HOST_ROOTS
 	// runs on EVERY host_path drive regardless of this flag.
 	DriveAuthored bool `json:"drive_authored,omitempty"`
+	// BoundRunner is the runner a member folder is bound to (WorkspaceSource.RunnerID). A driver binds
+	// it only on that runner, and a runner binds no member folder not bound to it.
+	BoundRunner string `json:"bound_runner,omitempty"`
 }
 
 type ProxyConfig struct {
@@ -373,6 +387,49 @@ type Sandbox struct {
 	// SignIns is what a VM's guest made of its sign-in store (guestagent.SignInsMemory or
 	// SignInsNone); empty for a container, or a guest or runner that predates the store.
 	SignIns string `json:",omitempty"`
+	// KeychainTrust is what a macOS guest made of trusting this run's proxy CA in its System
+	// keychain; nil when nothing was attempted (a container, a Linux guest, a run with no proxy CA,
+	// or a guest or runner that predates it). Read it through Known.
+	KeychainTrust *KeychainTrust `json:",omitempty"`
+}
+
+// KeychainTrust is a macOS guest's answer to trusting the run's proxy CA: a status and, when not
+// trusted, a fixed reason code. It never carries the guest's own output.
+type KeychainTrust struct {
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// The KeychainTrust codes. The guest agent sends the same strings (guestagent.KeychainTrusted and
+// its siblings).
+const (
+	KeychainTrusted    = "trusted"
+	KeychainNotTrusted = "not_trusted"
+	// KeychainRefused: macOS refused the trust change.
+	KeychainRefused = "refused"
+	// KeychainFailed: the security command failed for another reason.
+	KeychainFailed = "failed"
+	// KeychainUnavailable: the command could not run, the CA was not one certificate, or the guest
+	// sent a code this host does not know.
+	KeychainUnavailable = "unavailable"
+)
+
+// Known is k with any code this host does not know read as not trusted, unavailable. Nil stays nil:
+// absent means not attempted, never failed.
+func (k *KeychainTrust) Known() *KeychainTrust {
+	if k == nil {
+		return nil
+	}
+	if k.Status == KeychainTrusted && k.Reason == "" {
+		return &KeychainTrust{Status: KeychainTrusted}
+	}
+	switch k.Reason {
+	case KeychainRefused, KeychainFailed, KeychainUnavailable:
+		if k.Status == KeychainNotTrusted {
+			return &KeychainTrust{Status: KeychainNotTrusted, Reason: k.Reason}
+		}
+	}
+	return &KeychainTrust{Status: KeychainNotTrusted, Reason: KeychainUnavailable}
 }
 
 // Status reports observed sandbox state.
@@ -433,6 +490,14 @@ type SandboxEnder interface {
 	EndSandbox(ctx context.Context, ref string) error
 }
 
+// KindCoverer is an OPTIONAL substrate capability: whether Status can enumerate a machine kind's
+// sandboxes now. A kind it cannot (macOS VMs off in this runnerd) is unknown, never absent: the offline
+// Manager reports such a run present and does not probe it (#3667). A substrate without it covers
+// containers and Linux VMs only, the kinds whose Status answers from the engine's own record.
+type KindCoverer interface {
+	CoversKind(kind types.MachineKind) bool
+}
+
 // ErrEndUnsupported is EndSandbox's (and StopProxy's) answer from a router
 // whose substrate for ref cannot keep a stopped (or lost) sandbox.
 var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended sandbox")
@@ -468,9 +533,14 @@ type DesktopDialer interface {
 // AgentPauser is an OPTIONAL Runner capability: stop a VM sandbox's agent inside the guest and
 // continue it, through the guest agent (SIGSTOP and SIGCONT of the agent's process group), while the
 // guest and its desktop keep running. It is not Freezer, which would freeze the desktop too.
+//
+// gen is the run's pause generation (migration 0231): a guest agent that orders requests by it drops
+// one out of order (guestagent.PauseFence), so a continue delivered after a later pause's stop does not
+// run the agent. fenced says the request was ordered so; it is false from a runner or guest image that
+// predates the generation, which signals each request as it arrives.
 type AgentPauser interface {
-	PauseAgent(ctx context.Context, ref string) error
-	ResumeAgent(ctx context.Context, ref string) error
+	PauseAgent(ctx context.Context, ref string, gen int64) (fenced bool, err error)
+	ResumeAgent(ctx context.Context, ref string, gen int64) (fenced bool, err error)
 }
 
 // ErrAgentPauseUnsupported is AgentPauser's answer for a sandbox whose agent it cannot pause (a

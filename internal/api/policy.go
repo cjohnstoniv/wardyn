@@ -180,7 +180,7 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 	if err := validatePATNarrowingSSHConflict(spec.EligibleGrants); err != nil {
 		return err
 	}
-	if err := validatePolicyWorkspaces(spec, resolveMounts); err != nil {
+	if err := validatePolicyWorkspaces(spec, resolveMounts, nil); err != nil {
 		return err
 	}
 	if err := validateToolRules(spec.ToolRules); err != nil {
@@ -408,6 +408,9 @@ func validateUIApps(apps []types.UIApp) error {
 		}
 		ports[a.Port] = true
 		if err := validateUIAppPath(a.Path); err != nil {
+			return fmt.Errorf("ui_apps[%d]: %w", i, err)
+		}
+		if err := validateUIAppCallers(a); err != nil {
 			return fmt.Errorf("ui_apps[%d]: %w", i, err)
 		}
 	}
@@ -817,8 +820,10 @@ func validateAllowedMethods(methods []string) error {
 
 // validatePolicyWorkspaces validates workspace_mounts/workspace_repos and the
 // LLM-inspection block (extracted from validatePolicySpec for the gocyclo
-// gate; behavior is identical).
-func validatePolicyWorkspaces(spec types.RunPolicySpec, resolveMounts bool) error {
+// gate; behavior is identical). onRunner holds the workspace_mounts indexes that
+// are folders on a person's runner: only their text is checked, never what this
+// host has at that path.
+func validatePolicyWorkspaces(spec types.RunPolicySpec, resolveMounts bool, onRunner map[int]bool) error {
 	// WorkspaceMounts are operator/policy-controlled host bind mounts. Validate
 	// each against the SAME deny-list the docker driver enforces (absolute,
 	// cleaned, non-dangerous Source; allowed-prefix Target) so a bad mount is
@@ -839,7 +844,7 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec, resolveMounts bool) erro
 	seenTargets := make(map[string]bool, len(spec.WorkspaceMounts)+len(spec.WorkspaceRepos))
 	for i, wm := range spec.WorkspaceMounts {
 		validateSource := runner.ValidateMountSource
-		if !resolveMounts {
+		if !resolveMounts || onRunner[i] {
 			validateSource = runner.ValidateMountSourceLexical
 		}
 		if err := validateSource(wm.Source); err != nil {

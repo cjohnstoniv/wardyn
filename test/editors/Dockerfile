@@ -5,7 +5,7 @@
 # test-e2e-ssh-editors): they run here, never on the host. Each client is
 # pinned by exact version and sha256; a bump changes both lines together.
 # The base is the digest the agent images already use, so it is no new pull.
-FROM node:24-trixie-slim@sha256:8ec5d7557396cfe32d21c3f9c13072355ceab22b584578ca4bb28af31120cffe
+FROM node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl openssh-client openssl \

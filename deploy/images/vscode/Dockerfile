@@ -44,11 +44,11 @@ USER root
 # the equivalent bar: a version bump means re-downloading the new tarball,
 # recomputing its sha256, and updating both entries below; a mismatch fails
 # the build closed, never silently).
-ARG CODE_SERVER_VERSION=4.139.1
+ARG CODE_SERVER_VERSION=4.141.1
 ARG TARGETARCH
 # shell-quote inside code-server, replaced with the fixed
-# release. code-server 4.139.1 and the newest release (4.141.0,
-# checked 2026-10-18 on linux-amd64) both bundle shell-quote 1.10.0 in
+# release. code-server 4.141.1 (checked 2026-10-27 on both arches) still
+# bundles shell-quote 1.10.0 in
 # lib/vscode/node_modules (CVE-2026-102422, CRITICAL; fixed in 1.11.0), so a
 # code-server bump cannot clear it. The module is plain JavaScript with no
 # dependencies and no install script, so the registry tarball unpacked in
@@ -65,8 +65,8 @@ ARG SHELL_QUOTE_VERSION=1.11.0
 ARG SHELL_QUOTE_SHA256=028be526afacb2bf5c6c008a95d5435b5d205135f68bb48afd0bb947610393f1
 RUN set -eu; \
 	case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
-		amd64) plat=amd64; sum=53029be6c5781b7bca49b815fcc9a2a3fc111813ad8c9965b2c0f0d2985a0674;; \
-		arm64) plat=arm64; sum=0edb4b60d9c4744b2dd14b0911e3c2e6dd8c6f3c13bd58bda23ae744e59e7df1;; \
+		amd64) plat=amd64; sum=45fd3cfbff9fd0c36fe37105859b0f4f7a0544341ca4e322657f5b3caeca1cbe;; \
+		arm64) plat=arm64; sum=898903adc4d28dc23b9147073afe36fcafdb49e6ada8e1007bfc62a330ff9315;; \
 		*) echo "unsupported arch '${TARGETARCH:-unknown}' for code-server" >&2; exit 1;; \
 	esac; \
 	printf '%s' "$sum" | grep -zExq '[0123456789abcdefABCDEF]{64}'; \

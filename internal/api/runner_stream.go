@@ -43,6 +43,8 @@ type runnerStreamState struct {
 	connectMu    sync.Mutex
 	beganSession map[uuid.UUID]string
 	connectOwed  map[uuid.UUID]string
+	// beganAt is when each runner's latest fresh session began on this replica (runner_goaway reads it).
+	beganAt map[uuid.UUID]time.Time
 
 	// handshakes counts connections admitted and not yet proved or closed;
 	// inflight is the same count per address, under inflightMu.
@@ -356,6 +358,19 @@ func (s *Server) noteRunnerSession(id uuid.UUID, session string) {
 		rs.beganSession = map[uuid.UUID]string{}
 	}
 	rs.beganSession[id] = session
+	if rs.beganAt == nil {
+		rs.beganAt = map[uuid.UUID]time.Time{}
+	}
+	rs.beganAt[id] = s.cfg.Now()
+}
+
+// runnerSessionBegan is id's latest fresh session on this replica and when it began, false if it has had none.
+func (s *Server) runnerSessionBegan(id uuid.UUID) (string, time.Time, bool) {
+	rs := &s.runnerStreams
+	rs.connectMu.Lock()
+	defer rs.connectMu.Unlock()
+	at, ok := rs.beganAt[id]
+	return rs.beganSession[id], at, ok
 }
 
 // owedConnectSession is the session whose runner.connect row id owes, "" when none.

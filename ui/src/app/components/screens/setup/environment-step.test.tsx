@@ -468,6 +468,32 @@ describe("EnvironmentStep — k8s rows (prompt-v4)", () => {
     expect(within(panel).getByText("Agent image toolchains")).toBeInTheDocument();
   });
 
+  it("shows the several-replicas row under Runner when the server sends it, and none otherwise", () => {
+    renderStep({
+      status: k8sStatus({
+        checks: [
+          {
+            id: "registered_runners_ha",
+            label: "Runners with several replicas",
+            status: "warn",
+            detail:
+              "Runners connect to one server replica. A launch, terminal or revive that another replica serves finds the runner offline. Keep one replica while you use runners.",
+          },
+        ],
+      }),
+    });
+    const rows = within(screen.getByLabelText("Kubernetes environment")).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("RunnerKubernetes");
+    expect(rows[1].textContent).toBe(
+      "Runners with several replicasRunners connect to one server replica. A launch, terminal or revive that another replica serves finds the runner offline. Keep one replica while you use runners.",
+    );
+  });
+
+  it("omits the several-replicas row when the server does not send it", () => {
+    renderStep({ status: k8sStatus() });
+    expect(screen.queryByText("Runners with several replicas")).not.toBeInTheDocument();
+  });
+
   it("Not-enforcing reuses the backend row's exact dual-form fix — never dropped to Enforcing's style", () => {
     renderStep({
       status: k8sStatus({

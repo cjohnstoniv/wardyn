@@ -64,7 +64,7 @@ const (
 
 	uiTicketInvalidMsg = "Invalid, expired, or already-used attach ticket"
 	uiNoSessionMsg     = "No valid UI session for this run — open the app again from its run page"
-	uiNoDesktopMsg     = "This run has no desktop: only a Linux desktop VM run has one"
+	uiNoDesktopMsg     = "This run has no desktop: only a desktop VM run has one"
 )
 
 // The desktop stream's close codes (RFC 6455 private range): the viewer tells an ended session or
@@ -199,12 +199,18 @@ func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run type
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayAppNotDeclared, uiNoDesktopMsg)
 		return
 	}
+	if s.macOSDesktopSignInsOff(r.Context(), run) {
+		s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", uiDesktopAppName, "denied",
+			ta.withVia(map[string]any{"reason": "the agent does not allow sign-ins in a desktop, which a macOS desktop cannot block"}))
+		writeErrorReason(w, http.StatusForbidden, reasonDesktopSignInsOff, macOSDesktopSignInsOffMsg(run.Agent))
+		return
+	}
 	if (!superAdmin || !s.adminDoorExempt(run)) && s.refuseInteractiveAttach(w, r.WithContext(withTicketActor(r.Context(), ta)), run) {
 		return
 	}
 	sess := s.newUISession(run, ta, uiDesktopAppName, 0, min(s.uiSessionTTL(), uiDesktopSessionTTL))
 	sess.Desktop = true
-	s.startUISession(w, r, run, ta, sess, map[string]any{"app": uiDesktopAppName, "machine_kind": string(run.MachineKind)}, "/", redirectStatus)
+	s.startUISession(w, r, run, ta, sess, withViewOnly(s.macOSDesktopViewOnly(run), map[string]any{"app": uiDesktopAppName, "machine_kind": string(run.MachineKind)}), "/", redirectStatus)
 }
 
 // handleDesktopRelay serves /r/<run>/__desktop/...: the viewer's own files (no session: they are the
@@ -230,11 +236,20 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 	}
 	switch {
 	case rest == "/" && r.Method == http.MethodGet:
-		s.serveDesktopViewer(w, r, runID, map[string]any{
+		boot := map[string]any{
 			"state": "open", "expires": sess.Expires,
 			"rfb":   s.uiBasePath() + uiRelayPrefix(runID, uiDesktopAppName) + uiDesktopRFB,
 			"close": s.uiBasePath() + uiRelayPrefix(runID, uiDesktopAppName) + uiDesktopClose,
-		}, http.StatusOK)
+		}
+		// The run's machine kind, so the viewer names a macOS desktop while it starts. A run that
+		// cannot be read is served without it: the viewer then says what it says of any desktop.
+		if run, err := s.cfg.Store.GetRun(r.Context(), runID); err == nil && run.MachineKind != "" {
+			boot["machine_kind"] = string(run.MachineKind)
+			if s.macOSDesktopViewOnly(run) {
+				boot["view_only"] = true
+			}
+		}
+		s.serveDesktopViewer(w, r, runID, boot, http.StatusOK)
 	case rest == uiDesktopRFB:
 		s.serveDesktopRFB(w, r, sess)
 	case rest == uiDesktopClose && r.Method == http.MethodPost:
@@ -377,14 +392,15 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 
 	go s.attachKeepalive(ctx, sess.Run)
 	opened := s.cfg.Now()
-	s.auditUISession(sess, "ui.open", uiDesktopAppName, "success", map[string]any{"app": uiDesktopAppName})
+	viewOnly := s.macOSDesktopViewOnly(run)
+	s.auditUISession(sess, "ui.open", uiDesktopAppName, "success", withViewOnly(viewOnly, map[string]any{"app": uiDesktopAppName}))
 	defer func() {
 		s.auditUISession(sess, "ui.close", uiDesktopAppName, "success",
-			map[string]any{"app": uiDesktopAppName, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())})
+			withViewOnly(viewOnly, map[string]any{"app": uiDesktopAppName, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())}))
 	}()
 
 	conn := websocket.NetConn(r.Context(), ws, websocket.MessageBinary)
-	filtered := s.desktopClipboardFilter(ctx, sess, rules, s.recordVMDisplay(run, sess, &wsFramed{raw: display, wsUnframer: wsUnframer{w: display}}))
+	filtered := s.desktopClipboardFilter(ctx, sess, rules, viewOnly, s.recordVMDisplay(run, sess, &wsFramed{raw: display, wsUnframer: wsUnframer{w: display}}))
 	defer func() { _ = filtered.Close() }()
 	done := make(chan struct{}, 2)
 	go func() { _, _ = io.Copy(wsFramer{filtered}, conn); done <- struct{}{} }()
@@ -419,6 +435,14 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	}
 }
 
+// withViewOnly marks an audit row of a view-only desktop session.
+func withViewOnly(viewOnly bool, data map[string]any) map[string]any {
+	if viewOnly {
+		data["view_only"] = true
+	}
+	return data
+}
+
 // desktopSocket closes with words cut to what a close frame carries (123 bytes).
 type desktopSocket struct{ *websocket.Conn }
 
@@ -448,9 +472,10 @@ func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.Age
 // desktopClipboardFilter is uiFilterUpgrade's clipboard filter on a VM's display: the same desktop
 // copy_out and paste_in rules and the same ui.clipboard.transfer rows (direction, size and hash, never the
 // text). QEMU's VNC has no clipboard peer in the guest (no qemu-vdagent, internal/vm/qemu/args.go),
-// so no cut text flows today; the filter holds the rules for when one does.
-func (s *Server) desktopClipboardFilter(ctx context.Context, sess uiSession, d types.DesktopControls, display io.ReadWriteCloser) *rfbfilter.Conn {
-	rules := rfbfilter.Rules{PasteIn: d.PasteIn == types.TransferAllowed, CopyOut: d.CopyOut == types.TransferAllowed}
+// so no cut text flows today; the filter holds the rules for when one does. viewOnly also keeps the
+// viewer's input from the display.
+func (s *Server) desktopClipboardFilter(ctx context.Context, sess uiSession, d types.DesktopControls, viewOnly bool, display io.ReadWriteCloser) *rfbfilter.Conn {
+	rules := rfbfilter.Rules{PasteIn: d.PasteIn == types.TransferAllowed, CopyOut: d.CopyOut == types.TransferAllowed, ViewOnly: viewOnly}
 	filtered := rfbfilter.Wrap(display, rules, func(ev rfbfilter.Event) { s.auditUIClipboard(sess, ev) }, func(err error) {
 		slog.WarnContext(ctx, "wardynd: desktop relay closed a VM display it could not follow", "run_id", sess.Run, "err", err)
 		if errors.Is(err, rfbfilter.ErrNotRFB) {

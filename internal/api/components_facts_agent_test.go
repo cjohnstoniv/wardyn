@@ -256,9 +256,11 @@ func TestComponentFacts_CapturedProviderAndRenewableLanes(t *testing.T) {
 				if err := srv.cfg.Secrets.For(govMemberSub).Put(context.Background(), providerSecretName(tc.provider.UID, tc.part), wire); err != nil {
 					t.Fatal(err)
 				}
+				// Review's preflight renews an expired, renewable session as launch does, so it says nothing of a renewal at launch.
+				calls := renewedOIDC(t)
 				w := doSSO(t, srv, http.MethodPost, componentDoors[1], member, body)
-				if decodedAgentFact(t, w).Status != componentReady || !strings.Contains(w.Body.String(), "renewed at launch") {
-					t.Fatalf("dry renewable lane = %s", w.Body.String())
+				if decodedAgentFact(t, w).Status != componentReady || strings.Contains(w.Body.String(), "renewed at launch") || calls.Load() != 1 {
+					t.Fatalf("renewable lane = %s, %d renewals; want it renewed once at preflight", w.Body.String(), calls.Load())
 				}
 				blob.RefreshToken = ""
 				wire, err = json.Marshal(blob)

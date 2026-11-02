@@ -55,7 +55,7 @@ import (
 //     instead of being destroyed unjudged. Never retried by name — a fresh
 //     reclaim re-reads and re-judges whatever answers to the name now.
 func (d *Driver) ReclaimDrive(ctx context.Context, drive types.DriveMount) (runner.DriveReclaimOutcome, error) {
-	ns := d.cfg.Namespace
+	ns := d.defaultNamespace()
 	claims := d.clientset.CoreV1().PersistentVolumeClaims(ns)
 	claim, err := claims.Get(ctx, drive.ObjectName, metav1.GetOptions{})
 	switch {

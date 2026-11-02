@@ -43,6 +43,16 @@ describe("summaryText", () => {
   });
 });
 
+describe("FilesSummary on a phone", () => {
+  afterEach(cleanup);
+  it("sits in the page's flow below sm, so it never covers the controls above it, and floats from sm up", () => {
+    render(<FilesSummary text="Main drive 10 GiB" />);
+    const box = screen.getByTestId("nr-files-summary");
+    expect(box.className).toContain("sticky");
+    expect(box.className).toContain("max-sm:static");
+  });
+});
+
 describe("FilesSummary", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => {

@@ -9,7 +9,7 @@
 // way the doc says (1 reads the one form).
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { RUNS_FILTERS, RUNS_FILTERS_SHEET as S } from "../components/wardyn/copy/runs-landing";
+import { RUNS_FILTERS, RUNS_FILTERS_SHEET as S, RUNS_SEGMENTS as G } from "../components/wardyn/copy/runs-landing";
 import { parseFrozenTables } from "./copy-doc-parity";
 
 const doc = parseFrozenTables(resolve(process.cwd(), "../docs/design/runs-filters-canon.md"), /^## 1\. Frozen strings/);
@@ -23,6 +23,13 @@ const rendered: Record<string, string> = {
   "SHOW_MORE(n)": S.SHOW_MORE("{n}" as unknown as number),
   "CHIP_REMOVE_ARIA(chip)": S.CHIP_REMOVE_ARIA("{chip}"),
   "WORKSPACE_CHIP(w)": RUNS_FILTERS.WORKSPACE_CHIP("{w}"),
+  SEGMENT_ALL: G.ALL,
+  SEGMENT_AGENT_TASKS: G.AGENT_TASKS,
+  SEGMENT_ENVIRONMENTS: G.ENVIRONMENTS,
+  SEGMENT_APPS: G.APPS,
+  SEGMENT_SERVICES: G.SERVICES,
+  SEGMENT_SERVICES_EMPTY: G.SERVICES_EMPTY,
+  SEGMENT_LABEL: G.LABEL,
 };
 
 describe("runs-filters-copy: runs-filters-canon.md, #3041", () => {

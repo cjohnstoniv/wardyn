@@ -34,6 +34,7 @@ export interface RestrictionLimits {
   deny_user_drive?: boolean;
   deny_member_drives?: boolean;
   deny_placements?: PlacementValue[];
+  allowed_macos_bases?: string[];
   max_concurrent_runs?: number;
   max_cpu_millis?: number;
   max_memory_mib?: number;

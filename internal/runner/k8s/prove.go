@@ -26,8 +26,12 @@ func (d *Driver) ProveRunnerSandbox(ctx context.Context, ref, runnerID string) e
 	if err != nil || ref != agentPodName(id) || runnerID == "" {
 		return fmt.Errorf("k8s: %q is not a Wardyn agent pod name: %w", ref, runner.ErrNotRunnerSandbox)
 	}
+	ns, err := d.runNamespace(ctx, id)
+	if err != nil {
+		return err
+	}
 	for _, name := range []string{ref, proxyPodName(id)} {
-		pod, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(ctx, name, metav1.GetOptions{})
+		pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
 		if isNotFound(err) {
 			continue
 		}

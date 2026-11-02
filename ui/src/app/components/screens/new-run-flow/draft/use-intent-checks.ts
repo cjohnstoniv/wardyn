@@ -13,6 +13,7 @@ import { isCredentialRefusal, runs } from "../../../../lib/api/runs";
 import type { PreflightResult } from "../../../../lib/types";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 import { getErrorMessage } from "../../../../lib/format";
+import { useModelAccessDoor } from "../../../wardyn/model-access-context";
 import { useRequestIdentity } from "../../../wardyn/operator-context";
 import type { CreateRunWire } from "./intent-to-wire";
 import { PREFLIGHT_FRESH_MS, type PreflightRead } from "./launch-gate";
@@ -288,6 +289,7 @@ export function useIntentChecks(params: Params) {
   const result = preflightIsCurrent ? checked.result as PreflightResult | null : null;
   const error = checked.error;
   const reason = error instanceof HttpError ? error.reason : "";
+  const field = error instanceof HttpError ? error.field : "";
   const refused = checked.status >= 400 && checked.status < 500 && checked.status !== 401 && checked.status !== 429 && !NEVER_BLOCKS.has(reason);
   // A credential refusal is an answer that never holds Launch (NEVER_BLOCKS): the launch it lets through opens the
   // provider's sign-in door.
@@ -295,6 +297,13 @@ export function useIntentChecks(params: Params) {
     preflightIsCurrent && (result !== null || isCredentialRefusal(error)) ? { generation: checked.generation, at: checked.at } : null;
   // A credential refusal carries the setup rows resolved before it: its other blockers still hold Launch.
   const refusalSetup = preflightIsCurrent && isCredentialRefusal(error) ? (error as HttpError).setupItems ?? [] : [];
+  // A fresh credential refusal (a new generation's answer) means the person's sign-in may have lapsed since the banner
+  // last read /setup/status, so the door re-reads it now instead of at the next poll.
+  const { refresh: refreshDoor } = useModelAccessDoor();
+  const refusedAt = preflightIsCurrent && isCredentialRefusal(error) ? checked.generation : -1;
+  React.useEffect(() => {
+    if (refusedAt >= 0) void refreshDoor();
+  }, [refusedAt, refreshDoor]);
   const missing = (kind: string) => (result?.setup_items ?? refusalSetup).some((row) => row.kind === kind && row.status === "missing");
   const previewInScope = currentRead("preview");
   const previewIsCurrent = previewInScope && checks.preview.result !== null && !checks.preview.stale;
@@ -311,6 +320,8 @@ export function useIntentChecks(params: Params) {
     preflightErrorSeq: checked.errorSeq,
     /** The envelope's reason for preflight's refusal of this body, "" when it has none. */
     preflightReason: preflightIsCurrent ? reason : "",
+    /** The request field preflight's refusal names (machine_kind, harness, resources…), "" when it names none. */
+    preflightField: preflightIsCurrent ? field : "",
     preflightIsCurrent,
     preflightFresh,
     preflightBlock: preflightFresh && (refused || (autoCheck.backendArm && missing("backend")) || (autoCheck.modelArm && missing("llm_access"))),

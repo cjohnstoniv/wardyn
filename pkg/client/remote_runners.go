@@ -84,7 +84,8 @@ type RemoteRunnerPeoplePolicyRequest struct {
 // RunnerPoolMemberView is one runner of a pool, either kind. ID is the self-hosted runner's id or the
 // remote-hosted runner's. Runner is a self-hosted member's runner view, its owner named on an
 // operator's read; Configured is set for a remote-hosted member this server runs. Limits and Usage
-// are the member's own, either kind.
+// are the member's own, either kind. RunsNamespace is the Kubernetes namespace an organization runner
+// serves the pool in; empty is the runner's default namespace.
 type RunnerPoolMemberView struct {
 	Kind       RunnerKind          `json:"kind"`
 	ID         string              `json:"id"`
@@ -94,6 +95,8 @@ type RunnerPoolMemberView struct {
 	Runner     *types.RunnerView   `json:"runner,omitempty"`
 	Limits     *types.RunnerLimits `json:"limits"`
 	Usage      types.RunnerUsage   `json:"usage"`
+
+	RunsNamespace string `json:"runs_namespace,omitempty"`
 }
 
 // ListRemoteRunners lists every remote-hosted runner (admin or security admin).

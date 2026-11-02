@@ -424,6 +424,25 @@ func TestRunnerSetupDownloadBaseOrder(t *testing.T) {
 	}
 }
 
+// A mirror whose runner fails the pinned hash is refused and not remembered: --artifact-base reaches
+// cli.json only once what it served has been verified.
+func TestRunnerSetupDoesNotSaveAnArtifactBaseItRefused(t *testing.T) {
+	r := newSetupRig(t)
+	script, _ := r.fakeRunnerd(r.binDir, 0)
+	body, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinnedRunnerdSHA256 = strings.Repeat("2", 64)
+	r.assets["/mirror/v0.10.0/wardyn-runnerd-linux-amd64"] = body
+	if _, err := r.run("--token", "wdn_personal", "--artifact-base", r.srv.URL+"/mirror"); err == nil || !strings.Contains(err.Error(), pinnedRunnerdSHA256) {
+		t.Fatalf("err = %v, want the hash refusal", err)
+	}
+	if saved, _ := cliprofile.ReadArtifactBase(filepath.Join(r.home, ".config", "wardyn")); saved != "" {
+		t.Fatalf("a refused mirror was saved as %q", saved)
+	}
+}
+
 func TestRunnerSetupSelfHostRefusalIsTheServersLine(t *testing.T) {
 	r := newSetupRig(t)
 	bin, sum := r.fakeRunnerd(r.binDir, 0)

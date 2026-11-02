@@ -558,6 +558,45 @@ func TestInjectionResolve_OperatorRunUnchanged(t *testing.T) {
 	}
 }
 
+// A stored value ending in one line break is injected without it: no header can carry it, and a
+// secret placeholder is authored for such a value (headerCredential). A value the length check
+// admitted only by its line break is refused: without it, output masking would drop it.
+func TestInternalInjection_DropsOneTrailingLineBreak(t *testing.T) {
+	for _, tc := range []struct {
+		name, stored, want string
+	}{
+		{"CRLF", "corp-key-0001\r\n", "corp-key-0001"},
+		{"LF, eight bytes left", "8-bytes!\n", "8-bytes!"},
+		{"LF, seven bytes left", "7-bytes\n", ""},
+		{"CRLF, six bytes left", "6bytes\r\n", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, sec := newSecretsHarness(t)
+			sec.m["corp-key"] = []byte(tc.stored)
+			token := h.mintRunToken(t, uuid.New())
+			h.broker.minted = broker.Minted{
+				Kind: types.GrantAPIKey, JTI: "jti-break",
+				Injection: &egress.InjectionRule{Host: "api.corp.test", Header: "Authorization", SecretName: "corp-key", Format: "%s"},
+			}
+			rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
+			if tc.want == "" {
+				if rr.Code != http.StatusFailedDependency || !strings.Contains(rr.Body.String(), reasonSecretValueTooShort) {
+					t.Fatalf("status = %d body=%s, want 424 %s", rr.Code, rr.Body.String(), reasonSecretValueTooShort)
+				}
+				return
+			}
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+			}
+			var resp injectionResponse
+			_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+			if resp.Value != tc.want {
+				t.Fatalf("value = %q, want %q", resp.Value, tc.want)
+			}
+		})
+	}
+}
+
 // ---- The H2 OAuth host pin (both halves) and the sentinel success path ----
 //
 // handleInternalInjection's OAuth HOST PIN (H2) and its write-time sibling in

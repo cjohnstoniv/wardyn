@@ -24,6 +24,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -827,6 +828,23 @@ func TestReviveRun_AgentStatusProbeErrorRefuses(t *testing.T) {
 	f.rr.statusErr = errors.New("docker: inspect: context deadline exceeded")
 	if code := f.revive(t); code != http.StatusServiceUnavailable {
 		t.Fatalf("revive: code %d, want 503 (the agent's status could not be observed)", code)
+	}
+	if len(f.rr.replaced) != 0 {
+		t.Error("a refused revive replaced the proxy")
+	}
+	if lostAt, _ := f.st.lost(); lostAt == nil {
+		t.Error("a refused revive cleared the lost mark")
+	}
+}
+
+// TestReviveRun_UnobservableSandboxRefuses pins the revive half of A2 (#3667 F1): a runner with macOS
+// VMs off answers a macOS VM run's Status with an internal wire error, which revive reads as unknown:
+// 503, the proxy kept and the lost mark kept, never an agent start against a sandbox it cannot see.
+func TestReviveRun_UnobservableSandboxRefuses(t *testing.T) {
+	f := newReviveFixture(t) // lost to an outage
+	f.rr.statusErr = &runnerwire.Error{Code: runnerwire.CodeInternal, Message: "runner: this sandbox's machine kind cannot be observed on this runner now (macOS VMs are off)"}
+	if code := f.revive(t); code != http.StatusServiceUnavailable {
+		t.Fatalf("revive: code %d, want 503 (the runner cannot observe the sandbox)", code)
 	}
 	if len(f.rr.replaced) != 0 {
 		t.Error("a refused revive replaced the proxy")

@@ -40,6 +40,31 @@ func (f *registerLimits) register(cmd *cobra.Command) {
 	fl.Float64Var(&f.runCPU, "per-run-cpu", 0, "CPUs one run may use (defaults to the total divided by runs at once)")
 	fl.Int64Var(&f.runMem, "per-run-memory", 0, "GB of memory one run may use (defaults to the total divided by runs at once)")
 	fl.Int64Var(&f.runDisk, "per-run-disk", 0, "GB of disk one run may use (defaults to the total divided by runs at once)")
+	// Before the command runs, so its questions and checks see a managed limit as given.
+	prev := cmd.PreRunE
+	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+		if err := f.applyManaged(cmd); err != nil {
+			return err
+		}
+		if prev != nil {
+			return prev(cmd, args)
+		}
+		return nil
+	}
+}
+
+// applyManaged gives each limit flag (profileOnlyKeys) the person left out the value of its managed preference, as if it had
+// been typed, so the questions and the checks that follow see it as given. Off a Mac, or with no profile, it
+// changes nothing.
+func (f *registerLimits) applyManaged(cmd *cobra.Command) error {
+	for _, m := range profileOnlyKeys {
+		if v := managedPref(m.managed); m.flag != "" && v != "" && !cmd.Flags().Changed(m.flag) {
+			if err := cmd.Flags().Set(m.flag, v); err != nil {
+				return fmt.Errorf("the %s managed preference: %w", m.managed, err)
+			}
+		}
+	}
+	return nil
 }
 
 // defaultRuns is the Runs at once proposed for what this computer reports.

@@ -245,8 +245,9 @@ func applyRunHostOverrides(spec *types.RunPolicySpec, h client.RunHostOverrides,
 	}
 }
 
-// applyRunEgressOverrides sets the run-wide egress scalars. Each is a widening
-// the ceiling bounds, so it is recorded as the person's and left to the clamp.
+// applyRunEgressOverrides sets the run-wide egress scalars. A widening is
+// recorded as the person's and left to the ceiling's clamp; turning open egress
+// off is a narrowing, so there is nothing to bound and it applies on every base.
 func applyRunEgressOverrides(spec *types.RunPolicySpec, eg client.RunEgressOverrides, e *overrideEdits) {
 	if eg.FirstUseApproval != "" && eg.FirstUseApproval != spec.FirstUseApproval {
 		e.setFirstUse, e.prevFirstUse = true, spec.FirstUseApproval
@@ -260,6 +261,11 @@ func applyRunEgressOverrides(spec *types.RunPolicySpec, eg client.RunEgressOverr
 		e.egress().AllowAllEgress = eg.AllowAllEgress
 		e.add("allow_all_egress", "true", provEffectAdded)
 	}
+	if eg.AllowAllEgress != nil && !*eg.AllowAllEgress && spec.AllowAllEgress {
+		spec.AllowAllEgress = false
+		e.egress().AllowAllEgress = eg.AllowAllEgress
+		e.add("allow_all_egress", "false", provEffectNarrowed)
+	}
 }
 
 // applySecretOverrides turns each added secret into an api_key header grant and
@@ -271,7 +277,11 @@ func applyRunEgressOverrides(spec *types.RunPolicySpec, eg client.RunEgressOverr
 // the default), which a member reads with its secret references stripped.
 func (s *Server) applySecretOverrides(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, a client.AgentOverrides, e *overrideEdits, stored bool) *runRefusal {
 	for i, sec := range a.AddSecrets {
-		if !s.ownsSecretMemoized(ctx, s.secretOwnerFromRequest(r), sec.SecretName) {
+		own, err := s.ownsSecretChecked(ctx, s.secretOwnerFromRequest(r), sec.SecretName)
+		if err != nil {
+			return ownershipUnreadable()
+		}
+		if !own {
 			if ctx.Value(reviewDoorKey{}) != nil {
 				e.missingSecrets = append(e.missingSecrets, sec)
 				continue
@@ -298,9 +308,15 @@ func (s *Server) applySecretOverrides(ctx context.Context, r *http.Request, spec
 		// is not asked): matching the policy's grants before this would
 		// tell a person which operator secrets it pairs, which a member never
 		// reads (policy reads strip the references).
-		if !s.isOperator(r.Context()) && !s.ownsSecretMemoized(ctx, s.secretOwnerFromRequest(r), name) {
-			return runError(http.StatusUnprocessableEntity, reasonOverrideRefused, fmt.Sprintf(
-				"overrides.agent.remove_secrets[%d]: %s is not one of your stored secrets.", i, name))
+		if !s.isOperator(r.Context()) {
+			own, err := s.ownsSecretChecked(ctx, s.secretOwnerFromRequest(r), name)
+			if err != nil {
+				return ownershipUnreadable()
+			}
+			if !own {
+				return runError(http.StatusUnprocessableEntity, reasonOverrideRefused, fmt.Sprintf(
+					"overrides.agent.remove_secrets[%d]: %s is not one of your stored secrets.", i, name))
+			}
 		}
 		// Owning a secret of that name says nothing about a stored grant bound to
 		// another row under the same name, so on stored content a member removes

@@ -667,8 +667,14 @@ func caseOrgRestart(t *testing.T, o *orgEnv) {
 		t.Fatal("fence-live-http2 left no fenced proxy")
 	}
 	f := o.fenced
+	// The boot canary and run B go to the worker whose kubelet runs: the one the fenced proxy is not on,
+	// which the scheduler may have placed on the last worker from its view before the label moved.
 	ws := o.workers(t)
-	o.sched(t, ws[len(ws)-1]) // the boot canary and run B go to the worker whose kubelet runs
+	up := ws[len(ws)-1]
+	if up == f.node {
+		up = ws[0]
+	}
+	o.sched(t, up)
 	b := o.live(t, nil)
 	if got := o.connect(t, b, "example.com:443"); got != "status 200" {
 		t.Fatalf("run B control before the restart: %q", got)

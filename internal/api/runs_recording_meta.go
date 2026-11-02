@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
@@ -43,10 +44,18 @@ func wantsRecordingMeta(r *http.Request) bool {
 // the same as "no recording" — a metadata miss must never fail the run list.
 // No-op unless wantsRecordingMeta(r) — see its doc for why this is opt-in.
 func (s *Server) projectRecordingMeta(r *http.Request, runs []types.AgentRun) {
-	if s.cfg.RecordingStore == nil || !wantsRecordingMeta(r) {
+	if wantsRecordingMeta(r) {
+		s.fillRecordingMeta(r.Context(), runs)
+	}
+}
+
+// fillRecordingMeta is projectRecordingMeta without the opt-in: a single run's
+// own read pays one run's metadata lookup (StatJoined: each stored part plus
+// the first missing one), not one per run on the board, so it always projects.
+func (s *Server) fillRecordingMeta(ctx context.Context, runs []types.AgentRun) {
+	if s.cfg.RecordingStore == nil {
 		return
 	}
-	ctx := r.Context()
 	for i := range runs {
 		size, tail, err := recording.StatJoined(ctx, s.cfg.RecordingStore, runs[i].ID.String(), recordingMetaTailBytes)
 		if err != nil {

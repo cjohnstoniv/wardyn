@@ -28,7 +28,7 @@ import (
 //	wardyn runner pool show <pool>
 //	wardyn runner pool update <pool> --switch off
 //	wardyn runner pool delete <pool> --yes
-//	wardyn runner pool add <pool> <runner>...
+//	wardyn runner pool add <pool> <runner>... [--runs-namespace <namespace>]
 //	wardyn runner pool remove <pool> <runner>...
 //
 // --limits-file is the wire `limits` block as JSON (what `show --json` prints), "-" for stdin. An
@@ -49,18 +49,20 @@ func runnerPoolMemberCmd(client clientFn, add bool) *cobra.Command {
 		use, short = "remove <pool> <runner>...", "Take runners out of a pool"
 	}
 	var makeDefault bool
+	var runsNamespace string
 	cmd := &cobra.Command{Use: use, Short: short, Args: cobra.MinimumNArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
 		pool, err := readPoolArg(cmd, client, args[0])
 		if err != nil {
 			return err
 		}
-		if err := poolMembers(cmd, client(), pool, args[1:], add, false); err != nil || !makeDefault {
+		if err := poolMembers(cmd, client(), pool, args[1:], add, false, runsNamespace); err != nil || !makeDefault {
 			return err
 		}
 		return makePoolDefault(cmd, client(), pool)
 	}}
 	if add {
 		cmd.Flags().BoolVar(&makeDefault, "default", false, "also make the pool your default, the one New Run starts with")
+		cmd.Flags().StringVar(&runsNamespace, "runs-namespace", "", "the Kubernetes namespace an organization runner serves the pool in (empty: the runner's default); a runner serves each namespace for one pool only")
 	}
 	return cmd
 }
@@ -88,8 +90,9 @@ func makePoolDefault(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool) err
 // read, and an unclaimed one refused, before the first write; one already in the pool is said so and not
 // added again. With several runners, each one the server refuses is said on its own line after the ones
 // that went through, and the command fails; a lone runner's refusal is returned as it is. fresh says
-// the pool was just made, so there is nothing to read.
-func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerArgs []string, add, fresh bool) error {
+// the pool was just made, so there is nothing to read. runsNamespace is the namespace an organization
+// runner serves the pool in, and only an organization runner takes one.
+func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerArgs []string, add, fresh bool, runsNamespace string) error {
 	ctx := cmd.Context()
 	mine := pool.Scope == sdk.RunnerPoolUser
 	remotes := func() ([]sdk.RemoteRunnerView, error) {
@@ -140,17 +143,21 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 			if ref.unclaimed {
 				return fmt.Errorf("%s is not claimed yet; claim it first with `wardyn runner claim`", ref.name)
 			}
+			if runsNamespace != "" && ref.org == nil {
+				return fmt.Errorf("--runs-namespace applies to an organization runner in an organization pool, and %s is not one", ref.name)
+			}
 		}
 	}
 	var done, failed []string
 	for _, ref := range refs {
-		if add && ref.in(members) {
+		// A member in another namespace goes to the server, which refuses the change and says why.
+		if add && ref.in(members) && ref.sameNamespace(members, runsNamespace) {
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s is already in %s\n", ref.name, pool.Name); err != nil {
 				return err
 			}
 			continue
 		}
-		held, err := heldForApproval(cmd, writePoolMember(ctx, c, pool.ID, ref, add, mine))
+		held, err := heldForApproval(cmd, writePoolMember(ctx, c, pool.ID, ref, add, mine, runsNamespace))
 		if err != nil && len(refs) == 1 {
 			return err
 		}
@@ -183,11 +190,11 @@ func poolMembers(cmd *cobra.Command, c *sdk.Client, pool sdk.RunnerPool, runnerA
 
 // writePoolMember adds ref to pool or takes it out, through your own routes for a pool of yours or
 // one of your runners, and through the organization's otherwise (always, for an organization runner).
-func writePoolMember(ctx context.Context, c *sdk.Client, poolID uuid.UUID, ref runnerRef, add, mine bool) error {
+func writePoolMember(ctx context.Context, c *sdk.Client, poolID uuid.UUID, ref runnerRef, add, mine bool, runsNamespace string) error {
 	var err error
 	switch {
 	case ref.org != nil && add:
-		_, err = c.AddRunnerPoolRunner(ctx, poolID, *ref.org)
+		_, err = c.AddRunnerPoolRunner(ctx, poolID, *ref.org, runsNamespace)
 	case ref.org != nil:
 		err = c.RemoveRunnerPoolRunner(ctx, poolID, *ref.org)
 	case ref.self != nil && add:
@@ -264,7 +271,7 @@ func runnerPoolCreateCmd(client clientFn) *cobra.Command {
 			if err := printPoolCreated(cmd.OutOrStdout(), p, asJSON, len(runners) > 0); err != nil || len(runners) == 0 {
 				return err
 			}
-			return poolMembers(cmd, c, p, runners, true, true)
+			return poolMembers(cmd, c, p, runners, true, true, "")
 		}}
 	cmd.Flags().StringVar(&name, "name", "", "the pool's name, 1 to 64 characters")
 	cmd.Flags().StringVar(&scope, "scope", string(sdk.RunnerPoolUser), "user (your own) or organization (an admin's; remote-hosted runners and organization runners)")

@@ -338,6 +338,7 @@ function TokenRow({ t, svc, onRevoke }: { t: ApiToken; svc: string; onRevoke: (t
         <span className="flex flex-wrap items-center gap-2">
           <span className="font-mono text-xs">{t.name}</span>
           {t.revoked_at ? <Chip tone="neutral" dot>{T.REVOKED}</Chip> : expired ? <Chip tone="neutral" dot>{T.EXPIRED}</Chip> : null}
+          {t.inbound && <Chip tone="neutral">{T.INBOUND_ONLY}</Chip>}
         </span>
         <span className="block text-xs text-muted-foreground">{T.CREATED(inWords(t.created_at))}</span>
       </TableCell>

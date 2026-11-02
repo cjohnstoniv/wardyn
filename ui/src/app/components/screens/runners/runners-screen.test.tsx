@@ -45,6 +45,7 @@ vi.mock("../../../lib/api/runner-pools", () => ({
     clearPeoplePolicy: (...a: unknown[]) => clearPeopleMock(...a),
   },
 }));
+vi.mock("./workload-bindings-tab", () => ({ WorkloadBindingsTab: () => <div data-testid="bindings-tab" /> }));
 vi.mock("./pools/pools-tab", () => ({
   PoolsTab: ({ openPoolId, onOpenRunner }: { openPoolId: string | null; onOpenRunner: (kind: string, id: string) => void }) => (
     <div data-testid="pools-tab">
@@ -314,7 +315,7 @@ describe("Admin -> Runners list", () => {
     listMock.mockResolvedValue([]);
     renderScreen();
     expect(await screen.findByText("No runners yet")).toBeInTheDocument();
-    expect(screen.getByText("People add a computer from Your account → My runner. To set up computers through device management, create a registration token under Managed install (MDM) above.")).toBeInTheDocument();
+    expect(screen.getByText("People add a computer from Settings → My runner. To set up computers through device management, create a registration token under Managed install (MDM) above.")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Add this computer" })).toBeInTheDocument();
     expect(screen.getByText("Managed install (MDM)")).toBeInTheDocument();
   });
@@ -323,7 +324,7 @@ describe("Admin -> Runners list", () => {
     listMock.mockResolvedValue([]);
     renderScreen({ operator: false });
     expect(await screen.findByText("No runners yet")).toBeInTheDocument();
-    expect(screen.getByText("People add a computer from Your account → My runner.")).toBeInTheDocument();
+    expect(screen.getByText("People add a computer from Settings → My runner.")).toBeInTheDocument();
     expect(screen.queryByText(/Managed install \(MDM\)/)).toBeNull();
     expect(screen.queryByRole("heading", { name: "Add this computer" })).toBeNull();
   });
@@ -465,7 +466,7 @@ describe("Admin -> Runners drawer and revoke", () => {
     expect(within(drawer).getByText("Runs at once: 2")).toBeInTheDocument();
     expect(within(drawer).getByText(/Running now: 2 of 2/)).toBeInTheDocument();
     expect(within(drawer).getByText("At its limit")).toBeInTheDocument();
-    expect(within(drawer).getByText("Only its owner changes these, in Your account → My runner or with wardyn runner set. You can read them here.")).toBeInTheDocument();
+    expect(within(drawer).getByText("Only its owner changes these, in Settings → My runner or with wardyn runner set. You can read them here.")).toBeInTheDocument();
     expect(within(drawer).getByText(/This computer reports 8 CPUs · 16 GB memory · 500 GB disk\. Its limits can't be higher\./)).toBeInTheDocument();
     expect(within(drawer).getByRole("button", { name: "Laptop" })).toBeInTheDocument();
     expect(within(drawer).queryByRole("button", { name: "Edit limits" })).toBeNull();
@@ -734,6 +735,19 @@ describe("Admin -> Runners tabs", () => {
     expect(screen.queryByRole("heading", { name: "Add this computer" })).toBeNull();
   });
 
+  it("Workload bindings is the third tab, and the address keeps it", async () => {
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByRole("button", { name: "laptop-7" });
+    const strip = screen.getByRole("tablist", { name: "Runners sections" });
+    expect(within(strip).getAllByRole("tab").map((t) => t.textContent)).toEqual(["Runners", "Pools", "Workload bindings"]);
+    await user.click(within(strip).getByRole("tab", { name: "Workload bindings" }));
+    expect(await screen.findByTestId("bindings-tab")).toBeInTheDocument();
+    cleanup();
+    renderScreen({ at: "/admin/runners?tab=bindings" });
+    expect(await screen.findByTestId("bindings-tab")).toBeInTheDocument();
+  });
+
   // #3062: the strip is the shared underline Tabs, so the arrow keys move selection and focus.
   it("ArrowRight on the Runners tab moves to Pools, and ArrowLeft back", async () => {
     const user = userEvent.setup();
@@ -813,7 +827,7 @@ describe("Admin -> Runners: Managed install (MDM)", () => {
     expect(await mdm.findByText("Registration token for alice@example.com")).toHaveFocus();
     expect(mdm.getByText("wdr_secret")).toBeInTheDocument();
     expect(mdm.getByText(`wardyn-runnerd setup --org ${ORG} --token-file <file>`)).toBeInTheDocument();
-    expect(mdm.getByText("Their computer then waits for alice@example.com to claim it in Your account → My runner.")).toBeInTheDocument();
+    expect(mdm.getByText("Their computer then waits for alice@example.com to claim it in Settings → My runner.")).toBeInTheDocument();
     expect(mdm.queryByRole("button", { name: /claim/i })).toBeNull();
   });
 

@@ -14,22 +14,26 @@ import (
 
 // TestGetBoundaryReportsWhetherTheCallersSaveIsHeld (#3389): the boundary read carries save_held_for_approval
 // only when this caller's save would be held for a second human, so the editor words its submit to match. The
-// admin token saves directly past the switch (govBypass), so it never reads true.
+// admin token saves directly past the switch (govBypass), so it never reads true. Local mode refuses the write
+// outright (#3568), so no caller there has a held save either.
 func TestGetBoundaryReportsWhetherTheCallersSaveIsHeld(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		env    string
 		admin  bool // the admin token, not a signed-in person
+		local  bool // local mode, where the write is refused rather than held
 		wantOn bool
 	}{
-		{"switch on, signed-in security admin", "true", false, true},
-		{"switch on, admin token", "true", true, false},
-		{"switch off, signed-in security admin", "false", false, false},
-		{"switch off, admin token", "false", true, false},
+		{"switch on, signed-in security admin", "true", false, false, true},
+		{"switch on, admin token", "true", true, false, false},
+		{"switch off, signed-in security admin", "false", false, false, false},
+		{"switch off, admin token", "false", true, false, false},
+		{"switch on, local mode", "true", false, true, false},
+		{"switch on, local mode, admin token", "true", true, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(envGovernanceSecondHuman, tc.env)
-			srv := &Server{cfg: Config{Store: hardBoundary(types.BoundarySpec{})}}
+			srv := &Server{cfg: Config{Store: hardBoundary(types.BoundarySpec{}), LocalMode: tc.local}}
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/governance/boundary", nil)
 			if !tc.admin {
 				req = req.WithContext(withHumanIdentity(req.Context(), "sub-alice", "alice@corp.example", "admin", "standard", nil, false))

@@ -196,11 +196,13 @@ func (p *Peer) fail(err error) {
 	p.streams, p.parked, p.byCall = map[uint32]*Stream{}, map[uint32]*Stream{}, map[uint32][]uint32{}
 	p.mu.Unlock()
 	close(p.done)
-	p.cancel()
 	p.connSend.Close()
+	// Every stream's context is a child of p.ctx: reset them first so whoever wakes on a stream's
+	// context finds the reconnect reset already recorded, and a Close in reaction cannot replace it.
 	for _, s := range streams {
 		s.abort(ResetReconnect)
 	}
+	p.cancel()
 	for _, c := range cancels {
 		c()
 	}
@@ -313,7 +315,13 @@ func (p *Peer) handle(f Frame) error {
 		p.mu.Unlock()
 	}
 	if err := p.handleFrame(f); err != nil {
-		return err
+		var refusal *EventRefusal
+		if f.Type != TypeEvent || !p.cfg.Org || !errors.As(err, &refusal) {
+			return err
+		}
+		// The organisation refused the event for good and has recorded it: acknowledge, so the runner's replay
+		// buffer drops it, and keep the link. See EventRefusal.
+		slog.WarnContext(p.ctx, "runnerwire: event refused by the organisation and acknowledged", "seq", f.Seq, "code", refusal.Code)
 	}
 	if f.Type.Sequenced() {
 		p.acceptSequence(f)

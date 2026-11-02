@@ -7,11 +7,14 @@
 // (the `createUserDrive` seam). It reads the create door from the catalogue:
 // open, it offers "+ Create user drive"; closed, the same control disabled with
 // the reason beside it; switched off (the default), no create control at all.
-// The person's own drives list with "Delete drive" whatever the door says: the
-// server never gates a delete on it, and a person can always remove their own data.
+// The person's own drives carry "Delete drive" on their rows in the list, whatever the door says: the
+// server never gates a delete on it, and a person can always remove their own data. The dialog holds
+// whether the create card is open (it hides the dialog's footer) and which row asked for a delete;
+// the confirm for it is here, beside the create form.
 
 import * as React from "react";
-import { createMyDrive, deleteMyDrive, type MeDrive } from "../../../../../lib/api/me-drives";
+import { createMyDrive, deleteMyDrive } from "../../../../../lib/api/me-drives";
+import { MAC_DRIVES } from "../../../../wardyn/copy/mac-drives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { detachDrive } from "../../lenses/files-lens";
@@ -21,23 +24,30 @@ import { FILES_LINK, type AddDialogProps } from "./add-dialog";
 import { CreateDriveCard } from "./create-drive-card";
 import { DeleteDriveConfirm } from "./delete-drive-confirm";
 import { legacyIdOf } from "./file-items";
-import { createReasonText, useDriveCatalogue } from "./file-sources";
+import { useMacOSOffer } from "../run/macos-offer";
+import { createReasonText, useDriveCatalogue, useOwnMac } from "./file-sources";
 
 type ArmContext = Parameters<NonNullable<AddDialogProps["createUserDrive"]>>[0];
 
 const CLOSED_LINK = "font-semibold text-muted-foreground opacity-70 disabled:cursor-not-allowed";
 
-export function CreateUserDrive({ choose, reload }: ArmContext) {
+export function CreateUserDrive({ choose, reload, creating, setCreating, deleting, setDeleting }: ArmContext) {
   const dispatch = useNewRunDispatch();
   const announce = useAnnounce();
-  const { catalogue, reload: reloadOwn } = useDriveCatalogue(useNewRunDraft().intent.runner_pool_id);
-  const [creating, setCreating] = React.useState(false);
-  const [deleting, setDeleting] = React.useState<{ drive: MeDrive; opener: HTMLElement } | null>(null);
+  const { intent } = useNewRunDraft();
+  const { catalogue, reload: reloadOwn } = useDriveCatalogue(intent.runner_pool_id);
+  // A drive made for a macOS run is a disk kept on that run's Mac, so it is offered once the person's Mac is known.
+  const offer = useMacOSOffer();
+  const macOS = intent.machine_kind === "macos_vm";
+  const mac = useOwnMac(macOS && offer?.ok ? offer.runner : undefined);
   const link = React.useRef<HTMLButtonElement>(null);
   // Focus goes back to the create control when the card closes, and when a delete leaves no row to return to.
   const refocus = React.useRef(false);
   // A delete just finished: where focus goes once the drive has left the lists.
   const deleted = React.useRef(false);
+  React.useEffect(() => {
+    if (deleting) deleted.current = false;
+  }, [deleting]);
   const [afterDelete, setAfterDelete] = React.useState<{ id: string; name: string; dialog: HTMLElement | null } | null>(null);
   const reasonId = React.useId();
   const legacyId = legacyIdOf(catalogue);
@@ -61,12 +71,14 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
   const closeCard = React.useCallback(() => {
     refocus.current = true;
     setCreating(false);
-  }, []);
+  }, [setCreating]);
   const door = catalogue?.create;
   // No door: not a person. Disabled: the switch is off, which is the default.
-  const offersCreate = !!door && door.reason !== "disabled";
+  const offersCreate = !!door && door.reason !== "disabled" && (!macOS || !!mac);
   const own = (catalogue?.drives ?? []).filter((d) => d.owned);
-  if (!offersCreate && own.length === 0) return null;
+  // Nothing to offer and nothing open: with a confirm or the create card open (their state lives in the dialog) it stays, so a
+  // finished delete can say how it ended and the dialog's footer is never left hidden with no card.
+  if (!offersCreate && own.length === 0 && !deleting && !creating) return null;
   const reasonText = door && !door.allowed && door.reason ? createReasonText(door) : undefined;
   const refresh = () => {
     reload();
@@ -85,7 +97,9 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
       ))}
       {creating && (
         <CreateDriveCard
-          create={createMyDrive}
+          create={(name) => createMyDrive(name, mac?.id)}
+          intro={mac ? MAC_DRIVES.D02(mac.name) : undefined}
+          hint={macOS && door && door.limit > 0 ? NR_FILES.CREATE_LIMIT(door.count, door.limit) : undefined}
           onClose={closeCard}
           onCreated={(drive) => {
             refresh();
@@ -95,40 +109,20 @@ export function CreateUserDrive({ choose, reload }: ArmContext) {
           }}
         />
       )}
-      {own.length > 0 && (
-        <ul className="m-0 flex basis-full list-none flex-col gap-1 p-0" data-testid="nr-own-drives">
-          {own.map((d) => (
-            <li key={d.id} className="flex items-center justify-between gap-2 text-[13px] text-muted-foreground">
-              <span id={`nr-own-drive-${d.id}`}>{d.name}</span>
-              <button
-                type="button"
-                className="font-semibold text-primary hover:underline"
-                aria-describedby={`nr-own-drive-${d.id}`}
-                data-own-delete={d.id}
-                onClick={(e) => {
-                  deleted.current = false;
-                  setDeleting({ drive: d, opener: e.currentTarget });
-                }}
-              >
-                {NR_FILES.DELETE_DRIVE}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
       {deleting && (
         <DeleteDriveConfirm
           name={deleting.drive.name}
           remove={() => deleteMyDrive(deleting.drive.id)}
           returnFocusTo={() => (deleted.current ? null : deleting.opener)}
           onClose={() => setDeleting(null)}
-          onDeleted={() => {
+          onDeleted={(result) => {
             deleted.current = true;
             setAfterDelete({ id: deleting.drive.id, name: deleting.drive.name, dialog: deleting.opener.closest<HTMLElement>('[role="dialog"]') });
             refresh();
             // A drive already attached to this run goes with it, and so does a start on it.
             dispatch({ type: "edit", apply: (i) => detachDrive(i, deleting.drive.id, legacyId) });
-            announce(NR_FILES.DRIVE_DELETED(deleting.drive.name));
+            // A partial result has its own live Notice; announcing "deleted" on top of it would say two things at once.
+            if (!result) announce(NR_FILES.DRIVE_DELETED(deleting.drive.name));
           }}
         />
       )}

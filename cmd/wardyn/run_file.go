@@ -20,7 +20,7 @@ import (
 // runFileFlags are the flags that may stand beside --file: the run's name, when
 // it starts, and what to do with the run once it exists.
 var runFileFlags = map[string]bool{"file": true, "title": true, "description": true, "wait": true, "timeout": true, "max-wait": true, "json": true, "dry-run": true,
-	"start-at": true, "time-zone": true}
+	"start-at": true, "time-zone": true, "machine-kind": true, "macos-base": true}
 
 // runFileRequest reads the document, has the server's door check it, and maps it
 // to the create request: every intent field is the request field of the same
@@ -36,7 +36,7 @@ func runFileRequest(cmd *cobra.Command, c *sdk.Client, file, title, description 
 		}
 	})
 	if len(clash) > 0 {
-		return req, fmt.Errorf("--file carries the whole run: remove %s (only --title, --description, --wait, --timeout, --max-wait, --start-at, --time-zone, --json and --dry-run go with it)", strings.Join(clash, ", "))
+		return req, fmt.Errorf("--file carries the whole run: remove %s (only --title, --description, --wait, --timeout, --max-wait, --start-at, --time-zone, --machine-kind, --macos-base, --json and --dry-run go with it)", strings.Join(clash, ", "))
 	}
 	format := ""
 	if file == "-" {
@@ -53,15 +53,8 @@ func runFileRequest(cmd *cobra.Command, c *sdk.Client, file, title, description 
 	if res.Document == nil || len(res.Diagnostics) > 0 {
 		return req, printTemplateImport(cmd.ErrOrStderr(), res)
 	}
-	intent := res.Document.Intent
-	overlay := intent.Raw("inline_policy")
-	intent.Unset("inline_policy")
-	if req, err = intent.Request(); err != nil {
-		return req, fmt.Errorf("read the run document: %w", err)
-	}
-	req.PolicyOverlay = overlay
-	if req.Experience != "" {
-		req.ModeContract = sdk.RunModeContractV09
+	if req, err = sdk.RunDocumentRequest(res.Document.Intent); err != nil {
+		return req, err
 	}
 	req.Title, req.Description = title, description
 	return req, nil

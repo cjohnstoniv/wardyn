@@ -65,6 +65,27 @@ func answer(t *nameTable, q []byte) ([]byte, dnsResult, error) {
 	return build(hdr, question, nil), res, nil
 }
 
+// refuseAll is a preparation relay's whole DNS: REFUSED to every well-formed one-question query, with no name
+// table behind it. A synthetic answer makes the guest believe the network is up and keep retrying (Setup
+// Assistant waits on Screen Time for minutes); a refusal ends the wait. A query that does not parse, or asks more
+// or less than one question, gets no reply, as in answer.
+func refuseAll(q []byte) ([]byte, error) {
+	var p dnsmessage.Parser
+	h, err := p.Start(q)
+	if err != nil {
+		return nil, err
+	}
+	qs, err := p.AllQuestions()
+	if err != nil {
+		return nil, err
+	}
+	if h.Response || len(qs) != 1 {
+		return nil, errors.New("want one question")
+	}
+	hdr := dnsmessage.Header{ID: h.ID, Response: true, Authoritative: true, RecursionDesired: h.RecursionDesired, RecursionAvailable: true, RCode: dnsmessage.RCodeRefused}
+	return build(hdr, qs[0], nil), nil
+}
+
 func build(hdr dnsmessage.Header, q dnsmessage.Question, a *dnsmessage.AResource) []byte {
 	b := dnsmessage.NewBuilder(nil, hdr)
 	b.EnableCompression()

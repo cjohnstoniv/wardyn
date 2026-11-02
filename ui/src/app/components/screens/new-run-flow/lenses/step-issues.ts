@@ -22,6 +22,10 @@ export type StepIssueCode =
   | "command_required"
   | "pool_required"
   | "app_required"
+  | "service_port_invalid"
+  | "service_path_invalid"
+  | "service_interval_invalid"
+  | "service_failures_invalid"
   | "main_drive_size_required"
   | "files_choice_required"
   | "starts_here_required"
@@ -52,6 +56,10 @@ export const ISSUE_FOCUS: Record<StepIssueCode, string> = {
   command_required: "nr-command",
   pool_required: "nr-pool",
   app_required: "nr-app-add",
+  service_port_invalid: "nr-service-port",
+  service_path_invalid: "nr-service-path",
+  service_interval_invalid: "nr-service-every",
+  service_failures_invalid: "nr-service-failures",
   app_name_invalid: "nr-app-name-0",
   app_name_duplicate: "nr-app-name-0",
   app_port_invalid: "nr-app-port-0",

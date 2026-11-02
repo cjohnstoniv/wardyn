@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"time"
 
@@ -36,6 +37,24 @@ func foldersRunnerHooks(ctx context.Context, _ runneridentity.Identity, stateDir
 		cancel()
 		return runnerRuntime{}, err
 	}
+	report := connectReport{log: opts.offline}
+	// sendCaps reports the folders caps; always sends them even when no summary waits (a fresh session's are required).
+	sendCaps := func(ctx context.Context, peer *runnerwire.Peer, always bool) error {
+		machine, _ := os.Hostname()
+		caps := runnerwire.Caps{Version: version.String(), MachineName: machine, Folders: true}
+		if !report.fill(ctx, &caps, false) && !always {
+			return nil
+		}
+		data, err := runnerwire.Marshal(caps)
+		if err != nil {
+			return err
+		}
+		if err := peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
+			return err
+		}
+		report.sent(caps)
+		return nil
+	}
 	hooks := runnerwire.RunnerHooks{
 		Call: srv.Call,
 		Open: func(*runnerwire.Peer, *runnerwire.Stream, runnerwire.Open) error {
@@ -53,20 +72,17 @@ func foldersRunnerHooks(ctx context.Context, _ runneridentity.Identity, stateDir
 		StatePages: func(_ context.Context, send func(runnerwire.StatePage) error) error {
 			return send(runnerwire.StatePage{InventoryID: uuid.New(), Runs: []runnerwire.RunState{}, Final: true})
 		},
-		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
-			machine, _ := os.Hostname()
-			caps := runnerwire.Caps{Version: version.String(), MachineName: machine, Folders: true}
-			report := connectReport{log: opts.offline}
-			report.fill(ctx, &caps, false)
-			data, err := runnerwire.Marshal(caps)
-			if err != nil {
-				return err
+		Replay: func(ctx context.Context, peer *runnerwire.Peer) error { return sendCaps(ctx, peer, true) },
+		// A resumed session skips Replay, so a diagnostic recorded while the connection was down goes here.
+		Online: func(peer *runnerwire.Peer, resumed bool) {
+			if !resumed {
+				return
 			}
-			if err := peer.EventAck(ctx, runnerwire.Event{Kind: runnerwire.EventCaps, Data: data}); err != nil {
-				return err
-			}
-			report.sent(caps)
-			return nil
+			go func() {
+				if err := sendCaps(ctx, peer, false); err != nil {
+					slog.WarnContext(ctx, "runner caps after resume failed", "error", err)
+				}
+			}()
 		},
 		BeforeReady: func(context.Context, *runnerwire.Peer, bool) error { return nil },
 		Lease:       func(context.Context, runnerwire.Lease) error { return nil },

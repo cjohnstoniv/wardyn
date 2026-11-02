@@ -10,9 +10,11 @@ import * as React from "react";
 import { Lock, TriangleAlert } from "lucide-react";
 import type { MemberDriveCreate } from "../../../../../lib/api/me-drives";
 import { InfoTip } from "../../../../wardyn/info-tip";
+import { MAC_DRIVES } from "../../../../wardyn/copy/mac-drives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { setKeepWorkFolder } from "../../lenses/files-lens";
 import { useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
+import { useMacOSOffer } from "../run/macos-offer";
 import { createReasonText } from "./file-sources";
 
 export type KeepDoor =
@@ -38,7 +40,7 @@ export function keepDoor(create: MemberDriveCreate | undefined, asked: boolean):
 
 /** Wraps the paths of a sentence in code, so they read as paths. */
 function withPaths(text: string): React.ReactNode[] {
-  return text.split(/(\/home\/agent\/work|\/tmp)/).map((part, i) => (i % 2 ? <code key={i} className="font-mono">{part}</code> : part));
+  return text.split(/(\/home\/agent\/work|\/Users\/agent\/work|\/tmp)/).map((part, i) => (i % 2 ? <code key={i} className="font-mono">{part}</code> : part));
 }
 
 export function KeepWorkFolder({ door }: { door: KeepDoor }) {
@@ -46,7 +48,12 @@ export function KeepWorkFolder({ door }: { door: KeepDoor }) {
   const dispatch = useNewRunDispatch();
   const reasonId = React.useId();
   const asked = draft.intent.keep_work_folder === true;
-  const tip = <InfoTip label={NR_FILES.REUSE_ARIA}>{NR_FILES.REUSE_TIP}</InfoTip>;
+  // On a macOS run only the work folder is kept, as a disk on the run's Mac: the container wording and its tip give way (MAC-D06, D14).
+  const offer = useMacOSOffer();
+  const macOS = draft.intent.machine_kind === "macos_vm";
+  const mac = macOS && offer?.ok ? offer.runner : undefined;
+  const tip = macOS ? null : <InfoTip label={NR_FILES.REUSE_ARIA}>{NR_FILES.REUSE_TIP}</InfoTip>;
+  const what = macOS ? (mac ? MAC_DRIVES.D06(mac) : undefined) : NR_FILES.KEEP_WHAT;
   // Switch off: the control is not built, so it is not drawn: no disabled checkbox, no chip (#3045).
   if (door.kind === "today") return null;
   const reason = door.kind === "closed" ? door.reason : undefined;
@@ -63,7 +70,7 @@ export function KeepWorkFolder({ door }: { door: KeepDoor }) {
             aria-describedby={reason ? reasonId : undefined}
             onChange={(e) => dispatch({ type: "edit", apply: (i) => setKeepWorkFolder(i, e.target.checked) })}
           />
-          <label htmlFor="nr-reuse-drive" className="font-semibold">{NR_FILES.REUSE_LABEL}</label>
+          <label htmlFor="nr-reuse-drive" className="font-semibold">{macOS ? MAC_DRIVES.D14 : NR_FILES.REUSE_LABEL}</label>
         </span>
         {tip}
       </div>
@@ -75,7 +82,7 @@ export function KeepWorkFolder({ door }: { door: KeepDoor }) {
       )}
       {asked && door.kind === "open" && (
         <div className="flex flex-col gap-2.5 pl-6" data-testid="nr-keep-work-folder">
-          <p className="text-sm">{withPaths(NR_FILES.KEEP_WHAT)}</p>
+          {what && <p className="text-sm">{withPaths(what)}</p>}
           <div role="note" className="flex items-start gap-2 rounded-lg border border-[color-mix(in_srgb,var(--warning)_35%,var(--border))] bg-warning-subtle px-3 py-2.5 text-sm">
             <TriangleAlert aria-hidden="true" className="mt-0.5 size-4 flex-none text-warning" />
             <span>{NR_FILES.KEEP_WARNING}</span>

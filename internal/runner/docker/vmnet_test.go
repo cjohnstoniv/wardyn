@@ -108,6 +108,44 @@ func TestContainerCreateStartsNoRelayAndNoVMKey(t *testing.T) {
 	}
 }
 
+// The relay's argv for a run that sets no proxy URL override, byte for byte: the default proxy name
+// stays what it was.
+func TestVMRelayArgvIsPinnedForTheDefaultProxy(t *testing.T) {
+	r := newVMRig(t)
+	spec := vmSpec()
+	if _, err := r.d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	c := r.container(t, vmnetName(spec.RunID))
+	want := []string{"-listen", "/vm/net/net.sock", "-proxy", "wardyn-proxy:3128"}
+	if !slices.Equal([]string(c.cfg.Cmd), want) {
+		t.Fatalf("relay argv = %q, want %q", c.cfg.Cmd, want)
+	}
+	if len(c.host.ExtraHosts) != 1 || !strings.HasPrefix(c.host.ExtraHosts[0], "wardyn-proxy:") {
+		t.Fatalf("relay extra hosts = %q, want the default alias alone", c.host.ExtraHosts)
+	}
+}
+
+// An operator's sandbox proxy URL is the proxy the guest's variables name, so the relay splices that
+// name and port, and resolves the name to the run's proxy.
+func TestVMRelayFollowsTheSandboxProxyURLOverride(t *testing.T) {
+	r := newVMRig(t)
+	spec := vmSpec()
+	spec.Env["WARDYN_PROXY_URL"] = "http://relay-proxy.internal:3128"
+	if _, err := r.d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	c := r.container(t, vmnetName(spec.RunID))
+	want := []string{"-listen", "/vm/net/net.sock", "-proxy", "relay-proxy.internal:3128"}
+	if !slices.Equal([]string(c.cfg.Cmd), want) {
+		t.Fatalf("relay argv = %q, want %q", c.cfg.Cmd, want)
+	}
+	ip := strings.TrimPrefix(c.host.ExtraHosts[0], "wardyn-proxy:")
+	if len(c.host.ExtraHosts) != 2 || c.host.ExtraHosts[1] != "relay-proxy.internal:"+ip {
+		t.Fatalf("relay extra hosts = %q, want the override's name at the proxy's IP too", c.host.ExtraHosts)
+	}
+}
+
 // Stop and kill remove the relay before the run's network, which Docker refuses to remove while a
 // container is still on it: a relay that will not go fails the teardown and keeps the network, and a
 // retry finishes both.

@@ -88,6 +88,35 @@ func compileMITMHosts(entries []string) (hosts map[string]bool, ports map[string
 	return hosts, ports, plaintext
 }
 
+// mitmTables is the host and port tables a proxy terminates TLS for, with the credential doors
+// that add to them.
+type mitmTables struct {
+	hosts     map[string]bool
+	ports     map[string]int
+	plaintext map[string]bool
+	patAPI    map[string]PATGrant
+	ghAPI     *GitHubAPIGrant
+	arm       *azureARMDoor
+	sigv4     *awsSigV4Door
+	kube      *kubeAPIDoor
+}
+
+// buildMITMTables compiles the MITMHosts entries, then adds the hosts each credential door
+// terminates, in that order. newProxy and Config.mitmSetOf both call it, so the host set a run
+// reports is the host set its proxy builds. patGrants is already canonical.
+func buildMITMTables(entries []string, patGrants map[string]PATGrant, gh *GitHubAPIGrant, arm *AzureARMGrant, sigv4 *AWSSigV4Config, kube *KubeAPIGrant) mitmTables {
+	t := mitmTables{}
+	t.hosts, t.ports, t.plaintext = compileMITMHosts(entries)
+	// A git_pat grant with api: true terminates its own host on 443 and nothing else, so the
+	// forge API is reached only through the door. An entry the operator already authored keeps its own scope.
+	t.patAPI = newPATAPIGrants(patGrants, t.hosts, t.ports)
+	t.ghAPI = newGitHubAPIDoor(gh, t.hosts, t.ports)
+	t.arm = newAzureARMDoor(arm, t.hosts, t.ports)
+	t.sigv4 = newAWSSigV4Door(sigv4, t.hosts, t.ports)
+	t.kube = newKubeAPIDoor(kube, t.hosts, t.ports)
+	return t
+}
+
 // upstreamSchemeFor is the scheme and default port forwardInspectedLLM re-originates a
 // MITM'd request in: https/443 unless this host's entry said otherwise (only a plain-HTTP
 // test SSO fake does; production is unchanged).

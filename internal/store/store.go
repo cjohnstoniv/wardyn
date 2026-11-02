@@ -39,7 +39,7 @@ func (s PG) Ping(ctx context.Context) error {
 // runReservedCols and runInsertOnlyCols column, in order (TestCreateRunBindsEveryInsertColumn).
 var createRunSQL = `
 		INSERT INTO agent_runs (` + runInsertCols + `, ` + runReservedCols + `, ` + runInsertOnlyCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58)
 		RETURNING ` + runCols
 
 // runnerPoolFence is the value of the runner_pool_id column in createRunSQL: the pool read through its
@@ -243,6 +243,16 @@ func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 			return nil, fmt.Errorf("store: marshal local folder: %w", err)
 		}
 	}
+	serviceJSON, err := runServiceJSON(r.Service)
+	if err != nil {
+		return nil, err
+	}
+	var vmMachine []byte
+	if r.VMMachine != nil {
+		if vmMachine, err = json.Marshal(r.VMMachine); err != nil {
+			return nil, fmt.Errorf("store: marshal vm machine: %w", err)
+		}
+	}
 	return []any{
 		r.ID, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
@@ -252,9 +262,9 @@ func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 		r.Preset, r.PresetVersion, r.OperatorOwned, r.CreatedVia, r.DiskMiB,
 		string(r.Placement), r.PlacementFilled, r.RunnerID, string(r.EvidenceSource), string(r.Experience),
 		r.LifetimeCapAt, string(r.LifetimeCapSource), r.RunnerPoolID, r.RunnerPoolRevision, string(r.RunnerPoolSelection), r.RunnerPoolExecutor, r.HumanAuthor, walls,
-		string(r.MachineKind.Normalize()), r.BreakGlass, restrictionIDsParam(r.RestrictionIDs),
+		string(r.MachineKind.Normalize()), r.BreakGlass, restrictionIDsParam(r.RestrictionIDs), serviceJSON, string(r.Shape),
 		r.Reserved.CPUMillis, r.Reserved.MemoryMiB, r.Reserved.DiskMiB,
-		localFolder,
+		localFolder, vmMachine,
 	}, nil
 }
 
@@ -343,6 +353,13 @@ func (s PG) SetRunImage(ctx context.Context, id uuid.UUID, image string) error {
 		`UPDATE agent_runs SET image=$1, updated_at=now() WHERE id=$2`, image, id)
 }
 
+// SetRunImageArches scoped-writes ONLY the architectures the run's prewrapped image was checked on, once
+// its image resolves to a ready prewrapped row.
+func (s PG) SetRunImageArches(ctx context.Context, id uuid.UUID, arches []string) error {
+	return s.execRun(ctx, "set run image arches",
+		`UPDATE agent_runs SET image_arches=$1, updated_at=now() WHERE id=$2`, arches, id)
+}
+
 // SetRunDiskMiB scoped-writes ONLY the resolved ephemeral-disk-cap column.
 // Called once applyEphemeralDisk resolves the effective disk_mib, since that
 // needs dispatch-time inputs unavailable at CreateRun.
@@ -423,25 +440,26 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 // so a column appended to runInsertCols reaches both lists at once.
 const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level, ` +
 	`ends_at, wait_budget_sec, run_limits, unit_id, model_provider_id, user_type, preset, preset_version, operator_owned, created_via, disk_mib, placement, placement_filled, runner_id, ` +
-	`evidence_source, experience, lifetime_cap_at, lifetime_cap_source, runner_pool_id, runner_pool_revision, runner_pool_selection, runner_pool_executor, human_author, inner_walls, machine_kind, break_glass, restriction_ids`
+	`evidence_source, experience, lifetime_cap_at, lifetime_cap_source, runner_pool_id, runner_pool_revision, runner_pool_selection, runner_pool_executor, human_author, inner_walls, machine_kind, break_glass, restriction_ids, service, shape`
 
 // runReservedCols are what a run holds on its runner (0174, types.AgentRun.Reserved): written at
 // insert and summed by runnerUsageSQL, never read back into a run.
 const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk_mib`
 
 // runInsertOnlyCols are written at insert and read back only by their own reader: local_folder
-// (0195, types.AgentRun.LocalFolder) by RunLocalFolderSeed.
-const runInsertOnlyCols = `local_folder`
+// (0195, types.AgentRun.LocalFolder) by RunLocalFolderSeed. vm_machine is also in runCols: at insert it
+// holds a macOS VM run's picked base alone (types.VMMachine.MacOSBase), until SetRunVMMachine.
+const runInsertOnlyCols = `local_folder, vm_machine`
 
-const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, vm_machine, recording_level`
+const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, vm_machine, recording_level, image_arches, service_status`
 
 // scanRun is the ONE reader for runCols. A new column is appended to
 // runInsertCols/runCols and to the end of this Scan — appending is the one edit
 // that can't silently transpose two same-typed columns past the compiler.
 func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
-	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection, notRecorded, machineKind, recordingLevel string
-	var limitsRaw, wallsRaw, vmMachineRaw []byte
+	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection, notRecorded, machineKind, recordingLevel, shape string
+	var limitsRaw, wallsRaw, vmMachineRaw, serviceRaw, serviceStatusRaw []byte
 	var containmentErr *string
 	err := row.Scan(
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
@@ -451,9 +469,9 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.UnitID, &r.ModelProviderID, &r.UserType,
 		&r.Preset, &r.PresetVersion, &r.OperatorOwned, &r.CreatedVia, &r.DiskMiB,
 		&placement, &r.PlacementFilled, &r.RunnerID, &evidenceSource, &experience, &r.LifetimeCapAt, &capSource,
-		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor, &wallsRaw, &machineKind, &r.BreakGlass, &r.RestrictionIDs,
+		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor, &wallsRaw, &machineKind, &r.BreakGlass, &r.RestrictionIDs, &serviceRaw, &shape,
 		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &containmentErr, &r.ContainmentErrorAt, &r.EndedAt,
-		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt, &notRecorded, &vmMachineRaw, &recordingLevel,
+		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt, &notRecorded, &vmMachineRaw, &recordingLevel, &r.ImageArches, &serviceStatusRaw,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
@@ -469,6 +487,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	r.Placement = types.Placement(placement)
 	r.EvidenceSource = types.RunEvidenceSource(evidenceSource)
 	r.Experience = types.RunExperience(experience)
+	r.Shape = types.RunShape(shape)
 	r.LifetimeCapSource = types.LimitSource(capSource)
 	r.RunnerPoolSelection, r.NotRecorded = types.RunnerPoolSelection(poolSelection), types.RunNotRecorded(notRecorded)
 	r.RecordingLevel = types.RecordingLevel(recordingLevel)
@@ -485,6 +504,9 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		}
 	}
 	if err := scanRunMachine(&r, machineKind, vmMachineRaw); err != nil {
+		return types.AgentRun{}, err
+	}
+	if err := scanRunService(&r, serviceRaw, serviceStatusRaw); err != nil {
 		return types.AgentRun{}, err
 	}
 	return r, nil

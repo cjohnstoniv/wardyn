@@ -39,12 +39,13 @@ describe("parseRunsFilters", () => {
       workspace: "all",
       scope: "all",
       group: "sections",
+      segment: "all",
     });
   });
 
   it("reads every field back", () => {
     const params = new URLSearchParams(
-      "q=flaky&status=failed&ended_within=30d&include_killed=1&workspace=acme/widgets&owner=me&group=title",
+      "q=flaky&status=failed&ended_within=30d&include_killed=1&workspace=acme/widgets&owner=me&group=title&segment=environments",
     );
     expect(parseRunsFilters(params)).toEqual({
       q: "flaky",
@@ -54,6 +55,7 @@ describe("parseRunsFilters", () => {
       workspace: "acme/widgets",
       scope: "mine",
       group: "title",
+      segment: "environments",
     });
   });
 
@@ -62,6 +64,10 @@ describe("parseRunsFilters", () => {
     expect(parseRunsFilters(params).status).toBe("all");
     expect(parseRunsFilters(params).endedWithin).toBe("7d");
     expect(parseRunsFilters(params).group).toBe("sections");
+  });
+
+  it("an unknown segment reads as All", () => {
+    expect(parseRunsFilters(new URLSearchParams("segment=bogus")).segment).toBe("all");
   });
 
   it("any owner value other than 'me' reads as Everyone (H-4's fail-open default)", () => {
@@ -84,9 +90,15 @@ describe("serializeRunsFilters — round-trips through parseRunsFilters, and a D
       workspace: "acme/x",
       scope: "mine",
       group: "workspace",
+      segment: "services",
     } as const;
     const roundTripped = parseRunsFilters(serializeRunsFilters(state));
     expect(roundTripped).toEqual(state);
+  });
+
+  it("a non-default segment serializes; All does not", () => {
+    expect(serializeRunsFilters({ ...DEFAULT_RUNS_FILTERS, segment: "apps" }).get("segment")).toBe("apps");
+    expect(serializeRunsFilters(DEFAULT_RUNS_FILTERS).has("segment")).toBe(false);
   });
 
   it("Mine serializes to owner=me, the same param name the server filter reads", () => {
@@ -146,20 +158,29 @@ describe("matchesSavedView — the Saved view select's own 'which option is this
   it("Admin view, Mine: the URL right after picking a view (which carries owner=me) still matches it", () => {
     // Exactly what applySavedViewOwner produces for a built-in view picked
     // under Mine — matchesSavedView must see through the owner it added.
-    expect(matchesSavedView("status=failed", "status=failed&owner=me", true)).toBe(true);
+    expect(matchesSavedView("status=failed", "status=failed&owner=me")).toBe(true);
   });
 
   it("Admin view, Everyone: a view with no owner param matches a bare URL", () => {
-    expect(matchesSavedView("", "", true)).toBe(true);
+    expect(matchesSavedView("", "")).toBe(true);
   });
 
   it("Admin view: a genuinely different view (different status) does not match", () => {
-    expect(matchesSavedView("status=failed", "status=killed&owner=me", true)).toBe(false);
+    expect(matchesSavedView("status=failed", "status=killed&owner=me")).toBe(false);
   });
 
-  it("User view: owner is never in play, so this is a plain equality check", () => {
-    expect(matchesSavedView("status=failed", "status=failed", false)).toBe(true);
-    expect(matchesSavedView("status=failed", "status=killed", false)).toBe(false);
+  it("a view saved under Mine (owner=me) still matches in the User view, which carries no owner (#3783)", () => {
+    expect(matchesSavedView("status=failed&owner=me", "status=failed")).toBe(true);
+  });
+
+  it("params in another order are the same view (#3783)", () => {
+    expect(matchesSavedView("status=failed&q=cart+test", "q=cart+test&status=failed")).toBe(true);
+    expect(matchesSavedView("status=failed&q=cart+test", "q=cart+test&status=killed")).toBe(false);
+  });
+
+  it("plain equality otherwise", () => {
+    expect(matchesSavedView("status=failed", "status=failed")).toBe(true);
+    expect(matchesSavedView("status=failed", "status=killed")).toBe(false);
   });
 });
 

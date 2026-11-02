@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -22,6 +23,7 @@ import (
 func inputs(flags, env, managed map[string]string, file runnerFile) runnerInputs {
 	return runnerInputs{
 		flag:     func(n string) (string, bool) { v, ok := flags[n]; return v, ok },
+		flagList: func(n string) ([]string, bool) { v, ok := flags[n]; return []string{v}, ok },
 		getenv:   func(k string) string { return env[k] },
 		managed:  func(k string) string { return managed[k] },
 		file:     file,
@@ -83,7 +85,11 @@ func TestRunnerConfigOrgCAFileOrder(t *testing.T) {
 func TestRunnerConfigEveryFieldResolvesFromEachSource(t *testing.T) {
 	for _, f := range runnerFields {
 		var file runnerFile
-		*f.file(&file) = "file-value"
+		if f.fileList != nil {
+			*f.fileList(&file) = []string{"file-value"}
+		} else {
+			*f.file(&file) = "file-value"
+		}
 		if got := resolveRunnerConfig(inputs(nil, nil, nil, file)).field(f.name); got.Value != "file-value" || !strings.HasPrefix(got.Source, "file ") {
 			t.Errorf("%s: from the file = %+v", f.name, got)
 		}
@@ -98,7 +104,11 @@ func TestRunnerConfigEveryFieldResolvesFromEachSource(t *testing.T) {
 			}
 		}
 		if f.managed != "" {
-			if got := resolveRunnerConfig(inputs(nil, nil, map[string]string{f.managed: "managed-value"}, file)).field(f.name); got.Value != "managed-value" {
+			managed := "managed-value"
+			if f.fileList != nil {
+				managed = `["managed-value"]`
+			}
+			if got := resolveRunnerConfig(inputs(nil, nil, map[string]string{f.managed: managed}, file)).field(f.name); got.Value != "managed-value" {
 				t.Errorf("%s: the %s preference lost to the file: %+v", f.name, f.managed, got)
 			}
 		}
@@ -218,7 +228,7 @@ func TestRunnerFileNamesEachBadField(t *testing.T) {
 
 func TestRunnerFileAbsentIsEmptyUnlessNamed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), runnerConfigName)
-	if f, err := loadRunnerFile(path, false); err != nil || f != (runnerFile{}) {
+	if f, err := loadRunnerFile(path, false); err != nil || !reflect.DeepEqual(f, runnerFile{}) {
 		t.Fatalf("the default file, absent: %+v %v", f, err)
 	}
 	if _, err := loadRunnerFile(path, true); err == nil || !strings.Contains(err.Error(), path) {

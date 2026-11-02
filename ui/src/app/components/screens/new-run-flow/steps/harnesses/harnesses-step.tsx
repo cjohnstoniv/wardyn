@@ -21,6 +21,7 @@ import { stepIssues } from "../../lenses/local-issues";
 import { flowSteps, StepShell, useAnnounce } from "../step-shell";
 import { useLoaded } from "../shape/use-loaded";
 import { HarnessCard, type HarnessMode } from "./harness-card";
+import { useMacOSOffer } from "../run/macos-offer";
 import { combinationReason, loadRoster, unavailableReason, type Roster } from "./roster";
 
 const STEP_LABELS = {
@@ -40,8 +41,10 @@ export function HarnessesStep({ go, deps }: NewRunScreenProps & { deps?: { load:
   const dispatch = useNewRunDispatch();
   const announce = useAnnounce();
   const loaded = useLoaded(deps?.load ?? loadRoster);
-  const roster = loaded.status === "ready" ? loaded.value : EMPTY;
+  const offer = useMacOSOffer();
   const { intent } = draft;
+  const base = loaded.status === "ready" ? loaded.value : EMPTY;
+  const roster = intent.machine_kind === "macos_vm" ? { ...base, macOS: offer } : base;
   const ids = harnessIds(intent);
   const mode: HarnessMode = intent.shape !== "agent_task" ? "optional" : intent.experience === "background" ? "autonomous" : "interactive";
   // Several agents side by side only in an Autonomous run, and only where the server has the switch on.

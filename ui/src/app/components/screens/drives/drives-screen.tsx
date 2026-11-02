@@ -67,6 +67,7 @@ import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { EmptyState, TableSkeleton, loadFailStatus } from "../../wardyn/states";
 import { AllocationsBlock } from "./allocations";
 import { DriveEditor } from "./drive-editor";
+import { MemberDrives } from "./member-drives";
 import { Note, enforcementGloss, modeText, modeTone, noteClass, question, sizeText, withMono } from "./display";
 
 // A team drive's group names, as the Allocated to cell shows them: only when this
@@ -394,6 +395,10 @@ export function DrivesScreen() {
               />
             )}
           </section>
+
+          {/* The drives people made themselves (a disk kept on a Mac among them), read by the super admin only: GET /drives/member is
+              operatorOnly, and a security admin reading this page has no such read. */}
+          {operator && status === "ready" && <MemberDrives />}
 
           {/* Only once the read has landed AND there is something to allocate:
               "No allocations yet" over an unloaded snapshot is a confident

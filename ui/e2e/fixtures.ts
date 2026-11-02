@@ -47,7 +47,9 @@ function personToken(principal: string): string {
 export const MEMBER_TOKEN = personToken("e2e-member");
 const SECURITY_ADMIN_TOKEN = personToken("e2e-security-admin");
 const SECURITY_ADMIN_2_TOKEN = personToken("e2e-security-admin-2");
+const OPEN_EGRESS_TOKEN = personToken("e2e-open-egress");
 export const MEMBER_PRINCIPAL = "e2e-member";
+export const OPEN_EGRESS_PRINCIPAL = "e2e-open-egress";
 
 // T-68 — page-health teardown gate. A spec whose page threw an uncaught JS
 // error or tripped the CSP fails silently everywhere else: the click that
@@ -171,7 +173,10 @@ export { expect };
 // it is intentionally absent from this list.
 export type NavLabel =
   | "Runs"
+  | "Workloads"
   | "Approvals"
+  // 0.10 — beside Runs, in both views.
+  | "Workloads"
   // 0.8.6 (ppl-p2) — first under Access (#3056), both admin tiers.
   | "People"
   | "Workspaces"
@@ -186,14 +191,13 @@ export type NavLabel =
   | "Secrets"
   | "Audit"
   | "Recordings"
-  // A security admin's Admin view only (packet M-A).
+  // Under Setup, both admin tiers (app-shell.tsx).
   | "User drives"
-  // #217's slot, under a divider (app-shell.tsx#SidebarNav): Getting started and
-  // Settings in the Admin view, Getting started and Your account in the User
-  // view.
+  | "Images"
+  // Under Setup, at the end: Getting started and Settings in both views (the Admin view's Settings is
+  // /admin/settings, the User view's is /account).
   | "Settings"
-  | "Getting started"
-  | "Your account";
+  | "Getting started";
 
 // Sidebar entries are react-router <NavLink>s (role="link"), not <button>s.
 // Their accessible name can carry trailing content beyond the label — Runs/
@@ -533,6 +537,13 @@ export async function asRealSecurityAdmin(page: Page): Promise<void> {
 // The governance four-eyes spec needs a proposer and an approver who are two people.
 export async function asRealSecurityAdmin2(page: Page): Promise<void> {
   await asRealPerson(page, SECURITY_ADMIN_2_TOKEN, "e2e-security-admin-2", "security_admin");
+}
+
+// A member no other spec signs in as: the one a spec gives a ceiling that allows all egress (assigned to
+// OPEN_EGRESS_PRINCIPAL through the admin API), so e2e-member keeps the narrowed default ceiling the demos
+// sweep relies on.
+export async function asRealOpenEgressMember(page: Page): Promise<void> {
+  await asRealPerson(page, OPEN_EGRESS_TOKEN, OPEN_EGRESS_PRINCIPAL, "user");
 }
 
 // Render-only splices for specs that supply deliberately hypothetical states.

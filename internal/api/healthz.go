@@ -261,8 +261,9 @@ func (s *Server) healthzSignedIn(w http.ResponseWriter, r *http.Request) bool {
 	return signedIn
 }
 
-// healthzGateWriter takes what humanOrAdminAuth writes while healthzSignedIn
-// asks it, and sends nothing.
+// healthzGateWriter takes what a check writes when no one reads the answer
+// (humanOrAdminAuth while healthzSignedIn asks it, an inbound stream's
+// re-admission), and sends nothing.
 type healthzGateWriter struct{ h http.Header }
 
 func (g healthzGateWriter) Header() http.Header       { return g.h }

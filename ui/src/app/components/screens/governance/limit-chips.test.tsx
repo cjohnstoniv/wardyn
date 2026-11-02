@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { GovernanceLimits } from "../../../lib/api/governance";
 import { GOVERNANCE as GOV, LIMITS_CHIP } from "../../../lib/governance-copy";
+import { MAC_BASES } from "../../wardyn/copy/mac-bases";
 import { limitChips, limitsBoundNothing } from "./limit-chips";
 
 // #2111/#2506: every GovernanceLimits field is a limit, and "None" is the claim that a profile bounds none of
@@ -15,6 +16,7 @@ import { limitChips, limitsBoundNothing } from "./limit-chips";
 describe("limitChips and limitsBoundNothing", () => {
   it.each([
     ["deny_placements", { deny_placements: ["remote"] }, LIMITS_CHIP.PLACEMENT("remote")],
+    ["allowed_macos_bases", { allowed_macos_bases: ["Standard", "xcode-16"] }, `${MAC_BASES.B14}: Standard, xcode-16`],
     ["deny_ui_apps", { deny_ui_apps: true }, LIMITS_CHIP.UI_APPS],
     ["max_cpu_millis", { max_cpu_millis: 2000 }, `${LIMITS_CHIP.CPU}: 2000`],
     ["max_memory_mib", { max_memory_mib: 2048 }, `${LIMITS_CHIP.MEMORY}: 2048`],
@@ -29,6 +31,6 @@ describe("limitChips and limitsBoundNothing", () => {
   it("a run limit the summary chip does not name still counts, and no limits at all is None", () => {
     expect(limitsBoundNothing({ default_end_sec: 86400 } as GovernanceLimits)).toBe(false);
     expect(limitsBoundNothing({})).toBe(true);
-    expect(limitsBoundNothing({ max_cpu_millis: 0, deny_placements: [] })).toBe(true);
+    expect(limitsBoundNothing({ max_cpu_millis: 0, deny_placements: [], allowed_macos_bases: [] })).toBe(true);
   });
 });

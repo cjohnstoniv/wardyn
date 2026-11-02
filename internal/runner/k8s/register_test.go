@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
@@ -117,8 +118,8 @@ func TestBuildConfig_AllowUnenforcedNetPolFromEnv(t *testing.T) {
 // reading the env var) and the "set" case goes red.
 func TestBuildConfig_NamespaceFromEnv(t *testing.T) {
 	t.Setenv("WARDYN_K8S_NAMESPACE", "wardyn-run-ns")
-	if cfg := buildConfig(substrate.Deps{}); cfg.Namespace != "wardyn-run-ns" {
-		t.Errorf("WARDYN_K8S_NAMESPACE=wardyn-run-ns: Namespace = %q, want wardyn-run-ns", cfg.Namespace)
+	if cfg := buildConfig(substrate.Deps{}); !slices.Equal(cfg.Namespaces, []string{"wardyn-run-ns"}) {
+		t.Errorf("WARDYN_K8S_NAMESPACE=wardyn-run-ns: Namespaces = %q, want [wardyn-run-ns]", cfg.Namespaces)
 	}
 }
 

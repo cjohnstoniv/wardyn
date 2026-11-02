@@ -114,6 +114,8 @@ type RecordingChoice struct {
 	Org            *SiteRecording
 	// Required is the organisation's or the run's pool's required setting: at least terminal.
 	Required bool
+	// CeilingBy names the profile that set Ceiling, for a refusal that says whose it is; "" for none.
+	CeilingBy string
 }
 
 // Resolve is the run's recording level. Whether the organisation keeps recordings at all
@@ -128,4 +130,46 @@ func (c RecordingChoice) Resolve() RecordingLevel {
 		l = l.AtLeast(RecordingTerminal)
 	}
 	return l
+}
+
+// RecordingFloorSource is the layer that makes a run's recording a minimum.
+type RecordingFloorSource string
+
+const (
+	// RecordingFloorRequired: the organisation or the run's pool requires recording.
+	RecordingFloorRequired RecordingFloorSource = "required"
+	// RecordingFloorOrgLocked: the organisation's level is locked above off.
+	RecordingFloorOrgLocked RecordingFloorSource = "org_locked"
+	// RecordingFloorCeiling: the run's governance ceiling sets a level above off.
+	RecordingFloorCeiling RecordingFloorSource = "ceiling"
+)
+
+// Floor is the lowest level a run may be recorded at: the highest of its ceiling's level, the
+// organisation's when that is locked, and terminal when recording is required. The organisation's
+// unlocked level is a default, not a minimum, so it is no part of it. Empty when no layer sets one.
+// Resolve is unchanged: a container run keeps the opt-out rule it has.
+func (c RecordingChoice) Floor() RecordingLevel {
+	l := c.Ceiling
+	if c.Org != nil && c.Org.Locked {
+		l = l.AtLeast(c.Org.OrgLevel())
+	}
+	if c.Required {
+		l = l.AtLeast(RecordingTerminal)
+	}
+	return l
+}
+
+// FloorSource is the layer that sets a floor above off, the first of required, a locked organisation
+// level and the ceiling; empty when the floor is off or unset, which a run that cannot be recorded may
+// start under.
+func (c RecordingChoice) FloorSource() RecordingFloorSource {
+	switch {
+	case c.Required:
+		return RecordingFloorRequired
+	case c.Org != nil && c.Org.Locked && c.Org.OrgLevel().Rank() > RecordingOff.Rank():
+		return RecordingFloorOrgLocked
+	case c.Ceiling.Rank() > RecordingOff.Rank():
+		return RecordingFloorCeiling
+	}
+	return ""
 }

@@ -214,7 +214,11 @@ func (d *Driver) containPod(ctx context.Context, runID uuid.UUID, component, nam
 			_ = d.cfg.Sink.Drain(dctx, runID)
 			cancel()
 		}
-		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(ctx, name, metav1.GetOptions{})
+		ns, err := d.runNamespace(ctx, runID)
+		if err != nil {
+			return false, err
+		}
+		pod, gerr := d.clientset.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
 		switch {
 		case isNotFound(gerr):
 			if pe == nil || pe.UID == "" {
@@ -247,7 +251,7 @@ func (d *Driver) containPod(ctx context.Context, runID uuid.UUID, component, nam
 				orphan := metav1.DeletePropagationOrphan
 				opts.PropagationPolicy = &orphan
 			}
-			if err := d.clientset.CoreV1().Pods(d.cfg.Namespace).Delete(ctx, name, opts); err != nil && !isNotFound(err) {
+			if err := d.clientset.CoreV1().Pods(ns).Delete(ctx, name, opts); err != nil && !isNotFound(err) {
 				return false, fmt.Errorf("k8s: delete %s: %w", name, err)
 			}
 			if err := d.markDeleted(runID, component, name); err != nil {
@@ -386,7 +390,11 @@ func (d *Driver) awaitEvidence(ctx context.Context, runID uuid.UUID, component, 
 // name-scoped list sent after that read returned, persist the witness, and only then remove
 // runnerd's own finalizer. NotFound completes only a pod whose witness is already persisted.
 func (d *Driver) checkOnce(ctx context.Context, runID uuid.UUID, component, name string) (bool, error) {
-	pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(ctx, name, metav1.GetOptions{})
+	ns, err := d.runNamespace(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	pod, gerr := d.clientset.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
 	if isNotFound(gerr) {
 		ev, err := d.loadEvidence(runID)
 		if err != nil {
@@ -476,7 +484,7 @@ func (d *Driver) removeFinalizer(ctx context.Context, runID uuid.UUID, component
 		return false, err
 	}
 	if present {
-		_, err = d.clientset.CoreV1().Pods(d.cfg.Namespace).Patch(ctx, pod.Name, k8stypes.JSONPatchType, patch, metav1.PatchOptions{})
+		_, err = d.clientset.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, k8stypes.JSONPatchType, patch, metav1.PatchOptions{})
 		switch {
 		case err == nil, isNotFound(err):
 		case apierrors.IsConflict(err), apierrors.IsInvalid(err):
@@ -519,7 +527,10 @@ func (d *Driver) teardownRunner(ctx context.Context, runID uuid.UUID, grace *int
 		}
 		return err
 	}
-	ns := d.cfg.Namespace
+	ns, err := d.runNamespace(ctx, runID)
+	if err != nil {
+		return err
+	}
 	listOpts := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String() + "," + runner.LabelRunnerID + "=" + d.cfg.RunnerID}
 	if err := d.waitPodsGone(ctx, ns, listOpts, bound); err != nil {
 		return fmt.Errorf("k8s: teardown: waiting for pods to go before dropping NetworkPolicies: %w", err)
@@ -530,7 +541,21 @@ func (d *Driver) teardownRunner(ctx context.Context, runID uuid.UUID, grace *int
 	if err := d.clientset.NetworkingV1().NetworkPolicies(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, listOpts); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: teardown: delete network policies: %w", err)
 	}
+	d.runNamespaces.Delete(runID)
 	return nil
+}
+
+// nodeRecordRun reads the run's evidence and then the namespace its pods run in. done is true when the record
+// is the one already accepted, before the namespace is read.
+func (d *Driver) nodeRecordRun(ctx context.Context, runID, recordID uuid.UUID) (ev *runEvidence, ns string, done bool, err error) {
+	if ev, err = d.loadEvidence(runID); err != nil {
+		return nil, "", false, err
+	}
+	if ev.Record != nil && ev.Record.ID == recordID {
+		return ev, "", true, nil
+	}
+	ns, err = d.runNamespace(ctx, runID)
+	return ev, ns, false, err
 }
 
 // AcceptNodeRecord checks a security operator's node record against the run's own record and an
@@ -544,12 +569,9 @@ func (d *Driver) AcceptNodeRecord(ctx context.Context, ref string, rec runner.No
 	if err != nil {
 		return fmt.Errorf("k8s: node record: %w", err)
 	}
-	ev, err := d.loadEvidence(runID)
-	if err != nil {
+	ev, ns, done, err := d.nodeRecordRun(ctx, runID, rec.ID)
+	if err != nil || done {
 		return err
-	}
-	if ev.Record != nil && ev.Record.ID == rec.ID {
-		return nil
 	}
 	// Status reads, then each acceptance list after its read returned. Any holder these lists show
 	// latches its reuse generation first, so the tuple comparison below sees it.
@@ -560,7 +582,7 @@ func (d *Driver) AcceptNodeRecord(ctx context.Context, ref string, rec runner.No
 		if pe == nil || pe.NodeName == "" || pe.UID == "" {
 			continue
 		}
-		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(ctx, pe.Name, metav1.GetOptions{})
+		pod, gerr := d.clientset.CoreV1().Pods(ns).Get(ctx, pe.Name, metav1.GetOptions{})
 		switch {
 		case gerr == nil && string(pod.UID) == pe.UID:
 			pods[comp] = pod
@@ -666,7 +688,7 @@ func distinctHumanApprovers(approvers []runner.NodeRecordApprover) (int, error) 
 
 // holderBound is precondition (ii): on a run that is not (u2) and has no latched ID, the post-bind
 // holder still holds the name with its recorded machineID and systemUUID, and the pod's status is
-// bound to it: the terminal arm's three conditions or the never-initialized status, and a
+// bound to it: the terminal arm's three conditions or a status unstartedArm accepts, and a
 // non-empty hostIP equal to the holder's current InternalIP.
 func (pe *podEvidence) holderBound(pod *corev1.Pod, h *nodeHolder) string {
 	a := pe.anchor()
@@ -687,7 +709,7 @@ func (pe *podEvidence) holderBound(pod *corev1.Pod, h *nodeHolder) string {
 	if terminalThree(pod) {
 		return ""
 	}
-	if _, ok := pe.neverInitialized(pod); ok {
+	if arm, _ := unstartedArm(pod, pe.clean); arm != "" {
 		if h.OutOfService {
 			return "the holder carries the out-of-service taint"
 		}

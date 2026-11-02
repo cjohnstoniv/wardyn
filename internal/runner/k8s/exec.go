@@ -68,7 +68,10 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 	if len(argv) == 0 {
 		return "", errors.New("k8s: exec: empty argv")
 	}
-	ns := d.cfg.Namespace
+	ns, err := d.refNamespace(ctx, ref)
+	if err != nil {
+		return "", fmt.Errorf("k8s: exec: %w", err)
+	}
 	pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, ref, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("k8s: exec: get pod %q: %w", ref, err)
@@ -129,7 +132,7 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 	}
 	if w, ok := d.execOutputs.Load(ref); ok {
 		endDrain := runner.BeginOutputDrain(w.(io.Writer))
-		go func() { endDrain(d.followExecOutput(ref, w.(io.Writer))) }()
+		go func() { endDrain(d.followExecOutput(ns, ref, w.(io.Writer))) }()
 	}
 	return execContainerName, nil
 }
@@ -142,9 +145,9 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 // to its end, or when there was none to read (the container never starts, or
 // the pod is gone), and the error that cut the read short otherwise: the tail's
 // owner reads that as an incomplete capture.
-func (d *Driver) followExecOutput(ref string, w io.Writer) error {
+func (d *Driver) followExecOutput(ns, ref string, w io.Writer) error {
 	ctx := context.Background()
-	pods := d.clientset.CoreV1().Pods(d.cfg.Namespace)
+	pods := d.clientset.CoreV1().Pods(ns)
 	for errs := 0; ; time.Sleep(execWaitPollInterval) {
 		pod, err := pods.Get(ctx, ref, metav1.GetOptions{})
 		if err != nil {
@@ -254,9 +257,13 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 	// would save apiserver chatter, but polling is a five-line loop against
 	// the same kubernetes.Interface every clientset satisfies. Upgrade if
 	// poll volume ever shows up as real apiserver load.
+	ns, err := d.refNamespace(ctx, ref)
+	if err != nil {
+		return 0, fmt.Errorf("k8s: exec wait: %w", err)
+	}
 	errs := 0
 	for {
-		pod, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(ctx, ref, metav1.GetOptions{})
+		pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, ref, metav1.GetOptions{})
 		switch {
 		case err == nil:
 			errs = 0
@@ -312,7 +319,11 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 	if agentExecID == "" {
 		return d.Status(ctx, ref)
 	}
-	pod, err := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(ctx, ref, metav1.GetOptions{})
+	ns, err := d.refNamespace(ctx, ref)
+	if err != nil {
+		return runner.Status{}, fmt.Errorf("k8s: agent status: %w", err)
+	}
+	pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, ref, metav1.GetOptions{})
 	if err != nil {
 		if isNotFound(err) {
 			return runner.Status{State: types.RunStopped, Message: "agent exec not found"}, nil

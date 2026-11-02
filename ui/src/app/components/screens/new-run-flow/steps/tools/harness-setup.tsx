@@ -151,7 +151,7 @@ function HarnessCard({ fact, access, harnessSet, intent, answeredFor, name, answ
         <h3 className="font-medium">{name}</h3>
         <Chip>{startsWithRun(intent, fact.harness) ? NR_TOOLS.SUB_STARTS : NR_TOOLS.SUB_AVAILABLE}</Chip>
       </div>
-      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(230px,1fr))]">
+      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(230px,100%),1fr))]">
         <ProviderPicker fact={fact} access={access} harnessSet={harnessSet} intent={intent} status={status} onSignedIn={onSignedIn} />
         {!unsupported && (
           <div className="flex flex-col gap-2">

@@ -136,17 +136,22 @@ export function TeamGroups({
  * A null write leaves existing allocations' write bits alone; a group allocated now takes `fresh`.
  * Runs AFTER the drive is saved, so a drive that just became writable is
  * writable before any allocation says members can write.
+ * `wrote`, when given, is kept current with each allocation this call stores or removes, so a caller
+ * whose save fails part way can fold what was done into the baseline of its retry.
  */
-export async function syncTeamGroups(driveId: string, groups: string[], write: boolean | null, grants: UserDriveGrant[], fresh: boolean = write === true, shown: UserDriveGrant[] = grants): Promise<void> {
+export async function syncTeamGroups(driveId: string, groups: string[], write: boolean | null, grants: UserDriveGrant[], fresh: boolean = write === true, shown: UserDriveGrant[] = grants, wrote?: Map<string, UserDriveGrant>): Promise<void> {
   const mine = grants.filter((g) => g.drive_id === driveId && g.subject_type === "group");
   for (const g of mine) {
     // Only an allocation the editor listed can be taken off; one the cut page hid was never on screen.
-    if (!groups.includes(g.subject) && shown.some((s) => s.id === g.id)) await api.deleteGrant(g.id);
+    if (!groups.includes(g.subject) && shown.some((s) => s.id === g.id)) {
+      await api.deleteGrant(g.id);
+      wrote?.delete(g.id);
+    }
   }
   for (const subject of groups) {
     const had = mine.find((g) => g.subject === subject);
     if (had && (write === null || !!had.members_can_write === write)) continue;
-    await api.upsertGrant({
+    const { grant } = await api.upsertGrant({
       subject_type: "group",
       subject,
       drive_id: driveId,
@@ -157,5 +162,6 @@ export async function syncTeamGroups(driveId: string, groups: string[], write: b
       enabled: had?.enabled ?? true,
       members_can_write: had ? write === true : fresh,
     });
+    wrote?.set(grant.id, grant);
   }
 }

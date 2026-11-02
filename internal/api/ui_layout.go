@@ -39,7 +39,7 @@ var runLayoutPresets = []string{"live", "finished"}
 //   - "approvals"/"audit"/"recording" — those are TABS, not widgets on the
 //     Overview canvas. A tab has no x/y/w/h to save.
 var runLayoutWidgetIDs = []string{
-	"terminal", "egress", "files", "sandbox", "credentials", "identity", "effective-policy", "ssh",
+	"terminal", "egress", "files", "sandbox", "credentials", "identity", "effective-policy", "ssh", "service",
 }
 
 // runLayoutMaxWidgets bounds the element count of a PUT layout. The known-

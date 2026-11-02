@@ -9,6 +9,8 @@ import "context"
 // A link drop fails the wait; the caller retains its durable record and replays
 // it with its stable event identity. Sequence replay can also deliver it, so
 // the durable receiver must deduplicate by that identity.
+// An ACK says the org has durably decided the event: accepted, or refused for good and recorded in its audit log
+// (EventRefusal); either way the sender's record is settled.
 func (p *Peer) EventAck(ctx context.Context, ev Event) error {
 	return p.EventsAck(ctx, []Event{ev})
 }

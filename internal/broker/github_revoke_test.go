@@ -189,19 +189,22 @@ func TestGitHubMinter_MintReturnsInsideClientBudget(t *testing.T) {
 // budget. The mint derives one ctx deadline for the whole call, so the
 // in-transaction ceiling is 1x.
 //
-// The server here is the shape that separates the two: hop 1 answers just under
-// the budget, hop 2 never answers. Per-hop-only = ~1.8x; one ceiling = ~1x.
+// The server here is the shape that separates the two: hop 1 answers after 3/5
+// of the budget, hop 2 never answers. Per-hop-only = ~1.6x; one ceiling = ~1x.
+// The 2/5 left after hop 1 is the room hop 2 needs to be dialled at all on a
+// loaded -race runner; at 4/5 the deadline could pass first, and hop 2's
+// anti-vacuity count read 0.
 //
 // A raw hop-hit count cannot discriminate the two shapes — hop 2's HTTP
 // request reaches this fake either way (hop1Hits/hop2Hits are 1/1 under both,
 // since hop 1 succeeding at all means some of its own per-hop budget is still
 // left for hop 2 to dial). The counters stay as an anti-vacuity floor —
 // proving the fixture actually exercised both hops, so the timing assertion
-// below is proving something — and the ceiling sits at 1.5x, comfortably
-// between the two measured shapes (~500ms with one deadline vs ~900ms
-// per-hop) with headroom on both sides.
+// below is proving something — and the ceiling sits at 1.3x, between the two
+// shapes (~1s with one deadline vs ~1.6s per-hop) with 300ms of headroom on
+// both sides.
 func TestGitHubMinter_MintCeilingIsOneBudgetNotTwo(t *testing.T) {
-	const budget = 500 * time.Millisecond
+	const budget = time.Second
 
 	var hop1Hits, hop2Hits atomic.Int32
 	block := make(chan struct{})
@@ -209,7 +212,7 @@ func TestGitHubMinter_MintCeilingIsOneBudgetNotTwo(t *testing.T) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/installation"):
 			hop1Hits.Add(1)
-			time.Sleep(budget * 4 / 5) // slow, but inside the budget: hop 1 SUCCEEDS
+			time.Sleep(budget * 3 / 5) // slow, but inside the budget: hop 1 SUCCEEDS
 			_, _ = w.Write([]byte(`{"id": 42}`))
 		default:
 			hop2Hits.Add(1)
@@ -244,9 +247,9 @@ func TestGitHubMinter_MintCeilingIsOneBudgetNotTwo(t *testing.T) {
 		if got := hop2Hits.Load(); got != 1 {
 			t.Fatalf("hop2 (CreateInstallationToken) hits = %d, want 1", got)
 		}
-		// 1.5x sits comfortably below the ~1.8x per-hop-only shape and
-		// comfortably above the ~1.0x one-ceiling shape.
-		if ceiling := budget * 3 / 2; elapsed > ceiling {
+		// 1.3x sits below the ~1.6x per-hop-only shape and above the ~1.0x
+		// one-ceiling shape.
+		if ceiling := budget * 13 / 10; elapsed > ceiling {
 			t.Fatalf("mint took %s, want under %s — the whole mint must share ONE ceiling, not one per round trip (two hops = 2x the lock hold)", elapsed, ceiling)
 		}
 	case <-time.After(10 * time.Second):

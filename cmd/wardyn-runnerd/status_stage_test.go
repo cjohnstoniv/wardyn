@@ -114,7 +114,7 @@ func TestStatusStageStartupRefusalKeptAcrossARestart(t *testing.T) {
 	if st.State != "stopped" || st.Stage != types.RunnerStageEngine || st.StageAt == nil || !strings.Contains(st.LastError, "no socket") {
 		t.Fatalf("after a refusal at start: %+v", st)
 	}
-	serveOnce(t, state, errors.New("stop before any connect"))
+	serveOnce(t, state, atStage(types.RunnerStageEngine, errors.New("engine: still no socket")))
 	st, _ = readStatus(t, state)
 	if st.Stage != types.RunnerStageEngine {
 		t.Fatalf("the next start dropped the stage before a connect: %+v", st)
@@ -226,5 +226,35 @@ func TestStatusStageHoldsNoSecret(t *testing.T) {
 	}
 	if fi, err := os.Stat(filepath.Join(dir, statusFile)); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("status.json mode: %v %v", fi, err)
+	}
+}
+
+// A start that fails on a flag (an error with no stage) is recorded as the last error and kept through the
+// stop that follows it, in place of the error the previous process left.
+func TestStatusRecordsAStartThatFailedOnAFlag(t *testing.T) {
+	t.Setenv("WARDYN_PROXY_IMAGE", "")
+	state := filepath.Join(t.TempDir(), "runner")
+	identityIn(t, state, "https://org.example")
+	w := newStatusWriter(state)
+	w.linkChanged(false, "connection refused by the organisation")
+	w.stopped()
+	serveOnce(t, state, errors.New("--proxy-image: no image named"))
+	st, _ := readStatus(t, state)
+	if st.State != "stopped" || !strings.Contains(st.LastError, "--proxy-image: no image named") || st.LastErrorAt == nil || st.Stage != "" {
+		t.Fatalf("after a start that failed on a flag: %+v, want that error as the last error and no stage", st)
+	}
+}
+
+// A bad flag after a refusal that left a stage on disk shows the flag error and no stage: that stage's fix
+// would not mend it.
+func TestStatusFlagErrorReplacesAnEarlierRefusalsStage(t *testing.T) {
+	t.Setenv("WARDYN_PROXY_IMAGE", "")
+	state := filepath.Join(t.TempDir(), "runner")
+	identityIn(t, state, "https://org.example")
+	serveOnce(t, state, atStage(types.RunnerStageEngine, errors.New("engine: no socket")))
+	serveOnce(t, state, errors.New("--proxy-image: no image named"))
+	st, _ := readStatus(t, state)
+	if st.State != "stopped" || st.Stage != "" || st.StageAt != nil || !strings.Contains(st.LastError, "--proxy-image: no image named") {
+		t.Fatalf("after a bad flag following a staged refusal: %+v, want the flag error and no stage", st)
 	}
 }

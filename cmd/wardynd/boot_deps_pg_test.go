@@ -43,3 +43,22 @@ func TestConnectAndMigrate_SeparateBudgets(t *testing.T) {
 		t.Fatalf("error = %q, want it to name the expired migrateTimeout deadline", err.Error())
 	}
 }
+
+// TestConnectAndMigrate_ChecksOutliveTheConnectBudget pins that the checks after
+// the migration get their own budget: a migration that outlasts connectTimeout
+// (within migrateTimeout) must not fail the boot on an expired connect context.
+func TestConnectAndMigrate_ChecksOutliveTheConnectBudget(t *testing.T) {
+	dsn := os.Getenv("WARDYN_TEST_PG")
+	if dsn == "" {
+		t.Skip("WARDYN_TEST_PG not set; skipping Postgres-backed boot-budget test")
+	}
+	prev := afterMigrations
+	t.Cleanup(func() { afterMigrations = prev })
+	afterMigrations = func() { time.Sleep(6 * time.Second) }
+
+	pool, err := connectAndMigrate(t.Context(), dsn, "", 5*time.Second, 5*time.Minute, false)
+	if err != nil {
+		t.Fatalf("connectAndMigrate with a migration longer than the connect budget: %v", err)
+	}
+	pool.Close()
+}

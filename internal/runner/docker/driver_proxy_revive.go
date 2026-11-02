@@ -6,11 +6,13 @@
 package docker
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -60,6 +62,17 @@ const (
 	proxyStartWatch         = 3 * time.Second
 	proxyStartWatchInterval = 200 * time.Millisecond
 	proxyStartSettle        = 1 * time.Second
+)
+
+// proxyReadyWait bounds how long startProxy waits for a started proxy to print proxy.ReadyMarker, which it does
+// once it has loaded its config and bound its listener. The wait ends at once when the proxy exits first
+// (it refused its own config: a strict-decode error, an unreadable MITM key, ...), so this bound is only
+// ever spent on a proxy that stays up and never says it is listening. proxyExitPoll is how often the exit
+// code is read after the stream ended.
+const (
+	proxyReadyWait = 10 * time.Second
+	proxyExitPoll  = 100 * time.Millisecond
+	proxyExitLook  = 3 * time.Second
 )
 
 // proxyConfigStdinEnv tells the proxy sidecar its config arrives on stdin:
@@ -320,56 +333,72 @@ func (d *Driver) startProxyOn(ctx context.Context, image string, runID uuid.UUID
 		remove()
 		return "", fmt.Errorf("docker: connect proxy to %s: %w", d.cfg.InternalNetwork, err)
 	}
-	if err := d.startWithConfig(ctx, runID, resp.ID, cfgJSON); err != nil {
+	// An image that predates the ready marker never prints it: wait for it only from an image that
+	// says it does, and watch such a proxy for an early exit as before.
+	marker := d.proxyPrintsReadyMarker(ctx, image)
+	att, err := d.startWithConfig(ctx, runID, resp.ID, cfgJSON, marker)
+	if err != nil {
 		remove()
 		return "", err
 	}
+	defer att.Close()
 	if err := d.openLocalModels(ctx, runID, resp.ID, prep.localModelPorts); err != nil {
 		remove()
 		return "", err
 	}
-	// Watch briefly for the proxy exiting right back out — the shape of it
-	// refusing its own rendered config at boot (a strict-decode error, an
-	// unreadable MITM key, …). Without this, CreateSandbox pressed straight on
-	// to the IP lookup, which found no IP on a dead container and reported
-	// the generic "proxy has no IP…" instead of the proxy's own named cause.
+	// Wait for the proxy's ready marker: it is printed once the listener is bound, so the agent is
+	// never started into "connection refused", and a proxy that exits first (it refused its own
+	// config) is named here instead of surfacing as the generic "proxy has no IP...". A proxy image
+	// without the marker is only watched briefly for exiting right back out, as before.
 	//
-	// On a watch failure the container is deliberately NOT removed here: on
-	// the CreateSandbox path the caller removes it after also rolling back
-	// the per-run network; on the ReplaceProxy path it stays so its logs
-	// still name the cause, and the next revive removes it by name.
-	if err := d.watchProxyExit(ctx, resp.ID); err != nil {
+	// On a failure the container is deliberately NOT removed here: on the CreateSandbox path the
+	// caller removes it after also rolling back the per-run network; on the ReplaceProxy path it
+	// stays so its logs still name the cause, and the next revive removes it by name.
+	var waitErr error
+	if marker {
+		waitErr = d.awaitProxyReady(ctx, resp.ID, att)
+	} else {
+		waitErr = d.watchProxyExit(ctx, resp.ID)
+	}
+	if err := waitErr; err != nil {
 		d.closeLocalModels(runID) // an exited proxy's addresses are free for another container
 		return resp.ID, err
 	}
 	return resp.ID, nil
 }
 
-// startWithConfig attaches to the created proxy's stdin, starts it, writes
-// cfgJSON there and closes it: the proxy reads its config to EOF. Attaching
-// before the start is what `docker run -i` does, so no byte is written before
-// the proxy's stdin exists. The config's listen address is first bound to the
-// proxy's own address on runID's per-run network (see listenOnRunNetwork).
-func (d *Driver) startWithConfig(ctx context.Context, runID uuid.UUID, id string, cfgJSON []byte) error {
-	att, err := d.cli.ContainerAttach(ctx, id, client.ContainerAttachOptions{Stream: true, Stdin: true})
+// startWithConfig attaches to the created proxy's stdin (and stdout, when stdout is set), starts it, writes cfgJSON to
+// stdin and closes it: the proxy reads its config to EOF. Attaching before the start is what
+// `docker run -i` does, so no byte is written before the proxy's stdin exists, and none of its
+// stdout is missed. The stream is returned open for awaitProxyReady, which reads the proxy's ready
+// marker from it: the attach is the engine's own channel to the process, so it needs no host route
+// to the container (none exists on Docker Desktop for Mac) and no log driver that keeps logs. The
+// config's listen address is first bound to the proxy's own address on runID's per-run network (see
+// listenOnRunNetwork).
+func (d *Driver) startWithConfig(ctx context.Context, runID uuid.UUID, id string, cfgJSON []byte, stdout bool) (att client.ContainerAttachResult, err error) {
+	att, err = d.cli.ContainerAttach(ctx, id, client.ContainerAttachOptions{Stream: true, Stdin: true, Stdout: stdout})
 	if err != nil {
-		return fmt.Errorf("docker: attach proxy stdin: %w", err)
+		return att, fmt.Errorf("docker: attach proxy stdin: %w", err)
 	}
-	defer att.Close()
-	if _, err := d.cli.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
-		return fmt.Errorf("docker: start proxy: %w", err)
+	defer func() {
+		if err != nil {
+			att.Close()
+		}
+	}()
+	if _, err = d.cli.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
+		return att, fmt.Errorf("docker: start proxy: %w", err)
 	}
 	if cfgJSON, err = d.listenOnRunNetwork(ctx, runID, id, cfgJSON); err != nil {
-		return err
+		return att, err
 	}
 	_ = att.Conn.SetWriteDeadline(time.Now().Add(proxyConfigWriteTimeout))
-	if _, err := att.Conn.Write(cfgJSON); err != nil {
-		return fmt.Errorf("docker: write proxy config: %w", err)
+	if _, err = att.Conn.Write(cfgJSON); err != nil {
+		return att, fmt.Errorf("docker: write proxy config: %w", err)
 	}
-	if err := att.CloseWrite(); err != nil {
-		return fmt.Errorf("docker: close proxy stdin: %w", err)
+	if err = att.CloseWrite(); err != nil {
+		return att, fmt.Errorf("docker: close proxy stdin: %w", err)
 	}
-	return nil
+	return att, nil
 }
 
 // listenOnRunNetwork returns cfgJSON with its listen address set to the
@@ -409,6 +438,106 @@ func (d *Driver) listenOnRunNetwork(ctx context.Context, runID uuid.UUID, id str
 		return nil, err
 	}
 	return json.Marshal(data)
+}
+
+// proxyNotReadyMessage is what a proxy that stays up but never prints its ready marker is reported as.
+// The failure reason shows in the console, so it reuses the exit-at-config-load text until new copy is
+// settled for this case, although such a proxy has not exited.
+const proxyNotReadyMessage = "docker: proxy exited at config load"
+
+// proxyNotReadyError is a proxy that was still running when the ready bound ran out.
+type proxyNotReadyError struct{ tail string }
+
+func (e *proxyNotReadyError) Error() string { return proxyNotReadyMessage + ": " + e.tail }
+
+// awaitProxyReady reads the proxy's stdout from att until proxy.ReadyMarker, for at most
+// d.proxyReadyBound(). A proxy that exits first ends the stream; its exit code and log tail come back
+// as the same config-load error the exit-watch gave, and one still running at the bound is a
+// *proxyNotReadyError. The stream is read here and not with ContainerLogs because the attach was
+// open before the start, so the marker cannot be missed whatever the log driver keeps.
+func (d *Driver) awaitProxyReady(ctx context.Context, id string, att client.ContainerAttachResult) error {
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	go func() {
+		// The proxy sets no TTY, so the stream is stdcopy-multiplexed. Anything it logs after the
+		// marker is read and dropped until the caller closes att.
+		_, err := stdcopy.StdCopy(pw, io.Discard, att.Reader)
+		pw.CloseWithError(err)
+	}()
+	ready := make(chan bool, 1)
+	go func() {
+		sc := bufio.NewScanner(pr)
+		sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
+		for sc.Scan() {
+			if strings.TrimSpace(sc.Text()) == proxy.ReadyMarker {
+				ready <- true
+				return
+			}
+		}
+		ready <- false
+	}()
+	timer := time.NewTimer(d.proxyReadyBound())
+	defer timer.Stop()
+	select {
+	case ok := <-ready:
+		if ok {
+			return nil
+		}
+		return d.proxyExitedBeforeReady(ctx, id)
+	case <-timer.C:
+		return &proxyNotReadyError{tail: d.proxyExitLogTail(ctx, id)}
+	case <-ctx.Done():
+		return fmt.Errorf("docker: waiting for the proxy to be ready: %w", ctx.Err())
+	}
+}
+
+// proxyExitedBeforeReady names why a proxy's output ended without the marker: it exited, so its exit
+// code and log tail say why. The code can lag the stream, so it is read for up to proxyExitLook.
+func (d *Driver) proxyExitedBeforeReady(ctx context.Context, id string) error {
+	deadline := time.Now().Add(proxyExitLook)
+	for {
+		res, err := d.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+		if err != nil {
+			return fmt.Errorf("docker: the proxy's output ended before it was ready, and it cannot be inspected: %w", err)
+		}
+		if st := res.Container.State; st != nil && !st.Running {
+			return proxyConfigLoadError(st.ExitCode, d.proxyExitLogTail(ctx, id))
+		}
+		if time.Now().After(deadline) {
+			return &proxyNotReadyError{tail: d.proxyExitLogTail(ctx, id)}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("docker: waiting for the proxy to be ready: %w", ctx.Err())
+		case <-time.After(proxyExitPoll):
+		}
+	}
+}
+
+// proxyReadyLabel is the label wardyn-proxy images carry from the release that prints proxy.ReadyMarker.
+const proxyReadyLabel = "io.wardyn.proxy.ready-marker"
+
+// proxyPrintsReadyMarker reports whether image says it prints the ready marker. An organisation's proxy
+// image can be older than this runner (the peers-only fallback is built for that), and such an image
+// never prints it, so a label it lacks, or an image that cannot be read, means the older exit-watch
+// alone, logged once for each image.
+func (d *Driver) proxyPrintsReadyMarker(ctx context.Context, image string) bool {
+	res, err := d.cli.ImageInspect(ctx, image)
+	if err == nil && res.InspectResponse.Config != nil && res.InspectResponse.Config.Labels[proxyReadyLabel] == "1" {
+		return true
+	}
+	if _, seen := d.legacyProxyWarned.LoadOrStore(image, true); !seen {
+		slog.Warn("docker: the proxy image does not announce when it is listening, so a run's agent starts without waiting for it; "+
+			"upgrade the organisation's proxy image to this runner's release", "image", image)
+	}
+	return false
+}
+
+func (d *Driver) proxyReadyBound() time.Duration {
+	if d.proxyReady > 0 {
+		return d.proxyReady
+	}
+	return proxyReadyWait
 }
 
 // watchProxyExit polls id for up to proxyStartWatch, returning a named error

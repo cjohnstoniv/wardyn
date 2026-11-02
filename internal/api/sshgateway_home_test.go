@@ -24,12 +24,13 @@ import (
 // directory and HOME faked by two temp dirs.
 
 // sshLocalSandbox runs each exec's argv on this host from workdir, with only
-// PATH, HOME (when home is non-empty) and the exec's own env set.
-func sshLocalSandbox(t *testing.T, workdir, home string) *sshFakeRunner {
+// PATH, HOME (when home is non-empty), extraEnv and the exec's own env set.
+func sshLocalSandbox(t *testing.T, workdir, home string, extraEnv ...string) *sshFakeRunner {
 	return &sshFakeRunner{execFn: func(spec runner.ExecSpec) (*runner.ExecSession, error) {
 		cmd := exec.Command(spec.Argv[0], spec.Argv[1:]...)
 		cmd.Dir = workdir
 		cmd.Env = append([]string{"PATH=" + os.Getenv("PATH")}, spec.Env...)
+		cmd.Env = append(cmd.Env, extraEnv...)
 		if home != "" {
 			cmd.Env = append(cmd.Env, "HOME="+home)
 		}
@@ -105,6 +106,19 @@ func TestSSHGateway_ExecWithoutHomeStaysInWorkdir(t *testing.T) {
 				t.Fatalf("pwd = %q, want the working directory %q", out, work)
 			}
 		})
+	}
+}
+
+// TestSSHGateway_ExecCdPrintsNothingBeforeTheCommand (#3554): a relative HOME that CDPATH resolves makes a bare
+// `cd` print the directory it entered; the exec's stdout must be the command's output alone, as under sshd.
+func TestSSHGateway_ExecCdPrintsNothingBeforeTheCommand(t *testing.T) {
+	work, base := realDir(t, t.TempDir()), realDir(t, t.TempDir())
+	if err := os.Mkdir(filepath.Join(base, "home"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out := sshHomeOutput(t, sshLocalSandbox(t, work, "home", "CDPATH="+base), "pwd")
+	if want := filepath.Join(base, "home") + "\n"; out != want {
+		t.Fatalf("exec output = %q, want %q (the command's output alone)", out, want)
 	}
 }
 

@@ -10,6 +10,9 @@ import (
 	"math"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,15 +49,19 @@ type lapseGate struct {
 	clock    bootClock
 	ttl      time.Duration
 	state    lapseState
+	start    time.Duration
 	deadline time.Duration
 	reason   string
+	cause    string        // the last renew error, redacted (renewCause)
+	open     chan struct{} // closes on the first successful renew
 	done     chan struct{}
 	onLapse  func(reason string)
 }
 
 func newLapseGate(clock bootClock, ttl time.Duration) *lapseGate {
 	// Closed from start: until a renew succeeds the bound is process start + TTL.
-	return &lapseGate{clock: clock, ttl: ttl, deadline: addSat(clock.Now(), ttl), done: make(chan struct{})}
+	now := clock.Now()
+	return &lapseGate{clock: clock, ttl: ttl, start: now, deadline: addSat(now, ttl), open: make(chan struct{}), done: make(chan struct{})}
 }
 
 // addSat adds without wrapping: a far-future clock reading (the fail-closed
@@ -102,6 +109,9 @@ func (g *lapseGate) renewed(sent time.Duration, apply func()) bool {
 		return false
 	}
 	apply()
+	if g.state == lapseClosed {
+		close(g.open)
+	}
 	g.state, g.deadline = lapseOpen, addSat(sent, g.ttl)
 	return true
 }
@@ -110,6 +120,28 @@ func (g *lapseGate) lapse(reason string) {
 	g.mu.Lock()
 	g.lapseLocked(reason)
 	g.mu.Unlock()
+}
+
+// failed records a failed renew's cause. When the gate is still closed and its next try, at
+// retryAt, would land past start + firstRenewWithin, it lapses now: the proxy never served, so the
+// runner's start fails naming this cause instead of waiting out its own deadline with none.
+func (g *lapseGate) failed(cause string, retryAt time.Duration) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.cause = cause
+	if g.state == lapseClosed && retryAt >= addSat(g.start, firstRenewWithin) {
+		g.lapseLocked(LapseDeadline)
+	}
+}
+
+// lastCause is the last renew error recorded, redacted; "" when none failed.
+func (g *lapseGate) lastCause() string {
+	if g == nil {
+		return ""
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.cause
 }
 
 func (g *lapseGate) lapseLocked(reason string) {
@@ -153,7 +185,8 @@ func refuseClosed(w http.ResponseWriter) {
 
 // lapseRenewTuning is the self-lapse renew cadence (N1): every 10 min ±1 min
 // after a success, every 30 s ±5 s after a failure, until the deadline. Nothing
-// gives up before it; a permanent refusal lapses at once.
+// gives up before it, except a proxy not yet renewed by firstRenewWithin; a
+// permanent refusal lapses at once.
 type lapseRenewTuning struct {
 	success, successJitter time.Duration
 	failure, failureJitter time.Duration
@@ -193,10 +226,14 @@ func runSelfLapseRenewer(ctx context.Context, ts *tokenSource, base string, clie
 			next = tune.success + tune.jitter(tune.successJitter)
 		case errors.As(err, &se) && se.permanent():
 			slog.ErrorContext(ctx, "wardyn-proxy: run token renew refused permanently, lapsing", slog.Int("status", se.Status))
-			g.lapse(LapseRenewRefused)
+			g.mu.Lock()
+			g.cause = renewCause(err, ts.Get())
+			g.lapseLocked(LapseRenewRefused)
+			g.mu.Unlock()
 			return
 		default:
 			slog.ErrorContext(ctx, "wardyn-proxy: run token renew failed, retrying", slog.Duration("retry_in", next), slog.Any("err", err))
+			g.failed(renewCause(err, ts.Get()), addSat(g.clock.Now(), next))
 		}
 		select {
 		case <-ctx.Done():
@@ -210,3 +247,50 @@ func runSelfLapseRenewer(ctx context.Context, ts *tokenSource, base string, clie
 
 // selfLapseTTL is the deadline's span: the run token's lifetime.
 const selfLapseTTL = identity.RunTokenTTL
+
+// firstRenewWithin bounds how long a proxy that has never renewed keeps trying: it never served, so
+// no run is lost, and the runner's start (WARDYN_SANDBOX_START_TIMEOUT, 3m by default) can still
+// report why. Two or three tries fit at the failure cadence.
+const firstRenewWithin = time.Minute
+
+// maxRenewCause caps a recorded renew cause; a termination message holds 4 KiB.
+const maxRenewCause = 512
+
+// renewCause is a renew error fit to leave the proxy: one line of at most maxRenewCause bytes,
+// keeping the error's class and the organisation's scheme://host:port but never the token, the URL's
+// path, query or user info.
+func renewCause(err error, token string) string {
+	msg := err.Error()
+	var ue *url.Error
+	var se *renewStatusError
+	switch {
+	case errors.As(err, &se) && se.permanent():
+		msg = "refused for good: " + se.Error()
+	case errors.As(err, &se):
+		msg = se.Error()
+	case errors.As(err, &ue):
+		origin := "the organisation"
+		if u, perr := url.Parse(ue.URL); perr == nil && u.Host != "" {
+			origin = u.Scheme + "://" + u.Host
+		}
+		msg = ue.Op + " " + origin + ": " + ue.Err.Error()
+	}
+	if token != "" {
+		msg = strings.ReplaceAll(msg, token, "[redacted]")
+	}
+	msg = strings.Join(strings.Fields(msg), " ")
+	if len(msg) > maxRenewCause {
+		msg = strings.ToValidUTF8(msg[:maxRenewCause], "") + "…"
+	}
+	return msg
+}
+
+// WriteLapseCause writes a lapsed proxy's last renew error to path, the container's termination
+// message on a k8s runner, where the runner names a failed start by it. Nothing when none failed.
+func (s *Server) WriteLapseCause(path string) error {
+	cause := s.proxy.lapse.lastCause()
+	if cause == "" {
+		return nil
+	}
+	return os.WriteFile(path, []byte(cause), 0o644)
+}

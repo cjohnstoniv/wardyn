@@ -150,10 +150,11 @@ var adHocReasonLiterals = map[string]string{
 var roleComparisons = map[string]int{
 	"access.go":            2,
 	"attach.go":            1,
+	"attach_authority.go":  1, // the ticket lane's stamped role, as attach.go's
 	"http.go":              3, // isOperator and isSecurityOperator themselves
 	"sshgateway.go":        1,
 	"uigateway.go":         1,
-	"uigateway_session.go": 1,
+	"uigateway_session.go": 2,
 }
 
 // TestNoAdHocAuthz is G4: a refusal is registered and emitted through refuse,

@@ -75,13 +75,19 @@ func recordAssertedActionResultTx(ctx context.Context, tx pgx.Tx, runnerID, runI
 	prepare func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (types.RunnerPendingAction, bool, error) {
 	var claimed bool
 	err := tx.QueryRow(ctx, `SELECT true FROM runners WHERE id = $1 AND state = 'claimed' AND revoked_at IS NULL FOR SHARE`, runnerID).Scan(&claimed)
+	// Permanent, so refused (DR-0436): a runner leaves claimed only for revoked and never returns.
 	if errors.Is(err, pgx.ErrNoRows) {
-		return types.RunnerPendingAction{}, false, ErrNotFound
+		return types.RunnerPendingAction{}, false, fmt.Errorf("%w: %w", ErrRunnerActionRefused, ErrNotFound)
 	}
 	if err != nil {
 		return types.RunnerPendingAction{}, false, fmt.Errorf("store: lock runner: %w", err)
 	}
 	a, err := scanAction(tx.QueryRow(ctx, `SELECT `+actionCols+` FROM runner_pending_actions WHERE id = $1 FOR UPDATE`, actionID))
+	// Permanent, so refused: an action id is learnt only from a committed row and never reused; a purged row
+	// (PurgeAssertedRunnerSubjects) never comes back.
+	if errors.Is(err, ErrNotFound) {
+		return types.RunnerPendingAction{}, false, fmt.Errorf("%w: %w", ErrRunnerActionRefused, err)
+	}
 	if err != nil {
 		return types.RunnerPendingAction{}, false, err
 	}
@@ -89,8 +95,9 @@ func recordAssertedActionResultTx(ctx context.Context, tx pgx.Tx, runnerID, runI
 		return types.RunnerPendingAction{}, false, ErrRunnerActionRefused
 	}
 	if a.AppliedAt != nil {
+		// Permanent, so refused: the first receipt is set once and never cleared.
 		if a.Outcome != outcome || !a.ObservedAt.Equal(observedAt) {
-			return types.RunnerPendingAction{}, false, ErrConflict
+			return types.RunnerPendingAction{}, false, fmt.Errorf("%w: %w", ErrRunnerActionRefused, ErrConflict)
 		}
 		return a, false, tx.Commit(ctx)
 	}

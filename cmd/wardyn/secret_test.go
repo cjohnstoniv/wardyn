@@ -296,3 +296,16 @@ func TestSecretListChoosesItsRoute(t *testing.T) {
 		t.Error("--personal with --shared was accepted")
 	}
 }
+
+// /dev/null is a character device but not a terminal: `secret set` with stdin on it must read the
+// value as piped input, not prompt for it.
+func TestIsTerminal_DevNullIsNotATerminal(t *testing.T) {
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if isTerminal(f) {
+		t.Fatal("isTerminal(/dev/null) = true, want false")
+	}
+}

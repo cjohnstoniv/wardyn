@@ -159,7 +159,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   // dimensions actually change, so a drag is not a re-render per frame.
   const [active, setActive] = React.useState<{ i: string; w: number; h: number } | null>(null);
 
-  const { layout, persistable, apply, save, reset } = useRunLayout(preset);
+  const { layout, persistable, apply, save, reset } = useRunLayout(preset, !!ctx.run.service);
   const { ref, node, width, height } = useCanvasSize();
 
   // Focus mode (design board 2c). The shell learns about it through

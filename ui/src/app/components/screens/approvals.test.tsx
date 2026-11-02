@@ -482,6 +482,16 @@ describe("ApprovalsScreen — egress host not granted (member)", () => {
     expect(screen.getByText(DENIED.APPROVE_BODY("api.example.com"))).toBeInTheDocument();
   });
 
+  it("a personal_walls_host refusal turns Approve off, keeps Deny, and says whose walls block the host", async () => {
+    approveMock.mockRejectedValueOnce(new HttpError(403, "the owner's walls deny api.example.com", "personal_walls_host"));
+    renderMember();
+    await approveInDialog();
+    expect(screen.getByRole("button", { name: /^approve$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^deny$/i })).not.toBeDisabled();
+    expect(await screen.findByTestId("approval-walls-block")).toHaveTextContent("api.example.com");
+    expect(screen.queryByText(DENIED.APPROVE_CHIP)).not.toBeInTheDocument();
+  });
+
   // A 403 with another reason (the Always scope is admin-only) must not read as the host being withheld.
   it.each([
     [409, "approval_not_pending"],

@@ -102,7 +102,7 @@ func (s *Server) seedAuthorizedWorkspace(ctx context.Context, r *http.Request, s
 	if refusal := s.seededImageRefusal(r, seededImageOwner, req.Image); refusal != nil {
 		return workspaceSeed{}, refusal
 	}
-	if msg, reason := s.validateImageBuildRequest(*req); msg != "" {
+	if msg, reason := s.validateImageBuildRequest(ctx, *req); msg != "" {
 		if reason == reasonImageBuilderUnavailable && seed.imageOpen {
 			msg = fmt.Sprintf(workspaceBaseImageNoBuilderMsg, req.Image)
 		}

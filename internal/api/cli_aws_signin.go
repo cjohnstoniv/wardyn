@@ -56,7 +56,11 @@ func (s *Server) componentCLIAdmitted(r *http.Request, adm *componentAdmission, 
 		return componentRefused(*c, i, reasonComponentCLIAWSInjectOff, cliAWSInjectOffRefusal, "is the AWS CLI, which this deployment has turned off.")
 	}
 	adm.awsCLI = true
-	if s.callerOwnsSecret(r, adm, cliSecretName(c.snapshot.ComponentID.String(), providerSSOPart)) {
+	signedIn, err := s.callerOwnsSecret(r, adm, cliSecretName(c.snapshot.ComponentID.String(), providerSSOPart))
+	if err != nil {
+		return &componentRefusal{refusal: ownershipUnreadable(), ordinal: i, source: c.source, id: c.snapshot.ComponentID}
+	}
+	if signedIn {
 		return nil
 	}
 	if !adm.credentials {

@@ -553,6 +553,9 @@ func (d *Driver) waitMainProcess(ctx context.Context, ref string) (int, error) {
 }
 
 func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) {
+	if v := d.vmFor(ctx, ref); v != nil && v.mac {
+		return d.macVMStatus(ctx, v)
+	}
 	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
 	if err != nil {
 		if isNotFound(err) {

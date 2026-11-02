@@ -8,9 +8,10 @@
 import * as React from "react";
 import type { ComponentProps } from "react";
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { health, type ProxyTestResult } from "../../../lib/api/health";
 import type { HostProxyDetection } from "../../../lib/types";
 import { T } from "../../../lib/integrations";
 import { OperatorProvider } from "../../wardyn/operator-context";
@@ -94,6 +95,49 @@ describe("a saved change drops the verdict it made stale", () => {
     await user.click(await screen.findByRole("button", { name: /^save$/i }));
     await waitFor(() => expect(saveSiteConfig).toHaveBeenCalled());
     expect(spy).not.toHaveBeenCalledWith(expect.objectContaining({ redirectProbes: expect.anything() }));
+  });
+});
+
+describe("a redirect test still running when its redirect is saved (#3517)", () => {
+  const x = { from: "a.example.com", to: "mirror-a.corp.internal" };
+  // Starts x's test with a held response, opens the row and saves it with `to`, and returns the test's resolver.
+  // With leaveTab, the egress tab is left and opened again while the test runs, so a fresh tab makes the save.
+  async function testThenSave(to: string, leaveTab = false) {
+    let resolve!: (r: ProxyTestResult) => void;
+    vi.mocked(health.testRedirect).mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const out = renderStep({ siteConfig: { egress_redirects: [x] } });
+    await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    await user.click(await screen.findByRole("button", { name: /^test$/i }));
+    if (leaveTab) {
+      await user.click(screen.getByRole("tab", { name: /host proxy/i }));
+      await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    }
+    await user.click(screen.getByText("a.example.com"));
+    setField(await screen.findByLabelText("To", { selector: "#eg-edit-to" }), to);
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(out.saveSiteConfig).toHaveBeenCalled());
+    return { ...out, resolve };
+  }
+
+  it("a result for the old To is dropped: the row shows no verdict and the gate records none", async () => {
+    const { spy, resolve } = await testThenSave("mirror-b.corp.internal");
+    await act(async () => resolve(reached));
+    expect(screen.queryByText("Reached")).not.toBeInTheDocument();
+    expect(spy).not.toHaveBeenCalledWith({ redirectProbes: expect.objectContaining({ "a.example.com": expect.anything() }) });
+  });
+
+  it("a test that outlives the egress tab is judged against what is saved now, so the gate records none", async () => {
+    const { spy, resolve } = await testThenSave("mirror-b.corp.internal", true);
+    await act(async () => resolve(reached));
+    expect(spy).not.toHaveBeenCalledWith({ redirectProbes: expect.objectContaining({ "a.example.com": expect.anything() }) });
+  });
+
+  it("a result for a redirect saved with the same To is still recorded", async () => {
+    const { spy, resolve } = await testThenSave(x.to);
+    await act(async () => resolve(reached));
+    expect(await screen.findByText("Reached")).toBeInTheDocument();
+    expect(spy).toHaveBeenCalledWith({ redirectProbes: { "a.example.com": reached } });
   });
 });
 

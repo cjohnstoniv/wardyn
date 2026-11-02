@@ -79,11 +79,23 @@ describe("ApprovalsScreen — credentialKind banner per grant shape", () => {
     // The "what" line names the host; the "blast" line carries the shared
     // sshKeyLine, so match the host-qualified line to find a single element.
     await screen.findByText(/sign this run's Git SSH sign-in for github\.com/i);
+    // The title says the proxy signs, as the banner does; it never says a key is written.
+    expect(screen.getByText("Sign Git's SSH sign-in for github.com")).toBeInTheDocument();
+    expect(screen.queryByText(/Write an SSH key for/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Write a private SSH key to disk/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/written to disk/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/attached to the request by the proxy/i)).not.toBeInTheDocument();
     // ssh_key is a non-downscopable key like a PAT, signed with at the proxy —
     // it still earns the "grants git write" capability chip.
     expect(screen.getByText(/grants git write/i)).toBeInTheDocument();
+  });
+
+  it("titles an ssh_key approval with no host as signing, never writing a key to disk", async () => {
+    pending = [{ ...base, requested_scope: { key_secret_ref: "ssh-key-github.com" } }];
+    renderScreen();
+    expect(await screen.findByText("Sign Git's SSH sign-in")).toBeInTheDocument();
+    expect(screen.queryByText(/Write a private SSH key to disk/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Write an SSH key for/i)).not.toBeInTheDocument();
   });
 
   it("renders the git_pat banner for an actual PAT scope", async () => {

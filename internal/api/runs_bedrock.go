@@ -218,6 +218,8 @@ type bedrockAuth struct {
 	// sigv4Hosts are the hosts the proxy re-signs for this lane (WARDYN_AWS_SIGV4_AT_PROXY);
 	// nil when it does not, which is every lane while the switch is off.
 	sigv4Hosts []string
+	// sigv4Why is why the lane is not re-signed (the zero value when it is), for its audit row.
+	sigv4Why awsSigV4Why
 	// residentGrant is the grant the boundary's eligible grants judge a resident captured session
 	// by (awsSSOResidentGrant); nil on every other lane.
 	residentGrant *types.GrantSpec
@@ -579,7 +581,8 @@ func (s *Server) bedrockSSOAuth(ctx context.Context, runID uuid.UUID, blob awsSS
 	}
 	// Re-signing: the placeholder profile and no route to the sign-in hosts; the proxy alone
 	// redeems the session (runs_dispatch_aws_sigv4.go).
-	sigv4Hosts, sigv4 := s.awsSigV4Hosts(hosts)
+	sigv4Hosts, sigv4Why := s.awsSigV4Lane(hosts)
+	sigv4 := sigv4Why.Code == ""
 	switch {
 	case maskErr == nil && sigv4:
 		stageAWSSigV4Files(env, "")
@@ -594,7 +597,7 @@ func (s *Server) bedrockSSOAuth(ctx context.Context, runID uuid.UUID, blob awsSS
 	// compares must be the one this run will actually present.
 	auth := bedrockAuth{env: env, egressHosts: hosts, ssoInject: true,
 		ssoAccountID: blob.AccountID, ssoRoleName: blob.RoleName,
-		ssoRegion: blob.Region, ssoProxyInject: proxyInjected, sigv4Hosts: sigv4Hosts, maskErr: maskErr}
+		ssoRegion: blob.Region, ssoProxyInject: proxyInjected, sigv4Hosts: sigv4Hosts, sigv4Why: sigv4Why, maskErr: maskErr}
 	if !proxyInjected {
 		auth.residentGrant = s.awsSSOResidentGrant(blob.Region)
 	}

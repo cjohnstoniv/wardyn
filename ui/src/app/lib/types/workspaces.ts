@@ -135,15 +135,30 @@ export interface WorkspaceLLMCred {
 // One row of GET /base-images — internal/types.BaseImageEntry on the wire.
 export interface BaseImageEntry {
   id: string;
-  kind: "registry" | "custom" | "byo";
+  kind: "registry" | "custom" | "byo" | "prewrapped";
   name: string;
   image: string;
   steps?: string[];
+  // A prewrapped row's check on the cluster (internal/types.BaseImageCheck); absent on every other kind.
+  check?: BaseImageCheck;
   created_at: string;
   updated_at: string;
 }
 
+// reason is "<code>:<arch>[:<detail>]", or "check_interrupted" for an attempt that ran out of time.
+// On a ready row it names an architecture left out; accepted_arches are those that passed.
+export interface BaseImageCheck {
+  status: "checking" | "ready" | "refused";
+  reason?: string;
+  accepted_arches?: string[];
+  checked_at?: string;
+}
+
 export type WorkspaceSourceKind = "local_dir" | "repo" | "ephemeral";
+
+// How a source's runner binding stands now (Go: WorkspaceSourceRunner*). Anything but
+// "claimed" refuses a run by name.
+export type WorkspaceSourceRunnerState = "claimed" | "revoked" | "missing" | "not_owner";
 
 // One entry in a workspace's composition — a Workspace is one-or-more of
 // these. Field relevance by kind: local_dir -> path/target/writable,
@@ -155,6 +170,15 @@ export interface WorkspaceSourceInput {
   ref?: string;
   target?: string;
   writable?: boolean;
+  // local_dir only: the id of the person's own runner the folder lives on; absent is the
+  // control plane's host.
+  runner_id?: string;
+  // SERVER-OWNED, read-only, on a source with a runner_id: how that binding stands now.
+  // Never sent on a write.
+  runner_state?: WorkspaceSourceRunnerState;
+  // SERVER-OWNED, read-only, on a source with a runner_id: the bound runner's name; absent
+  // when the runner no longer exists. Never sent on a write.
+  runner_name?: string;
   // SERVER-OWNED, read-only: does this deployment's workspace-provider policy
   // admit this repo source today? Present on repo sources only, and ABSENT on a
   // deployment with no provider rows — so `admitted === false` is the ONLY value
@@ -167,7 +191,7 @@ export interface WorkspaceSourceInput {
   clone_target?: string;
 }
 
-export type WorkspaceBaseImageKind = "recommended" | "registry" | "custom" | "byo";
+export type WorkspaceBaseImageKind = "recommended" | "registry" | "custom" | "byo" | "prewrapped";
 
 export interface WorkspaceBaseImageInput {
   kind: WorkspaceBaseImageKind;

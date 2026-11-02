@@ -154,7 +154,8 @@ func (s *Server) queueRunnerFree(ctx context.Context, pool types.RunnerPool, lau
 	// on each (placementDemand.refusal: online, the barrier the run was queued at, limits declared, recording
 	// under a required setting). A ceiling that cannot be read denies nothing here: the start judges the
 	// run against it again.
-	in := placementInput{req: &req, reqCC: launch.Barrier, reqCCOK: launch.Barrier != "", drives: launch.Drives, driveRunner: launch.DriveRunner, noLocal: launch.NoLocal}
+	in := placementInput{req: &req, reqCC: launch.Barrier, reqCCOK: launch.Barrier != "", drives: launch.Drives, driveRunner: launch.DriveRunner, noLocal: launch.NoLocal,
+		mountRunner: launch.MountRunner}
 	if ceiling, err := s.queueCeiling(ctx); err == nil {
 		in.ceiling = ceiling
 	}
@@ -359,8 +360,9 @@ func (s *Server) failStalePromoted(ctx context.Context) error {
 // queueStartLostHint is the line under the FAILED badge of a promoted run whose start died.
 const queueStartLostHint = "This run left the queue, but the server that was starting it stopped before it came up. Start it again."
 
-// queueRefusalCapture is the ResponseWriter a replayed fold writes its refusal to: the start has no
-// client to answer, so the refusal becomes the run's end reason instead.
+// queueRefusalCapture is the ResponseWriter a create path with no client to answer writes to: a replayed
+// fold's refusal becomes the queued run's end reason, and a workload launch (launchWorkload) reads either
+// the 201 it captured or the refusal it records.
 type queueRefusalCapture struct {
 	header http.Header
 	status int

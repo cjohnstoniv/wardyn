@@ -42,6 +42,10 @@ that loop around it.
   Claude model and one by a second Claude session with fresh context, and is
   verified before it's published.
 
+## Where to look in the code
+
+[EXTENDING.md](EXTENDING.md) maps the layers of the code and the interface each extension implements.
+
 ## If you find a problem
 
 Report security issues privately, as [`SECURITY.md`](../SECURITY.md) describes.

@@ -43,13 +43,14 @@ export function AccessCredentials({ access, intent }: { access: AccessFacts | un
   const localRows = new Set((access?.rows ?? []).filter((r) => localMcp && isLocalMcp(r)).map((r) => r.id));
   const secrets = intent ? secretNames(access, intent) : new Map<string, string>();
   const credentials = (access?.credentials ?? []).filter((c) => c.kind === KUBE_API || localRows.has(c.row));
-  const org = useOrgRows(credentials.length > 0);
+  const org = useOrgRows(credentials.some((c) => c.kind === KUBE_API));
   if (credentials.length === 0) return null;
   return (
     <>
       <h4 className="label-eyebrow mt-1">{NR_REVIEW.POLICY_CREDENTIALS}</h4>
       {credentials.map((c) => {
-        const row = org.find((o) => o.id === c.row);
+        // Only a kubectl credential is a cluster's service account; a local MCP server's secret on an organisation row is not.
+        const row = c.kind === KUBE_API ? org.find((o) => o.id === c.row) : undefined;
         const accessRow = access?.rows.find((r) => r.id === c.row);
         const forRow = accessRow && (localRows.has(accessRow.id) ? rowLabel(accessRow, harnessNames) : accessRow.name);
         const delivery = deliveryLabel(c.delivery);

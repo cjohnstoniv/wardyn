@@ -581,7 +581,11 @@ func TestVMSweepRemovesOrphanedSidecarsAndRunDirs(t *testing.T) {
 	r.d.cfg.RunnerID, r.d.cfg.DecisionSink, r.d.cfg.Evidence = rid, newFakeSink(), &memEvidence{m: map[uuid.UUID][]byte{}}
 	spec := vmSpec()
 	spec.Labels = map[string]string{runner.LabelRunnerID: rid} // as runneragent fills them
-	spec.Mounts = []runner.Mount{{Source: t.TempDir(), Target: "/home/agent/work"}}
+	// A runner binds only a member's folder bound to it, inside its owner's --drive-root.
+	work := t.TempDir()
+	r.d.cfg.UserDriveHostRoots = []string{work}
+	spec.UserMountRoots, spec.UserWritable = []string{work}, &runner.UserWritableCeiling{Roots: []string{work}}
+	spec.Mounts = []runner.Mount{{Source: work, Target: "/home/agent/work", MemberAuthored: true, BoundRunner: rid}}
 	sb, err := r.d.CreateSandbox(context.Background(), spec)
 	if err != nil {
 		t.Fatal(err)

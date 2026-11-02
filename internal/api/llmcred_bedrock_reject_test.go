@@ -83,7 +83,11 @@ func TestApproveAlwaysRejects_StaysAsOnMainForBedrockHosts(t *testing.T) {
 	if _, refused := s.approveAlwaysRejects(context.Background(), types.Workspace{})[host]; refused {
 		t.Errorf("approve·always on %s is refused; it must behave as on main", host)
 	}
-	if _, skipped := s.recordPromoteSkipHosts(context.Background(), types.Workspace{})[host]; !skipped {
+	providerHosts, err := s.modelProviderRowHostSet(context.Background())
+	if err != nil {
+		t.Fatalf("modelProviderRowHostSet: %v", err)
+	}
+	if _, skipped := s.recordPromoteSkipHosts(context.Background(), types.Workspace{}, providerHosts)[host]; !skipped {
 		t.Errorf("record promotion does not skip %s", host)
 	}
 }

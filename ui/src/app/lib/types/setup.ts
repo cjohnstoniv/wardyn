@@ -193,6 +193,9 @@ export interface SetupHarnessTool {
   installed?: boolean;
   // Wardyn can hold this harness's tool calls for approval on an autonomous run.
   approval_hold?: boolean;
+  // The roster row's "Sign-ins in a desktop: Not allowed" (AgentProvider.desktop_sign_ins_off): a macOS
+  // desktop cannot block sign-ins, so a macOS VM run of this agent gets no desktop. Absent is allowed.
+  desktop_sign_ins_off?: boolean;
 }
 
 // THIS PRINCIPAL's Azure DevOps access state (internal/api.SCMAccess) —
@@ -341,6 +344,8 @@ export interface SetupStatus {
     multi_agent_tasks?: boolean;
     /** WARDYN_MCP_LOCAL_SERVERS: a component may define an MCP server that runs in the run's sandbox. Optional for fixtures. */
     mcp_local_servers?: boolean;
+    /** WARDYN_MACOS_VMS: a run may ask for a macOS virtual machine. Absent when off. */
+    macos_vms?: boolean;
   };
   checks: SetupCheck[];
   auth: {

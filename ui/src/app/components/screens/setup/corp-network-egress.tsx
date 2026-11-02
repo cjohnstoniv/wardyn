@@ -356,6 +356,11 @@ const duplicateKey = (raw: string): string => raw.trim().toLowerCase();
 // collision would silently shadow one row's probe result with the other's.
 // The plan's own correction rejects index-keying (`:409-415` shifts every
 // later row's verdict); disabling Add on the collision is the smaller fix.
+// Whether r's From still points at the To r names in saved: a test result counts only for the redirect it tested,
+// so a test still running when its To is saved anew is dropped, not recorded as the new target's verdict (#3517).
+export const isSavedRedirect = (saved: readonly EgressRedirect[], r: EgressRedirect): boolean =>
+  saved.some((s) => s.from === r.from && s.to === r.to);
+
 const ADD_REDIRECT_COLLISION = "A redirect already exists for this From — edit that row instead of adding a duplicate.";
 
 function AddRedirectForm({
@@ -429,8 +434,8 @@ export function EgressTab({
   operator: boolean;
   /** Each redirect's last result from a PRIOR visit to this step, keyed by `from` (see setup-screen.tsx's corpGate) — seeds each row back to what it last observed. */
   initialProbes: Record<string, ProxyTestResult>;
-  /** Reports a redirect's terminal probe result upward, by `from`, so it survives leaving/re-entering the step and can gate Next (see steps.ts's corpNetworkGate). */
-  onProbeResult: (from: string, result: ProxyTestResult) => void;
+  /** Reports a redirect's terminal probe result upward, with the redirect it tested (stored by `from`), so it survives leaving/re-entering the step and can gate Next (see steps.ts's corpNetworkGate). */
+  onProbeResult: (r: EgressRedirect, result: ProxyTestResult) => void;
   /** Bumped by the footer's "Test all redirects" gate action (corp-network-step.tsx) — each increment fires testAll once this tab is mounted. */
   testAllSignal?: number;
   /** Fired the moment a bumped testAllSignal is consumed, so the OWNER (which
@@ -457,6 +462,11 @@ export function EgressTab({
     });
     return seeded;
   });
+  // The redirects as last saved: a save that landed sets it at once, ahead of the reload that brings new props.
+  const savedRef = React.useRef(redirects);
+  React.useEffect(() => {
+    savedRef.current = siteConfig?.egress_redirects ?? [];
+  }, [siteConfig]);
 
   // B2: `egress_redirects` is compiled into the sidecar at dispatch, so every
   // save here (add / edit / remove) says when it applies — the same note the
@@ -466,6 +476,7 @@ export function EgressTab({
   const setRedirects = async (next: EgressRedirect[]) => {
     const ok = await mutate({ ...(siteConfig ?? {}), egress_redirects: next }, "Failed to save the egress redirect");
     if (ok) {
+      savedRef.current = next;
       toast.success("Egress redirects saved", { description: SITE.SAVE_NOTE });
       setTestStates((s) => keepCurrentRedirects(siteConfig, { egress_redirects: next }, s) ?? s);
     }
@@ -476,12 +487,13 @@ export function EgressTab({
     setTestStates((s) => ({ ...s, [r.from]: { kind: "running", elapsedSec: 0 } }));
     try {
       const result = await healthApi.testRedirect(r.from, r.to);
+      if (!isSavedRedirect(savedRef.current, r)) return;
       setTestStates((s) => ({ ...s, [r.from]: { kind: "done", result } }));
-      onProbeResult(r.from, result);
+      onProbeResult(r, result);
     } catch (e) {
       // See the proxy tab's runTest: a failed request is not a "blocked" verdict.
       toast.error(`Could not test the ${r.from} redirect`, { description: getErrorMessage(e) });
-      setTestStates((s) => ({ ...s, [r.from]: { kind: "idle" } }));
+      if (isSavedRedirect(savedRef.current, r)) setTestStates((s) => ({ ...s, [r.from]: { kind: "idle" } }));
     }
   };
   const testAll = () => redirects.forEach((r) => runTest(r));

@@ -11,7 +11,7 @@
 # README.md 2354 = ours 2339 + theirs 2344 - base 2329 at the 0.10 W4c merge of ATT-INSTALL onto the train.
 # 0.10 SI-POLICY: docs/README.md 843 adds 16 over 827: the approval-rules task row, measured.
 # docs/README.md 862 = ours 846 + theirs 843 - base 827 at the 0.10 W4c merge of W4f a55a58e89 into the W4X train.
-README.md=2354 share=35
+README.md=2364 share=35 # +10 (rc.10), measured: the one-line install needs a Claude Code image.
 # docs/README.md 597 adds 20: the index row for docs/CREDENTIALS.md.
 # 0.9 F-1519 (#1519): docs/README.md 720 adds 123 over 597 — eleven new index rows for the multi-user
 # split (the admin-only tier table, capabilities, the two-human gate, per-user API tokens, user drives
@@ -24,7 +24,7 @@ README.md=2354 share=35
 # docs/README.md 793 adds 26 over 767 (0.9.3 K7): the organisation-runner-in-a-cluster row, measured.
 # docs/README.md 810 measured at the 0.9.3 forward-port: both index rows above.
 # docs/README.md 846 = ours 829 + theirs 827 - base 810 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
-docs/README.md=862 share=35 # +19 (0.10 Linux VM): the Linux VM sandboxes row
+docs/README.md=958 share=35 # +20 (macOS VM sandboxes row); +19 (0.10 Linux VM): the Linux VM sandboxes row; +76 (rc.8 E5), measured: the extending, design index, high availability, services and workloads rows
 # docs/README.md 824 adds 14 over 810, measured (0.10 LAY-A): the org walls task row.
 # docs/README.md 827 measured (0.10 BOUNDARY): the org walls renamed the Wardyn boundary, with modes.
 # docs/TRY-IT.md 3209 adds 8: the demo/default difference names idle auto-stop.
@@ -32,4 +32,5 @@ docs/README.md=862 share=35 # +19 (0.10 Linux VM): the Linux VM sandboxes row
 # docs/TRY-IT.md 3254 adds 11: the default policy's model access goes through a model provider, not an authored grant.
 # docs/TRY-IT.md 3309 adds 55 over 3254 (setup sets the server runner's limits): make setup sets the server runner's limits; measured.
 # 0.9.4 L8: docs/TRY-IT.md 3371 adds 62 over 3309: the brokered-repo note, the setup-token wording and the rc-safe tag.
-docs/TRY-IT.md=3377 share=35
+# docs/TRY-IT.md 3421 adds 7 over 3414, measured: Setup's image row does not flag the install's pin.
+docs/TRY-IT.md=3421 share=35 # +37 (rc.10), measured: the Claude Code image row, the local-mode setting for the SSO step and two pointers.

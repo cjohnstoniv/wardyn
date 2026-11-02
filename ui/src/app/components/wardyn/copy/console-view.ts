@@ -41,14 +41,17 @@ export const VIEW_DROPPED = {
   STAY: "Stay in the Admin view",
 } as const;
 
+// The User view's nav item for /account. Its page heading is YOUR_ACCOUNT.TITLE; the Admin view's own
+// Settings (/admin/settings) is the deployment's.
 export const NAV = {
-  YOUR_ACCOUNT: "Your account",
+  SETTINGS: "Settings",
 } as const;
 
 // M-5 (#636, packet S-3, approved 2026-09-27): the /account page header's
 // description — every console page header has one, and this says what's here
 // and whose it is, which is the point of the split.
 export const YOUR_ACCOUNT = {
+  TITLE: "Your settings",
   LEDE: "The connections and keys your own runs use. No one else's runs can use them.",
 } as const;
 

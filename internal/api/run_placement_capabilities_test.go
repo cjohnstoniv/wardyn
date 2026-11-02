@@ -298,7 +298,7 @@ func TestPlacementCapability_UnsupportedInterfaceRefused(t *testing.T) {
 
 	ref := s.placementCapabilityRefusal(capsCtx, local, runPlacement{}, pausing, 0)
 	if ref == nil || ref.body.Reason != string(placement.ReasonPlacementCapability) || ref.status != http.StatusUnprocessableEntity ||
-		!strings.Contains(ref.body.Error, "pause_idle_after_sec") {
+		ref.body.Field != "pause_idle_after_sec" {
 		t.Fatalf("refusal = %+v, want 422 placement_capability naming pause_idle_after_sec", ref)
 	}
 	if ref := s.placementCapabilityRefusal(capsCtx, local, runPlacement{}, governanceCeiling{}, 0); ref != nil {

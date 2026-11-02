@@ -93,7 +93,7 @@ func (f *residentFix) authorClass(t *testing.T, run types.AgentRun, c residentCl
 		_, values = f.srv.resolveEnvSecretValues(ctx, run, spec.ProxyConfig.Policy, rows, env)
 		spec.SecretEnv = env
 	case types.GrantFileSecret:
-		spec.ManagedFiles, values, ok = f.srv.resolveFileSecretValues(ctx, run, spec.ProxyConfig.Policy, rows)
+		spec.ManagedFiles, _, values, ok = f.srv.resolveFileSecretValues(ctx, run, spec.ProxyConfig.Policy, rows)
 	default:
 		m := map[string]string{}
 		for _, r := range rows {

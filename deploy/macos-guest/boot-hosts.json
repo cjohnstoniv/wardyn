@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "hosts": [
+    "gdmf.apple.com",
+    "mesu.apple.com",
+    "gateway.icloud.com",
+    "init-kt.apple.com"
+  ]
+}

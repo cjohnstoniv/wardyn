@@ -26,7 +26,7 @@ export const UNSAVED = {
 } as const;
 
 // Single-sourced (AGENTS.md §1 — console copy in one place): the sidebar
-// entry (sidebar-settings-link.tsx) and the account menu's own entry
+// entry (app-shell.tsx) and the account menu's own entry
 // (top-bar.tsx) render the same word.
 export const NAV = {
   SETTINGS: "Settings",

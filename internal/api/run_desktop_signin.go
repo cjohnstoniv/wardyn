@@ -654,7 +654,7 @@ func (s *Server) closeDesktopSignin(ctx context.Context, st store.DesktopSigninS
 	if !ended {
 		return nil
 	}
-	s.endDesktopHold(ctx, run, si.ID.String())
+	s.endDesktopHold(ctx, run, si.ID.String(), nil)
 	shares, _ := st.CountDesktopSigninShares(ctx, si.ID)
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "desktop_signin.close", run.ID.String(), "success",
 		mustJSON(map[string]any{"signin_id": si.ID, "reason": reason, "shares": shares, "agent_resumed": resumed})))

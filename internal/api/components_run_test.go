@@ -749,7 +749,7 @@ func TestRunComponents_Secrets(t *testing.T) {
 		return componentCase{name: "not the caller's own: " + name,
 			setup:  refs(inlineComponent([]string{"svc.example"}, headerSecret(name, "svc.example"))),
 			status: 422, reason: "component_secret_not_owned", previewAdmits: true,
-			sentence: `components[0]: inline.secrets[0].secret_name: you have no secret named "` + name + `" of your own. Store it under Your account first.`}
+			sentence: `components[0]: inline.secrets[0].secret_name: you have no secret named "` + name + `" of your own. Store it in Settings first.`}
 	}
 	orgSecret := func(sec types.ComponentSecret) func(f *componentFixture) []any {
 		return func(f *componentFixture) []any {
@@ -762,7 +762,7 @@ func TestRunComponents_Secrets(t *testing.T) {
 		notOwned("nobody-has-this"),  // nobody has it: the same answer but for the name
 		{name: "an organisation's component with a secret of the person's own", setup: orgSecret(types.ComponentSecret{SecretName: "nobody-has-this"}),
 			status: 422, reason: "component_secret_not_owned", previewAdmits: true,
-			sentence: `components[0]: this component needs a secret of your own named "nobody-has-this". Store it under Your account first.`},
+			sentence: `components[0]: this component needs a secret of your own named "nobody-has-this". Store it in Settings first.`},
 		{name: "a shared secret the operator has not stored", setup: orgSecret(types.ComponentSecret{SecretName: "nobody-has-this", Shared: true}),
 			status: 422, reason: "component_secret_missing", previewAdmits: true,
 			sentence: "components[0]: this component needs a secret your admin has not provided yet. Ask your admin."},

@@ -265,6 +265,43 @@ func TestImageScopeScansWhatAnInputReaches(t *testing.T) {
 	}
 }
 
+// TestImageScopeScansARemovedNestedEmbeddedFile holds the change that deletes a
+// file a package embeds from a subdirectory (internal/db/migrations/*.sql). The
+// file is in no head-tree embed list, so only its place below a package of the
+// image's binaries can reach the scan. The planted paths do not exist.
+func TestImageScopeScansARemovedNestedEmbeddedFile(t *testing.T) {
+	root := repoRoot(t)
+	images := scannedImages(t, root)
+	type plant struct{ img, path string }
+	var plants []plant
+	var files []string
+	for _, img := range images {
+		_, _, mains := imageInputs(t, root, img, images)
+		if len(mains) == 0 {
+			continue
+		}
+		dirs, embeds := goClosure(t, root, nil, mains)
+		for _, e := range embeds {
+			if slices.Contains(dirs, filepath.Dir(e)) {
+				continue
+			}
+			removed := filepath.Join(filepath.Dir(e), "zz-removed-embedded.sql")
+			plants = append(plants, plant{img.name, removed})
+			files = append(files, removed)
+		}
+	}
+	if len(plants) == 0 {
+		t.Fatal("no image embeds a file from a subdirectory: the oracle derived nothing to hold the script")
+	}
+	files = slices.Compact(slices.Sorted(slices.Values(files)))
+	rows := runImageScope(t, root, nil, files)
+	for _, p := range plants {
+		if !rows[p.img][p.path] {
+			t.Errorf("removed embedded file %s: trivy (%s) would be SKIPPED, so the removal of a build input would ship unscanned", p.path, p.img)
+		}
+	}
+}
+
 // TestImageScopeSkipsWhatNoInputReaches is the other half: a scan that always
 // runs is the old behaviour. These changes reach no image, or only some.
 func TestImageScopeSkipsWhatNoInputReaches(t *testing.T) {

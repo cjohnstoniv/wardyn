@@ -93,7 +93,7 @@ test.describe("Your account — no admin cards for a member", () => {
     await gotoConsole(page);
     await navToRoute(page, "/account");
 
-    await expect(page.getByRole("heading", { name: "Your account", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Your settings", level: 1 })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Your SSH keys", level: 3 })).toBeVisible();
 
     for (const title of ["Host", "Model provider", "Model providers", "Workspace providers", "User drives", "Admin SSH keys"]) {

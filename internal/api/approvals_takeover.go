@@ -188,12 +188,15 @@ const takeoverHolds = "takeover:"
 
 // recordingGapNotice is the live-bus body of a recording pause or resume. DesktopHold is the take
 // over's or desktop sign-in's id, the hold it opens or ends on a desktop recording (a sign-in's notice
-// carries no approval).
+// carries no approval). RunEnded, on a resume, is whether the run was over when the hold ended, as
+// the replica that ended it knew (endDesktopHold); absent, as an older replica sends it, the
+// receiving replica reads it from the run.
 type recordingGapNotice struct {
 	ApprovalID  uuid.UUID `json:"approval_id"`
 	Paused      bool      `json:"paused"`
 	Reason      string    `json:"reason"`
 	DesktopHold string    `json:"desktop_hold,omitempty"`
+	RunEnded    *bool     `json:"run_ended,omitempty"`
 }
 
 // writeTakeoverError answers a failed take over or hand back.

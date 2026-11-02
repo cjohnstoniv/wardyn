@@ -16,12 +16,13 @@
 // are the field names themselves (wire keys, rendered mono) and On/Off.
 import * as React from "react";
 import type { CeilingOverlay, GovernanceLimits, GovernanceUnit } from "../../../lib/api/governance";
-import { GOVERNANCE as GOV, MEMBER_DRIVE_DOOR } from "../../../lib/governance-copy";
+import { GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR } from "../../../lib/governance-copy";
 import type { ConfinementClass } from "../../../lib/types";
 import { CC_ORDER } from "../../../lib/types";
 import { Input } from "../../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { CC_META } from "../../wardyn/cc-meta";
+import { MAC_BASES } from "../../wardyn/copy/mac-bases";
 import { Chip } from "../../wardyn/primitives";
 import { Switch } from "../../wardyn/form-primitives";
 import { Segmented } from "../../wardyn/segmented";
@@ -132,7 +133,7 @@ export function BasePicker({
 // ---- overlay rows ---------------------------------------------------------
 
 type Kind = "list" | "number" | "false" | "true" | "barrier";
-type Field = { key: string; kind: Kind; label: string; mono: boolean };
+type Field = { key: string; kind: Kind; label: string; mono: boolean; hint?: string };
 
 const ceilingField = (key: string, kind: Kind): Field => ({ key, kind, label: key, mono: true });
 
@@ -160,8 +161,9 @@ export const LIMIT_FIELDS: Field[] = [
   // The rest of the server's LimitsOverlay. They carry no friendly label (the
   // durations are seconds on the wire), so the wire key names the row, mono,
   // as the ceiling rows do. The autonomy rubric has its own section.
-  ceilingField("deny_ui_apps", "true"),
+  { key: "deny_ui_apps", kind: "true", label: LIMITS_CHIP.UI_APPS, mono: false },
   ceilingField("deny_placements", "list"),
+  { key: "allowed_macos_bases", kind: "list", label: MAC_BASES.B14, mono: false, hint: MAC_BASES.B15 },
   ceilingField("local_self_defined_components", "false"),
   ceilingField("max_cpu_millis", "number"),
   ceilingField("max_memory_mib", "number"),
@@ -264,6 +266,7 @@ export function OverlayRows({
                   {GOV.OVERLAY_INHERITED(shown(f.kind, inherited[f.key]))}
                 </p>
                 {on && <OverlayValue field={f} id={id} value={value[f.key]} disabled={disabled} onChange={(v) => set(f.key, v)} />}
+                {f.hint && <p className="mt-1 text-xs text-muted-foreground">{f.hint}</p>}
               </div>
             </div>
           </div>

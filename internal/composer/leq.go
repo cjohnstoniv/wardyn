@@ -191,16 +191,18 @@ func leqLLMInspection(a, b *types.LLMInspectionSpec) bool {
 }
 
 // leqUIApps holds when every app of a is a (name, port) app of b serving the
-// same path. An empty a is not within a b that names apps: an empty ceiling
-// list is no opinion to Clamp (a run may declare any app), and deny_ui_apps is
-// the limit that removes them.
+// same path, inbound only where b's is and with callers b's names too (a caller
+// added over b is not a narrowing). An empty a is not within a b that names
+// apps: an empty ceiling list is no opinion to Clamp (a run may declare any
+// app), and deny_ui_apps is the limit that removes them.
 func leqUIApps(a, b []types.UIApp) bool {
 	if len(a) == 0 && len(b) > 0 {
 		return false
 	}
 	for _, app := range a {
 		if !slices.ContainsFunc(b, func(x types.UIApp) bool {
-			return x.Name == app.Name && x.Port == app.Port && x.PathOrRoot() == app.PathOrRoot()
+			return x.Name == app.Name && x.Port == app.Port && x.PathOrRoot() == app.PathOrRoot() &&
+				(!app.Inbound || x.Inbound && !slices.ContainsFunc(app.Callers, func(c string) bool { return !slices.Contains(x.Callers, c) }))
 		}) {
 			return false
 		}
@@ -292,6 +294,10 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 	}
 	if slices.ContainsFunc(b.DenyPlacements, func(p types.Placement) bool { return !slices.Contains(a.DenyPlacements, p) }) {
 		return false // a placement denial the base keeps must stay
+	}
+	if len(b.AllowedMacOSBases) > 0 && (len(a.AllowedMacOSBases) == 0 ||
+		slices.ContainsFunc(a.AllowedMacOSBases, func(n string) bool { return !slices.Contains(b.AllowedMacOSBases, n) })) {
+		return false // a macOS base the base does not allow must stay refused
 	}
 	for _, p := range [][2]int{
 		{a.MaxConcurrentRuns, b.MaxConcurrentRuns}, {a.MaxCPUMillis, b.MaxCPUMillis},

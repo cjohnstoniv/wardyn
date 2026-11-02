@@ -29,6 +29,23 @@ func (e RunExperience) Valid() bool {
 	return e == ExperienceBackground || e == ExperienceInteractive
 }
 
+// RunShape is the New Run choice a run was set up from. It is not a second
+// mode: the server checks it against experience, workload and tools, and
+// stores it on the run (AgentRun.Shape), which nothing else reads.
+type RunShape string
+
+// The run shapes.
+const (
+	RunShapeAgentTask   RunShape = "agent_task"
+	RunShapeEnvironment RunShape = "environment"
+	RunShapeApplication RunShape = "application"
+)
+
+// Valid reports whether the shape is one of the three.
+func (s RunShape) Valid() bool {
+	return s == RunShapeAgentTask || s == RunShapeEnvironment || s == RunShapeApplication
+}
+
 // A pool's run-type limit is RunnerPoolLimits.AllowsRunType, and it is called with
 // the run's STORED experience, the value every interactive door reads
 // (AgentRun.Experience, or CreateRunRequest.Experience exactly as it will be

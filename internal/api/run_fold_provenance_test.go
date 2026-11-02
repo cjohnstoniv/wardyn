@@ -122,6 +122,19 @@ func TestRecordPolicyFold(t *testing.T) {
 	}
 }
 
+// TestSpecEntries_SkipsTheDesktop: the fold has no desktop rows, so a spec's desktop directions (the defaults
+// block two) never appear among its entries.
+func TestSpecEntries_SkipsTheDesktop(t *testing.T) {
+	sp := types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}, Desktop: &types.DesktopControls{PasteIn: types.TransferBlocked}}
+	got := specEntries(sp)
+	if !slices.Contains(got, specEntry{fieldAllowed, "pypi.org"}) {
+		t.Errorf("entries = %+v, want the allowed host kept", got)
+	}
+	if slices.ContainsFunc(got, func(e specEntry) bool { return e.field == fieldDesktop }) {
+		t.Errorf("entries = %+v, want no desktop entry", got)
+	}
+}
+
 func TestPolicyProvSource(t *testing.T) {
 	id := uuid.New()
 	for _, tc := range []struct {

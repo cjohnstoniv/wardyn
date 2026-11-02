@@ -194,7 +194,8 @@ func TestLinuxVMRefusalsCreateNothing(t *testing.T) {
 		mutate func(*runner.SandboxSpec)
 		want   string
 	}{
-		{"unknown kind", false, func(s *runner.SandboxSpec) { s.MachineKind = "macos_vm" }, "unknown machine kind"},
+		{"unknown kind", false, func(s *runner.SandboxSpec) { s.MachineKind = "windows_vm" }, "unknown machine kind"},
+		{"macos_vm", false, func(s *runner.SandboxSpec) { s.MachineKind = types.MachineMacOSVM }, "never on Kubernetes"},
 		{"drives", false, func(s *runner.SandboxSpec) {
 			s.Drives = []types.DriveMount{{ObjectName: "c"}}
 		}, "no drives"},
@@ -211,5 +212,25 @@ func TestLinuxVMRefusalsCreateNothing(t *testing.T) {
 			}
 			assertNoCreates(t, cs, before)
 		})
+	}
+}
+
+// A macos_vm run is refused before anything is created whether or not this runner offers Linux VMs.
+func TestCreateSandboxRefusesMacOSVMWhateverTheLinuxVMSwitch(t *testing.T) {
+	for _, enableLinux := range []bool{false, true} {
+		var d *Driver
+		var cs *fake.Clientset
+		if enableLinux {
+			d, cs = vmDriver(t, Config{})
+		} else {
+			d, cs = newTestDriver(t, Config{})
+		}
+		before := len(cs.Actions())
+		spec := testSandboxSpec()
+		spec.MachineKind = types.MachineMacOSVM
+		if _, err := d.CreateSandbox(context.Background(), spec); err == nil || !strings.Contains(err.Error(), "never on Kubernetes") {
+			t.Fatalf("linux VM switch %v: err = %v, want the macos_vm refusal", enableLinux, err)
+		}
+		assertNoCreates(t, cs, before)
 	}
 }

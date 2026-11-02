@@ -10,6 +10,7 @@
 import { setup } from "../../../../../lib/api/setup";
 import type { SetupHarnessTool } from "../../../../../lib/types/setup";
 import { NR_HARNESSES } from "../../../../wardyn/copy/new-run/harnesses";
+import { harnessRefusal, type MacOSOffer } from "../run/macos-offer";
 
 export interface Roster {
   harnesses: SetupHarnessTool[];
@@ -17,6 +18,8 @@ export interface Roster {
   sets: string[][];
   /** WARDYN_MULTI_AGENT_TASKS: an Autonomous run may hold several agents. Absent is off. */
   multiAgent?: boolean;
+  /** Set while the draft is a macOS VM: the harnesses its Macs' base cannot serve are refused like an uninstalled one. */
+  macOS?: MacOSOffer;
 }
 
 export async function loadRoster(): Promise<Roster> {
@@ -37,6 +40,8 @@ export function unavailableReason(row: SetupHarnessTool, chosen: readonly string
   if (row.enabled === false) return NR_HARNESSES.NOT_ENABLED;
   if (row.installed === false) return NR_HARNESSES.NOT_INSTALLED(row.display);
   if (row.providers_ungranted) return NR_HARNESSES.NO_PROVIDER(row.display);
+  const mac = harnessRefusal(roster.macOS, row.id, row.display);
+  if (mac) return mac;
   // "Your own tools" brings no CLI, so the server leaves it out of the set it looks for (harnessCLIs).
   const needs = [...chosen, row.id].filter((id) => id !== "none");
   if (chosen.length > 0 && needs.length > 1 && !roster.sets.some((s) => carriesAll(s, needs))) {

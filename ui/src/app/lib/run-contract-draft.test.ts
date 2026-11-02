@@ -120,6 +120,12 @@ describe("run contract draft", () => {
     }
   });
 
+  it("lists allow_all_egress true as a widening set and false as a narrow, as the server does", () => {
+    const op = (v: boolean) => overrideItems({ egress: { allow_all_egress: v } }).map((i) => `${i.kind} ${i.op}`);
+    expect(op(true)).toEqual(["allow_all_egress set"]);
+    expect(op(false)).toEqual(["allow_all_egress narrow"]);
+  });
+
   it("lists edits in the narrowing table's terms, as the server does", () => {
     expect(
       overrideItems({

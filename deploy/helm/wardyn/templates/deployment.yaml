@@ -49,10 +49,10 @@ out; guarded, the 0.5 defaults simply carry forward.
 {{- $internalPort := int (.Values.service.internalPort | default 8443) -}}
 {{- /* basePath (WARDYN_BASE_PATH): wardynd serves /healthz and /readyz under it,
 so the probes must follow whatever the CONTAINER actually gets — an explicit
-env.WARDYN_BASE_PATH wins (line ~233 below only adds it from basePath when
-env doesn't already set it), basePath otherwise. Same precedence both places,
-so the probes and the daemon can never disagree. */ -}}
-{{- $basePath := (get .Values.env "WARDYN_BASE_PATH") | default .Values.basePath | default "" -}}
+env.WARDYN_BASE_PATH wins, even an empty one (the WARDYN_BASE_PATH entry below is
+added from basePath only when env has no such key), basePath otherwise. Same
+precedence both places, so the probes and the daemon can never disagree. */ -}}
+{{- $basePath := ternary (get .Values.env "WARDYN_BASE_PATH") (.Values.basePath | default "") (hasKey .Values.env "WARDYN_BASE_PATH") -}}
 {{- /*
 startupProbe budget: wardynd's /healthz binds only after its fixed 30s connect and its migration
 (WARDYN_MIGRATE_TIMEOUT, default 5m) finish, so the probe window must outlast both or the kubelet

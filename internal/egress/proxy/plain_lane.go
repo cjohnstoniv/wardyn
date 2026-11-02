@@ -78,7 +78,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		if log != nil {
 			p.sink.emit(*log)
 		}
-		setEgressRefusalHeaders(w, egressRefusalPending, host)
+		setEgressRefusalHeadersWithReason(w, egressRefusalPending, host, decisionReason(log))
 		writeApprovalPending(w, log)
 		return
 	}

@@ -11,6 +11,7 @@
 import * as React from "react";
 import { Button } from "../../../../ui/button";
 import { HttpError } from "../../../../../lib/api/core";
+import { walls as wallsApi, type PersonalWallsSpec } from "../../../../../lib/api/walls";
 import { useModelAccessDoor, useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
@@ -23,9 +24,9 @@ import type { HarnessSetFact } from "../../../../../lib/types/new-run-contract";
 import { intentToWire } from "../../draft/intent-to-wire";
 import type { RunIntent } from "../../draft/run-intent";
 import { checkFailureText, useDraftIdentity, useIntentChecks } from "../../draft/use-intent-checks";
-import { useLocalIssues, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
+import { useLocalIssues, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../../new-run-route";
 import { stepIssues } from "../../lenses/local-issues";
-import { needsSetup } from "../../lenses/tools-lens";
+import { narrowsEgress, needsSetup, setNarrowEgress } from "../../lenses/tools-lens";
 import { flowSteps, STEP_HEADING_ID, StepShell } from "../step-shell";
 import { AddTools } from "./catalogue";
 import { githubRepos } from "./tool-access";
@@ -82,6 +83,14 @@ export function ToolsStep({ go }: NewRunScreenProps) {
   const door = useModelAccessDoor();
   const ado = useAdoConnect();
   const ownRows = useOwnTokenRows(status);
+  const dispatch = useNewRunDispatch();
+  // The person's own walls, to name a host they leave out; a caller with none (or no way to read them) sees no such line.
+  const [walls, setWalls] = React.useState<PersonalWallsSpec>();
+  React.useEffect(() => {
+    let alive = true;
+    wallsApi.get().then((w) => alive && setWalls(w.spec), () => undefined);
+    return () => { alive = false; };
+  }, []);
   // Connected: the shell reads the person's Azure DevOps answer again, and the server is asked about this run again.
   const connectAdo = async (connect: () => Promise<boolean | null>) => {
     if (await connect()) {
@@ -182,6 +191,8 @@ export function ToolsStep({ go }: NewRunScreenProps) {
             names={names}
             providers={providers}
             ownRows={ownRows}
+            walls={walls}
+            narrow={{ on: narrowsEgress(draft.intent), onChange: (on) => dispatch({ type: "edit", apply: (i) => setNarrowEgress(i, on) }) }}
             ado={{
               access: status?.unreachable ? undefined : (status?.scm_access as SCMAccessPAT | undefined),
               policyCaps: adoCaps,

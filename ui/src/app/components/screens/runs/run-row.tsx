@@ -25,7 +25,8 @@ import { repoLabel, rowHeadline } from "./board-groups";
 import { glyphKindFor, RowGlyph } from "./row-glyph";
 import { rowPresentation, waitingSignInPresentation } from "./runs-model";
 import { mayReadSignIn } from "../run-detail/sign-in-run";
-import { RUNS_ROW_ACTION } from "../../wardyn/copy/runs-landing";
+import { RUNS_ROW_ACTION, RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
+import { serviceBadge } from "../../wardyn/copy/run-service";
 import { SCHEDULED_RUN } from "../../wardyn/copy/scheduled-runs";
 import { scheduledMeta, signInTimedOut } from "./scheduled-state";
 import { REVIVE, REVIVING } from "../../wardyn/copy/run-lifetime";
@@ -112,6 +113,9 @@ export function RunRow({ run }: { run: AgentRun }) {
                 : REVIVE
               : null;
   const meta = metaLine(run, adminView, own);
+  // A live service says its health in place of "Running". Unhealthy is a warning chip on the same row, under Running:
+  // a report is not a request, so the row never moves to Needs you or borrows its glyph.
+  const health = p.word === RUNS_ROW_WORD.RUNNING ? serviceBadge(run) : undefined;
 
   return (
     <div
@@ -151,6 +155,8 @@ export function RunRow({ run }: { run: AgentRun }) {
             </Chip>
           ) : run.lost_reason === "ended" ? (
             <Chip tone="neutral">{p.word}</Chip>
+          ) : health ? (
+            <RunStateBadge state={run.state} word={health.word} tone={health.tone} pulse={health.pulse} />
           ) : (
             <RunStateBadge state={run.state} word={p.word} />
           )}

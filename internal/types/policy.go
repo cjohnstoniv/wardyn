@@ -370,6 +370,9 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	out.WorkspaceMounts = append([]WorkspaceMount(nil), s.WorkspaceMounts...)
 	out.WorkspaceRepos = append([]WorkspaceRepo(nil), s.WorkspaceRepos...)
 	out.UIApps = append([]UIApp(nil), s.UIApps...)
+	for i := range out.UIApps {
+		out.UIApps[i].Callers = append([]string(nil), s.UIApps[i].Callers...)
+	}
 	out.ToolRules = append([]ToolRule(nil), s.ToolRules...)
 	out.AzureDevOpsCapabilities = append([]adoscope.Capability(nil), s.AzureDevOpsCapabilities...)
 	out.GitHubCapabilities = append([]ghscope.Capability(nil), s.GitHubCapabilities...)
@@ -504,15 +507,22 @@ type WorkspaceRepo struct {
 }
 
 // UIApp is one declared in-sandbox HTTP app the UI gateway may relay to (RunPolicySpec.UIApps).
-// Three fields, no command string: Name identifies the app to the operator and the launcher
+// Name, Port and Path, plus the optional inbound declaration below; no command string: Name identifies the app to the operator and the launcher
 // convention (/usr/local/bin/wardyn-ui-<name>), constrained to a short lower-case slug since it
 // reaches a filesystem path and a URL query (never a slash, space, or ".."); Port is the port the
 // app listens on INSIDE the sandbox, on 127.0.0.1 (the sandbox has no other reachable address);
 // Path is where the app's UI lives, the landing path after the gateway's ticket handoff — empty means "/".
+//
+// Inbound marks the port as callable from outside the run through the gateway, with or without a terminal;
+// Callers names who besides the run's owner may call it (user:<sub or email>, group:<name> or
+// service:<name>) and is meaningful only with Inbound. Both are part of the effective policy, so they are
+// fixed at create.
 type UIApp struct {
-	Name string `json:"name"`
-	Port int    `json:"port"`
-	Path string `json:"path,omitempty"`
+	Name    string   `json:"name"`
+	Port    int      `json:"port"`
+	Path    string   `json:"path,omitempty"`
+	Inbound bool     `json:"inbound,omitempty"`
+	Callers []string `json:"callers,omitempty"`
 }
 
 // PathOrRoot is Path with the empty default applied.

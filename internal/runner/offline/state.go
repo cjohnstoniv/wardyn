@@ -47,9 +47,17 @@ type localRun struct {
 	// OutputCapture records that the create handed the sandbox an output
 	// writer; a retirement that says the run had no output is refused when set.
 	OutputCapture bool `json:"output_capture,omitempty"`
+	// MachineKind is the kind the create was for (SandboxSpec.MachineKind, normalised: "" is a
+	// container), so a later runnerd can tell a sandbox it cannot enumerate from one that is gone.
+	MachineKind types.MachineKind `json:"machine_kind,omitempty"`
 	// Tombstone marks a retired run the org acknowledged retiring, compacted to its identity
 	// (compactRetired): only RunID, Ref, Lease.RunID and Retired remain.
 	Tombstone bool `json:"tombstone,omitempty"`
+	// OutputPending is the durable obligation to release a retired run's output: set with the
+	// retirement receipt, cleared when a release succeeds, and kept through compaction, so a failed
+	// release is retried at runner start and on every reconnect. The release still refuses
+	// unsettled output.
+	OutputPending bool `json:"output_pending,omitempty"`
 }
 
 // proxyExit is one ProxyExited obligation and the evidence that recorded it.

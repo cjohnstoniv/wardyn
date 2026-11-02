@@ -23,7 +23,7 @@ import (
 // DriveProbeUnreadable — every outcome, including a Bound claim, answers
 // DriveProbeUnknown rather than guess.
 func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner.DriveProbe, error) {
-	claim, err := d.clientset.CoreV1().PersistentVolumeClaims(d.cfg.Namespace).
+	claim, err := d.clientset.CoreV1().PersistentVolumeClaims(d.defaultNamespace()).
 		Get(ctx, drive.ObjectName, metav1.GetOptions{})
 	if err != nil {
 		return runner.DriveProbe{Result: runner.DriveProbeUnknown,

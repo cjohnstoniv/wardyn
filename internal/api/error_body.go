@@ -27,6 +27,10 @@ type errorBody struct {
 	// Field names the request field a 400 is ABOUT (a dotted path into the body, e.g. azure.endpoint),
 	// so the console can put the sentence under that field. Present only on a refusal that names one.
 	Field string `json:"field,omitempty"`
+	// Feature names the capability feature a 403/422 capability_feature refusal is ABOUT (capabilities.go
+	// feature* ids, e.g. inbound, custom_component), so the console branches on it instead of the message.
+	// Present only on a capability_feature refusal.
+	Feature string `json:"feature,omitempty"`
 	// Detail narrows a reason that covers several causes (attach_local_unavailable: flag_off,
 	// not_your_runner, runner_too_old, runner_offline). Present only on such a reason.
 	Detail string `json:"detail,omitempty"`

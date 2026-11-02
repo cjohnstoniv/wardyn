@@ -140,7 +140,7 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 	}
 	p.resp.EndsCapLoosened = s.endsCapLoosenedFor(r.Context(), planned, exempt, p.resp)
 	if p.endChanged && (p.resp.EndsAt == nil || (run.EndsAt != nil && p.resp.EndsAt.After(*run.EndsAt))) {
-		if ref := s.extendRefusal(r, run); ref != nil {
+		if ref := s.extendRefusal(r.Context(), run, principalFromRequest(r) == run.CreatedBy); ref != nil {
 			s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, "run.end.set", run.ID.String(),
 				"denied", mustJSON(map[string]any{"subject": run.CreatedBy, "reason": ref.reason})))
 			writeErrorReason(w, ref.status, ref.reason, ref.msg)

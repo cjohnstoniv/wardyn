@@ -15,12 +15,14 @@ import (
 
 // MemberDriveAdminItem is one person's drive in GET /api/v1/drives/member.
 type MemberDriveAdminItem struct {
-	ID           uuid.UUID          `json:"id"`
-	Name         string             `json:"name"`
-	Owner        string             `json:"owner"`
-	Backend      types.DriveBackend `json:"backend"`
-	SizeMiB      int                `json:"size_mib,omitempty"`
-	StorageClass string             `json:"storage_class,omitempty"`
+	ID      uuid.UUID          `json:"id"`
+	Name    string             `json:"name"`
+	Owner   string             `json:"owner"`
+	Backend types.DriveBackend `json:"backend"`
+	// HomeRunnerID is the Mac a mac_disk drive's disk is kept on (types.UserDrive.HomeRunnerID); absent on every other backend.
+	HomeRunnerID *uuid.UUID `json:"home_runner_id,omitempty"`
+	SizeMiB      int        `json:"size_mib,omitempty"`
+	StorageClass string     `json:"storage_class,omitempty"`
 	// Object is the Docker volume or claim name the drive stores into.
 	Object    string    `json:"object"`
 	CreatedAt time.Time `json:"created_at"`

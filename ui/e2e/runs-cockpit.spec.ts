@@ -68,6 +68,37 @@ test.describe("Run cockpit — the layout catalog offers no dead controls", () =
   });
 });
 
+// #3777: a service run's live layout always shows the Service panel, and a saved layout with no Service entry reads as
+// one that predates the panel. A panel the person removed is stored as a marker entry, so a reload does not add it back.
+// The run read is spliced to carry a service (the seeded backend has none) and the layout row is held in the test.
+test.describe("Run cockpit — a removed Service panel stays removed", () => {
+  test("a reload does not add the panel back", async ({ page }) => {
+    let saved: { widget: string; w: number; h: number }[] = [];
+    await page.route(/\/api\/v1\/runs\/[0-9a-f-]{36}(\?.*)?$/, async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const res = await route.fetch();
+      await route.fulfill({ response: res, json: { ...(await res.json()), service: { restart: "never" } } });
+    });
+    await page.route(/\/api\/v1\/me\/run-layout(\?.*)?$/, async (route) => {
+      if (route.request().method() === "PUT") saved = (route.request().postDataJSON() as { layout: typeof saved }).layout;
+      await route.fulfill({ json: { preset: "live", layout: saved } });
+    });
+
+    await openRuns(page);
+    await page.getByText("e2e fixture 2").click(); // RUNNING
+    await expect(page.getByTestId("service-panel")).toBeVisible();
+
+    await page.getByRole("button", { name: "Edit layout" }).click();
+    await page.getByRole("button", { name: RUN_COCKPIT.removeWidget("Service") }).click();
+    await expect(page.getByTestId("service-panel")).toHaveCount(0);
+    await expect.poll(() => saved.some((w) => w.widget === "service" && w.w === 1 && w.h === 1)).toBe(true);
+
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
+    await expect(page.getByTestId("service-panel")).toHaveCount(0);
+  });
+});
+
 // R4-F142: the canvas tile's FILL rule was written for a widget that renders ONE
 // root card (`[&>section]:flex-1`), and the terminal widget renders a FRAGMENT —
 // the M7(b) failure block, then the pane. The rule therefore caught the failure

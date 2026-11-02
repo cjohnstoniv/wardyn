@@ -358,6 +358,31 @@ describe("Drive editor, Team drive", () => {
     expect(upsertGrantMock).not.toHaveBeenCalled();
   });
 
+  it("a group removed after its allocation was stored by a failed save is unallocated on the retry", async () => {
+    await renderScreen(snapshot({ drives: [drive({ id: "other", team: false, name: "home" })], grants: [] }));
+    await userEvent.click(await screen.findByRole("button", { name: DRIVES.NEW_CTA }));
+    await userEvent.type(screen.getByLabelText(DRIVES.FIELD_NAME), "team-scratch");
+    await userEvent.click(screen.getByRole("switch", { name: DRIVES.FIELD_TEAM }));
+    await addGroup("alpha");
+    await addGroup("beta");
+    // The drive and alpha are stored; beta is refused.
+    upsertGrantMock.mockImplementation(async (g: { subject: string }) => {
+      if (g.subject === "beta") throw new HttpError(503, "try again");
+      return { grant: grant({ id: "ga", subject: g.subject, drive_id: "new1" }), replaced: false };
+    });
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
+    await waitFor(() => expect(upsertGrantMock).toHaveBeenCalledTimes(2));
+    expect(deleteGrantMock).not.toHaveBeenCalled();
+
+    await userEvent.click(editor().getByRole("button", { name: `${PERM.REMOVE} alpha` }));
+    upsertGrantMock.mockImplementation(async (g: { subject: string }) => ({ grant: grant({ id: "gb", subject: g.subject, drive_id: "new1" }), replaced: false }));
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.SAVE_CTA }));
+    await waitFor(() => expect(deleteGrantMock).toHaveBeenCalledWith("ga"));
+    // The drive is not created twice.
+    expect(createDriveMock).toHaveBeenCalledTimes(1);
+    expect(updateDriveMock).toHaveBeenCalledWith("new1", expect.anything(), false);
+  });
+
   it("changing Team drive on an allocated drive meets the server's refusal, not the re-home confirm", async () => {
     const refusal = "team cannot change while the drive is allocated to 1 subject: remove its allocations first";
     updateDriveMock.mockRejectedValue(new HttpError(409, refusal));

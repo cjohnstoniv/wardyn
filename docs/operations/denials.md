@@ -40,6 +40,10 @@ read.
     "deployment"}` without a site-config read.
   - `GET /runs/{id}` carries `policy`: the profile the run was launched under, else the
     deployment's `policy_help`, else the key is absent. A store failure omits it.
+  - `POST /runs` and `POST /runs/preflight` carry `warning_context` (0.10) beside `warnings`:
+    one `{warning_index, kind, policy}` per warning that says the ceiling's allowlist dropped a
+    host, `kind` `egress_policy_drop`, `policy` the object above. Absent for an operator and when
+    nothing was dropped. The console names the policy and its contact under that warning.
   - `GET /runs/{id}/policy` carries `provenance` (0.10): per top-level policy key, the layer
     that set its value at create.
     - `layer`: `deployment` or `profile` (a ceiling set or narrowed it), `member` (the run's own

@@ -30,7 +30,7 @@ func TestSetupStatusNamesTheConsoleForUnmetModelAccess(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	console := "use the console: Your account → Your model connections (" + srv.URL + "/account)"
+	console := "use the console: Settings → Your model connections (" + srv.URL + "/account)"
 	for _, want := range []string{
 		"→ " + console + "\n",
 		"→ " + console + " — Sign in to AWS\n",

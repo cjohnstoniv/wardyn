@@ -75,7 +75,7 @@ func TestWaitPodIP_UnplaceableProxyWaitsForRoomThenStarts(t *testing.T) {
 		}
 		return proxyReadyStatus()
 	})
-	ip, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil)
+	ip, err := d.waitPodIP(context.Background(), d.newStartClock(), d.defaultNamespace(), podName, nil)
 	if err != nil || ip != "10.244.0.7" {
 		t.Fatalf("waitPodIP = %q, %v; want the IP once room frees, well past StartTimeout", ip, err)
 	}
@@ -126,7 +126,7 @@ func TestWaitPodIP_PlacementThatExcludesEveryNodeFailsAtTheStartBudget(t *testin
 				}
 				return proxyReadyStatus()
 			})
-			_, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil)
+			_, err := d.waitPodIP(context.Background(), d.newStartClock(), d.defaultNamespace(), podName, nil)
 			if !tc.wantErr {
 				if err != nil {
 					t.Fatalf("waitPodIP: %v; want the wait to run past StartTimeout and start", err)
@@ -154,10 +154,10 @@ func TestWaitContainerRunning_AgentOnlyContention(t *testing.T) {
 		return agentRunningStatus()
 	})
 	clock := d.newStartClock()
-	if _, err := d.waitPodIP(context.Background(), clock, proxy, nil); err != nil {
+	if _, err := d.waitPodIP(context.Background(), clock, d.defaultNamespace(), proxy, nil); err != nil {
 		t.Fatalf("proxy wait: %v", err)
 	}
-	if err := d.waitContainerRunning(context.Background(), clock, agent, mainContainerName, nil); err != nil {
+	if err := d.waitContainerRunning(context.Background(), clock, d.defaultNamespace(), agent, mainContainerName, nil); err != nil {
 		t.Fatalf("agent wait = %v; want the start once room frees", err)
 	}
 }
@@ -171,7 +171,7 @@ func TestWaitPodIP_CapacityWaitOffFailsAtStartTimeout(t *testing.T) {
 		return unschedulableStatus("0/1 nodes are available: 1 Insufficient cpu.")
 	})
 	start := time.Now()
-	_, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil)
+	_, err := d.waitPodIP(context.Background(), d.newStartClock(), d.defaultNamespace(), podName, nil)
 	elapsed := time.Since(start)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "Insufficient cpu") {
 		t.Fatalf("err = %v; want a deadline error carrying the scheduler's reason", err)
@@ -191,7 +191,7 @@ func TestWaitPodIP_NotReadyFailsAtStartTimeoutNamingTheContainerReason(t *testin
 			Name: proxyContainerName, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
 		}}}
 	})
-	_, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil)
+	_, err := d.waitPodIP(context.Background(), d.newStartClock(), d.defaultNamespace(), podName, nil)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "did not start within") ||
 		!strings.Contains(err.Error(), proxyContainerName+": ContainerCreating") {
 		t.Fatalf("err = %v; want a start-timeout error naming %s: ContainerCreating", err, proxyContainerName)
@@ -205,7 +205,7 @@ func TestWaitPodIP_CapacityWaitExpires(t *testing.T) {
 	const podName = "wardyn-proxy-expire"
 	podByAge(cs, podName, func(time.Duration) corev1.PodStatus { return unschedulableStatus("0/1 nodes are available") })
 	start := time.Now()
-	_, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil)
+	_, err := d.waitPodIP(context.Background(), d.newStartClock(), d.defaultNamespace(), podName, nil)
 	elapsed := time.Since(start)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "no machine had room") {
 		t.Fatalf("err = %v; want the capacity-wait expiry", err)
@@ -226,7 +226,7 @@ func TestWaitPodIP_TerminalErrorStillFailsFast(t *testing.T) {
 		}}}
 	})
 	start := time.Now()
-	_, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil)
+	_, err := d.waitPodIP(context.Background(), d.newStartClock(), d.defaultNamespace(), podName, nil)
 	if err == nil || !strings.Contains(err.Error(), "ImagePullBackOff") {
 		t.Fatalf("err = %v; want the terminal pull error", err)
 	}
@@ -244,7 +244,7 @@ func TestWaitPodIP_CancellationDuringCapacityWait(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(300*time.Millisecond, cancel)
 	start := time.Now()
-	_, err := d.waitPodIP(ctx, d.newStartClock(), podName, nil)
+	_, err := d.waitPodIP(ctx, d.newStartClock(), d.defaultNamespace(), podName, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v; want context.Canceled", err)
 	}
@@ -316,7 +316,7 @@ func blockedAPIDriver(t *testing.T) *Driver {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Driver{clientset: client, cfg: Config{Namespace: "blocked", StartTimeout: 20 * time.Millisecond, CapacityWait: 20 * time.Millisecond}}
+	return &Driver{clientset: client, cfg: Config{Namespaces: []string{"blocked"}, StartTimeout: 20 * time.Millisecond, CapacityWait: 20 * time.Millisecond}}
 }
 
 // A pod read the API server never answers still ends at the start budget: the poll bounds each
@@ -327,7 +327,7 @@ func TestWaitPodIP_BlockedGETFailsWithinBudgets(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // frees a still-blocked read so the fake server can close
 	done := make(chan error, 1)
-	go func() { _, err := d.waitPodIP(ctx, d.newStartClock(), "blocked-proxy", nil); done <- err }()
+	go func() { _, err := d.waitPodIP(ctx, d.newStartClock(), "blocked", "blocked-proxy", nil); done <- err }()
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "did not start within") {
@@ -343,7 +343,9 @@ func TestWaitContainerRunning_BlockedGETFailsWithinBudgets(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- d.waitContainerRunning(ctx, d.newStartClock(), "blocked-agent", "agent", nil) }()
+	go func() {
+		done <- d.waitContainerRunning(ctx, d.newStartClock(), "blocked", "blocked-agent", "agent", nil)
+	}()
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "did not start within") {
@@ -399,7 +401,7 @@ func TestWaitPodIP_TransientGetErrorIsNotYet(t *testing.T) {
 	const podName = "wardyn-proxy-blip"
 	podByAge(cs, podName, func(time.Duration) corev1.PodStatus { return proxyReadyStatus() })
 	reads := failGets(cs, podName, 1, apierrors.NewServiceUnavailable("control plane rolling"))
-	ip, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil)
+	ip, err := d.waitPodIP(context.Background(), d.newStartClock(), d.defaultNamespace(), podName, nil)
 	if err != nil || ip != "10.244.0.7" || *reads < 2 {
 		t.Fatalf("waitPodIP = %q, %v after %d reads; want the IP after one retried 503", ip, err, *reads)
 	}
@@ -410,7 +412,7 @@ func TestWaitContainerRunning_TransientGetErrorIsNotYet(t *testing.T) {
 	const podName = "wardyn-agent-blip"
 	podByAge(cs, podName, func(time.Duration) corev1.PodStatus { return agentRunningStatus() })
 	reads := failGets(cs, podName, 1, apierrors.NewServiceUnavailable("control plane rolling"))
-	if err := d.waitContainerRunning(context.Background(), d.newStartClock(), podName, mainContainerName, nil); err != nil || *reads < 2 {
+	if err := d.waitContainerRunning(context.Background(), d.newStartClock(), d.defaultNamespace(), podName, mainContainerName, nil); err != nil || *reads < 2 {
 		t.Fatalf("waitContainerRunning = %v after %d reads; want the start after one retried 503", err, *reads)
 	}
 }
@@ -420,7 +422,7 @@ func TestWaitPodIP_PersistentGetErrorExpiresNamingIt(t *testing.T) {
 	d, cs := newTestDriver(t, Config{StartTimeout: 400 * time.Millisecond})
 	const podName = "wardyn-proxy-down"
 	failGets(cs, podName, 1<<30, apierrors.NewServiceUnavailable("control plane rolling"))
-	_, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil)
+	_, err := d.waitPodIP(context.Background(), d.newStartClock(), d.defaultNamespace(), podName, nil)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "control plane rolling") {
 		t.Fatalf("err = %v; want a deadline error naming the last apiserver answer", err)
 	}
@@ -430,7 +432,7 @@ func TestWaitContainerRunning_PersistentGetErrorExpiresNamingIt(t *testing.T) {
 	d, cs := newTestDriver(t, Config{StartTimeout: 400 * time.Millisecond})
 	const podName = "wardyn-agent-down"
 	failGets(cs, podName, 1<<30, apierrors.NewServiceUnavailable("control plane rolling"))
-	err := d.waitContainerRunning(context.Background(), d.newStartClock(), podName, mainContainerName, nil)
+	err := d.waitContainerRunning(context.Background(), d.newStartClock(), d.defaultNamespace(), podName, mainContainerName, nil)
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "control plane rolling") {
 		t.Fatalf("err = %v; want a deadline error naming the last apiserver answer", err)
 	}
@@ -441,10 +443,10 @@ func TestWaits_PodDeletedStaysFatal(t *testing.T) {
 	d, cs := newTestDriver(t, Config{StartTimeout: 5 * time.Second})
 	const podName = "wardyn-pod-gone"
 	failGets(cs, podName, 1<<30, apierrors.NewNotFound(corev1.Resource("pods"), podName))
-	if _, err := d.waitPodIP(context.Background(), d.newStartClock(), podName, nil); !apierrors.IsNotFound(err) {
+	if _, err := d.waitPodIP(context.Background(), d.newStartClock(), d.defaultNamespace(), podName, nil); !apierrors.IsNotFound(err) {
 		t.Fatalf("waitPodIP err = %v; want NotFound", err)
 	}
-	if err := d.waitContainerRunning(context.Background(), d.newStartClock(), podName, mainContainerName, nil); !apierrors.IsNotFound(err) {
+	if err := d.waitContainerRunning(context.Background(), d.newStartClock(), d.defaultNamespace(), podName, mainContainerName, nil); !apierrors.IsNotFound(err) {
 		t.Fatalf("waitContainerRunning err = %v; want NotFound", err)
 	}
 }

@@ -38,6 +38,17 @@ func TestRunnerRuntimeAdvertisesEveryProxySetting(t *testing.T) {
 	}
 }
 
+// The Docker runtime binds a member's folder bound to it (the driver's G1-G5 checks) and says so; a
+// runtime that does not, Kubernetes, never does. The org places no bound folder on a runner without it.
+func TestRunnerRuntimeAdvertisesBoundFolders(t *testing.T) {
+	if !composedCaps(t, runtimeExtras{noPosture: true, arch: "amd64", boundFolders: true}).BoundFolders {
+		t.Fatal("the Docker runtime's caps do not say bound_folders")
+	}
+	if composedCaps(t, runtimeExtras{noPosture: true, arch: "amd64"}).BoundFolders {
+		t.Fatal("a runtime that binds no folder says bound_folders")
+	}
+}
+
 // composedCaps is the caps event the composed runtime with extra sends the organisation.
 func composedCaps(t *testing.T, extra runtimeExtras) runnerwire.Caps {
 	t.Helper()

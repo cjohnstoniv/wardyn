@@ -157,9 +157,16 @@ type RunnerPoolMember struct {
 	// an organization's in an organization pool.
 	RunnerID *uuid.UUID `json:"runner_id,omitempty"`
 	// RemoteRunnerID is a remote-hosted runner (either scope).
-	RemoteRunnerID string    `json:"remote_runner_id,omitempty"`
-	AddedAt        time.Time `json:"added_at"`
+	RemoteRunnerID string `json:"remote_runner_id,omitempty"`
+	// RunsNamespace is the Kubernetes namespace an organization runner serves this pool in; empty is the
+	// runner's default (first) namespace. It is set when the runner is added and never changes after.
+	RunsNamespace string    `json:"runs_namespace,omitempty"`
+	AddedAt       time.Time `json:"added_at"`
 }
+
+// ValidRunsNamespace reports whether ns can be a member's RunsNamespace: empty, or a Kubernetes
+// namespace name (a DNS-1123 label of at most 63 characters).
+func ValidRunsNamespace(ns string) bool { return ns == "" || CLIKubectlNamespace(ns) }
 
 // Validate refuses a member that names no runner, two runners, a person's
 // self-hosted runner in an organization pool, or an organization's runner in a

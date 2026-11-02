@@ -6,8 +6,10 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -45,6 +47,30 @@ func awsSSORefusal(err error) (awsSSORefusedError, bool) {
 	var refused awsSSORefusedError
 	ok := errors.As(err, &refused)
 	return refused, ok
+}
+
+// awsSSORefusedState is mpBRRefused for AWS's answer detail, with how long after signedIn
+// it came; a sign-in of unknown time names none.
+func (s *Server) awsSSORefusedState(detail string, signedIn time.Time) string {
+	age := ""
+	if d := s.cfg.Now().Sub(signedIn); !signedIn.IsZero() && d > 0 {
+		age = fmt.Sprintf(mpBRRefusedAge, awsSSOSignInAge(d))
+	}
+	return fmt.Sprintf(mpBRRefused, detail, age)
+}
+
+// awsSSOSignInAge is d in the coarsest unit that still reads as a session length.
+func awsSSOSignInAge(d time.Duration) string {
+	switch m := int(d.Round(time.Minute) / time.Minute); {
+	case m < 2:
+		return "a minute"
+	case m < 120:
+		return fmt.Sprintf("%d minutes", m)
+	case m < 48*60:
+		return fmt.Sprintf("%d hours", m/60)
+	default:
+		return fmt.Sprintf("%d days", m/(24*60))
+	}
 }
 
 // awsSSOExpiredFailure is the failure a non-spent renewal error returns when the
@@ -91,6 +117,9 @@ func (s *Server) auditAWSSSORenewalFailure(ctx context.Context, scope awsSSOScop
 		data["registration"] = "absent"
 		if blob.ClientID != "" && blob.ClientSecret != "" {
 			data["registration"] = "present"
+		}
+		if !blob.CapturedAt.IsZero() {
+			data["signed_in_sec"] = int64(s.cfg.Now().Sub(blob.CapturedAt) / time.Second)
 		}
 		s.markAWSSSORefused(ctx, awsSSOTokenFingerprint(blob.RefreshToken), scope.owner, refused.detail())
 	}

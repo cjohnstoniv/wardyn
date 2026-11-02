@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -129,6 +130,27 @@ func TestAWSSigV4Scope(t *testing.T) {
 		"amazonaws.com":                                   "",
 		"bedrock-runtime.us-east-1.amazonaws.com.cn":      "",
 		"example.com":                                     "",
+		// Bedrock PrivateLink: the endpoint id, then AWS's generated token and any zone.
+		"vpce-0123456789abcdef0-lj2wisx3.bedrock-runtime.us-east-1.vpce.amazonaws.com":            "bedrock us-east-1",
+		"vpce-0123456789abcdef0-lj2wisx3-us-east-1a.bedrock-runtime.us-east-1.vpce.amazonaws.com": "bedrock us-east-1",
+		"vpce-0123456789abcdef0.bedrock-agent-runtime.eu-west-1.vpce.amazonaws.com":               "bedrock eu-west-1",
+		"vpce-1a2b3c4d.bedrock.us-west-2.vpce.amazonaws.com":                                      "bedrock us-west-2",
+		"VPCE-0123456789ABCDEF0.Bedrock-Runtime.US-EAST-1.vpce.amazonaws.com.":                    "bedrock us-east-1",
+		// A customer's endpoint service, another service, S3, and every malformed shape stay off.
+		"vpce-0123456789abcdef0-lj2wisx3.vpce-svc-0123456789abcdef0.us-east-1.vpce.amazonaws.com": "",
+		"vpce-0123456789abcdef0.sts.us-east-1.vpce.amazonaws.com":                                 "",
+		"vpce-0123456789abcdef0.s3.us-east-1.vpce.amazonaws.com":                                  "",
+		"bucket.vpce-0123456789abcdef0.s3.us-east-1.vpce.amazonaws.com":                           "",
+		"x.vpce-0123456789abcdef0.bedrock-runtime.us-east-1.vpce.amazonaws.com":                   "",
+		"vpce-0123456789abcdef0-bedrock-runtime.us-east-1.vpce.amazonaws.com":                     "",
+		"vpce-0123456789abcdef0.bedrock-runtime-fips.us-east-1.vpce.amazonaws.com":                "",
+		"vpce-0123456789abcdef0.bedrock-runtime.us-east-1.vpce.amazonaws.com.cn":                  "",
+		"vpce-*.bedrock-runtime.us-east-1.vpce.amazonaws.com":                                     "",
+		"vpce-0123456789abcdef0--x.bedrock-runtime.us-east-1.vpce.amazonaws.com":                  "",
+		"vpce-0123.bedrock-runtime.us-east-1.vpce.amazonaws.com":                                  "",
+		"vpce-0123456789abcdef0.bedrock-runtime.vpce.amazonaws.com":                               "",
+		"bedrock-runtime.us-east-1.vpce.amazonaws.com":                                            "",
+		"vpce-0123456789abcdef0.bedrock-runtime.us-gov-west-1.vpce.amazonaws.com":                 "",
 	} {
 		service, region, ok := AWSSigV4Scope(host)
 		got := ""
@@ -155,10 +177,11 @@ const (
 	sigv4STSLondon  = "sts.eu-west-2.amazonaws.com"
 	sigv4STSFIPS    = "sts-fips.us-east-1.amazonaws.com"
 	sigv4IAM        = "iam.amazonaws.com"
+	sigv4BedrockPL  = "vpce-0123456789abcdef0-lj2wisx3.bedrock-runtime.eu-west-1.vpce.amazonaws.com"
 )
 
 // sigv4Hosts are the hosts the harness's run re-signs on.
-var sigv4Hosts = []string{sigv4Bedrock, sigv4S3, sigv4STS, sigv4STSLondon, sigv4STSFIPS, sigv4IAM}
+var sigv4Hosts = []string{sigv4Bedrock, sigv4S3, sigv4STS, sigv4STSLondon, sigv4STSFIPS, sigv4IAM, sigv4BedrockPL}
 
 // sigv4Arrival is one request as the fake AWS service read it.
 type sigv4Arrival struct {
@@ -404,6 +427,15 @@ func TestAWSSigV4_ReSignsAllowedRequests(t *testing.T) {
 			t.Fatalf("no %s allow row: %s", ruleSourceAWSSigV4, log)
 		}
 	})
+	t.Run("bedrock PrivateLink endpoint signed for its own host and region", func(t *testing.T) {
+		h := newSigV4Harness(t)
+		rec := h.send(t, sandboxRequest(t, "POST", sigv4BedrockPL, "/model/m/converse", `{}`,
+			map[string]string{"Content-Type": "application/json"}, "", "bedrock", "eu-west-1", ""), sigv4BedrockPL)
+		a := h.mustReSign(t, rec, "bedrock")
+		if a.host != sigv4BedrockPL || !strings.Contains(a.header.Get("Authorization"), "/eu-west-1/bedrock/aws4_request") {
+			t.Fatalf("AWS saw host %q Authorization %q, want the endpoint host and its eu-west-1 bedrock scope", a.host, a.header.Get("Authorization"))
+		}
+	})
 	t.Run("bedrock response stream relayed", func(t *testing.T) {
 		h := newSigV4Harness(t)
 		h.respond = func(w http.ResponseWriter, _ *http.Request) {
@@ -553,6 +585,53 @@ func TestAWSSigV4_RefusesWhenCredentialsFail(t *testing.T) {
 			if len(h.arrivals()) != 0 {
 				t.Fatal("a request with no role credentials reached AWS")
 			}
+		})
+	}
+}
+
+// Neither the role credentials nor the sign-in they are redeemed with reach the sandbox's response
+// (its headers or its body), the decision log or the proxy's own log: not on a re-signed request,
+// and not on one refused because the credentials could not be had.
+func TestAWSSigV4_CredentialsReachNoResponseOrLog(t *testing.T) {
+	var logged lockedBuffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	check := func(t *testing.T, h *sigv4Harness, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		var headers strings.Builder
+		_ = rec.Header().Write(&headers)
+		seen := map[string]string{"the response headers": headers.String(), "the response body": rec.Body.String(),
+			"the decision log": h.log(), "the proxy's log": logged.String()}
+		for _, secret := range []string{sigv4RoleKey, sigv4RoleSecret, sigv4RoleToken, sigv4Bearer} {
+			for where, text := range seen {
+				if strings.Contains(text, secret) {
+					t.Errorf("%q reached %s", secret, where)
+				}
+			}
+		}
+	}
+	converse := func(t *testing.T) *http.Request {
+		return sandboxRequest(t, "POST", sigv4Bedrock, "/model/m/converse", `{}`, nil, "", "bedrock", "us-east-1", "")
+	}
+	t.Run("re-signed", func(t *testing.T) {
+		h := newSigV4Harness(t)
+		rec := h.send(t, converse(t), sigv4Bedrock)
+		h.mustReSign(t, rec, "bedrock")
+		check(t, h, rec)
+	})
+	for name, set := range map[string]func(h *sigv4Harness){
+		"control plane refuses": func(h *sigv4Harness) { h.cpStatus.Store(http.StatusForbidden) },
+		"portal refuses":        func(h *sigv4Harness) { h.portalCode.Store(http.StatusUnauthorized) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newSigV4Harness(t)
+			set(h)
+			rec := h.send(t, converse(t), sigv4Bedrock)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status %d body %s, want 403", rec.Code, rec.Body)
+			}
+			check(t, h, rec)
 		})
 	}
 }

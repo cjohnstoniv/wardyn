@@ -103,7 +103,9 @@ spec:
             - --substrate=k8s
             - {{ printf "--org=%s" .Values.org | quote }}
             - --state-dir={{ $stateSub }}
-            - {{ printf "--runs-namespace=%s" .Values.runsNamespace | quote }}
+            {{- range include "runnerd.runsNamespaces" . | fromJsonArray }}
+            - {{ printf "--runs-namespace=%s" . | quote }}
+            {{- end }}
             - {{ printf "--relay-service=%s.%s.svc.%s" $fullname .Release.Namespace .Values.clusterDomain | quote }}
             - --relay-listen=$(POD_IP)
             - {{ printf "--proxy-image=%s:%s" .Values.proxyImage.repository $tag | quote }}
@@ -150,6 +152,10 @@ spec:
             {{- end }}
             {{- with $hardDeny }}
             - name: WARDYN_RUNNERD_HARD_DENY_CIDRS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.workloads.namespaces }}
+            - name: WARDYN_RUNNERD_WORKLOAD_NAMESPACES
               value: {{ join "," . | quote }}
             {{- end }}
             # The kubelet-floor check reads the node list the ClusterRole always grants.

@@ -78,10 +78,11 @@ type runnerHarness struct {
 	clock    time.Time
 }
 
-func newRunnerHarness(t *testing.T) *runnerHarness {
+// newRunnerHarness builds a runner over namespaces (testNamespace when none are given).
+func newRunnerHarness(t *testing.T, namespaces ...string) *runnerHarness {
 	t.Helper()
 	h := &runnerHarness{ev: &memEvidence{m: map[uuid.UUID][]byte{}}, runID: uuid.New(), clock: time.Now().UTC()}
-	cfg := Config{RunnerID: testRunnerID, Arch: "amd64", Evidence: h.ev, HardDeny: &HardDeny{Suffixes: []string{"svc", "cluster.local"}},
+	cfg := Config{Namespaces: namespaces, RunnerID: testRunnerID, Arch: "amd64", Evidence: h.ev, HardDeny: &HardDeny{Suffixes: []string{"svc", "cluster.local"}},
 		Fence: func(_ uuid.UUID, ip string) { h.fences = append(h.fences, ip) }}
 	h.d, h.cs = newTestDriver(t, cfg)
 	// Each read of the clock moves it a minute on, so a bounded evidence wait ends after one pass.
@@ -905,7 +906,7 @@ func TestRunnerBootRefusesOverrides(t *testing.T) {
 	} {
 		cs := fake.NewClientset()
 		installCanaryReactor(t, cs, false)
-		cfg.Namespace, cfg.ProxyImage = testNamespace, "wardyn/wardyn-proxy:test"
+		cfg.Namespaces, cfg.ProxyImage = []string{testNamespace}, "wardyn/wardyn-proxy:test"
 		if _, err := newWithClient(context.Background(), cs, testRestConfig(), cfg); err == nil {
 			t.Fatalf("runner booted with %+v", cfg)
 		}

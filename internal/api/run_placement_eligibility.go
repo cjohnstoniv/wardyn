@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -189,6 +190,14 @@ func (s *Server) localAdmittedPlan(r *http.Request, req createRunRequest,
 		// A bound drive's runner is the run's (kindTargets holds the run to it).
 		VerifiedLocalPaths: s.drivePathsOn(boundMountRunner(drives), drives),
 	}
+	// A bound folder's runner is the run's too (kindTargets holds the run to it).
+	mountRunner, refusal := boundMountsRunner(p.Spec.Mounts)
+	if refusal != nil {
+		return placement.LocalPlan{}, refusal
+	}
+	if mountRunner != nil {
+		p.VerifiedLocalPaths = mergePaths(p.VerifiedLocalPaths, s.mountPathsOn(*mountRunner, p.Spec.Mounts))
+	}
 	for _, c := range comps.attached {
 		if !c.snapshot.SelfDefined && c.snapshot.Definition.LocalMCP() {
 			return placement.LocalPlan{}, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), localMCPOrgServerMsg)
@@ -252,8 +261,9 @@ type boundLocalPath struct {
 // when its stored runner binding is the candidate runner and the path lies
 // inside one of that runner's allowed roots. bound is keyed by the plan path
 // ("SandboxSpec.Mounts[0]", "SandboxSpec.Drives[0]"). A drive's second place is
-// bound to one runner (drivePathsOn); local_dir sources carry no runner column
-// yet, so every local mount still refuses placement_local_path.
+// bound to one runner (drivePathsOn), and so is a local_dir source that names
+// its owner's runner (mountPathsOn); every other local mount still refuses
+// placement_local_path.
 func verifiedLocalPaths(candidate uuid.UUID, roots []string, bound map[string]boundLocalPath) map[string]bool {
 	out := map[string]bool{}
 	for key, b := range bound {
@@ -279,8 +289,13 @@ func withinAnyRoot(path string, roots []string) bool {
 // people's own runners: never placed there, permanently. Its volume or claim
 // would live on that person's machine, which deleting the drive cannot reach.
 // No later proof a pool's runners give about local paths (verifiedLocalPaths)
-// relaxes it.
+// relaxes it. A disk drive is the one kept on a person's machine, which its
+// delete reaches (reclaim_drive): it is on a pool only when the pool holds the
+// Mac it is kept on, and on no other.
 func memberDriveNeverOnPool(pool store.RunnerPoolCatalogueRow, d types.UserDrive) bool {
+	if d.Backend == types.DriveBackendMacDisk {
+		return d.HomeRunnerID == nil || !slices.Contains(pool.OwnRunnerIDs, *d.HomeRunnerID)
+	}
 	return d.OwnerSubject != "" && pool.Pool.Scope == types.RunnerPoolUser && len(pool.ExecutorIDs) == 0
 }
 
@@ -293,9 +308,27 @@ func localTrustedOutputRequest(req createRunRequest) bool {
 	}
 }
 
+// ownershipUnreadable is the refusal for an ownership proof the secret store
+// could not answer: the fixed retryable 503 the policy path gives, never a
+// verdict on the credential.
+func ownershipUnreadable() *runRefusal {
+	return runError(http.StatusServiceUnavailable, reasonSinkStoreUnavailable, errSecretStoreUnavailable.Error())
+}
+
+// ownershipFault is errSecretStoreUnavailable when ref is ownershipUnreadable,
+// for a dispatch caller with no HTTP answer that must not read the fault as a
+// credential with no provenance.
+func ownershipFault(ref *runRefusal) error {
+	if ref != nil && ref.status == http.StatusServiceUnavailable && ref.body.Reason == reasonSinkStoreUnavailable {
+		return errSecretStoreUnavailable
+	}
+	return nil
+}
+
 // localGrantOrigin proves the owner's actual namespace before any grant write.
 // Shared component scopes remain operator material even if the owner happens
 // to store a colliding name. No secret value or fallback Get is used as proof.
+// A store fault during that proof is ownershipUnreadable, never operator material.
 func (s *Server) localGrantOrigin(ctx context.Context, owner string, g types.GrantSpec) (placement.CredentialOrigin, *runRefusal) {
 	origin := placement.CredentialOrigin{GrantKind: g.Kind}
 	switch g.Kind {
@@ -307,6 +340,9 @@ func (s *Server) localGrantOrigin(ctx context.Context, owner string, g types.Gra
 		return origin, nil
 	}
 	if captured, handled, err := s.localCapturedGrantOrigin(ctx, owner, g); handled {
+		if errors.Is(err, errSecretStoreUnavailable) {
+			return origin, ownershipUnreadable()
+		}
 		if err != nil {
 			return origin, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), "eligible_grants: captured credential provenance cannot be resolved")
 		}
@@ -317,7 +353,13 @@ func (s *Server) localGrantOrigin(ctx context.Context, owner string, g types.Gra
 		return origin, runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), fmt.Sprintf("eligible_grants: %s credential provenance cannot be resolved", g.Kind))
 	}
 	origin.Stored = true
-	own := owner != "" && s.ownsSecretMemoized(ctx, owner, name) && (knownHosts == "" || s.ownsSecretMemoized(ctx, owner, knownHosts))
+	own, err := s.ownsSecretChecked(ctx, owner, name)
+	if err == nil && own && knownHosts != "" {
+		own, err = s.ownsSecretChecked(ctx, owner, knownHosts)
+	}
+	if err != nil {
+		return origin, ownershipUnreadable()
+	}
 	if g.Kind == types.GrantAPIKey && apiKeyScopeShared(g.Scope) {
 		own = false
 	}

@@ -22,6 +22,8 @@ import (
 // (recordingReader). Anyone else, a run that does not exist and a key with no recording all get the
 // recording read's own 404 (recording.Handler), byte for byte, so the check is no existence oracle;
 // a refused caller on a run that exists leaves the not_owner row recordingAuthorizer leaves.
+// A successful check of another person's run (an operator's) writes a recording.read row whose data names the
+// operation chain_check; a check of one's own run writes none.
 // A broken range answers 200 with ok=false, as the whole sweep does. One check walks at a time per
 // replica; a second is a 503 recording_chain_busy.
 func (s *Server) handleRecordingChain(w http.ResponseWriter, r *http.Request) {
@@ -78,8 +80,18 @@ func (s *Server) handleRecordingChain(w http.ResponseWriter, r *http.Request) {
 		slog.ErrorContext(r.Context(), "wardyn: AUDIT CHAIN BROKEN in a recording's range",
 			slog.Int64("broken_seq", rng.BrokenSeq), slog.String("reason", rng.Reason))
 	}
+	// A check reads the recording's metadata, not its content; an operator's check of another person's run is
+	// audited under the recording read's own action, marked as the check, as a replay of it is. An owner's
+	// check of their own run is not.
+	if run.CreatedBy != principalFromRequest(r) {
+		actorType, actor := actorFromRequest(r)
+		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, auditRecordingRead, key, "success", mustJSON(map[string]string{"operation": recordingChainOperation})))
+	}
 	writeJSON(w, http.StatusOK, rng)
 }
+
+// recordingChainOperation marks a recording.read row as the chain check, a metadata read, not a replay.
+const recordingChainOperation = "chain_check"
 
 // recordingNotFound is recording.Handler's refusal, the same status and body.
 func recordingNotFound(w http.ResponseWriter) {

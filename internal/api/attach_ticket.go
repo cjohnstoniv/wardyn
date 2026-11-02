@@ -51,17 +51,21 @@ const attachTicketTTL = 30 * time.Second
 // the ticket records: redemption asks whether a revoke landed since. The email is the verified identity's, from ctx — "" on the admin-token
 // and local lanes — because a revoke may name the email instead of the subject.
 func mintAttachTicket(ctx context.Context, st store.Store, runID uuid.UUID, actorType types.ActorType, principal, role string, issue oidc.Issue) (string, error) {
-	var via *types.DelegationVia
+	return storeAttachTicket(ctx, st, store.AttachTicket{RunID: runID, ActorType: actorType, Principal: principal, Role: role}, issue)
+}
+
+// storeAttachTicket is mintAttachTicket for a ticket whose run, actor, role and (for an app's ticket, inbound_ticket.go)
+// app and caller are set: it adds the portal, the authority and the email from ctx and issue.
+func storeAttachTicket(ctx context.Context, st store.Store, t store.AttachTicket, issue oidc.Issue) (string, error) {
 	if v, ok := audit.DelegationFrom(ctx); ok {
-		via = &v
+		t.Via = &v
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
 	tok := hex.EncodeToString(raw)
-	t := store.AttachTicket{RunID: runID, ActorType: actorType, Principal: principal, Role: role, Via: via,
-		AuthorizedAt: issue.At.UTC(), RevSeq: issue.Seq, Email: oidcEmailFromContext(ctx)}
+	t.AuthorizedAt, t.RevSeq, t.Email = issue.At.UTC(), issue.Seq, oidcEmailFromContext(ctx)
 	if err := st.MintAttachTicket(ctx, tok, t, issue.At, issue.At.Add(attachTicketTTL)); err != nil {
 		return "", err
 	}
@@ -84,7 +88,7 @@ func consumeAttachTicket(ctx context.Context, st store.Store, tok string, runID 
 		return ticketActor{}, false, nil
 	}
 	return ticketActor{actorType: t.ActorType, principal: t.Principal, role: t.Role, via: t.Via,
-		authorizedAt: t.AuthorizedAt, revSeq: t.RevSeq, email: t.Email}, true, nil
+		authorizedAt: t.AuthorizedAt, revSeq: t.RevSeq, email: t.Email, caller: t.Caller, app: t.App}, true, nil
 }
 
 // ticketActorCtxKey carries the ticket's minting principal through to
@@ -114,6 +118,9 @@ type ticketActor struct {
 	revSeq       int64
 	email        string
 	grantExpires time.Time
+	// app is the one UI app a ticket minted for an app opens, and caller the callers entry of that inbound
+	// app its person matched (inbound_ticket.go); a ticket with either never opens a terminal.
+	caller, app string
 }
 
 func withTicketActor(ctx context.Context, a ticketActor) context.Context {
@@ -195,10 +202,16 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	if s.isOperator(r.Context()) && !asSponsor {
 		role = oidc.RoleAdmin
 	}
+	s.issueAttachTicket(w, r, store.AttachTicket{RunID: id, ActorType: at, Principal: principal, Role: role}, authorizedAt)
+}
+
+// issueAttachTicket is the end both ticket routes share (this file's and inbound_ticket.go's): it mints t,
+// admitted at authorizedAt, and answers {ticket, expires_in_seconds}.
+func (s *Server) issueAttachTicket(w http.ResponseWriter, r *http.Request, t store.AttachTicket, authorizedAt time.Time) {
 	// The ticket's sequence is read before the late re-check, so a cut that commits between the two draws
 	// a sequence above the one recorded and ends the ticket (the order handleCreateAPIToken and
 	// handleAddSSHKey keep).
-	issue, err := s.ticketIssue(r.Context(), principal, authorizedAt)
+	issue, err := s.ticketIssue(r.Context(), t.Principal, authorizedAt)
 	if err != nil {
 		writeServerError(w, r, "mint attach ticket", err)
 		return
@@ -207,7 +220,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	// ticket behind: the same late re-check as handleCreateAPIToken, and the same
 	// fail-closed answer when it cannot be made.
 	if s.cfg.SessionRevocations != nil {
-		revoked, rerr := s.admittedRevoked(r.Context(), principal, authorizedAt)
+		revoked, rerr := s.admittedRevoked(r.Context(), t.Principal, authorizedAt)
 		if rerr != nil {
 			writeServerError(w, r, "mint attach ticket", rerr)
 			return
@@ -217,9 +230,9 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	tok, err := mintAttachTicket(r.Context(), s.cfg.Store, id, at, principal, role, issue)
+	tok, err := storeAttachTicket(r.Context(), s.cfg.Store, t, issue)
 	if err != nil {
-		slog.ErrorContext(r.Context(), "wardynd: mint attach ticket failed", "run_id", id, "err", err)
+		slog.ErrorContext(r.Context(), "wardynd: mint attach ticket failed", "run_id", t.RunID, "err", err)
 		writeErrorReason(w, http.StatusInternalServerError, reasonAttachTicketMintFailed, "mint attach ticket failed")
 		return
 	}

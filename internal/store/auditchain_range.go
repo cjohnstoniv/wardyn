@@ -49,8 +49,8 @@ var _ AuditChainRangeVerifier = PG{}
 // VerifyRecordingAuditRange walks the chain over the recording's range with the rules
 // VerifyAuditChain uses (auditChainWalk), starting from the row just before the range, so a row
 // removed at the range's edge breaks the first link as one removed inside it would. With no row
-// before the range (retention dropped it), the first link is the range's own and only the whole
-// sweep can check it. One repeatable-read snapshot, paged like the whole sweep.
+// before the range (retention dropped it), the walk starts as the whole sweep does, from the newest
+// retention drop's recorded tail. One repeatable-read snapshot, paged like the whole sweep.
 func (s PG) VerifyRecordingAuditRange(ctx context.Context, runID uuid.UUID, key string, from time.Time) (AuditChainRange, bool, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
@@ -74,7 +74,6 @@ func (s PG) VerifyRecordingAuditRange(ctx context.Context, runID uuid.UUID, key 
 
 	rng := AuditChainRange{FirstSeq: lo, LastSeq: hi, Marks: []AuditChainMark{}}
 	w := newAuditChainWalk()
-	w.ranged = true
 	// The row before the range is read for its hash only: it is the first link's other end.
 	var predHash string
 	err = tx.QueryRow(ctx, `SELECT COALESCE(row_hash, '') FROM audit_events WHERE seq < $1 ORDER BY seq DESC LIMIT 1`, lo).Scan(&predHash)
@@ -83,7 +82,20 @@ func (s PG) VerifyRecordingAuditRange(ctx context.Context, runID uuid.UUID, key 
 		return AuditChainRange{}, false, fmt.Errorf("store: read the row before the range: %w", err)
 	}
 	if hasPred {
-		w.prev, w.anchored = predHash, predHash != ""
+		w.prev, w.anchored, w.ranged = predHash, predHash != "", true
+	} else {
+		// No row before the range: it starts at the log's oldest retained row, which must chain to the
+		// newest retention drop's recorded tail, or to nothing when none dropped rows, as the whole
+		// sweep reads it. Seeding from the row's own prev_hash would let a deleted first row verify.
+		var partitioned bool
+		var tail string
+		if partitioned, err = auditEventsPartitioned(ctx, tx); err != nil {
+			return AuditChainRange{}, false, err
+		}
+		if tail, _, err = newestDropAnchor(ctx, tx, partitioned); err != nil {
+			return AuditChainRange{}, false, err
+		}
+		w.prev, w.anchored = tail, tail != ""
 	}
 
 	const q = `
@@ -117,9 +129,6 @@ func (s PG) VerifyRecordingAuditRange(ctx context.Context, runID uuid.UUID, key 
 			}
 			n++
 			after = l.seq
-			if !hasPred && w.st.Checked == 0 && !l.unchained {
-				w.prev, w.anchored = l.prev, l.prev != ""
-			}
 			if mark {
 				rng.Marks = append(rng.Marks, AuditChainMark{ID: id, Seq: l.seq})
 			}

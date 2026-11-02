@@ -618,9 +618,9 @@ The predicate is `reservedRunTasks` plus `source scan` plus probe runs. Refusal 
 
 | Item | Rule |
 |---|---|
-| `local_dir` workspace sources | Carry the `runner_id` they were registered for; placeable only there. No shipped migration adds the column, so 0.9.0 refuses them `placement_local_path` |
+| `local_dir` workspace sources | Carry the `runner_id` they were registered for; placeable only there. Done in 0.10.0-rc.9 (migration `0247_sources_runner_id`); before it, every local mount was refused `placement_local_path` |
 | `host_path` user drives | Carry a `runner_id` (#113); placeable only there. No shipped migration adds the column, so 0.9.0 refuses them `placement_local_path` |
-| Device-side check | The runner intersects `SandboxSpec.UserMountRoots` with its owner-set `allowed_roots` at bind |
+| Device-side check | The runner intersects `SandboxSpec.UserMountRoots` with its owner-set `allowed_roots` at bind. Done in 0.10.0-rc.9 (`--drive-root`) |
 | Residual | The writable bind lets agent-authored content reach files the developer later executes, as sync does ([§12](#12-threat-model-deltas-audit-actions-refusal-reasons)) |
 
 ### 6.8 Console states (for #111 and D-UI-a)

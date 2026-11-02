@@ -10,21 +10,21 @@ import (
 )
 
 // PauseAgent forwards to ref's substrate when it implements runner.AgentPauser.
-func (o *Orchestrator) PauseAgent(ctx context.Context, ref string) error {
+func (o *Orchestrator) PauseAgent(ctx context.Context, ref string, gen int64) (bool, error) {
 	p, err := o.agentPauser(ctx, ref)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return p.PauseAgent(ctx, ref)
+	return p.PauseAgent(ctx, ref, gen)
 }
 
 // ResumeAgent forwards to ref's substrate when it implements runner.AgentPauser.
-func (o *Orchestrator) ResumeAgent(ctx context.Context, ref string) error {
+func (o *Orchestrator) ResumeAgent(ctx context.Context, ref string, gen int64) (bool, error) {
 	p, err := o.agentPauser(ctx, ref)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return p.ResumeAgent(ctx, ref)
+	return p.ResumeAgent(ctx, ref, gen)
 }
 
 func (o *Orchestrator) agentPauser(ctx context.Context, ref string) (runner.AgentPauser, error) {

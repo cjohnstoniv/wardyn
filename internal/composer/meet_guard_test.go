@@ -83,6 +83,7 @@ var meetRules = map[string]meetRule{
 	"deny_user_drive":                       {"false", "OR"},
 	"deny_member_drives":                    {"false", "OR"},
 	"deny_placements":                       {"none; every placement permitted", "union"},
+	"allowed_macos_bases":                   {"none; any base a Mac offers", "intersection; empty on one side yields the other; disjoint is unsatisfiable"},
 	"max_cpu_millis":                        {"0 unlimited", "smaller positive"},
 	"max_memory_mib":                        {"0 unlimited", "smaller positive"},
 	"max_ephemeral_disk_mib":                {"0 unlimited", "smaller positive"},

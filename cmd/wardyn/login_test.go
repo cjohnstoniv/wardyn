@@ -95,7 +95,7 @@ func TestLoginURL(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := "Saved " + older.URL + ". This control plane does not offer CLI sign-in: set WARDYN_TOKEN to a personal API token. " +
-			"A Wardyn admin can invite you to create one, and you claim it under Your account in the console.\n"
+			"A Wardyn admin can invite you to create one, and you claim it in the console, in Settings.\n"
 		if !strings.HasPrefix(stdout.String(), want) {
 			t.Errorf("login printed %q, want it to start %q", stdout.String(), want)
 		}

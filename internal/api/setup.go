@@ -164,6 +164,9 @@ type SetupFeatures struct {
 	// MCPLocalServers is WARDYN_MCP_LOCAL_SERVERS: a component may define an
 	// MCP server that runs in the run's sandbox.
 	MCPLocalServers bool `json:"mcp_local_servers"`
+	// MacOSVMs is WARDYN_MACOS_VMS: a run may ask for a macOS virtual machine. Absent when off, so the
+	// status of a deployment that leaves it off reads exactly as before.
+	MacOSVMs bool `json:"macos_vms,omitempty"`
 }
 
 func setupFeatures(multiAgentTasks bool) SetupFeatures {
@@ -172,6 +175,7 @@ func setupFeatures(multiAgentTasks bool) SetupFeatures {
 		KubectlCLI:      kubectlCLIOn(),
 		MultiAgentTasks: multiAgentTasks,
 		MCPLocalServers: envEnabled(envMCPLocalServers),
+		MacOSVMs:        envEnabled(envMacOSVMs),
 	}
 }
 

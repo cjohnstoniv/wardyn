@@ -502,7 +502,7 @@ func TestGovCovHoldProfileWriteStoresTheProposal(t *testing.T) {
 			t.Errorf("base hash = %s, want the empty graph's", ch.BaseHash)
 		}
 		d := govCovDiff(t, ch)
-		if d.Before != nil || d.After == nil || !reflect.DeepEqual(d.Changed, changedPaths(nil, unitDiffStored{Name: "fresh", Ceiling: types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2}})) {
+		if d.Before != nil || d.After == nil || !reflect.DeepEqual(d.Changed, changedPaths(nil, unitDiffStored{Name: "fresh", Mode: types.UnitModeOwnWalls, Ceiling: types.RunPolicySpec{AllowedDomains: []string{"pypi.org"}, MinConfinementClass: types.CC2}})) {
 			t.Errorf("diff = %s", ch.Diff)
 		}
 		// R1-0098: the omission warning a direct save returns rides in the diff, for the proposer and the approver.

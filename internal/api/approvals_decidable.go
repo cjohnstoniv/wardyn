@@ -89,6 +89,7 @@ func (s *Server) withHoldProjection(r *http.Request, fn func(store.Page) ([]type
 		s.projectHolds(rows)
 		s.projectEscalations(r.Context(), rows)
 		s.projectDecidable(r, rows)
+		s.projectWallsBlock(r.Context(), rows)
 		return rows, nil
 	}
 }
@@ -102,6 +103,7 @@ func (s *Server) withHoldProjectionAll(r *http.Request, fn func() ([]types.Appro
 		s.projectHolds(rows)
 		s.projectEscalations(r.Context(), rows)
 		s.projectDecidable(r, rows)
+		s.projectWallsBlock(r.Context(), rows)
 		return rows, nil
 	}
 }

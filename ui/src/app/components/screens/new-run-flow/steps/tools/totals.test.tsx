@@ -10,6 +10,7 @@ import { adoCapName } from "../../../../../lib/ado-access-copy";
 import { ADO_PAT } from "../../../../../lib/ado-pat-copy";
 import type { SCMAccessPAT } from "../../../../../lib/types/ado-pat";
 import { NR_TOOLS } from "../../../../wardyn/copy/new-run/tools";
+import { NR_WALLS } from "../../../../wardyn/copy/personal-walls";
 import { BEDROCK_SSO_SWITCH_OFF, BEDROCK_SSO_SWITCH_ON, HARNESS_NAMES, SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import type { AccessFacts, AccessHost } from "../../../../../lib/types/new-run-access";
 import { Totals, unlistedSentences } from "./totals";
@@ -208,5 +209,51 @@ describe("Credentials total: a run whose Azure DevOps token Wardyn creates", () 
     view.rerender(<Totals names={HARNESS_NAMES} access={MEMBER} answered ado={facts(scm({ state: "not_configured" }))} />);
     expect(screen.queryByTestId("ado-run-token-line")).not.toBeInTheDocument();
     expect(screen.queryByTestId("ado-launch-note")).not.toBeInTheDocument();
+  });
+});
+
+describe("Only the sites listed (T4-b)", () => {
+  const OPEN: AccessFacts = { ...MEMBER, unlisted: { mode: "always_deny", allow_all: true, decider: "you" } };
+  const sw = () => screen.queryByRole("switch", { name: NR_WALLS.ONLY_LISTED });
+
+  it("shows only when the answer allows all egress, with the board's help", () => {
+    render(<Totals names={HARNESS_NAMES} access={OPEN} answered narrow={{ on: false, onChange: () => undefined }} />);
+    expect(sw()).toHaveAttribute("aria-checked", "false");
+    expect(network().getByText(NR_WALLS.ONLY_LISTED_HELP)).toBeInTheDocument();
+    cleanup();
+    render(<Totals names={HARNESS_NAMES} access={MEMBER} answered narrow={{ on: false, onChange: () => undefined }} />);
+    expect(sw()).not.toBeInTheDocument();
+  });
+
+  it("stays once it is on, though the answer then says all egress is off", () => {
+    render(<Totals names={HARNESS_NAMES} access={MEMBER} answered narrow={{ on: true, onChange: () => undefined }} />);
+    expect(sw()).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("reports the person's choice", async () => {
+    const onChange = vi.fn();
+    render(<Totals names={HARNESS_NAMES} access={OPEN} answered narrow={{ on: false, onChange }} />);
+    await userEvent.setup().click(sw()!);
+    expect(onChange).toHaveBeenCalledWith(true);
+  });
+
+  it("is absent where the step passes no switch", () => {
+    render(<Totals names={HARNESS_NAMES} access={OPEN} answered />);
+    expect(sw()).not.toBeInTheDocument();
+  });
+});
+
+describe("Your walls leave out {host} (T4-b)", () => {
+  it("names each host the walls take out, beside its Not allowed badge", () => {
+    const access = withHost({ host: "pypi.org", verdict: "not_allowed", reason: "clamped" });
+    render(<Totals names={HARNESS_NAMES} access={access} answered walls={{ allowed_domains: ["api.example.com"] }} />);
+    expect(network().getByText(NR_TOOLS.NET_NOT_ALLOWED)).toBeInTheDocument();
+    expect(screen.getByTestId("walls-leave-out")).toHaveTextContent("Your walls leave out pypi.org.");
+  });
+
+  it("draws no line without walls that cut the host", () => {
+    const access = withHost({ host: "pypi.org", verdict: "not_allowed", reason: "clamped" });
+    render(<Totals names={HARNESS_NAMES} access={access} answered walls={{ first_use_approval: "always_deny" }} />);
+    expect(screen.queryByTestId("walls-leave-out")).not.toBeInTheDocument();
   });
 });

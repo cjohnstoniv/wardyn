@@ -34,6 +34,12 @@ import (
 // shares one into the guest (virtiofs): the org's placement says it at create, and here at dispatch.
 const VMNoFolderShare = "this runner cannot share a folder into a Linux VM sandbox: its version predates folder shares into VMs, or its QEMU image has no working virtiofsd"
 
+// MacOSVMNotOffered refuses a macOS VM run on a runner whose caps carry no MacOSVM; runner is how the
+// sentence names it.
+func MacOSVMNotOffered(runner string) string {
+	return runner + " doesn't offer macOS VMs: it is older than 0.10, or macOS VMs aren't turned on for it."
+}
+
 var (
 	errOffline = fmt.Errorf("%w: no session", runner.ErrRunnerOffline)
 
@@ -72,6 +78,9 @@ type Options struct {
 	// output up to accepted (an absolute end that only grows) before the
 	// runner is told. It must be idempotent: a resent prefix repeats it.
 	OutputAccepted func(ctx context.Context, run uuid.UUID, accepted int64) error
+	// MacOSVMDisks, when set, takes the macOS VM disk reports a runner's stop, kill, end and sweep replies
+	// carry. They are the runner's word; an older runner sends none.
+	MacOSVMDisks func(ctx context.Context, reports []runner.MacOSVMDisk)
 }
 
 // callTimeout bounds the calls an io-shaped method (Resize, ExecSession.Wait)
@@ -84,16 +93,20 @@ type Substrate struct {
 	t    Transport
 	opts Options
 
-	mu                         sync.Mutex
-	caps                       *runnerwire.Caps
-	outputs                    map[uuid.UUID]*outputSink
-	resident                   map[uuid.UUID]leafHashes // SHA-256 of what DeliverResident delivered; never the value
+	mu       sync.Mutex
+	caps     *runnerwire.Caps
+	outputs  map[uuid.UUID]*outputSink
+	resident map[uuid.UUID]leafHashes // SHA-256 of what DeliverResident delivered; never the value
+	// vmKinds is the machine kind of each VM sandbox this substrate created, so a desktop or a pause is
+	// gated by that kind's caps; a ref missing from it (created before a restart) is gated by either.
+	vmKinds                    map[string]types.MachineKind
 	requireExecutionGeneration bool
 }
 
 // New builds the substrate of runnerID over t.
 func New(runnerID string, t Transport, opts Options) *Substrate {
-	s := &Substrate{id: runnerID, t: t, opts: opts, outputs: map[uuid.UUID]*outputSink{}, resident: map[uuid.UUID]leafHashes{}}
+	s := &Substrate{id: runnerID, t: t, opts: opts, outputs: map[uuid.UUID]*outputSink{}, resident: map[uuid.UUID]leafHashes{},
+		vmKinds: map[string]types.MachineKind{}}
 	t.SetHandler(s)
 	return s
 }
@@ -139,7 +152,8 @@ func (s *Substrate) Advertised() (runner.TargetFacts, bool) {
 	advertised := c.CPUMillisMax > 0 && c.MemoryMiBMax > 0
 	return runner.TargetFacts{Classes: slices.Clone(c.Support.Classes), CapacityAdvertised: advertised, CPUMillisMax: c.CPUMillisMax, MemoryMiBMax: c.MemoryMiBMax,
 		EphemeralDiskEnforcement: c.Support.EphemeralDiskEnforcement, KeepsEnded: !c.EndsUnkept, UserDrives: c.Support.UserDrives,
-		Records: c.Support.SessionRecording && c.Support.RecordPerRun, RecordsUnasked: c.Support.SessionRecording && !c.Support.RecordPerRun}, true
+		Records: c.Support.SessionRecording && c.Support.RecordPerRun, RecordsUnasked: c.Support.SessionRecording && !c.Support.RecordPerRun,
+		RunsNamespaces: slices.Clone(c.RunsNamespaces)}, true
 }
 
 // HandleEvent keeps the `caps` event and passes the rest to Options.OnEvent.
@@ -188,6 +202,30 @@ func (s *Substrate) refCall(ctx context.Context, method, ref string, result any)
 	return s.call(ctx, method, runnerwire.RefArgs{Ref: ref}, result)
 }
 
+// checkVMCaps refuses a VM spec for a runner whose last caps do not offer that kind. A VM is asked of
+// no runner that has not said it starts VMs of that kind: an older one would refuse create_vm anyway,
+// but this refusal names the reason and makes no call.
+func (s *Substrate) checkVMCaps(spec runner.SandboxSpec) error {
+	c, ok := s.Caps()
+	if spec.MachineKind.IsMacOSVM() {
+		if !ok || c.MacOSVM == nil {
+			return runnerwire.Refuse("%s", MacOSVMNotOffered("This runner"))
+		}
+		if len(spec.Mounts) > 0 && !c.MacOSVM.Folders {
+			return runnerwire.Refuse(runner.MacVMNoFolderShare)
+		}
+		return nil
+	}
+	if !ok || c.LinuxVM == nil {
+		return runnerwire.Refuse("this runner does not offer Linux VM sandboxes: it is older than 0.10, or its operator has not turned them on")
+	}
+	// Nor a VM that carries a folder of a runner that cannot share one into the guest.
+	if len(spec.Mounts) > 0 && !c.LinuxVM.Virtiofs {
+		return runnerwire.Refuse(VMNoFolderShare)
+	}
+	return nil
+}
+
 // CreateSandbox sends the spec minus OnWaiting and ExecOutput. `waiting` events
 // call spec.NotifyWaiting on this goroutine, in order, before it returns.
 func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
@@ -208,15 +246,8 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 	}
 	method := runnerwire.MethodCreateSandbox
 	if spec.MachineKind.IsVM() {
-		// Asked of no runner that has not said it starts VMs: an older one would refuse create_vm
-		// anyway, but this refusal names the reason and makes no call.
-		c, ok := s.Caps()
-		if !ok || c.LinuxVM == nil {
-			return runner.Sandbox{}, runnerwire.Refuse("this runner does not offer Linux VM sandboxes: it is older than 0.10, or its operator has not turned them on")
-		}
-		// Nor a VM that carries a folder of a runner that cannot share one into the guest.
-		if len(spec.Mounts) > 0 && !c.LinuxVM.Virtiofs {
-			return runner.Sandbox{}, runnerwire.Refuse(VMNoFolderShare)
+		if err := s.checkVMCaps(spec); err != nil {
+			return runner.Sandbox{}, err
 		}
 		method = runnerwire.MethodCreateVM
 	}
@@ -251,6 +282,11 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 			s.mu.Unlock()
 		}
 		return runner.Sandbox{}, err
+	}
+	if spec.MachineKind.IsVM() {
+		s.mu.Lock()
+		s.vmKinds[res.Sandbox.Ref] = spec.MachineKind
+		s.mu.Unlock()
 	}
 	return res.Sandbox, nil
 }
@@ -403,7 +439,20 @@ func (s *Substrate) AgentStatus(ctx context.Context, ref, agentExecID string) (r
 // teardown calls a verb that keeps working while the runner is away: offline,
 // it is queued as a pending action and answers runner.ErrPendingOnRunner.
 func (s *Substrate) teardown(ctx context.Context, method string, kind types.RunnerActionKind, ref string) error {
-	err := s.refCall(ctx, method, ref, nil)
+	var res runnerwire.TeardownResult
+	err := s.refCall(ctx, method, ref, &res)
+	// A kill or an end is the last this substrate does for the sandbox, so its machine kind goes when the
+	// runner answered it (even with a failure, and a local deadline counts as one), and when it was queued
+	// for the runner to replay on its own side, which never comes back through here. The kind stays only for
+	// an offline refusal that was not queued, which is asked again, and for a stop or stop_proxy, which
+	// leaves a sandbox that can start again.
+	ends := method == runnerwire.MethodKill || method == runnerwire.MethodEnd
+	if ends && !errors.Is(err, runner.ErrRunnerOffline) {
+		s.dropVMKind(ref)
+	}
+	if err == nil && res.MacOSVMDisk != nil {
+		s.macOSVMDisks(ctx, []runner.MacOSVMDisk{*res.MacOSVMDisk})
+	}
 	if err == nil || !errors.Is(err, runner.ErrRunnerOffline) || s.opts.Queue == nil {
 		return err
 	}
@@ -413,7 +462,24 @@ func (s *Substrate) teardown(ctx context.Context, method string, kind types.Runn
 	if l, ok := s.t.(*Link); ok {
 		l.requireFresh(ctx)
 	}
+	if ends {
+		s.dropVMKind(ref)
+	}
 	return runner.ErrPendingOnRunner
+}
+
+// dropVMKind forgets the machine kind held for ref.
+func (s *Substrate) dropVMKind(ref string) {
+	s.mu.Lock()
+	delete(s.vmKinds, ref)
+	s.mu.Unlock()
+}
+
+// macOSVMDisks hands reports to the MacOSVMDisks hook, when there is one and they are any.
+func (s *Substrate) macOSVMDisks(ctx context.Context, reports []runner.MacOSVMDisk) {
+	if s.opts.MacOSVMDisks != nil && len(reports) > 0 {
+		s.opts.MacOSVMDisks(ctx, reports)
+	}
 }
 
 func (s *Substrate) StopSandbox(ctx context.Context, ref string) error {
@@ -426,6 +492,13 @@ func (s *Substrate) KillSandbox(ctx context.Context, ref string) error {
 
 func (s *Substrate) EndSandbox(ctx context.Context, ref string) error {
 	return s.teardown(ctx, runnerwire.MethodEnd, types.RunnerActionEnd, ref)
+}
+
+// vmKind is the machine kind ref was created with here, "" when this substrate did not create it.
+func (s *Substrate) vmKind(ref string) types.MachineKind {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.vmKinds[ref]
 }
 
 func (s *Substrate) StopProxy(ctx context.Context, ref string) error {
@@ -472,6 +545,23 @@ func (s *Substrate) ProbeDrive(ctx context.Context, mount types.DriveMount) (run
 	var res runner.DriveProbe
 	err := s.call(ctx, runnerwire.MethodProbeDrive, mount, &res)
 	return res, err
+}
+
+// ReclaimMacDisk deletes a person's disk drive from this runner's Mac (reclaim_drive): runner.ErrDriveInUse
+// while a run there has it attached. A runner whose caps do not say it keeps disk drives is never asked.
+// It is not runner.DriveReclaimer's method, so no reclaim of the deployment's own storage reaches a runner.
+func (s *Substrate) ReclaimMacDisk(ctx context.Context, mount types.DriveMount) (runner.DriveReclaimOutcome, error) {
+	if c, ok := s.Caps(); !ok || c.MacOSVM == nil || !c.MacOSVM.DiskDrives {
+		return "", runnerwire.Refuse("this runner keeps no disk drives")
+	}
+	var res runnerwire.ReclaimDriveResult
+	if err := s.call(ctx, runnerwire.MethodReclaimDrive, mount, &res); err != nil {
+		return "", err
+	}
+	if res.InUse {
+		return "", runner.ErrDriveInUse
+	}
+	return res.Outcome, nil
 }
 
 // RecoverOutput reads the runner-side output buffer into w. For a live run adopted after a restart the
@@ -563,6 +653,7 @@ func (s *Substrate) SweepOrphanedSandboxes(ctx context.Context, minAge time.Dura
 	if err := s.call(ctx, runnerwire.MethodSweep, runnerwire.SweepArgs{MinAge: minAge}, &list); err != nil {
 		return 0, err
 	}
+	s.macOSVMDisks(ctx, list.MacOSVMDisks)
 	var orphans []uuid.UUID
 	for _, id := range list.Candidates {
 		if isOrphan(id) {
@@ -576,6 +667,7 @@ func (s *Substrate) SweepOrphanedSandboxes(ctx context.Context, minAge time.Dura
 	if err := s.call(ctx, runnerwire.MethodSweep, runnerwire.SweepArgs{MinAge: minAge, Remove: orphans}, &done); err != nil {
 		return 0, err
 	}
+	s.macOSVMDisks(ctx, done.MacOSVMDisks)
 	return done.Removed, nil
 }
 
@@ -609,4 +701,14 @@ func (s *Substrate) EraseResident(ctx context.Context, runID uuid.UUID) error {
 	delete(s.resident, runID)
 	s.mu.Unlock()
 	return s.call(ctx, runnerwire.MethodEraseResident, runnerwire.EraseResidentArgs{RunID: runID}, nil)
+}
+
+// WorkloadStatus has the runner write one WardynWorkload custom resource's status, which it patches
+// into the resource's status subresource and nowhere else. A status outside the wire's bounds is
+// refused here and never sent.
+func (s *Substrate) WorkloadStatus(ctx context.Context, a runnerwire.WorkloadStatusArgs) error {
+	if err := a.Validate(); err != nil {
+		return err
+	}
+	return s.call(ctx, runnerwire.MethodWorkloadStatus, a, nil)
 }

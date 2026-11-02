@@ -190,9 +190,11 @@ func rowLockKey(owner, name string) int32 {
 
 // removeOld removes the object a row pointed to before a Put moved it. The Put
 // has succeeded by then, so a failure is logged, not returned: the old object
-// is one `wardynd -reconcile` lists.
+// is one `wardynd -reconcile` lists. It goes through removeOldExternal, which
+// deletes under the row's lock and leaves an object the row names again: a
+// replacement may have reused the old object between the Put's commit and now.
 func (s *Store) removeOld(ctx context.Context, name, prev string) {
-	if err := s.ext.Delete(context.WithoutCancel(ctx), s.owner, name, prev); err != nil {
+	if _, _, err := s.removeOldExternal(context.WithoutCancel(ctx), s.owner, name, s.ext.Name(), prev); err != nil {
 		slog.Warn("pg secretstore: a replaced value's old object was not removed; `wardynd -reconcile` lists it",
 			slog.String("secret", rowRef(s.owner, name)), slog.String("store", s.ext.Name()), slog.Any("err", err))
 	}

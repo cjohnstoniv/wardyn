@@ -112,3 +112,37 @@ func TestResetErrorNamesItsReason(t *testing.T) {
 		}
 	}
 }
+
+// A stream whose context ended with the link already carries the reconnect reset: whoever wakes on the
+// context and asks Err why gets that cause, not nil, and a Close in reaction cannot replace it.
+func TestLinkDropResetsAStreamBeforeItsContextEnds(t *testing.T) {
+	const streams = 32
+	for range 20 {
+		incoming := make(chan *Stream, streams)
+		p := newPair(t, PeerConfig{OnOpen: func(s *Stream, o Open) error { incoming <- s; return nil }}, PeerConfig{})
+		woke := make(chan error, streams)
+		for range streams {
+			if _, err := p.run.Open(ctxT(t), Open{Kind: KindOutput}); err != nil {
+				t.Fatal(err)
+			}
+			in := <-incoming
+			go func() {
+				<-in.Context().Done()
+				err := in.Err()
+				_ = in.Close() // what an output copy does once its context ends
+				if err == nil {
+					woke <- errors.New("nil")
+					return
+				}
+				woke <- in.Err()
+			}()
+		}
+		p.org.Close()
+		for range streams {
+			var re *ResetError
+			if err := <-woke; !errors.As(err, &re) || re.Code != ResetReconnect {
+				t.Fatalf("a stream woken by the link drop saw %v, want a reconnect reset", err)
+			}
+		}
+	}
+}

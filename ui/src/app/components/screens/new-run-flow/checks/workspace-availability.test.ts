@@ -4,7 +4,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { resolvedModelProviders, workspaceModelProviderUnavailable } from "./workspace-availability";
+import { resolvedModelProviders, sourceRunnerLabel, workspaceModelProviderUnavailable, workspaceRunnerRefusal } from "./workspace-availability";
+import { folderSources } from "../steps/files/file-items";
 import { makeWorkspace } from "../../../../../test/factories";
 
 describe("resolvedModelProviders", () => {
@@ -44,5 +45,58 @@ describe("a pin the server hid (provider_unavailable)", () => {
 
   it("says nothing where the model-provider arm does not apply (no list)", () => {
     expect(workspaceModelProviderUnavailable(hidden, undefined)).toBe(false);
+  });
+});
+
+// A folder bound to a person's runner (runner_id) stays usable only while the server says the binding is claimed.
+describe("a folder bound to a runner", () => {
+  // The server projects runner_name while the runner exists; a removed runner has none.
+  const bound = (runner_state: "claimed" | "revoked" | "missing" | "not_owner", over = {}) =>
+    makeWorkspace({
+      id: "ws-r",
+      name: "payments",
+      sources: [
+        {
+          type: "local_dir",
+          path: "/Users/dana/work/payments",
+          runner_id: "abcdef12-3456-7890-abcd-ef1234567890",
+          runner_state,
+          ...(runner_state === "missing" ? {} : { runner_name: "ec2-mac-rc9" }),
+        },
+      ],
+      ...over,
+    });
+
+  it.each([
+    ["revoked", "runner revoked"],
+    ["missing", "runner removed"],
+    ["not_owner", "not your runner"],
+  ] as const)("a %s runner blocks the workspace with the named refusal", (state, word) => {
+    const ws = bound(state);
+    const runner = state === "missing" ? "abcdef12" : "ec2-mac-rc9";
+    const refusal = `The folder for payments is on ${runner}, which can't run it now (${word}). Add a new workspace with a folder on a runner you own or on the Wardyn server.`;
+    expect(workspaceRunnerRefusal(ws)).toBe(refusal);
+    // The run's folder step lists the folder with the same reason, so it cannot be included.
+    expect(folderSources([ws])[0].unavailable).toBe(refusal);
+  });
+
+  it("names the runner by runner_name, and by the first 8 characters of its id only when there is none", () => {
+    const id = "abcdef12-3456-7890-abcd-ef1234567890";
+    expect(sourceRunnerLabel({ runner_id: id, runner_name: "ec2-mac-rc9" })).toBe("ec2-mac-rc9");
+    expect(sourceRunnerLabel({ runner_id: id, runner_name: "" })).toBe("abcdef12");
+    expect(sourceRunnerLabel({ runner_id: id })).toBe("abcdef12");
+  });
+
+  it("a claimed runner blocks nothing, and a bound source is never blocked for not being scanned", () => {
+    for (const status of ["pending_scan", "scanning", "scanned", "error"] as const) {
+      const ws = bound("claimed", { status });
+      expect(workspaceRunnerRefusal(ws)).toBeUndefined();
+      expect(folderSources([ws])[0].unavailable).toBeUndefined();
+    }
+  });
+
+  it("a folder on the server has no runner refusal", () => {
+    const ws = makeWorkspace({ sources: [{ type: "local_dir", path: "/srv/payments" }] });
+    expect(workspaceRunnerRefusal(ws)).toBeUndefined();
   });
 });

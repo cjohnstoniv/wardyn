@@ -125,7 +125,7 @@ export function deriveTitle(kind: ApprovalKind, scope: Scope): string {
       const ck = credentialKind(scope);
       const host = str(scope, "host");
       if (ck === "git_pat") return host ? `Hand git a token for ${host}` : "Hand git an access token";
-      if (ck === "ssh_key") return host ? `Write an SSH key for ${host}` : "Write a private SSH key to disk";
+      if (ck === "ssh_key") return host ? `Sign Git's SSH sign-in for ${host}` : "Sign Git's SSH sign-in";
       if (ck === "github_token") {
         const repos = scopeRepos(scope);
         return repos.length ? `Mint a GitHub token for ${repos[0]}` : "Mint a GitHub token";
@@ -325,7 +325,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
     },
     [setSearchParams],
   );
-  const { refused, noteRefusal } = useRefusedApprovals();
+  const { refused, wallsRefused, noteRefusal } = useRefusedApprovals();
   const [prompt, setPrompt] = React.useState<{ id: string; action: "approve" | "deny"; kind: ApprovalRequest["kind"] } | null>(null);
 
   // EXPIRED approvals must be fetched too, or a request that timed out
@@ -358,9 +358,20 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // the one on screen (#2487: it is up to four capped lists, and only grows).
   const filterRef = React.useRef(filter);
   filterRef.current = filter;
+  const viewRef = React.useRef(view);
+  viewRef.current = view;
+  // A refresh that loads the decided lists for the view still on screen also heals a failed first load of the tab.
   const fetchAll = React.useCallback(
-    () => (filterRef.current === "decided" ? Promise.all([fetchPending(), fetchDecided()]).then(() => undefined) : fetchPending()),
-    [fetchPending, fetchDecided],
+    () =>
+      filterRef.current === "decided"
+        ? Promise.all([
+            fetchPending(),
+            fetchDecided().then(() => {
+              if (viewRef.current === view) setDecidedStatus("ready");
+            }),
+          ]).then(() => undefined)
+        : fetchPending(),
+    [fetchPending, fetchDecided, view],
   );
   const loadDecided = React.useCallback(() => {
     setDecidedStatus((st) => (st === "ready" ? st : "loading"));
@@ -553,7 +564,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
             {pendingItems.map((a) => (
               <ApprovalCard
                 key={a.id}
-                item={a}
+                item={wallsRefused.has(a.id) ? { ...a, walls_block: true } : a}
                 caps={caps}
                 onAct={(action) => setPrompt({ id: a.id, action, kind: a.kind })}
                 onAdoDecide={decideAdoDirect}

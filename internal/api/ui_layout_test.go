@@ -115,6 +115,28 @@ func TestRunLayoutREST_PutThenGetRoundTrips(t *testing.T) {
 	}
 }
 
+// TestRunLayoutREST_EveryKnownWidgetIDAccepted pins that a layout holding every
+// widget the cockpit renders, the service panel among them, is stored whole.
+func TestRunLayoutREST_EveryKnownWidgetIDAccepted(t *testing.T) {
+	srv, _ := runLayoutTestServer(t)
+
+	layout := make([]types.RunLayoutWidget, 0, len(runLayoutWidgetIDs))
+	for i, id := range runLayoutWidgetIDs {
+		layout = append(layout, types.RunLayoutWidget{Widget: id, X: 0, Y: i * 4, W: 4, H: 4})
+	}
+	raw, err := json.Marshal(putRunLayoutRequest{Preset: "live", Layout: layout})
+	if err != nil {
+		t.Fatalf("marshal layout: %v", err)
+	}
+	w := do(t, srv, http.MethodPut, "/api/v1/me/run-layout", adminToken, string(raw))
+	if w.Code != http.StatusOK {
+		t.Fatalf("put: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if got := decodeRunLayoutBody(t, w.Body.Bytes()); len(got.Layout) != len(runLayoutWidgetIDs) {
+		t.Errorf("stored %d widgets, want all %d", len(got.Layout), len(runLayoutWidgetIDs))
+	}
+}
+
 // TestRunLayoutREST_GetNoRowReturns200Empty pins the contract's central
 // invariant: "I have never saved a layout" is a 200 with the empty shape,
 // never a 404 — a 404 here would make a brand-new human's first cockpit

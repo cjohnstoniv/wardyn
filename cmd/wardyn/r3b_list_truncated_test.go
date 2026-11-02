@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // r3bTruncatedListServer answers every list GET with one row and the server's
@@ -59,6 +60,8 @@ func TestListCmdsWarnOnTruncation(t *testing.T) {
 		{"workspace list", []string{"workspace", "list"}, []types.Workspace{{ID: uuid.New(), Name: "example"}}},
 		// Your own runners are a page too (GET /me/runners), so a partial list says so.
 		{"runner list", []string{"runner", "list"}, []types.RunnerView{{ID: uuid.New(), Name: "example", State: types.RunnerClaimed}}},
+		{"workload list", []string{"workload", "list"}, []sdk.Workload{{Name: "web", Owner: "person:me"}}},
+		{"workload binding list", []string{"workload", "binding", "list"}, []sdk.WorkloadBinding{{ID: uuid.New(), Namespace: "team-a"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := r3bTruncatedListServer(t, tc.body)

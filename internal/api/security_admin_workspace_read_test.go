@@ -411,6 +411,8 @@ func TestSecurityTierNoteStatesOneRule(t *testing.T) {
 	for _, want := range []struct{ frag, why string }{
 		{"workspaceReadSecurity", "name the mechanism that lets a member-class workspace read coexist with these four narrowed ones"},
 		{"/workspaces", "the asymmetry a reader will notice is with the workspace read; a note that never mentions it invites widening these four instead"},
+		{"/workloads", "a workload's stored intent carries the same host axis, projected per reader the same way"},
+		{"redactWorkloadIntentForRead", "name the projection the workload reads use"},
 	} {
 		if !strings.Contains(block, want.frag) {
 			t.Errorf("the operator-topology tier note does not mention %q — %s\nnote=%s", want.frag, want.why, block)

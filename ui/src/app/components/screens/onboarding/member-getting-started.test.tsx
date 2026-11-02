@@ -724,10 +724,11 @@ describe("MemberGettingStarted", () => {
       });
     });
 
-    it("missing token permissions ask to sign in again, and Connect stays", async () => {
+    it("missing token permissions read Settings' administrator sentence, and Connect stays", async () => {
       getSetupStatusMock.mockResolvedValue(status({ scm_access: { state: "expired_signin", cause: "permissions_missing", source: "org" } }));
       renderPage();
-      expect(await screen.findByText(ADO_PAT.SIGN_IN_AGAIN_BODY)).toBeInTheDocument();
+      expect(await screen.findByText(ADO_PAT.MEMBER_NEEDS_ADMIN)).toBeInTheDocument();
+      expect(screen.queryByText(ADO_PAT.SIGN_IN_AGAIN_BODY)).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: ADO.CONNECT_ADO })).toBeInTheDocument();
     });
 

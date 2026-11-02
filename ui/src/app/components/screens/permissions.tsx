@@ -26,7 +26,7 @@ import { HttpError, PendingChangeError } from "../../lib/api/core";
 import { permissions as api } from "../../lib/api/permissions";
 import { people as peopleApi } from "../../lib/api/people";
 import { absoluteTime, getErrorMessage, relativeTime } from "../../lib/format";
-import { CAPABILITY_KINDS, KIND, PERM, PERM_EXTRA, type CapabilityKind } from "../../lib/permissions-copy";
+import { CAPABILITY_KINDS, INBOUND_ACCESS, KIND, PERM, PERM_EXTRA, type CapabilityKind } from "../../lib/permissions-copy";
 import type {
   CapabilityEffect,
   CapabilityGrant,
@@ -57,6 +57,7 @@ import { PageContainer } from "../wardyn/page-container";
 import { PreviewAsNewUser } from "../wardyn/user-preview";
 import { DefineOwnComponentsRow } from "./components/define-own-row";
 import { SelfHostRunnerRow } from "./self-host-runner-row";
+import { INBOUND_VALUE, InboundAccessRow, serviceName } from "./inbound-access-row";
 import { Chip } from "../wardyn/primitives";
 import { Segmented } from "../wardyn/segmented";
 import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
@@ -135,7 +136,9 @@ export const SUBJECT_LABEL: Record<CapabilitySubjectType, string> = {
 // A stored grant may name a kind this build doesn't know (the schema puts no
 // CHECK on `capability` on purpose — see migration 0042). Render it verbatim
 // rather than blank: an unknown row is inert, not invisible.
-function kindLabel(capability: string): string {
+function kindLabel(capability: string, value = ""): string {
+  // The feature kind is titled for its first values (SSH keys and API tokens); an inbound grant is the Inbound access row's.
+  if (capability === "feature" && value === INBOUND_VALUE) return INBOUND_ACCESS.LABEL;
   return KIND[capability as CapabilityKind]?.label ?? capability;
 }
 
@@ -218,6 +221,7 @@ export function PermissionsScreen() {
   const [status, setStatus] = React.useState<ScreenStatus>("loading");
   const [confirm, setConfirm] = React.useState<{ kind: CapabilityKind; next: boolean } | null>(null);
   const [presetKind, setPresetKind] = React.useState<CapabilityKind | undefined>(undefined);
+  const [presetValue, setPresetValue] = React.useState<{ value: string } | undefined>(undefined);
   const [toRemove, setToRemove] = React.useState<CapabilityGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
   // A write the server held for a second person (202): nothing has changed yet.
@@ -329,6 +333,7 @@ export function PermissionsScreen() {
                   onToggle={(next) => setConfirm({ kind, next })}
                   onAddGrant={() => {
                     setPresetKind(kind);
+                    setPresetValue(undefined);
                     document.getElementById("permissions-add-grant")?.scrollIntoView({ block: "center" });
                   }}
                 />
@@ -358,6 +363,18 @@ export function PermissionsScreen() {
                 onSubmitted={() => {
                   setSubmitted(true);
                   load();
+                }}
+              />
+              {/* The `inbound` feature value: restricted, so it lists its allows and opens the add-grant form with it filled in. */}
+              <InboundAccessRow
+                grants={snap.grants}
+                disabled={!securityOperator}
+                typeName={typeName}
+                labels={SUBJECT_LABEL}
+                onAddGrant={() => {
+                  setPresetKind("feature");
+                  setPresetValue({ value: INBOUND_VALUE });
+                  document.getElementById("permissions-add-grant")?.scrollIntoView({ block: "center" });
                 }}
               />
             </>
@@ -406,11 +423,11 @@ export function PermissionsScreen() {
                   <TableRow key={g.id} className={cn(g.effect === "deny" && "bg-danger-subtle")}>
                     <TableCell>
                       <span className="flex flex-wrap items-center gap-2">
-                        <Chip tone="neutral">{SUBJECT_LABEL[g.subject_type] ?? g.subject_type}</Chip>
-                        <SubjectName g={g} typeName={typeName} />
+                        <Chip tone="neutral">{serviceName(g) !== null ? INBOUND_ACCESS.SUBJECT_SERVICE : SUBJECT_LABEL[g.subject_type] ?? g.subject_type}</Chip>
+                        {serviceName(g) !== null ? <Mono>{serviceName(g)}</Mono> : <SubjectName g={g} typeName={typeName} />}
                       </span>
                     </TableCell>
-                    <TableCell>{kindLabel(g.capability)}</TableCell>
+                    <TableCell>{kindLabel(g.capability, g.value)}</TableCell>
                     <TableCell>
                       <Mono>{g.value}</Mono>
                     </TableCell>
@@ -443,7 +460,7 @@ export function PermissionsScreen() {
                         size="sm"
                         disabled={!securityOperator}
                         onClick={() => setToRemove(g)}
-                        aria-label={`${PERM.REMOVE} ${kindLabel(g.capability)} ${g.value}`}
+                        aria-label={`${PERM.REMOVE} ${kindLabel(g.capability, g.value)} ${g.value}`}
                       >
                         {PERM.REMOVE}
                       </Button>
@@ -464,6 +481,7 @@ export function PermissionsScreen() {
         }}
         onSubmitted={load}
         presetKind={presetKind}
+        presetValue={presetValue}
       />
 
       <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
@@ -669,6 +687,7 @@ export function AddGrantForm({
   fixed,
   hideTitle,
   presetKind,
+  presetValue,
 }: {
   disabled: boolean;
   onAdded: () => void;
@@ -678,6 +697,8 @@ export function AddGrantForm({
   hideTitle?: boolean;
   /** A capability's own Add grant button chooses its kind here (ignored once `fixed`). */
   presetKind?: CapabilityKind;
+  /** A feature row's Add grant button fills the value as well (ignored once `fixed`). An object, so a second click on the same button fills it again. */
+  presetValue?: { value: string };
 }) {
   const [subjectType, setSubjectType] = React.useState<PickableSubjectType>(fixed?.subjectType ?? "user");
   const [subject, setSubject] = React.useState(fixed?.subject ?? "");
@@ -697,6 +718,9 @@ export function AddGrantForm({
   React.useEffect(() => {
     if (presetKind && !fixed) setKind(presetKind);
   }, [presetKind, fixed]);
+  React.useEffect(() => {
+    if (presetValue && !fixed) setValue(presetValue.value);
+  }, [presetValue, fixed]);
 
   const copy = KIND[kind];
   const whoHint = SUBJECTS.find((s) => s.value === subjectType)?.hint ?? "";

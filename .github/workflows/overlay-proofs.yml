@@ -54,7 +54,7 @@ jobs:
   plan:
     name: plan
     if: startsWith(github.ref, 'refs/heads/proofs/')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -80,12 +80,29 @@ jobs:
     name: prove (${{ matrix.package }})
     needs: plan
     if: startsWith(github.ref, 'refs/heads/proofs/')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    # The same Postgres as ci.yml's test-pg-shard, so a proof of a PG-backed test
+    # (./internal/store, the PG tests in ./internal/api) runs instead of skipping,
+    # and overlay-proof.sh counts a skip as a failed proof. ci.yml logs in to
+    # ghcr.io with the job token; this job does not, because the package is public
+    # and a login would need a packages: read grant and a secrets reference. The
+    # password is a throwaway literal on a service container that dies with the job.
+    services:
+      postgres:
+        image: ghcr.io/cjohnstoniv/base-images:library-postgres-17-a426e44bac0b@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+        env:
+          POSTGRES_PASSWORD: wardyn
+          POSTGRES_DB: wardyn
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -108,6 +125,11 @@ jobs:
       - name: Run the proofs
         env:
           ONLY: ${{ matrix.only }}
+          # ci.yml's test-pg-shard DSN and pool guard. WARDYN_TEST_PG_SUPERUSER is
+          # left unset: it turns a skipped probe into a failure, and a proof must
+          # not take a FAIL line from anything but the reverted code.
+          WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
+          WARDYN_TEST_POOL_GUARD: '1'
         run: |
           read -ra names <<< "$ONLY"
           bash bundle/scripts/overlay-proof.sh run bundle src --only "${names[@]}"

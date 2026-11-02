@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -823,6 +825,108 @@ func TestExplainRunPolicy_GrantsMountsAndReposUseRedactionSafeKeys(t *testing.T)
 	}
 }
 
+// TestExplainRunPolicy_Walls pins cause walls: the entries and scalars the run.create row's
+// personal_walls record names, and nothing else.
+func TestExplainRunPolicy_Walls(t *testing.T) {
+	grant := func(host string) types.GrantSpec {
+		return types.GrantSpec{Kind: types.GrantAPIKey, Scope: json.RawMessage(`{"host":"` + host + `"}`)}
+	}
+	t.Run("walls only", func(t *testing.T) {
+		base := pvSpec([]string{"a.example", "B.Example"}, func(s *types.RunPolicySpec) {
+			s.EligibleGrants = []types.GrantSpec{grant("api.example")}
+		})
+		resolved := pvSpec([]string{"a.example"}, func(s *types.RunPolicySpec) {
+			s.DeniedDomains = []string{"evil.example"}
+			s.MinConfinementClass = types.CC3
+		})
+		walls := &wallsSourceRecord{
+			Narrowed: []string{"allowed_domains", "denied_domains", "eligible_grants", "min_confinement_class"},
+			Removed:  map[string][]string{"allowed_domains": {"b.example"}, "eligible_grants": {"api_key:api.example"}},
+			Added:    map[string][]string{"denied_domains": {"evil.example"}},
+		}
+		got := explainRunPolicy(ptr(base), resolved, evidenceOf(func(e *auditEvidence) { e.walls = walls }), types.SiteConfig{}, types.AgentRun{})
+		for _, w := range []struct {
+			field          string
+			added, removed []string
+		}{
+			{fieldAllowed, nil, []string{"B.Example"}},
+			{fieldDenied, []string{"evil.example"}, nil},
+			{fieldGrants, nil, []string{"api_key:api.example"}},
+			{fieldMinCC, []string{"CC3"}, []string{"CC2"}},
+		} {
+			if c := pvChange(got, causeWalls, w.field); c == nil || !slices.Equal(c.Added, w.added) || !slices.Equal(c.Removed, w.removed) {
+				t.Errorf("%s: changes = %+v, want walls added %v removed %v", w.field, got, w.added, w.removed)
+			}
+		}
+		if len(got) != 4 {
+			t.Errorf("changes = %+v, want only the four walls changes", got)
+		}
+		// The same difference without the record is the generic cause.
+		if c := pvChange(explainRunPolicy(ptr(base), resolved, evidenceOf(nil), types.SiteConfig{}, types.AgentRun{}), causeLaunch, fieldDenied); c == nil {
+			t.Errorf("no walls record: want launch for the deny")
+		}
+	})
+	t.Run("walls block a desktop direction", func(t *testing.T) {
+		open := types.DesktopControls{CopyOut: types.TransferAllowed}
+		blocked := types.DesktopControls{CopyOut: types.TransferBlocked, PasteIn: types.TransferAllowed, Upload: types.TransferAllowed, Download: types.TransferBlocked}
+		base := pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &open })
+		resolved := pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &blocked })
+		walls := &wallsSourceRecord{Narrowed: []string{fieldDesktop}, Added: map[string][]string{fieldDesktop: {"Block copy out"}}}
+		got := explainRunPolicy(ptr(base), resolved, evidenceOf(func(e *auditEvidence) { e.walls = walls }), types.SiteConfig{}, types.AgentRun{})
+		if c := pvChange(got, causeWalls, fieldDesktop); c == nil || !slices.Equal(c.Added, []string{"Block copy out"}) || len(c.Removed) != 0 || len(got) != 1 {
+			t.Errorf("changes = %+v, want walls adding only Block copy out", got)
+		}
+		defaults := types.DesktopControls{CopyOut: types.TransferBlocked, Download: types.TransferBlocked}
+		if same := explainRunPolicy(ptr(pvSpec(nil, nil)), pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &defaults }), evidenceOf(nil), types.SiteConfig{}, types.AgentRun{}); len(same) != 0 {
+			t.Errorf("an unset desktop against the default desktop = %+v, want no changes", same)
+		}
+	})
+	t.Run("only the desktop direction the walls blocked is the walls'", func(t *testing.T) {
+		open := types.DesktopControls{PasteIn: types.TransferAllowed, CopyOut: types.TransferBlocked, Upload: types.TransferAllowed, Download: types.TransferBlocked}
+		base := pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &open })
+		// The boundary blocks upload; the walls step then runs on that and blocks paste in.
+		afterBoundary := types.DesktopControls{PasteIn: types.TransferAllowed, CopyOut: types.TransferBlocked, Upload: types.TransferBlocked, Download: types.TransferBlocked}
+		resolved := pvSpec(nil, func(s *types.RunPolicySpec) {
+			s.Desktop = &types.DesktopControls{PasteIn: types.TransferBlocked, CopyOut: types.TransferBlocked, Upload: types.TransferBlocked, Download: types.TransferBlocked}
+		})
+		walls := newWallsSource(pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &afterBoundary }), resolved)
+		if walls == nil || !slices.Equal(walls.Added[fieldDesktop], []string{"Block paste in"}) {
+			t.Fatalf("walls record = %+v, want Added[desktop] = Block paste in only", walls)
+		}
+		got := explainRunPolicy(ptr(base), resolved, evidenceOf(func(e *auditEvidence) { e.walls = walls }), types.SiteConfig{}, types.AgentRun{})
+		if c := pvChange(got, causeWalls, fieldDesktop); c == nil || !slices.Equal(c.Added, []string{"Block paste in"}) || len(got) != 1 {
+			t.Errorf("changes = %+v, want walls adding only Block paste in, upload not shown as the walls'", got)
+		}
+	})
+	t.Run("a desktop direction narrowed by anything but the walls is not shown", func(t *testing.T) {
+		open := types.DesktopControls{CopyOut: types.TransferAllowed}
+		blocked := types.DesktopControls{CopyOut: types.TransferBlocked}
+		base := pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &open })
+		resolved := pvSpec(nil, func(s *types.RunPolicySpec) { s.Desktop = &blocked })
+		for name, ev := range map[string]auditEvidence{
+			"no walls record":        evidenceOf(nil),
+			"walls narrowed else":    evidenceOf(func(e *auditEvidence) { e.walls = &wallsSourceRecord{Narrowed: []string{"allowed_domains"}} }),
+			"member bound, no walls": evidenceOf(func(e *auditEvidence) { e.bounded = true }),
+		} {
+			if got := explainRunPolicy(ptr(base), resolved, ev, types.SiteConfig{}, types.AgentRun{}); len(got) != 0 {
+				t.Errorf("%s: changes = %+v, want no desktop entry", name, got)
+			}
+		}
+	})
+	t.Run("walls and the member bound on one knob", func(t *testing.T) {
+		base := pvSpec([]string{"a.example", "b.example", "c.example"}, nil)
+		resolved := pvSpec([]string{"a.example"}, nil)
+		walls := &wallsSourceRecord{Narrowed: []string{"allowed_domains"}, Removed: map[string][]string{"allowed_domains": {"b.example"}}}
+		got := explainRunPolicy(ptr(base), resolved, evidenceOf(func(e *auditEvidence) { e.walls, e.bounded = walls, true }), types.SiteConfig{}, types.AgentRun{})
+		if c := pvChange(got, causeWalls, fieldAllowed); c == nil || !slices.Equal(c.Removed, []string{"b.example"}) {
+			t.Errorf("changes = %+v, want walls removing only b.example", got)
+		}
+		if c := pvChange(got, causeLimits, fieldAllowed); c == nil || !slices.Equal(c.Removed, []string{"c.example"}) {
+			t.Errorf("changes = %+v, want limits removing only c.example", got)
+		}
+	})
+}
+
 // TestLatestPolicyResolve_LastWinsAndSkipsUndecodable pins the shared reader
 // the UI gateway and this view both use.
 func TestLatestPolicyResolve_LastWinsAndSkipsUndecodable(t *testing.T) {
@@ -883,6 +987,77 @@ func TestExplainRunPolicy_DiskBasis(t *testing.T) {
 			}
 			if tc.wantDetail != "" && !strings.Contains(strings.Join(c.Detail, " "), tc.wantDetail) {
 				t.Errorf("detail = %v, want %q", c.Detail, tc.wantDetail)
+			}
+		})
+	}
+}
+
+// pvPagedStore is pvStore as a store.Pager, serving a filtered page oldest first as PG does, so the view
+// takes its production paged reads. Pager methods the view never calls are the nil embedded ones.
+type pvPagedStore struct {
+	*pvStore
+	store.Pager
+}
+
+var _ store.Pager = pvPagedStore{}
+
+func (s pvPagedStore) QueryAuditEventsFilteredPage(ctx context.Context, runID *uuid.UUID, f store.AuditFilter, p store.Page) ([]types.AuditEvent, error) {
+	all, err := s.QueryAuditEvents(ctx, *runID, 0)
+	out := f.Keep(all)
+	if p.Limit > 0 && len(out) > p.Limit {
+		out = out[:p.Limit]
+	}
+	return out, err
+}
+
+// TestRunPolicyView_HostMarksAfterManyRefusedRestarts: a restart that succeeds after more refused
+// ones (a full pool, retried) than one page of run.revive rows still drops the launch marks.
+func TestRunPolicyView_HostMarksAfterManyRefusedRestarts(t *testing.T) {
+	spec := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
+	rows := []pvRow{{action: "run.policy.resolve", data: effectivePolicyDatum{RunPolicySpec: spec, HostMarks: &hostMarks{Inspected: []string{"api.anthropic.com"}}}}}
+	for range 200 {
+		rows = append(rows, pvRow{action: "run.revive", outcome: "denied", data: map[string]any{}})
+	}
+	rows = append(rows, pvRow{action: "run.revive", data: map[string]any{}})
+	srv, st := pvFixture(t, &capStore{})
+	srv.cfg.Store = pvPagedStore{pvStore: st}
+	run := st.seedRun(pvOwner, types.RunRunning)
+	st.rows(run.ID, rows...)
+	w, resp := pvMember(t, pvOwner).get(t, srv, run.ID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	if resp.HostMarks != nil {
+		t.Errorf("host_marks = %+v after a restart past the first 200 revive rows, want none", resp.HostMarks)
+	}
+}
+
+// TestRunPolicyView_HostMarks pins what the view says about each allowed host: the marks the
+// envelope recorded, none for an envelope that predates them, and none once the run was restarted
+// (a restart rebuilds the proxy from a config that can drop hosts and writes no envelope).
+func TestRunPolicyView_HostMarks(t *testing.T) {
+	spec := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com", "pypi.org"}}
+	marked := pvRow{action: "run.policy.resolve", data: effectivePolicyDatum{RunPolicySpec: spec, HostMarks: &hostMarks{Inspected: []string{"api.anthropic.com"}}}}
+	for _, tc := range []struct {
+		name string
+		rows []pvRow
+		want *hostMarks
+	}{
+		{"recorded", []pvRow{marked}, &hostMarks{Inspected: []string{"api.anthropic.com"}}},
+		{"an envelope from before marks", []pvRow{pvResolve(spec, false)}, nil},
+		{"a restarted run", []pvRow{marked, {action: "run.revive", data: map[string]any{}}}, nil},
+		{"a refused restart", []pvRow{marked, {action: "run.revive", outcome: "denied", data: map[string]any{}}}, &hostMarks{Inspected: []string{"api.anthropic.com"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, st := pvFixture(t, &capStore{})
+			run := st.seedRun(pvOwner, types.RunRunning)
+			st.rows(run.ID, tc.rows...)
+			w, resp := pvMember(t, pvOwner).get(t, srv, run.ID)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+			}
+			if !reflect.DeepEqual(resp.HostMarks, tc.want) {
+				t.Errorf("host_marks = %+v, want %+v", resp.HostMarks, tc.want)
 			}
 		})
 	}

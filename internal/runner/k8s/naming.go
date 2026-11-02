@@ -26,12 +26,15 @@ const driverName = "k8s"
 // a run identically on either substrate.
 const (
 	labelRun       = "wardyn.run-id"
-	labelComponent = "wardyn.component" // "agent" | "proxy" | "canary"
+	labelComponent = "wardyn.component" // "agent" | "proxy" | "canary" | "imagecheck"
 	labelManaged   = "wardyn.managed"   // "true"
 
 	componentAgent  = "agent"
 	componentProxy  = "proxy"
 	componentCanary = "canary"
+	// componentImageCheck is a prewrapped image's registration check pod (imagecheck.go); its labelRun is the
+	// check attempt's ID, which the orphan sweep asks the control plane about like a run's.
+	componentImageCheck = "imagecheck"
 )
 
 // In-pod container names (static; distinct from the pod-level names below, which embed the run id

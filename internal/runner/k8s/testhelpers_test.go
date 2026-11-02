@@ -100,7 +100,7 @@ func installCanaryReactor(t *testing.T, cs *fake.Clientset, unenforced bool) {
 func installCanaryReactorExitCodes(t *testing.T, cs *fake.Clientset, phaseAExit, phaseBExit int32) {
 	t.Helper()
 	seen := map[string]bool{}
-	phase := 0
+	phases := map[string]int{} // per namespace: a driver with several runs its canary in each
 	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
 		ga, ok := action.(clienttesting.GetAction)
 		if !ok || !strings.HasPrefix(ga.GetName(), "wardyn-egress-canary-") {
@@ -109,12 +109,12 @@ func installCanaryReactorExitCodes(t *testing.T, cs *fake.Clientset, phaseAExit,
 		name := ga.GetName()
 		if !seen[name] {
 			seen[name] = true
-			phase++
+			phases[action.GetNamespace()]++
 		}
 		// phase 1 => phase A (no NetworkPolicy yet): must read as a clean
 		// connect. phase 2 => phase B (deny-all in effect).
 		exitCode := phaseAExit
-		if phase >= 2 {
+		if phases[action.GetNamespace()] >= 2 {
 			exitCode = phaseBExit
 		}
 		pod := &corev1.Pod{
@@ -232,8 +232,8 @@ func newTestDriver(t *testing.T, cfg Config) (*Driver, *fake.Clientset) {
 	cs := fake.NewClientset()
 	installCanaryReactor(t, cs, false)
 	installDeleteCollectionSupport(t, cs)
-	if cfg.Namespace == "" {
-		cfg.Namespace = testNamespace
+	if len(cfg.Namespaces) == 0 {
+		cfg.Namespaces = []string{testNamespace}
 	}
 	if cfg.ProxyImage == "" {
 		cfg.ProxyImage = "wardyn/wardyn-proxy:test"

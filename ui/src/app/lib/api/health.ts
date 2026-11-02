@@ -191,7 +191,7 @@ export interface PolicyRef {
   email?: string;
   request_url?: string;
   request_text?: string;
-  // On a refusal: the kind of layer that refused ("deployment" or "unit").
+  // On a refusal: the kind of layer that refused ("deployment", "unit" or "personal").
   layer?: string;
   // The person changed the policy for this run, inside their ceiling.
   overridden?: boolean;
@@ -445,6 +445,8 @@ export const health = {
       // browser (#1241); the gateway refuses an enter without it.
       bind_url?: string;
       host_mode?: boolean;
+      // inbound_url_template: where an API client calls an inbound app, with {run} and {app} to fill in.
+      inbound_url_template?: string;
     };
     // Per-pluggable-seam selection (server.go's ComponentInfo), keyed by seam
     // name ("recording", "identity", ...). recording.selected ===

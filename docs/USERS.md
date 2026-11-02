@@ -108,6 +108,9 @@ Three things worth naming here, because they read as bugs otherwise:
   shared list for you) — see [ENV.md](ENV.md).
 - Unset means you may mount no host directory; that is fail-closed by design, not
   a bug.
+- A folder can sit on your own runner instead
+  ([how](operations/hybrid-laptops.md#a-workspace-folder-on-your-runner)). Such
+  folders are checked by their runner when the run starts, not scanned by Wardyn.
 - `GET /me` shows the root or roots that apply to you — a hint for the console;
   the server enforces the boundary when a mount binds.
 - Writability is a second, separate gate.
@@ -362,7 +365,7 @@ resolves your drive the same way, in a dry run too:
 
 ## Your model connections
 
-- Add your own credential for a provider from Your account ▸ Your model
+- Add your own credential for a provider from Settings ▸ Your model
   connections in the console.
 - One row per provider your admin enabled for your
   agents, each with its own sign-in or key button.

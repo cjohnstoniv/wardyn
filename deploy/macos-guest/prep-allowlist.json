@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hosts": [
+    "swscan.apple.com",
+    "swcdn.apple.com",
+    "swdist.apple.com",
+    "swdownload.apple.com",
+    "updates.cdn-apple.com",
+    "mesu.apple.com",
+    "gdmf.apple.com"
+  ]
+}

@@ -36,6 +36,8 @@ export function draftReducer(draft: NewRunDraft, action: DraftAction): NewRunDra
       return {
         ...draft, intent: action.intent, doc: undefined, revision: draft.revision + 1,
         origin: draft.origin.kind === "scratch" ? { kind: "import" } : draft.origin,
+        // A document the person commits holds the figures they chose, so leaving macOS takes none of them back.
+        guided: { ...draft.guided, macosFill: undefined },
       };
     case "launchFields":
       return { ...draft, launch: { ...draft.launch, ...action.patch } };

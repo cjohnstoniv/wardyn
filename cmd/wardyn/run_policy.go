@@ -36,6 +36,13 @@ const (
 	// for an organization component's secret: policy validation refuses that mark.
 	runPolicyShared = "This run used an organization component's shared secret. This is a record of the run, not a policy to reuse: Wardyn refuses a policy that sets shared. Select the component again on the new run."
 	runPolicyHeader = "Changed when the run started"
+
+	// The host marks (#2956). The console's SUMMARY in policy-tab-copy.ts holds the same five strings.
+	runPolicyInspected          = "Inspected"
+	runPolicyTunnelOnly         = "Tunnel only"
+	runPolicyInspectedMeaning   = "Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate."
+	runPolicyTunnelOnlyMeaning  = "Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here."
+	runPolicyTunnelOnlyAllowAll = "Hosts not listed as Inspected pass through unread."
 )
 
 // runPolicyCmd returns `wardyn run policy <run-id> [--json]`. The header lines
@@ -129,6 +136,7 @@ func runPolicyHeaderLines(v sdk.RunPolicyView, person string) []string {
 			lines = append(lines, runPolicyChangeLabel(ch, person)+": "+strings.Join(runPolicyEntries(ch), ", "))
 		}
 	}
+	lines = append(lines, runPolicyHostLines(v)...)
 	if !v.Complete {
 		lines = append(lines, runPolicyOlder)
 	}
@@ -137,6 +145,47 @@ func runPolicyHeaderLines(v sdk.RunPolicyView, person string) []string {
 	}
 	if runPolicyHasSharedGrant(v.Spec) {
 		lines = append(lines, runPolicyShared)
+	}
+	return lines
+}
+
+// runPolicyHostLines marks each allowed host Inspected or Tunnel only, then each host the proxy opens
+// outside the allowlist as Inspected, then says what each mark means. Nothing for a run that recorded
+// no marks. Under allow-all, the hosts the proxy opens outside the allowlist as Inspected, then the one
+// line that says every host not listed passes through unread.
+func runPolicyHostLines(v sdk.RunPolicyView) []string {
+	if v.HostMarks == nil || v.Spec == nil {
+		return nil
+	}
+	var lines []string
+	if v.Spec.AllowAllEgress {
+		for _, host := range v.HostMarks.Outside {
+			lines = append(lines, host+": "+runPolicyInspected)
+		}
+		if len(v.HostMarks.Outside) > 0 {
+			lines = append(lines, runPolicyInspected+": "+runPolicyInspectedMeaning)
+		}
+		return append(lines, runPolicyTunnelOnlyAllowAll)
+	}
+	var inspected, tunnel bool
+	for _, host := range v.Spec.AllowedDomains {
+		mark := runPolicyTunnelOnly
+		if slices.Contains(v.HostMarks.Inspected, host) {
+			mark, inspected = runPolicyInspected, true
+		} else {
+			tunnel = true
+		}
+		lines = append(lines, host+": "+mark)
+	}
+	for _, host := range v.HostMarks.Outside {
+		lines = append(lines, host+": "+runPolicyInspected)
+		inspected = true
+	}
+	if inspected {
+		lines = append(lines, runPolicyInspected+": "+runPolicyInspectedMeaning)
+	}
+	if tunnel {
+		lines = append(lines, runPolicyTunnelOnly+": "+runPolicyTunnelOnlyMeaning)
 	}
 	return lines
 }

@@ -57,6 +57,7 @@ import { AdminSshKeysCard } from "./admin-ssh-keys-card";
 import { ApprovalNotifyCard } from "./approval-notify-card";
 import { ScimCard } from "./scim-card";
 import { ComponentsSettingsCard } from "./components-settings-card";
+import { MacOSVMSettingsCard } from "./macos-vm-settings-card";
 import { RoleRefusal } from "../../wardyn/console-view";
 import { SETTINGS_SUPER_ONLY } from "../../wardyn/copy/console-view";
 import { Button } from "../../ui/button";
@@ -311,7 +312,7 @@ export function AdminSettingsScreen() {
   const navigate = useNavigate();
   // S-5 (#636) — the SUPER tier, not the security one: this whole page is
   // "this deployment, never a person", and a security admin has no door onto
-  // it (app-shell.tsx's navItemsForView already gives that tier `lower: []`).
+  // it (app-shell.tsx marks Settings tier "super" in the Admin nav).
   // A stale link or a typed URL still reaches the route, so the page itself
   // refuses rather than rendering the tier-appropriate leftovers it used to.
   const operator = useOperator();
@@ -431,6 +432,8 @@ export function AdminSettingsScreen() {
             {/* M-5 (#636, packet S-1): where an admin adds an SSH key that reaches other people's runs, now
                 that Your account is the only door left for a personal one. */}
             <AdminSshKeysCard />
+            {/* rc.9 (M11a, board J7): the oldest macOS base a run may use; reads its own site-config snapshot. */}
+            <MacOSVMSettingsCard />
           </SettingsGroup>
           <SettingsGroup title={SETTINGS_GROUPS.PEOPLE}>
             {/* notify-e4 (packet M6 S3): read-only channel health for the approval notifications

@@ -491,7 +491,7 @@ test("V00 act 2 — a run, and a knock at the door", async () => {
   await expect(page).toHaveURL(/\/runs\/new/, { timeout: 30_000 });
   await startGuided(page);
 
-  // The Environment sandbox is the plain command window, not the agent: this
+  // The Environment is the plain command window, not the agent: this
   // episode is keyless, and a shell is all a curl needs. Shape's cards are
   // buttons named by the card's title, which is how shapeCard finds it. An environment starts no harness, so the run comes up
   // idle with a shell, which is what act 2 and act 3 type into.

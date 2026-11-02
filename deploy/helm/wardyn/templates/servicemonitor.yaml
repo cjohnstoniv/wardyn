@@ -16,7 +16,7 @@ deprecated there). See the chart README's "Scraping /metrics" section.
 {{- $mon := (.Values.metrics | default dict).serviceMonitor | default dict -}}
 {{- if $mon.enabled -}}
 {{- $secret := $mon.bearerTokenSecret | default dict -}}
-{{- $basePath := (get .Values.env "WARDYN_BASE_PATH") | default .Values.basePath | default "" -}}
+{{- $basePath := ternary (get .Values.env "WARDYN_BASE_PATH") (.Values.basePath | default "") (hasKey .Values.env "WARDYN_BASE_PATH") -}}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

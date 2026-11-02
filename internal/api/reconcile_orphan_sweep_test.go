@@ -40,6 +40,10 @@ type orphanSweepStore struct {
 	clearedRefs []uuid.UUID
 }
 
+func (*orphanSweepStore) LiveImageCheckAttempts(context.Context) (map[uuid.UUID]bool, error) {
+	return nil, nil
+}
+
 func (s *orphanSweepStore) ListRuns(context.Context) ([]types.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

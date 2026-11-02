@@ -510,6 +510,41 @@ func TestLeqIsTrueForNarrowings(t *testing.T) {
 	}
 }
 
+// TestLeqUIAppsInboundAndCallers pins that making an app inbound, or adding a caller to
+// it, is a widening: without it the ceiling-narrowing check would wave a caller addition
+// through as a narrowing.
+func TestLeqUIAppsInboundAndCallers(t *testing.T) {
+	app := func(inbound bool, callers ...string) []types.UIApp {
+		return []types.UIApp{{Name: "api", Port: 8080, Inbound: inbound, Callers: callers}}
+	}
+	ana, bo, svc := "user:ana@example.com", "group:payments", "service:billing"
+	rows := []struct {
+		name string
+		a, b []types.UIApp
+		want bool
+	}{
+		{"same inbound app and callers", app(true, ana), app(true, ana), true},
+		{"fewer callers", app(true, ana), app(true, ana, bo), true},
+		{"no callers under an inbound app with callers", app(true), app(true, ana), true},
+		{"inbound dropped", app(false), app(true, ana), true},
+		{"a caller added", app(true, ana, bo), app(true, ana), false},
+		{"a caller swapped", app(true, svc), app(true, ana), false},
+		{"callers over an inbound app that names none", app(true, ana), app(true), false},
+		{"made inbound", app(true), app(false), false},
+		{"made inbound with callers", app(true, ana), app(false), false},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			b, lb := leqFixture()
+			a, la := leqFixture()
+			a.UIApps, b.UIApps = r.a, r.b
+			if got := composer.Leq(a, b, la, lb); got != r.want {
+				t.Errorf("Leq(%+v, %+v) = %v, want %v", r.a, r.b, got, r.want)
+			}
+		})
+	}
+}
+
 // The ceiling's grant order, and the order of two grants for the same host, must
 // not change the answer.
 func TestLeqSameHostGrantsAgreeInBothOrders(t *testing.T) {

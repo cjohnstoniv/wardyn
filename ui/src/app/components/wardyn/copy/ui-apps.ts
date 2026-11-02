@@ -46,3 +46,26 @@ export const POLICY_UI_APPS = {
   value: (app: string, port: number, path: string) => `${app} → localhost:${port}${path}`,
 } as const;
 
+
+// An app the run declares inbound (ui_apps[].inbound), on the run page and at the /open link people are given.
+// Byte for byte from the approved mock (r16 T2-b); ui-apps.test.ts freezes them.
+export const INBOUND_APP = {
+  TAG: "Inbound",
+  CALLERS: "Callers:",
+  ONLY_YOU: "Only you",
+  COPY_LINK: "Copy link for people",
+  COPY_ADDRESS: "Copy address for API clients",
+  PATH_MODE_NOTE:
+    "This deployment serves apps from one shared host, so people other than you can't open this in a browser. API clients can still call it.",
+} as const;
+
+// The /open/{run}/{app} page: Opening, then one sentence for each way it is refused. The shared-host sentence is
+// the server's (inboundNeedsHostModeMsg); the page never says whether a run exists.
+export const OPEN_APP = {
+  OPENING: (app: string) => `Opening ${app}…`,
+  NOT_SHARED: "This app isn't shared with you, or the run no longer exists.",
+  NOT_RUNNING: "This run isn't running.",
+  SHARED_HOST:
+    "This deployment serves apps from one shared host, so only the run's owner can open them in a browser. Ask an administrator to set per-run hosts.",
+  GATEWAY_OFF: "The app gateway is turned off on this deployment.",
+} as const;

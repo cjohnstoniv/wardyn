@@ -10,6 +10,8 @@
     <string>serve</string>
     <string>--config</string>
     <string>/Users/me/Library/Application Support/wardyn/runnerd.json</string>
+    <string>--log-file</string>
+    <string>/Users/me/Library/Logs/wardyn/runnerd.log</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -18,8 +20,8 @@
   <key>ThrottleInterval</key>
   <integer>10</integer>
   <key>StandardOutPath</key>
-  <string>/Users/me/Library/Logs/wardyn/runnerd.log</string>
+  <string>/Users/me/Library/Logs/wardyn/runnerd.crash.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/me/Library/Logs/wardyn/runnerd.log</string>
+  <string>/Users/me/Library/Logs/wardyn/runnerd.crash.log</string>
 </dict>
 </plist>

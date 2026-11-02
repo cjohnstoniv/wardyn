@@ -41,16 +41,26 @@ for name in "${want[@]}"; do
   spec="$(awk -v n="${name}" '$1 == n {print $2}' <<<"${TOOLS}")"
   [[ -n "${spec}" ]] || { echo "fetch-gate-tools: unknown tool ${name}" >&2; exit 2; }
   # One throwaway module per tool: tools resolved together could select different
-  # dependency versions than the tool's own `go run tool@version` does.
-  work="$(mktemp -d)"
-  (
-    cd "${work}"
-    go mod init gatetools >/dev/null 2>&1
-    go get "${spec}"
-    # A restored cache entry is trusted only after its files match go.sum's hashes.
-    go mod verify >/dev/null
-    go list -deps "${spec%@*}" >/dev/null
-  )
-  rm -rf "${work}"
+  # dependency versions than the tool's own `go run tool@version` does. The fetch is
+  # tried three times, 5 s then 10 s apart: one module-proxy stream error must not
+  # fail the gate (#3469).
+  for i in 1 2 3; do
+    work="$(mktemp -d)"
+    rc=0
+    # Chained with &&: set -e does not apply inside a subshell that is the left of ||.
+    (
+      cd "${work}" &&
+        go mod init gatetools >/dev/null 2>&1 &&
+        go get "${spec}" &&
+        # A restored cache entry is trusted only after its files match go.sum's hashes.
+        go mod verify >/dev/null &&
+        go list -deps "${spec%@*}" >/dev/null
+    ) || rc=$?
+    rm -rf "${work}"
+    [[ ${rc} -ne 0 ]] || break
+    [[ ${i} -lt 3 ]] || { echo "fetch-gate-tools: ${spec}: fetch failed 3 times" >&2; exit "${rc}"; }
+    echo "fetch-gate-tools: ${spec}: fetch attempt ${i} failed (exit ${rc}), retrying in $((i * 5)) s" >&2
+    sleep $((i * 5))
+  done
   echo "fetch-gate-tools: ${spec} modules are in the module cache"
 done

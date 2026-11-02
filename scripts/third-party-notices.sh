@@ -51,6 +51,30 @@ if ! { go_licenses report ./cmd/... > "$tmp/go.csv" &&
   exit 1
 fi
 
+# The macOS VM helper builds only for darwin/arm64 with cgo, so the pass above never sees its modules
+# (Code-Hex/vz). A second pass reports it under that target, from a go-licenses binary built for this
+# machine: `go run` would build the tool for darwin too. A module both passes list is kept once.
+darwin_pass() {
+  local bin="$tmp/bin/go-licenses"
+  GOBIN="$tmp/bin" go install "github.com/google/go-licenses@${GO_LICENSES_VERSION}" 2>> "$tmp/go-licenses.err" || return 1
+  GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 GOFLAGS=-tags=docker,k8s "$bin" report ./cmd/wardyn-macvm 2>> "$tmp/go-licenses.err" > "$tmp/go-darwin.csv" || return 1
+  GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 GOFLAGS=-tags=docker,k8s "$bin" save ./cmd/wardyn-macvm --save_path="$tmp/gotexts-darwin" --force >/dev/null 2>> "$tmp/go-licenses.err" || return 1
+}
+if ! darwin_pass; then
+  echo "ERROR: go-licenses failed for the darwin/arm64 pass, so the notices were not checked (this is the tool failing, not drift). Its stderr:"
+  head -n 100 "$tmp/go-licenses.err"
+  exit 1
+fi
+[ -s "$tmp/go-darwin.csv" ] || { echo "ERROR: the darwin pass listed no modules. Failing closed."; exit 1; }
+# Keep only what the first pass lacks, matched by licence URL: the darwin pass reports a package where the
+# first reports its module (golang.org/x/sys/unix for golang.org/x/sys).
+awk -F, 'NR==FNR { seen[$2] = 1; next } !seen[$2]' "$tmp/go.csv" "$tmp/go-darwin.csv" > "$tmp/go-darwin-new.csv"
+while IFS=, read -r mod _; do
+  mkdir -p "$tmp/gotexts/$(dirname "$mod")"
+  cp -r "$tmp/gotexts-darwin/$mod" "$tmp/gotexts/$(dirname "$mod")/"
+done < "$tmp/go-darwin-new.csv"
+cat "$tmp/go-darwin-new.csv" >> "$tmp/go.csv"
+
 # ── UI: prod dependencies only ───────────────────────────────────────────────
 (cd ui && pnpm licenses list --prod --json) > "$tmp/ui.json"
 n_ui=$(jq '[.[][]] | length' "$tmp/ui.json")
@@ -115,7 +139,7 @@ done < <( { cut -d, -f3 "$tmp/go.csv"; jq -r '.[][] | .license // empty' "$tmp/u
   echo
   echo "## Go modules (compiled into the shipped binaries)"
   echo
-  echo "Scope: reachable from \`./cmd/...\` under the production build tags \`docker,k8s\`."
+  echo "Scope: reachable from \`./cmd/...\` under the production build tags \`docker,k8s\`, and from \`./cmd/wardyn-macvm\` built for darwin/arm64 with cgo (the macOS VM helper)."
   echo
   echo "| module | licence | source |"
   echo "|---|---|---|"

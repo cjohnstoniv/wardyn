@@ -71,7 +71,10 @@ var backgroundDoors = []backgroundDoor{
 	{Door: "SSH access", Owner: "C-mode-doors", Symbols: []string{"sshAuth", "sshFreshRun"}, Enforced: true},
 	// handleUIEnter only parses and delegates to uiEnterCommon, and handleUIBind
 	// sets a binding cookie without reading any run, so neither can ask honestly.
-	{Door: "web application gateway", Owner: "C-mode-doors", Symbols: []string{"uiEnterCommon", "uiSessionStillAuthorized"}, Enforced: true},
+	// An app's ticket (handleAppTicket) is minted only for an inbound app, the door's
+	// one exception, so the predicate is asked where its ticket is spent: uiEnterCommon.
+	{Door: "web application gateway", Owner: "C-mode-doors", Symbols: []string{"uiEnterCommon", "uiSessionStillAuthorized"},
+		Routes: []string{"POST /runs/{id}/apps/{app}/ticket"}, Enforced: true},
 	// The desktop's own display is the novnc app, behind the web application
 	// gateway above. Its routes here are the Files panel, which moves files in and
 	// out of the graphical desktop (desktopRun), and the person's sign-in inside it

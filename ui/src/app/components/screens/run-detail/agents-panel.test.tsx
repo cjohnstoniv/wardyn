@@ -11,7 +11,7 @@ import type { RunDetailAgent, RunOutput, SetupStatus } from "../../../lib/types"
 import { SCENARIO_HARNESSES } from "../../../lib/new-run-fixtures/scenarios/harnesses";
 import { ModelAccessProvider } from "../../wardyn/model-access-context";
 import { RUN_AGENTS } from "../../wardyn/copy";
-import { agentLines, agentsSummary } from "./agents-panel";
+import { AgentsPanel, agentLines, agentStatus, agentsSummary } from "./agents-panel";
 import { OutputTab } from "./output-tab";
 
 const getMock = vi.fn();
@@ -46,6 +46,12 @@ const panel = () => screen.getByRole("region", { name: RUN_AGENTS.title });
 beforeEach(() => getMock.mockReset());
 
 describe("Agents panel", () => {
+  it("does not turn an absent live status into Running", () => {
+    expect(agentStatus(undefined, true)).toBeUndefined();
+    expect(agentStatus(undefined, false)).toBeUndefined();
+    expect(agentsSummary([undefined, undefined])).toBeUndefined();
+  });
+
   it("running: each agent's harness, task and status, the summary and the exit rule", async () => {
     await mount(true, { agents: [{ agent: "claude-code", state: "running" }, { agent: "codex-cli", state: "exited", exit_code: 0 }] });
     const rows = within(panel()).getAllByRole("listitem");
@@ -63,6 +69,27 @@ describe("Agents panel", () => {
     await mount(false, { complete: true, agents: [{ agent: "claude-code", state: "exited", exit_code: 0 }, { agent: "codex-cli", state: "exited", exit_code: 1 }] });
     expect(within(panel()).getByText("Failed")).toBeInTheDocument();
     expect(within(panel()).getByText("1 of 2 agents failed, so the run failed.")).toBeInTheDocument();
+  });
+
+  it("a live output with no per-agent states leaves the rows unbadged", async () => {
+    await mount(true, {});
+    expect(within(panel()).queryByText("Running")).toBeNull();
+    expect(within(panel()).queryByText(/agents ·/)).toBeNull();
+  });
+
+  it("an unavailable output leaves the rows unbadged", async () => {
+    render(
+      <ModelAccessProvider status={STATUS} onRefresh={() => {}}>
+        <AgentsPanel
+          agents={AGENTS}
+          runAgent="claude-code"
+          runTask="Fix the flaky login test in web-app."
+          live={false}
+        />
+      </ModelAccessProvider>,
+    );
+    expect(within(panel()).queryByText("Running")).toBeNull();
+    expect(within(panel()).queryByText(/agents ·/)).toBeNull();
   });
 
   it("summaries: running, failed, all finished", () => {

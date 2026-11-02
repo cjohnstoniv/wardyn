@@ -12,6 +12,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 	"github.com/google/uuid"
+	"github.com/spf13/cobra"
 )
 
 func TestRegisterCreatesPrivateBoundIdentity(t *testing.T) {
@@ -64,7 +66,7 @@ func TestRegisterCreatesPrivateBoundIdentity(t *testing.T) {
 	}
 	text := out.String()
 	if !strings.Contains(text, "registered laptop; key fingerprint "+got.Fingerprint+"\n  limits: runs at once ") ||
-		!strings.Contains(text, "claim it in the console (Your account → My runner) with this fingerprint, or\n  WARDYN_TOKEN=<your personal API token> wardyn runner claim --pool <name> --default\n") || !strings.Contains(text, "the admin token cannot claim") || strings.Contains(text, token) {
+		!strings.Contains(text, "claim it in the console (Settings → My runner) with this fingerprint, or\n  WARDYN_TOKEN=<your personal API token> wardyn runner claim --pool <name> --default\n") || !strings.Contains(text, "the admin token cannot claim") || strings.Contains(text, token) {
 		t.Fatal("fingerprint absent or token printed")
 	}
 }
@@ -447,5 +449,67 @@ func TestDropUnsentKeyKeepsAReusedKey(t *testing.T) {
 	dropUnsentKey(errors.New("connection refused"), registerArgs{}, dir)
 	if _, err := os.Stat(key); err != nil {
 		t.Errorf("a failure that is not an unknown authority removed the key: %v", err)
+	}
+}
+
+// Setup's registration takes the route its connection check took (the service's proxy), not the one this
+// shell's environment names: the check can no longer pass on a path the registration does not use.
+func TestRegisterTakesTheRouteTheConnectionCheckTook(t *testing.T) {
+	var org string
+	viaProxy := false
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		viaProxy = true
+		var req types.RunnerRegisterRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(types.RunnerRegistration{RunnerID: uuid.New(), Fingerprint: runnerwire.Fingerprint(req.PublicKey), State: types.RunnerUnclaimed, OrgURLSHA256: federation.OrgURLSHA256(org), Limits: req.Limits})
+	}))
+	defer proxy.Close()
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("the registration went direct, not by the route the check took")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer direct.Close()
+	org = direct.URL
+	root := t.TempDir()
+	tokenFile := filepath.Join(root, "token")
+	if err := os.WriteFile(tokenFile, []byte("wdr_"+strings.Repeat("d", 64)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var lim registerLimits
+	cmd := &cobra.Command{}
+	lim.register(cmd)
+	if err := cmd.ParseFlags([]string{"--max-runs=2", "--total-cpu=4", "--total-memory=8", "--total-disk=50", "--per-run-cpu=2", "--per-run-memory=4", "--per-run-disk=25"}); err != nil {
+		t.Fatal(err)
+	}
+	cmd.SetOut(&strings.Builder{})
+	cmd.SetIn(strings.NewReader(""))
+	// The check's route, as setup leaves it on the command; the test's names the proxy outright, since
+	// httpproxy never proxies loopback.
+	cmd.SetContext(context.WithValue(context.Background(), registrationRouteKey{}, func(*http.Request) (*url.URL, error) { return url.Parse(proxy.URL) }))
+	if _, err := registerRunner(cmd, registerArgs{org: org, tokenFile: tokenFile, stateDir: filepath.Join(root, "identity"), name: "laptop", limits: &lim, noMeasure: true, arch: "amd64"}); err != nil || !viaProxy {
+		t.Fatalf("registration via the checked route: viaProxy=%v err=%v", viaProxy, err)
+	}
+}
+
+// A rerun from a shell with no proxy keeps the proxy an earlier setup installed (runnerd.json) and the check
+// goes through it; the registration that follows must too, not dial the organisation direct.
+func TestSetupRegistersThroughTheProxyItChecked(t *testing.T) {
+	f, ca, addr := proxiedOrg(t)
+	proxy := newConnectProxy(t, addr, false)
+	p := mustPaths(t, f)
+	if err := os.MkdirAll(filepath.Dir(p.configFile()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(runnerFile{OrgURL: f.org, RunnerProxy: proxy.URL.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.configFile(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := f.run(setupOptions{orgCAFile: ca, tokenFile: f.tokenFile})
+	if err != nil || !strings.Contains(out, "registered ") {
+		t.Fatalf("setup did not register by the route its check took: %v\n%s", err, out)
 	}
 }

@@ -287,6 +287,7 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
   - per kubelet version (the 1.31 floor and the latest kind image) it creates a `wardyn-k6-<pid>` cluster on Calico, stands up a real organisation and enrols the `wardyn-runnerd` chart with it.
   - [`test/k6`](../test/k6) then runs under runnerd's own token; its bind/delete race cases gate the unbound-pod arm.
   - It deletes its clusters and images on exit, and runs in `nightly.yml`'s `k6-kind-conformance` job, one leg per kubelet and suite (`K6_SUITES`); self-skips unless `WARDYN_TEST_K8S=1`.
+  - `K6_SUITES=workload` runs `TestK6Workload` instead (#3804), with a throwaway in-cluster Dex for real sign-ins. A bound namespace's WardynWorkload launches a run on the bound pool; an unbound one is refused on its status. The `k6-workload-e2e` job runs it.
 - **[`scripts/kind-components-walk.sh`](../scripts/kind-components-walk.sh)** and **[`scripts/kind-run-output-walk.sh`](../scripts/kind-run-output-walk.sh)** each make and delete their own quickstart cluster, and run in `nightly.yml`'s `kind-acceptance-walks` job; self-skip unless `WARDYN_TEST_K8S=1`.
 - **[`scripts/runner-compat-walk.sh`](../scripts/runner-compat-walk.sh)** — runner and organisation version compatibility against the newest published 0.9.Z release:
   - this tree's `wardyn-runnerd` registers with the released organisation and completes one exec run. Below 0.9.3 that run must fail instead, with the error that says to upgrade the organisation first.
@@ -372,6 +373,8 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
 | `vm-conformance` (not required) | – | pending | pending | 30 |
+| `macos` (not required) | – | pending | pending | 30 |
+| `macos-xcode-27` (not required) | – | pending | pending | 10 |
 | `ui-e2e` (1/2, 2/2 matrix) | 1 | 7.0 | 7.0 | 25 |
 | `test-pg-shard` (api-1, api-2, store, race) | – | pending | pending | 20 |
 | `test-pg` (aggregator) | – | pending | pending | 10 |
@@ -437,7 +440,7 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 
 - The 07:00 nightly and a plain dispatch run every lane. A release candidate dispatches it with `-f scope=candidate`, which [`scripts/release-patch.sh`](../scripts/release-patch.sh) does right after pushing the branch and before opening the PR.
 - Five jobs then skip through a job-level `if: inputs.scope != 'candidate'`: `e2e-live`, `ci-mode-dogfood-model-fake`, `test-e2e-concurrent`, `migration-merge-check` and `published-image-scan`.
-- `kind-survival-walk`, `k6-kind-conformance`, `kind-acceptance-walks`, `hybrid-walk` and `kind-upgrade-walk` run under `scope=candidate`, are in `release.yml`'s `watched=`, and gate a release. [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) requires every leg of a matrix job to be green (#3439).
+- `kind-survival-walk`, `k6-kind-conformance`, `k6-workload-e2e`, `kind-acceptance-walks`, `hybrid-walk` and `kind-upgrade-walk` run under `scope=candidate`, are in `release.yml`'s `watched=`, and gate a release. [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) requires every leg of a matrix job to be green (#3439).
 - [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 18 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
 - A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
 - On a same-repo `train/*` or `prep/*` pull request, `train-suites` dispatches the nightly (`scope=candidate`, `publish=false`) on the head and waits; `train-gate` needs that run green. A call would fail on a fork's read-only token, so nothing uses `workflow_call`.
@@ -446,8 +449,13 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
   - Dispatch it on the bundle branch `proofs/<lane>-<sha12>`, one commit on `origin/main` adding `.proofs/`; on `main` every job skips.
   - Lane code can save cache entries under its run's ref whatever the token allows, and `ci.yml` restores `main`'s. So it never runs there, and it uses no cache.
   - A run counts only once `git diff --quiet origin/main...<head sha> -- ':(exclude).proofs'` exits 0 locally, so the workflow and script were main's.
+  - The `prove` job has the same Postgres service and `WARDYN_TEST_PG` as `test-pg-shard`, so a proof of a PG-backed test in `./internal/store` or `./internal/api` runs there instead of skipping.
 - `release.yml` has one group per ref and cancels nothing, so a dispatch and the tag push cannot publish at once.
 - `release.yml`'s `runner-pkg` job (macOS) builds `wardyn-runnerd.pkg` with [`scripts/build-runner-pkg.sh`](../scripts/build-runner-pkg.sh). Each signing step runs only when its `APPLE_DEVELOPER_ID_*` or `APPLE_NOTARY_*` secrets are set, and logs a skip line otherwise; [`scripts/test-runner-pkg.sh`](../scripts/test-runner-pkg.sh) covers the script on Linux.
+- The same job builds the macOS VM helper with cgo and signs it ad hoc with its one virtualization entitlement even without secrets. It then checks that entitlement, and that the package holds no macOS image.
+- The non-required `macos` job compiles and tests the helper and the darwin guest agent on a hosted Mac. `macos-xcode-27` checks the macOS 27 selector names. Neither boots a VM.
+  - `macos` is not a required check, but a red `macos` makes the run unusable as release evidence (green-by-tree reads the run's conclusion). It also runs the package postinstall as root against a temp root and reads the ledger back.
+  - `macos-xcode-27` runs on a public-preview image with `continue-on-error`, so it is informational and never release evidence.
 
 ### Incremental CI
 
@@ -556,7 +564,7 @@ So:
   - `notify-flaky` skips when both `ui-e2e` shards said their flaky list was empty, and runs on any other answer, including none.
 - `compose`, `dco`, `diagrams` and `gates (…)` do not read the classification and run on every change.
   - (`helm` stays on `backend`, not on the chart's own paths: `make helm-lint` also renders [`examples/policies/demo.json`](../examples/policies/demo.json) and [`cmd/wardynd/testdata/values-0.7.yaml`](../cmd/wardynd/testdata/values-0.7.yaml).)
-- Only a run whose five outputs and nine `image-scope` answers are all `true` uploads the `ci-full-tree-<tree>` marker that [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) accepts as release evidence.
+- Only a run whose six outputs and nine `image-scope` answers are all `true` uploads the `ci-full-tree-<tree>` marker that [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) accepts as release evidence.
   - A run that narrowed anything did not test everything, even where every check it reported is green.
   - `build` writes the marker, because only after `image-scope` can it know whether a scan was narrowed.
 
@@ -686,6 +694,7 @@ wardyn audit <id> --json       # likewise
 - `--dry-run` posts the same body to `POST /api/v1/runs/preflight`, a dry-run of launch resolution that mints nothing and prints the `setup_items` blockers plus the confinement class that would be enforced.
 - `--placement remote|local` chooses where the sandbox lives. A local run goes to your own runners through `--pool <id>` or your default pool, else is refused `runner_pool_required`. `--runner <id>` pins one of your runners in that pool; unset, the pool picks an online one with room. Other refusals include `runner_offline` and `runner_at_capacity`.
 - `ci-run.sh` calls the same endpoint before launching.
+- A command that must stay up is a [service](SERVICES.md).
 
 **Provisioning the CI principal, once, against this deployment:**
 

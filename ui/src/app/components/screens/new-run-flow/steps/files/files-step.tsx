@@ -12,7 +12,9 @@ import * as React from "react";
 import { TriangleAlert } from "lucide-react";
 import { Button } from "../../../../ui/button";
 import { cn } from "../../../../ui/utils";
+import { Notice } from "../../../../wardyn/notice";
 import { useOperator } from "../../../../wardyn/operator-context";
+import { MAC_DRIVES } from "../../../../wardyn/copy/mac-drives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { workspaces } from "../../../../../lib/api/workspaces";
@@ -97,6 +99,7 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
   const computerAllowed = useComputerFoldersAllowed();
   const computer = intent.local_folder?.runner_id ? intent.local_folder : undefined;
   const operator = useOperator();
+  const macOS = intent.machine_kind === "macos_vm";
 
   const attachments = pre?.attachments ?? [];
   const src: ItemSources = { rows, folders, catalogue: drives.catalogue, attachments };
@@ -264,6 +267,11 @@ export function FilesStep({ go, createUserDrive }: NewRunScreenProps & Pick<AddD
                   )}
                 </span>
               </label>
+            </div>
+          )}
+          {macOS && (
+            <div className="px-[15px] pb-3.5">
+              <Notice tone="info">{MAC_DRIVES.D08}</Notice>
             </div>
           )}
         </FilesGroup>

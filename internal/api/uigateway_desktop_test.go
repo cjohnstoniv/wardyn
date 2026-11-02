@@ -830,3 +830,117 @@ func postDesktopClose(gw http.Handler, h *uiHarness, c *http.Cookie) *httptest.R
 	gw.ServeHTTP(rec, req)
 	return rec
 }
+
+// desktopSiteStore answers the site config a test sets.
+type desktopSiteStore struct {
+	*desktopClosedStore
+	sc  types.SiteConfig
+	err error
+}
+
+func (s *desktopSiteStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.sc, s.err
+}
+
+// A macOS VM's desktop opens as a Linux VM's does, except for an agent whose admin set "Sign-ins in a
+// desktop: Not allowed", or when the roster cannot be read: a macOS keychain cannot be made read-only,
+// so that desktop is refused where a Linux one keeps no sign-ins.
+func TestDesktopEnterRefusesAMacOSDesktopWhoseSignInsAreOff(t *testing.T) {
+	h, _ := newDesktopHarness(t)
+	h.run.Agent, h.run.MachineKind = "claude-code", types.MachineMacOSVM
+	h.store.putRun(h.run)
+	st := &desktopSiteStore{desktopClosedStore: h.srv.cfg.Store.(*desktopClosedStore)}
+	h.srv.cfg.Store = st
+	if rec := h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)); rec.Code != http.StatusFound {
+		t.Fatalf("a macOS VM's desktop = %d %s, want it opened", rec.Code, rec.Body.String())
+	}
+	off := types.SiteConfig{AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{{ID: "claude-code", DesktopSignInsOff: true}}}}
+	for name, c := range map[string]struct {
+		sc  types.SiteConfig
+		err error
+	}{"Not allowed": {sc: off}, "an unreadable roster": {err: errors.New("pool closed")}} {
+		st.sc, st.err = c.sc, c.err
+		rec := h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser))
+		var body errorBody
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != http.StatusForbidden || body.Reason != reasonDesktopSignInsOff || body.Error != "Your admin doesn't allow sign-ins in a desktop while Claude Code runs, and a macOS desktop can't block them yet." {
+			t.Fatalf("%s: a macOS VM's desktop = %d %+v, want 403 %s", name, rec.Code, body, reasonDesktopSignInsOff)
+		}
+	}
+	h.run.MachineKind = types.MachineLinuxVM
+	h.store.putRun(h.run)
+	st.sc, st.err = off, nil
+	if rec := h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)); rec.Code != http.StatusFound {
+		t.Fatalf("a Linux VM's desktop under Not allowed = %d %s, want it opened (it keeps no sign-ins)", rec.Code, rec.Body.String())
+	}
+}
+
+// A macOS VM whose runner does not say it can be controlled is watched only: the viewer is told, the
+// sessions are audited as view only, and no key, pointer move or paste reaches the display.
+func TestDesktopStreamOnAViewOnlyMacKeepsInputFromTheDisplay(t *testing.T) {
+	h, dr := newDesktopHarness(t)
+	h.srv.cfg.Store = &desktopSiteStore{desktopClosedStore: h.srv.cfg.Store.(*desktopClosedStore)}
+	h.run.Agent, h.run.MachineKind = "claude-code", types.MachineMacOSVM
+	h.store.putRun(h.run)
+	request := []byte{3, 1, 0, 0, 0, 0, 7, 128, 4, 56}
+	reached := make(chan []byte, 1)
+	dr.after = func(b net.Conn) {
+		got := make([]byte, len(request))
+		if _, err := io.ReadFull(b, got); err == nil {
+			reached <- got
+		}
+	}
+	srv := httptest.NewServer(h.gateway)
+	t.Cleanup(srv.Close)
+	c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+	if got := uiGet(h, desktopPath(h, "/"), c); !strings.Contains(got.Body.String(), `&#34;view_only&#34;:true`) {
+		t.Fatalf("viewer = %d %s, want view_only in its boot data", got.Code, got.Body.String())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := dialDesktop(t, ctx, h, srv.URL, c)
+	<-dr.dialled
+	v.handshake()
+	var input []byte
+	input = append(input, 4, 1, 0, 0, 0, 0, 0, 'a')
+	input = append(input, 5, 1, 0, 10, 0, 20)
+	input = append(input, rfbCut(6, pasteSentinel)...)
+	v.write(append(input, request...))
+	select {
+	case got := <-reached:
+		if string(got) != string(request) {
+			t.Fatalf("the VM got %q, want only the update request", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("the update request never reached the VM")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(h.audit.auditRows("ui.input.drop", "denied")) < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if rows := h.audit.auditRows("ui.input.drop", "denied"); len(rows) != 2 {
+		t.Fatalf("ui.input.drop rows = %+v, want one each for key and pointer", rows)
+	}
+	for _, action := range []string{"ui.authorize", "ui.open"} {
+		rows := h.audit.auditRows(action, "success")
+		if len(rows) == 0 || !strings.Contains(string(rows[len(rows)-1].Data), `"view_only":true`) {
+			t.Fatalf("%s rows = %+v, want view_only", action, rows)
+		}
+	}
+}
+
+// The viewer's boot data names the run's machine kind, so a macOS desktop that is still starting is
+// named as one.
+func TestDesktopViewerBootNamesTheMachineKind(t *testing.T) {
+	h, _ := newDesktopHarness(t)
+	h.srv.cfg.Store = &desktopSiteStore{desktopClosedStore: h.srv.cfg.Store.(*desktopClosedStore)}
+	for _, kind := range []types.MachineKind{types.MachineLinuxVM, types.MachineMacOSVM} {
+		h.run.Agent, h.run.MachineKind = "claude-code", kind
+		h.store.putRun(h.run)
+		c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+		got := uiGet(h, desktopPath(h, "/"), c)
+		if want := `&#34;machine_kind&#34;:&#34;` + string(kind) + `&#34;`; got.Code != http.StatusOK || !strings.Contains(got.Body.String(), want) {
+			t.Fatalf("%s viewer = %d %s, want %s in its boot data", kind, got.Code, got.Body.String(), want)
+		}
+	}
+}

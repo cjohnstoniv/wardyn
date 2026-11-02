@@ -69,18 +69,20 @@
 
 - L2 egress allowlist: exact hosts or `*.` wildcards.
 - An exact host covers only itself, so a deny names every host a vendor answers on.
-- To wall off GitHub, deny `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com` and `ssh.github.com`; `api.github.com` is also the host the GitHub CLI component reaches.
+- To wall off GitHub, deny `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com` and `ssh.github.com`; the GitHub CLI component also reaches `api.github.com`.
 - A profile that denies any host in GitHub's family (`github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`) also withholds the git broker, while plain egress to `api.github.com` stays exact-host. Such a profile refuses a run that attaches a GitHub CLI row or the built-in GitHub component.
-- To wall off Azure DevOps, deny `dev.azure.com`, `*.dev.azure.com` and `*.visualstudio.com`; a deny on `dev.azure.com` alone leaves `<org>.visualstudio.com` and the `vssps`, `vsrm`, `feeds`, `pkgs` and `almsearch` service hosts reachable with the person's credential.
-- Empty under default-deny means the sandbox reaches nothing.
+- Denying any Azure DevOps host, such as `dev.azure.com`, withdraws the person's Azure DevOps credential lane: its credentials and the hosts it added; hosts your policy allows itself stay reachable without the credential.
+- After a revive, a host your policy lists with exactly the same host:port spelling as one of these hosts also loses plain egress for that person's runs. This happens only if the Wardyn boundary's allowlist applied to the run at its start or at the revive. A bare host or a wildcard is not affected.
+- To wall off plain Azure DevOps egress, deny `dev.azure.com`, `*.dev.azure.com` and `*.visualstudio.com`.
+- Empty under default-deny: no egress.
 - Each entry must be a shape the proxy's matcher can match.
-- A mid-label wildcard, a URL, a bad `:port`, or a non-ASCII spelling is rejected at write time rather than shipped as a rule that silently matches nothing.
-- (An internationalised host reaches the wire as punycode, so type the `xn--…` form.)
-- That refusal is a WRITE-time check, so a policy stored before it landed can still carry a dead entry.
-- Each sidecar therefore re-checks both lists at boot and logs one `WARN` naming every entry that can never match.
-- A warning, never a refusal, since failing a run closed over an entry that has been inert since it was written would be the worse outcome.
-- It matters most on `denied_domains`, where a dead entry denies nothing.
-- Capped at **256 entries** — a hostile-input ceiling, not a sizing of any real policy — rejected (`400`) at write time.
+- Writes reject a mid-label wildcard, a URL, a bad `:port` or a non-ASCII spelling.
+- Type internationalised hosts as punycode (`xn--…`).
+- A policy stored before that check can still carry a dead entry.
+- Each sidecar's boot `WARN` names every dead entry in both lists.
+- Never a refusal: failing a run over a long-inert entry is worse.
+- It matters most on `denied_domains`: it denies nothing.
+- Capped at **256 entries**, a hostile-input ceiling; more is a write-time `400`.
 
 ### `allow_all_egress`
 
@@ -534,6 +536,39 @@ What the check does and does not settle:
 - Whatever `approved_egress` already holds, from that button or from before this migration, is still unioned into a confined replay's allowlist.
 - An `egress:<host>` requirement row is kept safe by who may write it (the write-side authorization) and by its provenance (only `operator_set` rows are auto-added at launch), not by a clamp at fold time. With [`WARDYN_REQUIRE_OPERATOR_SET_EGRESS`](ENV.md#wardyn_require_operator_set_egress) set to `false`, the operator has chosen to drop the provenance gate, and no fold-time clamp replaces it.
 
+## Your walls
+
+- Your walls are limits you set on every run you start, which only narrow what your organisation allows. They are one private document per signed-in person; no one else reads or edits it, and no admin route reaches it.
+- Set them in **Settings** in the console, with `wardyn walls`, or through `/api/v1/me/walls` ([sdk.md](sdk.md#your-walls)). A save applies to runs you start from then on.
+- The admin token, local mode and a service identity are no person, so they have no walls (`400` `walls_need_person`) and none are applied to their runs.
+
+| Knob | Console | Effect on each run you start |
+|---|---|---|
+| `allowed_domains` | **Only these sites** | The run reaches only these sites and what its own setup needs: repositories, model and tools. `[]` leaves only the setup. Naming it turns `allow_all_egress` off |
+| `denied_domains` | **Never these sites** | Added to the run's deny list, which wins |
+| `allow_all_egress` | | `false` only. Turns open egress off |
+| `first_use_approval` | **When a site is not listed** | **Block it** (`always_deny`), **Block and ask for review** (`deny_with_review`) or **Hold for review** (`wait_for_review`). The stricter of the run's and yours stands |
+| `min_confinement_class` | **Barrier at least** | The run's floor is raised to at least `CC1` (Fence), `CC2` (Wall) or `CC3` (Vault) |
+| `desktop` | **Clipboard and files** | `paste_in`, `copy_out`, `upload` and `download` each take `blocked`. A direction you leave out stays as the run has it |
+| `withheld_grants` | **Credentials kept out** | The run is not given a grant of that `kind`, or of that `kind` and `scope` |
+
+- A knob you leave out is no limit. Every value only narrows: `allow_all_egress: true` and a direction set to anything but `blocked` are refused as `400` `walls_invalid`, naming the path.
+- A site is a DNS name or a `*.` wildcard, never an IP address, a port or a URL. A list holds at most 64 entries and `withheld_grants` at most 16.
+- In the console, choosing **Only these sites** also selects **Block it** for unlisted sites.
+
+### How your walls apply
+
+1. At create, on every base policy, the walls meet the run's policy just inside the Wardyn boundary's step. A super admin's own run is bound too.
+2. A host or credential they cut is dropped with the warning `your walls narrowed <knob>`. The run's policy record names the layer `personal` for each knob they decided, and the run's **Policy** tab heads those changes **Your walls**.
+3. At dispatch, at revive and at the credential mint door, your denies, your blocked directions and your withheld credentials are applied again. Your site list is not, so a host the run's own setup adds stays reachable.
+   - Loosening your walls after a run starts frees nothing for it. A deny, a blocked direction or a withheld credential added later binds it.
+4. An egress approval for a host your `denied_domains` cover is refused for every approver, `403` `personal_walls_host`: "Your walls block {host}. Change them in Settings." to you, and "{owner}'s walls block {host} for this run." to anyone else. A host outside your list follows your **When a site is not listed** choice.
+5. A mint of a credential you keep out is refused `403` `credential_withheld`.
+6. If your walls cannot be read, a create is refused `500`, the run is sealed to no egress and no credential, a mint is `503` `credential_withheld_unread` and an approval is `500`. A run is never started without them.
+
+- Unit and boundary locks do not apply to your walls, and your walls do not change unit limits or door switches. They have no GPU knob.
+- To narrow one run only, set `overrides.egress.allow_all_egress: false` beside `overrides.hosts.add_allowed` ([NEW-RUN.md](NEW-RUN.md#step-5-tools-and-access), [sdk.md](sdk.md#narrowing-one-run)).
+
 ## Approval decision scopes
 
 - An approve/deny decision on an `egress_domain` approval carries a **scope** — how far that one decision reaches.
@@ -582,6 +617,7 @@ What the check does and does not settle:
 > - It is **off by default for container runs** (today's every-port behaviour) and `dry_run` marks, without refusing, each allow it would refuse.
 > - The proxy turns it **on for every run dispatched as a desktop VM** (`vm` in its config). For such a run, every connection the desktop makes goes through Wardyn's network relay, which hands allowed ones to the proxy and drops the rest.
 > - The relay checks the TLS server name only when a connection opens with TLS. On a granted port it carries without that check plain HTTP (except on port 80), a protocol whose server speaks first, and a STARTTLS-style protocol (cleartext first, TLS later).
+> - A connection to the run's proxy itself, which the desktop's `HTTPS_PROXY` names, is carried through unchanged and checked as a container's: a `CONNECT` is decided on its host name, and the TLS server name is not checked.
 
 - An unrecognised `decision_scope` is rejected at write time, same as `first_use_approval` above — `Valid()` only accepts empty or one of the four values in the table.
 - The one place an unrecognised value can still appear is a proxy reading a decision made by a *newer* control plane.
@@ -885,6 +921,8 @@ What the check does and does not settle:
 | `name` | `string` | — (required) | Lower-case slug (`[a-z0-9-]`, 1–32 chars, alphanumeric at both ends), unique within the policy. It reaches a filesystem path (`/usr/local/bin/wardyn-ui-<name>`) and a URL query, so the shape is enforced at write time rather than sanitised later. |
 | `port` | `int` | — (required) | The port the app listens on **inside** the sandbox, on `127.0.0.1`. Unique within the policy. The sandbox has no other reachable address, and the relay dials nothing else. |
 | `path` | `string` | `/` | Landing path after the gateway's ticket handoff. Must be an absolute same-origin path — a scheme, a host, a `//` prefix or a `..` is rejected, since that redirect would otherwise leave the UI origin. |
+| `inbound` | `bool` | `false` | Makes the port a service port: the run's owner and its `callers` reach it through the gateway on any run, a background run included. Declaring it needs the restricted `feature` value `inbound`. See [Inbound](UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port). |
+| `callers` | `[]string` | `[]` | Who besides the owner may call an `inbound` app: `user:<sub or email>`, `group:<name>` or `service:<name>`, lower-case, each once, at most 32. Refused without `inbound`; `all` is not a caller. Fixed at create. |
 
 ## `desktop` — `DesktopControls`
 
@@ -1036,8 +1074,8 @@ The match is exact, so it would never fire and would silently read as enforcemen
 | | | | A body in a non-identity `Content-Encoding`, a malformed pack, a `deny_paths` list too long to evaluate, and a `deny_paths` entry the broker cannot read (one that bypassed write-time validation) land here too. |
 | A ref is set to a commit the request does not carry (for example a branch created at a commit the forge already has) | `415` | `brokered:git:push-uninspectable` | Leave the named refs out of the push, or point them at commits it carries. A complete clone (`git fetch --unshallow`) does not help, and one new commit need not fix every ref. |
 | The sidecar was busy inspecting other requests for longer than it waits | `503` | `brokered:git:push-uninspectable` | Retry the push. Inspection takes the sidecar's one inspection slot, shared with LLM request scanning, because a small compressed push can inflate to over a hundred MiB inside a sidecar capped at 256 MiB. |
-| A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked | `403` | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
-| A path matched `require_review_paths` on an **unattended** run | `403` | `brokered:git:push-held-unattended` | Take those paths out of the push, or run the task interactively. No approval is raised. |
+| A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked | `403`; on the Azure DevOps Entra lane, a push whose paths could not be worked out is instead a rejected ref whose reason git prints | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
+| A path matched `require_review_paths` on an **unattended** run | `403`; on the Azure DevOps Entra lane, a rejected ref whose reason git prints | `brokered:git:push-held-unattended` | Take those paths out of the push, or run the task interactively. No approval is raised. |
 
 
 - A refused push is **never forwarded**, and the refused request mints nothing itself — but it does not prevent a credential being issued.
@@ -1079,7 +1117,8 @@ So an entry a pattern matches is judged one of two ways:
 
 - **An entry the pack carries is refused from the pack alone.** It is content the push adds or changes.
 - **An entry the pack does not carry is compared with the commit the push builds on.**
-  - The broker reads that commit's trees from GitHub's REST API — trees only, never file contents — with the run's own credential for the lane.
+  - The broker reads that commit's trees from the forge's REST API — trees only, never file contents — with the run's own credential for the lane, in the repository the push names.
+  - That is GitHub's API, or the Azure DevOps Git API at version 7.1.
   - It compares the mode and object id at the same path.
   - Object ids are content addresses, so a match means the push left that path, and everything beneath it, exactly as that commit held it, and the entry passes.
   - With `deny_paths: [".github/workflows/**"]`, a repository that already has workflows can push an edit to `src/`; a push that adds, changes, moves or restores anything under `.github/workflows/` is refused.
@@ -1100,19 +1139,22 @@ So an entry a pattern matches is judged one of two ways:
 - So it re-sends its history — its shallow boundary commit, or everything — and the first commit of that history would read as though the push added every file the repository has.
 - Those commits are put to the same question: the ones GitHub places in the current history of the default branch or an updated branch are taken out, and the push is judged against them.
 
-- **When the comparison cannot be made, the entry refuses the push, and the refusal says why:** the forge is not GitHub (a `git_pat` grant for another host, or the Azure DevOps Entra lane).
-- No parent counts; or a read fails, answers other than `200`, comes back truncated, needs more than 64 reads, or takes longer than 20 seconds.
+- **When the comparison cannot be made, the entry refuses the push, and the refusal says why:** the broker has no reader for the forge.
+- That is a `git_pat` grant for a host that is neither GitHub nor Azure DevOps Services, or an Azure DevOps remote whose repository it cannot name.
+- No parent counts; or a read fails, answers other than `200`, comes back truncated or paged, needs more than 64 reads, or takes longer than 20 seconds.
+- On Azure DevOps, a push that moves a branch other than forward from the tip it states is not compared either: the commit it builds on does not show what the branch loses.
 - The reads happen only for a push the pack alone would refuse, while it holds the sidecar's inspection slot, and the credential is normally the one the push's own discovery request already minted.
 - In the refusal, a path ending in `/` names a directory the push does not carry, and `/` alone names the whole tree.
 
 **A push that adds no commits.**
 
 - Creating a branch at a commit the forge already has, or rolling a branch back, sends no objects, so the rules have nothing to read.
-- The broker asks GitHub, with the run's own credential, whether each commit the push points a ref at is in the current history of the default branch or of a branch the push updates.
+- The broker asks the forge, with the run's own credential, whether each commit the push points a ref at is in the current history of the default branch or of a branch the push updates.
 - When every one is, the push goes through as carrying no new content; the branch-namespace rules still apply.
   - That includes a commit whose tree still holds a path `deny_paths` now names: the forge already has it in that history.
   - Under `git_push_any_branch`, a lightweight tag at such a commit passes too; an annotated tag is still refused.
-- Otherwise it is refused: "This push adds no new commits; the remote already has them.", with the reason (the forge is not GitHub, a commit sits only on another branch, or the read failed).
+- Azure DevOps also requires each branch to move forward from the tip the push states, so rolling a branch back there is refused.
+- Otherwise it is refused: "This push adds no new commits; the remote already has them.", with the reason (no reader for the forge, a commit only on another branch, or a failed read).
 - A push that carries objects but points a ref at a commit it does not carry is still refused, naming that ref.
 
 > [!WARNING]
@@ -1157,6 +1199,13 @@ So an entry a pattern matches is judged one of two ways:
 - **An unattended run does not hold.**
   - A run with a task and nobody driving it (not `interactive`) has nobody to ask, so a review match is refused at once (`brokered:git:push-held-unattended`) and no approval is raised.
   - The control plane refuses such a raise as well.
+  - **It cannot be approved later.** A real match on an unattended run stays refused, on every lane and on macOS VM runs too. To land it, remove those paths from the push or run the task interactively so an admin can approve it.
+- **A push that removes a file at a review path is not held, on any forge.** That means deleting it, renaming it out, or replacing a directory or parent at or above the pattern with a file.
+  - These rules judge what a push introduces, so the push goes through. A `**` pattern does hold a push that replaces the directory itself with a file.
+  - The forge's own branch policy is what protects that file.
+- **On Azure DevOps a review pattern holds only a push that touches a matching path.**
+  - What the pack does not carry is compared through the Git REST API, so a new branch that touches no matching path goes through, on an unattended run too.
+  - When the comparison cannot be made, the push is still held or refused. Git prints the refusal as a remote rejection. It says the paths could not be worked out on this lane, and why, rather than that the push touches them. The listed paths are what could not be cleared. The audit row is the same `brokered:git:push-held-unattended` or `brokered:git:push-held`.
 - **The hold lasts `hold_seconds`** (default 120, at most 600).
   - git waits on the open request — it only gives up early if `http.lowSpeedLimit` and `http.lowSpeedTime` are set.
   - Past the hold the push is refused and the request stays in the console; pushing the same commits again waits on that same request rather than raising another.
@@ -1195,8 +1244,8 @@ So an entry a pattern matches is judged one of two ways:
 - The Azure DevOps REST door refuses every content push while it is on: a REST push names no file modes.
 - `max_file_size_mib` decides with `gitpack.Change.Size()`, which returns `(bytes, known)`, so a bare comparison against a limit does not compile.
 - A size the pack does not carry (a submodule pointer, an unchanged file on a second push) is cleared against the forge or refused.
-- The forge can be read only on github.com:
-  - on Azure DevOps and any other `git_pat` host the rule refuses every push that builds on history, because every file the push did not itself change has no size the broker can learn,
+- The forge can be read only on github.com and Azure DevOps:
+  - on any other `git_pat` host the rule refuses every push that builds on history, because every file the push did not itself change has no size the broker can learn,
   - and a size-only rule also refuses the Azure DevOps REST content routes that name no paths.
 
 > [!NOTE]

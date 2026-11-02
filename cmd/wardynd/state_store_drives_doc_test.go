@@ -68,9 +68,13 @@ func TestStateStoreTableCoversUserDrives(t *testing.T) {
 	}
 	// Every backend must be reachable from one of the shapes above; a NEW
 	// backend with a new shape has to be documented, not silently added.
-	if len(types.DriveBackends) != 4 {
-		t.Errorf("types.DriveBackends now has %d entries — the state-store row documents 3 object shapes for 4 backends "+
+	if len(types.DriveBackends) != 5 {
+		t.Errorf("types.DriveBackends now has %d entries — the state-store row documents 4 object shapes for 5 backends "+
 			"(the two PVC backends share one); re-check the row before widening this guard", len(types.DriveBackends))
+	}
+	// A Mac disk is named as a Docker volume is, but it is a file on the Mac it is kept on.
+	if want := "macos-vm.noindex/drives/"; !strings.Contains(row, want) {
+		t.Errorf("docs/OPERATIONS.md's state-store User drives row never says where a Mac disk drive's image is (%q); row is:\n%s", want, row)
 	}
 	for _, want := range []struct{ claim, why string }{
 		{"`pg_dump` never carried this",

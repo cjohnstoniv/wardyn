@@ -43,6 +43,10 @@ func (h *Hub) currentActivity(ctx context.Context, row types.Runner, a Admission
 	if !currentSession || !session.readyFor(session.id) || session.peer != peer || peer == nil || !peer.Online() || a.Activity == nil {
 		return runnerwire.ErrNotReady
 	}
+	// The lookups below hold the barrier for a store round trip. Say whose session holds it, so Online
+	// reads the runner as connected meanwhile and placement does not refuse a run on a runner that is.
+	session.activityPeer.Store(peer)
+	defer session.activityPeer.Store(nil)
 	current, err := h.cfg.Lookup(ctx, row.ID)
 	if err != nil || current.ID != row.ID || current.State != types.RunnerClaimed || current.RevokedAt != nil ||
 		!current.OwnerHeld() || current.OwnerKind != row.OwnerKind || current.Owner != row.Owner || string(current.PublicKey) != string(row.PublicKey) || current.OrgURLSHA256 != row.OrgURLSHA256 {

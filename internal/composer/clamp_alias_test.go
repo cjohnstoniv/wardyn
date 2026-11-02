@@ -26,7 +26,7 @@ func aliasProposal(t *testing.T) types.RunPolicySpec {
 		AllowedDomains:  append(make([]string, 0, 4), "api.example.com", "github.com"),
 		DeniedDomains:   []string{"blocked.example.com"},
 		AllowedMethods:  []string{"GET", "POST"},
-		UIApps:          []types.UIApp{{Name: "code", Port: 8080, Path: "/"}},
+		UIApps:          []types.UIApp{{Name: "code", Port: 8080, Path: "/", Inbound: true, Callers: []string{"user:ana@example.com"}}},
 		ToolRules:       []types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}},
 		WorkspaceRepos:  []types.WorkspaceRepo{{Repo: "acme/widgets", Target: "/work/widgets"}},
 		WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/repo", Target: "/work/repo", ReadOnly: &ro}},
@@ -65,6 +65,7 @@ func widenInPlace(t *testing.T, s *types.RunPolicySpec) {
 	s.DeniedDomains[0] = "allowed.example.com"
 	s.AllowedMethods[0] = "DELETE"
 	s.UIApps[0].Port = 31337
+	s.UIApps[0].Callers[0] = "user:mal@example.com"
 	s.ToolRules[0].Effect = types.ToolAllow
 	s.WorkspaceRepos[0].Repo = "attacker/payload"
 	s.Resources.MemoryMiB = 1 << 20

@@ -40,6 +40,16 @@ type poolTarget struct {
 	trust types.RunnerTrustClass
 	// ownerKind is a registered runner's owner kind: a person's own runner, or an organization's.
 	ownerKind types.RunnerOwnerKind
+	// runsNamespace is the Kubernetes namespace the pool's membership has this organization runner serve
+	// it in; empty is the runner's default namespace.
+	runsNamespace string
+}
+
+// servesRunsNamespace reports whether the target can place a run in the namespace its membership names:
+// always for the default namespace, and otherwise only a runner that advertises it. An older runner
+// advertises none, so it never takes a namespaced membership.
+func (t poolTarget) servesRunsNamespace() bool {
+	return t.runsNamespace == "" || slices.Contains(t.facts.RunsNamespaces, t.runsNamespace)
 }
 
 // personalPoolDefaults is the signed-in person's own saved defaults: empty for a caller who is no
@@ -258,7 +268,17 @@ func (s *Server) orgRunnerTargets(ctx context.Context, ps store.RunnerPoolStore,
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	return s.registeredRunnerTargets(ctx, ids, runners)
+	targets, refusal := s.registeredRunnerTargets(ctx, ids, runners)
+	namespaces := map[uuid.UUID]string{}
+	for _, m := range members {
+		if m.RunnerID != nil {
+			namespaces[*m.RunnerID] = m.RunsNamespace
+		}
+	}
+	for i := range targets {
+		targets[i].runsNamespace = namespaces[*targets[i].runnerID]
+	}
+	return targets, refusal
 }
 
 // registeredRunnerTargets is each runner of ids, among runners, with its facts, room and trust class.

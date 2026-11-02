@@ -151,6 +151,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepAWSCLIProfile", foldCreate | foldPreflight | foldPreview},
 	{"stepAutonomy", foldCreate | foldPreflight | foldPreview},
 	{"stepToolPolicy", foldCreate | foldPreflight | foldPreview},
+	{"stepMacOSHold", foldCreate | foldPreflight | foldPreview},
 	{"stepGitHubCLIRepo", foldCreate | foldPreflight},
 	{"stepADOStanding", foldCreate | foldPreflight | foldPreview},
 	{"stepPATNarrowing", foldPreflight | foldPreview},

@@ -175,6 +175,13 @@ func ProxySidecarEnvKnobs() [][2]string {
 // port is the sidecar's listen port (ProxyListenPort in production;
 // parameterized for tests).
 func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error) {
+	return json.Marshal(ProxyConfigOf(runID, pc, port))
+}
+
+// ProxyConfigOf is the proxy.Config a run's ProxyConfig becomes on its way to the sidecar. It is the
+// one mapping: BuildProxyConfig marshals it, and a caller that asks what the proxy will do with the
+// run reads it, so the two cannot differ.
+func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 	inj := make([]proxy.InjectionConfig, 0, len(pc.Injection))
 	for _, g := range pc.Injection {
 		inj = append(inj, proxy.InjectionConfig{InjectionRule: g.Rule, GrantID: g.GrantID})
@@ -226,5 +233,5 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 	if pc.DesktopSignins {
 		cfg.SigninListen = ":" + strconv.Itoa(SigninListenPort)
 	}
-	return json.Marshal(cfg)
+	return cfg
 }

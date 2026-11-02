@@ -50,6 +50,11 @@ describe("draftReducer (U3)", () => {
     expect(draftReducer(seeded(), { type: "commitDoc", intent: {} }).origin).toEqual(TEMPLATE);
   });
 
+  it("commitDoc makes the committed CPU and memory the person's, so leaving macOS takes neither back", () => {
+    const filled = draftReducer(seeded(), { type: "guided", patch: { macosFill: { cpu_millis: 4000, memory_mib: 8192 } } });
+    expect(draftReducer(filled, { type: "commitDoc", intent: LOADED }).guided.macosFill).toBeUndefined();
+  });
+
   it("reset empties everything for the new owner, the Name dialog's fields included", () => {
     let d = draftReducer(seeded(), { type: "launchFields", patch: { title: "Nightly", description: "why" } });
     d = draftReducer(d, { type: "guided", patch: { mainDriveText: "20", refText: { "w/r": "main" } } });

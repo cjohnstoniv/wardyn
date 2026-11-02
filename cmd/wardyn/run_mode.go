@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/pflag"
 
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
@@ -25,6 +27,14 @@ type runModeFlags struct {
 	startFolder string
 	tools       []string
 	noRepos     bool
+
+	// The service flags keep a background command running: --service turns it on, the rest shape it.
+	service        bool
+	restart        string
+	port           int
+	healthPath     string
+	healthEvery    time.Duration
+	healthFailures int
 }
 
 func (f *runModeFlags) bind(fs *pflag.FlagSet) {
@@ -34,10 +44,21 @@ func (f *runModeFlags) bind(fs *pflag.FlagSet) {
 	fs.StringVar(&f.startup, "startup", "", "interactive: what starts on its own: none, harness:ID (one included tool) or command:COMMAND. One choice; unset is none")
 	fs.StringVar(&f.startFolder, "start-folder", "", "the run's one starting folder: image-default, or ATTACHMENT[:SUBPATH] where ATTACHMENT is a workspace id or drive")
 	fs.BoolVar(&f.noRepos, "no-repos", false, "explicitly attach no repositories or drives. Nothing in the sandbox is kept when the run ends unless you push or copy it out")
+	fs.BoolVar(&f.service, "service", false, "background command: keep it running as a service, restarted when it fails. Needs --experience background and --command")
+	fs.StringVar(&f.restart, "restart", "", "service: on-failure (the default) or never")
+	fs.IntVar(&f.port, "port", 0, "service: the port it listens on, 127.0.0.1 inside the sandbox")
+	fs.StringVar(&f.healthPath, "health-path", "", "service: check health with an HTTP GET of this path (2xx or 3xx passes); without it the check is a TCP connect to --port")
+	fs.DurationVar(&f.healthEvery, "health-every", 0, "service: how often to check health, 5s to 5m (default 15s). Needs --port")
+	fs.IntVar(&f.healthFailures, "health-failures", 0, "service: consecutive failed checks before it reads unhealthy, 1 to 10 (default 3). Needs --port")
 }
 
 func (f runModeFlags) used() bool {
-	return f.experience != "" || f.command != "" || len(f.tools) > 0 || f.startup != "" || f.startFolder != "" || f.noRepos
+	return f.experience != "" || f.command != "" || len(f.tools) > 0 || f.startup != "" || f.startFolder != "" || f.noRepos || f.serviceUsed()
+}
+
+// serviceUsed reports whether any service flag is set, so one without --service is refused rather than dropped.
+func (f runModeFlags) serviceUsed() bool {
+	return f.service || f.restart != "" || f.port != 0 || f.healthPath != "" || f.healthEvery != 0 || f.healthFailures != 0
 }
 
 // applyRunModeFlags rewrites a request the older flags filled into the run-mode
@@ -63,8 +84,8 @@ func applyRunModeFlags(body *sdk.CreateRunRequest, f runModeFlags) error {
 		body.StartFolder = folder
 	}
 	if f.experience == "" {
-		if f.command != "" || len(f.tools) > 0 || f.startup != "" || f.startFolder != "" || f.noRepos {
-			return errors.New("--command, --tool, --startup, --start-folder and --no-repos need --experience background or interactive: the run mode is never inferred")
+		if f.command != "" || len(f.tools) > 0 || f.startup != "" || f.startFolder != "" || f.noRepos || f.serviceUsed() {
+			return errors.New("--command, --tool, --startup, --start-folder, --no-repos and the service flags need --experience background or interactive: the run mode is never inferred")
 		}
 		return nil
 	}
@@ -100,10 +121,48 @@ func backgroundFlags(body *sdk.CreateRunRequest, f runModeFlags) error {
 		}
 	}
 	body.Agent, body.Task, body.ModelProvider = "", "", ""
+	return serviceFlags(body, f)
+}
+
+// serviceFlags fills body.Service from the service flags. Ranges and the health path are the server's to check
+// (types.ValidateRunService); this refuses what the flags themselves cannot say.
+func serviceFlags(body *sdk.CreateRunRequest, f runModeFlags) error {
+	if !f.serviceUsed() {
+		return nil
+	}
+	if !f.service {
+		return errors.New("--restart, --port, --health-path, --health-every and --health-failures shape a service: add --service")
+	}
+	if body.Workload == nil || body.Workload.Kind != sdk.WorkloadCommand {
+		return errors.New("--service keeps a command running: add --command")
+	}
+	svc := &types.RunService{Port: f.port}
+	switch f.restart {
+	case "":
+	case "on-failure":
+		svc.Restart = types.ServiceRestartOnFailure
+	case "never":
+		svc.Restart = types.ServiceRestartNever
+	default:
+		return fmt.Errorf("--restart %q is not on-failure or never", f.restart)
+	}
+	if f.healthPath != "" || f.healthEvery != 0 || f.healthFailures != 0 {
+		if f.port == 0 {
+			return errors.New("--health-path, --health-every and --health-failures check the service's port: add --port")
+		}
+		if f.healthEvery%time.Second != 0 {
+			return fmt.Errorf("--health-every %s is not a whole number of seconds", f.healthEvery)
+		}
+		svc.Health = &types.ServiceHealth{Path: f.healthPath, IntervalSec: int(f.healthEvery / time.Second), FailureThreshold: f.healthFailures}
+	}
+	body.Service = svc
 	return nil
 }
 
 func interactiveFlags(body *sdk.CreateRunRequest, f runModeFlags) error {
+	if f.serviceUsed() {
+		return errors.New("--service and its flags are for a background run: an interactive sandbox is not restarted")
+	}
 	if f.command != "" || body.Task != "" {
 		return errors.New("--command and --task are for a background run: start a command in an interactive run with --startup command:COMMAND")
 	}

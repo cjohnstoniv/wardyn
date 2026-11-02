@@ -28,24 +28,31 @@ func runnerListCmd(client clientFn) *cobra.Command {
 	var state string
 	var limit, offset int
 	cmd := &cobra.Command{Use: "list", Short: "List your own runners, or with --all every person's", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		var rows []sdk.RunnerView
-		var truncated bool
-		var err error
+		var fetch func(...sdk.ListOpts) ([]sdk.RunnerView, bool, error)
 		switch {
 		case all:
-			rows, truncated, err = client().ListRunnersPage(cmd.Context(), sdk.RunnerFilter(state), listPageOptsAt(limit, offset)...)
+			fetch = func(o ...sdk.ListOpts) ([]sdk.RunnerView, bool, error) {
+				return client().ListRunnersPage(cmd.Context(), sdk.RunnerFilter(state), o...)
+			}
 		case state != "":
 			return fmt.Errorf("--state applies to --all; your own list is your unclaimed and claimed runners, plus any revoked by someone else in the last 7 days")
 		default:
-			rows, truncated, err = client().ListMyRunnersPage(cmd.Context(), listPageOptsAt(limit, offset)...)
+			fetch = func(o ...sdk.ListOpts) ([]sdk.RunnerView, bool, error) {
+				return client().ListMyRunnersPage(cmd.Context(), o...)
+			}
+		}
+		var rows []sdk.RunnerView
+		var truncated bool
+		var err error
+		if noLimits {
+			rows, truncated, err = noLimitsWindow(fetch, limit, offset)
+		} else {
+			rows, truncated, err = fetch(listPageOptsAt(limit, offset)...)
 		}
 		if err != nil {
 			return err
 		}
 		warnListTruncated(cmd, truncated, "runner", len(rows), offset)
-		if noLimits {
-			rows = slices.DeleteFunc(rows, func(r sdk.RunnerView) bool { return r.Limits != nil })
-		}
 		if asJSON {
 			if rows == nil {
 				rows = []sdk.RunnerView{}
@@ -70,6 +77,32 @@ func runnerListCmd(client clientFn) *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 0, "max rows (0 = server default page)")
 	cmd.Flags().IntVar(&offset, "offset", 0, "skip this many rows")
 	return cmd
+}
+
+// runnersPage is how many rows noLimitsWindow asks for at a time: the server's largest page.
+const runnersPage = 1000
+
+// noLimitsWindow is the runners with no limits set, read from every page rather than from the one a
+// plain list would fetch, then cut to --offset and --limit over that filtered list. truncated says more
+// of the filtered list follows the window.
+func noLimitsWindow(fetch func(...sdk.ListOpts) ([]sdk.RunnerView, bool, error), limit, offset int) ([]sdk.RunnerView, bool, error) {
+	var rows []sdk.RunnerView
+	for read := 0; ; {
+		page, more, ferr := fetch(sdk.ListOpts{Limit: runnersPage, Offset: read})
+		if ferr != nil {
+			return nil, false, ferr
+		}
+		read += len(page)
+		rows = append(rows, slices.DeleteFunc(page, func(r sdk.RunnerView) bool { return r.Limits != nil })...)
+		if !more || len(page) == 0 {
+			break
+		}
+	}
+	rows = rows[min(offset, len(rows)):]
+	if limit > 0 && len(rows) > limit {
+		return rows[:limit], true, nil
+	}
+	return rows, false, nil
 }
 
 func runnerStateWord(r sdk.RunnerView) string {

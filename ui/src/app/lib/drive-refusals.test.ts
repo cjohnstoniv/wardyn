@@ -30,10 +30,11 @@ describe("drive refusal sentences", () => {
     }
   });
 
-  it("each reason is a Go constant of internal/api/reasons.go or the authz registry", () => {
+  it("each reason is a Go constant of internal/api/reasons.go, the authz registry or internal/placement/reasons.go", () => {
     const goReasons =
       readFileSync(join(repoRoot(), "internal/api/reasons.go"), "utf8") +
-      readFileSync(join(repoRoot(), "internal/authz/registry.go"), "utf8");
+      readFileSync(join(repoRoot(), "internal/authz/registry.go"), "utf8") +
+      readFileSync(join(repoRoot(), "internal/placement/reasons.go"), "utf8");
     for (const reason of new Set(Object.values(DRIVE_REFUSAL_REASON))) {
       expect(goReasons, reason).toMatch(new RegExp(`= "${reason}"`));
     }

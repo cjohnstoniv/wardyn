@@ -135,6 +135,10 @@ var envDocShellOnly = map[string]bool{
 	// The harnesses image hands each agent of a background run with several its own
 	// prep mark (deploy/images/common/agent-run-set); set and read by shell only.
 	"WARDYN_TASK_PREPPED": true,
+	// The service supervisor's state-file path (deploy/images/common/agent-run-lib.sh
+	// service_state): a seam for scripts/test-service-supervisor.sh only. wardynd
+	// reads the default path over exec and never sets or reads this var.
+	"WARDYN_SERVICE_STATE_FILE": true,
 	// The store-mode and Transit compose overlays' host directory holding the
 	// Vault token (deploy/compose/docker-compose.{vault,transit}.yaml); Go reads
 	// the mounted file.
@@ -202,7 +206,7 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_KIND_SSO_SEEN_PORT": true, "WARDYN_WALK_SEEN_URL": true,
 	"WARDYN_KIND_SSO_NODE":      true,
 	"WARDYN_KIND_SSO_TOKEN_TTL": true, "WARDYN_KIND_SSO_ROLE_CRED_TTL": true, "WARDYN_KIND_SSO_PROXY_INJECT": true,
-	"WARDYN_KIND_SSO_SKIP_REAUTH_HOLD": true,
+	"WARDYN_KIND_SSO_SKIP_REAUTH_HOLD": true, "WARDYN_KIND_SSO_LEG": true,
 	// The walk's throwaway local registry for a cold aws-sso image pull (#891) —
 	// scripts/kind-sso-walk.sh only.
 	"WARDYN_KIND_SSO_REGISTRY": true, "WARDYN_KIND_SSO_REGISTRY_PORT": true,
@@ -241,6 +245,8 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_NOVNC_GEOMETRY": true, "WARDYN_REC_WRAP": true,
 	"WARDYN_SESSION_START": true, "WARDYN_SSH_AGENT_DIR": true,
 	"WARDYN_WALK_ADO_MEMBER_EMAIL": true, "WARDYN_WALK_ADO_PROXY_URL": true,
+	// The agent-run belt's wait bound (agent-run-lib.sh wait_for_proxy); no run sets it, Go never reads it.
+	"WARDYN_PROXY_WAIT_SECS": true,
 }
 
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)

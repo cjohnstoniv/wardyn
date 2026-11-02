@@ -183,6 +183,9 @@ func (s *Server) catalogueEntry(r *http.Request, in *poolListInput, row store.Ru
 		_, known := in.executorFacts(ctx, s, key)
 		return known && s.remoteRunnerConfigured(key)
 	})
+	if envEnabled(envMacOSVMs) {
+		e.MacOSVM = s.poolMacOSVMOf(ctx, fit, in.fits, in.denied, in.ceiling)
+	}
 	// Membership, not candidacy: every runner of the caller's in the pool, whether or not it could take a
 	// run now, so a person can read which pools each of their runners is in.
 	if len(row.OwnRunnerIDs) > 0 {

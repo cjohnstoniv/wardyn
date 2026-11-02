@@ -1,5 +1,5 @@
 skip  trusted-ca   no extra CA bundle is set: the system roots only
-ok    org-url      https://ORG (from WARDYN_RUNNER_ORG_URL)
+ok    org-url      https://ORG (from org_url in the service's settings)
 ok    dns          127.0.0.1 is an address: nothing to resolve
 ok    proxy        direct (no proxy applies to this address)
 ok    tls          ORG presented a certificate for (Acme Co) issued by (Acme Co); verified by the system trust store

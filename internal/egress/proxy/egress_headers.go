@@ -32,16 +32,11 @@ const (
 	egressHeaderReason = "X-Wardyn-Egress-Reason"
 )
 
-// setEgressRefusalHeaders annotates a deny/pending 403 with the refusal reason
-// and the host it applies to. Set BEFORE http.Error / writeApprovalPending,
-// which flush the header block on WriteHeader.
-func setEgressRefusalHeaders(w http.ResponseWriter, status, host string) {
-	setEgressRefusalHeadersWithReason(w, status, host, "")
-}
-
-// setEgressRefusalHeadersWithReason is setEgressRefusalHeaders plus the
-// decision log's reason. Separate rather than a changed signature so the two
-// callers that genuinely have no reason in scope stay honest about it.
+// setEgressRefusalHeadersWithReason annotates a deny/pending 403 with the
+// refusal status, the decision log's reason and the host it applies to. Set
+// BEFORE http.Error / writeApprovalPending, which flush the header block on
+// WriteHeader. A pending answer carries its reason too: an approval that
+// expired, was cancelled or can never be raised is not one a person will decide.
 func setEgressRefusalHeadersWithReason(w http.ResponseWriter, status, host, reason string) {
 	if reason != "" {
 		w.Header().Set(egressHeaderReason, reason)

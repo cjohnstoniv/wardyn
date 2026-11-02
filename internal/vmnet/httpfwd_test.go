@@ -33,7 +33,7 @@ func TestServeHTTPForwardsAbsoluteForm(t *testing.T) {
 		return &http.Response{StatusCode: 200, ProtoMajor: 1, ProtoMinor: 1, Header: http.Header{},
 			Body: io.NopCloser(strings.NewReader("ok")), ContentLength: 2, Request: r}, nil
 	})
-	raw := "GET /a?b=1 HTTP/1.1\r\nHost: origin.test\r\nProxy-Authorization: x\r\nConnection: keep-alive, X-Drop\r\nX-Drop: 1\r\nX-Keep: 1\r\n\r\n" +
+	raw := "GET /a?b=1 HTTP/1.1\r\nHost: origin.test\r\nProxy-Authorization: x\r\nWardyn-Vmnet-Flow: f\r\nWardyn-Vmnet-Stage: ask\r\nConnection: keep-alive, X-Drop\r\nX-Drop: 1\r\nX-Keep: 1\r\n\r\n" +
 		"POST /c HTTP/1.1\r\nHost: Origin.Test:80\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc"
 	reason, reply := serveOnce(t, raw, rt)
 	if reason != "" || strings.Count(reply, "HTTP/1.1 200") != 2 {
@@ -46,7 +46,7 @@ func TestServeHTTPForwardsAbsoluteForm(t *testing.T) {
 	if r.URL.String() != "http://origin.test/a?b=1" || r.Host != "origin.test" || r.RequestURI != "" {
 		t.Fatalf("forwarded %q host %q", r.URL, r.Host)
 	}
-	for _, h := range []string{"Proxy-Authorization", "Connection", "X-Drop"} {
+	for _, h := range []string{"Proxy-Authorization", "Connection", "X-Drop", flowHeader, stageHeader} {
 		if r.Header.Get(h) != "" {
 			t.Errorf("hop header %s forwarded", h)
 		}
@@ -85,5 +85,9 @@ func TestServeHTTPRefusals(t *testing.T) {
 	reason, reply := serveOnce(t, "GET / HTTP/1.1\r\nHost: origin.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n", never)
 	if reason != "" || !strings.HasPrefix(reply, "HTTP/1.1 501") {
 		t.Errorf("upgrade: reason %q reply %q", reason, reply)
+	}
+	reason, reply = serveOnce(t, "CONNECT origin.test:80 HTTP/1.1\r\nHost: origin.test:80\r\n\r\n", never)
+	if reason != "" || !strings.HasPrefix(reply, "HTTP/1.1 405") {
+		t.Errorf("connect: reason %q reply %q", reason, reply)
 	}
 }

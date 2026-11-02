@@ -140,7 +140,7 @@ func (f *runnerRegistrationFake) RunnerUsage(ctx context.Context, ids []uuid.UUI
 	held, _ := f.RunnerSlotHolders(ctx, ids)
 	out := map[string]types.RunnerTally{}
 	for id, n := range held {
-		out[id.String()] = types.RunnerTally{Runs: n}
+		out[id.String()] = types.RunnerTally{Runs: n, MacOSVMRuns: f.macRuns[id]}
 	}
 	return out, nil
 }
@@ -729,6 +729,98 @@ func TestRunnerViewCarriesWhatTheRunnerReportedAndNothingWithoutIt(t *testing.T)
 	}
 	if _, made := srv.runnerStreams.subs[silent.ID]; made {
 		t.Fatal("reading a runner created an endpoint for it")
+	}
+}
+
+// A Mac's macos_vm caps reach both the operators' inventory and its owner's own list exactly as the
+// runner sent them, with how many of its runs are macOS VMs; a runner without them carries neither.
+func TestRunnerViewPassesTheMacOSVMCapsThroughAndCountsItsMacOSVMRuns(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	mac := f.addRunner(srv, "alice", "mac-studio", types.RunnerClaimed, time.Hour)
+	linux := f.addRunner(srv, "alice", "laptop", types.RunnerClaimed, time.Hour)
+	f.runs = map[uuid.UUID]int{mac.ID: 3, linux.ID: 1}
+	f.macRuns = map[uuid.UUID]int{mac.ID: 2}
+	sent := map[uuid.UUID][]byte{}
+	srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{}
+	for id, caps := range map[uuid.UUID]runnerwire.Caps{
+		mac.ID: {MacOSVM: &runnerwire.MacVMCaps{Max: 2, MinCPUs: 4, MinMemoryMiB: 8192, Harnesses: []string{"claude"},
+			Desktop: runnerwire.MacVMDesktopControl, SignIns: true,
+			Base: runnerwire.MacVMBase{State: runnerwire.MacVMBaseReady, GuestOS: "macOS 27.0.1 (26A434)"}}},
+		linux.ID: {AllowedRoots: []string{"/home/alice/src"}},
+	} {
+		data, err := json.Marshal(caps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sent[id] = data
+		sub := remote.New(id.String(), &capsTransport{online: true}, remote.Options{})
+		sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+		srv.runnerStreams.subs[id] = runnerEndpoint{sub: sub, link: &remote.Link{}}
+	}
+	// canonical re-encodes JSON through a generic value, so key order and spacing do not count.
+	canonical := func(raw []byte) string {
+		var v any
+		if err := json.Unmarshal(raw, &v); err != nil {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		b, _ := json.Marshal(v)
+		return string(b)
+	}
+	var macSent struct {
+		MacOSVM json.RawMessage `json:"macos_vm"`
+	}
+	if err := json.Unmarshal(sent[mac.ID], &macSent); err != nil || len(macSent.MacOSVM) == 0 {
+		t.Fatalf("the Mac's caps event carries no macos_vm: %s (%v)", sent[mac.ID], err)
+	}
+	sec := memberModeSSOSession(t, "sam", "sam@example.com", oidc.RoleSecurityAdmin, false)
+	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
+	for route, cookie := range map[string]*http.Cookie{"/api/v1/runners?state=all": sec, "/api/v1/me/runners": alice} {
+		w := doSSO(t, srv, http.MethodGet, route, cookie, "")
+		got := viewIDs(runnerViewsOf(t, w))
+		if v := got[mac.ID]; canonical(v.MacOSVM) != canonical(macSent.MacOSVM) || v.Usage.InUse.Runs != 3 || v.Usage.InUse.MacOSVMRuns != 2 {
+			t.Fatalf("%s: the Mac shows macos_vm %s with %+v in use, want %s as sent and 2 of 3 runs macOS VMs", route, v.MacOSVM, v.Usage.InUse, macSent.MacOSVM)
+		}
+		var raw []map[string]json.RawMessage
+		if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range raw {
+			if !strings.Contains(string(row["id"]), linux.ID.String()) {
+				continue
+			}
+			if _, has := row["macos_vm"]; has || strings.Contains(string(row["usage"]), "macos_vm_runs") {
+				t.Fatalf("%s: a runner that offers no macOS VM carries one: %s %s", route, row["macos_vm"], row["usage"])
+			}
+		}
+	}
+}
+
+// A Mac that refuses macOS VMs reaches the console as its reason code and numbers, not as the runner's
+// own sentence (#3653); the runner's last caps still hold the sentence, which placement reads.
+func TestRunnerViewSendsAMacsRefusalAsItsReasonNotItsWords(t *testing.T) {
+	srv, f, _ := newRunnerRegistrationServer(t)
+	mac := f.addRunner(srv, "alice", "mac-studio", types.RunnerClaimed, time.Hour)
+	words := "Per-run memory on this runner is 6 GB; a macOS VM needs at least 8 GB."
+	data, err := json.Marshal(runnerwire.Caps{MacOSVM: &runnerwire.MacVMCaps{MinCPUs: 4, MinMemoryMiB: 8192,
+		Base: runnerwire.MacVMBase{State: runnerwire.MacVMBaseReady}, Refusal: words, Reason: runnerwire.MacVMReasonMemoryBelowMinimum}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{}
+	sub := remote.New(mac.ID.String(), &capsTransport{online: true}, remote.Options{})
+	sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	srv.runnerStreams.subs[mac.ID] = runnerEndpoint{sub: sub, link: &remote.Link{}}
+	alice := memberModeSSOSession(t, "alice", "alice@example.com", oidc.RoleUser, false)
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/me/runners", alice, "")
+	var caps map[string]any
+	if err := json.Unmarshal(viewIDs(runnerViewsOf(t, w))[mac.ID].MacOSVM, &caps); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := caps["refusal"]; has || caps["reason"] != runnerwire.MacVMReasonMemoryBelowMinimum || caps["min_memory_mib"] != float64(8192) {
+		t.Fatalf("macos_vm = %v, want the reason and the minimum and no refusal", caps)
+	}
+	if got, _ := srv.runnerLastCaps(mac.ID); got.MacOSVM == nil || got.MacOSVM.Refusal != words {
+		t.Fatalf("the runner's last caps lost their refusal: %+v", got.MacOSVM)
 	}
 }
 

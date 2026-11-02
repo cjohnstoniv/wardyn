@@ -12,6 +12,25 @@ const LABELS = { shape: "Shape", run: "Run", harnesses: "Harnesses", files: "Fil
 
 afterEach(cleanup);
 
+describe("StepShell on a phone (320 px)", () => {
+  const footer = () => screen.getByRole("button", { name: /^Continue to tools and access/ }).parentElement!;
+  const LONG = "Continue to tools and access";
+  it("a plain footer wraps, and its primary takes its own full-width row so a long label cannot push the page sideways", () => {
+    render(<StepShell title="Files" back={{ label: "Back", onBack: vi.fn() }} primary={{ label: LONG, onActivate: vi.fn() }} />);
+    expect(footer().className).toContain("max-sm:flex-wrap");
+    expect(screen.getByRole("button", { name: new RegExp(`^${LONG}`) }).className).toContain("max-sm:w-full");
+  });
+  it("with no Back, the empty left side leaves the row so it holds no gap above the primary", () => {
+    render(<StepShell title="Files" primary={{ label: LONG, onActivate: vi.fn() }} />);
+    expect(footer().firstElementChild!.className).toContain("max-sm:hidden");
+  });
+  it("a footer with extras or a phone bar keeps its own layout", () => {
+    render(<StepShell title="Review" phoneBar footerExtras={{ end: <button type="button">Save</button> }} primary={{ label: LONG, onActivate: vi.fn() }} />);
+    expect(screen.getByRole("button", { name: new RegExp(`^${LONG}`) }).className).not.toContain("max-sm:w-full");
+    expect(screen.getByTestId("step-footer").className).not.toContain("max-sm:flex-wrap");
+  });
+});
+
 describe("StepShell", () => {
   it("focuses and announces its heading, and shows progress with the current step marked", () => {
     const announce = vi.fn();

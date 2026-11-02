@@ -9,7 +9,8 @@
 #   --prev-tag prints). For every file HEAD changes against BASE, each line HEAD
 #   removes must also be in that file at PREV: a removed line that is not there
 #   is main-only content, and the port is deleting it. A binary file whose
-#   content at HEAD is PREV's while BASE's differs is main's change reverted.
+#   content at HEAD is PREV's while BASE's differs is main's change reverted, and
+#   so is one HEAD deletes when BASE's content is not PREV's (main added or changed it).
 #   Prints each as `file: line` (`file: <binary reverted to PREV>`), exits 1.
 #   A removal the port makes on purpose (a release-side rewrite of a main line, a
 #   budget sum) is listed in DIR/V.allow, one `path<TAB>exact line<TAB>reason`
@@ -105,7 +106,8 @@ while IFS= read -r -d '' f; do
     h="$(git rev-parse -q --verify "$HEAD_REF:$f" 2>/dev/null || true)"
     p="$(git rev-parse -q --verify "$PREV:$f" 2>/dev/null || true)"
     b="$(git rev-parse -q --verify "$BASE:$f" 2>/dev/null || true)"
-    if [ -n "$h" ] && [ "$h" = "$p" ] && [ "$h" != "$b" ]; then
+    # Reverted to PREV's blob, or deleted at HEAD while BASE's blob (main's addition or change) is not PREV's.
+    if { [ -n "$h" ] && [ "$h" = "$p" ] && [ "$h" != "$b" ]; } || { [ -z "$h" ] && [ -n "$b" ] && [ "$b" != "$p" ]; }; then
       lines=$((lines + 1))
       printf '%s\t%s\n' "$f" '<binary>' >>"$TMP/flagged"
     fi

@@ -121,6 +121,45 @@ describe("SummaryHeader — where a local run is", () => {
   });
 });
 
+describe("SummaryHeader — the workload chip (T3-b)", () => {
+  const chip = { name: "billing-api", owner: "service:billing" };
+
+  it("says Workload: <name> and links to the workload's drawer", () => {
+    renderHeader(
+      <OperatorProvider operator={false}>
+        <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} workload={chip} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByRole("link", { name: "Workload: billing-api" })).toHaveAttribute(
+      "href",
+      "/workloads?workload=billing-api&owner=service%3Abilling",
+    );
+  });
+
+  it("is absent on a run no workload owns", () => {
+    renderHeader(
+      <OperatorProvider operator={false}>
+        <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText(/^Workload:/)).toBeNull();
+  });
+
+  it("links within the Admin view from an admin run page", () => {
+    render(
+      <MemoryRouter initialEntries={["/admin/runs/run-1"]}>
+        <OperatorProvider operator={true}>
+          <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} workload={chip} />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("link", { name: "Workload: billing-api" })).toHaveAttribute(
+      "href",
+      "/admin/workloads?workload=billing-api&owner=service%3Abilling",
+    );
+  });
+});
+
 // #3034: the run's lifetime is two pill menus ending the facts row, not a full-width band under the header.
 describe("SummaryHeader — the lifetime pills", () => {
   const live = { ...runningInteractive, created_by: "me", wait_budget_sec: 4 * 3600, run_limits: { user_changes_limits: true } } as AgentRun;
@@ -849,5 +888,33 @@ describe("SummaryHeader — a scheduled run's badge", () => {
   it("keeps Queued for a run that waits for a slot", () => {
     show(queued("runner_pool_at_capacity"));
     expect(screen.getByText("Queued")).toBeInTheDocument();
+  });
+});
+
+describe("SummaryHeader — a live service's badge", () => {
+  const svc = (over: Partial<AgentRun> = {}): AgentRun => ({
+    ...runningInteractive, interactive: false, service: { restart: "on_failure" },
+    service_status: { health: "unhealthy", reason: "restarting", restarts: 3, observed_at: aheadByHours(-0.01) }, ...over,
+  });
+  const show = (run: AgentRun) =>
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={run} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+
+  it("carries the list's chip: the health word, the restarts and the warning tone, with no Interactive chip", () => {
+    show(svc());
+    expect(screen.getByText("Unhealthy · 3 restarts").closest("span[class*='rounded']")?.className).toMatch(/warning/);
+    expect(screen.queryByText("Running")).toBeNull();
+    expect(screen.queryByText("Interactive")).toBeNull();
+  });
+
+  it("reads Starting before the first health read, and plain Running for a run that is not a service", () => {
+    show(svc({ service_status: undefined }));
+    expect(screen.getByText("Starting")).toBeInTheDocument();
+    cleanup();
+    show(svc({ service: undefined, service_status: undefined }));
+    expect(screen.getByText("Running")).toBeInTheDocument();
   });
 });

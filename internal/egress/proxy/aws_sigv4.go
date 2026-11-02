@@ -143,31 +143,33 @@ var awsSigV4SigningNames = map[string]string{
 // the run's sign-in stays with the proxy.
 var awsSigV4NeverResigned = map[string]bool{"sso": true, "oidc": true, "portal": true, "signin": true}
 
+// awsSigV4PrivateLinkServices are the services a PrivateLink endpoint host is re-signed for. Only
+// Bedrock: a customer's own endpoint service (vpce-svc-...) shares the vpce zone, so the service
+// label is checked against this set, never against awsServiceLabel.
+var awsSigV4PrivateLinkServices = map[string]bool{"bedrock": true, "bedrock-runtime": true, "bedrock-agent": true, "bedrock-agent-runtime": true}
+
+// awsVPCEndpointLabel is the first label of an AWS-generated PrivateLink name: the endpoint id, then
+// the generated token and any zone, which are opaque here (the region is its own label).
+var awsVPCEndpointLabel = regexp.MustCompile(`^vpce-(?:[0-9a-f]{8}|[0-9a-f]{17})(?:-[a-z0-9]+)*$`)
+
 // AWSSigV4Scope reports the signing service and region of an AWS service host the proxy can
 // re-sign, from the host alone: <service>.<region>.amazonaws.com, a global
-// <service>.amazonaws.com (signed for us-east-1), or an S3 virtual-hosted bucket
-// <bucket>.s3[.<region>].amazonaws.com. Any other shape (dual-stack, PrivateLink, account-
-// prefixed control planes, other partitions) and the sign-in hosts are not re-signed: a run
-// with one stays on the path it had before re-signing.
+// <service>.amazonaws.com (signed for us-east-1), an S3 virtual-hosted bucket
+// <bucket>.s3[.<region>].amazonaws.com, or a Bedrock PrivateLink endpoint
+// vpce-<id>[-<token>][-<zone>].<service>.<region>.vpce.amazonaws.com. Any other shape (dual-stack,
+// another service's or a customer's PrivateLink, account-prefixed control planes, other
+// partitions) and the sign-in hosts are not re-signed: a run with one stays on the path it had
+// before re-signing.
 func AWSSigV4Scope(host string) (service, region string, ok bool) {
-	rest, found := strings.CutSuffix(hostKey(host), ".amazonaws.com")
-	if !found || rest == "" {
+	h := hostKey(host)
+	var label string
+	if rest, found := strings.CutSuffix(h, ".vpce.amazonaws.com"); found {
+		label, region, ok = awsPrivateLinkService(rest)
+	} else {
+		label, region, ok = awsPublicService(h)
+	}
+	if !ok || awsSigV4NeverResigned[label] {
 		return "", "", false
-	}
-	labels := strings.Split(rest, ".")
-	region = "us-east-1"
-	if n := len(labels); n > 1 && awsRegionLabel.MatchString(labels[n-1]) {
-		region, labels = labels[n-1], labels[:n-1]
-	}
-	label := labels[len(labels)-1]
-	if (len(labels) > 1 && label != "s3") || !awsServiceLabel.MatchString(label) ||
-		awsRegionLabel.MatchString(label) || awsSigV4NeverResigned[label] {
-		return "", "", false
-	}
-	for _, bucket := range labels[:len(labels)-1] {
-		if !awsBucketLabel.MatchString(bucket) {
-			return "", "", false // a wildcard or anything else that is not one exact bucket host
-		}
 	}
 	service = cmp.Or(awsSigV4SigningNames[label], label)
 	for guarded := range awsSigV4ActionGuards {
@@ -176,6 +178,41 @@ func AWSSigV4Scope(host string) (service, region string, ok bool) {
 		}
 	}
 	return service, region, true
+}
+
+// awsPrivateLinkService is the service label and region of rest, a host with its .vpce.amazonaws.com
+// cut: exactly an endpoint label, a Bedrock service and a commercial region. GovCloud (us-gov-*)
+// shares amazonaws.com but is another partition, and is not re-signed here.
+func awsPrivateLinkService(rest string) (label, region string, ok bool) {
+	labels := strings.Split(rest, ".")
+	if len(labels) != 3 || len(labels[0]) > 63 || !awsVPCEndpointLabel.MatchString(labels[0]) ||
+		!awsSigV4PrivateLinkServices[labels[1]] || !awsRegionLabel.MatchString(labels[2]) || strings.HasPrefix(labels[2], "us-gov-") {
+		return "", "", false
+	}
+	return labels[1], labels[2], true
+}
+
+// awsPublicService is the service label and region of h, a public AWS service host (AWSSigV4Scope).
+func awsPublicService(h string) (label, region string, ok bool) {
+	rest, found := strings.CutSuffix(h, ".amazonaws.com")
+	if !found || rest == "" {
+		return "", "", false
+	}
+	labels := strings.Split(rest, ".")
+	region = "us-east-1"
+	if n := len(labels); n > 1 && awsRegionLabel.MatchString(labels[n-1]) {
+		region, labels = labels[n-1], labels[:n-1]
+	}
+	label = labels[len(labels)-1]
+	if (len(labels) > 1 && label != "s3") || !awsServiceLabel.MatchString(label) || awsRegionLabel.MatchString(label) {
+		return "", "", false
+	}
+	for _, bucket := range labels[:len(labels)-1] {
+		if !awsBucketLabel.MatchString(bucket) {
+			return "", "", false // a wildcard or anything else that is not one exact bucket host
+		}
+	}
+	return label, region, true
 }
 
 // isAWSSigV4Host reports whether host is one the run re-signs on.
@@ -463,6 +500,7 @@ func (p *Proxy) awsSigV4Credentials(ctx context.Context) (aws.Credentials, error
 	if err != nil {
 		return aws.Credentials{}, err
 	}
+	procMaskFor(p.maskKey, []byte(creds.AccessKeyID))
 	procMaskFor(p.maskKey, []byte(creds.SecretAccessKey))
 	procMaskFor(p.maskKey, []byte(creds.SessionToken))
 	d.creds = creds

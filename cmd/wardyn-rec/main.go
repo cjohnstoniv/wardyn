@@ -51,6 +51,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // uploadDialTimeout/uploadClientTimeout bound how long a finished task can be
@@ -107,8 +108,13 @@ func run(args []string) error {
 	if v := os.Getenv("WARDYN_RUN_TOKEN"); v != "" {
 		*runToken = v
 	}
+	contract := fs.Bool("contract", false, "print the image contract line and exit (a pre-wrapped image's registration check)")
 
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *contract {
+		_, err := fmt.Println(types.ImageContractLine)
 		return err
 	}
 
@@ -157,7 +163,7 @@ func run(args []string) error {
 	}
 	var upload func() error
 	if *uploadURL != "" {
-		upload = func() error { return uploadLog(log, *uploadURL, *runToken) }
+		upload = func() error { return retryFinal(func() error { return uploadLog(log, *uploadURL, *runToken) }) }
 	}
 	return deliverAndExit(log, *outDir, upload, exitCode)
 }
@@ -375,9 +381,8 @@ func copyToDir(srcPath, dstDir string) error {
 }
 
 // uploadCast PUTs the recording file to uploadURL with Bearer auth. The server
-// is expected to return 2xx on success. Retries are not attempted to keep the
-// sidecar simple and dependency-free; callers that require reliability should
-// use -out-dir with a separate upload agent.
+// is expected to return 2xx on success. It makes one attempt; the delivery at
+// exit retries it (retryFinal).
 //
 // The transport is a clone of http.DefaultTransport (keeping its
 // proxy-from-environment semantics — the upload URL is the sandbox's own
@@ -472,14 +477,56 @@ func putBody(body io.Reader, n int64, uploadURL, runToken string, plainLog bool)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("http PUT: %w", err)
+		return retryableError{fmt.Errorf("http PUT: %w", err)}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		err := fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		switch resp.StatusCode {
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return retryableError{err}
+		}
+		return err
 	}
 	return nil
+}
+
+// finalRetryBudget bounds when the delivery at exit may start another attempt
+// at a PUT that may yet pass (retryFinal); finalRetryWait is the first wait,
+// doubled after each attempt. It schedules retries only: each attempt keeps its
+// own deadline (uploadTimeout) and a flush may send several parts, so the
+// delivery can end later than the budget. A run that ends before its first part (firstPartInterval) has only
+// this delivery, so one refusal at exit, from a run's proxy that cannot record
+// the request yet or a relay to the organisation that is down, lost its whole
+// recording (#3705). The run's exit is seen once this process exits, so a run
+// that cannot deliver at all is seen to end about this much later, plus its
+// last attempt's deadline.
+var (
+	finalRetryBudget = 30 * time.Second
+	finalRetryWait   = time.Second
+)
+
+// retryableError is a PUT that may pass on another attempt: one that got no
+// answer, or a gateway's or an unavailable server's. Any other refusal
+// (recording off, a terminal run, a body over the cap) answers the same again.
+type retryableError struct{ error }
+
+func (e retryableError) Unwrap() error { return e.error }
+
+// retryFinal runs put, and again after each retryable failure while the next
+// attempt would start inside finalRetryBudget. Re-sending a part is safe: the
+// control plane replaces a part it already holds.
+func retryFinal(put func() error) error {
+	deadline := time.Now().Add(finalRetryBudget)
+	for wait := finalRetryWait; ; wait *= 2 {
+		err := put()
+		var r retryableError
+		if err == nil || !errors.As(err, &r) || time.Now().Add(wait).After(deadline) {
+			return err
+		}
+		time.Sleep(wait)
+	}
 }
 
 // quoteArgs shell-quotes each arg so the joined `-c` command string that

@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "harnesses": [
+    {
+      "id": "claude-code",
+      "version": "2.1.310",
+      "url": "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.310/darwin-arm64/claude",
+      "sha256": "ffb64331bc0ee1b69efb7c2c428bd3ab516bc31b75bf60886b356c97c1c25ffd",
+      "size": 274068224,
+      "dest": "/usr/local/bin/claude",
+      "version_argv": ["/usr/local/bin/claude", "--version"]
+    },
+    {
+      "id": "codex-cli",
+      "version": "0.164.0",
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.164.0/codex-aarch64-apple-darwin.tar.gz",
+      "sha256": "aa8299c169d80111aac05543ad2621c9bdbedb9bc252c905fe3f5a5baf9a4142",
+      "size": 101767166,
+      "extract": "codex-aarch64-apple-darwin",
+      "dest": "/usr/local/bin/codex",
+      "version_argv": ["/usr/local/bin/codex", "--version"]
+    }
+  ]
+}

@@ -23,8 +23,9 @@ const VIEWPORT = { width: 1280, height: 744 };
 // Admin Settings (three group headings, eight collapsed cards, the no-barrier notice) needs 852px of viewport,
 // measured on the hosted runner at 1280 wide: 115px of chrome around <main> plus 737px of content. With the
 // Host card open it needs 1241px. The budget is the measured height plus a small margin; TOLERANCE_PX below is the
-// sub-pixel jitter allowance on top.
-const ADMIN_VIEWPORT = { width: 1280, height: 860 };
+// sub-pixel jitter allowance on top. The macOS virtual machines card (rc.9, no summary line, so the shorter
+// collapsed row) is a ninth card: 70px more, an estimate to be re-measured on the hosted runner.
+const ADMIN_VIEWPORT = { width: 1280, height: 930 };
 
 // runs.spec.ts's own "the page itself does not scroll" check notes the same
 // class of issue ("CI-flake: measured 300.28px ... sub-pixel layout jitter,
@@ -84,13 +85,13 @@ test.describe("Settings and Your account fit their viewport budget collapsed (#1
     ]);
 
     // Collapsed by default: none of the nine cards' bodies are in the DOM.
-    for (const title of ["Host", "Branding", "Model providers", "Custom components", "Admin SSH keys", "SCIM provisioning", "Approval notifications"]) {
+    for (const title of ["Host", "Branding", "Model providers", "Custom components", "Admin SSH keys", "macOS virtual machines", "SCIM provisioning", "Approval notifications"]) {
       const toggle = page.getByRole("button", { name: new RegExp(`^${title}( |$)`) });
       await expect(toggle).toHaveAttribute("aria-expanded", "false");
     }
     // The two cards that only link elsewhere are rows with a link, never an accordion (#3048).
     for (const [title, href] of [["Workspace providers", "/admin/providers"], ["User drives", "/admin/drives"]]) {
-      await expect(page.getByRole("link", { name: new RegExp(`^${title}( |$)`) })).toHaveAttribute("href", new RegExp(`${href}$`));
+      await expect(page.getByRole("main").getByRole("link", { name: new RegExp(`^${title}( |$)`) })).toHaveAttribute("href", new RegExp(`${href}$`));
     }
 
     expect(await mainScrolls(page)).toBe(false);

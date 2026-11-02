@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -22,6 +23,11 @@ type imageCaptureStore struct{ createCaptureStore }
 
 func (s *imageCaptureStore) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.BaseImageEntry, error) {
 	return s.lib.UpsertBaseImage(ctx, b)
+}
+
+// GetBaseImageByRef: a digest-pinned ref is looked up as a prewrapped row first; this store holds none.
+func (s *imageCaptureStore) GetBaseImageByRef(context.Context, string, string) (types.BaseImageEntry, error) {
+	return types.BaseImageEntry{}, store.ErrNotFound
 }
 
 // TestImageRefDotSegmentsRefused: an image ref is also a capability value the

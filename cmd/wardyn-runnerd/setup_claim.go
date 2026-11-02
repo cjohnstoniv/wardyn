@@ -25,7 +25,7 @@ func claimStep(cmd *cobra.Command, plan setupPlan, id runneridentity.Identity, t
 		if plan.claim {
 			fmt.Fprintln(out, "--claim needs WARDYN_TOKEN, your own personal API token; it was not set, so nothing was claimed.")
 		}
-		fmt.Fprintf(out, "Key fingerprint %s. Claim this runner as its owner in the console (Your account → My runner), or run\n  WARDYN_TOKEN=<your personal API token> wardyn runner claim --pool <name> --default\n", id.Fingerprint)
+		fmt.Fprintf(out, "Key fingerprint %s. Claim this runner as its owner in the console (Settings → My runner), or run\n  WARDYN_TOKEN=<your personal API token> wardyn runner claim --pool <name> --default\n", id.Fingerprint)
 		return nil
 	}
 	c := sdk.New(plan.org, token)

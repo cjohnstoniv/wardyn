@@ -40,7 +40,7 @@ func TestConformanceK8sKata(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 	sub, err := k8s.New(k8s.Config{
-		Namespace:           os.Getenv("WARDYN_K8S_NAMESPACE"),
+		Namespaces:          []string{os.Getenv("WARDYN_K8S_NAMESPACE")},
 		ProxyImage:          os.Getenv("WARDYN_PROXY_IMAGE"),
 		ConfinementRuntimes: map[types.ConfinementClass]string{types.CC3: rc},
 		// Record stays off: a Linux VM sandbox is not recorded in this release.

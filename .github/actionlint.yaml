@@ -1,5 +1,7 @@
 # Runner labels actionlint's built-in list does not know yet. ubuntu-26.04 is
-# GitHub-hosted (Docker 29, containerd image store); mirror-selftest.yml runs on it.
+# GitHub-hosted (Docker 29, containerd image store); mirror-selftest.yml runs on it. xcode-27 is the
+# GitHub-hosted public-preview Mac image with the macOS 27 SDK (ci.yml macos-xcode-27).
 self-hosted-runner:
   labels:
     - ubuntu-26.04
+    - xcode-27

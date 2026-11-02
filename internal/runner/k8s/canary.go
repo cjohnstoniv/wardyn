@@ -57,11 +57,11 @@ type canaryPhaseResult struct {
 	err            error
 }
 
-// runEgressCanary runs the two-phase boot-time canary: phase A (no NetworkPolicy) proves the cluster is
+// runEgressCanary runs the two-phase boot-time canary in ns: phase A (no NetworkPolicy) proves the cluster is
 // reachable; phase B (deny-all scoped to the canary pod) proves whether that policy takes effect. Only a
 // Running pod's connect outcome is evidence either way — anything else is indeterminate and boot refuses.
-func (d *Driver) runEgressCanary(ctx context.Context) (canaryVerdict, error) {
-	a := d.runCanaryPhase(ctx, "phase A (no NetworkPolicy)", false)
+func (d *Driver) runEgressCanary(ctx context.Context, ns string) (canaryVerdict, error) {
+	a := d.runCanaryPhase(ctx, ns, "phase A (no NetworkPolicy)", false)
 	if a.err != nil {
 		return canaryIndeterminate, fmt.Errorf("egress canary: %w: %w", a.err, errCanaryIndeterminate)
 	}
@@ -87,7 +87,7 @@ func (d *Driver) runEgressCanary(ctx context.Context) (canaryVerdict, error) {
 			a.reachedRunning, a.exitCode, errCanaryIndeterminate)
 	}
 
-	b := d.runCanaryPhase(ctx, "phase B (deny-all NetworkPolicy)", true)
+	b := d.runCanaryPhase(ctx, ns, "phase B (deny-all NetworkPolicy)", true)
 	if b.err != nil {
 		return canaryIndeterminate, fmt.Errorf("egress canary: %w: %w", b.err, errCanaryIndeterminate)
 	}
@@ -107,8 +107,7 @@ func (d *Driver) runEgressCanary(ctx context.Context) (canaryVerdict, error) {
 
 // runCanaryPhase launches one canary pod (optionally behind a deny-all NetworkPolicy scoped to it), waits
 // for a terminal verdict, and cleans up the pod + netpol in every path (defer). denyAll selects phase B.
-func (d *Driver) runCanaryPhase(ctx context.Context, phaseName string, denyAll bool) canaryPhaseResult {
-	ns := d.cfg.Namespace
+func (d *Driver) runCanaryPhase(ctx context.Context, ns, phaseName string, denyAll bool) canaryPhaseResult {
 	runID := uuid.New()
 	suffix := runID.String()
 	podName := "wardyn-egress-canary-" + suffix
@@ -163,7 +162,7 @@ func (d *Driver) runCanaryPhase(ctx context.Context, phaseName string, denyAll b
 		_ = d.clientset.CoreV1().Pods(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
 	}()
 
-	reached, code, err := d.waitCanaryTerminal(ctx, podName)
+	reached, code, err := d.waitCanaryTerminal(ctx, ns, podName)
 	if err != nil {
 		return canaryPhaseResult{reachedRunning: reached, err: fmt.Errorf("%s: %w", phaseName, err)}
 	}
@@ -172,9 +171,9 @@ func (d *Driver) runCanaryPhase(ctx context.Context, phaseName string, denyAll b
 
 // waitCanaryTerminal polls until the canary container Terminates (returns its exit code) or hits a
 // fast-path terminal Waiting reason (returns an error), bounded by canaryWaitTimeout.
-func (d *Driver) waitCanaryTerminal(ctx context.Context, podName string) (reachedRunning bool, exitCode int32, err error) {
+func (d *Driver) waitCanaryTerminal(ctx context.Context, ns, podName string) (reachedRunning bool, exitCode int32, err error) {
 	pollErr := wait.PollUntilContextTimeout(ctx, k8sPollInterval, canaryWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
-		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
+		pod, gerr := d.clientset.CoreV1().Pods(ns).Get(pollCtx, podName, metav1.GetOptions{})
 		if gerr != nil {
 			return false, gerr
 		}

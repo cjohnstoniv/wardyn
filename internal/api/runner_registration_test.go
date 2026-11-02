@@ -34,6 +34,7 @@ type runnerRegistrationFake struct {
 	tokens    map[string]types.RunnerRegistrationToken
 	rows      map[uuid.UUID]types.Runner
 	runs      map[uuid.UUID]int
+	macRuns   map[uuid.UUID]int // how many of runs are macos_vm ones
 	emails    map[string]string
 	// selfHost is the self_host_runner grant state migration 0178 sets up: restricted, and allowed to
 	// the subjects in selfHostAllow (empty: nobody).

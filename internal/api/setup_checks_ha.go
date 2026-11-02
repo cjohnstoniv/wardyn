@@ -24,15 +24,31 @@ type MaskSyncProbe interface {
 }
 
 // haChecks returns ha_mode, recording_store_shared and mask_registry_shared, in
-// that order. Only the last can fail, and it fails when this replica cannot
-// confirm it holds the latest masking list. It is never Blocking: the replica
+// that order, then registered_runners_ha while runners are enabled. Only the
+// third can fail, and it fails when this replica cannot confirm it holds the
+// latest masking list. It is never Blocking: the replica
 // already refuses the doors that depend on it, and sending every admin into the
 // setup funnel during a Postgres outage would hide the console that shows it.
 func (s *Server) haChecks(ctx context.Context) []SetupCheck {
-	return []SetupCheck{
+	checks := []SetupCheck{
 		haModeCheck(),
 		recordingStoreSharedCheck(s.cfg.RecordingStore != nil),
 		s.maskRegistrySharedCheck(ctx),
+	}
+	// registered_runners_ha: absent unless runners are enabled; a failed
+	// enablement read counts as not enabled.
+	if s.runnersEnabled(ctx) == nil {
+		checks = append(checks, registeredRunnersHACheck())
+	}
+	return checks
+}
+
+// registeredRunnersHACheck warns that a runner holds its connection to one
+// replica. It has no Fix: there is no setting to change, only the replica count.
+func registeredRunnersHACheck() SetupCheck {
+	return SetupCheck{
+		ID: "registered_runners_ha", Label: "Runners with several replicas", Status: "warn",
+		Detail: "Runners connect to one server replica. A launch, terminal or revive that another replica serves finds the runner offline. Keep one replica while you use runners.",
 	}
 }
 

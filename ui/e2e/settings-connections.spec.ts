@@ -76,7 +76,7 @@ test.describe("Settings — Host card", () => {
     await gotoConsole(page);
     await navToRoute(page, "/account");
 
-    await expect(page.getByRole("heading", { name: "Your account", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Your settings", level: 1 })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Host" })).toHaveCount(0);
     await expect(page.getByText("Internet")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Corporate proxy & egress" })).toHaveCount(0);

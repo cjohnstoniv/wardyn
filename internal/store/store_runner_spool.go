@@ -109,11 +109,16 @@ func runnerSpoolRun(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID) (
 	var kind, owner, state string
 	var revoked *time.Time
 	err := tx.QueryRow(ctx, `SELECT owner_kind,owner,state,revoked_at FROM runners WHERE id=$1 FOR SHARE`, runnerID).Scan(&kind, &owner, &state, &revoked)
-	if errors.Is(err, pgx.ErrNoRows) || state != string(types.RunnerClaimed) || revoked != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrRunnerSpoolRefused
 	}
+	// Any other Scan error leaves state empty: it must reach the caller as the error it is, never as the
+	// permanent refusal the empty state would read as (a refusal is acknowledged, so the decision would be lost).
 	if err != nil {
 		return types.AgentRun{}, err
+	}
+	if state != string(types.RunnerClaimed) || revoked != nil {
+		return types.AgentRun{}, ErrRunnerSpoolRefused
 	}
 	run, err := scanRun(tx.QueryRow(ctx, `SELECT `+runCols+` FROM agent_runs WHERE id=$1 FOR SHARE`, runID))
 	if errors.Is(err, ErrNotFound) {
@@ -125,7 +130,9 @@ func runnerSpoolRun(ctx context.Context, tx pgx.Tx, runnerID, runID uuid.UUID) (
 	if run.RunnerID == nil || *run.RunnerID != runnerID || run.Placement != types.PlacementLocal || !runnerReportsOn(kind, owner, run.CreatedBy) {
 		return run, ErrRunnerSpoolRefused
 	}
-	if run.State != types.RunRunning && !run.State.IsTerminal() {
+	// STARTING too: the run's proxy, and so its spool, exists from the sandbox create, before the
+	// STARTING→RUNNING CAS (DR-0436). Ingest is audit only, so no lifecycle state is touched.
+	if run.State != types.RunStarting && run.State != types.RunRunning && !run.State.IsTerminal() {
 		return run, ErrRunnerSpoolRefused
 	}
 	return run, nil

@@ -222,6 +222,45 @@ func TestSCIMPurgeKeepsWorkspacesWhenAsked(t *testing.T) {
 	}
 }
 
+// A hand-over whose suffixed fallback name the person already uses takes another, and hands over both: the
+// operator owns N, the person owns W named N and an older A named N (<W's id prefix>), and the newer W is
+// handed over first.
+func TestSCIMPurgeHandsOverPastAnOccupiedFallbackName(t *testing.T) {
+	e := newSCIMEnv(t)
+	f := e.seedPurgeSubject(purgeSub, purgeEmail, purgeOID)
+	ctx := context.Background()
+	opID, aID, wID := uuid.New(), uuid.New(), uuid.New()
+	now := time.Now().UTC()
+	for _, ws := range []types.Workspace{
+		{ID: opID, Name: "N", CreatedAt: now},
+		{ID: aID, Name: "N (" + wID.String()[:8] + ")", OwnedBy: purgeSub, CreatedAt: now.Add(time.Minute)},
+		{ID: wID, Name: "N", OwnedBy: purgeSub, CreatedAt: now.Add(2 * time.Minute)},
+	} {
+		ws.Status, ws.UpdatedAt = types.WorkspaceScanned, ws.CreatedAt
+		ws.Sources = []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}}
+		if _, err := e.st.CreateWorkspace(ctx, ws); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if w := e.del(e.b, f.id); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d %s, want 204", w.Code, w.Body.String())
+	}
+	names := map[string]bool{}
+	for _, id := range []uuid.UUID{opID, aID, wID} {
+		ws, err := e.st.GetWorkspace(ctx, id)
+		if err != nil || ws.OwnedBy != "" {
+			t.Errorf("workspace %s = %q owned by %q (%v), want the operator", id, ws.Name, ws.OwnedBy, err)
+		}
+		names[ws.Name] = true
+	}
+	if len(names) != 3 || !names["N"] || !names["N ("+wID.String()[:8]+")"] {
+		t.Errorf("names = %v, want three distinct names with the operator's and the person's own kept", names)
+	}
+	if d := dataOf(t, e.purgeRows(e.a, e.b)[0]); d["workspaces_reassigned"] != float64(3) {
+		t.Errorf("purge row = %v, want 3 workspaces reassigned", d)
+	}
+}
+
 // ageSuspension makes a suspended identity due for purge.
 func (e *scimEnv) ageSuspension(id string) {
 	e.t.Helper()

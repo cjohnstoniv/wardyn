@@ -149,8 +149,8 @@ func TestLocalSecretEnvKeysHaveCreateTimeIntents(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		intents, known := f.srv.localProviderIntent(r, awsSSOTestOwner, p)
-		if !known {
+		intents, known, err := f.srv.localProviderIntent(r, awsSSOTestOwner, p)
+		if err != nil || !known {
 			t.Fatalf("%s: no create-time intents", c.kind)
 		}
 		for key, value := range spec.SecretEnv {

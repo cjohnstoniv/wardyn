@@ -31,6 +31,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -665,6 +666,69 @@ func TestUIGateway_RefusedReassertIsAuditedWithItsReason(t *testing.T) {
 			}
 		})
 	}
+}
+
+// walledRun puts h's run under a profile that denies nothing yet, and returns what sets its limits.
+func walledRun(h *uiHarness) func(types.GovernanceLimits) {
+	unit := types.GovernanceUnit{ID: uuid.New(), Name: "walled"}
+	set := func(l types.GovernanceLimits) {
+		unit.Limits = l
+		h.store.sshMemStore.mu.Lock()
+		defer h.store.sshMemStore.mu.Unlock()
+		h.store.profiles = []types.GovernanceUnit{unit}
+	}
+	set(types.GovernanceLimits{})
+	h.run.UnitID = &unit.ID
+	h.store.putRun(h.run)
+	return set
+}
+
+// TestUIGateway_ProfileEditEndsAnOpenSession: the re-check asks the run's profile as it stands now what the
+// session's door asked, so an edit that denies UI apps refuses an open app session at its next re-check, and
+// one that denies interactive sessions an open desktop; a profile that does not deny them refuses neither
+// (#3398).
+func TestUIGateway_ProfileEditEndsAnOpenSession(t *testing.T) {
+	governanceUnit := string(authz.ReasonGovernanceUnit)
+	t.Run("an app session ends when the profile comes to deny UI apps", func(t *testing.T) {
+		h := newUIHarness(t, okBackend())
+		set := walledRun(h)
+		cookie := h.openSession()
+		path := uiRelayPrefix(h.run.ID, "code") + "/ide"
+		if rec := uiGet(h, path, cookie); rec.Code != http.StatusOK {
+			t.Fatalf("first request: %d %s", rec.Code, rec.Body.String())
+		}
+		set(types.GovernanceLimits{DenyInteractive: true}) // the app door asks deny_ui_apps alone
+		h.clock.advance(uiReassertInterval + time.Second)
+		if rec := uiGet(h, path, cookie); rec.Code != http.StatusOK {
+			t.Fatalf("re-checked under a profile that allows UI apps: %d %s, want 200", rec.Code, rec.Body.String())
+		}
+		set(types.GovernanceLimits{DenyUIApps: true})
+		h.clock.advance(uiReassertInterval + time.Second)
+		if rec := uiGet(h, path, cookie); rec.Code != http.StatusForbidden || respondedReason(t, rec) != governanceUnit {
+			t.Fatalf("re-checked under a profile that now denies UI apps: %d %s, want 403 %s", rec.Code, rec.Body.String(), governanceUnit)
+		}
+		if rows := h.audit.auditRows("ui.authorize", "denied"); len(rows) != 1 || !h.audit.hasDataValue("reason", governanceUnit) {
+			t.Errorf("ui.authorize denied rows = %+v, want one %s", rows, governanceUnit)
+		}
+	})
+
+	t.Run("a desktop ends when the profile comes to deny interactive sessions", func(t *testing.T) {
+		h := newUIHarness(t, okBackend())
+		set := walledRun(h)
+		now := h.clock.now().Unix()
+		sess := uiSession{Run: h.run.ID, App: uiDesktopAppName, Principal: h.owner, Role: oidc.RoleUser, Desktop: true,
+			IssuedAt: now, AuthorizedAt: now}
+		if _, code, why := h.srv.desktopRunCheck(context.Background(), sess); code != 0 {
+			t.Fatalf("checked under a profile that denies nothing: %d %s, want open", code, why)
+		}
+		set(types.GovernanceLimits{DenyInteractive: true})
+		if _, code, why := h.srv.desktopRunCheck(context.Background(), sess); code != desktopCloseNotAuthorized {
+			t.Fatalf("checked under a profile that now denies interactive sessions: %d %s, want %d", code, why, desktopCloseNotAuthorized)
+		}
+		if !h.audit.hasDataValue("reason", governanceUnit) {
+			t.Errorf("no ui.authorize denied %s; reasons: %s", governanceUnit, h.audit.dataReasons())
+		}
+	})
 }
 
 // auditRows returns the recorded rows with the given action and outcome.

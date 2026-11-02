@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -63,7 +64,7 @@ func TestPlacement_AllThreePods(t *testing.T) {
 	installProxyIPReactor(t, cs, "10.244.0.7")
 	installAgentRunningReactor(t, cs)
 	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
-		Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: testPlacementJSON,
+		Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: testPlacementJSON,
 	})
 	if err != nil {
 		t.Fatalf("newWithClient: %v", err)
@@ -162,7 +163,7 @@ func TestPlacement_RefusedAtBoot(t *testing.T) {
 			cs := fake.NewClientset()
 			installCanaryReactor(t, cs, false)
 			_, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
-				Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: tc.json,
+				Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: tc.json,
 			})
 			// The label form of safe-to-evict is allowlisted too (the same single key).
 			if tc.wantKey == "" {
@@ -192,7 +193,7 @@ func TestPlacement_RunnerArch(t *testing.T) {
 	cs := fake.NewClientset()
 	installCanaryReactor(t, cs, false)
 	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
-		Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: `{"nodeSelector": {"pool": "sandbox"}}`,
+		Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: `{"nodeSelector": {"pool": "sandbox"}}`,
 		RunnerID: testRunnerID, Arch: "arm64", Evidence: &memEvidence{}, HardDeny: &HardDeny{},
 	})
 	if err != nil {
@@ -236,7 +237,7 @@ func TestPlacement_RunnerArchRefusals(t *testing.T) {
 			cs := fake.NewClientset()
 			installCanaryReactor(t, cs, false)
 			_, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
-				Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: tc.json,
+				Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test", SandboxPlacement: tc.json,
 				RunnerID: testRunnerID, Arch: tc.arch, Evidence: &memEvidence{}, HardDeny: &HardDeny{},
 			})
 			if tc.wantErr == "" {
@@ -266,5 +267,85 @@ func TestPlacement_ApplyKeepsAnnotationsWardynSet(t *testing.T) {
 	p.apply(pod, uuid.New(), componentAgent, nil)
 	if pod.Annotations["dev.gvisor.spec.mount.drive.directfs"] != "off" || pod.Annotations["team.example.com/owner"] != "platform" {
 		t.Errorf("annotations = %v", pod.Annotations)
+	}
+}
+
+// TestPlacement_WithArches: a prewrapped image's accepted set (design final §3). One architecture pins
+// the node selector; two intersect each nonempty required term with kubernetes.io/arch In the set, keep an
+// empty term matching nothing, and add an arch-only term only where the operator set no required affinity.
+func TestPlacement_WithArches(t *testing.T) {
+	both := []string{"amd64", "arm64"}
+	archIn := corev1.NodeSelectorRequirement{Key: corev1.LabelArchStable, Operator: corev1.NodeSelectorOpIn, Values: both}
+	zone := corev1.NodeSelectorRequirement{Key: "topology.kubernetes.io/zone", Operator: corev1.NodeSelectorOpIn, Values: []string{"a"}}
+
+	one, err := Placement{}.withArches([]string{"amd64"})
+	if err != nil || one.NodeSelector[corev1.LabelArchStable] != "amd64" {
+		t.Fatalf("one accepted = %+v, %v; want the node selector pinned to amd64", one.NodeSelector, err)
+	}
+
+	none, err := Placement{}.withArches(both)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terms := none.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) != 1 || !reflect.DeepEqual(terms[0].MatchExpressions, []corev1.NodeSelectorRequirement{archIn}) {
+		t.Fatalf("no operator affinity = %+v, want one arch-only term", terms)
+	}
+
+	op := Placement{Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{
+			{MatchExpressions: []corev1.NodeSelectorRequirement{zone}},
+			{}, // matches no node; an arch expression would make it match every amd64/arm64 node
+		}},
+	}}}
+	got, err := op.withArches(both)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terms = got.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) != 2 || !reflect.DeepEqual(terms[0].MatchExpressions, []corev1.NodeSelectorRequirement{zone, archIn}) ||
+		len(terms[1].MatchExpressions) != 0 || len(terms[1].MatchFields) != 0 {
+		t.Fatalf("[zone, empty] = %+v, want [zone AND arch, empty]", terms)
+	}
+	if n := len(op.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions); n != 1 {
+		t.Fatalf("the operator's placement was changed (%d expressions); withArches must copy it", n)
+	}
+
+	if _, err := (Placement{NodeSelector: map[string]string{corev1.LabelArchStable: "s390x"}}).withArches(both); err == nil {
+		t.Fatal("an operator selector pinned to an architecture outside the set was accepted")
+	}
+}
+
+// TestPlacement_ImageArchesPlaceTheAgentPod: a run's ImageArches reach its agent pod, not its proxy.
+func TestPlacement_ImageArchesPlaceTheAgentPod(t *testing.T) {
+	cs := fake.NewClientset()
+	installCanaryReactor(t, cs, false)
+	installDeleteCollectionSupport(t, cs)
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
+	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test"})
+	if err != nil {
+		t.Fatalf("newWithClient: %v", err)
+	}
+	spec := testSandboxSpec()
+	spec.ImageArches = []string{"arm64"}
+	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	for _, a := range cs.Actions() {
+		if a.GetVerb() != "create" || a.GetResource().Resource != "pods" {
+			continue
+		}
+		pod := a.(clienttesting.CreateAction).GetObject().(*corev1.Pod)
+		switch pod.Name {
+		case agentPodName(spec.RunID):
+			if pod.Spec.NodeSelector[corev1.LabelArchStable] != "arm64" {
+				t.Errorf("agent pod node selector = %v, want arm64", pod.Spec.NodeSelector)
+			}
+		case proxyPodName(spec.RunID):
+			if _, ok := pod.Spec.NodeSelector[corev1.LabelArchStable]; ok {
+				t.Errorf("proxy pod node selector = %v, want no architecture", pod.Spec.NodeSelector)
+			}
+		}
 	}
 }

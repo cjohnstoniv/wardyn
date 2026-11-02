@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { setField } from "../../../../../../test/set-field";
-import { MY_COMPONENTS, SAVED_SECRETS } from "../../../../../lib/new-run-fixtures/scenarios/catalogue";
+import { MY_COMPONENTS, ORG_KUBECTL, SAVED_SECRETS } from "../../../../../lib/new-run-fixtures/scenarios/catalogue";
 import { SCENARIO_PREFLIGHT } from "../../../../../lib/new-run-fixtures/scenarios/preflight";
 import { SCENARIO_ACCESS } from "../../../../../lib/new-run-fixtures/scenarios/tools";
 import { CLAUDE_UNGATED, CODEX, MCP_LOCAL, MCP_LOCAL_ENV, MODEL_PROVIDERS, PROVIDER_ACCESS, withFacts } from "../../../../../lib/new-run-fixtures/scenarios/tools-harness";
@@ -59,6 +59,12 @@ function Draft() {
   const { intent } = useNewRunDraft();
   return <pre data-testid="draft">{JSON.stringify({ components: intent.components, tools: intent.tools })}</pre>;
 }
+// Puts another local server first in the draft, as a later edit would, while the answer still points into the old order.
+function Prepend() {
+  const dispatch = useNewRunDispatch();
+  const apply = (i: RunIntent): RunIntent => ({ ...i, components: [mcpLocalRef("other", "node other.js", [], { secret_name: "OTHER_TOKEN", delivery: { mode: "env", var: "OTHER_TOKEN" } }), ...(i.components ?? [])] });
+  return <button type="button" onClick={() => dispatch({ type: "edit", apply })}>prepend server</button>;
+}
 const draft = () => JSON.parse(screen.getByTestId("draft").textContent ?? "{}") as { components?: Record<string, unknown>[]; tools?: Record<string, unknown>[] };
 
 beforeEach(() => {
@@ -75,7 +81,7 @@ function Catalogue({ access = SCENARIO_ACCESS.member, intent = {} }: { access?: 
 async function openDialog(intent: RunIntent = {}, access?: AccessFacts) {
   render(
     <AnnounceContext.Provider value={vi.fn()}>
-      <NewRunDraftProvider owner="alice"><Seed intent={intent}><Catalogue access={access} intent={intent} /><Draft /></Seed></NewRunDraftProvider>
+      <NewRunDraftProvider owner="alice"><Seed intent={intent}><Catalogue access={access} intent={intent} /><Draft /><Prepend /></Seed></NewRunDraftProvider>
     </AnnounceContext.Provider>,
   );
   await screen.findByRole("heading", { name: NR_TOOLS.ADD_TITLE });
@@ -240,6 +246,20 @@ describe("Add an MCP server", () => {
   });
 });
 
+describe("An added local server while the next preview is out", () => {
+  it("keeps its own command and secret name when an edit has shifted the draft's components", async () => {
+    on();
+    await openDialog(WITH_DOCS, ACCESS);
+    await userEvent.click(screen.getByRole("button", { name: "prepend server" }));
+    const card = within(screen.getByRole("heading", { name: "docs-search", level: 3 }).closest("li") as HTMLElement);
+    expect(within(card.getByLabelText(NR_TOOLS.BRINGS_FOR("docs-search"))).getByText("DOCS_TOKEN")).toBeTruthy();
+    await userEvent.click(card.getByRole("button", { name: NR_TOOLS.DETAILS_FOR("docs-search") }));
+    const details = within(await screen.findByRole("dialog"));
+    expect(details.getByText("npx -y @example/mcp-server@1.4.2")).toBeTruthy();
+    expect(details.queryByText("node other.js")).toBeNull();
+  });
+});
+
 describe("Credentials total", () => {
   const totals = (credentials = [MCP_LOCAL_ENV]) => render(<Totals access={{ ...ACCESS, credentials }} answered />);
 
@@ -364,5 +384,14 @@ describe("Review", () => {
     expect(screen.getByText("DOCS_TOKEN")).toBeTruthy();
     expect(screen.getByText(NR_TOOLS.FOR_ROW("docs-search"))).toBeTruthy();
     expect(screen.getByText(NR_TOOLS.DELIVERY_ENV)).toBeTruthy();
+  });
+
+  it("never gives a local server's secret cluster wording, even when an organisation row has its id", async () => {
+    on();
+    h.mine.mockResolvedValue({ ...MY_COMPONENTS, org: [{ ...ORG_KUBECTL, id: "inline:0" }] });
+    render(<AccessGroup draft={draftOf(WITH_DOCS)} pre={pre} preview={null} docRows={[]} go={() => {}} dispatch={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_ACCESS}` }));
+    expect(screen.getByText("DOCS_TOKEN")).toBeTruthy();
+    expect(screen.queryByText(NR_TOOLS.KUBE_CREDENTIAL("staging"))).toBeNull();
   });
 });

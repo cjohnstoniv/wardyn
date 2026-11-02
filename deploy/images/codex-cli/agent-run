@@ -53,6 +53,7 @@ set -euo pipefail
 # provision_git_helper_secret, clone_one, dispatch_repo_clones,
 # resolve_workdir) — identical across every agent image's agent-run.
 source /usr/local/bin/agent-run-lib.sh
+wait_for_proxy
 
 # ── managed agent-side policy ────────────────────────────────────────────────
 # codex reads no managed-policy file — nothing in this image consults one — so

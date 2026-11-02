@@ -9,6 +9,20 @@ org: ""
 # ServiceAccount of its own namespace, so runs beside runnerd could name runnerd's.
 runsNamespace: ""
 
+# More pre-existing namespaces this one runner places runs in, beside runsNamespace (the default: the first
+# --runs-namespace). Each gets the same Role and RoleBinding and the same runnerd ingress rule, and has the
+# same constraints as runsNamespace: it is not the release namespace and no other runner uses it.
+extraRunsNamespaces: []
+
+# Declarative workloads. The WardynWorkload CRD (crds/) is installed with the release; Helm never upgrades it,
+# so re-apply it by hand on a chart upgrade.
+workloads:
+  # Namespaces whose WardynWorkload objects runnerd watches. Each gets a Role and RoleBinding with
+  # wardynworkloads get, list, watch and wardynworkloads/status patch: no secrets, nothing cluster-wide.
+  # A workload object is only an authorisation key; its run pods still go to the runs namespaces.
+  # With rbac.create=false apply those Roles before the image starts: runnerd refuses to boot without them.
+  namespaces: []
+
 sandbox:
   # Required: amd64 or arm64 (register and serve --arch, WARDYN_RUNNERD_ARCH). Every run pod and the canary get
   # nodeSelector kubernetes.io/arch=<arch> beside k8s.sandbox.nodeSelector's own keys, and the runner reports it
@@ -99,7 +113,7 @@ k8s:
   # must name a microVM runtime such as Kata; runnerd offers none when that class does not resolve.
   linuxVM: false
 
-# false: a platform team applies the ClusterRole, ClusterRoleBinding and both Roles and RoleBindings itself,
+# false: a platform team applies the ClusterRole, ClusterRoleBinding and every Role and RoleBinding itself,
 # before the image starts (see NOTES).
 rbac:
   create: true

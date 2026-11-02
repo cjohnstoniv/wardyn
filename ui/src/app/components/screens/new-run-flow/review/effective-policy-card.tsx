@@ -10,20 +10,23 @@ import { ADO_ACCESS } from "../../../../lib/ado-access-copy";
 import { Switch } from "../../../wardyn/form-primitives";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { PUSH } from "../../../wardyn/copy/push";
+import type { PersonalWallsSpec } from "../../../../lib/api/walls";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 import type { NewRunDraft } from "../draft/run-intent";
 import { BarrierChip } from "./barrier-chip";
 import { harnessName, loadRoster } from "../steps/harnesses/roster";
 import { useLoaded } from "../steps/shape/use-loaded";
+import { wallsLeaveOut } from "../lenses/tools-lens";
 import { changedRows, policyRows } from "./policy-rows";
 import type { ReviewPreflight } from "./review-seams";
 
-export function EffectivePolicyCard({ draft, pre, preview }: { draft: NewRunDraft; pre: ReviewPreflight | null; preview: PolicyPreviewResult | null }) {
+export function EffectivePolicyCard({ draft, pre, preview, walls }: { draft: NewRunDraft; pre: ReviewPreflight | null; preview: PolicyPreviewResult | null; walls?: PersonalWallsSpec }) {
   const [onlyChanged, setOnlyChanged] = React.useState(false);
   const changed = changedRows(draft.intent, draft.base);
   // The harness names the Tools group shows: the roster's display name, the id until it answers.
   const roster = useLoaded(loadRoster);
-  const all = policyRows(draft, pre, preview, (id) => (roster.status === "ready" ? harnessName(roster.value, id) : id));
+  const access = pre?.access ?? preview?.access;
+  const all = policyRows(draft, pre, preview, (id) => (roster.status === "ready" ? harnessName(roster.value, id) : id), wallsLeaveOut(walls, access, !!access));
   const rows = onlyChanged ? all.filter((r) => changed.has(r.id)) : all;
   const ado = adoAccessSummary(preview?.spec.azure_devops_capabilities);
   // Only a review rule holds a push; a deny rule refuses it attended or not, so the note needs one.

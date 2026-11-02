@@ -244,7 +244,7 @@ async function waitUnlessGone(
 // ---------------------------------------------------------------------------
 
 /**
- * Start to Review for an Environment sandbox on WORKSPACE: a shell with no
+ * Start to Review for an Environment on WORKSPACE: a shell with no
  * agent, which is all a curl needs and keeps the video keyless. Every click is
  * silent — the owner's lines for these beats wait until there is something to
  * decide. `atTools` runs on Tools and access, before Review.
@@ -802,7 +802,7 @@ test("beats 6-7 — Always, and the workspace's own Allowed hosts", async () => 
 
   await expect(newRunHeading(page, NEW_RUN_HEADING.start)).toBeVisible({ timeout: 30_000 });
 
-  // Environment sandbox, not the agent: this video is keyless, and a shell is
+  // Environment, not the agent: this video is keyless, and a shell is
   // all a curl needs. The run comes up idle with a shell, which is exactly what
   // beats 6 and 8 type into, and the Name dialog's title is the only text it
   // asks for.

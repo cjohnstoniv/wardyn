@@ -84,6 +84,15 @@ func TestProjectDropsOnlyTheBadFields(t *testing.T) {
 	}
 }
 
+func TestPersonalNamesTheWallsOwner(t *testing.T) {
+	if r := Layered(Personal("ana@example.com")); r == nil || *r != (Ref{Source: LayerPersonal, Owner: "ana@example.com", Layer: LayerPersonal}) {
+		t.Fatalf("Layered(Personal) = %+v", r)
+	}
+	if r := Personal("ana\nevil"); r.Owner != "" || r.Source != LayerPersonal {
+		t.Fatalf("Personal with a line break kept the owner: %+v", r)
+	}
+}
+
 func TestRequestRoute(t *testing.T) {
 	tests := []struct {
 		name string
@@ -122,5 +131,19 @@ func TestFields(t *testing.T) {
 	}
 	if !(Contact{}).IsZero() || (Contact{Owner: "x"}).IsZero() {
 		t.Error("IsZero wrong")
+	}
+}
+
+func TestLayered(t *testing.T) {
+	for _, source := range []string{SourceUnit, SourceDeployment, LayerPersonal} {
+		if got := Layered(&Ref{Source: source}); got.Layer != source {
+			t.Errorf("Layered(%s).Layer = %q, want %q", source, got.Layer, source)
+		}
+	}
+	if got := Layered(&Ref{Source: "other", Layer: "stale"}); got.Layer != "" {
+		t.Errorf("Layered(other).Layer = %q, want none", got.Layer)
+	}
+	if Layered(nil) != nil {
+		t.Error("Layered(nil) is not nil")
 	}
 }

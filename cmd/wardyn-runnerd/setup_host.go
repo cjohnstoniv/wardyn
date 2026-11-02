@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	runnerunits "github.com/cjohnstoniv/wardyn/deploy/runner"
 	"github.com/cjohnstoniv/wardyn/internal/doctor"
@@ -96,6 +97,12 @@ type setupPaths struct {
 }
 
 func (p setupPaths) identity() string { return filepath.Join(p.stateDir, "runner.json") }
+
+// crashLogFile is beside the log: the LaunchAgent's stdout and stderr, which take only what serve prints
+// outside its own rotated log (a panic, or a failure before it opens the log).
+func (p setupPaths) crashLogFile() string {
+	return crashLogPath(p.logFile)
+}
 
 // configFile is runnerd.json, where every setting the service runs with lives; the service definition
 // names only this path and the binary.
@@ -205,13 +212,59 @@ func (h setupHost) installBinary(ctx context.Context, dst string, stopService bo
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	if err := keepPrevious(dst, h.exe); err != nil {
-		return fmt.Errorf("keep the previous %s: %w", dst, err)
+	// A rollback installs from the .previous it restores: keeping the binary it replaces would overwrite that
+	// file with the failed one, and a write that then failed would leave no copy of the old runner.
+	if !isSameFile(h.exe, dst+".previous") {
+		if err := keepPrevious(dst, h.exe); err != nil {
+			return fmt.Errorf("keep the previous %s: %w", dst, err)
+		}
 	}
 	if err := writeAtomic(dst, 0o755, func(w io.Writer) error { _, err := io.Copy(w, src); return err }); err != nil {
 		return fmt.Errorf("install %s: %w", dst, err)
 	}
 	return nil
+}
+
+// macVMHelpers are the macOS VM files the package installs beside wardyn-runnerd: serve runs the helper from
+// beside its own binary (macVMHelperPath), and the helper runs the guest agent from beside itself.
+var macVMHelpers = []string{"wardyn-macvm", "wardyn-guest-agent"}
+
+// installHelpers puts each of macVMHelpers that is beside this binary (the package's directory) beside the
+// installed one at dst too, atomically, so the runner setup installs runs with its helper; on a Mac only. One
+// that is not beside this binary (a runner downloaded alone, which then offers no macOS VM: no_helper) is
+// skipped, and one that already is the installed file (setup run from the install directory, or a rollback's
+// copy there) is left alone. No .previous is kept: a rollback runs setup from that directory, which leaves
+// these files as they are.
+func (h setupHost) installHelpers(dst string) error {
+	if h.goos != "darwin" {
+		return nil
+	}
+	for _, name := range macVMHelpers {
+		src, to := filepath.Join(filepath.Dir(h.exe), name), filepath.Join(filepath.Dir(dst), name)
+		if isSameFile(src, to) {
+			continue
+		}
+		f, err := os.Open(src)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		err = writeAtomic(to, 0o755, func(w io.Writer) error { _, err := io.Copy(w, f); return err })
+		_ = f.Close()
+		if err != nil {
+			return fmt.Errorf("install %s: %w", to, err)
+		}
+	}
+	return nil
+}
+
+// isSameFile reports whether a and b are both there and are one file.
+func isSameFile(a, b string) bool {
+	sa, errA := os.Stat(a)
+	sb, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(sa, sb)
 }
 
 // keepPrevious keeps the binary an upgrade is about to replace as dst+".previous", a hard link taken
@@ -279,7 +332,8 @@ func shellUnquote(s string) string {
 }
 
 // runnerFile is runnerd.json as setup settled it: what setup owns, over what the file already held (the
-// mirror, the proxies and the recording store are edited by hand and kept). The image is written only when
+// mirror, the proxies and the recording store are edited by hand and kept; so are the drive roots a setup
+// without --drive-root leaves). The image is written only when
 // someone named it: an image that follows the organisation or this release is derived again at every start,
 // so replacing the binary alone moves the proxy with it.
 func (p setupPlan) runnerFile() runnerFile {
@@ -291,6 +345,15 @@ func (p setupPlan) runnerFile() runnerFile {
 	}
 	f.RelayListen, f.RelayHostTarget, f.TrustedCAFile, f.OrgCAFile = p.relayListen, p.relayHostTarget, p.trustedCAFile, p.orgCAFile
 	f.RunnerProxy, f.RunnerNoProxy = carriedValue(p.proxy, "HTTPS_PROXY", "https_proxy"), carriedValue(p.proxy, "NO_PROXY", "no_proxy")
+	if len(p.driveRoots) > 0 {
+		f.DriveRoot = p.driveRoots
+	}
+	switch p.macOSVM {
+	case "on":
+		f.MacOSVM = "1"
+	case "off":
+		f.MacOSVM = ""
+	}
 	return f
 }
 
@@ -363,6 +426,51 @@ func (p setupPaths) installedService() string {
 	}
 	return ""
 }
+
+// serviceOrgArg is the organisation the installed service definition really passes serve as --org, "" when
+// it passes none, and how to name where it came from: an earlier install's LaunchAgent names it in
+// ProgramArguments, an earlier Linux unit passes ${WARDYN_RUNNER_ORG_URL} from its environment file. A
+// definition that passes only --config consumes neither, so a stale environment file beside it names nothing.
+func (p setupPaths) serviceOrgArg() (org, source string) {
+	if p.plistFile != "" {
+		if plist, err := os.ReadFile(p.plistFile); err == nil {
+			if m := plistOrgArg.FindSubmatch(plist); m != nil {
+				return html.UnescapeString(strings.TrimSpace(string(m[1]))), "the LaunchAgent's --org argument"
+			}
+			return "", ""
+		}
+	}
+	unit, err := os.ReadFile(p.unitFile)
+	if err != nil {
+		return "", ""
+	}
+	for _, line := range strings.Split(string(unit), "\n") {
+		if strings.HasPrefix(line, "ExecStart=") && strings.Contains(line, "--org ${WARDYN_RUNNER_ORG_URL}") {
+			return p.setting("WARDYN_RUNNER_ORG_URL"), "WARDYN_RUNNER_ORG_URL in the service's settings"
+		}
+	}
+	return "", ""
+}
+
+var plistOrgArg = regexp.MustCompile(`<string>--org</string>\s*<string>([^<]*)</string>`)
+
+// serviceProgram is the binary the installed LaunchAgent runs, the first of its ProgramArguments, as written
+// there; "" when none is installed (Linux, --no-service, or the package's managed agent alone).
+func (p setupPaths) serviceProgram() string {
+	if p.plistFile == "" {
+		return ""
+	}
+	plist, err := os.ReadFile(p.plistFile)
+	if err != nil {
+		return ""
+	}
+	if m := plistProgram.FindSubmatch(plist); m != nil {
+		return html.UnescapeString(strings.TrimSpace(string(m[1])))
+	}
+	return ""
+}
+
+var plistProgram = regexp.MustCompile(`<key>ProgramArguments</key>\s*<array>\s*<string>([^<]*)</string>`)
 
 // noServiceEnvFile is the environment file a Linux service read before runnerd.json, and on macOS, which
 // had no such file, the one --no-service wrote beside the identity's directory.
@@ -447,7 +555,35 @@ func renderLaunchAgent(plan setupPlan) string {
 		"__WARDYN_RUNNERD__", html.EscapeString(plan.paths.installed),
 		"__WARDYN_CONFIG__", html.EscapeString(plan.paths.configFile()),
 		"__WARDYN_LOG__", html.EscapeString(plan.paths.logFile),
+		"__WARDYN_CRASH_LOG__", html.EscapeString(plan.paths.crashLogFile()),
 	).Replace(tpl)
+}
+
+// launchAgentUnloadWait and launchAgentUnloadPoll bound and pace the wait for launchd to finish unloading a
+// booted-out agent. They are variables so a test can shrink them.
+var (
+	launchAgentUnloadWait = 10 * time.Second
+	launchAgentUnloadPoll = 200 * time.Millisecond
+)
+
+// waitLaunchAgentsGone polls launchctl print until each label is gone. Any error from print counts as gone
+// (launchd answers 113 for an unknown label), so a surprise never waits longer than it would have. After
+// launchAgentUnloadWait in total it stops waiting and lets the bootstrap report.
+func (h setupHost) waitLaunchAgentsGone(ctx context.Context, domain string, labels ...string) error {
+	deadline := time.Now().Add(launchAgentUnloadWait)
+	for _, label := range labels {
+		for {
+			if _, err := h.run(ctx, "launchctl", "print", domain+"/"+label); err != nil || !time.Now().Before(deadline) {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(launchAgentUnloadPoll):
+			}
+		}
+	}
+	return ctx.Err()
 }
 
 func (h setupHost) startLaunchAgent(ctx context.Context, plan setupPlan, out io.Writer) error {
@@ -471,8 +607,13 @@ func (h setupHost) startLaunchAgent(ctx context.Context, plan setupPlan, out io.
 	domain := fmt.Sprintf("gui/%d", h.uid)
 	_, _ = h.run(ctx, "launchctl", "bootout", domain+"/"+managedServiceLabel)
 	_, _ = h.run(ctx, "launchctl", "bootout", domain+"/"+serviceLabel)
+	// bootout returns before launchd has finished unloading the job, and a bootstrap of a label that is
+	// still unloading fails with 5.
+	if err := h.waitLaunchAgentsGone(ctx, domain, managedServiceLabel, serviceLabel); err != nil {
+		return err
+	}
 	if b, err := h.run(ctx, "launchctl", "bootstrap", domain, p.plistFile); err != nil {
-		return fmt.Errorf("launchctl bootstrap: %w: %s", err, strings.TrimSpace(string(b)))
+		return fmt.Errorf("launchctl bootstrap: %w: %s; the runner is not running: start it with launchctl bootstrap %s %s", err, strings.TrimSpace(string(b)), domain, p.plistFile)
 	}
 	fmt.Fprintf(out, "Started the wardyn-runnerd LaunchAgent. Log: %s\n", p.logFile)
 	return nil

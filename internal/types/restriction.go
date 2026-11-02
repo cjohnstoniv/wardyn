@@ -70,6 +70,7 @@ type RestrictionLimits struct {
 	DenyUserDrive              *bool        `json:"deny_user_drive,omitempty"`
 	DenyMemberDrives           *bool        `json:"deny_member_drives,omitempty"`
 	DenyPlacements             *[]Placement `json:"deny_placements,omitempty"`
+	AllowedMacOSBases          *[]string    `json:"allowed_macos_bases,omitempty"`
 	MaxConcurrentRuns          *int         `json:"max_concurrent_runs,omitempty"`
 	MaxCPUMillis               *int         `json:"max_cpu_millis,omitempty"`
 	MaxMemoryMiB               *int         `json:"max_memory_mib,omitempty"`
@@ -124,7 +125,7 @@ func (l RestrictionLimits) Overlay() LimitsOverlay {
 	return LimitsOverlay{
 		LocalSelfDefinedComponents: l.LocalSelfDefinedComponents, DenyTaskModeExec: l.DenyTaskModeExec,
 		DenyInteractive: l.DenyInteractive, DenyUIApps: l.DenyUIApps, DenyUserDrive: l.DenyUserDrive,
-		DenyMemberDrives: l.DenyMemberDrives, DenyPlacements: l.DenyPlacements,
+		DenyMemberDrives: l.DenyMemberDrives, DenyPlacements: l.DenyPlacements, AllowedMacOSBases: l.AllowedMacOSBases,
 		MaxConcurrentRuns: l.MaxConcurrentRuns, MaxCPUMillis: l.MaxCPUMillis, MaxMemoryMiB: l.MaxMemoryMiB,
 		MaxEphemeralDiskMiB: l.MaxEphemeralDiskMiB, MaxDriveSizeMiB: l.MaxDriveSizeMiB,
 		MaxEndAheadSec: l.MaxEndAheadSec, MaxWaitSec: l.MaxWaitSec, PauseIdleAfterSec: l.PauseIdleAfterSec,

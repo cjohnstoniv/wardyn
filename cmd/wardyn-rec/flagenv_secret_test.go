@@ -39,12 +39,18 @@ func TestRunToken_NeverPrintedInUsage(t *testing.T) {
 // write time, so swapping it here captures the usage block.
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
+	return captureFile(t, &os.Stderr, fn)
+}
+
+// captureFile runs fn with *f (os.Stdout or os.Stderr) redirected to a pipe and returns what it wrote.
+func captureFile(t *testing.T, f **os.File, fn func()) string {
+	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("pipe: %v", err)
 	}
-	saved := os.Stderr
-	os.Stderr = w
+	saved := *f
+	*f = w
 	done := make(chan string, 1)
 	go func() {
 		var buf bytes.Buffer
@@ -52,7 +58,7 @@ func captureStderr(t *testing.T, fn func()) string {
 		done <- buf.String()
 	}()
 	fn()
-	os.Stderr = saved
+	*f = saved
 	_ = w.Close()
 	out := <-done
 	_ = r.Close()

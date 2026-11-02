@@ -461,10 +461,10 @@ func (h *harness) pollTerminal(id uuid.UUID, timeout time.Duration) types.AgentR
 // gradeExit runs a grader in a FRESH disposable container against a workspace
 // dir (read-only) with the task dir mounted read-only and returns its EXIT CODE
 // (0 = pass; grade.sh exits 1 on a graded failure) plus output. It bounds the
-// run so a hung grader can't stall to the Go test timeout. An exit code >= 125
-// is a docker infra error (missing image / mount), NOT a graded verdict — the
-// callers distinguish it so an infra hiccup can never impersonate pass OR a
-// correct rejection.
+// run so a hung grader can't stall to the Go test timeout. Only exit 0 (pass) and
+// exit 1 (graded failure) are verdicts: -1, 2..124 and 125+ (docker infra error,
+// signal, timeout, a crashed grader) are NOT, and callers must not count them as
+// a correct rejection any more than as a pass.
 func (h *harness) gradeExit(image, taskDir, wsDir string) (int, string) {
 	h.t.Helper()
 	if image == "" {

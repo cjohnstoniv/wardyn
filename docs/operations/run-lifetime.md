@@ -148,6 +148,6 @@ Four clocks can end a run or freeze its agent. They are independent; the first o
 - On Kubernetes the runner cannot freeze a pod in place, so the setting is inert there and an idle run is stopped by idle stop.
 - The limit is set in a governance profile's run limits; see the [profile table](../OPERATIONS.md#multi-user-who-can-change-what) for how profiles combine.
 
-**The lease.** A run has no `ends_at` on the defaults. A governance profile's run limits set one at create, from `default_end_sec` or `max_end_ahead_sec`; the owner moves it later within the captured maximum (see [Extend](#extend)).
+**The lease.** A run has no `ends_at` on the defaults. A governance profile's run limits set one at create, from `default_end_sec` or `max_end_ahead_sec`; the owner moves it later within the captured maximum (see [Extend](#extend)). For a service with a lifetime cap, `max_end_ahead_sec` is also the renewal unit ([Services](../SERVICES.md)).
 
 **`WARDYN_RUN_MAX_AGE`.** Off by default (unset, `0` or negative). It is an absolute cap on a run's age since creation and is not the lease: a person cannot extend it. See [ENV.md](../ENV.md).

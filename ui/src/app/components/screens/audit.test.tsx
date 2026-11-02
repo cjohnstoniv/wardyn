@@ -578,6 +578,34 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.getByText(/Denied egress to evil\.example\.com/)).toBeInTheDocument();
   });
 
+  // r15 T2-f: inbound rows answer to the Egress facet, say allow or deny, and carry their request as a second line.
+  it("shows an inbound call with its decision and its request, under the Egress facet", async () => {
+    listAuditMock.mockResolvedValue([
+      ev({ id: "e1", action: "inbound.allow", target: "api", data: { method: "GET", path: "/v1/invoices", via: "token", caller: "service:billing" } }),
+      ev({ id: "e2", action: "inbound.deny", target: "api", outcome: "denied", data: { reason: "not_found", via: "session", method: "GET", path: "/" } }),
+      ev({ id: "e3", action: "run.create" }),
+    ]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    expect(await screen.findByText("Allowed inbound to api")).toBeInTheDocument();
+    expect(screen.getByText("Denied inbound to api")).toBeInTheDocument();
+    expect(screen.getByText("GET /v1/invoices · via token · caller service:billing")).toBeInTheDocument();
+    expect(screen.getByText("reason not_found · via session · GET /")).toBeInTheDocument();
+    expect(screen.getByText("allow")).toBeInTheDocument();
+    expect(screen.getByText("deny")).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: /event/i }));
+    await user.click(await screen.findByRole("option", { name: /^Egress$/i }));
+    await waitFor(() => expect(screen.queryByText("Created the run")).not.toBeInTheDocument());
+    expect(screen.getByText("Allowed inbound to api")).toBeInTheDocument();
+  });
+
+  it("r15 T2-f: labels service rows by source, names no caller for a credential-less refusal, and ends an inbound detail with the run", async () => {
+    const run_id = "run_7c41e0a9-1111", sys = { actor_type: "system", actor: "wardynd", run_id } as const, data = { reason: "service_renewed", via: "token", method: "GET", path: "/" };
+    listAuditMock.mockResolvedValue([ev({ id: "e1", action: "run.service.health", ...sys }), ev({ id: "e2", action: "run.end.set", ...sys, data }), ev({ id: "e3", action: "inbound.deny", target: "api", actor: "", run_id, data })]);
+    renderScreen();
+    expect([await screen.findByText("sandbox"), screen.getByText("server"), screen.getByText("no caller")]).toHaveLength(3);
+    expect(screen.getByText("reason service_renewed · via token · GET / · 7c41e0a9")).toBeInTheDocument();
+  });
   // F5-F8: the Event-kind facet's items derive from the loaded window
   // (`KIND_ORDER.filter((k) => presentKinds.has(k))`) — drilling into a run
   // without the SELECTED kind unmounts that SelectItem while `kindFilter`

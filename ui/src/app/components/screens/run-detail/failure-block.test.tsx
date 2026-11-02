@@ -133,6 +133,15 @@ describe("runEndingFromAudit — the state picks the family, the audit picks the
     expect(runEndingFromAudit("FAILED", [ev("run.selftest", "failure")])?.kind).toBe("selftest");
   });
 
+  // A dropped base image or an unbuilt SSH devcontainer is recorded as a
+  // run.build failure the run carries on past (workspace_run_image.go): it is
+  // never the cause of a later, unrelated failure.
+  it("a skipped build row is not a cause — fail_closed:false disqualifies it", () => {
+    const skipped = ev("run.build", "failure", { data: { skipped: true, fail_closed: false } });
+    expect(runEndingFromAudit("FAILED", [skipped, ev("run.exec", "failure")])?.kind).not.toBe("image");
+    expect(runEndingFromAudit("FAILED", [skipped, ev("run.selftest", "failure")])?.kind).toBe("selftest");
+  });
+
   // The server exempts an already-KILLED run from the terminal guard so a kill
   // whose teardown failed can be retried; the LAST attempt is the run's
   // containment truth, not the first.

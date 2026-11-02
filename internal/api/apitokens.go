@@ -78,8 +78,8 @@ func apiTokenIDFromContext(ctx context.Context) uuid.UUID {
 
 // apiTokenAuth is the third auth branch, mounted by humanOrAdminAuth in front of
 // the admin bearer compare. A bearer carrying apiTokenPrefix is resolved against
-// api_tokens; anything else (and any request with no bearer at all) is handed
-// straight to fallback, which is the pre-existing admin path.
+// api_tokens (verifyAPIToken); anything else (and any request with no bearer at
+// all) is handed straight to fallback, which is the pre-existing admin path.
 //
 // An UNRESOLVABLE prefixed token also falls through to fallback rather than
 // answering 401 here, and that is deliberate on two counts. It keeps the branch
@@ -87,7 +87,9 @@ func apiTokenIDFromContext(ctx context.Context) uuid.UUID {
 // revoked and hash-mismatch into ErrNotFound; falling through collapses the
 // response too — one 401 from one place). And it removes a footgun: an operator
 // whose WARDYN_ADMIN_TOKEN happens to start with `wdn_` still authenticates,
-// because the admin compare still gets to run.
+// because the admin compare still gets to run. An inbound token is unresolvable
+// here by design: it calls a run's inbound ports through the app gateway and is
+// never a credential for this API, whoever holds it.
 //
 // A store FAILURE is not a rejection and must not fall through — falling
 // through would turn a database outage into "your token is invalid", and worse,
@@ -100,96 +102,24 @@ func apiTokenIDFromContext(ctx context.Context) uuid.UUID {
 func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok, ok := bearerToken(r)
-		if !ok || !strings.HasPrefix(tok, apiTokenPrefix) || s.cfg.Store == nil {
+		if !ok {
 			fallback.ServeHTTP(w, r)
 			return
 		}
-		t, err := s.cfg.Store.GetAPITokenByRaw(r.Context(), tok)
-		if errors.Is(err, store.ErrNotFound) {
+		v, r, verdict := s.verifyAPIToken(w, r, tok, false)
+		switch verdict {
+		case tokenAnswered:
+			return
+		case tokenRefused:
 			fallback.ServeHTTP(w, r)
 			return
 		}
-		if err != nil {
-			// Visible server-side, because this 500s an entire authentication
-			// lane — every CI job and script holding a wdn_ token — and the
-			// only other evidence is a client complaint. writeError does not
-			// log, no audit row is written (there is no authenticated principal
-			// to attribute one to), and wardyn_store_up keeps scraping 1: that
-			// gauge answers a PING, which a pool passes while one table denies
-			// a read or one statement times out. A health signal that stays
-			// green through the outage it appears to cover argues AGAINST the
-			// operator's own evidence, so the honest fix is to say what the
-			// gauge asserts and give this lane its own series.
-			//
-			// ERROR level by internal/audit/sink.go's own rule: a lost event is
-			// an ERROR-level fact an operator can alert on.
-			slog.ErrorContext(r.Context(), "api: api-token lookup failed; this request could not be authenticated",
-				"error", err, "path", r.URL.Path)
-			s.metrics.authStoreErrorInc()
-			writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "api token lookup failed")
+		t := v.APIToken
+		// A service identity's token is published at member reach on its route allow-list.
+		if v.service != nil {
+			s.serviceTokenAuth(w, r, t, *v.service, next)
 			return
 		}
-		// A service identity's token is checked against its live record and its sponsor, not a sign-in stamp.
-		if isServicePrincipal(t.Principal) {
-			s.serviceTokenAuth(w, r, t, next, fallback)
-			return
-		}
-		// A row minted for a reserved principal (before the sign-in callback
-		// refused one) would replay it as that identity (#1162). Audited and
-		// answered here: the fallback would only record invalid_admin_token.
-		if s.refuseReservedPrincipal(w, r, t.Principal, apiTokenReservedRefusal) {
-			return
-		}
-		// The same cutoff the session lane obeys, applied to the token's
-		// created_at. Without it POST /sessions/revoke was a race the sweep
-		// could lose FOREVER: revokeAPITokensFor takes a ListAPITokens snapshot,
-		// and a mint whose INSERT commits after that snapshot is never reachable
-		// by that revoke again — a token minted without an expiry never ages out, so the escaped row is
-		// a permanent credential. Closing it on the READ side rather than by
-		// locking the writer also removes the sweep's dependence on winning the
-		// race at all: the sweep still runs (it is what makes GET /api/v1/tokens
-		// show the row revoked), but a row it missed no longer authenticates.
-		//
-		// A token created at or before the cutoff is not a credential; one
-		// minted AFTER it is, which is correct — that is a new credential the
-		// principal minted from a session that itself cleared the cutoff.
-		//
-		// Falls through rather than 401ing here, for the reason the not-found
-		// arm above does: unknown, revoked and cut-off collapse into one 401
-		// from one place, and no branch here becomes an existence oracle.
-		//
-		// A store FAILURE fails closed with the same 503 the lookup failure
-		// gives, and for the same reason — an unanswerable revocation check must
-		// never read as "not revoked". 503 rather than 500: the token may
-		// be perfectly good, this deployment simply cannot decide, and the SSO
-		// lane now answers the identical condition the identical way.
-		if s.cfg.SessionRevocations != nil {
-			// The same read asks whether the owner's identity is deactivated (a token has no epoch of
-			// its own: a suspension revokes the tokens it can see, and the mint guard refuses the rest).
-			status, rerr := oidc.CheckSession(r.Context(), s.cfg.SessionRevocations, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
-			if rerr != nil {
-				slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this api token could not be authenticated",
-					"error", rerr, "path", r.URL.Path)
-				s.metrics.authStoreErrorInc()
-				writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "api token lookup failed")
-				return
-			}
-			if status != oidc.SessionLive {
-				if status == oidc.SessionDeactivated {
-					r = r.WithContext(oidc.WithSessionRejected(r.Context(), authFailedIdentityDeactivated))
-				}
-				fallback.ServeHTTP(w, r)
-				return
-			}
-		}
-		if s.refuseStaleRoleStamp(w, r, t) {
-			return
-		}
-		// Best effort by contract (see Store.TouchAPIToken): a failed touch must
-		// never fail an otherwise-valid request. "Last used" is an operator
-		// hygiene signal — which tokens are dead and can be revoked — not an
-		// authorization input, so nothing downstream reads it.
-		_ = s.cfg.Store.TouchAPIToken(r.Context(), t.ID, s.cfg.Now().UTC())
 		// The SAME five keys the session branch publishes, through the SAME
 		// function, from the snapshot stamped when this token was minted. This is
 		// what makes ownership, RBAC and capability grants bind to the owning
@@ -202,12 +132,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		// already refuses to shed. The cost is one re-mint, and only on a
 		// deployment that actually assigns profiles to groups — the resolver's
 		// refusal is itself gated on a group-tier row existing at all.
-		if t.Principal == "" {
-			// A person-less token row would read as the admin-token lane
-			// (no human on the context): refuse it rather than treat it as the operator.
-			fallback.ServeHTTP(w, r)
-			return
-		}
+		//
 		// A cli_access token publishes the role user whatever the person's role: the same downward-only
 		// clamp the user view applies (oidc contextWithPrincipal). Admin reach from the CLI is the 1-hour
 		// cli_admin step-up (wardyn login --admin).
@@ -228,6 +153,22 @@ type createAPITokenRequest struct {
 	// means the deployment's WARDYN_API_TOKEN_MAX_TTL when one is set, else no
 	// expiry; above that cap it is clamped to it; negative is a 400.
 	TTLSeconds int64 `json:"ttl_seconds,omitempty"`
+	// Kind is "api" (the default when omitted) or "inbound", a token that calls the inbound ports naming
+	// its owner and nothing on the API; an inbound token always expires (serviceTokenLifetime's rule).
+	Kind string `json:"kind,omitempty"`
+}
+
+// apiTokenMintKind is the kind a mint body asks for: api when it names none, or inbound. Anything else,
+// a CLI kind included, is a 400: a CLI token is minted by a CLI sign-in only.
+func apiTokenMintKind(w http.ResponseWriter, raw string) (string, bool) {
+	switch raw {
+	case "", types.APITokenKindAPI:
+		return types.APITokenKindAPI, true
+	case types.APITokenKindInbound:
+		return types.APITokenKindInbound, true
+	}
+	writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "kind: must be api or inbound")
+	return "", false
 }
 
 // apiTokenMaxTTLSeconds bounds a requested lifetime so the arithmetic below
@@ -320,7 +261,16 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	lifetime, clampedFrom, ok := s.apiTokenLifetime(w, req.TTLSeconds)
+	kind, ok := apiTokenMintKind(w, req.Kind)
+	if !ok {
+		return
+	}
+	// An inbound token always expires: at most 90 days, or the deployment's cap when lower, as a service token.
+	lifetimeOf := s.apiTokenLifetime
+	if kind == types.APITokenKindInbound {
+		lifetimeOf = s.serviceTokenLifetime
+	}
+	lifetime, clampedFrom, ok := lifetimeOf(w, req.TTLSeconds)
 	if !ok {
 		return
 	}
@@ -328,6 +278,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	row.Kind = kind
 	created, ok := s.insertAPIToken(w, r, row)
 	if !ok {
 		return

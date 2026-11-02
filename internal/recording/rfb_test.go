@@ -157,7 +157,7 @@ func TestRFBRecorderReplayGolden(t *testing.T) {
 			s = s[n:]
 		}
 		pb := playback(t, r)
-		if len(pb.Frames) != 4 || pb.ClipboardOmitted != 1 || pb.StoppedMS != 0 {
+		if len(pb.Frames) != 4 || pb.ClipboardOmitted != 1 || pb.StoppedMS != 0 || r.StoppedMS() != 0 {
 			t.Fatalf("chunk %d: %d frames, %d clipboard omitted, stopped %d", chunk, len(pb.Frames), pb.ClipboardOmitted, pb.StoppedMS)
 		}
 		for i := range pb.Frames { // frame times depend on how often the clock is read
@@ -229,8 +229,8 @@ func TestRFBRecorderStopsOnAStreamItCannotFollow(t *testing.T) {
 	_, _ = r.Write(wsFrame(true, 2, cat([]byte{99}, cutText("hunter2", 7)), nil))
 	_, _ = r.Write(wsFrame(true, 2, bell, nil))
 	pb := playback(t, r)
-	if pb.StoppedMS == 0 || !bytes.Equal(kept(t, pb), rfbHello()) {
-		t.Fatalf("stopped %d, kept %q", pb.StoppedMS, kept(t, pb))
+	if pb.StoppedMS == 0 || r.StoppedMS() != pb.StoppedMS || !bytes.Equal(kept(t, pb), rfbHello()) {
+		t.Fatalf("stopped %d (recorder says %d), kept %q", pb.StoppedMS, r.StoppedMS(), kept(t, pb))
 	}
 }
 

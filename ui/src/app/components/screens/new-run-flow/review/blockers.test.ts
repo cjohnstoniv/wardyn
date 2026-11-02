@@ -82,6 +82,13 @@ describe("Review blockers", () => {
     expect(buildBlockers({ ...NOTHING, issues: [{ home, code, focus }] })[0].text).toBe(text);
   });
 
+  it("shows the server's refusal of a macOS base as it came, and links it to the Run step (MAC-B08, MAC-B09)", () => {
+    for (const text of ["No Mac in this pool has the macOS base xcode-16. Choose another base or another pool.", "Platform doesn't allow the macOS base security-tools. Choose another base."]) {
+      const [b] = buildBlockers({ ...NOTHING, refusal: { text, reason: "placement_denied", field: "macos_base" } });
+      expect(b).toMatchObject({ kind: "refusal", text, to: { screen: "step", step: "run" } });
+    }
+  });
+
   it("links a refusal to nowhere when its reason is not known", () => {
     const out = buildBlockers({ ...NOTHING, issues: [{ home: "shape", code: "shape_required", focus: "nr-workload" }], refusal: { text: "Refused.", reason: "something_new" } });
     expect(out[1].to).toBeUndefined();

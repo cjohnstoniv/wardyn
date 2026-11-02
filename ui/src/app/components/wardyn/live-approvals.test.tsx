@@ -571,6 +571,19 @@ describe("LiveApprovals", () => {
       expect(approveMock).not.toHaveBeenCalled();
     });
 
+    // T4-c: a host the run owner's own walls deny can be denied but never approved.
+    it("walls_block turns Approve off and leaves Deny on", async () => {
+      listApprovalsMock.mockResolvedValue([pending({ id: "w1", requested_scope: { host: "paste.example.net" }, decidable: true, walls_block: true })]);
+      render(
+        <OperatorProvider operator={false} securityOperator={false}>
+          <LiveApprovals runId="r1" />
+        </OperatorProvider>,
+      );
+      const panel = await screen.findByTestId("live-approvals");
+      expect(within(panel).getByRole("button", { name: /^Approve$/ })).toBeDisabled();
+      expect(within(panel).getByRole("button", { name: /^Deny$/ })).not.toBeDisabled();
+    });
+
     it("decidable=true enables a row role+kind alone would have closed", async () => {
       listApprovalsMock.mockResolvedValue([pending({ id: "t1", kind: "tool_call", requested_scope: {}, decidable: true })]);
       render(

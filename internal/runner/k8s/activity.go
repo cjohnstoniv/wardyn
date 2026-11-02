@@ -39,7 +39,7 @@ type podMetricsList struct {
 	} `json:"items"`
 }
 
-// SampleCPU is runner.ActivitySampler: ONE PodMetrics list for the runs
+// SampleCPU is runner.ActivitySampler: ONE PodMetrics list per runs
 // namespace, label-selected to agent pods, however many refs are asked for, and
 // nothing run inside a sandbox. The proxy is another pod and is not selected.
 // An agent pod's reading is the sum of its containers, the ephemeral one Exec
@@ -49,16 +49,20 @@ type podMetricsList struct {
 // unavailable; a pod with no fresh sample (a young pod, a stale one) simply has
 // no reading.
 func (d *Driver) SampleCPU(ctx context.Context, refs []string) (map[string]float64, error) {
-	raw, err := d.readPodMetrics(ctx, d.cfg.Namespace, labelManaged+"=true,"+labelComponent+"="+componentAgent)
-	if err != nil {
-		if apierrors.IsForbidden(err) || apierrors.IsNotFound(err) || apierrors.IsServiceUnavailable(err) {
-			return nil, fmt.Errorf("%w: %v", runner.ErrActivityUnavailable, err)
-		}
-		return nil, fmt.Errorf("k8s: read pod metrics: %w", err)
-	}
 	var list podMetricsList
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return nil, fmt.Errorf("k8s: decode pod metrics: %w", err)
+	for _, ns := range d.cfg.Namespaces {
+		raw, err := d.readPodMetrics(ctx, ns, labelManaged+"=true,"+labelComponent+"="+componentAgent)
+		if err != nil {
+			if apierrors.IsForbidden(err) || apierrors.IsNotFound(err) || apierrors.IsServiceUnavailable(err) {
+				return nil, fmt.Errorf("%w: %v", runner.ErrActivityUnavailable, err)
+			}
+			return nil, fmt.Errorf("k8s: read pod metrics: %w", d.inNamespace(ns, err))
+		}
+		var one podMetricsList
+		if err := json.Unmarshal(raw, &one); err != nil {
+			return nil, fmt.Errorf("k8s: decode pod metrics: %w", err)
+		}
+		list.Items = append(list.Items, one.Items...)
 	}
 	want := make(map[string]bool, len(refs))
 	for _, r := range refs {

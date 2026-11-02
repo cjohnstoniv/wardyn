@@ -26,7 +26,7 @@ func TestNewWithClient_CanaryEnforced(t *testing.T) {
 	cs := fake.NewClientset()
 	installCanaryReactor(t, cs, false)
 
-	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test"})
+	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test"})
 	if err != nil {
 		t.Fatalf("newWithClient: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestNewWithClient_CanaryUnenforced_RefusesBoot(t *testing.T) {
 	cs := fake.NewClientset()
 	installCanaryReactor(t, cs, true)
 
-	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test"})
+	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test"})
 	if err == nil {
 		t.Fatal("newWithClient: want an error refusing boot, got nil")
 	}
@@ -73,7 +73,7 @@ func TestNewWithClient_CanaryUnenforced_OptOut(t *testing.T) {
 	cs := fake.NewClientset()
 	installCanaryReactor(t, cs, true)
 
-	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", AllowUnenforcedNetPol: true})
+	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test", AllowUnenforcedNetPol: true})
 	if err != nil {
 		t.Fatalf("newWithClient: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestNewWithClient_CanaryIndeterminate_RefusesBoot(t *testing.T) {
 	cs := fake.NewClientset()
 	installStuckCanaryReactor(t, cs)
 
-	_, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", AllowUnenforcedNetPol: true})
+	_, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test", AllowUnenforcedNetPol: true})
 	if err == nil {
 		t.Fatal("newWithClient: want an error refusing boot, got nil")
 	}
@@ -129,7 +129,7 @@ func TestNewWithClient_CanaryPhaseBUnexpectedExitCode_Indeterminate(t *testing.T
 	cs := fake.NewClientset()
 	installCanaryReactorExitCodes(t, cs, 0, 128)
 
-	_, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", AllowUnenforcedNetPol: true})
+	_, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test", AllowUnenforcedNetPol: true})
 	if err == nil {
 		t.Fatal("newWithClient: want an error refusing boot, got nil")
 	}
@@ -149,7 +149,7 @@ func TestNewWithClient_CanaryNetPolScopedToSuffix(t *testing.T) {
 	installCanaryReactor(t, cs, false)
 	cs.ClearActions()
 
-	if _, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test"}); err != nil {
+	if _, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test"}); err != nil {
 		t.Fatalf("newWithClient: %v", err)
 	}
 
@@ -201,7 +201,7 @@ func TestNewWithClient_AckAmbientDefaultDeny_Boots(t *testing.T) {
 	cs.ClearActions()
 
 	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
-		Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", AckAmbientDefaultDeny: true,
+		Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test", AckAmbientDefaultDeny: true,
 	})
 	if err != nil {
 		t.Fatalf("newWithClient: %v", err)
@@ -246,7 +246,7 @@ func TestNewWithClient_AckAmbientDefaultDeny_StuckPodStaysIndeterminate(t *testi
 	installStuckCanaryReactor(t, cs)
 
 	_, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
-		Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", AckAmbientDefaultDeny: true,
+		Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test", AckAmbientDefaultDeny: true,
 	})
 	if err == nil {
 		t.Fatal("newWithClient: want an error refusing boot, got nil")
@@ -265,7 +265,7 @@ func TestNewWithClient_AckAmbientDefaultDeny_HealthyPhaseAIsUnaffected(t *testin
 	installCanaryReactor(t, cs, false) // phase A exit 0, phase B exit 1 (enforced)
 
 	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
-		Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test", AckAmbientDefaultDeny: true,
+		Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test", AckAmbientDefaultDeny: true,
 	})
 	if err != nil {
 		t.Fatalf("newWithClient: %v", err)
@@ -287,7 +287,7 @@ func TestNewWithClient_NoAck_ExitOneNamesTheEnv(t *testing.T) {
 	installCanaryReactorExitCodes(t, cs, 1, 0)
 
 	_, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
-		Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test",
+		Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test",
 	})
 	if err == nil {
 		t.Fatal("newWithClient: want an error refusing boot, got nil")
@@ -358,7 +358,7 @@ func TestNewWithClient_CanaryPodDisablesServiceLinks(t *testing.T) {
 	installCanaryReactor(t, cs, false)
 	cs.ClearActions()
 
-	if _, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test"}); err != nil {
+	if _, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test"}); err != nil {
 		t.Fatalf("newWithClient: %v", err)
 	}
 

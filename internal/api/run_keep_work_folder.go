@@ -10,6 +10,7 @@
 // teardown reclaims a drive's volume or claim, only a drive delete does. The one
 // exception is a run that ends without ever starting: nothing was mounted by it, so
 // dropUnstartedKeptDrive deletes its drive, through the delete a person's own drive takes, and frees the person's count.
+// A macOS VM run its Mac refused when it started is one (dropUncreatedMacKeptDrive).
 package api
 
 import (
@@ -42,6 +43,12 @@ func keepWorkFolderTargetTakenMsg(target string) string {
 	return fmt.Sprintf("keep_work_folder: %s mounts over the work folder, so the folder can't be kept. Mount it somewhere else.", target)
 }
 
+// keepWorkFolderOneMacMsg refuses keeping a macOS VM's work folder in a pool of several Macs: the
+// folder is a disk on the Mac the run used (MAC-D07).
+func keepWorkFolderOneMacMsg() string {
+	return "The kept work folder stays on the Mac the run used, so keeping it needs a pool with one Mac. Choose one, or don't keep the folder."
+}
+
 // keptWorkFolderNS seeds keptWorkFolderDriveID.
 var keptWorkFolderNS = uuid.MustParse("5d0f6f3e-8f3b-4f38-9a8e-2b6c1f4a7e10")
 
@@ -59,13 +66,18 @@ type keptWorkFolder struct {
 	limit int
 }
 
+// onMac reports a macOS VM's kept work folder: a disk on the Mac the run uses.
+func (k *keptWorkFolder) onMac() bool { return k != nil && k.row.Backend == types.DriveBackendMacDisk }
+
 // keepWorkFolderGates runs keep_work_folder's doors for a request asking for
 // it, in order: a person launching for themselves, member drives and the keep
 // switch on, create's own doors (profile, backend, deletable), the runner can
 // mount it, nothing else mounts over the work folder, and the person is under
 // their drive limit. The store counts again at the insert. promoted skips the
-// count: the queue's start replays this over the drive its create made.
-func (s *Server) keepWorkFolderGates(r *http.Request, spec types.RunPolicySpec, promoted bool) (*keptWorkFolder, *runRefusal) {
+// count: the queue's start replays this over the drive its create made. mac
+// keeps a macOS VM's work folder as a disk on the Mac the run is placed on
+// (stepDriveEligibility names it), which that Mac's runner mounts and deletes.
+func (s *Server) keepWorkFolderGates(r *http.Request, spec types.RunPolicySpec, promoted, mac bool) (*keptWorkFolder, *runRefusal) {
 	ctx := r.Context()
 	owner := types.CanonicalUserSubject(oidcHumanFromContext(ctx))
 	if _, actor := actorFromContext(ctx, ""); owner == "" || neverOperator(ctx) || types.CanonicalUserSubject(actor) != owner {
@@ -78,12 +90,14 @@ func (s *Server) keepWorkFolderGates(r *http.Request, spec types.RunPolicySpec, 
 	if provider.Disabled || provider.MemberCreate == nil || !provider.MemberCreate.Enabled || !provider.MemberCreate.KeepMainDrive {
 		return nil, runError(http.StatusUnprocessableEntity, reasonKeepWorkFolderDisabled, keepWorkFolderDisabledMsg())
 	}
-	row, policy, refusal := s.memberDriveCreateDoors(r)
+	row, policy, refusal := s.memberDriveCreateDoors(r, mac)
 	if refusal != nil {
 		return nil, refusal
 	}
-	if f := s.driveBindFailureHere(ctx, types.ResolvedDrive{Drive: row}, drivePlace{}); f != nil {
-		return nil, &runRefusal{drive: f}
+	if !mac {
+		if f := s.driveBindFailureHere(ctx, types.ResolvedDrive{Drive: row}, drivePlace{}); f != nil {
+			return nil, &runRefusal{drive: f}
+		}
 	}
 	for _, m := range spec.WorkspaceMounts {
 		if t := path.Clean(m.Target); t == runner.ScratchWorkPath || strings.HasPrefix(runner.ScratchWorkPath, t+"/") {
@@ -238,6 +252,17 @@ func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
 	if res := s.deleteMemberDrive(ctx, ms, d, started, memberDriveByRunEnd); res.err != nil {
 		slog.WarnContext(ctx, "api: finish the delete of the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", res.err))
 	}
+}
+
+// dropUncreatedMacKeptDrive, deferred by a dispatch so it runs after the dispatch's lease is released, is
+// dropUnstartedKeptDrive for a macOS VM run the dispatch created no sandbox for and that has ended: a run
+// its Mac refused when it started (#3900). Until the lease is gone the drop would count the run itself as
+// one still starting, and leave the drive.
+func (s *Server) dropUncreatedMacKeptDrive(ctx context.Context, run types.AgentRun, created *bool) {
+	if *created || !run.MachineKind.IsMacOSVM() || !s.keptRunEnded(ctx, run.ID) {
+		return
+	}
+	s.dropUnstartedKeptDrive(ctx, run.ID)
 }
 
 // keptRunEnded reports whether runID, the run a kept drive was kept from, has ended or is gone. Until then

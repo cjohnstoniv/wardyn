@@ -55,7 +55,7 @@ func rootCommand() *cobra.Command {
 			}
 			return followDockerContext()
 		}}
-	cmd.AddCommand(newRegisterCommand(), newSetupCommand(), newDoctorCommand(), newServeCommand(productionRunnerHooks))
+	cmd.AddCommand(newRegisterCommand(), newSetupCommand(), newDoctorCommand(), newServeCommand(productionRunnerHooks), newMacOSVMCommand())
 	return cmd
 }
 

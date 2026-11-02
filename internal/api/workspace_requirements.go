@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
@@ -67,6 +68,14 @@ func splitRequirementKey(key string) (typ, rest string, ok bool) {
 // — and the value's level/provenance enums. A non-empty return is the 400
 // message.
 func validateWorkspaceRequirement(key string, req types.WorkspaceRequirement) string {
+	return validateWorkspaceRequirementOn(key, req, nil)
+}
+
+// validateWorkspaceRequirementOn is validateWorkspaceRequirement for a workspace
+// whose folders may live on a person's runner: onRunner (nil for none) says
+// whether a write path names such a folder, and the path is then checked by its
+// text alone, never against what this host has at that path.
+func validateWorkspaceRequirementOn(key string, req types.WorkspaceRequirement, onRunner func(path string) bool) string {
 	typ, rest, ok := splitRequirementKey(key)
 	if !ok {
 		return fmt.Sprintf("invalid requirement key %q (want secret:<name>, egress:<host>, write:<path>, or integration:<id>)", key)
@@ -101,7 +110,13 @@ func validateWorkspaceRequirement(key string, req types.WorkspaceRequirement) st
 			return fmt.Sprintf("requirement %q: invalid egress host (plain lowercase host, no scheme/port/wildcard)", key)
 		}
 	case "write":
-		if err := runner.ValidateMountSource(rest); err != nil {
+		// The text check comes first: it needs no workspace read, and onRunner is asked
+		// only about a path that passes it.
+		err := runner.ValidateMountSourceLexical(rest)
+		if err == nil && (onRunner == nil || !onRunner(rest)) {
+			err = runner.ValidateMountSource(rest)
+		}
+		if err != nil {
 			return fmt.Sprintf("requirement %q: invalid write path: %s", key, err.Error())
 		}
 	}
@@ -128,11 +143,12 @@ func (s *Server) handleSetWorkspaceRequirements(w http.ResponseWriter, r *http.R
 	}
 	scopedWorkspaceWrite(s, w, r, "workspace.requirements.write",
 		func(req body) (map[string]types.WorkspaceRequirement, string, string) {
+			onRunner := s.runnerBoundPath(r)
 			if len(req.Requirements) > maxWorkspaceRequirements {
 				return nil, reasonWorkspaceRequirementsInvalid, fmt.Sprintf("too many requirements (max %d)", maxWorkspaceRequirements)
 			}
 			for _, key := range sortedKeys(req.Requirements) {
-				if msg := validateWorkspaceRequirement(key, req.Requirements[key]); msg != "" {
+				if msg := validateWorkspaceRequirementOn(key, req.Requirements[key], onRunner); msg != "" {
 					return nil, reasonWorkspaceRequirementsInvalid, msg
 				}
 			}
@@ -146,6 +162,29 @@ func (s *Server) handleSetWorkspaceRequirements(w http.ResponseWriter, r *http.R
 		func(reqs map[string]types.WorkspaceRequirement) map[string]any {
 			return map[string]any{"count": len(reqs)}
 		})
+}
+
+// runnerBoundPath answers, for the workspace named by r's path, whether a path is
+// a folder bound to a runner. The workspace is read on the first question only,
+// and a failed read answers no: the path then gets the full check on this host,
+// as before.
+func (s *Server) runnerBoundPath(r *http.Request) func(string) bool {
+	var ws types.Workspace
+	var read, loaded bool
+	return func(path string) bool {
+		if !loaded {
+			loaded = true
+			if id, err := uuid.Parse(chi.URLParam(r, "id")); err == nil {
+				got, gerr := s.cfg.Store.GetWorkspace(r.Context(), id)
+				ws, read = got, gerr == nil
+			}
+		}
+		if !read {
+			return false
+		}
+		rid, agree := mountBinding([]types.Workspace{ws}, path)
+		return agree && rid != nil
+	}
 }
 
 // dropSourceContributedScanSeeded strips provenance:"scan_seeded" rows from

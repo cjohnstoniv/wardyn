@@ -23,8 +23,11 @@ import (
 // drive with no second place behaves exactly as it did.
 
 // drivePlace is where a run mounts its drives: the organisation's runners (the
-// zero value) or one person's own runner.
-type drivePlace struct{ runner *uuid.UUID }
+// zero value) or one person's own runner, and whether the run is a macOS VM.
+type drivePlace struct {
+	runner *uuid.UUID
+	macOS  bool
+}
 
 // driveSecondPlaceMsg is the admin save refusal for a second place of the wrong shape.
 func driveSecondPlaceMsg(name string) string {
@@ -94,19 +97,82 @@ func secondPlaceResolved(resolved types.ResolvedDrive) types.ResolvedDrive {
 
 // drivesBoundRunner is the one runner every drive of a run is bound to, or nil:
 // a run with a drive that has no second place, drives bound to different
-// runners, or a kept work folder (a managed volume) mounts only on the
-// organisation's runners.
+// runners, or a kept work folder in a managed volume mounts only on the
+// organisation's runners. A disk drive is bound to the Mac it is kept on, and a
+// macOS VM's kept work folder goes where its drives do.
 func drivesBoundRunner(drives []runDrive, keep *keptWorkFolder) *uuid.UUID {
-	if keep != nil || len(drives) == 0 {
+	if (keep != nil && !keep.onMac()) || len(drives) == 0 {
 		return nil
 	}
-	first := drives[0].resolved.Drive.AltRunnerID
+	first := driveBoundRunnerOf(drives[0].resolved.Drive)
 	for _, d := range drives {
-		if id := d.resolved.Drive.AltRunnerID; first == nil || id == nil || *id != *first {
+		if id := driveBoundRunnerOf(d.resolved.Drive); first == nil || id == nil || *id != *first {
 			return nil
 		}
 	}
 	return first
+}
+
+// driveBoundRunnerOf is the one runner d mounts on, nil for none: the runner its
+// second place is bound to, or the Mac a disk drive is kept on.
+func driveBoundRunnerOf(d types.UserDrive) *uuid.UUID {
+	if d.Backend == types.DriveBackendMacDisk {
+		return d.HomeRunnerID
+	}
+	return d.AltRunnerID
+}
+
+// driveOnRunner is driveOnRunnerMsg for any drive a run mounts on a person's own
+// runner: a disk drive mounts only in a macOS VM on the Mac it is kept on, and is
+// refused anywhere else naming that Mac, which is its owner's own (MAC-D05). A
+// person's Docker or cluster volume in a macOS VM is refused as the volume it is.
+func (s *Server) driveOnRunner(ctx context.Context, d types.UserDrive, runner *uuid.UUID, macOS bool) string {
+	switch {
+	case macOS && d.OwnerSubject != "" && d.Backend.RunnerTarget() == "k8s":
+		return driveMacOSClusterVolumeMsg(d.Name)
+	case macOS && d.OwnerSubject != "" && d.Backend == types.DriveBackendDockerVolume:
+		return driveMacOSDockerVolumeMsg(d.Name)
+	case d.Backend != types.DriveBackendMacDisk:
+		return driveOnRunnerMsg(d, runner)
+	}
+	if macOS && runner != nil && d.HomeRunnerID != nil && *runner == *d.HomeRunnerID {
+		return ""
+	}
+	_, mac, _ := s.macDiskHome(ctx, d)
+	return driveMacDiskElsewhereMsg(d.Name, mac)
+}
+
+// macDiskName is the Mac a disk drive is kept on, by name, for its owner's
+// catalogue; "" for any other drive.
+func (s *Server) macDiskName(ctx context.Context, d types.UserDrive) string {
+	if d.Backend != types.DriveBackendMacDisk {
+		return ""
+	}
+	_, mac, _ := s.macDiskHome(ctx, d)
+	return mac
+}
+
+// macDiskNoName is a disk drive's Mac in a sentence when its row cannot be read.
+const macDiskNoName = "your Mac"
+
+// macDiskHome is the Mac a disk drive is kept on: its row, revoked or not, and the
+// name its owner knows it by. store.ErrNotFound when the drive names no Mac or the
+// row is gone; a store that keeps no runners is an error, never a gone Mac.
+func (s *Server) macDiskHome(ctx context.Context, d types.UserDrive) (types.Runner, string, error) {
+	st, ok := s.cfg.Store.(interface {
+		GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error)
+	})
+	switch {
+	case d.HomeRunnerID == nil:
+		return types.Runner{}, macDiskNoName, store.ErrNotFound
+	case !ok:
+		return types.Runner{}, macDiskNoName, errors.New("api: the store keeps no runners")
+	}
+	rn, err := st.GetRunner(ctx, *d.HomeRunnerID)
+	if err != nil {
+		return types.Runner{}, macDiskNoName, err
+	}
+	return rn, cmp.Or(rn.Name, rn.MachineName, macDiskNoName), nil
 }
 
 // placedRunner is the one person's own runner a pooled local run goes to, nil
@@ -125,19 +191,35 @@ func (p runPlacement) placedRunner() *uuid.UUID {
 // drivePathsOn is a local plan's VerifiedLocalPaths for its drives on candidate:
 // a drive's path is verified only when its second place is bound to candidate
 // and the path lies inside the roots candidate advertises (its owner's
-// --drive-root). The runner checks the bind again against the same roots.
+// --drive-root). The runner checks the bind again against the same roots. A disk
+// drive's is verified when it is kept on candidate.
 func (s *Server) drivePathsOn(candidate uuid.UUID, drives []types.DriveMount) map[string]bool {
 	bound := map[string]boundLocalPath{}
+	var disks []string
 	for i, d := range drives {
-		if d.RunnerID != nil && d.Backend == types.DriveBackendHostPath {
-			bound["SandboxSpec.Drives["+strconv.Itoa(i)+"]"] = boundLocalPath{Runner: *d.RunnerID, Path: d.ObjectName}
+		switch path := "SandboxSpec.Drives[" + strconv.Itoa(i) + "]"; {
+		case d.RunnerID != nil && d.Backend == types.DriveBackendHostPath:
+			bound[path] = boundLocalPath{Runner: *d.RunnerID, Path: d.ObjectName}
+		case d.RunnerID != nil && d.Backend == types.DriveBackendMacDisk && *d.RunnerID == candidate:
+			// A disk drive is a file on the Mac it is kept on, so being bound to candidate is all it needs.
+			disks = append(disks, path)
 		}
 	}
-	if len(bound) == 0 {
+	if len(bound) == 0 && len(disks) == 0 {
 		return nil
 	}
-	_, _, roots := s.runnerReportedCaps(candidate)
-	return verifiedLocalPaths(candidate, roots, bound)
+	var out map[string]bool
+	if len(bound) > 0 {
+		_, _, roots := s.runnerReportedCaps(candidate)
+		out = verifiedLocalPaths(candidate, roots, bound)
+	}
+	for _, path := range disks {
+		if out == nil {
+			out = map[string]bool{}
+		}
+		out[path] = true
+	}
+	return out
 }
 
 // boundMountRunner is the runner the first bound drive mount names: the drive's
@@ -159,6 +241,9 @@ func boundMountRunner(drives []types.DriveMount) uuid.UUID {
 // where the drive mounts for them.
 func (s *Server) driveMountsFrom(ctx context.Context, d types.UserDrive) string {
 	const org = "Organisation runners"
+	if d.Backend == types.DriveBackendMacDisk {
+		return "" // a disk drive mounts only on its Mac, which MeDrive.Mac names
+	}
 	if name := s.boundRunnerName(ctx, d); name != "" {
 		return org + " and " + name
 	}

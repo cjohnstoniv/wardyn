@@ -10,7 +10,8 @@
 # 0.9.4 L8: ARCHITECTURE.md 5870 adds 115 over 5755: credential-claims rewrite of invariants 1 and 2 (auto-mint branch, brokered-token wording).
 # 0.9.4 L8: ARCHITECTURE.md 5876 adds 6 over 5870: ssh_key delivery claims bounded.
 # 0.9.4 W4-DOCS-1: ARCHITECTURE.md 5936 adds 60 over 5876, measured: #2231 #2232 #2233 #2235: CSP summary, invariant 3 scope, QUEUED state, CLI pointer.
-ARCHITECTURE.md=5936 share=35
+# ARCHITECTURE.md 5956 adds 20 over 5936, measured (rc.8 E5): the pointer to docs/EXTENDING.md and the organisation runner's several runs namespaces.
+ARCHITECTURE.md=5956 share=35
 # 0.9.4 L8: SECURITY.md 1326 adds 327 over 999: the 'Which credentials enter the sandbox' section and the qualified invariants.
 # 0.10.0 VM-B: SECURITY.md 1381 adds 55: the bare-host every-port scope and the port rule (#3193).
 SECURITY.md=1381 share=35

@@ -107,7 +107,10 @@ func writeFrame(w io.Writer, frame []byte) error {
 }
 
 // Query sends one DNS question with the raw name bytes given (so a test can
-// put CR or LF inside a label) and returns the reply, or an error after 2 s.
+// put CR or LF inside a label) and returns the reply, or an error after 10 s.
+// The relay answers every well-formed question, so the bound only turns a hung
+// relay into a failure; it is not a latency budget (a stalled macOS runner once
+// held a reply past 2 s).
 func (g *Guest) Query(labels []string, qtype dnsmessage.Type) (*dnsmessage.Message, error) {
 	c, err := gonet.DialUDP(g.s, nil, &tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4(Gateway), Port: 53}, ipv4.ProtocolNumber)
 	if err != nil {
@@ -123,7 +126,7 @@ func (g *Guest) Query(labels []string, qtype dnsmessage.Type) (*dnsmessage.Messa
 	if _, err := c.Write(q); err != nil {
 		return nil, err
 	}
-	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
 	buf := make([]byte, 1500)
 	n, err := c.Read(buf)
 	if err != nil {
@@ -157,6 +160,22 @@ func (g *Guest) Dial(addr [4]byte, port uint16, timeout time.Duration) (*gonet.T
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	return gonet.DialContextTCP(ctx, g.s, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom4(addr), Port: port}, ipv4.ProtocolNumber)
+}
+
+// Abort resets c, a connection dialled from this guest, instead of closing it
+// with a FIN.
+func (g *Guest) Abort(c *gonet.TCPConn) {
+	port := c.LocalAddr().(*net.TCPAddr).Port
+	for _, te := range g.s.RegisteredEndpoints() {
+		ep, ok := te.(tcpip.Endpoint)
+		if !ok {
+			continue
+		}
+		if a, err := ep.GetLocalAddress(); err == nil && int(a.Port) == port {
+			ep.SocketOptions().SetLinger(tcpip.LingerOption{Enabled: true})
+		}
+	}
+	_ = c.Close()
 }
 
 // SendUDP sends one datagram from the guest.

@@ -4,7 +4,7 @@
  */
 
 // "Add this computer" (mock M-ATT-4, DESIGN-ATTACH 11.10 ATT-RCARD): the three steps on Admin -> Runners and in
-// Your account -> My runner. Strings are the approved boards' (MATT4-AddComputer, -States, -Phone), character for
+// Settings -> My runner. Strings are the approved boards' (MATT4-AddComputer, -States, -Phone), character for
 // character. LAZY like runners.ts: reached only through the block, never re-exported from the eager copy.ts barrel.
 
 /**
@@ -38,7 +38,7 @@ export const ADD_COMPUTER = {
   STEP_SIGN_IN: "Sign in",
   SIGN_IN_NOTE: "A browser tab opens. Approve the sign-in there once.",
   NO_CLI_SIGN_IN:
-    "This server does not offer CLI sign-in yet. Set WARDYN_TOKEN to a personal API token first; a personal token works for setup. A Wardyn admin can invite you to create one, and you claim it under Your account.",
+    "This server does not offer CLI sign-in yet. Set WARDYN_TOKEN to a personal API token first; a personal token works for setup. A Wardyn admin can invite you to create one, and you claim it in Settings.",
   STEP_SETUP: "Set up the runner",
   SETUP_NOTE: "It checks this computer, registers and claims the runner, starts it, and waits up to 60 seconds for it to connect. Run it again to upgrade.",
   MDM_TITLE: "Managed install (MDM)",

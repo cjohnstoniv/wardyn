@@ -176,9 +176,14 @@ const (
 	// /me/runners/tokens). Restricted by migration 0178 on the same terms as service_attach: nobody
 	// until an allow names it, an `all` allow included. Runners and claims that already exist are untouched.
 	featureSelfHostRunner = "self_host_runner"
+	// featureInbound: "may declare a ui_app callable from outside the run" (ui_apps[].inbound). Restricted by
+	// migration 0239 on the same terms as service_attach: nobody until an allow names it, an `all` allow
+	// included. Asked at create and preflight when the request itself declares an inbound app, never for a
+	// stored or ceiling policy's (inboundDeclaredRefusal); runs already going are untouched.
+	featureInbound = "inbound"
 )
 
-var featureValues = []string{featureSSHKey, featureAPIToken, featureCustomComponent, featureServiceAttach, featureSelfHostRunner}
+var featureValues = []string{featureSSHKey, featureAPIToken, featureCustomComponent, featureServiceAttach, featureSelfHostRunner, featureInbound}
 
 // capabilityKinds is the closed set, in the order the admin surface shows them.
 var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capWorkspaceProvider, capModelProvider, capFeature, capPolicy, capComponent}
@@ -883,13 +888,21 @@ type ownedSecretMemoKey struct{}
 // and is discarded with the request, so a secret created or deleted between
 // requests is seen by the next one.
 //
-// A store ERROR is memoized as "owns nothing", which is what ownsSecret already
-// answers for a failed read — fail closed, and identical within the request
-// whether it is asked once or a thousand times. Re-reading per value on the
-// error path would leave exactly the amplification this closes, on the path a
+// A store ERROR is memoized as itself, never as an empty set: every later ask
+// for that owner within the request answers the same fault with no second read,
+// and a caller that takes the error (ownsSecretChecked) refuses with the fixed
+// retryable 503 rather than "unknown secret". Re-reading per value on the error
+// path would leave exactly the amplification this closes, on the path a
 // struggling store is least able to absorb.
 type ownedSecretMemo struct {
-	byOwner map[string]map[string]bool
+	byOwner map[string]ownedSecretAnswer
+}
+
+// ownedSecretAnswer is one owner's answer: the names they hold, or the fault that
+// kept the store from answering.
+type ownedSecretAnswer struct {
+	names map[string]bool
+	err   error
 }
 
 // withOwnedSecretMemo installs the memo for a resolution. Idempotent: a nested
@@ -898,51 +911,59 @@ func withOwnedSecretMemo(ctx context.Context) context.Context {
 	if _, ok := ctx.Value(ownedSecretMemoKey{}).(*ownedSecretMemo); ok {
 		return ctx
 	}
-	return context.WithValue(ctx, ownedSecretMemoKey{}, &ownedSecretMemo{byOwner: map[string]map[string]bool{}})
+	return context.WithValue(ctx, ownedSecretMemoKey{}, &ownedSecretMemo{byOwner: map[string]ownedSecretAnswer{}})
 }
 
-// ownsSecretMemoized is ownsSecret through the request's memo. Without a memo in
-// ctx it IS ownsSecret, byte for byte — every caller outside the member run
-// pipeline (policies.go, workspace_refs.go, compose_setup.go) keeps today's
-// behaviour with no signature change.
+// ownsSecretChecked is ownsSecret through the request's memo; its error is
+// errSecretStoreUnavailable. Without a memo in ctx it IS ownsSecret, byte for
+// byte, so a door with no memo reads the store once per call. It is ownsSecret's
+// only caller.
 //
 // Single-goroutine by construction: the member pipeline is one sequential
 // resolution inside one handler, and the memo is installed per resolution rather
 // than per process, so there is no second writer to guard against. If a caller
 // ever fans out over one memo, this needs a mutex — say so here rather than
 // discovering it as a race.
-func (s *Server) ownsSecretMemoized(ctx context.Context, owner, name string) bool {
+func (s *Server) ownsSecretChecked(ctx context.Context, owner, name string) (bool, error) {
 	if _, ok := ctx.Value(ownedSecretMemoKey{}).(*ownedSecretMemo); !ok || owner == "" || name == "" || s.cfg.Secrets == nil {
 		return s.ownsSecret(ctx, owner, name)
 	}
-	return s.ownedSecretNames(ctx, owner)[name]
+	read := s.ownedSecretRead(ctx, owner)
+	return read.names[name], read.err
 }
 
-// ownedSecretNames is every name owner holds in their own namespace, through the
-// request's memo when one is installed (read once per owner per request) and a
-// fresh read otherwise. The set is the memo's own: callers read it, never write it.
+// ownedSecretNames is every name owner holds in their own namespace (none on a
+// store fault, which ownedSecretRead logs), through the request's memo when one
+// is installed. The set is the memo's own: callers read it, never write it.
 func (s *Server) ownedSecretNames(ctx context.Context, owner string) map[string]bool {
+	return s.ownedSecretRead(ctx, owner).names
+}
+
+// ownedSecretRead reads owner's own names once per owner per request when a memo
+// is installed, and fresh otherwise.
+func (s *Server) ownedSecretRead(ctx context.Context, owner string) ownedSecretAnswer {
 	memo, _ := ctx.Value(ownedSecretMemoKey{}).(*ownedSecretMemo)
 	if memo != nil {
-		if set, loaded := memo.byOwner[owner]; loaded {
-			return set
+		if read, loaded := memo.byOwner[owner]; loaded {
+			return read
 		}
 	}
-	set := map[string]bool{}
+	read := ownedSecretAnswer{names: map[string]bool{}}
 	// Names only, own rows only — the same read ownsSecret makes, and the
 	// same reason: an ownership claim must be provable, never merely
 	// unrefuted.
 	names, err := s.cfg.Secrets.For(owner).List(ctx)
 	if err != nil {
-		// Fail closed (no ownership proven), but not silently: a store fault
-		// otherwise reads as "you hold no such secret".
+		// Not silently: a store fault otherwise reads as "you hold no such
+		// secret". The driver text stays in the log.
 		slog.WarnContext(ctx, "api: list a person's own secrets for an ownership check", slog.Any("err", err))
+		read.err = errSecretStoreUnavailable
 	}
 	for _, n := range names {
-		set[n] = true
+		read.names[n] = true
 	}
 	if memo != nil {
-		memo.byOwner[owner] = set
+		memo.byOwner[owner] = read
 	}
-	return set
+	return read
 }

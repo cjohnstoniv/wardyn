@@ -168,6 +168,8 @@ type runFoldStep struct {
 //     gated lane: a person's rule, or a policy rule that holds or blocks, puts
 //     a background run there too, and the person's allows are held to the
 //     policy with the lane's default under it.
+//   - A macOS VM's hold straight after the tool lane: autonomy and the inner walls
+//     have derived the hold by then, and the VM cannot hold a tool call.
 //   - Azure DevOps standing and PAT narrowing read autonomy's site snapshot.
 //   - The run's end reads the resolved pool, the governance ceiling and the deployment,
 //     so it sits after placement and refuses before capacity.
@@ -201,6 +203,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepAWSCLIProfile, foldAll},
 	{(*Server).stepAutonomy, foldAll},
 	{(*Server).stepToolPolicy, foldAll},
+	{(*Server).stepMacOSHold, foldAll},
 	{(*Server).stepGitHubCLIRepo, foldCreate | foldPreflight},
 	{(*Server).stepADOStanding, foldAll},
 	{(*Server).stepPATNarrowing, foldPreflight | foldPreview},

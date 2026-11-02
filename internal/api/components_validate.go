@@ -145,7 +145,14 @@ func claimResidentTargets(def types.ComponentDefinition, taken map[string]bool) 
 // same namespace and no other.
 func (s *Server) componentSecretsOwned(r *http.Request, adm *componentAdmission, c *attachedComponent, i int) *componentRefusal {
 	for si, sec := range c.snapshot.Definition.Secrets {
-		if sec.Shared || s.callerOwnsSecret(r, adm, sec.SecretName) {
+		if sec.Shared {
+			continue
+		}
+		own, err := s.callerOwnsSecret(r, adm, sec.SecretName)
+		if err != nil {
+			return &componentRefusal{refusal: ownershipUnreadable(), ordinal: i, source: c.source, id: c.snapshot.ComponentID}
+		}
+		if own {
 			continue
 		}
 		if !adm.credentials {
@@ -154,10 +161,10 @@ func (s *Server) componentSecretsOwned(r *http.Request, adm *componentAdmission,
 			}
 			continue
 		}
-		msg := fmt.Sprintf("components[%d]: %ssecrets[%d].secret_name: you have no secret named %q of your own. Store it under Your account first.",
+		msg := fmt.Sprintf("components[%d]: %ssecrets[%d].secret_name: you have no secret named %q of your own. Store it in Settings first.",
 			i, c.fieldPath(), si, sec.SecretName)
 		if !c.snapshot.SelfDefined {
-			msg = fmt.Sprintf("components[%d]: this component needs a secret of your own named %q. Store it under Your account first.", i, sec.SecretName)
+			msg = fmt.Sprintf("components[%d]: this component needs a secret of your own named %q. Store it in Settings first.", i, sec.SecretName)
 		}
 		return &componentRefusal{
 			refusal: runError(http.StatusUnprocessableEntity, reasonComponentSecretNotOwned, msg),
@@ -171,12 +178,13 @@ func (s *Server) componentSecretsOwned(r *http.Request, adm *componentAdmission,
 // run will be read from holds name: the run identity's own rows, or — for a
 // run the operator itself owns — the operator's, which is its own
 // (grantReadOwner). The same namespace the sink reads, so a component the gate
-// admits is one whose secret resolves.
-func (s *Server) callerOwnsSecret(r *http.Request, adm *componentAdmission, name string) bool {
+// admits is one whose secret resolves. Its error is a store fault reading a
+// person's own rows (errSecretStoreUnavailable).
+func (s *Server) callerOwnsSecret(r *http.Request, adm *componentAdmission, name string) (bool, error) {
 	if operatorOwnedRequest(r.Context()) {
-		return s.operatorSecretNames(r.Context(), adm)[name]
+		return s.operatorSecretNames(r.Context(), adm)[name], nil
 	}
-	return s.ownsSecretMemoized(r.Context(), adm.caller, name)
+	return s.ownsSecretChecked(r.Context(), adm.caller, name)
 }
 
 func (s *Server) operatorSecretNames(ctx context.Context, adm *componentAdmission) map[string]bool {

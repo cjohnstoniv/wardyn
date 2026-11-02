@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -79,13 +80,21 @@ func (m *Manager) observeRun(ctx context.Context, id uuid.UUID) (*runnerwire.Run
 	// Retirement intent is written only after settled Kill and a complete drain.
 	// No new substrate observer may create evidence after that exact settlement.
 	if r.Retirement == nil && r.Ref != "" {
-		st, err := m.sub.Status(ctx, r.Ref)
-		if err != nil {
-			return nil, err
-		}
-		row.SandboxPresent = st.State != types.RunStopped || st.ExitCode != nil
-		if err := m.observeAgent(ctx, id, r, row); err != nil {
-			return nil, err
+		if !m.coversKind(r.MachineKind) {
+			// Unknown, never absent: the substrate cannot enumerate this kind now (macOS VMs off), so
+			// the run is reported present, unprobed, and the org neither stamps nor ends it (#3667).
+			row.SandboxPresent = true
+		} else {
+			st, err := m.sub.Status(ctx, r.Ref)
+			if err != nil {
+				return nil, err
+			}
+			// A recorded exit the org has not acknowledged is the run's end, still to be sent (Replay
+			// follows STATE): the run reads present until then, so its real code lands, not a gone end.
+			row.SandboxPresent = st.State != types.RunStopped || st.ExitCode != nil || (r.Exit != nil && !r.ExitAcked)
+			if err := m.observeAgent(ctx, id, r, row); err != nil {
+				return nil, err
+			}
 		}
 	}
 	// A quarantine that arrived meanwhile owns the evidence: do not reopen (and
@@ -132,4 +141,17 @@ func (m *Manager) observeAgent(ctx context.Context, id uuid.UUID, r localRun, ro
 	current.Exit = &runnerwire.AgentExit{Generation: r.Generation, ExecID: r.ExecID, Ref: placement.RunnerRefPrefix(m.runnerID.String()) + r.Ref, Code: *agent.ExitCode, ObservedAt: m.now().UTC()}
 	m.state.Runs[id] = current
 	return m.save()
+}
+
+// coversKind reports whether the substrate can enumerate kind's sandboxes now (runner.KindCoverer).
+// One that does not say covers containers and Linux VMs only.
+func (m *Manager) coversKind(kind types.MachineKind) bool {
+	if c, ok := m.sub.(runner.KindCoverer); ok {
+		return c.CoversKind(kind)
+	}
+	switch kind.Normalize() {
+	case "", types.MachineLinuxVM:
+		return true
+	}
+	return false
 }

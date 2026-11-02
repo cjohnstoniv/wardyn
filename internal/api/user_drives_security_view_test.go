@@ -70,6 +70,7 @@ var (
 		"UserDrive.AltBackend":                true,
 		"UserDrive.AltHostRoot":               true,
 		"UserDrive.AltRunnerID":               true,
+		"UserDrive.HomeRunnerID":              true,
 		"UserDriveGrant.MembersCanWrite":      true,
 	}
 )

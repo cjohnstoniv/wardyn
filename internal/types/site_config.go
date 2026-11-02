@@ -138,6 +138,9 @@ type SiteConfig struct {
 	// for the same byte-identical-GET reason as the provider blocks; nil is today's behaviour: terminal
 	// sessions recorded, and a policy may choose another level.
 	Recording *SiteRecording `json:"recording,omitempty"`
+	// MacOSVM is the organisation's macOS VM sandbox settings. A POINTER for the same byte-identical-GET
+	// reason as the provider blocks; nil, or a zero max, sets no maximum.
+	MacOSVM *SiteMacOSVM `json:"macos_vm,omitempty"`
 	// EffectiveScmHosts is READ-ONLY, SERVER-OWNED: ScmHosts minus hosts a
 	// provider row claims, union enabled providers' hosts. A real field
 	// (not a wrapper key) so a get|set round trip still decodes under
@@ -159,6 +162,14 @@ type SiteConfig struct {
 	// value and carries the stored one forward; a dropped value is reported
 	// as onboarding_completed_at_ignored.
 	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
+}
+
+// SiteMacOSVM is SiteConfig.MacOSVM.
+type SiteMacOSVM struct {
+	// MaxBaseAgeDays refuses a macOS VM run on a Mac whose base was prepared more than this many days ago,
+	// so a base gets patched. 0 or absent: no maximum. A runner that does not report its base's age is
+	// refused while a maximum is set.
+	MaxBaseAgeDays int `json:"max_base_age_days,omitempty"`
 }
 
 // SiteEgress is SiteConfig.Egress.

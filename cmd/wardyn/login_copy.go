@@ -21,7 +21,7 @@ const (
 	copyAdminSignedIn = "Admin access to %s as %s until %s. It does not refresh." // host, person, local time
 
 	// A login that replaces this computer's sign-in could not sign the old one out (stderr; login succeeds).
-	copyPreviousNotEnded = "wardyn: the sign-in this one replaces could not be signed out (%v); it ends on its own, or sign it out under Your account → Signed-in CLIs"
+	copyPreviousNotEnded = "wardyn: the sign-in this one replaces could not be signed out (%v); it ends on its own, or sign it out in Settings → Signed-in CLIs"
 
 	// A login whose write waited on another command's lock too long, and a step-up whose session changed.
 	errStoreBusy  = "another wardyn command held the CLI sign-in for %s too long; run `wardyn login` again"
@@ -72,5 +72,5 @@ const (
 	// logout.
 	copyLoggedOut   = "Signed out of %s on this computer."
 	copyNotSignedIn = "Not signed in to %s."
-	errLogoutServer = "signed out on this computer, but %s did not end the session (%v): sign it out under Your account → Signed-in CLIs"
+	errLogoutServer = "signed out on this computer, but %s did not end the session (%v): sign it out in Settings → Signed-in CLIs"
 )

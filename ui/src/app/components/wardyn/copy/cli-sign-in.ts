@@ -86,7 +86,7 @@ export const SIGNED_IN_CLIS = {
   CHIP: "CLI sign-in",
   STORE_KEYCHAIN: "Keychain",
   STORE_FILE: "File, 0600",
-  FILE_NOTE: "No keychain here: the sign-in is kept in a file only you can read, so it ends after 7 days.",
+  FILE_NOTE: "No keychain here: the sign-in is kept in a file only you can read, so it ends after 7 days at most.",
   ADMIN_CHIP: (minutes: number) => `Admin access, ends in ${minutes} min`,
   SIGN_OUT: "Sign out",
   SIGN_OUT_LABEL: (machine: string) => `Sign out ${machine}`,

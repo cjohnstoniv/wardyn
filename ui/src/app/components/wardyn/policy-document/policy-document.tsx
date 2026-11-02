@@ -14,7 +14,7 @@
 // run page can show a recorded policy without loading the source parser.
 import * as React from "react";
 import type { PolicySourceFormat } from "../../../lib/policy-document";
-import type { RunPolicySpec } from "../../../lib/types";
+import type { RunPolicyHostMarks, RunPolicySpec } from "../../../lib/types";
 import type { PolicyPreviewPending } from "../../../lib/types/policy-preview";
 import { POLICY_TAB } from "../../screens/run-detail/policy-tab-copy";
 import { cn } from "../../ui/utils";
@@ -50,6 +50,8 @@ export interface PolicyDocumentProps {
   source?: { text: string; format: PolicySourceFormat };
   /** Launch-only checks a preview did not run. */
   pending?: readonly PolicyPreviewPending[];
+  /** Which allowed hosts the run's proxy opens (run page only). */
+  hostMarks?: RunPolicyHostMarks;
   /** The spec no longer answers the current draft: it stays readable, its copies are held. */
   stale?: boolean;
   headingLevel?: 3 | 4;
@@ -69,6 +71,7 @@ export function PolicyDocument({
   facts,
   source,
   pending,
+  hostMarks,
   stale,
   headingLevel,
   notes,
@@ -101,7 +104,7 @@ export function PolicyDocument({
       ) : (
         spec &&
         (view === "summary" ? (
-          <PolicySummary spec={spec} marks={marks} facts={facts} pending={pending} headingLevel={headingLevel} />
+          <PolicySummary spec={spec} marks={marks} facts={facts} pending={pending} hostMarks={hostMarks} headingLevel={headingLevel} />
         ) : (
           // A stale preview stays readable; the block's own copy is held with the button below.
           <fieldset disabled={held} className="m-0 min-w-0 border-0 p-0">

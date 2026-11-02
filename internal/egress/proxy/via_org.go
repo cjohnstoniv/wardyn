@@ -239,7 +239,7 @@ func (e *ViaOrgEngine) ServeInjected(w http.ResponseWriter, r *http.Request, hos
 		if log != nil {
 			p.sink.emit(*log)
 		}
-		setEgressRefusalHeaders(w, egressRefusalPending, host)
+		setEgressRefusalHeadersWithReason(w, egressRefusalPending, host, decisionReason(log))
 		writeApprovalPending(w, log)
 		return
 	}

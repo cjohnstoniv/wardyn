@@ -169,7 +169,7 @@ For a pool with a cap, every run takes the queue path, so FIFO has one door:
 | Pool switched off | Keep waiting; promotion skips it; the deadline runs | H10-pools' rule |
 | Cap lowered below the running count | Wait until slot-holders fall under it | Keep running; a cap never kills |
 | Run type, barrier, use policy, CPU, memory, lifetime tightened | Judged at the start; O6-A2 does not apply (no end yet) | CPU, memory: none. Lifetime: O6-A2 |
-| Self-hosted runner offline | Not queued: a Review blocker and a create refusal (`422 runner_offline` for a self-hosted pool, `runner_pool_no_eligible_member` for a remote-provided one), as today, and never a `run_queue` row. Only a run already queued waits (`runner_pool_no_runner_free`): a runner that drops offline after enqueue is not free, so the run keeps its place until its deadline | Owner ruling O-A3 (DR-0085); #1319 and PLAN's pending kill |
+| Self-hosted runner offline | Not queued: a Review blocker and a create refusal (`422 runner_offline` for a self-hosted pool, `runner_pool_no_eligible_member` for a remote-provided one), as today, and never a `run_queue` row. Only a run already queued waits (`runner_pool_no_runner_free`): a runner that drops offline after enqueue is not free, so the run keeps its place until its deadline | Owner ruling; #1319 and PLAN's pending kill |
 
 - `run_queue.pool_id` is `ON DELETE RESTRICT`. Pool removal cancels each waiting run, which deletes its row, then deletes the pool in the same transaction; a delete that skips the cancellation fails instead of orphaning waiting runs.
 

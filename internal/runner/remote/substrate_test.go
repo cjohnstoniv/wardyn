@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -97,6 +98,28 @@ func TestAdvertisedCarriesDiskWordKeepAndDrives(t *testing.T) {
 	f, ok := rig.Sub.Advertised()
 	if !ok || f.EphemeralDiskEnforcement != types.StorageEnforcementEviction || !f.KeepsEnded || !f.UserDrives {
 		t.Fatalf("Advertised = %+v, %v", f, ok)
+	}
+}
+
+// A k8s runner's runs namespaces reach the placement facts, in the order it advertised them; an older
+// runner says none.
+func TestAdvertisedCarriesTheRunsNamespaces(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		caps string
+		want []string
+	}{
+		{"two namespaces", `{"support":{"Classes":["CC1"]},"runs_namespaces":["wardyn-runs","team-a"]}`, []string{"wardyn-runs", "team-a"}},
+		{"older runner", `{"support":{"Classes":["CC1"]},"version":"0.9.3"}`, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rig := runnertest.NewRig(t, rid)
+			rig.Sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: []byte(c.caps)})
+			f, ok := rig.Sub.Advertised()
+			if !ok || !slices.Equal(f.RunsNamespaces, c.want) {
+				t.Fatalf("Advertised = %+v, %v; want RunsNamespaces %v", f, ok, c.want)
+			}
+		})
 	}
 }
 
@@ -602,6 +625,26 @@ func TestEraseResidentForgetsTheDigests(t *testing.T) {
 	spec := runner.SandboxSpec{RunID: run, Image: "gone-after-erase", ConfinementClass: types.CC1}
 	if _, err := rig.Sub.CreateSandbox(ctxT(t), spec); err != nil {
 		t.Fatalf("after erase the guard still holds the value: %v", err)
+	}
+}
+
+// WorkloadStatus reaches the runner as sent; a status outside the wire's bounds is refused before any call.
+func TestWorkloadStatusReachesTheRunner(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	a := runnerwire.WorkloadStatusArgs{Namespace: "team-a", Name: "web", UID: "uid-web", ObservedGeneration: 3, Phase: runnerwire.WorkloadPhaseRunning, RunID: uuid.NewString()}
+	if err := rig.Sub.WorkloadStatus(ctxT(t), a); err != nil {
+		t.Fatal(err)
+	}
+	if got := rig.Fake.WorkloadStatuses(); len(got) != 1 || got[0] != a {
+		t.Fatalf("runner saw %+v, want [%+v]", got, a)
+	}
+	bad := a
+	bad.Phase = "Sleeping"
+	if err := rig.Sub.WorkloadStatus(ctxT(t), bad); !errors.Is(err, runnerwire.ErrBadFrame) {
+		t.Fatalf("unknown phase = %v, want ErrBadFrame", err)
+	}
+	if got := rig.Fake.WorkloadStatuses(); len(got) != 1 {
+		t.Fatalf("a refused status reached the runner: %+v", got)
 	}
 }
 

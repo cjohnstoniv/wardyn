@@ -12,6 +12,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { makeRun } from "../../../../test/factories";
+import { aheadByHours } from "../../../lib/test-clock";
 import type { AgentRun } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RUNS_ROW_ACTION, RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
@@ -263,5 +264,46 @@ describe("RunRow — the status pill", () => {
     const run = makeRun({ attention: { kind: "approval", by: "you", pending: 1 } });
     renderRow(run);
     expect(pillOf(rowPresentation(run).word).className).toMatch(/warning/);
+  });
+});
+
+// Mock r15 T1-b: a live service says its health in place of Running, on the same row and under the same group.
+describe("RunRow: a live service's health chip", () => {
+  const pillOf = (word: string) => screen.getByText(word).closest("span[class*='rounded']") as HTMLElement;
+  const service = (service_status?: AgentRun["service_status"], over: Partial<AgentRun> = {}) =>
+    makeRun({ service: { restart: "on_failure" }, service_status, ...over });
+  const seen = (health: "starting" | "healthy" | "unhealthy" | "unknown", restarts = 0) =>
+    ({ health, restarts, observed_at: new Date().toISOString() }) as AgentRun["service_status"];
+
+  it("says Healthy with the restart suffix, in the success tone", () => {
+    renderRow(service(seen("healthy", 3)));
+    expect(pillOf("Healthy · 3 restarts").className).toMatch(/success/);
+    expect(screen.queryByText(RUNS_ROW_WORD.RUNNING)).not.toBeInTheDocument();
+  });
+
+  it("says Unhealthy in the warning tone with the singular suffix, and the row does not move to Needs you", () => {
+    const { container } = renderRow(service(seen("unhealthy", 1)));
+    expect(pillOf("Unhealthy · 1 restart").className).toMatch(/warning/);
+    expect(container.querySelector("[data-attention]")).toBeNull();
+  });
+
+  it("says Starting until the first read, Health unknown in a neutral tone, and plain Running for any other run", () => {
+    const starting = renderRow(service(undefined));
+    expect(pillOf("Starting").className).toMatch(/info/);
+    starting.unmount();
+    const unknown = renderRow(service(seen("unknown")));
+    expect(pillOf("Health unknown").className).toMatch(/muted/);
+    unknown.unmount();
+    renderRow(makeRun());
+    expect(screen.getByText(RUNS_ROW_WORD.RUNNING)).toBeInTheDocument();
+  });
+
+  it("keeps an attention row's amber chip and a finished service's own state", () => {
+    const attention = renderRow(service(seen("healthy"), { attention: { kind: "approval", by: "you", pending: 1 } }));
+    expect(screen.queryByText("Healthy")).not.toBeInTheDocument();
+    attention.unmount();
+    renderRow(service(seen("healthy"), { state: "FAILED", ended_at: aheadByHours(-2) }));
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.queryByText("Healthy")).not.toBeInTheDocument();
   });
 });

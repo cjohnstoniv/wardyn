@@ -44,6 +44,8 @@ var otherConcept = map[string]string{
 	"internal/adoscope/areas.go:profile":                           "the Azure DevOps user-profile scope area",
 	"internal/api/key_domains.go:assignments":                      "key-domain assignments",
 	"internal/api/governance_change_keydomain_kinds.go:assignment": "key-domain assignment",
+	"internal/macvm/customise.go:profiles":                         "a macOS guest's posture: how many configuration profiles are installed",
+	"internal/runnerwire/payload.go:profiles":                      "a macOS guest's posture: how many configuration profiles are installed",
 	// Old spellings kept on purpose, to read rows or refuse documents written before 0.10.0.
 	"internal/api/legacy_audit.go:profile":                  "reads audit rows written before 0.10.0, which are immutable",
 	"cmd/wardyn/governance_renamed_keys.go:profiles":        "the 0.9 governance document keys, named in the refusal hint",

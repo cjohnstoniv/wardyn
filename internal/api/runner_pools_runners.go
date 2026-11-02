@@ -42,7 +42,7 @@ func (s *Server) handleListRunnerPoolMembers(w http.ResponseWriter, r *http.Requ
 	}
 	owner := row.Pool.Owner != "" && row.Pool.Owner == poolOwner(r.Context())
 	out := []client.RunnerPoolMemberView{}
-	if !s.appendRunnerMembers(w, r, row.Pool, owner, &out) {
+	if !s.appendRunnerMembers(w, r, ps, row.Pool, owner, &out) {
 		return
 	}
 	if len(row.ExecutorIDs) > 0 {
@@ -78,7 +78,7 @@ func (s *Server) handleListRunnerPoolMembers(w http.ResponseWriter, r *http.Requ
 // organization pool's organization runners. Every reader of an organization pool sees the runner; only a security
 // operator also sees who owns, minted, trusted and revoked it, as the administrators' inventory shows them.
 // It reports false after answering the request itself.
-func (s *Server) appendRunnerMembers(w http.ResponseWriter, r *http.Request, pool types.RunnerPool, owner bool, out *[]client.RunnerPoolMemberView) bool {
+func (s *Server) appendRunnerMembers(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore, pool types.RunnerPool, owner bool, out *[]client.RunnerPoolMemberView) bool {
 	if _, ok := s.cfg.Store.(store.OrgRunnerPoolStore); !ok && pool.Scope != types.RunnerPoolUser {
 		return true // a store that cannot add an organization runner holds none
 	}
@@ -109,15 +109,38 @@ func (s *Server) appendRunnerMembers(w http.ResponseWriter, r *http.Request, poo
 	if !ok {
 		return false
 	}
+	var namespaces map[uuid.UUID]string
+	if pool.Scope != types.RunnerPoolUser {
+		if namespaces, ok = s.memberNamespaces(w, r, ps, pool.ID); !ok {
+			return false
+		}
+	}
 	for i := range views {
 		v := views[i]
 		if pool.Scope != types.RunnerPoolUser && !s.isSecurityOperator(r.Context()) {
 			withoutPeople(&v)
 		}
 		*out = append(*out, client.RunnerPoolMemberView{Kind: types.RunnerKindSelfHosted, ID: v.ID.String(), Name: v.Name, Online: v.Online, Runner: &v,
-			Limits: v.Limits, Usage: v.Usage})
+			Limits: v.Limits, Usage: v.Usage, RunsNamespace: namespaces[v.ID]})
 	}
 	return true
+}
+
+// memberNamespaces is the runs namespace of each of the pool's runner members, by runner id; a member
+// with the runner's default namespace is absent. It reports false after answering the request itself.
+func (s *Server) memberNamespaces(w http.ResponseWriter, r *http.Request, ps store.RunnerPoolStore, poolID uuid.UUID) (map[uuid.UUID]string, bool) {
+	members, err := ps.ListRunnerPoolMembers(r.Context(), poolID)
+	if err != nil {
+		writeServerError(w, r, "list runner pool members", err)
+		return nil, false
+	}
+	out := map[uuid.UUID]string{}
+	for _, m := range members {
+		if m.RunnerID != nil && m.RunsNamespace != "" {
+			out[*m.RunnerID] = m.RunsNamespace
+		}
+	}
+	return out, true
 }
 
 // withoutPeople clears the fields of a runner view that name the people behind it (its owner, who minted,

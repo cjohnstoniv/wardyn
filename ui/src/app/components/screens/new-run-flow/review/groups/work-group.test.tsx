@@ -23,6 +23,22 @@ describe("Review: an attachment row on a narrow screen", () => {
   });
 });
 
+// A macOS VM run's guest has /Users/agent where a container has /home/agent; the row reads it so, and sends nothing different.
+describe("Review: an attachment row's path on a macOS run", () => {
+  const a = { kind: "repository" as const, name: "web", target: "/home/agent/work/web", read_only: false, starts_here: false };
+
+  it("reads /Users/agent for a macOS run", () => {
+    render(<AttachmentRow a={a} macOS />);
+    expect(screen.getByText("/Users/agent/work/web")).toBeInTheDocument();
+    expect(screen.queryByText("/home/agent/work/web")).toBeNull();
+  });
+
+  it("keeps /home/agent for a container run, and for a path the guest does not move", () => {
+    render(<AttachmentRow a={a} />);
+    expect(screen.getByText("/home/agent/work/web")).toBeInTheDocument();
+  });
+});
+
 // #2107: a typed ref says it is not checked until the run starts; a picked or default ref says nothing new.
 describe("Review: a typed ref", () => {
   const a = { kind: "repository" as const, name: "app", target: "/home/agent/work/app", read_only: false, starts_here: false, ref: "feature/x-typo" };

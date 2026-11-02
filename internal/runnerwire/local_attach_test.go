@@ -201,3 +201,27 @@ func TestLocalAttachTeeOpenIsRefusedOutsideALocalAttachCall(t *testing.T) {
 		r.readType(t, TypeOpenOK)
 	})
 }
+
+// The per-run limits ride AUTH_OK as two optional members: an unset pair is not sent, an old runner
+// still reads the message, and the names are pinned.
+func TestPerRunLimitsAreOptionalAndPinned(t *testing.T) {
+	on, err := Marshal(AuthOK{SessionID: "s", PerRunCPUMillis: 4000, PerRunMemoryMiB: 8192})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"session_id":"s","resumed":false,"ping_interval":0,"last_seq":0,"per_run_cpu_millis":4000,"per_run_memory_mib":8192}`; string(on) != want {
+		t.Fatalf("wire form %s, want %s", on, want)
+	}
+	var old oldAuthOK
+	if err := Unmarshal(on, &old); err != nil || old.SessionID != "s" {
+		t.Fatalf("an old runner decoding a new AUTH_OK = %+v, %v", old, err)
+	}
+	off, _ := Marshal(AuthOK{})
+	if containsKey(off, "per_run_cpu_millis") || containsKey(off, "per_run_memory_mib") {
+		t.Fatalf("an unset per-run limit is sent: %s", off)
+	}
+	var a AuthOK
+	if err := Unmarshal([]byte(`{"session_id":"s"}`), &a); err != nil || a.PerRunCPUMillis != 0 || a.PerRunMemoryMiB != 0 {
+		t.Fatalf("an old org's AUTH_OK read as naming limits: %+v, %v", a, err)
+	}
+}

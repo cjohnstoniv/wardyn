@@ -14,13 +14,14 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // An attach socket is authenticated at its handshake, and a terminal can stay open far longer than
 // the credential that opened it. While it is open the socket repeats the check that admitted it every
 // attachAuthorityInterval, each lookup bounded by attachAuthorityLookup, and the first check that does
-// not answer "still authorized" (a cut, an expiry, an ended portal grant, or a lookup that failed or
-// timed out) ends it. A dropped terminal reconnects through a fresh ticket, which is checked anew.
+// not answer "still authorized" (a cut, an expiry, an ended portal grant, the run's profile now denying
+// interactive sessions, or a lookup that failed or timed out) ends it. A dropped terminal reconnects through a fresh ticket, which is checked anew.
 const (
 	attachAuthorityInterval = 30 * time.Second
 	attachAuthorityLookup   = 5 * time.Second
@@ -61,6 +62,10 @@ func (s *Server) attachAuthorityLookupBound() time.Duration {
 // ticket socket in local mode is handshake-only only while RoleStampTTL is unset: with it set, the
 // socket still ends at the ticket's issue time plus it.
 //
+// Both lanes also ask the door's deny_interactive again (attachUnitCheck), with the door's exemption: on
+// the ticket lane a super admin's ticket on a run adminDoorExempt exempts, on the cookie lane an ungoverned
+// caller (runUngoverned) or an operator-owned run (refuseNoTicketAttach).
+//
 //   - Ticket lane: what redemption asked (ticketAuthority), against the ticket's own issue time and
 //     sequence. The ticket's 30-second redemption window is not the terminal's lifetime; with
 //     RoleStampTTL set the socket ends at the ticket's issue time plus it, and when the handshake also
@@ -82,7 +87,8 @@ func (s *Server) attachAuthority(r *http.Request, runID uuid.UUID) func(context.
 				deadline = earlierDeadline(deadline, sessionDeadline(expiry, issuedAt, ttl))
 			}
 		}
-		if s.cfg.SessionRevocations == nil && ta.via == nil && deadline.IsZero() {
+		superAdmin := ta.role == oidc.RoleAdmin
+		if s.cfg.SessionRevocations == nil && ta.via == nil && deadline.IsZero() && superAdmin && !s.cfg.GovernAdminRuns {
 			return nil
 		}
 		return func(lctx context.Context) error {
@@ -92,7 +98,7 @@ func (s *Server) attachAuthority(r *http.Request, runID uuid.UUID) func(context.
 			if _, v := s.ticketAuthority(lctx, ta, runID); v != verdictOK {
 				return errAttachAuthorityEnded
 			}
-			return nil
+			return s.attachUnitCheck(lctx, runID, func(run types.AgentRun) bool { return superAdmin && s.adminDoorExempt(run) })
 		}
 	}
 	sub := oidc.PrincipalFromContext(ctx)
@@ -104,22 +110,43 @@ func (s *Server) attachAuthority(r *http.Request, runID uuid.UUID) func(context.
 	epoch, _ := oidc.AuthorityEpochFromContext(ctx)
 	deadline := sessionDeadline(oidc.ExpiryFromContext(ctx), issue.At, ttl)
 	rev := s.cfg.SessionRevocations
+	governed := !s.runUngoverned(ctx)
 	return func(lctx context.Context) error {
 		if !s.cfg.Now().Before(deadline) {
 			return errAttachAuthorityEnded
 		}
-		if rev == nil {
-			return nil
+		if rev != nil {
+			status, err := oidc.CheckSession(lctx, rev, sub, email, issue, epoch)
+			if err != nil {
+				return err
+			}
+			if status != oidc.SessionLive {
+				return errAttachAuthorityEnded
+			}
 		}
-		status, err := oidc.CheckSession(lctx, rev, sub, email, issue, epoch)
-		if err != nil {
-			return err
-		}
-		if status != oidc.SessionLive {
-			return errAttachAuthorityEnded
-		}
+		return s.attachUnitCheck(lctx, runID, func(run types.AgentRun) bool { return !governed || run.OperatorOwned })
+	}
+}
+
+// attachUnitCheck is the attach door's deny_interactive (refuseInteractiveAttach) asked again of runID as it
+// stands now: errAttachAuthorityEnded once the run's profile denies interactive sessions, and the read's
+// error when the run or its profile cannot be read. exempt is the lane's door exemption, asked of the run.
+func (s *Server) attachUnitCheck(ctx context.Context, runID uuid.UUID, exempt func(types.AgentRun) bool) error {
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if exempt(run) {
 		return nil
 	}
+	p, err := s.interactiveDeniedBy(ctx, run)
+	if err != nil {
+		return err
+	}
+	if p != nil {
+		return errAttachAuthorityEnded
+	}
+	return nil
 }
 
 // sessionDeadline is a session cookie's deadline: the earlier of its expiry and issuedAt + ttl (ttl > 0).

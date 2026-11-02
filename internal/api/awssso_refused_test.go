@@ -116,7 +116,7 @@ func TestAWSSSORefresh_RefusedOpensTheSignInDoor(t *testing.T) {
 	})
 
 	_, d, err := s.providerBedrockRefusal(context.Background(), awsSSOTestProvider(), "claude-code", awsSSOTestOwner, true)
-	want := connectDenial("bedrock-sso", fmt.Sprintf(mpBRRefused, "invalid_request: Invalid request"))
+	want := connectDenial("bedrock-sso", fmt.Sprintf(mpBRRefused, "invalid_request: Invalid request", fmt.Sprintf(mpBRRefusedAge, "60 minutes")))
 	if err != nil || d != want {
 		t.Fatalf("denial %+v err %v, want %+v", d, err, want)
 	}
@@ -224,7 +224,7 @@ func TestAWSSSORefused_GradesSignedOutUntilASignIn(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(answer)
 	})
 	ctx, p := context.Background(), awsSSOTestProvider()
-	want := connectDenial(p.ID, fmt.Sprintf(mpBRRefused, "invalid_request: Invalid request"))
+	want := connectDenial(p.ID, fmt.Sprintf(mpBRRefused, "invalid_request: Invalid request", fmt.Sprintf(mpBRRefusedAge, "60 minutes")))
 	grade := func() SetupProviderAccess {
 		var row SetupProviderAccess
 		s.gradeProviderBedrockSSO(ctx, &row, p, awsSSOTestOwner)
@@ -237,12 +237,14 @@ func TestAWSSSORefused_GradesSignedOutUntilASignIn(t *testing.T) {
 	if row := grade(); row.State != modelAccessExpiredSignin || row.Action != modelAccessSignInAction {
 		t.Errorf("grade after a refusal = %q / %q, want expired_signin with the sign-in action", row.State, row.Action)
 	}
-	if _, d, _ := s.providerBedrockRefusal(ctx, p, "claude-code", awsSSOTestOwner, false); d != want {
-		t.Errorf("Review denial %+v, want the dispatch's %+v", d, want)
+	// Review reads the mark, which keeps AWS's answer but not when it came, so it names no age.
+	reviewWant := connectDenial(p.ID, fmt.Sprintf(mpBRRefused, "invalid_request: Invalid request", ""))
+	if _, d, _ := s.providerBedrockRefusal(ctx, p, "claude-code", awsSSOTestOwner, false); d != reviewWant {
+		t.Errorf("Review denial %+v, want the dispatch's answer without its age %+v", d, reviewWant)
 	}
 	var data map[string]any
-	if rows := audit.find("harness.credential.refresh"); len(rows) != 1 || json.Unmarshal(rows[0].Data, &data) != nil || data["registration"] != "present" {
-		t.Errorf("refresh rows = %+v, want one carrying registration: present", rows)
+	if rows := audit.find("harness.credential.refresh"); len(rows) != 1 || json.Unmarshal(rows[0].Data, &data) != nil || data["registration"] != "present" || data["signed_in_sec"] != float64(3600) {
+		t.Errorf("refresh rows = %+v, want one carrying registration: present and signed_in_sec: 3600", rows)
 	}
 
 	// Expired but renewable on purpose: only a mark keyed by the refresh token
@@ -314,5 +316,25 @@ func TestAWSSSORefusedMarksAreBounded(t *testing.T) {
 	s.markAWSSSORefused(context.Background(), last, "", "access_denied")
 	if n := len(s.ssoRefreshRefused); n != awsSSORefusedMax || s.ssoRefreshRefused[last] != "access_denied" {
 		t.Errorf("re-marking a known token: %d marks, detail %q; want no eviction and the new detail", n, s.ssoRefreshRefused[last])
+	}
+}
+
+// The sign-in's age reads in the unit a session duration is set in, and a sign-in of unknown time names none.
+func TestAWSSSORefusedState(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		30 * time.Second: "a minute", 15 * time.Minute: "15 minutes", 119 * time.Minute: "119 minutes",
+		8 * time.Hour: "8 hours", 7 * 24 * time.Hour: "7 days",
+	} {
+		if got := awsSSOSignInAge(d); got != want {
+			t.Errorf("awsSSOSignInAge(%v) = %q, want %q", d, got, want)
+		}
+	}
+	s := &Server{cfg: Config{Now: func() time.Time { return awsSSOTestFixedNow }}}
+	if got, want := s.awsSSORefusedState("invalid_request", time.Time{}), fmt.Sprintf(mpBRRefused, "invalid_request", ""); got != want {
+		t.Errorf("unknown sign-in time: %q, want %q", got, want)
+	}
+	got := s.awsSSORefusedState("invalid_request", awsSSOTestFixedNow.Add(-15*time.Minute))
+	if want := fmt.Sprintf(mpBRRefused, "invalid_request", fmt.Sprintf(mpBRRefusedAge, "15 minutes")); got != want {
+		t.Errorf("state = %q, want %q", got, want)
 	}
 }

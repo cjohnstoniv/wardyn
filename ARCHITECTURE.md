@@ -24,6 +24,8 @@
 | `wardyn-aws-sso` | In-sandbox uploader for the containerized `aws sso login` capture lane; see [below](#wardyn-aws-sso-role). |
 | `wardyn` | CLI: `wardyn run`, `wardyn source`, `wardyn workspace`, `wardyn approval`, `wardyn audit`, `wardyn policy`, `wardyn secret`, `wardyn record`, `wardyn session`, `wardyn site-config`, `wardyn support-bundle` and `wardyn setup` among others (`wardyn --help` lists all); see [below](#wardyn-role). |
 
+The layers of the code, and the interface each extension implements, are mapped in [docs/EXTENDING.md](docs/EXTENDING.md).
+
 How they fit together (same diagram as the README):
 
 ```mermaid
@@ -78,7 +80,7 @@ flowchart LR
 | Substrate | Who owns it | What it runs on | Install |
 |---|---|---|---|
 | Docker laptop runner (0.9) | A person, who claims it with their own session | The laptop's Docker, with the same sandbox, proxy sidecar and gatewayless network as a Docker run | `wardyn-runnerd setup` ([`deploy/runner/install.sh`](deploy/runner/install.sh)) |
-| Kubernetes organisation runner (0.9.3) | The organisation; a security operator claims it | A dedicated runs namespace, through the `internal/runner/k8s` driver, beside runnerd's own namespace | The `deploy/helm/wardyn-runnerd` chart |
+| Kubernetes organisation runner (0.9.3) | The organisation; a security operator claims it | A dedicated runs namespace, or several each dedicated to it, through the `internal/runner/k8s` driver, beside runnerd's own namespace | The `deploy/helm/wardyn-runnerd` chart |
 
 - **Laptop runner.** The developer is root on the host, so every control binds the agent, not the developer. The proxy reaches the organisation through runnerd's relay, with TLS ending at wardynd.
 - **Organisation runner.** Outbound-only. runnerd's NetworkPolicy admits only its runs' proxy pods, and agent pods reach only their proxy.

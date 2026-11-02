@@ -7,9 +7,9 @@
 - [docs/CREDENTIALS.md](docs/CREDENTIALS.md) says how each kind of credential reaches a run, and which ones the sandbox can read.
 - Coding agents are the flagship use.
 
-![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by runs and audit.](docs/img/wardyn-walls.svg)
+![An isometric compound where one outer wall surrounds a datacentre and people's devices, each sandbox sits behind Wardyn's inner wall, and the org control plane links by runs and audit.](docs/img/wardyn-walls.webp)
 
-![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and the proxy adds keys to outbound requests.](docs/img/wardyn-places.svg)
+![One outer wall surrounds the cloud zone and people's devices; each sandbox has its own inner wall and proxy, nothing connects in, and the proxy adds keys to outbound requests.](docs/img/wardyn-places.webp)
 
 ## Before you start
 
@@ -30,7 +30,7 @@
 **Your own machine** — no SSO; the installer mints an admin token and prints where to read it (`grep WARDYN_ADMIN_TOKEN ~/.wardyn/.env`), rather than into your scrollback:
 
 ```sh
-curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.9.8/install.sh | sh
+curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.10.0-rc.10/install.sh | sh
 ```
 
 - Cosign-signed, not tip-of-`main` — only the script is pinned; it installs the newest release (`WARDYN_VERSION` overrides).
@@ -110,6 +110,7 @@ wardyn run --agent claude-code --task-mode exec \
 - To stop everything: `cd ~/.wardyn && docker compose down` (from a clone: `make compose-down`).
 
 - **Want an agent to write the code?** Then connect a model — optional, and equally first-class at the CLI or in the UI.
+  - The one-line install needs a Claude Code image first ([TRY-IT.md](docs/TRY-IT.md#before-you-start)).
 - An admin adds a model provider under Settings → Model providers; each person then connects their own credential for it (a key, or a Claude or AWS sign-in) from Getting started:
 
 ```sh

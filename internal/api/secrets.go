@@ -955,19 +955,23 @@ func (s *Server) presentSecretNamesFor(ctx context.Context, owner string) map[st
 // unrefuted. owner == "" (an operator) never "owns" anything by this path —
 // operator material is governed by the ceiling, not ownership.
 //
+// A store fault answers errSecretStoreUnavailable (the cause is logged), never
+// "not owned": the person holds the secret as far as anyone knows, and the
+// caller refuses with the fixed retryable 503 rather than "unknown secret".
+//
 // ponytail: one List call per invocation, no per-request cache — a member's
 // inline policy carries a handful of grants at most, so this never runs in a
 // loop large enough to matter; add a cache if a caller ever iterates hundreds.
-func (s *Server) ownsSecret(ctx context.Context, owner, name string) bool {
+func (s *Server) ownsSecret(ctx context.Context, owner, name string) (bool, error) {
 	if owner == "" || name == "" || s.cfg.Secrets == nil {
-		return false
+		return false, nil
 	}
 	names, err := s.cfg.Secrets.For(owner).List(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "api: list a person's own secrets for an ownership check", slog.Any("err", err))
-		return false
+		return false, errSecretStoreUnavailable
 	}
-	return slices.Contains(names, name)
+	return slices.Contains(names, name), nil
 }
 
 // formatInjectionValue applies an injection rule's Format ("%s"-style) to the

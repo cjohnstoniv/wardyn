@@ -280,8 +280,8 @@ func TestLocalOwnNamespaceProofIsTheRealSecretListNotTheOperatorRow(t *testing.T
 		{"alice", localCorpSecret, false},
 		{"", "alice-only", false},
 	} {
-		if got := f.h.srv.ownsSecretMemoized(ctx, tc.owner, tc.name); got != tc.want {
-			t.Errorf("owns(%q,%q)=%v, want %v", tc.owner, tc.name, got, tc.want)
+		if got, err := f.h.srv.ownsSecretChecked(ctx, tc.owner, tc.name); err != nil || got != tc.want {
+			t.Errorf("owns(%q,%q)=%v %v, want %v", tc.owner, tc.name, got, err, tc.want)
 		}
 	}
 }

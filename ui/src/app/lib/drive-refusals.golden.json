@@ -8,6 +8,9 @@
   { "key": "BOUND_ELSEWHERE", "args": ["team-share"], "text": "drive: \"team-share\" is bound to a different runner — choose an organisation pool, or launch without drive" },
   { "key": "TARGET_CONFLICT", "args": ["Team data", "team data", "/home/agent/shared/team-data"], "text": "Team data and team data both mount at /home/agent/shared/team-data. Attach one of them." },
   { "key": "SHARE_BESIDE_MANAGED", "args": ["Team share", "Personal"], "text": "Team share is a shared drive and Personal a managed one; a Kubernetes run mounts one kind or the other. Attach one of them." },
+  { "key": "MACOS_DOCKER_VOLUME", "args": ["team-data"], "text": "team-data is a Docker volume, which a macOS VM can't open." },
+  { "key": "MACOS_CLUSTER_VOLUME", "args": ["team-data"], "text": "team-data is a cluster volume, which a macOS VM can't open." },
+  { "key": "MAC_DISK_ELSEWHERE", "args": ["Notes", "Studio Mac"], "text": "Notes is a disk on Studio Mac, so only macOS VM runs on Studio Mac can use it." },
   { "key": "MEMBER_REQUIRES_PERSON", "args": [], "text": "Sign in under your own account to create or delete a drive." },
   { "key": "MEMBER_DISABLED", "args": [], "text": "Your organisation doesn't let people create drives. Ask an admin." },
   { "key": "MEMBER_DENIED_BY_UNIT", "args": ["contractors"], "text": "Your governance profile \"contractors\" doesn't let you create drives." },
@@ -21,5 +24,9 @@
   { "key": "MEMBER_IN_USE", "args": [], "text": "A run is still using this drive. End that run, or delete a run kept after its end, then try again." },
   { "key": "MEMBER_BUSY", "args": [], "text": "This drive is already being deleted." },
   { "key": "MEMBER_DELETE_FAILED", "args": [], "text": "The drive's files couldn't be deleted. Nothing was removed; try again." },
-  { "key": "MEMBER_RATE_LIMITED", "args": [], "text": "Too many drive changes; wait a minute and try again." }
+  { "key": "MEMBER_RATE_LIMITED", "args": [], "text": "Too many drive changes; wait a minute and try again." },
+  { "key": "MEMBER_MAC_UNAVAILABLE", "args": [], "text": "runner_id: choose one of your own Macs. It must be online, with a runner that is up to date." },
+  { "key": "MEMBER_DELETE_DEFERRED", "args": ["Studio Mac"], "text": "Deleting. Studio Mac is offline, so the disk is removed when it reconnects." },
+  { "key": "MEMBER_IN_RUN_ON_MAC", "args": ["Notes", "Studio Mac"], "text": "Notes is in a run on Studio Mac. Delete it after that run ends." },
+  { "key": "MEMBER_RECORD_ONLY", "args": ["Studio Mac"], "text": "Studio Mac is no longer registered, so this drive's disk stays on that Mac. Deleting removes only the record." }
 ]

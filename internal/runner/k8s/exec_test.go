@@ -368,7 +368,7 @@ func TestAgentStatus_RestartSafe_ReadsLiveFromAPIServer(t *testing.T) {
 	// no other construction-time state) — simulates a wardynd restart: ZERO
 	// shared in-memory state with the Driver that ran Exec, only the
 	// apiserver (the fake's backing store) in common.
-	fresh := &Driver{clientset: cs, cfg: Config{Namespace: testNamespace}}
+	fresh := &Driver{clientset: cs, cfg: Config{Namespaces: []string{testNamespace}}}
 
 	st, err := fresh.AgentStatus(context.Background(), ref, execContainerName)
 	if err != nil {

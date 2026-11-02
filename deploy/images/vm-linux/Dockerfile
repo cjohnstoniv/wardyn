@@ -14,7 +14,7 @@ ENV GOTOOLCHAIN=local
 ARG GOPROXY=
 ENV GOPROXY=${GOPROXY}
 COPY go.mod go.sum ./
-RUN go mod download
+RUN for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /out/wardyn-guest-agent ./cmd/wardyn-guest-agent
 

@@ -205,8 +205,10 @@ case "$1 ${2:-}" in
       mode="$(cat "$WSTUB/wait_mode" 2>/dev/null || true)"
       if [ -n "$mode" ]; then
         # The real CLI prints this on stderr before it blocks; --json prints only when the wait returns.
-        echo "waiting for run $RUN_UUID (timeout 30m0s)" >&2
-        if [ "$mode" = cancel ]; then
+        # The real CLI writes the created run to stdout (--json) before the waiting line; cancelearly is a cancel in between.
+        [ "$mode" != cancelearly ] || printf '{"id":"%s"}\n' "$RUN_UUID"
+        [ "$mode" = cancelearly ] || echo "waiting for run $RUN_UUID (timeout 30m0s)" >&2
+        if [ "$mode" = cancel ] || [ "$mode" = cancelearly ]; then
           # A job cancel: SIGTERM the OUTERMOST ci-run.sh ancestor (the pipeline's forked subshells
           # share its command line); it handles the signal once this CLI has exited.
           p=$PPID; top=""
@@ -286,6 +288,11 @@ printf 'cancel' > "$WSTUB/wait_mode"
 out="$(run_remote)"; rc=$?
 if [ "$rc" -eq 143 ] && grep -q "ARGV=run kill $RUN_UUID\$" "$WCALLS"; then ok "remote mode: a cancelled job kills its run"
 else bad "remote mode left the run alive after a job cancel (rc=$rc): $(grep -c 'run kill' "$WCALLS") kill call(s)"; fi
+# ...also when the cancel lands after the run exists but before the waiting line prints (#3519).
+printf 'cancelearly' > "$WSTUB/wait_mode"
+out="$(run_remote)"; rc=$?
+if [ "$rc" -eq 143 ] && grep -q "ARGV=run kill $RUN_UUID\$" "$WCALLS"; then ok "remote mode: a cancel before the waiting line still kills the created run"
+else bad "remote mode left the run alive after a cancel before the waiting line (rc=$rc): $(grep -c 'run kill' "$WCALLS") kill call(s)"; fi
 # ...but a run that finished normally is never killed.
 rm -f "$WSTUB/wait_mode" "$WSTUB/run_state"
 out="$(run_remote)"; rc=$?

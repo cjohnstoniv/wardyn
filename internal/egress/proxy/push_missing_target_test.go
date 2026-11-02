@@ -185,7 +185,7 @@ func TestPushRulesPassAPushThatAddsNoNewCommits(t *testing.T) {
 	t.Run("a forge other than GitHub", func(t *testing.T) {
 		r := newForgeRunVia(t, "gitlab.com", ordinaryRepo, nil, deny)
 		out, err := r.push()
-		refused(t, r, out, err, whyHeldNotGitHub)
+		refused(t, r, out, err, whyHeldNoForgeReader)
 		if n, _ := r.forge.reads(); n != 0 {
 			t.Errorf("a push to a forge that is not GitHub read the GitHub API %d time(s)", n)
 		}

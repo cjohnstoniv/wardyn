@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -170,6 +171,48 @@ func TestSweepTerminalSandboxes_LeavesSettledSandboxesAlone(t *testing.T) {
 	}
 	if len(h.broker.revoked) != 0 {
 		t.Errorf("must not re-revoke a run whose sandbox already settled; broker.revoked=%v", h.broker.revoked)
+	}
+}
+
+// sweepUnobservableRunner answers every Status as a runner with macOS VMs off answers a macOS VM
+// run's (#3667 F1 A2): an internal wire error, which the sweep must read as unknown.
+type sweepUnobservableRunner struct {
+	*fakeRunner
+	stopped []string
+}
+
+func (r *sweepUnobservableRunner) Status(context.Context, string) (runner.Status, error) {
+	return runner.Status{}, &runnerwire.Error{Code: runnerwire.CodeInternal, Message: "runner: this sandbox's machine kind cannot be observed on this runner now (macOS VMs are off)"}
+}
+func (r *sweepUnobservableRunner) StopSandbox(_ context.Context, ref string) error {
+	r.stopped = append(r.stopped, ref)
+	return nil
+}
+
+// TestSweepTerminalSandboxes_UnobservableSandboxIsLeftAlone: a terminal runner run whose runner cannot
+// observe its sandbox now is neither stopped nor revoked again; the sweep leaves it as unprobeable.
+func TestSweepTerminalSandboxes_UnobservableSandboxIsLeftAlone(t *testing.T) {
+	h := newHarness(t)
+	run := sweepRun(types.RunCompleted, "runner:"+uuid.NewString()+"/sbx")
+	fake := &sweepStore{runs: []types.AgentRun{run}}
+	rr := &sweepUnobservableRunner{fakeRunner: &fakeRunner{}}
+	cfg := baseTestConfig(h, fake)
+	cfg.Runner = rr
+	cfg.Broker = h.broker
+	srv := New(cfg)
+
+	swept, err := srv.SweepTerminalSandboxes(context.Background())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if swept != 0 {
+		t.Errorf("swept = %d, want 0 (the sandbox cannot be observed)", swept)
+	}
+	if len(rr.stopped) != 0 {
+		t.Errorf("must not call StopSandbox on a sandbox the runner cannot observe; stopped=%v", rr.stopped)
+	}
+	if len(h.broker.revoked) != 0 {
+		t.Errorf("must not re-revoke a run whose sandbox cannot be observed; broker.revoked=%v", h.broker.revoked)
 	}
 }
 

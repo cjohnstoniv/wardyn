@@ -173,13 +173,21 @@ func (st *queuedStart) bind(a queueAuthority) error {
 	st.auth = a
 	st.base = a.context(st.daemon)
 	choice := contextChoice{RunIn: st.launch.RunIn, OwningUnits: st.launch.OwningUnits}
-	st.ctx = withPromotedStart(withCeilingMemo(withCapBatch(withContextChoice(a.context(st.prep), choice))), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
+	st.ctx = withPromotedStart(bindAuthority(st.prep, a, choice), st.run.ID, st.run.RunnerID, st.run.RunnerPoolExecutor, st.launch.NoLocal)
 	r, err := http.NewRequestWithContext(st.ctx, http.MethodPost, "/api/v1/runs", nil)
 	if err != nil {
 		return err
 	}
 	st.r = r
 	return nil
+}
+
+// bindAuthority puts a on ctx with the memos a request carries, so a launch made without the owner's
+// session resolves the ceiling, the capability rows and the pool catalogue for a as a request of theirs
+// would. ctx must carry no other caller's identity. The queue start binds its stored authority with it,
+// and a workload launch acting as a service identity binds that identity's (serviceLaunchRequest).
+func bindAuthority(ctx context.Context, a queueAuthority, choice contextChoice) context.Context {
+	return withCeilingMemo(withCapBatch(withContextChoice(a.context(ctx), choice)))
 }
 
 // runQueuedStart is the table of section 7: the owner's standing, the profile, the doors, the policy,
@@ -503,8 +511,8 @@ func (s *Server) revokeKilledStart(st *queuedStart) {
 
 // auditQueueStart is the run.queue.start success row: how long the run waited, the pool's slots, the
 // limits it started under, the CPU and memory it got as the replayed placement applied them against the
-// limits as they stand at the start (resources_applied, run.create's shape), and the jti of its identity;
-// a portal launch's row carries via.
+// limits as they stand at the start (resources_applied, run.create's shape), the service advisory as the
+// start left it (warnings), and the jti of its identity; a portal launch's row carries via.
 func (s *Server) auditQueueStart(st *queuedStart, started, anchor types.AgentRun, jti string) {
 	data := map[string]any{
 		"waited_sec": int(started.AdmittedAt.Sub(st.entry.QueuedAt).Seconds()), "pool_id": st.entry.PoolID, "jti": jti,
@@ -512,6 +520,11 @@ func (s *Server) auditQueueStart(st *queuedStart, started, anchor types.AgentRun
 		"resources_applied": st.f.place.applied,
 		// The class the run started under: the one its create resolved, whoever chose it then.
 		"confinement_class": started.ConfinementClass,
+	}
+	// The service advisory as the start left the run: the 201's was read before its limits were captured,
+	// and a profile can change while the run waits.
+	if w := serviceCreateWarnings(anchor); len(w) > 0 {
+		data["warnings"] = w
 	}
 	if st.launch.ConfinementDefault != "" {
 		data["confinement_default"] = st.launch.ConfinementDefault

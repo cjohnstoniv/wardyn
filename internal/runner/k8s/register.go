@@ -28,7 +28,7 @@ func buildConfig(d substrate.Deps) Config {
 	return Config{
 		StartTimeout:        startTimeout,
 		CapacityWait:        capacityWait,
-		Namespace:           resolveNamespace(os.Getenv("WARDYN_K8S_NAMESPACE")),
+		Namespaces:          []string{resolveNamespace(os.Getenv("WARDYN_K8S_NAMESPACE"))},
 		ProxyImage:          d.ProxyImage,
 		ImagePullSecret:     os.Getenv("WARDYN_K8S_IMAGE_PULL_SECRET"),
 		SandboxPlacement:    os.Getenv("WARDYN_K8S_SANDBOX_PLACEMENT"),

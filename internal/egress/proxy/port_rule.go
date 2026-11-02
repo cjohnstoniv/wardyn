@@ -45,11 +45,11 @@ func effectivePortRule(vm bool, rule string) string {
 
 // portRuleRefuses reports whether the rule, in either live mode, refuses
 // host:port. Deny entries were already applied: AuthoredPortFor re-checks them.
-func (p *Proxy) portRuleRefuses(host string, port int) bool {
-	if p.portRule != PortRuleOn && p.portRule != PortRuleDryRun {
+func portRuleRefuses(rule string, pol *Policy, host string, port int) bool {
+	if rule != PortRuleOn && rule != PortRuleDryRun {
 		return false
 	}
-	return port != 80 && port != 443 && !p.policy.AuthoredPortFor(host, port)
+	return port != 80 && port != 443 && !pol.AuthoredPortFor(host, port)
 }
 
 // markPortDryRun marks an allow the dry run would have refused.

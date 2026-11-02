@@ -46,19 +46,22 @@ const (
 	// DriveBackendK8sPVCStatic is an admin-precreated PVC; Wardyn only ever
 	// READS it, a missing claim is a refusal not a create. Share, Kubernetes only.
 	DriveBackendK8sPVCStatic DriveBackend = "k8s_pvc_static"
+	// DriveBackendMacDisk is a disk image kept on one Mac (UserDrive.HomeRunnerID), which a macOS VM
+	// run on that Mac attaches as a second disk. Managed, a person's own drive only.
+	DriveBackendMacDisk DriveBackend = "mac_disk"
 )
 
 // DriveBackends is the closed set in the order the admin surface shows them.
 var DriveBackends = []DriveBackend{
 	DriveBackendDockerVolume, DriveBackendHostPath,
-	DriveBackendK8sPVC, DriveBackendK8sPVCStatic,
+	DriveBackendK8sPVC, DriveBackendK8sPVCStatic, DriveBackendMacDisk,
 }
 
-// Valid reports whether b is one of the four backends, mirroring
+// Valid reports whether b is one of the five backends, mirroring
 // CapabilitySubjectType.Valid.
 func (b DriveBackend) Valid() bool {
 	switch b {
-	case DriveBackendDockerVolume, DriveBackendHostPath, DriveBackendK8sPVC, DriveBackendK8sPVCStatic:
+	case DriveBackendDockerVolume, DriveBackendHostPath, DriveBackendK8sPVC, DriveBackendK8sPVCStatic, DriveBackendMacDisk:
 		return true
 	default:
 		return false
@@ -79,7 +82,7 @@ const (
 // deletes a share.
 func (b DriveBackend) Kind() DriveKind {
 	switch b {
-	case DriveBackendDockerVolume, DriveBackendK8sPVC:
+	case DriveBackendDockerVolume, DriveBackendK8sPVC, DriveBackendMacDisk:
 		return DriveKindManaged
 	default:
 		return DriveKindShare
@@ -88,7 +91,8 @@ func (b DriveBackend) Kind() DriveKind {
 
 // RunnerTarget is the ONE Config.RunnerTarget value that can mount this
 // backend, or "" — lets the write boundary refuse a k8s drive on a Docker
-// deployment (400) rather than store a row that can never resolve.
+// deployment (400) rather than store a row that can never resolve. A Mac disk
+// is "": its Mac mounts it, whatever the deployment dispatches to.
 func (b DriveBackend) RunnerTarget() string {
 	switch b {
 	case DriveBackendDockerVolume, DriveBackendHostPath:
@@ -278,6 +282,9 @@ type UserDrive struct {
 	AltBackend  DriveBackend `json:"alt_backend,omitempty"`
 	AltHostRoot string       `json:"alt_host_root,omitempty"`
 	AltRunnerID *uuid.UUID   `json:"alt_runner_id,omitempty"`
+	// HomeRunnerID is the Mac a mac_disk drive's disk is kept on, set on that backend and no other
+	// (migration 0246): only macOS VM runs on that Mac attach it.
+	HomeRunnerID *uuid.UUID `json:"home_runner_id,omitempty"`
 }
 
 // UserDriveGrant allocates one drive to one subject (migration 0054's

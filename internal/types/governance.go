@@ -33,6 +33,8 @@ import (
 //     describes the escape — the storage itself is the escape.
 //   - DenyPlacements: a placement the people under this profile may not run on;
 //     a deny list, so absent means permitted.
+//   - AllowedMacOSBases: the macOS bases they may pick; an allow list, so
+//     absent means any base a Mac offers.
 //   - MaxConcurrentRuns is a QUOTA, not a door: 422 with no authz.denied,
 //     not 403.
 //   - MaxCPUMillis/MaxMemoryMiB/MaxEphemeralDiskMiB/MaxDriveSizeMiB are neither: they CLAMP — capped
@@ -80,6 +82,11 @@ type GovernanceLimits struct {
 	// member with no assigned profile. Values are `remote` and `local`; a profile denying both is
 	// refused at write, since the people it binds could run nothing.
 	DenyPlacements []Placement `json:"deny_placements,omitempty"`
+	// AllowedMacOSBases are the macOS bases (MacOSStandardBase, or a Mac's other bases' names) a macOS VM
+	// run under this profile may name in macos_base (MacOSBaseAllowed). An ALLOW LIST whose empty value
+	// allows any base a Mac offers; a run naming another is refused 403 placement_denied. Operators are
+	// exempt, as from DenyPlacements.
+	AllowedMacOSBases []string `json:"allowed_macos_bases,omitempty"`
 	// MaxCPUMillis and MaxMemoryMiB cap the sandbox's CPU (millicores) and memory a run under this
 	// profile may be given, whatever its ceiling's own resources or a member's request say. 0 is
 	// unlimited. A CLAMP, NOT A DOOR, like MaxEphemeralDiskMiB. Folded into composer.Clamp at

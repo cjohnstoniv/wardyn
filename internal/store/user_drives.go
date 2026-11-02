@@ -27,7 +27,7 @@ const userDriveCols = `id, name, backend, host_root, storage_class, home_templat
 // driveRowCols is userDriveCols plus the member-drive columns: every read that
 // can return a member drive scans these, so the owner always travels with it.
 // The resolvers keep userDriveCols, since a member drive has no grant to win.
-const driveRowCols = userDriveCols + `, owner_subject, delete_started_at, kept_from_run`
+const driveRowCols = userDriveCols + `, owner_subject, delete_started_at, kept_from_run, home_runner_id`
 
 const userDriveGrantCols = `id, subject_type, subject, drive_id, priority, ` +
 	`size_mib_override, writable_override, home_override, enabled, created_at, created_by, members_can_write`
@@ -93,7 +93,7 @@ func userDriveDest(d *types.UserDrive) []any {
 
 // driveRowDest is the scan target list for driveRowCols.
 func driveRowDest(d *types.UserDrive) []any {
-	return append(userDriveDest(d), &d.OwnerSubject, &d.DeleteStartedAt, &d.KeptFromRun)
+	return append(userDriveDest(d), &d.OwnerSubject, &d.DeleteStartedAt, &d.KeptFromRun, &d.HomeRunnerID)
 }
 
 // userDriveGrantDest is the same for userDriveGrantCols. writable_override
@@ -282,7 +282,7 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 	const q = `SELECT d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
 			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme, d.team,
 			COALESCE(d.alt_backend, ''), COALESCE(d.alt_host_root, ''), d.alt_runner_id,
-			d.owner_subject, d.delete_started_at, d.kept_from_run, COALESCE(c.n, 0)
+			d.owner_subject, d.delete_started_at, d.kept_from_run, d.home_runner_id, COALESCE(c.n, 0)
 		FROM user_drives d
 		LEFT JOIN (SELECT drive_id, COUNT(*) AS n FROM user_drive_grants GROUP BY drive_id) c
 			ON c.drive_id = d.id

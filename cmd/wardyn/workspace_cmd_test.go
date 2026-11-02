@@ -142,6 +142,48 @@ func TestWorkspaceCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("create attaching a runner-bound library folder keeps its runner", func(t *testing.T) {
+		rid := uuid.New()
+		lib := types.Source{ID: uuid.New(), Kind: types.SourceLocalDir, Locator: "/Users/me/app", RunnerID: &rid}
+		api2 := newWorkspaceAPI(t, lib, ws)
+		root := rootCmd()
+		root.SetArgs([]string{"workspace", "create", "--name", "w", "--attach", lib.ID.String(), "--url", api2.URL, "--token", "tok"})
+		root.SetOut(&strings.Builder{})
+		root.SetErr(&strings.Builder{})
+		if err := root.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if s := api2.created.Sources; len(s) != 1 || s[0].Path != "/Users/me/app" || s[0].RunnerID == nil || *s[0].RunnerID != rid {
+			t.Errorf("sent sources %+v, want the folder still bound to runner %s", s, rid)
+		}
+	})
+
+	t.Run("create --runner refuses an attached folder bound to another runner, and accepts its own", func(t *testing.T) {
+		other, same := uuid.New(), uuid.New()
+		lib := types.Source{ID: uuid.New(), Kind: types.SourceLocalDir, Locator: "/Users/me/app", RunnerID: &other}
+		api2 := newWorkspaceAPI(t, lib, ws)
+		create := func(runner uuid.UUID) error {
+			root := rootCmd()
+			root.SetArgs([]string{"workspace", "create", "--name", "w", "--attach", lib.ID.String(), "--runner", runner.String(), "--url", api2.URL, "--token", "tok"})
+			root.SetOut(&strings.Builder{})
+			root.SetErr(&strings.Builder{})
+			return root.Execute()
+		}
+		err := create(same)
+		if err == nil || !strings.Contains(err.Error(), same.String()) || !strings.Contains(err.Error(), other.String()) || !strings.Contains(err.Error(), "/Users/me/app") {
+			t.Fatalf("err = %v, want a refusal naming both runners and the folder", err)
+		}
+		if api2.creates != 0 {
+			t.Errorf("%d workspaces created, want none", api2.creates)
+		}
+		if err := create(other); err != nil {
+			t.Fatalf("--runner equal to the folder's own runner: %v", err)
+		}
+		if s := api2.created.Sources; len(s) != 1 || s[0].RunnerID == nil || *s[0].RunnerID != other {
+			t.Errorf("sent sources %+v, want the folder on runner %s", s, other)
+		}
+	})
+
 	t.Run("create refuses a bad --add and an unresolvable --attach before creating anything", func(t *testing.T) {
 		before := api.creates
 		if _, _, err := run("workspace", "create", "--add", "volume:/x"); err == nil || !strings.Contains(err.Error(), "type must be dir, repo, or ephemeral") {

@@ -84,7 +84,7 @@ func TestRecordingK8s(t *testing.T) {
 
 	restCfg, cs := k8sTestClient(t)
 
-	sub, err := k8s.New(k8s.Config{Namespace: ns, ProxyImage: proxyImage, Record: true})
+	sub, err := k8s.New(k8s.Config{Namespaces: []string{ns}, ProxyImage: proxyImage, Record: true})
 	if err != nil {
 		t.Fatalf("k8s.New: %v (this cluster's CNI must enforce NetworkPolicy — see ci.yml's Calico step)", err)
 	}

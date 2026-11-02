@@ -13,6 +13,11 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 
+const poolGetMock = vi.fn();
+const poolMembersMock = vi.fn();
+vi.mock("../../../lib/api/runner-pools", () => ({
+  runnerPools: { get: (...a: unknown[]) => poolGetMock(...a), members: (...a: unknown[]) => poolMembersMock(...a) },
+}));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 const approveMock = vi.fn();
@@ -87,6 +92,22 @@ describe("the Changes tab", () => {
     expect(screen.getByText("ana@example.com")).toBeInTheDocument();
     expect(screen.getByText("2h ago")).toBeInTheDocument();
     expect(screen.getByText("in 20h")).toBeInTheDocument();
+  });
+
+  it("reads a held organization runner removal as a sentence, with who decides it", async () => {
+    poolGetMock.mockResolvedValue({ id: "p1", name: "Platform services" });
+    poolMembersMock.mockResolvedValue([{ kind: "self_hosted", id: "r-east", name: "k8s-east" }]);
+    const state = (ids?: string[]) => ({ policy_present: true, subjects: [], remote_runner_ids: [], ...(ids ? { runner_ids: ids } : {}) });
+    renderTab([change({ target_kind: "runner_pool_use_policy", op: "set", target_key: "p1", diff: { before: state(["r-east"]), after: state(), changed: ["runner_ids"] } })]);
+    expect(await screen.findByRole("button", { name: "Remove organization runner k8s-east from Platform services" })).toBeInTheDocument();
+    expect(screen.getByText("A super admin decides this.")).toBeInTheDocument();
+  });
+
+  it("keeps a use policy change under its kind and op", () => {
+    const state = { policy_present: true, subjects: [], remote_runner_ids: [] };
+    renderTab([change({ target_kind: "runner_pool_use_policy", op: "set", target_key: "p1", diff: { before: state, after: state, changed: [] } })]);
+    expect(screen.getByRole("button", { name: "Runner pool use policy · Set" })).toBeInTheDocument();
+    expect(screen.queryByText("A super admin decides this.")).not.toBeInTheDocument();
   });
 
   it("lists a credential delivery write as Runner credentials, under its natural key", () => {

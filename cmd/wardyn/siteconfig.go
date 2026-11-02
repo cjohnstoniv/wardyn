@@ -28,7 +28,7 @@ import (
 var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
 	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help", "components",
-	"recording", "governance_max_depth",
+	"recording", "governance_max_depth", "macos_vm",
 }
 
 // omittedPostV066Fields reports which of siteConfigFieldsAfter066 raw (the
@@ -227,19 +227,34 @@ func emptyUnsentFields(raw []byte, clearFields []string) ([]string, error) {
 		return nil, fmt.Errorf("parse site config JSON: %w", err)
 	}
 	for _, f := range clearFields {
-		empty, ok := sdk.SiteConfigClearForms[f]
-		if !ok {
+		if _, ok := sdk.SiteConfigClearForms[f]; !ok {
 			return nil, fmt.Errorf("--clear %q: not a clearable field (upstream_proxy_no_proxy, internal_hosts, sign_in_help_text, sign_in_help_url)", f)
 		}
-		if v, ok := present[f]; ok && string(bytes.TrimSpace(v)) != empty && string(bytes.TrimSpace(v)) != "null" {
+		if v, ok := present[f]; ok && !isEmptyJSON(v) && string(bytes.TrimSpace(v)) != "null" {
 			return nil, fmt.Errorf("--clear %s conflicts with the value this file gives it; drop one", f)
 		}
 	}
 	var unsent []string
 	for _, f := range slices.Sorted(maps.Keys(sdk.SiteConfigClearForms)) {
-		if v, ok := present[f]; ok && string(bytes.TrimSpace(v)) == sdk.SiteConfigClearForms[f] && !slices.Contains(clearFields, f) {
+		if v, ok := present[f]; ok && isEmptyJSON(v) && !slices.Contains(clearFields, f) {
 			unsent = append(unsent, f)
 		}
 	}
 	return unsent, nil
+}
+
+// isEmptyJSON reports whether v decodes to an empty list or an empty string, so
+// `[ ]` and a multi-line empty list count the same as `[]`.
+func isEmptyJSON(v json.RawMessage) bool {
+	var d any
+	if json.Unmarshal(v, &d) != nil {
+		return false
+	}
+	switch x := d.(type) {
+	case []any:
+		return len(x) == 0
+	case string:
+		return x == ""
+	}
+	return false
 }

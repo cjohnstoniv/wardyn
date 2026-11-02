@@ -27,8 +27,9 @@ func TestMigration0178_RestrictsSelfHostRunner(t *testing.T) {
 	if n := pgScalar[int](t, pool, q); n != 1 {
 		t.Errorf("capability_restrictions holds %d feature/self_host_runner rows after the migration, want 1", n)
 	}
-	if n := pgScalar[int](t, pool, `SELECT count(*)::int FROM capability_restrictions`); n != 2 {
-		t.Errorf("capability_restrictions holds %d rows, want service_attach and self_host_runner only", n)
+	// Migrate runs to the newest migration, so the rows later migrations seed are there too: 0239's inbound.
+	if n := pgScalar[int](t, pool, `SELECT count(*)::int FROM capability_restrictions WHERE NOT (capability = 'feature' AND value = 'inbound')`); n != 2 {
+		t.Errorf("capability_restrictions holds %d rows besides 0239's inbound, want service_attach and self_host_runner only", n)
 	}
 }
 

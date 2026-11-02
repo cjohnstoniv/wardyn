@@ -37,7 +37,10 @@ func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, s
 	var out []placement.CredentialIntent
 	var lanes providerDispatch // the local model lanes' route-gate settings, as dispatch authors them
 	providerLane := func(choice runProviderChoice, agent string) *runRefusal {
-		intents, ok := s.localProviderIntent(r, owner, choice.provider)
+		intents, ok, err := s.localProviderIntent(r, owner, choice.provider)
+		if err != nil {
+			return ownershipUnreadable()
+		}
 		if !ok {
 			return runError(placement.ReasonPlacementCredential.Status(), string(placement.ReasonPlacementCredential), "model_provider: unclassified credential kind")
 		}
@@ -81,7 +84,11 @@ func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, s
 	// the exact hosts dispatch hands planArtifactRedirect. None when it is off.
 	lane, on := resolveADOEntraRun(sc, spec.WorkspaceRepos, req.Repo, adoLaneOwnerOf(r))
 	if on {
-		out = append(out, placement.CredentialIntent{Field: "ProxyConfig.ADOGrant[" + lane.rowID + "]", Origin: s.localADOOrigin(r.Context(), lane.owner, lane)})
+		origin, err := s.localADOOrigin(r.Context(), lane.owner, lane)
+		if err != nil {
+			return nil, nil, nil, ownershipUnreadable()
+		}
+		out = append(out, placement.CredentialIntent{Field: "ProxyConfig.ADOGrant[" + lane.rowID + "]", Origin: origin})
 	}
 	out = append(out, s.localRedirectIntents(r, spec, sc, resolvedLaneHosts(lane, on))...)
 	return out, upstreams, lanes.localModels, nil
@@ -90,11 +97,12 @@ func (s *Server) localCredentialIntents(r *http.Request, req createRunRequest, s
 // localProviderIntent is every credential the chosen provider's dispatch arm
 // places in a spec: its proxy-side credential, and for bedrock_sso with
 // proxy-inject off the real token cache applyBedrockTransport puts in
-// SecretEnv, so create refuses what dispatch would refuse after Launch.
-func (s *Server) localProviderIntent(r *http.Request, owner string, p types.ModelProvider) ([]placement.CredentialIntent, bool) {
+// SecretEnv, so create refuses what dispatch would refuse after Launch. Its
+// error is a store fault during the ownership proof (errSecretStoreUnavailable).
+func (s *Server) localProviderIntent(r *http.Request, owner string, p types.ModelProvider) ([]placement.CredentialIntent, bool, error) {
 	part, field := providerKeyPart, "ProxyConfig.Injection[model_provider:"+p.ID+"]"
 	if providerTakesNoCredential(p) {
-		return nil, true // places no credential; its LLMUpstreams entry is what a local runner refuses
+		return nil, true, nil // places no credential; its LLMUpstreams entry is what a local runner refuses
 	}
 	switch p.Kind {
 	case types.ModelProviderAnthropicAPIKey, types.ModelProviderOpenAIAPIKey, types.ModelProviderCustomEndpoint, types.ModelProviderBedrockBearer,
@@ -107,14 +115,20 @@ func (s *Server) localProviderIntent(r *http.Request, owner string, p types.Mode
 		part = providerEntraPart
 		field = "ProxyConfig.AzureGates[model_provider:" + p.ID + "]"
 	default:
-		return nil, false
+		return nil, false, nil
 	}
-	own := owner != "" && p.UID != "" && s.ownsSecretMemoized(r.Context(), owner, providerSecretName(p.UID, part))
+	own := false
+	if p.UID != "" {
+		var err error
+		if own, err = s.ownsSecretChecked(r.Context(), owner, providerSecretName(p.UID, part)); err != nil {
+			return nil, true, err
+		}
+	}
 	out := []placement.CredentialIntent{{Field: field, Origin: placement.CredentialOrigin{Class: placement.ClassOwn, Stored: true, OwnNamespace: own, OwnerOnly: own}}}
 	if p.Kind == types.ModelProviderBedrockSSO && !s.cfg.AWSSSOProxyInject {
 		out = append(out, placement.CredentialIntent{Field: bedrockSSOSecretEnvField, Origin: bedrockSSOSecretEnvOrigin(own)})
 	}
-	return out, true
+	return out, true, nil
 }
 
 // bedrockSSOSecretEnvField is the spec path of a captured AWS SSO token cache
@@ -157,11 +171,15 @@ func (s *Server) localRedirectIntents(r *http.Request, spec types.RunPolicySpec,
 // localADOOrigin is the one origin of an Azure DevOps lane, at admission and at
 // dispatch: own only for the owner's own PAT proven in their namespace; every
 // other token mode is minted by the organisation. Only a minted_pat connection's
-// opt-in counts toward runner_resident: a bearer token keeps refusing.
-func (s *Server) localADOOrigin(ctx context.Context, owner string, a adoEntraRun) placement.CredentialOrigin {
+// opt-in counts toward runner_resident: a bearer token keeps refusing. Its error
+// is a store fault during the own-PAT proof (errSecretStoreUnavailable).
+func (s *Server) localADOOrigin(ctx context.Context, owner string, a adoEntraRun) (placement.CredentialOrigin, error) {
 	if a.tokenMode != types.ADOTokenModeOwnPAT || owner == "" || a.owner != owner || !adoEntraValidRowID(a.rowID) {
-		return placement.CredentialOrigin{Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT, ResidentOptIn: a.residentOptIn && a.tokenMode == types.ADOTokenModeMintedPAT}
+		return placement.CredentialOrigin{Class: placement.ClassBrokered, Delivery: placement.ClassADOMintedPAT, ResidentOptIn: a.residentOptIn && a.tokenMode == types.ADOTokenModeMintedPAT}, nil
 	}
-	own := s.ownsSecretMemoized(ctx, owner, adoOwnPATSecretName(a.rowID))
-	return placement.CredentialOrigin{Class: placement.ClassOwn, Stored: true, OwnNamespace: own, OwnerOnly: own}
+	own, err := s.ownsSecretChecked(ctx, owner, adoOwnPATSecretName(a.rowID))
+	if err != nil {
+		return placement.CredentialOrigin{}, err
+	}
+	return placement.CredentialOrigin{Class: placement.ClassOwn, Stored: true, OwnNamespace: own, OwnerOnly: own}, nil
 }

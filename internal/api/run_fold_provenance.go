@@ -96,6 +96,9 @@ func specEntries(sp types.RunPolicySpec) []specEntry {
 	sets := policyFieldSets(sp)
 	var out []specEntry
 	for _, field := range policyFieldOrder {
+		if field == fieldDesktop {
+			continue // the explainer's alone: the fold has no desktop rows, and the defaults would add two to every run
+		}
 		for _, v := range sets[field] {
 			if e := (specEntry{field, v}); !slices.Contains(out, e) {
 				out = append(out, e)

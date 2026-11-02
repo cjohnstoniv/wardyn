@@ -34,6 +34,8 @@ A knob the boundary does not name is left as the layers below set it. `contact` 
 - The run's policy record names the layer `boundary` for each knob the boundary decided.
 - At dispatch and revive the final seal meets the run's assembled egress with the boundary again, after every host a launch adds (workspace, clone, component, model and source-control hosts). A host outside its allowlist is cut and its denies are added. If the boundary cannot be read there, the run is sealed to no egress and no desktop direction.
 - The seal keeps an explicit `allow_all_egress: false` on its own: with no `allowed_domains` it turns allow-all off and keeps the run's own allowlist, so a paused run that allowed all egress is revived closed.
+- A person's own walls ([Your walls](../POLICIES.md#your-walls)) are met into the run one step before the boundary's, so the boundary has the last word. The policy record names the layer `personal` for what they decided.
+- The final seal keeps the run owner's denies, blocked desktop directions and withheld credentials beside the boundary's, never their site list. The run's `run.ceiling.reassert` row carries `personal_walls: true` when they acted.
 - In `hard_limits` no one can approve an egress request for a host the boundary denies or does not allow. The refusal is `403 boundary_host`.
 
 ## Credentials withheld

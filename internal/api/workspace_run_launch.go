@@ -184,9 +184,12 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 		Agent: stepRunAgent, Task: task,
 		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
 		RunnerTarget: s.cfg.RunnerTarget, OperatorOwned: operatorOwned, HumanAuthor: requestSponsor(ctx, actor),
-		// No pool places a run Wardyn launches itself: it goes to the deployment's remote-hosted substrate
-		// (createSandboxAtTarget), so the row says so rather than reading as "not recorded".
-		Placement: types.PlacementRemote,
+	}
+	// No pool places a run Wardyn launches itself: it goes to the deployment's remote-hosted substrate
+	// (createSandboxAtTarget). Where pools place runs, the row says so rather than reading as "not
+	// recorded"; where they do not, it is left empty, as every unpooled run is (#3812).
+	if s.poolsPlaceRuns() {
+		run.Placement = types.PlacementRemote
 	}
 	s.captureRunLimits(&run, gov.ceiling, nil)
 	if set != nil {
@@ -689,9 +692,16 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 
 	// Record in the built devcontainer image so the task actually runs (its
 	// toolchain isn't in the convention agent image) — same lane as verify.
-	image, ierr := s.workspaceRunImage(ctx, runID, ws)
+	image, arches, ierr := s.workspaceRunImage(ctx, runID, ws)
 	if ierr != nil {
 		return types.AgentRun{}, false, abort(ierr)
+	}
+	// A prewrapped image's checked architectures go on the run before dispatch, which places it by them.
+	if arches != nil {
+		if err := s.cfg.Store.SetRunImageArches(ctx, runID, arches); err != nil {
+			return types.AgentRun{}, false, abort(fmt.Errorf("record the prewrapped image's architectures: %w", err))
+		}
+		created.ImageArches = arches
 	}
 
 	// The chosen model provider's host joins at dispatch, like any run's; it is

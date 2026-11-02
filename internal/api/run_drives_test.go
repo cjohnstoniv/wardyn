@@ -245,7 +245,7 @@ func TestStepDriveEligibility_PersonsOwnRunner(t *testing.T) {
 	drive := runDrive{resolved: types.ResolvedDrive{Drive: ds.team.Drive}, target: runner.DrivesRoot + "/team-data"}
 	for kind, want := range map[types.Placement]bool{types.PlacementLocal: false, types.PlacementRemote: true} {
 		w := httptest.NewRecorder()
-		f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), drives: []runDrive{drive},
+		f := &runFold{w: w, req: &createRunRequest{}, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), drives: []runDrive{drive},
 			place: runPlacement{pooled: true, placement: kind, row: types.RunnerPool{Scope: types.RunnerPoolUser}}}
 		if got := (&Server{}).stepDriveEligibility(f, &foldRecorder{}); got != want {
 			t.Fatalf("%s: step = %v, want %v (%s)", kind, got, want, w.Body)
@@ -451,6 +451,58 @@ func TestStepDrive_K8sShareBesideManagedAtEveryDoor(t *testing.T) {
 	}
 }
 
+// TestKeptDriveMixRefusal_CountsTheProspectiveWorkFolder: keep_work_folder's
+// managed drive is added only at dispatch, so the mix check counts it up front:
+// a Kubernetes share beside it is refused with drive_share_beside_managed,
+// while a managed drive beside it, or a Docker kept drive, is accepted (#3400).
+func TestKeptDriveMixRefusal_CountsTheProspectiveWorkFolder(t *testing.T) {
+	share := winnerOf("Cluster Share", types.DriveBackendK8sPVCStatic, types.CapabilitySubjectAll, "", true)
+	managed := winnerOf("Cluster Home", types.DriveBackendK8sPVC, types.CapabilitySubjectUser, "sub-drive-bob", true)
+	attached := func(w store.UserDriveWinner) []runDrive {
+		return []runDrive{{resolved: types.ResolvedDrive{Drive: w.Drive}, target: runner.DrivesRoot + "/x"}}
+	}
+	k8sKept := types.UserDrive{Backend: types.DriveBackendK8sPVC, SizeMiB: 1024}
+	ref := keptDriveMixRefusal(attached(share), k8sKept)
+	if ref == nil || ref.status != http.StatusUnprocessableEntity || ref.body.Reason != reasonDriveShareBesideManaged ||
+		ref.body.Error != driveShareBesideManagedMsg("Cluster Share", "the kept work folder") {
+		t.Fatalf("a share beside the kept work folder = %+v, want 422 %s", ref, reasonDriveShareBesideManaged)
+	}
+	for name, tc := range map[string]struct {
+		drives []runDrive
+		kept   types.UserDrive
+	}{
+		"managed beside the kept folder": {attached(managed), k8sKept},
+		"the kept folder alone":          {nil, k8sKept},
+		"a Docker kept folder":           {attached(share), types.UserDrive{Backend: types.DriveBackendDockerVolume}},
+	} {
+		if ref := keptDriveMixRefusal(tc.drives, tc.kept); ref != nil {
+			t.Errorf("%s: refused %+v, want accepted", name, ref)
+		}
+	}
+}
+
+// TestStepDrive_K8sShareBesideKeptWorkFolderAtThePreview: keep_work_folder
+// with a Kubernetes share attached is refused at the door through the common
+// mix check, the kept work folder counted before dispatch makes it (#3400).
+func TestStepDrive_K8sShareBesideKeptWorkFolderAtThePreview(t *testing.T) {
+	share := winnerOf("Cluster Share", types.DriveBackendK8sPVCStatic, types.CapabilitySubjectAll, "", true)
+	st := newMemberDriveStore()
+	st.site = keepSite(true, true, 3, 1024)
+	st.winners[aliceSub] = []store.UserDriveWinner{share}
+	srv, _ := memberDriveServer(st, &keepRunner{}, "k8s")
+	req := drivesRequest(share.Drive.ID.String())
+	req.KeepWorkFolder = true
+	w := httptest.NewRecorder()
+	f := &runFold{mode: foldPreview, w: w, req: &req, r: keepRequest(personCtx(aliceSub))}
+	if srv.stepDrive(f, &foldRecorder{}) {
+		t.Fatal("a share beside the kept work folder passed")
+	}
+	want := driveShareBesideManagedMsg("Cluster Share", "the kept work folder")
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), reasonDriveShareBesideManaged) || !strings.Contains(w.Body.String(), want) {
+		t.Errorf("%d %s, want 422 %s %q", w.Code, w.Body, reasonDriveShareBesideManaged, want)
+	}
+}
+
 // TestDriveDenialsAreAudited: drive_not_found, drive_target_conflict and
 // drive_not_in_pool each leave an authz.denied row; another person's drive and
 // an id that names nothing leave the same row.
@@ -484,7 +536,7 @@ func TestDriveDenialsAreAudited(t *testing.T) {
 
 	audit.events = nil
 	w := httptest.NewRecorder()
-	f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx),
+	f := &runFold{w: w, req: &createRunRequest{}, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx),
 		drives: []runDrive{{resolved: types.ResolvedDrive{Drive: ds.share.Drive}}},
 		place:  runPlacement{pooled: true, placement: types.PlacementLocal, row: types.RunnerPool{Scope: types.RunnerPoolUser}}}
 	if srv.stepDriveEligibility(f, &foldRecorder{}) || len(audit.events) != 1 || !strings.Contains(string(audit.events[0].Data), string(authz.ReasonDriveNotInPool)) {

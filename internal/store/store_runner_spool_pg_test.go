@@ -15,11 +15,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -337,5 +339,77 @@ func TestPG_RunnerSpoolDenyCarriesTheRefusal(t *testing.T) {
 	}
 	if by != "outside" || reason != "connection_reset" {
 		t.Fatalf("spooled deny data by=%q refusal_reason=%q", by, reason)
+	}
+}
+
+// A transient failure of the runners-row read is an error the replay survives, not a refusal: a refusal is
+// acknowledged and moves the run's cursor past the record, which would lose the original decision for good.
+// The fault is real: another transaction holds the runner row, so runnerSpoolRun's FOR SHARE meets lock_timeout.
+func TestPG_RunnerSpoolTransientRunnerReadIsNotARefusal(t *testing.T) {
+	pool, st, rn, run, row := spoolPGFixture(t)
+	ctx := context.Background()
+	restore := db.AuditChainLockTimeout
+	db.AuditChainLockTimeout = 400 * time.Millisecond
+	t.Cleanup(func() { db.AuditChainLockTimeout = restore })
+
+	// The holder has its own connection, so the ingest below takes no second one from a goroutine already
+	// holding one.
+	conn, err := pgx.Connect(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx) //nolint:errcheck // test teardown
+	holder, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(ctx) //nolint:errcheck // a second rollback after the release below is harmless
+	if _, err := holder.Exec(ctx, `SELECT 1 FROM runners WHERE id=$1 FOR UPDATE`, rn.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.IngestRunnerDecision(ctx, rn.ID, row, prepareSpoolTest)
+	if err == nil || errors.Is(err, store.ErrRunnerSpoolRefused) || sqlStateOf(err) != "55P03" {
+		t.Fatalf("a transient runner-row read failure must surface as itself, not a refusal: %v (sqlstate %q)", err, sqlStateOf(err))
+	}
+	var refusals int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE action='runner.event.refuse' AND actor=$1`, "runner:"+rn.ID.String()).Scan(&refusals); err != nil {
+		t.Fatal(err)
+	}
+	if c, a := spoolCounts(t, pool, run.ID); refusals != 0 || c != 0 || a != 0 {
+		t.Fatalf("the failed attempt left %d refusal/%d cursor/%d audit", refusals, c, a)
+	}
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if ok, err := st.IngestRunnerDecision(ctx, rn.ID, row, prepareSpoolTest); err != nil || !ok {
+		t.Fatalf("retry ingested=%v: %v", ok, err)
+	}
+	if ok, err := st.IngestRunnerDecision(ctx, rn.ID, row, prepareSpoolTest); err != nil || ok {
+		t.Fatalf("second replay ingested=%v: %v", ok, err)
+	}
+	if c, a := spoolCounts(t, pool, run.ID); c != 1 || a != 1 {
+		t.Fatalf("the original decision was not ingested exactly once: %d cursor/%d audit", c, a)
+	}
+
+	// Controls: a missing, an unclaimed and a revoked runner stay permanent refusals.
+	unclaimed, err := st.CreateRunner(ctx, newRunner(rn.Owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoked, err := st.CreateRunner(ctx, newRunner(rn.Owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revoked, err = st.ClaimRunner(ctx, revoked.ID, revoked.Owner, revoked.KeyFingerprint, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RevokeRunner(ctx, revoked.ID, time.Now(), "security-admin", ""); err != nil {
+		t.Fatal(err)
+	}
+	for name, id := range map[string]uuid.UUID{"unknown": uuid.New(), "unclaimed": unclaimed.ID, "revoked": revoked.ID} {
+		if _, err := st.IngestRunnerDecision(ctx, id, row, prepareSpoolTest); !errors.Is(err, store.ErrRunnerSpoolRefused) {
+			t.Fatalf("%s runner not refused: %v", name, err)
+		}
 	}
 }

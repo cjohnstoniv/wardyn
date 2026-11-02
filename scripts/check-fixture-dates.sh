@@ -59,10 +59,12 @@ declare -A ALLOWLIST=(
   ["internal/api/uigateway_record_test.go"]=1 # injected clock only: srv.cfg.Now starts here and steps a second per call, never compared to the wall clock
   ["internal/recording/rfb_test.go"]=4 # injected clock only: the recorder's clock starts here and the test advances it, never compared to the wall clock
   ["cmd/wardyn-runnerd/doctor_status_test.go"]=2 # passthrough only: status.json's last-error time, echoed in the stage detail, never compared to the clock
-  ["ui/src/app/components/screens/approvals-lists.test.tsx"]=2 # display only: a decided row's requested and decided times
+  ["ui/src/app/components/screens/run-detail/service-panel.test.tsx"]=2 # injected clock only: the panel is rendered at a fixed now and a lease end, both passed in, never compared to the wall clock
+  ["ui/src/app/components/wardyn/copy/run-service.test.ts"]=5 # injected clock only: agoText and serviceBadge read a fixed now passed in, never the wall clock
+  ["ui/src/app/components/screens/approvals-lists.test.tsx"]=4 # display only: two decided rows' requested and decided times
   ["ui/src/app/components/screens/permissions.test.tsx"]=1 # display only: a deactivated person's deactivated_at
   ["ui/e2e/recording-level.spec.ts"]=4 # passthrough only: stubbed audit rows and a recording's started_at, rendered as given, never compared to the clock
-  ["ui/src/app/components/screens/run-detail/recording-tab.level.test.tsx"]=21 # passthrough only: audit rows' time, a gap's start/end and a playback's started_at, never compared to the clock
+  ["ui/src/app/components/screens/run-detail/recording-tab.level.test.tsx"]=24 # passthrough only: audit rows' time, a gap's start/end, a playback's started_at (also in the failed action-feed case) and the stopped-at time read from it, never compared to the clock
   ["cmd/wardyn-aws-sso/main_test.go"]=2
   ["cmd/wardyn/commands_test.go"]=6
   ["cmd/wardyn/runner_limits_test.go"]=2 # display only: runner list prints LastSeenAt as given, never compared to the clock
@@ -155,6 +157,9 @@ declare -A ALLOWLIST=(
   # New Run Launched: the wait/elapsed words are computed from a fixed reference instant passed in as now;
   # nothing reads the real clock.
   ["ui/src/app/components/screens/new-run-flow/launch/launched-model.test.ts"]=1
+  # The Azure DevOps expiring-days test pins the fake clock to one fixed instant, so it never reads the
+  # real date.
+  ["ui/src/app/components/screens/settings/ado-pat-panel.test.tsx"]=1
   # Invitations and service identities: a fixed instant that is wire passthrough (CLI table rows, the account
   # lists) or the frozen clock the token dialog and the copy formatters are tested against; nothing reads the real clock.
   ["cmd/wardyn/service_identity_test.go"]=1
@@ -212,13 +217,27 @@ declare -A ALLOWLIST=(
   ["ui/src/app/lib/schedule.test.ts"]=32
   # 0.10 W4f: SESS-M12's signedInUntil tests pass a fixed instant in as the clock (now) and compare only to it.
   ["ui/src/app/lib/session-continuity-copy.test.ts"]=3 # injected clock only: signedInUntil(at, now), never compared to the wall clock
+  # 0.10 MAC26: a sample AppKit stderr line whose timestamp is log text the prepare.log readers skip, never a time.
+  ["cmd/wardyn-runnerd/macos_vm_status_test.go"]=1
   # 0.10 DESK-PLAYER: a recorded desktop's started_at and the chain check's from bound, fixed instants the replay and
   # the range read only echo or offset from; audit rows' time is passthrough (partitions key on recorded_at). None is
   # compared to the wall clock.
-  ["internal/api/recording_chain_test.go"]=5
+  ["internal/api/recording_chain_test.go"]=8
   ["internal/store/auditchain_range_pg_test.go"]=1
   ["ui/e2e/desktop-replay.spec.ts"]=1
   ["ui/src/app/lib/desktop-replay-timeline.test.ts"]=1
+  # A macOS base's created_at and edited_at: the age and edit tests pass a fixed instant in as the clock (statusNow,
+  # Now, macOSBaseLimit.Now) and compare only to it; the runnerwire tests only encode and decode them.
+  ["cmd/wardyn-runnerd/macos_vm_age_test.go"]=9
+  ["cmd/wardyn-runnerd/macos_vm_edit_test.go"]=1
+  ["internal/api/run_macos_vm_age_test.go"]=1
+  ["internal/macvm/edit_test.go"]=1
+  ["internal/runnerwire/macvm_base_age_test.go"]=2
+  # A derived base's created_at: echoed from its manifest to the caps, and a pool's oldest copy picked among
+  # literals; the picked-base age test passes a fixed now in as the clock.
+  ["cmd/wardyn-runnerd/macos_vm_bases_test.go"]=2
+  ["internal/api/run_macos_base_test.go"]=4
+  ["internal/runnerwire/macvm_edit_test.go"]=2
 )
 
 fail=0

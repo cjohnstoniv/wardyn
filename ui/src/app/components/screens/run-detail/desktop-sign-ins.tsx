@@ -12,6 +12,9 @@ import { getErrorMessage } from "../../../lib/format";
 import { Button } from "../../ui/button";
 import { DESKTOP } from "../../wardyn/copy/desktop";
 
+// Where a sign-in lives and when it is gone, by store; a desktop that keeps none says so instead.
+const SIGN_INS_NOTE: Partial<Record<DesktopSignInsView["store"], string>> = { memory: DESKTOP.signInsNote, run_disk: DESKTOP.signInsNoteRunDisk };
+
 export interface DesktopSignIns {
   view: DesktopSignInsView | null;
   busy: boolean;
@@ -46,7 +49,7 @@ export function useDesktopSignIns(runId: string, enabled: boolean): DesktopSignI
  *  or the admin set Not allowed (the server refuses the pause there too). */
 export function DesktopSignInButton({ s }: { s: DesktopSignIns }) {
   const v = s.view;
-  if (!v || v.store !== "memory" || (!v.paused && !v.can_pause)) return null;
+  if (!v || (v.store !== "memory" && v.store !== "run_disk") || (!v.paused && !v.can_pause)) return null;
   return (
     <Button size="sm" variant="outline" disabled={s.busy} onClick={s.toggle}>
       {v.paused ? DESKTOP.resume : DESKTOP.pauseToSignIn}
@@ -76,7 +79,7 @@ export function DesktopSignInsNote({ s }: { s: DesktopSignIns }) {
           {s.error}
         </p>
       )}
-      <p className="mt-2 text-meta leading-relaxed text-foreground">{v.store === "memory" ? DESKTOP.signInsNote : DESKTOP.signInsOff(v.agent)}</p>
+      <p className="mt-2 text-meta leading-relaxed text-foreground">{SIGN_INS_NOTE[v.store] ?? DESKTOP.signInsOff(v.agent)}</p>
     </>
   );
 }

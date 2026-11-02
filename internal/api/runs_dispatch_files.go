@@ -50,21 +50,22 @@ import (
 // namespace its origin was proved in (readResidentValue: audited, masked with
 // both renderings, no owner fallback), and its file's Content is the grant's
 // placeholder, which the runner fills from its keystore at create. Its value
-// is returned in resident, for deliverResident and nothing else.
+// is returned in resident, for deliverResident and nothing else. by[i] is
+// the grant that delivered files[i], for placeFileSecrets.
 //
 // dispatchRun reaches it through completeMaskManifestWithFileSecrets.
 func (s *Server) resolveFileSecretGrants(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec) ([]runner.ManagedFile, bool) {
-	files, _, ok := s.resolveFileSecretValues(ctx, run, policy, nil)
+	files, _, _, ok := s.resolveFileSecretValues(ctx, run, policy, nil)
 	return files, ok
 }
 
 func (s *Server) resolveFileSecretValues(ctx context.Context, run types.AgentRun, policy types.RunPolicySpec,
-	rows []types.CredentialGrant) (files []runner.ManagedFile, resident []residentValue, ok bool) {
+	rows []types.CredentialGrant) (files []runner.ManagedFile, by []types.GrantSpec, resident []residentValue, ok bool) {
 	if !slices.ContainsFunc(policy.EligibleGrants, func(g types.GrantSpec) bool { return g.Kind == types.GrantFileSecret }) {
-		return nil, nil, true
+		return nil, nil, nil, true
 	}
 	if !s.fileSecretRunnerDelivers(ctx, run) {
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 	delivered := map[string]bool{}
 	for _, g := range policy.EligibleGrants {
@@ -98,6 +99,7 @@ func (s *Server) resolveFileSecretValues(ctx context.Context, run types.AgentRun
 					Path: runner.ComponentSecretDir + "/" + file, Mode: runner.ComponentSecretFileMode, AgentOwned: true, WipeAfterRead: true,
 					Content: []byte(placement.ResidentPlaceholder(row.ID)),
 				})
+				by = append(by, g)
 				resident = append(resident, v)
 			}
 		}
@@ -118,6 +120,7 @@ func (s *Server) resolveFileSecretValues(ctx context.Context, run types.AgentRun
 				files = append(files, runner.ManagedFile{
 					Path: runner.ComponentSecretDir + "/" + file, Mode: runner.ComponentSecretFileMode, AgentOwned: true, WipeAfterRead: true, Content: val,
 				})
+				by = append(by, g)
 			}
 		}
 		data := map[string]any{"file": file, "secret_name": secretName}
@@ -134,7 +137,7 @@ func (s *Server) resolveFileSecretValues(ctx context.Context, run types.AgentRun
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.file_secret.resolve",
 			run.ID.String(), outcome, mustJSON(data)))
 	}
-	return files, resident, true
+	return files, by, resident, true
 }
 
 // completeMaskManifestWithFileSecrets is the file lane's place in dispatchRun:
@@ -149,13 +152,13 @@ func (s *Server) completeMaskManifestWithFileSecrets(ctx context.Context, run ty
 	if !s.authorResidentMints(ctx, run, rows, patBroker, spec, resident) {
 		return false
 	}
-	files, values, ok := s.resolveFileSecretValues(ctx, run, policy, rows)
+	files, by, values, ok := s.resolveFileSecretValues(ctx, run, policy, rows)
 	if !ok {
 		return false
 	}
 	*resident = append(*resident, s.placeResidentFileSecrets(ctx, run, files, spec, values)...)
 	if s.cfg.FileSecretPlaceholders {
-		s.placeFileSecrets(ctx, run, policy, rows, files, spec)
+		s.placeFileSecrets(ctx, run, by, rows, files, spec)
 	}
 	spec.ManagedFiles = append(spec.ManagedFiles, files...)
 	return s.completeMaskManifest(ctx, run)

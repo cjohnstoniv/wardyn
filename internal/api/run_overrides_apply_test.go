@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -434,10 +436,130 @@ func TestRunEgressOverrides_StoredBaseClampedPastTheCeilingAppliedWithin(t *test
 		t.Errorf("applied edits are not the person's: %+v", rows)
 	}
 
-	for _, bad := range []string{`{"first_use_approval":"sometimes"}`, `{"allow_all_egress":false}`} {
-		w := doSSO(t, srv, http.MethodPost, previewDoor, ovCookie(t), `{"agent":"claude-code","task":"t","overrides":{"egress":`+bad+`}}`)
-		if w.Code != http.StatusBadRequest || errorReason(w) != reasonOverrideInvalid {
-			t.Errorf("%s = %d %s, want 400 %s", bad, w.Code, w.Body.String(), reasonOverrideInvalid)
+	bad := `{"first_use_approval":"sometimes"}`
+	w := doSSO(t, srv, http.MethodPost, previewDoor, ovCookie(t), `{"agent":"claude-code","task":"t","overrides":{"egress":`+bad+`}}`)
+	if w.Code != http.StatusBadRequest || errorReason(w) != reasonOverrideInvalid {
+		t.Errorf("%s = %d %s, want 400 %s", bad, w.Code, w.Body.String(), reasonOverrideInvalid)
+	}
+}
+
+// allow_all_egress false turns open egress off for the run on any base: the list
+// is the base's plus what the person added, the stored policy stays the base, and
+// the provenance records the narrowing. A base that is already closed is a no-op.
+func TestRunEgressOverrides_FalseClosesAnOpenBase(t *testing.T) {
+	srv, st := ovMemberFixture(t)
+	st.capStore.govProfile, st.capStore.govHasGroupTier = nil, false // unassigned: the row is not clamped as a whole
+	ceiling := govDeployment()
+	ceiling.AllowAllEgress = true
+	srv.cfg.DefaultPolicy = ceiling
+	open, closed := uuid.New(), uuid.New()
+	st.policies[open] = types.RunPolicy{ID: open, Name: "open", Spec: types.RunPolicySpec{
+		MinConfinementClass: types.CC1, AllowedDomains: []string{"api.anthropic.com"}, AllowAllEgress: true, FirstUseApproval: types.FirstUseAlwaysDeny}}
+	st.policies[closed] = types.RunPolicy{ID: closed, Name: "closed", Spec: types.RunPolicySpec{
+		MinConfinementClass: types.CC1, AllowedDomains: []string{"api.anthropic.com"}, FirstUseApproval: types.FirstUseAlwaysDeny}}
+	preview := func(id uuid.UUID, overrides string) policyPreviewResponse {
+		t.Helper()
+		body := `{"agent":"claude-code","task":"t","policy_id":"` + id.String() + `","overrides":` + overrides + `}`
+		w := doSSO(t, srv, http.MethodPost, previewDoor, ovCookie(t), body)
+		var pv policyPreviewResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &pv); err != nil || w.Code != http.StatusOK {
+			t.Fatalf("%d %v: %s", w.Code, err, w.Body.String())
+		}
+		return pv
+	}
+	person := provSource{Kind: provKindPerson}
+	off := `{"egress":{"allow_all_egress":false},"hosts":{"add_allowed":["pypi.org"]}}`
+
+	pv := preview(open, off)
+	if pv.Spec.AllowAllEgress {
+		t.Errorf("allow_all_egress false left open egress on: %+v", pv.Spec)
+	}
+	if !slices.Contains(pv.Spec.AllowedDomains, "api.anthropic.com") || !slices.Contains(pv.Spec.AllowedDomains, "pypi.org") {
+		t.Errorf("allowed = %v, want the base's hosts and the added one", pv.Spec.AllowedDomains)
+	}
+	if !provHas(pv.Provenance, "allow_all_egress", "false", person, provEffectNarrowed) {
+		t.Errorf("the narrowing is not the person's: %+v", pv.Provenance)
+	}
+	if pv.Source.PolicyID == nil || *pv.Source.PolicyID != open {
+		t.Errorf("source = %+v, want the stored base %s", pv.Source, open)
+	}
+
+	pv = preview(closed, off)
+	if pv.Spec.AllowAllEgress || provHas(pv.Provenance, "allow_all_egress", "false", person, provEffectNarrowed) {
+		t.Errorf("a closed base was narrowed again: %+v %+v", pv.Spec, pv.Provenance)
+	}
+}
+
+// Turning open egress off records the false in the diff, and does nothing to a
+// spec that is already closed.
+func TestOverrides_AllowAllEgressFalseIsANarrowing(t *testing.T) {
+	no := false
+	eg := client.RunEgressOverrides{AllowAllEgress: &no}
+	spec := types.RunPolicySpec{AllowedDomains: []string{"a.example"}, AllowAllEgress: true}
+	e := &overrideEdits{}
+	applyRunEgressOverrides(&spec, eg, e)
+	applyRunHostOverrides(&spec, client.RunHostOverrides{AddAllowed: []string{"b.example"}}, e)
+	if spec.AllowAllEgress || !slices.Equal(spec.AllowedDomains, []string{"a.example", "b.example"}) {
+		t.Errorf("spec = %+v, want closed with a.example and b.example", spec)
+	}
+	if e.setAllowAll {
+		t.Error("a narrowing is marked as a widening for the ceiling to bound")
+	}
+	src := policySourceRecord{}
+	e.finish(&src, spec)
+	if src.OverridesDiff == nil || src.OverridesDiff.Egress == nil || src.OverridesDiff.Egress.AllowAllEgress == nil || *src.OverridesDiff.Egress.AllowAllEgress {
+		t.Errorf("diff = %+v, want allow_all_egress false", src.OverridesDiff)
+	}
+
+	e = &overrideEdits{}
+	applyRunEgressOverrides(&spec, eg, e)
+	if len(e.rows) != 0 || e.applied.Egress != nil {
+		t.Errorf("a closed spec recorded an edit: %+v %+v", e.rows, e.applied)
+	}
+}
+
+// ovPresetStore is the overrides fixture's store with one launch preset.
+type ovPresetStore struct {
+	*pvStore
+	preset types.LaunchPreset
+}
+
+func (s *ovPresetStore) GetLaunchPreset(_ context.Context, name string) (types.LaunchPreset, error) {
+	if name != s.preset.Name {
+		return types.LaunchPreset{}, store.ErrNotFound
+	}
+	return s.preset, nil
+}
+
+// allow_all_egress false narrows an open deployment default policy too, both asked for in the
+// request itself and carried by a preset's stored request, which expands into the same door.
+func TestRunEgressOverrides_FalseClosesTheDefaultAndAPresetBase(t *testing.T) {
+	srv, st := ovMemberFixture(t)
+	st.capStore.govProfile, st.capStore.govHasGroupTier = nil, false // unassigned: the deployment default is the base
+	open := govDeployment()
+	open.AllowAllEgress = true
+	srv.cfg.DefaultPolicy = open
+	off := `{"egress":{"allow_all_egress":false}}`
+	srv.cfg.Store = &ovPresetStore{pvStore: st, preset: types.LaunchPreset{Name: "closed-egress", Version: 1,
+		Request: json.RawMessage(`{"agent":"claude-code","overrides":` + off + `}`)}}
+	person := provSource{Kind: provKindPerson}
+	for name, body := range map[string]string{
+		"request": `{"agent":"claude-code","task":"t","overrides":` + off + `}`,
+		"preset":  `{"preset":"closed-egress","task":"t"}`,
+	} {
+		w := doSSO(t, srv, http.MethodPost, previewDoor, ovCookie(t), body)
+		var pv policyPreviewResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &pv); err != nil || w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %v: %s", name, w.Code, err, w.Body.String())
+		}
+		if pv.Spec.AllowAllEgress {
+			t.Errorf("%s: allow_all_egress false left the default's open egress on: %+v", name, pv.Spec)
+		}
+		if !provHas(pv.Provenance, "allow_all_egress", "false", person, provEffectNarrowed) {
+			t.Errorf("%s: the narrowing is not recorded as the person's: %+v", name, pv.Provenance)
+		}
+		if pv.Source.PolicyID != nil {
+			t.Errorf("%s: source = %+v, want the deployment default", name, pv.Source)
 		}
 	}
 }

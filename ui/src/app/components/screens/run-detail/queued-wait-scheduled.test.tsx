@@ -38,7 +38,7 @@ function show(run: RunDetail, status = providerStatus([{ provider: MODEL_PROVIDE
   window.history.pushState({}, "", "/runs/run-1");
   render(
     <WithDoor path="/runs/run-1" principal="bob" operator={false} status={status}>
-      <TerminalPane run={run} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} execMode={false} />
+      <TerminalPane run={run} terminal={false} recording={null} recState="idle" recordingDisabled={false} onGoRecording={vi.fn()} onGoOutput={vi.fn()} execMode={false} />
     </WithDoor>,
   );
 }

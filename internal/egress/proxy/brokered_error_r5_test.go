@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -209,5 +210,31 @@ func TestSharedGatewayDirectRequestIsUninspected(t *testing.T) {
 	if d := lastDecision(t, buf); rec.Code != http.StatusForbidden || d.RuleSource != ruleSourceLLMBlocked || d.Scan == nil ||
 		d.Scan.SkipReason != "uninspected_channel" {
 		t.Errorf("status %d decision %+v", rec.Code, d)
+	}
+}
+
+// A shared gateway host that is also the run's own model endpoint is that
+// endpoint's vendor channel: its bodies are scanned, not refused as
+// uninspected under fail-closed blocking.
+func TestSharedGatewayThatIsTheRunEndpointIsInspected(t *testing.T) {
+	cu := captureUpstream(t, false, "{}")
+	buf := &bytes.Buffer{}
+	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{sharedGatewayHost}}),
+		Resolver: publicResolver{}, Sink: &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Dial: redirectDial(upstreamAddr(cu.srv)),
+		LLMUpstreams: map[string]string{
+			anthropicHost: "https://" + sharedGatewayHost + "/anthropic",
+			openaiHost:    "https://" + sharedGatewayHost + "/openai",
+		},
+		LLMChannelHosts: map[string]string{sharedGatewayHost: anthropicHost}})
+	if ch := p.channelForHost(sharedGatewayHost); ch != contentscan.ChannelAnthropicMessages {
+		t.Fatalf("channelForHost(shared gateway that is the run endpoint) = %q, want %q", ch, contentscan.ChannelAnthropicMessages)
+	}
+	p.scanner = scanEngineFailClosed(t, scanTestSecret)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "http://"+sharedGatewayHost+"/anthropic/v1/messages", strings.NewReader(anthropicMessagesBody("hi"))))
+	// A clean scan records no summary; an uninspected body would record skip_reason uninspected_channel.
+	if d := lastDecision(t, buf); rec.Code != http.StatusOK || !cu.reached || d.Scan != nil {
+		t.Errorf("status %d reached=%v decision %+v, want the scanned clean body forwarded", rec.Code, cu.reached, d)
 	}
 }

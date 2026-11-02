@@ -97,6 +97,10 @@ func serveHTTP(gc net.Conn, name string, rt http.RoundTripper) string {
 			writeStatus(gc, http.StatusNotImplemented, "protocol upgrades over plain HTTP are not carried\n")
 			return ""
 		}
+		if req.Method == http.MethodConnect {
+			writeStatus(gc, http.StatusMethodNotAllowed, "CONNECT is not carried over plain HTTP\n")
+			return ""
+		}
 		resp, err := rt.RoundTrip(forwardRequest(req, name))
 		if err != nil {
 			writeStatus(gc, http.StatusBadGateway, "the relay could not reach the proxy\n")
@@ -125,6 +129,10 @@ func forwardRequest(in *http.Request, name string) *http.Request {
 	for _, h := range hopHeaders {
 		out.Header.Del(h)
 	}
+	// The relay's own headers are for the proxy hop alone; a guest that sends
+	// them is not believed.
+	out.Header.Del(flowHeader)
+	out.Header.Del(stageHeader)
 	// net/http adds its own User-Agent to a request without one; an empty
 	// value keeps the guest's request as it was sent.
 	if _, ok := out.Header["User-Agent"]; !ok {

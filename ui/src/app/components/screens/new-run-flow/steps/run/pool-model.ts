@@ -23,6 +23,13 @@ import { cpuText, lifetimeText, memoryText } from "../../review/format";
 export const usablePools = (list: RunnerPoolList): RunnerPoolCatalogueEntry[] =>
   list.pools.filter((p) => p.reason !== "runner_pool_not_found");
 
+/** The run type the pool list is asked for: the draft's, or the one an unnamed agent run is about to get. */
+export function runTypeOf(intent: RunIntent): RunnerPoolRunType | undefined {
+  if (intent.experience) return intent.experience;
+  if (intent.shape !== "agent_task") return undefined;
+  return intent.workload?.kind === "agent_task" ? "background" : "interactive";
+}
+
 /** The short label after "{name} · " on a disabled option (DS-5 OQ-2). */
 export function reasonLabel(pool: RunnerPoolCatalogueEntry, asked: RunnerPoolRunType | undefined): string {
   switch (pool.reason) {

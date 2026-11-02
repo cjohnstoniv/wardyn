@@ -39,12 +39,15 @@ function walk(dir: string): string[] {
 // A literal handed straight to a builder is what the guard asks for, and a
 // wfetch path is already relative to the API base (core.ts).
 const BUILT = /\b(?:appURL|apiURL|wsURL|wfetch)\(\s*["'`]/g;
+// A field's placeholder is example text a person sees (a service's "/healthz" inside the sandbox), never a URL the
+// console fetches.
+const PLACEHOLDER = /\bplaceholder=["'`][^"'`]*["'`]/g;
 
 /** Lines that are code, not a comment (comments cite routes in prose), with built literals taken out. */
 function codeLines(text: string): [number, string][] {
   return text
     .split("\n")
-    .map((l, i): [number, string] => [i + 1, l.replace(BUILT, "(")])
+    .map((l, i): [number, string] => [i + 1, l.replace(BUILT, "(").replace(PLACEHOLDER, "placeholder=")])
     .filter(([, l]) => !/^\s*(\/\/|\/\*|\*)/.test(l));
 }
 

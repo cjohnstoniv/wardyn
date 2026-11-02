@@ -169,7 +169,7 @@ test.describe("New Run: keep the work folder", () => {
     await expect(option.getByText(NR_FILES.DRIVE_SIZE_NOT_ENFORCED)).toBeVisible();
     await option.getByRole("button", { name: NR_FILES.DRIVE_SIZE_NOT_ENFORCED }).click();
     await expect(page.getByText(NR_FILES.DRIVE_SIZE_NOT_ENFORCED_TIP)).toBeVisible();
-    // Its own Delete drive sits beside the list, as for any drive the person made.
-    await expect(dialog.getByTestId("nr-own-drives").getByRole("button", { name: NR_FILES.DELETE_DRIVE })).toBeVisible();
+    // Its own Delete drive sits on its row, as for any drive the person made.
+    await expect(option.locator("xpath=..").locator("[data-own-delete]")).toBeVisible();
   });
 });

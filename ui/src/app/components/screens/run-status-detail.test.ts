@@ -12,10 +12,16 @@ import {
   isTerminalStatusReason,
   RUN_PENDING_OVERDUE_MS,
   RUN_POLL_SLOW_START_MS,
+  LINUX_VM_BOOT_MS,
+  MACOS_VM_BOOT_MS,
+  RUN_START_OVERDUE_MACOS_MS,
   RUN_START_OVERDUE_MS,
   RUN_START_OVERDUE_SLACK_MS,
   startOverdueMs,
   RUN_STARTUP,
+  RUN_STARTUP_MACOS,
+  MACOS_START,
+  macOSStartOf,
   runStartupView,
   STATUS_REASON_BUILDING,
   type StartupLastStep,
@@ -335,6 +341,32 @@ describe("runStartupView: the plan's table", () => {
     expect(late.hint).toBe(RUN_STARTUP.OVERDUE);
   });
 
+  it("a macOS VM keeps the Linux ratio: no warning just under 15 minutes, the warning just over; Linux stays at 4:30", () => {
+    expect(RUN_START_OVERDUE_MACOS_MS).toBe(15 * MIN);
+    const mac = { machine_kind: "macos_vm" };
+    expect(view(mk({ updatedAgo: RUN_START_OVERDUE_MS + S, ...mac }))!.hint).not.toBe(RUN_STARTUP.OVERDUE);
+    expect(view(mk({ updatedAgo: RUN_START_OVERDUE_MACOS_MS - S, ...mac }))!.hint).not.toBe(RUN_STARTUP.OVERDUE);
+    expect(view(mk({ updatedAgo: RUN_START_OVERDUE_MACOS_MS + S, ...mac }))!.hint).toBe(RUN_STARTUP.OVERDUE);
+    expect(view(mk({ updatedAgo: RUN_START_OVERDUE_MS - S, machine_kind: "linux_vm" }))!.hint).not.toBe(RUN_STARTUP.OVERDUE);
+    expect(view(mk({ updatedAgo: RUN_START_OVERDUE_MS + S, machine_kind: "linux_vm" }))!.hint).toBe(RUN_STARTUP.OVERDUE);
+  });
+
+  it("a macOS phase row goes overdue on the macOS bound: a stalled start shows the advice, a fresh or failed one does not", () => {
+    const run = (updatedAgo: number) => mk({ updatedAgo, machine_kind: "macos_vm" });
+    const connecting = (updatedAgo: number) => runStartupView(run(updatedAgo), T0, { lastStep: "terminal", sawBuilding: false, macOS: { phase: "connect" } })!;
+    const stalled = connecting(RUN_START_OVERDUE_MACOS_MS + S);
+    expect(stalled.hint).toBe(RUN_STARTUP.OVERDUE);
+    expect(marks(stalled)[2]).toBe(`${RUN_STARTUP_MACOS.STEP_CONNECT}=pending`);
+    expect(stalled.rows[2].stale).toBe(true);
+    const fresh = connecting(RUN_START_OVERDUE_MS + S);
+    expect(fresh.hint).toBe("");
+    expect(marks(fresh)[2]).toBe(`${RUN_STARTUP_MACOS.STEP_CONNECT}=active`);
+    const failed = runStartupView(run(RUN_START_OVERDUE_MACOS_MS + S), T0, { lastStep: "terminal", sawBuilding: false, macOS: { phase: "connect", failure: "no route" } })!;
+    expect(failed.hint).toBe("");
+    expect(failed.alert).toBe("no route");
+    expect(marks(failed)[2]).toBe(`${RUN_STARTUP_MACOS.STEP_CONNECT_FAILED}=failed`);
+  });
+
   it("overdue in PENDING: 29:59 is live, 30:00 drops the spinner (Building or not)", () => {
     const live = view(mk({ state: "PENDING", createdAgo: 30 * MIN - S, ...BUILDING }))!;
     expect(live.rows[0].mark).toBe("active");
@@ -422,6 +454,16 @@ describe("runStartupView: mirrors of the Go sources", () => {
     expect(RUN_START_OVERDUE_MS).toBe(dur("DefaultSandboxStartTimeout") + RUN_START_OVERDUE_SLACK_MS);
   });
 
+  it("the macOS bound scales the Linux one by the two VM boot timeouts (internal/runner/docker/vm.go, macvm.go)", () => {
+    const boot = (file: string) => {
+      const m = /c\.BootTimeout = (\d+) \* time\.Minute/.exec(go(file));
+      expect(m, file).not.toBeNull();
+      return Number(m![1]) * MIN;
+    };
+    expect(boot("internal/runner/docker/vm.go")).toBe(LINUX_VM_BOOT_MS);
+    expect(boot("internal/runner/docker/macvm.go")).toBe(MACOS_VM_BOOT_MS);
+  });
+
   it("the overdue bound follows /setup/status: start budget + capacity wait + slack", () => {
     expect(startOverdueMs(undefined)).toBe(RUN_START_OVERDUE_MS);
     expect(startOverdueMs({ start_timeout_seconds: 180, capacity_wait_seconds: 900 })).toBe(1_080_000 + RUN_START_OVERDUE_SLACK_MS);
@@ -446,6 +488,37 @@ describe("runStartupView: mirrors of the Go sources", () => {
   it("STATUS_REASON_BUILDING equals Go's statusReasonBuilding", () => {
     expect(goBuilding).not.toBeNull();
     expect(STATUS_REASON_BUILDING).toBe(goBuilding![1]);
+  });
+
+  // Each macOS VM start token, by name and value: runner.MacOS<Name> is MACOS_START's same token.
+  const macGo = go("internal/runner/macos_start.go");
+  it("MACOS_START equals Go's runner.MacOS* start tokens, all of them", () => {
+    const goTokens = Object.fromEntries([...macGo.matchAll(/^\t(MacOS[A-Za-z]+)\s*=\s*"(MacOS[A-Za-z]+)"/gm)].map((m) => [m[1], m[2]]));
+    expect(Object.values(MACOS_START).sort()).toEqual(Object.values(goTokens).sort());
+    for (const v of Object.values(MACOS_START)) expect(goTokens[v]).toBe(v);
+    expect(/MacOSStartComponent\s*=\s*"macos"/.test(macGo)).toBe(true);
+  });
+});
+
+describe("macOS VM start lines", () => {
+  it("macOSStartOf reads each token, and the disk figures off the message", () => {
+    expect(macOSStartOf("macos: MacOSCloning", "MacOSCloning")).toEqual({ phase: "clone" });
+    expect(macOSStartOf("macos: MacOSStarting")).toEqual({ phase: "start" });
+    expect(macOSStartOf("macos: MacOSConnecting")).toEqual({ phase: "connect" });
+    expect(macOSStartOf("macos: MacOSCloneFailed")).toEqual({ phase: "clone", failure: "" });
+    expect(macOSStartOf("macos: MacOSStartFailed")).toEqual({ phase: "start", failure: "" });
+    expect(macOSStartOf("macos: MacOSConnectFailed")).toEqual({ phase: "connect", failure: "" });
+    expect(macOSStartOf("macos: MacOSDiskShort: 85 GB reserved, 40 GB free", "MacOSDiskShort")).toEqual({ phase: "start", failure: RUN_STARTUP_MACOS.DISK_SHORT("85", "40") });
+    expect(macOSStartOf("macos: MacOSDiskShort", "MacOSDiskShort")).toEqual({ phase: "start", failure: "" });
+    expect(macOSStartOf("agent: ContainerCreating")).toBeUndefined();
+  });
+  it("the header and the board say the phase, never the raw token", () => {
+    expect(statusDetailSentence("macos: MacOSStarting", "MacOSStarting")).toBe(RUN_STARTUP_MACOS.STEP_START);
+    expect(statusDetailChip("macos: MacOSConnecting", "MacOSConnecting")).toBe(RUN_STARTUP_MACOS.STEP_CONNECT);
+    expect(statusDetailSentence("macos: MacOSConnectFailed", "MacOSConnectFailed")).toBe(RUN_STARTUP_MACOS.STEP_CONNECT_FAILED);
+    const short = "macos: MacOSDiskShort: 85 GB reserved, 40 GB free";
+    expect(statusDetailSentence(short, "MacOSDiskShort")).toBe(RUN_STARTUP_MACOS.DISK_SHORT("85", "40"));
+    expect(statusDetailChip(short, "MacOSDiskShort")).toBe(RUN_STARTUP_MACOS.STEP_START_FAILED);
   });
 });
 

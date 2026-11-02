@@ -14,7 +14,7 @@ test.describe("Your account: My pools with runners off", () => {
     await asRealMember(page);
     await gotoConsole(page);
     await navToRoute(page, "/account");
-    await expect(page.getByRole("heading", { name: "Your account", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Your settings", level: 1 })).toBeVisible();
     const card = page.getByRole("button", { name: new RegExp(`^${MY_POOLS.TITLE}\\s*${MY_POOLS.SUMMARY_NONE}`) });
     await expect(card).toBeVisible();
     await expect(page.getByRole("button", { name: /^My runner/ })).toHaveCount(0);

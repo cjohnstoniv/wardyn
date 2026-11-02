@@ -5,6 +5,7 @@ package api
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // With WARDYN_AWS_SIGV4_AT_PROXY on, each AWS sign-in lane dispatches a placeholder key pair
@@ -98,6 +100,9 @@ func TestAWSSigV4Hosts(t *testing.T) {
 		{"wildcard", on, []string{"sts.amazonaws.com", "*.s3.us-east-1.amazonaws.com"}, nil},
 		{"another port", on, []string{"s3.us-east-1.amazonaws.com:8443"}, nil},
 		{"private endpoint", on, []string{"vpce-1.bedrock-runtime.us-east-1.vpce.amazonaws.com"}, nil},
+		{"bedrock PrivateLink endpoint", on, []string{"bedrock.us-east-1.amazonaws.com", "vpce-0123456789abcdef0-lj2wisx3.bedrock-runtime.us-east-1.vpce.amazonaws.com"},
+			[]string{"bedrock.us-east-1.amazonaws.com", "vpce-0123456789abcdef0-lj2wisx3.bedrock-runtime.us-east-1.vpce.amazonaws.com"}},
+		{"GovCloud PrivateLink endpoint keeps the lane", on, []string{"bedrock.us-east-1.amazonaws.com", "vpce-0123456789abcdef0.bedrock-runtime.us-gov-west-1.vpce.amazonaws.com"}, nil},
 		{"sts private endpoint", on, []string{"sts.us-east-1.amazonaws.com", "vpce-1a2b-c3d4.sts.us-east-1.vpce.amazonaws.com"}, nil},
 		{"sts dual-stack", on, []string{"sts.us-east-1.api.aws"}, nil},
 		{"sts fips", on, []string{"sts-fips.us-east-1.amazonaws.com"}, []string{"sts-fips.us-east-1.amazonaws.com"}},
@@ -147,5 +152,111 @@ func TestAWSSigV4ConfigFile_ProcessPrintsThePlaceholder(t *testing.T) {
 	if err := json.Unmarshal(out, &got); err != nil || got.Version != 1 ||
 		got.AccessKeyID != proxy.AWSSigV4PlaceholderAccessKeyID || got.SecretAccessKey != proxy.AWSSigV4PlaceholderSecretAccessKey {
 		t.Fatalf("credential_process printed %q (%v)", out, err)
+	}
+}
+
+// With the switch on, setup warns of each AWS sign-in provider whose lane is not re-signed and
+// says why; a re-signed one, a key provider and the switch off say nothing.
+func TestAWSSigV4FallbackChecks(t *testing.T) {
+	public, private, generated, key := brSSOProvider(), brSSOProvider(), brSSOProvider(), brBearerProvider()
+	private.ID, private.Name, private.Bedrock.BaseURL = "bedrock-glued", "Glued endpoint", brBaseURL
+	generated.ID, generated.Bedrock.BaseURL = "bedrock-vpce", "https://vpce-0123456789abcdef0-lj2wisx3.bedrock-runtime.us-west-2.vpce.amazonaws.com"
+	sc := types.SiteConfig{ModelProviders: &types.ModelProviders{Providers: []types.ModelProvider{public, private, generated, key}}}
+	var mp []SetupModelProvider
+	for _, p := range sc.ModelProviders.Providers {
+		mp = append(mp, SetupModelProvider{ID: p.ID, Kind: string(p.Kind)})
+	}
+	s := &Server{cfg: Config{AWSSigV4AtProxy: true, AWSSSOProxyInject: true}}
+	got := s.awsSigV4FallbackChecks(sc, mp)
+	if len(got) != 1 || got[0].ID != "aws_sigv4_fallback:bedrock-glued" || got[0].Status != "warn" ||
+		got[0].Label != "AWS signing at the proxy: Glued endpoint" ||
+		!strings.HasSuffix(got[0].Detail, "the proxy cannot sign for vpce-1.bedrock-runtime.us-west-2.vpce.amazonaws.com.") {
+		t.Fatalf("checks = %+v, want one warn for the glued endpoint naming its host", got)
+	}
+	s.cfg.AWSSSOEndpointOverride = "http://fake:8090"
+	if got := s.awsSigV4FallbackChecks(sc, mp); len(got) != 3 || !strings.HasSuffix(got[0].Detail, "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE is set.") {
+		t.Fatalf("with the test endpoint, checks = %+v, want the three sign-in providers and the reason", got)
+	}
+	s.cfg = Config{AWSSSOProxyInject: true}
+	if got := s.awsSigV4FallbackChecks(sc, mp); len(got) != 0 {
+		t.Fatalf("switch off: checks = %+v, want none", got)
+	}
+}
+
+// Each AWS sign-in lane's audit row says how dispatch set this run up, at the proxy or with role
+// credentials in the sandbox, and why not at the proxy: run.bedrock.configure and run.aws_cli.configure,
+// whose target is the component.
+func TestAWSSigV4LanesAuditTheirSigning(t *testing.T) {
+	for _, lane := range []struct {
+		action, target string
+		dispatch       func(*testing.T, func(*Config)) runner.SandboxSpec
+	}{{"run.bedrock.configure", "", dispatchBedrockSSORun}, {"run.aws_cli.configure", cliAWSID, dispatchAWSCLIRun}} {
+		for _, tc := range []struct {
+			name    string
+			on      bool
+			signing string
+			reason  any
+		}{{"on", true, "proxy", nil}, {"off", false, "sandbox", awsSigV4WhyOff}} {
+			t.Run(lane.action+"/"+tc.name, func(t *testing.T) {
+				rec := &recRecorder{}
+				lane.dispatch(t, func(c *Config) { c.AWSSigV4AtProxy, c.Audit = tc.on, rec })
+				var rows []map[string]any
+				for _, ev := range rec.snapshot() {
+					if ev.Action != lane.action {
+						continue
+					}
+					if lane.target != "" && ev.Target != lane.target {
+						t.Errorf("%s target = %q, want %q", lane.action, ev.Target, lane.target)
+					}
+					var d map[string]any
+					if err := json.Unmarshal(ev.Data, &d); err != nil {
+						t.Fatal(err)
+					}
+					rows = append(rows, d)
+				}
+				if len(rows) != 1 || rows[0]["aws_signing"] != tc.signing || rows[0]["aws_signing_reason"] != tc.reason {
+					t.Fatalf("%s rows = %v, want one with aws_signing %s, reason %v", lane.action, rows, tc.signing, tc.reason)
+				}
+			})
+		}
+	}
+}
+
+// The reason a lane keeps its old path is a code and the host it is about; setup says it in words.
+func TestAWSSigV4LaneReasons(t *testing.T) {
+	on := Config{AWSSigV4AtProxy: true, AWSSSOProxyInject: true}
+	for _, tc := range []struct {
+		cfg   Config
+		hosts []string
+		want  awsSigV4Why
+		text  string
+	}{
+		{on, []string{"sts.amazonaws.com"}, awsSigV4Why{}, ""},
+		{Config{AWSSSOProxyInject: true}, []string{"sts.amazonaws.com"}, awsSigV4Why{Code: awsSigV4WhyOff}, "WARDYN_AWS_SIGV4_AT_PROXY is off"},
+		{Config{AWSSigV4AtProxy: true}, []string{"sts.amazonaws.com"}, awsSigV4Why{Code: awsSigV4WhySSOProxyInjectOff}, "WARDYN_AWS_SSO_PROXY_INJECT is off"},
+		{Config{AWSSigV4AtProxy: true, AWSSSOProxyInject: true, AWSSSOEndpointOverride: "http://fake:8090"}, []string{"sts.amazonaws.com"},
+			awsSigV4Why{Code: awsSigV4WhyEndpointOverride}, "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE is set"},
+		{on, nil, awsSigV4Why{Code: awsSigV4WhyNoAWSHost}, "the lane names no AWS host"},
+		{on, []string{"s3.us-east-1.amazonaws.com:8443"}, awsSigV4Why{Code: awsSigV4WhyPort, Host: "s3.us-east-1.amazonaws.com:8443"},
+			"s3.us-east-1.amazonaws.com:8443 is not on port 443"},
+		{on, []string{"sts.amazonaws.com", "Bedrock.Corp.Example.com"}, awsSigV4Why{Code: awsSigV4WhyUnsignedHost, Host: "bedrock.corp.example.com"},
+			"the proxy cannot sign for bedrock.corp.example.com"},
+	} {
+		s := &Server{cfg: tc.cfg}
+		if _, got := s.awsSigV4Lane(tc.hosts); got != tc.want || got.String() != tc.text {
+			t.Errorf("awsSigV4Lane(%v) = %+v %q, want %+v %q", tc.hosts, got, got.String(), tc.want, tc.text)
+		}
+		data := map[string]any{}
+		awsSigningAudit(data, tc.want)
+		want := map[string]any{"aws_signing": "proxy"}
+		if tc.want.Code != "" {
+			want = map[string]any{"aws_signing": "sandbox", "aws_signing_reason": tc.want.Code}
+			if tc.want.Host != "" {
+				want["aws_signing_host"] = tc.want.Host
+			}
+		}
+		if !maps.Equal(data, want) {
+			t.Errorf("awsSigningAudit(%+v) = %v, want %v", tc.want, data, want)
+		}
 	}
 }

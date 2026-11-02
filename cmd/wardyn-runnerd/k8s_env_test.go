@@ -52,6 +52,9 @@ func TestReadK8sEnv(t *testing.T) {
 		{"unenforced netpol override", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL is set"},
 		{"unenforced netpol override off", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=false", "WARDYN_K8S_ALLOW_UNENFORCED_NETPOL is set"},
 		{"Linux VM switch not 1", "WARDYN_RUNNER_LINUX_VM=true", "WARDYN_RUNNER_LINUX_VM"},
+		{"empty workload namespace", "WARDYN_RUNNERD_WORKLOAD_NAMESPACES=team-a,", "WARDYN_RUNNERD_WORKLOAD_NAMESPACES"},
+		{"workload namespace not a name", "WARDYN_RUNNERD_WORKLOAD_NAMESPACES=Team_A", "WARDYN_RUNNERD_WORKLOAD_NAMESPACES"},
+		{"workload namespace twice", "WARDYN_RUNNERD_WORKLOAD_NAMESPACES=team-a,team-a", "named twice"},
 		{"ambient deny override", "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=true", "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY is set"},
 	} {
 		t.Run(bad.name, func(t *testing.T) {
@@ -62,6 +65,17 @@ func TestReadK8sEnv(t *testing.T) {
 	}
 	if _, err := readK8sEnv([]string{"PATH=/usr/bin"}); err == nil {
 		t.Fatal("missing settings accepted")
+	}
+}
+
+func TestReadK8sEnvWorkloadNamespaces(t *testing.T) {
+	off, err := readK8sEnv(k8sEnvFixture())
+	if err != nil || len(off.workloadNamespaces) != 0 {
+		t.Fatalf("no setting: %v, %v, want the workload path off", off.workloadNamespaces, err)
+	}
+	on, err := readK8sEnv(k8sEnvFixture("WARDYN_RUNNERD_WORKLOAD_NAMESPACES=team-a, team-b"))
+	if err != nil || strings.Join(on.workloadNamespaces, ",") != "team-a,team-b" {
+		t.Fatalf("two namespaces: %v, %v", on.workloadNamespaces, err)
 	}
 }
 
@@ -98,6 +112,26 @@ func TestSubstrateFlagChecks(t *testing.T) {
 	}
 	if checkMaxPodLifetime(168*time.Hour) != nil || checkMaxPodLifetime(0) == nil || checkMaxPodLifetime(1500*time.Millisecond+time.Minute) == nil {
 		t.Fatal("max pod lifetime check")
+	}
+}
+
+// TestRunsNamespacesCheck: every --runs-namespace is dedicated and named once (design T5 §2.7).
+func TestRunsNamespacesCheck(t *testing.T) {
+	if err := checkRunsNamespaces([]string{"team-a", "team-b"}, "wardyn-runner"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		runs []string
+		own  string
+	}{
+		{[]string{"team-a", "wardyn-runner"}, "wardyn-runner"},
+		{[]string{"team-a", "team-a"}, "wardyn-runner"},
+		{[]string{"team-a", ""}, "wardyn-runner"},
+		{[]string{"team-a"}, ""},
+	} {
+		if err := checkRunsNamespaces(tc.runs, tc.own); err == nil {
+			t.Errorf("--runs-namespace %q with runnerd in %q accepted", tc.runs, tc.own)
+		}
 	}
 }
 

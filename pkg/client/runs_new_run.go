@@ -145,7 +145,9 @@ type RunEgressOverrides struct {
 	// always_deny, deny_with_review or wait_for_review.
 	FirstUseApproval types.FirstUseMode `json:"first_use_approval,omitempty"`
 	// AllowAllEgress true requests every other public destination (the deny
-	// list still wins). False is not an edit: omit it.
+	// list still wins). False turns open egress off for this run: it then
+	// reaches the base's listed hosts, the hosts you add and the hosts its
+	// own setup needs. Always allowed.
 	AllowAllEgress *bool `json:"allow_all_egress,omitempty"`
 }
 
@@ -306,7 +308,11 @@ func (o RunOverrides) Items() []OverrideItem {
 			out = append(out, OverrideItem{types.OverrideFirstUseApproval, types.OverrideSet, string(e.FirstUseApproval)})
 		}
 		if e.AllowAllEgress != nil {
-			out = append(out, OverrideItem{types.OverrideAllowAllEgress, types.OverrideSet, "allow_all_egress"})
+			op := types.OverrideSet
+			if !*e.AllowAllEgress {
+				op = types.OverrideNarrow
+			}
+			out = append(out, OverrideItem{types.OverrideAllowAllEgress, op, "allow_all_egress"})
 		}
 	}
 	return out

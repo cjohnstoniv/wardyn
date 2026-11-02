@@ -37,7 +37,7 @@ import (
 
 // noSignInLine is what login says about signing in while no control plane offers a browser sign-in.
 const noSignInLine = "This control plane does not offer CLI sign-in: set WARDYN_TOKEN to a personal API token. " +
-	"A Wardyn admin can invite you to create one, and you claim it under Your account in the console."
+	"A Wardyn admin can invite you to create one, and you claim it in the console, in Settings."
 
 // loopbackWait is how long a browser sign-in waits for the browser to come back (design ATTACH 11.2).
 var loopbackWait = 5 * time.Minute

@@ -43,6 +43,9 @@ func TestDriveRefusalSentencesMatchGolden(t *testing.T) {
 		"BOUND_ELSEWHERE":      func(a []string) string { return driveBoundElsewhereMsg(a[0]) },
 		"TARGET_CONFLICT":      func(a []string) string { return driveTargetConflictMsg(a[0], a[1], a[2]) },
 		"SHARE_BESIDE_MANAGED": func(a []string) string { return driveShareBesideManagedMsg(a[0], a[1]) },
+		"MACOS_DOCKER_VOLUME":  func(a []string) string { return driveMacOSDockerVolumeMsg(a[0]) },
+		"MACOS_CLUSTER_VOLUME": func(a []string) string { return driveMacOSClusterVolumeMsg(a[0]) },
+		"MAC_DISK_ELSEWHERE":   func(a []string) string { return driveMacDiskElsewhereMsg(a[0], a[1]) },
 
 		"MEMBER_REQUIRES_PERSON":           func([]string) string { return memberDriveRequiresPersonMsg() },
 		"MEMBER_DISABLED":                  func([]string) string { return memberDrivesDisabledMsg() },
@@ -58,6 +61,10 @@ func TestDriveRefusalSentencesMatchGolden(t *testing.T) {
 		"MEMBER_BUSY":                      func([]string) string { return memberDriveBusyMsg() },
 		"MEMBER_DELETE_FAILED":             func([]string) string { return memberDriveDeleteFailedMsg() },
 		"MEMBER_RATE_LIMITED":              func([]string) string { return memberDriveRateLimitedMsg() },
+		"MEMBER_MAC_UNAVAILABLE":           func([]string) string { return memberDriveMacUnavailableMsg() },
+		"MEMBER_DELETE_DEFERRED":           func(a []string) string { return memberDriveDeleteDeferredMsg(a[0]) },
+		"MEMBER_IN_RUN_ON_MAC":             func(a []string) string { return memberDriveInRunOnMacMsg(a[0], a[1]) },
+		"MEMBER_RECORD_ONLY":               func(a []string) string { return memberDriveRecordOnlyMsg(a[0]) },
 	}
 	if len(golden) != len(got) {
 		t.Fatalf("golden has %d sentences, the server has %d", len(golden), len(got))

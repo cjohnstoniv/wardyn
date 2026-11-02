@@ -9,11 +9,14 @@
 // a card is only a view of it.
 
 import { DENIED } from "../../../../../lib/permissions-copy";
+import { driveSizeLabel } from "../../../../../lib/user-drives-display";
 import type { MeDrive, MeDriveCatalogue } from "../../../../../lib/api/me-drives";
 import type { RunAttachment } from "../../../../../lib/types/new-run-contract";
 import { START_FOLDER_DRIVE } from "../../../../../lib/types/new-run-contract";
 import type { Workspace } from "../../../../../lib/types/workspaces";
+import { workspaceRunnerRefusal } from "../../checks/workspace-availability";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
+import { MAC_DRIVES } from "../../../../wardyn/copy/mac-drives";
 import type { RunIntent } from "../../draft/run-intent";
 import {
   attachDrive, attachFolder, detachDrive, detachWorkspace, excludeRepo, includeRepo, repoIncluded, setDriveReadOnly, setRepoRef,
@@ -54,6 +57,23 @@ const slug = (text: string): string => text.trim().toLowerCase().replace(/[^a-z0
  * The server's mount target for a folder whose source names none (internal/api `composerWorkspaceTarget`).
  * A request can place only a workspace's one folder, so any other folder appears here or at its source's target.
  */
+/**
+ * A macOS VM run's guest has /Users/agent where a container has /home/agent: the server moves every path (docs/operations/
+ * macos-vms.md). The console shows the guest's own path on such a run, and only shows it: what is sent keeps /home/agent.
+ * Works on one path or on a sentence that holds one.
+ */
+export const guestPath = (text: string, macOS: boolean): string =>
+  macOS ? text.replace(/(^|\s)\/home\/agent(?=\/|\s|$)/g, "$1/Users/agent") : text;
+
+/** The size and what binds it, as a drive's row says them ("64 GiB · Enforced"); the words are the step's own.
+ * A kept work folder's row already says its size is not enforced, so its line gives only the size. */
+export function driveMeta(d: MeDrive): string | undefined {
+  const size = driveSizeLabel(d.size_mib);
+  if (!size) return undefined;
+  const word = d.enforcement === "filesystem" ? NR_FILES.ENFORCED : d.enforcement === "eviction" ? NR_FILES.ENFORCED_BY_STOP : d.enforcement === "none" && !d.kept_from_run ? NR_FILES.NOT_ENFORCED : undefined;
+  return word ? `${size} · ${word}` : size;
+}
+
 export const SERVER_FOLDER_TARGET = "/home/agent/work";
 
 /** Owner ruling 2026-10-13: a folder appears at /home/agent/folders/<name> unless its source names a place. */
@@ -69,13 +89,13 @@ export function folderSources(workspaces: readonly Workspace[]): FolderSource[] 
         defaultPath: d.target || folderPath(name), serverPath: d.target || SERVER_FOLDER_TARGET, single: dirs.length === 1, first: i === 0,
         // The server mounts a folder read-only unless its source says writable.
         writable: d.writable === true,
-        unavailable: w.available_to_you === false ? DENIED.WORKSPACE_NOT_AVAILABLE : undefined,
+        unavailable: w.available_to_you === false ? DENIED.WORKSPACE_NOT_AVAILABLE : workspaceRunnerRefusal(w),
       };
     });
   });
 }
 
-const BACKEND: Record<MeDrive["backend"], string> = {
+const BACKEND: Record<Exclude<MeDrive["backend"], "mac_disk">, string> = {
   docker_volume: NR_FILES.FAMILY_DOCKER_VOLUME,
   host_path: NR_FILES.FAMILY_HOST_FOLDER,
   k8s_pvc: NR_FILES.FAMILY_CLUSTER_VOLUME,
@@ -83,8 +103,12 @@ const BACKEND: Record<MeDrive["backend"], string> = {
 };
 const SOURCE: Record<MeDrive["source"], string> = { personal: NR_FILES.SOURCE_PERSONAL, team: NR_FILES.SOURCE_TEAM, organisation: NR_FILES.SOURCE_ORG };
 
+const macLine = (d?: MeDrive): string | undefined => (d?.backend === "mac_disk" && d.mac ? MAC_DRIVES.D01(d.mac) : undefined);
+
 /** The chips a drive is stored on: where it comes from, then its storage. */
-export const driveChips = (d: MeDrive): string[] => [SOURCE[d.source], BACKEND[d.backend]];
+export const driveChips = (d: MeDrive): string[] =>
+  // A disk drive names its Mac; with no name to give (the row is gone) it says only where it comes from.
+  d.backend === "mac_disk" ? [SOURCE[d.source], ...(d.mac ? [MAC_DRIVES.D01(d.mac)] : [])] : [SOURCE[d.source], BACKEND[d.backend]];
 // A team drive is shared whatever its backend: a Docker volume is a managed (user) section for one person, and one folder for a group here.
 export const driveKind = (d: MeDrive): FileKind => (d.section === "shared" || d.team ? "sharedDrive" : "userDrive");
 /** "Shared with" for a team drive: the caller's groups it is allocated to; undefined for every other drive. */
@@ -108,6 +132,8 @@ export interface FileItem {
   /** The request may place it: a repository its workspace clones alone, or a workspace's one folder. */
   pathEditable: boolean;
   storedOn: string[];
+  /** MAC-D01, a disk kept on a Mac: the collapsed row says it too (board J4), as a second line under the path. */
+  onMac?: string;
   hostPath?: string;
   starts: boolean;
   /** The run can start here. A workspace start with no repository opens its first folder, so no other folder can be one. */
@@ -172,7 +198,7 @@ export function fileItems(intent: RunIntent, src: ItemSources): FileItem[] {
       sharedWith: driveSharedWith(legacy),
       path: legacy?.target ?? src.attachments.find((a) => a.kind === "drive" && !a.drive_id)?.target,
       readOnly: intent.drive.read_only === true || legacy?.writable === false, locked: legacy?.writable === false, pathEditable: false,
-      storedOn: legacy ? driveChips(legacy) : [], starts: f?.attachment === START_FOLDER_DRIVE, canStart: true, driveId: legacy?.id,
+      storedOn: legacy ? driveChips(legacy) : [], onMac: macLine(legacy), starts: f?.attachment === START_FOLDER_DRIVE, canStart: true, driveId: legacy?.id,
     });
   }
   for (const a of intent.drives ?? []) {
@@ -182,7 +208,7 @@ export function fileItems(intent: RunIntent, src: ItemSources): FileItem[] {
       key: `drive:${a.drive_id}`, kind: d ? driveKind(d) : "userDrive", name: d?.name ?? served?.name ?? a.drive_id,
       sharedWith: driveSharedWith(d),
       path: d?.target ?? served?.target, readOnly: a.read_only === true || d?.writable === false, locked: d?.writable === false,
-      pathEditable: false, storedOn: d ? driveChips(d) : [], starts: f?.drive_id === a.drive_id, canStart: true, driveId: a.drive_id,
+      pathEditable: false, storedOn: d ? driveChips(d) : [], onMac: macLine(d), starts: f?.drive_id === a.drive_id, canStart: true, driveId: a.drive_id,
     });
   }
   return out;

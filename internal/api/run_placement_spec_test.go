@@ -199,13 +199,13 @@ func TestLocalAllModelProviderKindsHaveOwnClassification(t *testing.T) {
 		p := types.ModelProvider{ID: "selected", UID: "uid", Kind: kind}
 		if kind == types.ModelProviderLocalModel {
 			// With no auth a local model places no credential at all; with auth, the person's own token.
-			if intents, known := f.srv.localProviderIntent(r, capSub, p); !known || len(intents) != 0 {
+			if intents, known, err := f.srv.localProviderIntent(r, capSub, p); err != nil || !known || len(intents) != 0 {
 				t.Fatalf("a local model with no auth = %v %v, want classified with no credential", intents, known)
 			}
 			p.Auth = &types.ProviderAuth{Header: "Authorization", Format: "Bearer %s"}
 		}
-		intents, known := f.srv.localProviderIntent(r, capSub, p)
-		if !known || len(intents) == 0 {
+		intents, known, err := f.srv.localProviderIntent(r, capSub, p)
+		if err != nil || !known || len(intents) == 0 {
 			t.Fatalf("provider %s is unclassified", kind)
 		}
 		for _, intent := range intents {
@@ -214,7 +214,7 @@ func TestLocalAllModelProviderKindsHaveOwnClassification(t *testing.T) {
 			}
 		}
 	}
-	if _, known := f.srv.localProviderIntent(r, capSub, types.ModelProvider{Kind: "future"}); known {
+	if _, known, _ := f.srv.localProviderIntent(r, capSub, types.ModelProvider{Kind: "future"}); known {
 		t.Fatal("unimplemented provider kind accepted")
 	}
 }

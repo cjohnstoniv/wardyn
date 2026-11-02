@@ -206,6 +206,29 @@ test.describe("Runs Admin view — sections, Everyone/Mine, saved views, Group b
     await expect(page.getByText("A failed run")).toBeVisible();
   });
 
+  test("a view saved under Mine reads as itself, not Custom, when picked in the User view (#3783)", async ({ page }) => {
+    await mockRunsList(page, () => ({ runs: [baseRun("r1", "A run")] }));
+    await gotoConsole(page, "admin");
+    await page.getByRole("combobox", { name: "Whose runs" }).click();
+    await page.getByRole("option", { name: "Mine" }).click();
+    await page.getByRole("combobox", { name: "Group by" }).click();
+    await page.getByRole("option", { name: "Group · Title" }).click();
+    await expect(page).toHaveURL(/owner=me/);
+    await page.getByRole("button", { name: "Save view" }).click();
+    await page.getByLabel("Name this view").fill("Mine by title");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByText(runsViewSaved("Mine by title")).first()).toBeVisible();
+
+    // The User view never carries owner: picking the view drops it, and the select must still name the view.
+    await page.goto("/runs");
+    const trigger = page.getByRole("combobox", { name: "Saved view" });
+    await trigger.click();
+    await page.getByRole("option", { name: "View · Mine by title" }).click();
+    await expect(page).toHaveURL(/group=title/);
+    await expect(page).not.toHaveURL(/owner=me/);
+    await expect(trigger).toHaveText("View · Mine by title");
+  });
+
   test("Group by Title works", async ({ page }) => {
     await mockRunsList(page, () => ({
       runs: [
@@ -267,6 +290,12 @@ test.describe("Entry to another person's run (#1476)", () => {
 
   test("a super admin on a person's run: the owner line, no terminal or Attach card, Kill stays, and a ticket is refused", async ({ page }) => {
     const id = await seedRun(page, `entry foreign ${Date.now()}`, { owner: "priya@e2e.wardyn.invalid", operatorOwned: false });
+    // The Watch link needs a recording; this seeded run has none, so its read says it does.
+    await page.route(`**/api/v1/runs/${id}`, async (route: Route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      const res = await route.fetch();
+      await route.fulfill({ response: res, json: { ...((await res.json()) as Record<string, unknown>), has_recording: true } });
+    });
     await page.goto(`runs/${id}`);
     await expect(page.getByText("Only priya@e2e.wardyn.invalid can open this run's terminal, apps and SSH.")).toBeVisible();
     await expect(page.getByText(/Watch the captured session/)).toBeVisible();

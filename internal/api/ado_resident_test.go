@@ -80,8 +80,12 @@ func TestADOResident_OptInIsPerConnection(t *testing.T) {
 		if !ok {
 			t.Fatal("the row does not admit its own repository")
 		}
+		origin, err := (&Server{}).localADOOrigin(context.Background(), "alice", a)
+		if err != nil {
+			t.Fatal(err)
+		}
 		_, r := placement.LocalEligibility(placement.LocalPlan{
-			CredentialIntents: []placement.CredentialIntent{{Field: "ProxyConfig.ADOGrant[" + a.rowID + "]", Origin: (&Server{}).localADOOrigin(context.Background(), "alice", a)}},
+			CredentialIntents: []placement.CredentialIntent{{Field: "ProxyConfig.ADOGrant[" + a.rowID + "]", Origin: origin}},
 			Delivery:          placement.DeliveryPolicy{Classes: map[string]placement.ClassPolicy{placement.ClassADOMintedPAT: {Mode: placement.ModeRunnerResident}}},
 			Posture:           &types.RunnerPosture{OS: "linux"},
 			Trust:             types.RunnerTrustPersonal,

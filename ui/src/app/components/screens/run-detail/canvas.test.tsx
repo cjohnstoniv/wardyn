@@ -741,3 +741,30 @@ describe("RunCanvas — the decision row survives focus mode", () => {
     expect(await screen.findByTestId("live-approvals-show-all")).toHaveTextContent("Show fewer");
   });
 });
+
+// Mock r15 T1-c: the Service panel is a cockpit widget at the head of the right column, above Egress, on a service run only.
+describe("the Service widget", () => {
+  const SERVICE_RUN = { ...RUN, interactive: false, service: { restart: "on_failure" }, ends_at: null } as unknown as WidgetContext["run"];
+  const above = async () => {
+    expect(await screen.findByRole("heading", { name: "Egress" })).toBeInTheDocument();
+    expect(tileY(widgetHeading("Service"))).toBeLessThan(tileY(widgetHeading("Egress")));
+  };
+
+  it("sits above Egress in a service run's default layout", async () => {
+    render(<RunCanvas ctx={ctx({ run: SERVICE_RUN })} />);
+    await above();
+  });
+
+  it("is added above Egress to a saved layout that predates it", async () => {
+    getLayout.mockResolvedValue({ preset: "live", layout: presetLayout("live"), updated_at: new Date().toISOString() });
+    render(<RunCanvas ctx={ctx({ run: SERVICE_RUN })} />);
+    await waitFor(() => expect(getLayout).toHaveBeenCalledWith("live"));
+    await above();
+  });
+
+  it("is not on a run with no service", async () => {
+    render(<RunCanvas ctx={ctx()} />);
+    expect(await screen.findByRole("heading", { name: "Egress" })).toBeInTheDocument();
+    expect(widgetHeading("Service")).not.toBeInTheDocument();
+  });
+});

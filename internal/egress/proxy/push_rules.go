@@ -485,10 +485,10 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 		// the forge already holds every commit it points a ref at (forgeRepo.held).
 		// The branch rules ran before this; the content rules have nothing to read.
 		fctx, fcancel := context.WithTimeout(r.Context(), forgeReadWait)
-		why := forge.held(fctx, absent.Commands)
+		why := forge.forRule(adoClears.noObjects).held(fctx, absent.Commands)
 		fcancel()
 		if forge != nil && forge.reads > 0 {
-			p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: githubAPIHost, Port: 443,
+			p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: forge.apiHost(), Port: 443,
 				Method: http.MethodGet, Time: p.now()}, egress.Allow, ruleSourceGitForgeRead))
 		}
 		if why != "" {
@@ -509,7 +509,7 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 				" every object it deltifies against")
 		return nil, pushReview{}, noRelease, false
 	}
-	denied, why, err := p.matchedPaths(r, rules.deny, res, forge, subject)
+	denied, why, err := p.matchedPaths(r, rules.deny, res, forge.forRule(adoClears.denyPaths), subject)
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
@@ -529,19 +529,20 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 	}
 	if rules.maxFileBytes > 0 && !p.refuseLargeFiles(w, r, func(cs []gitpack.Change) ([]string, []gitpack.Change, error) {
 		return oversize(rules.maxFileBytes, cs)
-	}, res, forge, subject, deny) {
+	}, res, forge.forRule(adoClears.maxFileSize), subject, deny) {
 		return nil, pushReview{}, noRelease, false
 	}
-	if rules.denyNewExec && !p.refuseNewExecutables(w, r, res, forge, subject, deny) {
+	if rules.denyNewExec && !p.refuseNewExecutables(w, r, res, forge.forRule(adoClears.newExecutables), subject, deny) {
 		return nil, pushReview{}, noRelease, false
 	}
 	review := pushReview{cmds: res.Commands}
-	if review.paths, review.why, err = p.matchedPaths(r, rules.review, res, forge, subject); err != nil {
+	if review.paths, review.why, err = p.matchedPaths(r, rules.review, res, forge.forRule(adoClears.reviewPaths), subject); err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
 				"\nask an operator to shorten push_rules.require_review_paths")
 		return nil, pushReview{}, noRelease, false
 	}
+	review.unresolved = review.why != "" && review.why != whyChanged
 	// The buffer outlives the slot, forwarded or held from here, and stays charged.
 	kept = true
 	return buf, review, release, true
@@ -590,7 +591,7 @@ func (p *Proxy) claimedEntries(r *http.Request, claim func([]gitpack.Change) ([]
 		}
 	}
 	if forge != nil && forge.reads > 0 {
-		p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: githubAPIHost, Port: 443,
+		p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: forge.apiHost(), Port: 443,
 			Method: http.MethodGet, Time: p.now()}, egress.Allow, ruleSourceGitForgeRead))
 		slog.InfoContext(r.Context(), "wardyn-proxy: git push content rules read the forge",
 			slog.String("run_id", p.runID.String()),
@@ -646,10 +647,9 @@ func (p *Proxy) refuseLargeFiles(w http.ResponseWriter, r *http.Request,
 			lines[i] = pth + ": size not carried by the pack"
 		}
 		// A complete clone cannot help: git never sends objects the remote
-		// already has. The broker has to read the forge, and only GitHub's
-		// can be read.
+		// already has. The broker has to read the forge.
 		remedy := "ask an operator to set push_rules.max_file_size_mib to 0"
-		if why == whyNotGitHub {
+		if why == whyNoForgeReader {
 			remedy = "ask an operator to set push_rules.max_file_size_mib to 0 on this lane, or push through a GitHub lane"
 		}
 		body = pathsBody(headline, lines, "unsized", why, remedy)
@@ -707,7 +707,7 @@ func (p *Proxy) refuseNewExecutables(w http.ResponseWriter, r *http.Request, res
 	if why == whyChanged {
 		why = whyNotExecutable
 	}
-	if why == whyNotGitHub {
+	if why == whyNoForgeReader {
 		remedy += ". Wardyn can't read this repository's history here, so it can't tell which files are new."
 	}
 	body := pathsBody("wardyn: this push is refused by the run's push content rules: new executable files",

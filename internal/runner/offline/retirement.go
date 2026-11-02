@@ -74,6 +74,9 @@ func (m *Manager) retireRun(ctx context.Context, a runnerwire.PendingAction, r l
 		return m.actionReceipt(a, "deferred")
 	}
 	r.Retired = true
+	// The release obligation is saved with the receipt, so it outlives the receipt's
+	// acknowledgement and compaction until a release succeeds.
+	r.OutputPending = m.releaseOutput != nil
 	m.state.Runs[a.RunID] = r
 	// Retained run, execution and action tombstones prevent ID reuse, and
 	// neither an exit ACK nor this operation advances evidence ACKs. Retirement
@@ -83,12 +86,39 @@ func (m *Manager) retireRun(ctx context.Context, a runnerwire.PendingAction, r l
 	if err != nil || m.releaseOutput == nil {
 		return result, err
 	}
-	// The run is retired either way; output a release refuses or fails to
-	// delete stays on disk, as it did before release existed.
-	if err := m.releaseOutput(a.RunID, r.Ref); err != nil {
-		slog.WarnContext(ctx, "runner kept a retired run's output", "run_id", a.RunID, "error", err)
-	}
+	m.releaseRetiredOutput(ctx, a.RunID)
 	return result, nil
+}
+
+// releaseRetiredOutput releases a retired run's output and settles its OutputPending obligation. The
+// run is retired either way: a release that refuses or fails keeps the output and the obligation,
+// which retryRetiredReleases pays later, and never undoes the retirement or its receipt. m.mu is held.
+func (m *Manager) releaseRetiredOutput(ctx context.Context, id uuid.UUID) {
+	r := m.state.Runs[id]
+	if m.releaseOutput == nil || !r.Retired {
+		return
+	}
+	err := m.releaseOutput(id, r.Ref)
+	if err != nil {
+		slog.WarnContext(ctx, "runner kept a retired run's output", "run_id", id, "error", err)
+	}
+	if pending := err != nil; r.OutputPending != pending {
+		r.OutputPending = pending
+		m.state.Runs[id] = r
+		if err := m.save(); err != nil {
+			slog.WarnContext(ctx, "runner could not save a retired run's output release", "run_id", id, "error", err)
+		}
+	}
+}
+
+// retryRetiredReleases releases every retired run's output that an earlier release left behind. The
+// release hook still refuses output that is not settled. m.mu is held.
+func (m *Manager) retryRetiredReleases(ctx context.Context) {
+	for id, r := range m.state.Runs {
+		if r.OutputPending {
+			m.releaseRetiredOutput(ctx, id)
+		}
+	}
 }
 
 // compactRetired shrinks a retired run, once the org has acknowledged its retirement receipt, to an
@@ -109,7 +139,7 @@ func (m *Manager) compactRetired(id uuid.UUID) error {
 			delete(m.state.Actions, aid)
 		}
 	}
-	m.state.Runs[id] = localRun{RunID: id, Ref: r.Ref, Lease: runnerwire.Lease{RunID: id}, Retired: true, Tombstone: true}
+	m.state.Runs[id] = localRun{RunID: id, Ref: r.Ref, Lease: runnerwire.Lease{RunID: id}, Retired: true, Tombstone: true, OutputPending: r.OutputPending}
 	if err := m.save(); err != nil {
 		m.state.Runs[id] = r
 		maps.Copy(m.state.Actions, dropped)
@@ -120,11 +150,13 @@ func (m *Manager) compactRetired(id uuid.UUID) error {
 
 // ReleaseSettledOutput sets the hook that deletes a retired run's output. The
 // hook must refuse output that is not settled (complete and fully
-// acknowledged). Without it, retirement keeps all output.
+// acknowledged). Without it, retirement keeps all output. Setting it also
+// releases the output of runs retired before the runner last stopped.
 func (m *Manager) ReleaseSettledOutput(release func(runID uuid.UUID, ref string) error) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.releaseOutput = release
-	m.mu.Unlock()
+	m.retryRetiredReleases(context.Background())
 }
 
 // noOutputSettled answers output settlement for a receipt that says the org

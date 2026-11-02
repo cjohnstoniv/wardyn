@@ -23,6 +23,16 @@ func TestDispatchPlanFieldsClassified(t *testing.T) {
 	if got := Unclassified(); len(got) != 0 {
 		t.Fatalf("fields with no classification (add each to placement.Table, naming its class and local rule): %v", got)
 	}
+	// A local_dir folder bound to a person's runner names that runner on its mount, and the
+	// closed schema must carry it: a mount the switch never saw would leave the binding unchecked.
+	mountType := reflect.TypeFor[runner.Mount]()
+	f, ok := mountType.FieldByName("BoundRunner")
+	if !ok || f.Type.Kind() != reflect.String || strings.Split(f.Tag.Get("json"), ",")[0] != "bound_runner" {
+		t.Fatalf("runner.Mount.BoundRunner (string, json bound_runner) is missing: field=%v ok=%v", f, ok)
+	}
+	if !slices.Contains(nestedFields[mountType], "BoundRunner") {
+		t.Fatalf("nestedFields[runner.Mount] = %v, want BoundRunner classified", nestedFields[mountType])
+	}
 }
 
 func TestUnclassifiedCatchesANewField(t *testing.T) {
