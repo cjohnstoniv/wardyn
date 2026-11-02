@@ -144,7 +144,7 @@
 - **When it is worth it.**
   - It pays off when an organisation already sends all model and MCP traffic through one gateway.
   - For a single team, a provider's settings in Wardyn are enough.
-- Wardyn's CI does not run against an external gateway. The model route is the same path as any internal gateway.
+- Wardyn's CI has no green run against an external gateway yet. A nightly job for one is new, and [AI gateway setup](operations/ai-gateway.md) is the config it runs. The model route is the same path as any internal gateway.
 
 ### A Kubernetes sandbox controller (for example agent-sandbox)
 
