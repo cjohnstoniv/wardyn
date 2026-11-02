@@ -231,3 +231,41 @@ func TestARunRefusedForAHeldDiskAttachesNothing(t *testing.T) {
 		t.Fatalf("the holder lost the disk's lock: %v", err)
 	}
 }
+
+// A disk drive with a name leaves a name file beside its image for `wardyn-runnerd drive open`: JSON with the
+// drive's name and its volume label, byte for byte what that command's tests read. A drive with no name
+// leaves none, and a file that cannot be written never fails the run.
+func TestMacDiskDrivesRecordTheDrivesNameForDriveOpen(t *testing.T) {
+	r := newMacRig(t)
+	img, _ := r.c.Layout.DriveImage(testDiskObject)
+	nameFile := img + ".name"
+	if _, _, err := r.d.macDiskDrives(t.Context(), []types.DriveMount{testDiskDrive(runner.DriveTarget)}); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(nameFile); err != nil || string(b) != `{"label":"Wardyn-1a2b3c4d","name":"Notes"}` {
+		t.Fatalf("name file = %q, %v", b, err)
+	}
+	if _, _, err := r.d.macDiskDrives(t.Context(), []types.DriveMount{testDiskDrive(runner.DriveTarget)}); err != nil { // unchanged: not rewritten
+		t.Fatal(err)
+	}
+	if err := os.Remove(nameFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(nameFile, 0o700); err != nil { // a directory where the file goes: the write fails
+		t.Fatal(err)
+	}
+	if _, _, err := r.d.macDiskDrives(t.Context(), []types.DriveMount{testDiskDrive(runner.DriveTarget)}); err != nil {
+		t.Fatalf("a name file that could not be written failed the run: %v", err)
+	}
+	if err := os.Remove(nameFile); err != nil {
+		t.Fatal(err)
+	}
+	unnamed := testDiskDrive(runner.DriveTarget)
+	unnamed.DriveName = ""
+	if _, _, err := r.d.macDiskDrives(t.Context(), []types.DriveMount{unnamed}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(nameFile); !os.IsNotExist(err) {
+		t.Fatalf("an unnamed drive left a name file: %v", err)
+	}
+}
