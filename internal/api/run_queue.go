@@ -282,6 +282,7 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 	if created.State == types.RunQueued {
 		runs := []types.AgentRun{created}
 		s.projectStatusDetailFor(r, runs) // the 201 carries the same wait reason and place a GET does
+		s.projectQueueLimit(r, &runs[0])
 		created = runs[0]
 		sentence := runnerpool.WaitAtCapacityMsg(pool.Name, capMax)
 		switch {
@@ -367,7 +368,8 @@ func (s *Server) waitLimitSentence(ctx context.Context, pool string, eligible []
 // projectQueueLimit fills Queue.LimitSentence of the one run a single-run route serves, when the run waits
 // because its runners are at a limit and the reader is its owner or an admin: the sentence is worked out
 // from the runners' limits as they stand now, for the size the promotion holds the run to, so it stays
-// true as the wait changes. It is never done for a list, which would cost a read of every runner per row.
+// true as the wait changes. Only handleGetRun and the create answer call it: a list, even of one row, would
+// cost a read of every runner per row, so it never does.
 // A read that fails leaves the field off, and the console says the sentence its reason alone gives.
 func (s *Server) projectQueueLimit(r *http.Request, run *types.AgentRun) {
 	if run.Queue == nil || run.Queue.Reason != string(runnerpool.WaitRunnersAtCapacity) || !s.ownsRunOrAdmin(r, *run) {

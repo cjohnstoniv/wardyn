@@ -236,6 +236,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	runs := []types.AgentRun{run}
 	s.fillRecordingMeta(r.Context(), runs)
 	s.projectStatusDetailFor(r, runs)
+	s.projectQueueLimit(r, &runs[0]) // this route alone: a list, even of one row, never pays for it
 	s.projectRunnerFacts(r, runs)
 	redactRunRepos(runs)
 	run = runs[0]

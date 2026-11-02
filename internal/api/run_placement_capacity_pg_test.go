@@ -171,8 +171,10 @@ func TestPG_QueuedRunReadCarriesTheLimitSentence(t *testing.T) {
 	if !strings.Contains(read.Queue.LimitSentence, ": Runs at once: 1 running of 1.") {
 		t.Errorf("sentence %q does not name Runs at once", read.Queue.LimitSentence)
 	}
-	if w := e.call(e.person, http.MethodGet, "/api/v1/runs", ""); strings.Contains(w.Body.String(), "limit_sentence") {
-		t.Errorf("a list carried the sentence: %s", w.Body)
+	for _, path := range []string{"/api/v1/runs", "/api/v1/runs?limit=1"} {
+		if w := e.call(e.person, http.MethodGet, path, ""); !strings.Contains(w.Body.String(), got.ID.String()) || strings.Contains(w.Body.String(), "limit_sentence") {
+			t.Errorf("%s: want the run listed with no sentence, got %s", path, w.Body)
+		}
 	}
 	// The runners find room before any promotion pass: the stored reason is still the runners', but the
 	// sentence that names a limit would now be untrue, so the read gives none.

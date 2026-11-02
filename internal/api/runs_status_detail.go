@@ -171,9 +171,6 @@ func (s *Server) projectStatusDetailFor(r *http.Request, runs []types.AgentRun) 
 	if err := s.projectRunQueue(r.Context(), runs); err != nil {
 		slog.WarnContext(r.Context(), "wardynd: project run queue", slog.Any("err", err)) // the place is advisory: the run is served without it
 	}
-	if len(runs) == 1 {
-		s.projectQueueLimit(r, &runs[0]) // a list never pays for it
-	}
 }
 
 // projectStatusDetail decides what a run's startup detail SAYS to a reader, on
