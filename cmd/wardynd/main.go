@@ -116,7 +116,7 @@ func run() error {
 	// govern SERVING, and a rotation run under the deployment's own environment
 	// must not be refused over a listener it never opens. See rotateAgeKeyMode.
 	// -migrate-secrets / -reconcile (store mode) are early exits for the same
-	// reason; maintenanceMode (migrate_secrets.go) dispatches all three.
+	// reason; maintenance runs the gateway identity rotation, then maintenanceMode dispatches all three.
 	if ran, err := f.maintenance(); ran {
 		return err
 	}
