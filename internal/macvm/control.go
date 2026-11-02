@@ -85,7 +85,10 @@ type Status struct {
 	// Listeners are the vsock ports the helper registered for this VM: a
 	// run's are 1024 and 1025 only; runnerd ends a run that shows another.
 	Listeners []uint32 `json:"vsock_listeners"`
-	Error     string   `json:"error,omitempty"`
+	// DesktopForcedViewOnly comes from the shim serving this boot (RFBShim.DesktopForcedViewOnly), never
+	// from run.json. An older helper leaves it out, which reads as not forced.
+	DesktopForcedViewOnly bool   `json:"desktop_forced_view_only,omitempty"`
+	Error                 string `json:"error,omitempty"`
 }
 
 // Event types.

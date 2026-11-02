@@ -429,7 +429,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	base, _ := c.Layout.NamedBaseDir(spec.MacOSBase) // refuseMacVMSpec checked the name
 	if err := macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: spec.RunID.String(), BaseDir: base, CPUs: cpus, MemoryMiB: memMiB,
 		Identity: c.Identity, RunnerID: c.RunnerID, LedgerEntry: entry.ID, LedgerDir: c.LedgerDir, SockRoot: c.SockRoot,
-		Shares: shares, Disks: disks}); err != nil {
+		Shares: shares, Disks: disks, DesktopViewOnly: spec.DesktopViewOnly}); err != nil {
 		return fail(fmt.Errorf("docker: macOS VM run directory: %w", err))
 	}
 	if err := c.spawn(dir); err != nil {
@@ -496,6 +496,11 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 		}
 	}
 	signIns := res.SignIns
+	// What the helper's running filter does, asked of this boot's helper. No answer reads as not forced.
+	st, err := cc.Status(bctx)
+	if err != nil {
+		slog.Warn("docker: read the macOS VM helper's desktop filter", slog.String("run_id", spec.RunID.String()), slog.String("err", err.Error()))
+	}
 	machine := &types.VMMachine{Accelerator: types.MacVMAccelerator, MachineType: types.MacVMMachineType,
 		GuestOS: cmp.Or(man.GuestOS, "macOS "+man.BuildVersion), HostOS: c.HostOS, BaseEditedAt: macvm.BaseEditedAt(c.Layout.BaseDir(0), man)}
 	machine.MacOSBase = cmp.Or(spec.MacOSBase, macvm.StandardBase)
@@ -503,7 +508,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	d.vms.Store(ref, v)
 	d.keepExecOutput(ref, spec.ExecOutput)
 	return runner.Sandbox{Ref: ref, Driver: driverName, EnforcedClass: types.CC3, Machine: machine, SignIns: signIns,
-		KeychainTrust: macKeychainTrust(res)}, nil
+		KeychainTrust: macKeychainTrust(res), DesktopForcedViewOnly: st.DesktopForcedViewOnly}, nil
 }
 
 // makeRunDir creates a run's directory, new: a directory already there (another run's whose id shares

@@ -105,6 +105,7 @@ func Run(ctx context.Context, o RunOptions) error {
 		return err
 	}
 	defer os.RemoveAll(sockDir)
+	shim, _ := o.Desktop.(interface{ DesktopForcedViewOnly() bool })
 	r := &runner{
 		o: o, cfg: cfg, sockDir: sockDir,
 		netCh:   make(chan *os.File, 1),
@@ -113,7 +114,8 @@ func Run(ctx context.Context, o RunOptions) error {
 		st: Status{
 			Proto: ControlProto, RunID: cfg.RunID, State: StateStopped, HelperPID: os.Getpid(),
 			Identity: cfg.Identity, CPUs: cfg.CPUs, MemoryMiB: cfg.MemoryMiB, Network: NetWaiting,
-			Display: Display{Width: DisplayWidth, Height: DisplayHeight, PPI: DisplayPPI},
+			Display:               Display{Width: DisplayWidth, Height: DisplayHeight, PPI: DisplayPPI},
+			DesktopForcedViewOnly: shim != nil && shim.DesktopForcedViewOnly(),
 		},
 	}
 	defer r.events.close()

@@ -422,6 +422,8 @@ export interface VMMachine {
   base_edited_at?: string;
   // A macOS VM's base: the one the run picked ("Standard" or another of the Mac's), then the one it started on.
   macos_base?: string;
+  // What this boot's helper reported: its desktop filter is forced view only. Absent reads as not forced.
+  desktop_forced_view_only?: boolean;
 }
 
 export interface RunAttention {

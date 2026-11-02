@@ -69,6 +69,9 @@ type VMMachine struct {
 	// other bases), then the base the Mac started it on. Absent on a Linux VM, and on a macOS VM run that
 	// predates it.
 	MacOSBase string `json:"macos_base,omitempty"`
+	// DesktopForcedViewOnly is what this boot's helper reported its desktop filter does, overwritten with
+	// the machine at every boot. Read it through AgentRun.DesktopForcedViewOnly.
+	DesktopForcedViewOnly bool `json:"desktop_forced_view_only,omitempty"`
 }
 
 // MacOSStandardBase is the name of a Mac's first macOS base, the one prepare builds (MAC-B04). A run that
