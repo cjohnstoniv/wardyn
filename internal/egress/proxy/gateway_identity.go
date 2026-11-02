@@ -146,7 +146,10 @@ func (p *Proxy) attachGatewayIdentity(w http.ResponseWriter, r *http.Request, h 
 // scrubbed, whatever Config.ScrubResponses says, because a token echoed to the
 // sandbox defeats the point of holding it here, and always flushed, so forcing
 // the scrub leaves a stream's timing alone. It refuses bytes the masker cannot
-// read, and a masker with nothing to mask, rather than relay unmasked.
+// read, and a masker with nothing to mask, rather than relay unmasked. Every end
+// of the answer, clean or failed, is a cut: a trailing run that begins a held value
+// is replaced too, because a token missing its last characters can be recovered, and
+// a short Content-Length ends cleanly with no read error to tell it from a whole answer.
 func (p *Proxy) relayGatewayRoute(w http.ResponseWriter, r *http.Request, host string, port int, resp *http.Response, ruleSource string) {
 	refuse := func(cause string) {
 		if p.sink != nil {
@@ -161,12 +164,12 @@ func (p *Proxy) relayGatewayRoute(w http.ResponseWriter, r *http.Request, host s
 		refuse("the gateway answered with a Content-Encoding the proxy cannot scrub")
 		return
 	}
-	out, done, ok := p.scrubbedAlways(w)
+	out, ok := p.scrubbedAlways(w)
 	if !ok {
 		refuse("the proxy holds no value to scrub this answer with")
 		return
 	}
-	defer done()
+	defer func() { _ = out.mw.CloseCut() }()
 	flushRelay(out, resp)
 }
 
