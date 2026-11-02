@@ -193,9 +193,9 @@ describe("RunCanvas — Expand", () => {
     const heading = await screen.findByRole("heading", { name: "Files changed" });
     const body = heading.closest("section")!.lastElementChild as HTMLElement;
     const at = { top: 300, left: 12 };
-    Object.defineProperty(body, "scrollTop", { configurable: true, get: () => at.top, set: (v: number) => void (at.top = v) });
-    Object.defineProperty(body, "scrollLeft", { configurable: true, get: () => at.left, set: (v: number) => void (at.left = v) });
-    // What appendChild does to a moved subtree in a browser.
+    // What a browser does: a detached element reads 0, and a move resets what was there.
+    Object.defineProperty(body, "scrollTop", { configurable: true, get: () => (body.isConnected ? at.top : 0), set: (v: number) => void (at.top = v) });
+    Object.defineProperty(body, "scrollLeft", { configurable: true, get: () => (body.isConnected ? at.left : 0), set: (v: number) => void (at.left = v) });
     const append = Node.prototype.appendChild;
     vi.spyOn(Node.prototype, "appendChild").mockImplementation(function <T extends Node>(this: Node, child: T): T {
       const out = append.call(this, child) as T;

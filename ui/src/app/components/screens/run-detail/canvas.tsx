@@ -136,22 +136,31 @@ function TerminalSlot({ host, className = "flex min-h-0 flex-1 flex-col" }: { ho
   return <div ref={attach} className={className} />;
 }
 
+// Scroll offsets of a widget's host, read when its box lets go of it and written back when the next box takes it.
+const HOST_SCROLL = new WeakMap<HTMLElement, [Element, number, number][]>();
+
 /** Where a widget shows right now: its tile or the large view. Like TerminalSlot it renders only an empty box and moves
  *  the widget's one host element into it, so the widget is never remounted. Moving an element resets the scroll offset
- *  of everything inside it, so the offsets are read first and written back (the browser clamps them to the new size). */
+ *  of everything inside it, and by the time the next box attaches, React has already removed the old one and the host is
+ *  disconnected (every offset reads 0). So the offsets are read when the old box detaches, while the host is still in
+ *  the page, and written back on attach (the browser clamps them to the new size). */
 function WidgetBox({ host }: { host: HTMLElement }) {
   const attach = React.useCallback(
     (box: HTMLDivElement | null) => {
-      if (!box) return;
-      const kept: [Element, number, number][] = [];
-      host.querySelectorAll("*").forEach((el) => {
-        if (el.scrollTop || el.scrollLeft) kept.push([el, el.scrollTop, el.scrollLeft]);
-      });
+      if (!box) {
+        const kept: [Element, number, number][] = [];
+        host.querySelectorAll("*").forEach((el) => {
+          if (el.scrollTop || el.scrollLeft) kept.push([el, el.scrollTop, el.scrollLeft]);
+        });
+        HOST_SCROLL.set(host, kept);
+        return;
+      }
       box.appendChild(host);
-      for (const [el, top, left] of kept) {
+      for (const [el, top, left] of HOST_SCROLL.get(host) ?? []) {
         el.scrollTop = top;
         el.scrollLeft = left;
       }
+      HOST_SCROLL.delete(host);
     },
     [host],
   );
