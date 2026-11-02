@@ -21,20 +21,28 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
 )
 
-// attachLogSubstrate's Attach hands out a session whose reads fail with err at once, as one does after a
-// detach closed it.
+// attachLogSubstrate's Attach hands out a session whose reads fail with err once attached closes, as one
+// does after a detach closed it. A read that failed sooner would reset the stream before the attach's reply
+// reached the org, which then finds no stream to take (runnerwire.ErrNoStream), racing what this file pins.
 type attachLogSubstrate struct {
 	contextSubstrate
-	err error
+	err      error
+	attached <-chan struct{}
 }
 
 func (f attachLogSubstrate) Attach(context.Context, string, runner.AttachOptions) (runner.Session, error) {
-	return attachLogSession{f.err}, nil
+	return attachLogSession{f.err, f.attached}, nil
 }
 
-type attachLogSession struct{ err error }
+type attachLogSession struct {
+	err      error
+	attached <-chan struct{}
+}
 
-func (s attachLogSession) Read([]byte) (int, error)                   { return 0, s.err }
+func (s attachLogSession) Read([]byte) (int, error) {
+	<-s.attached
+	return 0, s.err
+}
 func (attachLogSession) Write(p []byte) (int, error)                  { return len(p), nil }
 func (attachLogSession) Resize(context.Context, uint16, uint16) error { return nil }
 func (attachLogSession) Close() error                                 { return nil }
@@ -76,12 +84,14 @@ func TestAttachCopyWarnsOnlyForAFailureNotADetach(t *testing.T) {
 			prev := slog.Default()
 			slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
 			t.Cleanup(func() { slog.SetDefault(prev) })
+			attached := make(chan struct{})
 			_, sub, _, _, held := streamRigWith(t, func(f *runnertest.Fake) substrate.Substrate {
-				return attachLogSubstrate{contextSubstrate{f}, c.err}
+				return attachLogSubstrate{contextSubstrate{f}, c.err, attached}
 			})
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			a, err := sub.Attach(ctx, held, runner.AttachOptions{})
+			close(attached)
 			if err != nil {
 				t.Fatal(err)
 			}
