@@ -27,21 +27,20 @@ func (p *Proxy) scrubbed(w http.ResponseWriter) (out http.ResponseWriter, done f
 	if !p.scrubResponses {
 		return w, func() {}
 	}
-	if s, done, ok := p.scrubbedAlways(w); ok {
-		return s, done
+	if s, ok := p.scrubbedAlways(w); ok {
+		return s, func() { _ = s.mw.Close() }
 	}
 	return w, func() {}
 }
 
 // scrubbedAlways wraps w whatever Config.ScrubResponses says, or reports false
-// when the masking set is empty.
-func (p *Proxy) scrubbedAlways(w http.ResponseWriter) (out http.ResponseWriter, done func(), ok bool) {
+// when the masking set is empty. The caller ends it.
+func (p *Proxy) scrubbedAlways(w http.ResponseWriter) (*scrubbedWriter, bool) {
 	m := procRegistry.Masker(p.maskKey)
 	if len(m.Secrets()) == 0 {
-		return nil, nil, false
+		return nil, false
 	}
-	s := &scrubbedWriter{ResponseWriter: w, m: m, mw: secretmask.NewMaskingWriter(w, m)}
-	return s, func() { _ = s.mw.Close() }, true
+	return &scrubbedWriter{ResponseWriter: w, m: m, mw: secretmask.NewMaskingWriter(w, m)}, true
 }
 
 func (s *scrubbedWriter) WriteHeader(code int) {

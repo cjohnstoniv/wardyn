@@ -862,6 +862,95 @@ func TestGatewayIdentity_RangeDroppedOnRoute(t *testing.T) {
 	}
 }
 
+// An answer on a route that ends in the start of the token: the end is replaced however it
+// came, a read failure, a clean short body, one byte or nearly all of it, split or not. REVERT
+// PROOF: ending with MaskingWriter.Close sends all but the token's last byte to the sandbox.
+func TestGatewayIdentity_AnswerEndingInTheTokensStart(t *testing.T) {
+	const hidden = "<secret-hidden>"
+	short := func(w http.ResponseWriter, declared int, parts ...string) {
+		if declared > 0 {
+			w.Header().Set("Content-Length", fmt.Sprint(declared))
+		}
+		for _, part := range parts {
+			_, _ = io.WriteString(w, part)
+			w.(http.Flusher).Flush()
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	cases := []struct {
+		name    string
+		respond func(w http.ResponseWriter, tok string)
+		want    func(tok string) string
+	}{
+		{"cut by Content-Length, one byte short", func(w http.ResponseWriter, tok string) { short(w, len(tok), tok[:len(tok)-1]) },
+			func(string) string { return hidden }},
+		{"clean short body, one byte short", func(w http.ResponseWriter, tok string) { short(w, len(tok)-1, tok[:len(tok)-1]) },
+			func(string) string { return hidden }},
+		{"clean short body, eight bytes", func(w http.ResponseWriter, tok string) { short(w, 8, tok[:8]) },
+			func(string) string { return hidden }},
+		{"clean short body, one byte", func(w http.ResponseWriter, tok string) { short(w, 1, tok[:1]) },
+			func(string) string { return hidden }},
+		{"cut by Content-Length, far short", func(w http.ResponseWriter, tok string) { short(w, len(tok), tok[:30]) },
+			func(string) string { return hidden }},
+		{"a start split across chunks, at the very end of a stream", func(w http.ResponseWriter, tok string) {
+			short(w, 0, "data: ", tok[:10], tok[10:60], tok[60:len(tok)-2])
+		},
+			func(string) string { return "data: " + hidden }},
+		{"the whole token split across writes", func(w http.ResponseWriter, tok string) { short(w, 0, "data: "+tok[:20], tok[20:50], tok[50:]+"\n") },
+			func(string) string { return "data: " + hidden + "\n" }},
+		{"the whole token, then the start of it again", func(w http.ResponseWriter, tok string) { short(w, 0, tok+" then "+tok[:12]) },
+			func(string) string { return hidden + " then " + hidden }},
+		{"a body ending in other bytes is untouched", func(w http.ResponseWriter, _ string) { short(w, 0, `{"ok":true}`) },
+			func(string) string { return `{"ok":true}` }},
+		// What a benign answer looks like: JWTs start "e", so text ending in "e" loses it.
+		{"a benign end equal to the token's first byte", func(w http.ResponseWriter, _ string) { short(w, 0, "the same type") },
+			func(string) string { return "the same typ" + hidden }},
+	}
+	for lane := range map[string]bool{"brokered": true, "mitm": true} {
+		for _, tc := range cases {
+			t.Run(lane+"/"+tc.name, func(t *testing.T) {
+				g := newGwidRig(t, gwidRoutes(), false)
+				g.gw.respond = func(w http.ResponseWriter, r *http.Request) { tc.respond(w, r.Header.Get(gatewayIdentityHeader)) }
+				rec := gwidLanes(g, t)[lane]()
+				if got, want := rec.Body.String(), tc.want(g.lastMinted(t)); got != want {
+					t.Errorf("answer %q, want %q", got, want)
+				}
+				if rec.Header().Get("Content-Length") != "" {
+					t.Errorf("Content-Length %q survived the masking", rec.Header().Get("Content-Length"))
+				}
+			})
+		}
+	}
+}
+
+// The cut applies to a route's answers alone. The same ending stays as it was off the prefix,
+// on a run with no route, and under the scrub flag, whose relay ends as it always did.
+func TestGatewayIdentity_CutStaysOnTheRoute(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	gwidLanes(g, t)["brokered"]()
+	start := g.lastMinted(t)[:30]
+	g.gw.respond = func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, start) }
+	rec := httptest.NewRecorder()
+	g.p.serveMITMRequest(rec, httptest.NewRequest(http.MethodGet, "https://"+gwidHost+"/other", nil), gwidHost, 443)
+	if rec.Body.String() != start {
+		t.Errorf("off the prefix: %q, want the bytes as sent", rec.Body)
+	}
+	off := newGwidRig(t, nil, false)
+	off.gw.respond = g.gw.respond
+	for lane, send := range gwidLanes(off, t) {
+		if rec := send(); rec.Body.String() != start {
+			t.Errorf("%s, no route: %q, want the bytes as sent", lane, rec.Body)
+		}
+	}
+	procMaskFor(off.p.maskKey, []byte(g.lastMinted(t)))
+	off.p.scrubResponses = true
+	for lane, send := range gwidLanes(off, t) {
+		if rec := send(); rec.Body.String() != start {
+			t.Errorf("%s, scrub flag: %q, want the held bytes flushed as they always were", lane, rec.Body)
+		}
+	}
+}
+
 // A route is matched by host, exact port and path prefix at a segment boundary.
 func TestGatewayRouteFor(t *testing.T) {
 	p := &Proxy{gatewayRoutes: gwidRoutes()}
