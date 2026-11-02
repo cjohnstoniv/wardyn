@@ -1,0 +1,586 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+// Run identity for a model gateway: an admin turns it on per provider, a run's
+// route and audience are sealed at dispatch, and the run's proxy asks here for a
+// short-lived token naming the person, the run and the runner
+// (internal/gatewayidentity signs it; internal/egress/proxy holds and sends it).
+// With no provider on, the mint and the key set answer as paths no route holds.
+
+import (
+	"cmp"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/gatewayidentity"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+const (
+	gatewayMintPath = "/api/v1/internal/gateway-identity"
+	// gatewayMintUnheldPath is a path no route holds. An off request is routed
+	// there, so its answer is the router's own, at every method and in every
+	// console and base-path configuration.
+	gatewayMintUnheldPath = "/api/v1/internal/gateway-identity-unheld"
+	// gatewayOnWindow is how long one replica keeps its answer to "is any provider
+	// on": the anonymous key set must not cost a query per request.
+	gatewayOnWindow = 30 * time.Second
+	// gatewayOnReadLimit bounds that read, which holds back the requests behind it.
+	gatewayOnReadLimit = 5 * time.Second
+	// gatewayFirstMintsKept bounds the first-mint memory. Past it the memory starts
+	// again, which costs a second row for a run, never a missing one.
+	gatewayFirstMintsKept = 4096
+	// maxGatewayAudience bounds an audience, which is written into every token.
+	maxGatewayAudience = 256
+
+	gatewayChangedMsg = "This run's model provider was changed or turned off after the run started, so the run gets no new " +
+		"gateway identity. Create a new run to use the provider as it is now."
+	gatewayReviveChangedMsg = "Model provider %q was changed or turned off after this run started, so nothing was revived: " +
+		"the run's gateway calls would be refused. Create a new run to use the provider as it is now."
+	gatewayUnavailableMsg    = "Wardyn couldn't check this run's gateway identity just now, so no token was issued"
+	gatewayKeyUnavailableMsg = "The signing key is unavailable, so this wasn't saved."
+	gatewayNotKeptMsg        = "This install keeps no run proxy configs, so a run's gateway route can't be checked and this wasn't saved."
+	gatewayServiceMsg        = "The service identity that started this run is retired or suspended"
+)
+
+// gatewayIdentityState is one replica's memory of gateway identity: whether any
+// provider is on, and which runs' first mints have an audit row.
+type gatewayIdentityState struct {
+	onMu   sync.Mutex
+	onAt   time.Time
+	on     bool
+	onRead bool // a read has succeeded
+	onErr  error
+
+	firstMu sync.Mutex
+	first   map[string]struct{}
+}
+
+// gatewayIdentityOn reports whether any enabled provider has identity on, from a
+// read at most gatewayOnWindow old. It comes before the signer, which a replica
+// keeps for its life: a key row left after the last provider turned off must not
+// publish or sign.
+//
+// A failed read is an error, and is kept for the window too. The exception is an
+// install last read as off, which stays off, so a database outage shows nothing
+// new at these paths. Both cases fail closed.
+func (s *Server) gatewayIdentityOn(ctx context.Context) (bool, error) {
+	if s.cfg.Store == nil {
+		return false, nil
+	}
+	c := &s.gatewayIdentity
+	c.onMu.Lock()
+	defer c.onMu.Unlock()
+	now := s.cfg.Now()
+	if age := now.Sub(c.onAt); !c.onAt.IsZero() && age >= 0 && age < gatewayOnWindow {
+		return c.on, c.onErr
+	}
+	// Not the caller's cancel: one that hangs up must not become the answer the
+	// next 30 seconds of callers read.
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayOnReadLimit)
+	defer cancel()
+	sc, err := s.cfg.Store.GetSiteConfig(rctx)
+	c.onAt = now
+	if err != nil {
+		slog.ErrorContext(ctx, "gateway identity: read the model providers", slog.Any("err", err))
+		c.onErr = nil
+		if !c.onRead || c.on {
+			c.on, c.onErr = false, err
+		}
+		return c.on, c.onErr
+	}
+	c.on, c.onRead, c.onErr = slices.ContainsFunc(modelProviderRows(sc), gatewayProviderOn), true, nil
+	return c.on, nil
+}
+
+// gatewayProviderOn reports whether p sends identity now.
+func gatewayProviderOn(p types.ModelProvider) bool { return p.GatewayIdentity != nil && !p.Disabled }
+
+// gatewayMintOffGate answers the mint path as a path no route holds while no
+// provider has identity on, at every method: it runs before the route and
+// before internalAuth, so an install with identity off shows nothing new and an
+// anonymous request costs one cached read. On, or when that read failed, the
+// request goes on to internalAuth and the handler, which refuses for itself.
+func (s *Server) gatewayMintOffGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == gatewayMintPath && r.URL.RawPath == "" {
+			if on, err := s.gatewayIdentityOn(r.Context()); !on && err == nil {
+				off := r.Clone(r.Context())
+				off.URL.Path = gatewayMintUnheldPath
+				next.ServeHTTP(w, off)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// mountGatewayIdentityRoute registers the mint outside the mountInternalRoutes
+// group, wrapped by internalAuth itself: gatewayMintOffGate has already answered
+// for an install with identity off. Relayed requests are refused
+// (relayedInternalRoutes false), and the sandbox has no brokered route to it.
+func (s *Server) mountGatewayIdentityRoute(r chi.Router) {
+	r.With(s.internalAuth).Post("/internal/gateway-identity", s.handleInternalGatewayIdentity)
+}
+
+// handleInternalGatewayIdentity mints a run's gateway token. internalAuth has
+// refused a terminal, kept, queued or wrongly relayed run. The run is the token's
+// claims.RunID and the body names the provider alone. What the token says comes
+// from the run token and the provider's live record, checked against what was
+// sealed at dispatch (gatewayMintAdmit), never from the request.
+//
+//	POST /api/v1/internal/gateway-identity
+func (s *Server) handleInternalGatewayIdentity(w http.ResponseWriter, r *http.Request) {
+	claims, err := claimsFromContext(r)
+	if err != nil {
+		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
+		return
+	}
+	var body struct {
+		ProviderID string `json:"provider_id"`
+	}
+	if !decodeStrict(w, r, &body) {
+		return
+	}
+	ctx := r.Context()
+	target := ""
+	if modelProviderIDPattern.MatchString(body.ProviderID) {
+		target = body.ProviderID
+	}
+	record := func(outcome string, data map[string]any) {
+		ev := s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID, "gateway_identity.mint", target, outcome, mustJSON(data))
+		ev.SourceIP = r.RemoteAddr
+		s.recordAudit(ctx, ev)
+	}
+	refuse := func(ref *ownerRefusal) {
+		record("denied", map[string]any{"reason": ref.reason, "provider": target})
+		writeErrorReason(w, ref.status, ref.reason, ref.msg)
+	}
+	run, live := liveRunFromContext(ctx)
+	if !live {
+		refuse(gatewayUnavailable())
+		return
+	}
+	p, sponsor, ref := s.gatewayMintAdmit(ctx, claims, run, body.ProviderID)
+	if ref != nil {
+		refuse(ref)
+		return
+	}
+	token, signed, err := s.signGatewayToken(ctx, claims, run, p, sponsor)
+	if err != nil {
+		slog.ErrorContext(ctx, "gateway identity: sign a token", slog.String("run_id", claims.RunID.String()), slog.Any("err", err))
+		refuse(gatewayUnavailable())
+		return
+	}
+	expires := time.Unix(signed.ExpiresAt, 0).UTC().Format(time.RFC3339)
+	// One row for a run's first token per provider on this replica, not one per mint:
+	// a proxy mints several times an hour for as long as the run lasts.
+	if s.gatewayFirstMint(claims.RunID.String(), p.ID) {
+		record("success", map[string]any{"provider": p.ID, "jti": signed.ID, "expires_at": expires, "first": true})
+	}
+	writeJSON(w, http.StatusOK, tokenRenewResponse{Token: token, ExpiresAt: expires})
+}
+
+// signGatewayToken signs for an admitted run. The signer is read, never created:
+// that is the first enable's job (refuseGatewayIdentityWrite).
+func (s *Server) signGatewayToken(ctx context.Context, claims *identity.Claims, run types.AgentRun, p types.ModelProvider, sponsor string) (string, gatewayidentity.Claims, error) {
+	if s.cfg.GatewayIdentity == nil {
+		return "", gatewayidentity.Claims{}, errors.New("no signer is configured")
+	}
+	signer, err := s.cfg.GatewayIdentity(ctx, false)
+	if err != nil {
+		return "", gatewayidentity.Claims{}, err
+	}
+	if signer == nil {
+		return "", gatewayidentity.Claims{}, errors.New("no signing key is stored")
+	}
+	issuer, _, ok := strings.Cut(claims.SPIFFEID, "/agent-run/")
+	if !ok {
+		return "", gatewayidentity.Claims{}, errors.New("the run token names no agent run")
+	}
+	return signer.Sign(gatewayidentity.Claims{
+		Issuer:   issuer,
+		Audience: p.GatewayIdentity.Audience,
+		Subject:  claims.Sub,
+		Run:      claims.RunID.String(),
+		Runner:   cmp.Or(run.RunnerPoolExecutor, run.RunnerTarget),
+		Provider: p.ID,
+		Sponsor:  sponsor,
+	})
+}
+
+// gatewayFirstMint reports whether this replica has not yet recorded a first mint
+// for the run and provider, and remembers it.
+func (s *Server) gatewayFirstMint(runID, providerID string) bool {
+	c := &s.gatewayIdentity
+	c.firstMu.Lock()
+	defer c.firstMu.Unlock()
+	key := runID + "/" + providerID
+	if _, seen := c.first[key]; seen {
+		return false
+	}
+	if c.first == nil || len(c.first) >= gatewayFirstMintsKept {
+		c.first = map[string]struct{}{}
+	}
+	c.first[key] = struct{}{}
+	return true
+}
+
+func gatewayUnavailable() *ownerRefusal {
+	return &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonGatewayIdentityUnavailable, msg: gatewayUnavailableMsg}
+}
+
+func gatewayChanged() *ownerRefusal {
+	return &ownerRefusal{status: http.StatusForbidden, reason: reasonGatewayIdentityChanged, msg: gatewayChangedMsg}
+}
+
+// gatewayMintAdmit is every check a token depends on past internalAuth: the
+// person, then the provider against what was sealed at dispatch. It returns the
+// live provider and, on a service run, the sponsor the token names.
+func (s *Server) gatewayMintAdmit(ctx context.Context, claims *identity.Claims, run types.AgentRun, providerID string) (types.ModelProvider, string, *ownerRefusal) {
+	sponsor, ref := s.gatewayMintPerson(ctx, claims, run)
+	if ref != nil {
+		return types.ModelProvider{}, "", ref
+	}
+	routes, err := s.sealedGatewayRoutes(ctx, run.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, errRunProxyConfigNotKept):
+		return types.ModelProvider{}, "", gatewayChanged()
+	case err != nil:
+		slog.ErrorContext(ctx, "gateway identity: read the sealed route", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return types.ModelProvider{}, "", gatewayUnavailable()
+	}
+	i := slices.IndexFunc(routes, func(rt proxy.GatewayIdentityRoute) bool { return rt.ProviderID == providerID })
+	if i < 0 {
+		return types.ModelProvider{}, "", gatewayChanged()
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		slog.ErrorContext(ctx, "gateway identity: read the provider", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return types.ModelProvider{}, "", gatewayUnavailable()
+	}
+	pairs, err := s.runHarnessPairs(ctx, run)
+	if err != nil {
+		slog.ErrorContext(ctx, "gateway identity: read the run's harnesses", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return types.ModelProvider{}, "", gatewayUnavailable()
+	}
+	p, found := modelProviderByID(sc.ModelProviders, providerID)
+	served := slices.ContainsFunc(pairs, func(h types.RunHarness) bool {
+		return h.ModelProviderID == providerID && p.Serves(h.Harness)
+	})
+	if !found || !served || !gatewayBindingHolds(routes[i], p) {
+		return types.ModelProvider{}, "", gatewayChanged()
+	}
+	return p, sponsor, nil
+}
+
+// gatewayMintPerson refuses a suspended person independently of the kill their
+// suspension runs: step one of a suspension commits the identity row and the
+// cutoff before its kill step, and the kill can fail and be retried, so a run
+// still alive must not go on minting as that person.
+//
+// Each check is the one statement an API token's own authentication makes, once
+// per half-life per provider. IdentityBlocked reads the identity rows bound to the
+// principal. CheckSession reads the cutoff a suspension writes for a principal no
+// row binds, a person known only by an email, with epoch -1, so a routine
+// sign-out's session cut does not count. A service run asks both of its sponsor
+// too. A store that cannot answer fails closed.
+func (s *Server) gatewayMintPerson(ctx context.Context, claims *identity.Claims, run types.AgentRun) (sponsor string, _ *ownerRefusal) {
+	if isServicePrincipal(claims.Sub) {
+		si, err := s.serviceRecord(ctx, strings.TrimPrefix(claims.Sub, types.ServicePrincipalPrefix))
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return "", &ownerRefusal{status: http.StatusForbidden, reason: reasonServiceIdentityInactive, msg: gatewayServiceMsg}
+		case err != nil:
+			slog.ErrorContext(ctx, "gateway identity: read the service identity", slog.Any("err", err))
+			return "", gatewayUnavailable()
+		case !si.Usable():
+			return "", &ownerRefusal{status: http.StatusForbidden, reason: reasonServiceIdentityInactive, msg: gatewayServiceMsg}
+		}
+		sponsor = si.Sponsor
+	}
+	ib, ok := s.cfg.Store.(identityBlocker)
+	if !ok {
+		return "", gatewayUnavailable()
+	}
+	for _, who := range nonEmptyForms(claims.Sub, sponsor) {
+		blocked, err := ib.IdentityBlocked(ctx, who, -1)
+		live := err == nil && !blocked
+		if live && s.cfg.SessionRevocations != nil {
+			var status oidc.SessionStatus
+			status, err = oidc.CheckSession(ctx, s.cfg.SessionRevocations, who, "", oidc.Issue{At: run.CreatedAt}, -1)
+			live = err == nil && status == oidc.SessionLive
+		}
+		switch {
+		case err != nil:
+			slog.ErrorContext(ctx, "gateway identity: read the person's status", slog.Any("err", err))
+			return "", gatewayUnavailable()
+		case !live:
+			return "", &ownerRefusal{status: http.StatusForbidden, reason: reasonIdentityDeactivated, msg: identityDeactivatedMsg}
+		}
+	}
+	return sponsor, nil
+}
+
+// sealedGatewayRoutes is the routes a run was dispatched with, from its sealed
+// config: never from the request or the run token.
+func (s *Server) sealedGatewayRoutes(ctx context.Context, runID uuid.UUID) ([]proxy.GatewayIdentityRoute, error) {
+	raw, err := s.loadRunProxyConfig(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	var sealed struct {
+		GatewayIdentity []proxy.GatewayIdentityRoute `json:"gateway_identity"`
+	}
+	if err := json.Unmarshal(raw, &sealed); err != nil {
+		return nil, fmt.Errorf("read the sealed gateway routes: %w", err)
+	}
+	return sealed.GatewayIdentity, nil
+}
+
+// gatewayDestination is where a provider's calls go, in the form two spellings of
+// one address compare equal in.
+type gatewayDestination struct {
+	host string
+	port int
+	path string
+}
+
+// gatewayDestinationOf normalizes a provider's base URL. ok is false for an address
+// the proxy's route could not hold, or that its path match could never cover,
+// which would send every call unsigned.
+func gatewayDestinationOf(baseURL string) (_ gatewayDestination, ok bool) {
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Hostname() == "" {
+		return gatewayDestination{}, false
+	}
+	d := gatewayDestination{host: strings.TrimSuffix(strings.ToLower(u.Hostname()), "."), port: 443, path: strings.TrimSuffix(u.Path, "/")}
+	if raw := u.Port(); raw != "" {
+		if d.port, err = strconv.Atoi(raw); err != nil || d.port < 1 || d.port > 65535 {
+			return gatewayDestination{}, false
+		}
+	}
+	if strings.ContainsAny(d.path, "?#\\") || slices.ContainsFunc(strings.Split(d.path, "/"), func(seg string) bool {
+		before, _, _ := strings.Cut(seg, ";")
+		return before == "." || before == ".."
+	}) {
+		return gatewayDestination{}, false
+	}
+	return d, true
+}
+
+// gatewayRouteOf is the route p would be dispatched with now. ok is false when p
+// has identity off or an address no route can hold.
+func gatewayRouteOf(p types.ModelProvider) (_ proxy.GatewayIdentityRoute, ok bool) {
+	if p.GatewayIdentity == nil {
+		return proxy.GatewayIdentityRoute{}, false
+	}
+	d, ok := gatewayDestinationOf(p.BaseURL)
+	if !ok {
+		return proxy.GatewayIdentityRoute{}, false
+	}
+	return proxy.GatewayIdentityRoute{
+		Host: d.host, Port: d.port, PathPrefix: d.path,
+		ProviderID: p.ID, ProviderUID: p.UID, Audience: p.GatewayIdentity.Audience,
+	}, true
+}
+
+// gatewayBindingHolds is the one predicate a mint and a revive share: the live
+// provider is on, is the provider that was dispatched (the UID, so one deleted and
+// recreated under the same id fails, as a provider key's UID check does), and would
+// be dispatched today with the sealed route. So a provider edited and edited back
+// passes, and neither a base_url nor an audience edit can send a token for one
+// gateway to another: the proxy's route is fixed for the run's life.
+func gatewayBindingHolds(sealed proxy.GatewayIdentityRoute, p types.ModelProvider) bool {
+	live, ok := gatewayRouteOf(p)
+	return ok && !p.Disabled && sealed.ProviderUID != "" && live == sealed
+}
+
+// gatewayIdentityRefusal is a revive's check of the same binding: a run that would
+// refuse every gateway call is not revived, and the refusal says why and what to do
+// instead. A run with no route reads nothing.
+func (s *Server) gatewayIdentityRefusal(ctx context.Context, cfg *proxy.Config) (*ownerRefusal, error) {
+	if len(cfg.GatewayIdentity) == 0 {
+		return nil, nil
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read the model providers: %w", err)
+	}
+	for _, rt := range cfg.GatewayIdentity {
+		p, found := modelProviderByID(sc.ModelProviders, rt.ProviderID)
+		if !found || !gatewayBindingHolds(rt, p) {
+			return &ownerRefusal{status: http.StatusConflict, reason: reasonGatewayIdentityChanged, msg: fmt.Sprintf(gatewayReviveChangedMsg, rt.ProviderID)}, nil
+		}
+	}
+	return nil, nil
+}
+
+// addGatewayRoute records a lane's route. A provider two harnesses share has one.
+// ok is false when identity is on and no route can be written: such a run is
+// refused, because it would otherwise call the gateway unsigned.
+func (d *providerDispatch) addGatewayRoute(l providerKeyLane) (ok bool) {
+	if l.provider.GatewayIdentity == nil {
+		return true
+	}
+	rt, ok := gatewayRouteOf(l.provider)
+	if !ok {
+		return false
+	}
+	if !slices.Contains(d.gatewayRoutes, rt) {
+		d.gatewayRoutes = append(d.gatewayRoutes, rt)
+	}
+	return true
+}
+
+// validateProviderGatewayIdentity holds one row's opt-in to the kinds that may carry
+// a token: a key row with a base_url, or an endpoint row. Every other kind, a
+// subscription row included, is refused: it has no gateway of an admin's to name.
+func validateProviderGatewayIdentity(mp types.ModelProvider) error {
+	gi := mp.GatewayIdentity
+	if gi == nil {
+		return nil
+	}
+	switch mp.Kind {
+	case types.ModelProviderAnthropicAPIKey, types.ModelProviderOpenAIAPIKey, types.ModelProviderCustomEndpoint:
+	default:
+		return fmt.Errorf(mp400GatewayKind, mp.ID, string(mp.Kind))
+	}
+	if mp.BaseURL == "" {
+		return atField("base_url", fmt.Errorf(mp400GatewayBaseURL, mp.ID))
+	}
+	if _, ok := gatewayDestinationOf(mp.BaseURL); !ok {
+		return atField("base_url", fmt.Errorf(mp400GatewayAddress, mp.ID))
+	}
+	if gi.Audience == "" {
+		return atField("gateway_identity.audience", fmt.Errorf(mp400GatewayAudience, mp.ID))
+	}
+	if len(gi.Audience) > maxGatewayAudience || strings.ContainsFunc(gi.Audience, unicode.IsControl) {
+		return atField("gateway_identity.audience", fmt.Errorf(mp400GatewayAudienceForm, mp.ID, maxGatewayAudience))
+	}
+	return nil
+}
+
+// validateGatewayAudiences refuses one audience on two destinations: a token for
+// it would be good at both, so one gateway could replay it at the other. Rows the
+// same destination serves may share one. Every row carrying the field counts,
+// turned off or not, since turning one on is no edit of the other.
+func validateGatewayAudiences(p *types.ModelProviders) error {
+	type holder struct {
+		id   string
+		dest gatewayDestination
+	}
+	seen := map[string]holder{}
+	for _, mp := range p.Providers {
+		if mp.GatewayIdentity == nil {
+			continue
+		}
+		dest, _ := gatewayDestinationOf(mp.BaseURL) // validateProviderGatewayIdentity has passed it
+		first, ok := seen[mp.GatewayIdentity.Audience]
+		if ok && first.dest != dest {
+			return atField("gateway_identity.audience", fmt.Errorf(mp400GatewayAudienceDup, mp.ID, mp.GatewayIdentity.Audience, first.id))
+		}
+		if !ok {
+			seen[mp.GatewayIdentity.Audience] = holder{id: mp.ID, dest: dest}
+		}
+	}
+	return nil
+}
+
+// validateGatewayIdentityEdit refuses a save that re-points a provider with identity
+// on and keeps its audience: the audience names one gateway, so a new address needs
+// its own. A retyped value can't be told from a kept one, so the same audience is
+// refused however it arrived; saving with identity off first is the way to keep it.
+// It needs the stored block, so it is not in validateModelProviders.
+func validateGatewayIdentityEdit(block, stored *types.ModelProviders) error {
+	if block == nil {
+		return nil
+	}
+	for _, p := range block.Providers {
+		prior, ok := modelProviderByID(stored, p.ID)
+		if !ok || p.GatewayIdentity == nil || prior.GatewayIdentity == nil ||
+			prior.GatewayIdentity.Audience != p.GatewayIdentity.Audience {
+			continue
+		}
+		before, _ := gatewayDestinationOf(prior.BaseURL)
+		after, _ := gatewayDestinationOf(p.BaseURL)
+		if before != after {
+			return atField("gateway_identity.audience", fmt.Errorf(mp400GatewayAudienceMoved, p.ID))
+		}
+	}
+	return nil
+}
+
+// introducedGatewayIdentity reports whether block turns identity on for a provider
+// that was not sending it. Only that makes or reads the key, the reason
+// introducedSubscription gives: a stored provider and a damaged key row must not
+// wedge every later save of this document, the one that turns identity off included.
+func introducedGatewayIdentity(block, stored *types.ModelProviders) bool {
+	if block == nil {
+		return false
+	}
+	return slices.ContainsFunc(block.Providers, func(p types.ModelProvider) bool {
+		prior, ok := modelProviderByID(stored, p.ID)
+		return gatewayProviderOn(p) && (!ok || !gatewayProviderOn(prior))
+	})
+}
+
+// refuseGatewayIdentityWrite is a save door's stored-block half of the identity
+// rules, and makes the signing key at the first save that turns identity on, so
+// the key set can serve it before any run starts and an install with identity off
+// has no row. A failed create refuses the save. It answers for itself and returns
+// true when it refused; prefix is the door's own sentence opening.
+func (s *Server) refuseGatewayIdentityWrite(w http.ResponseWriter, r *http.Request, block, stored *types.ModelProviders, prefix string) bool {
+	if err := validateGatewayIdentityEdit(block, stored); err != nil {
+		writeErrorReasonField(w, http.StatusBadRequest, reasonSiteConfigInvalid, prefix+err.Error(), refusalField(err))
+		return true
+	}
+	if !introducedGatewayIdentity(block, stored) {
+		return false
+	}
+	if _, kept := s.runProxyConfigStore(); !kept {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonGatewayIdentityUnavailable, gatewayNotKeptMsg)
+		return true
+	}
+	if s.cfg.GatewayIdentity != nil {
+		signer, err := s.cfg.GatewayIdentity(r.Context(), true)
+		if err == nil && signer != nil {
+			return false
+		}
+		slog.ErrorContext(r.Context(), "gateway identity: make the signing key", slog.Any("err", err))
+	}
+	writeErrorReason(w, http.StatusServiceUnavailable, reasonGatewayIdentityUnavailable, gatewayKeyUnavailableMsg)
+	return true
+}
+
+// gatewayIdentityIssuer is every token's iss, as the run token spells it: the
+// trust domain's SPIFFE address, not the bare name /healthz reports. It is what the
+// console shows and a gateway must be told. "" when the name cannot be read.
+func (s *Server) gatewayIdentityIssuer() string {
+	td, err := spiffeid.TrustDomainFromString(s.cfg.TrustDomain)
+	if err != nil {
+		return ""
+	}
+	return td.IDString()
+}

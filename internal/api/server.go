@@ -773,9 +773,10 @@ type Config struct {
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
 type Server struct {
-	runnerStreams runnerStreamState
-	cfg           Config
-	router        chi.Router
+	runnerStreams   runnerStreamState
+	gatewayIdentity gatewayIdentityState
+	cfg             Config
+	router          chi.Router
 	// metrics holds the /metrics scrape counters (see metrics.go). Zero value is ready to use.
 	metrics metrics
 	// recordingChainWalk lets one recording range check (recording_chain.go) walk the audit log at a time on this replica:
@@ -851,7 +852,6 @@ type Server struct {
 	// substrateProbe is this replica's cached probe of the runner's substrate,
 	// read by /metrics and /setup/status (substrate_health.go).
 	substrateProbe substrateProbeCache
-
 	refRulesetMu   sync.Mutex
 	refRulesetAt   time.Time
 	refRulesetRow  SetupCheck

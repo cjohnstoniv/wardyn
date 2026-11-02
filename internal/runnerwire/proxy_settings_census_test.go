@@ -45,14 +45,15 @@ var proxySettingOfField = map[string]string{
 	// (proxy.patPushTarget), so an admin's denial of Owner/Repo.git is asked
 	// again as owner/repo: the one decision the operator turned it on for is lost.
 	"CanonicalPushRepos": ProxySettingCanonicalRepos,
+	// Dropped, the proxy attaches no token and forwards the sandbox's own header
+	// to the gateway: an older remote executor must refuse the run, not run it
+	// unsigned. A person's runner never gets this far (internal/placement enforce.go).
+	"GatewayIdentity": ProxySettingGatewayIdentity,
 }
 
 // proxyFieldExemptions maps each post-v0.9.8 field left ungated to why a runner
 // dropping it fails closed.
 var proxyFieldExemptions = map[string]string{
-	"GatewayIdentity": "placement refuses it at every local door (internal/placement enforce.go gates), so a person's runner " +
-		"never receives it set; dropped by an older remote-hosted executor, its proxy attaches no token and the model call " +
-		"reaches the gateway unsigned, which a gateway in the documented strict mode refuses",
 	"DesktopSignins": "the org sets it only when signinTarget holds, which is false for a run with a runner or a pool " +
 		"(internal/api run_desktop_signin.go signinTarget; remote.Substrate is no runner.SigninExecer either), so a " +
 		"wardyn-runnerd never receives it set; dropped, " +

@@ -1423,7 +1423,7 @@ func TestGatewayIdentityConfig(t *testing.T) {
 	for f := range rt.Fields() {
 		keys = append(keys, f.Tag.Get("json"))
 	}
-	if want := []string{"host", "port", "path_prefix,omitempty", "provider_id", "audience"}; !slices.Equal(keys, want) {
+	if want := []string{"host", "port", "path_prefix,omitempty", "provider_id", "audience", "provider_uid,omitempty"}; !slices.Equal(keys, want) {
 		t.Fatalf("route keys %v: a route holds no token and no key, want %v", keys, want)
 	}
 	good := map[string]any{"host": gwidHost, "port": 443, "path_prefix": "/v1", "provider_id": "p", "audience": "a"}

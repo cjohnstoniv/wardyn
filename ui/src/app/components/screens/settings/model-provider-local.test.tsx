@@ -17,7 +17,7 @@ import type { ModelProvider } from "../../../lib/types/site";
 import { setField } from "../../../../test/set-field";
 import { expandCard } from "../../../lib/test-dom";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { addressChanged, refusedModel } from "./model-provider-draft";
+import { addressChanged, refusedField, refusedModel } from "./model-provider-draft";
 import { ModelProviderEditor } from "./model-provider-editor";
 import { ModelProvidersList } from "./model-providers-list";
 
@@ -317,5 +317,18 @@ describe("the provider list", () => {
     renderList();
     await expandCard(M.TITLE);
     expect(await screen.findByText(LOCAL_MODEL_LIST.EMPTY_EXTRA)).toBeInTheDocument();
+  });
+});
+
+// The server's words, from internal/api/model_providers.go.
+describe("a gateway identity refusal", () => {
+  it.each([
+    ['model_providers: "p": gateway_identity: audience is required', "gateway_audience"],
+    [`model_providers: "p": moved to a new address, so gateway_identity.audience can't stay the same: use a different one, or save with identity off first`, "gateway_audience"],
+    ['model_providers: "q": gateway_identity.audience "a" is already used by provider "p" for a different address; use a different one for each', "gateway_audience"],
+    ['model_providers: "p": gateway_identity needs a base_url, or the token would go to the vendor', "base_url"],
+    ['model_providers: "p": gateway_identity is not available for anthropic_subscription providers', null],
+  ])("%s", (message, field) => {
+    expect(refusedField(message)).toBe(field);
   });
 });

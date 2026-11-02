@@ -30,7 +30,6 @@ h1{color:#58a6ff;font-size:1.4rem;}code{color:#7ee787;}a{color:#58a6ff;}</style>
 // for client-side routes); without one it serves the embedded status page at /.
 // The /api and /healthz routes are already registered and take precedence.
 func (s *Server) mountUI(r chi.Router) {
-	const gatewayJWKS = "/.well-known/wardyn-experimental/gateway-jwks.json"
 	if s.cfg.UIDir == "" {
 		r.Get("/", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -40,7 +39,7 @@ func (s *Server) mountUI(r chi.Router) {
 		// unheld path answers 404, and with no GET /* to share that 405 another
 		// method would show the JWKS exists. Every other path gets chi's own answer.
 		r.NotFound(func(w http.ResponseWriter, req *http.Request) {
-			if req.URL.Path == gatewayJWKS && req.Method == http.MethodGet {
+			if req.URL.Path == gatewayJWKSRoute && req.Method == http.MethodGet {
 				s.handleGatewayJWKS(w, req)
 				return
 			}
@@ -48,7 +47,7 @@ func (s *Server) mountUI(r chi.Router) {
 		})
 		return
 	}
-	r.Get(gatewayJWKS, s.handleGatewayJWKS)
+	r.Get(gatewayJWKSRoute, s.handleGatewayJWKS)
 	dir := s.cfg.UIDir
 	fs := http.FileServer(http.Dir(dir))
 	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {

@@ -788,6 +788,9 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid site config: "+err.Error())
 		return
 	}
+	if s.refuseGatewayIdentityWrite(w, r, cfg.ModelProviders, existing.ModelProviders, "invalid site config: ") {
+		return
+	}
 	// Narrowing is never silent on this door either, and this is the door where
 	// it matters most: a laptop re-applies /etc/wardyn/site-config.json on EVERY
 	// boot, so an MDM-tightened base URL lands here, not on the providers page,

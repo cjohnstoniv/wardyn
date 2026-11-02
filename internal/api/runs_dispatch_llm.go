@@ -387,6 +387,8 @@ type dispatchLLMPlan struct {
 	localModels map[string]types.LocalModelSettings
 	// localAllowlists is those allowlists by provider id, as recorded on the run (recordModelAllowlists).
 	localAllowlists map[string][]string
+	// gatewayRoutes is ProxyConfig.GatewayIdentity: nil, so no key is written, unless the run chose a provider with it on.
+	gatewayRoutes []proxy.GatewayIdentityRoute
 	// mitmLLM is whether the BUILT-IN LLM hosts should be intercepted —
 	// subscription injection or intercept_tls inspection, never a CA minted
 	// purely for artifact tokens. Computed here because every input to it is
@@ -531,6 +533,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		kubectlCLI:           kubectlCLI,
 		mitmLLM:              subscription || mitmForInspect,
 		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams, localModels: prov.localModels, localAllowlists: prov.localAllowlists,
+		gatewayRoutes: prov.gatewayRoutes,
 	}, true
 }
 

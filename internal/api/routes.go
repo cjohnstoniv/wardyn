@@ -28,7 +28,7 @@ func (s *Server) routes() chi.Router {
 	// real TCP peer instead. Handler's trustedProxyClient reads X-Forwarded-For
 	// ONLY from a peer in the explicit WARDYN_TRUSTED_PROXIES allowlist.
 	r.Use(middleware.Recoverer)
-	r.Use(s.securityHeaders, s.dropInboundOnWrite)
+	r.Use(s.securityHeaders, s.dropInboundOnWrite, s.gatewayMintOffGate)
 
 	r.Get("/healthz", s.handleHealthz)
 	// Readiness: proves Postgres is reachable, not just that the process is up
@@ -669,8 +669,8 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}/attach", s.handleAttachWS)
 		})
 
-		// Internal sidecar surface (run-token bearer) — see mountInternalRoutes.
-		r.Group(s.mountInternalRoutes)
+		r.Group(s.mountInternalRoutes) // the sidecar surface (run-token bearer)
+		s.mountGatewayIdentityRoute(r) // and its one door gated before internalAuth
 
 		// Ground-truth ingest surface (host-sensor bearer, aud=wardyn-groundtruth).
 		// SEPARATE auth group from the run-token internal surface above: the
