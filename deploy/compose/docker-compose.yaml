@@ -697,7 +697,7 @@ services:
   # ───────────────────────────────────────────────────────────────────────────
   tetragon:
     # Digest-pinned (tag kept for readability); bump both together on a version move.
-    image: quay.io/cilium/tetragon:v1.7.1@sha256:afc9458ba4bc3f2795da3df6b03d88ce50e175ac3903027de8036e2046b84a02
+    image: quay.io/cilium/tetragon:v1.8.0@sha256:5ed9088a1582131d71b06c98e0d549a37a71ae63ab13aabefc7a47553c822a9d
     container_name: ${WARDYN_NS:-wardyn}-tetragon
     profiles: ["groundtruth"]
     # Host eBPF sensor: needs privileged + host PID/cgroup + kernel mounts.
