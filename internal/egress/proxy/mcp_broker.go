@@ -499,11 +499,6 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	stripSandboxCredentials(out.Header, "")
 	// An MCP server gets the call id on a run with a gateway route, and no identity token.
 	p.stripGatewayHeaders(out.Header)
-	callID := ""
-	if len(p.gatewayRoutes) > 0 {
-		callID = uuid.NewString()
-		out.Header.Set(gatewayCallIDHeader, callID)
-	}
 	if s.grantID != nil {
 		hdr, err := p.mcpCredential(x.r.Context(), s)
 		if err != nil {
@@ -512,6 +507,11 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 			return
 		}
 		out.Header.Set(hdr.name, hdr.value)
+	}
+	callID := ""
+	if len(p.gatewayRoutes) > 0 {
+		callID = uuid.NewString()
+		out.Header.Set(gatewayCallIDHeader, callID)
 	}
 	resp, err := p.roundTripUpstream(out)
 	if err != nil {
