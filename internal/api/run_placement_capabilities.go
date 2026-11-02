@@ -655,9 +655,9 @@ func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementC
 	rn.ID = id
 	var live int
 	if st, ok := s.cfg.Store.(interface {
-		RunnerMacOSVMHolders(context.Context, []uuid.UUID) (map[uuid.UUID]int, error)
+		RunnerMacOSVMHolders(context.Context, []uuid.UUID, uuid.UUID) (map[uuid.UUID]int, error)
 	}); ok && haveCaps {
-		held, err := st.RunnerMacOSVMHolders(ctx, []uuid.UUID{id})
+		held, err := st.RunnerMacOSVMHolders(ctx, []uuid.UUID{id}, promotedRun(ctx))
 		if err != nil {
 			return nil, err
 		}
