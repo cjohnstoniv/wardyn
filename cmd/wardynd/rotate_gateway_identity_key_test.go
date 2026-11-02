@@ -25,10 +25,13 @@ type testGatewayKeyStore struct {
 	getErr       error
 	gets, puts   int
 	createLocked int
+	touched      []string // every key name read or written
+	putCtx       []context.Context
 }
 
-func (s *testGatewayKeyStore) Get(context.Context, string) ([]byte, error) {
+func (s *testGatewayKeyStore) Get(_ context.Context, name string) ([]byte, error) {
 	s.gets++
+	s.touched = append(s.touched, name)
 	if s.getErr != nil {
 		return nil, s.getErr
 	}
@@ -38,8 +41,10 @@ func (s *testGatewayKeyStore) Get(context.Context, string) ([]byte, error) {
 	return s.row, nil
 }
 
-func (s *testGatewayKeyStore) Put(_ context.Context, _ string, v []byte) error {
+func (s *testGatewayKeyStore) Put(ctx context.Context, name string, v []byte) error {
 	s.puts++
+	s.touched = append(s.touched, name)
+	s.putCtx = append(s.putCtx, ctx)
 	s.row = v
 	return nil
 }
@@ -170,10 +175,41 @@ func TestRotateGatewayIdentityRefusesWithNoKey(t *testing.T) {
 	}
 }
 
+// A rotation reads and writes one row, the gateway identity key, in the operator namespace: its write
+// carries the caller's own context, so no owner's erase fence (secretstore.BeginWrite) comes with it. That
+// is why the credential writers guard lists it in operatorNamespaceWriters and not under putOwned.
+func TestRotateGatewayIdentityTouchesOnlyItsOwnKey(t *testing.T) {
+	first, err := gatewayidentity.Rotate(nil, false, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &testGatewayKeyStore{row: first}
+	ctx := t.Context()
+	for _, retire := range []bool{false, true} {
+		if err := st.boot().rotateGatewayIdentity(ctx, &capturingRecorder{}, retire, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st.puts != 2 || st.createLocked != 0 {
+		t.Errorf("puts = %d, create locks = %d; want a write per rotation and no create", st.puts, st.createLocked)
+	}
+	for _, name := range st.touched {
+		if name != secretGatewayIdentityKey {
+			t.Errorf("a rotation touched %q, want only %q", name, secretGatewayIdentityKey)
+		}
+	}
+	for _, got := range st.putCtx {
+		if got != ctx {
+			t.Errorf("a rotation's write took a context of its own (%v), not its caller's", got)
+		}
+	}
+}
+
 // A planned rotation serves both keys, signs with the new one and says so in a
 // row; -retire-previous serves the new key alone, and its row says so.
 func TestRotateGatewayIdentityWritesARowAPersonCanFind(t *testing.T) {
-	now := time.Date(2025, 11, 2, 12, 0, 0, 0, time.UTC)
+	// The clock the Signer reads: a rotation dated in the past has already retired the key it replaced.
+	now := time.Now()
 	first, err := gatewayidentity.Rotate(nil, false, now)
 	if err != nil {
 		t.Fatal(err)
