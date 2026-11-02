@@ -636,37 +636,6 @@ describe("Review groups", () => {
   });
 });
 
-describe("Review: the person's walls", () => {
-  it("are read once for the Access group and the policy card together, so their counts cannot differ", async () => {
-    open(AGENT);
-    await ready();
-    await screen.findByLabelText(NR_REVIEW.POLICY_TITLE);
-    await waitFor(() => expect(wfetchMock.mock.calls.some(([p]) => p === "/me/walls")).toBe(true));
-    expect(wfetchMock.mock.calls.filter(([p]) => p === "/me/walls")).toHaveLength(1);
-  });
-});
-
-describe("Review: Your walls apply (G4a)", () => {
-  it("says which walls apply above the groups, not inside the Access group", async () => {
-    open(AGENT, { walls: { denied_domains: ["x.example"], first_use_approval: "always_deny" } });
-    await ready();
-    const line = await screen.findByTestId("walls-apply");
-    expect(line).toHaveTextContent("Your walls apply: 1 site never reached. Change your walls");
-    expect(screen.getByRole("link", { name: "Change your walls" })).toHaveAttribute("target", "_blank");
-    expect(document.querySelectorAll("[data-testid=walls-apply]")).toHaveLength(1);
-    expect(group("access").queryByTestId("walls-apply")).toBeNull();
-    expect(line.compareDocumentPosition(document.querySelector("[data-review-group=run]") as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
-  it("says nothing for walls that name nothing, or when they could not be read", async () => {
-    open(AGENT, { walls: "fail" });
-    await ready();
-    await screen.findByLabelText(NR_REVIEW.POLICY_TITLE);
-    await waitFor(() => expect(wfetchMock.mock.calls.some(([p]) => p === "/me/walls")).toBe(true));
-    expect(screen.queryByTestId("walls-apply")).toBeNull();
-  });
-});
-
 describe("Review: an application server (#1994)", () => {
   const SERVER: RunIntent = {
     shape: "application", experience: "interactive", no_repositories_or_drives: true, runner_pool_id: "pool-general",

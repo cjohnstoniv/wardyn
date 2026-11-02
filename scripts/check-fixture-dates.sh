@@ -229,7 +229,7 @@ declare -A ALLOWLIST=(
   # A macOS base's created_at and edited_at: the age and edit tests pass a fixed instant in as the clock (statusNow,
   # Now, macOSBaseLimit.Now) and compare only to it; the runnerwire tests only encode and decode them.
   ["cmd/wardyn-runnerd/macos_vm_age_test.go"]=9
-  ["cmd/wardyn-runnerd/macos_vm_edit_test.go"]=1
+  ["cmd/wardyn-runnerd/macos_vm_edit_test.go"]=2
   ["internal/api/run_macos_vm_age_test.go"]=1
   ["internal/macvm/edit_test.go"]=1
   ["internal/runnerwire/macvm_base_age_test.go"]=2

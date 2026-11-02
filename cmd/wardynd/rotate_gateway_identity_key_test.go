@@ -173,7 +173,7 @@ func TestRotateGatewayIdentityRefusesWithNoKey(t *testing.T) {
 // A planned rotation serves both keys, signs with the new one and says so in a
 // row; -retire-previous serves the new key alone, and its row says so.
 func TestRotateGatewayIdentityWritesARowAPersonCanFind(t *testing.T) {
-	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	now := time.Date(2025, 11, 2, 12, 0, 0, 0, time.UTC)
 	first, err := gatewayidentity.Rotate(nil, false, now)
 	if err != nil {
 		t.Fatal(err)

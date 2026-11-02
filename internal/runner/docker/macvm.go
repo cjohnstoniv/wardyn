@@ -411,8 +411,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	entry, err := c.admitMacVM(admission.Request{Kind: admission.KindRun, RunID: spec.RunID.String(), GuestCPUs: cpus,
 		GuestMemory: memMiB << 20, DiskReserve: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes)), OwnerPID: self, OwnerStart: start})
 	if err != nil {
-		if short := (*admission.Refusal)(nil); errors.As(err, &short) && short.DiskNeeded > 0 {
-			spec.NotifyWaiting(runner.MacOSDiskShortMessage(short.DiskNeeded, short.DiskFreeLeft))
+		if macVMDiskShortSaid(spec, err) {
 			failed = ""
 		}
 		return fail(err)

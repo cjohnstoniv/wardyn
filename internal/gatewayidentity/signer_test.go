@@ -23,7 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-var testRotatedAt = time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+var testRotatedAt = time.Date(2025, 11, 2, 12, 0, 0, 0, time.UTC)
 
 func testClaims() Claims {
 	return Claims{
