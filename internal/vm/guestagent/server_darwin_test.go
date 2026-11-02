@@ -361,3 +361,37 @@ func TestDarwinInitTrustsTheRunCABeforeItAnswers(t *testing.T) {
 		t.Errorf("Init with no run CA = %d %s", w.Code, w.Body)
 	}
 }
+
+// A terminal exec on a real macOS kernel: the PTY opens, the child gets it as its controlling terminal
+// and the winsize, and the session ends with an exit frame, not an error frame. The attach path in the
+// runner resets the stream when the guest errors at once, so a failure here names the cause.
+func TestDarwinExecTTYRunsAShell(t *testing.T) {
+	_, _, h := newDarwinServer(t)
+	spec, _ := json.Marshal(ExecRequest{Argv: []string{"sh", "-c", `stty size; [ -t 0 ] && echo istty`}, TTY: true, Cols: 100, Rows: 30})
+	var body bytes.Buffer
+	if err := WriteFrame(&body, FrameSpec, spec); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/exec", &body))
+	var out strings.Builder
+	var exit []byte
+	rd := bytes.NewReader(w.Body.Bytes())
+	for {
+		typ, p, err := ReadFrame(rd)
+		if err != nil {
+			break
+		}
+		switch typ {
+		case FrameStdout:
+			out.Write(p)
+		case FrameError:
+			t.Fatalf("the guest errored at once: %s", p)
+		case FrameExit:
+			exit = p
+		}
+	}
+	if !bytes.Equal(exit, int32Payload(0)) || !strings.Contains(out.String(), "30 100") || !strings.Contains(out.String(), "istty") {
+		t.Fatalf("tty exec = %q, exit %v", out.String(), exit)
+	}
+}
