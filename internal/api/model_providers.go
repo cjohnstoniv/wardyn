@@ -77,7 +77,7 @@ const (
 	mp400GatewayAudience      = "model_providers: %q: gateway_identity: audience is required"
 	mp400GatewayAudienceForm  = "model_providers: %q: gateway_identity: audience must be at most %d bytes, with no control characters"
 	mp400GatewayAudienceDup   = "model_providers: %q: gateway_identity.audience %q is already used by provider %q for a different address; use a different one for each"
-	mp400GatewayAudienceAgain = "model_providers: %q: base_url changed, so gateway_identity.audience must be entered again"
+	mp400GatewayAudienceMoved = "model_providers: %q: moved to a new address, so gateway_identity.audience can't stay the same: use a different one, or save with identity off first"
 )
 
 // maxLocalModels bounds a local_model provider's allowlist; maxLocalBound
