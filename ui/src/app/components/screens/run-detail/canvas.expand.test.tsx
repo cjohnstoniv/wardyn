@@ -163,8 +163,8 @@ describe("RunCanvas — Expand", () => {
     // The dialog's own (screen-reader) title and the card's heading, which is the node that was in the tile.
     expect(within(dialog).getAllByRole("heading", { name: "Files changed" })).toContain(heading);
     expect(heading.closest("[role=dialog]")).toBe(dialog);
-    // The 64px gutter that keeps the daemon banner above it.
-    expect(dialog).toHaveClass("top-16");
+    // It starts below the shell's top bar and banners, so the daemon banner stays above it.
+    expect(dialog).toHaveClass("top-[calc(var(--shell-banner-h,3.5rem)_+_0.5rem)]");
 
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
