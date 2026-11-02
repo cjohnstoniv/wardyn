@@ -71,9 +71,9 @@ export const RUN_COCKPIT = {
   recordingMissing:
     "This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox.",
   // A macOS VM run: the agent's own process makes no cast there (SandboxSpec.Record is false), only a console
-  // or SSH terminal session does, so the second sentence says where a recording comes from.
+  // or SSH terminal session does, and its cast is saved when the session ends, only if it showed output.
   recordingMissingMacOS:
-    "This run has no captured terminal session. A recording appears here once someone opens a console or SSH terminal on this run.",
+    "This run has no captured terminal session. A recording appears here after a console or SSH terminal on this run closes, if it showed any output.",
   // The THIRD fact: a fetch that FAILED establishes nothing about the run, so
   // it must not be reported as "this run has no recording". Same sentence the
   // Recording tab already shows
