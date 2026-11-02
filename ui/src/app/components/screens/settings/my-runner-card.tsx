@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { RUNNERS_DISABLED, runners as runnersApi } from "../../../lib/api/runners";
 import { useMyCapabilities } from "../../../lib/capabilities";
+import { usePoll } from "../../../lib/use-poll";
 import { absoluteTime, relativeTime, shortDate } from "../../../lib/format";
 import type { RunnerView } from "../../../lib/types/runners";
 import { MY_POOLS, RES, RUNNER_V6 } from "../../wardyn/copy/runner-pools";
@@ -244,7 +245,7 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
 
   const read = React.useCallback((silent: boolean) => {
     const mine = ++seq.current;
-    runnersApi
+    return runnersApi
       .listMine()
       .then((list) => {
         if (mine !== seq.current) return;
@@ -264,7 +265,7 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
     seq.current++;
   }, []);
   React.useEffect(() => {
-    read(false);
+    void read(false);
     return abandon;
   }, [read, abandon]);
 
@@ -273,18 +274,7 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
   // The card polls only while it is open (Add this computer is shown then, so a runner `wardyn runner setup` just
   // registered appears) or while one waits to be claimed; a closed card does not poll, and a poll is never announced.
   const polling = status === "ready" && (waiting.length > 0 || open);
-  React.useEffect(() => {
-    if (!polling) return;
-    const tick = () => {
-      if (document.visibilityState === "visible") read(true);
-    };
-    const id = setInterval(tick, POLL_MS);
-    document.addEventListener("visibilitychange", tick);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", tick);
-    };
-  }, [polling, read]);
+  usePoll(() => read(true), POLL_MS, !polling);
 
   // The first runner's arrival remounts the block (above My pools, then below): focus that was inside it is
   // lost to the page, so it returns to the card.
@@ -391,7 +381,7 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
         runner={claiming}
         onOpenChange={(o) => !o && setClaiming(null)}
         onClaimed={() => {
-          read(true);
+          void read(true);
           pools.reload();
           requestAnimationFrame(() => sectionRef.current?.focus());
         }}
@@ -401,7 +391,7 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
         onOpenChange={(o) => !o && setLimitsFor(null)}
         onSave={(limits) => runnersApi.updateMine(limitsFor?.id ?? "", limits)}
         onSaved={() => {
-          read(true);
+          void read(true);
           pools.reload();
         }}
       />
@@ -418,7 +408,7 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
         onConfirm={() => runnersApi.revokeMine(revoking?.runner.id ?? "", revoking?.notMine)}
         onDone={() => {
           toast.success(RUNNER.REVOKED_TOAST(revoking?.runner.name ?? ""));
-          read(true);
+          void read(true);
           requestAnimationFrame(() => sectionRef.current?.focus());
         }}
         onRaced={() => read(true)}
