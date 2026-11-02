@@ -42,6 +42,12 @@ decision_sink.key
 decision_sink.spki_sha256
 decision_sink.url
 decision_spool_dir
+gateway_identity
+gateway_identity.audience
+gateway_identity.host
+gateway_identity.path_prefix
+gateway_identity.port
+gateway_identity.provider_id
 git_grants
 github_api
 github_api.capabilities

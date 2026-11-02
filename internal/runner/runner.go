@@ -243,8 +243,8 @@ type ProxyConfig struct {
 	// the person's sign-in browser; see SandboxSpec.DesktopSignins.
 	DesktopSignins bool `json:"desktop_signins,omitempty"`
 
-	// LocalModels: local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels).
-	LocalModels map[string]types.LocalModelSettings
+	LocalModels     map[string]types.LocalModelSettings // local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels)
+	GatewayIdentity []proxy.GatewayIdentityRoute        `json:"gateway_identity,omitempty"` // routes carrying the run's signed identity (proxy.Config.GatewayIdentity)
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).
