@@ -49,6 +49,8 @@ The dry run writes nothing, not even an audit row.
   - A person's later allow that replaces the standing decision undoes the deny: `run`, `always` or an unexpired `until`. A `once` allow releases that one connection, and the deny stands.
   - A person's deny covers its run. A new run starts without it, so a rule may approve the same host there.
   - To close a host, an admin removes it from `approve.hosts`, which is live at the next raise, on a running run too, or denies it by policy. `denied_domains` reaches runs started after it, since a proxy keeps the policy it started with.
+  - A profile, boundary or restriction deny also reaches a standing run when its proxy is replaced.
+  - A host a rule already approved at `run` stays open on that run until its proxy raises again, as a replaced proxy does. Removing it from `approve.hosts` does not recall it.
 
 ## What bounds a rule
 
