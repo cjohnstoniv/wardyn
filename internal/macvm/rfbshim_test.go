@@ -365,7 +365,7 @@ func TestNewDesktopSecret(t *testing.T) {
 // recording would show a leak.
 func TestRFBClientViewOnlyShimPassesOnlyReadRequests(t *testing.T) {
 	pixelFormat := []byte{0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0}
-	encodings := []byte{2, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 16, 0xc0, 0xa6, 0x4d, 0x00} // raw, ZRLE, Extended Clipboard
+	encodings := []byte{2, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 16, 0xc0, 0xa1, 0xe5, 0xce} // raw, ZRLE, Extended Clipboard
 	kept := []byte{2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 16}
 	update := []byte{3, 0, 0, 0, 0, 0, 5, 0, 3, 32}
 	input := [][]byte{

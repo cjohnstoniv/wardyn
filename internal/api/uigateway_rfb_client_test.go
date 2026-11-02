@@ -31,7 +31,7 @@ import (
 // the first two.
 var (
 	rfbClientPixelFormat   = []byte{0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0}
-	rfbClientEncodings     = []byte{2, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 16, 0xc0, 0xa6, 0x4d, 0x00}
+	rfbClientEncodings     = []byte{2, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 16, 0xc0, 0xa1, 0xe5, 0xce}
 	rfbClientEncodingsKept = []byte{2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 16}
 	rfbClientUpdate        = []byte{3, 0, 0, 0, 0, 0, 5, 0, 3, 32}
 	rfbClientLastUpdate    = []byte{3, 1, 0, 0, 0, 0, 7, 128, 4, 56}
