@@ -116,6 +116,7 @@ func TestGovernanceControlWarnings(t *testing.T) {
 		ToolRules:           []types.ToolRule{{Tool: "WebFetch", Effect: types.ToolDeny}},
 		AutoStopAfterSec:    900,
 		LLMInspection:       &types.LLMInspectionSpec{Mode: "block", DetectSecrets: true},
+		Resources:           &types.ResourceLimits{CPUMillis: 2000, MemoryMiB: 4096}, // a size of its own: the sandbox size warning is not one of these
 	}
 	has := func(got []string, want string) bool {
 		return slices.ContainsFunc(got, func(w string) bool { return strings.Contains(w, want) })
