@@ -592,7 +592,7 @@ func TestGatewayMintOffEqualsAnUnregisteredPath(t *testing.T) {
 						r.Header.Set("Authorization", "Bearer "+bearer)
 					}
 					w := httptest.NewRecorder()
-					srv.Handler().ServeHTTP(w, r)
+					panicFails(t, srv.Handler()).ServeHTTP(w, r)
 					return w
 				}
 				got, want := ask(gatewayMintPath), ask(sibling)
