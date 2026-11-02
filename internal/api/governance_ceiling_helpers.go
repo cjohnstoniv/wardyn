@@ -80,14 +80,15 @@ func governanceOmissionWarnings(ceiling, deployment types.RunPolicySpec, limits 
 //
 // local_self_defined_components is the one GovernanceLimits zero value that means deny. The rest
 // compare the profile with the deployment default: desktop directions the default blocks, a
-// recording level below the default's, tool rules and an idle auto-stop the default carries,
+// recording level below the default's (or none, which drops the minimum), tool rules and an idle auto-stop the default carries,
 // and a weaker llm_inspection mode.
 func governanceControlWarnings(ceiling, deployment types.RunPolicySpec, limits types.GovernanceLimits) []string {
 	var warns []string
 	if !limits.LocalSelfDefinedComponents {
 		warns = append(warns,
 			"this profile leaves limits.local_self_defined_components off — members under it cannot start "+
-				"a local run with a component they define themselves")
+				"a local run with a component they define themselves. Leaving it off is fine if that is intended; "+
+				"to allow such runs, set it to true in this standalone profile's own limits (an overlay cannot turn it on)")
 	}
 	own, dep := ceiling.Desktop.Effective(), deployment.Desktop.Effective()
 	var opened []string
@@ -108,7 +109,12 @@ func governanceControlWarnings(ceiling, deployment types.RunPolicySpec, limits t
 				"members under it can move data across the desktop's edge in that direction",
 			strings.Join(opened, ", ")))
 	}
-	if ceiling.Recording != "" && ceiling.Recording.Rank() < deployment.Recording.Rank() {
+	switch {
+	case ceiling.Recording == "" && deployment.Recording.Rank() > types.RecordingOff.Rank():
+		warns = append(warns, fmt.Sprintf(
+			"this profile sets no recording level while the deployment default's is %q — it sets no minimum, "+
+				"so a run under it can be recorded at a lower level", deployment.Recording))
+	case ceiling.Recording != "" && ceiling.Recording.Rank() < deployment.Recording.Rank():
 		warns = append(warns, fmt.Sprintf(
 			"this profile's recording level %q is LOWER than the deployment default's %q",
 			ceiling.Recording, deployment.Recording))
@@ -129,7 +135,8 @@ func governanceControlWarnings(ceiling, deployment types.RunPolicySpec, limits t
 	if deployment.AutoStopAfterSec > 0 && ceiling.AutoStopAfterSec <= 0 {
 		warns = append(warns, fmt.Sprintf(
 			"this profile sets no auto_stop_after_sec while the deployment default stops idle sandboxes after %d s — "+
-				"idle sandboxes under it are never reaped", deployment.AutoStopAfterSec))
+				"this profile sets no idle cap, so a run stops only if its own policy or pool says so",
+			deployment.AutoStopAfterSec))
 	}
 	inspection := func(spec *types.LLMInspectionSpec) (mode string, rank int) {
 		switch {
