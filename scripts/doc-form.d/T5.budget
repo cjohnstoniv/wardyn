@@ -7,4 +7,6 @@ docs/design/README.md=221 share=1
 # docs/operations/high-availability.md 549 measured (rc.8 E5): blockers B1 to B11, each with its state, and the verdict to keep one replica with registered runners.
 # docs/operations/high-availability.md 1071 adds 522 over 549, measured (rc.9 Mac docs): running one replica, what a restart does, the health endpoints and what to watch.
 # docs/operations/high-availability.md 1095 adds 24 over 1071, measured: finish a rollout before reviving a run (B7).
-docs/operations/high-availability.md=1095 share=6
+# docs/operations/high-availability.md 1238 adds 143 over 1095, measured: before turning on AI gateway identity.
+# docs/operations/high-availability.md 1263 adds 25 over 1238, measured: a refusal is held 30 seconds, so up to about a minute; an older replica answers as an unregistered path.
+docs/operations/high-availability.md=1263 share=6

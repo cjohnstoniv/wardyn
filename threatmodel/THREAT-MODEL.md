@@ -824,6 +824,7 @@ is not the deployment described above.**
   - Adding every rendering is the REGISTERING side's job.
   - Proxy-side (`internal/egress/proxy`, the registry `Proxy.httpError` and the decision log consult) all four sites now do it through one definition.
     - `registerHeaderCredentialFor` / `registerBasicAuthCredential` (`inject.go`) and `upstreamProxy.maskValues` (`upstream.go`) — covering the formatted header value, the bare credential under a scheme prefix, and the decoded `user:pass` and password half behind a Basic rendering.
+  - An AI gateway route always scrubs its response: [AI gateway run identity](#ai-gateway-run-identity-opt-in-experimental).
   - Not covered, and underivable from what the proxy holds: a `Format` that glues the secret to a suffix rather than a space-separated prefix, and hex-encoded or model-narrated forms, which no verbatim matcher catches.
 
 **Recording and masking boundaries.**
@@ -2295,14 +2296,15 @@ hiding them would repeat the failure mode we are designed to avoid.
     - `WARDYN_AGE_KEY` (or `WARDYN_AGE_KEY_FILE`) is the root of all Postgres secret-store encryption (`internal/secretstore/pg`): the age identity rows are encrypted under, or, with envelope encryption, the input the local KEK is HKDF-derived from.
     - Two things are stored under it in the same table.
     - First, every credential kept in the secret store: model API keys, forge tokens, SSH keys, captured AWS SSO sessions.
-    - Second, up to four process-global keys that `loadOrCreateSecret` ([`cmd/wardynd/boot_keys.go`](../cmd/wardynd/boot_keys.go)) mints on first use:
+    - Second, up to five process-global keys that `loadOrCreateSecret` ([`cmd/wardynd/boot_keys.go`](../cmd/wardynd/boot_keys.go)) mints on first use:
       - the embedded-identity ES256 signing key (`wardyn-signing-key`), always present, which signs every run-identity token (SVID) and the ground-truth sensor token;
       - the OIDC session-cookie HMAC key (`wardyn-session-key`), only when an OIDC issuer is configured;
       - the SSH gateway host key (`wardyn-ssh-host-key`), only when `WARDYN_SSH_LISTEN` is set;
-      - the UI-sandbox relay-cookie HMAC key (`wardyn-ui-session-key`), only when `WARDYN_UI_SANDBOX_LISTEN` is set.
+      - the UI-sandbox relay-cookie HMAC key (`wardyn-ui-session-key`), only when `WARDYN_UI_SANDBOX_LISTEN` is set;
+      - the AI gateway identity key (`wardyn-gateway-identity-key`), only after the first save that turns identity on.
     - An attacker who holds the age key and a read of that table (the DSN, a backup or a replica) therefore holds all of it at once.
     - That means every stored credential in cleartext and run-identity tokens the broker accepts.
-    - Wherever those features are on, it also means a console session forged for any human (admin included), forged UI relay cookies and the SSH gateway's identity.
+    - Wherever those features are on, it also means a console session forged for any human (admin included), forged UI relay cookies, the SSH gateway's identity and gateway tokens naming anyone.
     - The age key alone, without the ciphertext, decrypts nothing.
     - **Not under the age key:** the admin token, the OIDC and directory client secrets, and the DSN.
       - These boot secrets are read from env or their `_FILE` twin, and each is its own blast radius (the admin token is full API admin by itself).
@@ -3837,6 +3839,135 @@ The labelled series, every label, and where its values come from:
 - Those checks bound the value's shape, not what it does.
 - Whoever can set the value runs a command on the computer of every person who connects, the same class as whoever sets the chart's image.
 - The card's copy-paste command and the `--print` and `--config` output are run by the person, so a person must read what they paste.
+
+### AI gateway run identity (opt-in, experimental)
+
+- An admin can turn this on per model provider, so a gateway in front of a model learns whose call it is.
+- **It is off by default and experimental.** The token format and the key set's address may change before 0.11.
+- The disclosure, word for word: "When on, each model call to this gateway carries a signed token naming the person, the run and the runner."
+- A `custom_endpoint` row may opt in, and so may an `anthropic_api_key` or `openai_api_key` row with a `base_url`. Every other kind is refused at save, `anthropic_subscription` included.
+- `wardynd` signs one ES256 token per run and provider, valid for 10 minutes (`gatewayidentity.Signer`).
+- `wardyn-proxy` asks for it, holds it in memory and sends it as `X-Wardyn-Identity`, only on a request matching the provider's route: host, exact port and path prefix (`Proxy.gatewayRouteFor`).
+- The gateway verifies it against an anonymous key set, `GET /.well-known/wardyn-experimental/gateway-jwks.json`. [The AI gateway identity key](../docs/operations/secrets-and-keys.md#the-ai-gateway-identity-key) covers the key's storage and rotation.
+
+**Off changes nothing.**
+
+- On an install that never turned identity on, no key row exists. A run started with it off holds no route, so nothing is requested, signed or stripped.
+- Turning it off later keeps the key row and the routes of runs already started, and refuses new mints (`gatewayProviderOn`). A run already holding a token keeps stripping the gateway headers and signing with it until it expires, within 10 minutes; its calls on that route are then refused. Runs started afterwards hold no route for it.
+- With no provider on, the mint and the key set answer as paths no route holds, and on a run with no route a sandbox's own `X-Wardyn-Identity` passes as any other header does.
+- A gateway verifying that header still refuses a forged value by its signature.
+
+**A sandbox reading the token.**
+
+- Wardyn places no copy in the sandbox. The proxy config holds routes, never a token or a key, so the sealed `run_proxy_configs` row holds neither.
+- The token never reaches a decision row's `Cause`, the shaped error to the sandbox, `slog` or the runner audit spool. Tests pin this against a fake control plane whose refusal body carries a token (`TestGatewayIdentity_RefusalBodyNeverRepeated`, `TestGatewayIdentity_SpoolHoldsNoToken`).
+- A response on a route is always scrubbed, whatever `WARDYN_PROXY_RESPONSE_SCRUB` says, in its header values and its body (`Proxy.relayGatewayRoute`).
+- So an echo arrives in bytes the masker can read, the proxy deletes `Accept-Encoding`, `Range` and `If-Range` on a route. It refuses an answer that still carries a `Content-Encoding` other than `identity`, with a 502.
+- Every end of the answer counts as a cut: a trailing run of eight bytes or more (`gatewayCutFloor`) that begins a held token is replaced too, because a token missing its last characters can be recovered.
+- A header value's end counts the same way from eight bytes up. Shorter ones pass, because an ordinary value such as `true` ends in the letter every token starts with.
+- **Residual: masking matches exact bytes.** Both need a gateway or upstream that echoes.
+  - An echo that holds a token's signature from its first character through its twentieth has those 20 characters masked, which leaves it 120 bits short of a signature.
+  - A truncated echo can still show the token's claims (person, run, runner) with fewer than 20 signature characters, or the signature's later characters around the masked head.
+  - An echo that starts inside the first 20 signature characters matches nothing and passes whole. So a gateway that slices a token, like one that transforms it (re-lining, case, base64), can show all of its signature across two answers. Slicing and transforms by the gateway are out of scope.
+  - Under eight bytes of a held value's start may pass at the very end of an answer or header value.
+
+**A sandbox spending the identity.**
+
+- It can. Any process in the sandbox can make a model call that the proxy signs as the person, as it can with their model credential (residual #80).
+- The token adds attribution, not new reach. A gateway's log means "this person's run", never "this person typed it".
+
+**A sandbox forging the identity.**
+
+- `send` copies every sandbox header (`copyHeader`), so on a run with a route the proxy deletes both gateway header names on the plain, MITM and brokered lanes, MCP calls and the Git and PAT brokers included (`Proxy.stripGatewayHeaders`). A run with identity off is byte-identical to before.
+- An opaque tunnel is out of the proxy's reach, and a forged token fails the signature there.
+- **Residual:** a gateway in an optional or permissive mode takes a tunnelled call with no token as anonymous. Configure its check as strict.
+
+**The token used elsewhere.**
+
+- `aud` binds a token to one provider's audience. The route also holds the audience it expects, and the proxy refuses a token for any other (`gatewayTokenHolder.check`), so two independent layers check it.
+- The signing key is separate from `wardyn-signing-key`, so a gateway token never authenticates to the internal API.
+- Two providers may not share an audience with different destinations.
+- **Residual:** two services behind one destination and one audience accept each other's tokens.
+
+**A compromised gateway.**
+
+- It sees the identity, and it already sees the model credential the provider sends it.
+- **Residual:** it can replay a token to the same audience until `exp`.
+
+**A run that ends.**
+
+- Killed, kept, revoked or still queued: the mint runs `internalAuth` (`refuseTerminalRun`, `refuseRelayBinding`) after its off-check, so no new token is issued. The run id is the token's `claims.RunID`, never the request body.
+- **Residual: revocation latency is the token's life, capped at 10 minutes.** A gateway cannot learn of a kill, so a token already issued is valid to `exp`.
+- **Residual: pause does not stop mints; kill does.** A paused run (`pauseRun`) is not terminal, so its proxy keeps minting while the agent cannot act.
+
+**The signing key stolen.**
+
+- A thief forges any person at every gateway trusting the key set, with any `exp`, until the key is retired from the key set and the gateway refetches. The ten-minute lifetime bounds nothing here.
+- A planned rotation publishes the replaced key's public half for 15 more minutes. `wardynd -rotate-gateway-identity-key -retire-previous` drops it at once and writes a `secret.rekey` audit row.
+- Rotation stops every replica, so an emergency is an outage, accepted for this version.
+- Refetching is the gateway's own: agentgateway v1.7.0's source reads 15 minutes by default, with `max-age` overriding that down to 60 seconds. This was read, not run, so the procedure restarts each gateway.
+- A key row that fails to decrypt or parse fails closed: the mint answers 503 and the row is never made again.
+
+**Personal data at the gateway.**
+
+- The gateway's logs gain what the token says: `iss`, `aud`, `sub`, `jti`, `iat`, `exp`, `act`, `wardyn_run`, `wardyn_runner`, `wardyn_provider`, `wardyn_format`, and `sponsor` on a service run (`gatewayidentity.Claims`).
+- `sub` is the run's subject: a person, a service principal, or the fixed seat or admin-token name on runs started those ways.
+- `wardyn_runner` is the executor id (an operator slug, possibly a hostname), or the control plane's own runner type such as `docker`.
+- An admin opts in, with the disclosure at the switch.
+- **Residual:** retention is the gateway owner's, and the person named is not told in the console.
+- **Residual:** two Wardyns on one trust domain behind one gateway present one issuer.
+
+**A hostile gateway response.**
+
+- A call id is generated by Wardyn, never taken from an upstream request id. Every attempt on a model gateway route carries one, as does an MCP call on a run with a route; an MCP call carries no token.
+- Responses get the forced scrub and the encoding refusal above.
+
+**A control-plane outage.**
+
+- The proxy keeps a held token to `exp` while mints fail, with no grace past it, and then refuses the call without sending it (`Proxy.attachGatewayIdentity`).
+- That is sooner than other credentials, which keep a 15-minute last-good grace (`lastGoodGrace`). A long outage stops model calls on these routes, deliberately.
+- A route configured to sign never sends unsigned, because a lenient gateway would take the call as anonymous.
+- Each replica reads "is any provider on" at most every 30 seconds (`gatewayOnWindow`). A run started inside that window can have calls refused for up to about a minute: those 30 seconds, then up to 30 more before its proxy asks for a token again (`lastGoodRetry`).
+
+**The key set.**
+
+- It holds public keys only, and answers as a path no route holds while identity is off.
+- **Residual:** it reveals that a Wardyn is there and has identity on.
+
+**A redirect.**
+
+- The proxy never follows one (`roundTripUpstream`), so a 3xx goes back to the sandbox and its next request meets the route table afresh.
+- A `Location` that echoes the token is masked, exact bytes as above.
+
+**A provider edited, deleted or recreated mid-run.**
+
+- The mint compares the live provider's UID, normalized destination (host, port, path) and audience with what was sealed at dispatch in `run_proxy_configs`, which `localStoredSpec` carries through revive and admin restart.
+- On a difference it refuses, and the message says to create a new run. Editing back to the original values passes.
+- A revive after such an edit is refused with the same step, rather than reviving a run that would fail closed.
+
+**A person offboarded mid-run.**
+
+- Suspension's `killStep` ends their runs, and the mint refuses a suspended person independently of that kill. A retired or suspended service identity, or its sponsor, is refused the same way.
+- **Residual:** a person whose email form is shared with another principal gets no cutoff under that form (`shared` in the suspension plan, `store.HeldEmails`), so such a run stops only when the kill ends it.
+- **Residual:** tokens already issued live to `exp`.
+
+**A hostile address on a provider.**
+
+- `validateOneLLMGateway` refuses IP literals (`ipguard.GatewayIPRefused`), credentials in the URL and the vendor's own host.
+- A name resolving privately is refused by `egressTarget` and `vetHost`, unless `InternalHosts` lifts it.
+- The host already receives the provider's model credential. The token adds attribution, replayable only to that `aud`.
+
+**Clock skew and replicas.**
+
+- The token has no `nbf`. A proxy clock ahead drops the token early, and one behind gets a 401 at the gateway, so both fail closed.
+- Several replicas sign with one row (`lockCreate`). A replica without the route answers as an unregistered path and the call is refused, so finish the rollout before turning identity on.
+- The first-mint audit row is kept per replica, in memory, for at most 4096 run and provider pairs (`gatewayFirstMintsKept`). A restart or a second replica writes another `first` row for the same run; a first mint is never missed.
+
+**Runs on a runner.**
+
+- A run with a route is refused on a person's own runner, and the mint is not relayed (`relayedInternalRoutes`).
+- It goes to a remote executor only if that executor reports the setting. An older executor would drop the route and send the sandbox's own header, so the run is refused there rather than sent unsigned.
+- **Residual: rolling a control plane back under a newer runner.** A newer runner's proxy records `gateway_call_id` on its spooled decision rows. A control plane from before that field decodes spooled rows strictly (`DecisionIngestFromRunner`), refuses such a row for good and acknowledges it, so that decision row is lost and only a bounded `runner.event.refuse` row with its hash remains. End those runs before rolling back.
 
 ### Known latent vulnerabilities
 

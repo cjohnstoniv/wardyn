@@ -22,6 +22,20 @@
 | B10 | A few small states are per replica: the runner-event refusal window, the live-revive rate bound and the Azure DevOps Entra access cache. | Minor, tracked in #3661 and #3663. | Nothing to do: each is a per-replica bound or cache. |
 | B11 | `wardyn-runnerd` is one replica, held by its state lock. | By design. Runner redundancy is a second runner in the pool. | [Organisation runners in a Kubernetes cluster](k8s-runners.md). |
 
+## Before turning on AI gateway identity
+
+- Identity is off by default and experimental, so nothing in this section applies until an admin turns it on for a provider ([what it is](secrets-and-keys.md#the-ai-gateway-identity-key)).
+- Finish the rollout first. A call on a route that signs is refused, never sent unsigned, while any part below is older.
+
+| Still on the older version | What happens |
+|---|---|
+| A `wardynd` replica | It has no mint route, so it answers as an unregistered path and that call is refused. |
+| The `wardyn-proxy` image | It refuses the config's new key, so the run fails at start. |
+| A remote executor's `wardyn-runnerd` | It does not report the setting, so the run is refused rather than called unsigned. |
+
+- Each replica notices the change within 30 seconds. A run started in that window can have calls refused for up to about a minute: those 30 seconds, then up to 30 more before its proxy asks for a token again.
+- Rotating the key stops every replica, so plan it as downtime: [Rotating the key](secrets-and-keys.md#rotating-the-key).
+
 ## Running one replica
 
 - One replica is the chart's default: `replicas: 1` ([`values.yaml`](../../deploy/helm/wardyn/values.yaml)), and the chart refuses more unless `ha.enabled` is set.
