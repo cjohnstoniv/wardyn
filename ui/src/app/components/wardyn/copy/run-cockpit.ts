@@ -180,6 +180,8 @@ export const RUN_COCKPIT = {
   dock: "Widget dock",
   closeDock: "Close the widget dock",
   showWidget: (label: string) => `Show ${label}`,
+  // The control in a tile's header that opens the same widget in a large view (aria-label and tooltip).
+  expandWidget: (label: string) => `Expand ${label}`,
   // Bottom strip. The three counts are the SAME facts the Egress and
   // Credentials widgets state, said as text you can read without opening
   // anything — which is the whole point of the strip on this board.

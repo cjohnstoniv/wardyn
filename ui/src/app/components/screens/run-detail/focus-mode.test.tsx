@@ -252,6 +252,13 @@ describe("Focus mode — the edge dock", () => {
     expect(screen.queryByRole("heading", { name: "Egress" })).toBeNull();
   });
 
+  // #3940: the dock is focus mode's large view already, and has no provider, so its cards draw no Expand control.
+  it("draws no Expand control on a docked widget", async () => {
+    render(<FocusMode ctx={ctx()} onExit={() => {}} />);
+    expect(screen.getByRole("heading", { name: "Egress" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: RUN_COCKPIT.expandWidget("Egress") })).toBeNull();
+  });
+
   it("⌘\\ toggles it", async () => {
     const user = userEvent.setup();
     render(<FocusMode ctx={ctx()} onExit={() => {}} />);
