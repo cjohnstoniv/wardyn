@@ -151,6 +151,12 @@ The recording fields of an `AgentRun` are derived, not stored:
 - `ListRuns` sets them only with `?include=recording_meta`; otherwise `HasRecording` is `nil` and the key is absent, so a listed run never reads as "no recording".
 - `RecordingBytes` and `RecordingDurationSec` are omitted at zero; `HasRecording` is the only "no recording" signal.
 
+A `QUEUED` run held back by its runners' limits carries `queue.limit_sentence`.
+
+- It is on a single-run `GET /runs/{id}` and in the `warnings` of the create answer, for the run's owner or an admin. A list never has it, and it is absent when it cannot be worked out. The sentence from `queue.reason` then stands alone.
+- It names the limit as the runners stand now, for the size the start would hold: "`<runner>` is at a limit: Runs at once: 2 running of 2. This run starts when it has room." A total reads "memory total: 16 GB held of 16 GB, this run needs 8 GB"; CPU and disk read alike.
+- With several runners it gives one as an example, the runner holding the fewest runs (the first by id on a tie). That is not claimed to be the closest to having room.
+
 ## Reading the policy a run got
 
 `GetRunPolicy` returns `GET /api/v1/runs/{id}/policy`: the resolved policy, where
@@ -764,7 +770,7 @@ start.
 | `run_application_ui_apps_denied` | `422`: `POST /runs`, `POST /runs/preflight` and `POST /runs/policy-preview`: `shape` `application` declares `ui_apps` that the governance profile's `deny_ui_apps` strips or its allowed apps lack, or an inbound app that `deny_interactive` strips, and the sentence says which. Other shapes keep the strip and the warning. |
 | `run_background_watch_site_off` | `403`: watching a background macOS run's desktop while the site config's `macos_vm.allow_background_watch` is `false`. A profile's `deny_background_desktop_watch` answers as `governance_unit` instead. |
 | `run_background_watch_not_background` / `run_background_watch_old_boot` / `run_background_watch_unconfirmed` / `run_background_watch_offline` / `run_background_watch_control` / `run_background_watch_paused` | `409`: `POST /runs/{id}/desktop/watch-ticket`, the view-only ticket to a background macOS run's desktop, or that ticket at the gateway: a run that is not a background task; a boot from before its helper was asked to force the view; no report that this boot's view is forced, or caps that do not say `observe`; a runner that is offline; a Mac that offers desktop control; a paused run. `403` on the same reasons when a re-check refuses an open view. |
-| `run_background_only` | `409`: an interactive door of a background task (terminal, exec, SSH, web gateway, desktop). Logs, audit, status and the lifecycle controls (kill, revive, extend) stay. |
+| `run_background_only` | `409`: an interactive door of a background task (terminal, exec, SSH, web gateway, desktop). Logs, audit, status and the lifecycle controls (kill, revive, extend) stay. The one exception is the built-in desktop of a background macOS VM run, which its owner can watch view only through `POST /runs/{id}/desktop/watch-ticket` (the `run_background_watch_*` rows above). A declared noVNC app, the desktop's files and a desktop sign-in still answer this. |
 | `template_document_invalid` / `template_field_invalid` / `template_field_unknown` / `template_version_unsupported` | `400`, `422` for the version: a document that is not one bounded document, a value of the wrong shape (null and redaction placeholders included), a key the schema lacks, or an `api_version` or `kind` this server does not read. |
 | `template_secret_refused` / `template_run_state_refused` / `template_metadata_in_content` / `template_field_excluded` | `400`: a template never holds a secret value, state of one run (identity, session, claim, admission), an owner, scope, group or revision, or a launch-only (title, description) or retired field. The path is in the diagnostic. |
 | `template_field_unavailable` / `template_dependency_missing` / `template_coverage_invalid` / `template_shared_field_refused` | `422`: a field this server cannot honour yet (refused, never dropped), a field whose dependency is neither included nor listed under `needs_setup`, a coverage that does not fit the content, or a field that names one person's own thing in an organisation or group template. |

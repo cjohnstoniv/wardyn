@@ -168,6 +168,7 @@ the ADMIN pre-authorized.
 - `always`-scope decisions stay on the admin-or-`security_admin` gate even for a member granted the host — a grant must never promote a member's decision into durable workspace config.
 - `GET /workspaces` is not narrowed: visibility is not capability, the launch gate is what refuses.
 - Machine lanes (`/internal/*`, ground-truth ingest, attach tickets) are untouched.
+- Watching a background macOS VM run's desktop is not a capability kind: the site switch and the profile's limits decide it ([macOS VMs](macos-vms.md#watching-a-background-runs-desktop)), and the run's owner alone may open it.
 - And where the operator ceiling sets `allow_all_egress` the allowlist is not the gate for a public host, so `egress_host` narrowing bounds no public reach there — the operator's own posture, not a switch that failed.
 - An `egress_host` grant is never authority for a private address: under that ceiling a member's own exact entry for one is dropped unless the ceiling lists it ([`POLICIES.md`](../POLICIES.md), "It is a name deny").
 

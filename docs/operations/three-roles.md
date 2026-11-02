@@ -208,6 +208,8 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - A limit set later reaches new sessions and later requests on an open UI-app session, which get a `403`. It does not sever a socket already open: a terminal, an SSH session or an open UI-app socket runs until it ends.
   - A limit set during a desktop sign-in stops new entry. An open display stays until it ends, and the agent comes back at End or within 30 minutes.
   - `deny_ui_apps` does not close an SSH port forward to the app; `deny_interactive` does.
+  - `deny_background_desktop_watch` refuses watching a background macOS run's desktop, view only, under the profile as it stands now. `deny_ui_apps` and `deny_interactive` refuse it too.
+  - No role is exempt from a watch, a super admin included, because its ticket is stamped as a member's. An open watch is re-checked every 30 seconds and ends within a minute of a change, unlike the open sockets above. The refusal at the door is `governance_unit` at `runs.desktop_watch`; the re-check that ends an open watch writes a `ui.authorize` row, `denied`, with `data.reason` `governance_unit`.
 - **The autonomy rubric (0.8, #77).**
   - A profile may also carry `limits.autonomy_rubric`, nine closed fields — three egress postures (`egress_open`, `egress_reviewed`, `egress_sealed`), three secret postures (`secrets_powerful`, `secrets_baseline`, `secrets_none`) and three enforced confinement classes (`confinement_cc1`, `confinement_cc2`, `confinement_cc3`).
     - Each is unset or one of four autonomy levels:
