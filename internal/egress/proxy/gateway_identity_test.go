@@ -1243,7 +1243,7 @@ func TestGatewayIdentity_RefreshLandingDuringTheAnswer(t *testing.T) {
 		t.Helper()
 		resp := &http.Response{StatusCode: 200, Header: http.Header{"X-Echo": {token}}, Body: io.NopCloser(body)}
 		rec := httptest.NewRecorder()
-		g.p.relayGatewayRoute(rec, mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"m", nil), gwidHost, 443, resp, ruleSourceLLM, token)
+		g.p.relayGatewayRoute(rec, mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"m", nil), gwidHost, 443, resp, ruleSourceLLM, token, "")
 		return rec
 	}
 	t.Run("dropped before the set is read", func(t *testing.T) {
