@@ -47,6 +47,10 @@ type GatewayIdentityRoute struct {
 	// Audience is what this route expects in a token's aud. A token for any
 	// other audience is refused here, whatever the control plane minted.
 	Audience string `json:"audience"`
+	// ProviderUID is the provider's UID at dispatch. The proxy never reads it: it is
+	// here because this config is what is sealed, and a mint compares it to the live
+	// provider's, so one deleted and recreated under the same id fails closed.
+	ProviderUID string `json:"provider_uid,omitempty"`
 }
 
 // validate checks a route against the ones before it. A provider has one

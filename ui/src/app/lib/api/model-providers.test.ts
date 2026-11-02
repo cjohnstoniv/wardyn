@@ -37,7 +37,13 @@ describe("modelProviders.getModelProviders() — connected_people", () => {
 
   it("keeps the server facts off the document PUT sends back", async () => {
     const providers = [{ id: "anthropic", kind: "anthropic_api_key" }];
-    fetchMock.mockResolvedValueOnce(res({ providers, entra_login_configured: true, kinds_available: ["anthropic_api_key"] }));
+    fetchMock.mockResolvedValueOnce(res({
+      providers,
+      entra_login_configured: true,
+      kinds_available: ["anthropic_api_key"],
+      gateway_identity_issuer: "spiffe://wardyn.local",
+      gateway_jwks_path: "/.well-known/wardyn-experimental/gateway-jwks.json",
+    }));
     const snap = await modelProviders.getModelProviders();
     expect(snap.providers).toEqual({ providers });
   });

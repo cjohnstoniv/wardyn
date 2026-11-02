@@ -68,7 +68,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.IntegrationDelivery](): strings.Fields("Mode Header Format Path Var"),
 	reflect.TypeFor[types.IntegrationSecret]():   strings.Fields("Role SecretName Delivery"),
 	reflect.TypeFor[types.MemberDrivePolicy]():   strings.Fields("Enabled KeepMainDrive MaxPerPerson SizeMiB StorageClass"),
-	reflect.TypeFor[types.ModelProvider]():       strings.Fields("ID UID Name Kind Disabled BaseURL Auth Bedrock Azure Local Harnesses"),
+	reflect.TypeFor[types.ModelProvider]():       strings.Fields("ID UID Name Kind Disabled BaseURL Auth Bedrock Azure Local GatewayIdentity Harnesses"),
 	reflect.TypeFor[types.LocalModelSettings]():  strings.Fields("Models MaxContext MaxOutput KeepAliveSeconds AllowOnLaptopRunners"),
 	reflect.TypeFor[types.ModelProviders]():      strings.Fields("Providers"),
 	reflect.TypeFor[types.ProviderAuth]():        strings.Fields("Header Format"),
@@ -85,6 +85,8 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.UserDriveProvider]():  strings.Fields("Disabled MaxSizeMiB MemberCreate TeamDrives"),
 	reflect.TypeFor[types.WithheldScmHost]():    strings.Fields("Host ProviderID ProviderKind"),
 	reflect.TypeFor[types.WorkspaceProviders](): strings.Fields("Git Storage GitPatBrokerEnabled"),
+
+	reflect.TypeFor[types.ModelProviderGatewayIdentity](): strings.Fields("Audience"),
 }
 
 // localDispatchOpaque names the non-data interface values of the private

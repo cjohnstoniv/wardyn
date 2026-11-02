@@ -61,6 +61,7 @@ var relayedInternalRoutes = map[string]bool{
 	"PUT /api/v1/internal/sso-token/{runID}":               false, // container login is cluster-only
 	"POST /api/v1/internal/groundtruth":                    false, // no host sensor on a laptop
 	"POST /api/v1/internal/desktop-signin/check":           false, // sign-ins never run on a runner (signinTarget)
+	"POST /api/v1/internal/gateway-identity":               false, // placement refuses a gateway route on a person's runner
 }
 
 type relayRunnerKey struct{}

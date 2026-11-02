@@ -110,6 +110,7 @@ func TestGatewayJWKSServesTheKeysThatVerifyAToken(t *testing.T) {
 		askedToCreate = askedToCreate || create
 		return signer, nil
 	})
+	srv.cfg.Store.(*authzStore).siteCfg = testGatewaySite(testGatewayProvider())
 	if w := testGatewayGet(srv, http.MethodGet, testGatewayJWKSPath); w.Code != http.StatusNotFound {
 		t.Errorf("outside the base path: %d, want 404", w.Code)
 	}
@@ -149,6 +150,7 @@ func TestGatewayJWKSUnreadableKeyIs503(t *testing.T) {
 	srv := testGatewayServer(t, "", "", func(context.Context, bool) (*gatewayidentity.Signer, error) {
 		return nil, errors.New("decrypt failed: row wardyn-gateway-identity-key")
 	})
+	srv.cfg.Store.(*authzStore).siteCfg = testGatewaySite(testGatewayProvider())
 	w := testGatewayGet(srv, http.MethodGet, testGatewayJWKSPath)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status %d", w.Code)
