@@ -73,10 +73,10 @@ The setup was checked against the pinned image in a one-container trial. These a
 ## The image
 
 - The gateway image is the operator's own choice to trust. This setup takes it unmodified and pins it by digest.
-- Trivy 0.70.0 (`trivy image --severity CRITICAL`, run on a `docker save` of the digest) reports nothing on the base layers. It cannot see the Rust binary's crates.
+- Trivy 0.70.0 (`trivy image --severity CRITICAL`, run on a `docker save` of the digest) found no CRITICAL findings on the base layers on 2026-11-02. It cannot see the Rust binary's crates.
 - For the crates, `Cargo.lock` at the v1.7.0 tag lists 804 registry packages. Querying them against OSV (`api.osv.dev/v1/querybatch`) flags 6.
   - The flagged `rmcp` 0.10.0 has six advisory ids. `crates/agentgateway/Cargo.toml` at the tag declares it under `[dev-dependencies]`, so it appears not to be linked into the binary.
-  - The other five (`atomic-polyfill`, `crypto-bigint`, `ctutils`, `paste`, `pulldown-cmark`) are not determined.
+  - The other five (`atomic-polyfill`, `crypto-bigint`, `ctutils`, `paste`, `pulldown-cmark`): whether they are linked is not determined.
 
 ## If the gateway verifies tokens from a JWKS URL
 

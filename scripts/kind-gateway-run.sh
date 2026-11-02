@@ -250,7 +250,7 @@ check "audit: the proxy let the tool call through to ${MCP_HOST}" $?
 step "reading the gateway's access log"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "deployment/${GATEWAY}" >"${EVIDENCE_DIR}/gateway.log" 2>&1 \
   || die "could not read the gateway's log"
-[[ "$(grep 'route=default/llm ' "${EVIDENCE_DIR}/gateway.log" | grep -E 'http\.path=/v1/messages( |$)' | grep -c 'http.status=200')" -ge 1 ]]
+[[ "$(grep 'route=default/llm ' "${EVIDENCE_DIR}/gateway.log" | grep -E 'http\.path=/v1/messages(\?[^ ]*)?( |$)' | grep -c 'http.status=200')" -ge 1 ]]
 check "gateway log: the model route served /v1/messages with 200" $?
 [[ "$(grep 'route=default/mcp ' "${EVIDENCE_DIR}/gateway.log" | grep 'mcp.method.name=tools/call' | grep -c 'http.status=200')" -ge 1 ]]
 check "gateway log: the MCP route served a tools/call with 200" $?
