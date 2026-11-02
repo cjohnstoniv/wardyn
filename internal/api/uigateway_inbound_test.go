@@ -1213,6 +1213,7 @@ func TestUIGateway_InFlightCheckDoesNotOutliveAWrite(t *testing.T) {
 // the session is not kept: the next request is admitted afresh and refused. It is a policy write because that
 // is what this cache holds; a profile's denial is the re-assert's, which meets it either way. On the old code
 // the session lands in the emptied uiInbound.sessions map and that request is served (200) for 30 seconds.
+// This pins the cache against a write in flight; it isn't proof that editing a policy reaches a run already going.
 func TestUIGateway_InFlightAdmissionDoesNotOutliveAWrite(t *testing.T) {
 	h := inboundHarnessOn(t, okBackend(), "user:bob")
 	var dials int32
