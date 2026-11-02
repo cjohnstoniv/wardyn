@@ -7,7 +7,7 @@
 // list's Limits cell and the User types editor's read-only "Ceiling and run
 // limits" section render the same words for the same field.
 import type { GovernanceLimits } from "../../../lib/api/governance";
-import { foldAutonomyRubric, GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR, runLimitsChip, setsRunLimits } from "../../../lib/governance-copy";
+import { BACKGROUND_WATCH_DOOR, foldAutonomyRubric, GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR, runLimitsChip, setsRunLimits } from "../../../lib/governance-copy";
 import { MAC_BASES } from "../../wardyn/copy/mac-bases";
 import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
 import { Chip } from "../../wardyn/primitives";
@@ -25,6 +25,7 @@ export function limitChips(limits: GovernanceLimits) {
   if (limits.deny_user_drive) chips.push(GOV.LIMIT_DRIVE_LABEL);
   if (limits.deny_member_drives) chips.push(MEMBER_DRIVE_DOOR.LABEL);
   if (limits.deny_ui_apps) chips.push(LIMITS_CHIP.UI_APPS);
+  if (limits.deny_background_desktop_watch) chips.push(BACKGROUND_WATCH_DOOR.LABEL);
   for (const placement of limits.deny_placements ?? []) chips.push(LIMITS_CHIP.PLACEMENT(placement));
   // The admin's own list, in the `label: value` form the caps use below; a bases-only profile bounds something.
   if (limits.allowed_macos_bases?.length) chips.push(`${MAC_BASES.B14}: ${limits.allowed_macos_bases.join(", ")}`);

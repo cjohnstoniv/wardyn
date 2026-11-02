@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Settings field for the oldest macOS base: the site config's `macos_vm.max_base_age_days`.
+// The Settings fields of the macOS virtual machines card: the site config's `macos_vm.max_base_age_days` and
+// `macos_vm.allow_background_watch`.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -53,9 +54,14 @@ describe("parseMaxBaseAge / macosVMBody", () => {
     expect(parseMaxBaseAge(" 30 ")).toBe(30);
     for (const bad of ["0", "-5", "1.5", "30d", "1e3", "007x", "99999999999999999999"]) expect(parseMaxBaseAge(bad)).toBeNull();
   });
-  it("sets the one field, or leaves an empty block that still names macos_vm", () => {
-    expect(macosVMBody(undefined, 30)).toEqual({ max_base_age_days: 30 });
-    expect(macosVMBody({ max_base_age_days: 30 }, "")).toEqual({});
+  it("sets the days, or drops them, and always names the watch switch", () => {
+    expect(macosVMBody(undefined, 30)).toEqual({ max_base_age_days: 30, allow_background_watch: true });
+    expect(macosVMBody({ max_base_age_days: 30 }, "")).toEqual({ allow_background_watch: true });
+  });
+  it("writes the switch true or false, whatever is stored, and keeps each field when the other changes", () => {
+    expect(macosVMBody(undefined, 30, false)).toEqual({ max_base_age_days: 30, allow_background_watch: false });
+    expect(macosVMBody({ allow_background_watch: false }, 30)).toEqual({ max_base_age_days: 30, allow_background_watch: true });
+    expect(macosVMBody({ max_base_age_days: 30, allow_background_watch: false }, "", false)).toEqual({ allow_background_watch: false });
   });
 });
 
@@ -69,6 +75,30 @@ describe("MacOSVMSettingsCard", () => {
     expectActionBar(saveBtn(card));
   });
 
+  it("shows the watch switch on when nothing is stored, and saving it off sends allow_background_watch false", async () => {
+    const card = await open();
+    const watch = within(card).getByRole("switch", { name: T.WATCH_LABEL });
+    expect(watch).toHaveAttribute("aria-checked", "true");
+    expect(within(card).getByText(T.WATCH_HINT)).toBeInTheDocument();
+    expect(saveBtn(card)).toBeDisabled();
+    await userEvent.click(watch);
+    await userEvent.click(saveBtn(card));
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ upstream_proxy_url: "http://p", macos_vm: { allow_background_watch: false } }, '"v1"');
+    expect(toastSuccess).toHaveBeenCalledWith("macOS settings saved.");
+    expect(saveBtn(card)).toBeDisabled();
+  });
+
+  it("reads a stored false as off, and turning it on again drops the key with one Save beside the days", async () => {
+    snapshotMock.mockResolvedValue({ siteConfig: { macos_vm: { max_base_age_days: 30, allow_background_watch: false } }, etag: '"v1"' });
+    const card = await open();
+    const watch = within(card).getByRole("switch", { name: T.WATCH_LABEL });
+    expect(watch).toHaveAttribute("aria-checked", "false");
+    await userEvent.click(watch);
+    await userEvent.type(field(card), "0");
+    await userEvent.click(saveBtn(card));
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ macos_vm: { max_base_age_days: 300, allow_background_watch: true } }, '"v1"');
+  });
+
   it("loads the stored maximum", async () => {
     snapshotMock.mockResolvedValue({ siteConfig: { macos_vm: { max_base_age_days: 30 } }, etag: '"v1"' });
     const card = await open();
@@ -80,7 +110,7 @@ describe("MacOSVMSettingsCard", () => {
     const card = await open();
     await userEvent.type(field(card), "30");
     await userEvent.click(saveBtn(card));
-    expect(putSiteConfigMock).toHaveBeenCalledWith({ upstream_proxy_url: "http://p", macos_vm: { max_base_age_days: 30 } }, '"v1"');
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ upstream_proxy_url: "http://p", macos_vm: { max_base_age_days: 30, allow_background_watch: true } }, '"v1"');
     expect(toastSuccess).toHaveBeenCalledWith(T.SAVED_TOAST);
     expect(saveBtn(card)).toBeDisabled();
   });
@@ -90,7 +120,7 @@ describe("MacOSVMSettingsCard", () => {
     const card = await open();
     await userEvent.clear(field(card));
     await userEvent.click(saveBtn(card));
-    expect(putSiteConfigMock).toHaveBeenCalledWith({ macos_vm: {} }, '"v1"');
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ macos_vm: { allow_background_watch: true } }, '"v1"');
     expect(field(card)).toHaveValue("");
   });
 

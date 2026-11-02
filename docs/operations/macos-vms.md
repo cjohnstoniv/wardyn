@@ -85,6 +85,7 @@
 | `macos_vm_bases_dir` | The Mac's runner, or `MacOSVMBasesDir` in the profile | A directory of the Mac's other bases, one install list each ([Several bases](#several-bases)) |
 | `MDMManaged`, `DiskEncrypted` | The managed preferences profile | The posture, from your MDM, when no posture file exists |
 | `macos_vm.max_base_age_days` | The organisation's site config | The most days since a Mac's base was prepared that a run is accepted. Empty or 0: no maximum; a negative number is refused. A runner that reports no base age is refused while one is set |
+| `macos_vm.allow_background_watch` | The organisation's site config (Settings, macOS virtual machines) | Whether a person may watch a background macOS run's desktop, view only. Absent or `true`: allowed. `false`: no one may. A governance profile's `deny_background_desktop_watch` denies it for that profile's runs. |
 
 ## Which Macs qualify
 

@@ -170,6 +170,15 @@ type SiteMacOSVM struct {
 	// so a base gets patched. 0 or absent: no maximum. A runner that does not report its base's age is
 	// refused while a maximum is set.
 	MaxBaseAgeDays int `json:"max_base_age_days,omitempty"`
+	// AllowBackgroundWatch lets a person watch a background macOS run's desktop, view only. A pointer
+	// so an explicit false survives omitempty: absent reads allowed, only false turns it off for the
+	// whole install. A governance profile can still deny it (GovernanceLimits.DenyBackgroundDesktopWatch).
+	AllowBackgroundWatch *bool `json:"allow_background_watch,omitempty"`
+}
+
+// BackgroundWatchAllowed reads the switch: a nil block or an absent field is allowed.
+func (m *SiteMacOSVM) BackgroundWatchAllowed() bool {
+	return m == nil || m.AllowBackgroundWatch == nil || *m.AllowBackgroundWatch
 }
 
 // SiteEgress is SiteConfig.Egress.

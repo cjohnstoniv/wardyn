@@ -20,3 +20,23 @@ func TestSiteConfigMacOSVMMaxBaseAgeDays(t *testing.T) {
 		t.Fatalf("an empty config encodes %s, %v", raw, err)
 	}
 }
+
+// macos_vm.allow_background_watch: absent reads allowed, and an explicit false survives the round trip.
+func TestSiteMacOSVMBackgroundWatchAllowed(t *testing.T) {
+	var absent *SiteMacOSVM
+	if !absent.BackgroundWatchAllowed() || !(&SiteMacOSVM{MaxBaseAgeDays: 7}).BackgroundWatchAllowed() {
+		t.Fatal("an absent block or field must read allowed")
+	}
+	var sc SiteConfig
+	if err := json.Unmarshal([]byte(`{"macos_vm":{"allow_background_watch":false}}`), &sc); err != nil || sc.MacOSVM.BackgroundWatchAllowed() {
+		t.Fatalf("decoded %+v, %v: false must read off", sc.MacOSVM, err)
+	}
+	raw, err := json.Marshal(sc)
+	if err != nil || string(raw) != `{"macos_vm":{"allow_background_watch":false}}` {
+		t.Fatalf("encoded %s, %v: false must be kept", raw, err)
+	}
+	on := true
+	if !(&SiteMacOSVM{AllowBackgroundWatch: &on}).BackgroundWatchAllowed() {
+		t.Fatal("true must read allowed")
+	}
+}

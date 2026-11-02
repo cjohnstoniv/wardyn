@@ -237,6 +237,10 @@ const (
 	reasonRunKillStateChanged                  = "run_kill_state_changed"                   // the run ended or kept moving between the read and the write
 	reasonRunMaxWaitInvalid                    = "run_max_wait_invalid"                     // max_wait_sec is below 1
 	reasonRunQueued                            = "run_queued"                               // the run is waiting for a slot in its pool: its end is set when it starts
+	// Watching a background macOS run's desktop (run_background_watch_limit.go). The site switch is off; a
+	// profile's deny_background_desktop_watch answers as governance_unit. Kept out of the run-mode block above.
+	reasonRunBackgroundWatchSiteOff = "run_background_watch_site_off" // macos_vm.allow_background_watch is false: no one may watch a background desktop on this install
+
 	// One-time scheduled runs (run_schedule.go): start_at on a create. Kept out of the run-mode block above,
 	// which ui/src/app/lib/run-mode-refusals.test.ts reads as the run-mode set.
 	reasonScheduledRunsOff         = "scheduled_runs_off"         // start_at sent while WARDYN_SCHEDULED_RUNS is off
