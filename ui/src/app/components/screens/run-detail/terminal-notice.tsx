@@ -63,7 +63,7 @@ export function TerminalPane({
   const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
   // The Watch link leads to this run's recording, so it needs one: has_recording is on every single-run read.
   const watchable = !recordingDisabled && run.has_recording !== false;
-  // Mock F-hero: a desktop the Mac lets be watched alone is offered here too, for whoever may enter the run. Never on a
+  // A desktop the Mac lets be watched alone is offered here too, for whoever may enter the run. Never on a
   // background run: its watch has its own ticket and lives in the Desktop tile, and this button's attach ticket refuses it.
   const watchDesktop =
     run.state === "RUNNING" && canAttach && !isBackgroundRun(run) && run.macos?.desktop === "observe" ? <WatchDesktopButton run={run} /> : undefined;

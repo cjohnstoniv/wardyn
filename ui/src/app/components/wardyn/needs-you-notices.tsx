@@ -13,6 +13,7 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import { runs as runsApi } from "../../lib/api/runs";
+import { isBackgroundRun } from "../../lib/run-entry";
 import { runHeadline } from "../../lib/types";
 import { runPath, useConsoleMode } from "./console-view";
 import { NEEDS_YOU } from "./copy/needs-you";
@@ -60,7 +61,11 @@ export function NeedsYouNotices() {
           id: `needs-you-${ap.id}`,
           description: reason,
           duration: Infinity,
-          action: { label: NEEDS_YOU.banner.takeOver, onClick: () => void navigate(runPath(view, ap.run_id)) },
+          // A background run has no console to take over, so its notice carries no Take over action.
+          action:
+            run && isBackgroundRun(run)
+              ? undefined
+              : { label: NEEDS_YOU.banner.takeOver, onClick: () => void navigate(runPath(view, ap.run_id)) },
           cancel: { label: NEEDS_YOU.toast.later, onClick: () => undefined },
         });
         if (typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden) {

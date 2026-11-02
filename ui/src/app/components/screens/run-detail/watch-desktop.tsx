@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The hero's Watch desktop (mock F-hero): the Desktop block's own action, on a macOS VM
+// The hero's Watch desktop: the Desktop block's own action, on a macOS VM
 // whose desktop is view only, where it is seen without scrolling. It renders nothing until /healthz says the
 // gateway is on. The ticket mint is the entry check, as for Open desktop.
 import * as React from "react";

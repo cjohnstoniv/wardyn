@@ -171,7 +171,7 @@ describe("TerminalPane — the Watch link needs a recording", () => {
   });
 });
 
-// Board F-hero: Watch desktop on the hero of a running macOS VM run whose desktop is view only.
+// Watch desktop on the hero of a running macOS VM run whose desktop is view only.
 describe("TerminalPane — Watch desktop", () => {
   const paneFor = (over: Record<string, unknown>, principal = "me") =>
     render(
