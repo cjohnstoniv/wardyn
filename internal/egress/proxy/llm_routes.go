@@ -274,7 +274,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		Path:     "/" + rest,
 		RawQuery: r.URL.RawQuery,
 	}
-	gatewayRoute, gatewayToken := p.gatewayRouteFor(host, port, "/"+rest), ""
+	gatewayRoute, gatewayToken, gatewayCallID := p.gatewayRouteFor(host, port, "/"+rest), "", ""
 	// send forwards one attempt carrying hdr and records its allow. On false it has answered.
 	send := func(body io.Reader, hdr *injectedHeader) (*http.Response, bool) {
 		// A fresh id for each attempt, made here and never taken from the sandbox: the
@@ -304,6 +304,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		if callID != "" {
 			outReq.Header.Set(gatewayCallIDHeader, callID)
 		}
+		gatewayCallID = callID
 		gatewayToken = outReq.Header.Get(gatewayIdentityHeader)
 		outReq.Host = hostport
 		outReq.Header.Del("Host")
@@ -312,7 +313,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		// over-report an allow.
 		resp, err := p.roundTripUpstream(outReq)
 		if err != nil {
-			seen := &egress.DecisionLog{Request: p.reqOf(r, host, port), Scan: scanSummary}
+			seen := &egress.DecisionLog{Request: p.reqOf(r, host, port), Scan: scanSummary, GatewayCallID: callID}
 			if p.refuseH2Mismatch(w, p.shapeOf(r, host), err, ruleSourceUpstreamProtocolMismatch, seen, host, "llm upstream error") {
 				return nil, false
 			}
@@ -370,7 +371,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		}
 	}
 	if gatewayRoute != nil {
-		p.relayGatewayRoute(w, r, host, port, resp, ruleSource, gatewayToken)
+		p.relayGatewayRoute(w, r, host, port, resp, ruleSource, gatewayToken, gatewayCallID)
 		return
 	}
 	p.relayUpstream(w, r, host, port, resp, ruleSource)

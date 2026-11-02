@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -176,5 +177,72 @@ func TestGatewayCallID_MCPAllowRowCarriesTheSentID(t *testing.T) {
 	}
 	if got, _ := gwcidOf(t, gwcidRows(t, f.buf), egress.Allow, ruleSourceMCP).(string); got != sent {
 		t.Errorf("allow row call id = %q, want the sent %q", got, sent)
+	}
+}
+
+// A gateway answer the proxy will not relay leaves a deny row naming the id the gateway was sent.
+func TestGatewayCallID_RelayRefusalRowCarriesIt(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	g.gw.respond = func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Encoding", "br")
+		_, _ = w.Write([]byte("x"))
+	}
+	for lane, send := range gwidLanes(g, t) {
+		g.buf.Reset()
+		if rec := send(); rec.Code != http.StatusBadGateway {
+			t.Fatalf("%s: status %d", lane, rec.Code)
+		}
+		sent := g.gw.last(t).Header.Get(gatewayCallIDHeader)
+		var got []any
+		for _, row := range gwcidRows(t, g.buf) {
+			if row["decision"] == string(egress.Deny) && strings.Contains(fmt.Sprint(row["cause"]), "Content-Encoding") {
+				got = append(got, row["gateway_call_id"])
+			}
+		}
+		if len(got) != 1 || got[0] != sent || sent == "" {
+			t.Errorf("%s: relay-refusal row call ids %v, want the sent %q", lane, got, sent)
+		}
+	}
+}
+
+// The two shared failure arms stamp the id of the attempt they were handed, and a caller
+// with none leaves the field out.
+func TestGatewayCallID_SharedFailureArmsStampIt(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	req := g.p.reqOf(httptest.NewRequest(http.MethodPost, "https://"+gwidHost+"/v1/messages", nil), gwidHost, 443)
+	for name, tc := range map[string]struct {
+		err        error
+		id, source string
+	}{
+		"h2 mismatch, id sent":    {&h2MismatchError{hadTLS: true, err: errors.New("frame")}, "id-1", ruleSourceUpstreamProtocolMismatch},
+		"dial failed, id sent":    {errors.New("connection refused"), "id-2", "builtin:dial-failed"},
+		"dial failed, no id sent": {errors.New("connection refused"), "", "builtin:dial-failed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g.buf.Reset()
+			g.p.failUpstream(httptest.NewRecorder(), tc.err, &egress.DecisionLog{Request: req, GatewayCallID: tc.id}, gwidHost, "upstream error")
+			got, present := gwcidRows(t, g.buf)[0]["gateway_call_id"]
+			if tc.id == "" && present || tc.id != "" && got != tc.id {
+				t.Errorf("row call id = %v (present %v), want %q", got, present, tc.id)
+			}
+			if rs := gwcidRows(t, g.buf)[0]["rule_source"]; rs != tc.source {
+				t.Errorf("rule_source = %v, want %s", rs, tc.source)
+			}
+		})
+	}
+}
+
+// An MCP server that cannot be dialled leaves a dial-failed row that names the id it would have been sent.
+func TestGatewayCallID_MCPDialFailedRowCarriesIt(t *testing.T) {
+	f := newMCPFixture(t, types.RunPolicySpec{AllowedDomains: []string{"mcp.github.test"}}, nil, nil)
+	f.p.mcp = newMCPBroker([]MCPServerConfig{{Key: "github", URL: "https://mcp.github.test/mcp"}}, []MCPBinding{mcpBindingFor("claude-code", "github")})
+	f.p.dial = func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("connection refused") }
+	f.p.gatewayRoutes = gwidRoutes()
+	if rec := f.post(t, mcpToken("claude-code"), "github", mcpInit); rec.Code != http.StatusBadGateway {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	id, _ := gwcidOf(t, gwcidRows(t, f.buf), egress.Deny, "builtin:dial-failed").(string)
+	if _, err := uuid.Parse(id); err != nil {
+		t.Errorf("dial-failed row call id %q: %v", id, err)
 	}
 }

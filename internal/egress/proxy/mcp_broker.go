@@ -515,7 +515,7 @@ func (x *mcpExchange) forward(w http.ResponseWriter, body []byte) {
 	}
 	resp, err := p.roundTripUpstream(out)
 	if err != nil {
-		p.failUpstream(w, err, &egress.DecisionLog{Request: x.req}, s.host, "MCP upstream error")
+		p.failUpstream(w, err, &egress.DecisionLog{Request: x.req, GatewayCallID: callID}, s.host, "MCP upstream error")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()

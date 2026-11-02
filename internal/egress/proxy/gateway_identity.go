@@ -155,11 +155,12 @@ func (p *Proxy) attachGatewayIdentity(w http.ResponseWriter, r *http.Request, h 
 // of the answer, clean or failed, is a cut: a trailing run that begins a held value
 // is replaced too, because a token missing its last characters can be recovered, and
 // a short Content-Length ends cleanly with no read error to tell it from a whole answer.
-func (p *Proxy) relayGatewayRoute(w http.ResponseWriter, r *http.Request, host string, port int, resp *http.Response, ruleSource, sentToken string) {
+func (p *Proxy) relayGatewayRoute(w http.ResponseWriter, r *http.Request, host string, port int, resp *http.Response, ruleSource, sentToken, callID string) {
 	refuse := func(cause string) {
 		if p.sink != nil {
 			log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSource)
 			log.Cause = cause
+			log.GatewayCallID = callID
 			p.sink.emit(log)
 		}
 		p.httpErrorShaped(w, p.shapeOf(r, host), host, "the model gateway's answer was not relayed", errors.New(cause), http.StatusBadGateway,
