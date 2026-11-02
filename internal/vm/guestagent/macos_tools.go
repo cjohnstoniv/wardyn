@@ -119,11 +119,15 @@ type AdminCodeResult struct {
 // or start another.
 var adminCodeForm = regexp.MustCompile(`^[A-Za-z0-9]{8,64}$`)
 
-// ToolsPosture is what edit-base's recheck reads of the guest: its local accounts, and whether Remote
-// Login answers. The host decides which accounts Wardyn made.
+// ToolsPosture is what edit-base's recheck reads of the guest: its local accounts, whether Remote Login
+// answers, and whether Full Disk Access is given to this agent. The host decides which accounts Wardyn made.
 type ToolsPosture struct {
 	Accounts    []GuestAccount `json:"accounts"`
 	RemoteLogin bool           `json:"remote_login"`
+	// FullDiskAccess is "allowed" or "refused" for this agent, as one open of macOS's protected TCC
+	// database in this boot answered; "" when that open failed some other way, and absent from an agent
+	// that predates the field. The host reads "" as unknown, never as allowed.
+	FullDiskAccess string `json:"full_disk_access,omitempty"`
 }
 
 // GuestAccount is one local account, as `dscl . -list /Users UniqueID` lists it.
@@ -194,6 +198,9 @@ type Tools struct {
 	// passwd changes an account's password from old; nil is setPassword (tests record). sshAddr is "" in use.
 	passwd  func(ctx context.Context, user, old, password string) error
 	sshAddr string
+	// fdaOpen opens the path the Full Disk Access probe names and closes it; nil is a plain read-only open
+	// (tests answer).
+	fdaOpen func(path string) error
 
 	// cltListed is the Command Line Tools labels this process's own `softwareupdate -l` runs printed,
 	// in memory only, so a boot installs only what that boot listed; nil until a `-l` has run.
@@ -404,7 +411,32 @@ func (t *Tools) handlePosture(w http.ResponseWriter, r *http.Request) {
 		_ = c.Close()
 		p.RemoteLogin = true
 	}
+	p.FullDiskAccess = t.fullDiskAccess()
 	writeJSONAny(w, p)
+}
+
+// fullDiskAccess is whether macOS lets this agent open its protected TCC database: "allowed", "refused"
+// (the kernel's EPERM or EACCES, which root gets only from privacy protection), or "" for any other
+// failure, such as a path that is not there. It opens and closes the file: it reads nothing from it and
+// writes nothing.
+func (t *Tools) fullDiskAccess() string {
+	open := t.fdaOpen
+	if open == nil {
+		open = func(path string) error {
+			fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC, 0)
+			if err == nil {
+				_ = unix.Close(fd)
+			}
+			return err
+		}
+	}
+	switch err := open("/Library/Application Support/com.apple.TCC/TCC.db"); {
+	case err == nil:
+		return "allowed"
+	case errors.Is(err, unix.EPERM), errors.Is(err, unix.EACCES):
+		return "refused"
+	}
+	return ""
 }
 
 // parseAccounts reads `dscl . -list /Users UniqueID`: one "name uid" line per account.
