@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -411,7 +412,10 @@ func TestDarwinExecTTYResizeReachesTheShell(t *testing.T) {
 		}
 	}
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/exec", &body))
+	// The shell waits on stdin; a lost line ends here, not at the suite's timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	h.ServeHTTP(w, httptest.NewRequestWithContext(ctx, "POST", "/v1/exec", &body))
 	var out strings.Builder
 	rd := bytes.NewReader(w.Body.Bytes())
 	for {
