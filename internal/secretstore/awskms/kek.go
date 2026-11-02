@@ -13,7 +13,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -33,6 +32,7 @@ import (
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/smithy-go"
 
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 )
@@ -145,7 +145,7 @@ func NewKEK(ctx context.Context, cfg Config) (*KEK, error) {
 func tlsConfig(base *tls.Config, caFile string) (*tls.Config, error) {
 	cfg := base.Clone()
 	if base == nil {
-		cfg = &tls.Config{MinVersion: tls.VersionTLS12}
+		cfg = &tls.Config{MinVersion: hoptls.MinClientTLSVersion}
 	}
 	if caFile == "" {
 		return cfg, nil
@@ -154,11 +154,8 @@ func tlsConfig(base *tls.Config, caFile string) (*tls.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read the trusted CA bundle: %w", err)
 	}
-	pool, err := x509.SystemCertPool()
-	if err != nil || pool == nil {
-		pool = x509.NewCertPool()
-	}
-	if !pool.AppendCertsFromPEM(pem) {
+	pool, err := hoptls.SystemPoolWith(pem)
+	if err != nil {
 		return nil, fmt.Errorf("the trusted CA bundle %s holds no PEM certificate", caFile)
 	}
 	cfg.RootCAs = pool

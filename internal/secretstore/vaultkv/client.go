@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +21,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 )
@@ -200,7 +200,7 @@ func loopback(host string) bool {
 // tlsConfig adds caFile (WARDYN_VAULT_CACERT_FILE, else WARDYN_TRUSTED_CA_FILE)
 // to the system roots.
 func tlsConfig(caFile string) (*tls.Config, error) {
-	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	cfg := &tls.Config{MinVersion: hoptls.MinClientTLSVersion}
 	if caFile == "" {
 		return cfg, nil
 	}
@@ -208,11 +208,8 @@ func tlsConfig(caFile string) (*tls.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read the Vault CA bundle: %w", err)
 	}
-	pool, err := x509.SystemCertPool()
-	if err != nil || pool == nil {
-		pool = x509.NewCertPool()
-	}
-	if !pool.AppendCertsFromPEM(pem) {
+	pool, err := hoptls.SystemPoolWith(pem)
+	if err != nil {
 		return nil, fmt.Errorf("the Vault CA bundle %s holds no PEM certificate", caFile)
 	}
 	cfg.RootCAs = pool
