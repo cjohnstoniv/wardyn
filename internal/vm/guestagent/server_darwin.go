@@ -707,9 +707,6 @@ func openPTY(cols, rows uint16) (*os.File, *os.File, error) {
 	if err == nil {
 		err = ptyIoctl(fd, unix.TIOCPTYGNAME, uintptr(unsafe.Pointer(&name[0])))
 	}
-	if err == nil && cols > 0 && rows > 0 {
-		err = setWinsize(master, cols, rows)
-	}
 	if err != nil {
 		master.Close()
 		return nil, nil, err
@@ -718,6 +715,15 @@ func openPTY(cols, rows uint16) (*os.File, *os.File, error) {
 	if err != nil {
 		master.Close()
 		return nil, nil, err
+	}
+	// The size goes on the slave, once it is open: the master of a pair with no open slave has no terminal
+	// behind it yet.
+	if cols > 0 && rows > 0 {
+		if err := setWinsize(slave, cols, rows); err != nil {
+			slave.Close()
+			master.Close()
+			return nil, nil, err
+		}
 	}
 	return master, slave, nil
 }
