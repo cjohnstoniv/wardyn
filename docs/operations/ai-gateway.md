@@ -146,4 +146,4 @@ Wardyn makes a fresh call id for every attempt to a model gateway route and send
 | The response scrub is forced on | `WARDYN_PROXY_RESPONSE_SCRUB=off` does not turn it off here, so a gateway that echoes the token back cannot hand it to the sandbox |
 | `Accept-Encoding` is deleted from the request | The answer arrives in bytes the scrub can read |
 | A compressed answer gets a `502` | The proxy refuses bytes it cannot scrub rather than relay them |
-| A running run keeps the routes it started with | Changing a provider does not change a run in flight. Create a new run to pick the change up |
+| A running run keeps the routes it started with | A run keeps its routes. Once a provider's gateway changes, the mint refuses that run, so its gateway calls fail once its token expires, within 10 minutes. Create a new run to pick the change up |
