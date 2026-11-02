@@ -41,7 +41,9 @@ import { CodeBlock, Mono } from "../wardyn/code-block";
 import { RUN_CLI, RUN_SSH, UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
 import { RUN_SYNC } from "../wardyn/copy/runners";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
+import { isVMKind } from "../../lib/types/machine-kind";
 import { WidgetCard } from "../wardyn/primitives";
+import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
 import { UIAppRow } from "./run-detail/ui-app-row";
 import { cn } from "../ui/utils";
 import { CliLane, GetTheCli } from "./run-detail/get-the-cli";
@@ -431,6 +433,8 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
             ))}
             <p className="mt-3 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.noRecording}</p>
+            {/* A VM run's Files panel is in its Desktop tile; any other run with a declared UI app keeps it here. */}
+            {mayAttach && !sponsorOnly && running && !isVMKind(run.machine_kind) && <DesktopFilesPanel runId={run.id} />}
           </>
         )}
       </div>

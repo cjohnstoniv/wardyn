@@ -8,7 +8,7 @@
 // gateway is on. The ticket mint is the entry check, as for Open desktop.
 import * as React from "react";
 import { health } from "../../../lib/api/health";
-import { entryErrorMessage } from "../../../lib/run-entry";
+import { entryErrorMessage, isBackgroundRun } from "../../../lib/run-entry";
 import type { RunDetail } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { DESKTOP } from "../../wardyn/copy/desktop";
@@ -30,7 +30,8 @@ export function WatchDesktopButton({ run }: { run: RunDetail }) {
     };
   }, []);
 
-  if (!gateway) return null;
+  // A background run is watched from the Desktop tile, by its own ticket; this button mints the attach ticket, which refuses it.
+  if (!gateway || isBackgroundRun(run)) return null;
 
   async function watch() {
     setError(null);

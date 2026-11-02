@@ -171,7 +171,7 @@ const names = (root: import("@playwright/test").Locator) =>
       .map((n) => n.getAttribute("aria-label") ?? n.textContent?.trim() ?? ""),
   );
 
-test("the hard rule: each widget offers the same controls expanded as in its tile", async ({ page }) => {
+test("each widget offers the same controls expanded as in its tile", async ({ page }) => {
   paths = 60;
   await openRun(page);
   for (const [id, label] of [["egress", "Egress"], ["files", "Files changed"], ["sandbox", "Sandbox"], ["credentials", "Credentials"], ["identity", "Identity"]] as const) {

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Desktop tile for a macOS VM run (mock M-D1 frames 5, 6, 7, 9, 10 and 11).
+// The Desktop tile for a macOS VM run.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -68,7 +68,7 @@ beforeEach(() => {
 });
 
 describe("DesktopCard: macOS desktop", () => {
-  it("frame 5: Ready, the macOS kind line, the same Open and pause buttons, and the run-disk note last", async () => {
+  it("Ready, the macOS kind line, the same Open and pause buttons, and the run-disk note last", async () => {
     renderCard();
     const d = await desk();
     expect(await within(d).findByRole("button", { name: DESKTOP.pauseToSignIn })).toBeEnabled();
@@ -81,7 +81,7 @@ describe("DesktopCard: macOS desktop", () => {
     expect(within(d).queryByText(DESKTOP.signInsNote)).toBeNull();
   });
 
-  it("frame 6: while paused the chip says Agent paused, with today's pause words and the macOS note", async () => {
+  it("while paused the chip says Agent paused, with today's pause words and the macOS note", async () => {
     signInsGet.mockResolvedValue({ ...runDisk, paused: true });
     renderCard();
     const d = await desk();

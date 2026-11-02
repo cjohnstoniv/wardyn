@@ -158,12 +158,15 @@ describe("DesktopCard: a background macOS run", () => {
     expect(d.textContent).toBe(DESKTOP.kindMacOS);
   });
 
-  it("with the gateway off, an open watch has no button and says the deployment has it off", async () => {
+  it("with the gateway off, an open watch has no button and says the deployment has it off, and promises no watching", async () => {
     healthMock.mockResolvedValue({ status: "ok" });
     renderCard(bg("open"));
     const d = await desk();
     expect(await within(d).findByText(/Off on this deployment/)).toBeInTheDocument();
     expect(within(d).queryByRole("button")).toBeNull();
+    for (const line of [DESKTOP.backgroundWatchTile, DESKTOP.backgroundWatchExposure, DESKTOP.loginWindowNote, UI_APPS_LANE.newTab]) {
+      expect(within(d).queryByText(line)).toBeNull();
+    }
   });
 
   it("a finished background run keeps only the disk line, with the tile Off", async () => {
@@ -243,6 +246,48 @@ describe("ConnectSSHCard: the desktop left it", () => {
     expect(screen.queryByRole("button", { name: UI_APPS_LANE.cta("desktop") })).toBeNull();
     expect(screen.queryByTestId("files-panel")).toBeNull();
     expect(signInsGet).not.toHaveBeenCalled();
+  });
+
+  const apps = [{ name: "vscode", port: 8080 }];
+
+  it("keeps the Files panel for a container run with a declared UI app, which has no Desktop tile", async () => {
+    renderAttach({ experience: "interactive", machine_kind: undefined, interactive: true, ui_apps: apps });
+    expect(await screen.findByTestId("files-panel")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: DESKTOP.title })).toBeNull();
+  });
+
+  it("has no Files panel for a container run with no declared UI app", async () => {
+    renderAttach({ experience: "interactive", machine_kind: undefined, interactive: true });
+    await screen.findByText("Attach from your terminal");
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    expect(screen.queryByTestId("files-panel")).toBeNull();
+  });
+
+  it("has no Files panel, and no card, once the container run has ended", () => {
+    const { container } = renderAttach({ experience: "interactive", machine_kind: undefined, state: "COMPLETED", ui_apps: apps });
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("has no Files panel for a container run when the gateway is off", async () => {
+    healthMock.mockResolvedValue({ status: "ok" });
+    renderAttach({ experience: "interactive", machine_kind: undefined, interactive: true, ui_apps: apps });
+    await screen.findByText("Attach from your terminal");
+    await waitFor(() => expect(healthMock).toHaveBeenCalled());
+    expect(screen.queryByTestId("files-panel")).toBeNull();
+  });
+
+  it("shows a VM run's Files panel once, in the Desktop tile and not the Attach tile", async () => {
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator={false} principal={OWNER}>
+          <DesktopCard run={{ ...run, experience: "interactive", machine_kind: "linux_vm", interactive: true, ui_apps: apps }} />
+          <ConnectSSHCard run={{ ...run, experience: "interactive", machine_kind: "linux_vm", interactive: true, ui_apps: apps }} />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByRole("region", { name: DESKTOP.title });
+    await waitFor(() => expect(screen.getAllByTestId("files-panel")).toHaveLength(1));
+    expect(screen.getByRole("region", { name: DESKTOP.title })).toContainElement(screen.getByTestId("files-panel"));
   });
 
   it("a background run has no Attach card at all", async () => {

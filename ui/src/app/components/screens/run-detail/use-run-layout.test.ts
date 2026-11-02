@@ -130,6 +130,22 @@ describe("useRunLayout: the Desktop tile on a VM run", () => {
     expect(noOverlap(l)).toBe(true);
   });
 
+  it("overlaps nothing when a widget in partly the same columns sits below Attach (ssh x8 y24 w4 h2, A x6 y26 w4 h4, C x0 y30 w8 h4)", async () => {
+    const saved: RunLayoutWidget[] = [
+      { widget: "terminal", x: 0, y: 0, w: 8, h: 12 },
+      { widget: "ssh", x: 8, y: 24, w: 4, h: 2 },
+      { widget: "identity", x: 6, y: 26, w: 4, h: 4 },
+      { widget: "credentials", x: 0, y: 30, w: 8, h: 4 },
+    ];
+    expect(noOverlap(saved)).toBe(true);
+    const { result } = await loadedAs(saved, "live", true);
+    const l = result.current.layout;
+    expect(l.find((w) => w.widget === "desktop")).toEqual({ widget: "desktop", x: 8, y: 24, w: 4, h: 4 });
+    expect(l.find((w) => w.widget === "identity")?.y).toBe(30);
+    expect(l.find((w) => w.widget === "credentials")?.y).toBe(34);
+    expect(noOverlap(l)).toBe(true);
+  });
+
   it("goes below everything when the saved layout has no Attach tile", async () => {
     const { result } = await loadedAs(SAVED, "live", true);
     expect(result.current.layout.find((w) => w.widget === "desktop")).toEqual({ widget: "desktop", x: 0, y: 12, w: 4, h: 4 });
@@ -184,5 +200,26 @@ describe("useRunLayout: the Desktop tile on a VM run", () => {
     act(() => result.current.reset());
     expect(ids(result.current.layout)).toContain("desktop");
     expect(putLayout.mock.calls[0][1]).toEqual([]);
+  });
+});
+
+describe("useRunLayout: the default rail by kind of run", () => {
+  const y = (l: RunLayoutWidget[], id: string) => l.find((w) => w.widget === id)?.y;
+
+  it("a VM run with nothing saved has the Desktop tile, Attach under it and Effective policy under that", async () => {
+    const { result } = await loadedAs([], "live", true);
+    expect([y(result.current.layout, "desktop"), y(result.current.layout, "ssh"), y(result.current.layout, "effective-policy")]).toEqual([20, 24, 29]);
+  });
+
+  it("any other run with nothing saved has no Desktop tile and no gap above Effective policy", async () => {
+    const { result } = await loadedAs([], "live", false);
+    expect(ids(result.current.layout)).not.toContain("desktop");
+    expect([y(result.current.layout, "ssh"), y(result.current.layout, "effective-policy")]).toEqual([20, 25]);
+  });
+
+  it("the first paint, before the saved layout arrives, is the same", () => {
+    getLayout.mockReturnValue(new Promise(() => {}));
+    expect(y(renderHook(() => useRunLayout("live", false, false)).result.current.layout, "effective-policy")).toBe(25);
+    expect(y(renderHook(() => useRunLayout("live", false, true)).result.current.layout, "effective-policy")).toBe(29);
   });
 });

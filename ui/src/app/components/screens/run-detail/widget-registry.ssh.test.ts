@@ -5,8 +5,7 @@
 
 // The "Attach from your terminal" tile (a running run the person may enter, never a background one: it has no terminal)
 // and the Desktop tile that took the desktop block out of it. A finished macOS VM run keeps the Desktop tile while
-// its disk line has something to say (mock M-D1 frames 9 to 11), at the place migration 0236_macos_vm_disks writes into
-// saved finished layouts.
+// its disk line has something to say, at the place the Attach tile held it.
 import { describe, it, expect } from "vitest";
 import { RUN_WIDGETS, WIDGET_IDS, addWidget, presetLayout, type WidgetContext } from "./widget-registry";
 import type { RunDetail } from "../../../lib/types";
@@ -41,11 +40,23 @@ describe("RUN_WIDGETS.ssh", () => {
     expect(presetLayout("finished").find((w) => w.widget === "ssh")).toBeUndefined();
   });
 
-  it("the live preset puts it under the Desktop tile, and Effective policy under it", () => {
-    const at = (id: string) => presetLayout("live").find((w) => w.widget === id);
+  it("the live preset of a VM run puts it under the Desktop tile, and Effective policy under it", () => {
+    const at = (id: string) => presetLayout("live", false, true).find((w) => w.widget === id);
     expect(at("desktop")).toEqual({ widget: "desktop", x: 8, y: 20, w: 4, h: 4 });
     expect(at("ssh")).toEqual({ widget: "ssh", x: 8, y: 24, w: 4, h: 5 });
     expect(at("effective-policy")?.y).toBe(29);
+  });
+
+  it("the live preset of any other run has no Desktop tile and no gap: Attach at 20, Effective policy at 25", () => {
+    const l = presetLayout("live");
+    expect(l.find((w) => w.widget === "desktop")).toBeUndefined();
+    expect(l.find((w) => w.widget === "ssh")).toEqual({ widget: "ssh", x: 8, y: 20, w: 4, h: 5 });
+    expect(l.find((w) => w.widget === "effective-policy")?.y).toBe(25);
+  });
+
+  it("the finished preset of any other run has no Desktop tile", () => {
+    expect(presetLayout("finished").find((w) => w.widget === "desktop")).toBeUndefined();
+    expect(presetLayout("finished").find((w) => w.widget === "effective-policy")).toEqual({ widget: "effective-policy", x: 0, y: 12, w: 6, h: 4 });
   });
 
   it("an add puts it below everything, 4 by 5", () => {
@@ -73,8 +84,8 @@ describe("RUN_WIDGETS.desktop", () => {
     expect(desktopAvailable(c)).toBe(want);
   });
 
-  it("the finished preset places it where migration 0236 put the finished disk line, 6,12,6,5", () => {
-    expect(presetLayout("finished").find((w) => w.widget === "desktop")).toEqual({ widget: "desktop", x: 6, y: 12, w: 6, h: 5 });
+  it("the finished preset of a VM run places it where the Attach tile held the disk line, 6,12,6,5", () => {
+    expect(presetLayout("finished", false, true).find((w) => w.widget === "desktop")).toEqual({ widget: "desktop", x: 6, y: 12, w: 6, h: 5 });
   });
 
   it("is a registered widget id, labelled as its tile is, so a tile's expand view can read it", () => {

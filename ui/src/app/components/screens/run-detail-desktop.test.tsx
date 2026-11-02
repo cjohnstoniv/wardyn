@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Desktop tile (mock M6; its own tile, not a block of the attach card): a Linux desktop VM run only, opened through the UI gateway's
+// The Desktop tile (its own tile, not a block of the attach card): a Linux desktop VM run only, opened through the UI gateway's
 // ticket -> bind -> POST enter hand-off for the built-in desktop app, and off when the gateway is.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";

@@ -59,7 +59,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
   // Seeded with the preset default rather than empty: the canvas can paint the
   // machine's arrangement immediately and swap once a saved one arrives, which
   // beats one round-trip of empty canvas for the majority who never saved one.
-  const [layout, setLayout] = React.useState<RunLayoutWidget[]>(() => presetLayout(preset, service));
+  const [layout, setLayout] = React.useState<RunLayoutWidget[]>(() => presetLayout(preset, service, vm));
   const [loaded, setLoaded] = React.useState(false);
   const [persistable, setPersistable] = React.useState(true);
 
@@ -150,12 +150,12 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
     dirty.current = true;
     serviceRemoved.current = false;
     desktopRemoved.current = false;
-    commit(presetLayout(preset, service));
+    commit(presetLayout(preset, service, vm));
     // PUT [] is the reset: there is no DELETE route, and storing today's
     // default as a personal choice would freeze this human out of every future
     // improvement to it. An empty saved layout reads as "never saved" on load.
     void put([]);
-  }, [preset, service, put]);
+  }, [preset, service, vm, put]);
 
   React.useEffect(() => {
     let alive = true;
@@ -177,7 +177,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
         desktopRemoved.current = res.layout.some(isDesktopRemoved);
         const saved = res.layout.filter((w) => !isServiceRemoved(w) && !isDesktopRemoved(w));
         const shown = normalizeLayout(saved, preset);
-        const base = saved.length === 0 ? presetLayout(preset, service && !serviceRemoved.current) : serviceRemoved.current ? shown : forRun(shown, preset, service);
+        const base = saved.length === 0 ? presetLayout(preset, service && !serviceRemoved.current, vm) : serviceRemoved.current ? shown : forRun(shown, preset, service);
         // Saved with the tile taken out: the preset's own tile (nothing saved but the marker) goes too.
         commit(desktopRemoved.current ? base.filter((w) => w.widget !== "desktop") : saved.length === 0 ? base : forVMRun(base, vm));
         setLoaded(true);
@@ -187,7 +187,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
           if (alive) setLoaded(true);
           return;
         }
-        commit(presetLayout(preset, service));
+        commit(presetLayout(preset, service, vm));
         setLoaded(true);
       });
     return () => {

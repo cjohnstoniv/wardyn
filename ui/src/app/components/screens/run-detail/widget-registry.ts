@@ -259,11 +259,12 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     Icon: Monitor,
     component: (ctx) => React.createElement(DesktopCard, { run: ctx.run }),
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 3 },
-    // Above Attach in the live rail, and where migration 0236 put the finished macOS VM disk line (the ssh tile's old
-    // finished place).
+    // Above Attach in the live rail. The finished place is the one the Attach tile had for a finished macOS VM run's disk
+    // line, which this tile now carries. (Migration 0236 appended Attach to saved finished layouts at x 0, below
+    // everything; the console adds this tile to a saved layout itself, withDesktop.)
     presets: { live: { x: 8, y: 20, w: 4, h: 4 }, finished: { x: 6, y: 12, w: 6, h: 5 } },
     // DesktopCard's own gate, so the grid never holds an empty tile: a VM run the person may enter, while it runs or,
-    // for a macOS VM, while the Mac's report of its disk has something to say (mock M-D1 9-11). The admin monitor has
+    // for a macOS VM, while the Mac's report of its disk has something to say. The admin monitor has
     // no door at all, even on the admin's own run (admin-member-modes-design.md §4.6, §6).
     available: (ctx) =>
       ctx.view === "user" &&
@@ -348,8 +349,9 @@ export const isDesktopRemoved = (w: RunLayoutWidget): boolean => w.widget === "d
 
 /**
  * The layout with a Desktop tile when it has none: in the Attach tile's place, which the tile sat above in the preset,
- * with the widgets in those columns from there down moved down to make room. With no Attach tile it goes where an add
- * puts it, below everything. Never overlaps, and leaves a layout that has the tile as it is.
+ * with every widget at or below that row moved down to make room (all columns, so nothing a partial-column move
+ * would have pushed into another can collide). With no Attach tile it goes where an add puts it, below everything.
+ * A layout with no overlap stays without one, and a layout that has the tile is left as it is.
  */
 export function withDesktop(layout: RunLayoutWidget[]): RunLayoutWidget[] {
   if (layout.some((w) => w.widget === "desktop")) return layout;
@@ -357,8 +359,7 @@ export function withDesktop(layout: RunLayoutWidget[]): RunLayoutWidget[] {
   if (!ssh) return addWidget(layout, "desktop");
   const { h, minW } = RUN_WIDGETS.desktop.defaultLayout;
   const at = { x: ssh.x, y: ssh.y, w: Math.max(ssh.w, minW), h };
-  const under = (o: RunLayoutWidget) => o.y + o.h > at.y && o.x < at.x + at.w && o.x + o.w > at.x && o.y >= at.y;
-  return [...layout.map((o) => (under(o) ? { ...o, y: o.y + at.h } : o)), { widget: "desktop", ...at }];
+  return [...layout.map((o) => (o.y >= at.y ? { ...o, y: o.y + at.h } : o)), { widget: "desktop", ...at }];
 }
 
 /** A layout for one run: a service run's live layout has the Service panel, one saved before the panel existed included. */
@@ -371,12 +372,17 @@ export function forVMRun(layout: RunLayoutWidget[], vm: boolean): RunLayoutWidge
   return vm ? withDesktop(layout) : layout;
 }
 
-/** The situational default for a preset, in wire shape. `service`: the run is a service, which adds its panel. */
-export function presetLayout(preset: RunLayoutPreset, service = false): RunLayoutWidget[] {
+/**
+ * The situational default for a preset, in wire shape. `service`: the run is a service, which adds its panel. `vm`: the
+ * run is a VM run, which has the Desktop tile; any other run's rail closes the tile's rows, so no gap is left in it.
+ */
+export function presetLayout(preset: RunLayoutPreset, service = false, vm = false): RunLayoutWidget[] {
+  const slot = RUN_WIDGETS.desktop.presets[preset];
   const base = WIDGET_IDS.flatMap((id) => {
+    if (id === "desktop" && !vm) return [];
     const at = RUN_WIDGETS[id].presets[preset];
     return at ? [{ widget: id, ...at }] : [];
-  });
+  }).map((w) => (!vm && slot && w.y >= slot.y + slot.h && w.x < slot.x + slot.w && w.x + w.w > slot.x ? { ...w, y: w.y - slot.h } : w));
   return forRun(base, preset, service);
 }
 
