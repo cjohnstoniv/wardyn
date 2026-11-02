@@ -366,7 +366,9 @@ func (s *Server) waitLimitSentence(ctx context.Context, pool string, eligible []
 }
 
 // projectQueueLimit fills Queue.LimitSentence of the one run a single-run route serves, when the run waits
-// because its runners are at a limit and the reader is its owner or an admin: the sentence is worked out
+// because its runners are at a limit and the reader is its owner or an admin (ownsRunOrAdmin: the creator,
+// an admin, a security admin or the shared credential, the same readers the runner lists serve, so no
+// reader is told a runner name the lists would not give them): the sentence is worked out
 // from the runners' limits as they stand now, for the size the promotion holds the run to, so it stays
 // true as the wait changes. Only handleGetRun and the create answer call it: a list, even of one row, would
 // cost a read of every runner per row, so it never does.
@@ -379,7 +381,15 @@ func (s *Server) projectQueueLimit(r *http.Request, run *types.AgentRun) {
 	if !ok {
 		return
 	}
-	e, err := qs.GetRunQueueEntry(r.Context(), run.ID)
+	// Judged as the owner, on the daemon's own context as the promotion is: the reader's identity never reaches it.
+	// Both reads, the entry and the runners, are under one bound.
+	base := s.cfg.BaseCtx
+	if base == nil {
+		base = context.Background()
+	}
+	pctx, cancel := context.WithTimeout(inheritQueuePass(context.WithoutCancel(base), r.Context()), queueEnqueueBound)
+	defer cancel()
+	e, err := qs.GetRunQueueEntry(pctx, run.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return // the run left the queue between the two reads
 	}
@@ -391,13 +401,6 @@ func (s *Server) projectQueueLimit(r *http.Request, run *types.AgentRun) {
 		slog.WarnContext(r.Context(), "wardynd: read the queue entry for the wait sentence", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return
 	}
-	// Judged as the owner, on the daemon's own context as the promotion is: the reader's identity never reaches it.
-	base := s.cfg.BaseCtx
-	if base == nil {
-		base = context.Background()
-	}
-	pctx, cancel := context.WithTimeout(inheritQueuePass(context.WithoutCancel(base), r.Context()), queueEnqueueBound)
-	defer cancel()
 	var auth queueAuthority
 	_ = json.Unmarshal(e.Authority, &auth) //nolint:errcheck // an unreadable authority fails the start's own checks
 	room, err := s.queueRunnerFree(withQueueOwner(auth.context(pctx), e.Owner, e.Authority), types.RunnerPool{ID: e.PoolID}, launch)

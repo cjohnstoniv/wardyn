@@ -67,7 +67,7 @@ func WaitRunnersAtCapacityMsg(pool string) string {
 // WaitRunnerAtLimitMsg is the sentence of a queued run with one runner to go to, naming the limit that
 // holds it back (NoRoomReason).
 func WaitRunnerAtLimitMsg(runner, limit string) string {
-	return fmt.Sprintf("%s is at its %s. This run starts when it has room.", runner, limit)
+	return fmt.Sprintf("%s is at a limit: %s. This run starts when it has room.", runner, limit)
 }
 
 // WaitRunnersAtLimitMsg is the sentence of a queued run with several runners to go to, giving as an

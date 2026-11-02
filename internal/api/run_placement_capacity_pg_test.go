@@ -295,7 +295,7 @@ func TestPG_RunnerDiskTotalSpentWaits(t *testing.T) {
 	}
 	w := e.call(e.person, http.MethodPost, "/api/v1/runs", body)
 	if w.Code != http.StatusCreated || decodeJSON[types.AgentRun](t, w).State != types.RunQueued ||
-		!strings.Contains(w.Body.String(), string(runnerpool.WaitRunnersAtCapacity)) || !strings.Contains(w.Body.String(), row.Name+" is at its disk total: 4 GB held of 4 GB") {
+		!strings.Contains(w.Body.String(), string(runnerpool.WaitRunnersAtCapacity)) || !strings.Contains(w.Body.String(), row.Name+" is at a limit: disk total: 4 GB held of 4 GB") {
 		t.Fatalf("launch with the disk total spent = %d %s, want 201 QUEUED for runner_pool_runners_at_capacity naming the disk total", w.Code, w.Body)
 	}
 	// Once the runner has disk to spare (enough for the waiting run and one more), a launch starts at once.

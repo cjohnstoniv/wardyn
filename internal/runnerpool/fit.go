@@ -44,7 +44,7 @@ func Fits(l *types.RunnerLimits, inUse types.RunnerTally, need types.RunnerAmoun
 }
 
 // NoRoomReason names the limit that holds a run back, with its numbers, asking in Fits' own order, and
-// is "" whenever Fits answers anything but FitNoRoom. Its words finish "<runner> is at its …".
+// is "" whenever Fits answers anything but FitNoRoom. Its words follow "<runner> is at a limit: …".
 func NoRoomReason(l *types.RunnerLimits, inUse types.RunnerTally, need types.RunnerAmounts) string {
 	if Fits(l, inUse, need) != FitNoRoom {
 		return ""
