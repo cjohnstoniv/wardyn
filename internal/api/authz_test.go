@@ -217,9 +217,13 @@ var routeMatrix = map[string]classifiedRoute{
 	// mounted on the TOP-LEVEL router, outside every auth group and after the
 	// whole /api/v1 tree, so it can shadow nothing; mountUI's rooted clean of
 	// the path is what keeps it from serving outside the directory.
-	"GET /*":             {class: classAnonymous},
-	"GET /healthz":       {class: classAnonymous},
-	"GET /readyz":        {class: classAnonymous},
+	"GET /*":       {class: classAnonymous},
+	"GET /healthz": {class: classAnonymous},
+	"GET /readyz":  {class: classAnonymous},
+	// Public keys only, fetched by an AI gateway that holds no Wardyn credential;
+	// with no key it answers as a path no route holds (handleGatewayJWKS). Walked on
+	// the console's router; a headless one serves it from mountUI's NotFound.
+	"GET /.well-known/wardyn-experimental/gateway-jwks.json": {class: classAnonymous},
 	"GET /auth/login":    {class: classAnonymous},
 	"GET /auth/callback": {class: classAnonymous},
 	// Hybrid enrolment: a laptop's first boot holds no credential yet, only the

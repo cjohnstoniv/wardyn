@@ -59,6 +59,10 @@ const (
 	secretRunConfigKey = "wardyn-run-config-key" // seals each run's stored proxy config (32 bytes, #1176)
 )
 
+// secretGatewayIdentityKey holds the keys that sign an AI gateway's run identity
+// token (internal/gatewayidentity): the current key and the previous one's public half.
+const secretGatewayIdentityKey = "wardyn-gateway-identity-key"
+
 // Host-sensor (eBPF ground-truth) token parameters. The audience MUST match the
 // api package's groundtruthAudience (kept in sync as a literal because that
 // const is unexported). The sentinel run id is fixed: the host sensor is
@@ -113,7 +117,7 @@ func run() error {
 	// must not be refused over a listener it never opens. See rotateAgeKeyMode.
 	// -migrate-secrets / -reconcile (store mode) are early exits for the same
 	// reason; maintenanceMode (migrate_secrets.go) dispatches all three.
-	if ran, err := maintenanceMode(f); ran {
+	if ran, err := f.maintenance(); ran {
 		return err
 	}
 
@@ -393,8 +397,11 @@ func run() error {
 		SweepHealth:  ticks,
 		Store:        st,
 		Identity:     idp,
-		Approvals:    approvals,
-		Broker:       brk,
+		// Reads its row on first use, so an install with identity off has no key
+		// and takes no query per anonymous JWKS request past one each 30 seconds.
+		GatewayIdentity: bootKeys.gatewayIdentity(),
+		Approvals:       approvals,
+		Broker:          brk,
 		// The wait ceiling a run's captured wait folds under; the approval
 		// sweeper (runApprovalSweeper) enforces the same value, and dispatch
 		// mirrors it onto a hold-mode run's sandbox (RL-1).
