@@ -35,6 +35,7 @@ type claudeSignInImageState struct {
 	resolved bool   // ref is set AND (unverifiable-so-trusted OR confirmed present)
 	verified bool   // true when `resolved` came from an actual ImagePresent check
 	checkErr error  // the ImagePresent error when the check was inconclusive
+	noCLI    bool   // ref is Wardyn's agent-base image, which ships no vendor CLI: it can never sign in
 }
 
 // resolveClaudeSignInImage is the one place that decides whether the Claude
@@ -44,6 +45,20 @@ func resolveClaudeSignInImage(ctx context.Context, images map[string]string, rnr
 	ref := strings.TrimSpace(images["claude-code"])
 	if ref == "" {
 		return claudeSignInImageState{}
+	}
+	// install.sh pins claude-code to the published agent-base image, which
+	// ships no coding agent, so the login sandbox built from it cannot run
+	// `claude`. Present or not, it is not a sign-in image.
+	name := ref
+	if i := strings.IndexByte(name, '@'); i >= 0 {
+		name = name[:i]
+	}
+	name = name[strings.LastIndexByte(name, '/')+1:]
+	if i := strings.IndexByte(name, ':'); i >= 0 {
+		name = name[:i]
+	}
+	if name == "agent-base" {
+		return claudeSignInImageState{ref: ref, noCLI: true}
 	}
 	ic, ok := rnr.(runner.ImageChecker)
 	if !ok {
@@ -103,6 +118,15 @@ func claudeSignInImageCheck(ctx context.Context, images map[string]string, rnr r
 			ID: id, Label: label, Status: "warn",
 			Detail: "WARDYN_AGENT_IMAGES[\"claude-code\"] is not set, so the sign-in sandbox has no image " +
 				"carrying the vendor CLI — anthropic_subscription model providers are refused until it resolves.",
+			Fix: fix,
+		}
+	}
+	if st.noCLI {
+		return SetupCheck{
+			ID: id, Label: label, Status: "warn",
+			Detail: "WARDYN_AGENT_IMAGES[\"claude-code\"] is pinned to " + st.ref + ", Wardyn's agent base image, which " +
+				"ships no Claude Code CLI, so it cannot sign in — anthropic_subscription model providers are refused until " +
+				"it points at an image that carries the vendor CLI.",
 			Fix: fix,
 		}
 	}
