@@ -52,7 +52,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"components_builtin.go:builtinGitHubGrant":                 {1, "D: the built-in GitHub grant clamp; grants meet the boundary at resolve and dispatch"},
 	"compose_setup.go:setupBackendItem":                        {1, "authz-only: a setup row's detail"},
 	"compose_setup.go:setupMemberView":                         {1, "authz-only: the workspace read tier a setup checklist shows"},
-	"desktop_files.go:desktopRun":                              {1, "authz-only: desktop transfer reach (mayEnterRun) and the deny_ui_apps skip, as the ticket's"},
+	"desktop_files.go:desktopRun":                              {1, "authz-only: desktop transfer reach (mayEnterRun) and the skip of deny_ui_apps and deny_interactive, as the ticket's"},
 	"govern_admin.go:handleRecordGoverned":                     {1, "S: a Record Mode session; its policy is met with the boundary (boundaryRecordPolicy)"},
 	"govern_admin.go:markGovernanceExempt":                     {1, "authz-only: the governance_exempt audit marker"},
 	"govern_admin.go:presetLaunchOpenTo":                       {1, "R: preset visibility at launch; the preset's policy resolves through the boundary"},
