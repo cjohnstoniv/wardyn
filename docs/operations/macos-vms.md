@@ -19,12 +19,12 @@
 | Network | One virtual NIC, wired to the run's own network relay and proxy in Docker. The guest has no other way out |
 | Proxy variables | `HTTPS_PROXY`, `HTTP_PROXY` and `WARDYN_PROXY_URL` name the run's proxy. The relay carries a connection to the proxy itself unchanged, and the proxy checks what is sent on it as it checks a container's |
 | Open connections | The relay holds at most 1,024 per run on granted ports other than 80. One past that is refused and reported as `tunnel-limit`; the cap does not evict existing connections; lower process or container resource limits can bind first |
-| Desktop | The guest's own Screen Sharing, reached only through the runner and the organisation's gateway. The clipboard rules apply as for a Linux VM desktop. The desktop is not recorded in this release |
+| Desktop | The guest's own Screen Sharing, reached only through the runner and the organisation's gateway. The clipboard rules apply as for a Linux VM desktop. The desktop is not recorded |
 | Confinement | The VM boundary, which the runner treats as the `CC3` family. The run's recorded `confinement_class` stays the one it asked for |
 | Sign-ins | Kept on the run's virtual disk, not in memory ([Credentials and sign-ins](#credentials-and-sign-ins)) |
 
 - Not in this release: Linux VMs on a Mac and reviving a stopped VM. Each is refused with a reason.
-- Recording is not in this release either. A macOS VM run starts unrecorded, with a notice at Review. It is refused at create when recording is required, the organisation's level is locked above off, or the governance ceiling sets a level.
+- A macOS VM run's desktop is not recorded, and Review says so. Its console and SSH terminal sessions are recorded at the organisation's level, as any run's are. A run is refused at create when recording is required, the organisation's level is locked above off, or the governance ceiling sets a level.
 - macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.
 - A Kubernetes runner refuses the kind.
 
@@ -527,7 +527,7 @@ A background run has no terminal, SSH or web door. This is the one exception: th
 - **The exposure.** A background run has no terminal, so what a person sees of it is its logs and audit trail. A screen can show what those keep out: a secret in a GUI app, a document, anything the run puts on screen.
   - Turn the site switch off, or set the profile limit, where that is not acceptable.
   - On macOS 26 the viewer may show the guest's login window, not its apps ([#3890](https://github.com/cjohnstoniv/wardyn/issues/3890)). Whether what it shows is useful is not yet witnessed.
-- **Recording.** A watch is not recorded, because a macOS VM run's desktop is not recorded in this release.
+- **Recording.** A watch is not recorded, because a macOS VM run's desktop is not recorded.
   - The audit log shows `ui.open` and `ui.close` with `view_only` and `background`, never the picture.
 
 | A watch is refused when | What you see |

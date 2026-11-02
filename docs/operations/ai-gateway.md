@@ -3,7 +3,7 @@
 # An external AI gateway: setup
 
 - An AI gateway such as [agentgateway](https://agentgateway.dev) runs beside Wardyn and serves model and MCP traffic for every caller. [Pluggability](../PLUGGABILITY.md#an-external-ai-gateway-for-example-agentgateway) says where it fits.
-- This page is the working setup: the config, the hostnames and the Wardyn settings that go with them. Its image is `agentgateway` v1.7.0, pinned by digest in [`deploy/kind/gateway/gateway.yaml`](../../deploy/kind/gateway/gateway.yaml).
+- This page is the intended setup: the config, the hostnames and the Wardyn settings that go with them. Its image is `agentgateway` v1.7.0, pinned by digest in [`deploy/kind/gateway/gateway.yaml`](../../deploy/kind/gateway/gateway.yaml).
 - **Status.** The nightly job `ai-gateway-kind` runs this setup and is new. It has no scheduled green run yet, so nothing below is claimed as tested by CI until it has one.
 
 ## What the setup is

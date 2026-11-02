@@ -3846,7 +3846,7 @@ The labelled series, every label, and where its values come from:
 - **It is off by default and experimental.** The token format and the key set's address may change before 0.11.
 - The disclosure, word for word: "When on, each model call to this gateway carries a signed token naming the person, the run and the runner."
 - A `custom_endpoint` row may opt in, and so may an `anthropic_api_key` or `openai_api_key` row with a `base_url`. Every other kind is refused at save, `anthropic_subscription` included.
-- `wardynd` signs one ES256 token per run and provider, valid for 10 minutes (`gatewayidentity.Signer`).
+- `wardynd` signs an ES256 token per run and provider, valid for 10 minutes and minted again at half-life (`gatewayidentity.Signer`).
 - `wardyn-proxy` asks for it, holds it in memory and sends it as `X-Wardyn-Identity`, only on a request matching the provider's route: host, exact port and path prefix (`Proxy.gatewayRouteFor`).
 - The gateway verifies it against an anonymous key set, `GET /.well-known/wardyn-experimental/gateway-jwks.json`. [The AI gateway identity key](../docs/operations/secrets-and-keys.md#the-ai-gateway-identity-key) covers the key's storage and rotation.
 

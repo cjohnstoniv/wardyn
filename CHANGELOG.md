@@ -18,7 +18,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Governance profiles have a new limit, "Deny watching background desktops" (`deny_background_desktop_watch`), and Settings has an "Allow watching background runs" switch for macOS virtual machines. The switch is on by default.
 - A governance profile write now warns, without refusing, when its Azure DevOps capability list reaches past a provider row's capability ceiling (a member who asks for one of those is refused at launch). It also warns when a standalone profile leaves out the local-run component limit, or sets desktop, recording, tool rules, auto-stop or LLM inspection weaker than the deployment default.
 - macOS VMs: `wardyn-runnerd drive open <name>` opens a disk drive in a throwaway virtual machine meant to run with no network and copies its files to ~/Wardyn Drives/<name>, so this Mac never reads a disk an agent wrote. Press Return to write your changes back as the agent, or Ctrl-C to discard them. Links, devices and set-id files are skipped, and every file is marked as downloaded with no execute permission. Built and unit-tested; not yet run on a real Mac.
-- Experimental: an admin can turn on run identity per model provider. Each model call to that provider's gateway then carries a short-lived signed token naming the person, the run and the runner. Off changes nothing a run sends. An older remote runner refuses such a run rather than calling the gateway unsigned.
+- Experimental: an admin can turn on run identity per model provider. Each model call to that provider's gateway then carries a short-lived signed token naming the person, the run and the runner. Off changes nothing a run sends. A run with identity on is refused on an older remote runner rather than calling the gateway unsigned.
 - Added: The model provider editor can send each model call's person, run and runner to a gateway you name, for Anthropic API key, OpenAI API key and own-endpoint providers (experimental until 0.11). It shows the issuer and key address to give your gateway (#3861).
 - The run page has its own Desktop tile for a VM run. The Open desktop button sits at the top, and sign-ins and the Files panel stay with it.
 - A background macOS run you may watch gets Watch desktop from that tile. It is view only, and each refusal shows the server's sentence.
@@ -49,7 +49,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A background run shows no Take over button, no Attach tile, and no Watch button in the terminal notice. A background run's takeover request shows no Take over in the approval card, the toast or the runs list. Decline and the toast itself stay.
 
 ### Fixed
-- A macOS VM run's desktop is no longer recorded when the organisation's level is Screen and actions, as Review already said.
+- A macOS VM run's desktop is no longer recorded, as Review already said. Earlier 0.10.0 prereleases may have stored its screen frames, unmasked, at the Screen and actions level; `desktop.recording.write` on a macOS VM run shows whether they did.
+- Review and the docs now say that console and SSH terminal sessions on a macOS VM run are recorded at the organisation's level, as they always were (`session.recording.write`).
+- Recordings already stored are kept forever by default, unless `WARDYN_RECORDING_RETENTION_DAYS` is set.
 
 - The membership-move dry run counts a live run whose owner a membership names by a verified alias.
 - A BYOI selftest that did not run says so, in the run and in its audit row, on an interactive run with no task.
