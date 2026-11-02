@@ -239,7 +239,7 @@ func TestGatewayMintNamesThePersonRunAndRunner(t *testing.T) {
 		t.Fatalf("expires_at %q is not RFC3339: %v", expires, err)
 	}
 	var set jose.JSONWebKeySet
-	jw := testGatewayGet(f.srv, http.MethodGet, testGatewayJWKSPath)
+	jw := testGatewayGet(t, f.srv, http.MethodGet, testGatewayJWKSPath)
 	if err := json.Unmarshal(jw.Body.Bytes(), &set); err != nil {
 		t.Fatalf("key set %d %q: %v", jw.Code, jw.Body, err)
 	}
@@ -611,7 +611,9 @@ func TestGatewayMintOffEqualsAnUnregisteredPath(t *testing.T) {
 // replica keeps for life, within the window: on; the last provider off with its key
 // row left; disabled and enabled again; and a failed read.
 func TestGatewayOnGate(t *testing.T) {
-	jwks := func(f *gatewayFixture) int { return testGatewayGet(f.srv, http.MethodGet, testGatewayJWKSPath).Code }
+	jwks := func(t *testing.T, f *gatewayFixture) int {
+		return testGatewayGet(t, f.srv, http.MethodGet, testGatewayJWKSPath).Code
+	}
 	step := func(f *gatewayFixture, edit func(*gatewayStore)) {
 		f.st.set(edit)
 		f.now = f.now.Add(gatewayOnWindow)
@@ -623,15 +625,15 @@ func TestGatewayOnGate(t *testing.T) {
 
 	t.Run("last provider off with the key kept", func(t *testing.T) {
 		f := newGatewayFixture(t)
-		if got := jwks(f); got != http.StatusOK {
+		if got := jwks(t, f); got != http.StatusOK {
 			t.Fatalf("on: %d", got)
 		}
 		f.st.set(func(s *gatewayStore) { s.site = testGatewaySite(offProvider) })
-		if got := jwks(f); got != http.StatusOK {
+		if got := jwks(t, f); got != http.StatusOK {
 			t.Errorf("inside the window: %d, want the kept answer", got)
 		}
 		step(f, func(*gatewayStore) {})
-		if got := jwks(f); got != http.StatusNotFound {
+		if got := jwks(t, f); got != http.StatusNotFound {
 			t.Errorf("off: key set %d, want 404", got)
 		}
 		if w := f.mint(t); w.Code != http.StatusNotFound {
@@ -641,11 +643,11 @@ func TestGatewayOnGate(t *testing.T) {
 	t.Run("disable and enable again", func(t *testing.T) {
 		f := newGatewayFixture(t)
 		step(f, func(s *gatewayStore) { s.site = testGatewaySite(disabled) })
-		if got := jwks(f); got != http.StatusNotFound {
+		if got := jwks(t, f); got != http.StatusNotFound {
 			t.Errorf("disabled: %d", got)
 		}
 		step(f, func(s *gatewayStore) { s.site = testGatewaySite(testGatewayProvider()) })
-		if got := jwks(f); got != http.StatusOK {
+		if got := jwks(t, f); got != http.StatusOK {
 			t.Errorf("enabled again: %d", got)
 		}
 		if w := f.mint(t); w.Code != http.StatusOK {
@@ -656,38 +658,38 @@ func TestGatewayOnGate(t *testing.T) {
 		f := newGatewayFixture(t)
 		boom := errors.New("db down")
 		f.st.set(func(s *gatewayStore) { s.siteErr = boom })
-		if got := jwks(f); got != http.StatusServiceUnavailable {
+		if got := jwks(t, f); got != http.StatusServiceUnavailable {
 			t.Errorf("first read failed: %d, want 503", got)
 		}
 		if w := f.mint(t); w.Code != http.StatusServiceUnavailable || reasonOf(t, w) != reasonGatewayIdentityUnavailable {
 			t.Errorf("first read failed: mint %d %s", w.Code, w.Body)
 		}
 		step(f, func(s *gatewayStore) { s.siteErr = nil })
-		if got := jwks(f); got != http.StatusOK {
+		if got := jwks(t, f); got != http.StatusOK {
 			t.Errorf("recovered: %d", got)
 		}
 		step(f, func(s *gatewayStore) { s.siteErr = boom })
-		if got := jwks(f); got != http.StatusServiceUnavailable {
+		if got := jwks(t, f); got != http.StatusServiceUnavailable {
 			t.Errorf("failed after on: %d, want 503", got)
 		}
 	})
 	t.Run("an install read as off stays off through an outage", func(t *testing.T) {
 		f := newGatewayFixture(t)
 		step(f, func(s *gatewayStore) { s.site = testGatewaySite() })
-		if got := jwks(f); got != http.StatusNotFound {
+		if got := jwks(t, f); got != http.StatusNotFound {
 			t.Fatalf("off: %d", got)
 		}
 		step(f, func(s *gatewayStore) { s.siteErr = errors.New("db down") })
-		if got := jwks(f); got != http.StatusNotFound {
+		if got := jwks(t, f); got != http.StatusNotFound {
 			t.Errorf("outage: %d, want the same 404", got)
 		}
 	})
 	t.Run("the read is one per window", func(t *testing.T) {
 		f := newGatewayFixture(t)
 		f.st.set(func(s *gatewayStore) { s.siteErr = errors.New("db down") })
-		jwks(f)
+		jwks(t, f)
 		f.st.set(func(s *gatewayStore) { s.siteErr = nil })
-		if got := jwks(f); got != http.StatusServiceUnavailable {
+		if got := jwks(t, f); got != http.StatusServiceUnavailable {
 			t.Errorf("inside the window after a failure: %d, want the kept 503", got)
 		}
 	})
