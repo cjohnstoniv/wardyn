@@ -85,7 +85,7 @@ What Wardyn does for a delivered value:
   - One trailing line break is dropped. A value with a line break inside goes in as it is, audited as a `run.secret_placeholder.resolve` failure.
   - The proxy replaces the placeholder with the value in the `Authorization` header of requests to that host ([`internal/api/runs_dispatch_placeholders.go#Server.authorSecretPlaceholder`](../internal/api/runs_dispatch_placeholders.go)).
   - A program that uses the value any other way, such as signing locally, fails.
-  - Without `WARDYN_PROXY_RESPONSE_SCRUB`, a host that echoes the request header back returns the value to the sandbox.
+  - Without `WARDYN_PROXY_RESPONSE_SCRUB`, a host that echoes the request header back returns the value to the sandbox. The exception is a model gateway route carrying the identity token, which is always scrubbed ([`internal/egress/proxy/gateway_identity.go#Proxy.relayGatewayRoute`](../internal/egress/proxy/gateway_identity.go)).
   - `WARDYN_RUNNER_SECRET_PLACEHOLDERS`, also off by default, does the same for a `runner_resident` grant: the runner gets the placeholder, and the organisation's egress fills it ([`internal/api/runs_dispatch_placeholders.go#Server.placeResidentEnvSecrets`](../internal/api/runs_dispatch_placeholders.go)).
 - It skips a grant it cannot honour, and leaves the variable or file absent; it does not set a blank ([`internal/api/runs_dispatch_files.go#Server.resolveFileSecretGrants`](../internal/api/runs_dispatch_files.go)).
 
@@ -179,7 +179,7 @@ One mode places a Git credential inside the sandbox:
   - A header secret in a component a person defines is sent over TLS only ([`internal/types/component.go#ComponentDefinition.Validate`](../internal/types/component.go)).
   - The value is on the run's masking record, so an echo printed to a masked output is replaced there.
 - What does not bound it by default: masking does not remove the bytes from the response the workload receives.
-- With `WARDYN_PROXY_RESPONSE_SCRUB` on (off by default in 0.10.0), the proxy replaces a value it added with `<secret-hidden>` in the response's headers and body before the workload receives it ([`internal/egress/proxy/scrub.go#Proxy.scrubbed`](../internal/egress/proxy/scrub.go)). It matches exact bytes, as masking does, so a compressed or re-encoded echo still passes.
+- With `WARDYN_PROXY_RESPONSE_SCRUB` on (off by default in 0.10.0), the proxy replaces a value it added with `<secret-hidden>` in the response's headers and body before the workload receives it ([`internal/egress/proxy/scrub.go#Proxy.scrubbed`](../internal/egress/proxy/scrub.go)). It matches exact bytes, as masking does, so a compressed or re-encoded echo still passes. A model gateway route carrying the identity token is scrubbed whatever this setting says.
 
 > [!WARNING]
 > **Masking matches exact bytes, and some paths are not masked.** The full statement is [Output masking, and the paths it does not cover](../threatmodel/THREAT-MODEL.md#41-output-masking-and-the-paths-it-does-not-cover).
