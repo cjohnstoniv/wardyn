@@ -827,7 +827,8 @@ func (s *Server) recordVMMachine(ctx context.Context, run types.AgentRun, sb run
 	// One write with the machine, so a later boot's report replaces an earlier one's and a lost write
 	// ends the boot. The report is taken from the Sandbox field, never what the runner put in Machine.
 	m := *sb.Machine
-	m.DesktopForcedViewOnly = run.MachineKind.IsMacOSVM() && run.BackgroundOnly() && sb.DesktopForcedViewOnly
+	m.DesktopViewOnlyAsked = run.MachineKind.IsMacOSVM() && run.BackgroundOnly()
+	m.DesktopForcedViewOnly = m.DesktopViewOnlyAsked && sb.DesktopForcedViewOnly
 	return st.SetRunVMMachine(ctx, run.ID, m)
 }
 

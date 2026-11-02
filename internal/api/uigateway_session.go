@@ -132,6 +132,9 @@ type uiSession struct {
 	// Desktop marks a session on a VM's desktop (App uiDesktopAppName, no Port): it lasts at most
 	// uiDesktopSessionTTL and ends when its person closes it (uigateway_desktop.go).
 	Desktop bool `json:"d,omitempty"`
+	// ViewOnly pins a VM desktop session's input off for its whole life, whatever the Mac's caps later say.
+	// Set at enter on a background run's watch alone (backgroundWatch); signed, so it can't be dropped.
+	ViewOnly bool `json:"w,omitempty"`
 	// Inbound marks a session on an app declared inbound: true, the one door a background run keeps
 	// (uigateway_inbound.go). Caller is the callers entry the session's principal matched, empty for the
 	// run's owner: a Caller session skips the owner rule, its run's callers being fixed at create.
@@ -141,6 +144,12 @@ type uiSession struct {
 	// and the sponsor of the service identity that holds it.
 	tokenID uuid.UUID
 	sponsor string
+}
+
+// backgroundWatch says sess is a view-only watch of a background run's built-in desktop, the one way a person
+// reaches that desktop. Only the watch door's ticket makes one (ticketOpensBackgroundWatch).
+func (sess uiSession) backgroundWatch() bool {
+	return sess.Desktop && sess.ViewOnly && sess.App == uiDesktopAppName && sess.Caller == "" && !sess.Inbound
 }
 
 // auditUISession writes one ui.* row for sess: its run, its principal, and the
@@ -355,7 +364,11 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
 			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
-	if !sess.Inbound && backgroundOnlyRefusal(run, "web application gateway") != nil {
+	if sess.backgroundWatch() {
+		if de := s.uiBackgroundWatchDenies(ctx, sess, run); de != nil {
+			return de
+		}
+	} else if !sess.Inbound && backgroundOnlyRefusal(run, "web application gateway") != nil {
 		return s.uiDenyReassert(sess, reasonRunBackgroundOnly,
 			http.StatusConflict, runBackgroundOnlyMsg("web application gateway"))
 	}
@@ -418,6 +431,8 @@ func (s *Server) uiSessionUnitDenies(ctx context.Context, sess uiSession, run ty
 	case uiAppIsDesktopSession(sess.App) && p.Limits.DenyInteractive && run.Task != harnessLoginTask:
 		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden,
 			fmt.Sprintf("A desktop is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.", p.Name))
+	case sess.backgroundWatch() && p.Limits.DenyBackgroundDesktopWatch:
+		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden, backgroundWatchProfileMsg)
 	}
 	return nil
 }
@@ -440,7 +455,7 @@ func (s *Server) uiDenyReassert(sess uiSession, reason string, status int, msg s
 	// honest here too.
 	if s.authFailedLimiter.allow(s.cfg.Now()) {
 		s.auditUISession(sess, "ui.authorize", sess.App, "denied",
-			map[string]any{"app": sess.App, "port": sess.Port, "reason": reason})
+			withBackgroundWatch(sess.backgroundWatch(), map[string]any{"app": sess.App, "port": sess.Port, "reason": reason}))
 	}
 	return &uiDialError{status: status, reason: reason, msg: msg}
 }

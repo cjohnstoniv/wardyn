@@ -74,6 +74,8 @@ const (
 	desktopCloseRunEnded      websocket.StatusCode = 4002
 	desktopCloseNotAuthorized websocket.StatusCode = 4003
 	desktopCloseUnreachable   websocket.StatusCode = 4004
+	// desktopCloseWatchEnded: a re-check ended a background run's watch. It says so, never the hour's words.
+	desktopCloseWatchEnded websocket.StatusCode = 4005
 )
 
 // uiDesktopSessions is the process-local state of desktop sessions, keyed by uiReassertKey: a cache
@@ -83,6 +85,8 @@ type uiDesktopSessions struct {
 	closed map[string]int64
 	live   map[string]map[uint64]context.CancelFunc
 	next   uint64
+	// recheckEvery replaces uiDesktopRecheck: tests only, so a re-check can be observed without its wait.
+	recheckEvery time.Duration
 }
 
 func (s *Server) uiSessionTTLFor(sess uiSession) time.Duration {
@@ -210,7 +214,10 @@ func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run type
 	}
 	sess := s.newUISession(run, ta, uiDesktopAppName, 0, min(s.uiSessionTTL(), uiDesktopSessionTTL))
 	sess.Desktop = true
-	s.startUISession(w, r, run, ta, sess, withViewOnly(s.macOSDesktopViewOnly(run), map[string]any{"app": uiDesktopAppName, "machine_kind": string(run.MachineKind)}), "/", redirectStatus)
+	// A background run reaches here only through the watch door; interactive sessions stay unpinned.
+	sess.ViewOnly = run.BackgroundOnly() && ticketOpensBackgroundWatch(ta, uiDesktopAppName)
+	data := withBackgroundWatch(sess.backgroundWatch(), map[string]any{"app": uiDesktopAppName, "machine_kind": string(run.MachineKind)})
+	s.startUISession(w, r, run, ta, sess, withViewOnly(sess.ViewOnly || s.macOSDesktopViewOnly(run), data), "/", redirectStatus)
 }
 
 // handleDesktopRelay serves /r/<run>/__desktop/...: the viewer's own files (no session: they are the
@@ -240,6 +247,10 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 			"state": "open", "expires": sess.Expires,
 			"rfb":   s.uiBasePath() + uiRelayPrefix(runID, uiDesktopAppName) + uiDesktopRFB,
 			"close": s.uiBasePath() + uiRelayPrefix(runID, uiDesktopAppName) + uiDesktopClose,
+		}
+		// From the signed session, so the viewer's strip is right even if the run below can't be read.
+		if sess.backgroundWatch() {
+			boot["view_only"], boot["background"] = true, true
 		}
 		// The run's machine kind, so the viewer names a macOS desktop while it starts. A run that
 		// cannot be read is served without it: the viewer then says what it says of any desktop.
@@ -373,9 +384,13 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		_ = c.Close(desktopCloseUnreachable, "no runner configured; UI apps unavailable")
 		return
 	}
-	if err := s.thawForExec(ctx, run, types.ActorHuman, sess.Principal, "presence"); err != nil {
-		_ = c.Close(desktopCloseUnreachable, "run is paused and could not be resumed; try again")
-		return
+	// A watch is not a person entering: it neither resumes the run nor stamps presence nor keeps the run alive.
+	watch := sess.backgroundWatch()
+	if !watch {
+		if err := s.thawForExec(ctx, run, types.ActorHuman, sess.Principal, "presence"); err != nil {
+			_ = c.Close(desktopCloseUnreachable, "run is paused and could not be resumed; try again")
+			return
+		}
 	}
 	release, ok := s.acquireUIConn(sess.Run)
 	if !ok {
@@ -390,13 +405,15 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	}
 	defer func() { _ = display.Close() }()
 
-	go s.attachKeepalive(ctx, sess.Run)
+	if !watch {
+		go s.attachKeepalive(ctx, sess.Run)
+	}
 	opened := s.cfg.Now()
-	viewOnly := s.macOSDesktopViewOnly(run)
-	s.auditUISession(sess, "ui.open", uiDesktopAppName, "success", withViewOnly(viewOnly, map[string]any{"app": uiDesktopAppName}))
+	viewOnly := sess.ViewOnly || s.macOSDesktopViewOnly(run)
+	s.auditUISession(sess, "ui.open", uiDesktopAppName, "success", withBackgroundWatch(watch, withViewOnly(viewOnly, map[string]any{"app": uiDesktopAppName})))
 	defer func() {
 		s.auditUISession(sess, "ui.close", uiDesktopAppName, "success",
-			withViewOnly(viewOnly, map[string]any{"app": uiDesktopAppName, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())}))
+			withBackgroundWatch(watch, withViewOnly(viewOnly, map[string]any{"app": uiDesktopAppName, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())})))
 	}()
 
 	conn := websocket.NetConn(r.Context(), ws, websocket.MessageBinary)
@@ -405,7 +422,7 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	done := make(chan struct{}, 2)
 	go func() { _, _ = io.Copy(wsFramer{filtered}, conn); done <- struct{}{} }()
 	go func() { _, _ = io.Copy(&wsUnframer{w: conn}, filtered); done <- struct{}{} }()
-	tick := time.NewTicker(uiDesktopRecheck)
+	tick := time.NewTicker(cmp.Or(s.uiDesktop.recheckEvery, uiDesktopRecheck))
 	defer tick.Stop()
 	closedTick := time.NewTicker(cmp.Or(s.uiDesktopClosedEvery, uiDesktopClosedRecheck))
 	defer closedTick.Stop()
@@ -443,6 +460,14 @@ func withViewOnly(viewOnly bool, data map[string]any) map[string]any {
 	return data
 }
 
+// withBackgroundWatch marks an audit row of a background run's watch: view only, and background.
+func withBackgroundWatch(watch bool, data map[string]any) map[string]any {
+	if watch {
+		data["view_only"], data["background"] = true, true
+	}
+	return data
+}
+
 // desktopSocket closes with words cut to what a close frame carries (123 bytes).
 type desktopSocket struct{ *websocket.Conn }
 
@@ -464,6 +489,9 @@ func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.Age
 		return run, desktopCloseRunEnded, "run has ended; cannot open a UI app"
 	}
 	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {
+		if sess.backgroundWatch() {
+			return run, desktopCloseWatchEnded, backgroundWatchEndedMsg
+		}
 		return run, desktopCloseNotAuthorized, de.msg
 	}
 	return run, 0, ""
@@ -473,9 +501,13 @@ func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.Age
 // copy_out and paste_in rules and the same ui.clipboard.transfer rows (direction, size and hash, never the
 // text). QEMU's VNC has no clipboard peer in the guest (no qemu-vdagent, internal/vm/qemu/args.go),
 // so no cut text flows today; the filter holds the rules for when one does. viewOnly also keeps the
-// viewer's input from the display.
+// viewer's input from the display. A background run's watch moves nothing but the picture, whatever the run's
+// rules and the Mac's caps say, and this filter holds that independently of the helper's.
 func (s *Server) desktopClipboardFilter(ctx context.Context, sess uiSession, d types.DesktopControls, viewOnly bool, display io.ReadWriteCloser) *rfbfilter.Conn {
 	rules := rfbfilter.Rules{PasteIn: d.PasteIn == types.TransferAllowed, CopyOut: d.CopyOut == types.TransferAllowed, ViewOnly: viewOnly}
+	if sess.backgroundWatch() {
+		rules = rfbfilter.Rules{ViewOnly: true}
+	}
 	filtered := rfbfilter.Wrap(display, rules, func(ev rfbfilter.Event) { s.auditUIClipboard(sess, ev) }, func(err error) {
 		slog.WarnContext(ctx, "wardynd: desktop relay closed a VM display it could not follow", "run_id", sess.Run, "err", err)
 		if errors.Is(err, rfbfilter.ErrNotRFB) {
