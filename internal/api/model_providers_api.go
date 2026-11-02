@@ -80,6 +80,7 @@ func (s *Server) handleGetModelProviders(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, types.ModelProvidersRead{
 		ModelProviders: block, ConnectedPeople: connected,
 		EntraLoginConfigured: s.providerWriteEnv(nil).EntraLoginConfigured, KindsAvailable: kindsAvailable(),
+		GatewayIdentityIssuer: s.gatewayIdentityIssuer(), GatewayJWKSPath: s.cfg.BasePath + gatewayJWKSRoute,
 	})
 }
 
@@ -137,6 +138,9 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	}
 	if err := validateModelProviderImagePrereqs(block, existing.ModelProviders, imageOK); err != nil {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid model providers: "+err.Error())
+		return
+	}
+	if s.refuseGatewayIdentityWrite(w, r, block, existing.ModelProviders, "invalid model providers: ") {
 		return
 	}
 	assignModelProviderUIDs(block, existing.ModelProviders)
@@ -198,7 +202,7 @@ func stillDefaultRefusal(roster *types.AgentProviders, block *types.ModelProvide
 // more people than the providers page is.
 func modelProviderAuditData(before, after types.ModelProviders) map[string]any {
 	ids, kinds, pairs, disabled, pins, changed := []string{}, []string{}, []string{}, []string{}, []string{}, []string{}
-	rekinded := []string{}
+	rekinded, identity := []string{}, []string{}
 	prior, priorByID := map[string]types.ModelProvider{}, map[string]types.ModelProvider{}
 	for _, p := range before.Providers {
 		prior[p.UID], priorByID[p.ID] = p, p
@@ -214,6 +218,9 @@ func modelProviderAuditData(before, after types.ModelProviders) map[string]any {
 		if p.Disabled {
 			disabled = append(disabled, p.ID)
 		}
+		if p.GatewayIdentity != nil {
+			identity = append(identity, p.ID)
+		}
 		if p.Bedrock != nil && p.Bedrock.SSOAccountID != "" {
 			pins = append(pins, p.ID+":"+p.Bedrock.SSOAccountID+"/"+p.Bedrock.SSORoleName)
 		}
@@ -224,13 +231,17 @@ func modelProviderAuditData(before, after types.ModelProviders) map[string]any {
 			rekinded = append(rekinded, p.ID)
 		}
 	}
-	for _, l := range [][]string{ids, kinds, pairs, disabled, pins, changed, rekinded} {
+	for _, l := range [][]string{ids, kinds, pairs, disabled, pins, changed, rekinded, identity} {
 		slices.Sort(l)
 	}
-	return map[string]any{
+	data := map[string]any{
 		"provider_count": len(after.Providers), "ids": ids, "kinds": kinds, "harnesses": pairs,
 		"disabled": disabled, "pins": pins, "base_url_changed": changed, "kind_changed": rekinded,
 	}
+	if len(identity) > 0 { // absent with identity off, so this row reads as it always has
+		data["gateway_identity"] = identity
+	}
+	return data
 }
 
 // providerAddressChanged is rule 8's predicate: where requests go, or how each

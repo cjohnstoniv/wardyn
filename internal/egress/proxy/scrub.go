@@ -18,6 +18,8 @@ type scrubbedWriter struct {
 	http.ResponseWriter
 	m  secretmask.Masker
 	mw *secretmask.MaskingWriter
+	// cutHeaders is a gateway identity route's answer: see maskValuesCut.
+	cutHeaders bool
 }
 
 // scrubbed wraps w when Config.ScrubResponses is set; done flushes what the
@@ -27,25 +29,21 @@ func (p *Proxy) scrubbed(w http.ResponseWriter) (out http.ResponseWriter, done f
 	if !p.scrubResponses {
 		return w, func() {}
 	}
-	if s, ok := p.scrubbedAlways(w); ok {
-		return s, func() { _ = s.mw.Close() }
-	}
-	return w, func() {}
-}
-
-// scrubbedAlways wraps w whatever Config.ScrubResponses says, or reports false
-// when the masking set is empty. The caller ends it.
-func (p *Proxy) scrubbedAlways(w http.ResponseWriter) (*scrubbedWriter, bool) {
 	m := procRegistry.Masker(p.maskKey)
 	if len(m.Secrets()) == 0 {
-		return nil, false
+		return w, func() {}
 	}
-	return &scrubbedWriter{ResponseWriter: w, m: m, mw: secretmask.NewMaskingWriter(w, m)}, true
+	s := &scrubbedWriter{ResponseWriter: w, m: m, mw: secretmask.NewMaskingWriter(w, m)}
+	return s, func() { _ = s.mw.Close() }
 }
 
 func (s *scrubbedWriter) WriteHeader(code int) {
 	h := s.ResponseWriter.Header()
 	for _, vs := range h {
+		if s.cutHeaders {
+			s.maskValuesCut(vs)
+			continue
+		}
 		for i, v := range vs {
 			vs[i] = string(s.m.Mask([]byte(v)))
 		}

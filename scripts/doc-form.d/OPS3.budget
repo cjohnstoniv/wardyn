@@ -188,7 +188,8 @@ docs/operations/api-tokens.md=6550 share=35 # +86 (lane SI-DOCS), measured; +17 
 # docs/operations/denials.md 5579 adds 19 over 5560, measured (0.10 MDL-LAPTOP, #2957): runner_local_model_port_not_allowed.
 # docs/operations/denials.md 5629 adds 50 over 5579, measured (0.10 rc.6): POST /runs and preflight warning_context.
 # docs/operations/denials.md 5640 adds 11 over 5629, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
-docs/operations/denials.md=5640 share=35
+# docs/operations/denials.md 5641 adds 1 over 5640, measured (0.10 rc.11 gateway identity): the setting on runner_proxy_setting_unsupported.
+docs/operations/denials.md=5641 share=35
 # Round 1: docs/operations/who-gets-in.md measured 1453 after the split banner and heading cleanup.
 # Round 1: docs/operations/admin-only-writes.md measured 2869 after the split banner and heading cleanup.
 # Round 1: docs/operations/three-roles.md measured 4012 after the split banner and heading cleanup.

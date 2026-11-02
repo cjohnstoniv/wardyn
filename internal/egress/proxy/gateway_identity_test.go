@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -45,7 +46,11 @@ const (
 func gwidToken(aud any, exp time.Time, n int64) string {
 	enc := base64.RawURLEncoding.EncodeToString
 	payload, _ := json.Marshal(map[string]any{"aud": aud, "exp": exp.Unix(), "jti": fmt.Sprintf("jti-%d-%s", n, uuid.NewString())})
-	return enc([]byte(`{"alg":"ES256"}`)) + "." + enc(payload) + "." + enc([]byte("signature-bytes"))
+	// An ES256-sized signature, its own for each token. The leading 0xff makes it start
+	// "_", so no test's benign answer ends in the first byte of a random signature.
+	signature := sha512.Sum512(payload)
+	signature[0] = 0xff
+	return enc([]byte(`{"alg":"ES256"}`)) + "." + enc(payload) + "." + enc(signature[:])
 }
 
 // gwidUpstream records every request, and by default echoes all its headers back in
@@ -368,6 +373,21 @@ func TestGatewayIdentity_MintFailureRefuses(t *testing.T) {
 			if !strings.Contains(g.buf.String(), "gateway identity unavailable") {
 				t.Errorf("no deny row names the cause: %s", g.buf)
 			}
+			// Retries are refused from the last answer: one mint per interval, however many sends.
+			send := gwidLanes(g, t)["brokered"]
+			for range 5 {
+				if rec := send(); rec.Code < 400 {
+					t.Errorf("a retry was not refused: %d", rec.Code)
+				}
+			}
+			if n := g.mint.hits.Load(); n != 1 {
+				t.Errorf("mints across repeated sends = %d, want 1", n)
+			}
+			g.advance(lastGoodRetry)
+			send()
+			if n := g.mint.hits.Load(); n != 2 {
+				t.Errorf("mints after the interval = %d, want 2", n)
+			}
 		})
 	}
 }
@@ -551,7 +571,7 @@ func TestGatewayIdentity_SpoolHoldsNoToken(t *testing.T) {
 
 // Many callers with no token share one mint, and the mask set stays at two values however
 // many times it rotates, so the set does not grow for the run's life.
-func TestGatewayIdentity_SingleMintAndMaskSetStaysAtTwo(t *testing.T) {
+func TestGatewayIdentity_SingleMintAndMaskSetStaysAtTwoTokens(t *testing.T) {
 	g := newGwidRig(t, gwidRoutes(), false)
 	release := make(chan struct{})
 	base := g.mint.answer
@@ -579,12 +599,14 @@ func TestGatewayIdentity_SingleMintAndMaskSetStaysAtTwo(t *testing.T) {
 		all = append(all, g.lastMinted(t))
 	}
 	set := procRegistry.Snapshot(g.p.maskKey)
-	if len(set) != 2 {
-		t.Fatalf("mask set holds %d values, want 2", len(set))
+	if len(set) != 4 {
+		t.Fatalf("mask set holds %d values, want two tokens and their signature heads", len(set))
 	}
-	for _, want := range all[len(all)-2:] {
-		if !slices.ContainsFunc(set, func(v []byte) bool { return string(v) == want }) {
-			t.Errorf("a recent token is not in the mask set")
+	for _, token := range all[len(all)-2:] {
+		for _, want := range gatewayMaskValues(token) {
+			if !slices.ContainsFunc(set, func(v []byte) bool { return bytes.Equal(v, want) }) {
+				t.Errorf("a recent token's value is not in the mask set")
+			}
 		}
 	}
 }
@@ -767,15 +789,6 @@ func TestGatewayIdentity_UnreadableAnswerRefused(t *testing.T) {
 		}
 		gwidNotIn(t, lane, rec.Body.String(), g.lastMinted(t))
 	}
-	g.gw.respond = gwidEcho
-	gwidLanes(g, t)["brokered"]()
-	procRegistry.Evict(g.p.maskKey)
-	resp := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("unmasked-bytes"))}
-	rec := httptest.NewRecorder()
-	g.p.relayGatewayRoute(rec, mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"m", nil), gwidHost, 443, resp, ruleSourceLLM)
-	if rec.Code != http.StatusBadGateway || strings.Contains(rec.Body.String(), "unmasked-bytes") {
-		t.Fatalf("an empty masker relayed: %d %s", rec.Code, rec.Body)
-	}
 }
 
 // The same on the HTTP/2 fallback: the token goes, gzip is negotiated by the transport
@@ -923,6 +936,147 @@ func TestGatewayIdentity_AnswerEndingInTheTokensStart(t *testing.T) {
 	}
 }
 
+// An echo cut short with more bytes after it ends in no held value's start and holds no whole
+// token, so the signature head is what stops it. What still passes is the residual: the claims
+// and under twenty signature characters, never a usable token.
+func TestGatewayIdentity_TruncatedEchoFollowedByMoreBytes(t *testing.T) {
+	const hidden = "<secret-hidden>"
+	// tok up to where its signature starts, the signature, and the head that is masked.
+	split := func(tok string) (claims, sig, rest string) {
+		at := strings.LastIndexByte(tok, '.') + 1
+		return tok[:at], tok[at:], tok[at+gatewaySignatureHeadLen:]
+	}
+	cases := []struct {
+		name string
+		echo func(tok string) string
+		want func(tok string) string
+	}{
+		{"json, token less a byte", func(tok string) string { return `{"echo":"` + tok[:len(tok)-1] + `"}` }, func(tok string) string {
+			claims, _, rest := split(tok)
+			return `{"echo":"` + claims + hidden + rest[:len(rest)-1] + `"}`
+		}},
+		{"token less a byte, more bytes", func(tok string) string { return tok[:len(tok)-1] + " x" }, func(tok string) string {
+			claims, _, rest := split(tok)
+			return claims + hidden + rest[:len(rest)-1] + " x"
+		}},
+		{"cut at 20 signature characters", func(tok string) string {
+			claims, sig, _ := split(tok)
+			return claims + sig[:20] + " x"
+		}, func(tok string) string {
+			claims, _, _ := split(tok)
+			return claims + hidden + " x"
+		}},
+		{"cut at 19 signature characters passes: the residual", func(tok string) string {
+			claims, sig, _ := split(tok)
+			return claims + sig[:19] + " x"
+		}, func(tok string) string {
+			claims, sig, _ := split(tok)
+			return claims + sig[:19] + " x"
+		}},
+		{"signature head alone", func(tok string) string {
+			_, sig, _ := split(tok)
+			return "a " + sig[:20] + " x"
+		}, func(string) string { return "a " + hidden + " x" }},
+		{"the whole token is one placeholder", func(tok string) string { return "a " + tok + " x" }, func(string) string { return "a " + hidden + " x" }},
+	}
+	// The same values with nothing after them: an answer's end, cut as a whole.
+	ending := []struct {
+		name string
+		echo func(tok string) string
+	}{
+		{"cut at 19, at the end", func(tok string) string {
+			claims, sig, _ := split(tok)
+			return claims + sig[:19]
+		}},
+		{"cut at 20, at the end", func(tok string) string {
+			claims, sig, _ := split(tok)
+			return claims + sig[:20]
+		}},
+		{"signature head alone, at the end", func(tok string) string {
+			_, sig, _ := split(tok)
+			return sig[:20]
+		}},
+	}
+	for lane := range map[string]bool{"brokered": true, "mitm": true} {
+		for _, tc := range cases {
+			t.Run(lane+"/"+tc.name, func(t *testing.T) {
+				g := newGwidRig(t, gwidRoutes(), false)
+				g.gw.respond = func(w http.ResponseWriter, r *http.Request) {
+					echo := tc.echo(r.Header.Get(gatewayIdentityHeader))
+					w.Header().Set("X-Echo", echo)
+					// Across two writes, the short echoes with the head split between them.
+					at := len(echo) / 2
+					_, _ = io.WriteString(w, echo[:at])
+					w.(http.Flusher).Flush()
+					_, _ = io.WriteString(w, echo[at:]+"\n")
+				}
+				rec := gwidLanes(g, t)[lane]()
+				want := tc.want(g.lastMinted(t))
+				if got := rec.Body.String(); got != want+"\n" {
+					t.Errorf("body %q, want %q", got, want+"\n")
+				}
+				if got := rec.Header().Get("X-Echo"); got != want {
+					t.Errorf("header %q, want %q", got, want)
+				}
+			})
+		}
+		for _, tc := range ending {
+			t.Run(lane+"/"+tc.name, func(t *testing.T) {
+				g := newGwidRig(t, gwidRoutes(), false)
+				g.gw.respond = func(w http.ResponseWriter, r *http.Request) {
+					echo := tc.echo(r.Header.Get(gatewayIdentityHeader))
+					w.Header().Set("X-Echo", echo)
+					_, _ = io.WriteString(w, echo)
+				}
+				rec := gwidLanes(g, t)[lane]()
+				if got := rec.Body.String(); got != hidden {
+					t.Errorf("body %q, want the placeholder", got)
+				}
+				if got := rec.Header().Get("X-Echo"); got != hidden {
+					t.Errorf("header %q, want the placeholder", got)
+				}
+			})
+		}
+	}
+}
+
+// A token whose signature cannot give a head is refused as malformed, on any lane, and no
+// call goes out. Twenty characters is enough; nineteen is not.
+func TestGatewayIdentity_TokenWithoutASignatureHeadRefused(t *testing.T) {
+	short := func(token string, n int) string {
+		at := strings.LastIndexByte(token, '.') + 1
+		return token[:at] + token[at:at+n]
+	}
+	cases := []struct {
+		name  string
+		shape func(token string) string
+		sent  bool
+	}{
+		{"no signature segment", func(tok string) string { return tok[:strings.LastIndexByte(tok, '.')] }, false},
+		{"an empty signature", func(tok string) string { return short(tok, 0) }, false},
+		{"nineteen characters", func(tok string) string { return short(tok, 19) }, false},
+		{"twenty characters", func(tok string) string { return short(tok, 20) }, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newGwidRig(t, gwidRoutes(), false)
+			g.mint.answer = func(w http.ResponseWriter, _ *http.Request, n int64) {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"token":      tc.shape(gwidToken(gwidAudience, g.now().Add(10*time.Minute), n)),
+					"expires_at": g.now().Add(10 * time.Minute).Format(time.RFC3339),
+				})
+			}
+			rec := gwidLanes(g, t)["brokered"]()
+			if sent := g.gw.count() == 1; sent != tc.sent {
+				t.Fatalf("sent %v, want %v: %d %s", sent, tc.sent, rec.Code, rec.Body)
+			}
+			if !tc.sent && rec.Code != http.StatusBadGateway {
+				t.Fatalf("%d %s, want a refusal", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
 // The cut applies to a route's answers alone. The same ending stays as it was off the prefix,
 // on a run with no route, and under the scrub flag, whose relay ends as it always did.
 func TestGatewayIdentity_CutStaysOnTheRoute(t *testing.T) {
@@ -947,6 +1101,255 @@ func TestGatewayIdentity_CutStaysOnTheRoute(t *testing.T) {
 	for lane, send := range gwidLanes(off, t) {
 		if rec := send(); rec.Body.String() != start {
 			t.Errorf("%s, scrub flag: %q, want the held bytes flushed as they always were", lane, rec.Body)
+		}
+	}
+}
+
+// A header on a route gets what a body's end gets: a value ending in the start of the token is
+// replaced, and a token crossing two values of one name hides them all. Short ends stay, so
+// "true", "false" and "no-cache" keep their last letter though every JWT starts "e".
+func TestGatewayIdentity_HeaderValuesCut(t *testing.T) {
+	const hidden = "<secret-hidden>"
+	cases := []struct {
+		name   string
+		values func(tok string) []string
+		want   func(tok string) []string
+	}{
+		{"one byte short", func(tok string) []string { return []string{tok[:len(tok)-1]} }, func(string) []string { return []string{hidden} }},
+		{"the floor, eight bytes", func(tok string) []string { return []string{tok[:8]} }, func(string) []string { return []string{hidden} }},
+		{"under the floor", func(tok string) []string { return []string{tok[:7]} }, func(tok string) []string { return []string{tok[:7]} }},
+		{"at the end of a url", func(tok string) []string { return []string{"https://o.test/?t=" + tok[:40]} }, func(string) []string { return []string{"https://o.test/?t=" + hidden} }},
+		{"a whole token in one of two", func(tok string) []string { return []string{"a", tok} }, func(string) []string { return []string{"a", hidden} }},
+		{"a token across two values", func(tok string) []string { return []string{tok[:20], tok[20:]} }, func(string) []string { return []string{hidden, hidden} }},
+		{"a short start across two values", func(tok string) []string { return []string{tok[:20], tok[20:60]} }, func(string) []string { return []string{hidden, hidden} }},
+		{"a start across two values, the first short", func(tok string) []string { return []string{tok[:3], tok[3:60]} }, func(string) []string { return []string{hidden, hidden} }},
+		{"benign true", func(string) []string { return []string{"true"} }, func(string) []string { return []string{"true"} }},
+		{"benign false", func(string) []string { return []string{"false"} }, func(string) []string { return []string{"false"} }},
+		{"benign no-cache", func(string) []string { return []string{"no-cache"} }, func(string) []string { return []string{"no-cache"} }},
+		{"benign values", func(string) []string { return []string{"a=1; Path=/", "b=2; SameSite=Lax"} }, func(string) []string { return []string{"a=1; Path=/", "b=2; SameSite=Lax"} }},
+	}
+	for lane := range map[string]bool{"brokered": true, "mitm": true} {
+		for _, tc := range cases {
+			t.Run(lane+"/"+tc.name, func(t *testing.T) {
+				g := newGwidRig(t, gwidRoutes(), false)
+				g.gw.respond = func(w http.ResponseWriter, r *http.Request) {
+					for _, v := range tc.values(r.Header.Get(gatewayIdentityHeader)) {
+						w.Header().Add("X-Echo", v)
+					}
+				}
+				rec := gwidLanes(g, t)[lane]()
+				if got, want := rec.Header().Values("X-Echo"), tc.want(g.lastMinted(t)); !slices.Equal(got, want) {
+					t.Errorf("values %q, want %q", got, want)
+				}
+			})
+		}
+		t.Run(lane+"/Location", func(t *testing.T) {
+			g := newGwidRig(t, gwidRoutes(), false)
+			g.gw.respond = func(w http.ResponseWriter, r *http.Request) {
+				tok := r.Header.Get(gatewayIdentityHeader)
+				w.Header().Set("Location", "https://"+gwidOther+"/?t="+tok[:len(tok)-1])
+				w.WriteHeader(http.StatusTemporaryRedirect)
+			}
+			rec := gwidLanes(g, t)[lane]()
+			if got, want := rec.Header().Get("Location"), "https://"+gwidOther+"/?t="+hidden; rec.Code != http.StatusTemporaryRedirect || got != want {
+				t.Errorf("%d Location %q, want %q", rec.Code, got, want)
+			}
+		})
+	}
+	// The scrub flag's relay, and no route at all, keep exact masking of their headers.
+	start := "abcdefghijklmnopqrstuvwxyz0123456789"
+	off := newGwidRig(t, nil, false)
+	procMaskFor(off.p.maskKey, []byte(start+"-the-rest-of-a-held-value"))
+	off.gw.respond = func(w http.ResponseWriter, _ *http.Request) { w.Header().Set("X-Echo", start) }
+	for _, flag := range []bool{false, true} {
+		off.p.scrubResponses = flag
+		if rec := gwidLanes(off, t)["brokered"](); rec.Header().Get("X-Echo") != start {
+			t.Errorf("scrub flag %v: X-Echo %q, want the value as sent", flag, rec.Header().Get("X-Echo"))
+		}
+	}
+}
+
+// A call pending longer than the mask set keeps a value: its own token is still masked when
+// the answer finally comes, however many refreshes passed while it waited.
+func TestGatewayIdentity_PendingCallKeepsItsTokenMasked(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	release := make(chan struct{})
+	seen := make(chan struct{})
+	var first atomic.Bool
+	g.gw.respond = func(w http.ResponseWriter, r *http.Request) {
+		if first.CompareAndSwap(false, true) {
+			close(seen)
+			<-release
+		}
+		tok := r.Header.Get(gatewayIdentityHeader)
+		w.Header().Set("X-Echo", tok)
+		w.Header().Set("X-Echo-Short", tok[:len(tok)-1]+" x")
+		_, _ = io.WriteString(w, tok)
+	}
+	send := gwidLanes(g, t)["brokered"]
+	pending := make(chan *httptest.ResponseRecorder, 1)
+	go func() { pending <- send() }()
+	<-seen
+	slow := g.lastMinted(t)
+	for range 4 { // twenty minutes of refreshes while the first call waits
+		g.advance(5 * time.Minute)
+		send()
+		gwidWaitNoFlight(t, g)
+	}
+	if slices.ContainsFunc(procRegistry.Snapshot(g.p.maskKey), func(v []byte) bool { return string(v) == slow }) {
+		t.Fatal("the pending call's token is still in the mask set, so this proves nothing")
+	}
+	close(release)
+	rec := <-pending
+	gwidNotIn(t, "the late body", rec.Body.String(), slow)
+	gwidNotIn(t, "the late header", rec.Header().Get("X-Echo"), slow)
+	gwidNotIn(t, "the late short echo", rec.Header().Get("X-Echo-Short"), string(gatewayMaskValues(slow)[1]))
+	if rec.Body.String() != "<secret-hidden>" {
+		t.Errorf("late body %q", rec.Body)
+	}
+	if set := procRegistry.Snapshot(g.p.maskKey); len(set) != 4 || slices.ContainsFunc(set, func(v []byte) bool { return string(v) == slow }) {
+		t.Errorf("the slow call left %d values in the shared mask set, or its token among them", len(set))
+	}
+}
+
+// The token leaves the shared set at each moment a refresh can land around the answer: before the
+// relay reads the set, and with the answer part read. Each masks, since the answer's own masker
+// holds the token whatever the set does.
+func TestGatewayIdentity_RefreshLandingDuringTheAnswer(t *testing.T) {
+	const hidden = "<secret-hidden>"
+	token := gwidToken(gwidAudience, time.Now().Add(10*time.Minute), 1)
+	relay := func(t *testing.T, g *gwidRig, body io.Reader) *httptest.ResponseRecorder {
+		t.Helper()
+		resp := &http.Response{StatusCode: 200, Header: http.Header{"X-Echo": {token}}, Body: io.NopCloser(body)}
+		rec := httptest.NewRecorder()
+		g.p.relayGatewayRoute(rec, mustLocalReq(t, http.MethodPost, llmAnthropicPrefix+"m", nil), gwidHost, 443, resp, ruleSourceLLM, token)
+		return rec
+	}
+	t.Run("dropped before the set is read", func(t *testing.T) {
+		g := newGwidRig(t, gwidRoutes(), false)
+		for _, v := range gatewayMaskValues(token) {
+			procRegistry.DropRunValue(g.p.maskKey, v)
+		}
+		rec := relay(t, g, strings.NewReader(token+"\n"))
+		if rec.Body.String() != hidden+"\n" || rec.Header().Get("X-Echo") != hidden {
+			t.Errorf("%q, X-Echo %q", rec.Body, rec.Header().Get("X-Echo"))
+		}
+	})
+	t.Run("dropped with the answer part read", func(t *testing.T) {
+		g := newGwidRig(t, gwidRoutes(), false)
+		for _, v := range gatewayMaskValues(token) {
+			procMaskFor(g.p.maskKey, v)
+		}
+		pr, pw := io.Pipe()
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() { done <- relay(t, g, pr) }()
+		_, _ = io.WriteString(pw, "first\n") // returns once the relay has read it, so its masker is built
+		for _, v := range gatewayMaskValues(token) {
+			procRegistry.DropRunValue(g.p.maskKey, v)
+		}
+		_, _ = io.WriteString(pw, token+"\n")
+		_ = pw.Close()
+		if rec := <-done; rec.Body.String() != "first\n"+hidden+"\n" {
+			t.Errorf("%q", rec.Body)
+		}
+		if slices.ContainsFunc(procRegistry.Snapshot(g.p.maskKey), func(v []byte) bool { return string(v) == token }) {
+			t.Error("the relay put the token back in the shared set")
+		}
+	})
+}
+
+// The other lanes that forward a sandbox's headers: both names go on a run with a route, and
+// pass as they did with none. The API door is driven below serveMITMRequest, which strips too.
+func TestGatewayIdentity_BrokerLanesStrip(t *testing.T) {
+	forge := map[string]func(t *testing.T, on bool, forged func(*http.Request) *http.Request) http.Header{
+		"git broker": func(t *testing.T, on bool, forged func(*http.Request) *http.Request) http.Header {
+			up := newGitBrokerUpstream(t, "gh-inst-token")
+			p, _ := newGitBrokerProxy(t, map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv))
+			if on {
+				p.gatewayRoutes = gwidRoutes()
+			}
+			p.ServeHTTP(httptest.NewRecorder(), forged(mustLocalReq(t, http.MethodGet, "/wardyn/gh/octocat/Hello-World.git/info/refs?service=git-upload-pack", nil)))
+			return up.gitHeaders
+		},
+		"pat broker": func(t *testing.T, on bool, forged func(*http.Request) *http.Request) http.Header {
+			up := newPATBrokerUpstream(t, "T", "oauth2")
+			p, _ := newPATBrokerProxy(t, map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
+			if on {
+				p.gatewayRoutes = gwidRoutes()
+			}
+			p.ServeHTTP(httptest.NewRecorder(), forged(mustLocalReq(t, http.MethodGet, "/wardyn/git/gitlab.com/org/repo.git/info/refs?service=git-upload-pack", nil)))
+			return up.gitHeaders
+		},
+		"pat api door": func(t *testing.T, on bool, forged func(*http.Request) *http.Request) http.Header {
+			h := newAPIHarness(t, types.PATForgeGitLab, apiGrants[types.PATForgeGitLab])
+			if on {
+				h.p.gatewayRoutes = gwidRoutes()
+			}
+			h.p.serveAPIDoor(httptest.NewRecorder(), forged(rawAPIRequest(t, http.MethodGet, glBase+"/issues", "", "", nil)), apiHost, 443)
+			return h.up.gitHeaders
+		},
+	}
+	for name, run := range forge {
+		t.Run(name, func(t *testing.T) {
+			on := run(t, true, gwidForge)
+			if on == nil {
+				t.Fatal("the forge received nothing")
+			}
+			if got := on.Get(gatewayIdentityHeader) + on.Get(gatewayCallIDHeader); got != "" {
+				t.Errorf("with a route the forge saw %q", got)
+			}
+			off := run(t, false, gwidForge)
+			if off.Get(gatewayIdentityHeader) != gwidForged || off.Get(gatewayCallIDHeader) != gwidCallID {
+				t.Errorf("with no route the sandbox's headers changed: %v", off)
+			}
+		})
+	}
+}
+
+// A plain forward keeps a chunked request's trailers through r.Clone: on a run with a route the
+// gateway's two names go and others stay. With none, all stay.
+func TestGatewayIdentity_PlainLaneTrailers(t *testing.T) {
+	send := func(t *testing.T, routes []GatewayIdentityRoute) http.Header {
+		g := newGwidRig(t, routes, false)
+		seen := make(chan http.Header, 1)
+		backend := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			seen <- r.Trailer.Clone()
+		}))
+		t.Cleanup(backend.Close)
+		g.p.dial = redirectDial(upstreamAddr(backend))
+		front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.URL.Scheme, r.URL.Host = "http", gwidOther
+			g.p.handlePlain(w, r)
+		}))
+		t.Cleanup(front.Close)
+		req, err := http.NewRequest(http.MethodPost, front.URL+"/thing", io.MultiReader(strings.NewReader("chunked")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.ContentLength = -1
+		req.Trailer = http.Header{gatewayIdentityHeader: {gwidForged}, gatewayCallIDHeader: {gwidCallID}, "X-Other": {"kept"}}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return <-seen
+	}
+	on := send(t, gwidRoutes())
+	if _, ok := on[gatewayIdentityHeader]; ok {
+		t.Errorf("identity trailer reached the destination: %v", on)
+	}
+	if _, ok := on[gatewayCallIDHeader]; ok {
+		t.Errorf("call id trailer reached the destination: %v", on)
+	}
+	if _, ok := on["X-Other"]; !ok {
+		t.Errorf("another trailer was lost, so this proves nothing: %v", on)
+	}
+	off := send(t, nil)
+	for _, name := range []string{gatewayIdentityHeader, gatewayCallIDHeader, "X-Other"} {
+		if _, ok := off[name]; !ok {
+			t.Errorf("no route: %s was lost: %v", name, off)
 		}
 	}
 }
@@ -991,7 +1394,7 @@ func TestGatewayIdentityConfig(t *testing.T) {
 	for f := range rt.Fields() {
 		keys = append(keys, f.Tag.Get("json"))
 	}
-	if want := []string{"host", "port", "path_prefix,omitempty", "provider_id", "audience"}; !slices.Equal(keys, want) {
+	if want := []string{"host", "port", "path_prefix,omitempty", "provider_id", "audience", "provider_uid,omitempty"}; !slices.Equal(keys, want) {
 		t.Fatalf("route keys %v: a route holds no token and no key, want %v", keys, want)
 	}
 	good := map[string]any{"host": gwidHost, "port": 443, "path_prefix": "/v1", "provider_id": "p", "audience": "a"}

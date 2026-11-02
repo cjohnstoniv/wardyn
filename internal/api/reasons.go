@@ -340,6 +340,7 @@ const (
 	reasonApprovalRuleChanged       = "approval_rule_changed"        // the rule was written after it matched, so it decides nothing
 	reasonApprovalRuleNotApplicable = "approval_rule_not_applicable" // an approval rule never decides this approval: the kind, an Azure DevOps escalation, a run no service identity created, or a match that no longer holds
 	reasonApprovalRuleHost          = "approval_rule_host"           // a rule's host is outside the Wardyn boundary in hard_limits
+	reasonApprovalRuleHostDenied    = "approval_rule_host_denied"    // a person's deny for this host still stands on this run, so a rule does not decide it
 
 	// PUT /governance/credential-delivery.
 	reasonCredentialDeliveryInvalid     = "credential_delivery_invalid"     // an unknown or fixed class, a mode outside the class's bounds or one the server cannot build (422), or require_posture without runner_resident
@@ -643,6 +644,14 @@ const (
 // A run refused at create because it sets a run proxy setting its runner's wardyn-runnerd does not
 // carry (sandboxCreateFailure, remote.ProxySettingError): the run.create failure row's reason.
 const reasonRunnerProxySetting = "runner_proxy_setting_unsupported"
+
+// A run's gateway identity (internal_gateway_identity.go): the provider no longer matches what the run was
+// dispatched with, so the mint or the revive is refused and a new run is the way on; and a check or the
+// signing key that could not be read just now, on a mint or on the save that turns identity on.
+const (
+	reasonGatewayIdentityChanged     = "gateway_identity_changed"
+	reasonGatewayIdentityUnavailable = "gateway_identity_unavailable"
+)
 
 // A run refused at create because its laptop local model is on a port the runner's person has not allowed
 // (sandboxCreateFailure, remote.LocalModelPortError): the run.create failure row's reason.

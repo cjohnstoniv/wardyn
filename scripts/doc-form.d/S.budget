@@ -301,7 +301,9 @@
 # docs/sdk.md 23974 measured (rc.8): workload_binding_inactive says a revoke, not a session-only sign-out, ends a binding.
 # docs/sdk.md 24038 measured at the Mac train main merge (+42: a disk drive's delete while its Mac is offline or no longer registered; +23: the workload_binding_inactive row says a deleted binding and a restart's launch.reason carry it).
 # docs/sdk.md 24178 adds 22 over 24156, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
-docs/sdk.md=24178 share=21 # +57 (0.10.1 recording fields on lists: the AgentRun recording fields note); +2 (rc.9 Mac train, measured 24040: the macos_base_invalid reason); +51 (rc.9 U12, measured 24091: the runner-bound folder reasons); +8 (rc.10, measured 24099: the drive_one_disk reason)
+# docs/sdk.md 24198 adds 20 over 24178, measured (0.10 rc.11 wave 2): a person's deny for a host and what a rule does after it.
+# docs/sdk.md 24273 adds 75 over 24198, measured (0.10 rc.11 gateway identity): two refusal reasons and the setting on runner_proxy_setting_unsupported.
+docs/sdk.md=24273 share=21 # +57 (0.10.1 recording fields on lists: the AgentRun recording fields note); +2 (rc.9 Mac train, measured 24040: the macos_base_invalid reason); +51 (rc.9 U12, measured 24091: the runner-bound folder reasons); +8 (rc.10, measured 24099: the drive_one_disk reason)
 # docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/sdk.md 20315 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.
 # 0.10 HYB-C: docs/sdk.md 20343 adds 28 over 20315, measured: the placement_capability refusal of a linux_vm run with a folder on a runner that cannot share one.

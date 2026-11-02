@@ -159,7 +159,7 @@ func (p UserMountPolicy) ValidateUserMountLexical(principal, src string, writabl
 		return fmt.Errorf("mount source %q is refused: this deployment configures no member workspace roots (WARDYN_USER_WORKSPACE_ROOTS / _MAP), so a member may not mount a host directory", src)
 	}
 	if !withinAnyCanon(src, roots, filepath.Clean) {
-		return fmt.Errorf("%w: mount source %q is outside every member workspace root (%s)", errMemberSourceRefused, src, strings.Join(roots, ", "))
+		return fmt.Errorf("%w: mount source %q is outside every member workspace root (%s); an operator sets these roots with WARDYN_USER_WORKSPACE_ROOTS", errMemberSourceRefused, src, strings.Join(roots, ", "))
 	}
 	if seg := DeniedUserSegment(src); seg != "" {
 		return fmt.Errorf("mount source %q is or traverses the credential path %q; denied", src, seg)
@@ -277,10 +277,10 @@ func validateUserSource(src string, roots []string) (string, error) {
 	}
 	refused := func(real string, cause error) (string, error) {
 		slog.Warn("runner: member mount source refused", slog.String("source", src), slog.String("resolved", real), slog.Any("err", cause))
-		return "", fmt.Errorf("%w: mount source %q must resolve on this host to a directory inside your member workspace roots (%s)", errMemberSourceRefused, src, strings.Join(roots, ", "))
+		return "", fmt.Errorf("%w: mount source %q must resolve on this host to a directory inside your member workspace roots (%s); an operator sets these roots with WARDYN_USER_WORKSPACE_ROOTS", errMemberSourceRefused, src, strings.Join(roots, ", "))
 	}
 	if !withinAnyRootLexical(src, roots) {
-		return "", fmt.Errorf("%w: mount source %q is outside every member workspace root (%s)", errMemberSourceRefused, src, strings.Join(roots, ", "))
+		return "", fmt.Errorf("%w: mount source %q is outside every member workspace root (%s); an operator sets these roots with WARDYN_USER_WORKSPACE_ROOTS", errMemberSourceRefused, src, strings.Join(roots, ", "))
 	}
 	if err := denySourceSymlink(src); err != nil {
 		return refused("", err)

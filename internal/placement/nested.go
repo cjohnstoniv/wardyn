@@ -28,7 +28,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.DecisionSinkConfig]():   strings.Fields("URL SPKISHA256 Key"),
 	reflect.TypeFor[proxy.HardDenyConfig]():       strings.Fields("Suffixes Hosts CIDRs"),
 	reflect.TypeFor[proxy.ViaOrgRoute]():          strings.Fields("GrantID Host"),
-	reflect.TypeFor[proxy.GatewayIdentityRoute](): strings.Fields("Host Port PathPrefix ProviderID Audience"),
+	reflect.TypeFor[proxy.GatewayIdentityRoute](): strings.Fields("Host Port PathPrefix ProviderID Audience ProviderUID"),
 	reflect.TypeFor[proxy.ResidentMint]():         strings.Fields("GrantID Kind Username KnownHosts Token ExpiresAt Host"),
 	reflect.TypeFor[proxy.MCPServerConfig]():      strings.Fields("Key URL GrantID Ordinal"),
 	reflect.TypeFor[proxy.MCPBinding]():           strings.Fields("Harness SHA256 Servers"),
