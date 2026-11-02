@@ -44,6 +44,7 @@ The dry run writes nothing, not even an audit row.
 - `approve.tools` and `approve.hosts` are exact: no `*`, no glob, no port. `egress_scope` is `once` or `run`, never `until` or `always`.
 - A host the Wardyn boundary does not allow in `hard_limits` is refused at write, `409 approval_rule_host`, and again when a rule decides.
 - A rule only approves. A deny already wins before an approval row exists: `tool_rules` deny, `policy:denied` and `always_deny` raise nothing.
+  - A person's `once` deny, or an `until` deny that has lapsed, does not stop a rule approving a later connection to that host.
 
 ## What bounds a rule
 

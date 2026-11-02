@@ -3892,7 +3892,7 @@ done
 
 | Install | How |
 |---|---|
-| Compose | Compose does not pass the variable on from `.env`: add the override file below beside `docker-compose.yaml`, and name it with a second `-f` if you pass `-f` yourself |
+| Compose | Set it in `.env`. Compose passes it on. The override file below also works: name it with a second `-f` if you pass `-f` yourself |
 | Helm | `--set env.WARDYN_MIGRATE_TIMEOUT=30m`, or an `extraEnv` entry of that name. The startup probe follows it. Give `helm upgrade --timeout` more than the migration needs |
 
 ```yaml

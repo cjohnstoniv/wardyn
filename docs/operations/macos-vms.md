@@ -496,7 +496,7 @@ A Mac can hold other bases beside its first, Standard. Each is derived from Stan
 | Proxy certificate | On macOS 26 the run's System keychain does not trust it, so apps that use only the system trust store fail on inspected hosts ([System trust store](#apps-that-use-only-the-system-trust-store)). Node, Python, git and curl are pointed at it |
 | Harnesses | Claude Code, Codex CLI and "Your own tools", depending on what the base installed and what passed the launcher's self-test. If Apple's Command Line Tools cannot install, only "Your own tools" is offered |
 | Folders | Shared into the guest; see [Folders](#folders) |
-| Desktop | One fixed 1920 x 1080 display. An `observe` result (see above) can be watched, not controlled |
+| Desktop | One fixed 1920 x 1080 display. A `view only` result (see above) can be watched, not controlled |
 | Clipboard | Paste in is allowed and copy out is blocked by default, as for other desktops, if Apple's Screen Sharing carries the standard clipboard messages. Otherwise nothing is copied either way |
 | Heat and battery | New VMs are refused at serious or critical thermal state. Battery use and lid-close sleep on MacBooks were not measured |
 | Guest patching | The guest's automatic updates are off, so a run's OS is predictable. Re-prepare to move to a newer macOS. `macos_vm.max_base_age_days` in the site config refuses runs on a Mac whose base is older |

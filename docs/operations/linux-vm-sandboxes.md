@@ -42,6 +42,7 @@
 | The same, on a runner too old to share one, or a Kubernetes runner | Refused at Review: update the runner, or run without drives |
 | A person's own Docker or cluster volume, or a drive with no binding | Refused at Review, as in a container on this runner |
 | A disk drive kept on a Mac | Refused at Review, naming the Mac |
+| A kept work folder | Refused at Review, naming the folder |
 
 - **Who a write lands as.** A guest write lands as the runner's user; a container's lands as the image's agent (uid 1000).
   - If the runner's uid is not 1000, a VM and a container on one drive may fail to change each other's files.

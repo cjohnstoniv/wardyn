@@ -113,6 +113,15 @@ func TestClaudeSignInImageAgentBaseIsNotASignInImage(t *testing.T) {
 			if !strings.Contains(chk.Detail, "no Claude Code CLI") || !strings.Contains(chk.Detail, ref) {
 				t.Errorf("%s / %s: detail does not name the ref and the missing CLI: %q", ref, name, chk.Detail)
 			}
+			// A one-line install has no clone: the step has to work without make.
+			for _, want := range []string{"docs/operations/build-images.md", "WARDYN_AGENT_IMAGES", ".env", "docker compose up -d"} {
+				if !strings.Contains(chk.Fix, want) {
+					t.Errorf("%s / %s: fix does not name %q: %q", ref, name, want, chk.Fix)
+				}
+			}
+			if strings.Contains(chk.Fix, "make ") {
+				t.Errorf("%s / %s: fix names a make target a one-line install lacks: %q", ref, name, chk.Fix)
+			}
 		}
 	}
 	// Lookalikes that merely contain the name are real sign-in images.

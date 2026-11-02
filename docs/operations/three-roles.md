@@ -205,7 +205,8 @@ Stated honestly: profiles narrow by omission — a profile that omits secret gra
   - An empty ceiling `ui_apps` is still no opinion, so a profile without the limit behaves as before.
   - So emptying a profile's own `ui_apps` is not a narrowing: the update waits for a second approver where one is required. An overlay's `ui_apps: []` denies UI apps instead.
   - A super admin is exempt from both at every door, as at create; a security admin is bound.
-  - A limit set later reaches new sessions but does not sever ones already open: a terminal, SSH session or UI-app session opened before the limit was set runs until it ends.
+  - A limit set later reaches new sessions and later requests on an open UI-app session, which get a `403`. It does not sever a socket already open: a terminal, an SSH session or an open UI-app socket runs until it ends.
+  - A limit set during a desktop sign-in stops new entry. An open display stays until it ends, and the agent comes back at End or within 30 minutes.
   - `deny_ui_apps` does not close an SSH port forward to the app; `deny_interactive` does.
 - **The autonomy rubric (0.8, #77).**
   - A profile may also carry `limits.autonomy_rubric`, nine closed fields — three egress postures (`egress_open`, `egress_reviewed`, `egress_sealed`), three secret postures (`secrets_powerful`, `secrets_baseline`, `secrets_none`) and three enforced confinement classes (`confinement_cc1`, `confinement_cc2`, `confinement_cc3`).

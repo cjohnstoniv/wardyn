@@ -29,6 +29,11 @@ import (
 // login run itself, naming the image, which is cheaper than a false warning on
 // every k8s install.
 
+// claudeSignInBaseImageFix is the row's next step for the installer's agent-base pin:
+// a one-line install has no clone, so no make target.
+const claudeSignInBaseImageFix = "Build or supply an image with the Claude Code CLI (docs/operations/build-images.md, Claude sign-in image), " +
+	"set the claude-code entry of WARDYN_AGENT_IMAGES to it in the install's .env (~/.wardyn/.env by default), then run `docker compose up -d`."
+
 // claudeSignInImageState is resolveClaudeSignInImage's result.
 type claudeSignInImageState struct {
 	ref      string // the pinned ref, "" when unpinned
@@ -127,7 +132,7 @@ func claudeSignInImageCheck(ctx context.Context, images map[string]string, rnr r
 			Detail: "WARDYN_AGENT_IMAGES[\"claude-code\"] is pinned to " + st.ref + ", Wardyn's agent base image, which " +
 				"ships no Claude Code CLI, so it cannot sign in — anthropic_subscription model providers are refused until " +
 				"it points at an image that carries the vendor CLI.",
-			Fix: fix,
+			Fix: claudeSignInBaseImageFix,
 		}
 	}
 	if st.resolved {

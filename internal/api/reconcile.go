@@ -953,7 +953,7 @@ func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to type
 		return
 	}
 	// A run its runner holds is ended by the runner, which this must not race: one with a sandbox there
-	// (an interactive run has no task, so no execution row) and one handed a task (its durable exit
+	// (an interactive run has no execution row: dispatch never Execs its task) and one handed a task (its durable exit
 	// receipt). One with neither (a crash between create and dispatch) has nothing on the runner to
 	// report, so it is finalized here like any other run that was never dispatched.
 	if cur.Placement == types.PlacementLocal && cur.RunnerID != nil && (cur.SandboxRef != "" || s.runnerReceived(ctx, runID)) {
