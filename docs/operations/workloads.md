@@ -21,6 +21,7 @@
 - An owner holds at most 100 workloads (`422` `workload_cap_reached`).
 - The store must be Postgres. Any other backend answers `501` `workloads_unavailable`.
 - A workload is not a schedule or a queue. It has one current run, and it starts a run only when its spec is ahead of its run.
+- It is one run: no replicas, no autoscaling, and a service's health is the sandbox's own claim ([Health is the sandbox's claim](../SERVICES.md#health-is-the-sandboxs-claim)). Replicated production agents belong on the sandbox controller directly.
 
 ## The workload file
 
@@ -68,7 +69,7 @@ intent:
 
 - `-f -` reads standard input. `FILE` is required.
 - `workload list|get|restart|delete` take `--owner` for an administrator, or a service identity's sponsor, who acts on another owner's workloads. A `security_admin` may list, get and delete them but not restart one (below). `list` takes `--limit`, `--offset` and `--json`.
-- Authentication is unchanged: `WARDYN_URL`, `WARDYN_TOKEN` or your stored sign-in. A pipeline uses a service identity's token, which reaches only that identity's own workloads.
+- Authentication is unchanged: `WARDYN_URL`, `WARDYN_TOKEN` or your stored sign-in. A pipeline uses a service identity's token, which reaches only that identity's own workloads. It can `apply`, but not `diff` or `apply --dry-run`; see [Apply from a pipeline](../CI.md#apply-from-a-pipeline).
 
 ### apply
 

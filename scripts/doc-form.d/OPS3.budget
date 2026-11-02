@@ -125,7 +125,7 @@ docs/operations/ownership-and-offboarding.md=2428 share=35 # +14 (rc.10), measur
 # docs/operations/governance-writes.md 3572 adds 8 over 3564, measured (#2967 DESK-LOCKS row 5): the recording level row in the covered-writes table.
 # docs/operations/governance-writes.md 3574 adds 2 over 3572, measured: the held-removal row covers an organization runner.
 # docs/operations/governance-writes.md 3588 adds 14 over 3574, measured (rc.8 E5): the super-admin tier names an organization runner's held removal.
-docs/operations/governance-writes.md=3588 share=35
+docs/operations/governance-writes.md=3669 share=35 # +81 (rc.11): rows a release cannot build, measured.
 # 0.9.4 L8: docs/operations/member-runs.md 1054 adds 10 over 1044: ssh_key delivery claims bounded.
 # docs/operations/member-runs.md=1054 share=35
 # 0.10.0-rc.6: member-runs 1086 adds 32 over 1054, measured: a no-policy member run's default is the ceiling.
