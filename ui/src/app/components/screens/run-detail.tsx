@@ -383,6 +383,7 @@ function RunDetailPage({ id }: { id: string }) {
               onGoAudit={() => setTab("audit")}
               onGoPolicy={() => setTab("policy")}
               onGoRecording={() => setTab("recording")}
+              onGoOutput={() => setTab("output")}
               onGoApprovals={() => setTab("approvals")}
             />
           </TabsContent>

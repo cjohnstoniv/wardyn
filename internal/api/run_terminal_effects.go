@@ -36,10 +36,15 @@ func (s *Server) finalizeRunEffects(ctx context.Context, runID uuid.UUID, ref, a
 	// (#3466); each write after it on a fresh one, so a stop that overruns its budget takes
 	// none of them with it (#3482). Both still end when the run-op lock ctx holds is lost:
 	// another replica may then be running this same tail (#3480).
-	tctx, cancel := teardownCtx(ctx)
+	stops := ref != "" && s.cfg.Runner != nil && !keep
+	budget := runTeardownBudget
+	if stops && s.macOSVMRun(ctx, runID) {
+		budget = macOSVMTeardownBudget
+	}
+	tctx, cancel := teardownCtxWithin(ctx, budget)
 	defer cancel()
 	teardownOK := false
-	if ref != "" && s.cfg.Runner != nil && !keep {
+	if stops {
 		if serr := s.cfg.Runner.StopSandbox(tctx, ref); serr != nil {
 			errs = append(errs, serr)
 			td := make(map[string]any, len(data)+1)
@@ -85,14 +90,36 @@ var errComputerFolderResumes = errors.New("the sandbox is kept: its computer fol
 // (bringComputerFolderBack).
 const runTeardownBudget = 15 * time.Second
 
+// macOSVMTeardownBudget is runTeardownBudget for a macOS VM run. Its runner's stop asks the guest to
+// shut down and waits up to 30 s for it, then for the helper to exit, and bounds that destroy at 80 s:
+// held to a runner exit's 30 s, every such stop overran and was audited as a failed teardown (#3886).
+const macOSVMTeardownBudget = 90 * time.Second
+
+// macOSVMRun reports whether runID is a macOS VM run, read on a teardownCtx. A run it cannot read is not.
+func (s *Server) macOSVMRun(ctx context.Context, runID uuid.UUID) bool {
+	if s.cfg.Store == nil {
+		return false
+	}
+	rctx, cancel := teardownCtx(ctx)
+	defer cancel()
+	run, err := s.cfg.Store.GetRun(rctx, runID)
+	return err == nil && run.MachineKind.IsMacOSVM()
+}
+
 // teardownCtx is ctx's values with none of its cancellation but a lost lock's
 // (db.WithoutCancelUnlessLost), on a deadline of its own: ctx's deadline or
 // runTeardownBudget from now, whichever is later. A ctx with no deadline gets
 // reconcileFinalizeTimeout, the bound the sweeps give the whole finalize tail.
 func teardownCtx(ctx context.Context) (context.Context, context.CancelFunc) {
-	d := reconcileFinalizeTimeout
+	return teardownCtxWithin(ctx, runTeardownBudget)
+}
+
+// teardownCtxWithin is teardownCtx with floor in place of runTeardownBudget, and in place of
+// reconcileFinalizeTimeout when floor is the longer.
+func teardownCtxWithin(ctx context.Context, floor time.Duration) (context.Context, context.CancelFunc) {
+	d := max(reconcileFinalizeTimeout, floor)
 	if dl, ok := ctx.Deadline(); ok {
-		d = max(time.Until(dl), runTeardownBudget)
+		d = max(time.Until(dl), floor)
 	}
 	fenced, release := db.WithoutCancelUnlessLost(ctx)
 	tctx, cancel := context.WithTimeout(fenced, d)

@@ -74,6 +74,9 @@ type runnerFile struct {
 	// DriveRoot lists the folders a drive bound to this runner may mount from, with everything under each:
 	// a JSON array of absolute, cleaned folder paths (parseDriveRoots). None when unset, so no drive mounts here.
 	DriveRoot []string `json:"drive_root,omitempty"`
+	// Substrate is where runs execute: docker, k8s or folders (serve's --substrate, which outranks it). None
+	// when unset, which is docker, so `wardyn-runnerd doctor` judges the settings against the substrate serve uses.
+	Substrate string `json:"substrate,omitempty"`
 }
 
 // Where each setting is read from, in the order serve consults them. A managed preference outranks the
@@ -131,6 +134,7 @@ var runnerFields = []runnerField{
 	// No flag or environment variable sets it, as macos_vm_base_file.
 	{name: "macos_vm_bases_dir", managed: "MacOSVMBasesDir", file: func(f *runnerFile) *string { return &f.MacOSVMBasesDir }},
 	{name: "drive_root", flag: "drive-root", env: []string{"WARDYN_DRIVE_ROOT"}, managed: "DriveRoot", locked: true, fileList: func(f *runnerFile) *[]string { return &f.DriveRoot }},
+	{name: "substrate", flag: "substrate", def: "docker", file: func(f *runnerFile) *string { return &f.Substrate }},
 }
 
 // profileOnlyKeys are the managed preferences no serve setting stands for: the posture a Mac's MDM attests
@@ -523,6 +527,9 @@ func checkRunnerFile(f runnerFile) error {
 	}
 	if _, err := parseDriveRootsFrom(f.DriveRoot, "drive_root"); err != nil {
 		return err
+	}
+	if f.Substrate != "" && !slices.Contains([]string{"docker", "k8s", "folders"}, f.Substrate) {
+		return errors.New("substrate: must be docker, k8s or folders")
 	}
 	if err := checkMacOSVMImage(f.MacOSVMImageURL, f.MacOSVMImageHash); err != nil {
 		return err

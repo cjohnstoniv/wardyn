@@ -44,16 +44,19 @@ func (l Layout) NamedBaseDir(name string) (string, error) {
 	return "", fmt.Errorf("macvm: %q is not a macOS base name", name)
 }
 
-// BaseVariant is one derived base the operator defines: its name and its own install list.
+// BaseVariant is one derived base the operator defines: its name and its own install list. Err is why
+// that list cannot be used (it is not readable, or holds a profile); the base is then not derived.
 type BaseVariant struct {
 	Name string
 	List BaseList
+	Err  error
 }
 
 // LoadBaseVariants reads the derived bases the runner setting macos_vm_bases_dir defines: each regular
 // <name>.json in dir is the install list (in macos_vm_base_file's form) of the base <name>, in name order;
 // other files are ignored. A list cannot hold a profile: a profile waits for approval in macos-vm
-// edit-base, which edits Standard only.
+// edit-base, which edits Standard only. A list that cannot be used leaves its base with Err set and the
+// others loaded.
 func LoadBaseVariants(dir string) ([]BaseVariant, error) {
 	des, err := os.ReadDir(dir)
 	if err != nil {
@@ -69,13 +72,10 @@ func LoadBaseVariants(dir string) ([]BaseVariant, error) {
 			return nil, fmt.Errorf("macvm: the macOS bases directory %s: %q is not a base name (lowercase letters, digits, '.', '_' and '-')", dir, name)
 		}
 		l, err := LoadBaseList(filepath.Join(dir, de.Name()))
-		if err != nil {
-			return nil, err
+		if i := slices.IndexFunc(l.Items, func(it BaseItem) bool { return it.Kind == ItemKindProfile }); err == nil && i >= 0 {
+			err = fmt.Errorf("macvm: the macOS base %s: item %q is a profile, which only Standard's list (macos_vm_base_file) can hold", name, l.Items[i].Name)
 		}
-		if i := slices.IndexFunc(l.Items, func(it BaseItem) bool { return it.Kind == ItemKindProfile }); i >= 0 {
-			return nil, fmt.Errorf("macvm: the macOS base %s: item %q is a profile, which only Standard's list (macos_vm_base_file) can hold", name, l.Items[i].Name)
-		}
-		out = append(out, BaseVariant{Name: name, List: l})
+		out = append(out, BaseVariant{Name: name, List: l, Err: err})
 	}
 	return out, nil
 }

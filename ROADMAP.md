@@ -62,6 +62,7 @@
 | **v0.10.0-rc.7** | rc.7: each allowed host marked Inspected or Tunnel only on a run's Policy tab and in the CLI, folders shared into a macOS VM, and pre-wrapped images on Kubernetes without an image builder. | **Shipped (pre-alpha)** — `v0.10.0-rc.7`, 2026-10-29 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.8** | rc.8: commands kept running as services, inbound apps that people and API clients can call, workloads Wardyn keeps declared, your own walls, and a macOS VM guest that gets its network address. | **Shipped (pre-alpha)** — `v0.10.0-rc.8`, 2026-10-29 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.9** | rc.9: macOS VM runs with drives and operator-made bases, folders on a person's own runner, Wardyn-only guest pairing, AWS re-signing on a person's runner (AWS and some macOS parts not yet run end to end). | **Shipped (pre-alpha)** — `v0.10.0-rc.9`, 2026-11-01 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.10** | rc.10: Watch desktop on a view-only macOS VM run, and macOS VM, Azure DevOps push, workload and console fixes (macOS parts not yet run on a real Mac). | **Shipped (pre-alpha)** — `v0.10.0-rc.10`, 2026-11-01 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 

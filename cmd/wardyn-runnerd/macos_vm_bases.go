@@ -60,7 +60,7 @@ func (m *macOSVMs) derivedBases(man macvm.Manifest) []runnerwire.MacVMDerivedBas
 	b.once.Do(func() { b.dir, b.err = macOSVMBasesDir() })
 	if b.err != nil || b.dir == "" {
 		if b.err != nil {
-			m.warnBases(b.err)
+			m.warnBases("the other bases cannot be read; only Standard is offered", b.err)
 		}
 		return nil
 	}
@@ -71,7 +71,7 @@ func (m *macOSVMs) derivedBases(man macvm.Manifest) []runnerwire.MacVMDerivedBas
 			return m.offerBases(vs, stamp, man)
 		}
 	}
-	m.warnBases(err)
+	m.warnBases("the other bases cannot be read; only Standard is offered", err)
 	return nil
 }
 
@@ -82,8 +82,15 @@ func (m *macOSVMs) offerBases(vs []macvm.BaseVariant, stamp string, man macvm.Ma
 	asked, starting := b.asked, b.starting
 	m.mu.Unlock()
 	var out []runnerwire.MacVMDerivedBase
+	var unreadable []error
 	next := -1
 	for i, v := range vs {
+		if v.Err != nil {
+			// Its list cannot be used: the caps carry the base as failed, with why.
+			unreadable = append(unreadable, v.Err)
+			out = append(out, runnerwire.MacVMDerivedBase{Name: v.Name, State: runnerwire.MacVMDerivedFailed, Reason: m.scrubError(v.Err.Error())})
+			continue
+		}
 		dir, digest := m.layout.VariantDir(v.Name), v.List.Digest()
 		key := v.Name + " " + stamp + " " + digest
 		d := runnerwire.MacVMDerivedBase{Name: v.Name, State: runnerwire.MacVMDerivedRebuilding, Items: len(v.List.Items)}
@@ -117,6 +124,9 @@ func (m *macOSVMs) offerBases(vs []macvm.BaseVariant, stamp string, man macvm.Ma
 			next = i
 		}
 		out = append(out, d)
+	}
+	if len(unreadable) > 0 {
+		m.warnBases("a base's install list cannot be read; the base is shown as failed", errors.Join(unreadable...))
 	}
 	if next >= 0 && !busy && !starting {
 		m.deriveNext(vs[next], vs[next].Name+" "+stamp+" "+vs[next].List.Digest(), man)
@@ -195,13 +205,13 @@ func (m *macOSVMs) runsOn(dir string) bool {
 	return false
 }
 
-// warnBases logs err once, until another error replaces it.
-func (m *macOSVMs) warnBases(err error) {
+// warnBases logs msg with err once, until another error replaces it.
+func (m *macOSVMs) warnBases(msg string, err error) {
 	m.mu.Lock()
 	again := m.bases.warned == err.Error()
 	m.bases.warned = err.Error()
 	m.mu.Unlock()
 	if !again {
-		slog.Warn("macOS VM bases: the other bases cannot be read; only Standard is offered", "error", err.Error())
+		slog.Warn("macOS VM bases: "+msg, "error", err.Error())
 	}
 }

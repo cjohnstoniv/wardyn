@@ -113,13 +113,16 @@ func (s *Server) stepDrive(f *runFold, rec *foldRecorder) bool {
 	}
 	// keep_work_folder's doors, at every door. A promoted run's start replays them over the drive
 	// its create already made, which is not counted again.
-	if !f.req.KeepWorkFolder {
-		return true
-	}
+	macOS := types.MachineKind(f.req.MachineKind).IsMacOSVM()
 	var refusal *runRefusal
-	f.keep, refusal = s.keepWorkFolderGates(f.r, f.spec, f.promoted, types.MachineKind(f.req.MachineKind).IsMacOSVM())
+	if f.req.KeepWorkFolder {
+		f.keep, refusal = s.keepWorkFolderGates(f.r, f.spec, f.promoted, macOS)
+		if refusal == nil {
+			refusal = keptDriveMixRefusal(f.drives, f.keep.row)
+		}
+	}
 	if refusal == nil {
-		refusal = keptDriveMixRefusal(f.drives, f.keep.row)
+		refusal = macVMOneDiskRefusal(f.drives, f.keep, macOS)
 	}
 	return !refusal.write(s, f.w, f.r)
 }

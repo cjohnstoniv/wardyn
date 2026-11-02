@@ -86,6 +86,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -137,6 +143,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -203,6 +215,12 @@ jobs:
       RUNSC_SHA512: ea985c4a505a37c50726b35fa5d48fdb8058dce36833d7710d49be035e08623b425869f91deb9133c1c5b35a33a77aed5ddcbc6926801a2dc49ddb0805aed7dc
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -297,6 +315,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -345,6 +369,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -467,6 +497,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -529,6 +565,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -783,6 +825,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1200,8 +1248,22 @@ jobs:
   # quickstart-kind-config.yaml's own comment on why the walk's precedent is
   # NodePort-on-loopback, not node-IP routing.
   #
-  # WARDYN_KIND_SSO_REBUILD=1: certify the tip this workflow checked out, not
-  # whatever quickstart.sh's own image builds happened to cache.
+  # No WARDYN_KIND_SSO_REBUILD here: on this fresh runner every image the walk
+  # judges is already built from this checkout before the walk starts, so the
+  # walk's own five-image rebuild only repeated those builds (about 4-6 min a
+  # leg, and it rebuilt images from the same sources, so it certified nothing
+  # new). Built from this checkout, in order: `make agent-images` builds
+  # agent-aws-sso:local and agent-claude-code:local (plus agent-base:local);
+  # `make kind-quickstart` builds wardynd:quickstart and wardyn-proxy:quickstart
+  # unconditionally (it reuses only the claude-code tag, which is the one just
+  # built); `make kind-sso` builds awsssofake:local unconditionally. Every one
+  # is a `COPY . .` Go (or UI) build from the checked-out tree on digest-pinned
+  # bases; the job has no buildx, no --cache-from and no actions/cache for
+  # images (the pnpm store cache holds npm tarballs only), and the runner has
+  # no wardyn/* image before the job. The cluster then gets exactly those tags:
+  # quickstart.sh and overlay.sh `kind load` them, and the walk serves a
+  # derived copy of agent-aws-sso:local from its local registry. The assert step
+  # below checks that the node holds the host daemon's digest for the other four.
   # WARDYN_KIND_SSO_SKIP_REAUTH_HOLD=1: sso-reauth-hold.spec.ts's case K holds
   # a credential for about ten minutes of wall clock by design — every other
   # case in the walk does not, and that is too long for something nobody is
@@ -1214,11 +1276,34 @@ jobs:
   # after this one asserts on that exit code directly, plus that the walk
   # actually reached its own PASS line and reported at least one executed
   # spec file — belt and suspenders, neither one a grep of the skip message.
+  #
+  # TWO LEGS, each on its own runner with its own kind cluster, so the walk's
+  # wall clock is the slower leg and not the sum (measured on two green runs:
+  # sso-member ~85 s, sso-member-recovery ~270 s, sso-concurrency ~165 s, the
+  # two role renders ~70 s). Specs inside a leg stay serial: they share one
+  # cluster's org-wide state, and sso-member-recovery inherits what sso-member
+  # leaves, so that pair is one leg. WARDYN_KIND_SSO_LEG makes
+  # scripts/kind-sso-walk.sh run its half; the legs together are exactly the
+  # set the single job ran (reauth-hold still excluded), and `specs` / `roles`
+  # below are each leg's expected counts for the executed-specs assertion.
+  # Each leg reports as "kind-sso-walk (<leg>)", which release.yml's watched=
+  # entry `kind-sso-walk` covers by prefix (green-by-tree.sh): both must pass.
   kind-sso-walk:
+    name: kind-sso-walk (${{ matrix.leg }})
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: member
+            specs: 2
+            roles: "0"
+          - leg: concurrency
+            specs: 1
+            roles: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
@@ -1259,10 +1344,10 @@ jobs:
           WARDYN_QUICKSTART_HTTP_PORT: "8280"
           WARDYN_QUICKSTART_SSH_PORT: "2322"
         run: make kind-sso
-      - name: Live kind AWS SSO walk (member + recovery; reauth-hold excluded — see job comment above)
+      - name: Live kind AWS SSO walk (${{ matrix.leg }} leg; reauth-hold excluded — see job comment above)
         env:
           WARDYN_TEST_K8S: "1"
-          WARDYN_KIND_SSO_REBUILD: "1"
+          WARDYN_KIND_SSO_LEG: ${{ matrix.leg }}
           WARDYN_KIND_SSO_SKIP_REAUTH_HOLD: "1"
           WARDYN_KIND_SSO_EVIDENCE: ${{ github.workspace }}/test/reports/e2e/kind-sso
         shell: bash
@@ -1277,6 +1362,9 @@ jobs:
       # the walk actually ran specs and reached its own closing PASS line.
       - name: Assert the walk actually executed specs (not a self-skip)
         shell: bash
+        env:
+          WALK_SPECS: ${{ matrix.specs }}
+          WITH_ROLES: ${{ matrix.roles }}
         run: |
           set -euo pipefail
           log=test/reports/e2e/kind-sso-walk.log
@@ -1295,7 +1383,10 @@ jobs:
           # calls, read from the file each one tees ALONE: $log interleaves all
           # three summaries, and its last one is always a roles leg's.
           # WARDYN_KIND_SSO_SKIP_REAUTH_HOLD=1 above fixes the AWS walk to exactly
-          # sso-member + sso-member-recovery + sso-concurrency; each roles leg runs sso-roles alone.
+          # sso-member + sso-member-recovery + sso-concurrency, of which this matrix
+          # leg runs WALK_SPECS (member: the first two; concurrency: the last, then
+          # both roles renders, each running sso-roles alone). WITH_ROLES=1 marks the
+          # leg that runs them.
           # Every one of those specs' WARDYN_TEST_K8S guard is satisfied here, so
           # "0 failed, 0 skipped" is what this job's own configuration implies.
           evidence=test/reports/e2e/kind-sso
@@ -1329,9 +1420,22 @@ jobs:
               exit 1
             fi
           }
-          expect_per_spec_summaries "$evidence/walk.log" 3
-          expect_summary "$evidence/roles-sso.log" 1
-          expect_summary "$evidence/roles-sso-only.log" 1
+          # The walk no longer rebuilds, so check what it recorded (images.txt, written
+          # by scripts/lib/kind-sso-walk-image-provenance.sh before any spec runs): the
+          # kind node holds exactly the digest the host daemon holds, for the four
+          # `kind load`ed images. agent-aws-sso reaches the node through the walk's
+          # registry under a fresh tag, so it has no row to compare.
+          for img in wardyn/wardynd:quickstart wardyn/wardyn-proxy:quickstart wardyn/agent-claude-code:local wardyn/awsssofake:local; do
+            if ! awk -v i="$img" '$1==i && $NF=="yes" {f=1} END {exit !f}' "$evidence/images.txt"; then
+              echo "::error::$evidence/images.txt: the node does not hold the host daemon's $img — see the uploaded images.txt"
+              exit 1
+            fi
+          done
+          expect_per_spec_summaries "$evidence/walk.log" "$WALK_SPECS"
+          if [ "$WITH_ROLES" = "1" ]; then
+            expect_summary "$evidence/roles-sso.log" 1
+            expect_summary "$evidence/roles-sso-only.log" 1
+          fi
           # Shared with kind-sso-ado-walk below (scripts/test-kind-sso-walk-log.sh
           # proves it profile-aware, red on self-skip, green on PASS) — the
           # per-spec counts above are this job's own extra rigor (T-08/G9),
@@ -1341,7 +1445,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: kind-sso-walk-results
+          name: kind-sso-walk-results-${{ matrix.leg }}
           path: |
             test/reports/e2e/kind-sso-walk.log
             test/reports/e2e/kind-sso/**
@@ -1360,8 +1464,9 @@ jobs:
   # one pinned callback — see overlay.sh and the walk script's own checks) so
   # this job can never collide with kind-sso-walk above.
   #
-  # WARDYN_KIND_SSO_REBUILD=1: same reasoning as the default profile's job —
-  # certify the tip this workflow checked out. overlay.sh's ado branch already
+  # WARDYN_KIND_SSO_REBUILD=1: certify the tip this workflow checked out. The
+  # default-profile job above dropped it (its builds are all from this checkout,
+  # see there); this job keeps it until the same is shown for the ado overlay. overlay.sh's ado branch already
   # rebuilds wardynd/proxy/the fake unconditionally, so this is belt-and-
   # suspenders, not load-bearing, here.
   #
@@ -1545,6 +1650,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1847,6 +1958,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -1914,6 +2031,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -2057,6 +2180,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror
@@ -2167,6 +2296,12 @@ jobs:
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
         uses: ./.github/actions/base-image-mirror

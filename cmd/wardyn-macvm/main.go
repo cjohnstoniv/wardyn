@@ -147,6 +147,12 @@ func cmdLedgerSetup(args []string, d deps) int {
 	return 0
 }
 
+// runShim is the run's desktop shim: view only unless the run's base has desktop control, read here so
+// the rule holds whatever the gateway in front of the runner lets through.
+func runShim(dir string, pw *macvm.DesktopSecret, log *slog.Logger) *macvm.RFBShim {
+	return &macvm.RFBShim{Credential: pw.Credential, ViewOnly: macvm.BaseViewOnly(dir), Log: log}
+}
+
 func cmdRun(ctx context.Context, args []string, d deps) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(d.stderr)
@@ -178,7 +184,7 @@ func cmdRun(ctx context.Context, args []string, d deps) int {
 	}
 	err = macvm.Run(ctx, macvm.RunOptions{
 		Engine: eng, RunDir: *dir, Log: log, SockFstat: d.sockFstat,
-		Desktop:         &macvm.RFBShim{Credential: pw.Credential, Log: log},
+		Desktop:         runShim(*dir, pw, log),
 		DesktopPassword: pw,
 		Claim: func(c macvm.RunConfig) error {
 			if c.LedgerEntry == "" || c.RunnerID == "" {

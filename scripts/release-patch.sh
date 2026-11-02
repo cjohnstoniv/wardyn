@@ -201,9 +201,10 @@ nightly_state() {
   if [ "$(age_s "${row#*$'\t'}")" -gt "$NIGHTLY_MAX_AGE" ]; then echo none; return 0; fi
   rows="$(gh api -X GET --paginate "repos/$REPO/actions/runs/$id/jobs" -f per_page=100 --jq '.jobs[] | [.name, .conclusion] | @tsv')" \
     || { echo "release-patch: cannot read the jobs of nightly run $id" >&2; return 1; }
+  # a matrix job reports one row per leg, "<name> (<leg>)": every row of a watched name must succeed (as green-by-tree.sh status_of does)
   if awk -F'\t' -v watched="$WATCHED" '
     BEGIN { n = split(watched, w, " ") }
-    { seen[$1] = 1; if ($2 != "success") bad[$1] = 1
+    { for (i = 1; i <= n; i++) if ($1 == w[i] || index($1, w[i] " (") == 1) { seen[w[i]] = 1; if ($2 != "success") bad[w[i]] = 1 }
       if (index($1, "multi-arch build (") == 1) { m = 1; if ($2 != "success") mbad = 1 } }
     END { for (i = 1; i <= n; i++) if (!(w[i] in seen) || (w[i] in bad)) exit 1; if (!m || mbad) exit 1 }' <<<"$rows"; then
     echo green

@@ -201,7 +201,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
   sandbox: {
     label: "Sandbox",
     Icon: Box,
-    component: (ctx) => React.createElement(SandboxWidget, { runId: ctx.run.id, live: !ctx.finished }),
+    component: (ctx) => React.createElement(SandboxWidget, { runId: ctx.run.id, live: !ctx.finished, macOS: isMacOSVM(ctx.run) }),
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
     presets: { live: { x: 8, y: 8, w: 4, h: 4 } },
   },
@@ -306,6 +306,15 @@ export function withService(layout: RunLayoutWidget[]): RunLayoutWidget[] {
   return [...layout.map((w) => (under(w) ? { ...w, y: w.y + SERVICE_AT.h } : w)), { widget: "service", ...SERVICE_AT, x }];
 }
 
+/**
+ * What a saved layout holds in place of the Service panel once the person has removed it. The panel's smallest size is
+ * 3×3, so a 1×1 entry cannot be the panel itself. A saved layout with no Service entry at all predates the panel and
+ * gets it (withService); one with this entry was saved after, with the panel taken out, and does not.
+ */
+export const SERVICE_REMOVED: RunLayoutWidget = { widget: "service", x: 0, y: 0, w: 1, h: 1 };
+
+export const isServiceRemoved = (w: RunLayoutWidget): boolean => w.widget === "service" && w.w === 1 && w.h === 1;
+
 /** A layout for one run: a service run's live layout has the Service panel, one saved before the panel existed included. */
 export function forRun(layout: RunLayoutWidget[], preset: RunLayoutPreset, service: boolean): RunLayoutWidget[] {
   return service && preset === "live" ? withService(layout) : layout;
@@ -333,7 +342,7 @@ export function normalizeLayout(
   const seen = new Set<string>();
   const out: RunLayoutWidget[] = [];
   for (const w of layout) {
-    if (!isWidgetId(w.widget) || seen.has(w.widget)) continue;
+    if (!isWidgetId(w.widget) || seen.has(w.widget) || isServiceRemoved(w)) continue;
     seen.add(w.widget);
     out.push({ widget: w.widget, x: w.x, y: w.y, w: w.w, h: w.h });
   }

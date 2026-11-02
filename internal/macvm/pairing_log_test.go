@@ -5,8 +5,11 @@ package macvm
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"net"
 	"testing"
 	"time"
 )
@@ -52,5 +55,33 @@ func TestPairerLogsRefusalsAtMostOnceAMinute(t *testing.T) {
 	}
 	if lines[1]["held_back"] != float64(1000) {
 		t.Fatalf("the minute's line %v, want held_back 1000", lines[1])
+	}
+}
+
+// A guest connection whose peer stopped reading cannot hold take: the open byte's write times out, the
+// connection is closed, and take goes on to wait for another until its context ends.
+func TestPairerTakeBoundsTheOpenByteWrite(t *testing.T) {
+	old := pairDeadline
+	pairDeadline = 100 * time.Millisecond
+	defer func() { pairDeadline = old }()
+	p := newPairer(AgentPort, nil, []byte{1})
+	stuck, peer := net.Pipe() // nothing reads peer, so a write to stuck blocks
+	defer peer.Close()
+	p.idle = stuck
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := p.take(ctx); done <- err }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, errNoGuest) {
+			t.Fatalf("take = %v; want errNoGuest", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("take did not return: the open byte's write has no deadline")
+	}
+	if _, err := stuck.Write([]byte{1}); err == nil {
+		t.Fatal("the connection that timed out was left open")
 	}
 }

@@ -28,6 +28,7 @@ import { deriveTitle } from "../approvals";
 import { viewerBlockedOnDecision } from "./viewer-blocked";
 import { RunCanvas } from "./canvas";
 import { RunStatusStrip, useEvidenceFacts } from "./status-strip";
+import { isMacOSVM } from "../../../lib/types/machine-kind";
 import { RunFailureBlock } from "./failure-block";
 import { LocalModelsCard } from "./local-models-card";
 import { LoginSandboxNote } from "./login-sandbox-note";
@@ -58,6 +59,7 @@ export function Cockpit({
   onGoAudit,
   onGoPolicy,
   onGoRecording,
+  onGoOutput,
   onGoApprovals,
 }: {
   run: RunDetail;
@@ -82,6 +84,7 @@ export function Cockpit({
   onGoAudit: () => void;
   onGoPolicy: () => void;
   onGoRecording: () => void;
+  onGoOutput: () => void;
   onGoApprovals: () => void;
 }) {
   const principal = usePrincipal();
@@ -133,6 +136,7 @@ export function Cockpit({
         recState={recState}
         recordingDisabled={recordingDisabled}
         onGoRecording={onGoRecording}
+        onGoOutput={onGoOutput}
         execMode={execMode}
       />
     </>
@@ -170,7 +174,7 @@ export function Cockpit({
     </>
   );
 
-  const evidence = useEvidenceFacts(run.id, !terminal);
+  const evidence = useEvidenceFacts(run.id, !terminal, isMacOSVM(run));
   const ctx: WidgetContext = {
     run,
     finished: terminal,

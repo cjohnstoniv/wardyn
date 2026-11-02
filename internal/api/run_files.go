@@ -32,6 +32,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
 const (
@@ -253,7 +254,7 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		Argv: []string{"/bin/sh", "-c", runFilesScript},
 		// R is the repo clone's directory name under W for a --repo run (the leaf
 		// of org/name); empty otherwise. The script tries $W/$R before W itself.
-		Env: []string{"W=" + composerWorkspaceTarget, "R=" + repoCloneLeaf(run.Repo)},
+		Env: []string{"W=" + runWorkDir(run), "R=" + repoCloneLeaf(run.Repo)},
 	})
 	if err != nil {
 		if errors.Is(err, runner.ErrSandboxGone) {
@@ -359,6 +360,17 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runFilesResponse{
 		VCS: runFilesVCSGit, Files: files, Path: inspectedPath, Truncated: truncated,
 	})
+}
+
+// runWorkDir is the run's workspace mount target as the sandbox itself sees it.
+// A macOS VM's guest has no /home: the runner moves the run's own paths to
+// /Users/agent when it builds the guest (macGuestDirs), but an exec's env is
+// passed through as written, so the script has to be handed the guest's path.
+func runWorkDir(run types.AgentRun) string {
+	if run.MachineKind.IsMacOSVM() {
+		return guestagent.MacAgentHome + "/work"
+	}
+	return composerWorkspaceTarget
 }
 
 // repoCloneLeaf is the directory agent-run clones a run's repo into under the

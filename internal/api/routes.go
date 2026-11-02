@@ -28,7 +28,7 @@ func (s *Server) routes() chi.Router {
 	// real TCP peer instead. Handler's trustedProxyClient reads X-Forwarded-For
 	// ONLY from a peer in the explicit WARDYN_TRUSTED_PROXIES allowlist.
 	r.Use(middleware.Recoverer)
-	r.Use(s.securityHeaders)
+	r.Use(s.securityHeaders, s.dropInboundOnWrite)
 
 	r.Get("/healthz", s.handleHealthz)
 	// Readiness: proves Postgres is reachable, not just that the process is up

@@ -620,12 +620,16 @@ func (d *Driver) startVMNet(ctx context.Context, spec runner.SandboxSpec, netDir
 	host := hardenedHostConfig(internalNetName(spec.RunID), "", runner.Resources{MemoryMiB: 256, PidsLimit: vmPidsLimit}, info.Info)
 	host.ReadonlyRootfs = true
 	host.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyDisabled}
-	host.ExtraHosts = []string{"wardyn-proxy:" + proxyIP}
+	guestProxy, err := guestProxyAddr(spec.Env)
+	if err != nil {
+		return err
+	}
+	host.ExtraHosts = relayProxyHosts(guestProxy, proxyIP)
 	host.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: netDir, Target: qemu.NetDir}}
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: vmnetName(spec.RunID),
 		Config: &container.Config{Image: d.proxyImage(), User: vc.user(), Entrypoint: []string{vmnetEntrypoint},
-			Cmd:    []string{"-listen", qemu.NetDir + "/" + qemu.NetSocket, "-proxy", "wardyn-proxy:" + strconv.Itoa(runner.ProxyListenPort)},
+			Cmd:    []string{"-listen", qemu.NetDir + "/" + qemu.NetSocket, "-proxy", guestProxy},
 			Labels: d.labels(spec.RunID, componentVMNet, spec.Labels)},
 		HostConfig: host,
 	})

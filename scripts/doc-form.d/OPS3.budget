@@ -111,7 +111,7 @@ docs/operations/three-roles.md=4788 share=35
 # docs/operations/provider-policy.md 1382 adds 20 over 1362, measured (0.10.0 GHPAT r2): a run cannot mix a shared and a personal-token GitHub row.
 docs/operations/provider-policy.md=1382 share=35
 # 0.9.4 W4-DOCS-1: docs/operations/ownership-and-offboarding.md 2383 adds 13 over 2370, measured: #2376: the Azure DevOps owner exception.
-docs/operations/ownership-and-offboarding.md=2414 share=35
+docs/operations/ownership-and-offboarding.md=2428 share=35 # +14 (rc.10), measured: the inbound-token 30-second exception.
 # 0.9 F-1515: governance-writes.md 2754 adds 28 over 2726 for the `governance plan` bullet and example.
 # docs/operations/governance-writes.md 2888 measured after the F-1508-author merge (human_author; four-eyes on service-identity create and sponsor change).
 # docs/operations/governance-writes.md 2978 adds 90 over 2888: 0.9 final docs pass 3, measured: the six 0.9 rows of the held-writes table and the super-admin approvals.
@@ -160,7 +160,7 @@ docs/operations/custom-components.md=1269 share=35
 # docs/operations/api-tokens.md 6516 adds 465 over 6051, measured (rc.8 inbound docs): the inbound tokens section, the workload routes of a service's allow-list and the app ticket.
 # docs/operations/api-tokens.md 6525 measured (rc.8 review): inbound wording made exact (groups refreshed at sign-in, rate-bound denials, burst, HEAD, session TTL).
 # docs/operations/api-tokens.md 6529 adds 4 over 6525, measured (rc.8 cumulative review: only an upgraded connection an inbound token opened is re-checked).
-docs/operations/api-tokens.md=6529 share=35 # +86 (lane SI-DOCS), measured; +17 the sponsor mints in admin view only
+docs/operations/api-tokens.md=6550 share=35 # +86 (lane SI-DOCS), measured; +17 the sponsor mints in admin view only; +21 (rc.10), measured: the inbound re-check cadence and the 30-second sponsor-revoke exception.
 # G-1423 r1: docs/operations/denials.md 4709 adds 32 over 4677 for the audit-only delegation_scope source.
 # docs/operations/denials.md 4786 adds 77 (0.9 G-sec-rest): the exec relay rows (#1976) and the audit_retention_actor_reserved row.
 # D-108-114 merge: docs/operations/denials.md 4806 adds 20 over 4786 for the runs.placement cause of governance_profile.

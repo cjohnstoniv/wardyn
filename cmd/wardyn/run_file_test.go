@@ -181,6 +181,23 @@ func TestRunFileStandsAloneBesideItsAllowedFlags(t *testing.T) {
 	}
 }
 
+// TestRunFileTakesTheMachineKindFromFlags: a document cannot carry machine_kind or macos_base (the door
+// refuses them), so they stand beside --file as flags and reach the create request.
+func TestRunFileTakesTheMachineKindFromFlags(t *testing.T) {
+	rig := runFileRig(t)
+	file := writeTemplateFile(t, "run.yaml", runDocYAML)
+	if _, err := rig.run(t, "run", "--file", file, "--machine-kind", "macos_vm", "--macos-base", "Xcode"); err != nil {
+		t.Fatal(err)
+	}
+	var req sdk.CreateRunRequest
+	if err := json.Unmarshal([]byte(rig.sent(runsPath)[0]), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.MachineKind != "macos_vm" || req.MacOSBase != "Xcode" {
+		t.Errorf("request = %+v", req)
+	}
+}
+
 // TestRunFileReportsTheDoorsDiagnosticsAndLaunchesNothing.
 func TestRunFileReportsTheDoorsDiagnosticsAndLaunchesNothing(t *testing.T) {
 	rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){

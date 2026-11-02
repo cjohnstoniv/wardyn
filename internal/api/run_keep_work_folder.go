@@ -10,6 +10,7 @@
 // teardown reclaims a drive's volume or claim, only a drive delete does. The one
 // exception is a run that ends without ever starting: nothing was mounted by it, so
 // dropUnstartedKeptDrive deletes its drive, through the delete a person's own drive takes, and frees the person's count.
+// A macOS VM run its Mac refused when it started is one (dropUncreatedMacKeptDrive).
 package api
 
 import (
@@ -251,6 +252,17 @@ func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
 	if res := s.deleteMemberDrive(ctx, ms, d, started, memberDriveByRunEnd); res.err != nil {
 		slog.WarnContext(ctx, "api: finish the delete of the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", res.err))
 	}
+}
+
+// dropUncreatedMacKeptDrive, deferred by a dispatch so it runs after the dispatch's lease is released, is
+// dropUnstartedKeptDrive for a macOS VM run the dispatch created no sandbox for and that has ended: a run
+// its Mac refused when it started (#3900). Until the lease is gone the drop would count the run itself as
+// one still starting, and leave the drive.
+func (s *Server) dropUncreatedMacKeptDrive(ctx context.Context, run types.AgentRun, created *bool) {
+	if *created || !run.MachineKind.IsMacOSVM() || !s.keptRunEnded(ctx, run.ID) {
+		return
+	}
+	s.dropUnstartedKeptDrive(ctx, run.ID)
 }
 
 // keptRunEnded reports whether runID, the run a kept drive was kept from, has ended or is gone. Until then

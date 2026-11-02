@@ -193,13 +193,17 @@ const (
 // allowed-apps list having stripped it already (boundRunUserSpec), which leaves the resolved spec with none.
 // resolveRunPolicy calls it for create and for preflight alike, on the policy as resolved, before boundUIApps drops
 // anything. Other shapes keep the strip-and-warn behaviour. It keys on what the request declared
-// (applicationServer), never on the resolved spec alone: a background application that declares no app still
-// inherits the ceiling's, and denying that one strips nothing the person asked for.
+// (applicationServer, or a stored policy_id whose apps storedPolicyApplicationRefusal has checked), never on the
+// resolved spec alone: a background application that declares no app still inherits the ceiling's, and denying
+// that one strips nothing the person asked for.
 func (s *Server) applicationUIAppsRefusal(r *http.Request, req createRunRequest, spec types.RunPolicySpec, ceiling governanceCeiling) *runRefusal {
-	if req.Shape != client.RunShapeApplication || !applicationServer(req) {
+	if req.Shape != client.RunShapeApplication || !(applicationServer(req) || applicationOnStoredPolicy(req)) {
 		return nil
 	}
 	declared, _ := requestPolicyRules(req)
+	if declared == nil { // a stored policy_id declares what it resolved to
+		declared = &spec
+	}
 	switch {
 	case s.uiAppsDenied(r, spec, ceiling):
 		return runError(http.StatusUnprocessableEntity, reasonRunApplicationUIAppsDenied, applicationUIAppsDeniedMsg)

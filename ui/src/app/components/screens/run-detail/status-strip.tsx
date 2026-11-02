@@ -15,10 +15,15 @@ const POLL_MS = 10000;
 // #3038: what the Files and Sandbox tiles can say. Both read the same two evidence endpoints the widgets under
 // them poll; anything that is not a real reading (no sandbox, no exec channel, no git, an error) is "nothing to show".
 // The cockpit reads them once and hands them to the strip and the widget gate through the widget context.
-export function useEvidenceFacts(runId: string, live: boolean): EvidenceFacts | undefined {
+// A macOS VM's CPU comes from inside the guest, and only the Sandbox card has room to say so (#3924): skipGuestCPU
+// leaves the tile with nothing to show, without running a second read in the guest.
+export function useEvidenceFacts(runId: string, live: boolean, skipGuestCPU = false): EvidenceFacts | undefined {
   const [facts, setFacts] = React.useState<EvidenceFacts | undefined>(undefined);
   const load = React.useCallback(async () => {
-    const [files, resources] = await Promise.allSettled([runsApi.getFiles(runId), runsApi.getResources(runId)]);
+    const [files, resources] = await Promise.allSettled([
+      runsApi.getFiles(runId),
+      skipGuestCPU ? Promise.reject(new Error("skipped")) : runsApi.getResources(runId),
+    ]);
     setFacts({
       files: files.status === "fulfilled" && files.value.vcs !== "none" && files.value.vcs !== "unknown" ? files.value.files.length : null,
       sandbox:
@@ -28,7 +33,7 @@ export function useEvidenceFacts(runId: string, live: boolean): EvidenceFacts | 
             : null
           : null,
     });
-  }, [runId]);
+  }, [runId, skipGuestCPU]);
   React.useEffect(() => {
     void load();
   }, [load]);

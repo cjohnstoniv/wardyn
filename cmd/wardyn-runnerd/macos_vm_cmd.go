@@ -227,6 +227,8 @@ type macOSVMStatus struct {
 	ToolsDial     string   `json:"tools_dial"`      // how the last run boot's tools-port dial ended, "" before one
 	Error         string   `json:"error"`
 	Failure       string   `json:"failure,omitempty"` // runnerwire.MacVMFailure*, when the base has one
+	// Bases are the Mac's other bases (macos_vm_bases_dir), with a failed one's reason.
+	Bases []runnerwire.MacVMDerivedBase `json:"bases,omitempty"`
 
 	progress, counted, minCPUs, minMemoryMiB int
 	setupCode                                string
@@ -247,7 +249,7 @@ func (m *macOSVMs) status(ctx context.Context) (macOSVMStatus, error) {
 	m.recompute()
 	c := m.current()
 	st.State, st.Base, st.Max, st.progress, st.Error = c.Base.State, c.Base.GuestOS, c.Max, c.Base.Progress, c.Base.Error
-	st.Failure = c.Base.Failure
+	st.Failure, st.Bases = c.Base.Failure, c.Bases
 	if perr != nil {
 		st.Error = cmp.Or(st.Error, perr.Error())
 	}
@@ -309,7 +311,7 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 	}
 	fmt.Fprintln(out)
 	if st.setupCode != "" {
-		fmt.Fprintf(out, "macOS asked for setup by hand. In the window %q on this Mac, create the account wardyn-admin with the one-time code in %s as its password, and turn on Remote Login.\n", macOSVMSetupWindow, st.setupCode)
+		fmt.Fprintf(out, "macOS asked for setup by hand. In the window %q on this Mac, create the account wardyn-admin with the one-time code in %s as its password, turn on Screen Sharing with control, and turn on Remote Login.\n", macOSVMSetupWindow, st.setupCode)
 	} else if st.byHand && st.State != runnerwire.MacVMBaseReady {
 		fmt.Fprintf(out, "This Mac's macOS has no guest provisioning (macOS %d has it), so preparing its base needs setup by hand once: after the install, the window %q opens on this Mac.\n", macvm.ProvisionHostMajor, macOSVMSetupWindow)
 	}
@@ -318,6 +320,13 @@ func (st macOSVMStatus) writeText(out io.Writer) {
 		for _, l := range st.withheld {
 			fmt.Fprintln(out, l)
 		}
+	}
+	for _, b := range st.Bases {
+		fmt.Fprintf(out, "other base %s: %s", b.Name, b.State)
+		if b.Reason != "" {
+			fmt.Fprintf(out, ": %s", b.Reason)
+		}
+		fmt.Fprintln(out)
 	}
 	if st.Thermal != "" {
 		fmt.Fprintf(out, "thermal: %s\n", st.Thermal)
@@ -342,11 +351,25 @@ const macOSVMSetupWindow = "Wardyn: set up this macOS VM"
 // dial of the tools port ended (docker.MacVMConfig.ToolsDialFile).
 const runToolsDialFile = "run-tools-dial"
 
-// lastToolsDial is that record when it names one of the five classes, else "".
+// lastToolsDial is how the newest tools-port dial ended, when it is one of the five classes, else "". The
+// candidates are the run boot's record and the last one prepare logged (a prepare's stage 2 boots the guest
+// too; its event carries when it was reported), and the later of the two wins. A prepare does not rewrite a
+// run boot's record, so reading that alone kept a failure from before a prepare that reached ready.
 func lastToolsDial(root string) string {
+	var class string
+	var at time.Time
 	b, err := os.ReadFile(filepath.Join(root, runToolsDialFile))
 	if s := strings.TrimSpace(string(b)); err == nil && macvm.ValidToolsDial(s) {
-		return s
+		class = s
+		if fi, err := os.Stat(filepath.Join(root, runToolsDialFile)); err == nil {
+			at = fi.ModTime()
+		}
+	}
+	if pc, pat, err := lastPrepareToolsDial(macvm.Layout{Root: root}.PrepareLog()); err == nil && pc != "" && pat.After(at) {
+		class = pc
+	}
+	if macvm.ValidToolsDial(class) {
+		return class
 	}
 	return ""
 }

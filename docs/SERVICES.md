@@ -131,6 +131,7 @@ The supervisor ships in the runner tools of the image. An image wrapped or built
 | `run.service.health` | The health changes | `from`, `to`, `reason`, `source` |
 | `run.service.restart` | The restart count rises | `restarts`, `delta`, `last_exit_code`, `source` |
 | `run.end.set` | Reason `service_renewed`: a lease renewed | `from`, `to`, `max`, `source`, `health` |
+| `run.end.set` | Outcome denied: a due renewal was refused or could not be checked; once per reason, then at most hourly | `subject`, `reason` |
 | `run.create` | A service starts | `service`, the frozen spec |
 
 At most one `run.service.health` and one `run.service.restart` row are written per run per sweep. [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md) has the full rows.

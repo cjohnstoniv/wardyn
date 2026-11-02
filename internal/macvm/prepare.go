@@ -55,6 +55,10 @@ type PrepareEvent struct {
 	// ToolsDial is the guest agent's classified tools-port dial, recorded
 	// once per stage-2 boot.
 	ToolsDial string `json:"tools_dial,omitempty"`
+	// ToolsDialAt is when the dial was reported, in Unix nanoseconds, set by
+	// emit: the log is appended to by every prepare, and `macos-vm status`
+	// orders this dial against a run boot's by it.
+	ToolsDialAt int64 `json:"tools_dial_at,omitempty"`
 	// Retry marks a download event for a range that failed and is fetched
 	// again; Bytes is that range's start.
 	Retry bool `json:"retry,omitempty"`
@@ -65,8 +69,8 @@ type PrepareEvent struct {
 }
 
 // ObserveDesktopDetail is the detail event stage 2 emits when its control check reads observe: the
-// base is ready and runs agent-only, and the person did not turn Screen Sharing on with control during setup by hand.
-const ObserveDesktopDetail = "Screen Sharing was not turned on with control during setup"
+// base is ready and runs agent-only. It does not say setup went wrong: a macOS 26 base reads observe with control turned on (#3901).
+const ObserveDesktopDetail = "macOS 26 doesn't keep Screen Sharing control here, so this base's desktop is view only"
 
 // InstallFailurePrefix starts the error an install that failed ends with; the cause follows it.
 const InstallFailurePrefix = "macvm: install: "
@@ -362,6 +366,9 @@ func newPrep(o PrepareOptions) (*prep, error) {
 }
 
 func (p *prep) emit(ev PrepareEvent) {
+	if ev.ToolsDial != "" {
+		ev.ToolsDialAt = time.Now().UnixNano()
+	}
 	p.Log.Info("macvm: prepare", "phase", ev.Phase, "fraction", ev.Fraction, "bytes", ev.Bytes, "total", ev.Total, "paused", ev.Paused, "detail", ev.Detail, "tools_dial", ev.ToolsDial)
 	p.Progress(ev)
 }
@@ -720,7 +727,7 @@ func (p *prep) firstBoot(ctx context.Context, spec MachineSpec, nic *os.File, us
 	var fb FirstBoot
 	err := retryAuxLocked(ctx, p.Log, func() error {
 		var err error
-		fb, err = p.FirstBoot.Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
+		fb, err = p.codeWindowBooter().Boot(spec.DiskPath, spec.AuxPath, spec.HardwareModel, spec.MachineIdentifier,
 			uint(spec.CPUs), spec.MemoryBytes, nic, user, pass)
 		return err
 	})

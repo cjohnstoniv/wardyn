@@ -19,14 +19,18 @@ import { SquareTerminal } from "lucide-react";
 import type { Recording, RunDetail } from "../../../lib/types";
 import { AttachTerminal } from "../../attach-terminal";
 import { TerminalPlayer } from "../../wardyn/terminal-player";
+import { WatchDesktopButton } from "./watch-desktop";
 import { Chip } from "../../wardyn/primitives";
 import { useOperator, useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
 import { mayEnterRunOrUnknown, runEntryRefusalLine } from "../../../lib/run-entry";
 import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
 import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
+import { isMacOSVM } from "../../../lib/types/machine-kind";
 import type { StartupLastStep } from "../run-status-detail";
 import { StartupProgress } from "./startup-progress";
 import { QueuedWait } from "./queued-wait";
+import { KeptOutput } from "./output-pane";
+import { useRunOutput } from "./use-run-output";
 
 export function TerminalPane({
   run,
@@ -35,6 +39,7 @@ export function TerminalPane({
   recState,
   recordingDisabled,
   onGoRecording,
+  onGoOutput,
   execMode,
 }: {
   run: RunDetail;
@@ -43,6 +48,7 @@ export function TerminalPane({
   recState: "idle" | "loading" | "error" | "ready";
   recordingDisabled: boolean;
   onGoRecording: () => void;
+  onGoOutput: () => void;
   // run.create's task_mode said "exec" — a shell command ran, no agent harness.
   execMode: boolean;
 }) {
@@ -55,6 +61,24 @@ export function TerminalPane({
   // (#1476: the run's person, or an admin on a run no person owns).
   const canAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
   const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
+  // The Watch link leads to this run's recording, so it needs one: has_recording is on every single-run read.
+  const watchable = !recordingDisabled && run.has_recording !== false;
+  // Mock F-hero: a desktop the Mac lets be watched alone is offered here too, for whoever may enter the run.
+  const watchDesktop = run.state === "RUNNING" && canAttach && run.macos?.desktop === "observe" ? <WatchDesktopButton run={run} /> : undefined;
+
+  // A run with no recording to replay shows the bytes the Output tab reads: a macOS VM run while it lives (a
+  // macOS VM is not recorded), any other non-interactive run once the recording read found none. A read that
+  // fails or is refused leaves the notices below as they were.
+  const comingUp = run.state === "PENDING" || run.state === "STARTING" || run.state === "QUEUED";
+  // A macOS VM run is never recorded, so its recording read cannot change the answer: the pane stays on Output
+  // while that read is still out, rather than flashing the Recording frame as the run ends.
+  const recordingPending = recState === "idle" || recState === "loading";
+  const wantsKept =
+    !run.interactive && (terminal ? (recState === "ready" && !recording) || (isMacOSVM(run) && recordingPending) : isMacOSVM(run) && !comingUp);
+  const kept = useRunOutput(run.id, !terminal, run.state, run.ended_at, wantsKept);
+  // An answer read while the run lived is not shown once it has ended; the re-read replaces it.
+  const keptFresh = kept.loaded && kept.readLive === !terminal;
+  const keptOut = wantsKept && keptFresh && kept.out?.source === "stdout" ? kept.out : null;
 
   // 0.9 (M-RN-3 RS6): a live run on a computer that is offline cannot be reached, so the terminal and the
   // attach controls give way to a sentence naming it. The captured replay is still offered; it is a file the
@@ -65,7 +89,7 @@ export function TerminalPane({
         <PaneNotice
           text={LOCAL_RUN.TERMINAL_OFFLINE(runnerLabel(run))}
           action={
-            recordingDisabled ? undefined : (
+            !watchable ? undefined : (
               <button onClick={onGoRecording} className="text-xs font-medium text-info hover:underline">
                 Watch the captured session →
               </button>
@@ -79,7 +103,15 @@ export function TerminalPane({
   if (attachable) {
     // fill: the pane owns the height. h-[70vh] was a guess that predates this
     // layout and stays the default for every other mount site.
-    return <AttachTerminal fill runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} policy={run.policy} />;
+    return <AttachTerminal fill barAction={watchDesktop} runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} policy={run.policy} />;
+  }
+
+  if (wantsKept && (keptOut || !keptFresh)) {
+    return (
+      <PaneFrame title="Output" chip={execMode ? RUN_COCKPIT.execNoHarness : RUN_COCKPIT.autonomous}>
+        {keptOut ? <KeptOutput out={keptOut} onGoOutput={onGoOutput} /> : <div aria-busy="true" className="min-h-0 flex-1" />}
+      </PaneFrame>
+    );
   }
 
   // Finished run: the pane becomes the replay surface in place rather than a
@@ -157,7 +189,7 @@ export function TerminalPane({
           {lastStep === null && (
             <div className="flex flex-col items-center gap-2 pt-2 text-center">
               <p className="text-sm text-muted-foreground">{runEntryRefusalLine(run)}</p>
-              {!recordingDisabled && (
+              {watchable && (
                 <button onClick={onGoRecording} className="text-xs font-medium text-info hover:underline">
                   Watch the captured session →
                 </button>
@@ -179,6 +211,7 @@ export function TerminalPane({
     // drive this one); an autonomous run has none to type into at all, which
     // is why that tile tails output instead of offering a prompt.
     <PaneFrame
+      action={watchDesktop}
       title={run.interactive ? "Terminal" : "Output"}
       chip={run.interactive ? undefined : execMode ? RUN_COCKPIT.execNoHarness : RUN_COCKPIT.autonomous}
     >
@@ -191,7 +224,7 @@ export function TerminalPane({
         <PaneNotice
           text={run.interactive ? runEntryRefusalLine(run) : RUN_MODE.autonomous.blurb}
           action={
-            recordingDisabled ? undefined : (
+            !watchable ? undefined : (
               <button onClick={onGoRecording} className="text-xs font-medium text-info hover:underline">
                 Watch the captured session →
               </button>
@@ -208,10 +241,12 @@ export function TerminalPane({
 function PaneFrame({
   title,
   chip,
+  action,
   children,
 }: {
   title: string;
   chip?: string;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -225,6 +260,7 @@ function PaneFrame({
             {chip}
           </Chip>
         )}
+        {action && <div className="ml-auto flex min-w-0 items-center gap-2">{action}</div>}
       </div>
       {children}
     </div>

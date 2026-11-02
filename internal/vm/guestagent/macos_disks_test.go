@@ -192,7 +192,8 @@ func TestMacDisksWaitsForTheVolumeThenGivesUp(t *testing.T) {
 }
 
 // TestMacDisksFindTheDriveByItsSizeApartFromTheBootDisk covers the lookup itself: the boot disk is never
-// a drive even at the drive's size, and two disks a run cannot tell apart are refused, not guessed.
+// a drive even at the drive's size, and two disks a run cannot tell apart are refused, not guessed, with
+// the whole sentence: the control plane refuses the pair at create, and this is its backstop.
 func TestMacDisksFindTheDriveByItsSizeApartFromTheBootDisk(t *testing.T) {
 	bootSized := strings.Replace(macDiskIoreg, `"Size" = 53687091200`, `"Size" = 2147483648`, 1)
 	twoDrives := macDiskIoreg + strings.ReplaceAll(macDiskIoreg[strings.LastIndex(macDiskIoreg, "+-o "):], `"disk0"`, `"disk4"`)
@@ -201,7 +202,8 @@ func TestMacDisksFindTheDriveByItsSizeApartFromTheBootDisk(t *testing.T) {
 	}{
 		"a drive numbered below the boot disk": {macDiskIoreg, macDiskBootPlist, "disk0", ""},
 		"a boot disk of the drive's size":      {bootSized, macDiskBootPlist, "disk0", ""},
-		"two disks of the drive's size":        {twoDrives, macDiskBootPlist, "", "cannot tell them apart"},
+		"two disks of the drive's size": {twoDrives, macDiskBootPlist, "", "disk wardyn-disk0: 2 disks of its size are attached to this VM, " +
+			"and a run cannot tell them apart; a macOS VM run attaches one disk drive, and a kept work folder counts as one"},
 		"a boot store that is not a partition": {macDiskIoreg, strings.Replace(macDiskBootPlist, "disk1s2", "disk1", 1), "", "find the boot disk"},
 		"no boot store at all":                 {macDiskIoreg, "<dict/>", "", "find the boot disk"},
 	} {

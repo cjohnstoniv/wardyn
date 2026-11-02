@@ -24,10 +24,19 @@ func MacVMFolderUnreadable(name string) string {
 }
 
 // MacVMDiskLocked refuses a run whose disk drive name another macOS VM on this Mac has attached
-// (MAC-D04): a disk drive is in one run at a time.
+// (MAC-D04): a disk drive is in one run at a time. The VM of a run that has just ended holds its disk
+// for about half a minute more while it shuts down, and the run already shows as ended, so the
+// sentence names that case too.
 func MacVMDiskLocked(name string) string { return name + macVMDiskLockedTail }
 
-const macVMDiskLockedTail = " is in another macOS VM on this Mac. A disk drive is in one run at a time: try again when that run ends."
+const macVMDiskLockedTail = " is in another macOS VM on this Mac, or is still being released by a run that just ended. " +
+	"A disk drive is in one run at a time: try again in a minute, or when that run ends."
 
-// IsMacVMDiskLocked reports whether msg is a MacVMDiskLocked sentence, so the run's failure shows it as written.
-func IsMacVMDiskLocked(msg string) bool { return strings.HasSuffix(msg, macVMDiskLockedTail) }
+// macVMDiskLockedTailBefore is the sentence's tail from a runner older than this one.
+const macVMDiskLockedTailBefore = " is in another macOS VM on this Mac. A disk drive is in one run at a time: try again when that run ends."
+
+// IsMacVMDiskLocked reports whether msg is a MacVMDiskLocked sentence, this runner's or an older one's,
+// so the run's failure shows it as written.
+func IsMacVMDiskLocked(msg string) bool {
+	return strings.HasSuffix(msg, macVMDiskLockedTail) || strings.HasSuffix(msg, macVMDiskLockedTailBefore)
+}

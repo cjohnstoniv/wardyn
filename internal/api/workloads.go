@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -186,7 +187,21 @@ func (s *Server) answerWorkload(w http.ResponseWriter, r *http.Request, ws store
 	if err != nil {
 		v = store.WorkloadView{Workload: wl} // deleted under the apply: answer what was recorded
 	}
-	writeJSON(w, status, client.WorkloadApplyResult{Workload: workloadOut(v, s.workloadReadTier(r, wl.Owner), s.cfg.Now()), Outcome: outcome, Launch: launch})
+	writeJSON(w, status, client.WorkloadApplyResult{Workload: s.workloadReadFor(r, v), Outcome: outcome, Launch: launch})
+}
+
+// viewServiceStatus is v's run's service health as the run routes serve it at now: unknown
+// while paused or stale, with the observation time kept. Nil when the run has no health yet.
+func viewServiceStatus(v store.WorkloadView, now time.Time) *types.RunServiceStatus {
+	if v.RunState == "" || v.ServiceHealth == "" {
+		return nil
+	}
+	run := []types.AgentRun{{PausedAt: v.RunPausedAt, ServiceStatus: &types.RunServiceStatus{Health: types.ServiceHealthState(v.ServiceHealth)}}}
+	if v.ServiceObservedAt != nil {
+		run[0].ServiceStatus.ObservedAt = *v.ServiceObservedAt
+	}
+	projectServiceHealth(run, now)
+	return run[0].ServiceStatus
 }
 
 func workloadTarget(wl store.Workload) string { return wl.Owner + "/" + wl.Name }
@@ -196,14 +211,8 @@ func workloadOut(v store.WorkloadView, tier workspaceReadTier, now time.Time) cl
 	out := client.Workload{Name: v.Name, Owner: v.Owner, Source: client.WorkloadSource(v.Source), Namespace: v.SourceNamespace,
 		Description: v.Description, RunIn: v.RunIn, RestartKey: v.RestartKey, Generation: v.Generation,
 		CurrentGeneration: v.CurrentGeneration, RunID: v.CurrentRunID, State: string(v.RunState), CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
-	if v.RunState != "" && v.ServiceHealth != "" {
-		// The run's health as the run routes serve it: unknown while paused or stale.
-		run := []types.AgentRun{{PausedAt: v.RunPausedAt, ServiceStatus: &types.RunServiceStatus{Health: types.ServiceHealthState(v.ServiceHealth)}}}
-		if v.ServiceObservedAt != nil {
-			run[0].ServiceStatus.ObservedAt = *v.ServiceObservedAt
-		}
-		projectServiceHealth(run, now)
-		out.State += "/" + string(run[0].ServiceStatus.Health)
+	if st := viewServiceStatus(v, now); st != nil {
+		out.State += "/" + string(st.Health)
 	}
 	if tier == workspaceReadFull { // the digest of an intent whose host axis is withheld would let a reader test guesses at it
 		out.Digest = v.Digest
@@ -596,10 +605,32 @@ func (s *Server) workloadOwnerOf(r *http.Request, launches bool) (string, bool) 
 	if owner == "" || owner == caller {
 		return caller, caller != ""
 	}
+	return owner, s.mayReachWorkloadsOf(r, owner, launches)
+}
+
+// mayReachWorkloadsOf reports whether the caller of r, who is not owner, may reach owner's workloads for
+// what workloadOwnerOf's launches says.
+func (s *Server) mayReachWorkloadsOf(r *http.Request, owner string, launches bool) bool {
 	if launches {
-		return owner, s.isOperator(r.Context()) || s.sponsorsWorkloadOwner(r, owner)
+		return s.isOperator(r.Context()) || s.sponsorsWorkloadOwner(r, owner)
 	}
-	return owner, s.isSecurityOperator(r.Context()) || s.sponsorsWorkloadOwner(r, owner)
+	return s.isSecurityOperator(r.Context()) || s.sponsorsWorkloadOwner(r, owner)
+}
+
+// workloadReadFor is a stored workload as the API reports it to the caller of r: at the caller's read tier,
+// with whether the caller may restart it (the rule POST /workloads/{name}/restart enforces).
+func (s *Server) workloadReadFor(r *http.Request, v store.WorkloadView) client.Workload {
+	out := workloadOut(v, s.workloadReadTier(r, v.Owner), s.cfg.Now())
+	out.CanRestart = s.canRestartWorkload(r, v.Owner)
+	return out
+}
+
+// canRestartWorkload is workloadOwnerOf's rule for a restart, for a workload of owner.
+func (s *Server) canRestartWorkload(r *http.Request, owner string) bool {
+	if caller := principalFromRequest(r); owner == caller {
+		return caller != ""
+	}
+	return s.mayReachWorkloadsOf(r, owner, true)
 }
 
 // sponsorsWorkloadOwner reports whether the caller of r is the current sponsor of the service identity
@@ -640,7 +671,7 @@ func (s *Server) handleGetWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if v, ok := s.workloadFor(w, r, ws, false); ok {
-		writeJSON(w, http.StatusOK, workloadOut(v, s.workloadReadTier(r, v.Owner), s.cfg.Now()))
+		writeJSON(w, http.StatusOK, s.workloadReadFor(r, v))
 	}
 }
 
@@ -699,9 +730,10 @@ func workloadEventOf(ev types.AuditEvent) client.WorkloadEvent {
 	return out
 }
 
-// handleListWorkloads is GET /workloads[?owner=]: the caller's own and those of the service identities
-// they sponsor; every owner's for the security tier; one owner's with ?owner=, or none when the caller may
-// not reach that owner.
+// handleListWorkloads is GET /workloads[?owner=][&run_id=]: the caller's own and those of the service
+// identities they sponsor; every owner's for the security tier; one owner's with ?owner=, or none when the
+// caller may not reach that owner. With ?run_id= it lists only the workload whose current run that is, if
+// the caller may read it.
 func (s *Server) handleListWorkloads(w http.ResponseWriter, r *http.Request) {
 	ws, ok := s.workloadStore(w)
 	if !ok {
@@ -710,6 +742,15 @@ func (s *Server) handleListWorkloads(w http.ResponseWriter, r *http.Request) {
 	page, ok := parseListPage(w, r, defaultListLimit)
 	if !ok {
 		return
+	}
+	var byRun *uuid.UUID
+	if q := r.URL.Query().Get("run_id"); q != "" {
+		id, err := uuid.Parse(q)
+		if err != nil {
+			writeErrorReason(w, http.StatusBadRequest, reasonInvalidRunIDParam, "invalid run_id")
+			return
+		}
+		byRun = &id
 	}
 	ctx := r.Context()
 	owners, all, err := s.workloadListOwners(r)
@@ -720,23 +761,47 @@ func (s *Server) handleListWorkloads(w http.ResponseWriter, r *http.Request) {
 	servePage(w, r, page, func(p store.Page) ([]client.Workload, error) {
 		var rows []store.WorkloadView
 		var lerr error
-		if all {
+		switch {
+		case byRun != nil:
+			rows, lerr = workloadOfRun(ctx, ws, *byRun, owners, all)
+		case all:
 			rows, lerr = ws.ListWorkloads(ctx, p)
-		} else {
+		default:
 			rows, lerr = ws.ListWorkloadsOf(ctx, owners, p)
 		}
 		out := make([]client.Workload, 0, len(rows))
-		tiers := map[string]workspaceReadTier{} // one sponsor read per owner, not per row
+		type reach struct {
+			tier workspaceReadTier
+			may  bool
+		}
+		reaches := map[string]reach{} // one sponsor read per owner, not per row
 		for _, v := range rows {
-			tier, ok := tiers[v.Owner]
+			rc, ok := reaches[v.Owner]
 			if !ok {
-				tier = s.workloadReadTier(r, v.Owner)
-				tiers[v.Owner] = tier
+				rc = reach{s.workloadReadTier(r, v.Owner), s.canRestartWorkload(r, v.Owner)}
+				reaches[v.Owner] = rc
 			}
-			out = append(out, workloadOut(v, tier, s.cfg.Now()))
+			row := workloadOut(v, rc.tier, s.cfg.Now())
+			row.CanRestart = rc.may
+			out = append(out, row)
 		}
 		return out, lerr
 	}, nil)
+}
+
+// workloadOfRun is the workload whose current run is runID, as a list of one, or none when no workload has
+// it or its owner is not among the owners the caller lists (all: every owner).
+func workloadOfRun(ctx context.Context, ws store.WorkloadStore, runID uuid.UUID, owners []string, all bool) ([]store.WorkloadView, error) {
+	v, err := ws.GetWorkloadByRun(ctx, runID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	case !all && !slices.Contains(owners, v.Owner):
+		return nil, nil
+	}
+	return []store.WorkloadView{v}, nil
 }
 
 // workloadListOwners is whose workloads GET /workloads lists: all, or the owners named.

@@ -377,5 +377,6 @@ func (s *Server) saveRevivedRestrictions(ctx context.Context, run types.AgentRun
 	if err := set.SetRunRestrictionIDs(ctx, run.ID, run.RestrictionIDs); err != nil {
 		return reviveRefused(http.StatusServiceUnavailable, reasonOwnerUnitUnreadable, loggedMsg(ctx, "record the run's restrictions", err))
 	}
+	s.dropInboundSessions() // the run's profile now folds these in (runUnit)
 	return nil
 }

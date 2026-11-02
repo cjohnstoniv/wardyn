@@ -181,3 +181,118 @@ func TestDiskDriveOffItsMacIsRefusedAsNotInPool(t *testing.T) {
 		}
 	}
 }
+
+// A macOS VM run attaches one disk drive, and a kept work folder counts as one: two disks are refused
+// with drive_one_disk, naming them, whatever their sizes (#3897). One disk, a share beside it, and any
+// run that is not a macOS VM are not this refusal's business.
+func TestMacVMOneDiskRefusal(t *testing.T) {
+	mac := uuid.New()
+	disk := func(name string) runDrive {
+		return runDrive{resolved: types.ResolvedDrive{Drive: types.UserDrive{Name: name, Backend: types.DriveBackendMacDisk,
+			OwnerSubject: aliceSub, HomeRunnerID: &mac}}}
+	}
+	share := runDrive{resolved: types.ResolvedDrive{Drive: types.UserDrive{Name: "Team", Backend: types.DriveBackendHostPath}}}
+	keep := &keptWorkFolder{row: types.UserDrive{Backend: types.DriveBackendMacDisk}}
+	for name, tc := range map[string]struct {
+		drives []runDrive
+		keep   *keptWorkFolder
+		macOS  bool
+		want   string
+	}{
+		"two disk drives":                   {[]runDrive{disk("Notes"), disk("Data")}, nil, true, macVMOneDiskMsg("Notes", "Data")},
+		"a disk drive and the kept folder":  {[]runDrive{disk("Notes")}, keep, true, macVMOneDiskMsg("Notes", "the kept work folder")},
+		"one disk drive":                    {[]runDrive{disk("Notes")}, nil, true, ""},
+		"the kept folder alone":             {nil, keep, true, ""},
+		"a share beside a disk drive":       {[]runDrive{share, disk("Notes")}, nil, true, ""},
+		"a share beside the kept folder":    {[]runDrive{share}, keep, true, ""},
+		"two disk drives on another kind":   {[]runDrive{disk("Notes"), disk("Data")}, nil, false, ""},
+		"no drives and no kept work folder": {nil, nil, true, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ref := macVMOneDiskRefusal(tc.drives, tc.keep, tc.macOS)
+			if tc.want == "" {
+				if ref != nil {
+					t.Fatalf("refused %+v, want accepted", ref.body)
+				}
+				return
+			}
+			if ref == nil || ref.status != http.StatusUnprocessableEntity || ref.body.Reason != reasonDriveOneDisk || ref.body.Error != tc.want {
+				t.Fatalf("refusal = %+v, want 422 %s %q", ref, reasonDriveOneDisk, tc.want)
+			}
+		})
+	}
+	const want = "Notes and the kept work folder are both disks, and a macOS VM run attaches one disk drive; " +
+		"a kept work folder counts as one. Choose one of them."
+	if got := macVMOneDiskMsg("Notes", "the kept work folder"); got != want {
+		t.Fatalf("macVMOneDiskMsg = %q, want %q", got, want)
+	}
+}
+
+// Two disk drives in one macOS VM run are refused at the preview, Review (preflight) and create,
+// before anything is made (#3897).
+func TestStepDrive_MacVMSecondDiskAtEveryDoor(t *testing.T) {
+	mac := uuid.New()
+	notes := winnerOf("Notes", types.DriveBackendMacDisk, types.CapabilitySubjectUser, "sub-drive-bob", true)
+	data := winnerOf("Data", types.DriveBackendMacDisk, types.CapabilitySubjectUser, "sub-drive-bob", true)
+	notes.Drive.HomeRunnerID, data.Drive.HomeRunnerID = &mac, &mac
+	srv, _ := multiDriveServer(notes, data)
+	req := drivesRequest(notes.Drive.ID.String(), data.Drive.ID.String())
+	req.MachineKind = string(types.MachineMacOSVM)
+	want := macVMOneDiskMsg("Notes", "Data")
+	for _, mode := range []foldMode{foldPreview, foldPreflight, foldCreate} {
+		w := httptest.NewRecorder()
+		f := &runFold{mode: mode, w: w, req: &req,
+			r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(driveMemberCtx(nil, false))}
+		if srv.stepDrive(f, &foldRecorder{}) {
+			t.Fatalf("mode %d: a second disk drive passed", mode)
+		}
+		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), reasonDriveOneDisk) || !strings.Contains(w.Body.String(), want) {
+			t.Errorf("mode %d: %d %s, want 422 %s %q", mode, w.Code, w.Body, reasonDriveOneDisk, want)
+		}
+	}
+}
+
+// Deleting a disk drive while the owner's last macOS VM run still counts says the drive may still be
+// being released by a run that just ended, not only that a run is using it (#3899).
+func TestOwnerDeleteOfADiskARunJustEndedSaysItIsReleasing(t *testing.T) {
+	srv, st, tr, d := macDiskDeleteRig(t)
+	st.starting = map[string]bool{aliceSub: true}
+	body := wantReason(t, deleteMyDrive(srv, aliceSub, d.ID.String()), http.StatusConflict, reasonMemberDriveInUse)
+	const want = "A run is still using Notes, or a macOS VM run that just ended is still releasing it. " +
+		"Try again in two minutes, or end that run first."
+	if body.Error != want || tr.asked != 0 {
+		t.Fatalf("409 = %q, Mac asked %d times; want %q and no ask", body.Error, tr.asked, want)
+	}
+	if got, kept := st.drives[d.ID]; !kept || got.DeleteStartedAt != nil {
+		t.Fatalf("kept = %v, tombstone %v; want kept, never tombstoned", kept, got.DeleteStartedAt)
+	}
+}
+
+// A macOS VM run its Mac refused when it started (no sandbox created, the run ended) gives up the drive
+// it kept its work folder in, once its dispatch has let go of its lease (#3900). A run that got a
+// sandbox, and a run that is not a macOS VM, keep theirs.
+func TestUncreatedMacRunDropsItsKeptDrive(t *testing.T) {
+	for name, tc := range map[string]struct {
+		created bool
+		kind    types.MachineKind
+		dropped bool
+	}{
+		"refused when it started": {false, types.MachineMacOSVM, true},
+		"its sandbox was created": {true, types.MachineMacOSVM, false},
+		"a container run":         {false, "", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, st, _, d := macDiskDeleteRig(t)
+			run := types.AgentRun{ID: uuid.New(), State: types.RunFailed, MachineKind: tc.kind, CreatedBy: aliceSub}
+			delete(st.drives, d.ID)
+			d.ID, d.KeptFromRun = keptWorkFolderDriveID(run.ID), &run.ID
+			st.drives[d.ID] = d
+			st.runs = map[uuid.UUID]types.AgentRun{run.ID: run}
+			created := tc.created
+			srv.dropUncreatedMacKeptDrive(context.Background(), run, &created)
+			if _, kept := st.drives[d.ID]; kept == tc.dropped {
+				t.Fatalf("kept = %v, want dropped %v", kept, tc.dropped)
+			}
+		})
+	}
+}

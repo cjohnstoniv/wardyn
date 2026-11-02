@@ -600,6 +600,10 @@ That has two consequences:
 - **`policy_bypass` is only a pull request completed with `completionOptions.bypassPolicy: true`**, the one request whose body asks Azure DevOps to skip its own policies.
   - The switch does not touch it.
   - A held push outside this run's own branch (switch on, `code_write` not yet granted) is shown to the approver as *"Outside this run's own branch"*.
+- **An agent that must push its work and open a pull request needs both `code_write` and `pr`** in the run's `azure_devops_capabilities`; an unattended run has nobody to approve either later.
+- **`push_rules` read what a `git push` leaves out through the Git REST API**, version 7.1, with the run's own credential: see [`require_review_paths`](POLICIES.md#push_rules--pushrulesspec). A push whose paths cannot be worked out is held or refused, and says so.
+- **A push that removes a file at a review path is not held.** That means deleting it, renaming it out, or replacing a directory or parent at or above the pattern with a file. That is true on every forge: Azure DevOps' own branch policy is what protects that file.
+- **A review-path match on an unattended run stays refused and cannot be approved later.** Git prints what to do: remove those paths, or run the task interactively.
 
 ## Request flow
 

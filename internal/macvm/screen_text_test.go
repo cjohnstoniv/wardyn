@@ -4,9 +4,14 @@
 package macvm_test
 
 import (
+	"context"
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/macvm"
 )
 
 // Setup by hand's window keeps its text byte for byte: screen_darwin.m (cgo, built only on a Mac) holds
@@ -34,5 +39,95 @@ func TestSetupWindowTextUnchanged(t *testing.T) {
 	}
 	if n := strings.Count(m, "wardynScreenSteps"); n != 2 {
 		t.Errorf("wardynScreenSteps is used %d times, want its definition and the NULL default", n)
+	}
+}
+
+// The window's Show code control (screen_darwin.m, built only on a Mac) is pinned by its text: the words, a
+// click that reads the file and nothing before it, a readout nobody can copy.
+func TestSetupWindowShowCodeControl(t *testing.T) {
+	b, err := os.ReadFile("screen_darwin.m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := string(b)
+	for _, want := range []string{
+		`wardynScreenShowCode = @"Show code";`,
+		`wardynScreenHideCode = @"Hide code";`,
+		`wardynScreenCodeUnreadable = @"Can't read the code file. In Terminal, stop the command and run it again.";`,
+		`self.readout.selectable = NO;`,
+		// A second click hides: the code leaves the label.
+		"- (void)hide {\n\tself.shown = NO;\n\tself.readout.stringValue = @\"\";",
+		`[wardynScreenStrip hide]; // no code is left in the label`,
+	} {
+		if !strings.Contains(m, want) {
+			t.Errorf("screen_darwin.m lost the Show code control's text:\n%s", want)
+		}
+	}
+	// No copy control and nothing selectable.
+	for _, banned := range []string{"NSPasteboard", "generalPasteboard", "copy:", "NSLog", "os_log", "getenv", "NSProcessInfo"} {
+		if strings.Contains(m, banned) {
+			t.Errorf("screen_darwin.m mentions %q: the code must not be copyable, logged or read from the environment", banned)
+		}
+	}
+	if strings.Contains(m, "selectable = YES") {
+		t.Error("a readout is selectable")
+	}
+	// The file is read in one place, from the click, and again on every click: not at open and not cached.
+	if n := strings.Count(m, "dataWithContentsOfFile"); n != 1 {
+		t.Errorf("the code file is read in %d places, want 1", n)
+	}
+	if n := strings.Count(m, "wardynScreenReadCode("); n != 2 {
+		t.Errorf("wardynScreenReadCode appears %d times, want its definition and one call", n)
+	}
+	_, after, ok := strings.Cut(m, "- (void)toggle:(id)sender {\n")
+	if !ok {
+		t.Fatal("screen_darwin.m has no toggle: click action")
+	}
+	body, _, _ := strings.Cut(after, "\n}\n")
+	if !strings.Contains(body, "wardynScreenReadCode(self.codeFile)") {
+		t.Errorf("the click action does not read the file:\n%s", body)
+	}
+	// What is passed in is the path, never a code.
+	if !strings.Contains(m, "const char *steps, const char *codeFile) {") {
+		t.Error("wardynScreenShow does not take the code file's path")
+	}
+	// The code's JSON key is the one setupcode.go writes.
+	rec, err := json.Marshal(macvm.SetupCodeRecord{Account: "a", Code: "c"})
+	if err != nil || !strings.Contains(string(rec), `"code":"c"`) || !strings.Contains(m, `[@"code"]`) {
+		t.Errorf("record %s (%v) and the helper's key disagree", rec, err)
+	}
+}
+
+// Only the setup and edit windows are made by wardynScreenShow, and it is called from one place; a window of
+// another kind (a run's desktop view) must not be given the control, so any new caller shows up here.
+func TestScreenShowHasOneCaller(t *testing.T) {
+	files, err := filepath.Glob("*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") || (!strings.HasSuffix(f, ".go") && !strings.HasSuffix(f, ".m")) {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := strings.Count(string(b), "wardynScreenShow("); n > 0 && f != "screen_darwin.go" && f != "screen_darwin.m" {
+			t.Errorf("%s calls wardynScreenShow: give its window no Show code control, or update this test", f)
+		}
+	}
+}
+
+// Prepare's setup by hand and the edit both hand the window the code file's path.
+func TestSetupByHandWindowGetsTheCodeFilePath(t *testing.T) {
+	f, _, _ := handPrep(t)
+	var text macvm.ScreenText
+	f.opts.FirstBoot = textFirstBoot{f.fb, &text}
+	if _, err := macvm.Prepare(context.Background(), f.opts); err != nil {
+		t.Fatal(err)
+	}
+	if want := (macvm.ScreenText{CodeFile: f.opts.Layout.SetupCode()}); text != want {
+		t.Errorf("setup by hand's window text %+v, want %+v", text, want)
 	}
 }

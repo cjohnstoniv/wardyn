@@ -92,14 +92,25 @@ describe("ConnectSSHCard: macOS desktop", () => {
   it.each<[from: string, facts: MacOSRunFacts | undefined, over: Partial<RunDetail>]>([
     ["a prop", { desktop: "observe" }, {}],
     ["the run's own macos field", undefined, { macos: { desktop: "observe" } }],
-  ])("frame 7: a view-only Screen Sharing is Off, says so, and has no Open desktop (from %s)", async (_from, facts, over) => {
+  ])("board F-block: a view-only desktop says so and offers Watch desktop, with no sign-ins (from %s)", async (_from, facts, over) => {
     renderCard(facts, over);
     const d = await desk();
-    expect(await within(d).findByText(DESKTOP.statusOff)).toBeInTheDocument();
+    expect(await within(d).findByText(DESKTOP.viewOnlyChip)).toBeInTheDocument();
     expect(within(d).getByText(DESKTOP.kindMacOS)).toBeInTheDocument();
     expect(within(d).getByText(DESKTOP.observeOnlyMacOS)).toBeInTheDocument();
-    expect(within(d).queryByRole("button")).toBeNull();
+    expect(within(d).getAllByRole("button").map((b) => b.textContent)).toEqual([DESKTOP.watch]);
     expect(within(d).queryByText(DESKTOP.off)).toBeNull();
+    expect(signInsGet).not.toHaveBeenCalled();
+  });
+
+  it("board F-block: a view-only desktop with the gateway off is Off, with no button", async () => {
+    healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: false } });
+    renderCard({ desktop: "observe" });
+    const d = await desk();
+    expect(await within(d).findByText(DESKTOP.statusOff)).toBeInTheDocument();
+    expect(within(d).getByText(DESKTOP.observeOnlyMacOS)).toBeInTheDocument();
+    expect(within(d).queryByRole("button")).toBeNull();
+    expect(within(d).getByText(/Off on this deployment/)).toBeInTheDocument();
   });
 
   it("a Mac whose Screen Sharing can be controlled keeps the Open desktop", async () => {

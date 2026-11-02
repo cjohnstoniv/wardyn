@@ -313,6 +313,9 @@ func validateTemplateContentDecoded(doc client.TemplateDocument) []client.Templa
 		filled.Task = "written at use"
 		shape.Workload = &filled
 	}
+	// The import door reads no store, so an application that names a stored policy_id passes the shape check
+	// without the policy's ui_apps being read, and a policy that declares none is refused at launch,
+	// Review and preview (storedPolicyApplicationRefusal): a stored policy can change after import anyway.
 	for _, check := range append([]func(createRunRequest) *runRefusal{runModeConflictRefusal}, runContractShapeChecks...) {
 		if refusal := check(shape); refusal != nil {
 			d.add("intent", refusal.body.Reason, refusal.body.Error)

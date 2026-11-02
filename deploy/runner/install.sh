@@ -24,7 +24,7 @@ Usage: install.sh --org <url> [--binary <path>] [--token-file <file>] [setup fla
        install.sh --uninstall
 
   --binary <path>   wardyn-runnerd to install (default: beside this script, else on PATH)
-  --uninstall       stop and remove the service, the installed wardyn-runnerd and its .previous rollback copy; keeps the runner identity, and the wardyn CLI and its cli.json (they are yours)
+  --uninstall       stop and remove the service, the installed wardyn-runnerd and, on a Mac, the wardyn-macvm and wardyn-guest-agent beside it, with their .previous rollback copies; keeps the runner identity, and the wardyn CLI and its cli.json (they are yours)
 
 Everything else is passed to `wardyn-runnerd setup` (--org, --token-file, --proxy-image, --internal-network, --trusted-ca-file,
 --relay-listen, --relay-host-target, --claim, --pool, --default and the limit flags); run `wardyn-runnerd setup --help`.
@@ -70,8 +70,11 @@ uninstall() {
       ;;
     *) die "unsupported OS: $(uname -s)" ;;
   esac
-  rm -f "$data_dir/bin/wardyn-runnerd" "$data_dir/bin/wardyn-runnerd.previous"
-  echo "Removed the wardyn-runnerd service and binary. The wardyn CLI and its cli.json are yours and stay."
+  # setup on a Mac also installs the macOS VM helper and its guest agent beside the runner.
+  for f in wardyn-runnerd wardyn-macvm wardyn-guest-agent; do
+    rm -f "$data_dir/bin/$f" "$data_dir/bin/$f.previous"
+  done
+  echo "Removed the wardyn-runnerd service and binary (on a Mac, the VM helper and guest agent too). The wardyn CLI and its cli.json are yours and stay."
   echo "Kept the runner identity in: $identity_dir"
   echo "To revoke this runner, run: wardyn runner revoke <runner id or name>   (or use My runner in the Wardyn console)."
 }

@@ -80,3 +80,32 @@ func TestRunPlacementFlagsAreSentUnchanged(t *testing.T) {
 		}
 	})
 }
+
+func TestRunMachineFlagsAreSentUnchanged(t *testing.T) {
+	t.Run("kind and base", func(t *testing.T) {
+		srv := newCmdServer(t, http.StatusOK, types.AgentRun{ID: uuid.New(), State: types.RunPending})
+		if err := execCmd(t, "run", "--agent", "claude-code", "--machine-kind", "macos_vm", "--macos-base", "Xcode", "--url", srv.URL, "--token", "t"); err != nil {
+			t.Fatal(err)
+		}
+		var body sdk.CreateRunRequest
+		if err := json.Unmarshal(srv.last().body, &body); err != nil || body.MachineKind != "macos_vm" || body.MacOSBase != "Xcode" {
+			t.Fatalf("body = %s, want machine_kind=macos_vm macos_base=Xcode", srv.last().body)
+		}
+	})
+
+	t.Run("neither flag leaves the keys out", func(t *testing.T) {
+		srv := newCmdServer(t, http.StatusOK, types.AgentRun{ID: uuid.New(), State: types.RunPending})
+		if err := execCmd(t, "run", "--agent", "claude-code", "--url", srv.URL, "--token", "t"); err != nil {
+			t.Fatal(err)
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(srv.last().body, &raw); err != nil {
+			t.Fatalf("body not JSON: %v", err)
+		}
+		for _, key := range []string{"machine_kind", "macos_base"} {
+			if _, ok := raw[key]; ok {
+				t.Errorf("%s key present in body when unset: %v", key, raw)
+			}
+		}
+	})
+}

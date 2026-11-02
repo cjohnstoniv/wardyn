@@ -90,6 +90,9 @@ export const RUN_COCKPIT = {
   // procfs/sysfs and may withhold the cgroup files entirely — saying so is the
   // honest answer; rendering 0 would claim the sandbox is using no memory.
   metricUnavailable: "not available on this barrier",
+  // #3924: a macOS VM's numbers come from inside the guest, for the whole VM, and memory's second number is what
+  // the VM was given. Display only; nothing acts on them.
+  sandboxGuestReported: "Reported by the macOS guest, for the whole VM. Memory is in use / the VM's allocation.",
   // RL-13 (long-holds design rev 4 §8): the Sandbox widget's disk row turns
   // this color/text on at >=80% of disk_cap_bytes — which the backend sends
   // ONLY when the deployment's driver actually enforces a disk cap, so this

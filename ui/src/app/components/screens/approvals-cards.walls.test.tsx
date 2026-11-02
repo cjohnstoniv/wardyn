@@ -17,18 +17,20 @@ import { ApprovalCard } from "./approvals-cards";
 
 const getRun = vi.hoisted(() => vi.fn());
 vi.mock("../../lib/api/runs", () => ({ runs: { getRun } }));
+const search = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/api/directory", async (orig) => ({ ...(await orig<typeof import("../../lib/api/directory")>()), directory: { search } }));
 const RUN = { id: "r1", created_by: "ana@example.com", agent: "claude-code", repo: "acme/web-app", title: "Fix the flaky cart test", state: "RUNNING", confinement_class: "CC1" } satisfies Partial<RunDetail>;
-beforeEach(() => { getRun.mockResolvedValue(RUN); });
+beforeEach(() => { getRun.mockResolvedValue(RUN); search.mockResolvedValue(null); });
 
 const row = (walls_block?: boolean) =>
   makeApproval({
     id: "a1", run_id: "r1", kind: "egress_domain", state: "PENDING", requested_at: "",
     requested_scope: { host: "paste.example.net" }, walls_block,
   });
-const show = (it: ReturnType<typeof row>, principal: string) =>
+const show = (it: ReturnType<typeof row>, principal: string, securityOperator = true) =>
   render(
     <MemoryRouter>
-      <OperatorProvider operator principal={principal}>
+      <OperatorProvider operator securityOperator={securityOperator} principal={principal}>
         <ModelAccessProvider status={{ harnesses: SCENARIO_HARNESSES.full } as SetupStatus} onRefresh={() => {}}>
           <ApprovalCard item={it} caps={null} onAct={() => {}} onAdoDecide={async () => {}} onPushDecide={async () => {}} />
         </ModelAccessProvider>
@@ -54,6 +56,28 @@ describe("ApprovalCard: a host the requester's walls deny", () => {
     expect(note).toHaveTextContent("ana@example.com's walls block paste.example.net for this run.");
     expect(note).toHaveTextContent("Can changeNot from here. The owner can.");
     expect(screen.getByRole("button", { name: /approve/i })).toBeDisabled();
+  });
+
+  it("names the owner by display name in the sentence and the Why card (#3785)", async () => {
+    search.mockResolvedValue([{ display_name: "Ana Torres", claim_value: "ana@example.com", kind: "user" }]);
+    show(row(true), "lena@example.com");
+    const note = await screen.findByTestId("approval-walls-block");
+    await waitFor(() => expect(note).toHaveTextContent("Ana Torres's walls block paste.example.net for this run."));
+    expect(note).toHaveTextContent("OwnerAna Torres");
+    expect(note).not.toHaveTextContent("ana@example.com");
+  });
+
+  it("keeps the subject when the directory does not know it, and does not ask a non-security viewer", async () => {
+    search.mockResolvedValue([{ display_name: "Someone Else", claim_value: "other@example.com", kind: "user" }]);
+    const first = show(row(true), "lena@example.com");
+    const note = await screen.findByTestId("approval-walls-block");
+    await waitFor(() => expect(search).toHaveBeenCalled());
+    expect(note).toHaveTextContent("ana@example.com's walls block");
+    first.unmount();
+    search.mockClear();
+    show(row(true), "lena@example.com", false);
+    await screen.findByTestId("approval-walls-block");
+    expect(search).not.toHaveBeenCalled();
   });
 
   it("draws none of it without the server's fact", async () => {

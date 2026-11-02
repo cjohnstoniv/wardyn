@@ -385,8 +385,8 @@ func deleteRunnerPoolQ(ctx context.Context, q Querier, id uuid.UUID) (RunnerPool
 // as DeleteRunnerPool deletes one, and then every pool of theirs, the tombstones included, forgets them
 // (owner and created_by cleared). It holds the lock every create takes, so a pool the person creates
 // meanwhile is either deleted here or made after it. The person's stored preferences are deleted in the
-// same transaction, and so are their workloads; the owed ends of runs their workloads let go of forget
-// them. Returns the deletions, in pool id order.
+// same transaction, and so are their workloads, whose current runs are owed their end; the owed ends of
+// runs their workloads let go of forget them. Returns the deletions, in pool id order.
 func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]RunnerPoolDeletion, error) {
 	var out []RunnerPoolDeletion
 	err := s.inTx(ctx, func(q Querier) error {
@@ -421,8 +421,21 @@ func (s PG) DeleteRunnerPoolsByOwner(ctx context.Context, owner string) ([]Runne
 		if _, err = q.Exec(ctx, `DELETE FROM ui_run_layouts WHERE principal = $1`, owner); err != nil {
 			return err
 		}
-		// So do the workloads they own. The runs those workloads let go of stay owed their end (erasure
-		// ends none of the person's runs), but no longer name them.
+		// So do the workloads they own, as deleteWorkload deletes one: each current run is owed its end,
+		// and a run that waited on it to take over has nothing left to wait for. The owed ends, those
+		// and the ones already owed, stay owed but no longer name the person.
+		if _, err = q.Exec(ctx, `
+			UPDATE workload_run_ends SET after_run_id = NULL, reason = $2
+			WHERE after_run_id IN (SELECT current_run_id FROM workloads WHERE owner = $1 AND current_run_id IS NOT NULL)`,
+			owner, WorkloadEndDeleted); err != nil {
+			return err
+		}
+		if _, err = q.Exec(ctx, `
+			INSERT INTO workload_run_ends (run_id, owner, name, generation, reason)
+			SELECT current_run_id, owner, name, generation, $2 FROM workloads WHERE owner = $1 AND current_run_id IS NOT NULL
+			ON CONFLICT (run_id) DO NOTHING`, owner, WorkloadEndDeleted); err != nil {
+			return err
+		}
 		if _, err = q.Exec(ctx, `DELETE FROM workloads WHERE owner = $1`, owner); err != nil {
 			return err
 		}

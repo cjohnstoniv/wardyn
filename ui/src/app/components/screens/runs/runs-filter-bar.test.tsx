@@ -99,3 +99,22 @@ describe("RunsFilterBar status options", () => {
     for (const [, text] of words) expect(text).toMatch(/^Status · \S/);
   });
 });
+
+describe("RunsFilterBar saved view select", () => {
+  it("shows a saved view's own name, not Custom, when it was saved under Mine and is picked in the User view (#3783)", () => {
+    render(
+      <RunsFilterBar
+        filters={DEFAULT_RUNS_FILTERS}
+        workspaces={[]}
+        adminView={false}
+        currentSearch="segment=services&workspace=acme"
+        savedViews={[{ name: "My services", search: "workspace=acme&owner=me&segment=services" }]}
+        runCount={0}
+        onChange={vi.fn()}
+        onSelectView={vi.fn()}
+        onSaveView={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("combobox", { name: "Saved view" })).toHaveTextContent("View · My services");
+  });
+});
