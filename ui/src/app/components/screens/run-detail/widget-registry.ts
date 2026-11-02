@@ -336,9 +336,39 @@ export const SERVICE_REMOVED: RunLayoutWidget = { widget: "service", x: 0, y: 0,
 
 export const isServiceRemoved = (w: RunLayoutWidget): boolean => w.widget === "service" && w.w === 1 && w.h === 1;
 
+/**
+ * What a saved layout holds in place of the Desktop tile once the person has removed it, as SERVICE_REMOVED does for
+ * the panel (the tile's smallest size is 3×3, so 1×1 cannot be the tile). A saved layout with no Desktop entry at all
+ * predates the tile and, on a VM run, gets it (withDesktop); one with this entry was saved after, with the tile taken
+ * out, and does not.
+ */
+export const DESKTOP_REMOVED: RunLayoutWidget = { widget: "desktop", x: 0, y: 0, w: 1, h: 1 };
+
+export const isDesktopRemoved = (w: RunLayoutWidget): boolean => w.widget === "desktop" && w.w === 1 && w.h === 1;
+
+/**
+ * The layout with a Desktop tile when it has none: in the Attach tile's place, which the tile sat above in the preset,
+ * with the widgets in those columns from there down moved down to make room. With no Attach tile it goes where an add
+ * puts it, below everything. Never overlaps, and leaves a layout that has the tile as it is.
+ */
+export function withDesktop(layout: RunLayoutWidget[]): RunLayoutWidget[] {
+  if (layout.some((w) => w.widget === "desktop")) return layout;
+  const ssh = layout.find((x) => x.widget === "ssh");
+  if (!ssh) return addWidget(layout, "desktop");
+  const { h, minW } = RUN_WIDGETS.desktop.defaultLayout;
+  const at = { x: ssh.x, y: ssh.y, w: Math.max(ssh.w, minW), h };
+  const under = (o: RunLayoutWidget) => o.y + o.h > at.y && o.x < at.x + at.w && o.x + o.w > at.x && o.y >= at.y;
+  return [...layout.map((o) => (under(o) ? { ...o, y: o.y + at.h } : o)), { widget: "desktop", ...at }];
+}
+
 /** A layout for one run: a service run's live layout has the Service panel, one saved before the panel existed included. */
 export function forRun(layout: RunLayoutWidget[], preset: RunLayoutPreset, service: boolean): RunLayoutWidget[] {
   return service && preset === "live" ? withService(layout) : layout;
+}
+
+/** A saved layout for a VM run: the Desktop tile is there unless the person took it out. */
+export function forVMRun(layout: RunLayoutWidget[], vm: boolean): RunLayoutWidget[] {
+  return vm ? withDesktop(layout) : layout;
 }
 
 /** The situational default for a preset, in wire shape. `service`: the run is a service, which adds its panel. */
@@ -363,7 +393,7 @@ export function normalizeLayout(
   const seen = new Set<string>();
   const out: RunLayoutWidget[] = [];
   for (const w of layout) {
-    if (!isWidgetId(w.widget) || seen.has(w.widget) || isServiceRemoved(w)) continue;
+    if (!isWidgetId(w.widget) || seen.has(w.widget) || isServiceRemoved(w) || isDesktopRemoved(w)) continue;
     seen.add(w.widget);
     out.push({ widget: w.widget, x: w.x, y: w.y, w: w.w, h: w.h });
   }

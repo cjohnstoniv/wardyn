@@ -28,6 +28,7 @@ import "react-grid-layout/css/styles.css";
 import { Check, Expand, GripVertical, LayoutGrid, Pencil, Plus, RotateCcw, X } from "lucide-react";
 import { toast } from "sonner";
 import type { RunLayoutPreset } from "../../../lib/api/run-layout";
+import { isVMKind } from "../../../lib/types/machine-kind";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { cn } from "../../ui/utils";
 import { RUN_COCKPIT } from "../../wardyn/copy";
@@ -159,7 +160,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   // dimensions actually change, so a drag is not a re-render per frame.
   const [active, setActive] = React.useState<{ i: string; w: number; h: number } | null>(null);
 
-  const { layout, persistable, apply, save, reset } = useRunLayout(preset, !!ctx.run.service);
+  const { layout, persistable, apply, save, reset } = useRunLayout(preset, !!ctx.run.service, isVMKind(ctx.run.machine_kind));
   const { ref, node, width, height } = useCanvasSize();
 
   // Focus mode (design board 2c). The shell learns about it through
