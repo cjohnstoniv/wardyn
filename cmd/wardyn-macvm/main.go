@@ -11,6 +11,8 @@
 //	                                     build this Mac's macOS base image
 //	wardyn-macvm update-tools --root <dir> --cpus N --memory-mib M
 //	                                     bring the base up to the shipped tool pins
+//	wardyn-macvm drive-open --root <dir> --cpus N --memory-mib M --runner-id R --ledger-entry E --drive O --drive-label L
+//	                                     boot a throwaway guest with one disk drive; stops when stdin ends
 //	wardyn-macvm probe                   say (JSON) whether this Mac and build can run macOS VMs
 //	wardyn-macvm version
 //
@@ -97,7 +99,7 @@ func mainDeps() deps {
 
 func run(ctx context.Context, args []string, d deps) int {
 	if len(args) == 0 {
-		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|update-tools|edit-base|probe|ledger-setup|version [flags]")
+		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|update-tools|edit-base|drive-open|probe|ledger-setup|version [flags]")
 		return 2
 	}
 	switch args[0] {
@@ -114,6 +116,8 @@ func run(ctx context.Context, args []string, d deps) int {
 		return cmdUpdateTools(ctx, args[1:], d)
 	case macvm.EditBaseCommand:
 		return cmdEditBase(ctx, args[1:], d)
+	case macvm.DriveOpenCommand:
+		return cmdDriveOpen(ctx, args[1:], d)
 	case macvm.InstallCommand:
 		return cmdInstall(ctx, d)
 	case "probe":
