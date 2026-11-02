@@ -901,8 +901,10 @@ func TestGatewayIdentity_AnswerEndingInTheTokensStart(t *testing.T) {
 			func(string) string { return hidden }},
 		{"clean short body, eight bytes", func(w http.ResponseWriter, tok string) { short(w, 8, tok[:8]) },
 			func(string) string { return hidden }},
-		{"clean short body, one byte", func(w http.ResponseWriter, tok string) { short(w, 1, tok[:1]) },
-			func(string) string { return hidden }},
+		{"under the floor, seven bytes pass", func(w http.ResponseWriter, tok string) { short(w, 7, tok[:7]) },
+			func(tok string) string { return tok[:7] }},
+		{"under the floor, one byte passes", func(w http.ResponseWriter, tok string) { short(w, 1, tok[:1]) },
+			func(tok string) string { return tok[:1] }},
 		{"cut by Content-Length, far short", func(w http.ResponseWriter, tok string) { short(w, len(tok), tok[:30]) },
 			func(string) string { return hidden }},
 		{"a start split across chunks, at the very end of a stream", func(w http.ResponseWriter, tok string) {
@@ -915,9 +917,9 @@ func TestGatewayIdentity_AnswerEndingInTheTokensStart(t *testing.T) {
 			func(string) string { return hidden + " then " + hidden }},
 		{"a body ending in other bytes is untouched", func(w http.ResponseWriter, _ string) { short(w, 0, `{"ok":true}`) },
 			func(string) string { return `{"ok":true}` }},
-		// What a benign answer looks like: JWTs start "e", so text ending in "e" loses it.
-		{"a benign end equal to the token's first byte", func(w http.ResponseWriter, _ string) { short(w, 0, "the same type") },
-			func(string) string { return "the same typ" + hidden }},
+		// JWTs start "e", and the floor keeps text ending in "e" whole.
+		{"a benign end equal to the token's first byte", func(w http.ResponseWriter, _ string) { short(w, 0, "Service Unavailable") },
+			func(string) string { return "Service Unavailable" }},
 	}
 	for lane := range map[string]bool{"brokered": true, "mitm": true} {
 		for _, tc := range cases {
@@ -996,6 +998,10 @@ func TestGatewayIdentity_TruncatedEchoFollowedByMoreBytes(t *testing.T) {
 			_, sig, _ := split(tok)
 			return sig[:20]
 		}},
+		{"signature head's first eight, at the end", func(tok string) string {
+			_, sig, _ := split(tok)
+			return sig[:8]
+		}},
 	}
 	for lane := range map[string]bool{"brokered": true, "mitm": true} {
 		for _, tc := range cases {
@@ -1037,6 +1043,21 @@ func TestGatewayIdentity_TruncatedEchoFollowedByMoreBytes(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Under the floor the end of an answer passes, and that is all that does: seven bytes of a
+// signature head with nothing before them are what the floor costs.
+func TestGatewayIdentity_FloorPassesSevenSignatureBytes(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	var seven string
+	g.gw.respond = func(w http.ResponseWriter, r *http.Request) {
+		tok := r.Header.Get(gatewayIdentityHeader)
+		seven = tok[strings.LastIndexByte(tok, '.')+1:][:7]
+		_, _ = io.WriteString(w, "a "+seven)
+	}
+	if got := gwidLanes(g, t)["brokered"]().Body.String(); got != "a "+seven {
+		t.Errorf("%q", got)
 	}
 }
 
@@ -1279,6 +1300,15 @@ func TestGatewayIdentity_BrokerLanesStrip(t *testing.T) {
 			}
 			p.ServeHTTP(httptest.NewRecorder(), forged(mustLocalReq(t, http.MethodGet, "/wardyn/git/gitlab.com/org/repo.git/info/refs?service=git-upload-pack", nil)))
 			return up.gitHeaders
+		},
+		"via org": func(t *testing.T, on bool, forged func(*http.Request) *http.Request) http.Header {
+			f := newLaptopFixture(t)
+			if on {
+				f.p.gatewayRoutes = gwidRoutes()
+			}
+			req, _ := http.NewRequest(http.MethodGet, "http://api.corp.example/v1/models", nil)
+			_ = readAll(t, proxyDoHandler(t, f.p, forged(req)))
+			return f.cpReq.Header
 		},
 		"pat api door": func(t *testing.T, on bool, forged func(*http.Request) *http.Request) http.Header {
 			h := newAPIHarness(t, types.PATForgeGitLab, apiGrants[types.PATForgeGitLab])
