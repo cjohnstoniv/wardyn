@@ -318,7 +318,7 @@ func (s *Server) personDeniedHost(ctx context.Context, runID uuid.UUID, host str
 		for _, ap := range rows {
 			lapsed := ap.DecisionScope == types.ScopeUntil && ap.DecisionExpiresAt != nil && !now.Before(*ap.DecisionExpiresAt)
 			byRule := state == types.ApprovalApproved && strings.HasPrefix(ap.DecidedBy, "policy:")
-			if ap.Kind != types.ApprovalEgressDomain || approvalHost(ap) != host || ap.DecisionScope == types.ScopeOnce || lapsed || byRule {
+			if ap.Kind != types.ApprovalEgressDomain || approvalHost(ap) != host || ap.DecisionScope.Normalize() == types.ScopeOnce || lapsed || byRule {
 				continue
 			}
 			found = true
