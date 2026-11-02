@@ -250,6 +250,7 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 	outReq.ContentLength = r.ContentLength
 	copyHeader(outReq.Header, r.Header)
 	removeHopByHop(outReq.Header)
+	p.stripGatewayHeaders(outReq.Header)
 	// Strip any sandbox-supplied credential BEFORE injecting ours, through
 	// stripSandboxCredentials (inject.go, the ONE definition) — a local
 	// Header.Del("Authorization") would leave Private-Token, X-Api-Key,

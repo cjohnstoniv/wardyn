@@ -256,6 +256,20 @@ func TestBuildProxyConfig_LocalModels(t *testing.T) {
 	}
 }
 
+// TestBuildProxyConfig_GatewayIdentity: a run's gateway routes reach the sidecar's config, and
+// a run without one writes no key an older proxy refuses.
+func TestBuildProxyConfig_GatewayIdentity(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{
+		GatewayIdentity: []proxy.GatewayIdentityRoute{{Host: "gw.corp.example", Port: 443, PathPrefix: "/v1", ProviderID: "p", Audience: "a"}},
+	}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"gateway_identity":[{"host":"gw.corp.example","port":443,"path_prefix":"/v1","provider_id":"p","audience":"a"}]`) {
+		t.Fatalf("BuildProxyConfig = %s %v, want the route under gateway_identity", b, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "gateway_identity") {
+		t.Fatalf("a run with no route names the key: %s", b)
+	}
+}
+
 // TestBuildProxyConfig_Attribution: the attribution round-trips through the
 // sidecar's own strict decoder, and an absent one leaves no key behind.
 func TestBuildProxyConfig_Attribution(t *testing.T) {
