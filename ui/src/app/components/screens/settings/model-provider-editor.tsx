@@ -732,6 +732,9 @@ function GatewayIdentity({
           <p id={noteId} className="text-body">
             {g.DISCLOSURE}
           </p>
+          <a href={g.CLAIMS_URL} target="_blank" rel="noreferrer" className="block text-xs text-info underline-offset-2 hover:underline">
+            {g.CLAIMS_LINK}
+          </a>
           {!operator && (
             <p id={reasonId} className="text-xs leading-snug text-muted-foreground">
               {OPERATOR_ONLY_REASON}

@@ -6,6 +6,8 @@
 // Run identity on a gateway in the provider editor (gateway-identity boards M1 and M2, with their
 // verdicts): the switch and its sentence per kind, the audience, issuer and key address, the re-entry on
 // a new address, and the server's refusals in their place.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -108,6 +110,22 @@ describe("the switch, off", () => {
       "When on, each model call to this gateway carries a signed token naming the person, the run and the runner.",
     );
     expect(screen.queryByText(G.CHIP)).not.toBeInTheDocument();
+  });
+
+  it("links the claim table, which the doc has under that heading", async () => {
+    await addKind(M.KIND.custom_endpoint);
+    expect(screen.getByRole("link", { name: G.CLAIMS_LINK })).toHaveAttribute(
+      "href",
+      "https://github.com/cjohnstoniv/wardyn/blob/main/docs/operations/ai-gateway.md#the-claims-a-gateway-receives",
+    );
+    // process.cwd() is the vitest root, ui/.
+    const doc = readFileSync(resolve(process.cwd(), "../docs/operations/ai-gateway.md"), "utf8");
+    expect(doc).toMatch(/^## The claims a gateway receives$/m);
+  });
+
+  it("does not offer the link where the switch is unavailable", async () => {
+    await addKind(M.KIND.local_model);
+    expect(screen.queryByRole("link", { name: G.CLAIMS_LINK })).not.toBeInTheDocument();
   });
 
   it("reads the sentence with the switch", async () => {

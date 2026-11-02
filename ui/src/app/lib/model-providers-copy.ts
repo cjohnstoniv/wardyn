@@ -77,6 +77,8 @@ export const PROVIDER_EDITOR = {
     SWITCH: "Send the person and run to this gateway",
     DISCLOSURE:
       "When on, each model call to this gateway carries a signed token naming the person, the run and the runner.",
+    CLAIMS_LINK: "See everything the token says",
+    CLAIMS_URL: "https://github.com/cjohnstoniv/wardyn/blob/main/docs/operations/ai-gateway.md#the-claims-a-gateway-receives",
     CHIP: "Experimental until 0.11",
     MAY_CHANGE: "The token format and the key address may change before 0.11.",
     AUDIENCE: "Token audience",
