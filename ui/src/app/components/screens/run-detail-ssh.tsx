@@ -36,26 +36,20 @@ import { sshKeys as sshKeysApi } from "../../lib/api/ssh-keys";
 import { Button } from "../ui/button";
 import { basePath } from "../../lib/base-path";
 import { proxyCommandIsSafe } from "../../lib/ssh-proxy-command";
-import { isMacOSVM, isVMKind } from "../../lib/types/machine-kind";
-import { entryErrorMessage, mayEnterRunOrUnknown, sponsorOnlyEntry } from "../../lib/run-entry";
+import { entryErrorMessage, isBackgroundRun, mayEnterRunOrUnknown, sponsorOnlyEntry } from "../../lib/run-entry";
 import { CodeBlock, Mono } from "../wardyn/code-block";
 import { RUN_CLI, RUN_SSH, UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
 import { RUN_SYNC } from "../wardyn/copy/runners";
-import { DESKTOP } from "../wardyn/copy/desktop";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
-import { Chip, WidgetCard } from "../wardyn/primitives";
-import { MacOSDiskNote, macOSRunFactsOf, type MacOSRunFacts } from "./run-detail/macos-run-facts";
-import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
+import { WidgetCard } from "../wardyn/primitives";
 import { UIAppRow } from "./run-detail/ui-app-row";
-import { DesktopPausedNote, DesktopSignInButton, DesktopSignInsNote, useDesktopSignIns } from "./run-detail/desktop-sign-ins";
 import { cn } from "../ui/utils";
 import { CliLane, GetTheCli } from "./run-detail/get-the-cli";
 import { orgCAFingerprints } from "../../lib/cli-install";
 
 // Exported for run-detail-ssh.test.tsx: standalone-testable without mounting
 // the whole screen's run/grants/egress/approvals/audit/recording fetch graph.
-export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: MacOSRunFacts }) {
-  const macOS = given ?? macOSRunFactsOf(run);
+export function ConnectSSHCard({ run }: { run: RunDetail }) {
   const principal = usePrincipal();
   const operator = useOperator();
   const resolved = useOperatorResolved();
@@ -116,12 +110,11 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
   const [cliLoaded, setCLILoaded] = React.useState(false);
   const [attempt, setAttempt] = React.useState(0);
   // Which declared app's ticket-mint/open is in flight, and the last failure
-  // (scoped to one app — the other rows stay untouched per the mock's S5).
+  // (scoped to one app — the other rows stay untouched per the mock's S5). The
+  // built-in desktop is not a declared app: its Open and errors live in the
+  // Desktop tile (run-detail-desktop.tsx).
   const [openingApp, setOpeningApp] = React.useState<string | null>(null);
   const [appError, setAppError] = React.useState<{ app: string; message: string } | null>(null);
-  // #2972: a VM desktop's sign-ins, once the gateway can open it.
-  const signIns = useDesktopSignIns(run.id, mayAttach && running && isVMKind(run.machine_kind) && !!uiSandbox?.enabled && macOS?.desktop !== "observe");
-
   React.useEffect(() => {
     if (!mayAttach || !running) return; // nothing to show either way — skip the fetch
     let alive = true;
@@ -156,7 +149,7 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
     };
   }, [mayAttach, running, attempt]);
 
-  if (!mayAttach || (!running && !macOS?.disk)) return null; // a finished macOS VM run keeps its Desktop block while the Mac reports its disk
+  if (!mayAttach || !running || isBackgroundRun(run)) return null; // a background run has no terminal to attach to
 
   const [host, port] = splitHostPort(ssh?.advertise_addr ?? "");
   const shortId = run.id.replace(/^run_/, "").slice(0, 8);
@@ -224,11 +217,6 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
   // token at whatever else owns the host root). It rides `wardyn login <url>`;
   // the attach command itself carries no prefix.
   const consoleURL = typeof window !== "undefined" ? window.location.origin + basePath() : "";
-  // A macOS VM whose disk the Mac is removing has no desktop to open. One whose desktop is view only is
-  // watched: nobody can sign in without typing, so it has no sign-ins.
-  const macOff = !!macOS?.disk;
-  const viewOnly = macOS?.desktop === "observe" && running;
-  const desktopOn = uiSandboxOn && !macOff;
   const syncLane = sshOn && run.placement !== "local" && !!run.agent_exec_id;
 
   return (
@@ -240,46 +228,6 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
       grow
       bodyClassName="scroll-thin overflow-y-auto p-4"
     >
-      {/* Mock M6: a desktop VM's desktop comes first, in its own block. It is the gateway's ticket ->
-          bind -> enter hand-off for the built-in desktop app, never a declared ui_app. */}
-      {isVMKind(run.machine_kind) && (
-        <section aria-label={DESKTOP.title} className="mb-4 rounded-[10px] border border-border p-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs font-medium text-foreground">{DESKTOP.title}</p>
-            {(healthAnswered || macOff) &&
-              (desktopOn && viewOnly ? (
-                <Chip tone="neutral">{DESKTOP.viewOnlyChip}</Chip>
-              ) : desktopOn && signIns.view?.paused ? (
-                <Chip tone="warning">{DESKTOP.agentPaused}</Chip>
-              ) : (
-                <Chip tone={desktopOn ? "success" : "neutral"}>{desktopOn ? DESKTOP.ready : DESKTOP.statusOff}</Chip>
-              ))}
-          </div>
-          <p className="mt-0.5 text-meta text-muted-foreground">{isMacOSVM(run) ? DESKTOP.kindMacOS : DESKTOP.kind}</p>
-          {viewOnly && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{DESKTOP.observeOnlyMacOS}</p>}
-          {healthAnswered && !uiSandboxOn && !macOff && (
-            <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{monoTokens(DESKTOP.off, "WARDYN_UI_SANDBOX_LISTEN")}</p>
-          )}
-          <MacOSDiskNote disk={macOS?.disk} />
-          {desktopOn && (
-            <>
-              <DesktopPausedNote s={signIns} />
-              <div className="mt-2 flex flex-wrap gap-2">
-                <Button size="sm" disabled={openingApp === DESKTOP_APP.name} onClick={() => openApp(DESKTOP_APP)}>
-                  {openingApp === DESKTOP_APP.name ? UI_APPS_LANE.ctaBusy : viewOnly ? DESKTOP.watch : UI_APPS_LANE.cta("desktop")}
-                </Button>
-                <DesktopSignInButton s={signIns} />
-              </div>
-              {appError?.app === DESKTOP_APP.name && (
-                <p role="alert" className="mt-2 font-mono text-meta leading-relaxed text-muted-foreground">{appError.message}</p>
-              )}
-              {!viewOnly && <p className="mt-2 text-meta leading-relaxed text-muted-foreground sm:hidden">{DESKTOP.phoneBefore}</p>}
-              <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
-              <DesktopSignInsNote s={signIns} />
-            </>
-          )}
-        </section>
-      )}
       {externalTool && (
         <p className="mb-2 text-meta leading-relaxed text-muted-foreground">
           Managed by an external tool — killing this run tears down that tool's workspace.
@@ -483,7 +431,6 @@ export function ConnectSSHCard({ run, macOS: given }: { run: RunDetail; macOS?: 
             ))}
             <p className="mt-3 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.noRecording}</p>
-            {mayAttach && !sponsorOnly && running && <DesktopFilesPanel runId={run.id} />}
           </>
         )}
       </div>

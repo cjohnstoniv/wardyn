@@ -56,7 +56,8 @@ test.describe("Run detail: a finished macOS VM run's disk", () => {
     const desk = desktop(page);
     await desk.scrollIntoViewIfNeeded();
     await expect(desk.getByText(DESKTOP.diskRemoving)).toBeVisible();
-    await expect(desk.getByText(DESKTOP.statusOff)).toBeVisible();
+    // The chip is in the tile's header, which holds the region.
+    await expect(desk.locator("xpath=ancestor::section[1]").getByText(DESKTOP.statusOff)).toBeVisible();
     await expect(desk.getByRole("button")).toHaveCount(0);
   });
 

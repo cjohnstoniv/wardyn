@@ -12,7 +12,7 @@
 // The ids are NOT ours to choose: internal/api/ui_layout.go's
 // runLayoutWidgetIDs is a CLOSED set the server validates every PUT against
 // ("terminal, egress, files, sandbox, credentials, identity, effective-policy,
-// ssh, service"). An id outside it is a 400, so this table's keys must match that slice
+// desktop, ssh, service"). An id outside it is a 400, so this table's keys must match that slice
 // exactly — the two halves of the contract are kept in sync by hand (C-UI adds
 // `effective-policy` to BOTH, in the same commit — a client-only add would
 // 400 every layout PUT that ever placed it). That file's own doc explains what
@@ -23,7 +23,7 @@
 // use React.createElement rather than turning the registry into a component
 // module.
 import * as React from "react";
-import { Box, FileDiff, Fingerprint, Globe, HeartPulse, KeyRound, ShieldCheck, SquareTerminal, Terminal } from "lucide-react";
+import { Box, FileDiff, Fingerprint, Globe, HeartPulse, KeyRound, Monitor, ShieldCheck, SquareTerminal, Terminal } from "lucide-react";
 import type {
   AuditEvent,
   CredentialGrant,
@@ -33,8 +33,9 @@ import type {
 import type { RunLayoutPreset, RunLayoutWidget } from "../../../lib/api/run-layout";
 import type { ConsoleView } from "../../wardyn/console-view";
 import { createRequestFromAudit } from "../../../lib/api/audit";
-import { mayEnterRunOrUnknown } from "../../../lib/run-entry";
-import { isMacOSVM } from "../../../lib/types/machine-kind";
+import { isBackgroundRun, mayEnterRunOrUnknown } from "../../../lib/run-entry";
+import { isMacOSVM, isVMKind } from "../../../lib/types/machine-kind";
+import { DesktopCard } from "../run-detail-desktop";
 import { ConnectSSHCard } from "../run-detail-ssh";
 import { ServicePanel } from "./service-panel";
 import {
@@ -62,6 +63,7 @@ export type WidgetId =
   | "credentials"
   | "identity"
   | "effective-policy"
+  | "desktop"
   | "ssh"
   | "service";
 
@@ -241,7 +243,7 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     component: (ctx) => React.createElement(EffectivePolicyWidget, { audit: ctx.audit }),
     defaultLayout: { w: 4, h: 4, minW: 3, minH: 2 },
     presets: {
-      live: { x: 8, y: 25, w: 4, h: 4 },
+      live: { x: 8, y: 29, w: 4, h: 4 },
       finished: { x: 0, y: 12, w: 6, h: 4 },
     },
     // The widget returns null whenever the run's own run.create row never
@@ -250,6 +252,24 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // button that opens a blank pane (focus-mode.tsx). Same reason ssh carries
     // one: the predicate must mirror the component's own gate exactly.
     available: (ctx) => createRequestFromAudit(ctx.audit).clamp_warnings !== undefined,
+  },
+  // A VM run's desktop, in its own tile between Identity and Attach (it was a block inside the ssh tile).
+  desktop: {
+    label: "Desktop",
+    Icon: Monitor,
+    component: (ctx) => React.createElement(DesktopCard, { run: ctx.run }),
+    defaultLayout: { w: 4, h: 4, minW: 3, minH: 3 },
+    // Above Attach in the live rail, and where migration 0236 put the finished macOS VM disk line (the ssh tile's old
+    // finished place).
+    presets: { live: { x: 8, y: 20, w: 4, h: 4 }, finished: { x: 6, y: 12, w: 6, h: 5 } },
+    // DesktopCard's own gate, so the grid never holds an empty tile: a VM run the person may enter, while it runs or,
+    // for a macOS VM, while the Mac's report of its disk has something to say (mock M-D1 9-11). The admin monitor has
+    // no door at all, even on the admin's own run (admin-member-modes-design.md §4.6, §6).
+    available: (ctx) =>
+      ctx.view === "user" &&
+      isVMKind(ctx.run.machine_kind) &&
+      (ctx.run.state === "RUNNING" || (isMacOSVM(ctx.run) && !!ctx.run.macos_disk)) &&
+      mayEnterRunOrUnknown(ctx.run, ctx.principal, ctx.operator, ctx.operatorResolved ?? true),
   },
   ssh: {
     label: "Attach from your terminal",
@@ -260,15 +280,16 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // absent (owner-only), and with free placement an absent tile leaves a
     // hole — at the bottom of the rail that hole costs nothing, between two
     // widgets it is a visible gap on every run you did not start.
-    presets: { live: { x: 8, y: 20, w: 4, h: 5 }, finished: { x: 6, y: 12, w: 6, h: 5 } },
-    // ConnectSSHCard's mayEnterRun gate, plus the RUNNING check, or a finished macOS VM run with a disk line.
+    presets: { live: { x: 8, y: 24, w: 4, h: 5 } },
+    // ConnectSSHCard's mayEnterRun gate, plus the RUNNING check. A background run has no terminal, SSH or apps of
+    // its own to attach to so its desktop's Watch lives in the Desktop tile alone.
     // M-7: AND the user view — the admin monitor carries no Connect-via-SSH
     // door at all, even on the admin's own run (admin-member-modes-design.md
     // §4.6, §6).
-    // A finished macOS VM run keeps the tile while its disk's removal has something to say (mock M-D1 9-11).
     available: (ctx) =>
       ctx.view === "user" &&
-      (ctx.run.state === "RUNNING" || (isMacOSVM(ctx.run) && !!ctx.run.macos_disk)) &&
+      ctx.run.state === "RUNNING" &&
+      !isBackgroundRun(ctx.run) &&
       mayEnterRunOrUnknown(ctx.run, ctx.principal, ctx.operator, ctx.operatorResolved ?? true),
   },
   // Mock r15 T1-c: the Service panel heads the Overview's right column, above Egress. It exists only on a live service

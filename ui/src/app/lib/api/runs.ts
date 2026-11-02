@@ -291,6 +291,15 @@ export const runs = {
     return body.ticket;
   },
 
+  // POST /api/v1/runs/{id}/desktop/watch-ticket — a single-use ticket that opens a background macOS VM run's built-in
+  // desktop, view only. It is spent at app "__desktop" like any desktop ticket; the server refuses it with the
+  // sentence the run's background_watch carried.
+  async watchTicket(runId: string): Promise<string> {
+    const res = await wfetch(`/runs/${encodeURIComponent(runId)}/desktop/watch-ticket`, { method: "POST" });
+    const body = await asJson<{ ticket: string; expires_in_seconds: number }>(res);
+    return body.ticket;
+  },
+
   // POST /api/v1/runs/{id}/apps/{app}/ticket — a single-use ticket that opens one inbound app in a browser, for
   // the run's owner or a person its callers name. Any other person, a run that is gone and an app that is not
   // inbound all answer the same 404.

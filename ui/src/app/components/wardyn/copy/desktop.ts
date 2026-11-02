@@ -60,6 +60,8 @@ export const DESKTOP = {
   watch: "Watch desktop", // MAC-V02
   viewOnlyTitle: "View only", // MAC-V05
   viewOnlyBody: "macOS 26 doesn't keep control here. Typing and clicking don't reach this desktop.", // MAC-V06
+  backgroundWatchTile: "You can watch this desktop. Typing, clicking, pasting and clipboard copy are disabled.", // RF-01 (Codex's words)
+  backgroundWatchExposure: "A screen can show what the run keeps out of its logs, such as an app's secrets, open documents or anything else it puts on screen.", // RF-02
   backgroundWatchBody: "This is a background run. Typing, clicking, pasting and clipboard copy are disabled.", // RF-10
   loginWindowNote: "You may see a macOS login window instead of the agent's screen. The run keeps going either way.", // RF-03
   // The gateway's own close code: a re-check ended a watch of a background run. Never the hour's words.

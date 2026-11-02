@@ -164,7 +164,8 @@ test.describe("Run detail: a macOS desktop", () => {
     await desk.scrollIntoViewIfNeeded();
     await expect(desk.getByText(DESKTOP.kindMacOS)).toBeVisible();
     await expect(desk.getByText(DESKTOP.observeOnlyMacOS)).toBeVisible();
-    await expect(desk.getByText(DESKTOP.viewOnlyChip)).toBeVisible();
+    // The chip is in the tile's header, which holds the region.
+    await expect(desk.locator("xpath=ancestor::section[1]").getByText(DESKTOP.viewOnlyChip)).toBeVisible();
     await expect(desk.getByRole("button", { name: DESKTOP.watch })).toBeVisible();
     await expect(desk.getByRole("button")).toHaveCount(1);
   });
