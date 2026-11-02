@@ -141,7 +141,11 @@ kubectl --context "${CONTEXT}" -n "${NAMESPACE}" create secret tls ai-gateway-tl
 kubectl --context "${CONTEXT}" apply -f "${MANIFEST}" >/dev/null || die "could not apply ${MANIFEST}"
 for d in "${FAKE_SVC}" "${GATEWAY}"; do
   kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status "deployment/${d}" --timeout=240s \
-    || { kubectl --context "${CONTEXT}" -n "${NAMESPACE}" describe "deployment/${d}" >&2; die "${d} did not become ready"; }
+    || {
+      kubectl --context "${CONTEXT}" -n "${NAMESPACE}" describe "deployment/${d}" >&2
+      kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "deployment/${d}" --tail=100 >"${EVIDENCE_DIR}/${d}-rollout.log" 2>&1
+      die "${d} did not become ready (its last 100 log lines are in ${EVIDENCE_DIR}/${d}-rollout.log)"
+    }
 done
 
 # ── 3. internal_hosts: the private-address refusal, lifted for the MCP host only ─
@@ -246,7 +250,7 @@ check "audit: the proxy let the tool call through to ${MCP_HOST}" $?
 step "reading the gateway's access log"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "deployment/${GATEWAY}" >"${EVIDENCE_DIR}/gateway.log" 2>&1 \
   || die "could not read the gateway's log"
-[[ "$(grep 'route=default/llm ' "${EVIDENCE_DIR}/gateway.log" | grep 'http.path=/v1/messages' | grep -c 'http.status=200')" -ge 1 ]]
+[[ "$(grep 'route=default/llm ' "${EVIDENCE_DIR}/gateway.log" | grep -E 'http\.path=/v1/messages( |$)' | grep -c 'http.status=200')" -ge 1 ]]
 check "gateway log: the model route served /v1/messages with 200" $?
 [[ "$(grep 'route=default/mcp ' "${EVIDENCE_DIR}/gateway.log" | grep 'mcp.method.name=tools/call' | grep -c 'http.status=200')" -ge 1 ]]
 check "gateway log: the MCP route served a tools/call with 200" $?
@@ -264,7 +268,7 @@ done
 printf '%s\n' "${seen}" >"${EVIDENCE_DIR}/fake-seen.json"
 # The gateway moves a bearer token to the x-api-key header an Anthropic upstream expects, so the
 # value is looked for in every header of a model request rather than in one.
-jq -e --arg c "${CREDENTIAL}" '.model_calls >= 1 and any(.requests[]; .route == "model" and any(.headers[][]; contains($c)))' <<<"${seen}" >/dev/null
+jq -e --arg c "${CREDENTIAL}" '.model_calls >= 1 and any(.requests[]; .route == "model" and .path == "/v1/messages" and any(.headers[][]; contains($c)))' <<<"${seen}" >/dev/null
 check "the fake received a model call carrying the made-up credential ($(jq -c '{model_calls}' <<<"${seen}"))" $?
 jq -e '.tool_calls == 1' <<<"${seen}" >/dev/null
 check "the fake's tool was called exactly once ($(jq -c '{tool_calls}' <<<"${seen}"))" $?

@@ -17,4 +17,5 @@ docs/EXPORT.md=507 share=35
 docs/RECORDING-ROOT-READ.md=332 share=35
 docs/adoption/README.md=249 share=35
 # docs/operations/ai-gateway.md 792 measured (an external AI gateway setup): the two hostnames, the config, what the gateway does with a request and what the nightly job asserts.
-docs/operations/ai-gateway.md=792 share=35
+# docs/operations/ai-gateway.md 1025 adds 233 over 792, measured: the image section (scan result and what it cannot see), the JWKS start-up and refresh timings, and three corrections to the request table and assertions.
+docs/operations/ai-gateway.md=1025 share=35

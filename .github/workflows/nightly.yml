@@ -2669,6 +2669,38 @@ jobs:
             gh issue create --title "$title" --body "$body"
           fi
 
+  # ai-gateway-kind is outside notify-new-lanes (scripts/test-repo-guards.sh, NOTIFY_EXEMPT), so a
+  # scheduled red reaches someone through this job instead.
+  notify-ai-gateway-kind:
+    needs: [ai-gateway-kind]
+    # main only: a workflow_dispatch on any other branch must not post to the main-health issue.
+    if: failure() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the AI gateway issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="nightly: the AI gateway job failed"
+          existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Still failing: $RUN_URL"
+          else
+            body=$(printf '%s\n' \
+              "The ai-gateway-kind job failed; see the run." \
+              "" \
+              "It runs the pinned agentgateway image in front of test/gatewayfake on a kind cluster (scripts/kind-gateway-run.sh). The uploaded evidence holds the script's log, the gateway's access log and the fake's /_seen listing; the run log says which assertion failed." \
+              "" \
+              "Run: $RUN_URL")
+            gh issue create --title "$title" --body "$body"
+          fi
+
   notify-new-lanes:
     needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, agent-claude-code-native, buildx-smoke-ui-sandbox, buildx-smoke-ui-sandbox-signin, kind-sso-walk, kek-conformance, fuzz, gvisor-cc2-live, kind-sso-ado-walk, compose-sso-roles, daemon-proxy-secret-kind, provider-subscription-docker-pg, managed-settings-drift, runner-compat-walk, kind-survival-walk, k6-kind-conformance, k6-workload-e2e, kind-acceptance-walks, hybrid-walk, kind-upgrade-walk]
     # main only: a workflow_dispatch on any other branch must not post to the main-health issue.

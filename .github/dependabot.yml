@@ -60,6 +60,7 @@ updates:
       # nothing bumped (CS1): the fakes the kind walks build and the hybrid-walk relay.
       - /test/adofake/cmd
       - /test/awsssofake/cmd
+      - /test/gatewayfake
       - /test/hybrid-walk
     schedule:
       interval: weekly

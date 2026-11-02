@@ -49,11 +49,11 @@ The setup was checked against the pinned image in a one-container trial. These a
 |---|---|
 | `POST /v1/messages`, streamed or not | A Messages answer in the same shape, with the gateway's own `protocol=llm` log line |
 | A bearer `Authorization` header | The upstream receives it as `x-api-key`, the form an Anthropic host expects |
-| A path the table does not name | Forwarded to the upstream, which answers it: a `404` from the fake for a path it does not serve |
+| A path other than the two the table names (the `*` row) | Forwarded to the upstream, which answers it: a `404` from the fake for a path it does not serve |
 | An MCP call with no session | `400`. The client sends `initialize` first and repeats the `Mcp-Session-Id` it gets back |
 | An MCP call that does not accept both `application/json` and `text/event-stream` | `406` |
 
-- The job's `/_seen` listing names every path a harness reached outside the model route's own. That is the evidence for what the gateway forwards, and for the sentence in [Pluggability](../PLUGGABILITY.md#an-external-ai-gateway-for-example-agentgateway) about the other paths.
+- The job saves the fake's `/_seen` listing, which names every path a harness reached outside the model route's own. It is evidence for what the gateway forwards and for the sentence in [Pluggability](../PLUGGABILITY.md#an-external-ai-gateway-for-example-agentgateway) about the other paths. The job does not assert on it.
 
 ## What the job asserts
 
@@ -67,4 +67,24 @@ The setup was checked against the pinned image in a one-container trial. These a
 
 - A run's exit code is not an assertion for the model run: Claude Code's exit says nothing about the gateway.
 - The tool call comes from a `curl` in an exec run, not from a model.
+- The job attaches no component, so it does not exercise the `component_host_serves_model` refusal above.
 - The job carries no token and no person's data. Run it by hand on a disposable quickstart cluster with `WARDYN_TEST_K8S=1 WARDYN_ACK_SHARED_QUICKSTART=1 scripts/kind-gateway-run.sh` ([the script](../../scripts/kind-gateway-run.sh)).
+
+## The image
+
+- The gateway image is the operator's own choice to trust. This setup takes it unmodified and pins it by digest.
+- Trivy 0.70.0 (`trivy image --severity CRITICAL`, run on a `docker save` of the digest) reports nothing on the base layers. It cannot see the Rust binary's crates.
+- For the crates, `Cargo.lock` at the v1.7.0 tag lists 804 registry packages. Querying them against OSV (`api.osv.dev/v1/querybatch`) flags 6.
+  - The flagged `rmcp` 0.10.0 has six advisory ids. `crates/agentgateway/Cargo.toml` at the tag declares it under `[dev-dependencies]`, so it appears not to be linked into the binary.
+  - The other five (`atomic-polyfill`, `crypto-bigint`, `ctutils`, `paste`, `pulldown-cmark`) are not determined.
+
+## If the gateway verifies tokens from a JWKS URL
+
+- With `jwtAuth` and a `jwks.url`, the gateway loads the key set when it reads its config. It then fails to start with `failed to load JWKS` if the URL is unreachable, so serve the key set before the gateway starts. This was run against the pinned image.
+- The refresh timings come from reading `crates/agentgateway/src/resource_manager.rs` at the v1.7.0 tag. They were not run.
+
+| Setting | Value read |
+|---|---|
+| Default refresh (`JWKS_TTL`) | 15 minutes |
+| A `Cache-Control: max-age` or `Expires` header | Replaces the default, with a floor of 60 seconds |
+| A failed refresh | Retried after 15 seconds |
