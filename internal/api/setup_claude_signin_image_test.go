@@ -81,6 +81,48 @@ func TestClaudeSignInImageResolves(t *testing.T) {
 	})
 }
 
+// signInImageBaseRefs are the agent-base spellings install.sh and compose use,
+// plus a digest pin.
+var signInImageBaseRefs = []string{
+	"ghcr.io/cjohnstoniv/agent-base:0.10.0",
+	"wardyn/agent-base:local",
+	"registry.example/wardyn/agent-base@sha256:0123456789abcdef",
+	"agent-base",
+}
+
+func TestClaudeSignInImageAgentBaseIsNotASignInImage(t *testing.T) {
+	ctx := context.Background()
+	for _, ref := range signInImageBaseRefs {
+		images := map[string]string{"claude-code": ref}
+		// Every runner shape: present, absent, cannot-check, check-errors, none wired.
+		runners := map[string]runner.Runner{
+			"present":   &imageCheckerRunner{fakeRunner: &fakeRunner{}, present: map[string]bool{ref: true}},
+			"absent":    &imageCheckerRunner{fakeRunner: &fakeRunner{}, present: map[string]bool{}},
+			"no-check":  &fakeRunner{},
+			"check-err": imageCheckErrRunner{&fakeRunner{}},
+			"nil":       nil,
+		}
+		for name, rnr := range runners {
+			if claudeSignInImageResolves(ctx, images, rnr) {
+				t.Errorf("%s / %s: agent-base ships no claude, so it must not resolve as the sign-in image", ref, name)
+			}
+			chk := claudeSignInImageCheck(ctx, images, rnr)
+			if chk.Status != "warn" || chk.Blocking {
+				t.Errorf("%s / %s: status = %q blocking = %v, want a non-blocking warn", ref, name, chk.Status, chk.Blocking)
+			}
+			if !strings.Contains(chk.Detail, "no Claude Code CLI") || !strings.Contains(chk.Detail, ref) {
+				t.Errorf("%s / %s: detail does not name the ref and the missing CLI: %q", ref, name, chk.Detail)
+			}
+		}
+	}
+	// Lookalikes that merely contain the name are real sign-in images.
+	for _, ref := range []string{"wardyn/agent-base-claude:local", "wardyn/agent-claude-code:local", "example.com/agent-base/claude:1"} {
+		if !claudeSignInImageResolves(ctx, map[string]string{"claude-code": ref}, &fakeRunner{}) {
+			t.Errorf("%s: only the agent-base image itself is excluded", ref)
+		}
+	}
+}
+
 func TestClaudeSignInImageCheck(t *testing.T) {
 	ctx := context.Background()
 
