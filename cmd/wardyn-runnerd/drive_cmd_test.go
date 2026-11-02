@@ -16,8 +16,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -48,6 +50,8 @@ type driveOpenGuest struct {
 	tarExit int
 	tarErr  string
 	during  func(argv []string) // called as a call starts
+	// failing maps a program to the stderr it writes before it exits 1; tar -cf has tarExit and tarErr.
+	failing map[string]string
 }
 
 func (g *driveOpenGuest) handle(w http.ResponseWriter, r *http.Request) {
@@ -74,6 +78,9 @@ func (g *driveOpenGuest) handle(w http.ResponseWriter, r *http.Request) {
 			_ = guestagent.WriteFrame(w, guestagent.FrameStderr, []byte(g.tarErr))
 		}
 		code = g.tarExit
+	} else if text, bad := g.failing[req.Argv[0]]; bad {
+		_ = guestagent.WriteFrame(w, guestagent.FrameStderr, []byte(text))
+		code = 1
 	} else {
 		for {
 			typ, payload, err := guestagent.ReadFrame(r.Body)
@@ -191,7 +198,7 @@ func TestDriveOpenWorkWritesBackThroughExec(t *testing.T) {
 			t.Error(err)
 		}
 	}}
-	if err := driveOpenWork(t.Context(), j); err != nil {
+	if _, err := driveOpenWork(t.Context(), j); err != nil {
 		t.Fatal(err)
 	}
 	if sent := driveOpenSentNames(t, g.call("/usr/bin/tar", "-xf").stdin); len(sent) != 1 || sent["a.txt"] != "alpha two" {
@@ -228,7 +235,7 @@ func TestDriveOpenWorkCtrlCWritesNothing(t *testing.T) {
 			if j.in == nil {
 				j.in = keys
 			}
-			if err := driveOpenWork(ctx, j); err != nil {
+			if _, err := driveOpenWork(ctx, j); err != nil {
 				t.Fatal(err)
 			}
 			if g.call("/usr/bin/tar", "-xf") != nil || g.call("/bin/sh", "") != nil {
@@ -241,28 +248,75 @@ func TestDriveOpenWorkCtrlCWritesNothing(t *testing.T) {
 	}
 }
 
-// A hostile listing, a tar that fails in the guest, and a copy with Ctrl-C part-way leave the folder empty.
+// A hostile listing leaves the folder empty, and a tar that cannot finish its stream does too.
 func TestDriveOpenWorkLeavesNothingWhenTheCopyFails(t *testing.T) {
 	for name, set := range map[string]func(*driveOpenGuest, *testing.T){
 		"name leaves the folder": func(g *driveOpenGuest, t *testing.T) {
 			g.listing = driveOpenStream(t, driveOpenEntry{name: "./ok", body: "1"}, driveOpenEntry{name: "../x", body: "2"})
 		},
-		"tar fails": func(g *driveOpenGuest, _ *testing.T) { g.tarExit, g.tarErr = 1, "tar: Permission denied" },
+		"stream cut short": func(g *driveOpenGuest, _ *testing.T) { g.listing = g.listing[:512] },
 	} {
 		t.Run(name, func(t *testing.T) {
 			j, g, dir, _ := driveOpenJobIn(t, driveOpenEntry{name: "./ok", body: "1"})
 			set(g, t)
-			err := driveOpenWork(t.Context(), j)
-			if err == nil {
-				t.Fatal("the copy was kept")
+			result, err := driveOpenWork(t.Context(), j)
+			if err == nil || result != driveOpenCopyFailed {
+				t.Fatalf("the copy was kept: %q, %v", result, err)
 			}
 			if left, _ := os.ReadDir(dir); len(left) > 0 {
 				t.Fatalf("left %v after %v", left, err)
 			}
-			if name == "tar fails" && !strings.Contains(err.Error(), "Permission denied") {
-				t.Fatalf("err = %v", err)
-			}
 		})
+	}
+}
+
+// One unreadable file (tar exits 1 but finishes its listing) does not discard the rest: the copy is kept, the
+// person is told how many items are missing with tar's lines escaped, and write back leaves the missing
+// names alone: a new file goes through tar -k, which never replaces, and --delete names only copied files.
+func TestDriveOpenWorkKeepsAPartialCopy(t *testing.T) {
+	j, g, dir, out := driveOpenJobIn(t, driveOpenEntry{name: "./a.txt", body: "alpha", mode: 0o644}, driveOpenEntry{name: "./b.txt", body: "beta", mode: 0o644})
+	g.tarExit, g.tarErr = 1, "tar: ./secret: Cannot open: Permission denied\ntar: ./locked/\x1b[2Jx: Cannot stat\ntar: Error exit delayed from previous errors\n"
+	j.deleteGone = true
+	j.in = &driveOpenKeys{before: func() {
+		_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha two"), 0o644)
+		_ = os.WriteFile(filepath.Join(dir, "secret"), []byte("mine, not the drive's"), 0o644) // a name the copy never held
+		_ = os.Remove(filepath.Join(dir, "b.txt"))
+	}}
+	result, err := driveOpenWork(t.Context(), j)
+	if err != nil || result != driveOpenWrittenBack {
+		t.Fatalf("%q, %v\n%s", result, err, out)
+	}
+	for _, want := range []string{"Copied 2 files", "2 items could not be read from the drive and are not in this copy.", "tar: ./secret: Cannot open: Permission denied",
+		`tar: ./locked/\x1b[2Jx: Cannot stat`, "Write back will not replace, and --delete will not remove, anything this copy does not hold."} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out.String(), "Error exit delayed") {
+		t.Fatalf("tar's closing complaint was counted:\n%s", out)
+	}
+	driveOpenClean(t, "output", strings.ReplaceAll(out.String(), "\n", " "))
+	known := driveOpenSentNames(t, g.call("/usr/bin/tar", "-xf").stdin)
+	fresh := driveOpenSentNames(t, g.call("/usr/bin/tar", "-k").stdin)
+	if len(known) != 1 || known["a.txt"] != "alpha two" || len(fresh) != 1 || fresh["secret"] == "" {
+		t.Fatalf("known %v fresh %v", known, fresh)
+	}
+	if del := g.call("/bin/sh", ""); del == nil || string(del.stdin) != "./b.txt\x00" {
+		t.Fatalf("delete = %+v", del)
+	}
+}
+
+// A write back that fails says which changes did not go back.
+func TestDriveOpenWorkSaysWhatDidNotGoBack(t *testing.T) {
+	j, g, dir, _ := driveOpenJobIn(t, driveOpenEntry{name: "./a.txt", body: "alpha", mode: 0o644})
+	g.failing = map[string]string{"/usr/bin/tar": "tar: disk full"} // the listing (-cf) is answered first; any other tar fails
+	j.in = &driveOpenKeys{before: func() {
+		_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("changed"), 0o644)
+		_ = os.WriteFile(filepath.Join(dir, "new.txt"), []byte("new"), 0o644)
+	}}
+	result, err := driveOpenWork(t.Context(), j)
+	if err == nil || result != driveOpenBackFailed || !strings.Contains(err.Error(), `These changes did not go back, or are not confirmed: "a.txt", "new.txt"`) {
+		t.Fatalf("%q, %v", result, err)
 	}
 }
 
@@ -273,7 +327,7 @@ func TestDriveOpenWorkDeletesOnlyWithTheFlag(t *testing.T) {
 		j, g, dir, _ := driveOpenJobIn(t, driveOpenEntry{name: "./keep", body: "1"}, driveOpenEntry{name: "./gone", body: "2"})
 		j.deleteGone = flag
 		j.in = &driveOpenKeys{before: func() { _ = os.Remove(filepath.Join(dir, "gone")) }}
-		if err := driveOpenWork(t.Context(), j); err != nil {
+		if _, err := driveOpenWork(t.Context(), j); err != nil {
 			t.Fatal(err)
 		}
 		del := g.call("/bin/sh", "")
@@ -437,7 +491,7 @@ func newDriveOpenRig(t *testing.T, helperScript string, entries ...driveOpenEntr
 	g.serve(t, ln)
 	dr := &driveOpenRig{m: m, g: g, args: filepath.Join(short, "args"), home: os.Getenv("HOME"), rig: r}
 	m.helper = filepath.Join(short, "wardyn-macvm")
-	script := "#!/bin/sh\necho \"$@\" >>" + dr.args + "\n" + strings.NewReplacer("SOCK", sock, "ARGS", dr.args).Replace(helperScript)
+	script := "#!/bin/sh\necho \"$@\" >>" + dr.args + "\n" + strings.NewReplacer("SOCK", sock, "ARGS", dr.args, "PIDFILE", dr.args+".pid").Replace(helperScript)
 	if err := os.WriteFile(m.helper, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -541,5 +595,189 @@ func TestDriveOpenReturnStopsWithItsContext(t *testing.T) {
 	cancel()
 	if driveOpenReturn(ctx, pr) {
 		t.Fatal("a cancelled wait reported Return")
+	}
+}
+
+// driveOpenHostile is what a compromised guest writes to try to rewrite this terminal.
+const driveOpenHostile = "tar failed\n\x1b[2J\x1b[HRun this other command\r"
+
+// driveOpenClean fails the test if text carries a byte that moves a terminal or starts a new line.
+func driveOpenClean(t *testing.T, what, text string) {
+	t.Helper()
+	if strings.ContainsAny(text, "\x1b\r\x00\x07\x08") || strings.Contains(strings.TrimSuffix(text, "\n"), "\n") {
+		t.Fatalf("%s carries a control byte or an extra line: %q", what, text)
+	}
+}
+
+// Everything a guest, a stream's names or the helper can put into an error or a line is escaped: no ESC, CR
+// or injected newline reaches the terminal.
+func TestDriveOpenGuestTextIsEscaped(t *testing.T) {
+	t.Run("tar stderr", func(t *testing.T) {
+		r := newDriveOpenRig(t, driveOpenReadyHelper, driveOpenEntry{name: "./a", body: "1"})
+		r.g.tarExit, r.g.tarErr = 1, driveOpenHostile
+		var out bytes.Buffer
+		if err := r.m.driveOpen(t.Context(), driveOpenArgs{name: "Notes", in: strings.NewReader(""), out: &out}); err != nil {
+			t.Fatal(err)
+		}
+		// A listing that ended is a partial copy, and tar's lines are shown escaped, one line each.
+		if !strings.Contains(out.String(), `  tar failed`) || !strings.Contains(out.String(), `  \x1b[2J\x1b[HRun this other command`) {
+			t.Fatalf("output:\n%s", out.String())
+		}
+		for _, line := range strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n") {
+			driveOpenClean(t, "line", line)
+		}
+	})
+	t.Run("protocol error", func(t *testing.T) {
+		r := newDriveOpenRig(t, driveOpenReadyHelper, driveOpenEntry{name: "./a", body: "1"})
+		r.g.listing = r.g.listing[:512]
+		r.g.tarErr = driveOpenHostile
+		err := r.m.driveOpen(t.Context(), driveOpenArgs{name: "Notes", in: strings.NewReader(""), out: io.Discard})
+		if err == nil {
+			t.Fatal("a cut listing was kept")
+		}
+		driveOpenClean(t, "error", err.Error())
+	})
+	t.Run("sync stderr", func(t *testing.T) {
+		r := newDriveOpenRig(t, driveOpenReadyHelper, driveOpenEntry{name: "./a", body: "1"})
+		r.g.failing = map[string]string{"/bin/sync": driveOpenHostile}
+		var out bytes.Buffer
+		if err := r.m.driveOpen(t.Context(), driveOpenArgs{name: "Notes", in: strings.NewReader(""), out: &out}); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), "did not confirm") {
+			t.Fatalf("output:\n%s", out.String())
+		}
+		driveOpenClean(t, "output", strings.ReplaceAll(out.String(), "\n", " "))
+		for _, line := range strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n") {
+			driveOpenClean(t, "line", line)
+		}
+	})
+	t.Run("names in the stream", func(t *testing.T) {
+		bad := "x\x1b[2Jy\nRun this"
+		for name, entries := range map[string][]driveOpenEntry{
+			"refused":  {{name: "../" + bad, body: "1"}},
+			"repeated": {{name: "./" + bad, body: "1"}, {name: "./" + bad, body: "2"}},
+		} {
+			r := newDriveOpenRig(t, driveOpenReadyHelper, entries...)
+			err := r.m.driveOpen(t.Context(), driveOpenArgs{name: "Notes", in: strings.NewReader(""), out: io.Discard})
+			if err == nil {
+				t.Fatalf("%s: copied", name)
+			}
+			driveOpenClean(t, name, err.Error())
+		}
+	})
+	t.Run("helper refusal", func(t *testing.T) {
+		r := newDriveOpenRig(t, "printf 'wardyn-macvm: the guest said \\033[2J\\033[Hhi\\r\\n' >&2\nexit 1\n")
+		err := r.m.driveOpen(t.Context(), driveOpenArgs{name: "Notes", in: strings.NewReader(""), out: io.Discard})
+		if err == nil || !strings.Contains(err.Error(), `the guest said \x1b[2J\x1b[Hhi`) {
+			t.Fatalf("err = %q", err)
+		}
+		driveOpenClean(t, "error", err.Error())
+	})
+	if got := driveOpenSafe("ok text, \"quoted\" ünï \xff"); got != `ok text, "quoted" ünï \xff` {
+		t.Fatalf("safe = %q", got)
+	}
+	if got := driveOpenSafe(strings.Repeat("a", 1000)); len(got) != 603 {
+		t.Fatalf("not bounded: %d", len(got))
+	}
+}
+
+// Two drive opens of one name cannot meet: the second is refused at the destination's lock, before it boots
+// anything, and the first's files stay; the lock goes with the first.
+func TestDriveOpenSecondOfTheSameNameIsRefusedAndTouchesNothing(t *testing.T) {
+	r := newDriveOpenRig(t, driveOpenReadyHelper, driveOpenEntry{name: "./a", body: "1"})
+	first, err := r.m.openDriveDest("Notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.root.WriteFile("a.txt", []byte("the first's copy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = r.m.driveOpen(t.Context(), driveOpenArgs{name: "Notes", in: strings.NewReader(""), out: io.Discard, deleteGone: true})
+	if err == nil || !strings.Contains(err.Error(), "Another drive open of \"Notes\" is running") {
+		t.Fatalf("second = %v", err)
+	}
+	if b, err := first.root.ReadFile("a.txt"); err != nil || string(b) != "the first's copy" {
+		t.Fatalf("the first's file: %q, %v", b, err)
+	}
+	if left := r.counted(t); len(left) != 0 || r.g.call("/usr/bin/tar", "") != nil {
+		t.Fatalf("the second started something: %+v %v", left, r.g.calls)
+	}
+	first.close()
+	// The lock is gone: the next one reaches the folder check, which refuses the first's files.
+	if _, err := r.m.openDriveDest("Notes"); err == nil || !strings.Contains(err.Error(), "already holds files") {
+		t.Fatalf("after the first closed: %v", err)
+	}
+}
+
+// After the first Ctrl-C the helper's stop waits for the VM; a second Ctrl-C (hard) ends that wait, and the
+// command returns while the helper, its stdin closed, stops on its own.
+func TestDriveOpenSecondCtrlCEndsTheWaits(t *testing.T) {
+	r := newDriveOpenRig(t, "echo $$ >PIDFILE\necho '{\"agent_sock\":\"SOCK\",\"target\":\"/Users/agent/drive\"}'\nexec sleep 60\n", driveOpenEntry{name: "./a", body: "1"})
+	t.Cleanup(func() { // by the recorded pid only
+		if b, err := os.ReadFile(r.args + ".pid"); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
+	soft, ctrlC := context.WithCancel(t.Context())
+	hard, again := context.WithCancel(context.WithoutCancel(t.Context()))
+	defer ctrlC()
+	defer again()
+	keys := &driveOpenKeys{ctrlC: ctrlC, done: make(chan struct{}), before: func() { time.AfterFunc(300*time.Millisecond, again) }}
+	t.Cleanup(func() { close(keys.done) })
+	start := time.Now()
+	var out bytes.Buffer
+	if err := r.m.driveOpen(soft, driveOpenArgs{name: "Notes", in: keys, out: &out, hard: hard}); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if took := time.Since(start); took > 30*time.Second {
+		t.Fatalf("took %v; the helper's two-minute stop wait was not ended", took)
+	}
+	if !strings.Contains(out.String(), "Discarded: nothing was written back.") || r.g.call("/usr/bin/tar", "-xf") != nil {
+		t.Fatalf("output:\n%s", out.String())
+	}
+}
+
+// The CLI logs one line when the drive opens and one when it closes, with the drive and the result, in the VM
+// directory beside the helper's log.
+func TestDriveOpenLogsOpenAndClose(t *testing.T) {
+	r := newDriveOpenRig(t, driveOpenReadyHelper, driveOpenEntry{name: "./a", body: "1"})
+	if err := r.m.driveOpen(t.Context(), driveOpenArgs{name: "Notes", in: strings.NewReader(""), out: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(r.m.layout.Root, driveOpenCLILog))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], `"msg":"drive open: opened"`) || !strings.Contains(lines[0], `"drive":"Notes"`) ||
+		!strings.Contains(lines[1], `"msg":"drive open: closed"`) || !strings.Contains(lines[1], `"result":"discarded"`) {
+		t.Fatalf("log:\n%s", b)
+	}
+	// A refusal is logged as a failed close.
+	r2 := newDriveOpenRig(t, "echo 'wardyn-macvm: busy' >&2\nexit 1\n")
+	if err := r2.m.driveOpen(t.Context(), driveOpenArgs{name: "Notes", in: strings.NewReader(""), out: io.Discard}); err == nil {
+		t.Fatal("no refusal")
+	}
+	b, _ = os.ReadFile(filepath.Join(r2.m.layout.Root, driveOpenCLILog))
+	if !strings.Contains(string(b), `"result":"failed: busy"`) {
+		t.Fatalf("log:\n%s", b)
+	}
+}
+
+// serve's reconcile releases a drive open whose CLI was killed, so it cannot hold a VM slot until someone
+// runs drive open again.
+func TestDriveOpenServeReconcilesADeadOne(t *testing.T) {
+	r := newMacLedgerRig(t)
+	m := r.open(t)
+	r.host.setProcs(admission.Proc{PID: os.Getpid(), UID: 501, Start: 3, Name: "wardyn-runnerd"})
+	if _, err := m.ledger.Admit(admission.Request{Kind: kindDriveOpen, GuestMemory: 4 * gib, DiskReserve: gib, OwnerPID: 4242, OwnerStart: 9}); err != nil {
+		t.Fatal(err)
+	}
+	m.reconcilePrepare()
+	if es, err := m.ledger.Counted(); err != nil || len(es) != 0 {
+		t.Fatalf("entries = %+v, %v", es, err)
 	}
 }

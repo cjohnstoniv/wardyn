@@ -16,7 +16,7 @@ import (
 )
 
 // Every file a copy makes carries com.apple.quarantine, read back from the file itself, in the
-// flags;time;agent; shape macOS writes, and a directory is not marked.
+// flags;time;agent; shape macOS writes, and so is each folder.
 func TestDriveOpenExtractMarksEachFileQuarantined(t *testing.T) {
 	root, dir, _ := driveOpenRoot(t)
 	stream := driveOpenStream(t,
@@ -37,8 +37,9 @@ func TestDriveOpenExtractMarksEachFileQuarantined(t *testing.T) {
 			t.Fatalf("%s quarantine = %q", name, v)
 		}
 	}
-	if _, err := unix.Getxattr(filepath.Join(dir, "d"), driveOpenQuarantine, make([]byte, 8)); err == nil {
-		t.Fatal("a folder was marked")
+	buf := make([]byte, 128)
+	if n, err := unix.Getxattr(filepath.Join(dir, "d"), driveOpenQuarantine, buf); err != nil || !strings.HasPrefix(string(buf[:n]), "0081;") {
+		t.Fatalf("the folder d was not marked: %v", err)
 	}
 	if fi, _ := os.Stat(filepath.Join(dir, "b.txt")); fi.Mode().Perm()&0o111 != 0 {
 		t.Fatalf("execute bit kept: %v", fi.Mode())

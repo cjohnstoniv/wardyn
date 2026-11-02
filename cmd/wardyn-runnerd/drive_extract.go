@@ -106,6 +106,10 @@ type driveOpenCopy struct {
 	skipped driveOpenSkips
 	base    map[string]driveOpenFile // slash-separated names under the root
 	dirs    map[string]bool
+	// unread and unreadText are what the guest's tar could not read: a count of its messages, and the first
+	// few, escaped. The copy is then partial, and write back and delete know nothing of what is missing.
+	unread     int
+	unreadText []string
 }
 
 // driveOpenName is a tar entry's name as a path under the root, "" for the root itself. An absolute name,
@@ -170,7 +174,7 @@ func driveOpenExtract(r io.Reader, root *os.Root, lim driveOpenLimits, mark func
 		}
 		switch h.Typeflag {
 		case tar.TypeDir:
-			if err := c.addDir(root, name); err != nil {
+			if err := c.addDir(root, name, mark); err != nil {
 				return nil, err
 			}
 		case tar.TypeReg:
@@ -187,23 +191,31 @@ func driveOpenExtract(r io.Reader, root *os.Root, lim driveOpenLimits, mark func
 	}
 }
 
-// addDir makes a directory (and the ones above it) and notes it as copied.
-func (c *driveOpenCopy) addDir(root *os.Root, name string) error {
+// addDir makes a directory (and the ones above it), marks each new one, and notes it as copied.
+func (c *driveOpenCopy) addDir(root *os.Root, name string, mark func(*os.File) error) error {
 	if name == "" {
 		return nil
 	}
 	if err := root.MkdirAll(name, 0o755); err != nil {
 		return fmt.Errorf("make folder %q: %w", name, err)
 	}
-	c.dirs[name] = true
-	c.noteParents(name)
-	return nil
-}
-
-func (c *driveOpenCopy) noteParents(name string) {
-	for d := path.Dir(name); d != "."; d = path.Dir(d) {
-		c.dirs[d] = true
+	parts := strings.Split(name, "/")
+	for i := range parts {
+		dir := strings.Join(parts[:i+1], "/")
+		if c.dirs[dir] {
+			continue
+		}
+		f, err := root.Open(dir)
+		if err == nil {
+			err = mark(f)
+			_ = f.Close()
+		}
+		if err != nil {
+			return fmt.Errorf("mark folder %q: %w", dir, err)
+		}
+		c.dirs[dir] = true
 	}
+	return nil
 }
 
 // addFile copies one regular file's bytes from tr, hashing them as they go.
@@ -215,7 +227,7 @@ func (c *driveOpenCopy) addFile(root *os.Root, tr *tar.Reader, h *tar.Header, na
 		return fmt.Errorf("the drive's files are more than the %s this Mac has room for", driveOpenSize(lim.bytes))
 	}
 	if dir := path.Dir(name); dir != "." {
-		if err := c.addDir(root, dir); err != nil {
+		if err := c.addDir(root, dir, mark); err != nil {
 			return err
 		}
 	}
@@ -245,21 +257,26 @@ func (c *driveOpenCopy) addFile(root *os.Root, tr *tar.Reader, h *tar.Header, na
 	return nil
 }
 
-// driveOpenBack is what driveOpenPack found to write back.
+// driveOpenBack is what driveOpenPack found to write back. The files of the copy that changed (known) and
+// the ones the copy did not hold (fresh, with new folders) go in two streams: the fresh one is extracted
+// without overwriting, so a name the copy never held (an unreadable item, say) is never replaced.
 type driveOpenBack struct {
-	changed int // new and changed files
-	newDirs int
-	skipped driveOpenSkips
-	gone    []string // copied files no longer there, sorted
+	known, fresh []string // names of files in each stream
+	newDirs      int
+	skipped      driveOpenSkips
+	gone         []string // copied files no longer there, sorted
 }
 
-// driveOpenPack writes to w, as a tar stream for the guest, the files under root that are new or differ
-// from the copy, and the folders that are new. It reads regular files only, with one link: a link, a
-// device, a pipe or a set-id file is skipped and counted, and the walk never descends a link. gone lists
-// the copied files that are missing now, for the delete flag.
-func driveOpenPack(root *os.Root, c *driveOpenCopy, w io.Writer) (driveOpenBack, error) {
+func (b driveOpenBack) changed() int { return len(b.known) + len(b.fresh) }
+
+// driveOpenPack writes to known and fresh, as tar streams for the guest, the files under root that differ
+// from the copy, and those and the folders that the copy did not hold. It reads regular files only, with one
+// link: a link, a device, a pipe or a set-id file is skipped and counted, and the walk never descends a
+// link. gone lists the copied files that are missing now, for the delete flag; a name the copy never held is
+// never in it.
+func driveOpenPack(root *os.Root, c *driveOpenCopy, known, fresh io.Writer) (driveOpenBack, error) {
 	var b driveOpenBack
-	tw := tar.NewWriter(w)
+	tk, tf := tar.NewWriter(known), tar.NewWriter(fresh)
 	present := map[string]bool{}
 	err := fs.WalkDir(root.FS(), ".", func(p string, _ fs.DirEntry, err error) error {
 		if err != nil || p == "." {
@@ -276,9 +293,9 @@ func driveOpenPack(root *os.Root, c *driveOpenCopy, w io.Writer) (driveOpenBack,
 				return nil
 			}
 			b.newDirs++
-			return tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: p + "/", Mode: 0o755, ModTime: fi.ModTime()})
+			return tf.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: p + "/", Mode: 0o755, ModTime: fi.ModTime()})
 		case mode.IsRegular():
-			return b.packFile(tw, root, c, p, fi)
+			return b.packFile(tk, tf, root, c, p, fi)
 		case mode&fs.ModeSymlink != 0:
 			b.skipped[driveOpenSkipLink]++
 		case mode&fs.ModeDevice != 0:
@@ -291,7 +308,7 @@ func driveOpenPack(root *os.Root, c *driveOpenCopy, w io.Writer) (driveOpenBack,
 		return nil
 	})
 	if err == nil {
-		err = tw.Close()
+		err = errors.Join(tk.Close(), tf.Close())
 	}
 	for p := range c.base {
 		if !present[p] {
@@ -304,7 +321,7 @@ func driveOpenPack(root *os.Root, c *driveOpenCopy, w io.Writer) (driveOpenBack,
 
 // packFile adds the regular file p if it is new or changed. The file is opened through the root and must
 // still be the file the walk saw, so a link swapped in meanwhile is not read.
-func (b *driveOpenBack) packFile(tw *tar.Writer, root *os.Root, c *driveOpenCopy, p string, fi fs.FileInfo) error {
+func (b *driveOpenBack) packFile(tk, tf *tar.Writer, root *os.Root, c *driveOpenCopy, p string, fi fs.FileInfo) error {
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
 		b.skipped[driveOpenSkipLink]++
 		return nil
@@ -334,9 +351,9 @@ func (b *driveOpenBack) packFile(tw *tar.Writer, root *os.Root, c *driveOpenCopy
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	mode := fs.FileMode(0o644)
+	mode, tw := fs.FileMode(0o644), tf
 	if known {
-		mode = was.mode
+		mode, tw = was.mode, tk
 	}
 	if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: p, Mode: int64(mode), Size: size, ModTime: fi.ModTime()}); err != nil {
 		return err
@@ -344,6 +361,10 @@ func (b *driveOpenBack) packFile(tw *tar.Writer, root *os.Root, c *driveOpenCopy
 	if _, err := io.CopyN(tw, f, size); err != nil {
 		return err
 	}
-	b.changed++
+	if known {
+		b.known = append(b.known, p)
+	} else {
+		b.fresh = append(b.fresh, p)
+	}
 	return nil
 }
