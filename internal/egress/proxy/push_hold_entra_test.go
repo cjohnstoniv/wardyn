@@ -106,8 +106,10 @@ func TestPushHoldOnTheEntraLane(t *testing.T) {
 	t.Run("unattended refuses without a row", func(t *testing.T) {
 		p, sink, up, cp, _ := newEntraLane(t, review, types.ApprovalApproved, write)
 		p.pushHolds.unattended = true
-		if rec := postEntraPush(t, p, recordedPush(t, BranchNSPrefix(p.runID)+"work", workflowPush)); rec.Code != http.StatusForbidden {
-			t.Fatalf("status = %d, want 403", rec.Code)
+		// In git's own terms, so the agent reads what to do: git does not print a 403's body.
+		rec := postEntraPush(t, p, recordedPush(t, BranchNSPrefix(p.runID)+"work", workflowPush))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "ng refs/heads/") || !strings.Contains(rec.Body.String(), "run the task interactively") {
+			t.Fatalf("status = %d body %q, want a rejected ref saying what to do", rec.Code, rec.Body.String())
 		}
 		if raises, _ := cp.counts(); raises != 0 || !strings.Contains(sink.String(), ruleSourceGitPushHeldUnattended) || up.gitHits != 0 {
 			t.Errorf("raises = %d, log %q, hits %d; want none, a %s row, no forward", raises, sink.String(), up.gitHits, ruleSourceGitPushHeldUnattended)

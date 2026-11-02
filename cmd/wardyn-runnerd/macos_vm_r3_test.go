@@ -345,6 +345,76 @@ func TestMacOSVMStatusShowsTheRunBootToolsDial(t *testing.T) {
 	}
 }
 
+// While macOS waits for setup by hand, status lists the window's three steps: the account, Screen Sharing
+// with control, and Remote Login.
+func TestMacOSVMStatusSetupByHandNamesScreenSharing(t *testing.T) {
+	var text strings.Builder
+	macOSVMStatus{setupCode: "/x/setup-code.json"}.writeText(&text)
+	if !strings.Contains(text.String(), "turn on Screen Sharing with control, and turn on Remote Login") {
+		t.Fatalf("setup by hand's steps:\n%s", text.String())
+	}
+}
+
+// `macos-vm status` shows the newest tools-port dial: a prepare's, reported after a run boot's record,
+// replaces it, and a run boot after the prepare replaces that. The log's lines are what the helper writes
+// (macvm.PrepareEvent as JSON, no clock of their own), and events after the tools phase do not hide the dial.
+func TestMacOSVMStatusToolsDialIsTheNewest(t *testing.T) {
+	r := newMacLedgerRig(t)
+	m := r.open(t)
+	m.helper, _ = fakeHelper(t, 0)
+	base := time.Now().Add(-time.Hour).Truncate(time.Second)
+	line := func(ev macvm.PrepareEvent, at time.Time) string {
+		if ev.ToolsDial != "" {
+			ev.ToolsDialAt = at.UnixNano()
+		}
+		b, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b) + "\n"
+	}
+	dial := func(class string, at time.Time) string {
+		return line(macvm.PrepareEvent{Phase: macvm.PhaseTools}, at) + line(macvm.PrepareEvent{Phase: macvm.PhaseTools, ToolsDial: class}, at)
+	}
+	ready := line(macvm.PrepareEvent{Phase: macvm.PhaseReady, Fraction: 1}, base)
+	runRecord := filepath.Join(r.root, runToolsDialFile)
+	write := func(path, content string, at time.Time) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil || os.Chtimes(path, at, at) != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		name, run string
+		runAt     time.Time
+		prepare   string
+		want      string
+	}{
+		{"a later prepare replaces an older run record", "transport failure\n", base,
+			dial("transport failure", base.Add(time.Minute)) + dial("connected", base.Add(2*time.Minute)) + ready, "connected"},
+		{"a later run boot replaces the prepare's", "refused\n", base.Add(10 * time.Minute),
+			dial("connected", base.Add(time.Minute)) + ready, "refused"},
+		{"an older prepare in an appended log does not beat a later run boot", "refused\n", base.Add(10 * time.Minute),
+			dial("connected", base.Add(time.Minute)) + ready + line(macvm.PrepareEvent{Phase: macvm.PhaseCheck}, base.Add(time.Hour)), "refused"},
+		{"a prepare's dial still pending shows no older class", "transport failure\n", base,
+			dial("pending", base.Add(time.Minute)), ""},
+		{"no run record", "", base, dial("connected", base.Add(time.Minute)), "connected"},
+	} {
+		_ = os.Remove(runRecord)
+		if c.run != "" {
+			write(runRecord, c.run, c.runAt)
+		}
+		write(m.layout.PrepareLog(), c.prepare, base.Add(time.Hour))
+		st, err := m.status(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.ToolsDial != c.want {
+			t.Errorf("%s: tools_dial %q, want %q", c.name, st.ToolsDial, c.want)
+		}
+	}
+}
+
 // runnerd's start sweeps the stage-2 networks a crash left before any job is handed one, keeping those of
 // every job still in the ledger.
 func TestMacOSVMStartSweepsLeftoverPrepNetsButLedgeredJobs(t *testing.T) {

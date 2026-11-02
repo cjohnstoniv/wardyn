@@ -365,17 +365,18 @@ cmd_seed() {
   TOKEN="$(cmd_token)"
   log "Seeding deterministic fixtures via API + SQL"
   # Match fixtures.ts's per-person derivation without passing the bearer to psql.
-  local token_hashes member_hash security_hash security2_hash
+  local token_hashes member_hash security_hash security2_hash open_egress_hash
   token_hashes="$(printf '%s' "${TOKEN}" | python3 -c '
 import hashlib, sys
 admin = sys.stdin.read()
-for principal in ("e2e-member", "e2e-security-admin", "e2e-security-admin-2"):
+for principal in ("e2e-member", "e2e-security-admin", "e2e-security-admin-2", "e2e-open-egress"):
     token = "wdn_" + hashlib.sha256(f"{admin}:{principal}".encode()).hexdigest()
     print(hashlib.sha256(token.encode()).hexdigest(), end=" ")
 ')"
-  read -r member_hash security_hash security2_hash <<< "${token_hashes}"
+  read -r member_hash security_hash security2_hash open_egress_hash <<< "${token_hashes}"
   psql_e2e -v ON_ERROR_STOP=1 -v member_hash="${member_hash}" \
-    -v security_hash="${security_hash}" -v security2_hash="${security2_hash}" >/dev/null <<'SQL'
+    -v security_hash="${security_hash}" -v security2_hash="${security2_hash}" \
+    -v open_egress_hash="${open_egress_hash}" >/dev/null <<'SQL'
 INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256)
 VALUES
   ('69800000-0000-4000-8000-000000000001', 'e2e-member', 'member@e2e.wardyn.invalid',
@@ -388,7 +389,12 @@ VALUES
   -- server counts one mailbox as one human.
   ('69800000-0000-4000-8000-000000000003', 'e2e-security-admin-2', 'security-admin-2@e2e.wardyn.invalid',
    'security_admin', 'standard', '[]', false, 'e2e security admin 2',
-   :'security2_hash')
+   :'security2_hash'),
+  -- A member whose ceiling a spec widens to allow all egress (your-walls.spec.ts); e2e-member keeps the
+  -- narrowed default ceiling that member-demos-sweep.spec.ts relies on.
+  ('69800000-0000-4000-8000-000000000004', 'e2e-open-egress', 'open-egress@e2e.wardyn.invalid',
+   'user', 'standard', '[]', false, 'e2e open egress member',
+   :'open_egress_hash')
 ON CONFLICT (id) DO NOTHING;
 SQL
   # The fixture install is ONBOARDED. The suite's specs exercise the console,

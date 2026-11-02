@@ -206,7 +206,7 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_KIND_SSO_SEEN_PORT": true, "WARDYN_WALK_SEEN_URL": true,
 	"WARDYN_KIND_SSO_NODE":      true,
 	"WARDYN_KIND_SSO_TOKEN_TTL": true, "WARDYN_KIND_SSO_ROLE_CRED_TTL": true, "WARDYN_KIND_SSO_PROXY_INJECT": true,
-	"WARDYN_KIND_SSO_SKIP_REAUTH_HOLD": true,
+	"WARDYN_KIND_SSO_SKIP_REAUTH_HOLD": true, "WARDYN_KIND_SSO_LEG": true,
 	// The walk's throwaway local registry for a cold aws-sso image pull (#891) —
 	// scripts/kind-sso-walk.sh only.
 	"WARDYN_KIND_SSO_REGISTRY": true, "WARDYN_KIND_SSO_REGISTRY_PORT": true,

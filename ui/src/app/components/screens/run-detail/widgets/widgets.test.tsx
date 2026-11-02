@@ -120,6 +120,53 @@ describe("SandboxWidget", () => {
   });
 });
 
+describe("SandboxWidget on a macOS VM run (#3924)", () => {
+  const GiB = 1024 ** 3;
+
+  it("says the numbers are the guest's and shows memory in GB, in use against the allocation", async () => {
+    getResourcesMock.mockResolvedValue({
+      cpu_percent: 29,
+      memory_used_bytes: 7.9 * GiB,
+      memory_limit_bytes: 8 * GiB,
+      disk_used_bytes: 2_000_000_000,
+      process_count: 412,
+    });
+    render(<SandboxWidget runId="r1" live={true} macOS />);
+    expect(await screen.findByText(RUN_COCKPIT.sandboxGuestReported)).toBeInTheDocument();
+    expect(screen.getByText("7.9 GB / 8.0 GB")).toBeInTheDocument();
+    expect(screen.getByText("412")).toBeInTheDocument();
+  });
+
+  it("raises no warning from a guest's numbers, however full", async () => {
+    getResourcesMock.mockResolvedValue({ memory_used_bytes: 8 * GiB, memory_limit_bytes: 8 * GiB, disk_used_bytes: 999 * GiB });
+    render(<SandboxWidget runId="r1" live={true} macOS />);
+    await screen.findByText(RUN_COCKPIT.sandboxGuestReported);
+    expect(screen.queryByText(RUN_COCKPIT.diskNearCap)).not.toBeInTheDocument();
+  });
+
+  it("keeps the unavailable line for what the guest did not report", async () => {
+    getResourcesMock.mockResolvedValue({ memory_used_bytes: GiB, memory_limit_bytes: 8 * GiB });
+    render(<SandboxWidget runId="r1" live={true} macOS />);
+    await screen.findByText(RUN_COCKPIT.sandboxGuestReported);
+    expect(screen.getAllByText(RUN_COCKPIT.metricUnavailable)).toHaveLength(3);
+    expect(screen.queryByText("0")).not.toBeInTheDocument();
+  });
+
+  it("renders an answer with no numbers as today: all unavailable, nothing to attribute", async () => {
+    getResourcesMock.mockResolvedValue({});
+    render(<SandboxWidget runId="r1" live={true} macOS />);
+    expect(await screen.findAllByText(RUN_COCKPIT.metricUnavailable)).toHaveLength(4);
+    expect(screen.queryByText(RUN_COCKPIT.sandboxGuestReported)).not.toBeInTheDocument();
+  });
+
+  it("changes nothing on any other run", async () => {
+    getResourcesMock.mockResolvedValue({ memory_used_bytes: GiB, memory_limit_bytes: 8 * GiB });
+    render(<SandboxWidget runId="r1" live={true} />);
+    expect(await screen.findByText(`${fmtBytes(GiB)} / ${fmtBytes(8 * GiB)}`)).toBeInTheDocument();
+    expect(screen.queryByText(RUN_COCKPIT.sandboxGuestReported)).not.toBeInTheDocument();
+  });
+});
+
 describe("FilesChangedWidget", () => {
   it("renders a binary file as 'binary' — never a +0/−0 stat", async () => {
     getFilesMock.mockResolvedValue({

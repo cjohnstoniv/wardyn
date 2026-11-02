@@ -34,3 +34,20 @@ func (f runPlacementFlags) apply(body *sdk.CreateRunRequest) error {
 	body.RunnerID = f.runner
 	return nil
 }
+
+// runMachineFlags are the `wardyn run` flags that say what kind of sandbox a run gets. Like the placement
+// flags they go to the server unchanged, and they stand beside --file because a document never carries them:
+// the kind is entered at each launch.
+type runMachineFlags struct {
+	kind, macOSBase string
+}
+
+func (f *runMachineFlags) register(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&f.kind, "machine-kind", "", "the kind of sandbox: container (the default), linux_vm or macos_vm; a macos_vm run needs a registered Mac that offers it — see 'wardyn runner'")
+	cmd.Flags().StringVar(&f.macOSBase, "macos-base", "", "the macOS base a --machine-kind macos_vm run starts from: Standard (the default) or the name of another base the Mac holds")
+}
+
+// apply copies the flags into body after any --file document, which cannot carry either field.
+func (f runMachineFlags) apply(body *sdk.CreateRunRequest) {
+	body.MachineKind, body.MacOSBase = f.kind, f.macOSBase
+}

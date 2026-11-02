@@ -578,7 +578,7 @@ func desktopMode(mode string) string {
 	case "", "none":
 		return "none"
 	case "observe":
-		return "view only (Screen Sharing was not turned on with control; to get control, run macos-vm edit-base, turn on Screen Sharing with \"VNC viewers may control screen with password\", then close the window)"
+		return "view only (macOS 26 doesn't keep Screen Sharing control here, even turned on with control in macos-vm edit-base. On a later macOS, run macos-vm edit-base, turn on Screen Sharing with \"VNC viewers may control screen with password\", then close the window)"
 	}
 	return mode
 }

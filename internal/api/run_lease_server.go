@@ -38,6 +38,11 @@ type runLeaseState struct {
 	// warning is logged once while the runner is offline, not every pass.
 	// Cleared on any other answer and pruned by the sweep.
 	containmentPending sync.Map
+	// renewalRefused holds, per service run, the reason its lease renewal was last refused
+	// and when this process audited it (run_service_lease.go), so a renewal refused the same
+	// way every pass writes one row an hour, not one a minute. Cleared on a renewal and
+	// pruned by the sweep.
+	renewalRefused sync.Map
 	// reviving holds the id of every run a revive is replacing the proxy of
 	// in this process (run_revive.go), so two revives of one run cannot race
 	// each other's remove-and-create of the same sidecar.

@@ -927,7 +927,7 @@ func TestPushRulesMaxFileSizeRefusalNamesTheForge(t *testing.T) {
 	}
 	want := fileSizeBody(
 		"ask an operator to set push_rules.max_file_size_mib to 0 on this lane, or push through a GitHub lane",
-		"  kept.txt: size not carried by the pack", whyNotGitHub)
+		"  kept.txt: size not carried by the pack", whyNoForgeReader)
 	if got := rec.Body.String(); got != want {
 		t.Errorf("refusal =\n%q\nwant\n%q", got, want)
 	}

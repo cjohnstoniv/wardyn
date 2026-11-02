@@ -514,7 +514,7 @@ func TestPushRulesKeepTheStrictReadingWhenTheForgeCannotBeRead(t *testing.T) {
 		r := newForgeRunVia(t, "gitlab.com", ordinaryRepo, []string{"--depth", "1"}, ".github/workflows/**")
 		r.editMain(t, "elsewhere")
 		out, err := r.push()
-		r.wantRefusedFor(t, out, err, ".github/workflows/ci.yml", whyNotGitHub)
+		r.wantRefusedFor(t, out, err, ".github/workflows/ci.yml", whyNoForgeReader)
 		if n, _ := r.forge.reads(); n != 0 {
 			t.Errorf("a push to a forge that is not GitHub read the GitHub API %d time(s)", n)
 		}

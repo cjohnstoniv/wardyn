@@ -21,6 +21,12 @@ export const workloads = {
     return unwrapList<Workload>(await asJson<unknown>(await wfetch(withLimit("/workloads"), { method: "GET" })));
   },
 
+  /** The workload whose current run this is, if the caller may read it. */
+  async ofRun(runId: string): Promise<Workload | undefined> {
+    const rows = unwrapList<Workload>(await asJson<unknown>(await wfetch(withLimit(`/workloads?run_id=${seg(runId)}`, 1), { method: "GET" })));
+    return rows[0];
+  },
+
   get: async (name: string, owner?: string): Promise<Workload> => asJson<Workload>(await wfetch(workloadPath(name, owner), { method: "GET" })),
 
   /** The workload's audit rows (launches, replacements, refusals), newest first. */

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
@@ -597,8 +598,10 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	if err := d.removeProxy(ctx, id); err != nil {
 		return err
 	}
-	// A VM's network relay is on the run's network, which Docker removes only once it is gone.
-	if _, err := d.cli.ContainerRemove(ctx, vmnetName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+	// A VM's network relay is on the run's network, which Docker removes only once it is gone. A removal of it
+	// that another teardown of the run already has in progress is waited out, not failed (#3886).
+	if _, err := d.cli.ContainerRemove(ctx, vmnetName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) &&
+		!d.removedElsewhere(ctx, vmnetName(id), err) {
 		return fmt.Errorf("docker: remove the VM's network relay: %w", err)
 	}
 	if _, err := d.cli.NetworkRemove(ctx, internalNetName(id), client.NetworkRemoveOptions{}); err != nil && !isNotFound(err) {
@@ -610,6 +613,23 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 		return fmt.Errorf("docker: remove drive seed: %w", err)
 	}
 	return nil
+}
+
+// removedElsewhere reports whether err is Docker refusing to remove the container name because another call
+// is already removing it, and that removal then ended within ctx with the container gone.
+func (d *Driver) removedElsewhere(ctx context.Context, name string, err error) bool {
+	if !errdefs.IsConflict(err) || !strings.Contains(err.Error(), "already in progress") {
+		return false
+	}
+	wait := d.cli.ContainerWait(ctx, name, client.ContainerWaitOptions{Condition: container.WaitConditionRemoved})
+	select {
+	case <-wait.Result:
+		return true
+	case werr := <-wait.Error:
+		return isNotFound(werr)
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // sweepDriveSeeds removes drive seed containers (seedDriveVolume) older than

@@ -69,7 +69,7 @@ func (s *Server) SweepRunnerExits(ctx context.Context) error {
 			if !s.exitRetry.due(key, now) {
 				continue
 			}
-			bounded, cancel := context.WithTimeout(ctx, 30*time.Second)
+			bounded, cancel := context.WithTimeout(ctx, s.runnerExitTimeout(ctx, row.RunID))
 			err := s.applyRunnerExit(bounded, st, row)
 			cancel()
 			if err == nil {
@@ -104,6 +104,16 @@ func (s *Server) SweepRunnerExits(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+}
+
+// runnerExitTimeout bounds one receipt's transition and terminal tail: 30 s, and for a macOS VM run
+// macOSVMTeardownBudget more, which its sandbox stop alone can use, so the tail is not cut short after
+// the stop and run again (#3886).
+func (s *Server) runnerExitTimeout(ctx context.Context, runID uuid.UUID) time.Duration {
+	if s.macOSVMRun(ctx, runID) {
+		return 30*time.Second + macOSVMTeardownBudget
+	}
+	return 30 * time.Second
 }
 
 func (s *Server) applyRunnerExit(ctx context.Context, st store.PG, row store.RunnerExitWork) error {

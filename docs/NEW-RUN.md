@@ -75,6 +75,7 @@ A harness is an agent tool the sandbox holds, such as a coding CLI.
 | Environment or Application sandbox | Optional. They are available inside the sandbox and start nothing |
 
 - A harness you cannot pick is disabled with its reason, such as not installed in this server's images or **Not enabled by your admin**.
+- An Autonomous agent task on an Azure DevOps repository that must push its work and open a pull request needs `azure_devops_capabilities` with `code_write` and `pr`; nobody is there to approve either later. See [AZURE-DEVOPS.md](AZURE-DEVOPS.md#how-pushes-work).
 - **Start the run in this harness** marks the one that starts. The last harness of an Agent task cannot be removed.
 
 ### Step 4: Files
@@ -214,7 +215,7 @@ A `kind: Run` document is the draft written as text. Choose **YAML / JSON** on t
 - Unsupported input is reported, never discarded. "N issues must be fixed" blocks **Continue to review**. **Open in Guided setup** validates, then opens step 1.
 - [Run documents](sdk.md#run-documents) lists the fields. A title or description is refused as `template_field_excluded`; you name the run at launch.
 
-From a terminal, `wardyn run --file <doc>` (`-` reads standard input) sends a `Run` document through the same door check, then creates the run. Only `--title`, `--description`, `--wait`, `--timeout`, `--max-wait`, `--json` and `--dry-run` go with it. A document's `inline_policy` is laid onto your default policy, as `policy_overlay`.
+From a terminal, `wardyn run --file <doc>` (`-` reads standard input) sends a `Run` document through the same door check, then creates the run. Only `--title`, `--description`, `--wait`, `--timeout`, `--max-wait`, `--machine-kind`, `--macos-base`, `--json` and `--dry-run` go with it. A document's `inline_policy` is laid onto your default policy, as `policy_overlay`.
 
 The `wardyn template` commands are listed in [Run templates](sdk.md#run-templates).
 

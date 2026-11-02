@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -874,6 +875,33 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 		}
 	})
 
+	t.Run("reads of the run's profile failing past the bound close the stream with a run_unreadable row", func(t *testing.T) {
+		h, gw := open(t)
+		unit := types.GovernanceUnit{ID: uuid.New(), Name: "walled"}
+		h.store.profiles = []types.GovernanceUnit{unit}
+		h.run.UnitID = &unit.ID
+		h.store.putRun(h.run)
+		conn, br := openInboundStream(t, h, gw, "wdn_alice")
+		if !echoes(conn, br) {
+			t.Fatal("the stream carried nothing before the profile became unreadable")
+		}
+		h.store.sshMemStore.mu.Lock()
+		h.store.profilesErr = errors.New("connection refused")
+		h.store.sshMemStore.mu.Unlock()
+		time.Sleep(5 * every) // the first unanswerable re-admission is recorded, and rides out
+		if !echoes(conn, br) {
+			t.Fatal("one unreadable profile closed the stream")
+		}
+		h.clock.advance(inboundResolveTTL)
+		if !closes(conn, br) {
+			t.Fatal("the stream outlived re-admissions unanswerable past the bound")
+		}
+		if rows := awaitDenies(h); len(rows) != 1 || rows[0].Actor != h.owner ||
+			!h.audit.hasDataValue("reason", reasonRunUnreadable) || h.audit.hasDataValue("reason", reasonTokenLookupUnavailable) {
+			t.Errorf("inbound.deny rows = %+v, want one run_unreadable by %s and no token_lookup_unavailable", rows, h.owner)
+		}
+	})
+
 	// The bound runs from the last check that confirmed the stream, here the lookup of the session it opened
 	// on (cached), not from the first that failed.
 	t.Run("lookups failing close the stream a bound after its last good check, not after the first failure", func(t *testing.T) {
@@ -979,4 +1007,104 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 			t.Errorf("a live token was refused: %s", reasons)
 		}
 	})
+}
+
+// TestUIGateway_InboundSessionDropsOnWrite: a token's cached session ends at once with a successful write to a
+// policy, a governance profile or a permission grant, so the next call meets the profile as it stands; a
+// read, a write that failed and a POST that writes nothing leave it.
+func TestUIGateway_InboundSessionDropsOnWrite(t *testing.T) {
+	for _, tc := range []struct {
+		method, path string
+		status       int
+		drops        bool
+	}{
+		{http.MethodPost, "/api/v1/policies", http.StatusCreated, true},
+		{http.MethodPut, "/api/v1/policies/" + uuid.NewString(), http.StatusOK, true},
+		{http.MethodDelete, "/api/v1/policies/" + uuid.NewString(), http.StatusNoContent, true},
+		{http.MethodPut, "/api/v1/governance/units/" + uuid.NewString(), http.StatusOK, true},
+		{http.MethodPost, "/api/v1/governance/memberships", http.StatusAccepted, true},
+		{http.MethodPost, "/api/v1/governance/changes/" + uuid.NewString() + "/approve", http.StatusOK, true},
+		{http.MethodPost, "/api/v1/governance/restrictions", http.StatusCreated, true},
+		{http.MethodPut, "/api/v1/governance/boundary", http.StatusOK, true},
+		{http.MethodPost, "/api/v1/permissions/grants", http.StatusCreated, true},
+		{http.MethodDelete, "/api/v1/permissions/grants/" + uuid.NewString(), http.StatusNoContent, true},
+		{http.MethodPut, "/api/v1/permissions/enforcement", http.StatusOK, true},
+		{http.MethodPut, "/api/v1/permissions/availability/agent/codex", http.StatusOK, true},
+		{http.MethodGet, "/api/v1/policies", http.StatusOK, false},
+		{http.MethodPost, "/api/v1/policies/grade", http.StatusOK, false},
+		{http.MethodPost, "/api/v1/governance/check", http.StatusOK, false},
+		{http.MethodPost, "/api/v1/governance/dry-run", http.StatusOK, false},
+		{http.MethodPut, "/api/v1/policies/" + uuid.NewString(), http.StatusBadRequest, false},
+		{http.MethodPut, "/api/v1/governance/units/" + uuid.NewString(), http.StatusConflict, false},
+		{http.MethodPost, "/api/v1/runs", http.StatusCreated, false},
+	} {
+		t.Run(fmt.Sprintf("%s %s answering %d", tc.method, tc.path, tc.status), func(t *testing.T) {
+			h, _ := inboundHarness(t)
+			if rec := h.call("wdn_alice", nil); rec.Code != http.StatusOK {
+				t.Fatalf("call = %d %s, want 200", rec.Code, rec.Body.String())
+			}
+			// The profile now denies UI apps; the cached session has not met it.
+			unit := types.GovernanceUnit{ID: uuid.New(), Name: "walled", Limits: types.GovernanceLimits{DenyUIApps: true}}
+			h.store.profiles = []types.GovernanceUnit{unit}
+			h.run.UnitID = &unit.ID
+			h.store.putRun(h.run)
+			if rec := h.call("wdn_alice", nil); rec.Code != http.StatusOK {
+				t.Fatalf("call on the cached session = %d %s, want 200", rec.Code, rec.Body.String())
+			}
+			h.srv.dropInboundOnWrite(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+			})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(tc.method, tc.path, nil))
+			want := http.StatusOK
+			if tc.drops {
+				want = http.StatusForbidden
+			}
+			if rec := h.call("wdn_alice", nil); rec.Code != want {
+				t.Fatalf("call after the write = %d %s, want %d", rec.Code, rec.Body.String(), want)
+			}
+		})
+	}
+}
+
+// TestInboundSessionDropIsMountedOnTheRouter: the real router drops the cache on a policy write that
+// succeeds, and keeps it on one that is refused.
+func TestInboundSessionDropIsMountedOnTheRouter(t *testing.T) {
+	h := newHarness(t)
+	srv := testServer(t, baseTestConfig(h, &memPolicyStore{rows: map[uuid.UUID]types.RunPolicy{}}))
+	cached := func() int {
+		srv.uiInbound.mu.Lock()
+		defer srv.uiInbound.mu.Unlock()
+		return len(srv.uiInbound.sessions)
+	}
+	seed := func() {
+		srv.uiInbound.remember("k", uiSession{}, time.Now())
+	}
+	seed()
+	if w := do(t, srv, http.MethodPost, "/api/v1/policies", adminToken, `{`); w.Code != http.StatusBadRequest || cached() != 1 {
+		t.Fatalf("refused create = %d with %d cached, want 400 with 1", w.Code, cached())
+	}
+	if w := do(t, srv, http.MethodPost, "/api/v1/policies", adminToken,
+		`{"name":"prod","spec":{"min_confinement_class":"CC2","allowed_domains":["a.example.com"]}}`); w.Code != http.StatusCreated || cached() != 0 {
+		t.Fatalf("create = %d with %d cached, want 201 with 0", w.Code, cached())
+	}
+}
+
+// saveRevivedRestrictions changes the restrictions a run's profile folds in, so it drops the cache too.
+func TestInboundSessionDropsOnRevivedRestrictions(t *testing.T) {
+	srv := &Server{cfg: Config{Store: &restrictionSetStore{}}}
+	srv.uiInbound.remember("k", uiSession{}, time.Now())
+	run := types.AgentRun{ID: uuid.New(), RestrictionIDs: []uuid.UUID{uuid.New()}}
+	if err := srv.saveRevivedRestrictions(context.Background(), run, nil); err != nil {
+		t.Fatalf("saveRevivedRestrictions = %+v", err)
+	}
+	srv.uiInbound.mu.Lock()
+	defer srv.uiInbound.mu.Unlock()
+	if n := len(srv.uiInbound.sessions); n != 0 {
+		t.Errorf("%d sessions cached after the restrictions changed, want 0", n)
+	}
+}
+
+type restrictionSetStore struct{ store.Store }
+
+func (*restrictionSetStore) SetRunRestrictionIDs(context.Context, uuid.UUID, []uuid.UUID) error {
+	return nil
 }

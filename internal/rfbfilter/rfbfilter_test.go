@@ -211,6 +211,40 @@ func TestBlockedPasteInIsDroppedAndAudited(t *testing.T) {
 	}
 }
 
+// A view-only relay keeps every input message from the desktop, whatever the clipboard rules say:
+// keys, pointer moves and paste are gone, the viewing messages pass, and each input kind is reported once.
+func TestViewOnlyDropsInput(t *testing.T) {
+	h := newHarness(t, Rules{PasteIn: true, CopyOut: true, ViewOnly: true}, true)
+	h.handshake38()
+	request := []byte{3, 1, 0, 0, 0, 0, 7, 128, 4, 56}
+	key, pointer := cat([]byte{4, 1, 0, 0}, be32(0x61)), []byte{5, 1, 0, 10, 0, 20}
+	if got := h.client(cat(key, pointer, pointer, key, cutText(6, "do not paste"), request)); !bytes.Equal(got, request) {
+		t.Fatalf("desktop got %x, want only the update request %x", got, request)
+	}
+	if len(h.events) != 3 || h.events[0].Input != InputKey || h.events[1].Input != InputPointer || h.events[2].Direction != PasteIn || h.events[2].Allowed {
+		t.Fatalf("audit events = %+v", h.events)
+	}
+	copied := cutText(3, "copy me")
+	if got := h.server(copied); !bytes.Equal(got, copied) {
+		t.Fatalf("an allowed copy out was altered: %x", got)
+	}
+}
+
+// The other messages that act on a desktop end a view-only socket.
+func TestViewOnlyEndsOnControlMessages(t *testing.T) {
+	for _, msg := range [][]byte{
+		{250, 0, 1, 2},                            // xvp
+		{251, 0, 7, 128, 4, 56, 0, 0},             // SetDesktopSize
+		{255, 0, 0, 1, 0, 0, 0, 0x61, 0, 0, 0, 0}, // QEMU extended key event
+	} {
+		h := newHarness(t, Rules{ViewOnly: true}, false)
+		h.handshake38()
+		if _, err := h.c.Write(frames(msg, true, false)); err == nil {
+			t.Errorf("message type %d relayed on a view-only socket", msg[0])
+		}
+	}
+}
+
 // SetEncodings comes out holding only what the relay can frame: Tight, the
 // Extended Clipboard and Fence pseudo-encodings are gone.
 func TestSetEncodingsKeepsOnlyRelayableEncodings(t *testing.T) {

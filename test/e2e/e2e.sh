@@ -231,7 +231,8 @@ service_step() {
   fi
   svc_kill "${SVC_A_ID}" >/dev/null
 
-  serve='socat TCP-LISTEN:8080,reuseaddr,fork SYSTEM:"printf '"'"'HTTP/1.0 200 OK\r\n\r\n'"'"'"'
+  # No nested quotes or \r\n escapes: socat 1.8 unquotes its SYSTEM: address and would print only "HTTP/1.0".
+  serve='socat TCP-LISTEN:8080,reuseaddr,fork SYSTEM:"echo HTTP/1.0 200 OK"'
   out="$(e2e_wardyn run --experience background --command "${serve}" --service --port 8080 --health-path / --health-every 5s 2>&1)"
   echo "${out}"
   SVC_B_ID="$(printf '%s\n' "${out}" | awk '/^created run/{print $3; exit}')"
@@ -506,6 +507,14 @@ echo "login_redirect_pkce_s256=$(echo "$AU" | grep -c 'code_challenge_method=S25
 PAGE=$($C -L "$AU")
 ACT=$(printf '%s' "$PAGE" | sed -n 's/.*<form[^>]*action="\([^"]*\)".*/\1/p' | head -1 | sed 's/&amp;/\&/g')
 LOC=$($C -D - -o /dev/null --data-urlencode "login=demo@wardyn.local" --data-urlencode "password=password" "$DEX$ACT" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')
+# Dex answers the login POST with a relative redirect and one or more hops before the
+# console's callback (approval is skipped in dex.yaml): follow them, resolving a relative
+# Location against Dex's origin, until one names /auth/callback.
+N=0
+while [ -n "$LOC" ] && ! printf '%s' "$LOC" | grep -q '/auth/callback' && [ $N -lt 5 ]; do
+  case "$LOC" in /*) LOC="$DEX$LOC" ;; esac
+  LOC=$($C -D - -o /dev/null "$LOC" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p'); N=$((N+1))
+done
 CB=$(printf '%s' "$LOC" | sed 's#http://localhost:[0-9]*#http://localhost:8080#')
 $C -D /tmp/cb.txt -o /tmp/cb-body.txt "$CB"
 # The callback's own answer names the cause of a failed sign-in: a 302 to

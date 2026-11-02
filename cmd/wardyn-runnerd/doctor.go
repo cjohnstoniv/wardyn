@@ -32,7 +32,7 @@ type doctorOptions struct {
 	// serverVersion and runnerOnly serve `wardyn doctor`, which has run the network stages itself.
 	serverVersion    string
 	json, runnerOnly bool
-	// substrate is --substrate, as serve's: what drive_root is judged against.
+	// substrate is --substrate, as serve's: what drive_root is judged against. Left out, it is runnerd.json's, else docker.
 	substrate string
 }
 
@@ -66,7 +66,7 @@ func newDoctorCommand() *cobra.Command {
 	fl.StringVar(&o.relayListen, "relay-listen", "", "address the run relay listens on (default: the service's setting)")
 	fl.StringVar(&o.relayHostTarget, "relay-host-target", "", "what a run's proxy reaches the relay at (default: the service's setting)")
 	fl.StringVar(&o.trustedCAFile, "trusted-ca-file", "", "PEM bundle of extra roots (default: the service's setting)")
-	fl.StringVar(&o.substrate, "substrate", "docker", "where the runner's runs execute, as serve's --substrate: docker, k8s or folders")
+	fl.StringVar(&o.substrate, "substrate", "", "where the runner's runs execute, as serve's --substrate: docker, k8s or folders (default: the service's setting, else docker)")
 	fl.BoolVar(&o.json, "json", false, "print the stages as JSON")
 	fl.BoolVar(&o.runnerOnly, "runner-only", false, "run only the engine, proxy image and relay stages")
 	fl.StringVar(&o.serverVersion, "server-version", "", "the organisation's version, for the proxy image's skew check when --runner-only")
@@ -228,7 +228,8 @@ func runDoctor(ctx context.Context, h setupHost, o doctorOptions, getenv func(st
 		serverVersion = o.serverVersion
 	}
 	stages = append(stages, h.engineStages(ctx, s, o, org, serverVersion)...)
-	if st, ok := driveRootStage(s, cmp.Or(o.substrate, "docker")); ok {
+	subField := runnerFields[slices.IndexFunc(runnerFields, func(f runnerField) bool { return f.name == "substrate" })]
+	if st, ok := driveRootStage(s, s.resolved(subField, o.substrate).Value); ok {
 		stages = append(stages, st)
 	}
 	stages = append(stages, macOSVMDoctorStages()...)

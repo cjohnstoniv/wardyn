@@ -86,6 +86,15 @@ func (p *prep) setupByHand(ctx context.Context, nw PrepNetwork, screen func() (f
 	return string(code), nil
 }
 
+// codeWindowBooter is p's first booter, with the guest's window showing the Show code control for the
+// setup-code file (a booter that cannot take window text is returned as it is).
+func (p *prep) codeWindowBooter() FirstBooter {
+	if t, ok := p.FirstBoot.(screenTexter); ok {
+		return t.WithScreen(ScreenText{CodeFile: p.Layout.SetupCode()})
+	}
+	return p.FirstBoot
+}
+
 // writeSetupCode creates path new (O_EXCL|O_NOFOLLOW, mode 0600) in its 0700
 // directory; a leftover from an earlier prepare is removed first, so the
 // exclusive create never writes through anything planted there.

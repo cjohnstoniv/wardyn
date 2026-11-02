@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -76,13 +77,30 @@ func (d *Driver) macDiskDrives(drives []types.DriveMount) ([]macvm.Disk, []guest
 		if err != nil {
 			return nil, nil, fmt.Errorf("docker: user drive (%s): %w", runner.DriveSubject(drive), err)
 		}
+		size, err := macDiskSize(img, drive)
 		unlock()
+		if err != nil {
+			return nil, nil, err
+		}
 		id := macvm.DiskID(i)
-		disks = append(disks, macvm.Disk{ID: id, Path: img, ReadOnly: drive.ReadOnly, SizeBytes: int64(drive.SizeMiB) << 20})
+		disks = append(disks, macvm.Disk{ID: id, Path: img, ReadOnly: drive.ReadOnly, SizeBytes: size})
 		guest = append(guest, guestagent.Disk{ID: id, Label: macDiskLabel(drive.DriveID.String()), Target: target, ReadOnly: drive.ReadOnly,
-			SizeBytes: int64(drive.SizeMiB) << 20})
+			SizeBytes: size})
 	}
 	return disks, guest, nil
+}
+
+// macDiskSize is the size the VM and the guest take for a disk drive: the image's own length when it
+// exists, since it is made once and never resized, and the run's size only for a new one.
+func macDiskSize(img string, drive *types.DriveMount) (int64, error) {
+	fi, err := os.Stat(img)
+	switch {
+	case err == nil && fi.Mode().IsRegular():
+		return fi.Size(), nil
+	case err == nil || !errors.Is(err, os.ErrNotExist):
+		return 0, fmt.Errorf("docker: user drive (%s): disk image: %w", runner.DriveSubject(drive), cmp.Or(err, errors.New("not a file")))
+	}
+	return int64(drive.SizeMiB) << 20, nil
 }
 
 // macDiskLabel is the name of a disk drive's volume: the same on every run, and different for every
@@ -95,8 +113,8 @@ func nonDiskDrives(drives []types.DriveMount) []types.DriveMount {
 	return rest
 }
 
-// reclaimMacDisk deletes a disk drive's image from this Mac, under its lock: runner.ErrDriveInUse while
-// a run here has it attached. Only a name Wardyn mints is ever removed, and only in the drives folder.
+// reclaimMacDisk deletes a disk drive's image and its lock file from this Mac, under the lock:
+// runner.ErrDriveInUse while a run here has it attached. Only a name Wardyn mints is ever removed, and only in the drives folder.
 func (d *Driver) reclaimMacDisk(drive types.DriveMount) (runner.DriveReclaimOutcome, error) {
 	c := d.macVMConfig()
 	if c == nil {

@@ -46,8 +46,9 @@ package proxy
 // so the read is a cache hit — and only for a push the pack alone would
 // refuse. At most maxForgeReads requests, all inside forgeReadWait, all
 // while the push holds the sidecar's inspection slot. Any failure — a forge
-// other than GitHub, a status other than 200, a truncated listing, the read
-// budget or wait running out — keeps the strict reading.
+// with no reader, a status other than 200, a truncated listing, the read
+// budget or wait running out — keeps the strict reading. Azure DevOps answers
+// the same questions over its own API (push_forge_ado.go).
 
 import (
 	"context"
@@ -78,14 +79,14 @@ const (
 	// whyNotExecutable is whyChanged for deny_new_executables, whose forge test is the mode alone.
 	whyNotExecutable = "was not an executable file at the same path in any commit this push builds on"
 	whyNoBase        = "this push builds on no commit in the history of the default branch or of a branch it updates, so nothing vouches for what it does not carry"
-	whyNotGitHub     = "this forge is not GitHub, so what the push does not carry cannot be compared with the commit it builds on"
+	whyNoForgeReader = "the broker cannot read this forge's history, so what the push does not carry cannot be compared with the commit it builds on"
 	whyUnread        = "the broker could not compare what this push does not carry with the commit it builds on: "
 	whyUnsettled     = "the broker could not ask the forge which commits this push carries it already holds, so every one of them is read as new: "
 
 	// The reasons a push that carries no object is refused (forgeRepo.held).
-	whyHeldNotGitHub = "this forge is not GitHub, so the broker cannot ask it whether it already holds these commits"
-	whyHeldUnread    = "the broker could not ask the forge whether it already holds these commits: "
-	whyNotHeld       = "the forge holds no such commit in the history of the default branch or of a branch this push updates, for: "
+	whyHeldNoForgeReader = "the broker cannot read this forge's history, so it cannot ask whether the forge already holds these commits"
+	whyHeldUnread        = "the broker could not ask the forge whether it already holds these commits: "
+	whyNotHeld           = "the forge holds no such commit in the history of the default branch or of a branch this push updates, for: "
 )
 
 // maxForgeReads and forgeReadWait bound what one push may cost the forge and
@@ -98,11 +99,12 @@ var (
 // errForgeTooLarge is an API response over maxForgeBody.
 var errForgeTooLarge = fmt.Errorf("a forge response exceeded %d bytes", maxForgeBody)
 
-// forgeRepo reads one GitHub repository's history for one push. Built per
-// request; nil for a lane that cannot read GitHub (a git_pat host that is not
-// github.com), which keeps the strict reading.
+// forgeRepo reads one repository's history for one push: GitHub's, or Azure
+// DevOps' when ado is set. Built per request; nil for a lane with no reader (a
+// git_pat host that is neither), which keeps the strict reading.
 type forgeRepo struct {
-	p *Proxy
+	p   *Proxy
+	ado *adoForge
 	// repo is "owner/name", already validated by the lane.
 	repo string
 	// token is the lane's own credential lookup.
@@ -131,9 +133,12 @@ type ghTreeEntry struct {
 	SHA  string `json:"sha"`
 }
 
-// patForge is the git_pat lane's reader: GitHub only, and only for a path
+// patForge is the git_pat lane's reader: on GitHub, only for a path
 // that names exactly one repository, "/<owner>/<name>[.git]/git-receive-pack".
 func (p *Proxy) patForge(host, rest string, g PATGrant) *forgeRepo {
+	if adoHostedHost(host) {
+		return p.adoPATForge(host, rest, g)
+	}
 	path, ok := strings.CutSuffix(rest, "/git-receive-pack")
 	if host != githubHost || !ok {
 		return nil
@@ -156,7 +161,10 @@ type forgeClear func(f *forgeRepo, ctx context.Context, roots []string, c gitpac
 // unchanged returns the entries clear could NOT clear, and why.
 func (f *forgeRepo) unchanged(ctx context.Context, entries []gitpack.Change, res gitpack.Result, clear forgeClear) ([]gitpack.Change, string) {
 	if f == nil {
-		return entries, whyNotGitHub
+		return entries, whyNoForgeReader
+	}
+	if f.ado != nil && !fastForwards(res) {
+		return entries, whyForced
 	}
 	var roots []string
 	for _, base := range res.Bases {
@@ -214,7 +222,7 @@ func (f *forgeRepo) settle(ctx context.Context, res gitpack.Result) (gitpack.Res
 // not. A forge it cannot read (nil) cannot answer, so the push is refused.
 func (f *forgeRepo) held(ctx context.Context, cmds []gitpack.Command) string {
 	if f == nil {
-		return whyHeldNotGitHub
+		return whyHeldNoForgeReader
 	}
 	var unheld []string
 	for _, c := range cmds {
@@ -227,6 +235,15 @@ func (f *forgeRepo) held(ctx context.Context, cmds []gitpack.Command) string {
 		}
 		if root == "" {
 			unheld = append(unheld, c.Ref)
+		}
+		if f.ado != nil && strings.Trim(c.Old, "0") != "" && root != "" {
+			forward, err := f.adoContains(ctx, c.New, c.Old)
+			if err != nil {
+				return f.unread(whyHeldUnread, err)
+			}
+			if forward == "" {
+				return whyHeldForced + c.Ref
+			}
 		}
 	}
 	if len(unheld) > 0 {
@@ -265,6 +282,13 @@ func (f *forgeRepo) vouchOnce(ctx context.Context, base string, cmds []gitpack.C
 			return root, err
 		}
 	}
+	if f.ado != nil && f.defaultBranch == "" {
+		branch, err := f.adoDefaultBranch(ctx)
+		if err != nil || branch == "" {
+			return "", err
+		}
+		f.defaultBranch = branch
+	}
 	if f.defaultBranch == "" {
 		var repo struct {
 			DefaultBranch string `json:"default_branch"`
@@ -295,7 +319,16 @@ func (f *forgeRepo) updatedTip(ctx context.Context, c gitpack.Command) (string, 
 		return "", nil
 	}
 	tip, seen := f.tips[c.Ref]
-	if !seen {
+	if !seen && f.ado != nil {
+		var err error
+		if tip, err = f.adoBranchTip(ctx, c.Ref); err != nil {
+			return "", err
+		}
+		if f.tips == nil {
+			f.tips = map[string]string{}
+		}
+		f.tips[c.Ref] = tip
+	} else if !seen {
 		var ref struct {
 			Object struct {
 				SHA string `json:"sha"`
@@ -333,6 +366,9 @@ func (f *forgeRepo) updatedTip(ctx context.Context, c gitpack.Command) (string, 
 // when their merge base is base itself; such an answer lists no commits and no
 // files, so it is small, and one too large to read is not one.
 func (f *forgeRepo) contains(ctx context.Context, branch, base string) (string, error) {
+	if f.ado != nil {
+		return f.adoContains(ctx, branch, base)
+	}
 	var cmp struct {
 		MergeBase struct {
 			SHA    string `json:"sha"`
@@ -427,6 +463,28 @@ func (f *forgeRepo) listing(ctx context.Context, tree string) (map[string]ghTree
 	if l, ok := f.listings[tree]; ok {
 		return l, nil
 	}
+	entries, err := f.treeEntries(ctx, tree)
+	if err != nil {
+		return nil, err
+	}
+	l := make(map[string]ghTreeEntry, len(entries))
+	for _, e := range entries {
+		if !isHex(e.SHA) {
+			return nil, fmt.Errorf("tree %s lists %q with no object id", tree, e.Path)
+		}
+		l[e.Path] = e
+	}
+	if f.listings == nil {
+		f.listings = map[string]map[string]ghTreeEntry{}
+	}
+	f.listings[tree] = l
+	return l, nil
+}
+
+func (f *forgeRepo) treeEntries(ctx context.Context, tree string) ([]ghTreeEntry, error) {
+	if f.ado != nil {
+		return f.adoTree(ctx, tree)
+	}
 	var v struct {
 		Tree      []ghTreeEntry `json:"tree"`
 		Truncated bool          `json:"truncated"`
@@ -440,63 +498,72 @@ func (f *forgeRepo) listing(ctx context.Context, tree string) (map[string]ghTree
 	case v.Truncated:
 		return nil, fmt.Errorf("the forge truncated its listing of tree %s", tree)
 	}
-	l := make(map[string]ghTreeEntry, len(v.Tree))
-	for _, e := range v.Tree {
-		if !isHex(e.SHA) {
-			return nil, fmt.Errorf("tree %s lists %q with no object id", tree, e.Path)
-		}
-		l[e.Path] = e
-	}
-	if f.listings == nil {
-		f.listings = map[string]map[string]ghTreeEntry{}
-	}
-	f.listings[tree] = l
-	return l, nil
+	return v.Tree, nil
 }
 
-// get reads one GitHub API path into v and reports the status. Only a 200 is
-// decoded; every request counts against maxForgeReads.
+// get reads one GitHub API path into v and reports the status.
 func (f *forgeRepo) get(ctx context.Context, path string, v any) (int, error) {
+	status, _, err := f.read(ctx, githubAPIHost, path, func(ctx context.Context, req *http.Request) error {
+		if f.tok == "" {
+			tok, err := f.token(ctx)
+			if err != nil {
+				return fmt.Errorf("the run's credential: %w", err)
+			}
+			f.tok = tok
+		}
+		req.Header.Set("Authorization", "Bearer "+f.tok)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		return nil
+	}, v)
+	return status, err
+}
+
+// apiHost is the host this reader's requests go to, for the audit row.
+func (f *forgeRepo) apiHost() string {
+	if f.ado != nil {
+		return f.ado.host
+	}
+	return githubAPIHost
+}
+
+// read makes one authorized GET of the forge and decodes a 200 into v; every
+// request counts against maxForgeReads. The header is never nil.
+func (f *forgeRepo) read(ctx context.Context, host, path string, authorize func(context.Context, *http.Request) error, v any) (int, http.Header, error) {
+	none := http.Header{}
 	if f.reads >= maxForgeReads {
-		return 0, fmt.Errorf("the comparison needs more than %d reads of the forge", maxForgeReads)
+		return 0, none, fmt.Errorf("the comparison needs more than %d reads of the forge", maxForgeReads)
 	}
 	f.reads++
-	if f.tok == "" {
-		tok, err := f.token(ctx)
-		if err != nil {
-			return 0, fmt.Errorf("the run's credential: %w", err)
-		}
-		f.tok = tok
-	}
-	target, _, err := f.p.egressTarget(githubAPIHost, 443)
+	target, _, err := f.p.egressTarget(host, 443)
 	if err != nil {
-		return 0, err
+		return 0, none, err
 	}
 	req, err := http.NewRequestWithContext(context.WithValue(ctx, vettedIPKey{}, target),
-		http.MethodGet, "https://"+githubAPIHost+path, nil)
+		http.MethodGet, "https://"+upstreamURLHost(host, 443, 443)+path, nil)
 	if err != nil {
-		return 0, err
+		return 0, none, err
 	}
-	req.Header.Set("Authorization", "Bearer "+f.tok)
-	req.Header.Set("Accept", "application/vnd.github+json")
+	if err := authorize(ctx, req); err != nil {
+		return 0, none, err
+	}
 	// roundTripUpstream, not the transport: the forge host may speak HTTP/2
 	// unasked, and a bodyless GET is always resendable over the fallback.
 	resp, err := f.p.roundTripUpstream(req)
 	if err != nil {
-		return 0, err
+		return 0, none, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return resp.StatusCode, nil
+		return resp.StatusCode, resp.Header, nil
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxForgeBody+1))
 	if err != nil {
-		return 0, err
+		return 0, none, err
 	}
 	if len(body) > maxForgeBody {
-		return http.StatusOK, errForgeTooLarge
+		return http.StatusOK, resp.Header, errForgeTooLarge
 	}
-	return http.StatusOK, json.Unmarshal(body, v)
+	return http.StatusOK, resp.Header, json.Unmarshal(body, v)
 }
 
 // isHex reports a non-empty lowercase hex string: an object id as the forge

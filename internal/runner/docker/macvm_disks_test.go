@@ -41,6 +41,23 @@ func TestMacDisksAreAttachedInTheirOrder(t *testing.T) {
 	}
 }
 
+// The image is made once, at the size the run had then; a later run, at another size, sends the
+// image's own length, so the guest finds the disk by it.
+func TestMacDiskSizeIsTheExistingImagesAndTheRunsOnlyForANewOne(t *testing.T) {
+	r := newMacRig(t)
+	img, _ := r.c.Layout.DriveImage(testDiskObject)
+	if err := macvm.MakeDiskImage(img, 2<<20); err != nil {
+		t.Fatal(err)
+	}
+	disks, guest, err := r.d.macDiskDrives([]types.DriveMount{testDiskDrive(runner.DriveTarget)}) // asks for 1 GiB
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disks[0].SizeBytes != 2<<20 || guest[0].SizeBytes != 2<<20 {
+		t.Fatalf("sizes = %d, %d, want the image's %d", disks[0].SizeBytes, guest[0].SizeBytes, 2<<20)
+	}
+}
+
 func TestMacDisksRefuseAHeldDiskInItsSentence(t *testing.T) {
 	r := newMacRig(t)
 	img, _ := r.c.Layout.DriveImage(testDiskObject)
@@ -88,6 +105,9 @@ func TestReclaimMacDiskRemovesOnlyItsImage(t *testing.T) {
 	}
 	if _, err := os.Stat(img); !os.IsNotExist(err) {
 		t.Fatal("the image is still there")
+	}
+	if _, err := os.Stat(img + ".lock"); !os.IsNotExist(err) {
+		t.Fatalf("the lock file is still there: %v", err)
 	}
 	drive.ObjectName = "../../x"
 	if _, err := r.d.ReclaimDrive(t.Context(), drive); !errors.Is(err, runner.ErrDriveNotReclaimable) {

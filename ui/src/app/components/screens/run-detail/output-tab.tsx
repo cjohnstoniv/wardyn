@@ -8,48 +8,24 @@
 // HTML, never a markdown component, no escape-sequence interpretation.
 import * as React from "react";
 import { AlertTriangle, Loader2, Logs } from "lucide-react";
-import { HttpError } from "../../../lib/api/core";
-import { runOutput } from "../../../lib/api/run-output";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
-import type { RunDetailAgent, RunOutput } from "../../../lib/types";
+import type { RunDetailAgent } from "../../../lib/types";
 import { RUN_AGENTS, RUN_COCKPIT, RUN_OUTPUT } from "../../wardyn/copy";
 import { CopyButton } from "../../wardyn/copy-button";
 import { Segmented } from "../../wardyn/segmented";
 import { Chip } from "../../wardyn/primitives";
 import { useAgentName } from "../../wardyn/use-agent-name";
 import { AgentsPanel, agentLines } from "./agents-panel";
+import { useRunOutput, type Refusal } from "./use-run-output";
 import { EmptyState, ErrorState } from "../../wardyn/states";
 
-const POLL_MS = 4000;
-// After a good read, a failed poll is retried this many times, backing off up to MAX_BACKOFF_MS, before it is shown.
-const MAX_BLIPS = 4;
-const MAX_BACKOFF_MS = 30_000;
-// A not-kept answer this soon after the run ended is the final row still
-// being written (design §3, read order 5), not a verdict. So is an interactive
-// answer this soon after a Wardyn stop: the pane snapshot row is written a
-// moment after the run reaches STOPPED.
-const SAVING_WINDOW_MS = 60_000;
 // The empty busy body stays empty this long before a loading line shows.
 const LOADING_LINE_MS = 1000;
-
-type Refusal = "off" | "not_kept" | "expired" | "erased" | "interactive" | "not_captured" | "mask" | "error";
 
 // Ended states that never went through a Wardyn stop (internal/api/run_output.go).
 const NOT_STOPPED = new Set(["KILLED", "FAILED", "COMPLETED"]);
 
-const REFUSALS: Record<string, Refusal> = {
-  run_output_off: "off",
-  run_output_not_kept: "not_kept",
-  run_output_expired: "expired",
-  run_output_erased: "erased",
-  // Told only to the run's owner or an operator; anyone else gets not_captured or not_kept.
-  recording_erased: "erased",
-  run_output_interactive: "interactive",
-  run_output_not_captured: "not_captured",
-  mask_state_unavailable: "mask",
-};
-
-function Notice({ id, children }: { id?: string; children: React.ReactNode }) {
+export function Notice({ id, children }: { id?: string; children: React.ReactNode }) {
   return (
     <div id={id} className="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
       <AlertTriangle className="size-3.5 shrink-0" />
@@ -80,17 +56,10 @@ export function OutputTab({
   runTask?: string;
   onGoRecording: () => void;
 }) {
-  const [out, setOut] = React.useState<RunOutput | null>(null);
-  const [refusal, setRefusal] = React.useState<Refusal | null>(null);
-  const [loaded, setLoaded] = React.useState(false);
-  const [attempt, setAttempt] = React.useState(0);
-
-  const [saving, setSaving] = React.useState(false);
-  const [retrying, setRetrying] = React.useState(false);
+  const { out, refusal, loaded, saving, retrying, retry } = useRunOutput(runId, live, state, endedAt);
   const noticeId = React.useId();
   const [showLoading, setShowLoading] = React.useState(false);
   const recordingOff = useRecordingDisabled() === true;
-  const stopped = state === "STOPPED";
   const agents: readonly RunDetailAgent[] = declared?.length ? declared : (out?.agents ?? []).map(({ agent }) => ({ agent }));
   const multi = agents.length >= 2;
   const [filter, setFilter] = React.useState("all");
@@ -115,58 +84,6 @@ export function OutputTab({
     return () => clearTimeout(t);
   }, [loaded]);
 
-  // Whether this run's output has been read at least once: after that, one failed poll is a blip, not a verdict.
-  const hadRead = React.useRef(false);
-  React.useEffect(() => {
-    hadRead.current = false;
-  }, [runId]);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let failures = 0;
-    const tick = async () => {
-      try {
-        const o = await runOutput.get(runId);
-        if (cancelled) return;
-        hadRead.current = true;
-        failures = 0;
-        setOut(o);
-        setRefusal(null);
-        setSaving(false);
-        setRetrying(false);
-        setLoaded(true);
-        if (!o.complete) timer = setTimeout(tick, POLL_MS);
-      } catch (e) {
-        if (cancelled) return;
-        const r = e instanceof HttpError ? (REFUSALS[e.reason] ?? "error") : "error";
-        // A 502 or a network blip while polling a healthy run: keep the output on screen and look again, backing
-        // off. A mapped reason (not kept, interactive, ...) is an answer and still replaces it.
-        if (r === "error" && hadRead.current && failures < MAX_BLIPS) {
-          failures += 1;
-          timer = setTimeout(tick, Math.min(POLL_MS * 2 ** failures, MAX_BACKOFF_MS));
-          return;
-        }
-        setOut(null);
-        setRefusal(r);
-        setRetrying(false);
-        setLoaded(true);
-        // Only an answer around the end of a run is worth another look: not-kept
-        // while the final row is written, interactive while the snapshot is.
-        const justEnded = !!endedAt && Date.now() - Date.parse(endedAt) < SAVING_WINDOW_MS;
-        const again = (r === "not_kept" && (live || justEnded)) || (r === "interactive" && stopped && justEnded);
-        setSaving(again);
-        if (again) timer = setTimeout(tick, POLL_MS);
-      }
-    };
-    void tick();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-    // endedAt/live/stopped only steer whether to poll again; a change re-reads once.
-  }, [runId, live, stopped, endedAt, attempt]);
-
   if (!loaded) {
     return withPanel(
       <div className="max-w-4xl text-sm text-muted-foreground" aria-busy="true">
@@ -187,13 +104,8 @@ export function OutputTab({
         data-testid="run-output-refusal"
         aria-busy={retrying}
       >
-        {refusalBody(refusal, saving, recordingOff, live, state, onGoRecording, () => {
-          // The surface stays mounted while the retry read is in flight, so
-          // keyboard focus stays on Retry; a press during it sends nothing.
-          if (retrying) return;
-          setRetrying(true);
-          setAttempt((n) => n + 1);
-        })}
+        {/* The surface stays mounted while the retry read is in flight, so keyboard focus stays on Retry. */}
+        {refusalBody(refusal, saving, recordingOff, live, state, onGoRecording, retry)}
       </div>,
     );
   }
