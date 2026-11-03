@@ -459,6 +459,21 @@ that ceiling down; each run receives only the minimal subset its task needs.
 | Agent pod → runnerd, API server, in-cluster services | Egress to its own proxy only, then the proxy's hard deny | #89 |
 | Cluster admins → run material | None: choosing `org_cluster` trusts them | #89 |
 
+
+### B13a — Agent-sandbox controller vs. run
+
+- **[0.10, experimental]** With `k8s.agentSandbox.enabled`, a controller outside Wardyn creates each run's agent pod from a `Sandbox` ([setup and limits](../docs/operations/kubernetes-agent-sandbox.md)). Off by default; off renders no RBAC, policy or env for it.
+- A scheduling gate (`wardyn.dev/verify`) holds the pod. Wardynd reads it back and removes the gate only if it matches what Wardyn asked for.
+- The gate holds unless the controller or an admission hook removes it. Two admission policies now cover the create and the gate removal, only as far as the controller's identity and wardynd's are configured right.
+- A pod read back without its gate is refused and torn down with "may have started", never "nothing ran".
+
+| Crossing | Guard | Residual |
+|---|---|---|
+| Controller → every run's pod (widening 1) | The controller's ClusterRole can create any pod in any namespace; Pod Security Admission still applies. Install the core controller only. | Turning it on trusts that controller with each run's pod. Image swap before the gate is removed is caught by the read-back; a swap afterwards is caught at the next Status read |
+| wardynd → pods (widening 2) | `pods: patch` in the runs namespace, to remove the gate; the patch carries the pod's UID and resourceVersion | Small: wardynd already creates and deletes pods there |
+| Anyone with write on `sandboxes` → run confinement (widening 3) | wardynd holds no patch or update on Sandboxes; the admission policies; nobody else may write `sandboxes` in the runs namespace | A label edit on a Sandbox is copied onto the live pod and un-selects it from its NetworkPolicy. Status checks the labels at each read, not continuously |
+| Read-back vs. later change | The read-back proves the pod at start; the Status read catches a replaced pod, a returned gate, a missing label or a changed image at its next read | Nothing proves the pod between reads. A real controller rewrite, Kata, other versions and the chart's Role end to end are untested |
+
 ### B14 — macOS VM guest vs. the Mac that runs it
 
 - **[0.10, off by default]** A run with `machine_kind: macos_vm` is a macOS guest under Apple's Virtualization framework on a company-managed Mac ([`docs/operations/macos-vms.md`](../docs/operations/macos-vms.md)). B12 holds for it: the Mac's person is root there, and no control binds them.

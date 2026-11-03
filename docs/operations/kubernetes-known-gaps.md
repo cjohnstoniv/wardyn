@@ -34,6 +34,11 @@ flowchart LR
 | 🟡 `replicas` stays 1 on k8s unless `ha.enabled` is set | HA is supported on Kubernetes only. See [High availability](../OPERATIONS.md#high-availability) for what the replicas share, what stays per replica (caps multiply by the replica count) and the residual risks. With registered runners keep one replica: [what a second replica still hits](high-availability.md) | |
 
 
+## The agent-sandbox backend
+
+- The optional agent-sandbox backend is experimental and off by default. It has its own limits: server mode only, no warm pools, pause, `linux_vm` or revive, and a trusted controller with cluster-wide pod rights.
+- Details: [Kubernetes: the agent-sandbox backend](kubernetes-agent-sandbox.md).
+
 ## The proxy's DNS peer
 
 - The peer is fixed to `kube-system` and `k8s-app=kube-dns`; no chart value changes it.

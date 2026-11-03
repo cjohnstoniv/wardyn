@@ -48,6 +48,7 @@
 | Keep a run declared from a file or a WardynWorkload resource, and bind a namespace | [operations/workloads.md](operations/workloads.md) |
 | Give each person persistent storage, and reclaim it when they leave | [operations/user-drives.md](operations/user-drives.md) |
 | Offboard a person: sessions, tokens, keys, runs, credentials, workspaces, drives | [operations/ownership-and-offboarding.md](operations/ownership-and-offboarding.md) |
+| Let an agent-sandbox controller make the agent pods (experimental), and what that trusts | [operations/kubernetes-agent-sandbox.md](operations/kubernetes-agent-sandbox.md) |
 | See which run and person a Kubernetes kernel-sensor alert belongs to | [operations/kubernetes-ground-truth.md](operations/kubernetes-ground-truth.md) |
 | Write the organisation's provider policy — console, CLI or MDM | [operations/provider-policy.md](operations/provider-policy.md) |
 | Look up why a member was refused (`authz.denied` reasons and their targets) | [operations/denials.md](operations/denials.md) |

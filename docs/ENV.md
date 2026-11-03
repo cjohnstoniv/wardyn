@@ -179,6 +179,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_K8S_NAMESPACE` | string | the pod's own namespace (read from `/var/run/secrets/kubernetes.io/serviceaccount/namespace`), else `default` | Kubernetes namespace the `k8s` substrate (`-tags k8s`) creates every sandbox's Secret/NetworkPolicies/pods in |
 | `WARDYN_K8S_IMAGE_PULL_SECRET` | string | (unset) | optional pre-existing Secret name threaded onto `imagePullSecrets` for every pod the `k8s` substrate creates (agent, proxy, and the boot-time egress canary) (`-tags k8s`) |
 | `WARDYN_K8S_READ_NODES` | bool | off | list the cluster's nodes so preflight and create can warn that no node a run may be placed on is large enough for one of its pods (`-tags k8s`); boot measures the cluster from them. Needs `list` on `nodes`. [Details](#wardyn_k8s_read_nodes) |
+| `WARDYN_K8S_AGENT_SANDBOX` | bool | off | experimental: the `k8s` substrate makes each run's agent pod through an agent-sandbox `Sandbox` (`-tags k8s`); server mode only, refused under `wardyn-runnerd`. Chart: `k8s.agentSandbox.enabled`. [Details](#wardyn_k8s_agent_sandbox) |
 | `WARDYN_K8S_SANDBOX_PLACEMENT` | JSON | (unset) | where the `k8s` substrate puts every pod it creates (`-tags k8s`): an object with any of `nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, `podAnnotations`, `podLabels`; an unknown field is refused. [Details](#wardyn_k8s_sandbox_placement) |
 | `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` | bool | off | escape hatch: allow the `k8s` substrate to boot when its boot-time egress canary proves the cluster's CNI does NOT enforce NetworkPolicy, proceeding with UNCONFINED egress. Off by default (fail closed) (`-tags k8s`). [Details](#wardyn_k8s_allow_unenforced_netpol) |
 | `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` | bool | off | on a managed cluster where a platform team already applies a baseline default-deny NetworkPolicy, acknowledges the canary's failure shape and lets boot proceed (`-tags k8s`). Never proof of enforcement. [Details](#wardyn_k8s_ack_ambient_default_deny) |
@@ -776,6 +777,12 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
   - Leave the flag off for such a cluster, or its runs fail at the start timeout instead of waiting for the new node.
 - The runs namespace's ResourceQuota read needs no flag and no env.
 - Boot measures the cluster from that quota, else from the nodes this reads, and proposes the cluster runner's limits; with neither it sets none.
+
+### `WARDYN_K8S_AGENT_SANDBOX`
+
+- Experimental, off by default (`-tags k8s`). The agent pod is made by a [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) controller from a `Sandbox`; the proxy pod, Secret and NetworkPolicies stay Wardyn's.
+- Boot refuses when the cluster does not serve `agents.x-k8s.io/v1beta1`, when wardynd lacks a needed verb, under `wardyn-runnerd`, or beside `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY`.
+- Tested with agent-sandbox v1.0.9 only. Setup, what it widens and what is not supported: [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md). Chart: `k8s.agentSandbox.*`.
 
 ### `WARDYN_K8S_SANDBOX_PLACEMENT`
 

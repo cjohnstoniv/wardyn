@@ -154,8 +154,10 @@
 - It sits at the physical-sandbox layer. It takes its isolation from a RuntimeClass (gVisor, Kata).
   - A sandbox template can carry a NetworkPolicy with coarse egress rules (by default, public Internet only).
   - It has no per-domain egress decisions, and no credential, approval or audit controls.
-- Wardyn's `k8s` substrate creates its own pods, so it does not drive agent-sandbox today.
-  - A backend that does is not built. It would create the controller's objects in place of pods, keep Wardyn's NetworkPolicy, proxy and managed files on them, and pass the same conformance contract.
+- Wardyn's `k8s` substrate creates its own pods by default. An experimental switch (`k8s.agentSandbox.enabled`, off by default) makes the agent pod through a bare `Sandbox` instead.
+  - Wardyn keeps its own NetworkPolicies, proxy pod and managed files, and holds the pod behind a scheduling gate until it has read it back.
+  - Server mode only, no warm pools, templates, pause or resume. Tested with agent-sandbox v1.0.9 only.
+  - It trusts the controller with every run's pod. See [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md).
 - A cluster can run both now, each in its own namespace.
 
 ### Inner walls: narrowing an organisation's access per person, machine and run
@@ -209,6 +211,7 @@
 - `k8s` substrate ([`internal/runner/k8s`](../internal/runner/k8s), `-tags k8s`, `WARDYN_RUNNER=k8s`) — pods instead of containers, L1/NetworkPolicy-backed (not L0/structural: the boot-time egress canary refuses to construct unless the cluster's CNI actually enforces `NetworkPolicy`),
   - CC1-only until `WARDYN_CONFINEMENT_MAP`/the Helm chart's `k8s.runtimeClasses` pins CC2/CC3 to a registered RuntimeClass;
 - OCI runtime pins via `WARDYN_CONFINEMENT_MAP` (kata-qemu, kata-clh, gVisor, sysbox);
+- an experimental agent-sandbox switch inside the `k8s` substrate (off by default; [setup and limits](operations/kubernetes-agent-sandbox.md));
 - non-OCI VMM (SmolVM/Firecracker) via a new `Substrate` impl.
 
 ### Sandbox / confinement: conformance
@@ -223,6 +226,7 @@
 - shipped (registry + `init()` self-registration — the `docker` impl registers under `-tags docker`, the `k8s` impl under `-tags k8s`; runtime-pluggable + substrate sub-interface).
 - The `k8s` substrate is registered and conformance-green on kind+Calico, but is NOT the shipped out-of-box default (that stays `docker`) and is not at parity with it —
 - no BYOI/devcontainer builds, no `local_dir` mounts, no ground-truth correlator ([`docs/operations/kubernetes-known-gaps.md`](operations/kubernetes-known-gaps.md)'s "Kubernetes: known gaps").
+- The agent-sandbox switch is experimental and covered by its own CI job; it is not part of the shipped default.
 - Non-OCI VMM impl planned.
 
 ### Secret store: registered alternates
