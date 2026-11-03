@@ -1023,7 +1023,9 @@ The match is exact, so it would never fire and would silently read as enforcemen
 
 ## `recording`
 
-- `off` records no terminal or screen; the audit log still shows what happened. `terminal` records terminal sessions only, what every run got before the level existed. `screen_actions` also records a desktop's screen and an action log of what was opened, copied and transferred.
+- `off` records no terminal or screen; the audit log still shows what happened. `terminal` records terminal sessions only, what every run got before the level existed. `screen_actions` also records a desktop's screen while someone watches it through Wardyn, on every machine kind, and an action log of what was opened, copied and transferred.
+  - The screen is not masked: anything it shows, a secret included, is kept.
+  - A window on a Mac is not recorded, so a macOS VM run at `screen_actions` refuses one.
 - Omitted, the organisation's level applies: `site_config.recording.level`, `terminal` when unset. With `site_config.recording.locked`, that level is a minimum no policy, profile or run goes under, an operator's included.
 - A ceiling's level is a minimum: a member's policy under it may record more, never less. A member's own inline policy under a ceiling that sets no level may not go under the organisation's level.
 - A required setting (the organisation's or a runner pool's `recording: required`) records at least `terminal`. With `WARDYN_RECORDING_STORE=off` nothing is recorded at any level.
