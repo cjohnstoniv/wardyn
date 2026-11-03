@@ -34,8 +34,12 @@ func ServeScreens(work func() int) int {
 // serveScreens is set by the darwin cgo build (screen_darwin.go).
 var serveScreens func(work func() int) int
 
-// WindowStrip is the line under a run window's title bar.
-const WindowStrip = "What you type goes into this run. Sign-ins stay on the run's disk until it ends. Close this window to hand back; the run keeps going."
+// The line under a run window's title bar. The kept-machine words are a draft until its board is approved;
+// a copy change is an edit to this block.
+const (
+	WindowStrip     = "What you type goes into this run. Sign-ins stay on the run's disk until it ends. Close this window to hand back; the run keeps going."
+	KeptWindowStrip = "What you type goes into this run. Sign-ins stay on this kept machine until you delete it. Close this window to hand back; the run keeps going."
+)
 
 // WindowText is a run window's text: its title and the strip under the title bar.
 type WindowText struct{ Title, Strip string }
