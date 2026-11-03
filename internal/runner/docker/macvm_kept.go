@@ -705,8 +705,10 @@ func (d *Driver) KeptMachines() (*runnerwire.MacVMKept, error) {
 	for _, f := range folders {
 		n, _ := macvm.KeptAllocatedBytes(f.dir)
 		// In use is read from the live runs and the record's session, never by probing the machine's lock,
-		// which a boot taking it at that instant would find held.
-		run := cmp.Or(runs[f.rec.ID], c.keptHeldBy(f.rec))
+		// which a boot taking it at that instant would find held. A record that still names a session is in
+		// use even once its run folder is gone: until recoverKept clears it and writes the new deadline, its
+		// expiry is the boot's, and the organisation must not keep or expire the machine by it.
+		run := cmp.Or(runs[f.rec.ID], f.rec.ActiveRun)
 		m := runnerwire.MacVMKeptMachine{ID: f.rec.ID, Bytes: n, InUse: run != "", RunID: run, Scrubbed: f.rec.Scrubbed, ExpiresAt: f.rec.ExpiresAt}
 		out.WorstBytes += keptWorstOf(f.dir)
 		out.AllocatedBytes += n

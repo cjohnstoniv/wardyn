@@ -992,11 +992,18 @@ func TestKeptStopThatCannotLockReportsPending(t *testing.T) {
 	if err := os.RemoveAll(r.c.runDir(run)); err != nil {
 		t.Fatal(err)
 	}
+	// The run folder is gone and the record still names the session: not yet a machine to keep or expire.
+	if k, err := r.d.KeptMachines(); err != nil || len(k.Machines) != 1 || !k.Machines[0].InUse || k.Machines[0].RunID != run.String() {
+		t.Fatalf("the inventory of an unrecovered session: %+v, %v", k, err)
+	}
 	if err := r.d.SweepKeptMachines(); err != nil {
 		t.Fatal(err)
 	}
 	if rec := readKept(t, dir, id); rec.ActiveRun != "" || !rec.ExpiresAt.Equal(now.AddDate(0, 0, 1)) {
 		t.Fatalf("the recovered machine %+v, want the launched 1 day", rec)
+	}
+	if k, err := r.d.KeptMachines(); err != nil || k.Machines[0].InUse || !k.Machines[0].ExpiresAt.Equal(now.AddDate(0, 0, 1)) {
+		t.Fatalf("the inventory after recovery: %+v, %v", k, err)
 	}
 }
 
