@@ -48,6 +48,7 @@ export function machineCardOf(run: Facts): MachineCardView | undefined {
   // this run is live it is the holder, so the machine's stop result is its own (K-36, K-37, K-38). Once it has ended a
   // later run may have used the machine, so only the machine's own state is said, never a stop result.
   if (m.state === "kept") {
+    if (!live && !m.scrubbed) return { ...common, chip: { label: KEEP_LIST.CHIP_NOT_CLEANED, tone: "warning" }, headline: T.KEPT(where), notes: [T.NEEDS_CLEANUP, T.AS_NOW] };
     if (!live) return { ...common, chip: { label: T.CHIP_KEPT, tone: "success" }, headline: T.KEPT(where), notes: [T.AS_NOW] };
     return { ...common, chip: { label: T.CHIP_KEPT, tone: "success" }, headline: T.HELD(where, m.name ?? ""), notes: [m.scrubbed ? T.SCRUBBED : T.NOT_SCRUBBED] };
   }

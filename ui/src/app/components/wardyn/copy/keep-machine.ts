@@ -94,6 +94,8 @@ export const KEEP_RUN = {
   KEPT: (mac: string) => `Kept on ${mac}`,
   /** K-36 */
   SCRUBBED: "Wardyn removed this run's settings, certificate and credential placeholders when it stopped.",
+  /** An ended run's card, on a kept machine that still needs its cleanup: said of the machine, never of which run stopped badly. */
+  NEEDS_CLEANUP: "This machine still needs cleanup before its next run.",
   /** An ended run's card shows the machine as it is now: a run after this one may have used it since, so no stop result is claimed. */
   AS_NOW: "This is the machine as it is now. A run after this one may have used it since.",
   /** An ended run whose machine a run holds: the run read doesn't say which. */

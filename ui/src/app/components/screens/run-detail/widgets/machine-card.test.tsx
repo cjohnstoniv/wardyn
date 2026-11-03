@@ -69,10 +69,13 @@ describe("Run page: the Machine card", () => {
     expect(within(card).queryByText(T.NOT_SCRUBBED)).toBeNull();
   });
 
-  it("km3-kept-hard: an unscrubbed machine says nothing of this run's stop once the run has ended", () => {
+  it("km3-kept-hard: an unscrubbed machine is flagged as needing cleanup, amber, without saying which run stopped badly", () => {
     const card = show({ state: "KILLED", machine: machine({ state: "kept", scrubbed: false }) })!;
     expect(within(card).getByText(T.KEPT(MAC))).toBeInTheDocument();
-    expect(text(card)).not.toMatch(/didn't stop normally/);
+    expect(within(card).getByText(T.NEEDS_CLEANUP)).toBeInTheDocument();
+    expect(within(card).getByText(KEEP_LIST.CHIP_NOT_CLEANED)).toBeInTheDocument();
+    expect(within(card).queryByText(T.CHIP_KEPT)).toBeNull();
+    expect(text(card)).not.toMatch(/didn't stop normally|this run/i);
   });
 
   it("run A then run B on the same machine: A's page never says Stopping, nor that A stopped badly", () => {
@@ -84,6 +87,7 @@ describe("Run page: the Machine card", () => {
     // B stopped abruptly: the machine is kept and not scrubbed, and that is B's stop, not A's.
     const afterB = show({ state: "STOPPED", machine: machine({ state: "kept", scrubbed: false }) })!;
     expect(text(afterB)).not.toMatch(/stop normally|removes its settings/);
+    expect(within(afterB).getByText(T.NEEDS_CLEANUP)).toBeInTheDocument();
     expect(within(afterB).getByText(T.AS_NOW)).toBeInTheDocument();
   });
 
