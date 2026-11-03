@@ -140,7 +140,10 @@ func TestSSHGateway_VMRunDoors(t *testing.T) {
 
 			// Screen Sharing's ports are the macOS window's door: refused there, forwardable elsewhere.
 			for _, port := range []string{"5900", "5905", "5909"} {
-				_, err := client.Dial("tcp", "127.0.0.1:"+port)
+				conn, err := client.Dial("tcp", "127.0.0.1:"+port)
+				if err == nil {
+					_ = conn.Close() // an open forward holds one of the run's channel slots
+				}
 				if c.kind.IsMacOSVM() && err == nil {
 					t.Errorf("forward to %s succeeded for a macOS VM run, want refused", port)
 				}
