@@ -437,7 +437,10 @@ export function DoorDialog({
             onCancel={onCancel}
             onSaved={() => onDone(doorToast(t))}
             onRemoved={onRemoved}
-            onSignsIn={() => setSwappedTo(t.provider.id)}
+            onSignsIn={() => {
+              setSwappedTo(t.provider.id);
+              void onRecheck?.();
+            }}
           />
         )}
         {swapped && !unreadable && <p role="status" className="text-body text-warning">{OIDC_SIGN_IN.PASTE_REFUSED}</p>}

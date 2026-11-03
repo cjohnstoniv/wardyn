@@ -72,6 +72,11 @@ describe("local_model wire", () => {
     expect([...tsKeys(ts, "SetupModelProvider")].sort()).toEqual([...goJSONTags(goSetup, "SetupModelProvider")].sort());
   });
 
+  it("the provider access row carries signed_in_at as the server writes it", () => {
+    expect(tsKeys(read("ui/src/app/lib/types/setup.ts"), "SetupProviderAccess")).toContain("signed_in_at");
+    expect(goJSONTags(read("internal/api/provider_access.go"), "SetupProviderAccess")).toContain("signed_in_at");
+  });
+
   it("the defaults and limits are the API's", () => {
     expect(LOCAL_MODEL_DEFAULTS).toEqual({
       max_context: num(goType, "DefaultLocalMaxContext"),

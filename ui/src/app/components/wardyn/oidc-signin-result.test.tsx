@@ -56,13 +56,22 @@ it("in the door's own window it tells the opener, by this origin, and closes", (
   const close = vi.spyOn(window, "close").mockImplementation(() => {});
   window.name = "wardyn-provider-oidc-abc123";
   at(`?${OIDC_RETURN.ERROR_PARAM}=identity_binding&provider=u-1`);
-  const { container } = render(<OidcSignInResult />);
+  render(<OidcSignInResult />);
   expect(post).toHaveBeenCalledWith(
     { type: OIDC_RETURN.MESSAGE, ok: false, reason: "identity_binding", attempt: "wardyn-provider-oidc-abc123" },
     window.location.origin,
   );
   expect(close).toHaveBeenCalled();
-  expect(container).toBeEmptyDOMElement();
+  // A window the browser leaves open says it can be closed.
+  expect(screen.getByText(T.WINDOW_FAIL(T.BANNER_FAIL_NAME))).toBeInTheDocument();
+});
+
+it("in the door's own window a success says it can be closed", () => {
+  Object.defineProperty(window, "opener", { value: { postMessage: vi.fn() }, configurable: true });
+  vi.spyOn(window, "close").mockImplementation(() => {});
+  at(`?${OIDC_RETURN.DONE_PARAM}=${OIDC_RETURN.DONE_VALUE}&provider=u-1`);
+  render(<OidcSignInResult />);
+  expect(screen.getByText(T.WINDOW_OK(T.BANNER_FAIL_NAME))).toBeInTheDocument();
 });
 
 it("the return banner is announced: a status for success, an alert for a failure", () => {

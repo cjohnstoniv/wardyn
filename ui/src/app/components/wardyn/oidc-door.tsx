@@ -29,11 +29,19 @@ function attemptNonce(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** A sign-in made since `baseline`: live, and stored after the one that was there when the door opened. */
-function signedInSince(access: SetupStatus["provider_access"], id: string, baseline: string): boolean {
-  const a = access?.find((x) => x.provider === id);
-  return (a?.state === "live" || a?.state === "expiring") && (a.added_at ?? "") !== baseline;
+type Access = NonNullable<SetupStatus["provider_access"]>[number];
+
+/** What a sign-in already stored looked like when the door opened. added_at is when the credential was first stored
+ *  and a replaced one keeps it, so it only moves for a first sign-in; signed_in_at moves on every sign-in. */
+interface Stamp {
+  addedAt: string;
+  signedInAt: string;
 }
+const stampOf = (a: Access | undefined): Stamp => ({ addedAt: a?.added_at ?? "", signedInAt: a?.signed_in_at ?? "" });
+const isLive = (a: Access | undefined) => a?.state === "live" || a?.state === "expiring";
+/** A sign-in made since `from`: live now, with either stamp moved on. */
+const signedInSince = (a: Access | undefined, from: Stamp) =>
+  isLive(a) && ((a?.added_at ?? "") !== from.addedAt || (a?.signed_in_at ?? "") !== from.signedInAt);
 
 export function OidcDoor({
   provider,
@@ -55,13 +63,17 @@ export function OidcDoor({
   // The parent's callbacks are new on every render; the wait below must not restart with them.
   const calls = React.useRef({ onRecheck, onDone });
   calls.current = { onRecheck, onDone };
-  // The stored sign-in's stamp when this attempt began: "Sign in again" starts from a live state.
-  const baseline = React.useRef("");
+  // The stored sign-in's stamps when this attempt began: "Sign in again" starts from a live state.
+  const baseline = React.useRef<Stamp>({ addedAt: "", signedInAt: "" });
+  // This attempt's own window said the sign-in succeeded; the door then ends once a re-read shows it live.
+  const okWord = React.useRef(false);
   const popup = React.useRef<Window | null>(null);
   // This attempt's own name for its window, carried in the window's name: the return page echoes it.
   const attempt = React.useRef("");
   const finished = React.useRef(false);
-  const url = apiURL(`/model-providers/${encodeURIComponent(provider.id)}/oidc/sign-in`);
+  const settleRef = React.useRef<(() => boolean) | null>(null);
+  // The sign-in route takes the provider row's uid, which the setup status carries; the admin's slug is not it.
+  const url = provider.uid ? apiURL(`/model-providers/${encodeURIComponent(provider.uid)}/oidc/sign-in`) : "";
   const waiting = phase.name === "waiting" || phase.name === "blocked";
 
   const fail = React.useCallback((failure: OidcFailure) => {
@@ -83,17 +95,25 @@ export function OidcDoor({
       // crosses sites), since the window itself already says whose word this is.
       if (!popup.current || e.source !== popup.current) return;
       if (d.attempt && d.attempt !== attempt.current) return;
-      if (d.ok) void calls.current.onRecheck?.();
-      else fail(oidcFailureKind(d.reason ?? ""));
+      if (d.ok) {
+        okWord.current = true;
+        void calls.current.onRecheck?.();
+      } else fail(oidcFailureKind(d.reason ?? ""));
     };
     window.addEventListener("message", onMessage);
+    // Done once this attempt's own window said so and the status shows a live sign-in, or, with no word (the
+    // link a blocked browser gave), once a live sign-in's stamps have moved on from where the attempt began.
+    const settled = (): boolean => {
+      const a = accessRef.current?.find((x) => x.provider === provider.id);
+      if (finished.current || !(okWord.current ? isLive(a) : signedInSince(a, baseline.current))) return false;
+      finished.current = true;
+      calls.current.onDone();
+      return true;
+    };
+    settleRef.current = settled;
     const tick = window.setInterval(() => {
       if (finished.current) return;
-      if (signedInSince(accessRef.current, provider.id, baseline.current)) {
-        finished.current = true;
-        calls.current.onDone();
-        return;
-      }
+      if (settled()) return;
       // A window closed with no word and no new sign-in is a failure, but only after a few more reads: the sign-in
       // may have landed as it closed, and the status is read again each tick.
       if (popup.current?.closed === true) closedAt ??= Date.now();
@@ -106,8 +126,13 @@ export function OidcDoor({
     return () => {
       window.removeEventListener("message", onMessage);
       window.clearInterval(tick);
+      settleRef.current = null;
     };
   }, [waiting, provider.id, fail]);
+  // A re-read of the status ends the wait at once, not at the next tick.
+  React.useEffect(() => {
+    settleRef.current?.();
+  }, [access]);
 
   // Leaving the door by any road takes its window with it, unless it finished.
   React.useEffect(
@@ -118,7 +143,8 @@ export function OidcDoor({
   );
 
   const start = () => {
-    baseline.current = access?.find((x) => x.provider === provider.id)?.added_at ?? "";
+    baseline.current = stampOf(access?.find((x) => x.provider === provider.id));
+    okWord.current = false;
     finished.current = false;
     // An earlier attempt's window goes, so its late word has nowhere to land.
     popup.current?.close();
@@ -129,7 +155,11 @@ export function OidcDoor({
 
   return (
     <div className="space-y-4">
-      {phase.name === "fail" ? (
+      {!provider.uid ? (
+        <p role="alert" className="text-body text-danger">
+          {T.NOT_READY}
+        </p>
+      ) : phase.name === "fail" ? (
         <div role="alert" className="space-y-1 rounded-lg border border-danger/30 bg-danger-subtle p-3 text-body text-danger">
           <b className="font-semibold">{T.FAIL_TITLE(name)}</b>
           <p>{T.FAIL[phase.failure](name)}</p>
@@ -156,7 +186,7 @@ export function OidcDoor({
         <Button type="button" variant="ghost" onClick={onCancel}>
           {T.CANCEL}
         </Button>
-        {!waiting && (
+        {!waiting && provider.uid && (
           <Button type="button" onClick={start}>
             {phase.name === "fail" ? T.RETRY : T.CONTINUE}
           </Button>

@@ -27,6 +27,7 @@ import type { SetupModelProvider, SetupStatus } from "../../../lib/types";
 
 const SSO: SetupModelProvider = {
   id: "corp-sso",
+  uid: "uid-7f3a",
   name: "Corp SSO",
   kind: "custom_endpoint",
   harnesses: ["claude-code"],
@@ -121,7 +122,7 @@ it("Sign in opens the door; Continue opens the authority's sign-in window at the
   expect(within(dialog).getByText(T.INTRO)).toBeInTheDocument();
   expect(within(dialog).getByText(CONNECTIONS.SENT_TO("llm.contoso.example"))).toBeInTheDocument();
   await userEvent.click(within(dialog).getByRole("button", { name: T.CONTINUE }));
-  expect(open).toHaveBeenCalledWith("/api/v1/model-providers/corp-sso/oidc/sign-in", expect.any(String), expect.any(String));
+  expect(open).toHaveBeenCalledWith("/api/v1/model-providers/uid-7f3a/oidc/sign-in", expect.any(String), expect.any(String));
   expect(await within(dialog).findByText(T.WAITING)).toBeInTheDocument();
 });
 
@@ -134,7 +135,7 @@ it("a blocked window gives a link to open it", async () => {
   expect(screen.getByText(T.BLOCKED)).toBeInTheDocument();
   expect(screen.getByRole("link", { name: T.BLOCKED_LINK("Corp SSO") })).toHaveAttribute(
     "href",
-    "/api/v1/model-providers/corp-sso/oidc/sign-in",
+    "/api/v1/model-providers/uid-7f3a/oidc/sign-in",
   );
 });
 
@@ -189,6 +190,20 @@ async function openDoor() {
   await screen.findByText(T.WAITING);
   return { wins, names };
 }
+async function openAgain(status: SetupStatus) {
+  const wins: Window[] = [];
+  vi.spyOn(window, "open").mockImplementation(() => {
+    const w = fakeWindow();
+    wins.push(w);
+    return w;
+  });
+  renderCard(status);
+  await expandCard(CONNECTIONS.TITLE);
+  await userEvent.click(screen.getByRole("button", { name: T.SIGN_IN_AGAIN }));
+  await userEvent.click(await screen.findByRole("button", { name: T.CONTINUE }));
+  await screen.findByText(T.WAITING);
+  return { wins };
+}
 const word = (source: Window | null, extra: Record<string, unknown> = {}) =>
   act(() => {
     window.dispatchEvent(
@@ -233,24 +248,61 @@ it("a retry closes the earlier window and a late word from it is ignored", async
   expect(await screen.findByRole("alert")).toBeInTheDocument();
 });
 
-it("closes the door with a toast once the person's own state shows a new sign-in", async () => {
-  vi.spyOn(window, "open").mockReturnValue({ closed: false, close: vi.fn() } as unknown as Window);
-  const before = providerStatus([{ provider: SSO, state: "live", addedAt: aheadByHours(-48) }]);
-  const after = providerStatus([{ provider: SSO, state: "live", addedAt: aheadByHours(-1) }]);
+it("the sign-in URL carries the row's uid, never the admin's slug", async () => {
+  const open = vi.spyOn(window, "open").mockReturnValue(fakeWindow());
+  renderCard(providerStatus([{ provider: SSO, state: "not_configured" }]));
+  await expandCard(CONNECTIONS.TITLE);
+  await userEvent.click(screen.getByRole("button", { name: T.SIGN_IN }));
+  await userEvent.click(await screen.findByRole("button", { name: T.CONTINUE }));
+  const url = String(open.mock.calls[0][0]);
+  expect(url).toContain(`/model-providers/${SSO.uid}/oidc/sign-in`);
+  expect(url).not.toContain(`/${SSO.id}/`);
+});
+
+it("a provider with no uid in the status offers no Continue", async () => {
+  const { uid: _uid, ...noUid } = SSO;
+  renderCard(providerStatus([{ provider: noUid, state: "not_configured" }]));
+  await expandCard(CONNECTIONS.TITLE);
+  await userEvent.click(screen.getByRole("button", { name: T.SIGN_IN }));
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByText(T.NOT_READY)).toBeInTheDocument();
+  expect(within(dialog).queryByRole("button", { name: T.CONTINUE })).toBeNull();
+});
+
+// The credential's first-stored time, which a re-sign-in keeps.
+const FIXED_ADDED_AT = aheadByHours(-48);
+const live = (signedInAt: string) =>
+  providerStatus([{ provider: SSO, state: "live" }], {
+    provider_access: [{ provider: "corp-sso", state: "live", added_at: FIXED_ADDED_AT, signed_in_at: signedInAt }],
+  });
+
+it("Sign in again ends when this attempt's own window says it worked and a re-read shows it live, with added_at unchanged", async () => {
+  const { wins } = await openAgain(live(aheadByHours(-30)));
+  word(wins[0], { ok: true, reason: "" });
+  await waitFor(() => expect(toast.success).toHaveBeenCalledWith(T.DONE_TOAST("Corp SSO")), { timeout: 4000 });
+  await waitFor(() => expect(screen.queryByText(T.WAITING)).toBeNull());
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("without a word (the blocked-link path) Sign in again ends when signed_in_at moves, with added_at unchanged", async () => {
+  const before = live(aheadByHours(-30));
+  const after = live(aheadByHours(-1));
   const view = (s: SetupStatus) => (
     <WithDoor status={s} path="/account" operator={false}>
       <ModelConnectionsCard status={s} onChanged={vi.fn()} />
     </WithDoor>
   );
+  vi.spyOn(window, "open").mockReturnValue(null);
   const { rerender } = render(view(before));
   await expandCard(CONNECTIONS.TITLE);
   await userEvent.click(screen.getByRole("button", { name: T.SIGN_IN_AGAIN }));
   await userEvent.click(await screen.findByRole("button", { name: T.CONTINUE }));
-  await screen.findByText(T.WAITING);
+  await screen.findByText(T.BLOCKED);
   // The sign-in it started from does not end the wait: only a newer one does.
+  rerender(view(before));
+  expect(toast.success).not.toHaveBeenCalled();
   rerender(view(after));
   await waitFor(() => expect(toast.success).toHaveBeenCalledWith(T.DONE_TOAST("Corp SSO")), { timeout: 4000 });
-  await waitFor(() => expect(screen.queryByText(T.WAITING)).toBeNull());
   // The row after it: signed in, with Sign in again and Disconnect beside it.
   const card = screen.getByTestId("model-connections-card");
   expect(within(card).getByText(CONNECTIONS.SIGNED_IN)).toBeInTheDocument();

@@ -12,7 +12,11 @@ import { AlertTriangle, CheckCircle2, X } from "lucide-react";
 import { useShellSetupStatus } from "./model-access-context";
 import { OIDC_RETURN, OIDC_SIGN_IN as T, oidcFailureKind } from "./copy/oidc-signin";
 
-type Result = ({ ok: true } | { ok: false; reason: string }) & { uid: string };
+type Result = ({ ok: true } | { ok: false; reason: string }) & {
+  uid: string;
+  /** Shown in the window the door opened, which has told the door and asked to close. */
+  window?: true;
+};
 
 function readAndClearResult(): Result | null {
   const url = new URL(window.location.href);
@@ -39,6 +43,8 @@ export function OidcSignInResult() {
           window.location.origin,
         );
         window.close();
+        // A window that stays open (a browser may refuse the close) says it can be closed.
+        setResult({ ...r, window: true });
         return;
       } catch {
         /* no opener to tell: show the result here */
@@ -50,7 +56,11 @@ export function OidcSignInResult() {
   if (!result) return null;
   const named = result.uid ? status?.model_providers?.find((p) => p.sign_in === "oidc" && p.uid === result.uid) : undefined;
   const name = named ? named.name || named.id : "";
-  const sentence = result.ok
+  const sentence = result.window
+    ? result.ok
+      ? T.WINDOW_OK(name || T.BANNER_FAIL_NAME)
+      : T.WINDOW_FAIL(name || T.BANNER_FAIL_NAME)
+    : result.ok
     ? name
       ? T.BANNER_OK_NAMED(name)
       : T.BANNER_OK

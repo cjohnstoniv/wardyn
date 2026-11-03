@@ -291,6 +291,9 @@ export interface SetupProviderAccess {
   // was never used.
   added_at?: string;
   last_used_at?: string;
+  // RFC3339: when the caller last signed in to an endpoint that signs people in. Unlike added_at (first stored,
+  // kept when a credential is replaced) it moves on every sign-in. Absent for any other row.
+  signed_in_at?: string;
 }
 
 export interface SetupStatus {

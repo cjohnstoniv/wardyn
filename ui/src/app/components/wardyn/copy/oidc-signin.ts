@@ -22,6 +22,8 @@ export const OIDC_SIGN_IN = {
   DOOR_TITLE: (name: string) => `Sign in to ${name}`,
   INTRO:
     "You'll sign in with your own account in a new window. Wardyn keeps a refresh grant and issues the run a short-lived credential when it starts. The sandbox never sees your sign-in.",
+  // The setup status carries no id to start this sign-in with (a console older than its server): nothing to continue.
+  NOT_READY: "Wardyn couldn't start this sign-in. Reload the page and try again.",
   CONTINUE: "Continue to sign in",
   WAITING: "Finish signing in in the new window. This page carries on when you are done.",
   BLOCKED: "Your browser blocked the sign-in window.",
@@ -34,7 +36,6 @@ export const OIDC_SIGN_IN = {
     timeout: () => "The sign-in took too long, or its window was closed. Start it again.",
     refused: (name: string) => `${name} refused the sign-in. If you expected access, ask your admin.`,
     row_changed: (name: string) => `An admin changed how ${name} signs people in while you were signing in. Start again.`,
-    removed: (name: string) => `${name} was removed while you were signing in.`,
     issuer_mismatch: (name: string) =>
       `${name} signed you in through a different service from the one you use for Wardyn, so Wardyn can't tell the account is yours. Ask your admin.`,
     identity_binding: (name: string) =>

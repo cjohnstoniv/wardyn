@@ -172,16 +172,18 @@ describe("the key and token door (case c)", () => {
     putCredential.mockRejectedValue(
       new HttpError(409, '"corp-gateway" signs people in, so a token cannot be pasted for it. Use Sign in', "model_provider_credential_signs_in"),
     );
-    renderDoor(providerStatus([{ provider: gateway }]), { for: { provider: gateway.id } });
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    renderDoor(providerStatus([{ provider: { ...gateway, uid: "uid-gw-1" } }]), { for: { provider: gateway.id } });
     await userEvent.click(screen.getByRole("button", { name: "entrance" }));
     await userEvent.type(await screen.findByLabelText("Token"), "abc12");
     await userEvent.click(screen.getByRole("button", { name: KEY_DOOR.SAVE }));
     const dialog = await screen.findByRole("dialog", { name: OIDC_SIGN_IN.DOOR_TITLE("Corp gateway") });
     expect(within(dialog).getByText(OIDC_SIGN_IN.PASTE_REFUSED)).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: OIDC_SIGN_IN.CONTINUE })).toBeInTheDocument();
+    // The swapped door starts the sign-in with the status row's uid, not the slug.
+    await userEvent.click(within(dialog).getByRole("button", { name: OIDC_SIGN_IN.CONTINUE }));
+    expect(String(open.mock.calls[0][0])).toContain("/model-providers/uid-gw-1/oidc/sign-in");
     expect(within(dialog).queryByRole("button", { name: KEY_DOOR.SAVE })).toBeNull();
     expect(within(dialog).queryByLabelText("Token")).toBeNull();
-    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("with a token stored, Remove lives in the door (opened from Replace), and asks to confirm first", async () => {
@@ -293,7 +295,7 @@ describe("the key and token door (case c)", () => {
 // nothing rather than a door no sign-in could complete.
 describe("the sign-in door on a phone", () => {
   it("keeps its Cancel and Continue in a footer that stays at the bottom of the dialog's scroll", async () => {
-    const sso = { ...gateway, sign_in: "oidc" as const };
+    const sso = { ...gateway, uid: "uid-gw-1", sign_in: "oidc" as const };
     renderDoor(providerStatus([{ provider: sso }]), { for: { provider: sso.id } });
     await userEvent.click(screen.getByRole("button", { name: "entrance" }));
     const dialog = await screen.findByRole("dialog", { name: OIDC_SIGN_IN.DOOR_TITLE("Corp gateway") });
