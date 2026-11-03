@@ -67,6 +67,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
 const (
@@ -727,6 +728,13 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	if runIsKept(run) {
 		return nil, uiFail(ctx, http.StatusConflict, reasonUIGatewayRunKept, "run has ended; the UI app is gone")
 	}
+	// A macOS VM's loopback also holds Screen Sharing (5900-5909): the desktop door, which the window's
+	// session and recording accounting covers. Refused here, before any launcher probe, relay exec or
+	// ui.open row, rather than left to the guest agent's own refusal.
+	if run.MachineKind.IsMacOSVM() && guestagent.MacScreenSharingPort(sess.Port) {
+		return nil, uiFail(ctx, http.StatusForbidden, reasonUIGatewayAppNotDeclared,
+			fmt.Sprintf("port %d is the macOS VM's Screen Sharing and can't be a UI app; open the run's window instead", sess.Port))
+	}
 	// …and the human, re-asserted against that same freshly-loaded run and
 	// against the revoke cutoff. The cookie is a long-lived credential; this is
 	// what keeps it bounded-stale rather than final (uiSessionStillAuthorized).
@@ -769,7 +777,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	}
 
 	execSess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
-		Argv: []string{"socat", "-", fmt.Sprintf("TCP:127.0.0.1:%d", sess.Port)},
+		Argv: sshRelayArgv(run.MachineKind, sess.Port),
 	})
 	if err != nil {
 		stopSignIn()
@@ -844,7 +852,7 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 		seedPolls = uiEnsureWaitSecs * 2
 	}
 	exec, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
-		Argv: []string{"sh", "-c", uiLauncherScript(launcher, sess.Port, seedPolls)},
+		Argv: []string{"sh", "-c", uiLauncherScriptFor(run.MachineKind, launcher, sess.Port, seedPolls)},
 	})
 	if err != nil {
 		return uiExecFailure(ctx, reasonUIGatewayLauncherExecFailed, "start ui app launcher", err)
@@ -902,7 +910,7 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 	}
 }
 
-// uiLauncherScript is the in-sandbox probe-launch-poll cycle. Both
+// uiLauncherScriptFor is the in-sandbox probe-launch-poll cycle. Both
 // interpolations are policy-validated (a lower-case slug and an integer port,
 // validateUIApps), so neither can carry a shell metacharacter; they are quoted
 // anyway.
@@ -918,16 +926,26 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 // sandbox's WARDYN_INTERACTIVE_START is agent, set from the run's interactive_start,
 // which the run row does not keep) starts no server, so it answers at once.
 // After the wait an application run (its env says so) answers 6, not 3.
-func uiLauncherScript(launcher string, port, seedPolls int) string {
-	return fmt.Sprintf(`p=%d
-b='%s'
-socat -u /dev/null "TCP:127.0.0.1:$p" >/dev/null 2>&1 && exit 0
+//
+// The listening check is the machine kind's: socat in a container, the guest agent's forward -probe
+// in a VM, which has no socat.
+func uiLauncherScriptFor(kind types.MachineKind, launcher string, port, seedPolls int) string {
+	probe := `socat -u /dev/null "TCP:127.0.0.1:$p"`
+	switch kind {
+	case types.MachineLinuxVM:
+		probe = "'" + guestagent.LinuxAgentPath + `' forward -probe "$p"`
+	case types.MachineMacOSVM:
+		probe = "'" + guestagent.MacAgentBinaryPath + `' forward -probe "$p"`
+	}
+	return fmt.Sprintf(`p=%[1]d
+b='%[2]s'
+%[5]s >/dev/null 2>&1 && exit 0
 if ! [ -x "$b" ]; then
   [ "${WARDYN_INTERACTIVE_START:-}" = agent ] && exit 3
   i=0
-  while [ "$i" -lt %d ]; do
+  while [ "$i" -lt %[3]d ]; do
     sleep 0.5
-    socat -u /dev/null "TCP:127.0.0.1:$p" >/dev/null 2>&1 && exit 0
+    %[5]s >/dev/null 2>&1 && exit 0
     i=$((i+1))
   done
   [ "${WARDYN_APPLICATION_RUN:-}" = 1 ] && exit 6
@@ -935,13 +953,13 @@ if ! [ -x "$b" ]; then
 fi
 "$b" >/dev/null 2>&1 </dev/null &
 i=0
-while [ "$i" -lt %d ]; do
+while [ "$i" -lt %[4]d ]; do
   sleep 0.5
-  socat -u /dev/null "TCP:127.0.0.1:$p" >/dev/null 2>&1 && exit 5
+  %[5]s >/dev/null 2>&1 && exit 5
   i=$((i+1))
 done
 exit 4
-`, port, launcher, seedPolls, uiEnsureWaitSecs*2)
+`, port, launcher, seedPolls, uiEnsureWaitSecs*2, probe)
 }
 
 func (s *Server) uiAppReady(key string) bool {

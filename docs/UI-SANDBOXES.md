@@ -1,6 +1,6 @@
 # UI sandboxes
 
-`wardynd` can relay **one declared loopback port** inside a running sandbox — a code editor, a dev server — to an operator's browser. It rides the same exec lane the SSH gateway's `-L` forward already uses (`socat` over `Runner.ExecStream`): there is no pod-IP or container-IP dial, no `NetworkPolicy` change, and **no new network path out of the sandbox**. The bytes travel control plane → substrate exec → container, exactly like an attach.
+`wardynd` can relay **one declared loopback port** inside a running sandbox — a code editor, a dev server — to an operator's browser. It rides the same exec lane the SSH gateway's `-L` forward already uses (`socat` over `Runner.ExecStream`): there is no pod-IP or container-IP dial, no `NetworkPolicy` change, and **no new network path out of the sandbox**. The bytes travel control plane → substrate exec → container.
 
 - The gateway is off by default. It exists only when `WARDYN_UI_SANDBOX_LISTEN` is set — see [docs/ENV.md](ENV.md) for all three variables (`WARDYN_UI_SANDBOX_LISTEN`, `WARDYN_UI_SANDBOX_ADVERTISE`, `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`). With it unset there is no listener and no new surface: the relay's cookie key is not even generated.
 - It listens on a **second address**, and boot refuses one equal to `-listen` (or to `-ssh-listen`). That is a security control, not a deployment convenience: everything the relay serves is the sandbox's **own** HTML and JavaScript.
@@ -269,9 +269,9 @@
 - An app is a **name, a loopback port and a path — never a command string**, so a
   policy can never choose what runs inside the sandbox.
 - The relay serves **only**
-  a declared port; anything else is refused naming this field, and
+  a declared port; anything else is refused, and
   [`ssh -L`](SSH.md#4--l-port-forwarding) stays the escape hatch for an
-  undeclared one.
+  undeclared one. A macOS VM app can't use 5900-5909.
 - Declaring an app grants nothing on its own: the gateway still
   has to be enabled, and every session still needs a ticket.
 
