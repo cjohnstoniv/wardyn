@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -323,15 +324,35 @@ func (d *driveOpenDest) close() {
 	}
 }
 
-// undo removes what this run's failed copy left: the folder's contents, which this run alone can have
-// written (it holds the lock and found the folder empty), and the folder if this run made it.
-func (d *driveOpenDest) undo() {
+// undo removes the folder's contents, which this run alone can have written (it holds the lock and found
+// the folder empty), and the folder if this run made it. It runs after a failed copy, a discard and a
+// write back that sent everything; the first thing it could not remove is returned.
+func (d *driveOpenDest) undo() error {
+	var first error
 	left, _ := fs.ReadDir(d.root.FS(), ".")
 	for _, e := range left {
-		_ = d.root.RemoveAll(e.Name())
+		if err := d.root.RemoveAll(e.Name()); err != nil && first == nil {
+			first = err
+		}
 	}
 	if d.created {
-		_ = d.parent.Remove(d.leaf)
+		if err := d.parent.Remove(d.leaf); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+// remove is undo for a session that ended normally, and the closing line it prints says what happened to the
+// folder. A folder that was already there stays, empty.
+func (d *driveOpenDest) remove(out io.Writer) {
+	switch err := d.undo(); {
+	case err != nil:
+		fmt.Fprintf(out, "Could not remove everything in %s (%s). Delete it yourself before the next drive open.\n", d.shown, driveOpenSafe(err.Error()))
+	case d.created:
+		fmt.Fprintf(out, "The folder %s was removed.\n", d.shown)
+	default:
+		fmt.Fprintf(out, "The files in %s were removed; the empty folder was there before this run, so it stays.\n", d.shown)
 	}
 }
 
@@ -655,10 +676,20 @@ func driveOpenWork(ctx context.Context, j driveOpenJob) (result string, err erro
 	fmt.Fprintln(j.out, "Change the files, then press Return to write them back, or press Ctrl-C to discard your changes.")
 	if !driveOpenReturn(ctx, j.in) {
 		fmt.Fprintln(j.out, "Discarded: nothing was written back.")
+		j.dest.remove(j.out)
 		return driveOpenDiscarded, nil
 	}
-	if err := j.writeBack(c); err != nil {
+	unsent, err := j.writeBack(c)
+	switch {
+	case err != nil:
+		// The folder holds the only copy of the changes that did not go back.
+		fmt.Fprintf(j.out, "The folder %s is kept: it holds the changes that did not go back.\n", j.dest.shown)
 		return driveOpenBackFailed, err
+	case unsent > 0:
+		// Links, devices, pipes and set-id files are never sent; removing the folder would lose them.
+		fmt.Fprintf(j.out, "The folder %s is kept: %s in it could not be written back.\n", j.dest.shown, driveOpenCount(unsent, "item", "items"))
+	default:
+		j.dest.remove(j.out)
 	}
 	return driveOpenWrittenBack, nil
 }
@@ -678,7 +709,7 @@ func driveOpenReturn(ctx context.Context, in io.Reader) bool {
 // copyOut runs tar in the guest as the agent user and extracts its stream. A tar that read the drive's
 // listing to its end but exited with an error left some items unread; the copy is kept, with the count.
 func (j driveOpenJob) copyOut(ctx context.Context) (*driveOpenCopy, error) {
-	s, err := j.agent.Exec(ctx, guestagent.ExecRequest{Argv: []string{"/usr/bin/tar", "-C", macvm.DriveOpenTarget, "-cf", "-", "."}, Env: []string{"COPYFILE_DISABLE=1"}})
+	s, err := j.agent.Exec(ctx, guestagent.ExecRequest{Argv: driveOpenTarArgv(), Env: []string{"COPYFILE_DISABLE=1"}})
 	if err != nil {
 		return nil, fmt.Errorf("the throwaway VM did not start a copy: %w", err)
 	}
@@ -698,12 +729,58 @@ func (j driveOpenJob) copyOut(ctx context.Context) (*driveOpenCopy, error) {
 		return nil, fmt.Errorf("the throwaway VM could not read the whole drive (%w%s)", err, said.msg())
 	}
 	if code != 0 {
-		c.unread, c.unreadText = max(len(said.lines), 1), said.shown(driveOpenUnreadShown)
-		if len(said.lines) == 0 {
-			c.unreadText = []string{fmt.Sprintf("tar ended with code %d without saying why", code)}
+		said0 := len(said.lines)
+		if said.more && said0 > 0 {
+			said.lines = said.lines[:said0-1] // the last kept line was cut where the 64 KiB ended
 		}
+		said.lines = driveOpenUnreadLines(said.lines)
+		switch {
+		case len(said.lines) > 0:
+			c.unread, c.unreadText = len(said.lines), said.shown(driveOpenUnreadShown)
+		case said0 == 0:
+			c.unread, c.unreadText = 1, []string{fmt.Sprintf("tar ended with code %d without saying why", code)}
+		case said.more:
+			c.unread, c.unreadText = 1, []string{"tar said more than was kept"}
+		}
+		// else: every line was about the volume's own folders or extended attributes, which are not items of the drive.
 	}
 	return c, nil
+}
+
+// driveOpenTarExcluded are the volume's own folders at the drive's root. They are not the person's files, and
+// the guest's tar cannot read some of them.
+var driveOpenTarExcluded = []string{".Trashes", ".Spotlight-V100", ".fseventsd", ".TemporaryItems"}
+
+// driveOpenTarArgv is the guest's tar (macOS bsdtar) that lists the drive: no extended attributes, no Mac metadata
+// (--no-xattrs alone still runs the copyfile path), and none of driveOpenTarExcluded.
+func driveOpenTarArgv() []string {
+	argv := []string{"/usr/bin/tar", "-C", macvm.DriveOpenTarget, "-cf", "-", "--no-xattrs", "--no-mac-metadata"}
+	for _, name := range driveOpenTarExcluded {
+		argv = append(argv, "--exclude", "./"+name)
+	}
+	return append(argv, ".")
+}
+
+// driveOpenTarNoise matches a tar complaint that names only one of driveOpenTarExcluded at the drive's root.
+var driveOpenTarNoise = regexp.MustCompile(`(^|[\s:])\./(` + strings.Join(driveOpenTarExcluded, "|") + `)(/\S*)?(:|$)`)
+
+// driveOpenTarXattr matches a complaint whose message segment says an operation on extended attributes failed
+// ("Couldn't list extended attributes", "Could not pack extended attributes"), with at most bsdtar's ": <strerror>"
+// after it. Anchoring on the segment after ": " keeps a path that holds the words ("./xattr-notes.txt: Cannot open",
+// "./Couldn't read xattr.txt: Cannot open") from matching.
+var driveOpenTarXattr = regexp.MustCompile(`(?i): (couldn't|could not|cannot|can't|failed to|unable to) [^:]*\b(extended attributes?|xattrs?)\b[^:]*(: [^:]*)?$`)
+
+// driveOpenUnreadLines is lines without the ones that are not unread items of the drive: a complaint about
+// one of driveOpenTarExcluded, and one about extended attributes.
+func driveOpenUnreadLines(lines []string) []string {
+	var kept []string
+	for _, l := range lines {
+		if driveOpenTarNoise.MatchString(l) || driveOpenTarXattr.MatchString(l) {
+			continue
+		}
+		kept = append(kept, l)
+	}
+	return kept
 }
 
 // writeBack sends the new and changed files to the guest, where tar writes them as the agent user. The
@@ -712,21 +789,21 @@ func (j driveOpenJob) copyOut(ctx context.Context) (*driveOpenCopy, error) {
 // -k), so a name the copy never held, an unreadable item among them, is never replaced. With deleteGone,
 // the copied files deleted here are removed from the drive, and no other name is. An error says which
 // changes did not go back.
-func (j driveOpenJob) writeBack(c *driveOpenCopy) error {
+func (j driveOpenJob) writeBack(c *driveOpenCopy) (unsent int, err error) {
 	ctx, cancel := context.WithTimeout(j.hard, driveOpenBackWait)
 	defer cancel()
 	var archives [2]*os.File
 	for i := range archives {
 		f, err := os.CreateTemp("", "wardyn-drive-*.tar")
 		if err != nil {
-			return err
+			return 0, err
 		}
 		archives[i] = f
 		defer func() { _ = f.Close(); _ = os.Remove(f.Name()) }()
 	}
 	back, err := driveOpenPack(j.dest.root, c, archives[0], archives[1])
 	if err != nil {
-		return fmt.Errorf("read the changed files: %w", err)
+		return 0, fmt.Errorf("read the changed files: %w", err)
 	}
 	send := func(f *os.File, names []string, argv ...string) error {
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
@@ -739,23 +816,26 @@ func (j driveOpenJob) writeBack(c *driveOpenCopy) error {
 	}
 	if len(back.known) > 0 {
 		if err := send(archives[0], slices.Concat(back.known, back.fresh), "/usr/bin/tar", "-C", macvm.DriveOpenTarget, "-xf", "-"); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	if len(back.fresh)+back.newDirs > 0 {
 		if err := send(archives[1], back.fresh, "/usr/bin/tar", "-C", macvm.DriveOpenTarget, "-k", "-xf", "-"); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	if gone := back.gone; j.deleteGone && len(gone) > 0 {
 		names := "./" + strings.Join(gone, "\x00./") + "\x00"
 		if err := j.run(ctx, strings.NewReader(names), "/bin/sh", "-c", `cd "$1" && exec /usr/bin/xargs -0 /bin/rm -f --`, "sh", macvm.DriveOpenTarget); err != nil {
-			return fmt.Errorf("delete the removed files from the drive: %w. These deletions did not go through, or are not confirmed: %s", err, driveOpenNames(gone))
+			return 0, fmt.Errorf("delete the removed files from the drive: %w. These deletions did not go through, or are not confirmed: %s", err, driveOpenNames(gone))
 		}
 	}
 	fmt.Fprintln(j.out, strings.TrimSpace(fmt.Sprintf("Wrote back %s. The next run that uses this drive sees them, owned by the agent. %s",
 		driveOpenCount(back.changed(), "changed file", "changed files"), back.skipped.text())))
-	return nil
+	for _, n := range back.skipped {
+		unsent += n
+	}
+	return unsent, nil
 }
 
 // driveOpenNames lists up to driveOpenNamesShown names, each quoted, and how many more there are.
