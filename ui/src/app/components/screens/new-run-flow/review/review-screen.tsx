@@ -116,6 +116,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     autoCheck: AUTO_CHECK,
     doorOpen: false,
     adoDoorOpen: false,
+    recheckOnExpiry: true,
   });
   const pre = checks.preflightResult as PreflightResult | null as ReviewPreflight | null;
   const template = useTemplateNeeds(draft.origin, draft.intent);
@@ -150,9 +151,13 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     localMcp: localMcpConflicts(pre?.access ?? checks.preview.result?.access, draft.intent),
     harnessLabel: (id: string) => harnessNames.get(id) ?? id,
   };
-  const blockers = buildBlockers({ ...inputs, stale: !gate(0) });
+  // An answer the server gave for this draft that is now over a minute old, as against no answer yet.
+  const expired = checks.preflightRead !== null && checks.preflightRead.generation === checks.generation && !gate(0);
+  const blockers = buildBlockers({ ...inputs, stale: !gate(0), expired });
   const hard = blockers.filter((b) => b.kind !== "stale");
   const open = gate(hard.length);
+  // Only age holds Launch: pressing it asks the server again instead of doing nothing.
+  const recheckOnLaunch = !open && !hard.length && !issues.length && expired && !checks.preflighting;
 
   const asked = React.useRef(false);
   const wasOpen = React.useRef(false);
@@ -193,7 +198,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       eyebrow={NR_REVIEW.EYEBROW}
       title={NR_REVIEW.TITLE}
       lede={NR_REVIEW.LEDE}
-      primary={{ label: NR_REVIEW.LAUNCH_RUN, onActivate: () => onLaunch?.(), disabled: !open, describedBy: BLOCKERS_ID, arrow: false, className: cn(DISABLED_FILL, "max-sm:order-3 max-sm:col-span-2 max-sm:h-11") }}
+      primary={{ label: NR_REVIEW.LAUNCH_RUN, onActivate: () => (open ? onLaunch?.() : checkAgain()), disabled: !open && !recheckOnLaunch, describedBy: BLOCKERS_ID, arrow: false, className: cn(DISABLED_FILL, "max-sm:order-3 max-sm:col-span-2 max-sm:h-11") }}
       phoneBar
       headingAside={
         <div role="group" aria-label={NR_REVIEW.VIEW_ARIA}>
@@ -227,7 +232,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       }}
     >
       <Notices poolName={pool} slots={pre?.runner_pool_slots} applied={pre?.resources_applied} askedByYou={changedFromOrigin(draft, ["resources"])} warnings={pre?.warnings} warningContext={pre?.warning_context} diskCut={!!pre?.main_drive?.clamped_by && pre.main_drive.clamped_by !== "policy"} wallsLeftOut={wallsLeftOut} />
-      <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} onCheckAgain={issues.length ? undefined : checkAgain} onAdd={setAddingSecret} />
+      <BlockerList blockers={blockers} go={(loc: NewRunLocation) => go(loc)} onCheckAgain={issues.length ? undefined : checkAgain} onAdd={setAddingSecret} checking={checks.preflighting} />
       {addingSecret && (
         <AddTokenDialog
           item={addingSecret}

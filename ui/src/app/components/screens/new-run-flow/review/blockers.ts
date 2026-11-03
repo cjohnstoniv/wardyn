@@ -107,6 +107,8 @@ export interface BlockerInput {
   gatewayOff?: boolean;
   /** The result for this draft is missing or older than a minute. */
   stale: boolean;
+  /** The stale result is one the server did answer for this draft, now more than a minute old. */
+  expired?: boolean;
 }
 
 export function buildBlockers(input: BlockerInput): Blocker[] {
@@ -147,7 +149,7 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     out.push({ id: "gateway_off", kind: "gateway_off", text: NR_REVIEW.BLOCKER_GATEWAY_OFF, to: { screen: "step", step: "run" }, field: "inline_policy.ui_apps" });
   }
   // A stale result only matters when nothing else already holds Launch.
-  if (input.stale && out.length === 0) out.push({ id: "stale", kind: "stale", text: NR_REVIEW.BLOCKER_STALE });
+  if (input.stale && out.length === 0) out.push({ id: "stale", kind: "stale", text: input.expired ? NR_REVIEW.BLOCKER_EXPIRED : NR_REVIEW.BLOCKER_STALE });
   return out;
 }
 
