@@ -41,3 +41,26 @@ func TestKeptMachineWireNames(t *testing.T) {
 		t.Fatalf("result JSON %s, %v", b, err)
 	}
 }
+
+// A kept machine in the inventory names the run booted from it, and a machine no run holds names none:
+// the org compares that run before it releases a machine, so the id survives the round trip.
+func TestKeptMachineInventoryCarriesItsRun(t *testing.T) {
+	in := MacVMKept{Machines: []MacVMKeptMachine{
+		{ID: "a", InUse: true, RunID: "11111111-1111-1111-1111-111111111111", ExpiresAt: time.Unix(0, 0).UTC()},
+		{ID: "b", ExpiresAt: time.Unix(0, 0).UTC()},
+	}}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"run_id":"11111111-1111-1111-1111-111111111111"`) || strings.Count(string(b), `"run_id"`) != 1 {
+		t.Fatalf("inventory JSON %s", b)
+	}
+	var out MacVMKept
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Machines[0].RunID != in.Machines[0].RunID || out.Machines[1].RunID != "" {
+		t.Fatalf("round trip %+v", out.Machines)
+	}
+}

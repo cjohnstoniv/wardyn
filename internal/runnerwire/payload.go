@@ -325,6 +325,10 @@ type MacVMKeptMachine struct {
 	InUse     bool      `json:"in_use,omitempty"`
 	Scrubbed  bool      `json:"scrubbed,omitempty"`
 	ExpiresAt time.Time `json:"expires_at"`
+	// RunID is the run booted from the machine now, the one whose helper holds its lock; empty when it is
+	// not in use. The org releases a machine only from the run it names, so an older snapshot cannot
+	// release a newer run's hold.
+	RunID string `json:"run_id,omitempty"`
 }
 
 // MacVMCaps.Reason values, in priority order. An unknown value is a newer runner's, and decodes as itself.
