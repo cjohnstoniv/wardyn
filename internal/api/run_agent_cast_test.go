@@ -622,6 +622,31 @@ func (a *rejectingAudit) Record(context.Context, types.AuditEvent) error {
 	return errors.New("audit store down and spool full")
 }
 
+// A decline at dispatch whose failure row the audit recorder rejects (durably and into its spool) is never
+// silently lost: the run is stopped with its own sentence and a run.create failure row, and no run is started
+// marked and unexplained. With the recorder accepting, the same run starts and the row is there.
+func TestAgentCast_ADispatchDeclineWhoseRowIsRejectedStopsTheRun(t *testing.T) {
+	f, _, _ := agentCastFixture(t, types.MachineMacOSVM, func(c *Config) { c.ExecOutputTailOff = true })
+	rejecting := &rejectingAudit{}
+	f.srv.cfg.Audit = rejecting
+	run, _, ok := startDispatch(f, types.SiteConfig{}, false)
+	if ok || f.st.FailureHint() != macOSAgentDeclineUnrecordedMsg || f.st.State() != types.RunFailed {
+		t.Fatalf("started=%v hint=%q state=%s, want the run stopped with %q", ok, f.st.FailureHint(), f.st.State(), macOSAgentDeclineUnrecordedMsg)
+	}
+	if rejecting.refused.Load() == 0 || run.NotRecorded != types.NotRecordedRunnerDeclined {
+		t.Fatalf("refused rows %d, not_recorded %q, want the row attempted for a declined run", rejecting.refused.Load(), run.NotRecorded)
+	}
+
+	f2, cs2, _ := agentCastFixture(t, types.MachineMacOSVM, func(c *Config) { c.ExecOutputTailOff = true })
+	run2, _, ok2 := startDispatch(f2, types.SiteConfig{}, false)
+	if !ok2 || f2.st.State() == types.RunFailed || cs2.marked() != types.NotRecordedRunnerDeclined {
+		t.Fatalf("accepting recorder: started=%v state=%s mark=%q, want the run started with the mark stored", ok2, f2.st.State(), cs2.marked())
+	}
+	if rows := castRows(t, f2, agentCastSession); len(rows) != 1 || rows[0]["outcome"] != "failure" || rows[0]["reason"] != "no_tail" {
+		t.Fatalf("rows %v, want one no_tail failure row for %s", rows, run2.ID)
+	}
+}
+
 // agentCastDeclineFixture is a macOS VM task run that has ended and still owes its agent cast, on a
 // runner that keeps no copy of it: the sweep can only decline it, no_tail.
 func agentCastDeclineFixture(t *testing.T) (*outputFixture, *castStore) {

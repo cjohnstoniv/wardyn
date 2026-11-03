@@ -76,7 +76,9 @@ func (s *Server) applyRunRecording(ctx context.Context, run *types.AgentRun, spe
 // the run starts, unless the organisation or the run's pool requires recording (a setting that cannot be
 // read counts as required), which fails the run with a run.create failure row. msg, when set, is the
 // sentence for a requirement that was read; else the reason's own. declined, when set, is why the run's agent
-// output cast was declined at dispatch: a run that starts anyway gets its failure row (keepRunNotRecorded).
+// output cast was declined at dispatch: a run that starts anyway gets its failure row (keepRunNotRecorded), and one
+// whose row the audit recorder will not accept is stopped (macOSAgentDeclineUnrecordedMsg), never started with the
+// decline unsaid.
 func (s *Server) keepOrHoldNotRecorded(ctx context.Context, run *types.AgentRun, msg, declined string) bool {
 	if pool, required, readErr := s.recordingRequired(ctx, *run); required {
 		reason, held := recordingHold(run.NotRecorded == types.NotRecordedOrgOff, pool, readErr)
@@ -88,7 +90,12 @@ func (s *Server) keepOrHoldNotRecorded(ctx context.Context, run *types.AgentRun,
 			run.ID.String(), "failure", mustJSON(map[string]any{"reason": reason})))
 		return false
 	}
-	s.keepRunNotRecorded(ctx, *run, declined)
+	if !s.keepRunNotRecorded(ctx, *run, declined) {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, macOSAgentDeclineUnrecordedMsg)
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"reason": "decline_not_recorded"})))
+		return false
+	}
 	return true
 }
 
@@ -128,8 +135,10 @@ func (s *Server) applyDispatchRecording(ctx context.Context, run *types.AgentRun
 // keepRunNotRecorded stores why the run is not recorded; best-effort, like the decision's audit. declined,
 // when set, is the reason the run's agent output cast was declined at dispatch: it goes in a
 // session.recording.write failure row, the one declineAgentOutput writes for a later decline, through the
-// durable path (recordStreamAuditDurably), so Audit says why. A row the recorder cannot accept is logged.
-func (s *Server) keepRunNotRecorded(ctx context.Context, run types.AgentRun, declined string) {
+// durable path (recordStreamAuditDurably), so Audit says why. It reports false only for a row the recorder
+// would not accept, durably or into its spool: there is nothing to retry the row from at dispatch, so the
+// caller stops the run.
+func (s *Server) keepRunNotRecorded(ctx context.Context, run types.AgentRun, declined string) bool {
 	st, ok := s.cfg.Store.(interface {
 		SetRunNotRecorded(context.Context, uuid.UUID, types.RunNotRecorded) error
 	})
@@ -139,13 +148,15 @@ func (s *Server) keepRunNotRecorded(ctx context.Context, run types.AgentRun, dec
 		}
 	}
 	if declined == "" {
-		return
+		return true
 	}
 	key := recording.CastKey(run.ID.String(), agentCastSession)
 	if !s.recordStreamAuditDurably(ctx, run.SandboxRef, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "session.recording.write",
 		key, "failure", mustJSON(map[string]any{"session": agentCastSession, "key": key, "reason": declined}))) {
-		slog.ErrorContext(ctx, "wardynd: record why a run's agent output is not recorded", slog.String("run_id", run.ID.String()), slog.String("reason", declined))
+		slog.ErrorContext(ctx, "wardynd: record why a run's agent output is not recorded; the run is stopped", slog.String("run_id", run.ID.String()), slog.String("reason", declined))
+		return false
 	}
+	return true
 }
 
 // keepRunRecordingOff stores an off decision, the level and policy_off in one write, and reports
