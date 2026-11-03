@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 const lockPw = "Zq9-secret-agent-password-0123456789ab"
@@ -98,7 +99,7 @@ func TestScreenLockOffFailsClosedAndLogsNoSecret(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			logs := logCapture(t)
 			run, in := &fakeRunner{}, &fakeStdin{err: tc.stdin}
-			l := ScreenLock{Run: run, Stdin: in, Console: tc.console, KCPassword: tc.kc}
+			l := ScreenLock{Run: run, Stdin: in, Console: tc.console, KCPassword: tc.kc, Wait: func(time.Duration) {}}
 			if l.Off(context.Background()) {
 				t.Fatal("Off = true")
 			}
@@ -136,5 +137,47 @@ func TestExecRunnerRunStdinKeepsThePasswordOffArgvEnvAndErrors(t *testing.T) {
 		if got := strings.Contains(string(b), lockPw); got != want {
 			t.Errorf("%s holds the password = %v, want %v", f, got, want)
 		}
+	}
+}
+
+// flakyConsole has nobody at the console for its first n asks.
+type flakyConsole struct {
+	n     int
+	asked *int
+}
+
+func (f flakyConsole) Console(context.Context) (uint32, error) {
+	*f.asked++
+	if *f.asked <= f.n {
+		return 0, ErrNoConsoleUser
+	}
+	return 502, nil
+}
+
+func TestScreenLockOffWaitsForTheConsoleUserFiveTriesTwoSecondsApart(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		missing   int
+		wantOK    bool
+		wantAsked int
+	}{{"up on the fourth ask", 3, true, 4}, {"never up", 99, false, 5}} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := logCapture(t)
+			var asked int
+			var waits []time.Duration
+			l := ScreenLock{Run: &fakeRunner{}, Stdin: &fakeStdin{}, Console: flakyConsole{n: tc.missing, asked: &asked},
+				KCPassword: kcFile(t, lockPw), Wait: func(d time.Duration) { waits = append(waits, d) }}
+			if got := l.Off(context.Background()); got != tc.wantOK || asked != tc.wantAsked || len(waits) != tc.wantAsked-1 {
+				t.Fatalf("Off = %v after %d asks and %d waits; want %v, %d, %d", got, asked, len(waits), tc.wantOK, tc.wantAsked, tc.wantAsked-1)
+			}
+			for _, d := range waits {
+				if d != 2*time.Second {
+					t.Fatalf("waited %v", d)
+				}
+			}
+			if failed := strings.Contains(logs.String(), "screen lock left as it was"); failed == tc.wantOK {
+				t.Fatalf("log = %s", logs)
+			}
+		})
 	}
 }

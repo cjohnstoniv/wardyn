@@ -47,6 +47,9 @@ type command struct {
 	// MayDropSession: turning Remote Login off may end this very session
 	// before it reports an exit status; the fresh-dial check after it decides.
 	MayDropSession bool
+	// Optional: a failure of this row is logged by its id and stage 1 goes on. For a setting that must not stop a
+	// base from being published.
+	Optional bool
 	// SkipIfOK: a probe argv, run the way the row runs. The row is skipped when the probe exits 0,
 	// and runs when it exits anything else.
 	SkipIfOK []string
@@ -111,7 +114,7 @@ var commands = []command{
 	// The agent's own screen saver idle time: macOS reads it per user and ignores the system domain.
 	{ID: "screensaver-off", Step: "7d", Root: true, Argv: asAgent("/usr/bin/defaults", "-currentHost", "write", "com.apple.screensaver", "idleTime", "-int", "0")},
 	// The screen lock itself, which the idle time above does not turn off: sysadminctl takes the agent's password on stdin.
-	{ID: "screenlock-off", Step: "7d", Root: true, Argv: asAgent("/usr/sbin/sysadminctl", "-screenLock", "off", "-password", "-"), In: stdinAgentPassword},
+	{ID: "screenlock-off", Step: "7d", Root: true, Argv: asAgent("/usr/sbin/sysadminctl", "-screenLock", "off", "-password", "-"), In: stdinAgentPassword, Optional: true},
 	{ID: "updates-check-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticCheckEnabled", "-bool", "false"}},
 	{ID: "updates-download-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticDownload", "-bool", "false"}},
 	{ID: "updates-macos-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticallyInstallMacOSUpdates", "-bool", "false"}},

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"time"
 )
 
 // MacKCPasswordPath is the file macOS reads the auto-login password from. Stage 1 writes it, root-owned,
@@ -61,6 +62,30 @@ type ScreenLock struct {
 	Console ConsoleUser
 	// KCPassword is the file the password is read from; "" is MacKCPasswordPath.
 	KCPassword string
+	// Wait pauses between tries at the console user; nil is time.Sleep.
+	Wait func(time.Duration)
+}
+
+// The console user may not be up when Init arrives (auto-login is still running): Off tries consoleTries
+// times, consoleGap apart.
+const (
+	consoleTries = 5
+	consoleGap   = 2 * time.Second
+)
+
+// consoleUser asks for the console user, again while nobody is logged in yet.
+func (l ScreenLock) consoleUser(ctx context.Context) (uint32, error) {
+	wait := l.Wait
+	if wait == nil {
+		wait = time.Sleep
+	}
+	for i := 0; ; i++ {
+		uid, err := l.Console.Console(ctx)
+		if err == nil || i == consoleTries-1 || ctx.Err() != nil {
+			return uid, err
+		}
+		wait(consoleGap)
+	}
 }
 
 // asUserHome is argv run in the console user's GUI session as that user, with that user's HOME (sudo -H),
@@ -96,7 +121,7 @@ func (l ScreenLock) agentPassword() ([]byte, error) {
 // a step that fails is logged by name, never with why or with what the password was, and leaves the
 // lock as it was. It says whether the lock was turned off.
 func (l ScreenLock) Off(ctx context.Context) bool {
-	uid, err := l.Console.Console(ctx)
+	uid, err := l.consoleUser(ctx)
 	if err != nil {
 		slog.Warn("guest agent: screen lock left as it was", "step", "console user")
 		return false
