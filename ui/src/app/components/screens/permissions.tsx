@@ -728,7 +728,8 @@ export function AddGrantForm({
   const copy = KIND[kind];
   // A picker only where the kind's list loaded; otherwise the free text stays.
   const pickItems = useGrantItems([kind])[kind] ?? null;
-  // "Enter an ID" turns the picker into the free-text field: a list holds only its first page.
+  // "Enter an ID" turns the picker into the free-text field: a list holds only its first page. Typing in the
+  // field sets it too, so a list that finishes loading later does not swap the field away from typed text.
   const [enterId, setEnterId] = React.useState(false);
   React.useEffect(() => setEnterId(false), [kind]);
   const picking = PICKABLE_KINDS.includes(kind) && pickItems !== null && !enterId;
@@ -858,7 +859,11 @@ export function AddGrantForm({
             <Input
               id="grant-value"
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onChange={(e) => {
+                setValue(e.target.value);
+                // Typed text stays a typed id even if the list arrives afterwards.
+                setEnterId(true);
+              }}
               disabled={disabled}
               className="font-mono"
               autoComplete="off"

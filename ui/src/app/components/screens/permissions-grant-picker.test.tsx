@@ -118,6 +118,32 @@ describe("Add grant Value picker", () => {
     expect(await screen.findByRole("combobox", { name: KIND.workspace.valueLabel })).toBeInTheDocument();
   });
 
+  it("keeps text typed before the list arrives", async () => {
+    const typed = "7d1e5c90-3333-4b2a-9c4d-1e2f3a4b5c6d";
+    let release!: (v: unknown) => void;
+    listWorkspacesMock.mockReturnValue(new Promise((r) => (release = r)));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await chooseKind(user, KIND.workspace.label);
+    setField(await screen.findByRole("textbox", { name: KIND.workspace.valueLabel }), typed);
+    release([{ id: WS_ID, name: "web-app" }]);
+    // The back-to-list button only exists once the list has arrived; the typed text is still there.
+    await screen.findByRole("button", { name: PERM_EXTRA.PICKER_BACK_TO_LIST });
+    expect(screen.getByRole("textbox", { name: KIND.workspace.valueLabel })).toHaveValue(typed);
+    expect(screen.queryByRole("combobox", { name: KIND.workspace.valueLabel })).toBeNull();
+  });
+
+  it("swaps to the picker when the list arrives and nothing was typed", async () => {
+    let release!: (v: unknown) => void;
+    listWorkspacesMock.mockReturnValue(new Promise((r) => (release = r)));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await chooseKind(user, KIND.workspace.label);
+    expect(await screen.findByRole("textbox", { name: KIND.workspace.valueLabel })).toBeInTheDocument();
+    release([{ id: WS_ID, name: "web-app" }]);
+    expect(await screen.findByRole("combobox", { name: KIND.workspace.valueLabel })).toBeInTheDocument();
+  });
+
   it("keeps free text for a kind with no list, and for a list that is empty", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();

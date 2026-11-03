@@ -101,22 +101,58 @@ func (s *Server) availabilityOf(r *http.Request, kind, value string) (availabili
 	if err != nil {
 		return v, err
 	}
+	var prefixes, denies []types.CapabilityGrant
+	onlyPrefixAllows := true
 	for _, g := range grants {
-		if g.Capability == kind && g.Effect == types.CapabilityAllow && strings.TrimSpace(g.Value) == value {
-			v.AllowedBy = append(v.AllowedBy, g)
+		if g.Capability != kind {
 			continue
 		}
-		// The launch check's own matcher (capValueMatches), so this list can never
-		// disagree with what a launch lets through.
-		if kind == capImage && g.Capability == kind && g.Effect == types.CapabilityAllow &&
-			isImagePrefixGrant(g.Value) && capValueMatches(kind, g.Value, value) {
-			v.CoveredBy = append(v.CoveredBy, availabilityCover{
-				Prefix: strings.TrimSpace(g.Value),
-				Who:    availabilityWhoRef{SubjectType: g.SubjectType, Subject: g.Subject},
-			})
+		switch {
+		case g.Effect == types.CapabilityDeny:
+			denies = append(denies, g)
+		case strings.TrimSpace(g.Value) == value:
+			v.AllowedBy = append(v.AllowedBy, g)
+		case kind == capImage && capValueMatches(kind, g.Value, value):
+			// The launch check's own matcher, so this list can never name a row
+			// a launch would not match.
+			if isImagePrefixGrant(g.Value) {
+				prefixes = append(prefixes, g)
+			} else {
+				onlyPrefixAllows = false
+			}
 		}
 	}
+	if kind == capImage {
+		v.CoveredBy = coveringPrefixes(prefixes, denies, value, v.Restricted, onlyPrefixAllows && imageSiblingIn(restricted[capImage], value))
+	}
 	return v, nil
+}
+
+// coveringPrefixes keeps the prefix allows a launch would honour for value,
+// mirroring capRead.granted: nothing on a restricted value (only a named allow
+// counts there), nothing when the allows are all prefixes and another tag of
+// the repository is restricted, and nothing for a who that a deny row on the
+// image refuses outright (the same subject, or everyone). A deny on a narrower
+// subject than the cover's, such as one person in a user type, is not read.
+func coveringPrefixes(prefixes, denies []types.CapabilityGrant, value string, restricted, siblingBlocks bool) []availabilityCover {
+	covers := []availabilityCover{}
+	if restricted || siblingBlocks {
+		return covers
+	}
+next:
+	for _, g := range prefixes {
+		for _, d := range denies {
+			if capDenyOverlaps(capImage, d.Value, value) &&
+				(d.SubjectType == types.CapabilitySubjectAll || (d.SubjectType == g.SubjectType && d.Subject == g.Subject)) {
+				continue next
+			}
+		}
+		covers = append(covers, availabilityCover{
+			Prefix: strings.TrimSpace(g.Value),
+			Who:    availabilityWhoRef{SubjectType: g.SubjectType, Subject: g.Subject},
+		})
+	}
+	return covers
 }
 
 // handleGetAvailability answers one value's availability. securityOps.
