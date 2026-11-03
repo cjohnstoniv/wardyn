@@ -176,9 +176,9 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
         )}
         {desktopOn && (!background || watchable) && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>}
         {/* Files moves with the desktop, under the buttons: the same gate it had in the Attach tile
-            (the run's person, not a sponsor, while it runs, with a declared UI app), plus never on a background run,
-            which has no files door. */}
-        {desktopOn && !background && uiApps.length > 0 && mayAttach && !sponsorOnly && running && <DesktopFilesPanel runId={run.id} vm />}
+            (the run's person, not a sponsor, while it runs, with a declared UI app or a Linux VM's built-in desktop),
+            plus never on a background run, which has no files door. The panel shows the run's own desktop rules. */}
+        {desktopOn && !background && (uiApps.length > 0 || !mac) && mayAttach && !sponsorOnly && running && <DesktopFilesPanel runId={run.id} vm />}
         {desktopOn && !background && <DesktopSignInsNote s={signIns} />}
       </section>
     </WidgetCard>
