@@ -100,12 +100,9 @@ export function sectionOfRefusal(message: string): { section: FormSection | "nam
 }
 
 /**
- * The built-in presets whose spec refuses every push (push_rules.deny_all); wall-presets.wire.test.ts pins this to
- * the Go built-ins. A saved preset's spec is never on the run read, so none of them is named here.
+ * The name to print under a deny-all refusal when the run's wall preset is what refused every push: the policy view's
+ * wall_preset says the preset added deny_all (added.push_rules). A personal preset a non-owner reads has no name, so none.
  */
-export const BUILTIN_PUSH_REFUSING = new Set(["read-only", "sealed"]);
-
-/** The name to print under a deny-all refusal when the run's preset is known to be what sets it; none otherwise. */
-export function presetRefusingEveryPush(p: { id?: string; name?: string; scope: string } | undefined): string | undefined {
-  return p?.scope === "builtin" && p.id && p.name && BUILTIN_PUSH_REFUSING.has(p.id) ? p.name : undefined;
+export function presetRefusingEveryPush(p: { name?: string; added?: Record<string, string[]> } | undefined): string | undefined {
+  return p?.name && p.added?.push_rules?.includes("deny_all") ? p.name : undefined;
 }

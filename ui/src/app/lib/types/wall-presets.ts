@@ -54,6 +54,8 @@ export interface RunWallPreset {
   name?: string;
   scope: WallPresetScope;
   group_id?: string;
+  /** A group preset's group label, when the group has one. */
+  group_label?: string;
   version?: number;
 }
 

@@ -322,12 +322,14 @@ type CreateRunRequest struct {
 // waited, which ended it queue_policy_changed. A personal preset on a run read
 // by anyone but the run's owner carries no id or name.
 type RunWallPreset struct {
-	ID      string            `json:"id,omitempty"`
-	Name    string            `json:"name,omitempty"`
-	Scope   string            `json:"scope"`
-	GroupID string            `json:"group_id,omitempty"`
-	Version int               `json:"version,omitempty"`
-	Changed *WallPresetChange `json:"changed,omitempty"`
+	ID      string `json:"id,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Scope   string `json:"scope"`
+	GroupID string `json:"group_id,omitempty"`
+	// GroupLabel is the group's display label, for a group preset whose group has one.
+	GroupLabel string            `json:"group_label,omitempty"`
+	Version    int               `json:"version,omitempty"`
+	Changed    *WallPresetChange `json:"changed,omitempty"`
 }
 
 // DriveSelection is the per-run user-drive option set. See

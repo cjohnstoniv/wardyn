@@ -120,6 +120,10 @@ type runPolicyResponse struct {
 	// WallPreset is the wall preset the run was launched with and what it narrowed, removed and added
 	// (policy_source.wall_preset). A personal preset read by anyone but the run's owner is its scope alone.
 	WallPreset *runPolicyWallPreset `json:"wall_preset,omitempty"`
+	// PushesUnstoppable is set when this install's git token broker is off and the run's recorded capability list leaves out
+	// code_write: a git token in the sandbox can still push. It is the decision behind unstoppablePushWarning, read from the
+	// spec the walls and the preset have already narrowed.
+	PushesUnstoppable bool `json:"pushes_unstoppable,omitempty"`
 }
 
 type runPolicyWallPreset struct {
@@ -272,6 +276,9 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	// Redacted: this tier was shown less than a super admin is (a mount's host path, a secret name).
 	resp.Redacted = !reflect.DeepEqual(specJSON(redactSpecForRead(served, specReadFull)), specJSON(redactSpecForRead(served, tier)))
 	resp.Spec = &out
+	if w := gitPushWithheldBy(served, types.PersonalWallsSpec{}, nil); s.cfg.DisableGitPATBroker && (w.github || w.ado) {
+		resp.PushesUnstoppable = true
+	}
 	// Shown with the host list it marks, so a tier that sees fewer hosts sees no marks.
 	restarted, err := s.runRestarted(ctx, run.ID)
 	if err != nil {

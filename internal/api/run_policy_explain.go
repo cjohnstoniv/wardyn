@@ -59,8 +59,12 @@ const (
 	fieldMethods   = "allowed_methods"
 	fieldMinCC     = "min_confinement_class"
 	fieldDesktop   = "desktop"
+	fieldPushRules = "push_rules"
 	fieldDisk      = "resources.disk_mib"
 )
+
+// pushRulesDenyAll is the entry of the walls' added push_rules that says every push is refused.
+const pushRulesDenyAll = "deny_all"
 
 var policyFieldOrder = []string{
 	fieldAllowed, fieldDenied, "allow_all_egress", "first_use_approval", "first_use_hold_seconds", "max_holds",

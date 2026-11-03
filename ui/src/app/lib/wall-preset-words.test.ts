@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { WALL_PRESETS as W } from "../components/wardyn/copy/wall-presets";
 import type { PersonalWallsSpec } from "./api/walls";
-import { audienceOf, presetChips, sectionOfRefusal } from "./wall-preset-words";
+import { audienceOf, presetChips, presetRefusingEveryPush, sectionOfRefusal } from "./wall-preset-words";
 
 const GH_READ = ["code_read", "issues_read", "identity"];
 const ADO_READ = ["code_read", "work_read"];
@@ -63,4 +63,14 @@ describe("sectionOfRefusal", () => {
     ["invalid wall preset: push_rules.deny_paths: 99 entries", null],
     ["invalid wall preset: the preset names no limit; Open is the built-in for no preset", null],
   ])("%s", (message, section) => expect(sectionOfRefusal(message).section).toBe(section));
+});
+
+describe("presetRefusingEveryPush", () => {
+  it.each([
+    ["the preset added deny_all", { name: "Docs triage", added: { push_rules: ["deny_all"] } }, "Docs triage"],
+    ["the preset added other entries only", { name: "Docs triage", added: { denied_domains: ["x"] } }, undefined],
+    ["the preset narrowed push_rules but added no deny_all", { name: "Docs triage", added: {} }, undefined],
+    ["a personal preset a non-owner reads (no name)", { added: { push_rules: ["deny_all"] } }, undefined],
+    ["no preset", undefined, undefined],
+  ])("%s", (_n, p, want) => expect(presetRefusingEveryPush(p)).toBe(want));
 });

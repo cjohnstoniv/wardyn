@@ -24,6 +24,7 @@ import type {
 import { CAPABILITY } from "../../wardyn/copy";
 import { CC_META } from "../../wardyn/cc-meta";
 import { usePrincipal } from "../../wardyn/operator-context";
+import type { PolicyPresetNotes } from "../../wardyn/policy-document/policy-summary";
 import { PolicyDocument, type PolicyView } from "../../wardyn/policy-document/policy-document";
 import { lifecycleSummary } from "../../wardyn/policy-document/policy-facts";
 import {
@@ -96,7 +97,7 @@ export function PolicyTab({ run }: { run: RunDetail }) {
       {run.wall_preset && (
         <WallPresetRunLine
           name={run.wall_preset.name}
-          audience={run.wall_preset.name ? audienceOf({ scope: run.wall_preset.scope, group_id: run.wall_preset.group_id }) : undefined}
+          audience={run.wall_preset.name ? audienceOf({ scope: run.wall_preset.scope, group_id: run.wall_preset.group_id }, run.wall_preset.group_id && run.wall_preset.group_label ? { [run.wall_preset.group_id]: run.wall_preset.group_label } : undefined) : undefined}
           version={run.wall_preset.version}
         />
       )}
@@ -114,6 +115,15 @@ export function PolicyTab({ run }: { run: RunDetail }) {
       )}
     </div>
   );
+}
+
+// The wall preset's notes on the summary: its chip on the rows it decided (the provenance's wall_preset layer), none
+// for a personal preset a non-owner reads (no name), and the unstoppable-push line when the server says so.
+function presetNotes(view: RunPolicyView): PolicyPresetNotes | undefined {
+  const name = view.wall_preset?.name;
+  const fields = new Set(Object.entries(view.provenance ?? {}).filter(([, p]) => p.layer === "wall_preset").map(([field]) => field));
+  const chip = name && fields.size > 0 ? { label: WALL_PRESETS.CHIP(name), fields } : undefined;
+  return chip || view.pushes_unstoppable ? { chip, pushesUnstoppable: view.pushes_unstoppable } : undefined;
 }
 
 function sourceText(s: RunPolicySource): string {
@@ -206,6 +216,7 @@ function RecordedPolicy({
         marks={marks}
         facts={{ usedClass: run.confinement_class }}
         hostMarks={view.host_marks}
+        presetNotes={presetNotes(view)}
         headingLevel={4}
       />
       <p className="mt-4 max-w-[92ch] border-t border-dashed border-border pt-2.5 text-xs text-muted-foreground">

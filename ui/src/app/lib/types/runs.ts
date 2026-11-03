@@ -728,6 +728,8 @@ export interface RunPolicyView {
   // host passed through unread. Absent for a run recorded before it existed.
   host_marks?: RunPolicyHostMarks;
   wall_preset?: RunPolicyWallPreset; // run-policy-wall-preset.ts
+  // The broker is off and the capability list leaves out code_write: a git token in the sandbox can still push.
+  pushes_unstoppable?: boolean;
 }
 
 // internal/api/run_host_marks.go hostMarks: the allowed_domains entries marked Inspected.

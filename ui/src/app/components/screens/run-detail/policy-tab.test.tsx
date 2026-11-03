@@ -770,3 +770,44 @@ describe("PolicyTab: a wall preset's changes sit under their own heading", () =>
     expect(screen.getByRole("heading", { name: "dana@acme.example's walls" })).toBeInTheDocument();
   });
 });
+
+describe("PolicyTab: P-63 chips, P-62b and the group label", () => {
+  const withPreset = (wall_preset: RunDetail["wall_preset"]) => ({ ...RUN, wall_preset }) as RunDetail;
+  const sealed = { id: "sealed", name: "Sealed", scope: "builtin" as const, version: 1 };
+  const policy = (over: Partial<RunPolicyView> = {}) =>
+    view({
+      spec: { allowed_domains: ["a.example.com"], push_rules: { deny_all: true }, git_push_any_branch: false } as never,
+      provenance: { allowed_domains: { layer: "wall_preset" }, push_rules: { layer: "wall_preset" }, first_use_approval: { layer: "deployment" } },
+      wall_preset: { ...sealed, narrowed: ["allowed_domains", "push_rules"] },
+      ...over,
+    });
+
+  it("puts Wall preset: {name} on the rows the preset decided", async () => {
+    show(policy(), { run: withPreset(sealed) });
+    await ready();
+    const chips = screen.getAllByText("Wall preset: Sealed").filter((e) => e.closest("[data-testid=policy-summary]"));
+    expect(chips).toHaveLength(2);
+  });
+
+  it("draws no chip for a personal preset a non-owner reads, which carries its scope alone", async () => {
+    show(policy({ wall_preset: { scope: "person" } }), { run: withPreset({ scope: "person" }) });
+    await ready();
+    expect(screen.queryByText(/^Wall preset: /, { selector: "[data-testid=policy-summary] *" })).toBeNull();
+  });
+
+  it("reads Pushes can't be stopped on this install from the policy view's pushes_unstoppable", async () => {
+    show(policy({ pushes_unstoppable: true }), { run: withPreset(sealed) });
+    await ready();
+    expect(within(screen.getByTestId("policy-summary")).getByText("Pushes can't be stopped on this install.")).toBeInTheDocument();
+  });
+
+  it("names a group preset's audience by the group's label, not its id", async () => {
+    show(view(), { run: withPreset({ id: "g1", name: "Release freeze", scope: "group", group_id: "grp-77", group_label: "Platform", version: 2 }) });
+    await ready();
+    expect(screen.getByTestId("wall-preset-run-line")).toHaveTextContent("Wall preset: Release freeze (Platform group, version 2).");
+    cleanup();
+    show(view(), { run: withPreset({ id: "g1", name: "Release freeze", scope: "group", group_id: "grp-77", version: 2 }) });
+    await ready();
+    expect(screen.getByTestId("wall-preset-run-line")).toHaveTextContent("(grp-77 group, version 2)");
+  });
+});

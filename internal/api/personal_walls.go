@@ -402,6 +402,11 @@ func newWallsSource(before, after types.RunPolicySpec) *wallsSourceRecord {
 	put(&rec.Removed, "eligible_grants", setDiff(wallsGrantKeys(before.EligibleGrants), wallsGrantKeys(after.EligibleGrants)))
 	put(&rec.Added, "denied_domains", setDiff(a.DeniedDomains, b.DeniedDomains))
 	put(&rec.Added, fieldDesktop, setDiff(desktopBlocked(after), desktopBlocked(before)))
+	// Every push refused is a knob inside push_rules, so Narrowed names push_rules alone; the console reads this entry to say
+	// which layer refuses every push.
+	if after.PushRules != nil && after.PushRules.DenyAll && (before.PushRules == nil || !before.PushRules.DenyAll) {
+		put(&rec.Added, fieldPushRules, []string{pushRulesDenyAll})
+	}
 	return rec
 }
 
@@ -605,6 +610,26 @@ func runWallPresetView(r *http.Request, run types.AgentRun) *client.RunWallPrese
 		return v
 	}
 	return &client.RunWallPreset{ID: p.ID, Name: p.Name, Scope: string(p.Scope), GroupID: p.GroupID, Version: p.Version, Changed: p.Changed}
+}
+
+// runWallPresetViewLabelled is runWallPresetView with a group preset's group label added, read the way the templates' and
+// the wall preset list's group labels are (TemplateGroupLabels). A group with no label, or a store without labels, adds none.
+func (s *Server) runWallPresetViewLabelled(r *http.Request, run types.AgentRun) *client.RunWallPreset {
+	v := runWallPresetView(r, run)
+	if v == nil || v.Scope != string(types.WallPresetScopeGroup) || v.GroupID == "" {
+		return v
+	}
+	ts, ok := s.cfg.Store.(store.TemplateStore)
+	if !ok {
+		return v
+	}
+	labels, err := ts.TemplateGroupLabels(r.Context(), []string{v.GroupID})
+	if err != nil {
+		slog.WarnContext(r.Context(), "api: read a wall preset's group label for the run read", slog.Any("err", err))
+		return v
+	}
+	v.GroupLabel = labels[v.GroupID]
+	return v
 }
 
 // unstoppablePushWarning is the run warning for a run whose effective capability list leaves out

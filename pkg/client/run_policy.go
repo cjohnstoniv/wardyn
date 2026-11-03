@@ -48,6 +48,9 @@ type RunPolicyView struct {
 	// narrowed, removed and added. A personal preset read by anyone but the
 	// run's owner carries its scope alone.
 	WallPreset *RunPolicyWallPreset `json:"wall_preset,omitempty"`
+	// PushesUnstoppable is set when the install's git token broker is off and the run's capability list leaves out
+	// code_write: a git token in the sandbox can still push.
+	PushesUnstoppable bool `json:"pushes_unstoppable,omitempty"`
 }
 
 // RunPolicyWallPreset is a run's wall preset in its policy view: Narrowed names

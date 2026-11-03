@@ -431,26 +431,34 @@ describe("RunDetailScreen — Audit tab wording", () => {
     expect(within(other).getByTestId("run-audit-target")).toHaveTextContent("pypi.org");
   });
 
-  // P-70: a push refused for deny_all names the run's wall preset when that preset is known to set it.
+  // P-70: a push refused for deny_all names the run's wall preset when the policy view says that preset added deny_all.
   const denyAll = { ...base, id: "e9", action: "egress.deny", target: "github.com", actor_type: "proxy", outcome: "deny", data: { rule_source: "brokered:git:push-deny-all" } };
-  it.each([
-    ["Sealed", { id: "sealed", name: "Sealed", scope: "builtin", version: 1 }, "Refused by this run's Sealed wall preset."],
-    ["Read-only", { id: "read-only", name: "Read-only", scope: "builtin", version: 1 }, "Refused by this run's Read-only wall preset."],
-  ])("names the run's %s wall preset under a deny-all refusal", async (_n, wall_preset, text) => {
-    const [row] = await openAuditTab([denyAll], { ...RUN, wall_preset } as unknown as typeof RUN);
+  const withPreset = { ...RUN, wall_preset: { id: "o1", name: "Docs triage", scope: "org", version: 2 } } as unknown as typeof RUN;
+  const viewOf = (wall_preset: unknown) => getPolicyMock.mockResolvedValue({ run_id: "run-1", state: "recorded", source: { kind: "default" }, redacted: false, changes: [], complete: true, wall_preset });
+
+  it("names a saved preset under a deny-all refusal when its policy view says it added deny_all", async () => {
+    viewOf({ id: "o1", name: "Docs triage", scope: "org", version: 2, narrowed: ["push_rules"], added: { push_rules: ["deny_all"] } });
+    const [row] = await openAuditTab([denyAll], withPreset);
     expect(within(row).getByTestId("run-audit-target")).toHaveTextContent("Refused: every push");
-    expect(within(row).getByTestId("wall-preset-refusal-line")).toHaveTextContent(text);
+    expect(await within(row).findByTestId("wall-preset-refusal-line")).toHaveTextContent("Refused by this run's Docs triage wall preset.");
   });
 
   it.each([
-    ["Open", { id: "open", name: "Open", scope: "builtin", version: 1 }],
-    ["a saved preset whose spec the read does not carry", { id: "o1", name: "Docs triage", scope: "org", version: 2 }],
+    ["the preset narrowed push paths only", { id: "o1", name: "Docs triage", scope: "org", version: 2, narrowed: ["push_rules"], added: { denied_domains: ["x"] } }],
     ["a personal preset read by a non-owner", { scope: "person" }],
-    ["no wall preset", undefined],
-  ])("names no preset under a deny-all refusal for %s", async (_n, wall_preset) => {
-    const [row] = await openAuditTab([denyAll], { ...RUN, wall_preset } as unknown as typeof RUN);
+  ])("names no preset under a deny-all refusal when %s", async (_n, wall_preset) => {
+    viewOf(wall_preset);
+    const [row] = await openAuditTab([denyAll], withPreset);
+    await waitFor(() => expect(getPolicyMock).toHaveBeenCalled());
     expect(within(row).getByTestId("run-audit-target")).toHaveTextContent("Refused: every push");
     expect(within(row).queryByTestId("wall-preset-refusal-line")).toBeNull();
+  });
+
+  it("does not read the policy view for a run with no wall preset, or with no deny-all refusal", async () => {
+    getPolicyMock.mockClear();
+    await openAuditTab([denyAll]);
+    await openAuditTab([{ ...base, id: "e10", action: "egress.allow", target: "pypi.org", actor_type: "proxy" }], withPreset);
+    expect(getPolicyMock).not.toHaveBeenCalled();
   });
 
   it("reads an egress row with no target as the Audit screen does", async () => {

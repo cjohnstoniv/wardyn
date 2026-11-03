@@ -438,3 +438,31 @@ describe("PolicySummary — the Pushes row", () => {
     expect(screen.queryByText("Pushes")).toBeNull();
   });
 });
+
+describe("PolicySummary: the wall preset's notes (P-63, P-62b)", () => {
+  const spec = {
+    allowed_domains: ["a.example.com"], denied_domains: ["paste.example.net"], first_use_approval: "always_deny",
+    push_rules: { deny_all: true }, git_push_any_branch: false,
+  } as unknown as RunPolicySpec;
+  const chip = { label: "Wall preset: Sealed", fields: new Set(["allowed_domains", "push_rules"]) };
+  const chipsIn = (group: string, label: string) => within(row(group, label)).queryAllByText("Wall preset: Sealed");
+
+  it("puts the preset's chip on the rows built from fields it decided, and only those", () => {
+    render(<PolicySummary spec={spec} notes={{ chip }} />);
+    expect(chipsIn("Network", "Allowed hosts")).toHaveLength(1);
+    expect(chipsIn("Tools and pushes", "Pushes")).toHaveLength(1);
+    expect(chipsIn("Network", "Blocked hosts")).toHaveLength(0);
+    expect(chipsIn("Network", "Any other host")).toHaveLength(0);
+  });
+
+  it("draws no chip without notes, or for a chip with no fields", () => {
+    render(<PolicySummary spec={spec} notes={{ chip: { ...chip, fields: new Set() } }} />);
+    expect(screen.queryByText("Wall preset: Sealed")).toBeNull();
+  });
+
+  it("reads Pushes can't be stopped on this install when the server says so, ahead of every refusal", () => {
+    render(<PolicySummary spec={spec} notes={{ pushesUnstoppable: true }} />);
+    expect(row("Tools and pushes", "Pushes")).toHaveTextContent(WALL_PRESETS.PUSHES_UNSTOPPABLE);
+    expect(row("Tools and pushes", "Pushes")).not.toHaveTextContent(WALL_PRESETS.PUSH_EVERY_REFUSED);
+  });
+});

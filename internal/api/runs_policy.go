@@ -319,7 +319,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		BackgroundWatch: s.backgroundWatchViewFor(r.Context(), run, principalFromRequest(r)),
 		MacWindow:       s.macWindowViewFor(r.Context(), stored, s.macWindowAuthorityOf(r)),
 		MacOSDisk:       s.runMacOSDiskView(r.Context(), run),
-		WallPreset:      runWallPresetView(r, run),
+		WallPreset:      s.runWallPresetViewLabelled(r, run),
 	})
 }
 
