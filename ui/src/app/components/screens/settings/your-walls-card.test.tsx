@@ -161,6 +161,29 @@ describe("Your walls card", () => {
     await waitFor(() => expect(putMock).toHaveBeenCalledWith({ ...carried, desktop: { copy_out: "blocked" } }));
   });
 
+  it("keeps only the host of a typed site: no scheme, path or capitals", async () => {
+    render(<YourWallsCard />);
+    await open();
+    const never = screen.getByPlaceholderText(YOUR_WALLS.ADD_SITE);
+    setField(never, "HTTPS://GitHub.com/org/repo?x=1");
+    fireEvent.keyDown(never, { key: "Enter" });
+    expect(screen.getByText("github.com")).toBeInTheDocument();
+    expect(screen.getByText(YOUR_WALLS.SITE_HINT)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledWith({ denied_domains: ["github.com"] }));
+  });
+
+  it("can clear the barrier and the unlisted-sites choice, and says what VM desktops do with the clipboard", async () => {
+    getMock.mockResolvedValue({ spec: { min_confinement_class: "CC2", first_use_approval: "wait_for_review" } });
+    render(<YourWallsCard />);
+    await open();
+    expect(screen.getByText(YOUR_WALLS.CLIPBOARD_HINT)).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: YOUR_WALLS.BARRIER_NONE }));
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.UNLISTED_ORG }));
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledWith({}));
+  });
+
   it("removes a site chip", async () => {
     getMock.mockResolvedValue({ spec: { denied_domains: ["a.example.com", "b.example.com"] } });
     render(<YourWallsCard />);
@@ -170,11 +193,27 @@ describe("Your walls card", () => {
     expect(screen.getByText("b.example.com")).toBeInTheDocument();
   });
 
-  it("Remove all walls clears the document and the form", async () => {
+  it("Remove all walls asks first, and Cancel removes nothing", async () => {
+    getMock.mockResolvedValue({ spec: { denied_domains: ["a.example.com"] } });
+    render(<YourWallsCard />);
+    await open();
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.REMOVE_ALL }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(YOUR_WALLS.REMOVE_ALL_TITLE)).toBeInTheDocument();
+    expect(within(dialog).getByText(YOUR_WALLS.REMOVE_ALL_BODY)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: YOUR_WALLS.CANCEL }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(clearMock).not.toHaveBeenCalled();
+    expect(screen.getByText("a.example.com")).toBeInTheDocument();
+  });
+
+  it("Remove all walls clears the document and the form once confirmed", async () => {
     getMock.mockResolvedValue({ spec: { denied_domains: ["a.example.com"], desktop: { upload: "blocked" } } });
     render(<YourWallsCard />);
     await open();
     await user.click(screen.getByRole("button", { name: YOUR_WALLS.REMOVE_ALL }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: YOUR_WALLS.REMOVE_ALL }));
     await waitFor(() => expect(clearMock).toHaveBeenCalledTimes(1));
     expect(screen.queryByText("a.example.com")).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: YOUR_WALLS.UPLOAD })).not.toBeChecked();

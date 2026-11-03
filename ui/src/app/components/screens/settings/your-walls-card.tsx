@@ -12,7 +12,17 @@ import { Check, X } from "lucide-react";
 import { HttpError } from "../../../lib/api/core";
 import { walls as api, wallsAbsent, type PersonalWallsSpec, type WithheldGrant } from "../../../lib/api/walls";
 import { CC_ORDER, type ConfinementClass, type FirstUseMode } from "../../../lib/types";
-import { Button } from "../../ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../../ui/alert-dialog";
+import { Button, buttonVariants } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
@@ -30,7 +40,8 @@ const DIRECTIONS: { id: Direction; label: string }[] = [
   { id: "upload", label: T.UPLOAD },
   { id: "download", label: T.DOWNLOAD },
 ];
-const UNLISTED: { value: FirstUseMode; label: string }[] = [
+const UNLISTED: { value: FirstUseMode | ""; label: string }[] = [
+  { value: "", label: T.UNLISTED_ORG },
   { value: "always_deny", label: T.UNLISTED_BLOCK },
   { value: "deny_with_review", label: T.UNLISTED_ASK },
   { value: "wait_for_review", label: T.UNLISTED_HOLD },
@@ -77,9 +88,12 @@ function toForm(s: PersonalWallsSpec): Form {
   };
 }
 
+// A typed site is a bare host: lower-case, with any scheme and everything from the first "/", "?" or "#" dropped.
+const siteOf = (text: string): string => text.trim().toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, "").replace(/[/?#].*$/, "");
+
 // A site typed and not yet entered still counts: Save folds it in.
 const withText = (list: string[], text: string): string[] => {
-  const site = text.trim().toLowerCase();
+  const site = siteOf(text);
   return site && !list.includes(site) ? [...list, site] : list;
 };
 
@@ -104,6 +118,7 @@ function SiteList({ label, sites, text, onSites, onText }: { label: string; site
     onText("");
   };
   return (
+    <div className="flex flex-col gap-1.5">
     <div className="flex flex-wrap items-center gap-1.5">
       {sites.map((site) => (
         <Chip key={site} mono className="gap-1">
@@ -125,6 +140,8 @@ function SiteList({ label, sites, text, onSites, onText }: { label: string; site
           enter();
         }}
       />
+    </div>
+    <p className="text-xs text-muted-foreground">{T.SITE_HINT}</p>
     </div>
   );
 }
@@ -181,6 +198,7 @@ export function YourWallsCard() {
       setForm(toForm({}));
       setSaved(false);
     });
+  const [confirmingRemove, setConfirmingRemove] = React.useState(false);
 
   if (state === "absent") return null;
   const unnamed = KIND_OPTIONS.filter((k) => !form.withheld.some((g) => g.kind === k));
@@ -247,7 +265,11 @@ export function YourWallsCard() {
           </div>
           <div className="flex flex-col gap-2">
             <span className={LABEL}>{T.BARRIER}</span>
-            <RadioGroup className="flex flex-wrap gap-4" aria-label={T.BARRIER} value={form.floor ?? ""} onValueChange={(v) => edit({ floor: v as ConfinementClass })}>
+            <RadioGroup className="flex flex-wrap gap-4" aria-label={T.BARRIER} value={form.floor ?? "none"} onValueChange={(v) => edit({ floor: v === "none" ? undefined : (v as ConfinementClass) })}>
+              <label className="flex items-center gap-2 text-sm">
+                <RadioGroupItem value="none" />
+                {T.BARRIER_NONE}
+              </label>
               {CC_ORDER.map((cc) => (
                 <label key={cc} className="flex items-center gap-2">
                   <RadioGroupItem value={cc} />
@@ -258,6 +280,7 @@ export function YourWallsCard() {
           </div>
           <div className="flex flex-col gap-2">
             <span className={LABEL}>{T.CLIPBOARD}</span>
+            <p className="text-xs text-muted-foreground">{T.CLIPBOARD_HINT}</p>
             <div className="flex flex-wrap gap-x-5 gap-y-2">
               {DIRECTIONS.map((d) => (
                 <label key={d.id} className="flex items-center gap-2 text-sm">
@@ -299,7 +322,7 @@ export function YourWallsCard() {
             <Button size="sm" disabled={busy} onClick={() => void save()}>
               {T.SAVE}
             </Button>
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => void removeAll()}>
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirmingRemove(true)}>
               {T.REMOVE_ALL}
             </Button>
           </div>
@@ -318,6 +341,27 @@ export function YourWallsCard() {
           <p className="text-xs text-muted-foreground">{T.RESTART_NOTE}</p>
         </div>
       )}
+      <AlertDialog open={confirmingRemove} onOpenChange={(o) => !o && !busy && setConfirmingRemove(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{T.REMOVE_ALL_TITLE}</AlertDialogTitle>
+            <AlertDialogDescription>{T.REMOVE_ALL_BODY}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>{T.CANCEL}</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: "destructive" })}
+              disabled={busy}
+              onClick={(e) => {
+                e.preventDefault();
+                void removeAll().then(() => setConfirmingRemove(false));
+              }}
+            >
+              {T.REMOVE_ALL}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </CollapsibleCard>
   );
 }
