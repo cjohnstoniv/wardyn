@@ -108,12 +108,3 @@ func prepareLimits(file string, cpu float64, memGB int64) (cpus int, memMiB uint
 	}
 	return cpus, uint64(mem), nil
 }
-
-// macOSVMKeptDiskLimit reads the runner setting macos_vm_kept_disk_limit_gb as bytes (tests replace it).
-var macOSVMKeptDiskLimit = func() (int64, error) {
-	c, err := effectiveRunnerConfig("", nil)
-	if err != nil {
-		return 0, err
-	}
-	return parseKeptDiskLimit(c.get(macOSVMKeptDiskLimitKey))
-}

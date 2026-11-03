@@ -23,30 +23,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
-// keptMachine writes a kept machine's folder under m's layout: its kept.json (with name when given, as a
-// record that holds one has it), and a manifest naming the disk's logical size. It returns the folder.
+// keptMachine writes a kept machine's folder under m's layout: its kept.json (named when name is given),
+// and a manifest naming the disk's logical size. It returns the folder.
 func keptMachine(t *testing.T, m *macOSVMs, id uuid.UUID, name string, mutate func(*macvm.KeptRecord)) string {
 	t.Helper()
 	dir := m.layout.KeptMachineDir(id.String())
-	rec := macvm.KeptRecord{ID: id.String(), OwnerHash: "owner", RunnerID: m.runnerID, Base: "Standard",
+	rec := macvm.KeptRecord{ID: id.String(), Name: name, OwnerHash: "owner", RunnerID: m.runnerID, Base: "Standard",
 		CreatedAt: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), ExpiresAt: time.Date(2026, 12, 1, 12, 0, 0, 0, time.Local), Scrubbed: true}
 	if mutate != nil {
 		mutate(&rec)
 	}
 	if err := macvm.WriteKept(dir, rec); err != nil {
 		t.Fatal(err)
-	}
-	if name != "" {
-		var raw map[string]any
-		b, _ := os.ReadFile(filepath.Join(dir, macvm.KeptFile))
-		if err := json.Unmarshal(b, &raw); err != nil {
-			t.Fatal(err)
-		}
-		raw["name"] = name
-		b, _ = json.Marshal(raw)
-		if err := os.WriteFile(filepath.Join(dir, macvm.KeptFile), b, 0o600); err != nil {
-			t.Fatal(err)
-		}
 	}
 	if err := os.WriteFile(filepath.Join(dir, macvm.ManifestFile), []byte(`{"format":2,"state":"ready","disk_bytes":`+"53687091200"+`}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -486,17 +474,27 @@ func TestKeptDiskLimitSetting(t *testing.T) {
 	}
 }
 
-// A setting that cannot be read keeps no machines on the Mac; a good one is the handle's limit.
-func TestOpenReadsTheKeptLimit(t *testing.T) {
-	was := macOSVMKeptDiskLimit
-	defer func() { macOSVMKeptDiskLimit = was }()
-	macOSVMKeptDiskLimit = func() (int64, error) { return 60 << 30, nil }
-	if m := keptRig(t); m.kept.limit != 60<<30 {
-		t.Fatalf("limit %d", m.kept.limit)
+// openKeptRig opens the rig's runner with the kept limit setting as its caller resolved it.
+func openKeptRig(t *testing.T, r *macLedgerRig, setting string) *macOSVMs {
+	t.Helper()
+	m := openMacOSVMs(macOSVMSetup{ledgerDir: r.dir, root: r.root, runnerID: "runner-a", version: "1.0.0", uid: 501,
+		dockerMemory: 8 * gib, host: r.host, owner: r.owner, fstat: r.fstat, keptLimit: setting})
+	if m.ledger == nil {
+		t.Fatalf("ledger refused: %s", m.refusal)
 	}
-	macOSVMKeptDiskLimit = func() (int64, error) { return 0, errors.New("macos_vm_kept_disk_limit_gb: no") }
-	if m := keptRig(t); m.kept.limit != 0 || m.kept.limitErr == nil {
-		t.Fatalf("limit %d, err %v", m.kept.limit, m.kept.limitErr)
+	return m
+}
+
+// The handle's limit is the setting its caller resolved: unset is 110 GB, 0 is off, and one that cannot be
+// read keeps no machines on the Mac.
+func TestOpenTakesTheKeptLimitItIsGiven(t *testing.T) {
+	for setting, want := range map[string]int64{"": 110 << 30, "0": 0, "60": 60 << 30} {
+		if m := openKeptRig(t, newMacLedgerRig(t), setting); m.kept.limit != want || m.kept.limitErr != nil {
+			t.Errorf("%q: limit %d, err %v; want %d", setting, m.kept.limit, m.kept.limitErr, want)
+		}
+	}
+	if m := openKeptRig(t, newMacLedgerRig(t), "lots"); m.kept.limit != 0 || m.kept.limitErr == nil {
+		t.Fatalf("a bad setting: limit %d, err %v", m.kept.limit, m.kept.limitErr)
 	}
 }
 
@@ -678,26 +676,53 @@ func TestKeptDiskLimitIsARunnerSetting(t *testing.T) {
 			t.Errorf("%s: err %v, want a refusal naming the setting", body, err)
 		}
 	}
-	// The reader the handle uses resolves through the same config: runnerd.json in the user config folder.
+}
+
+// The limit serve gives the handle is the one in the file serve was told to read (--config), not the default
+// file's: an explicit file's 0 (off) or smaller budget beats a default file's, and an explicit file with
+// none leaves the default (110), whatever the default file says.
+func TestKeptDiskLimitFollowsTheConfigFileServeReads(t *testing.T) {
 	cfgHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfgHome)
 	t.Setenv("HOME", cfgHome)
-	if n, err := macOSVMKeptDiskLimit(); err != nil || n != 110<<30 {
-		t.Errorf("the reader's default = %d, %v", n, err)
-	}
-	cfgPath, err := defaultRunnerConfigPath()
+	defPath, err := defaultRunnerConfigPath()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for body, want := range map[string]int64{`{"macos_vm_kept_disk_limit_gb":"0"}`: 0, `{"macos_vm_kept_disk_limit_gb":"60"}`: 60 << 30} {
-		if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if n, err := macOSVMKeptDiskLimit(); err != nil || n != want {
-			t.Errorf("%s: the reader gave %d, %v; want %d", body, n, err, want)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
 		}
+	}
+	explicit := filepath.Join(t.TempDir(), "runner.json")
+	limitOf := func() int64 {
+		t.Helper()
+		cfg, err := serveConfig(newServeCommand(nil), explicit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var org, state string
+		var opts serveOptions
+		cfg.applyTo(&org, &state, &opts)
+		return openKeptRig(t, newMacLedgerRig(t), opts.macOSVMKeptLimit).kept.limit
+	}
+	body := func(v string) string { return `{"macos_vm_kept_disk_limit_gb":"` + v + `"}` }
+	write(defPath, body("60"))
+	write(explicit, body("0"))
+	if n := limitOf(); n != 0 {
+		t.Errorf("explicit 0 over a default file's 60 = %d", n)
+	}
+	write(defPath, body("0"))
+	write(explicit, body("40"))
+	if n := limitOf(); n != 40<<30 {
+		t.Errorf("explicit 40 over a default file's 0 = %d", n)
+	}
+	write(explicit, `{}`)
+	if n := limitOf(); n != 110<<30 {
+		t.Errorf("explicit file with none over a default file's 0 = %d, want 110 GB", n)
 	}
 }

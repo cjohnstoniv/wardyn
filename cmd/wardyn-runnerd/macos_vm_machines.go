@@ -58,10 +58,11 @@ type macOSVMKept struct {
 	sweepEvery int
 }
 
-// openKept reads the kept limit setting. One that cannot be read keeps no machines on this Mac, never
-// more than the person set.
-func (m *macOSVMs) openKept() {
-	if m.kept.limit, m.kept.limitErr = macOSVMKeptDiskLimit(); m.kept.limitErr != nil {
+// openKept takes the kept limit setting as resolved by the caller (it never reads a settings file itself,
+// so the file serve was given is the one that counts). One that cannot be read keeps no machines on this
+// Mac, never more than the person set.
+func (m *macOSVMs) openKept(setting string) {
+	if m.kept.limit, m.kept.limitErr = parseKeptDiskLimit(setting); m.kept.limitErr != nil {
 		m.kept.limit = 0
 		slog.Warn("macOS VM sandboxes: this Mac keeps no machines", "error", m.kept.limitErr.Error())
 	}
@@ -191,11 +192,7 @@ func (m *macOSVMs) keptRows() ([]keptRow, error) {
 			continue
 		}
 		dir := filepath.Join(m.layout.KeptDir(), de.Name())
-		// The name is read from the file itself, so a record that has one shows it.
-		var probe struct {
-			macvm.KeptRecord
-			Name string `json:"name"`
-		}
+		var probe macvm.KeptRecord
 		b, err := os.ReadFile(filepath.Join(dir, macvm.KeptFile))
 		if err != nil || json.Unmarshal(b, &probe) != nil {
 			continue
@@ -206,7 +203,7 @@ func (m *macOSVMs) keptRows() ([]keptRow, error) {
 		}
 		man, _ := macvm.ReadManifest(dir)
 		written, _ := macvm.KeptAllocatedBytes(dir)
-		rows = append(rows, keptRow{key: de.Name(), name: probe.Name, dir: dir, rec: rec, written: written, inUse: runs[rec.ID] != "",
+		rows = append(rows, keptRow{key: de.Name(), name: rec.Name, dir: dir, rec: rec, written: written, inUse: runs[rec.ID] != "",
 			worst: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes))})
 	}
 	slices.SortFunc(rows, func(a, b keptRow) int {

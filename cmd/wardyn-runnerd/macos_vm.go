@@ -132,10 +132,13 @@ type macOSVMs struct {
 type macOSVMSetup struct {
 	ledgerDir, root, runnerID, version string
 	limitsFile                         string
-	uid                                int
-	dockerMemory, perRunMemory         uint64
-	host                               admission.Host
-	owner                              func(os.FileInfo) (int, bool)
+	// keptLimit is macos_vm_kept_disk_limit_gb as the caller resolved it (serve from its --config file, a
+	// command from its own), "" when unset: the Mac's kept machines budget, which this never re-reads.
+	keptLimit                  string
+	uid                        int
+	dockerMemory, perRunMemory uint64
+	host                       admission.Host
+	owner                      func(os.FileInfo) (int, bool)
 	// fstat replaces fstat(2) in the ledger's root-ownership checks (tests); nil is the real one.
 	fstat func(fd int, name string) (unix.Stat_t, error)
 }
@@ -163,7 +166,7 @@ func (m *macOSVMs) useDriver(d macVMDriver) {
 func openMacOSVMs(s macOSVMSetup) *macOSVMs {
 	m := &macOSVMs{host: s.host, layout: macvm.Layout{Root: s.root}, runnerID: s.runnerID, uid: s.uid, version: s.version, perRunMemory: s.perRunMemory, limitsFile: s.limitsFile,
 		defaultPerRunMemory: s.perRunMemory, interval: macOSVMRecompute, kick: make(chan struct{}, 1), items: openMacOSVMItems()}
-	m.openKept()
+	m.openKept(s.keptLimit)
 	if s.ledgerDir != admission.DefaultDir {
 		m.ledgerDir = s.ledgerDir
 	}
