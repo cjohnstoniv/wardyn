@@ -174,6 +174,11 @@ func (r *runner) run(ctx context.Context) error {
 	}
 	man, id, machineDir, release, err := r.openMachine()
 	if err != nil {
+		if code := KeptRefusalCode(err); code != "" {
+			if werr := writeJSONAtomic(filepath.Join(r.o.RunDir, KeptRefusalFile), keptRefusal{code}, 0o600); werr != nil {
+				r.o.Log.Error("macvm: recording a kept machine refusal failed", "run_id", r.cfg.RunID, "err", werr.Error())
+			}
+		}
 		return err
 	}
 	defer release()
