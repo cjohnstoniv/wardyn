@@ -780,6 +780,7 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	r.Get("/me/launch-intents", s.handleListLaunchIntents)
 	r.Put("/me/run-layout", s.handlePutRunLayout)
 	s.mountPersonalWallsRoutes(r) // the caller's own walls, keyed by their session (personal_walls.go)
+	s.mountWallPresetRoutes(r)    // named walls picked at launch, with the run templates' authority (wall_presets.go)
 	// Per-user Azure DevOps sign-in (ado_entra.go): two browser doors that
 	// capture ONE PERSON'S Azure DevOps refresh token. It belongs in this
 	// self-service block and nowhere else — both doors refuse a caller with no
