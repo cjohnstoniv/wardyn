@@ -4108,6 +4108,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0242` (`0242_runner_pool_member_namespace`) adds `runner_pool_members.runs_namespace` (`0152`'s table): the Kubernetes namespace an organization runner serves a pool in, empty (the runner's default) on every existing row; no grant changes.
 - `0245` (`0245_run_shape`) adds `agent_runs.shape` (`0001`'s table): the New Run shape a run was set up from, empty on every existing row; no grant changes.
 - `0247` (`0247_sources_runner_id`) adds `sources.runner_id` (`0031`'s table): the runner a library folder is bound to, part of its identity, NULL on every existing row; no grant changes.
+- `0248` (`0248_wall_presets`) creates `wall_presets` (named walls kept for a person, a group or the organisation) and adds `agent_runs.wall_preset` (`0001`'s table): the frozen copy of the wall preset a run was launched with, NULL on every existing row. A split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `wall_presets`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

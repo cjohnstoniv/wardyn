@@ -22,4 +22,4 @@ export function sessionOptionLabel(e: AuditEvent): string {
 // selected !== runId (run-detail.tsx) is what distinguishes the two cases.
 export const RECORDING_MISSING_SESSION_TITLE = "No recording for this session";
 export const RECORDING_MISSING_SESSION_BODY =
-  "This attach session's cast is missing — it may still be capturing, or the recording failed to save.";
+  "This terminal session's recording is missing. It may still be saving, or it failed to save.";

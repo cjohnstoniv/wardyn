@@ -177,7 +177,7 @@ test.describe("Run detail — the local lost-run banner", () => {
     await expect(banner).toContainText("This run's network was stopped");
     await expect(banner.getByRole("button", { name: "Revive" })).toBeVisible();
     await expect(banner.getByRole("button", { name: "Extend" })).toBeVisible();
-    await expect(banner.getByRole("button", { name: "End run" })).toBeVisible();
+    await expect(banner.getByRole("button", { name: "Kill run" })).toBeVisible();
     await expect(banner).not.toContainText("reports its runner stopped this run's network");
     await expect(banner).not.toContainText("was still on when it came back");
   });
@@ -190,6 +190,6 @@ test.describe("Run detail — the local lost-run banner", () => {
     await expect(banner).not.toContainText("offline for over an hour");
     await expect(banner.getByRole("button", { name: "Revive" })).toBeVisible();
     await expect(banner.getByRole("button", { name: "Extend" })).toBeVisible();
-    await expect(banner.getByRole("button", { name: "End run" })).toBeVisible();
+    await expect(banner.getByRole("button", { name: "Kill run" })).toBeVisible();
   });
 });

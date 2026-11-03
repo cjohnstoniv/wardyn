@@ -8,7 +8,7 @@
 // state's own copy and actions, and that only one ever renders (the
 // tightened note is the one exception, F19).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { makeRun } from "../../../../test/factories";
 import type { ApprovalRequest, RunDetail } from "../../../lib/types";
@@ -96,7 +96,7 @@ describe("RunLifetimeBanner — lost (reboot)", () => {
     expect(screen.getByText(/continues the Claude Code conversation/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Extend" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Kill run" })).toBeInTheDocument();
     // Reboot, not outage: the outage-only sentence must not appear.
     expect(screen.queryByText(/unreachable for over an hour/)).not.toBeInTheDocument();
   });
@@ -150,7 +150,7 @@ describe("RunLifetimeBanner — lost on k8s (F18)", () => {
     expect(screen.getByText("The node it ran on restarted. Files on your drive are kept; the rest is gone.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Revive" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Extend" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Kill run" })).toBeInTheDocument();
   });
 });
 
@@ -169,7 +169,7 @@ describe("RunLifetimeBanner — lost (outage): F5, one sentence, no contradictio
     renderBanner(run);
     expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Extend" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Kill run" })).toBeInTheDocument();
   });
 });
 
@@ -182,7 +182,7 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
     // drew — only the two sentences the owner actually approved render.
     expect(screen.getByText("It has no network. Extend to revive it.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Extend and revive" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Kill run" })).toBeInTheDocument();
     expect(screen.queryByText("This run's sandbox stopped")).not.toBeInTheDocument();
   });
 
@@ -280,7 +280,38 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
     expect(screen.queryByText(/Extend to revive it/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Extend and revive" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Extend" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Kill run" })).toBeInTheDocument();
+  });
+});
+
+describe("RunLifetimeBanner — Kill run asks first (UXR-15)", () => {
+  const ended = () => detail({ lost_reason: "ended", lost_at: new Date(NOW - 60_000).toISOString(), interactive: true, title: "nightly build" });
+
+  it("opens the shared confirm and kills nothing until it is confirmed", async () => {
+    const user = userEvent.setup();
+    const onChanged = vi.fn();
+    renderBanner(ended(), [], onChanged);
+    await user.click(screen.getByRole("button", { name: "Kill run" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveAccessibleName('Kill "nightly build"?');
+    expect(dialog).toHaveTextContent("This cannot be undone.");
+    expect(killRunMock).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(killRunMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Kill run" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Kill run" }));
+    await waitFor(() => expect(killRunMock).toHaveBeenCalledWith("run-1"));
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it("a failed kill names the run by its title, not its id", async () => {
+    const user = userEvent.setup();
+    killRunMock.mockRejectedValue(new Error("boom"));
+    renderBanner(ended());
+    await user.click(screen.getByRole("button", { name: "Kill run" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Kill run" }));
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith("Couldn't end nightly build", expect.anything()));
   });
 });
 
@@ -471,7 +502,7 @@ describe("RunLifetimeBanner — F16: a non-owner, non-operator viewer gets no ac
     expect(screen.getByText("This run's sandbox stopped")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Revive" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Extend" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "End run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Kill run" })).not.toBeInTheDocument();
   });
 
   it("paused: no Resume now", () => {
@@ -532,7 +563,7 @@ describe("RunLifetimeBanner: a local run (RS4)", () => {
     expect(banner).toHaveTextContent("You can revive it once laptop-7 is back online.");
     expect(screen.queryByRole("button", { name: "Revive" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Extend 1 day" })).toBeNull();
-    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Kill run" })).toBeInTheDocument();
   });
 
   // FR-0114 (WARDYN_HA): the replica asked may not hold the runner's connection, so it reports nothing. That is not
@@ -547,7 +578,7 @@ describe("RunLifetimeBanner: a local run (RS4)", () => {
     expect(banner).not.toHaveTextContent("You can revive it once");
     expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Extend" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Kill run" })).toBeInTheDocument();
     expect(screen.queryByTestId("run-lifetime-local-lapse")).toBeNull();
   });
 
@@ -564,7 +595,7 @@ describe("RunLifetimeBanner: a local run (RS4)", () => {
     expect(banner).toHaveTextContent("This run's network was stopped");
     expect(banner).toHaveTextContent("laptop-7 reports its runner stopped this run's network after an hour offline.");
     expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Kill run" })).toBeInTheDocument();
     expect(listAuditMock).toHaveBeenCalledWith(expect.any(String), { action: "run.containment.reassert" });
   });
 
@@ -592,7 +623,7 @@ describe("RunLifetimeBanner: a local run (RS4)", () => {
     expect(banner).toHaveTextContent("This run's network was stopped");
     expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Extend" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Kill run" })).toBeInTheDocument();
     expect(screen.queryByText(/reports its runner stopped this run's network/)).toBeNull();
     expect(screen.queryByText(/was still on when it came back/)).toBeNull();
   });
@@ -656,7 +687,7 @@ describe("RunLifetimeBanner: a local run (RS4)", () => {
     renderBanner(lost({ lost_reason: "reboot", runner_online: false }));
     await screen.findByTestId("run-lifetime-local-lapse");
     expect(screen.queryByRole("button", { name: "Revive" })).toBeNull();
-    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Kill run" })).toBeInTheDocument();
   });
 
   // WARDYN_HA: the server leaves runner_online unset when it cannot know; unset is unknown, never offline.
