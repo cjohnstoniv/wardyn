@@ -32,6 +32,7 @@ import { ModelConnectionsCard } from "./model-connections-card";
 import { useConsoleMode } from "../../wardyn/console-view";
 import { AdoConnectionCard } from "./ado-connection";
 import { MyComponentsCard } from "./my-components-card";
+import { WallPresetsCard } from "./wall-presets-card";
 import { YourWallsCard } from "./your-walls-card";
 import { MyRunnerAndPoolsCards } from "./my-pools-card";
 import { InvitationsCard } from "./invitations-card";
@@ -91,6 +92,9 @@ export function YourAccountScreen() {
           {/* #2948: the person's own limits on every run they start. Renders nothing for a caller who is
               no person (the admin token, local mode) and where the store keeps no personal settings. */}
           <YourWallsCard />
+          {/* rc.12: named walls the person picks per run at New Run. Renders nothing for a caller who is no person and
+              where the store keeps no wall presets. The organisation's presets are written in the Admin view. */}
+          <WallPresetsCard admin={adminView} />
           {/* 0.9 (M-RN-2): the person's own computer that runs their runs. User view only; renders
               nothing while runners are off. */}
           {!adminView && <MyRunnerAndPoolsCards />}
