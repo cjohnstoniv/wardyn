@@ -532,13 +532,19 @@ export async function enterUIApp(
     // (replaceAll is ES2021; this tsconfig's lib is ES2020).
     if (uiSandbox?.enter_post_url) {
       const action = uiSandbox.enter_post_url.split("{run}").join(encodeURIComponent(runId));
+      // The person closed the blank tab while the ticket was pending: a named form would now open a new tab that never
+      // had its opener cleared. Treat it as cancelling, checked in the same tick as the submit.
+      if (tab?.closed) return;
       submitEnterForm(action, { run: runId, app, ticket }, formTarget);
     } else if (uiSandbox?.enter_url_template) {
       const url = Object.entries({ run: runId, app, ticket }).reduce(
         (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
         uiSandbox.enter_url_template,
       );
-      if (tab) tab.location.replace(url);
+      if (tab) {
+        if (tab.closed) return;
+        tab.location.replace(url);
+      }
       else window.open(url, target, "noopener");
     } else {
       throw new Error("This deployment's UI-sandbox gateway published no enter URL for the console to use.");

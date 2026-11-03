@@ -56,4 +56,28 @@ describe("enterUIApp — a tab the caller opened inside its click", () => {
     expect(tabStub.close).toHaveBeenCalled();
     expect(tab).toBe(tabStub);
   });
+
+  it("ends quietly, with no form, no navigation and no new tab, when the person closed the tab while the ticket was pending", async () => {
+    let release: (t: string) => void = () => {};
+    attachTicketMock.mockReturnValue(new Promise<string>((r) => (release = r)));
+    const submitSpy = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
+    const tab = openEnterTab()!;
+    openSpy.mockClear();
+    const entered = enterUIApp("run-1", "__desktop", gateway, { tab });
+    Object.assign(tabStub, { closed: true });
+    release("tkt_x");
+    await expect(entered).resolves.toBeUndefined();
+    expect(submitSpy).not.toHaveBeenCalled();
+    expect(openSpy).not.toHaveBeenCalled();
+    submitSpy.mockRestore();
+  });
+
+  it("does not navigate a closed tab on the URL-template path either", async () => {
+    attachTicketMock.mockResolvedValue("tkt_x");
+    const tab = openEnterTab()!;
+    Object.assign(tabStub, { closed: true });
+    await enterUIApp("run-1", "__desktop", { enabled: true, enter_url_template: "http://ui.local/enter?t={ticket}" }, { tab });
+    expect(tabStub.location.replace).not.toHaveBeenCalled();
+    expect(openSpy).toHaveBeenCalledTimes(1);
+  });
 });
