@@ -56,6 +56,8 @@ export interface ProviderDraft {
   authFormat: string;
   // Bedrock kinds only (bedrock_sso, bedrock_bearer) — mp.Bedrock's fields.
   region: string;
+  // bedrock_bearer only: bedrock.base_url, the gateway address a Bedrock key row routes through.
+  bedrockBaseUrl: string;
   ssoStartUrl: string;
   ssoAccountId: string;
   ssoRoleName: string;
@@ -78,12 +80,24 @@ export interface ProviderDraft {
   harnesses: Record<string, HarnessDraft>;
 }
 
+// The address a provider's gateway is reached at: a Bedrock row's bedrock.base_url, any other row's base_url.
+export const providerGatewayAddress = (p: ModelProvider) => (isBedrock(p.kind) ? (p.bedrock?.base_url ?? "") : (p.base_url ?? ""));
+// The same address as the draft has it now.
+export const draftGatewayAddress = (d: ProviderDraft) => (isBedrock(d.kind) ? d.bedrockBaseUrl : d.baseUrl);
+// The kinds that may send run identity to a gateway. A Bedrock sign-in row may not: SigV4 signs the Host.
+export const gatewayKind = (kind: ModelProviderKind) =>
+  kind === "anthropic_api_key" || kind === "openai_api_key" || kind === "custom_endpoint" || kind === "bedrock_bearer";
+
 export const isEndpoint = (kind: ModelProviderKind) => kind === "custom_endpoint";
 export const isLocal = (kind: ModelProviderKind) => kind === "local_model";
 
 // The vendor host a key kind's route-through re-points (providerPublicHosts).
 export const vendorHost = (kind: ModelProviderKind) =>
   kind === "openai_api_key" ? "api.openai.com" : "api.anthropic.com";
+
+// Where a provider's calls go when it has no gateway: the vendor's host, or a Bedrock row's regional runtime host.
+export const directHost = (d: ProviderDraft) =>
+  isBedrock(d.kind) ? `bedrock-runtime.${d.region.trim() || "us-east-1"}.amazonaws.com` : vendorHost(d.kind);
 
 // The provides-line under the dialog title (§2.2, per kind) — the editor's own
 // wording, distinct from the list row's compact providesLine (model-providers-
@@ -127,6 +141,7 @@ export function newDraft(kind: EditorKind, harnesses: HarnessRow[]): ProviderDra
     authHeader: "Authorization",
     authFormat: "Bearer {token}",
     region: "",
+    bedrockBaseUrl: "",
     ssoStartUrl: "",
     ssoAccountId: "",
     ssoRoleName: "",
@@ -158,6 +173,7 @@ export function draftFrom(p: ModelProvider, harnesses: HarnessRow[]): ProviderDr
     authHeader: p.auth?.header ?? "Authorization",
     authFormat: toDisplayFormat(p.auth?.format ?? "Bearer %s"),
     region: p.bedrock?.region ?? "",
+    bedrockBaseUrl: p.bedrock?.base_url ?? "",
     ssoStartUrl: p.bedrock?.sso_start_url ?? "",
     ssoAccountId: p.bedrock?.sso_account_id ?? "",
     ssoRoleName: p.bedrock?.sso_role_name ?? "",
@@ -169,7 +185,7 @@ export function draftFrom(p: ModelProvider, harnesses: HarnessRow[]): ProviderDr
     keepAlive: p.local?.keep_alive_seconds ? String(p.local.keep_alive_seconds) : "",
     gatewayOn: !!p.gateway_identity,
     gatewayAudience: p.gateway_identity?.audience ?? "",
-    gatewaySaved: p.gateway_identity ? { baseUrl: p.base_url ?? "", audience: p.gateway_identity.audience } : null,
+    gatewaySaved: p.gateway_identity ? { baseUrl: providerGatewayAddress(p), audience: p.gateway_identity.audience } : null,
     harnesses: rows,
   };
 }
@@ -218,7 +234,7 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
     kind: draft.kind,
     base_url: draft.baseUrl.trim() || undefined,
     // Absent is off; a stored field the editor doesn't show rides along inside it.
-    gateway_identity: draft.gatewayOn
+    gateway_identity: draft.gatewayOn && gatewayKind(draft.kind)
       ? { ...base?.gateway_identity, audience: draft.gatewayAudience.trim() }
       : undefined,
     auth:
@@ -242,6 +258,7 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
       ? {
           ...base?.bedrock,
           region: draft.region.trim() || undefined,
+          base_url: sso ? base?.bedrock?.base_url : draft.bedrockBaseUrl.trim() || undefined,
           sso_start_url: sso ? draft.ssoStartUrl.trim() || undefined : undefined,
           sso_account_id: sso ? draft.ssoAccountId.trim() || undefined : undefined,
           sso_role_name: sso ? draft.ssoRoleName.trim() || undefined : undefined,
