@@ -113,6 +113,16 @@ func (m *meeter) validateMacOSBases(b *[]string) {
 	}
 }
 
+// validateAllowedModels refuses an overlay's allowed_models list that a profile could not hold.
+func (m *meeter) validateAllowedModels(a *[]string) {
+	if a == nil {
+		return
+	}
+	if err := types.ValidAllowedModels(*a); err != nil {
+		m.fail(ReasonOverlayInvalid, "allowed_models", "%v", err)
+	}
+}
+
 // meetMacOSBases intersects two macOS base allow lists where empty means "any base". An empty overlay
 // narrows nothing. A disjoint pair has no representable result: the empty list the intersection would be
 // allows every base.

@@ -236,9 +236,6 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		}
 		return reviveResult{}, rerr
 	}
-	if rerr := s.reviveModelListRunnerRefusal(run, cfg); rerr != nil {
-		return reviveResult{}, rerr
-	}
 	imageMark, rerr := s.reviveImageDigestRefusal(ctx, run, actorType, actor)
 	if rerr != nil {
 		return reviveResult{}, rerr
@@ -543,7 +540,7 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 	if rerr := s.reviveMCPBindings(ctx, run, cfg); rerr != nil {
 		return nil, rerr
 	}
-	return cfg, nil
+	return cfg, s.reviveModelListRunnerRefusal(run, cfg)
 }
 
 // rescopeRevivedPATGrants is scopePATGrants over the allowlist entries whose grant row still exists.
