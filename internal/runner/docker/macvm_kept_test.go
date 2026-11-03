@@ -478,8 +478,13 @@ func TestKeptMachineDeleteOp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.d.DeleteKeptMachine(ctx, booted, "owner"); err == nil {
+	_, derr := r.d.DeleteKeptMachine(ctx, booted, "owner")
+	if derr == nil {
 		t.Fatal("a booted machine was deleted")
+	}
+	var we *runnerwire.Error
+	if !errors.As(derr, &we) || we.Code != runnerwire.CodeRefused {
+		t.Fatalf("a booted machine's refusal is a refused reply, since nothing was removed: %v", derr)
 	}
 	if _, err := os.Stat(filepath.Join(r.c.Layout.KeptMachineDir(booted.String()), macvm.DiskFile)); err != nil {
 		t.Fatalf("a refused delete removed the disk: %v", err)
