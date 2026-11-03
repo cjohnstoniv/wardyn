@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -356,6 +357,70 @@ func (d *driveOpenDest) remove(out io.Writer) {
 	}
 }
 
+// driveOpenSent is what the folder held when the write back began: its regular files as they were (size,
+// time, identity) and its folders. Whatever differs afterwards was changed or made after it was sent.
+type driveOpenSent struct {
+	files map[string]fs.FileInfo
+	dirs  map[string]bool
+}
+
+// sent records the folder before the pack; a change in between is sent and reads as changed here, so is kept.
+func (d *driveOpenDest) sent() (driveOpenSent, error) {
+	s := driveOpenSent{files: map[string]fs.FileInfo{}, dirs: map[string]bool{}}
+	err := fs.WalkDir(d.root.FS(), ".", func(p string, _ fs.DirEntry, err error) error {
+		if err != nil || p == "." {
+			return err
+		}
+		fi, err := d.root.Lstat(p)
+		if fi != nil && fi.IsDir() {
+			s.dirs[p] = true
+		} else if fi != nil && fi.Mode().IsRegular() {
+			s.files[p] = fi
+		}
+		return err
+	})
+	return s, err
+}
+
+// removeSent removes what is still exactly what was sent and returns the number of items it kept: a file that
+// differs or is new, and a folder made since (as one item). A folder that holds a kept item is kept. The
+// residual window is a change made between a file's check and its removal.
+func (d *driveOpenDest) removeSent(s driveOpenSent, dir string) (kept int) {
+	entries, err := fs.ReadDir(d.root.FS(), dir)
+	if err != nil {
+		return 1
+	}
+	for _, e := range entries {
+		p := path.Join(dir, e.Name())
+		fi, err := d.root.Lstat(p)
+		was := s.files[p]
+		switch {
+		case err != nil || fi.IsDir() && !s.dirs[p]:
+			kept++
+		case fi.IsDir():
+			if n := d.removeSent(s, p); n > 0 || d.root.Remove(p) != nil {
+				kept += max(n, 1)
+			}
+		case was != nil && fi.Mode().IsRegular() && fi.Size() == was.Size() && fi.ModTime().Equal(was.ModTime()) && os.SameFile(fi, was):
+			if d.root.Remove(p) != nil {
+				kept++
+			}
+		default:
+			kept++
+		}
+	}
+	return kept
+}
+
+// removeSentFiles is remove for a write back that sent everything, but it keeps what changed after the send.
+func (d *driveOpenDest) removeSentFiles(out io.Writer, s driveOpenSent) {
+	if kept := d.removeSent(s, "."); kept > 0 {
+		fmt.Fprintf(out, "The folder %s is kept: %s in it changed after it was sent and did not go back.\n", d.shown, driveOpenCount(kept, "item", "items"))
+		return
+	}
+	d.remove(out)
+}
+
 // openDriveDest makes or checks the folder for the drive named name, and sets the copy's limits from the
 // room on this Mac. A symlink at either step, or a folder that holds anything, is refused.
 func (m *macOSVMs) openDriveDest(name string) (*driveOpenDest, error) {
@@ -679,7 +744,11 @@ func driveOpenWork(ctx context.Context, j driveOpenJob) (result string, err erro
 		j.dest.remove(j.out)
 		return driveOpenDiscarded, nil
 	}
-	unsent, err := j.writeBack(c)
+	sent, err := j.dest.sent()
+	var unsent int
+	if err == nil {
+		unsent, err = j.writeBack(c)
+	}
 	switch {
 	case err != nil:
 		// The folder holds the only copy of the changes that did not go back.
@@ -689,7 +758,7 @@ func driveOpenWork(ctx context.Context, j driveOpenJob) (result string, err erro
 		// Links, devices, pipes and set-id files are never sent; removing the folder would lose them.
 		fmt.Fprintf(j.out, "The folder %s is kept: %s in it could not be written back.\n", j.dest.shown, driveOpenCount(unsent, "item", "items"))
 	default:
-		j.dest.remove(j.out)
+		j.dest.removeSentFiles(j.out, sent)
 	}
 	return driveOpenWrittenBack, nil
 }
@@ -761,8 +830,17 @@ func driveOpenTarArgv() []string {
 	return append(argv, ".")
 }
 
+// driveOpenQuoteMeta is names with their regexp metacharacters escaped.
+func driveOpenQuoteMeta(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = regexp.QuoteMeta(n)
+	}
+	return out
+}
+
 // driveOpenTarNoise matches a tar complaint that names only one of driveOpenTarExcluded at the drive's root.
-var driveOpenTarNoise = regexp.MustCompile(`(^|[\s:])\./(` + strings.Join(driveOpenTarExcluded, "|") + `)(/\S*)?(:|$)`)
+var driveOpenTarNoise = regexp.MustCompile(`(^|[\s:])\./(` + strings.Join(driveOpenQuoteMeta(driveOpenTarExcluded), "|") + `)(/\S*)?(:|$)`)
 
 // driveOpenTarXattr matches a complaint whose message segment says an operation on extended attributes failed
 // ("Couldn't list extended attributes", "Could not pack extended attributes"), with at most bsdtar's ": <strerror>"
