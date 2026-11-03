@@ -385,8 +385,9 @@ export function SetupScreen({
   // underneath since that reload is refused 412, not silently accepted. On a
   // 412, reloadSiteConfig() refreshes this orchestrator's copy (and its ETag,
   // for a retry) but the step's own draft is left exactly where the operator
-  // left it: the Host proxy fields seed from the `siteConfig` PROP once, during the first render that has
-  // a loaded snapshot), and the Egress add form / edit row clear or collapse
+  // left it: the Host proxy fields seed from the `siteConfig` PROP once,
+  // in the first render that has a loaded snapshot, and the Egress add
+  // form / edit row clear or collapse
   // only when mutate() reports the save landed. mutate() (step-bodies.tsx's
   // useSiteConfigStep) still shows its own toast for the failure — thrown as
   // a plain Error here only so its description is the human sentence, not the
