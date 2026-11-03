@@ -171,7 +171,7 @@ export const RUN_COCKPIT = {
   // inline in the toolbar — never a toast per drag.
   // THIS attempt failed and the next may not — distinct from layoutNotPersisted,
   // which is a permanent fact about the deployment.
-  layoutSaveFailed: "Layout wasn't saved.",
+  layoutSaveFailed: (preset: string) => `${preset} layout wasn't saved.`,
   layoutNotPersisted:
     "This deployment can't store layouts — your arrangement lasts for this session.",
   removeWidget: (label: string) => `Remove ${label}`,

@@ -205,7 +205,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   const [active, setActive] = React.useState<{ i: string; w: number; h: number } | null>(null);
 
   const vm = isVMKind(ctx.run.machine_kind);
-  const { layout, persistable, status, apply, save, reset } = useRunLayout(preset, !!ctx.run.service, vm);
+  const { layout, persistable, status, failedPreset, retry, apply, reset } = useRunLayout(preset, !!ctx.run.service, vm);
   const { ref, node, width, height } = useCanvasSize();
 
   // Focus mode (design board 2c). The shell learns about it through
@@ -524,7 +524,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
               <ToolbarButton onClick={reset} Icon={RotateCcw}>
                 {RUN_COCKPIT.resetLayout}
               </ToolbarButton>
-              <LayoutStatus status={status} onRetry={() => void save()} />
+              <LayoutStatus status={status} failedPreset={failedPreset} onRetry={retry} />
               <button
                 type="button"
                 onClick={() => setEditing(false)}
@@ -545,7 +545,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
             // canvas carries its own entry points.
             <div className="flex items-center gap-1.5">
               {/* A write that failed outlives Done: leaving the editor must not read as "saved". */}
-              {status === "failed" && <LayoutStatus status={status} onRetry={() => void save()} />}
+              {status === "failed" && <LayoutStatus status={status} failedPreset={failedPreset} onRetry={retry} />}
               <button
                 type="button"
                 onClick={() => setFocus(true)}
@@ -677,12 +677,12 @@ function ToolbarButton({
 }
 
 // Where the automatic save stands. Silent before the first gesture; a failure names itself and offers the retry.
-function LayoutStatus({ status, onRetry }: { status: SaveStatus; onRetry: () => void }) {
+function LayoutStatus({ status, failedPreset, onRetry }: { status: SaveStatus; failedPreset: RunLayoutPreset | null; onRetry: () => void }) {
   if (status === "idle") return null;
   if (status === "failed") {
     return (
       <span role="status" className="inline-flex items-center gap-1 px-1.5 text-xs text-destructive">
-        {RUN_COCKPIT.layoutSaveFailed}
+        {RUN_COCKPIT.layoutSaveFailed(failedPreset === "finished" ? "Finished" : "Live")}
         <button type="button" onClick={onRetry} className="rounded px-1 font-medium underline underline-offset-2">
           {RUN_COCKPIT.layoutRetry}
         </button>

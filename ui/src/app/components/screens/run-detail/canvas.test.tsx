@@ -612,21 +612,21 @@ describe("RunCanvas — a save that merely FAILED is not a deployment that canno
     await user.click(screen.getByRole("button", { name: RUN_COCKPIT.editLayout }));
     await user.click(screen.getByRole("button", { name: RUN_COCKPIT.resetLayout }));
 
-    expect(await screen.findByText(RUN_COCKPIT.layoutSaveFailed)).toBeInTheDocument();
+    expect(await screen.findByText(RUN_COCKPIT.layoutSaveFailed("Live"))).toBeInTheDocument();
     // The permanent claim is never made, and nothing is toasted per gesture.
     expect(screen.queryByText(RUN_COCKPIT.layoutNotPersisted)).toBeNull();
     expect(toasted.error).not.toHaveBeenCalled();
 
     // Done must not imply completion: the failure and its retry outlive the editor.
     await user.click(screen.getByRole("button", { name: RUN_COCKPIT.doneEditing }));
-    expect(screen.getByText(RUN_COCKPIT.layoutSaveFailed)).toBeInTheDocument();
+    expect(screen.getByText(RUN_COCKPIT.layoutSaveFailed("Live"))).toBeInTheDocument();
 
     // Retry repeats what the person asked for (the reset, i.e. an empty row), and it works.
     putLayout.mockResolvedValue({ preset: "live", layout: [] });
     await user.click(screen.getByRole("button", { name: RUN_COCKPIT.layoutRetry }));
     await waitFor(() => expect(putLayout).toHaveBeenCalledTimes(2));
     expect(putLayout.mock.calls[1]).toEqual(["live", []]);
-    await waitFor(() => expect(screen.queryByText(RUN_COCKPIT.layoutSaveFailed)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(RUN_COCKPIT.layoutSaveFailed("Live"))).toBeNull());
   });
 
   it("shows Saving, then Saved, for a write that lands", async () => {
@@ -654,7 +654,7 @@ describe("RunCanvas — a save that merely FAILED is not a deployment that canno
     await user.click(screen.getByRole("button", { name: RUN_COCKPIT.resetLayout }));
 
     expect(await screen.findByText(RUN_COCKPIT.layoutNotPersisted)).toBeInTheDocument();
-    expect(screen.queryByText(RUN_COCKPIT.layoutSaveFailed)).toBeNull();
+    expect(screen.queryByText(RUN_COCKPIT.layoutSaveFailed("Live"))).toBeNull();
   });
 });
 
