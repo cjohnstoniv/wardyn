@@ -321,9 +321,30 @@ func errKeptRunning(r keptRow) error {
 	return fmt.Errorf("machine %s is running on this Mac; try again when its run has stopped", r.label())
 }
 
-// deleteKept deletes the machine on this Mac. macvm.RemoveKept takes the machine's boot lock first
-// (macvm.LockKept), so a machine a boot or an update holds is refused and no delete runs beside a boot.
+// keptLockWait is how long a person's delete or update waits for a machine's lock before it says the
+// machine is running: a brief holder (a stop write, a probe) is not a boot (tests shorten it).
+var keptLockWait = 2 * time.Second
+
+// waitKeptFree waits up to keptLockWait for the machine's lock to be free, and holds nothing after: the
+// action that follows takes the lock itself. ErrKeptLocked means a boot or another update holds it.
+func waitKeptFree(r keptRow) error {
+	unlock, err := macvm.LockKeptWait(r.dir, keptLockWait)
+	if errors.Is(err, macvm.ErrKeptLocked) {
+		return errKeptRunning(r)
+	} else if err != nil {
+		return err
+	}
+	unlock()
+	return nil
+}
+
+// deleteKept deletes the machine on this Mac. It waits briefly for a holder of the machine's lock, then
+// macvm.RemoveKept takes the lock (macvm.LockKept) and holds it throughout, so a machine a boot or an
+// update holds is refused and no delete runs beside a boot.
 func deleteKept(out io.Writer, r keptRow) error {
+	if err := waitKeptFree(r); err != nil {
+		return err
+	}
 	gone, err := macvm.RemoveKept(r.dir)
 	switch {
 	case errors.Is(err, macvm.ErrKeptLocked):
@@ -341,6 +362,9 @@ func deleteKept(out io.Writer, r keptRow) error {
 // updateKept brings the machine's tools up to this Mac's. Without force it does nothing for a machine that
 // is current; with force it updates anyway and retries every withheld harness.
 func updateKept(ctx context.Context, out io.Writer, u *keptToolsUpdater, r keptRow, force bool) error {
+	if err := waitKeptFree(r); err != nil {
+		return err
+	}
 	if !force {
 		behind, err := u.behind(r.dir)
 		if err != nil {

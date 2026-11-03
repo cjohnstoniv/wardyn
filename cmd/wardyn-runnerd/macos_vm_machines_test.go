@@ -56,6 +56,9 @@ func keptMachine(t *testing.T, m *macOSVMs, id uuid.UUID, name string, mutate fu
 
 func keptRig(t *testing.T) *macOSVMs {
 	t.Helper()
+	was := keptLockWait
+	keptLockWait = 20 * time.Millisecond
+	t.Cleanup(func() { keptLockWait = was })
 	return newMacLedgerRig(t).open(t)
 }
 
@@ -308,9 +311,45 @@ func TestMachinesDeleteRefusesAMachineABootHolds(t *testing.T) {
 	}
 }
 
+// A holder that lets go within the wait does not refuse a delete or an update; one that does not is a boot.
+func TestMachinesWaitBrieflyForTheLock(t *testing.T) {
+	m := keptRig(t)
+	keptLockWait = 2 * time.Second
+	dir := keptMachine(t, m, uuid.New(), "dev", nil)
+	rows, _ := m.keptRows()
+	unlock, err := macvm.LockKept(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { time.Sleep(100 * time.Millisecond); unlock() }()
+	var out bytes.Buffer
+	if err := deleteKept(&out, rows[0]); err != nil {
+		t.Fatalf("a brief holder refused the delete: %v", err)
+	}
+	if _, err := os.Lstat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the machine survives: %v", err)
+	}
+	// A holder that stays is a boot: the refusal comes after the wait, not before.
+	dir = keptMachine(t, m, uuid.New(), "boot", nil)
+	rows, _ = m.keptRows()
+	keptLockWait = 300 * time.Millisecond
+	unlock, err = macvm.LockKept(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	start := time.Now()
+	if err := deleteKept(&out, rows[0]); err == nil || time.Since(start) < 250*time.Millisecond {
+		t.Fatalf("a held machine: err %v after %v", err, time.Since(start))
+	}
+}
+
 // An update of a machine that is current says so and starts nothing; --force updates it anyway, naming the
 // folder, and a machine a boot holds is refused in the person's words.
 func TestMachinesUpdateRunsTheKeptUpdater(t *testing.T) {
+	was := keptLockWait
+	keptLockWait = 20 * time.Millisecond
+	defer func() { keptLockWait = was }()
 	k := newKeptToolsRig(t)
 	id := uuid.New()
 	// Re-home the rig's folder under a machine record that names it.
