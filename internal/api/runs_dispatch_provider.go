@@ -102,7 +102,7 @@ func providerTakesNoCredential(p types.ModelProvider) bool {
 // model_credential. A human owner's sentence is untouched.
 func (s *Server) providerLiveness(ctx context.Context, p types.ModelProvider, agent, owner string, refresh bool) (awsSSOBlob, providerDenial, error) {
 	blob, d, err := s.providerLivenessByKind(ctx, p, agent, owner, refresh)
-	if d.credential && isServicePrincipal(owner) && !providerTypedKinds[p.Kind] {
+	if d.credential && isServicePrincipal(owner) && (!providerTypedKinds[p.Kind] || p.OIDC != nil) {
 		d.msg = fmt.Sprintf(mpRunRefusal, p.ID, d.state, mpRunRemedyService)
 	}
 	return blob, d, err
@@ -225,6 +225,9 @@ func (s *Server) providerCredentialRefusal(ctx context.Context, owner string, p 
 	}
 	if !s.credentialPerson(owner) {
 		return providerDenial{msg: mpcNoPerson}, nil
+	}
+	if p.OIDC != nil {
+		return s.providerEndpointOIDCRefusal(ctx, owner, p)
 	}
 	_, found, err := s.ownSecret(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), owner, providerSecretName(p.UID, providerKeyPart))
 	if err != nil || found {
@@ -720,15 +723,11 @@ func codexBaseURL(proxyURL, gateway string) string {
 
 // authorProviderKeyInjection writes the key arm's one model-credential grant:
 // an api_key grant for the lane's host naming the owner's own
-// wardyn-provider-<uid>-key, with the record the sink requires
-// (providerGrantSnapshot). ok=false means the write failed and the run is
-// already FAILED.
+// wardyn-provider-<uid>-key (-oidc for an endpoint that signs people in), with
+// the record the sink requires (providerGrantSnapshot). ok=false means the
+// write failed and the run is already FAILED.
 func (s *Server) authorProviderKeyInjection(ctx context.Context, run types.AgentRun, lane providerKeyLane) (runner.InjectionGrant, bool) {
-	scope, _ := json.Marshal(map[string]any{
-		"host": lane.host, "header": lane.header, "format": lane.format,
-		"secret_name": providerSecretName(lane.provider.UID, providerKeyPart),
-		"snapshot":    providerGrantSnapshot{OwnerSubject: lane.owner, ProviderUID: lane.provider.UID, Harness: run.Agent},
-	})
+	scope, _ := json.Marshal(providerKeyGrantScope(run, lane))
 	grantID := uuid.New()
 	if _, err := s.createDispatchGrant(ctx, run, types.CredentialGrant{
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),

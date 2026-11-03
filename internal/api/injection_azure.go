@@ -24,6 +24,7 @@ package api
 // pinned deployments.
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -224,6 +225,9 @@ type entraRedeemLane struct {
 	raisedNote                 string
 	closed, tooMany            string
 	raiseFailed                string
+	// interaction, storeRefused and unavailable replace the Azure sentences for a lane whose authority is
+	// not Entra: the Conditional Access wording, and "Azure sign-in" in the two refusals. Empty keeps Azure's.
+	interaction, storeRefused, unavailable string
 }
 
 // answerEntraRedeemFailure answers a redemption failure by class, for a model provider's Azure sign-in
@@ -249,7 +253,7 @@ func (s *Server) answerEntraRedeemFailure(w http.ResponseWriter, r *http.Request
 	case ADOEntraFailureDeadCredential, ADOEntraFailureInteractionRequired:
 		body, note := l.dead, l.raisedNote
 		if class == ADOEntraFailureInteractionRequired {
-			body = fmt.Sprintf(azureResolveInteraction, azureConditionalAccessClass(err))
+			body = cmp.Or(l.interaction, fmt.Sprintf(azureResolveInteraction, azureConditionalAccessClass(err)))
 			note = body
 		}
 		if boot {
@@ -266,9 +270,9 @@ func (s *Server) answerEntraRedeemFailure(w http.ResponseWriter, r *http.Request
 	case ADOEntraFailureConsentRequired:
 		return fail(http.StatusForbidden, string(class), l.consent, extra)
 	case ADOEntraFailureStoreRefused:
-		return fail(http.StatusForbidden, string(class), azureResolveStoreRefuse, extra)
+		return fail(http.StatusForbidden, string(class), cmp.Or(l.storeRefused, azureResolveStoreRefuse), extra)
 	}
-	return fail(http.StatusServiceUnavailable, string(class), azureResolveUnavailable, extra)
+	return fail(http.StatusServiceUnavailable, string(class), cmp.Or(l.unavailable, azureResolveUnavailable), extra)
 }
 
 // reconcileAzureReauthOnRead resolves a PENDING Azure sign-in request once the person has signed in again
@@ -319,12 +323,15 @@ func (s *Server) reconcileAzureReauth(ctx context.Context, ap types.ApprovalRequ
 }
 
 // azureReauthCapture is the capture that answers an Azure sign-in request, and the lane it was raised
-// under: a model provider's (its row read from the site config, for its audience) or an Azure CLI row's.
-// ok=false for any other request, and for one whose row is gone.
+// under: a model provider's (its row read from the site config, for its audience), an Azure CLI row's or a
+// custom endpoint's own sign-in (endpointOIDCReauthCapture). ok=false for any other request, and for one whose row is gone.
 func (s *Server) azureReauthCapture(ctx context.Context, ap types.ApprovalRequest) (adoSignInScopeBody, entraCapture, string, bool) {
 	if sc, ok := signInScopeFor(ap, azureCLIMechanism); ok {
 		ec, err := azureARMCapture(sc.ProviderID)
 		return sc, ec, azureCLIMechanism, err == nil
+	}
+	if sc, ok := signInScopeFor(ap, endpointOIDCApprovalLane); ok {
+		return s.endpointOIDCReauthCapture(ctx, sc)
 	}
 	sc, ok := signInScopeFor(ap, azureApprovalLane)
 	if !ok {

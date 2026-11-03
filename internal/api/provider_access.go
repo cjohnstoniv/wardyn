@@ -297,6 +297,12 @@ func (s *Server) providerAccessFor(ctx context.Context, p types.ModelProvider, o
 		s.gradeProviderSubscription(ctx, &row, p, owner)
 	case types.ModelProviderAzureFoundry:
 		s.gradeProviderAzureFoundry(ctx, &row, p, owner)
+	case types.ModelProviderCustomEndpoint:
+		if p.OIDC != nil {
+			s.gradeProviderEndpointOIDC(ctx, &row, p, owner)
+		} else {
+			s.gradeProviderKey(ctx, &row, p, owner)
+		}
 	default:
 		// Every other closed kind is a typed key or token: providerTypedKinds
 		// (model_provider_credentials.go) — anthropic_api_key, openai_api_key,

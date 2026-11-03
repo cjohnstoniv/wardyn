@@ -507,6 +507,7 @@ func run() error {
 		ADOEntraByRow:                 adoEntraByRow(st, adoEntraLoginFromFlags(f)),
 		AzureFoundryEntra:             azureFoundryEntraByRow(st, adoEntraLoginFromFlags(f)), // ado_entra_source.go
 		AzureCLIEntra:                 azureCLIEntraByRow(adoEntraLoginFromFlags(f)),
+		EndpointOIDC:                  endpointOIDCFromFlags(f), // endpoint_oidc_source.go
 		ADOLoginFacts:                 adoLoginFactsFromFlags(f),
 		Components:                    componentsInfo(f, runnerTarget, feats.recStore),
 		RecordingSelection:            *f.recordingSel,

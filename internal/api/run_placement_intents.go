@@ -117,6 +117,9 @@ func (s *Server) localProviderIntent(r *http.Request, owner string, p types.Mode
 	default:
 		return nil, false, nil
 	}
+	if p.OIDC != nil { // a custom endpoint that signs people in holds no key: its credential is the sign-in
+		part = providerOIDCPart
+	}
 	own := false
 	if p.UID != "" {
 		var err error

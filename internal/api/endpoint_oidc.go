@@ -43,6 +43,7 @@ import (
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -746,6 +747,11 @@ func (s *Server) handleEndpointOIDCCallback(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	blob := grant.blob
+	// The resume of a run a resolved request held takes the run's lock, which must precede the sign-in lock
+	// (db.LockOrder): it runs after the lock is released, the deferred calls running last-in first.
+	var resolved []uuid.UUID
+	parent := ctx
+	defer func() { s.approvalsClosed(parent, resolved) }()
 	// The sign-in lock is taken after the exchange, as the Azure capture does, and the store below takes the
 	// site-config lock inside it.
 	ctx, unlock, err := s.lockADOSignIn(ctx, subject, ec.rowUID)
@@ -770,6 +776,7 @@ func (s *Server) handleEndpointOIDCCallback(w http.ResponseWriter, r *http.Reque
 		"scopes": blob.Scopes, "expires_at": blob.ExpiresAt.Format(time.RFC3339),
 		"issuer": blob.Issuer, "idp_subject": blob.IDPSubject, "binding": row.OIDC.Binding(),
 	})
+	resolved = s.resolvePendingAzureReauth(ctx, endpointOIDCApprovalLane, subject, ec.rowUID)
 	http.Redirect(w, r, s.cfg.BasePath+ec.donePath+"&provider="+url.QueryEscape(stamp.RowUID), http.StatusFound)
 }
 

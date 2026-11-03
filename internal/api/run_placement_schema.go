@@ -18,7 +18,7 @@ import (
 // Nil/empty child carriers are inspected too. A new provider, grant, config or
 // control field therefore needs an explicit classification before local use.
 var localDispatchFields = map[reflect.Type][]string{
-	reflect.TypeFor[providerGrantSnapshot](): strings.Fields("ProviderUID OwnerSubject Harness"),
+	reflect.TypeFor[providerGrantSnapshot](): strings.Fields("ProviderUID OwnerSubject Harness AddressDigest"),
 	reflect.TypeFor[azureGrantSnapshot]():    strings.Fields("ProviderUID OwnerSubject Audience"),
 	reflect.TypeFor[awsSSOScopeSnapshot]():   strings.Fields("OwnerSubject CredentialSource Mechanism SSOAccountID SSORoleName Region ProviderUID ComponentID SSOStartURL"),
 	reflect.TypeFor[adoEntraScopeSnapshot](): strings.Fields("ProviderRowID Organisation OwnerSubject CredentialSource TenantID ClientID TokenMode Capabilities"),
