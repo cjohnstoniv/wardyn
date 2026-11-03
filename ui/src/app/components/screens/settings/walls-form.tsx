@@ -8,13 +8,16 @@
 // the callers own loading, saving and their own buttons.
 import * as React from "react";
 import { X } from "lucide-react";
-import { type PersonalWallsSpec, type WithheldGrant } from "../../../lib/api/walls";
+import { type PersonalWallsPushRules, type PersonalWallsSpec, type WithheldGrant } from "../../../lib/api/walls";
 import { CC_ORDER, type ConfinementClass, type FirstUseMode } from "../../../lib/types";
 import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { RadioGroup, RadioGroupItem } from "../../ui/radio-group";
 import { cn } from "../../ui/utils";
 import { YOUR_WALLS as T } from "../../wardyn/copy/personal-walls";
+import type { FormSection } from "../../../lib/wall-preset-words";
+import { WALL_PRESETS as WP, carriedKnobWords } from "../../wardyn/copy/wall-presets";
+import { Switch } from "../../wardyn/form-primitives";
 import { ConfinementChip, Chip } from "../../wardyn/primitives";
 import { Segmented } from "../../wardyn/segmented";
 
@@ -44,13 +47,18 @@ export interface Form {
   blocked: Record<Direction, boolean>;
   withheld: WithheldGrant[];
   allowAllOff: boolean;
+  /** push_rules.deny_all: refuse every push. */
+  denyAll: boolean;
   // The knobs the card has no control for (capability lists, tool and push rules, recording, auto-stop):
   // kept as fetched, since a save replaces the whole document.
   carried: PersonalWallsSpec;
 }
 
 export const carriedKnobs = (s: PersonalWallsSpec): PersonalWallsSpec => {
-  const { azure_devops_capabilities, github_capabilities, tool_rules, push_rules, recording, auto_stop_after_sec } = s;
+  const { azure_devops_capabilities, github_capabilities, tool_rules, recording, auto_stop_after_sec } = s;
+  // deny_all has its own switch; the push paths beside it ride along as fetched.
+  const paths = Object.fromEntries(Object.entries(s.push_rules ?? {}).filter(([k]) => k !== "deny_all")) as PersonalWallsPushRules;
+  const push_rules = Object.keys(paths).length > 0 ? paths : undefined;
   const carried = { azure_devops_capabilities, github_capabilities, tool_rules, push_rules, recording, auto_stop_after_sec };
   return Object.fromEntries(Object.entries(carried).filter(([, v]) => v !== undefined));
 };
@@ -68,6 +76,7 @@ export function toForm(s: PersonalWallsSpec): Form {
     blocked: { paste_in: d?.paste_in === "blocked", copy_out: d?.copy_out === "blocked", upload: d?.upload === "blocked", download: d?.download === "blocked" },
     withheld: s.withheld_grants ?? [],
     allowAllOff: s.allow_all_egress === false,
+    denyAll: s.push_rules?.deny_all === true,
     carried: carriedKnobs(s),
   };
 }
@@ -89,6 +98,7 @@ export function toSpec(f: Form): PersonalWallsSpec {
   const blocked = DIRECTIONS.filter((d) => f.blocked[d.id]);
   if (blocked.length > 0) spec.desktop = Object.fromEntries(blocked.map((d) => [d.id, "blocked" as const]));
   if (f.withheld.length > 0) spec.withheld_grants = f.withheld;
+  if (f.denyAll) spec.push_rules = { ...spec.push_rules, deny_all: true };
   return spec;
 }
 
@@ -127,8 +137,18 @@ function SiteList({ label, sites, text, onSites, onText }: { label: string; site
 export const KIND_OPTIONS = Object.keys(T.KINDS);
 export const LABEL = "text-sm font-medium text-foreground";
 
-/** The controlled form. `onEdit` merges a patch into the caller's Form. */
-export function WallsForm({ form, onEdit: edit }: { form: Form; onEdit: (patch: Partial<Form>) => void }) {
+const SectionError = ({ text }: { text: string }) => (
+  <p role="alert" className="text-xs text-danger">
+    {text}
+  </p>
+);
+
+/**
+ * The controlled form. `onEdit` merges a patch into the caller's Form. `listCarried` adds a read-only row naming the
+ * knobs the form has no control for, which a save keeps as they were fetched. `errors` puts a server sentence under the
+ * section it names.
+ */
+export function WallsForm({ form, onEdit: edit, listCarried, errors }: { form: Form; onEdit: (patch: Partial<Form>) => void; listCarried?: boolean; errors?: Partial<Record<FormSection, string>> }) {
   // The unlisted-sites choice was filled in by picking "Only these sites", not chosen by the person.
   const [autoFirstUse, setAutoFirstUse] = React.useState(false);
   const unnamed = KIND_OPTIONS.filter((k) => !form.withheld.some((g) => g.kind === k));
@@ -136,6 +156,7 @@ export function WallsForm({ form, onEdit: edit }: { form: Form; onEdit: (patch: 
     <div className="flex flex-col gap-[18px]">
       <div className="flex flex-col gap-2">
         <span className={LABEL}>{T.SITES}</span>
+        {errors?.sites && <SectionError text={errors.sites} />}
         <RadioGroup
           className="gap-2"
           aria-label={T.SITES}
@@ -169,11 +190,14 @@ export function WallsForm({ form, onEdit: edit }: { form: Form; onEdit: (patch: 
       </div>
       <div className="flex flex-col gap-2">
         <span className={LABEL}>{T.NEVER}</span>
+        {errors?.never && <SectionError text={errors.never} />}
         <SiteList label={T.NEVER} sites={form.denied} text={form.deniedText} onSites={(denied) => edit({ denied })} onText={(deniedText) => edit({ deniedText })} />
       </div>
       <div className="flex flex-col gap-2">
         <span className={LABEL}>{T.UNLISTED}</span>
+        {errors?.unlisted && <SectionError text={errors.unlisted} />}
         <Segmented<FirstUseMode | "">
+          stackOnPhone
           value={form.firstUse ?? ""}
           options={UNLISTED}
           onChange={(v) => {
@@ -184,6 +208,7 @@ export function WallsForm({ form, onEdit: edit }: { form: Form; onEdit: (patch: 
       </div>
       <div className="flex flex-col gap-2">
         <span className={LABEL}>{T.BARRIER}</span>
+        {errors?.barrier && <SectionError text={errors.barrier} />}
         <RadioGroup className="flex flex-wrap gap-4" aria-label={T.BARRIER} value={form.floor ?? ""} onValueChange={(v) => edit({ floor: v as ConfinementClass })}>
           {CC_ORDER.map((cc) => (
             <label key={cc} className="flex items-center gap-2">
@@ -195,6 +220,7 @@ export function WallsForm({ form, onEdit: edit }: { form: Form; onEdit: (patch: 
       </div>
       <div className="flex flex-col gap-2">
         <span className={LABEL}>{T.CLIPBOARD}</span>
+        {errors?.clipboard && <SectionError text={errors.clipboard} />}
         <div className="flex flex-wrap gap-x-5 gap-y-2">
           {DIRECTIONS.map((d) => (
             <label key={d.id} className="flex items-center gap-2 text-sm">
@@ -206,6 +232,7 @@ export function WallsForm({ form, onEdit: edit }: { form: Form; onEdit: (patch: 
       </div>
       <div className="flex flex-col gap-2">
         <span className={LABEL}>{T.CREDENTIALS}</span>
+        {errors?.credentials && <SectionError text={errors.credentials} />}
         <div className="flex flex-wrap items-center gap-1.5">
           {form.withheld.map((g, i) => (
             <Chip key={`${g.kind}${i}`} className="gap-1">
@@ -232,6 +259,22 @@ export function WallsForm({ form, onEdit: edit }: { form: Form; onEdit: (patch: 
           )}
         </div>
       </div>
+      <div className="flex flex-col gap-2">
+        <span className={LABEL}>{T.PUSHES}</span>
+        {errors?.pushes && <SectionError text={errors.pushes} />}
+        <label className="flex items-start gap-2 text-sm">
+          <Switch checked={form.denyAll} onChange={(denyAll) => edit({ denyAll })} label={T.REFUSE_PUSH} className="mt-0.5" />
+          <span className="flex flex-col gap-0.5">
+            <span className="font-medium text-foreground">{T.REFUSE_PUSH}</span>
+            <span className="text-xs text-muted-foreground">{T.REFUSE_PUSH_HELP}</span>
+          </span>
+        </label>
+      </div>
+      {listCarried && carriedKnobWords(form.carried).length > 0 && (
+        <p data-testid="walls-carried" className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+          {WP.CARRIED(carriedKnobWords(form.carried).join(", "))}
+        </p>
+      )}
     </div>
   );
 }

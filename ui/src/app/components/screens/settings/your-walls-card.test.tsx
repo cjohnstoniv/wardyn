@@ -191,6 +191,40 @@ describe("Your walls card", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
+  it("Refuse every push is a switch under Pushes: it sends push_rules.deny_all true beside the paths the CLI wrote, and is not sent when off", async () => {
+    getMock.mockResolvedValue({ spec: { push_rules: { deny_paths: [".github/**"] } } });
+    render(<YourWallsCard />);
+    await open();
+    expect(screen.getByText(YOUR_WALLS.PUSHES)).toBeInTheDocument();
+    expect(screen.getByText(YOUR_WALLS.REFUSE_PUSH_HELP)).toBeInTheDocument();
+    const sw = screen.getByRole("switch", { name: YOUR_WALLS.REFUSE_PUSH });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    await user.click(sw);
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenLastCalledWith({ push_rules: { deny_paths: [".github/**"], deny_all: true } }));
+    await user.click(sw);
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenLastCalledWith({ push_rules: { deny_paths: [".github/**"] } }));
+  });
+
+  it("shows the switch on when the walls it loaded refuse every push, and saves only deny_all with nothing else", async () => {
+    getMock.mockResolvedValue({ spec: { push_rules: { deny_all: true } } });
+    render(<YourWallsCard />);
+    await open();
+    expect(screen.getByRole("switch", { name: YOUR_WALLS.REFUSE_PUSH })).toHaveAttribute("aria-checked", "true");
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledWith({ push_rules: { deny_all: true } }));
+  });
+
+  it("stacks the unlisted-sites choices below 400px and lists no carried-knob row", async () => {
+    getMock.mockResolvedValue({ spec: { github_capabilities: ["code_read"] } });
+    render(<YourWallsCard />);
+    await open();
+    expect(screen.getByRole("button", { name: YOUR_WALLS.UNLISTED_BLOCK }).parentElement?.className).toContain("max-[399px]:flex-col");
+    expect(screen.queryByTestId("walls-carried")).not.toBeInTheDocument();
+  });
+
   it.each(["walls_need_person", "walls_unavailable"])("is absent when the server answers %s", async (reason) => {
     getMock.mockRejectedValue(new HttpError(reason === "walls_unavailable" ? 501 : 400, "no", reason));
     const { container } = render(<YourWallsCard />);

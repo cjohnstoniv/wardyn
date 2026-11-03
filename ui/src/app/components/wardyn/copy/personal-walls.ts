@@ -31,7 +31,11 @@ export const YOUR_WALLS = {
   SAVE: "Save walls",
   REMOVE_ALL: "Remove all walls",
   SAVED: "Saved. Runs you start from now on use these walls.",
-  RESTART_NOTE: "Runs already started keep their sites. Blocked sites, clipboard and credentials also apply when they restart.",
+  RESTART_NOTE: "Your walls, including Refuse every push, apply again when a run restarts.",
+  // Rc.12 wall presets: the shared form's Pushes section, shown in Your walls too.
+  PUSHES: "Pushes",
+  REFUSE_PUSH: "Refuse every push",
+  REFUSE_PUSH_HELP: "Refuses every push the run makes: new commits, branch and tag changes, and deletes. The run can still fetch.",
   // The credential kinds a person may keep out, in the words the policy summary uses (the board shows two).
   KINDS: {
     github_token: "GitHub access",
