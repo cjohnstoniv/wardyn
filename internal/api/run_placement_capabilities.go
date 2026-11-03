@@ -280,7 +280,7 @@ const macOSVMOnRemote = "macOS VMs run only on a registered runner that offers t
 
 // linuxVMAgentStart is the refusal of interactive_start: agent on a Linux VM, whose terminal is a
 // plain shell in this release (no shared session to open in the agent CLI or to take over).
-const linuxVMAgentStart = "A Linux VM sandbox's terminal opens a shell, not the agent CLI, in this release: set interactive_start to shell"
+const linuxVMAgentStart = "A Linux VM's terminal opens a shell, not the agent, in this release. Turn off \"Start the run in this harness\", or send interactive_start: \"shell\" in the API."
 
 // runnerCaps is the runner's own last caps event, which remote.Substrate keeps.
 type runnerCaps interface {
@@ -348,7 +348,7 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "machine_kind"}, macOSVMOnRemote)
 	}
 	if demands.LinuxVM && requestIsInteractive(req) && req.InteractiveStart == "agent" {
-		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMAgentStart)
+		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "interactive_start"}, linuxVMAgentStart)
 	}
 	if f := macOSVMRunShapeRefusal(req, demands); f != nil {
 		return f

@@ -27,6 +27,7 @@ describe("field homes (U7)", () => {
     expect(homeOfRefusal("placement_capability", "machine_kind")).toBe("run");
     expect(homeOfRefusal("placement_capability", "harness")).toBe("harnesses");
     expect(homeOfRefusal("placement_capability", "resources")).toBe("review");
+    expect(homeOfRefusal("placement_capability", "interactive_start")).toBe("harnesses");
     expect(homeOfRefusal("runner_posture_unmet", "machine_kind")).toBe("run");
     expect(homeOfRefusal("placement_capability")).toBe(homeOfReason("placement_capability"));
     expect(homeOfRefusal("placement_capability", "pause_idle_after_sec")).toBe(homeOfReason("placement_capability"));

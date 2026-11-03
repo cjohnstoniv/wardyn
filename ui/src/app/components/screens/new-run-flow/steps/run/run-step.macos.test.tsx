@@ -102,6 +102,8 @@ describe("OS row: macOS chosen (frame 2, M-N2 frame 1)", () => {
     expect(intentNow().confinement_class).toBeUndefined();
     expect(macosButton()).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText(NR_MACHINE.MACOS_ABOUT("macOS 27.0.1 (26A434)"))).toBeInTheDocument();
+    // UXR-17: the desktop is view only on macOS 26, so the choice says where to type and click.
+    expect(screen.getByText(NR_MACHINE.MACOS_VIEW_ONLY)).toBeInTheDocument();
     expect(screen.getByText(NR_MACHINE.MACOS_SIZE("4", "8192"))).toBeInTheDocument();
     expect(screen.queryByText(NR_MACHINE.OS_WINDOWS_LATER)).toBeNull();
     const panel = within(changes());

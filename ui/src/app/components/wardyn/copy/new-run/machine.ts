@@ -12,6 +12,10 @@ export const NR_MACHINE = {
   VM: "Virtual machine",
   CONTAINER_HELP: "A sandbox container with a terminal. This is the default.",
   VM_HELP: "A full desktop in its own virtual machine, with a browser. You open it from the run page.",
+  // UXR-17: the macOS desktop opens view only on macOS 26, so the choice says where the person types and clicks.
+  MACOS_VIEW_ONLY: "On macOS 26 the browser shows this desktop view only. You type and click in a window on your own Mac, or in the terminal.",
+  // UXR-1: a VM's terminal opens a shell, so the Harnesses step shows the start switch off and says why.
+  VM_STARTS_SHELL: "A virtual machine's terminal opens a shell in this release. Start the agent from that shell.",
   OS_LABEL: "Operating system",
   OS_LINUX: "Linux",
   OS_LATER: "macOS and Windows virtual machines arrive when your organisation adds a pool that can run them.",

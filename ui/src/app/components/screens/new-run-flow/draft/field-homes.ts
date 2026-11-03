@@ -128,7 +128,7 @@ export const homeOfReason = (reason: string): FieldHome =>
 
 /** The step that changes the request field a refusal names (the envelope's `field`), where it differs by field
  *  within one reason: a macOS VM's placement refusal names the machine kind, a harness or the run's size. */
-export const HOME_OF_REFUSAL_FIELD: Record<string, FieldHome> = { machine_kind: "run", macos_base: "run", harness: "harnesses", resources: "review" };
+export const HOME_OF_REFUSAL_FIELD: Record<string, FieldHome> = { machine_kind: "run", macos_base: "run", interactive_start: "harnesses", harness: "harnesses", resources: "review" };
 
 /** A refusal's step: its field's, when the console knows that field, else its reason's. */
 export const homeOfRefusal = (reason: string, field = ""): FieldHome => HOME_OF_REFUSAL_FIELD[field] ?? homeOfReason(reason);
