@@ -137,12 +137,18 @@ type runPolicyWallPreset struct {
 	Added    map[string][]string `json:"added,omitempty"`
 }
 
+// personalPresetHidden is true for a person-scope preset read by anyone but the run's owner: its name and the
+// entries it changed are the owner's to see.
+func personalPresetHidden(r *http.Request, run types.AgentRun, rec *wallPresetSourceRecord) bool {
+	return rec != nil && rec.Scope == types.WallPresetScopePerson && principalFromRequest(r) != run.CreatedBy
+}
+
 // runPolicyWallPresetOf is the policy view's wall_preset, read as runWallPresetView reads the run's.
 func runPolicyWallPresetOf(r *http.Request, run types.AgentRun, rec *wallPresetSourceRecord) *runPolicyWallPreset {
 	if rec == nil {
 		return nil
 	}
-	if rec.Scope == types.WallPresetScopePerson && principalFromRequest(r) != run.CreatedBy {
+	if personalPresetHidden(r, run, rec) {
 		return &runPolicyWallPreset{Scope: string(rec.Scope)}
 	}
 	out := &runPolicyWallPreset{ID: rec.ID, Name: rec.Name, Scope: string(rec.Scope), GroupID: rec.GroupID, Version: rec.Version}
@@ -259,6 +265,10 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 		slog.WarnContext(ctx, "api: run policy view without the site config", "run_id", run.ID, "err", err)
 	}
 	resp.Changes = explainRunPolicy(base, served, ev, sc, run)
+	if create.Source != nil && personalPresetHidden(r, run, create.Source.WallPreset) {
+		// Not the owner: the changes a personal preset made would show its spec rows, so none is listed.
+		resp.Changes = slices.DeleteFunc(resp.Changes, func(c runPolicyChange) bool { return c.Cause == causeWallPreset })
+	}
 	resp.Provenance = envelope.Provenance.withContacts(s.runPolicyRef(ctx, run), sc.PolicyHelp, s.restrictionContacts(ctx, run.RestrictionIDs))
 	s.fillLockerContacts(ctx, run, resp.Provenance)
 	resp.StoredPolicyNow = s.storedPolicyNowOf(ctx, run, create, &resp.Source)

@@ -78,7 +78,7 @@ import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
 import { RunLifetimeWithContainment } from "./run-detail/containment-pending";
 import { PolicyTab } from "./run-detail/policy-tab";
 import { WallPresetRefusalLine } from "./run-detail/wall-preset-run-lines";
-import { presetRefusingEveryPush } from "../../lib/wall-preset-words";
+import { presetRefusingEveryPush, PUSH_DENY_ALL_SOURCE } from "../../lib/wall-preset-words";
 import { usePresetRefusal } from "./run-detail/use-preset-refusal";
 import { POLICY_TAB } from "./run-detail/policy-tab-copy";
 import { RecordingTab } from "./run-detail/recording-tab";
@@ -540,7 +540,7 @@ function AuditTab({
               const signing = awsSigningLine(e);
               const inbound = inboundDetail(e);
               const callId = gatewayCallId(e);
-              const refusedBy = e.data?.rule_source === "brokered:git:push-deny-all" ? presetRefusingEveryPush(presetView) : undefined;
+              const refusedBy = e.data?.rule_source === PUSH_DENY_ALL_SOURCE ? presetRefusingEveryPush(presetView) : undefined;
               return (
                 // One line from sm up; below sm the target drops to a second line of its own (#2917).
                 <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${(isAttributedRefusal(e) && !toolRuleDecision(e)) || signing || inbound || callId || refusedBy ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>

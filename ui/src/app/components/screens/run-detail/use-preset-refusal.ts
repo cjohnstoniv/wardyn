@@ -5,12 +5,11 @@
 
 import * as React from "react";
 import { runs } from "../../../lib/api/runs";
+import { PUSH_DENY_ALL_SOURCE } from "../../../lib/wall-preset-words";
 import type { AuditEvent, RunPolicyView } from "../../../lib/types";
 
-const DENY_ALL_SOURCE = "brokered:git:push-deny-all";
-
 /** The audit trail holds a push refused because every push is refused. */
-export const hasDenyAllRefusal = (events: readonly AuditEvent[]): boolean => events.some((e) => e.data?.rule_source === DENY_ALL_SOURCE);
+export const hasDenyAllRefusal = (events: readonly AuditEvent[]): boolean => events.some((e) => e.data?.rule_source === PUSH_DENY_ALL_SOURCE);
 
 /**
  * The run's wall preset as its policy view reads it, fetched once and only when the run has one and its audit trail

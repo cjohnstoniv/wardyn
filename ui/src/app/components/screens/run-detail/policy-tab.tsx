@@ -123,9 +123,7 @@ function presetNotes(view: RunPolicyView): PolicyPresetNotes | undefined {
   const name = view.wall_preset?.name;
   const fields = new Set(Object.entries(view.provenance ?? {}).filter(([, p]) => p.layer === "wall_preset").map(([field]) => field));
   const chip = name && fields.size > 0 ? { label: WALL_PRESETS.CHIP(name), fields } : undefined;
-  // push_deny_all_secrets is the forge guard's fact; it is read when the view carries it and never declared here.
-  const pushDenyAllSecrets = (view as { push_deny_all_secrets?: boolean }).push_deny_all_secrets;
-  return chip || view.pushes_unstoppable || pushDenyAllSecrets ? { chip, pushesUnstoppable: view.pushes_unstoppable, pushDenyAllSecrets } : undefined;
+  return chip || view.pushes_unstoppable ? { chip, pushesUnstoppable: view.pushes_unstoppable } : undefined;
 }
 
 function sourceText(s: RunPolicySource): string {
@@ -162,8 +160,11 @@ function RecordedPolicy({
   const now = view.stored_policy_now;
   const banner =
     now?.state === "changed" ? POLICY_TAB.changedSince : now?.state === "updated" ? POLICY_TAB.updatedSince : null;
-  const groups = groupChanges(view.changes, ownRun, run.created_by, spec.first_use_hold_seconds, run.wall_preset?.name);
-  const marks = React.useMemo(() => changeMarks(view.changes), [view.changes]);
+  // A personal preset read by anyone but its owner has no name, and its changes (its spec rows) are not shown.
+  const presetName = run.wall_preset?.name;
+  const changes = React.useMemo(() => view.changes.filter((c) => c.cause !== "wall_preset" || !!presetName), [view.changes, presetName]);
+  const groups = groupChanges(changes, ownRun, run.created_by, spec.first_use_hold_seconds, presetName);
+  const marks = React.useMemo(() => changeMarks(changes), [changes]);
   return (
     <>
       {banner && (
@@ -248,9 +249,9 @@ function headingFor(c: RunPolicyChange, ownRun: boolean, person: string, presetN
       return { key: "limits", heading: ownRun ? CHANGE_HEADING.limitsOwn : CHANGE_HEADING.limitsOther(person) };
     case "walls":
       return { key: "walls", heading: ownRun ? CHANGE_HEADING.wallsOwn : CHANGE_HEADING.wallsOther(person) };
-    // A wall preset's own heading, apart from the person's walls: its name, or none for a personal preset a non-owner reads.
+    // A wall preset's own heading, apart from the person's walls. Its changes reach here only with its name.
     case "wall_preset":
-      return { key: "wall_preset", heading: presetName ? WALL_PRESETS.CHANGE_HEADING(presetName) : WALL_PRESETS.CHANGE_HEADING_PERSONAL };
+      return { key: "wall_preset", heading: WALL_PRESETS.CHANGE_HEADING(presetName ?? "") };
     case "unit":
       if (c.unit) return { key: `profile:${c.unit}`, heading: CHANGE_HEADING.unit(c.unit) };
       break;

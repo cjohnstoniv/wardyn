@@ -766,8 +766,11 @@ describe("PolicyTab: a wall preset's changes sit under their own heading", () =>
   it("names no preset to a reader who gets the scope alone", async () => {
     show(mixed, { principal: "admin@acme.example", run: { ...RUN, wall_preset: { scope: "person" } } as RunDetail });
     await ready();
-    expect(screen.getByRole("heading", { name: "A personal wall preset" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "A personal wall preset" })).toBeNull();
     expect(screen.getByRole("heading", { name: "dana@acme.example's walls" })).toBeInTheDocument();
+    // None of the preset's change rows shows, as an entry or as a chip on the spec.
+    expect(screen.queryByText("pastebin.com")).toBeNull();
+    expect(headings().some((h) => /wall preset/i.test(h))).toBe(false);
   });
 });
 
@@ -811,12 +814,11 @@ describe("PolicyTab: P-63 chips, P-62b and the group label", () => {
     expect(screen.getByTestId("wall-preset-run-line")).toHaveTextContent("(grp-77 group, version 2)");
   });
 
-  it("under deny_all the run page never says Pushes can't be stopped, and shows the secrets note the view carries", async () => {
-    show(policy({ pushes_unstoppable: true, ...({ push_deny_all_secrets: true } as object) }), { run: withPreset(sealed) });
+  it("under deny_all the run page never says Pushes can't be stopped", async () => {
+    show(policy({ pushes_unstoppable: true }), { run: withPreset(sealed) });
     await ready();
     const summary = within(screen.getByTestId("policy-summary"));
     expect(summary.queryByText("Pushes can't be stopped on this install.")).toBeNull();
     expect(summary.getByText("Every push refused")).toBeInTheDocument();
-    expect(summary.getByText(/A push token you add as a secret could still push/)).toBeInTheDocument();
   });
 });

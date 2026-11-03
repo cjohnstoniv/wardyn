@@ -67,6 +67,9 @@ export interface PolicyPreviewResult {
   // The run-level reason the per-person Azure DevOps credential would not be
   // given to this run's sandbox; absent when no structural decline was reported.
   ado_lane_declined?: string;
+  // The draft refuses every push and carries an environment or file secret of its own, so a push token added as a
+  // secret could still reach a code host Wardyn does not recognize. Set by the forge guard.
+  push_deny_all_secrets?: boolean;
   // The install's git token broker is off and the run's capability list leaves out code_write, so a git token in
   // the sandbox can still push. Set from the decision behind the run's unstoppable-push warning, which the preview
   // does not send as a warning.

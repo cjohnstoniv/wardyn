@@ -122,7 +122,6 @@ export const WALL_PRESETS = {
   QUEUED_GONE: (name: string, queued: string | number) => `The run was queued with the ${name} wall preset, version ${queued}. It was no longer available to this run when it would have started.`,
   CHIP: (name: string) => `Wall preset: ${name}`,
   CHANGE_HEADING: (name: string) => `Wall preset: ${name}`,
-  CHANGE_HEADING_PERSONAL: "A personal wall preset",
   // The Why card's wall_preset arm.
   WHY_SET_BY: (name: string) => `Wall preset: ${name}`,
   WHY_SET_BY_PERSONAL: "A personal wall preset",

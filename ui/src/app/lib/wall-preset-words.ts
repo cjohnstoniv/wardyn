@@ -99,6 +99,9 @@ export function sectionOfRefusal(message: string): { section: FormSection | "nam
   return { section: SECTION_OF_PATH[path] ?? SECTION_OF_PATH[path.split(".")[0]] ?? null, text };
 }
 
+/** The audit rule_source of a push refused because the policy refuses every push. */
+export const PUSH_DENY_ALL_SOURCE = "brokered:git:push-deny-all";
+
 /**
  * The name to print under a deny-all refusal when the run's wall preset is what refused every push: the policy view's
  * wall_preset says the preset added deny_all (added.push_rules). A personal preset a non-owner reads has no name, so none.

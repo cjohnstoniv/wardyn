@@ -466,16 +466,10 @@ describe("PolicySummary: the wall preset's notes (P-63, P-62b)", () => {
     expect(row("Tools and pushes", "Pushes")).not.toHaveTextContent(/no write access/);
   });
 
-  it("under deny_all never says Pushes can't be stopped, and shows the secrets note when told", () => {
-    render(<PolicySummary spec={spec} notes={{ pushesUnstoppable: true, pushDenyAllSecrets: true }} />);
+  it("under deny_all never says Pushes can't be stopped", () => {
+    render(<PolicySummary spec={spec} notes={{ pushesUnstoppable: true }} />);
     const pushes = row("Tools and pushes", "Pushes");
     expect(pushes).toHaveTextContent(WALL_PRESETS.PUSH_EVERY_REFUSED);
     expect(pushes).not.toHaveTextContent(WALL_PRESETS.PUSHES_UNSTOPPABLE);
-    expect(pushes).toHaveTextContent(WALL_PRESETS.PUSH_DENY_ALL_SECRETS);
-  });
-
-  it("shows the secrets note only under deny_all", () => {
-    render(<PolicySummary spec={{ git_push_any_branch: false } as unknown as RunPolicySpec} notes={{ pushDenyAllSecrets: true }} />);
-    expect(screen.queryByText(WALL_PRESETS.PUSH_DENY_ALL_SECRETS)).toBeNull();
   });
 });

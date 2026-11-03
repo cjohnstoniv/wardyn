@@ -102,3 +102,37 @@ func TestRunPolicyViewPushesUnstoppable(t *testing.T) {
 		}
 	}
 }
+
+// TestRunPolicyViewHidesPersonalPresetChanges: a person-scope wall preset's change rows (what it removed or added
+// at start) are the owner's to see. The owner reads them under cause wall_preset; another reader, who is not even
+// told the preset's name, reads none.
+func TestRunPolicyViewHidesPersonalPresetChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		scope types.WallPresetScope
+		other bool
+		want  bool
+	}{
+		{"the owner reads a personal preset's changes", types.WallPresetScopePerson, false, true},
+		{"another reader reads none of a personal preset's changes", types.WallPresetScopePerson, true, false},
+		{"another reader reads an org preset's changes", types.WallPresetScopeOrg, true, true},
+	} {
+		srv, st := pvFixture(t, &capStore{})
+		run := st.seedRun(pvOwner, types.RunRunning)
+		src := pvSource(policyKindInline, nil, "", false, pvSpec([]string{"a.example", "b.example"}, nil))
+		src.WallPreset = &wallPresetSourceRecord{ID: "p1", Name: "Mine", Scope: tc.scope, Version: 1,
+			wallsSourceRecord: &wallsSourceRecord{Narrowed: []string{"allowed_domains"}, Removed: map[string][]string{"allowed_domains": {"b.example"}}}}
+		st.rows(run.ID, pvCreate(nil, src), pvResolve(pvSpec([]string{"a.example"}, nil), false))
+		reader := pvMember(t, pvOwner)
+		if tc.other {
+			reader = pvSecurity(t)
+		}
+		w, resp := reader.get(t, srv, run.ID)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status %d", tc.name, w.Code)
+		}
+		if got := pvChange(resp.Changes, causeWallPreset, fieldAllowed) != nil; got != tc.want {
+			t.Errorf("%s: a wall_preset change listed = %v, want %v (changes %+v)", tc.name, got, tc.want, resp.Changes)
+		}
+	}
+}
