@@ -31,6 +31,10 @@
    - Two providers with identity on can share one gateway only on paths apart, such as `/anthropic` and `/openai`. A run that uses both on one path is refused.
 4. Add the model hostname to the policy's `allowed_domains`. The model route needs no `internal_hosts` entry, and adding one lifts the private-address guard for that host on every path ([Internal model gateway](../OPERATIONS.md#internal-model-gateway)).
 5. Allow the MCP hostname in the run's policy, and add it to `internal_hosts` when it names a private address. Wardyn then governs whether a run reaches the gateway, and the gateway decides which tools a caller gets.
+6. To have the gateway know which run and person made an MCP call, set `mcp.gateway_audience` on the organisation's MCP component (its `url` is the gateway's MCP address). Run identity is turned on per model provider and makes the signing key, so turn it on for a provider first.
+   - Only an organisation's remote server may set it: a host a person names could otherwise be sent a token good at a real gateway.
+   - One audience belongs to one address, across model providers and MCP servers.
+   - An MCP component edited after a run started is refused a new token for that run, as a changed provider is.
 
 ## The gateway's config
 
@@ -42,6 +46,7 @@
 | `"*": passthrough` | Every other path is forwarded to the provider's host untouched |
 | `ai.hostOverride` | Where the provider's calls go: the fake here, a vendor's host in a real setup |
 | `mcp.targets` | The servers behind the one MCP endpoint a client sees |
+| `policies.jwtAuth` on the MCP route: `mode: strict`, `location.header.name: x-wardyn-identity`, `providers[].issuer`, `audiences` (the component's `mcp.gateway_audience`), `jwks.url` | Verifies the same token on MCP calls. `wardyn_mcp` names the server |
 | `policies.jwtAuth` on the model route: `mode: strict`, `location.header.name: x-wardyn-identity`, `providers[].issuer`, `audiences`, `jwks.url` | Verifies the run's identity token (below). `preserveToken` is left unset, so the gateway consumes the header and the upstream never receives it |
 | `frontendPolicies.accessLog.add`: `jwt.sub`, `jwt.wardyn_run`, `request.headers["x-wardyn-call-id"]` | Puts the subject, the run id and Wardyn's call id on each access-log line |
 
@@ -100,17 +105,18 @@ The setup was checked against the pinned image in a one-container trial. These a
 ## The claims a gateway receives
 
 - Experimental until 0.11. The token format (`wardyn_format` is `experimental-1`) and the key set's address may change before then.
-- With a provider's run identity on, `wardyn-proxy` sends a signed token in the `X-Wardyn-Identity` header on that provider's gateway route only. It never uses `Authorization`, which carries a person's own credential.
-- The token is ES256 with the key's `kid` in its header, and lives 10 minutes unless the provider sets a shorter life (see "How long a token lives"). No claim comes from the request or the sandbox. Every claim is in the table.
+- With a provider's run identity on, `wardyn-proxy` sends a signed token in the `X-Wardyn-Identity` header on that provider's gateway route only. It does the same on an organisation MCP server's address when the component sets `mcp.gateway_audience`. It never uses `Authorization`, which carries a person's own credential.
+- The token is ES256 with the key's `kid` in its header, and lives 10 minutes unless the provider sets a shorter life (see "How long a token lives"). An MCP server's token always lives 10 minutes. No claim comes from the request or the sandbox. Every claim is in the table.
 
 | Claim | Value | Notes |
 |---|---|---|
 | `iss` | The trust domain, as `spiffe://<trust domain>` | `GET /api/v1/model-providers` reports it as `gateway_identity_issuer`. Two Wardynds on the default `wardyn.local` domain behind one gateway present one issuer, so set `WARDYN_TRUST_DOMAIN` on each |
-| `aud` | The provider's `gateway_identity.audience` | Set by an admin. A gateway accepts only the audiences it lists |
+| `aud` | The provider's `gateway_identity.audience`, or an MCP component's `mcp.gateway_audience` | Set by an admin. A gateway accepts only the audiences it lists. One audience is never on two addresses, so a model route's token is no good on an MCP route |
 | `sub` | The run's subject: a person, or a service identity on a service run | A local install gives a fixed seat. A run started with the admin token gives `admin-token` |
 | `wardyn_run` | The run id | Flat, so a gateway rule needs no SPIFFE parsing |
 | `wardyn_runner` | The runner's id, else the runner target | An operator-chosen slug, possibly a hostname, or `docker` |
-| `wardyn_provider` | The model provider's id | |
+| `wardyn_provider` | The model provider's id | Absent on an MCP server's token |
+| `wardyn_mcp` | The MCP server's key, the `<server>` of `mcp__<server>__<tool>` | Present on an MCP server's token alone |
 | `sponsor` | The accountable person of a service identity | Present only on a service run |
 | `jti` | A fresh UUID per token | |
 | `iat` | When the token was issued | Unix seconds |
@@ -180,7 +186,7 @@ Wardyn makes a fresh call id for every attempt to a model gateway route and send
 - Only a gateway log line that passed the token check is trustworthy. A sandbox that reaches the gateway through an opaque tunnel can send any `X-Wardyn-Call-Id`, so run the gateway's `jwtAuth` in `strict` mode.
 - An attempt refused or failed after the proxy made its id has a row with the id, and no gateway line when nothing was sent. A call refused before that has no id.
 - The id is Wardyn's own. It is not a request id the gateway made.
-- MCP has a call id and no identity token.
+- An MCP server has a call id. It also gets an identity token when it is an organisation's remote server with `mcp.gateway_audience`, and no token otherwise.
 
 ## Defaults on a route that carries the token
 
@@ -189,4 +195,4 @@ Wardyn makes a fresh call id for every attempt to a model gateway route and send
 | The response scrub is forced on | `WARDYN_PROXY_RESPONSE_SCRUB=off` does not turn it off here, so a gateway that echoes the token back cannot hand it to the sandbox |
 | `Accept-Encoding` is deleted from the request | The answer arrives in bytes the scrub can read |
 | A compressed answer gets a `502` | The proxy refuses bytes it cannot scrub rather than relay them |
-| A running run keeps the routes it started with | A run keeps its routes. Once a provider's gateway changes, the mint refuses that run, so its gateway calls fail once its token expires, within 10 minutes at most. Create a new run to pick the change up |
+| A running run keeps the routes it started with | A run keeps its routes. Once a provider's gateway changes, the mint refuses that run, so its gateway calls fail once its token expires, within 10 minutes at most. Create a new run to pick the change up. |

@@ -375,6 +375,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// MCP servers: their credentials move to the broker and each harness's
 	// token goes into its own configuration (run_mcp.go).
 	mcp := dispatchMCP(p.Components.MCP, withholding{deny: ceiling.deny, layers: layers}, &injections, proxyURL, p.Interactive, sandboxEnv)
+	gatewayRoutes, gatewayRefusal := gatewayMCPRoutesOf(plan.gatewayRoutes, mcp)
+	if gatewayRefusal != "" {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, gatewayRefusal)
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create", run.ID.String(), "failure", mustJSON(map[string]any{"error": gatewayRefusal})))
+		return
+	}
 	harnessCreds, credFiles, merr := s.holdLaneHarnessCredentials(ctx, run, p)
 	if merr != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
@@ -516,7 +522,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// nil, so no key is written, unless the run chose one.
 			LocalModels: plan.localModels,
 			// The routes that carry the run's signed identity; nil, so no key is written, with identity off.
-			GatewayIdentity: plan.gatewayRoutes,
+			GatewayIdentity: gatewayRoutes,
 			// What the brokered-LLM 404 says when this run reaches that route
 			// with nothing behind it — compiled at dispatch because the sidecar
 			// knows only that no injection matched (see llmUnavailableDetail).

@@ -129,6 +129,9 @@ func (s *Server) componentSaveRefusal(ctx context.Context, c types.Component) (r
 			return reasonComponentSecretMissing, fmt.Sprintf("definition.secrets[%d]: the organisation has no secret named %q; add it under Secrets first", i, sec.SecretName)
 		}
 	}
+	if m := c.Definition.MCP; c.Owner == "" && m != nil && m.GatewayAudience != "" {
+		return s.gatewayMCPAudienceRefusal(ctx, c)
+	}
 	return "", ""
 }
 

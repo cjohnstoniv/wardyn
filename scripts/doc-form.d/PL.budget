@@ -24,4 +24,5 @@ docs/adoption/README.md=249 share=35
 # docs/operations/ai-gateway.md 1941 adds 26 over 1915, measured: two providers on one gateway need paths apart
 # docs/operations/ai-gateway.md 2351 adds 410 over 1941, measured: the unserved-path line under the key set's address, and the TLS chain section (hop table, the inspector warning, the bypass recipe).
 # docs/operations/ai-gateway.md 2574 adds 223 over 2351, measured: the token lifetime section (the setting, when it applies, the outage a run survives, the mint load) and the two lines that name it.
-docs/operations/ai-gateway.md=2574 share=35
+# docs/operations/ai-gateway.md 2791 adds 217 over 2574, measured: run identity on an organisation MCP server's route (the setup step, the MCP jwtAuth row, the wardyn_mcp claim row and the two lines that name it).
+docs/operations/ai-gateway.md=2791 share=35

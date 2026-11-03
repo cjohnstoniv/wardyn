@@ -56,6 +56,8 @@ const (
 
 	gatewayChangedMsg = "This run's model provider was changed or turned off after the run started, so the run gets no new " +
 		"gateway identity. Create a new run to use the provider as it is now."
+	gatewayReviveMCPChangedMsg = "MCP server %q was changed or turned off after this run started, so nothing was revived: " +
+		"the run's calls to it would be refused. Create a new run to use the server as it is now."
 	gatewayReviveChangedMsg = "Model provider %q was changed or turned off after this run started, so nothing was revived: " +
 		"the run's gateway calls would be refused. Create a new run to use the provider as it is now."
 	gatewayUnavailableMsg    = "Wardyn couldn't check this run's gateway identity just now, so no token was issued"
@@ -146,9 +148,9 @@ func (s *Server) mountGatewayIdentityRoute(r chi.Router) {
 
 // handleInternalGatewayIdentity mints a run's gateway token. internalAuth has
 // refused a terminal, kept, queued or wrongly relayed run. The run is the token's
-// claims.RunID and the body names the provider alone. What the token says comes
-// from the run token and the provider's live record, checked against what was
-// sealed at dispatch (gatewayMintAdmit), never from the request.
+// claims.RunID and the body names the provider, or the MCP server, alone. What the token
+// says comes from the run token and the live record, checked against what was sealed at
+// dispatch (gatewayMintAdmit), never from the request.
 //
 //	POST /api/v1/internal/gateway-identity
 func (s *Server) handleInternalGatewayIdentity(w http.ResponseWriter, r *http.Request) {
@@ -159,13 +161,20 @@ func (s *Server) handleInternalGatewayIdentity(w http.ResponseWriter, r *http.Re
 	}
 	var body struct {
 		ProviderID string `json:"provider_id"`
+		MCPServer  string `json:"mcp_server"`
 	}
 	if !decodeStrict(w, r, &body) {
 		return
 	}
 	ctx := r.Context()
-	target := ""
-	if modelProviderIDPattern.MatchString(body.ProviderID) {
+	target, kind := "", "provider"
+	switch {
+	case body.MCPServer != "":
+		kind = "mcp_server"
+		if gatewayMCPKeyPattern.MatchString(body.MCPServer) {
+			target = body.MCPServer
+		}
+	case modelProviderIDPattern.MatchString(body.ProviderID):
 		target = body.ProviderID
 	}
 	record := func(outcome string, data map[string]any) {
@@ -174,7 +183,7 @@ func (s *Server) handleInternalGatewayIdentity(w http.ResponseWriter, r *http.Re
 		s.recordAudit(ctx, ev)
 	}
 	refuse := func(ref *ownerRefusal) {
-		record("denied", map[string]any{"reason": ref.reason, "provider": target})
+		record("denied", map[string]any{"reason": ref.reason, kind: target})
 		writeErrorReason(w, ref.status, ref.reason, ref.msg)
 	}
 	run, live := liveRunFromContext(ctx)
@@ -182,29 +191,29 @@ func (s *Server) handleInternalGatewayIdentity(w http.ResponseWriter, r *http.Re
 		refuse(gatewayUnavailable())
 		return
 	}
-	p, sponsor, ref := s.gatewayMintAdmit(ctx, claims, run, body.ProviderID)
+	dest, sponsor, ref := s.gatewayMintAdmit(ctx, claims, run, body.ProviderID, body.MCPServer)
 	if ref != nil {
 		refuse(ref)
 		return
 	}
-	token, signed, err := s.signGatewayToken(ctx, claims, run, p, sponsor)
+	token, signed, err := s.signGatewayToken(ctx, claims, run, dest, sponsor)
 	if err != nil {
 		slog.ErrorContext(ctx, "gateway identity: sign a token", slog.String("run_id", claims.RunID.String()), slog.Any("err", err))
 		refuse(gatewayUnavailable())
 		return
 	}
 	expires := time.Unix(signed.ExpiresAt, 0).UTC().Format(time.RFC3339)
-	// One row for a run's first token per provider on this replica, not one per mint:
+	// One row for a run's first token per provider or MCP server on this replica, not one per mint:
 	// a proxy mints several times an hour for as long as the run lasts.
-	if s.gatewayFirstMint(claims.RunID.String(), p.ID) {
-		record("success", map[string]any{"provider": p.ID, "jti": signed.ID, "expires_at": expires, "first": true})
+	if s.gatewayFirstMint(claims.RunID.String(), dest.holder()) {
+		record("success", map[string]any{kind: dest.name(), "jti": signed.ID, "expires_at": expires, "first": true})
 	}
 	writeJSON(w, http.StatusOK, tokenRenewResponse{Token: token, ExpiresAt: expires})
 }
 
 // signGatewayToken signs for an admitted run. The signer is read, never created:
 // that is the first enable's job (refuseGatewayIdentityWrite).
-func (s *Server) signGatewayToken(ctx context.Context, claims *identity.Claims, run types.AgentRun, p types.ModelProvider, sponsor string) (string, gatewayidentity.Claims, error) {
+func (s *Server) signGatewayToken(ctx context.Context, claims *identity.Claims, run types.AgentRun, dest gatewayDest, sponsor string) (string, gatewayidentity.Claims, error) {
 	if s.cfg.GatewayIdentity == nil {
 		return "", gatewayidentity.Claims{}, errors.New("no signer is configured")
 	}
@@ -221,13 +230,14 @@ func (s *Server) signGatewayToken(ctx context.Context, claims *identity.Claims, 
 	}
 	return signer.Sign(gatewayidentity.Claims{
 		Issuer:   issuer,
-		Audience: p.GatewayIdentity.Audience,
+		Audience: dest.audience,
 		Subject:  claims.Sub,
 		Run:      claims.RunID.String(),
 		Runner:   cmp.Or(run.RunnerPoolExecutor, run.RunnerTarget),
-		Provider: p.ID,
+		Provider: dest.provider,
+		MCP:      dest.mcp,
 		Sponsor:  sponsor,
-	}, time.Duration(p.GatewayIdentity.TokenLifetimeSeconds)*time.Second)
+	}, dest.lifetime)
 }
 
 // gatewayFirstMint reports whether this replica has not yet recorded a first mint
@@ -255,44 +265,78 @@ func gatewayChanged() *ownerRefusal {
 	return &ownerRefusal{status: http.StatusForbidden, reason: reasonGatewayIdentityChanged, msg: gatewayChangedMsg}
 }
 
+// gatewayDest is what an admitted mint signs for: a model provider or an MCP server, with
+// the audience and lifetime its live record sets.
+type gatewayDest struct {
+	audience string
+	lifetime time.Duration
+	// provider or mcp is set, never both.
+	provider, mcp string
+}
+
+// holder names the destination for the first-mint memory; name is its id in an audit row.
+func (d gatewayDest) holder() string {
+	if d.mcp != "" {
+		return "mcp\x00" + d.mcp
+	}
+	return d.provider
+}
+
+func (d gatewayDest) name() string { return cmp.Or(d.provider, d.mcp) }
+
 // gatewayMintAdmit is every check a token depends on past internalAuth: the
-// person, then the provider against what was sealed at dispatch. It returns the
-// live provider and, on a service run, the sponsor the token names.
-func (s *Server) gatewayMintAdmit(ctx context.Context, claims *identity.Claims, run types.AgentRun, providerID string) (types.ModelProvider, string, *ownerRefusal) {
+// person, then the provider or MCP server against what was sealed at dispatch (exactly
+// one of providerID and mcpKey is named). It returns the destination the live record
+// sets and, on a service run, the sponsor the token names.
+func (s *Server) gatewayMintAdmit(ctx context.Context, claims *identity.Claims, run types.AgentRun, providerID, mcpKey string) (gatewayDest, string, *ownerRefusal) {
 	sponsor, ref := s.gatewayMintPerson(ctx, claims, run)
 	if ref != nil {
-		return types.ModelProvider{}, "", ref
+		return gatewayDest{}, "", ref
 	}
 	routes, err := s.sealedGatewayRoutes(ctx, run.ID)
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, errRunProxyConfigNotKept):
-		return types.ModelProvider{}, "", gatewayChanged()
+		return gatewayDest{}, "", gatewayChanged()
 	case err != nil:
 		slog.ErrorContext(ctx, "gateway identity: read the sealed route", slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		return types.ModelProvider{}, "", gatewayUnavailable()
+		return gatewayDest{}, "", gatewayUnavailable()
 	}
-	i := slices.IndexFunc(routes, func(rt proxy.GatewayIdentityRoute) bool { return rt.ProviderID == providerID })
+	if (providerID == "") == (mcpKey == "") {
+		return gatewayDest{}, "", gatewayChanged()
+	}
+	i := slices.IndexFunc(routes, func(rt proxy.GatewayIdentityRoute) bool {
+		return rt.ProviderID == providerID && rt.MCPKey == mcpKey
+	})
+	if i < 0 && mcpKey != "" {
+		return gatewayDest{}, "", gatewayMCPChanged()
+	}
 	if i < 0 {
-		return types.ModelProvider{}, "", gatewayChanged()
+		return gatewayDest{}, "", gatewayChanged()
+	}
+	if mcpKey != "" {
+		return s.gatewayMintAdmitMCP(ctx, run, routes[i], sponsor)
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "gateway identity: read the provider", slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		return types.ModelProvider{}, "", gatewayUnavailable()
+		return gatewayDest{}, "", gatewayUnavailable()
 	}
 	pairs, err := s.runHarnessPairs(ctx, run)
 	if err != nil {
 		slog.ErrorContext(ctx, "gateway identity: read the run's harnesses", slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		return types.ModelProvider{}, "", gatewayUnavailable()
+		return gatewayDest{}, "", gatewayUnavailable()
 	}
 	p, found := modelProviderByID(sc.ModelProviders, providerID)
 	served := slices.ContainsFunc(pairs, func(h types.RunHarness) bool {
 		return h.ModelProviderID == providerID && p.Serves(h.Harness)
 	})
 	if !found || !served || !gatewayBindingHolds(routes[i], p) {
-		return types.ModelProvider{}, "", gatewayChanged()
+		return gatewayDest{}, "", gatewayChanged()
 	}
-	return p, sponsor, nil
+	return gatewayDest{
+		audience: p.GatewayIdentity.Audience, provider: p.ID,
+		lifetime: time.Duration(p.GatewayIdentity.TokenLifetimeSeconds) * time.Second,
+	}, sponsor, nil
 }
 
 // gatewayMintPerson refuses a suspended person independently of the kill their
@@ -429,6 +473,16 @@ func (s *Server) gatewayIdentityRefusal(ctx context.Context, cfg *proxy.Config) 
 		return nil, fmt.Errorf("read the model providers: %w", err)
 	}
 	for _, rt := range cfg.GatewayIdentity {
+		if rt.MCPKey != "" {
+			held, err := s.gatewayMCPBindingHolds(ctx, cfg.RunID, rt)
+			if err != nil {
+				return nil, fmt.Errorf("read the run's MCP server: %w", err)
+			}
+			if !held {
+				return &ownerRefusal{status: http.StatusConflict, reason: reasonGatewayIdentityChanged, msg: fmt.Sprintf(gatewayReviveMCPChangedMsg, rt.MCPKey)}, nil
+			}
+			continue
+		}
 		p, found := modelProviderByID(sc.ModelProviders, rt.ProviderID)
 		if !found || !gatewayBindingHolds(rt, p) {
 			return &ownerRefusal{status: http.StatusConflict, reason: reasonGatewayIdentityChanged, msg: fmt.Sprintf(gatewayReviveChangedMsg, rt.ProviderID)}, nil
@@ -502,16 +556,23 @@ func validateProviderGatewayIdentity(mp types.ModelProvider) error {
 }
 
 // validateGatewayAudiences refuses one audience on two destinations: a token for
-// it would be good at both, so one gateway could replay it at the other. Rows the
+// it would be good at both, so one gateway could replay it at the other, and a
+// model route's token could be replayed on an MCP route or the reverse. Rows the
 // same destination serves may share one. Every row carrying the field counts,
-// turned off or not, since turning one on is no edit of the other.
-func validateGatewayAudiences(p *types.ModelProviders) error {
+// turned off or not, since turning one on is no edit of the other. mcp is the
+// organisation's remote MCP servers with an audience (gatewayMCPAudienceUses).
+func validateGatewayAudiences(p *types.ModelProviders, mcp []types.Component) error {
 	type holder struct {
-		id   string
-		dest gatewayDestination
+		id    string // the provider's id, for a provider
+		label string
+		dest  gatewayDestination
 	}
 	seen := map[string]holder{}
-	for _, mp := range p.Providers {
+	var providers []types.ModelProvider
+	if p != nil {
+		providers = p.Providers
+	}
+	for _, mp := range providers {
 		if mp.GatewayIdentity == nil {
 			continue
 		}
@@ -521,7 +582,19 @@ func validateGatewayAudiences(p *types.ModelProviders) error {
 			return atField("gateway_identity.audience", fmt.Errorf(mp400GatewayAudienceDup, mp.ID, mp.GatewayIdentity.Audience, first.id))
 		}
 		if !ok {
-			seen[mp.GatewayIdentity.Audience] = holder{id: mp.ID, dest: dest}
+			seen[mp.GatewayIdentity.Audience] = holder{id: mp.ID, label: "provider " + strconv.Quote(mp.ID), dest: dest}
+		}
+	}
+	for _, c := range mcp {
+		aud := c.Definition.MCP.GatewayAudience
+		dest, _ := gatewayDestinationOf(c.Definition.MCP.URL) // the component save has passed it
+		label := "MCP server " + strconv.Quote(c.Name)
+		first, ok := seen[aud]
+		if ok && first.dest != dest {
+			return atField("mcp.gateway_audience", fmt.Errorf(gatewayMCPAudienceDup, aud, label, first.label))
+		}
+		if !ok {
+			seen[aud] = holder{label: label, dest: dest}
 		}
 	}
 	return nil
@@ -573,6 +646,9 @@ func introducedGatewayIdentity(block, stored *types.ModelProviders) bool {
 func (s *Server) refuseGatewayIdentityWrite(w http.ResponseWriter, r *http.Request, block, stored *types.ModelProviders, prefix string) bool {
 	if err := validateGatewayIdentityEdit(block, stored); err != nil {
 		writeErrorReasonField(w, http.StatusBadRequest, reasonSiteConfigInvalid, prefix+err.Error(), refusalField(err))
+		return true
+	}
+	if s.refuseGatewayAudienceWrite(w, r, block, prefix) {
 		return true
 	}
 	if !introducedGatewayIdentity(block, stored) {
