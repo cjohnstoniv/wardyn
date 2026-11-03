@@ -11,8 +11,7 @@ import { NR_RUN } from "../../../wardyn/copy/new-run/run";
 import { NR_TOOLS } from "../../../wardyn/copy/new-run/tools";
 import { NR_SHARED } from "../../../wardyn/copy/new-run/shared";
 import { WALL_PRESETS } from "../../../wardyn/copy/wall-presets";
-import { SUMMARY } from "../../run-detail/policy-tab-copy";
-import { pushesFact } from "../../../wardyn/policy-document/policy-facts";
+import { pushesLines } from "../../../wardyn/policy-document/policy-facts";
 import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 import type { ConfinementClass } from "../../../../lib/types/runs";
 import { sameValue } from "../draft/draft-reducer";
@@ -132,8 +131,7 @@ export function policyRows(
   rows.push({ id: "tools", label: WALL_PRESETS.ROW_TOOLS, value, detail: joined(toolsDetail, wallsDetail), ...(harnessRules.length > 0 && { notes: harnessRules }) });
   // Pushes are their own row (board WP-2): every push refused and no write access outrank where a push could go.
   const spec = preview?.spec;
-  const refused = spec && pushesFact(spec);
-  const pushes = refused ? (refused === "deny_all" ? WALL_PRESETS.PUSH_EVERY_REFUSED : WALL_PRESETS.PUSH_NO_WRITE) : spec?.git_push_any_branch === undefined ? undefined : spec.git_push_any_branch ? SUMMARY.anyBranch : SUMMARY.ownBranch;
+  const pushes = spec ? pushesLines(spec).join("; ") : "";
   if (pushes) rows.push({ id: "pushes", label: WALL_PRESETS.ROW_PUSHES, value: pushes });
   return rows;
 }

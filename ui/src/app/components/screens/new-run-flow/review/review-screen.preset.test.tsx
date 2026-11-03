@@ -128,7 +128,8 @@ describe("Review: the wall preset", () => {
   });
 
   it.each([
-    ["no write access", { git_push_any_branch: false, github_capabilities: ["code_read"] }, W.PUSH_NO_WRITE],
+    ["no write access on both forges", { git_push_any_branch: false, github_capabilities: ["code_read"], azure_devops_capabilities: ["code_read"] }, W.PUSH_NO_WRITE],
+    ["no write access on one forge only", { git_push_any_branch: false, github_capabilities: ["code_read"] }, "GitHub: no pushes (no write access); Azure DevOps: only this run's own branch"],
     ["own branch", { git_push_any_branch: false }, "Only this run's own branch"],
     ["any branch", { git_push_any_branch: true }, "Any branch"],
   ])("Pushes reads for %s", async (_name, spec, text) => {

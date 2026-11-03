@@ -114,6 +114,7 @@ export const WALL_PRESETS = {
   // Pushes values (Review's Effective policy card and the run's policy document).
   PUSH_EVERY_REFUSED: "Every push refused",
   PUSH_NO_WRITE: "No pushes (no write access)",
+  PUSH_FORGE_NO_WRITE: (forge: string) => `${forge}: no pushes (no write access)`,
   // Run page.
   RUN_LINE: (name: string, audience: string, version: string | number) => `Wall preset: ${name} (${audience}, version ${version}).`,
   RUN_LINE_PERSONAL: "Wall preset: a personal wall preset.",

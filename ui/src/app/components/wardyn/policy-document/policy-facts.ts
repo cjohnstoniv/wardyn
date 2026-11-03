@@ -13,6 +13,9 @@ import { POLICY_DOCUMENT } from "../copy/policy-document";
 import type { Chip } from "../primitives";
 import { EFFECT_PAST, splitToolRules } from "../policy-tool-rules";
 
+import { WALL_PRESETS } from "../copy/wall-presets";
+import { SUMMARY } from "../../screens/run-detail/policy-tab-copy";
+
 export type ChipTone = NonNullable<React.ComponentProps<typeof Chip>["tone"]>;
 
 // Compact, honest egress summary. allow_all_egress is always the block-list
@@ -42,16 +45,25 @@ export function lifecycleSummary(spec: RunPolicySpec): string {
 }
 
 /**
- * What the run's policy says of pushing, where it is not the run's own branch or any branch: every push is refused
- * (push_rules.deny_all), or no capability list the run holds names code_write, so no push is allowed. A list that
- * is absent is no limit. Ceiling: a run's forge is not known here, so one list without code_write beside an absent
- * other reads as no pushes; the policy this reads is the effective one, in which the walls have already met the
- * provider default.
+ * What the policy says of pushing, one line per statement. Every push refused (push_rules.deny_all) stands alone.
+ * "No pushes (no write access)" is said only when BOTH forge lists are present and neither names code_write. One
+ * list without code_write beside an absent list restricts that forge only: the other forge keeps its provider
+ * default, which can push, so the restricted forge is named and the branch line stays for the rest. An absent
+ * list is no limit.
  */
-export function pushesFact(spec: Pick<RunPolicySpec, "push_rules" | "github_capabilities" | "azure_devops_capabilities">): "deny_all" | "no_write" | undefined {
-  if (spec.push_rules?.deny_all === true) return "deny_all";
-  const lists = [spec.github_capabilities, spec.azure_devops_capabilities].filter((l): l is string[] => Array.isArray(l));
-  return lists.length > 0 && lists.every((l) => !l.includes("code_write")) ? "no_write" : undefined;
+export function pushesLines(
+  spec: Pick<RunPolicySpec, "push_rules" | "github_capabilities" | "azure_devops_capabilities" | "git_push_any_branch">,
+): string[] {
+  if (spec.push_rules?.deny_all === true) return [WALL_PRESETS.PUSH_EVERY_REFUSED];
+  const gh = spec.github_capabilities;
+  const ado = spec.azure_devops_capabilities;
+  const noWrite = (l?: string[]) => Array.isArray(l) && !l.includes("code_write");
+  const branch = spec.git_push_any_branch === undefined ? undefined : spec.git_push_any_branch ? SUMMARY.anyBranch : SUMMARY.ownBranch;
+  if (noWrite(gh) && noWrite(ado)) return [WALL_PRESETS.PUSH_NO_WRITE];
+  const restricted = [...(noWrite(gh) ? ["GitHub"] : []), ...(noWrite(ado) ? ["Azure DevOps"] : [])];
+  if (restricted.length === 0) return branch ? [branch] : [];
+  const other = noWrite(gh) ? "Azure DevOps" : "GitHub";
+  return [...restricted.map(WALL_PRESETS.PUSH_FORGE_NO_WRITE), ...(branch ? [`${other}: ${branch.charAt(0).toLowerCase()}${branch.slice(1)}`] : [])];
 }
 
 // What happens to a tool no rule names.

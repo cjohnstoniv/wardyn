@@ -87,8 +87,8 @@ describe("PolicySummary — plain names for every key", () => {
     expect(row("Tools and pushes", "Tool rules")).toHaveTextContent("Bash — held" + "Read — allowed" + "Anything else is denied.");
     expect(row("Tools and pushes", "Deny")).toHaveTextContent(".github/**");
     expect(row("Tools and pushes", "Hold for review")).toHaveTextContent("payments/**");
-    // The fixture's capability list holds no code_write, so no push is allowed (board WP-3, ruling 20).
-    expect(row("Tools and pushes", "Pushes")).toHaveTextContent("No pushes (no write access)");
+    // The fixture's one capability list holds no code_write: that forge only is named, the other keeps its branch line.
+    expect(row("Tools and pushes", "Pushes")).toHaveTextContent(/no pushes \(no write access\)/);
     expect(row("Apps", "UI apps")).toHaveTextContent("web → localhost:3000/app");
     expect(row("Limits", "CPU")).toHaveTextContent("2 CPU");
     expect(row("Limits", "Memory")).toHaveTextContent("4096 MiB");
@@ -404,8 +404,27 @@ describe("PolicySummary — the Pushes row", () => {
     expect(pushes({ push_rules: { deny_all: true }, git_push_any_branch: true, github_capabilities: ["code_write"] })).toHaveTextContent(WALL_PRESETS.PUSH_EVERY_REFUSED);
   });
 
-  it("says no pushes when the capability lists it holds name no code_write", () => {
-    expect(pushes({ github_capabilities: ["code_read", "issues_read"] })).toHaveTextContent(WALL_PRESETS.PUSH_NO_WRITE);
+  const GH_READ = ["code_read", "issues_read"];
+  const ADO_READ = ["code_read", "work_read"];
+  const GH_WRITE = ["code_read", "code_write"];
+  // Table: the global sentence needs BOTH lists present and neither naming code_write. One list names its forge and the
+  // other forge keeps the branch line, because its provider default (an absent list) can still push.
+  it.each([
+    ["both lists, neither writes", { github_capabilities: GH_READ, azure_devops_capabilities: ADO_READ }, [WALL_PRESETS.PUSH_NO_WRITE]],
+    ["GitHub list only, no write: the ADO default can push", { github_capabilities: GH_READ }, ["GitHub: no pushes (no write access)", "Azure DevOps: only this run's own branch"]],
+    ["ADO list only, no write: the GitHub default can push", { azure_devops_capabilities: ADO_READ, git_push_any_branch: true }, ["Azure DevOps: no pushes (no write access)", "GitHub: any branch"]],
+    ["GitHub no write beside an ADO list that writes", { github_capabilities: GH_READ, azure_devops_capabilities: ["code_write"] }, ["GitHub: no pushes (no write access)", "Azure DevOps: only this run's own branch"]],
+    ["both lists write", { github_capabilities: GH_WRITE, azure_devops_capabilities: ["code_write"] }, [SUMMARY.ownBranch]],
+    ["no lists", {}, [SUMMARY.ownBranch]],
+  ])("Pushes: %s", (_name, spec, want) => {
+    const cell = pushes(spec);
+    expect(cell).toHaveTextContent(want.join(""));
+    if (want[0] !== WALL_PRESETS.PUSH_NO_WRITE) expect(cell).not.toHaveTextContent(/^No pushes/);
+  });
+
+  it("a stored policy whose ADO provider default can push is never read as no pushes at all", () => {
+    // A stored policy (Policies screen): a GitHub read list and no ADO list.
+    expect(pushes({ github_capabilities: GH_READ })).not.toHaveTextContent(WALL_PRESETS.PUSH_NO_WRITE);
   });
 
   it("keeps the run's own branch, or any branch, when a list names code_write or none is named", () => {
