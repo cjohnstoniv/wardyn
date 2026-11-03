@@ -133,6 +133,9 @@ type SandboxSpec struct {
 	// MacOSBase is the macOS base a macos_vm run is started on: a Mac's other base's name, or "" for its
 	// Standard base. A Mac that has no ready base of that name refuses the create.
 	MacOSBase string `json:"macos_base,omitempty"`
+	// KeptMachine, when set, makes a macos_vm run the session of one person's kept machine: a new one
+	// to keep, or an existing one to resume or reset. Only a macOS VM on the person's own Mac reads it.
+	KeptMachine *KeptMachineSpec `json:"kept_machine,omitempty"`
 	// ImageArches, when set, are the only architectures Image runs on: a prewrapped image's accepted
 	// set (design final §3). A Kubernetes substrate places the agent pod on a node of one of them.
 	ImageArches []string `json:"image_arches,omitempty"`
@@ -401,6 +404,9 @@ type Sandbox struct {
 	// (macvm.RFBShim.DesktopForcedViewOnly), not an echo of SandboxSpec.DesktopViewOnly. False from
 	// anything else, or a runner or helper that predates it.
 	DesktopForcedViewOnly bool `json:",omitempty"`
+	// KeptScrub is what the stop scrub made of a kept machine's disk, set on the stop that ends its
+	// session; nil for any other sandbox, or a runner that predates kept machines.
+	KeptScrub *KeptScrub `json:",omitempty"`
 }
 
 // Status reports observed sandbox state.
