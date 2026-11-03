@@ -97,3 +97,22 @@ func TestGatewayInspectionLeftTo(t *testing.T) {
 		t.Fatalf("no sealed config: %v", got)
 	}
 }
+
+// A Bedrock key row's calls are scanned by the generic forward check, which no route
+// defers: the switch is refused when saved, never sealed, and so never named on the run.
+func TestGatewayInspectionNotForBedrock(t *testing.T) {
+	p := testGatewayBedrockBearer()
+	p.GatewayIdentity.Inspection = types.GatewayInspectionGateway
+	if err := validateProviderGatewayIdentity(p); err == nil || !strings.Contains(err.Error(), "inspection is not available for a Bedrock provider") {
+		t.Fatalf("err = %v", err)
+	}
+	rt, ok := gatewayRouteOf(p)
+	if !ok || rt.InspectionDeferred {
+		t.Fatalf("route %+v, ok %v: a Bedrock route must not defer", rt, ok)
+	}
+	f := newGatewayFixture(t)
+	f.seal(t, f.run.ID, p)
+	if got := f.srv.inspectionLeftTo(context.Background(), f.run.ID, testGatewaySite(p)); got != nil {
+		t.Fatalf("a Bedrock run claims its prompts were left to the gateway: %v", got)
+	}
+}

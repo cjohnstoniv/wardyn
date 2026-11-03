@@ -105,6 +105,7 @@ export const PROVIDER_EDITOR = {
     INSPECT_OFF: "Turn this on if your gateway already checks prompts, so Wardyn doesn't check them twice.",
     INSPECT_ON:
       "Wardyn keeps the run's secret-value check when that check is enabled by its policy. Other prompt checks are left to this gateway.",
+    INSPECT_NOT_BEDROCK: "Not available for Amazon Bedrock yet. The run's policy alone decides how Wardyn checks Bedrock prompts.",
     INSPECT_SEALED:
       "After you save this, existing runs stop starting new gateway calls within 10 minutes. Create new runs to use the change.",
     ADDRESS_CHANGED:

@@ -241,7 +241,7 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
     base_url: draft.baseUrl.trim() || undefined,
     // Absent is off; a stored field the editor doesn't show rides along inside it.
     gateway_identity: draft.gatewayOn && gatewayKind(draft.kind)
-      ? { ...base?.gateway_identity, audience: draft.gatewayAudience.trim(), inspection: draft.gatewayInspect ? "gateway" : undefined }
+      ? { ...base?.gateway_identity, audience: draft.gatewayAudience.trim(), inspection: draft.gatewayInspect && !isBedrock(draft.kind) ? "gateway" : undefined }
       : undefined,
     auth:
       endpoint || (local && draft.useToken)

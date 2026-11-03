@@ -114,6 +114,24 @@ describe("the inspection switch", () => {
     expect(inspect()).toBeDisabled();
   });
 
+  it("is not offered on a Bedrock key row, which says why, and a stored value is not sent back", async () => {
+    const bedrock: ModelProvider = {
+      id: "bedrock-keys",
+      uid: "u-3",
+      name: "Bedrock keys",
+      kind: "bedrock_bearer",
+      bedrock: { region: "us-east-1", base_url: "https://gateway.example.com/bedrock" },
+      gateway_identity: { audience: "wardyn-bedrock", inspection: "gateway" },
+      harnesses: [{ harness: "claude-code", model: "us.anthropic.profile" }],
+    };
+    const { user } = renderEditor(bedrock);
+    expect(screen.queryByRole("switch", { name: G.INSPECT_SWITCH })).not.toBeInTheDocument();
+    expect(screen.getByText(G.INSPECT_NOT_BEDROCK)).toBeInTheDocument();
+    expect(screen.queryByText(G.INSPECT_ON)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    expect(putBody().providers[0].gateway_identity).toEqual({ audience: "wardyn-bedrock" });
+  });
+
   it("round-trips through the draft, and identity off drops it", () => {
     const on = { ...CORP, gateway_identity: { audience: "a", inspection: "gateway" as const } };
     const d = draftFrom(on, HARNESSES);

@@ -490,8 +490,9 @@ func gatewayRouteOf(p types.ModelProvider) (_ proxy.GatewayIdentityRoute, ok boo
 	return proxy.GatewayIdentityRoute{
 		Host: d.host, Port: d.port, PathPrefix: d.path,
 		ProviderID: p.ID, ProviderUID: p.UID, Audience: p.GatewayIdentity.Audience,
-		// Only the exact value defers; anything else leaves Wardyn inspecting.
-		InspectionDeferred: p.GatewayIdentity.Inspection == types.GatewayInspectionGateway,
+		// Only the exact value defers; anything else leaves Wardyn inspecting. A Bedrock
+		// call is scanned by the generic forward check, which a route never defers.
+		InspectionDeferred: p.GatewayIdentity.Inspection == types.GatewayInspectionGateway && !p.Kind.IsBedrock(),
 	}, true
 }
 
@@ -624,8 +625,11 @@ func validateProviderGatewayIdentity(mp types.ModelProvider) error {
 		return atField("gateway_identity.token_lifetime_seconds",
 			fmt.Errorf(mp400GatewayLifetime, mp.ID, types.GatewayTokenLifetimeMin, types.GatewayTokenLifetimeMax))
 	}
-	if gi.Inspection != "" && gi.Inspection != types.GatewayInspectionGateway {
+	switch {
+	case gi.Inspection != "" && gi.Inspection != types.GatewayInspectionGateway:
 		return atField("gateway_identity.inspection", fmt.Errorf(mp400GatewayInspection, mp.ID, types.GatewayInspectionGateway))
+	case gi.Inspection != "" && mp.Kind.IsBedrock():
+		return atField("gateway_identity.inspection", fmt.Errorf(mp400GatewayInspectionBR, mp.ID))
 	}
 	return nil
 }

@@ -206,7 +206,7 @@ With content inspection on (`llm_inspection` in the run's policy), Wardyn checks
 - Each prompt left to the gateway has an `llm.scan.skip` row with `data.skip_reason: deferred_to_gateway` and `data.deferred_to` set to the provider id. A secret found there is an alert or block row with the same `deferred_to`. The console's audit reads "Left prompt checks to" the provider, and the run's Policy tab reads "On, except prompts to" its name.
 - In block mode the gateway's rules then decide what the other checks would have refused. A policy author who relies on Wardyn's blocks loses them on that route.
 - A prompt-bearing path the proxy cannot parse is still refused when the policy blocks on scanner errors.
-- A Bedrock key provider's calls are scanned only by `inspect_forward_egress`, which this setting leaves whole.
+- A Bedrock provider cannot take the setting, and saving it is refused. Its calls are scanned only by `inspect_forward_egress`, which no gateway takes over.
 - The setting is part of the route a run starts with. Changing it refuses the run's next token, so its gateway calls stop within 10 minutes. Create a new run to pick it up.
 - Any value other than `gateway` is refused when saved.
 

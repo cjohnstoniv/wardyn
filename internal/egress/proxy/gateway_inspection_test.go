@@ -215,3 +215,27 @@ func TestGatewayInspection_PolicyWithoutSecretCheckLeavesAll(t *testing.T) {
 		t.Fatalf("audit data %s does not name the provider", data)
 	}
 }
+
+// A Bedrock gateway's calls ride the generic channel, where inspect_forward_egress
+// scans the body with the run's whole engine. A route that says it defers changes
+// nothing there: the marker is still refused.
+func TestGatewayInspection_BedrockLaneKeepsTheFullScanner(t *testing.T) {
+	routes := []GatewayIdentityRoute{{Host: gwidOther, Port: 443, ProviderID: "bedrock-gw", Audience: "bedrock-aud", InspectionDeferred: true}}
+	spec := inspSpec(true)
+	spec.InspectForwardEgress = true
+	g := newInspectRig(t, routes, spec)
+	if g.p.channelForHost(gwidOther) != contentscan.ChannelGeneric || g.p.deferredScan == nil {
+		t.Fatal("the rig is not a deferred route on the generic channel")
+	}
+	rec := httptest.NewRecorder()
+	g.p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+gwidOther+"/model/m/invoke",
+		strings.NewReader(`{"prompt":"this is `+inspMarker+`"}`)), gwidOther, 443)
+	if rec.Code != http.StatusForbidden || g.other.count() != 0 {
+		t.Fatalf("got %d %s, upstream saw %d; the full scanner must refuse the marker", rec.Code, rec.Body, g.other.count())
+	}
+	for _, s := range inspScans(t, g) {
+		if s.DeferredTo != "" {
+			t.Fatalf("row %+v claims a check was left to the gateway", s)
+		}
+	}
+}

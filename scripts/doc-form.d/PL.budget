@@ -27,5 +27,5 @@ docs/adoption/README.md=249 share=35
 # docs/operations/ai-gateway.md 2791 adds 217 over 2574, measured: run identity on an organisation MCP server's route (the setup step, the MCP jwtAuth row, the wardyn_mcp claim row and the two lines that name it).
 # docs/operations/ai-gateway.md 2811 adds 20 over 2791, measured: an MCP server under another destination's identity route is refused (502).
 # docs/operations/ai-gateway.md 2861 adds 50 over 2811, measured: a Bedrock key provider can send run identity through bedrock.base_url, and why a Bedrock SSO provider cannot.
-# docs/operations/ai-gateway.md 3192 adds 331 over 2861, measured: who inspects a gateway route's prompts (the check table, the route match, the run's own secret values, the audit rows and the sealed-route note).
-docs/operations/ai-gateway.md=3192 share=35
+# docs/operations/ai-gateway.md 3201 adds 340 over 2861, measured: who inspects a gateway route's prompts (the check table, the route match, the run's own secret values, the audit rows, the Bedrock refusal and the sealed-route note).
+docs/operations/ai-gateway.md=3201 share=35
