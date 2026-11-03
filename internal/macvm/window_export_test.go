@@ -22,7 +22,7 @@ func SetWindowRecheck(d time.Duration) (restore func()) {
 // HasNativeWindowScreen says whether this build has the Mac's own window screen.
 func HasNativeWindowScreen() bool { return nativeWindowScreen != nil }
 
-// WatchWindowClosed is watchWindowClosed.
-func WatchWindowClosed(up func() int, every time.Duration, closed chan<- struct{}) {
-	watchWindowClosed(up, every, closed)
+// WatchWindow is watchWindow.
+func WatchWindow(up func() int, lockNotices func() int64, since int64, every time.Duration, closed, locked chan<- struct{}) {
+	watchWindow(up, lockNotices, since, every, closed, locked)
 }

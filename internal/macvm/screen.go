@@ -5,6 +5,7 @@ package macvm
 
 import (
 	"errors"
+	"fmt"
 	"time"
 	"unsafe"
 )
@@ -40,14 +41,95 @@ const WindowStrip = "What you type goes into this run. Sign-ins stay on the run'
 type WindowText struct{ Title, Strip string }
 
 // ErrNotAtMac is what WindowScreen.Ready wraps when the Mac's screen is locked or its console session is not
-// this process's. Any other Ready error means the check could not be read; both refuse a window.
-var ErrNotAtMac = errors.New("macvm: this Mac's screen is locked or its console session is not this user's")
+// this process's. ErrLockUnknown is its answer when it can't tell whether the screen is locked. Any other Ready
+// error means the check could not be read; all three refuse a window, and close an open one.
+var (
+	ErrNotAtMac    = errors.New("macvm: this Mac's screen is locked or its console session is not this user's")
+	ErrLockUnknown = errors.New("macvm: whether this Mac's screen is locked can't be told")
+)
+
+// errConsoleUnreadable is the console check's answer when the session's on-console key is missing or not a boolean.
+var errConsoleUnreadable = errors.New("macvm: the Mac's console session could not be read")
+
+// consoleKey is one boolean key of the Mac's session dictionary as the cgo reader found it. The values are the
+// reader's own numbers (wardynScreenConsoleKeys in screen_darwin.m).
+type consoleKey int
+
+const (
+	keyAbsent    consoleKey = 0
+	keyFalse     consoleKey = 1
+	keyTrue      consoleKey = 2
+	keyMalformed consoleKey = 3 // present but not a boolean; any number the reader does not give reads so too
+)
+
+// consoleReading is what the console check read: the session dictionary (Dict false when it could not be had)
+// with its on-console and lock keys, and whether the Mac's latest screen notification was a lock.
+type consoleReading struct {
+	Dict              bool
+	OnConsole, Locked consoleKey
+	LockNoticed       bool
+}
+
+// lockState is what the Mac says of its screen lock. Only a lock key that reads false is known-unlocked; a lock
+// notification, or a lock key that reads true, is locked; anything else (no dictionary, no key, a key that is not
+// a boolean) is unknown.
+type lockState int
+
+const (
+	lockUnknown lockState = iota
+	lockUnlocked
+	lockLocked
+)
+
+func (r consoleReading) lock() lockState {
+	switch {
+	case r.LockNoticed, r.Dict && r.Locked == keyTrue:
+		return lockLocked
+	case r.Dict && r.Locked == keyFalse:
+		return lockUnlocked
+	}
+	return lockUnknown
+}
+
+// consoleCheck is WindowScreen.Ready's answer for r: nil only when the screen is known unlocked and this
+// process's session is the Mac's console. A locked screen, or a session not on the console, wraps ErrNotAtMac;
+// an unknown lock wraps ErrLockUnknown, so it refuses and never falls back to the on-console key.
+func consoleCheck(r consoleReading) error {
+	if r.lock() == lockLocked {
+		return fmt.Errorf("the screen is locked: %w", ErrNotAtMac)
+	}
+	if !r.Dict {
+		return fmt.Errorf("no session dictionary: %w", ErrLockUnknown)
+	}
+	switch r.OnConsole {
+	case keyFalse:
+		return fmt.Errorf("the session is not on the console: %w", ErrNotAtMac)
+	case keyTrue:
+	default:
+		return errConsoleUnreadable
+	}
+	switch r.Locked {
+	case keyFalse:
+		return nil
+	case keyAbsent:
+		return fmt.Errorf("the session has no CGSSessionScreenIsLocked key: %w", ErrLockUnknown)
+	}
+	return fmt.Errorf("the session's CGSSessionScreenIsLocked key is not a boolean: %w", ErrLockUnknown)
+}
+
+// consoleKeyOf is the reader's number n as a consoleKey.
+func consoleKeyOf(n int) consoleKey {
+	if k := consoleKey(n); k >= keyAbsent && k <= keyTrue {
+		return k
+	}
+	return keyMalformed
+}
 
 // WindowScreen draws a run's window on the Mac. The darwin cgo build supplies one (nativeWindowScreen); tests
 // supply a fake through RunOptions.Window.
 type WindowScreen interface {
-	// Ready is nil when a window can open now: the screen is unlocked and this process's session is the Mac's
-	// console. It is asked before a window opens and every 2 s while one is up.
+	// Ready is nil when a window can open now: the screen is known unlocked and this process's session is the
+	// Mac's console. It is asked before a window opens and every 2 s while one is up.
 	Ready() error
 	// Open puts a close-only window on vm (a VZVirtualMachine the caller keeps alive until the window ends).
 	Open(vm unsafe.Pointer, text WindowText) (Window, error)
@@ -57,6 +139,9 @@ type WindowScreen interface {
 type Window interface {
 	// Closed is closed when the person closes the window (or Close has run).
 	Closed() <-chan struct{}
+	// Locked is closed when the Mac says its screen locked while the window was up; Closed follows. The window
+	// then ends as the Mac locking, whatever the session dictionary says.
+	Locked() <-chan struct{}
 	// Close detaches the view and closes the window; it never stops the VM. It returns once the window is
 	// gone, and is safe to call twice.
 	Close()
@@ -73,13 +158,26 @@ type ViewMachine interface {
 // nativeWindowScreen is the Mac's WindowScreen; set by the darwin cgo build (screen_darwin.go).
 var nativeWindowScreen WindowScreen
 
-// watchWindowClosed closes closed once up() is no longer positive: the window's state goes to 0 when the person
-// closes it (or Close ran), and to -1 if it could not be made. It polls every interval.
-func watchWindowClosed(up func() int, interval time.Duration, closed chan<- struct{}) {
+// watchWindow ends a native window's channels, polling every interval. locked is closed once lockNotices() is no
+// longer since, its count when the window began to open: a lock notification came (the C side then tears the
+// window down itself). closed is closed once up() is no longer positive: the window's state goes to 0 when the
+// person closes it, Close ran or a lock tore it down, and to -1 if it could not be made. up is read before
+// lockNotices, and a lock counts its notification before its teardown, so a window a lock closed shows locked
+// before closed.
+func watchWindow(up func() int, lockNotices func() int64, since int64, interval time.Duration, closed, locked chan<- struct{}) {
 	go func() {
-		for up() > 0 {
+		noticed := false
+		for {
+			isUp := up() > 0
+			if !noticed && lockNotices() != since {
+				noticed = true
+				close(locked)
+			}
+			if !isUp {
+				close(closed)
+				return
+			}
 			time.Sleep(interval)
 		}
-		close(closed)
 	}()
 }

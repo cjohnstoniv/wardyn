@@ -40,37 +40,43 @@ int wardynScreenSession(void) {
 	return 1;
 }
 
-// wardynScreenConsole answers the run window's console check: 1 when this process's session is the Mac's console
-// and its screen is not locked, 0 when it is not (no session, not on the console, or locked), -1 when the session
-// cannot be read, and the caller refuses. The lock key (CGSSessionScreenIsLocked) is undocumented: when it is
-// absent, the on-console key alone decides.
-int wardynScreenConsole(void) {
+// wardynScreenBoolKey reads one boolean key of d as the Go side's consoleKey: 0 absent, 1 false, 2 true, 3 not a
+// boolean.
+static int wardynScreenBoolKey(CFDictionaryRef d, CFStringRef key) {
+	CFTypeRef v = CFDictionaryGetValue(d, key);
+	if (v == NULL) {
+		return 0;
+	}
+	if (CFGetTypeID(v) != CFBooleanGetTypeID()) {
+		return 3;
+	}
+	return CFBooleanGetValue((CFBooleanRef)v) ? 2 : 1;
+}
+
+// wardynScreenConsoleKeys reads the run window's console check: the session's on-console key and its lock key
+// (CGSSessionScreenIsLocked, undocumented), each as wardynScreenBoolKey gives it. It returns 0, setting neither,
+// when the session dictionary cannot be had. It decides nothing: consoleCheck (screen.go) does, and a missing or
+// malformed lock key, or no dictionary, is an unknown lock that refuses.
+int wardynScreenConsoleKeys(int *onConsole, int *locked) {
 	CFDictionaryRef d = CGSessionCopyCurrentDictionary();
 	if (d == NULL) {
 		return 0;
 	}
-	int answer = -1;
-	CFTypeRef onConsole = CFDictionaryGetValue(d, kCGSessionOnConsoleKey);
-	if (onConsole != NULL && CFGetTypeID(onConsole) == CFBooleanGetTypeID()) {
-		answer = CFBooleanGetValue((CFBooleanRef)onConsole) ? 1 : 0;
-		CFTypeRef locked = CFDictionaryGetValue(d, CFSTR("CGSSessionScreenIsLocked"));
-		if (answer == 1 && locked != NULL) {
-			if (CFGetTypeID(locked) != CFBooleanGetTypeID()) {
-				answer = -1;
-			} else if (CFBooleanGetValue((CFBooleanRef)locked)) {
-				answer = 0;
-			}
-		}
-	}
+	*onConsole = wardynScreenBoolKey(d, kCGSessionOnConsoleKey);
+	*locked = wardynScreenBoolKey(d, CFSTR("CGSSessionScreenIsLocked"));
 	CFRelease(d);
-	return answer;
+	return 1;
 }
 
-// wardynScreenRun starts AppKit on the main thread. It does not return.
+static void wardynScreenWatchLock(void); // below, beside the run window it closes
+
+// wardynScreenRun starts AppKit on the main thread. It does not return. The screen's lock notifications are
+// observed from here: they are delivered by this thread's run loop, which [NSApp run] serves.
 void wardynScreenRun(void) {
 	@autoreleasepool {
 		[NSApplication sharedApplication];
 		[NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+		wardynScreenWatchLock();
 	}
 	[NSApp run];
 }
@@ -378,6 +384,59 @@ static void wardynScreenTeardown(void) {
 @end
 
 static WardynScreenCloseOnly *wardynScreenCloseOnly; // main thread only; the window's delegate is weak
+
+// The screen's lock notifications: wardynScreenLockCount counts com.apple.screenIsLocked, and wardynScreenLockLast
+// is 1 while the latest of it and com.apple.screenIsUnlocked was a lock. The Go side reads both from any thread.
+static _Atomic long wardynScreenLockCount;
+static _Atomic int wardynScreenLockLast;
+
+// WardynScreenLockWatch observes the lock notifications. A lock closes a run window at once, whatever the session
+// dictionary says; the count goes up first, so the Go side reads the close as the lock's.
+@interface WardynScreenLockWatch : NSObject
+- (void)locked:(NSNotification *)n;
+- (void)unlocked:(NSNotification *)n;
+@end
+
+@implementation WardynScreenLockWatch
+- (void)locked:(NSNotification *)n {
+	atomic_store(&wardynScreenLockLast, 1);
+	atomic_fetch_add(&wardynScreenLockCount, 1);
+	dispatch_async(dispatch_get_main_queue(), ^{
+		if (wardynScreenViewOnly && wardynScreenWindow != nil) {
+			wardynScreenTeardown(); // the state goes to 0, which the Go side polls
+		}
+	});
+}
+- (void)unlocked:(NSNotification *)n {
+	atomic_store(&wardynScreenLockLast, 0);
+}
+@end
+
+static WardynScreenLockWatch *wardynScreenLockWatch; // main thread only; the center does not retain observers
+
+// wardynScreenWatchLock observes the lock notifications on the main thread's run loop. They are delivered at once
+// even while the app is inactive: AppKit suspends an inactive app's distributed notifications otherwise.
+static void wardynScreenWatchLock(void) {
+	wardynScreenLockWatch = [[WardynScreenLockWatch alloc] init];
+	NSDistributedNotificationCenter *c = [NSDistributedNotificationCenter defaultCenter];
+	[c addObserver:wardynScreenLockWatch
+	      selector:@selector(locked:)
+	          name:@"com.apple.screenIsLocked"
+	        object:nil
+	suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
+	[c addObserver:wardynScreenLockWatch
+	      selector:@selector(unlocked:)
+	          name:@"com.apple.screenIsUnlocked"
+	        object:nil
+	suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
+}
+
+// wardynScreenLockNotices is the number of lock notifications seen; a window ends when it moves past its value
+// at the open.
+long wardynScreenLockNotices(void) { return atomic_load(&wardynScreenLockCount); }
+
+// wardynScreenLockNoticed is 1 while the latest lock notification was a lock: the console check then refuses.
+int wardynScreenLockNoticed(void) { return atomic_load(&wardynScreenLockLast); }
 
 // wardynScreenShowWindow opens a run window on vm, a VZVirtualMachine the block keeps until the window closes:
 // close-only (see WardynScreenCloseOnly), not floating, with title and steps (never NULL) and no Show code

@@ -615,6 +615,7 @@ Wardyn asks these in order, and the first that refuses answers. Every refusal wr
 | Your session was cut off | `403` `mac_window_revoked` | "This session is no longer authorized, so Wardyn won't open a window. Sign in again." |
 | A browser desktop with control did not close in time | `409` `mac_window_desktop_control` | "A browser desktop that has control of this run didn't close in time, so Wardyn can't open the window. Close it and open the window again." |
 | You are not signed in at the Mac's screen, or it is locked | `409` `mac_window_not_at_mac` | "The window didn't open: you aren't signed in at `<computer>`'s screen, or it is locked. Unlock it and open the window again." |
+| The Mac can't tell whether its screen is locked | `409` `mac_window_lock_unknown` | "Wardyn can't tell whether this Mac's screen is locked, so the window stays closed." |
 | The runner could not draw the window | `502` `mac_window_failed` | "Wardyn couldn't open the window on the run's Mac. The run goes on; try again." |
 
 - A runner older than 0.10.0-rc.12 does not report the window, so it reads as "can't open a window".
@@ -624,7 +625,9 @@ Wardyn asks these in order, and the first that refuses answers. Every refusal wr
 ### Closing a window
 
 - Closing the window detaches the view. The VM, its one network card and its proxy are untouched, so the run goes on as before.
-- The window also ends when the Mac locks, the run ends, the runner goes offline, or the link to the runner is lost.
+- The window also ends when the run ends, the runner goes offline, or the link to the runner is lost.
+- It closes as soon as the Mac locks, or as soon as the Mac can no longer tell whether its screen is locked.
+- If the window always says it can't tell whether the screen is locked, tell us.
 - **An open window is re-checked every 30 seconds.** Each check reads the site switch, the profile, the run and your session again, and closes the window when any of them now refuses.
 - `GET /runs/{id}` carries `mac_window.last_close` with a reason of `person`, `host_locked`, `run_ended` or `failed`, and the time. `wardyn window <run> --status` prints it.
 

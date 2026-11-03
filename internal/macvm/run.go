@@ -501,6 +501,10 @@ func (r *runner) openWindow(grant, title string) (*windowSession, *WindowRefusal
 		if errors.Is(err, ErrNotAtMac) {
 			return nil, &WindowRefusal{WindowCodeNotAtMac, WindowNotAtMacSentence}
 		}
+		if errors.Is(err, ErrLockUnknown) {
+			r.o.Log.Warn("macvm: window: screen lock unknown", "run_id", r.cfg.RunID, "grant", grant, "err", err.Error())
+			return nil, &WindowRefusal{WindowCodeLockUnknown, WindowLockUnknownSentence}
+		}
 		r.o.Log.Warn("macvm: window: console check unreadable", "run_id", r.cfg.RunID, "grant", grant, "err", err.Error())
 		return nil, &WindowRefusal{WindowCodeNotAtMac, WindowUnreadableSentence}
 	}

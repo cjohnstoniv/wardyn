@@ -23,6 +23,8 @@ var (
 	ErrMacWindowNotAtMac = errors.New("remote: the person is not at the Mac's unlocked screen")
 	// ErrMacWindowAlreadyOpen: the runner already holds a window for the run.
 	ErrMacWindowAlreadyOpen = errors.New("remote: the runner already holds a window for this run")
+	// ErrMacWindowLockUnknown: the Mac can't tell whether its screen is locked, so the window stays closed.
+	ErrMacWindowLockUnknown = errors.New("remote: whether the Mac's screen is locked can't be told")
 )
 
 // MacWindowRequest is one open: the organisation's grant id and the window's title.
@@ -80,6 +82,8 @@ func macWindowRefusal(err error) error {
 		return ErrMacWindowAlreadyOpen
 	case runnerwire.MacWindowNotAtMacSentence, runnerwire.MacWindowUnreadableSentence:
 		return ErrMacWindowNotAtMac
+	case runnerwire.MacWindowLockUnknownSentence:
+		return ErrMacWindowLockUnknown
 	}
 	return err
 }

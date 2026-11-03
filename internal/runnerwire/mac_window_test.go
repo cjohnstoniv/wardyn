@@ -61,11 +61,12 @@ func TestMacWindowMessagesAreGolden(t *testing.T) {
 // The sentences are the same on every side that refuses; pin them.
 func TestMacWindowSentencesArePinned(t *testing.T) {
 	for got, want := range map[string]string{
-		MacWindowOpenSentence:       "This run's window is already open.",
-		MacWindowNotMacSentence:     "This run is not a macOS VM, so it has no window to open.",
-		MacWindowHelperOldSentence:  "This run's macOS VM helper is too old to open a window. End the run and start it again on this runner.",
-		MacWindowNotAtMacSentence:   "The window didn't open: you aren't signed in at this Mac's screen, or it is locked. Unlock it and open the window again.",
-		MacWindowUnreadableSentence: "The window didn't open: Wardyn couldn't tell whether you are at this Mac's screen. Unlock it and open the window again.",
+		MacWindowOpenSentence:        "This run's window is already open.",
+		MacWindowNotMacSentence:      "This run is not a macOS VM, so it has no window to open.",
+		MacWindowHelperOldSentence:   "This run's macOS VM helper is too old to open a window. End the run and start it again on this runner.",
+		MacWindowNotAtMacSentence:    "The window didn't open: you aren't signed in at this Mac's screen, or it is locked. Unlock it and open the window again.",
+		MacWindowUnreadableSentence:  "The window didn't open: Wardyn couldn't tell whether you are at this Mac's screen. Unlock it and open the window again.",
+		MacWindowLockUnknownSentence: "Wardyn can't tell whether this Mac's screen is locked, so the window stays closed.",
 	} {
 		if got != want {
 			t.Errorf("sentence %q, want %q", got, want)

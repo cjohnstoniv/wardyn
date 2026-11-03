@@ -631,11 +631,13 @@ const (
 )
 
 // The helper's two refusals (window_not_at_mac) of a screen that is locked or not the person's, and of one
-// that could not be read. The runner's reply carries the sentence and not the code, so the organisation
-// tells them by these words (macvm.WindowNotAtMacSentence, macvm.WindowUnreadableSentence).
+// that could not be read, and its refusal (window_lock_unknown) of a screen whose lock it can't tell. The
+// runner's reply carries the sentence and not the code, so the organisation tells them by these words
+// (macvm.WindowNotAtMacSentence, macvm.WindowUnreadableSentence, macvm.WindowLockUnknownSentence).
 const (
-	MacWindowNotAtMacSentence   = "The window didn't open: you aren't signed in at this Mac's screen, or it is locked. Unlock it and open the window again."
-	MacWindowUnreadableSentence = "The window didn't open: Wardyn couldn't tell whether you are at this Mac's screen. Unlock it and open the window again."
+	MacWindowNotAtMacSentence    = "The window didn't open: you aren't signed in at this Mac's screen, or it is locked. Unlock it and open the window again."
+	MacWindowUnreadableSentence  = "The window didn't open: Wardyn couldn't tell whether you are at this Mac's screen. Unlock it and open the window again."
+	MacWindowLockUnknownSentence = "Wardyn can't tell whether this Mac's screen is locked, so the window stays closed."
 )
 
 // Open is the OPEN payload.
