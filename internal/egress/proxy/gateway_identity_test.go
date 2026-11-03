@@ -462,6 +462,40 @@ func TestGatewayIdentity_ShortLifeRetriesBeforeExp(t *testing.T) {
 	}
 }
 
+// Past a short-lived token's exp with the control plane still down, mints fall back to the usual
+// interval instead of one a second.
+func TestGatewayIdentity_ShortLifeOutagePastExpKeepsTheInterval(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	g.mint.mu.Lock()
+	g.mint.answer = func(w http.ResponseWriter, _ *http.Request, n int64) {
+		tok := gwidToken(gwidAudience, g.now().Add(time.Minute), n)
+		g.mint.mu.Lock()
+		g.mint.minted = append(g.mint.minted, tok)
+		g.mint.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": tok, "expires_at": g.now().Add(time.Minute)})
+	}
+	g.mint.mu.Unlock()
+	send := gwidLanes(g, t)["brokered"]
+	send()
+	g.answerStatus(http.StatusServiceUnavailable)
+	g.advance(61 * time.Second) // past exp, never refreshed
+	send()
+	gwidWaitNoFlight(t, g)
+	after := g.mint.hits.Load()
+	g.advance(2 * time.Second)
+	send()
+	gwidWaitNoFlight(t, g)
+	if n := g.mint.hits.Load(); n != after {
+		t.Fatalf("mints 2 s after a failure past exp = %d, want %d", n, after)
+	}
+	g.advance(lastGoodRetry)
+	send()
+	gwidWaitNoFlight(t, g)
+	if n := g.mint.hits.Load(); n != after+1 {
+		t.Fatalf("mints after the interval = %d, want %d", n, after+1)
+	}
+}
+
 // A refusal on refresh drops the held token at once, and an exp far off is held to ten minutes.
 func TestGatewayIdentity_RefusalDropsHeldAndLifetimeIsCapped(t *testing.T) {
 	for _, status := range []int{http.StatusForbidden, http.StatusNotFound} {

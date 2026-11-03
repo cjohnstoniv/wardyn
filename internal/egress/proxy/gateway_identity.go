@@ -329,9 +329,10 @@ func (h *gatewayTokenHolder) settleLocked(p *Proxy, token string, exp time.Time,
 			h.token = ""
 		}
 		// A held token is asked again within half of what is left of its life, so a short-lived
-		// token's next mint still lands before its exp; with none held, the usual interval.
+		// token's next mint still lands before its exp; with none held, or one past its exp, the
+		// usual interval, so an outage longer than a token's life is not asked once a second.
 		wait := lastGoodRetry
-		if left := h.expires.Sub(now); h.token != "" && left/2 < wait {
+		if left := h.expires.Sub(now); h.token != "" && left > 0 && left/2 < wait {
 			wait = max(left/2, time.Second)
 		}
 		h.lastErr, h.nextAsk = err, now.Add(wait)
