@@ -52,7 +52,7 @@ describe("P-85: the queued run's version line", () => {
   const preset = (over: object) => ({ id: "o1", name: "Docs triage", scope: "org" as const, version: 3, ...over });
   it.each([
     ["the version changed", preset({ changed: { version: 4 } }), "The run was queued with the Docs triage wall preset, version 3. It was at version 4 when the run would have started."],
-    ["the preset went", preset({ changed: { gone: true } }), "The run was queued with the Docs triage wall preset, version 3. It is no longer available."],
+    ["the preset went", preset({ changed: { gone: true } }), "The run was queued with the Docs triage wall preset, version 3. It was no longer available to this run when it would have started."],
   ])("says so when %s", (_n, wall_preset, text) => {
     render(<WallPresetQueuedChanged preset={wall_preset} />);
     expect(screen.getByTestId("wall-preset-queued-changed")).toHaveTextContent(text);

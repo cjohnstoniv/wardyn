@@ -226,7 +226,7 @@ describe("RunDetailScreen — a queued run whose wall preset changed (P-85)", ()
   it("says the preset is no longer available when it went", async () => {
     renderRun({ ...ended, wall_preset: { id: "o1", name: "Docs triage", scope: "org", version: 3, changed: { gone: true } } } as typeof RUN);
     await screen.findByText(/The policy this run used changed/);
-    expect(line()).toHaveTextContent("The run was queued with the Docs triage wall preset, version 3. It is no longer available.");
+    expect(line()).toHaveTextContent("The run was queued with the Docs triage wall preset, version 3. It was no longer available to this run when it would have started.");
   });
 
   it("names nothing for a personal preset read by a non-owner, which carries its scope alone", async () => {
