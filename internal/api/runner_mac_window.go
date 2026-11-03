@@ -15,15 +15,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
-// remoteMacWindow is a runner's remote substrate as the grant's macWindowSub: it carries the grant to the
+// remoteMacWindowSub is a runner's remote substrate as the grant's macWindowSub: it carries the grant to the
 // runner's mac_window call and words the runner's two refusals as this package's.
-type remoteMacWindow struct{ sub *remote.Substrate }
+type remoteMacWindowSub struct{ sub *remote.Substrate }
 
-func (r remoteMacWindow) MacWindowSupported() (supported, reported bool) {
+func (r remoteMacWindowSub) MacWindowSupported() (supported, reported bool) {
 	return r.sub.MacWindowSupported()
 }
 
-func (r remoteMacWindow) MacWindow(ctx context.Context, ref string, req macWindowRequest) (macWindowSession, error) {
+func (r remoteMacWindowSub) MacWindow(ctx context.Context, ref string, req macWindowRequest) (macWindowSession, error) {
 	w, err := r.sub.MacWindow(ctx, ref, remote.MacWindowRequest{GrantID: req.GrantID.String(), Title: req.Title})
 	switch {
 	case errors.Is(err, remote.ErrMacWindowNotAtMac):

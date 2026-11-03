@@ -143,7 +143,7 @@ func (s *Server) macWindowSubFor(id uuid.UUID) (macWindowSub, bool) {
 		sub := s.macWindowSubs(id)
 		return sub, sub != nil
 	}
-	return remoteMacWindow{sub: s.runnerEndpoint(id).sub}, true
+	return remoteMacWindowSub{sub: s.runnerEndpoint(id).sub}, true
 }
 
 // macWindowTicks is the re-check clock: a channel that ticks every d, and its stop. The test seam macWindowTick

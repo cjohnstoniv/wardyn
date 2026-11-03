@@ -75,6 +75,19 @@ func (s *Server) macWindowLoadPending(ctx context.Context, run types.AgentRun) (
 		Issue: oidc.Issue{At: p.AuthorizedAt, Seq: p.RevSeq}, Token: p.Token, Via: p.Via}, true, nil
 }
 
+// macWindowForgetPending drops the pending grant of run once its launch has asked: a window that stays open
+// judges its person by the grant it opened under (macWindow.auth), never by this record. A store that cannot
+// delete one leaves it, which only costs a row.
+func (s *Server) macWindowForgetPending(ctx context.Context, run types.AgentRun) {
+	st, ok := s.cfg.Store.(store.PrincipalPrefDeleter)
+	if !ok || run.CreatedBy == "" {
+		return
+	}
+	if err := st.DeletePrincipalPref(ctx, run.CreatedBy, macWindowPendingKey+run.ID.String()); err != nil {
+		slog.WarnContext(ctx, "wardynd: could not drop a run's pending window grant", "run_id", run.ID, "err", err)
+	}
+}
+
 // macWindowRecordPending stores the grant of a create that asks for desktop_window, and says true after writing the
 // refusal when it cannot: a create must not go on to ask for a window the launch could not open.
 func (s *Server) macWindowRecordPending(w http.ResponseWriter, r *http.Request, runID uuid.UUID, window string, actorType types.ActorType, actor string) bool {
@@ -116,6 +129,7 @@ func (s *Server) macWindowAtStart(ctx context.Context, runID uuid.UUID) {
 		denied(reasonRunUnreadable)
 		return
 	}
+	defer s.macWindowForgetPending(ctx, run) // the grant is spent whether the open succeeds or is refused
 	a, ok, err := s.macWindowLoadPending(ctx, run)
 	switch {
 	case err != nil:
@@ -132,17 +146,20 @@ func (s *Server) macWindowAtStart(ctx context.Context, runID uuid.UUID) {
 }
 
 // macWindowCreateRefusal is macWindowRefusal's rows that a create can answer, for a request with desktop_window
-// at_start: rows 1, 4, 5 and 6, so Review shows a refusal before launch. The rest need a run, a runner or a
+// at_start: rows 1, 4, 5 and 6, and the part of row 3 that is about who asks (a human with a principal, no
+// delegated token, not an operator's run), so Review shows a refusal before launch. The rest need a run, a runner or a
 // registry, and the launch hook asks the whole of macWindowRefusal again once the run is up. The recording level
 // is resolved at dispatch, so the level the request's policy sets is read here.
 func (s *Server) macWindowCreateRefusal(ctx context.Context, f *runFold) *runRefusal {
 	if rf := s.macWindowSiteRefusal(ctx); rf != nil {
 		return rf
 	}
-	if !f.ceiling.Operator {
-		if rf := s.macWindowGovernanceRefusal(ctx, f.ceiling.Limits, f.ceiling.Unit, uuid.Nil); rf != nil {
-			return rf
-		}
+	if at, principal := actorFromRequest(f.r); at != types.ActorHuman || principal == "" || f.ceiling.Operator ||
+		macWindowAuthorityFrom(f.r.Context(), at, principal, s.cfg.Now().UTC()).Via {
+		return macWindowNotYourMac("")
+	}
+	if rf := s.macWindowGovernanceRefusal(ctx, f.ceiling.Limits, f.ceiling.Unit, uuid.Nil); rf != nil {
+		return rf
 	}
 	if f.spec.Recording == types.RecordingScreenActions {
 		return runError(http.StatusForbidden, reasonMacWindowUnrecorded, macWindowUnrecordedMsg)
