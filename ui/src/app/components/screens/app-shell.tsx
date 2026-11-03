@@ -559,12 +559,15 @@ export function AppShell({
           <div className="flex h-screen flex-col bg-background text-foreground">
             {/* Skip-to-content: first focusable element, visually hidden until focused,
           so a keyboard user can jump past the nav to the main region (WCAG 2.4.1). */}
-            <a
-              href="#main-content"
-              className="sr-only rounded-md focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-            >
-              Skip to main content
-            </a>
+            {/* Hidden in focus mode: its target is inert then, and the focus overlay is what is on screen. */}
+            {!focus && (
+              <a
+                href="#main-content"
+                className="sr-only rounded-md focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              >
+                Skip to main content
+              </a>
+            )}
             {/* Measured for focus mode, so it starts above the reauth layer: that layer's z-50 bar
           must grow this box, or the overlay's offset goes stale when the bar comes and goes. */}
             <div ref={bannerStackRef} className="shrink-0">

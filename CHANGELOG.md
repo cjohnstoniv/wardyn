@@ -45,7 +45,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- Focus mode on the run page now keeps the keyboard inside it: the run controls it covers are skipped, and leaving Focus returns you to its button.
+- Focus mode on the run page: the keyboard now skips the run controls it covers, starts on Exit focus, and returns to the Focus button when you leave.
 - Endpoint sign-in: a changed endpoint now tells the people it signed out why ("destination changed"), and signing in again clears that note, as every other provider sign-in already did.
 - Endpoint sign-in: a stored refresh token is used only with the provider address and token URL it was signed in at. A renewal for a provider whose address, authority or token URL moved now answers "sign in" without sending the token.
 - A `github_capabilities` list without `code_write`, in your walls or the run's policy, now stops git pushes to GitHub: the git broker refuses them with a sentence saying why (`brokered:git:push-capability`), and the run's GitHub tokens are read-only. An `azure_devops_capabilities` list without `code_write` does the same for an Azure DevOps `git_pat` lane.
