@@ -47,6 +47,7 @@ var terminalWriterCensus = map[string]string{
 	"finalizeUndispatchedRuns": "reconcileFinalize -> finalizeRunTail",
 	"sweepRunWatchers":         "reconcileFinalize -> finalizeRunTail",
 	"reconcileWatch":           "reconcileFinalize -> finalizeRunTail",
+	"failInterruptedMacPrep":   "CASes, then finalizeRunTail",
 	// (2) The kill switch, which deliberately does NOT route through the tail.
 	// handleKillRun is the HTTP half only; the cascade is killRunCascade
 	// (claimKillTransition then killTeardownTail — #122 split the CAS out of the
