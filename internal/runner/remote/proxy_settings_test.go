@@ -36,6 +36,7 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 	runnerwire.ProxySettingGatewayIdentity: func(pc *runner.ProxyConfig) {
 		pc.GatewayIdentity = []proxy.GatewayIdentityRoute{{Host: "gw.corp.example", Port: 443, ProviderID: "p", Audience: "a"}}
 	},
+	runnerwire.ProxySettingGitPushWithheld: func(pc *runner.ProxyConfig) { pc.GitPushWithheld = map[string]string{"github.com": "GitHub"} },
 }
 
 // oldCapsJSON is a 0.9.x runner's caps event as it sends it: no proxy_settings key.

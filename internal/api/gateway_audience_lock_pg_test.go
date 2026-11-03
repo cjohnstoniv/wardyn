@@ -79,6 +79,12 @@ func newAudienceRacePG(t *testing.T) (componentsPG, *strictListBarrier) {
 	return e, b
 }
 
+// audienceClash reports whether body is the component save's refusal of one gateway audience at two addresses.
+func audienceClash(body string) bool {
+	return strings.Contains(body, `"reason":"component_definition_invalid"`) &&
+		strings.Contains(body, "mcp.gateway_audience: ") && strings.Contains(body, "at different addresses")
+}
+
 func audienceMCPDef(host, audience string) string {
 	return `{"hosts":["` + host + `"],"mcp":{"url":"https://` + host + `/mcp","transport":"http","gateway_audience":"` + audience + `"}}`
 }
@@ -110,7 +116,7 @@ func TestGatewayAudience_ConcurrentComponentSavesKeepOne(t *testing.T) {
 		switch {
 		case r.code == http.StatusCreated:
 			saved++
-		case r.code == http.StatusUnprocessableEntity && strings.Contains(r.body, "gateway audience"):
+		case r.code == http.StatusUnprocessableEntity && audienceClash(r.body):
 			refused++
 		}
 	}
@@ -147,7 +153,7 @@ func TestGatewayAudience_ConcurrentComponentAndProviderSavesKeepOne(t *testing.T
 		t.Fatalf("component = %d %s, provider = %d %s; want exactly one saved", comp.StatusCode, compBody, prov.StatusCode, provBody)
 	case compSaved && (prov.StatusCode != http.StatusBadRequest || !strings.Contains(provBody, "shared-aud")):
 		t.Errorf("provider refused as %d %s, want 400 naming the audience", prov.StatusCode, provBody)
-	case provSaved && (comp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(compBody, "gateway audience")):
+	case provSaved && (comp.StatusCode != http.StatusUnprocessableEntity || !audienceClash(compBody)):
 		t.Errorf("component refused as %d %s, want 422 naming the audience", comp.StatusCode, compBody)
 	}
 }

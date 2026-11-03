@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -57,6 +59,10 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	req.ToolApprovals = effectiveToolApprovals(req, ceiling)
 	f, ok := s.foldRunRequest(w, r, foldPreview, &req, ceiling, reqCC)
 	if !ok {
+		return
+	}
+	// The create's window grant, after the fold as at create: refused as the create would be, stored by none.
+	if s.macWindowRecordPending(w, r, uuid.Nil, req.DesktopWindow, "", "", false) {
 		return
 	}
 	response := policyPreviewFacts(req, f.spec, f.source, f.policyWarns, f.scmSite, f.mpChoice)

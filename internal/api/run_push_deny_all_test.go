@@ -97,7 +97,7 @@ func TestDispatchRefusesDenyAllWithAResidentPAT(t *testing.T) {
 				return []types.CredentialGrant{patRowWith(uuid.New(), id, host, nil)}
 			})
 			requireRefusedWith(t, fr, st, audit, run, reasonPushDenyAllResidentPAT)
-			if ev := findAudit(audit.events, run.ID, "run.create", "failure"); ev == nil || !strings.Contains(string(ev.Data), "pushes can't be stopped") {
+			if ev := findAudit(audit.snapshot(), run.ID, "run.create", "failure"); ev == nil || !strings.Contains(string(ev.Data), "pushes can't be stopped") {
 				t.Errorf("run.create failure does not carry the sentence: %v", ev)
 			}
 		})

@@ -466,7 +466,7 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 		slog.ErrorContext(st.base, queueStartFailedLogName+": mint run identity", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return &queueEnd{hint: queueStartFailedHint}
 	}
-	imageInput := createDigestInput(req, f) // what this start's fold held to the digest rule, for a revive
+	imageInput := createDigestInput(req, f.carriedImage) // what this start's fold held to the digest rule, for a revive
 	started, ok, err := qs.StartQueuedRun(st.ctx, run.ID, store.QueueStart{
 		SPIFFEID: id.SPIFFEID, ConfinementClass: f.enforced, ModelProviderID: f.mpChoice.provider.ID, AutonomyLevel: f.autonomy.Level, InnerWalls: f.innerWalls,
 		EndsAt: anchor.EndsAt, WaitBudgetSec: anchor.WaitBudgetSec, RunLimits: anchor.RunLimits, UnitID: anchor.UnitID, RestrictionIDs: anchor.RestrictionIDs,

@@ -173,13 +173,14 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 }
 
 // createDigestInput is the image create held to the digest rule: the request's (named, or set by an attached
-// workspace's base image), else a policy-carried workspace's (runFold.carriedImage), "" for the convention
-// image. The run row records it (AgentRun.ImageInput) and the run.create row's exempt mark reads it.
-func createDigestInput(req createRunRequest, f runFold) string {
+// workspace's base image), else a policy-carried workspace's (carried, the fold's carriedImage), "" for the
+// convention image. The run row records it (AgentRun.ImageInput) and the run.create row's exempt mark reads it.
+// It takes the carried image, not the fold: only runFoldSteps steps take the fold.
+func createDigestInput(req createRunRequest, carried string) string {
 	if req.Image != "" {
 		return req.Image
 	}
-	return f.carriedImage
+	return carried
 }
 
 // stepHarnessSet holds every harness a run-mode request includes to the agent

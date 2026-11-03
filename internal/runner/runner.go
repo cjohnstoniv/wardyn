@@ -202,8 +202,8 @@ type ProxyConfig struct {
 	// AzureGates are the run's azure_foundry route gates. A non-empty set also sizes the sidecar's
 	// memory envelope up (ProxyLimitsFor): the in-flight body budget does not fit the default.
 	AzureGates []proxy.AzureGateConfig
-	// GitPushWithheld is the broker hosts whose pushes the run's capabilities withhold (proxy.Config.GitPushWithheld).
-	GitPushWithheld map[string]string
+	// GitPushWithheld is the broker hosts whose pushes the run's capabilities withhold (proxy.Config.GitPushWithheld); omitempty, so an older runner gets unchanged bytes while none is.
+	GitPushWithheld map[string]string `json:"git_push_withheld,omitempty"`
 	// GitHubAPI is the run's GitHub CLI grant for the proxy's api.github.com door; nil == off.
 	GitHubAPI *proxy.GitHubAPIGrant
 	// AzureARM is the run's Azure CLI grant for the proxy's management.azure.com door; nil == off.

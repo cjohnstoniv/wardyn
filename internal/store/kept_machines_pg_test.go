@@ -124,7 +124,10 @@ func TestKeptMachinePersonLimitAtInsert(t *testing.T) {
 		t.Fatalf("a row being deleted still counts: %v", err)
 	}
 
-	// A concurrent insert under the lock, committed after the create started counting.
+	// A concurrent insert under the lock, committed after the create started counting. The runs are
+	// made first: this goroutine holds the transaction's connection, and a second acquire from it
+	// is the nested pool acquire the pool guard stops.
+	heldRun, racerRun := erasureRun(t, pg, "sub-c", "keep"), erasureRun(t, pg, "sub-c", "keep")
 	held, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -134,10 +137,10 @@ func TestKeptMachinePersonLimitAtInsert(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := held.Exec(ctx, `INSERT INTO kept_machines (id, name, owner_subject, runner_id, base, base_prepared_at, state, run_id, expires_at)
-		VALUES ($1, 'held', 'sub-c', $2, 'base-1', now(), 'creating', $3, now() + interval '1 day')`, uuid.New(), mac, erasureRun(t, pg, "sub-c", "keep")); err != nil {
+		VALUES ($1, 'held', 'sub-c', $2, 'base-1', now(), 'creating', $3, now() + interval '1 day')`, uuid.New(), mac, heldRun); err != nil {
 		t.Fatal(err)
 	}
-	racer := keptMachineFor("sub-c", mac, erasureRun(t, pg, "sub-c", "keep"), "racer")
+	racer := keptMachineFor("sub-c", mac, racerRun, "racer")
 	done := make(chan error, 1)
 	go func() {
 		_, err := pg.CreateKeptMachine(ctx, racer, 1)
