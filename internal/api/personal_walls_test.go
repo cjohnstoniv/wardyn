@@ -91,7 +91,7 @@ func wallsAuditRow(events []types.AuditEvent, action string) *types.AuditEvent {
 // TestValidatePersonalWalls: walls may only narrow, and each refusal names the first path it refuses.
 func TestValidatePersonalWalls(t *testing.T) {
 	screen, fiveMin := types.RecordingScreenActions, 300
-	on, empty, cc9, review := true, types.FirstUseMode("ask_me"), types.ConfinementClass("CC9"), types.FirstUseWaitForReview
+	on, off, empty, cc9, review := true, false, types.FirstUseMode("ask_me"), types.ConfinementClass("CC9"), types.FirstUseWaitForReview
 	keystrokes, recOff, zero, negative := types.RecordingLevel("keystrokes"), types.RecordingOff, 0, -1
 	tooMany := make([]string, maxWallsDomains+1)
 	for i := range tooMany {
@@ -120,6 +120,7 @@ func TestValidatePersonalWalls(t *testing.T) {
 		{"a duplicate tool rule", types.PersonalWallsSpec{ToolRules: &[]types.ToolRule{{Tool: "Bash", Effect: types.ToolHold}, {Tool: "Bash", Effect: types.ToolDeny}}}, "tool_rules[1]"},
 		{"an empty deny path", types.PersonalWallsSpec{PushRules: &types.PersonalWallsPushRules{DenyPaths: wallsList("a/**", "")}}, "push_rules.deny_paths[1]"},
 		{"too many deny paths", types.PersonalWallsSpec{PushRules: &types.PersonalWallsPushRules{DenyPaths: &tooMany}}, "push_rules.deny_paths:"},
+		{"deny_all false", types.PersonalWallsSpec{PushRules: &types.PersonalWallsPushRules{DenyAll: &off}}, "push_rules.deny_all"},
 		{"an unknown recording level", types.PersonalWallsSpec{Recording: &keystrokes}, "recording"},
 		{"recording off", types.PersonalWallsSpec{Recording: &recOff}, "recording"},
 		{"a zero auto-stop", types.PersonalWallsSpec{AutoStopAfterSec: &zero}, "auto_stop_after_sec"},
@@ -138,11 +139,17 @@ func TestValidatePersonalWalls(t *testing.T) {
 		WithheldGrants:          []types.GrantSpec{{Kind: types.GrantSSHKey}},
 		AzureDevOpsCapabilities: &[]adoscope.Capability{adoscope.CapCodeRead}, GitHubCapabilities: &[]ghscope.Capability{ghscope.CapCodeRead},
 		ToolRules: &[]types.ToolRule{{Tool: "Bash", Effect: types.ToolDeny}, {Tool: "*", Effect: types.ToolHold}},
-		PushRules: &types.PersonalWallsPushRules{DenyPaths: wallsList("secrets/**", ".github/workflows/**")},
+		PushRules: &types.PersonalWallsPushRules{DenyPaths: wallsList("secrets/**", ".github/workflows/**"), DenyAll: &on},
 		Recording: &screen, AutoStopAfterSec: &fiveMin,
 	}
 	if err := validatePersonalWalls(ok); err != nil {
 		t.Errorf("valid walls refused: %v", err)
+	}
+	if knobs, _ := wallsAuditData(ok)["knobs"].([]string); !slices.Contains(knobs, "push_rules.deny_all") {
+		t.Errorf("audit knobs = %v, want push_rules.deny_all", knobs)
+	}
+	if knobs, _ := wallsAuditData(types.PersonalWallsSpec{})["knobs"].([]string); slices.Contains(knobs, "push_rules.deny_all") {
+		t.Errorf("walls naming nothing record push_rules.deny_all: %v", knobs)
 	}
 }
 
@@ -582,6 +589,18 @@ func TestPersonalWallsNeverWiden(t *testing.T) {
 		}
 		if got := run(wall, nil, types.RunPolicySpec{}); got.PushRules == nil || !slices.Equal(got.PushRules.DenyPaths, []string{".github/workflows/**"}) {
 			t.Errorf("a path on a policy with no push rules: %+v, want just the wall's", got.PushRules)
+		}
+	})
+
+	t.Run("push_rules.deny_all", func(t *testing.T) {
+		on := true
+		wall := types.PersonalWallsSpec{PushRules: &types.PersonalWallsPushRules{DenyAll: &on}}
+		ceiling := types.RunPolicySpec{PushRules: &types.PushRulesSpec{DenyPaths: []string{"secrets/**"}}}
+		if got := run(wall, nil, ceiling); got.PushRules == nil || !got.PushRules.DenyAll || !slices.Equal(got.PushRules.DenyPaths, []string{"secrets/**"}) {
+			t.Errorf("deny_all over a policy with paths: %+v, want deny_all and the policy's paths", got.PushRules)
+		}
+		if got := run(wall, nil, types.RunPolicySpec{}); got.PushRules == nil || !got.PushRules.DenyAll {
+			t.Errorf("deny_all on a policy with no push rules: %+v, want deny_all", got.PushRules)
 		}
 	})
 

@@ -61,6 +61,18 @@ func TestPersonalWallsSpecOverlay(t *testing.T) {
 			t.Fatalf("push_rules = %+v, want deny_paths only", o.PushRules)
 		}
 	})
+	t.Run("deny_all reaches the overlay, with or without deny paths", func(t *testing.T) {
+		yes, paths := true, []string{"a/**"}
+		for _, rules := range []PersonalWallsPushRules{{DenyAll: &yes}, {DenyAll: &yes, DenyPaths: &paths}} {
+			o := PersonalWallsSpec{PushRules: &rules}.Overlay()
+			if o.PushRules == nil || o.PushRules.DenyAll == nil || !*o.PushRules.DenyAll {
+				t.Fatalf("overlay push_rules = %+v, want deny_all true", o.PushRules)
+			}
+			if (rules.DenyPaths != nil) != (o.PushRules.DenyPaths != nil) {
+				t.Errorf("overlay deny_paths = %v, want %v", o.PushRules.DenyPaths, rules.DenyPaths)
+			}
+		}
+	})
 	t.Run("tool rules and an empty deny list stay out of the overlay", func(t *testing.T) {
 		none := []string{}
 		o := PersonalWallsSpec{ToolRules: &[]ToolRule{{Tool: "Bash", Effect: ToolDeny}}, PushRules: &PersonalWallsPushRules{DenyPaths: &none}}.Overlay()
@@ -72,7 +84,7 @@ func TestPersonalWallsSpecOverlay(t *testing.T) {
 
 func TestPersonalWallsSpecEmpty(t *testing.T) {
 	none := []string{}
-	cc, rec, sec := CC2, RecordingTerminal, 60
+	cc, rec, sec, yes := CC2, RecordingTerminal, 60, true
 	for name, tc := range map[string]struct {
 		s    PersonalWallsSpec
 		want bool
@@ -90,6 +102,7 @@ func TestPersonalWallsSpecEmpty(t *testing.T) {
 		"a deny path":            {PersonalWallsSpec{PushRules: &PersonalWallsPushRules{DenyPaths: &[]string{"a"}}}, false},
 		"no deny paths":          {PersonalWallsSpec{PushRules: &PersonalWallsPushRules{DenyPaths: &[]string{}}}, true},
 		"push rules naming none": {PersonalWallsSpec{PushRules: &PersonalWallsPushRules{}}, true},
+		"refusing every push":    {PersonalWallsSpec{PushRules: &PersonalWallsPushRules{DenyAll: &yes}}, false},
 		"a recording floor":      {PersonalWallsSpec{Recording: &rec}, false},
 		"an auto-stop cap":       {PersonalWallsSpec{AutoStopAfterSec: &sec}, false},
 	} {

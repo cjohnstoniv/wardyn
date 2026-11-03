@@ -66,6 +66,7 @@ type PushRulesOverlay struct {
 	HoldSeconds        *int      `json:"hold_seconds,omitempty"`
 	DenyNewExecutables *bool     `json:"deny_new_executables,omitempty"`
 	MaxFileSizeMiB     *int      `json:"max_file_size_mib,omitempty"`
+	DenyAll            *bool     `json:"deny_all,omitempty"`
 }
 
 // LimitsOverlay is CeilingOverlay's counterpart for GovernanceLimits. The

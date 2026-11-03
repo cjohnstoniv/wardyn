@@ -29,6 +29,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- `push_rules.deny_all`, in a policy or your walls, refuses every push: git pushes on every broker lane, ref updates and deletes included, and Azure DevOps REST writes to a repository. The built-in Read-only and Sealed wall presets now set it, so they refuse pushes. A run that sets it is refused at start when it holds an `ssh_key`, or a `git_pat` while the git token broker is off (`push_deny_all_ssh_key`, `push_deny_all_resident_pat`).
 - Wall presets: named walls that only narrow, kept for yourself, a group or the organisation, with three built in (Open, Read-only and Sealed). `GET`, `POST`, `PUT` and `DELETE /api/v1/wall-presets` manage them, with the run templates' authority: your own are yours, a group's template managers save a group's, and an organisation administrator saves the organisation's. Migration `0248_wall_presets` adds the `wall_presets` table and `agent_runs.wall_preset`.
 - An organisation setting, `images.require_digest` (off by default), refuses a member's run whose image, or whose attached workspace's base image (whoever owns the workspace), is not pinned by digest (`image@sha256:<digest>`), even where an exact or prefix image grant covers it. The refusal is `403` `image_digest_required`. Operators are not bound; their unpinned runs are marked `image_digest_exempt` on the run.create audit row. Not run in CI against a real registry.
 

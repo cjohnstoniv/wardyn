@@ -148,6 +148,9 @@ type pushRuleSet struct {
 	// denyNewExec refuses a push that adds an executable file or makes one
 	// executable.
 	denyNewExec bool
+	// denyAll refuses every push before its body is read: content, ref
+	// updates and deletes alike.
+	denyAll bool
 }
 
 // compilePushRules builds the compiled form, or nil when the spec carries no
@@ -168,6 +171,7 @@ func compilePushRules(s *types.PushRulesSpec) *pushRuleSet {
 	}
 	rs.maxFileBytes = int64(s.MaxFileSizeMiB) << 20
 	rs.denyNewExec = s.DenyNewExecutables
+	rs.denyAll = s.DenyAll
 	rs.deny = rs.compile(s.DenyPaths)
 	rs.review = rs.compile(s.RequireReviewPaths)
 	return rs
@@ -392,6 +396,10 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 	}
 	if rules == nil {
 		return body, noRelease, true
+	}
+	if rules.denyAll {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPushDenyAll, http.StatusForbidden, pushDenyAllRefusal)
+		return nil, noRelease, false
 	}
 	buf, review, release, ok := p.inspectPush(w, r, rules, body, subject, deny, forge)
 	if !ok {
@@ -787,6 +795,13 @@ func pathsBody(headline string, paths []string, noun, why, remedy string) string
 // remote could not be derived: the push rules cannot be looked up, which is a
 // refusal and never "no rules".
 const ruleSourceGitPushEntry = "brokered:git:push-entry-underivable"
+
+// ruleSourceGitPushDenyAll marks a push refused because the run's push_rules
+// set deny_all: every push to every remote is refused, whatever it carries.
+const ruleSourceGitPushDenyAll = "brokered:git:push-deny-all"
+
+// pushDenyAllRefusal is what git shows for a push deny_all refused.
+const pushDenyAllRefusal = "wardyn: this run may not push: its policy refuses every push"
 
 // rulesForRemote is the content rules of the SCM entry that owns the remote at
 // host and path. With no PushRuleSets the run is on the older run-wide regime

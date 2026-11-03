@@ -325,7 +325,7 @@ var templateNestedCarried = map[string]string{
 	"LLMInspectionSpec": "mode workspace_secret_names detect_secrets detect_secret_patterns detect_entropy detect_pii detector_sidecar_url " +
 		"classified_markers scan_attachments inspect_forward_egress max_scan_bytes on_scanner_error require_inspectable_llm intercept_tls block_min_severity",
 	"PushRuleOverride":   "provider host org deny_paths require_review_paths",
-	"PushRulesSpec":      "deny_paths max_inspect_pack_mib require_review_paths hold_seconds deny_new_executables max_file_size_mib",
+	"PushRulesSpec":      "deny_paths max_inspect_pack_mib require_review_paths hold_seconds deny_new_executables max_file_size_mib deny_all",
 	"DriveAttachment":    "drive_id read_only",
 	"ResourceLimits":     "cpu_millis memory_mib pids_limit disk_mib",
 	"RunService":         "restart port health",

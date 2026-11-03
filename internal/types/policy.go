@@ -283,6 +283,9 @@ type PushRulesSpec struct {
 	// size the pack does not carry and the forge cannot show unchanged. 0/absent is off; bounded
 	// 0..1024 by validatePolicySpec.
 	MaxFileSizeMiB int `json:"max_file_size_mib,omitempty"`
+	// DenyAll refuses every push to every remote: content, ref updates and deletes. It only adds a
+	// refusal, so a meet ORs it and a ceiling's true is kept. false/absent is off.
+	DenyAll bool `json:"deny_all,omitempty"`
 }
 
 // IsSet reports whether this spec carries an actual rule — NOT a bare != nil. An all-zero-but-non-nil
@@ -291,7 +294,7 @@ type PushRulesSpec struct {
 // advertisement/enforcement) — one method so those readers can't drift.
 func (s *PushRulesSpec) IsSet() bool {
 	return s != nil && (len(s.DenyPaths) > 0 || len(s.RequireReviewPaths) > 0 || s.MaxInspectPackMiB > 0 ||
-		s.MaxFileSizeMiB > 0 || s.DenyNewExecutables)
+		s.MaxFileSizeMiB > 0 || s.DenyNewExecutables || s.DenyAll)
 }
 
 // DenyPathSegments is the one reading of a push_rules.deny_paths entry, shared by write-time

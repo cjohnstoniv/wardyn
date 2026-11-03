@@ -74,9 +74,6 @@ const builtinWallPresetVersion = 1
 
 // BuiltinWallPresets returns Open, Read-only and Sealed, widest first, each a fresh copy a caller may
 // change. They nest: every knob Read-only names, Sealed names at least as narrowly.
-//
-// TODO(rc12-push-deny-all): Read-only and Sealed also set push_rules.deny_all: true once that lane adds
-// the knob; until then neither refuses a push.
 func BuiltinWallPresets() []WallPreset {
 	readOnly := readOnlyWalls()
 	sealed := readOnlyWalls()
@@ -87,21 +84,23 @@ func BuiltinWallPresets() []WallPreset {
 		{ID: WallPresetOpen, Scope: WallPresetScopeBuiltin, Name: "Open", Version: builtinWallPresetVersion,
 			Description: "Your policy as it stands."},
 		{ID: WallPresetReadOnly, Scope: WallPresetScopeBuiltin, Name: "Read-only", Version: builtinWallPresetVersion, Spec: readOnly,
-			Description: "Keeps only the Azure DevOps and GitHub read capabilities, so the run can read but not write through them."},
+			Description: "Keeps only the Azure DevOps and GitHub read capabilities and refuses every push, so the run can read but not push."},
 		{ID: WallPresetSealed, Scope: WallPresetScopeBuiltin, Name: "Sealed", Version: builtinWallPresetVersion, Spec: sealed,
-			Description: "Read-only, plus only the sites the run's own setup needs; an unlisted site is refused, not asked about, and no desktop transfers."},
+			Description: "Read-only, so every push is refused, plus only the sites the run's own setup needs; an unlisted site is refused, not asked about, and no desktop transfers."},
 	}
 }
 
-// readOnlyWalls keeps every grantable read capability of both forges and nothing else, so it removes
-// writes only.
+// readOnlyWalls keeps every grantable read capability of both forges and nothing else, and refuses
+// every push, so it removes writes only.
 func readOnlyWalls() PersonalWallsSpec {
 	gh := []ghscope.Capability{ghscope.CapCodeRead, ghscope.CapIssuesRead, ghscope.CapActionsRead,
 		ghscope.CapPackagesRead, ghscope.CapOrgRead, ghscope.CapIdentity}
 	ado := []adoscope.Capability{adoscope.CapCodeRead, adoscope.CapWorkRead, adoscope.CapWikiRead,
 		adoscope.CapBuildRead, adoscope.CapReleaseRead, adoscope.CapServiceEndpointRead, adoscope.CapLibraryRead,
 		adoscope.CapPackagingRead, adoscope.CapTestRead, adoscope.CapProjectRead, adoscope.CapIdentityRead}
-	return PersonalWallsSpec{GitHubCapabilities: &gh, AzureDevOpsCapabilities: &ado}
+	denyAll := true
+	return PersonalWallsSpec{GitHubCapabilities: &gh, AzureDevOpsCapabilities: &ado,
+		PushRules: &PersonalWallsPushRules{DenyAll: &denyAll}}
 }
 
 // BuiltinWallPreset returns the built-in whose id is id, compared as given (ids are lower case).

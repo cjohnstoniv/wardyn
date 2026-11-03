@@ -250,7 +250,7 @@ func clampResources(out *types.RunPolicySpec, ceiling types.RunPolicySpec, limit
 // clampPushRules only narrows push_rules: a silent ceiling passes the proposal through unclamped;
 // when the ceiling sets one, an unset proposal inherits it wholesale, a set proposal gets the
 // ceiling's deny_paths unioned in (see unionPaths), max_inspect_pack_mib and max_file_size_mib capped
-// (a proposal can neither raise a ceiling's limit nor turn it off with 0), and deny_new_executables kept on.
+// (a proposal can neither raise a ceiling's limit nor turn it off with 0), deny_new_executables and deny_all kept on.
 //
 // IsSet treats an all-zero-but-non-nil PushRulesSpec (push_rules: {} on the wire) as "no opinion"
 // like nil, so an empty ceiling doesn't get inherited wholesale and false-warn.
@@ -282,6 +282,7 @@ func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns
 		merged.MaxFileSizeMiB = ceil
 	}
 	merged.DenyNewExecutables = merged.DenyNewExecutables || ceiling.PushRules.DenyNewExecutables
+	merged.DenyAll = merged.DenyAll || ceiling.PushRules.DenyAll
 	if ceil := ceiling.PushRules.HoldSeconds; ceil > 0 && (merged.HoldSeconds <= 0 || merged.HoldSeconds > ceil) {
 		merged.HoldSeconds = ceil // the shorter of two authored holds, silently: it widens nothing
 	}
