@@ -6,6 +6,7 @@ package sinks
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -197,5 +199,77 @@ func TestEnrichRuns_NoIDForARunTheCoverageGateDoesNotVouchFor(t *testing.T) {
 	emitFor(t, f, run)
 	if _, ok := sink.correlation(t); ok {
 		t.Error("a warm cache still sent the id after the run stopped being covered")
+	}
+}
+
+// An erasure of the masking corpus on its own (fence first, then eviction) that lands while an emit is in
+// flight must not let the raw id out: the masker the emit used may already be empty.
+func TestEnrichRuns_AFenceDuringTheReadOrTheMaskingExportsNothing(t *testing.T) {
+	const secret = "zq-throwaway-barrier-6"
+	for _, tc := range []struct {
+		name     string
+		warm     bool
+		blockIn  string // "read" or "mask"
+		wantRead int32
+	}{
+		{"cold cache, erased during the read", false, "read", 1},
+		{"warm cache, erased during the masking", true, "mask", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := uuid.New()
+			reg := secretmask.NewRegistry()
+			if err := reg.Add(run, []byte(secret)); err != nil {
+				t.Fatal(err)
+			}
+			var covered atomic.Bool
+			covered.Store(true)
+			rows := &erasableRows{ids: map[uuid.UUID]string{run: secret}}
+			inside, release := make(chan struct{}), make(chan struct{})
+			var block atomic.Bool
+			wait := func() {
+				if block.Load() {
+					close(inside)
+					<-release
+				}
+			}
+			sink := &lastEventSink{}
+			f := NewFanout(sink)
+			f.EnrichRuns(func(ctx context.Context, id uuid.UUID) (string, bool, error) {
+				v, ok, err := rows.lookup(ctx, id) // the raw value is read before the erasure
+				if tc.blockIn == "read" {
+					wait()
+				}
+				return v, ok, err
+			}, func(id uuid.UUID, b []byte) []byte {
+				if tc.blockIn == "mask" {
+					wait()
+				}
+				return reg.JSONVariantMasker(id).Mask(b) // read after the eviction below
+			}, func(uuid.UUID) bool { return covered.Load() })
+
+			if tc.warm {
+				emitFor(t, f, run)
+				if got, _ := sink.correlation(t); got != "<secret-hidden>" {
+					t.Fatalf("warm-up: %q", got)
+				}
+			}
+			block.Store(true)
+			done := make(chan struct{})
+			go func() { defer close(done); emitFor(t, f, run) }()
+			<-inside
+			covered.Store(false) // the fence, durable first
+			reg.Evict(run)       // then the corpus goes
+			close(release)
+			<-done
+
+			if got, ok := sink.correlation(t); ok {
+				t.Errorf("the sink got correlation_id %q after the fence", got)
+			}
+			sink.mu.Lock()
+			defer sink.mu.Unlock()
+			if strings.Contains(string(sink.ev.Data), secret) {
+				t.Errorf("the raw value reached the sink: %s", sink.ev.Data)
+			}
+		})
 	}
 }

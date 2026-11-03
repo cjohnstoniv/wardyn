@@ -87,6 +87,13 @@ func (c *correlationEnricher) apply(ctx context.Context, ev types.AuditEvent) ty
 			return ev
 		}
 	}
+	// Again, now that the id is masked: an erasure that fenced the run and evicted its corpus while the read
+	// or the masking ran left the masker empty. The fence is durable and set before the eviction (maskmanifest
+	// FenceSubject and Forget drop the held manifest, then the registry's values), and a fenced run is never
+	// held again, so a run still held here was masked by its whole corpus.
+	if c.covers != nil && !c.covers(*ev.RunID) {
+		return ev
+	}
 	if data, ok := stampCorrelation(ev.Data, id); ok {
 		ev.Data = data // a new slice: the caller's event, which the store already took, is untouched
 	}
