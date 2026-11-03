@@ -736,7 +736,16 @@ func (r *capRead) granted(ctx context.Context) bool {
 		r.err = err
 		return false
 	}
-	return !restricted
+	if restricted {
+		return false
+	}
+	// A prefix allow must not open another tag or digest of a repository an
+	// admin restricted: the restriction names one reference, the prefix names
+	// the whole repository. A wildcard allow keeps its existing reading.
+	if r.kind == capImage && r.b.onlyPrefixAllows(r.kind, r.value) && r.b.imageSiblingRestricted(r.value) {
+		return false
+	}
+	return true
 }
 
 func (r *capRead) scan(ctx context.Context) {
@@ -822,7 +831,7 @@ func (b *capBatch) scan(ctx context.Context, kind, value string) (deny, allow bo
 	for _, g := range b.byKind[kind] {
 		b.s.capRowsScanned.Add(1)
 		if g.Effect == types.CapabilityDeny {
-			if capValueOverlaps(kind, g.Value, value) {
+			if capDenyOverlaps(kind, g.Value, value) {
 				return true, false, nil // deny is final
 			}
 			continue
@@ -862,14 +871,14 @@ func (b *capBatch) unresolvableGroupDeny(ctx context.Context, kind, value string
 		var err error
 		// ListGroupDenyGrants filters subject_type='group' AND effect='deny' AND
 		// capability=$1 in SQL, so nothing is filtered again here and the match
-		// is capValueOverlaps alone — one shared matcher.
+		// is capDenyOverlaps alone — one shared matcher.
 		if grants, err = b.s.cfg.Store.ListGroupDenyGrants(ctx, kind); err != nil {
 			return false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
 		}
 		b.groupDeny[kind] = grants
 	}
 	for _, g := range grants {
-		if capValueOverlaps(kind, g.Value, value) {
+		if capDenyOverlaps(kind, g.Value, value) {
 			return true, nil
 		}
 	}

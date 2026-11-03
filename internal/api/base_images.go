@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"unicode"
 
+	"github.com/distribution/reference"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
@@ -97,6 +99,12 @@ func imagePrefixGrant(v string) (string, bool) {
 	return prefix, validImagePrefix(prefix)
 }
 
+// isImagePrefixGrant: v is a well-formed image prefix grant.
+func isImagePrefixGrant(v string) bool {
+	_, ok := imagePrefixGrant(v)
+	return ok
+}
+
 // imageStarRow: an image value with a "*" that is neither the bare wildcard nor
 // a well-formed prefix. The write boundary refuses it; a row stored earlier
 // matches nothing.
@@ -109,30 +117,47 @@ func imageStarRow(v string) bool {
 	return !ok
 }
 
-// validImagePrefix: a path-safe, lowercase "host/seg/..." with no tag, digest,
-// whitespace or "*", whose first segment is a registry host by the same test
+// validImagePrefix: a path-safe "host/seg/..." with no tag, digest, whitespace
+// or "*", whose first segment is a registry host by the same test
 // github.com/distribution/reference uses for a domain (a "." or ":" in it, or
 // exactly "localhost"). Without that, "team/*" would name a Docker Hub
-// namespace by accident. Nothing is normalised: the prefix is compared as typed.
+// namespace by accident. The host and every path segment are ASCII
+// [a-z0-9._-] (the host may also hold one ":port", 1..65535, and may not be
+// only dots). Nothing is normalised: the prefix is compared as typed.
 func validImagePrefix(prefix string) bool {
-	for _, r := range prefix {
-		if unicode.IsSpace(r) || unicode.IsUpper(r) || r == '*' || r == '@' {
-			return false
-		}
-	}
 	if !imageRefPathSafe(prefix) {
 		return false
 	}
 	segs := strings.Split(prefix, "/")
 	host := segs[0]
-	if !strings.ContainsAny(host, ".:") && host != "localhost" || strings.Count(host, ":") > 1 {
+	if !imageIsRegistryHost(host) || strings.Count(host, ":") > 1 {
 		return false
 	}
-	if _, port, hasPort := strings.Cut(host, ":"); hasPort && !allASCIIDigits(port) {
+	name, port, hasPort := strings.Cut(host, ":")
+	if hasPort {
+		n, err := strconv.Atoi(port)
+		if !allASCIIDigits(port) || err != nil || n < 1 || n > 65535 {
+			return false
+		}
+	}
+	if strings.Trim(name, ".") == "" || !imageNameChars(name) {
 		return false
 	}
 	for _, seg := range segs[1:] {
-		if strings.Contains(seg, ":") {
+		if !imageNameChars(seg) {
+			return false
+		}
+	}
+	return true
+}
+
+// imageNameChars: a non-empty run of ASCII [a-z0-9._-].
+func imageNameChars(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '.' && r != '_' && r != '-' {
 			return false
 		}
 	}
@@ -197,6 +222,81 @@ func imagePrefixOverlaps(grantValue, want string) bool {
 		return imagePrefixCovers(wp, grantValue)
 	}
 	return gp == wp || strings.HasPrefix(gp, wp+"/") || strings.HasPrefix(wp, gp+"/")
+}
+
+// imageSpellings lists the spellings of one image reference that name the same
+// registry and image, for the DENY side only (an allow is compared as typed):
+// the reference as typed; with its registry host lowercased, ":443" stripped and
+// "index.docker.io" read as "docker.io"; and, for a reference with no registry
+// host or a Docker Hub one, its fully qualified Docker Hub form
+// ("nginx:1" is "docker.io/library/nginx:1"), tag and digest kept. Without it a
+// deny on "registry.example.com/team/*" is walked around by
+// "REGISTRY.example.com/team/x" or "registry.example.com:443/team/x".
+func imageSpellings(ref string) []string {
+	ref = strings.TrimSpace(ref)
+	out := []string{ref}
+	norm := imageNormalHost(ref)
+	if norm != ref {
+		out = append(out, norm)
+	}
+	if hub, ok := imageDockerHubForm(norm); ok && hub != norm && hub != ref {
+		out = append(out, hub)
+	}
+	return out
+}
+
+// imageDenyForm is a deny row's value read the same way imageSpellings reads a
+// want: host lowercased, ":443" stripped, Docker Hub made fully qualified. A
+// value that cannot be read that way is returned as stored.
+func imageDenyForm(v string) string {
+	v = imageNormalHost(strings.TrimSpace(v))
+	if hub, ok := imageDockerHubForm(v); ok {
+		return hub
+	}
+	return v
+}
+
+// imageNormalHost lowercases the registry host of ref (its first segment, when
+// that reads as a host), drops a ":443" port and maps index.docker.io to
+// docker.io. The path, tag and digest are left as typed.
+func imageNormalHost(ref string) string {
+	host, rest, hasRest := strings.Cut(ref, "/")
+	if !hasRest || !imageIsRegistryHost(host) {
+		return ref
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ":443")
+	if host == "index.docker.io" {
+		host = "docker.io"
+	}
+	return host + "/" + rest
+}
+
+// imageIsRegistryHost is the test github.com/distribution/reference applies to
+// a first segment: a "." or ":" in it, or exactly "localhost".
+func imageIsRegistryHost(seg string) bool {
+	return strings.ContainsAny(seg, ".:") || seg == "localhost"
+}
+
+// imageDockerHubForm returns the fully qualified Docker Hub spelling of ref
+// ("docker.io/library/nginx:1") when ref names a Docker Hub image, either with
+// no registry host or with docker.io. ok is false for any other registry and
+// for a reference the parser refuses.
+func imageDockerHubForm(ref string) (string, bool) {
+	if host, _, hasRest := strings.Cut(ref, "/"); hasRest && imageIsRegistryHost(host) && host != "docker.io" {
+		return "", false
+	}
+	named, err := reference.ParseNormalizedNamed(ref)
+	if err != nil || reference.Domain(named) != "docker.io" {
+		return "", false
+	}
+	out := named.Name()
+	if t, ok := named.(reference.Tagged); ok {
+		out += ":" + t.Tag()
+	}
+	if d, ok := named.(reference.Digested); ok {
+		out += "@" + d.Digest().String()
+	}
+	return out, true
 }
 
 // handleListBaseImages returns the catalog. A security admin sees the prewrapped rows only: the

@@ -4,8 +4,13 @@
 package api
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -168,6 +173,17 @@ func TestImagePrefixWriteTime(t *testing.T) {
 		{"registry.example.com\\team/*", false},
 		{"localhost:5000:1/team/*", false},
 		{"localhost:port/team/*", false},
+		{"registry.example.com:99999/team/*", false},
+		{"registry.example.com:0/team/*", false},
+		{"registry.example.com:65535/team/*", true},
+		{"registry.example.com:1/team/*", true},
+		{"registry.example.com/tеam/*", false}, // Cyrillic е
+		{"registrу.example.com/team/*", false}, // Cyrillic у in the host
+		{"registry.example.com/team!/*", false},
+		{"registry.example.com/te$am/*", false},
+		{"registry.example.com/te+am/*", false},
+		{".../team/*", false},
+		{"...:5000/team/*", false},
 	} {
 		t.Run(tc.in, func(t *testing.T) {
 			got, err := canonicalGrantValue(capImage, tc.in)
@@ -255,6 +271,41 @@ func TestImagePrefixNeverSatisfiesARestriction(t *testing.T) {
 			}
 		})
 	}
+	// Another tag or digest of the restricted repository is closed to a prefix
+	// allow, and open to a wildcard allow or an allow naming it.
+	for _, sib := range []string{
+		"registry.example.com/team/app:2",
+		"registry.example.com/team/app:latest",
+		"registry.example.com/team/app",
+		"registry.example.com/team/app@" + imgDigest,
+	} {
+		for _, tc := range []struct {
+			name   string
+			grants []types.CapabilityGrant
+			want   bool
+		}{
+			{"prefix allow", []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capImage, imgPrefix, types.CapabilityAllow)}, false},
+			{"allow naming the sibling", []types.CapabilityGrant{
+				grant(types.CapabilitySubjectAll, "", capImage, imgPrefix, types.CapabilityAllow),
+				grant(types.CapabilitySubjectAll, "", capImage, sib, types.CapabilityAllow),
+			}, true},
+			{"wildcard allow", []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capImage, capWildcard, types.CapabilityAllow)}, true},
+		} {
+			t.Run("sibling "+sib+": "+tc.name, func(t *testing.T) {
+				st := &capStore{grants: tc.grants, enf: map[string]bool{capImage: true}, restricted: restricted}
+				got, err := capServer(st).capGranted(memberCtx(nil), capImage, sib)
+				if err != nil || got != tc.want {
+					t.Fatalf("capGranted(%q) = %v, %v; want %v", sib, got, err, tc.want)
+				}
+				// capAllowedForSub reads the same rows for a revive.
+				st.grants = append([]types.CapabilityGrant(nil), tc.grants...)
+				got, err = capServer(st).capAllowedForSub(memberCtx(nil), "sub-x", "", capImage, sib)
+				if err != nil || got != tc.want {
+					t.Fatalf("capAllowedForSub(%q) = %v, %v; want %v", sib, got, err, tc.want)
+				}
+			})
+		}
+	}
 	// The sibling the restriction does not name is covered by the prefix alone.
 	st := &capStore{
 		grants:     []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capImage, imgPrefix, types.CapabilityAllow)},
@@ -339,5 +390,103 @@ func TestStoredImageRowsAcrossTheUpgrade(t *testing.T) {
 				t.Fatalf("capGranted(%q) with stored row %q = %v, %v; want %v", tc.ref, tc.row, got, err, tc.want)
 			}
 		})
+	}
+}
+
+// TestImageDenyCoversOtherSpellings: a deny row is checked against every
+// spelling of the requested image, an allow only against the one written.
+func TestImageDenyCoversOtherSpellings(t *testing.T) {
+	allowAll := grant(types.CapabilitySubjectAll, "", capImage, capWildcard, types.CapabilityAllow)
+	denyTeam := grant(types.CapabilitySubjectAll, "", capImage, imgPrefix, types.CapabilityDeny)
+	denyLib := grant(types.CapabilitySubjectAll, "", capImage, "docker.io/library/*", types.CapabilityDeny)
+	for _, tc := range []struct {
+		name   string
+		grants []types.CapabilityGrant
+		ref    string
+		want   bool
+	}{
+		{"team deny, as typed", []types.CapabilityGrant{allowAll, denyTeam}, "registry.example.com/team/secret:1", false},
+		{"team deny, capital host", []types.CapabilityGrant{allowAll, denyTeam}, "REGISTRY.example.com/team/secret:1", false},
+		{"team deny, :443", []types.CapabilityGrant{allowAll, denyTeam}, "registry.example.com:443/team/secret:1", false},
+		{"team deny, capital host and :443 and digest", []types.CapabilityGrant{allowAll, denyTeam}, "Registry.Example.com:443/team/secret@" + imgDigest, false},
+		{"team deny, other port is another registry", []types.CapabilityGrant{allowAll, denyTeam}, "registry.example.com:5000/team/secret:1", true},
+		{"team deny, sibling path", []types.CapabilityGrant{allowAll, denyTeam}, "REGISTRY.example.com/teamx/app:1", true},
+		{"library deny, nginx", []types.CapabilityGrant{allowAll, denyLib}, "nginx", false},
+		{"library deny, nginx:1", []types.CapabilityGrant{allowAll, denyLib}, "nginx:1", false},
+		{"library deny, library/nginx", []types.CapabilityGrant{allowAll, denyLib}, "library/nginx", false},
+		{"library deny, index.docker.io", []types.CapabilityGrant{allowAll, denyLib}, "index.docker.io/library/nginx", false},
+		{"library deny, docker.io/nginx", []types.CapabilityGrant{allowAll, denyLib}, "docker.io/nginx:1", false},
+		{"library deny, digest", []types.CapabilityGrant{allowAll, denyLib}, "nginx@" + imgDigest, false},
+		{"library deny leaves another Hub namespace", []types.CapabilityGrant{allowAll, denyLib}, "myorg/app:1", true},
+		{"index.docker.io deny covers docker.io", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "index.docker.io/library/*", types.CapabilityDeny)}, "nginx", false},
+		{"short exact deny covers the qualified ref", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "nginx", types.CapabilityDeny)}, "docker.io/library/nginx", false},
+		{"exact deny with a capital host", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "REGISTRY.example.com/team/x:1", types.CapabilityDeny)}, "registry.example.com/team/x:1", false},
+		{"prefix allow written with :443, deny without", []types.CapabilityGrant{
+			grant(types.CapabilitySubjectAll, "", capImage, "registry.example.com:443/team/*", types.CapabilityAllow), denyTeam},
+			"registry.example.com:443/team/app:1", false},
+		// An allow covers only the spelling written.
+		{"allow prefix is not read as a capital host", []types.CapabilityGrant{
+			grant(types.CapabilitySubjectAll, "", capImage, imgPrefix, types.CapabilityAllow)}, "REGISTRY.example.com/team/app:1", false},
+		{"allow prefix is not read as :443", []types.CapabilityGrant{
+			grant(types.CapabilitySubjectAll, "", capImage, imgPrefix, types.CapabilityAllow)}, "registry.example.com:443/team/app:1", false},
+		{"allow exact library/nginx is not nginx", []types.CapabilityGrant{
+			grant(types.CapabilitySubjectAll, "", capImage, "docker.io/library/nginx", types.CapabilityAllow)}, "nginx", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &capStore{grants: tc.grants, enf: map[string]bool{capImage: true}}
+			got, err := capServer(st).capGranted(memberCtx(nil), capImage, tc.ref)
+			if err != nil || got != tc.want {
+				t.Fatalf("capGranted(%q) = %v, %v; want %v", tc.ref, got, err, tc.want)
+			}
+			// capAllowedForSub walks the same rows by sub.
+			st.grants = nil
+			for _, g := range tc.grants {
+				g.SubjectType, g.Subject = types.CapabilitySubjectAll, ""
+				st.grants = append(st.grants, g)
+			}
+			got, err = capServer(st).capAllowedForSub(memberCtx(nil), "sub-x", "", capImage, tc.ref)
+			if err != nil || got != tc.want {
+				t.Fatalf("capAllowedForSub(%q) = %v, %v; want %v", tc.ref, got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestImageSpellings(t *testing.T) {
+	for _, tc := range []struct {
+		ref  string
+		want []string
+	}{
+		{"registry.example.com/team/app:1", []string{"registry.example.com/team/app:1"}},
+		{"REGISTRY.example.com:443/team/app:1", []string{"REGISTRY.example.com:443/team/app:1", "registry.example.com/team/app:1"}},
+		{"nginx", []string{"nginx", "docker.io/library/nginx"}},
+		{"library/nginx:1", []string{"library/nginx:1", "docker.io/library/nginx:1"}},
+		{"index.docker.io/library/nginx", []string{"index.docker.io/library/nginx", "docker.io/library/nginx"}},
+		{"nginx@" + imgDigest, []string{"nginx@" + imgDigest, "docker.io/library/nginx@" + imgDigest}},
+		{"localhost:5000/app", []string{"localhost:5000/app"}},
+	} {
+		got := imageSpellings(tc.ref)
+		if strings.Join(got, "|") != strings.Join(tc.want, "|") {
+			t.Errorf("imageSpellings(%q) = %q; want %q", tc.ref, got, tc.want)
+		}
+	}
+}
+
+// TestAvailabilityRefusesAnImagePrefix: a prefix names many images, so it is
+// not a target "Available to" can restrict, the same as the bare wildcard.
+func TestAvailabilityRefusesAnImagePrefix(t *testing.T) {
+	for _, raw := range []string{"registry.example.com%2Fteam%2F*", "registry.example.com/team/*", "*"} {
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("kind", capImage)
+		rctx.URLParams.Add("*", raw)
+		r := httptest.NewRequest(http.MethodPut, "/x", nil)
+		r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+		w := httptest.NewRecorder()
+		if _, _, ok := availabilityTarget(w, r); ok || w.Code != http.StatusBadRequest {
+			t.Errorf("availabilityTarget(%q) = ok %v, %d; want 400", raw, ok, w.Code)
+		}
 	}
 }

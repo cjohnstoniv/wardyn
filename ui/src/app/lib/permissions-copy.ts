@@ -87,7 +87,7 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     label: "Base images",
     blurb: "Which base images a member may name on a run of their own.",
     valueLabel: "Image ref",
-    valueHint: "The exact image ref, registry and tag included. Use * for every image.",
+    valueHint: "An exact image ref (registry and tag included), a prefix ending in /*, or * for every image.",
     unenforced: "Members can't name their own base image at all. Runs use what the workspace carries.",
     enforced: "A member can name an image granted to them. Every other ref is still refused.",
     direction: "widens",

@@ -63,7 +63,8 @@ the ADMIN pre-authorized.
 - It matches `registry.example.com/team/app:1`, `…/app@sha256:…` and `…/sub/app:1`, but not `registry.example.com/team`, `…/teamx/app` or `…/Team/app`. Whole path segments, case-sensitive, nothing normalised: `docker.io/library/*` does not cover `nginx:1`.
 - It must start with a registry host and end in one `/*`, with no tag, digest, uppercase letter, `..` segment or other `*`; anything else is refused `400`. A stored row that breaks these rules matches nothing.
 - A deny prefix overlaps every ref it matches and every prefix above or below it.
-- "Available to" stays exact: a prefix never opens a restricted image, only an allow naming it does.
+- A deny covers other spellings of the same registry and image (capitals in the host, `:443`, Docker Hub short names such as `nginx`); an allow covers only the spelling written.
+- "Available to" stays exact: a prefix never opens a restricted image, or another tag or digest of its repository, only an allow naming it does.
 - A prefix over mutable tags is weaker than an exact digest ref.
 - That rule is also why `agent` narrows rather than widens:
   - launching an agent is something every member could already do,
