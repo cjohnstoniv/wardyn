@@ -820,6 +820,8 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `BLOCKERS_ONE` | mock | 1 blocker before launch |
 | `BLOCKERS_MANY(n)` | mock | {n} blockers before launch |
 | `BLOCKER_STALE` | mock | The setup changed. Check the server's current result again. |
+| `BLOCKER_EXPIRED` | deviation (lead wording 2026-11-03) | The server's check is more than a minute old. Check again before you launch. |
+| `CHECKING` | deviation (lead wording 2026-11-03) | Checking with the server… |
 | `BLOCKER_UNSUPPORTED(path)` | pending (W-29) | This document field isn't supported here: {path}. |
 | `CHECK_AGAIN` | mock | Check again |
 | `CHECKED_ANNOUNCE` | mock | Server result checked. Launch is ready. |
