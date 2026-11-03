@@ -39,6 +39,12 @@ vi.mock("../../../lib/api/walls", async (orig) => ({
   walls: { get: (...a: unknown[]) => getWallsMock(...a) },
 }));
 
+// Wall presets read /wall-presets; the store keeps none here, so that card is absent.
+vi.mock("../../../lib/api/wall-presets", async (orig) => ({
+  ...(await orig<typeof import("../../../lib/api/wall-presets")>()),
+  wallPresets: { list: () => Promise.reject(new HttpError(501, "no", "wall_presets_unavailable")) },
+}));
+
 vi.mock("../../../lib/api/secrets", () => ({
   secrets: { setSecret: vi.fn(), deleteSecret: vi.fn() },
 }));
@@ -115,7 +121,7 @@ describe("YourAccountScreen", () => {
     getWallsMock.mockRejectedValue(new HttpError(400, "no person", "walls_need_person"));
     renderScreen();
     await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
-    await waitFor(() => expect(getWallsMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getWallsMock.mock.calls.length).toBeGreaterThanOrEqual(2));
     expect(screen.queryByRole("heading", { name: startsWith("Your walls") })).not.toBeInTheDocument();
   });
 

@@ -77,6 +77,9 @@ import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
 import { RunLifetimeWithContainment } from "./run-detail/containment-pending";
 import { PolicyTab } from "./run-detail/policy-tab";
+import { WallPresetRefusalLine } from "./run-detail/wall-preset-run-lines";
+import { presetRefusingEveryPush, PUSH_DENY_ALL_SOURCE } from "../../lib/wall-preset-words";
+import { usePresetRefusal } from "./run-detail/use-preset-refusal";
 import { POLICY_TAB } from "./run-detail/policy-tab-copy";
 import { RecordingTab } from "./run-detail/recording-tab";
 import { OutputTab } from "./run-detail/output-tab";
@@ -124,7 +127,7 @@ function RunDetailPage({ id }: { id: string }) {
   const [profileRunId, setProfileRunId] = React.useState<string | null>(null);
 
   const { copyAsync } = useCopyToClipboard(1400);
-  const { refused, wallsRefused, noteRefusal } = useRefusedApprovals();
+  const { refused, wallsRefused, presetRefused, noteRefusal } = useRefusedApprovals();
   const [decide, setDecide] = React.useState<{
     id: string;
     action: "approve" | "deny";
@@ -393,7 +396,8 @@ function RunDetailPage({ id }: { id: string }) {
 
           <TabsContent value="approvals" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
             <ApprovalsTab
-              approvals={approvals.map((a) => (wallsRefused.has(a.id) ? { ...a, walls_block: true } : a))}
+              approvals={approvals.map((a) => (wallsRefused.has(a.id) || presetRefused.has(a.id) ? { ...a, walls_block: true } : a))}
+              presetRefused={presetRefused}
               run={run}
               viewerBlocked={viewerBlockedOnDecision(pending, securityOperator, run.created_by === principal)}
               onDecide={(approvalId, action, kind) => setDecide({ id: approvalId, action, kind })}
@@ -410,7 +414,7 @@ function RunDetailPage({ id }: { id: string }) {
           </TabsContent>
 
           <TabsContent value="audit" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
-            <AuditTab events={audit} runId={run.id} policy={run.policy} onMakePolicy={() => setProfileRunId(run.id)} />
+            <AuditTab events={audit} runId={run.id} policy={run.policy} hasWallPreset={!!run.wall_preset} onMakePolicy={() => setProfileRunId(run.id)} />
           </TabsContent>
 
           <TabsContent value="recording" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
@@ -481,6 +485,7 @@ function AuditTab({
   events,
   runId,
   policy,
+  hasWallPreset,
   onMakePolicy,
 }: {
   events: AuditEvent[];
@@ -488,9 +493,12 @@ function AuditTab({
   /** The run's own policy (GET /runs/{id}), never /me: an admin viewing someone
    *  else's run must see that run's owner, not their own. */
   policy?: RunDetail["policy"];
+  /** The run was launched with a wall preset (GET /runs/{id}): its policy view says whether it refuses every push. */
+  hasWallPreset: boolean;
   onMakePolicy: () => void;
 }) {
   const securityOperator = useSecurityOperator();
+  const presetView = usePresetRefusal(runId, events, hasWallPreset);
   return (
     <div className="max-w-4xl">
       <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -532,9 +540,10 @@ function AuditTab({
               const signing = awsSigningLine(e);
               const inbound = inboundDetail(e);
               const callId = gatewayCallId(e);
+              const refusedBy = e.data?.rule_source === PUSH_DENY_ALL_SOURCE ? presetRefusingEveryPush(presetView) : undefined;
               return (
                 // One line from sm up; below sm the target drops to a second line of its own (#2917).
-                <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${(isAttributedRefusal(e) && !toolRuleDecision(e)) || signing || inbound || callId ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
+                <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${(isAttributedRefusal(e) && !toolRuleDecision(e)) || signing || inbound || callId || refusedBy ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
                   <span
                     data-testid="run-audit-time"
                     className="w-[84px] shrink-0 whitespace-nowrap font-mono text-meta text-muted-foreground"
@@ -584,6 +593,7 @@ function AuditTab({
                       {inbound}
                     </span>
                   )}
+                  {refusedBy && <WallPresetRefusalLine name={refusedBy} className="basis-full sm:pl-[208px]" />}
                   {callId && (
                     // Cut at a narrow width, and Copy still takes the whole value.
                     <span data-testid="run-audit-call-id" className="flex min-w-0 basis-full items-center gap-1 font-mono text-xs text-muted-foreground sm:pl-[208px]">

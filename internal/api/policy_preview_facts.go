@@ -19,18 +19,27 @@ import (
 )
 
 type policyPreviewResponse struct {
-	Spec             types.RunPolicySpec       `json:"spec"`
-	Source           policyPreviewSource       `json:"source"`
-	Provisional      bool                      `json:"provisional"`
-	Redacted         bool                      `json:"redacted"`
-	Warnings         []string                  `json:"warnings"`
-	Pending          []policyPreviewPending    `json:"pending"`
-	RepositoryAccess []policyPreviewRepository `json:"repository_access"`
+	Spec        types.RunPolicySpec `json:"spec"`
+	Source      policyPreviewSource `json:"source"`
+	Provisional bool                `json:"provisional"`
+	Redacted    bool                `json:"redacted"`
+	Warnings    []string            `json:"warnings"`
+	// PushesUnstoppable is set when this install's git token broker is off and the run's capability list
+	// leaves out code_write: a git token in the sandbox can still push. It is the same decision as the run
+	// warning unstoppablePushWarning, which the preview's warning filter drops.
+	PushesUnstoppable bool                      `json:"pushes_unstoppable,omitempty"`
+	Pending           []policyPreviewPending    `json:"pending"`
+	RepositoryAccess  []policyPreviewRepository `json:"repository_access"`
 	// ADOLaneDeclined is the run-level reason the per-person Azure DevOps
 	// credential would not be given to this run's sandbox (adoLaneDecline),
 	// decided by the resolver launch uses. Absent means no structural decline
 	// was reported; it is never set on a repository group.
 	ADOLaneDeclined string `json:"ado_lane_declined,omitempty"`
+	// PushDenyAllSecrets is set when the draft refuses every push and carries an
+	// environment or file secret of its own (pushDenyAllSecrets). Review then says:
+	// "A push token you add as a secret could still push to a code host Wardyn
+	// doesn't recognize, if this run can reach it." (types.PushDenyAllSecretsNote).
+	PushDenyAllSecrets bool `json:"push_deny_all_secrets,omitempty"`
 	// Components is what the draft is given access to (componentFacts): absent
 	// for an exec draft with no Git provider or attached component.
 	Components []componentFact `json:"components,omitempty"`

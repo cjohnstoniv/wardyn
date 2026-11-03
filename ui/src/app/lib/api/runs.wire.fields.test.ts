@@ -232,6 +232,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "mac_window",
       "macos_preparing",
       "macos_disk",
+      "wall_preset",
     ]);
   });
 

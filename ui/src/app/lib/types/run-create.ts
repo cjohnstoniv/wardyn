@@ -80,6 +80,11 @@ export interface CreateRunInput {
    * (pkg/client.CreateRunRequest.KeepWorkFolder). Chosen at each launch: never in a template.
    */
   keep_work_folder?: boolean;
+  /**
+   * Narrows the run by a wall preset: a built-in's id (open, read-only, sealed) or a saved preset's id
+   * (pkg/client.CreateRunRequest.WallPreset). Chosen at each launch: never in a template.
+   */
+  wall_preset?: string;
 }
 
 /** types.RunLocalFolder as a request names it. `direction`: "both" brings the sandbox's changes back when the run ends. */

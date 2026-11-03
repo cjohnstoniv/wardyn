@@ -31,6 +31,8 @@ export type RunIntent = Partial<Omit<CreateRunRequestFields, "title" | "descript
   drives?: DriveAttachment[];
   /** Overlay onto the caller's default policy. Never a whole policy. */
   inline_policy?: Partial<RunPolicySpec>;
+  /** The wall preset chosen for this launch (pkg/client.CreateRunRequest.WallPreset): a built-in's id or a stored preset's uuid. Chosen at each launch; never in a template. */
+  wall_preset?: string;
 };
 
 export type NewRunOrigin =
@@ -64,6 +66,8 @@ export interface GuidedFacts {
   drivePreselected?: boolean;
   /** The server's sentence for a window on the Mac it refused, which cleared the choice; until the person chooses again. */
   windowCleared?: string;
+  /** A launch found the chosen wall preset missing (422 wall_preset_unknown): the choice stays, as an error, until another is picked. */
+  wallPresetGone?: { id: string; name: string };
 }
 
 export interface DocDiagnostic {

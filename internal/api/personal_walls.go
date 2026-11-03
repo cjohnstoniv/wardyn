@@ -402,6 +402,11 @@ func newWallsSource(before, after types.RunPolicySpec) *wallsSourceRecord {
 	put(&rec.Removed, "eligible_grants", setDiff(wallsGrantKeys(before.EligibleGrants), wallsGrantKeys(after.EligibleGrants)))
 	put(&rec.Added, "denied_domains", setDiff(a.DeniedDomains, b.DeniedDomains))
 	put(&rec.Added, fieldDesktop, setDiff(desktopBlocked(after), desktopBlocked(before)))
+	// Every push refused is a knob inside push_rules, so Narrowed names push_rules alone; the console reads this entry to say
+	// which layer refuses every push.
+	if after.PushRules != nil && after.PushRules.DenyAll && (before.PushRules == nil || !before.PushRules.DenyAll) {
+		put(&rec.Added, fieldPushRules, []string{pushRulesDenyAll})
+	}
 	return rec
 }
 
@@ -425,7 +430,7 @@ func (s *Server) personalWallsRunStep(ctx context.Context, spec *types.RunPolicy
 	}
 	rec, err := s.wallsRunStep(spec, source, walls, personalProvenance)
 	if err != nil {
-		return nil, wallsMeetRefusal(err, "your walls", "Your walls", "Change your walls with `wardyn walls`, or in Settings.")
+		return nil, wallsMeetRefusal(err, "your walls", "Your walls", "Change your walls with `wardyn walls`, or in Settings.", true)
 	}
 	source.PersonalWalls = rec
 	return wallsWarnings("your walls", rec), nil
@@ -463,13 +468,17 @@ func (s *Server) wallsRunStep(spec *types.RunPolicySpec, source *policySourceRec
 }
 
 // wallsMeetRefusal answers a walls meet that failed: 403 when the walls and the policy have nothing in
-// common for a knob, named as who (mid-sentence) and Who (at its start), with the remedy; else a server
-// error.
-func wallsMeetRefusal(err error, who, whoStart, remedy string) *runRefusal {
+// common for a knob, named as who (mid-sentence) and Who (at its start), with the remedy and, when
+// detail, the values that did not meet; else a server error.
+func wallsMeetRefusal(err error, who, whoStart, remedy string, detail bool) *runRefusal {
 	var unmet *composer.OverlayError
 	if errors.As(err, &unmet) && unmet.Reason == composer.ReasonOverlayUnsatisfiable {
+		values := ""
+		if detail {
+			values = ": " + unmet.Detail
+		}
 		return runError(http.StatusForbidden, reasonGovernanceOverlayUnsatisfiable,
-			whoStart+" and this run's policy leave "+unmet.Field+" nothing in common: "+unmet.Detail+". "+remedy)
+			whoStart+" and this run's policy leave "+unmet.Field+" nothing in common"+values+". "+remedy)
 	}
 	return runServerError("meet "+who, err)
 }
@@ -550,6 +559,15 @@ func wallPresetLabel(p *types.WallPresetOnRun, owner bool) string {
 	return "the " + p.Name + " wall preset"
 }
 
+// wallPresetKept names the run's preset in text kept on the run or in its audit (a warning, a refusal
+// that becomes a queued run's end, a dispatch refusal), which more than its owner read: a personal
+// preset is never named there, nor are its values quoted (open is false). who starts mid-sentence,
+// whoStart a sentence.
+func wallPresetKept(p *types.WallPresetOnRun) (who, whoStart string, open bool) {
+	who = wallPresetLabel(p, false)
+	return who, strings.ToUpper(who[:1]) + who[1:], p.Scope != types.WallPresetScopePerson
+}
+
 // wallPresetRunStep narrows spec by the wall preset the launch chose, after the person's own walls and
 // by the same step (wallsRunStep), so it only narrows and every knob a preset can name is met. The
 // frozen copy is validated again first: a preset a later, stricter rule refuses stops the launch (422
@@ -558,13 +576,19 @@ func (s *Server) wallPresetRunStep(spec *types.RunPolicySpec, source *policySour
 	if p == nil {
 		return nil, nil
 	}
-	label := wallPresetLabel(p, true)
+	// The warnings are kept on the run and a refusal at a queued start becomes its end, so both name
+	// the preset as wallPresetKept does.
+	label, labelStart, open := wallPresetKept(p)
 	if err := validatePersonalWalls(p.Spec); err != nil {
-		return nil, wallPresetInvalid(label + " no longer passes the rules for walls (" + err.Error() + "); edit the preset, or pick another")
+		why := ""
+		if open {
+			why = " (" + err.Error() + ")"
+		}
+		return nil, wallPresetInvalid(label + " no longer passes the rules for walls" + why + "; edit the preset, or pick another")
 	}
 	rec, err := s.wallsRunStep(spec, source, p.Spec, wallPresetProvenance(p))
 	if err != nil {
-		return nil, wallsMeetRefusal(err, label, "The "+p.Name+" wall preset", "Pick another preset, or launch with Open.")
+		return nil, wallsMeetRefusal(err, label, labelStart, "Pick another preset, or launch with Open.", open)
 	}
 	source.WallPreset = &wallPresetSourceRecord{ID: p.ID, Name: p.Name, Scope: p.Scope, GroupID: p.GroupID, Version: p.Version, wallsSourceRecord: rec}
 	source.wallPreset = p
@@ -572,16 +596,40 @@ func (s *Server) wallPresetRunStep(spec *types.RunPolicySpec, source *policySour
 }
 
 // runWallPresetView is the run read's wall_preset: never the spec, and for a personal preset read by
-// anyone but the run's owner, its scope alone.
+// anyone but the run's owner, its scope alone, with the versions when a change ended the queued run.
 func runWallPresetView(r *http.Request, run types.AgentRun) *client.RunWallPreset {
 	p := run.WallPreset
 	if p == nil {
 		return nil
 	}
 	if p.Scope == types.WallPresetScopePerson && principalFromRequest(r) != run.CreatedBy {
-		return &client.RunWallPreset{Scope: string(p.Scope)}
+		v := &client.RunWallPreset{Scope: string(p.Scope), Changed: p.Changed}
+		if p.Changed != nil {
+			v.Version = p.Version
+		}
+		return v
 	}
-	return &client.RunWallPreset{ID: p.ID, Name: p.Name, Scope: string(p.Scope), GroupID: p.GroupID, Version: p.Version}
+	return &client.RunWallPreset{ID: p.ID, Name: p.Name, Scope: string(p.Scope), GroupID: p.GroupID, Version: p.Version, Changed: p.Changed}
+}
+
+// runWallPresetViewLabelled is runWallPresetView with a group preset's group label added, read the way the templates' and
+// the wall preset list's group labels are (TemplateGroupLabels). A group with no label, or a store without labels, adds none.
+func (s *Server) runWallPresetViewLabelled(r *http.Request, run types.AgentRun) *client.RunWallPreset {
+	v := runWallPresetView(r, run)
+	if v == nil || v.Scope != string(types.WallPresetScopeGroup) || v.GroupID == "" {
+		return v
+	}
+	ts, ok := s.cfg.Store.(store.TemplateStore)
+	if !ok {
+		return v
+	}
+	labels, err := ts.TemplateGroupLabels(r.Context(), []string{v.GroupID})
+	if err != nil {
+		slog.WarnContext(r.Context(), "api: read a wall preset's group label for the run read", slog.Any("err", err))
+		return v
+	}
+	v.GroupLabel = labels[v.GroupID]
+	return v
 }
 
 // unstoppablePushWarning is the run warning for a run whose effective capability list leaves out
@@ -615,10 +663,13 @@ func wallsCapabilityMeet[C ~string](ctx context.Context, s *Server, run types.Ag
 	type capWall struct {
 		list                  *[]C
 		whoStart, who, remedy string
+		open                  bool // the list may be quoted (wallPresetKept)
 	}
-	lists := []capWall{{wallOf(walls), "Your walls", "your walls", "Change your walls with `wardyn walls`, or in Settings."}}
+	lists := []capWall{{wallOf(walls), "Your walls", "your walls", "Change your walls with `wardyn walls`, or in Settings.", true}}
 	if p := run.WallPreset; p != nil {
-		lists = append(lists, capWall{wallOf(p.Spec), "The " + p.Name + " wall preset", "the " + p.Name + " wall preset", "Pick another preset, or launch with Open."})
+		// The refusal is kept on the run and in its audit, so the preset is named as wallPresetKept does.
+		who, whoStart, open := wallPresetKept(p)
+		lists = append(lists, capWall{wallOf(p.Spec), whoStart, who, "Pick another preset, or launch with Open.", open})
 	}
 	named := false
 	for _, l := range lists {
@@ -636,9 +687,13 @@ func wallsCapabilityMeet[C ~string](ctx context.Context, s *Server, run types.Ag
 			}
 		}
 		if len(kept) == 0 {
+			list := ""
+			if l.open {
+				list = " (" + wallsCapList(*l.list) + ")"
+			}
 			return nil, &wallsCapabilityRefusal{status: http.StatusForbidden, reason: reasonGovernanceOverlayUnsatisfiable,
 				detail: l.whoStart + " and this run's provider default leave " + field + " nothing in common: no capability is in both the default (" +
-					wallsCapList(from) + ") and " + l.who + " (" + wallsCapList(*l.list) + "). " + l.remedy}
+					wallsCapList(from) + ") and " + l.who + list + ". " + l.remedy}
 		}
 	}
 	return kept, nil

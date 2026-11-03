@@ -422,7 +422,8 @@ export function PushRulesSection({
       <div className="mb-2 flex items-center gap-2">
         <SectionLabel>Push rules</SectionLabel>
         {/* The counts next to the title read "N denied path(s) · N path(s) held for review". */}
-        <span className="text-xs text-muted-foreground">{PUSH_RULES_CARD.COUNTS(deny.length, review.length)}</span>
+        {/* Under deny_all the counts read as "nothing is refused", so they are hidden. */}
+        {spec.push_rules?.deny_all !== true && <span className="text-xs text-muted-foreground">{PUSH_RULES_CARD.COUNTS(deny.length, review.length)}</span>}
         <Chip tone="neutral" mono className="ml-auto">
           push_rules
         </Chip>

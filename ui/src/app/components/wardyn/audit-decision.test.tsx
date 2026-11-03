@@ -185,6 +185,11 @@ describe("ruleSourceLabel", () => {
       tone: "danger",
     });
   });
+
+  it("labels a push the run's walls or wall preset refuse, and leaves the five labels as shipped", () => {
+    expect(ruleSourceLabel("brokered:git:push-deny-all")).toEqual({ label: "Refused: every push", tone: "danger" });
+    expect(ruleSourceLabel("brokered:git:push-rules")?.label).toBe("Push refused — a denied path");
+  });
 });
 
 describe("RuleSourceChip", () => {
