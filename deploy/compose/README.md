@@ -107,7 +107,7 @@ WARDYN_LOCAL_MODE=true docker compose -f deploy/compose/docker-compose.yaml up p
 - Sidecar/run-token auth is unaffected.
 
 > [!WARNING]
-> Local mode **refuses to start on an explicit publicly-routable IP** (it will not serve a no-auth API on a public IP), but on an **unspecified bind** (`0.0.0.0`, the `WARDYN_LISTEN` default) it only **warns**.
+> Local mode **refuses to start on an explicit publicly-routable IP** (it will not serve a no-auth API on a public IP), but on an **unspecified bind** (`:8080`, the `WARDYN_LISTEN` default) it only **warns**.
 > It does not refuse — because that bind might be host-firewalled or purely a docker-bridge address.
 > For a real guarantee, bind/publish loopback-only (the Compose default already publishes `127.0.0.1`) — do not rely on the warning alone, and keep local mode on a trusted single-dev machine.
 

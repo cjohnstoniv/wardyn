@@ -43,6 +43,7 @@ export const ADMIN_SSH_KEYS = {
   LEDE: "Keys added here reach runs you don't own. Each is refreshed when you sign in, and expires on its own if you don't.",
   EMPTY_TITLE: "No admin keys",
   EMPTY_BODY: "Add one only if you need to reach other people's runs over SSH.",
+  LOAD_FAILED_TITLE: "Couldn't load admin SSH keys.",
 } as const;
 
 export function AdminSshKeysCard() {
@@ -93,7 +94,7 @@ export function AdminSshKeysCard() {
         {status === "loading" ? (
           <TableSkeleton rows={1} cols={4} />
         ) : status === "error" ? (
-          <ErrorState onRetry={load} />
+          <ErrorState size="compact" title={ADMIN_SSH_KEYS.LOAD_FAILED_TITLE} onRetry={load} />
         ) : adminKeys.length === 0 ? (
           <EmptyState
             icon={KeyRound}

@@ -118,13 +118,19 @@ func (s *Server) undoFreeze(ctx, hold context.Context, f runner.Freezer, run typ
 }
 
 // moveSandbox freezes the sandbox when paused, else thaws it, trying a few
-// times.
+// times. A sandbox that cannot be frozen (a macOS VM) has nothing to move, so
+// a settle record an older build left for one clears instead of looping.
 func moveSandbox(ctx context.Context, f runner.Freezer, ref string, paused bool) error {
 	act := f.ThawSandbox
 	if paused {
 		act = f.FreezeSandbox
 	}
-	return retrying(ctx, func() error { return act(ctx, ref) })
+	return retrying(ctx, func() error {
+		if err := act(ctx, ref); err != nil && !errors.Is(err, runner.ErrFreezeUnsupported) {
+			return err
+		}
+		return nil
+	})
 }
 
 // readRunRetrying is GetRun, tried a few times.

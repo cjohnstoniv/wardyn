@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import type { Component } from "../../../lib/types";
-import { blankSecret, blankSetting, draftOf, headerHostChoices, newUuid, requestOf } from "./component-editor-model";
+import { blankSecret, blankSetting, draftOf, headerHostChoices, newUuid, requestOf, withStored } from "./component-editor-model";
 import { aheadByHours } from "../../../lib/test-clock";
 
 const stored: Component = {
@@ -76,6 +76,26 @@ describe("newUuid", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("withStored", () => {
+  const cliRow: Component = {
+    ...stored,
+    definition: {
+      hosts: [],
+      cli: { kind: "azure", azure: { subscriptions: ["11111111-2222-4333-8444-555555555555"], access: "read" } },
+    },
+  };
+
+  it("sends a stored CLI card back unchanged, which the editor has no field for", () => {
+    const req = withStored(requestOf({ ...draftOf(cliRow), description: "Azure, read only" }), cliRow, "");
+    expect(req.definition.cli).toEqual(cliRow.definition.cli);
+    expect(req.definition.description).toBe("Azure, read only");
+  });
+
+  it("adds nothing to a row with neither a CLI card nor an MCP server", () => {
+    expect(withStored(requestOf(draftOf(stored)), stored, "aud")).toEqual(requestOf(draftOf(stored)));
   });
 });
 

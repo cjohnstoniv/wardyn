@@ -113,7 +113,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	watch.onChange = opts.offline.relayChanged
 	extras.report = connectReport{log: opts.offline, relay: watch}
 	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
-	extras.macOSVM = enableMacOSVM(ctx, sub, identity.RunnerID.String(), stateDir, opts.macOSVM)
+	extras.macOSVM = enableMacOSVM(ctx, sub, identity.RunnerID.String(), stateDir, opts.macOSVM, opts.macOSVMSettings)
 	extras.localAttach, extras.orgURL = local, opts.orgURL
 	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, sub.EndVM)
 	extras.driveRoots, extras.localModelRelay, extras.localModelPorts = driveRoots, true, modelPorts
@@ -538,6 +538,9 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	}
 	checkLapsesAtStartup(ctx, manager)
 	caps := &capsReporter{sub: sub, extra: extra, capacity: capacity, dispatcher: dispatcher, hasLocal: local != nil}
+	if extra.macOSVM != nil {
+		reportWindowsOn(ctx, caps.online.Load)
+	}
 	hooks := runnerwire.RunnerHooks{
 		Call: dispatcher.Call,
 		// The org never opens a stream toward a runner: a relay is the
@@ -548,8 +551,11 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		Clock: manager.Clock, Pending: manager.Pending, StatePages: manager.StatePages,
 		BeforeReady: manager.BeforeReady, Lease: manager.Lease, Offline: manager.Offline,
 		// manager.Revoked has released the manager's lock before the resident
-		// erase runs (lock order: Resident, then Manager).
-		Revoked: func(ctx context.Context) error { return errors.Join(manager.Revoked(ctx), resident.EraseAll(ctx)) },
+		// erase runs (lock order: Resident, then Manager). A revoked runner's kept machines go too: a VM booted
+		// from one is torn down, then every machine folder is deleted.
+		Revoked: func(ctx context.Context) error {
+			return errors.Join(manager.Revoked(ctx), resident.EraseAll(ctx), extra.macOSVM.eraseKept(ctx))
+		},
 		Replay: func(ctx context.Context, peer *runnerwire.Peer) error {
 			if err := caps.send(ctx, peer, true, true); err != nil {
 				return err
@@ -591,6 +597,10 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			if manager.IsRevoked() {
 				if err := resident.EraseAll(ctx); err != nil {
 					slog.WarnContext(ctx, "runner resident erase after revocation will retry on the sweep", "error", err)
+				}
+				// A failed erase of the kept machines is retried by the kept machines sweep.
+				if err := extra.macOSVM.eraseKept(ctx); err != nil {
+					slog.WarnContext(ctx, "runner kept machines erase after revocation will retry on the sweep", "error", err)
 				}
 			}
 			resident.SweepExpired(ctx, time.Minute)
@@ -869,7 +879,7 @@ func (d *dockerSink) extras(sub *docker.Driver, ev *evidenceForwarder) runtimeEx
 // whose helper's probe does not pass, offers none and says why in its caps as a code, and in its log in words. Container runs are untouched
 // either way. The runner does not know its per-run memory here (the organisation keeps the limits), so
 // the offer sizes each guest at the base's minimum until it does.
-func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir string, on bool) *macOSVMs {
+func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir string, on bool, set macOSVMSettings) *macOSVMs {
 	if !on {
 		return nil
 	}
@@ -886,7 +896,7 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir s
 	if err != nil {
 		slog.WarnContext(ctx, "macOS VM sandboxes: Docker did not report its memory; the ledger subtracts none", "error", err.Error())
 	}
-	m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: runnerID, version: version.String(), uid: os.Getuid(), limitsFile: macOSVMLimitsFile(stateDir),
+	m := openMacOSVMs(macOSVMSetup{ledgerDir: admission.DefaultDir, root: root, runnerID: runnerID, version: version.String(), uid: os.Getuid(), limitsFile: macOSVMLimitsFile(stateDir), settings: set,
 		dockerMemory: uint64(max(measured.MemoryMiB, 0)) << 20, host: admission.SystemHost(), owner: fileOwner})
 	m.helper, err = macVMHelperPath()
 	if err == nil {
@@ -901,7 +911,8 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir s
 	if m.ledger != nil {
 		m.sweepStaging()
 		cfg := &docker.MacVMConfig{Layout: m.layout, Helper: m.helper, Identity: macOSVMIdentity, SockRoot: m.sockRoot,
-			ToolsDialFile: filepath.Join(root, runToolsDialFile), Ledger: m.ledger, Host: m.host, RunnerID: runnerID, HostOS: macHostOS(), Changed: m.changed}
+			ToolsDialFile: filepath.Join(root, runToolsDialFile), Ledger: m.ledger, Host: m.host, RunnerID: runnerID, HostOS: macHostOS(), Changed: m.changed, OnUnexpectedWindow: unexpectedWindow,
+			KeptConfig: docker.KeptConfig{LimitBytes: m.kept.limit, Tools: newKeptToolsUpdater(m)}}
 		if err := sub.EnableMacVM(cfg); err != nil {
 			slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
 			m.ledger, m.refusal, m.reason = nil, macOSVMLedgerDamaged, runnerwire.MacVMReasonLedgerDamaged

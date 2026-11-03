@@ -244,7 +244,7 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 |---|---|
 | Runner binary | `--runnerd <file>`, else a `wardyn-runnerd` beside the CLI or on `PATH`, else a download. Each is checked against the SHA-256 this CLI pins, and refused on a mismatch |
 | Package runner | The macOS package's `/usr/local/wardyn/bin/wardyn-runnerd` needs no hash while it and its directory are root-owned and nobody else can write them |
-| Download | `<base>/v<version>/wardyn-runnerd-<os>-<arch>`. The base is `--artifact-base` (then saved in `cli.json`), the saved one, `/healthz.cli_artifact_base`, else the release |
+| Download | `<base>/v<version>/wardyn-runnerd-<os>-<arch>`. The base is `--artifact-base` (then saved in `cli.json`), the macOS managed preference `ArtifactBase`, the saved one, `/healthz.cli_artifact_base`, else the release |
 | Registration token | Minted only when this computer has no runner identity: single use, 1 hour, yours only. It reaches `wardyn-runnerd setup --token-file /dev/fd/3` over a pipe: never on disk, in an argument or in an environment variable |
 | Service | `wardyn-runnerd setup --org <url>`, with `--org-ca-file` when `wardyn ca` holds a root for the organisation. Your shell's environment goes along without `WARDYN_TOKEN`, `WARDYN_ADMIN_TOKEN` and `ANTHROPIC_API_KEY` |
 | Claim and pool | The CLI claims the runner with your own credential, then applies `--pool` and `--default` |
@@ -256,11 +256,12 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 - On Windows it refuses: run it inside your WSL2 distribution.
 - A failed run leaves nothing to undo: run it again. An unused token expires within the hour; an unclaimed runner lapses after 24 hours.
 - To upgrade, see [Upgrading a runner](#upgrading-a-runner).
+- Before the first run, check [the policy's `github_token` grant](#before-the-first-run): on a fresh install it is refused on a person's runner until the delivery policy or the grant changes.
 - Org runners keep the operator's `--token-file` path.
 
 ### `wardyn runner install` and `wardyn runner upgrade`
 
-`wardyn runner install` is `wardyn runner setup` with the runner taken from a signed release instead of the copy this CLI pins. It takes setup's flags and `--version` (this CLI's own release when left out). On a computer that already runs a runner it is `upgrade`, so running it again with a newer `--version` upgrades.
+`wardyn runner install` is `wardyn runner setup` with the runner taken from a signed release instead of the copy this CLI pins. It takes `--version` (this CLI's own release when left out), `--pool`, `--default`, `--name` and `--artifact-base`, but not `--runnerd`. On a computer that already runs a runner it ignores `--pool`, `--default` and `--name` and says so; `wardyn runner upgrade` takes `--version` and `--artifact-base` only. On a computer that already runs a runner it is `upgrade`, so running it again with a newer `--version` upgrades.
 
 | Step | What it does |
 |---|---|
@@ -283,6 +284,21 @@ Both run `serve --config <path to runnerd.json>` and hold no setting themselves.
 Upgrade the organisation before its runners. A runner installed with `setup` upgrades by running `wardyn runner setup` again, or the new release's `wardyn-runnerd setup` with the same flags: it renames a new file over its own copy and restarts the service. Installing a new `wardyn-runnerd.pkg` upgrades only a runner the package's managed agent runs (one set up with `register`); it stops that agent first. A `setup`-installed runner keeps its own copy, so a new package alone leaves it on the old version. Never copy a new binary over the running one: on macOS the system can stop a process whose binary is overwritten in place.
 
 A hand-installed macOS LaunchAgent does not get `--log-file`, so its log is not rotated until someone adds `--log-file` to its `ProgramArguments`. `wardyn runner upgrade` to a newer release writes it. On a runner already on the current release, upgrade stops before setup, so run `wardyn-runnerd setup` again or add the flag by hand.
+
+### Before the first run
+
+The shipped default policy ([`examples/policies/default.json`](../examples/policies/default.json), which the wardynd image sets as `WARDYN_DEFAULT_POLICY`; `demo.json` has the same grant) carries an eligible `github_token` grant. The organisation's credential delivery policy (`local_credential_delivery`) holds no row for `github_token` until an administrator writes one, and a class with no row is refused. A run on a person's own runner is then refused at create with `placement_credential` (`422`), for example:
+
+```
+ProxyConfig.Policy.EligibleGrants[0]: github_token credential is not delivered to a local runner of trust class personal (delivery policy: refuse)
+```
+
+The runner is fine; the run's policy asks for something the organisation does not deliver to it. Either fix lets the run start:
+
+| Fix | Who | How |
+|---|---|---|
+| Deliver the token through the organisation | A security administrator | In *Governance → Runner credentials* (or `PUT /governance/credential-delivery`) set `github_token` to `via_org`. The token stays in the organisation, which uses it through its egress for the run ([the delivery table](operations/hybrid-laptops.md#resident-credentials-and-posture)). A deployment that holds changes for a second person holds this one too |
+| Drop the grant | Whoever owns the policy | Remove the `github_token` entry from `eligible_grants` in the policy the run uses. For the deployment default, edit the file `WARDYN_DEFAULT_POLICY` names and restart `wardynd`, which reads it once at boot. The run then has no GitHub token |
 
 ## The runner's settings file
 

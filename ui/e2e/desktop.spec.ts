@@ -67,7 +67,9 @@ test.describe("Run detail — Desktop", () => {
     const runId = await openVMRun(page);
     const desk = page.getByRole("region", { name: DESKTOP.title });
     await desk.scrollIntoViewIfNeeded();
-    await expect(desk.getByText(DESKTOP.ready, { exact: true })).toBeVisible();
+    // The status chip is in the tile's header, which holds the region.
+    const tile = desk.locator("xpath=ancestor::section[1]");
+    await expect(tile.getByText(DESKTOP.ready, { exact: true })).toBeVisible();
     await expect(desk.getByText(DESKTOP.kind)).toBeVisible();
 
     let captured: { url: string; postData: string | null; cookie: string } | null = null;
@@ -79,7 +81,9 @@ test.describe("Run detail — Desktop", () => {
     const [popup] = await Promise.all([context.waitForEvent("page"), desk.getByRole("button", { name: "Open desktop" }).click()]);
     await popup.waitForLoadState("domcontentloaded").catch(() => {});
 
-    expect(captured).not.toBeNull();
+    // The click opens a blank tab at once; the ticket's POST lands in that same tab once it is minted and bound.
+    await expect.poll(() => captured).not.toBeNull();
+    await expect(popup).toHaveURL(/\/__wardyn\/enter$/);
     const { url, postData, cookie } = captured!;
     expect(new URL(url).origin).not.toBe(new URL(page.url()).origin);
     expect(new URL(url).search).toBe("");
@@ -101,7 +105,9 @@ test.describe("Run detail — Desktop", () => {
     await openVMRun(page);
     const desk = page.getByRole("region", { name: DESKTOP.title });
     await desk.scrollIntoViewIfNeeded();
-    await expect(desk.getByText(DESKTOP.statusOff, { exact: true })).toBeVisible();
+    // The status chip is in the tile's header, which holds the region.
+    const tile = desk.locator("xpath=ancestor::section[1]");
+    await expect(tile.getByText(DESKTOP.statusOff, { exact: true })).toBeVisible();
     await expect(desk.getByText(/^Off on this deployment\. It relays the desktop of a sandbox/)).toBeVisible();
     await expect(desk.getByRole("button")).toHaveCount(0);
   });

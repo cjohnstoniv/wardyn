@@ -31,6 +31,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
@@ -100,6 +101,9 @@ type uiInboundState struct {
 	buckets map[uuid.UUID]*inboundBucket
 	// callers is each caller's request bucket, by principal, over all the runs they call.
 	callers map[string]*inboundBucket
+	// drops counts dropInboundSessions. A check reads it before the first read its decision rests on and keeps
+	// its answer only if the count has not moved (remember, markUIReasserted): the two caches have a lock each.
+	drops atomic.Uint64
 }
 
 type inboundCached struct {
@@ -131,7 +135,14 @@ func (st *uiInboundState) cached(key string, now time.Time) (uiSession, bool) {
 // would ride: a session minted in the same second as the one it replaces has the same debounce key, and
 // would skip the profile arm the write may have changed. The worst case is one extra lookup per live caller,
 // as for a wholesale prune.
+//
+// A check already in flight must not put its pre-write answer back, so the order is: count the drop, then clear
+// each map under its own lock; remember and markUIReasserted compare the count under that same lock. A publisher
+// that holds a map's lock has either seen the new count and stands down, or got in before that map's clear,
+// which wipes it. The request that raced may still pass on its own check; its answer is not kept. All of this is
+// this replica's: another replica's caches last out their 30 seconds (inboundResolveTTL, uiReassertInterval).
 func (s *Server) dropInboundSessions() {
+	s.uiInbound.drops.Add(1)
 	s.uiInbound.mu.Lock()
 	clear(s.uiInbound.sessions)
 	s.uiInbound.mu.Unlock()
@@ -163,17 +174,19 @@ func inboundDropsOn(r *http.Request) bool {
 }
 
 // dropInboundOnWrite drops the inbound session cache (dropInboundSessions) once a write under inboundDropRoots
-// has answered below 400, so a policy, profile or grant change reaches a live caller's next request instead of
-// its next lookup. It runs after the handler, so after the write has committed: a session admitted meanwhile
-// is the one the write is racing, and ends with the window. Every such route is covered here, a held change's
-// approval and a unit admin's scoped write included, rather than at each place the store is written.
+// has answered below 400, so a policy, profile or grant change reaches a live caller's next request on this
+// replica instead of its next lookup; another replica's cache lasts out its window. It drops as the status
+// leaves (inboundDropWriter), since a large answer reaches the client before the handler returns, and again after
+// the handler, in case it wrote that status before committing. A check in flight meanwhile keeps nothing
+// (dropInboundSessions). Every such route is covered here, a held change's approval and a unit admin's scoped
+// write included, rather than at each place the store is written.
 func (s *Server) dropInboundOnWrite(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !inboundDropsOn(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		ww := middleware.NewWrapResponseWriter(&inboundDropWriter{ResponseWriter: w, s: s}, r.ProtoMajor)
 		next.ServeHTTP(ww, r)
 		if ww.Status() < http.StatusBadRequest {
 			s.dropInboundSessions()
@@ -181,9 +194,33 @@ func (s *Server) dropInboundOnWrite(next http.Handler) http.Handler {
 	})
 }
 
-func (st *uiInboundState) remember(key string, sess uiSession, now time.Time) {
+// inboundDropWriter sits under the status-recording writer, which sends every status through WriteHeader, a first
+// Write's and a Flush's included. It drops the inbound session cache before a status below 400 goes out, so a
+// client that has heard the write succeed cannot ride the cache on its next request. No route under
+// inboundDropRoots hijacks.
+type inboundDropWriter struct {
+	http.ResponseWriter
+	s *Server
+}
+
+func (d *inboundDropWriter) WriteHeader(code int) {
+	if code >= http.StatusOK && code < http.StatusBadRequest {
+		d.s.dropInboundSessions()
+	}
+	d.ResponseWriter.WriteHeader(code)
+}
+
+func (d *inboundDropWriter) Flush() { _ = http.NewResponseController(d.ResponseWriter).Flush() }
+
+func (d *inboundDropWriter) Unwrap() http.ResponseWriter { return d.ResponseWriter }
+
+// remember keeps sess unless a drop has run since gen was read (dropInboundSessions).
+func (st *uiInboundState) remember(key string, sess uiSession, now time.Time, gen uint64) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	if st.drops.Load() != gen {
+		return
+	}
 	if st.sessions == nil {
 		st.sessions = map[string]inboundCached{}
 	} else if len(st.sessions) > maxInboundEntries {
@@ -335,12 +372,13 @@ func (s *Server) inboundTokenSession(w http.ResponseWriter, r *http.Request, run
 	if sess, ok := s.uiInbound.cached(key, now); ok {
 		return sess, true
 	}
+	gen := s.uiInbound.drops.Load()
 	sess, refusal, ok := s.admitInboundToken(w, r, runID, app, raw, "", uuid.Nil)
 	if refusal != nil {
 		refusal(context.WithoutCancel(r.Context()))
 	}
 	if ok {
-		s.uiInbound.remember(key, sess, now)
+		s.uiInbound.remember(key, sess, now, gen)
 	}
 	return sess, ok
 }

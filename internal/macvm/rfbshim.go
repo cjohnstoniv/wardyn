@@ -28,7 +28,8 @@ import (
 // messages it can frame and ends the session on any other, so a message it does not know never
 // crosses. Coordinates pass unchanged: RFB's origin is the top left on both sides. On a base whose
 // desktop is view only the shim also drops every key, pointer and paste message (RFBShim.ViewOnly),
-// whatever the gateway in front of it sent.
+// whatever the gateway in front of it sent. A run the control plane forces view only (RFBShim.ForceViewOnly)
+// also keeps the guest's clipboard from the viewer.
 
 // shimHandshakeWait bounds both handshakes and the credential request together.
 const shimHandshakeWait = 30 * time.Second
@@ -123,24 +124,48 @@ type RFBShim struct {
 	// Credential returns the run's VNC password (DesktopSecret.Credential). An error refuses the
 	// session before either side's handshake.
 	Credential func(ctx context.Context) (string, error)
-	// ViewOnly keeps every input message from the guest (BaseViewOnly).
+	// ViewOnly keeps every input message from the guest (BaseViewOnly, or ForceViewOnly).
 	ViewOnly bool
+	// ForceViewOnly is the control plane's setting for this boot (RunConfig.DesktopViewOnly). Its sessions
+	// also drop the server's cut text, which a run on a view-only base still gets: only a background run
+	// is forced, and watching one carries no clipboard out.
+	ForceViewOnly bool
 	// Log gets one line per refused or ended session, never the password; nil is slog.Default().
 	Log *slog.Logger
 }
 
 // BaseViewOnly says whether the run in runDir boots a base without desktop control, from the base's
-// own manifest rather than anything the gateway said. A run or base it cannot read counts as view only.
+// own manifest rather than anything the gateway said. A resumed kept machine boots its own disk, so it reads
+// the manifest copy in its kept folder: the Mac's base may since have been replaced or gone. A run or base it
+// cannot read counts as view only.
 func BaseViewOnly(runDir string) bool {
 	cfg, err := ReadRunConfig(runDir)
 	if err != nil {
 		return true
 	}
-	m, err := ReadManifest(cfg.BaseDir)
+	from := cfg.BaseDir
+	if k := cfg.Kept; k != nil && k.Mode == KeptResume {
+		if from, err = keptDirOf(runDir, k.ID); err != nil {
+			return true
+		}
+	}
+	m, err := ReadManifest(from)
 	return err != nil || m.Desktop != DesktopControl
 }
 
 var _ DesktopShim = (*RFBShim)(nil)
+
+// relay is one session's filter. DesktopForcedViewOnly reads it too, so its answer is what a session does.
+func (s *RFBShim) relay() *rfbRelay {
+	return &rfbRelay{viewOnly: s.ViewOnly, dropServerCuts: s.ForceViewOnly}
+}
+
+// DesktopForcedViewOnly says this shim's sessions are forced view only: no input reaches the guest and no
+// clipboard reaches the viewer. The helper reports it in Status.
+func (s *RFBShim) DesktopForcedViewOnly() bool {
+	r := s.relay()
+	return r.viewOnly && r.dropServerCuts
+}
 
 // ServeDesktop serves one session and closes both connections.
 func (s *RFBShim) ServeDesktop(client, guest net.Conn) {
@@ -181,7 +206,7 @@ func (s *RFBShim) ServeDesktop(client, guest net.Conn) {
 	_ = guest.SetDeadline(time.Time{})
 	_ = client.SetDeadline(time.Time{})
 
-	r := &rfbRelay{viewOnly: s.ViewOnly}
+	r := s.relay()
 	r.bpp.Store(int32(serverInit[4]))
 	var once sync.Once
 	var first error
@@ -355,6 +380,7 @@ type rfbRelay struct {
 	bpp                    atomic.Int32 // bits per pixel of the server's rectangles, as the viewer last set
 	clientCuts, serverCuts atomic.Int64
 	viewOnly               bool
+	dropServerCuts         bool
 	inputDropped           atomic.Int64 // key, pointer and paste messages kept from a view-only guest
 }
 
@@ -482,6 +508,15 @@ func (x *rfbRelay) cut(w *bufio.Writer, r *bufio.Reader, h []byte, count *atomic
 	return err
 }
 
+// dropServerCut reads and discards a ServerCutText whose type byte is head. It still counts in serverCuts.
+func (x *rfbRelay) dropServerCut(r *bufio.Reader, head []byte) error {
+	h := append(head, make([]byte, 7)...)
+	if _, err := io.ReadFull(r, h[1:]); err != nil {
+		return err
+	}
+	return x.cut(bufio.NewWriter(io.Discard), r, h, &x.serverCuts)
+}
+
 // serverMsgs carries the server's FramebufferUpdate (in the kept encodings), SetColourMapEntries, Bell
 // and ServerCutText to the viewer.
 func (x *rfbRelay) serverMsgs(r *bufio.Reader, w *bufio.Writer) error {
@@ -502,6 +537,10 @@ func (x *rfbRelay) serverMsgs(r *bufio.Reader, w *bufio.Writer) error {
 		case 2: // Bell
 			err = w.WriteByte(t)
 		case 3: // ServerCutText
+			if x.dropServerCuts {
+				err = x.dropServerCut(r, head)
+				break
+			}
 			var h []byte
 			if h, err = rfbPass(w, r, head, 7); err == nil {
 				err = x.cut(w, r, h, &x.serverCuts)

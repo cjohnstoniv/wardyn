@@ -72,14 +72,26 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
   if (run === null || (failed && !loaded)) {
     return <ErrorState as="h1" onRetry={failed ? reload : undefined} />;
   }
-  if (!loaded) return null;
+  // UXR-48: the badge and the title, drawn as placeholders while the launched run loads, not a blank page.
+  if (!loaded) {
+    return (
+      <section data-testid="launched-loading" aria-busy="true" className="flex flex-col items-center gap-4 text-center">
+        <span className="h-5 w-16 animate-pulse rounded-full bg-muted motion-reduce:animate-none" />
+        <span className="h-8 w-72 max-w-full animate-pulse rounded bg-muted motion-reduce:animate-none" />
+      </section>
+    );
+  }
 
   const queue = run.queue;
   // A scheduled run waits for its time, not for a place in line: it says when it starts and what is checked then.
   const scheduled = queue && scheduledWait(run);
   const body = scheduled
     ? undefined
-    : waiting ? queue && waitingBody(queue.reason, pool) : starting ? NR_LAUNCH.STARTING_BODY : undefined;
+    : waiting ? queue && waitingBody(queue.reason, pool, queue.limit_sentence) : starting ? NR_LAUNCH.STARTING_BODY : undefined;
+  // A pool wait's sentence is the create's last warning. The run page says why it waits in its own panel, so
+  // carrying the create's copy there would show a second sentence that can differ once the wait has changed.
+  const carried = created?.warnings ?? [];
+  const launchWarnings = created?.state === "QUEUED" && created.queue && !scheduledWait(created) ? carried.slice(0, -1) : carried;
   const kill = async (id: string) => {
     setKilling(null);
     setKillFailed("");
@@ -148,7 +160,7 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
         <Button type="button" variant="outline" onClick={startAnother}>
           {NR_LAUNCH.START_ANOTHER}
         </Button>
-        <Link to={`/runs/${encodeURIComponent(run.id)}`} state={{ launchWarnings: created?.warnings ?? [] }} className={buttonVariants()}>
+        <Link to={`/runs/${encodeURIComponent(run.id)}`} state={{ launchWarnings }} className={buttonVariants()}>
           {NR_LAUNCH.VIEW_RUN}
         </Link>
       </div>

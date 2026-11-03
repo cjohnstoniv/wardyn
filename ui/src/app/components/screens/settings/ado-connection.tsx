@@ -58,6 +58,12 @@ import type { SCMAccessPAT } from "../../../lib/types/ado-pat";
 import { AdoPatBody, patToneClass } from "./ado-pat-panel";
 import type { SetupStatus } from "../../../lib/types";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
+import { CARD_STATUS } from "../../wardyn/copy/card-status";
+
+// The collapsed card's pill for a state that needs the person, so it stands out the way Host's does.
+const NEEDS_YOU = { tone: "attention", label: CARD_STATUS.NEEDS_ATTENTION } as const;
+// With several organisations the card has no single state to state; count the ones that need the person.
+const ORGS_SUMMARY = (n: number, needYou: number) => `${n} organisations${needYou > 0 ? ` · ${needYou} need you` : ""}`;
 
 export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus; onChanged: () => void }) {
   const { connecting, connect, connectFallback, blockedUrl } = useAdoConnect();
@@ -95,9 +101,15 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
   };
   if (!access || access.state === "") return null;
   if (ownRows.length >= 2) {
+    const needYou = ownRows.filter((row) => {
+      const tone = patCardView(row, PROVIDERS.KIND_AZURE_DEVOPS)?.chip.tone;
+      return tone === "warning" || tone === "danger";
+    }).length;
     return (
       <CollapsibleCard
         title={PROVIDERS.KIND_AZURE_DEVOPS}
+        summary={ORGS_SUMMARY(ownRows.length, needYou)}
+        status={needYou > 0 ? NEEDS_YOU : undefined}
         id="azure-devops"
         ref={sectionRef}
         tabIndex={-1}
@@ -141,6 +153,7 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
       <CollapsibleCard
         title={patView.title}
         summary={<span className={patToneClass[patView.chip.tone]}>{patView.chip.label}</span>}
+        status={patView.refused || patView.chip.tone === "warning" || patView.chip.tone === "danger" ? NEEDS_YOU : undefined}
         id="azure-devops"
         ref={sectionRef}
         tabIndex={-1}
@@ -175,6 +188,7 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
     <CollapsibleCard
       title={PROVIDERS.KIND_AZURE_DEVOPS}
       summary={summary}
+      status={scmAccessNeedsConnect(access.state, access.cause) || chip?.tone === "warning" || chip?.tone === "danger" ? NEEDS_YOU : undefined}
       id="azure-devops"
       ref={sectionRef}
       tabIndex={-1}

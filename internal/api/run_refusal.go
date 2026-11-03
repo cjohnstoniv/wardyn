@@ -67,7 +67,7 @@ func (f *runRefusal) write(s *Server, w http.ResponseWriter, r *http.Request) bo
 	} else if f.err != nil {
 		writeServerError(w, r, f.operation, f.err)
 	} else if f.decision != nil && f.status == 0 {
-		s.refuse(w, r, *f.decision)
+		s.refuseOn(w, r, *f.decision, f.body.Field)
 	} else {
 		if f.decision != nil {
 			s.recordRefusal(r.Context(), r, *f.decision)

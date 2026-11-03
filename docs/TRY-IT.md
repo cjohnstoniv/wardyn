@@ -1,7 +1,7 @@
 # Try Wardyn in 10 minutes
 
 - The guided walkthrough.
-- It picks up where the [README quickstart](../README.md) stops: `make setup` has finished, the UI is open at <http://localhost:8080>, and `wardyn setup status` says what model access is still missing.
+- It picks up where the [README quickstart](../README.md) stops: `make setup` has finished, the UI is open at <http://localhost:8080>, and `wardyn setup status` says whether model access is set up (optional: only agent-harness runs need it).
 - Easiest first: a **governance demo** (no keys), a **real Claude Code run** (bring an Anthropic API key), and **record, then replay confined** to onboard your own work.
 
 ## Before you start
@@ -24,7 +24,7 @@
 >   | `make setup` | the installer already did it; `docker compose up -d` re-ups |
 >   | `make compose-down` | `docker compose down` |
 >   | `make reset` | `docker compose down -v && docker compose up -d` — wipes runs, audit and recordings; leaves `.env`, and so the age key |
->   | `make agent-images-core` | the installer pins `claude-code` to `agent-base`, which ships no coding agent, and Setup's image row won't flag it. Build `wardyn/agent-claude-code:local` from a clone or [your own](operations/build-images.md#claude-sign-in-image), repoint that `WARDYN_AGENT_IMAGES` entry in `.env`, then `docker compose up -d` |
+>   | `make agent-images-core` | the installer pins `claude-code` to `agent-base`, which ships no coding agent, and Setup's image row says so. [Build one and repoint that entry](operations/build-images.md#claude-sign-in-image) |
 >   | `make doctor`, `make test-drive` | clone-only (`scripts/up.sh doctor`, [`scripts/test-drive.sh`](../scripts/test-drive.sh)); the console's Getting-started rail runs the same capability probes |
 >
 > - **`--policy-file examples/policies/<name>`** needs a file you do not have.

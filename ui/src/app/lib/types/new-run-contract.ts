@@ -247,6 +247,10 @@ export interface HarnessModelCredential {
   provider: string;
   kind: string;
   residency: string;
+  /** The model the provider's admin fixed for this harness; absent where the session chooses. */
+  model?: string;
+  /** The small model the provider's admin fixed for this harness; absent where none is set. */
+  fast_model?: string;
 }
 
 /** One included harness: whether it starts with the run, and its model credential (absent when it takes none or the choice is open). */

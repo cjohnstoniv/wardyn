@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -359,5 +360,94 @@ func TestDarwinInitTrustsTheRunCABeforeItAnswers(t *testing.T) {
 	}
 	if w := postInit(h, Init{}); w.Code != 200 || strings.Contains(w.Body.String(), "keychain_trust") {
 		t.Errorf("Init with no run CA = %d %s", w.Code, w.Body)
+	}
+}
+
+// A terminal exec on a real macOS kernel: the PTY opens, the child gets it as its controlling terminal
+// and the winsize, and the session ends with an exit frame, not an error frame. The attach path in the
+// runner resets the stream when the guest errors at once, so a failure here names the cause.
+func TestDarwinExecTTYRunsAShell(t *testing.T) {
+	_, _, h := newDarwinServer(t)
+	spec, _ := json.Marshal(ExecRequest{Argv: []string{"sh", "-c", `stty size; [ -t 0 ] && echo istty`}, TTY: true, Cols: 100, Rows: 30})
+	var body bytes.Buffer
+	if err := WriteFrame(&body, FrameSpec, spec); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/exec", &body))
+	var out strings.Builder
+	var exit []byte
+	rd := bytes.NewReader(w.Body.Bytes())
+	for {
+		typ, p, err := ReadFrame(rd)
+		if err != nil {
+			break
+		}
+		switch typ {
+		case FrameStdout:
+			out.Write(p)
+		case FrameError:
+			t.Fatalf("the guest errored at once: %s", p)
+		case FrameExit:
+			exit = p
+		}
+	}
+	if !bytes.Equal(exit, int32Payload(0)) || !strings.Contains(out.String(), "30 100") || !strings.Contains(out.String(), "istty") {
+		t.Fatalf("tty exec = %q, exit %v", out.String(), exit)
+	}
+}
+
+// A resize after the parent has closed its slave end still reaches the shell, and an exec with no size
+// (what `wardyn attach` opens before its first resize) gets a terminal too.
+func TestDarwinExecTTYResizeReachesTheShell(t *testing.T) {
+	_, _, h := newDarwinServer(t)
+	spec, _ := json.Marshal(ExecRequest{Argv: []string{"sh", "-c", `read _; stty size`}, TTY: true})
+	var body bytes.Buffer
+	for _, f := range []struct {
+		typ byte
+		p   []byte
+	}{{FrameSpec, spec}, {FrameResize, uint16Pair(120, 40)}, {FrameStdin, []byte("go\n")}} {
+		if err := WriteFrame(&body, f.typ, f.p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := httptest.NewRecorder()
+	// The shell waits on stdin; a lost line ends here, not at the suite's timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	h.ServeHTTP(w, httptest.NewRequestWithContext(ctx, "POST", "/v1/exec", &body))
+	var out strings.Builder
+	rd := bytes.NewReader(w.Body.Bytes())
+	for {
+		typ, p, err := ReadFrame(rd)
+		if err != nil {
+			break
+		}
+		switch typ {
+		case FrameStdout:
+			out.Write(p)
+		case FrameError:
+			t.Fatalf("the guest errored at once: %s", p)
+		}
+	}
+	if !strings.Contains(out.String(), "40 120") {
+		t.Fatalf("after a resize to 120x40, the shell printed %q", out.String())
+	}
+}
+
+func TestDarwinInitTurnsTheScreenLockOffBeforeItAnswersAndNeverFailsInit(t *testing.T) {
+	for _, off := range []bool{true, false} {
+		s, _, h := newDarwinServer(t)
+		calls := 0
+		s.ScreenLockOff = func(context.Context) bool {
+			if s.inited {
+				t.Error("the screen lock was handled after Init answered")
+			}
+			calls++
+			return off
+		}
+		if w := postInit(h, Init{}); w.Code != 200 || calls != 1 {
+			t.Errorf("off=%v: Init = %d after %d screen lock calls", off, w.Code, calls)
+		}
 	}
 }

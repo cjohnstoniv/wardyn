@@ -149,9 +149,12 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepMainDrive", foldCreate | foldPreflight | foldPreview},
 	{"stepModelProvider", foldCreate | foldPreflight | foldPreview},
 	{"stepAWSCLIProfile", foldCreate | foldPreflight | foldPreview},
+	{"stepAllowedModelsChecked", foldCreate | foldPreflight | foldPreview},
 	{"stepAutonomy", foldCreate | foldPreflight | foldPreview},
 	{"stepToolPolicy", foldCreate | foldPreflight | foldPreview},
 	{"stepMacOSHold", foldCreate | foldPreflight | foldPreview},
+	{"stepMacWindow", foldCreate | foldPreflight | foldPreview},
+	{"stepKeptMachine", foldCreate | foldPreflight | foldPreview},
 	{"stepGitHubCLIRepo", foldCreate | foldPreflight},
 	{"stepADOStanding", foldCreate | foldPreflight | foldPreview},
 	{"stepPATNarrowing", foldPreflight | foldPreview},
@@ -238,9 +241,11 @@ type foldStepDecl struct {
 }
 
 // runFoldStepDecls reads runFoldSteps itself, not its source: the names and
-// doors the loop will actually run, each with the declaration to scan.
+// doors the loop will actually run, each with the declaration to scan, found
+// in whichever non-test file of this package declares it.
 func runFoldStepDecls(t *testing.T, fset *token.FileSet) []foldStepDecl {
 	t.Helper()
+	methods := serverMethodDecls(t, fset)
 	var out []foldStepDecl
 	for _, st := range runFoldSteps {
 		full := runtime.FuncForPC(reflect.ValueOf(st.run).Pointer()).Name()
@@ -248,7 +253,43 @@ func runFoldStepDecls(t *testing.T, fset *token.FileSet) []foldStepDecl {
 		if !strings.Contains(full, "(*Server)."+name) {
 			t.Fatalf("runFoldSteps entry %s is not a (*Server) method expression", full)
 		}
-		out = append(out, foldStepDecl{name, st.modes, parseHandler(t, fset, "run_fold_steps.go", name)})
+		decl, ok := methods[name]
+		if !ok {
+			t.Fatalf("internal/api: no (*Server) method %s", name)
+		}
+		out = append(out, foldStepDecl{name, st.modes, decl})
+	}
+	return out
+}
+
+// serverMethodDecls maps each (*Server) method declared in this package's
+// non-test files to its declaration.
+func serverMethodDecls(t *testing.T, fset *token.FileSet) map[string]*ast.FuncDecl {
+	t.Helper()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]*ast.FuncDecl{}
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || len(fn.Recv.List) != 1 {
+				continue
+			}
+			if star, ok := fn.Recv.List[0].Type.(*ast.StarExpr); ok {
+				if id, ok := star.X.(*ast.Ident); ok && id.Name == "Server" {
+					out[fn.Name.Name] = fn
+				}
+			}
+		}
 	}
 	return out
 }
@@ -554,6 +595,22 @@ func modeSelector(n ast.Node) *ast.SelectorExpr {
 
 // parseHandler returns the named top-level method's body from an internal/api
 // source file.
+// parseFunc is file's plain function name, the same way parseHandler reads a method.
+func parseFunc(t *testing.T, fset *token.FileSet, file, name string) *ast.FuncDecl {
+	t.Helper()
+	f, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", file, err)
+	}
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == name {
+			return fn
+		}
+	}
+	t.Fatalf("%s: no function %s", file, name)
+	return nil
+}
+
 func parseHandler(t *testing.T, fset *token.FileSet, file, name string) *ast.FuncDecl {
 	t.Helper()
 	f, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
@@ -601,7 +658,8 @@ func serverMethodName(call *ast.CallExpr) string {
 }
 
 // The parity scan above sees Server methods only. These plain functions are launch gates too: the
-// request enums and the hold/interactive conflict. Review calls each one launch's validation calls.
+// request enums, the hold/interactive conflict and desktop_window's own 400. Review calls each one launch's
+// validation calls; the policy preview also asks desktop_window's.
 func TestPreflightCallsLaunchsPlainFunctionGates(t *testing.T) {
 	fset := token.NewFileSet()
 	calls := func(fn *ast.FuncDecl) map[string]bool {
@@ -618,12 +676,22 @@ func TestPreflightCallsLaunchsPlainFunctionGates(t *testing.T) {
 	}
 	launch := calls(parseHandler(t, fset, "runs_create_validate.go", "decodeAndValidateCreateRun"))
 	preflight := calls(parseHandler(t, fset, "preflight.go", "handlePreflightRun"))
-	for _, gate := range []string{"runRequestEnums", "interactiveToolApprovalsError", "agentRequirementError"} {
+	preview := calls(parseHandler(t, fset, "policy_preview.go", "handlePolicyPreview"))
+	// Preflight asks desktop_window's 400 through writeRequestFieldRefusal.
+	if preflight["writeRequestFieldRefusal"] {
+		for name := range calls(parseFunc(t, fset, "preflight.go", "writeRequestFieldRefusal")) {
+			preflight[name] = true
+		}
+	}
+	for _, gate := range []string{"runRequestEnums", "interactiveToolApprovalsError", "agentRequirementError", "desktopWindowRequestRefusal"} {
 		if !launch[gate] {
 			t.Errorf("launch no longer calls %s: re-point this guard", gate)
 		}
 		if !preflight[gate] {
 			t.Errorf("handlePreflightRun does not call %s, which launch's validation does", gate)
 		}
+	}
+	if !preview["desktopWindowRequestRefusal"] {
+		t.Error("handlePolicyPreview does not call desktopWindowRequestRefusal: a bogus desktop_window would pass Review and 400 at launch")
 	}
 }

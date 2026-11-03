@@ -34,6 +34,10 @@ import (
 // shares one into the guest (virtiofs): the org's placement says it at create, and here at dispatch.
 const VMNoFolderShare = "this runner cannot share a folder into a Linux VM sandbox: its version predates folder shares into VMs, or its QEMU image has no working virtiofsd"
 
+// VMNoDriveShare refuses a Linux VM run that carries a drive on a runner whose caps do not say it can
+// share one into the guest.
+const VMNoDriveShare = "This runner's version can't attach drives to a Linux VM. Update the runner, or run without drives."
+
 // MacOSVMNotOffered refuses a macOS VM run on a runner whose caps carry no MacOSVM; runner is how the
 // sentence names it.
 func MacOSVMNotOffered(runner string) string {
@@ -222,6 +226,9 @@ func (s *Substrate) checkVMCaps(spec runner.SandboxSpec) error {
 	// Nor a VM that carries a folder of a runner that cannot share one into the guest.
 	if len(spec.Mounts) > 0 && !c.LinuxVM.Virtiofs {
 		return runnerwire.Refuse(VMNoFolderShare)
+	}
+	if len(spec.Drives) > 0 && !c.LinuxVM.Drives {
+		return runnerwire.Refuse(VMNoDriveShare)
 	}
 	return nil
 }
@@ -526,7 +533,26 @@ func (s *Substrate) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte
 	if err := s.own(ref); err != nil {
 		return err
 	}
+	if err := s.checkRevivedModelList(cfgJSON); err != nil {
+		return err
+	}
 	return s.call(ctx, runnerwire.MethodReplaceProxy, runnerwire.ReplaceProxyArgs{Ref: ref, CfgJSON: cfgJSON}, nil)
+}
+
+// checkRevivedModelList refuses, before anything is sent, a revived config that limits the run's
+// models on a runner that did not advertise the list: an older runner would start the replacement
+// proxy without it, admitting every model.
+func (s *Substrate) checkRevivedModelList(cfgJSON []byte) error {
+	var head struct {
+		AllowedModels *[]string `json:"allowed_models"`
+	}
+	if err := json.Unmarshal(cfgJSON, &head); err != nil {
+		return fmt.Errorf("remote: read the revived proxy config: %w", err)
+	}
+	if c, _ := s.Caps(); head.AllowedModels != nil && !slices.Contains(c.ProxySettings, runnerwire.ProxySettingAllowedModels) {
+		return &ProxySettingError{Setting: runnerwire.ProxySettingAllowedModels}
+	}
+	return nil
 }
 
 func (s *Substrate) EnsureProxyImage(ctx context.Context) error {
@@ -562,6 +588,17 @@ func (s *Substrate) ReclaimMacDisk(ctx context.Context, mount types.DriveMount) 
 		return "", runner.ErrDriveInUse
 	}
 	return res.Outcome, nil
+}
+
+// KeptMachine asks this runner's Mac to act on a kept machine's folder (kept_machine). A runner whose
+// caps do not say it keeps machines is never asked.
+func (s *Substrate) KeptMachine(ctx context.Context, args runnerwire.KeptMachineArgs) (runnerwire.KeptMachineResult, error) {
+	var res runnerwire.KeptMachineResult
+	if c, ok := s.Caps(); !ok || c.MacOSVM == nil || !c.MacOSVM.KeptMachines {
+		return res, runnerwire.Refuse("this runner keeps no machines")
+	}
+	err := s.call(ctx, runnerwire.MethodKeptMachine, args, &res)
+	return res, err
 }
 
 // RecoverOutput reads the runner-side output buffer into w. For a live run adopted after a restart the

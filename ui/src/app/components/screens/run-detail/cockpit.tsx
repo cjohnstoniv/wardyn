@@ -30,6 +30,7 @@ import { RunCanvas } from "./canvas";
 import { RunStatusStrip, useEvidenceFacts } from "./status-strip";
 import { isMacOSVM } from "../../../lib/types/machine-kind";
 import { RunFailureBlock } from "./failure-block";
+import { AllowedModelsCard } from "./allowed-models-card";
 import { LocalModelsCard } from "./local-models-card";
 import { LoginSandboxNote } from "./login-sandbox-note";
 import { TerminalPane } from "./terminal-notice";
@@ -200,6 +201,7 @@ export function Cockpit({
     <div className="flex min-h-0 flex-1 flex-col">
       <RunStatusStrip ctx={ctx} />
       <LocalModelsCard run={run} />
+      <AllowedModelsCard run={run} />
       <div className="flex min-h-0 flex-1 flex-col">
         <RunCanvas ctx={ctx} />
       </div>

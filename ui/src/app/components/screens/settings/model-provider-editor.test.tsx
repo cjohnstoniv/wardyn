@@ -329,13 +329,14 @@ describe("E3 — a new Bedrock provider (#538)", () => {
     expect(screen.getByText(E.MODEL_HINT_BEDROCK)).toBeInTheDocument();
   });
 
-  it("How people sign in flips to Bearer: the IDC-only fields drop, Region stays, the provides line becomes a key line", async () => {
+  it("How people sign in flips to Bearer: the IDC-only fields and heading drop, the region is labelled for AWS, the provides line becomes a key line", async () => {
     const { user } = renderEditor();
     await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.bedrock_sso }));
     await user.click(screen.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_BEARER }));
 
     expect(screen.getByText(E.PROVIDES_KEY)).toBeInTheDocument();
-    expect(screen.getByLabelText(E.REGION)).toBeInTheDocument();
+    expect(screen.getByLabelText(E.REGION_BEARER)).toBeInTheDocument();
+    expect(screen.queryByText(E.IDC_GROUP)).toBeNull();
     expect(screen.queryByLabelText(AGENTS.FIELD_SSO_START_URL)).toBeNull();
     expect(screen.queryByLabelText(AGENTS_EXTRA.FIELD_SSO_ACCOUNT_ID)).toBeNull();
     expect(screen.queryByLabelText(AGENTS_EXTRA.FIELD_SSO_ROLE_NAME)).toBeNull();
@@ -390,7 +391,7 @@ describe("E3 — a new Bedrock provider (#538)", () => {
     expect(within(dialog()).getByText(MODEL_PROVIDERS.KIND.bedrock_bearer)).toBeInTheDocument();
     expect(screen.getByText(E.PROVIDES_KEY)).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_BEARER })).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByLabelText(E.REGION)).toHaveValue("us-east-1");
+    expect(screen.getByLabelText(E.REGION_BEARER)).toHaveValue("us-east-1");
     expect(screen.queryByLabelText(AGENTS.FIELD_SSO_START_URL)).toBeNull();
   });
 });

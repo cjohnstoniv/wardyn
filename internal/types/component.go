@@ -244,7 +244,7 @@ func (d ComponentDefinition) Validate(validHost func(string) error, personDefine
 	if err := d.validateCLI(personDefined); err != nil {
 		return err
 	}
-	if err := d.validateMCP(); err != nil {
+	if err := d.validateMCP(personDefined); err != nil {
 		return err
 	}
 	if len(d.Secrets) > MaxComponentSecrets {
@@ -831,6 +831,8 @@ const (
 	MaxComponentMCPHarnesses = 8
 	MaxComponentMCPArgs      = 32
 	MaxComponentMCPArgBytes  = 1024
+	// MaxComponentMCPGatewayAudience bounds an audience, which is written into every token.
+	MaxComponentMCPGatewayAudience = 256
 )
 
 // ComponentMCP is an MCP server. Transport decides which kind:
@@ -855,6 +857,11 @@ type ComponentMCP struct {
 	Transport string `json:"transport"` // http | stdio
 	// Launch is a local server's command.
 	Launch *ComponentMCPLaunch `json:"launch,omitempty"`
+	// GatewayAudience, when set, has the run's proxy send the run's signed identity
+	// (internal/gatewayidentity) to this server, with this as the token's audience.
+	// It is valid on an organisation's remote server alone: a person's own server
+	// could name a real gateway's audience and be handed a token good at that gateway.
+	GatewayAudience string `json:"gateway_audience,omitempty"`
 }
 
 // MCPURLDestination checks an MCP server URL and returns its host and port as

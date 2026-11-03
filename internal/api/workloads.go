@@ -191,12 +191,13 @@ func (s *Server) answerWorkload(w http.ResponseWriter, r *http.Request, ws store
 }
 
 // viewServiceStatus is v's run's service health as the run routes serve it at now: unknown
-// while paused or stale, with the observation time kept. Nil when the run has no health yet.
+// while paused or stale, with the observation time kept, and Wardyn's own check beside it when the
+// run has a reading of one. Nil when the run has no health yet.
 func viewServiceStatus(v store.WorkloadView, now time.Time) *types.RunServiceStatus {
 	if v.RunState == "" || v.ServiceHealth == "" {
 		return nil
 	}
-	run := []types.AgentRun{{PausedAt: v.RunPausedAt, ServiceStatus: &types.RunServiceStatus{Health: types.ServiceHealthState(v.ServiceHealth)}}}
+	run := []types.AgentRun{{PausedAt: v.RunPausedAt, ServiceStatus: &types.RunServiceStatus{Health: types.ServiceHealthState(v.ServiceHealth), Probe: v.ServiceProbe}}}
 	if v.ServiceObservedAt != nil {
 		run[0].ServiceStatus.ObservedAt = *v.ServiceObservedAt
 	}
@@ -212,7 +213,7 @@ func workloadOut(v store.WorkloadView, tier workspaceReadTier, now time.Time) cl
 		Description: v.Description, RunIn: v.RunIn, RestartKey: v.RestartKey, Generation: v.Generation,
 		CurrentGeneration: v.CurrentGeneration, RunID: v.CurrentRunID, State: string(v.RunState), CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt}
 	if st := viewServiceStatus(v, now); st != nil {
-		out.State += "/" + string(st.Health)
+		out.State += "/" + string(viewServiceHealth(v, st, now)) // the worse of the two readings, as the run list's chip
 	}
 	if tier == workspaceReadFull { // the digest of an intent whose host axis is withheld would let a reader test guesses at it
 		out.Digest = v.Digest

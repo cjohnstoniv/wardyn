@@ -28,7 +28,7 @@ import { Textarea } from "../../ui/textarea";
 import { Field } from "../../wardyn/form-primitives";
 import { SafetyMeter } from "../../wardyn/safety-meter";
 import { Note } from "../governance/display";
-import { limitChips, limitsBoundNothing } from "../governance/limit-chips";
+import { profileLimitsContent } from "../governance/limit-chips";
 import { ExplainGrid } from "./explain-grid";
 
 // The profile bound to this type, by governance's own priority rule (highest
@@ -180,19 +180,12 @@ export function UserTypeEditor({
               <>
                 <p className="mt-2 text-body text-foreground">{UT.CEILING_PROFILE(profile.name)}</p>
                 <div className="mt-3 max-w-md">
-                  <SafetyMeter spec={profile.ceiling} />
+                  <SafetyMeter spec={profile.effective?.ceiling ?? profile.ceiling} />
                 </div>
-                {(() => {
-                  const chips = limitChips(profile.limits);
-                  return (
-                    <div className="mt-3">
-                      <p className="text-xs text-muted-foreground">{GOV.LIMITS_TITLE}</p>
-                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-body">
-                        {chips.length > 0 ? chips : limitsBoundNothing(profile.limits) && GOV.LIMITS_NONE}
-                      </div>
-                    </div>
-                  );
-                })()}
+                <div className="mt-3">
+                  <p className="text-xs text-muted-foreground">{GOV.LIMITS_TITLE}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-body">{profileLimitsContent(profile)}</div>
+                </div>
               </>
             ) : (
               <Note>{UT.CEILING_NONE}</Note>

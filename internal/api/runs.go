@@ -223,7 +223,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	runID := uuid.New()
 	// The run's one target is chosen from its own id, before an identity exists to leak on a refusal.
 	placed := types.AgentRun{ID: runID}
-	if f.place.apply(&placed, enforced).write(s, w, r) {
+	// A window at start is opened under the grant this create leaves (macWindowRecordPending), judged again at the open.
+	if f.place.apply(&placed, enforced).write(s, w, r) || s.macWindowRecordPending(w, r, runID, req.DesktopWindow, createdByType, createdBy, true) {
 		return
 	}
 	intent := launchIntentFor(asked)
@@ -361,7 +362,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	stampHarnessSet(createData, f.harnesses, f.image)
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created, s.runnerNameOf(ctx, created)))
-	s.markGovernanceExempt(ctx, createData)
+	s.markRunCreateExempt(ctx, createDigestInput(req, f.carriedImage), createData)
 	s.stampBreakGlass(ctx, runID, createdByType, createdBy, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))
@@ -420,11 +421,21 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 func (s *Server) wireRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, run types.AgentRun, now time.Time, spec types.RunPolicySpec,
 	req createRunRequest, comps runComponents, delivery localJudgement,
 ) (grantWiring, []string, bool) {
-	gw, ok := s.persistRunGrants(ctx, w, r, run.ID, now, spec, run.Placement, delivery)
-	// The git broker's repositories, then the GitHub CLI's grants over them.
-	if !ok || !s.persistGitHubCLIGrants(ctx, w, r, run.ID, now, req.Repo, spec.WorkspaceRepos, comps, &gw) {
+	// A run whose capabilities leave out code_write gets read-only GitHub tokens, and its proxy
+	// refuses the push itself (gitPushWithheld).
+	withheld, refusal := s.gitPushWithheldFor(ctx, run, spec)
+	if refusal.write(s, w, r) {
 		return grantWiring{}, nil, false
 	}
+	if withheld.github {
+		spec.EligibleGrants = readOnlyGitHubGrants(spec.EligibleGrants)
+	}
+	gw, ok := s.persistRunGrants(ctx, w, r, run.ID, now, spec, run.Placement, delivery)
+	// The git broker's repositories, then the GitHub CLI's grants over them.
+	if !ok || !s.persistGitHubCLIGrants(ctx, w, r, run, now, req.Repo, spec.WorkspaceRepos, comps, &gw) {
+		return grantWiring{}, nil, false
+	}
+	gw.gitPushWithheld = withheld.hosts(gw.adoGitHosts)
 	warnings := append([]string(nil), gw.warnings...)
 	warnings = append(warnings, s.applySSHLaneWarnings(ctx, req, run.ID, &gw)...)
 	return gw, warnings, true
@@ -450,7 +461,8 @@ type runRowInput struct {
 func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 	req, f, placed := in.req, in.f, in.placed
 	operatorOwned := operatorOwnedRequest(ctx)
-	service, _ := frozenRunService(req.Service) // serviceRefusal has already held it valid
+	service, _ := frozenRunService(req.Service)          // serviceRefusal has already held it valid
+	imageInput := createDigestInput(req, f.carriedImage) // what the digest rule was asked about, for a revive to ask again
 	return types.AgentRun{
 		ID:               in.runID,
 		CreatedAt:        in.now,
@@ -469,7 +481,9 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		MachineKind:      types.MachineKind(req.MachineKind).Normalize(),
 		VMMachine:        macOSBaseMachine(req), // a macOS VM's picked base, until the Mac records its machine
 		Experience:       req.Experience,
+		ImageInput:       &imageInput,
 		Shape:            storedRunShape(req),
+		CorrelationID:    correlationID(req.CorrelationID),
 		Service:          service,
 		LocalFolder:      req.LocalFolder,
 		WorkspacePath:    in.workspacePath,
@@ -481,6 +495,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		// nothing reads back.
 		AutonomyLevel: f.autonomy.Level,
 		InnerWalls:    f.innerWalls,
+		WallPreset:    f.source.wallPreset,
 		// The id alone — mpChoice.provider.Kind rides on the audit snapshot
 		// instead (AgentRun.ModelProviderID's own doc explains why).
 		// provider.ID is "" when mpChoice.chosen is false.

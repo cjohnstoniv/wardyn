@@ -81,6 +81,48 @@ describe("RecordingTab levels (#2968, M7 RunStrip, Replay, States 8)", () => {
     expect(strip).not.toHaveTextContent("Terminal only");
   });
 
+  it.each([
+    ["terminal", "Recording · Terminal only", "The screen is not recorded. The agent's output isn't recorded."],
+    ["screen_actions", "Recording · Screen and actions", "The screen is kept while someone watches it. It isn't masked. The agent's output isn't recorded."],
+  ] as const)(
+    "a macOS VM run declined by its runner at %s keeps the level's own words, then says the agent's output isn't recorded", (level, title, note) => {
+      tab({ level, notRecorded: "runner_declined", macOS: true, screen: true });
+      const strip = screen.getByTestId("recording-level-strip");
+      expect(strip).toHaveTextContent(`${title}${note}`);
+      expect(strip).not.toHaveTextContent("The desktop is not recorded");
+      expect(strip).not.toHaveTextContent("Recording off");
+      expect(strip).not.toHaveTextContent(RUN_RECORDING.runner_declined);
+    });
+
+  it("says what the screen recording keeps at Screen and actions only on a run that has a screen", () => {
+    const { unmount } = tab({ level: "screen_actions", screen: true });
+    expect(screen.getByTestId("recording-level-strip")).toHaveTextContent("Recording · Screen and actionsThe screen is kept while someone watches it. It isn't masked.");
+    unmount();
+    tab({ level: "screen_actions" });
+    expect(screen.getByTestId("recording-level-strip")).toHaveTextContent(/^Recording · Screen and actions$/);
+  });
+
+  it("the empty state of a macOS VM run names both ways a recording appears; an interactive run has no agent clause; a finished run is neutral; Linux keeps the agent-process sentence", () => {
+    const { unmount } = tab({ level: "terminal", notRecorded: "runner_declined", macOS: true });
+    expect(screen.getByText("This run has no recording yet. One appears when a console or SSH terminal on this run closes, or when a task's agent finishes.")).toBeInTheDocument();
+    unmount();
+    const interactive = tab({ level: "terminal", macOS: true, interactive: true });
+    expect(screen.getByText("This run has no recording yet. One appears when a console or SSH terminal on this run closes.")).toBeInTheDocument();
+    expect(screen.queryByText(/agent finishes/)).not.toBeInTheDocument();
+    interactive.unmount();
+    const finished = tab({ level: "terminal", macOS: true, ended: true, notRecorded: "runner_declined" });
+    expect(screen.getByText("No recording is available for this run.")).toBeInTheDocument();
+    expect(screen.queryByText(/yet/)).not.toBeInTheDocument();
+    finished.unmount();
+    tab({ level: "terminal", notRecorded: "runner_declined" });
+    expect(screen.getByText("This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox.")).toBeInTheDocument();
+  });
+
+  it("a macOS VM run at off still says it is not recorded", () => {
+    tab({ level: "off", notRecorded: "policy_off", macOS: true });
+    expect(screen.getByTestId("recording-level-strip")).toHaveTextContent("Recording off");
+  });
+
   it("a desktop recording marks its gap, jumps from the action log and shows the chain verdict", async () => {
     getDesktopRecording.mockResolvedValue({
       raw: "{}",
@@ -231,5 +273,58 @@ describe("RecordingTab levels (#2968, M7 RunStrip, Replay, States 8)", () => {
     listAudit.mockResolvedValue([]);
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByTestId("desktop-replay")).toBeInTheDocument();
+  });
+});
+
+describe("RecordingTab session picker on a macOS VM run", () => {
+  beforeEach(() => listAudit.mockResolvedValue([]));
+  const agent = (over: Record<string, unknown> = {}, id = "a1"): AuditEvent =>
+    ({ id, time: new Date().toISOString(), actor_type: "system", actor: "wardynd", action: "session.recording.write", target: `${RUN}~agent`, outcome: "success", data: { session: "agent", ...over } }) as AuditEvent;
+  const terminal = { ...agent(), id: "t1", actor: "maya", actor_type: "human", target: `${RUN}~console-1`, data: { session: "console-1" } } as AuditEvent;
+  const open = async (name: string | RegExp) => {
+    fireEvent.pointerDown(screen.getByRole("combobox", { name: "Recorded session" }), { button: 0, ctrlKey: false, pointerType: "mouse" });
+    return screen.findAllByRole("option", { name });
+  };
+
+  it("drops the Agent session entry on a macOS VM run and keeps it on any other", async () => {
+    const mac = tab({ macOS: true, sessions: [agent(), terminal], selected: `${RUN}~agent` });
+    expect(await open(/Agent output/)).toHaveLength(1);
+    expect(screen.queryByRole("option", { name: "Agent session" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: new RegExp(`^Session ended ${clockTime(terminal.time)} · maya`) })).toBeInTheDocument();
+    mac.unmount();
+    tab({ sessions: [terminal], selected: RUN });
+    expect(await open("Agent session")).toHaveLength(1);
+  });
+
+  it("lets the trigger shrink at a phone's width in a row that wraps", () => {
+    tab({ macOS: true, sessions: [agent()], selected: `${RUN}~agent` });
+    const trigger = screen.getByRole("combobox", { name: "Recorded session" });
+    expect(trigger.className).toContain("w-full");
+    expect(trigger.className).toContain("max-w-[280px]");
+    expect(trigger.className).not.toMatch(/(^| )w-\[280px\]/);
+    expect(trigger.parentElement!.className).toContain("flex-wrap");
+  });
+
+  it("puts one note under the picker for each way the picked recording is not whole, and none for a whole one", () => {
+    const first = tab({ macOS: true, sessions: [agent({ incomplete: true, read_error: true, gap_bytes: 12 })], selected: `${RUN}~agent` });
+    const notes = screen.getByTestId("recording-session-notes");
+    expect(within(notes).getAllByText(/./).map((n) => n.textContent)).toEqual([
+      "The runner's copy ended early; the rest of the output is missing.",
+      "The start of the output is missing; the runner had already discarded it.",
+    ]);
+    expect(screen.getByRole("combobox", { name: "Recorded session" })).toHaveTextContent("· incomplete");
+    first.unmount();
+    tab({ macOS: true, sessions: [agent(), terminal], selected: `${RUN}~console-1` });
+    expect(screen.queryByTestId("recording-session-notes")).toBeNull();
+  });
+
+  it("the player's footer on a macOS VM run names the recording level, not the runner", () => {
+    const recording = { header: { version: 2, width: 80, height: 24 }, events: [] } as never;
+    const mac = tab({ macOS: true, recording, sessions: [agent()], selected: `${RUN}~agent` });
+    expect(screen.getByText(/^Recorded at this run's recording level\./)).toBeInTheDocument();
+    expect(screen.queryByText(/runner supports session capture/)).not.toBeInTheDocument();
+    mac.unmount();
+    tab({ recording, sessions: [terminal], selected: RUN });
+    expect(screen.getByText(/Recorded when the run's runner supports session capture/)).toBeInTheDocument();
   });
 });

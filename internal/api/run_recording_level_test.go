@@ -86,7 +86,7 @@ func TestRecordingChoiceAtDispatch(t *testing.T) {
 		{"member inline off, ceiling chose off", types.AgentRun{}, dispatchCeiling{recordingBound: true, recording: types.RecordingOff}, nil, types.RecordingOff},
 		{"site unreadable", types.AgentRun{}, dispatchCeiling{}, context.DeadlineExceeded, types.RecordingTerminal},
 	} {
-		if got := recordingChoice(tc.run, off, tc.c, types.SiteConfig{}, tc.siteErr).Resolve(); got != tc.want {
+		if got := recordingChoice(tc.run, off, tc.c, types.SiteConfig{}, tc.siteErr, "").Resolve(); got != tc.want {
 			t.Errorf("%s: level %q, want %q", tc.name, got, tc.want)
 		}
 	}

@@ -173,7 +173,7 @@ test("shows the empty state when no policies are defined", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "No policies yet" })).toBeVisible();
   await expect(
     page.getByText(
-      "A policy overrides the default for specific runs — tighter or looser, referenced by its ID when you create a run.",
+      "A stored policy is a starting point people can pick when they create a run. For anyone under a governance profile it is clamped to that profile's ceiling, so it can narrow it but never widen it.",
     ),
   ).toBeVisible();
   // The empty-state action button (second "New policy") opens the editor.

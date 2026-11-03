@@ -66,6 +66,12 @@ func (s RunShape) Valid() bool {
 // client always carries an experience, so its Background runs answer true.
 func (r AgentRun) BackgroundOnly() bool { return r.Experience == ExperienceBackground }
 
+// DesktopForcedViewOnly says the helper this run booted with reported its desktop forced view only. No
+// record, an older runner or helper, and a run that isn't background all read as not forced.
+func (r AgentRun) DesktopForcedViewOnly() bool {
+	return r.BackgroundOnly() && r.VMMachine != nil && r.VMMachine.DesktopForcedViewOnly
+}
+
 // PushRuleSet is the push content rules of one SCM entry (provider host and
 // organisation), wherever the entry came from: a repository or workspace, a
 // tool or a component. It is the dispatch-plan carrier the proxy's git route

@@ -392,8 +392,9 @@ A service identity is automation that runs under its own name. It is not a perso
 | `PATCH /runs/{id}`, `POST /runs/{id}/kill` | manage its own runs |
 | `GET /me`, `GET /setup/status` | who am I and what can I reach (`GET /me` adds a `service` block), and which providers are live |
 | `PUT`, `DELETE /model-providers/{id}/credential` | its own model key, in its own namespace |
-| `PUT /workloads/{name}`, `GET /workloads`, `GET /workloads/{name}` | keep a named run request running as the service, and read it |
-| `DELETE /workloads/{name}`, `POST /workloads/{name}/restart` | remove one of its workloads, which ends its run, or start a fresh run of the same spec |
+| `PUT /workloads/{name}`, `GET /workloads`, `GET /workloads/{name}` | keep a named run request running, and read it |
+| `DELETE /workloads/{name}`, `POST /workloads/{name}/restart` | remove a workload (ends its run), or restart it |
+| `POST /templates/import` | the file check `diff` and `apply --dry-run` make; stores nothing |
 
 - Every other route, including any added later, answers `403` `service_scope` with an `authz.denied` row.
   - That covers attach, an inbound app's browser ticket (`POST /runs/{id}/apps/{app}/ticket`), approvals, secrets, tokens, SSH keys, invitations, `GET /audit/export`, `GET /workspaces/{id}` and every admin route.

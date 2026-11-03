@@ -15,6 +15,22 @@ import (
 // (a super admin included: this is the run's shape, not a permission). Logs,
 // audit, status and the authorised lifecycle controls (kill, stop, approve) stay.
 //
+// Two exceptions, both on a macOS VM's built-in desktop alone.
+//
+// The first is a view-only watch (run_background_watch.go). It opens only by its
+// own ticket and answers to backgroundWatchRefusal, at the mint, at the enter, at
+// the stream and at every re-check; nothing reaches the display but read requests,
+// and no clipboard moves either way.
+//
+// The second is the attended window (run_mac_window.go): the run's own person,
+// sitting at the Mac their own runner is on, opens a window onto the VM there. It
+// answers to macWindowRefusal at the grant and at every 30 s re-check, and never
+// to backgroundOnlyRefusal: a background run's owner may sit at it, and no browser
+// session keeps control beside it.
+//
+// A declared noVNC, a Linux VM's desktop, the Files panel, sign-ins, the terminal,
+// exec and SSH refuse as ever.
+//
 // The stored field is agent_runs.experience (types.AgentRun.Experience), written
 // once at create from the request. The single predicate is
 // types.AgentRun.BackgroundOnly, and every door asks it through
@@ -81,7 +97,9 @@ var backgroundDoors = []backgroundDoor{
 	// (#2972): signinRun is the one read every sign-in route makes before it acts.
 	// A VM desktop's pause and resume (#2972) refuse in mayPauseDesktopAgent.
 	{Door: "desktop", Owner: "CTL-A (desktop Files panel), CTL-C (desktop sign-ins)", Symbols: []string{"desktopRun", "signinRun", "mayPauseDesktopAgent"},
-		Routes: []string{"GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}",
+		// POST .../desktop/watch-ticket is the contract's first exception, asked in uiEnterCommon and uiSessionStillAuthorized.
+		// POST .../desktop/window is the contract's second exception, asked in macWindowRefusal.
+		Routes: []string{"POST /runs/{id}/desktop/watch-ticket", "POST /runs/{id}/desktop/window", "GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}",
 			"POST /runs/{id}/desktop-signin", "POST /runs/{id}/desktop-signin/shares", "POST /runs/{id}/desktop-signin/end",
 			"POST /runs/{id}/desktop/sign-ins/pause", "POST /runs/{id}/desktop/sign-ins/resume"}, Enforced: true},
 }

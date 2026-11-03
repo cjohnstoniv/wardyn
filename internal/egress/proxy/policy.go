@@ -680,6 +680,9 @@ func (p *Proxy) denyEgress(w http.ResponseWriter, host string, port int, log *eg
 	case ruleSourcePort:
 		w.Header().Set(egressHeaderDetail, portRuleDetail)
 		detail = "egress denied: " + portRuleDetail
+	case ruleSourceGitPushDenyAllForge:
+		detail = pushDenyAllForgeRefusal(host)
+		w.Header().Set(egressHeaderDetail, detail)
 	}
 	headerHost := host
 	if shape != shapePlain {

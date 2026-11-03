@@ -228,12 +228,17 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// The final seal, as dispatch's (run_policy_seal.go), then the ceiling's re-assertion over the
 	// layers it read, so a credential the boundary withholds goes as one the profile denies does.
 	layers := s.sealRunPolicy(ctx, run, &cfg.Policy, nil)
+	reassertDenyAllPushes(cfg, layers) // before revivePATNarrowing reads it
 	re, rerr := reassertProxyCeiling(run, cfg, c, layers)
 	if rerr != nil {
 		if rerr.reason == reasonReviveCeilingDeniesGitBroker || rerr.reason == reasonReviveCeilingDeniesAzureCLI {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
 				mustJSON(map[string]any{"subject": run.CreatedBy, "reason": rerr.reason})))
 		}
+		return reviveResult{}, rerr
+	}
+	imageMark, rerr := s.reviveImageDigestRefusal(ctx, run, actorType, actor)
+	if rerr != nil {
 		return reviveResult{}, rerr
 	}
 	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
@@ -312,6 +317,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		"dropped_broker_lanes":    re.droppedLane,
 		"proxy_release":           version.Version,
 	}
+	maps.Copy(data, imageMark)
 	s.stampLiveRevive(run)
 	// The old proxy's renewed token ids are read before the new proxy starts, in the same statement
 	// that makes the fresh token the only one a renewal may present: a renewal by the old proxy after
@@ -535,7 +541,7 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 	if rerr := s.reviveMCPBindings(ctx, run, cfg); rerr != nil {
 		return nil, rerr
 	}
-	return cfg, nil
+	return cfg, s.reviveModelListRunnerRefusal(run, cfg)
 }
 
 // rescopeRevivedPATGrants is scopePATGrants over the allowlist entries whose grant row still exists.
@@ -561,6 +567,10 @@ func rescopeRevivedPATGrants(allow map[string]proxy.PATGrant, rows []types.Crede
 func (s *Server) revivePATNarrowing(ctx context.Context, run types.AgentRun, cfg *proxy.Config,
 	grants []types.CredentialGrant, actorType types.ActorType, actor string,
 ) *reviveError {
+	denyAll := refusesEveryPush(cfg.Policy, cfg.PushRuleBase, cfg.PushRuleSets)
+	if reason, detail := pushDenyAllRefusal(denyAll, patGrantSpecs(grants), !s.cfg.DisableGitPATBroker, len(cfg.GitGrants) > 0); reason != "" {
+		return s.refuseRevive(ctx, run, actorType, actor, reason, detail)
+	}
 	if len(patGrantIDsOf(grants)) == 0 {
 		return nil
 	}
@@ -586,6 +596,11 @@ func (s *Server) revivePATNarrowing(ctx context.Context, run types.AgentRun, cfg
 	if reason == "" {
 		return nil
 	}
+	return s.refuseRevive(ctx, run, actorType, actor, reason, detail)
+}
+
+// refuseRevive is revivePATNarrowing's refusal: audited on run.revive, answered 409.
+func (s *Server) refuseRevive(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor, reason, detail string) *reviveError {
 	detail = "the run cannot be revived as it was dispatched: " + detail
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure",
 		mustJSON(map[string]any{"subject": run.CreatedBy, "reason": reason, "error": detail})))

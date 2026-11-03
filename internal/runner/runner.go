@@ -133,12 +133,19 @@ type SandboxSpec struct {
 	// MacOSBase is the macOS base a macos_vm run is started on: a Mac's other base's name, or "" for its
 	// Standard base. A Mac that has no ready base of that name refuses the create.
 	MacOSBase string `json:"macos_base,omitempty"`
+	// KeptMachine, when set, makes a macos_vm run the session of one person's kept machine: a new one
+	// to keep, or an existing one to resume or reset. Only a macOS VM on the person's own Mac reads it.
+	KeptMachine *KeptMachineSpec `json:"kept_machine,omitempty"`
 	// ImageArches, when set, are the only architectures Image runs on: a prewrapped image's accepted
 	// set (design final §3). A Kubernetes substrate places the agent pod on a node of one of them.
 	ImageArches []string `json:"image_arches,omitempty"`
 	// DesktopSignInsOff makes a VM's sign-in store read-only, so its desktop keeps no sign-ins: the
 	// admin set "Not allowed" for the run's agent (#2972). A container ignores it.
 	DesktopSignInsOff bool `json:"desktop_sign_ins_off,omitempty"`
+	// DesktopViewOnly makes a macOS VM's helper force its desktop view only for this boot, whatever
+	// the base allows. Only dispatch sets it, from the run's stored mode (types.AgentRun.BackgroundOnly),
+	// never from a request or a run token. Every other sandbox ignores it.
+	DesktopViewOnly bool `json:"desktop_view_only,omitempty"`
 }
 
 // RecordWithin is whether this run is recorded on a substrate whose own setting is ceiling.
@@ -195,6 +202,8 @@ type ProxyConfig struct {
 	// AzureGates are the run's azure_foundry route gates. A non-empty set also sizes the sidecar's
 	// memory envelope up (ProxyLimitsFor): the in-flight body budget does not fit the default.
 	AzureGates []proxy.AzureGateConfig
+	// GitPushWithheld is the broker hosts whose pushes the run's capabilities withhold (proxy.Config.GitPushWithheld); omitempty, so an older runner gets unchanged bytes while none is.
+	GitPushWithheld map[string]string `json:"git_push_withheld,omitempty"`
 	// GitHubAPI is the run's GitHub CLI grant for the proxy's api.github.com door; nil == off.
 	GitHubAPI *proxy.GitHubAPIGrant
 	// AzureARM is the run's Azure CLI grant for the proxy's management.azure.com door; nil == off.
@@ -239,12 +248,12 @@ type ProxyConfig struct {
 	// PortRule is a container run's port rule, "" (off), "dry_run" or "on"
 	// (WARDYN_EGRESS_PORT_RULE; proxy.Config.PortRule).
 	PortRule string
-	// DesktopSignins opens the proxy's sign-in listener (SigninListenPort) for
-	// the person's sign-in browser; see SandboxSpec.DesktopSignins.
-	DesktopSignins bool `json:"desktop_signins,omitempty"`
-
-	// LocalModels: local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels).
-	LocalModels map[string]types.LocalModelSettings
+	// DesktopSignins opens the proxy's sign-in listener (SigninListenPort) for the person's sign-in browser; see SandboxSpec.DesktopSignins.
+	DesktopSignins  bool                                `json:"desktop_signins,omitempty"`
+	ForgeHosts      []string                            `json:"forge_hosts,omitempty"` // code hosts the deny_all guard refuses (proxy.Config.ForgeHosts)
+	LocalModels     map[string]types.LocalModelSettings // local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels)
+	GatewayIdentity []proxy.GatewayIdentityRoute        `json:"gateway_identity,omitempty"` // routes carrying the run's signed identity (proxy.Config.GatewayIdentity)
+	ModelLimit      *ModelLimit                         `json:"model_limit,omitempty"`      // the run's governed model list and its Bedrock gateway routes (model_limit.go); nil when no limit binds the run
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).
@@ -391,52 +400,13 @@ type Sandbox struct {
 	// keychain; nil when nothing was attempted (a container, a Linux guest, a run with no proxy CA,
 	// or a guest or runner that predates it). Read it through Known.
 	KeychainTrust *KeychainTrust `json:",omitempty"`
-}
-
-// KeychainTrust is a macOS guest's answer to trusting the run's proxy CA: a status and, when not
-// trusted, a fixed reason code. It never carries the guest's own output.
-type KeychainTrust struct {
-	Status string `json:"status"`
-	Reason string `json:"reason,omitempty"`
-}
-
-// The KeychainTrust codes. The guest agent sends the same strings (guestagent.KeychainTrusted and
-// its siblings).
-const (
-	KeychainTrusted    = "trusted"
-	KeychainNotTrusted = "not_trusted"
-	// KeychainRefused: macOS refused the trust change.
-	KeychainRefused = "refused"
-	// KeychainFailed: the security command failed for another reason.
-	KeychainFailed = "failed"
-	// KeychainUnavailable: the command could not run, the CA was not one certificate, or the guest
-	// sent a code this host does not know.
-	KeychainUnavailable = "unavailable"
-)
-
-// Known is k with any code this host does not know read as not trusted, unavailable. Nil stays nil:
-// absent means not attempted, never failed.
-func (k *KeychainTrust) Known() *KeychainTrust {
-	if k == nil {
-		return nil
-	}
-	if k.Status == KeychainTrusted && k.Reason == "" {
-		return &KeychainTrust{Status: KeychainTrusted}
-	}
-	switch k.Reason {
-	case KeychainRefused, KeychainFailed, KeychainUnavailable:
-		if k.Status == KeychainNotTrusted {
-			return &KeychainTrust{Status: KeychainNotTrusted, Reason: k.Reason}
-		}
-	}
-	return &KeychainTrust{Status: KeychainNotTrusted, Reason: KeychainUnavailable}
-}
-
-// Status reports observed sandbox state.
-type Status struct {
-	State    types.RunState
-	ExitCode *int
-	Message  string
+	// DesktopForcedViewOnly is what a macOS VM helper's running desktop filter reported in this boot
+	// (macvm.RFBShim.DesktopForcedViewOnly), not an echo of SandboxSpec.DesktopViewOnly. False from
+	// anything else, or a runner or helper that predates it.
+	DesktopForcedViewOnly bool `json:",omitempty"`
+	// KeptScrub and KeptBase are a kept create's boot scrub and cloned base; nil otherwise or from older runners.
+	KeptScrub *KeptScrub `json:",omitempty"`
+	KeptBase  *KeptBase  `json:",omitempty"`
 }
 
 // ErrRunnerOffline is the answer for a call to a registered runner whose link
@@ -550,6 +520,29 @@ var ErrAgentPauseUnsupported = errors.New("runner: this sandbox's agent cannot b
 // ErrDesktopUnsupported is DialDesktop's answer for a sandbox with no desktop to open (a container),
 // or from a router or runner that cannot open one.
 var ErrDesktopUnsupported = errors.New("runner: this sandbox has no desktop to open")
+
+// MacWindower is an OPTIONAL Runner capability: put an attended window (keyboard and pointer) on a macOS
+// VM run's live screen. The window lives exactly as long as the MacWindow returned; the VM and the run
+// are untouched either way. Refusals are the ErrMacWindow* of mac_window.go.
+type MacWindower interface {
+	OpenWindow(ctx context.Context, ref string, req MacWindowRequest) (MacWindow, error)
+}
+
+// MacWindowRequest is MacWindower's input: GrantID names the org's grant for this open, Title is the
+// window's title (it names the run and the person).
+type MacWindowRequest struct {
+	GrantID string
+	Title   string
+}
+
+// MacWindow is one open window. Ended is closed once the window is over, whoever ended it; Reason is
+// then why, one of MacWindowEnd*, or "" when Close ended it. Close closes the window; it is safe to call
+// more than once.
+type MacWindow interface {
+	Ended() <-chan struct{}
+	Reason() string
+	Close() error
+}
 
 // ProxyStopper is an OPTIONAL Runner capability: stop a sandbox's proxy
 // sidecar and leave its agent running (a run lost to a control-plane outage).

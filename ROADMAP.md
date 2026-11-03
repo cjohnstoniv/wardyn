@@ -63,6 +63,8 @@
 | **v0.10.0-rc.8** | rc.8: commands kept running as services, inbound apps that people and API clients can call, workloads Wardyn keeps declared, your own walls, and a macOS VM guest that gets its network address. | **Shipped (pre-alpha)** — `v0.10.0-rc.8`, 2026-10-29 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.9** | rc.9: macOS VM runs with drives and operator-made bases, folders on a person's own runner, Wardyn-only guest pairing, AWS re-signing on a person's runner (AWS and some macOS parts not yet run end to end). | **Shipped (pre-alpha)** — `v0.10.0-rc.9`, 2026-11-01 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.0-rc.10** | rc.10: Watch desktop on a view-only macOS VM run, and macOS VM, Azure DevOps push, workload and console fixes (macOS parts not yet run on a real Mac). | **Shipped (pre-alpha)** — `v0.10.0-rc.10`, 2026-11-01 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.11** | rc.11: a macOS VM run's desktop is no longer recorded; experimental gateway run identity; desktop watch, drive open, Expand, and rc.10 test fixes (macOS parts not yet run on a real Mac). | **Shipped (pre-alpha)** — `v0.10.0-rc.11`, 2026-11-02 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.0-rc.12** | rc.12 (last candidate): Mac window, kept macOS VMs, wall presets, allowed models, endpoint sign-in, MCP run identity, image prefix grants; macOS parts not yet run on a real Mac. | **Shipped (pre-alpha)** — `v0.10.0-rc.12`, 2026-11-03 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Shipped detail
 

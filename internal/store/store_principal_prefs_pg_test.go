@@ -41,6 +41,30 @@ func TestPG_PrincipalPref_UpsertIsPerPrincipal(t *testing.T) {
 	}
 }
 
+// TestPG_PrincipalPref_DeleteIsPerKey: a delete drops the one record, leaves the principal's others, and is
+// not an error for a record that is not there.
+func TestPG_PrincipalPref_DeleteIsPerKey(t *testing.T) {
+	st := store.NewPG(runsPGPool(t))
+	ctx := context.Background()
+	alice := "alice-" + uuid.NewString()
+	for _, k := range []string{"a", "b"} {
+		if err := st.PutPrincipalPref(ctx, alice, k, json.RawMessage(`1`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		if err := st.DeletePrincipalPref(ctx, alice, "a"); err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+	}
+	if _, err := st.GetPrincipalPref(ctx, alice, "a"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("deleted record: err = %v, want ErrNotFound", err)
+	}
+	if _, err := st.GetPrincipalPref(ctx, alice, "b"); err != nil {
+		t.Fatalf("the other record: %v", err)
+	}
+}
+
 // TestPG_RunUserTypeRoundTrips: agent_runs.user_type is written by CreateRun
 // and read back by scanRun, and a run with none reads "".
 func TestPG_RunUserTypeRoundTrips(t *testing.T) {

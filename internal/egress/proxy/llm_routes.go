@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
@@ -149,6 +151,13 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 		if refused {
 			return
 		}
+	} else {
+		// A hosted provider's model is judged against the run's allowed_models (allowed_models.go).
+		release, refused := p.allowedModelRefused(w, r, host, port, rest)
+		defer release()
+		if refused {
+			return
+		}
 	}
 	hdr, ok, ierr := p.inject.resolveCtx(r.Context(), host)
 	if !ok && lm == nil {
@@ -204,7 +213,7 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 
 	// On a confident BLOCK (or fail-closed uninspectable channel) inspectLLM
 	// writes the 403 itself and returns blocked=true.
-	bodyReader, scanSummary, releaseBody, blocked := p.inspectLLM(w, r, host, port, rest, channel)
+	bodyReader, scanSummary, releaseBody, blocked := p.inspectForwardedLLM(w, r, host, port, rest, channel)
 	defer releaseBody()
 	if blocked {
 		return
@@ -272,18 +281,38 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		Path:     "/" + rest,
 		RawQuery: r.URL.RawQuery,
 	}
+	gatewayRoute, gatewayToken, gatewayCallID := p.gatewayRouteFor(host, port, "/"+rest), "", ""
 	// send forwards one attempt carrying hdr and records its allow. On false it has answered.
 	send := func(body io.Reader, hdr *injectedHeader) (*http.Response, bool) {
+		// A fresh id for each attempt, made here and never taken from the sandbox: the
+		// gateway's log line and this attempt's rows join on it.
+		callID := ""
+		if gatewayRoute != nil {
+			callID = uuid.NewString()
+		}
 		outReq, err := http.NewRequestWithContext(context.WithValue(r.Context(), vettedIPKey{}, target), r.Method, upstreamURL.String(), body)
 		if err != nil {
-			p.emitLLMDecision(r, host, port, egress.Deny, ruleSource, nil)
+			if p.sink != nil {
+				log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSource)
+				log.GatewayCallID = callID
+				p.sink.emit(log)
+			}
 			p.httpErrorShaped(w, p.shapeOf(r, host), host, "build llm request", err, http.StatusBadGateway,
 				brokeredFault{port: port, ruleSource: ruleSource, reason: reasonUpstreamError})
 			return nil, false
 		}
 		copyHeader(outReq.Header, r.Header)
 		removeHopByHop(outReq.Header)
+		p.stripGatewayHeaders(outReq.Header)
 		applyCredential(outReq.Header, ownedHeader, hdr)
+		if gatewayRoute != nil && !p.attachGatewayIdentity(w, r, outReq.Header, gatewayRoute, host, port, ruleSource, callID) {
+			return nil, false
+		}
+		if callID != "" {
+			outReq.Header.Set(gatewayCallIDHeader, callID)
+		}
+		gatewayCallID = callID
+		gatewayToken = outReq.Header.Get(gatewayIdentityHeader)
 		outReq.Host = hostport
 		outReq.Header.Del("Host")
 
@@ -291,19 +320,21 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		// over-report an allow.
 		resp, err := p.roundTripUpstream(outReq)
 		if err != nil {
-			seen := &egress.DecisionLog{Request: p.reqOf(r, host, port), Scan: scanSummary}
+			seen := &egress.DecisionLog{Request: p.reqOf(r, host, port), Scan: scanSummary, GatewayCallID: callID}
 			if p.refuseH2Mismatch(w, p.shapeOf(r, host), err, ruleSourceUpstreamProtocolMismatch, seen, host, "llm upstream error") {
 				return nil, false
 			}
 			if p.sink != nil {
-				p.sink.emit(p.denyDialFailed("builtin:dial-failed", p.reqOf(r, host, port), host, err, scanSummary))
+				dl := p.denyDialFailed("builtin:dial-failed", p.reqOf(r, host, port), host, err, scanSummary)
+				dl.GatewayCallID = callID
+				p.sink.emit(dl)
 			}
 			// No reason: classified from err, and the message ends with the decision log's Cause above.
 			p.httpErrorShaped(w, p.shapeOf(r, host), host, "llm upstream error", err, http.StatusBadGateway,
 				brokeredFault{port: port, ruleSource: "builtin:dial-failed"})
 			return nil, false
 		}
-		p.emitLLMAllowWithFault(r, host, port, ruleSource, scanSummary, "/"+rest, resp)
+		p.emitLLMAllowWithFault(r, host, port, ruleSource, scanSummary, "/"+rest, callID, resp)
 		if nsOff { // once, however many times a credential heal sends
 			p.emitLLMDecision(r, host, port, egress.Allow, ruleSourceGitNSOff, nil)
 			nsOff = false
@@ -345,6 +376,10 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 			p.refuseLocalModel(w, r, host, port, http.StatusBadGateway, reasonUpstreamError, err.Error())
 			return
 		}
+	}
+	if gatewayRoute != nil {
+		p.relayGatewayRoute(w, r, host, port, resp, ruleSource, gatewayToken, gatewayCallID)
+		return
 	}
 	p.relayUpstream(w, r, host, port, resp, ruleSource)
 }
@@ -433,13 +468,31 @@ func scanSummaryFrom(res contentscan.Result, serr error, eng *contentscan.Engine
 // honestly marked uninspected; non-prompt paths stream through quietly.
 //
 // The returned release must be deferred by the caller — see scanBufferedBody.
+// A request through here gets the run's whole policy on every route.
 func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel) (io.Reader, *egress.ScanSummary, func(), bool) {
+	return p.inspectLLMOn(w, r, host, port, rest, channel, nil)
+}
+
+// inspectForwardedLLM is inspectLLM for a request forwardInspectedLLM then sends: the
+// one door that attaches a gateway route's token, so the only one where a route may
+// leave the prompt to its gateway (inspectionDeferredTo). Both match host, port and
+// "/"+rest, so the route deferred here is the route the token goes on.
+func (p *Proxy) inspectForwardedLLM(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel) (io.Reader, *egress.ScanSummary, func(), bool) {
+	return p.inspectLLMOn(w, r, host, port, rest, channel, p.inspectionDeferredTo(host, port, "/"+rest))
+}
+
+// inspectLLMOn is inspectLLM where deferred, when not nil, is the gateway route that
+// checks this request's prompt itself.
+func (p *Proxy) inspectLLMOn(w http.ResponseWriter, r *http.Request, host string, port int, rest string, channel contentscan.Channel, deferred *GatewayIdentityRoute) (io.Reader, *egress.ScanSummary, func(), bool) {
 	noRelease := func() {}
 	if p.scanner == nil || p.scanner.Mode() == contentscan.ModeOff {
 		return r.Body, nil, noRelease, false
 	}
 	switch classifyLLM(channel, r.Method, rest) {
 	case scanMessages:
+		if deferred != nil {
+			return p.scanDeferredBody(w, r, host, port, deferred.ProviderID, channel)
+		}
 		return p.scanBufferedBody(w, r, host, channel, "read llm body",
 			func(d egress.Decision, ruleSource string, scan *egress.ScanSummary) {
 				p.emitLLMDecision(r, host, port, d, ruleSource, scan)
@@ -457,6 +510,43 @@ func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, 
 		return r.Body, nil, noRelease, false
 	}
 }
+
+// scanDeferredBody inspects a prompt on a route whose gateway checks prompts itself
+// (inspectionDeferredTo): the run's own secret values only, exact match, enforced as
+// the policy says. Every row it leaves names the provider (DeferredTo), so the run's
+// coverage says the other checks were left to that gateway; with no secret-value
+// check on the policy, the prompt is forwarded unscanned with that row alone.
+func (p *Proxy) scanDeferredBody(w http.ResponseWriter, r *http.Request, host string, port int, providerID string, channel contentscan.Channel) (io.Reader, *egress.ScanSummary, func(), bool) {
+	if p.deferredScan.eng == nil {
+		sum := p.skipSummary("skip", skipDeferredToGateway, channel)
+		sum.DeferredTo = providerID
+		return r.Body, sum, func() {}, false
+	}
+	mark := func(scan *egress.ScanSummary) *egress.ScanSummary {
+		if scan == nil {
+			scan = &egress.ScanSummary{Scanned: true, Coverage: coverageInspectable, Mode: string(p.scanner.Mode()), Action: "skip", Channel: string(channel)}
+		}
+		if !scan.Skipped {
+			scan.Skipped, scan.SkipReason = true, skipDeferredToGateway
+		}
+		scan.DeferredTo = providerID
+		return scan
+	}
+	body, sum, release, blocked := p.scanBufferedBodyWith(w, r, host, p.deferredScan.eng, channel, "read llm body",
+		func(d egress.Decision, ruleSource string, scan *egress.ScanSummary) {
+			if scan != nil {
+				scan = mark(scan)
+			}
+			p.emitLLMDecision(r, host, port, d, ruleSource, scan)
+		})
+	if blocked {
+		return body, sum, release, true
+	}
+	return body, mark(sum), release, false
+}
+
+// skipDeferredToGateway is the skip reason on a prompt a gateway route left to its gateway.
+const skipDeferredToGateway = "deferred_to_gateway"
 
 // bodyBearingMethod reports whether a method may carry a request body Wardyn
 // would want to inspect.
@@ -501,6 +591,12 @@ func (p *Proxy) inspectForwardBody(w http.ResponseWriter, r *http.Request, host 
 // The returned release MUST be deferred by the caller: gives the buffer back
 // to maxRetainedScanBytes. Always non-nil and safe to call more than once.
 func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, host string, channel contentscan.Channel, readErrMsg string, emit func(egress.Decision, string, *egress.ScanSummary)) (io.Reader, *egress.ScanSummary, func(), bool) {
+	return p.scanBufferedBodyWith(w, r, host, p.scanner, channel, readErrMsg, emit)
+}
+
+// scanBufferedBodyWith is scanBufferedBody with the engine named: p.scanner, or a
+// gateway route's cut engine (scanDeferredBody). eng is never nil.
+func (p *Proxy) scanBufferedBodyWith(w http.ResponseWriter, r *http.Request, host string, eng *contentscan.Engine, channel contentscan.Channel, readErrMsg string, emit func(egress.Decision, string, *egress.ScanSummary)) (io.Reader, *egress.ScanSummary, func(), bool) {
 	shape := p.shapeOf(r, host)
 	noRelease := func() {}
 	// Read before the scan slot, charged to the engine's retained budget for
@@ -525,7 +621,7 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, host st
 		return nil, nil, noRelease, true
 	}
 	if len(buffered) > maxLLMScanBody {
-		if p.scanner.BlocksOnError() {
+		if eng.BlocksOnError() {
 			release()
 			emit(egress.Deny, ruleSourceLLMBlocked, p.skipSummary("block", "body_oversize", channel))
 			writeScanBlockedShaped(w, shape, 0, nil, "body_oversize")
@@ -545,17 +641,17 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, host st
 		p.scanFault(w, shape, readErrMsg, err, http.StatusBadGateway)
 		return nil, nil, noRelease, true
 	}
-	res, _, serr := p.scanner.ScanRequestContext(r.Context(), channel, buffered)
+	res, _, serr := eng.ScanRequestContext(r.Context(), channel, buffered)
 	free()
-	if p.scanner.ShouldBlock(res) {
+	if eng.ShouldBlock(res) {
 		release()
-		emit(egress.Deny, ruleSourceLLMBlocked, scanSummaryFrom(res, serr, p.scanner, "block", channel))
+		emit(egress.Deny, ruleSourceLLMBlocked, scanSummaryFrom(res, serr, eng, "block", channel))
 		writeScanBlockedShaped(w, shape, len(res.Findings), categoriesOf(res.Findings), res.SkipReason)
 		return nil, nil, noRelease, true
 	}
 	var sum *egress.ScanSummary
 	if len(res.Findings) > 0 || res.Skipped || serr != nil {
-		sum = scanSummaryFrom(res, serr, p.scanner, "", channel)
+		sum = scanSummaryFrom(res, serr, eng, "", channel)
 	}
 	return bytes.NewReader(buffered), sum, release, false
 }
@@ -630,9 +726,7 @@ func writeScanBlockedShaped(w http.ResponseWriter, shape errShape, findings int,
 		writeProviderError(w, shape, http.StatusForbidden, reasonContentBlocked, msg, extra)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(b)
+	writeJSONStatus(w, http.StatusForbidden, "application/json", b)
 }
 
 // emitLLMDecision emits a decision log for an LLM or MITM route carrying a

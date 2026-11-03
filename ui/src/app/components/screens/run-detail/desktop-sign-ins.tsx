@@ -11,6 +11,7 @@ import { desktopSignIns, type DesktopSignInsView } from "../../../lib/api/deskto
 import { getErrorMessage } from "../../../lib/format";
 import { Button } from "../../ui/button";
 import { DESKTOP } from "../../wardyn/copy/desktop";
+import { KEEP_RUN } from "../../wardyn/copy/keep-machine";
 
 // Where a sign-in lives and when it is gone, by store; a desktop that keeps none says so instead.
 const SIGN_INS_NOTE: Partial<Record<DesktopSignInsView["store"], string>> = { memory: DESKTOP.signInsNote, run_disk: DESKTOP.signInsNoteRunDisk };
@@ -57,6 +58,16 @@ export function DesktopSignInButton({ s }: { s: DesktopSignIns }) {
   );
 }
 
+/** A failed pause or resume, right under the buttons it came from. */
+export function DesktopSignInsError({ s }: { s: DesktopSignIns }) {
+  if (!s.error) return null;
+  return (
+    <p role="alert" className="mt-2 text-meta leading-relaxed text-danger">
+      {s.error}
+    </p>
+  );
+}
+
 /** State 2's warning note, above the buttons. */
 export function DesktopPausedNote({ s }: { s: DesktopSignIns }) {
   if (!s.view?.paused) return null;
@@ -69,16 +80,12 @@ export function DesktopPausedNote({ s }: { s: DesktopSignIns }) {
 }
 
 /** The block's last line: where a sign-in lives and when it is gone, or that this desktop keeps none. */
-export function DesktopSignInsNote({ s }: { s: DesktopSignIns }) {
+export function DesktopSignInsNote({ s, keptOn }: { s: DesktopSignIns; /** The Mac, when the run keeps its machine: the note says where the sign-ins stay (K-45). */ keptOn?: string }) {
   const v = s.view;
   if (!v || v.store === "") return null;
+  if (keptOn && v.store === "run_disk") return <p className="mt-2 text-meta leading-relaxed text-foreground">{KEEP_RUN.SIGN_INS_NOTE(keptOn)}</p>;
   return (
     <>
-      {s.error && (
-        <p role="alert" className="mt-2 text-meta leading-relaxed text-danger">
-          {s.error}
-        </p>
-      )}
       <p className="mt-2 text-meta leading-relaxed text-foreground">{SIGN_INS_NOTE[v.store] ?? DESKTOP.signInsOff(v.agent)}</p>
     </>
   );

@@ -28,7 +28,7 @@ func (s *Server) routes() chi.Router {
 	// real TCP peer instead. Handler's trustedProxyClient reads X-Forwarded-For
 	// ONLY from a peer in the explicit WARDYN_TRUSTED_PROXIES allowlist.
 	r.Use(middleware.Recoverer)
-	r.Use(s.securityHeaders, s.dropInboundOnWrite)
+	r.Use(s.securityHeaders, s.dropInboundOnWrite, s.gatewayMintOffGate)
 
 	r.Get("/healthz", s.handleHealthz)
 	// Readiness: proves Postgres is reachable, not just that the process is up
@@ -268,12 +268,12 @@ func (s *Server) routes() chi.Router {
 			// only for a run with no personal owner (mayEnterRun); on a person's run
 			// they get 403 run_owner_only (#1476).
 			r.Post("/runs/{id}/attach-ticket", s.handleAttachTicket)
-			// The three lines above are each issue #658's pre-0.8 alias; their
-			// 0.8 names (mounted alongside, same handlers, kept one minor —
-			// docs/sdk.md "Renamed in 0.8") are factored out of this already-long
-			// function into mountRenamedRunRoutes, called once, below.
+			// The three lines above are each issue #658's pre-0.8 alias; their 0.8 names (mounted alongside,
+			// same handlers, kept one minor — docs/sdk.md "Renamed in 0.8") are factored out of this
+			// already-long function into mountRenamedRunRoutes, called once, below.
 			s.mountRenamedRunRoutes(r)
-			s.mountInboundTicketRoutes(r) // a browser's ticket to one inbound app, for its owner or a named caller (inbound_ticket.go)
+			s.mountInboundTicketRoutes(r)   // a browser's ticket to one inbound app, for its owner or a named caller (inbound_ticket.go)
+			s.mountBackgroundWatchRoutes(r) // the ticket to watch a background macOS run's desktop, view only (run_background_watch.go)
 			// Approvals: reading the queue is a member act (own runs only — see
 			// handleListApprovals), DECIDING is OWNER-OR-ADMIN rather than
 			// operator-only: the decision IS the live authorization over an
@@ -650,7 +650,7 @@ func (s *Server) routes() chi.Router {
 			// …and POST /drives/{id}/reclaim with them: mountUserDriveFamily
 			// (user_drives_reclaim.go) joins the family's two halves.
 			s.mountUserDriveFamily(r, operatorOnly, securityOps)
-
+			s.mountKeptMachineRoutes(r, operatorOnly) // kept_machines.go: a person's own kept machines; the super admin's list and delete
 			s.mountRecordingRoutes(r)
 		})
 
@@ -669,8 +669,8 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}/attach", s.handleAttachWS)
 		})
 
-		// Internal sidecar surface (run-token bearer) — see mountInternalRoutes.
-		r.Group(s.mountInternalRoutes)
+		r.Group(s.mountInternalRoutes) // the sidecar surface (run-token bearer)
+		s.mountGatewayIdentityRoute(r) // and its one door gated before internalAuth
 
 		// Ground-truth ingest surface (host-sensor bearer, aud=wardyn-groundtruth).
 		// SEPARATE auth group from the run-token internal surface above: the
@@ -772,14 +772,14 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	s.mountInvitationRoutes(r, securityOps)
 	s.mountServiceIdentityRoutes(r, securityOps)
 	s.mountSCIMStatusRoute(securityOps)
-	// Run-detail widget layout: per-user, per-preset, server-synced so a layout survives a new
-	// machine (localStorage would not). Scoped to the caller's OWN principal at the store, exactly
-	// like the ssh-keys block above — never a principal taken from the body.
+	// Run-detail widget layout: per-user, per-preset, server-synced so a layout survives a new machine (localStorage
+	// would not). Scoped to the caller's OWN principal at the store, like the ssh-keys block above, never the body's.
 	r.Get("/me/run-layout", s.handleGetRunLayout)
 	// The caller's own kept launch setups, newest first (launch_intent.go).
 	r.Get("/me/launch-intents", s.handleListLaunchIntents)
 	r.Put("/me/run-layout", s.handlePutRunLayout)
 	s.mountPersonalWallsRoutes(r) // the caller's own walls, keyed by their session (personal_walls.go)
+	s.mountWallPresetRoutes(r)    // named walls picked at launch, with the run templates' authority (wall_presets.go)
 	// Per-user Azure DevOps sign-in (ado_entra.go): two browser doors that
 	// capture ONE PERSON'S Azure DevOps refresh token. It belongs in this
 	// self-service block and nowhere else — both doors refuse a caller with no

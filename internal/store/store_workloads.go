@@ -117,13 +117,18 @@ type Workload struct {
 // WorkloadView is a workload with the state of its current run, as the reads report it: RunState is empty
 // while it has no run, and ServiceHealth when the run has no service health yet. RunPausedAt and
 // ServiceObservedAt are the run's paused_at and its service health's observed_at, for the API to project
-// that health as it projects a run's.
+// that health as it projects a run's. ServiceProbe is the run's last reading of Wardyn's own check, nil for none;
+// ServiceProbeOn is whether the run's frozen spec opted in to that check, and RunStartedAt is when the run was
+// admitted (or created, before admission), so a missing reading reads as renewal reads it.
 type WorkloadView struct {
 	Workload
 	RunState          types.RunState
 	ServiceHealth     string
 	RunPausedAt       *time.Time
 	ServiceObservedAt *time.Time
+	ServiceProbe      *types.RunServiceProbe
+	ServiceProbeOn    bool
+	RunStartedAt      *time.Time
 }
 
 // WorkloadPut is the record half of an apply. Digest is the caller's, over Intent, RunIn and RestartKey.
@@ -240,7 +245,8 @@ const workloadCols = `w.id, w.owner, w.name, w.source, w.source_pool_id, COALESC
 // that column lands in.
 const (
 	workloadViewCols = workloadCols + `, COALESCE(r.state, ''), COALESCE(to_jsonb(r) -> 'service_status' ->> 'health', ''), r.paused_at,
-		(to_jsonb(r) -> 'service_status' ->> 'observed_at')::timestamptz`
+		(to_jsonb(r) -> 'service_status' ->> 'observed_at')::timestamptz, to_jsonb(r) -> 'service_status' -> 'probe',
+		COALESCE(to_jsonb(r) -> 'service' -> 'health' ->> 'probe', ''), COALESCE(r.admitted_at, r.created_at)`
 	workloadViewFrom = ` FROM workloads w LEFT JOIN agent_runs r ON r.id = w.current_run_id`
 )
 
@@ -272,8 +278,20 @@ func scanWorkload(row pgx.Row) (Workload, error) {
 
 func scanWorkloadView(row pgx.Row) (WorkloadView, error) {
 	var v WorkloadView
-	err := scanWorkloadInto(row, &v.Workload, &v.RunState, &v.ServiceHealth, &v.RunPausedAt, &v.ServiceObservedAt)
-	return v, err
+	var probe []byte
+	var probeSpec string
+	if err := scanWorkloadInto(row, &v.Workload, &v.RunState, &v.ServiceHealth, &v.RunPausedAt, &v.ServiceObservedAt, &probe,
+		&probeSpec, &v.RunStartedAt); err != nil {
+		return v, err
+	}
+	v.ServiceProbeOn = probeSpec == types.ServiceProbeControlPlane
+	if len(probe) > 0 && string(probe) != "null" {
+		v.ServiceProbe = &types.RunServiceProbe{}
+		if err := json.Unmarshal(probe, v.ServiceProbe); err != nil {
+			return v, fmt.Errorf("store: decode workload service probe: %w", err)
+		}
+	}
+	return v, nil
 }
 
 func sameUUIDPtr(a, b *uuid.UUID) bool {

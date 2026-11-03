@@ -158,7 +158,7 @@ function relativeAbsolute(iso: string): string {
 // The run this card needs to know about — created_by (who it acts as / owns
 // the decision) and state (has it ended). Every real caller passes a real
 // AgentRun/RunDetail; this Pick is what the two shapes have in common.
-export type AdoCardRun = Pick<AgentRun, "created_by" | "state"> & Pick<RunDetail, "agents">;
+export type AdoCardRun = Pick<AgentRun, "created_by" | "state" | "model_provider_id"> & Pick<RunDetail, "agents">;
 
 export function AdoCapabilityCard({
   item,

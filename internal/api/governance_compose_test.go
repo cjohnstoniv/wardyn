@@ -159,6 +159,140 @@ func TestStandaloneProfilesResolveByteForByte(t *testing.T) {
 	}
 }
 
+// TestStandaloneProvenanceNamesTheUnitAndChangesNoValue: a standalone unit whose walls equal the
+// deployment's still sets them (a change to the deployment default does not reach them; a redeploy can still drop a grant), so provenance
+// and path_provenance name the unit for them; only a size it omits is the deployment's. A
+// default-rooted unit follows the deployment, so its equal walls stay the deployment's. None of it
+// changes a value: the resolved ceiling and limits are the 0.8.5 body's, and a standalone unit's
+// stay its own after the deployment default is changed.
+func TestStandaloneProvenanceNamesTheUnitAndChangesNoValue(t *testing.T) {
+	deployment := govDeployment()
+	deployment.Resources = &types.ResourceLimits{CPUMillis: 1500, MemoryMiB: 3072}
+	srv := &Server{cfg: Config{DefaultPolicy: deployment}}
+	eight := 8
+
+	equal := &types.GovernanceUnit{ID: uuid.New(), Name: "same-as-deployment", Ceiling: govDeployment()}
+	sized := &types.GovernanceUnit{ID: uuid.New(), Name: "sized", Ceiling: govDeployment()}
+	sized.Ceiling.Resources = &types.ResourceLimits{CPUMillis: 500}
+	diskOnly := &types.GovernanceUnit{ID: uuid.New(), Name: "disk-only", Ceiling: govDeployment()}
+	diskOnly.Ceiling.Resources = &types.ResourceLimits{DiskMiB: 4096}
+	child := types.GovernanceUnit{ID: uuid.New(), Name: "child", ParentID: &equal.ID, Overlay: &types.CeilingOverlay{MaxHolds: &eight}}
+	def := types.GovernanceUnit{ID: store.DefaultUnitID, Name: "Default", Kind: types.UnitKindDefault}
+	underDefault := types.GovernanceUnit{ID: uuid.New(), Name: "under-default", ParentID: &def.ID, Overlay: &types.CeilingOverlay{MaxHolds: &eight}}
+
+	// The path's record per knob: every knob but the named ones is want.
+	allBut := func(t *testing.T, got knobProvenance, want policyref.Provenance, exceptions map[string]policyref.Provenance) {
+		t.Helper()
+		if len(got) == 0 {
+			t.Fatalf("provenance is empty")
+		}
+		for knob, rec := range got {
+			w := want
+			if e, ok := exceptions[knob]; ok {
+				w = e
+			}
+			if rec != w {
+				t.Errorf("provenance[%s] = %+v, want %+v", knob, rec, w)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		chain []types.GovernanceUnit
+		want  policyref.Provenance
+		other map[string]policyref.Provenance
+	}{
+		{"standalone equal to the deployment, size omitted", []types.GovernanceUnit{*equal}, unitRec("same-as-deployment"),
+			map[string]policyref.Provenance{"resources": deploymentProvenance}},
+		{"standalone with its own size", []types.GovernanceUnit{*sized}, unitRec("sized"), nil},
+		{"standalone with only a disk of its own", []types.GovernanceUnit{*diskOnly}, unitRec("disk-only"), nil},
+		{"composed on a standalone root", []types.GovernanceUnit{child, *equal}, unitRec("same-as-deployment"),
+			map[string]policyref.Provenance{"resources": deploymentProvenance, "max_holds": unitRec("child")}},
+		{"composed on Default", []types.GovernanceUnit{underDefault, def}, deploymentProvenance,
+			map[string]policyref.Provenance{"max_holds": unitRec("under-default")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := srv.composeChain(tc.chain)
+			if err != nil {
+				t.Fatalf("compose: %v", err)
+			}
+			allBut(t, got.PathProvenance, tc.want, tc.other)
+
+			// check's leaf-only provenance: the unit for what it sets, never claiming the deployment for
+			// a standalone unit's equal wall.
+			walls, err := contextWalls(governanceCeiling{Spec: deployment.Clone()},
+				governanceCeiling{Spec: got.Ceiling.Clone(), Unit: got}, governanceCeiling{Spec: got.Ceiling.Clone(), Unit: got},
+				types.Boundary{}, specReadSecurity)
+			if err != nil {
+				t.Fatalf("contextWalls: %v", err)
+			}
+			if !reflect.DeepEqual(walls.PathProvenance, got.PathProvenance) {
+				t.Errorf("check path_provenance %+v differs from the unit's %+v", walls.PathProvenance, got.PathProvenance)
+			}
+			if tc.chain[len(tc.chain)-1].Kind != types.UnitKindDefault && !got.StandaloneRoot {
+				t.Errorf("a standalone-rooted chain is not marked StandaloneRoot")
+			}
+			if tc.chain[len(tc.chain)-1].Kind == types.UnitKindDefault {
+				if got.StandaloneRoot {
+					t.Errorf("a Default-rooted chain is marked StandaloneRoot")
+				}
+				return
+			}
+			leaf := unitRec(tc.chain[0].Name)
+			if got.StandaloneRoot {
+				if r := walls.Provenance["allowed_domains"]; r != leaf {
+					t.Errorf("check provenance[allowed_domains] = %+v, want %+v: the unit's wall equals the deployment's", r, leaf)
+				}
+				if r := walls.Provenance["resources"]; (r == deploymentProvenance) != (tc.other["resources"] == deploymentProvenance) {
+					t.Errorf("check provenance[resources] = %+v for %q", r, tc.name)
+				}
+			}
+		})
+	}
+
+	// Nothing changes a value: a standalone unit resolves as the 0.8.5 body does, and a composed one
+	// on it is that with its overlay.
+	for _, p := range []*types.GovernanceUnit{equal, sized} {
+		got, err := srv.composeChain([]types.GovernanceUnit{*p})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := srv.legacyCeilingFromUnit(p)
+		if !reflect.DeepEqual(got.Ceiling, want.Spec) || !reflect.DeepEqual(got.Limits, want.Limits) || !slices.Equal(got.Warnings, want.Warnings) {
+			t.Errorf("%s resolves\n got  %+v %+v %v\n want %+v %+v %v", p.Name, got.Ceiling, got.Limits, got.Warnings, want.Spec, want.Limits, want.Warnings)
+		}
+	}
+	onRoot, err := srv.composeChain([]types.GovernanceUnit{child, *equal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := srv.legacyCeilingFromUnit(equal).Spec; onRoot.Ceiling.MaxHolds != eight ||
+		!reflect.DeepEqual(onRoot.Ceiling.AllowedDomains, want.AllowedDomains) || !reflect.DeepEqual(onRoot.Ceiling.Resources, want.Resources) {
+		t.Errorf("a composed unit on a standalone root resolves %+v, want the root's walls and max_holds %d", onRoot.Ceiling, eight)
+	}
+
+	// Why the names are what they are: after the deployment default narrows its egress, a standalone
+	// unit's walls are as they were and a Default-rooted unit's follow.
+	moved := govDeployment()
+	moved.AllowedDomains = []string{"api.anthropic.com"}
+	moved.Resources = deployment.Resources
+	after := &Server{cfg: Config{DefaultPolicy: moved}}
+	alone, err := after.composeChain([]types.GovernanceUnit{*equal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(alone.Ceiling.AllowedDomains, equal.Ceiling.AllowedDomains) {
+		t.Errorf("a standalone unit's allowed_domains = %v after the deployment moved, want its own %v", alone.Ceiling.AllowedDomains, equal.Ceiling.AllowedDomains)
+	}
+	followed, err := after.composeChain([]types.GovernanceUnit{underDefault, def})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(followed.Ceiling.AllowedDomains, moved.AllowedDomains) {
+		t.Errorf("a Default-rooted unit's allowed_domains = %v after the deployment moved, want the deployment's %v", followed.Ceiling.AllowedDomains, moved.AllowedDomains)
+	}
+}
+
 // the resolver itself
 
 func TestResolverRefusesAChainThatIsNotACleanLine(t *testing.T) {

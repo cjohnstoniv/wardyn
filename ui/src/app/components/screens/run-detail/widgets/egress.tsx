@@ -23,6 +23,16 @@ import { LOCAL_RUN } from "../../../wardyn/copy/runners";
 // a rolling recent-activity view, not a paginated list.
 const MAX_ROWS = 8;
 
+// A row reached Wardyn later when it arrived 60 s or more after the runner decided it; a time that
+// can't be read shows no marker.
+const REACHED_LATER_MS = 60_000;
+function reachedLater(e: SpooledEgressDecision): boolean {
+  if (!e.spooled_at) return false;
+  const decided = Date.parse(e.spooled_at);
+  const recorded = Date.parse(e.time);
+  return Number.isFinite(decided) && Number.isFinite(recorded) && recorded - decided >= REACHED_LATER_MS;
+}
+
 export function EgressWidget({
   egress,
   heldCount = 0,
@@ -88,12 +98,21 @@ export function EgressWidget({
               >
                 {e.domain}
               </span>
-              {/* A spooled row's own time is when the runner decided it, which is not when it reached the
-                  chain; the full-log refusal says why it was refused. */}
+              {/* A spooled row's own time is when the runner decided it. Only a row that reached the chain
+                  60 s or more later says so; the full-log refusal says why it was refused. */}
               {e.spool_full && <span className="shrink-0 text-meta text-muted-foreground">{LOCAL_RUN.SPOOL_FULL}</span>}
-              <span className="shrink-0 font-mono text-meta text-muted-foreground">
-                {e.spooled_at ? LOCAL_RUN.SPOOLED(absoluteTime(e.spooled_at)) : relativeTime(e.time)}
-              </span>
+              {reachedLater(e) ? (
+                <span
+                  className="shrink-0 font-mono text-meta text-muted-foreground"
+                  title={LOCAL_RUN.REACHED_LATER_TIP(absoluteTime(e.spooled_at!), absoluteTime(e.time))}
+                >
+                  {LOCAL_RUN.REACHED_LATER} · {absoluteTime(e.spooled_at!)}
+                </span>
+              ) : (
+                <span className="shrink-0 font-mono text-meta text-muted-foreground">
+                  {relativeTime(e.spooled_at && Number.isFinite(Date.parse(e.spooled_at)) ? e.spooled_at : e.time)}
+                </span>
+              )}
             </div>
           ))}
         </div>

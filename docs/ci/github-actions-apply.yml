@@ -1,0 +1,31 @@
+# Wardyn workload apply - GitHub Actions example. NOT RUN BY ANY WARDYN CI JOB.
+# Copy it into your repo's .github/workflows/. See docs/CI.md "Apply from a pipeline".
+#
+# Uses a service identity's token. It may run `wardyn apply --dry-run`, so the
+# first step previews the change before the gated apply.
+# Required reviewers on the `production` environment are the approval gate.
+name: wardyn-apply-workload
+
+on:
+  workflow_dispatch:
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Check out your repo
+        uses: actions/checkout@v4
+
+      # Put the wardyn CLI on PATH first (a release asset, docs/VERIFY.md).
+      - name: Preview the change
+        env:
+          WARDYN_URL: https://wardyn.example.com
+          WARDYN_TOKEN: ${{ secrets.WARDYN_CI_TOKEN }}
+        run: wardyn apply -f workloads/web.yaml --dry-run
+
+      - name: Apply the workload
+        env:
+          WARDYN_URL: https://wardyn.example.com
+          WARDYN_TOKEN: ${{ secrets.WARDYN_CI_TOKEN }}
+        run: wardyn apply -f workloads/web.yaml --wait --timeout 10m

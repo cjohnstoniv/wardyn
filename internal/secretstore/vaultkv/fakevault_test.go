@@ -333,6 +333,15 @@ func writeFile(t *testing.T, content string) string {
 // newFakeStore returns a Store logged in to f with Kubernetes auth.
 func newFakeStore(t *testing.T, f *fakeVault) *Store {
 	t.Helper()
+	s := newFakeStoreDefaultBackoff(t, f)
+	s.c.backoff = 0
+	return s
+}
+
+// newFakeStoreDefaultBackoff is for a token short enough to renew during the
+// test: keepAlive then reads c.backoff, so nothing may write it after New.
+func newFakeStoreDefaultBackoff(t *testing.T, f *fakeVault) *Store {
+	t.Helper()
 	f.mu.Lock()
 	f.jwts["sa-jwt"] = "wardyn"
 	f.mu.Unlock()
@@ -343,6 +352,5 @@ func newFakeStore(t *testing.T, f *fakeVault) *Store {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	s.c.backoff = 0
 	return s
 }

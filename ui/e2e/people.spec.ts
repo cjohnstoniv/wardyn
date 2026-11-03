@@ -56,7 +56,7 @@ test.describe("People (Admin view)", () => {
     const row = page.getByRole("row").filter({ hasText: person.email });
     await expect(row).toBeVisible();
     await expect(row.getByText("Never signed in")).toBeVisible();
-    await expect(row.getByText("1 key")).toBeVisible();
+    await expect(row.getByText("1 SSH key")).toBeVisible();
     await row.getByRole("button", { name: person.email }).click();
 
     const drawer = page.getByRole("dialog");
@@ -75,7 +75,7 @@ test.describe("People (Admin view)", () => {
     await drawer.getByRole("button", { name: "Sign out everywhere" }).click();
     const confirm = page.getByRole("alertdialog");
     await expect(
-      confirm.getByText(`Sign ${person.email} out of every browser? Their API tokens, including the CLI's, and SSH keys keep working; revoke those from Tokens or Remove all. They can sign in again unless their access is removed.`),
+      confirm.getByText(`Sign ${person.email} out of every browser and CLI session? Their personal API tokens and SSH keys keep working; revoke those from Tokens or Remove all. They can sign in again unless their access is removed.`),
     ).toBeVisible();
     expect(revoked).toBeNull();
     await confirm.getByRole("button", { name: "Sign out everywhere" }).click();
@@ -110,7 +110,7 @@ test.describe("People (Admin view)", () => {
     await page.goto("/admin/people");
     await expect(page.getByRole("heading", { name: "People", level: 1 })).toBeVisible();
     await expect(sidebarPeople(page)).toBeVisible();
-    await expect(page.getByText("Only the super admin can see and change who can sign in.")).toBeVisible();
+    await expect(page.getByText("Only people with the Admin role can see and change who can sign in.")).toBeVisible();
     await page.getByRole("textbox", { name: "Search people" }).fill(person.email.slice(0, 14));
     await page.getByRole("button", { name: person.email }).click();
     await expect(page.getByRole("dialog").getByRole("button", { name: "Remove all" })).toBeEnabled();
