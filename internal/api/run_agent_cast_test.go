@@ -370,7 +370,7 @@ func TestAgentCast_AnObligationThatCannotBeStoredIsNoCast(t *testing.T) {
 		if tw, _ := spec.ExecOutput.(*tailWriter); tw == nil || tw.cast != nil {
 			t.Fatalf("required=%v: the tail kept a cast with no obligation behind it", required)
 		}
-		assertNoCastDecision(t, f, cs, run, ok, required)
+		assertNoCastDecision(t, f, cs, run, ok, required, "save_failed")
 	}
 }
 
@@ -414,7 +414,7 @@ func TestAgentCast_MacOSVMWithNoCastFollowsTheRequiredRule(t *testing.T) {
 				if spec.ExecOutput != nil {
 					t.Fatalf("exec output %T, want none", spec.ExecOutput)
 				}
-				assertNoCastDecision(t, f, cs, run, ok, sc.required)
+				assertNoCastDecision(t, f, cs, run, ok, sc.required, "no_tail")
 			})
 		}
 	}
@@ -429,13 +429,32 @@ func TestAgentCast_MacOSVMWithNoCastFollowsTheRequiredRule(t *testing.T) {
 			f.srv.cfg.RecordingStore = nil // what the recorder needs; the mark was settled before
 			run := f.run
 			ok := f.srv.recordMacOSAgent(context.Background(), &run, &spec, false)
-			assertNoCastDecision(t, f, cs, run, ok, sc.required)
+			assertNoCastDecision(t, f, cs, run, ok, sc.required, "no_tail")
 		})
 	}
 }
 
-func assertNoCastDecision(t *testing.T, f *outputFixture, cs *castStore, run types.AgentRun, started, required bool) {
+// assertNoCastDecision also checks the failure row a decline leaves in Audit: one session.recording.write
+// failure row for the run's agent cast naming wantReason when the run started (a run that failed at start
+// has its run.create failure row instead and no cast row).
+func assertNoCastDecision(t *testing.T, f *outputFixture, cs *castStore, run types.AgentRun, started, required bool, wantReason string) {
 	t.Helper()
+	defer func() {
+		rows := f.audit.eventsFor(f.run.ID, "session.recording.write")
+		if required {
+			if len(rows) != 0 {
+				t.Errorf("a run that failed at start wrote %d agent cast rows, want none", len(rows))
+			}
+			return
+		}
+		var d map[string]any
+		if len(rows) == 1 {
+			_ = json.Unmarshal(rows[0].Data, &d)
+		}
+		if len(rows) != 1 || rows[0].Outcome != "failure" || rows[0].Target != recording.CastKey(f.run.ID.String(), agentCastSession) || d["reason"] != wantReason {
+			t.Errorf("decline rows = %+v, want one failure row for the agent cast with reason %q", rows, wantReason)
+		}
+	}()
 	if run.NotRecorded != types.NotRecordedRunnerDeclined {
 		t.Fatalf("not_recorded = %q, want runner_declined", run.NotRecorded)
 	}
@@ -601,6 +620,31 @@ type rejectingAudit struct{ refused atomic.Int32 }
 func (a *rejectingAudit) Record(context.Context, types.AuditEvent) error {
 	a.refused.Add(1)
 	return errors.New("audit store down and spool full")
+}
+
+// A decline at dispatch whose failure row the audit recorder rejects (durably and into its spool) is never
+// silently lost: the run is stopped with its own sentence and a run.create failure row, and no run is started
+// marked and unexplained. With the recorder accepting, the same run starts and the row is there.
+func TestAgentCast_ADispatchDeclineWhoseRowIsRejectedStopsTheRun(t *testing.T) {
+	f, _, _ := agentCastFixture(t, types.MachineMacOSVM, func(c *Config) { c.ExecOutputTailOff = true })
+	rejecting := &rejectingAudit{}
+	f.srv.cfg.Audit = rejecting
+	run, _, ok := startDispatch(f, types.SiteConfig{}, false)
+	if ok || f.st.FailureHint() != macOSAgentDeclineUnrecordedMsg || f.st.State() != types.RunFailed {
+		t.Fatalf("started=%v hint=%q state=%s, want the run stopped with %q", ok, f.st.FailureHint(), f.st.State(), macOSAgentDeclineUnrecordedMsg)
+	}
+	if rejecting.refused.Load() == 0 || run.NotRecorded != types.NotRecordedRunnerDeclined {
+		t.Fatalf("refused rows %d, not_recorded %q, want the row attempted for a declined run", rejecting.refused.Load(), run.NotRecorded)
+	}
+
+	f2, cs2, _ := agentCastFixture(t, types.MachineMacOSVM, func(c *Config) { c.ExecOutputTailOff = true })
+	run2, _, ok2 := startDispatch(f2, types.SiteConfig{}, false)
+	if !ok2 || f2.st.State() == types.RunFailed || cs2.marked() != types.NotRecordedRunnerDeclined {
+		t.Fatalf("accepting recorder: started=%v state=%s mark=%q, want the run started with the mark stored", ok2, f2.st.State(), cs2.marked())
+	}
+	if rows := castRows(t, f2, agentCastSession); len(rows) != 1 || rows[0]["outcome"] != "failure" || rows[0]["reason"] != "no_tail" {
+		t.Fatalf("rows %v, want one no_tail failure row for %s", rows, run2.ID)
+	}
 }
 
 // agentCastDeclineFixture is a macOS VM task run that has ended and still owes its agent cast, on a

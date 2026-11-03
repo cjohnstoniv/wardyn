@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -68,14 +69,17 @@ func (s *Server) applyRunRecording(ctx context.Context, run *types.AgentRun, spe
 	if run.NotRecorded == "" {
 		return true
 	}
-	return s.keepOrHoldNotRecorded(ctx, run, "")
+	return s.keepOrHoldNotRecorded(ctx, run, "", "")
 }
 
 // keepOrHoldNotRecorded is a run that will not be recorded, run.NotRecorded saying why: it is stored and
 // the run starts, unless the organisation or the run's pool requires recording (a setting that cannot be
 // read counts as required), which fails the run with a run.create failure row. msg, when set, is the
-// sentence for a requirement that was read; else the reason's own.
-func (s *Server) keepOrHoldNotRecorded(ctx context.Context, run *types.AgentRun, msg string) bool {
+// sentence for a requirement that was read; else the reason's own. declined, when set, is why the run's agent
+// output cast was declined at dispatch: a run that starts anyway gets its failure row (keepRunNotRecorded), and one
+// whose row the audit recorder will not accept is stopped (macOSAgentDeclineUnrecordedMsg), never started with the
+// decline unsaid.
+func (s *Server) keepOrHoldNotRecorded(ctx context.Context, run *types.AgentRun, msg, declined string) bool {
 	if pool, required, readErr := s.recordingRequired(ctx, *run); required {
 		reason, held := recordingHold(run.NotRecorded == types.NotRecordedOrgOff, pool, readErr)
 		if msg != "" && readErr == nil {
@@ -86,7 +90,12 @@ func (s *Server) keepOrHoldNotRecorded(ctx context.Context, run *types.AgentRun,
 			run.ID.String(), "failure", mustJSON(map[string]any{"reason": reason})))
 		return false
 	}
-	s.keepRunNotRecorded(ctx, *run)
+	if !s.keepRunNotRecorded(ctx, *run, declined) {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, macOSAgentDeclineUnrecordedMsg)
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"reason": "decline_not_recorded"})))
+		return false
+	}
 	return true
 }
 
@@ -123,8 +132,13 @@ func (s *Server) applyDispatchRecording(ctx context.Context, run *types.AgentRun
 	return s.applyRunRecording(ctx, run, spec, recordingChoice(*run, policy, c, site, siteErr, floor))
 }
 
-// keepRunNotRecorded stores why the run is not recorded; best-effort, like the decision's audit.
-func (s *Server) keepRunNotRecorded(ctx context.Context, run types.AgentRun) {
+// keepRunNotRecorded stores why the run is not recorded; best-effort, like the decision's audit. declined,
+// when set, is the reason the run's agent output cast was declined at dispatch: it goes in a
+// session.recording.write failure row, the one declineAgentOutput writes for a later decline, through the
+// durable path (recordStreamAuditDurably), so Audit says why. It reports false only for a row the recorder
+// would not accept, durably or into its spool: there is nothing to retry the row from at dispatch, so the
+// caller stops the run.
+func (s *Server) keepRunNotRecorded(ctx context.Context, run types.AgentRun, declined string) bool {
 	st, ok := s.cfg.Store.(interface {
 		SetRunNotRecorded(context.Context, uuid.UUID, types.RunNotRecorded) error
 	})
@@ -133,6 +147,16 @@ func (s *Server) keepRunNotRecorded(ctx context.Context, run types.AgentRun) {
 			slog.WarnContext(ctx, "wardynd: keep why a run is not recorded", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
 	}
+	if declined == "" {
+		return true
+	}
+	key := recording.CastKey(run.ID.String(), agentCastSession)
+	if !s.recordStreamAuditDurably(ctx, run.SandboxRef, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "session.recording.write",
+		key, "failure", mustJSON(map[string]any{"session": agentCastSession, "key": key, "reason": declined}))) {
+		slog.ErrorContext(ctx, "wardynd: record why a run's agent output is not recorded; the run is stopped", slog.String("run_id", run.ID.String()), slog.String("reason", declined))
+		return false
+	}
+	return true
 }
 
 // keepRunRecordingOff stores an off decision, the level and policy_off in one write, and reports
@@ -336,20 +360,27 @@ func (s *Server) targetRecords(ctx context.Context, run types.AgentRun) (records
 // The notices of a macOS VM run, at Review and in the 201's warnings, by the level dispatch will resolve:
 // at Screen and actions its desktop is recorded while someone watches it, unmasked, and it gets no window
 // on the Mac; at Terminal its desktop is not recorded. Its terminal sessions and a task run's agent output
-// are recorded and masked at either.
+// are recorded and masked at either. The agent's output is named only where it is kept: not for an interactive
+// run (it has no agent exec) or where the output tail is off (openExecOutput), which leaves a task run with no
+// agent output cast.
 const (
-	macOSVMScreenNotice   = "This run's desktop is recorded while someone watches it from the run page. The screen recording isn't masked: anything the desktop shows, a secret included, is kept. A window on your Mac isn't recorded, so this run can't open one. Terminal sessions are recorded and masked."
-	macOSVMTerminalNotice = "At the Terminal level this run's desktop isn't recorded. Terminal sessions and the agent's output are recorded and masked."
+	macOSVMScreenNotice                = "This run's desktop is recorded while someone watches it from the run page. The screen recording isn't masked: anything the desktop shows, a secret included, is kept. A window on your Mac isn't recorded, so this run can't open one. Terminal sessions are recorded and masked."
+	macOSVMTerminalNotice              = "At the Terminal level this run's desktop isn't recorded. Terminal sessions and the agent's output are recorded and masked."
+	macOSVMTerminalNoticeNoAgentOutput = "At the Terminal level this run's desktop isn't recorded. Terminal sessions are recorded and masked."
 )
 
 // macOSVMRecordingNotice is a macOS VM run's recording notice at create and Review, by the level its
 // dispatch will resolve (createRecordingChoice): none at off. Nothing about recording refuses a macOS VM run
-// here; the caller skips it where the organisation keeps no recordings.
-func macOSVMRecordingNotice(level types.RecordingLevel) string {
+// here; the caller skips it where the organisation keeps no recordings. noAgentOutput is a run with no agent output
+// cast: an interactive run, or any run where the output tail is off.
+func macOSVMRecordingNotice(level types.RecordingLevel, noAgentOutput bool) string {
 	switch level {
 	case types.RecordingScreenActions:
 		return macOSVMScreenNotice
 	case types.RecordingTerminal:
+		if noAgentOutput {
+			return macOSVMTerminalNoticeNoAgentOutput
+		}
 		return macOSVMTerminalNotice
 	}
 	return ""

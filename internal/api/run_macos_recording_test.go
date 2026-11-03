@@ -114,7 +114,7 @@ func TestStepPlacementCapability_MacOSVMRecording(t *testing.T) {
 			// The notice rides the fold's warnings, which Review and the 201 both carry.
 			var notices []string
 			for _, warn := range f.policyWarns {
-				if warn == macOSVMScreenNotice || warn == macOSVMTerminalNotice {
+				if warn == macOSVMScreenNotice || warn == macOSVMTerminalNotice || warn == macOSVMTerminalNoticeNoAgentOutput {
 					notices = append(notices, warn)
 				}
 			}
@@ -123,6 +123,46 @@ func TestStepPlacementCapability_MacOSVMRecording(t *testing.T) {
 			}
 		})
 	}
+
+	// The Terminal notice names the agent's output only for a task run whose output tail is on: an interactive run has
+	// no agent exec, and with the tail off a task run has no agent output cast. The Screen and actions notice names
+	// no agent output, so it is the same either way.
+	t.Run("the Terminal notice names the agent's output only where it is kept", func(t *testing.T) {
+		const noAgent = "At the Terminal level this run's desktop isn't recorded. Terminal sessions are recorded and masked."
+		if macOSVMTerminalNoticeNoAgentOutput != noAgent {
+			t.Fatalf("notice %q, want %q", macOSVMTerminalNoticeNoAgentOutput, noAgent)
+		}
+		for _, tc := range []struct {
+			name        string
+			interactive bool
+			tailOff     bool
+			site        types.SiteConfig
+			want        string
+		}{
+			{name: "a task run, tail on", want: macOSVMTerminalNotice},
+			{name: "an interactive run", interactive: true, want: noAgent},
+			{name: "a task run with the output tail off", tailOff: true, want: noAgent},
+			{name: "an interactive run with the output tail off", interactive: true, tailOff: true, want: noAgent},
+			{name: "Screen and actions, interactive", interactive: true, site: types.SiteConfig{Recording: &types.SiteRecording{Level: types.RecordingScreenActions}}, want: macOSVMScreenNotice},
+			{name: "Screen and actions, tail off", tailOff: true, site: types.SiteConfig{Recording: &types.SiteRecording{Level: types.RecordingScreenActions}}, want: macOSVMScreenNotice},
+		} {
+			s := capsServer(&fakeRunner{})
+			id := macRunner(t, s, readyMac(), roomyRunner)
+			s.cfg.Store = &macRecordingStore{ownedRunners: s.cfg.Store.(ownedRunners), site: tc.site}
+			s.cfg.RecordingStore = fsRecordingStore(t)
+			s.cfg.ExecOutputTailOff = tc.tailOff
+			req := macReq(id)
+			req.Interactive = tc.interactive
+			w := httptest.NewRecorder()
+			f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(capsCtx), req: &req, ceiling: profile}
+			if !s.stepPlacementCapability(f, nil) {
+				t.Fatalf("%s: refused: %d %s", tc.name, w.Code, w.Body.String())
+			}
+			if len(f.policyWarns) != 1 || f.policyWarns[0] != tc.want {
+				t.Errorf("%s: warnings %q, want the one notice %q", tc.name, f.policyWarns, tc.want)
+			}
+		}
+	})
 
 	t.Run("a container on the same Mac is not touched", func(t *testing.T) {
 		s := capsServer(&fakeRunner{})

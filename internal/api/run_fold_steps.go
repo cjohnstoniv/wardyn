@@ -399,7 +399,7 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 	if refusal.write(s, f.w, f.r) {
 		return false
 	}
-	if notice := macOSVMRecordingNotice(choice.Resolve()); notice != "" {
+	if notice := macOSVMRecordingNotice(choice.Resolve(), f.req.Interactive || s.cfg.ExecOutputTailOff); notice != "" {
 		f.policyWarns = append(f.policyWarns, notice)
 	}
 	return true

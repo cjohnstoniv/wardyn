@@ -69,12 +69,13 @@ export function TerminalPane({
   const watchDesktop =
     run.state === "RUNNING" && canAttach && !isBackgroundRun(run) && run.macos?.desktop === "observe" ? <WatchDesktopButton run={run} /> : undefined;
 
-  // A run with no recording to replay shows the bytes the Output tab reads: a macOS VM run while it lives (a
-  // macOS VM is not recorded), any other non-interactive run once the recording read found none. A read that
-  // fails or is refused leaves the notices below as they were.
+  // A run with no recording to replay shows the bytes the Output tab reads: a macOS VM run while it lives (its
+  // agent output cast is saved when the agent finishes), any other non-interactive run once the recording read
+  // found none. A read that fails or is refused leaves the notices below as they were.
   const comingUp = run.state === "PENDING" || run.state === "STARTING" || run.state === "QUEUED";
-  // A macOS VM run is never recorded, so its recording read cannot change the answer: the pane stays on Output
-  // while that read is still out, rather than flashing the Recording frame as the run ends.
+  // A finished macOS VM task run can have a recording (its agent output cast): the pane stays on Output while
+  // that read is still out, rather than flashing the Recording frame as the run ends, and becomes the replay
+  // only once the read finds one.
   const recordingPending = recState === "idle" || recState === "loading";
   const wantsKept =
     !run.interactive && (terminal ? (recState === "ready" && !recording) || (isMacOSVM(run) && recordingPending) : isMacOSVM(run) && !comingUp);

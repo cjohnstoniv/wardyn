@@ -70,10 +70,12 @@ export const RUN_COCKPIT = {
   recordingDisabled: "Session recording is disabled on this deployment",
   recordingMissing:
     "This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox.",
-  // A macOS VM run: the agent's own process makes no cast there (SandboxSpec.Record is false), only a console
-  // or SSH terminal session does, and its cast is saved when the session ends, only if it showed output.
-  recordingMissingMacOS:
-    "This run has no captured terminal session. A recording appears here after a console or SSH terminal on this run closes, if it showed any output.",
+  // A macOS VM run: a recording appears when a console or SSH terminal on it closes, or when a task's
+  // agent finishes (its output is saved as one). An interactive run has no agent, so no agent clause.
+  recordingMissingMacOS: "This run has no recording yet. One appears when a console or SSH terminal on this run closes, or when a task's agent finishes.",
+  recordingMissingMacOSInteractive: "This run has no recording yet. One appears when a console or SSH terminal on this run closes.",
+  // A finished run with nothing listed: not "yet", and not a claim about why.
+  recordingNoneForRun: "No recording is available for this run.",
   // The THIRD fact: a fetch that FAILED establishes nothing about the run, so
   // it must not be reported as "this run has no recording". Same sentence the
   // Recording tab already shows

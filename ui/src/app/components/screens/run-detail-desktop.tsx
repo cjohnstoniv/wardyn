@@ -23,6 +23,7 @@ import { Mono } from "../wardyn/code-block";
 import { RUN_SSH, UI_APPS_LANE } from "../wardyn/copy";
 import { DESKTOP } from "../wardyn/copy/desktop";
 import { MAC_WINDOW } from "../wardyn/copy/mac-window";
+import { RECORDING_DESKTOP, desktopRecordedAt } from "../wardyn/copy/recording-level";
 import { RUN_VM_PAGE } from "../wardyn/copy/run-cockpit";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { Chip, WidgetCard } from "../wardyn/primitives";
@@ -150,6 +151,12 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
             </Button>
             {!background && <DesktopSignInButton s={signIns} />}
           </div>
+        )}
+        {/* What the screen recording keeps, once, where the desktop opens. No frames are kept while the agent is paused for a sign-in. */}
+        {desktopOn && !noDoor && (!background || watchable) && desktopRecordedAt(run) && (
+          <p className="mt-2 text-meta text-muted-foreground" data-testid="desktop-recorded-line">
+            {!background && signIns.view?.paused ? RECORDING_DESKTOP.PAUSED : RECORDING_DESKTOP.WATCHED}
+          </p>
         )}
         {desktopOn && !background && <DesktopSignInsError s={signIns} />}
         {healthFailed && !macOff && !noDoor && (
