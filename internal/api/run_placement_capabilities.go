@@ -350,6 +350,13 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 	if demands.LinuxVM && requestIsInteractive(req) && req.InteractiveStart == "agent" {
 		return runError(placement.ReasonPlacementCapability.Status(), string(placement.ReasonPlacementCapability), linuxVMAgentStart)
 	}
+	if demands.MacOSVM && requestIsInteractive(req) && req.InteractiveStart == "agent" {
+		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "interactive_start"}, runner.MacVMAgentStart)
+	}
+	if demands.MacOSVM && demands.IdlePause {
+		// A macOS VM has no pause (the runner's Freeze answers ErrFreezeUnsupported), so the profile's idle pause cannot apply.
+		return placementRunRefusal(&placement.Refusal{Reason: placement.ReasonPlacementCapability, Field: "pause_idle_after_sec"}, runner.MacVMNoIdlePause)
+	}
 	if demands.LinuxVM && ask.KeepsWorkFolder {
 		// A kept work folder is a Docker or cluster volume, which a Linux VM can never open (it takes only a drive bound to its
 		// runner), so this answers at Review for every runner, whatever it reports, rather than failing the start.

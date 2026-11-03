@@ -469,8 +469,12 @@ func (d *Driver) proxyRunID(ctx context.Context, ref string) (uuid.UUID, error) 
 //
 // The per-class Capabilities.Freeze check is the caller's, but the driver enforces the same rule on
 // the container itself: a ref whose effective runtime is not runc is refused with
-// runner.ErrFreezeUnsupported and never paused.
+// runner.ErrFreezeUnsupported and never paused. A macOS VM is no container and has no pause in this
+// release, so it gets the same answer rather than the "missing container" success.
 func (d *Driver) FreezeSandbox(ctx context.Context, ref string) error {
+	if d.macVMLookup(ref) != nil {
+		return runner.ErrFreezeUnsupported
+	}
 	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
 	if isNotFound(err) {
 		return nil
@@ -500,8 +504,11 @@ func (d *Driver) FreezeSandbox(ctx context.Context, ref string) error {
 
 // ThawSandbox is runner Freeze/Thaw's resume half (runner.Freezer):
 // ContainerUnpause on the agent ref. Idempotent: a missing container, or one
-// that is not paused, is not an error.
+// that is not paused, is not an error. A macOS VM is never paused, so it is refused as FreezeSandbox does.
 func (d *Driver) ThawSandbox(ctx context.Context, ref string) error {
+	if d.macVMLookup(ref) != nil {
+		return runner.ErrFreezeUnsupported
+	}
 	if _, err := d.cli.ContainerUnpause(ctx, ref, client.ContainerUnpauseOptions{}); err != nil && !isNotFound(err) && !isNotPaused(err) {
 		return fmt.Errorf("docker: unpause: %w", err)
 	}

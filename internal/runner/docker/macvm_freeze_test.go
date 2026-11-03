@@ -7,21 +7,24 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
-// TestMacVMFreezeIsNil pins today's answer: a macOS VM ref is no container, so Freeze and Thaw find
-// nothing and report success without pausing anything.
-func TestMacVMFreezeIsNil(t *testing.T) {
+// TestMacVMFreezeIsUnsupported: a macOS VM has no pause, so Freeze and Thaw say so (as a container
+// under another runtime does) instead of reporting a pause that never happened.
+func TestMacVMFreezeIsUnsupported(t *testing.T) {
 	r := newMacRig(t)
 	sb, err := r.d.CreateSandbox(context.Background(), macSpec())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.d.FreezeSandbox(context.Background(), sb.Ref); err != nil {
-		t.Fatalf("FreezeSandbox = %v", err)
+	if err := r.d.FreezeSandbox(context.Background(), sb.Ref); !errors.Is(err, runner.ErrFreezeUnsupported) {
+		t.Fatalf("FreezeSandbox = %v, want ErrFreezeUnsupported", err)
 	}
-	if err := r.d.ThawSandbox(context.Background(), sb.Ref); err != nil {
-		t.Fatalf("ThawSandbox = %v", err)
+	if err := r.d.ThawSandbox(context.Background(), sb.Ref); !errors.Is(err, runner.ErrFreezeUnsupported) {
+		t.Fatalf("ThawSandbox = %v, want ErrFreezeUnsupported", err)
 	}
 }

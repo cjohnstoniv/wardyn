@@ -256,7 +256,7 @@ func (d *Driver) refuseMacVMSpec(spec runner.SandboxSpec) (macvm.Manifest, error
 		return macvm.Manifest{}, errors.New("A macOS VM sandbox's terminal isn't recorded in this release, and the organisation asked to record this run.")
 	case spec.Interactive && spec.Env[envInteractiveStart] == "agent":
 		//lint:ignore ST1005 the sentence the person reads, as written in the approved copy
-		return macvm.Manifest{}, errors.New("A macOS VM sandbox's terminal opens a shell, not the agent CLI, in this release. Set the interactive start to shell.")
+		return macvm.Manifest{}, errors.New(runner.MacVMAgentStart)
 	}
 	if err := d.preflightSpec(spec); err != nil {
 		return macvm.Manifest{}, err
