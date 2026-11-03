@@ -13,7 +13,7 @@ export const NR_MACHINE = {
   CONTAINER_HELP: "A sandbox container with a terminal. This is the default.",
   VM_HELP: "A virtual machine of its own, with its own kernel and a terminal. Choose its operating system below.",
   OS_LINUX_HELP: "Runs the image you choose. To get a desktop you can open, use your own image with a desktop in it.",
-  MACOS_GIVES: "A terminal with your repository and agent set up, SSH access for your editor, and a view-only desktop in the browser. A window on the Mac is available when your organisation enables it and this run is eligible.",
+  MACOS_GIVES: "A terminal with your repository and agent set up, SSH access for your editor, and the desktop in the browser: view-only, or with control where the Mac allows it. A window on the Mac is available when your organisation enables it and this run is eligible.",
   // UXR-1: a VM's terminal opens a shell, so the Harnesses step shows the start switch off and says why.
   VM_STARTS_SHELL: "A virtual machine's terminal opens a shell in this release. Start the agent from that shell.",
   OS_LABEL: "Operating system",
