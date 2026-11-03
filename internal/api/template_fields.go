@@ -206,6 +206,8 @@ var templateRequestRules = []TemplateFieldRule{
 		"The kind of sandbox is chosen at each launch in this release; a template never prefills a Linux VM."),
 	excludedField("macos_base", templateExcludeLaunch,
 		"A macOS VM's base is chosen at each launch, with the kind of sandbox."),
+	excludedField("desktop_window", templateExcludeLaunch,
+		"A window onto a macOS VM is asked for at each launch by the person at that Mac; a template never opens one for whoever uses it."),
 	excludedField("max_wait_sec", templateExcludeLaunch,
 		"How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."),
 	excludedField("start_at", templateExcludeLaunch,

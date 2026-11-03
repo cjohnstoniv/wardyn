@@ -34,6 +34,8 @@ export interface CreateRunInput {
   machine_kind?: MachineKind;
   // pkg/client.CreateRunRequest.MacOSBase: a macos_vm run's base, "Standard" or another base's name; absent is Standard.
   macos_base?: string;
+  // pkg/client.CreateRunRequest.DesktopWindow: "at_start" opens a window onto a macos_vm run on the creator's own Mac when it starts.
+  desktop_window?: "at_start";
   interactive?: boolean;
   // Bring Your Own Image: a user-supplied base image the backend WRAPS with the
   // runner tools (FROM <image> + COPY tools + cleared ENTRYPOINT) before use.

@@ -139,4 +139,7 @@ type dispatchParams struct {
 	// desktop sign-ins (signinVariantUngranted). Set only by
 	// finishCreateRunLaunch, from the fold.
 	SigninImageUngranted bool
+	// DesktopWindowAtStart: the request asked for a window onto the run on its own Mac as it comes up
+	// (CreateRunRequest.DesktopWindow); dispatch asks for it once the run is RUNNING.
+	DesktopWindowAtStart bool
 }

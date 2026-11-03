@@ -247,6 +247,24 @@ const (
 	reasonRunBackgroundWatchControl       = "run_background_watch_control"        // the run's Mac offers desktop control, which a watch does not open
 	reasonRunBackgroundWatchPaused        = "run_background_watch_paused"         // the run is paused, and a watch never wakes it
 
+	// An attended window onto a macOS VM run (run_mac_window.go). A profile's deny_ui_apps or deny_interactive
+	// answers as governance_unit, and an agent whose desktop sign-ins are Not allowed as desktop_sign_ins_off.
+	reasonMacWindowSiteOff        = "mac_window_site_off"        // macos_vm.allow_attended_window is not true: no window on this install
+	reasonMacWindowNotMacOSVM     = "mac_window_not_macos_vm"    // the run is not a macOS VM run
+	reasonMacWindowNotYourMac     = "mac_window_not_your_mac"    // the run is not on a Mac whose runner the caller registered
+	reasonMacWindowUnrecorded     = "mac_window_unrecorded"      // the run's recording level is Screen and actions, which a macOS VM's screen can't meet
+	reasonMacWindowOffline        = "mac_window_offline"         // the run's runner is not connected
+	reasonMacWindowRunnerTooOld   = "mac_window_runner_too_old"  // the runner's caps say it can't open a window
+	reasonMacWindowDesktopControl = "mac_window_desktop_control" // a browser desktop that had control of the run did not close in time: one keyboard at a time
+	reasonMacWindowPaused         = "mac_window_paused"          // the run is paused
+	reasonMacWindowPreparing      = "mac_window_preparing"       // the run is still being prepared
+	reasonMacWindowNotHere        = "mac_window_not_here"        // the runner is connected through another server, and nothing routes the call there
+	reasonMacWindowOpen           = "mac_window_open"            // the run already has a window open
+	reasonMacWindowNotAtMac       = "mac_window_not_at_mac"      // the person isn't signed in at the Mac's screen, or it is locked
+	reasonMacWindowRevoked        = "mac_window_revoked"         // the caller's session was cut off
+	reasonMacWindowFailed         = "mac_window_failed"          // the runner could not open the window
+	reasonDesktopWindowInvalid    = "desktop_window_invalid"     // desktop_window is not "at_start", or is on a run that is not a macOS VM
+
 	// One-time scheduled runs (run_schedule.go): start_at on a create. Kept out of the run-mode block above,
 	// which ui/src/app/lib/run-mode-refusals.test.ts reads as the run-mode set.
 	reasonScheduledRunsOff         = "scheduled_runs_off"         // start_at sent while WARDYN_SCHEDULED_RUNS is off

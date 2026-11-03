@@ -321,6 +321,11 @@
   },
   {
     "reason": "governance_overlay_unsatisfiable",
+    "target": "\"runs.desktop_window\"",
+    "sentence": "u.Error()"
+  },
+  {
+    "reason": "governance_overlay_unsatisfiable",
     "target": "target",
     "sentence": "u.Error()"
   },
@@ -348,6 +353,11 @@
     "reason": "governance_unit",
     "target": "\"runs.desktop_watch\"",
     "sentence": "backgroundWatchProfileMsg"
+  },
+  {
+    "reason": "governance_unit",
+    "target": "\"runs.desktop_window\"",
+    "sentence": "macWindowProfileMsg"
   },
   {
     "reason": "governance_unit",

@@ -233,6 +233,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	// a single run's own detail read must agree with what the list showed.
 	// The recording fields are always filled here: a default read that said
 	// has_recording false for a stored recording read as a lost one (#3705).
+	stored := run // the window's prep check reads the stored status_detail, which the projection blanks
 	runs := []types.AgentRun{run}
 	s.fillRecordingMeta(r.Context(), runs)
 	s.projectStatusDetailFor(r, runs)
@@ -294,6 +295,9 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// if not why (run_background_watch.go); absent on every other run. Beside macos, which an offline
 		// runner leaves absent.
 		BackgroundWatch *backgroundWatchView `json:"background_watch,omitempty"`
+		// MacWindow is whether this caller may open a window onto a live macOS VM run on its own Mac, and if not
+		// why (run_mac_window.go); absent on every other run.
+		MacWindow *macWindowView `json:"mac_window,omitempty"`
 		// MacOSDisk is where a macOS VM run's disk stands on its Mac at the run's end (run_macos_disk.go);
 		// absent on every other run.
 		MacOSDisk *runMacOSDiskView `json:"macos_disk,omitempty"`
@@ -310,6 +314,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		ModelAllowlists: s.runModelAllowlists(r.Context(), run.ID),
 		MacOS:           s.runMacOSView(run),
 		BackgroundWatch: s.backgroundWatchViewFor(r.Context(), run, principalFromRequest(r)),
+		MacWindow:       s.macWindowViewFor(r.Context(), stored, s.macWindowAuthorityOf(r)),
 		MacOSDisk:       s.runMacOSDiskView(r.Context(), run),
 	})
 }

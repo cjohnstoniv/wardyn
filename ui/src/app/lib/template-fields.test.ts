@@ -76,6 +76,7 @@ describe("template field registry", () => {
   it("excludes the secret-bearing, retired and launch-only fields and nothing else", () => {
     expect(TEMPLATE_REQUEST_FIELDS.filter((r) => r.excluded).map((r) => r.name).sort()).toEqual([
       "description",
+      "desktop_window",
       "integration_id",
       "keep_work_folder",
       "local_folder",

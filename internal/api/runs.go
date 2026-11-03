@@ -223,7 +223,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	runID := uuid.New()
 	// The run's one target is chosen from its own id, before an identity exists to leak on a refusal.
 	placed := types.AgentRun{ID: runID}
-	if f.place.apply(&placed, enforced).write(s, w, r) {
+	// A window at start is opened under the grant this create leaves (macWindowRecordPending), judged again at the open.
+	if f.place.apply(&placed, enforced).write(s, w, r) || s.macWindowRecordPending(w, r, runID, req.DesktopWindow, createdByType, createdBy) {
 		return
 	}
 	intent := launchIntentFor(asked)

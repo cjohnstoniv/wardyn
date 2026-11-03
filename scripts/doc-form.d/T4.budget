@@ -119,7 +119,8 @@
 # threatmodel/THREAT-MODEL.md 73046 adds 246 over 72800, measured: the truncated-echo residual, turning identity off, the refusal window, the shared-email residual and the first-mint audit.
 # threatmodel/THREAT-MODEL.md 73130 adds 84 over 73046, measured: the call id on every route attempt and the control plane rollback residual.
 # threatmodel/THREAT-MODEL.md 73135 adds 5 over 73130, measured: gateway identity tokens are minted again at half-life.
-threatmodel/THREAT-MODEL.md=73175 share=20
+# threatmodel/THREAT-MODEL.md 73375 = 73175 + the attended window rows (window lanes), measured at the rc.12 w2 merge of window-remote.
+threatmodel/THREAT-MODEL.md=73375 share=20
 # 0.10 HYB-C: threatmodel/THREAT-MODEL.md 66573 adds 43 over 66530, measured: the Linux VM's virtiofs shares are the container's binds (same folders, targets, mode, no other host path).
 # threatmodel/THREAT-MODEL.md 66596 adds 23 over 66573 (0.10 HYB-C review): VM state reaches the guest only as its disk; a guest write lands as the runner's user.
 # threatmodel/THREAT-MODEL.md 65311 adds 222 over 65089 (0.10 FEAT-1MCP), measured: item (r), a local MCP server's access, secrets, egress, off switch and refusals.

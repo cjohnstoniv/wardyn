@@ -87,10 +87,13 @@ const (
 	// change, or the names a namespace still holds. Only a runner that lists workload namespaces
 	// sends it.
 	EventWorkload = "workload"
+	// EventMacWindowUnexpected carries a MacWindowUnexpected: a window opened on a macOS VM run through
+	// its helper's control socket, not through a mac_window call. Event.RunID is the run.
+	EventMacWindowUnexpected = "mac_window_unexpected"
 )
 
 // EventKinds is the closed list.
-var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase, EventWorkload}
+var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase, EventWorkload, EventMacWindowUnexpected}
 
 // Event is the EVENT payload. Call, when non-zero, names the in-flight CALL the
 // event belongs to (a waiting report), so the org can deliver it on that
@@ -275,6 +278,9 @@ type MacVMCaps struct {
 	// this Mac, attaches them to its macOS VM, and deletes them (reclaim_drive). A runner without it is
 	// never sent a macOS VM run with one.
 	DiskDrives bool `json:"disk_drives,omitempty"`
+	// Window says the runner serves mac_window: it opens an attended window onto a macOS VM run it holds.
+	// A runner without it (older) is never sent the call.
+	Window bool `json:"window,omitempty"`
 	// Bases are the Mac's other bases, each derived from Base (Standard, MAC-B04) with its operator's own
 	// install list, in name order; absent when it has none. A run names one in its create's macos_base.
 	Bases []MacVMDerivedBase `json:"bases,omitempty"`
@@ -592,6 +598,44 @@ const (
 	// opened only by the runner, only as the reply stream of a local_attach call, and carries bytes
 	// in that one direction: the org's writes are reset. The org ends the session by resetting it.
 	KindPTYTee = "pty_tee"
+	// KindMacWindow is the stream of one attended window onto a macOS VM run. It is opened only by the
+	// runner, only as the reply stream of a mac_window call. It carries no input: when the window ends
+	// first the runner writes one MacWindowEnd line and half-closes it; the org ends the window by
+	// resetting or closing it.
+	KindMacWindow = "mac_window"
+)
+
+// MacWindowUnexpected is the mac_window_unexpected event's data: Grant is the grant id the helper's window
+// event carried, as seen (empty when it carried none, and never a grant the runner issued), and At is when
+// the runner saw the window open.
+type MacWindowUnexpected struct {
+	Grant string    `json:"grant"`
+	At    time.Time `json:"at"`
+}
+
+// MacWindowEnd is the one line a mac_window stream carries, written by the runner when the window ends
+// before the org ended it. Reason is runner.MacWindowEnd*.
+type MacWindowEnd struct {
+	Reason string `json:"reason"`
+}
+
+// MacWindowOpenSentence is the refusal for a second window on a run that has one open: the helper, the
+// runner and the organisation use these words (macvm.WindowAlreadyOpenSentence), so a person reads the
+// same sentence from any of them.
+const MacWindowOpenSentence = "This run's window is already open."
+
+// The runner's other window refusals, whole. A refusal the helper words itself carries its own sentence.
+const (
+	MacWindowNotMacSentence    = "This run is not a macOS VM, so it has no window to open."
+	MacWindowHelperOldSentence = "This run's macOS VM helper is too old to open a window. End the run and start it again on this runner."
+)
+
+// The helper's two refusals (window_not_at_mac) of a screen that is locked or not the person's, and of one
+// that could not be read. The runner's reply carries the sentence and not the code, so the organisation
+// tells them by these words (macvm.WindowNotAtMacSentence, macvm.WindowUnreadableSentence).
+const (
+	MacWindowNotAtMacSentence   = "The window didn't open: you aren't signed in at this Mac's screen, or it is locked. Unlock it and open the window again."
+	MacWindowUnreadableSentence = "The window didn't open: Wardyn couldn't tell whether you are at this Mac's screen. Unlock it and open the window again."
 )
 
 // Open is the OPEN payload.
@@ -607,7 +651,7 @@ type Open struct {
 // Validate refuses a kind outside the closed list.
 func (o Open) Validate() error {
 	switch o.Kind {
-	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindFolder, KindDesktop, KindPTYTee:
+	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindFolder, KindDesktop, KindPTYTee, KindMacWindow:
 		return nil
 	}
 	return fmt.Errorf("%w: unknown stream kind %q", ErrBadFrame, o.Kind)

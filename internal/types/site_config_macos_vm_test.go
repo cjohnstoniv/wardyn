@@ -40,3 +40,27 @@ func TestSiteMacOSVMBackgroundWatchAllowed(t *testing.T) {
 		t.Fatal("true must read allowed")
 	}
 }
+
+// macos_vm.allow_attended_window: absent reads off, only an explicit true reads on, and an explicit false
+// survives the round trip.
+func TestSiteMacOSVMAttendedWindowAllowed(t *testing.T) {
+	var absent *SiteMacOSVM
+	if absent.AttendedWindowAllowed() || (&SiteMacOSVM{MaxBaseAgeDays: 7}).AttendedWindowAllowed() {
+		t.Fatal("an absent block or field must read off")
+	}
+	var sc SiteConfig
+	if err := json.Unmarshal([]byte(`{"macos_vm":{"allow_attended_window":false}}`), &sc); err != nil || sc.MacOSVM.AttendedWindowAllowed() {
+		t.Fatalf("decoded %+v, %v: false must read off", sc.MacOSVM, err)
+	}
+	raw, err := json.Marshal(sc)
+	if err != nil || string(raw) != `{"macos_vm":{"allow_attended_window":false}}` {
+		t.Fatalf("encoded %s, %v: false must be kept", raw, err)
+	}
+	if err := json.Unmarshal([]byte(`{"macos_vm":{"allow_attended_window":true}}`), &sc); err != nil || !sc.MacOSVM.AttendedWindowAllowed() {
+		t.Fatalf("decoded %+v, %v: true must read on", sc.MacOSVM, err)
+	}
+	on := true
+	if !(&SiteMacOSVM{AllowAttendedWindow: &on, AllowBackgroundWatch: new(bool)}).AttendedWindowAllowed() {
+		t.Fatal("the window switch is independent of the watch's")
+	}
+}

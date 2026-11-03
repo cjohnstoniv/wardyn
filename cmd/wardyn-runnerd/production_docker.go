@@ -538,6 +538,9 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	}
 	checkLapsesAtStartup(ctx, manager)
 	caps := &capsReporter{sub: sub, extra: extra, capacity: capacity, dispatcher: dispatcher, hasLocal: local != nil}
+	if extra.macOSVM != nil {
+		reportWindowsOn(ctx, caps.online.Load)
+	}
 	hooks := runnerwire.RunnerHooks{
 		Call: dispatcher.Call,
 		// The org never opens a stream toward a runner: a relay is the
@@ -901,7 +904,7 @@ func enableMacOSVM(ctx context.Context, sub *docker.Driver, runnerID, stateDir s
 	if m.ledger != nil {
 		m.sweepStaging()
 		cfg := &docker.MacVMConfig{Layout: m.layout, Helper: m.helper, Identity: macOSVMIdentity, SockRoot: m.sockRoot,
-			ToolsDialFile: filepath.Join(root, runToolsDialFile), Ledger: m.ledger, Host: m.host, RunnerID: runnerID, HostOS: macHostOS(), Changed: m.changed}
+			ToolsDialFile: filepath.Join(root, runToolsDialFile), Ledger: m.ledger, Host: m.host, RunnerID: runnerID, HostOS: macHostOS(), Changed: m.changed, OnUnexpectedWindow: unexpectedWindow}
 		if err := sub.EnableMacVM(cfg); err != nil {
 			slog.WarnContext(ctx, "macOS VM sandboxes are off on this runner", "reason", err.Error())
 			m.ledger, m.refusal, m.reason = nil, macOSVMLedgerDamaged, runnerwire.MacVMReasonLedgerDamaged

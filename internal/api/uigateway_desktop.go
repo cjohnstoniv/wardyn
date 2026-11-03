@@ -421,6 +421,16 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	}
 	opened := s.cfg.Now()
 	viewOnly := sess.ViewOnly || s.macOSDesktopViewOnly(run)
+	if !viewOnly && run.MachineKind.IsMacOSVM() {
+		// A stream with control is known to a window that opens (macWindowYieldControl). Registered before the
+		// window is looked for once more, so a window that opened since viewOnly was read ends this stream
+		// instead of running beside it.
+		defer s.desktopControl.track(sess.Run, cancel)()
+		if s.macWindows.open(sess.Run) != nil {
+			_ = c.Close(desktopCloseSessionEnded, "A window is open on the Mac, so this desktop only watches now. Reload to keep watching.")
+			return
+		}
+	}
 	s.auditUISession(sess, "ui.open", uiDesktopAppName, "success", withBackgroundWatch(watch, withViewOnly(viewOnly, map[string]any{"app": uiDesktopAppName})))
 	defer func() {
 		s.auditUISession(sess, "ui.close", uiDesktopAppName, "success",

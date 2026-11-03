@@ -126,6 +126,8 @@ export interface MacVMCaps {
   base: MacVMBase;
   /** The runner keeps a person's disk drives and kept work folders as disk images on this Mac, and deletes them. */
   disk_drives?: boolean;
+  /** The runner opens an attended window (keyboard and pointer) onto a macOS VM run it holds. */
+  window?: boolean;
   /** The Mac's other bases, each derived from `base` (Standard), in name order; absent when it has none. */
   bases?: MacVMDerivedBase[];
   /** In words, why the runner offers no macOS VM. The runner inventory leaves it out: the console words `reason` itself. */

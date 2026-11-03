@@ -545,4 +545,6 @@ export interface SiteMacOSVM {
   max_base_age_days?: number;
   /** A person may watch a background macOS run's desktop, view only. Absent reads allowed; only false turns it off. */
   allow_background_watch?: boolean;
+  /** A person may open a window onto their own macOS VM run from its Mac. Absent reads off; only true turns it on. */
+  allow_attended_window?: boolean;
 }

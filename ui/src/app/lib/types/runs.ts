@@ -583,6 +583,8 @@ export interface RunDetail extends AgentRun {
   macos?: RunMacOS;
   // Whether this caller may watch a running background macOS VM run's desktop (GET /runs/{id} only); see RunBackgroundWatch.
   background_watch?: RunBackgroundWatch;
+  // Whether this caller may open a window onto the run on their own Mac (GET /runs/{id} only); see RunMacWindow.
+  mac_window?: RunMacWindow;
   // Where a macOS VM run's disk stands on its Mac at the run's end (GET /runs/{id} only); see RunMacOSDisk.
   macos_disk?: RunMacOSDisk;
 }
@@ -600,6 +602,19 @@ export interface RunMacOS {
 export interface RunBackgroundWatch {
   state: "open" | "site_off" | "governance" | "sign_ins_off" | "old_boot" | "unconfirmed" | "offline" | "control" | "paused" | "not_run_owner";
   message?: string;
+}
+
+// GET /runs/{id}'s mac_window (macWindowView, internal/api/run_mac_window.go): "open" is the only state with a
+// button; the others are the door's refusals, with their sentence, except "not_run_owner". Absent unless a live macOS VM run.
+export interface RunMacWindow {
+  state: "open" | "window_open" | "site_off" | "governance" | "sign_ins_off" | "not_your_mac" | "unrecorded" | "offline" | "runner_too_old" | "not_here" | "paused" | "preparing" | "unconfirmed" | "not_run_owner";
+  message?: string;
+  last_close?: RunMacWindowClose; // why this person's last window closed (macWindowLastClose); absent when none has
+}
+
+export interface RunMacWindowClose {
+  reason: "person" | "host_locked" | "run_ended" | "failed";
+  at: string;
 }
 
 // GET /runs/{id}'s macos_disk (runMacOSDiskView, internal/api/run_macos_disk.go): "removing" while no report
