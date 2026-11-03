@@ -127,7 +127,7 @@
   {
     "reason": "byoi_user",
     "target": "\"runs.image\"",
-    "sentence": "\"image \" + image + \" comes from your own workspace's base image and is not granted to you — \" + \"ask an admin to grant the exact image ref, or launch with the agent's convention image\""
+    "sentence": "\"image \" + image + \" comes from your own workspace's base image and is not granted to you — \" + \"ask an admin for an image grant that covers it, or launch with the agent's convention image\""
   },
   {
     "reason": "byoi_user",

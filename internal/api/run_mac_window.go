@@ -285,23 +285,23 @@ func (s *Server) macWindowSiteRefusal(ctx context.Context) *runRefusal {
 	return nil
 }
 
-// macWindowGovernanceRefusal is row 4, on limits and the unit that set them (nil at create for a caller with
-// none): neither deny_ui_apps nor deny_interactive, no role exempt, a super admin's own run included.
-// runID is uuid.Nil at create, before the run has one.
-func (s *Server) macWindowGovernanceRefusal(ctx context.Context, limits types.GovernanceLimits, p *ResolvedUnit, runID uuid.UUID) *runRefusal {
-	if !limits.DenyUIApps && !limits.DenyInteractive {
+// macWindowGovernanceRefusal is row 4, on c's limits and the unit that set them (nil at create for a caller
+// with none, whose refusal names the deployment's policy): neither deny_ui_apps nor deny_interactive, no role
+// exempt, a super admin's own run included. runID is uuid.Nil at create, before the run has one.
+func (s *Server) macWindowGovernanceRefusal(ctx context.Context, c governanceCeiling, runID uuid.UUID) *runRefusal {
+	if !c.Limits.DenyUIApps && !c.Limits.DenyInteractive {
 		return nil
 	}
-	d := authz.Deny(authz.ReasonGovernanceUnit, "runs.desktop_window", macWindowProfileMsg)
+	d := authz.Deny(authz.ReasonGovernanceUnit, "runs.desktop_window", macWindowProfileMsg).WithPolicy(s.ceilingPolicy(ctx, c))
 	if runID != uuid.Nil {
 		d = d.OnRun(runID)
 	}
-	if p != nil {
+	if c.Unit != nil {
 		knob := "deny_interactive"
-		if limits.DenyUIApps {
+		if c.Limits.DenyUIApps {
 			knob = "deny_ui_apps"
 		}
-		d = d.WithPolicy(s.unitRefWithSiteHelp(ctx, p)).OnKnob(s.runLockOf(ctx, p, knob))
+		d = d.OnKnob(s.runLockOf(ctx, c.Unit, knob))
 	}
 	return runDenied(d)
 }
@@ -397,7 +397,7 @@ func (s *Server) macWindowCheck(ctx context.Context, run types.AgentRun, a macWi
 		return rn, runServerError("read the run's governance profile", err)
 	}
 	if p != nil {
-		if rf := s.macWindowGovernanceRefusal(ctx, p.Limits, p, run.ID); rf != nil {
+		if rf := s.macWindowGovernanceRefusal(ctx, governanceCeiling{Limits: p.Limits, Unit: p}, run.ID); rf != nil {
 			return rn, rf
 		}
 	}

@@ -16,10 +16,10 @@ import (
 // imageDigestRequiredMsg and imageDigestSeededMsg are the digest rule's two refusal sentences: the
 // first for an image the member named, the second for an attached workspace's base image, whoever owns it.
 const (
-	imageDigestRequiredMsg = "image %s is not pinned by digest — this organisation requires images pinned by digest " +
+	imageDigestRequiredMsg = "Image %s is not pinned by digest — this organisation requires images pinned by digest " +
 		"(image@sha256:<digest>), because an image grant names what an admin approved and only a digest makes that what runs " +
 		"(site setting images.require_digest). Use the digest form of the image, or launch with the agent's convention image"
-	imageDigestSeededMsg = "image %s comes from the workspace's base image and is not pinned by digest — this organisation requires " +
+	imageDigestSeededMsg = "Image %s comes from the workspace's base image and is not pinned by digest — this organisation requires " +
 		"images pinned by digest (image@sha256:<digest>) (site setting images.require_digest). " +
 		"Set the workspace's base image to its digest form (or ask its owner to), or launch with the agent's convention image"
 )

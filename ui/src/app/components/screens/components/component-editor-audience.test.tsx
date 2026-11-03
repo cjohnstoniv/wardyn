@@ -136,7 +136,7 @@ describe("ComponentEditor token audience", () => {
   });
 
   it.each([
-    'invalid component: definition.gateway audience "wardyn-corp-gateway" is used by MCP server "Docs search" and provider "corp-gateway" at different addresses; use a different one for each',
+    'invalid component: definition.mcp.gateway_audience: "wardyn-corp-gateway" is used by MCP server "Docs search" and provider "corp-gateway" at different addresses; use a different one for each',
     "invalid component: definition.mcp.gateway_audience: run identity is turned on per model provider, which also makes the signing key; turn it on for a provider first",
     "invalid component: definition.mcp.gateway_audience: must be printable text of at most 256 bytes, with no space at either end",
   ])("shows the server's refusal under the field: %s", async (msg) => {

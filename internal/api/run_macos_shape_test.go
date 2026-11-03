@@ -4,6 +4,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -100,10 +101,12 @@ func TestStepPlacementCapability_MacOSVMRefusesWhatItCannotDo(t *testing.T) {
 				}
 				return
 			}
-			body := w.Body.String()
-			if ok || w.Code != http.StatusUnprocessableEntity || !strings.Contains(body, `"placement_capability"`) || !strings.Contains(body, tc.want) ||
-				!strings.Contains(body, `"field":"`+tc.field+`"`) {
-				t.Fatalf("ok = %v, %d %s; want 422 placement_capability on %s saying %q", ok, w.Code, body, tc.field, tc.want)
+			// The sentence is compared decoded: in the JSON body its quotes are escaped.
+			var body errorBody
+			_ = json.Unmarshal(w.Body.Bytes(), &body)
+			if ok || w.Code != http.StatusUnprocessableEntity || body.Reason != "placement_capability" || !strings.Contains(body.Error, tc.want) ||
+				body.Field != tc.field {
+				t.Fatalf("ok = %v, %d %s; want 422 placement_capability on %s saying %q", ok, w.Code, w.Body, tc.field, tc.want)
 			}
 		})
 	}

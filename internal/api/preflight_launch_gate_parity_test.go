@@ -152,6 +152,7 @@ var wantRunFoldSteps = []pinnedStep{
 	{"stepAutonomy", foldCreate | foldPreflight | foldPreview},
 	{"stepToolPolicy", foldCreate | foldPreflight | foldPreview},
 	{"stepMacOSHold", foldCreate | foldPreflight | foldPreview},
+	{"stepMacWindow", foldCreate | foldPreflight | foldPreview},
 	{"stepGitHubCLIRepo", foldCreate | foldPreflight},
 	{"stepADOStanding", foldCreate | foldPreflight | foldPreview},
 	{"stepPATNarrowing", foldPreflight | foldPreview},
@@ -238,9 +239,11 @@ type foldStepDecl struct {
 }
 
 // runFoldStepDecls reads runFoldSteps itself, not its source: the names and
-// doors the loop will actually run, each with the declaration to scan.
+// doors the loop will actually run, each with the declaration to scan, found
+// in whichever non-test file of this package declares it.
 func runFoldStepDecls(t *testing.T, fset *token.FileSet) []foldStepDecl {
 	t.Helper()
+	methods := serverMethodDecls(t, fset)
 	var out []foldStepDecl
 	for _, st := range runFoldSteps {
 		full := runtime.FuncForPC(reflect.ValueOf(st.run).Pointer()).Name()
@@ -248,7 +251,43 @@ func runFoldStepDecls(t *testing.T, fset *token.FileSet) []foldStepDecl {
 		if !strings.Contains(full, "(*Server)."+name) {
 			t.Fatalf("runFoldSteps entry %s is not a (*Server) method expression", full)
 		}
-		out = append(out, foldStepDecl{name, st.modes, parseHandler(t, fset, "run_fold_steps.go", name)})
+		decl, ok := methods[name]
+		if !ok {
+			t.Fatalf("internal/api: no (*Server) method %s", name)
+		}
+		out = append(out, foldStepDecl{name, st.modes, decl})
+	}
+	return out
+}
+
+// serverMethodDecls maps each (*Server) method declared in this package's
+// non-test files to its declaration.
+func serverMethodDecls(t *testing.T, fset *token.FileSet) map[string]*ast.FuncDecl {
+	t.Helper()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]*ast.FuncDecl{}
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || len(fn.Recv.List) != 1 {
+				continue
+			}
+			if star, ok := fn.Recv.List[0].Type.(*ast.StarExpr); ok {
+				if id, ok := star.X.(*ast.Ident); ok && id.Name == "Server" {
+					out[fn.Name.Name] = fn
+				}
+			}
+		}
 	}
 	return out
 }

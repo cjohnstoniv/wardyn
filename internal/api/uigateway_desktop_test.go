@@ -835,12 +835,22 @@ func postDesktopClose(gw http.Handler, h *uiHarness, c *http.Cookie) *httptest.R
 // desktopSiteStore answers the site config a test sets.
 type desktopSiteStore struct {
 	*desktopClosedStore
-	sc  types.SiteConfig
-	err error
+	siteMu sync.Mutex
+	sc     types.SiteConfig
+	err    error
 }
 
 func (s *desktopSiteStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	s.siteMu.Lock()
+	defer s.siteMu.Unlock()
 	return s.sc, s.err
+}
+
+// setSite changes what GetSiteConfig answers while a server goroutine may be reading it.
+func (s *desktopSiteStore) setSite(sc types.SiteConfig, err error) {
+	s.siteMu.Lock()
+	defer s.siteMu.Unlock()
+	s.sc, s.err = sc, err
 }
 
 // A macOS VM's desktop opens as a Linux VM's does, except for an agent whose admin set "Sign-ins in a
