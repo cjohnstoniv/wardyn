@@ -48,6 +48,10 @@ type KeptRun struct {
 	RunnerID  string `json:"runner_id"`
 	// Base is the base's name, recorded in kept.json when the machine is made or reset.
 	Base string `json:"base,omitempty"`
+	// BaseDigest is BaseDigest(base) as the runner checked it, which it reserved the kept disk's bytes
+	// against. A new or fresh boot whose current base differs is refused (ErrKeptBaseChanged) before any
+	// disk is touched; a resume boots the machine's own disk and ignores it.
+	BaseDigest string `json:"base_digest,omitempty"`
 	// IdleDays moves expires_at that far past each boot and stop (KeptDefaultIdleDays when 0).
 	IdleDays int `json:"idle_days,omitempty"`
 }
@@ -185,6 +189,8 @@ var (
 	ErrKeptOwner = errors.New("macvm: this kept machine belongs to another person or registration")
 	// ErrKeptExpired is a machine past its expires_at; it is deleted, not booted.
 	ErrKeptExpired = errors.New("macvm: this kept machine expired")
+	// ErrKeptBaseChanged is a new or fresh boot whose base is no longer the one the runner checked.
+	ErrKeptBaseChanged = errors.New("macvm: the macOS base changed since this kept machine's start was checked")
 	// ErrKeptIncomplete is a kept folder missing a file a boot needs, or holding one that is not the
 	// person's own regular file.
 	ErrKeptIncomplete = errors.New("macvm: this kept machine's folder is incomplete")
@@ -196,11 +202,12 @@ const KeptRefusalFile = "kept-refusal.json"
 
 // The kept_refusal values (KeptRefusalCode), one per way a boot is refused.
 const (
-	KeptRefusalLocked     = "locked"
-	KeptRefusalOwner      = "owner"
-	KeptRefusalIncomplete = "incomplete"
-	KeptRefusalExpired    = "expired"
-	KeptRefusalIDMismatch = "id_mismatch"
+	KeptRefusalLocked      = "locked"
+	KeptRefusalOwner       = "owner"
+	KeptRefusalIncomplete  = "incomplete"
+	KeptRefusalExpired     = "expired"
+	KeptRefusalIDMismatch  = "id_mismatch"
+	KeptRefusalBaseChanged = "base_changed"
 )
 
 type keptRefusal struct {
@@ -220,6 +227,8 @@ func KeptRefusalCode(err error) string {
 		return KeptRefusalExpired
 	case errors.Is(err, ErrKeptIDMismatch):
 		return KeptRefusalIDMismatch
+	case errors.Is(err, ErrKeptBaseChanged):
+		return KeptRefusalBaseChanged
 	}
 	return ""
 }
@@ -236,6 +245,10 @@ func ReadKeptRefusal(runDir string) (string, error) {
 	}
 	return r.Code, err
 }
+
+// BaseDigest is the digest of the base in baseDir a runner pins in KeptRun.BaseDigest and the helper
+// compares at a new or fresh boot: BaseStamp, so a prepare, a tools update or an edit each change it.
+func BaseDigest(baseDir string) (string, error) { return BaseStamp(baseDir) }
 
 // keptFiles are what a kept folder holds besides kept.json and the tools record.
 var keptFiles = []string{DiskFile, AuxFile, MachineIDFile, PairKeyFile, ManifestFile, ToolsRecordFile}
@@ -286,7 +299,7 @@ func openKept(e Engine, cfg RunConfig, dir string, now time.Time) (man Manifest,
 		if _, serr := os.Lstat(dir); serr == nil {
 			return man, id, nil, fmt.Errorf("macvm: kept machine %s already exists", k.ID)
 		}
-		man, id, err = cloneKept(e, cfg, dir)
+		man, id, err = cloneKept(e, cfg, dir, nil)
 		if err != nil {
 			_ = os.RemoveAll(dir)
 			return man, id, nil, err
@@ -367,7 +380,10 @@ func checkKept(dir string, k *KeptRun, now time.Time) (KeptRecord, error) {
 // cloneKept clones the base into dir, with its manifest and tools record, under one hold of the base's
 // lock so all come from the same generation. The manifest copy is what a resume boots by, so a later base
 // does not change a machine.
-func cloneKept(e Engine, cfg RunConfig, dir string) (Manifest, Identity, error) {
+//
+// A pinned BaseDigest is compared under that lock, and prep (a reset's removal of the old machine) runs only
+// after it matches and before the clone, so a base that moved leaves an existing disk untouched.
+func cloneKept(e Engine, cfg RunConfig, dir string, prep func() error) (Manifest, Identity, error) {
 	unlock, err := lockFile(context.Background(), baseLockPath(cfg.BaseDir), false)
 	if err != nil {
 		return Manifest{}, Identity{}, err
@@ -376,6 +392,16 @@ func cloneKept(e Engine, cfg RunConfig, dir string) (Manifest, Identity, error) 
 	man, err := ReadyBase(cfg.BaseDir)
 	if err != nil {
 		return man, Identity{}, err
+	}
+	if want := cfg.Kept.BaseDigest; want != "" {
+		if got, err := BaseDigest(cfg.BaseDir); err != nil || got != want {
+			return man, Identity{}, errors.Join(ErrKeptBaseChanged, err)
+		}
+	}
+	if prep != nil {
+		if err := prep(); err != nil {
+			return man, Identity{}, err
+		}
 	}
 	id, err := cloneRun(e, cfg.BaseDir, dir, cfg.Identity)
 	if err != nil {
@@ -390,12 +416,14 @@ func cloneKept(e Engine, cfg RunConfig, dir string) (Manifest, Identity, error) 
 // resetKept replaces dir's machine with a clone of the current base, keeping its id, owner and creation
 // time. The record stays valid throughout, so a cut-short reset can be reset again.
 func resetKept(e Engine, cfg RunConfig, dir string, rec KeptRecord, now time.Time) (Manifest, Identity, error) {
-	for _, f := range keptFiles {
-		if err := os.Remove(filepath.Join(dir, f)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return Manifest{}, Identity{}, err
+	man, id, err := cloneKept(e, cfg, dir, func() error {
+		for _, f := range keptFiles {
+			if err := os.Remove(filepath.Join(dir, f)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
 		}
-	}
-	man, id, err := cloneKept(e, cfg, dir)
+		return nil
+	})
 	if err != nil {
 		return man, id, err
 	}

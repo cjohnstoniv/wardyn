@@ -6,6 +6,7 @@ package macvm_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -471,11 +472,12 @@ func TestKeptResumeBeforeExpiryRefreshesItAndMarksTheRun(t *testing.T) {
 }
 
 func TestKeptStopUpdateAfterTheOldExpiry(t *testing.T) {
-	boot := time.Date(2026, 11, 3, 9, 59, 0, 0, time.UTC)
-	stop := time.Date(2026, 11, 3, 10, 30, 0, 0, time.UTC)
+	boot := time.Now().UTC().Truncate(time.Minute)
+	oldExpiry := boot.Add(time.Minute)
+	stop := boot.Add(31 * time.Minute)
 	// The boot refreshed the expiry, so the record held the boot's date; model the worst case where it is
 	// the old one, 10:00, and already past at the stop.
-	rec := macvm.KeptRecord{ActiveRun: "run-a", LastUsed: boot, ExpiresAt: time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)}
+	rec := macvm.KeptRecord{ActiveRun: "run-a", LastUsed: boot, ExpiresAt: oldExpiry}
 	other := rec
 	if macvm.KeptStopUpdate(&other, "run-b", stop, 30) || other != rec {
 		t.Fatalf("a stop for another run changed the record: %+v", other)
@@ -512,5 +514,86 @@ func TestKeptExpiredRecordIsStillRefusedAtBootAndNotRefreshed(t *testing.T) {
 	}
 	if after, _ := macvm.ReadKept(dir, id.String()); after != before {
 		t.Fatalf("a refused boot rewrote the record: %+v", after)
+	}
+}
+
+func TestKeptBaseDigestPinsNewAndFreshAndResumeIgnoresIt(t *testing.T) {
+	l := macvm.Layout{Root: t.TempDir()}
+	base := makeBase(t, l)
+	id := uuid.New()
+	dir := l.KeptMachineDir(id.String())
+	now := time.Now().UTC()
+	digest, err := macvm.BaseDigest(base)
+	if err != nil || digest == "" {
+		t.Fatalf("BaseDigest = %q, %v", digest, err)
+	}
+	pinned := func(mode, d string) macvm.RunConfig {
+		c := keptCfg(base, mode, id)
+		c.Kept.BaseDigest = d
+		return c
+	}
+	if err := openKept(t, pinned(macvm.KeptNew, "not-the-base"), dir, now); !errors.Is(err, macvm.ErrKeptBaseChanged) {
+		t.Fatalf("new against another base = %v", err)
+	}
+	if _, err := os.Lstat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused new left a folder: %v", err)
+	}
+	if err := openKept(t, pinned(macvm.KeptNew, digest), dir, now); err != nil {
+		t.Fatalf("new with the matching digest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, macvm.DiskFile), []byte("persons-work"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func() map[string]string {
+		out := map[string]string{}
+		for _, f := range []string{macvm.DiskFile, macvm.AuxFile, macvm.MachineIDFile, macvm.PairKeyFile, macvm.ManifestFile, macvm.KeptFile} {
+			b, err := os.ReadFile(filepath.Join(dir, f))
+			if err != nil {
+				t.Fatal(err)
+			}
+			out[f] = string(b)
+		}
+		return out
+	}
+	before := snapshot()
+	// The base moves on (a tools update rewrites its record): fresh is refused with the old disk untouched.
+	if err := os.WriteFile(filepath.Join(base, macvm.ToolsRecordFile), []byte(`{"format":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := openKept(t, pinned(macvm.KeptFresh, digest), dir, now); !errors.Is(err, macvm.ErrKeptBaseChanged) {
+		t.Fatalf("fresh against a moved base = %v", err)
+	}
+	if after := snapshot(); !maps.Equal(before, after) {
+		t.Fatal("a refused fresh changed the kept folder")
+	}
+	// Resume boots the machine's own disk and ignores the pin.
+	if err := openKept(t, pinned(macvm.KeptResume, digest), dir, now); err != nil {
+		t.Fatalf("resume with a stale digest: %v", err)
+	}
+	moved, _ := macvm.BaseDigest(base)
+	if err := openKept(t, pinned(macvm.KeptFresh, moved), dir, now); err != nil {
+		t.Fatalf("fresh with the current digest: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, macvm.DiskFile)); string(got) != "base-disk" {
+		t.Fatalf("fresh left disk %q", got)
+	}
+}
+
+func TestKeptBaseChangedWritesItsCode(t *testing.T) {
+	id := uuid.New()
+	r := startRun(t, &macvmtest.Engine{}, func(c *macvm.RunConfig, _ *macvm.RunOptions) {
+		dir := macvm.Layout{Root: filepath.Dir(filepath.Dir(c.BaseDir))}.KeptMachineDir(id.String())
+		if err := openKept(t, keptCfg(c.BaseDir, macvm.KeptNew, id), dir, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		*c = keptCfg(c.BaseDir, macvm.KeptFresh, id)
+		c.Kept.BaseDigest = "not-the-base"
+		c.CPUs, c.MemoryMiB, c.SockRoot = 4, 8192, macvmtest.SockRoot(t)
+	})
+	if err := <-r.done; !errors.Is(err, macvm.ErrKeptBaseChanged) {
+		t.Fatalf("Run = %v", err)
+	}
+	if got, err := macvm.ReadKeptRefusal(r.dir); got != "base_changed" || err != nil {
+		t.Fatalf("kept_refusal = %q, %v", got, err)
 	}
 }
