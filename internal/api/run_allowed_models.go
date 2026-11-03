@@ -12,12 +12,14 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"slices"
 	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -61,22 +63,66 @@ func modelLimitOf(c governanceCeiling) allowedModelsLimit {
 	return allowedModelsLimit{models: slices.Clone(c.Limits.AllowedModels), profileID: c.Unit.ID, profile: c.Unit.Name}
 }
 
-// proxyList is the list as the run's proxy config carries it: nil, so no key is written, when no limit
-// binds the run. Never an empty list, which the proxy reads as every model refused.
-func (l allowedModelsLimit) proxyList() *[]string {
+// runnerLimit is the limit as the run's proxy config carries it, with the Bedrock gateway routes of its
+// lanes: nil, so no key is written, when no limit binds the run. Never an empty list, which the proxy
+// reads as every model refused.
+func (l allowedModelsLimit) runnerLimit(bedrockRoutes map[string]string) *runner.ModelLimit {
 	if !l.set() {
 		return nil
 	}
-	list := slices.Clone(l.models)
-	return &list
+	return &runner.ModelLimit{Models: slices.Clone(l.models), BedrockRoutes: bedrockRoutes}
+}
+
+// bedrockModelRoute is the route the run's proxy needs to read a Bedrock provider's model requests at the
+// address the provider names (bedrock.base_url): its host and the base path its Bedrock API is served
+// under. host is "" when the provider names no address: AWS's regional endpoint, which the proxy knows
+// by name. ok is false for an address the route cannot carry (an escape, a dot segment, a query), whose
+// requests the proxy could not read.
+func bedrockModelRoute(p types.ModelProvider) (host, base string, ok bool) {
+	raw := providerBedrockSettings(p).BaseURL
+	if raw == "" {
+		return "", "", true
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" || strings.ContainsAny(u.Path, "%\\") {
+		return "", "", false
+	}
+	if base = strings.TrimSuffix(u.Path, "/"); base != "" && path.Clean(base) != base {
+		return "", "", false
+	}
+	return strings.ToLower(u.Hostname()), base, true
+}
+
+// laneBedrockRoutes is the Bedrock gateway routes of the run's lanes (bedrockModelRoute), keyed by host.
+func laneBedrockRoutes(llms []llmTransport) map[string]string {
+	var routes map[string]string
+	for _, l := range llms {
+		if !l.bedrockReady || l.provider == nil {
+			continue
+		}
+		if host, base, ok := bedrockModelRoute(l.provider.provider); ok && host != "" {
+			if routes == nil {
+				routes = map[string]string{}
+			}
+			routes[host] = base
+		}
+	}
+	return routes
 }
 
 // providerModelsUnchecked reports whether the run's proxy could not hold a run on provider p to the
-// list: an AWS sign-in whose requests the sandbox signs itself. The proxy cannot read inside them
-// without breaking the signature, so it would refuse every one as an opaque connection; the doors
-// refuse the run first. Re-signed at the proxy (WARDYN_AWS_SIGV4_AT_PROXY), the proxy terminates them
-// and checks each. A local model is held to its own allowlist and is not a hosted provider.
+// list: a Bedrock provider whose address the proxy's route cannot carry (bedrockModelRoute), or an AWS
+// sign-in whose requests the sandbox signs itself. The proxy cannot read inside those without breaking
+// the signature, so it would refuse every one as an opaque connection; the doors refuse the run first.
+// Re-signed at the proxy (WARDYN_AWS_SIGV4_AT_PROXY), the proxy terminates them and checks each. A local
+// model is held to its own allowlist and is not a hosted provider.
 func (s *Server) providerModelsUnchecked(p types.ModelProvider) bool {
+	if !p.Kind.IsBedrock() {
+		return false
+	}
+	if _, _, ok := bedrockModelRoute(p); !ok {
+		return true
+	}
 	if p.Kind != types.ModelProviderBedrockSSO {
 		return false
 	}
@@ -84,10 +130,20 @@ func (s *Server) providerModelsUnchecked(p types.ModelProvider) bool {
 	return !resigned
 }
 
-// laneModelsUnchecked is providerModelsUnchecked for a dispatched lane: a Bedrock lane whose requests
-// the sandbox signs, with no bearer the proxy injects and no re-signing at the proxy.
+// laneModelsUnchecked is providerModelsUnchecked for a dispatched lane: a Bedrock lane with no provider
+// record to read its address from, at an address the route cannot carry, or whose requests the sandbox
+// signs, with no bearer the proxy injects and no re-signing at the proxy.
 func laneModelsUnchecked(l llmTransport) bool {
-	return l.bedrockReady && !l.injectBedrockBearer && !l.signsBedrock()
+	if !l.bedrockReady {
+		return false
+	}
+	if l.provider == nil {
+		return true
+	}
+	if _, _, ok := bedrockModelRoute(l.provider.provider); !ok {
+		return true
+	}
+	return !l.injectBedrockBearer && !l.signsBedrock()
 }
 
 // uncheckedModelProvider is the first chosen provider of choices whose model calls the proxy could not

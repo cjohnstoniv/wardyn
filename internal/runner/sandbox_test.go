@@ -259,15 +259,20 @@ func TestBuildProxyConfig_LocalModels(t *testing.T) {
 // TestBuildProxyConfig_AllowedModels: a run's governed model list reaches the sidecar's config, so the proxy holds the run to it (and a revive, which replays the stored config, keeps
 // it); a run with no limit writes no key an older proxy refuses.
 func TestBuildProxyConfig_AllowedModels(t *testing.T) {
-	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{AllowedModels: &[]string{"model-a", "small-model-a"}}, ProxyListenPort)
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{ModelLimit: &ModelLimit{Models: []string{"model-a", "small-model-a"},
+		BedrockRoutes: map[string]string{"bedrock-gateway.corp.example": "/bedrock"}}}, ProxyListenPort)
 	if err != nil || !strings.Contains(string(b), `"allowed_models":["model-a","small-model-a"]`) {
 		t.Fatalf("BuildProxyConfig = %s %v, want the list under allowed_models", b, err)
 	}
 	var cfg proxy.Config
-	if err := json.Unmarshal(b, &cfg); err != nil || cfg.AllowedModels == nil || len(*cfg.AllowedModels) != 2 {
-		t.Fatalf("the sidecar read %v %v, want the two models", cfg.AllowedModels, err)
+	if err := json.Unmarshal(b, &cfg); err != nil || cfg.AllowedModels == nil || len(*cfg.AllowedModels) != 2 ||
+		cfg.BedrockRoutes["bedrock-gateway.corp.example"] != "/bedrock" {
+		t.Fatalf("the sidecar read %v %v %v, want the two models and the Bedrock route", cfg.AllowedModels, cfg.BedrockRoutes, err)
 	}
-	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "allowed_models") {
+	if _, err := proxy.LoadConfigBytes(b); err != nil && strings.Contains(err.Error(), "bedrock_routes") {
+		t.Fatalf("the sidecar refused the route: %v", err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "allowed_models") || strings.Contains(string(b), "bedrock_routes") {
 		t.Fatalf("a run with no limit names the key: %s", b)
 	}
 }

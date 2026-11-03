@@ -275,6 +275,14 @@ type Config struct {
 	// refuses a key it does not know, and a pointer so `[]` survives the wire. Unset (the default) =>
 	// off, byte-identical to today; `[]` => set and empty, every model refused.
 	AllowedModels *[]string `json:"allowed_models,omitempty"`
+	// BedrockRoutes maps each Bedrock gateway a run's provider names by its own address
+	// (bedrock.base_url) to the base path its Bedrock API is served under ("" at the root). AWS's
+	// endpoint names (isBedrockHost) do not identify such a host, so this is what makes it a model host
+	// of Bedrock shape for the allowed_models gate: a request under the base path is read as
+	// /model/{id}/{op}, and any other request that is not a read is refused. Sent only with
+	// AllowedModels. Control-plane-authored; omitempty because an older proxy refuses a key it does
+	// not know.
+	BedrockRoutes map[string]string `json:"bedrock_routes,omitempty"`
 	// GatewayIdentity lists the routes that carry the run's signed identity
 	// (gateway_identity.go). Control-plane-authored, same trust boundary as
 	// LLMUpstreams; it holds no token and no key. Empty (the default) => off,
@@ -642,7 +650,7 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if err := c.validateLocalModels(); err != nil {
 		return err
 	}
-	return cmp.Or(c.validateAllowedModels(), c.validateChannelHosts())
+	return cmp.Or(c.validateAllowedModels(), c.validateBedrockRoutes(), c.validateChannelHosts())
 }
 
 // validateInternalHostCIDRs parse-checks each internal host's CIDRs and that each lies inside

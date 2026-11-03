@@ -223,7 +223,7 @@ var ProxySettings = []string{ProxySettingAWSSigV4, ProxySettingScrubResponses, P
 // Nothing sets VM yet (the Docker driver will, where the desktop relay starts), so the org leaves it false; its gate stays.
 func ProxySettingsSet(pc runner.ProxyConfig) []string {
 	var out []string
-	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil, pc.CanonicalPushRepos, len(pc.GatewayIdentity) != 0, len(pc.GitPushWithheld) != 0, pc.AllowedModels != nil} {
+	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil, pc.CanonicalPushRepos, len(pc.GatewayIdentity) != 0, len(pc.GitPushWithheld) != 0, pc.ModelLimit != nil} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}

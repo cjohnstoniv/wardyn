@@ -47,11 +47,11 @@ func modelGateProxy(t *testing.T, allowed []string) (*Proxy, *capturedUpstream, 
 
 // modelSet compiles a test's list the way a loaded config does: nil is unset (off), and an empty
 // non-nil list is `[]` (every model refused).
-func modelSet(list []string) map[string]bool {
+func modelSet(list []string) *modelLimit {
 	if list == nil {
 		return nil
 	}
-	return compileAllowedModels(&list)
+	return compileAllowedModels(&list, nil)
 }
 
 func TestAllowedModels_BrokeredRoutes(t *testing.T) {
@@ -424,7 +424,7 @@ func TestAllowedModels_ConfigLoadsAndOffByDefault(t *testing.T) {
 	}
 	// Unset is off, and is not written back (an older proxy refuses a key it does not know).
 	c, err := load(nil)
-	if err != nil || c.AllowedModels != nil || compileAllowedModels(c.AllowedModels) != nil {
+	if err != nil || c.AllowedModels != nil || compileAllowedModels(c.AllowedModels, nil) != nil {
 		t.Fatalf("unset must stay off: %+v %v", c, err)
 	}
 	if out, _ := json.Marshal(c); strings.Contains(string(out), "allowed_models") {
@@ -432,14 +432,14 @@ func TestAllowedModels_ConfigLoadsAndOffByDefault(t *testing.T) {
 	}
 	// A list loads and compiles to its set.
 	if c, err = load(map[string]any{"allowed_models": []string{"claude-sonnet-5"}}); err != nil || c.AllowedModels == nil ||
-		!compileAllowedModels(c.AllowedModels)["claude-sonnet-5"] {
+		!compileAllowedModels(c.AllowedModels, nil).models["claude-sonnet-5"] {
 		t.Fatalf("allowed_models did not load: %+v %v", c, err)
 	}
 	// `[]` loads, survives the wire, and compiles to a set that is not nil: on, and empty.
 	if c, err = load(map[string]any{"allowed_models": []string{}}); err != nil || c.AllowedModels == nil {
 		t.Fatalf("an empty list must load as set: %+v %v", c, err)
 	}
-	if set := compileAllowedModels(c.AllowedModels); set == nil || len(set) != 0 {
+	if set := compileAllowedModels(c.AllowedModels, nil); set == nil || len(set.models) != 0 {
 		t.Fatalf("an empty list must compile to a non-nil empty set, got %#v", set)
 	}
 	if out, _ := json.Marshal(c); !strings.Contains(string(out), `"allowed_models":[]`) {

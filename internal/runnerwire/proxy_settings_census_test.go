@@ -55,7 +55,7 @@ var proxySettingOfField = map[string]string{
 	"GitPushWithheld": ProxySettingGitPushWithheld,
 	// Dropped, the run's proxy holds no model list and admits every model the
 	// governance profile limits.
-	"AllowedModels": ProxySettingAllowedModels,
+	"ModelLimit": ProxySettingAllowedModels,
 }
 
 // proxyFieldExemptions maps each post-v0.9.8 field left ungated to why a runner

@@ -37,7 +37,7 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 		pc.GatewayIdentity = []proxy.GatewayIdentityRoute{{Host: "gw.corp.example", Port: 443, ProviderID: "p", Audience: "a"}}
 	},
 	runnerwire.ProxySettingGitPushWithheld: func(pc *runner.ProxyConfig) { pc.GitPushWithheld = map[string]string{"github.com": "push"} },
-	runnerwire.ProxySettingAllowedModels:   func(pc *runner.ProxyConfig) { pc.AllowedModels = &[]string{"model-a"} },
+	runnerwire.ProxySettingAllowedModels:   func(pc *runner.ProxyConfig) { pc.ModelLimit = &runner.ModelLimit{Models: []string{"model-a"}} },
 }
 
 // oldCapsJSON is a 0.9.x runner's caps event as it sends it: no proxy_settings key.
@@ -229,7 +229,7 @@ func TestAllowedModelsNeedARunnerThatCarriesThem(t *testing.T) {
 	sb, _ := create(t, rig, nil)
 	publishCaps(t, rig, capsWithout(t, runnerwire.ProxySettingAllowedModels))
 	limited := runner.SandboxSpec{RunID: uuid.New(), Image: "img", ConfinementClass: types.CC1,
-		ProxyConfig: runner.ProxyConfig{AllowedModels: &[]string{"model-a"}}}
+		ProxyConfig: runner.ProxyConfig{ModelLimit: &runner.ModelLimit{Models: []string{"model-a"}}}}
 	_, err := rig.Sub.CreateSandbox(ctxT(t), limited)
 	var pe *remote.ProxySettingError
 	if !errors.As(err, &pe) || pe.Setting != runnerwire.ProxySettingAllowedModels || !strings.Contains(err.Error(), "too old for allowed_models") {

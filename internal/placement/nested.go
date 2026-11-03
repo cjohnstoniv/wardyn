@@ -21,7 +21,7 @@ import (
 var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.Config](): strings.Fields("RunID ControlPlaneURL ControlPlaneCAPEM RunToken Policy Injection Listen DecisionBufferSize SelfLapse DecisionSink HardDeny MITMCACertPEM MITMCAKeyPEM MITMHosts GitGrants GitPushWithheld PATGrants " +
 		"BrokeredPATGrantIDs ResidentMints ADOGrant AzureGates GitHubAPI AzureARM AWSSigV4 KubeAPI MITMLLM UpstreamProxyURL UpstreamProxyNoProxy AllowedPeers " +
-		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail LocalModels GatewayIdentity RunnerLocalModels Unattended ScrubResponses CanonicalPushRepos Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules AllowedModels HarnessCredentials ViaOrgRoutes MCPServers MCPBindings " +
+		"TrustedCAPEM InternalHosts LLMUpstreams LLMChannelHosts LLMUnavailableDetail LocalModels GatewayIdentity RunnerLocalModels Unattended ScrubResponses CanonicalPushRepos Attribution DecisionSpoolDir PushRuleSets PushRuleBase HarnessToolRules AllowedModels BedrockRoutes HarnessCredentials ViaOrgRoutes MCPServers MCPBindings " +
 		// SigninListen is ProxyConfig.DesktopSignins as stored (localStoredSpec), refused by its row.
 		"VM PortRule SigninListen"),
 	reflect.TypeFor[proxy.InjectionConfig]():      strings.Fields("InjectionRule GrantID"),
@@ -53,6 +53,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.PATGrant]():             strings.Fields("GrantID Username Repos Access Forge API"),
 	reflect.TypeFor[runner.InjectionGrant]():      strings.Fields("GrantID Rule"),
 	reflect.TypeFor[runner.ManagedFile]():         strings.Fields("Path Mode AgentOwned WipeAfterRead Content"),
+	reflect.TypeFor[runner.ModelLimit]():          strings.Fields("Models BedrockRoutes"),
 	reflect.TypeFor[runner.Mount]():               strings.Fields("Source Target ReadOnly MemberAuthored DriveAuthored BoundRunner"),
 	reflect.TypeFor[runner.KeptMachineSpec]():     strings.Fields("ID Mode OwnerHash IdleDays"),
 	reflect.TypeFor[runner.UserWritableCeiling](): strings.Fields("Roots Deny"),

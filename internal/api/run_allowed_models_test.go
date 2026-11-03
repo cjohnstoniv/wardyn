@@ -44,8 +44,9 @@ func TestModelLimitOf(t *testing.T) {
 	if !slices.Equal(got.models, []string{"model-a"}) || got.profileID != unit.ID || got.profile != "Contractors" {
 		t.Errorf("limit = %+v", got)
 	}
-	if got.proxyList() == nil || (allowedModelsLimit{}).proxyList() != nil {
-		t.Error("the proxy list is set exactly when the limit is")
+	if rl := got.runnerLimit(map[string]string{"bedrock-gateway.corp.example": "/bedrock"}); rl == nil || !slices.Equal(rl.Models, []string{"model-a"}) ||
+		rl.BedrockRoutes["bedrock-gateway.corp.example"] != "/bedrock" || (allowedModelsLimit{}).runnerLimit(nil) != nil {
+		t.Error("the proxy's limit is set exactly when the run's is, with the routes")
 	}
 	d := ceilingForDispatch(governanceCeiling{Unit: unit, Limits: types.GovernanceLimits{AllowedModels: []string{"model-a"}}},
 		adoEntraUngraded(), bedrockCredUngraded())
@@ -114,6 +115,19 @@ func TestAllowedModels_UncheckedProviders(t *testing.T) {
 	if !off.providerModelsUnchecked(sso) || resigned.providerModelsUnchecked(sso) {
 		t.Error("a Bedrock sign-in is unchecked exactly when the proxy does not re-sign it")
 	}
+	gw := brBearerProvider()
+	gw.Bedrock.BaseURL = "https://bedrock-gateway.corp.example/bedrock/"
+	if off.providerModelsUnchecked(gw) {
+		t.Error("a bearer key at a gateway of its own name is unchecked, want its route carried")
+	}
+	for _, addr := range []string{"https://bedrock-gateway.corp.example/bed%2Frock", "https://bedrock-gateway.corp.example/a/../bedrock",
+		"https://bedrock-gateway.corp.example/bedrock?x=1"} {
+		odd := brBearerProvider()
+		odd.Bedrock.BaseURL = addr
+		if !off.providerModelsUnchecked(odd) {
+			t.Errorf("%s: checked, want refused: the route cannot carry it", addr)
+		}
+	}
 	for _, p := range []types.ModelProvider{bearer, subProvider("claude"),
 		{Kind: types.ModelProviderAnthropicAPIKey}, {Kind: types.ModelProviderOpenAIAPIKey},
 		{Kind: types.ModelProviderCustomEndpoint}, {Kind: types.ModelProviderAzureFoundry}} {
@@ -126,9 +140,12 @@ func TestAllowedModels_UncheckedProviders(t *testing.T) {
 		l    llmTransport
 		want bool
 	}{
-		{"a sandbox-signed Bedrock lane", llmTransport{bedrockReady: true}, true},
-		{"a bearer lane", llmTransport{bedrockReady: true, injectBedrockBearer: true}, false},
-		{"a re-signed lane", llmTransport{bedrockReady: true, bedrock: bedrockAuth{sigv4Hosts: []string{"bedrock-runtime.us-west-2.amazonaws.com"}}}, false},
+		{"a sandbox-signed Bedrock lane", llmTransport{bedrockReady: true, provider: &chosenProvider{provider: sso}}, true},
+		{"a bearer lane", llmTransport{bedrockReady: true, injectBedrockBearer: true, provider: &chosenProvider{provider: bearer}}, false},
+		{"a bearer lane at a gateway", llmTransport{bedrockReady: true, injectBedrockBearer: true, provider: &chosenProvider{provider: gw}}, false},
+		{"a re-signed lane", llmTransport{bedrockReady: true, provider: &chosenProvider{provider: sso},
+			bedrock: bedrockAuth{sigv4Hosts: []string{"bedrock-runtime.us-west-2.amazonaws.com"}}}, false},
+		{"a Bedrock lane with no provider record", llmTransport{bedrockReady: true, injectBedrockBearer: true}, true},
 		{"a key lane", llmTransport{}, false},
 	} {
 		if got := laneModelsUnchecked(tc.l); got != tc.want {
@@ -202,7 +219,7 @@ func dispatchedProxyConfig(runID uuid.UUID, plan dispatchLLMPlan) proxy.Config {
 		Injection: plan.injections, MITMCACertPEM: plan.mitmCACertPEM, MITMCAKeyPEM: plan.mitmCAKeyPEM,
 		MITMHosts: slices.Concat(plan.bedrockMITMHosts, plan.azure.mitmHosts), MITMLLM: plan.mitmLLM,
 		AWSSigV4: plan.awsSigV4, AzureGates: plan.azure.gates, LLMChannelHosts: plan.channelHosts,
-		LLMUpstreams: plan.llmUpstreams, LocalModels: plan.localModels, AllowedModels: plan.allowedModels,
+		LLMUpstreams: plan.llmUpstreams, LocalModels: plan.localModels, ModelLimit: plan.modelLimit,
 	}, runner.ProxyListenPort)
 }
 
@@ -238,12 +255,18 @@ func TestAllowedModels_DispatchEveryKind(t *testing.T) {
 	gateway := kinds[0]
 	gateway.p.ID, gateway.p.UID, gateway.p.BaseURL = "anthropic-gateway", "uid-agw", "https://llm-gw.corp.example/v1"
 	gateway.grantHost, gateway.grantName = "llm-gw.corp.example", providerSecretName("uid-agw", providerKeyPart)
-	kinds = append(kinds, gateway)
+	bearerGW := kinds[len(kinds)-1] // bedrock_bearer, at a gateway of its own name and base path
+	bearerGW.p.ID, bearerGW.p.UID, bearerGW.grantHost = "bedrock-gateway", "uid-bgw", "bedrock-gateway.corp.example"
+	bearerGW.p.Bedrock = &types.BedrockSettings{Region: "us-west-2", BaseURL: "https://bedrock-gateway.corp.example/bedrock"}
+	kinds = append(kinds, gateway, bearerGW)
 	limit := testModelLimit()
 	for _, k := range kinds {
 		name := string(k.p.Kind)
 		if k.p.BaseURL != "" && k.p.Kind == types.ModelProviderAnthropicAPIKey {
 			name = "gateway"
+		}
+		if k.p.ID == "bedrock-gateway" {
+			name = "bedrock_bearer at a gateway"
 		}
 		t.Run(name, func(t *testing.T) {
 			plan, ok, st := limitedDispatch(t, k, limit)
@@ -272,6 +295,12 @@ func TestAllowedModels_DispatchEveryKind(t *testing.T) {
 			if k.p.BaseURL != "" && k.p.Kind != types.ModelProviderAnthropicSubscription && len(cfg.LLMUpstreams) == 0 {
 				t.Errorf("the gateway lost its brokered route: %v", cfg.LLMUpstreams)
 			}
+			// A Bedrock provider's own address is a model host of Bedrock shape to the run's proxy.
+			if host, base, _ := bedrockModelRoute(k.p); host != "" {
+				if got, ok := cfg.BedrockRoutes[host]; !ok || got != base {
+					t.Errorf("bedrock_routes = %v, want %s -> %q", cfg.BedrockRoutes, host, base)
+				}
+			}
 		})
 	}
 }
@@ -284,12 +313,12 @@ func TestAllowedModels_EmptyIsNoLimitAtDispatch(t *testing.T) {
 	if !ok {
 		t.Fatalf("dispatch refused: %q", st.failed)
 	}
-	if plan.allowedModels != nil || plan.mitmLLM || plan.mitmCAKeyPEM != "" {
-		t.Errorf("no list: allowed_models=%v mitm_llm=%v ca=%v, want none", plan.allowedModels, plan.mitmLLM, plan.mitmCAKeyPEM != "")
+	if plan.modelLimit != nil || plan.mitmLLM || plan.mitmCAKeyPEM != "" {
+		t.Errorf("no list: model_limit=%v mitm_llm=%v ca=%v, want none", plan.modelLimit, plan.mitmLLM, plan.mitmCAKeyPEM != "")
 	}
 	plan, ok, st = limitedDispatch(t, k, testModelLimit())
-	if !ok || !plan.mitmLLM || plan.mitmCAKeyPEM == "" || plan.allowedModels == nil {
-		t.Errorf("a list: ok=%v mitm_llm=%v ca=%v allowed_models=%v (failed %q), want interception on", ok, plan.mitmLLM, plan.mitmCAKeyPEM != "", plan.allowedModels, st.failed)
+	if !ok || !plan.mitmLLM || plan.mitmCAKeyPEM == "" || plan.modelLimit == nil {
+		t.Errorf("a list: ok=%v mitm_llm=%v ca=%v model_limit=%v (failed %q), want interception on", ok, plan.mitmLLM, plan.mitmCAKeyPEM != "", plan.modelLimit, st.failed)
 	}
 }
 
@@ -369,7 +398,8 @@ func TestAllowedModels_RunRecord(t *testing.T) {
 func TestAllowedModels_ReviveReplaysTheStoredList(t *testing.T) {
 	run := types.AgentRun{ID: uuid.New()}
 	list := []string{"model-a"}
-	cfg := &proxy.Config{RunID: run.ID, AllowedModels: &list, MITMLLM: true, MITMHosts: []string{"gw.corp.example:443"}}
+	routes := map[string]string{"bedrock-gateway.corp.example": "/bedrock"}
+	cfg := &proxy.Config{RunID: run.ID, AllowedModels: &list, BedrockRoutes: routes, MITMLLM: true, MITMHosts: []string{"gw.corp.example:443"}}
 	if _, rerr := reassertProxyCeiling(run, cfg, ownerCeiling{deny: []string{"evil.example"}}, nil); rerr != nil {
 		t.Fatalf("re-assertion refused: %+v", rerr)
 	}
@@ -378,11 +408,12 @@ func TestAllowedModels_ReviveReplaysTheStoredList(t *testing.T) {
 		t.Fatal(err)
 	}
 	var back proxy.Config
-	if err := json.Unmarshal(raw, &back); err != nil || back.AllowedModels == nil || !slices.Equal(*back.AllowedModels, list) || !back.MITMLLM {
-		t.Fatalf("revived config allowed_models=%v mitm_llm=%v (%v)", back.AllowedModels, back.MITMLLM, err)
+	if err := json.Unmarshal(raw, &back); err != nil || back.AllowedModels == nil || !slices.Equal(*back.AllowedModels, list) || !back.MITMLLM ||
+		back.BedrockRoutes["bedrock-gateway.corp.example"] != "/bedrock" {
+		t.Fatalf("revived config allowed_models=%v bedrock_routes=%v mitm_llm=%v (%v)", back.AllowedModels, back.BedrockRoutes, back.MITMLLM, err)
 	}
-	if pc := localStoredSpec(*cfg).ProxyConfig; pc.AllowedModels == nil || !slices.Equal(*pc.AllowedModels, list) {
-		t.Errorf("the local revive's copy dropped the list: %v", pc.AllowedModels)
+	if pc := localStoredSpec(*cfg).ProxyConfig; pc.ModelLimit == nil || !slices.Equal(pc.ModelLimit.Models, list) || pc.ModelLimit.BedrockRoutes["bedrock-gateway.corp.example"] != "/bedrock" {
+		t.Errorf("the local revive's copy dropped the limit: %+v", pc.ModelLimit)
 	}
 }
 

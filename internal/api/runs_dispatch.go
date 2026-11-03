@@ -532,7 +532,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			LocalModels: plan.localModels,
 			// The governed allowed-models list every hosted model request is held to; nil, so no key is
 			// written, when no limit binds the run. Never an empty list.
-			AllowedModels: plan.allowedModels,
+			ModelLimit: plan.modelLimit,
 			// The routes that carry the run's signed identity; nil, so no key is written, with identity off.
 			GatewayIdentity: gatewayRoutes,
 			// What the brokered-LLM 404 says when this run reaches that route

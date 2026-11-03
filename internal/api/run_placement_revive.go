@@ -66,7 +66,7 @@ func localStoredSpec(c proxy.Config) runner.SandboxSpec {
 		UpstreamProxyURL: c.UpstreamProxyURL, TrustedCAPEM: c.TrustedCAPEM, InternalHosts: c.InternalHosts,
 		UpstreamProxyNoProxy: c.UpstreamProxyNoProxy, LLMUpstreams: c.LLMUpstreams,
 		LLMChannelHosts: c.LLMChannelHosts, LLMUnavailableDetail: c.LLMUnavailableDetail, LocalModels: c.LocalModels, GatewayIdentity: c.GatewayIdentity,
-		AllowedModels: c.AllowedModels, Unattended: c.Unattended,
+		ModelLimit: runner.ModelLimitOf(c.AllowedModels, c.BedrockRoutes), Unattended: c.Unattended,
 		ScrubResponses: c.ScrubResponses, CanonicalPushRepos: c.CanonicalPushRepos, Attribution: c.Attribution,
 		PushRuleSets: c.PushRuleSets, PushRuleBase: c.PushRuleBase, HarnessToolRules: c.HarnessToolRules, HarnessCredentials: c.HarnessCredentials, ViaOrgRoutes: c.ViaOrgRoutes,
 		MCPServers: c.MCPServers, MCPBindings: c.MCPBindings,

@@ -28,13 +28,15 @@ func TestAllowedModels_EveryProviderKindChecked(t *testing.T) {
 		foundry   = "foundry.corp.internal"
 		runtime   = "bedrock-runtime.us-west-2.amazonaws.com"
 		vpce      = "vpce-1.bedrock-runtime.us-west-2.vpce.amazonaws.com"
+		bedrockGW = "bedrock-gateway.corp.example"
 	)
 	anthropicBody, openaiBody := `{"model":"model-b","messages":[]}`, `{"model":"model-b","input":"x"}`
 	type direct struct{ host, path, body string }
 	for _, tc := range []struct {
 		kind     string
 		opts     Options
-		brokered string // a brokered route the kind's harness is pointed at, or ""
+		routes   map[string]string // Config.BedrockRoutes
+		brokered string            // a brokered route the kind's harness is pointed at, or ""
 		body     string
 		direct   []direct // hosts the kind's sandbox connects to itself
 	}{
@@ -55,6 +57,9 @@ func TestAllowedModels_EveryProviderKindChecked(t *testing.T) {
 			direct: []direct{{anthropicHost, "/v1/messages", anthropicBody}, {routeThru, "/anthropic/v1/messages", anthropicBody}}},
 		{kind: "bedrock_bearer", opts: Options{MITMLLM: true, MITMHosts: []string{vpce + ":443"}},
 			direct: []direct{{vpce, "/model/model-b/invoke", `{}`}}},
+		{kind: "bedrock_bearer at a gateway of its own name", opts: Options{MITMLLM: true, MITMHosts: []string{bedrockGW + ":443"}},
+			routes: map[string]string{bedrockGW: "/bedrock"},
+			direct: []direct{{bedrockGW, "/bedrock/model/model-b/invoke", `{}`}, {bedrockGW, "/bedrock/model/model-b/converse-stream", `{}`}}},
 		{kind: "bedrock_sso re-signed at the proxy", opts: Options{MITMLLM: true,
 			AWSSigV4: &AWSSigV4Config{GrantID: uuid.New(), Hosts: []string{runtime}}},
 			direct: []direct{{runtime, "/model/model-b/converse", `{}`}}},
@@ -65,9 +70,9 @@ func TestAllowedModels_EveryProviderKindChecked(t *testing.T) {
 		t.Run(tc.kind, func(t *testing.T) {
 			opts := tc.opts
 			opts.RunID, opts.CA, opts.Resolver = uuid.New(), fakeCA(t), publicResolver{}
-			opts.Policy = CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost, openaiHost, gateway, routeThru, foundry, runtime, vpce}})
+			opts.Policy = CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost, openaiHost, gateway, routeThru, foundry, runtime, vpce, bedrockGW}})
 			p := newProxy(opts)
-			p.allowedModels = modelSet([]string{"model-a"})
+			p.allowedModels = compileAllowedModels(&[]string{"model-a"}, tc.routes)
 			for _, d := range tc.direct {
 				if !(p.mitmLLMHost(d.host, 443) || (p.ca != nil && p.isCorpMITMHost(d.host) && p.mitmPortAllowed(d.host, 443))) {
 					t.Fatalf("%s: a connection to it is not terminated, so the gate cannot read it", d.host)
@@ -87,5 +92,53 @@ func TestAllowedModels_EveryProviderKindChecked(t *testing.T) {
 				t.Fatalf("brokered %s: status = %d body = %q, want model-b refused", tc.brokered, rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+// A Bedrock gateway named by its own address is read by its configured route alone: under the base path
+// a listed model passes and an unlisted one is refused before anything is sent; a write outside the base
+// path is refused as unchecked, a read there passes. Without the route the host is no model host, which
+// is why dispatch carries it.
+func TestAllowedModels_BedrockGatewayRoute(t *testing.T) {
+	const gw = "bedrock-gateway.corp.example"
+	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{gw}}), Resolver: publicResolver{}})
+	p.allowedModels = compileAllowedModels(&[]string{"model-a"}, map[string]string{"Bedrock-Gateway.corp.example": "/bedrock"})
+	for _, tc := range []struct {
+		method, path string
+		refused      bool
+	}{
+		{http.MethodPost, "/bedrock/model/model-a/invoke", false},
+		{http.MethodPost, "/bedrock/model/model-a/invoke-with-response-stream", false},
+		{http.MethodPost, "/bedrock/model/model-b/converse", true},
+		{http.MethodPost, "/bedrock/model/model-b/converse-stream", true},
+		{http.MethodPost, "/model/model-a/invoke", true},
+		{http.MethodPost, "/bedrockx/model/model-a/invoke", true},
+		{http.MethodGet, "/health", false},
+	} {
+		rec := httptest.NewRecorder()
+		release, refused := p.allowedModelRefused(rec, httptest.NewRequest(tc.method, "https://"+gw+tc.path, strings.NewReader(`{}`)), gw, 443, tc.path)
+		release()
+		if refused != tc.refused || (refused && rec.Code != http.StatusForbidden) {
+			t.Errorf("%s %s: refused = %v (%d %q), want %v", tc.method, tc.path, refused, rec.Code, rec.Body.String(), tc.refused)
+		}
+	}
+	bare := newProxy(Options{RunID: uuid.New(), Resolver: publicResolver{}})
+	bare.allowedModels = modelSet([]string{"model-a"})
+	if bare.isLLMHost(gw) {
+		t.Fatal("a gateway host with no route is a model host by DNS alone: the route test proves nothing")
+	}
+	for name, routes := range map[string]map[string]string{
+		"a port in the key":     {gw + ":443": ""},
+		"a relative base":       {gw: "bedrock"},
+		"a trailing slash":      {gw: "/bedrock/"},
+		"an escape in the base": {gw: "/bed%2Frock"},
+		"a dot segment":         {gw: "/a/../bedrock"},
+	} {
+		if err := (&Config{BedrockRoutes: routes}).validateBedrockRoutes(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if err := (&Config{BedrockRoutes: map[string]string{gw: "/bedrock", "vpce-1.bedrock-runtime.us-west-2.vpce.amazonaws.com": ""}}).validateBedrockRoutes(); err != nil {
+		t.Errorf("good routes refused: %v", err)
 	}
 }

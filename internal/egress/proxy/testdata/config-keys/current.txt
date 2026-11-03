@@ -33,6 +33,7 @@ azure_gates.body_cap
 azure_gates.host
 azure_gates.models
 azure_gates.route
+bedrock_routes
 brokered_pat_grant_ids
 canonical_push_repos
 control_plane_ca_pem

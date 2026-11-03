@@ -80,17 +80,67 @@ var bedrockModelOps = map[string]bool{
 
 func noopRelease() {}
 
-// compileAllowedModels is the set the gate tests against: nil (the limit is off) for an unset
-// list, and a non-nil set, empty for `[]`, which refuses every model.
-func compileAllowedModels(list *[]string) map[string]bool {
+// modelLimit is what the gate tests against: the run's models, and its Bedrock gateway routes.
+type modelLimit struct {
+	models map[string]bool
+	// bedrockRoutes is Config.BedrockRoutes keyed by hostKey: a Bedrock gateway's host -> its base path.
+	bedrockRoutes map[string]string
+}
+
+// compileAllowedModels is the limit the gate tests against: nil (the limit is off) for an unset
+// list, and a non-nil limit whose set is empty for `[]`, which refuses every model.
+func compileAllowedModels(list *[]string, routes map[string]string) *modelLimit {
 	if list == nil {
 		return nil
 	}
-	out := make(map[string]bool, len(*list))
+	l := &modelLimit{models: make(map[string]bool, len(*list))}
 	for _, m := range *list {
-		out[m] = true
+		l.models[m] = true
 	}
-	return out
+	for h, base := range routes {
+		if l.bedrockRoutes == nil {
+			l.bedrockRoutes = make(map[string]string, len(routes))
+		}
+		l.bedrockRoutes[hostKey(h)] = base
+	}
+	return l
+}
+
+// bedrockRoute is the base path of h's configured Bedrock gateway route, when the limit is set and h
+// has one.
+func (p *Proxy) bedrockRoute(h string) (string, bool) {
+	if p.allowedModels == nil {
+		return "", false
+	}
+	base, ok := p.allowedModels.bedrockRoutes[h]
+	return base, ok
+}
+
+// underBase is cleaned with base taken off, when cleaned is base or a path under it.
+func underBase(cleaned, base string) (string, bool) {
+	switch {
+	case base == "":
+		return cleaned, true
+	case cleaned == base:
+		return "/", true
+	case strings.HasPrefix(cleaned, base+"/"):
+		return cleaned[len(base):], true
+	}
+	return "", false
+}
+
+// validateBedrockRoutes refuses a route whose key is not a bare hostname or a bare IPv6 address, or
+// whose base path is not "" or a clean absolute path with no escapes, query or trailing slash.
+func (c *Config) validateBedrockRoutes() error {
+	for host, base := range c.BedrockRoutes {
+		switch {
+		case strings.TrimSpace(host) == "" || (strings.ContainsAny(host, ":/@ ") && !bareIPv6(host)):
+			return fmt.Errorf("config: bedrock_routes[%q]: the key must be a bare hostname or a bare IPv6 address", host)
+		case base != "" && (!strings.HasPrefix(base, "/") || path.Clean(base) != base || base == "/" || strings.ContainsAny(base, "%?#\\")):
+			return fmt.Errorf("config: bedrock_routes[%q]: base path %q must be empty or a clean absolute path", host, base)
+		}
+	}
+	return nil
 }
 
 // validateAllowedModels refuses a list with an empty entry, an entry with leading or trailing
@@ -286,7 +336,8 @@ func (p *Proxy) allowedModelRefused(w http.ResponseWriter, r *http.Request, host
 	if p.allowedModels == nil || !p.isLLMHost(host) {
 		return noopRelease, false
 	}
-	bedrock := isBedrockHost(hostKey(host))
+	base, routed := p.bedrockRoute(hostKey(host))
+	bedrock := routed || isBedrockHost(hostKey(host))
 	raw := rest
 	if bedrock {
 		raw = r.URL.EscapedPath() // an escaped "/" in a model id stays inside its segment
@@ -294,6 +345,14 @@ func (p *Proxy) allowedModelRefused(w http.ResponseWriter, r *http.Request, host
 	cleaned, ok := cleanModelPath(raw, bedrock)
 	if !ok {
 		return noopRelease, p.refuseAllowedModel(w, r, host, port, http.StatusBadRequest, reasonUnsupportedPath, unsafePathRefusal)
+	}
+	if routed { // a Bedrock gateway: its Bedrock API is under the base path, and nothing else on it is read
+		if cleaned, ok = underBase(cleaned, base); !ok {
+			if bodiless(r.Method) {
+				return noopRelease, false
+			}
+			return noopRelease, p.refuseAllowedModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied, uncheckedRouteRefusal)
+		}
 	}
 	check, model := checkPass, ""
 	if bedrock {
@@ -331,7 +390,7 @@ func (p *Proxy) allowedModelRefused(w http.ResponseWriter, r *http.Request, host
 	switch {
 	case check == checkUnreadable:
 		return noopRelease, p.refuseAllowedModel(w, r, host, port, http.StatusBadRequest, reasonNotInspected, modelUnreadable)
-	case !p.allowedModels[model]:
+	case !p.allowedModels.models[model]:
 		release()
 		return noopRelease, p.refuseAllowedModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied,
 			fmt.Sprintf("model %q is not on this run's allowed models list", shownModel(model)))

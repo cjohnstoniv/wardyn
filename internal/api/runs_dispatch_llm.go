@@ -394,8 +394,9 @@ type dispatchLLMPlan struct {
 	// list, never a CA minted purely for artifact tokens. Computed here because
 	// every input to it is decided here.
 	mitmLLM bool
-	// allowedModels is ProxyConfig.AllowedModels: the run's governed list, nil when none binds it.
-	allowedModels *[]string
+	// modelLimit is ProxyConfig.ModelLimit: the run's governed list and its lanes' Bedrock gateway
+	// routes, nil when none binds it.
+	modelLimit *runner.ModelLimit
 }
 
 // resolveLLMInjections resolves the LLM transport and authors every proxy-side
@@ -548,7 +549,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		kubectlCLI:           kubectlCLI,
 		mitmLLM:              subscription || mitmForInspect || limited,
 		llmUnavailableDetail: prov.detail, llmUpstreams: prov.upstreams, localModels: prov.localModels, localAllowlists: prov.localAllowlists,
-		gatewayRoutes: prov.gatewayRoutes, allowedModels: p.modelLimit.proxyList(),
+		gatewayRoutes: prov.gatewayRoutes, modelLimit: p.modelLimit.runnerLimit(laneBedrockRoutes(llms)),
 	}, true
 }
 

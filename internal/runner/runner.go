@@ -253,7 +253,7 @@ type ProxyConfig struct {
 	DesktopSignins  bool                                `json:"desktop_signins,omitempty"`
 	LocalModels     map[string]types.LocalModelSettings // local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels)
 	GatewayIdentity []proxy.GatewayIdentityRoute        `json:"gateway_identity,omitempty"` // routes carrying the run's signed identity (proxy.Config.GatewayIdentity)
-	AllowedModels   *[]string                           `json:"allowed_models,omitempty"`   // the run's governed model list (proxy.Config.AllowedModels); nil, never empty, when no limit binds the run
+	ModelLimit      *ModelLimit                         `json:"model_limit,omitempty"`      // the run's governed model list and its Bedrock gateway routes (model_limit.go); nil when no limit binds the run
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).
