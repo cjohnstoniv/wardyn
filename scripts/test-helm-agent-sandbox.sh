@@ -10,7 +10,7 @@
 #     byte-identical to that commit's chart under the same values;
 #   - on renders exactly: pods patch, a sandboxes create/get/list/delete rule, the env, and a
 #     ValidatingAdmissionPolicy + binding that selects the controller identity and requires the gate, a Sandbox owner and an empty nodeName;
-#   - on without k8s.enabled, or with the unenforced-NetworkPolicy override (value or env or extraEnv), is refused.
+#   - on without k8s.enabled, or with an unenforced-NetworkPolicy or ambient-default-deny override (value, env, extraEnv or valueFrom), is refused.
 # `make helm-lint` runs it. Needs helm and yq (mikefarah v4).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -108,9 +108,9 @@ ok "on: the diff to off only adds lines (apart from the pods verb list)"
 #   denied:   controller identity, gate kept, spec.nodeName set
 #   denied:   controller identity, owner kept, gate removed
 #   not selected: any other identity (wardynd's proxy and canary pods, kubectl), whatever the pod holds
-[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy") | .metadata.name' "$TMP/on.out")" == "r-wardyn-sandbox-pod-gate" ]] \
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy") | .metadata.name' "$TMP/on.out" | sort | tr '\n' ' ')" == "r-wardyn-sandbox-pod-gate r-wardyn-sandbox-pod-ungate " ]] \
   || die "on: no ValidatingAdmissionPolicy r-wardyn-sandbox-pod-gate"
-vap='select(.kind == "ValidatingAdmissionPolicy")'
+vap='select(.kind == "ValidatingAdmissionPolicy" and .metadata.name == "r-wardyn-sandbox-pod-gate")'
 [[ "$(y "$vap | .spec.failurePolicy" "$TMP/on.out")" == "Fail" ]] || die "on: the policy does not fail closed"
 [[ "$(y "$vap | .spec.matchConstraints.resourceRules[0] | [.apiGroups[0], .apiVersions[0], .operations[0], .resources[0]] | join(\",\")" "$TMP/on.out")" == ",v1,CREATE,pods" ]] \
   || die "on: the policy does not match pod CREATE only"
@@ -128,10 +128,49 @@ conds="$(y "$vap | .spec.matchConditions[].expression" "$TMP/on.out")"
   || die "on: validation 1 is not the Sandbox owner reference"
 [[ "$(y "$vap | .spec.validations[2].expression" "$TMP/on.out")" == "!has(object.spec.nodeName) || object.spec.nodeName == ''" ]] \
   || die "on: validation 2 is not an empty nodeName"
-bind='select(.kind == "ValidatingAdmissionPolicyBinding")'
+bind='select(.kind == "ValidatingAdmissionPolicyBinding" and .spec.policyName == "r-wardyn-sandbox-pod-gate")'
 [[ "$(y "$bind | .spec.policyName + \" \" + .spec.validationActions[0] + \" \" + .spec.matchResources.namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"]" "$TMP/on.out")" == "r-wardyn-sandbox-pod-gate Deny wardyn-runs" ]] \
   || die "on: the binding is not Deny on the runs namespace for the policy"
 ok "on: policy selects on the controller identity alone; gate, Sandbox owner and empty nodeName are validations; Deny, runs namespace"
+
+# The ungate policy (UPDATE). Rendered CEL text only. The decisions a kind job must reach (lane 4):
+#   admitted: wardynd's identity removes the gate, nothing else in the write changed
+#   denied:   wardynd's identity removes the gate and the same write changes a label (wardyn.component)
+#   denied:   wardynd's identity removes the gate and the same write changes a container or init container image
+#   denied:   wardynd's identity removes the gate and the same write sets spec.nodeName, changes tolerations,
+#             activeDeadlineSeconds or owner references, or adds an ephemeral container
+#   denied:   any other identity (the controller's included) removes the gate
+#   denied:   the gate removed from a pod with no Sandbox owner
+#   not selected: an UPDATE of a pod whose stored object holds no wardyn.dev/verify gate
+un='select(.kind == "ValidatingAdmissionPolicy" and .metadata.name == "r-wardyn-sandbox-pod-ungate")'
+[[ "$(y "$un | .spec.failurePolicy" "$TMP/on.out")" == "Fail" ]] || die "on: the ungate policy does not fail closed"
+[[ "$(y "$un | .spec.matchConstraints.resourceRules[0] | [.operations[0], .resources[0], (.operations | length), (.resources | length)] | join(\",\")" "$TMP/on.out")" == "UPDATE,pods,1,1" ]] \
+  || die "on: the ungate policy does not match pod UPDATE (main resource) only"
+[[ "$(y "$un | .spec.matchConditions | length" "$TMP/on.out")" == 1 ]] || die "on: not exactly one ungate match condition"
+[[ "$(y "$un | .spec.matchConditions[0].expression" "$TMP/on.out")" == "has(oldObject.spec.schedulingGates) && oldObject.spec.schedulingGates.exists(g, g.name == 'wardyn.dev/verify')" ]] \
+  || die "on: the ungate policy does not select on the STORED pod holding the gate (oldObject alone)"
+[[ "$(y "$un | .spec.validations | length" "$TMP/on.out")" == 3 ]] || die "on: not exactly three ungate validations"
+[[ "$(y "$un | .spec.validations[0].expression" "$TMP/on.out")" == "variables.gateHeld || request.userInfo.username == 'system:serviceaccount:default:wardyn-byo'" ]] \
+  || die "on: a gate removal is not restricted to wardynd's own identity"
+[[ "$(y "$un | .spec.validations[1].expression" "$TMP/on.out")" == "variables.gateHeld || (has(oldObject.metadata.ownerReferences) && oldObject.metadata.ownerReferences.exists(o, o.kind == 'Sandbox' && o.apiVersion.startsWith('agents.x-k8s.io/')))" ]] \
+  || die "on: a gate removal from a pod with no Sandbox owner is not denied"
+[[ "$(y "$un | .spec.validations[2].expression" "$TMP/on.out")" == "variables.gateHeld || variables.unchanged" ]] \
+  || die "on: a gate removal is not held to variables.unchanged"
+[[ "$(y "$un | .spec.variables[0].expression" "$TMP/on.out")" == "has(object.spec.schedulingGates) && object.spec.schedulingGates.exists(g, g.name == 'wardyn.dev/verify')" ]] \
+  || die "on: variables.gateHeld is not the gate on the new object"
+unchanged="$(y "$un | .spec.variables[1].expression" "$TMP/on.out")"
+for tok in 'oldObject.metadata.labels == object.metadata.labels' 'oldObject.metadata.ownerReferences == object.metadata.ownerReferences' \
+  'oldObject.spec.containers.map(c, c.image) == object.spec.containers.map(c, c.image)' \
+  'oldObject.spec.initContainers.map(c, c.image) == object.spec.initContainers.map(c, c.image)' \
+  'oldObject.spec.tolerations == object.spec.tolerations' 'oldObject.spec.activeDeadlineSeconds == object.spec.activeDeadlineSeconds' \
+  "object.spec.nodeName == ''" 'size(object.spec.ephemeralContainers) == 0'; do
+  [[ "$unchanged" == *"$tok"* ]] || die "on: variables.unchanged does not compare: $tok"
+done
+[[ "$(y "$un | .spec.variables | length" "$TMP/on.out")" == 2 ]] || die "on: the ungate policy has other variables than gateHeld and unchanged"
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicyBinding" and .spec.policyName == "r-wardyn-sandbox-pod-ungate") | .spec.validationActions[0] + " " + .spec.matchResources.namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "$TMP/on.out")" == "Deny wardyn-runs" ]] \
+  || die "on: the ungate binding is not Deny on the runs namespace"
+[[ "$(grep -c '^kind: ValidatingAdmissionPolic' "$TMP/on.out")" == 4 ]] || die "on: not exactly two policies and two bindings"
+ok "on: ungate policy selects on the stored gate; only wardynd removes it; labels, owners, images, tolerations, deadline, node, ephemeral containers unchanged"
 
 # The controller identity is a value, and may not be wardynd's own ServiceAccount.
 render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.controller.namespace=as-sys --set k8s.agentSandbox.controller.serviceAccount=ctl >"$TMP/ctl.out"
@@ -150,13 +189,17 @@ ok "on: no runsNamespace binds the release namespace"
 
 # Refusals, each by its message.
 refused "on without k8s.enabled" "k8s.agentSandbox.enabled needs k8s.enabled=true" "${BASAL[@]}" --set k8s.agentSandbox.enabled=true
-refused "on with k8s.allowUnenforcedNetPol" "refused with the unenforced-NetworkPolicy override" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.allowUnenforcedNetPol=true
-refused "on with env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL" "refused with the unenforced-NetworkPolicy override" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set-string env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1
-refused "on with extraEnv WARDYN_K8S_ALLOW_UNENFORCED_NETPOL" "refused with the unenforced-NetworkPolicy override" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set 'extraEnv[0].name=WARDYN_K8S_ALLOW_UNENFORCED_NETPOL' --set-string 'extraEnv[0].value=true'
+refused "on with k8s.allowUnenforcedNetPol" "refused with the NetworkPolicy override" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.allowUnenforcedNetPol=true
+refused "on with env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL" "refused with the NetworkPolicy override" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set-string env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1
+refused "on with extraEnv WARDYN_K8S_ALLOW_UNENFORCED_NETPOL" "refused with the NetworkPolicy override" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set 'extraEnv[0].name=WARDYN_K8S_ALLOW_UNENFORCED_NETPOL' --set-string 'extraEnv[0].value=true'
 refused "on with the override from a valueFrom configMapKeyRef" "set through extraEnv valueFrom" -f "$ALLON" --set k8s.agentSandbox.enabled=true \
   --set 'extraEnv[0].name=WARDYN_K8S_ALLOW_UNENFORCED_NETPOL' --set 'extraEnv[0].valueFrom.configMapKeyRef.name=cm' --set 'extraEnv[0].valueFrom.configMapKeyRef.key=k'
 render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set 'extraEnv[0].name=SOMETHING_ELSE' --set 'extraEnv[0].valueFrom.configMapKeyRef.name=cm' --set 'extraEnv[0].valueFrom.configMapKeyRef.key=k' >/dev/null \
   || die "a valueFrom on an unrelated variable refused an otherwise valid on render"
+refused "on with k8s.ackAmbientDefaultDeny" "refused with the NetworkPolicy override k8s.ackAmbientDefaultDeny" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.ackAmbientDefaultDeny=true
+refused "on with env.WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY" "refused with the NetworkPolicy override k8s.ackAmbientDefaultDeny" -f "$ALLON" --set k8s.agentSandbox.enabled=true --set-string env.WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1
+refused "on with the ack override from a valueFrom configMapKeyRef" "WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY is set through extraEnv valueFrom" -f "$ALLON" --set k8s.agentSandbox.enabled=true \
+  --set 'extraEnv[0].name=WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY' --set 'extraEnv[0].valueFrom.configMapKeyRef.name=cm' --set 'extraEnv[0].valueFrom.configMapKeyRef.key=k'
 render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set-string env.WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=0 >/dev/null \
   || die "an explicit false override refused an otherwise valid on render"
 ok "an explicit false override is not refused"
