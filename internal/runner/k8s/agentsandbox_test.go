@@ -399,7 +399,7 @@ func TestAgentSandbox_ReadBackRefusesEveryChangedField(t *testing.T) {
 		{"container image", func(p *corev1.Pod) { agent(p).Image = "attacker/agent:1" }, "spec.containers[agent].image"},
 		{"container name", func(p *corev1.Pod) { agent(p).Name = "renamed" }, "spec.containers[agent].name"},
 		{"container command", func(p *corev1.Pod) { agent(p).Command = []string{"sh"} }, "spec.containers[agent].command"},
-		{"container args added", func(p *corev1.Pod) { agent(p).Args = []string{"-x"} }, "spec.containers[agent].args"},
+		{"container args added", func(p *corev1.Pod) { agent(p).Args = []string{"-x"} }, "spec.containers[agent].args[0]"},
 		{"env value", func(p *corev1.Pod) { findEnv(agent(p), "HTTP_PROXY").Value = "http://elsewhere:3128" }, "spec.containers[agent].env[HTTP_PROXY].value"},
 		{"env secretKeyRef", func(p *corev1.Pod) { findEnv(agent(p), "API_KEY").ValueFrom.SecretKeyRef.Name = "other" }, "spec.containers[agent].env[API_KEY].valueFrom.secretKeyRef.name"},
 		{"env added", func(p *corev1.Pod) { agent(p).Env = append(agent(p).Env, corev1.EnvVar{Name: "INJECTED", Value: "1"}) }, "spec.containers[agent].env[INJECTED]"},
@@ -451,7 +451,7 @@ func TestAgentSandbox_ReadBackRefusesEveryChangedField(t *testing.T) {
 		{"default toleration seconds", func(p *corev1.Pod) { *p.Spec.Tolerations[1].TolerationSeconds = 5 }, "spec.tolerations[1]"},
 		{"affinity added", func(p *corev1.Pod) {
 			p.Spec.Affinity = &corev1.Affinity{PodAffinity: &corev1.PodAffinity{RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{TopologyKey: "kubernetes.io/hostname"}}}}
-		}, "spec.affinity"},
+		}, "spec.affinity.podAffinity.requiredDuringSchedulingIgnoredDuringExecution[0]"},
 		{"priorityClassName added", func(p *corev1.Pod) { p.Spec.PriorityClassName = "system-node-critical" }, "spec.priorityClassName"},
 		{"schedulerName", func(p *corev1.Pod) { p.Spec.SchedulerName = "other-scheduler" }, "spec.schedulerName"},
 		{"terminationGracePeriodSeconds", func(p *corev1.Pod) { *p.Spec.TerminationGracePeriodSeconds = 5 }, "spec.terminationGracePeriodSeconds"},
@@ -839,7 +839,7 @@ func admitRuntimeClass(rc *nodev1.RuntimeClass) func(*corev1.Pod) {
 
 // runRuntimeClassCase runs a CC2 run whose class is rc and whose admitted pod is the template with
 // admitted's admission additions, then mutate.
-func runRuntimeClassCase(t *testing.T, rc, admitted *nodev1.RuntimeClass, mutate func(*corev1.Pod)) (error, *fake.Clientset, *dynamicfake.FakeDynamicClient) {
+func runRuntimeClassCase(t *testing.T, rc, admitted *nodev1.RuntimeClass, mutate func(*corev1.Pod)) (*fake.Clientset, *dynamicfake.FakeDynamicClient, error) {
 	t.Helper()
 	answer := controllerMaking(t, func(p *corev1.Pod) {
 		admitRuntimeClass(admitted)(p)
@@ -854,7 +854,7 @@ func runRuntimeClassCase(t *testing.T, rc, admitted *nodev1.RuntimeClass, mutate
 	spec := asSpec()
 	spec.ConfinementClass = types.CC2
 	_, err := d.CreateSandbox(context.Background(), spec)
-	return err, cs, dyn
+	return cs, dyn, err
 }
 
 // RuntimeClass admission's additions are expected exactly from the class: its overhead, its node
@@ -870,7 +870,7 @@ func TestAgentSandbox_RuntimeClassAdditionsAreExpectedFromTheClass(t *testing.T)
 		{"all three", asRuntimeClass(asOverhead, asClassNodes, asClassTols)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err, cs, dyn := runRuntimeClassCase(t, tc.rc, tc.rc, nil)
+			cs, dyn, err := runRuntimeClassCase(t, tc.rc, tc.rc, nil)
 			if err != nil {
 				t.Fatalf("CreateSandbox: %v", err)
 			}
@@ -915,7 +915,7 @@ func TestAgentSandbox_RuntimeClassAdditionsAreComparedExactly(t *testing.T) {
 		}, "spec.tolerations[3]"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err, cs, dyn := runRuntimeClassCase(t, tc.rc, tc.admitted, tc.mutate)
+			cs, dyn, err := runRuntimeClassCase(t, tc.rc, tc.admitted, tc.mutate)
 			if err == nil {
 				t.Fatal("CreateSandbox admitted a pod that differs from its RuntimeClass")
 			}
