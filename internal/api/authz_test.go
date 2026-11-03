@@ -1136,12 +1136,44 @@ func (fakeAuthzSessionRevocations) RevokeAll(context.Context) error         { re
 // too. Shared rather than duplicated: a second copy of this config is exactly
 // where a conditional route silently goes unmounted and therefore unprobed.
 // authzMatrixSiteConfig is the roster the matrix walks under: ONE enabled
-// row for claude-code.
+// row for claude-code. The attended macOS window's site switch is on, so the
+// owner of a run reaches POST /runs/{id}/desktop/window's handler; the switch
+// is off by default, and TestAuthzMatrixMacWindowSiteSwitch pins that answer.
 func authzMatrixSiteConfig() types.SiteConfig {
+	on := true
 	return types.SiteConfig{
 		Runners: &types.RunnerSettings{Enabled: true}, AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{{
 			ID: "claude-code",
-		}}}}
+		}}},
+		MacOSVM: &types.SiteMacOSVM{AllowAttendedWindow: &on},
+	}
+}
+
+// TestAuthzMatrixMacWindowSiteSwitch pins both answers the run's owner gets from POST
+// /runs/{id}/desktop/window on the matrix server: with the site switch at its default (off) a 403
+// mac_window_site_off, and with it on, the handler's own answer (the matrix's switch-on rows).
+func TestAuthzMatrixMacWindowSiteSwitch(t *testing.T) {
+	srv, ast, _, _ := newAuthzMatrixServer(t)
+	const owner = "sub-member"
+	memberSess := ssoSession(t, owner, "member@corp.example", oidc.RoleUser)
+	id := uuid.New()
+	on := true
+	ast.mu.Lock()
+	ast.runs[id] = types.AgentRun{ID: id, CreatedBy: owner, State: types.RunRunning, Agent: "claude-code"}
+	ast.siteCfg.MacOSVM = nil
+	ast.mu.Unlock()
+	const route = "POST /api/v1/runs/{id}/desktop/window"
+	path, body := buildPath("/api/v1/runs/{id}/desktop/window", id.String()), bodyFor(http.MethodPost, routeMatrix[route])
+	if w := doSSO(t, srv, http.MethodPost, path, memberSess, body); w.Code != http.StatusForbidden ||
+		!strings.Contains(w.Body.String(), `"reason":"`+reasonMacWindowSiteOff+`"`) {
+		t.Errorf("switch off: owning member: status = %d, want 403 %s; body=%s", w.Code, reasonMacWindowSiteOff, w.Body.String())
+	}
+	ast.mu.Lock()
+	ast.siteCfg.MacOSVM = &types.SiteMacOSVM{AllowAttendedWindow: &on}
+	ast.mu.Unlock()
+	if w := doSSO(t, srv, http.MethodPost, path, memberSess, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden || w.Code == http.StatusNotFound {
+		t.Errorf("switch on: owning member: status = %d, want none of 401/403/404; body=%s", w.Code, w.Body.String())
+	}
 }
 
 // shape, when given, adjusts the config before New — the deployment-shape knobs

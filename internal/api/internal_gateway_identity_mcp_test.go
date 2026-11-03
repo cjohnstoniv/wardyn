@@ -266,10 +266,11 @@ func TestGatewayMCPDispatchRoutes(t *testing.T) {
 		t.Errorf("withheld: %+v %v", out.gatewayRoutes, out.gatewayBad)
 	}
 	servers[0].URL = "https://mcp.corp.example/a/../tools"
-	if out := dispatchMCP(servers, withholding{}, &[]runner.InjectionGrant{}, "http://p:3128", false, map[string]string{}); len(out.gatewayRoutes) != 0 || !slices.Equal(out.gatewayBad, []string{"tools"}) {
-		t.Errorf("dot segment: %+v %v", out.gatewayRoutes, out.gatewayBad)
+	bad := dispatchMCP(servers, withholding{}, &[]runner.InjectionGrant{}, "http://p:3128", false, map[string]string{})
+	if len(bad.gatewayRoutes) != 0 || !slices.Equal(bad.gatewayBad, []string{"tools"}) {
+		t.Errorf("dot segment: %+v %v", bad.gatewayRoutes, bad.gatewayBad)
 	}
-	if routes, msg := gatewayMCPRoutesOf(nil, out); routes != nil || !strings.Contains(msg, `"tools"`) {
+	if routes, msg := gatewayMCPRoutesOf(nil, bad); routes != nil || !strings.Contains(msg, `"tools"`) {
 		t.Errorf("a route that cannot be written: %v %q, want a refusal", routes, msg)
 	}
 }

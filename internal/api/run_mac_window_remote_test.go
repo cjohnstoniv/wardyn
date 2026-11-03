@@ -40,6 +40,11 @@ func TestMacWindowSubForIsTheRemoteSubstrate(t *testing.T) {
 	r := newMacWindowRig(t)
 	r.h.srv.macWindowSubs = nil
 	id := *r.h.run.RunnerID
+	// The rig's runner is a fake already carrying caps; drop it so the run's runner is the server's own
+	// endpoint for a runner that has never connected.
+	r.h.srv.runnerStreams.subsMu.Lock()
+	delete(r.h.srv.runnerStreams.subs, id)
+	r.h.srv.runnerStreams.subsMu.Unlock()
 	sub, ok := r.h.srv.macWindowSubFor(id)
 	if _, is := sub.(remoteMacWindowSub); !ok || !is {
 		t.Fatalf("macWindowSubFor = %T, %v, want the remote substrate's adapter", sub, ok)
@@ -154,9 +159,8 @@ func TestMacWindowCreateRefusesWhoCannotOpen(t *testing.T) {
 			return q.WithContext(audit.WithDelegation(q.Context(), types.DelegationVia{}))
 		}, refused: true},
 	} {
-		f := &runFold{mode: foldPreview, w: httptest.NewRecorder(), r: tc.req(), ceiling: tc.ceiling,
-			req: &createRunRequest{Agent: "claude-code", MachineKind: "macos_vm", DesktopWindow: "at_start"}}
-		rf := r.h.srv.macWindowCreateRefusal(context.Background(), f)
+		req := &createRunRequest{Agent: "claude-code", MachineKind: "macos_vm", DesktopWindow: "at_start"}
+		rf := r.h.srv.macWindowCreateRefusal(context.Background(), tc.req(), tc.ceiling, req, "")
 		if refused := rf != nil; refused != tc.refused {
 			t.Errorf("%s: refusal %+v, want refused=%v", name, rf, tc.refused)
 			continue

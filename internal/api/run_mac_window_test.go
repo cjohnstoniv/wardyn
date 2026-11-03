@@ -724,7 +724,7 @@ func TestMacWindowRecheckEndsTheWindow(t *testing.T) {
 			now := time.Now()
 			r.set(func(run *types.AgentRun) { run.LostAt = &now })
 		}, macWindowRunEnded, ""},
-		{"the site switch is turned off", func(r *macWindowRig) { r.st.sc = types.SiteConfig{} }, macWindowRefusedRecheck, reasonMacWindowSiteOff},
+		{"the site switch is turned off", func(r *macWindowRig) { r.st.setSite(types.SiteConfig{}, nil) }, macWindowRefusedRecheck, reasonMacWindowSiteOff},
 		{"the profile comes to deny interactive desktops", func(r *macWindowRig) {
 			walledRun(r.h)(types.GovernanceLimits{DenyInteractive: true})
 		}, macWindowRefusedRecheck, string(authz.ReasonGovernanceUnit)},
@@ -741,7 +741,10 @@ func TestMacWindowRecheckEndsTheWindow(t *testing.T) {
 			macWindowRefusedRecheck, uiDeniedReasonRevocationUnavailable},
 		{"the run can't be read", func(r *macWindowRig) { r.st.failRunRead(errors.New("conn closed by peer")) },
 			macWindowRefusedRecheck, reasonRunUnreadable},
-		{"the site config can't be read", func(r *macWindowRig) { r.st.err = errors.New("conn closed by peer") },
+		{"the site config can't be read", func(r *macWindowRig) {
+			on := true
+			r.st.setSite(types.SiteConfig{MacOSVM: &types.SiteMacOSVM{AllowAttendedWindow: &on}}, errors.New("conn closed by peer"))
+		},
 			macWindowRefusedRecheck, reasonRunUnreadable},
 	}
 	for _, tc := range cases {

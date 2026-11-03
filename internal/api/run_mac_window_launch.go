@@ -150,22 +150,22 @@ func (s *Server) macWindowAtStart(ctx context.Context, runID uuid.UUID) {
 // delegated token, not an operator's run), so Review shows a refusal before launch. The rest need a run, a runner or a
 // registry, and the launch hook asks the whole of macWindowRefusal again once the run is up. The recording level
 // is resolved at dispatch, so the level the request's policy sets is read here.
-func (s *Server) macWindowCreateRefusal(ctx context.Context, f *runFold) *runRefusal {
+func (s *Server) macWindowCreateRefusal(ctx context.Context, r *http.Request, ceiling governanceCeiling, req *createRunRequest, recording types.RecordingLevel) *runRefusal {
 	if rf := s.macWindowSiteRefusal(ctx); rf != nil {
 		return rf
 	}
-	if at, principal := actorFromRequest(f.r); at != types.ActorHuman || principal == "" || f.ceiling.Operator ||
-		macWindowAuthorityFrom(f.r.Context(), at, principal, s.cfg.Now().UTC()).Via {
+	if at, principal := actorFromRequest(r); at != types.ActorHuman || principal == "" || ceiling.Operator ||
+		macWindowAuthorityFrom(r.Context(), at, principal, s.cfg.Now().UTC()).Via {
 		return macWindowNotYourMac("")
 	}
-	if rf := s.macWindowGovernanceRefusal(ctx, f.ceiling.Limits, f.ceiling.Unit, uuid.Nil); rf != nil {
+	if rf := s.macWindowGovernanceRefusal(ctx, ceiling, uuid.Nil); rf != nil {
 		return rf
 	}
-	if f.spec.Recording == types.RecordingScreenActions {
+	if recording == types.RecordingScreenActions {
 		return runError(http.StatusForbidden, reasonMacWindowUnrecorded, macWindowUnrecordedMsg)
 	}
-	if s.macOSDesktopSignInsOff(ctx, types.AgentRun{MachineKind: types.MachineKind(f.req.MachineKind), Agent: f.req.Agent}) {
-		return runError(http.StatusForbidden, reasonDesktopSignInsOff, macOSDesktopSignInsOffMsg(f.req.Agent))
+	if s.macOSDesktopSignInsOff(ctx, types.AgentRun{MachineKind: types.MachineKind(req.MachineKind), Agent: req.Agent}) {
+		return runError(http.StatusForbidden, reasonDesktopSignInsOff, macOSDesktopSignInsOffMsg(req.Agent))
 	}
 	return nil
 }
@@ -177,17 +177,24 @@ func (s *Server) stepMacWindow(f *runFold, _ *foldRecorder) bool {
 	if f.req.DesktopWindow == "" {
 		return true
 	}
-	rf := s.macWindowCreateRefusal(f.r.Context(), f)
+	rf := s.macWindowCreateRefusal(f.r.Context(), f.r, f.ceiling, f.req, f.spec.Recording)
 	if rf == nil {
 		return true
 	}
-	if f.mode == foldCreate {
-		at, principal := actorFromRequest(f.r)
-		data := macWindowData(f.req.Experience == types.ExperienceBackground, macWindowTriggerLaunch, nil)
-		data["reason"] = macWindowRefusalReason(rf)
-		s.auditMacWindowBegin(f.r.Context(), nil, macWindowAuthority{ActorType: at, Principal: principal}, "create", "denied", data)
-	}
+	s.auditMacWindowCreateDenied(f.r, f.req, rf, f.mode == foldCreate)
 	return !rf.write(s, f.w, f.r)
+}
+
+// auditMacWindowCreateDenied writes a create's denied takeover.begin row for rf, with no run to name yet. The
+// dry doors pass create false and write none: the mode rides as a flag so every door makes the same calls.
+func (s *Server) auditMacWindowCreateDenied(r *http.Request, req *createRunRequest, rf *runRefusal, create bool) {
+	if !create {
+		return
+	}
+	at, principal := actorFromRequest(r)
+	data := macWindowData(req.Experience == types.ExperienceBackground, macWindowTriggerLaunch, nil)
+	data["reason"] = macWindowRefusalReason(rf)
+	s.auditMacWindowBegin(r.Context(), nil, macWindowAuthority{ActorType: at, Principal: principal}, "create", "denied", data)
 }
 
 // desktopWindowRequestRefusal is the 400 for a desktop_window the request cannot carry; "" when it can.

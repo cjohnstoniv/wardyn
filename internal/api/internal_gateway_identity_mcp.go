@@ -31,7 +31,7 @@ import (
 const (
 	gatewayMCPChangedMsg = "This run's MCP server was changed or turned off after the run started, so the run gets no new " +
 		"gateway identity for it. Create a new run to use the server as it is now."
-	gatewayMCPAudienceDup = "gateway audience %q is used by %s and %s at different addresses; use a different one for each"
+	gatewayMCPAudienceDup = "mcp.gateway_audience: %q is used by %s and %s at different addresses; use a different one for each"
 	gatewayMCPAddress     = "mcp.url: this address can't carry a signed identity: its path may not hold a dot segment, a backslash, a query or a fragment"
 	gatewayMCPNeedsOn     = "mcp.gateway_audience: run identity is turned on per model provider, which also makes the signing key; turn it on for a provider first"
 	gatewayMCPRunAddress  = "MCP server %q sends a signed identity to its gateway, but its address can't carry one, so nothing was started. " +
