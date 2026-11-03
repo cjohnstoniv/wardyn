@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -35,6 +36,11 @@ type otlpRequest struct {
 }
 
 func newOTLPReceiver(t *testing.T, status func(n int) int) *otlpReceiver {
+	return newOTLPReceiverReply(t, status, "")
+}
+
+// newOTLPReceiverReply is newOTLPReceiver answering every request with reply as its body.
+func newOTLPReceiverReply(t *testing.T, status func(n int) int, reply string) *otlpReceiver {
 	t.Helper()
 	r := &otlpReceiver{}
 	r.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -48,6 +54,7 @@ func newOTLPReceiver(t *testing.T, status func(n int) int) *otlpReceiver {
 			code = status(n)
 		}
 		w.WriteHeader(code)
+		_, _ = io.WriteString(w, reply)
 	}))
 	t.Cleanup(r.srv.Close)
 	return r
@@ -81,7 +88,7 @@ func goldenEvent() types.AuditEvent {
 	run := uuid.MustParse("11111111-2222-3333-4444-555555555555")
 	return types.AuditEvent{
 		ID:        uuid.MustParse("99999999-2222-3333-4444-555555555555"),
-		Time:      time.Date(2026, 11, 3, 12, 0, 0, 123456789, time.UTC),
+		Time:      time.Unix(1793707200, 123456789).UTC(), // passthrough data: only its nanosecond rendering is asserted
 		RunID:     &run,
 		ActorType: types.ActorSystem,
 		Actor:     "spiffe://wardyn/run/abc",
@@ -425,5 +432,58 @@ func TestOTLPSink_SourceBecomesServiceInstanceID(t *testing.T) {
 	<-done
 	if rcv.count() != 1 || !strings.Contains(string(rcv.get(0).body), `{"key":"service.instance.id","value":{"stringValue":"prod-us-east"}}`) {
 		t.Errorf("service.instance.id missing from the request: %d requests", rcv.count())
+	}
+}
+
+// A 200 whose partialSuccess rejects records counts them as drops, once: the
+// accepted records are not resent, and only the count reaches the log, never
+// the collector's errorMessage. Not t.Parallel(): it swaps the default logger.
+func TestOTLPSink_PartialSuccessCountsRejectedRecordsWithoutRetry(t *testing.T) {
+	var logs strings.Builder
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	for _, reply := range []string{
+		`{"partialSuccess":{"rejectedLogRecords":"1","errorMessage":"secret-collector-detail"}}`,
+		`{"partialSuccess":{"rejectedLogRecords":1,"errorMessage":"secret-collector-detail"}}`,
+	} {
+		rcv := newOTLPReceiverReply(t, nil, reply)
+		sink, cancel, done := startOTLP(t, sinks.OTLPConfig{
+			Endpoint: rcv.srv.URL, BatchSize: 2, FlushInterval: "1h", MaxRetries: 3, RetryBaseDelay: "1ms",
+		})
+		_ = sink.Emit(context.Background(), makeEvent("partial.a"))
+		_ = sink.Emit(context.Background(), makeEvent("partial.b"))
+		waitThenSettle(t, 30*time.Millisecond, func() bool { return sink.Drops() != 0 })
+		cancel()
+		<-done
+		if rcv.count() != 1 {
+			t.Errorf("reply %s: requests = %d, want 1 (no retry of accepted records)", reply, rcv.count())
+		}
+		if sink.Drops() != 1 {
+			t.Errorf("reply %s: drops = %d, want 1", reply, sink.Drops())
+		}
+	}
+	if !strings.Contains(logs.String(), "rejected=1") {
+		t.Errorf("the rejected count is not logged: %q", logs.String())
+	}
+	if strings.Contains(logs.String(), "secret-collector-detail") {
+		t.Errorf("the collector's errorMessage reached the log: %q", logs.String())
+	}
+}
+
+// An empty, malformed or zero-rejection 2xx body is plain success.
+func TestOTLPSink_UnparseableOrEmptyReplyIsSuccess(t *testing.T) {
+	t.Parallel()
+	for _, reply := range []string{``, `not json`, `{}`, `{"partialSuccess":{}}`, `{"partialSuccess":{"rejectedLogRecords":"0"}}`, `{"partialSuccess":{"rejectedLogRecords":"many"}}`} {
+		rcv := newOTLPReceiverReply(t, nil, reply)
+		sink, cancel, done := startOTLP(t, sinks.OTLPConfig{Endpoint: rcv.srv.URL, BatchSize: 1, FlushInterval: "1h"})
+		_ = sink.Emit(context.Background(), makeEvent("ok.test"))
+		waitThenSettle(t, 20*time.Millisecond, func() bool { return rcv.count() > 0 })
+		cancel()
+		<-done
+		if rcv.count() != 1 || sink.Drops() != 0 {
+			t.Errorf("reply %q: requests = %d, drops = %d, want 1 and 0", reply, rcv.count(), sink.Drops())
+		}
 	}
 }

@@ -58,7 +58,7 @@ flowchart LR
 ## OpenTelemetry logs
 
 - The `otlp` audit sink sends each audit row to an OpenTelemetry collector as an OTLP/HTTP JSON log record; setup and the record shape are in [ENV.md](../ENV.md#opentelemetry-logs-otlp).
-- It is best-effort logs, not lossless: a full queue or a batch that fails every retry is dropped and shows in `wardyn_audit_sink_drops_total{sink="otlp"}`. Postgres keeps every row.
+- It is best-effort logs, not lossless: a full queue or a batch that fails every retry is dropped and shows in `wardyn_audit_sink_drops_total{sink="otlp"}`. Postgres keeps every row. A 2xx reply that reports rejected records in `partialSuccess` adds that count to the same counter; the accepted records are not resent and the collector's message is not logged.
 - Spans come later; the sink exports no traces or metrics. `/metrics` stays the Prometheus surface.
 
 ## Substrate and sweep health

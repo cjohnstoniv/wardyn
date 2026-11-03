@@ -35,7 +35,7 @@ func TestOTLPSink_BearerSentOverHTTPSAndNeverInErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sink.post(context.Background(), body); err != nil {
+	if _, err := sink.post(context.Background(), body); err != nil {
 		t.Fatalf("post: %v", err)
 	}
 	if got, _ := gotAuth.Load().(string); got != "Bearer "+token {
@@ -43,7 +43,7 @@ func TestOTLPSink_BearerSentOverHTTPSAndNeverInErrors(t *testing.T) {
 	}
 
 	srv.Close()
-	err = sink.post(context.Background(), body)
+	_, err = sink.post(context.Background(), body)
 	if err == nil {
 		t.Fatal("post to a closed collector succeeded")
 	}

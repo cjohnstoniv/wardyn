@@ -6,6 +6,7 @@ package sinks
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -285,8 +286,9 @@ func (o *OTLPSink) deliverWithRetry(ctx context.Context, batch []types.AuditEven
 	}
 	delay := o.baseDelay
 	for attempt := 1; attempt <= o.cfg.MaxRetries; attempt++ {
-		err := o.post(ctx, body)
+		rejected, err := o.post(ctx, body)
 		if err == nil {
+			o.countRejected(rejected, len(batch))
 			return
 		}
 		if attempt == o.cfg.MaxRetries {
@@ -312,13 +314,29 @@ func (o *OTLPSink) deliverWithRetry(ctx context.Context, batch []types.AuditEven
 	}
 }
 
-// post sends one OTLP/HTTP JSON request. Neither the bearer token nor the
+// countRejected adds the records a collector refused inside an accepted request
+// (a 2xx with partialSuccess) to the drop counter. The accepted records are not
+// retried. Only the count is logged: the collector's errorMessage is free text
+// from outside Wardyn and stays out of the log.
+func (o *OTLPSink) countRejected(rejected int64, batchLen int) {
+	if rejected <= 0 {
+		return
+	}
+	rejected = min(rejected, int64(batchLen))
+	o.drops.Add(rejected)
+	slog.Warn("sinks.otlp: collector rejected records",
+		slog.Int64("rejected", rejected), slog.Int64("drops", o.drops.Load()))
+}
+
+// post sends one OTLP/HTTP JSON request and returns how many records the
+// collector reports rejecting in a 2xx reply's partialSuccess. A malformed or
+// empty reply body counts as none. Neither the bearer token nor the
 // endpoint (net/http's *url.Error embeds it, query included) appears in the
 // returned error.
-func (o *OTLPSink) post(ctx context.Context, body []byte) error {
+func (o *OTLPSink) post(ctx context.Context, body []byte) (int64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.target, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("build request: %w", withoutURL(err))
+		return 0, fmt.Errorf("build request: %w", withoutURL(err))
 	}
 	for name, value := range o.cfg.Headers {
 		req.Header.Set(name, value)
@@ -329,13 +347,32 @@ func (o *OTLPSink) post(ctx context.Context, body []byte) error {
 	}
 	resp, err := o.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("http post: %w", withoutURL(err))
+		return 0, fmt.Errorf("http post: %w", withoutURL(err))
 	}
 	// Read what a small reply carries before closing, so keep-alive reuses the connection.
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	reply, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	_ = resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("http post: unexpected status %d", resp.StatusCode)
+		return 0, fmt.Errorf("http post: unexpected status %d", resp.StatusCode)
 	}
-	return nil
+	return rejectedRecords(reply), nil
+}
+
+// rejectedRecords reads partialSuccess.rejectedLogRecords from an
+// ExportLogsServiceResponse. The protocol's JSON mapping writes the int64 as a
+// string; a number is read too. Anything unparseable reads as 0.
+func rejectedRecords(reply []byte) int64 {
+	var r struct {
+		PartialSuccess struct {
+			Rejected json.Number `json:"rejectedLogRecords"`
+		} `json:"partialSuccess"`
+	}
+	if json.Unmarshal(reply, &r) != nil {
+		return 0
+	}
+	n, err := r.PartialSuccess.Rejected.Int64()
+	if err != nil {
+		return 0
+	}
+	return n
 }
