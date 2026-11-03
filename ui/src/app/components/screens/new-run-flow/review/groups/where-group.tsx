@@ -16,6 +16,7 @@ import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { NR_WINDOW } from "../../../../wardyn/copy/new-run/window";
 import { useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import type { ConfinementClass } from "../../../../../lib/types/runs";
+import { isVMKind } from "../../../../../lib/types/machine-kind";
 import { chooseBarrier, choosePool } from "../../lenses/run-lens";
 import { barrierRows, poolChoices, selectedPoolId, usablePools } from "../../steps/run/pool-model";
 import { loadPools, usePools } from "../../steps/run/pool-source";
@@ -42,6 +43,7 @@ function WhereEditor({ draft, dispatch, close }: Pick<GroupProps, "draft" | "dis
   const { status } = useShellSetupStatus();
   const windowId = React.useId();
   const macOS = intent.machine_kind === "macos_vm";
+  const vm = isVMKind(intent.machine_kind);
   const windowOn = macOS && macWindowOn(status);
   const pools = usePools(loadPools, intent.experience);
   const list = pools.status === "ready" ? pools.list : undefined;
@@ -67,8 +69,9 @@ function WhereEditor({ draft, dispatch, close }: Pick<GroupProps, "draft" | "dis
           <span id={`${windowId}-label`} className="text-sm font-medium">{NR_WINDOW.GROUP}</span>
           <WindowCheckbox id={windowId} chosen={!!intent.desktop_window} onChoose={(on) => chooseWindowIn(dispatch, on)} />
         </div>
-      ) : macOS ? (
-        // A macOS VM's barrier is fixed, as the Run step says: no container barrier to pick.
+      ) : vm ? (
+        // A virtual machine's barrier is fixed (the runner enforces CC3 for a Linux or macOS VM), as the Run step says:
+        // no container barrier to pick.
         <dl data-testid="nr-review-vm-barrier" className="flex min-w-40 flex-1 flex-col gap-1 text-sm">
           <dt className="font-medium">{NR_MACHINE.BARRIER_LABEL}</dt>
           <dd>{NR_MACHINE.BARRIER_VM}</dd>

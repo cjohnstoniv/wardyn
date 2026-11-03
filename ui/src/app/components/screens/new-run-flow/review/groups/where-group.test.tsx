@@ -29,9 +29,9 @@ afterEach(cleanup);
 
 const AGENT: RunIntent = { shape: "agent_task", experience: "interactive" };
 
-function renderWhere() {
+function renderWhere(intent: RunIntent = AGENT) {
   const dispatch = vi.fn<(a: DraftAction) => void>();
-  const draft = { ...initialDraft("alice"), intent: AGENT };
+  const draft = { ...initialDraft("alice"), intent };
   render(<WhereGroup draft={draft} pre={SCENARIO_PREFLIGHT.member} preview={null} docRows={[]} go={vi.fn()} dispatch={dispatch} />);
   /** What the draft would become after every edit dispatched so far. */
   const edited = () => dispatch.mock.calls.reduce((i, [a]) => (a.type === "edit" ? a.apply(i) : i), AGENT);
@@ -52,6 +52,15 @@ describe("Review: where it runs, Change", () => {
     await user.click(screen.getByRole("button", { name: NR_REVIEW.DONE }));
     expect(screen.queryByLabelText(NR_REVIEW.BARRIER_LABEL)).toBeNull();
     expect(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_WHERE}` })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("shows a Linux VM's fixed barrier, as the Run step does, and no container barrier select", async () => {
+    const user = userEvent.setup();
+    renderWhere({ ...AGENT, machine_kind: "linux_vm" });
+    await user.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_WHERE}` }));
+    await screen.findByLabelText(NR_REVIEW.POOL_LABEL);
+    expect(screen.queryByLabelText(NR_REVIEW.BARRIER_LABEL)).toBeNull();
+    expect(screen.getByTestId("nr-review-vm-barrier")).toHaveTextContent(NR_MACHINE.BARRIER_VM);
   });
 });
 
