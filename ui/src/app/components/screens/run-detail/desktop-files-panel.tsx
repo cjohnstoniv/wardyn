@@ -48,7 +48,7 @@ function Blocked({ title }: { title: string }) {
   );
 }
 
-export function DesktopFilesPanel({ runId }: { runId: string }) {
+export function DesktopFilesPanel({ runId, vm = false }: { runId: string; vm?: boolean }) {
   const [view, setView] = React.useState<DesktopFilesView | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [paused, setPaused] = React.useState<string | null>(null);
@@ -136,14 +136,18 @@ export function DesktopFilesPanel({ runId }: { runId: string }) {
   return (
     <section aria-label={C.title} data-testid="desktop-files" className="mt-4">
       <p className="text-xs font-medium text-foreground">{C.title}</p>
-      <dl className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-meta">
-        {([[C.pasteIn, rules.paste_in], [C.copyOut, rules.copy_out]] as const).map(([label, rule]) => (
-          <div key={label} className="flex gap-1.5">
-            <dt className="text-muted-foreground">{label}</dt>
-            <dd className="font-medium text-foreground">{rule === "allowed" ? C.allowed : C.blocked}</dd>
-          </div>
-        ))}
-      </dl>
+      {vm ? (
+        <p data-testid="desktop-files-no-clipboard" className="mt-1.5 text-meta text-muted-foreground">{C.clipboardVM}</p>
+      ) : (
+        <dl className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-meta">
+          {([[C.pasteIn, rules.paste_in], [C.copyOut, rules.copy_out]] as const).map(([label, rule]) => (
+            <div key={label} className="flex gap-1.5">
+              <dt className="text-muted-foreground">{label}</dt>
+              <dd className="font-medium text-foreground">{rule === "allowed" ? C.allowed : C.blocked}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
       <Tabs defaultValue="to" className="mt-2" onValueChange={(v) => v === "from" && void load()}>
         <TabsList>
           <TabsTrigger value="to">{C.toTab}</TabsTrigger>

@@ -72,7 +72,7 @@ export type KnownLaunchReason = NewRunReason | PlacementReason | RunModeReason |
 
 /** Written out key by key, so a new reason without a home fails typecheck. */
 export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
-  placement_invalid: "document", image_conflict: "document", allowed_image_invalid: "document",
+  placement_invalid: "document", image_conflict: "document", image_digest_required: "document", allowed_image_invalid: "document",
   workspace_target_invalid: "files", workspace_target_overlap: "files", workspace_pin_conflict: "files",
   workspace_selection_invalid: "files", workspace_repo_unknown: "files", run_ref_invalid: "files",
   workspace_ado_org_conflict: "files",

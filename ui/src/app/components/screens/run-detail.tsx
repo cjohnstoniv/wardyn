@@ -84,6 +84,7 @@ import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run-flow/draft/clone-pre
 import { launchIntentSource } from "./new-run-flow/steps/shape/shape-sources";
 import { useRunDetail, type Tab } from "./run-detail/use-run-detail";
 import { Cockpit } from "./run-detail/cockpit";
+import { COULDNT_END, ENDING, toastRunName } from "../wardyn/copy/run-lifetime";
 
 // The route's component. KEYED by the route id on both run routes (/runs/:id
 // and /admin/runs/:id), so moving from run A to run B REMOUNTS the page: A's
@@ -146,9 +147,9 @@ function RunDetailPage({ id }: { id: string }) {
   const kill = async (killId: string) => {
     try {
       await runsApi.killRun(killId);
-      toast.success(`Kill requested for ${killId}`);
+      toast.success(ENDING(run?.id === killId ? toastRunName(run) : killId));
     } catch (err) {
-      toast.error(`Failed to kill ${killId}`, {
+      toast.error(COULDNT_END(run?.id === killId ? toastRunName(run) : killId), {
         description: getErrorMessage(err),
       });
     } finally {

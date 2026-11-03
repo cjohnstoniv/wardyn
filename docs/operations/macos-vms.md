@@ -599,7 +599,7 @@ Wardyn asks these in order, and the first that refuses answers. Every refusal wr
 
 | Refused when | Status and reason | What you see |
 |---|---|---|
-| The site switch is off | `403` `mac_window_site_off` | "Windows onto macOS VM runs are turned off for this install. An admin can turn on macos_vm.allow_attended_window in the site config." |
+| The site switch is off | `403` `mac_window_site_off` | "Opening a window onto a macOS VM run is turned off for this install. An admin can turn on macos_vm.allow_attended_window in the site config." |
 | The run is not a macOS VM run | `409` `mac_window_not_macos_vm` | "Only a macOS VM run has a window." |
 | The run is not running, or has ended | `409` `attach_not_running` or `attach_run_kept` | "run is not RUNNING; cannot open its window", with the state, or "run has ended; cannot open its window" |
 | You did not register the run's Mac, did not start the run, or came through a delegated token | `403` `mac_window_not_your_mac` | "Wardyn opens a window only on a Mac whose runner you registered. This run is on `<computer>`, so Wardyn can't tell who is at its keyboard. Watch its desktop from the run page instead." |
@@ -607,8 +607,8 @@ Wardyn asks these in order, and the first that refuses answers. Every refusal wr
 | The run's recording level is Screen and actions | `403` `mac_window_unrecorded` | "This run's recording level is Screen and actions, and a macOS VM's screen isn't recorded, so Wardyn won't open a window onto it." |
 | The agent's sign-ins in a desktop are "Not allowed" | `403` `desktop_sign_ins_off` | "Your admin doesn't allow sign-ins in a desktop while `<agent>` runs, and a macOS desktop can't block them yet." |
 | The Mac's runner is offline | `409` `mac_window_offline` | "This Mac's runner is offline, so Wardyn can't open a window on it." |
-| The runner is connected through another server | `409` `mac_window_not_here` | "This window has to be opened through the server your runner is connected to; try again." |
-| The runner cannot open a window | `409` `mac_window_runner_too_old` | "This Mac's runner can't open a window. Upgrade it to 0.10.0-rc.12 or later." |
+| The runner is connected through another server | `409` `mac_window_not_here` | "Wardyn couldn't reach this Mac's runner from here. Try again in a moment." |
+| The runner cannot open a window | `409` `mac_window_runner_too_old` | "This Mac's runner can't open a window. Upgrade it to this server's version." |
 | The run is paused | `409` `mac_window_paused` | "This run is paused. You can open its window once it is running again." |
 | The run is still being prepared | `409` `mac_window_preparing` | "This run is still being prepared; the window opens when preparation finishes." |
 | The run already has a window | `409` `mac_window_open` | "This run's window is already open on `<computer>`." |

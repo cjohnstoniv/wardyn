@@ -125,6 +125,10 @@ export const COMPONENTS_ADMIN = {
   SETTINGS_SAVE_FAILED: "Couldn't save these settings.",
   SETTINGS_LOAD_FAILED: "Couldn't load these settings.",
   SETTINGS_RETRY: "Retry",
+  // The card's own failed-read title (the compact ErrorState); SETTINGS_LOAD_FAILED is still the macOS card's line.
+  SETTINGS_LOAD_FAILED_TITLE: "Couldn't load custom components.",
+  // A 412 on a save where this card's own settings are unchanged: another card on the page saved the same document.
+  SETTINGS_STALE_KEPT: "This page changed since it loaded. Your change is still here — save again.",
   SETTINGS_SAVED_ELSEWHERE:
     "Someone else changed these settings while you were editing. The values shown are theirs. Make your change again and save.",
   SUMMARY_CAP: { "": "Unattended runs: no restriction", L1: "Unattended runs: tool calls held", L0: "Unattended runs: never" } as Record<string, string>,

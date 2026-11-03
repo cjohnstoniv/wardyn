@@ -512,6 +512,26 @@ func TestWindowRefusedWhenItCannotBeMade(t *testing.T) {
 	wantRefusal(t, err, macvm.WindowCodeFailed, macvm.WindowFailedSentence+"no display")
 }
 
+// A lock that lands after the caller's console check but before the window goes up is caught by the
+// check Open runs again, and refused as the lock it is, not as a failed window.
+func TestWindowLockDuringOpenIsRefusedAsALock(t *testing.T) {
+	for _, tc := range []struct {
+		err      error
+		code     string
+		sentence string
+	}{
+		{fmt.Errorf("check: %w", macvm.ErrNotAtMac), macvm.WindowCodeNotAtMac, macvm.WindowNotAtMacSentence},
+		{fmt.Errorf("check: %w", macvm.ErrLockUnknown), macvm.WindowCodeLockUnknown, macvm.WindowLockUnknownSentence},
+	} {
+		w := startWindowRun(t, true, func(_ *windowEngine, s *fakeScreen) { s.openErr = tc.err })
+		_, err := w.client(t).Window(context.Background(), "grant-1", "")
+		wantRefusal(t, err, tc.code, tc.sentence)
+		if w.scr.opens() != 0 {
+			t.Fatalf("%d windows opened, want none", w.scr.opens())
+		}
+	}
+}
+
 func TestWindowNeedsAGrant(t *testing.T) {
 	w := startWindowRun(t, true, nil)
 	for _, grant := range []string{"", "has space", "semi;colon", string(make([]byte, 129))} {

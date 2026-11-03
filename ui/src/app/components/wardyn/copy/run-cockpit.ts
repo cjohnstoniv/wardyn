@@ -237,6 +237,21 @@ export const RUN_COCKPIT = {
   tileCredentialsValue: (eligible: number, minted: number) => `${eligible} eligible · ${minted} minted`,
 } as const;
 
+// The run page's VM desktop tile and identity card (run-surfaces review).
+export const RUN_VM_PAGE = {
+  gatewayUnknown: "Couldn't check whether the desktop gateway is on.",
+  tryAgain: "Try again",
+  // The macOS 26 view-only tile sentence while a window can be opened; the command follows, then the full stop.
+  macOS26OpenWindow: "On macOS 26 the browser can only watch this desktop. To type and click, open a window on your own Mac:",
+  diskKeptNextStep: "It still takes room on this Mac. Tell the Mac's owner so they can remove it.",
+  machineLabel: "Machine",
+  machineMacOS: "macOS VM",
+  machineLinux: "Linux VM",
+  machineWithBase: (kind: string, base: string) => `${kind} · ${base}`,
+  startedLabel: "Started",
+  startedByLabel: "Started by",
+} as const;
+
 // #125 — the run page's own launch-advisory block. A launch that answers 2xx
 // always navigates here in the same tick (use-launch.ts), carrying any
 // advisory `warnings[]` as router state; this is where they land, in the New

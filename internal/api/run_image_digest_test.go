@@ -196,9 +196,9 @@ func TestImageDigestRule_CreatePreflightQueueAndServiceReachRunRequestGovernance
 	})
 }
 
-// TestImageDigestRule_WorkspaceSeedImage: the image a member's own workspace sets is checked at
-// seededImageRefusal, which create and preflight reach through seedAuthorizedWorkspace and a held run's start
-// reaches through foldRunRequest (foldCreate).
+// TestImageDigestRule_WorkspaceSeedImage: the image an attached workspace's base image sets is checked at
+// seededImageRefusal, whoever owns the workspace, which create and preflight reach through
+// seedAuthorizedWorkspace and a held run's start reaches through foldRunRequest (foldCreate).
 func TestImageDigestRule_WorkspaceSeedImage(t *testing.T) {
 	src, err := os.ReadFile("run_fold_steps.go")
 	if err != nil || !strings.Contains(string(src), "s.seedAuthorizedWorkspace(ctx, f.r, &f.spec, f.req)") ||
@@ -206,24 +206,36 @@ func TestImageDigestRule_WorkspaceSeedImage(t *testing.T) {
 		t.Error("run_fold_steps.go no longer seeds the workspace for preview and create through seedAuthorizedWorkspace")
 	}
 	src, err = os.ReadFile("run_workspace_authorization.go")
-	if err != nil || !strings.Contains(string(src), "s.seededImageRefusal(r, seededImageOwner, req.Image)") {
+	if err != nil || !strings.Contains(string(src), "s.seededImageRefusal(r, seed, req.Image)") {
 		t.Error("run_workspace_authorization.go no longer calls seededImageRefusal")
 	}
 	s := digestRuleServer(digestRuleStore(true), false)
 	member := memberCtx(nil)
-	if ref := s.seededImageRefusal(governReq(member), "member-sub", digestTagRef); !isDigestRefusal(ref) || ref.status != 403 ||
-		!strings.Contains(ref.body.Error, "your own workspace's base image") {
+	memberSeed := workspaceSeed{imageOpen: true, imageOwner: "member-sub"}
+	operatorSeed := workspaceSeed{imageOpen: true} // an operator-owned workspace set the image: no member owner
+	if ref := s.seededImageRefusal(governReq(member), memberSeed, digestTagRef); !isDigestRefusal(ref) || ref.status != 403 ||
+		!strings.Contains(ref.body.Error, "the workspace's base image") {
 		t.Errorf("a member-owned workspace's tag image: refusal = %+v", ref)
 	}
-	if ref := s.seededImageRefusal(governReq(member), "member-sub", digestPinnedRef); isDigestRefusal(ref) {
+	if ref := s.seededImageRefusal(governReq(member), memberSeed, digestPinnedRef); isDigestRefusal(ref) {
 		t.Errorf("a pinned workspace image was refused by the digest rule: %+v", ref)
 	}
-	// An operator-owned workspace's image (owner "") is the operator's choice: not bound.
-	if ref := s.seededImageRefusal(governReq(member), "", digestTagRef); ref != nil {
-		t.Errorf("an operator-owned workspace image was refused: %+v", ref)
+	// An operator-owned workspace's tag base image, launched by a member: the digest rule binds it too.
+	if ref := s.seededImageRefusal(governReq(member), operatorSeed, digestTagRef); !isDigestRefusal(ref) || ref.status != 403 ||
+		!strings.Contains(ref.body.Error, digestTagRef) {
+		t.Errorf("a member's run seeded by an operator-owned workspace's tag image: refusal = %+v", ref)
+	}
+	// ... and only the digest rule: with it off, the operator's image is not held to the member's grants.
+	off := digestRuleServer(digestRuleStore(false), false)
+	if ref := off.seededImageRefusal(governReq(member), operatorSeed, digestTagRef); ref != nil {
+		t.Errorf("an operator-owned workspace image met the grant re-check: %+v", ref)
+	}
+	// A request that named its own image was checked at runRequestGovernance, with its own sentence.
+	if ref := s.seededImageRefusal(governReq(member), workspaceSeed{}, digestTagRef); ref != nil {
+		t.Errorf("a request-named image was re-checked as a workspace's: %+v", ref)
 	}
 	// An operator launching a member-owned workspace is not bound.
-	if ref := s.seededImageRefusal(governReq(operatorCtx(capSub, capEmail, oidc.RoleAdmin)), "member-sub", digestTagRef); ref != nil {
+	if ref := s.seededImageRefusal(governReq(operatorCtx(capSub, capEmail, oidc.RoleAdmin)), memberSeed, digestTagRef); ref != nil {
 		t.Errorf("an operator was bound by the digest rule at the seed: %+v", ref)
 	}
 }

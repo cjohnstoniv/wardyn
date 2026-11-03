@@ -205,6 +205,30 @@ describe("RunRow — a local run's meta line (RS8)", () => {
   });
 });
 
+describe("RunRow — the machine kind in the meta line (UXR-31)", () => {
+  const metaOf = () => screen.getByTestId("run-row").querySelector("[title]")?.textContent ?? "";
+
+  it("names a macOS VM and a Linux VM after the repo, and says nothing for a container", () => {
+    const mac = renderRow(makeRun({ repo: "acme/payments", state: "RUNNING", machine_kind: "macos_vm" }));
+    expect(metaOf()).toMatch(/^acme\/payments · macOS VM · started /);
+    mac.unmount();
+    const linux = renderRow(makeRun({ repo: "acme/payments", state: "RUNNING", machine_kind: "linux_vm" }));
+    expect(metaOf()).toMatch(/^acme\/payments · Linux VM · started /);
+    linux.unmount();
+    renderRow(makeRun({ repo: "acme/payments", state: "RUNNING" }));
+    expect(metaOf()).toMatch(/^acme\/payments · started /);
+  });
+});
+
+describe("RunRow — a paused run (UXR-24)", () => {
+  it("says Paused in a neutral chip, not Running", () => {
+    renderRow(makeRun({ state: "RUNNING", paused_at: aheadByHours(-1), paused_reason: "idle" }));
+    const pill = screen.getByText("Paused").closest("span[class*='rounded']") as HTMLElement;
+    expect(pill.className).not.toMatch(/info|success|warning|danger/);
+    expect(screen.queryByText("Running")).toBeNull();
+  });
+});
+
 describe("RunRow — a scheduled run", () => {
   const queued = (reason: string, over: Partial<AgentRun> = {}) =>
     makeRun({

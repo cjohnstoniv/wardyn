@@ -176,7 +176,11 @@ describe("DesktopCard — Desktop sign-ins", () => {
     renderCard();
     const desk = await screen.findByRole("region", { name: DESKTOP.title });
     (await within(desk).findByRole("button", { name: DESKTOP.pauseToSignIn })).click();
-    expect(await within(desk).findByRole("alert")).toHaveTextContent("the agent could not be paused; it keeps running");
+    const alert = await within(desk).findByRole("alert");
+    expect(alert).toHaveTextContent("the agent could not be paused; it keeps running");
     expect(within(tile(desk)).getByText(DESKTOP.ready)).toBeInTheDocument();
+    // UXR-28: the error sits under the button row, above the kind line and the notes, not at the foot of the tile.
+    const kind = within(desk).getByText(DESKTOP.kind);
+    expect(alert.compareDocumentPosition(kind) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

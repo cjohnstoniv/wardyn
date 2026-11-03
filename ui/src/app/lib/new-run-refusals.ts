@@ -21,6 +21,8 @@ export const NEW_RUN_REASON = {
   WORKSPACE_PIN_CONFLICT: "workspace_pin_conflict",
   /** About the run's one image, shown in the Runner tab's Image section, not on a workspace. */
   IMAGE_CONFLICT: "image_conflict",
+  /** The org requires a member's image pinned by digest (images.require_digest); shown with the image. */
+  IMAGE_DIGEST_REQUIRED: "image_digest_required",
   ALLOWED_IMAGE_INVALID: "allowed_image_invalid",
   WORKSPACE_ADO_ORG_CONFLICT: "workspace_ado_org_conflict",
   RESOURCES_INVALID: "resources_invalid",
