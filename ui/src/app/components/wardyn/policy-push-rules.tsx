@@ -423,7 +423,8 @@ export function PushRulesSection({
         <SectionLabel>Push rules</SectionLabel>
         {/* The mock's own header (packet script, "Try it") carries this exact
             count next to the title in every one of its five scenarios. */}
-        <span className="text-xs text-muted-foreground">{PUSH_RULES_CARD.COUNTS(deny.length, review.length)}</span>
+        {/* Under deny_all the counts read as "nothing is refused", so they are hidden. */}
+        {spec.push_rules?.deny_all !== true && <span className="text-xs text-muted-foreground">{PUSH_RULES_CARD.COUNTS(deny.length, review.length)}</span>}
         <Chip tone="neutral" mono className="ml-auto">
           push_rules
         </Chip>

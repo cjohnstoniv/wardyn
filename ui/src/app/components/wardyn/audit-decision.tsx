@@ -118,6 +118,8 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   if (source === "brokered:git:push-uninspectable") {
     return { label: "Push refused — couldn't be inspected", tone: "danger" };
   }
+  // A run's walls or wall preset refuse every push (push_rules.deny_all): additive to the five labels above, which stay as shipped.
+  if (source === "brokered:git:push-deny-all") return { label: "Refused: every push", tone: "danger" };
   // builtin:upstream-proxy is the ONE builtin:* value that is an ALLOW, not a
   // refusal: recorded once per run, at proxy construction, to audit the
   // deliberate SSRF-guard relaxation for the operator's own configured

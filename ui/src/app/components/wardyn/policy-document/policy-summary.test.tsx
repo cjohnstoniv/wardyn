@@ -6,9 +6,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import type { RunPolicySpec } from "../../../lib/types";
 import { SUMMARY } from "../../screens/run-detail/policy-tab-copy";
+import { WALL_PRESETS } from "../copy/wall-presets";
 import { PolicySummary, specIsRedacted, type PolicyChangeMarks } from "./policy-summary";
 
 // Every key a RunPolicySpec has, each carrying something the Summary shows.
@@ -86,7 +87,8 @@ describe("PolicySummary — plain names for every key", () => {
     expect(row("Tools and pushes", "Tool rules")).toHaveTextContent("Bash — held" + "Read — allowed" + "Anything else is denied.");
     expect(row("Tools and pushes", "Deny")).toHaveTextContent(".github/**");
     expect(row("Tools and pushes", "Hold for review")).toHaveTextContent("payments/**");
-    expect(row("Tools and pushes", "Pushes")).toHaveTextContent("Only this run's own branch");
+    // The fixture's capability list holds no code_write, so no push is allowed (board WP-3, ruling 20).
+    expect(row("Tools and pushes", "Pushes")).toHaveTextContent("No pushes (no write access)");
     expect(row("Apps", "UI apps")).toHaveTextContent("web → localhost:3000/app");
     expect(row("Limits", "CPU")).toHaveTextContent("2 CPU");
     expect(row("Limits", "Memory")).toHaveTextContent("4096 MiB");
@@ -389,5 +391,31 @@ describe("PolicySummary host marks", () => {
     expect(screen.getByText(ALLOW_ALL_TEXT)).toBeInTheDocument();
     expect(screen.getByText(ALLOW_ALL_LINE)).toBeInTheDocument();
     for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING]) expect(screen.queryByText(s)).toBeNull();
+  });
+});
+
+describe("PolicySummary — the Pushes row", () => {
+  const pushes = (partial: Record<string, unknown>) => {
+    render(<PolicySummary spec={{ git_push_any_branch: false, ...partial } as unknown as RunPolicySpec} />);
+    return row("Tools and pushes", "Pushes");
+  };
+
+  it("says every push is refused for push_rules.deny_all, ahead of where a push could go", () => {
+    expect(pushes({ push_rules: { deny_all: true }, git_push_any_branch: true, github_capabilities: ["code_write"] })).toHaveTextContent(WALL_PRESETS.PUSH_EVERY_REFUSED);
+  });
+
+  it("says no pushes when the capability lists it holds name no code_write", () => {
+    expect(pushes({ github_capabilities: ["code_read", "issues_read"] })).toHaveTextContent(WALL_PRESETS.PUSH_NO_WRITE);
+  });
+
+  it("keeps the run's own branch, or any branch, when a list names code_write or none is named", () => {
+    expect(pushes({ github_capabilities: ["code_read", "code_write"] })).toHaveTextContent(SUMMARY.ownBranch);
+    cleanup();
+    expect(pushes({ git_push_any_branch: true })).toHaveTextContent(SUMMARY.anyBranch);
+  });
+
+  it("shows no Pushes row when the spec says nothing of pushing", () => {
+    render(<PolicySummary spec={{ allowed_domains: ["a.example.com"] } as unknown as RunPolicySpec} />);
+    expect(screen.queryByText("Pushes")).toBeNull();
   });
 });

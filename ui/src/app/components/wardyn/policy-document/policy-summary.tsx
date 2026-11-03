@@ -22,7 +22,8 @@ import { asFirstUseMode } from "../../../lib/types";
 import type { ConfinementClass, RunPolicyHostMarks, RunPolicySpec, ToolRule } from "../../../lib/types";
 import type { PolicyPreviewPending } from "../../../lib/types/policy-preview";
 import { POLICY_TAB, SUMMARY } from "../../screens/run-detail/policy-tab-copy";
-import { toolRulesTail } from "./policy-facts";
+import { pushesFact, toolRulesTail } from "./policy-facts";
+import { WALL_PRESETS } from "../copy/wall-presets";
 
 export const REDACTED = "<redacted>";
 
@@ -284,7 +285,10 @@ function summarize(
   if (holdFor) tools.push(row(SUMMARY.pushHoldFor, [text(SUMMARY.secondsValue(holdFor))]));
   if (inspect) tools.push(row(SUMMARY.pushInspectPack, [text(SUMMARY.mibValue(inspect))]));
   const anyBranch = take("git_push_any_branch", asBool);
-  if (anyBranch !== undefined) tools.push(row(SUMMARY.pushes, [text(anyBranch ? SUMMARY.anyBranch : SUMMARY.ownBranch)]));
+  // Every push refused, or no write access, outranks where a push could go.
+  const refused = pushesFact(spec);
+  if (refused) tools.push(row(SUMMARY.pushes, [text(refused === "deny_all" ? WALL_PRESETS.PUSH_EVERY_REFUSED : WALL_PRESETS.PUSH_NO_WRITE)]));
+  else if (anyBranch !== undefined) tools.push(row(SUMMARY.pushes, [text(anyBranch ? SUMMARY.anyBranch : SUMMARY.ownBranch)]));
   add(SUMMARY.tools, tools);
 
   const apps = take("ui_apps", asBags);

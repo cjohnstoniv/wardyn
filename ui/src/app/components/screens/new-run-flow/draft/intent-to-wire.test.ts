@@ -68,6 +68,12 @@ describe("intentToWire (U1)", () => {
     expect(unsupported).toEqual([]);
   });
 
+  it("sends wall_preset: a launch-time choice, carried and never reported", () => {
+    const { body, unsupported } = intentToWire({ ...INTENT, wall_preset: "sealed" });
+    expect(body.wall_preset).toBe("sealed");
+    expect(unsupported).toEqual([]);
+  });
+
   it("sends the document's inline_policy as the policy overlay, never as a whole policy", () => {
     const { body } = intentToWire(INTENT);
     expect(body.policy_overlay).toEqual({ allowed_domains: [], auto_stop_after_sec: 0 });

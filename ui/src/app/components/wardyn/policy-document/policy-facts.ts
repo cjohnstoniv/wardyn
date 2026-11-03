@@ -41,6 +41,19 @@ export function lifecycleSummary(spec: RunPolicySpec): string {
   return "Runs until stopped";
 }
 
+/**
+ * What the run's policy says of pushing, where it is not the run's own branch or any branch: every push is refused
+ * (push_rules.deny_all), or no capability list the run holds names code_write, so no push is allowed. A list that
+ * is absent is no limit. Ceiling: a run's forge is not known here, so one list without code_write beside an absent
+ * other reads as no pushes; the policy this reads is the effective one, in which the walls have already met the
+ * provider default.
+ */
+export function pushesFact(spec: Pick<RunPolicySpec, "push_rules" | "github_capabilities" | "azure_devops_capabilities">): "deny_all" | "no_write" | undefined {
+  if (spec.push_rules?.deny_all === true) return "deny_all";
+  const lists = [spec.github_capabilities, spec.azure_devops_capabilities].filter((l): l is string[] => Array.isArray(l));
+  return lists.length > 0 && lists.every((l) => !l.includes("code_write")) ? "no_write" : undefined;
+}
+
 // What happens to a tool no rule names.
 export const toolRulesTail = (effect: string) =>
   `Anything else is ${EFFECT_PAST[effect as keyof typeof EFFECT_PAST] ?? effect}.`;
