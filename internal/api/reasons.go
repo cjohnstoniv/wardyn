@@ -644,6 +644,8 @@ const (
 	reasonGitPATNarrowingUnsupportedHost = "git_pat_narrowing_unsupported_host" // the host is served by a lane that ignores the narrowing axes
 	reasonGitPATAPIForgeDisabled         = "git_pat_api_forge_disabled"         // api: true on a forge whose API door is off on this deployment
 	reasonGitPATBrokerOffResident        = "git_pat_broker_off_resident"        // the PAT broker is off, and a member's run (or any, under WARDYN_GIT_PAT_BROKER_OFF_REFUSED) may not hold the PAT
+	reasonPushDenyAllResidentPAT         = "push_deny_all_resident_pat"         // the run refuses every push, and the broker-off lane would put a git PAT in the sandbox
+	reasonPushDenyAllSSHKey              = "push_deny_all_ssh_key"              // the run refuses every push, and an ssh_key would let it push over SSH, which no broker sees
 )
 
 // Run templates (template_document.go, template_refusals.go): the refusals of

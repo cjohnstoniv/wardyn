@@ -71,6 +71,7 @@ var meetRules = map[string]meetRule{
 	"push_rules.hold_seconds":          {"120 s, cut to 600 s", "smaller after normalising"},
 	"push_rules.deny_new_executables":  {"false", "OR"},
 	"push_rules.max_file_size_mib":     {"off", "smaller positive"},
+	"push_rules.deny_all":              {"false", "OR"},
 	"azure_devops_capabilities":        {"the provider row's default profile", "intersection; a list under an empty base is a widening and stays empty; disjoint is unsatisfiable; empty overlay refused"},
 	"github_capabilities":              {"the provider row's default profile", "intersection; a list under an empty base is a widening and stays empty; disjoint is unsatisfiable; empty overlay refused"},
 

@@ -55,10 +55,13 @@ type PersonalWallsSpec struct {
 	AutoStopAfterSec *int `json:"auto_stop_after_sec,omitempty"`
 }
 
-// PersonalWallsPushRules is the one part of a policy's push_rules a person may add to: paths a
-// brokered push may not touch. It is PushRulesOverlay's deny_paths and nothing else of it.
+// PersonalWallsPushRules is the part of a policy's push_rules a person may add to: paths a
+// brokered push may not touch, and refusing every push. It is PushRulesOverlay's deny_paths and
+// deny_all and nothing else of it.
 type PersonalWallsPushRules struct {
 	DenyPaths *[]string `json:"deny_paths,omitempty"`
+	// DenyAll refuses every push; walls accept only true.
+	DenyAll *bool `json:"deny_all,omitempty"`
 }
 
 // Empty reports whether the walls name nothing, so no run is narrowed by them. A desktop block that
@@ -68,7 +71,7 @@ func (s PersonalWallsSpec) Empty() bool {
 		s.FirstUseApproval == nil && s.MinConfinementClass == nil &&
 		(s.Desktop == nil || *s.Desktop == DesktopControls{}) && len(s.WithheldGrants) == 0 &&
 		s.AzureDevOpsCapabilities == nil && s.GitHubCapabilities == nil &&
-		(s.ToolRules == nil || len(*s.ToolRules) == 0) && s.AddedDenyPaths() == nil &&
+		(s.ToolRules == nil || len(*s.ToolRules) == 0) && s.AddedDenyPaths() == nil && !s.DeniesAllPushes() &&
 		s.Recording == nil && s.AutoStopAfterSec == nil
 }
 
@@ -78,6 +81,11 @@ func (s PersonalWallsSpec) AddedDenyPaths() *[]string {
 		return nil
 	}
 	return s.PushRules.DenyPaths
+}
+
+// DeniesAllPushes reports whether the walls refuse every push.
+func (s PersonalWallsSpec) DeniesAllPushes() bool {
+	return s.PushRules != nil && s.PushRules.DenyAll != nil && *s.PushRules.DenyAll
 }
 
 // Overlay is the spec as a ceiling overlay. As the boundary's does, an allowlist with allow_all_egress
@@ -93,6 +101,13 @@ func (s PersonalWallsSpec) Overlay() CeilingOverlay {
 	}
 	if d := s.AddedDenyPaths(); d != nil {
 		out.PushRules = &PushRulesOverlay{DenyPaths: d}
+	}
+	if s.DeniesAllPushes() {
+		if out.PushRules == nil {
+			out.PushRules = &PushRulesOverlay{}
+		}
+		on := true
+		out.PushRules.DenyAll = &on
 	}
 	if s.AllowedDomains != nil && s.AllowAllEgress == nil {
 		off := false

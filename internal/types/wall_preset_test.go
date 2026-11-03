@@ -59,6 +59,21 @@ func TestWallPresetBuiltins(t *testing.T) {
 	if !slices.Contains(*got[1].Spec.AzureDevOpsCapabilities, adoscope.CapIdentityRead) {
 		t.Error("Read-only drops Azure DevOps identity_read")
 	}
+	// Read-only and Sealed refuse every push, and their overlays carry it to the run's push rules.
+	for _, p := range got[1:] {
+		if !p.Spec.DeniesAllPushes() {
+			t.Errorf("%s does not refuse every push", p.ID)
+		}
+		if ov := p.Spec.Overlay(); ov.PushRules == nil || ov.PushRules.DenyAll == nil || !*ov.PushRules.DenyAll {
+			t.Errorf("%s's overlay drops push_rules.deny_all: %+v", p.ID, ov.PushRules)
+		}
+		if !strings.Contains(p.Description, "push") {
+			t.Errorf("%s's description %q does not say it refuses pushes", p.ID, p.Description)
+		}
+	}
+	if got[0].Spec.DeniesAllPushes() {
+		t.Error("Open refuses every push")
+	}
 }
 
 // Sealed narrows every knob Read-only names at least as far, and more: no sites beyond the run's
@@ -69,6 +84,9 @@ func TestWallPresetSealedNestsInReadOnly(t *testing.T) {
 	if !slices.Equal(*ro.Spec.GitHubCapabilities, *sealed.Spec.GitHubCapabilities) ||
 		!slices.Equal(*ro.Spec.AzureDevOpsCapabilities, *sealed.Spec.AzureDevOpsCapabilities) {
 		t.Fatal("Sealed keeps capabilities Read-only does not")
+	}
+	if ro.Spec.DeniesAllPushes() && !sealed.Spec.DeniesAllPushes() {
+		t.Error("Sealed pushes where Read-only refuses")
 	}
 	if sealed.Spec.AllowedDomains == nil || len(*sealed.Spec.AllowedDomains) != 0 {
 		t.Errorf("Sealed allowed_domains = %v, want []", sealed.Spec.AllowedDomains)
@@ -91,8 +109,9 @@ func TestWallPresetBuiltinsAreFreshCopies(t *testing.T) {
 	a, _ := BuiltinWallPreset(WallPresetSealed)
 	*a.Spec.AllowedDomains = append(*a.Spec.AllowedDomains, "example.com")
 	(*a.Spec.GitHubCapabilities)[0] = ghscope.CapCodeWrite
+	*a.Spec.PushRules.DenyAll = false
 	b, _ := BuiltinWallPreset(WallPresetSealed)
-	if len(*b.Spec.AllowedDomains) != 0 || (*b.Spec.GitHubCapabilities)[0] != ghscope.CapCodeRead {
+	if len(*b.Spec.AllowedDomains) != 0 || (*b.Spec.GitHubCapabilities)[0] != ghscope.CapCodeRead || !b.Spec.DeniesAllPushes() {
 		t.Fatalf("a caller's change reached the next built-in: %+v", b.Spec)
 	}
 	if _, ok := BuiltinWallPreset("Sealed"); ok {

@@ -274,6 +274,7 @@ func leqPush(a, b *types.PushRulesSpec) bool {
 	return contains(pa.DenyPaths, pb.DenyPaths) &&
 		contains(pa.RequireReviewPaths, pb.RequireReviewPaths) &&
 		(pa.DenyNewExecutables || !pb.DenyNewExecutables) &&
+		(pa.DenyAll || !pb.DenyAll) &&
 		notLooser(pa.MaxFileSizeMiB, pb.MaxFileSizeMiB) &&
 		normPushHold(pa.HoldSeconds) <= normPushHold(pb.HoldSeconds) &&
 		notLooser(packCap(&pa), packCap(&pb))

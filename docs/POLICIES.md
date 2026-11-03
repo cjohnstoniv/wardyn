@@ -59,9 +59,9 @@
 | `harness_inner_walls` | `HarnessInnerWalls` | omitted = what the harness and lane give | The harness's own walls inside Wardyn's: its `sandbox_mode` and where its `approvals` happen. Only adds walls; a looser choice refuses the run. See [below](#harness_inner_walls--harnessinnerwalls). |
 | `recording` | `string` | omitted = the organisation's level (`terminal` unless it sets one) | How much of the run is recorded: `off`, `terminal` or `screen_actions` (a desktop's screen and an action log). A ceiling's level is a minimum. `WARDYN_RECORDING_STORE=off` still records nothing. Keystrokes are never recorded at any level. See [below](#recording). |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes on every brokered lane; operator-authored, never agent-settable. See [`git_push_any_branch`](#git_push_any_branch). |
-| `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Enforced on every brokered git lane, and on the Azure DevOps REST door, before a push is forwarded: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below. |
+| `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for brokered git pushes on every broker lane and the Azure DevOps REST door ([details](#push_rules--pushrulesspec)). With `deny_all`, a run holding an `ssh_key`, or a `git_pat` while the git token broker is off, is refused at start. |
 | `azure_devops_capabilities` | `[]string` | omitted = the provider row's `default_profile` | This run's Azure DevOps capabilities on the per-person (Entra) lane, chosen only within the row's `capability_ceiling`; unknown or unpermitted choices are refused. See [`azure_devops_capabilities`](#azure_devops_capabilities). |
-| `github_capabilities` | `[]string` | omitted = the provider row's `default_profile` | The GitHub twin of `azure_devops_capabilities`, chosen only within the row's `capability_ceiling`. **Not enforced yet:** no GitHub lane reads it. See [`github_capabilities`](#github_capabilities). |
+| `github_capabilities` | `[]string` | omitted = the provider row's `default_profile` | The GitHub twin of `azure_devops_capabilities`, chosen only within the row's `capability_ceiling`. Without `code_write`, git pushes to github.com are refused (`403` `brokered:git:push-capability`) and GitHub tokens are read-only. See [`github_capabilities`](#github_capabilities). |
 | `llm_inspection` | `LLMInspectionSpec` | omitted = **off** | Outbound content inspection on brokered LLM routes. |
 | `resources` | `ResourceLimits` | omitted = platform defaults | Sandbox CPU/memory/PID/disk caps. |
 
@@ -154,7 +154,7 @@
 - The GitHub twin of `azure_devops_capabilities`: this run's GitHub capabilities in place of a GitHub provider row's `default_profile`, chosen only within the row's `capability_ceiling`.
 - Entries come from the GitHub catalogue: `code_read`, `code_write`, `workflows_write`, `pr`, `issues_read`, `issues_write`, `actions_read`, `actions_execute`, `actions_admin`, `packages_read`, `packages_write`, `repo_admin`, `org_read`, `org_admin`, `identity`.
 - A composed profile narrows it as it narrows `azure_devops_capabilities` (intersection; an empty overlay list is refused), and a ceiling's list is never handed to a member as their choice.
-- **Not enforced yet:** the field is stored, composed and explained, but no GitHub lane reads it, and entries are not yet checked against the catalogue on write. A person's `github_capabilities` wall does narrow the GitHub CLI's capabilities ([Your walls](#your-walls)).
+- Without `code_write`, git pushes to github.com are refused (`403` `brokered:git:push-capability`) and GitHub tokens are read-only. Entries are not yet checked against the catalogue on write. A person's `github_capabilities` wall also narrows the GitHub CLI's capabilities ([Your walls](#your-walls)).
 
 ### Brokered GitHub: the denies you did not write
 
@@ -259,6 +259,8 @@
 | `git_pat_narrowing_unsupported_host` | the host is served by a lane that does not read the axes. That is an Azure DevOps host, one the run's Azure DevOps gate covers, or the host of a forge the run is GitHub-brokered for |
 | `git_pat_api_forge_disabled` | the grant sets `api` for `bitbucket_server` and `WARDYN_GIT_PAT_API_BITBUCKET_SERVER` is off. Also refused (`400`) when the policy or a governance profile is written |
 | `git_pat_broker_off_resident` | 0.10.0: `WARDYN_GIT_PAT_BROKER` is `off`, so the PAT would be minted into the sandbox, and the run is not an operator's (or `WARDYN_GIT_PAT_BROKER_OFF_REFUSED` is set). Narrowed or not; a `runner_resident` grant and a host another lane serves are not refused |
+| `push_deny_all_resident_pat` | the run's `push_rules` set `deny_all` and `WARDYN_GIT_PAT_BROKER` is `off`, so a `git_pat` (a `runner_resident` one included) would sit in the sandbox where no broker sees its pushes. Refused at Review, at dispatch and at revive, on an operator's run too |
+| `push_deny_all_ssh_key` | the run's `push_rules` set `deny_all` and it holds an `ssh_key`, a push path the broker cannot see. An `ssh_key` withheld because its forge is GitHub-brokered is not refused |
 
 
 - Dispatch is authoritative, because the broker posture is deployment-wide and can change after a policy was written, and `POST /runs/preflight` answers the same reasons.
@@ -555,6 +557,7 @@ What the check does and does not settle:
 | `github_capabilities` | | The same for GitHub: the GitHub CLI keeps only your listed capabilities. Without `code_write` (yours or the policy's), git pushes to github.com are refused (`403` `brokered:git:push-capability`) and GitHub tokens are read-only; `azure_devops_capabilities` does the same for Azure DevOps `git_pat` pushes. |
 | `tool_rules` | | Rules added to the run's: `hold` or `deny` a tool, or `*` for every tool that neither you nor the run's policy names. A rule never loosens one the run already has, and `allow` is refused |
 | `push_rules.deny_paths` | | Paths added to the run's push deny list. Only more is refused; a path the run already denies stays denied |
+| `push_rules.deny_all` | | `true` only. Refuses every push the run makes |
 | `recording` | | A floor: the run is recorded at least at `terminal` or `screen_actions`. It never lowers the run's level or your organisation's default; `off` is no floor and is refused |
 | `auto_stop_after_sec` | | A cap on the idle seconds before the sandbox is stopped. The shorter of the run's and yours stands; above zero, because zero or less means never stop |
 
@@ -1078,6 +1081,7 @@ The match is exact, so it would never fire and would silently read as enforcemen
 
 | Refusal | Status | `rule_source` | Remedy |
 |---|---|---|---|
+| The run's `push_rules.deny_all` refuses every push | `403` | `brokered:git:push-deny-all` | Launch without the preset or wall that refuses pushing. |
 | A path the push introduces matched `deny_paths` | `403` | `brokered:git:push-rules` | Take those paths out of the push, or have an operator widen `deny_paths`. The refusal names up to ten of them and, for a path the broker compared with the forge, why it could not clear it. |
 | A file the push introduces is over `max_file_size_mib`, or its size is not carried by the pack and the forge cannot show it unchanged | `403` | `brokered:git:push-rules` | Remove or shrink those files, or have an operator raise `max_file_size_mib` (`0` turns it off; off github.com that is the only remedy besides pushing through a GitHub lane). Names up to ten files; a deny, so it wins over `require_review_paths`. |
 | The request is bigger than the inspection ceiling | `413` | `brokered:git:push-too-large` | Push fewer commits, or have an operator raise `max_inspect_pack_mib`. It is **refused, not held**: holding would ask a person to approve a push nobody inspected. |
@@ -1264,8 +1268,9 @@ So an entry a pattern matches is judged one of two ways:
 > **Unenforceable is a warning, not a refusal.** `push_rules` is enforced only on the brokered lanes (`github_token`, `git_pat`) — git's own SSH transport has no broker seam.
 >
 > - A policy that sets `push_rules` while `ssh_key` is the run's **only** git-capable grant is legal (never a `422` at write time) but the rules cannot be enforced.
+> - `deny_all` is the exception: a run that sets it and holds an `ssh_key` is refused at start (`push_deny_all_ssh_key`), since it would promise a refusal SSH can go around.
 > - The policy's risk grade (`composer.Grade`, shown by the Policies screen's safety meter and returned by preflight as `risk_assessment`) surfaces that as a **medium**-risk item so the operator is told rather than blocked.
-> - An all-zero `push_rules: {}` — nothing in `deny_paths` or `require_review_paths`, `max_inspect_pack_mib` and `max_file_size_mib` `0`/absent, `deny_new_executables` `false` — reads as **absent** (a `hold_seconds` with no review path to hold for does not count), the same as `null`.
+> - An all-zero `push_rules: {}` — nothing in `deny_paths` or `require_review_paths`, `max_inspect_pack_mib` and `max_file_size_mib` `0`/absent, `deny_new_executables` and `deny_all` `false` — reads as **absent** (a `hold_seconds` with no review path to hold for does not count), the same as `null`.
 > - It never survives an operator ceiling into a member's clamped spec, and never grades the warning above.
 
 **Clamped as a floor, not a bare merge.**
@@ -1275,7 +1280,7 @@ So an entry a pattern matches is judged one of two ways:
 - So a member re-typing the ceiling's own entry in different case adds a second entry rather than silently dropping the operator's.
 - A ceiling that sets none leaves a proposal's own `push_rules` untouched — this field only narrows, so there is nothing here for a silent ceiling to protect against.
 - When both set `max_inspect_pack_mib`, `max_file_size_mib` or `hold_seconds`, the smaller one applies.
-- For `max_file_size_mib` that is the smaller **non-zero** value, so a proposal can neither raise a ceiling's limit nor turn it off with `0`, and a ceiling's `deny_new_executables: true` cannot be switched off.
+- For `max_file_size_mib` that is the smaller **non-zero** value, so a proposal can neither raise a ceiling's limit nor turn it off with `0`, and a ceiling's `deny_new_executables: true` or `deny_all: true` cannot be switched off.
 
 | Field | Type | Default | What it does |
 |---|---|---|---|
@@ -1284,6 +1289,7 @@ So an entry a pattern matches is judged one of two ways:
 | | | | `0`/absent means **32 MiB**, deliberately below the maximum an operator may author so that raising the ceiling — the stated remedy for a `413` — is available. Bounded at write time to **0..64**. |
 | `max_file_size_mib` | `int` | `0` | Refuses a push that introduces a file larger than this many MiB; `0`/absent is **off**, bounded to **0..32** at write time. A deny, like a `deny_paths` match. See [`max_file_size_mib`](#max_file_size_mib). |
 | `deny_new_executables` | `bool` | `false` | Refuses a push that adds an executable file or makes a file executable. An edit to an executable passes unless a parent tree the push carries held it not executable; see [`push_rules`](#push_rules--pushrulesspec). `false`/absent is **off**. |
+| `deny_all` | `bool` | `false` | Refuses every push to every remote before it is read: content, ref updates and deletes, and Azure DevOps REST repository writes. Reads pass. A meet ORs it and a ceiling's `true` is kept. Read-only and Sealed set it. |
 | `require_review_paths` | `[]string` | `[]` | Path patterns whose match **holds** a push for an admin's `push_content` decision instead of refusing it — see **Held for review** above. |
 | | | | Same pattern language and the same per-entry write-time checks as `deny_paths` (256 bytes, valid UTF-8, no control character, no leading or trailing whitespace, no empty/`.`/`..` segment), and likewise no count cap. A `deny_paths` match wins. |
 | `hold_seconds` | `int` | `0` | How long a held push waits for its decision before it is refused. `0`/absent means **120**. Bounded at write time to **0..600**, the proxy's own hold ceiling, which also clamps a stored value past it. |

@@ -39,9 +39,11 @@ export interface PersonalWallsSpec {
   auto_stop_after_sec?: number;
 }
 
-/** Mirrors Go's types.PersonalWallsPushRules: paths added to the run's push deny list. */
+/** Mirrors Go's types.PersonalWallsPushRules: paths added to the run's push deny list, and refusing every push. */
 export interface PersonalWallsPushRules {
   deny_paths?: string[];
+  /** true only: refuses every push. */
+  deny_all?: boolean;
 }
 
 /** Mirrors Go's types.PersonalWalls. */

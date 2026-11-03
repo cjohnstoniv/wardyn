@@ -566,6 +566,10 @@ func rescopeRevivedPATGrants(allow map[string]proxy.PATGrant, rows []types.Crede
 func (s *Server) revivePATNarrowing(ctx context.Context, run types.AgentRun, cfg *proxy.Config,
 	grants []types.CredentialGrant, actorType types.ActorType, actor string,
 ) *reviveError {
+	denyAll := refusesEveryPush(cfg.Policy, cfg.PushRuleBase, cfg.PushRuleSets)
+	if reason, detail := pushDenyAllRefusal(denyAll, patGrantSpecs(grants), !s.cfg.DisableGitPATBroker, len(cfg.GitGrants) > 0); reason != "" {
+		return s.refuseRevive(ctx, run, actorType, actor, reason, detail)
+	}
 	if len(patGrantIDsOf(grants)) == 0 {
 		return nil
 	}
@@ -591,6 +595,11 @@ func (s *Server) revivePATNarrowing(ctx context.Context, run types.AgentRun, cfg
 	if reason == "" {
 		return nil
 	}
+	return s.refuseRevive(ctx, run, actorType, actor, reason, detail)
+}
+
+// refuseRevive is revivePATNarrowing's refusal: audited on run.revive, answered 409.
+func (s *Server) refuseRevive(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor, reason, detail string) *reviveError {
 	detail = "the run cannot be revived as it was dispatched: " + detail
 	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure",
 		mustJSON(map[string]any{"subject": run.CreatedBy, "reason": reason, "error": detail})))

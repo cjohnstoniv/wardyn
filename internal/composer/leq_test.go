@@ -589,3 +589,22 @@ func TestGrantWithinFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+// TestLeqPushDenyAll: deny_all is a refusal, so a proposal without it is wider than a ceiling with it,
+// and one with it is no wider than a ceiling with or without it.
+func TestLeqPushDenyAll(t *testing.T) {
+	leq := func(a, b *types.PushRulesSpec) bool {
+		return composer.Leq(types.RunPolicySpec{PushRules: a}, types.RunPolicySpec{PushRules: b}, types.GovernanceLimits{}, types.GovernanceLimits{})
+	}
+	on := &types.PushRulesSpec{DenyAll: true}
+	paths := &types.PushRulesSpec{DenyPaths: []string{".github/**"}}
+	if leq(nil, on) || leq(paths, on) {
+		t.Error("a proposal without deny_all reads as within a ceiling that sets it")
+	}
+	if !leq(on, on) || !leq(on, nil) {
+		t.Error("a proposal with deny_all reads as wider than a ceiling with or without it")
+	}
+	if !leq(&types.PushRulesSpec{DenyAll: true, DenyPaths: []string{".github/**"}}, paths) {
+		t.Error("adding deny_all to the ceiling's own rules reads as a widening")
+	}
+}

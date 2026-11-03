@@ -169,6 +169,7 @@ policy.llm_inspection.workspace_secret_values
 policy.max_holds
 policy.min_confinement_class
 policy.push_rules
+policy.push_rules.deny_all
 policy.push_rules.deny_new_executables
 policy.push_rules.deny_paths
 policy.push_rules.hold_seconds
@@ -200,6 +201,7 @@ policy.workspace_repos.repo
 policy.workspace_repos.target
 port_rule
 push_rule_base
+push_rule_base.deny_all
 push_rule_base.deny_new_executables
 push_rule_base.deny_paths
 push_rule_base.hold_seconds
@@ -212,6 +214,7 @@ push_rule_sets.host
 push_rule_sets.org
 push_rule_sets.provider
 push_rule_sets.rules
+push_rule_sets.rules.deny_all
 push_rule_sets.rules.deny_new_executables
 push_rule_sets.rules.deny_paths
 push_rule_sets.rules.hold_seconds

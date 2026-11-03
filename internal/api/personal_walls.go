@@ -215,6 +215,7 @@ func wallsAuditData(sp types.PersonalWallsSpec) map[string]any {
 		set  bool
 	}{
 		{"allow_all_egress", sp.AllowAllEgress != nil}, {"first_use_approval", sp.FirstUseApproval != nil},
+		{"push_rules.deny_all", sp.DeniesAllPushes()},
 		{"min_confinement_class", sp.MinConfinementClass != nil}, {"desktop", sp.Desktop != nil},
 		{"recording", sp.Recording != nil}, {"auto_stop_after_sec", sp.AutoStopAfterSec != nil},
 	} {
@@ -327,6 +328,9 @@ func validateWallsNarrowing(sp types.PersonalWallsSpec) error {
 				return fmt.Errorf("tool_rules[%d]: walls only hold or deny a tool; %q cannot be allowed", i, r.Tool)
 			}
 		}
+	}
+	if sp.PushRules != nil && sp.PushRules.DenyAll != nil && !*sp.PushRules.DenyAll {
+		return errors.New("push_rules.deny_all: walls only narrow; set it to true, or leave it out")
 	}
 	if sp.PushRules != nil && sp.PushRules.DenyPaths != nil {
 		if len(*sp.PushRules.DenyPaths) > maxWallsDenyPaths {
