@@ -41,6 +41,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run page says, above the terminal, when an interactive macOS VM run is still being set up (`macos_preparing` on `GET /runs/{id}`), even with windows onto the Mac off; and a Linux VM run's built-in desktop gets the Files panel, under the run's desktop rules, with no UI app declared.
 - Kept macOS VM machines: keep, resume or fresh-start a person's macOS VM across runs (`wardyn run --keep-machine`, `--resume-machine`, `--fresh`, and `wardyn machines` to list and delete them).
 - Kept machines in the console: New run and Review offer keeping the machine or resuming a kept one, the run page's Machine card shows the machine as it is now and flags one that still needs cleanup, Your settings lists your kept machines with their idle days, and an admin sets the site switch and a governance profile's `deny_kept_machines`. A kept machine's expiry is now the one its Mac wrote at the stop, so the Mac and Wardyn agree on one deadline; a stop that could not write it reports the expiry as pending. The macOS VM page and the SDK reference cover keeping a machine, what stays on its disk, its expiry, deletion, limits and the API.
+- Experimental, off by default: an agent-sandbox backend for the Kubernetes substrate (server mode), with its chart switch, admission policies, CI job and operator guide.
 
 ### Fixed
 
@@ -70,6 +71,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run page's layout now saves as you arrange it and says so ("Saving layout…", "Layout saved"), instead of a separate Save as my default button. A save that fails stays on screen as "Live layout wasn't saved" (or Finished) with Retry, also after Done, where it used to be silent. In Focus mode, Escape and Ctrl+\ now reach the terminal (vim keeps its Escape) while the terminal has focus, and Ctrl+Shift+Backspace, the chord the terminal already teaches, leaves focus from anywhere.
 - The policy editor and the Wardyn boundary page now say what is true: the `desktop` field help says an omitted `desktop` under a ceiling takes the ceiling's rules, the `recording` help says the run owner's walls can raise the level, the Policies empty state says a stored policy is clamped to a governance profile's ceiling (it can narrow but never widen), and the boundary and recording words match Governance ("profiles below"). The Fields list no longer points at `docs/POLICIES.md`, a file a packaged install does not have.
 - People and tokens copy is truer. A service identity's inbound-token help names the identity (not "you"), a person's own API token can run to 1 year or the server's limit, the token reveal and the People page call the `admin` role "Admin", the People confirms are titled for what they do ("Sign out everywhere?", "Remove all SSH keys?") with toasts that say what happened ("Removed 2 SSH keys for …", "… was already listed."), the Holds cell says "SSH key", the drawer says how to invite someone to create a token, and a lifetime hint is read with its control. Erase below the security tier is titled "Erase someone's credentials".
+- Kubernetes teardown now identifies a run by its pod's fixed name, never by a label.
 
 ### Changed
 
@@ -84,6 +86,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Docs: the macOS VM page now covers the attended window (how to open it, the site switch, every refusal, closing, audit rows) and an interactive developer sandbox quickstart.
 - Docs: a new page on signing people in to a custom model endpoint, and a new page on checking image signatures in your cluster with Sigstore policy-controller or Kyverno. The second recipe is not run in CI.
 - Docs: Windows VMs are listed as not available yet. A Linux desktop VM uses your own image for now.
+- Docs: joining a run to a platform team's own kernel sensor on Kubernetes.
 - Your walls can now also narrow tool rules, push rules, recording, auto-stop and Azure DevOps and GitHub capabilities, and the Settings card keeps them across a save.
 
 ## [0.10.0-rc.11] — 2026-11-02
