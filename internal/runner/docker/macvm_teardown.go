@@ -22,7 +22,8 @@ import (
 )
 
 // macVMStop is the macOS VM's part of a stop or a lease end: the VM is stopped (gracefully first when
-// asked) and destroyed, since a macOS VM keeps no disk past its run.
+// asked) and destroyed, since a macOS VM keeps no disk past its run; a kept machine's disk is not the
+// run's, and stays (endKeptMacVM).
 func (d *Driver) macVMStop(ctx context.Context, v *vmRun, graceful bool) {
 	cfg, err := readMacRun(v.dir, v.runID)
 	if err != nil {
@@ -46,6 +47,12 @@ func (d *Driver) destroyMacVM(ctx context.Context, v *vmRun, entryID string, gra
 	ctx, done := context.WithTimeout(context.WithoutCancel(ctx), macDestroyTimeout)
 	defer done()
 	log := slog.With(slog.String("run_id", v.runID.String()))
+	// A kept machine's guest scrubs what its run wrote before a graceful stop; a hard stop scrubs at the next boot.
+	var scrub *runner.KeptScrub
+	k := c.keptMachineOf(v)
+	if k != nil && graceful {
+		scrub = keptStopScrub(ctx, v)
+	}
 	if _, err := c.Ledger.Update(entryID, func(e *admission.Entry) { e.State = admission.StateStopping }); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Warn("docker: mark a macOS VM stopping in the ledger", slog.String("err", err.Error()))
 	}
@@ -74,7 +81,11 @@ func (d *Driver) destroyMacVM(ctx context.Context, v *vmRun, entryID string, gra
 		d.recordMacOSVMDisk(v.runID, runner.MacOSVMDiskKept, runner.MacOSVMDiskRemoveFailed)
 		return
 	}
-	d.recordMacOSVMDisk(v.runID, runner.MacOSVMDiskRemoved, "")
+	if k != nil {
+		d.endKeptMacVM(c, v, k, scrub)
+	} else {
+		d.recordMacOSVMDisk(v.runID, runner.MacOSVMDiskRemoved, "")
+	}
 	c.sweepSockResidue()
 	var err error
 	if e, ok := c.entry(entryID); stopped || ok && e.HelperPID == 0 {

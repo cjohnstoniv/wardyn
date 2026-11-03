@@ -79,6 +79,8 @@ type MacVMConfig struct {
 	Changed func()
 	// OnUnexpectedWindow, when set, hears of a window the helper opened with a grant this runner did not issue.
 	OnUnexpectedWindow func(runID uuid.UUID, grant string, at time.Time)
+	// KeptConfig turns kept machines on (macvm_kept.go); its zero value keeps none.
+	KeptConfig
 
 	// spawn starts the helper for a run dir and signal signals a helper; tests replace both.
 	spawn  func(runDir string) error
@@ -263,7 +265,7 @@ func (d *Driver) refuseMacVMSpec(spec runner.SandboxSpec) (macvm.Manifest, error
 		//lint:ignore ST1005 the sentence the person reads, as written in the approved copy
 		return macvm.Manifest{}, errors.New(runner.MacVMAgentStart)
 	}
-	if err := cmp.Or(refuseKeptSecrets(spec), d.preflightSpec(spec)); err != nil {
+	if err := cmp.Or(refuseKeptSpec(c, spec), d.preflightSpec(spec)); err != nil {
 		return macvm.Manifest{}, err
 	}
 	// The base the run names: Standard, or one of the Mac's others (macvm.NamedBaseDir).
@@ -366,6 +368,11 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
+	// A kept machine's own checks; a resume's tools update, and its own manifest in man.
+	kept, err := d.keptStart(ctx, spec, &man)
+	if err != nil {
+		return runner.Sandbox{}, err
+	}
 	c := d.macVMConfig()
 	cpus := cmp.Or(int(spec.Resources.CPUMillis/1000), man.MinCPUs)
 	memMiB := cmp.Or(uint64(max(spec.Resources.MemoryMiB, 0)), man.MinMemoryMiB)
@@ -384,6 +391,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 		failed = failure
 	}
 	fail := func(err error) (runner.Sandbox, error) {
+		err = c.keptStartErr(spec, err)
 		if failed != "" {
 			spec.NotifyWaiting(runner.MacOSStartDetail(failed))
 		}
@@ -403,7 +411,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 		if !destroys {
 			_ = os.RemoveAll(dir)
 		}
-	})
+	}, func() { c.undoKeptNew(spec) })
 	// The run's network and proxy are what the start hands the VM (MacOSStarting), so a failure here is
 	// the start's, said before any clone began.
 	failed = runner.MacOSStartFailed
@@ -419,7 +427,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 		if macVMDiskShortSaid(spec, err) {
 			failed = ""
 		}
-		return fail(err)
+		return fail(c.keptDiskSaid(err))
 	}
 	v := newMacVMRun(c, spec.RunID, dir)
 	ref := agentContainerName(spec.RunID)
@@ -433,7 +441,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	base, _ := c.Layout.NamedBaseDir(spec.MacOSBase) // refuseMacVMSpec checked the name
 	if err := macvm.WriteRunConfig(dir, macvm.RunConfig{RunID: spec.RunID.String(), BaseDir: base, CPUs: cpus, MemoryMiB: memMiB,
 		Identity: c.Identity, RunnerID: c.RunnerID, LedgerEntry: entry.ID, LedgerDir: c.LedgerDir, SockRoot: c.SockRoot,
-		Shares: shares, Disks: disks, DesktopViewOnly: spec.DesktopViewOnly}); err != nil {
+		Shares: shares, Disks: disks, DesktopViewOnly: spec.DesktopViewOnly, Kept: kept}); err != nil {
 		return fail(fmt.Errorf("docker: macOS VM run directory: %w", err))
 	}
 	if err := c.spawn(dir); err != nil {
@@ -512,7 +520,7 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	d.vms.Store(ref, v)
 	d.keepExecOutput(ref, spec.ExecOutput)
 	return runner.Sandbox{Ref: ref, Driver: driverName, EnforcedClass: types.CC3, Machine: machine, SignIns: signIns,
-		KeychainTrust: macKeychainTrust(res), DesktopForcedViewOnly: st.DesktopForcedViewOnly}, nil
+		KeychainTrust: macKeychainTrust(res), DesktopForcedViewOnly: st.DesktopForcedViewOnly, KeptScrub: keptBootScrub(spec, res)}, nil
 }
 
 // makeRunDir creates a run's directory, new: a directory already there (another run's whose id shares
