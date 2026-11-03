@@ -29,28 +29,41 @@ var _ macvm.ViewMachine = (*machine)(nil)
 func (m *machine) ViewHandle() (unsafe.Pointer, error) { return vmPointer(m.vm) }
 
 // vmPointer reads vm's VZVirtualMachine pointer. It never panics: a shape it does not know is an error.
-func vmPointer(vm *vz.VirtualMachine) (p unsafe.Pointer, err error) {
+func vmPointer(vm *vz.VirtualMachine) (unsafe.Pointer, error) {
+	if vm == nil {
+		return nil, errors.New("vzengine: no VM")
+	}
+	return readVMPointer(reflect.ValueOf(vm).Elem())
+}
+
+// readVMPointer reads the pointer from rv, a vz.VirtualMachine value. An invalid Value anywhere on the way is
+// an error: it never calls Elem or Field on one.
+func readVMPointer(rv reflect.Value) (p unsafe.Pointer, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			p, err = nil, fmt.Errorf("vzengine: reading the VM pointer: %v", r)
 		}
 	}()
-	if vm == nil {
-		return nil, errors.New("vzengine: no VM")
+	noObject := errors.New("vzengine: the VM has no Objective-C object")
+	if !rv.IsValid() {
+		return nil, noObject
 	}
-	rv := reflect.ValueOf(vm).Elem()
 	if err := checkVMPointerLayout(rv.Type()); err != nil {
 		return nil, err
 	}
 	ptr := rv.FieldByName(vmPointerField)
-	if ptr.IsNil() {
-		return nil, errors.New("vzengine: the VM has no Objective-C object")
+	if !ptr.IsValid() || ptr.IsNil() {
+		return nil, noObject
 	}
-	obj := ptr.Elem().Field(0)
-	if obj.IsNil() {
-		return nil, errors.New("vzengine: the VM has no Objective-C object")
+	obj := ptr.Elem()
+	if !obj.IsValid() {
+		return nil, noObject
 	}
-	return obj.UnsafePointer(), nil
+	raw := obj.Field(0)
+	if !raw.IsValid() || raw.IsNil() {
+		return nil, noObject
+	}
+	return raw.UnsafePointer(), nil
 }
 
 const (

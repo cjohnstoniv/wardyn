@@ -5,6 +5,7 @@ package macvm
 
 import (
 	"errors"
+	"time"
 	"unsafe"
 )
 
@@ -71,3 +72,14 @@ type ViewMachine interface {
 
 // nativeWindowScreen is the Mac's WindowScreen; set by the darwin cgo build (screen_darwin.go).
 var nativeWindowScreen WindowScreen
+
+// watchWindowClosed closes closed once up() is no longer positive: the window's state goes to 0 when the person
+// closes it (or Close ran), and to -1 if it could not be made. It polls every interval.
+func watchWindowClosed(up func() int, interval time.Duration, closed chan<- struct{}) {
+	go func() {
+		for up() > 0 {
+			time.Sleep(interval)
+		}
+		close(closed)
+	}()
+}

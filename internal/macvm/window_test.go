@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -173,6 +174,71 @@ func waitWindow(t *testing.T, what string, ok func() bool) {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
+	}
+}
+
+// An open or a close of a run window is published on the events stream with its grant, so runnerd can tell a
+// window it did not grant.
+func TestWindowPublishesEvents(t *testing.T) {
+	w := startWindowRun(t, true, nil)
+	evs, err := w.client(t).Events(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := func() macvm.Event {
+		t.Helper()
+		for {
+			select {
+			case ev, ok := <-evs:
+				if !ok {
+					t.Fatal("the events stream ended")
+				}
+				if ev.Type == macvm.EventWindow {
+					return ev
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("no window event")
+			}
+		}
+	}
+	ended, err := w.client(t).Window(context.Background(), "grant-9", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev := next(); ev.Detail != macvm.EventWindowOpen || ev.Grant != "grant-9" || ev.Reason != "" {
+		t.Fatalf("open event %+v", ev)
+	}
+	w.scr.win(0).byPerson()
+	recv(t, ended)
+	if ev := next(); ev.Detail != macvm.EventWindowClosedDetail || ev.Grant != "grant-9" || ev.Reason != macvm.WindowClosedPerson {
+		t.Fatalf("closed event %+v", ev)
+	}
+	// A refused open publishes nothing: the next event is the reopen's.
+	if _, err := w.client(t).Window(context.Background(), "grant-10", ""); err != nil {
+		t.Fatal(err)
+	}
+	if ev := next(); ev.Detail != macvm.EventWindowOpen || ev.Grant != "grant-10" {
+		t.Fatalf("reopen event %+v", ev)
+	}
+}
+
+// The native window's close is seen by polling its state: watchWindowClosed ends the window's channel when the
+// state leaves "up", whoever closed it.
+func TestWindowWatcherSeesThePersonsClose(t *testing.T) {
+	var state atomic.Int32
+	state.Store(1)
+	closed := make(chan struct{})
+	macvm.WatchWindowClosed(func() int { return int(state.Load()) }, time.Millisecond, closed)
+	select {
+	case <-closed:
+		t.Fatal("closed while the window was up")
+	case <-time.After(20 * time.Millisecond):
+	}
+	state.Store(0) // the delegate's teardown
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the person's close was never seen")
 	}
 }
 

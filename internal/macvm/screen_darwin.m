@@ -404,6 +404,8 @@ void wardynScreenShowWindow(void *vm, const char *title, const char *steps) {
 		w.contentAspectRatio = NSMakeSize(16, 9);
 		VZVirtualMachineView *view = [[VZVirtualMachineView alloc] init];
 		view.virtualMachine = machine;
+		// The guest's display follows the window's size.
+		view.automaticallyReconfiguresDisplay = YES;
 		w.contentView = view;
 		[w center];
 		wardynScreenWindow = w;

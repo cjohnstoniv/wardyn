@@ -41,3 +41,13 @@ func TestVMPointerLayoutRefusesOtherShapes(t *testing.T) {
 		}
 	}
 }
+
+// An invalid reflect Value is an error, never a panic.
+func TestVMPointerInvalidValueIsAnError(t *testing.T) {
+	if p, err := readVMPointer(reflect.Value{}); err == nil || p != nil {
+		t.Fatalf("an invalid Value gave %v, %v; want an error", p, err)
+	}
+	if p, err := readVMPointer(reflect.ValueOf(struct{ x int }{})); err == nil || p != nil {
+		t.Fatalf("another shape gave %v, %v; want an error", p, err)
+	}
+}

@@ -521,6 +521,7 @@ func (r *runner) openWindow(grant, title string) (*windowSession, *WindowRefusal
 		return nil, &WindowRefusal{WindowCodeFailed, WindowFailedSentence + err.Error()}
 	}
 	r.o.Log.Info("macvm: window open", "run_id", r.cfg.RunID, "grant", grant)
+	r.events.publish(Event{Type: EventWindow, Detail: EventWindowOpen, Grant: grant})
 	return &windowSession{
 		win: w, ready: scr.Ready, vmDone: m.Done(), at: time.Now(),
 		end: func(reason string, held time.Duration) {
@@ -528,6 +529,7 @@ func (r *runner) openWindow(grant, title string) (*windowSession, *WindowRefusal
 				reason = WindowClosedConnection
 			}
 			release()
+			r.events.publish(Event{Type: EventWindow, Detail: EventWindowClosedDetail, Grant: grant, Reason: reason})
 			r.o.Log.Info("macvm: window closed", "run_id", r.cfg.RunID, "grant", grant, "reason", reason, "held_ms", held.Milliseconds())
 		},
 	}, nil

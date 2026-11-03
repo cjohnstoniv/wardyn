@@ -174,12 +174,7 @@ func (macWindowScreen) Open(vm unsafe.Pointer, text WindowText) (Window, error) 
 		return nil, errors.New("macvm: the run's window could not be made")
 	}
 	// ponytail: polled, as showScreen's is; the close-only delegate sets the state to 0 on the main queue.
-	go func() {
-		for C.wardynScreenUp() > 0 {
-			time.Sleep(50 * time.Millisecond)
-		}
-		close(w.closed)
-	}()
+	watchWindowClosed(func() int { return int(C.wardynScreenUp()) }, 50*time.Millisecond, w.closed)
 	return w, nil
 }
 

@@ -40,6 +40,12 @@ const (
 	OpWindow = "window"
 )
 
+// Detail values of an EventWindow.
+const (
+	EventWindowOpen         = "open"
+	EventWindowClosedDetail = "closed"
+)
+
 // Reasons a window ends (Event.Detail of the EventWindowClosed event). A client that closes the
 // connection first gets no event: it knows why.
 const (
@@ -157,6 +163,9 @@ const (
 	EventState      = "state"
 	EventNetwork    = "network"
 	EventGuestAgent = "guest_agent"
+	// EventWindow is published on the OpEvents stream when a run window opens or closes (Detail is
+	// EventWindowOpen or EventWindowClosedDetail), so runnerd can tell a window it did not ask for.
+	EventWindow = "window"
 	// EventWindowClosed ends an OpWindow connection; Detail is a WindowClosed* reason.
 	EventWindowClosed = "window_closed"
 )
@@ -167,6 +176,10 @@ type Event struct {
 	Type   string       `json:"type"`
 	State  MachineState `json:"state,omitempty"`
 	Detail string       `json:"detail,omitempty"`
+	// Grant and Reason are an EventWindow's: the grant id the window was opened with, and, when it closed,
+	// why (a WindowClosed* value).
+	Grant  string `json:"grant,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // ErrProto is returned by DialControl when the helper speaks another version.
