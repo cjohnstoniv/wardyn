@@ -206,6 +206,62 @@ func TestAgentSandboxLifecycle_PodWithoutItsSandboxReadsByPhase(t *testing.T) {
 	}
 }
 
+// An image swapped in the Sandbox template changes the pod and the template alike, so only the
+// Sandbox's generation shows it: the API server sets 1 on create, and Wardyn never changes a Sandbox.
+// The fake client sets none, which reads as unchanged; generation 1 is the real API's created Sandbox.
+func TestAgentSandboxLifecycle_ChangedSandboxSpecReadsFailed(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		gen      int64
+		deleting bool
+		want     types.RunState
+	}{
+		{"created, as the API server leaves it", 1, false, types.RunRunning},
+		{"spec changed after create", 2, false, types.RunFailed},
+		{"being deleted", 2, true, types.RunRunning},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, cs, dyn, ref := asAdmitted(t)
+			obj, err := dyn.Tracker().Get(sandboxesGVR, testNamespace, ref)
+			if err != nil {
+				t.Fatalf("get Sandbox: %v", err)
+			}
+			sb := obj.(*unstructured.Unstructured).DeepCopy()
+			sb.SetGeneration(tc.gen)
+			if tc.deleting {
+				now := metav1.Now()
+				sb.SetDeletionTimestamp(&now)
+			}
+			const swapped = "registry.example/other:1"
+			containers, _, _ := unstructured.NestedSlice(sb.Object, "spec", "podTemplate", "spec", "containers")
+			containers[0].(map[string]any)["image"] = swapped
+			if err := unstructured.SetNestedSlice(sb.Object, containers, "spec", "podTemplate", "spec", "containers"); err != nil {
+				t.Fatalf("set template containers: %v", err)
+			}
+			if err := dyn.Tracker().Update(sandboxesGVR, sb, testNamespace); err != nil {
+				t.Fatalf("update Sandbox: %v", err)
+			}
+			changeAgentPod(t, cs, ref, func(p *corev1.Pod) { p.Spec.Containers[0].Image = swapped })
+			ctx := context.Background()
+			for name, read := range map[string]func() (runner.Status, error){
+				"Status":      func() (runner.Status, error) { return d.Status(ctx, ref) },
+				"AgentStatus": func() (runner.Status, error) { return d.AgentStatus(ctx, ref, execContainerName) },
+			} {
+				st, err := read()
+				if err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				if name == "Status" && st.State != tc.want {
+					t.Errorf("Status = %+v; want %s", st, tc.want)
+				}
+				if replaced := st.FailureHint == agentPodReplacedMessage; replaced != (tc.want == types.RunFailed) {
+					t.Errorf("%s = %+v; want the replaced-pod sentence only for a changed spec", name, st)
+				}
+			}
+		})
+	}
+}
+
 // The orphan sweep finds a run by its Sandbox alone, with no NetworkPolicy or pod left to name it.
 func TestAgentSandboxLifecycle_SweepFindsALoneSandbox(t *testing.T) {
 	d, _, dyn := newSandboxRig(t, Config{}, controllerMaking(t, nil))

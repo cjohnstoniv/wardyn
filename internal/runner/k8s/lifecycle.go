@@ -72,9 +72,10 @@ func (d *Driver) replacedPodStatus(ctx context.Context, ns string, pod *corev1.P
 // carries a scheduling gate (gates can only be removed, and CreateSandbox removed them all, so a gated
 // pod is one the controller made again from the template), a label the run's NetworkPolicies select
 // is missing or changed (an unselected pod is default-allow), or a container or init container runs
-// an image other than the one the run's Sandbox template asked for. The selected labels come from the
-// run id, never from the Sandbox, whose template labels the controller copies onto the live pod. A
-// Sandbox already gone gives no images to compare: its pod is being collected with it.
+// an image other than the one the run's Sandbox template asked for, or the Sandbox's spec changed after
+// create (sandboxSpecChanged). The selected labels come from the run id, never from the Sandbox, whose
+// template labels the controller copies onto the live pod. A Sandbox already gone gives no images to
+// compare: its pod is being collected with it.
 func (d *Driver) agentPodReplaced(ctx context.Context, ns string, pod *corev1.Pod) (bool, error) {
 	runID, err := runIDFromAgentPodName(pod.Name)
 	if err != nil {
@@ -90,11 +91,25 @@ func (d *Driver) agentPodReplaced(ctx context.Context, ns string, pod *corev1.Po
 	if err != nil {
 		return false, fmt.Errorf("read agent sandbox: %w", err)
 	}
+	if sandboxSpecChanged(sb) {
+		return true, nil
+	}
 	return !slices.Equal(containerImages(pod.Spec.Containers), templateImages(sb, "containers")) ||
 		!slices.Equal(containerImages(pod.Spec.InitContainers), templateImages(sb, "initContainers")), nil
 }
 
 func agentPodGated(pod *corev1.Pod) bool { return len(pod.Spec.SchedulingGates) > 0 }
+
+// sandboxSpecChanged reports whether sb's spec changed after it was created. The API server sets a
+// Sandbox's generation to 1 on create and adds one for each spec change; Wardyn never changes a Sandbox
+// it created, and the controller writes only its status subresource, which leaves the generation alone.
+// So a generation past 1 is a change from outside, such as an image swapped in the template, which
+// changes the pod and the template alike and so passes the image comparison. A Sandbox already being
+// deleted is not asked: setting its deletion time can add one too, and its pod goes with it. A fake
+// client sets no generation, so 0 reads as unchanged; the API server never returns 0.
+func sandboxSpecChanged(sb *unstructured.Unstructured) bool {
+	return sb.GetDeletionTimestamp() == nil && sb.GetGeneration() > 1
+}
 
 // hasAgentLabels reports whether labels carry every label runID's NetworkPolicies select its agent by.
 func hasAgentLabels(labels map[string]string, runID uuid.UUID) bool {
