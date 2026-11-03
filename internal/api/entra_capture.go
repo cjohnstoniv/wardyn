@@ -322,6 +322,11 @@ func (s *Server) redeemEntraCode(ctx context.Context, cfg ADOEntraConfig, ec ent
 	if reason, ok := s.bindEntraIdentity(ctx, cfg, ec, resp.IDToken, nonce, subject); !ok {
 		slog.WarnContext(ctx, "wardynd: "+ec.label()+" sign-in identity binding failed",
 			slog.String("row", ec.rowUID), slog.String("reason", reason))
+		// Only an endpoint sign-in can tell "another authority" from "another person": the console binding
+		// compares the issuer before the person.
+		if ec.oidc != nil && reason == endpointOIDCWrongIssuerRefusal {
+			return entraCodeGrant{}, reasonEndpointOIDCIssuerMismatch
+		}
 		return entraCodeGrant{}, reasonADOCallbackIdentityBinding
 	}
 	granted := ec.capturedScopes(resp.Scope)

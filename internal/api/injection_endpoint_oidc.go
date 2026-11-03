@@ -122,6 +122,10 @@ func (s *Server) gradeProviderEndpointOIDC(ctx context.Context, row *SetupProvid
 	if name == "" {
 		name = p.ID
 	}
+	if found && !blob.CapturedAt.IsZero() {
+		at := blob.CapturedAt.UTC()
+		row.SignedInAt = &at
+	}
 	switch {
 	case !found:
 		row.State = modelAccessNotConfigured

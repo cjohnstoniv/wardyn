@@ -74,7 +74,9 @@ export function providerAttention(status: SetupStatus | null | undefined): Provi
     const access = status?.provider_access?.find((a) => a.provider === p.id);
     if (p.disabled || !access) continue;
     const defaultFor = (p.default_for ?? []).filter((h) => p.harnesses.includes(h));
-    const held = p.kind === "bedrock_sso" && (access.state === "expiring" || access.state === "expired_signin");
+    const held =
+      (p.kind === "bedrock_sso" && (access.state === "expiring" || access.state === "expired_signin")) ||
+      (p.sign_in === "oidc" && access.state === "expired_signin");
     const missing = defaultFor.length > 0 && MODEL_ACCESS_ACTIONABLE.has(access.state) && !(p.kind === "anthropic_subscription" && access.state === "expiring");
     if (held || missing)
       out.push({ ...access, provider: p, deadline: access.deadline ?? "", action: access.action ?? "", defaultFor });
@@ -91,7 +93,7 @@ export type DoorRequest = { provider: string } | { login: "aws" | "anthropic" };
 // only (packet E: "mounted in the Member view only") — a person's credential
 // for a provider is theirs as a person, added from the User view.
 export type DoorTarget =
-  | { kind: "signin"; login: "aws" | "anthropic"; provider: SetupModelProvider }
+  | { kind: "signin"; login: "aws" | "anthropic" | "oidc"; provider: SetupModelProvider }
   | { kind: "key"; provider: SetupModelProvider; token: boolean; stored: boolean };
 
 const SIGN_IN_KINDS: Record<string, "aws" | "anthropic"> = {
@@ -99,15 +101,21 @@ const SIGN_IN_KINDS: Record<string, "aws" | "anthropic"> = {
   anthropic_subscription: "anthropic",
 };
 
-/** Whether a provider of this kind is connected by signing in, not a typed key. */
-export function signsIn(kind: string): boolean {
-  return SIGN_IN_KINDS[kind] !== undefined;
+/** Whether people connect to this provider by signing in, not a typed key: a sign-in kind, or an endpoint the
+ *  server says signs people in at its own authority (sign_in on the setup status's row, never the kind). */
+export function providerSignsIn(p: Pick<SetupModelProvider, "kind" | "sign_in">): boolean {
+  return SIGN_IN_KINDS[p.kind] !== undefined || p.sign_in === "oidc";
 }
 
 /** Typed kinds whose member credential is a "token" in the copy (operator side: providesLine); the rest say "key". */
 export const isTokenKind = (kind: string): boolean => kind === "custom_endpoint" || kind === "local_model";
 
+/** isTokenKind for a provider as the setup status lists it: an endpoint that signs people in takes no token. */
+export const isTokenProvider = (p: Pick<SetupModelProvider, "kind" | "sign_in">): boolean =>
+  p.sign_in !== "oidc" && isTokenKind(p.kind);
+
 function providerDoor(status: SetupStatus, p: SetupModelProvider): DoorTarget {
+  if (p.sign_in === "oidc") return { kind: "signin", login: "oidc", provider: p };
   const login = SIGN_IN_KINDS[p.kind];
   if (login) return { kind: "signin", login, provider: p };
   // Every other kind is a typed key or token (the server's providerTypedKinds);

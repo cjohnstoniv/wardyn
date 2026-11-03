@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { AlertTriangle } from "lucide-react";
 import { ALLOWED_MODELS as AM, MEMBER } from "../../../../../lib/governance-copy";
 import { Button } from "../../../../ui/button";
 import { Input } from "../../../../ui/input";
@@ -10,6 +11,8 @@ import { Label } from "../../../../ui/label";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
+import { OIDC_SIGN_IN } from "../../../../wardyn/copy/oidc-signin";
+import { useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import type { IncludedTool } from "../../../../../lib/types/new-run-contract";
 import type { RunIntent } from "../../draft/run-intent";
 import { commandOf, isServer, setCommand } from "../../lenses/apps-lens";
@@ -71,6 +74,12 @@ export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: Group
           .map((model) => ({ id: h.id, provider: providerOf(h) ?? cred?.provider ?? "", model }));
       })
     : [];
+  // A provider whose sign-ins are not tied to the person's console sign-in says so where the run is reviewed.
+  const { status } = useShellSetupStatus();
+  const unbound = [...new Set(harnesses.map((h) => providerOf(h)).filter((id): id is string => !!id))]
+    .map((id) => status?.model_providers?.find((p) => p.id === id))
+    .filter((p) => p?.sign_in === "oidc" && p.identity_binding === "none")
+    .map((p) => p!.name || p!.id);
 
   let detail: string;
   if (command && n === 0 && isServer(intent)) detail = NR_REVIEW.TOOLS_START_COMMAND;
@@ -151,6 +160,12 @@ export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: Group
           ))}
         </div>
       )}
+      {unbound.map((name) => (
+        <p key={name} className="flex items-start gap-1.5 text-sm text-warning">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+          {OIDC_SIGN_IN.REVIEW_NOT_BOUND(name)}
+        </p>
+      ))}
       {pre?.harness_set?.shared_model_access && <p className="text-sm text-muted-foreground">{NR_REVIEW.SHARED_MODEL_ACCESS}</p>}
     </ReviewGroup>
   );

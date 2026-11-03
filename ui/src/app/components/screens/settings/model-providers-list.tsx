@@ -173,7 +173,7 @@ function Rows({
       <>
         <div className="text-body font-medium text-foreground">{name}</div>
         {name !== kind && <div className="text-meta text-muted-foreground">{kind}</div>}
-        <div className="text-meta text-muted-foreground">{noToken ? LOCAL_MODEL_LIST.PROVIDES_NONE : providesLine(p.kind)}</div>
+        <div className="text-meta text-muted-foreground">{noToken ? LOCAL_MODEL_LIST.PROVIDES_NONE : providesLine(p.kind, !!p.oidc)}</div>
         <div className="text-meta text-muted-foreground">{usage}</div>
         {p.kind === "local_model" && (
           <div className="font-mono text-meta text-muted-foreground">
@@ -190,6 +190,7 @@ function Rows({
         </button>
         <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
           {chipDefaults.length > 0 && <Chip>{M.CHIP_DEFAULT_FOR(chipDefaults)}</Chip>}
+          {p.oidc?.identity_binding === "none" && <Chip tone="warning">{M.CHIP_UNBOUND}</Chip>}
           <Chip>{p.disabled ? M.CHIP_OFF : noToken ? LOCAL_MODEL_LIST.CHIP_NO_TOKEN : M.CONNECTED(connected[p.id] ?? 0)}</Chip>
         </div>
       </li>

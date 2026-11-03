@@ -79,6 +79,16 @@ export interface ProviderDraft {
   // The address, audience and inspection the stored row sends identity with, or null when it does not: what
   // a Base URL edit compares against, and what turning it off is a change from.
   gatewaySaved: { baseUrl: string; audience: string; inspect: boolean } | null;
+  // custom_endpoint only: how people connect. Off is "Paste a token"; on is "Sign in", and the fields below
+  // are the stored `oidc` block's. The block's authorize_url and token_url are not here: a save carries them.
+  oidcOn: boolean;
+  oidcIssuer: string;
+  oidcClientId: string;
+  // The operator secret holding the client's secret; "" is a public client.
+  oidcSecret: string;
+  oidcScopes: string[];
+  // "Match the person to their console sign-in": on is identity_binding "console", off is "none".
+  oidcBound: boolean;
   harnesses: Record<string, HarnessDraft>;
 }
 
@@ -104,7 +114,8 @@ export const directHost = (d: ProviderDraft) =>
 // The provides-line under the dialog title (§2.2, per kind) — the editor's own
 // wording, distinct from the list row's compact providesLine (model-providers-
 // copy.ts), which drops the trailing period for a table cell.
-export function editorProvidesLine(kind: ModelProviderKind): string {
+export function editorProvidesLine(kind: ModelProviderKind, signIn = false): string {
+  if (signIn && isEndpoint(kind)) return PROVIDER_EDITOR.OIDC.PROVIDES;
   switch (kind) {
     case "bedrock_sso":
       return PROVIDER_EDITOR.PROVIDES_SSO;
@@ -157,6 +168,12 @@ export function newDraft(kind: EditorKind, harnesses: HarnessRow[]): ProviderDra
     gatewayAudience: "",
     gatewayInspect: false,
     gatewaySaved: null,
+    oidcOn: false,
+    oidcIssuer: "",
+    oidcClientId: "",
+    oidcSecret: "",
+    oidcScopes: [],
+    oidcBound: true,
     harnesses: Object.fromEntries(
       harnesses.map((h) => [h.id, { ticked: !incompatibleReason(kind, h.id), model: "", path: "" }]),
     ),
@@ -192,6 +209,12 @@ export function draftFrom(p: ModelProvider, harnesses: HarnessRow[]): ProviderDr
     gatewaySaved: p.gateway_identity
       ? { baseUrl: providerGatewayAddress(p), audience: p.gateway_identity.audience, inspect: p.gateway_identity.inspection === "gateway" }
       : null,
+    oidcOn: !!p.oidc,
+    oidcIssuer: p.oidc?.issuer ?? "",
+    oidcClientId: p.oidc?.client_id ?? "",
+    oidcSecret: p.oidc?.client_secret_ref ?? "",
+    oidcScopes: p.oidc?.scopes ?? [],
+    oidcBound: p.oidc?.identity_binding !== "none",
     harnesses: rows,
   };
 }
@@ -243,6 +266,19 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
     gateway_identity: draft.gatewayOn && gatewayKind(draft.kind)
       ? { ...base?.gateway_identity, audience: draft.gatewayAudience.trim(), inspection: draft.gatewayInspect && !isBedrock(draft.kind) ? "gateway" : undefined }
       : undefined,
+    // The stored block's authorize_url and token_url ride along inside it: dropping one would change the
+    // sign-in's address and delete everyone's sign-in. Binding "console" is also the absent value.
+    oidc:
+      endpoint && draft.oidcOn
+        ? {
+            ...base?.oidc,
+            issuer: draft.oidcIssuer.trim(),
+            client_id: draft.oidcClientId.trim(),
+            client_secret_ref: draft.oidcSecret || undefined,
+            scopes: draft.oidcScopes,
+            identity_binding: draft.oidcBound ? undefined : "none",
+          }
+        : undefined,
     auth:
       endpoint || (local && draft.useToken)
         ? { header: draft.authHeader.trim() || undefined, format: toWireFormat(draft.authFormat.trim()) || undefined }
@@ -302,9 +338,33 @@ export function laptopBaseUrlRefused(draft: ProviderDraft): boolean {
   }
 }
 
+// The server's oidcAddress (internal/api/endpoint_oidc.go): "" for a provider with no sign-in block, else the
+// authority, the client, the scopes and the binding. Compared as the server compares them: nothing trimmed, the
+// scopes sorted but never de-duplicated (a repeat is a change), and an absent binding read as "console".
+const oidcAddress = (p: ModelProvider): string =>
+  p.oidc
+    ? JSON.stringify([
+        p.oidc.issuer,
+        p.oidc.authorize_url ?? "",
+        p.oidc.token_url ?? "",
+        p.oidc.client_id,
+        [...(p.oidc.scopes ?? [])].sort(),
+        p.oidc.identity_binding || "console",
+      ])
+    : "";
+
+// How the sign-in block differs between two versions of one provider, when it does: added (Paste a token to
+// Sign in), removed (the other way), or edited. Only the digest's terms count, as for addressChanged.
+export type OIDCChange = "to_sign_in" | "to_paste" | "edited";
+export function oidcChange(a: ModelProvider, b: ModelProvider): OIDCChange | null {
+  if (oidcAddress(a) === oidcAddress(b)) return null;
+  return !a.oidc ? "to_sign_in" : !b.oidc ? "to_paste" : "edited";
+}
+
 export function addressChanged(a: ModelProvider, b: ModelProvider): boolean {
   if (
     a.kind !== b.kind ||
+    oidcAddress(a) !== oidcAddress(b) ||
     normURL(a.base_url) !== normURL(b.base_url) ||
     header(a) !== header(b) ||
     normURL(a.bedrock?.region) !== normURL(b.bedrock?.region) ||

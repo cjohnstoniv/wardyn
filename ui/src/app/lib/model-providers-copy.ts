@@ -72,6 +72,53 @@ export const PROVIDER_EDITOR = {
   ADDRESS_BODY_KEY: (n: number) =>
     `The keys ${n} people added were given for the old address, so they are deleted. Everyone who connected adds theirs again.`,
   ADDRESS_BODY_KEY_ONE: "The key 1 person added was given for the old address, so it is deleted. They add it again.",
+  // How people connect to your own endpoint: paste a token (the default) or sign in at the endpoint's own
+  // authority. The refusals the server sends for the sign-in block are shown as sent, never reworded here.
+  OIDC: {
+    CHOICE: "How people connect",
+    PASTE: "Paste a token",
+    SIGN_IN: "Sign in",
+    SELECTED: "Selected",
+    PROVIDES: "Each person signs in with their own account. You set up the connection once, below.",
+    CHOICE_HINT: "Wardyn keeps each person's sign-in, renews it for their runs, and never puts it in the sandbox.",
+    GROUP: "Sign-in service",
+    ISSUER: "Issuer",
+    ISSUER_HINT: "Where people sign in. Wardyn finds the rest from this address. https only.",
+    CLIENT_ID: "Client ID",
+    CLIENT_ID_HINT: "The client you registered for Wardyn at your sign-in service.",
+    CLIENT_SECRET: "Client secret (optional)",
+    CLIENT_SECRET_HINT:
+      "Leave this empty for a public client. Otherwise choose a secret stored on the Secrets page.",
+    CLIENT_SECRET_NONE: "No secret",
+    CLIENT_SECRET_MISSING: (secret: string) =>
+      `No secret named ${secret} is stored yet. Sign-in fails until you add it on the Secrets page.`,
+    SCOPES: "Scopes",
+    SCOPES_HINT: "openid and offline_access are always added. Add at least one scope your endpoint needs.",
+    SCOPES_NONE: "No scopes yet.",
+    SCOPES_PLACEHOLDER: "Add a scope, then Enter",
+    SCOPE_REMOVE: (name: string) => `Remove ${name}`,
+    CALLBACK: "Callback URL to register",
+    CALLBACK_HINT: "Add this as a redirect URL on the client. It is the same for every provider.",
+    COPY_CALLBACK: "Copy callback URL",
+    BIND: "Match the person to their console sign-in",
+    BIND_ON: "A person can connect only the account that is theirs in Wardyn. The issuer above must be the service people sign in to Wardyn with.",
+    BIND_OFF:
+      "Wardyn won't check that the account a person signs in with is theirs. It records the issuer and account id of each connection, so you can see which account was connected. This is no stricter than people pasting a token.",
+    CONFIRM_TITLE: (name: string) => `Change how ${name} signs people in?`,
+    CONFIRM_BODY: (n: number) =>
+      `The sign-ins ${n} people made were for the old issuer, client, scopes or account matching, so they are deleted. Everyone who connected signs in again.`,
+    CONFIRM_BODY_ONE:
+      "The sign-in 1 person made was for the old issuer, client, scopes or account matching, so it is deleted. They sign in again.",
+    // The note under the choice and the Save confirmation's body, one string in both places.
+    TO_SIGN_IN: (n: number) =>
+      `Saving this change deletes the tokens ${n} people added for this provider. Everyone must sign in before starting another run with it.`,
+    TO_SIGN_IN_ONE:
+      "Saving this change deletes the token 1 person added for this provider. They must sign in before starting another run with it.",
+    TO_PASTE: (n: number) =>
+      `Saving this change deletes the sign-ins ${n} people made for this provider. Everyone must add a token before starting another run with it.`,
+    TO_PASTE_ONE:
+      "Saving this change deletes the sign-in 1 person made for this provider. They must add a token before starting another run with it.",
+  },
   // Run identity on a gateway (mock boards M1 and M2, their verdicts of 2026-11-02 winning over the
   // frames). Not in the canon doc: model-providers-copy.test.ts pins only the frozen rows.
   GATEWAY: {
@@ -92,6 +139,7 @@ export const PROVIDER_EDITOR = {
     KEY_ADDRESS_OTHER: "If your gateway reaches Wardyn at another address, use that address with this path.",
     KEY_ADDRESS_UNSAVED: "Available after identity is saved; it can take up to 30 seconds.",
     COPY: "Copy",
+    COPIED: "Copied",
     COPY_ISSUER: "Copy issuer",
     COPY_KEY_ADDRESS: "Copy key address",
     OFF_NOTE:
@@ -140,7 +188,9 @@ export const MODEL_PROVIDERS = {
     SSO: "Each person signs in with one click",
     TOKEN: "Each person adds their own token",
     KEY: "Each person adds their own key",
+    SIGN_IN: "Each person signs in with their own account",
   },
+  CHIP_UNBOUND: "Not bound to sign-in",
   USED_BY: (harnesses: string[]) => `Used by ${harnesses.join(", ")}`,
   // One harness, or both ("Default for Claude Code and Codex CLI", A4).
   CHIP_DEFAULT_FOR: (harnesses: string[]) => `Default for ${harnesses.join(" and ")}`,
@@ -162,7 +212,8 @@ export const MODEL_PROVIDERS = {
 
 // What each person provides, per kind (§2.2). A Bedrock bearer provider takes
 // each person's own Bedrock API key, so it reads as a key.
-export function providesLine(kind: ModelProviderKind): string {
+export function providesLine(kind: ModelProviderKind, signsIn = false): string {
+  if (signsIn) return MODEL_PROVIDERS.PROVIDES.SIGN_IN;
   switch (kind) {
     case "anthropic_subscription":
       return PROVIDER_EDITOR.PROVIDES_CLAUDE;

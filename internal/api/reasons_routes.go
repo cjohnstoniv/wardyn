@@ -611,6 +611,11 @@ const (
 	reasonADOCallbackMissingCode     = "ado_callback_missing_code"
 	reasonADOCallbackIdentityBinding = "identity_binding"
 	reasonADOCallbackUnusableGrant   = "unusable_grant"
+	// reasonEndpointOIDCIssuerMismatch is an endpoint sign-in whose identity token came from an authority other
+	// than the one the console signs the person in with, under the console binding. Unlike identity_binding
+	// (the token is another person's), the person cannot fix it: their admin pointed the provider at the wrong
+	// authority.
+	reasonEndpointOIDCIssuerMismatch = "identity_issuer_mismatch"
 )
 
 // The sign-in door and callback of a custom endpoint that signs people in (endpoint_oidc.go), and the paste
