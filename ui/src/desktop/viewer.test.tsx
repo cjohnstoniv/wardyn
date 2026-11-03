@@ -386,6 +386,15 @@ describe("DesktopViewer", () => {
     expect(screen.queryByText(DESKTOP.escapeHint)).toBeNull();
   });
 
+  it("tells a macOS VM desktop to use the terminal, not Files", () => {
+    const socket = new FakeSocket();
+    render(<DesktopViewer boot={{ ...OPEN, machine_kind: "macos_vm" }} connect={() => socket} />);
+    socket.serve(HANDSHAKE);
+    expect(screen.getByText(DESKTOP.noClipboardMac)).toBeInTheDocument();
+    expect(DESKTOP.noClipboardMac).not.toMatch(/Files/);
+    expect(screen.queryByText(DESKTOP.noClipboard)).toBeNull();
+  });
+
   it("offers no clipboard or escape line to a view-only session", () => {
     render(<DesktopViewer boot={{ ...OPEN, view_only: true }} connect={() => new FakeSocket()} />);
     expect(screen.queryByText(DESKTOP.noClipboard)).toBeNull();

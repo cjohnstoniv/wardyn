@@ -30,6 +30,7 @@ import type { SetupStatus } from "../../lib/types";
 import { AUTONOMY_META } from "../wardyn/autonomy-meta";
 import { PENDING_NO_DETAIL, STARTING_CONTAINER_CREATING, STARTING_UNSCHEDULABLE } from "./run-status-detail";
 import { setField } from "../../../test/set-field";
+import { END_RUN } from "../wardyn/copy/run-lifetime";
 
 // SummaryHeader now renders a "Runs" breadcrumb <Link> (react-router-dom),
 // which throws outside a Router context — wrap every render the same way
@@ -64,6 +65,17 @@ describe("SummaryHeader — a paused run (UXR-24)", () => {
     const pill = screen.getByText("Paused").closest("span[class*='rounded']") as HTMLElement;
     expect(pill.className).not.toMatch(/info|success|warning|danger/);
     expect(screen.queryByText("Running")).toBeNull();
+  });
+});
+
+describe("SummaryHeader — a lost run is not Paused", () => {
+  it.each(["reboot", "outage", "gone"] as const)("%s with paused_at set does not read Paused", (lost_reason) => {
+    renderHeader(
+      <OperatorProvider operator={true} principal="me">
+        <SummaryHeader run={{ ...runningInteractive, paused_at: aheadByHours(-1), paused_reason: "idle", lost_reason }} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText("Paused")).toBeNull();
   });
 });
 
@@ -230,7 +242,7 @@ describe("SummaryHeader — command bar", () => {
         <SummaryHeader run={{ ...taskRun, state: "COMPLETED" }} terminal={true} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.queryByRole("button", { name: /kill/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /end run/i })).toBeNull();
   });
 
   it("keeps Kill on a terminal run whose teardown the trail does not prove", () => {
@@ -239,7 +251,7 @@ describe("SummaryHeader — command bar", () => {
         <SummaryHeader run={{ ...taskRun, state: "KILLED" }} terminal={true} canKillAgain onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByRole("button", { name: /kill/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /end run/i })).toBeEnabled();
   });
 
   it("keeps Kill enabled on a live run", () => {
@@ -248,7 +260,7 @@ describe("SummaryHeader — command bar", () => {
         <SummaryHeader run={taskRun} terminal={false} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByRole("button", { name: /kill/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /end run/i })).toBeEnabled();
   });
 
   it("shows the pending-approval count when non-zero", () => {
@@ -376,7 +388,7 @@ describe("SummaryHeader — clone door", () => {
     );
     const clone = screen.getByRole("button", { name: RUN.CLONE_CTA });
     expect(clone.className).not.toContain("text-danger");
-    const kill = screen.getByRole("button", { name: /kill/i });
+    const kill = screen.getByRole("button", { name: /end run/i });
     expect(kill.className).toContain("text-danger");
   });
 });
@@ -439,7 +451,7 @@ describe("SummaryHeader — state once, with a visible status sentence", () => {
         <SummaryHeader run={runningInteractive} terminal={false} onCopyLink={() => {}} onRename={() => {}} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByRole("button", { name: "Kill" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: END_RUN })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: RUN_HEADER.MORE }));
     expect(await screen.findByRole("menuitem", { name: "Copy link to this run" })).toBeInTheDocument();
   });

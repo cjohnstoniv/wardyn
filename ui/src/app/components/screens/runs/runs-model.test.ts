@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest";
 import type { AgentRun, RunState } from "../../../lib/types";
 import { aheadByHours } from "../../../lib/test-clock";
-import { rowPresentation, sectionRuns, isTopQuiet, nonAttentionRuns, isLiveRunState } from "./runs-model";
+import { rowPresentation, isPausedRun, sectionRuns, isTopQuiet, nonAttentionRuns, isLiveRunState } from "./runs-model";
 import { glyphKindFor } from "./row-glyph";
 
 // Relative to the moment the suite runs, not a literal date (scripts/
@@ -183,6 +183,15 @@ describe("rowPresentation — a paused run (UXR-24)", () => {
     expect(p.word).toBe("Paused");
     expect(p.action).toBeNull();
     expect(p.needsYou).toBe(false);
+  });
+
+  it("a lost run (reboot, outage or gone) is never Paused, even with paused_at set", () => {
+    for (const lost_reason of ["reboot", "outage", "gone"] as const) {
+      const r = run({ state: "RUNNING", paused_at: aheadByHours(-1), lost_reason });
+      expect(isPausedRun(r)).toBe(false);
+      expect(rowPresentation(r).word).not.toBe("Paused");
+    }
+    expect(isPausedRun(run({ state: "RUNNING", paused_at: aheadByHours(-1) }))).toBe(true);
   });
 
   it("an unpaused RUNNING run still reads Running, and a lease-ended one still reads its end", () => {

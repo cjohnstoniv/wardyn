@@ -234,7 +234,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
     >
       {externalTool && (
         <p className="mb-2 text-meta leading-relaxed text-muted-foreground">
-          Managed by an external tool — killing this run tears down that tool's workspace.
+          Managed by an external tool — ending this run tears down that tool's workspace.
         </p>
       )}
       <p className="mb-2 text-xs leading-relaxed text-muted-foreground">

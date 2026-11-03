@@ -25,6 +25,7 @@ import { RUN_HEADER } from "../wardyn/copy/run-header";
 import { WORKLOAD_CHIP } from "../wardyn/copy/workloads";
 import { useConsoleMode } from "../wardyn/console-view";
 import { serviceBadge } from "../wardyn/copy/run-service";
+import { END_RUN } from "../wardyn/copy/run-lifetime";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { RunEndsControls } from "./run-detail/run-ends-row";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
@@ -226,8 +227,8 @@ export function SummaryHeader({
             <Pencil className="size-4" /> {RUN_COCKPIT.rename}
           </Button>
         )}
-        {/* The primary action leads: Start-a-run-like-this on a run that ended, Kill on one that has not.
-            Neither is the header's danger colour except Kill itself. */}
+        {/* The primary action leads: Start-a-run-like-this on a run that ended, End run on one that has not.
+            Neither is the header's danger colour except End run itself. */}
         {terminal && onClone && (
           <Button variant="outline" size="sm" className="shrink-0" onClick={onClone}>
             <RotateCcw className="size-4" /> {RUN.CLONE_CTA}
@@ -240,7 +241,7 @@ export function SummaryHeader({
             className="shrink-0 text-danger hover:text-danger"
             onClick={() => setConfirmId(run.id)}
           >
-            <Skull className="size-4" /> Kill
+            <Skull className="size-4" /> {END_RUN}
           </Button>
         )}
         {(canRename || onCopyLink) && (

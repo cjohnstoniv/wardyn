@@ -245,6 +245,7 @@ describe("TokenDialog show-once", () => {
     await revealed({ submit: vi.fn(async () => token({ expires_at: undefined })) });
     const dl = screen.getByText(T.DETAIL_EXPIRES).parentElement!;
     expect(within(dl).getByText(T.NEVER)).toBeInTheDocument();
+    expect(screen.getByText(T.NEVER_NOTE)).toBeInTheDocument();
   });
 
   it("copies the token, says so, and then Done closes at once", async () => {

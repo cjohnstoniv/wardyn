@@ -85,6 +85,8 @@ export const DESKTOP = {
   reconnectingBody: "The connection dropped. This tab reconnects on its own.",
   stillTrying: (reason: string) => `Still trying. The gateway said: ${reason}`,
   noClipboard: "Copy and paste don't reach this desktop yet. Use Files or the terminal to move text.",
+  // A macOS VM desktop: the viewer cannot tell whether the run declared a UI app, so no Files there.
+  noClipboardMac: "Copy and paste don't reach this desktop yet. Use the terminal to move text.",
   escapeHint: `${TERMINAL.ESCAPE_CHORD} leaves the desktop`,
   canvasLabel: "Remote desktop",
   backToRun: (title: string) => `Back to ${title}`,

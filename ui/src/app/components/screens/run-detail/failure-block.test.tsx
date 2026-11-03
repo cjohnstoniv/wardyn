@@ -241,7 +241,7 @@ describe("RunFailureBlock", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("runner_error: connection refused")).toHaveClass("font-mono");
     expect(screen.getByText("The audit row names the step that failed — read it before treating this run as contained.")).toBeInTheDocument();
-    expect(screen.getByText("Killing it again re-runs the same teardown; the cascade is safe to repeat.")).toBeInTheDocument();
+    expect(screen.getByText("Ending it again re-runs the same teardown; the cascade is safe to repeat.")).toBeInTheDocument();
     expect(
       screen.getByText("Whether scratch files remain is not confirmed. Files written to a mounted workspace are still on the host."),
     ).toBeInTheDocument();
@@ -268,7 +268,7 @@ describe("RunFailureBlock", () => {
         "This run is marked KILLED, but its audit trail has no kill record, so Wardyn can't confirm who killed it or whether teardown finished.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText("Kill it again to run teardown once more; the cascade is safe to repeat.")).toBeInTheDocument();
+    expect(screen.getByText("End it again to run teardown once more; the cascade is safe to repeat.")).toBeInTheDocument();
     expect(screen.getByText("Start a new run if the work still needs doing — a killed run cannot resume.")).toBeInTheDocument();
     expect(screen.queryByText(/An operator killed this run/)).not.toBeInTheDocument();
     expect(screen.queryByText(/scratch is gone|torn down|stopped and removed/)).not.toBeInTheDocument();
@@ -540,9 +540,9 @@ describe("RunFailureBlock: a run on a person's computer", () => {
     expect(screen.queryByText(/was told to stop its network/)).toBeNull();
   });
 
-  it("offers no Revive, Extend or Kill run", () => {
+  it("offers no Revive, Extend or End run", () => {
     renderLocal([revoked(true)]);
-    expect(screen.queryByRole("button", { name: /Revive|Extend|Kill run/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Revive|Extend|End run/ })).toBeNull();
     expect(screen.getByRole("button", { name: /Open audit trail/ })).toBeInTheDocument();
   });
 

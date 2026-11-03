@@ -169,6 +169,7 @@ export function ComponentsSettingsCard() {
             <RadioGroup
               aria-label={T.CAP_LABEL}
               value={draft.cap || "none"}
+              disabled={saving}
               onValueChange={(v) => setDraft({ ...draft, cap: v === "none" ? "" : (v as Cap) })}
               className="mt-3 gap-3"
             >
@@ -185,10 +186,10 @@ export function ComponentsSettingsCard() {
           </fieldset>
 
           <Row label={T.RESIDENT_LABEL} hint={T.RESIDENT_HINT}>
-            <Switch checked={draft.residentAllowed} onChange={(v) => setDraft({ ...draft, residentAllowed: v })} label={T.RESIDENT_LABEL} />
+            <Switch disabled={saving} checked={draft.residentAllowed} onChange={(v) => setDraft({ ...draft, residentAllowed: v })} label={T.RESIDENT_LABEL} />
           </Row>
           <Row label={T.VAULT_LABEL} hint={T.VAULT_HINT}>
-            <Switch checked={draft.vault} onChange={(v) => setDraft({ ...draft, vault: v })} label={T.VAULT_LABEL} />
+            <Switch disabled={saving} checked={draft.vault} onChange={(v) => setDraft({ ...draft, vault: v })} label={T.VAULT_LABEL} />
           </Row>
 
           {savedElsewhere && (

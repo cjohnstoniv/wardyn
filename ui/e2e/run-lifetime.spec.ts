@@ -251,7 +251,7 @@ test.describe("Run lifetime — ended (the lease ran out)", () => {
     await expect(banner.getByText(/Extend to revive it/)).toHaveCount(0);
     await expect(banner.getByRole("button", { name: "Extend and revive" })).toHaveCount(0);
     await expect(banner.getByRole("button", { name: "Extend" })).toHaveCount(0);
-    await expect(banner.getByRole("button", { name: "Kill run" })).toBeVisible();
+    await expect(banner.getByRole("button", { name: "End run" })).toBeVisible();
   });
 });
 

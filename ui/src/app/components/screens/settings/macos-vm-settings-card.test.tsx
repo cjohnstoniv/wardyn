@@ -6,7 +6,7 @@
 // The Settings fields of the macOS virtual machines card: the site config's `macos_vm.max_base_age_days` and
 // `macos_vm.allow_background_watch`.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expandCard } from "../../../lib/test-dom";
 import { expectActionBar } from "../../../../test/action-bar";
@@ -178,5 +178,18 @@ describe("MacOSVMSettingsCard", () => {
     await expandCard(T.TITLE);
     await userEvent.click(await screen.findByRole("button", { name: C.SETTINGS_RETRY }));
     expect(await screen.findByRole("textbox", { name: T.P17 })).toBeInTheDocument();
+  });
+
+  it("locks the field and switch while the save is pending", async () => {
+    const card = await open();
+    let resolve!: (v: unknown) => void;
+    putSiteConfigMock.mockReturnValue(new Promise((r) => (resolve = r)));
+    await userEvent.type(field(card), "5");
+    await userEvent.click(saveBtn(card));
+    expect(field(card)).toBeDisabled();
+    expect(within(card).getByRole("switch")).toBeDisabled();
+    resolve({ siteConfig: { macos_vm: { max_base_age_days: 5 } }, etag: '"v2"', danglingSecretRefs: [], onboardingCompletedAtIgnored: false, appliesFrom: "", sourcesNoLongerAdmitted: null });
+    await waitFor(() => expect(field(card)).toBeEnabled());
+    expect(within(card).getByRole("switch")).toBeEnabled();
   });
 });

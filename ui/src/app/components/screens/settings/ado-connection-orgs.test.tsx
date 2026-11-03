@@ -64,14 +64,14 @@ describe("AdoConnectionCard — collapsed, a state that needs the person", () =>
   it("several organisations: the summary counts the ones that need you, with the pill", async () => {
     getMineMock.mockResolvedValue([expired, beta, { ...own, state: "live", org: "https://dev.azure.com/gamma" }]);
     renderCard();
-    expect(await screen.findByText("3 organizations · 1 need you")).toBeInTheDocument();
+    expect(await screen.findByText("3 organisations · 1 need you")).toBeInTheDocument();
     expect(screen.getByText(CARD_STATUS.NEEDS_ATTENTION)).toBeInTheDocument();
   });
 
   it("several organisations, none needing you: a plain count and no pill", async () => {
     getMineMock.mockResolvedValue([acme, { ...acme, org: "https://dev.azure.com/gamma" }]);
     renderCard();
-    expect(await screen.findByText("2 organizations")).toBeInTheDocument();
+    expect(await screen.findByText("2 organisations")).toBeInTheDocument();
     expect(screen.queryByText(CARD_STATUS.NEEDS_ATTENTION)).toBeNull();
   });
 

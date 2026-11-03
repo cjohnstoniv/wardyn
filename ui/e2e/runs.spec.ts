@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { test, expect, ADMIN_TOKEN, asRealMember, gotoConsole, navTo, sidebarLink, sql } from "./fixtures";
 import { RUN_WAIT } from "../src/app/components/wardyn/copy/run-wait";
 import { NO_BARRIER } from "../src/app/components/wardyn/copy";
-import { COULDNT_END, ENDING } from "../src/app/components/wardyn/copy/run-lifetime";
+import { COULDNT_END, END_RUN, ENDING } from "../src/app/components/wardyn/copy/run-lifetime";
 import type { Page } from "@playwright/test";
 
 // ============================================================================
@@ -193,17 +193,17 @@ test.describe("Killing an active run", () => {
     await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText(badge, { exact: true })).toBeVisible();
 
-    const killBtn = page.getByRole("button", { name: "Kill", exact: true });
+    const killBtn = page.getByRole("button", { name: END_RUN, exact: true });
     await expect(killBtn).toBeEnabled();
     await killBtn.click();
 
     const confirm = page.getByRole("alertdialog");
     await expect(confirm).toBeVisible();
-    await expect(confirm.getByText(/Kill .+\?/)).toBeVisible();
+    await expect(confirm.getByText(/End .+\?/)).toBeVisible();
     // #3036: the question names the run by its title, and the short id beside it is the copyable reference.
-    await expect(confirm.getByText(`Kill "${victim!.task}"?`)).toBeVisible();
+    await expect(confirm.getByText(`End ${victim!.task}?`)).toBeVisible();
     await expect(confirm.getByTestId("run-ref").getByRole("button")).toHaveText(/^[0-9a-f]{8}$/);
-    await confirm.getByRole("button", { name: "Kill run" }).click();
+    await confirm.getByRole("button", { name: "End run" }).click();
 
     // Success on a graceful kill ("Ending <title>"), or "Couldn't end <title>" on a 409 from the `none`
     // runner. Either proves the rejection was handled, not swallowed.

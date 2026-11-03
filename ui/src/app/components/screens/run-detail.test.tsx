@@ -317,7 +317,7 @@ describe("RunDetailScreen — a not-yet-running interactive run tells its owner 
     expect(screen.queryByText("Requires the admin role.")).not.toBeInTheDocument();
     expect(screen.queryByText("Attach from your terminal")).not.toBeInTheDocument();
     // Kill stays.
-    expect(screen.getByRole("button", { name: /^Kill/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^End run/ })).toBeEnabled();
   });
 
   // #1888: the link leads to a recording, so it is offered unless /healthz says

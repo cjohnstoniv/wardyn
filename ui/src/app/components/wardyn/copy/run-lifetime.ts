@@ -137,8 +137,8 @@ export const ENDED_BODY_NO_DATE = "It has no network. Extend to revive it.";
 export const ENDED_BODY_TASK = "It has no network.";
 export const ENDED_EXTEND_AND_REVIVE = "Extend and revive";
 // UXR-15: one verb for stopping a run on the run page. The header's Kill and the banner's button both open the same
-// confirm, whose own button says "Kill run".
-export const END_RUN = "Kill run";
+// confirm, whose own button says "End run".
+export const END_RUN = "End run";
 /** The toast names the run by its title (else its task), one line, bounded: a task can be a paragraph. */
 export function toastRunName(run: { title?: string; task?: string }): string {
   const line = ((run.title ?? "").trim() || run.task || "").trim().split("\n")[0];
