@@ -57,7 +57,7 @@ function Harness(props: Partial<ComponentProps<typeof CorpNetworkStep>>) {
   return (
     <CorpNetworkStep
       status={baseStatus()}
-      siteConfig={null}
+      siteConfig={{}} // loaded and empty: the proxy editor is disabled until the first document loads
       reloadSiteConfig={vi.fn().mockResolvedValue(undefined)}
       saveSiteConfig={vi.fn().mockResolvedValue(undefined)}
       {...rest}
@@ -132,6 +132,27 @@ describe("Host proxy tab — panel states", () => {
     renderStep({ siteConfig: { upstream_proxy_url: "http://proxy.corp.acme.com:8080" } });
     expect(screen.getByText("http://proxy.corp.acme.com:8080")).toBeInTheDocument();
     expect(screen.getByLabelText(/proxy url/i)).toHaveValue("http://proxy.corp.acme.com:8080");
+  });
+
+  it("the editor is disabled until the first site-config loads, then holds the stored value — no draft is overwritten", async () => {
+    const wrap = (siteConfig: ComponentProps<typeof CorpNetworkStep>["siteConfig"]) => (
+      <MemoryRouter>
+        <OperatorProvider operator>
+          <Harness siteConfig={siteConfig} />
+        </OperatorProvider>
+      </MemoryRouter>
+    );
+    const { rerender } = render(wrap(null));
+    const field = screen.getByLabelText(/proxy url/i);
+    expect(field).toBeDisabled();
+    expect(screen.getByText("Loading the saved proxy settings…")).toBeInTheDocument();
+    await userEvent.type(field, "http://typed-too-early:8080");
+    expect(field).toHaveValue("");
+
+    rerender(wrap({ upstream_proxy_url: "http://proxy.corp.acme.com:8080" }));
+    expect(field).toBeEnabled();
+    expect(field).toHaveValue("http://proxy.corp.acme.com:8080");
+    expect(screen.queryByText("Loading the saved proxy settings…")).not.toBeInTheDocument();
   });
 
   it("cred: typing a URL with a username/password auto-switches the field to masked input and shows CRED_URL_NOTE", async () => {

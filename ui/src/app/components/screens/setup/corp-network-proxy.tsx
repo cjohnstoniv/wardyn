@@ -277,11 +277,13 @@ export function HostProxyTab({
   const [selected, setSelected] = React.useState(0);
 
   // Seed from the freshest doc exactly once — a later reload (Re-check) must
-  // never stomp an in-progress edit.
-  const seededRef = React.useRef(false);
-  React.useEffect(() => {
-    if (seededRef.current || !siteConfig) return;
-    seededRef.current = true;
+  // never stomp an in-progress edit. Seeded during render, so no commit shows
+  // an editable field before the seed. Until then the editor is disabled: a
+  // draft typed before the first load would be overwritten by the seed, and a
+  // save needs the loaded document and its ETag.
+  const [seeded, setSeeded] = React.useState(false);
+  if (!seeded && siteConfig) {
+    setSeeded(true);
     if (siteConfig.upstream_proxy_url) {
       setUrl(siteConfig.upstream_proxy_url);
     } else if (siteConfig.upstream_proxy_secret_ref) {
@@ -289,7 +291,8 @@ export function HostProxyTab({
       setDisclosureOpen(true);
       setSecretName(siteConfig.upstream_proxy_secret_ref);
     }
-  }, [siteConfig]);
+  }
+  const canEdit = operator && seeded;
 
   const rows = evidenceRows(detection);
   const candidates = proxyCandidateValues(detection, true);
@@ -358,7 +361,7 @@ export function HostProxyTab({
         rows={rows}
         showUse={showUse}
         onUse={(row) => (row.hasCredentials || hasUserinfo(row.useValue!) ? setUrl(row.useValue!) : saveUrl(row.useValue!))}
-        operator={operator}
+        operator={canEdit}
         hostProxyCheck={hostProxyCheck}
       />
 
@@ -390,7 +393,7 @@ export function HostProxyTab({
 
         {!useSecret && !configured && candidates.length === 1 && !url && (
           <div className="flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/10 p-2.5">
-            <Button size="sm" className="shrink-0" disabled={!operator} onClick={() => saveUrl(candidates[0])}>
+            <Button size="sm" className="shrink-0" disabled={!canEdit} onClick={() => saveUrl(candidates[0])}>
               Use detected proxy
             </Button>
             <p className="min-w-0 flex-1 text-xs text-foreground">
@@ -417,7 +420,7 @@ export function HostProxyTab({
                 </div>
               ))}
             </RadioGroup>
-            <Button size="sm" disabled={!operator} onClick={() => saveUrl(candidates[selected])}>
+            <Button size="sm" disabled={!canEdit} onClick={() => saveUrl(candidates[selected])}>
               Use selected
             </Button>
           </div>
@@ -428,10 +431,11 @@ export function HostProxyTab({
             <Field
               label={candidates.length > 0 && !configured ? "Or enter the proxy URL yourself" : "Proxy URL"}
               htmlFor="corp-proxy-url"
-              hint={T.PROXY_URL_HINT}
+              hint={seeded || !operator ? T.PROXY_URL_HINT : "Loading the saved proxy settings…"}
             >
               <Input
                 id="corp-proxy-url"
+                disabled={!seeded}
                 type={draftHasCreds ? "password" : "text"}
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
@@ -451,7 +455,7 @@ export function HostProxyTab({
                   </Chip>
                   <p className="text-meta text-muted-foreground">{T.WRITE_ONLY}</p>
                 </div>
-                <Button size="sm" disabled={!operator || saving} onClick={() => saveAsSecret(url, secretName)}>
+                <Button size="sm" disabled={!canEdit || saving} onClick={() => saveAsSecret(url, secretName)}>
                   {saving ? <Loader2 className="size-3.5 animate-spin" /> : "Save"}
                 </Button>
               </>
@@ -465,7 +469,7 @@ export function HostProxyTab({
                   // (e.g. switching from the secret field via "Enter a URL
                   // instead" without typing one) otherwise. Removing one on
                   // purpose is the explicit "Remove proxy" control beside it.
-                  disabled={!operator || saving || (!url.trim() && isProxyConfigured(siteConfig))}
+                  disabled={!canEdit || saving || (!url.trim() && isProxyConfigured(siteConfig))}
                   onClick={() => saveUrl(url)}
                 >
                   {saving ? <Loader2 className="size-3.5 animate-spin" /> : "Save"}
@@ -512,13 +516,13 @@ export function HostProxyTab({
                       className="font-mono"
                     />
                   </Field>
-                  <Button variant="outline" disabled={!operator} onClick={() => setAddSecretOpen(true)}>
+                  <Button variant="outline" disabled={!canEdit} onClick={() => setAddSecretOpen(true)}>
                     Add secret…
                   </Button>
                 </div>
                 <p className="text-meta leading-snug text-muted-foreground">{T.SECRET_INSTEAD_HINT}</p>
                 <div className="flex items-center gap-2">
-                  <Button size="sm" disabled={!operator || saving || !secretName.trim()} onClick={() => saveSecretRef(secretName)}>
+                  <Button size="sm" disabled={!canEdit || saving || !secretName.trim()} onClick={() => saveSecretRef(secretName)}>
                     Save
                   </Button>
                   <button
