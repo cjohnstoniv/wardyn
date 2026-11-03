@@ -467,8 +467,10 @@ func keptStopScrub(ctx context.Context, v *vmRun) *runner.KeptScrub {
 // machine's lock so a racing resume or sweep cannot interleave. It binds to the session: the record changes
 // only while its ActiveRun is this run (macvm.KeptStopUpdate, which also restarts the idle allowance, so a
 // machine used past its old expiry is not deleted as it stops); then the stop, and whether its scrub
-// finished. It answers the scrub to report, not_run for a hard stop.
-func (c *MacVMConfig) keptStopped(k *macvm.KeptRun, runID uuid.UUID, scrub *runner.KeptScrub) *runner.KeptScrub {
+// finished. It answers the scrub to report, not_run for a hard stop, and the expiry it wrote to the record
+// (zero when the record did not change), which the stop report carries so the organisation records the
+// same deadline and never reads a later setting.
+func (c *MacVMConfig) keptStopped(k *macvm.KeptRun, runID uuid.UUID, scrub *runner.KeptScrub) (*runner.KeptScrub, time.Time) {
 	if scrub == nil {
 		scrub = &runner.KeptScrub{When: guestagent.ScrubAtStop, Outcome: keptScrubNotRun}
 	}
@@ -479,7 +481,7 @@ func (c *MacVMConfig) keptStopped(k *macvm.KeptRun, runID uuid.UUID, scrub *runn
 		// The record keeps this run as its session; once the run folder is gone, the sweep ends the session
 		// as a hard stop (recoverKept), and the next boot scrubs again.
 		log.Warn("docker: record a kept machine's stop (the sweep records it)", slog.String("err", err.Error()))
-		return scrub
+		return scrub, time.Time{}
 	}
 	defer unlock()
 	rec, err := macvm.ReadKept(dir, k.ID)
@@ -487,11 +489,11 @@ func (c *MacVMConfig) keptStopped(k *macvm.KeptRun, runID uuid.UUID, scrub *runn
 		if !errors.Is(err, fs.ErrNotExist) {
 			log.Warn("docker: record a kept machine's stop", slog.String("err", err.Error()))
 		}
-		return scrub
+		return scrub, time.Time{}
 	}
 	now := c.keptClock()
 	if !macvm.KeptStopUpdate(&rec, runID.String(), now, keptIdleDays(k.IdleDays)) {
-		return scrub // the helper refused this boot, or another session holds the machine
+		return scrub, time.Time{} // the helper refused this boot, or another session holds the machine
 	}
 	rec.LastStop, rec.StopKind = now, macvm.KeptStopHard
 	if scrub.Outcome != keptScrubNotRun {
@@ -500,15 +502,17 @@ func (c *MacVMConfig) keptStopped(k *macvm.KeptRun, runID uuid.UUID, scrub *runn
 	rec.Scrubbed = scrub.Outcome == guestagent.ScrubDone
 	if err := macvm.WriteKept(dir, rec); err != nil {
 		log.Warn("docker: record a kept machine's stop", slog.String("err", err.Error()))
+		return scrub, time.Time{}
 	}
-	return scrub
+	return scrub, rec.ExpiresAt
 }
 
 // keptMachineDisk is a kept machine session's disk report once its run folder is deleted: kept, with the
-// stop scrub's outcome.
-func (d *Driver) keptMachineDisk(runID uuid.UUID, scrub *runner.KeptScrub) {
+// stop scrub's outcome and the expiry the stop wrote to the record; a zero expiry (the record was not
+// written) is reported as pending, not as no word.
+func (d *Driver) keptMachineDisk(runID uuid.UUID, scrub *runner.KeptScrub, expiresAt time.Time) {
 	d.macDisks.Store(runID, runner.MacOSVMDisk{RunID: runID, State: runner.MacOSVMDiskKept, Reason: runner.MacOSVMDiskKeptMachine,
-		At: time.Now().UTC(), Scrub: scrub})
+		At: time.Now().UTC(), Scrub: scrub, KeptExpiresAt: expiresAt, KeptExpiryPending: expiresAt.IsZero()})
 }
 
 // DeleteKeptMachine deletes one kept machine from this Mac, holding its lock throughout (the
@@ -701,8 +705,10 @@ func (d *Driver) KeptMachines() (*runnerwire.MacVMKept, error) {
 	for _, f := range folders {
 		n, _ := macvm.KeptAllocatedBytes(f.dir)
 		// In use is read from the live runs and the record's session, never by probing the machine's lock,
-		// which a boot taking it at that instant would find held.
-		run := cmp.Or(runs[f.rec.ID], c.keptHeldBy(f.rec))
+		// which a boot taking it at that instant would find held. A record that still names a session is in
+		// use even once its run folder is gone: until recoverKept clears it and writes the new deadline, its
+		// expiry is the boot's, and the organisation must not keep or expire the machine by it.
+		run := cmp.Or(runs[f.rec.ID], f.rec.ActiveRun)
 		m := runnerwire.MacVMKeptMachine{ID: f.rec.ID, Bytes: n, InUse: run != "", RunID: run, Scrubbed: f.rec.Scrubbed, ExpiresAt: f.rec.ExpiresAt}
 		out.WorstBytes += keptWorstOf(f.dir)
 		out.AllocatedBytes += n

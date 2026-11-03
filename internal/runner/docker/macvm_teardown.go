@@ -78,8 +78,9 @@ func (d *Driver) destroyMacVM(ctx context.Context, v *vmRun, entryID string, gra
 	}
 	// A kept machine's stop is recorded while the run folder is still there, so a sweep never reads the
 	// session as interrupted.
+	var keptExpiry time.Time
 	if k != nil {
-		scrub = c.keptStopped(k, v.runID, scrub)
+		scrub, keptExpiry = c.keptStopped(k, v.runID, scrub)
 	}
 	if err := c.removeAll(v.dir); err != nil {
 		log.Warn("docker: delete a macOS VM run directory (pending; the orphan sweep retries)", slog.String("err", err.Error()))
@@ -87,7 +88,7 @@ func (d *Driver) destroyMacVM(ctx context.Context, v *vmRun, entryID string, gra
 		return
 	}
 	if k != nil {
-		d.keptMachineDisk(v.runID, scrub)
+		d.keptMachineDisk(v.runID, scrub, keptExpiry)
 	} else {
 		d.recordMacOSVMDisk(v.runID, runner.MacOSVMDiskRemoved, "")
 	}

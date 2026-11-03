@@ -103,7 +103,10 @@ func (m *macOSVMs) keptFromFolder() *runnerwire.MacVMKept {
 	for _, r := range rows {
 		out.WorstBytes += r.worst
 		out.AllocatedBytes += r.written
-		out.Machines = append(out.Machines, runnerwire.MacVMKeptMachine{ID: r.rec.ID, Bytes: r.written, InUse: r.inUse, RunID: r.run,
+		// A record that still names a session is in use until the sweep's recovery clears it and writes the
+		// new deadline, even once its run folder is gone; its expiry is the boot's until then.
+		run := cmp.Or(r.run, r.rec.ActiveRun)
+		out.Machines = append(out.Machines, runnerwire.MacVMKeptMachine{ID: r.rec.ID, Bytes: r.written, InUse: run != "", RunID: run,
 			Scrubbed: r.rec.Scrubbed, ExpiresAt: r.rec.ExpiresAt})
 	}
 	return out

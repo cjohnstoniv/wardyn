@@ -936,6 +936,77 @@ func TestKeptSweepWaitsForTheSessionsStop(t *testing.T) {
 	}
 }
 
+// A stop reports the expiry it wrote to the record, from the idle days the run was launched with, so the
+// organisation records the same deadline whatever its setting is by then; a stop that is not the session's
+// own writes and reports none.
+func TestKeptStopReportsTheExpiryItWrote(t *testing.T) {
+	r, _ := newKeptRig(t)
+	now := time.Now().UTC()
+	keptAt(r, now)
+	for _, days := range []int{1, 30, 90} {
+		run := uuid.New()
+		dir, id := keptRunning(t, r, run, true, now.Add(time.Hour))
+		k := &macvm.KeptRun{ID: id.String(), OwnerHash: keptOwnerHash, RunnerID: "runner-a", IdleDays: days}
+		if _, got := r.c.keptStopped(k, uuid.New(), nil); !got.IsZero() {
+			t.Fatalf("%d days: a stop of another run reported %s", days, got)
+		}
+		_, got := r.c.keptStopped(k, run, nil)
+		if rec := readKept(t, dir, id); !got.Equal(rec.ExpiresAt) || !got.Equal(now.AddDate(0, 0, days)) {
+			t.Fatalf("%d days: reported %s, record %s, want %s", days, got, rec.ExpiresAt, now.AddDate(0, 0, days))
+		}
+	}
+	d := r.d
+	run := uuid.New()
+	d.keptMachineDisk(run, nil, now.AddDate(0, 0, 3))
+	if rep, ok := d.macDisks.Load(run); !ok || !rep.(runner.MacOSVMDisk).KeptExpiresAt.Equal(now.AddDate(0, 0, 3)) {
+		t.Fatalf("the disk report lost the expiry: %v", rep)
+	}
+}
+
+// A stop that cannot lock the record writes nothing and reports the expiry as pending, not as no word; the
+// Mac's own recovery then gives the machine the idle days its run was launched with, which its inventory
+// carries to the organisation.
+func TestKeptStopThatCannotLockReportsPending(t *testing.T) {
+	r, _ := newKeptRig(t)
+	now := time.Now().UTC()
+	keptAt(r, now)
+	run, id := uuid.New(), uuid.New()
+	dir := writeKeptFolder(t, r, macvm.KeptRecord{ID: id.String(), OwnerHash: keptOwnerHash, RunnerID: "runner-a",
+		ActiveRun: run.String(), IdleDays: 1, ExpiresAt: now.Add(time.Hour)})
+	if err := os.MkdirAll(r.c.runDir(run), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r.c.lockWait = 50 * time.Millisecond
+	unlock, err := macvm.LockKept(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scrub, expiry := r.c.keptStopped(&macvm.KeptRun{ID: id.String(), OwnerHash: keptOwnerHash, RunnerID: "runner-a", IdleDays: 1}, run, nil)
+	unlock()
+	r.d.keptMachineDisk(run, scrub, expiry)
+	v, _ := r.d.macDisks.Load(run)
+	rep, ok := v.(runner.MacOSVMDisk)
+	if !ok || !rep.KeptExpiresAt.IsZero() || !rep.KeptExpiryPending {
+		t.Fatalf("the report of a stop that wrote nothing: %+v, %v", rep, ok)
+	}
+	if err := os.RemoveAll(r.c.runDir(run)); err != nil {
+		t.Fatal(err)
+	}
+	// The run folder is gone and the record still names the session: not yet a machine to keep or expire.
+	if k, err := r.d.KeptMachines(); err != nil || len(k.Machines) != 1 || !k.Machines[0].InUse || k.Machines[0].RunID != run.String() {
+		t.Fatalf("the inventory of an unrecovered session: %+v, %v", k, err)
+	}
+	if err := r.d.SweepKeptMachines(); err != nil {
+		t.Fatal(err)
+	}
+	if rec := readKept(t, dir, id); rec.ActiveRun != "" || !rec.ExpiresAt.Equal(now.AddDate(0, 0, 1)) {
+		t.Fatalf("the recovered machine %+v, want the launched 1 day", rec)
+	}
+	if k, err := r.d.KeptMachines(); err != nil || k.Machines[0].InUse || !k.Machines[0].ExpiresAt.Equal(now.AddDate(0, 0, 1)) {
+		t.Fatalf("the inventory after recovery: %+v, %v", k, err)
+	}
+}
+
 // A session cut short (its run folder gone, its stop never recorded) is ended by the sweep and its machine
 // kept, expired or not; an expired machine no session holds is still deleted.
 func TestKeptSweepRecoversAnInterruptedSession(t *testing.T) {

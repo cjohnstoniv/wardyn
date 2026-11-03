@@ -902,3 +902,23 @@ func TestLimitZeroDoesNotHideMachines(t *testing.T) {
 		t.Errorf("caps after the delete: %+v", c.Kept)
 	}
 }
+
+// The caps read from the kept folder never offer a record that still names a session as idle, even with
+// its run folder gone: its expiry is the boot's until the sweep's recovery writes the new one.
+func TestKeptFromFolderHoldsAnUnrecoveredSession(t *testing.T) {
+	m := keptRig(t)
+	held, idle := uuid.New(), uuid.New()
+	run := uuid.NewString()
+	keptMachine(t, m, held, "held", func(r *macvm.KeptRecord) { r.ActiveRun = run })
+	keptMachine(t, m, idle, "idle", nil)
+	got := map[string]runnerwire.MacVMKeptMachine{}
+	for _, k := range m.keptFromFolder().Machines {
+		got[k.ID] = k
+	}
+	if k := got[held.String()]; !k.InUse || k.RunID != run {
+		t.Fatalf("a record naming an unrecovered session: %+v", k)
+	}
+	if k := got[idle.String()]; k.InUse || k.RunID != "" {
+		t.Fatalf("a machine no session holds: %+v", k)
+	}
+}
