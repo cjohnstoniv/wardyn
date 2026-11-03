@@ -36,6 +36,10 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 	runnerwire.ProxySettingGatewayIdentity: func(pc *runner.ProxyConfig) {
 		pc.GatewayIdentity = []proxy.GatewayIdentityRoute{{Host: "gw.corp.example", Port: 443, ProviderID: "p", Audience: "a"}}
 	},
+	runnerwire.ProxySettingGitPushWithheld: func(pc *runner.ProxyConfig) {
+		pc.GitPushWithheld = map[string]string{"github.com": "this run may not push"}
+	},
+	runnerwire.ProxySettingForgeHosts: func(pc *runner.ProxyConfig) { pc.ForgeHosts = []string{"ghe.corp.example"} },
 }
 
 // oldCapsJSON is a 0.9.x runner's caps event as it sends it: no proxy_settings key.
@@ -207,5 +211,33 @@ func TestCreateSandboxRefusesALaptopModelPortThePersonHasNotAllowed(t *testing.T
 	publishCaps(t, rig, caps("allowed", `,"local_model_ports":[8080,11434]`))
 	if _, err := rig.Sub.CreateSandbox(ctxT(t), spec()); err != nil {
 		t.Fatalf("a runner allowing port 11434 was refused: %v", err)
+	}
+}
+
+// A run that refuses every push names forge_hosts even with no code host configured or granted
+// (the public ones are always on the list), so a runner whose proxy has no deny_all guard, which
+// would open github.com as a plain tunnel to a push token kept as a secret, is refused the run
+// before anything is sent. The same run without deny_all still goes to that runner.
+func TestCreateSandboxRefusesADenyAllRunOnARunnerWithoutTheForgeGuard(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	publishCaps(t, rig, oldCapsJSON)
+	spec := func(denyAll bool) runner.SandboxSpec {
+		s := runner.SandboxSpec{RunID: uuid.New(), Image: "img", ConfinementClass: types.CC1, ProxyConfig: runner.ProxyConfig{
+			MITMHosts: []string{"api.github.com"}}}
+		if denyAll {
+			s.ProxyConfig.ForgeHosts = types.DenyAllForgeHosts(types.SiteConfig{}, nil)
+		}
+		return s
+	}
+	_, err := rig.Sub.CreateSandbox(ctxT(t), spec(true))
+	var pe *remote.ProxySettingError
+	if !errors.As(err, &pe) || pe.Setting != runnerwire.ProxySettingForgeHosts || !strings.Contains(err.Error(), "wardyn-runnerd is too old for forge_hosts") {
+		t.Fatalf("create = %v, want a ProxySettingError naming %s", err, runnerwire.ProxySettingForgeHosts)
+	}
+	if len(rig.Fake.Created) != 0 {
+		t.Fatal("the refused create reached the runner")
+	}
+	if _, err := rig.Sub.CreateSandbox(ctxT(t), spec(false)); err != nil {
+		t.Fatalf("a run without deny_all was refused on an older runner: %v", err)
 	}
 }

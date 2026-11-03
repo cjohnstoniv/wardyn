@@ -115,8 +115,9 @@ func refusesEveryPush(policy types.RunPolicySpec, base *types.PushRulesSpec, set
 		slices.ContainsFunc(sets, func(s types.PushRuleSet) bool { return s.Rules.DenyAll })
 }
 
-// denyAllForgeHosts is proxy.Config.ForgeHosts: the self-hosted code hosts the proxy refuses while
-// the run refuses every push (types.DenyAllForgeHosts), nil when it does not.
+// denyAllForgeHosts is proxy.Config.ForgeHosts: the code hosts the proxy refuses while the run
+// refuses every push (types.DenyAllForgeHosts, never empty, so a runner that does not name
+// forge_hosts is refused the run), nil when it does not.
 func denyAllForgeHosts(policy types.RunPolicySpec, sets []types.PushRuleSet, site types.SiteConfig, rows []types.CredentialGrant) []string {
 	if !refusesEveryPush(policy, nil, sets) {
 		return nil

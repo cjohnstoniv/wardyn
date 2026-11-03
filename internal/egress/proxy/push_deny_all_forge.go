@@ -34,22 +34,13 @@ func pushDenyAllForgeRefusal(host string) string {
 		" is a code host Wardyn doesn't broker for this run."
 }
 
-// publicForgeHosts are the public code hosts' git, SSH, API and upload hosts;
-// adoHostedHost adds the rest of hosted Azure DevOps (*.dev.azure.com and
-// *.visualstudio.com). codeload.github.com is left out on purpose: it serves
-// repository archives for download and takes no write.
-var publicForgeHosts = map[string]bool{
-	"github.com":         true,
-	"api.github.com":     true,
-	"uploads.github.com": true,
-	"gist.github.com":    true,
-	"ssh.github.com":     true,
-	"dev.azure.com":      true,
-}
+// publicForgeHosts is types.PublicForgeHosts by key; adoHostedHost adds the
+// rest of hosted Azure DevOps (*.dev.azure.com and *.visualstudio.com).
+var publicForgeHosts = forgeHostSet(types.PublicForgeHosts)
 
-// forgeHostSet compiles Config.ForgeHosts: the self-hosted code hosts dispatch
-// knows from site config and the run's git_pat and ssh_key grants. Nil when
-// there are none.
+// forgeHostSet compiles Config.ForgeHosts: the code hosts dispatch knows from
+// site config and the run's git_pat and ssh_key grants, and the public ones.
+// Nil when there are none.
 func forgeHostSet(hosts []string) map[string]bool {
 	var out map[string]bool
 	for _, h := range hosts {

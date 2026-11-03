@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// The deny_all guard's self-hosted code hosts come from the site's SCM hosts,
+// The deny_all guard's code hosts are the public ones plus the site's SCM hosts,
 // every Git provider row (a disabled one too; a GitHub row brings its API,
 // upload and gist hosts), and the run's git_pat and ssh_key grants. Other
 // grants name no code host.
@@ -28,12 +28,15 @@ func TestDenyAllForgeHosts(t *testing.T) {
 		{Kind: GrantEnvSecret, Scope: scope(map[string]string{"host": "not.a.forge.example", "name": "X"})},
 		{Kind: GrantAPIKey, Scope: scope(map[string]string{"host": "api.vendor.example"})},
 	}
-	want := []string{"api.ghe.corp.example", "bitbucket.corp.example", "dev.azure.com", "ghe.corp.example",
-		"gist.ghe.corp.example", "git.corp.example", "gitlab.corp.example", "tfs.corp.example", "uploads.ghe.corp.example"}
+	public := slices.Sorted(slices.Values(PublicForgeHosts))
+	want := slices.Sorted(slices.Values(append(slices.Clone(PublicForgeHosts), "api.ghe.corp.example", "bitbucket.corp.example",
+		"ghe.corp.example", "gist.ghe.corp.example", "git.corp.example", "gitlab.corp.example", "tfs.corp.example", "uploads.ghe.corp.example")))
 	if got := DenyAllForgeHosts(site, grants); !slices.Equal(got, want) {
 		t.Fatalf("DenyAllForgeHosts = %q, want %q", got, want)
 	}
-	if got := DenyAllForgeHosts(SiteConfig{}, nil); got != nil {
-		t.Fatalf("no hosts: %q, want nil", got)
+	// With nothing configured or granted the public code hosts are still named, so a
+	// deny_all run always sets forge_hosts and an older runner is refused it.
+	if got := DenyAllForgeHosts(SiteConfig{}, nil); !slices.Equal(got, public) {
+		t.Fatalf("no hosts: %q, want the public code hosts %q", got, public)
 	}
 }

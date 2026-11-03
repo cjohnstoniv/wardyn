@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -76,22 +77,34 @@ func TestRefusesEveryPushReadsEverySource(t *testing.T) {
 }
 
 // TestDispatchCarriesDenyAllForgeHosts: a dispatched run that refuses every push hands its proxy the
-// code host its git_pat grant names; a run without deny_all writes no key, which an older proxy would
-// refuse.
+// public code hosts and the one its git_pat grant names. With no SCM row and no grant, an env secret
+// and github.com allowed, the list still carries the public code hosts, so the run names forge_hosts
+// and a runner that does not carry it is refused the run (internal/runner/remote). A run without
+// deny_all writes no key and names no setting, so an older runner still takes it.
 func TestDispatchCarriesDenyAllForgeHosts(t *testing.T) {
+	public := slices.Sorted(slices.Values(types.PublicForgeHosts))
+	withPAT := slices.Sorted(slices.Values(append(slices.Clone(types.PublicForgeHosts), "gitlab.corp.io")))
+	envSecretAllowingGitHub := denyAllPolicy()
+	envSecretAllowingGitHub.AllowedDomains = []string{"github.com"}
+	envSecretAllowingGitHub.EligibleGrants = []types.GrantSpec{{Kind: types.GrantEnvSecret, OwnerOnly: true,
+		Scope: mustJSON(map[string]string{"name": "GH_PUSH_TOKEN", "secret_name": "gh-push"})}}
 	for _, tc := range []struct {
 		name   string
 		policy types.RunPolicySpec
+		pat    bool
 		want   []string
 	}{
-		{"deny_all", denyAllPolicy(), []string{"gitlab.corp.io"}},
-		{"no deny_all", types.RunPolicySpec{}, nil},
+		{"deny_all and a git_pat", denyAllPolicy(), true, withPAT},
+		{"deny_all, nothing configured or granted, an env secret", envSecretAllowingGitHub, false, public},
+		{"no deny_all", types.RunPolicySpec{}, true, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fr := &fakeRunner{}
 			srv, st, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
 			run.Task = ""
-			st.grants = []types.CredentialGrant{patRowWith(uuid.New(), run.ID, "gitlab.corp.io", nil)}
+			if tc.pat {
+				st.grants = []types.CredentialGrant{patRowWith(uuid.New(), run.ID, "gitlab.corp.io", nil)}
+			}
 			srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{Operator: true}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 				RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: tc.policy,
 				GitPATGrants: winningByHost(st.grants),
@@ -99,8 +112,12 @@ func TestDispatchCarriesDenyAllForgeHosts(t *testing.T) {
 			if fr.createCalls != 1 {
 				t.Fatalf("createCalls = %d, want the run dispatched", fr.createCalls)
 			}
-			if got := fr.lastSpec.ProxyConfig.ForgeHosts; !slices.Equal(got, tc.want) {
-				t.Fatalf("ForgeHosts = %q, want %q", got, tc.want)
+			pc := fr.lastSpec.ProxyConfig
+			if !slices.Equal(pc.ForgeHosts, tc.want) {
+				t.Fatalf("ForgeHosts = %q, want %q", pc.ForgeHosts, tc.want)
+			}
+			if named := slices.Contains(runnerwire.ProxySettingsSet(pc), runnerwire.ProxySettingForgeHosts); named != (tc.want != nil) {
+				t.Fatalf("the run names forge_hosts = %v, want %v", named, tc.want != nil)
 			}
 		})
 	}
