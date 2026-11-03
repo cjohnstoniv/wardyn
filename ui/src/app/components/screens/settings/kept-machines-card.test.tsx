@@ -54,7 +54,7 @@ describe("Your kept machines", () => {
   it("km4-list: one kept and one in use, each with its Mac, base, size and dates", async () => {
     const card = await mount();
     expect(within(card).getByRole("heading", { name: new RegExp(`^${T.TITLE}`) })).toHaveTextContent(T.SUMMARY(2, "Maya's MacBook"));
-    expect(within(card).getByText(T.LEDE(30))).toBeInTheDocument();
+    expect(within(card).getByText(T.LEDE)).toBeInTheDocument();
     const a = rowOf(card, "dev");
     expect(within(a).getByText(T.CHIP_KEPT)).toBeInTheDocument();
     expect(within(a).getByText(T.META("Maya's MacBook", "Standard", 12))).toBeInTheDocument();
@@ -73,6 +73,15 @@ describe("Your kept machines", () => {
     expect(await within(rowOf(card, "design-review")).findByText(T.IN_USE("12345678"))).toBeInTheDocument();
   });
 
+  it("a machine a run is still making reads Preparing, names that run, and cannot be deleted", async () => {
+    listMock.mockResolvedValue(reply([dev({ state: "creating", scrubbed: false, run_id: "run_1234567890" })]));
+    const a = rowOf(await mount(), "dev");
+    expect(within(a).getByText(T.CHIP_PREPARING)).toBeInTheDocument();
+    expect(await within(a).findByText(T.PREPARING("ui-polish"))).toBeInTheDocument();
+    expect(within(a).queryByText(T.CHIP_NOT_CLEANED)).toBeNull();
+    expect(within(a).getByRole("button", { name: `${T.DELETE} dev` })).toBeDisabled();
+  });
+
   it("km4-not-scrubbed: Not cleaned yet, with the line that says why", async () => {
     listMock.mockResolvedValue(reply([dev({ scrubbed: false })]));
     const a = rowOf(await mount(), "dev");
@@ -88,11 +97,12 @@ describe("Your kept machines", () => {
     expect(within(rowOf(card, "tomorrow")).getByText(T.EXPIRES_SOON(1))).toBeInTheDocument();
   });
 
-  it("km4-deleting: a delete waiting for the Mac reads Deleting with the offline line, and cannot be deleted again", async () => {
+  it("km4-deleting: a delete still under way reads Deleting with the neutral sentence, never claiming the Mac is offline", async () => {
     listMock.mockResolvedValue(reply([dev({ state: "deleting", delete_started_at: aheadByHours(-1), delete_reason: "person" })]));
     const a = rowOf(await mount(), "dev");
     expect(within(a).getByText(T.CHIP_DELETING)).toBeInTheDocument();
-    expect(within(a).getByText(T.DELETING("Maya's MacBook"))).toBeInTheDocument();
+    expect(within(a).getByText(T.DELETE_UNCONFIRMED)).toBeInTheDocument();
+    expect(within(a).queryByText(/offline/)).toBeNull();
     expect(within(a).getByRole("button", { name: `${T.DELETE} dev` })).toBeDisabled();
   });
 
@@ -156,6 +166,7 @@ describe("Your kept machines", () => {
     await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: T.DELETE }));
     expect(await within(card).findByRole("alert")).toHaveTextContent(T.DELETE_UNCONFIRMED);
     await waitFor(() => expect(within(rowOf(card, "dev")).getByText(T.CHIP_DELETING)).toBeInTheDocument());
+    expect(within(rowOf(card, "dev")).queryByText(/offline/)).toBeNull();
   });
 
   it("km4-empty: the switch on and nothing kept shows None and the sentence that says how to keep one", async () => {
@@ -163,7 +174,7 @@ describe("Your kept machines", () => {
     const card = await mount();
     expect(within(card).getByRole("heading", { name: new RegExp(`^${T.TITLE}`) })).toHaveTextContent(T.NONE);
     expect(within(card).getByText(T.EMPTY)).toBeInTheDocument();
-    expect(within(card).getByText(T.LEDE(30))).toBeInTheDocument();
+    expect(within(card).getByText(T.LEDE)).toBeInTheDocument();
   });
 
   it("the switch off and nothing kept: the card is not drawn", async () => {

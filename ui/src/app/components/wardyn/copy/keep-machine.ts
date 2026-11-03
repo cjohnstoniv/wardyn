@@ -23,8 +23,8 @@ export const KEEP_NEW_RUN = {
   /** K-03 */
   KEEP: "Keep this machine for next time",
   /** K-04 */
-  KEEP_DETAIL: (mac: string, gb: number, days: number) =>
-    `Kept on ${mac}, up to ${gb} GB. It stays until you delete it, or ${days} days after its last use. Your files, tools and sign-ins stay. Wardyn cleans up the settings and certificates it added when the run stops, or before the machine's next run if the stop was abrupt. The run page says if anything was left.`,
+  KEEP_DETAIL: (mac: string, gb: number) =>
+    `Kept on ${mac}, up to ${gb} GB. It stays until you delete it, or until it has gone unused for the time your admin sets. Your files, tools and sign-ins stay. Wardyn cleans up the settings and certificates it added when the run stops, or before the machine's next run if the stop was abrupt. The run page says if anything was left.`,
   /** K-05 */
   NAME: "Name",
   /** K-06 */
@@ -114,7 +114,7 @@ export const KEEP_LIST = {
   /** K-51 */
   SUMMARY: (n: number, mac: string) => `${n} on ${mac}`,
   /** K-52 */
-  LEDE: (days: number) => `macOS VMs kept on your own Mac between runs, with your files, tools and sign-ins. Wardyn deletes one ${days} days after its last use.`,
+  LEDE: "macOS VMs kept on your own Mac between runs, with your files, tools and sign-ins. Wardyn deletes one after it goes unused for the time your admin sets.",
   /** K-53 */
   META: (mac: string, base: string, gb: number) => `${mac} · ${base} base · ${gb} GB written`,
   /** K-54 */
@@ -122,13 +122,14 @@ export const KEEP_LIST = {
   /** K-55 */
   CHIP_KEPT: "Kept",
   CHIP_IN_USE: "In use",
+  CHIP_PREPARING: "Preparing",
   CHIP_DELETING: "Deleting",
   CHIP_EXPIRED: "Expired",
   CHIP_NOT_CLEANED: "Not cleaned yet",
   /** K-56 */
   IN_USE: (run: string) => `In use by ${run}. Stop that run to delete it.`,
-  /** K-57 */
-  DELETING: (mac: string) => `Deleting. ${mac} is offline; the delete finishes when it's back.`,
+  /** A machine a run is still making: its Mac is preparing it for that run. */
+  PREPARING: (run: string) => `Being prepared for ${run}. Stop that run to delete it.`,
   /** K-58 */
   EXPIRES_SOON: (n: number) => `Expires in ${n} ${n === 1 ? "day" : "days"}. Resume it to keep it longer.`,
   /** K-59 */

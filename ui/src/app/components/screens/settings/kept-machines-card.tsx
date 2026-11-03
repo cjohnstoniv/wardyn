@@ -12,7 +12,6 @@ import * as React from "react";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { deleteMyMachine, myMachines } from "../../../lib/api/me-machines";
-import { runs } from "../../../lib/api/runs";
 import { shortDate } from "../../../lib/format";
 import type { KeptMachine, MyMachines } from "../../../lib/types";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../ui/alert-dialog";
@@ -21,29 +20,8 @@ import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { gbOf, KEEP_LIST as T } from "../../wardyn/copy/keep-machine";
 import { Chip } from "../../wardyn/primitives";
 import { ErrorState } from "../../wardyn/states";
-import { idleDaysOf, macOf, macsOf, rowOf } from "./kept-machines-model";
-
-const shortId = (id: string) => id.replace(/^run_/, "").slice(0, 8);
-
-/** The title of each run that holds a machine, else its short id: K-56 names the run the way the server's sentences do. */
-function useHolderLabels(machines: readonly KeptMachine[]): Record<string, string> {
-  const [labels, setLabels] = React.useState<Record<string, string>>({});
-  const ids = machines.flatMap((m) => (m.state === "in_use" && m.run_id ? [m.run_id] : []));
-  const key = ids.join(",");
-  React.useEffect(() => {
-    let live = true;
-    for (const id of key ? key.split(",") : []) {
-      runs
-        .getRun(id)
-        .then((r) => live && setLabels((l) => ({ ...l, [id]: r?.title?.trim() || shortId(id) })))
-        .catch(() => {});
-    }
-    return () => {
-      live = false;
-    };
-  }, [key]);
-  return labels;
-}
+import { useHolderLabels, shortRunId } from "./use-holder-labels";
+import { macOf, macsOf, rowOf } from "./kept-machines-model";
 
 export function KeptMachinesCard() {
   const [data, setData] = React.useState<MyMachines | null>(null);
@@ -92,13 +70,13 @@ export function KeptMachinesCard() {
         <ErrorState size="compact" title={T.LOAD_FAILED} onRetry={load} />
       ) : (
         <div className="space-y-3">
-          <p className="text-xs text-muted-foreground">{T.LEDE(idleDaysOf(machines))}</p>
+          <p className="text-xs text-muted-foreground">{T.LEDE}</p>
           {machines.length === 0 ? (
             <p className="text-sm text-muted-foreground">{T.EMPTY}</p>
           ) : (
             <ul className="overflow-hidden rounded-lg border border-border">
               {machines.map((m) => {
-                const row = rowOf(m, labels[m.run_id ?? ""] ?? (m.run_id ? shortId(m.run_id) : ""), now);
+                const row = rowOf(m, labels[m.run_id ?? ""] ?? (m.run_id ? shortRunId(m.run_id) : ""), now);
                 return (
                   <li key={m.id} className="flex items-start justify-between gap-3 border-b border-border px-3 py-2.5 last:border-b-0">
                     <span className="min-w-0">

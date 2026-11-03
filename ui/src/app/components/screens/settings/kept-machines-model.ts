@@ -32,20 +32,14 @@ export function rowOf(m: KeptMachine, runLabel: string, now: number): KeptRow {
     if (m.delete_reason === "expired") {
       return { chip: KEEP_LIST.CHIP_EXPIRED, tone: "neutral", line: KEEP_LIST.EXPIRED(shortDate(m.delete_started_at ?? m.expires_at), macOf(m)), canDelete: false };
     }
-    return { chip: KEEP_LIST.CHIP_DELETING, tone: "warning", line: KEEP_LIST.DELETING(macOf(m)), canDelete: false };
+    return { chip: KEEP_LIST.CHIP_DELETING, tone: "warning", line: KEEP_LIST.DELETE_UNCONFIRMED, canDelete: false };
   }
+  if (m.state === "creating") return { chip: KEEP_LIST.CHIP_PREPARING, tone: "info", line: KEEP_LIST.PREPARING(runLabel), canDelete: false };
   if (m.state === "in_use") return { chip: KEEP_LIST.CHIP_IN_USE, tone: "info", line: KEEP_LIST.IN_USE(runLabel), canDelete: false };
   if (!m.scrubbed) return { chip: KEEP_LIST.CHIP_NOT_CLEANED, tone: "warning", line: KEEP_LIST.NOT_SCRUBBED, canDelete: true };
   const days = Math.ceil((Date.parse(m.expires_at) - now) / DAY_MS);
   if (days <= EXPIRES_SOON_DAYS) return { chip: KEEP_LIST.CHIP_KEPT, tone: "success", line: KEEP_LIST.EXPIRES_SOON(Math.max(days, 1)), canDelete: true };
   return { chip: KEEP_LIST.CHIP_KEPT, tone: "success", canDelete: true };
-}
-
-/** The days a machine sits unused before it is deleted, read from the first machine's own dates; the default with none. */
-export function idleDaysOf(machines: readonly KeptMachine[]): number {
-  const m = machines.find((k) => k.state !== "deleting") ?? machines[0];
-  const days = m ? Math.round((Date.parse(m.expires_at) - Date.parse(m.last_used_at)) / DAY_MS) : 0;
-  return days >= 1 ? days : 30;
 }
 
 /** The Macs the machines are kept on, each once, in the order they first appear. */
