@@ -621,3 +621,35 @@ func TestKeptResumeUpdatesToolsUnderTheLock(t *testing.T) {
 		t.Fatalf("updates %v, locked %v", tools.dirs, tools.locked)
 	}
 }
+
+// A spec with no idle days, or a nonsense count, still makes a machine with an expiry this Mac enforces:
+// the site default of 30 days, in run.json and in the machine's record, and again at its stop.
+func TestKeptMachineIdleDaysDefaultToThirty(t *testing.T) {
+	r, _ := newKeptRig(t)
+	for _, days := range []int{0, -1} {
+		id := uuid.New()
+		spec := keptSpec(id, macvm.KeptNew)
+		spec.KeptMachine.IdleDays = days
+		before := time.Now().UTC()
+		sb, err := r.d.CreateSandbox(context.Background(), spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg, err := macvm.ReadRunConfig(r.c.runDir(spec.RunID)); err != nil || cfg.Kept == nil || cfg.Kept.IdleDays != 30 {
+			t.Fatalf("idle days %d: run.json kept block %+v %v", days, cfg.Kept, err)
+		}
+		dir := r.c.Layout.KeptMachineDir(id.String())
+		if rec := readKept(t, dir, id); rec.ExpiresAt.Before(before.AddDate(0, 0, 30)) || rec.ExpiresAt.After(time.Now().UTC().AddDate(0, 0, 30)) {
+			t.Fatalf("idle days %d: a new machine expires at %v", days, rec.ExpiresAt)
+		}
+		if err := r.d.StopSandbox(context.Background(), sb.Ref); err != nil {
+			t.Fatal(err)
+		}
+		if rec := readKept(t, dir, id); rec.ExpiresAt.Before(rec.LastStop.AddDate(0, 0, 30)) {
+			t.Fatalf("idle days %d: a stopped machine expires at %v, stopped %v", days, rec.ExpiresAt, rec.LastStop)
+		}
+	}
+	if keptSaidExpired(keptIdleDays(0)).Error() != "Your machine wasn't used for 30 days, so it was deleted. Start a new one." {
+		t.Fatal("the expiry sentence does not name the default")
+	}
+}

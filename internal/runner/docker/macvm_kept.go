@@ -55,6 +55,18 @@ type KeptToolsUpdater interface {
 // keptScrubNotRun is a stop scrub's outcome on a hard stop, which runs none (runner.KeptScrub.Outcome).
 const keptScrubNotRun = "not_run"
 
+// keptDefaultIdleDays is the site's default kept_machine_idle_days, used when a spec carries none: a
+// kept machine always has an expiry this Mac enforces on its own.
+const keptDefaultIdleDays = 30
+
+// keptIdleDays is the idle days a kept machine's expiry is counted with: the spec's, or the default.
+func keptIdleDays(days int) int {
+	if days <= 0 {
+		return keptDefaultIdleDays
+	}
+	return days
+}
+
 // keptStopScrubWait bounds the guest's stop scrub; a scrub that does not finish leaves the machine
 // unscrubbed, never the stop failed.
 const keptStopScrubWait = 60 * time.Second
@@ -80,9 +92,6 @@ func keptSaidNotFound(id uuid.UUID) error {
 }
 
 func keptSaidExpired(days int) error {
-	if days <= 0 {
-		return keptRefusal("Your machine expired, so it was deleted. Start a new one.")
-	}
 	return keptRefusal(fmt.Sprintf("Your machine wasn't used for %d days, so it was deleted. Start a new one.", days))
 }
 
@@ -184,7 +193,7 @@ func (d *Driver) keptStart(ctx context.Context, spec runner.SandboxSpec, man *ma
 		return nil, keptSaidNotFound(k.ID)
 	case !rec.ExpiresAt.IsZero() && time.Now().After(rec.ExpiresAt):
 		c.removeExpiredKept(dir, k.ID)
-		return nil, keptSaidExpired(k.IdleDays)
+		return nil, keptSaidExpired(keptIdleDays(k.IdleDays))
 	}
 	if locked, err := macvm.KeptLocked(dir); err != nil || locked {
 		return nil, cmp.Or(err, keptRefusal(keptSaidLocked))
@@ -209,7 +218,7 @@ func (d *Driver) keptStart(ctx context.Context, spec runner.SandboxSpec, man *ma
 func (c *MacVMConfig) keptRun(spec runner.SandboxSpec) *macvm.KeptRun {
 	k := spec.KeptMachine
 	return &macvm.KeptRun{ID: k.ID.String(), Mode: k.Mode, OwnerHash: k.OwnerHash, RunnerID: c.RunnerID,
-		Base: cmp.Or(spec.MacOSBase, macvm.StandardBase), IdleDays: k.IdleDays}
+		Base: cmp.Or(spec.MacOSBase, macvm.StandardBase), IdleDays: keptIdleDays(k.IdleDays)}
 }
 
 // updateKeptTools runs the tools update on a resumed machine's folder, under the machine's lock so no boot
@@ -249,7 +258,7 @@ func (c *MacVMConfig) keptStartErr(spec runner.SandboxSpec, err error) error {
 		return keptRefusal(keptSaidIncomplete)
 	case strings.Contains(said, macvm.ErrKeptExpired.Error()):
 		c.removeExpiredKept(c.keptDir(k.ID), k.ID)
-		return keptSaidExpired(k.IdleDays)
+		return keptSaidExpired(keptIdleDays(k.IdleDays))
 	}
 	return err
 }
@@ -330,9 +339,7 @@ func (c *MacVMConfig) keptStopped(k *macvm.KeptRun, scrub *runner.KeptScrub, now
 		rec.StopKind = macvm.KeptStopGraceful
 	}
 	rec.Scrubbed = scrub.Outcome == guestagent.ScrubDone
-	if k.IdleDays > 0 {
-		rec.ExpiresAt = now.AddDate(0, 0, k.IdleDays)
-	}
+	rec.ExpiresAt = now.AddDate(0, 0, keptIdleDays(k.IdleDays))
 	if err := macvm.WriteKept(dir, rec); err != nil {
 		log.Warn("docker: record a kept machine's stop", slog.String("err", err.Error()))
 	}
