@@ -184,7 +184,7 @@ describe("RunDetailScreen — a failing side fetch is not an outage", () => {
     // The run rendered, so the page must say what the run says.
     expect((await screen.findAllByText(RUN.task)).length).toBeGreaterThan(0);
     // ...and the one control that ends a runaway run is still reachable.
-    expect(screen.getByRole("button", { name: /Kill/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /End run/ })).toBeInTheDocument();
     expect(screen.queryByText(CONTROL_PLANE_SENTENCE)).toBeNull();
   });
 
@@ -237,7 +237,7 @@ describe("RunDetailScreen — a background poll blip keeps the last-good cockpit
 
     expect(screen.queryByText(CONTROL_PLANE_SENTENCE)).toBeNull();
     expect((await screen.findAllByText(RUN.task)).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: /Kill/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /End run/ })).toBeInTheDocument();
   });
 });
 
@@ -283,7 +283,7 @@ describe("RunDetailScreen — a route change drops everything run A was doing", 
       expect(screen.queryAllByText("Distinct task A")).toHaveLength(0);
       expect(screen.queryAllByText("Distinct task B").length).toBeGreaterThan(0);
 
-      await user.click(screen.getByRole("button", { name: /^Kill/ }));
+      await user.click(screen.getByRole("button", { name: /^End run/ }));
       const dialog = screen.getByRole("alertdialog");
       expect(dialog).toHaveAccessibleName("End Distinct task B?");
       await user.click(within(dialog).getByRole("button", { name: "End run" }));

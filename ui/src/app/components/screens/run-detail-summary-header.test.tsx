@@ -242,7 +242,7 @@ describe("SummaryHeader — command bar", () => {
         <SummaryHeader run={{ ...taskRun, state: "COMPLETED" }} terminal={true} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.queryByRole("button", { name: /kill/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /end run/i })).toBeNull();
   });
 
   it("keeps Kill on a terminal run whose teardown the trail does not prove", () => {
@@ -251,7 +251,7 @@ describe("SummaryHeader — command bar", () => {
         <SummaryHeader run={{ ...taskRun, state: "KILLED" }} terminal={true} canKillAgain onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByRole("button", { name: /kill/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /end run/i })).toBeEnabled();
   });
 
   it("keeps Kill enabled on a live run", () => {
@@ -260,7 +260,7 @@ describe("SummaryHeader — command bar", () => {
         <SummaryHeader run={taskRun} terminal={false} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByRole("button", { name: /kill/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /end run/i })).toBeEnabled();
   });
 
   it("shows the pending-approval count when non-zero", () => {
@@ -388,7 +388,7 @@ describe("SummaryHeader — clone door", () => {
     );
     const clone = screen.getByRole("button", { name: RUN.CLONE_CTA });
     expect(clone.className).not.toContain("text-danger");
-    const kill = screen.getByRole("button", { name: /kill/i });
+    const kill = screen.getByRole("button", { name: /end run/i });
     expect(kill.className).toContain("text-danger");
   });
 });

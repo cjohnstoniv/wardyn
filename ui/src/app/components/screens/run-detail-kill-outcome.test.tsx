@@ -114,9 +114,9 @@ function renderRun() {
   );
 }
 
-const killButton = () => screen.getByRole("button", { name: /^Kill/ });
+const killButton = () => screen.getByRole("button", { name: /^End run/ });
 // An ended run with a confirmed teardown has no Kill at all (the approved header drops it).
-const noKillButton = () => screen.queryByRole("button", { name: /^Kill/ });
+const noKillButton = () => screen.queryByRole("button", { name: /^End run/ });
 
 beforeEach(() => {
   vi.clearAllMocks();
