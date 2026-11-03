@@ -60,6 +60,9 @@ type policyPreviewResponse struct {
 	Access *accessBlock `json:"access,omitempty"`
 	// Attachments is the preflight's, with the same meaning.
 	Attachments []client.RunAttachment `json:"attachments"`
+	// Ungoverned is present only when the caller's own runs are outside governance:
+	// what a member of their type would be held to, or that there is nobody to compare with.
+	Ungoverned *client.UngovernedNotice `json:"ungoverned,omitempty"`
 }
 
 type policyPreviewPending string
