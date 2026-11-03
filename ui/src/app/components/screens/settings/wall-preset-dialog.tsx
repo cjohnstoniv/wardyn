@@ -63,6 +63,7 @@ export function WallPresetDialog({
   const [form, setForm] = React.useState<Form>(() => toForm(source?.spec ?? {}));
   const [busy, setBusy] = React.useState(false);
   const [nameError, setNameError] = React.useState("");
+  const [descriptionError, setDescriptionError] = React.useState("");
   const [sectionErrors, setSectionErrors] = React.useState<Partial<Record<FormSection, string>>>({});
   const [failure, setFailure] = React.useState("");
   const [conflict, setConflict] = React.useState(false);
@@ -77,6 +78,7 @@ export function WallPresetDialog({
 
   const clear = () => {
     setNameError("");
+    setDescriptionError("");
     setSectionErrors({});
     setFailure("");
     setConflict(false);
@@ -94,7 +96,8 @@ export function WallPresetDialog({
     }
     if (e.reason === WALL_PRESET_REASON.INVALID) {
       const { section, text } = sectionOfRefusal(e.message);
-      if (section === "name" || section === "description") return setNameError(text);
+      if (section === "name") return setNameError(text);
+      if (section === "description") return setDescriptionError(text);
       if (section) return setSectionErrors({ [section]: text });
       return setFailure(text);
     }
@@ -146,7 +149,12 @@ export function WallPresetDialog({
               <Label htmlFor="wall-preset-description">{W.DESCRIPTION}</Label>
               <span className="text-xs text-muted-foreground">{W.OPTIONAL}</span>
             </div>
-            <Input id="wall-preset-description" value={description} placeholder={W.DESCRIPTION_PLACEHOLDER} onChange={(e) => setDescription(e.target.value)} />
+            <Input id="wall-preset-description" value={description} placeholder={W.DESCRIPTION_PLACEHOLDER} aria-invalid={descriptionError !== ""} aria-describedby={descriptionError ? "wall-preset-description-error" : undefined} onChange={(e) => (setDescription(e.target.value), clear())} />
+            {descriptionError && (
+              <p id="wall-preset-description-error" role="alert" className="text-xs text-danger">
+                {descriptionError}
+              </p>
+            )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="wall-preset-audience">{W.AUDIENCE}</Label>

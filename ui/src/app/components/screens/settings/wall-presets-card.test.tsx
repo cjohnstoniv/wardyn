@@ -28,12 +28,13 @@ import { WallPresetsCard } from "./wall-presets-card";
 
 const user = userEvent.setup();
 const GH = ["code_read", "issues_read", "actions_read", "packages_read", "org_read", "identity"];
+const ADO = ["code_read", "work_read", "wiki_read", "build_read", "release_read", "serviceendpoint_read", "library_read", "packaging_read", "test_read", "project_read", "identity_read"];
 const BUILTINS: WallPreset[] = [
   { id: "open", scope: "builtin", name: "Open", description: "Your policy as it stands.", spec: {}, version: 1 },
-  { id: "read-only", scope: "builtin", name: "Read-only", description: "Reads only.", version: 1, spec: { github_capabilities: GH, push_rules: { deny_all: true } } },
+  { id: "read-only", scope: "builtin", name: "Read-only", description: "Reads only.", version: 1, spec: { github_capabilities: GH, azure_devops_capabilities: ADO, push_rules: { deny_all: true } } },
   {
     id: "sealed", scope: "builtin", name: "Sealed", description: "Sealed.", version: 1,
-    spec: { allowed_domains: [], first_use_approval: "always_deny", desktop: { paste_in: "blocked", copy_out: "blocked", upload: "blocked", download: "blocked" }, github_capabilities: GH, push_rules: { deny_all: true } },
+    spec: { allowed_domains: [], first_use_approval: "always_deny", desktop: { paste_in: "blocked", copy_out: "blocked", upload: "blocked", download: "blocked" }, github_capabilities: GH, azure_devops_capabilities: ADO, push_rules: { deny_all: true } },
   },
 ];
 const ORG: WallPreset = { id: "org-1", scope: "org", name: "Docs triage", description: "Docs only.", spec: { allowed_domains: [], github_capabilities: ["code_read"] }, version: 4, updated_by: "Ana Ruiz", updated_at: new Date(Date.now() - 2 * 86400000).toISOString() };
@@ -74,6 +75,9 @@ describe("Wall presets card", () => {
     await open();
     expect(row("open").getByText(W.CHIP_OPEN)).toBeInTheDocument();
     for (const chip of [W.CHIP_SETUP_ONLY, W.CHIP_UNLISTED_REFUSED, W.CHIP_NO_TRANSFERS, W.CHIP_READ_ONLY, W.CHIP_EVERY_PUSH]) expect(row("sealed").getByText(chip)).toBeInTheDocument();
+    // One forge's list is named by that forge, never as an unqualified read-only.
+    expect(row("org-1").getByText(W.CHIP_FORGE_READ("GitHub"))).toBeInTheDocument();
+    expect(row("org-1").queryByText(W.CHIP_READ_ONLY)).not.toBeInTheDocument();
     expect(row("grp-1").getByText(W.CHIP_BARRIER("Wall"))).toBeInTheDocument();
     expect(row("mine-1").getByText(W.CHIP_DENIED(2))).toBeInTheDocument();
     expect(row("org-1").getByText(/^Version 4 · saved by Ana Ruiz, 2d ago$/)).toBeInTheDocument();
@@ -87,7 +91,7 @@ describe("Wall presets card", () => {
     await user.click(row("read-only").getByRole("button", { name: W.SHOW }));
     const detail = within(screen.getByTestId("wall-preset-detail"));
     expect(detail.getByText(W.PUSH_EVERY_REFUSED)).toBeInTheDocument();
-    for (const c of GH) expect(detail.getByText(c)).toBeInTheDocument();
+    for (const c of [...GH, ...ADO]) expect(detail.getAllByText(c).length).toBeGreaterThan(0);
     expect(detail.getAllByText(W.DETAIL_NOT_NARROWED).length).toBeGreaterThanOrEqual(3);
     await user.click(row("read-only").getByRole("button", { name: W.HIDE }));
     expect(screen.queryByTestId("wall-preset-detail")).not.toBeInTheDocument();
@@ -241,6 +245,23 @@ describe("Wall presets card", () => {
     const alert = await dialog.findByRole("alert");
     expect(alert).toHaveTextContent("Sealed is the name of a built-in wall preset.");
     expect(dialog.getByLabelText(/^Name/)).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("puts a description refusal on the Description field, with its own aria-invalid and aria-describedby, and not on Name", async () => {
+    createMock.mockRejectedValueOnce(new HttpError(422, "invalid wall preset: description must be printable text of at most 512 characters", "wall_preset_invalid"));
+    render(<WallPresetsCard />);
+    await open();
+    await user.click(screen.getByRole("button", { name: W.NEW_PRESET }));
+    const dialog = within(await screen.findByRole("dialog"));
+    setField(dialog.getByLabelText(/^Name/), "Tight");
+    await user.click(dialog.getByRole("switch", { name: "Refuse every push" }));
+    await user.click(dialog.getByRole("button", { name: W.SAVE }));
+    const alert = await dialog.findByRole("alert");
+    expect(alert).toHaveTextContent("description must be printable text");
+    const field = dialog.getByLabelText(W.DESCRIPTION);
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(field.getAttribute("aria-describedby")).toBe(alert.id);
+    expect(dialog.getByLabelText(/^Name/)).toHaveAttribute("aria-invalid", "false");
   });
 
   it("Delete confirms with what happens to runs and to a queued run, then deletes and reads again", async () => {
