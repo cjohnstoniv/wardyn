@@ -73,6 +73,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	response.Limits, response.ResourcesApplied = f.place.sizeFacts()
 	response.RunnerPoolSlots = s.runnerPoolSlots(r.Context(), f.place, *f.req)
 	response.MainDrive = f.mainDrive.applied()
+	response.Ungoverned = s.ungovernedNotice(r.Context(), f.ceiling)
 	runRepos := append([]string{f.req.Repo, f.req.DevcontainerRepo}, repoLocatorsOf(f.spec.WorkspaceRepos)...)
 	var signIn *SCMAccess
 	if !adoServiceCaller(r.Context()) {

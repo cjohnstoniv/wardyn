@@ -55,6 +55,22 @@ export interface ProvenanceEntry {
   effect: "added" | "clamped" | "narrowed" | "removed" | (string & {});
 }
 
+/**
+ * What a member of the caller's type would be held to, for a caller whose own runs stand
+ * outside governance (pkg/client's UngovernedNotice). At most one of no_person, no_profile and
+ * unavailable is set; with none set, unit names the unit and limits its headline limits.
+ */
+export interface UngovernedNotice {
+  no_person?: boolean;
+  no_profile?: boolean;
+  unavailable?: boolean;
+  unit?: string;
+  /** At most three short phrases, in a fixed order. */
+  limits?: string[];
+  /** The unit sets further limits than `limits` lists. */
+  more?: boolean;
+}
+
 /** Authorized, provisional read output. Never use it as the authored draft. */
 export interface PolicyPreviewResult {
   spec: RunPolicySpec;
@@ -101,4 +117,6 @@ export interface PolicyPreviewResult {
   // uses it at, the one holding the starting folder marked. The server always
   // sends the array; optional here so an older server still types.
   attachments?: RunAttachment[];
+  // Present only when the caller's own runs stand outside governance; absent otherwise.
+  ungoverned?: UngovernedNotice;
 }
