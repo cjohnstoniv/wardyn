@@ -248,6 +248,9 @@ func (d *Driver) admitAgentSandboxPod(ctx context.Context, clock *startClock, wa
 			return fmt.Errorf("k8s: agent sandbox: this run did not start: its pod could not be read again after its gate patch failed: %w", err)
 		}
 		if fresh.UID != got.UID {
+			if err := heldAgentSandboxPod(fresh); err != nil {
+				return err
+			}
 			return errors.New("k8s: agent sandbox: this run did not start: its pod was replaced while Wardyn checked it (metadata.uid). Nothing ran. Ask your administrator")
 		}
 		if err := checkAgentSandboxPod(want, fresh, sandboxUID); err != nil {
@@ -257,11 +260,19 @@ func (d *Driver) admitAgentSandboxPod(ctx context.Context, clock *startClock, wa
 	}
 }
 
+// heldAgentSandboxPod refuses a pod that may have run (gateNotHeld), never saying nothing ran.
+func heldAgentSandboxPod(pod *corev1.Pod) error {
+	if field := gateNotHeld(pod); field != "" {
+		return fmt.Errorf("k8s: agent sandbox: this run did not start: its pod was not held for Wardyn's check (%s), so it may have started before Wardyn removed it. Ask your administrator", field)
+	}
+	return nil
+}
+
 // checkAgentSandboxPod is the read-back: got must still be held (gateNotHeld) and be the pod Wardyn
 // asked for (readBackDiff).
 func checkAgentSandboxPod(want, got *corev1.Pod, sandboxUID k8stypes.UID) error {
-	if field := gateNotHeld(got); field != "" {
-		return fmt.Errorf("k8s: agent sandbox: this run did not start: its pod was not held for Wardyn's check (%s), so it may have started before Wardyn removed it. Ask your administrator", field)
+	if err := heldAgentSandboxPod(got); err != nil {
+		return err
 	}
 	if field := readBackDiff(want, got, sandboxUID); field != "" {
 		return fmt.Errorf("k8s: agent sandbox: this run did not start: the cluster changed the pod Wardyn asked for (%s). Nothing ran. Ask your administrator", field)

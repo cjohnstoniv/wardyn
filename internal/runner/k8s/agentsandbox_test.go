@@ -730,6 +730,40 @@ func TestAgentSandbox_UngateRetryRechecksThePod(t *testing.T) {
 	assertRunObjectsGone(t, cs, asRunID)
 }
 
+// A pod replaced under the same name between attempts is refused. "Nothing ran" only when the new
+// pod is proven still held; an ungated or running one may have started.
+func TestAgentSandbox_UngateRetryRefusesAReplacedPod(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*corev1.Pod)
+		want   string
+	}{
+		{"still held", func(*corev1.Pod) {}, "(metadata.uid). Nothing ran"},
+		{"gate gone", func(p *corev1.Pod) { p.Spec.SchedulingGates = nil }, "(spec.schedulingGates), so it may have started"},
+		{"running", func(p *corev1.Pod) {
+			p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: mainContainerName, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
+		}, "(status.containerStatuses), so it may have started"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, cs, dyn := newSandboxRig(t, Config{SandboxPlacement: asPlacement}, controllerMaking(t, nil))
+			failGatePatches(t, cs, 1, testOpFailed, func(_ int, p *corev1.Pod) {
+				p.UID = "replaced-pod-uid"
+				tc.change(p)
+			})
+			_, err := d.CreateSandbox(context.Background(), asSpec())
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("CreateSandbox err = %v, want %q", err, tc.want)
+			}
+			if strings.Contains(tc.want, "may have started") && strings.Contains(err.Error(), "Nothing ran") {
+				t.Errorf("err = %q says nothing ran for a pod that may have started", err)
+			}
+			if n := sandboxActions(dyn, "delete"); n != 1 {
+				t.Errorf("Sandbox deletes = %d, want 1", n)
+			}
+		})
+	}
+}
+
 // Three failed gate patches are a refusal, as one was before.
 func TestAgentSandbox_UngateGivesUpAfterThreeAttempts(t *testing.T) {
 	d, cs, dyn := newSandboxRig(t, Config{SandboxPlacement: asPlacement}, controllerMaking(t, nil))
