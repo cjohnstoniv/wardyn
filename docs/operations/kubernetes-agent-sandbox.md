@@ -105,9 +105,12 @@
 
 ## Switching it off with live runs
 
-- Off removes the RBAC on Sandboxes. A run still live is left as one Sandbox and one held pod that never starts.
+- Switching off does not stop existing pods. A run that already started keeps running, because Wardyn removed its gate. Off also removes the RBAC on Sandboxes, so Wardyn can no longer delete them.
 1. Drain first: let runs end or stop them.
-2. Or delete what is left: `kubectl delete sandboxes -l wardyn.managed=true` in the runs namespace.
+2. Confirm their Sandboxes are gone: `kubectl get sandboxes -l wardyn.managed=true` in the runs namespace.
+3. Or delete the survivors: `kubectl delete sandboxes -l wardyn.managed=true`.
+
+- A Sandbox left behind keeps the controller watching it. If its pod is ever replaced, the replacement carries the gate and stays held, so it never starts.
 
 - Stop and kill delete the Sandbox before the pods, so the controller does not recreate the agent pod. A failed Sandbox delete returns an error and keeps the NetworkPolicies. The orphan sweep also lists Sandboxes.
 
