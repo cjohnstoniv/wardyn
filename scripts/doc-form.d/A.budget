@@ -398,7 +398,8 @@
 # docs/AUDIT-ACTIONS.md 56605, measured at the rc.12 merge of presets-store into push-deny-all (ours 56473 + theirs 56557 - base 56427 = 56603 by arithmetic; the merged file measures 2 more).
 # docs/AUDIT-ACTIONS.md 56696 adds 91 over 56605, measured (rc.12): the brokered:git:push-deny-all row and its name in the carved-out refusal list, and the two push_deny_all_* refusals on run.create and run.revive.
 # docs/AUDIT-ACTIONS.md 56697, measured at the rc.12 train merge of push-deny-all (ours 56606, theirs 56696; both carry the wall preset rows once).
-docs/AUDIT-ACTIONS.md=56697 share=8
+# docs/AUDIT-ACTIONS.md 56964, measured: the machine.keep, machine.scrub and machine.delete rows and the kept-machine fields of person.deprovision and person.erasure.
+docs/AUDIT-ACTIONS.md=56964 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
