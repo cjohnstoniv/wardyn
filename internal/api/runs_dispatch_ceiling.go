@@ -120,6 +120,9 @@ type dispatchCeiling struct {
 	// agentGuardrailLocks is the rubric's agent_guardrail_locks term, which
 	// selects the locked L2 managed-settings document (agentPolicyFor).
 	agentGuardrailLocks bool
+	// modelLimit is the assigned profile's effective allowed_models list and the profile that set it
+	// (run_allowed_models.go); the zero value, no limit, for an operator and a member with no profile.
+	modelLimit allowedModelsLimit
 }
 
 // ceilingForDispatch is the ONE translation from a resolved ceiling into the
@@ -156,6 +159,7 @@ func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade, bedrock bedrockC
 		maxMemoryMiB: memberBound(c.Limits.MaxMemoryMiB, c.memberSize().MemoryMiB), adoEntra: ado, bedrock: bedrock, adoStanding: standing,
 		agentGuardrailLocks: c.Limits.AutonomyRubric != nil && c.Limits.AutonomyRubric.AgentGuardrailLocks,
 		recording:           c.Spec.Recording, recordingBound: !c.Operator,
+		modelLimit: modelLimitOf(c),
 	}
 }
 

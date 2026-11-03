@@ -107,7 +107,7 @@ docs/operations/admin-only-writes.md=3933 share=35 # tightened from 3738 to the 
 # docs/operations/three-roles.md 4772 = ours 4734 + theirs 4720 - base 4682 at the 0.10 UNIT-ADMIN merge of RESTRICT-PIN 35c385de1.
 # docs/operations/three-roles.md 4788 = 4772 + 16, measured: a unit PUT takes the unit as GET returns it.
 # docs/operations/three-roles.md 4826 adds 38 over 4788, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
-docs/operations/three-roles.md=4914 share=35 # +87 (rc.11, measured 4914: the background watch exception and its re-check row)
+docs/operations/three-roles.md=5052 share=35 # +138 (rc.12, measured 5052: the allowed_models limit row and its notes); +87 (rc.11, measured 4914: the background watch exception and its re-check row)
 # docs/operations/provider-policy.md 1362 adds 84 over 1278, measured (0.10.0 GHPAT): the GitHub per_user row that takes each person's own token.
 # docs/operations/provider-policy.md 1382 adds 20 over 1362, measured (0.10.0 GHPAT r2): a run cannot mix a shared and a personal-token GitHub row.
 docs/operations/provider-policy.md=1382 share=35

@@ -256,6 +256,22 @@ func TestBuildProxyConfig_LocalModels(t *testing.T) {
 	}
 }
 
+// TestBuildProxyConfig_AllowedModels: a run's governed model list reaches the sidecar's config, so the proxy holds the run to it (and a revive, which replays the stored config, keeps
+// it); a run with no limit writes no key an older proxy refuses.
+func TestBuildProxyConfig_AllowedModels(t *testing.T) {
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{AllowedModels: &[]string{"model-a", "small-model-a"}}, ProxyListenPort)
+	if err != nil || !strings.Contains(string(b), `"allowed_models":["model-a","small-model-a"]`) {
+		t.Fatalf("BuildProxyConfig = %s %v, want the list under allowed_models", b, err)
+	}
+	var cfg proxy.Config
+	if err := json.Unmarshal(b, &cfg); err != nil || cfg.AllowedModels == nil || len(*cfg.AllowedModels) != 2 {
+		t.Fatalf("the sidecar read %v %v, want the two models", cfg.AllowedModels, err)
+	}
+	if b, _ = BuildProxyConfig(uuid.New(), ProxyConfig{}, ProxyListenPort); strings.Contains(string(b), "allowed_models") {
+		t.Fatalf("a run with no limit names the key: %s", b)
+	}
+}
+
 // TestBuildProxyConfig_GatewayIdentity: a run's gateway routes reach the sidecar's config, and
 // a run without one writes no key an older proxy refuses.
 func TestBuildProxyConfig_GatewayIdentity(t *testing.T) {

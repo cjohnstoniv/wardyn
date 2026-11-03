@@ -143,4 +143,7 @@ type dispatchParams struct {
 	// DesktopWindowAtStart: the request asked for a window onto the run on its own Mac as it comes up
 	// (CreateRunRequest.DesktopWindow); dispatch asks for it once the run is RUNNING.
 	DesktopWindowAtStart bool
+	// modelLimit is the run's governed allowed-models limit. Never set by a caller: dispatchRun copies it
+	// from the required ceiling before any phase reads it, so a lane cannot leave it out.
+	modelLimit allowedModelsLimit
 }

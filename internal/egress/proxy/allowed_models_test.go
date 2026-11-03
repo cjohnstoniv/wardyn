@@ -723,3 +723,34 @@ func TestAllowedModels_PlainLane(t *testing.T) {
 		})
 	}
 }
+
+// A named route that carries no model is let through while the list is set, and writes an allow row
+// under the gate's rule source so the console can say why it passed; a read writes none of its own.
+func TestAllowedModels_NamedModelFreeRouteWritesAnAllowRow(t *testing.T) {
+	buf := &bytes.Buffer{}
+	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{}),
+		Sink: &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}, Resolver: publicResolver{}})
+	p.allowedModels = modelSet([]string{"model-a"})
+	req := httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/files", strings.NewReader(`not json`))
+	if _, refused := p.allowedModelRefused(httptest.NewRecorder(), req, anthropicHost, 443, "v1/files"); refused {
+		t.Fatal("a named model-free route was refused")
+	}
+	d := lastDecision(t, buf)
+	if d.Decision != egress.Allow || d.RuleSource != ruleSourceAllowedModels || d.Cause != namedModelFreeCause {
+		t.Fatalf("decision = %+v, want an allow row under %s", d, ruleSourceAllowedModels)
+	}
+	buf.Reset()
+	get := httptest.NewRequest(http.MethodGet, "https://"+anthropicHost+"/v1/models", nil)
+	if _, refused := p.allowedModelRefused(httptest.NewRecorder(), get, anthropicHost, 443, "v1/models"); refused || buf.Len() != 0 {
+		t.Fatalf("a read was refused=%v or wrote %q", refused, buf.String())
+	}
+}
+
+// The tunnel refusal is said in words a person can act on: no wire terms.
+func TestAllowedModels_TunnelRefusalNamesNoWireTerms(t *testing.T) {
+	for _, term := range []string{"mitm", "CA", "TLS", "tunnel"} {
+		if strings.Contains(opaqueModelTunnelRefusal, term) {
+			t.Errorf("the tunnel refusal %q says %q", opaqueModelTunnelRefusal, term)
+		}
+	}
+}

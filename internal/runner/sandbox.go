@@ -217,6 +217,7 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		LLMChannelHosts:      pc.LLMChannelHosts,
 		LLMUnavailableDetail: pc.LLMUnavailableDetail,
 		LocalModels:          pc.LocalModels,
+		AllowedModels:        pc.AllowedModels,
 		GatewayIdentity:      pc.GatewayIdentity,
 		Unattended:           pc.Unattended,
 		ScrubResponses:       pc.ScrubResponses,

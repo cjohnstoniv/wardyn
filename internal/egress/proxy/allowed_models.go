@@ -67,8 +67,10 @@ const (
 )
 
 // opaqueModelTunnelRefusal is the sentence a refused opaque tunnel to a model host carries.
-const opaqueModelTunnelRefusal = "this run limits the models it may use, and a tunnel to a model host cannot be checked against them; " +
-	"the run needs TLS interception (mitm_llm and a CA, plus a mitm_hosts entry for a Bedrock or gateway host) to reach it"
+const opaqueModelTunnelRefusal = "this run limits the models it may use, and this connection to a model host can't be checked against them"
+
+// namedModelFreeCause is the cause on the allow row a named model-free route writes.
+const namedModelFreeCause = "a named route that carries no model"
 
 // bedrockModelOps are the Bedrock runtime operations whose path is /model/<id>/<op>.
 var bedrockModelOps = map[string]bool{
@@ -152,6 +154,7 @@ type modelCheck int
 
 const (
 	checkPass       modelCheck = iota // not a request the limit governs
+	checkNamedFree                    // a named route that carries no model: let through, with an allow row
 	checkBatch                        // a batch route: refused
 	checkUnchecked                    // a request with no model to check: refused
 	checkUnreadable                   // a model route whose model cannot be found: refused
@@ -199,7 +202,7 @@ func (p *Proxy) hostedCheck(r *http.Request, host, cleaned string) modelCheck {
 	case bodiless(r.Method):
 		return checkPass
 	case post && shape == shapeAnthropic && routeCarriesModel(path, anthropicModelFree):
-		return checkPass
+		return checkNamedFree
 	}
 	return checkUnchecked
 }
@@ -301,6 +304,13 @@ func (p *Proxy) allowedModelRefused(w http.ResponseWriter, r *http.Request, host
 	release := noopRelease
 	switch check {
 	case checkPass:
+		return noopRelease, false
+	case checkNamedFree:
+		if p.sink != nil {
+			log := decisionLog(p.reqOf(r, host, port), egress.Allow, ruleSourceAllowedModels)
+			log.Cause = namedModelFreeCause
+			p.sink.emit(log)
+		}
 		return noopRelease, false
 	case checkBatch:
 		return noopRelease, p.refuseAllowedModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied, batchRefusal)

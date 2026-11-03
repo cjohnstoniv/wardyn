@@ -4113,6 +4113,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0250` (`0250_kept_machines`) creates `kept_machines`: a person's macOS guest disk, kept on their own Mac between runs. A split-role install grants the app role `SELECT, INSERT, UPDATE, DELETE` on `kept_machines`.
 - `0251` (`0251_agent_runs_agent_cast_owed`) adds `agent_runs.agent_cast_owed_at` (`0001`'s table) and a partial index on it: a macOS VM task run's agent output recording still owed, NULL on every existing row; no grant changes.
 - `0252` (`0252_provider_change_clears_on_oidc`) is a later `CREATE OR REPLACE` of `0143`'s `clear_provider_connection_change` trigger function, so an endpoint sign-in's `-oidc` part clears the owner's provider change history too; no table, row or grant changes.
+- `0255` (`0255_agent_runs_allowed_models`) adds `allowed_models` to `agent_runs` (`0001`'s table): the governed allowed-models list the run was dispatched under and the profile that set it, replayed on revive and never changed by a later profile edit; NULL when no list binds the run.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

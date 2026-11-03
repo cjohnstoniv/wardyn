@@ -83,6 +83,7 @@ type LimitsOverlay struct {
 	DenyMemberDrives           *bool           `json:"deny_member_drives,omitempty"`
 	DenyPlacements             *[]Placement    `json:"deny_placements,omitempty"`
 	AllowedMacOSBases          *[]string       `json:"allowed_macos_bases,omitempty"`
+	AllowedModels              *[]string       `json:"allowed_models,omitempty"`
 	MaxCPUMillis               *int            `json:"max_cpu_millis,omitempty"`
 	MaxMemoryMiB               *int            `json:"max_memory_mib,omitempty"`
 	MaxEphemeralDiskMiB        *int            `json:"max_ephemeral_disk_mib,omitempty"`

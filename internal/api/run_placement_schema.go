@@ -43,9 +43,10 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.CLIAzure]():     strings.Fields("Subscriptions Access"),
 	reflect.TypeFor[types.CLIAWS]():       strings.Fields("StartURL SSORegion AccountID RoleName Region"),
 	reflect.TypeFor[types.CLIKubectl]():   strings.Fields("Server CAPEM ServiceAccount Namespaces Access"),
-	reflect.TypeFor[dispatchCeiling]():    strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks denyPlacements recording recordingBound"),
+	reflect.TypeFor[dispatchCeiling]():    strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks denyPlacements recording recordingBound modelLimit"),
 	reflect.TypeFor[dispatchParams](): strings.Fields("TrustedOutput RunToken Image Policy FirstGitHubGrantID GitGrants PATBroker PATAPI GitPATGrants SSHGrants Injections Interactive TaskMode InteractiveStart SeedAutoTools ToolApprovals ApprovalExpiryAfter ExtraEnv Toolchains UserMounts EphemeralDirs Drives MemberDrives MainDrive Components " +
-		"GitPushWithheld PolicyOverridden Provenance PushRuleSets HarnessToolRules Harnesses ADOLaneRepo RedirectProbe SigninImageUngranted DesktopWindowAtStart"), // DesktopWindowAtStart: a bool asking for a window on the person's own Mac; no credential
+		"GitPushWithheld PolicyOverridden Provenance PushRuleSets HarnessToolRules Harnesses ADOLaneRepo RedirectProbe SigninImageUngranted DesktopWindowAtStart modelLimit"), // DesktopWindowAtStart: a bool asking for a window on the person's own Mac; no credential
+	reflect.TypeFor[allowedModelsLimit]():   strings.Fields("models profileID profile"), // the run's model list and the profile that set it; no credential
 	reflect.TypeFor[mainDriveDecision]():    strings.Fields("MiB Soft Basis DefaultSource"),
 	reflect.TypeFor[llmTransport]():         strings.Fields("bedrock bedrockReady injectBedrockBearer injectBedrockSSO azure provider secretEnvKeys bedrockAudit"),
 	reflect.TypeFor[providerAzureLane]():    strings.Fields("provider owner harness endpoint host route audience model fast"),

@@ -250,10 +250,10 @@ type ProxyConfig struct {
 	PortRule string
 	// DesktopSignins opens the proxy's sign-in listener (SigninListenPort) for
 	// the person's sign-in browser; see SandboxSpec.DesktopSignins.
-	DesktopSignins bool `json:"desktop_signins,omitempty"`
-
+	DesktopSignins  bool                                `json:"desktop_signins,omitempty"`
 	LocalModels     map[string]types.LocalModelSettings // local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels)
 	GatewayIdentity []proxy.GatewayIdentityRoute        `json:"gateway_identity,omitempty"` // routes carrying the run's signed identity (proxy.Config.GatewayIdentity)
+	AllowedModels   *[]string                           // the run's governed model list (proxy.Config.AllowedModels); nil, never empty, when no limit binds the run
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).

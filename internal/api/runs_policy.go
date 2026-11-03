@@ -23,6 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // Pagination defaults for the public list endpoints. defaultListLimit is what an
@@ -289,6 +290,9 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// ModelAllowlists (#3374) is the model allowlist each local model provider handed the run's proxy at
 		// its latest dispatch, {provider id: models}: what the run is held to, whatever the provider lists now.
 		ModelAllowlists map[string][]string `json:"model_allowlists,omitempty"`
+		// AllowedModels is the governed allowed-models list the run's proxy was handed at dispatch and the
+		// profile that set it (run_allowed_models.go); absent when no limit binds the run.
+		AllowedModels *client.RunAllowedModels `json:"allowed_models,omitempty"`
 		// MacOS is a macOS VM run's desktop as its Mac offers it (run_macos_view.go); absent on every other run.
 		MacOS *runMacOSView `json:"macos,omitempty"`
 		// BackgroundWatch is whether this caller may watch a running background macOS VM run's desktop, and
@@ -315,6 +319,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		ComputerFolder:  s.computerFolderRunView(r.Context(), run.ID),
 		Agents:          s.runDetailAgents(r.Context(), run),
 		ModelAllowlists: s.runModelAllowlists(r.Context(), run.ID),
+		AllowedModels:   s.runAllowedModels(r.Context(), run.ID),
 		MacOS:           s.runMacOSView(run),
 		BackgroundWatch: s.backgroundWatchViewFor(r.Context(), run, principalFromRequest(r)),
 		MacWindow:       s.macWindowViewFor(r.Context(), stored, s.macWindowAuthorityOf(r)),

@@ -398,6 +398,11 @@ func harnessSetFact(set []types.RunHarness, choices []harnessChoice) *client.Har
 		}
 		mc := choices[j].choice.modelCredential()
 		fact.Harnesses[i].ModelCredential = &client.HarnessModelCredential{Provider: mc.Provider, Kind: mc.Kind, Residency: string(mc.Residency)}
+		// The models the provider's admin fixed for this harness, for Review's allowed-models warning.
+		if k := slices.IndexFunc(choices[j].choice.provider.Harnesses, func(ph types.ProviderHarness) bool { return ph.Harness == h.Harness }); k >= 0 {
+			ph := choices[j].choice.provider.Harnesses[k]
+			fact.Harnesses[i].ModelCredential.Model, fact.Harnesses[i].ModelCredential.FastModel = ph.Model, ph.FastModel
+		}
 		credentialed++
 	}
 	fact.SharedModelAccess = credentialed >= 2
