@@ -143,7 +143,7 @@ docs/operations/user-drives.md=4984 share=35
 # docs/operations/capabilities.md 4586 adds 193 over 4393, measured (rc.8 inbound docs): the inbound feature value.
 # docs/operations/capabilities.md 4750 adds 133 over 4617, measured: the registry-prefix form of an image grant.
 # docs/operations/capabilities.md 4788 adds 38 over 4750, measured: a deny covers other spellings; a prefix leaves other tags of a restricted image closed.
-docs/operations/capabilities.md=5077 share=35 # +289 (rc.12, measured 5077: the image digest rule, its operator exemption and its doors); +171 (rc.12, measured 4788: image registry prefix)
+docs/operations/capabilities.md=5080 share=35 # +3 (rc.12, measured 5080: the digest rule covers an attached workspace's base image whoever owns it, and links image admission); +289 (rc.12, measured 5077: the image digest rule, its operator exemption and its doors); +171 (rc.12, measured 4788: image registry prefix)
 # docs/operations/custom-components.md 1365 adds 181 over 1184, measured: the credential confinement floor on a CC1-only estate (0.9.3 ASK-6).
 # docs/operations/custom-components.md 1269, measured: the credential-floor section trimmed from 181 to 85 added words over 1184 (0.9.3 ASK-6 review).
 docs/operations/custom-components.md=1269 share=35
