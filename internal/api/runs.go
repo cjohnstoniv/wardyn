@@ -483,6 +483,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		Experience:       req.Experience,
 		ImageInput:       &imageInput,
 		Shape:            storedRunShape(req),
+		CorrelationID:    correlationID(req.CorrelationID),
 		Service:          service,
 		LocalFolder:      req.LocalFolder,
 		WorkspacePath:    in.workspacePath,

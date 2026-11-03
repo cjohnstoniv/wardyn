@@ -745,6 +745,11 @@ const (
 	reasonRunTitleStoreUnavailable = "run_title_store_unavailable" // this store cannot rename a run
 )
 
+// POST /runs correlation_id (run_correlation_id.go).
+const (
+	reasonCorrelationIDInvalid = "correlation_id_invalid" // correlation_id is over 128 characters or holds anything but ASCII letters, digits and . _ : / -
+)
+
 // GET /runs/{id}/resources and GET /runs/{id}/files (run_resources.go,
 // run_files.go): the two widgets read the identical run-state facts, so they
 // share a reason per cause rather than each inventing its own synonym.

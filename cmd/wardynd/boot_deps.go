@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -256,6 +257,11 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 		return nil, nil, nil, nil, ferr
 	}
 	if fan != nil {
+		if pool != nil { // the maintenance-mode tests build the chain without a pool; there is no run to read then
+			fan.EnrichRuns(func(ctx context.Context, runID uuid.UUID) (string, bool, error) {
+				return store.RunCorrelationID(ctx, pool, runID)
+			})
+		}
 		auditRec = fanoutRecorder{primary: storeRec, fanout: fan}
 		resealed = landedRecorder{primary: storeRec, fanout: fan}
 		slog.Info("wardynd: audit fanout enabled")

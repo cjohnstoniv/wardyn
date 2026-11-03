@@ -215,6 +215,9 @@ type AgentRun struct {
 	// Shape is the New Run shape the run was set up from, frozen at create: the request's own, else the one shape
 	// its experience, workload and tools fit. Empty when they fit more than one, for an older client, or before 0245.
 	Shape RunShape `json:"shape,omitempty"`
+	// CorrelationID is the caller's own reference for the run (POST /runs correlation_id), stored once at create. It rides in the
+	// data of the run's audit rows as they reach the audit sinks, never in the stored row, and is never a metric label.
+	CorrelationID string `json:"correlation_id,omitempty"`
 	// WorkspacePath is the run's primary host directory, denormalized so the control plane can warn (never block) a second run on it.
 	WorkspacePath string `json:"workspace_path,omitempty"`
 	// WorkspaceID marks a governed scan run: the driver runs wardyn-scan instead of the agent, trusted (not sandbox input) to persist the profile.
