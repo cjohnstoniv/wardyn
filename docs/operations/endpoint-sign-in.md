@@ -69,6 +69,7 @@
 
 - The proxy asks for a fresh access token about every 10 minutes, or sooner if the token's own expiry is sooner ([`storedKeyTTL`](../../internal/api/injection.go)). A run is renewed unattended for as long as the refresh token lives.
 - Each renewal can rotate the refresh token. It is saved under a lock and a revision check, one renewal at a time per person.
+- A renewal sends the refresh token only to the token URL and provider address it was signed in at. If either moved, the run gets the no-sign-in answer and the stored sign-in is kept.
 - A disconnect stops the injection within one renewal, so a disconnected person's token is injected for at most 10 minutes.
 
 | Renewal fails because | What the run sees | What to do |

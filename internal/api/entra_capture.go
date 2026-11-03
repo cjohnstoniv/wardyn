@@ -109,6 +109,9 @@ type entraCapture struct {
 	authority *tokenAuthority
 	// oidc is what an endpoint sign-in binds an identity token against; nil for every Entra kind.
 	oidc *endpointOIDCBinding
+	// redeemFor is the row an endpoint redemption resolved authority from (endpointOIDCStillBound); nil
+	// otherwise.
+	redeemFor *types.ModelProvider
 }
 
 // adoCapture is the capture an Azure DevOps row runs. Callers have validated

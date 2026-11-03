@@ -208,6 +208,10 @@ type adoEntraBlob struct {
 	// kept so a review can say which platform account a person connected. Entra blobs carry neither.
 	Issuer     string `json:"issuer,omitempty"`
 	IDPSubject string `json:"idp_sub,omitempty"`
+	// CaptureDigest is the provider address and token URL an endpoint sign-in was captured for
+	// (endpointOIDCCaptureDigest). A redemption posts the refresh token only while it matches; an endpoint
+	// sign-in without one reads as no sign-in. Entra blobs carry none.
+	CaptureDigest string `json:"capture_digest,omitempty"`
 }
 
 // signInEnded reports whether the last renewal found this sign-in unusable
@@ -499,6 +503,11 @@ func (s *Server) redeemEntraAccessLocked(ctx context.Context, cfg ADOEntraConfig
 	}
 	if !found {
 		return ADOEntraAccess{}, ErrADOEntraNotCaptured
+	}
+	// Before anything is posted: an endpoint sign-in is presented only where it was captured. A mismatch
+	// answers like no sign-in and touches nothing, so a refusal below can only end a sign-in that matched.
+	if err := s.endpointOIDCStillBound(ctx, ec, blob); err != nil {
+		return ADOEntraAccess{}, err
 	}
 	// The requested subset must be inside the CONSENTED set the capture
 	// recorded. Refusing here saves a round trip and, more importantly, names
