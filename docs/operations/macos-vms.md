@@ -19,13 +19,13 @@
 | Network | One virtual NIC, wired to the run's own network relay and proxy in Docker. The guest has no other way out |
 | Proxy variables | `HTTPS_PROXY`, `HTTP_PROXY` and `WARDYN_PROXY_URL` name the run's proxy. The relay carries a connection to the proxy itself unchanged, and the proxy checks what is sent on it as it checks a container's |
 | Open connections | The relay holds at most 1,024 per run on granted ports other than 80. One past that is refused and reported as `tunnel-limit`; the cap does not evict existing connections; lower process or container resource limits can bind first |
-| Desktop | The guest's own Screen Sharing, reached only through the runner and the organisation's gateway. The clipboard rules apply as for a Linux VM desktop. The desktop is not recorded |
+| Desktop | The guest's own Screen Sharing, reached only through the runner and the organisation's gateway, with a Linux VM desktop's clipboard rules. Recorded while watched at Screen and actions, unmasked ([Recording](#recording)) |
 | Confinement | The VM boundary, which the runner treats as the `CC3` family. The run's recorded `confinement_class` stays the one it asked for |
 | Sign-ins | Kept on the run's virtual disk, not in memory ([Credentials and sign-ins](#credentials-and-sign-ins)) |
 
 - Not in this release: Linux VMs on a Mac and reviving a stopped VM. Each is refused with a reason.
 - Windows VMs are not available yet. `machine_kind` takes `container`, `linux_vm` and `macos_vm` only.
-- A macOS VM run's desktop is not recorded, and Review says so. Its console and SSH terminal sessions are recorded at this run's recording level, as any run's are. A run is refused at create when recording is required, the organisation's level is locked above off, or the governance ceiling sets a level.
+- At Screen and actions a macOS VM run's desktop is recorded while someone watches it, and Review says so. At Terminal it is not. Console and SSH terminal sessions are recorded at this run's recording level, as any run's are, and so is a task run's agent output ([Recording](#recording)). Recording does not refuse a macOS VM run at create.
 - macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.
 - A Kubernetes runner refuses the kind.
 
@@ -544,7 +544,7 @@ A background run has no terminal, SSH or web door. This is the one exception: th
 - **The exposure.** A background run has no terminal, so what a person sees of it is its logs and audit trail. A screen can show what those keep out: a secret in a GUI app, a document, anything the run puts on screen.
   - Turn the site switch off, or set the profile limit, where that is not acceptable.
   - On macOS 26 the viewer may show the guest's login window, not its apps ([#3890](https://github.com/cjohnstoniv/wardyn/issues/3890)). Whether what it shows is useful is not yet witnessed.
-- **Recording.** A watch is not recorded, because a macOS VM run's desktop is not recorded.
+- **Recording.** A watch is recorded when the run is at Screen and actions ([Recording](#recording)).
   - The audit log shows `ui.open` and `ui.close` with `view_only` and `background`, never the picture.
 
 | A watch is refused when | What you see |
@@ -567,12 +567,70 @@ A background run has no terminal, SSH or web door. This is the one exception: th
   - The run's owner also gets the refusal's sentence. Anyone else who can read the run gets `not_run_owner` and no sentence.
   - The run page shows its Watch button only when the state is `open`.
 
+## Recording
+
+A macOS VM run is recorded the way a Linux VM run is, at the run's recording level. The recording belongs to the organisation: the runner keeps none of its own.
+
+| Level | What is kept for a macOS VM run |
+|---|---|
+| Off | Nothing. Review shows no macOS notice |
+| Terminal | Console and SSH terminal sessions, masked, and a task run's agent output, masked. The desktop is not recorded |
+| Screen and actions | The above, and the desktop screen while someone watches it from the run page |
+
+- **Screen frames are not masked.** Masking runs on terminal bytes. A frame is kept as the guest drew it, so a secret the desktop shows is in the recording. Review says so before the run starts. The desktop's clipboard is left out.
+- **Only a watched screen is kept.** A run nobody watches has no desktop recording. A takeover or a sign-in pause shows as a gap in the recording.
+- **No window.** A window on your Mac never crosses the gateway, so a run at Screen and actions refuses one (`mac_window_unrecorded`, [Opening a window on your Mac](#opening-a-window-on-your-mac)).
+- **The runner is trusted for frames.** The gateway records what the person's own runner relays, so a runner that alters the picture alters the recording ([Threat model](../../threatmodel/THREAT-MODEL.md)).
+
+### The agent output cast
+
+A task run's agent output is masked into an asciinema cast and saved when the agent's output copy ends. The run page lists it as "Agent output". An interactive run has no agent exec and no cast; its terminal sessions are recorded as any run's are.
+
+| Part | What happens |
+|---|---|
+| Saved | The cast is stored under the run with a `session.recording.write` row (`session` `agent`). The row is accepted before the run counts as recorded |
+| Nothing printed | An agent that printed nothing leaves nothing to record. The run stays recorded, with no cast |
+| Declined | The run is marked `runner_declined` and a **failure** row says why in `reason`. A decline after the run starts never stops it. One at dispatch can (below) |
+| Recovery | After a restart, or on another replica, the runner's copy is read again and saved as `agent-recovered`. The two never replace each other. A sweep settles every finished run that still owes a cast |
+| Erasure | Erasing a run's recordings erases its casts. A run erased in the middle of a save or a re-read owes nothing and gets no cast |
+| Required | Under a recording requirement, a task run whose cast cannot open at start fails: "Recording is required, and this macOS VM run's agent output can't be recorded on this deployment, so the run didn't start." |
+
+| Decline `reason` | Meaning |
+|---|---|
+| `mask_gap` | The masker dropped bytes it could not vouch for, and nothing else was kept |
+| `mask_uncovered` | The run's masking was not covered, so the output could not be checked for secrets |
+| `save_failed` | The recording store refused the cast |
+| `no_tail` | The run has no output to re-read from |
+| `read_failed` | The re-read kept failing until the sweep gave up |
+| `erased` | The run's recordings were erased |
+| `unrecoverable`, `sandbox_gone`, `runner_offline` | The re-read found nothing: the runner cannot recover it, the VM is gone, or the runner is not connected |
+
+A decline has three timings:
+
+- **At dispatch** (`no_tail`: no cast could open on the run's output; `save_failed`: its obligation could not be stored). The run is marked `runner_declined` and a failure row is durably accepted before it starts.
+  - If the audit recorder will not accept the row, the run does not start: "Wardyn could not record why this run's agent output isn't recorded, so the run didn't start. Try again."
+  - Its `run.create` failure row has `reason` `decline_not_recorded`.
+  - Under a recording requirement it fails with the required sentence above instead.
+- **Later** (a lost or unreadable copy, a failed save, a restart). The run keeps running. A rejected row keeps the obligation, and the sweep writes it again.
+- **Partial or total mask drop.** Some output kept and some dropped: the cast is saved, `incomplete` and `mask_gap`. Everything dropped: nothing is saved and the run is declined as `mask_gap`.
+
+A saved cast says how complete it is, on its row and in its header. A row carries these only when they apply:
+
+| Field | Meaning |
+|---|---|
+| `incomplete` | The cast is not the whole output. Always set with `read_error` or `mask_gap`, and with `completeness` `unknown` |
+| `read_error` | The runner's copy ended in an error. The cast ends with a marker line. The error's text goes only to the log |
+| `mask_gap` | Some output was left out because Wardyn could not check it for secrets. The gap is marked, never filled |
+| `truncated`, `limit_bytes` | Only the first `limit_bytes` were kept |
+| `gap_bytes` | The start of the output is missing: the runner had already discarded that many bytes |
+| `completeness` `unknown` | A swept row whose cast header could not be read. It is never called complete on no evidence |
+
 ## Opening a window on your Mac
 
 A window is a keyboard-and-pointer view of your own macOS VM run, drawn on your own Mac. The run's own helper (`wardyn-macvm run`) draws it with Apple's virtual machine view. Wardyn's server decides each open and tells the run's runner to draw it. Nothing rests on the Mac between opens. Built and unit-tested; not yet run on a real Mac.
 
 - The window shows the VM's screen and takes your keys and pointer.
-- It is not recorded, because a macOS VM run's desktop is not recorded.
+- It is not recorded, because it is drawn on your Mac and never crosses the gateway. A run at Screen and actions can't open one.
 - While it is open, the run's browser desktop is view only. A browser desktop that had control is ended first, and the open waits up to 5 seconds for it.
 
 | Way to open it | What it does |
@@ -605,7 +663,7 @@ Wardyn asks these in order, and the first that refuses answers. Every refusal wr
 | The run is not running, or has ended | `409` `attach_not_running` or `attach_run_kept` | "run is not RUNNING; cannot open its window", with the state, or "run has ended; cannot open its window" |
 | You did not register the run's Mac, did not start the run, or came through a delegated token | `403` `mac_window_not_your_mac` | "Wardyn opens a window only on a Mac whose runner you registered. This run is on `<computer>`, so Wardyn can't tell who is at its keyboard. Watch its desktop from the run page instead." |
 | The run's profile sets `deny_ui_apps` or `deny_interactive` | `403` `governance_unit`, target `runs.desktop_window` | "Your organisation's governance profile doesn't allow an interactive desktop on this run." |
-| The run's recording level is Screen and actions | `403` `mac_window_unrecorded` | "This run's recording level is Screen and actions, and a macOS VM's screen isn't recorded, so Wardyn won't open a window onto it." |
+| The run's recording level is Screen and actions | `403` `mac_window_unrecorded` | "This run's recording level is Screen and actions, and a window on your Mac isn't recorded, so Wardyn won't open one. Watch its desktop from the run page instead." |
 | The agent's sign-ins in a desktop are "Not allowed" | `403` `desktop_sign_ins_off` | "Your admin doesn't allow sign-ins in a desktop while `<agent>` runs, and a macOS desktop can't block them yet." |
 | The Mac's runner is offline | `409` `mac_window_offline` | "This Mac's runner is offline, so Wardyn can't open a window on it." |
 | The runner is connected through another server | `409` `mac_window_not_here` | "Wardyn couldn't reach this Mac's runner from here. Try again in a moment." |
