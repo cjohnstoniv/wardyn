@@ -11,7 +11,9 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -23,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/macvm"
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent/guestagenttest"
@@ -215,13 +218,33 @@ func TestDriveOpenWorkWritesBackThroughExec(t *testing.T) {
 	}
 }
 
-// Ctrl-C before Return, and an input that ends, write nothing: no tar x, no delete. The copy stays, and the
-// guest is still synced (opening the drive replayed its journal).
+// driveOpenOwnDest makes the job's folder one this run created inside a parent, as drive open does, so that
+// removing it can be seen.
+func driveOpenOwnDest(t *testing.T, j *driveOpenJob, dir string) {
+	t.Helper()
+	parent, err := os.OpenRoot(filepath.Dir(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = parent.Close() })
+	j.dest.parent, j.dest.leaf, j.dest.created = parent, filepath.Base(dir), true
+}
+
+func driveOpenGone(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("%s is still there (%v)", dir, err)
+	}
+}
+
+// Ctrl-C before Return, and an input that ends, write nothing: no tar x, no delete. The copy is removed, and
+// the guest is still synced (opening the drive replayed its journal).
 func TestDriveOpenWorkCtrlCWritesNothing(t *testing.T) {
 	for _, name := range []string{"ctrl-c", "input ends"} {
 		t.Run(name, func(t *testing.T) {
 			j, g, dir, out := driveOpenJobIn(t, driveOpenEntry{name: "./a.txt", body: "alpha", mode: 0o644})
 			j.deleteGone = true
+			driveOpenOwnDest(t, &j, dir)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			keys := &driveOpenKeys{done: make(chan struct{}), before: func() { _ = os.Remove(filepath.Join(dir, "a.txt")) }}
@@ -243,6 +266,10 @@ func TestDriveOpenWorkCtrlCWritesNothing(t *testing.T) {
 			}
 			if g.call("/bin/sync", "") == nil || !strings.Contains(out.String(), "Discarded: nothing was written back.") {
 				t.Fatalf("calls %v\n%s", g.calls, out)
+			}
+			driveOpenGone(t, dir)
+			if want := "The folder " + dir + " was removed.\n"; !strings.HasSuffix(out.String(), want) {
+				t.Fatalf("the last line is not %q:\n%s", want, out)
 			}
 		})
 	}
@@ -779,5 +806,129 @@ func TestDriveOpenServeReconcilesADeadOne(t *testing.T) {
 	m.reconcilePrepare()
 	if es, err := m.ledger.Counted(); err != nil || len(es) != 0 {
 		t.Fatalf("entries = %+v, %v", es, err)
+	}
+}
+
+// A write back that sent everything removes the folder, and says so on the last line.
+func TestDriveOpenWorkRemovesTheFolderAfterWriteBack(t *testing.T) {
+	j, g, dir, out := driveOpenJobIn(t, driveOpenEntry{name: "./a.txt", body: "alpha", mode: 0o644})
+	driveOpenOwnDest(t, &j, dir)
+	j.in = &driveOpenKeys{before: func() { _ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha two"), 0o644) }}
+	result, err := driveOpenWork(t.Context(), j)
+	if err != nil || result != driveOpenWrittenBack {
+		t.Fatalf("%q, %v\n%s", result, err, out)
+	}
+	if sent := driveOpenSentNames(t, g.call("/usr/bin/tar", "-xf").stdin); sent["a.txt"] != "alpha two" {
+		t.Fatalf("sent %v", sent)
+	}
+	driveOpenGone(t, dir)
+	if want := "Wrote back 1 changed file."; !strings.Contains(out.String(), want) {
+		t.Fatalf("output lacks %q:\n%s", want, out)
+	}
+	if want := "The folder " + dir + " was removed.\n"; !strings.HasSuffix(out.String(), want) {
+		t.Fatalf("the last line is not %q:\n%s", want, out)
+	}
+}
+
+// A folder that was there before the run stays, empty, and the line says so.
+func TestDriveOpenWorkEmptiesAFolderItDidNotMake(t *testing.T) {
+	j, _, dir, out := driveOpenJobIn(t, driveOpenEntry{name: "./a.txt", body: "alpha", mode: 0o644})
+	j.in = strings.NewReader("")
+	if _, err := driveOpenWork(t.Context(), j); err != nil {
+		t.Fatal(err)
+	}
+	if left, err := os.ReadDir(dir); err != nil || len(left) != 0 {
+		t.Fatalf("%v %v", left, err)
+	}
+	if want := "The files in " + dir + " were removed; the empty folder was there before this run, so it stays.\n"; !strings.HasSuffix(out.String(), want) {
+		t.Fatalf("the last line is not %q:\n%s", want, out)
+	}
+}
+
+// A write back that failed keeps the folder and its files, and the last line names the folder.
+func TestDriveOpenWorkKeepsTheFolderWhenWriteBackFails(t *testing.T) {
+	j, g, dir, out := driveOpenJobIn(t, driveOpenEntry{name: "./a.txt", body: "alpha", mode: 0o644})
+	driveOpenOwnDest(t, &j, dir)
+	g.failing = map[string]string{"/usr/bin/tar": "tar: disk full"}
+	j.in = &driveOpenKeys{before: func() { _ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("changed"), 0o644) }}
+	result, err := driveOpenWork(t.Context(), j)
+	if err == nil || result != driveOpenBackFailed {
+		t.Fatalf("%q, %v", result, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "a.txt")); err != nil || string(b) != "changed" {
+		t.Fatalf("the edit is gone: %q, %v", b, err)
+	}
+	if want := "The folder " + dir + " is kept: it holds the changes that did not go back.\n"; !strings.HasSuffix(out.String(), want) {
+		t.Fatalf("the last line is not %q:\n%s", want, out)
+	}
+}
+
+// A write back that succeeded but left out a link the person made keeps the folder: the link is in it only.
+func TestDriveOpenWorkKeepsTheFolderWhenItemsWereNotSent(t *testing.T) {
+	j, _, dir, out := driveOpenJobIn(t, driveOpenEntry{name: "./a.txt", body: "alpha", mode: 0o644})
+	driveOpenOwnDest(t, &j, dir)
+	j.in = &driveOpenKeys{before: func() { _ = os.Symlink("a.txt", filepath.Join(dir, "mine")) }}
+	result, err := driveOpenWork(t.Context(), j)
+	if err != nil || result != driveOpenWrittenBack {
+		t.Fatalf("%q, %v", result, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "mine")); err != nil {
+		t.Fatalf("the link is gone: %v", err)
+	}
+	if want := "The folder " + dir + " is kept: 1 item in it could not be written back.\n"; !strings.HasSuffix(out.String(), want) {
+		t.Fatalf("the last line is not %q:\n%s", want, out)
+	}
+}
+
+// The guest's tar leaves out extended attributes and the volume's own folders at the drive's root.
+func TestDriveOpenListsWithoutVolumeFoldersOrXattrs(t *testing.T) {
+	j, g, _, _ := driveOpenJobIn(t, driveOpenEntry{name: "./a.txt", body: "alpha", mode: 0o644})
+	j.in = strings.NewReader("")
+	if _, err := driveOpenWork(t.Context(), j); err != nil {
+		t.Fatal(err)
+	}
+	call := g.call("/usr/bin/tar", "-cf")
+	if call == nil {
+		t.Fatalf("no listing: %v", g.calls)
+	}
+	want := "/usr/bin/tar -C " + macvm.DriveOpenTarget + " -cf - --no-xattrs --exclude ./.Trashes --exclude ./.Spotlight-V100 --exclude ./.fseventsd --exclude ./.TemporaryItems ."
+	if got := strings.Join(call.argv, " "); got != want {
+		t.Fatalf("argv %q, want %q", got, want)
+	}
+}
+
+// A tar that exits 1 having complained only about the volume's own folders and extended attributes lost no item
+// of the drive: no warning. One that exits 1 with nothing on stderr still says it ended without saying why, and
+// a real complaint among the others is counted alone.
+func TestDriveOpenUnreadItemsLeaveOutVolumeNoise(t *testing.T) {
+	noise := "tar: ./.Spotlight-V100: Cannot open: Operation not permitted\ntar: ./.Trashes/501: Cannot stat: Permission denied\n" +
+		"tar: ./.fseventsd: Failed to get extended attributes\ntar: ./a.txt: Couldn't read xattr\ntar: Error exit delayed from previous errors\n"
+	for _, tc := range []struct {
+		name, stderr string
+		unread       string // "" for no warning
+		line         string
+	}{
+		{"only the volume's own", noise, "", ""},
+		{"nothing on stderr", "", "1 item could not be read", "tar ended with code 1 without saying why"},
+		{"one real among the noise", noise + "tar: ./secret: Cannot open: Permission denied\n", "1 item could not be read", "tar: ./secret: Cannot open: Permission denied"},
+		{"a nested folder of the same name is a real item", "tar: ./docs/.Trashes: Cannot open: Permission denied\n", "1 item could not be read", "tar: ./docs/.Trashes: Cannot open: Permission denied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			j, g, _, out := driveOpenJobIn(t, driveOpenEntry{name: "./a.txt", body: "alpha", mode: 0o644})
+			g.tarExit, g.tarErr = 1, tc.stderr
+			j.in = strings.NewReader("")
+			if result, err := driveOpenWork(t.Context(), j); err != nil || result != driveOpenDiscarded {
+				t.Fatalf("%q, %v\n%s", result, err, out)
+			}
+			if got := strings.Contains(out.String(), "could not be read from the drive"); got != (tc.unread != "") {
+				t.Fatalf("warning = %v, want %q:\n%s", got, tc.unread, out)
+			}
+			if tc.unread != "" && (!strings.Contains(out.String(), tc.unread) || !strings.Contains(out.String(), tc.line)) {
+				t.Fatalf("output lacks %q and %q:\n%s", tc.unread, tc.line, out)
+			}
+			if strings.Contains(out.String(), "Spotlight") || strings.Contains(out.String(), "xattr") {
+				t.Fatalf("noise shown:\n%s", out)
+			}
+		})
 	}
 }
