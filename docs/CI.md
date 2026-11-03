@@ -372,6 +372,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `stop-early-dco` | – | pending | pending | 10 |
 | `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
+| `conformance-k8s-agent-sandbox` (not required; train and main only) | – | pending | pending | 35 |
 | `vm-conformance` (not required) | – | pending | pending | 30 |
 | `macos` (not required) | – | pending | pending | 30 |
 | `macos-xcode-27` (not required) | – | pending | pending | 10 |

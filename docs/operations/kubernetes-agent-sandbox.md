@@ -8,7 +8,13 @@
 
 ## What is claimed
 
-- Experimental, off by default. Tested in CI on kind, Kubernetes v1.30, Calico, confinement class CC1, with agent-sandbox v1.0.9 by digest, whose API is `v1beta1` (beta). Server mode only.
+- Experimental, off by default. Tested in CI on kind, Kubernetes v1.30.0 (kind v0.23.0, node image pinned by digest), Calico, confinement class CC1, with agent-sandbox v1.0.9 by digest, whose API is `v1beta1` (beta). Server mode only.
+- The CI job `conformance-k8s-agent-sandbox` runs on train pull requests and pushes to main only. It is not a required check. Its cluster is its own: this page says nothing about the Kubernetes version of Wardyn's plain `conformance-k8s` job.
+- The job checks:
+  - the plain conformance suite plus the backend's own cases, with the backend on;
+  - every decision of the two admission policies, on a real API server;
+  - each verb in the chart's Role, with `kubectl auth can-i` under a separate account.
+- The suite itself runs as the wardynd ServiceAccount, which is bound to cluster-admin. So the chart's Role is not proven end to end.
 - Not tested:
   - a controller rewriting a pod for real (fake clients only);
   - RuntimeClass under real Kata;
@@ -89,7 +95,15 @@
 | At start, the pod the controller made matches what Wardyn asked for: containers, images, env, mounts, security context, resources, volumes, `hostAliases`, DNS, RuntimeClass, placement and the labels the NetworkPolicy selects. No extra container or volume. | Anything after the gate is removed. |
 | The pod is still held when it is checked: gate present, no node, phase Pending. | That nothing edited a Sandbox or pod later. |
 
-- Afterwards, Wardyn reads Status. A pod with the gate back, a missing selected label, or a changed container image ends the run at the next Status read. Nothing watches between reads, so this is not a time bound.
+- Afterwards, Wardyn reads Status. Each of these ends the run at the next Status read:
+  - the pod carries a gate again;
+  - a label the NetworkPolicies select is missing or changed;
+  - a container or init container runs a different image than the Sandbox template asked for;
+  - the Sandbox's spec was edited after create (its generation is above 1);
+  - the Sandbox is being deleted, or is missing while the pod lives.
+- Nothing watches between reads, so this is not a time bound.
+- The run ends as failed, and the replaced-pod sentence below is recorded as the run's failure hint.
+- Teardown finds the run's agent pod by its fixed name, not by a label, so a pod whose labels were edited is still deleted.
 - A mutating webhook that injects a sidecar makes the read-back refuse the run, though the plain path accepts it. That is deliberate.
 - A real controller rewrite is tested with fake clients only.
 
