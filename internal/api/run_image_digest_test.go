@@ -240,42 +240,63 @@ func TestImageDigestRule_WorkspaceSeedImage(t *testing.T) {
 	}
 }
 
-// TestImageDigestRule_PolicyCarriedWorkspaceImage: a workspace the run's policy carries (not attached) sets the
-// image dispatch uses when neither the request nor an attached workspace chose one (resolveCreateRunImage), so
-// stepWorkspaces holds its base image to the rule at every door. A governed caller (an SSO admin under
-// WARDYN_GOVERN_ADMIN_RUNS, bound as a member is) is refused a tag ref and passes a digest ref; the admin token
-// is not bound.
+// TestImageDigestRule_PolicyCarriedWorkspaceImage: a workspace the run's policy carries sets the image dispatch
+// uses when neither the request nor an attached workspace chose one (resolveCreateRunImage), whether or not any
+// workspace is attached, so stepWorkspaces holds its base image to the rule at every door. A governed caller (an
+// SSO admin under WARDYN_GOVERN_ADMIN_RUNS, bound as a member is) is refused a tag ref and passes a digest ref;
+// the admin token is not bound, and its run.create row carries image_digest_exempt.
 func TestImageDigestRule_PolicyCarriedWorkspaceImage(t *testing.T) {
-	for _, tc := range []struct {
-		name, image     string
-		ruleOn, refused bool
-	}{
-		{"tag ref", digestTagRef, true, true},
-		{"digest ref", digestPinnedRef, true, false},
-		{"tag ref, rule off", digestTagRef, false, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			plain, carried := repoWS("plain", helloRepo), repoWS("carried", spoonRepo)
-			carried.BaseImage = &types.WorkspaceBaseImage{Kind: "custom", Image: tc.image}
-			srv := attachFixture(t, digestRuleSite(tc.ruleOn), plain, carried)
-			srv.cfg.GovernAdminRuns = true
-			body := `{"agent":"claude-code","task":"t","workspace_id":"` + plain.ID.String() +
-				`","inline_policy":{"min_confinement_class":"CC2","workspace_repos":[{"repo":"` + spoonRepo + `"}]}}`
-			governed := ssoSession(t, "sub-governed-admin", "admin@corp.example", oidc.RoleAdmin)
-			for _, door := range runDoors {
-				w := doSSO(t, srv, http.MethodPost, door.path, governed, body)
-				got := strings.Contains(w.Body.String(), reasonImageDigestRequired)
-				if tc.refused && (w.Code != http.StatusForbidden || !got || !strings.Contains(w.Body.String(), tc.image)) {
-					t.Fatalf("%s: %d %s; want 403 %s naming %s", door.name, w.Code, w.Body.String(), reasonImageDigestRequired, tc.image)
-				}
-				if !tc.refused && got {
-					t.Fatalf("%s: refused by the digest rule: %d %s", door.name, w.Code, w.Body.String())
-				}
-				if w := do(t, srv, http.MethodPost, door.path, adminToken, body); strings.Contains(w.Body.String(), reasonImageDigestRequired) {
-					t.Fatalf("%s: the admin token was bound by the digest rule: %d %s", door.name, w.Code, w.Body.String())
-				}
+	for _, attach := range []bool{true, false} {
+		for _, tc := range []struct {
+			name, image     string
+			ruleOn, refused bool
+		}{
+			{"tag ref", digestTagRef, true, true},
+			{"digest ref", digestPinnedRef, true, false},
+			{"tag ref, rule off", digestTagRef, false, false},
+		} {
+			name := tc.name + ", no workspace attached"
+			if attach {
+				name = tc.name + ", another workspace attached"
 			}
-		})
+			t.Run(name, func(t *testing.T) {
+				plain, carried := repoWS("plain", helloRepo), repoWS("carried", spoonRepo)
+				carried.BaseImage = &types.WorkspaceBaseImage{Kind: "custom", Image: tc.image}
+				srv := attachFixture(t, digestRuleSite(tc.ruleOn), plain, carried)
+				srv.cfg.GovernAdminRuns = true
+				policy := `"inline_policy":{"min_confinement_class":"CC2","workspace_repos":[{"repo":"` + spoonRepo + `"}]}}`
+				body := `{"agent":"claude-code","task":"t",` + policy
+				if attach {
+					body = `{"agent":"claude-code","task":"t","workspace_id":"` + plain.ID.String() + `",` + policy
+				}
+				governed := ssoSession(t, "sub-governed-admin", "admin@corp.example", oidc.RoleAdmin)
+				for _, door := range runDoors {
+					w := doSSO(t, srv, http.MethodPost, door.path, governed, body)
+					got := strings.Contains(w.Body.String(), reasonImageDigestRequired)
+					if tc.refused && (w.Code != http.StatusForbidden || !got || !strings.Contains(w.Body.String(), tc.image)) {
+						t.Fatalf("%s: %d %s; want 403 %s naming %s", door.name, w.Code, w.Body.String(), reasonImageDigestRequired, tc.image)
+					}
+					if !tc.refused && got {
+						t.Fatalf("%s: refused by the digest rule: %d %s", door.name, w.Code, w.Body.String())
+					}
+					if w := do(t, srv, http.MethodPost, door.path, adminToken, body); strings.Contains(w.Body.String(), reasonImageDigestRequired) {
+						t.Fatalf("%s: the admin token was bound by the digest rule: %d %s", door.name, w.Code, w.Body.String())
+					}
+				}
+				if !tc.refused || !tc.ruleOn {
+					return
+				}
+				marked := false
+				for _, ev := range srv.cfg.Audit.(*recRecorder).snapshot() {
+					if ev.Action == "run.create" && ev.Outcome == "success" && leaseAuditData(t, ev)["image_digest_exempt"] == true {
+						marked = true
+					}
+				}
+				if !marked {
+					t.Error("the admin token's run.create row does not carry image_digest_exempt for the carried tag image")
+				}
+			})
+		}
 	}
 	src, err := os.ReadFile("run_fold_steps.go")
 	if err != nil || !strings.Contains(string(src), "s.imageDigestRefusal(f.r.Context(), f.carriedImage, true)") {
