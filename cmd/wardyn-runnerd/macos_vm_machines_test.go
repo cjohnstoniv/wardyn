@@ -156,6 +156,32 @@ func TestMachinesListMarksAMachineALiveVMBoots(t *testing.T) {
 	}
 }
 
+// The list says a machine whose record still names a session is in use, even with its run folder gone,
+// as the caps do (keptFromFolder): its expiry is the boot's until the sweep's recovery writes the new one.
+func TestMachinesListMarksAnUnrecoveredSessionInUse(t *testing.T) {
+	m := keptRig(t)
+	held, idle := uuid.New(), uuid.New()
+	keptMachine(t, m, held, "held", func(r *macvm.KeptRecord) { r.ActiveRun = uuid.NewString() })
+	keptMachine(t, m, idle, "idle", nil)
+	rows, err := m.keptRows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	writeKeptList(&out, rows)
+	byName := map[string][]string{}
+	for _, l := range strings.Split(strings.TrimSpace(out.String()), "\n")[1:] {
+		f := strings.Fields(l)
+		byName[f[0]] = f
+	}
+	if f := byName["held"]; f[len(f)-1] != "yes" || f[len(f)-5] != "-" {
+		t.Errorf("held lists as %v; want in use yes and scrubbed -", f)
+	}
+	if f := byName["idle"]; f[len(f)-1] != "no" {
+		t.Errorf("idle lists as %v; want in use no", f)
+	}
+}
+
 // Nothing periodic or read-only takes a machine's lock: a lock held by someone else (a boot, a stop write)
 // is invisible to the caps, the status and the list, which read live VMs from the run folders. The lock
 // probe (macvm.KeptLocked) is flock'd with the helper's boot and the runner's stop write, so one at the

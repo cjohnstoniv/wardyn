@@ -103,10 +103,7 @@ func (m *macOSVMs) keptFromFolder() *runnerwire.MacVMKept {
 	for _, r := range rows {
 		out.WorstBytes += r.worst
 		out.AllocatedBytes += r.written
-		// A record that still names a session is in use until the sweep's recovery clears it and writes the
-		// new deadline, even once its run folder is gone; its expiry is the boot's until then.
-		run := cmp.Or(r.run, r.rec.ActiveRun)
-		out.Machines = append(out.Machines, runnerwire.MacVMKeptMachine{ID: r.rec.ID, Bytes: r.written, InUse: run != "", RunID: run,
+		out.Machines = append(out.Machines, runnerwire.MacVMKeptMachine{ID: r.rec.ID, Bytes: r.written, InUse: r.inUse, RunID: r.run,
 			Scrubbed: r.rec.Scrubbed, ExpiresAt: r.rec.ExpiresAt})
 	}
 	return out
@@ -219,12 +216,13 @@ type keptRow struct {
 	dir  string
 	rec  macvm.KeptRecord
 	// written is what the machine's files take now, worst what they could grow to (its disk's size plus a
-	// run's reserve), and inUse says a live VM of this runner boots it. That is read from the run folders
-	// and the ledger, never by probing the machine's lock: a probe takes the lock the helper's boot and
+	// run's reserve), and inUse says a live VM of this runner boots it, or its record still names a session
+	// the sweep has not recovered. That is read from the run folders, the ledger and the record, never by
+	// probing the machine's lock: a probe takes the lock the helper's boot and
 	// the runner's stop write use, so it can refuse a boot or drop a write.
 	written, worst int64
 	inUse          bool
-	run            string // the run whose VM boots the machine, "" when none
+	run            string // the run whose VM boots the machine, else the session its record names; "" when none
 }
 
 // keptRunsByMachine maps each kept machine a live VM of this runner boots to that VM's run id, from the run
@@ -283,7 +281,10 @@ func (m *macOSVMs) keptRows() ([]keptRow, error) {
 		}
 		man, _ := macvm.ReadManifest(dir)
 		written, _ := macvm.KeptAllocatedBytes(dir)
-		rows = append(rows, keptRow{key: de.Name(), name: rec.Name, dir: dir, rec: rec, written: written, inUse: runs[rec.ID] != "", run: runs[rec.ID],
+		// A record that still names a session is in use until the sweep's recovery clears it and writes the
+		// new deadline, even once its run folder is gone; its expiry is the boot's until then.
+		run := cmp.Or(runs[rec.ID], rec.ActiveRun)
+		rows = append(rows, keptRow{key: de.Name(), name: rec.Name, dir: dir, rec: rec, written: written, inUse: run != "", run: run,
 			worst: admission.RunDiskReservation(cmp.Or(man.DiskBytes, macvm.BaseDiskBytes))})
 	}
 	slices.SortFunc(rows, func(a, b keptRow) int {
