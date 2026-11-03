@@ -488,6 +488,24 @@ overrides:
     add_allowed: [api.example.com, pypi.org]
 ```
 
+## Wall presets
+
+A wall preset is a named set of walls that only narrows, picked for one run at launch. Open, Read-only and Sealed are built in; a person keeps their own, a group's template managers keep the group's, and an organisation administrator keeps the organisation's.
+
+| Method | Route | Who |
+|---|---|---|
+| `ListWallPresets` | `GET /api/v1/wall-presets` | anyone signed in, the admin token and a service identity: the built-ins, then each preset they may read, and `publish` |
+| `GetWallPreset` | `GET /api/v1/wall-presets/{id}` | a reader of that preset; `{id}` is a uuid or a built-in's name (`open`, `read-only`, `sealed`) |
+| `SaveWallPreset` | `POST /api/v1/wall-presets`, `PUT /api/v1/wall-presets/{id}` | the owner (personal), an organisation administrator in the Admin view (organisation), the group's template managers (group) |
+| `DeleteWallPreset` | `DELETE /api/v1/wall-presets/{id}` | as `SaveWallPreset` |
+
+- The rules are the [run templates'](#run-templates): the same scopes, the same `publish`, and the same template managers. A preset you cannot read, and one that does not exist, answer the same `404` `wall_preset_not_found`.
+- `WallPresetSaveRequest` on `POST` names `scope` (`person`, `group` or `org`), `group_id` for a group, `name`, `description` and `spec`. On `PUT` it names `name`, `description`, `spec` and `expected_version`, the version you read; the scope never changes.
+- `spec` is the [Your walls](#your-walls) document and is checked the same way, as `422` `wall_preset_invalid`. A spec that names no limit is refused too: Open is the built-in for no preset.
+- A built-in is never written (`403` `wall_preset_builtin`), and no preset may take a built-in's name in any case (`409` `wall_preset_name_taken`).
+- Writes need a signed-in person (`400` `walls_need_person`). Who saved a shared preset last is answered as `updated_by`; for a personal preset it never is.
+- A write is audited as `wall_preset.create`, `wall_preset.update` or `wall_preset.delete`. A shared preset's row records its whole spec; a personal one's records only the knobs and list sizes, as `person.walls.set` does.
+
 ## Run templates
 
 A template is a saved run setup, whole or partial, kept for yourself, published to the organisation or published to one group. It is content: a published template grants nothing.
@@ -499,7 +517,7 @@ A template is a saved run setup, whole or partial, kept for yourself, published 
 | `SaveTemplate` | `POST /api/v1/templates`, `PUT /api/v1/templates/{id}` | the owner (personal), an organisation administrator (organisation), the group's template managers (group) |
 | `DeleteTemplate` | `DELETE /api/v1/templates/{id}` | as `SaveTemplate` |
 | `CopyTemplate` | `POST /api/v1/templates/{id}/copy` | a reader of the source who may write the target |
-| `ListTemplateGroupAdmins`, `GrantTemplateGroupAdmin`, `RevokeTemplateGroupAdmin` | `GET`/`PUT`/`DELETE /api/v1/admin/template-group-admins` | admin |
+| `ListTemplateGroupAdmins`, `GrantTemplateGroupAdmin`, `RevokeTemplateGroupAdmin` | `GET`/`PUT`/`DELETE /api/v1/admin/template-group-admins` | admin; a grant makes one person a template manager of one group, for its templates and its [wall presets](#wall-presets) |
 
 - A template you cannot read, and one that does not exist, answer the same `404` `template_not_found`.
 - `ListTemplates` answers `publish`: where you may save one.
@@ -864,7 +882,7 @@ start.
 | `restriction_invalid` / `restriction_not_found` / `restriction_host` / `workspace_owning_unit_default` | The restriction routes, an egress approval, and `PUT /workspaces/{id}/owning-unit`. |
 | `walls_invalid` / `walls_need_person` / `walls_unavailable` | `/me/walls` ([Your walls](#your-walls)): `400` walls that name a wider value, a bad site or a list over its cap; `400` a caller who is no signed-in person (the admin token, local mode, a service identity); `501` a store that keeps no personal settings. |
 | `personal_walls_host` | `POST /approvals/{id}/approve` (403): the run owner's walls deny the egress host (`GET /approvals` marks the row `walls_block: true`). A host outside their list follows their choice for an unlisted site. |
-| `wall_preset_invalid` / `wall_preset_scope_forbidden` / `wall_preset_builtin` / `wall_preset_not_found` | `/wall-presets`: `422` a preset that names a wider value or no limit, or a launch whose preset no longer passes the walls check; `403` a save to the organisation or a group you may not save to; `403` an edit or delete of a built-in; `404` no such preset, or one you cannot see. |
+| `wall_preset_invalid` / `wall_preset_scope_forbidden` / `wall_preset_builtin` / `wall_preset_not_found` | `/wall-presets` ([Wall presets](#wall-presets)): `422` a preset that names a wider value or no limit, or a launch whose preset no longer passes the walls check; `403` a save to the organisation or a group you may not save to; `403` an edit or delete of a built-in; `404` no such preset, or one you cannot see. |
 | `wall_preset_name_taken` / `wall_preset_version_conflict` / `wall_preset_limit_reached` | `409`: another preset of the same audience, or a built-in, has the name; the preset changed since the version you read; the audience holds the most presets it may. |
 | `wall_preset_unknown` / `wall_preset_host` / `wall_presets_unavailable` | `422` a launch names a preset that does not exist or is not open to you; `403` `POST /approvals/{id}/approve` of a host the run's wall preset denies; `501` this server's store keeps no wall presets. |
 | `credential_withheld` | `POST /internal/credentials/mint`, `GET /internal/injection/{grantID}` (403): the run's governance profile, the Wardyn boundary or the run owner's walls now withhold the grant or a host it reaches. |
