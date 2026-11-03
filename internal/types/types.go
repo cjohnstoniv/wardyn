@@ -229,6 +229,8 @@ type AgentRun struct {
 	AutonomyLevel AutonomyLevel `json:"autonomy_level,omitempty"`
 	// InnerWalls freezes the harness's own walls the run launched with (#2822); nil for a run with no catalog harness, or one created before this field.
 	InnerWalls *HarnessInnerWalls `json:"inner_walls,omitempty"`
+	// WallPreset is the frozen copy of the wall preset the run was launched with, taken at create and at a queued start; nil for none. Its spec never reaches the wire: the run read sends client.RunWallPreset.
+	WallPreset *WallPresetOnRun `json:"-"`
 	// AdmittedAt is when a queued run was promoted out of the queue; written by promotion only, so nil for a run that never waited.
 	AdmittedAt *time.Time `json:"admitted_at,omitempty"`
 	// Queue is a waiting run's place in its pool's queue, derived at read from the queue row and never stored on the run; absent once the run leaves QUEUED.

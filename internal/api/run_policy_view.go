@@ -63,6 +63,11 @@ type policySourceRecord struct {
 	// PersonalWalls is what the launching person's own walls narrowed, set only
 	// when they narrowed something (personal_walls.go).
 	PersonalWalls *wallsSourceRecord `json:"personal_walls,omitempty"`
+	// WallPreset is the wall preset the run was launched with and what it narrowed, set only when
+	// the launch chose one (personal_walls.go).
+	WallPreset *wallPresetSourceRecord `json:"wall_preset,omitempty"`
+	// wallPreset stays in memory: the frozen copy create and the queue's start put on the run.
+	wallPreset *types.WallPresetOnRun
 	// edits stays in memory: the person's provenance rows for this request.
 	edits *overrideEdits
 	// overlaid stays in memory: Spec with the overlay laid on, before the clamp.
