@@ -104,6 +104,64 @@ A run's VM is deleted when the run ends. To keep it on your own Mac, an admin tu
 - `--keep-machine` and `--resume-machine` do not go together, `--machine-name` needs `--keep-machine`, and `--fresh` needs `--resume-machine`. None of them works with `--file`.
 - Kept machines are folders in `macos-vm.noindex/kept/` on the Mac.
 
+#### What stays on a kept disk
+
+A kept machine's disk is a folder in the `kept` folder of `macos-vm.noindex`, in the runner login's account on your Mac. While the machine is stopped it holds:
+
+| What | Contents |
+|---|---|
+| Everything you made in it | Files, your work folder and its repositories, the tools and apps you installed, and their settings |
+| Your sign-ins | The `agent` account's keychain, browser profiles and cookies, and app sign-ins. A Claude or Codex command-line sign-in you made yourself stays too, until a run starts with your organisation's credential for that tool, which replaces it |
+| What every copy of your Mac's base holds | The guest agent, the harness CLIs, the base's pairing key, and the `agent` account's password in `/etc/kcpassword` |
+
+- **Who can read your sign-ins.** The password in `/etc/kcpassword` opens the keychain, so anyone who can read the disk file can read your sign-ins. Your Mac's file permissions and FileVault protect it. Nothing else does.
+- **No secret Wardyn delivers.** A kept machine refuses environment and file secrets, SSH keys, a git token held in the machine, and other credentials that live inside it. Use credentials the proxy adds.
+- **What a stop removes.** When a run stops normally, Wardyn removes the run's managed settings, proxy certificate, credential placeholders, tool routes, git routes and desktop password. It asks macOS to remove the certificate's trust. It does all of this again each time the machine starts, before the run's setup.
+- **If macOS refuses.** When macOS will not remove a trust without a person, the run's record says so and lists the certificate's fingerprint.
+- **After a crash.** After a crash, a restart of the Mac or a kill, these stay until the machine next starts. None of them is a live credential.
+- **AWS sign-ins.** Wardyn removes the AWS command-line sign-in caches (`~/.aws/sso/cache` and `~/.aws/cli/cache`) as folders. Sign in again.
+- **AWS config.** The profile and SSO session named `wardyn` belong to Wardyn. The scrub removes the `[profile wardyn]` and `[sso-session wardyn]` sections from `~/.aws/config`, including any you wrote under those names. It keeps your other sections byte for byte.
+  - It deletes the file only when nothing but blank lines and comments is left. Give your own profiles other names.
+  - A config the scrub cannot read as sections is left whole. If it names `wardyn`, the scrub reports a failure.
+- **Deleted files.** Deleting a file does not erase its blocks. Copies may remain in the disk file until the machine is deleted, and in the Mac's local snapshots and backups after that.
+
+#### The life of a kept machine
+
+| Event | What happens |
+|---|---|
+| Keep | `--keep-machine` makes the machine when the run starts, on your own Mac, from its base. The run must be an interactive macOS VM run you start yourself |
+| Stop | A normal stop scrubs the disk (up to 60 seconds) and keeps the machine. Its expiry date is the stop time plus the idle days the run was admitted with, as the Mac recorded them |
+| A stop without a scrub | A kill by you, a restart of the Mac, lost network, a runner upgrade or a low disk keeps the machine too. The scrub did not run, so the machine shows `scrubbed: false` and is scrubbed when it next starts |
+| A kill by someone else | A kill by an admin or a service identity, who is not the run's owner, deletes the machine |
+| Resume | `--resume-machine` starts a new run from the disk. Before it boots, the Mac brings the machine's tools up to date if they are behind ([The tools update](#the-tools-update-of-a-kept-machine)) |
+| Fresh start | `--resume-machine <id\|name> --fresh` deletes what is on the machine and starts again from the Mac's current base, under the same name and base |
+| Idle expiry | A machine unused past its date is deleted. A resume of one past it is refused `410` and starts its delete. The Mac enforces the date too, offline included. A machine a run holds does not expire |
+
+- **Each machine has its own date.** The date is counted from each stop, using the idle days the run was admitted with. Changing `macos_vm.kept_machine_idle_days` does not move the date of a machine already kept. `wardyn machines` shows each machine's date.
+- **Resume ends the old run.** A macOS run cannot be revived. If you resume a machine while its last run is still in its ended-run grace, that run ends at once. While the machine is still marked in use, the resume is refused (`kept_machine_in_use`). Stop the last run first.
+
+#### Deleting a kept machine
+
+- `wardyn machines delete <id|name>` asks first. Without a terminal it refuses, and `--yes` deletes without asking. An admin deletes someone's machine with `DELETE /machines/kept/{id}` ([sdk.md](../sdk.md#kept-machines)).
+- **In use.** A machine a run holds is refused (`409`, `kept_machine_in_use`) until that run ends.
+- **The Mac is offline.** The delete is accepted (`202`) and waits. It finishes when the Mac is back, and `wardyn machines` shows the machine as deleting. If the Mac is no longer registered, Wardyn only records the delete (`record_only`).
+- **Unconfirmed.** If the Mac's answer is lost, Wardyn cannot tell whether the machine is gone (`503`, `kept_machine_delete_unconfirmed`). The delete stays pending and is retried until the Mac confirms. You cannot resume the machine meanwhile.
+- **Refused by the Mac.** If the Mac refuses before removing anything (`503`, `kept_machine_delete_failed`), the machine is kept. Run the delete again.
+
+#### When a limit is 0
+
+- **The Mac's disk limit is `0`.** `macos_vm_kept_disk_limit_gb` of `0` turns kept machines off on that Mac. A keep is refused, and so is a resume: the Mac answers "This Mac doesn't keep machines." Machines already there are still listed and can still be deleted, and they still expire.
+- **The per-person limit.** `macos_vm.max_kept_machines_per_person` is 1 to 4, and 0 or an unset value reads 1. At the limit, a keep is refused (`kept_machine_person_limit`) and a resume still works.
+- **The site switch.** With `macos_vm.allow_kept_machines` off, a keep and a resume are both refused (`kept_machine_site_off`). Machines already kept stay listed and can be deleted.
+
+#### The tools update of a kept machine
+
+A kept disk keeps the guest agent and harness tools it was made with. When they are behind the Mac's, a resume updates them before the run boots. `wardyn-runnerd macos-vm machines update <id> --force` runs the update on demand.
+
+- The update boots your disk outside any run, on the prep network ([The prep proxy](#the-prep-proxy)). That network reaches only `swscan.apple.com`, `swcdn.apple.com`, `swdist.apple.com`, `swdownload.apple.com`, `updates.cdn-apple.com`, `mesu.apple.com` and `gdmf.apple.com`, on port 443, with no credential.
+- **The window.** It lasts from the start of the update job until its helper exits. The network is removed then. The run's proxy does not apply: no run exists yet.
+- If the update fails, the machine does not start. Start it fresh, or try again.
+
 ### Where to look when it fails
 
 - **The guest agent has no log file.** Its launchd job, `com.wardyn.guest-agent`, names no output path, and the agent writes its messages with Go's `slog` to standard error. Wardyn sets up no place for them on the guest's disk. The lines it writes, such as `screen lock left as it was`, are not kept in a file Wardyn names.
