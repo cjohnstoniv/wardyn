@@ -521,6 +521,12 @@ func (r *runner) openWindow(grant, title string) (*windowSession, *WindowRefusal
 	runtime.KeepAlive(m)
 	if err != nil {
 		release()
+		if errors.Is(err, ErrNotAtMac) {
+			return nil, &WindowRefusal{WindowCodeNotAtMac, WindowNotAtMacSentence}
+		}
+		if errors.Is(err, ErrLockUnknown) {
+			return nil, &WindowRefusal{WindowCodeLockUnknown, WindowLockUnknownSentence}
+		}
 		r.o.Log.Error("macvm: window: could not open", "run_id", r.cfg.RunID, "grant", grant, "err", err.Error())
 		return nil, &WindowRefusal{WindowCodeFailed, WindowFailedSentence + err.Error()}
 	}

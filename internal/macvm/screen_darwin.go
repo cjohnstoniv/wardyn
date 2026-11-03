@@ -151,10 +151,14 @@ func (macWindowScreen) Ready() error {
 // Open puts the run window up on vm and returns once it is. The window ends when the person closes it or Close
 // runs; neither touches the VM.
 func (macWindowScreen) Open(vm unsafe.Pointer, text WindowText) (Window, error) {
-	// since is read before the console check: a lock that lands after the check moves the count past it and ends
-	// the window at once, and one before it is refused by the check itself.
+	// since is read first and the console check runs again after it: a lock that lands after the check moves the
+	// count past since and ends the window at once, and one before it is refused by the check itself. The caller's
+	// own Ready ran before since was read, so it alone cannot cover that gap.
 	since := int64(C.wardynScreenLockNotices())
 	if err := screenReady(); err != nil {
+		return nil, err
+	}
+	if err := (macWindowScreen{}).Ready(); err != nil {
 		return nil, err
 	}
 	if C.wardynScreenUp() != 0 {
