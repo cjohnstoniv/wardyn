@@ -217,10 +217,8 @@ func (k *keptFixture) exec(t *testing.T, q string, args ...any) {
 // rows is every audit row of action on target, with its data.
 func (k *keptFixture) rows(t *testing.T, action string, target uuid.UUID) []map[string]any {
 	t.Helper()
-	k.audit.mu.Lock()
-	defer k.audit.mu.Unlock()
 	var out []map[string]any
-	for _, ev := range k.audit.events {
+	for _, ev := range k.audit.snapshot() {
 		if ev.Action != action || ev.Target != target.String() {
 			continue
 		}
