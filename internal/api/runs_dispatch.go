@@ -719,6 +719,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// audit stream does not carry.
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
+	// A window requested at start is asked for now the run is RUNNING, beside the start of its agent; a
+	// refusal is audited and the run goes on (macWindowAtStart).
+	if p.DesktopWindowAtStart {
+		s.goBackground(func() { s.macWindowAtStart(context.WithoutCancel(ctx), run.ID) })
+	}
+
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
 	s.startAgentsOrIdle(ctx, run, p.Harnesses, sb.Ref, p.Image, p.Interactive, execution, auditAgentPolicy)
 }

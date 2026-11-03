@@ -892,6 +892,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/runs/{id}/desktop/sign-ins/resume": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// The ticket to watch a background macOS run's desktop, view only (run_background_watch.go).
 	"POST /api/v1/runs/{id}/desktop/watch-ticket": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"POST /api/v1/runs/{id}/desktop/window":       {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
 	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
@@ -1797,9 +1798,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// /runs/{id}/computer-folder/bring-back; 46 since 0.10 (#2968) added GET
 		// /runs/{id}/recording-chain; 49 since 0.10 (#2972) added GET
 		// /runs/{id}/desktop/sign-ins and POST .../pause and .../resume; 50 since
-		// 0.10 added POST /runs/{id}/desktop/watch-ticket (tierEntry).
-		if probed != 50 {
-			t.Errorf("probed %d classOwner routes, want 50 — a route that left classOwner takes its tier "+
+		// 0.10 added POST /runs/{id}/desktop/watch-ticket (tierEntry); 51 since
+		// 0.10 added POST /runs/{id}/desktop/window (tierEntry).
+		if probed != 51 {
+			t.Errorf("probed %d classOwner routes, want 51 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

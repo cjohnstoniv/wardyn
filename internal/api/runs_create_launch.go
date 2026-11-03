@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 	"github.com/google/uuid"
 )
 
@@ -189,6 +190,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			MainDrive:        l.mainDrive,
 			// SigninImageUngranted keeps a person's own desktop image (desktopSigninDispatch).
 			SigninImageUngranted: l.signinImageUngranted,
+			DesktopWindowAtStart: l.req.DesktopWindow == client.DesktopWindowAtStart,
 		})
 	}
 }

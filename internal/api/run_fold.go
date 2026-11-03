@@ -204,6 +204,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepAutonomy, foldAll},
 	{(*Server).stepToolPolicy, foldAll},
 	{(*Server).stepMacOSHold, foldAll},
+	{(*Server).stepMacWindow, foldAll},
 	{(*Server).stepGitHubCLIRepo, foldCreate | foldPreflight},
 	{(*Server).stepADOStanding, foldAll},
 	{(*Server).stepPATNarrowing, foldPreflight | foldPreview},

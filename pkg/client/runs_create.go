@@ -13,6 +13,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// DesktopWindowAtStart is CreateRunRequest.DesktopWindow's one value.
+const DesktopWindowAtStart = "at_start"
+
 // CreateRunRequest is the body for POST /api/v1/runs.
 type CreateRunRequest struct {
 	Agent string `json:"agent"`
@@ -51,6 +54,11 @@ type CreateRunRequest struct {
 	// MacOSBase is a macos_vm run's macOS base: "" or "Standard", the one prepare builds, or one of
 	// the Mac's other bases by name (PoolMacOSVM.Bases). Any other kind of sandbox sends none.
 	MacOSBase string `json:"macos_base,omitempty"`
+	// DesktopWindow, "at_start", asks for a window onto a macOS VM run on the person's own Mac as the VM comes
+	// up. The server judges it as it judges `wardyn window`, at create and again when the run is up: a create
+	// it would refuse is refused with the sentence, and a window that can't open then (the Mac's screen is
+	// locked) leaves the run going, to be opened on request. Only a macOS VM run sends it.
+	DesktopWindow string `json:"desktop_window,omitempty"`
 	// WorkspaceID, when set, launches the run against that ONBOARDED workspace:
 	// the server prepends the workspace's stored source onto the resolved policy
 	// (a repo as a workspace_repos entry, a local dir as a read-only-by-default

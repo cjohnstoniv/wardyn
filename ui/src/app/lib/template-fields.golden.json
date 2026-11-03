@@ -764,6 +764,11 @@
       "why": "A macOS VM's base is chosen at each launch, with the kind of sandbox."
     },
     {
+      "name": "desktop_window",
+      "excluded": "launch",
+      "why": "A window onto a macOS VM is asked for at each launch by the person at that Mac; a template never opens one for whoever uses it."
+    },
+    {
       "name": "max_wait_sec",
       "excluded": "launch",
       "why": "How long a run may wait for a slot in a full pool is chosen at each launch; the default wait suits a template's runs."

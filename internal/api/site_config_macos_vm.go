@@ -20,14 +20,19 @@ func validateSiteMacOSVM(m *types.SiteMacOSVM) error {
 // carryForwardSiteMacOSVM keeps what the body leaves unsaid. A body that does not name the block keeps the stored
 // block: an older client cannot name it, and its round trip must not drop the organisation's base-age limit. A body
 // that names the block but not allow_background_watch keeps the stored switch, so an older client or a re-applied
-// managed config cannot turn a stored false back into allowed. A JSON null decodes to nil, the same as an omitted
-// key, and is carried the same way. A stored nil stays nil, which reads allowed.
+// managed config cannot turn a stored false back into allowed; allow_attended_window is carried the same way, so
+// the same save cannot turn a stored true off or a stored false on by silence. A JSON null decodes to nil, the
+// same as an omitted key, and is carried the same way. A stored nil stays nil: the watch reads allowed, the window
+// reads off.
 func carryForwardSiteMacOSVM(cfg *types.SiteConfig, existing types.SiteConfig, present map[string]bool) {
 	if !present["macos_vm"] {
 		cfg.MacOSVM = existing.MacOSVM
 		return
 	}
-	if existing.MacOSVM == nil || existing.MacOSVM.AllowBackgroundWatch == nil {
+	if existing.MacOSVM == nil {
+		return
+	}
+	if cfg.MacOSVM == nil && existing.MacOSVM.AllowBackgroundWatch == nil && existing.MacOSVM.AllowAttendedWindow == nil {
 		return
 	}
 	if cfg.MacOSVM == nil {
@@ -35,5 +40,8 @@ func carryForwardSiteMacOSVM(cfg *types.SiteConfig, existing types.SiteConfig, p
 	}
 	if cfg.MacOSVM.AllowBackgroundWatch == nil {
 		cfg.MacOSVM.AllowBackgroundWatch = existing.MacOSVM.AllowBackgroundWatch
+	}
+	if cfg.MacOSVM.AllowAttendedWindow == nil {
+		cfg.MacOSVM.AllowAttendedWindow = existing.MacOSVM.AllowAttendedWindow
 	}
 }

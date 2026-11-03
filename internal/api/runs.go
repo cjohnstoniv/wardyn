@@ -227,6 +227,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	intent := launchIntentFor(asked)
+	// A window at start is opened under the grant this create leaves, judged again at the open (run_mac_window.go).
+	if req.DesktopWindow != "" {
+		if err := s.macWindowStorePending(ctx, runID, macWindowAuthorityFrom(ctx, createdByType, createdBy, s.cfg.Now().UTC())); err != nil {
+			writeServerError(w, r, "record the window's grant", err)
+			return
+		}
+	}
 	// A run bound for a capped pool waits for a slot instead of starting: nothing is minted, renewed or
 	// delivered for it, and the start does all of that when the pool has room.
 	if f.queued {

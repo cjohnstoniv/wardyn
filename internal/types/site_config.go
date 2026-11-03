@@ -174,11 +174,20 @@ type SiteMacOSVM struct {
 	// so an explicit false survives omitempty: absent reads allowed, only false turns it off for the
 	// whole install. A governance profile can still deny it (GovernanceLimits.DenyBackgroundDesktopWatch).
 	AllowBackgroundWatch *bool `json:"allow_background_watch,omitempty"`
+	// AllowAttendedWindow lets a person open a keyboard-and-pointer window onto their own macOS VM run
+	// from the Mac it runs on. A pointer so an explicit false survives omitempty. Unlike the watch it
+	// is off when absent: only true turns it on for the whole install.
+	AllowAttendedWindow *bool `json:"allow_attended_window,omitempty"`
 }
 
 // BackgroundWatchAllowed reads the switch: a nil block or an absent field is allowed.
 func (m *SiteMacOSVM) BackgroundWatchAllowed() bool {
 	return m == nil || m.AllowBackgroundWatch == nil || *m.AllowBackgroundWatch
+}
+
+// AttendedWindowAllowed reads the window switch: a nil block or an absent field is off.
+func (m *SiteMacOSVM) AttendedWindowAllowed() bool {
+	return m != nil && m.AllowAttendedWindow != nil && *m.AllowAttendedWindow
 }
 
 // SiteEgress is SiteConfig.Egress.

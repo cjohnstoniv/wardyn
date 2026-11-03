@@ -229,6 +229,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "agents",
       "macos",
       "background_watch",
+      "mac_window",
       "macos_disk",
     ]);
   });
@@ -266,6 +267,19 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     const tsStates = [...(/state: ([^;]+);/.exec(runsTs.slice(runsTs.indexOf("interface RunBackgroundWatch")))?.[1] ?? "").matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
     expect(goStates.length).toBeGreaterThan(0);
     expect(tsStates).toEqual(goStates);
+  });
+
+  it("RunMacWindow's keys and states are exactly macWindowView's json tags and the door's states, and RunMacWindowClose's keys and reasons macWindowLastClose's (GET /runs/{id} mac_window, run_mac_window.go)", () => {
+    const windowGo = readFileSync(join(root, "internal/api/run_mac_window.go"), "utf8");
+    expect(tsInterfaceKeys(runsTs, "RunMacWindow").sort()).toEqual(goJSONTags(windowGo, "macWindowView").sort());
+    const goStates = [...windowGo.matchAll(/^\s*macWindowState\w+\s*=\s*"([a-z_]+)"$/gm)].map((m) => m[1]).sort();
+    const tsStates = [...(/state:([^;]+);/.exec(runsTs.slice(runsTs.indexOf("interface RunMacWindow")))?.[1] ?? "").matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
+    expect(goStates.length).toBeGreaterThan(0);
+    expect(tsStates).toEqual(goStates);
+    expect(tsInterfaceKeys(runsTs, "RunMacWindowClose").sort()).toEqual(goJSONTags(windowGo, "macWindowLastClose").sort());
+    const goEnded = [...windowGo.matchAll(/^\s*macWindowEnded\w+\s*=\s*"([a-z_]+)"$/gm)].map((m) => m[1]).sort();
+    const tsEnded = [...(/reason: ([^;]+);/.exec(runsTs.slice(runsTs.indexOf("interface RunMacWindowClose")))?.[1] ?? "").matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
+    expect(tsEnded).toEqual(goEnded);
   });
 
   it("RunDetailAgent's keys are exactly runDetailAgent's json tags (GET /runs/{id} agents, run_multi_agent.go)", () => {

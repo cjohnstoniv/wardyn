@@ -171,6 +171,7 @@ func (s *Server) backgroundWatchViewFor(ctx context.Context, run types.AgentRun,
 // mountBackgroundWatchRoutes registers the watch's ticket on the authenticated group.
 func (s *Server) mountBackgroundWatchRoutes(r chi.Router) {
 	r.Post("/runs/{id}/desktop/watch-ticket", s.handleBackgroundWatchTicket)
+	s.mountMacWindowRoutes(r) // the desktop door's second exception, beside the watch (run_mac_window.go)
 }
 
 // handleBackgroundWatchTicket mints a single-use ticket that opens a background macOS VM run's built-in desktop,
