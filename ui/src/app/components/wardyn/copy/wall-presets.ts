@@ -131,6 +131,9 @@ export const WALL_PRESETS = {
   APPROVAL_OTHER: (owner: string, name: string) => `${owner}'s run uses the ${name} wall preset, which blocks `,
   APPROVAL_OTHER_AFTER: ".",
   PUSH_REFUSED_LABEL: "Refused: every push",
+  PUSH_REFUSED_BY: (name: string) => `Refused by this run's ${name} wall preset.`,
+  QUEUED_CHANGED: (name: string, queued: string | number, now: string | number) =>
+    `The run was queued with the ${name} wall preset, version ${queued}. It was at version ${now} when the run would have started.`,
 } as const;
 
 const isRead = (c: string) => c.endsWith("_read") || c === "identity";
