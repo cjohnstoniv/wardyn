@@ -215,7 +215,7 @@ export const RUN_COCKPIT = {
   // Only the shortcuts this file actually binds. ⌘K (no command palette
   // exists) and ⌘1..4 (the tabs belong to run-detail-command-bar.tsx) are on
   // the board's strip and deliberately absent here: a hint that lies is worse
-  // than no hint. ⇧⌘F is the reserved exit chord, since Esc is the terminal's.
+  // than no hint. Esc is the terminal's, so the strip shows the terminal's own leave chord.
   //
   // M3: the same two hints, as two labelled key chips rather than one run of
   // text — the key itself is drawn by Kbd (kbd.tsx), which spells the modifier

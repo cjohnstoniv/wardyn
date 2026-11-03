@@ -290,12 +290,21 @@ describe("Focus mode — the edge dock", () => {
       expect(screen.getByRole("heading", { name: "Egress" })).toBeInTheDocument();
     });
 
-    it("still exits with the reserved chord", async () => {
+    it("exits on Ctrl+Shift+Backspace from inside the terminal", async () => {
       const user = userEvent.setup();
       const onExit = vi.fn();
       withTerminal(onExit);
       screen.getByLabelText("terminal input").focus();
-      await user.keyboard("{Control>}{Shift>}f{/Shift}{/Control}");
+      await user.keyboard("{Control>}{Shift>}{Backspace}{/Shift}{/Control}");
+      expect(onExit).toHaveBeenCalledTimes(1);
+    });
+
+    it("exits on Ctrl+Shift+Backspace from the console chrome too", async () => {
+      const user = userEvent.setup();
+      const onExit = vi.fn();
+      withTerminal(onExit);
+      screen.getByRole("button", { name: RUN_COCKPIT.exitFocus }).focus();
+      await user.keyboard("{Control>}{Shift>}{Backspace}{/Shift}{/Control}");
       expect(onExit).toHaveBeenCalledTimes(1);
     });
 
@@ -476,7 +485,7 @@ describe("Focus mode — the bottom strip states the facts", () => {
     render(<FocusMode ctx={ctx()} onExit={() => {}} />);
     // Two chords, each a key cap beside the word for what it does.
     const caps = document.querySelectorAll("kbd");
-    expect([...caps].map((k) => k.textContent)).toEqual([chordLabel([MOD, "\\"]), chordLabel([MOD, "Shift", "F"])]);
+    expect([...caps].map((k) => k.textContent)).toEqual([chordLabel([MOD, "\\"]), "Ctrl+Shift+Backspace"]);
     expect(screen.getByText(RUN_COCKPIT.shortcutDock)).toBeInTheDocument();
     expect(screen.getByText(RUN_COCKPIT.shortcutExitFocus)).toBeInTheDocument();
     // ⌘K / ⌘1..4 / ⇧⌘F are on the board's strip and are NOT wired here.

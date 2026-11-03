@@ -34,6 +34,8 @@ import { cn } from "../../ui/utils";
 import { ConfinementChip } from "../../wardyn/primitives";
 import { RUN_PLACEMENT, runnerLabel } from "../../wardyn/copy/runners";
 import { Kbd, MOD } from "../../wardyn/kbd";
+import { TERMINAL } from "../../wardyn/copy/terminal";
+import { isEscapeChord } from "../../../../desktop/keysym";
 import { RUN_WIDGETS, WIDGET_IDS, type WidgetContext, type WidgetId } from "./widget-registry";
 import { WidgetSlot } from "./widget-slot";
 import { ErrorBoundary } from "../../wardyn/error-boundary";
@@ -76,9 +78,10 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
   React.useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const inTerminal = e.target instanceof Node && !!terminalRef.current?.contains(e.target);
-      // Mod+Shift+F — the console's own exit, reserved so it never competes with a program in the terminal. Capture
-      // phase, so it runs before xterm's textarea sends the key to the PTY.
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+      // Ctrl+Shift+Backspace — the chord the terminal and the desktop already teach as "leave" (TERMINAL.ESCAPE_CHORD),
+      // so here it leaves focus mode, from the terminal too. Capture phase, so it runs before xterm's textarea
+      // sends the key to the PTY and before the terminal's own handler merely blurs.
+      if (isEscapeChord(e)) {
         e.preventDefault();
         e.stopPropagation();
         onExit();
@@ -298,7 +301,7 @@ function Strip({ ctx }: { ctx: WidgetContext }) {
           {RUN_COCKPIT.shortcutDock}
         </span>
         <span className="flex items-center gap-1.5">
-          <Kbd keys={[MOD, "Shift", "F"]} />
+          <Kbd keys={[TERMINAL.ESCAPE_CHORD]} />
           {RUN_COCKPIT.shortcutExitFocus}
         </span>
       </span>
