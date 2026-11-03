@@ -4,10 +4,16 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -242,4 +248,114 @@ func oidcRowForSite() types.ModelProvider {
 	p := oidcRow()
 	p.UID = "" // credentialSite mints it
 	return p
+}
+
+// ── the token-endpoint seam ─────────────────────────────────────────────────
+
+// An Entra application's token request is byte for byte what it was before the seam; the seam's other
+// client authentication keeps the credentials out of the form.
+func TestEndpointOIDC_PostTokenSeam(t *testing.T) {
+	var gotBody, gotAuth, gotType string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody, gotAuth, gotType = string(b), r.Header.Get("Authorization"), r.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"access_token":"a-0123456789","expires_in":3600}`)
+	}))
+	defer ts.Close()
+	s := &Server{cfg: Config{}}
+	ctx := context.Background()
+	form := func() url.Values {
+		return url.Values{"grant_type": {"refresh_token"}, "refresh_token": {"r-1"}, "scope": {"a b"}}
+	}
+	cfg := ADOEntraConfig{TenantID: "tenant-1", ClientID: "client-1", ClientSecret: "s3cret", AuthorityOverride: ts.URL, AllowTestEndpoints: true}
+
+	if _, err := s.postADOEntraToken(ctx, cfg, form()); err != nil {
+		t.Fatal(err)
+	}
+	if want := "client_id=client-1&client_secret=s3cret&grant_type=refresh_token&refresh_token=r-1&scope=a+b"; gotBody != want || gotAuth != "" {
+		t.Errorf("Entra request = %q auth %q, want %q and no Authorization header", gotBody, gotAuth, want)
+	}
+	if gotType != "application/x-www-form-urlencoded" {
+		t.Errorf("Content-Type = %q", gotType)
+	}
+	cfg.ClientSecret = ""
+	if _, err := s.postADOEntraToken(ctx, cfg, form()); err != nil {
+		t.Fatal(err)
+	}
+	if want := "client_id=client-1&grant_type=refresh_token&refresh_token=r-1&scope=a+b"; gotBody != want {
+		t.Errorf("a public client sent %q, want %q", gotBody, want)
+	}
+
+	ta := tokenAuthority{tokenURL: ts.URL, clientID: "id 1", clientSecret: "se:cret", basicAuth: true}
+	if _, err := s.postToken(ctx, ta, form()); err != nil {
+		t.Fatal(err)
+	}
+	if want := "Basic " + base64.StdEncoding.EncodeToString([]byte("id+1:se%3Acret")); gotAuth != want {
+		t.Errorf("Authorization = %q, want the form-encoded id and secret joined: %q", gotAuth, want)
+	}
+	if want := "grant_type=refresh_token&refresh_token=r-1&scope=a+b"; gotBody != want {
+		t.Errorf("a Basic request sent %q, want no client credentials in the form: %q", gotBody, want)
+	}
+}
+
+// Condition: a token response with no scope is read as the requested set FOR THE ENDPOINT KIND ONLY. Every
+// Entra capture still refuses it, at the code exchange and at a redemption.
+func TestEndpointOIDC_EntraStillRefusesAResponseWithNoScope(t *testing.T) {
+	ado := adoCapture(ADOEntraConfig{RowID: "ado-row-1", Scopes: []string{"499b84ac-1321-427f-aa17-267ca6975798/vso.code"}})
+	foundry, err := azureFoundryCapture(azUIDAnthropic, azureFoundryAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := entraCapture{kind: entraKindEndpointOIDC, scopes: []string{"openid", "offline_access", "api.read"}}
+	for name, ec := range map[string]entraCapture{"azure devops": ado, "azure foundry": foundry} {
+		if got := ec.capturedScopes(""); len(got) != 0 {
+			t.Errorf("%s keeps %v from a response with no scope", name, got)
+		}
+		if ec.omittedScopeIsGranted() || !ec.sendsScopeOnRefresh() {
+			t.Errorf("%s reads an omitted scope as granted, or refreshes without one", name)
+		}
+	}
+	if got := endpoint.capturedScopes(""); !slices.Equal(got, endpoint.scopes) {
+		t.Errorf("an endpoint capture keeps %v from a response with no scope, want the requested set %v", got, endpoint.scopes)
+	}
+	if got := endpoint.capturedScopes("api.read api.read openid"); !slices.Equal(got, []string{"api.read", "openid"}) {
+		t.Errorf("a named grant is kept as granted, deduplicated: %v", got)
+	}
+	if !endpoint.omittedScopeIsGranted() || endpoint.sendsScopeOnRefresh() {
+		t.Error("an endpoint capture refreshes with a scope, or refuses an omitted one")
+	}
+
+	t.Run("azure devops code exchange", func(t *testing.T) {
+		f := newADOFixture(t)
+		f.fake.SetGenericMode(true) // the fake now omits scope, which Entra never does
+		w := f.capture(t, f.fake.Subject())
+		if want := f.srv.cfg.BasePath + adoSignInErrorPath + reasonADOCallbackUnusableGrant; w.Header().Get("Location") != want {
+			t.Fatalf("callback Location %q, want %q", w.Header().Get("Location"), want)
+		}
+		if raw := f.storedRaw(t, f.fake.Subject()); raw != nil {
+			t.Error("a sign-in with no granted scope was stored")
+		}
+	})
+	t.Run("azure foundry code exchange", func(t *testing.T) {
+		f := newAzureFixture(t)
+		f.fake.SetGenericMode(true)
+		w := f.capture(t, f.fake.Subject(), azUIDAnthropic)
+		if want := f.srv.cfg.BasePath + azureErrorRedirect(reasonADOCallbackUnusableGrant); w.Header().Get("Location") != want {
+			t.Fatalf("callback Location %q, want %q", w.Header().Get("Location"), want)
+		}
+		if _, found := f.stored(t, f.fake.Subject(), azUIDAnthropic); found {
+			t.Error("a sign-in with no granted scope was stored")
+		}
+	})
+	t.Run("azure devops redemption", func(t *testing.T) {
+		f := newADOFixture(t)
+		subject := f.fake.Subject()
+		f.capture(t, subject)
+		f.fake.SetGenericMode(true)
+		_, err := f.srv.RedeemADOEntraAccess(context.Background(), f.cfg, subject, f.cfg.Scopes[:1])
+		if !errors.Is(err, ErrADOEntraUnavailable) || !strings.Contains(err.Error(), "named no granted scope") {
+			t.Fatalf("redeem = %v, want it unavailable for naming no granted scope", err)
+		}
+	})
 }
