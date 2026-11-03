@@ -409,18 +409,6 @@ type Sandbox struct {
 	KeptBase  *KeptBase  `json:",omitempty"`
 }
 
-// Status reports observed sandbox state.
-type Status struct {
-	State    types.RunState
-	ExitCode *int
-	Message  string
-	// FailureHint is a sentence for the run's person saying why the run ended; a run finalized from
-	// this status records it as its failure hint. Empty from every driver except Kubernetes with the
-	// agent-sandbox backend, which runs only in the server, so it is never sent between a runner and
-	// the server: runner-supplied text never becomes a person-facing reason.
-	FailureHint string `json:"-"`
-}
-
 // ErrRunnerOffline is the answer for a call to a registered runner whose link
 // is down. It is transient: the caller retries or refuses, and never falls back
 // to another substrate.
