@@ -106,7 +106,7 @@ func (s *Server) handleListMyMachines(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "read kept machine deletes", err)
 		return
 	}
-	out.Count, out.Limit = len(mine), sc.MacOSVM.MaxKeptMachinesPerPersonOrDefault()
+	out.Count, out.Limit, out.IdleDays = len(mine), sc.MacOSVM.MaxKeptMachinesPerPersonOrDefault(), sc.MacOSVM.KeptMachineIdleDaysOrDefault()
 	if !sc.MacOSVM.KeptMachinesAllowed() {
 		out.Reason = reasonKeptMachineSiteOff
 	} else {

@@ -730,6 +730,9 @@ func TestMyMachinesSaysWhetherThePersonMayKeep(t *testing.T) {
 	if !got.Allowed || got.Reason != "" || got.Count != 0 || got.Limit != types.MaxKeptMachinesPerPersonDefault || got.WorstBytes != keptMachineNewWorstBytes {
 		t.Fatalf("own Mac, nothing kept: %+v; want allowed", got)
 	}
+	if got.IdleDays != types.KeptMachineIdleDaysDefault {
+		t.Fatalf("idle_days = %d, want the site default %d", got.IdleDays, types.KeptMachineIdleDaysDefault)
+	}
 	k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineKept)
 	got = k.listMine(t, k.owner)
 	if got.Allowed || got.Reason != reasonKeptMachinePersonLimit || got.Count != 1 || len(got.Machines) != 1 || got.Machines[0].RunnerName != k.rn.Name {
