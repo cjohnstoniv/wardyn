@@ -591,16 +591,20 @@ func (s *Server) wallPresetRunStep(spec *types.RunPolicySpec, source *policySour
 }
 
 // runWallPresetView is the run read's wall_preset: never the spec, and for a personal preset read by
-// anyone but the run's owner, its scope alone.
+// anyone but the run's owner, its scope alone, with the versions when a change ended the queued run.
 func runWallPresetView(r *http.Request, run types.AgentRun) *client.RunWallPreset {
 	p := run.WallPreset
 	if p == nil {
 		return nil
 	}
 	if p.Scope == types.WallPresetScopePerson && principalFromRequest(r) != run.CreatedBy {
-		return &client.RunWallPreset{Scope: string(p.Scope)}
+		v := &client.RunWallPreset{Scope: string(p.Scope), Changed: p.Changed}
+		if p.Changed != nil {
+			v.Version = p.Version
+		}
+		return v
 	}
-	return &client.RunWallPreset{ID: p.ID, Name: p.Name, Scope: string(p.Scope), GroupID: p.GroupID, Version: p.Version}
+	return &client.RunWallPreset{ID: p.ID, Name: p.Name, Scope: string(p.Scope), GroupID: p.GroupID, Version: p.Version, Changed: p.Changed}
 }
 
 // unstoppablePushWarning is the run warning for a run whose effective capability list leaves out

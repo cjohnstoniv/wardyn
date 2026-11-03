@@ -17,6 +17,9 @@ type (
 	WallPreset = types.WallPreset
 	// WallPresetScope is builtin, person, group or org.
 	WallPresetScope = types.WallPresetScope
+	// WallPresetChange is what a run's wall preset had become when it ended the run queued under it:
+	// at Version, or Gone (deleted, or no longer open to the run's owner).
+	WallPresetChange = types.WallPresetChange
 )
 
 // WallPresetList is GET /api/v1/wall-presets: the built-ins first, then every preset the caller may

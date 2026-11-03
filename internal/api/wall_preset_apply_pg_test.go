@@ -173,21 +173,22 @@ func TestPG_QueueWallPresetChangedWhileWaiting(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		change func(t *testing.T, e *queueEnv, p types.WallPreset, run uuid.UUID)
+		want   types.WallPresetChange
 	}{
 		{"edited", func(t *testing.T, e *queueEnv, p types.WallPreset, _ uuid.UUID) {
 			p.Spec = types.PersonalWallsSpec{DeniedDomains: wallsList("evil.example")}
 			if _, err := e.pg.UpdateWallPreset(context.Background(), p, 1, nil); err != nil {
 				t.Fatal(err)
 			}
-		}},
+		}, types.WallPresetChange{Version: 2}},
 		{"deleted", func(t *testing.T, e *queueEnv, p types.WallPreset, _ uuid.UUID) {
 			if _, err := e.pg.DeleteWallPreset(context.Background(), uuid.MustParse(p.ID), nil); err != nil {
 				t.Fatal(err)
 			}
-		}},
+		}, types.WallPresetChange{Gone: true}},
 		{"no longer open to the owner", func(_ *testing.T, e *queueEnv, _ types.WallPreset, run uuid.UUID) {
 			e.exec(`UPDATE run_queue SET authority = jsonb_set(authority, '{groups}', '[]'::jsonb) WHERE run_id = $1`, run)
-		}},
+		}, types.WallPresetChange{Gone: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newQueueEnv(t)
@@ -210,6 +211,8 @@ func TestPG_QueueWallPresetChangedWhileWaiting(t *testing.T) {
 			}
 			if got.WallPreset == nil || got.WallPreset.Version != 1 || !got.WallPreset.Spec.DeniesAllPushes() {
 				t.Errorf("%s: the run's copy = %+v, want the reviewed version 1", tc.name, got.WallPreset)
+			} else if c := got.WallPreset.Changed; c == nil || *c != tc.want {
+				t.Errorf("%s: the run's wall preset change = %+v, want %+v", tc.name, c, tc.want)
 			}
 		})
 	}

@@ -544,23 +544,89 @@ func TestGitPushWithheldByThePreset(t *testing.T) {
 	}
 }
 
-// TestPolicyViewAttributesThePreset: a knob or entry the run's wall preset changed is the walls' cause
-// in the policy view, as one the person's own walls changed is; what neither changed is not.
+// TestPolicyViewAttributesThePreset: in the policy view, what the person's own walls changed is cause
+// walls and what the run's wall preset changed is cause wall_preset, each entry under its own; a knob
+// both narrowed is the walls', whose step runs first; what neither changed is neither's.
 func TestPolicyViewAttributesThePreset(t *testing.T) {
-	x := &explainer{ev: auditEvidence{preset: &wallsSourceRecord{Narrowed: []string{"first_use_approval"},
-		Removed: map[string][]string{fieldAllowed: {"pypi.org"}}, Added: map[string][]string{fieldDenied: {"pastebin.com"}}}}}
+	ev := evidenceOf(func(e *auditEvidence) {
+		e.walls = &wallsSourceRecord{Narrowed: []string{"auto_stop_after_sec"}, Removed: map[string][]string{fieldAllowed: {"pypi.org"}}}
+		e.preset = &wallsSourceRecord{Narrowed: []string{"first_use_approval", "auto_stop_after_sec"},
+			Removed: map[string][]string{fieldAllowed: {"npm.example"}}, Added: map[string][]string{fieldDenied: {"pastebin.com"}}}
+	})
+	base := pvSpec([]string{"api.anthropic.com", "pypi.org", "npm.example"}, nil)
+	got := explainRunPolicy(&base, pvSpec([]string{"api.anthropic.com"}, func(sp *types.RunPolicySpec) { sp.DeniedDomains = []string{"pastebin.com"} }),
+		ev, types.SiteConfig{}, types.AgentRun{})
+	if c := pvChange(got, causeWalls, fieldAllowed); c == nil || !slices.Equal(c.Removed, []string{"pypi.org"}) {
+		t.Errorf("walls allowed_domains change = %+v, want pypi.org alone (changes %+v)", c, got)
+	}
+	if c := pvChange(got, causeWallPreset, fieldAllowed); c == nil || !slices.Equal(c.Removed, []string{"npm.example"}) {
+		t.Errorf("wall_preset allowed_domains change = %+v, want npm.example alone (changes %+v)", c, got)
+	}
+	if c := pvChange(got, causeWallPreset, fieldDenied); c == nil || !slices.Equal(c.Added, []string{"pastebin.com"}) {
+		t.Errorf("wall_preset denied_domains change = %+v, want pastebin.com (changes %+v)", c, got)
+	}
+	if pvChange(got, causeWalls, fieldDenied) != nil {
+		t.Errorf("the preset's deny was given to the person's walls: %+v", got)
+	}
+
+	x := &explainer{ev: ev}
 	for _, tc := range []struct {
 		field, entry string
-		added, want  bool
+		added        bool
+		want         string
 	}{
-		{"first_use_approval", "", false, true},
-		{fieldAllowed, "pypi.org", false, true},
-		{fieldDenied, "pastebin.com", true, true},
-		{fieldAllowed, "github.com", false, false},
-		{"auto_stop_after_sec", "", false, false},
+		{"first_use_approval", "", false, causeWallPreset},
+		{"auto_stop_after_sec", "", false, causeWalls},
+		{fieldAllowed, "github.com", false, ""},
 	} {
-		if got := x.walled(tc.field, tc.entry, tc.added); got != tc.want {
-			t.Errorf("walled(%s, %q, %v) = %v, want %v", tc.field, tc.entry, tc.added, got, tc.want)
+		if cause, _, _, _ := x.evidenceCause(tc.field, tc.entry, tc.added); cause != tc.want {
+			t.Errorf("evidenceCause(%s, %q) = %q, want %q", tc.field, tc.entry, cause, tc.want)
 		}
+	}
+}
+
+// TestQueueWallPresetChangeDetail: a queued run ended because its wall preset changed carries what the
+// preset became, the version it was queued under, and a new version or gone; the run read names a
+// personal preset to its owner only, and gives anyone the versions.
+func TestQueueWallPresetChangeDetail(t *testing.T) {
+	ref := func(v map[string]any) json.RawMessage { return mustJSON(v) }
+	id := uuid.NewString()
+	queued := ref(map[string]any{"wall_preset": id, "wall_preset_version": 1})
+	for _, tc := range []struct {
+		name string
+		now  json.RawMessage
+		want *types.WallPresetChange
+	}{
+		{"unchanged", ref(map[string]any{"wall_preset": id, "wall_preset_version": 1}), nil},
+		{"edited", ref(map[string]any{"wall_preset": id, "wall_preset_version": 3}), &types.WallPresetChange{Version: 3}},
+		{"gone", ref(map[string]any{"wall_preset": id, "wall_preset_gone": true}), &types.WallPresetChange{Gone: true}},
+		{"only the stored policy moved", ref(map[string]any{"wall_preset": id, "wall_preset_version": 1, "spec_sha256": "x"}), nil},
+	} {
+		v, got := queueWallPresetChange(queued, tc.now)
+		if !reflect.DeepEqual(got, tc.want) || (tc.want != nil && v != 1) {
+			t.Errorf("%s: queued %d change %+v, want 1 and %+v", tc.name, v, got, tc.want)
+		}
+	}
+	if _, got := queueWallPresetChange(ref(map[string]any{}), ref(map[string]any{"policy_id": "p"})); got != nil {
+		t.Errorf("a run with no wall preset: change %+v, want none", got)
+	}
+
+	mine := frozenPreset(tightPreset(types.WallPresetScopePerson, "Mine"))
+	mine.Changed = &types.WallPresetChange{Version: 2}
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: wallsSub, WallPreset: mine}
+	reader := func(sub string) *http.Request {
+		return httptest.NewRequest(http.MethodGet, "/api/v1/runs/x", nil).WithContext(memberCtxFor(sub))
+	}
+	if v := runWallPresetView(reader("sub-admin"), run); v == nil || v.Name != "" || v.ID != "" || v.Version != 1 || v.Changed == nil || v.Changed.Version != 2 {
+		t.Errorf("an admin's read of a personal preset that changed = %+v, want scope, versions 1 then 2, and no name", v)
+	}
+	if v := runWallPresetView(reader(wallsSub), run); v == nil || v.Name != "Mine" || v.Changed == nil || v.Changed.Version != 2 {
+		t.Errorf("the owner's read = %+v, want the name and the change", v)
+	}
+	org := frozenPreset(tightPreset(types.WallPresetScopeOrg, "Org tight"))
+	org.Changed = &types.WallPresetChange{Gone: true}
+	run.WallPreset = org
+	if v := runWallPresetView(reader("sub-admin"), run); v == nil || v.Name != "Org tight" || v.Version != 1 || v.Changed == nil || !v.Changed.Gone {
+		t.Errorf("an org preset that went = %+v, want its name, version 1 and gone", v)
 	}
 }

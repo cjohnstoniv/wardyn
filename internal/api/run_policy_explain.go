@@ -30,6 +30,7 @@ const (
 	causeOverlay       = "overlay"
 	causeUnit          = "unit"
 	causeWalls         = "walls"
+	causeWallPreset    = "wall_preset" // the run's wall preset; the view's wall_preset names it, or for a personal preset read by another, its scope
 	causeOrgDisk       = "org_disk"
 	causePoolDisk      = "pool_disk" // the console heading is policy-tab-copy.ts pool_disk
 	causeRestart       = "restart"
@@ -39,7 +40,7 @@ const (
 
 var causeOrder = []string{
 	causeWorkspace, causeSourceControl, causeComponent, causeMirror, causeModelAccess, causeGitBroker,
-	causeOverlay, causeUnit, causeWalls, causeOrgDisk, causePoolDisk, causeRestart, causeLimits, causeLaunch,
+	causeOverlay, causeUnit, causeWalls, causeWallPreset, causeOrgDisk, causePoolDisk, causeRestart, causeLimits, causeLaunch,
 }
 
 // The RunPolicySpec fields a change can name, as their JSON names. The list
@@ -127,8 +128,8 @@ func explainRunPolicy(base *types.RunPolicySpec, resolved types.RunPolicySpec, e
 	groups := map[changeKey]*runPolicyChange{}
 	put := func(field, entry string, added bool) {
 		cause, profile, at := x.cause(field, entry, added)
-		if field == fieldDesktop && cause != causeWalls {
-			return // only a person's walls or wall preset are said to narrow the desktop; any other layer's change stays unshown
+		if field == fieldDesktop && cause != causeWalls && cause != causeWallPreset {
+			return // only a person's walls or the run's wall preset are said to narrow the desktop; any other layer's change stays unshown
 		}
 		k := changeKey{cause: cause, field: field, profile: profile}
 		if at != nil {
@@ -283,8 +284,10 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 	ev := x.ev
 	allowAdded, denyAdded := field == fieldAllowed && added, field == fieldDenied && added
 	switch {
-	case x.walled(field, entry, added):
+	case wallsRecordHas(ev.walls, field, entry, added):
 		return causeWalls, "", nil, true
+	case wallsRecordHas(ev.preset, field, entry, added):
+		return causeWallPreset, "", nil, true
 	case allowAdded && ev.workspace[entry]:
 		return causeWorkspace, "", nil, true
 	case allowAdded && ev.sourceControl[entry]:
@@ -311,17 +314,12 @@ func (x *explainer) evidenceCause(field, entry string, added bool) (cause, profi
 	return "", "", nil, false
 }
 
-// walled is the walls rule: the entry is one the person's walls or the run's wall preset took out of
-// the run (an allowlist entry or a grant) or added to it (a deny or a blocked desktop direction), as
-// the run.create row recorded, or the field is a scalar knob either narrowed. List entries are matched
-// exactly, so a knob the boundary also narrowed keeps each of its entries with the layer that changed
-// it. A scalar holds one value that several layers may have tightened; the walls steps run first and the record cannot tell them apart, so
-// it is the walls'.
-func (x *explainer) walled(field, entry string, added bool) bool {
-	return wallsRecordHas(x.ev.walls, field, entry, added) || wallsRecordHas(x.ev.preset, field, entry, added)
-}
-
-// wallsRecordHas is walled for one record: a person's walls or a wall preset.
+// wallsRecordHas is the walls rule, for the person's walls (cause walls) and then the run's wall preset
+// (cause wall_preset): the entry is one the record took out of the run (an allowlist entry or a grant)
+// or added to it (a deny or a blocked desktop direction), as the run.create row recorded, or the field
+// is a scalar knob it narrowed. List entries are matched exactly, so a knob the boundary also narrowed
+// keeps each of its entries with the layer that changed it. A scalar holds one value that several layers may have tightened; the walls
+// steps run first, the person's before the preset's, and the record cannot tell them apart, so it is the first that names it.
 func wallsRecordHas(w *wallsSourceRecord, field, entry string, added bool) bool {
 	if w == nil {
 		return false

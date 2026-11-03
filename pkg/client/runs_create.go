@@ -317,14 +317,17 @@ type CreateRunRequest struct {
 }
 
 // RunWallPreset is the wall preset a run was launched with, as the run read
-// sends it: never its spec. A personal preset on a run read by anyone but the
-// run's owner carries its scope alone.
+// sends it: never its spec. Version is the version the run was queued and
+// reviewed under; Changed is set when the preset changed or went while the run
+// waited, which ended it queue_policy_changed. A personal preset on a run read
+// by anyone but the run's owner carries no id or name.
 type RunWallPreset struct {
-	ID      string `json:"id,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Scope   string `json:"scope"`
-	GroupID string `json:"group_id,omitempty"`
-	Version int    `json:"version,omitempty"`
+	ID      string            `json:"id,omitempty"`
+	Name    string            `json:"name,omitempty"`
+	Scope   string            `json:"scope"`
+	GroupID string            `json:"group_id,omitempty"`
+	Version int               `json:"version,omitempty"`
+	Changed *WallPresetChange `json:"changed,omitempty"`
 }
 
 // DriveSelection is the per-run user-drive option set. See
