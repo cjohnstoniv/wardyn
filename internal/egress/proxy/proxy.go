@@ -496,7 +496,7 @@ func newProxy(opts Options) *Proxy {
 	p.offerHTTP2(egressDial, opts.TLSClientConfig)
 	p.kube.bindTransport(p.transport)
 	for _, rt := range opts.GatewayIdentity {
-		p.gatewayHolders[rt.ProviderID] = &gatewayTokenHolder{providerID: rt.ProviderID, audience: rt.Audience, timeout: 15 * time.Second}
+		p.gatewayHolders[rt.holderKey()] = &gatewayTokenHolder{providerID: rt.ProviderID, mcpKey: rt.MCPKey, audience: rt.Audience, timeout: 15 * time.Second}
 	}
 	p.controlTransport = mkTransport(directDial)
 	if opts.ControlTLS == nil {

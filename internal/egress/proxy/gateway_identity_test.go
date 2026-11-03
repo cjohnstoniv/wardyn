@@ -164,9 +164,10 @@ func newGwidRig(t *testing.T, routes []GatewayIdentityRoute, h2 bool) *gwidRig {
 		n := g.mint.hits.Add(1)
 		var body struct {
 			ProviderID string `json:"provider_id"`
+			MCPServer  string `json:"mcp_server"`
 		}
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/internal/gateway-identity" ||
-			r.Header.Get("Authorization") != "Bearer RUNTOK" || json.NewDecoder(r.Body).Decode(&body) != nil || body.ProviderID == "" {
+			r.Header.Get("Authorization") != "Bearer RUNTOK" || json.NewDecoder(r.Body).Decode(&body) != nil || (body.ProviderID == "") == (body.MCPServer == "") {
 			t.Errorf("bad mint request %s %s", r.Method, r.URL.Path)
 		}
 		g.mint.mu.Lock()
@@ -1498,7 +1499,7 @@ func TestGatewayIdentityConfig(t *testing.T) {
 	for f := range rt.Fields() {
 		keys = append(keys, f.Tag.Get("json"))
 	}
-	if want := []string{"host", "port", "path_prefix,omitempty", "provider_id", "audience", "provider_uid,omitempty"}; !slices.Equal(keys, want) {
+	if want := []string{"host", "port", "path_prefix,omitempty", "provider_id,omitempty", "mcp_key,omitempty", "audience", "provider_uid,omitempty"}; !slices.Equal(keys, want) {
 		t.Fatalf("route keys %v: a route holds no token and no key, want %v", keys, want)
 	}
 	good := map[string]any{"host": gwidHost, "port": 443, "path_prefix": "/v1", "provider_id": "p", "audience": "a"}
@@ -1511,6 +1512,7 @@ func TestGatewayIdentityConfig(t *testing.T) {
 		"url host":    {"host": "https://x/", "port": 443, "provider_id": "p", "audience": "a"},
 		"no port":     {"host": gwidHost, "provider_id": "p", "audience": "a"},
 		"no provider": {"host": gwidHost, "port": 443, "audience": "a"},
+		"both":        {"host": gwidHost, "port": 443, "provider_id": "p", "mcp_key": "m", "audience": "a"},
 		"no audience": {"host": gwidHost, "port": 443, "provider_id": "p"},
 		"bad prefix":  {"host": gwidHost, "port": 443, "provider_id": "p", "audience": "a", "path_prefix": "v1"},
 		"unknown key": {"host": gwidHost, "port": 443, "provider_id": "p", "audience": "a", "token": "x"},
@@ -1520,10 +1522,11 @@ func TestGatewayIdentityConfig(t *testing.T) {
 		}
 	}
 	for name, second := range map[string]map[string]any{
-		"two audiences for a provider": {"host": gwidOther, "port": 443, "provider_id": "p", "audience": "b"},
-		"two providers on a host":      {"host": gwidHost, "port": 443, "provider_id": "q", "audience": "b"},
-		"two providers on one path":    {"host": gwidHost, "port": 443, "provider_id": "q", "audience": "b", "path_prefix": "/v1/"},
-		"a path under the other's":     {"host": gwidHost, "port": 443, "provider_id": "q", "audience": "b", "path_prefix": "/v1/messages"},
+		"two audiences for a provider":       {"host": gwidOther, "port": 443, "provider_id": "p", "audience": "b"},
+		"two providers on a host":            {"host": gwidHost, "port": 443, "provider_id": "q", "audience": "b"},
+		"two providers on one path":          {"host": gwidHost, "port": 443, "provider_id": "q", "audience": "b", "path_prefix": "/v1/"},
+		"a path under the other's":           {"host": gwidHost, "port": 443, "provider_id": "q", "audience": "b", "path_prefix": "/v1/messages"},
+		"an MCP server on a provider's path": {"host": gwidHost, "port": 443, "mcp_key": "m", "audience": "b", "path_prefix": "/v1/mcp"},
 	} {
 		if _, err := LoadConfigBytes(baseConfigJSON(t, map[string]any{"gateway_identity": []any{good, second}})); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -1541,6 +1544,20 @@ func TestGatewayIdentityConfig(t *testing.T) {
 	}
 	if rt := p.gatewayRouteFor(gwidHost, 443, "/v1/messages"); rt == nil || rt.ProviderID != "p" {
 		t.Errorf("/v1/messages matched %+v, want p", rt)
+	}
+	// An MCP server's route is a destination of its own: apart from the provider's it loads, and holds one audience.
+	mcp := map[string]any{"host": gwidOther, "port": 443, "mcp_key": "m", "audience": "b"}
+	cfg, err = LoadConfigBytes(baseConfigJSON(t, map[string]any{"gateway_identity": []any{good, mcp}}))
+	if err != nil {
+		t.Fatalf("a provider and an MCP server on hosts apart: %v", err)
+	}
+	p = &Proxy{gatewayRoutes: cfg.GatewayIdentity}
+	if rt := p.gatewayRouteFor(gwidOther, 443, "/x"); rt == nil || rt.MCPKey != "m" {
+		t.Errorf("the MCP host matched %+v, want the MCP route", rt)
+	}
+	mcpTwice := map[string]any{"host": gwidHost, "port": 8443, "mcp_key": "m", "audience": "c"}
+	if _, err := LoadConfigBytes(baseConfigJSON(t, map[string]any{"gateway_identity": []any{mcp, mcpTwice}})); err == nil {
+		t.Error("one MCP server with two audiences: accepted")
 	}
 	unset, err := LoadConfigBytes(baseConfigJSON(t, nil))
 	if err != nil {

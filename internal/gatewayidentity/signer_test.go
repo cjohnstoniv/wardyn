@@ -166,6 +166,38 @@ func TestSignRefusesAMissingIdentityField(t *testing.T) {
 	}
 }
 
+// An MCP server's token names the server and no provider; a token naming both, or neither, is refused.
+func TestSignMCPToken(t *testing.T) {
+	s := testSigner(t, testRotate(t, nil, false), testRotatedAt)
+	c := testClaims()
+	c.Provider, c.MCP = "", "corp-tools"
+	token, _, err := s.Sign(c, 0)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	body, err := base64.RawURLEncoding.DecodeString(strings.Split(token, ".")[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := m["wardyn_provider"]; has || m["wardyn_mcp"] != "corp-tools" {
+		t.Errorf("claims = %v, want wardyn_mcp and no wardyn_provider", m)
+	}
+	for name, mutate := range map[string]func(*Claims){
+		"both":    func(c *Claims) { c.Provider = "corp-gateway" },
+		"neither": func(c *Claims) { c.MCP = "" },
+	} {
+		bad := c
+		mutate(&bad)
+		if token, _, err := s.Sign(bad, 0); err == nil {
+			t.Errorf("%s: signed %q", name, token)
+		}
+	}
+}
+
 // The caller's lifetime sets exp; a lifetime that is zero, negative or past the
 // cap gives the cap.
 func TestSignLifetime(t *testing.T) {

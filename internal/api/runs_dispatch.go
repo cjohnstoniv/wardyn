@@ -18,6 +18,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// runUnattended reports whether nobody drives the run and its policy has review paths: the one case a
+// push held for review is refused instead. It is a function to keep dispatchRun under its complexity limit.
+func runUnattended(p dispatchParams, policy types.RunPolicySpec) bool {
+	return !p.Interactive && pushReviewRules(policy, p.PushRuleSets)
+}
+
 // dispatchRun launches the sandbox via the runner and advances run state. On any
 // failure it marks the run FAILED and audits — but never returns the failure to
 // the create caller (the run row exists and is queryable). p.RunToken is passed
@@ -375,6 +381,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// MCP servers: their credentials move to the broker and each harness's
 	// token goes into its own configuration (run_mcp.go).
 	mcp := dispatchMCP(p.Components.MCP, withholding{deny: ceiling.deny, layers: layers}, &injections, proxyURL, p.Interactive, sandboxEnv)
+	gatewayRoutes, gatewayRefusal := gatewayMCPRoutesOf(plan.gatewayRoutes, mcp)
+	if gatewayRefusal != "" {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, gatewayRefusal)
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create", run.ID.String(), "failure", mustJSON(map[string]any{"error": gatewayRefusal})))
+		return
+	}
 	harnessCreds, credFiles, merr := s.holdLaneHarnessCredentials(ctx, run, p)
 	if merr != nil {
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, "the run's tool-approval credential could not be made")
@@ -516,7 +528,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// nil, so no key is written, unless the run chose one.
 			LocalModels: plan.localModels,
 			// The routes that carry the run's signed identity; nil, so no key is written, with identity off.
-			GatewayIdentity: plan.gatewayRoutes,
+			GatewayIdentity: gatewayRoutes,
 			// What the brokered-LLM 404 says when this run reaches that route
 			// with nothing behind it — compiled at dispatch because the sidecar
 			// knows only that no injection matched (see llmUnavailableDetail).
@@ -525,7 +537,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// for review is refused instead (push_hold.go). Set only when the
 			// policy has review paths, the one thing it changes: an older
 			// proxy refuses the key, and must not refuse every task run.
-			Unattended:         !p.Interactive && pushReviewRules(policy, p.PushRuleSets),
+			Unattended:         runUnattended(p, policy),
 			ScrubResponses:     s.cfg.ScrubProxyResponses,
 			CanonicalPushRepos: s.cfg.CanonicalPushRepos,
 			PushRuleSets:       p.PushRuleSets,

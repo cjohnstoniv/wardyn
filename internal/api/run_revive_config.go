@@ -112,6 +112,7 @@ func reassertProxyCeiling(run types.AgentRun, cfg *proxy.Config, c ownerCeiling,
 		}
 		return true
 	})
+	cfg.GatewayIdentity = slices.DeleteFunc(cfg.GatewayIdentity, func(rt proxy.GatewayIdentityRoute) bool { return gone[rt.MCPKey] })
 	for i := range cfg.MCPBindings {
 		cfg.MCPBindings[i].Servers = slices.DeleteFunc(cfg.MCPBindings[i].Servers, func(k string) bool { return gone[k] })
 	}

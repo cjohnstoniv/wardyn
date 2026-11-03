@@ -296,7 +296,7 @@ func validateModelProviders(p *types.ModelProviders, env providerWriteEnv) ([]st
 			return nil, err
 		}
 	}
-	if err := validateGatewayAudiences(p); err != nil {
+	if err := validateGatewayAudiences(p, nil); err != nil {
 		return nil, err
 	}
 	return azureEndpointWarnings(p, env), nil

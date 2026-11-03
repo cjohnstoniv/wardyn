@@ -48,12 +48,13 @@ const (
 // caller fills the identity fields from the run and the provider, never from a
 // request; Sign fills the rest.
 type Claims struct {
-	Issuer   string `json:"iss"`             // the trust domain, spelled as the run token spells it
-	Audience string `json:"aud"`             // the provider's gateway audience
-	Subject  string `json:"sub"`             // the person, or the service principal of a service run
-	Run      string `json:"wardyn_run"`      // the run id
-	Runner   string `json:"wardyn_runner"`   // the executor, else the runner target
-	Provider string `json:"wardyn_provider"` // the model provider id
+	Issuer   string `json:"iss"`                       // the trust domain, spelled as the run token spells it
+	Audience string `json:"aud"`                       // the provider's gateway audience
+	Subject  string `json:"sub"`                       // the person, or the service principal of a service run
+	Run      string `json:"wardyn_run"`                // the run id
+	Runner   string `json:"wardyn_runner"`             // the executor, else the runner target
+	Provider string `json:"wardyn_provider,omitempty"` // the model provider id; empty on an MCP server's token
+	MCP      string `json:"wardyn_mcp,omitempty"`      // the MCP server's key, on its token alone
 	Sponsor  string `json:"sponsor,omitempty"`
 
 	ID        string   `json:"jti"`
@@ -162,8 +163,8 @@ func Rotate(raw []byte, retirePrevious bool, now time.Time) ([]byte, error) {
 // signed one. The token lives for lifetime, or for the longest a token may when
 // lifetime is zero, negative or longer than that.
 func (s *Signer) Sign(c Claims, lifetime time.Duration) (string, Claims, error) {
-	if c.Issuer == "" || c.Audience == "" || c.Subject == "" || c.Run == "" || c.Provider == "" {
-		return "", Claims{}, errors.New("gateway identity: issuer, audience, subject, run and provider are required")
+	if c.Issuer == "" || c.Audience == "" || c.Subject == "" || c.Run == "" || (c.Provider == "") == (c.MCP == "") {
+		return "", Claims{}, errors.New("gateway identity: issuer, audience, subject, run and exactly one of provider and MCP server are required")
 	}
 	if lifetime <= 0 || lifetime > tokenLifetime {
 		lifetime = tokenLifetime

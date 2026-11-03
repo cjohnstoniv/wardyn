@@ -46,6 +46,7 @@ decision_spool_dir
 gateway_identity
 gateway_identity.audience
 gateway_identity.host
+gateway_identity.mcp_key
 gateway_identity.path_prefix
 gateway_identity.port
 gateway_identity.provider_id

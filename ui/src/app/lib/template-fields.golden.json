@@ -62,7 +62,8 @@
     "ComponentMCP": [
       "url",
       "transport",
-      "launch"
+      "launch",
+      "gateway_audience"
     ],
     "ComponentMCPLaunch": [
       "command",

@@ -64,6 +64,33 @@ type gatewayStore struct {
 	blkErr  error
 	service types.ServiceIdentity
 	svcErr  error
+
+	// comps and runComps are the stored components and the run's snapshot of them (the MCP arm's reads).
+	comps    map[uuid.UUID]types.Component
+	runComps []types.RunComponent
+	compErr  error
+}
+
+func (s *gatewayStore) GetComponent(_ context.Context, id uuid.UUID, owner string) (types.Component, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.compErr != nil {
+		return types.Component{}, s.compErr
+	}
+	c, ok := s.comps[id]
+	if !ok || c.Owner != owner {
+		return types.Component{}, store.ErrNotFound
+	}
+	return c, nil
+}
+
+func (s *gatewayStore) ListRunComponents(_ context.Context, runID uuid.UUID) ([]types.RunComponent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.compErr != nil {
+		return nil, s.compErr
+	}
+	return s.runComps, nil
 }
 
 func (s *gatewayStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
@@ -866,7 +893,7 @@ func TestGatewayIdentitySaveRefusals(t *testing.T) {
 	// One destination in two spellings, a real shared gateway, keeps one audience.
 	block := &types.ModelProviders{Providers: []types.ModelProvider{testGatewayProvider(), testGatewayProvider()}}
 	block.Providers[1].ID, block.Providers[1].BaseURL = "corp-gw-2", "https://GW.corp.example.:443/llm/"
-	if err := validateGatewayAudiences(block); err != nil {
+	if err := validateGatewayAudiences(block, nil); err != nil {
 		t.Errorf("one destination refused: %v", err)
 	}
 }

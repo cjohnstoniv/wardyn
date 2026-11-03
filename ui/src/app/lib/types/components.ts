@@ -69,6 +69,11 @@ export interface ComponentMCP {
   url?: string;
   transport: "http" | "stdio";
   launch?: ComponentMCPLaunch;
+  /**
+   * An organisation's remote server only: the audience of the run identity token the proxy sends to it.
+   * The editor field is board GW-MCP and is not built yet.
+   */
+  gateway_audience?: string;
 }
 
 /** A local MCP server's command and arguments, started with no shell. */
