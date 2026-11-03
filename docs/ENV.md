@@ -187,7 +187,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_UI_DIR` | string | (unset) | built web UI directory (flag `-ui-dir`) |
 | `WARDYN_BASE_PATH` | string | (unset = the host root) | sub-path the console, API, sign-in, `/healthz` and `/readyz` are served under behind a reverse proxy, e.g. `/wardyn` (flag `-base-path`). The proxy forwards the path **unchanged** (no stripping). [Details](#wardyn_base_path) |
 | `WARDYN_HOST_PROXY_B64` | string (base64 JSON) | (unset) | host-side proxy detection, captured by [`scripts/up.sh`](../scripts/up.sh) on the host and consumed by the Getting-started "Host proxy" step. **Diagnostics only.** [Details](#wardyn_host_proxy_b64) |
-| `WARDYN_AUDIT_SINKS` 🔒 | string (JSON) | (unset) | audit sink config file/webhook/syslog (flag `-audit-sinks`). A webhook `bearer_token` requires an `https://` url — boot fails rather than replay the SIEM credential in cleartext on every POST. Schema: [Audit sinks](#audit-sinks-wardyn_audit_sinks) below |
+| `WARDYN_AUDIT_SINKS` 🔒 | string (JSON) | (unset) | audit sink config file/webhook/syslog/otlp (flag `-audit-sinks`). A webhook or otlp `bearer_token` requires an `https://` url — boot fails rather than replay the SIEM credential in cleartext on every POST. Schema: [Audit sinks](#audit-sinks-wardyn_audit_sinks) below |
 | `WARDYN_APPROVAL_NOTIFY` 🔒 | string (JSON) | (unset) | approval notification config (flag `-approval-notify`): channels that are told when an approval is waiting. Unset or empty means off. Any bad value refuses boot, naming the channel `id` and the rule. [Details](#wardyn_approval_notify) |
 | `WARDYN_AUDIT_SPOOL` | string | `./data/audit-spool.jsonl` | append-only JSONL fallback for failed audit writes (flag `-audit-spool`); a sibling `<path>.quarantine` appears if the store permanently refuses a spooled line |
 | `WARDYN_AUDIT_SEAL` | string | `off` | `off`, `fields` or `full` (flag `-audit-seal`). With `fields`, personal fields reach every audit sink only as ciphertext; with `full`, a person in `actor` or `target` is a subject, shown while their key exists and `[erased]` after. [Details](#wardyn_audit_seal) |
@@ -2145,7 +2145,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 {
   "syslog":  {"network": "udp", "addr": "localhost:514"},
   "webhook": {"url": "https://siem.example.com/ingest", "bearer_token": "...", "batch_size": 50},
-  "file":    {"path": "/var/log/wardyn/audit.log", "max_bytes": 52428800, "keep": 3}
+  "file":    {"path": "/var/log/wardyn/audit.log", "max_bytes": 52428800, "keep": 3},
+  "otlp":    {"endpoint": "https://otel.example.com:4318", "bearer_token": "...", "batch_size": 100}
 }
 ```
 
@@ -2156,6 +2157,29 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Every event is one JSON object (NDJSON on the webhook sink — one line per event per POST batch).
 - `Data` is the per-action payload documented in [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 - `WARDYN_AUDIT_SOURCE` above adds a `"source"` field to every one of them, for a multi-instance SIEM index.
+
+#### OpenTelemetry logs (`otlp`)
+
+- Each audit row becomes one OTLP/HTTP JSON log record, POSTed in batches to `<endpoint>/v1/logs` (the path is added unless `endpoint` already ends in it). Stdlib only, no SDK.
+- Best-effort, like the webhook sink: a full queue or a batch that fails every retry is shed and counted in `wardyn_audit_sink_drops_total{sink="otlp"}`. It is not lossless; use the acknowledged webhook for that.
+- Spans are not exported yet.
+
+| Field | Default | Notes |
+|---|---|---|
+| `endpoint` | (required) | collector base URL, `http://` or `https://` |
+| `bearer_token` | (unset) | sent as `Authorization: Bearer`; requires an `https://` endpoint, boot fails otherwise |
+| `headers` | (unset) | extra request headers, for example a tenant id; sent as written, so a secret in one travels in cleartext over `http://`. `Authorization`, `Content-Type`, `Content-Length` and `Host` are refused |
+| `batch_size` | `100` | records per POST |
+| `flush_interval`, `buffer_size`, `max_retries`, `retry_base_delay`, `timeout` | as `webhook` | same meaning and limits, including the `15s` timeout cap |
+
+| Record part | Value |
+|---|---|
+| Resource | `service.name=wardynd`; `service.instance.id` is `WARDYN_AUDIT_SOURCE` when set |
+| Body | the audit `action` |
+| Severity | `success` is INFO, `denied` is WARN, `failure` is ERROR |
+| Attributes | `wardyn.run_id` (run-scoped rows), `wardyn.actor`, `wardyn.target` (when set), `wardyn.outcome`, `wardyn.correlation_id` (when the row's `data` carries one, at most 128 characters) |
+
+- Nothing else from the row is sent: not `data`, `source_ip`, the hashes or the row id. The webhook sink's payload is the ceiling.
 
 #### Acknowledged delivery (`delivery: acknowledged`)
 
