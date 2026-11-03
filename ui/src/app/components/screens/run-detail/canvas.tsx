@@ -681,7 +681,7 @@ function LayoutStatus({ status, failedPreset, onRetry }: { status: SaveStatus; f
   if (status === "idle") return null;
   if (status === "failed") {
     return (
-      <span role="status" className="inline-flex items-center gap-1 px-1.5 text-xs text-destructive">
+      <span role="status" className="inline-flex items-center gap-1 px-1.5 text-xs text-danger">
         {RUN_COCKPIT.layoutSaveFailed(failedPreset === "finished" ? "Finished" : "Live")}
         <button type="button" onClick={onRetry} className="rounded px-1 font-medium underline underline-offset-2">
           {RUN_COCKPIT.layoutRetry}
