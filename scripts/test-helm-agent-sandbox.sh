@@ -6,7 +6,7 @@
 # must be OFF by default and cost nothing off. Asserts on rendered output, not on the templates' text:
 #   - off (key absent, null, false, the 0.8.5 reuse-values file) renders the same bytes as one another, with no
 #     agents.x-k8s.io rule, no pods patch, no admissionregistration object, no CRD and no WARDYN_K8S_AGENT_SANDBOX;
-#   - when BASE is a git rev (the lane check sets it to the commit before the key existed), the off render is
+#   - when BASE is a git rev (the CI check sets it to the commit before the key existed), the off render is
 #     byte-identical to that commit's chart under the same values;
 #   - on renders exactly: pods patch, a sandboxes create/get/list/delete rule, the env, and a
 #     ValidatingAdmissionPolicy + binding that selects the controller identity and requires the gate, a Sandbox owner and an empty nodeName;
@@ -133,7 +133,7 @@ bind='select(.kind == "ValidatingAdmissionPolicyBinding" and .spec.policyName ==
   || die "on: the binding is not Deny on the runs namespace for the policy"
 ok "on: policy selects on the controller identity alone; gate, Sandbox owner and empty nodeName are validations; Deny, runs namespace"
 
-# The ungate policy (UPDATE). Rendered CEL text only. The decisions a kind job must reach (lane 4):
+# The ungate policy (UPDATE). Rendered CEL text only. The decisions the kind job must reach:
 #   admitted: wardynd's identity removes the gate, nothing else in the write changed
 #   denied:   wardynd's identity removes the gate and the same write changes a label (wardyn.component)
 #   denied:   wardynd's identity removes the gate and the same write changes a container or init container image
