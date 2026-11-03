@@ -80,7 +80,23 @@ const (
 	// types.DriveMount), answered with ReclaimDriveResult. It is sent only to a runner whose caps carry
 	// MacVMCaps.DiskDrives, and the runner refuses every other backend.
 	MethodReclaimDrive = "reclaim_drive"
+	// MethodMacWindow asks the runner to put an attended window (keyboard and pointer) on a macOS VM
+	// run it holds (MacWindowArgs), on a runner whose caps carry MacVMCaps.Window; an older runner never
+	// gets the call. The runner answers with a mac_window stream (KindMacWindow) that lives as long as
+	// the window: the org ends the window by resetting or closing it, and the runner ends the stream when
+	// the window ends first.
+	MethodMacWindow = "mac_window"
 )
+
+// MacWindowArgs is mac_window's input. GrantID names the org's grant for this one open (the helper logs
+// it, and a second open on the same run is refused whatever its id; letters, digits and . _ : -, at most
+// 128). Title is the window's title, which
+// names the run and the person.
+type MacWindowArgs struct {
+	Ref     string `json:"ref"`
+	GrantID string `json:"grant_id"`
+	Title   string `json:"title,omitempty"`
+}
 
 // ReclaimDriveResult is reclaim_drive's answer: Outcome when the disk is gone, or InUse when a run on
 // this Mac holds it, which deletes nothing.

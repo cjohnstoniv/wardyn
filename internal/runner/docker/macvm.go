@@ -77,6 +77,8 @@ type MacVMConfig struct {
 	// Changed is called after each ledger transaction the driver makes, so the runner recomputes the
 	// max it offers and resends its caps.
 	Changed func()
+	// OnUnexpectedWindow, when set, hears of a window the helper opened with a grant this runner did not issue.
+	OnUnexpectedWindow func(runID uuid.UUID, grant string, at time.Time)
 
 	// spawn starts the helper for a run dir and signal signals a helper; tests replace both.
 	spawn  func(runDir string) error
@@ -173,6 +175,9 @@ func startHelper(helper, runDir string) error {
 func newMacVMRun(c *MacVMConfig, runID uuid.UUID, dir string) *vmRun {
 	ctx, stop := context.WithCancel(context.Background())
 	var nd net.Dialer
+	if c.OnUnexpectedWindow != nil {
+		go c.watchWindows(ctx, runID)
+	}
 	return &vmRun{runID: runID, dir: dir, mac: true, ctx: ctx, stop: stop,
 		agent: guestagent.NewClient(func(ctx context.Context) (net.Conn, error) {
 			sock, err := c.sockPath(runID, macvm.AgentSock)
