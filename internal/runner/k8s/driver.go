@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
@@ -106,6 +107,14 @@ type Config struct {
 	// under k8s.readNodes) so preflight and create can warn when no node a run may be placed on is large
 	// enough. Off by default: nodes are cluster-scoped and a shared-cluster tenant may not be granted them.
 	ReadNodes bool
+	// AgentSandbox is WARDYN_K8S_AGENT_SANDBOX (experimental, server mode only): an
+	// agents.x-k8s.io/v1beta1 Sandbox makes the agent pod, held by a scheduling gate until Wardyn has
+	// read it back (agentsandbox.go). Off builds no dynamic client and takes none of its branches.
+	AgentSandbox bool
+	// AgentSandboxBeforeUngate is a test seam: called with the pod's namespace and name after the
+	// read-back passed and before the gate is removed, while the pod is still unscheduled. Nil in
+	// production; an error refuses the run.
+	AgentSandboxBeforeUngate func(ctx context.Context, namespace, pod string) error
 
 	// Runner mode (wardyn-runnerd, design K1 §3). Only runnerd sets these; with RunnerID empty every
 	// one is ignored and server mode is unchanged.
@@ -187,6 +196,8 @@ type Driver struct {
 	clientset  kubernetes.Interface
 	restConfig *rest.Config
 	cfg        Config
+	// dynamic serves only agents.x-k8s.io Sandboxes; nil unless Config.AgentSandbox.
+	dynamic dynamic.Interface
 	// placement is cfg.SandboxPlacement, parsed and validated once at construction.
 	placement Placement
 	// nodeCache is the last node list, shared by every fit check (fit_nodes.go).
@@ -317,7 +328,13 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 			return nil, err
 		}
 	}
-	d := &Driver{clientset: cs, restConfig: restCfg, cfg: cfg, placement: placement, apiserverHostPort: hostPort, now: time.Now}
+	var dyn dynamic.Interface
+	if cfg.AgentSandbox {
+		if dyn, err = bootAgentSandbox(ctx, cs, restCfg, cfg); err != nil {
+			return nil, err
+		}
+	}
+	d := &Driver{clientset: cs, restConfig: restCfg, cfg: cfg, dynamic: dyn, placement: placement, apiserverHostPort: hostPort, now: time.Now}
 
 	// The canary runs in every namespace: each is where some run's NetworkPolicies must hold.
 	// NetworkPolicy reads as enforced only when every namespace proved it.
