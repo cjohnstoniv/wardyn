@@ -26,6 +26,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -169,9 +170,9 @@ const (
 	endpointOIDCUnknownRowRefusal   = "No model provider with that uid signs people in"
 	endpointOIDCAuthorityRefusal    = "The endpoint's sign-in service could not be reached, so the sign-in was not started"
 	// endpointOIDCWrongIssuerRefusal and endpointOIDCSubjectMismatchRefusal name no issuer and no subject.
-	endpointOIDCWrongIssuerRefusal = "the identity token was issued by an authority other than the one the console signs you in with, " +
+	endpointOIDCWrongIssuerRefusal = "The identity token was issued by an authority other than the one the console signs you in with, " +
 		"and this provider is set to match your console sign-in"
-	endpointOIDCSubjectMismatchRefusal = "the identity token is not for the person signed in to this browser session"
+	endpointOIDCSubjectMismatchRefusal = "The identity token is not for the person signed in to this browser session"
 )
 
 // EndpointOIDCEnv is what an endpoint sign-in takes from the process rather than from a provider row.
@@ -797,10 +798,48 @@ func (s *Server) storeEndpointOIDCCapture(ctx context.Context, subject string, s
 	if err != nil {
 		return "", fmt.Errorf("read model providers: %w", err)
 	}
-	if row, found := endpointOIDCRowFor(sc, stamp.RowUID); !found || providerAddressDigest(row) != stamp.Digest {
+	row, found := endpointOIDCRowFor(sc, stamp.RowUID)
+	if !found || providerAddressDigest(row) != stamp.Digest {
 		return azureCaptureRowChanged, nil
 	}
+	blob.CaptureDigest = endpointOIDCCaptureDigest(row, ec.authority.tokenURL)
 	return "", s.storeEntraBlob(ctx, subject, ec, blob)
+}
+
+// endpointOIDCCaptureDigest is what a stored endpoint sign-in is bound to: the row's address as
+// providerAddressChanged reads it, harness paths aside, and the token URL its requests post to, which discovery
+// can move with no row change. Harness paths are left out so adding a harness ends no one's sign-in; a
+// redemption compares the live row's whole providerAddressDigest as well. The client secret is not in it:
+// rotating one moves no authority.
+func endpointOIDCCaptureDigest(p types.ModelProvider, tokenURL string) string {
+	sum := sha256.Sum256(mustJSON([]any{p.BaseURL, bedrockAddress(p), authHeader(p.Auth), oidcAddress(p), tokenURL}))
+	return hex.EncodeToString(sum[:])
+}
+
+// endpointOIDCStillBound is a redemption's check, under the sign-in lock and before any request: the stored
+// sign-in was captured for the row and token URL this redemption resolved, and the live row's address is
+// still that row's. Anything else, a sign-in stored before the binding included, answers as no sign-in,
+// with nothing posted and nothing deleted. Every Entra kind passes: its token URL is the Entra application's,
+// which no row edit moves.
+func (s *Server) endpointOIDCStillBound(ctx context.Context, ec entraCapture, blob adoEntraBlob) error {
+	if ec.kind != entraKindEndpointOIDC {
+		return nil
+	}
+	if ec.redeemFor == nil || ec.authority == nil || blob.CaptureDigest == "" ||
+		blob.CaptureDigest != endpointOIDCCaptureDigest(*ec.redeemFor, ec.authority.tokenURL) {
+		return fmt.Errorf("%w: the stored sign-in was captured for another address or authority", ErrADOEntraNotCaptured)
+	}
+	if s.cfg.Store == nil {
+		return fmt.Errorf("%w: no store to read the provider from", ErrADOEntraUnavailable)
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: read the provider: %w", ErrADOEntraUnavailable, err)
+	}
+	if live, found := endpointOIDCRowFor(sc, ec.rowUID); !found || providerAddressDigest(live) != providerAddressDigest(*ec.redeemFor) {
+		return fmt.Errorf("%w: the provider changed while its sign-in was being renewed", ErrADOEntraNotCaptured)
+	}
+	return nil
 }
 
 // auditEndpointOIDC writes the capture's one audit row, on both outcomes. data never carries a token, a code, a
@@ -816,14 +855,19 @@ func (s *Server) auditEndpointOIDC(ctx context.Context, actor, target, outcome s
 // ── run time: what the dispatch lane reads and redeems ──────────────────────
 
 // endpointOIDCBlob is owner's stored sign-in for row, read from the owner's own namespace only (never the
-// operator's), with found=false when none is stored. The dispatch and status lanes read DeadAt and the shape
-// from it; the refresh token in it is never theirs to use.
+// operator's), with found=false when none is stored or it carries no capture digest (no redemption would
+// use it). The dispatch and status lanes read DeadAt and the shape from it; the refresh token in it is never
+// theirs to use.
 func (s *Server) endpointOIDCBlob(ctx context.Context, owner string, row types.ModelProvider) (adoEntraBlob, bool, error) {
 	ec, err := endpointOIDCCapture(row, nil, nil)
 	if err != nil {
 		return adoEntraBlob{}, false, err
 	}
-	return s.readEntraBlob(ctx, owner, ec)
+	blob, found, err := s.readEntraBlob(ctx, owner, ec)
+	if err != nil || !found || blob.CaptureDigest == "" {
+		return adoEntraBlob{}, false, err
+	}
+	return blob, true, nil
 }
 
 // RedeemEndpointOIDCAccess mints an access token for owner at row's authority and persists the rotation, under
@@ -850,7 +894,7 @@ func (s *Server) RedeemEndpointOIDCAccess(ctx context.Context, owner string, row
 	if err != nil {
 		return ADOEntraAccess{}, fmt.Errorf("%w: %w", ErrADOEntraUnavailable, err)
 	}
-	ec.authority = &ta
+	ec.authority, ec.redeemFor = &ta, &row
 	lctx, unlock, err := s.lockADOSignInRedeem(ctx, owner, row.UID)
 	if err != nil {
 		return ADOEntraAccess{}, err
@@ -863,14 +907,15 @@ func (s *Server) RedeemEndpointOIDCAccess(ctx context.Context, owner string, row
 // revocation endpoint. Best effort: a person's disconnect deletes the stored sign-in whether or not this
 // worked, and nothing it logs carries a token.
 func (s *Server) revokeEndpointOIDC(ctx context.Context, owner string, row types.ModelProvider) {
-	ctx, cancel := context.WithTimeout(secretstore.WithPurpose(ctx, secretstore.PurposeProviderSignIn), 5*time.Second)
+	// One assignment from the mark, so every read below is audited with this purpose.
+	rctx, cancel := context.WithTimeout(secretstore.WithPurpose(ctx, secretstore.PurposeProviderSignIn), 5*time.Second)
 	defer cancel()
-	blob, found, err := s.endpointOIDCBlob(ctx, owner, row)
+	blob, found, err := s.endpointOIDCBlob(rctx, owner, row)
 	if err != nil || !found {
 		return
 	}
-	ta, disc, err := s.endpointOIDCAuthority(ctx, row.OIDC)
-	if err != nil || disc.revocationURL == "" {
+	ta, disc, err := s.endpointOIDCAuthority(rctx, row.OIDC)
+	if err != nil || disc.revocationURL == "" || blob.CaptureDigest != endpointOIDCCaptureDigest(row, ta.tokenURL) {
 		return
 	}
 	form := url.Values{"token": {blob.RefreshToken}, "token_type_hint": {"refresh_token"}}
@@ -880,7 +925,7 @@ func (s *Server) revokeEndpointOIDC(ctx context.Context, owner string, row types
 			form.Set("client_secret", ta.clientSecret)
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, disc.revocationURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(rctx, http.MethodPost, disc.revocationURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return
 	}
@@ -890,13 +935,13 @@ func (s *Server) revokeEndpointOIDC(ctx context.Context, owner string, row types
 	}
 	resp, err := endpointOIDCClient().Do(req)
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: revoking an endpoint sign-in at its authority failed", slog.String("row", row.UID))
+		slog.WarnContext(rctx, "wardynd: revoking an endpoint sign-in at its authority failed", slog.String("row", row.UID))
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		slog.WarnContext(ctx, "wardynd: an authority refused to revoke an endpoint sign-in",
+		slog.WarnContext(rctx, "wardynd: an authority refused to revoke an endpoint sign-in",
 			slog.String("row", row.UID), slog.Int("status", resp.StatusCode))
 	}
 }

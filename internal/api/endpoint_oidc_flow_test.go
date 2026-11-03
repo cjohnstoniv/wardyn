@@ -76,6 +76,8 @@ type oidcFlow struct {
 	logs  *lockedBuffer
 	row   types.ModelProvider
 	env   EndpointOIDCEnv
+	// gate, when set, sees every request to the authority before it is served and may hold it.
+	gate atomic.Pointer[func(*http.Request)]
 }
 
 // newOIDCFlow wires a server whose custom_endpoint row signs people in at a fake authority. binding "" is the
@@ -113,7 +115,12 @@ func newOIDCFlow(t *testing.T, binding string) *oidcFlow {
 		}
 		return nil
 	}
-	proxy := httptest.NewServer(rp)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if g := f.gate.Load(); g != nil {
+			(*g)(r)
+		}
+		rp.ServeHTTP(w, r)
+	}))
 	t.Cleanup(proxy.Close)
 	f.fake.SetBaseURL(proxy.URL)
 	f.fake.SetGenericMode(true)

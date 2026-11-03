@@ -37,8 +37,8 @@
 
 - Wardyn never matches on an email or a user name. Those can be changed by an admin.
 - A `console` sign-in that fails the check is refused. The reason is one of two:
-  - "the identity token was issued by an authority other than the one the console signs you in with";
-  - "the identity token is not for the person signed in to this browser session".
+  - "The identity token was issued by an authority other than the one the console signs you in with";
+  - "The identity token is not for the person signed in to this browser session".
 
 ## How a person signs in
 
@@ -69,7 +69,9 @@
 
 - The proxy asks for a fresh access token about every 10 minutes, or sooner if the token's own expiry is sooner ([`storedKeyTTL`](../../internal/api/injection.go)). A run is renewed unattended for as long as the refresh token lives.
 - Each renewal can rotate the refresh token. It is saved under a lock and a revision check, one renewal at a time per person.
+- A renewal sends the refresh token only to the token URL and provider address it was signed in at. If either moved, the run gets the no-sign-in answer and the stored sign-in is kept.
 - A disconnect stops the injection within one renewal, so a disconnected person's token is injected for at most 10 minutes.
+- Disconnecting a sign-in made before this release deletes it here but does not revoke it at the authority.
 
 | Renewal fails because | What the run sees | What to do |
 |---|---|---|
@@ -79,6 +81,7 @@
 | The authority did not answer | "did not complete; nothing about the credential is known to be wrong" | Wait, or retry |
 | The secret store refused | "sign in again, or ask an administrator to check the store" | Check the store's access |
 | The provider changed after launch | "Relaunch the run." | Relaunch |
+| The sign-in was made before this release, or its address or token URL moved | "has not signed in to this model provider's endpoint — sign in from the console, then relaunch". Nothing is sent and the stored sign-in is kept | The person signs in again once |
 
 - **A residual: reuse detection.** If saving a rotated refresh token fails, Wardyn serves the renewal from memory. An authority that revokes a token family on reuse then revokes the person's session on the next renewal. It fails closed and the person signs in again.
 - Whether an authority's own rate limits bind at one renewal per run every 10 minutes has not been measured.
