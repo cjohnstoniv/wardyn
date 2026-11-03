@@ -203,6 +203,10 @@ type AgentRun struct {
 	LocalFolder *RunLocalFolder `json:"-"`
 	SandboxRef  string          `json:"sandbox_ref,omitempty"`
 	Image       string          `json:"image,omitempty"` // resolved sandbox image, kept for provenance; empty for legacy rows
+	// ImageInput is the image ref create held to the digest rule (images.require_digest): the ref the member
+	// named or an attached workspace's base image set, "" when the run named none (the convention image),
+	// nil for a run created before 0249. A revive re-runs create's decision on it (site_config_images.go).
+	ImageInput *string `json:"-"`
 	// Interactive marks a human-driven run: sandbox comes up RUNNING, no task exec'd, no completion watcher.
 	Interactive bool `json:"interactive"`
 	// Experience is the canonical run mode chosen at launch (0.9 New Run), frozen at create and never re-derived. Empty for a run from an older client or before 0.9;

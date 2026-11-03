@@ -60,6 +60,10 @@ type runFold struct {
 	// the primary leading); wsRefs adds every other one the spec references.
 	seed   workspaceSeed
 	wsRefs []types.Workspace
+	// carriedImage is the base image a policy-carried workspace sets when neither the request nor an attached
+	// workspace chose one, which dispatch then uses (resolveCreateRunImage); stepWorkspaces holds it to the
+	// digest rule.
+	carriedImage string
 	// signinImageUngranted: the person's own image keeps its desktop sign-ins
 	// off at dispatch (signinVariantUngranted), decided here with the caller's
 	// identity, which the detached launch does not hold.

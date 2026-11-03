@@ -362,7 +362,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	stampHarnessSet(createData, f.harnesses, f.image)
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created, s.runnerNameOf(ctx, created)))
-	s.markRunCreateExempt(ctx, req.Image, createData)
+	s.markRunCreateExempt(ctx, createDigestInput(req, f), createData)
 	s.stampBreakGlass(ctx, runID, createdByType, createdBy, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))
@@ -452,6 +452,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 	req, f, placed := in.req, in.f, in.placed
 	operatorOwned := operatorOwnedRequest(ctx)
 	service, _ := frozenRunService(req.Service) // serviceRefusal has already held it valid
+	imageInput := createDigestInput(req, f)     // what the digest rule was asked about, for a revive to ask again
 	return types.AgentRun{
 		ID:               in.runID,
 		CreatedAt:        in.now,
@@ -470,6 +471,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		MachineKind:      types.MachineKind(req.MachineKind).Normalize(),
 		VMMachine:        macOSBaseMachine(req), // a macOS VM's picked base, until the Mac records its machine
 		Experience:       req.Experience,
+		ImageInput:       &imageInput,
 		Shape:            storedRunShape(req),
 		Service:          service,
 		LocalFolder:      req.LocalFolder,

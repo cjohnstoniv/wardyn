@@ -68,10 +68,11 @@ the ADMIN pre-authorized.
 - A prefix over mutable tags is weaker than an exact digest ref.
 - **Digest rule (`images.require_digest`, off by default).** With it on, a member's image must be pinned by digest, `image@sha256:<digest>` (a tag beside the digest is fine).
   - It sits on top of the grants, not instead of them: a prefix grant or an exact grant on a tag ref still needs the run to name the digest form, and `*` does not lift it.
-  - It applies to the image a member names (`image`) and to the base image of a workspace the run attaches, whoever owns the workspace. A run that names no image keeps the agent's convention image, which an operator sets.
+  - It applies to the image a member names (`image`) and to the base image of a workspace the run attaches or its policy carries, whoever owns the workspace. A run that names no image keeps the agent's convention image, which an operator sets.
   - A refused run answers `403` with reason `image_digest_required` and a sentence that names the setting and shows the form.
   - **Operators are not bound by it**, as for other governance. While it is on, an operator's run.create audit row carries `image_digest_exempt: true` when its image is not pinned. An SSO admin is bound when `WARDYN_GOVERN_ADMIN_RUNS` is on.
-  - It is checked when a run is created, previewed (Review), or starts after waiting in a queue, and for a service identity's run, which is a member's. Reviving, restarting or extending an existing run does not re-check it (the same as the `image` grant), so a run made while the rule was off keeps working.
+  - It is checked when a run is created, previewed (Review), or starts after waiting in a queue, and for a service identity's run, which is a member's.
+  - Reviving or restarting a run checks it again, on the image the run's create checked and under the rule as it is then. A run made while the rule was off, or before this release, is refused until a new run starts. The run owner's authority decides: an operator's run stays exempt, marked `image_digest_exempt` on the run.revive row, and an admin reviving a member's run is bound as the member. Extending a run does not check it.
   - Set it with `PUT /api/v1/site-config` (`"images": {"require_digest": true}`); a body that omits `images` keeps the stored value, and the change is on the `site_config.write` audit row as `images_require_digest`. There is no console control yet.
   - It reads only the reference as typed: it does not look the image up in a registry, and it cannot verify a signature. For cluster-side enforcement, see [image admission](image-admission.md).
   - Not run in CI against a real cluster or registry: the tests cover the control plane's decision.

@@ -48,7 +48,14 @@ const (
 // image never reads the site config. Operators and the break-glass admin are runUngoverned: never refused,
 // reported as exempt so the audit row can say so.
 func (s *Server) imageDigestVerdict(ctx context.Context, image string) (digestVerdict, error) {
-	if image == "" || imagePinnedByDigest(image) {
+	return s.digestVerdictBy(ctx, &image, s.runUngoverned)
+}
+
+// digestVerdictBy is imageDigestVerdict on a recorded input (AgentRun.ImageInput): nil is a run whose create
+// recorded none, which the rule, while on, holds as an unpinned image. ungoverned names whose authority the
+// rule asks about: the caller's at a launch, the run owner's at a revive (reviveImageDigestRefusal).
+func (s *Server) digestVerdictBy(ctx context.Context, image *string, ungoverned func(context.Context) bool) (digestVerdict, error) {
+	if image != nil && (*image == "" || imagePinnedByDigest(*image)) {
 		return digestAllowed, nil
 	}
 	sc, ok := s.siteConfigSnapshot(ctx)
@@ -58,10 +65,45 @@ func (s *Server) imageDigestVerdict(ctx context.Context, image string) (digestVe
 	if !imageRequireDigest(sc) {
 		return digestAllowed, nil
 	}
-	if s.runUngoverned(ctx) {
+	if ungoverned(ctx) {
 		return digestExempt, nil
 	}
 	return digestRefused, nil
+}
+
+// imageDigestReviveSuffix ends a revive's digest refusal: a kept sandbox cannot change its image.
+const imageDigestReviveSuffix = ". Start a new run to use an allowed image"
+
+// reviveImageDigestRefusal re-runs create's digest decision on the input the run's create recorded, under the
+// rule as it is now, so turning the rule on binds the sandboxes already kept, and a run from before the input
+// was recorded is refused while it is on. The authority is the run owner's, as ownerCapabilityRefusal reads
+// it: an ungoverned owner reviving their own run, or anyone reviving an operator-owned run, is exempt (mark is
+// then image_digest_exempt, for the run.revive row); an admin reviving a member's run is bound as the member.
+// An unreadable site config refuses.
+func (s *Server) reviveImageDigestRefusal(ctx context.Context, run types.AgentRun, actorType types.ActorType, actor string) (mark map[string]any, rerr *reviveError) {
+	v, err := s.digestVerdictBy(ctx, run.ImageInput, func(ctx context.Context) bool {
+		if actor == run.CreatedBy {
+			return s.runUngoverned(ctx)
+		}
+		return run.OperatorOwned
+	})
+	if err != nil {
+		return nil, reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable,
+			loggedMsg(ctx, "re-check the image digest rule", err))
+	}
+	if v == digestExempt {
+		return map[string]any{"image_digest_exempt": true}, nil
+	}
+	if v != digestRefused {
+		return nil, nil
+	}
+	ref := run.Image
+	if run.ImageInput != nil {
+		ref = *run.ImageInput
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "denied",
+		mustJSON(map[string]any{"subject": run.CreatedBy, "reason": reasonImageDigestRequired})))
+	return nil, reviveRefused(http.StatusForbidden, reasonImageDigestRequired, fmt.Sprintf(imageDigestRequiredMsg, ref)+imageDigestReviveSuffix)
 }
 
 var errImageDigestRuleUnreadable = errors.New("read the site config for the image digest rule")

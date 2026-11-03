@@ -19,7 +19,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- An organisation setting, `images.require_digest` (off by default), refuses a member's run whose image, or whose attached workspace's base image (whoever owns the workspace), is not pinned by digest (`image@sha256:<digest>`), even where an exact or prefix image grant covers it. The refusal is `403` `image_digest_required`. Operators are not bound; their unpinned runs are marked `image_digest_exempt` on the run.create audit row. Not run in CI against a real registry.
+- An organisation setting, `images.require_digest` (off by default), refuses a member's run whose image, or the base image of a workspace it attaches or its policy carries (whoever owns the workspace), is not pinned by digest (`image@sha256:<digest>`), even where an exact or prefix image grant covers it. The refusal is `403` `image_digest_required`. A revive or restart checks again the image the run's create checked, under the rule as it is then; a run made before this release, or while the rule was off, is refused until a new run starts. Operators are not bound; their unpinned runs are marked `image_digest_exempt` on the run.create and run.revive audit rows. Migration `0249_run_image_input` adds `agent_runs.image_input`, NULL on every existing row; no grant changes. Not run in CI against a real registry.
 
 ### Fixed
 

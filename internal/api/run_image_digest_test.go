@@ -6,11 +6,10 @@ package api
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -20,7 +19,8 @@ import (
 // pinned image@sha256:<digest>, whatever the image grants say. Operators are not bound and are marked
 // image_digest_exempt on the run.create row. Every door that can start a member-chosen image reaches
 // imageDigestVerdict through runRequestGovernance (create, preflight, a held run's start, a service
-// identity's run) or seededImageRefusal (the workspace's base image, at create, preflight and a held start).
+// identity's run) or seededImageRefusal (the workspace's base image, at create, preflight and a held start),
+// and a revive re-runs that decision on the input the run's create recorded (reviveImageDigestRefusal).
 
 const (
 	digestTagRef    = "registry.example.com/team/app:1"
@@ -240,17 +240,125 @@ func TestImageDigestRule_WorkspaceSeedImage(t *testing.T) {
 	}
 }
 
-// TestImageDigestRule_ReviveStartsNoImage: a revive restarts the kept sandbox by its ref
-// (runner.SandboxStarter.StartSandbox) and re-checks the owner's launch doors through persistedLaunchDoors,
-// which has never carried the image (the row cannot tell a member-named image from the convention image).
-// So the rule is a launch-time rule: a run created while it was off keeps reviving after it is turned on.
-func TestImageDigestRule_ReviveStartsNoImage(t *testing.T) {
-	run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", Image: digestTagRef}
-	for _, d := range persistedLaunchDoors(run, nil, nil) {
-		if d.kind == capImage {
-			t.Fatalf("persistedLaunchDoors carries an image door %+v: revive would now meet the digest rule, decide that on purpose", d)
-		}
+// TestImageDigestRule_PolicyCarriedWorkspaceImage: a workspace the run's policy carries (not attached) sets the
+// image dispatch uses when neither the request nor an attached workspace chose one (resolveCreateRunImage), so
+// stepWorkspaces holds its base image to the rule at every door. A governed caller (an SSO admin under
+// WARDYN_GOVERN_ADMIN_RUNS, bound as a member is) is refused a tag ref and passes a digest ref; the admin token
+// is not bound.
+func TestImageDigestRule_PolicyCarriedWorkspaceImage(t *testing.T) {
+	for _, tc := range []struct {
+		name, image     string
+		ruleOn, refused bool
+	}{
+		{"tag ref", digestTagRef, true, true},
+		{"digest ref", digestPinnedRef, true, false},
+		{"tag ref, rule off", digestTagRef, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plain, carried := repoWS("plain", helloRepo), repoWS("carried", spoonRepo)
+			carried.BaseImage = &types.WorkspaceBaseImage{Kind: "custom", Image: tc.image}
+			srv := attachFixture(t, digestRuleSite(tc.ruleOn), plain, carried)
+			srv.cfg.GovernAdminRuns = true
+			body := `{"agent":"claude-code","task":"t","workspace_id":"` + plain.ID.String() +
+				`","inline_policy":{"min_confinement_class":"CC2","workspace_repos":[{"repo":"` + spoonRepo + `"}]}}`
+			governed := ssoSession(t, "sub-governed-admin", "admin@corp.example", oidc.RoleAdmin)
+			for _, door := range runDoors {
+				w := doSSO(t, srv, http.MethodPost, door.path, governed, body)
+				got := strings.Contains(w.Body.String(), reasonImageDigestRequired)
+				if tc.refused && (w.Code != http.StatusForbidden || !got || !strings.Contains(w.Body.String(), tc.image)) {
+					t.Fatalf("%s: %d %s; want 403 %s naming %s", door.name, w.Code, w.Body.String(), reasonImageDigestRequired, tc.image)
+				}
+				if !tc.refused && got {
+					t.Fatalf("%s: refused by the digest rule: %d %s", door.name, w.Code, w.Body.String())
+				}
+				if w := do(t, srv, http.MethodPost, door.path, adminToken, body); strings.Contains(w.Body.String(), reasonImageDigestRequired) {
+					t.Fatalf("%s: the admin token was bound by the digest rule: %d %s", door.name, w.Code, w.Body.String())
+				}
+			}
+		})
 	}
+	src, err := os.ReadFile("run_fold_steps.go")
+	if err != nil || !strings.Contains(string(src), "s.imageDigestRefusal(f.r.Context(), f.carriedImage, true)") {
+		t.Error("stepWorkspaces no longer holds a policy-carried workspace's base image to the digest rule")
+	}
+}
+
+// TestImageDigestRule_Revive: a revive re-runs create's decision on the input the run's create checked
+// (AgentRun.ImageInput), under the rule as it is at the revive, by the run owner's authority.
+func TestImageDigestRule_Revive(t *testing.T) {
+	tag, pinned, convention := digestTagRef, digestPinnedRef, ""
+	for _, tc := range []struct {
+		name     string
+		ruleOn   bool
+		input    *string
+		operator bool // an operator-owned run (the admin token, local mode)
+		owner    bool // the owner revives (a member session); else the admin token
+		refused  bool
+		exempt   bool
+	}{
+		{"tag ref", true, &tag, false, true, true, false},
+		{"digest ref", true, &pinned, false, true, false, false},
+		{"convention image", true, &convention, false, true, false, false},
+		{"no recorded input (a run from before the rule reached revive), rule on", true, nil, false, true, true, false},
+		{"no recorded input, rule off", false, nil, false, true, false, false},
+		{"tag ref, rule off", false, &tag, false, true, false, false},
+		{"operator-owned run", true, &tag, true, false, false, true},
+		{"a member's run revived by an admin", true, &tag, false, false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, _ := newOwnerFixture(t)
+			f.st.site.Images = &types.SiteImages{RequireDigest: tc.ruleOn}
+			f.st.run.ImageInput, f.st.run.OperatorOwned = tc.input, tc.operator
+			code, body := f.reviveAs(t, tc.owner)
+			if tc.refused {
+				if code != http.StatusForbidden || !strings.Contains(body, reasonImageDigestRequired) ||
+					!strings.Contains(body, "images.require_digest") || !strings.Contains(body, "Start a new run to use an allowed image") {
+					t.Fatalf("revive = %d %s; want 403 %s with the revive sentence", code, body, reasonImageDigestRequired)
+				}
+				if tc.input != nil && !strings.Contains(body, *tc.input) {
+					t.Errorf("refusal %s does not name the image %q", body, *tc.input)
+				}
+				f.assertReviveRefused(t, reasonImageDigestRequired)
+				return
+			}
+			if code != http.StatusOK {
+				t.Fatalf("revive = %d %s, want 200", code, body)
+			}
+			var marked bool
+			for _, ev := range f.audit.eventsFor(f.run.ID, "run.revive") {
+				if ev.Outcome == "success" {
+					marked = leaseAuditData(t, ev)["image_digest_exempt"] == true
+				}
+			}
+			if marked != tc.exempt {
+				t.Errorf("run.revive success row image_digest_exempt = %v, want %v", marked, tc.exempt)
+			}
+		})
+	}
+	t.Run("a rule turned on after create refuses the revive", func(t *testing.T) {
+		f, _ := newOwnerFixture(t)
+		// Create's own decision on the tag ref, with the rule off: allowed.
+		if v, err := f.srv.imageDigestVerdict(memberCtx(nil), tag); err != nil || v != digestAllowed {
+			t.Fatalf("create with the rule off = %v, %v; want allowed", v, err)
+		}
+		f.st.run.ImageInput = &tag
+		f.st.site.Images = &types.SiteImages{RequireDigest: true}
+		if code, body := f.reviveAs(t, true); code != http.StatusForbidden {
+			t.Fatalf("revive after the rule was turned on = %d %s, want 403", code, body)
+		}
+		f.assertReviveRefused(t, reasonImageDigestRequired)
+	})
+	t.Run("unreadable site config fails closed", func(t *testing.T) {
+		f, _ := newOwnerFixture(t)
+		f.st.run.ImageInput = &tag
+		f.st.siteErr = errors.New("db down")
+		if code, body := f.reviveAs(t, true); code != http.StatusServiceUnavailable {
+			t.Fatalf("revive with the site config unreadable = %d %s, want 503", code, body)
+		}
+		if len(f.rr.replaced) != 0 {
+			t.Error("a revive that could not read the digest rule replaced the proxy")
+		}
+	})
 }
 
 // TestImageDigestRule_TemplateAndPresetStartNothing: a template import only validates a document (it starts
