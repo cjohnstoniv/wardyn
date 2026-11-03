@@ -81,7 +81,9 @@ test.describe("Run detail — Desktop", () => {
     const [popup] = await Promise.all([context.waitForEvent("page"), desk.getByRole("button", { name: "Open desktop" }).click()]);
     await popup.waitForLoadState("domcontentloaded").catch(() => {});
 
-    expect(captured).not.toBeNull();
+    // The click opens a blank tab at once; the ticket's POST lands in that same tab once it is minted and bound.
+    await expect.poll(() => captured).not.toBeNull();
+    await expect(popup).toHaveURL(/\/__wardyn\/enter$/);
     const { url, postData, cookie } = captured!;
     expect(new URL(url).origin).not.toBe(new URL(page.url()).origin);
     expect(new URL(url).search).toBe("");
