@@ -4,11 +4,16 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"io"
+	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -219,5 +224,27 @@ func TestSSHGateway_ContainerRunForwardStaysSocat(t *testing.T) {
 	_ = conn.Close()
 	if got := log.all(); len(got) != 1 || !slices.Equal(got[0], []string{"socat", "-", "TCP:127.0.0.1:9999"}) {
 		t.Errorf("container -L exec = %v, want [[socat - TCP:127.0.0.1:9999]]", got)
+	}
+}
+
+// A UI app on a macOS VM's Screen Sharing ports is refused by the relay with a sentence, before any exec and
+// with no ui.open row; the same port on a Linux VM run is not refused by this check.
+func TestUIGateway_MacOSVMScreenSharingPortRefused(t *testing.T) {
+	for _, port := range []int{5900, 5905, 5909} {
+		h := newUIHarness(t, okBackend())
+		h.run.MachineKind = types.MachineMacOSVM
+		h.store.putRun(h.run)
+		now := time.Now()
+		sess := uiSession{Run: h.run.ID, App: "code", Port: port, Principal: h.owner,
+			Expires: now.Add(time.Hour).Unix(), IssuedAt: 1, AuthorizedAt: now.Unix()}
+		ctx := context.WithValue(context.Background(), uiSessionCtxKey{}, sess)
+		_, err := h.srv.uiDial(ctx, "tcp", h.run.ID.String()+":"+strconv.Itoa(port))
+		var de *uiDialError
+		if !errors.As(err, &de) || de.status != http.StatusForbidden || !strings.Contains(de.msg, "open the run's window instead") {
+			t.Fatalf("port %d: uiDial = %v, want 403 naming the run's window", port, err)
+		}
+		if rows := h.audit.auditRows("ui.open", "success"); len(rows) != 0 {
+			t.Errorf("port %d: a refused relay wrote ui.open rows %+v", port, rows)
+		}
 	}
 }

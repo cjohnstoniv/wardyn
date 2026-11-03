@@ -728,6 +728,13 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	if runIsKept(run) {
 		return nil, uiFail(ctx, http.StatusConflict, reasonUIGatewayRunKept, "run has ended; the UI app is gone")
 	}
+	// A macOS VM's loopback also holds Screen Sharing (5900-5909): the desktop door, which the window's
+	// session and recording accounting covers. Refused here, before any launcher probe, relay exec or
+	// ui.open row, rather than left to the guest agent's own refusal.
+	if run.MachineKind.IsMacOSVM() && guestagent.MacScreenSharingPort(sess.Port) {
+		return nil, uiFail(ctx, http.StatusForbidden, reasonUIGatewayAppNotDeclared,
+			fmt.Sprintf("port %d is the macOS VM's Screen Sharing and can't be a UI app; open the run's window instead", sess.Port))
+	}
 	// …and the human, re-asserted against that same freshly-loaded run and
 	// against the revoke cutoff. The cookie is a long-lived credential; this is
 	// what keeps it bounded-stale rather than final (uiSessionStillAuthorized).
