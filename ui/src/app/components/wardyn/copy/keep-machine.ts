@@ -137,7 +137,7 @@ export const KEEP_LIST = {
   /** K-51 */
   SUMMARY: (n: number, mac: string) => `${n} on ${mac}`,
   /** K-52 */
-  LEDE: (days?: number) => `macOS VMs kept on your own Mac between runs, with your files, tools and sign-ins. Wardyn deletes one ${afterDays(days)}.`,
+  LEDE: (days?: number) => `macOS VMs kept on your own Mac between runs, with your files, tools and sign-ins. Wardyn deletes one ${afterDays(days)}${days === undefined ? "" : " (the current setting)"}. Each machine shows its own date.`,
   /** K-53 */
   META: (mac: string, base: string, gb: number) => `${mac} · ${base} base · ${gb} GB written`,
   /** K-54 */
