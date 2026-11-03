@@ -213,7 +213,19 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   // console: a canvas mounted with no <AppShell> above it gets the default
   // no-op setter and simply never enters focus.
   const { focus, setFocus } = useFocusMode();
-  const exitFocus = React.useCallback(() => setFocus(false), [setFocus]);
+  // An ordinary exit (Exit focus, Escape, the leave chord) hands focus back to the button that opened it. That button
+  // is a new element by then, so the effect below finds it after the cockpit has rendered. Unmounting skips this.
+  const focusTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const restoreFocusRef = React.useRef(false);
+  const exitFocus = React.useCallback(() => {
+    restoreFocusRef.current = true;
+    setFocus(false);
+  }, [setFocus]);
+  React.useEffect(() => {
+    if (focus || !restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    (focusTriggerRef.current ?? document.getElementById("main-content") ?? document.body).focus();
+  }, [focus]);
   // Never leave the console headless: whatever unmounts this canvas — a route
   // change, an ErrorBoundary catch — puts the shell's chrome back.
   React.useEffect(() => () => setFocus(false), [setFocus]);
@@ -547,6 +559,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
               {/* A write that failed outlives Done: leaving the editor must not read as "saved". */}
               {status === "failed" && <LayoutStatus status={status} failedPreset={failedPreset} onRetry={retry} />}
               <button
+                ref={focusTriggerRef}
                 type="button"
                 onClick={() => setFocus(true)}
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-xs font-medium text-muted-foreground shadow-xs hover:text-foreground"

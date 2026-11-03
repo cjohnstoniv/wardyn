@@ -730,6 +730,10 @@ export function AppShell({
               <main
                 id="main-content"
                 tabIndex={-1}
+                // Focus mode paints its overlay in a portal over this region; the run header and tabs stay mounted
+                // beneath it, so they must leave the tab order and the accessibility tree while it is on. The
+                // overlay, the terminal and the banners all live outside this element and stay reachable.
+                inert={focus}
                 className="scroll-thin min-w-0 flex-1 overflow-y-auto focus:outline-none"
               >
                 {/* Keyed by pathname so navigating away from a screen that threw

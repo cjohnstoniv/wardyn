@@ -75,6 +75,13 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
   // alone there; the reserved chord and the Exit focus button are how a person leaves.
   const terminalRef = React.useRef<HTMLDivElement>(null);
 
+  // The control that opened focus mode unmounts with the cockpit, leaving focus on nothing. Land it on Exit focus,
+  // the one control that is always there and always safe to press.
+  const exitRef = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => {
+    exitRef.current?.focus();
+  }, []);
+
   React.useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const inTerminal = e.target instanceof Node && !!terminalRef.current?.contains(e.target);
@@ -135,6 +142,7 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
 
         <div className={cn("absolute left-4 top-3 flex items-center gap-3 rounded-xl px-3 py-1.5", GLASS)}>
           <button
+            ref={exitRef}
             type="button"
             onClick={onExit}
             className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border px-2 text-xs font-medium text-foreground hover:bg-accent"

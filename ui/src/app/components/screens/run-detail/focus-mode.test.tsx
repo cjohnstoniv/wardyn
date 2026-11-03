@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as React from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 
 const getLayout = vi.fn();
 const putLayout = vi.fn();
@@ -87,7 +87,11 @@ afterEach(() => vi.unstubAllGlobals());
 // The whole point of the mode: the canvas asks, the SHELL answers. Driven
 // through the real AppShell rather than a stub context, because "the shell
 // hides its own chrome" is the assertion.
-function renderCockpitInShell(Wrap: React.ComponentType<{ children: React.ReactNode }> = React.Fragment) {
+function renderCockpitInShell(
+  Wrap: React.ComponentType<{ children: React.ReactNode }> = React.Fragment,
+  // Stands in for the run header and tabs, which sit beside the canvas in main-content.
+  covered?: React.ReactNode,
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) =>
@@ -111,7 +115,16 @@ function renderCockpitInShell(Wrap: React.ComponentType<{ children: React.ReactN
         <Wrap>
           <Routes>
             <Route element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}>
-              <Route path="/runs/:id" element={<RunCanvas ctx={ctx()} />} />
+              <Route
+                path="/runs/:id"
+                element={
+                  <>
+                    {covered}
+                    <RunCanvas ctx={ctx()} />
+                  </>
+                }
+              />
+              <Route path="/elsewhere" element={<p>elsewhere</p>} />
             </Route>
           </Routes>
         </Wrap>
@@ -229,6 +242,61 @@ describe("Focus mode — the shell gets out of the way", () => {
 
     await user.click(screen.getByRole("button", { name: RUN_COCKPIT.exitFocus }));
     await waitFor(() => expect(screen.getByRole("banner")).toBeInTheDocument());
+  });
+});
+
+describe("Focus mode — keyboard", () => {
+  let navigateTo: (to: string) => void = () => {};
+  function Covered() {
+    const navigate = useNavigate();
+    navigateTo = navigate;
+    return <button type="button">Approvals tab</button>;
+  }
+  const main = () => document.getElementById("main-content") as HTMLElement;
+
+  it("moves focus into the overlay on entry, and makes the covered region inert", async () => {
+    const user = userEvent.setup();
+    renderCockpitInShell(undefined, <Covered />);
+    await screen.findByRole("heading", { name: "Egress" });
+    expect(main()).not.toHaveAttribute("inert");
+
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.enterFocus }));
+
+    expect(screen.getByRole("button", { name: RUN_COCKPIT.exitFocus })).toHaveFocus();
+    expect(main()).toHaveAttribute("inert");
+    // The overlay and the terminal's host are outside main-content, so Tab can still reach them.
+    expect(main().contains(screen.getByRole("button", { name: RUN_COCKPIT.exitFocus }))).toBe(false);
+    expect(main().contains(screen.getByText("the session"))).toBe(false);
+    // The covered tab is still in the DOM, but only inside the inert region.
+    expect(main().contains(screen.getByText("Approvals tab"))).toBe(true);
+  });
+
+  it("removes inert and returns focus to the Focus button on Escape and on the exit button", async () => {
+    const user = userEvent.setup();
+    renderCockpitInShell(undefined, <Covered />);
+    await screen.findByRole("heading", { name: "Egress" });
+
+    for (const leave of [() => user.keyboard("{Escape}"), () => user.click(screen.getByRole("button", { name: RUN_COCKPIT.exitFocus }))]) {
+      await user.click(screen.getByRole("button", { name: RUN_COCKPIT.enterFocus }));
+      expect(main()).toHaveAttribute("inert");
+      await leave();
+      await waitFor(() => expect(screen.getByRole("button", { name: RUN_COCKPIT.enterFocus })).toHaveFocus());
+      expect(main()).not.toHaveAttribute("inert");
+    }
+  });
+
+  it("clears inert when the run page unmounts while focus is on, and does not throw", async () => {
+    const user = userEvent.setup();
+    renderCockpitInShell(undefined, <Covered />);
+    await screen.findByRole("heading", { name: "Egress" });
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.enterFocus }));
+    expect(main()).toHaveAttribute("inert");
+
+    act(() => navigateTo("/elsewhere"));
+
+    await screen.findByText("elsewhere");
+    expect(main()).not.toHaveAttribute("inert");
+    expect(screen.queryByRole("button", { name: RUN_COCKPIT.exitFocus })).toBeNull();
   });
 });
 
