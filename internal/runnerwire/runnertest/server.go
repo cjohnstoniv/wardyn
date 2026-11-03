@@ -37,6 +37,9 @@ type Server struct {
 	// Resident holds the values delivered through deliver_resident, by run id.
 	Resident map[uuid.UUID][]runnerwire.DeliverResidentArgs
 	Erased   []uuid.UUID
+	// KeptMachineCalls is every kept_machine call received, in order. The fake holds no machines: the
+	// first delete of an id answers deleted, a repeat answers already_absent.
+	KeptMachineCalls []runnerwire.KeptMachineArgs
 }
 
 // Serve runs the runner side of a session over conn, backed by sub, until the
@@ -94,6 +97,27 @@ func (s *Server) reclaimDrive(ctx context.Context, args json.RawMessage) (any, e
 		return runnerwire.ReclaimDriveResult{InUse: true}, nil
 	}
 	return runnerwire.ReclaimDriveResult{Outcome: outcome}, err
+}
+
+// keptMachine answers kept_machine: it records the call and answers per the contract.
+func (s *Server) keptMachine(args json.RawMessage) (any, error) {
+	a, err := decode[runnerwire.KeptMachineArgs](args)
+	if err != nil {
+		return nil, err
+	}
+	if a.Op != runnerwire.KeptMachineOpDelete {
+		return nil, runnerwire.Refuse("kept_machine op %q is unknown", a.Op)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := runnerwire.KeptMachineDeleted
+	for _, c := range s.KeptMachineCalls {
+		if c.Op == a.Op && c.ID == a.ID {
+			out = runnerwire.KeptMachineAlreadyAbsent
+		}
+	}
+	s.KeptMachineCalls = append(s.KeptMachineCalls, a)
+	return runnerwire.KeptMachineResult{Outcome: out}, nil
 }
 
 func (s *Server) handle(ctx context.Context, id uint32, method string, args json.RawMessage) (any, error) {
@@ -182,6 +206,8 @@ func (s *Server) handle(ctx context.Context, id uint32, method string, args json
 		return nil, ws.WorkloadStatus(ctx, a)
 	case runnerwire.MethodReclaimDrive:
 		return s.reclaimDrive(ctx, args)
+	case runnerwire.MethodKeptMachine:
+		return s.keptMachine(args)
 	case runnerwire.MethodEnsureProxyImg:
 		rv, ok := s.sub.(runner.ProxyReviver)
 		if !ok {

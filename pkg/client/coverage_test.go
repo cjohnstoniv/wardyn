@@ -127,6 +127,7 @@ func routeFamilies() map[string][]string {
 		"site-config": {"GetSiteConfig", "PutSiteConfig", "PutSiteConfigResult", "PutSiteConfigClearing"},
 		"drives":      {"GetDrives", "ApplyDrives", "ApplyDrivesResult", "ListMemberDrives", "DeleteMemberDrive", "CreateMyDrive", "DeleteMyDrive"},
 		"templates":   {"ListTemplates", "GetTemplate", "SaveTemplate", "DeleteTemplate", "CopyTemplate", "ImportTemplate", "ListTemplateGroupAdmins", "GrantTemplateGroupAdmin", "RevokeTemplateGroupAdmin"},
+		"machines":    {"ListMyMachines", "DeleteMyMachine"},
 		"walls":       {"GetMyWalls", "PutMyWalls", "ClearMyWalls"},
 		"presets":     {"ListPresets", "GetPreset", "PutPreset", "DeletePreset", "ApplyPresets"},
 		"governance": {"GetGovernance", "ApplyGovernance", "ApplyGovernanceResult", "PlanGovernance",

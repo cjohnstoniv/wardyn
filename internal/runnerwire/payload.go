@@ -281,6 +281,12 @@ type MacVMCaps struct {
 	// Window says the runner serves mac_window: it opens an attended window onto a macOS VM run it holds.
 	// A runner without it (older) is never sent the call.
 	Window bool `json:"window,omitempty"`
+	// KeptMachines says the runner keeps a person's kept machines (SandboxSpec.KeptMachine) and deletes
+	// them (kept_machine). A runner without it is never sent a macOS VM run with one.
+	KeptMachines bool `json:"kept_machines,omitempty"`
+	// Kept is the Mac's kept machines and the disk they may take; nil when the runner keeps none or has
+	// not counted yet.
+	Kept *MacVMKept `json:"kept,omitempty"`
 	// Bases are the Mac's other bases, each derived from Base (Standard, MAC-B04) with its operator's own
 	// install list, in name order; absent when it has none. A run names one in its create's macos_base.
 	Bases []MacVMDerivedBase `json:"bases,omitempty"`
@@ -300,6 +306,21 @@ type MacVMCaps struct {
 	// Absent is 0.
 	FreeGB int `json:"free_gb,omitempty"`
 	NeedGB int `json:"need_gb,omitempty"`
+}
+
+// MacVMKept is a Mac's kept machines. LimitBytes is the operator's limit for them all, WorstBytes what
+// they could grow to, AllocatedBytes what they take now.
+type MacVMKept struct {
+	LimitBytes, WorstBytes, AllocatedBytes int64
+	Machines                               []MacVMKeptMachine
+}
+
+// MacVMKeptMachine is one kept machine on the Mac, by the id the org gave it.
+type MacVMKeptMachine struct {
+	ID              string
+	Bytes           int64
+	InUse, Scrubbed bool
+	ExpiresAt       time.Time
 }
 
 // MacVMCaps.Reason values, in priority order. An unknown value is a newer runner's, and decodes as itself.
