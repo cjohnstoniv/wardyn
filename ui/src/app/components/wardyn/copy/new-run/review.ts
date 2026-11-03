@@ -28,6 +28,8 @@ export const NR_REVIEW = {
   BLOCKERS_ONE: "1 blocker before launch",
   BLOCKERS_MANY: (n: string | number) => `${n} blockers before launch`,
   BLOCKER_STALE: "The setup changed. Check the server's current result again.",
+  BLOCKER_EXPIRED: "The server's check is more than a minute old. Check again before you launch.",
+  CHECKING: "Checking with the server…",
   /** pending W-29: the recommended text until the owner answers. */
   BLOCKER_UNSUPPORTED: (path: string | number) => `This document field isn't supported here: ${path}.`,
   CHECK_AGAIN: "Check again",

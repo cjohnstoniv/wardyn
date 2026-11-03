@@ -108,6 +108,7 @@ describe("Review blockers", () => {
 
   it("adds the stale line only when nothing else holds Launch", () => {
     expect(buildBlockers({ ...NOTHING, stale: true })).toEqual([{ id: "stale", kind: "stale", text: NR_REVIEW.BLOCKER_STALE }]);
+    expect(buildBlockers({ ...NOTHING, stale: true, expired: true })).toEqual([{ id: "stale", kind: "stale", text: NR_REVIEW.BLOCKER_EXPIRED }]);
     expect(buildBlockers({ ...EVERYTHING }).some((b) => b.kind === "stale")).toBe(false);
     expect(buildBlockers(NOTHING)).toEqual([]);
   });
