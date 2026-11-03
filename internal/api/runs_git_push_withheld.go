@@ -20,11 +20,8 @@ import (
 type gitPushWithheld struct{ github, ado bool }
 
 // gitPushWithheldFor reads the decision at create and at the queue's start (wireRunGrants runs at
-// both, so the walls read here are the run owner's current ones). Effective is the policy's list
-// where it names one, else the walls' own list: the git lanes have no provider default the walls
-// could meet instead. Where both name a list the push needs code_write in both, which at create is
-// the meet personalWallsRunStep already made and at the queue's start catches walls saved since.
-// Walls that cannot be read refuse the run, as the capability meet's do.
+// both, so the walls read here are the run owner's current ones, and the wall preset the run's frozen
+// copy). Walls that cannot be read refuse the run, as the capability meet's do.
 func (s *Server) gitPushWithheldFor(ctx context.Context, run types.AgentRun, spec types.RunPolicySpec) (gitPushWithheld, *runRefusal) {
 	walls, err := s.personalWalls(ctx, run.CreatedBy)
 	if err != nil {
@@ -32,10 +29,24 @@ func (s *Server) gitPushWithheldFor(ctx context.Context, run types.AgentRun, spe
 		return gitPushWithheld{}, runError(http.StatusServiceUnavailable, reasonGrantWithheldUnread,
 			"Your walls could not be read, so whether this run may push cannot be decided. Walls that cannot be read refuse the run; try again.")
 	}
-	return gitPushWithheld{
+	return gitPushWithheldBy(spec, walls, run.WallPreset), nil
+}
+
+// gitPushWithheldBy is the decision on spec, the person's walls and the run's wall preset (nil for
+// none). Effective is the policy's list where it names one, else each wall's own list: the git lanes
+// have no provider default the walls could meet instead. Where several name a list the push needs
+// code_write in each, which at create is the meet the walls' steps already made and at the queue's
+// start catches walls saved since.
+func gitPushWithheldBy(spec types.RunPolicySpec, walls types.PersonalWallsSpec, preset *types.WallPresetOnRun) gitPushWithheld {
+	w := gitPushWithheld{
 		github: pushWithheldBy(spec.GitHubCapabilities, walls.GitHubCapabilities, ghscope.CapCodeWrite),
 		ado:    pushWithheldBy(spec.AzureDevOpsCapabilities, walls.AzureDevOpsCapabilities, adoscope.CapCodeWrite),
-	}, nil
+	}
+	if preset != nil {
+		w.github = w.github || pushWithheldBy(nil, preset.Spec.GitHubCapabilities, ghscope.CapCodeWrite)
+		w.ado = w.ado || pushWithheldBy(nil, preset.Spec.AzureDevOpsCapabilities, adoscope.CapCodeWrite)
+	}
+	return w
 }
 
 func pushWithheldBy[C ~string](policy []C, wall *[]C, write C) bool {

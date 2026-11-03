@@ -735,6 +735,11 @@
       "why": "A preset's version only means something beside its preset."
     },
     {
+      "name": "wall_preset",
+      "excluded": "launch",
+      "why": "A wall preset is chosen at each launch."
+    },
+    {
       "name": "runner_pool_id",
       "part": "runner",
       "omitted": "baseline",

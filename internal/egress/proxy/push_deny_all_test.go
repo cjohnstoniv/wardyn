@@ -215,7 +215,7 @@ func TestADORESTPushDenyAll(t *testing.T) {
 				target += strings.TrimPrefix(h.branch(), "refs/") + "&api-version=7.1"
 			}
 			rec := h.do(t, c.method, target, c.body(h), nil)
-			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "its policy refuses every push") {
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "every push is refused for this run") {
 				t.Fatalf("status = %d body %s, want 403 with the deny_all sentence", rec.Code, rec.Body.String())
 			}
 			if n := len(h.fake.Requests()); n != 0 {
@@ -292,5 +292,18 @@ func TestPushDenyAllCompiles(t *testing.T) {
 	}
 	if rs := compilePushRules(&types.PushRulesSpec{DenyAll: false}); rs != nil {
 		t.Errorf("deny_all false compiled to %+v, want no rules", rs)
+	}
+}
+
+// TestPushDenyAllSentenceNamesNoSource: a policy, a person's walls and a wall preset all set deny_all,
+// so what git and the Azure DevOps REST door show is true for each and blames none of them.
+func TestPushDenyAllSentenceNamesNoSource(t *testing.T) {
+	for _, s := range []string{pushDenyAllRefusal, adoPushDenyAllRefusal} {
+		if !strings.Contains(s, "every push is refused for this run") || strings.Contains(s, "policy") {
+			t.Errorf("refusal %q, want it to say every push is refused for this run, naming no policy", s)
+		}
+	}
+	if !strings.HasPrefix(pushDenyAllRefusal, "wardyn: ") || !strings.HasPrefix(adoPushDenyAllRefusal, "Wardyn refused this Azure DevOps request: ") {
+		t.Errorf("refusals %q and %q lost their door's prefix", pushDenyAllRefusal, adoPushDenyAllRefusal)
 	}
 }
