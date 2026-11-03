@@ -291,8 +291,6 @@ type CreateRunRequest struct {
 	// No end (allow_no_end with user_changes_limits); otherwise 403
 	// run_end_no_end_not_allowed or run_limits_gate_denied.
 	NoEnd bool `json:"no_end,omitempty"`
-	// WallPreset narrows the run with a wall preset, by uuid or a built-in's name.
-	WallPreset string `json:"wall_preset,omitempty"`
 	// Service keeps a background command running: the supervisor in the sandbox restarts it when it
 	// exits with an error and, with both a port and a health block, checks it; a port alone is not
 	// checked. Only with experience background and workload kind command on a container sandbox;

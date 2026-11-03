@@ -231,7 +231,7 @@ func runCmd(client clientFn) *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "created run %s (state %s, confinement %s)\n", run.ID, run.State, run.ConfinementClass)
 				fmt.Fprintf(cmd.OutOrStdout(), "  spiffe id: %s\n", run.SPIFFEID)
 				fmt.Fprintln(cmd.OutOrStdout(), endLine(run.AgentRun))
-				wallPreset.printLine(cmd.OutOrStdout())
+				wallPreset.printLine(cmd.Context(), client(), cmd.OutOrStdout(), run.ID)
 				// The image is resolved after the 201 (the build runs server-side),
 				// so it is read back later with `wardyn run get`, never printed here.
 				if interactive || body.Experience == sdk.ExperienceInteractive {

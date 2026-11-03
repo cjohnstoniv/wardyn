@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // presetsServer answers /api/v1/wall-presets from a fixed list and records every other request.
@@ -36,6 +37,11 @@ func newPresetsServer(t *testing.T, ps *presetsServer) *httptest.Server {
 			return
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/wall-presets/"):
 			_, _ = io.WriteString(w, `{"id":"read-only","scope":"builtin","name":"Read-only","version":1,"spec":{"push_rules":{"deny_all":true}}}`)
+			return
+		}
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/runs/") {
+			// The run read names the version the server froze, which may differ from the list's.
+			_, _ = io.WriteString(w, `{"id":"`+uuid.NewString()+`","state":"PENDING","wall_preset":{"id":"read-only","name":"Read-only","scope":"builtin","version":7}}`)
 			return
 		}
 		ps.reqs = append(ps.reqs, r.Method+" "+r.URL.Path)
@@ -176,7 +182,7 @@ func TestRunWallPreset(t *testing.T) {
 	ps := &presetsServer{list: presetsList}
 	srv := newPresetsServer(t, ps)
 	out, err := execCmdCapture(t, "run", "--agent", "claude-code", "--wall-preset", "Read-Only", "--url", srv.URL, "--token", "tok")
-	if err != nil || ps.body["wall_preset"] != "read-only" || !strings.Contains(out, "Wall preset: Read-only (built in, version 1).") {
+	if err != nil || ps.body["wall_preset"] != "read-only" || !strings.Contains(out, "Wall preset: Read-only (built in, version 7).") {
 		t.Fatalf("builtin: %q %v %v", out, err, ps.body)
 	}
 	if _, err = execCmdCapture(t, "run", "--agent", "claude-code", "--wall-preset", idOrg, "--url", srv.URL, "--token", "tok"); err != nil || ps.body["wall_preset"] != idOrg {
@@ -196,5 +202,71 @@ func TestRunFileAcceptsWallPreset(t *testing.T) {
 	}
 	if types.IsBuiltinWallPresetName("docs") {
 		t.Fatal("test fixture name collides with a built-in")
+	}
+}
+
+// A label two groups share, in any case, is refused with both ids; an id or a unique label still works.
+func TestWallPresetGroupLabelDuplicates(t *testing.T) {
+	dup := strings.Replace(presetsList, `"groups":["g1"],"group_labels":{"g1":"Platform"}`,
+		`"groups":["g1","g2","g3"],"group_labels":{"g1":"Platform","g2":"platform","g3":"Data"}`, 1)
+	ps := &presetsServer{list: dup}
+	srv := newPresetsServer(t, ps)
+	f := writePresetFile(t, "denied_domains: [evil.example]\n")
+	_, err := execCmdCapture(t, "walls", "presets", "set", "Team", "--group", "PLATFORM", "-f", f, "--url", srv.URL, "--token", "tok")
+	if err == nil || !strings.Contains(err.Error(), "more than one group is labelled") || !strings.Contains(err.Error(), "g1, g2") || len(ps.reqs) != 0 {
+		t.Fatalf("duplicate label: err = %v, requests %v", err, ps.reqs)
+	}
+	if _, err = execCmdCapture(t, "walls", "presets", "show", "docs", "--group", "platform", "--url", srv.URL, "--token", "tok"); err == nil ||
+		!strings.Contains(err.Error(), "more than one group is labelled") {
+		t.Fatalf("show with a duplicate label: %v", err)
+	}
+	if _, err = execCmdCapture(t, "walls", "presets", "set", "Team", "--group", "g2", "-f", f, "--url", srv.URL, "--token", "tok"); err != nil || ps.body["group_id"] != "g2" {
+		t.Fatalf("by id: %v %v", err, ps.body)
+	}
+	if _, err = execCmdCapture(t, "walls", "presets", "set", "Team", "--group", "data", "-f", f, "--url", srv.URL, "--token", "tok"); err != nil || ps.body["group_id"] != "g3" {
+		t.Fatalf("unique label: %v %v", err, ps.body)
+	}
+}
+
+// run --file <doc> --wall-preset <name>: the document goes through the import door, the preset is looked up
+// by name, and the create request carries the document's intent and the preset's id together.
+func TestRunFileWithWallPresetImportToCreate(t *testing.T) {
+	rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){
+		"GET /api/v1/wall-presets": replyJSON(http.StatusOK, json.RawMessage(presetsList)),
+		importPath: func(w http.ResponseWriter, body []byte) {
+			var req sdk.TemplateImportRequest
+			_ = json.Unmarshal(body, &req)
+			var doc sdk.TemplateDocument
+			_ = json.Unmarshal(yamlToJSONForTest(t, req.Source), &doc)
+			replyJSON(http.StatusOK, sdk.TemplateImportResult{Document: &doc, Diagnostics: []sdk.TemplateDiagnostic{}})(w, nil)
+		},
+		runsPath: replyJSON(http.StatusCreated, sdk.CreateRunResult{AgentRun: types.AgentRun{ID: uuid.MustParse(idMine), State: types.RunPending}}),
+		"GET /api/v1/runs/" + idMine: replyJSON(http.StatusOK, map[string]any{
+			"id": idMine, "wall_preset": map[string]any{"id": idOrg, "name": "Docs", "scope": "org", "version": 4}}),
+	})
+	file := writeTemplateFile(t, "run.yaml", runDocYAML)
+	if _, err := rig.run(t, "run", "--file", file, "--wall-preset", "docs"); err == nil || !strings.Contains(err.Error(), "more than one of your audiences") {
+		t.Fatalf("ambiguous name: %v", err)
+	}
+	// A name in two audiences is refused before the door or the create is touched.
+	if n := len(rig.sent(importPath)) + len(rig.sent(runsPath)); n != 0 {
+		t.Fatalf("a refused lookup still sent %d request(s)", n)
+	}
+	out, err := rig.run(t, "run", "--file", file, "--wall-preset", idOrg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req sdk.CreateRunRequest
+	if len(rig.sent(importPath)) != 1 || len(rig.sent(runsPath)) != 1 {
+		t.Fatalf("import %d, create %d, want one each", len(rig.sent(importPath)), len(rig.sent(runsPath)))
+	}
+	if err := json.Unmarshal([]byte(rig.sent(runsPath)[0]), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.WallPreset != idOrg || req.Shape != "environment" || req.Placement != sdk.PlacementRemote {
+		t.Errorf("create request = %+v, want the document's intent and wall_preset %s", req, idOrg)
+	}
+	if !strings.Contains(out, "Wall preset: Docs (organisation, version 4).") {
+		t.Errorf("output = %q, want the line from the run read (version 4)", out)
 	}
 }

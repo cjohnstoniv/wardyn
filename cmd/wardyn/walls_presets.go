@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,19 +86,29 @@ func (a wallPresetAudience) matches(p sdk.WallPreset, groupID string) bool {
 	return true
 }
 
-// wallPresetGroupID resolves --group to a group id: the id itself, or the label of a group you may save for.
-func wallPresetGroupID(g string, publish sdk.TemplatePublish) string {
+// wallPresetGroupID resolves --group to a group id: the id itself, or the label of a group you may save
+// for, compared without regard to case. Two groups with the same label are refused, listing their ids,
+// rather than one being picked.
+func wallPresetGroupID(g string, publish sdk.TemplatePublish) (string, error) {
 	for _, id := range publish.Groups {
 		if id == g {
-			return id
+			return id, nil
 		}
 	}
+	var ids []string
 	for id, label := range publish.GroupLabels {
 		if strings.EqualFold(label, g) {
-			return id
+			ids = append(ids, id)
 		}
 	}
-	return g
+	sort.Strings(ids)
+	switch len(ids) {
+	case 0:
+		return g, nil
+	case 1:
+		return ids[0], nil
+	}
+	return "", fmt.Errorf("more than one group is labelled %q (ids %s): use the group's id", g, strings.Join(ids, ", "))
 }
 
 // wallPresetAudienceWord names a preset's audience in the words the console uses.
@@ -143,7 +154,10 @@ func resolveWallPreset(list sdk.WallPresetList, ref string, aud wallPresetAudien
 	}
 	gid := ""
 	if aud.group != "" {
-		gid = wallPresetGroupID(aud.group, list.Publish)
+		var err error
+		if gid, err = wallPresetGroupID(aud.group, list.Publish); err != nil {
+			return sdk.WallPreset{}, err
+		}
 	}
 	var found []sdk.WallPreset
 	for _, p := range list.Presets {
@@ -232,7 +246,11 @@ func wallPresetSetCmd(client clientFn) *cobra.Command {
 			case aud.org:
 				req.Scope = types.WallPresetScopeOrg
 			case aud.group != "":
-				req.Scope, req.GroupID = types.WallPresetScopeGroup, wallPresetGroupID(aud.group, list.Publish)
+				gid, err := wallPresetGroupID(aud.group, list.Publish)
+				if err != nil {
+					return err
+				}
+				req.Scope, req.GroupID = types.WallPresetScopeGroup, gid
 			}
 			id := ""
 			for _, p := range list.Presets {
@@ -346,9 +364,10 @@ func printWallsSpec(out io.Writer, spec types.PersonalWallsSpec) error {
 
 // runWallPreset is `wardyn run --wall-preset`: the preset is looked up when the command starts, so a name in
 // more than one audience or a missing one is refused before the run is built, and the run is sent the
-// preset's id.
+// preset's id. The line saying which preset bound the run is read back from the run, not from that lookup.
 type runWallPreset struct {
-	ref, id, line string
+	ref, id string
+	publish sdk.TemplatePublish
 }
 
 func (w *runWallPreset) register(cmd *cobra.Command, client clientFn) {
@@ -365,15 +384,21 @@ func (w *runWallPreset) register(cmd *cobra.Command, client clientFn) {
 		if err != nil {
 			return err
 		}
-		w.id = p.ID
-		w.line = fmt.Sprintf("  Wall preset: %s (%s, version %d).", p.Name, wallPresetAudienceWord(p, list.Publish), p.Version)
+		w.id, w.publish = p.ID, list.Publish
 		return nil
 	}
 }
 
-// printLine says which preset the run was sent, as resolved when the command started.
-func (w *runWallPreset) printLine(out io.Writer) {
-	if w.line != "" {
-		fmt.Fprintln(out, w.line)
+// printLine says which wall preset, and which version of it, the server bound the run to. A run read that
+// fails or names no preset prints nothing: the line is never filled in from the earlier lookup.
+func (w *runWallPreset) printLine(ctx context.Context, c *sdk.Client, out io.Writer, run uuid.UUID) {
+	if w.id == "" {
+		return
 	}
+	rp, err := c.GetRunWallPreset(ctx, run)
+	if err != nil || rp == nil || rp.Name == "" {
+		return
+	}
+	p := sdk.WallPreset{Scope: types.WallPresetScope(rp.Scope), GroupID: rp.GroupID, Name: rp.Name, Version: rp.Version}
+	fmt.Fprintf(out, "  Wall preset: %s (%s, version %d).\n", rp.Name, wallPresetAudienceWord(p, w.publish), rp.Version)
 }
