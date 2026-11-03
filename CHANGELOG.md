@@ -23,6 +23,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- Endpoint sign-in: a changed endpoint now tells the people it signed out why ("destination changed"), and signing in again clears that note, as every other provider sign-in already did.
 - Endpoint sign-in: a stored refresh token is used only with the provider address and token URL it was signed in at. A renewal for a provider whose address, authority or token URL moved now answers "sign in" without sending the token, and a sign-in stored before this release asks the person to sign in again.
 - Finish setup now sticks: the console re-reads its setup status right after the install records completion, so the logo or the Admin home no longer sends the admin back into Getting started for up to five minutes.
 - Getting started no longer says the wrong thing in several places: an SSO install whose SSO side does not answer shows "SSO · not answering" instead of "isn't configured", a failed workspace list says so with a Retry instead of "No workspaces onboarded yet", Review no longer shows two verdicts when the barrier is ready and only a model provider is missing, a Kubernetes cluster with no barrier is pointed at the chart settings instead of the Docker daemon, and the welcome screen says "Couldn't reach Wardyn" instead of "Checking…" forever.

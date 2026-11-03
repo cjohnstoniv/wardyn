@@ -170,9 +170,9 @@ const (
 	endpointOIDCUnknownRowRefusal   = "No model provider with that uid signs people in"
 	endpointOIDCAuthorityRefusal    = "The endpoint's sign-in service could not be reached, so the sign-in was not started"
 	// endpointOIDCWrongIssuerRefusal and endpointOIDCSubjectMismatchRefusal name no issuer and no subject.
-	endpointOIDCWrongIssuerRefusal = "the identity token was issued by an authority other than the one the console signs you in with, " +
+	endpointOIDCWrongIssuerRefusal = "The identity token was issued by an authority other than the one the console signs you in with, " +
 		"and this provider is set to match your console sign-in"
-	endpointOIDCSubjectMismatchRefusal = "the identity token is not for the person signed in to this browser session"
+	endpointOIDCSubjectMismatchRefusal = "The identity token is not for the person signed in to this browser session"
 )
 
 // EndpointOIDCEnv is what an endpoint sign-in takes from the process rather than from a provider row.
@@ -907,13 +907,14 @@ func (s *Server) RedeemEndpointOIDCAccess(ctx context.Context, owner string, row
 // revocation endpoint. Best effort: a person's disconnect deletes the stored sign-in whether or not this
 // worked, and nothing it logs carries a token.
 func (s *Server) revokeEndpointOIDC(ctx context.Context, owner string, row types.ModelProvider) {
-	ctx, cancel := context.WithTimeout(secretstore.WithPurpose(ctx, secretstore.PurposeProviderSignIn), 5*time.Second)
+	// One assignment from the mark, so every read below is audited with this purpose.
+	rctx, cancel := context.WithTimeout(secretstore.WithPurpose(ctx, secretstore.PurposeProviderSignIn), 5*time.Second)
 	defer cancel()
-	blob, found, err := s.endpointOIDCBlob(ctx, owner, row)
+	blob, found, err := s.endpointOIDCBlob(rctx, owner, row)
 	if err != nil || !found {
 		return
 	}
-	ta, disc, err := s.endpointOIDCAuthority(ctx, row.OIDC)
+	ta, disc, err := s.endpointOIDCAuthority(rctx, row.OIDC)
 	if err != nil || disc.revocationURL == "" || blob.CaptureDigest != endpointOIDCCaptureDigest(row, ta.tokenURL) {
 		return
 	}
@@ -924,7 +925,7 @@ func (s *Server) revokeEndpointOIDC(ctx context.Context, owner string, row types
 			form.Set("client_secret", ta.clientSecret)
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, disc.revocationURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(rctx, http.MethodPost, disc.revocationURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return
 	}
@@ -934,13 +935,13 @@ func (s *Server) revokeEndpointOIDC(ctx context.Context, owner string, row types
 	}
 	resp, err := endpointOIDCClient().Do(req)
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: revoking an endpoint sign-in at its authority failed", slog.String("row", row.UID))
+		slog.WarnContext(rctx, "wardynd: revoking an endpoint sign-in at its authority failed", slog.String("row", row.UID))
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		slog.WarnContext(ctx, "wardynd: an authority refused to revoke an endpoint sign-in",
+		slog.WarnContext(rctx, "wardynd: an authority refused to revoke an endpoint sign-in",
 			slog.String("row", row.UID), slog.Int("status", resp.StatusCode))
 	}
 }

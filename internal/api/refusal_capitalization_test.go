@@ -47,7 +47,7 @@ var sentenceConstFragments = map[string]string{
 	"mpBRRenewing": whyRunRefusalClause, "mpBRRemedyRetry": whyRunRefusalClause, "mpBRPersistFailed": whyRunRefusalClause,
 	"mpRunRemedy": whyRunRefusalClause, "mpRunStateMissing": whyRunRefusalClause, "mpRunStateOff": whyRunRefusalClause,
 	"mpRunStateNotServing": whyRunRefusalClause, "mpRunNoKey": whyRunRefusalClause, "mpRunNoToken": whyRunRefusalClause,
-	"mpRunRemedyService": whyRunRefusalClause,
+	"mpRunRemedyService": whyRunRefusalClause, "mpRunNotSignedIn": whyRunRefusalClause, "mpRunSignInEnded": whyRunRefusalClause,
 
 	"laneAppReason": whyLaneReason, "laneSSHReason": whyLaneReason, "adoSSHRetired": whyLaneReason, "adoPATRetired": whyLaneReason,
 

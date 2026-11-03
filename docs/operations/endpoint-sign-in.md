@@ -37,8 +37,8 @@
 
 - Wardyn never matches on an email or a user name. Those can be changed by an admin.
 - A `console` sign-in that fails the check is refused. The reason is one of two:
-  - "the identity token was issued by an authority other than the one the console signs you in with";
-  - "the identity token is not for the person signed in to this browser session".
+  - "The identity token was issued by an authority other than the one the console signs you in with";
+  - "The identity token is not for the person signed in to this browser session".
 
 ## How a person signs in
 
