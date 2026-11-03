@@ -34,7 +34,9 @@ import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "./push-content-card";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
-import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
+import { OIDC_HOLD_LANE, REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
+import { OIDC_SIGN_IN } from "./copy/oidc-signin";
+import { useShellSetupStatus } from "./model-access-context";
 import { approvals as api } from "../../lib/api/approvals";
 import { HttpError } from "../../lib/api/core";
 import { getErrorMessage } from "../../lib/format";
@@ -197,6 +199,7 @@ export function LiveApprovals({
   run?: AdoCardRun | null;
   adminView?: boolean;
 }) {
+  const { status: setupStatus } = useShellSetupStatus();
   // Decides here go straight to the API with no ReasonDialog stop, so this is
   // the one gate for all FOUR mount sites (run detail, demo screen, and
   // record-pane.tsx's two) — see approvals.tsx's ApprovalCard for the
@@ -439,12 +442,17 @@ export function LiveApprovals({
   // provider; a MIXED set (both present, or reauth alongside something else)
   // falls through to the generic "waiting on you" heading rather than assert
   // either provider by name.
+  const isOidcHold = (a: ApprovalRequest) => a.kind === "credential_reauth" && a.requested_scope?.lane === OIDC_HOLD_LANE;
+  const allOidcReauth = pending.length > 0 && pending.every(isOidcHold);
   const allAwsReauth =
-    pending.length > 0 && pending.every((a) => a.kind === "credential_reauth" && !isAdoConsentRequest(a));
+    pending.length > 0 && pending.every((a) => a.kind === "credential_reauth" && !isAdoConsentRequest(a) && !isOidcHold(a));
   const allAdoConsent = pending.length > 0 && pending.every((a) => isAdoConsentRequest(a));
+  const oidcName = setupStatus?.model_providers?.find((p) => p.id === run?.model_provider_id && p.sign_in === "oidc");
   const heading = allAwsReauth
     ? REAUTH_HEADING
-    : allAdoConsent
+    : allOidcReauth
+      ? OIDC_SIGN_IN.APPROVAL_HEADING(oidcName ? oidcName.name || oidcName.id : OIDC_SIGN_IN.APPROVAL_UNNAMED)
+      : allAdoConsent
       ? ADO.STRIP_HEADING_CONSENT
       : anyHeld
         ? "Sandbox is waiting — approve to let it through"
@@ -544,7 +552,7 @@ export function LiveApprovals({
         const scoped = a.kind === "egress_domain";
         const telemetry = scoped && isKnownTelemetryHost(label);
         if (a.kind === "credential_reauth") {
-          return <ReauthRow key={a.id} request={a} adminView={adminView} runId={runId} />;
+          return <ReauthRow key={a.id} request={a} adminView={adminView} runId={runId} runProvider={run?.model_provider_id} />;
         }
         return (
           <div key={a.id} className="flex flex-wrap items-center gap-2" data-testid="live-approval-row">

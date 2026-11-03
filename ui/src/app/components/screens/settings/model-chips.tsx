@@ -16,7 +16,7 @@ import { Input } from "../../ui/input";
 import { cn } from "../../ui/utils";
 
 // Names split on commas and any whitespace: a model name has neither.
-const split = (text: string) => text.split(/[\s,]+/).filter(Boolean);
+const split = (text: string, commas = true) => text.split(commas ? /[\s,]+/ : /\s+/).filter(Boolean);
 
 // The words a chip list wears. Models' own are the default; a different list (the sign-in scopes) passes its own.
 export interface ChipCopy {
@@ -44,6 +44,7 @@ export function ModelChips({
   isBad,
   invalid,
   copy = MODEL_COPY,
+  commas = true,
 }: {
   id: string;
   value: string[];
@@ -53,6 +54,8 @@ export function ModelChips({
   /** The refusal is about the list itself (empty, or over the most the API takes). */
   invalid?: boolean;
   copy?: ChipCopy;
+  /** Whether a comma ends a name. A model name has none; a sign-in scope may (`read,write` is one scope). */
+  commas?: boolean;
 }) {
   const [text, setText] = React.useState("");
   const add = (names: string[]) => {
@@ -61,7 +64,7 @@ export function ModelChips({
     if (next.length !== value.length) onChange(next);
     setText("");
   };
-  const commit = () => add(split(text));
+  const commit = () => add(split(text, commas));
 
   return (
     <div
@@ -103,12 +106,12 @@ export function ModelChips({
           value={text}
           onChange={(e) => {
             // A comma ends a name as Enter does; a paste of several lands whole.
-            if (/[\s,]/.test(e.target.value.slice(-1)) && e.target.value.trim()) add(split(e.target.value));
+            if ((commas ? /[\s,]/ : /\s/).test(e.target.value.slice(-1)) && e.target.value.trim()) add(split(e.target.value, commas));
             else setText(e.target.value);
           }}
           onPaste={(e) => {
             e.preventDefault();
-            add(split(text + e.clipboardData.getData("text")));
+            add(split(text + e.clipboardData.getData("text"), commas));
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter") {

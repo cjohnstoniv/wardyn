@@ -18,6 +18,7 @@ import { modelConnectionCause } from "./model-connection-cause";
 import type { SetupModelProvider, SetupProviderAccess, SetupStatus } from "./types";
 import { AGENTS } from "./workspace-providers-copy";
 import { CONNECTIONS } from "../components/wardyn/copy/door";
+import { OIDC_SIGN_IN } from "../components/wardyn/copy/oidc-signin";
 
 /** A provider this caller may connect, paired with their own state for it. */
 export interface ConnectionRow {
@@ -99,6 +100,11 @@ export interface ConnectionRowCopy {
    *  state/kind: an expired or signed-out row that once held a credential
    *  still carries it. */
   meta: string;
+  /** A sign-in that is not tied to the person's console sign-in says so, with what that means: the row's second
+   *  button is Disconnect for any endpoint sign-in. */
+  unbound?: { line: string; explain: string };
+  /** The row's Disconnect, for an endpoint sign-in that holds one. */
+  disconnect?: string;
   /** meta's exact-instant hover, mirroring `title` above — the last-used
    *  stamp only (absoluteTime), "" when meta has no Last-used clause. */
   metaTitle: string;
@@ -132,7 +138,9 @@ function connectionMeta(access: SetupProviderAccess): Pick<ConnectionRowCopy, "m
  *  at every one of connectionRowCopyByKind's return points. */
 export function connectionRowCopy(status: SetupStatus | null | undefined, row: ConnectionRow): ConnectionRowCopy {
   const copy = { ...connectionRowCopyByKind(status, row), ...connectionMeta(row.access) };
-  const cause = modelConnectionCause(row.provider, row.access);
+  // An endpoint's first sign-in reads as the row's own "Not signed in", not as a missing stored token.
+  const oidcFirst = row.provider.sign_in === "oidc" && row.access.cause === "never_connected";
+  const cause = oidcFirst ? undefined : modelConnectionCause(row.provider, row.access);
   if (!cause) return copy;
   return {
     ...copy, line: cause.line, button: cause.button ?? copy.button,
@@ -147,6 +155,8 @@ function connectionRowCopyByKind(
   const { provider, access } = row;
   const name = provider.name || provider.id;
   const forLine = CONNECTIONS.FOR(harnessDisplayNames(status, provider.harnesses));
+
+  if (provider.sign_in === "oidc") return oidcRowCopy(provider, access, forLine, name);
 
   if (provider.kind === "bedrock_sso") {
     switch (access.state) {
@@ -229,4 +239,38 @@ function connectionRowCopyByKind(
     title: "",
     button: token ? CONNECTIONS.ADD_TOKEN : CONNECTIONS.ADD_KEY,
   };
+}
+
+// An endpoint that signs people in: Not signed in, Signed in, Signed out; Sign in, Sign in again, Disconnect. The
+// provider not tied to the person's console sign-in says so on its row.
+function oidcRowCopy(
+  provider: SetupModelProvider,
+  access: SetupProviderAccess,
+  forLine: string,
+  name: string,
+): Omit<ConnectionRowCopy, "meta" | "metaTitle"> {
+  const T = OIDC_SIGN_IN;
+  const unbound = provider.identity_binding === "none" ? { line: T.NOT_BOUND, explain: T.NOT_BOUND_EXPLAIN } : undefined;
+  const sent = CONNECTIONS.SENT_TO(provider.host);
+  if (access.state === "live" || access.state === "expiring")
+    return {
+      chip: { label: CONNECTIONS.SIGNED_IN, tone: "success" },
+      forLine,
+      line: sent,
+      title: "",
+      button: T.SIGN_IN_AGAIN,
+      disconnect: T.DISCONNECT,
+      unbound,
+    };
+  if (access.state === "expired_signin")
+    return {
+      chip: { label: CONNECTIONS.SIGNED_OUT, tone: "danger" },
+      forLine,
+      line: T.STRIP_ENDED(name),
+      title: "",
+      button: T.SIGN_IN_AGAIN,
+      disconnect: T.DISCONNECT,
+      unbound,
+    };
+  return { chip: { label: CONNECTIONS.NOT_SIGNED_IN, tone: "neutral" }, forLine, line: sent, title: "", button: T.SIGN_IN };
 }

@@ -60,7 +60,7 @@ export function OidcChoice({
   draft: ProviderDraft;
   set: (patch: Partial<ProviderDraft>) => void;
   operator: boolean;
-  // What saving the change deletes (O1-20 / O1-22), when it deletes anything: shown under the choice.
+  // What saving the change deletes, when it deletes anything: shown under the choice and again in the confirmation.
   note?: string;
 }) {
   const reasonId = React.useId();
@@ -193,6 +193,7 @@ export function OidcFields({
           isBad={() => false}
           invalid={refusedAt === "oidc.scopes"}
           copy={SCOPE_COPY}
+          commas={false}
         />
       </Field>
       <Field label={T.CALLBACK} hint={T.CALLBACK_HINT}>

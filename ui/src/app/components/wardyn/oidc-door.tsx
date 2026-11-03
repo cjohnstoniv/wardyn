@@ -1,0 +1,150 @@
+/**
+ * Copyright 2026 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// The sign-in door for a provider that signs people in at its own authority: Continue opens the authority's sign-in in
+// a new window, the page waits, and the door closes when the person's own state for the provider shows a new
+// sign-in. The window ends on the console (oidc-signin-result.tsx), which tells this one how it went. A browser
+// that blocks the window gets a link to open it instead, and the wait is then bounded: nothing says that tab closed.
+import * as React from "react";
+import { Loader2 } from "lucide-react";
+import { apiURL } from "../../lib/base-path";
+import type { SetupModelProvider, SetupStatus } from "../../lib/types";
+import { Button } from "../ui/button";
+import { CONNECTIONS } from "./copy/door";
+import { OIDC_RETURN, OIDC_SIGN_IN as T, oidcFailureKind, type OidcFailure } from "./copy/oidc-signin";
+
+const POLL_MS = 1500;
+const GIVE_UP_MS = 5 * 60 * 1000;
+const CLOSE_GRACE_MS = 4000;
+const WINDOW_FEATURES = "popup,width=520,height=720";
+
+type Phase = { name: "connect" } | { name: "waiting" } | { name: "blocked" } | { name: "fail"; failure: OidcFailure };
+
+/** A sign-in made since `baseline`: live, and stored after the one that was there when the door opened. */
+function signedInSince(access: SetupStatus["provider_access"], id: string, baseline: string): boolean {
+  const a = access?.find((x) => x.provider === id);
+  return (a?.state === "live" || a?.state === "expiring") && (a.added_at ?? "") !== baseline;
+}
+
+export function OidcDoor({
+  provider,
+  access,
+  onRecheck,
+  onCancel,
+  onDone,
+}: {
+  provider: SetupModelProvider;
+  access: SetupStatus["provider_access"];
+  onRecheck?: () => void | Promise<unknown>;
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const name = provider.name || provider.id;
+  const [phase, setPhase] = React.useState<Phase>({ name: "connect" });
+  const accessRef = React.useRef(access);
+  accessRef.current = access;
+  // The parent's callbacks are new on every render; the wait below must not restart with them.
+  const calls = React.useRef({ onRecheck, onDone });
+  calls.current = { onRecheck, onDone };
+  // The stored sign-in's stamp when this attempt began: "Sign in again" starts from a live state.
+  const baseline = React.useRef("");
+  const popup = React.useRef<Window | null>(null);
+  const finished = React.useRef(false);
+  const url = apiURL(`/model-providers/${encodeURIComponent(provider.id)}/oidc/sign-in`);
+  const waiting = phase.name === "waiting" || phase.name === "blocked";
+
+  const fail = React.useCallback((failure: OidcFailure) => {
+    finished.current = true;
+    setPhase({ name: "fail", failure });
+  }, []);
+
+  // While waiting: the window's own word (a message from this console's origin), the state it leaves behind, and a
+  // window closed with neither. A sign-in the person abandons ends at GIVE_UP_MS.
+  React.useEffect(() => {
+    if (!waiting) return;
+    const started = Date.now();
+    let closedAt: number | undefined;
+    const onMessage = (e: MessageEvent) => {
+      const d = e.data as { type?: string; ok?: boolean; reason?: string } | null;
+      if (e.origin !== window.location.origin || d?.type !== OIDC_RETURN.MESSAGE || finished.current) return;
+      if (d.ok) void calls.current.onRecheck?.();
+      else fail(oidcFailureKind(d.reason ?? ""));
+    };
+    window.addEventListener("message", onMessage);
+    const tick = window.setInterval(() => {
+      if (finished.current) return;
+      if (signedInSince(accessRef.current, provider.id, baseline.current)) {
+        finished.current = true;
+        calls.current.onDone();
+        return;
+      }
+      // A window closed with no word and no new sign-in is a failure, but only after a few more reads: the sign-in
+      // may have landed as it closed, and the status is read again each tick.
+      if (popup.current?.closed === true) closedAt ??= Date.now();
+      if ((closedAt && Date.now() - closedAt > CLOSE_GRACE_MS) || Date.now() - started > GIVE_UP_MS) {
+        fail("timeout");
+        return;
+      }
+      void calls.current.onRecheck?.();
+    }, POLL_MS);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      window.clearInterval(tick);
+    };
+  }, [waiting, provider.id, fail]);
+
+  // Leaving the door by any road takes its window with it, unless it finished.
+  React.useEffect(
+    () => () => {
+      if (!finished.current) popup.current?.close();
+    },
+    [],
+  );
+
+  const start = () => {
+    baseline.current = access?.find((x) => x.provider === provider.id)?.added_at ?? "";
+    finished.current = false;
+    popup.current = window.open(url, "wardyn-provider-oidc", WINDOW_FEATURES);
+    setPhase(popup.current ? { name: "waiting" } : { name: "blocked" });
+  };
+
+  return (
+    <div className="space-y-4">
+      {phase.name === "fail" ? (
+        <div role="alert" className="space-y-1 rounded-lg border border-danger/30 bg-danger-subtle p-3 text-body text-danger">
+          <b className="font-semibold">{T.FAIL_TITLE(name)}</b>
+          <p>{T.FAIL[phase.failure](name)}</p>
+        </div>
+      ) : phase.name === "connect" ? (
+        <p className="text-body">{T.INTRO}</p>
+      ) : (
+        <div role="status" className="flex items-start gap-2 text-body">
+          <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />
+          <div className="space-y-1">
+            {phase.name === "blocked" && <p>{T.BLOCKED}</p>}
+            {phase.name === "blocked" ? (
+              <a href={url} target="_blank" rel="noreferrer" className="text-info underline underline-offset-2">
+                {T.BLOCKED_LINK(name)}
+              </a>
+            ) : (
+              <p>{T.WAITING}</p>
+            )}
+          </div>
+        </div>
+      )}
+      <p className="text-xs text-muted-foreground">{CONNECTIONS.SENT_TO(provider.host)}</p>
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="ghost" onClick={onCancel}>
+          {T.CANCEL}
+        </Button>
+        {!waiting && (
+          <Button type="button" onClick={start}>
+            {phase.name === "fail" ? T.RETRY : T.CONTINUE}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}

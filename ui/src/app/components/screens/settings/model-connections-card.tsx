@@ -32,8 +32,23 @@
 // anywhere. ClaimWhileOpen is a child of the CollapsibleCard body for exactly
 // this reason — mounted only while open, so it claims and releases with the
 // same visibility the button itself has.
+import * as React from "react";
+import { toast } from "sonner";
+import { modelProviderCredentials } from "../../../lib/api/model-provider-credentials";
+import { getErrorMessage } from "../../../lib/format";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../../ui/alert-dialog";
+import { OIDC_SIGN_IN } from "../../wardyn/copy/oidc-signin";
 import { Chip } from "../../wardyn/primitives";
-import { Button } from "../../ui/button";
+import { Button, buttonVariants } from "../../ui/button";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { useClaimModelAccessDoor, useModelAccessDoor } from "../../wardyn/model-access-context";
 import {
@@ -58,10 +73,12 @@ function ConnectionRowView({
   row,
   copy,
   onOpen,
+  onDisconnect,
 }: {
   row: ConnectionRow;
   copy: ConnectionRowCopy;
   onOpen: (providerId: string) => void;
+  onDisconnect: (row: ConnectionRow) => void;
 }) {
   const name = row.provider.name || row.provider.id;
   return (
@@ -73,6 +90,12 @@ function ConnectionRowView({
           <p className="text-meta text-muted-foreground" title={copy.title || undefined}>
             {copy.line}
           </p>
+        )}
+        {copy.unbound && (
+          <>
+            <p className="text-meta text-warning">{copy.unbound.line}</p>
+            <p className="text-meta text-muted-foreground">{copy.unbound.explain}</p>
+          </>
         )}
         {/* #592 — Added/Last used, from THIS caller's own provider_access
             row; absent whenever nothing is stored for it (copy.meta === ""). */}
@@ -89,6 +112,11 @@ function ConnectionRowView({
             {copy.button}
           </Button>
         )}
+        {copy.disconnect && (
+          <Button size="sm" variant="ghost" onClick={() => onDisconnect(row)}>
+            {copy.disconnect}
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -99,6 +127,25 @@ function ConnectionRowView({
  *  check is what keeps a legacy install's page free of an empty card shell. */
 export function ModelConnectionsCard({ status, onChanged }: { status: SetupStatus; onChanged: () => void }) {
   const door = useModelAccessDoor();
+  // The endpoint sign-in being disconnected, while the confirmation is up.
+  const [leaving, setLeaving] = React.useState<ConnectionRow | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const leaveName = leaving ? leaving.provider.name || leaving.provider.id : "";
+  const disconnect = async () => {
+    if (!leaving) return;
+    setBusy(true);
+    try {
+      await modelProviderCredentials.deleteCredential(leaving.provider.id);
+      toast.success(OIDC_SIGN_IN.DISCONNECT_TOAST(leaveName));
+      setLeaving(null);
+      onChanged();
+    } catch (e) {
+      toast.error(getErrorMessage(e));
+      setLeaving(null);
+    } finally {
+      setBusy(false);
+    }
+  };
   // No memo: a handful of providers, and connectionRows/connectionRowCopy are
   // cheap pure reads — not worth the dependency-array upkeep.
   const rows = connectionRows(status);
@@ -128,6 +175,7 @@ export function ModelConnectionsCard({ status, onChanged }: { status: SetupStatu
                 key={row.provider.id}
                 row={row}
                 copy={copy}
+                onDisconnect={setLeaving}
                 onOpen={(providerId) => {
                   if (row.access.state === "not_configured" && row.access.cause === "store_unreadable") { onChanged(); }
                   else door.openDoor({ for: { provider: providerId }, onClosed: onChanged });
@@ -137,6 +185,27 @@ export function ModelConnectionsCard({ status, onChanged }: { status: SetupStatu
           </div>
         </>
       )}
+      <AlertDialog open={leaving !== null} onOpenChange={(open) => !open && !busy && setLeaving(null)}>
+        <AlertDialogContent className="sm:max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{OIDC_SIGN_IN.DISCONNECT_TITLE(leaveName)}</AlertDialogTitle>
+            <AlertDialogDescription>{OIDC_SIGN_IN.DISCONNECT_BODY(leaveName)}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>{OIDC_SIGN_IN.CANCEL}</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: "destructive" })}
+              disabled={busy}
+              onClick={(e) => {
+                e.preventDefault();
+                void disconnect();
+              }}
+            >
+              {OIDC_SIGN_IN.DISCONNECT}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </CollapsibleCard>
   );
 }

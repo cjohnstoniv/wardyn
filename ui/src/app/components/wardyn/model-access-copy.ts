@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { ApprovalRequest } from "../../lib/types";
+import type { ApprovalRequest, SetupModelProvider, SetupStatus } from "../../lib/types";
+import { OIDC_SIGN_IN } from "./copy/oidc-signin";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 
 // The 0.7.6 model-access / re-authentication strings, in their OWN module.
@@ -127,6 +128,11 @@ export interface ReauthAudience {
   /** The row names this viewer — true for the admin's own run in the Admin
    *  view too, where a provider's door does not open (canAct is false). */
   mine: boolean;
+  /** An endpoint that signs people in raised the hold (its lane, not AWS's). The hold names the provider row by
+   *  uid, which the console cannot read, so the provider is the run's own (oidcHoldProvider). */
+  oidc: boolean;
+  /** That provider's name, once the caller has resolved it: the row's wording is then provider-named. */
+  signIn?: string;
 }
 
 /**
@@ -157,13 +163,29 @@ export function reauthAudience(
   const provider = String((request.requested_scope?.provider as string) ?? "");
   const mine = !!viewer.principal && owner === viewer.principal;
   const canAct = shared ? viewer.operator : mine && !(provider && viewer.view === "admin");
-  return { canAct, shared, owner, provider, mine };
+  const oidc = String((request.requested_scope?.lane as string) ?? "") === OIDC_HOLD_LANE;
+  return { canAct, shared, owner, provider, mine, oidc };
+}
+
+/** The lane an endpoint sign-in's held request is raised under (the server's endpointOIDCApprovalLane). */
+export const OIDC_HOLD_LANE = "custom_endpoint";
+
+/** The endpoint provider an OIDC hold is for: the run's own provider, when this person's setup status lists it as
+ *  one that signs people in. undefined while the run is unread, or once the provider is gone. */
+export function oidcHoldProvider(
+  audience: Pick<ReauthAudience, "oidc">,
+  status: SetupStatus | null | undefined,
+  runProvider: string | undefined,
+): SetupModelProvider | undefined {
+  if (!audience.oidc || !runProvider) return undefined;
+  return status?.model_providers?.find((p) => p.id === runProvider && p.sign_in === "oidc");
 }
 
 /** The row's sentence for that audience — the door's own hint, or the one
  *  sentence that names who can actually clear it. */
 export function reauthRowHint(audience: ReauthAudience): string {
   if (audience.canAct) return REAUTH_ROW.hint;
+  if (audience.oidc) return OIDC_SIGN_IN.APPROVAL_OTHER(audience.owner || "the run owner");
   return audience.shared ? REAUTH_ROW.sharedMemberHint : REAUTH_ROW.notYoursHint(audience.owner);
 }
 

@@ -168,7 +168,7 @@ describe("saving a sign-in provider", () => {
     await user.click(choice(O.SIGN_IN));
     setField(screen.getByLabelText(new RegExp(`^${O.ISSUER}`)), "https://sso.contoso.example");
     setField(screen.getByLabelText(new RegExp(`^${O.CLIENT_ID}`)), "wardyn-llm-client");
-    setField(screen.getByPlaceholderText(O.SCOPES_PLACEHOLDER), "llm.invoke,");
+    setField(screen.getByPlaceholderText(O.SCOPES_PLACEHOLDER), "llm.invoke ");
     await user.click(screen.getByRole("button", { name: E.SAVE }));
     await waitFor(() => expect(putMock).toHaveBeenCalled());
     expect(putBody().providers[0].oidc).toEqual({
@@ -176,6 +176,21 @@ describe("saving a sign-in provider", () => {
       client_id: "wardyn-llm-client",
       scopes: ["llm.invoke"],
     });
+  });
+
+  it("a scope with a comma in it stays one scope, typed or pasted, and reaches the PUT whole", async () => {
+    const { user } = renderEditor(PASTE);
+    await user.click(choice(O.SIGN_IN));
+    setField(screen.getByLabelText(new RegExp(`^${O.ISSUER}`)), "https://sso.contoso.example");
+    setField(screen.getByLabelText(new RegExp(`^${O.CLIENT_ID}`)), "c");
+    const input = screen.getByPlaceholderText(O.SCOPES_PLACEHOLDER);
+    await user.click(input);
+    await user.paste("read,write");
+    expect(screen.getByRole("button", { name: O.SCOPE_REMOVE("read,write") })).toBeInTheDocument();
+    setField(input, "other ");
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalled());
+    expect(putBody().providers[0].oidc?.scopes).toEqual(["read,write", "other"]);
   });
 
   it("a stored authorize_url and token_url go back unchanged", async () => {
@@ -211,7 +226,7 @@ describe("the confirmation", () => {
     expect(screen.getByRole("status")).toHaveTextContent(O.TO_SIGN_IN(14));
     setField(screen.getByLabelText(new RegExp(`^${O.ISSUER}`)), "https://sso.contoso.example");
     setField(screen.getByLabelText(new RegExp(`^${O.CLIENT_ID}`)), "c");
-    setField(screen.getByPlaceholderText(O.SCOPES_PLACEHOLDER), "llm.invoke,");
+    setField(screen.getByPlaceholderText(O.SCOPES_PLACEHOLDER), "llm.invoke ");
     await user.click(screen.getByRole("button", { name: E.SAVE }));
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(O.CONFIRM_TITLE("Corp SSO"))).toBeInTheDocument();

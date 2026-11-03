@@ -28,6 +28,8 @@ import { modelConnectionCause } from "../../lib/model-connection-cause";
 import type { SetupModelProvider, SetupStatus } from "../../lib/types";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { CLAUDE_DOOR, CONNECTIONS, CRED_NOTICE, DOOR, KEY_DOOR, REMOVE_CONFIRM, WRITE_ONLY } from "./copy/door";
+import { OIDC_SIGN_IN } from "./copy/oidc-signin";
+import { OidcDoor } from "./oidc-door";
 
 // Lazy, and that is a gate rather than a nicety: the strip that mounts this is
 // in the shell, and the login pane drags xterm + addon-fit + its stylesheet
@@ -53,6 +55,7 @@ function doorTitle(t: DoorTarget, confirmingRemove: boolean): string {
     const title = t.stored ? KEY_DOOR.TITLE_REPLACE : KEY_DOOR.TITLE;
     return title(t.token, providerName(t.provider));
   }
+  if (t.login === "oidc") return OIDC_SIGN_IN.DOOR_TITLE(providerName(t.provider));
   return t.login === "aws" ? MODEL_ACCESS_BANNER.DIALOG_TITLE : CLAUDE_DOOR.TITLE;
 }
 
@@ -81,10 +84,18 @@ function credNoticeLine2(storage: SetupStatus["credential_storage"]): string {
  *  case: the strip vanishing is not a confirmation). */
 export function doorToast(t: DoorTarget): string {
   if (t.kind === "key") return KEY_DOOR.SAVED_TOAST(t.token);
+  if (t.login === "oidc") return OIDC_SIGN_IN.DONE_TOAST(providerName(t.provider));
   return t.login === "aws" ? MODEL_ACCESS_BANNER.SIGNED_IN_TOAST : CLAUDE_DOOR.SIGNED_IN_TOAST;
 }
 
-function SignInHeader({ target }: { target: DoorTarget & { kind: "signin" } }) {
+function SignInHeader({ target, forHarnesses }: { target: DoorTarget & { kind: "signin" }; forHarnesses?: string }) {
+  // An endpoint's sign-in is for the agents that use it, and has no cleanup of a sign-in sandbox to explain.
+  if (target.login === "oidc")
+    return (
+      <DialogDescription className="text-body text-muted-foreground">
+        {forHarnesses ? CONNECTIONS.FOR(forHarnesses) : DOOR.FOR(providerName(target.provider))}
+      </DialogDescription>
+    );
   const forLine = DOOR.FOR(providerName(target.provider));
   return (
     <div className="space-y-1 text-body text-muted-foreground">
@@ -291,8 +302,11 @@ export function DoorDialog({
   onDone,
   onRemoved,
   onCloseAutoFocus,
+  forHarnesses,
 }: {
   target: DoorTarget | null;
+  /** The display names of the agents that use an endpoint's sign-in, for its "For …" line. */
+  forHarnesses?: string;
   access?: SetupStatus["provider_access"];
   onRecheck?: () => void | Promise<unknown>;
   /** /setup/status's credential_storage (design F-3) — the key door's
@@ -366,6 +380,7 @@ export function DoorDialog({
     try { await onRecheck?.(); } finally { setChecking(false); }
   };
   const signIn = t && t.kind !== "key" ? t : null;
+  const oidc = signIn?.login === "oidc" ? signIn : null;
   return (
     <Dialog
       open={target !== null}
@@ -382,9 +397,9 @@ export function DoorDialog({
       <DialogContent
         id={DOOR_ID}
         onCloseAutoFocus={onCloseAutoFocus}
-        className={signIn ? "scroll-thin inset-0 top-0 left-0 m-auto h-fit max-h-[92vh] overflow-y-auto" : undefined}
+        className={signIn && !oidc ? "scroll-thin inset-0 top-0 left-0 m-auto h-fit max-h-[92vh] overflow-y-auto" : undefined}
         style={
-          signIn
+          signIn && !oidc
             ? { width: "min(96vw, 72rem)", maxWidth: "min(96vw, 72rem)", translate: "none", transform: "none" }
             : undefined
         }
@@ -406,8 +421,18 @@ export function DoorDialog({
             onRemoved={onRemoved}
           />
         )}
-        {signIn && !unreadable && <SignInHeader target={signIn} />}
-        {signIn && target && !unreadable && (
+        {signIn && !unreadable && <SignInHeader target={signIn} forHarnesses={forHarnesses} />}
+        {oidc && target && !unreadable && (
+          <OidcDoor
+            key={oidc.provider.id}
+            provider={oidc.provider}
+            access={access}
+            onRecheck={onRecheck}
+            onCancel={onCancel}
+            onDone={() => onDone(doorToast(oidc))}
+          />
+        )}
+        {signIn && !oidc && target && !unreadable && (
           <div className="min-w-0">
             {/* The same mark + spinner App.tsx's RouteFallback shows for a
                 lazy route: a chunk in flight reads as the console still

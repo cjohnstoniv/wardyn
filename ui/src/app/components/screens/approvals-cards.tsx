@@ -27,7 +27,8 @@ import { JsonBlock } from "../wardyn/yaml-block";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { isPushContentRequest, PushContentCard } from "../wardyn/push-content-card";
 import { isTakeoverRequest, TakeoverCard } from "../wardyn/takeover-card";
-import { REAUTH_ROW, reauthAudience } from "../wardyn/model-access-copy";
+import { REAUTH_ROW, oidcHoldProvider, reauthAudience } from "../wardyn/model-access-copy";
+import { OIDC_SIGN_IN } from "../wardyn/copy/oidc-signin";
 import { useClaimModelAccessDoor, useModelAccessDoor, useShellSetupStatus } from "../wardyn/model-access-context";
 import { resolveDoor } from "../../lib/model-access";
 import { isBackgroundRun } from "../../lib/run-entry";
@@ -94,6 +95,14 @@ export function ApprovalCard({
   const view = useConsoleMode();
   const reauth = reauthAudience(item, { operator: door.operator, principal: door.principal, view });
   const { status } = useShellSetupStatus();
+  // The run this approval gates, from the context row below's own fetch (B4 below says why it is read).
+  const [fetchedRun, setRun] = React.useState<RunDetail | null | undefined>(undefined);
+  const run = runProp ?? fetchedRun;
+  const runRow = runProp ? null : <RunContextRow runId={item.run_id} onRun={setRun} />;
+  // An endpoint sign-in's hold names its provider row by uid, which this console cannot read: the provider is the
+  // run's own, and until the run is read the card says what it can and offers no door.
+  const oidcHold = oidcHoldProvider(reauth, status, run?.model_provider_id);
+  const holdAudience = oidcHold ? { ...reauth, signIn: oidcHold.name || oidcHold.id } : reauth;
   // M-7 (admin-member-modes-design.md §4.6, §6): the admin queue carries no
   // personal reauth door either, even on the admin's own row — same rule as
   // the cockpit's ReauthRow, with a switch link back to it there instead. The
@@ -103,8 +112,16 @@ export function ApprovalCard({
   // A hold whose provider this person has no door for any more (removed, or no
   // agent of theirs uses it) gets its hint alone, never a button that opens
   // nothing — the failure block's rule (ProviderDoor).
-  const reauthDoor = reauthCanAct && (!reauth.provider || !!resolveDoor(status, { provider: reauth.provider }, "user"));
-  const banner = deriveBanner(item.kind, scope, reauthCanAct === reauth.canAct ? reauth : { ...reauth, canAct: reauthCanAct });
+  const reauthDoor =
+    reauthCanAct &&
+    (reauth.oidc
+      ? !!oidcHold && !!resolveDoor(status, { provider: oidcHold.id }, "user")
+      : !reauth.provider || !!resolveDoor(status, { provider: reauth.provider }, "user"));
+  const banner = deriveBanner(
+    item.kind,
+    scope,
+    reauthCanAct === reauth.canAct ? holdAudience : { ...holdAudience, canAct: reauthCanAct },
+  );
   // Deciding an egress_domain approval on an owned run is a MEMBER act (B3,
   // decide() in approvals.go); credential and tool_call stay admin-only
   // regardless of ownership — see canDecideApproval's doc for why. This list
@@ -137,13 +154,12 @@ export function ApprovalCard({
   // both leave the controls exactly as they were: the screen withdraws them on
   // a KNOWN terminal state, never on a guess, which is the same direction the
   // rest of this card errs in.
-  const [fetchedRun, setRun] = React.useState<RunDetail | null | undefined>(undefined);
-  const run = runProp ?? fetchedRun;
-  const runRow = runProp ? null : <RunContextRow runId={item.run_id} onRun={setRun} />;
   // The hold's provider is the run's own, so its name rides the run read (#996,
   // model_provider_name) for a viewer whose setup status does not list it. It is
   // not on the hold: that scope is the dedup key, identity only.
-  const reauthProvider = reauth.provider
+  const reauthProvider = reauth.oidc
+    ? (oidcHold?.name ?? oidcHold?.id ?? "")
+    : reauth.provider
     ? status?.model_providers?.find((p) => p.id === reauth.provider)?.name ||
       (run?.model_provider_id === reauth.provider ? run.model_provider_name : "") ||
       reauth.provider
@@ -267,10 +283,10 @@ export function ApprovalCard({
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4">
       <div className="flex flex-wrap items-center gap-2">
-        <ApprovalKindChip kind={item.kind} />
+        <ApprovalKindChip kind={item.kind} scope={scope} />
         <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-foreground">
           <KindIcon className="size-3.5 text-muted-foreground" />
-          {deriveTitle(item.kind, scope)}
+          {reauth.oidc && holdAudience.signIn ? OIDC_SIGN_IN.APPROVAL_LABEL(holdAudience.signIn) : deriveTitle(item.kind, scope)}
         </span>
         {cap && <Chip tone="warning">{cap}</Chip>}
         {/* notify-e4 (packet M6 S2): where this request sits on its notification
@@ -361,7 +377,7 @@ export function ApprovalCard({
              no tier can — the server answers 409 to either verb. The one
              control opens the same dialog every other sign-in surface opens. */
           reauthDoor ? (
-            <ReauthAction provider={reauth.provider} />
+            <ReauthAction provider={oidcHold?.id ?? reauth.provider} name={oidcHold ? oidcHold.name || oidcHold.id : undefined} />
           ) : reauthOwnRow ? (
             <OpenInUserView />
           ) : null
@@ -437,7 +453,7 @@ export function DecidedRow({
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-3 first:border-t-0">
-      <ApprovalKindChip kind={item.kind} />
+      <ApprovalKindChip kind={item.kind} scope={scope} />
       <span className="min-w-0 flex-1 truncate text-sm text-foreground">{deriveTitle(item.kind, scope)}</span>
       {showRun && <RunRef runId={item.run_id} title={runTitle} to={runPath(view, item.run_id)} className="max-w-[16rem]" />}
       <ApprovalStateBadge state={item.state} />
@@ -477,15 +493,15 @@ export function DecidedRow({
  * everyone else reads the card's hint, which names whose sign-in is awaited,
  * and gets no control at all.
  */
-function ReauthAction({ provider }: { provider: string }) {
+function ReauthAction({ provider, name }: { provider: string; name?: string }) {
   const door = useModelAccessDoor();
   useClaimModelAccessDoor(true);
   // The hold's OWN provider's door (#543): the claude-code default may be
   // another AWS provider, whose sign-in cannot clear it.
   const open = () => door.openDoor(provider ? { for: { provider } } : undefined);
   return (
-    <Button size="sm" variant="info" aria-label={REAUTH_ROW.ariaLabel} onClick={open}>
-      {REAUTH_ROW.action}
+    <Button size="sm" variant="info" aria-label={name ? OIDC_SIGN_IN.BUTTON(name) : REAUTH_ROW.ariaLabel} onClick={open}>
+      {name ? OIDC_SIGN_IN.BUTTON(name) : REAUTH_ROW.action}
     </Button>
   );
 }

@@ -10,6 +10,7 @@ import { AUTONOMY_META, AUTONOMY_NO_CAP_LABEL } from "./autonomy-meta";
 import { APPROVAL, APPROVAL_KIND_LABEL, OPERATOR_ONLY_REASON, RUN_COCKPIT, WIRE_TO_COPY } from "./copy";
 import { POSTURE_CHIP_SUFFIX_ACKNOWLEDGED, POSTURE_CHIP_SUFFIX_UNENFORCED } from "./confinement-posture-copy";
 import { useConfinementPosture, type ConfinementPosture } from "./operator-context";
+import { OIDC_SIGN_IN } from "./copy/oidc-signin";
 import {
   Archive,
   AlertTriangle,
@@ -408,8 +409,10 @@ const kindTone: Record<ApprovalKind, Tone> = {
   // The agent is waiting on a person, like the two above.
   human_takeover: "warning",
 };
-export function ApprovalKindChip({ kind }: { kind: ApprovalKind }) {
+export function ApprovalKindChip({ kind, scope }: { kind: ApprovalKind; scope?: Record<string, unknown> }) {
   const tone = metaFor(kindTone, kind as string, "neutral" as Tone);
+  // A held sign-in to an endpoint is not an AWS sign-in: its request names its own lane.
+  if (kind === "credential_reauth" && scope?.lane === "custom_endpoint") return <Chip tone={tone}>{OIDC_SIGN_IN.APPROVAL_CHIP}</Chip>;
   const copyKind = WIRE_TO_COPY[kind];
   return <Chip tone={tone}>{copyKind ? APPROVAL_KIND_LABEL[copyKind] : String(kind)}</Chip>;
 }

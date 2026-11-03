@@ -264,6 +264,9 @@ const SubstrateHealthBanner = React.lazy(() =>
 const AdoSignInBanner = React.lazy(() =>
   import("../wardyn/ado-signin-banner").then((m) => ({ default: m.AdoSignInBanner })),
 );
+const OidcSignInResult = React.lazy(() =>
+  import("../wardyn/oidc-signin-result").then((m) => ({ default: m.OidcSignInResult })),
+);
 
 // #483 — the "Sign in to continue" dialog and the signed-out bar. Lazy for the
 // same entry-budget reason; the shell warms the chunk on mount, because by the
@@ -678,6 +681,9 @@ export function AppShell({
               condition like the bands below it. */}
               <React.Suspense fallback={null}>
                 <AdoSignInBanner />
+              </React.Suspense>
+              <React.Suspense fallback={null}>
+                <OidcSignInResult />
               </React.Suspense>
               {/* §4.2 (M-3): each band is passed the session's resolved view
               (useShellView, not the raw URL) so a clamped admin who types an
