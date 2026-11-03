@@ -68,6 +68,8 @@ export const AUDIT = {
   MINT_SIGNED: "Signed a gateway token",
   MINT_REFUSED: "Refused a gateway token",
   MINT_NO_PROVIDER: "an unknown provider",
+  // llm.scan.skip with data.deferred_to: a prompt left to the provider's gateway, which checks prompts itself.
+  SCAN_LEFT_TO: "Left prompt checks to",
   OUTCOME_ALLOW: "allow",
   OUTCOME_DENY: "deny",
 } as const;
@@ -178,6 +180,9 @@ interface Described {
 function describe(e: AuditEvent): Described {
   if (e.action.startsWith("egress.")) {
     return { head: egressVerb(e), join: { sep: " to ", fallback: "an unknown host" } };
+  }
+  if (e.action === "llm.scan.skip" && typeof e.data?.deferred_to === "string" && e.data.deferred_to) {
+    return { head: `${AUDIT.SCAN_LEFT_TO} ${e.data.deferred_to}` };
   }
   if (e.action.startsWith("llm.scan.")) {
     return {

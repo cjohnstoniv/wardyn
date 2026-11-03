@@ -39,12 +39,16 @@ export interface PolicyChangeMarks {
 export interface PolicyFacts {
   usedClass?: ConfinementClass;
   requestedClass?: ConfinementClass;
+  /** Model providers whose gateway checks the run's prompts itself (run page only). */
+  inspectionLeftTo?: string[];
 }
 
 type ChipSpec = { label: string; tone: "neutral" | "warning" | "info"; title?: string };
 type Value = {
   text?: string;
   mono?: boolean;
+  /** A second, quieter line under the value before it. */
+  note?: boolean;
   hidden?: boolean;
   hiddenTip?: string;
   mark?: PolicyMark;
@@ -202,7 +206,16 @@ function summarize(
   const inspection = take("llm_inspection", asBag);
   if (inspection) {
     const on = typeof inspection.mode === "string" && inspection.mode !== "" && inspection.mode !== "off";
-    network.push(row(SUMMARY.traffic, [text(on ? SUMMARY.on : SUMMARY.off)]));
+    // A gateway that checks prompts itself changes the line only while checks are on.
+    const leftTo = on && facts?.inspectionLeftTo?.length ? facts.inspectionLeftTo.join(", ") : "";
+    network.push(
+      row(
+        SUMMARY.traffic,
+        leftTo
+          ? [text(SUMMARY.onExcept(leftTo)), text(SUMMARY.leftTo(leftTo, inspection.detect_secrets === true), { note: true })]
+          : [text(on ? SUMMARY.on : SUMMARY.off)],
+      ),
+    );
   }
   add(SUMMARY.network, network);
   if (meanings.length > 0) groups.find((g) => g.heading === SUMMARY.network)!.meanings = meanings;
@@ -393,7 +406,9 @@ export function PolicySummary({
                     <ul className="flex flex-col gap-0.5">
                       {r.values.map((v, i) => (
                         <li key={i} className="flex flex-wrap items-baseline gap-2 text-sm text-foreground [overflow-wrap:anywhere]">
-                          {v.text && <span className={v.mono ? "font-mono" : undefined}>{v.text}</span>}
+                          {v.text && (
+                            <span className={v.mono ? "font-mono" : v.note ? "text-xs text-muted-foreground" : undefined}>{v.text}</span>
+                          )}
                           {v.hidden && <HiddenChip tip={v.hiddenTip} />}
                           {v.chips?.map((c) => (
                             <span key={c.label} title={c.title}>

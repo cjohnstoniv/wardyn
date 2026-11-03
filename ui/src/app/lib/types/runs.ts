@@ -731,6 +731,7 @@ export interface RunPolicyView {
   // Which allowed hosts the run's proxy opened at launch; every other allowed
   // host passed through unread. Absent for a run recorded before it existed.
   host_marks?: RunPolicyHostMarks;
+  inspection_left_to?: string[]; // each model provider whose gateway checks the run's prompts itself, by name
 }
 
 // internal/api/run_host_marks.go hostMarks: the allowed_domains entries marked Inspected.

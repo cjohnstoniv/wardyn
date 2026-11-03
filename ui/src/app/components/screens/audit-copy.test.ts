@@ -184,3 +184,15 @@ describe("service audit rows", () => {
     expect(describeTabEvent(ev("person.erasure", "p", { data: { scopes: ["credentials"] } }))).toBe("Erased a person's data — p");
   });
 });
+
+describe("a prompt left to a model gateway", () => {
+  const left = (action: string, deferred?: string) => ev(action, "gateway.example.com", deferred ? { data: { deferred_to: deferred } } : {});
+
+  it("reads as left to the provider on both surfaces, only for the skip row that names one", () => {
+    expect(AUDIT.SCAN_LEFT_TO).toBe("Left prompt checks to");
+    expect(describeEvent(left("llm.scan.skip", "corp-gateway"))).toBe("Left prompt checks to corp-gateway");
+    expect(describeTabEvent(left("llm.scan.skip", "corp-gateway"))).toBe("Left prompt checks to corp-gateway");
+    expect(describeEvent(left("llm.scan.skip"))).toBe("LLM content scan (skip) for gateway.example.com");
+    expect(describeEvent(left("llm.scan.block", "corp-gateway"))).toBe("LLM content scan (block) for gateway.example.com");
+  });
+});

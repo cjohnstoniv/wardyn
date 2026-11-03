@@ -194,7 +194,7 @@ function RecordedPolicy({
         onViewChange={onMode}
         redacted={view.redacted}
         marks={marks}
-        facts={{ usedClass: run.confinement_class }}
+        facts={{ usedClass: run.confinement_class, inspectionLeftTo: view.inspection_left_to }}
         hostMarks={view.host_marks}
         headingLevel={4}
       />

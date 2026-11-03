@@ -179,6 +179,10 @@ export const SUMMARY = {
   // S-45
   off: "Off",
   on: "On",
+  // Traffic checks on a run whose model gateway checks prompts itself (gateway_identity.inspection).
+  onExcept: (providers: string) => `On, except prompts to ${providers}`,
+  leftTo: (providers: string, secrets: boolean) =>
+    `Your organisation has assigned these checks to ${providers}. ${secrets ? "Wardyn still checks them for the secret values the run holds." : "Wardyn does not check them."}`,
   // S-47
   none: "None",
 } as const;

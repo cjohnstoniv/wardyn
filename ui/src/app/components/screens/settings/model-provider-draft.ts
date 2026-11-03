@@ -74,9 +74,11 @@ export interface ProviderDraft {
   // apart from the editor's own `audience`, which is who the provider is available to.
   gatewayOn: boolean;
   gatewayAudience: string;
-  // The address and audience the stored row sends identity with, or null when it does not: what a Base
-  // URL edit compares against, and what turning it off is a change from.
-  gatewaySaved: { baseUrl: string; audience: string } | null;
+  // gateway_identity.inspection: the "Let this gateway check prompts" switch.
+  gatewayInspect: boolean;
+  // The address, audience and inspection the stored row sends identity with, or null when it does not: what
+  // a Base URL edit compares against, and what turning it off is a change from.
+  gatewaySaved: { baseUrl: string; audience: string; inspect: boolean } | null;
   harnesses: Record<string, HarnessDraft>;
 }
 
@@ -153,6 +155,7 @@ export function newDraft(kind: EditorKind, harnesses: HarnessRow[]): ProviderDra
     keepAlive: "",
     gatewayOn: false,
     gatewayAudience: "",
+    gatewayInspect: false,
     gatewaySaved: null,
     harnesses: Object.fromEntries(
       harnesses.map((h) => [h.id, { ticked: !incompatibleReason(kind, h.id), model: "", path: "" }]),
@@ -185,7 +188,10 @@ export function draftFrom(p: ModelProvider, harnesses: HarnessRow[]): ProviderDr
     keepAlive: p.local?.keep_alive_seconds ? String(p.local.keep_alive_seconds) : "",
     gatewayOn: !!p.gateway_identity,
     gatewayAudience: p.gateway_identity?.audience ?? "",
-    gatewaySaved: p.gateway_identity ? { baseUrl: providerGatewayAddress(p), audience: p.gateway_identity.audience } : null,
+    gatewayInspect: p.gateway_identity?.inspection === "gateway",
+    gatewaySaved: p.gateway_identity
+      ? { baseUrl: providerGatewayAddress(p), audience: p.gateway_identity.audience, inspect: p.gateway_identity.inspection === "gateway" }
+      : null,
     harnesses: rows,
   };
 }
@@ -235,7 +241,7 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
     base_url: draft.baseUrl.trim() || undefined,
     // Absent is off; a stored field the editor doesn't show rides along inside it.
     gateway_identity: draft.gatewayOn && gatewayKind(draft.kind)
-      ? { ...base?.gateway_identity, audience: draft.gatewayAudience.trim() }
+      ? { ...base?.gateway_identity, audience: draft.gatewayAudience.trim(), inspection: draft.gatewayInspect ? "gateway" : undefined }
       : undefined,
     auth:
       endpoint || (local && draft.useToken)

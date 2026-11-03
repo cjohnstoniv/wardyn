@@ -204,6 +204,9 @@ function describeParts(e: AuditEvent): AuditParts {
           : "Deferred egress to";
     return { lead: verb, sep: " ", object: e.target || "an unknown host" };
   }
+  if (e.action === "llm.scan.skip" && typeof e.data?.deferred_to === "string" && e.data.deferred_to) {
+    return { lead: AUDIT.SCAN_LEFT_TO, sep: " ", object: e.data.deferred_to };
+  }
   if (e.action.startsWith("llm.scan.")) {
     return { lead: `LLM content scan (${e.action.slice("llm.scan.".length)}) for`, sep: " ", object: e.target || "an unknown host" };
   }

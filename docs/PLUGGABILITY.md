@@ -142,7 +142,7 @@
   - A provider can opt in to run identity: a signed token in `X-Wardyn-Identity` naming the person, the run and the runner, and a call id in `X-Wardyn-Call-Id` that joins the gateway's log to the run's audit rows. Both are experimental until 0.11. The [claims and the join](operations/ai-gateway.md#the-claims-a-gateway-receives) and [the TLS chain](operations/ai-gateway.md#the-tls-chain) are on the setup page.
   - A Bedrock key provider opts in with its gateway in `bedrock.base_url`. A Bedrock SSO provider cannot.
   - Without it, a per-person limit can key only on what the gateway still sees: a person's sign-in token for a subscription provider, and nothing per person once the gateway swaps in its own key. With it, a rule can key on the token's `sub`, `wardyn_run` and `wardyn_runner`.
-  - Two policy points can disagree. Decide which one owns model choice and tool access, and keep the other permissive for that concern.
+  - Two policy points can disagree. Decide which one owns model choice and tool access, and keep the other permissive for that concern. Prompt checks can be left to a provider's gateway, except the run's own secret values: see [Who inspects](operations/ai-gateway.md#who-inspects).
 - **When it is worth it.**
   - It pays off when an organisation already sends all model and MCP traffic through one gateway.
   - For a single team, a provider's settings in Wardyn are enough.

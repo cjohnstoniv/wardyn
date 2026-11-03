@@ -99,6 +99,14 @@ export const PROVIDER_EDITOR = {
     NEEDS_ADDRESS: (host: string) =>
       `Add a gateway address above to turn this on. Without one, calls go straight to ${host}.`,
     ADDRESS_CLEARED: "This needs a gateway address. Add one, or turn this off.",
+    // gateway_identity.inspection: who checks the prompts sent to this gateway.
+    INSPECT_HEADING: "Inspection",
+    INSPECT_SWITCH: "Let this gateway check prompts",
+    INSPECT_OFF: "Turn this on if your gateway already checks prompts, so Wardyn doesn't check them twice.",
+    INSPECT_ON:
+      "Wardyn keeps the run's secret-value check when that check is enabled by its policy. Other prompt checks are left to this gateway.",
+    INSPECT_SEALED:
+      "After you save this, existing runs stop starting new gateway calls within 10 minutes. Create new runs to use the change.",
     ADDRESS_CHANGED:
       "You changed where this provider sends requests. Enter the audience again for the new address. After saving, existing runs cannot refresh their gateway tokens. Create new runs to use the new address.",
     NOT_AVAILABLE: {

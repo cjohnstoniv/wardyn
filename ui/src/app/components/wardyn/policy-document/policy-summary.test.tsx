@@ -391,3 +391,31 @@ describe("PolicySummary host marks", () => {
     for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING]) expect(screen.queryByText(s)).toBeNull();
   });
 });
+
+describe("PolicySummary — traffic checks left to a model gateway", () => {
+  const spec = (inspection: Record<string, unknown>) => ({ allowed_domains: [], llm_inspection: inspection }) as unknown as RunPolicySpec;
+
+  it("names the gateway, and says Wardyn still checks the run's secret values when the policy has that check", () => {
+    render(<PolicySummary spec={spec({ mode: "block", detect_secrets: true })} facts={{ inspectionLeftTo: ["Corp gateway"] }} />);
+    expect(row("Network", "Traffic checks")).toHaveTextContent(
+      "On, except prompts to Corp gateway" +
+        "Your organisation has assigned these checks to Corp gateway. Wardyn still checks them for the secret values the run holds.",
+    );
+  });
+
+  it("says Wardyn does not check them when the policy has no secret-value check", () => {
+    render(<PolicySummary spec={spec({ mode: "alert", detect_pii: true })} facts={{ inspectionLeftTo: ["Corp gateway", "Lab gateway"] }} />);
+    expect(row("Network", "Traffic checks")).toHaveTextContent(
+      "On, except prompts to Corp gateway, Lab gateway" +
+        "Your organisation has assigned these checks to Corp gateway, Lab gateway. Wardyn does not check them.",
+    );
+  });
+
+  it("adds nothing when the policy turns traffic checks off, or no gateway checks prompts", () => {
+    const { unmount } = render(<PolicySummary spec={spec({ mode: "off" })} facts={{ inspectionLeftTo: ["Corp gateway"] }} />);
+    expect(row("Network", "Traffic checks").textContent).toBe("Off");
+    unmount();
+    render(<PolicySummary spec={spec({ mode: "block", detect_secrets: true })} facts={{ inspectionLeftTo: [] }} />);
+    expect(row("Network", "Traffic checks").textContent).toBe("On");
+  });
+});
