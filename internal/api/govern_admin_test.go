@@ -180,6 +180,10 @@ func governSites() []governSite {
 				_, err := s.capAllowed(ctx, capAgent, "claude-code")
 				return err != nil
 			}},
+		{"run_kept_machine.go keptMachineGovernanceRefusal", capSrv(&capStore{}),
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				return s.keptMachineGovernanceRefusal(ctx, walled(types.GovernanceLimits{DenyKeptMachines: true})) != nil
+			}},
 		{"user_drives_run.go driveDoorProfile", plain,
 			func(t *testing.T, s *Server, ctx context.Context) bool {
 				_, shut := s.driveDoorProfile(ctx, walled(types.GovernanceLimits{DenyUserDrive: true}))
