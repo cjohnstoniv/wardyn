@@ -709,6 +709,11 @@ const reasonSignInRequired = "sign_in_required"
 // (writeHostCapacityRefusal): a wait, not a fault, so it is a 503 with a Retry-After.
 const reasonHostCapacityRefused = "host_capacity_refused"
 
+// A run held to the allowed-models list whose chosen model provider's calls the run's proxy could not
+// check (stepAllowedModelsChecked, run_allowed_models.go), refused at every door before it starts, and
+// the run failed at dispatch for the same lane.
+const reasonAllowedModelsUnchecked = "allowed_models_unchecked"
+
 // PUT /workspaces/{id}/approved-egress naming a host on the workspace's denied list (handleSetApprovedEgress):
 // deny beats allow, so the approval would change nothing.
 const reasonWorkspaceApprovedEgressDenied = "workspace_approved_egress_denied"

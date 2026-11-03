@@ -154,14 +154,14 @@ func TestAllowedModels_UncheckedProviders(t *testing.T) {
 	}
 }
 
-// Create and preflight refuse a run held to a list whose chosen provider (its own, or an included
-// harness's) the proxy cannot check; with no list the same run passes.
+// Create, preflight and the policy preview refuse a run held to a list whose chosen provider (its own,
+// or an included harness's) the proxy cannot check; with no list the same run passes.
 func TestAllowedModels_DoorsRefuseAnUncheckedProvider(t *testing.T) {
 	i := slices.IndexFunc(runFoldSteps, func(st runFoldStep) bool {
 		return strings.HasSuffix(runtime.FuncForPC(reflect.ValueOf(st.run).Pointer()).Name(), ".stepAllowedModelsChecked")
 	})
-	if i < 0 || runFoldSteps[i].modes != foldCreate|foldPreflight {
-		t.Fatal("stepAllowedModelsChecked is not a create and preflight fold step")
+	if i < 0 || runFoldSteps[i].modes != foldAll {
+		t.Fatal("stepAllowedModelsChecked is not a fold step at every door")
 	}
 	sso := brSSOProvider()
 	sso.Name = "Corp Bedrock"

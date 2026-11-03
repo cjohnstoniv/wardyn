@@ -110,7 +110,7 @@ func TestWallPresetsNeverWiden(t *testing.T) {
 		if refusal != nil || !reflect.DeepEqual(specJSON(got), specJSON(base)) {
 			t.Errorf("Open over %s: refusal %+v, spec %+v, want it byte for byte as it was", name, refusal, got)
 		}
-		if source.WallPreset == nil || source.WallPreset.ID != types.WallPresetOpen || source.WallPreset.wallsSourceRecord != nil {
+		if source.WallPreset == nil || source.WallPreset.ID != types.WallPresetOpen || source.WallPreset.WallsSourceRecord != nil {
 			t.Errorf("Open over %s: policy_source.wall_preset %+v, want Open recorded with nothing narrowed", name, source.WallPreset)
 		}
 	}
@@ -495,7 +495,7 @@ func TestWallPresetPersonalNameNeverKept(t *testing.T) {
 
 	runOf := types.AgentRun{ID: uuid.New(), CreatedBy: wallsSub}
 	rec := &wallPresetSourceRecord{ID: mine.ID, Name: "Mine", Scope: types.WallPresetScopePerson, Version: 1,
-		wallsSourceRecord: &wallsSourceRecord{Narrowed: []string{"first_use_approval"}}}
+		WallsSourceRecord: &wallsSourceRecord{Narrowed: []string{"first_use_approval"}}}
 	reader := func(sub string) *http.Request {
 		return httptest.NewRequest(http.MethodGet, "/api/v1/runs/x/policy", nil).WithContext(memberCtxFor(sub))
 	}

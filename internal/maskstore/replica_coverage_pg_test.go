@@ -55,7 +55,10 @@ func TestPG_AReplicaAppliesAnErasureBeforeItsManifestsHearOfIt(t *testing.T) {
 	if err := mA.Start(ctx, run, "alice"); err != nil {
 		t.Fatal(err)
 	}
-	if err := mA.Append(ctx, run, []byte(secret)); err != nil {
+	// The value goes through A's registry, so its record is a mask_values row: the table an erasure
+	// tombstones and B's read applies. A manifest rendering (mA.Append) lives in run_mask_values only,
+	// which no tombstone reaches; B lets go of that one at DropFenced.
+	if err := regA.Add(run, []byte(secret)); err != nil {
 		t.Fatal(err)
 	}
 	if err := mA.Complete(ctx, run); err != nil {

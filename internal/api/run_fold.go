@@ -211,7 +211,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepMainDrive, foldAll},
 	{(*Server).stepModelProvider, foldAll},
 	{(*Server).stepAWSCLIProfile, foldAll},
-	{(*Server).stepAllowedModelsChecked, foldCreate | foldPreflight},
+	{(*Server).stepAllowedModelsChecked, foldAll},
 	{(*Server).stepAutonomy, foldAll},
 	{(*Server).stepToolPolicy, foldAll},
 	{(*Server).stepMacOSHold, foldAll},

@@ -121,7 +121,7 @@ func TestRunPolicyViewHidesPersonalPresetChanges(t *testing.T) {
 		run := st.seedRun(pvOwner, types.RunRunning)
 		src := pvSource(policyKindInline, nil, "", false, pvSpec([]string{"a.example", "b.example"}, nil))
 		src.WallPreset = &wallPresetSourceRecord{ID: "p1", Name: "Mine", Scope: tc.scope, Version: 1,
-			wallsSourceRecord: &wallsSourceRecord{Narrowed: []string{"allowed_domains"}, Removed: map[string][]string{"allowed_domains": {"b.example"}}}}
+			WallsSourceRecord: &wallsSourceRecord{Narrowed: []string{"allowed_domains"}, Removed: map[string][]string{"allowed_domains": {"b.example"}}}}
 		st.rows(run.ID, pvCreate(nil, src), pvResolve(pvSpec([]string{"a.example"}, nil), false))
 		reader := pvMember(t, pvOwner)
 		if tc.other {

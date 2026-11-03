@@ -155,7 +155,7 @@ func runPolicyWallPresetOf(r *http.Request, run types.AgentRun, rec *wallPresetS
 		return &runPolicyWallPreset{Scope: string(rec.Scope)}
 	}
 	out := &runPolicyWallPreset{ID: rec.ID, Name: rec.Name, Scope: string(rec.Scope), GroupID: rec.GroupID, Version: rec.Version}
-	if w := rec.wallsSourceRecord; w != nil {
+	if w := rec.WallsSourceRecord; w != nil {
 		out.Narrowed, out.Removed, out.Added = w.Narrowed, w.Removed, w.Added
 	}
 	return out
@@ -247,7 +247,7 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	if create.Source != nil {
 		ev.clamp, ev.overlay, ev.walls = create.ClampWarnings, create.Source.Overlay, create.Source.PersonalWalls
 		if p := create.Source.WallPreset; p != nil {
-			ev.preset = p.wallsSourceRecord
+			ev.preset = p.WallsSourceRecord
 		}
 	} else {
 		ev.legacyGitBroker = s.holdsGitHubGrant(ctx, run.ID)

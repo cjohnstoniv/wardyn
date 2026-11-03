@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -635,7 +636,8 @@ func (k *keptTools) UpdateKeptTools(_ context.Context, dir string) error {
 
 // A resume runs the tools update on the machine's own folder before its boot, with the machine's lock free
 // for the update to take; the boot then holds the lock. A failed update does not start the machine, and
-// one whose lock another holds reads as running. A new machine is not updated.
+// one whose lock another holds is tried again within the lock wait, then reads as running. A new machine
+// is not updated.
 func TestKeptResumeUpdatesToolsBeforeTheBootLock(t *testing.T) {
 	r, g := newKeptRig(t)
 	tools := &keptTools{}
@@ -650,10 +652,12 @@ func TestKeptResumeUpdatesToolsBeforeTheBootLock(t *testing.T) {
 	if _, err := r.d.CreateSandbox(context.Background(), keptSpec(id, macvm.KeptResume)); err == nil || err.Error() != keptSaidTools {
 		t.Fatalf("a failed update: %v", err)
 	}
+	failed := len(tools.dirs)
 	tools.err = macvm.ErrKeptLocked
 	if _, err := r.d.CreateSandbox(context.Background(), keptSpec(id, macvm.KeptResume)); err == nil || err.Error() != keptSaidLocked {
 		t.Fatalf("an update that found the machine locked: %v", err)
 	}
+	locked := len(tools.dirs)
 	if _, spawns := g.counts(); spawns != spawned {
 		t.Fatal("a machine whose update failed was started")
 	}
@@ -663,8 +667,9 @@ func TestKeptResumeUpdatesToolsBeforeTheBootLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = r.d.StopSandbox(context.Background(), sb.Ref) }()
-	if len(tools.dirs) != 3 || tools.dirs[2] != dir || !tools.free[0] || !tools.free[1] || !tools.free[2] {
-		t.Fatalf("updates %v, lock free %v", tools.dirs, tools.free)
+	if failed != 1 || locked < failed+2 || len(tools.dirs) != locked+1 ||
+		slices.ContainsFunc(tools.dirs, func(d string) bool { return d != dir }) || slices.Contains(tools.free, false) {
+		t.Fatalf("updates %v (failed %d, locked %d), lock free %v", tools.dirs, failed, locked, tools.free)
 	}
 	if locked, err := macvm.KeptLocked(dir); err != nil || !locked {
 		t.Fatalf("the boot after the update does not hold the machine's lock: %v %v", locked, err)
