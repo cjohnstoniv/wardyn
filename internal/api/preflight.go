@@ -107,8 +107,10 @@ type preflightResponse struct {
 	// harness. ModelCredential above is graded from the most resident of them.
 	HarnessSet *client.HarnessSetFact `json:"harness_set,omitempty"`
 	// AllowedModels is the governed allowed-models list a run under this caller's profile is held to
-	// (run_allowed_models.go); absent when no limit binds it.
-	AllowedModels []string `json:"allowed_models,omitempty"`
+	// (run_allowed_models.go); absent when no limit binds it. AllowedModelsProfile names the profile
+	// that sets it, the caller's own (the name the run page's card shows).
+	AllowedModels        []string `json:"allowed_models,omitempty"`
+	AllowedModelsProfile string   `json:"allowed_models_profile,omitempty"`
 	// RunnerPool is the pool the request resolves to, absent until the pool lane
 	// resolves one; RunnerPools are the permitted choices, an array that is
 	// empty until that lane fills it.
@@ -425,7 +427,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	resp.RunnerPool, resp.RunnerPools = f.place.facts()
 	resp.BarrierOptions = f.barrierOptions
 	resp.Image, resp.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
-	resp.AllowedModels = modelLimitOf(f.ceiling).models
+	resp.AllowedModels, resp.AllowedModelsProfile = modelLimitOf(f.ceiling).models, modelLimitOf(f.ceiling).profile
 	resp.Limits, resp.ResourcesApplied = f.place.sizeFacts()
 	resp.RunnerPoolSlots = s.runnerPoolSlots(ctx, f.place, *f.req)
 	resp.MainDrive = f.mainDrive.applied()

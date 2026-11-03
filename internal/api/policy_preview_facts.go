@@ -50,8 +50,9 @@ type policyPreviewResponse struct {
 	AllowedImages []client.AllowedImage `json:"allowed_images"`
 	// HarnessSet is the preflight's, with the same meaning.
 	HarnessSet *client.HarnessSetFact `json:"harness_set,omitempty"`
-	// AllowedModels is the preflight's, with the same meaning.
-	AllowedModels []string `json:"allowed_models,omitempty"`
+	// AllowedModels and AllowedModelsProfile are the preflight's, with the same meaning.
+	AllowedModels        []string `json:"allowed_models,omitempty"`
+	AllowedModelsProfile string   `json:"allowed_models_profile,omitempty"`
 	// RunnerPool and RunnerPools are the preflight's, with the same meaning.
 	RunnerPool  *client.ResolvedRunnerPool `json:"runner_pool,omitempty"`
 	RunnerPools []client.RunnerPoolChoice  `json:"runner_pools"`

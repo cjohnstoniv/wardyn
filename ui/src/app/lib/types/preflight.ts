@@ -176,6 +176,8 @@ export interface PreflightResult {
   harness_set?: HarnessSetFact;
   // The hosted models the run may ask for (the effective list); absent when no limit binds it.
   allowed_models?: string[];
+  // The profile that sets allowed_models, the caller's own; absent when no list applies.
+  allowed_models_profile?: string;
   // The pool the request resolves to and how it was chosen (absent until the
   // pool lane resolves one), and the pools the person may choose, each with
   // whether it is available; empty until that lane fills it.

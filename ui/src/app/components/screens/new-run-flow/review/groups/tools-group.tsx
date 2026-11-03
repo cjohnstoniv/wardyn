@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { ALLOWED_MODELS as AM } from "../../../../../lib/governance-copy";
+import { ALLOWED_MODELS as AM, MEMBER } from "../../../../../lib/governance-copy";
 import { Button } from "../../../../ui/button";
 import { Input } from "../../../../ui/input";
 import { Label } from "../../../../ui/label";
@@ -62,6 +62,7 @@ export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: Group
   // the list is said so before launch; the run is not blocked, since a subscription's model is chosen in the session.
   const allowed = pre?.allowed_models ?? preview?.allowed_models;
   const limited = allowed && allowed.length > 0 ? allowed : undefined;
+  const limitedBy = pre?.allowed_models ? pre.allowed_models_profile : preview?.allowed_models_profile;
   const offList = limited
     ? harnesses.flatMap((h) => {
         const cred = pre?.harness_set?.harnesses.find((x) => x.id === h.id)?.model_credential;
@@ -137,6 +138,11 @@ export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: Group
           <p className="text-sm text-foreground">
             <AroundModels sentence={AM.REVIEW_LINE} models={limited} />
           </p>
+          {limitedBy && (
+            <div>
+              <Chip>{MEMBER.GS_CHIP(limitedBy)}</Chip>
+            </div>
+          )}
           <p className="text-xs text-muted-foreground">{AM.REVIEW_READS}</p>
           {offList.map((o) => (
             <p key={`${o.id}:${o.model}`} className="text-sm text-warning" data-testid="review-allowed-models-warning">

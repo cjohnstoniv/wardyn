@@ -94,7 +94,25 @@ describe("Review: the allowed models line", () => {
   });
 
   it("reads the list off the policy preview when the preflight has none", () => {
-    render(<ToolsGroup draft={draft} pre={null} preview={{ allowed_models: ["model-a"] } as never} docRows={[]} go={vi.fn()} dispatch={vi.fn()} />);
+    render(
+      <ToolsGroup
+        draft={draft}
+        pre={null}
+        preview={{ allowed_models: ["model-a"], allowed_models_profile: "Interns" } as never}
+        docRows={[]}
+        go={vi.fn()}
+        dispatch={vi.fn()}
+      />,
+    );
     expect(screen.getByTestId("review-allowed-models")).toHaveTextContent("model-a");
+    expect(screen.getByTestId("review-allowed-models")).toHaveTextContent("Governance · Interns");
+  });
+
+  it("names the profile that sets the list on the Governance chip, and shows no chip without a name", () => {
+    const { unmount } = show({ allowed_models: ["model-a"], allowed_models_profile: "Contractors" });
+    expect(screen.getByTestId("review-allowed-models")).toHaveTextContent("Governance · Contractors");
+    unmount();
+    show({ allowed_models: ["model-a"] });
+    expect(screen.getByTestId("review-allowed-models")).not.toHaveTextContent("Governance ·");
   });
 });

@@ -438,3 +438,37 @@ func TestAllowedModels_ReviveNeedsARunnerThatCarriesThem(t *testing.T) {
 		t.Error("a run with no list, or on no runner, was refused")
 	}
 }
+
+// Preflight and the policy preview name the list and the profile that sets it for the caller's own run, a
+// member included, so Review can show both; with no list neither is sent.
+func TestAllowedModels_PreflightNamesTheProfile(t *testing.T) {
+	body := `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"]}}`
+	for _, list := range [][]string{{"model-a"}, nil} {
+		profile := govProfile("Contractors")
+		profile.Limits = types.GovernanceLimits{AllowedModels: list}
+		srv := providerRunFixture(t, types.SiteConfig{}, &capStore{govProfile: profile, govTier: types.CapabilitySubjectUser}, nil)
+		member := ssoSession(t, "member", "m@example.com", oidc.RoleUser)
+		for _, path := range []string{"/api/v1/runs/preflight", policyPreviewPath} {
+			w := doSSO(t, srv, http.MethodPost, path, member, body)
+			if w.Code != http.StatusOK {
+				t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
+			}
+			var got struct {
+				Models  []string `json:"allowed_models"`
+				Profile *string  `json:"allowed_models_profile"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if list == nil {
+				if got.Models != nil || got.Profile != nil {
+					t.Errorf("%s with no list: %+v, want neither key", path, got)
+				}
+				continue
+			}
+			if !slices.Equal(got.Models, list) || got.Profile == nil || *got.Profile != "Contractors" {
+				t.Errorf("%s: models %v profile %v, want %v and Contractors", path, got.Models, got.Profile, list)
+			}
+		}
+	}
+}
