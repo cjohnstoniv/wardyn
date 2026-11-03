@@ -172,7 +172,7 @@ func writesTerminalState(call *ast.CallExpr) bool {
 		// Store methods that end runs in SQL, with the terminal state inside the
 		// statement rather than in an argument.
 		return true
-	case "casRunState", "StopKeptRunIf", "UpdateRunStateIfIdle", "reconcileFinalize":
+	case "casRunState", "StopKeptRunIf", "UpdateRunStateIfIdle", "reconcileFinalize", "reconcileFinalizeHint":
 	default:
 		return false
 	}

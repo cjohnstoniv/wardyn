@@ -85,6 +85,6 @@ var errSecondExec = errors.New("k8s: exec: this sandbox already has an agent exe
 // add-only limit as errSecondExec.
 var errBYOIUnsupported = errors.New("k8s: BYOI (wardyn-byoi/ images) is docker-only and is refused on this substrate: ephemeral containers cannot honour the selftest-then-task double-exec")
 
-// errTeardownUnresolved: teardown found the pod but its wardyn.run-id label
-// was missing/unparseable, so its sibling resources can't be located.
-var errTeardownUnresolved = errors.New("k8s: teardown could not resolve run id from the sandbox's wardyn.run-id label; sibling proxy/netpols/secret may be orphaned")
+// errTeardownUnresolved: teardown found a pod under a ref that is not a wardyn
+// agent pod name, so no run, and none of its sibling resources, can be keyed from it.
+var errTeardownUnresolved = errors.New("k8s: teardown could not resolve a run id from the sandbox ref; the pod is not a wardyn agent pod and is left alone")

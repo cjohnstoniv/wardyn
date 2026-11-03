@@ -483,7 +483,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err := d.runnerPodSpec(agentPod, componentAgent, ""); err != nil {
 		return fail(err)
 	}
-	if _, err := d.createPod(ctx, spec.RunID, componentAgent, agentPod); err != nil {
+	if d.cfg.AgentSandbox {
+		if err := d.createAgentSandbox(ctx, clock, agentPod); err != nil {
+			return fail(err)
+		}
+	} else if _, err := d.createPod(ctx, spec.RunID, componentAgent, agentPod); err != nil {
 		return fail(fmt.Errorf("k8s: create agent pod: %w", err))
 	}
 
