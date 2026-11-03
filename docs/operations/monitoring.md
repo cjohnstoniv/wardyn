@@ -55,6 +55,12 @@ flowchart LR
 - So the series reads "how many distinct sessions AWS retired," not "how many times people hit a dead one."
 - A climbing `transport_error`/`unavailable` series is the SSO-OIDC endpoint itself in trouble.
 
+## OpenTelemetry logs
+
+- The `otlp` audit sink sends each audit row to an OpenTelemetry collector as an OTLP/HTTP JSON log record; setup and the record shape are in [ENV.md](../ENV.md#opentelemetry-logs-otlp).
+- It is best-effort logs, not lossless: a full queue or a batch that fails every retry is dropped and shows in `wardyn_audit_sink_drops_total{sink="otlp"}`. Postgres keeps every row.
+- Spans come later; the sink exports no traces or metrics. `/metrics` stays the Prometheus surface.
+
 ## Substrate and sweep health
 
 - `/readyz` answers for the store only, and stays that way. The chart's readinessProbe reads it.
