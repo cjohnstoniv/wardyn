@@ -58,7 +58,21 @@ func (f *runMachineFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.name, "machine-name", "", "the name of the machine --keep-machine keeps; empty lets the server pick one")
 	cmd.Flags().StringVar(&f.resume, "resume-machine", "", "start this run from a machine you kept earlier, by id or name (with --experience interactive --machine-kind macos_vm)")
 	cmd.Flags().BoolVar(&f.fresh, "fresh", false, "with --resume-machine: delete what is on the machine and start it again from the Mac's current base")
-	cmd.PreRunE = func(cmd *cobra.Command, _ []string) error { return f.check(cmd.Flags().Changed("file")) }
+	addPreRunE(cmd, func(cmd *cobra.Command, _ []string) error { return f.check(cmd.Flags().Changed("file")) })
+}
+
+// addPreRunE runs check after the command's earlier PreRunE, so each flag group's register can add its own
+// check: a plain assignment would drop the one registered before it.
+func addPreRunE(cmd *cobra.Command, check func(*cobra.Command, []string) error) {
+	prev := cmd.PreRunE
+	cmd.PreRunE = func(c *cobra.Command, args []string) error {
+		if prev != nil {
+			if err := prev(c, args); err != nil {
+				return err
+			}
+		}
+		return check(c, args)
+	}
 }
 
 // check refuses the keep flags that contradict each other, or a --file document, before any request. Each

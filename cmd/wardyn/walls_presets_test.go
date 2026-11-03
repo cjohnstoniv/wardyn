@@ -195,6 +195,35 @@ func TestRunWallPreset(t *testing.T) {
 	}
 }
 
+// --wall-preset and the machine flags each add a check to the run command, and neither drops the other's: the
+// preset is still looked up and sent, an unknown one is still refused, and a machine flag contradiction is
+// refused before any request, the preset list's included.
+func TestRunWallPresetBesideMachineFlags(t *testing.T) {
+	ps := &presetsServer{list: presetsList}
+	srv := newPresetsServer(t, ps)
+	var calls int
+	inner := srv.Config.Handler
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		inner.ServeHTTP(w, r)
+	})
+	if _, err := execCmdCapture(t, "run", "--agent", "claude-code", "--wall-preset", "read-only", "--url", srv.URL, "--token", "tok"); err != nil || ps.body["wall_preset"] != "read-only" {
+		t.Fatalf("read-only: %v %v", err, ps.body)
+	}
+	n := len(ps.reqs)
+	if _, err := execCmdCapture(t, "run", "--agent", "claude-code", "--wall-preset", "no-such-preset", "--url", srv.URL, "--token", "tok"); err == nil || len(ps.reqs) != n {
+		t.Fatalf("unknown preset: %v, requests %v", err, ps.reqs[n:])
+	}
+	calls = 0
+	_, err := execCmdCapture(t, "run", "--agent", "claude-code", "--wall-preset", "read-only", "--machine-name", "web", "--url", srv.URL, "--token", "tok")
+	if want := "--machine-name names the machine --keep-machine keeps: add --keep-machine, or drop --machine-name"; err == nil || err.Error() != want {
+		t.Fatalf("machine-name without keep: %v, want %q", err, want)
+	}
+	if calls != 0 {
+		t.Fatalf("a refused machine flag still sent %d requests", calls)
+	}
+}
+
 // --wall-preset is the one flag besides the run's name that goes with --file.
 func TestRunFileAcceptsWallPreset(t *testing.T) {
 	if !runFileFlags["wall-preset"] {

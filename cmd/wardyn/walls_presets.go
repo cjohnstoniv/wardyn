@@ -372,7 +372,7 @@ type runWallPreset struct {
 
 func (w *runWallPreset) register(cmd *cobra.Command, client clientFn) {
 	cmd.Flags().StringVar(&w.ref, "wall-preset", "", "narrow this run with a wall preset, by name or id (see `wardyn walls presets`); also goes with --file")
-	cmd.PreRunE = func(cmd *cobra.Command, _ []string) error {
+	addPreRunE(cmd, func(cmd *cobra.Command, _ []string) error {
 		if w.ref == "" {
 			return nil
 		}
@@ -386,7 +386,7 @@ func (w *runWallPreset) register(cmd *cobra.Command, client clientFn) {
 		}
 		w.id, w.publish = p.ID, list.Publish
 		return nil
-	}
+	})
 }
 
 // printLine says which wall preset, and which version of it, the server bound the run to. A run read that

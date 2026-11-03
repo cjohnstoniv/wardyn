@@ -260,8 +260,8 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&correlationID, "correlation-id", "", "your own reference for this run, up to 128 characters of letters, digits and . _ : / - (optional; carried on the run's audit rows sent to audit sinks)")
 	cmd.Flags().StringVar(&policyID, "policy", "", "policy id (optional; uses the default policy if unset)")
 	where.register(cmd)
+	machine.register(cmd) // its flag checks send no request, so they run before the wall preset's lookup
 	wallPreset.register(cmd, client)
-	machine.register(cmd)
 	ends.register(cmd)
 	cmd.Flags().StringVar(&workspaceID, "workspace", "", "onboarded workspace id to launch against (optional; seeds its source, egress, image and bound model creds — composes with --policy/--policy-file)")
 	cmd.Flags().StringVar(&policyFile, "policy-file", "", "path to a JSON or YAML RunPolicySpec applied inline (optional; mutually exclusive with --policy, enforced server-side)")
