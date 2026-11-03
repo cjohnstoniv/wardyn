@@ -17,6 +17,8 @@ const (
 	MacOSVMDiskKept         = "kept"          // it is still on the Mac; the orphan sweep retries it
 	MacOSVMDiskHelperAlive  = "helper_alive"  // kept: the VM's helper process outlived its kill
 	MacOSVMDiskRemoveFailed = "remove_failed" // kept: deleting the directory failed
+	// MacOSVMDiskKeptMachine: kept on purpose; the folder is a person's kept machine, not a leftover.
+	MacOSVMDiskKeptMachine = "kept_machine"
 )
 
 // MacOSVMDisk is a run's latest disk report. Reason is set only on MacOSVMDiskKept.
@@ -25,6 +27,8 @@ type MacOSVMDisk struct {
 	State  string    `json:"state"`
 	Reason string    `json:"reason,omitempty"`
 	At     time.Time `json:"at"`
+	// Scrub is the stop scrub's outcome for a kept machine's session; nil for any other run.
+	Scrub *KeptScrub `json:"scrub,omitempty"`
 }
 
 // MacOSVMDiskReporter is a substrate that keeps macOS VM disk reports (the Docker driver with macOS VMs).
@@ -38,5 +42,5 @@ type MacOSVMDiskReporter interface {
 
 // IsMacOSVMDiskReason reports whether code is a reason a kept report may carry.
 func IsMacOSVMDiskReason(code string) bool {
-	return code == MacOSVMDiskHelperAlive || code == MacOSVMDiskRemoveFailed
+	return code == MacOSVMDiskHelperAlive || code == MacOSVMDiskRemoveFailed || code == MacOSVMDiskKeptMachine
 }
