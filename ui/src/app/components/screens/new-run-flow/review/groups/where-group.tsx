@@ -7,6 +7,7 @@ import * as React from "react";
 import { Button } from "../../../../ui/button";
 import { Label } from "../../../../ui/label";
 import { MAC_BASES } from "../../../../wardyn/copy/mac-bases";
+import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
@@ -38,7 +39,8 @@ function WhereEditor({ draft, dispatch, close }: Pick<GroupProps, "draft" | "dis
   const { intent } = draft;
   const { status } = useShellSetupStatus();
   const windowId = React.useId();
-  const windowOn = intent.machine_kind === "macos_vm" && macWindowOn(status);
+  const macOS = intent.machine_kind === "macos_vm";
+  const windowOn = macOS && macWindowOn(status);
   const pools = usePools(loadPools, intent.experience);
   const list = pools.status === "ready" ? pools.list : undefined;
   const usable = list ? usablePools(list) : [];
@@ -63,6 +65,13 @@ function WhereEditor({ draft, dispatch, close }: Pick<GroupProps, "draft" | "dis
           <span id={`${windowId}-label`} className="text-sm font-medium">{NR_WINDOW.GROUP}</span>
           <WindowCheckbox id={windowId} chosen={!!intent.desktop_window} onChoose={(on) => chooseWindowIn(dispatch, on)} />
         </div>
+      ) : macOS ? (
+        // A macOS VM's barrier is fixed, as the Run step says: no container barrier to pick.
+        <dl data-testid="nr-review-vm-barrier" className="flex min-w-40 flex-1 flex-col gap-1 text-sm">
+          <dt className="font-medium">{NR_MACHINE.BARRIER_LABEL}</dt>
+          <dd>{NR_MACHINE.BARRIER_VM}</dd>
+          <dd className="text-xs text-muted-foreground">{NR_MACHINE.BARRIER_VM_WHY}</dd>
+        </dl>
       ) : (
       <div className="flex min-w-40 flex-1 flex-col gap-2">
         <Label htmlFor="nr-review-barrier">{NR_REVIEW.BARRIER_LABEL}</Label>

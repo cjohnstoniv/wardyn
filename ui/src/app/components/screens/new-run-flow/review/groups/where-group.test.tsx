@@ -8,6 +8,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MAC_BASES } from "../../../../wardyn/copy/mac-bases";
 import { NR_REVIEW } from "../../../../wardyn/copy/new-run/review";
+import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { NR_WINDOW } from "../../../../wardyn/copy/new-run/window";
 import { ModelAccessProvider } from "../../../../wardyn/model-access-context";
 import type { SetupStatus } from "../../../../../lib/types/setup";
@@ -150,11 +151,12 @@ describe("Review: where it runs, the window on the Mac", () => {
     expect(dispatch.mock.calls.some(([a]) => a.type === "guided" && "windowCleared" in a.patch && a.patch.windowCleared === undefined)).toBe(true);
   });
 
-  it("Change with the site switch off keeps the barrier select and shows no window checkbox", async () => {
+  it("Change with the site switch off shows the Run step's fixed VM barrier, no container barrier select and no window checkbox", async () => {
     const user = userEvent.setup();
     view(MAC, { offer: ONE_MAC, status: { features: { macos_vms: true } } as SetupStatus });
     await user.click(screen.getByRole("button", { name: `${NR_REVIEW.CHANGE} ${NR_REVIEW.GROUP_WHERE}` }));
-    expect(screen.getByLabelText(NR_REVIEW.BARRIER_LABEL)).toBeInTheDocument();
+    expect(screen.queryByLabelText(NR_REVIEW.BARRIER_LABEL)).toBeNull();
+    expect(screen.getByTestId("nr-review-vm-barrier")).toHaveTextContent(NR_MACHINE.BARRIER_VM);
     expect(screen.queryByRole("checkbox", { name: NR_WINDOW.OPTION })).toBeNull();
   });
 });
