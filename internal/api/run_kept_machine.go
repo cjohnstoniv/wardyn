@@ -903,16 +903,25 @@ func (s *Server) keptSecretRefusal(ctx context.Context, run types.AgentRun, spec
 }
 
 // runMachineView is GET /runs/{id}'s machine: the kept machine the run kept or resumed, read now. A
-// machine whose row is gone is {id, deleted}; who deleted it stays in the audit log.
+// machine whose row is gone is {id, deleted}; who deleted it stays in the audit log. Every field but
+// the run's own mode is the machine's row as it is now, and the row is shared by every run that used the
+// machine: HolderRunID names the run that holds it now or held it last (a stop does not clear it), so
+// the console says what a stop did to the machine only on that run's page. Base, DiskBytes (what the
+// last stop wrote) and ExpiresAt are the row's. last_used_at is left out: a claim overwrites it with
+// the claim's time, so a resumed run's page could not say when the machine was last used before it.
 type runMachineView struct {
-	ID         uuid.UUID              `json:"id"`
-	Name       string                 `json:"name,omitempty"`
-	Mode       string                 `json:"mode,omitempty"`
-	KeepAtEnd  bool                   `json:"keep_at_end,omitempty"`
-	State      types.KeptMachineState `json:"state,omitempty"`
-	Scrubbed   bool                   `json:"scrubbed"`
-	RunnerName string                 `json:"runner_name,omitempty"`
-	Deleted    bool                   `json:"deleted"`
+	ID          uuid.UUID              `json:"id"`
+	Name        string                 `json:"name,omitempty"`
+	Mode        string                 `json:"mode,omitempty"`
+	KeepAtEnd   bool                   `json:"keep_at_end,omitempty"`
+	State       types.KeptMachineState `json:"state,omitempty"`
+	Scrubbed    bool                   `json:"scrubbed"`
+	RunnerName  string                 `json:"runner_name,omitempty"`
+	HolderRunID *uuid.UUID             `json:"holder_run_id,omitempty"`
+	Base        string                 `json:"base,omitempty"`
+	DiskBytes   int64                  `json:"disk_bytes,omitempty"`
+	ExpiresAt   *time.Time             `json:"expires_at,omitempty"`
+	Deleted     bool                   `json:"deleted"`
 }
 
 // runMachineOf is run's machine view, nil for a run that keeps none or a store that cannot say.
@@ -937,6 +946,10 @@ func (s *Server) runMachineOf(ctx context.Context, run types.AgentRun) *runMachi
 		return nil
 	}
 	v.Name, v.State, v.Scrubbed, v.RunnerName = km.Name, km.State, km.Scrubbed, s.keptRunnerName(ctx, km.RunnerID)
+	v.HolderRunID, v.Base, v.DiskBytes = km.RunID, km.Base, km.DiskBytes
+	if !km.ExpiresAt.IsZero() {
+		v.ExpiresAt = &km.ExpiresAt
+	}
 	return v
 }
 

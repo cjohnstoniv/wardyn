@@ -26,7 +26,7 @@ import {
   type RunLayoutPreset,
   type RunLayoutWidget,
 } from "../../../lib/api/run-layout";
-import { DESKTOP_REMOVED, forRun, forVMRun, isDesktopRemoved, isServiceRemoved, normalizeLayout, presetLayout, SERVICE_REMOVED } from "./widget-registry";
+import { DESKTOP_REMOVED, forMachineRun, forRun, forVMRun, isDesktopRemoved, isMachineRemoved, isServiceRemoved, MACHINE_REMOVED, normalizeLayout, presetLayout, SERVICE_REMOVED } from "./widget-registry";
 
 // Long enough that a drag across the canvas is one PUT, short enough that a
 // human who drags and immediately closes the tab keeps the arrangement (and
@@ -74,12 +74,12 @@ export type RunLayoutState = {
   reset: () => void;
 };
 
-/** `service`: the run is a service, so its live layout carries the Service panel. `vm`: the run is a VM run, so a saved layout carries the Desktop tile. */
-export function useRunLayout(preset: RunLayoutPreset, service = false, vm = false): RunLayoutState {
+/** `service`: the run is a service, so its live layout carries the Service panel. `vm`: the run is a VM run, so a saved layout carries the Desktop tile. `machine`: the run keeps or resumed a kept machine, so a layout carries the Machine tile. */
+export function useRunLayout(preset: RunLayoutPreset, service = false, vm = false, machine = false): RunLayoutState {
   // Seeded with the preset default rather than empty: the canvas can paint the
   // machine's arrangement immediately and swap once a saved one arrives, which
   // beats one round-trip of empty canvas for the majority who never saved one.
-  const [layout, setLayout] = React.useState<RunLayoutWidget[]>(() => presetLayout(preset, service, vm));
+  const [layout, setLayout] = React.useState<RunLayoutWidget[]>(() => presetLayout(preset, service, vm, machine));
   const [loaded, setLoaded] = React.useState(false);
   const [persistable, setPersistable] = React.useState(true);
   const [statuses, setStatuses] = React.useState<Partial<Record<RunLayoutPreset, SaveStatus>>>({});
@@ -106,6 +106,8 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
   // The same for the Desktop tile, which a saved layout from before the tile has no entry for: stored as DESKTOP_REMOVED,
   // kept out of `layout`, and kept in the saved row by every write (also from a run with no desktop to show).
   const desktopRemoved = React.useRef(false);
+  // The same for the Machine tile, which a saved layout from before the tile has no entry for.
+  const machineRemoved = React.useRef(false);
 
   const commit = (next: RunLayoutWidget[]) => {
     layoutRef.current = next;
@@ -129,6 +131,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
       ...body,
       ...(serviceRemoved.current ? [SERVICE_REMOVED] : []),
       ...(desktopRemoved.current ? [DESKTOP_REMOVED] : []),
+      ...(machineRemoved.current ? [MACHINE_REMOVED] : []),
     ],
     [],
   );
@@ -201,6 +204,8 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
       if (service && preset === "live") serviceRemoved.current = !norm.some((w) => w.widget === "service");
       // A VM run's saved layout shows the tile until it is taken out; a run with no desktop says nothing.
       if (vm) desktopRemoved.current = !norm.some((w) => w.widget === "desktop");
+      // A run with a kept machine shows the tile until it is taken out; a run with none says nothing.
+      if (machine) machineRemoved.current = !norm.some((w) => w.widget === "machine");
       commit(norm);
       cancelPending();
       lastBody.current = norm;
@@ -214,7 +219,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
         body: norm,
       };
     },
-    [preset, service, vm, enqueue, setStatusFor, wire],
+    [preset, service, vm, machine, enqueue, setStatusFor, wire],
   );
 
   const save = React.useCallback(async (): Promise<SaveResult> => {
@@ -234,13 +239,14 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
     dirty.current = true;
     serviceRemoved.current = false;
     desktopRemoved.current = false;
-    commit(presetLayout(preset, service, vm));
+    machineRemoved.current = false;
+    commit(presetLayout(preset, service, vm, machine));
     lastBody.current = [];
     // PUT [] is the reset: there is no DELETE route, and storing today's
     // default as a personal choice would freeze this human out of every future
     // improvement to it. An empty saved layout reads as "never saved" on load.
     void enqueue(preset, wire([]));
-  }, [preset, service, vm, enqueue, wire]);
+  }, [preset, service, vm, machine, enqueue, wire]);
 
   React.useEffect(() => {
     let alive = true;
@@ -251,6 +257,7 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
     lastBody.current = null;
     serviceRemoved.current = false;
     desktopRemoved.current = false;
+    machineRemoved.current = false;
     setLoaded(false);
     runLayoutApi
       .getLayout(preset)
@@ -261,11 +268,14 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
         }
         serviceRemoved.current = res.layout.some(isServiceRemoved);
         desktopRemoved.current = res.layout.some(isDesktopRemoved);
-        const saved = res.layout.filter((w) => !isServiceRemoved(w) && !isDesktopRemoved(w));
+        machineRemoved.current = res.layout.some(isMachineRemoved);
+        const saved = res.layout.filter((w) => !isServiceRemoved(w) && !isDesktopRemoved(w) && !isMachineRemoved(w));
         const shown = normalizeLayout(saved, preset);
-        const base = saved.length === 0 ? presetLayout(preset, service && !serviceRemoved.current, vm) : serviceRemoved.current ? shown : forRun(shown, preset, service);
+        const base = saved.length === 0 ? presetLayout(preset, service && !serviceRemoved.current, vm, machine) : serviceRemoved.current ? shown : forRun(shown, preset, service);
         // Saved with the tile taken out: the preset's own tile (nothing saved but the marker) goes too.
-        commit(desktopRemoved.current ? base.filter((w) => w.widget !== "desktop") : saved.length === 0 ? base : forVMRun(base, vm));
+        const withDesk = desktopRemoved.current ? base.filter((w) => w.widget !== "desktop") : saved.length === 0 ? base : forVMRun(base, vm);
+        // Saved with the Machine tile taken out: the preset's own goes too. A saved layout with no entry gets it on a run that has a machine.
+        commit(machineRemoved.current ? withDesk.filter((w) => w.widget !== "machine") : saved.length === 0 ? withDesk : forMachineRun(withDesk, machine));
         setLoaded(true);
       })
       .catch(() => {
@@ -273,13 +283,13 @@ export function useRunLayout(preset: RunLayoutPreset, service = false, vm = fals
           if (alive) setLoaded(true);
           return;
         }
-        commit(presetLayout(preset, service, vm));
+        commit(presetLayout(preset, service, vm, machine));
         setLoaded(true);
       });
     return () => {
       alive = false;
     };
-  }, [preset, service, vm]);
+  }, [preset, service, vm, machine]);
 
   // Finish a debounced write the human never saw land — on unmount (they
   // navigated away mid-debounce) and on a preset switch, where the cleanup

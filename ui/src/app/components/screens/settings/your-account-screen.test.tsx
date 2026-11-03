@@ -32,6 +32,10 @@ vi.mock("../../../lib/api/runners", () => ({
   runners: { listMine: (...a: unknown[]) => listMineMock(...a) },
 }));
 
+// Your kept machines reads /me/machines; the default here is a caller who may keep none, which is "no card".
+const myMachinesMock = vi.fn();
+vi.mock("../../../lib/api/me-machines", () => ({ myMachines: () => myMachinesMock(), deleteMyMachine: vi.fn() }));
+
 // Your walls reads /me/walls; none are set here.
 const getWallsMock = vi.fn();
 vi.mock("../../../lib/api/walls", async (orig) => ({
@@ -75,6 +79,7 @@ function renderScreen(operator = false) {
 }
 
 beforeEach(() => {
+  myMachinesMock.mockReset().mockRejectedValue(new HttpError(403, "no person", "kept_machine_not_your_mac"));
   getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
   listKeysMock.mockReset().mockResolvedValue([]);
   listMineMock.mockReset().mockRejectedValue(new HttpError(403, "runners are off", "runners_disabled"));
@@ -187,6 +192,22 @@ describe("YourAccountScreen — My runner", () => {
     const keys = await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
     expect(runner.compareDocumentPosition(keys) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(runner.closest("section")?.id).toBe("my-runner");
+  });
+
+  // KM-4 (km4-page): Your kept machines sits under My runner, in the User view only.
+  it("draws Your kept machines right after My runner, and not in the Admin view", async () => {
+    listMineMock.mockReset().mockResolvedValue([]);
+    myMachinesMock.mockResolvedValue({ machines: [], allowed: true, count: 0, limit: 1, worst_bytes: 0 });
+    renderAt("/account");
+    const titles = async () => (await screen.findAllByRole("heading", { level: 3 })).map((h) => h.textContent ?? "");
+    await screen.findByRole("heading", { name: startsWith("Your kept machines"), level: 3 });
+    const at = await titles();
+    expect(at.findIndex((t) => t.startsWith("Your kept machines"))).toBe(at.findIndex((t) => t.startsWith("My runner")) + 1);
+    cleanup();
+    myMachinesMock.mockClear();
+    renderAt("/admin/account");
+    await screen.findByRole("heading", { name: startsWith("Your SSH keys"), level: 3 });
+    expect(myMachinesMock).not.toHaveBeenCalled();
   });
 
   it("is not read at all in the Admin view", async () => {

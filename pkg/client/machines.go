@@ -70,6 +70,9 @@ type MyMachines struct {
 	Count      int           `json:"count"`
 	Limit      int           `json:"limit"`
 	WorstBytes int64         `json:"worst_bytes"`
+	// IdleDays is the days a machine may sit unused before Wardyn deletes it: the site's setting, or its default.
+	// Absent from a server that does not say.
+	IdleDays int `json:"idle_days,omitempty"`
 }
 
 // KeptMachineList is GET /api/v1/machines/kept: one page of every person's kept machines, for an admin.

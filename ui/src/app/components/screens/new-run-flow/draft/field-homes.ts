@@ -7,6 +7,7 @@
 // Keys are the template field registry's request names and every policy name
 // as `inline_policy.<name>`; a registry row without a home fails its test.
 
+import { KEPT_MACHINE_REASON, type KeptMachineReason } from "../../../../lib/kept-machine-refusals";
 import type { NewRunReason, PlacementReason, WorkspaceDoorReason } from "../../../../lib/new-run-refusals";
 import type { RunModeReason } from "../../../../lib/run-mode-refusals";
 import type { RunnerPoolReason } from "../../../../lib/runner-pool-refusals";
@@ -68,7 +69,7 @@ export const REVIEW_GROUP_OF_FIELD: Record<string, ReviewGroupId> = {
 };
 
 /** Every reason a preflight or create refusal can carry that the console names. */
-export type KnownLaunchReason = NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | ScheduleReason | TemplateReason | WorkspaceDoorReason;
+export type KnownLaunchReason = KeptMachineReason | NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | ScheduleReason | TemplateReason | WorkspaceDoorReason;
 
 /** Written out key by key, so a new reason without a home fails typecheck. */
 export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
@@ -109,11 +110,15 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   template_name_taken: "review", template_limit_reached: "review", template_policy_field_refused: "review",
   harness_not_installed: "harnesses", harness_set_no_image: "harnesses", harness_set_custom_image: "harnesses",
   harness_providers_conflict: "harnesses", multi_agent_tasks_off: "harnesses",
+  // A refusal of the run's kept machine: the choice is on the Run step, under Where should it run.
+  ...(Object.fromEntries(Object.values(KEPT_MACHINE_REASON).map((r) => [r, "run"])) as Record<KeptMachineReason, FieldHome>),
 };
 
 /** The one field a refusal names, where it names one: the run's runner, chosen through its pool. */
 export const FIELD_OF_REASON: Partial<Record<KnownLaunchReason, string>> = {
   placement_credential: "runner_pool_id",
+  // A refusal of the run's kept machine marks the Where row, where Review shows the machine.
+  ...(Object.fromEntries(Object.values(KEPT_MACHINE_REASON).map((r) => [r, "machine"])) as Record<KeptMachineReason, string>),
 };
 
 /** A document path's Review group: its top-level field's (or `inline_policy.<name>`). */

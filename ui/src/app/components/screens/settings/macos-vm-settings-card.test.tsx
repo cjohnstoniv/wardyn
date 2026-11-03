@@ -73,7 +73,7 @@ describe("MacOSVMSettingsCard", () => {
     const card = await open();
     expect(field(card)).toHaveValue("");
     expect(field(card)).toHaveAccessibleDescription(T.P18);
-    expect(within(card).getByText(T.UNIT)).toBeInTheDocument();
+    expect(within(card).getAllByText(T.UNIT)).toHaveLength(2);
     expect(saveBtn(card)).toBeDisabled();
     expectActionBar(saveBtn(card));
   });

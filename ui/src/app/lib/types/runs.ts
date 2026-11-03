@@ -17,6 +17,7 @@ import type { HarnessInnerWalls, RecordingLevel, RunPolicySpec } from "./policy"
 import type { VMKind } from "./machine-kind";
 import type { RunService, RunServiceStatus } from "./run-service";
 import type { RunnerPoolSelection } from "./runner-pools";
+import type { RunMachine } from "./kept-machine";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
 // Older mock data used "claude_code" / "codex". Keep the union open
@@ -555,14 +556,13 @@ export interface RunDetail extends AgentRun {
   macos?: RunMacOS;
   // Whether this caller may watch a running background macOS VM run's desktop (GET /runs/{id} only); see RunBackgroundWatch.
   background_watch?: RunBackgroundWatch;
-  // Whether this caller may open a window onto the run on their own Mac (GET /runs/{id} only); see RunMacWindow.
-  mac_window?: RunMacWindow;
+  mac_window?: RunMacWindow; // whether this caller may open a window onto the run on their own Mac (GET /runs/{id} only)
   // True while an interactive macOS VM run's setup (repo clone, harness setup) runs (GET /runs/{id} only); absent otherwise.
   macos_preparing?: boolean;
   // Where a macOS VM run's disk stands on its Mac at the run's end (GET /runs/{id} only); see RunMacOSDisk.
   macos_disk?: RunMacOSDisk;
-  // The wall preset the run was launched with, never its spec (GET /runs/{id} only).
-  wall_preset?: RunWallPreset;
+  wall_preset?: RunWallPreset; // the preset the run was launched with, never its spec (GET /runs/{id} only)
+  machine?: RunMachine; // the kept machine the run keeps or resumed (GET /runs/{id} only); absent for a run that keeps none
 }
 
 // GET /runs/{id}'s macos (runMacOSView, internal/api/run_macos_view.go): whether the Mac's Screen Sharing
@@ -708,8 +708,7 @@ export interface RunPolicyView {
   host_marks?: RunPolicyHostMarks;
   inspection_left_to?: string[]; // each model provider whose gateway checks the run's prompts itself, by name
   wall_preset?: RunPolicyWallPreset; // run-policy-wall-preset.ts
-  // The broker is off and the capability list leaves out code_write: a git token in the sandbox can still push.
-  pushes_unstoppable?: boolean;
+  pushes_unstoppable?: boolean; // the broker is off and the capability list leaves out code_write: a git token in the sandbox can still push
 }
 
 // internal/api/run_host_marks.go hostMarks: the allowed_domains entries marked Inspected.

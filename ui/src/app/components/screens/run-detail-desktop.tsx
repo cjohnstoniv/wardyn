@@ -27,6 +27,7 @@ import { RECORDING_DESKTOP, desktopRecordedAt } from "../wardyn/copy/recording-l
 import { RUN_VM_PAGE } from "../wardyn/copy/run-cockpit";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { Chip, WidgetCard } from "../wardyn/primitives";
+import { KEEP_LIST } from "../wardyn/copy/keep-machine";
 import { MacOSDiskNote, macOSRunFactsOf, type MacOSRunFacts } from "./run-detail/macos-run-facts";
 import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
 import { DesktopPausedNote, DesktopSignInButton, DesktopSignInsError, DesktopSignInsNote, useDesktopSignIns } from "./run-detail/desktop-sign-ins";
@@ -198,7 +199,7 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
             (the run's person, not a sponsor, while it runs, with a declared UI app or a Linux VM's built-in desktop),
             plus never on a background run, which has no files door. The panel shows the run's own desktop rules. */}
         {desktopOn && !background && (uiApps.length > 0 || !mac) && mayAttach && !sponsorOnly && running && <DesktopFilesPanel runId={run.id} vm />}
-        {desktopOn && !background && <DesktopSignInsNote s={signIns} />}
+        {desktopOn && !background && <DesktopSignInsNote s={signIns} keptOn={run.machine && !run.machine.deleted && run.machine.keep_at_end ? run.machine.runner_name || KEEP_LIST.THIS_MAC : undefined} />}
       </section>
     </WidgetCard>
   );

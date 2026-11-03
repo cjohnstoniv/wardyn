@@ -17,8 +17,10 @@ import { serviceIssues } from "./service-lens";
 import { issue, type StepIssue, type StepValidator } from "./step-issues";
 
 export function chooseMode(intent: RunIntent, mode: RunMode): RunIntent {
-  if (intent.shape) return withKeys(intent, shapeCarriers(intent.shape, mode, intent));
-  return withKeys(intent, { experience: mode === "interactive" ? "interactive" : "background" });
+  // Only an interactive run keeps or resumes a machine.
+  const machine = mode === "interactive" ? {} : { machine: undefined };
+  if (intent.shape) return withKeys(intent, { ...shapeCarriers(intent.shape, mode, intent), ...machine });
+  return withKeys(intent, { experience: mode === "interactive" ? "interactive" : "background", ...machine });
 }
 
 /** Organization pools and User pools: the wire's scope is the console's word for the two kinds of pool. */
@@ -35,11 +37,11 @@ export const choosePool = (intent: RunIntent, poolId: string): RunIntent => with
  */
 export const chooseMachineKind = (intent: RunIntent, kind: MachineKind): RunIntent =>
   kind === "container"
-    ? withKeys(intent, { machine_kind: undefined, macos_base: undefined, desktop_window: undefined })
+    ? withKeys(intent, { machine_kind: undefined, macos_base: undefined, desktop_window: undefined, machine: undefined })
     : withKeys(intent, {
         machine_kind: kind,
         confinement_class: undefined,
-        ...(kind !== "macos_vm" && { macos_base: undefined, desktop_window: undefined }),
+        ...(kind !== "macos_vm" && { macos_base: undefined, desktop_window: undefined, machine: undefined }),
         ...(intent.startup?.kind === "harness" && { startup: undefined }),
       });
 
