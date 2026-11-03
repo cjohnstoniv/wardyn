@@ -327,8 +327,12 @@ func (s *Server) reconcileKeptMachine(ctx context.Context, ks store.KeptMachineS
 	on, listed := inv[m.ID.String()]
 	switch {
 	case listed && !on.InUse:
+		exp := on.ExpiresAt
+		if exp.IsZero() {
+			exp = s.keptMachineExpiry(ctx) // a listing with no expiry is not one that has passed
+		}
 		return s.keepKeptMachine(ctx, ks, store.KeptMachineStop{ID: m.ID, RunnerID: m.RunnerID, RunID: *m.RunID,
-			Scrubbed: on.Scrubbed, DiskBytes: on.Bytes, ExpiresAt: on.ExpiresAt}, keptMachineStopUnreported, nil)
+			Scrubbed: on.Scrubbed, DiskBytes: on.Bytes, ExpiresAt: exp}, keptMachineStopUnreported, nil)
 	case !listed && m.State == types.KeptMachineCreating &&
 		(gone || run.EndedAt != nil && s.cfg.Now().Sub(*run.EndedAt) > keptMachineUnstartedAfter):
 		if err := ks.DropUnstartedKeptMachine(ctx, m.ID, *m.RunID); err != nil && !errors.Is(err, store.ErrNotFound) {

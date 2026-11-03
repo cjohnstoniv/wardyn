@@ -98,13 +98,7 @@ func newKeptFixture(t *testing.T) *keptFixture {
 		mac: &keptMacTransport{capsTransport: capsTransport{online: true}}, online: map[uuid.UUID]bool{f.rn.ID: true}}
 	f.srv.cfg.Audit = k.audit
 	f.srv.cfg.RunnerOnline = func(id uuid.UUID) bool { k.mu.Lock(); defer k.mu.Unlock(); return k.online[id] }
-	k.sub = remote.New(f.rn.ID.String(), k.mac, remote.Options{})
-	f.srv.runnerStreams.subsMu.Lock()
-	if f.srv.runnerStreams.subs == nil {
-		f.srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{}
-	}
-	f.srv.runnerStreams.subs[f.rn.ID] = runnerEndpoint{sub: k.sub, link: &remote.Link{}}
-	f.srv.runnerStreams.subsMu.Unlock()
+	k.sub = k.connect(f.rn.ID, k.mac)
 	k.inventory(t)
 	on := true
 	if _, err := f.st.PutSiteConfig(f.ctx, types.SiteConfig{MacOSVM: &types.SiteMacOSVM{AllowKeptMachines: &on}}); err != nil {
@@ -120,13 +114,32 @@ func (k *keptFixture) setOnline(id uuid.UUID, on bool) {
 }
 
 // inventory sends the Mac's caps: it keeps machines, and holds ms.
+// connect holds runnerID's session on this replica through tr, online.
+func (k *keptFixture) connect(runnerID uuid.UUID, tr *keptMacTransport) *remote.Substrate {
+	sub := remote.New(runnerID.String(), tr, remote.Options{})
+	k.srv.runnerStreams.subsMu.Lock()
+	if k.srv.runnerStreams.subs == nil {
+		k.srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{}
+	}
+	k.srv.runnerStreams.subs[runnerID] = runnerEndpoint{sub: sub, link: &remote.Link{}}
+	k.srv.runnerStreams.subsMu.Unlock()
+	k.setOnline(runnerID, true)
+	return sub
+}
+
 func (k *keptFixture) inventory(t *testing.T, ms ...runnerwire.MacVMKeptMachine) {
+	t.Helper()
+	inventoryOf(t, k.sub, ms...)
+}
+
+// inventoryOf sends sub's caps: its Mac keeps machines, and holds ms.
+func inventoryOf(t *testing.T, sub *remote.Substrate, ms ...runnerwire.MacVMKeptMachine) {
 	t.Helper()
 	data, err := json.Marshal(runnerwire.Caps{MacOSVM: &runnerwire.MacVMCaps{KeptMachines: true, Kept: &runnerwire.MacVMKept{Machines: ms}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	k.sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
 }
 
 // newRun stores a RUNNING local run of createdBy's on runnerID.
@@ -493,6 +506,32 @@ func TestInventoryKeepsAMachineWhoseStopReportNeverCame(t *testing.T) {
 	}
 	if keeps := k.rows(t, "machine.keep", m.ID); len(keeps) != 1 || keeps[0]["stop"] != keptMachineStopUnreported {
 		t.Fatalf("machine.keep = %v, want one unreported", keeps)
+	}
+}
+
+// TestReconcileIgnoresAnotherRunnersInventory: a runner's inventory speaks only for the machines
+// recorded on that runner. Mac B listing Mac A's machine as stopped neither keeps it nor sets its size,
+// and its stop report for A's run changes nothing; A's own inventory still decides.
+func TestReconcileIgnoresAnotherRunnersInventory(t *testing.T) {
+	k := newKeptFixture(t)
+	m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineInUse)
+	k.exec(t, `UPDATE agent_runs SET state = 'KILLED', ended_at = now() WHERE id = $1`, k.run.ID)
+	b := k.claimedMac(t, k.owner)
+	macB := &keptMacTransport{capsTransport: capsTransport{online: true}}
+	inventoryOf(t, k.connect(b.ID, macB), runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 9 << 30, Scrubbed: true,
+		ExpiresAt: time.Now().Add(24 * time.Hour).UTC()})
+	k.srv.runnerMacOSVMDisks(k.ctx, b.ID, []runner.MacOSVMDisk{diskReport(k.run.ID, &runner.KeptScrub{When: "stop", Outcome: keptScrubDone})})
+	k.sweep(t)
+	if got, _ := k.row(t, m.ID); got.State != types.KeptMachineInUse || got.DiskBytes == 9<<30 || got.Scrubbed {
+		t.Fatalf("after Mac B's inventory and report: %+v; want A's machine untouched", got)
+	}
+	if keeps := k.rows(t, "machine.keep", m.ID); len(keeps) != 0 || len(macB.asked()) != 0 {
+		t.Fatalf("machine.keep %v, Mac B asked %v; want neither", keeps, macB.asked())
+	}
+	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 2 << 30, ExpiresAt: time.Now().Add(24 * time.Hour).UTC()})
+	k.sweep(t)
+	if got, _ := k.row(t, m.ID); got.State != types.KeptMachineKept || got.DiskBytes != 2<<30 {
+		t.Fatalf("after Mac A's own inventory: %+v; want kept at A's size", got)
 	}
 }
 
