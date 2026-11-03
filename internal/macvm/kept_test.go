@@ -5,6 +5,7 @@ package macvm_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"maps"
 	"os"
@@ -354,6 +355,7 @@ func TestKeptWindowStripSaysTheSignInsStay(t *testing.T) {
 }
 
 func TestKeptRefusedBootWritesItsCode(t *testing.T) {
+	t.Cleanup(macvm.SetKeptBootLockWait(50 * time.Millisecond))
 	id := uuid.New()
 	for _, tc := range []struct {
 		name, code string
@@ -654,5 +656,104 @@ func TestKeptIdleDaysAreStoredAtBootAndStopAndDerivedWithoutThem(t *testing.T) {
 		if got := macvm.KeptRecordIdleDays(tc.rec); got != tc.want {
 			t.Errorf("%s: KeptRecordIdleDays = %d, want %d", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestKeptBootWaitsBrieflyForTheLock(t *testing.T) {
+	l := macvm.Layout{Root: t.TempDir()}
+	base := makeBase(t, l)
+	id := uuid.New()
+	dir := l.KeptMachineDir(id.String())
+	now := time.Now().UTC()
+	if err := openKept(t, keptCfg(base, macvm.KeptNew, id), dir, now); err != nil {
+		t.Fatal(err)
+	}
+	hold := func(d time.Duration) {
+		unlock, err := macvm.LockKept(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() { time.Sleep(d); unlock() }()
+	}
+	t.Cleanup(macvm.SetKeptBootLockWait(2 * time.Second))
+	hold(150 * time.Millisecond)
+	if err := openKept(t, keptCfg(base, macvm.KeptResume, id), dir, now); err != nil {
+		t.Fatalf("a lock released within the bound refused the boot: %v", err)
+	}
+	macvm.SetKeptBootLockWait(50 * time.Millisecond)
+	hold(time.Second)
+	start := time.Now()
+	if err := openKept(t, keptCfg(base, macvm.KeptResume, id), dir, now); !errors.Is(err, macvm.ErrKeptLocked) {
+		t.Fatalf("a lock held past the bound = %v, want ErrKeptLocked", err)
+	}
+	if time.Since(start) < 40*time.Millisecond {
+		t.Fatal("the refusal did not wait")
+	}
+	// LockKeptWait itself: a wait of 0 is the one try.
+	if _, err := macvm.LockKeptWait(dir, 0); !errors.Is(err, macvm.ErrKeptLocked) {
+		t.Fatalf("LockKeptWait(0) while held = %v", err)
+	}
+	time.Sleep(time.Second)
+	unlock, err := macvm.LockKeptWait(dir, 0)
+	if err != nil {
+		t.Fatalf("LockKeptWait(0) once free: %v", err)
+	}
+	unlock()
+}
+
+func TestKeptResumeViewOnlyComesFromTheMachinesOwnManifest(t *testing.T) {
+	setDesktop := func(dir, mode string) {
+		t.Helper()
+		m, err := macvm.ReadManifest(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.Desktop = mode
+		b, _ := json.Marshal(m)
+		if err := os.WriteFile(filepath.Join(dir, macvm.ManifestFile), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name, kept, base string
+		removeBase       bool
+		want             bool
+	}{
+		{"base swapped to view only, machine has control", macvm.DesktopControl, macvm.DesktopObserve, false, false},
+		{"base replaced by one with control, machine is view only", macvm.DesktopObserve, macvm.DesktopControl, false, true},
+		{"base gone, machine has control", macvm.DesktopControl, macvm.DesktopControl, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := macvm.Layout{Root: t.TempDir()}
+			base := makeBase(t, l)
+			id := uuid.New()
+			dir := l.KeptMachineDir(id.String())
+			if err := openKept(t, keptCfg(base, macvm.KeptNew, id), dir, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			setDesktop(dir, tc.kept)
+			setDesktop(base, tc.base)
+			if tc.removeBase {
+				if err := os.RemoveAll(base); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg := keptCfg(base, macvm.KeptResume, id)
+			run := l.RunDir(cfg.RunID)
+			if err := macvm.WriteRunConfig(run, cfg); err != nil {
+				t.Fatal(err)
+			}
+			if got := macvm.BaseViewOnly(run); got != tc.want {
+				t.Fatalf("view only = %v, want %v", got, tc.want)
+			}
+			// A new or fresh boot clones the current base, so it reads that.
+			cfg.Kept.Mode = macvm.KeptFresh
+			if err := macvm.WriteRunConfig(run, cfg); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := macvm.BaseViewOnly(run), tc.removeBase || tc.base != macvm.DesktopControl; got != want {
+				t.Fatalf("fresh: view only = %v, want %v", got, want)
+			}
+		})
 	}
 }

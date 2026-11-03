@@ -112,8 +112,10 @@ func WriteKept(dir string, rec KeptRecord) error {
 }
 
 // KeptLocked reports whether a helper holds dir's boot lock (dir/../<key>.lock) now, without waiting and
-// without making anything: a machine that was never booted has no lock file and is not locked. The probe
-// takes the lock shared for an instant, so a helper starting at that instant may be told the machine is busy.
+// without making anything: a machine that was never booted has no lock file and is not locked. The lock is
+// a flock and the kernel offers no way to read it without taking it, so this takes it shared for an instant:
+// a caller that LockKept's at that instant is refused (LockKeptWait rides it out). It is a probe, not for hot
+// paths or loops; a caller with the record and the ledger should read in-use from them instead.
 func KeptLocked(dir string) (bool, error) {
 	lock := dir + ".lock"
 	if _, err := os.Lstat(lock); errors.Is(err, fs.ErrNotExist) {
@@ -144,6 +146,20 @@ func LockKept(dir string) (unlock func(), err error) {
 		return nil, ErrKeptLocked
 	}
 	return unlock, err
+}
+
+// LockKeptWait is LockKept that polls for up to wait before it returns ErrKeptLocked, for a caller whose
+// refusal would be spurious if the holder is only a brief write or probe. Delete and erase keep the one-try
+// LockKept.
+func LockKeptWait(dir string, wait time.Duration) (unlock func(), err error) {
+	deadline := time.Now().Add(wait)
+	for {
+		unlock, err = LockKept(dir)
+		if !errors.Is(err, ErrKeptLocked) || !time.Now().Before(deadline) {
+			return unlock, err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // RemoveKept deletes the kept machine's folder and then its lock file, holding the lock throughout:
@@ -264,18 +280,30 @@ func (r *runner) openMachine() (man Manifest, id Identity, dir string, release f
 		man, id, err = cloneReadyBase(r.o.Engine, r.cfg.BaseDir, r.o.RunDir, r.cfg.Identity)
 		return man, id, r.o.RunDir, func() {}, err
 	}
-	// The kept folder is beside runs/, never named by run.json, so a run.json cannot point a boot elsewhere.
-	runs := filepath.Dir(filepath.Clean(r.o.RunDir))
-	if filepath.Base(runs) != "runs" {
-		return man, id, "", nil, fmt.Errorf("macvm: %s is not a run folder under runs/", r.o.RunDir)
+	dir, err = keptDirOf(r.o.RunDir, r.cfg.Kept.ID)
+	if err != nil {
+		return man, id, "", nil, err
 	}
-	dir = Layout{Root: filepath.Dir(runs)}.KeptMachineDir(r.cfg.Kept.ID)
 	man, id, release, err = openKept(r.o.Engine, r.cfg, dir, time.Now().UTC())
 	if err != nil {
 		return man, id, "", nil, err
 	}
 	return man, id, dir, release, nil
 }
+
+// keptDirOf is the kept machine id's folder for the run folder runDir. It is derived from where the run
+// folder sits (root/runs/<key>), never named by run.json, so a run.json cannot point a boot elsewhere.
+func keptDirOf(runDir, id string) (string, error) {
+	runs := filepath.Dir(filepath.Clean(runDir))
+	if filepath.Base(runs) != "runs" {
+		return "", fmt.Errorf("macvm: %s is not a run folder under runs/", runDir)
+	}
+	return Layout{Root: filepath.Dir(runs)}.KeptMachineDir(id), nil
+}
+
+// keptBootLockWait is how long a boot waits for the kept machine's lock before it is refused as running: a
+// runner's brief record write or a probe holds it for moments, and must not refuse a boot.
+var keptBootLockWait = 10 * time.Second
 
 // openKept takes dir's boot lock, then per cfg.Kept.Mode clones the base into dir (new), checks and boots
 // what is there (resume), or replaces it with a clone of the current base under the same id (fresh).
@@ -285,7 +313,7 @@ func openKept(e Engine, cfg RunConfig, dir string, now time.Time) (man Manifest,
 	if k.OwnerHash == "" || k.RunnerID == "" {
 		return man, id, nil, errors.New("macvm: a kept machine boot needs its owner and runner")
 	}
-	unlock, err := LockKept(dir)
+	unlock, err := LockKeptWait(dir, keptBootLockWait)
 	if err != nil {
 		return man, id, nil, err
 	}
