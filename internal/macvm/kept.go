@@ -48,7 +48,7 @@ type KeptRun struct {
 	RunnerID  string `json:"runner_id"`
 	// Base is the base's name, recorded in kept.json when the machine is made or reset.
 	Base string `json:"base,omitempty"`
-	// IdleDays moves expires_at that far past each stop.
+	// IdleDays moves expires_at that far past each boot and stop (KeptDefaultIdleDays when 0).
 	IdleDays int `json:"idle_days,omitempty"`
 }
 
@@ -64,6 +64,10 @@ type KeptRecord struct {
 	// until the machine has stopped once.
 	LastStop time.Time `json:"last_stop,omitzero"`
 	StopKind string    `json:"stop_kind,omitempty"`
+	// ActiveRun is the run id that booted the machine and has not yet stopped it (KeptStopUpdate clears it);
+	// a stop that is not that run's changes nothing. LastUsed is the latest boot or stop.
+	ActiveRun string    `json:"active_run,omitempty"`
+	LastUsed  time.Time `json:"last_used,omitzero"`
 	// Scrubbed is true only when the latest stop ran the guest's scrub; a boot sets it false.
 	Scrubbed  bool      `json:"scrubbed"`
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
@@ -286,8 +290,10 @@ func openKept(e Engine, cfg RunConfig, dir string, now time.Time) (man Manifest,
 			_ = os.RemoveAll(dir)
 			return man, id, nil, err
 		}
-		err = WriteKept(dir, KeptRecord{ID: k.ID, OwnerHash: k.OwnerHash, RunnerID: k.RunnerID, Base: k.Base,
-			BasePreparedAt: man.CreatedAt, CreatedAt: now, ExpiresAt: keptExpiry(now, k.IdleDays)})
+		rec := KeptRecord{ID: k.ID, OwnerHash: k.OwnerHash, RunnerID: k.RunnerID, Base: k.Base,
+			BasePreparedAt: man.CreatedAt, CreatedAt: now}
+		markKeptBoot(&rec, cfg.RunID, now, k.IdleDays)
+		err = WriteKept(dir, rec)
 		if err != nil {
 			_ = os.RemoveAll(dir)
 		}
@@ -305,19 +311,40 @@ func openKept(e Engine, cfg RunConfig, dir string, now time.Time) (man Manifest,
 		if err != nil {
 			return man, id, nil, err
 		}
-		// A boot is about to write what a scrub would remove; the stop that scrubs sets this again.
-		rec.Scrubbed = false
+		markKeptBoot(&rec, cfg.RunID, now, k.IdleDays)
 		err = WriteKept(dir, rec)
 		return man, id, release, err
 	}
 	return man, id, nil, fmt.Errorf("macvm: kept machine mode %q", k.Mode)
 }
 
+// KeptDefaultIdleDays is the idle allowance when a boot or stop is given none.
+const KeptDefaultIdleDays = 30
+
 func keptExpiry(now time.Time, idleDays int) time.Time {
 	if idleDays <= 0 {
-		return time.Time{}
+		idleDays = KeptDefaultIdleDays
 	}
 	return now.AddDate(0, 0, idleDays)
+}
+
+// markKeptBoot is what every boot writes before its VM starts, after the expiry check: the run that holds the
+// machine, a fresh idle allowance (so a machine in use cannot expire under its run), and scrubbed false, since
+// the run is about to write what a scrub removes.
+func markKeptBoot(rec *KeptRecord, runID string, now time.Time, idleDays int) {
+	rec.ActiveRun, rec.LastUsed, rec.ExpiresAt, rec.Scrubbed = runID, now, keptExpiry(now, idleDays), false
+}
+
+// KeptStopUpdate is the stop's change to rec, for the runner to make under LockKept: it returns false and
+// changes nothing unless rec.ActiveRun is runID, the run the stop belongs to. Otherwise the run no longer
+// holds the machine, and its idle allowance restarts from now whether or not the boot's expiry has passed,
+// so a machine used past its old expiry is not deleted the moment it stops.
+func KeptStopUpdate(rec *KeptRecord, runID string, now time.Time, idleDays int) (ok bool) {
+	if runID == "" || rec.ActiveRun != runID {
+		return false
+	}
+	rec.ActiveRun, rec.LastUsed, rec.ExpiresAt = "", now, keptExpiry(now, idleDays)
+	return true
 }
 
 // checkKept reads dir's record and refuses a boot by anyone but the machine's owner on its runner, and one
@@ -372,8 +399,8 @@ func resetKept(e Engine, cfg RunConfig, dir string, rec KeptRecord, now time.Tim
 		return man, id, err
 	}
 	rec.Base, rec.BasePreparedAt = cfg.Kept.Base, man.CreatedAt
-	rec.LastStop, rec.StopKind, rec.Scrubbed = time.Time{}, "", false
-	rec.ExpiresAt = keptExpiry(now, cfg.Kept.IdleDays)
+	rec.LastStop, rec.StopKind = time.Time{}, ""
+	markKeptBoot(&rec, cfg.RunID, now, cfg.Kept.IdleDays)
 	return man, id, WriteKept(dir, rec)
 }
 

@@ -426,3 +426,91 @@ func TestKeptRefusedBootWritesItsCode(t *testing.T) {
 		t.Fatalf("a boot that was not refused left kept_refusal %q, %v", got, err)
 	}
 }
+
+func TestKeptResumeBeforeExpiryRefreshesItAndMarksTheRun(t *testing.T) {
+	l := macvm.Layout{Root: t.TempDir()}
+	base := makeBase(t, l)
+	id := uuid.New()
+	dir := l.KeptMachineDir(id.String())
+	t0 := time.Now().UTC().Truncate(time.Second)
+	if err := openKept(t, keptCfg(base, macvm.KeptNew, id), dir, t0); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := macvm.ReadKept(dir, id.String())
+	if err != nil || rec.ActiveRun != testRunID || !rec.LastUsed.Equal(t0) {
+		t.Fatalf("after new: %+v %v", rec, err)
+	}
+	expiry := rec.ExpiresAt
+	resume := keptCfg(base, macvm.KeptResume, id)
+	resume.RunID = "22222222-2222-2222-2222-222222222222"
+	at := expiry.Add(-time.Minute)
+	if err := openKept(t, resume, dir, at); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = macvm.ReadKept(dir, id.String())
+	if !rec.ExpiresAt.Equal(at.AddDate(0, 0, 30)) || !rec.LastUsed.Equal(at) || rec.ActiveRun != resume.RunID || rec.Scrubbed {
+		t.Fatalf("resume at expiry-1m: %+v", rec)
+	}
+	// A zero IdleDays reads as the default 30.
+	resume.Kept.IdleDays = 0
+	if err := openKept(t, resume, dir, at); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ = macvm.ReadKept(dir, id.String()); !rec.ExpiresAt.Equal(at.AddDate(0, 0, macvm.KeptDefaultIdleDays)) {
+		t.Fatalf("zero IdleDays gave expiry %v", rec.ExpiresAt)
+	}
+	// The same fresh boot marks the run and the allowance too.
+	fresh := keptCfg(base, macvm.KeptFresh, id)
+	fresh.RunID = "33333333-3333-3333-3333-333333333333"
+	if err := openKept(t, fresh, dir, at.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ = macvm.ReadKept(dir, id.String()); rec.ActiveRun != fresh.RunID || !rec.ExpiresAt.Equal(at.Add(time.Hour).AddDate(0, 0, 30)) {
+		t.Fatalf("after fresh: %+v", rec)
+	}
+}
+
+func TestKeptStopUpdateAfterTheOldExpiry(t *testing.T) {
+	boot := time.Date(2026, 11, 3, 9, 59, 0, 0, time.UTC)
+	stop := time.Date(2026, 11, 3, 10, 30, 0, 0, time.UTC)
+	// The boot refreshed the expiry, so the record held the boot's date; model the worst case where it is
+	// the old one, 10:00, and already past at the stop.
+	rec := macvm.KeptRecord{ActiveRun: "run-a", LastUsed: boot, ExpiresAt: time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)}
+	other := rec
+	if macvm.KeptStopUpdate(&other, "run-b", stop, 30) || other != rec {
+		t.Fatalf("a stop for another run changed the record: %+v", other)
+	}
+	if macvm.KeptStopUpdate(&other, "", stop, 30) || other != rec {
+		t.Fatal("a stop with no run id changed the record")
+	}
+	if !macvm.KeptStopUpdate(&rec, "run-a", stop, 30) {
+		t.Fatal("the matching run's stop was refused")
+	}
+	if rec.ActiveRun != "" || !rec.LastUsed.Equal(stop) || !rec.ExpiresAt.Equal(stop.AddDate(0, 0, 30)) {
+		t.Fatalf("after the stop: %+v", rec)
+	}
+	if macvm.KeptStopUpdate(&rec, "run-a", stop, 30) {
+		t.Fatal("a second stop for the same run was taken")
+	}
+}
+
+func TestKeptExpiredRecordIsStillRefusedAtBootAndNotRefreshed(t *testing.T) {
+	l := macvm.Layout{Root: t.TempDir()}
+	base := makeBase(t, l)
+	id := uuid.New()
+	dir := l.KeptMachineDir(id.String())
+	t0 := time.Now().UTC().Truncate(time.Second)
+	if err := openKept(t, keptCfg(base, macvm.KeptNew, id), dir, t0); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := macvm.ReadKept(dir, id.String())
+	late := before.ExpiresAt.Add(time.Second)
+	for _, mode := range []string{macvm.KeptResume, macvm.KeptFresh} {
+		if err := openKept(t, keptCfg(base, mode, id), dir, late); !errors.Is(err, macvm.ErrKeptExpired) {
+			t.Fatalf("%s past expiry = %v", mode, err)
+		}
+	}
+	if after, _ := macvm.ReadKept(dir, id.String()); after != before {
+		t.Fatalf("a refused boot rewrote the record: %+v", after)
+	}
+}
