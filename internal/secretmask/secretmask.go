@@ -599,14 +599,14 @@ func (r *Registry) Evict(runID uuid.UUID) {
 	if r == nil {
 		return
 	}
+	r.guardDrop(runID) // first: nothing vouches for the run once its values go
 	r.mu.Lock()
 	_, hadSecrets := r.perRun[runID]
 	delete(r.perRun, runID)
 	delete(r.cached, runID)
-	// The bump is CONDITIONAL: gen is the cache key for every run, so an
-	// unconditional bump would invalidate every OTHER run's cached Masker on
-	// every eviction. An eviction that deleted no per-run secrets changed
-	// nothing any other run's Masker was built from.
+	// The bump is CONDITIONAL: gen keys every run's cached Masker, so a bump on
+	// each eviction would invalidate every OTHER run's. An eviction that
+	// deleted no per-run secrets changed nothing any other Masker was built from.
 	if hadSecrets {
 		r.gen++
 	}

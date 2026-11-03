@@ -84,8 +84,9 @@ type Manifests struct {
 	// seq orders every invalidation (invalidate): last holds the seq of each run's latest, lastAll that of
 	// the latest process-wide one. A load keeps its result only if neither passed seq's value from before
 	// it began, so a load that was in flight when the corpus was dropped cannot vouch for it again.
-	// ponytail: last grows by one entry per run ever invalidated; prune it if that count ever shows.
+	// last is kept only while a load is in flight (loads), so evictions do not leave an entry each.
 	seq, lastAll uint64
+	loads        int
 	last         map[uuid.UUID]uint64
 	publishMu    sync.Mutex                          // serialises the register-check-publish step of loads
 	loadPause    func(stage string, runID uuid.UUID) // test seam: stops a load before and after it registers
@@ -307,7 +308,15 @@ func (m *Manifests) Covered(ctx context.Context, runID uuid.UUID) bool {
 func (m *Manifests) load(ctx context.Context, runID uuid.UUID, owner string) bool {
 	m.mu.Lock()
 	began := m.seq // before the snapshot and the registrations: an invalidation after this voids the result
+	m.loads++
 	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		if m.loads--; m.loads == 0 {
+			clear(m.last)
+		}
+		m.mu.Unlock()
+	}()
 	rev, stored, ok := m.snapshot(ctx, runID)
 	if !ok {
 		return false
@@ -404,7 +413,9 @@ func (m *Manifests) invalidate(runID uuid.UUID) {
 		clear(m.cache)
 		return
 	}
-	m.last[runID] = m.seq
+	if m.loads > 0 {
+		m.last[runID] = m.seq
+	}
 	delete(m.cache, runID)
 }
 

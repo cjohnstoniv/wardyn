@@ -6,16 +6,20 @@ package maskmanifest
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // noKeys is a Keys that must never be asked: every path these tests drive
@@ -269,4 +273,56 @@ func TestADroppedProcessWideValueUnholdsEveryRun(t *testing.T) {
 	if m.Held(a) || m.Held(b) {
 		t.Fatalf("a dropped process-wide value left runs held: %v %v", m.Held(a), m.Held(b))
 	}
+}
+
+// The sweeper's late eviction takes a held run's values out of the registry; it stops the manifests vouching
+// for the run first, and the audit sinks stop adding the run's correlation id from then on.
+func TestAnEvictionUnholdsTheRunBeforeItsValuesGoAndTheSinkStopsAddingTheID(t *testing.T) {
+	const secret = "zq-throwaway-evict-13"
+	m, reg := newManifests(t, nil)
+	run := uuid.New()
+	m.note(run, 1, true, nil)
+	if err := reg.Add(run, []byte(secret)); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var got []types.AuditEvent
+	fan := sinks.NewFanout(sinkFunc(func(ev types.AuditEvent) { mu.Lock(); got = append(got, ev); mu.Unlock() }))
+	fan.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return secret, true, nil },
+		func(id uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(id).Mask(b) }, m.Held)
+	emit := func() {
+		ev := types.AuditEvent{ID: uuid.New(), RunID: &run, Action: "run.kill", Outcome: "success", Data: json.RawMessage(`{"k":1}`)}
+		if err := fan.Emit(context.Background(), ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	emit() // held: the id goes out masked
+	if !m.Held(run) {
+		t.Fatal("the run is not held before the eviction")
+	}
+	reg.Evict(run)
+	if m.Held(run) {
+		t.Fatal("the manifests still vouch for the run after its values were evicted")
+	}
+	emit() // the id is cached on the sink; coverage is checked before the cache
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 2 {
+		t.Fatalf("%d events reached the sink, want 2", len(got))
+	}
+	if !strings.Contains(string(got[0].Data), sinks.CorrelationKey) || strings.Contains(string(got[0].Data), secret) {
+		t.Errorf("held event: %s", got[0].Data)
+	}
+	if strings.Contains(string(got[1].Data), secret) || strings.Contains(string(got[1].Data), sinks.CorrelationKey) {
+		t.Errorf("event after the eviction: %s", got[1].Data)
+	}
+}
+
+type sinkFunc func(types.AuditEvent)
+
+func (sinkFunc) Name() string { return "func" }
+func (f sinkFunc) Emit(_ context.Context, ev types.AuditEvent) error {
+	f(ev)
+	return nil
 }
