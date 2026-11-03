@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -382,5 +383,41 @@ func TestWallsAndPresetReassertOnRestart(t *testing.T) {
 	}
 	if d := cfg.Policy.Desktop.Effective(); d.PasteIn != types.TransferBlocked || d.Upload != types.TransferBlocked {
 		t.Errorf("revived desktop = %+v, want the preset's blocks re-asserted", d)
+	}
+}
+
+// TestWallPresetListGroupLabels: the list labels the groups the caller may save to and those of the
+// group presets they can read, so a card and `--group <label>` name a group by its label; a group
+// outside both is never labelled, and a caller in no group gets no labels.
+func TestWallPresetListGroupLabels(t *testing.T) {
+	e := newWallPresetEnv(t)
+	for _, g := range []types.TemplateGroupAdmin{{Group: "eng", Person: "gary", Label: "Engineering"},
+		{Group: "ops", Person: "olga", Label: "Operations"}, {Group: "hr", Person: "hana", Label: "People"}} {
+		g.GrantedBy = "admin"
+		if _, err := e.ts.PutTemplateGroupAdmin(context.Background(), g); err != nil {
+			t.Fatal(err)
+		}
+	}
+	olga := templateCookie(t, "olga", oidc.RoleUser, false, []string{"ops"}, false)
+	e.save(olga, `{"scope":"group","group_id":"ops","name":"Ops tight",`+tightSpec+`}`)
+
+	list := func(c *http.Cookie) client.WallPresetList {
+		var out client.WallPresetList
+		if err := json.Unmarshal([]byte(e.expect(c, http.MethodGet, "/api/v1/wall-presets", "", http.StatusOK, "")), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	gary := templateCookie(t, "gary", oidc.RoleUser, false, []string{"eng", "ops"}, false)
+	got := list(gary)
+	if want := map[string]string{"eng": "Engineering", "ops": "Operations"}; !maps.Equal(got.Publish.GroupLabels, want) {
+		t.Errorf("gary's group_labels = %v, want %v (eng to save to, ops from its preset, never hr)", got.Publish.GroupLabels, want)
+	}
+	if !slices.Equal(got.Publish.Groups, []string{"eng"}) {
+		t.Errorf("gary's publish groups = %v, want [eng]", got.Publish.Groups)
+	}
+	bob := templateCookie(t, "bob", oidc.RoleUser, false, []string{}, false)
+	if got := list(bob); len(got.Publish.GroupLabels) != 0 {
+		t.Errorf("bob's group_labels = %v, want none", got.Publish.GroupLabels)
 	}
 }
