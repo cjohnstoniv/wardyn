@@ -693,6 +693,8 @@ func (s *Server) claimKeptMachine(ctx context.Context, st keptMachineStore, rs r
 	switch {
 	case errors.Is(err, store.ErrRunNotDispatching):
 		return types.KeptMachine{}, keptRunGone, ""
+	case errors.Is(err, store.ErrKeptMachineExpired):
+		return types.KeptMachine{}, reasonKeptMachineExpired, keptMachineExpiredMsg
 	case errors.Is(err, store.ErrKeptMachineResetUnconfirmed):
 		return types.KeptMachine{}, reasonKeptMachineResetUnconfirmed, keptMachineResetUnconfirmedMsg(before.Name)
 	case errors.Is(err, store.ErrKeptMachineInUse):

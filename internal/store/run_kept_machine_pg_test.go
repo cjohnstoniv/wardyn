@@ -63,6 +63,26 @@ func TestRunKeptMachineOutlivesTheMachine(t *testing.T) {
 }
 
 // A kill that holds the run's row first wins: the claim waits for it, then makes and changes nothing.
+// A machine past its expires_at is not claimed even when the caller skipped its own expiry check.
+func TestClaimKeptMachineForRunRefusesAnExpiredMachine(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	ctx := context.Background()
+	runner := claimedRunnerOf(t, pg, "sub-a")
+	m := keptMachineOf(t, pg, "sub-a", runner, "web")
+	if _, err := pool.Exec(ctx, `UPDATE kept_machines SET expires_at = now() - interval '1 minute' WHERE id = $1`, m.ID); err != nil {
+		t.Fatal(err)
+	}
+	run := startingRun(t, pool, pg, "sub-a")
+	if _, err := pg.ClaimKeptMachineForRun(ctx, m.ID, "sub-a", run, "resume"); !errors.Is(err, store.ErrKeptMachineExpired) {
+		t.Fatalf("claim of an expired machine: %v", err)
+	}
+	got, err := pg.GetKeptMachine(ctx, m.ID)
+	if err != nil || got.State != types.KeptMachineKept || (got.RunID != nil && *got.RunID == run) {
+		t.Fatalf("the refused claim changed the machine: %+v, %v", got, err)
+	}
+}
+
 func TestClaimKeptMachineForRunLosesToAKillThatCommitsFirst(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	pg := store.NewPG(pool)

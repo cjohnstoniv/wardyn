@@ -22,6 +22,10 @@ import (
 // first): it makes and changes no machine.
 var ErrRunNotDispatching = errors.New("store: the run is no longer starting")
 
+// ErrKeptMachineExpired is a claim of a machine whose expires_at has passed: the API refuses it first, and
+// the claim's own WHERE refuses it again.
+var ErrKeptMachineExpired = fmt.Errorf("%w: this kept machine has expired", ErrConflict)
+
 // ErrKeptMachineResetUnconfirmed is a resume, not a fresh start, of a machine whose fresh start was asked
 // of its Mac and never confirmed: its disk may or may not have been reset.
 var ErrKeptMachineResetUnconfirmed = fmt.Errorf("%w: this kept machine's fresh start is unconfirmed", ErrConflict)
@@ -144,7 +148,7 @@ func (s PG) ClaimKeptMachineForRun(ctx context.Context, id uuid.UUID, owner stri
 			return err
 		}
 		m, err := scanKeptMachine(q.QueryRow(ctx, `UPDATE kept_machines SET state = 'in_use', run_id = $3, last_used_at = now()
-			WHERE id = $1 AND owner_subject = $2 AND delete_intent_at IS NULL
+			WHERE id = $1 AND owner_subject = $2 AND delete_intent_at IS NULL AND expires_at > now()
 			  AND (state = 'kept' OR (state IN ('creating', 'in_use') AND run_id = $3))
 			  AND ($4::text = 'fresh' OR (reset_run_id IS NULL AND NOT reset_unconfirmed))
 			RETURNING `+keptMachineCols, id, owner, runID, mode))
@@ -160,6 +164,13 @@ func (s PG) ClaimKeptMachineForRun(ctx context.Context, id uuid.UUID, owner stri
 			}
 			if d.Machine.State == types.KeptMachineDeleting || d.By != "" {
 				return ErrKeptMachineDeleting
+			}
+			var expired bool
+			if err := q.QueryRow(ctx, `SELECT expires_at <= now() FROM kept_machines WHERE id = $1`, id).Scan(&expired); err != nil {
+				return fmt.Errorf("store: read kept machine expiry: %w", err)
+			}
+			if expired {
+				return ErrKeptMachineExpired
 			}
 			var pending bool
 			if err := q.QueryRow(ctx, `SELECT `+keptResetPendingExpr+` FROM kept_machines WHERE id = $1`, id).Scan(&pending); err != nil {
