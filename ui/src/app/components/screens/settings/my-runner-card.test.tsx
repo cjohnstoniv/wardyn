@@ -244,7 +244,9 @@ describe("My runner card", () => {
     const user = userEvent.setup();
     renderCard();
     await expand(user);
-    expect(await screen.findByText("Couldn't load your runners.")).toBeInTheDocument();
+    // UXA-74: the shared compact failure block.
+    expect(await screen.findByRole("heading", { name: "Couldn't load your runners.", level: 4 })).toBeInTheDocument();
+    expect(document.querySelector('[data-size="compact"]')).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("laptop-7")).toBeInTheDocument();
   });

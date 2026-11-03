@@ -6,7 +6,7 @@
 // The admin editor's draft and its conversion to the wire. The server refuses a
 // delivery that carries another mode's fields, so requestOf writes only the
 // fields the chosen mode uses, and `shared` only on a header delivery.
-import type { Component, ComponentDeliveryMode, ComponentRequest, ComponentSecret } from "../../../lib/types";
+import type { Component, ComponentDeliveryMode, ComponentMCP, ComponentRequest, ComponentSecret } from "../../../lib/types";
 
 export interface SecretDraft {
   // Stable React key; never sent.
@@ -125,6 +125,20 @@ export function requestOf(d: ComponentDraft): ComponentRequest {
       ...(Object.keys(config).length > 0 && { config }),
     },
   };
+}
+
+// The token audience (mcp.gateway_audience) is for an organisation's remote MCP server alone: the server
+// refuses it on a person's server and on one that runs in the sandbox (types.validateGatewayAudience).
+export const audienceEditable = (c: Component | null): boolean => !!c && !c.owner && c.definition.mcp?.transport === "http";
+
+// The org editor edits no MCP field but the audience, so the stored server goes back as it was, with
+// the audience as edited: an empty one sends none.
+export function withMCP(req: ComponentRequest, c: Component | null, audience: string): ComponentRequest {
+  const stored = c?.definition.mcp;
+  if (!stored) return req;
+  const { gateway_audience: _a, ...mcp }: ComponentMCP = stored;
+  const a = audience.trim();
+  return { ...req, definition: { ...req.definition, mcp: audienceEditable(c) && a ? { ...mcp, gateway_audience: a } : mcp } };
 }
 
 // crypto.randomUUID exists only in secure contexts (HTTPS or localhost), and the console

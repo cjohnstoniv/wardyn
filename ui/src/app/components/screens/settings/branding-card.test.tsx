@@ -21,7 +21,7 @@ vi.mock("sonner", () => ({
 
 import { ThemeProvider } from "../../wardyn/theme-provider";
 import { BrandingCard } from "./branding-card";
-import { BRANDING } from "../../../lib/branding-copy";
+import { BRANDING, BRANDING_FORM } from "../../../lib/branding-copy";
 import { expandCard, startsWith } from "../../../lib/test-dom";
 import { unsavedSnapshot } from "../../../lib/unsaved-registry";
 import { expectActionBar } from "../../../../test/action-bar";
@@ -83,6 +83,8 @@ describe("Branding card: a failed read", () => {
     expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument();
     expect(screen.getByText(BRANDING.LOAD_FAILED_SUMMARY)).toBeInTheDocument();
     expect(screen.queryByText("Default branding")).toBeNull();
+    // UXA-74: the shared compact failure block, named for this card.
+    expect(screen.getByRole("heading", { name: BRANDING_FORM.LOAD_FAILED_TITLE, level: 4 })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: BRANDING.SAVE })).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -122,7 +124,11 @@ describe("Branding card (#1125)", () => {
     expect(await screen.findByLabelText(BRANDING.PRIMARY_LABEL)).toHaveValue("#0f766e");
     expect(screen.getByLabelText(BRANDING.TEXT_LABEL)).toHaveValue("#ffffff");
     expect(screen.queryByText(BRANDING.ERR_COLOR)).not.toBeInTheDocument();
-    expect(screen.queryByText(BRANDING.FIX_ONE)).not.toBeInTheDocument();
+    // The empty name is the one thing keeping Save off on a first visit, and it says so (UXA-38).
+    expect(screen.getByText(BRANDING_FORM.ERR_NAME)).toBeInTheDocument();
+    expect(screen.getByLabelText(BRANDING.ORG_NAME_LABEL)).toHaveAccessibleDescription(BRANDING_FORM.ERR_NAME);
+    expect(screen.getByRole("button", { name: BRANDING.SAVE })).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   // #2878: with no organisation name the title is the placeholder shape; the hint must not repeat it.

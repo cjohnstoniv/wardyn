@@ -390,7 +390,8 @@
 # docs/AUDIT-ACTIONS.md 56404 adds 22 over 56382 (rc.12): the secret.read purpose list names provider-signin.
 # docs/AUDIT-ACTIONS.md 56395 adds 13 over 56382, measured: the gateway_identity.mint row says it also covers an organisation MCP server and lists the mcp_server field.
 # docs/AUDIT-ACTIONS.md 56417 = ours 56404 + theirs 56395 - base 56382 at the rc.12 merge of gateway-mcp.
-docs/AUDIT-ACTIONS.md=56417 share=8
+# docs/AUDIT-ACTIONS.md 56427 adds 10 over 56417, measured (rc.12): provider-signin covers the client secret at a redemption, and a redemption reads the stored sign-in as ado-refresh.
+docs/AUDIT-ACTIONS.md=56427 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.

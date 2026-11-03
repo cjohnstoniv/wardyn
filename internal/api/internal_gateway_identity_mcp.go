@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -37,6 +38,8 @@ const (
 		"Ask an administrator to correct the component's url."
 	gatewayMCPRunClash = "MCP server %q and %s both send a signed identity to one gateway address and path, so nothing was started. " +
 		"Ask an administrator to give them addresses or paths apart."
+	gatewayMCPRunAudienceDup = "MCP server %q and %s send a signed identity with one audience to different addresses, so nothing was started. " +
+		"Ask an administrator to give each its own audience."
 )
 
 // gatewayMCPKeyPattern is an MCP server key as the proxy's broker accepts one.
@@ -140,7 +143,10 @@ func (s *Server) gatewayMintAdmitMCP(ctx context.Context, run types.AgentRun, se
 }
 
 // gatewayMCPRoutesOf is the dispatch's MCP routes added to the providers', or the refusal for a run that
-// cannot carry them: an address no route can hold, or a route a provider's or another server's could also match.
+// cannot carry them: an address no route can hold, a route a provider's or another server's could also match,
+// or an audience another route has at a different address. A provider save and a component save each check
+// audiences against the other table, but nothing spans both, so two saves at once can still leave one audience
+// at two addresses; the run is refused here rather than sent a token that one gateway would take for the other.
 func gatewayMCPRoutesOf(providers []proxy.GatewayIdentityRoute, mcp mcpDispatch) ([]proxy.GatewayIdentityRoute, string) {
 	if len(mcp.gatewayBad) > 0 {
 		return nil, fmt.Sprintf(gatewayMCPRunAddress, mcp.gatewayBad[0])
@@ -150,9 +156,19 @@ func gatewayMCPRoutesOf(providers []proxy.GatewayIdentityRoute, mcp mcpDispatch)
 		if i := slices.IndexFunc(routes, rt.Clashes); i >= 0 {
 			return nil, fmt.Sprintf(gatewayMCPRunClash, rt.MCPKey, gatewayRouteLabel(routes[i]))
 		}
+		if i := slices.IndexFunc(routes, func(o proxy.GatewayIdentityRoute) bool {
+			return o.Audience == rt.Audience && gatewayRouteAddress(o) != gatewayRouteAddress(rt)
+		}); i >= 0 {
+			return nil, fmt.Sprintf(gatewayMCPRunAudienceDup, rt.MCPKey, gatewayRouteLabel(routes[i]))
+		}
 		routes = append(routes, rt)
 	}
 	return routes, ""
+}
+
+// gatewayRouteAddress is a route's address as validateGatewayAudiences compares them.
+func gatewayRouteAddress(rt proxy.GatewayIdentityRoute) gatewayDestination {
+	return gatewayDestination{host: domainmatch.CanonHost(rt.Host), port: rt.Port, path: strings.TrimSuffix(rt.PathPrefix, "/")}
 }
 
 // gatewayRouteLabel names a route in a refusal.

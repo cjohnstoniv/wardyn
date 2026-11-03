@@ -4,7 +4,7 @@
  */
 
 // Audit events + the run-detail supporting shapes projected from them.
-export type ActorType = "human" | "agent" | "system";
+export type ActorType = "human" | "agent" | "system" | "service";
 
 export type Outcome = "success" | "failure" | "denied";
 

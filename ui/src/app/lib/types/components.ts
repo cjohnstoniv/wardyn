@@ -71,7 +71,7 @@ export interface ComponentMCP {
   launch?: ComponentMCPLaunch;
   /**
    * An organisation's remote server only: the audience of the run identity token the proxy sends to it.
-   * The editor field is board GW-MCP and is not built yet.
+   * The org component editor's "Token audience" field.
    */
   gateway_audience?: string;
 }
