@@ -438,6 +438,13 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	// A via_org destination: the inner request's own Host goes to the
 	// organisation, which refuses one that is not the grant's destination.
 	if route, ok := p.viaOrgRouteForHost(host); ok {
+		// The run's allowed_models judges a via_org request to a model host too: the organisation
+		// forwards it on, and nothing after this branch would see it.
+		releaseModels, modelRefused := p.allowedModelRefused(w, r, host, port, strings.TrimPrefix(r.URL.Path, "/"))
+		defer releaseModels()
+		if modelRefused {
+			return
+		}
 		authority := r.Host
 		if authority == "" {
 			authority = net.JoinHostPort(host, strconv.Itoa(port))
@@ -451,6 +458,16 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		return
 	}
 	defer release()
+	// The run's allowed_models judges a model host's request before any door, gate or scan sees it.
+	// A method the policy refuses is left to serveAdmittedMITMRequest, which keeps its policy:method row.
+	releaseModels, modelRefused := noopRelease, false
+	if p.evaluator.MethodAllowed(r.Method) {
+		releaseModels, modelRefused = p.allowedModelRefused(w, r, host, port, strings.TrimPrefix(r.URL.Path, "/"))
+	}
+	defer releaseModels()
+	if modelRefused {
+		return
+	}
 	p.serveAdmittedMITMRequest(w, r, host, port)
 }
 

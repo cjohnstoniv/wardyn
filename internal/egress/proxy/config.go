@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -260,6 +261,14 @@ type Config struct {
 	// because an older proxy refuses a key it does not know. Empty (the
 	// default) => no local model route, byte-identical to today.
 	LocalModels map[string]types.LocalModelSettings `json:"local_models,omitempty"`
+	// AllowedModels is the run's allowed_models list: when set, a request to a hosted model
+	// provider (a brokered or terminated Anthropic, OpenAI or Bedrock route) names one of these
+	// models exactly or is refused (allowed_models.go). It applies to the whole run, not a
+	// route: the limit is one governance value for the run, and a per-route map would let a
+	// provider the map missed through. Control-plane-authored; omitempty because an older proxy
+	// refuses a key it does not know, and a pointer so `[]` survives the wire. Unset (the default) =>
+	// off, byte-identical to today; `[]` => set and empty, every model refused.
+	AllowedModels *[]string `json:"allowed_models,omitempty"`
 	// GatewayIdentity lists the routes that carry the run's signed identity
 	// (gateway_identity.go). Control-plane-authored, same trust boundary as
 	// LLMUpstreams; it holds no token and no key. Empty (the default) => off,
@@ -627,7 +636,7 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if err := c.validateLocalModels(); err != nil {
 		return err
 	}
-	return c.validateChannelHosts()
+	return cmp.Or(c.validateAllowedModels(), c.validateChannelHosts())
 }
 
 // validateInternalHostCIDRs parse-checks each internal host's CIDRs and that each lies inside
