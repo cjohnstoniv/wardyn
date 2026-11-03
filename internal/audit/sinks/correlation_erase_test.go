@@ -77,7 +77,7 @@ func TestForgetRuns_AWarmCacheStopsCarryingAnErasedID(t *testing.T) {
 	rows := &erasableRows{ids: map[uuid.UUID]string{erased: "person-ref-1", other: "other-ref-2"}}
 	sink := &lastEventSink{}
 	f := NewFanout(sink)
-	f.EnrichRuns(rows.lookup, nil)
+	f.EnrichRuns(rows.lookup, nil, nil)
 
 	emitFor(t, f, erased)
 	emitFor(t, f, other)
@@ -115,7 +115,7 @@ func TestForgetRuns_ARacingReadDoesNotRepopulateTheCache(t *testing.T) {
 		v, ok, err := rows.lookup(ctx, id) // reads the row before the erasure
 		once.Do(func() { close(inRead); <-release })
 		return v, ok, err
-	}, nil)
+	}, nil, nil)
 
 	done := make(chan struct{})
 	go func() { defer close(done); emitFor(t, f, run) }()
@@ -138,7 +138,7 @@ func TestCorrelationCache_EntriesExpireAfterTheTTL(t *testing.T) {
 	rows := &erasableRows{ids: map[uuid.UUID]string{run: "person-ref-1"}}
 	sink := &lastEventSink{}
 	f := NewFanout(sink)
-	f.EnrichRuns(rows.lookup, nil)
+	f.EnrichRuns(rows.lookup, nil, nil)
 	clock := time.Now()
 	f.enrich.now = func() time.Time { return clock }
 
@@ -153,5 +153,49 @@ func TestCorrelationCache_EntriesExpireAfterTheTTL(t *testing.T) {
 	emitFor(t, f, run)
 	if got, ok := sink.correlation(t); ok || rows.reads.Load() != 2 {
 		t.Errorf("past the TTL: %q (%v) after %d reads, want no id after a second read", got, ok, rows.reads.Load())
+	}
+}
+
+func TestCorrelationCache_TheTTLClockStartsBeforeTheRead(t *testing.T) {
+	run := uuid.New()
+	rows := &erasableRows{ids: map[uuid.UUID]string{run: "person-ref-1"}}
+	clock := time.Now()
+	sink := &lastEventSink{}
+	f := NewFanout(sink)
+	f.EnrichRuns(func(ctx context.Context, id uuid.UUID) (string, bool, error) {
+		v, ok, err := rows.lookup(ctx, id)
+		clock = clock.Add(correlationCacheTTL + time.Second) // a read slower than the whole TTL
+		return v, ok, err
+	}, nil, nil)
+	f.enrich.now = func() time.Time { return clock }
+
+	emitFor(t, f, run)
+	emitFor(t, f, run)
+	if rows.reads.Load() != 2 {
+		t.Errorf("%d reads; an entry whose read took longer than the TTL must already be stale", rows.reads.Load())
+	}
+}
+
+func TestEnrichRuns_NoIDForARunTheCoverageGateDoesNotVouchFor(t *testing.T) {
+	run := uuid.New()
+	rows := &erasableRows{ids: map[uuid.UUID]string{run: "person-ref-1"}}
+	var covered atomic.Bool
+	sink := &lastEventSink{}
+	f := NewFanout(sink)
+	f.EnrichRuns(rows.lookup, nil, func(uuid.UUID) bool { return covered.Load() })
+
+	emitFor(t, f, run) // cold, not covered
+	if _, ok := sink.correlation(t); ok || rows.reads.Load() != 0 {
+		t.Fatalf("an uncovered run: id sent %v after %d reads, want neither", ok, rows.reads.Load())
+	}
+	covered.Store(true)
+	emitFor(t, f, run) // warms the cache
+	if got, _ := sink.correlation(t); got != "person-ref-1" {
+		t.Fatalf("a covered run: %q", got)
+	}
+	covered.Store(false) // fenced or erased: the warm entry must not be used
+	emitFor(t, f, run)
+	if _, ok := sink.correlation(t); ok {
+		t.Error("a warm cache still sent the id after the run stopped being covered")
 	}
 }

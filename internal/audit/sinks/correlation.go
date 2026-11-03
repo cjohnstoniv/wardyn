@@ -29,6 +29,10 @@ type RunCorrelationLookup func(ctx context.Context, runID uuid.UUID) (id string,
 // passes through here on every emit.
 type RunValueMasker func(runID uuid.UUID, b []byte) []byte
 
+// RunCoverage reports whether the run's masking is provably whole here. Only then is its correlation id
+// added: a fenced or erased corpus, or an answer that cannot be confirmed, is false.
+type RunCoverage func(runID uuid.UUID) bool
+
 const (
 	correlationCacheMax     = 4096
 	correlationCacheTTL     = 30 * time.Second
@@ -44,6 +48,7 @@ const (
 type correlationEnricher struct {
 	lookup RunCorrelationLookup
 	mask   RunValueMasker
+	covers RunCoverage
 	now    func() time.Time
 	mu     sync.Mutex
 	ids    map[uuid.UUID]cachedCorrelation
@@ -68,6 +73,9 @@ func (c *correlationEnricher) forget(runIDs []uuid.UUID) {
 func (c *correlationEnricher) apply(ctx context.Context, ev types.AuditEvent) types.AuditEvent {
 	if ev.RunID == nil {
 		return ev
+	}
+	if c.covers != nil && !c.covers(*ev.RunID) {
+		return ev // asked on every emit, before the cache: a fence applies at once, warm or cold
 	}
 	id, ok := c.idOf(ctx, *ev.RunID)
 	if !ok || id == "" {
@@ -108,6 +116,7 @@ func (c *correlationEnricher) idOf(ctx context.Context, runID uuid.UUID) (string
 	if ok && c.now().Before(hit.expires) {
 		return hit.id, true
 	}
+	started := c.now() // the entry's clock starts before the read, so a slow read cannot stretch the bound after an erasure
 	ctx, cancel := context.WithTimeout(ctx, correlationLookupBudget)
 	defer cancel()
 	id, found, err := c.lookup(ctx, runID)
@@ -126,7 +135,7 @@ func (c *correlationEnricher) idOf(ctx context.Context, runID uuid.UUID) (string
 	if len(c.ids) >= correlationCacheMax {
 		clear(c.ids)
 	}
-	c.ids[runID] = cachedCorrelation{id: id, expires: c.now().Add(correlationCacheTTL)}
+	c.ids[runID] = cachedCorrelation{id: id, expires: started.Add(correlationCacheTTL)}
 	return id, true
 }
 
@@ -153,9 +162,10 @@ func stampCorrelation(data json.RawMessage, id string) (json.RawMessage, bool) {
 
 // EnrichRuns has Emit stamp each run-scoped event's data with that run's correlation ID, so every child
 // sink sees data.correlation_id and no emit site changes. mask, when set, is applied to the id on every
-// emit. Call it once at boot, before the first Emit.
-func (f *Fanout) EnrichRuns(lookup RunCorrelationLookup, mask RunValueMasker) {
-	f.enrich = &correlationEnricher{lookup: lookup, mask: mask, now: time.Now, ids: map[uuid.UUID]cachedCorrelation{}}
+// emit, and covers, when set, gates it: a run it does not vouch for gets no id. Call it once at boot,
+// before the first Emit.
+func (f *Fanout) EnrichRuns(lookup RunCorrelationLookup, mask RunValueMasker, covers RunCoverage) {
+	f.enrich = &correlationEnricher{lookup: lookup, mask: mask, covers: covers, now: time.Now, ids: map[uuid.UUID]cachedCorrelation{}}
 }
 
 // ForgetRuns drops what EnrichRuns cached for runIDs, for a person's erasure of their runs' correlation IDs

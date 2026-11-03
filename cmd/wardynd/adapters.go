@@ -483,6 +483,16 @@ func runValueMasker(reg *secretmask.Registry) sinks.RunValueMasker {
 	return func(runID uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(runID).Mask(b) }
 }
 
+// enrichCoverage is the gate on the correlation id the sinks add: the serving boot's maskScope, the same
+// decision that labels a row globals_only. The maintenance modes have no scope, so they add none.
+func enrichCoverage(serve []serveChain) sinks.RunCoverage {
+	var scope *maskScope
+	if len(serve) > 0 {
+		scope = serve[0].scope
+	}
+	return scope.covers
+}
+
 // Spooling recorder
 
 // spoolingRecorder wraps an audit.Recorder so that when the inner (durable) write

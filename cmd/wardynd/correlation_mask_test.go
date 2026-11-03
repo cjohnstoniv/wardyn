@@ -6,6 +6,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,7 +53,7 @@ func TestCorrelationIDIsMaskedOnItsWayToTheSinks(t *testing.T) {
 	}
 	capture := &captureSink{}
 	fan := sinks.NewFanout(capture)
-	fan.EnrichRuns(func(_ context.Context, id uuid.UUID) (string, bool, error) { return ids[id], true, nil }, runValueMasker(reg))
+	fan.EnrichRuns(func(_ context.Context, id uuid.UUID) (string, bool, error) { return ids[id], true, nil }, runValueMasker(reg), func(uuid.UUID) bool { return true })
 	held := &fanOnly{fan: fan}
 	rec := maskingRecorder{inner: held, reg: reg}
 
@@ -94,6 +96,69 @@ func TestCorrelationIDIsMaskedOnItsWayToTheSinks(t *testing.T) {
 	for _, ev := range held.seen {
 		if string(ev.Data) != `{"agent":"claude-code"}` {
 			t.Errorf("the row handed to the store = %s; the id is stamped after it", ev.Data)
+		}
+	}
+}
+
+// TestCorrelationIDIsOmittedOnceTheRunsMaskingIsFenced: the corpus is erased on its own (the mask_copies
+// scope, not run_tasks), so the column still holds the raw value. The masking recorder labels the rows
+// globals_only, and the sinks get no correlation id after that, whether the cache was cold or warm.
+func TestCorrelationIDIsOmittedOnceTheRunsMaskingIsFenced(t *testing.T) {
+	const secret = "zq-throwaway-fenced-5"
+	warm, cold := uuid.New(), uuid.New()
+	ids := map[uuid.UUID]string{warm: secret, cold: secret}
+	reg := secretmask.NewRegistry()
+	var heldMu sync.Mutex
+	held := map[uuid.UUID]bool{}
+	scope := &maskScope{}
+	scope.arm(func(id uuid.UUID) bool { heldMu.Lock(); defer heldMu.Unlock(); return held[id] })
+	setHeld := func(id uuid.UUID, v bool) { heldMu.Lock(); defer heldMu.Unlock(); held[id] = v }
+	for _, id := range []uuid.UUID{warm, cold} {
+		if err := reg.Add(id, []byte(secret)); err != nil {
+			t.Fatal(err)
+		}
+		setHeld(id, true)
+	}
+	capture := &captureSink{}
+	fan := sinks.NewFanout(capture)
+	fan.EnrichRuns(func(_ context.Context, id uuid.UUID) (string, bool, error) { return ids[id], true, nil }, runValueMasker(reg), scope.covers)
+	rec := maskingRecorder{inner: &fanOnly{fan: fan}, reg: reg, scope: scope}
+
+	emit := func(run uuid.UUID, action string) map[string]any {
+		t.Helper()
+		ev := types.AuditEvent{ID: uuid.New(), RunID: &run, ActorType: types.ActorSystem, Actor: "wardynd", Action: action, Outcome: "success",
+			Data: json.RawMessage(`{"agent":"claude-code"}`)}
+		if err := rec.Record(context.Background(), ev); err != nil {
+			t.Fatal(err)
+		}
+		evs := capture.events()
+		var d map[string]any
+		if err := json.Unmarshal(evs[len(evs)-1].Data, &d); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+
+	if d := emit(warm, "run.create"); d["correlation_id"] != "<secret-hidden>" {
+		t.Fatalf("while covered the id is masked: %v", d)
+	}
+	// mask_copies erased on its own: the corpus is gone and the run is no longer held; the column is not touched.
+	for _, id := range []uuid.UUID{warm, cold} {
+		reg.Evict(id)
+		setHeld(id, false)
+	}
+	for name, run := range map[string]uuid.UUID{"warm cache": warm, "cold cache": cold} {
+		d := emit(run, "run.kill")
+		if _, ok := d["correlation_id"]; ok {
+			t.Errorf("%s: run.kill reached the sink with a correlation id: %v", name, d)
+		}
+		if d["mask_scope"] != "globals_only" {
+			t.Errorf("%s: the row is not labelled globals_only: %v", name, d)
+		}
+	}
+	for _, ev := range capture.events() {
+		if strings.Contains(string(ev.Data), secret) {
+			t.Errorf("the raw value reached the sink: %s", ev.Data)
 		}
 	}
 }

@@ -54,7 +54,7 @@ func TestFanoutEnrichRuns_StampsTheSinksCopyAndLeavesTheStoredEventAlone(t *test
 	runID := uuid.New()
 	sink := &lastSink{}
 	f := sinks.NewFanout(sink)
-	f.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return "build-42/a:b", true, nil }, nil)
+	f.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return "build-42/a:b", true, nil }, nil, nil)
 
 	stored := runEvent(&runID, `{"agent":"claude-code","n":1}`)
 	before := stored
@@ -96,7 +96,7 @@ func TestFanoutEnrichRuns_DataShapes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			sink := &lastSink{}
 			f := sinks.NewFanout(sink)
-			f.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return "abc", true, nil }, nil)
+			f.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return "abc", true, nil }, nil, nil)
 			if err := f.Emit(context.Background(), runEvent(&runID, tc.data)); err != nil {
 				t.Fatal(err)
 			}
@@ -127,7 +127,7 @@ func TestFanoutEnrichRuns_ReadsEachRunOnceAndSkipsWhatNeedsNoRead(t *testing.T) 
 			return "", true, nil
 		}
 		return "", false, nil
-	}, nil)
+	}, nil, nil)
 	emit := func(id *uuid.UUID) types.AuditEvent {
 		t.Helper()
 		if err := f.Emit(context.Background(), runEvent(id, `{"k":1}`)); err != nil {
@@ -162,7 +162,7 @@ func TestFanoutEnrichRuns_AReadFailureStillDeliversTheEvent(t *testing.T) {
 	runID := uuid.New()
 	sink := &lastSink{}
 	f := sinks.NewFanout(sink)
-	f.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return "", false, errors.New("db down") }, nil)
+	f.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return "", false, errors.New("db down") }, nil, nil)
 	if err := f.Emit(context.Background(), runEvent(&runID, `{"k":1}`)); err != nil {
 		t.Fatalf("emit = %v; a failed read must not fail the fan-out", err)
 	}
@@ -213,7 +213,7 @@ func TestFanoutEnrichRuns_MasksTheIDWithTheRunsRegistryOnEveryEmit(t *testing.T)
 	f.EnrichRuns(func(_ context.Context, id uuid.UUID) (string, bool, error) {
 		reads.Add(1)
 		return ids[id], true, nil
-	}, registryMasker(reg))
+	}, registryMasker(reg), nil)
 	emit := func(id uuid.UUID) string {
 		t.Helper()
 		if err := f.Emit(context.Background(), runEvent(&id, `{"k":1}`)); err != nil {

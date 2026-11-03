@@ -109,7 +109,7 @@ func TestPG_RunCorrelationID_SinkEnrichmentLeavesTheStoredRowAndItsChainAlone(t 
 	fan := sinks.NewFanout(sink)
 	fan.EnrichRuns(func(ctx context.Context, id uuid.UUID) (string, bool, error) {
 		return store.RunCorrelationID(ctx, pool, id)
-	}, nil)
+	}, nil, nil)
 	if err := fan.Emit(ctx, ev); err != nil {
 		t.Fatal(err)
 	}

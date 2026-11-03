@@ -260,7 +260,7 @@ func buildAuditChain(rootCtx context.Context, sinksJSON, spoolPath, source strin
 		if pool != nil { // the maintenance-mode tests build the chain without a pool; there is no run to read then
 			fan.EnrichRuns(func(ctx context.Context, runID uuid.UUID) (string, bool, error) {
 				return store.RunCorrelationID(ctx, pool, runID)
-			}, runValueMasker(maskReg))
+			}, runValueMasker(maskReg), enrichCoverage(serve))
 		}
 		auditRec = fanoutRecorder{primary: storeRec, fanout: fan}
 		resealed = landedRecorder{primary: storeRec, fanout: fan}
