@@ -907,7 +907,14 @@ func clampInnerWalls(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warn
 
 // clampDesktop blocks every desktop direction the ceiling blocks, its defaults included: a member may
 // block more, never open what the operator keeps shut. A proposal already within is left as written.
+// A proposal that sets no desktop takes a copy of the ceiling's, so it gets what the ceiling gives and
+// not the platform default; that asks for nothing narrower than the ceiling, so it is not warned.
 func clampDesktop(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if out.Desktop == nil && ceiling.Desktop != nil {
+		d := *ceiling.Desktop
+		out.Desktop = &d
+		return warns
+	}
 	if leqDesktop(out.Desktop, ceiling.Desktop) {
 		return warns
 	}
