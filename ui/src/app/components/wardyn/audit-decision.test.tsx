@@ -12,7 +12,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { AuditEvent } from "../../lib/types";
-import { AuditDecision, ruleSourceLabel, RuleSourceChip, toolRuleDecision } from "./audit-decision";
+import { AuditDecision, isAttributedRefusal, ruleSourceLabel, RuleSourceChip, toolRuleDecision } from "./audit-decision";
 import { aheadByHours } from "../../lib/test-clock";
 import { PUSH } from "./copy/push";
 
@@ -260,5 +260,19 @@ describe("RuleSourceChip", () => {
     renderChip({ data: { rule_source: "brokered:git:push-rules" } });
     expect(screen.getByText("Push refused — a denied path")).toBeInTheDocument();
     expect(screen.getByText(PUSH.DENIED_PATH_BODY)).toBeInTheDocument();
+  });
+  // The allowed-models gate writes both its refusals and the model-free routes it lets through under one
+  // rule_source, so the row's own decision picks the chip. Every refusal reads the same, whatever its cause says.
+  it("names the allowed-models gate's refusals and allowed routes by the row's decision", () => {
+    expect(ruleSourceLabel("brokered:allowed-models", "egress.deny")).toEqual({ label: "Refused: model limit", tone: "danger" });
+    expect(ruleSourceLabel("brokered:allowed-models", "egress.allow")).toEqual({ label: "Allowed: not a model request", tone: "neutral" });
+    renderChip({ action: "egress.deny", data: { rule_source: "brokered:allowed-models", cause: "batch requests cannot be checked against this run's allowed models" } });
+    expect(screen.getByText("Refused: model limit")).toBeInTheDocument();
+    expect(screen.getByText("batch requests cannot be checked against this run's allowed models")).toBeInTheDocument();
+  });
+
+  it("offers Request access beside a refusal of the gate, and not beside an allowed route", () => {
+    expect(isAttributedRefusal(event({ action: "egress.deny", data: { rule_source: "brokered:allowed-models" } }))).toBe(true);
+    expect(isAttributedRefusal(event({ action: "egress.allow", data: { rule_source: "brokered:allowed-models" } }))).toBe(false);
   });
 });

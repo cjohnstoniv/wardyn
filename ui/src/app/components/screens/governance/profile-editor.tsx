@@ -38,6 +38,7 @@ import { safeRequestHref } from "../../wardyn/policy-remedy";
 import { Field, fieldHintId, Switch } from "../../wardyn/form-primitives";
 import { specToSource, type PolicySourceFormat } from "../../wardyn/policy-document/policy-source";
 import { minimalSpec, parseSpec } from "../../wardyn/policy-panel";
+import { AllowedModelsRow, ALLOWED_MODELS_KEY } from "./allowed-models";
 import { Note, withMono } from "./display";
 import {
   asOverlay,
@@ -198,6 +199,10 @@ export function ProfileEditor({
   const initial = React.useRef(edited).current;
   useUnsavedGuard("profile-editor", edited !== initial, () => edited);
 
+  // Narrow is on for the models and the box is empty: there is nothing to save for it.
+  const narrowedModels = overlayLimits[ALLOWED_MODELS_KEY];
+  const narrowsToNothing = composed && Array.isArray(narrowedModels) && narrowedModels.length === 0;
+
   const save = async () => {
     const parsed = ceiling;
     if (parsed && !parsed.ok) {
@@ -227,6 +232,9 @@ export function ProfileEditor({
       // limits. An empty limits overlay is sent as null: absent would keep a stored one. Leaving a
       // base sends null for the overlay, which clears the base and limits with it. A standalone
       // profile that was never composed sends none of the three, as before.
+      // An empty models list narrows nothing, so it is never sent (Narrow on with an empty box cannot be saved).
+      const { [ALLOWED_MODELS_KEY]: emptyModels, ...rest } = overlayLimits;
+      const sendable = Array.isArray(emptyModels) && emptyModels.length === 0 ? rest : overlayLimits;
       const input: GovernanceUnitInput = composed
         ? {
             name: name.trim(),
@@ -234,7 +242,7 @@ export function ProfileEditor({
             limits: {},
             parent_id: baseProfile?.id ?? null,
             overlay: asOverlay(overlay),
-            overlay_limits: Object.keys(overlayLimits).length > 0 ? overlayLimits : null,
+            overlay_limits: Object.keys(sendable).length > 0 ? sendable : null,
             ...contactField,
           }
         : {
@@ -466,6 +474,14 @@ export function ProfileEditor({
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, max_drive_size_mib: v }))}
         />
+        {/* A blank box is no limit and there is no deny-all, so the key is left out rather than sent empty. */}
+        <AllowedModelsRow
+          value={limits.allowed_models ?? []}
+          disabled={disabled}
+          onChange={(models) =>
+            setLimits(({ allowed_models: _drop, ...rest }) => (models.length > 0 ? { ...rest, allowed_models: models } : rest))
+          }
+        />
           </>
         )}
       </section>
@@ -629,7 +645,7 @@ export function ProfileEditor({
         onCancel={onCancel}
         onSave={save}
         saving={saving}
-        saveDisabled={disabled || !name.trim() || ceiling?.ok === false}
+        saveDisabled={disabled || !name.trim() || ceiling?.ok === false || narrowsToNothing}
         saveLabel={GOV.SAVE}
         cancelLabel={PEOPLE.CANCEL}
       />

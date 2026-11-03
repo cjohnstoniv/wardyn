@@ -19,6 +19,7 @@
 // page's Audit tab.
 import { Link } from "react-router-dom";
 import { cn } from "../ui/utils";
+import { ALLOWED_MODELS } from "../../lib/governance-copy";
 import { erasedFieldNames, toolRuleDecision, type AuditEvent } from "../../lib/types";
 import { AUDIT } from "../screens/audit-copy";
 import { Chip } from "./primitives";
@@ -86,6 +87,8 @@ export const ATTRIBUTED_RULE_SOURCES: ReadonlySet<string> = new Set([
   "brokered:git:push-too-large",
   "brokered:ado:denied",
   "brokered:ado-git:denied",
+  // The run's allowed-models gate: a refusal names the profile that limits the models, so its owner is who to ask.
+  "brokered:allowed-models",
 ]);
 
 // True for a refusal row (an egress.deny) whose rule_source is in the set. The
@@ -95,8 +98,16 @@ export function isAttributedRefusal(event: AuditEvent): boolean {
   return event.action === "egress.deny" && typeof source === "string" && ATTRIBUTED_RULE_SOURCES.has(source);
 }
 
-export function ruleSourceLabel(source: string): RuleSourceLabel | null {
+// `action` is the row's own (egress.allow or egress.deny); only the allowed-models gate reads it, since one
+// rule_source writes both its refusals and the named model-free routes it lets through.
+export function ruleSourceLabel(source: string, action?: string): RuleSourceLabel | null {
   if (!source || source.startsWith("policy:tool-")) return null; // toolRuleDecision's rows
+  // Every refusal of the gate reads the same, whatever the cause text on the row says; the cause names which.
+  if (source === "brokered:allowed-models") {
+    return action === "egress.allow"
+      ? { label: ALLOWED_MODELS.AUDIT_ALLOWED, tone: "neutral" }
+      : { label: ALLOWED_MODELS.AUDIT_REFUSED, tone: "danger" };
+  }
   if (source === "policy:allowed") return { label: "Allowed by policy", tone: "neutral" };
   // Every other policy:* value the proxy emits is a refusal (denied,
   // default-deny, method, evaluator-error) — the row's outcome column already
@@ -176,7 +187,7 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
 export function RuleSourceChip({ event, className }: { event: AuditEvent; className?: string }) {
   const source = event.data?.rule_source;
   if (typeof source !== "string") return null;
-  const label = ruleSourceLabel(source);
+  const label = ruleSourceLabel(source, event.action);
   if (!label) return null;
   const chip = (
     <Chip tone={label.tone} mono title={source}>

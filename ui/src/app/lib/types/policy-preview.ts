@@ -86,6 +86,8 @@ export interface PolicyPreviewResult {
   allowed_images?: AllowedImage[];
   // The preflight's harness_set fact, with the same meaning.
   harness_set?: HarnessSetFact;
+  // The preflight's allowed_models, with the same meaning.
+  allowed_models?: string[];
   // The preflight's pool facts, with the same meaning.
   runner_pool?: ResolvedRunnerPool;
   runner_pools?: RunnerPoolChoice[];

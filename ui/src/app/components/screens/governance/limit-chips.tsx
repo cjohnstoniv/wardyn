@@ -7,7 +7,7 @@
 // list's Limits cell and the User types editor's read-only "Ceiling and run
 // limits" section render the same words for the same field.
 import type { GovernanceLimits } from "../../../lib/api/governance";
-import { BACKGROUND_WATCH_DOOR, foldAutonomyRubric, GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR, runLimitsChip, setsRunLimits } from "../../../lib/governance-copy";
+import { ALLOWED_MODELS, BACKGROUND_WATCH_DOOR, foldAutonomyRubric, GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR, runLimitsChip, setsRunLimits } from "../../../lib/governance-copy";
 import { MAC_BASES } from "../../wardyn/copy/mac-bases";
 import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
 import { Chip } from "../../wardyn/primitives";
@@ -29,6 +29,8 @@ export function limitChips(limits: GovernanceLimits) {
   for (const placement of limits.deny_placements ?? []) chips.push(LIMITS_CHIP.PLACEMENT(placement));
   // The admin's own list, in the `label: value` form the caps use below; a bases-only profile bounds something.
   if (limits.allowed_macos_bases?.length) chips.push(`${MAC_BASES.B14}: ${limits.allowed_macos_bases.join(", ")}`);
+  // Names up to three, a count beyond; a blank list is no limit and has no chip.
+  if (limits.allowed_models?.length) chips.push(ALLOWED_MODELS.CHIP(limits.allowed_models));
   if ((limits.max_concurrent_runs ?? 0) > 0) chips.push(GOV.LIMIT_QUOTA_LABEL(limits.max_concurrent_runs!));
   // Ruling 2 (#96 review): names the STRICTEST cap, not merely that a rubric
   // exists — on the chip face, not behind a tooltip.
