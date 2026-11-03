@@ -786,7 +786,10 @@ func (s *Server) killLiveRun(ctx context.Context, run types.AgentRun, killerType
 func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any) (bool, map[string]any, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
+	// A kept machine's delete by a kill not its owner's is written before the claim (kept_machine_delete.go).
+	intent := s.keptMachineOnKill(ctx, run, killerType, killer)
 	applied, serr := s.claimKillTransition(ctx, run)
+	s.keptMachineKillClaimed(ctx, intent, applied, serr)
 	if serr != nil {
 		return false, nil, serr
 	}
@@ -794,6 +797,7 @@ func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerT
 		return false, nil, nil
 	}
 	killData := s.killTeardownTail(ctx, run, killerType, killer, extra, true)
+	s.finishKeptMachineKill(ctx, intent)
 	return true, killData, nil
 }
 
