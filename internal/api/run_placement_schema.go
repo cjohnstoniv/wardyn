@@ -34,16 +34,16 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[componentConfig]():       strings.Fields("ordinal source selfDefined env"),
 	// componentMCP Launch/EnvNames: a self-defined row's command is the person's own; an org row's MCP server that runs in the sandbox is refused on a local runner (localMCPOrgServerMsg); values are judged as componentConfig env
 	// GatewayAudience/GatewayUID name the org MCP server's gateway destination, never a token.
-	reflect.TypeFor[componentMCP]():          strings.Fields("Ordinal Key URL Host Harnesses Credentialed Launch EnvNames GatewayAudience GatewayUID"),
-	reflect.TypeFor[componentDispatch]():     strings.Fields("HeaderHosts MITMHosts Config GitHubAPI AWSCLI AzureCLI KubectlCLI MCP"),
-	reflect.TypeFor[awsCLIDispatch]():        strings.Fields("ComponentID AWS Hosts"),
-	reflect.TypeFor[awsSigV4Why]():           strings.Fields("Code Host"),
-	reflect.TypeFor[azureCLIDispatch]():      strings.Fields("ComponentID Azure"),
-	reflect.TypeFor[kubectlCLIDispatch]():    strings.Fields("ComponentID Kubectl"),
-	reflect.TypeFor[types.CLIAzure]():        strings.Fields("Subscriptions Access"),
-	reflect.TypeFor[types.CLIAWS]():          strings.Fields("StartURL SSORegion AccountID RoleName Region"),
-	reflect.TypeFor[types.CLIKubectl]():      strings.Fields("Server CAPEM ServiceAccount Namespaces Access"),
-	reflect.TypeFor[dispatchCeiling]():       strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks denyPlacements recording recordingBound"),
+	reflect.TypeFor[componentMCP]():       strings.Fields("Ordinal Key URL Host Harnesses Credentialed Launch EnvNames GatewayAudience GatewayUID"),
+	reflect.TypeFor[componentDispatch]():  strings.Fields("HeaderHosts MITMHosts Config GitHubAPI AWSCLI AzureCLI KubectlCLI MCP"),
+	reflect.TypeFor[awsCLIDispatch]():     strings.Fields("ComponentID AWS Hosts"),
+	reflect.TypeFor[awsSigV4Why]():        strings.Fields("Code Host"),
+	reflect.TypeFor[azureCLIDispatch]():   strings.Fields("ComponentID Azure"),
+	reflect.TypeFor[kubectlCLIDispatch](): strings.Fields("ComponentID Kubectl"),
+	reflect.TypeFor[types.CLIAzure]():     strings.Fields("Subscriptions Access"),
+	reflect.TypeFor[types.CLIAWS]():       strings.Fields("StartURL SSORegion AccountID RoleName Region"),
+	reflect.TypeFor[types.CLIKubectl]():   strings.Fields("Server CAPEM ServiceAccount Namespaces Access"),
+	reflect.TypeFor[dispatchCeiling]():    strings.Fields("localSelfDefinedComponents resolved deny profile maxEphemeralDiskMiB maxCPUMillis maxMemoryMiB adoEntra bedrock adoStanding agentGuardrailLocks denyPlacements recording recordingBound"),
 	reflect.TypeFor[dispatchParams](): strings.Fields("TrustedOutput RunToken Image Policy FirstGitHubGrantID GitGrants PATBroker PATAPI GitPATGrants SSHGrants Injections Interactive TaskMode InteractiveStart SeedAutoTools ToolApprovals ApprovalExpiryAfter ExtraEnv Toolchains UserMounts EphemeralDirs Drives MemberDrives MainDrive Components " +
 		"PolicyOverridden Provenance PushRuleSets HarnessToolRules Harnesses ADOLaneRepo RedirectProbe SigninImageUngranted DesktopWindowAtStart"), // DesktopWindowAtStart: a bool asking for a window on the person's own Mac; no credential
 	reflect.TypeFor[mainDriveDecision]():    strings.Fields("MiB Soft Basis DefaultSource"),
