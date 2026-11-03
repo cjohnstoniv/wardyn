@@ -394,7 +394,8 @@
 # docs/AUDIT-ACTIONS.md 56473 adds 46 over 56427, measured (rc.12): the brokered:git:push-capability row and its name in the carved-out refusal list.
 # docs/AUDIT-ACTIONS.md 56557 adds 130 over 56427, measured (rc.12): the three wall_preset.* rows, and wall presets in the run_setups erasure scope and counts.
 # docs/AUDIT-ACTIONS.md 56603 = ours 56473 + theirs 56557 - base 56427 at the rc.12 merge of presets-store.
-docs/AUDIT-ACTIONS.md=56603 share=8
+# docs/AUDIT-ACTIONS.md 56606 adds 3 over 56603, measured at the merged rc.12 train head: the merged lanes' rows together.
+docs/AUDIT-ACTIONS.md=56606 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
