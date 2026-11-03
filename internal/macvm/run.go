@@ -71,6 +71,9 @@ type runner struct {
 	id      Identity
 	events  eventHub
 	sockDir string
+	// machineDir holds the VM's disk, aux storage, machine-id and pair key: the run folder, or a kept
+	// machine's folder.
+	machineDir string
 
 	mu      sync.Mutex
 	st      Status
@@ -169,10 +172,12 @@ func (r *runner) run(ctx context.Context) error {
 	if err := thermalGate(r.o.Engine); err != nil {
 		return err
 	}
-	man, id, err := cloneReadyBase(r.o.Engine, r.cfg.BaseDir, r.o.RunDir, r.cfg.Identity)
+	man, id, machineDir, release, err := r.openMachine()
 	if err != nil {
 		return err
 	}
+	defer release()
+	r.machineDir = machineDir
 	r.id = id
 	r.mu.Lock()
 	r.st.MachineID, r.st.MachineIDSHA256 = r.id.Encoded(), IDHash(r.id.MachineIdentifier)
@@ -205,7 +210,7 @@ func (r *runner) run(ctx context.Context) error {
 		CPUs: r.cfg.CPUs, MemoryBytes: r.cfg.MemoryMiB * mib,
 		MinCPUs: man.MinCPUs, MinMemoryBytes: man.MinMemoryMiB * mib,
 		HardwareModel: man.HardwareModel, MachineIdentifier: r.id.MachineIdentifier,
-		DiskPath: filepath.Join(r.o.RunDir, DiskFile), AuxPath: filepath.Join(r.o.RunDir, AuxFile),
+		DiskPath: filepath.Join(r.machineDir, DiskFile), AuxPath: filepath.Join(r.machineDir, AuxFile),
 		BaseDir: r.cfg.BaseDir, Net: guestNet, Shares: r.cfg.Shares, Disks: r.cfg.Disks,
 	})
 	if err != nil {
@@ -343,8 +348,8 @@ func (r *runner) serveGuest(m Machine) (func(), error) {
 	for _, port := range r.o.extraPorts {
 		ports = append(ports, guestPort{port: port, sock: "tools.sock", serve: splice})
 	}
-	// The run's clone holds its copy of the base's key, which its guest disk holds too.
-	key, err := readPairKey(r.o.RunDir)
+	// The machine's clone holds its copy of the base's key, which its guest disk holds too.
+	key, err := readPairKey(r.machineDir)
 	if err != nil {
 		return nil, err
 	}
@@ -517,7 +522,11 @@ func (r *runner) openWindow(grant, title string) (*windowSession, *WindowRefusal
 	if title == "" {
 		title = "Wardyn: macOS VM run"
 	}
-	w, err := scr.Open(ptr, WindowText{Title: title, Strip: WindowStrip})
+	strip := WindowStrip
+	if r.cfg.Kept != nil {
+		strip = KeptWindowStrip
+	}
+	w, err := scr.Open(ptr, WindowText{Title: title, Strip: strip})
 	runtime.KeepAlive(m)
 	if err != nil {
 		release()
