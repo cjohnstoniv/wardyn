@@ -49,6 +49,7 @@ func newKeptRig(t *testing.T) (*macRig, *keptGuest) {
 	t.Helper()
 	r := newMacRig(t)
 	r.c.LimitBytes = 110 << 30
+	r.c.lockWait = 100 * time.Millisecond // a held lock is refused at once; TestKeptStopWaitsForABriefHolder waits
 	g := &keptGuest{}
 	r.c.spawn = func(dir string) error {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -1223,6 +1224,7 @@ func TestKeptConfirmRefusesACloneOverTheMacTotal(t *testing.T) {
 func TestKeptStopWaitsForABriefHolder(t *testing.T) {
 	r, _ := newKeptRig(t)
 	run := uuid.New()
+	r.c.lockWait = 10 * time.Second
 	dir, id := keptRunning(t, r, run, true, time.Now().Add(time.Hour))
 	unlock, err := macvm.LockKept(dir)
 	if err != nil {

@@ -50,7 +50,13 @@ type KeptConfig struct {
 	keptListed func()
 	// eraseWait bounds an erasure's wait for each machine's lock; 0 is keptEraseWait (tests set it).
 	eraseWait time.Duration
+	// lockWait bounds a record write's or a person's action's wait for a machine's lock; 0 is keptLockWait
+	// (tests set it).
+	lockWait time.Duration
 }
+
+// lockWaitOr is lockWait, or keptLockWait.
+func (k *KeptConfig) lockWaitOr() time.Duration { return cmp.Or(k.lockWait, keptLockWait) }
 
 // The bounds on the runner's takes of a machine's lock, which a boot, a tools update, a stop's record or a
 // sweep may hold for a moment: a record write or a person's action waits keptLockWait before it says the
@@ -257,7 +263,7 @@ func (c *MacVMConfig) keptCheckResume(spec runner.SandboxSpec, dir string) error
 	if _, err := c.keptOwned(dir, k); err != nil { // read unlocked first: no lock file for a machine not here
 		return err
 	}
-	unlock, err := macvm.LockKeptWait(dir, keptLockWait)
+	unlock, err := macvm.LockKeptWait(dir, c.lockWaitOr())
 	if errors.Is(err, macvm.ErrKeptLocked) {
 		return keptRefusal(keptSaidLocked)
 	} else if err != nil {
@@ -342,7 +348,7 @@ func (c *MacVMConfig) updateKeptTools(ctx context.Context, spec runner.SandboxSp
 	}
 	spec.NotifyWaiting(runner.MacOSStartDetail(runner.MacOSCloning))
 	err := c.Tools.UpdateKeptTools(ctx, dir)
-	for deadline := time.Now().Add(keptLockWait); errors.Is(err, macvm.ErrKeptLocked) && time.Now().Before(deadline) && ctx.Err() == nil; {
+	for deadline := time.Now().Add(c.lockWaitOr()); errors.Is(err, macvm.ErrKeptLocked) && time.Now().Before(deadline) && ctx.Err() == nil; {
 		time.Sleep(100 * time.Millisecond)
 		err = c.Tools.UpdateKeptTools(ctx, dir)
 	}
@@ -407,7 +413,7 @@ func (c *MacVMConfig) undoKeptNew(spec runner.SandboxSpec) {
 	if rec, err := macvm.ReadKept(dir, k.ID.String()); err != nil || rec.OwnerHash != k.OwnerHash || rec.RunnerID != c.RunnerID {
 		return
 	}
-	if _, err := removeKept(dir, keptLockWait); err != nil {
+	if _, err := removeKept(dir, c.lockWaitOr()); err != nil {
 		slog.Warn("docker: delete a kept machine whose create failed", slog.String("machine_id", k.ID.String()), slog.String("err", err.Error()))
 	}
 }
@@ -416,7 +422,7 @@ func (c *MacVMConfig) undoKeptNew(spec runner.SandboxSpec) {
 // it: a machine a boot or a session holds, or no longer expired, stays. It reports whether the machine is
 // gone (deleted, or not on the Mac at all).
 func (c *MacVMConfig) removeExpiredKept(dir string, id uuid.UUID) bool {
-	unlock, err := macvm.LockKeptWait(dir, keptLockWait)
+	unlock, err := macvm.LockKeptWait(dir, c.lockWaitOr())
 	if err != nil {
 		c.logExpiredRemoval(id.String(), err)
 		return false
@@ -468,7 +474,7 @@ func (c *MacVMConfig) keptStopped(k *macvm.KeptRun, runID uuid.UUID, scrub *runn
 	}
 	dir := c.Layout.KeptMachineDir(k.ID)
 	log := slog.With(slog.String("machine_id", k.ID), slog.String("run_id", runID.String()))
-	unlock, err := macvm.LockKeptWait(dir, keptLockWait)
+	unlock, err := macvm.LockKeptWait(dir, c.lockWaitOr())
 	if err != nil {
 		// The record keeps this run as its session; once the run folder is gone, the sweep ends the session
 		// as a hard stop (recoverKept), and the next boot scrubs again.
@@ -521,7 +527,7 @@ func (d *Driver) DeleteKeptMachine(_ context.Context, id uuid.UUID, by string) (
 	case err != nil:
 		return "", fmt.Errorf("docker: kept machine %s: %w", id, err)
 	}
-	gone, err := removeKept(dir, keptLockWait)
+	gone, err := removeKept(dir, c.lockWaitOr())
 	switch {
 	case errors.Is(err, macvm.ErrKeptLocked):
 		return "", fmt.Errorf("docker: kept machine %s is running on this Mac", id)
