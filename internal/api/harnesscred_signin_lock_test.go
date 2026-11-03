@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,16 +34,28 @@ var errLockWaitExpired = errors.New("db: advisory lock: context deadline exceede
 // answering every LockLoginSupersede with lockErr.
 type lockingSupersedeStore struct {
 	*supersedeStore
+	lockMu  sync.Mutex
 	lockErr error
 }
 
 func (s *lockingSupersedeStore) LockLoginSupersede(context.Context, string) (func(), error) {
+	s.lockMu.Lock()
+	defer s.lockMu.Unlock()
 	if s.lockErr != nil {
 		return nil, s.lockErr
 	}
 	return func() {}, nil
 }
 
+// refuseLocks makes every later LockLoginSupersede answer err.
+func (s *lockingSupersedeStore) refuseLocks(err error) {
+	s.lockMu.Lock()
+	defer s.lockMu.Unlock()
+	s.lockErr = err
+}
+
+// withLoginLock installs the lock seam. Call it before the fixture starts any run: a run's dispatch
+// goroutine reads the server's store, so swapping it under a live run is a data race.
 func withLoginLock(f supersedeFixture, lockErr error) *lockingSupersedeStore {
 	st := &lockingSupersedeStore{supersedeStore: f.store, lockErr: lockErr}
 	f.srv.cfg.Store = st
@@ -52,10 +65,11 @@ func withLoginLock(f supersedeFixture, lockErr error) *lockingSupersedeStore {
 func TestHarnessLogin_ALockWaitThatExpiresRefusesBeforeAnythingIsStarted(t *testing.T) {
 	f := newSupersedeFixture(t, nil, nil)
 	sess := memberLoginSession(t)
+	lock := withLoginLock(f, nil)
 	first := launchLoginRun(t, f.srv, sess)
 	waitRunState(t, f.store, first, types.RunRunning)
 
-	withLoginLock(f, errLockWaitExpired)
+	lock.refuseLocks(errLockWaitExpired)
 	f.store.mu.Lock()
 	before := len(f.store.runs)
 	f.store.mu.Unlock()
