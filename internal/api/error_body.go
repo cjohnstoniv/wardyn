@@ -24,7 +24,7 @@ type errorBody struct {
 	// console can attach the blocker to that harness. Present only on a refusal
 	// of one included harness.
 	Tool string `json:"tool,omitempty"`
-	// Field names the request field a 400 is ABOUT (a dotted path into the body, e.g. azure.endpoint),
+	// Field names the request field a refusal is ABOUT (a dotted path into the body, e.g. azure.endpoint),
 	// so the console can put the sentence under that field. Present only on a refusal that names one.
 	Field string `json:"field,omitempty"`
 	// Feature names the capability feature a 403/422 capability_feature refusal is ABOUT (capabilities.go

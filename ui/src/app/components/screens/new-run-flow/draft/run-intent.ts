@@ -62,6 +62,8 @@ export interface GuidedFacts {
   refText: Record<string, string>;
   /** The Files step has already chosen the person's own drive for an Environment, so a later visit does not choose it again. */
   drivePreselected?: boolean;
+  /** The server's sentence for a window on the Mac it refused, which cleared the choice; until the person chooses again. */
+  windowCleared?: string;
 }
 
 export interface DocDiagnostic {

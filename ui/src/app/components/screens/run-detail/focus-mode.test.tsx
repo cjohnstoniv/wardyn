@@ -268,7 +268,7 @@ describe("Focus mode — the edge dock", () => {
     expect(screen.getByRole("heading", { name: "Egress" })).toBeInTheDocument();
   });
 
-  // C012-010: with the terminal focused, Escape and Ctrl+\\ are the program's keys (vim insert mode, SIGQUIT).
+  // With the terminal focused, Escape and Ctrl+\\ are the program's keys (vim insert mode, SIGQUIT).
   describe("keys while the terminal has focus", () => {
     const withTerminal = (onExit: () => void) =>
       render(<FocusMode ctx={ctx({ terminalPane: <textarea aria-label="terminal input" /> })} onExit={onExit} />);

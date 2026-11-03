@@ -656,3 +656,38 @@ func TestSetupStatus_MemberRunnerCarriesOnlyTheKubernetesBit(t *testing.T) {
 		})
 	}
 }
+
+// features.mac_window is the site config's window switch, kept for members (the console hides the New Run
+// window option on it) and absent from the body unless an explicit true is stored.
+func TestSetupStatus_MacWindowFeature(t *testing.T) {
+	on, off := true, false
+	for name, tc := range map[string]struct {
+		mac  *types.SiteMacOSVM
+		want bool
+	}{
+		"no macos_vm block": {nil, false},
+		"absent switch":     {&types.SiteMacOSVM{MaxBaseAgeDays: 7}, false},
+		"explicit false":    {&types.SiteMacOSVM{AllowAttendedWindow: &off}, false},
+		"explicit true":     {&types.SiteMacOSVM{AllowAttendedWindow: &on}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			cfg := baseTestConfig(h, &integStore{govEscapeStore: newGovEscapeStore(&capStore{}), site: types.SiteConfig{MacOSVM: tc.mac}})
+			cfg.Runner = &fakeRunner{}
+			cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+			cfg.OIDC = &oidc.Authenticator{}
+			srv := New(cfg)
+			w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), "")
+			var st SetupStatus
+			if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &st) != nil {
+				t.Fatalf("member: code %d body %s", w.Code, w.Body.String())
+			}
+			if st.Features.MacWindow != tc.want || strings.Contains(w.Body.String(), `"mac_window"`) != tc.want {
+				t.Errorf("member: mac_window %v in %s, want %v and the key only when on", st.Features.MacWindow, w.Body.String(), tc.want)
+			}
+		})
+	}
+	if f := setupFeatures(false, false); f.MacWindow {
+		t.Error("a site config that could not be read reads the switch on")
+	}
+}
