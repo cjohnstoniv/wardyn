@@ -73,6 +73,10 @@ const (
 	// The API server's own refusals, which come before any admission policy.
 	asInvalidNodeWithGate = "cannot be set until all schedulingGates have been cleared"
 	asInvalidPodUpdate    = "pod updates may not change fields other than"
+
+	// asReplacedHint opens the sentence the run's person reads, the run's failure hint, when its pod
+	// was replaced outside Wardyn.
+	asReplacedHint = "This run ended: its pod was replaced outside Wardyn"
 )
 
 var asSandboxes = schema.GroupVersionResource{Group: "agents.x-k8s.io", Version: "v1beta1", Resource: "sandboxes"}
@@ -548,8 +552,8 @@ func TestAgentSandboxGoneAfterTeardown(t *testing.T) {
 }
 
 // TestAgentSandboxPodReplacedOutsideWardynEndsTheRun: a run's pod deleted behind Wardyn's back comes
-// back from the controller held by the gate; Status reads the run failed, and the replacement is never
-// released.
+// back from the controller held by the gate; Status reads the run failed with the person-facing failure
+// hint, and the replacement is never released.
 func TestAgentSandboxPodReplacedOutsideWardynEndsTheRun(t *testing.T) {
 	requireAgentSandbox(t)
 	e := newASEnv(t)
@@ -574,12 +578,12 @@ func TestAgentSandboxPodReplacedOutsideWardynEndsTheRun(t *testing.T) {
 		st, err := r.Status(ctx, sb.Ref)
 		if err == nil {
 			last = st
-			if st.State == types.RunFailed && strings.Contains(st.Message, "replaced outside Wardyn") {
+			if st.State == types.RunFailed && strings.HasPrefix(st.FailureHint, asReplacedHint) {
 				break
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("Status never read the replaced pod as failed; last status %+v (last error %v)", last, err)
+			t.Fatalf("Status never read the replaced pod as failed with the replaced-pod hint; last status %+v (last error %v)", last, err)
 		}
 	}
 	got, err := e.cs.CoreV1().Pods(e.ns).Get(ctx, name, metav1.GetOptions{})

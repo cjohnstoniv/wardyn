@@ -1386,7 +1386,9 @@ jobs:
   # identities by impersonation.
   #
   # Train pull requests and pushes to main only: one more runner for up to 35 minutes, on the runs
-  # that merge a wave. Not a required check and not in `gates`.
+  # that merge a wave. Not a required check and not in `gates` (the backend is experimental), but a
+  # red here is the run's red: the train pull request shows it as its own check, and the run's
+  # conclusion is failure, which green-by-tree.sh refuses as release evidence for that tree.
   conformance-k8s-agent-sandbox:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || startsWith(github.head_ref, 'train/')) }}
@@ -1451,8 +1453,13 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
+      # Kubernetes v1.30 by digest, with the kind release that image was built for: the docs claim the
+      # backend was tested on v1.30, and kind-action's default node image is newer. The version is
+      # printed after the Calico rollout so the log shows what ran.
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
+          version: v0.23.0
+          node_image: kindest/node:v1.30.0@sha256:047357ac0cfea04663786a612ba1eaba9702bef25227a794b52890dd8bcd692e
           cluster_name: wardyn-conformance-k8s
           config: deploy/kind/conformance-kind-config.yaml
           wait: 90s
@@ -1466,6 +1473,8 @@ jobs:
           kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
           kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=180s
           kubectl version
+          server=$(kubectl version -o json | jq -r .serverVersion.gitVersion)
+          [ "$server" = v1.30.0 ] || { echo "::error::the cluster runs $server, not the v1.30.0 the docs name"; exit 1; }
       - name: Label a PSS-restricted namespace for runs
         run: |
           kubectl create namespace wardyn-conformance
