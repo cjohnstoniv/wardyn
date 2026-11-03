@@ -642,7 +642,8 @@ func serverMethodName(call *ast.CallExpr) string {
 }
 
 // The parity scan above sees Server methods only. These plain functions are launch gates too: the
-// request enums and the hold/interactive conflict. Review calls each one launch's validation calls.
+// request enums, the hold/interactive conflict and desktop_window's own 400. Review calls each one launch's
+// validation calls; the policy preview also asks desktop_window's.
 func TestPreflightCallsLaunchsPlainFunctionGates(t *testing.T) {
 	fset := token.NewFileSet()
 	calls := func(fn *ast.FuncDecl) map[string]bool {
@@ -659,12 +660,16 @@ func TestPreflightCallsLaunchsPlainFunctionGates(t *testing.T) {
 	}
 	launch := calls(parseHandler(t, fset, "runs_create_validate.go", "decodeAndValidateCreateRun"))
 	preflight := calls(parseHandler(t, fset, "preflight.go", "handlePreflightRun"))
-	for _, gate := range []string{"runRequestEnums", "interactiveToolApprovalsError", "agentRequirementError"} {
+	preview := calls(parseHandler(t, fset, "policy_preview.go", "handlePolicyPreview"))
+	for _, gate := range []string{"runRequestEnums", "interactiveToolApprovalsError", "agentRequirementError", "desktopWindowRequestRefusal"} {
 		if !launch[gate] {
 			t.Errorf("launch no longer calls %s: re-point this guard", gate)
 		}
 		if !preflight[gate] {
 			t.Errorf("handlePreflightRun does not call %s, which launch's validation does", gate)
 		}
+	}
+	if !preview["desktopWindowRequestRefusal"] {
+		t.Error("handlePolicyPreview does not call desktopWindowRequestRefusal: a bogus desktop_window would pass Review and 400 at launch")
 	}
 }

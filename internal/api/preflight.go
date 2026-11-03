@@ -260,6 +260,11 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonRunTaskReserved, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
 		return
 	}
+	// The same 400 launch gives a desktop_window it cannot carry, before any step reads the field.
+	if msg := desktopWindowRequestRefusal(req); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonDesktopWindowInvalid, msg)
+		return
+	}
 	// Same member request-field denial launch runs (runs_create.go's
 	// decodeAndValidateCreateRun): a preflight dry-run must refuse a member's
 	// BYOI/devcontainer_repo/ungranted-workspace request with the SAME 403

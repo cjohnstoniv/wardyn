@@ -51,6 +51,11 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	if r, ok = s.stampContextChoice(w, r, req); !ok {
 		return
 	}
+	// The same 400 launch gives a desktop_window it cannot carry, before any step reads the field.
+	if msg := desktopWindowRequestRefusal(req); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonDesktopWindowInvalid, msg)
+		return
+	}
 	ceiling, reqCC, refusal := s.authorizePreviewRequest(r, req)
 	if refusal.write(s, w, r) {
 		return
