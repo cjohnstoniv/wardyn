@@ -182,7 +182,7 @@ func (p *Peer) fail(err error) {
 		return
 	}
 	p.err = err
-	streams := make([]*Stream, 0, len(p.streams)+len(p.parked))
+	streams := make([]*Stream, 0, len(p.streams))
 	for _, s := range p.streams {
 		streams = append(streams, s)
 	}
