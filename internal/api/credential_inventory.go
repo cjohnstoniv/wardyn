@@ -45,6 +45,9 @@ func providerCredentialName(p types.ModelProvider) string {
 	case types.ModelProviderAzureFoundry:
 		return providerSecretName(p.UID, providerEntraPart)
 	default:
+		if p.OIDC != nil {
+			return providerSecretName(p.UID, providerOIDCPart)
+		}
 		return providerSecretName(p.UID, providerKeyPart)
 	}
 }
