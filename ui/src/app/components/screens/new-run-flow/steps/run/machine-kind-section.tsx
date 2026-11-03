@@ -95,11 +95,11 @@ export function MachineKindSection({ kind, agents = [], macosBase, onChoose, onC
 function MacOSLines({ on, chosen, offer }: { on: boolean; chosen: boolean; offer: MacOSOffer | undefined }) {
   if (!on) return <p className={note}>{NR_MACHINE.OS_LATER}</p>;
   if (!chosen) return <p className={note}>{NR_MACHINE.OS_WINDOWS_LATER}</p>;
-  if (!offer?.ok) return null;
   return (
     <>
-      {offer.guestOS && <p className={note}>{NR_MACHINE.MACOS_ABOUT(offer.guestOS)}</p>}
-      <p className={note}>{NR_MACHINE.MACOS_SIZE(String(offer.minCPUs), String(offer.minMemoryMiB))}</p>
+      <p className={note}>{NR_MACHINE.MACOS_VIEW_ONLY}</p>
+      {offer?.ok && offer.guestOS && <p className={note}>{NR_MACHINE.MACOS_ABOUT(offer.guestOS)}</p>}
+      {offer?.ok && <p className={note}>{NR_MACHINE.MACOS_SIZE(String(offer.minCPUs), String(offer.minMemoryMiB))}</p>}
     </>
   );
 }

@@ -40,7 +40,7 @@ func TestStepPlacementCapability_MacOSVMRefusesWhatItCannotDo(t *testing.T) {
 			want: "A macOS VM starts one agent per run in this release, and another harness in this run has its own starting prompt. Remove that prompt, or choose a container or a Linux VM.", field: "tools"},
 		{name: "an interactive run that starts in the agent CLI", edit: func(req *createRunRequest) {
 			req.Agent, req.Interactive, req.InteractiveStart = "claude-code", true, "agent"
-		}, want: "A macOS VM sandbox's terminal opens a shell, not the agent CLI, in this release. Set the interactive start to shell.", field: "interactive_start"},
+		}, want: `A macOS VM's terminal opens a shell, not the agent, in this release. Turn off "Start the run in this harness", or send interactive_start: "shell" in the API.`, field: "interactive_start"},
 		{name: "an interactive run that starts in a shell", edit: func(req *createRunRequest) {
 			req.Agent, req.Interactive, req.InteractiveStart = "claude-code", true, "shell"
 		}},

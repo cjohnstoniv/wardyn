@@ -9,6 +9,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { setField } from "../../../../../../test/set-field";
 import { MemoryRouter } from "react-router-dom";
+import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { NR_HARNESSES } from "../../../../wardyn/copy/new-run/harnesses";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { SCENARIO_HARNESSES, SCENARIO_HARNESS_SETS } from "../../../../../lib/new-run-fixtures/scenarios/harnesses";
@@ -226,6 +227,25 @@ describe("Harnesses step: Make's Harness 1", () => {
     expect(await screen.findByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS })).toBeChecked();
     expect(intentNow().tools?.map((t) => t.id)).toEqual(["claude-code"]);
     expect(intentNow().startup).toEqual({ kind: "harness", tool: "claude-code" });
+  });
+});
+
+// UXR-1: a VM's terminal opens a shell, so a VM run starts no harness and the switch says why.
+describe("Harnesses step: a virtual machine", () => {
+  it.each(["linux_vm", "macos_vm"] as const)("a new %s agent task gets its first harness but starts none, and the switch is off and disabled", async (kind) => {
+    show({ ...INTERACTIVE, machine_kind: kind });
+    const start = await screen.findByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS });
+    expect(start).toBeDisabled();
+    expect(start).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(NR_MACHINE.VM_STARTS_SHELL)).toBeInTheDocument();
+    expect(intentNow().tools?.map((t) => t.id)).toEqual(["claude-code"]);
+    expect(intentNow().startup).toBeUndefined();
+  });
+
+  it("a container still seeds the started harness and shows no shell note", async () => {
+    show(INTERACTIVE);
+    expect(await screen.findByRole("switch", { name: NR_HARNESSES.START_IN_HARNESS })).toBeEnabled();
+    expect(screen.queryByText(NR_MACHINE.VM_STARTS_SHELL)).not.toBeInTheDocument();
   });
 });
 

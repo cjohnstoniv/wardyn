@@ -11,6 +11,7 @@ import { Button } from "../../../../ui/button";
 import { Label } from "../../../../ui/label";
 import { Textarea } from "../../../../ui/textarea";
 import { NR_HARNESSES } from "../../../../wardyn/copy/new-run/harnesses";
+import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { StepSection } from "../../../../wardyn/step-section";
 import { Switch } from "../../../../wardyn/form-primitives";
@@ -36,6 +37,8 @@ export interface HarnessCardProps {
   /** Why these harnesses cannot share one image; the card says so under its select. */
   combination?: string;
   started: boolean;
+  /** A virtual machine's terminal opens a shell, so no harness starts the run: the switch is off and disabled. */
+  vm?: boolean;
   /** The starting prompt (Interactive) or the task (Autonomous). */
   text: string;
   onSwap: (to: string) => void;
@@ -44,7 +47,7 @@ export interface HarnessCardProps {
   onText: (text: string) => void;
 }
 
-export function HarnessCard({ index, id, roster, mode, others, removable, count, combination, started, text, onSwap, onRemove, onStart, onText }: HarnessCardProps) {
+export function HarnessCard({ index, id, roster, mode, others, removable, count, combination, started, vm, text, onSwap, onRemove, onStart, onText }: HarnessCardProps) {
   const [flagged, setFlagged] = React.useState(false);
   const selectId = `nr-harness-${index}`;
   const textId = mode === "autonomous" ? agentTaskId(index) : `nr-text-${index}`;
@@ -96,10 +99,11 @@ export function HarnessCard({ index, id, roster, mode, others, removable, count,
       {mode === "interactive" && (
         <div className="flex flex-col gap-3.5">
           <div className="flex items-center gap-[9px] text-sm text-foreground">
-            <Switch checked={started} label={NR_HARNESSES.START_IN_HARNESS} onChange={onStart} />
+            <Switch checked={started && !vm} disabled={vm} label={NR_HARNESSES.START_IN_HARNESS} onChange={onStart} />
             <span aria-hidden="true">{NR_HARNESSES.START_IN_HARNESS}</span>
           </div>
-          {started && id !== "none" && (
+          {vm && <p role="note" className="text-xs leading-snug text-muted-foreground">{NR_MACHINE.VM_STARTS_SHELL}</p>}
+          {started && !vm && id !== "none" && (
             <div className="flex flex-col gap-2">
               <Label htmlFor={textId} className="w-full justify-between">{NR_HARNESSES.STARTING_PROMPT} <Chip>{NR_SHARED.OPTIONAL}</Chip></Label>
               <Textarea id={textId} value={text} placeholder={NR_HARNESSES.STARTING_PROMPT_PLACEHOLDER} aria-describedby={`${textId}-hint`} onChange={(e) => onText(e.target.value)} />
