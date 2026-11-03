@@ -2,16 +2,16 @@
 
 # Ground truth on Kubernetes
 
-Use your own kernel sensor, such as Tetragon or Falco, to see what a run did, and tie each alert to a Wardyn run and a person.
+Use your own kernel sensor, such as Tetragon or Falco, to see what a run did, and tie each alert to a Wardyn run and its creating principal.
 
 - On Kubernetes, Wardyn ships no kernel sensor and no kernel-level corroboration of its own. See [known gaps](kubernetes-known-gaps.md).
 - Wardyn does not read, check or store your sensor's events.
-- This page is a join recipe. It makes your sensor's alerts actionable by run and person. Wardyn does not verify those events.
+- This page is a join recipe. It makes your sensor's alerts actionable by run and creating principal. Wardyn does not verify those events.
 - The Compose `groundtruth` profile is a different pipeline. It does not run on Kubernetes.
 
 ## The join
 
-Your sensor reports a container or a pod. Follow it to a person in four steps.
+Your sensor reports a container or a pod. Follow it to a run and its creating principal in four steps.
 
 1. **Container to pod.** Most sensors already add the pod name, namespace and pod labels. If yours reports only a container ID, map it to a pod (see below).
 2. **Pod to run.** Every agent and proxy pod carries three labels ([`internal/runner/k8s/naming.go`](../../internal/runner/k8s/naming.go) `wardynLabels`, constants at the top of the file):
@@ -20,10 +20,19 @@ Your sensor reports a container or a pod. Follow it to a person in four steps.
    - `wardyn.component=agent` (or `proxy`)
 
    The agent pod is the one that runs the task. The proxy pod only forwards traffic.
-3. **Run to owner.** Call `GET /api/v1/runs/{id}`. The run JSON has `created_by`, the signed-in person's principal (the token `sub`), and `sandbox_ref`, the agent pod's name ([`internal/types/types.go`](../../internal/types/types.go) `AgentRun`).
+3. **Run to creating principal.** Call `GET /api/v1/runs/{id}`. The run JSON has `created_by`, the principal that created the run (the token `sub`), and `sandbox_ref`, the agent pod's name ([`internal/types/types.go`](../../internal/types/types.go) `AgentRun`).
 4. **Optional: the audit trail.** `GET /api/v1/audit?run_id={id}` lists the run's audit rows. Each row has `actor`, `action` and `time` ([`internal/types/types.go`](../../internal/types/types.go) `AuditEvent`).
 
 Two checks use the same pod name. `sandbox_ref` for a Kubernetes run is the agent pod name ([`internal/runner/k8s/sandbox.go`](../../internal/runner/k8s/sandbox.go) `agentPodName`). So you can also start from the pod name: list runs and match `sandbox_ref`.
+
+## Person or service
+
+`created_by` is a person only when a person created the run. A run launched by a service identity has `created_by` of the form `service:<name>` ([`internal/types/service_identity.go`](../../internal/types/service_identity.go) `ServicePrincipalPrefix`).
+
+- For such a run the join gives you the service, not a human.
+- The human is the service's sponsor. Read it separately: the service identity record has a `sponsor` field (`ServiceIdentity`, same file). Read it with `GET /api/v1/service-identities/{name}`, a security-tier route ([`internal/api/service_identities.go`](../../internal/api/service_identities.go)); a run reader token is not enough.
+- The sponsor can change. The record holds the current sponsor, not necessarily the one at the time of the run ([`internal/api/helpers.go`](../../internal/api/helpers.go) `sponsorsRun`, `runSponsor`). Check the audit trail for service changes if the date matters.
+- The label join alone establishes neither a person nor a sponsor.
 
 ## Who may read the run
 
@@ -54,16 +63,12 @@ Find every Wardyn agent pod:
 kubectl get pods -A -l wardyn.managed=true,wardyn.component=agent
 ```
 
-For Tetragon, scope a `TracingPolicy` to Wardyn pods with a pod selector:
+Use your sensor's own pod-label field to read `wardyn.run-id`. Two points from the sensors' own docs:
 
-```yaml
-spec:
-  podSelector:
-    matchLabels:
-      wardyn.managed: "true"
-```
+- Tetragon events carry the pod under `process.pod`, with `name`, `namespace` and `pod_labels` ([Tetragon gRPC API reference](https://tetragon.io/docs/reference/grpc-api/)).
+- Falco reads one label with `k8s.pod.label[wardyn.run-id]` or `k8s.pod.label.wardyn.run-id` ([Falco supported fields](https://falco.org/docs/reference/rules/supported-fields/)). Its `container.id` is only the first 12 characters of the ID.
 
-Then read the label from each event. Tetragon puts the pod name, namespace and labels on `process.pod`. Match `wardyn.run-id` there. Check your Tetragon version's output; field names can differ. For Falco, enable its Kubernetes metadata enrichment and use the `k8s.pod.label.wardyn.run-id` field in rules or output.
+Scoping a sensor policy to Wardyn pods by label depends on your sensor and version. Follow its own docs.
 
 ## Container ID to pod
 
@@ -84,6 +89,7 @@ An empty run means the pod is not a Wardyn pod.
 
 - The kernel sensor and its policy, on every node that can host runs.
 - Pod metadata enrichment in the sensor, or the container ID lookup above.
+- A security-tier token to read the service identity's sponsor, if you launch runs from services.
 - Read access to pods (get, list) for that lookup.
 - A Wardyn token for the run lookup.
 - Retention for the sensor's events. Wardyn keeps none of them.
