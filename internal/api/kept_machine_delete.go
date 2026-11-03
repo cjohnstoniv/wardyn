@@ -49,10 +49,6 @@ const (
 	keptScrubNotRun = "not_run"
 )
 
-// keptMachineIntentWait is how long a kill's delete intent may wait for its claim before the sweep
-// reads a run that is still live as a kill that never happened.
-const keptMachineIntentWait = 2 * killCascadeTimeout
-
 // keptMachineUnstartedAfter is how long after its keep run ended a machine still being created, which its
 // Mac does not list, is dropped as never made: long enough for the Mac's next caps to list a clone.
 const keptMachineUnstartedAfter = 10 * time.Minute
@@ -101,6 +97,17 @@ func (s *Server) keptMachineInventory(runnerID uuid.UUID) (map[string]runnerwire
 		inv[m.ID] = m
 	}
 	return inv, true
+}
+
+// keptMachineDeleteReady reports whether m's delete can run from here now: its runner is no longer
+// registered, or this replica holds its Mac and the Mac has not booted it.
+func (s *Server) keptMachineDeleteReady(ctx context.Context, m types.KeptMachine) bool {
+	rn, err := s.keptMachineRunner(ctx, m.RunnerID)
+	if errors.Is(err, store.ErrNotFound) || err == nil && rn.RevokedAt != nil {
+		return true
+	}
+	inv, held := s.keptMachineInventory(m.RunnerID)
+	return err == nil && held && s.keptMachinesHeldHere(m.RunnerID) && !inv[m.ID.String()].InUse
 }
 
 // deleteKeptMachine finishes the delete of a tombstoned machine: its Mac deletes the folder, then the row
@@ -311,72 +318,53 @@ func (s *Server) reconcileKeptMachine(ctx context.Context, ks store.KeptMachineS
 	return nil
 }
 
-// keptMachineOnKill records, before a kill claims run, that the kill deletes the kept machine run holds:
-// a person or a service identity who is not the machine's owner killing it (an admin, a security
-// operator, automation) is the incident lever, and must not leave a person's machine behind. The intent
-// is written before the claim so a replica lost between the two still deletes (the sweep finishes it).
-// The owner's own kill and every system kill write nothing: the machine is kept as a hard stop. The
-// zero deletion means no intent.
-func (s *Server) keptMachineOnKill(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string) store.KeptMachineDeletion {
+// claimKill is the kill's claim (claimKillTransition). A person who is not the run's creator, or a
+// service identity, killing a run that is past its queue and not yet ended is the incident lever, and
+// must not leave a person's machine behind: that claim goes through KillRunMarkingKeptMachine, which
+// writes the delete intent on the machine the run holds in the claim's own transaction. A kill that
+// ends the run therefore always leaves its delete for the sweep, even if this replica stops right
+// after, and the intent blocks a resume until then; a lost claim marks nothing. Containment waits on
+// no write but the claim. The owner's own kill and every system kill mark nothing: the machine is kept
+// as a hard stop. The zero deletion means no intent.
+func (s *Server) claimKill(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string) (bool, store.KeptMachineDeletion, error) {
 	ks, ok := s.cfg.Store.(store.KeptMachineStore)
-	if !ok || run.State.IsTerminal() || killerType != types.ActorHuman && killerType != serviceActorType {
-		return store.KeptMachineDeletion{}
+	nonOwner := killerType == serviceActorType || killerType == types.ActorHuman && killer != run.CreatedBy
+	if !ok || !nonOwner || run.State.IsTerminal() || run.State == types.RunQueued {
+		applied, err := s.claimKillTransition(ctx, run)
+		return applied, store.KeptMachineDeletion{}, err
 	}
-	m, err := ks.GetKeptMachineByRun(ctx, run.ID)
-	if err == nil && killerType == types.ActorHuman && (killer == run.CreatedBy || types.CanonicalUserSubject(killer) == m.OwnerSubject) {
-		return store.KeptMachineDeletion{} // the owner's own kill: a keep run is its creator's
-	}
-	if err == nil {
-		var d store.KeptMachineDeletion
-		if d, err = ks.SetKeptMachineDeleteIntent(ctx, run.ID, keptMachineByNonOwnerKill, killer); err == nil {
-			return d
-		}
-	}
-	if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrKeptMachineDeleting) {
-		slog.ErrorContext(ctx, "api: record a kill's kept machine delete", slog.String("run_id", run.ID.String()), slog.Any("err", err))
-	}
-	return store.KeptMachineDeletion{}
+	var intent store.KeptMachineDeletion
+	applied, err := s.claimKillTransitionWith(ctx, run, func() (bool, error) {
+		applied, d, err := ks.KillRunMarkingKeptMachine(ctx, run.ID, run.State, keptMachineByNonOwnerKill, killer,
+			types.CanonicalUserSubject(killer))
+		s.runStateMoved(run.ID, run.State, types.RunKilled, applied)
+		intent = d
+		return applied, err
+	})
+	return applied, intent, err
 }
 
-// keptMachineKillClaimed settles intent once its kill's claim is known: a won claim tombstones the
-// machine before the teardown; a lost one clears the intent, unless the run is KILLED all the same (a
-// concurrent kill won, and the sweep deletes from the intent). A failed claim leaves the intent to the
-// sweep, which reads the run's state.
-func (s *Server) keptMachineKillClaimed(ctx context.Context, intent store.KeptMachineDeletion, applied bool, claimErr error) {
-	ks, ok := s.cfg.Store.(store.KeptMachineStore)
-	if !ok || intent.At.IsZero() || intent.Machine.RunID == nil || claimErr != nil {
-		return
-	}
-	var err error
-	if applied {
-		_, err = ks.BeginKeptMachineDeleteForKill(ctx, intent.Machine.ID, intent.At)
-	} else if run, rerr := s.cfg.Store.GetRun(ctx, *intent.Machine.RunID); rerr != nil || run.State != types.RunKilled {
-		err = ks.ClearKeptMachineDeleteIntent(ctx, intent.Machine.ID, intent.At)
-	}
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		slog.ErrorContext(ctx, "api: settle a kill's kept machine delete", slog.String("machine_id", intent.Machine.ID.String()), slog.Any("err", err))
-	}
-}
-
-// finishKeptMachineKill runs the delete a won kill tombstoned, once the teardown has stopped the VM. A
-// Mac that still has it booted, or is away, leaves the tombstone to the sweep.
+// finishKeptMachineKill tombstones the machine a won kill marked and runs its delete, once the teardown
+// has stopped the VM. A Mac that still has it booted, or is away, leaves the tombstone to the sweep, and
+// a tombstone that could not be written leaves the intent to it.
 func (s *Server) finishKeptMachineKill(ctx context.Context, intent store.KeptMachineDeletion) {
 	ks, ok := s.cfg.Store.(store.KeptMachineStore)
 	if !ok || intent.At.IsZero() {
 		return
 	}
 	d, err := ks.BeginKeptMachineDeleteForKill(ctx, intent.Machine.ID, intent.At)
-	if err != nil {
-		return // no tombstone from this intent: the claim was lost, or another delete finished it
+	if err != nil || !s.keptMachineDeleteReady(ctx, d.Machine) {
+		return // no tombstone from this intent (the claim was lost, or a delete finished it), or not yet
 	}
 	if res := s.deleteKeptMachine(ctx, ks, d); res.err != nil {
 		slog.ErrorContext(ctx, "api: finish a kill's kept machine delete", slog.String("machine_id", d.Machine.ID.String()), slog.Any("err", res.err))
 	}
 }
 
-// settleKeptMachineKillIntents settles each kill's delete intent no delete has started from: the run
-// was KILLED, so the delete starts (finishKeptMachineDeletes runs it); the run is gone, ended otherwise,
-// or still live past keptMachineIntentWait, so the kill never claimed it and the intent is cleared.
+// settleKeptMachineKillIntents settles each kill's delete intent no delete has started from, as a kill
+// whose replica stopped before its tombstone left it: the run was KILLED (an intent is written only with
+// that claim), so the delete starts, and runs now when its Mac is ready (else finishKeptMachineDeletes
+// runs it); a run that is gone or not KILLED leaves no kill to finish, and the intent is cleared.
 func (s *Server) settleKeptMachineKillIntents(ctx context.Context, ks store.KeptMachineStore) error {
 	intents, err := ks.ListKeptMachineDeleteIntents(ctx)
 	if err != nil {
@@ -391,8 +379,10 @@ func (s *Server) settleKeptMachineKillIntents(ctx context.Context, ks store.Kept
 		switch {
 		case err != nil && !errors.Is(err, store.ErrNotFound):
 		case err == nil && run.State == types.RunKilled:
-			_, err = ks.BeginKeptMachineDeleteForKill(ctx, d.Machine.ID, d.At)
-		case err == nil && !run.State.IsTerminal() && s.cfg.Now().Sub(d.At) < keptMachineIntentWait:
+			var tomb store.KeptMachineDeletion
+			if tomb, err = ks.BeginKeptMachineDeleteForKill(ctx, d.Machine.ID, d.At); err == nil && s.keptMachineDeleteReady(ctx, tomb.Machine) {
+				err = s.deleteKeptMachine(ctx, ks, tomb).err
+			}
 		default:
 			err = ks.ClearKeptMachineDeleteIntent(ctx, d.Machine.ID, d.At)
 		}
@@ -441,16 +431,10 @@ func (s *Server) finishKeptMachineDeletes(ctx context.Context, ks store.KeptMach
 	}
 	var errs []error
 	for _, w := range waiting {
-		m := w.Machine
-		rn, herr := s.keptMachineRunner(ctx, m.RunnerID)
-		gone := errors.Is(herr, store.ErrNotFound) || herr == nil && rn.RevokedAt != nil
-		if !gone {
-			inv, held := s.keptMachineInventory(m.RunnerID)
-			if herr != nil || !held || !s.keptMachinesHeldHere(m.RunnerID) || inv[m.ID.String()].InUse {
-				continue
-			}
+		if !s.keptMachineDeleteReady(ctx, w.Machine) {
+			continue
 		}
-		d, err := ks.BeginKeptMachineDelete(ctx, "", m.ID, w.By)
+		d, err := ks.BeginKeptMachineDelete(ctx, "", w.Machine.ID, w.By)
 		switch {
 		case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrKeptMachineDeleting), errors.Is(err, store.ErrKeptMachineInUse):
 			continue

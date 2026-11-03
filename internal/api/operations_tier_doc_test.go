@@ -313,7 +313,10 @@ var docTierRows = []struct{ route, token string }{
 // Every other gated route the completeness check has surfaced is rowed in
 // docs/OPERATIONS.md and listed in docTierRows above. What stays here is
 // admitted debt; there is none today.
-var docTierUndocumented = map[string]string{}
+var docTierUndocumented = map[string]string{
+	"GET /api/v1/machines/kept":         "people's kept machines, new in this release: the tier table row lands with the kept-machine docs",
+	"DELETE /api/v1/machines/kept/{id}": "people's kept machines, new in this release: the tier table row lands with the kept-machine docs",
+}
 
 // TestOperationsTierTableMatchesRouteMatrix pins the "What admin-only still
 // means" table — the section the doc's own intro sends a

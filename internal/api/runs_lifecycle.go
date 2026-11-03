@@ -240,6 +240,12 @@ func isTerminalRunState(st types.RunState) bool { return st.IsTerminal() }
 // the same run twice.
 func (s *Server) casRunState(ctx context.Context, runID uuid.UUID, from, to types.RunState) (bool, error) {
 	applied, err := s.cfg.Store.UpdateRunStateIf(ctx, runID, from, to)
+	s.runStateMoved(runID, from, to, applied)
+	return applied, err
+}
+
+// runStateMoved is casRunState's count and notice for a transition a store call made (applied).
+func (s *Server) runStateMoved(runID uuid.UUID, from, to types.RunState, applied bool) {
 	if applied && to.IsTerminal() && !from.IsTerminal() {
 		s.metrics.runTerminal(to)
 	}
@@ -250,7 +256,6 @@ func (s *Server) casRunState(ctx context.Context, runID uuid.UUID, from, to type
 			s.kickQueue()
 		}
 	}
-	return applied, err
 }
 
 // stopSandboxOrAudit tears a dispatch-created sandbox down and RECORDS a failed
@@ -786,10 +791,8 @@ func (s *Server) killLiveRun(ctx context.Context, run types.AgentRun, killerType
 func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any) (bool, map[string]any, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
-	// A kept machine's delete by a kill not its owner's is written before the claim (kept_machine_delete.go).
-	intent := s.keptMachineOnKill(ctx, run, killerType, killer)
-	applied, serr := s.claimKillTransition(ctx, run)
-	s.keptMachineKillClaimed(ctx, intent, applied, serr)
+	// A kill not the kept machine's owner's marks it for delete in the claim itself (kept_machine_delete.go).
+	applied, intent, serr := s.claimKill(ctx, run, killerType, killer)
 	if serr != nil {
 		return false, nil, serr
 	}
@@ -827,6 +830,12 @@ func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerT
 // Returns whether the KILLED transition was ours (a lost CAS is `false`, with
 // nothing else touched).
 func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (bool, error) {
+	return s.claimKillTransitionWith(ctx, run, func() (bool, error) { return s.casRunState(ctx, run.ID, run.State, types.RunKilled) })
+}
+
+// claimKillTransitionWith is claimKillTransition with cas making the KILLED transition (claimKill's
+// also marks a kept machine for delete).
+func (s *Server) claimKillTransitionWith(ctx context.Context, run types.AgentRun, cas func() (bool, error)) (bool, error) {
 	// Win the terminal transition first. Revoking before this CAS meant a
 	// kill that then LOST the CAS to a concurrent dispatch forward-transition
 	// (PENDING->STARTING) had already revoked the run's credentials — leaving a live
@@ -835,7 +844,7 @@ func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (b
 	// from the (non-terminal) state we read, so a completion watcher winning
 	// RUNNING->COMPLETED is not clobbered. A re-kill of an already-KILLED run still
 	// CASes KILLED->KILLED (applied), re-running the idempotent teardown.
-	applied, serr := s.casRunState(ctx, run.ID, run.State, types.RunKilled)
+	applied, serr := cas()
 	if serr != nil {
 		return false, serr
 	}
