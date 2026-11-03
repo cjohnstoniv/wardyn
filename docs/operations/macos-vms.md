@@ -160,7 +160,7 @@ A kept machine's disk is a folder in the `kept` folder of `macos-vm.noindex`, in
 A kept disk keeps the guest agent and harness tools it was made with. When they are behind the Mac's, a resume updates them before the run boots. `wardyn-runnerd macos-vm machines update <id> --force` runs the update on demand.
 
 - The update boots your disk outside any run, on the prep network ([The prep proxy](#the-prep-proxy)). That network reaches only `swscan.apple.com`, `swcdn.apple.com`, `swdist.apple.com`, `swdownload.apple.com`, `updates.cdn-apple.com`, `mesu.apple.com` and `gdmf.apple.com`, on port 443, with no credential.
-- **The window.** It lasts from the start of the update job until its helper exits. The network is removed then. The run's proxy does not apply: no run exists yet.
+- **The window.** It lasts from the start of the update job until its helper exits. The network is removed shortly after. The run's proxy does not apply: no run exists yet.
 - If the update fails, the machine does not start. Start it fresh, or try again.
 
 ### Where to look when it fails
