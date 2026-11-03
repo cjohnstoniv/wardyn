@@ -434,13 +434,30 @@ func gatewayDestinationOf(baseURL string) (_ gatewayDestination, ok bool) {
 	return d, true
 }
 
+// A Bedrock row names its gateway in bedrock.base_url. Its sign-in kind is refused: SigV4 signs Host, so a
+// gateway at its own name breaks the signature unless it re-signs with AWS credentials of its own.
+const (
+	mp400GatewayBedrockBaseURL = "model_providers: %q: gateway_identity needs a bedrock.base_url, or the token would go to AWS"
+	mp400GatewayBedrockAddress = "model_providers: %q: gateway_identity needs a bedrock.base_url with a valid port and no dot segment in its path"
+	mp400GatewayBedrockSSO     = "model_providers: %q: gateway_identity is not available for bedrock_sso providers; use a bedrock_bearer row, or the gateway as a custom endpoint"
+)
+
+// gatewayAddressOf is the address p sends its calls to when it has a gateway: a
+// Bedrock row's bedrock.base_url, any other row's base_url.
+func gatewayAddressOf(p types.ModelProvider) string {
+	if p.Kind.IsBedrock() {
+		return providerBedrockSettings(p).BaseURL
+	}
+	return p.BaseURL
+}
+
 // gatewayRouteOf is the route p would be dispatched with now. ok is false when p
 // has identity off or an address no route can hold.
 func gatewayRouteOf(p types.ModelProvider) (_ proxy.GatewayIdentityRoute, ok bool) {
 	if p.GatewayIdentity == nil {
 		return proxy.GatewayIdentityRoute{}, false
 	}
-	d, ok := gatewayDestinationOf(p.BaseURL)
+	d, ok := gatewayDestinationOf(gatewayAddressOf(p))
 	if !ok {
 		return proxy.GatewayIdentityRoute{}, false
 	}
@@ -493,8 +510,8 @@ func (s *Server) gatewayIdentityRefusal(ctx context.Context, cfg *proxy.Config) 
 
 // gatewayRouteClash is the id of a provider already on the run whose route a call
 // to l's could also match, or "" (proxy.GatewayIdentityRoute.Clashes).
-func (d *providerDispatch) gatewayRouteClash(l providerKeyLane) string {
-	rt, ok := gatewayRouteOf(l.provider)
+func (d *providerDispatch) gatewayRouteClash(p types.ModelProvider) string {
+	rt, ok := gatewayRouteOf(p)
 	if !ok {
 		return ""
 	}
@@ -506,14 +523,14 @@ func (d *providerDispatch) gatewayRouteClash(l providerKeyLane) string {
 	return ""
 }
 
-// addGatewayRoute records a lane's route. A provider two harnesses share has one.
+// addGatewayRoute records a provider's route. A provider two harnesses share has one.
 // ok is false when identity is on and no route can be written: such a run is
 // refused, because it would otherwise call the gateway unsigned.
-func (d *providerDispatch) addGatewayRoute(l providerKeyLane) (ok bool) {
-	if l.provider.GatewayIdentity == nil {
+func (d *providerDispatch) addGatewayRoute(p types.ModelProvider) (ok bool) {
+	if p.GatewayIdentity == nil {
 		return true
 	}
-	rt, ok := gatewayRouteOf(l.provider)
+	rt, ok := gatewayRouteOf(p)
 	if !ok {
 		return false
 	}
@@ -524,23 +541,31 @@ func (d *providerDispatch) addGatewayRoute(l providerKeyLane) (ok bool) {
 }
 
 // validateProviderGatewayIdentity holds one row's opt-in to the kinds that may carry
-// a token: a key row with a base_url, or an endpoint row. Every other kind, a
-// subscription row included, is refused: it has no gateway of an admin's to name.
+// a token: a key row with a base_url, a Bedrock key row with a bedrock.base_url, or
+// an endpoint row. Every other kind, a subscription row included, is refused: it has
+// no gateway of an admin's to name. A Bedrock sign-in row is refused with its own
+// reason, since SigV4 signs the Host a gateway at its own name would change.
 func validateProviderGatewayIdentity(mp types.ModelProvider) error {
 	gi := mp.GatewayIdentity
 	if gi == nil {
 		return nil
 	}
+	field, noAddress, badAddress := "base_url", mp400GatewayBaseURL, mp400GatewayAddress
 	switch mp.Kind {
 	case types.ModelProviderAnthropicAPIKey, types.ModelProviderOpenAIAPIKey, types.ModelProviderCustomEndpoint:
+	case types.ModelProviderBedrockBearer:
+		field, noAddress, badAddress = "bedrock.base_url", mp400GatewayBedrockBaseURL, mp400GatewayBedrockAddress
+	case types.ModelProviderBedrockSSO:
+		return fmt.Errorf(mp400GatewayBedrockSSO, mp.ID)
 	default:
 		return fmt.Errorf(mp400GatewayKind, mp.ID, string(mp.Kind))
 	}
-	if mp.BaseURL == "" {
-		return atField("base_url", fmt.Errorf(mp400GatewayBaseURL, mp.ID))
+	addr := gatewayAddressOf(mp)
+	if addr == "" {
+		return atField(field, fmt.Errorf(noAddress, mp.ID))
 	}
-	if _, ok := gatewayDestinationOf(mp.BaseURL); !ok {
-		return atField("base_url", fmt.Errorf(mp400GatewayAddress, mp.ID))
+	if _, ok := gatewayDestinationOf(addr); !ok {
+		return atField(field, fmt.Errorf(badAddress, mp.ID))
 	}
 	if gi.Audience == "" {
 		return atField("gateway_identity.audience", fmt.Errorf(mp400GatewayAudience, mp.ID))
@@ -576,7 +601,7 @@ func validateGatewayAudiences(p *types.ModelProviders, mcp []types.Component) er
 		if mp.GatewayIdentity == nil {
 			continue
 		}
-		dest, _ := gatewayDestinationOf(mp.BaseURL) // validateProviderGatewayIdentity has passed it
+		dest, _ := gatewayDestinationOf(gatewayAddressOf(mp)) // validateProviderGatewayIdentity has passed it
 		first, ok := seen[mp.GatewayIdentity.Audience]
 		if ok && first.dest != dest {
 			return atField("gateway_identity.audience", fmt.Errorf(mp400GatewayAudienceDup, mp.ID, mp.GatewayIdentity.Audience, first.id))
@@ -615,8 +640,8 @@ func validateGatewayIdentityEdit(block, stored *types.ModelProviders) error {
 			prior.GatewayIdentity.Audience != p.GatewayIdentity.Audience {
 			continue
 		}
-		before, _ := gatewayDestinationOf(prior.BaseURL)
-		after, _ := gatewayDestinationOf(p.BaseURL)
+		before, _ := gatewayDestinationOf(gatewayAddressOf(prior))
+		after, _ := gatewayDestinationOf(gatewayAddressOf(p))
 		if before != after {
 			return atField("gateway_identity.audience", fmt.Errorf(mp400GatewayAudienceMoved, p.ID))
 		}

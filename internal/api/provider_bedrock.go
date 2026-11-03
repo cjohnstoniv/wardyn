@@ -243,6 +243,22 @@ func (s *Server) providerBedrockTransport(ctx context.Context, run types.AgentRu
 	return t
 }
 
+// takeBedrockGatewayRoute records a Bedrock key row's gateway route on prov, the lane's equivalent of a key
+// lane's: a gateway at bedrock.base_url gets the run's signed identity through the bearer's MITM host. ok is
+// false when the run was refused and is already FAILED: the route clashes with one already on the run, or its
+// stored address can hold none, so the call would otherwise go unsigned.
+func (s *Server) takeBedrockGatewayRoute(ctx context.Context, run types.AgentRun, prov *providerDispatch, p types.ModelProvider) (ok bool) {
+	if other := prov.gatewayRouteClash(p); other != "" {
+		s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf(mpRunGatewayClash, p.ID, other)}, nil)
+		return false
+	}
+	if !prov.addGatewayRoute(p) {
+		s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf(mpRunGatewayAddress, p.ID)}, nil)
+		return false
+	}
+	return true
+}
+
 // runBedrockProvider re-reads the provider run chose and reports it when it
 // is still the one uid names, of kind, on and serving the run's agent.
 func runBedrockProvider(sc types.SiteConfig, run types.AgentRun, uid string, kind types.ModelProviderKind) (types.ModelProvider, bool) {

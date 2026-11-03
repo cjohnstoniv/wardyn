@@ -386,6 +386,12 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 			return nil, nil, injections, providerDispatch{}, false
 		}
 		llms, lanePairs = append(llms, llm), append(lanePairs, pairs[i])
+		if lane.chosen != nil && lane.chosen.provider.Kind == types.ModelProviderBedrockBearer {
+			if !s.takeBedrockGatewayRoute(ctx, lr, &prov, lane.chosen.provider) {
+				return nil, nil, injections, providerDispatch{}, false
+			}
+			continue
+		}
 		if lane.chosen == nil || !providerKeyKind(lane.chosen.provider.Kind) {
 			continue
 		}
@@ -401,11 +407,11 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 			unionAllowedDomains(policy, []string{lane.key.host})
 		}
 		prov.addLocalModel(lane.key)
-		if other := prov.gatewayRouteClash(lane.key); other != "" {
+		if other := prov.gatewayRouteClash(lane.key.provider); other != "" {
 			s.refuseProviderDispatch(ctx, lr, lane.chosen.provider.Kind, providerDenial{msg: fmt.Sprintf(mpRunGatewayClash, lane.chosen.provider.ID, other)}, nil)
 			return nil, nil, injections, providerDispatch{}, false
 		}
-		if !prov.addGatewayRoute(lane.key) {
+		if !prov.addGatewayRoute(lane.key.provider) {
 			s.refuseProviderDispatch(ctx, lr, lane.chosen.provider.Kind, providerDenial{msg: fmt.Sprintf(mpRunGatewayAddress, lane.chosen.provider.ID)}, nil)
 			return nil, nil, injections, providerDispatch{}, false
 		}
