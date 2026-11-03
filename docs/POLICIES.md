@@ -600,6 +600,19 @@ What the check does and does not settle:
 
 - The file is the one `wardyn walls set` reads, and `push_rules.deny_all: true` is read like any other knob. A preset that names no limit is refused (`422` `wall_preset_invalid`).
 
+## `deny_kept_machines`
+
+`deny_kept_machines` is a limit on a governance profile, not a field of a run's policy. When it is `true`, the profile's people cannot keep a macOS VM between runs ([macOS VMs](operations/macos-vms.md#keeping-the-machine)).
+
+| Part | Behaviour |
+|---|---|
+| Default | `false` or absent. The site switch `macos_vm.allow_kept_machines`, which is off by default, decides. A profile that sets nothing changes nothing |
+| Where | A governance profile's limits (Governance, the profile editor), or a restriction or overlay that carries limits. It only turns on |
+| Composition | Any layer that sets it `true` wins; no layer turns it off |
+| Effect | A run create with `machine.keep` or `machine.resume` is refused `403` `governance_unit`, target `runs.kept_machine`, with an `authz.denied` row naming the knob `deny_kept_machines` |
+| The list | `GET /me/machines` answers `allowed: false` with `reason` `governance_unit` |
+| Not affected | A machine already kept stays listed, and its owner can still delete it |
+
 ## Approval decision scopes
 
 - An approve/deny decision on an `egress_domain` approval carries a **scope** — how far that one decision reaches.

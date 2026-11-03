@@ -598,6 +598,67 @@ A `wardyn/v1` document with `kind: Run` is a draft of one run. Its `intent` hold
 - A held tool call's approval names the agent that asked in `requested_scope.harness`; an egress approval names none, since the agents share one proxy route: the agent whose tool-approval credential the call carried, never one the request body names. The agents share one user in the sandbox, so one agent could present another's credential; every agent holds the same met rules, so that changes the name on the card and never the decision.
 - Needs a harnesses image from 0.10.0 or later: an older image's launcher has no `--tasks`.
 
+## Kept machines
+
+A kept machine is a person's macOS VM, kept on their own Mac between runs ([macOS VMs](operations/macos-vms.md#keeping-the-machine)). The refusal codes are in the [reason table](#reason-branch-on-this-never-on-errors-prose) as `kept_machine_*`.
+
+| Method | Route | Who |
+|---|---|---|
+| `CreateRun` with `Machine` | `POST /api/v1/runs` | a signed-in person, for an interactive macOS VM run on their own Mac |
+| `ListMyMachines` | `GET /api/v1/me/machines` | a signed-in person: their own machines |
+| `DeleteMyMachine` | `DELETE /api/v1/me/machines/{id}` | the machine's owner |
+| none | `GET /api/v1/machines/kept` | the super admin: every person's machines, narrowed by `?owner=` and `?runner=`; answers `machines` and `total` |
+| none | `DELETE /api/v1/machines/kept/{id}` | the super admin |
+
+The run's `machine` request field is `RunMachine`:
+
+| Field | Meaning |
+|---|---|
+| `keep` | `true` keeps this run's machine when the run stops |
+| `name` | The new machine's name, yours alone and unique among yours. Empty lets the server pick one. Only with `keep` |
+| `resume` | The kept machine this run starts from, by id or name |
+| `fresh` | With `resume`: delete what is on the machine and start it again from the Mac's current base. Only with `resume` |
+
+- `keep` and `resume` are exclusive. Both together, `fresh` without `resume`, or a bad name is `400` `kept_machine_invalid`.
+
+`GET /api/v1/me/machines` answers `MyMachines`:
+
+| Field | Meaning |
+|---|---|
+| `machines` | The caller's machines, deleting ones included. Each has `id`, `name`, `owner_subject`, `runner_id`, `runner_name`, `base`, `base_prepared_at`, `state` (`creating`, `in_use`, `kept` or `deleting`), `run_id` while a run holds it, `scrubbed`, `disk_bytes`, `created_at`, `last_used_at`, `expires_at`, and `delete_started_at` with `delete_reason` while a delete is finishing |
+| `count` | How many machines the caller keeps |
+| `limit` | The most the caller may keep: `macos_vm.max_kept_machines_per_person` |
+| `idle_days` | The site's current idle limit in days: `macos_vm.kept_machine_idle_days`. It does not move a machine's own `expires_at`, which was set at its last stop |
+| `allowed` | Whether the caller may keep another machine |
+| `reason` | When `allowed` is false, the refusal code: `kept_machine_site_off`, `governance_unit`, `kept_machine_not_your_mac` or `kept_machine_person_limit` (a resume still works) |
+| `worst_bytes` | The most disk one new kept machine can take |
+
+`GET /api/v1/runs/{id}` adds `machine` for a run that kept or resumed one. The Go client's `AgentRun` has no typed field for it, so read it as JSON:
+
+| Field | Meaning |
+|---|---|
+| `id` | The machine's id |
+| `name` | Its name |
+| `mode` | `new`, `resumed` or `fresh`: what this run did with it |
+| `keep_at_end` | `true` while the machine still exists and is kept when the run stops |
+| `state` | The machine's state now: `creating`, `in_use`, `kept` or `deleting` |
+| `scrubbed` | Whether its last stop scrubbed it |
+| `runner_name` | The Mac it is kept on |
+| `holder_run_id` | The run that holds it now, or held it last. A stop does not clear it |
+| `base` | The base it was made from |
+| `disk_bytes` | What its last stop wrote |
+| `expires_at` | When it expires if unused |
+| `deleted` | `true` when the machine no longer exists. The row is then `id`, `mode`, `scrubbed` (false) and `deleted` |
+
+- The row is the machine as it is now, shared by every run that used it. It leaves out `last_used_at`, which a resume overwrites.
+
+`DELETE /api/v1/me/machines/{id}` answers `204` once the Mac has deleted the machine, or the Mac is no longer registered. It answers `202` with the machine while the Mac is offline, and the delete finishes when the Mac is back. `DELETE /api/v1/machines/kept/{id}` answers `200`, or `202` while the Mac is offline, with `id`, `name`, `owner`, `runner_id` and `outcome` (`deleted`, `already_absent`, `deferred` or `record_only`). For both:
+
+- A machine a run holds is `409` `kept_machine_in_use`. A delete already started is `409` `kept_machine_deleting`.
+- An id that is not yours, or is no machine, is `404` `kept_machine_not_found`. The admin route answers `404` only for no machine.
+- `503` `kept_machine_delete_failed` means the Mac refused and the machine is kept. `503` `kept_machine_delete_unconfirmed` means the Mac's answer is unknown and the delete is retried.
+- A delete is audited as `machine.delete`, and an admin's as `by: admin`.
+
 ## Model providers
 
 `GetModelProviders` (`GET /api/v1/model-providers`, admin) answers a `ModelProvidersRead`: the provider records, and per provider id how many people hold a credential of their own for it. It returns configuration and counts, never a credential value. Changing providers, signing in and storing a credential stay in the console.
