@@ -191,7 +191,8 @@ const macHelperStartWait = 2 * time.Minute
 
 // waitMacVMHelper waits for the helper started for dir to make its control socket. It stops early when that
 // helper has exited (one this runnerd started), or has refused a kept machine's boot, which it records in
-// the run dir before it exits (macvm.ReadKeptRefusal); keptStartErr words that refusal.
+// the run dir before it exits (macvm.ReadKeptRefusal); keptStartErr words that refusal. A kept machine's
+// helper has cloned by the time it listens, so the disk it cloned is checked against the reservation then.
 func (c *MacVMConfig) waitMacVMHelper(ctx context.Context, dir string, runID uuid.UUID) error {
 	var exited <-chan struct{}
 	if c.helperExits != nil {
@@ -203,7 +204,7 @@ func (c *MacVMConfig) waitMacVMHelper(ctx context.Context, dir string, runID uui
 	deadline := time.Now().Add(macHelperStartWait)
 	for {
 		if fi, err := os.Stat(sock); err == nil && fi.Mode()&os.ModeSocket != 0 {
-			return nil
+			return c.keptConfirmReserve(dir, runID)
 		}
 		if code, _ := macvm.ReadKeptRefusal(dir); code != "" {
 			return fmt.Errorf("the helper refused the kept machine (%s)", code)
@@ -408,10 +409,11 @@ func (c *MacVMConfig) admitMacVM(req admission.Request) (admission.Entry, error)
 //
 //nolint:funlen // One linear assembly sequence whose rollback must stay in one scope, as createVM's.
 func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
-	man, kept, err := d.refuseMacVMStart(ctx, spec)
+	man, kept, release, err := d.refuseMacVMStart(ctx, spec)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
+	defer release()
 	// Folders are checked before anything exists, as createVM checks its mounts, and disk drives with them.
 	shares, guestMounts, disks, guestDisks, err := d.macDrives(ctx, spec)
 	if err != nil {

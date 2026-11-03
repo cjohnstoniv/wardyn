@@ -746,7 +746,7 @@ func TestKeptMachineIdleDaysDefaultToThirty(t *testing.T) {
 			t.Fatalf("idle days %d: a stopped machine expires at %v, stopped %v", days, rec.ExpiresAt, rec.LastStop)
 		}
 	}
-	if keptSaidExpired(keptIdleDays(0)).Error() != "Your machine wasn't used for 30 days, so it was deleted. Start a new one." {
+	if keptSaidExpired(keptIdleDays(0), true).Error() != "Your machine wasn't used for 30 days, so it was deleted. Start a new one." {
 		t.Fatal("the expiry sentence does not name the default")
 	}
 }
@@ -834,5 +834,238 @@ func TestMacVMHelperWaitEndsWhenTheHelperExits(t *testing.T) {
 	}
 	if _, ok := exits.Load(dir); ok {
 		t.Fatal("the wait left the run dir's exit channel behind")
+	}
+}
+
+// keptAt sets the rig's kept clock to at.
+func keptAt(r *macRig, at time.Time) { r.c.keptNow = func() time.Time { return at } }
+
+// keptRunning writes a record whose session is run, and run's folder when live, as a helper that has
+// exited before its stop was recorded (live) or a session cut short (not live) leaves it.
+func keptRunning(t *testing.T, r *macRig, run uuid.UUID, live bool, expires time.Time) (string, uuid.UUID) {
+	t.Helper()
+	id := uuid.New()
+	dir := writeKeptFolder(t, r, macvm.KeptRecord{ID: id.String(), OwnerHash: keptOwnerHash, RunnerID: "runner-a",
+		ActiveRun: run.String(), ExpiresAt: expires})
+	if live {
+		if err := os.MkdirAll(r.c.runDir(run), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir, id
+}
+
+// A machine resumed before its expiry and stopped after it is refreshed by its stop, and no sweep deletes
+// it; a stop that is not the session's own changes nothing.
+func TestKeptMachineUsedPastItsExpiryIsKept(t *testing.T) {
+	r, _ := newKeptRig(t)
+	id := uuid.New()
+	dir := keptMachine(t, r, id)
+	spec := keptSpec(id, macvm.KeptResume)
+	sb, err := r.d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := readKept(t, dir, id); rec.ActiveRun != spec.RunID.String() {
+		t.Fatalf("the resumed machine's session is %q, want %s", rec.ActiveRun, spec.RunID)
+	}
+	later := time.Now().UTC().AddDate(0, 0, 45)
+	keptAt(r, later)
+	if err := r.d.StopSandbox(context.Background(), sb.Ref); err != nil {
+		t.Fatal(err)
+	}
+	rec := readKept(t, dir, id)
+	if rec.ActiveRun != "" || !rec.LastStop.Equal(later) || !rec.ExpiresAt.Equal(later.AddDate(0, 0, 30)) {
+		t.Fatalf("the stop after the old expiry recorded %+v", rec)
+	}
+	if err := r.d.SweepKeptMachines(); err != nil || !keptExists(filepath.Join(dir, macvm.DiskFile)) {
+		t.Fatalf("the sweep after the stop: %v, disk there %v", err, keptExists(filepath.Join(dir, macvm.DiskFile)))
+	}
+	if r.c.keptStopped(&macvm.KeptRun{ID: id.String(), OwnerHash: keptOwnerHash, RunnerID: "runner-a"}, uuid.New(), nil); readKept(t, dir, id) != rec {
+		t.Fatal("another run's stop changed the record")
+	}
+}
+
+// Between a helper's exit and its stop's record, the run's folder is still there: a sweep and a resume
+// leave the machine, expired or not, and the session's own stop then records it.
+func TestKeptSweepWaitsForTheSessionsStop(t *testing.T) {
+	r, _ := newKeptRig(t)
+	run := uuid.New()
+	dir, id := keptRunning(t, r, run, true, time.Now().Add(-time.Hour))
+	if err := r.d.SweepKeptMachines(); err != nil {
+		t.Fatal(err)
+	}
+	if rec := readKept(t, dir, id); rec.ActiveRun != run.String() {
+		t.Fatalf("the sweep changed a held machine: %+v", rec)
+	}
+	if _, err := r.d.CreateSandbox(context.Background(), keptSpec(id, macvm.KeptResume)); err == nil || err.Error() != keptSaidLocked {
+		t.Fatalf("a resume of a machine whose stop is not recorded: %v", err)
+	}
+	now := time.Now().UTC()
+	keptAt(r, now)
+	r.c.keptStopped(&macvm.KeptRun{ID: id.String(), OwnerHash: keptOwnerHash, RunnerID: "runner-a"}, run, nil)
+	if rec := readKept(t, dir, id); rec.ActiveRun != "" || rec.StopKind != macvm.KeptStopHard || !rec.ExpiresAt.Equal(now.AddDate(0, 0, 30)) {
+		t.Fatalf("the session's stop recorded %+v", rec)
+	}
+}
+
+// A session cut short (its run folder gone, its stop never recorded) is ended by the sweep and its machine
+// kept, expired or not; an expired machine no session holds is still deleted.
+func TestKeptSweepRecoversAnInterruptedSession(t *testing.T) {
+	r, _ := newKeptRig(t)
+	now := time.Now().UTC()
+	keptAt(r, now)
+	cut, cutID := keptRunning(t, r, uuid.New(), false, now.Add(-time.Hour))
+	idle := writeKeptFolder(t, r, macvm.KeptRecord{ID: uuid.NewString(), OwnerHash: keptOwnerHash, RunnerID: "runner-a", ExpiresAt: now.Add(-time.Hour)})
+	if err := r.d.SweepKeptMachines(); err != nil {
+		t.Fatal(err)
+	}
+	if rec := readKept(t, cut, cutID); rec.ActiveRun != "" || !rec.ExpiresAt.Equal(now.AddDate(0, 0, 30)) {
+		t.Fatalf("the interrupted session's machine %+v", rec)
+	}
+	if keptExists(idle) {
+		t.Fatal("an expired machine no session holds was kept")
+	}
+	// A resume recovers the same way, and starts.
+	id := uuid.New()
+	dir := keptMachine(t, r, id)
+	rec := readKept(t, dir, id)
+	rec.ActiveRun, rec.ExpiresAt = uuid.NewString(), time.Now().Add(-time.Hour)
+	if err := macvm.WriteKept(dir, rec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.d.CreateSandbox(context.Background(), keptSpec(id, macvm.KeptResume)); err != nil {
+		t.Fatalf("a resume after an interrupted session: %v", err)
+	}
+}
+
+// An expired machine is said deleted only once it is gone; one its lock still holds will be deleted.
+func TestKeptExpiryIsSaidDeletedOnlyWhenGone(t *testing.T) {
+	r, _ := newKeptRig(t)
+	id := uuid.New()
+	dir := keptMachine(t, r, id)
+	keptAt(r, time.Now().UTC().AddDate(0, 0, 31))
+	spec := keptSpec(id, macvm.KeptResume)
+	said := fmt.Errorf("docker: the macOS VM did not start: %s", macvm.ErrKeptExpired)
+	unlock, err := macvm.LockKept(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.c.keptStartErr(spec, said); err == nil || err.Error() != "Your machine wasn't used for 30 days, so it expired and will be deleted." {
+		t.Fatalf("an expired machine still locked: %v", err)
+	}
+	unlock()
+	if !keptExists(dir) {
+		t.Fatal("a locked machine was deleted")
+	}
+	if _, err := r.d.CreateSandbox(context.Background(), spec); err == nil || err.Error() != "Your machine wasn't used for 30 days, so it was deleted. Start a new one." {
+		t.Fatalf("an expired machine: %v", err)
+	}
+	if keptExists(dir) {
+		t.Fatal("the expired machine is still there")
+	}
+}
+
+// keptBase sets the size of the disk the rig's base clones.
+func keptBase(t *testing.T, r *macRig, diskBytes int64) {
+	t.Helper()
+	base, err := r.c.Layout.NamedBaseDir("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	man, err := macvm.ReadManifest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	man.DiskBytes = diskBytes
+	b, _ := json.Marshal(man)
+	if err := os.WriteFile(filepath.Join(base, macvm.ManifestFile), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Two new machines that each fit but not together cannot both reserve: the second start counts the
+// first's reservation before its record exists. A dropped reservation frees its room.
+func TestKeptReservationRefusesTheSecondStart(t *testing.T) {
+	r, _ := newKeptRig(t)
+	r.c.LimitBytes = 60 << 30
+	man, err := r.d.refuseMacVMSpec(macSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := r.c.reserveKept(keptSpec(uuid.New(), macvm.KeptNew), man)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.c.reserveKept(keptSpec(uuid.New(), macvm.KeptNew), man); err == nil || !strings.HasPrefix(err.Error(), "This Mac keeps machines up to 60 GB") {
+		t.Fatalf("the second start: %v", err)
+	}
+	first()
+	release, err := r.c.reserveKept(keptSpec(uuid.New(), macvm.KeptNew), man)
+	if err != nil {
+		t.Fatalf("after the first dropped its reservation: %v", err)
+	}
+	release()
+}
+
+// A reset onto a larger base reserves the difference and is refused when that passes the limit; the
+// machine is left as it was.
+func TestKeptResetOntoALargerBaseIsRefused(t *testing.T) {
+	r, g := newKeptRig(t)
+	id := uuid.New()
+	dir := keptMachine(t, r, id)
+	r.c.LimitBytes = 60 << 30
+	keptBase(t, r, 80<<30)
+	_, spawned := g.counts()
+	if _, err := r.d.CreateSandbox(context.Background(), keptSpec(id, macvm.KeptFresh)); err == nil || !strings.HasPrefix(err.Error(), "This Mac keeps machines up to 60 GB") {
+		t.Fatalf("a reset onto a larger base: %v", err)
+	}
+	if _, spawns := g.counts(); spawns != spawned || !keptExists(filepath.Join(dir, macvm.DiskFile)) {
+		t.Fatal("a refused reset started a helper or changed the machine")
+	}
+}
+
+// A base replaced between the reservation and the helper's clone is checked once the helper has cloned:
+// a clone past the limit is refused and the new machine dropped.
+func TestKeptBaseSwappedBeforeTheCloneIsChecked(t *testing.T) {
+	r, _ := newKeptRig(t)
+	r.c.LimitBytes = 60 << 30
+	spawn := r.c.spawn
+	r.c.spawn = func(dir string) error {
+		keptBase(t, r, 80<<30) // after the reservation, before the clone
+		return spawn(dir)
+	}
+	id := uuid.New()
+	if _, err := r.d.CreateSandbox(context.Background(), keptSpec(id, macvm.KeptNew)); err == nil || !strings.HasPrefix(err.Error(), "This Mac keeps machines up to 60 GB") {
+		t.Fatalf("a clone of a larger base than reserved: %v", err)
+	}
+	dir := r.c.Layout.KeptMachineDir(id.String())
+	if keptExists(dir) || keptExists(dir+keptReserveSuffix) {
+		t.Fatal("the refused machine or its reservation was kept")
+	}
+}
+
+// A reservation whose create is gone is dropped by the sweep; inventory never lists one.
+func TestKeptSweepDropsAStaleReservation(t *testing.T) {
+	r, _ := newKeptRig(t)
+	keptMachine(t, r, uuid.New())
+	man, err := r.d.refuseMacVMSpec(macSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.New()
+	if _, err := r.c.reserveKept(keptSpec(id, macvm.KeptNew), man); err != nil {
+		t.Fatal(err)
+	}
+	res := r.c.Layout.KeptMachineDir(id.String()) + keptReserveSuffix
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(res, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if k, err := r.d.KeptMachines(); err != nil || k == nil || len(k.Machines) != 1 {
+		t.Fatalf("inventory with a reservation: %+v, %v", k, err)
+	}
+	if err := r.d.SweepKeptMachines(); err != nil || keptExists(res) {
+		t.Fatalf("the stale reservation after the sweep: %v, there %v", err, keptExists(res))
 	}
 }

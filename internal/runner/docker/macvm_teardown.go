@@ -23,7 +23,7 @@ import (
 
 // macVMStop is the macOS VM's part of a stop or a lease end: the VM is stopped (gracefully first when
 // asked) and destroyed, since a macOS VM keeps no disk past its run; a kept machine's disk is not the
-// run's, and stays (endKeptMacVM).
+// run's, and stays (keptStopped).
 func (d *Driver) macVMStop(ctx context.Context, v *vmRun, graceful bool) {
 	cfg, err := readMacRun(v.dir, v.runID)
 	if err != nil {
@@ -76,13 +76,18 @@ func (d *Driver) destroyMacVM(ctx context.Context, v *vmRun, entryID string, gra
 			return
 		}
 	}
+	// A kept machine's stop is recorded while the run folder is still there, so a sweep never reads the
+	// session as interrupted.
+	if k != nil {
+		scrub = c.keptStopped(k, v.runID, scrub)
+	}
 	if err := c.removeAll(v.dir); err != nil {
 		log.Warn("docker: delete a macOS VM run directory (pending; the orphan sweep retries)", slog.String("err", err.Error()))
 		d.recordMacOSVMDisk(v.runID, runner.MacOSVMDiskKept, runner.MacOSVMDiskRemoveFailed)
 		return
 	}
 	if k != nil {
-		d.endKeptMacVM(c, v, k, scrub)
+		d.keptMachineDisk(v.runID, scrub)
 	} else {
 		d.recordMacOSVMDisk(v.runID, runner.MacOSVMDiskRemoved, "")
 	}
