@@ -6,7 +6,7 @@
 // The Desktop tile on a background run: Watch only when the run's background_watch says open,
 // one sentence (the server's own) for every refusal, and the Files panel moved here from the Attach tile with the
 // gate it had. The tile's button comes first.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { RunBackgroundWatch, RunDetail } from "../../lib/types";
@@ -28,7 +28,7 @@ vi.mock("./run-detail/desktop-files-panel", () => ({ DesktopFilesPanel: () => <d
 import { DesktopCard } from "./run-detail-desktop";
 import { ConnectSSHCard } from "./run-detail-ssh";
 import { OperatorProvider } from "../wardyn/operator-context";
-import { UI_APPS_LANE } from "../wardyn/copy";
+import { RUN_SSH, UI_APPS_LANE } from "../wardyn/copy";
 import { DESKTOP } from "../wardyn/copy/desktop";
 import { RUN_MODE_REFUSAL } from "../../lib/run-mode-refusals";
 import { aheadByHours } from "../../lib/test-clock";
@@ -64,7 +64,13 @@ const bg = (state: RunBackgroundWatch["state"], message?: string): Partial<RunDe
 const tile = (region: HTMLElement) => region.parentElement!.parentElement!;
 const desk = () => screen.findByRole("region", { name: DESKTOP.title });
 
+// A stubbed window.open: the new tab the click opens before any request.
+let tabStub: { opener: unknown; name: string; close: ReturnType<typeof vi.fn>; location: { replace: ReturnType<typeof vi.fn> } };
+let openSpy: ReturnType<typeof vi.spyOn>;
+
 beforeEach(() => {
+  tabStub = { opener: {}, name: "", close: vi.fn(), location: { replace: vi.fn() } };
+  openSpy = vi.spyOn(window, "open").mockReturnValue(tabStub as unknown as Window);
   healthMock.mockReset();
   attachTicketMock.mockReset();
   watchTicketMock.mockReset();
@@ -73,7 +79,30 @@ beforeEach(() => {
   signInsGet.mockResolvedValue({ store: "run_disk", paused: false, can_pause: true, agent: "Claude Code" });
 });
 
+afterEach(() => openSpy.mockRestore());
+
 describe("DesktopCard: a background macOS run", () => {
+  it("Watch opens the tab before the watch ticket is minted, and closes it when the ticket is refused", async () => {
+    let fail: (e: Error) => void = () => {};
+    watchTicketMock.mockReturnValue(new Promise((_, rej) => (fail = rej)));
+    renderCard(bg("open"));
+    const d = await desk();
+    within(d).getByRole("button", { name: DESKTOP.watch }).click();
+    await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1));
+    expect(tabStub.close).not.toHaveBeenCalled();
+    fail(new Error("not allowed right now"));
+    await waitFor(() => expect(tabStub.close).toHaveBeenCalled());
+  });
+
+  it("Watch says the browser blocked the new tab, and mints no ticket, when window.open returns null", async () => {
+    openSpy.mockReturnValue(null);
+    renderCard(bg("open"));
+    const d = await desk();
+    within(d).getByRole("button", { name: DESKTOP.watch }).click();
+    expect(await within(d).findByText(RUN_SSH.POPUP_BLOCKED)).toBeInTheDocument();
+    expect(watchTicketMock).not.toHaveBeenCalled();
+  });
+
   it("open: Watch desktop first, then the kind line and the three sentences, View only in the header, no sign-ins and no Files", async () => {
     renderCard({ ...bg("open"), ui_apps: [{ name: "novnc", port: 6080 }] });
     const d = await desk();

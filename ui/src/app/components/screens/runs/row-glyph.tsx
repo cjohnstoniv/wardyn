@@ -12,6 +12,7 @@
 // that file's OWN standing rule, not an instruction to touch it here).
 import type { RowHue } from "./runs-model";
 import { cn } from "../../ui/utils";
+import { RUNS_ROW_WORD } from "../../wardyn/copy/runs-landing";
 
 export type RowGlyphKind = "dot" | "ring" | "need" | "fail" | "check" | "square-fill" | "square-outline";
 
@@ -118,6 +119,8 @@ export function glyphKindFor(hue: RowHue, word: string, state: string): RowGlyph
   // explicit: "Ended at its end time" is the square-outline shape, same as
   // any other over row — checked on the word, ahead of the state switch.
   if (word === "Ended at its end time") return "square-outline";
+  // A paused run's `state` is still RUNNING (its agent is frozen, not over), but it is not live: a static ring, no pulse.
+  if (word === RUNS_ROW_WORD.PAUSED) return "ring";
   if (state === "RUNNING") return "dot";
   if (state === "STARTING" || state === "PENDING" || state === "QUEUED") return "ring";
   if (word === "Completed") return "check";
