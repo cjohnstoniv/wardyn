@@ -354,6 +354,7 @@ func resolveKept(rows []keptRow, arg string) (keptRow, error) {
 		for i, r := range named {
 			keys[i] = r.key
 		}
+		//lint:ignore ST1005 the sentence the person reads at the terminal, as written
 		return keptRow{}, fmt.Errorf("More than one kept machine is named %s (%s). Use the key.", arg, strings.Join(keys, ", "))
 	}
 	want := strings.ReplaceAll(strings.ToLower(arg), "-", "")
