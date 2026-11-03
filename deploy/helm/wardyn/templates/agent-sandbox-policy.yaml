@@ -1,0 +1,54 @@
+{{- /*
+Experimental agent-sandbox backend (#3863). Rendered ONLY when k8s.agentSandbox.enabled and k8s.enabled are
+both on; the default render has no admissionregistration object at all.
+
+The agent pod's scheduling gate (wardyn.dev/verify) is what keeps it unscheduled until wardynd has read the
+pod back and checked it. The agent-sandbox controller, not wardynd, creates that pod from the Sandbox's
+template, so a mutating admission hook (or a controller fault) that dropped the gate at create would start
+the pod before the check. This policy refuses such a create: a Sandbox-owned pod in the runs namespace must
+carry the gate. failurePolicy Fail, so an unavailable policy engine refuses the create too.
+
+Match conditions and expression are the ones lane 0 passed on kind v1.30 (a hook dropping the gate: denied;
+a normal Sandbox: admitted; a replacement of a normal pod: admitted; a replacement under the hook: denied; a
+plain non-Sandbox pod in the same namespace: unaffected). The controller retries a refused create, so a
+denied pod shows as repeated SandboxPodCreateFailed events on the Sandbox, not as a crash.
+
+ValidatingAdmissionPolicy is GA in Kubernetes 1.30. The names carry the release fullname because both objects
+are cluster-scoped.
+*/ -}}
+{{- if and .Values.k8s.enabled (.Values.k8s.agentSandbox | default dict).enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "wardyn.fullname" . }}-sandbox-pod-gate
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+  matchConditions:
+    - name: owned-by-sandbox
+      expression: "has(object.metadata.ownerReferences) && object.metadata.ownerReferences.exists(o, o.kind == 'Sandbox' && o.apiVersion.startsWith('agents.x-k8s.io/'))"
+  validations:
+    - expression: "has(object.spec.schedulingGates) && object.spec.schedulingGates.exists(g, g.name == 'wardyn.dev/verify')"
+      message: "a Sandbox-owned pod in a Wardyn runs namespace must carry the wardyn.dev/verify scheduling gate"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "wardyn.fullname" . }}-sandbox-pod-gate
+  labels:
+    {{- include "wardyn.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "wardyn.fullname" . }}-sandbox-pod-gate
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Values.k8s.runsNamespace | default .Release.Namespace | quote }}
+{{- end }}

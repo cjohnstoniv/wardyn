@@ -408,6 +408,14 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   - With no ResourceQuota in the runs namespace, it is also how wardynd measures the cluster at boot to propose the cluster runner's limits. With neither, the runner gets none and takes no run until an admin sets them. The kind quickstart turns it on for that.
   - Separately and always on, the runner Role has `list` on `resourcequotas`: a run that cannot fit the runs namespace's quota is refused before it is created (`namespace_quota_exceeded`),
     - and one that would fill a quota to 90% or more is warned; a quota wardynd may not read is reported as unreadable, never as empty.
+- `k8s.agentSandbox.enabled` (`WARDYN_K8S_AGENT_SANDBOX`, default `false`, **experimental**): creates each run's agent pod through a [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) `Sandbox` instead of directly.
+  - Off renders exactly what the chart rendered before the key existed: no extra RBAC, policy, CRD or env.
+  - Tested against agent-sandbox v1.0.9 only (beta `agents.x-k8s.io/v1beta1`). Install its controller and CRD first: this chart installs neither.
+  - Needs `k8s.enabled=true` and an enforced NetworkPolicy; the chart refuses `k8s.allowUnenforcedNetPol` and `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL`.
+  - Adds `patch` on `pods` and `create`, `get`, `list`, `delete` on `sandboxes.agents.x-k8s.io` to the runner Role, nothing to the ClusterRole.
+  - Also renders a `ValidatingAdmissionPolicy` and binding (`<release>-wardyn-sandbox-pod-gate`) that refuse a `Sandbox`-owned pod in the runs namespace without the `wardyn.dev/verify` scheduling gate.
+    - It needs Kubernetes 1.30+ and fails closed. It covers every `Sandbox`-owned pod in that namespace, so give the namespace to Wardyn alone.
+    - A refused create is retried by the controller and shows as `SandboxPodCreateFailed` events on the `Sandbox`.
 - `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`).
   - Ships at 1000m/2048Mi so a run fits a shared node; set 2000/4096 to keep the pre-0.8.6 size.
   - `runner.sandbox.proxyResources` sizes each run's `wardyn-proxy` sidecar (500m/256Mi).

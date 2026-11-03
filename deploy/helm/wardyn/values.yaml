@@ -691,6 +691,16 @@ k8s:
   # wardynd measure the cluster at boot (the nodes' allocatable CPU, memory and ephemeral storage) and propose
   # the cluster runner's limits; without either it sets none (deploy/kind/quickstart.sh turns it on for that).
   readNodes: false
+  # EXPERIMENTAL (#3863). Create each run's agent pod through a kubernetes-sigs/agent-sandbox `Sandbox`
+  # object instead of directly (WARDYN_K8S_AGENT_SANDBOX). Off by default, and off renders exactly what the
+  # chart rendered before this key existed: no extra RBAC, no extra policy, no extra env. On adds a
+  # `pods: patch` verb and `create/get/list/delete` on `sandboxes.agents.x-k8s.io` to the runner Role, and a
+  # ValidatingAdmissionPolicy that refuses a Sandbox-owned pod in the runs namespace unless it carries the
+  # `wardyn.dev/verify` scheduling gate (needs Kubernetes 1.30+, where that API is GA). The chart never
+  # installs the agent-sandbox controller or its CRD: the operator does, at a version Wardyn was tested with.
+  # Needs k8s.enabled=true and an enforced NetworkPolicy; the chart refuses to render otherwise.
+  agentSandbox:
+    enabled: false
   # Confinement-Class -> RuntimeClass NAME pins (WARDYN_CONFINEMENT_MAP's k8s
   # form, e.g. CC2=gvisor;CC3=kata-qemu; the chart README has a Kata example). A k8s RuntimeClass object name
   # carries no platform convention Wardyn can guess (unlike docker's runtime
