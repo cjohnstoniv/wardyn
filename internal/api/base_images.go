@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -227,10 +228,11 @@ func imagePrefixOverlaps(grantValue, want string) bool {
 // imageSpellings lists the spellings of one image reference that name the same
 // registry and image, for the DENY side only (an allow is compared as typed):
 // the reference as typed; with its registry host lowercased, ":443" stripped and
-// "index.docker.io" read as "docker.io"; and, for a reference with no registry
-// host or a Docker Hub one, its fully qualified Docker Hub form
-// ("nginx:1" is "docker.io/library/nginx:1"), tag and digest kept. Without it a
-// deny on "registry.example.com/team/*" is walked around by
+// the Docker Hub registry aliases read as "docker.io"; for a reference with no
+// registry host or a Docker Hub one, its fully qualified Docker Hub form
+// ("nginx:1" is "docker.io/library/nginx:1"), tag and digest kept; and the two
+// same-image forms of imageSameImageForms (digest alone, implicit ":latest").
+// Without it a deny on "registry.example.com/team/*" is walked around by
 // "REGISTRY.example.com/team/x" or "registry.example.com:443/team/x".
 func imageSpellings(ref string) []string {
 	ref = strings.TrimSpace(ref)
@@ -242,7 +244,7 @@ func imageSpellings(ref string) []string {
 	if hub, ok := imageDockerHubForm(norm); ok && hub != norm && hub != ref {
 		out = append(out, hub)
 	}
-	return out
+	return imageAppendForms(out, out[len(out)-1])
 }
 
 // imageDenyForm is a deny row's value read the same way imageSpellings reads a
@@ -256,8 +258,49 @@ func imageDenyForm(v string) string {
 	return v
 }
 
+// imageDenyForms is every form a deny row (or a restriction) value answers to:
+// as stored, imageDenyForm, and imageSameImageForms of that. Only an exact
+// reference gains the extra forms; a prefix pattern never parses.
+func imageDenyForms(v string) []string {
+	out := []string{v}
+	if d := imageDenyForm(v); d != v {
+		out = append(out, d)
+	}
+	return imageAppendForms(out, out[len(out)-1])
+}
+
+// imageAppendForms adds imageSameImageForms(qualified) to out, skipping repeats.
+func imageAppendForms(out []string, qualified string) []string {
+	for _, f := range imageSameImageForms(qualified) {
+		if !slices.Contains(out, f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// imageSameImageForms are the other ways one exact reference names the same
+// image: with a digest, the digest alone (a runtime pulls by digest, so
+// "app:1@sha256:X" is "app@sha256:X"); with neither tag nor digest, the
+// implicit ":latest". Any registry. Nothing for a value that is not a
+// reference.
+func imageSameImageForms(ref string) []string {
+	named, err := reference.ParseNormalizedNamed(ref)
+	if err != nil {
+		return nil
+	}
+	if d, ok := named.(reference.Digested); ok {
+		return []string{reference.TrimNamed(named).String() + "@" + d.Digest().String()}
+	}
+	if _, ok := named.(reference.Tagged); !ok {
+		return []string{reference.TagNameOnly(named).String()}
+	}
+	return nil
+}
+
 // imageNormalHost lowercases the registry host of ref (its first segment, when
-// that reads as a host), drops a ":443" port and maps index.docker.io to
+// that reads as a host), drops a ":443" port and maps the Docker Hub registry
+// aliases (index.docker.io, registry-1.docker.io, registry.hub.docker.com) to
 // docker.io. The path, tag and digest are left as typed.
 func imageNormalHost(ref string) string {
 	host, rest, hasRest := strings.Cut(ref, "/")
@@ -265,7 +308,8 @@ func imageNormalHost(ref string) string {
 		return ref
 	}
 	host = strings.TrimSuffix(strings.ToLower(host), ":443")
-	if host == "index.docker.io" {
+	switch host {
+	case "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com":
 		host = "docker.io"
 	}
 	return host + "/" + rest

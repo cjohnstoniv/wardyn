@@ -781,7 +781,10 @@ func (b *capBatch) isRestricted(ctx context.Context, kind, value string) (bool, 
 		}
 		b.restricted, b.restrictLoaded = rs, true
 	}
-	return b.restricted[kind][strings.TrimSpace(value)], nil
+	if b.restricted[kind][strings.TrimSpace(value)] {
+		return true, nil
+	}
+	return kind == capImage && imageRestrictedSpelling(value, b.restricted[kind]), nil
 }
 
 // namedAllow reports whether the caller holds an allow naming value itself,

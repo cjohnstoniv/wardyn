@@ -306,6 +306,29 @@ func TestImagePrefixNeverSatisfiesARestriction(t *testing.T) {
 			})
 		}
 	}
+	// A Hub restriction is the same image under every Hub spelling: a prefix
+	// allow written for the qualified or aliased registry opens none of them.
+	for _, tc := range []struct{ name, restrict, prefix, want string }{
+		{"short restriction, docker.io prefix, qualified want", "nginx:1", "docker.io/library/*", "docker.io/library/nginx:1"},
+		{"short restriction, index.docker.io prefix, aliased want", "nginx:1", "index.docker.io/library/*", "index.docker.io/library/nginx:1"},
+		{"short restriction, docker.io prefix, other tag", "nginx:1", "docker.io/library/*", "docker.io/library/nginx:2"},
+		{"short restriction, index.docker.io prefix, other tag", "nginx:1", "index.docker.io/library/*", "index.docker.io/library/nginx:2"},
+		{"qualified restriction, prefix, short want", "docker.io/library/nginx:1", "docker.io/library/*", "nginx:1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &capStore{
+				grants:     []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capImage, tc.prefix, types.CapabilityAllow)},
+				enf:        map[string]bool{capImage: true},
+				restricted: map[string]map[string]bool{capImage: {tc.restrict: true}},
+			}
+			if ok, err := capServer(st).capGranted(memberCtx(nil), capImage, tc.want); err != nil || ok {
+				t.Errorf("capGranted(%q) = %v, %v; want refused", tc.want, ok, err)
+			}
+			if ok, err := capServer(st).capAllowedForSub(memberCtx(nil), "sub-x", "", capImage, tc.want); err != nil || ok {
+				t.Errorf("capAllowedForSub(%q) = %v, %v; want refused", tc.want, ok, err)
+			}
+		})
+	}
 	// The sibling the restriction does not name is covered by the prefix alone.
 	st := &capStore{
 		grants:     []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capImage, imgPrefix, types.CapabilityAllow)},
@@ -427,6 +450,32 @@ func TestImageDenyCoversOtherSpellings(t *testing.T) {
 		{"prefix allow written with :443, deny without", []types.CapabilityGrant{
 			grant(types.CapabilitySubjectAll, "", capImage, "registry.example.com:443/team/*", types.CapabilityAllow), denyTeam},
 			"registry.example.com:443/team/app:1", false},
+		{"exact deny nginx:1 covers registry-1.docker.io", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "nginx:1", types.CapabilityDeny)}, "registry-1.docker.io/library/nginx:1", false},
+		{"exact deny nginx:1 covers registry.hub.docker.com", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "nginx:1", types.CapabilityDeny)}, "registry.hub.docker.com/library/nginx:1", false},
+		{"library deny covers registry.hub.docker.com", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "docker.io/library/*", types.CapabilityDeny)}, "registry.hub.docker.com/library/x:1", false},
+		{"library deny covers registry-1.docker.io", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "docker.io/library/*", types.CapabilityDeny)}, "registry-1.docker.io/library/x:1", false},
+		{"registry-1 deny covers short name", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "registry-1.docker.io/library/nginx:1", types.CapabilityDeny)}, "nginx:1", false},
+		{"digest deny covers tag plus digest, Hub", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "nginx@"+imgDigest, types.CapabilityDeny)}, "nginx:1@" + imgDigest, false},
+		{"digest deny covers tag plus digest, other registry", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "registry.example.com/team/app@"+imgDigest, types.CapabilityDeny)}, "registry.example.com/team/app:1@" + imgDigest, false},
+		{"tag plus digest deny covers digest alone", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "registry.example.com/team/app:1@"+imgDigest, types.CapabilityDeny)}, "registry.example.com/team/app@" + imgDigest, false},
+		{"untagged deny covers :latest, other registry", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "registry.example.com/team/app", types.CapabilityDeny)}, "registry.example.com/team/app:latest", false},
+		{"untagged deny covers :latest, Hub", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "nginx", types.CapabilityDeny)}, "nginx:latest", false},
+		{":latest deny covers untagged, other registry", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "registry.example.com/team/app:latest", types.CapabilityDeny)}, "registry.example.com/team/app", false},
+		{":latest deny covers untagged, Hub", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "docker.io/library/nginx:latest", types.CapabilityDeny)}, "nginx", false},
+		{"untagged deny leaves another tag", []types.CapabilityGrant{allowAll,
+			grant(types.CapabilitySubjectAll, "", capImage, "registry.example.com/team/app", types.CapabilityDeny)}, "registry.example.com/team/app:2", true},
 		// An allow covers only the spelling written.
 		{"allow prefix is not read as a capital host", []types.CapabilityGrant{
 			grant(types.CapabilitySubjectAll, "", capImage, imgPrefix, types.CapabilityAllow)}, "REGISTRY.example.com/team/app:1", false},
@@ -462,11 +511,16 @@ func TestImageSpellings(t *testing.T) {
 	}{
 		{"registry.example.com/team/app:1", []string{"registry.example.com/team/app:1"}},
 		{"REGISTRY.example.com:443/team/app:1", []string{"REGISTRY.example.com:443/team/app:1", "registry.example.com/team/app:1"}},
-		{"nginx", []string{"nginx", "docker.io/library/nginx"}},
+		{"nginx", []string{"nginx", "docker.io/library/nginx", "docker.io/library/nginx:latest"}},
 		{"library/nginx:1", []string{"library/nginx:1", "docker.io/library/nginx:1"}},
-		{"index.docker.io/library/nginx", []string{"index.docker.io/library/nginx", "docker.io/library/nginx"}},
+		{"index.docker.io/library/nginx:1", []string{"index.docker.io/library/nginx:1", "docker.io/library/nginx:1"}},
+		{"registry-1.docker.io/library/nginx:1", []string{"registry-1.docker.io/library/nginx:1", "docker.io/library/nginx:1"}},
+		{"registry.hub.docker.com/library/nginx:1", []string{"registry.hub.docker.com/library/nginx:1", "docker.io/library/nginx:1"}},
 		{"nginx@" + imgDigest, []string{"nginx@" + imgDigest, "docker.io/library/nginx@" + imgDigest}},
-		{"localhost:5000/app", []string{"localhost:5000/app"}},
+		{"nginx:1@" + imgDigest, []string{"nginx:1@" + imgDigest, "docker.io/library/nginx:1@" + imgDigest, "docker.io/library/nginx@" + imgDigest}},
+		{"registry.example.com/team/app:1@" + imgDigest, []string{"registry.example.com/team/app:1@" + imgDigest, "registry.example.com/team/app@" + imgDigest}},
+		{"registry.example.com/team/app", []string{"registry.example.com/team/app", "registry.example.com/team/app:latest"}},
+		{"localhost:5000/app", []string{"localhost:5000/app", "localhost:5000/app:latest"}},
 	} {
 		got := imageSpellings(tc.ref)
 		if strings.Join(got, "|") != strings.Join(tc.want, "|") {
