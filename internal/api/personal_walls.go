@@ -587,7 +587,7 @@ func runWallPresetView(r *http.Request, run types.AgentRun) *client.RunWallPrese
 // unstoppablePushWarning is the run warning for a run whose effective capability list leaves out
 // code_write on an install whose git token broker is off: the token goes into the sandbox, where
 // nothing holds it to the list, so its pushes cannot be stopped.
-const unstoppablePushWarning = "pushes can't be stopped on this install: this run's capabilities leave out code_write, " +
+const unstoppablePushWarning = "Pushes can't be stopped on this install: this run's capabilities leave out code_write, " +
 	"but the git token broker is off, so a git token in the sandbox can still push"
 
 // wallsCapabilityRefusal is why a run's provider capabilities are not narrowed to its owner's walls:
