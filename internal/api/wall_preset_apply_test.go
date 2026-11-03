@@ -226,7 +226,7 @@ func TestWallPresetEditAfterLaunch(t *testing.T) {
 	if refusal != nil {
 		t.Fatalf("launch: %+v", refusal)
 	}
-	before, err := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: stored.ID})
+	before, err := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: stored.ID}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,17 +235,20 @@ func TestWallPresetEditAfterLaunch(t *testing.T) {
 	edited := stored
 	edited.Spec, edited.Version = types.PersonalWallsSpec{DeniedDomains: wallsList("other.example")}, 2
 	e.wp.presets[stored.ID] = edited
-	after, err := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: stored.ID})
+	after, err := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: stored.ID}, nil)
 	if err != nil || jsonEqual(before, after) {
 		t.Errorf("queue ref before %s after the edit %s (%v), want them to differ", before, after, err)
 	}
+	if pinned, err := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: stored.ID}, frozen); err != nil || !jsonEqual(before, pinned) {
+		t.Errorf("queue ref from the frozen copy after the edit = %s (%v), want the launch's %s: the copy is recorded, never a second read", pinned, err, before)
+	}
 	delete(e.wp.presets, stored.ID)
-	gone, err := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: stored.ID})
+	gone, err := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: stored.ID}, nil)
 	if err != nil || !strings.Contains(string(gone), `"wall_preset_gone":true`) {
 		t.Errorf("queue ref after the delete = %s (%v), want wall_preset_gone", gone, err)
 	}
-	builtin, _ := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: types.WallPresetSealed})
-	if again, _ := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: types.WallPresetSealed}); !jsonEqual(builtin, again) {
+	builtin, _ := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: types.WallPresetSealed}, nil)
+	if again, _ := e.srv.queuePolicyRef(ctx, createRunRequest{WallPreset: types.WallPresetSealed}, nil); !jsonEqual(builtin, again) {
 		t.Errorf("a built-in's queue ref moved: %s then %s", builtin, again)
 	}
 

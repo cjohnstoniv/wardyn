@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -79,5 +80,88 @@ func TestWallPresetPGSealAndMint(t *testing.T) {
 	if w := doSSO(t, decider, http.MethodPost, "/api/v1/approvals/"+ap.ID.String()+"/approve", e.alice, `{}`); w.Code != http.StatusForbidden ||
 		wireReason(t, w) != reasonWallPresetHost {
 		t.Errorf("approving a host the preset denies: %d %s, want 403 %s", w.Code, w.Body, reasonWallPresetHost)
+	}
+}
+
+// queueRacePreset is a stored organisation preset that refuses every push, and the edit that a race
+// lands between the queue's check and the read it guards: version 2, the push refusal removed.
+func queueRacePreset(t *testing.T, e *queueEnv) (types.WallPreset, func()) {
+	t.Helper()
+	on := true
+	p, err := e.pg.CreateWallPreset(context.Background(), types.WallPreset{ID: uuid.NewString(), Scope: types.WallPresetScopeOrg,
+		Name: "No pushes", UpdatedBy: "sub-admin", Spec: types.PersonalWallsSpec{DeniedDomains: wallsList("evil.example"),
+			PushRules: &types.PersonalWallsPushRules{DenyAll: &on}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	return p, func() {
+		once.Do(func() {
+			widened := p
+			widened.Spec = types.PersonalWallsSpec{DeniedDomains: wallsList("evil.example")}
+			if _, err := e.pg.UpdateWallPreset(context.Background(), widened, 1, nil); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+}
+
+// TestPG_QueueWallPresetEditedAfterTheEnqueueFold: the preset is edited after the create's fold froze
+// version 1 and before the queue row is written. The row records the version the run was reviewed
+// under, never a second read, so the start sees the edit and ends the run queue_policy_changed.
+func TestPG_QueueWallPresetEditedAfterTheEnqueueFold(t *testing.T) {
+	e := newQueueEnv(t)
+	p, edit := queueRacePreset(t, e)
+	e.srv.queueRace = func(point string) {
+		if point == queueRaceEnqueueAfterFold {
+			edit()
+		}
+	}
+	pool := e.cappedPool("Busy", 1)
+	occupant := e.occupy(pool)
+	queued := e.queuedLaunch(e.person, pool, `,"wall_preset":"`+p.ID+`"`)
+	entry, err := e.pg.GetRunQueueEntry(context.Background(), queued.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ref struct {
+		Version int `json:"wall_preset_version"`
+	}
+	if err := json.Unmarshal(entry.PolicyRef, &ref); err != nil || ref.Version != 1 {
+		t.Errorf("policy_ref = %s (%v), want wall_preset_version 1, the version the fold froze", entry.PolicyRef, err)
+	}
+	if r := e.run(queued.ID); r.WallPreset == nil || r.WallPreset.Version != 1 || !r.WallPreset.Spec.DeniesAllPushes() {
+		t.Errorf("the queued run's copy = %+v, want version 1 refusing every push", r.WallPreset)
+	}
+	e.free(occupant)
+	got := e.waitFailed(queued.ID)
+	if got.StatusDetail != "queue: queue_policy_changed" {
+		t.Errorf("a run whose preset was edited before its queue row = %s %q, want queue_policy_changed", got.State, got.StatusDetail)
+	}
+}
+
+// TestPG_QueueWallPresetEditedAfterTheStartPrecheck: the preset is edited after the start's check of
+// the reference passed and before its fold reads the preset again. The start compares what the fold
+// froze with the reference before anything is minted or written, so the run ends queue_policy_changed
+// and never starts with pushes permitted.
+func TestPG_QueueWallPresetEditedAfterTheStartPrecheck(t *testing.T) {
+	e := newQueueEnv(t)
+	p, edit := queueRacePreset(t, e)
+	e.srv.queueRace = func(point string) {
+		if point == queueRaceStartAfterPrecheck {
+			edit()
+		}
+	}
+	pool := e.cappedPool("Busy", 1)
+	occupant := e.occupy(pool)
+	queued := e.queuedLaunch(e.person, pool, `,"wall_preset":"`+p.ID+`"`)
+	e.free(occupant)
+	got := e.waitFailed(queued.ID)
+	if got.StatusDetail != "queue: queue_policy_changed" || got.SPIFFEID != "" {
+		t.Errorf("a run whose preset was edited between the start's check and its fold = %s %q (identity %q), want queue_policy_changed and nothing minted",
+			got.State, got.StatusDetail, got.SPIFFEID)
+	}
+	if got.WallPreset == nil || got.WallPreset.Version != 1 || !got.WallPreset.Spec.DeniesAllPushes() {
+		t.Errorf("the run's copy = %+v, want the reviewed version 1 kept, never the edit", got.WallPreset)
 	}
 }

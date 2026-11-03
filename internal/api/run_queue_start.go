@@ -213,9 +213,10 @@ func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 	if end != nil {
 		return end
 	}
-	if end := s.queuePolicyUnchanged(st, req); end != nil {
+	if end := s.queuePolicyUnchanged(st, req, nil); end != nil {
 		return end
 	}
+	s.queueRaceAt(queueRaceStartAfterPrecheck)
 	reqCC, refusal := runRequestEnums(req)
 	if refusal.write(s, st.cw, st.r) {
 		return st.refusalEnd()
@@ -238,6 +239,11 @@ func (s *Server) runQueuedStart(st *queuedStart) *queueEnd {
 		}
 	}
 	st.f = f
+	// The fold read the wall preset again: it starts with the copy it froze only if that is the one the
+	// run was reviewed under, checked before anything is minted or written.
+	if end := s.queuePolicyUnchanged(st, req, f.source.wallPreset); end != nil {
+		return end
+	}
 	if end := s.queueNarrowOnly(st); end != nil {
 		return end
 	}
@@ -406,10 +412,11 @@ func sameUnit(ceiling governanceCeiling, recorded *uuid.UUID) bool {
 	return ceiling.Unit.ID == *recorded
 }
 
-// queuePolicyUnchanged is step 5 (Q7-A): the stored policy or launch preset the run was reviewed under
-// is the one it would start under. An edit fails the run, so nothing starts that nobody reviewed.
-func (s *Server) queuePolicyUnchanged(st *queuedStart, req createRunRequest) *queueEnd {
-	now, err := s.queuePolicyRef(st.ctx, req)
+// queuePolicyUnchanged is step 5 (Q7-A): the stored policy, launch preset or wall preset the run was
+// reviewed under is the one it would start under. An edit fails the run, so nothing starts that nobody
+// reviewed. frozen is the wall preset the start's fold froze (queuePolicyRef), nil before the fold.
+func (s *Server) queuePolicyUnchanged(st *queuedStart, req createRunRequest, frozen *types.WallPresetOnRun) *queueEnd {
+	now, err := s.queuePolicyRef(st.ctx, req, frozen)
 	if err != nil {
 		return &queueEnd{hint: queueStartFailedHint}
 	}
