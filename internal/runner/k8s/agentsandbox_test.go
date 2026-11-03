@@ -95,13 +95,21 @@ func controllerMaking(t *testing.T, mutate func(*corev1.Pod)) sandboxAnswer {
 	}
 }
 
-// applyAPIDefaults sets what kind v1.30's API server and admission added to the gated pod.
+// applyAPIDefaults sets what kind v1.30's API server and admission added to the gated pod. The
+// API server defaults a container's pull policy and termination message fields only where they are
+// empty: the stage-secrets init container keeps the FallbackToLogsOnError Wardyn sets.
 func applyAPIDefaults(pod *corev1.Pod) {
 	for _, cs := range [][]corev1.Container{pod.Spec.InitContainers, pod.Spec.Containers} {
 		for i := range cs {
-			cs[i].ImagePullPolicy = corev1.PullIfNotPresent
-			cs[i].TerminationMessagePath = corev1.TerminationMessagePathDefault
-			cs[i].TerminationMessagePolicy = corev1.TerminationMessageReadFile
+			if cs[i].ImagePullPolicy == "" {
+				cs[i].ImagePullPolicy = corev1.PullIfNotPresent
+			}
+			if cs[i].TerminationMessagePath == "" {
+				cs[i].TerminationMessagePath = corev1.TerminationMessagePathDefault
+			}
+			if cs[i].TerminationMessagePolicy == "" {
+				cs[i].TerminationMessagePolicy = corev1.TerminationMessageReadFile
+			}
 		}
 	}
 	grace, priority, preempt := int64(30), int32(0), corev1.PreemptLowerPriority
@@ -423,6 +431,11 @@ func TestAgentSandbox_ReadBackRefusesEveryChangedField(t *testing.T) {
 		}, "spec.containers[sidecar]"},
 		{"init image", func(p *corev1.Pod) { stage(p).Image = "attacker/stage:1" }, "spec.initContainers[" + stageAgentSecretsName + "].image"},
 		{"init command", func(p *corev1.Pod) { stage(p).Command = []string{"true"} }, "spec.initContainers[" + stageAgentSecretsName + "].command"},
+		{"init args added", func(p *corev1.Pod) { stage(p).Args = []string{"-x"} }, "spec.initContainers[" + stageAgentSecretsName + "].args[0]"},
+		{"init mount dropped", func(p *corev1.Pod) { c := stage(p); c.VolumeMounts = c.VolumeMounts[:len(c.VolumeMounts)-1] }, "spec.initContainers[" + stageAgentSecretsName + "].volumeMounts"},
+		{"init source mount made writable", func(p *corev1.Pod) { stage(p).VolumeMounts[0].ReadOnly = false }, "spec.initContainers[" + stageAgentSecretsName + "].volumeMounts[" + agentSecretsSourceVolume + "].readOnly"},
+		{"init securityContext privileged", func(p *corev1.Pod) { stage(p).SecurityContext.Privileged = boolPtr(true) }, "spec.initContainers[" + stageAgentSecretsName + "].securityContext.privileged"},
+		{"init terminationMessagePolicy", func(p *corev1.Pod) { stage(p).TerminationMessagePolicy = corev1.TerminationMessageReadFile }, "spec.initContainers[" + stageAgentSecretsName + "].terminationMessagePolicy"},
 		{"init container added", func(p *corev1.Pod) {
 			p.Spec.InitContainers = append(p.Spec.InitContainers, corev1.Container{Name: "injected", Image: "x"})
 		}, "spec.initContainers[injected]"},

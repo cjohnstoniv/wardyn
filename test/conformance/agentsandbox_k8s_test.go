@@ -189,8 +189,9 @@ func agentSandboxRunner(t *testing.T, e *asEnv) runner.Runner {
 
 func asPodName(runID uuid.UUID) string { return "wardyn-agent-" + runID.String() }
 
-// startRun creates a run with the conformance agent image; a created run is killed at cleanup.
-func (e *asEnv) startRun(ctx context.Context, t *testing.T, r runner.Runner, runID uuid.UUID) (runner.Sandbox, error) {
+// startRun creates a run with the conformance agent image, changed by each mod; a created run is
+// killed at cleanup.
+func (e *asEnv) startRun(ctx context.Context, t *testing.T, r runner.Runner, runID uuid.UUID, mods ...func(*runner.SandboxSpec)) (runner.Sandbox, error) {
 	t.Helper()
 	caps, err := r.Capabilities(ctx)
 	if err != nil {
@@ -206,6 +207,9 @@ func (e *asEnv) startRun(ctx context.Context, t *testing.T, r runner.Runner, run
 		Labels:           map[string]string{"wardyn.conformance": "true"},
 		ProxyConfig:      conformance.LoadableProxyConfig(),
 		Resources:        runner.Resources{CPUMillis: 250, MemoryMiB: 128},
+	}
+	for _, mod := range mods {
+		mod(&spec)
 	}
 	sb, err := r.CreateSandbox(ctx, spec)
 	if err == nil {
@@ -415,6 +419,38 @@ func TestAgentSandboxBackendIsReallyOn(t *testing.T) {
 	}
 	if sb.GetUID() != owner.UID {
 		t.Fatalf("the pod's controller UID %s is not the run's Sandbox (%s)", owner.UID, sb.GetUID())
+	}
+	if len(pod.Spec.SchedulingGates) != 0 {
+		t.Fatalf("the run started but its pod still carries %v", pod.Spec.SchedulingGates)
+	}
+}
+
+// TestAgentSandboxStagedSecretStarts: a run with a delivered secret file has the stage-secrets init
+// container, which sets terminationMessagePolicy itself; the real API server keeps that value, so the
+// read-back passes and the run starts.
+func TestAgentSandboxStagedSecretStarts(t *testing.T) {
+	requireAgentSandbox(t)
+	e := newASEnv(t)
+	r := agentSandboxRunner(t, e)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	runID := uuid.New()
+	secret := func(s *runner.SandboxSpec) {
+		s.ManagedFiles = []runner.ManagedFile{{Path: runner.ComponentSecretDir + "/probe", Mode: runner.ComponentSecretFileMode,
+			AgentOwned: true, Content: []byte("probe-secret")}}
+	}
+	if _, err := e.startRun(ctx, t, r, runID, secret); err != nil {
+		t.Fatalf("CreateSandbox with a delivered secret file: %v", err)
+	}
+	pod, err := e.cs.CoreV1().Pods(e.ns).Get(ctx, asPodName(runID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("read the run's agent pod: %v", err)
+	}
+	if len(pod.Spec.InitContainers) != 1 || pod.Spec.InitContainers[0].Name != "stage-secrets" {
+		t.Fatalf("the run's pod has init containers %+v, want stage-secrets alone", pod.Spec.InitContainers)
+	}
+	if got := pod.Spec.InitContainers[0].TerminationMessagePolicy; got != corev1.TerminationMessageFallbackToLogsOnError {
+		t.Fatalf("stage-secrets terminationMessagePolicy = %q, want %q", got, corev1.TerminationMessageFallbackToLogsOnError)
 	}
 	if len(pod.Spec.SchedulingGates) != 0 {
 		t.Fatalf("the run started but its pod still carries %v", pod.Spec.SchedulingGates)

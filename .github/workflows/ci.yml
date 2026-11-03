@@ -1394,7 +1394,7 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || startsWith(github.head_ref, 'train/')) }}
     runs-on: ubuntu-26.04
     # Until measured: conformance-k8s's 35 (the Makefile's 30m suite timeout plus the bring-up) plus 10 for
-    # the controller fetch, two trivy scans, its install, the policies, can-i and six real-pod cases.
+    # the controller fetch, two trivy scans, its install, the policies, can-i and seven real-pod cases.
     timeout-minutes: 45
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -1656,7 +1656,8 @@ jobs:
           out=test/reports/go/conformance-k8s/test-output.json
           fail=0
           for t in TestAgentSandboxBackendIsReallyOn TestAgentSandboxNetworkPolicyFirst TestAgentSandboxSquatterPodIsRefused \
-                   TestAgentSandboxGoneAfterTeardown TestAgentSandboxPodReplacedOutsideWardynEndsTheRun TestAgentSandboxAdmission; do
+                   TestAgentSandboxGoneAfterTeardown TestAgentSandboxPodReplacedOutsideWardynEndsTheRun TestAgentSandboxAdmission \
+                   TestAgentSandboxStagedSecretStarts; do
             if grep -qF "\"Action\":\"pass\",\"Package\":\"github.com/cjohnstoniv/wardyn/test/conformance\",\"Test\":\"$t\"" "$out"; then
               echo "passed: $t"
             else
