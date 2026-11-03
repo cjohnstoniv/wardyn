@@ -824,18 +824,13 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		return Manifest{}, false, errors.New("macvm: a tools update needs an engine, a power source, a stage 2 and a root")
 	}
 	o.setDefaults()
-	base := o.Layout.BaseDir(o.Slot)
-	kept := o.KeptDir != ""
-	var keptRec KeptRecord
-	if kept {
-		var unlock func()
-		var err error
-		if base, keptRec, unlock, err = o.lockKept(); err != nil {
-			return Manifest{}, false, err
-		}
-		// Dropped last: the old generation is deleted under the lock.
-		defer unlock()
+	site, unlock, err := o.openSite()
+	if err != nil {
+		return Manifest{}, false, err
 	}
+	// Dropped last: the old generation is deleted under a kept machine's lock.
+	defer unlock()
+	base := site.dir
 	nb, done, err := beginUpdate(ctx, base, o.Log)
 	if err != nil {
 		return Manifest{}, false, err
@@ -879,12 +874,7 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 		return m, false, err
 	}
 	o.Progress(PrepareEvent{Phase: PhaseTools})
-	var id Identity
-	if kept {
-		id, err = cloneKeptStaging(o.Engine, base, nb)
-	} else {
-		id, err = cloneStaging(o.Engine, base, nb)
-	}
+	id, err := site.clone(o.Engine, nb)
 	if err != nil {
 		return m, false, err
 	}
@@ -915,17 +905,7 @@ func UpdateTools(ctx context.Context, o UpdateOptions) (Manifest, bool, error) {
 	if err := writeJSONAtomic(filepath.Join(nb, ManifestFile), m, 0o600); err != nil {
 		return m, false, err
 	}
-	if kept {
-		// The stage-2 boot wrote to the disk, which the next boot's scrub removes what it holds of.
-		keptRec.Scrubbed = false
-		if err := WriteKept(nb, keptRec); err != nil {
-			return m, false, err
-		}
-		err = swapKept(nb, base)
-	} else {
-		err = swapBase(ctx, nb, base)
-	}
-	if err != nil {
+	if err := site.swap(ctx, nb); err != nil {
 		return m, false, err
 	}
 	o.Progress(PrepareEvent{Phase: PhaseReady, Fraction: 1})

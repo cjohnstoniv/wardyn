@@ -107,26 +107,59 @@ func checkBaseFiles(dir string) error {
 // no fallback to two renames: a base that is half swapped is not a base.
 var swapFn = swapDirs
 
-// lockKept checks that o.KeptDir is a kept machine's folder of o.Layout, takes its lock and returns its
-// record, read under the lock. The check comes first so that no lock file is made for a folder that is not
-// one; a base is never a kept folder, since KeptMachineDir is under the layout's kept/.
-func (o UpdateOptions) lockKept() (dir string, rec KeptRecord, unlock func(), err error) {
-	dir = filepath.Clean(o.KeptDir)
-	if filepath.Dir(dir) != o.Layout.KeptDir() {
-		return "", rec, nil, fmt.Errorf("macvm: %s is not a kept machine folder of this Mac", o.KeptDir)
+// updateSite is what an update works on: the base in a slot, or one kept machine's folder with its record,
+// read under the lock the update holds.
+type updateSite struct {
+	dir  string
+	kept bool
+	rec  KeptRecord
+}
+
+// openSite finds o's site. For a kept machine it checks that o.KeptDir is a folder of o.Layout's kept
+// machines, takes its lock and returns the unlock; the check comes first so that no lock file is made for a
+// folder that is not one. A base is never a kept folder, since KeptMachineDir is under the layout's kept/.
+func (o UpdateOptions) openSite() (s updateSite, unlock func(), err error) {
+	if o.KeptDir == "" {
+		return updateSite{dir: o.Layout.BaseDir(o.Slot)}, func() {}, nil
 	}
-	if rec, err = readKeptAt(o.Layout, dir); err != nil {
-		return "", rec, nil, err
+	s = updateSite{dir: filepath.Clean(o.KeptDir), kept: true}
+	if filepath.Dir(s.dir) != o.Layout.KeptDir() {
+		return s, nil, fmt.Errorf("macvm: %s is not a kept machine folder of this Mac", o.KeptDir)
 	}
-	if unlock, err = LockKept(dir); err != nil {
-		return "", rec, nil, err
+	if _, err = readKeptAt(o.Layout, s.dir); err != nil {
+		return s, nil, err
+	}
+	if unlock, err = LockKept(s.dir); err != nil {
+		return s, nil, err
 	}
 	// Whatever a delete or a reset did before the lock is read again.
-	if rec, err = readKeptAt(o.Layout, dir); err != nil {
+	if s.rec, err = readKeptAt(o.Layout, s.dir); err != nil {
 		unlock()
-		return "", rec, nil, err
+		return s, nil, err
 	}
-	return dir, rec, unlock, nil
+	return s, unlock, nil
+}
+
+// clone makes the staging copy nb of the site: a base's with its admin password, a kept machine's with its
+// own identifier and pair key and none (a kept folder holds none).
+func (s updateSite) clone(e Engine, nb string) (Identity, error) {
+	if s.kept {
+		return cloneRun(e, s.dir, nb, IdentityTravel)
+	}
+	return cloneStaging(e, s.dir, nb)
+}
+
+// swap puts the updated copy nb in the site's place. A kept machine's record goes in first, with scrubbed
+// false: the stage-2 boot wrote to its disk, and the next boot's scrub removes what it holds of.
+func (s updateSite) swap(ctx context.Context, nb string) error {
+	if !s.kept {
+		return swapBase(ctx, nb, s.dir)
+	}
+	s.rec.Scrubbed = false
+	if err := WriteKept(nb, s.rec); err != nil {
+		return err
+	}
+	return swapKept(nb, s.dir)
 }
 
 // readKeptAt reads dir's kept.json and checks that the record's id is the one dir is the folder of.
@@ -145,13 +178,6 @@ func readKeptAt(l Layout, dir string) (KeptRecord, error) {
 		return KeptRecord{}, fmt.Errorf("%w: %s holds %q", ErrKeptIDMismatch, dir, id.ID)
 	}
 	return ReadKept(dir, id.ID)
-}
-
-// cloneKeptStaging is cloneStaging for a kept machine: it clones the folder's disk and aux storage into
-// staging with the machine's own identifier and pair key, as a boot of that folder would use them. It
-// carries no admin password: a kept folder holds none.
-func cloneKeptStaging(e Engine, dir, staging string) (Identity, error) {
-	return cloneRun(e, dir, staging, IdentityTravel)
 }
 
 // swapKept exchanges the updated kept machine nb with its folder dir; the caller holds dir's LockKept, so
