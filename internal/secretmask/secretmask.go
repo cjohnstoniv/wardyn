@@ -50,10 +50,9 @@ var placeholder = []byte("<secret-hidden>")
 //
 // A nil *Registry is safe: all methods on a nil pointer are no-ops.
 type Registry struct {
-	mu     sync.RWMutex
-	perRun map[uuid.UUID][][]byte // run id -> set of secret values
-	// dropGuard runs before DropRunValue or DropGlobalValue removes a value (backend.go), outside mu.
-	dropGuard atomic.Pointer[func(runID uuid.UUID)]
+	mu        sync.RWMutex
+	perRun    map[uuid.UUID][][]byte                // run id -> set of secret values
+	dropGuard atomic.Pointer[func(runID uuid.UUID)] // runs before a Drop*Value removes a value (backend.go)
 	// globals is every process-wide value masked right now, on every run: the
 	// union of current, retired and rows, rebuilt by reflatten whenever one changes.
 	globals [][]byte
@@ -176,8 +175,7 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) error {
 
 // AddLocal is Add into this process's cache only, for a value that is already
 // committed elsewhere (a masking manifest's renderings, a row another replica
-// wrote). It never fails. It reports whether it added the value: false when the run already held it
-// (or the value is too short to mask), so a caller can take back exactly what it added with RemoveLocal.
+// wrote). It never fails. It reports whether it added the value, so a caller can RemoveLocal exactly that.
 func (r *Registry) AddLocal(runID uuid.UUID, value []byte) bool {
 	if r == nil || len(value) < MinLen {
 		return false
