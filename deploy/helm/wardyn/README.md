@@ -408,6 +408,18 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   - With no ResourceQuota in the runs namespace, it is also how wardynd measures the cluster at boot to propose the cluster runner's limits. With neither, the runner gets none and takes no run until an admin sets them. The kind quickstart turns it on for that.
   - Separately and always on, the runner Role has `list` on `resourcequotas`: a run that cannot fit the runs namespace's quota is refused before it is created (`namespace_quota_exceeded`),
     - and one that would fill a quota to 90% or more is warned; a quota wardynd may not read is reported as unreadable, never as empty.
+- `k8s.agentSandbox.enabled` (`WARDYN_K8S_AGENT_SANDBOX`, default `false`, **experimental**): creates each run's agent pod through a [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) `Sandbox` instead of directly.
+  - Off renders exactly what the chart rendered before the key existed: no extra RBAC, policy, CRD or env.
+  - Tested against agent-sandbox v1.0.9 only (beta `agents.x-k8s.io/v1beta1`). Install its controller and CRD first: this chart installs neither.
+  - Needs `k8s.enabled=true` and an enforced NetworkPolicy; the chart refuses `k8s.allowUnenforcedNetPol` and `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL`, including one set through `extraEnv` `valueFrom`, which it cannot read.
+  - Adds `patch` on `pods` and `create`, `get`, `list`, `delete` on `sandboxes.agents.x-k8s.io` to the runner Role, nothing to the ClusterRole.
+  - Also renders two `ValidatingAdmissionPolicy` objects with bindings (`<release>-wardyn-sandbox-pod-gate` and `-ungate`) for the runs namespace.
+    - The first selects pod creates by the controller's identity (`k8s.agentSandbox.controller`, default the upstream ServiceAccount). It refuses one without the `wardyn.dev/verify` scheduling gate or a `Sandbox` owner, or one that names a node.
+    - The second selects an update of a pod that held the gate. Only wardynd's own ServiceAccount may remove the gate, and the same write may not change labels, annotations, owners, images, tolerations, node selector, affinity, the deadline or the node, or add an ephemeral container.
+    - They need Kubernetes 1.30+ and fail closed. Other identities, Wardyn's own pods included, are not selected.
+    - The guarantee covers create and gate-removal hooks, and only while those two identities are configured right. A kind run has not yet proven it.
+    - A refused create is retried by the controller and shows as `SandboxPodCreateFailed` events on the `Sandbox`.
+  - Refused with `k8s.ackAmbientDefaultDeny` or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` too, as a literal or a `valueFrom`.
 - `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`).
   - Ships at 1000m/2048Mi so a run fits a shared node; set 2000/4096 to keep the pre-0.8.6 size.
   - `runner.sandbox.proxyResources` sizes each run's `wardyn-proxy` sidecar (500m/256Mi).
