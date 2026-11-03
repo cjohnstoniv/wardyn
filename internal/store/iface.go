@@ -503,6 +503,17 @@ type MemberDriveStore interface {
 // Compile-time assertion: PG satisfies MemberDriveStore.
 var _ MemberDriveStore = PG{}
 
+// KeptMachineStore persists kept machines (kept_machines.go) and lists the pools that hold a runner,
+// the read a kept machine's own-Mac check uses. Optional: callers type-assert it and refuse a kept
+// machine when it is absent.
+type KeptMachineStore interface {
+	// ListRunnerPoolsWithMember returns every pool, of any scope and state, that holds runnerID.
+	ListRunnerPoolsWithMember(ctx context.Context, runnerID uuid.UUID) ([]types.RunnerPool, error)
+}
+
+// Compile-time assertion: PG satisfies KeptMachineStore.
+var _ KeptMachineStore = PG{}
+
 // TemplateStore persists run templates (migration 0165_run_templates); bodies in
 // store_run_templates.go. Optional like ComponentStore: callers type-assert, and a
 // caller that finds it absent answers 501 templates_unavailable rather than
