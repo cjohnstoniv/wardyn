@@ -198,7 +198,11 @@ func (s *Server) auditMacWindowCreateDenied(r *http.Request, req *createRunReque
 	at, principal := actorFromRequest(r)
 	data := macWindowData(req.Experience == types.ExperienceBackground, macWindowTriggerLaunch, nil)
 	data["reason"] = macWindowRefusalReason(rf)
-	s.auditMacWindowBegin(r.Context(), nil, macWindowAuthority{ActorType: at, Principal: principal}, "create", "denied", data)
+	outcome := "denied"
+	if rf.err != nil {
+		outcome = "failure" // a failed read is a server error, not a policy refusal
+	}
+	s.auditMacWindowBegin(r.Context(), nil, macWindowAuthority{ActorType: at, Principal: principal}, "create", outcome, data)
 }
 
 // desktopWindowRequestRefusal is the 400 for a desktop_window the request cannot carry; "" when it can.
