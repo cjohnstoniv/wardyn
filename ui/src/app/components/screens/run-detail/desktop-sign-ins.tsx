@@ -11,6 +11,7 @@ import { desktopSignIns, type DesktopSignInsView } from "../../../lib/api/deskto
 import { getErrorMessage } from "../../../lib/format";
 import { Button } from "../../ui/button";
 import { DESKTOP } from "../../wardyn/copy/desktop";
+import { KEEP_RUN } from "../../wardyn/copy/keep-machine";
 
 // Where a sign-in lives and when it is gone, by store; a desktop that keeps none says so instead.
 const SIGN_INS_NOTE: Partial<Record<DesktopSignInsView["store"], string>> = { memory: DESKTOP.signInsNote, run_disk: DESKTOP.signInsNoteRunDisk };
@@ -79,9 +80,10 @@ export function DesktopPausedNote({ s }: { s: DesktopSignIns }) {
 }
 
 /** The block's last line: where a sign-in lives and when it is gone, or that this desktop keeps none. */
-export function DesktopSignInsNote({ s }: { s: DesktopSignIns }) {
+export function DesktopSignInsNote({ s, keptOn }: { s: DesktopSignIns; /** The Mac, when the run keeps its machine: the note says where the sign-ins stay (K-45). */ keptOn?: string }) {
   const v = s.view;
   if (!v || v.store === "") return null;
+  if (keptOn && v.store === "run_disk") return <p className="mt-2 text-meta leading-relaxed text-foreground">{KEEP_RUN.SIGN_INS_NOTE(keptOn)}</p>;
   return (
     <>
       <p className="mt-2 text-meta leading-relaxed text-foreground">{SIGN_INS_NOTE[v.store] ?? DESKTOP.signInsOff(v.agent)}</p>

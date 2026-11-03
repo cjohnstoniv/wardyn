@@ -6,6 +6,7 @@
 // Review: the whole run with where each value came from, the true notices, one
 // ordered blocker list, and Launch only on a current, fresh, clean check.
 
+import { useKeptMachines } from "../steps/run/kept-machines-provider";
 import * as React from "react";
 import { Check, CircleAlert, MoreHorizontal } from "lucide-react";
 import { Button } from "../../../ui/button";
@@ -145,6 +146,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   const roster = useLoaded(loadRoster);
   const ids = harnessIds(draft.intent);
   const macOSOffer = useMacOSOffer();
+  const keptRead = useKeptMachines();
   const combination = roster.status === "ready" ? combinationReason(roster.value, ids, ids[0]) : undefined;
 
   const gate = (blockers: number) =>
@@ -159,6 +161,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     unsupported: wire.unsupported,
     combination,
     macOSMinimum: macOSMinimumSentence(draft.intent, macOSOffer),
+    keptReadFailed: !!draft.intent.machine && keptRead.status === "failed",
     templateNeeds: template.needs,
     templateUnread: template.unread,
     // A credential refusal is not a blocker: Launch's own refusal opens the provider's sign-in door.

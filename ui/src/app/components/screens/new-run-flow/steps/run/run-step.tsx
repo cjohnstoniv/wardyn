@@ -18,12 +18,15 @@ import { keepRunning, mayKeepRunning, setHealth, setPort, setRestart } from "../
 import { addApp, appsOf, chooseAppKind, commandOf, editApp, isServer, removeApp, setCommand } from "../../lenses/apps-lens";
 import type { MachineKind } from "../../../../../lib/types/machine-kind";
 import { dropMinimum, minimumFill, startAtMinimum } from "../../lenses/limits-lens";
+import { deleteMachine, keepMachine, nameKeptMachine, resumeMachine, startFresh } from "../../lenses/machine-lens";
 import { chooseBarrier, chooseMacOSBase, chooseMachineKind, chooseMode, choosePool } from "../../lenses/run-lens";
 import { modeOf, type RunMode } from "../../lenses/shape-lens";
 import { flowSteps, StepShell } from "../step-shell";
 import { BarrierSection } from "./barrier-section";
 import { CommandSection } from "./command-section";
 import { MachineKindSection } from "./machine-kind-section";
+import { keptChoiceOf, keptReadRetry, useDropProvenMachine } from "./kept-machine-choice";
+import { useKeptMachines } from "./kept-machines-provider";
 import { useMacOSOffer } from "./macos-offer";
 import { ModeSection } from "./mode-section";
 import { ledeOf, runTypeOf, selectedPoolId, usablePools } from "./pool-model";
@@ -67,11 +70,20 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
   const offer = useMacOSOffer();
   const minimum = offer?.ok ? { cpuMillis: offer.minCPUs * 1000, memoryMib: offer.minMemoryMiB } : undefined;
   const fill = draft.guided.macosFill;
+  const keptRead = useKeptMachines();
+  const keptChoice = keptChoiceOf(keptRead, offer, intent);
+  useDropProvenMachine(keptRead, offer, keptChoice, intent);
+  // A choice of the person's own ends the notice of one the server's answer cleared.
+  const choose = (apply: (i: RunIntent) => RunIntent) => {
+    if (draft.guided.machineCleared) dispatch({ type: "guided", patch: { machineCleared: undefined } });
+    edit(apply);
+  };
   const chooseKind = (kind: MachineKind) => {
     const onMac = intent.machine_kind === "macos_vm";
     if (kind === "macos_vm" && !onMac && minimum) dispatch({ type: "guided", patch: { macosFill: minimumFill(intent, minimum) } });
     else if (kind !== "macos_vm" && fill) dispatch({ type: "guided", patch: { macosFill: undefined } });
     // The window goes with macOS (chooseMachineKind), and its cleared notice with it.
+    if (kind !== "macos_vm" && draft.guided.machineCleared) dispatch({ type: "guided", patch: { machineCleared: undefined } });
     if (kind !== "macos_vm" && draft.guided.windowCleared) dispatch({ type: "guided", patch: { windowCleared: undefined } });
     edit((i) => {
       const leaving = i.machine_kind === "macos_vm" && kind !== "macos_vm" ? dropMinimum(i, fill) : i;
@@ -121,6 +133,17 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
           agents={harnessIds(intent)}
           macosBase={intent.macos_base}
           windowChoice={{ chosen: !!intent.desktop_window, checking: windowChecking, cleared: draft.guided.windowCleared, onChoose: (on) => chooseWindowIn(dispatch, on) }}
+          kept={{
+            choice: keptChoice,
+            retry: keptReadRetry(keptRead, offer, intent),
+            cleared: draft.guided.machineCleared,
+            machine: intent.machine,
+            onDelete: () => choose(deleteMachine),
+            onKeep: () => choose(keepMachine),
+            onName: (name) => edit((i) => nameKeptMachine(i, name)),
+            onResume: (id) => choose((i) => resumeMachine(i, id)),
+            onFresh: (fresh) => edit((i) => startFresh(i, fresh)),
+          }}
           onChoose={chooseKind}
           onChooseBase={(base) => edit((i) => chooseMacOSBase(i, base))}
         />

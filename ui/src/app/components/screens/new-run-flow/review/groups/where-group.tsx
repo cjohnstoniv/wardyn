@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { useKeptMachines } from "../../steps/run/kept-machines-provider";
+import { keptReviewLines } from "../kept-machine-lines";
 import * as React from "react";
 import { Button } from "../../../../ui/button";
 import { Label } from "../../../../ui/label";
@@ -107,10 +109,19 @@ export function WhereGroup({ draft, pre, docRows, dispatch }: GroupProps) {
   const runner = offer?.ok ? offer.runner : undefined;
   const windowLine = draft.intent.desktop_window ? (runner ? NR_WINDOW.REVIEW_ONE_MAC(runner) : NR_WINDOW.REVIEW_SEVERAL_MACS) : undefined;
   const cleared = !draft.intent.desktop_window ? draft.guided.windowCleared : undefined;
-  const detail = !base && !windowLine && !cleared ? poolDetail : (
+  const keptLines = keptReviewLines(draft.intent, useKeptMachines(), runner);
+  const keptCleared = !draft.intent.machine ? draft.guided.machineCleared : undefined;
+  const detail = !base && !windowLine && !cleared && !keptLines && !keptCleared ? poolDetail : (
     <>
       {poolDetail}
       {base && <span className="block">{MAC_BASES.B16(base)}</span>}
+      {keptCleared && <span className="block">{keptCleared}</span>}
+      {keptLines && (
+        <>
+          <span className="block">{keptLines.machine}</span>
+          <span className="block">{keptLines.detail}</span>
+        </>
+      )}
       {windowLine && <span className="block">{windowLine}</span>}
       {cleared && <span className="mt-1 block"><WindowCleared text={cleared} /></span>}
     </>

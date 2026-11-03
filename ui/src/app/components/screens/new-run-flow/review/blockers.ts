@@ -7,6 +7,7 @@
 // local issues, unsupported document fields, the template's unmet setup, the
 // server's refusal, missing setup items, then a stale or unchecked result.
 
+import { KEEP_NEW_RUN } from "../../../wardyn/copy/keep-machine";
 import { NR_DOCUMENT } from "../../../wardyn/copy/new-run/document";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { NR_HARNESSES } from "../../../wardyn/copy/new-run/harnesses";
@@ -109,6 +110,8 @@ export interface BlockerInput {
   gatewayOff?: boolean;
   /** The wall preset the draft chose, and whether this caller can no longer pick it (a launch or the list said so). */
   wallPreset?: { name: string; unavailable: boolean };
+  /** The draft keeps or resumes a machine and the read of the kept machines failed: Launch waits for the Run step's retry. */
+  keptReadFailed?: boolean;
   /** The result for this draft is missing or older than a minute. */
   stale: boolean;
   /** The stale result is one the server did answer for this draft, now more than a minute old. */
@@ -123,6 +126,7 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
   if (input.combination) out.push({ id: "local:combination", kind: "local", text: input.combination, to: locationOfHome("harnesses") });
   if (input.macOSMinimum) out.push({ id: "local:macos_minimum", kind: "local", text: input.macOSMinimum, field: "resources" });
   if (input.keepLimit) out.push({ id: "keep:limit", kind: "local", ...input.keepLimit, to: locationOfHome("files"), field: "keep_work_folder" });
+  if (input.keptReadFailed) out.push({ id: "kept:read", kind: "local", text: KEEP_NEW_RUN.READ_FAILED, to: locationOfHome("run"), field: "machine" });
   for (const path of input.unsupported) {
     out.push({ id: `unsupported:${path}`, kind: "unsupported", text: NR_REVIEW.BLOCKER_UNSUPPORTED(path), to: locationOfHome(homeOfPath(path) ?? "document"), field: path });
   }

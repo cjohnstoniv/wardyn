@@ -74,6 +74,12 @@ describe("intentToWire (U1)", () => {
     expect(unsupported).toEqual([]);
   });
 
+  it("sends machine: a launch-time choice to keep or resume a macOS VM machine, carried and never reported", () => {
+    const { body, unsupported } = intentToWire({ ...INTENT, machine: { resume: "m-1", fresh: true } });
+    expect(body.machine).toEqual({ resume: "m-1", fresh: true });
+    expect(unsupported).not.toContain("machine");
+  });
+
   it("sends wall_preset: a launch-time choice, carried and never reported", () => {
     const { body, unsupported } = intentToWire({ ...INTENT, wall_preset: "sealed" });
     expect(body.wall_preset).toBe("sealed");

@@ -45,6 +45,15 @@ export const KEEP_NEW_RUN = {
   IN_USE: (run: string) => `In use by ${run}. Stop that run first.`,
   /** K-14, the changes panel's Sign-ins row when Keep or Resume is chosen (replaces MV-C04) */
   SIGN_INS: (mac: string) => `Kept on this machine's disk on ${mac} while this machine is kept. The Mac's own snapshots or backups may keep a copy for a while.`,
+  /** The read of the person's kept machines failed: the choice stays and Launch waits. */
+  READ_FAILED: "Wardyn couldn't read your kept machines. Try again.",
+  /** A resume the list proved gone: the choice is cleared, and says so. */
+  GONE: "Your kept machine is gone. This run starts a new machine, deleted when the run ends.",
+  /** A keep or resume the server's answer says this run can't have. */
+  UNAVAILABLE: "Keeping a machine isn't available for this run, so its machine is deleted when the run ends.",
+  /** A keep at the person's limit. */
+  AT_LIMIT: "You've reached your limit of kept machines, so this run's machine is deleted when it ends.",
+  RETRY: "Try again",
   /** K-15 */
   NOT_SCRUBBED: "Its last run didn't stop normally; Wardyn cleans it when it starts.",
 } as const;
@@ -70,6 +79,9 @@ export const KEEP_REVIEW = {
 export const KEEP_RUN = {
   /** K-30 */
   TITLE: "Machine",
+  /** The card's two rows, as the board draws them. */
+  ROW_NAME: "Name",
+  ROW_MAC: "Mac",
   /** K-31 */
   WHILE_RUNNING: "Kept when this run stops",
   /** K-32 */

@@ -65,7 +65,7 @@ export function KeptMachinesCard() {
   const machines = data?.machines ?? [];
   const now = Date.now();
   return (
-    <CollapsibleCard title={T.TITLE} summary={state === "ready" ? (machines.length ? T.SUMMARY(machines.length, macsOf(machines).join(", ")) : T.NONE) : undefined} testId="kept-machines-card">
+    <CollapsibleCard title={T.TITLE} summary={state === "ready" ? (machines.length ? T.SUMMARY(machines.length, macsOf(machines).join(", ")) : T.NONE) : undefined} testId="kept-machines-card" id="kept-machines">
       {state === "failed" ? (
         <ErrorState size="compact" title={T.LOAD_FAILED} onRetry={load} />
       ) : (
