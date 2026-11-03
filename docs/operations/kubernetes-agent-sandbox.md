@@ -27,7 +27,7 @@
 1. Wardyn creates the drives, the two NetworkPolicies, the Secret and the proxy pod, in the same order as without this backend.
 2. It builds the agent pod as usual, then creates a bare `Sandbox` with the pod's name. The template carries a scheduling gate, `wardyn.dev/verify`, so no container can start yet.
 3. It waits for the controller's pod and reads it back. Any difference from the pod Wardyn asked for, or a gate that is already gone, refuses the run and deletes the Sandbox.
-4. Only then does it remove the gate, with a patch pinned to the pod's UID and resourceVersion.
+4. Only then does it remove the gate, with a patch pinned to the pod's UID and resourceVersion. If the pod changed meanwhile (the scheduler's own status write moves its resourceVersion), Wardyn reads it again, repeats the whole check, and tries again, up to 3 patches in all.
 5. The rest is unchanged: exec, terminal, logs, recording, drives, and the per-run NetworkPolicies, which stay the only policies that select the pod.
 
 ## Install the controller

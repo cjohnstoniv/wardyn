@@ -9,7 +9,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -21,6 +23,7 @@ import (
 	authzv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	nodev1 "k8s.io/api/node/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -648,6 +651,104 @@ func TestAgentSandbox_BeforeUngateErrorRefusesTheRun(t *testing.T) {
 		t.Fatalf("CreateSandbox err = %v, want the seam's error", err)
 	}
 	assertRefusedAndTornDown(t, cs, dyn)
+}
+
+// failGatePatches makes the first n gate patches fail as the API server fails them, after change has
+// run on the stored pod (call is 1-based); later patches reach the fake's own JSON patch.
+func failGatePatches(t *testing.T, cs *fake.Clientset, n int, fail func(call int) error, change func(call int, p *corev1.Pod)) {
+	t.Helper()
+	calls := 0
+	cs.PrependReactor("patch", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if !strings.HasPrefix(a.(clienttesting.PatchAction).GetName(), agentPodNamePrefix) {
+			return false, nil, nil
+		}
+		calls++
+		if calls > n {
+			return false, nil, nil
+		}
+		changeAgentPod(t, cs, agentPodName(asRunID), func(p *corev1.Pod) { change(calls, p) })
+		return true, nil, fail(calls)
+	})
+}
+
+// testOpFailed is what the API server answers when a JSON patch's test op fails: 422 Invalid.
+func testOpFailed(int) error {
+	return apierrors.NewGenericServerResponse(http.StatusUnprocessableEntity, "", schema.GroupResource{}, "", "testing value /metadata/resourceVersion failed", 0, false)
+}
+
+// The scheduler's SchedulingGated condition write moves a gated pod's resourceVersion between the
+// read-back and the gate patch. The failed patch is followed by a fresh read, the full check, and a
+// patch pinned to the new resourceVersion.
+func TestAgentSandbox_UngateRetriesAfterAResourceVersionBump(t *testing.T) {
+	d, cs, dyn := newSandboxRig(t, Config{SandboxPlacement: asPlacement}, controllerMaking(t, nil))
+	failGatePatches(t, cs, 1, testOpFailed, func(_ int, p *corev1.Pod) { p.ResourceVersion = "627" })
+	cs.ClearActions()
+	if _, err := d.CreateSandbox(context.Background(), asSpec()); err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	patches := podPatches(cs)
+	if len(patches) != 2 {
+		t.Fatalf("pod patches = %d, want 2: the failed one and its retry", len(patches))
+	}
+	var ops []jsonPatchOp
+	if err := json.Unmarshal(patches[1].GetPatch(), &ops); err != nil {
+		t.Fatalf("decode patch: %v", err)
+	}
+	if len(ops) != 4 || ops[0].Value != string(asPodUID) || ops[1].Path != "/metadata/resourceVersion" || ops[1].Value != "627" {
+		t.Errorf("retry patch = %+v, want the UID and the new resourceVersion 627 pinned", ops)
+	}
+	pod, err := cs.Tracker().Get(podsGVR, testNamespace, agentPodName(asRunID))
+	if err != nil {
+		t.Fatalf("get agent pod: %v", err)
+	}
+	if gates := pod.(*corev1.Pod).Spec.SchedulingGates; len(gates) != 0 {
+		t.Errorf("gates after the retry = %+v, want none", gates)
+	}
+	if n := sandboxActions(dyn, "delete"); n != 0 {
+		t.Errorf("an admitted run's Sandbox was deleted %d time(s)", n)
+	}
+}
+
+// A pod changed in a checked field between attempts is refused by the re-check, naming the field.
+func TestAgentSandbox_UngateRetryRechecksThePod(t *testing.T) {
+	d, cs, dyn := newSandboxRig(t, Config{SandboxPlacement: asPlacement}, controllerMaking(t, nil))
+	failGatePatches(t, cs, 1, testOpFailed, func(_ int, p *corev1.Pod) {
+		p.ResourceVersion = "627"
+		p.Labels["example.com/allow-egress"] = "true"
+	})
+	cs.ClearActions()
+	_, err := d.CreateSandbox(context.Background(), asSpec())
+	if err == nil || !strings.Contains(err.Error(), "(metadata.labels.example.com/allow-egress)") || !strings.Contains(err.Error(), "Nothing ran") {
+		t.Fatalf("CreateSandbox err = %v, want the changed field and \"Nothing ran\"", err)
+	}
+	if n := len(podPatches(cs)); n != 1 {
+		t.Errorf("pod patches = %d, want 1: no retry of a pod that fails the check", n)
+	}
+	if n := sandboxActions(dyn, "delete"); n != 1 {
+		t.Errorf("Sandbox deletes = %d, want 1", n)
+	}
+	assertRunObjectsGone(t, cs, asRunID)
+}
+
+// Three failed gate patches are a refusal, as one was before.
+func TestAgentSandbox_UngateGivesUpAfterThreeAttempts(t *testing.T) {
+	d, cs, dyn := newSandboxRig(t, Config{SandboxPlacement: asPlacement}, controllerMaking(t, nil))
+	conflict := func(int) error {
+		return apierrors.NewConflict(schema.GroupResource{Resource: "pods"}, agentPodName(asRunID), errors.New("changed"))
+	}
+	failGatePatches(t, cs, ungateAttempts, conflict, func(call int, p *corev1.Pod) { p.ResourceVersion = fmt.Sprint(626 + call) })
+	cs.ClearActions()
+	_, err := d.CreateSandbox(context.Background(), asSpec())
+	if err == nil || !strings.Contains(err.Error(), "its gate could not be removed") {
+		t.Fatalf("CreateSandbox err = %v, want the gate-patch refusal", err)
+	}
+	if n := len(podPatches(cs)); n != ungateAttempts {
+		t.Errorf("pod patches = %d, want %d", n, ungateAttempts)
+	}
+	if n := sandboxActions(dyn, "delete"); n != 1 {
+		t.Errorf("Sandbox deletes = %d, want 1", n)
+	}
+	assertRunObjectsGone(t, cs, asRunID)
 }
 
 func TestReadBack_EveryAllowanceHasAReason(t *testing.T) {

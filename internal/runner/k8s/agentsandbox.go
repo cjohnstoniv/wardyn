@@ -19,6 +19,7 @@ import (
 
 	authzv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -44,6 +45,9 @@ const (
 	// validation message can print a whole struct.
 	agentSandboxMessageCap    = 300
 	agentSandboxDeleteTimeout = 30 * time.Second
+	// ungateAttempts bounds the gate patches of one admission; each after the first follows a fresh
+	// read and a full re-check.
+	ungateAttempts = 3
 )
 
 var sandboxesGVR = schema.GroupVersionResource{Group: agentSandboxGroup, Version: "v1beta1", Resource: "sandboxes"}
@@ -215,24 +219,54 @@ func gatedSpec(pod *corev1.Pod) *corev1.PodSpec {
 }
 
 // admitAgentSandboxPod reads the controller's pod back and removes its gate only if the pod is still
-// held and is the pod Wardyn asked for.
+// held and is the pod Wardyn asked for. The scheduler writes a SchedulingGated condition on a gated pod,
+// which moves its resourceVersion, so a gate patch whose test ops failed reads the pod again, checks it
+// again in full, and tries again, up to ungateAttempts patches in all.
 func (d *Driver) admitAgentSandboxPod(ctx context.Context, clock *startClock, want *corev1.Pod, sandboxUID k8stypes.UID) error {
 	got, err := d.awaitAgentSandboxPod(ctx, clock, want.Namespace, want.Name)
 	if err != nil {
 		return err
 	}
-	if field := gateNotHeld(got); field != "" {
-		return fmt.Errorf("k8s: agent sandbox: this run did not start: its pod was not held for Wardyn's check (%s), so it may have started before Wardyn removed it. Ask your administrator", field)
-	}
-	if field := readBackDiff(want, got, sandboxUID); field != "" {
-		return fmt.Errorf("k8s: agent sandbox: this run did not start: the cluster changed the pod Wardyn asked for (%s). Nothing ran. Ask your administrator", field)
+	if err := checkAgentSandboxPod(want, got, sandboxUID); err != nil {
+		return err
 	}
 	if hook := d.cfg.AgentSandboxBeforeUngate; hook != nil {
 		if err := hook(ctx, got.Namespace, got.Name); err != nil {
 			return fmt.Errorf("k8s: agent sandbox: before removing the gate: %w", err)
 		}
 	}
-	return d.ungate(ctx, got)
+	for attempt := 1; ; attempt++ {
+		perr := d.ungate(ctx, got)
+		if perr == nil {
+			return nil
+		}
+		if attempt == ungateAttempts || !(apierrors.IsInvalid(perr) || apierrors.IsConflict(perr)) {
+			return fmt.Errorf("k8s: agent sandbox: this run did not start: its pod changed while Wardyn checked it, or its gate could not be removed: %w", perr)
+		}
+		fresh, err := d.readPod(ctx, got.Namespace, got.Name)
+		if err != nil {
+			return fmt.Errorf("k8s: agent sandbox: this run did not start: its pod could not be read again after its gate patch failed: %w", err)
+		}
+		if fresh.UID != got.UID {
+			return errors.New("k8s: agent sandbox: this run did not start: its pod was replaced while Wardyn checked it (metadata.uid). Nothing ran. Ask your administrator")
+		}
+		if err := checkAgentSandboxPod(want, fresh, sandboxUID); err != nil {
+			return err
+		}
+		got = fresh
+	}
+}
+
+// checkAgentSandboxPod is the read-back: got must still be held (gateNotHeld) and be the pod Wardyn
+// asked for (readBackDiff).
+func checkAgentSandboxPod(want, got *corev1.Pod, sandboxUID k8stypes.UID) error {
+	if field := gateNotHeld(got); field != "" {
+		return fmt.Errorf("k8s: agent sandbox: this run did not start: its pod was not held for Wardyn's check (%s), so it may have started before Wardyn removed it. Ask your administrator", field)
+	}
+	if field := readBackDiff(want, got, sandboxUID); field != "" {
+		return fmt.Errorf("k8s: agent sandbox: this run did not start: the cluster changed the pod Wardyn asked for (%s). Nothing ran. Ask your administrator", field)
+	}
+	return nil
 }
 
 // awaitAgentSandboxPod polls for the controller's pod inside the run's start clock. While the pod is
@@ -326,10 +360,8 @@ func (d *Driver) ungate(ctx context.Context, pod *corev1.Pod) error {
 	if err != nil {
 		return err
 	}
-	if _, err := d.clientset.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, k8stypes.JSONPatchType, patch, metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("k8s: agent sandbox: this run did not start: its pod changed while Wardyn checked it, or its gate could not be removed: %w", err)
-	}
-	return nil
+	_, err = d.clientset.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, k8stypes.JSONPatchType, patch, metav1.PatchOptions{})
+	return err
 }
 
 // deleteAgentSandbox deletes this run's Sandbox, and only it (a UID precondition), when a create is
