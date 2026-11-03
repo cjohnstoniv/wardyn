@@ -61,6 +61,7 @@ import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { ModelChips } from "./model-chips";
 import { LaptopRunnersSwitch } from "./model-provider-laptop";
+import { OidcChoice, OidcFields } from "./model-provider-oidc";
 import {
   EDITOR_KINDS,
   addressChanged,
@@ -71,6 +72,7 @@ import {
   isEndpoint,
   isLocal,
   newDraft,
+  oidcChange,
   providerFrom,
   refusedField,
   laptopBaseUrlRefused,
@@ -132,6 +134,8 @@ export function ModelProviderEditor({
   const [baseline, setBaseline] = React.useState<string | null>(() => (editing ? editedText(draftFrom(editing, harnesses), audience) : null));
   const [saving, setSaving] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
+  // The field the server's refusal named ("oidc.issuer"): outlined beside the alert.
+  const [refusedAt, setRefusedAt] = React.useState<string | null>(null);
   const [stale, setStale] = React.useState<string | null>(null);
   const discard = useDiscardReload(onSaved);
   const [confirm, setConfirm] = React.useState<Confirm>(null);
@@ -147,10 +151,14 @@ export function ModelProviderEditor({
     const doc = { providers: next };
     setSaving(true);
     setRefused(null);
+    setRefusedAt(null);
     try {
       return await modelProviders.putModelProviders(doc, list.etag);
     } catch (e) {
-      if (e instanceof HttpError && e.status === 400) setRefused(e.message);
+      if (e instanceof HttpError && e.status === 400) {
+        setRefused(e.message);
+        setRefusedAt(e.field || null);
+      }
       else if (e instanceof HttpError && e.status === 412) setStale(JSON.stringify(doc, null, 2));
       else toast.error(getErrorMessage(e));
       return null;
@@ -208,8 +216,23 @@ export function ModelProviderEditor({
     void save();
   };
 
+  // A sign-in change on its own says what it deletes in its own words; with another address change beside it
+  // the address wording stands, and either way the count and the deletion are the same.
+  const signInChange = (() => {
+    if (!editing || !draft) return null;
+    const next = candidate();
+    const change = oidcChange(editing, next);
+    return change && !addressChanged({ ...editing, oidc: undefined }, { ...next, oidc: undefined }) ? change : null;
+  })();
+  const O = PROVIDER_EDITOR.OIDC;
   const addressBody =
-    n === 1
+    signInChange === "to_sign_in"
+      ? n === 1 ? O.TO_SIGN_IN_ONE : O.TO_SIGN_IN(n)
+      : signInChange === "to_paste"
+        ? n === 1 ? O.TO_PASTE_ONE : O.TO_PASTE(n)
+        : signInChange === "edited"
+          ? n === 1 ? O.CONFIRM_BODY_ONE : O.CONFIRM_BODY(n)
+          : n === 1
       ? keyKind
         ? PROVIDER_EDITOR.ADDRESS_BODY_KEY_ONE
         : PROVIDER_EDITOR.ADDRESS_BODY_ONE
@@ -228,7 +251,7 @@ export function ModelProviderEditor({
             <DialogTitle>{title}</DialogTitle>
             {editing && <Chip tone="neutral">{MODEL_PROVIDERS.KIND[editing.kind]}</Chip>}
           </div>
-          {draft && <DialogDescription>{editorProvidesLine(draft.kind)}</DialogDescription>}
+          {draft && <DialogDescription>{editorProvidesLine(draft.kind, draft.oidcOn)}</DialogDescription>}
         </DialogHeader>
 
         {!draft ? (
@@ -255,6 +278,9 @@ export function ModelProviderEditor({
               setDraft={setDraft}
               harnesses={harnesses}
               refused={refused}
+              refusedAt={refusedAt}
+              editing={editing}
+              people={n}
               gatewayIssuer={list.gatewayIssuer}
               gatewayJwksPath={list.gatewayJwksPath}
             />
@@ -306,7 +332,11 @@ export function ModelProviderEditor({
           <AlertDialogContent className="sm:max-w-md">
             <AlertDialogHeader>
               <AlertDialogTitle>
-                {confirm === "address" ? PROVIDER_EDITOR.ADDRESS_TITLE(title) : PROVIDER_EDITOR.DELETE_TITLE(title)}
+                {confirm === "address"
+                  ? signInChange
+                    ? O.CONFIRM_TITLE(title)
+                    : PROVIDER_EDITOR.ADDRESS_TITLE(title)
+                  : PROVIDER_EDITOR.DELETE_TITLE(title)}
               </AlertDialogTitle>
               <AlertDialogDescription>
                 {confirm === "address"
@@ -389,6 +419,9 @@ function ProviderFields({
   setDraft,
   harnesses,
   refused,
+  refusedAt,
+  editing,
+  people,
   gatewayIssuer,
   gatewayJwksPath,
 }: {
@@ -397,6 +430,11 @@ function ProviderFields({
   harnesses: HarnessRow[];
   // The last refused save's sentence: the field it is about is outlined.
   refused: string | null;
+  // The field the server's refusal named, when it named one.
+  refusedAt: string | null;
+  // The stored provider being edited, and how many people hold a credential for it.
+  editing: ModelProvider | null;
+  people: number;
   gatewayIssuer?: string;
   gatewayJwksPath?: string;
 }) {
@@ -424,6 +462,16 @@ function ProviderFields({
   // (role="radiogroup" Buttons over useRovingRadio, not a native radiogroup —
   // CONSOLE-RULES' precedent for a two-option choice with the mock's segmented
   // look).
+  const operator = useOperator();
+  // What saving the choice would delete, read under the choice and again in the confirmation.
+  const switchNote = (() => {
+    if (!editing || people === 0 || !endpoint) return undefined;
+    const change = oidcChange(editing, providerFrom(draft, editing, []));
+    const t = PROVIDER_EDITOR.OIDC;
+    if (change === "to_sign_in") return people === 1 ? t.TO_SIGN_IN_ONE : t.TO_SIGN_IN(people);
+    if (change === "to_paste") return people === 1 ? t.TO_PASTE_ONE : t.TO_PASTE(people);
+    return undefined;
+  })();
   const signInGroup = useRovingRadio(2, sso ? 0 : 1, (i) => set({ kind: i === 0 ? "bedrock_sso" : "bedrock_bearer" }));
 
   return (
@@ -605,6 +653,8 @@ function ProviderFields({
               onChange={(e) => setBaseUrl(e.target.value)}
             />
           </Field>
+          <OidcChoice draft={draft} set={set} operator={operator} note={switchNote} />
+          {draft.oidcOn && <OidcFields draft={draft} set={set} refusedAt={refusedAt} />}
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label={PROVIDER_EDITOR.AUTH_HEADER} htmlFor="mp-auth-header">
               <Input id="mp-auth-header" className="font-mono" value={draft.authHeader} onChange={(e) => set({ authHeader: e.target.value })} />

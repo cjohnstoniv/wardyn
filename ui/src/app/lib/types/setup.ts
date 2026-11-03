@@ -259,6 +259,10 @@ export interface SetupModelProvider {
   // The agents whose roster default it is.
   default_for?: string[];
   host: string;
+  // "oidc" for a custom endpoint that signs people in at its own authority; absent otherwise.
+  sign_in?: "oidc" | (string & {});
+  // With sign_in: "console" or "none". "none" is the "not bound to your sign-in" row.
+  identity_binding?: "console" | "none" | (string & {});
 }
 
 // One provider's connection state for THIS PRINCIPAL (internal/api.

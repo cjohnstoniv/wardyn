@@ -294,6 +294,23 @@ export interface ModelProviderGatewayIdentity {
   token_lifetime_seconds?: number;
 }
 
+// A custom_endpoint's sign-in (Go's types.ProviderOIDC): where each person signs in and as which
+// client. PKCE, openid and offline_access are always on and are not settings.
+export interface ProviderOIDC {
+  // Required: discovery and the identity token's verification both come from it.
+  issuer: string;
+  // Overrides of what discovery names. The editor does not show them; a save carries them through.
+  authorize_url?: string;
+  token_url?: string;
+  client_id: string;
+  // The name of an operator secret holding the client's secret; absent is a public client.
+  client_secret_ref?: string;
+  // Asked for beside openid and offline_access. The server keeps the list as sent, duplicates included.
+  scopes: string[];
+  // "console" (also absent) or "none".
+  identity_binding?: "console" | "none" | (string & {});
+}
+
 // One provider. No credential lives here — each person supplies their own.
 export interface ModelProvider {
   // The admin's slug ("corp-gateway"), what a run names.
@@ -318,6 +335,8 @@ export interface ModelProvider {
   // person's token is sent. The server fills Authorization / "Bearer %s" when
   // absent; a local_model with no auth has no token at all.
   auth?: ProviderAuth;
+  // custom_endpoint only: each person signs in at the endpoint's own authority instead of pasting a token.
+  oidc?: ProviderOIDC;
   // bedrock_sso / bedrock_bearer only.
   bedrock?: BedrockSettings;
   // local_model only: the model allowlist and the caps on each request.
