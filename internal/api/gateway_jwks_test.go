@@ -54,9 +54,9 @@ func testGatewayGet(t *testing.T, srv *Server, method, path string) *httptest.Re
 
 // Off answers byte for byte as a path no route holds, at every method, with and
 // without a console and a base path, with no signer wired and with no key row:
-// serveIndex or http.NotFound for GET, chi's 405 or 404 for the rest. The sibling
-// is the comparison; the status and body pin which real answer that is, so both
-// cannot drift together.
+// http.NotFound for GET, chi's 405 or 404 for the rest. The sibling is the
+// comparison; the status and body pin which real answer that is, so both cannot
+// drift together.
 func TestGatewayJWKSOffEqualsAnUnregisteredPath(t *testing.T) {
 	noKey := func(context.Context, bool) (*gatewayidentity.Signer, error) { return nil, nil }
 	uiDir := testGatewayUIDir(t)
@@ -74,13 +74,9 @@ func TestGatewayJWKSOffEqualsAnUnregisteredPath(t *testing.T) {
 							t.Errorf("route: %d %v %q\nsibling: %d %v %q", got.Code, got.Header(), got.Body, want.Code, want.Header(), want.Body)
 						}
 						switch {
-						case ui == "":
+						case ui == "" || method == http.MethodGet:
 							if got.Code != http.StatusNotFound || got.Body.String() != notFound {
-								t.Errorf("no console: %d %q, want http.NotFound", got.Code, got.Body)
-							}
-						case method == http.MethodGet:
-							if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), "<!doctype html>") || got.Header().Get("Cache-Control") != "no-cache" {
-								t.Errorf("console: %d %v %q, want the shell", got.Code, got.Header(), got.Body)
+								t.Errorf("ui=%v: %d %q, want http.NotFound", ui != "", got.Code, got.Body)
 							}
 						default:
 							if got.Code != http.StatusMethodNotAllowed || !slices.Equal(got.Header().Values("Allow"), []string{"GET"}) || got.Body.Len() != 0 {
@@ -91,6 +87,83 @@ func TestGatewayJWKSOffEqualsAnUnregisteredPath(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// Under /.well-known/ the console answers a path naming no file with a plain
+// 404, never its HTML shell; a file the deployment put there is still served;
+// every other unknown path still gets the shell. The off JWKS answer matches an
+// unregistered /.well-known/ path in status, every header and body, with and
+// without a console.
+func TestWellKnownUnservedIsPlain404(t *testing.T) {
+	uiDir := testGatewayUIDir(t)
+	if err := os.MkdirAll(filepath.Join(uiDir, ".well-known"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	const own = `{"own":"file"}`
+	if err := os.WriteFile(filepath.Join(uiDir, ".well-known", "own.json"), []byte(own), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	noKey := func(context.Context, bool) (*gatewayidentity.Signer, error) { return nil, nil }
+	const notFound = "404 page not found\n"
+	for _, ui := range []string{"", uiDir} {
+		for _, base := range []string{"", "/wardyn"} {
+			srv := testGatewayServer(t, ui, base, noKey)
+			get := func(p string) *httptest.ResponseRecorder { return testGatewayGet(t, srv, http.MethodGet, base+p) }
+			name := fmt.Sprintf("ui=%v base=%q", ui != "", base)
+			t.Run(name+" unserved", func(t *testing.T) {
+				want := get("/.well-known/x")
+				if want.Code != http.StatusNotFound || want.Body.String() != notFound {
+					t.Fatalf("/.well-known/x: %d %q, want http.NotFound", want.Code, want.Body)
+				}
+				for _, p := range []string{testGatewayJWKSPath, testGatewaySibling, "/.well-known/", "/.well-known", "/.well-known/a/b/c"} {
+					got := get(p)
+					if got.Code != want.Code || got.Body.String() != want.Body.String() || !reflect.DeepEqual(got.Header(), want.Header()) {
+						t.Errorf("%s: %d %v %q\nwant: %d %v %q", p, got.Code, got.Header(), got.Body, want.Code, want.Header(), want.Body)
+					}
+				}
+			})
+			if ui == "" {
+				continue
+			}
+			t.Run(name+" own file", func(t *testing.T) {
+				w := get("/.well-known/own.json")
+				if w.Code != http.StatusOK || w.Body.String() != own {
+					t.Errorf("own file: %d %q, want %q", w.Code, w.Body, own)
+				}
+			})
+			t.Run(name+" spa unchanged", func(t *testing.T) {
+				for _, p := range []string{"/runs/abc", "/well-known/x", "/.wellknown/x", "/x/.well-known/y"} {
+					w := get(p)
+					if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<!doctype html>") || w.Header().Get("Cache-Control") != "no-cache" {
+						t.Errorf("%s: %d %v %q, want the shell", p, w.Code, w.Header(), w.Body)
+					}
+				}
+			})
+		}
+	}
+}
+
+// On, the set is the same with a console as without one: the new 404 under
+// /.well-known/ never reaches a route that is registered.
+func TestGatewayJWKSOnWithAConsoleIsServed(t *testing.T) {
+	raw, err := gatewayidentity.Rotate(nil, false, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := gatewayidentity.New(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := testGatewayServer(t, testGatewayUIDir(t), "/wardyn", func(context.Context, bool) (*gatewayidentity.Signer, error) { return signer, nil })
+	srv.cfg.Store.(*authzStore).siteCfg = testGatewaySite(testGatewayProvider())
+	w := testGatewayGet(t, srv, http.MethodGet, "/wardyn"+testGatewayJWKSPath)
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "application/json" || w.Header().Get("Cache-Control") != "public, max-age=60" {
+		t.Fatalf("%d %v %q", w.Code, w.Header(), w.Body)
+	}
+	var set jose.JSONWebKeySet
+	if err := json.Unmarshal(w.Body.Bytes(), &set); err != nil || len(set.Keys) == 0 {
+		t.Errorf("not a key set: %v %q", err, w.Body)
 	}
 }
 

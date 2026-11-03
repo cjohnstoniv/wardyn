@@ -126,6 +126,31 @@ The setup was checked against the pinned image in a one-container trial. These a
 - The key set is the anonymous `GET /.well-known/wardyn-experimental/gateway-jwks.json` on wardynd, under `WARDYN_BASE_PATH` when that is set.
 - The console shows the address built from the browser's own origin. A gateway that reaches wardynd by another address, such as a cluster Service name, uses that address with the same path.
 - The gateway reads the key set when it loads its config and does not start if the read fails. Start wardynd first, and save a provider with run identity on, which creates the key.
+- With run identity off, every `GET` under `/.well-known/` that names no file in the console's directory answers a plain `404`, this address included. A gateway whose `jwks.url` points here cannot load a key set from it. A file an operator places under `/.well-known/` in the console's directory is still served.
+
+## The TLS chain
+
+A model call crosses three TLS hops. Only the first two are Wardyn's.
+
+| Hop | Who terminates TLS | Who trusts what | What each side sees |
+|---|---|---|---|
+| 1. Sandbox to `wardyn-proxy` | `wardyn-proxy`, with a leaf from the run's own certificate authority. It terminates only a host it is set to intercept; any other `CONNECT` is an opaque tunnel | The sandbox trusts the run's authority plus the `WARDYN_TRUSTED_CA_FILE` roots | The proxy reads the whole request, the person's bearer included. The sandbox never holds the identity token, and the proxy deletes any `X-Wardyn-Identity` the sandbox sends on a run with a route |
+| 2. `wardyn-proxy` to the gateway | The gateway | The proxy trusts the system roots plus the `WARDYN_TRUSTED_CA_FILE` bundle. It presents no client certificate | The gateway sees `wardyn-proxy` as its caller, with `X-Wardyn-Identity`, `X-Wardyn-Call-Id` and the person's bearer |
+| 3. The gateway to the model vendor | The vendor | Whatever the gateway's own config says | Nothing on this hop is Wardyn's |
+
+- Identity is a header, not a client certificate. The gateway checks the token's signature against the key set, and nothing at the TLS layer names the caller.
+- With an upstream proxy set, hop 2 is a `CONNECT` through it, unless the gateway host is on `upstream_proxy_no_proxy`.
+
+> [!WARNING]
+> A TLS-inspecting corporate proxy on hop 2 terminates TLS with its own authority, so it reads `X-Wardyn-Identity` and the person's bearer in clear. To stop that, keep it out of the path with the recipe below. Trusting the inspector's root in `WARDYN_TRUSTED_CA_FILE` makes it a party to every credential on that hop.
+
+To exempt the gateway host from the upstream proxy:
+
+1. Check that the `wardyn-proxy` sidecar can resolve the gateway's name and reach it directly. A bypassed host is dialled by the sidecar itself, not by the corporate proxy. The model route needs no `internal_hosts` entry, as step 4 of the setup says.
+2. Add the gateway's host to `upstream_proxy_no_proxy` in site config. A name or a domain suffix matches a hostname; a CIDR matches only an address written as an IP literal.
+3. Start a run and confirm the gateway's access log shows the call.
+
+- The list and its matching rules are under "[Upstream proxy: the bypass list](../OPERATIONS.md#upstream-proxy-the-bypass-list-upstream_proxy_no_proxy)".
 
 ## Joining a run's audit rows to the gateway's log
 
