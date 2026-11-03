@@ -8,13 +8,18 @@ package k8s
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	clienttesting "k8s.io/client-go/testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The agent-sandbox backend off (the default) builds no dynamic client, asks the cluster nothing
@@ -56,9 +61,9 @@ func TestAgentSandboxOff_OverridesStillBoot(t *testing.T) {
 	}
 }
 
-// Off, create and teardown issue the same writes in the same order as before the backend existed:
-// both NetworkPolicies, the Secret, the proxy pod, the agent pod; then pods, Secrets, NetworkPolicies.
-// No Sandbox, no pod patch, and the agent pod carries no gate.
+// Off, create, status and teardown issue the same writes in the same order as before the backend
+// existed: both NetworkPolicies, the Secret, the proxy pod, the agent pod; nothing for a status read;
+// then pods, Secrets, NetworkPolicies. No Sandbox, no pod patch, and the agent pod carries no gate.
 func TestAgentSandboxOff_CreateAndTeardownWritesAreUnchanged(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.7")
@@ -68,6 +73,12 @@ func TestAgentSandboxOff_CreateAndTeardownWritesAreUnchanged(t *testing.T) {
 	sb, err := d.CreateSandbox(ctx, testSandboxSpec())
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if _, err := d.Status(ctx, sb.Ref); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if _, err := d.AgentStatus(ctx, sb.Ref, execContainerName); err != nil {
+		t.Fatalf("AgentStatus: %v", err)
 	}
 	if err := d.KillSandbox(ctx, sb.Ref); err != nil {
 		t.Fatalf("KillSandbox: %v", err)
@@ -91,5 +102,39 @@ func TestAgentSandboxOff_CreateAndTeardownWritesAreUnchanged(t *testing.T) {
 	}
 	if !slices.Equal(writes, want) {
 		t.Errorf("off writes = %v\nwant %v", writes, want)
+	}
+}
+
+// Off, a pod that the backend would call replaced (gated, its selected label gone, its image changed)
+// reads as it always did: Status by its phase, Wait as an agent never exec'd, and Exec goes ahead.
+// With no dynamic client, a check taken here would panic.
+func TestAgentSandboxOff_ReplacedPodChecksAreNotTaken(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	runID := uuid.New()
+	ref := createAgentPodFixture(t, cs, runID, "wardyn/agent:test", nil)
+	ctx := context.Background()
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(ctx, ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	pod.Spec.SchedulingGates = []corev1.PodSchedulingGate{{Name: agentSandboxGate}}
+	pod.Spec.Containers[0].Image = "registry.example/other:1"
+	delete(pod.Labels, labelComponent)
+	pod.Status.Phase = corev1.PodPending
+	if _, err := cs.CoreV1().Pods(testNamespace).Update(ctx, pod, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("update pod: %v", err)
+	}
+	st, err := d.Status(ctx, ref)
+	if err != nil || st.State != types.RunStarting || st.Message == agentPodReplacedMessage || st.FailureHint != "" {
+		t.Errorf("off Status = %+v, %v; want STARTING by the pod's phase", st, err)
+	}
+	if st, err := d.AgentStatus(ctx, ref, execContainerName); err != nil || st.State != types.RunStopped || st.Message != "agent exec not found" {
+		t.Errorf("off AgentStatus = %+v, %v; want STOPPED \"agent exec not found\"", st, err)
+	}
+	if _, err := d.Wait(ctx, ref); err == nil || !strings.Contains(err.Error(), "no agent exec tracked") {
+		t.Errorf("off Wait err = %v, want \"no agent exec tracked\"", err)
+	}
+	if _, err := d.Exec(ctx, ref, []string{"agent-run", "task"}); err != nil {
+		t.Errorf("off Exec on a gated pod: %v, want it to go ahead", err)
 	}
 }
