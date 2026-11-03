@@ -192,6 +192,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "Unattended", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "ScrubResponses", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "CanonicalPushRepos", Class: ClassExempt, Rule: RuleExempt, Variant: "the operator's held-push key spelling; it names an approval, no credential"},
+	{Struct: StructProxyConfig, Field: "GitPushWithheld", Class: ClassExempt, Rule: RuleExempt, Variant: "the hosts whose pushes the run's capabilities withhold; it names a refusal, no credential"},
 	{Struct: StructProxyConfig, Field: "Attribution", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "VM", Class: ClassExempt, Rule: RuleExempt, Variant: "a desktop VM run's flag: it turns the port rule on and the relay's refusal route; no credential"},
 	{Struct: StructProxyConfig, Field: "DesktopSignins", Class: ClassPlatform, Rule: RuleRefuse, Reason: ReasonPlacementCredential, Variant: "opens the sign-in listener (port 3129), which admits a per-sign-in credential the organisation's control plane checks and carries the person's logins; refused, like signinTarget"},

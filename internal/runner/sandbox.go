@@ -199,6 +199,7 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		MITMHosts:            pc.MITMHosts,
 		MITMLLM:              pc.MITMLLM,
 		GitGrants:            pc.GitGrants,
+		GitPushWithheld:      pc.GitPushWithheld,
 		PATGrants:            pc.PATGrants,
 		BrokeredPATGrantIDs:  pc.BrokeredPATGrantIDs,
 		ResidentMints:        pc.ResidentMints,

@@ -481,6 +481,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// these "<org>/<repo>" keys (each -> its github_token grant), minting the
 			// scoped token proxy-side so it never enters the sandbox.
 			GitGrants: p.GitGrants,
+			// The hosts whose pushes the run's capabilities withhold (wireRunGrants).
+			GitPushWithheld: p.GitPushWithheld,
 			// git_pat per-HOST allowlist: the /wardyn/git/ route serves only these
 			// hosts, minting the stored PAT proxy-side so it never enters the
 			// sandbox. Empty when the lane is off, which makes the route 403 —

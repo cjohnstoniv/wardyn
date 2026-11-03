@@ -71,7 +71,8 @@
 # docs/POLICIES.md 21487 adds 239 over 21248, measured: personal walls gain six narrowing knobs (capability lists, tool rules, push deny paths, recording floor, auto-stop cap).
 # docs/POLICIES.md 21538 adds 47 over 21491, measured: a capability wall narrows the provider default where the policy names no list.
 # docs/POLICIES.md 21577 adds 39 over 21538, measured: what a GitHub capability wall does not narrow (git pushes), an approved Azure DevOps capability request, and the 503 create refusal.
-docs/POLICIES.md=21577 share=12
+# docs/POLICIES.md 21590 adds 13 over 21577, measured (rc.12): a capability list without code_write now refuses git pushes, replacing the sentence that said it did not.
+docs/POLICIES.md=21590 share=12
 # docs/POLICIES.md 19597 = ours 19378 + theirs 19511 - base 19292 at the 0.10 W4b merge of the CTL-B fix onto the train.
 # docs/POLICIES.md 19511 adds 219 (0.10 CTL-B): the recording knob (#2968).
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.

@@ -31,6 +31,10 @@ type grantWiring struct {
 	// grant id, from each github_token grant's scope.repos. Delivered proxy-side
 	// only (never the sandbox) so the /wardyn/gh/ route serves exactly these repos.
 	gitGrants map[string]uuid.UUID
+	// adoGitHosts are the Azure DevOps hosts among gitPATGrants, and gitPushWithheld the hosts whose
+	// pushes the run's capabilities withhold (wireRunGrants), for proxy.Config.GitPushWithheld.
+	adoGitHosts     []string
+	gitPushWithheld map[string]string
 	// githubAPI is the GitHub CLI door's grant (persistGitHubCLIGrants); nil without one.
 	githubAPI *proxy.GitHubAPIGrant
 	// injections are the proxy injection configs for auto-mintable api_key
@@ -194,6 +198,9 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r 
 					continue
 				}
 				gw.gitPATGrants[host] = grantID.String()
+				if adoGrantHost(sc, host) {
+					gw.adoGitHosts = append(gw.adoGitHosts, host)
+				}
 				gw.gitPATEgress = append(gw.gitPATEgress, grantLaneEgress(g)...)
 			}
 		}

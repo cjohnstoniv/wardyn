@@ -157,6 +157,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			Policy:             l.spec,
 			FirstGitHubGrantID: l.gw.firstGitHubGrantID,
 			GitGrants:          l.gw.gitGrants,
+			GitPushWithheld:    l.gw.gitPushWithheld,
 			GitPATGrants:       l.gw.gitPATGrants,
 			SSHGrants:          l.gw.sshGrants,
 			Injections:         l.gw.injections,

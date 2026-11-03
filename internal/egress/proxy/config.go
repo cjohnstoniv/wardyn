@@ -107,6 +107,12 @@ type Config struct {
 	// stays proxy-side. Compiled at dispatch from the run's github grants. Empty =>
 	// the git-broker route always 403s (no repo brokered).
 	GitGrants map[string]uuid.UUID `json:"git_grants,omitempty"`
+	// GitPushWithheld names the broker hosts whose pushes this run's effective
+	// capabilities withhold (no code_write), each with the forge's name for the
+	// refusal: "github.com" -> "GitHub" on the /wardyn/gh/ route, an Azure DevOps
+	// git_pat host -> "Azure DevOps" on /wardyn/git/. The broker refuses a push
+	// there before anything mints. Empty => no push withheld.
+	GitPushWithheld map[string]string `json:"git_push_withheld,omitempty"`
 	// PATGrants is the git_pat broker's per-HOST allowlist: canonical lower-case
 	// host -> the git_pat grant id to mint from, backing the /wardyn/git/ route.
 	//
