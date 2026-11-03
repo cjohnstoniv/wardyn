@@ -166,7 +166,9 @@ export function PersonDrawer({
                 </ul>
               )}
             </Section>
-            <p className="border-b border-border py-2 text-meta text-muted-foreground">{P.INVITE_HINT(person.principal)}</p>
+            <p className="border-b border-border py-2 text-meta text-muted-foreground">
+              {P.INVITE_LEAD} <code className="font-mono text-foreground [overflow-wrap:anywhere]">{P.INVITE_CMD(person.principal)}</code>.
+            </p>
             <Section label={P.SSH} value={person.ssh_keys}>
               <Button size="sm" variant="outline" disabled={person.ssh_keys === 0} onClick={() => setConfirm("ssh")}>
                 {P.SSH_REMOVE}

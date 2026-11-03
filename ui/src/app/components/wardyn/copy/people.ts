@@ -61,7 +61,9 @@ export const PEOPLE_PAGE = {
   SSH_REMOVE_DONE: (n: number, p: string) => `Removed ${n} SSH key${n === 1 ? "" : "s"} for ${p}.`,
   ADDED: (p: string) => `Added ${p}.`,
   ALREADY_LISTED: (p: string) => `${p} was already listed.`,
-  INVITE_HINT: (p: string) => `To let them create a token, invite them with wardyn invite ${p}.`,
+  INVITE_LEAD: "To let them create a token, invite them with",
+  // POSIX single quotes keep any subject (idp|123, a$b) one word; `--` (cobra stops flag parsing there) covers a leading dash.
+  INVITE_CMD: (p: string) => `wardyn invite -- '${p.replace(/'/g, `'\\''`)}'`,
   SSH_REMOVE_CONFIRM: (p: string) => `Remove every SSH key ${p} has added? Their open SSH sessions end.`,
   CREDS: "Stored credentials",
   CREDS_ERASE: "Erase",

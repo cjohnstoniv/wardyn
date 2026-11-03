@@ -63,6 +63,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The policy editor and the Wardyn boundary page now say what is true: the `desktop` field help says an omitted `desktop` under a ceiling takes the ceiling's rules, the `recording` help says the run owner's walls can raise the level, the Policies empty state says a stored policy is clamped to a governance profile's ceiling (it can narrow but never widen), and the boundary and recording words match Governance ("profiles below"). The Fields list no longer points at `docs/POLICIES.md`, a file a packaged install does not have.
 - People and tokens copy is truer. A service identity's inbound-token help names the identity (not "you"), a person's own API token can run to 1 year or the server's limit, the token reveal and the People page call the `admin` role "Admin", the People confirms are titled for what they do ("Sign out everywhere?", "Remove all SSH keys?") with toasts that say what happened ("Removed 2 SSH keys for …", "… was already listed."), the Holds cell says "SSH key", the drawer says how to invite someone to create a token, and a lifetime hint is read with its control. Erase below the security tier is titled "Erase someone's credentials".
 
+### Changed
+
+- The run page says "End run" everywhere: the header button, the confirm ("End <title>?") and its note, and the retry and error messages. Signing someone out everywhere now says it ends browser and CLI sessions, and that personal API tokens and SSH keys keep working. The invite command shown for a person is quoted so any subject is safe to paste into a shell.
+
 ### Added
 
 - An `image` capability grant may be a registry or path prefix ending in `/*` (for example `registry.example.com/team/*`), so one grant covers every image under it. A deny on an image also covers its other spellings, such as capitals in the host, `:443` and Docker Hub short names.
