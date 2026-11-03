@@ -85,7 +85,7 @@ func wallsCmd(client clientFn) *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(set, clearWalls)
+	cmd.AddCommand(set, clearWalls, wallPresetsCmd(client))
 	return cmd
 }
 
