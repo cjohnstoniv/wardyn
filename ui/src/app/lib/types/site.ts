@@ -288,6 +288,8 @@ export type ModelProviderKind =
 // provider's gateway looks for, and no other address's.
 export interface ModelProviderGatewayIdentity {
   audience: string;
+  // A token's life in seconds, 60 to 600; absent is 600.
+  token_lifetime_seconds?: number;
 }
 
 // One provider. No credential lives here — each person supplies their own.

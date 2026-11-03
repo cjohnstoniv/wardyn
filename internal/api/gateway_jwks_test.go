@@ -205,7 +205,7 @@ func TestGatewayJWKSServesTheKeysThatVerifyAToken(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &set); err != nil {
 		t.Fatal(err)
 	}
-	token, _, err := signer.Sign(gatewayidentity.Claims{Issuer: "spiffe://wardyn.local", Audience: "a", Subject: "s", Run: "r", Provider: "p"})
+	token, _, err := signer.Sign(gatewayidentity.Claims{Issuer: "spiffe://wardyn.local", Audience: "a", Subject: "s", Run: "r", Provider: "p"}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

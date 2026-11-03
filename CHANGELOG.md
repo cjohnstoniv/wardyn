@@ -25,6 +25,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - An `image` capability grant may be a registry or path prefix ending in `/*` (for example `registry.example.com/team/*`), so one grant covers every image under it. A deny on an image also covers its other spellings, such as capitals in the host, `:443` and Docker Hub short names.
+- An admin can set a model provider's run identity token to live 60 to 600 seconds (`gateway_identity.token_lifetime_seconds`; the default stays 10 minutes), so a killed run's tokens stop working sooner
 
 ## [0.10.0-rc.11] — 2026-11-02
 
