@@ -631,7 +631,17 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	envelope.HostMarks = hostMarksOf(spec.ProxyConfig, envelope.AllowedDomains)
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(envelope)))
-	if !s.applyRunRecording(ctx, &run, &spec, recordingChoice(run, policy, ceiling, siteCfg, siteCfgErr)) {
+	wallsFloor, wallsErr := s.wallsRecordingFloor(ctx, run)
+	if wallsErr != nil {
+		// Walls that cannot be read refuse the run: it is never recorded at a lower level than they ask.
+		slog.ErrorContext(ctx, "wardynd: read the run owner's walls for the recording floor; the run is refused",
+			slog.String("run_id", run.ID.String()), slog.Any("err", wallsErr))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "your walls could not be read, so the run's recording level cannot be set; walls that cannot be read refuse the run")
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": "read the run owner's walls"})))
+		return
+	}
+	if !s.applyRunRecording(ctx, &run, &spec, recordingChoice(run, policy, ceiling, siteCfg, siteCfgErr, wallsFloor)) {
 		return
 	}
 	spec.ExecOutput = s.openExecOutput(run, p.Interactive)

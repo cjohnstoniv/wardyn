@@ -510,6 +510,13 @@ func TestPersonalWallsNeverWiden(t *testing.T) {
 		if got := run(wider, nil, types.RunPolicySpec{}); len(got.AzureDevOpsCapabilities) != 0 {
 			t.Errorf("no list in the policy: %v, want none added", got.AzureDevOpsCapabilities)
 		}
+		saveWalls(t, st, "sub-walls-widen", wider)
+		noop := policySourceRecord{knobs: startProvenance(memberProvenance)}
+		bare := types.RunPolicySpec{}
+		warns, _ := srv.personalWallsRunStep(memberCtxFor("sub-walls-widen"), &bare, &noop)
+		if !slices.Contains(warns, "your walls' azure_devops_capabilities did not apply: this run's policy names no list") {
+			t.Errorf("no list in the policy: warnings %v, want the capability list named as not applied", warns)
+		}
 		// A list with nothing in common is refused with the person's own words, never a server error.
 		_, refusal := wallsMeetStep(t, srv, st, types.PersonalWallsSpec{AzureDevOpsCapabilities: &[]adoscope.Capability{write}}, nil, ceiling)
 		if refusal == nil || refusal.err != nil || refusal.status != http.StatusForbidden || refusal.body.Reason != reasonGovernanceOverlayUnsatisfiable ||
@@ -527,6 +534,13 @@ func TestPersonalWallsNeverWiden(t *testing.T) {
 		narrower := types.PersonalWallsSpec{GitHubCapabilities: &[]ghscope.Capability{ghscope.CapCodeRead}}
 		if got := run(narrower, nil, types.RunPolicySpec{GitHubCapabilities: []ghscope.Capability{ghscope.CapCodeRead, ghscope.CapCodeWrite}}); !slices.Equal(got.GitHubCapabilities, []ghscope.Capability{ghscope.CapCodeRead}) {
 			t.Errorf("a narrower list: %v, want the wall's [code_read]", got.GitHubCapabilities)
+		}
+		saveWalls(t, st, "sub-walls-widen", wider)
+		noop := policySourceRecord{knobs: startProvenance(memberProvenance)}
+		bare := types.RunPolicySpec{}
+		warns, _ := srv.personalWallsRunStep(memberCtxFor("sub-walls-widen"), &bare, &noop)
+		if !slices.Contains(warns, "your walls' github_capabilities did not apply: this run's policy names no list") {
+			t.Errorf("no list in the policy: warnings %v, want the capability list named as not applied", warns)
 		}
 	})
 
@@ -577,13 +591,40 @@ func TestPersonalWallsNeverWiden(t *testing.T) {
 		if got := run(types.PersonalWallsSpec{Recording: rec(types.RecordingScreenActions)}, nil, types.RunPolicySpec{Recording: types.RecordingTerminal}); got.Recording != types.RecordingScreenActions {
 			t.Errorf("a higher floor: %q, want the wall's screen_actions", got.Recording)
 		}
-		// A policy that names no level takes the organisation's: a floor under it never lowers it.
-		org := &types.SiteRecording{Level: types.RecordingScreenActions}
-		if got := run(types.PersonalWallsSpec{Recording: rec(types.RecordingTerminal)}, org, types.RunPolicySpec{}); got.Recording != types.RecordingScreenActions {
-			t.Errorf("a floor under the organisation's default: %q, want screen_actions", got.Recording)
+		// A policy that names no level stays naming none at create: the floor is applied at dispatch, after
+		// the organisation's default, so it can only raise the level the run would have had.
+		resolved := func(walls types.PersonalWallsSpec, org *types.SiteRecording, spec types.RunPolicySpec) types.RecordingLevel {
+			t.Helper()
+			got := run(walls, org, spec)
+			owner := types.AgentRun{CreatedBy: "sub-walls-widen"}
+			floor, err := srv.wallsRecordingFloor(context.Background(), owner)
+			if err != nil {
+				t.Fatalf("read the floor: %v", err)
+			}
+			return recordingChoice(owner, got, dispatchCeiling{}, types.SiteConfig{Recording: org}, nil, floor).Resolve()
 		}
-		if got := run(types.PersonalWallsSpec{Recording: rec(types.RecordingScreenActions)}, nil, types.RunPolicySpec{}); got.Recording != types.RecordingScreenActions {
-			t.Errorf("a floor over the terminal default: %q, want screen_actions", got.Recording)
+		unlocked := &types.SiteRecording{Level: types.RecordingScreenActions}
+		if got := run(types.PersonalWallsSpec{Recording: rec(types.RecordingTerminal)}, unlocked, types.RunPolicySpec{}); got.Recording != "" {
+			t.Errorf("a floor on a policy that names no level: %q, want none pinned at create", got.Recording)
+		}
+		if got := resolved(types.PersonalWallsSpec{Recording: rec(types.RecordingTerminal)}, unlocked, types.RunPolicySpec{}); got != types.RecordingScreenActions {
+			t.Errorf("a floor under an unlocked organisation default: %q, want screen_actions", got)
+		}
+		terminalOrg := &types.SiteRecording{Level: types.RecordingTerminal}
+		if got := resolved(types.PersonalWallsSpec{Recording: rec(types.RecordingScreenActions)}, terminalOrg, types.RunPolicySpec{}); got != types.RecordingScreenActions {
+			t.Errorf("a floor over the organisation's terminal: %q, want screen_actions", got)
+		}
+		if got := resolved(types.PersonalWallsSpec{Recording: rec(types.RecordingScreenActions)}, nil, types.RunPolicySpec{}); got != types.RecordingScreenActions {
+			t.Errorf("a floor over the terminal default: %q, want screen_actions", got)
+		}
+		// An organisation default raised after create still counts: nothing was pinned from the old one.
+		if got := resolved(types.PersonalWallsSpec{Recording: rec(types.RecordingTerminal)}, &types.SiteRecording{Level: types.RecordingScreenActions, Locked: true}, types.RunPolicySpec{}); got != types.RecordingScreenActions {
+			t.Errorf("a floor under a locked organisation level: %q, want screen_actions", got)
+		}
+		// Walls that cannot be read at dispatch refuse the run: no level, never a lower one.
+		st.prefs["sub-walls-bad|"+types.PersonalWallsPrefKey] = json.RawMessage(`{"spec":{"bogus":true}}`)
+		if floor, err := srv.wallsRecordingFloor(context.Background(), types.AgentRun{CreatedBy: "sub-walls-bad"}); err == nil || floor != "" {
+			t.Errorf("unreadable walls: floor %q err %v, want an error and no level", floor, err)
 		}
 	})
 

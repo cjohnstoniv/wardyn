@@ -433,38 +433,51 @@ func (s *Server) personalWallsRunStep(ctx context.Context, spec *types.RunPolicy
 			}
 		}
 		met.EligibleGrants = kept
-		s.wallsBeyondMeet(ctx, &met, *spec, walls)
+		s.wallsBeyondMeet(&met, *spec, walls)
 		*spec = met
 	})
 	var unmet *composer.OverlayError
 	if errors.As(err, &unmet) && unmet.Reason == composer.ReasonOverlayUnsatisfiable {
 		return nil, runError(http.StatusForbidden, reasonGovernanceOverlayUnsatisfiable,
-			"Your walls and this run's policy leave "+unmet.Field+" nothing in common: "+unmet.Detail+". Change your walls in Settings, or with `wardyn walls`.")
+			"Your walls and this run's policy leave "+unmet.Field+" nothing in common: "+unmet.Detail+". Change your walls with `wardyn walls`, or in Settings.")
 	}
 	if err != nil {
 		return nil, runServerError("meet your walls", err)
 	}
-	rec := newWallsSource(before, *spec)
-	if rec == nil {
-		return nil, nil
+	var warns []string
+	if rec := newWallsSource(before, *spec); rec != nil {
+		source.PersonalWalls = rec
+		for _, knob := range rec.Narrowed {
+			warns = append(warns, "your walls narrowed "+knob)
+		}
 	}
-	source.PersonalWalls = rec
-	warns := make([]string, 0, len(rec.Narrowed))
-	for _, knob := range rec.Narrowed {
-		warns = append(warns, "your walls narrowed "+knob)
-	}
-	return warns, nil
+	return append(warns, wallsCapabilityNoOps(before, walls)...), nil
 }
 
-// wallsBeyondMeet applies to met the two knobs the meet alone would place wrongly, before is the policy
-// the meet started from.
+// wallsCapabilityNoOps names a capability list in the walls that did nothing because the run's policy
+// names no list to narrow (the provider row's default profile applies, which a list cannot be proven
+// within). before is the policy the meet started from.
+func wallsCapabilityNoOps(before types.RunPolicySpec, walls types.PersonalWallsSpec) []string {
+	var warns []string
+	if walls.AzureDevOpsCapabilities != nil && len(before.AzureDevOpsCapabilities) == 0 {
+		warns = append(warns, "your walls' azure_devops_capabilities did not apply: this run's policy names no list")
+	}
+	if walls.GitHubCapabilities != nil && len(before.GitHubCapabilities) == 0 {
+		warns = append(warns, "your walls' github_capabilities did not apply: this run's policy names no list")
+	}
+	return warns
+}
+
+// wallsBeyondMeet applies to met what the meet alone would place wrongly; before is the policy the meet
+// started from.
 //   - tool_rules: each rule is ADDED by narrowToolRule, as a run override's is (a hold or deny only, and
 //     only where it is stricter than the tool's effect today). The meet would spell out the "*" default
 //     as hold, which tightens every tool the person did not name on a run whose lane lets them run.
 //   - recording: a policy that names no level reads as the organisation's, so a floor met into it would
-//     replace that default with the lower floor. The floor is raised to the organisation's level, so it
-//     can only record more than the run would have.
-func (s *Server) wallsBeyondMeet(ctx context.Context, met *types.RunPolicySpec, before types.RunPolicySpec, walls types.PersonalWallsSpec) {
+//     replace that default with the lower floor. It is left naming none, and the floor is applied at
+//     dispatch (wallsRecordingFloor), after the organisation's default is known. A policy that names a
+//     level keeps the meet's: the higher of the two.
+func (s *Server) wallsBeyondMeet(met *types.RunPolicySpec, before types.RunPolicySpec, walls types.PersonalWallsSpec) {
 	if walls.ToolRules != nil {
 		for _, nr := range *walls.ToolRules {
 			if next, _, applied := narrowToolRule(met.ToolRules, nr); applied {
@@ -473,12 +486,19 @@ func (s *Server) wallsBeyondMeet(ctx context.Context, met *types.RunPolicySpec, 
 		}
 	}
 	if walls.Recording != nil && before.Recording == "" {
-		org := &types.SiteRecording{Level: types.RecordingTerminal, Locked: true}
-		if site, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
-			org = site.Recording
-		}
-		met.Recording = met.Recording.AtLeast(org.OrgLevel())
+		met.Recording = ""
 	}
+}
+
+// wallsRecordingFloor is the recording level the run owner's walls ask for, read at dispatch; empty when
+// they name none or the run has no owner. An error means the walls cannot be read: the caller refuses the
+// run, as the create does.
+func (s *Server) wallsRecordingFloor(ctx context.Context, run types.AgentRun) (types.RecordingLevel, error) {
+	walls, err := s.personalWalls(ctx, run.CreatedBy)
+	if err != nil || walls.Recording == nil {
+		return "", err
+	}
+	return *walls.Recording, nil
 }
 
 // personalWallsSealLayer is the run owner's walls as a seal layer: their denies, the desktop

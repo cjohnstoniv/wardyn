@@ -144,6 +144,23 @@ describe("Your walls card", () => {
     await waitFor(() => expect(putMock).toHaveBeenCalledWith({ allow_all_egress: false, withheld_grants: [scoped] }));
   });
 
+  it("keeps the capability lists, tool and push rules, recording and auto-stop the CLI wrote across a save", async () => {
+    const carried = {
+      azure_devops_capabilities: ["work_items_read"],
+      github_capabilities: ["contents_read"],
+      tool_rules: [{ tool: "Bash", effect: "hold" }],
+      push_rules: { deny_paths: [".github/**"] },
+      recording: "screen_actions",
+      auto_stop_after_sec: 900,
+    };
+    getMock.mockResolvedValue({ spec: carried } as PersonalWalls);
+    render(<YourWallsCard />);
+    await open();
+    await user.click(screen.getByRole("checkbox", { name: YOUR_WALLS.COPY_OUT }));
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.SAVE }));
+    await waitFor(() => expect(putMock).toHaveBeenCalledWith({ ...carried, desktop: { copy_out: "blocked" } }));
+  });
+
   it("removes a site chip", async () => {
     getMock.mockResolvedValue({ spec: { denied_domains: ["a.example.com", "b.example.com"] } });
     render(<YourWallsCard />);

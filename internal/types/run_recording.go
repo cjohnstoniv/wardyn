@@ -114,11 +114,14 @@ type RecordingChoice struct {
 	Org            *SiteRecording
 	// Required is the organisation's or the run's pool's required setting: at least terminal.
 	Required bool
+	// WallsFloor is the run owner's own walls' recording floor, read at dispatch: it raises the level
+	// resolved from everything else, never lowers it. Empty when their walls name none.
+	WallsFloor RecordingLevel
 	// CeilingBy names the profile that set Ceiling, for a refusal that says whose it is; "" for none.
 	CeilingBy string
 }
 
-// Resolve is the run's recording level. Whether the organisation keeps recordings at all
+// Resolve is the run's recording level, raised last to the owner's walls' floor. Whether the organisation keeps recordings at all
 // (WARDYN_RECORDING_STORE) is not part of it: off there is off for every level.
 func (c RecordingChoice) Resolve() RecordingLevel {
 	org := c.Org.OrgLevel()
@@ -129,7 +132,7 @@ func (c RecordingChoice) Resolve() RecordingLevel {
 	if c.Required {
 		l = l.AtLeast(RecordingTerminal)
 	}
-	return l
+	return l.AtLeast(c.WallsFloor)
 }
 
 // RecordingFloorSource is the layer that makes a run's recording a minimum.

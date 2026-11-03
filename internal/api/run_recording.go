@@ -91,13 +91,14 @@ func (s *Server) applyRunRecording(ctx context.Context, run *types.AgentRun, spe
 // recordingChoice is what applyRunRecording resolves the run's level from: its policy's level (already
 // raised to its ceiling's), its ceiling, and the organisation's level. A member's run with no stored
 // policy runs their inline policy (or the ceiling itself). An organisation document that cannot be read
-// is taken as terminal, locked: the run is recorded at least as it was before levels.
-func recordingChoice(run types.AgentRun, policy types.RunPolicySpec, c dispatchCeiling, site types.SiteConfig, siteErr error) types.RecordingChoice {
+// is taken as terminal, locked: the run is recorded at least as it was before levels. wallsFloor is the
+// run owner's walls' recording floor (wallsRecordingFloor), applied after the organisation's default.
+func recordingChoice(run types.AgentRun, policy types.RunPolicySpec, c dispatchCeiling, site types.SiteConfig, siteErr error, wallsFloor types.RecordingLevel) types.RecordingChoice {
 	org := site.Recording
 	if siteErr != nil {
 		org = &types.SiteRecording{Level: types.RecordingTerminal, Locked: true}
 	}
-	choice := types.RecordingChoice{Policy: policy.Recording, MemberAuthored: c.recordingBound && run.PolicyID == nil, Org: org}
+	choice := types.RecordingChoice{Policy: policy.Recording, MemberAuthored: c.recordingBound && run.PolicyID == nil, Org: org, WallsFloor: wallsFloor}
 	if c.recordingBound {
 		choice.Ceiling, choice.CeilingBy = c.recording, c.profile
 	}

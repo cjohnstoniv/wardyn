@@ -553,7 +553,7 @@ What the check does and does not settle:
 | `withheld_grants` | **Credentials kept out** | The run is not given a grant of that `kind`, or of that `kind` and `scope` |
 | `azure_devops_capabilities` | | A subset of the capabilities the run's policy names: the run keeps only those in both lists. A list with nothing in common refuses the run (`403` `governance_overlay_unsatisfiable`) |
 | `github_capabilities` | | The same for GitHub |
-| `tool_rules` | | Rules added to the run's: `hold` or `deny` a tool, or `*` for every tool you do not name. A rule never loosens one the run already has, and `allow` is refused |
+| `tool_rules` | | Rules added to the run's: `hold` or `deny` a tool, or `*` for every tool that neither you nor the run's policy names. A rule never loosens one the run already has, and `allow` is refused |
 | `push_rules.deny_paths` | | Paths added to the run's push deny list. Only more is refused; a path the run already denies stays denied |
 | `recording` | | A floor: the run is recorded at least at `terminal` or `screen_actions`. It never lowers the run's level or your organisation's default; `off` is no floor and is refused |
 | `auto_stop_after_sec` | | A cap on the idle seconds before the sandbox is stopped. The shorter of the run's and yours stands; above zero, because zero or less means never stop |
