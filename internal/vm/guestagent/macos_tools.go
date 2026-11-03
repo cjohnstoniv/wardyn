@@ -781,6 +781,7 @@ func itemPushAllowed(dest string) bool {
 //	/usr/bin/hdiutil detach -force S/<name>/mnt
 //	/usr/bin/profiles list                            the profiles installed, read back
 //	/usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain S/<name>/item.cer
+//	/usr/bin/security remove-trusted-cert -d S/<name>/item.cer   a rotated CA's admin trust, before its delete
 //	/usr/bin/security delete-certificate -t -Z <SHA-1> /Library/Keychains/System.keychain
 //	/usr/bin/security verify-cert -L -p ssl -c S/<name>/item.cer
 //	/usr/bin/sw_vers -productVersion|-buildVersion     the guest posture's reads
@@ -830,6 +831,9 @@ var itemForms = map[string]func(a []string) bool{
 	"/usr/bin/profiles list":  func(a []string) bool { return len(a) == 2 },
 	"/usr/bin/security add-trusted-cert": func(a []string) bool {
 		return len(a) == 10 && slices.Equal(a[2:9], []string{"-d", "-r", "trustRoot", "-p", "ssl", "-k", MacSystemKeychain}) && isItemFile(a[9], ItemCert)
+	},
+	"/usr/bin/security remove-trusted-cert": func(a []string) bool {
+		return len(a) == 4 && a[2] == "-d" && isItemFile(a[3], ItemCert)
 	},
 	"/usr/bin/security delete-certificate": func(a []string) bool {
 		return len(a) == 6 && a[2] == "-t" && a[3] == "-Z" && sha1Hex.MatchString(a[4]) && a[5] == MacSystemKeychain

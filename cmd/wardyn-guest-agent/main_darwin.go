@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/version"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
@@ -67,6 +68,9 @@ func run(out, plist string) error {
 	desktop := &guestagent.Desktop{Run: runner, Console: guestagent.ConsoleOwner{}}
 	dial := &guestagent.ToolsDialRecord{}
 	cred := &syscall.Credential{Uid: ids.UID, Gid: ids.GID, Groups: ids.Groups}
+	keychain := guestagent.MacKeychain{Run: runner, Dir: out, RecordDir: guestagent.MacRunCARecordDir}
+	scrub := guestagent.MacScrub{OutDir: out, MarkerDir: "/var/run", AgentUID: int(ids.UID), AgentGID: int(ids.GID),
+		Keychain: keychain, SetDesktopPassword: desktop.SetPassword}
 	srv := &guestagent.Server{
 		Version:    version.String(),
 		Cred:       cred,
@@ -76,11 +80,21 @@ func run(out, plist string) error {
 		MarkerDir:  "/var/run",
 		Desktop:    desktop,
 		ToolsDial:  dial,
-		TrustRunCA: guestagent.MacKeychain{Run: runner, Dir: out}.TrustRunCA,
+		TrustRunCA: keychain.TrustRunCA,
 		Mount:      guestagent.MacShares{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID), Probe: guestagent.ShareProbe{Cred: cred}.Read}.Mount,
 		Disk:       guestagent.MacDisks{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID)}.Attach,
 	}
 	srv.ScreenLockOff = guestagent.ScreenLock{Run: runner, Stdin: runner, Console: guestagent.ConsoleOwner{}}.Off
+	srv.Scrub, srv.RecordMCPTables = scrub.Scrub, scrub.RecordMCPTables
+	// Before the agent serves, so before any Init: what a past run wrote is gone, whether it stopped
+	// gracefully or not. A restart of this service after Init skips it (BootScrubDue).
+	if guestagent.BootScrubDue(srv.MarkerDir) {
+		sctx, cancel := context.WithTimeout(ctx, time.Minute)
+		r := scrub.Scrub(sctx, guestagent.ScrubAtBoot)
+		cancel()
+		srv.BootScrub = &r
+		slog.Info("wardyn-guest-agent boot scrub", "outcome", r.Outcome, "removed", r.Removed, "ca_sha256", r.CAs)
+	}
 	h, err := srv.Handler()
 	if err != nil {
 		return err
