@@ -299,6 +299,27 @@ func TestGatewayMCPRoutesOfRefusesAClash(t *testing.T) {
 	}
 }
 
+// Two saves at once can leave one audience on a provider and a server, or on two servers, at different
+// addresses; the run is refused rather than sent a token one gateway would take for the other.
+func TestGatewayMCPRoutesOfRefusesAnAudienceTwice(t *testing.T) {
+	prov, _ := gatewayRouteOf(testGatewayProvider()) // gw-aud at gw.corp.example:443/llm
+	tools := proxy.GatewayIdentityRoute{Host: "mcp.corp.example", Port: 443, PathPrefix: "/tools", MCPKey: "tools", Audience: "gw-aud", ProviderUID: "x/v1"}
+	if routes, msg := gatewayMCPRoutesOf([]proxy.GatewayIdentityRoute{prov}, mcpDispatch{gatewayRoutes: []proxy.GatewayIdentityRoute{tools}}); routes != nil ||
+		!strings.Contains(msg, `"tools"`) || !strings.Contains(msg, `model provider "corp-gw"`) || !strings.Contains(msg, "own audience") {
+		t.Errorf("a provider's audience: %v %q", routes, msg)
+	}
+	tools.Audience = "mcp-aud"
+	docs := proxy.GatewayIdentityRoute{Host: "docs.corp.example", Port: 443, MCPKey: "docs", Audience: "mcp-aud", ProviderUID: "y/v1"}
+	if routes, msg := gatewayMCPRoutesOf(nil, mcpDispatch{gatewayRoutes: []proxy.GatewayIdentityRoute{tools, docs}}); routes != nil ||
+		!strings.Contains(msg, `"docs"`) || !strings.Contains(msg, `MCP server "tools"`) {
+		t.Errorf("another server's audience: %v %q", routes, msg)
+	}
+	docs.Audience = "docs-aud"
+	if routes, msg := gatewayMCPRoutesOf([]proxy.GatewayIdentityRoute{prov}, mcpDispatch{gatewayRoutes: []proxy.GatewayIdentityRoute{tools, docs}}); msg != "" || len(routes) != 3 {
+		t.Errorf("audiences apart: %v %q", routes, msg)
+	}
+}
+
 // A revive that drops an MCP server for a withheld host drops its identity route with it.
 func TestGatewayMCPReviveCeilingDropsTheRoute(t *testing.T) {
 	run := types.AgentRun{ID: uuid.New()}

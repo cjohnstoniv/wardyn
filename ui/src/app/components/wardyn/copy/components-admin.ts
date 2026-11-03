@@ -131,6 +131,15 @@ export const COMPONENTS_ADMIN = {
   SUMMARY_RESIDENT_OFF: "Variable and file delivery off",
   SUMMARY_VAULT_ON: "Strongest sandbox required",
 
+  // ---- run identity on an organisation's remote MCP server (mcp.gateway_audience) ----
+  MCP_GROUP: "MCP server",
+  AUDIENCE: "Token audience",
+  AUDIENCE_HINT:
+    "The value your gateway looks for in each token. Use a different one from every model provider and every other server. Leave empty to send nothing.",
+  AUDIENCE_SENDS: "When set, each call to this server carries a signed token naming the person, the run and the runner.",
+  AUDIENCE_SAVED_NOTE:
+    "After you save a change to this component, runs already going stop sending identity to this server within 10 minutes. Create new runs to use the change.",
+
   // ---- Permissions switch row (custom_component) ----
   DEFINE_LABEL: "Custom components",
   DEFINE_BLURB: "Whether a person may define their own components, for one run or saved for later.",
