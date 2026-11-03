@@ -3,12 +3,21 @@
 
 package api
 
-// The refusals of a run that keeps or resumes a machine (run_kept_machine.go): a create or Review that
-// asks to keep a macOS VM's machine, or to resume one, and the dispatch that inserts or claims it. The
-// reasons the kept-machine routes share are in reasons_kept_machine_shared.go. The same closed set and the
-// same convention as reasons.go; TestReasonDocsMatchReasonsGo reads this file too. Their sentences are in
-// run_kept_machine_msgs.go.
+// The kept-machine reasons: the same closed set and convention as reasons.go, in a file of their own
+// beside the other kept-machine code. TestReasonDocsMatchReasonsGo reads this file too.
 const (
+	reasonKeptMachineSiteOff      = "kept_machine_site_off"      // macos_vm.allow_kept_machines is not true: no kept machines on this install
+	reasonKeptMachineNotYourMac   = "kept_machine_not_your_mac"  // not a person, or no Mac of the caller's own outside other people's pools
+	reasonKeptMachinePersonLimit  = "kept_machine_person_limit"  // the caller keeps macos_vm.max_kept_machines_per_person machines already
+	reasonKeptMachineNotFound     = "kept_machine_not_found"     // no kept machine of the caller's with that id (a resume: that id or name)
+	reasonKeptMachineInUse        = "kept_machine_in_use"        // a run holds the machine, so it can't be deleted or resumed
+	reasonKeptMachineDeleting     = "kept_machine_deleting"      // a delete of the machine has started
+	reasonKeptMachineDeleteFailed = "kept_machine_delete_failed" // the Mac refused the delete before removing anything; it is kept
+	// The Mac's answer was lost or was not a refusal, so the machine may be gone already: the delete
+	// stays pending, is retried until the Mac confirms it, and the machine can't be resumed meanwhile.
+	reasonKeptMachineDeleteUnconfirmed = "kept_machine_delete_unconfirmed"
+	// A run that keeps or resumes a machine (run_kept_machine.go): its create or Review, and the dispatch
+	// that inserts or claims the machine.
 	reasonKeptMachineInvalid          = "kept_machine_invalid"           // the request's machine is malformed: both keep and resume, fresh without resume, a bad name
 	reasonKeptMachineInteractiveOnly  = "kept_machine_interactive_only"  // not an interactive macOS VM run
 	reasonKeptMachineResidentSecrets  = "kept_machine_resident_secrets"  // the run would put a lasting credential inside the machine

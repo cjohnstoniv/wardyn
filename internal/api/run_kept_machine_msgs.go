@@ -5,9 +5,8 @@ package api
 
 import "fmt"
 
-// The sentences of the kept-machine refusals. Their reasons are in reasons_kept_machine_run.go and
-// reasons_kept_machine_shared.go, where every string constant is read as a reason, so the sentences live
-// here. No sentence carries a backtick.
+// The sentences of a run's kept-machine refusals. Their reasons are in reasons_kept_machine.go, where
+// every string constant is read as a reason, so the sentences live here. No sentence carries a backtick.
 
 // Request shape (400).
 const (
@@ -98,4 +97,9 @@ func keptMachineFreshBaseMsg(base string) string {
 // keptMachineResetUnconfirmedMsg refuses a normal resume of a machine whose fresh start never confirmed.
 func keptMachineResetUnconfirmedMsg(name string) string {
 	return fmt.Sprintf("Your machine %s was being started fresh when its run ended, and Wardyn can't tell whether that finished. Start it fresh to use it.", name)
+}
+
+// keptMachineExpiredDeletedMsg is an expired machine's refusal once its Mac confirmed the delete.
+func keptMachineExpiredDeletedMsg(name string, days int) string {
+	return fmt.Sprintf("Your machine %s wasn't used for %d days, so it was deleted. Start a new one.", name, days)
 }

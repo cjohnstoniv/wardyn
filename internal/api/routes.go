@@ -650,7 +650,7 @@ func (s *Server) routes() chi.Router {
 			// …and POST /drives/{id}/reclaim with them: mountUserDriveFamily
 			// (user_drives_reclaim.go) joins the family's two halves.
 			s.mountUserDriveFamily(r, operatorOnly, securityOps)
-
+			s.mountKeptMachineRoutes(r, operatorOnly) // kept_machines.go: a person's own kept machines; the super admin's list and delete
 			s.mountRecordingRoutes(r)
 		})
 

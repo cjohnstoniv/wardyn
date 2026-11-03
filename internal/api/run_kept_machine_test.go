@@ -783,7 +783,7 @@ func TestKeptMachineDispatchRaceFailsTheRunWithTheCreateSentence(t *testing.T) {
 	wantKeptAudit(t, r.audit, "machine.create", "denied", reasonKeptMachinePersonLimit)
 }
 
-func TestKeptMachineResumeEndsTheRunHeldInItsGrace(t *testing.T) {
+func TestResumeDuringGraceEndsTheOldRun(t *testing.T) {
 	r := newKeptRig(t, keepingCaps())
 	ended := time.Now().Add(-time.Hour)
 	old := types.AgentRun{ID: uuid.New(), State: types.RunRunning, LostAt: &ended, LostReason: types.LostEnded}
@@ -929,7 +929,7 @@ func TestKeptMachineConfirmedFreshStartRecordsTheMacsBase(t *testing.T) {
 	if !r.srv.keptMachineResetting(context.Background(), run, kd) {
 		t.Fatal("mark failed")
 	}
-	r.srv.keptMachineUp(context.Background(), run, kd)
+	r.srv.keptMachineUp(context.Background(), run, kd, nil)
 	want, _ := time.Parse(time.RFC3339, caps.Base.CreatedAt)
 	if got := r.st.machines[m.ID]; !got.BasePreparedAt.Equal(want) || got.Base != types.MacOSStandardBase {
 		t.Fatalf("after a confirmed fresh start: %+v, want prepared %v", got, want)
@@ -990,4 +990,52 @@ func TestKeptMachineDispatchForAKilledRunMakesNoMachine(t *testing.T) {
 	if got := r.st.machines[m.ID]; got.State != types.KeptMachineKept || got.RunID != nil {
 		t.Fatalf("a killed run's claim changed the machine: %+v", got)
 	}
+}
+
+// A suspension kills the run as the system, which keeps the machine unscrubbed; nothing but its owner's
+// own live session can resume it, and the suspended person has none.
+func TestSuspensionKillKeepsTheMachineUnbootable(t *testing.T) {
+	r := newKeptRig(t, keepingCaps())
+	r.kept("web", func(m *types.KeptMachine) { m.Scrubbed = false })
+	in := r.ask(client.RunMachine{Resume: "web"})
+	for name, ctx := range map[string]context.Context{
+		"the system, or an admin token": context.Background(),
+		"another person":                personCtx(bobSub),
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
+		plan, rf := r.srv.keptMachineDecision(req, in)
+		if rf == nil || plan != nil {
+			t.Errorf("%s resumed the machine: %+v", name, plan)
+		}
+	}
+	if plan, rf := r.decide(in); rf != nil || plan.mode != keptModeResume {
+		t.Fatalf("its owner's own session: %+v, %+v", plan, rf)
+	}
+}
+
+func TestKeptMachineBootScrubWritesItsRow(t *testing.T) {
+	r := newKeptRig(t, keepingCaps())
+	r.kept("web", nil)
+	plan, rf := r.decide(r.ask(client.RunMachine{Resume: "web"}))
+	if rf != nil {
+		t.Fatal(rf.body.Error)
+	}
+	run := r.startingRun()
+	kd, ok := r.srv.keptMachineAtDispatch(context.Background(), run, plan)
+	if !ok {
+		t.Fatal("claim failed")
+	}
+	r.srv.keptMachineUp(context.Background(), run, kd, nil)
+	for _, ev := range r.audit.snapshot() {
+		if ev.Action == "machine.scrub" {
+			t.Fatal("a boot with no scrub report wrote machine.scrub")
+		}
+	}
+	r.srv.keptMachineUp(context.Background(), run, kd, &runner.KeptScrub{When: "boot", Outcome: keptScrubDone, Removed: map[string]int{"keychain": 2}})
+	data := wantKeptAudit(t, r.audit, "machine.scrub", "success", "")
+	if data["when"] != "boot" || data["outcome"] != keptScrubDone || data["machine_id"] != kd.machine.ID.String() {
+		t.Fatalf("machine.scrub = %v", data)
+	}
+	r.srv.keptMachineUp(context.Background(), run, kd, &runner.KeptScrub{When: "boot", Outcome: keptScrubFailed})
+	wantKeptAudit(t, r.audit, "machine.scrub", "failure", "")
 }

@@ -86,6 +86,8 @@ type keptMachineAsk struct {
 	comps    runComponents
 	keepWork bool
 	queued   bool
+	// create is the create door's: only it starts the delete of an expired machine it meets.
+	create bool
 }
 
 // keptMac is the caller's own Mac the run is placed on, as the step read it.
@@ -109,7 +111,7 @@ func (s *Server) stepKeptMachine(f *runFold, _ *foldRecorder) bool {
 		return true
 	}
 	plan, rf := s.keptMachineDecision(f.r, keptMachineAsk{req: *f.req, ceiling: f.ceiling, place: f.place, spec: f.spec,
-		comps: f.comps, keepWork: f.keep != nil, queued: f.queued})
+		comps: f.comps, keepWork: f.keep != nil, queued: f.queued, create: f.mode == foldCreate})
 	if rf == nil {
 		f.machine = plan
 		return true
@@ -388,7 +390,7 @@ func (s *Server) keptResumeRefusal(ctx context.Context, st keptMachineStore, in 
 	}
 	now := s.cfg.Now().UTC()
 	if !now.Before(km.ExpiresAt) {
-		return runError(http.StatusGone, reasonKeptMachineExpired, keptMachineExpiredMsg)
+		return s.keptExpiredRefusal(ctx, km, in.create)
 	}
 	limit, err := s.macOSBaseLimitOf(ctx)
 	if err != nil {
@@ -423,6 +425,22 @@ func (s *Server) keptResumeRefusal(ctx context.Context, st keptMachineStore, in 
 		plan.base, plan.prepared = keptCurrentBase(mac.caps, km.Base)
 	}
 	return nil
+}
+
+// keptExpiredRefusal is the refusal of a resume of an expired machine. A create starts its delete now;
+// the sentence says it was deleted only once the Mac confirmed it, and that it will be until then. The
+// dry doors delete nothing.
+func (s *Server) keptExpiredRefusal(ctx context.Context, km types.KeptMachine, create bool) *runRefusal {
+	if ks, ok := s.cfg.Store.(store.KeptMachineStore); ok && create {
+		if d := s.expireKeptMachine(ctx, ks, km); keptMachineDeleteConfirmed(d.outcome) {
+			days := types.KeptMachineIdleDaysDefault
+			if sc, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
+				days = sc.MacOSVM.KeptMachineIdleDaysOrDefault()
+			}
+			return runError(http.StatusGone, reasonKeptMachineExpired, keptMachineExpiredDeletedMsg(km.Name, days))
+		}
+	}
+	return runError(http.StatusGone, reasonKeptMachineExpired, keptMachineExpiredMsg)
 }
 
 // keptStateRefusal refuses a machine being deleted, or one a run holds.
@@ -756,10 +774,11 @@ func (s *Server) keptResetNotAsked(ctx context.Context, run types.AgentRun, k ke
 // start, which the Mac has now made, records the base it was made from (as the Mac reports that base now)
 // and clears its mark. A base whose preparation time the Mac does not report keeps the mark: a normal
 // resume stays refused rather than read an age nobody knows.
-func (s *Server) keptMachineUp(ctx context.Context, run types.AgentRun, k keptDispatch) {
+func (s *Server) keptMachineUp(ctx context.Context, run types.AgentRun, k keptDispatch, boot *runner.KeptScrub) {
 	if k.plan == nil {
 		return
 	}
+	s.auditKeptBootScrub(ctx, run.ID, k.machine.ID, boot)
 	switch k.plan.mode {
 	case keptModeNew:
 		if st, ok := s.cfg.Store.(keptMachineStore); ok {
@@ -777,6 +796,22 @@ func (s *Server) keptMachineUp(ctx context.Context, run types.AgentRun, k keptDi
 			slog.WarnContext(ctx, "wardynd: record a fresh kept machine's base", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
 	}
+}
+
+// auditKeptBootScrub writes machine.scrub for the boot scrub a resumed machine's Mac reported at create;
+// nothing when it reported none (a new machine, or a Mac that predates the report).
+func (s *Server) auditKeptBootScrub(ctx context.Context, runID, machineID uuid.UUID, scrub *runner.KeptScrub) {
+	if scrub == nil {
+		return
+	}
+	result := "success"
+	if scrub.Outcome == keptScrubFailed {
+		result = "failure"
+	}
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "machine.scrub", machineID.String(), result, mustJSON(map[string]any{
+		"machine_id": machineID, "run_id": runID, "when": cmp.Or(scrub.When, "boot"), "outcome": scrub.Outcome, "removed": scrub.Removed,
+		"ca_sha256": scrub.CAs,
+	})))
 }
 
 // keptMacBaseNow is base as Mac runnerID reports it now: its name, and when it was prepared (zero when
