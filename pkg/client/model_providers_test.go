@@ -61,6 +61,12 @@ func TestModelProvidersRead_HasNoSecretBearingField(t *testing.T) {
 			if name == "" || name == "-" {
 				name = strings.ToLower(f.Name)
 			}
+			// A name argued for: token_lifetime_seconds is how long a gateway's run identity token lives, a
+			// number of seconds, never the token.
+			if name == "token_lifetime_seconds" {
+				walk(path+"."+f.Name, f.Type, seen)
+				continue
+			}
 			for _, bad := range []string{"secret", "token", "password", "key"} {
 				if strings.Contains(name, bad) {
 					t.Errorf("%s.%s (json %q) looks like it carries a credential: GetModelProviders must return configuration and counts only", path, f.Name, name)
