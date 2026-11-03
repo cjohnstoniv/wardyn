@@ -904,7 +904,7 @@ func TestDriveOpenListsWithoutVolumeFoldersOrXattrs(t *testing.T) {
 // a real complaint among the others is counted alone.
 func TestDriveOpenUnreadItemsLeaveOutVolumeNoise(t *testing.T) {
 	noise := "tar: ./.Spotlight-V100: Cannot open: Operation not permitted\ntar: ./.Trashes/501: Cannot stat: Permission denied\n" +
-		"tar: ./.fseventsd: Failed to get extended attributes\ntar: ./a.txt: Couldn't read xattr\ntar: Error exit delayed from previous errors\n"
+		"tar: ./.fseventsd: Failed to get extended attributes\ntar: ./a.txt: Couldn't read xattr\ntar: ./a.txt: Couldn't read xattr: Operation not permitted\ntar: ./x: Couldn't list extended attributes: Permission denied\ntar: Error exit delayed from previous errors\n"
 	for _, tc := range []struct {
 		name, stderr string
 		unread       string // "" for no warning

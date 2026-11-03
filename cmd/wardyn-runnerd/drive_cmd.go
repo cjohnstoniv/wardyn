@@ -764,9 +764,11 @@ func driveOpenTarArgv() []string {
 // driveOpenTarNoise matches a tar complaint that names only one of driveOpenTarExcluded at the drive's root.
 var driveOpenTarNoise = regexp.MustCompile(`(^|[\s:])\./(` + strings.Join(driveOpenTarExcluded, "|") + `)(/\S*)?(:|$)`)
 
-// driveOpenTarXattr matches a complaint whose message, the part after the last colon, is about extended
-// attributes. A path that holds the words is followed by ": <message>", so it does not match.
-var driveOpenTarXattr = regexp.MustCompile(`(?i)(extended attribute|xattr)[^:]*$`)
+// driveOpenTarXattr matches a complaint that a verb on extended attributes failed ("Couldn't read xattr",
+// "Failed to get extended attributes"), whatever follows: bsdtar appends ": <strerror>", so the tail cannot be
+// anchored. Requiring the verb phrase keeps a path that holds the words ("./xattr-notes.txt: Cannot open")
+// from matching.
+var driveOpenTarXattr = regexp.MustCompile(`(?i)(couldn't|could not|cannot|can't|failed to|unable to) (read|list|query|get|set|restore|save|copy) (the )?(extended attributes?|xattrs?)`)
 
 // driveOpenUnreadLines is lines without the ones that are not unread items of the drive: a complaint about
 // one of driveOpenTarExcluded, and one about extended attributes.
