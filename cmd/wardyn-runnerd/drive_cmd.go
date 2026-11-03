@@ -314,6 +314,7 @@ type driveOpenDest struct {
 	lock         *os.File // flock on the destination's lock file in the parent, held for the session
 	leaf, shown  string
 	created      bool
+	trash        string // the person's Trash folder
 	limits       driveOpenLimits
 }
 
@@ -326,35 +327,37 @@ func (d *driveOpenDest) close() {
 }
 
 // undo removes the folder's contents, which this run alone can have written (it holds the lock and found
-// the folder empty), and the folder if this run made it. It runs after a failed copy, a discard and a
-// write back that sent everything; the first thing it could not remove is returned.
-func (d *driveOpenDest) undo() error {
-	var first error
+// the folder empty, and the person has not been asked to touch it yet), and the folder if this run made it.
+// It runs after a failed copy; what it cannot remove stays.
+func (d *driveOpenDest) undo() {
 	left, _ := fs.ReadDir(d.root.FS(), ".")
 	for _, e := range left {
-		if err := d.root.RemoveAll(e.Name()); err != nil && first == nil {
-			first = err
-		}
+		_ = d.root.RemoveAll(e.Name())
 	}
 	if d.created {
-		if err := d.parent.Remove(d.leaf); err != nil && first == nil {
-			first = err
-		}
+		_ = d.parent.Remove(d.leaf)
 	}
-	return first
 }
 
-// remove is undo for a session that ended normally, and the closing line it prints says what happened to the
-// folder. A folder that was already there stays, empty.
-func (d *driveOpenDest) remove(out io.Writer) {
-	switch err := d.undo(); {
-	case err != nil:
-		fmt.Fprintf(out, "Could not remove everything in %s (%s). Delete it yourself before the next drive open.\n", d.shown, driveOpenSafe(err.Error()))
-	case d.created:
-		fmt.Fprintf(out, "The folder %s was removed.\n", d.shown)
-	default:
-		fmt.Fprintf(out, "The files in %s were removed; the empty folder was there before this run, so it stays.\n", d.shown)
+// toTrash moves the whole folder into the Trash with one rename, so a write that lands late is in the moved
+// folder and can be got back, not lost. It never deletes. A folder that was there before the run is not moved.
+func (d *driveOpenDest) toTrash() error {
+	if !d.created {
+		return errors.New("the folder was there before this run")
 	}
+	if err := os.Mkdir(d.trash, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	return os.Rename(d.shown, filepath.Join(d.trash, d.leaf+" "+time.Now().UTC().Format("2006-01-02T150405Z")))
+}
+
+// finish ends a session that is over for the folder: it moves it to the Trash, or keeps it, and says which.
+func (d *driveOpenDest) finish(out io.Writer) {
+	if d.toTrash() != nil {
+		fmt.Fprintf(out, "The folder %s is kept; delete it when you're done.\n", d.shown)
+		return
+	}
+	fmt.Fprintf(out, "The folder %s was moved to the Trash.\n", d.shown)
 }
 
 // driveOpenSent is what the folder held when the write back began: its regular files as they were (size,
@@ -382,10 +385,9 @@ func (d *driveOpenDest) sent() (driveOpenSent, error) {
 	return s, err
 }
 
-// removeSent removes what is still exactly what was sent and returns the number of items it kept: a file that
-// differs or is new, and a folder made since (as one item). A folder that holds a kept item is kept. The
-// residual window is a change made between a file's check and its removal.
-func (d *driveOpenDest) removeSent(s driveOpenSent, dir string) (kept int) {
+// changed is how many items under dir differ from what was sent: a file that differs or is new, and a folder
+// made since (as one item). Nothing is removed here.
+func (d *driveOpenDest) changed(s driveOpenSent, dir string) (n int) {
 	entries, err := fs.ReadDir(d.root.FS(), dir)
 	if err != nil {
 		return 1
@@ -395,30 +397,25 @@ func (d *driveOpenDest) removeSent(s driveOpenSent, dir string) (kept int) {
 		fi, err := d.root.Lstat(p)
 		was := s.files[p]
 		switch {
-		case err != nil || fi.IsDir() && !s.dirs[p]:
-			kept++
-		case fi.IsDir():
-			if n := d.removeSent(s, p); n > 0 || d.root.Remove(p) != nil {
-				kept += max(n, 1)
-			}
+		case err != nil:
+			n++
+		case fi.IsDir() && s.dirs[p]:
+			n += d.changed(s, p)
 		case was != nil && fi.Mode().IsRegular() && fi.Size() == was.Size() && fi.ModTime().Equal(was.ModTime()) && os.SameFile(fi, was):
-			if d.root.Remove(p) != nil {
-				kept++
-			}
 		default:
-			kept++
+			n++
 		}
 	}
-	return kept
+	return n
 }
 
-// removeSentFiles is remove for a write back that sent everything, but it keeps what changed after the send.
-func (d *driveOpenDest) removeSentFiles(out io.Writer, s driveOpenSent) {
-	if kept := d.removeSent(s, "."); kept > 0 {
-		fmt.Fprintf(out, "The folder %s is kept: %s in it changed after it was sent and did not go back.\n", d.shown, driveOpenCount(kept, "item", "items"))
+// finishSent is finish after a write back that sent everything: a folder that changed after the send stays.
+func (d *driveOpenDest) finishSent(out io.Writer, s driveOpenSent) {
+	if n := d.changed(s, "."); n > 0 {
+		fmt.Fprintf(out, "The folder %s is kept: %s in it changed after it was sent and did not go back.\n", d.shown, driveOpenCount(n, "item", "items"))
 		return
 	}
-	d.remove(out)
+	d.finish(out)
 }
 
 // openDriveDest makes or checks the folder for the drive named name, and sets the copy's limits from the
@@ -477,7 +474,7 @@ func (m *macOSVMs) openDriveDest(name string) (*driveOpenDest, error) {
 		_ = parent.Close()
 		return nil, err
 	}
-	d := &driveOpenDest{root: root, parent: parent, lock: lock, leaf: leaf, shown: shown, created: created,
+	d := &driveOpenDest{root: root, parent: parent, lock: lock, leaf: leaf, shown: shown, created: created, trash: filepath.Join(home, ".Trash"),
 		limits: driveOpenLimits{entries: driveOpenMaxEntries, bytes: free - macOSVMDiskFloor}}
 	if left, _ := fs.ReadDir(root.FS(), "."); len(left) > 0 {
 		d.close()
@@ -741,7 +738,7 @@ func driveOpenWork(ctx context.Context, j driveOpenJob) (result string, err erro
 	fmt.Fprintln(j.out, "Change the files, then press Return to write them back, or press Ctrl-C to discard your changes.")
 	if !driveOpenReturn(ctx, j.in) {
 		fmt.Fprintln(j.out, "Discarded: nothing was written back.")
-		j.dest.remove(j.out)
+		j.dest.finish(j.out)
 		return driveOpenDiscarded, nil
 	}
 	sent, err := j.dest.sent()
@@ -758,7 +755,7 @@ func driveOpenWork(ctx context.Context, j driveOpenJob) (result string, err erro
 		// Links, devices, pipes and set-id files are never sent; removing the folder would lose them.
 		fmt.Fprintf(j.out, "The folder %s is kept: %s in it could not be written back.\n", j.dest.shown, driveOpenCount(unsent, "item", "items"))
 	default:
-		j.dest.removeSentFiles(j.out, sent)
+		j.dest.finishSent(j.out, sent)
 	}
 	return driveOpenWrittenBack, nil
 }
