@@ -15,6 +15,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A member policy with no desktop setting now gets the ceiling's desktop controls (for example, copy out opens where the ceiling allows it). Set `desktop` on the policy to keep the narrower defaults.
 - Existing `image` capability grants whose value ends in `/*` (for example `registry.example.com/team/*`, which matched nothing until now) now match every image under that path. Review them before upgrading. A stored image value with any other `*`, or a prefix without a registry host, still matches nothing.
+- After a downgrade to an older server, a person whose walls use the new settings (tool rules, push rules, recording, auto-stop, or Azure DevOps or GitHub capabilities) gets errors when they create a run, until they run `wardyn walls delete` or save their walls without those settings.
 
 ### Fixed
 
@@ -27,12 +28,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - An `image` capability grant may be a registry or path prefix ending in `/*` (for example `registry.example.com/team/*`), so one grant covers every image under it. A deny on an image also covers its other spellings, such as capitals in the host, `:443` and Docker Hub short names.
 - An admin can set a model provider's run identity token to live 60 to 600 seconds (`gateway_identity.token_lifetime_seconds`; the default stays 10 minutes), so a killed run's tokens stop working sooner
 - `wardyn window <run>` opens a window onto your macOS VM run on your own Mac, `wardyn window <run> --status` shows whether one can open and why your last one closed, and `wardyn run --machine-kind macos_vm --window` asks for it as the VM comes up. A refusal prints the server's sentence and exits non-zero. Built and unit-tested; not yet run on a real Mac.
+- Your walls can now also narrow tool rules, push rules, recording, auto-stop and Azure DevOps and GitHub capabilities, and the Settings card keeps them across a save.
 
 ## [0.10.0-rc.11] — 2026-11-02
 
 ### Added
 
-- Your walls can now also narrow tool rules, push rules, recording, auto-stop and Azure DevOps and GitHub capabilities, and the Settings card keeps them across a save.
 - A Linux VM run can mount a drive bound to its runner. An older runner and a Kubernetes runner are refused at Review. Do not rely on a file lock across two VMs.
 - New Run now says which of your own walls apply to the run, in one line on Review above the setup groups and above the Tools step totals, with a link to change them (opens in a new tab).
 - Governance profiles have a new limit, "Deny watching background desktops" (`deny_background_desktop_watch`), and Settings has an "Allow watching background runs" switch for macOS virtual machines. The switch is on by default.
@@ -96,10 +97,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Security
 
 - An approval rule no longer approves a host a person denied on that run after the run's proxy is replaced. The approval waits for a person, and a person's later allow undoes the deny.
-
-### Before you upgrade
-
-- After a downgrade to an older server, a person whose walls use the new settings (tool rules, push rules, recording, auto-stop, or Azure DevOps or GitHub capabilities) gets errors when they create a run, until they run `wardyn walls delete` or save their walls without those settings.
 
 ## [0.10.0-rc.10] — 2026-11-01
 
