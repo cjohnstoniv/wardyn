@@ -84,6 +84,9 @@ const (
 	ScrubRunDirs          = "run_dirs"
 	ScrubDesktopPassword  = "desktop_password"
 	ScrubAWSProfiles      = "aws_profiles"
+	// ScrubAWSConfigMalformed counts a ~/.aws/config left whole, unread as sections, that names
+	// Wardyn's profile: the scrub fails, so the record shows it.
+	ScrubAWSConfigMalformed = "aws_config_malformed"
 )
 
 // scrubReadMax bounds a file the scrub reads: every file Wardyn writes is far smaller, and a larger
@@ -298,11 +301,19 @@ const awsConfig = ".aws/config"
 
 // scrubAWSConfig removes Wardyn's [profile wardyn] and [sso-session wardyn] sections from
 // ~/.aws/config and keeps every other section byte for byte; the file goes only when nothing but
-// blank lines and comments is left. A file it cannot read as sections is left whole.
+// blank lines and comments is left. A file it cannot read as sections is left whole; when it names
+// Wardyn's profile the scrub fails.
 func (m MacScrub) scrubAWSConfig(home *os.Root, s *scrubbing) {
 	b, err := readHomeFile(home, awsConfig)
 	s.fail(awsConfig, err)
-	if err != nil || b == nil || !wellFormedINI(string(b)) {
+	if err != nil || b == nil {
+		return
+	}
+	if !wellFormedINI(string(b)) {
+		if namesWardynAWS(string(b)) {
+			s.add(ScrubAWSConfigMalformed, 1)
+			s.failed = true
+		}
 		return
 	}
 	drop := func(sec []string) bool { return wardynAWSSection(sec[0]) }
@@ -332,6 +343,18 @@ func wardynAWSSection(header string) bool {
 	switch strings.Join(strings.Fields(h[1:len(h)-1]), " ") {
 	case "profile " + ScrubAWSProfile, "sso-session " + ScrubAWSProfile:
 		return true
+	}
+	return false
+}
+
+// namesWardynAWS is text with a Wardyn profile or sso-session header, closed or not.
+func namesWardynAWS(conf string) bool {
+	for _, l := range strings.Split(conf, "\n") {
+		t := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(l), "["), "]")
+		switch strings.Join(strings.Fields(t), " ") {
+		case "profile " + ScrubAWSProfile, "sso-session " + ScrubAWSProfile:
+			return true
+		}
 	}
 	return false
 }

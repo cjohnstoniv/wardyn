@@ -129,9 +129,11 @@ type Untrusted struct {
 	Removed, Refused, Failed []string
 }
 
-// UntrustRecorded removes every recorded run CA from the System keychain with its trust settings,
-// by SHA-1 (security delete-certificate -t -Z, the form a tools update uses for a rotated CA), and
-// drops the record of each one that is gone. err is a record folder that could not be read.
+// UntrustRecorded removes every recorded run CA's trust and certificate, and drops the record of each
+// one that is gone. TrustRunCA trusts in the admin trust domain (-d), which delete-certificate -t does
+// not reach (-t is the user domain), so the admin trust goes first, by the recorded file
+// (remove-trusted-cert -d); then the certificate, by SHA-1. A step macOS refuses stops that CA there.
+// err is a record folder that could not be read.
 func (k MacKeychain) UntrustRecorded(ctx context.Context) (Untrusted, error) {
 	var u Untrusted
 	if k.RecordDir == "" {
@@ -157,13 +159,12 @@ func (k MacKeychain) UntrustRecorded(ctx context.Context) (Untrusted, error) {
 			continue
 		}
 		s1 := sha1.Sum(block.Bytes)
-		_, err = k.Run.Run(ctx, macSecurity, "delete-certificate", "-t", "-Z", strings.ToUpper(hex.EncodeToString(s1[:])), MacSystemKeychain)
+		err = k.untrust(ctx, path, strings.ToUpper(hex.EncodeToString(s1[:])))
+		if err == nil {
+			err = os.Remove(path)
+		}
 		switch _, reason := keychainCode(err); {
-		case err == nil || certNotFound(err):
-			if rmErr := os.Remove(path); rmErr != nil {
-				u.Failed = append(u.Failed, fp)
-				continue
-			}
+		case err == nil:
 			u.Removed = append(u.Removed, fp)
 		case reason == KeychainRefused:
 			u.Refused = append(u.Refused, fp)
@@ -172,6 +173,28 @@ func (k MacKeychain) UntrustRecorded(ctx context.Context) (Untrusted, error) {
 		}
 	}
 	return u, nil
+}
+
+// untrust runs RemoveTrustArgs then DeleteCertArgs; one that finds nothing to remove has nothing to do.
+func (k MacKeychain) untrust(ctx context.Context, certFile, sha1Hex string) error {
+	for _, args := range [][]string{RemoveTrustArgs(certFile), DeleteCertArgs(sha1Hex)} {
+		if _, err := k.Run.Run(ctx, macSecurity, args...); err != nil && !certNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// RemoveTrustArgs removes a certificate's trust settings from the admin trust domain, where
+// KeychainTrustArgs put them. See security(1), remove-trusted-cert.
+func RemoveTrustArgs(certFile string) []string {
+	return []string{"remove-trusted-cert", "-d", certFile}
+}
+
+// DeleteCertArgs deletes the certificate with SHA-1 sha1Hex from the System keychain, with its user
+// trust settings. See security(1), delete-certificate.
+func DeleteCertArgs(sha1Hex string) []string {
+	return []string{"delete-certificate", "-t", "-Z", sha1Hex, MacSystemKeychain}
 }
 
 // certNotFound is security's exit for a certificate no keychain holds: the CA is already gone.

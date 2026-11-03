@@ -169,7 +169,7 @@ func TestScrubUntrustsEveryRecordedRunCA(t *testing.T) {
 	sha1Gone := ""
 	r.calls = nil
 	r.out = func(argv []string) ([]byte, error) {
-		if argv[4] == sha1Gone {
+		if argv[1] == "delete-certificate" && argv[4] == sha1Gone {
 			return nil, exitError(t, "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.")
 		}
 		return nil, nil
@@ -178,14 +178,22 @@ func TestScrubUntrustsEveryRecordedRunCA(t *testing.T) {
 	fp2, s2 := caDigests(t, two)
 	sha1Gone = s2
 	rep := m.Scrub(context.Background(), ScrubAtStop)
-	var want [][]string
-	for _, s := range []string{s1, s2} {
-		want = append(want, []string{"/usr/bin/security", "delete-certificate", "-t", "-Z", s, MacSystemKeychain})
+	// Per CA, in this order: the admin trust by the recorded file, then the certificate by SHA-1.
+	want := map[string][][]string{}
+	for _, d := range [][2]string{{fp1, s1}, {fp2, s2}} {
+		want[d[0]] = [][]string{
+			{"/usr/bin/security", "remove-trusted-cert", "-d", filepath.Join(m.Keychain.RecordDir, d[0]+".pem")},
+			{"/usr/bin/security", "delete-certificate", "-t", "-Z", d[1], MacSystemKeychain},
+		}
 	}
-	slices.SortFunc(want, func(a, b []string) int { return strings.Compare(a[4], b[4]) })
-	slices.SortFunc(r.calls, func(a, b []string) int { return strings.Compare(a[4], b[4]) })
-	if !slices.EqualFunc(r.calls, want, slices.Equal) {
-		t.Errorf("calls = %q, want %q", r.calls, want)
+	if len(r.calls) != 4 {
+		t.Fatalf("calls = %q, want 4", r.calls)
+	}
+	for i := 0; i < 4; i += 2 {
+		fp := strings.TrimSuffix(filepath.Base(r.calls[i][len(r.calls[i])-1]), ".pem")
+		if !slices.EqualFunc(r.calls[i:i+2], want[fp], slices.Equal) {
+			t.Errorf("calls %d-%d = %q, want %q", i, i+1, r.calls[i:i+2], want[fp])
+		}
 	}
 	if entries, _ := os.ReadDir(m.Keychain.RecordDir); len(entries) != 0 {
 		t.Errorf("records left: %v", entries)
@@ -210,18 +218,28 @@ func TestScrubKeepsTheRecordWhenUntrustIsRefused(t *testing.T) {
 		t.Fatal(status)
 	}
 	fp, _ := caDigests(t, ca)
-	r.out = func([]string) ([]byte, error) {
-		return nil, exitError(t, "SecTrustSettingsRemoveTrustSettings: The authorization was denied since no user interaction was possible.")
-	}
-	rep := m.Scrub(context.Background(), ScrubAtStop)
-	if rep.Outcome != ScrubFailed || rep.Removed[ScrubCAUntrustRefused] != 1 || !slices.Equal(rep.CAs, []string{fp}) {
-		t.Errorf("refused: report = %+v", rep)
-	}
-	if !exists("/", filepath.Join(m.Keychain.RecordDir, fp+".pem")) {
-		t.Fatal("a refused CA's record is dropped, so no later scrub tries it again")
+	for _, refuses := range []string{"remove-trusted-cert", "delete-certificate"} {
+		r.calls = nil
+		r.out = func(argv []string) ([]byte, error) {
+			if argv[1] == refuses {
+				return nil, exitError(t, "SecTrustSettingsRemoveTrustSettings: The authorization was denied since no user interaction was possible.")
+			}
+			return nil, nil
+		}
+		rep := m.Scrub(context.Background(), ScrubAtStop)
+		if rep.Outcome != ScrubFailed || rep.Removed[ScrubCAUntrustRefused] != 1 || !slices.Equal(rep.CAs, []string{fp}) {
+			t.Errorf("%s refused: report = %+v", refuses, rep)
+		}
+		if !exists("/", filepath.Join(m.Keychain.RecordDir, fp+".pem")) {
+			t.Fatalf("%s refused: the record is dropped, so no later scrub tries it again", refuses)
+		}
+		// A refused admin-trust removal stops there: the certificate is not deleted under its trust.
+		if refuses == "remove-trusted-cert" && len(r.calls) != 1 {
+			t.Errorf("after a refused remove-trusted-cert, calls = %q", r.calls)
+		}
 	}
 	r.out = nil
-	rep = m.Scrub(context.Background(), ScrubAtBoot)
+	rep := m.Scrub(context.Background(), ScrubAtBoot)
 	if rep.Outcome != ScrubDone || rep.Removed[ScrubCAUntrusted] != 1 || exists("/", filepath.Join(m.Keychain.RecordDir, fp+".pem")) {
 		t.Errorf("retry at boot: report = %+v", rep)
 	}
@@ -452,15 +470,16 @@ func TestScrubAWSConfigKeepsAPersonsSections(t *testing.T) {
 	for _, when := range []string{ScrubAtStop, ScrubAtBoot} {
 		for _, tc := range []struct {
 			name, conf, want string
-			gone             bool
+			gone, malformed  bool
 		}{
 			{"mixed", "[profile personal]\nregion = eu-west-1\n\n" + wardyn + "[default]\r\nregion = us-west-2",
-				"[profile personal]\nregion = eu-west-1\n\n[default]\r\nregion = us-west-2", false},
-			{"wardyn first", wardyn + person[len("# mine\n"):], person[len("# mine\n"):], false},
-			{"only wardyn's", "# written by a run\n" + wardyn, "", true},
-			{"none", person, person, false},
-			{"malformed", "region = eu-west-1\n" + wardyn, "region = eu-west-1\n" + wardyn, false},
-			{"unclosed header", wardyn + "[profile personal\nregion = x\n", wardyn + "[profile personal\nregion = x\n", false},
+				"[profile personal]\nregion = eu-west-1\n\n[default]\r\nregion = us-west-2", false, false},
+			{"wardyn first", wardyn + person[len("# mine\n"):], person[len("# mine\n"):], false, false},
+			{"only wardyn's", "# written by a run\n" + wardyn, "", true, false},
+			{"none", person, person, false, false},
+			{"malformed", "region = eu-west-1\n" + wardyn, "region = eu-west-1\n" + wardyn, false, true},
+			{"unclosed header", wardyn + "[profile personal\nregion = x\n", wardyn + "[profile personal\nregion = x\n", false, true},
+			{"malformed, not wardyn's", "region = eu-west-1\n[profile personal]\n", "region = eu-west-1\n[profile personal]\n", false, false},
 		} {
 			t.Run(when+"/"+tc.name, func(t *testing.T) {
 				m, root := scrubOn(t, &fakeRunner{})
@@ -490,8 +509,9 @@ func TestScrubAWSConfigKeepsAPersonsSections(t *testing.T) {
 				if untouched := tc.conf == tc.want; untouched != fi.ModTime().Equal(old) {
 					t.Errorf("untouched = %v but mtime moved = %v", untouched, !fi.ModTime().Equal(old))
 				}
-				if rep.Outcome != ScrubDone {
-					t.Errorf("report = %+v", rep)
+				// A malformed file naming Wardyn's profile is left whole, and the record says so.
+				if tc.malformed != (rep.Outcome == ScrubFailed) || tc.malformed != (rep.Removed[ScrubAWSConfigMalformed] == 1) {
+					t.Errorf("report = %+v, malformed = %v", rep, tc.malformed)
 				}
 			})
 		}
