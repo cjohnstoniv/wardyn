@@ -71,10 +71,11 @@ func validDesktopFileName(name string) bool {
 }
 
 // desktopRun loads the run for a transfer: the person who may enter it, while it runs, with a
-// desktop declared. It mirrors handleAttachTicket's entry rule (mayEnterRun) without the sponsor arm,
-// and it is the desktop door: a background-only run has no desktop to move files to, and deny_ui_apps
-// and deny_interactive close it as they close the desktop itself (uiEnterDesktop). It never thaws a
-// paused run: only a transfer the rules allow does, just before its exec.
+// desktop declared or a Linux VM's built-in one. It mirrors handleAttachTicket's entry rule
+// (mayEnterRun) without the sponsor arm, and it is the desktop door: a background-only run has no
+// desktop to move files to, and deny_ui_apps and deny_interactive close it as they close the desktop
+// itself (uiEnterDesktop). It never thaws a paused run: only a transfer the rules allow does, just
+// before its exec.
 func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.AgentRun, types.DesktopControls, bool) {
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
@@ -116,7 +117,8 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
 		return run, types.DesktopControls{}, false
 	}
-	if len(apps) == 0 {
+	// A Linux VM run's built-in desktop is a desktop with no declared app: its files move under the same rules.
+	if len(apps) == 0 && run.MachineKind != types.MachineLinuxVM {
 		writeErrorReason(w, http.StatusConflict, reasonDesktopTransferUnavailable, "this run's policy declares no UI app, so it has no desktop to move files to")
 		return run, types.DesktopControls{}, false
 	}

@@ -206,8 +206,14 @@ describe("DesktopCard: the Files panel moved here with its gate", () => {
     expect(buttons.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("is absent with no declared UI app, as it was in the Attach tile", async () => {
+  it("shows for a Linux VM's built-in desktop with no declared UI app", async () => {
     renderCard({ ...interactive });
+    const d = await desk();
+    expect(d).toContainElement(await screen.findByTestId("files-panel"));
+  });
+
+  it("is absent on a macOS VM with no declared UI app", async () => {
+    renderCard({ ...interactive, machine_kind: "macos_vm" });
     await desk();
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
     expect(screen.queryByTestId("files-panel")).toBeNull();

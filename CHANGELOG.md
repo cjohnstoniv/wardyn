@@ -20,6 +20,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - An organisation setting, `images.require_digest` (off by default), refuses a member's run whose image, or whose attached workspace's base image (whoever owns the workspace), is not pinned by digest (`image@sha256:<digest>`), even where an exact or prefix image grant covers it. The refusal is `403` `image_digest_required`. Operators are not bound; their unpinned runs are marked `image_digest_exempt` on the run.create audit row. Not run in CI against a real registry.
+- The run page says, above the terminal, when an interactive macOS VM run is still being set up (`macos_preparing` on `GET /runs/{id}`), even with windows onto the Mac off; and a Linux VM run's built-in desktop gets the Files panel, under the run's desktop rules, with no UI app declared.
 
 ### Fixed
 

@@ -25,6 +25,7 @@ import { useOperator, useOperatorResolved, usePrincipal } from "../../wardyn/ope
 import { isBackgroundRun, mayEnterRunOrUnknown, runEntryRefusalLine } from "../../../lib/run-entry";
 import { RUN_COCKPIT, RUN_MODE } from "../../wardyn/copy";
 import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
+import { RUN_VM_PAGE } from "../../wardyn/copy/run-cockpit";
 import { isMacOSVM } from "../../../lib/types/machine-kind";
 import type { StartupLastStep } from "../run-status-detail";
 import { StartupProgress } from "./startup-progress";
@@ -105,7 +106,17 @@ export function TerminalPane({
   if (attachable) {
     // fill: the pane owns the height. h-[70vh] was a guess that predates this
     // layout and stays the default for every other mount site.
-    return <AttachTerminal fill barAction={watchDesktop} runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} policy={run.policy} />;
+    const terminal = <AttachTerminal fill barAction={watchDesktop} runId={run.id} createdBy={run.created_by} operatorOwned={run.operator_owned} policy={run.policy} />;
+    // A macOS VM run is RUNNING while its setup runs: the terminal opens at once, so say the setup is still going.
+    if (!run.macos_preparing) return terminal;
+    return (
+      <>
+        <p role="status" className="shrink-0 rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground" data-testid="macos-setting-up">
+          {RUN_VM_PAGE.settingUp}
+        </p>
+        {terminal}
+      </>
+    );
   }
 
   if (wantsKept && (keptOut || !keptFresh)) {

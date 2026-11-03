@@ -298,6 +298,9 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// MacWindow is whether this caller may open a window onto a live macOS VM run on its own Mac, and if not
 		// why (run_mac_window.go); absent on every other run.
 		MacWindow *macWindowView `json:"mac_window,omitempty"`
+		// MacOSPreparing is true while an interactive macOS VM run's setup (repo clone, harness setup) runs
+		// (macOSPrepRunning); absent on every other run, and once it is done.
+		MacOSPreparing bool `json:"macos_preparing,omitempty"`
 		// MacOSDisk is where a macOS VM run's disk stands on its Mac at the run's end (run_macos_disk.go);
 		// absent on every other run.
 		MacOSDisk *runMacOSDiskView `json:"macos_disk,omitempty"`
@@ -315,6 +318,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		MacOS:           s.runMacOSView(run),
 		BackgroundWatch: s.backgroundWatchViewFor(r.Context(), run, principalFromRequest(r)),
 		MacWindow:       s.macWindowViewFor(r.Context(), stored, s.macWindowAuthorityOf(r)),
+		MacOSPreparing:  macOSPrepRunning(stored),
 		MacOSDisk:       s.runMacOSDiskView(r.Context(), run),
 	})
 }

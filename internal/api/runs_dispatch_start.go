@@ -176,6 +176,14 @@ const macPrepInterruptedMsg = "This run's setup was interrupted when the server 
 // serving projection is never done. The attended window must not open before it is true.
 func macPrepDone(run types.AgentRun) bool { return run.StatusDetail == statusDetailMacPrepDone }
 
+// macOSPrepRunning is GET /runs/{id}'s macos_preparing: a RUNNING interactive macOS VM run, not kept, whose prep
+// has not recorded done. It is its own field because mac_window answers its earlier rows (the site switch, the
+// profile) before preparing, so a run with windows off would never say its setup is still going. stored is the
+// stored row (macPrepDone).
+func macOSPrepRunning(stored types.AgentRun) bool {
+	return stored.State == types.RunRunning && !runIsKept(stored) && macRunPreparing(stored)
+}
+
 // macPrepareTimeout bounds `agent-run --prepare`: a shallow clone of each repo and the harness setup.
 const macPrepareTimeout = 20 * time.Minute
 

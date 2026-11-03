@@ -585,6 +585,8 @@ export interface RunDetail extends AgentRun {
   background_watch?: RunBackgroundWatch;
   // Whether this caller may open a window onto the run on their own Mac (GET /runs/{id} only); see RunMacWindow.
   mac_window?: RunMacWindow;
+  // True while an interactive macOS VM run's setup (repo clone, harness setup) runs (GET /runs/{id} only); absent otherwise.
+  macos_preparing?: boolean;
   // Where a macOS VM run's disk stands on its Mac at the run's end (GET /runs/{id} only); see RunMacOSDisk.
   macos_disk?: RunMacOSDisk;
 }
