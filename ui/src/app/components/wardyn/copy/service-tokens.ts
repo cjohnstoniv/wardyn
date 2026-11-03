@@ -9,6 +9,8 @@
 //
 // The server's refusals are shown as the server says them. They are not here.
 
+import { PEOPLE } from "../../../lib/people-access-copy";
+
 const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
 
 /** "in 2 days", "12 hours ago", "just now": the mock's relative stamp (whole units, no abbreviations). */
@@ -65,7 +67,7 @@ export const INVITATIONS = {
 export const SERVICES = {
   TITLE: "Service identities I sponsor",
   SUMMARY: (active: number, total: number) => `${active} active${total > active ? `, ${total - active} not active` : ""}`,
-  LEDE: "A service identity is automation that runs under its own name, not yours. As its sponsor you create its tokens, see its runs and can stop them. An admin creates, suspends and retires it.",
+  LEDE: "A service identity is automation that runs under its own name, not yours. As its sponsor you create its tokens, see its runs and can stop them. An admin creates, suspends and retires it with wardyn service-identity.",
   STATE_ACTIVE: "Active",
   STATE_SUSPENDED: "Suspended",
   STATE_RETIRED: "Retired",
@@ -133,7 +135,7 @@ export const TOKEN_DIALOG = {
   USE_LABEL: "Use",
   USE_API: "Wardyn API",
   USE_INBOUND: "Calling inbound ports",
-  INBOUND_HELP: "An inbound token can call the ports that name you as a caller. It can't use the Wardyn API. It expires within 90 days.",
+  INBOUND_HELP: (who: string) => `An inbound token can call the ports that name ${who} as a caller. It can't use the Wardyn API. It expires within 90 days.`,
   NAME_LABEL: "Token name",
   NAME_HINT: "Helps you tell your tokens apart.",
   NAME_REQUIRED: "Name the token.",
@@ -172,4 +174,4 @@ export const TOKEN_DIALOG = {
 } as const;
 
 /** The role the new token carries, as the reveal names it: "you (User)". */
-export const ROLE_WORDS: Record<string, string> = { user: "User", security_admin: "Security admin", admin: "Super admin" };
+export const ROLE_WORDS: Record<string, string> = { user: PEOPLE.ROLE_USER, security_admin: PEOPLE.ROLE_SECURITY_ADMIN, admin: PEOPLE.ROLE_ADMIN };
