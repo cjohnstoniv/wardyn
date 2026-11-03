@@ -43,7 +43,7 @@ const CANON: [id: string, actual: string, canon: string][] = [
   ["UXR-18a", YOUR_WALLS.BARRIER_NONE, "No minimum"],
   ["UXR-18b", YOUR_WALLS.UNLISTED_ORG, "Your organisation's choice"],
   ["UXR-33", YOUR_WALLS.SITE_HINT, "Enter a host, like github.com or *.github.com."],
-  ["UXR-40", YOUR_WALLS.CLIPBOARD_HINT, "VM desktops have no copy and paste yet. These apply to app desktops in containers."],
+  ["UXR-40", YOUR_WALLS.CLIPBOARD_HINT, "Copy and paste apply to app desktops in containers; VM desktops have no copy and paste yet. Upload and download also apply to a Linux VM desktop's Files."],
   ["T4-a25", YOUR_WALLS.KINDS.cloud_sts, "Cloud credentials"],
   ["T4-a26", YOUR_WALLS.KINDS.ssh_key, "SSH key"],
   ["T4-b01", NR_WALLS.ONLY_LISTED, "Only the sites listed"],
