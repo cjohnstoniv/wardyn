@@ -187,10 +187,65 @@ func TestAgentCast_MacOSVMTaskRunIsRecorded(t *testing.T) {
 			if out := readCast(t, casts, run.ID, agentCastSession); !strings.Contains(out, "<secret-hidden>") {
 				t.Fatalf("the cast is not masked: %q", out)
 			}
-			if cs.marked() != "" {
-				t.Fatalf("not_recorded = %q, want empty", cs.marked())
+			// The pessimistic mark went down before the drain was released, and the save cleared it.
+			if cs.marked() != "" || cs.declineCount() != 1 {
+				t.Fatalf("not_recorded = %q after %d marks, want marked once and cleared", cs.marked(), cs.declineCount())
 			}
 		})
+	}
+}
+
+// blockingCasts is a recording store whose saves wait until release closes, then fail: a process that
+// never finishes its save.
+type blockingCasts struct {
+	recording.Store
+	release chan struct{}
+}
+
+func (b blockingCasts) SaveCastNamed(context.Context, string, string, io.Reader) error {
+	<-b.release
+	return errors.New("the process went before its save")
+}
+
+// A process that commits the run's output row while the agent cast's save is still pending, then dies:
+// no recovery runs for a run with a final row, so the run is left marked runner_declined (written before
+// the drain was released), never marked recorded with no cast.
+func TestAgentCast_ADeathMidSaveLeavesTheRunMarked(t *testing.T) {
+	f, cs, casts := agentCastFixture(t, types.MachineMacOSVM)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	f.srv.cfg.RecordingStore = blockingCasts{Store: casts, release: release}
+	_, spec, ok := startDispatch(f, types.SiteConfig{}, false)
+	tw, _ := spec.ExecOutput.(*tailWriter)
+	if !ok || tw == nil || tw.cast == nil {
+		t.Fatalf("started=%v, want started with a cast", ok)
+	}
+	tw.BeginDrain()
+	_, _ = tw.Write([]byte("agent output\n"))
+	tw.EndDrain(nil)
+	waitFor(t, "the pessimistic mark", func() bool { return cs.marked() == types.NotRecordedRunnerDeclined })
+	f.st.mu.Lock()
+	f.st.state = types.RunRunning
+	f.st.mu.Unlock()
+	f.srv.FinishRunOutput(t.Context(), f.run.ID) // the drain is released while the save waits
+	f.mem.mu.Lock()
+	final := f.mem.rows[f.run.ID].CapturedAt != nil
+	f.mem.mu.Unlock()
+	if !final {
+		t.Fatal("the output row was not committed while the save was pending")
+	}
+
+	dropTail(f) // the process goes; its cast and save with it
+	run, _ := f.srv.cfg.Store.GetRun(t.Context(), f.run.ID)
+	f.srv.recoverRunOutput(t.Context(), f.srv.runOutputStore(), run, "stale_pending")
+	if cs.marked() != types.NotRecordedRunnerDeclined || len(castRows(t, f, agentCastSession)) != 0 || len(castRows(t, f, agentCastRecoveredSession)) != 0 {
+		t.Fatalf("mark %q, agent rows %v, recovered rows %v: want the run left marked with no cast",
+			cs.marked(), castRows(t, f, agentCastSession), castRows(t, f, agentCastRecoveredSession))
+	}
+	for _, key := range []string{agentCastSession, agentCastRecoveredSession} {
+		if _, err := casts.OpenCast(context.Background(), recording.CastKey(f.run.ID.String(), key)); err == nil {
+			t.Fatalf("a %s cast was stored", key)
+		}
 	}
 }
 
@@ -337,8 +392,10 @@ func TestAgentCast_SaveFailureMarksTheRunAndSilenceKeepsItRecorded(t *testing.T)
 		tw := spec.ExecOutput.(*tailWriter)
 		tw.BeginDrain()
 		tw.EndDrain(nil)
-		tw.cast.finish() // runs the save once, or waits for the drain's own call to it
-		if rows := castRows(t, f, agentCastSession); len(rows) != 0 || cs.marked() != "" {
+		if save := tw.cast.seal(); save != nil { // seals once, or waits for the drain's own seal
+			t.Fatal("a cast with no output has a save")
+		}
+		if rows := castRows(t, f, agentCastSession); len(rows) != 0 || cs.marked() != "" || cs.declineCount() != 0 {
 			t.Fatalf("rows %v mark %q, want no row and the run recorded", rows, cs.marked())
 		}
 	})

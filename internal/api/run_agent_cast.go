@@ -31,8 +31,9 @@ import (
 // the run re-reads the runner's copy into a fresh tail (openRecoveryTail) and records that too, as
 // <run>~agent-recovered, so the two never replace each other. Where a re-read gives nothing, or a cast's
 // save fails, the run is marked runner_declined with a session.recording.write failure row saying why
-// (declineAgentOutput); a running run is never stopped for it. A cast of either session saved later
-// clears the mark.
+// (declineAgentOutput); a running run is never stopped for it. A cast about to be saved marks the run so
+// first (agentCast.seal), so a process that dies mid-save leaves the mark. A cast of either session saved
+// later clears it.
 
 const (
 	agentCastSession          = "agent"
@@ -109,28 +110,35 @@ type agentCast struct {
 	gapBytes atomic.Int64
 
 	mu       sync.Mutex
-	declined string // why a re-read found nothing to record (decline); finish then saves nothing
+	declined string // why a re-read found nothing to record (decline); seal then saves nothing
 	once     sync.Once
 }
 
 func (c *agentCast) write(p []byte) { _, _ = c.pipe.Write(p) }
 
 // decline is a re-read that ended with nothing to read (noteRecoveryEnd's reason): the copy's bytes are
-// not the run's output, so finish saves no cast and leaves the run unrecorded with reason.
+// not the run's output, so seal saves no cast and leaves the run unrecorded with reason.
 func (c *agentCast) decline(reason string) {
 	c.mu.Lock()
 	c.declined = reason
 	c.mu.Unlock()
 }
 
-// finish saves the cast once, after its copy ended (tailWriter.EndDrain). A cast with no output is not
-// saved and the run stays recorded: an agent that printed nothing left nothing to record. A save that
-// fails marks the run runner_declined on its failure row; one that succeeds clears that mark.
-func (c *agentCast) finish() {
-	c.once.Do(c.save)
+// seal ends the cast once, after its copy ended (tailWriter.EndDrain), and returns its save for the caller
+// to run once the tail's drain is released; nil when there is nothing to save. A cast with no output is
+// not saved and the run stays recorded: an agent that printed nothing left nothing to record. A cast to
+// save first marks the run runner_declined, durably, before the drain is released: the finisher may then
+// commit the run's output row, after which no recovery runs, so a process that dies before the save leaves
+// that mark rather than a run marked recorded with no cast. The save clears it, or keeps it on its
+// failure row.
+func (c *agentCast) seal() func() {
+	var save func()
+	c.once.Do(func() { save = c.take() })
+	return save
 }
 
-func (c *agentCast) save() {
+// take flushes and copies what the cast holds, and settles what seal does with it.
+func (c *agentCast) take() func() {
 	ctx := context.Background()
 	c.pipe.flush()
 	c.mw.mu.Lock()
@@ -142,14 +150,23 @@ func (c *agentCast) save() {
 	c.mu.Lock()
 	declined := c.declined
 	c.mu.Unlock()
+	switch {
+	case declined != "":
+		c.s.declineAgentOutput(ctx, c.run, declined)
+		return nil
+	case !had:
+		return nil
+	}
+	run := c.run
+	run.NotRecorded = types.NotRecordedRunnerDeclined
+	c.s.keepRunNotRecorded(ctx, run)
+	return func() { c.save(ctx, snap, truncated) }
+}
+
+// save stores the cast with its session.recording.write row: a success clears the run's runner_declined
+// mark, a failure keeps it.
+func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool) {
 	s, runID := c.s, c.run.ID
-	if declined != "" {
-		s.declineAgentOutput(ctx, c.run, declined)
-		return
-	}
-	if !had {
-		return
-	}
 	key := recording.CastKey(runID.String(), c.session)
 	saveCtx, cancel := context.WithTimeout(ctx, sessionRecordingSaveWait)
 	err := s.cfg.RecordingStore.SaveCastNamed(saveCtx, runID.String(), c.session, bytes.NewReader(snap))
@@ -167,9 +184,6 @@ func (c *agentCast) save() {
 	outcome := "success"
 	if err != nil {
 		outcome, data["error"] = "failure", err.Error()
-		run := c.run
-		run.NotRecorded = types.NotRecordedRunnerDeclined
-		s.keepRunNotRecorded(ctx, run)
 	} else {
 		s.clearAgentOutputDeclined(ctx, runID)
 	}

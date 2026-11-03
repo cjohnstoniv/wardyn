@@ -125,13 +125,18 @@ func outputGapMarker(skipped int64) string {
 // EndDrain must not block (runner.OutputDrainer), and the drain may end only
 // once the copy's bytes are through the masker, or the finisher would seal ahead
 // of them: the end waits for that on its own goroutine. The agent output cast is
-// saved after the drain ends, so its store wait never holds the finisher.
+// sealed before the drain ends (its pessimistic mark is written then) and saved
+// after, so its store wait never holds the finisher.
 func (w *tailWriter) EndDrain(err error) {
 	go func() {
 		w.t.in.flush()
-		w.t.endDrain(err)
+		var save func()
 		if w.cast != nil {
-			w.cast.finish()
+			save = w.cast.seal()
+		}
+		w.t.endDrain(err)
+		if save != nil {
+			save()
 		}
 	}()
 }
