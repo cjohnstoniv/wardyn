@@ -48,7 +48,7 @@ const (
 // image never reads the site config. Operators and the break-glass admin are runUngoverned: never refused,
 // reported as exempt so the audit row can say so.
 func (s *Server) imageDigestVerdict(ctx context.Context, image string) (digestVerdict, error) {
-	return s.digestVerdictBy(ctx, &image, s.runUngoverned)
+	return s.digestVerdictBy(ctx, &image, func(ctx context.Context) bool { return s.runUngoverned(ctx) })
 }
 
 // digestVerdictBy is imageDigestVerdict on a recorded input (AgentRun.ImageInput): nil is a run whose create
