@@ -436,7 +436,7 @@ export function HostProxyTab({
 
         {operator && !seeded && loadFailed && (
           <div className="flex flex-wrap items-center gap-2">
-            <p className="text-sm text-muted-foreground">{SITE.PROXY_LOAD_FAILED}</p>
+            <p role="alert" className="text-sm text-muted-foreground">{SITE.PROXY_LOAD_FAILED}</p>
             {onReload && (
               <Button variant="outline" size="sm" onClick={() => void onReload()}>
                 <RotateCw className="size-3.5" />
