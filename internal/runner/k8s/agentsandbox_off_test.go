@@ -125,7 +125,7 @@ func TestAgentSandboxOff_ReplacedPodChecksAreNotTaken(t *testing.T) {
 		t.Fatalf("update pod: %v", err)
 	}
 	st, err := d.Status(ctx, ref)
-	if err != nil || st.State != types.RunStarting || st.Message == agentPodReplacedMessage {
+	if err != nil || st.State != types.RunStarting || st.Message == agentPodReplacedMessage || st.FailureHint != "" {
 		t.Errorf("off Status = %+v, %v; want STARTING by the pod's phase", st, err)
 	}
 	if st, err := d.AgentStatus(ctx, ref, execContainerName); err != nil || st.State != types.RunStopped || st.Message != "agent exec not found" {

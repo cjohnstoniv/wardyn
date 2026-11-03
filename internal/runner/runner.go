@@ -409,13 +409,6 @@ type Sandbox struct {
 	KeptBase  *KeptBase  `json:",omitempty"`
 }
 
-// Status reports observed sandbox state.
-type Status struct {
-	State    types.RunState
-	ExitCode *int
-	Message  string
-}
-
 // ErrRunnerOffline is the answer for a call to a registered runner whose link
 // is down. It is transient: the caller retries or refuses, and never falls back
 // to another substrate.

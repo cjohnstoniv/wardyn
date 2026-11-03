@@ -271,11 +271,15 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 		pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, ref, metav1.GetOptions{})
 		// ponytail: with the agent-sandbox backend on, each poll also reads the Sandbox for its images;
 		// skip that while the pod's resourceVersion is unchanged if the read ever shows as load.
-		replaced := false
+		replaced, deleting := false, false
 		if err == nil && d.cfg.AgentSandbox {
-			replaced, err = d.agentPodReplaced(ctx, ns, pod)
+			replaced, deleting, err = d.agentPodReplaced(ctx, ns, pod)
 		}
 		switch {
+		case deleting:
+			// Its Sandbox is being deleted or gone: read as the gone pod below is, so a run Wardyn's
+			// own teardown already ended gets no second end, and one ended from outside fails.
+			return notFoundExitCode, nil
 		case replaced:
 			return 0, fmt.Errorf("k8s: exec wait: %s", agentPodReplacedMessage)
 		case err == nil:

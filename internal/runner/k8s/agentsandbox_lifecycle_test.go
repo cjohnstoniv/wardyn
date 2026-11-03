@@ -22,6 +22,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -143,8 +144,8 @@ func TestAgentSandboxLifecycle_ReplacedPodReadsFailed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d, cs, _, ref := asAdmitted(t)
 			ctx := context.Background()
-			if st, err := d.Status(ctx, ref); err != nil || st.State != types.RunRunning {
-				t.Fatalf("admitted pod Status = %+v, %v; want RUNNING before the change", st, err)
+			if st, err := d.Status(ctx, ref); err != nil || st.State != types.RunRunning || st.FailureHint != "" {
+				t.Fatalf("admitted pod Status = %+v, %v; want RUNNING with no failure hint before the change", st, err)
 			}
 			changeAgentPod(t, cs, ref, func(p *corev1.Pod) {
 				if len(p.Spec.InitContainers) == 0 {
@@ -154,20 +155,18 @@ func TestAgentSandboxLifecycle_ReplacedPodReadsFailed(t *testing.T) {
 			})
 			for _, read := range []struct {
 				name string
-				get  func() (string, types.RunState, error)
+				get  func() (runner.Status, error)
 			}{
-				{"Status", func() (string, types.RunState, error) {
-					st, err := d.Status(ctx, ref)
-					return st.Message, st.State, err
-				}},
-				{"AgentStatus", func() (string, types.RunState, error) {
-					st, err := d.AgentStatus(ctx, ref, execContainerName)
-					return st.Message, st.State, err
-				}},
+				{"Status", func() (runner.Status, error) { return d.Status(ctx, ref) }},
+				{"AgentStatus", func() (runner.Status, error) { return d.AgentStatus(ctx, ref, execContainerName) }},
 			} {
-				msg, state, err := read.get()
-				if err != nil || state != types.RunFailed || msg != agentPodReplacedMessage {
-					t.Errorf("%s = %s %q, %v; want FAILED with the replaced-pod sentence", read.name, state, msg, err)
+				st, err := read.get()
+				if err != nil || st.State != types.RunFailed || st.Message != agentPodReplacedMessage {
+					t.Errorf("%s = %s %q, %v; want FAILED with the replaced-pod sentence", read.name, st.State, st.Message, err)
+				}
+				// The run page shows a run's failure hint, never its status message.
+				if st.FailureHint != agentPodReplacedMessage {
+					t.Errorf("%s FailureHint = %q, want the replaced-pod sentence for the run page", read.name, st.FailureHint)
 				}
 			}
 			wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -195,15 +194,139 @@ func TestAgentSandboxLifecycle_ExecRefusesAGatedPod(t *testing.T) {
 	}
 }
 
-// A pod whose Sandbox is already gone (Wardyn's own teardown deletes it first) has no images to be
-// compared with; it reads by its phase until it is collected.
-func TestAgentSandboxLifecycle_PodWithoutItsSandboxReadsByPhase(t *testing.T) {
-	d, _, dyn, ref := asAdmitted(t)
-	if err := dyn.Tracker().Delete(sandboxesGVR, testNamespace, ref); err != nil {
-		t.Fatalf("delete Sandbox: %v", err)
+// A running pod whose Sandbox is gone (deleted with the orphan policy, or not yet collected) has no
+// template to be compared with, so it reads ended, image changed or not. Wait reads it as a gone pod:
+// Wardyn's own teardown ends the run before it deletes the Sandbox, so that end is the only one.
+func TestAgentSandboxLifecycle_PodWithoutItsSandboxReadsFailed(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		d, cs, dyn, ref := asAdmitted(t)
+		changeAgentPod(t, cs, ref, func(p *corev1.Pod) {
+			p.Status.Phase = corev1.PodRunning
+			if changed {
+				p.Spec.Containers[0].Image = "registry.example/other:1"
+			}
+		})
+		if err := dyn.Tracker().Delete(sandboxesGVR, testNamespace, ref); err != nil {
+			t.Fatalf("delete Sandbox: %v", err)
+		}
+		ctx := context.Background()
+		for name, read := range map[string]func() (runner.Status, error){
+			"Status":      func() (runner.Status, error) { return d.Status(ctx, ref) },
+			"AgentStatus": func() (runner.Status, error) { return d.AgentStatus(ctx, ref, execContainerName) },
+		} {
+			if st, err := read(); err != nil || st.State != types.RunFailed || st.FailureHint != agentPodReplacedMessage {
+				t.Errorf("image changed %v: %s = %+v, %v; want FAILED with the replaced-pod sentence", changed, name, st, err)
+			}
+		}
+		wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		if code, err := d.Wait(wctx, ref); err != nil || code != notFoundExitCode {
+			t.Errorf("image changed %v: Wait = %d, %v; want %d, nil, as for a gone pod", changed, code, err, notFoundExitCode)
+		}
+		cancel()
 	}
-	if st, err := d.Status(context.Background(), ref); err != nil || st.State != types.RunRunning {
-		t.Errorf("Status = %+v, %v; want RUNNING", st, err)
+}
+
+// An image swapped in the Sandbox template changes the pod and the template alike, so only the
+// Sandbox's generation shows it: the API server sets 1 on create, and Wardyn never changes a Sandbox.
+// The fake client sets none, which reads as unchanged; generation 1 is the real API's created Sandbox.
+// A Sandbox being deleted reads ended whatever its images: a finalizer can hold it with its pod
+// running, setting its deletion time adds one to its generation, and its pod is going with it. Wait
+// reads it as a gone pod, so a run Wardyn's own teardown already ended is not ended twice.
+func TestAgentSandboxLifecycle_ChangedSandboxSpecReadsFailed(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		gen      int64
+		deleting bool
+		swap     bool
+		want     types.RunState
+	}{
+		{"created, as the API server leaves it", 1, false, true, types.RunRunning},
+		{"spec changed after create", 2, false, true, types.RunFailed},
+		{"being deleted, images swapped", 2, true, true, types.RunFailed},
+		{"being deleted, images unchanged", 2, true, false, types.RunFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, cs, dyn, ref := asAdmitted(t)
+			obj, err := dyn.Tracker().Get(sandboxesGVR, testNamespace, ref)
+			if err != nil {
+				t.Fatalf("get Sandbox: %v", err)
+			}
+			sb := obj.(*unstructured.Unstructured).DeepCopy()
+			sb.SetGeneration(tc.gen)
+			if tc.deleting {
+				now := metav1.Now()
+				sb.SetDeletionTimestamp(&now)
+			}
+			const swapped = "registry.example/other:1"
+			if tc.swap {
+				containers, _, _ := unstructured.NestedSlice(sb.Object, "spec", "podTemplate", "spec", "containers")
+				containers[0].(map[string]any)["image"] = swapped
+				if err := unstructured.SetNestedSlice(sb.Object, containers, "spec", "podTemplate", "spec", "containers"); err != nil {
+					t.Fatalf("set template containers: %v", err)
+				}
+			}
+			if err := dyn.Tracker().Update(sandboxesGVR, sb, testNamespace); err != nil {
+				t.Fatalf("update Sandbox: %v", err)
+			}
+			if tc.swap {
+				changeAgentPod(t, cs, ref, func(p *corev1.Pod) { p.Spec.Containers[0].Image = swapped })
+			}
+			ctx := context.Background()
+			for name, read := range map[string]func() (runner.Status, error){
+				"Status":      func() (runner.Status, error) { return d.Status(ctx, ref) },
+				"AgentStatus": func() (runner.Status, error) { return d.AgentStatus(ctx, ref, execContainerName) },
+			} {
+				st, err := read()
+				if err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				if name == "Status" && st.State != tc.want {
+					t.Errorf("Status = %+v; want %s", st, tc.want)
+				}
+				if replaced := st.FailureHint == agentPodReplacedMessage; replaced != (tc.want == types.RunFailed) {
+					t.Errorf("%s = %+v; want the replaced-pod sentence only for a changed spec", name, st)
+				}
+			}
+			if tc.deleting {
+				wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+				if code, err := d.Wait(wctx, ref); err != nil || code != notFoundExitCode {
+					t.Errorf("Wait = %d, %v; want %d, nil, as for a gone pod", code, err, notFoundExitCode)
+				}
+			}
+		})
+	}
+}
+
+// With the backend on too, stopping a run whose agent pod's label names another live run removes the
+// ref's run, its Sandbox first, and leaves the other run and its Sandbox whole.
+func TestAgentSandboxLifecycle_TeardownKeysOnTheRefNotTheLabel(t *testing.T) {
+	d, cs, dyn, refA := asAdmitted(t)
+	ctx := context.Background()
+	specB := asSpec()
+	specB.RunID = uuid.New()
+	sbB, err := d.CreateSandbox(ctx, specB)
+	if err != nil {
+		t.Fatalf("CreateSandbox B: %v", err)
+	}
+	before := runObjectCounts(t, cs, specB.RunID)
+	changeAgentPod(t, cs, refA, func(p *corev1.Pod) { p.Labels[labelRun] = specB.RunID.String() })
+
+	if err := d.StopSandbox(ctx, refA); err != nil {
+		t.Fatalf("StopSandbox A: %v", err)
+	}
+	assertRunObjectsGone(t, cs, asRunID)
+	if _, err := cs.Tracker().Get(podsGVR, testNamespace, refA); !isNotFound(err) {
+		t.Errorf("A's relabelled agent pod is still there (get err %v)", err)
+	}
+	if _, err := dyn.Tracker().Get(sandboxesGVR, testNamespace, refA); !isNotFound(err) {
+		t.Errorf("A's Sandbox is still there (get err %v)", err)
+	}
+	if after := runObjectCounts(t, cs, specB.RunID); after != before {
+		t.Errorf("stopping run A changed run B's objects: %+v, want %+v", after, before)
+	}
+	if _, err := dyn.Tracker().Get(sandboxesGVR, testNamespace, sbB.Ref); err != nil {
+		t.Errorf("run B's Sandbox: %v, want it kept", err)
 	}
 }
 
