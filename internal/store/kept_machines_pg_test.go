@@ -130,7 +130,7 @@ func TestKeptMachinePersonLimitAtInsert(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer held.Rollback(ctx) //nolint:errcheck // committed below
-	if _, err := held.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, db.MemberDriveLockClass, int32(crc32.ChecksumIEEE([]byte("sub-c")))); err != nil {
+	if _, err := held.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, db.KeptMachineLockClass, int32(crc32.ChecksumIEEE([]byte("sub-c")))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := held.Exec(ctx, `INSERT INTO kept_machines (id, name, owner_subject, runner_id, base, base_prepared_at, state, run_id, expires_at)

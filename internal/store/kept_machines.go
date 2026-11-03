@@ -127,9 +127,8 @@ func scanKeptMachineDeletion(row pgx.Row) (KeptMachineDeletion, error) {
 
 // CreateKeptMachine inserts m in state creating for the keep run m.RunID,
 // unless owner m.OwnerSubject already keeps limit machines. The count and the
-// insert run in one READ COMMITTED transaction under the owner's member lock
-// (the one CreateMemberDrive takes: a person's drive and kept machine creates
-// only wait for each other). The caller sets ExpiresAt; created_at and
+// insert run in one READ COMMITTED transaction under the owner's
+// KeptMachineLockClass lock. The caller sets ExpiresAt; created_at and
 // last_used_at are the database's now.
 func (s PG) CreateKeptMachine(ctx context.Context, m types.KeptMachine, limit int) (types.KeptMachine, error) {
 	if m.OwnerSubject == "" {
@@ -144,7 +143,7 @@ func (s PG) CreateKeptMachine(ctx context.Context, m types.KeptMachine, limit in
 	var out types.KeptMachine
 	err := s.inTx(ctx, func(q Querier) error {
 		if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`,
-			db.MemberDriveLockClass, int32(crc32.ChecksumIEEE([]byte(m.OwnerSubject)))); err != nil {
+			db.KeptMachineLockClass, int32(crc32.ChecksumIEEE([]byte(m.OwnerSubject)))); err != nil {
 			return fmt.Errorf("store: lock kept machines: %w", err)
 		}
 		var n int
