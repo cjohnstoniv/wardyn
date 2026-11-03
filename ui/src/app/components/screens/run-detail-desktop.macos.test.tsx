@@ -23,6 +23,7 @@ import { DesktopCard } from "./run-detail-desktop";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { UI_APPS_LANE } from "../wardyn/copy";
 import { DESKTOP } from "../wardyn/copy/desktop";
+import { MAC_WINDOW } from "../wardyn/copy/mac-window";
 import { RUN_VM_PAGE } from "../wardyn/copy/run-cockpit";
 import { DESKTOP_FILES } from "../wardyn/copy";
 import { aheadByHours } from "../../lib/test-clock";
@@ -158,19 +159,23 @@ describe("DesktopCard: macOS desktop", () => {
     );
   });
 
-  // UXR-6: the view-only sentence says how to type and click.
-  it("on macOS 26 with a window available, names `wardyn window <run-id>`", async () => {
+  // UXR-6: the view-only sentence says how to type and click: in the window, which has its own button now.
+  it("on macOS 26 with a window available, the window button stands where the command was, and the watch line points to it", async () => {
     renderCard({ desktop: "observe" }, { mac_window: { state: "open" } });
     const d = await desk();
-    expect(d.textContent).toContain(`On macOS 26 the browser can only watch this desktop. To type and click, open a window on your own Mac: wardyn window ${run.id}.`);
-    expect(within(d).getByText(`wardyn window ${run.id}`)).toBeInTheDocument();
+    expect(within(d).getByRole("button", { name: MAC_WINDOW.openCompact })).toBeEnabled();
+    expect(within(d).getByText(MAC_WINDOW.watchLine)).toBeInTheDocument();
+    expect(d.textContent).not.toContain("wardyn window");
     expect(within(d).queryByText(DESKTOP.observeOnlyMacOS)).toBeNull();
   });
 
-  it("on macOS 26 with a window refused, prints the server's own sentence", async () => {
+  it("on macOS 26 with a window refused, the watch line stays and the server's own sentence sits under it", async () => {
     renderCard({ desktop: "observe" }, { mac_window: { state: "site_off", message: "Windows on the Mac are turned off for this install." } });
     const d = await desk();
-    expect(within(d).getByText("Windows on the Mac are turned off for this install.")).toBeInTheDocument();
+    const watchLine = within(d).getByText(DESKTOP.observeOnlyMacOS);
+    const refusal = within(d).getByText("Windows on the Mac are turned off for this install.");
+    expect(watchLine.compareDocumentPosition(refusal) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(d).queryByRole("button", { name: MAC_WINDOW.openCompact })).toBeNull();
     expect(d.textContent).not.toContain("wardyn window");
   });
 

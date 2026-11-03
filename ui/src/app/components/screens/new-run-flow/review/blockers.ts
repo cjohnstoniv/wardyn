@@ -22,7 +22,7 @@ import { DRIVE_REFUSAL_REASON } from "../../../../lib/drive-refusals";
 import type { SetupItem } from "../../../../lib/types/preflight";
 import type { TemplateSetupNeed } from "../../../../lib/types/templates";
 import {
-  FIELD_HOME_OVERRIDES, FIELD_OF_REASON, groupOfPath, homeOfPath, homeOfRefusal, REVIEW_GROUP_OF_FIELD, type FieldHome, type ReviewGroupId,
+  DESKTOP_WINDOW_FIELD, FIELD_HOME_OVERRIDES, FIELD_OF_REASON, groupOfPath, homeOfPath, homeOfRefusal, REVIEW_GROUP_OF_FIELD, type FieldHome, type ReviewGroupId,
 } from "../draft/field-homes";
 import type { NewRunLocation } from "../draft/new-run-url";
 import type { RunIntent } from "../draft/run-intent";
@@ -144,10 +144,12 @@ export function buildBlockers(input: BlockerInput): Blocker[] {
     });
   }
   // The server's own refusal of the same conflict says it in other words; the blocker above stands for it. The keep
-  // blocker likewise says the member limit.
+  // blocker likewise says the member limit. A refusal of the window on the Mac is never a blocker: the choice is cleared
+  // with its sentence and the draft checked again without it (window-choice.ts).
   if (
     input.refusal &&
     !presetRefused &&
+    input.refusal.field !== DESKTOP_WINDOW_FIELD &&
     !(input.localMcp?.length && input.refusal.reason === "request_field_unavailable") &&
     !(input.keepLimit && input.refusal.reason === DRIVE_REFUSAL_REASON.MEMBER_LIMIT_REACHED)
   ) {

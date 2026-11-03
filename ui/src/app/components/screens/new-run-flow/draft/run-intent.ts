@@ -66,6 +66,8 @@ export interface GuidedFacts {
   drivePreselected?: boolean;
   /** A launch found the chosen wall preset missing (422 wall_preset_unknown): the choice stays, as an error, until another is picked. */
   wallPresetGone?: { id: string; name: string };
+  /** The server's sentence for a window on the Mac it refused, which cleared the choice; until the person chooses again. */
+  windowCleared?: string;
 }
 
 export interface DocDiagnostic {

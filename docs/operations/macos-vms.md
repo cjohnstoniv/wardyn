@@ -658,7 +658,7 @@ Wardyn asks these in order, and the first that refuses answers. Every refusal wr
 
 | Refused when | Status and reason | What you see |
 |---|---|---|
-| The site switch is off | `403` `mac_window_site_off` | "Opening a window onto a macOS VM run is turned off for this install. An admin can turn on macos_vm.allow_attended_window in the site config." |
+| The site switch is off | `403` `mac_window_site_off` | "Opening a window onto a macOS VM run is turned off for this install. An admin can turn it on in Settings, under macOS virtual machines, or set macos_vm.allow_attended_window in the site config." |
 | The run is not a macOS VM run | `409` `mac_window_not_macos_vm` | "Only a macOS VM run has a window." |
 | The run is not running, or has ended | `409` `attach_not_running` or `attach_run_kept` | "run is not RUNNING; cannot open its window", with the state, or "run has ended; cannot open its window" |
 | You did not register the run's Mac, did not start the run, or came through a delegated token | `403` `mac_window_not_your_mac` | "Wardyn opens a window only on a Mac whose runner you registered. This run is on `<computer>`, so Wardyn can't tell who is at its keyboard. Watch its desktop from the run page instead." |

@@ -128,7 +128,9 @@ func (s *Server) macWindowAtStartIfAsked(ctx context.Context, runID uuid.UUID, a
 // run goes on: the run page and the CLI offer the window later. The run is read again here, since dispatch has
 // set its recording level and its state since create. The open waits for the run to be up by where it is called
 // (after the sandbox started and the run is RUNNING); a run still preparing then is refused with the preparing
-// sentence, and no later retry is made, so a window never appears on a Mac the person did not just ask for.
+// sentence, and no later retry is made, so a window never appears on a Mac the person did not just ask for. A
+// refusal under a loaded grant is also kept as the grant principal's last close (not_opened, with its sentence),
+// so the run page says why the window it asked for is not there.
 func (s *Server) macWindowAtStart(ctx context.Context, runID uuid.UUID) {
 	denied := func(reason string) {
 		a := macWindowAuthority{ActorType: types.ActorSystem, Principal: "wardynd"}
@@ -155,6 +157,7 @@ func (s *Server) macWindowAtStart(ctx context.Context, runID uuid.UUID) {
 	}
 	if _, rf := s.openMacWindow(ctx, run, a, macWindowTriggerLaunch); rf != nil {
 		slog.InfoContext(ctx, "wardynd: a run's window was not opened at start", "run_id", runID, "reason", macWindowRefusalReason(rf))
+		s.macWindowStoreLastClose(ctx, a.Principal, runID, macWindowLastClose{Reason: macWindowEndedNotOpened, Message: macWindowRefusalSentence(rf)})
 	}
 }
 
@@ -186,7 +189,8 @@ func (s *Server) macWindowCreateRefusal(ctx context.Context, r *http.Request, ce
 
 // stepMacWindow refuses a create that asks for a window at start that macWindowCreateRefusal would refuse, with
 // its sentence, at create and Review; it is never dropped and the run never launches without the window it
-// asked for. A create writes the denied takeover.begin row, with no run to name yet.
+// asked for. A create writes the denied takeover.begin row, with no run to name yet. Every refusal names the
+// desktop_window field, so the console clears that choice on it and on nothing that only shares a reason.
 func (s *Server) stepMacWindow(f *runFold, _ *foldRecorder) bool {
 	if f.req.DesktopWindow == "" {
 		return true
@@ -199,6 +203,7 @@ func (s *Server) stepMacWindow(f *runFold, _ *foldRecorder) bool {
 		return true
 	}
 	s.auditMacWindowCreateDenied(f.r, f.req, rf, f.mode == foldCreate)
+	rf.body.Field = fieldDesktopWindow
 	return !rf.write(s, f.w, f.r)
 }
 
@@ -213,6 +218,9 @@ func (s *Server) auditMacWindowCreateDenied(r *http.Request, req *createRunReque
 	data["reason"] = macWindowRefusalReason(rf)
 	s.auditMacWindowBegin(r.Context(), nil, macWindowAuthority{ActorType: at, Principal: principal}, "create", "denied", data)
 }
+
+// fieldDesktopWindow is the request field every refusal of stepMacWindow names (errorBody.Field).
+const fieldDesktopWindow = "desktop_window"
 
 // desktopWindowRequestRefusal is the 400 for a desktop_window the request cannot carry; "" when it can.
 func desktopWindowRequestRefusal(req createRunRequest) string {

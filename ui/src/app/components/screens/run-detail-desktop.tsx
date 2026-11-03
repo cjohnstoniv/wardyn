@@ -22,6 +22,7 @@ import { RUN_MODE_REFUSAL } from "../../lib/run-mode-refusals";
 import { Mono } from "../wardyn/code-block";
 import { RUN_SSH, UI_APPS_LANE } from "../wardyn/copy";
 import { DESKTOP } from "../wardyn/copy/desktop";
+import { MAC_WINDOW } from "../wardyn/copy/mac-window";
 import { RECORDING_DESKTOP, desktopRecordedAt } from "../wardyn/copy/recording-level";
 import { RUN_VM_PAGE } from "../wardyn/copy/run-cockpit";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
@@ -29,6 +30,7 @@ import { Chip, WidgetCard } from "../wardyn/primitives";
 import { MacOSDiskNote, macOSRunFactsOf, type MacOSRunFacts } from "./run-detail/macos-run-facts";
 import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
 import { DesktopPausedNote, DesktopSignInButton, DesktopSignInsError, DesktopSignInsNote, useDesktopSignIns } from "./run-detail/desktop-sign-ins";
+import { MacWindowButton, macWindowHasButton, MacWindowRefusal } from "./run-detail/mac-window-section";
 import { DESKTOP_APP, enterUIApp, openEnterTab } from "./run-detail-ssh";
 
 // Exported for the tests: standalone-testable without mounting the whole screen's fetch graph.
@@ -93,6 +95,10 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
   const viewOnly = (macOS?.desktop === "observe" && running) || watchable;
   const desktopOn = !!uiSandbox?.enabled && !macOff;
   const uiApps = run.ui_apps ?? [];
+  // The window on the Mac (mac_window, live macOS VM runs only): its button comes first and the desktop's turns outline.
+  const windowState = running ? run.mac_window?.state : undefined;
+  const windowButton = running && macWindowHasButton(run.mac_window);
+  const windowWay = windowButton || windowState === "window_open";
 
   // Mints a single-use ticket and opens the built-in desktop in a new tab. A background watch has its own ticket
   // route; every other desktop uses the UI-app ticket the Attach lanes use. The ticket mint is the entry check.
@@ -121,7 +127,9 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
   const bgMac = background && mac && running;
   const noWatchChip = bgMac && (!watch || watch.state === "control" || watch.state === "not_run_owner");
   const chip =
-    (!healthAnswered && !macOff) || noDoor || noWatchChip ? null : desktopOn && (viewOnly || bgMac) ? (
+    windowState === "window_open" ? (
+      <Chip tone="info">{MAC_WINDOW.openChip}</Chip>
+    ) : (!healthAnswered && !macOff) || noDoor || noWatchChip ? null : desktopOn && (viewOnly || bgMac) ? (
       <Chip tone="neutral">{DESKTOP.viewOnlyChip}</Chip>
     ) : desktopOn && signIns.view?.paused ? (
       <Chip tone="warning">{DESKTOP.agentPaused}</Chip>
@@ -134,9 +142,11 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
     // loses its bottom on a short one.
     <WidgetCard title={DESKTOP.title} Icon={Monitor} right={chip} grow bodyClassName="scroll-thin overflow-y-auto p-4">
       <section aria-label={DESKTOP.title}>
+        <p className="mb-2 text-meta text-muted-foreground">{mac ? DESKTOP.kindMacOS : DESKTOP.kind}</p>
+        {running && <MacWindowButton run={run} />}
         {desktopOn && !noDoor && (!background || watchable) && (
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" disabled={openingApp} onClick={() => void openDesktop()}>
+          <div className={`flex flex-wrap gap-2 ${windowWay ? "mt-4" : ""}`}>
+            <Button size="sm" variant={windowButton ? "outline" : undefined} disabled={openingApp} onClick={() => void openDesktop()}>
               {openingApp ? UI_APPS_LANE.ctaBusy : viewOnly ? DESKTOP.watch : UI_APPS_LANE.cta("desktop")}
             </Button>
             {!background && <DesktopSignInButton s={signIns} />}
@@ -158,7 +168,6 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
           </div>
         )}
         {appError && <p role="alert" className="mt-2 font-mono text-meta leading-relaxed text-muted-foreground">{appError}</p>}
-        <p className="mt-2 text-meta text-muted-foreground">{mac ? DESKTOP.kindMacOS : DESKTOP.kind}</p>
         {noDoor && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{RUN_MODE_REFUSAL.BACKGROUND_ONLY("desktop")}</p>}
         {watchRefusal && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{watchRefusal}</p>}
         {/* What a person can do on this desktop is only said while the gateway can open it; with it off, the Off sentence is the one claim. */}
@@ -170,18 +179,10 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
           </>
         )}
         {!background && viewOnly && (
-          <p className="mt-2 text-meta leading-relaxed text-muted-foreground">
-            {run.mac_window?.state === "open" ? (
-              <>{RUN_VM_PAGE.macOS26OpenWindow} <Mono className="text-foreground">{`wardyn window ${run.id}`}</Mono>.</>
-            ) : (
-              run.mac_window?.state === "unrecorded" ? DESKTOP.observeOnlyMacOS : run.mac_window?.message ?? DESKTOP.observeOnlyMacOS
-            )}
-          </p>
+          <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{windowWay ? MAC_WINDOW.watchLine : DESKTOP.observeOnlyMacOS}</p>
         )}
-        {/* The window refusal for a recorded level sits under the watch-only line: both are true. */}
-        {!background && viewOnly && run.mac_window?.state === "unrecorded" && run.mac_window.message && (
-          <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{run.mac_window.message}</p>
-        )}
+        {/* A window refusal sits under the line above: the browser can still watch, and this says why no window opens. */}
+        {running && <MacWindowRefusal run={run} />}
         {healthAnswered && !uiSandbox?.enabled && !macOff && !noDoor && (
           <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{offCopy(DESKTOP.off, "WARDYN_UI_SANDBOX_LISTEN")}</p>
         )}

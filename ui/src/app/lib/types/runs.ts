@@ -614,7 +614,8 @@ export interface RunMacWindow {
 }
 
 export interface RunMacWindowClose {
-  reason: "person" | "host_locked" | "run_ended" | "failed";
+  reason: "person" | "host_locked" | "run_ended" | "failed" | "not_opened";
+  message?: string; // not_opened only: the refusal's sentence when the window a create asked for didn't open at start
   at: string;
 }
 

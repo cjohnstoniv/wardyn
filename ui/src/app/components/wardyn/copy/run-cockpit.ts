@@ -244,8 +244,6 @@ export const RUN_COCKPIT = {
 export const RUN_VM_PAGE = {
   gatewayUnknown: "Couldn't check whether the desktop gateway is on.",
   tryAgain: "Try again",
-  // The macOS 26 view-only tile sentence while a window can be opened; the command follows, then the full stop.
-  macOS26OpenWindow: "On macOS 26 the browser can only watch this desktop. To type and click, open a window on your own Mac:",
   // The strip above a macOS VM run's terminal while its setup runs (macos_preparing).
   settingUp:
     "Setting up this run: cloning the repository and installing the agent's tools. You can use the terminal now. The work folder fills in when setup finishes.",

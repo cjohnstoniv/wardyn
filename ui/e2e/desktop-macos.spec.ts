@@ -7,6 +7,7 @@ import type { Page } from "@playwright/test";
 import { test, expect, sql, gotoConsole, navToRoute } from "./fixtures";
 import { MAC_BASES } from "../src/app/components/wardyn/copy/mac-bases";
 import { NR_MACHINE } from "../src/app/components/wardyn/copy/new-run/machine";
+import { NR_WINDOW } from "../src/app/components/wardyn/copy/new-run/window";
 import { NR_SHAPE } from "../src/app/components/wardyn/copy/new-run/shape";
 import { NR_START } from "../src/app/components/wardyn/copy/new-run/start";
 import { DESKTOP } from "../src/app/components/wardyn/copy/desktop";
@@ -51,19 +52,19 @@ test.describe("New Run: the macOS option", () => {
     const os = await openVMStep(page);
     await expect(os.getByRole("button", { name: NR_MACHINE.OS_LINUX })).toHaveAttribute("aria-pressed", "true");
     await expect(os.getByRole("button", { name: NR_MACHINE.OS_MACOS })).toHaveCount(0);
-    await expect(os.getByText(NR_MACHINE.OS_LATER)).toBeVisible();
+    await expect(os.getByText(NR_WINDOW.OS_LATER)).toBeVisible();
   });
 
   test("with it on, macOS joins Linux, and choosing it swaps the changes panel's rows for the macOS ones", async ({ page }) => {
     await macosSwitch(page, true);
     const os = await openVMStep(page);
-    await expect(os.getByText(NR_MACHINE.OS_WINDOWS_LATER)).toBeVisible();
+    await expect(os.getByText(NR_WINDOW.OS_WINDOWS_LATER)).toBeVisible();
     const changes = page.getByRole("region", { name: NR_MACHINE.CHANGES_TITLE });
     await expect(changes.getByText(NR_MACHINE.CHANGES_SIGN_INS)).toHaveCount(0);
 
     await os.getByRole("button", { name: NR_MACHINE.OS_MACOS }).click();
     await expect(os.getByRole("button", { name: NR_MACHINE.OS_MACOS })).toHaveAttribute("aria-pressed", "true");
-    await expect(os.getByText(NR_MACHINE.OS_WINDOWS_LATER)).toHaveCount(0);
+    await expect(os.getByText(NR_WINDOW.OS_WINDOWS_LATER)).toHaveCount(0);
     await expect(page.getByTestId("nr-vm-barrier")).toContainText(NR_MACHINE.BARRIER_VM);
     await expect(changes.getByText(NR_MACHINE.CHANGES_CLIPBOARD_MACOS_NONE)).toBeVisible();
     await expect(changes.getByText(NR_MACHINE.CHANGES_SIGN_INS_RUN_DISK)).toBeVisible();

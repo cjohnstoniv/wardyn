@@ -30,6 +30,7 @@ import { ledeOf, runTypeOf, selectedPoolId, usablePools } from "./pool-model";
 import { PoolSection } from "./pool-section";
 import { ServiceSection } from "./service-section";
 import { useRunPreview } from "./use-run-preview";
+import { chooseWindowIn, useClearRefusedWindow } from "./window-choice";
 import { QuestionBlock } from "./question-block";
 import { loadPools, usePools, type LoadPools } from "./pool-source";
 import { TimingSection } from "./timing-section";
@@ -54,7 +55,8 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
     if (unnamed) dispatch({ type: "edit", apply: (i) => chooseMode(i, fallback) });
   }, [unnamed, fallback, dispatch]);
   const runType = runTypeOf(intent);
-  const { pauses, inboundRefused } = useRunPreview(intent);
+  const { pauses, inboundRefused, windowChecking, refusal } = useRunPreview(intent);
+  useClearRefusedWindow(refusal);
 
   const pools = usePools(deps?.load ?? loadPools, runType);
   const list = pools.status === "ready" ? pools.list : undefined;
@@ -69,6 +71,8 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
     const onMac = intent.machine_kind === "macos_vm";
     if (kind === "macos_vm" && !onMac && minimum) dispatch({ type: "guided", patch: { macosFill: minimumFill(intent, minimum) } });
     else if (kind !== "macos_vm" && fill) dispatch({ type: "guided", patch: { macosFill: undefined } });
+    // The window goes with macOS (chooseMachineKind), and its cleared notice with it.
+    if (kind !== "macos_vm" && draft.guided.windowCleared) dispatch({ type: "guided", patch: { windowCleared: undefined } });
     edit((i) => {
       const leaving = i.machine_kind === "macos_vm" && kind !== "macos_vm" ? dropMinimum(i, fill) : i;
       const next = chooseMachineKind(leaving, kind);
@@ -112,7 +116,14 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
         </CommandSection>
       )}
       <QuestionBlock label={NR_RUN.WHERE_LABEL}>
-        <MachineKindSection kind={intent.machine_kind ?? "container"} agents={harnessIds(intent)} macosBase={intent.macos_base} onChoose={chooseKind} onChooseBase={(base) => edit((i) => chooseMacOSBase(i, base))} />
+        <MachineKindSection
+          kind={intent.machine_kind ?? "container"}
+          agents={harnessIds(intent)}
+          macosBase={intent.macos_base}
+          windowChoice={{ chosen: !!intent.desktop_window, checking: windowChecking, cleared: draft.guided.windowCleared, onChoose: (on) => chooseWindowIn(dispatch, on) }}
+          onChoose={chooseKind}
+          onChooseBase={(base) => edit((i) => chooseMacOSBase(i, base))}
+        />
         <PoolSection state={pools} runType={runType} intent={intent} onChoose={(id) => edit((i) => choosePool(i, id))} />
         {!vm && <BarrierSection pool={chosen} chosen={intent.confinement_class} onChoose={(cc) => edit((i) => chooseBarrier(i, cc))} />}
       </QuestionBlock>
