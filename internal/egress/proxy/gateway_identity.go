@@ -325,10 +325,16 @@ func (h *gatewayTokenHolder) settleLocked(p *Proxy, token string, exp time.Time,
 	now := p.now()
 	if err != nil {
 		slog.Warn("proxy: gateway identity mint failed", "provider", h.providerID, "err", err)
-		h.lastErr, h.nextAsk = err, now.Add(lastGoodRetry)
 		if drop {
 			h.token = ""
 		}
+		// A held token is asked again within half of what is left of its life, so a short-lived
+		// token's next mint still lands before its exp; with none held, the usual interval.
+		wait := lastGoodRetry
+		if left := h.expires.Sub(now); h.token != "" && left/2 < wait {
+			wait = max(left/2, time.Second)
+		}
+		h.lastErr, h.nextAsk = err, now.Add(wait)
 		return
 	}
 	for _, v := range gatewayMaskValues(token) {
@@ -384,8 +390,9 @@ func (h *gatewayTokenHolder) mint(ctx context.Context, p *Proxy) (token string, 
 // is judged against the control plane's expires_at, or its exp if that is earlier.
 // A clock ahead of the control plane's drops the token early; one behind holds it
 // no longer than ten minutes, and the gateway refuses what its own clock has passed:
-// wrong either way, it fails closed. Ten minutes is how long a kill may go unseen by
-// a gateway; half of it, the refresh point, is how long an outage is tolerated.
+// wrong either way, it fails closed. Ten minutes is the cap on a token's life (the
+// provider may set a shorter one); half the life, the refresh point, is how long an
+// outage is tolerated.
 func (h *gatewayTokenHolder) check(token string, expiresAt, now time.Time) (time.Time, error) {
 	const lifetime = 10 * time.Minute
 	unusable := errors.New("the control plane's gateway identity token is malformed")

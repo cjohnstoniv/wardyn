@@ -421,6 +421,47 @@ func TestGatewayIdentity_RefreshAndOutageTolerance(t *testing.T) {
 	}
 }
 
+// A short-lived token: a failed refresh is asked again within half of what is left of its life,
+// not after the full retry interval, so a mint that recovers lands before exp.
+func TestGatewayIdentity_ShortLifeRetriesBeforeExp(t *testing.T) {
+	g := newGwidRig(t, gwidRoutes(), false)
+	short := func() {
+		g.mint.mu.Lock()
+		defer g.mint.mu.Unlock()
+		g.mint.answer = func(w http.ResponseWriter, _ *http.Request, n int64) {
+			tok := gwidToken(gwidAudience, g.now().Add(time.Minute), n)
+			g.mint.mu.Lock()
+			g.mint.minted = append(g.mint.minted, tok)
+			g.mint.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": tok, "expires_at": g.now().Add(time.Minute)})
+		}
+	}
+	short()
+	send := gwidLanes(g, t)["brokered"]
+	send()
+	first := g.lastMinted(t)
+	g.answerStatus(http.StatusServiceUnavailable)
+	g.advance(30 * time.Second) // half-life, and the control plane is down
+	send()
+	gwidWaitNoFlight(t, g)
+	if n := g.mint.hits.Load(); n != 2 {
+		t.Fatalf("mints at half-life = %d, want 2", n)
+	}
+	short()                     // the control plane is back
+	g.advance(15 * time.Second) // half of the 30 s left, well inside lastGoodRetry
+	if rec := send(); rec.Code != http.StatusOK {
+		t.Fatalf("status %d before exp", rec.Code)
+	}
+	gwidWaitNoFlight(t, g)
+	if n := g.mint.hits.Load(); n != 3 {
+		t.Fatalf("mints 15 s after the failed refresh = %d, want 3", n)
+	}
+	g.advance(20 * time.Second) // past the first token's exp
+	if rec := send(); rec.Code != http.StatusOK || g.gw.last(t).Header.Get(gatewayIdentityHeader) == first {
+		t.Fatalf("past the first exp: status %d, still the first token=%v", rec.Code, g.gw.last(t).Header.Get(gatewayIdentityHeader) == first)
+	}
+}
+
 // A refusal on refresh drops the held token at once, and an exp far off is held to ten minutes.
 func TestGatewayIdentity_RefusalDropsHeldAndLifetimeIsCapped(t *testing.T) {
 	for _, status := range []int{http.StatusForbidden, http.StatusNotFound} {
