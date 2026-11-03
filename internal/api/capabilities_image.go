@@ -59,11 +59,17 @@ func imageNormalRepo(value string) (string, bool) {
 // repository (the reference less its tag and digest, normalised by
 // imageNormalRepo). Asked after isRestricted loaded the restrictions.
 func (b *capBatch) imageSiblingRestricted(value string) bool {
+	return imageSiblingIn(b.restricted[capImage], value)
+}
+
+// imageSiblingIn is imageSiblingRestricted over a restriction set the caller
+// read itself (the availability read shares it with the launch check).
+func imageSiblingIn(restricted map[string]bool, value string) bool {
 	repo, ok := imageNormalRepo(value)
 	if !ok {
 		return false
 	}
-	for v := range b.restricted[capImage] {
+	for v := range restricted {
 		if r, ok := imageNormalRepo(v); ok && r == repo {
 			return true
 		}

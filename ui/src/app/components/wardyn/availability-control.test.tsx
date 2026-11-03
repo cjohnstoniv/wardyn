@@ -376,6 +376,27 @@ describe("AvailabilityControl — states.html", () => {
 });
 
 describe("AvailabilityControl — the image family (decision 2)", () => {
+  it("says, under the control, which registry prefix also covers the image, and not when none does", async () => {
+    const img = "registry.example.com/team/app:1";
+    getAvailabilityMock.mockResolvedValue({
+      ...view(false),
+      kind: "image",
+      value: img,
+      covered_by: [{ prefix: "registry.example.com/team/*", who: { subject_type: "all", subject: "" } }],
+    });
+    const { unmount } = render(<AvailabilityControl kind="image" value={img} adminsOnly />);
+    expect(await screen.findByTestId("availability-covered-by")).toHaveTextContent(
+      AVAILABILITY.COVERED_BY_PREFIX("registry.example.com/team/*", "Everyone"),
+    );
+    expect(screen.getByText(AVAILABILITY.IMAGE_HINT)).toBeInTheDocument();
+    unmount();
+
+    getAvailabilityMock.mockResolvedValue({ ...view(false), kind: "image", value: img, covered_by: [] });
+    render(<AvailabilityControl kind="image" value={img} adminsOnly />);
+    await screen.findByText(AVAILABILITY.IMAGE_HINT);
+    expect(screen.queryByTestId("availability-covered-by")).not.toBeInTheDocument();
+  });
+
   it("reads Admins only / Only these, with the image hint under the choice and the image lock", async () => {
     getAvailabilityMock.mockResolvedValue({ ...view(true, [DEV]), kind: "image", value: "ghcr.io/acme/dev-toolbox:1.4" });
     render(<AvailabilityControl kind="image" value="ghcr.io/acme/dev-toolbox:1.4" adminsOnly note={AVAILABILITY.IMAGE_NOTE} />);
