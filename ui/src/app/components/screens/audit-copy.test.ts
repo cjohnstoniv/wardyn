@@ -153,4 +153,34 @@ describe("service audit rows", () => {
     expect(inboundDetail(ev("inbound.allow", "api"))).toBeNull();
     expect(inboundDetail(ev("egress.allow", "a.example", { data: { method: "GET", path: "/" } }))).toBeNull();
   });
+
+  // A destructive admin verb reads by its outcome, so a failed or refused row never says it was done above its badge.
+  it.each([
+    ["person.erasure", "Erased a person's data", "Person data erasure failed", "Person data erasure refused"],
+    ["credential.erase", "Erased a person's stored credentials", "Credential erasure failed", "Credential erasure refused"],
+    ["person.deprovision", "Deprovisioned a person", "Person deprovisioning failed", "Person deprovisioning refused"],
+    ["service_identity.retire", "Retired a service identity", "Retiring a service identity failed", "Retiring a service identity refused"],
+    ["token.revoke", "Revoked an API token", "Revoking an API token failed", "Revoking an API token refused"],
+    ["session.revoke", "Signed a person out everywhere", "Signing a person out failed", "Signing a person out refused"],
+    ["access.role_mapping.delete", "Removed a role mapping", "Removing a role mapping failed", "Removing a role mapping refused"],
+    ["template.delete", "Deleted a template", "Deleting a template failed", "Deleting a template refused"],
+    ["audit.retention.partition_dropped", "Dropped an audit partition", "Dropping an audit partition failed", "Dropping an audit partition refused"],
+    ["scim.user.deactivate", "Deactivated by your identity provider", "Deactivation by your identity provider failed", "Deactivation by your identity provider refused"],
+  ])("%s reads by its outcome", (action, done, failed, refused) => {
+    expect(describeTabEvent(ev(action, "t1"))).toBe(`${done} — t1`);
+    expect(describeTabEvent(ev(action, "t1", { outcome: "failure" }))).toBe(`${failed} — t1`);
+    expect(describeTabEvent(ev(action, "t1", { outcome: "denied" }))).toBe(`${refused} — t1`);
+    expect(describeTabAction(ev(action, "t1", { outcome: "failure" }))).toBe(failed);
+  });
+
+  it("a person.erasure that failed on an unknown scope is not worded as an erasure", () => {
+    const row = ev("person.erasure", "priya@acme.io", { outcome: "failure", data: { reason: "erasure_scope_unknown" } });
+    expect(describeTabEvent(row)).toBe("Person data erasure failed — priya@acme.io");
+  });
+
+  it("a success row that kept some data reads as partial, not as completed", () => {
+    expect(describeTabEvent(ev("person.erasure", "p", { data: { not_erased: { drives: 1 } } }))).toBe("Erased part of a person's data — p");
+    expect(describeTabEvent(ev("person.deprovision", "p", { data: { not_erased: { drives: 1 } } }))).toBe("Deprovisioned a person; some data was kept — p");
+    expect(describeTabEvent(ev("person.erasure", "p", { data: { scopes: ["credentials"] } }))).toBe("Erased a person's data — p");
+  });
 });

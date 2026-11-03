@@ -5,7 +5,7 @@
 
 // The Desktop tile (its own tile, not a block of the attach card): a Linux desktop VM run only, opened through the UI gateway's
 // ticket -> bind -> POST enter hand-off for the built-in desktop app, and off when the gateway is.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { RunDetail } from "../../lib/types";
@@ -27,7 +27,7 @@ vi.mock("../../lib/api/desktop-sign-ins", () => ({
 
 import { DesktopCard } from "./run-detail-desktop";
 import { OperatorProvider } from "../wardyn/operator-context";
-import { UI_APPS_LANE } from "../wardyn/copy";
+import { RUN_SSH, UI_APPS_LANE } from "../wardyn/copy";
 import { DESKTOP } from "../wardyn/copy/desktop";
 import { aheadByHours } from "../../lib/test-clock";
 
@@ -61,7 +61,13 @@ const renderCard = (over: Partial<RunDetail> = {}) =>
 // The chip is in the tile's header, a sibling of the region that holds the body.
 const tile = (region: HTMLElement) => region.parentElement!.parentElement!;
 
+// A stubbed window.open: the new tab the click opens before any request.
+let tabStub: { opener: unknown; name: string; close: ReturnType<typeof vi.fn>; location: { replace: ReturnType<typeof vi.fn> } };
+let openSpy: ReturnType<typeof vi.spyOn>;
+
 beforeEach(() => {
+  tabStub = { opener: {}, name: "", close: vi.fn(), location: { replace: vi.fn() } };
+  openSpy = vi.spyOn(window, "open").mockReturnValue(tabStub as unknown as Window);
   healthMock.mockReset();
   attachTicketMock.mockReset();
   signInsGet.mockReset();
@@ -71,7 +77,36 @@ beforeEach(() => {
   signInsGet.mockResolvedValue({ store: "", paused: false, can_pause: false, agent: "Claude Code" });
 });
 
+afterEach(() => openSpy.mockRestore());
+
 describe("DesktopCard — Desktop", () => {
+  it("opens a named blank tab before the ticket request, closes it when the ticket fails, and says when the browser blocks it", async () => {
+    healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true, enter_post_url: "http://ui.local/__wardyn/enter" } });
+    let fail: (e: Error) => void = () => {};
+    attachTicketMock.mockReturnValue(new Promise((_, rej) => (fail = rej)));
+    renderCard();
+    const desk = await screen.findByRole("region", { name: DESKTOP.title });
+    await within(tile(desk)).findByText(DESKTOP.ready);
+    within(desk).getByRole("button", { name: UI_APPS_LANE.cta("desktop") }).click();
+    await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1));
+    expect(openSpy.mock.calls[0][1]).toMatch(/^wardyn-enter-/);
+    expect(tabStub.opener).toBeNull();
+    expect(tabStub.close).not.toHaveBeenCalled();
+    fail(new Error("no ticket"));
+    await waitFor(() => expect(tabStub.close).toHaveBeenCalled());
+  });
+
+  it("says the browser blocked the new tab, and requests no ticket, when window.open returns null", async () => {
+    healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true, enter_post_url: "http://ui.local/__wardyn/enter" } });
+    openSpy.mockReturnValue(null);
+    renderCard();
+    const desk = await screen.findByRole("region", { name: DESKTOP.title });
+    await within(tile(desk)).findByText(DESKTOP.ready);
+    within(desk).getByRole("button", { name: UI_APPS_LANE.cta("desktop") }).click();
+    expect(await within(desk).findByText(RUN_SSH.POPUP_BLOCKED)).toBeInTheDocument();
+    expect(attachTicketMock).not.toHaveBeenCalled();
+  });
+
   it("opens the VM's desktop through a bound ticket and a POSTed form, as the built-in desktop app", async () => {
     healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true, enter_post_url: "http://ui.local/__wardyn/enter" } });
     attachTicketMock.mockResolvedValue("tkt_desk");

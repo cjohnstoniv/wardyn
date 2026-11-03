@@ -482,30 +482,42 @@ function monoTokens(text: string, ...tokens: string[]): (string | React.ReactEle
 /** The UI-sandbox enter facts /healthz publishes (internal/api/healthz.go ui_sandbox). */
 export type UISandboxEnter = { enabled?: boolean; enter_url_template?: string; enter_post_url?: string; bind_url?: string } | null;
 
+// openEnterTab opens the named blank tab enterUIApp sends the app into. A browser only lets the click open a
+// tab, and the awaits that come later (ticket, bind, takeover) can outlive that permission, so a caller opens it
+// here, synchronously at the top of its click handler, and hands it to enterUIApp as opts.tab. A null return
+// means the browser blocked the pop-up: show RUN_SSH.POPUP_BLOCKED and request nothing.
+export function openEnterTab(): Window | null {
+  const name = `wardyn-enter-${Date.now().toString(36)}`;
+  const tab = window.open("", name);
+  if (!tab) return null;
+  tab.name = name;
+  // The new tab must not reach back to the console (the "noopener" a plain window.open would carry).
+  tab.opener = null;
+  return tab;
+}
+
 // enterUIApp opens a declared UI app of the run in a new tab: a single-use ticket, bound to this
-// browser, handed to the gateway by POST. ConnectSSHCard's Open button and a "Needs you" desktop
-// takeover (needs-you-banner.tsx) both go through it.
+// browser, handed to the gateway by POST. ConnectSSHCard's Open button, the Desktop tile, the Watch button
+// and a "Needs you" desktop takeover (needs-you-banner.tsx) all go through it.
 //
 // The /open page passes the ticket it minted itself (an inbound app's, for a named caller) and "_self", since
-// that page is already the new tab.
+// that page is already the new tab. A caller that has to await before this (a takeover, a ticket) opens the tab
+// itself with openEnterTab, inside its click, and passes it as opts.tab; then no other tab is opened here.
 export async function enterUIApp(
   runId: string,
   app: string,
   uiSandbox: UISandboxEnter,
-  opts: { ticket?: string; target?: "_blank" | "_self" } = {},
+  opts: { ticket?: string; target?: "_blank" | "_self"; tab?: Window } = {},
 ) {
   const target = opts.target ?? "_blank";
-  // A browser only lets the click open a tab, and the awaits below (ticket, bind) can outlive that
-  // permission. So a new tab is opened here, before the first await, as a named blank window, and the
-  // form (or URL) is sent into it later. A null return means the browser blocked it.
+  // The tab is opened here, before the first await, when the caller did not open one. A null return means the
+  // browser blocked it.
   let tab: Window | null = null;
   let formTarget: string = target;
   if (target === "_blank") {
-    formTarget = `wardyn-enter-${Date.now().toString(36)}`;
-    tab = window.open("", formTarget);
+    tab = opts.tab ?? openEnterTab();
     if (!tab) throw new Error(RUN_SSH.POPUP_BLOCKED);
-    // The new tab must not reach back to the console (the "noopener" a plain window.open would carry).
-    tab.opener = null;
+    formTarget = tab.name;
   }
   try {
     const ticket = opts.ticket ?? (await runsApi.attachTicket(runId, "ui"));
@@ -520,13 +532,19 @@ export async function enterUIApp(
     // (replaceAll is ES2021; this tsconfig's lib is ES2020).
     if (uiSandbox?.enter_post_url) {
       const action = uiSandbox.enter_post_url.split("{run}").join(encodeURIComponent(runId));
+      // The person closed the blank tab while the ticket was pending: a named form would now open a new tab that never
+      // had its opener cleared. Treat it as cancelling, checked in the same tick as the submit.
+      if (tab?.closed) return;
       submitEnterForm(action, { run: runId, app, ticket }, formTarget);
     } else if (uiSandbox?.enter_url_template) {
       const url = Object.entries({ run: runId, app, ticket }).reduce(
         (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
         uiSandbox.enter_url_template,
       );
-      if (tab) tab.location.replace(url);
+      if (tab) {
+        if (tab.closed) return;
+        tab.location.replace(url);
+      }
       else window.open(url, target, "noopener");
     } else {
       throw new Error("This deployment's UI-sandbox gateway published no enter URL for the console to use.");
@@ -565,14 +583,13 @@ async function bindTicket(url: string, ticket: string) {
 // submitEnterForm drives the #1220 POST hand-off: a hidden form, submitted
 // into the named tab enterUIApp opened inside the click (or "_self"), as a real POST
 // whose fields never touch the URL, browser history, or a reverse-proxy access log.
-// rel="noopener" is form.submit()'s equivalent of window.open's "noopener" flag —
-// no window.opener back to the console from the new tab.
+// The named tab already has its opener cleared (openEnterTab), so the form carries no rel="noopener": under it a
+// browser may refuse to reuse the named tab and open a second one, outside the click.
 function submitEnterForm(action: string, fields: Record<string, string>, target: string) {
   const form = document.createElement("form");
   form.method = "POST";
   form.action = action;
   form.target = target;
-  form.rel = "noopener";
   for (const [name, value] of Object.entries(fields)) {
     const input = document.createElement("input");
     input.type = "hidden";

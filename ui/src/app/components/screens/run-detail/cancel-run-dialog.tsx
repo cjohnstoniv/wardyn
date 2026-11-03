@@ -9,16 +9,19 @@
 import { toast } from "sonner";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { getErrorMessage } from "../../../lib/format";
+import { COULDNT_END, ENDING, toastRunName } from "../../wardyn/copy/run-lifetime";
 import { KillRunDialog } from "../../wardyn/kill-run-dialog";
 
 export default function CancelRunDialog({ runId, title, onClose }: { runId: string; title?: string; onClose: () => void }) {
+  // The toast names the run by its title, else its task, never its id; with neither it says "this run".
+  const name = toastRunName({ title });
   const cancel = async (id: string) => {
     onClose();
     try {
       await runsApi.killRun(id);
-      toast.success(`Kill requested for ${id}`);
+      toast.success(ENDING(name));
     } catch (err) {
-      toast.error(`Failed to kill ${id}`, { description: getErrorMessage(err) });
+      toast.error(COULDNT_END(name), { description: getErrorMessage(err) });
     }
   };
   return <KillRunDialog runId={runId} title={title} onOpenChange={(open) => !open && onClose()} onConfirm={(id) => void cancel(id)} />;

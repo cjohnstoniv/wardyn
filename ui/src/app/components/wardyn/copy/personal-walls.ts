@@ -25,7 +25,7 @@ export const YOUR_WALLS = {
   BARRIER: "Barrier at least",
   BARRIER_NONE: "No minimum",
   CLIPBOARD: "Clipboard and files",
-  CLIPBOARD_HINT: "VM desktops have no copy and paste yet. These apply to app desktops in containers.",
+  CLIPBOARD_HINT: "Copy and paste apply to app desktops in containers; VM desktops have no copy and paste yet. Upload and download also apply to a Linux VM desktop's Files.",
   PASTE_IN: "Block paste in",
   COPY_OUT: "Block copy out",
   UPLOAD: "Block upload",

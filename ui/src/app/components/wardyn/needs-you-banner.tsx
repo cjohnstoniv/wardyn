@@ -17,9 +17,10 @@ import { getErrorMessage, shortTime } from "../../lib/format";
 import { isBackgroundRun, mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
-import { DESKTOP_APP, enterUIApp } from "../screens/run-detail-ssh";
+import { DESKTOP_APP, enterUIApp, openEnterTab } from "../screens/run-detail-ssh";
 import { HARNESS_LOGIN_TASK } from "../screens/run-detail/sign-in-run";
 import { useOperator, useOperatorResolved, usePrincipal } from "./operator-context";
+import { RUN_SSH } from "./copy";
 import { NEEDS_YOU, askedAgo, heldClock, type TakeoverSurface } from "./copy/needs-you";
 import { toast } from "sonner";
 
@@ -43,6 +44,9 @@ export function surfaceOf(run: RunDetail): TakeoverSurface {
   if ((run.ui_apps ?? []).some((a) => a.name === "novnc")) return "desktop";
   return isVMKind(run.machine_kind) && !macDesktopViewOnly(run) ? "desktop" : "terminal";
 }
+
+/** The takeover answers (take over, hand back) carry the server's surface; the approval list does not. */
+type ApprovalWithSurface = ApprovalRequest & { surface?: TakeoverSurface };
 
 const snoozeKey = (id: string) => `wardyn.needs-you.snooze.${id}`;
 
@@ -82,6 +86,9 @@ export function NeedsYouBanner({
   const apId = ap?.id;
   const [busy, setBusy] = React.useState<"take" | "back" | "decline" | null>(null);
   const [done, setDone] = React.useState(false);
+  // The surface the server answered for this approval's takeover, once it has: it knows the gateway, the macOS sign-ins and an
+  // attended Mac window, which surfaceOf cannot see.
+  const [served, setServed] = React.useState<{ id: string; surface: TakeoverSurface } | null>(null);
   const [now, setNow] = React.useState(() => Date.now());
   const [snoozedUntil, setSnoozedUntil] = React.useState(0);
   React.useEffect(() => setSnoozedUntil(apId ? readSnooze(apId) : 0), [apId]);
@@ -118,21 +125,37 @@ export function NeedsYouBanner({
   // A background run has no console to enter: the server refuses its attach ticket, so no Take over is offered.
   const mayTake = mayEnter && !isBackgroundRun(run);
   const reason = String(ap.requested_scope.reason ?? "");
-  const surface = surfaceOf(run);
+  // The server's answer wins; the run page's guess stands only until there is one.
+  const surface = (ap as ApprovalWithSurface).surface ?? (served?.id === ap.id ? served.surface : undefined) ?? surfaceOf(run);
 
   const takeOver = async () => {
+    // A desktop opens in a new tab, and the browser only allows that inside the click, so the tab opens here, before the
+    // takeover and health requests, and is closed again if the takeover ends up on the terminal or fails.
+    let tab: Window | null = null;
+    if (surface === "desktop") {
+      tab = openEnterTab();
+      if (!tab) {
+        toast.error(NEEDS_YOU.failed.takeOver, { description: RUN_SSH.POPUP_BLOCKED });
+        return;
+      }
+    }
     setBusy("take");
     try {
       const got = await approvalsApi.takeOver(ap.id);
+      setServed({ id: ap.id, surface: got.surface });
       if (got.surface === "desktop") {
         const h = await healthApi.health();
         const declared = (run.ui_apps ?? []).some((a) => a.name === "novnc");
-        await enterUIApp(run.id, declared ? "novnc" : DESKTOP_APP.name, h.ui_sandbox ?? null);
+        await enterUIApp(run.id, declared ? "novnc" : DESKTOP_APP.name, h.ui_sandbox ?? null, tab ? { tab } : {});
+        tab = null;
       } else {
+        tab?.close();
+        tab = null;
         onOpenTerminal();
       }
       onChanged();
     } catch (err) {
+      tab?.close();
       toast.error(NEEDS_YOU.failed.takeOver, { description: getErrorMessage(err) });
     } finally {
       setBusy(null);

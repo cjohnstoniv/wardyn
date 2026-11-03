@@ -514,7 +514,7 @@ export function AuditScreen() {
             <EmptyState
               icon={ScrollText}
               title="The trail starts with your first run."
-              description="Every egress decision, credential broker, approval, and enforcement action gets recorded here the moment you launch a run."
+              description="Every egress decision, brokered credential, approval, and enforcement action gets recorded here the moment you launch a run."
               action={
                 // An audit screen doesn't need to own a run-launcher — /runs
                 // is already the canonical "Launch your first run" CTA (its

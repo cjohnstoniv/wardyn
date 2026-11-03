@@ -261,6 +261,13 @@ describe("glyphKindFor — the shape half of the colour/glyph rule", () => {
     // not win the shape decision for this word.
     expect(glyphKindFor("grey", "Ended at its end time", "RUNNING")).toBe("square-outline");
   });
+
+  it("a paused row (state still RUNNING, its agent frozen) gets the static ring, not the pulsing dot", () => {
+    expect(glyphKindFor("grey", "Paused", "RUNNING")).toBe("ring");
+    const paused = rowPresentation(run({ state: "RUNNING", paused_at: aheadByHours(-1) }));
+    expect(paused.word).toBe("Paused");
+    expect(glyphKindFor(paused.hue, paused.word, "RUNNING")).toBe("ring");
+  });
 });
 
 describe("sectionRuns — need, then time (H-1/H-6)", () => {

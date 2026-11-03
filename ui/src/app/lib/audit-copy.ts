@@ -112,6 +112,61 @@ const ACTION_VERB: Record<string, string> = {
   "auth.fail": "failed to sign in to",
 };
 
+// An admin verb that destroys something is worded by its outcome, so a failed or refused row never reads as done
+// above its own badge. `partial` is for a success row that carries data.not_erased (some of it was kept).
+interface OutcomeWords {
+  done: string;
+  failed: string;
+  refused: string;
+  partial?: string;
+}
+const DESTRUCTIVE: Record<string, OutcomeWords> = {
+  "person.erasure": {
+    done: "Erased a person's data",
+    failed: "Person data erasure failed",
+    refused: "Person data erasure refused",
+    partial: "Erased part of a person's data",
+  },
+  "credential.erase": {
+    done: "Erased a person's stored credentials",
+    failed: "Credential erasure failed",
+    refused: "Credential erasure refused",
+  },
+  "session.revoke": {
+    done: "Signed a person out everywhere",
+    failed: "Signing a person out failed",
+    refused: "Signing a person out refused",
+  },
+  "token.revoke": { done: "Revoked an API token", failed: "Revoking an API token failed", refused: "Revoking an API token refused" },
+  "person.deprovision": {
+    done: "Deprovisioned a person",
+    failed: "Person deprovisioning failed",
+    refused: "Person deprovisioning refused",
+    partial: "Deprovisioned a person; some data was kept",
+  },
+  "service_identity.retire": {
+    done: "Retired a service identity",
+    failed: "Retiring a service identity failed",
+    refused: "Retiring a service identity refused",
+  },
+  "access.role_mapping.delete": {
+    done: "Removed a role mapping",
+    failed: "Removing a role mapping failed",
+    refused: "Removing a role mapping refused",
+  },
+  "template.delete": { done: "Deleted a template", failed: "Deleting a template failed", refused: "Deleting a template refused" },
+  "audit.retention.partition_dropped": {
+    done: "Dropped an audit partition",
+    failed: "Dropping an audit partition failed",
+    refused: "Dropping an audit partition refused",
+  },
+  "scim.user.deactivate": {
+    done: "Deactivated by your identity provider",
+    failed: "Deactivation by your identity provider failed",
+    refused: "Deactivation by your identity provider refused",
+  },
+};
+
 // A run.build failure row the run carried on past (a dropped base image, an unbuilt SSH devcontainer): its reason is
 // the row's detail line (inboundDetail), and the failure badge stays.
 const SKIPPED_BUILD = "Skipped part of the sandbox image build";
@@ -175,6 +230,12 @@ function describeParts(e: AuditEvent): AuditParts {
       return whole(ok ? AUDIT.EXPIRED_DELETE_REFUSED : AUDIT.EXPIRED_DELETE_REFUSED_FAILED);
     }
     if (reason === "expired") return whole(ok ? AUDIT.EXPIRED_DELETE_EXPIRED : AUDIT.EXPIRED_DELETE_EXPIRED_FAILED);
+  }
+  const destructive = DESTRUCTIVE[e.action];
+  if (destructive) {
+    const kept = e.outcome === "success" && !!e.data?.not_erased;
+    const lead = e.outcome === "success" ? (kept && destructive.partial ? destructive.partial : destructive.done) : e.outcome === "denied" ? destructive.refused : destructive.failed;
+    return { lead, sep: " — ", object: e.target ?? "" };
   }
   if (isSkippedBuild(e)) return { lead: SKIPPED_BUILD, sep: " — ", object: e.target ?? "" };
   if (e.action === "run.build" && e.data?.cache_hit === true) {

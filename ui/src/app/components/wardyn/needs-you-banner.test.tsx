@@ -5,14 +5,17 @@
 
 // #2963 "Needs you" banner (mock M8 Option A): the request, the takeover strip, the one-click hand
 // back and its confirmation — the strings are the boards', through copy/needs-you.ts.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { ApprovalRequest, RunDetail } from "../../lib/types";
 import { NEEDS_YOU } from "./copy/needs-you";
+import { RUN_SSH } from "./copy";
 
 const api = vi.hoisted(() => ({ takeOver: vi.fn(), handBack: vi.fn(), decline: vi.fn() }));
+const toastError = vi.hoisted(() => vi.fn());
+vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn() } }));
 vi.mock("../../lib/api/approvals", () => ({ approvals: api }));
 vi.mock("../../lib/api/health", () => ({ health: { health: vi.fn().mockResolvedValue({}) } }));
 vi.mock("./operator-context", () => ({
@@ -44,10 +47,19 @@ function mount(approvals: ApprovalRequest[], r: RunDetail = run) {
   return cb;
 }
 
+// A stubbed window.open: the new tab the click opens before any request.
+let tabStub: { opener: unknown; name: string; close: ReturnType<typeof vi.fn>; location: { replace: ReturnType<typeof vi.fn> } };
+let openSpy: ReturnType<typeof vi.spyOn>;
+
 beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();
+  tabStub = { opener: {}, name: "", close: vi.fn(), location: { replace: vi.fn() } };
+  openSpy = vi.spyOn(window, "open").mockReturnValue(tabStub as unknown as Window);
 });
+afterEach(() => openSpy.mockRestore());
+
+const vmRun = { ...run, machine_kind: "linux_vm" } as unknown as RunDetail;
 
 describe("NeedsYouBanner", () => {
   it("a Linux VM run's takeover is the desktop, not the terminal (UXR-16)", () => {
@@ -206,5 +218,73 @@ describe("NeedsYouBanner", () => {
 
   it("a handed-back, declined or other-kind row is not active", () => {
     expect(activeTakeover([request({ state: "APPROVED", handed_back_at: new Date().toISOString() }), request({ state: "DENIED" }), request({ kind: "tool_call" })])).toBeUndefined();
+  });
+
+  // The copy follows the server's answer where there is one; the run page's guess is only the fallback.
+  it("says terminal for a VM run when the approval carries the server's terminal surface", () => {
+    mount([{ ...request(), surface: "terminal" } as ApprovalRequest], vmRun);
+    expect(within(screen.getByTestId("needs-you-banner")).getByText(NEEDS_YOU.banner.asked("2 min ago", "terminal"))).toBeInTheDocument();
+  });
+
+  it("keeps the VM guess (desktop) when the approval carries no surface", () => {
+    mount([request()], vmRun);
+    expect(within(screen.getByTestId("needs-you-banner")).getByText(NEEDS_YOU.banner.asked("2 min ago", "desktop"))).toBeInTheDocument();
+  });
+
+  it("after a takeover the server answered terminal for, the strip says terminal though the run page guessed desktop", async () => {
+    api.takeOver.mockResolvedValue({ ...request({ state: "APPROVED" }), surface: "terminal" });
+    const cb = { onChanged: vi.fn(), onOpenTerminal: vi.fn(), onGoAudit: vi.fn() };
+    const view = render(<NeedsYouBanner run={vmRun} approvals={[request()]} {...cb} />);
+    await userEvent.click(screen.getByRole("button", { name: NEEDS_YOU.banner.takeOver }));
+    expect(cb.onOpenTerminal).toHaveBeenCalled();
+    view.rerender(<NeedsYouBanner run={vmRun} approvals={[request({ state: "APPROVED", takeover_holder: "dev-sub" })]} {...cb} />);
+    expect(screen.getByText(NEEDS_YOU.strip.control("terminal"))).toBeInTheDocument();
+  });
+
+  describe("Take over opens the desktop tab inside the click", () => {
+    it("opens a named blank tab before the takeover request is answered, and sends the app into it", async () => {
+      let answer: (v: unknown) => void = () => {};
+      api.takeOver.mockReturnValue(new Promise((r) => (answer = r)));
+      mount([request()], vmRun);
+      await userEvent.click(screen.getByRole("button", { name: NEEDS_YOU.banner.takeOver }));
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(openSpy.mock.calls[0][0]).toBe("");
+      expect(openSpy.mock.calls[0][1]).toMatch(/^wardyn-enter-/);
+      expect(tabStub.opener).toBeNull();
+      expect(api.takeOver).toHaveBeenCalledTimes(1);
+      expect(tabStub.close).not.toHaveBeenCalled();
+      answer({ ...request({ state: "APPROVED" }), surface: "terminal" });
+    });
+
+    it("closes the blank tab when the server puts the takeover on the terminal", async () => {
+      api.takeOver.mockResolvedValue({ ...request({ state: "APPROVED" }), surface: "terminal" });
+      const cb = mount([request()], vmRun);
+      await userEvent.click(screen.getByRole("button", { name: NEEDS_YOU.banner.takeOver }));
+      expect(tabStub.close).toHaveBeenCalled();
+      expect(cb.onOpenTerminal).toHaveBeenCalled();
+    });
+
+    it("closes the blank tab when the takeover fails", async () => {
+      api.takeOver.mockRejectedValue(new Error("not now"));
+      mount([request()], vmRun);
+      await userEvent.click(screen.getByRole("button", { name: NEEDS_YOU.banner.takeOver }));
+      expect(tabStub.close).toHaveBeenCalled();
+      expect(toastError).toHaveBeenCalledWith(NEEDS_YOU.failed.takeOver, { description: "not now" });
+    });
+
+    it("says the browser blocked the tab, and takes nothing over, when window.open returns null", async () => {
+      openSpy.mockReturnValue(null);
+      mount([request()], vmRun);
+      await userEvent.click(screen.getByRole("button", { name: NEEDS_YOU.banner.takeOver }));
+      expect(toastError).toHaveBeenCalledWith(NEEDS_YOU.failed.takeOver, { description: RUN_SSH.POPUP_BLOCKED });
+      expect(api.takeOver).not.toHaveBeenCalled();
+    });
+
+    it("opens no tab for a run whose takeover is the terminal", async () => {
+      api.takeOver.mockResolvedValue({ ...request({ state: "APPROVED" }), surface: "terminal" });
+      mount([request()]);
+      await userEvent.click(screen.getByRole("button", { name: NEEDS_YOU.banner.takeOver }));
+      expect(openSpy).not.toHaveBeenCalled();
+    });
   });
 });

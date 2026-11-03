@@ -20,7 +20,7 @@ import { isMacOSVM, isVMKind } from "../../lib/types/machine-kind";
 import { entryErrorMessage, isBackgroundRun, mayEnterRunOrUnknown, sponsorOnlyEntry } from "../../lib/run-entry";
 import { RUN_MODE_REFUSAL } from "../../lib/run-mode-refusals";
 import { Mono } from "../wardyn/code-block";
-import { UI_APPS_LANE } from "../wardyn/copy";
+import { RUN_SSH, UI_APPS_LANE } from "../wardyn/copy";
 import { DESKTOP } from "../wardyn/copy/desktop";
 import { RUN_VM_PAGE } from "../wardyn/copy/run-cockpit";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
@@ -28,7 +28,7 @@ import { Chip, WidgetCard } from "../wardyn/primitives";
 import { MacOSDiskNote, macOSRunFactsOf, type MacOSRunFacts } from "./run-detail/macos-run-facts";
 import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
 import { DesktopPausedNote, DesktopSignInButton, DesktopSignInsError, DesktopSignInsNote, useDesktopSignIns } from "./run-detail/desktop-sign-ins";
-import { DESKTOP_APP, enterUIApp } from "./run-detail-ssh";
+import { DESKTOP_APP, enterUIApp, openEnterTab } from "./run-detail-ssh";
 
 // Exported for the tests: standalone-testable without mounting the whole screen's fetch graph.
 export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: MacOSRunFacts }) {
@@ -97,11 +97,18 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
   // route; every other desktop uses the UI-app ticket the Attach lanes use. The ticket mint is the entry check.
   async function openDesktop() {
     setAppError(null);
+    // The tab opens here, before the ticket request, so the browser still counts it as the click's own.
+    const tab = openEnterTab();
+    if (!tab) {
+      setAppError(RUN_SSH.POPUP_BLOCKED);
+      return;
+    }
     setOpeningApp(true);
     try {
       const ticket = watchable ? await runsApi.watchTicket(run.id) : undefined;
-      await enterUIApp(run.id, DESKTOP_APP.name, uiSandbox, { ticket });
+      await enterUIApp(run.id, DESKTOP_APP.name, uiSandbox, { ticket, tab });
     } catch (err) {
+      tab.close();
       setAppError(entryErrorMessage(err, (e) => (e instanceof Error ? e.message : String(e)), run));
     } finally {
       setOpeningApp(false);
