@@ -57,6 +57,16 @@ export function DesktopSignInButton({ s }: { s: DesktopSignIns }) {
   );
 }
 
+/** A failed pause or resume, right under the buttons it came from. */
+export function DesktopSignInsError({ s }: { s: DesktopSignIns }) {
+  if (!s.error) return null;
+  return (
+    <p role="alert" className="mt-2 text-meta leading-relaxed text-danger">
+      {s.error}
+    </p>
+  );
+}
+
 /** State 2's warning note, above the buttons. */
 export function DesktopPausedNote({ s }: { s: DesktopSignIns }) {
   if (!s.view?.paused) return null;
@@ -74,11 +84,6 @@ export function DesktopSignInsNote({ s }: { s: DesktopSignIns }) {
   if (!v || v.store === "") return null;
   return (
     <>
-      {s.error && (
-        <p role="alert" className="mt-2 text-meta leading-relaxed text-danger">
-          {s.error}
-        </p>
-      )}
       <p className="mt-2 text-meta leading-relaxed text-foreground">{SIGN_INS_NOTE[v.store] ?? DESKTOP.signInsOff(v.agent)}</p>
     </>
   );

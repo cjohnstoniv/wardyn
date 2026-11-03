@@ -23,6 +23,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- The run page's VM desktop tile is clearer. It says how to type and click on macOS 26 (`wardyn window <run-id>`), says when the gateway check failed (with Try again) instead of showing nothing, shows a pause or resume error under its buttons, and no longer shows a View only chip beside Off. Files on a VM says copy and paste aren't available, a macOS disk that couldn't be removed says who to tell, a Watch desktop error wraps instead of being cut off, and the Identity card has a Machine row and separate Started and Started by rows.
 - Docs no longer say a gateway run identity token always lives 10 minutes. It lives 60 to 600 seconds, and 600 by default.
 - A window onto a macOS VM run no longer opens when the Mac can't tell whether its screen is locked: it refuses with `mac_window_lock_unknown`, and an open window closes as soon as the Mac locks or its lock can no longer be told. Reopening after a lock needs a new `wardyn window`. Not yet run on a real Mac.
 - New run: choosing a virtual machine no longer leaves "Start the run in this harness" on. The switch is off and disabled for a Linux or macOS VM, whose terminal opens a shell, and the refusal now names that switch, links to Harnesses and gives the `interactive_start` field. The macOS choice also says the browser desktop is view only on macOS 26.
