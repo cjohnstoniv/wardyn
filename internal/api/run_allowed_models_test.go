@@ -442,7 +442,7 @@ func TestAllowedModels_ReviveNeedsARunnerThatCarriesThem(t *testing.T) {
 // Preflight and the policy preview name the list and the profile that sets it for the caller's own run, a
 // member included, so Review can show both; with no list neither is sent.
 func TestAllowedModels_PreflightNamesTheProfile(t *testing.T) {
-	body := `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"]}}`
+	body := `{"agent":"claude-code","task":"t"}`
 	for _, list := range [][]string{{"model-a"}, nil} {
 		profile := govProfile("Contractors")
 		profile.Limits = types.GovernanceLimits{AllowedModels: list}
@@ -470,5 +470,56 @@ func TestAllowedModels_PreflightNamesTheProfile(t *testing.T) {
 				t.Errorf("%s: models %v profile %v, want %v and Contractors", path, got.Models, got.Profile, list)
 			}
 		}
+	}
+}
+
+// The doors and dispatch judge a Bedrock provider by one rule (bedrockModelsUnchecked): for each lane
+// providerBedrockTransport really builds, the doors' answer is the dispatched lane's. A lane whose
+// bearer the proxy does not inject, or with no provider record, is unchecked by the same rule.
+func TestAllowedModels_DoorAndDispatchAgreeOnBedrock(t *testing.T) {
+	odd := func(p types.ModelProvider) types.ModelProvider {
+		b := *p.Bedrock
+		b.BaseURL = "https://bedrock-gateway.corp.example/a/../bedrock"
+		p.Bedrock = &b
+		return p
+	}
+	gw := brBearerProvider()
+	gw.Bedrock.BaseURL = "https://bedrock-gateway.corp.example/bedrock/"
+	for _, tc := range []struct {
+		name      string
+		p         types.ModelProvider
+		sigv4     bool
+		unchecked bool
+	}{
+		{"sign-in, signed in the sandbox", awsSSOTestProvider(), false, true},
+		{"sign-in, re-signed at the proxy", awsSSOTestProvider(), true, false},
+		{"sign-in at an address the route cannot carry", odd(awsSSOTestProvider()), true, true},
+		{"bearer key", brBearerProvider(), false, false},
+		{"bearer key at a gateway", gw, false, false},
+		{"bearer key at an address the route cannot carry", odd(brBearerProvider()), false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, blob := bedrockSSOLocalFixture(t, true)
+			f.srv.cfg.AWSSigV4AtProxy = tc.sigv4
+			run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: awsSSOTestOwner, Placement: types.PlacementLocal}
+			lane := f.srv.providerBedrockTransport(context.Background(), run, &types.RunPolicySpec{},
+				map[string]string{"WARDYN_TASK_MODE": "agent"}, chosenProvider{provider: tc.p, owner: awsSSOTestOwner}, blob)
+			door, dispatch := f.srv.providerModelsUnchecked(tc.p), laneModelsUnchecked(lane)
+			if door != tc.unchecked || dispatch != tc.unchecked {
+				t.Fatalf("door unchecked = %v, dispatch unchecked = %v, want both %v", door, dispatch, tc.unchecked)
+			}
+		})
+	}
+	bearer := brBearerProvider()
+	for name, l := range map[string]llmTransport{
+		"a bearer lane whose bearer the proxy does not inject": {bedrockReady: true, provider: &chosenProvider{provider: bearer}},
+		"a Bedrock lane with no provider record":               {bedrockReady: true, injectBedrockBearer: true},
+	} {
+		if !laneModelsUnchecked(l) {
+			t.Errorf("%s: checked, want unchecked", name)
+		}
+	}
+	if !bedrockModelsUnchecked(bearer, false, false) || bedrockModelsUnchecked(bearer, true, false) {
+		t.Error("the shared rule must refuse a Bedrock provider whose requests neither carry a proxy bearer nor are re-signed")
 	}
 }

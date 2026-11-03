@@ -110,29 +110,37 @@ func laneBedrockRoutes(llms []llmTransport) map[string]string {
 	return routes
 }
 
-// providerModelsUnchecked reports whether the run's proxy could not hold a run on provider p to the
-// list: a Bedrock provider whose address the proxy's route cannot carry (bedrockModelRoute), or an AWS
-// sign-in whose requests the sandbox signs itself. The proxy cannot read inside those without breaking
-// the signature, so it would refuse every one as an opaque connection; the doors refuse the run first.
-// Re-signed at the proxy (WARDYN_AWS_SIGV4_AT_PROXY), the proxy terminates them and checks each. A local
+// bedrockModelsUnchecked is the one rule both doors and dispatch apply to a Bedrock provider p: its model
+// calls are unchecked at an address the proxy's route cannot carry (bedrockModelRoute), or where the
+// sandbox signs its own AWS requests, the proxy neither injecting a bearer key (bearer) nor re-signing
+// them (resigned). The proxy cannot read inside a request the sandbox signed without breaking the
+// signature, so it would refuse every one as an opaque connection.
+func bedrockModelsUnchecked(p types.ModelProvider, bearer, resigned bool) bool {
+	if _, _, ok := bedrockModelRoute(p); !ok {
+		return true
+	}
+	return !bearer && !resigned
+}
+
+// providerModelsUnchecked reports, at the doors, whether the run's proxy could not hold a run on provider
+// p to the list (bedrockModelsUnchecked), with the lane dispatch would build: a bearer key the proxy
+// injects for bedrock_bearer, and for a sign-in the re-signing WARDYN_AWS_SIGV4_AT_PROXY decides for the
+// provider's hosts (providerBedrockTransport). The doors refuse the run before dispatch would. A local
 // model is held to its own allowlist and is not a hosted provider.
 func (s *Server) providerModelsUnchecked(p types.ModelProvider) bool {
 	if !p.Kind.IsBedrock() {
 		return false
 	}
-	if _, _, ok := bedrockModelRoute(p); !ok {
-		return true
+	bearer, resigned := p.Kind == types.ModelProviderBedrockBearer, false
+	if !bearer {
+		_, resigned = s.awsSigV4Hosts(providerBedrockHosts(p))
 	}
-	if p.Kind != types.ModelProviderBedrockSSO {
-		return false
-	}
-	_, resigned := s.awsSigV4Hosts(providerBedrockHosts(p))
-	return !resigned
+	return bedrockModelsUnchecked(p, bearer, resigned)
 }
 
-// laneModelsUnchecked is providerModelsUnchecked for a dispatched lane: a Bedrock lane with no provider
-// record to read its address from, at an address the route cannot carry, or whose requests the sandbox
-// signs, with no bearer the proxy injects and no re-signing at the proxy.
+// laneModelsUnchecked is bedrockModelsUnchecked for a dispatched Bedrock lane, read off the lane itself.
+// A lane with no provider record has no address to check and is refused; providerBedrockTransport, the
+// one builder of a ready lane, always gives it one.
 func laneModelsUnchecked(l llmTransport) bool {
 	if !l.bedrockReady {
 		return false
@@ -140,10 +148,7 @@ func laneModelsUnchecked(l llmTransport) bool {
 	if l.provider == nil {
 		return true
 	}
-	if _, _, ok := bedrockModelRoute(l.provider.provider); !ok {
-		return true
-	}
-	return !l.injectBedrockBearer && !l.signsBedrock()
+	return bedrockModelsUnchecked(l.provider.provider, l.injectBedrockBearer, l.signsBedrock())
 }
 
 // uncheckedModelProvider is the first chosen provider of choices whose model calls the proxy could not
