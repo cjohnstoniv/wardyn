@@ -8,7 +8,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { renderHook, act } from "@testing-library/react";
 import { HttpError } from "../../../lib/api/core";
 import { useRefusedApprovals } from "../../../lib/hooks/use-refused-approvals";
-import { WallPresetRunLine, wallPresetApprovalSentence } from "./wall-preset-run-lines";
+import { WallPresetQueuedChanged, WallPresetRefusalLine, WallPresetRunLine, wallPresetApprovalSentence } from "./wall-preset-run-lines";
 
 afterEach(cleanup);
 
@@ -21,6 +21,18 @@ describe("run page wall preset sentences", () => {
   it("P-60b: names nothing for a personal preset its reader does not own", () => {
     render(<WallPresetRunLine />);
     expect(screen.getByTestId("wall-preset-run-line")).toHaveTextContent("Wall preset: a personal wall preset.");
+  });
+
+  it("P-70: says the run's preset refused the push", () => {
+    render(<WallPresetRefusalLine name="Sealed" />);
+    expect(screen.getByTestId("wall-preset-refusal-line")).toHaveTextContent("Refused by this run's Sealed wall preset.");
+  });
+
+  it("P-85: says a queued run's preset changed, and nothing when it did not", () => {
+    const { rerender, container } = render(<WallPresetQueuedChanged name="Docs triage" queuedVersion={3} nowVersion={4} />);
+    expect(container).toHaveTextContent("The run was queued with the Docs triage wall preset, version 3. It was at version 4 when the run would have started.");
+    rerender(<WallPresetQueuedChanged name="Docs triage" queuedVersion={4} nowVersion={4} />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("P-67 and P-68: the approval sentence for the owner's run and for somebody else's", () => {

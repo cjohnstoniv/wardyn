@@ -382,9 +382,9 @@ describe("RunDetailScreen — Audit tab row shape", () => {
 describe("RunDetailScreen — Audit tab wording", () => {
   const base = { time: new Date().toISOString(), actor_type: "system", actor: "wardynd", outcome: "success", run_id: "run-1" };
 
-  async function openAuditTab(rows: Record<string, unknown>[]) {
+  async function openAuditTab(rows: Record<string, unknown>[], run: typeof RUN = RUN) {
     listAuditMock.mockImplementation((_id: string, action?: unknown) => Promise.resolve(action ? [] : rows));
-    renderRun(RUN);
+    renderRun(run);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(await screen.findByRole("tab", { name: /audit/i }));
     return screen.findAllByTestId("run-audit-row");
@@ -404,6 +404,28 @@ describe("RunDetailScreen — Audit tab wording", () => {
     expect(within(other).getByTestId("run-audit-action")).toHaveTextContent("Allowed egress to");
     expect(within(other).getByTestId("run-audit-action")).toHaveAttribute("title", "Allowed egress to pypi.org\negress.allow");
     expect(within(other).getByTestId("run-audit-target")).toHaveTextContent("pypi.org");
+  });
+
+  // P-70: a push refused for deny_all names the run's wall preset when that preset is known to set it.
+  const denyAll = { ...base, id: "e9", action: "egress.deny", target: "github.com", actor_type: "proxy", outcome: "deny", data: { rule_source: "brokered:git:push-deny-all" } };
+  it.each([
+    ["Sealed", { id: "sealed", name: "Sealed", scope: "builtin", version: 1 }, "Refused by this run's Sealed wall preset."],
+    ["Read-only", { id: "read-only", name: "Read-only", scope: "builtin", version: 1 }, "Refused by this run's Read-only wall preset."],
+  ])("names the run's %s wall preset under a deny-all refusal", async (_n, wall_preset, text) => {
+    const [row] = await openAuditTab([denyAll], { ...RUN, wall_preset } as unknown as typeof RUN);
+    expect(within(row).getByTestId("run-audit-target")).toHaveTextContent("Refused: every push");
+    expect(within(row).getByTestId("wall-preset-refusal-line")).toHaveTextContent(text);
+  });
+
+  it.each([
+    ["Open", { id: "open", name: "Open", scope: "builtin", version: 1 }],
+    ["a saved preset whose spec the read does not carry", { id: "o1", name: "Docs triage", scope: "org", version: 2 }],
+    ["a personal preset read by a non-owner", { scope: "person" }],
+    ["no wall preset", undefined],
+  ])("names no preset under a deny-all refusal for %s", async (_n, wall_preset) => {
+    const [row] = await openAuditTab([denyAll], { ...RUN, wall_preset } as unknown as typeof RUN);
+    expect(within(row).getByTestId("run-audit-target")).toHaveTextContent("Refused: every push");
+    expect(within(row).queryByTestId("wall-preset-refusal-line")).toBeNull();
   });
 
   it("reads an egress row with no target as the Audit screen does", async () => {

@@ -77,6 +77,8 @@ import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
 import { RunLifetimeWithContainment } from "./run-detail/containment-pending";
 import { PolicyTab } from "./run-detail/policy-tab";
+import { WallPresetRefusalLine } from "./run-detail/wall-preset-run-lines";
+import { presetRefusingEveryPush } from "../../lib/wall-preset-words";
 import { POLICY_TAB } from "./run-detail/policy-tab-copy";
 import { RecordingTab } from "./run-detail/recording-tab";
 import { OutputTab } from "./run-detail/output-tab";
@@ -411,7 +413,7 @@ function RunDetailPage({ id }: { id: string }) {
           </TabsContent>
 
           <TabsContent value="audit" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
-            <AuditTab events={audit} runId={run.id} policy={run.policy} onMakePolicy={() => setProfileRunId(run.id)} />
+            <AuditTab events={audit} runId={run.id} policy={run.policy} wallPreset={run.wall_preset} onMakePolicy={() => setProfileRunId(run.id)} />
           </TabsContent>
 
           <TabsContent value="recording" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
@@ -482,6 +484,7 @@ function AuditTab({
   events,
   runId,
   policy,
+  wallPreset,
   onMakePolicy,
 }: {
   events: AuditEvent[];
@@ -489,6 +492,8 @@ function AuditTab({
   /** The run's own policy (GET /runs/{id}), never /me: an admin viewing someone
    *  else's run must see that run's owner, not their own. */
   policy?: RunDetail["policy"];
+  /** The run's wall preset (GET /runs/{id}): names the preset under a deny-all refusal it is known to set. */
+  wallPreset?: RunDetail["wall_preset"];
   onMakePolicy: () => void;
 }) {
   const securityOperator = useSecurityOperator();
@@ -533,9 +538,10 @@ function AuditTab({
               const signing = awsSigningLine(e);
               const inbound = inboundDetail(e);
               const callId = gatewayCallId(e);
+              const refusedBy = e.data?.rule_source === "brokered:git:push-deny-all" ? presetRefusingEveryPush(wallPreset) : undefined;
               return (
                 // One line from sm up; below sm the target drops to a second line of its own (#2917).
-                <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${(isAttributedRefusal(e) && !toolRuleDecision(e)) || signing || inbound || callId ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
+                <div key={e.id} data-testid="run-audit-row" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 ${(isAttributedRefusal(e) && !toolRuleDecision(e)) || signing || inbound || callId || refusedBy ? "sm:flex-wrap" : "sm:flex-nowrap"}`}>
                   <span
                     data-testid="run-audit-time"
                     className="w-[84px] shrink-0 whitespace-nowrap font-mono text-meta text-muted-foreground"
@@ -585,6 +591,7 @@ function AuditTab({
                       {inbound}
                     </span>
                   )}
+                  {refusedBy && <WallPresetRefusalLine name={refusedBy} className="basis-full sm:pl-[208px]" />}
                   {callId && (
                     // Cut at a narrow width, and Copy still takes the whole value.
                     <span data-testid="run-audit-call-id" className="flex min-w-0 basis-full items-center gap-1 font-mono text-xs text-muted-foreground sm:pl-[208px]">

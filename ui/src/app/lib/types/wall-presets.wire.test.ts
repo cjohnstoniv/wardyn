@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { WALL_PRESET_REASON } from "../api/wall-presets";
+import { BUILTIN_PUSH_REFUSING } from "../wall-preset-words";
 
 function repoRoot(): string {
   let dir = resolve(process.cwd());
@@ -63,6 +64,14 @@ describe("wall presets wire", () => {
     if (!m) throw new Error("type WallPresetScope not found");
     expect(go.length).toBe(4);
     expect(new Set([...m[1].matchAll(/"([a-z]+)"/g)].map((x) => x[1]))).toEqual(new Set(go));
+  });
+
+  it("the built-ins that refuse every push are the ones the Go built-ins build from readOnlyWalls", () => {
+    const go = read("internal/types/wall_preset.go");
+    expect(/func readOnlyWalls\(\)[\s\S]*?DenyAll:/.test(go)).toBe(true);
+    // Read-only is readOnlyWalls itself and Sealed is a copy of it that only narrows further; Open is empty.
+    expect(/readOnly := readOnlyWalls\(\)\s+sealed := readOnlyWalls\(\)/.test(go)).toBe(true);
+    expect([...BUILTIN_PUSH_REFUSING].sort()).toEqual(["read-only", "sealed"]);
   });
 
   it("every reason the console branches on is one the server sends", () => {

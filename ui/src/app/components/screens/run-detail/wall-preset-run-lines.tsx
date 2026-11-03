@@ -4,13 +4,24 @@
  */
 
 // The run page's wall preset sentences (boards WP-3), as plain components over the words they need: the policy tab's
-// line and the approval row's sentence.
+// line, the activity line under a deny-all refusal, the queued run's version line and the approval row's sentence.
 import { WALL_PRESETS as W } from "../../wardyn/copy/wall-presets";
 
 /** The policy tab's line under the source line. A person preset seen by anyone but its owner is named by no one. */
 export function WallPresetRunLine({ name, audience, version }: { name?: string; audience?: string; version?: number }) {
   const text = name && audience && version !== undefined ? W.RUN_LINE(name, audience, version) : W.RUN_LINE_PERSONAL;
   return <p data-testid="wall-preset-run-line" className="text-xs text-muted-foreground">{text}</p>;
+}
+
+/** The run activity line under a deny-all refusal, when the run's preset is what sets it. */
+export function WallPresetRefusalLine({ name, className = "" }: { name: string; className?: string }) {
+  return <span data-testid="wall-preset-refusal-line" className={`text-xs text-muted-foreground ${className}`}>{W.PUSH_REFUSED_BY(name)}</span>;
+}
+
+/** The muted line under a queued run's end sentence when its preset changed before it could start. */
+export function WallPresetQueuedChanged({ name, queuedVersion, nowVersion }: { name: string; queuedVersion: number; nowVersion: number }) {
+  if (queuedVersion === nowVersion) return null;
+  return <p data-testid="wall-preset-queued-changed" className="text-xs text-muted-foreground">{W.QUEUED_CHANGED(name, queuedVersion, nowVersion)}</p>;
 }
 
 /** An approval row's sentence when the run's wall preset denies the host: the owner's own run, or somebody else's. */

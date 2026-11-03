@@ -115,6 +115,9 @@ export const WALL_PRESETS = {
   // Run page.
   RUN_LINE: (name: string, audience: string, version: string | number) => `Wall preset: ${name} (${audience}, version ${version}).`,
   RUN_LINE_PERSONAL: "Wall preset: a personal wall preset.",
+  PUSH_REFUSED_BY: (name: string) => `Refused by this run's ${name} wall preset.`,
+  QUEUED_CHANGED: (name: string, queued: string | number, now: string | number) =>
+    `The run was queued with the ${name} wall preset, version ${queued}. It was at version ${now} when the run would have started.`,
   CHANGE_HEADING: (name: string) => `Wall preset: ${name}`,
   CHANGE_HEADING_PERSONAL: "A personal wall preset",
   // The Why card's wall_preset arm.

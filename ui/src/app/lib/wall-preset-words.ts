@@ -98,3 +98,14 @@ export function sectionOfRefusal(message: string): { section: FormSection | "nam
   const path = /^[a-z_]+(?:\[\d+\])?(?:\.[a-z_]+)?(?:\[\d+\])?(?=[: ])/.exec(text)?.[0].replace(/\[\d+\]/g, "") ?? "";
   return { section: SECTION_OF_PATH[path] ?? SECTION_OF_PATH[path.split(".")[0]] ?? null, text };
 }
+
+/**
+ * The built-in presets whose spec refuses every push (push_rules.deny_all); wall-presets.wire.test.ts pins this to
+ * the Go built-ins. A saved preset's spec is never on the run read, so none of them is named here.
+ */
+export const BUILTIN_PUSH_REFUSING = new Set(["read-only", "sealed"]);
+
+/** The name to print under a deny-all refusal when the run's preset is known to be what sets it; none otherwise. */
+export function presetRefusingEveryPush(p: { id?: string; name?: string; scope: string } | undefined): string | undefined {
+  return p?.scope === "builtin" && p.id && p.name && BUILTIN_PUSH_REFUSING.has(p.id) ? p.name : undefined;
+}
