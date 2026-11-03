@@ -180,7 +180,26 @@ type SiteMacOSVM struct {
 	// from the Mac it runs on. A pointer so an explicit false survives omitempty. Unlike the watch it
 	// is off when absent: only true turns it on for the whole install.
 	AllowAttendedWindow *bool `json:"allow_attended_window,omitempty"`
+	// AllowKeptMachines lets a person keep a macOS VM between their own interactive runs on their own Mac.
+	// A pointer so an explicit false survives omitempty. Off when absent, like the window: only true turns
+	// it on for the whole install, so an untouched install keeps "deleted when the run ends".
+	AllowKeptMachines *bool `json:"allow_kept_machines,omitempty"`
+	// KeptMachineIdleDays deletes a kept machine nobody has used for this many days. 1 to 90; 0 or absent
+	// reads KeptMachineIdleDaysDefault.
+	KeptMachineIdleDays int `json:"kept_machine_idle_days,omitempty"`
+	// MaxKeptMachinesPerPerson caps how many machines one person keeps. 1 to 4; 0 or absent reads
+	// MaxKeptMachinesPerPersonDefault.
+	MaxKeptMachinesPerPerson int `json:"max_kept_machines_per_person,omitempty"`
 }
+
+// The kept-machine limits' defaults and bounds (macos_vm.kept_machine_idle_days and
+// macos_vm.max_kept_machines_per_person).
+const (
+	KeptMachineIdleDaysDefault      = 30
+	KeptMachineIdleDaysMax          = 90
+	MaxKeptMachinesPerPersonDefault = 1
+	MaxKeptMachinesPerPersonMax     = 4
+)
 
 // BackgroundWatchAllowed reads the switch: a nil block or an absent field is allowed.
 func (m *SiteMacOSVM) BackgroundWatchAllowed() bool {
@@ -190,6 +209,29 @@ func (m *SiteMacOSVM) BackgroundWatchAllowed() bool {
 // AttendedWindowAllowed reads the window switch: a nil block or an absent field is off.
 func (m *SiteMacOSVM) AttendedWindowAllowed() bool {
 	return m != nil && m.AllowAttendedWindow != nil && *m.AllowAttendedWindow
+}
+
+// KeptMachinesAllowed reads the keep switch: a nil block or an absent field is off.
+func (m *SiteMacOSVM) KeptMachinesAllowed() bool {
+	return m != nil && m.AllowKeptMachines != nil && *m.AllowKeptMachines
+}
+
+// KeptMachineIdleDaysOrDefault is the idle limit in days: the stored value, or the default when the block or
+// the field is absent.
+func (m *SiteMacOSVM) KeptMachineIdleDaysOrDefault() int {
+	if m == nil || m.KeptMachineIdleDays <= 0 {
+		return KeptMachineIdleDaysDefault
+	}
+	return m.KeptMachineIdleDays
+}
+
+// MaxKeptMachinesPerPersonOrDefault is the per-person cap: the stored value, or the default when the block or
+// the field is absent.
+func (m *SiteMacOSVM) MaxKeptMachinesPerPersonOrDefault() int {
+	if m == nil || m.MaxKeptMachinesPerPerson <= 0 {
+		return MaxKeptMachinesPerPersonDefault
+	}
+	return m.MaxKeptMachinesPerPerson
 }
 
 // SiteEgress is SiteConfig.Egress.

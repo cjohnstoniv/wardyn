@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,7 +122,8 @@ type macOSVMs struct {
 
 	mu    sync.Mutex
 	caps  *runnerwire.MacVMCaps
-	drift string // the base agent version a tools update was last asked for
+	drift string      // the base agent version a tools update was last asked for
+	kept  macOSVMKept // the driver's kept machines and this Mac's limit for them
 	items macOSVMItems
 	bases macOSVMBases
 }
@@ -132,10 +132,12 @@ type macOSVMs struct {
 type macOSVMSetup struct {
 	ledgerDir, root, runnerID, version string
 	limitsFile                         string
-	uid                                int
-	dockerMemory, perRunMemory         uint64
-	host                               admission.Host
-	owner                              func(os.FileInfo) (int, bool)
+	// settings are the runner settings as the caller resolved them (macOSVMSettings).
+	settings                   macOSVMSettings
+	uid                        int
+	dockerMemory, perRunMemory uint64
+	host                       admission.Host
+	owner                      func(os.FileInfo) (int, bool)
 	// fstat replaces fstat(2) in the ledger's root-ownership checks (tests); nil is the real one.
 	fstat func(fd int, name string) (unix.Stat_t, error)
 }
@@ -154,6 +156,7 @@ type macVMDriver interface {
 func (m *macOSVMs) useDriver(d macVMDriver) {
 	m.reclaim, m.endNewest = d.ReclaimMacVMs, d.EndNewestMacVM
 	m.prepNet, m.prepSweep, m.prepRemove = d.StartMacPrepNet, d.SweepMacPrep, d.RemoveMacPrepNet
+	m.kept.driver, _ = d.(keptDriver)
 }
 
 // openMacOSVMs opens the ledger and the VM directory. A ledger the package did not install whole (the
@@ -161,7 +164,8 @@ func (m *macOSVMs) useDriver(d macVMDriver) {
 // none of them) makes a handle that offers no macOS VM and names the fix.
 func openMacOSVMs(s macOSVMSetup) *macOSVMs {
 	m := &macOSVMs{host: s.host, layout: macvm.Layout{Root: s.root}, runnerID: s.runnerID, uid: s.uid, version: s.version, perRunMemory: s.perRunMemory, limitsFile: s.limitsFile,
-		defaultPerRunMemory: s.perRunMemory, interval: macOSVMRecompute, kick: make(chan struct{}, 1), items: openMacOSVMItems()}
+		defaultPerRunMemory: s.perRunMemory, interval: macOSVMRecompute, kick: make(chan struct{}, 1), items: macOSVMItems{file: s.settings.baseFile}, bases: macOSVMBases{dir: s.settings.basesDir}}
+	m.openKept(s.settings.keptLimit)
 	if s.ledgerDir != admission.DefaultDir {
 		m.ledgerDir = s.ledgerDir
 	}
@@ -242,6 +246,7 @@ func (m *macOSVMs) start(ctx context.Context, resend func()) {
 	m.mu.Lock()
 	m.ctx = ctx
 	m.mu.Unlock()
+	m.sweepKept(ctx)
 	if m.endNewest != nil {
 		go m.watchDisk(ctx, macOSVMDiskEvery, func() (int64, error) { return m.host.FreeDiskBytes(m.layout.Root) }, m.endNewest)
 	}
@@ -316,6 +321,7 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 			slog.Warn("macOS VM ledger: reconcile", "error", err.Error())
 		}
 	}
+	m.keptCaps(&c, last)
 	man, base := m.base()
 	c.Base = base
 	if base.State != runnerwire.MacVMBaseReady {
@@ -345,40 +351,6 @@ func (m *macOSVMs) build(last *runnerwire.MacVMCaps) runnerwire.MacVMCaps {
 		c.Max = last.Max
 	}
 	return c
-}
-
-// guestMemory is what one guest of this base takes: the per-run memory, or the base's minimum when that
-// is more (a run below it is refused at start).
-func (m *macOSVMs) guestMemory(man macvm.Manifest) uint64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return max(m.perRunMemory, man.MinMemoryMiB<<20)
-}
-
-// The caps' refusal for a per-run limit below the base's minimum: the owner's MV-R47 (memory) and MV-R48
-// (CPU), with the runner's per-run amount, the base's minimum and the runner's id.
-const (
-	macOSVMMemoryBelowMinimum = "Per-run memory on this runner is %[1]s GB; a macOS VM needs at least %[2]d GB. Its owner raises it to %[2]d GB or more in Settings → My runner, or with `wardyn runner set %[3]s --per-run-memory %[2]d`."
-	macOSVMCPUBelowMinimum    = "Per-run CPU on this runner is %[1]d CPUs; a macOS VM needs at least %[2]d. Its owner raises it to %[2]d or more in Settings → My runner, or with `wardyn runner set %[3]s --per-run-cpu %[2]d`."
-)
-
-// belowMinimum is why a per-run limit the organisation sent is below the base's minimum, naming the flag
-// to raise, for this Mac's log, and the caps' refusal (design 6, "Guest size below minimum"), else "".
-func (m *macOSVMs) belowMinimum(man macvm.Manifest) (why, refusal, reason string) {
-	m.mu.Lock()
-	mem, cpus := m.perRunMemory, m.perRunCPUs
-	m.mu.Unlock()
-	switch {
-	case mem != 0 && mem < man.MinMemoryMiB<<20:
-		gb := strconv.FormatFloat(math.Floor(float64(mem>>20)/1024*10)/10, 'f', -1, 64)
-		need := (man.MinMemoryMiB + 1023) >> 10
-		return fmt.Sprintf("the runner's per-run memory (%d MiB) is below the macOS base's minimum (%d MiB); raise --per-run-memory", mem>>20, man.MinMemoryMiB),
-			fmt.Sprintf(macOSVMMemoryBelowMinimum, gb, need, m.runnerID), runnerwire.MacVMReasonMemoryBelowMinimum
-	case cpus != 0 && cpus < man.MinCPUs:
-		return fmt.Sprintf("the runner's per-run CPUs (%d) are below the macOS base's minimum (%d); raise --per-run-cpu", cpus, man.MinCPUs),
-			fmt.Sprintf(macOSVMCPUBelowMinimum, cpus, man.MinCPUs, m.runnerID), runnerwire.MacVMReasonCPUBelowMinimum
-	}
-	return "", "", ""
 }
 
 // setPerRunLimits is runnerwire.RunnerHooks.PerRunLimits: the per-run CPU (milli-CPU) and memory (MiB)
