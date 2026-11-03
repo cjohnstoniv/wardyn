@@ -50,6 +50,7 @@ import type { RunPolicySpec } from "../../../lib/types";
 import type { ModelProvider } from "../../../lib/types/site";
 import { aheadByHours } from "../../../lib/test-clock";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { providerModels } from "./allowed-models";
 import { ProfileEditor } from "./profile-editor";
 
 const SPEC: RunPolicySpec = { allowed_domains: ["*.corp"], first_use_approval: "deny_with_review", min_confinement_class: "CC2" };
@@ -174,6 +175,16 @@ describe("Allowed models: the helper strip", { timeout: 20_000 }, () => {
     expect(within(strip).queryByText(AM.NO_SMALL("Foundry A"))).toBeNull();
     expect(within(strip).getByText(AM.NO_SMALL("Gateway B"))).toBeInTheDocument();
     expect(within(strip).getByText(AM.NOT_HELD("Subscription C"))).toBeInTheDocument();
+  });
+
+  it("asks for a small model only for a provider's Claude Code harness, and never on Azure Foundry", () => {
+    const advised = (harnesses: ModelProvider["harnesses"], kind = "custom_endpoint") =>
+      providerModels([{ id: "p", name: "P", kind, harnesses } as ModelProvider])[0].noSmall;
+    expect(advised([{ harness: "codex-cli", model: "model-c" }])).toBe(false);
+    expect(advised([{ harness: "codex-cli", model: "model-c" }, { harness: "claude-code", model: "model-a" }])).toBe(true);
+    expect(advised([{ harness: "codex-cli", model: "model-c" }, { harness: "claude-code", model: "model-a", fast_model: "small-model-a" }])).toBe(false);
+    expect(advised([{ harness: "claude-code", model: "model-a" }])).toBe(true);
+    expect(advised([{ harness: "claude-code", model: "model-a" }], "azure_foundry")).toBe(false);
   });
 
   it("is absent, with the hints kept, when the providers cannot be read", async () => {

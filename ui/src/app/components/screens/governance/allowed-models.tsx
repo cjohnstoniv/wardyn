@@ -69,8 +69,10 @@ export function providerModels(providers: ModelProvider[]): ProviderModels[] {
     .map((p) => {
       const models = once((p.harnesses ?? []).map((h) => h.model));
       const small = once((p.harnesses ?? []).map((h) => h.fast_model));
-      // On Azure Foundry an unset small model is the model itself, so nothing is missing.
-      const noSmall = models.length > 0 && small.length === 0 && (p.kind as string) !== "azure_foundry";
+      // Only Claude Code asks for a small model, so only its harness can be missing one; on Azure Foundry an
+      // unset small model is the model itself, so nothing is missing there.
+      const noSmall =
+        (p.kind as string) !== "azure_foundry" && (p.harnesses ?? []).some((h) => h.harness === "claude-code" && !!h.model && !h.fast_model);
       return { id: p.id, name: p.name || p.id, models, small, noSmall };
     });
 }

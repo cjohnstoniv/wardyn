@@ -38,7 +38,7 @@ export function AllowedModelsCard({ run }: { run: RunDetail }) {
         <p className="text-muted-foreground">{T.CARD_REFUSED}</p>
         <p className="text-muted-foreground">{T.CARD_FIXED}</p>
         {security && resolved && (
-          <Link to="/admin/governance" className="inline-block text-info hover:underline">
+          <Link to={`/admin/governance?profile=${encodeURIComponent(allowed.profile.id)}`} className="inline-block text-info hover:underline">
             {T.OPEN_PROFILE}
           </Link>
         )}

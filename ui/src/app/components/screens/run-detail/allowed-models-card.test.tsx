@@ -41,7 +41,7 @@ describe("AllowedModelsCard", () => {
 
   it("offers the profile to someone who may read profiles, and not to a member", () => {
     const { unmount } = renderCard(run());
-    expect(screen.getByRole("link", { name: T.OPEN_PROFILE })).toHaveAttribute("href", "/admin/governance");
+    expect(screen.getByRole("link", { name: T.OPEN_PROFILE })).toHaveAttribute("href", "/admin/governance?profile=p1");
     unmount();
     renderCard(run(), { operator: false, securityOperator: false });
     expect(screen.getByText("model-a")).toBeInTheDocument();
