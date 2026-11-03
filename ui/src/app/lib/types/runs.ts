@@ -688,7 +688,7 @@ export type RunPolicyCause =
   | "git_broker"
   | "overlay"
   | "unit"
-  | "walls"
+  | "walls" | "wall_preset"
   | "org_disk"
   | "pool_disk"
   | "restart"

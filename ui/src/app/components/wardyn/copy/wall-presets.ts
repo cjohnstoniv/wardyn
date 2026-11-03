@@ -115,6 +115,8 @@ export const WALL_PRESETS = {
   // Run page.
   RUN_LINE: (name: string, audience: string, version: string | number) => `Wall preset: ${name} (${audience}, version ${version}).`,
   RUN_LINE_PERSONAL: "Wall preset: a personal wall preset.",
+  CHANGE_HEADING: (name: string) => `Wall preset: ${name}`,
+  CHANGE_HEADING_PERSONAL: "A personal wall preset",
   // The Why card's wall_preset arm.
   WHY_SET_BY: (name: string) => `Wall preset: ${name}`,
   WHY_SET_BY_PERSONAL: "A personal wall preset",

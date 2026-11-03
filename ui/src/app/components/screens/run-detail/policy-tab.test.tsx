@@ -740,3 +740,33 @@ describe("PolicyTab: the run's wall preset line", () => {
     expect(screen.queryByTestId("wall-preset-run-line")).toBeNull();
   });
 });
+
+describe("PolicyTab: a wall preset's changes sit under their own heading", () => {
+  const mixed = view({
+    changes: [
+      change({ cause: "walls", field: "allowed_domains", removed: ["pypi.org"] }),
+      change({ cause: "wall_preset", field: "allowed_domains", removed: ["pastebin.com"] }),
+    ],
+  });
+  const headings = () => screen.getAllByRole("heading").map((h) => h.textContent);
+  const entriesOf = (name: string) => within(screen.getByRole("heading", { name }).parentElement as HTMLElement);
+
+  it("names an organisation preset, apart from the person's walls", async () => {
+    show(mixed, { run: { ...RUN, wall_preset: { id: "o1", name: "Docs triage", scope: "org", version: 4 } } as RunDetail });
+    await ready();
+    expect(screen.getByRole("heading", { name: "Your walls" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Wall preset: Docs triage" })).toBeInTheDocument();
+    expect(entriesOf("Your walls").getByText("pypi.org")).toBeInTheDocument();
+    expect(entriesOf("Wall preset: Docs triage").getByText("pastebin.com")).toBeInTheDocument();
+    expect(entriesOf("Your walls").queryByText("pastebin.com")).toBeNull();
+    expect(entriesOf("Wall preset: Docs triage").queryByText("pypi.org")).toBeNull();
+    expect(headings().filter((h) => h === "Your walls")).toHaveLength(1);
+  });
+
+  it("names no preset to a reader who gets the scope alone", async () => {
+    show(mixed, { principal: "admin@acme.example", run: { ...RUN, wall_preset: { scope: "person" } } as RunDetail });
+    await ready();
+    expect(screen.getByRole("heading", { name: "A personal wall preset" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "dana@acme.example's walls" })).toBeInTheDocument();
+  });
+});

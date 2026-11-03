@@ -122,9 +122,8 @@ describe("Review: the wall preset", () => {
     open({ ...AGENT, wall_preset: "sealed" });
     const card = within(await screen.findByLabelText(NR_REVIEW.POLICY_TITLE));
     expect(card.getByText(W.ROW_TOOLS)).toBeInTheDocument();
-    const row = document.querySelector("[data-policy-row=pushes]") as HTMLElement;
-    expect(within(row).getByText(W.ROW_PUSHES)).toBeInTheDocument();
-    expect(row).toHaveTextContent(W.PUSH_EVERY_REFUSED);
+    await waitFor(() => expect(document.querySelector("[data-policy-row=pushes]")).toHaveTextContent(W.PUSH_EVERY_REFUSED));
+    expect(within(document.querySelector("[data-policy-row=pushes]") as HTMLElement).getByText(W.ROW_PUSHES)).toBeInTheDocument();
   });
 
   it.each([
@@ -136,17 +135,16 @@ describe("Review: the wall preset", () => {
     preview(spec);
     open({ ...AGENT, wall_preset: "sealed" });
     await screen.findByLabelText(NR_REVIEW.POLICY_TITLE);
-    expect(document.querySelector("[data-policy-row=pushes]")).toHaveTextContent(text);
+    await waitFor(() => expect(document.querySelector("[data-policy-row=pushes]")).toHaveTextContent(text));
   });
 
   it("Pushes reads Pushes can't be stopped on this install when the preview says so, not from the warning text", async () => {
     preview({ git_push_any_branch: false, push_rules: { deny_all: true }, github_capabilities: ["code_read"] });
     (checks.current.preview as { result: Record<string, unknown> }).result.pushes_unstoppable = true;
-    open({ ...AGENT, wall_preset: "read-only" });
+    open({ ...AGENT, wall_preset: "sealed" });
     await screen.findByLabelText(NR_REVIEW.POLICY_TITLE);
-    const row = document.querySelector("[data-policy-row=pushes]");
-    expect(row).toHaveTextContent(W.PUSHES_UNSTOPPABLE);
-    expect(row).not.toHaveTextContent(W.PUSH_EVERY_REFUSED);
+    await waitFor(() => expect(document.querySelector("[data-policy-row=pushes]")).toHaveTextContent(W.PUSHES_UNSTOPPABLE));
+    expect(document.querySelector("[data-policy-row=pushes]")).not.toHaveTextContent(W.PUSH_EVERY_REFUSED);
   });
 
   it("Change goes back to the Tools step", async () => {

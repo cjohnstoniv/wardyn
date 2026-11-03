@@ -36,6 +36,7 @@ import {
 import { Chip } from "../../wardyn/primitives";
 import { ErrorState } from "../../wardyn/states";
 import { cn } from "../../ui/utils";
+import { WALL_PRESETS } from "../../wardyn/copy/wall-presets";
 import { audienceOf } from "../../../lib/wall-preset-words";
 import { WallPresetRunLine } from "./wall-preset-run-lines";
 import { CHANGE_HEADING, FIELD_LABEL, POLICY_TAB, SUMMARY, type PlainCause } from "./policy-tab-copy";
@@ -149,7 +150,7 @@ function RecordedPolicy({
   const now = view.stored_policy_now;
   const banner =
     now?.state === "changed" ? POLICY_TAB.changedSince : now?.state === "updated" ? POLICY_TAB.updatedSince : null;
-  const groups = groupChanges(view.changes, ownRun, run.created_by, spec.first_use_hold_seconds);
+  const groups = groupChanges(view.changes, ownRun, run.created_by, spec.first_use_hold_seconds, run.wall_preset?.name);
   const marks = React.useMemo(() => changeMarks(view.changes), [view.changes]);
   return (
     <>
@@ -228,12 +229,15 @@ function MarkChip({ mark }: { mark: PolicyMark }) {
 
 // The heading a change sits under, and what separates two headings of one cause
 // (a profile's name, a restart's date).
-function headingFor(c: RunPolicyChange, ownRun: boolean, person: string): { key: string; heading: string } {
+function headingFor(c: RunPolicyChange, ownRun: boolean, person: string, presetName?: string): { key: string; heading: string } {
   switch (c.cause) {
     case "limits":
       return { key: "limits", heading: ownRun ? CHANGE_HEADING.limitsOwn : CHANGE_HEADING.limitsOther(person) };
     case "walls":
       return { key: "walls", heading: ownRun ? CHANGE_HEADING.wallsOwn : CHANGE_HEADING.wallsOther(person) };
+    // A wall preset's own heading, apart from the person's walls: its name, or none for a personal preset a non-owner reads.
+    case "wall_preset":
+      return { key: "wall_preset", heading: presetName ? WALL_PRESETS.CHANGE_HEADING(presetName) : WALL_PRESETS.CHANGE_HEADING_PERSONAL };
     case "unit":
       if (c.unit) return { key: `profile:${c.unit}`, heading: CHANGE_HEADING.unit(c.unit) };
       break;
@@ -254,10 +258,10 @@ function headingFor(c: RunPolicyChange, ownRun: boolean, person: string): { key:
   return { key: "launch", heading: CHANGE_HEADING.launch };
 }
 
-function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: string, holdSeconds?: number): Group[] {
+function groupChanges(changes: RunPolicyChange[], ownRun: boolean, person: string, holdSeconds?: number, presetName?: string): Group[] {
   const groups = new Map<string, Group>();
   for (const c of changes) {
-    const { key, heading } = headingFor(c, ownRun, person);
+    const { key, heading } = headingFor(c, ownRun, person, presetName);
     const g = groups.get(key) ?? { key, heading, detail: [], entries: [] };
     groups.set(key, g);
     // The heading of a restart or a disk change already says what happened.
