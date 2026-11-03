@@ -90,6 +90,7 @@ const (
 	keptSaidIncomplete = "This machine's files on this Mac are incomplete, so it didn't start. Start it fresh, or delete it."
 	keptSaidOff        = "This Mac doesn't keep machines."
 	keptSaidOnlyLive   = "Only an interactive macOS VM run can keep or resume a machine."
+	keptSaidBase       = "This Mac's base image changed while your run was starting. Start the run again."
 )
 
 // keptRefusal is a refusal the person reads as it is.
@@ -176,7 +177,7 @@ func (d *Driver) refuseMacVMStart(ctx context.Context, spec runner.SandboxSpec) 
 		return man, kept, release, err
 	}
 	if kept.Mode != macvm.KeptResume {
-		release, err = d.macVMConfig().reserveKept(spec, man)
+		release, err = d.macVMConfig().reserveKept(spec, &man, kept)
 	}
 	return man, kept, release, err
 }
@@ -354,6 +355,8 @@ func (c *MacVMConfig) keptStartErr(spec runner.SandboxSpec, err error) error {
 		return keptSaidNotFound(k.ID)
 	case macvm.KeptRefusalIncomplete:
 		return keptRefusal(keptSaidIncomplete)
+	case macvm.KeptRefusalBaseChanged:
+		return keptRefusal(keptSaidBase)
 	case macvm.KeptRefusalExpired:
 		return keptSaidExpired(keptIdleDays(k.IdleDays), c.removeExpiredKept(c.keptDir(k.ID), k.ID))
 	}
@@ -363,7 +366,7 @@ func (c *MacVMConfig) keptStartErr(spec runner.SandboxSpec, err error) error {
 // keptRefusalInText is the refusal code an older helper's error names in its text, or "".
 func keptRefusalInText(err error) string {
 	said := err.Error()
-	for _, e := range []error{macvm.ErrKeptLocked, macvm.ErrKeptOwner, macvm.ErrKeptIncomplete, macvm.ErrKeptExpired, macvm.ErrKeptIDMismatch} {
+	for _, e := range []error{macvm.ErrKeptLocked, macvm.ErrKeptOwner, macvm.ErrKeptIncomplete, macvm.ErrKeptExpired, macvm.ErrKeptIDMismatch, macvm.ErrKeptBaseChanged} {
 		if strings.Contains(said, e.Error()) {
 			return macvm.KeptRefusalCode(e)
 		}
@@ -876,20 +879,26 @@ func (c *MacVMConfig) keptReservedBytes(dir string) (int64, error) {
 
 // reserveKept reserves what spec's new machine or reset adds to the Mac's kept disk at its worst, against
 // the limit: a new machine's worst case, or for a reset the base's worst case less the disk it replaces.
-// It refuses a start that would pass the limit. release drops the reservation.
-func (c *MacVMConfig) reserveKept(spec runner.SandboxSpec, man macvm.Manifest) (release func(), err error) {
+// It refuses a start that would pass the limit. The base is read again under the lock, into man, and
+// pinned in kept by its digest: the helper clones only that base and refuses the boot, before it touches a
+// reset's old disk, when the base has changed since (macvm.ErrKeptBaseChanged). release drops the
+// reservation.
+func (c *MacVMConfig) reserveKept(spec runner.SandboxSpec, man *macvm.Manifest, kept *macvm.KeptRun) (release func(), err error) {
 	k := spec.KeptMachine
 	dir := c.keptDir(k.ID)
-	r := keptReservation{Bytes: keptWorst(man), New: k.Mode == macvm.KeptNew, RunDir: c.runDir(spec.RunID)}
-	if !r.New {
-		r.Prior = keptWorstOf(dir)
-		r.Bytes = max(0, r.Bytes-r.Prior)
-	}
 	unlock, err := c.lockKeptReserve()
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
+	if err := c.pinKeptBase(spec, man, kept); err != nil {
+		return nil, err
+	}
+	r := keptReservation{Bytes: keptWorst(*man), New: k.Mode == macvm.KeptNew, RunDir: c.runDir(spec.RunID)}
+	if !r.New {
+		r.Prior = keptWorstOf(dir)
+		r.Bytes = max(0, r.Bytes-r.Prior)
+	}
 	held, err := c.keptReservedBytes(dir)
 	if err != nil {
 		return nil, err
@@ -904,10 +913,34 @@ func (c *MacVMConfig) reserveKept(spec runner.SandboxSpec, man macvm.Manifest) (
 	return func() { _ = os.Remove(dir + keptReserveSuffix) }, nil
 }
 
+// pinKeptBase reads the run's base, its digest before and after, into man and kept.BaseDigest; a base
+// replaced while it is read is refused as changed. The base is checked against the run again.
+func (c *MacVMConfig) pinKeptBase(spec runner.SandboxSpec, man *macvm.Manifest, kept *macvm.KeptRun) error {
+	base, err := c.Layout.NamedBaseDir(spec.MacOSBase)
+	if err != nil {
+		return fmt.Errorf("docker: %w", err)
+	}
+	digest, err := macvm.BaseDigest(base)
+	if err != nil {
+		return fmt.Errorf("docker: %w", err)
+	}
+	m, err := macvm.ReadyBase(base)
+	if err != nil {
+		return fmt.Errorf("docker: %w", err)
+	}
+	if again, err := macvm.BaseDigest(base); err != nil || again != digest {
+		return keptRefusal(keptSaidBase)
+	}
+	if err := macVMFits(spec, m); err != nil {
+		return err
+	}
+	*man, kept.BaseDigest = m, digest
+	return nil
+}
+
 // keptConfirmReserve checks, once a new machine's or a reset's helper has cloned, the disk it cloned
-// against the limit: the base it cloned may not be the one reserved for (a base replaced between the
-// check and the boot). A clone that needs more than was reserved and no longer fits is refused, and the
-// create's rollback drops a new machine.
+// against the limit, as a second line behind the pinned base digest (pinKeptBase): a clone that needs more
+// than was reserved and no longer fits is refused, and the create's rollback drops a new machine.
 func (c *MacVMConfig) keptConfirmReserve(runDir string, runID uuid.UUID) error {
 	cfg, err := readMacRun(runDir, runID)
 	if err != nil || cfg.Kept == nil || cfg.Kept.Mode == macvm.KeptResume {

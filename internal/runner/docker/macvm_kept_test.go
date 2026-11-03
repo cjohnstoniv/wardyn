@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1004,15 +1005,15 @@ func TestKeptReservationRefusesTheSecondStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := r.c.reserveKept(keptSpec(uuid.New(), macvm.KeptNew), man)
+	first, err := r.c.reserveKept(keptSpec(uuid.New(), macvm.KeptNew), &man, &macvm.KeptRun{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.c.reserveKept(keptSpec(uuid.New(), macvm.KeptNew), man); err == nil || !strings.HasPrefix(err.Error(), "This Mac keeps machines up to 60 GB") {
+	if _, err := r.c.reserveKept(keptSpec(uuid.New(), macvm.KeptNew), &man, &macvm.KeptRun{}); err == nil || !strings.HasPrefix(err.Error(), "This Mac keeps machines up to 60 GB") {
 		t.Fatalf("the second start: %v", err)
 	}
 	first()
-	release, err := r.c.reserveKept(keptSpec(uuid.New(), macvm.KeptNew), man)
+	release, err := r.c.reserveKept(keptSpec(uuid.New(), macvm.KeptNew), &man, &macvm.KeptRun{})
 	if err != nil {
 		t.Fatalf("after the first dropped its reservation: %v", err)
 	}
@@ -1036,23 +1037,39 @@ func TestKeptResetOntoALargerBaseIsRefused(t *testing.T) {
 	}
 }
 
-// A base replaced between the reservation and the helper's clone is checked once the helper has cloned:
-// a clone past the limit is refused and the new machine dropped.
-func TestKeptBaseSwappedBeforeTheCloneIsChecked(t *testing.T) {
+// A base replaced between the reservation and the helper's clone is refused by the helper, which clones
+// only the base the reservation pinned: a new machine is not made, and a reset leaves the old disk as it was.
+func TestKeptBaseSwappedBeforeTheCloneIsRefused(t *testing.T) {
 	r, _ := newKeptRig(t)
-	r.c.LimitBytes = 60 << 30
+	kept := uuid.New()
+	keptDir := keptMachine(t, r, kept)
+	before := readKept(t, keptDir, kept)
+	disk, err := macvm.ReadManifest(keptDir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	spawn := r.c.spawn
 	r.c.spawn = func(dir string) error {
 		keptBase(t, r, 80<<30) // after the reservation, before the clone
 		return spawn(dir)
 	}
 	id := uuid.New()
-	if _, err := r.d.CreateSandbox(context.Background(), keptSpec(id, macvm.KeptNew)); err == nil || !strings.HasPrefix(err.Error(), "This Mac keeps machines up to 60 GB") {
-		t.Fatalf("a clone of a larger base than reserved: %v", err)
+	if _, err := r.d.CreateSandbox(context.Background(), keptSpec(id, macvm.KeptNew)); err == nil || err.Error() != keptSaidBase {
+		t.Fatalf("a new machine on a swapped base: %v", err)
 	}
 	dir := r.c.Layout.KeptMachineDir(id.String())
 	if keptExists(dir) || keptExists(dir+keptReserveSuffix) {
 		t.Fatal("the refused machine or its reservation was kept")
+	}
+	keptBase(t, r, disk.DiskBytes)
+	if _, err := r.d.CreateSandbox(context.Background(), keptSpec(kept, macvm.KeptFresh)); err == nil || err.Error() != keptSaidBase {
+		t.Fatalf("a reset on a swapped base: %v", err)
+	}
+	if man, err := macvm.ReadManifest(keptDir); err != nil || !reflect.DeepEqual(man, disk) || !keptExists(filepath.Join(keptDir, macvm.DiskFile)) {
+		t.Fatalf("the refused reset changed the old disk: %+v, %v", man, err)
+	}
+	if after := readKept(t, keptDir, kept); after.BasePreparedAt != before.BasePreparedAt || after.CreatedAt != before.CreatedAt {
+		t.Fatalf("the refused reset changed the record: %+v", after)
 	}
 }
 
@@ -1065,7 +1082,7 @@ func TestKeptSweepDropsAStaleReservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := uuid.New()
-	if _, err := r.c.reserveKept(keptSpec(id, macvm.KeptNew), man); err != nil {
+	if _, err := r.c.reserveKept(keptSpec(id, macvm.KeptNew), &man, &macvm.KeptRun{}); err != nil {
 		t.Fatal(err)
 	}
 	res := r.c.Layout.KeptMachineDir(id.String()) + keptReserveSuffix
