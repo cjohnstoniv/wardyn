@@ -8,9 +8,10 @@ import type { AuditEvent } from "../../../lib/types";
 import { clockTime } from "../../../lib/format";
 import { sessionOptionLabel } from "./recording-tab-copy";
 
+const time = new Date().toISOString();
 const row = (data?: Record<string, unknown>): AuditEvent => ({
   id: "ev-1",
-  time: "2026-11-03T10:00:00Z",
+  time,
   actor_type: "system",
   actor: "wardynd",
   action: "session.recording.write",
@@ -21,12 +22,12 @@ const row = (data?: Record<string, unknown>): AuditEvent => ({
 
 describe("sessionOptionLabel", () => {
   it("names a complete session plainly", () => {
-    expect(sessionOptionLabel(row({ session: "agent" }))).toBe(`Session ended ${clockTime(row().time)} · wardynd`);
+    expect(sessionOptionLabel(row({ session: "agent" }))).toBe(`Session ended ${clockTime(time)} · wardynd`);
   });
 
   it("says incomplete when the session's row does, completeness unknown included", () => {
     for (const data of [{ incomplete: true, mask_gap: true }, { incomplete: true, completeness: "unknown" }]) {
-      expect(sessionOptionLabel(row(data))).toBe(`Session ended ${clockTime(row().time)} · wardynd · incomplete`);
+      expect(sessionOptionLabel(row(data))).toBe(`Session ended ${clockTime(time)} · wardynd · incomplete`);
     }
   });
 });
