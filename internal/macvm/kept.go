@@ -4,6 +4,7 @@
 package macvm
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -55,14 +56,19 @@ type KeptRun struct {
 	BaseDigest string `json:"base_digest,omitempty"`
 	// IdleDays moves expires_at that far past each boot and stop (KeptDefaultIdleDays when 0).
 	IdleDays int `json:"idle_days,omitempty"`
+	// Name is the machine's name as the organisation knows it, recorded in kept.json when the machine is
+	// made and again when a boot names it otherwise (a rename); empty leaves the recorded one.
+	Name string `json:"name,omitempty"`
 }
 
 // KeptRecord is kept.json: what the Mac knows of one kept machine, readable with no network.
 type KeptRecord struct {
-	ID             string    `json:"id"`
-	OwnerHash      string    `json:"owner_hash"`
-	RunnerID       string    `json:"runner_id"`
-	Base           string    `json:"base,omitempty"`
+	ID        string `json:"id"`
+	OwnerHash string `json:"owner_hash"`
+	RunnerID  string `json:"runner_id"`
+	Base      string `json:"base,omitempty"`
+	// Name is the machine's name as of its latest boot that carried one, for listing it with no network.
+	Name           string    `json:"name,omitempty"`
 	BasePreparedAt time.Time `json:"base_prepared_at"`
 	CreatedAt      time.Time `json:"created_at"`
 	// LastStop and StopKind (KeptStopGraceful or KeptStopHard) describe the latest stop; both are empty
@@ -335,7 +341,7 @@ func openKept(e Engine, cfg RunConfig, dir string, now time.Time) (man Manifest,
 			_ = os.RemoveAll(dir)
 			return man, id, nil, err
 		}
-		rec := KeptRecord{ID: k.ID, OwnerHash: k.OwnerHash, RunnerID: k.RunnerID, Base: k.Base,
+		rec := KeptRecord{ID: k.ID, OwnerHash: k.OwnerHash, RunnerID: k.RunnerID, Base: k.Base, Name: k.Name,
 			BasePreparedAt: man.CreatedAt, CreatedAt: now}
 		markKeptBoot(&rec, cfg.RunID, now, k.IdleDays)
 		err = WriteKept(dir, rec)
@@ -348,6 +354,7 @@ func openKept(e Engine, cfg RunConfig, dir string, now time.Time) (man Manifest,
 		if rec, err = checkKept(dir, k, now); err != nil {
 			return man, id, nil, err
 		}
+		rec.Name = cmp.Or(k.Name, rec.Name) // the organisation's rename, if it sent one
 		if k.Mode == KeptFresh {
 			man, id, err = resetKept(e, cfg, dir, rec, now)
 			return man, id, release, err

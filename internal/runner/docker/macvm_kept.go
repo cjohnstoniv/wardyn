@@ -334,7 +334,7 @@ func (c *MacVMConfig) logExpiredRemoval(id string, err error) {
 func (c *MacVMConfig) keptRun(spec runner.SandboxSpec) *macvm.KeptRun {
 	k := spec.KeptMachine
 	return &macvm.KeptRun{ID: k.ID.String(), Mode: k.Mode, OwnerHash: k.OwnerHash, RunnerID: c.RunnerID,
-		Base: cmp.Or(spec.MacOSBase, macvm.StandardBase), IdleDays: keptIdleDays(k.IdleDays)}
+		Base: cmp.Or(spec.MacOSBase, macvm.StandardBase), IdleDays: keptIdleDays(k.IdleDays), Name: k.Name}
 }
 
 // updateKeptTools runs the tools update on a resumed machine's folder before its boot. The runner holds no

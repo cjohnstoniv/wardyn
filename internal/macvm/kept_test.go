@@ -757,3 +757,45 @@ func TestKeptResumeViewOnlyComesFromTheMachinesOwnManifest(t *testing.T) {
 		})
 	}
 }
+
+// A machine's name is recorded when it is made, kept by a stop's rewrite and a boot that names none, and
+// replaced by a boot that names it otherwise (a rename).
+func TestKeptNameIsRecordedKeptAndRenamed(t *testing.T) {
+	l := macvm.Layout{Root: t.TempDir()}
+	base := makeBase(t, l)
+	id := uuid.New()
+	dir := l.KeptMachineDir(id.String())
+	now := time.Now().UTC().Truncate(time.Second)
+	boot := func(mode, name string) macvm.KeptRecord {
+		t.Helper()
+		cfg := keptCfg(base, mode, id)
+		cfg.Kept.Name = name
+		if err := openKept(t, cfg, dir, now); err != nil {
+			t.Fatalf("%s %q: %v", mode, name, err)
+		}
+		rec, err := macvm.ReadKept(dir, id.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !macvm.KeptStopUpdate(&rec, testRunID, now, 30) {
+			t.Fatalf("%s: the stop is not this run's", mode)
+		}
+		if err := macvm.WriteKept(dir, rec); err != nil {
+			t.Fatal(err)
+		}
+		if rec, err = macvm.ReadKept(dir, id.String()); err != nil {
+			t.Fatal(err)
+		}
+		return rec
+	}
+	for _, step := range []struct{ mode, name, want string }{
+		{macvm.KeptNew, "build box", "build box"},
+		{macvm.KeptResume, "", "build box"},
+		{macvm.KeptResume, "release box", "release box"},
+		{macvm.KeptFresh, "", "release box"},
+	} {
+		if rec := boot(step.mode, step.name); rec.Name != step.want {
+			t.Fatalf("%s %q: the record names %q, want %q", step.mode, step.name, rec.Name, step.want)
+		}
+	}
+}
