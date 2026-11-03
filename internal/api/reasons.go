@@ -364,6 +364,18 @@ const (
 	reasonWallsUnavailable  = "walls_unavailable"   // the store keeps no personal settings (not the Postgres store)
 	reasonPersonalWallsHost = "personal_walls_host" // an egress approval would admit a host the run owner's walls deny
 
+	// /wall-presets (wall_presets.go), a run's wall_preset at launch, and the preset's refusals at an approval.
+	reasonWallPresetInvalid         = "wall_preset_invalid"          // 422: a preset that names a wider value or no limit, or a launch whose frozen copy no longer validates
+	reasonWallPresetScopeForbidden  = "wall_preset_scope_forbidden"  // 403: a write to the organisation or a group the caller may not save to
+	reasonWallPresetBuiltin         = "wall_preset_builtin"          // 403: an edit or delete of Open, Read-only or Sealed
+	reasonWallPresetHost            = "wall_preset_host"             // 403: an egress approval would admit a host the run's wall preset denies
+	reasonWallPresetNotFound        = "wall_preset_not_found"        // 404: no such preset, or the caller may not see it
+	reasonWallPresetNameTaken       = "wall_preset_name_taken"       // 409: another preset of the same audience, or a built-in, uses the name (case-insensitive)
+	reasonWallPresetVersionConflict = "wall_preset_version_conflict" // 409: the preset changed since the version the caller read
+	reasonWallPresetLimitReached    = "wall_preset_limit_reached"    // 409: the audience already holds the most presets it may
+	reasonWallPresetUnknown         = "wall_preset_unknown"          // 422: a launch names a preset that does not exist or the caller may not see
+	reasonWallPresetsUnavailable    = "wall_presets_unavailable"     // 501: the store keeps no wall presets (not the Postgres store)
+
 	// /governance/approval-rules, and an approval rule's own refusals inside decide().
 	reasonApprovalRuleInvalid       = "approval_rule_invalid"        // the rule document names an unknown kind, a glob, a wildcard host, a scope other than once or run, or no repo or preset
 	reasonApprovalRuleNotFound      = "approval_rule_not_found"      // no approval rule has that name

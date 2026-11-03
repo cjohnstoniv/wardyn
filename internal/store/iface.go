@@ -544,10 +544,43 @@ type TemplateStore interface {
 	// TemplateGroupLabels returns the labels of those of groups that have one.
 	TemplateGroupLabels(ctx context.Context, groups []string) (map[string]string, error)
 	// EraseRunSetupsOf is the run_setups erasure scope: person's own templates
-	// (with their revisions) and grants go, and their name is blanked wherever
-	// it is the author of a shared template, a revision or a grant.
+	// (with their revisions), wall presets and grants go, and their name is
+	// blanked wherever it is the author of a shared template, a revision, a
+	// shared wall preset or a grant.
 	EraseRunSetupsOf(ctx context.Context, person string) (RunSetupsErased, error)
 }
 
 // Compile-time assertion: PG satisfies TemplateStore.
 var _ TemplateStore = PG{}
+
+// WallPresetStore persists wall presets (migration 0248_wall_presets); bodies in
+// store_wall_presets.go. Optional: a caller that finds it absent answers 501
+// wall_presets_unavailable. A preset borrows the run templates' authority, so a
+// store that keeps presets keeps templates too.
+//
+// The store does not authorise: the API checks types.TemplateAuthorize on the
+// preset's Owner() first. What the store holds is what must sit in the write's
+// own transaction, as for templates: a group write's template group-admin grant
+// re-read (TemplateGrantCheck), the audience limit (TemplateLimit, counted under
+// a named lock), the case-insensitive name per audience (ErrTemplateNameTaken),
+// and the version compare-and-set (*TemplateRevisionConflictError, whose
+// Current is the version).
+type WallPresetStore interface {
+	TemplateStore
+	// ListWallPresetsVisible returns every organisation preset, person's own,
+	// and the groups' presets, by name.
+	ListWallPresetsVisible(ctx context.Context, person string, groups []string) ([]types.WallPreset, error)
+	// GetWallPreset returns one preset; ErrNotFound when absent.
+	GetWallPreset(ctx context.Context, id uuid.UUID) (types.WallPreset, error)
+	// CreateWallPreset inserts p at version 1 under the uuid the caller chose,
+	// with p.UpdatedBy as its writer.
+	CreateWallPreset(ctx context.Context, p types.WallPreset, grant *TemplateGrantCheck) (types.WallPreset, error)
+	// UpdateWallPreset saves p's name, description and spec as the next version
+	// when the row is at expected; the scope and owner never change.
+	UpdateWallPreset(ctx context.Context, p types.WallPreset, expected int, grant *TemplateGrantCheck) (types.WallPreset, error)
+	// DeleteWallPreset removes the preset and returns the row it removed.
+	DeleteWallPreset(ctx context.Context, id uuid.UUID, grant *TemplateGrantCheck) (types.WallPreset, error)
+}
+
+// Compile-time assertion: PG satisfies WallPresetStore.
+var _ WallPresetStore = PG{}

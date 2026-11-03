@@ -14,6 +14,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you upgrade
 
 - Endpoint sign-ins made before this release must be made again once; runs ask for it.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set) whose app role does not pick up new tables through the `ALTER
+  DEFAULT PRIVILEGES` step in Operations: grant the app role `SELECT, INSERT, UPDATE, DELETE` on `wall_presets`
+  (migration `0248_wall_presets`). Without it the wall preset routes fail. An upgrade from before 0.10.0-rc.9 also
+  needs every grant the 0.10.0-rc.8 notes list: `SELECT, INSERT, UPDATE, DELETE` on `workloads`, `workload_bindings`,
+  `workload_run_ends`, `macos_vm_disks`, `aws_sso_refused_tokens`, `cli_sign_ins`, `ui_desktop_closed`,
+  `desktop_signins`, `desktop_signin_shares`, `desktop_signin_runs`, `approval_rules`, `governance_restrictions`,
+  `governance_restriction_members`, `governance_unit_admins`, `oidc_session_sids` and `desktop_vm_sign_ins`, and
+  `SELECT, INSERT, UPDATE` on `runner_health`, `launch_preset_version_floor`, `cli_sessions` and `governance_boundary`
+  (and on `run_harnesses` if it turns on `WARDYN_MULTI_AGENT_TASKS`).
 - A member policy with no desktop setting now gets the ceiling's desktop controls (for example, copy out opens where the ceiling allows it). Set `desktop` on the policy to keep the narrower defaults.
 - Existing `image` capability grants whose value ends in `/*` (for example `registry.example.com/team/*`, which matched nothing until now) now match every image under that path. Review them before upgrading. A stored image value with any other `*`, or a prefix without a registry host, still matches nothing.
 - After a downgrade to an older server, a person whose walls use the new settings (tool rules, push rules, recording, auto-stop, or Azure DevOps or GitHub capabilities) gets errors when they create a run, until they run `wardyn walls delete` or save their walls without those settings.
@@ -22,6 +31,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - An organisation setting, `images.require_digest` (off by default), refuses a member's run whose image, or the base image of a workspace it attaches or its policy carries (whoever owns the workspace), is not pinned by digest (`image@sha256:<digest>`), even where an exact or prefix image grant covers it. The refusal is `403` `image_digest_required`. A revive or restart checks again the image the run's create checked, under the rule as it is then; a run whose image was not pinned, made while the rule was off or before this release, is refused until a new run starts. Operators are not bound; their unpinned runs are marked `image_digest_exempt` on the run.create and run.revive audit rows. Migration `0249_run_image_input` adds `agent_runs.image_input`, NULL on every existing row; no grant changes. Not run in CI against a real registry.
+- Wall presets: named walls that only narrow, kept for yourself, a group or the organisation, with three built in (Open, Read-only and Sealed). `GET`, `POST`, `PUT` and `DELETE /api/v1/wall-presets` manage them, with the run templates' authority: your own are yours, a group's template managers save a group's, and an organisation administrator saves the organisation's. Migration `0248_wall_presets` adds the `wall_presets` table and `agent_runs.wall_preset`.
 
 ### Fixed
 

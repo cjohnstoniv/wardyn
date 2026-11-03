@@ -788,6 +788,13 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/presets":                             {class: classMember},
 	"GET /api/v1/presets/{name}":                      {class: classMember},
 	"GET /api/v1/runs":                                {class: classMember},
+	// Wall presets (wall_presets.go): member at the router, like /templates; the handler checks the
+	// preset's scope with types.TemplateAuthorize, and one the caller cannot read is the missing 404.
+	"GET /api/v1/wall-presets":         {class: classMember},
+	"POST /api/v1/wall-presets":        {class: classMember},
+	"GET /api/v1/wall-presets/{id}":    {class: classMember},
+	"PUT /api/v1/wall-presets/{id}":    {class: classMember},
+	"DELETE /api/v1/wall-presets/{id}": {class: classMember},
 	// PUT/DELETE moved here from classAdmin in 0.7 (migration `0050`,
 	// per-principal secrets): self-service, scoped to the caller's OWN row at
 	// the STORE (secretOwnerFromRequest) — same shape as /me/ssh-keys and

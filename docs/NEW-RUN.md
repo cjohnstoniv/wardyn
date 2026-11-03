@@ -257,4 +257,4 @@ What you configure changes what members see. Each row links to the section that 
 | User and shared drives | The drive lists on step 4 | [User drives](operations/user-drives.md) |
 | Organisation templates, template managers | Who can publish, rename and delete | [Run templates](OPERATIONS.md#run-templates) |
 
-- Template managers are granted with `PUT /api/v1/admin/template-group-admins` or `wardyn template group-admin grant`; no console screen does this in this release.
+- Template managers are granted with `PUT /api/v1/admin/template-group-admins` or `wardyn template group-admin grant`; no console screen does this in this release. A template manager also saves the group's wall presets ([SDK](sdk.md#wall-presets)).
