@@ -465,6 +465,16 @@ func (m maskingRecorder) prepare(ev types.AuditEvent) types.AuditEvent {
 	return ev
 }
 
+// runValueMasker is the masking recorder's own mask for one run-scoped value the sink fan-out adds after
+// the recorder has run: the same registry and the same JSON-aware corpus, read on every call so a secret
+// registered later still covers it. A nil registry masks nothing.
+func runValueMasker(reg *secretmask.Registry) sinks.RunValueMasker {
+	if reg == nil {
+		return nil
+	}
+	return func(runID uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(runID).Mask(b) }
+}
+
 // Spooling recorder
 
 // spoolingRecorder wraps an audit.Recorder so that when the inner (durable) write

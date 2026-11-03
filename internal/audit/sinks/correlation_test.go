@@ -7,13 +7,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -51,7 +54,7 @@ func TestFanoutEnrichRuns_StampsTheSinksCopyAndLeavesTheStoredEventAlone(t *test
 	runID := uuid.New()
 	sink := &lastSink{}
 	f := sinks.NewFanout(sink)
-	f.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return "build-42/a:b", true, nil })
+	f.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return "build-42/a:b", true, nil }, nil)
 
 	stored := runEvent(&runID, `{"agent":"claude-code","n":1}`)
 	before := stored
@@ -93,7 +96,7 @@ func TestFanoutEnrichRuns_DataShapes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			sink := &lastSink{}
 			f := sinks.NewFanout(sink)
-			f.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return "abc", true, nil })
+			f.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return "abc", true, nil }, nil)
 			if err := f.Emit(context.Background(), runEvent(&runID, tc.data)); err != nil {
 				t.Fatal(err)
 			}
@@ -124,7 +127,7 @@ func TestFanoutEnrichRuns_ReadsEachRunOnceAndSkipsWhatNeedsNoRead(t *testing.T) 
 			return "", true, nil
 		}
 		return "", false, nil
-	})
+	}, nil)
 	emit := func(id *uuid.UUID) types.AuditEvent {
 		t.Helper()
 		if err := f.Emit(context.Background(), runEvent(id, `{"k":1}`)); err != nil {
@@ -159,7 +162,7 @@ func TestFanoutEnrichRuns_AReadFailureStillDeliversTheEvent(t *testing.T) {
 	runID := uuid.New()
 	sink := &lastSink{}
 	f := sinks.NewFanout(sink)
-	f.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return "", false, errors.New("db down") })
+	f.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return "", false, errors.New("db down") }, nil)
 	if err := f.Emit(context.Background(), runEvent(&runID, `{"k":1}`)); err != nil {
 		t.Fatalf("emit = %v; a failed read must not fail the fan-out", err)
 	}
@@ -176,5 +179,82 @@ func TestFanoutWithoutEnrichRuns_PassesTheEventThrough(t *testing.T) {
 	}
 	if string(sink.ev.Data) != `{"k":1}` {
 		t.Errorf("data = %s", sink.ev.Data)
+	}
+}
+
+// registryMasker is the mask the daemon hands EnrichRuns (cmd/wardynd runValueMasker).
+func registryMasker(reg *secretmask.Registry) sinks.RunValueMasker {
+	return func(runID uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(runID).Mask(b) }
+}
+
+// TestFanoutEnrichRuns_MasksTheIDWithTheRunsRegistryOnEveryEmit: the id comes from the run row after the
+// recorder has masked the event, so it is masked here: against a global value, against the run's own
+// value and not another run's, and, on a warm cache, against a value registered after the first emit.
+func TestFanoutEnrichRuns_MasksTheIDWithTheRunsRegistryOnEveryEmit(t *testing.T) {
+	const (
+		globalSecret = "zq-throwaway-global-1"
+		runSecret    = "zq-throwaway-run-2"
+		lateSecret   = "zq-throwaway-late-3"
+	)
+	ids := map[uuid.UUID]string{}
+	runA, runB, runC, runD := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	ids[runA], ids[runB], ids[runC], ids[runD] = globalSecret, runSecret, "plain-ref/7", lateSecret
+
+	reg := secretmask.NewRegistry()
+	if err := reg.AddGlobal(0, "", "throwaway", time.Now(), []byte(globalSecret)); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Add(runB, []byte(runSecret)); err != nil {
+		t.Fatal(err)
+	}
+	var reads atomic.Int32
+	sink := &lastSink{}
+	f := sinks.NewFanout(sink)
+	f.EnrichRuns(func(_ context.Context, id uuid.UUID) (string, bool, error) {
+		reads.Add(1)
+		return ids[id], true, nil
+	}, registryMasker(reg))
+	emit := func(id uuid.UUID) string {
+		t.Helper()
+		if err := f.Emit(context.Background(), runEvent(&id, `{"k":1}`)); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := dataOf(t, sink.ev)[sinks.CorrelationKey].(string)
+		return got
+	}
+	const hidden = "<secret-hidden>"
+
+	if got := emit(runA); got != hidden {
+		t.Errorf("a global value went out as %q", got)
+	}
+	if got := emit(runB); got != hidden {
+		t.Errorf("the run's own value went out as %q", got)
+	}
+	if got := emit(runC); got != "plain-ref/7" {
+		t.Errorf("an id no secret covers went out as %q", got)
+	}
+	// Another run's value is not this run's to hide.
+	if err := reg.Add(runC, []byte("zq-throwaway-other-4")); err != nil {
+		t.Fatal(err)
+	}
+	if got := emit(runC); got != "plain-ref/7" {
+		t.Errorf("an unrelated registered value changed the id to %q", got)
+	}
+	// Warm cache, then the registry learns the value: the next emit hides it, with no second read.
+	if got := emit(runD); got != lateSecret {
+		t.Fatalf("before it was registered the id went out as %q", got)
+	}
+	before := reads.Load()
+	if err := reg.Add(runD, []byte(lateSecret)); err != nil {
+		t.Fatal(err)
+	}
+	if got := emit(runD); got != hidden {
+		t.Errorf("a value registered after the cache was warm went out as %q", got)
+	}
+	if reads.Load() != before {
+		t.Errorf("%d more reads; the cache should have served the raw id", reads.Load()-before)
+	}
+	if strings.Contains(string(sink.ev.Data), lateSecret) {
+		t.Errorf("the sink's data still holds the secret: %s", sink.ev.Data)
 	}
 }

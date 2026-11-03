@@ -24,6 +24,11 @@ const CorrelationKey = "correlation_id"
 // RunCorrelationLookup reads a run's correlation ID. found is false for a run it does not hold yet.
 type RunCorrelationLookup func(ctx context.Context, runID uuid.UUID) (id string, found bool, err error)
 
+// RunValueMasker masks the secrets registered for runID out of b, the way the audit recorder masks an
+// event's data. The id the enricher adds comes from the run row, after that masking has run, so it
+// passes through here on every emit.
+type RunValueMasker func(runID uuid.UUID, b []byte) []byte
+
 const (
 	correlationCacheMax     = 4096
 	correlationLookupBudget = 2 * time.Second
@@ -31,9 +36,12 @@ const (
 
 // correlationEnricher stamps a run's correlation ID into the data of its events. A run's ID is written
 // once at create, so a hit never goes stale; a run without one is cached as "" so it costs one read.
+// The cache holds the raw id and mask runs on every emit, so a secret registered after the first hit
+// still covers it.
 // ponytail: a full cache is emptied whole; an LRU if a deployment's live run count makes refills show.
 type correlationEnricher struct {
 	lookup RunCorrelationLookup
+	mask   RunValueMasker
 	mu     sync.Mutex
 	ids    map[uuid.UUID]string
 }
@@ -46,10 +54,31 @@ func (c *correlationEnricher) apply(ctx context.Context, ev types.AuditEvent) ty
 	if !ok || id == "" {
 		return ev
 	}
+	if c.mask != nil {
+		id = c.masked(*ev.RunID, id)
+		if id == "" {
+			return ev
+		}
+	}
 	if data, ok := stampCorrelation(ev.Data, id); ok {
 		ev.Data = data // a new slice: the caller's event, which the store already took, is untouched
 	}
 	return ev
+}
+
+// masked is id with the run's registered secrets replaced, "" when what comes back is not a JSON string
+// (the key is then left off rather than sent unmasked).
+func (c *correlationEnricher) masked(runID uuid.UUID, id string) string {
+	quoted, err := json.Marshal(id)
+	if err != nil {
+		return ""
+	}
+	quoted = c.mask(runID, quoted)
+	var out string
+	if json.Unmarshal(quoted, &out) != nil {
+		return ""
+	}
+	return out
 }
 
 func (c *correlationEnricher) idOf(ctx context.Context, runID uuid.UUID) (string, bool) {
@@ -100,7 +129,8 @@ func stampCorrelation(data json.RawMessage, id string) (json.RawMessage, bool) {
 }
 
 // EnrichRuns has Emit stamp each run-scoped event's data with that run's correlation ID, so every child
-// sink sees data.correlation_id and no emit site changes. Call it once at boot, before the first Emit.
-func (f *Fanout) EnrichRuns(lookup RunCorrelationLookup) {
-	f.enrich = &correlationEnricher{lookup: lookup, ids: map[uuid.UUID]string{}}
+// sink sees data.correlation_id and no emit site changes. mask, when set, is applied to the id on every
+// emit. Call it once at boot, before the first Emit.
+func (f *Fanout) EnrichRuns(lookup RunCorrelationLookup, mask RunValueMasker) {
+	f.enrich = &correlationEnricher{lookup: lookup, mask: mask, ids: map[uuid.UUID]string{}}
 }
