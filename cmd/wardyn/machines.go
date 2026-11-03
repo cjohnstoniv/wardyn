@@ -179,8 +179,9 @@ func findMachine(ms []sdk.KeptMachine, ref string) (sdk.KeptMachine, bool) {
 			}
 		}
 	}
+	// The server matches a machine's name case-blind, so the CLI does too.
 	for _, m := range ms {
-		if m.Name == ref {
+		if strings.EqualFold(m.Name, ref) {
 			return m, true
 		}
 	}

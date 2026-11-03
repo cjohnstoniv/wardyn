@@ -261,6 +261,27 @@ func TestMachinesDeleteShowsTheServersRefusalUnchanged(t *testing.T) {
 	}
 }
 
+// A name is matched in any case, as the server matches it, and the delete is still confirmed first.
+func TestMachinesDeleteFindsANameInAnyCase(t *testing.T) {
+	withTerminal(t, false)
+	m := keptMachine("dev", types.KeptMachineKept)
+	rig := deleteRig(t, m, noContent, myMachines())
+	_, err := runMachines(t, rig, "", "machines", "delete", "DEV")
+	if err == nil || !strings.Contains(err.Error(), "nothing was deleted: without a terminal, pass --yes to delete machine dev.") {
+		t.Fatalf("err = %v", err)
+	}
+	path := "DELETE " + myMachinesPath + "/" + m.ID.String()
+	if n := len(rig.sent(path)); n != 0 {
+		t.Fatalf("sent %d deletes before the confirm, want none", n)
+	}
+	if _, err := runMachines(t, rig, "", "machines", "delete", "Dev", "--yes"); err != nil {
+		t.Fatalf("delete Dev: %v", err)
+	}
+	if n := len(rig.sent(path)); n != 1 {
+		t.Errorf("sent %d deletes, want 1", n)
+	}
+}
+
 func TestMachinesDeleteAsksFirst(t *testing.T) {
 	path := func(m sdk.KeptMachine) string { return "DELETE " + myMachinesPath + "/" + m.ID.String() }
 
