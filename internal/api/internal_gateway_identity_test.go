@@ -474,6 +474,40 @@ func TestGatewayMintRefusesAProviderThatChanged(t *testing.T) {
 	})
 }
 
+// A lifetime saved after the run was dispatched is not part of the sealed route: the next
+// mint still passes, and the token lives as long as the live row now says.
+func TestGatewayMintTakesTheLifetimeFromTheLiveProvider(t *testing.T) {
+	f := newGatewayFixture(t)
+	life := func() int64 {
+		w := f.mint(t)
+		if w.Code != http.StatusOK {
+			t.Fatalf("mint = %d %s", w.Code, w.Body)
+		}
+		var body struct{ Token string }
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := jwt.ParseSigned(body.Token, []jose.SignatureAlgorithm{jose.ES256})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var c gatewayidentity.Claims
+		if err := parsed.UnsafeClaimsWithoutVerification(&c); err != nil {
+			t.Fatal(err)
+		}
+		return c.ExpiresAt - c.IssuedAt
+	}
+	if got := life(); got != 600 {
+		t.Errorf("unset life = %d s, want 600", got)
+	}
+	p := testGatewayProvider()
+	p.GatewayIdentity.TokenLifetimeSeconds = 90
+	f.st.set(func(s *gatewayStore) { s.site = testGatewaySite(p) })
+	if got := life(); got != 90 {
+		t.Errorf("life after the edit = %d s, want 90", got)
+	}
+}
+
 // The body names a provider; the run's sealed routes decide whether it is this
 // run's. One with identity on that the run never started with is refused.
 func TestGatewayMintRefusesAProviderNotOnTheRun(t *testing.T) {
@@ -834,6 +868,28 @@ func TestGatewayIdentitySaveRefusals(t *testing.T) {
 	block.Providers[1].ID, block.Providers[1].BaseURL = "corp-gw-2", "https://GW.corp.example.:443/llm/"
 	if err := validateGatewayAudiences(block); err != nil {
 		t.Errorf("one destination refused: %v", err)
+	}
+}
+
+// The token lifetime is unset or from 60 to 600 seconds; anything else is refused with the
+// provider named and the field set.
+func TestGatewayIdentityTokenLifetimeBounds(t *testing.T) {
+	for _, tc := range []struct {
+		secs int
+		ok   bool
+	}{{0, true}, {60, true}, {120, true}, {600, true}, {59, false}, {601, false}, {-1, false}, {86400, false}} {
+		p := testGatewayProvider()
+		p.GatewayIdentity.TokenLifetimeSeconds = tc.secs
+		err := validateProviderGatewayIdentity(p)
+		if tc.ok {
+			if err != nil {
+				t.Errorf("%d seconds refused: %v", tc.secs, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), "gateway_identity: token_lifetime_seconds must be between 60 and 600") {
+			t.Errorf("%d seconds: err = %v", tc.secs, err)
+		}
 	}
 }
 

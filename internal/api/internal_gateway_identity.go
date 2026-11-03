@@ -227,7 +227,7 @@ func (s *Server) signGatewayToken(ctx context.Context, claims *identity.Claims, 
 		Runner:   cmp.Or(run.RunnerPoolExecutor, run.RunnerTarget),
 		Provider: p.ID,
 		Sponsor:  sponsor,
-	})
+	}, time.Duration(p.GatewayIdentity.TokenLifetimeSeconds)*time.Second)
 }
 
 // gatewayFirstMint reports whether this replica has not yet recorded a first mint
@@ -493,6 +493,10 @@ func validateProviderGatewayIdentity(mp types.ModelProvider) error {
 	}
 	if len(gi.Audience) > maxGatewayAudience || strings.ContainsFunc(gi.Audience, unicode.IsControl) {
 		return atField("gateway_identity.audience", fmt.Errorf(mp400GatewayAudienceForm, mp.ID, maxGatewayAudience))
+	}
+	if n := gi.TokenLifetimeSeconds; n != 0 && (n < types.GatewayTokenLifetimeMin || n > types.GatewayTokenLifetimeMax) {
+		return atField("gateway_identity.token_lifetime_seconds",
+			fmt.Errorf(mp400GatewayLifetime, mp.ID, types.GatewayTokenLifetimeMin, types.GatewayTokenLifetimeMax))
 	}
 	return nil
 }

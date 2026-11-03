@@ -135,10 +135,19 @@ func (p ModelProvider) Serves(harness string) bool {
 }
 
 // ModelProviderGatewayIdentity is a provider's opt-in to run identity. Audience is the token's aud: the value
-// this provider's gateway looks for, and no other destination's.
+// this provider's gateway looks for, and no other destination's. TokenLifetimeSeconds is how long each token
+// works: absent (0) is GatewayTokenLifetimeMax, and a set value runs from GatewayTokenLifetimeMin to
+// GatewayTokenLifetimeMax. It is not part of the route sealed into a run, so a change applies to the next token.
 type ModelProviderGatewayIdentity struct {
-	Audience string `json:"audience"`
+	Audience             string `json:"audience"`
+	TokenLifetimeSeconds int    `json:"token_lifetime_seconds,omitempty"`
 }
+
+// The bounds of ModelProviderGatewayIdentity.TokenLifetimeSeconds.
+const (
+	GatewayTokenLifetimeMin = 60
+	GatewayTokenLifetimeMax = 600
+)
 
 // ProviderAuth is how a custom endpoint expects each person's token: header and value format ("Bearer %s").
 type ProviderAuth struct {

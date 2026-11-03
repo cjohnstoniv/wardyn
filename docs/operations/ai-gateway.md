@@ -101,7 +101,7 @@ The setup was checked against the pinned image in a one-container trial. These a
 
 - Experimental until 0.11. The token format (`wardyn_format` is `experimental-1`) and the key set's address may change before then.
 - With a provider's run identity on, `wardyn-proxy` sends a signed token in the `X-Wardyn-Identity` header on that provider's gateway route only. It never uses `Authorization`, which carries a person's own credential.
-- The token is ES256 with the key's `kid` in its header, and lives 10 minutes. No claim comes from the request or the sandbox. Every claim is in the table.
+- The token is ES256 with the key's `kid` in its header, and lives 10 minutes unless the provider sets a shorter life (see "How long a token lives"). No claim comes from the request or the sandbox. Every claim is in the table.
 
 | Claim | Value | Notes |
 |---|---|---|
@@ -114,12 +114,29 @@ The setup was checked against the pinned image in a one-container trial. These a
 | `sponsor` | The accountable person of a service identity | Present only on a service run |
 | `jti` | A fresh UUID per token | |
 | `iat` | When the token was issued | Unix seconds |
-| `exp` | `iat` plus 10 minutes | A gateway cannot learn that a run was killed, so a killed run's token is spendable until `exp` |
+| `exp` | `iat` plus the provider's token lifetime, 10 minutes unless set | A gateway cannot learn that a run was killed, so a killed run's token is spendable until `exp` |
 | `wardyn_format` | `experimental-1` | |
 | `act` | `{"sub": "spiffe://<trust domain>/agent-run/<run id>"}` | The agent run acting for `sub`, in the run token's shape |
 
 - There is no `nbf`. A Wardyn clock ahead of the gateway's drops a token early and one behind gets a `401`: both fail closed.
 - A test holds this table equal to the signer's claim struct.
+
+## How long a token lives
+
+- A provider's `gateway_identity.token_lifetime_seconds` sets it, from 60 to 600 seconds. Unset means 600, so an install that sets nothing changes nothing. Any other value is refused when saved.
+- A shorter life limits how long a leaked token is good for, and so how long a killed run's token can still be spent.
+- The setting applies to tokens issued after a save. A running run keeps working, because the life is not part of the route the run started with.
+- `wardyn-proxy` asks for a new token at half the remaining life. If the mint fails, it keeps the held token until `exp`, so a run survives a wardynd outage of about half the lifetime.
+
+| Lifetime | Outage a run survives | A mint, per run and provider, every |
+|---|---|---|
+| 600 seconds | 5 minutes | 5 minutes |
+| 300 seconds | 2 minutes 30 seconds | 2 minutes 30 seconds |
+| 120 seconds | 1 minute | 1 minute |
+| 60 seconds | 30 seconds | 30 seconds |
+
+- Each mint is about five store reads. At 60 seconds, 500 concurrent runs come to about 83 reads a second.
+- A rolling wardynd upgrade longer than the outage a run survives fails that run's model calls, so a short life is the admin's trade.
 
 ## The key set's address
 
@@ -172,4 +189,4 @@ Wardyn makes a fresh call id for every attempt to a model gateway route and send
 | The response scrub is forced on | `WARDYN_PROXY_RESPONSE_SCRUB=off` does not turn it off here, so a gateway that echoes the token back cannot hand it to the sandbox |
 | `Accept-Encoding` is deleted from the request | The answer arrives in bytes the scrub can read |
 | A compressed answer gets a `502` | The proxy refuses bytes it cannot scrub rather than relay them |
-| A running run keeps the routes it started with | A run keeps its routes. Once a provider's gateway changes, the mint refuses that run, so its gateway calls fail once its token expires, within 10 minutes. Create a new run to pick the change up |
+| A running run keeps the routes it started with | A run keeps its routes. Once a provider's gateway changes, the mint refuses that run, so its gateway calls fail once its token expires, within 10 minutes at most. Create a new run to pick the change up |

@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- An admin can set a model provider's run identity token to live 60 to 600 seconds (`gateway_identity.token_lifetime_seconds`; the default stays 10 minutes), so a killed run's tokens stop working sooner
 - A Linux VM run can mount a drive bound to its runner. An older runner and a Kubernetes runner are refused at Review. Do not rely on a file lock across two VMs.
 - New Run now says which of your own walls apply to the run, in one line on Review above the setup groups and above the Tools step totals, with a link to change them (opens in a new tab).
 - Governance profiles have a new limit, "Deny watching background desktops" (`deny_background_desktop_watch`), and Settings has an "Allow watching background runs" switch for macOS virtual machines. The switch is on by default.
