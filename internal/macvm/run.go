@@ -524,10 +524,18 @@ func (r *runner) openWindow(grant, title string, going func() bool) (*windowSess
 			r.mu.Unlock()
 		})
 	}
-	if expired != nil && going != nil && going() {
-		// This opener left while it waited: give the slot back and open nothing. Nobody reads the reply.
-		release()
-		return nil, &WindowRefusal{WindowCodeOpen, WindowAlreadyOpenSentence}
+	if expired != nil {
+		// An opener that left while it waited gives the slot back and opens nothing. Nobody reads the reply.
+		left := going != nil && going()
+		if left {
+			release()
+		}
+		if h := windowWaitedHook.Load(); h != nil {
+			(*h)()
+		}
+		if left {
+			return nil, &WindowRefusal{WindowCodeOpen, WindowAlreadyOpenSentence}
+		}
 	}
 	scr := r.o.Window
 	if scr == nil {

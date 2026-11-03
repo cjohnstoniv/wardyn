@@ -39,6 +39,12 @@ func SetWindowWaitHook(f func()) (restore func()) {
 	return func() { windowWaitHook.Store(old) }
 }
 
+// SetWindowWaitedHook runs f when an open that waited has checked its own connection. restore undoes it.
+func SetWindowWaitedHook(f func()) (restore func()) {
+	old := windowWaitedHook.Swap(&f)
+	return func() { windowWaitedHook.Store(old) }
+}
+
 // ErrConsoleUnreadable is errConsoleUnreadable.
 var ErrConsoleUnreadable = errConsoleUnreadable
 

@@ -480,7 +480,13 @@ func TestWindowReopenThatLeavesWhileWaitingOpensNothing(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the closed opener's call never returned")
 	}
+	checked := make(chan struct{})
+	var once sync.Once
+	t.Cleanup(macvm.SetWindowWaitedHook(func() { once.Do(func() { close(checked) }) }))
 	let()
+	// The leaver has checked its connection after the wait before the next open is sent, so the next open
+	// meets a free slot or one the leaver still holds, never a window the leaver made.
+	recvClosed(t, checked, "the leaver to check its connection after the wait")
 	if _, err := w.client(t).Window(context.Background(), "grant-3", "third"); err != nil {
 		t.Fatalf("an open after the leaver = %v", err)
 	}
