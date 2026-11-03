@@ -20,6 +20,7 @@ import { ModelConnectionsCard } from "./model-connections-card";
 import { WithDoor } from "../../../../test/door-harness";
 import { providerStatus } from "../../../lib/test-fixtures";
 import { expandCard } from "../../../lib/test-dom";
+import { aheadByHours } from "../../../lib/test-clock";
 import { CONNECTIONS } from "../../wardyn/copy/door";
 import { OIDC_RETURN, OIDC_SIGN_IN as T } from "../../wardyn/copy/oidc-signin";
 import type { SetupModelProvider, SetupStatus } from "../../../lib/types";
@@ -59,7 +60,7 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 it("a signed-in row that is not bound says so, with what it means, and offers Sign in again and Disconnect", async () => {
-  const s = providerStatus([{ provider: { ...SSO, identity_binding: "none" }, state: "live", addedAt: "2026-11-02T10:00:00Z" }]);
+  const s = providerStatus([{ provider: { ...SSO, identity_binding: "none" }, state: "live", addedAt: aheadByHours(-30) }]);
   renderCard(s);
   await expandCard(CONNECTIONS.TITLE);
   const card = screen.getByTestId("model-connections-card");
@@ -234,8 +235,8 @@ it("a retry closes the earlier window and a late word from it is ignored", async
 
 it("closes the door with a toast once the person's own state shows a new sign-in", async () => {
   vi.spyOn(window, "open").mockReturnValue({ closed: false, close: vi.fn() } as unknown as Window);
-  const before = providerStatus([{ provider: SSO, state: "live", addedAt: "2026-11-01T10:00:00Z" }]);
-  const after = providerStatus([{ provider: SSO, state: "live", addedAt: "2026-11-03T10:00:00Z" }]);
+  const before = providerStatus([{ provider: SSO, state: "live", addedAt: aheadByHours(-48) }]);
+  const after = providerStatus([{ provider: SSO, state: "live", addedAt: aheadByHours(-1) }]);
   const view = (s: SetupStatus) => (
     <WithDoor status={s} path="/account" operator={false}>
       <ModelConnectionsCard status={s} onChanged={vi.fn()} />

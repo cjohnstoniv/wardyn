@@ -13,6 +13,7 @@ import { providerStripLine } from "../components/wardyn/model-access-banner";
 import { CONNECTIONS } from "../components/wardyn/copy/door";
 import { OIDC_SIGN_IN as T } from "../components/wardyn/copy/oidc-signin";
 import { MODEL_PROVIDERS, providerStatus } from "./test-fixtures";
+import { aheadByHours } from "./test-clock";
 import type { SetupModelProvider } from "./types";
 
 const SSO: SetupModelProvider = {
@@ -74,7 +75,7 @@ describe("the strip", () => {
 
 describe("the connection row", () => {
   const row = (p: SetupModelProvider, state: string) => {
-    const s = providerStatus([{ provider: p, state, addedAt: "2026-11-02T10:00:00Z" }]);
+    const s = providerStatus([{ provider: p, state, addedAt: aheadByHours(-30) }]);
     return connectionRowCopy(s, connectionRows(s)[0]);
   };
 
