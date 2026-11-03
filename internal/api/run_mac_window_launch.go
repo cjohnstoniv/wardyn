@@ -149,7 +149,8 @@ func (s *Server) macWindowAtStart(ctx context.Context, runID uuid.UUID) {
 // at_start: rows 1, 4, 5 and 6, and the part of row 3 that is about who asks (a human with a principal, no
 // delegated token, not an operator's run), so Review shows a refusal before launch. The rest need a run, a runner or a
 // registry, and the launch hook asks the whole of macWindowRefusal again once the run is up. The recording level
-// is resolved at dispatch, so the level the request's policy sets is read here.
+// is resolved at dispatch; the caller passes the level resolved from the same layers (createRecordingChoice), so a
+// locked organisation level or the caller's walls refuse the window at create, not at launch.
 func (s *Server) macWindowCreateRefusal(ctx context.Context, r *http.Request, ceiling governanceCeiling, req *createRunRequest, recording types.RecordingLevel) *runRefusal {
 	if rf := s.macWindowSiteRefusal(ctx); rf != nil {
 		return rf
@@ -177,7 +178,10 @@ func (s *Server) stepMacWindow(f *runFold, _ *foldRecorder) bool {
 	if f.req.DesktopWindow == "" {
 		return true
 	}
-	rf := s.macWindowCreateRefusal(f.r.Context(), f.r, f.ceiling, f.req, f.spec.Recording)
+	choice, rf := s.createRecordingChoice(f.r.Context(), f.r, f.spec.Recording, f.place, f.ceiling, f.policyID == nil)
+	if rf == nil {
+		rf = s.macWindowCreateRefusal(f.r.Context(), f.r, f.ceiling, f.req, choice.Resolve())
+	}
 	if rf == nil {
 		return true
 	}

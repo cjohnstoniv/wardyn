@@ -390,13 +390,16 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 	if !types.MachineKind(f.req.MachineKind).IsMacOSVM() {
 		return true
 	}
-	// A macOS VM keeps no recording of its own and its desktop is not recorded: refused where recording is asked
-	// for, else its desktop is said not to be recorded.
-	notice, refusal := s.macOSVMRecordingGate(f.r.Context(), f.place, f.ceiling)
+	// A macOS VM is recorded by the organisation, not its runner: nothing about recording refuses it, and Review
+	// says what its level records (its desktop only at Screen and actions, and then unmasked).
+	if s.cfg.RecordingStore == nil || s.cfg.Store == nil {
+		return true
+	}
+	choice, refusal := s.createRecordingChoice(f.r.Context(), f.r, f.spec.Recording, f.place, f.ceiling, f.policyID == nil)
 	if refusal.write(s, f.w, f.r) {
 		return false
 	}
-	if notice != "" {
+	if notice := macOSVMRecordingNotice(choice.Resolve()); notice != "" {
 		f.policyWarns = append(f.policyWarns, notice)
 	}
 	return true

@@ -645,10 +645,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	envelope.HostMarks = hostMarksOf(spec.ProxyConfig, envelope.AllowedDomains)
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(envelope)))
-	if !s.applyDispatchRecording(ctx, &run, &spec, policy, ceiling, siteCfg, siteCfgErr) {
+	if !s.startRunRecording(ctx, &run, &spec, policy, ceiling, siteCfg, siteCfgErr, p.Interactive) {
 		return
 	}
-	spec.ExecOutput = s.openExecOutput(run, p.Interactive)
 	s.recordRunnerOutputWatermark(ctx, run, spec.ExecOutput != nil)
 	// The lease, the runner_resident values, then the create, in that order: a runner
 	// refuses a create no lease authorizes, and the create names the values.
@@ -656,6 +655,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	endStartWait()
 	stopCreateLease()
 	if refused {
+		s.unoweAgentCast(ctx, run)
 		return // deliverResident failed the run and recorded why; no create was asked for
 	}
 	if err != nil {
@@ -666,6 +666,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, hint)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": reason})))
+		s.unoweAgentCast(ctx, run)
 		return
 	}
 	created = true
