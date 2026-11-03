@@ -268,7 +268,7 @@ An admin turns identity on per model provider, by setting `gateway_identity` wit
 - **Which providers.** A `custom_endpoint` row, or an `anthropic_api_key` or `openai_api_key` row with a `base_url`. Every other kind is refused at save, a subscription row included. So is one audience on two addresses, and a `base_url` change that keeps the audience: use a different one, or save with identity off first.
 - **Turning it on.** The first save that turns identity on makes the key. If the key can't be made, nothing is saved. Each replica notices a change within 30 seconds, so the key set can take that long to answer.
 - **A run started in that window.** Its gateway calls can be refused for up to about a minute: those 30 seconds, then up to 30 more before its proxy asks for a token again.
-- **Turning it off.** The key row stays, and so do the routes of runs already started. Those runs are refused new tokens, so within 10 minutes they stop starting new gateway calls. With no provider on, each replica also stops serving the key set within 30 seconds. Create new runs to use the provider with identity off.
+- **Turning it off.** The key row stays, and so do the routes of runs already started. Those runs are refused new tokens, so within one token life they stop starting new gateway calls. With no provider on, each replica also stops serving the key set within 30 seconds. Create new runs to use the provider with identity off.
 - **Edits during a run.** A run keeps the provider, address and audience it started with. If any of them changes, or the provider is removed and added again, its token requests are refused and a revive is refused too, and it says to create a new run. Editing the provider back to the original values lets the run go on.
 - **A suspended person.** No new token is issued once the person is suspended, whether or not the kill of their runs has finished. A token already issued is valid until it expires.
 - **An email form shared with another principal.** That form gets no cutoff, so a run owned under it stops only when the kill ends it.
@@ -281,7 +281,7 @@ An admin turns identity on per model provider, by setting `gateway_identity` wit
 | Algorithm | ES256 on P-256, with a `kid` in each token's header. |
 | Storage | One secret-store row, `wardyn-gateway-identity-key`, holding the current key and the previous key's public half with its retire time. It is separate from `wardyn-signing-key`, so a gateway token can never authenticate to the internal API. |
 | Created | At the first save that turns identity on, not at boot. |
-| Token lifetime | 10 minutes. There is no `nbf`. |
+| Token lifetime | 60 to 600 seconds, set per provider with `gateway_identity.token_lifetime_seconds`. Unset means 600. There is no `nbf`. |
 | Key set | Anonymous `GET /.well-known/wardyn-experimental/gateway-jwks.json`, under `WARDYN_BASE_PATH` when set, with `Cache-Control: public, max-age=60`. |
 
 **Off answers as nothing.** With identity off the key set's address answers exactly as a path no route holds. A gateway configured with `jwtAuth` against it therefore cannot start until identity is on.
@@ -305,7 +305,7 @@ Read from agentgateway v1.7.0's source, not run:
 2. Run the mode. It writes the new key, writes a `secret.rekey` audit row and exits. With no key row it refuses, and it never makes a first key.
 3. Start `wardynd`, then restart each gateway.
 
-The old key stays published until 15 minutes after the rotation: the 10-minute token lifetime plus a 5-minute overlap for refetches and clock skew. The key set stops publishing it then, restart or not.
+The old key stays published until 15 minutes after the rotation: the longest token lifetime, 10 minutes, plus a 5-minute overlap for refetches and clock skew. The key set stops publishing it then, restart or not.
 
 Signing moves to the new key at once, so a gateway that has not refetched answers 401 until it does. Restarting it ends that. A second rotation inside those 15 minutes removes the older key early, and calls carrying its tokens fail until they mint again.
 
@@ -313,7 +313,7 @@ Signing moves to the new key at once, so a gateway that has not refetched answer
 
 `wardynd -rotate-gateway-identity-key -retire-previous` is the same mode, and publishes the new key alone from that moment. Neither the replaced key nor an older previous key stays in the key set.
 
-- **What a thief can do.** A stolen key forges a token naming any person, with any `exp`, at every gateway that trusts this key set, until the key is retired and the gateway has refetched. The 10-minute lifetime bounds nothing here.
+- **What a thief can do.** A stolen key forges a token naming any person, with any `exp`, at every gateway that trusts this key set, until the key is retired and the gateway has refetched. The token lifetime, 600 seconds at most, bounds nothing here.
 - **The limit.** A gateway accepts a retired key until it refetches, and that interval is the gateway's own. So the procedure restarts each gateway, and everything forged stays valid until then.
 - **The outage.** The rotation stops every replica, so a recovery is an outage. Gateway calls stay refused until the replicas are back and the gateways have reloaded.
 

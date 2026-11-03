@@ -24,6 +24,7 @@
 | Sign-ins | Kept on the run's virtual disk, not in memory ([Credentials and sign-ins](#credentials-and-sign-ins)) |
 
 - Not in this release: Linux VMs on a Mac and reviving a stopped VM. Each is refused with a reason.
+- Windows VMs are not available yet. `machine_kind` takes `container`, `linux_vm` and `macos_vm` only.
 - A macOS VM run's desktop is not recorded, and Review says so. Its console and SSH terminal sessions are recorded at this run's recording level, as any run's are. A run is refused at create when recording is required, the organisation's level is locked above off, or the governance ceiling sets a level.
 - macOS VMs need a pool where every runner offers them; a mixed pool refuses them. This matches Linux VMs.
 - A Kubernetes runner refuses the kind.
@@ -67,6 +68,20 @@
 6. Check it with `wardyn-runnerd macos-vm status`. A run is placed on the Mac only when the base is ready.
 
 - The two switches are separate gates. The organisation's decides whether a run may ask: with it off, create refuses `macos_vm`. The Mac's decides what its runner offers: with it off, the Mac offers no macOS VMs.
+
+## Quickstart: an interactive developer sandbox
+
+An interactive macOS VM run is a sandbox you work in: a terminal, and a window on the VM on your own Mac. This is the path from off to running.
+
+1. Turn it on, once per organisation and Mac. Do steps 1 to 6 of [Turn it on](#turn-it-on). A run is placed on the Mac only when `wardyn-runnerd macos-vm status` shows the base is ready.
+2. Register the Mac as your own runner ([Claiming a runner](hybrid-laptops.md#claiming-a-runner)). A window opens only on a Mac whose runner you registered.
+3. Ask an admin to turn on `macos_vm.allow_attended_window` if you want the window. It is off by default ([Opening a window on your Mac](#opening-a-window-on-your-mac)).
+4. Start the run: `wardyn run --experience interactive --machine-kind macos_vm --window`. In the console, choose a virtual machine, then macOS, in New Run. `--macos-base <name>` picks a base other than Standard.
+5. Wait until the run is `RUNNING` and its preparation is done. The window opens as the VM comes up. If it does not, run `wardyn window <run>` once the run has finished preparing.
+6. Work in the window, or open a terminal with `wardyn attach <run>` or `wardyn ssh <run>`. Closing the window leaves the run going.
+
+- **Where the guest agent logs.** It has no log file of its own. Its launchd job, `com.wardyn.guest-agent`, names no output path, and the agent writes its messages with Go's `slog` to standard error. The Mac-side record of a run is `helper.log`, in `~/Library/Application Support/Wardyn/macos-vm.noindex/runs/<run-key>/` on the Mac.
+- **What to check first.** `wardyn-runnerd macos-vm status` on the Mac, then `wardyn window <run> --status`.
 
 ## Docker on the Mac
 
@@ -550,6 +565,79 @@ A background run has no terminal, SSH or web door. This is the one exception: th
 - **Where it shows.** `GET /runs/{id}` carries `background_watch`, beside `macos`, on a running background macOS VM run. Its `state` is `open`, `site_off`, `governance`, `sign_ins_off`, `old_boot`, `unconfirmed`, `offline`, `control`, `paused` or `not_run_owner`.
   - The run's owner also gets the refusal's sentence. Anyone else who can read the run gets `not_run_owner` and no sentence.
   - The run page shows its Watch button only when the state is `open`.
+
+## Opening a window on your Mac
+
+A window is a keyboard-and-pointer view of your own macOS VM run, drawn on your own Mac. The run's own helper (`wardyn-macvm run`) draws it with Apple's virtual machine view. Wardyn's server decides each open and tells the run's runner to draw it. Nothing rests on the Mac between opens. Built and unit-tested; not yet run on a real Mac.
+
+- The window shows the VM's screen and takes your keys and pointer.
+- It is not recorded, because a macOS VM run's desktop is not recorded.
+- While it is open, the run's browser desktop is view only. A browser desktop that had control is ended first, and the open waits up to 5 seconds for it.
+
+| Way to open it | What it does |
+|---|---|
+| `wardyn window <run>` | Asks the server to open a window on the Mac the run is on. It prints "The window is opening on `<computer>`." or the refusal's sentence, and exits non-zero on a refusal |
+| `wardyn window <run> --status` | Prints `window:` and a state, the state's sentence, and `last window closed:` with the reason and time. It opens nothing |
+| `wardyn run ... --window` | Asks at create for a window as the VM comes up. A create the window would be refused for is refused with that sentence, and the run is not launched |
+| The run page | `GET /runs/{id}` carries `mac_window` on a running macOS VM run. Its `state` is `open` when you can open a window. The console button for it is not in this build |
+
+- The CLI route is `POST /runs/{id}/desktop/window`. Its body may carry `trigger`, either `cli` or `run_page`.
+- The run's owner also gets the refusal's sentence in `mac_window`. Anyone else who can read the run gets `not_run_owner` and no sentence.
+
+### The site switch
+
+| Setting | Where | Meaning |
+|---|---|---|
+| `macos_vm.allow_attended_window` | The organisation's site config | `true` lets a person open a window. Absent or `false`: no window. Off by default |
+
+- **A write that leaves the switch out keeps it.** A save that omits it keeps the stored value, so an older client cannot turn it on or off by silence.
+- A governance profile that sets `deny_ui_apps` or `deny_interactive` also refuses the window. No role is exempt.
+
+### When a window is refused
+
+Wardyn asks these in order, and the first that refuses answers. Every refusal writes a denied `takeover.begin` row.
+
+| Refused when | Status and reason | What you see |
+|---|---|---|
+| The site switch is off | `403` `mac_window_site_off` | "Windows onto macOS VM runs are turned off for this install. An admin can turn on macos_vm.allow_attended_window in the site config." |
+| The run is not a macOS VM run | `409` `mac_window_not_macos_vm` | "Only a macOS VM run has a window." |
+| The run is not running, or has ended | `409` `attach_not_running` or `attach_run_kept` | "run is not RUNNING; cannot open its window", with the state, or "run has ended; cannot open its window" |
+| You did not register the run's Mac, did not start the run, or came through a delegated token | `403` `mac_window_not_your_mac` | "Wardyn opens a window only on a Mac whose runner you registered. This run is on `<computer>`, so Wardyn can't tell who is at its keyboard. Watch its desktop from the run page instead." |
+| The run's profile sets `deny_ui_apps` or `deny_interactive` | `403` `governance_unit`, target `runs.desktop_window` | "Your organisation's governance profile doesn't allow an interactive desktop on this run." |
+| The run's recording level is Screen and actions | `403` `mac_window_unrecorded` | "This run's recording level is Screen and actions, and a macOS VM's screen isn't recorded, so Wardyn won't open a window onto it." |
+| The agent's sign-ins in a desktop are "Not allowed" | `403` `desktop_sign_ins_off` | "Your admin doesn't allow sign-ins in a desktop while `<agent>` runs, and a macOS desktop can't block them yet." |
+| The Mac's runner is offline | `409` `mac_window_offline` | "This Mac's runner is offline, so Wardyn can't open a window on it." |
+| The runner is connected through another server | `409` `mac_window_not_here` | "This window has to be opened through the server your runner is connected to; try again." |
+| The runner cannot open a window | `409` `mac_window_runner_too_old` | "This Mac's runner can't open a window. Upgrade it to 0.10.0-rc.12 or later." |
+| The run is paused | `409` `mac_window_paused` | "This run is paused. You can open its window once it is running again." |
+| The run is still being prepared | `409` `mac_window_preparing` | "This run is still being prepared; the window opens when preparation finishes." |
+| The run already has a window | `409` `mac_window_open` | "This run's window is already open on `<computer>`." |
+| Your session was cut off | `403` `mac_window_revoked` | "This session is no longer authorized, so Wardyn won't open a window. Sign in again." |
+| A browser desktop with control did not close in time | `409` `mac_window_desktop_control` | "A browser desktop that has control of this run didn't close in time, so Wardyn can't open the window. Close it and open the window again." |
+| You are not signed in at the Mac's screen, or it is locked | `409` `mac_window_not_at_mac` | "The window didn't open: you aren't signed in at `<computer>`'s screen, or it is locked. Unlock it and open the window again." |
+| The runner could not draw the window | `502` `mac_window_failed` | "Wardyn couldn't open the window on the run's Mac. The run goes on; try again." |
+
+- A runner older than 0.10.0-rc.12 does not report the window, so it reads as "can't open a window".
+- A read of the site config or the run that fails refuses the open.
+- `mac_window.state` is `open`, `window_open`, `site_off`, `governance`, `sign_ins_off`, `not_your_mac`, `unrecorded`, `offline`, `runner_too_old`, `not_here`, `paused`, `preparing`, `unconfirmed` or `not_run_owner`. Only `open` shows a button.
+
+### Closing a window
+
+- Closing the window detaches the view. The VM, its one network card and its proxy are untouched, so the run goes on as before.
+- The window also ends when the Mac locks, the run ends, the runner goes offline, or the link to the runner is lost.
+- **An open window is re-checked every 30 seconds.** Each check reads the site switch, the profile, the run and your session again, and closes the window when any of them now refuses.
+- `GET /runs/{id}` carries `mac_window.last_close` with a reason of `person`, `host_locked`, `run_ended` or `failed`, and the time. `wardyn window <run> --status` prints it.
+
+### Audit rows
+
+| Row | When | What it carries |
+|---|---|---|
+| `takeover.begin`, success | A window opens | `surface` `mac_window`, `trigger` (`launch`, `cli` or `run_page`), `background`, `recorded` false, `runner_id` and `grant_id` |
+| `takeover.begin`, denied | Any refusal above | The same fields and `reason`, the refusal's reason. A refusal at create has no run to name |
+| `takeover.close` | A window ends | The same fields, `held_ms` (how long it was open) and `reason`. `refused_by` names the check that ended it on a re-check |
+
+- A `takeover.close` reason is `closed_by_person`, `host_locked`, `refused_on_recheck`, `revoked`, `run_ended`, `runner_offline`, `link_lost` or `helper_failed`.
+- The rows carry no screen contents and no keys.
 
 ## Limits in this release
 
