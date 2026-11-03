@@ -307,25 +307,79 @@ func TestMachinesDeleteAsksFirst(t *testing.T) {
 	})
 }
 
-func TestMachinesDeleteUnknownMachine(t *testing.T) {
-	rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){
-		"GET " + myMachinesPath: replyJSON(http.StatusOK, myMachines(keptMachine("dev", types.KeptMachineKept))),
-	})
-	_, err := runMachines(t, rig, "", "machines", "delete", "nope", "--yes")
-	if err == nil || err.Error() != "You have no kept machine nope." {
-		t.Fatalf("err = %v", err)
+// every spelling uuid.Parse reads, for one id
+func uuidSpellings(id uuid.UUID) map[string]string {
+	canon := id.String()
+	return map[string]string{
+		"canonical": canon,
+		"upper":     strings.ToUpper(canon),
+		"braced":    "{" + canon + "}",
+		"urn":       "urn:uuid:" + canon,
+		"32 hex":    strings.ReplaceAll(canon, "-", ""),
 	}
+}
 
-	// An id that is not in your list goes to the server, which answers it.
+// Whatever spelling names your machine, the delete is asked about first, and sent once, and only then.
+func TestMachinesDeleteOfAnyIDSpellingIsGated(t *testing.T) {
+	for _, form := range []string{"canonical", "upper", "braced", "urn", "32 hex"} {
+		t.Run(form, func(t *testing.T) {
+			m := keptMachine("dev", types.KeptMachineKept)
+			ref := uuidSpellings(m.ID)[form]
+			del := "DELETE " + myMachinesPath + "/" + m.ID.String()
+
+			withTerminal(t, false)
+			rig := deleteRig(t, m, noContent, myMachines())
+			if _, err := runMachines(t, rig, "", "machines", "delete", ref); err == nil || !strings.Contains(err.Error(), "pass --yes") {
+				t.Errorf("no terminal, no --yes: err = %v", err)
+			}
+			if n := len(rig.sent(del)); n != 0 {
+				t.Errorf("no terminal, no --yes: %d DELETEs, want 0", n)
+			}
+
+			withTerminal(t, true)
+			rig = deleteRig(t, m, noContent, myMachines())
+			if _, err := runMachines(t, rig, "n\n", "machines", "delete", ref); err == nil || err.Error() != "nothing was deleted" {
+				t.Errorf("answer n: err = %v", err)
+			}
+			if n := len(rig.sent(del)); n != 0 {
+				t.Errorf("answer n: %d DELETEs, want 0", n)
+			}
+
+			rig = deleteRig(t, m, noContent, myMachines())
+			out, err := runMachines(t, rig, "", "machines", "delete", ref, "--yes")
+			if err != nil || out != "deleted machine dev from Maya's MacBook\n" {
+				t.Errorf("--yes: out %q, err %v", out, err)
+			}
+			if n := len(rig.sent(del)); n != 1 {
+				t.Errorf("--yes: %d DELETEs, want exactly 1", n)
+			}
+		})
+	}
+}
+
+// A reference that names none of your machines is refused here: no DELETE goes out for the server to answer.
+func TestMachinesDeleteUnknownMachineSendsNothing(t *testing.T) {
 	other := uuid.New()
-	rig = newRouteRig(t, map[string]func(http.ResponseWriter, []byte){
-		"GET " + myMachinesPath: replyJSON(http.StatusOK, myMachines()),
-		"DELETE " + myMachinesPath + "/" + other.String(): replyJSON(http.StatusNotFound,
-			map[string]string{"error": "You have no kept machine " + other.String() + ".", "reason": "kept_machine_not_found"}),
-	})
-	_, err = runMachines(t, rig, "", "machines", "delete", other.String())
-	if err == nil || err.Error() != "API error 404: You have no kept machine "+other.String()+"." {
-		t.Fatalf("err = %v", err)
+	for _, ref := range []string{"nope", other.String(), strings.ToUpper(other.String()), "urn:uuid:" + other.String()} {
+		for _, yes := range []bool{false, true} {
+			withTerminal(t, true)
+			rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){
+				"GET " + myMachinesPath: replyJSON(http.StatusOK, myMachines(keptMachine("dev", types.KeptMachineKept))),
+			})
+			args := []string{"machines", "delete", ref}
+			if yes {
+				args = append(args, "--yes")
+			}
+			_, err := runMachines(t, rig, "y\n", args...)
+			if err == nil || err.Error() != "You have no kept machine "+ref+"." {
+				t.Errorf("%s (yes=%v): err = %v", ref, yes, err)
+			}
+			for key := range rig.bodies {
+				if strings.HasPrefix(key, "DELETE ") {
+					t.Errorf("%s (yes=%v): sent %s", ref, yes, key)
+				}
+			}
+		}
 	}
 }
 

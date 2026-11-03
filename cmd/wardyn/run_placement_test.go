@@ -135,22 +135,24 @@ func TestRunKeptMachineFlagsBuildTheMachineField(t *testing.T) {
 					args, wantPath = append(args, "--dry-run"), "/api/v1/runs/preflight"
 				}
 				_ = execCmd(t, args...)
-				if got := srv.last().path; got != wantPath {
-					t.Fatalf("path = %q, want %q", got, wantPath)
+				// A created run is followed by a read of the machine list, so the request is found by its path.
+				create := srv.sentTo(wantPath)
+				if create == nil {
+					t.Fatalf("no request to %q", wantPath)
 				}
 				var raw map[string]json.RawMessage
-				if err := json.Unmarshal(srv.last().body, &raw); err != nil {
+				if err := json.Unmarshal(create, &raw); err != nil {
 					t.Fatal(err)
 				}
 				if tc.want == nil {
 					if _, ok := raw["machine"]; ok {
-						t.Fatalf("machine key present with no keep flag: %s", srv.last().body)
+						t.Fatalf("machine key present with no keep flag: %s", create)
 					}
 					return
 				}
 				var body sdk.CreateRunRequest
-				if err := json.Unmarshal(srv.last().body, &body); err != nil || body.Machine == nil || *body.Machine != *tc.want {
-					t.Fatalf("machine = %v (%v), want %+v; body %s", body.Machine, err, *tc.want, srv.last().body)
+				if err := json.Unmarshal(create, &body); err != nil || body.Machine == nil || *body.Machine != *tc.want {
+					t.Fatalf("machine = %v (%v), want %+v; body %s", body.Machine, err, *tc.want, create)
 				}
 			})
 		}
@@ -219,4 +221,78 @@ func TestRunKeptMachineHelpNamesTheModeFlags(t *testing.T) {
 			t.Errorf("--%s is not a flag of wardyn run", name)
 		}
 	}
+}
+
+// A run that keeps or resumes a machine says so right under its created line; any other run says nothing
+// more, and --json stays one JSON object.
+func TestRunPrintsTheKeptMachineLine(t *testing.T) {
+	dev := keptMachine("dev", types.KeptMachineKept)
+	rig := func(t *testing.T) *routeRig {
+		return newRouteRig(t, map[string]func(http.ResponseWriter, []byte){
+			"POST /api/v1/runs":     replyJSON(http.StatusCreated, sdk.CreateRunResult{AgentRun: types.AgentRun{ID: uuid.New(), State: types.RunQueued, ConfinementClass: "CC3"}}),
+			"GET " + myMachinesPath: replyJSON(http.StatusOK, myMachines(dev)),
+		})
+	}
+	used := machinesUsed.Local().Format("2006-01-02")
+	base := []string{"run", "--experience", "interactive", "--machine-kind", "macos_vm", "--agent", "claude-code"}
+	for _, tc := range []struct {
+		name  string
+		flags []string
+		want  string
+	}{
+		{"keep", []string{"--keep-machine", "--machine-name", "web"}, "machine web: new, kept when this run stops"},
+		{"keep unnamed", []string{"--keep-machine"}, "machine: new, kept when this run stops; it is named when the run starts"},
+		{"resume", []string{"--resume-machine", "dev"}, "machine dev: will resume (last used " + used + "), kept when this run stops"},
+		{"fresh", []string{"--resume-machine", "dev", "--fresh"}, "machine dev: will start fresh from Maya's MacBook's current base, kept when this run stops"},
+		{"ordinary", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runMachines(t, rig(t), "", append(append([]string{}, base...), tc.flags...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+			if !strings.HasPrefix(lines[0], "created run ") {
+				t.Fatalf("first line = %q", lines[0])
+			}
+			if tc.want == "" {
+				for _, l := range lines {
+					if strings.HasPrefix(l, "machine") {
+						t.Errorf("an ordinary run printed %q", l)
+					}
+				}
+				return
+			}
+			if len(lines) < 2 || lines[1] != tc.want {
+				t.Errorf("second line of\n%s\nwant %q", out, tc.want)
+			}
+		})
+	}
+
+	t.Run("json", func(t *testing.T) {
+		r := rig(t)
+		out, err := runMachines(t, r, "", append(append([]string{}, base...), "--resume-machine", "dev", "--json")...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var run types.AgentRun
+		if err := json.Unmarshal([]byte(out), &run); err != nil || strings.Contains(out, "machine dev") {
+			t.Errorf("--json stdout is not one run object: %q (%v)", out, err)
+		}
+		if n := len(r.sent("GET " + myMachinesPath)); n != 0 {
+			t.Errorf("--json read the machine list %d times, want 0", n)
+		}
+	})
+}
+
+// sentTo is the body of the last request the server got at path, nil when none came.
+func (s *cmdServer) sentTo(path string) []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.reqs) - 1; i >= 0; i-- {
+		if s.reqs[i].path == path {
+			return s.reqs[i].body
+		}
+	}
+	return nil
 }

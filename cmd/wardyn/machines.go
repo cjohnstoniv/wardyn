@@ -141,14 +141,11 @@ func runMachinesDelete(cmd *cobra.Command, c *sdk.Client, ref string, yes bool) 
 	if err != nil {
 		return err
 	}
+	// Every delete this command sends is of a machine in your own list, asked about first: a reference that
+	// names none is refused here, never sent to the server to see what it says.
 	m, found := findMachine(mine.Machines, ref)
 	if !found {
-		id, perr := uuid.Parse(ref)
-		if perr != nil {
-			return fmt.Errorf("You have no kept machine %s.", ref) //nolint:staticcheck // the server's sentence for it (kept_machine_not_found)
-		}
-		// An id that is not in your list: the server answers it, in its own words.
-		return c.DeleteMyMachine(cmd.Context(), id)
+		return fmt.Errorf("You have no kept machine %s.", ref) //nolint:staticcheck // the server's sentence for it (kept_machine_not_found)
 	}
 	if !yes {
 		if err := confirmMachineDelete(cmd, m); err != nil {
@@ -172,11 +169,14 @@ func runMachinesDelete(cmd *cobra.Command, c *sdk.Client, ref string, yes bool) 
 	return nil
 }
 
-// findMachine is the machine whose id or name is ref.
+// findMachine is the machine whose id or name is ref. An id is compared as a UUID, so any spelling of it
+// (upper case, no dashes, in braces, urn:uuid:) finds the machine its canonical form does.
 func findMachine(ms []sdk.KeptMachine, ref string) (sdk.KeptMachine, bool) {
-	for _, m := range ms {
-		if m.ID.String() == ref {
-			return m, true
+	if id, err := uuid.Parse(ref); err == nil {
+		for _, m := range ms {
+			if m.ID == id {
+				return m, true
+			}
 		}
 	}
 	for _, m := range ms {
