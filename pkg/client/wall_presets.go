@@ -20,7 +20,8 @@ type (
 )
 
 // WallPresetList is GET /api/v1/wall-presets: the built-ins first, then every preset the caller may
-// read, and where the caller may save one (the run templates' publish rules).
+// read, and where the caller may save one (the run templates' publish rules). Publish.GroupLabels
+// labels those groups and the groups of the group presets listed.
 type WallPresetList struct {
 	Presets []WallPreset    `json:"presets"`
 	Publish TemplatePublish `json:"publish"`

@@ -39,7 +39,7 @@ func (s PG) Ping(ctx context.Context) error {
 // runReservedCols and runInsertOnlyCols column, in order (TestCreateRunBindsEveryInsertColumn).
 var createRunSQL = `
 		INSERT INTO agent_runs (` + runInsertCols + `, ` + runReservedCols + `, ` + runInsertOnlyCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58,$59)
 		RETURNING ` + runCols
 
 // runnerPoolFence is the value of the runner_pool_id column in createRunSQL: the pool read through its
@@ -253,6 +253,10 @@ func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 			return nil, fmt.Errorf("store: marshal vm machine: %w", err)
 		}
 	}
+	wallPreset, err := wallPresetJSON(r.WallPreset)
+	if err != nil {
+		return nil, err
+	}
 	return []any{
 		r.ID, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
@@ -264,7 +268,7 @@ func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 		r.LifetimeCapAt, string(r.LifetimeCapSource), r.RunnerPoolID, r.RunnerPoolRevision, string(r.RunnerPoolSelection), r.RunnerPoolExecutor, r.HumanAuthor, walls,
 		string(r.MachineKind.Normalize()), r.BreakGlass, restrictionIDsParam(r.RestrictionIDs), serviceJSON, string(r.Shape),
 		r.Reserved.CPUMillis, r.Reserved.MemoryMiB, r.Reserved.DiskMiB,
-		localFolder, vmMachine,
+		localFolder, vmMachine, wallPreset,
 	}, nil
 }
 
@@ -449,9 +453,10 @@ const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk
 // runInsertOnlyCols are written at insert and read back only by their own reader: local_folder
 // (0195, types.AgentRun.LocalFolder) by RunLocalFolderSeed. vm_machine is also in runCols: at insert it
 // holds a macOS VM run's picked base alone (types.VMMachine.MacOSBase), until SetRunVMMachine.
-const runInsertOnlyCols = `local_folder, vm_machine`
+// wall_preset (0248, types.AgentRun.WallPreset) is in runCols too, and a queued start rewrites it.
+const runInsertOnlyCols = `local_folder, vm_machine, wall_preset`
 
-const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, vm_machine, recording_level, image_arches, service_status`
+const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, vm_machine, recording_level, image_arches, service_status, wall_preset`
 
 // scanRun is the ONE reader for runCols. A new column is appended to
 // runInsertCols/runCols and to the end of this Scan — appending is the one edit
@@ -459,7 +464,7 @@ const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_re
 func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
 	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection, notRecorded, machineKind, recordingLevel, shape string
-	var limitsRaw, wallsRaw, vmMachineRaw, serviceRaw, serviceStatusRaw []byte
+	var limitsRaw, wallsRaw, vmMachineRaw, serviceRaw, serviceStatusRaw, wallPresetRaw []byte
 	var containmentErr *string
 	err := row.Scan(
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
@@ -472,6 +477,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor, &wallsRaw, &machineKind, &r.BreakGlass, &r.RestrictionIDs, &serviceRaw, &shape,
 		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &containmentErr, &r.ContainmentErrorAt, &r.EndedAt,
 		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt, &notRecorded, &vmMachineRaw, &recordingLevel, &r.ImageArches, &serviceStatusRaw,
+		&wallPresetRaw,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
@@ -502,6 +508,9 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		if err := json.Unmarshal(wallsRaw, r.InnerWalls); err != nil {
 			return types.AgentRun{}, fmt.Errorf("store: unmarshal run inner walls: %w", err)
 		}
+	}
+	if r.WallPreset, err = scanRunWallPreset(wallPresetRaw); err != nil {
+		return types.AgentRun{}, err
 	}
 	if err := scanRunMachine(&r, machineKind, vmMachineRaw); err != nil {
 		return types.AgentRun{}, err
