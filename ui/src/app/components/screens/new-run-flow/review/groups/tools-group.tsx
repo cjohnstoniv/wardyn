@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { ALLOWED_MODELS as AM, MEMBER } from "../../../../../lib/governance-copy";
 import { Button } from "../../../../ui/button";
 import { Input } from "../../../../ui/input";
 import { Label } from "../../../../ui/label";
@@ -26,6 +27,24 @@ const harnessesOf = (i: RunIntent): IncludedTool[] => (i.tools ?? []).filter((t)
 const startsAutomatically = (i: RunIntent, id: string, all: IncludedTool[]) =>
   !!i.workload?.task?.trim() && id === (i.workload.agent ?? all[0]?.id);
 
+// A sentence with one slot, set around a value shown in mono: the copy stays one string, the model gets its own element.
+const SLOT = "\u0001";
+function AroundModels({ sentence, models }: { sentence: (slot: string) => string; models: string[] }) {
+  const [before, after] = sentence(SLOT).split(SLOT);
+  return (
+    <>
+      {before}
+      {models.map((m, i) => (
+        <span key={m}>
+          {i > 0 && ", "}
+          <code className="break-all font-mono text-xs">{m}</code>
+        </span>
+      ))}
+      {after}
+    </>
+  );
+}
+
 export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: GroupProps) {
   const { intent } = draft;
   const harnesses = harnessesOf(intent);
@@ -38,6 +57,20 @@ export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: Group
   const name = (id: string) => (roster.status === "ready" ? harnessName(roster.value, id) : id);
   const providerOf = (t?: IncludedTool) =>
     t?.model_provider ?? pre?.harness_set?.harnesses.find((h) => h.id === t?.id)?.model_credential?.provider ?? pre?.model_credential?.provider;
+
+  // The hosted models the run may ask for, when a limit binds it. A harness whose provider fixed a model off
+  // the list is said so before launch; the run is not blocked, since a subscription's model is chosen in the session.
+  const allowed = pre?.allowed_models ?? preview?.allowed_models;
+  const limited = allowed && allowed.length > 0 ? allowed : undefined;
+  const limitedBy = pre?.allowed_models ? pre.allowed_models_profile : preview?.allowed_models_profile;
+  const offList = limited
+    ? harnesses.flatMap((h) => {
+        const cred = pre?.harness_set?.harnesses.find((x) => x.id === h.id)?.model_credential;
+        return [cred?.model, cred?.fast_model]
+          .filter((m): m is string => !!m && !limited.includes(m))
+          .map((model) => ({ id: h.id, provider: providerOf(h) ?? cred?.provider ?? "", model }));
+      })
+    : [];
 
   let detail: string;
   if (command && n === 0 && isServer(intent)) detail = NR_REVIEW.TOOLS_START_COMMAND;
@@ -98,6 +131,24 @@ export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: Group
               </div>
             );
           })}
+        </div>
+      )}
+      {limited && (
+        <div className="grid gap-1" data-testid="review-allowed-models">
+          <p className="text-sm text-foreground">
+            <AroundModels sentence={AM.REVIEW_LINE} models={limited} />
+          </p>
+          {limitedBy && (
+            <div>
+              <Chip>{MEMBER.GS_CHIP(limitedBy)}</Chip>
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">{AM.REVIEW_READS}</p>
+          {offList.map((o) => (
+            <p key={`${o.id}:${o.model}`} className="text-sm text-warning" data-testid="review-allowed-models-warning">
+              <AroundModels sentence={(slot) => AM.REVIEW_OFF_LIST(name(o.id), o.provider, slot)} models={[o.model]} />
+            </p>
+          ))}
         </div>
       )}
       {pre?.harness_set?.shared_model_access && <p className="text-sm text-muted-foreground">{NR_REVIEW.SHARED_MODEL_ACCESS}</p>}

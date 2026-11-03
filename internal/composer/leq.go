@@ -301,6 +301,10 @@ func leqLimits(a, b types.GovernanceLimits) bool {
 		slices.ContainsFunc(a.AllowedMacOSBases, func(n string) bool { return !slices.Contains(b.AllowedMacOSBases, n) })) {
 		return false // a macOS base the base does not allow must stay refused
 	}
+	if len(b.AllowedModels) > 0 && (len(a.AllowedModels) == 0 ||
+		slices.ContainsFunc(a.AllowedModels, func(n string) bool { return !slices.Contains(b.AllowedModels, n) })) {
+		return false // a model the base does not allow must stay refused
+	}
 	for _, p := range [][2]int{
 		{a.MaxConcurrentRuns, b.MaxConcurrentRuns}, {a.MaxCPUMillis, b.MaxCPUMillis},
 		{a.MaxMemoryMiB, b.MaxMemoryMiB}, {a.MaxEphemeralDiskMiB, b.MaxEphemeralDiskMiB},

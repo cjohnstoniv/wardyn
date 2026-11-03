@@ -120,6 +120,7 @@ derives its role.
 | `deny_task_mode_exec`, `deny_interactive`, `deny_ui_apps`, `deny_user_drive`, `deny_member_drives`, `deny_background_desktop_watch` | false | OR |
 | `local_self_defined_components` | false | AND |
 | `deny_placements` | none denied: every placement is permitted | union of the denied placements |
+| `allowed_models` | none listed: no limit | intersection; an empty list on one side yields the other; disjoint is unsatisfiable |
 | `max_concurrent_runs`, `max_ephemeral_disk_mib`, `max_drive_size_mib`, `max_cpu_millis`, `max_memory_mib` | 0 is unlimited | smaller positive |
 | `autonomy_rubric` | caps nothing | per field, the lower level; a field set on one side only takes that side |
 | `max_end_ahead_sec` | 0 is no limit | smaller positive |
@@ -129,6 +130,13 @@ derives its role.
 | `allow_no_end`, `user_changes_limits` | false | AND |
 | `pause_idle_after_sec` | 0 is pause only runs waiting for a decision | smaller positive |
 
+- *Allowed models.*
+  - `limits.allowed_models` lists the hosted models a run may ask for, exactly as the provider names them (`model-a`, `small-model-a`). Empty is no limit; there is no deny-all.
+  - A run is held to the list it started with, kept on a revive. The run's proxy intercepts the vendor hosts and refuses any other model.
+  - A harness's small model is not added for you. Local models keep their own lists.
+  - Other writes to a model host are refused under `brokered:allowed-models`, file and skill uploads included.
+  - A provider whose calls the proxy cannot read is refused with `403 allowed_models_unchecked`.
+  - An admin run that stands outside governance is not bound by this list. Test with a governed run.
 - *Worked example.*
   - An organisation keeps three profiles.
   - The **baseline** is a composed profile with no base (so the deployment default is its base) and an overlay that sets `allowed_domains` to the package registries and the forge, `first_use_approval` to `always_deny`, and `limits.max_cpu_millis` to 4000.

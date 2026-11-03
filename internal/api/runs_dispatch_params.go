@@ -146,4 +146,7 @@ type dispatchParams struct {
 	// Machine is the kept machine stepKeptMachine planned (a keep or a resume); dispatch inserts or claims
 	// it before any runner work. nil for a run that keeps none. Set only by finishCreateRunLaunch.
 	Machine *keptMachinePlan
+	// modelLimit is the run's governed allowed-models limit. Never set by a caller: dispatchRun copies it
+	// from the required ceiling before any phase reads it, so a lane cannot leave it out.
+	modelLimit allowedModelsLimit
 }

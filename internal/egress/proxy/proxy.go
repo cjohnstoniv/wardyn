@@ -253,8 +253,8 @@ type Proxy struct {
 	// localModels is each local_model upstream's route gate, keyed by
 	// localModelKey (local_model.go). Empty == no local model route.
 	localModels map[string]*localModel
-	// allowedModels is Config.AllowedModels compiled (allowed_models.go). Nil == off.
-	allowedModels map[string]bool
+	// allowedModels is Config.AllowedModels and BedrockRoutes compiled (allowed_models.go). Nil == off.
+	allowedModels *modelLimit
 	// gatewayRoutes is Options.GatewayIdentity and gatewayHolders each route
 	// provider's token (gateway_identity.go). Empty == off.
 	gatewayRoutes  []GatewayIdentityRoute

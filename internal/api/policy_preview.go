@@ -73,6 +73,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 	response.Attachments = f.attachments
 	response.RunnerPool, response.RunnerPools = f.place.facts()
 	response.Image, response.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
+	response.AllowedModels, response.AllowedModelsProfile = modelLimitOf(f.ceiling).models, modelLimitOf(f.ceiling).profile
 	response.Limits, response.ResourcesApplied = f.place.sizeFacts()
 	response.RunnerPoolSlots = s.runnerPoolSlots(r.Context(), f.place, *f.req)
 	response.MainDrive = f.mainDrive.applied()

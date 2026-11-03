@@ -39,7 +39,8 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 	runnerwire.ProxySettingGitPushWithheld: func(pc *runner.ProxyConfig) {
 		pc.GitPushWithheld = map[string]string{"github.com": "this run may not push"}
 	},
-	runnerwire.ProxySettingForgeHosts: func(pc *runner.ProxyConfig) { pc.ForgeHosts = []string{"ghe.corp.example"} },
+	runnerwire.ProxySettingForgeHosts:    func(pc *runner.ProxyConfig) { pc.ForgeHosts = []string{"ghe.corp.example"} },
+	runnerwire.ProxySettingAllowedModels: func(pc *runner.ProxyConfig) { pc.ModelLimit = &runner.ModelLimit{Models: []string{"model-a"}} },
 }
 
 // oldCapsJSON is a 0.9.x runner's caps event as it sends it: no proxy_settings key.
@@ -239,5 +240,49 @@ func TestCreateSandboxRefusesADenyAllRunOnARunnerWithoutTheForgeGuard(t *testing
 	}
 	if _, err := rig.Sub.CreateSandbox(ctxT(t), spec(false)); err != nil {
 		t.Fatalf("a run without deny_all was refused on an older runner: %v", err)
+	}
+}
+
+// capsWithout is a caps event naming every proxy setting but setting.
+func capsWithout(t *testing.T, setting string) string {
+	t.Helper()
+	named, err := json.Marshal(slices.DeleteFunc(slices.Clone(runnerwire.ProxySettings), func(s string) bool { return s == setting }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return `{"support":{"Classes":["CC1","CC2"]},"cpu_millis_max":4000,"memory_mib_max":8192,"version":"0.10.0","resident":true,"proxy_settings":` + string(named) + `}`
+}
+
+// A runner that does not carry the governed model list is refused a run that has one, at create and at a
+// revive's proxy replacement, before anything is sent; the same runner takes a run with no list.
+func TestAllowedModelsNeedARunnerThatCarriesThem(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	sb, _ := create(t, rig, nil)
+	publishCaps(t, rig, capsWithout(t, runnerwire.ProxySettingAllowedModels))
+	limited := runner.SandboxSpec{RunID: uuid.New(), Image: "img", ConfinementClass: types.CC1,
+		ProxyConfig: runner.ProxyConfig{ModelLimit: &runner.ModelLimit{Models: []string{"model-a"}}}}
+	_, err := rig.Sub.CreateSandbox(ctxT(t), limited)
+	var pe *remote.ProxySettingError
+	if !errors.As(err, &pe) || pe.Setting != runnerwire.ProxySettingAllowedModels || !strings.Contains(err.Error(), "too old for allowed_models") {
+		t.Fatalf("limited create = %v, want a ProxySettingError naming %s", err, runnerwire.ProxySettingAllowedModels)
+	}
+	if len(rig.Fake.Created) != 1 {
+		t.Fatal("the refused create reached the runner")
+	}
+	unlimited := limited
+	unlimited.RunID, unlimited.ProxyConfig = uuid.New(), runner.ProxyConfig{}
+	if _, err := rig.Sub.CreateSandbox(ctxT(t), unlimited); err != nil {
+		t.Fatalf("a run with no list was refused: %v", err)
+	}
+	local := strings.TrimPrefix(sb.Ref, "runner:"+rid+"/")
+	err = rig.Sub.ReplaceProxy(ctxT(t), sb.Ref, []byte(`{"allowed_models":["model-a"]}`))
+	if !errors.As(err, &pe) || pe.Setting != runnerwire.ProxySettingAllowedModels {
+		t.Fatalf("limited replace = %v, want a ProxySettingError naming %s", err, runnerwire.ProxySettingAllowedModels)
+	}
+	if rig.Fake.Called(`replace_proxy {"allowed_models":["model-a"]}`, local) {
+		t.Fatal("the refused replace reached the runner")
+	}
+	if err := rig.Sub.ReplaceProxy(ctxT(t), sb.Ref, []byte(`{"stripped":true}`)); err != nil {
+		t.Fatalf("a revive with no list was refused: %v", err)
 	}
 }

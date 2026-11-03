@@ -365,6 +365,8 @@ export interface ProviderHarness {
   harness: string;
   // Admin-set, no member override; required on a Bedrock kind.
   model?: string;
+  // The small model Claude Code's background work asks for; azure_foundry and custom_endpoint only.
+  fast_model?: string;
   // custom_endpoint only: where the endpoint serves this agent's API dialect.
   path?: string;
   auth_header?: string;

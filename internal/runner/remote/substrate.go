@@ -533,7 +533,26 @@ func (s *Substrate) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte
 	if err := s.own(ref); err != nil {
 		return err
 	}
+	if err := s.checkRevivedModelList(cfgJSON); err != nil {
+		return err
+	}
 	return s.call(ctx, runnerwire.MethodReplaceProxy, runnerwire.ReplaceProxyArgs{Ref: ref, CfgJSON: cfgJSON}, nil)
+}
+
+// checkRevivedModelList refuses, before anything is sent, a revived config that limits the run's
+// models on a runner that did not advertise the list: an older runner would start the replacement
+// proxy without it, admitting every model.
+func (s *Substrate) checkRevivedModelList(cfgJSON []byte) error {
+	var head struct {
+		AllowedModels *[]string `json:"allowed_models"`
+	}
+	if err := json.Unmarshal(cfgJSON, &head); err != nil {
+		return fmt.Errorf("remote: read the revived proxy config: %w", err)
+	}
+	if c, _ := s.Caps(); head.AllowedModels != nil && !slices.Contains(c.ProxySettings, runnerwire.ProxySettingAllowedModels) {
+		return &ProxySettingError{Setting: runnerwire.ProxySettingAllowedModels}
+	}
+	return nil
 }
 
 func (s *Substrate) EnsureProxyImage(ctx context.Context) error {

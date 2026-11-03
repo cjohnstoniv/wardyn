@@ -66,6 +66,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.dispatchStartable(ctx, run, ceiling, p) {
 		return
 	}
+	p.modelLimit = ceiling.modelLimit // from the ceiling alone, whatever the lane passed
 	// Only the values a phase below REBINDS get a local alias; everything else is
 	// read straight off p (the named-field struct is already self-documenting).
 	policy := p.Policy // local copy; the phases below mutate policy.AllowedDomains
@@ -529,6 +530,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// What each local_model upstream above may be asked for (#2957);
 			// nil, so no key is written, unless the run chose one.
 			LocalModels: plan.localModels,
+			// The governed allowed-models list every hosted model request is held to; nil, so no key is
+			// written, when no limit binds the run. Never an empty list.
+			ModelLimit: plan.modelLimit,
 			// The routes that carry the run's signed identity; nil, so no key is written, with identity off.
 			GatewayIdentity: gatewayRoutes,
 			// What the brokered-LLM 404 says when this run reaches that route

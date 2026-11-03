@@ -4117,6 +4117,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0252` (`0252_provider_change_clears_on_oidc`) is a later `CREATE OR REPLACE` of `0143`'s `clear_provider_connection_change` trigger function, so an endpoint sign-in's `-oidc` part clears the owner's provider change history too; no table, row or grant changes.
 - `0253` (`0253_agent_runs_kept_machine_id`) adds `agent_runs.kept_machine_id` and `agent_runs.kept_machine_mode` (`0001`'s table): the kept machine a macOS VM run kept or resumed and how, with no foreign key so the run's page can say the machine was deleted. It also adds `kept_machines.reset_run_id` and `kept_machines.reset_unconfirmed` (`0250`'s table): a fresh start its Mac has not confirmed, and an earlier one a later attempt replaced. NULL or false on every existing row; no grant changes.
 - `0254` (`0254_agent_runs_correlation_id`) adds `agent_runs.correlation_id` (`0001`'s table): the caller's own reference for a run, empty on every existing row; no grant changes.
+- `0255` (`0255_agent_runs_allowed_models`) adds `allowed_models` to `agent_runs` (`0001`'s table): the governed allowed-models list the run was dispatched under and the profile that set it, replayed on revive and never changed by a later profile edit; NULL when no list binds the run.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

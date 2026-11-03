@@ -196,6 +196,7 @@ const (
 	ProxySettingGatewayIdentity = "gateway_identity"
 	ProxySettingGitPushWithheld = "git_push_withheld"
 	ProxySettingForgeHosts      = "forge_hosts"
+	ProxySettingAllowedModels   = "allowed_models"
 )
 
 // ProxySettingLocalModelRelay is no proxy.Config field: a Docker runner names it when it relays a
@@ -217,13 +218,13 @@ func LocalModelRelayNeeded(pc runner.ProxyConfig) bool {
 
 // ProxySettings is every run proxy setting this build's runner carries through to its proxy, in the
 // order ProxySettingsSet tests them.
-var ProxySettings = []string{ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels, ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity, ProxySettingGitPushWithheld, ProxySettingForgeHosts}
+var ProxySettings = []string{ProxySettingAWSSigV4, ProxySettingScrubResponses, ProxySettingVM, ProxySettingPortRule, ProxySettingLocalModels, ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity, ProxySettingGitPushWithheld, ProxySettingForgeHosts, ProxySettingAllowedModels}
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
 // Nothing sets VM yet (the Docker driver will, where the desktop relay starts), so the org leaves it false; its gate stays.
 func ProxySettingsSet(pc runner.ProxyConfig) []string {
 	var out []string
-	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil, pc.CanonicalPushRepos, len(pc.GatewayIdentity) != 0, len(pc.GitPushWithheld) != 0, len(pc.ForgeHosts) != 0} {
+	for i, on := range []bool{pc.AWSSigV4 != nil, pc.ScrubResponses, pc.VM, pc.PortRule != "", len(pc.LocalModels) != 0, pc.KubeAPI != nil, pc.CanonicalPushRepos, len(pc.GatewayIdentity) != 0, len(pc.GitPushWithheld) != 0, len(pc.ForgeHosts) != 0, pc.ModelLimit != nil} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}

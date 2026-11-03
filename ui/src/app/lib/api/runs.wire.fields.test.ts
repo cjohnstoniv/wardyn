@@ -211,7 +211,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
     expect(omitted).toEqual([]);
   });
 
-  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the allowlists its proxy was handed, the pool's name, the ended run's kept_until, the run's policy, its open sync sessions, its computer folder, its agents, a macOS VM's desktop, whether it is still being set up, and its disk over AgentRun — " +
+  it("RunDetail adds exactly ui_apps, user_type_name, the model provider's name and deleted flag, the launching portal's name, the allowlists its proxy was handed, the hosted-model list it started with, the pool's name, the ended run's kept_until, the run's policy, its open sync sessions, its computer folder, its agents, a macOS VM's desktop, whether it is still being set up, and its disk over AgentRun — " +
     "the fields only GET /runs/{id} sends (handleGetRun's anonymous wrapper struct, runs_policy.go)", () => {
     const runDetailOwnKeys = tsInterfaceKeys(runsTs, "RunDetail");
     expect(runDetailOwnKeys).toEqual([
@@ -221,6 +221,7 @@ describe("source parity — Go wire tags vs the TS mirror", () => {
       "model_provider_deleted",
       "created_via_name",
       "model_allowlists",
+      "allowed_models",
       "runner_pool_name",
       "kept_until",
       "policy",

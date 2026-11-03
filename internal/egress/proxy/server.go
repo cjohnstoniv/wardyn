@@ -310,7 +310,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ViaOrgRoutes:         cfg.ViaOrgRoutes,
 	})
 	p.residentMints = residentMintsByGrant(cfg.ResidentMints)
-	p.allowedModels = compileAllowedModels(cfg.AllowedModels)
+	p.allowedModels = compileAllowedModels(cfg.AllowedModels, cfg.BedrockRoutes)
 	p.deferredScan = deferred
 	p.vm, p.portRule = cfg.VM, effectivePortRule(cfg.VM, cfg.PortRule)
 	p.pushSets, p.pushBase, p.harnessRules, p.harnessCreds, p.mcp = cfg.PushRuleSets, compilePushRules(cfg.PushRuleBase), cfg.HarnessToolRules, cfg.HarnessCredentials, newMCPBroker(cfg.MCPServers, cfg.MCPBindings)

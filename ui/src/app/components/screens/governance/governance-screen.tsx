@@ -141,6 +141,24 @@ export function GovernanceScreen() {
       .catch((e) => setChangesError(getErrorMessage(e)));
   }, []);
   React.useEffect(load, [load]);
+  // A link to one profile (the run page's allowed-models card) opens its editor once the profiles are read.
+  const askedProfile = searchParams.get("profile");
+  React.useEffect(() => {
+    if (status !== "ready" || !askedProfile) return;
+    const profile = snap.profiles.find((p) => p.id === askedProfile);
+    if (profile) {
+      setOmission([]);
+      setSubmitted(false);
+      setEditing({ profile });
+    }
+    setSearchParams(
+      (sp) => {
+        sp.delete("profile");
+        return sp;
+      },
+      { replace: true },
+    );
+  }, [status, askedProfile, snap.profiles, setSearchParams]);
 
   const assignedCount = React.useCallback(
     (p: GovernanceUnit) => snap.assignments.filter((a) => a.unit_id === p.id).length,

@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -47,11 +48,11 @@ func modelGateProxy(t *testing.T, allowed []string) (*Proxy, *capturedUpstream, 
 
 // modelSet compiles a test's list the way a loaded config does: nil is unset (off), and an empty
 // non-nil list is `[]` (every model refused).
-func modelSet(list []string) map[string]bool {
+func modelSet(list []string) *modelLimit {
 	if list == nil {
 		return nil
 	}
-	return compileAllowedModels(&list)
+	return compileAllowedModels(&list, nil)
 }
 
 func TestAllowedModels_BrokeredRoutes(t *testing.T) {
@@ -156,15 +157,12 @@ func TestAllowedModels_EncodedBodyRefused(t *testing.T) {
 	}
 }
 
-// A read, and a named model-free route, are left alone with the list set: the body is not read and
-// the request is forwarded as ever.
+// A read is left alone with the list set: the body is not read and the request is forwarded as ever.
 func TestAllowedModels_OtherRoutesUntouched(t *testing.T) {
 	for _, tc := range []struct{ method, route, body string }{
 		{http.MethodGet, llmAnthropicPrefix + "models", ""},
 		{http.MethodGet, llmOpenAIPrefix + "models", ""},
 		{http.MethodHead, llmOpenAIPrefix + "models", ""},
-		{http.MethodPost, llmAnthropicPrefix + "files", `not json at all`},
-		{http.MethodPost, llmAnthropicPrefix + "skills", `not json at all`},
 		{http.MethodGet, llmAnthropicPrefix + "messages", ""},
 	} {
 		t.Run(tc.method+" "+tc.route, func(t *testing.T) {
@@ -219,7 +217,6 @@ func TestAllowedModels_NonModelRequestsReadNothing(t *testing.T) {
 		{"registry.npmjs.org", http.MethodPost, "/v1/messages"},
 		{"s3.us-east-1.amazonaws.com", http.MethodPost, "/model/x/invoke"},
 		{anthropicHost, http.MethodGet, "/v1/messages"},
-		{anthropicHost, http.MethodPost, "/v1/files"},
 	} {
 		req := httptest.NewRequest(tc.method, tc.path, failReader{t})
 		rec := httptest.NewRecorder()
@@ -424,7 +421,7 @@ func TestAllowedModels_ConfigLoadsAndOffByDefault(t *testing.T) {
 	}
 	// Unset is off, and is not written back (an older proxy refuses a key it does not know).
 	c, err := load(nil)
-	if err != nil || c.AllowedModels != nil || compileAllowedModels(c.AllowedModels) != nil {
+	if err != nil || c.AllowedModels != nil || compileAllowedModels(c.AllowedModels, nil) != nil {
 		t.Fatalf("unset must stay off: %+v %v", c, err)
 	}
 	if out, _ := json.Marshal(c); strings.Contains(string(out), "allowed_models") {
@@ -432,14 +429,14 @@ func TestAllowedModels_ConfigLoadsAndOffByDefault(t *testing.T) {
 	}
 	// A list loads and compiles to its set.
 	if c, err = load(map[string]any{"allowed_models": []string{"claude-sonnet-5"}}); err != nil || c.AllowedModels == nil ||
-		!compileAllowedModels(c.AllowedModels)["claude-sonnet-5"] {
+		!compileAllowedModels(c.AllowedModels, nil).models["claude-sonnet-5"] {
 		t.Fatalf("allowed_models did not load: %+v %v", c, err)
 	}
 	// `[]` loads, survives the wire, and compiles to a set that is not nil: on, and empty.
 	if c, err = load(map[string]any{"allowed_models": []string{}}); err != nil || c.AllowedModels == nil {
 		t.Fatalf("an empty list must load as set: %+v %v", c, err)
 	}
-	if set := compileAllowedModels(c.AllowedModels); set == nil || len(set) != 0 {
+	if set := compileAllowedModels(c.AllowedModels, nil); set == nil || len(set.models) != 0 {
 		t.Fatalf("an empty list must compile to a non-nil empty set, got %#v", set)
 	}
 	if out, _ := json.Marshal(c); !strings.Contains(string(out), `"allowed_models":[]`) {
@@ -476,7 +473,7 @@ func TestAllowedModels_EmptyListRefusesEveryModel(t *testing.T) {
 }
 
 // With the list set, a request on a model host that carries no checked model is refused unless it is
-// a read or a named model-free route; with the list unset every one of them is forwarded as ever.
+// a read; with the list unset every one of them is forwarded as ever.
 func TestAllowedModels_UncheckedRoutes(t *testing.T) {
 	const body = `{"model":"gpt-5"}`
 	for _, tc := range []struct {
@@ -499,8 +496,8 @@ func TestAllowedModels_UncheckedRoutes(t *testing.T) {
 		{"get models", http.MethodGet, llmOpenAIPrefix + "models", false},
 		{"get a batch", http.MethodGet, llmOpenAIPrefix + "batches/batch_1", false},
 		{"head", http.MethodHead, llmOpenAIPrefix + "models", false},
-		{"anthropic files", http.MethodPost, llmAnthropicPrefix + "files", false},
-		{"anthropic skills", http.MethodPost, llmAnthropicPrefix + "skills", false},
+		{"anthropic files", http.MethodPost, llmAnthropicPrefix + "files", true},
+		{"anthropic skills", http.MethodPost, llmAnthropicPrefix + "skills", true},
 		{"openai files stay batch input", http.MethodPost, llmOpenAIPrefix + "files", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -604,7 +601,6 @@ func TestAllowedModels_BatchRoutesRefused(t *testing.T) {
 		{"openai upload complete", http.MethodPost, llmOpenAIPrefix + "uploads/upload_abc/complete", true},
 		{"anthropic batch read", http.MethodGet, llmAnthropicPrefix + "messages/batches/msgbatch_1", false},
 		{"openai batch read", http.MethodGet, llmOpenAIPrefix + "batches/batch_1", false},
-		{"anthropic files untouched", http.MethodPost, llmAnthropicPrefix + "files", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, list := range [][]string{{"gpt-5"}, nil} {
@@ -719,6 +715,80 @@ func TestAllowedModels_PlainLane(t *testing.T) {
 			}
 			if tc.status != 200 && up.reached {
 				t.Fatal("a refused request must never reach the upstream")
+			}
+		})
+	}
+}
+
+// No route that names no model is let through while the list is set: a file or skill upload to a
+// model host is refused, unread, with a deny row under the gate's rule source, until a capture of
+// real harness traffic backs an exact path. A read still writes no row of its own.
+func TestAllowedModels_FileAndSkillUploadsRefused(t *testing.T) {
+	for _, rest := range []string{"v1/files", "v1/skills"} {
+		buf := &bytes.Buffer{}
+		p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{}),
+			Sink: &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}, Resolver: publicResolver{}})
+		p.allowedModels = modelSet([]string{"model-a"})
+		req := httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/"+rest, failReader{t})
+		rec := httptest.NewRecorder()
+		if _, refused := p.allowedModelRefused(rec, req, anthropicHost, 443, rest); !refused || rec.Code != http.StatusForbidden {
+			t.Fatalf("POST %s: refused = %v status = %d, want a 403", rest, refused, rec.Code)
+		}
+		d := lastDecision(t, buf)
+		if d.Decision != egress.Deny || d.RuleSource != ruleSourceAllowedModels {
+			t.Fatalf("POST %s: decision = %+v, want a deny row under %s", rest, d, ruleSourceAllowedModels)
+		}
+		buf.Reset()
+		get := httptest.NewRequest(http.MethodGet, "https://"+anthropicHost+"/"+rest, nil)
+		if _, refused := p.allowedModelRefused(httptest.NewRecorder(), get, anthropicHost, 443, rest); refused || buf.Len() != 0 {
+			t.Fatalf("GET %s was refused=%v or wrote %q", rest, refused, buf.String())
+		}
+	}
+}
+
+// The tunnel refusal is said in words a person can act on: no wire terms.
+func TestAllowedModels_TunnelRefusalNamesNoWireTerms(t *testing.T) {
+	for _, term := range []string{"mitm", "CA", "TLS", "tunnel"} {
+		if strings.Contains(opaqueModelTunnelRefusal, term) {
+			t.Errorf("the tunnel refusal %q says %q", opaqueModelTunnelRefusal, term)
+		}
+	}
+}
+
+// A plain absolute-URI request to a model host that a via_org grant serves is judged before it is
+// forwarded to the organisation, as its terminated twin is: an unlisted model is refused with a deny
+// row under the gate's rule source and never reaches the organisation; a listed one is forwarded.
+func TestAllowedModels_PlainViaOrgRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+	}{
+		{"refused", `{"model":"claude-opus-9","messages":[]}`, http.StatusForbidden},
+		{"allowed", `{"model":"claude-sonnet-5","messages":[]}`, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLaptopFixture(t)
+			f.p.viaOrgRoutes = append(f.p.viaOrgRoutes, ViaOrgRoute{GrantID: f.header, Host: anthropicHost})
+			f.p.allowedModels = modelSet([]string{"claude-sonnet-5"})
+			req, _ := http.NewRequest(http.MethodPost, "http://"+anthropicHost+"/v1/messages", strings.NewReader(tc.body))
+			resp := proxyDoHandler(t, f.p, req)
+			_ = readAll(t, resp)
+			if resp.StatusCode != tc.status {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, tc.status)
+			}
+			_ = f.p.sink.close(context.Background())
+			if tc.status == http.StatusOK {
+				if f.cpSeen != 1 {
+					t.Fatalf("the organisation saw %d requests, want the listed model forwarded", f.cpSeen)
+				}
+				return
+			}
+			if f.cpSeen != 0 || f.lHits != 0 {
+				t.Fatalf("a refused request reached the organisation (%d) or the laptop (%d)", f.cpSeen, f.lHits)
+			}
+			rows := f.sink.String()
+			if !strings.Contains(rows, `"decision":"deny"`) || !strings.Contains(rows, ruleSourceAllowedModels) {
+				t.Fatalf("no deny row under %s: %s", ruleSourceAllowedModels, rows)
 			}
 		})
 	}

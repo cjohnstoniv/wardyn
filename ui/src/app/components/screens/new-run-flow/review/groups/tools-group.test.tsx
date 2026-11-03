@@ -59,3 +59,60 @@ describe("Review: the count line for Autonomous harnesses", () => {
     expect(screen.getByText("1 of 2 harnesses start automatically")).toBeInTheDocument();
   });
 });
+
+describe("Review: the allowed models line", () => {
+  const draft = { ...initialDraft("alice"), intent: INTENT };
+  const harness = (id: string, model?: string, fast_model?: string) => ({
+    id,
+    starts: id === "claude-code",
+    model_credential: { provider: "Provider A", kind: "custom_endpoint", residency: "elsewhere", model, fast_model },
+  });
+  const show = (pre: Record<string, unknown> | null) =>
+    render(<ToolsGroup draft={draft} pre={pre as never} preview={null} docRows={[]} go={vi.fn()} dispatch={vi.fn()} />);
+
+  it("adds nothing when no limit binds the run", () => {
+    show({ harness_set: { harnesses: [harness("claude-code", "model-a")], shared_model_access: false } });
+    expect(screen.queryByTestId("review-allowed-models")).toBeNull();
+  });
+
+  it("names the models and what reads them, and warns for none while every harness model is listed", () => {
+    show({ allowed_models: ["model-a", "small-model-a"], harness_set: { harnesses: [harness("claude-code", "model-a", "small-model-a")], shared_model_access: false } });
+    const line = screen.getByTestId("review-allowed-models");
+    expect(line).toHaveTextContent("Your organisation limits the models this run may use: model-a, small-model-a.");
+    expect(line).toHaveTextContent("The run's proxy reads each model request to check its model.");
+    expect(screen.queryByTestId("review-allowed-models-warning")).toBeNull();
+  });
+
+  it("warns in amber, without blocking, for a harness model off the list", () => {
+    show({ allowed_models: ["model-a"], harness_set: { harnesses: [harness("claude-code", "model-b", "model-a"), harness("codex-cli", "model-c")], shared_model_access: false } });
+    const warnings = screen.getAllByTestId("review-allowed-models-warning");
+    expect(warnings.map((w) => w.textContent)).toEqual([
+      "claude-code on Provider A is set to use model-b, which is not on that list. Its requests will be refused.",
+      "codex-cli on Provider A is set to use model-c, which is not on that list. Its requests will be refused.",
+    ]);
+    expect(warnings[0]).toHaveClass("text-warning");
+  });
+
+  it("reads the list off the policy preview when the preflight has none", () => {
+    render(
+      <ToolsGroup
+        draft={draft}
+        pre={null}
+        preview={{ allowed_models: ["model-a"], allowed_models_profile: "Interns" } as never}
+        docRows={[]}
+        go={vi.fn()}
+        dispatch={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("review-allowed-models")).toHaveTextContent("model-a");
+    expect(screen.getByTestId("review-allowed-models")).toHaveTextContent("Governance · Interns");
+  });
+
+  it("names the profile that sets the list on the Governance chip, and shows no chip without a name", () => {
+    const { unmount } = show({ allowed_models: ["model-a"], allowed_models_profile: "Contractors" });
+    expect(screen.getByTestId("review-allowed-models")).toHaveTextContent("Governance · Contractors");
+    unmount();
+    show({ allowed_models: ["model-a"] });
+    expect(screen.getByTestId("review-allowed-models")).not.toHaveTextContent("Governance ·");
+  });
+});
