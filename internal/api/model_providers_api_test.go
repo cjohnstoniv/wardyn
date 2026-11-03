@@ -528,6 +528,24 @@ func TestSetupStatusModelProviders(t *testing.T) {
 		}
 	})
 
+	t.Run("a sign-in provider carries its row uid for a member, and no other row does", func(t *testing.T) {
+		in := endpointProvider()
+		in.ID, in.UID = "corp-sso", "uid-corp-sso"
+		in.OIDC = &types.ProviderOIDC{Issuer: "https://sso.corp.example", ClientID: "wardyn"}
+		plain := endpointProvider()
+		plain.ID, plain.UID = "plain-gateway", "uid-plain"
+		withSignIn := site
+		withSignIn.ModelProviders = providerBlock(in, plain)
+		w := doSSO(t, modelProvidersStatusSrv(t, withSignIn, &capStore{}), http.MethodGet, "/api/v1/setup/status", member, "")
+		got := statusModelProviders(t, w.Body.Bytes())
+		if len(got) != 2 || got[0].UID != "uid-corp-sso" || got[0].SignIn != "oidc" || got[1].UID != "" {
+			t.Errorf("model_providers = %+v; want the sign-in row to carry uid-corp-sso and the plain row none", got)
+		}
+		if strings.Contains(w.Body.String(), "uid-plain") {
+			t.Errorf("a row that does not sign people in published its uid: %s", w.Body.String())
+		}
+	})
+
 	// review round 3, R3-1: a caller granted no provider at all is the case
 	// the omitzero fix targets — the block exists (this test's own site
 	// config), so the key is present as `[]`, distinct from no block at all.

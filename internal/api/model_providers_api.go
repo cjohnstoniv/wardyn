@@ -317,7 +317,11 @@ func authHeader(a *types.ProviderAuth) string {
 // header scheme or UID. Built the same for admins and members, so there is
 // nothing for the member redaction to strip.
 type SetupModelProvider struct {
-	ID   string `json:"id"`
+	ID string `json:"id"`
+	// UID is the row's own id, published for a sign-in row only: the one in its sign-in URL and in a held run's
+	// approval scope, so a person's console can name the provider such a request is for. Other rows keep it off
+	// the member-readable status.
+	UID  string `json:"uid,omitempty"`
 	Name string `json:"name,omitempty"`
 	Kind string `json:"kind"`
 	// Disabled is published, never hidden: a turned-off default is why this
@@ -354,7 +358,7 @@ func (s *Server) setupModelProviders(ctx context.Context, sc types.SiteConfig) [
 		row := SetupModelProvider{ID: p.ID, Name: p.Name, Kind: string(p.Kind), Disabled: p.Disabled,
 			Harnesses: []string{}, Host: providerHost(p)}
 		if p.OIDC != nil && p.Kind == types.ModelProviderCustomEndpoint {
-			row.SignIn, row.IdentityBinding = "oidc", p.OIDC.Binding()
+			row.SignIn, row.IdentityBinding, row.UID = "oidc", p.OIDC.Binding(), p.UID
 		}
 		for _, h := range p.Harnesses {
 			if !launchable(h.Harness) {

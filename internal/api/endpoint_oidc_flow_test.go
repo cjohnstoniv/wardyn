@@ -477,7 +477,7 @@ func TestEndpointOIDC_PersonBinding(t *testing.T) {
 		f := newOIDCFlow(t, "")
 		f.env.ConsoleIssuer = "https://the-consoles-own-login.example"
 		_, w := f.capture(t, oidcPersonSub)
-		if w.Header().Get("Location") != f.errorRedirect(reasonADOCallbackIdentityBinding) {
+		if w.Header().Get("Location") != f.errorRedirect(reasonEndpointOIDCIssuerMismatch) {
 			t.Fatalf("Location %q", w.Header().Get("Location"))
 		}
 		if _, found := f.stored(t, oidcPersonSub); found {
@@ -487,7 +487,7 @@ func TestEndpointOIDC_PersonBinding(t *testing.T) {
 	t.Run("console binding with no console issuer refuses", func(t *testing.T) {
 		f := newOIDCFlow(t, "")
 		f.env.ConsoleIssuer = ""
-		if _, w := f.capture(t, oidcPersonSub); w.Header().Get("Location") != f.errorRedirect(reasonADOCallbackIdentityBinding) {
+		if _, w := f.capture(t, oidcPersonSub); w.Header().Get("Location") != f.errorRedirect(reasonEndpointOIDCIssuerMismatch) {
 			t.Fatalf("Location %q", w.Header().Get("Location"))
 		}
 	})
