@@ -563,7 +563,7 @@ func TestKeptMachineEraseAllTearsDownAndDeletes(t *testing.T) {
 	if _, err := r.d.CreateSandbox(context.Background(), spec); err != nil {
 		t.Fatal(err)
 	}
-	writeKeptFolder(t, r, macvm.KeptRecord{ID: uuid.NewString(), OwnerHash: keptOwnerHash, RunnerID: "runner-a"})
+	keptStaging(t, writeKeptFolder(t, r, macvm.KeptRecord{ID: uuid.NewString(), OwnerHash: keptOwnerHash, RunnerID: "runner-a"}))
 	if err := os.MkdirAll(filepath.Join(r.c.Layout.KeptDir(), "debris"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -579,22 +579,28 @@ func TestKeptMachineEraseAllTearsDownAndDeletes(t *testing.T) {
 	}
 }
 
-// keptTools is a fake tools updater: it records the folders it was handed and whether each was locked.
+// keptTools is a fake tools updater that does what the real one does with the machine's lock: it takes it
+// itself, refused while another holds it. It records, per call, whether the lock was free.
 type keptTools struct {
-	dirs   []string
-	locked []bool
-	err    error
+	dirs []string
+	free []bool
+	err  error
 }
 
 func (k *keptTools) UpdateKeptTools(_ context.Context, dir string) error {
-	locked, _ := macvm.KeptLocked(dir)
-	k.dirs, k.locked = append(k.dirs, dir), append(k.locked, locked)
+	unlock, err := macvm.LockKept(dir)
+	k.dirs, k.free = append(k.dirs, dir), append(k.free, err == nil)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return k.err
 }
 
-// A resume runs the tools update on the machine's own folder under its lock, before the helper starts; a
-// failed update does not start the machine. A new machine and a reset are not updated.
-func TestKeptResumeUpdatesToolsUnderTheLock(t *testing.T) {
+// A resume runs the tools update on the machine's own folder before its boot, with the machine's lock free
+// for the update to take; the boot then holds the lock. A failed update does not start the machine, and
+// one whose lock another holds reads as running. A new machine is not updated.
+func TestKeptResumeUpdatesToolsBeforeTheBootLock(t *testing.T) {
 	r, g := newKeptRig(t)
 	tools := &keptTools{}
 	r.c.Tools = tools
@@ -608,6 +614,10 @@ func TestKeptResumeUpdatesToolsUnderTheLock(t *testing.T) {
 	if _, err := r.d.CreateSandbox(context.Background(), keptSpec(id, macvm.KeptResume)); err == nil || err.Error() != keptSaidTools {
 		t.Fatalf("a failed update: %v", err)
 	}
+	tools.err = macvm.ErrKeptLocked
+	if _, err := r.d.CreateSandbox(context.Background(), keptSpec(id, macvm.KeptResume)); err == nil || err.Error() != keptSaidLocked {
+		t.Fatalf("an update that found the machine locked: %v", err)
+	}
 	if _, spawns := g.counts(); spawns != spawned {
 		t.Fatal("a machine whose update failed was started")
 	}
@@ -617,9 +627,96 @@ func TestKeptResumeUpdatesToolsUnderTheLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = r.d.StopSandbox(context.Background(), sb.Ref) }()
-	if len(tools.dirs) != 2 || tools.dirs[1] != dir || !tools.locked[0] || !tools.locked[1] {
-		t.Fatalf("updates %v, locked %v", tools.dirs, tools.locked)
+	if len(tools.dirs) != 3 || tools.dirs[2] != dir || !tools.free[0] || !tools.free[1] || !tools.free[2] {
+		t.Fatalf("updates %v, lock free %v", tools.dirs, tools.free)
 	}
+	if locked, err := macvm.KeptLocked(dir); err != nil || !locked {
+		t.Fatalf("the boot after the update does not hold the machine's lock: %v %v", locked, err)
+	}
+}
+
+// keptStaging writes a tools update's staging beside a machine's folder, as an update leaves it: a copy of
+// the folder's record, and the staging's lock file.
+func keptStaging(t *testing.T, dir string) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, macvm.KeptFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir+keptUpdateSuffix, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for path, body := range map[string][]byte{filepath.Join(dir+keptUpdateSuffix, macvm.KeptFile): b, dir + keptUpdateSuffix + ".lock": nil} {
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func keptExists(p string) bool { _, err := os.Lstat(p); return err == nil }
+
+// A tools update's staging, <key>.update and its lock, is never a machine: the inventory does not list it,
+// the sweep never deletes it while its machine's lock is held, even for a machine it deletes otherwise, and
+// removes it, stale, only holding that lock. A deleted machine takes its staging with it.
+func TestKeptUpdateStagingIsNotAMachine(t *testing.T) {
+	r, _ := newKeptRig(t)
+	future := time.Now().Add(time.Hour)
+	foreign := writeKeptFolder(t, r, macvm.KeptRecord{ID: uuid.NewString(), OwnerHash: keptOwnerHash, RunnerID: "runner-b", ExpiresAt: future})
+	current := writeKeptFolder(t, r, macvm.KeptRecord{ID: uuid.NewString(), OwnerHash: keptOwnerHash, RunnerID: "runner-a", ExpiresAt: future})
+	keptStaging(t, foreign)
+	keptStaging(t, current)
+	k, err := r.d.KeptMachines()
+	if err != nil || len(k.Machines) != 2 || k.WorstBytes != 2*(51<<30) {
+		t.Fatalf("inventory with update staging %+v %v", k, err)
+	}
+	// Both machines held: nothing goes, the foreign one and either staging included.
+	unlockF, err := macvm.LockKept(foreign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlockC, err := macvm.LockKept(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.d.SweepKeptMachines(); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{foreign, foreign + keptUpdateSuffix, foreign + keptUpdateSuffix + ".lock", current + keptUpdateSuffix} {
+		if !keptExists(p) {
+			t.Fatalf("the sweep deleted %s while its machine was held", p)
+		}
+	}
+	unlockF()
+	unlockC()
+	// Free: the foreign machine goes with its staging; the current one stays and loses its stale staging.
+	if err := r.d.SweepKeptMachines(); err != nil {
+		t.Fatal(err)
+	}
+	for p, want := range map[string]bool{foreign: false, foreign + keptUpdateSuffix: false, foreign + keptUpdateSuffix + ".lock": false, foreign + ".lock": false,
+		current: true, current + keptUpdateSuffix: false, current + keptUpdateSuffix + ".lock": false} {
+		if keptExists(p) != want {
+			t.Errorf("%s present=%v after the sweep, want %v", p, !want, want)
+		}
+	}
+	// The delete op takes a machine's staging too.
+	id := uuid.MustParse(readKeptID(t, current))
+	keptStaging(t, current)
+	if out, err := r.d.DeleteKeptMachine(context.Background(), id, "owner"); err != nil || out != runnerwire.KeptMachineDeleted {
+		t.Fatalf("delete: %q %v", out, err)
+	}
+	if keptExists(current+keptUpdateSuffix) || keptExists(current+keptUpdateSuffix+".lock") {
+		t.Fatal("a deleted machine left its update staging")
+	}
+}
+
+func readKeptID(t *testing.T, dir string) string {
+	t.Helper()
+	var rec macvm.KeptRecord
+	b, err := os.ReadFile(filepath.Join(dir, macvm.KeptFile))
+	if err != nil || json.Unmarshal(b, &rec) != nil {
+		t.Fatalf("record in %s: %v", dir, err)
+	}
+	return rec.ID
 }
 
 // A spec with no idle days, or a nonsense count, still makes a machine with an expiry this Mac enforces:

@@ -47,7 +47,8 @@ type KeptConfig struct {
 }
 
 // KeptToolsUpdater updates the guest agent and pinned harness CLIs on a kept machine's disk, in its
-// folder, when the machine's tools are behind this Mac's. The runner holds the machine's lock around it.
+// folder, when the machine's tools are behind this Mac's. It takes the machine's lock itself (ErrKeptLocked
+// when a boot holds it), so the runner calls it unlocked, before the boot.
 type KeptToolsUpdater interface {
 	UpdateKeptTools(ctx context.Context, keptDir string) error
 }
@@ -221,21 +222,17 @@ func (c *MacVMConfig) keptRun(spec runner.SandboxSpec) *macvm.KeptRun {
 		Base: cmp.Or(spec.MacOSBase, macvm.StandardBase), IdleDays: keptIdleDays(k.IdleDays)}
 }
 
-// updateKeptTools runs the tools update on a resumed machine's folder, under the machine's lock so no boot
-// runs beside it. A machine whose update fails does not start.
+// updateKeptTools runs the tools update on a resumed machine's folder before its boot. The runner holds no
+// lock around it: the update takes the machine's lock itself, so no boot runs beside it, and the boot that
+// follows takes it again. A machine whose update fails does not start; one another boot holds is locked.
 func (c *MacVMConfig) updateKeptTools(ctx context.Context, spec runner.SandboxSpec, dir string) error {
 	if c.Tools == nil {
 		return nil
 	}
-	unlock, err := macvm.LockKept(dir)
-	if errors.Is(err, macvm.ErrKeptLocked) {
+	spec.NotifyWaiting(runner.MacOSStartDetail(runner.MacOSCloning))
+	if err := c.Tools.UpdateKeptTools(ctx, dir); errors.Is(err, macvm.ErrKeptLocked) {
 		return keptRefusal(keptSaidLocked)
 	} else if err != nil {
-		return fmt.Errorf("docker: kept machine %s: %w", spec.KeptMachine.ID, err)
-	}
-	defer unlock()
-	spec.NotifyWaiting(runner.MacOSStartDetail(runner.MacOSCloning))
-	if err := c.Tools.UpdateKeptTools(ctx, dir); err != nil {
 		slog.Warn("docker: update a kept machine's tools", slog.String("machine_id", spec.KeptMachine.ID.String()), slog.String("err", err.Error()))
 		return keptRefusal(keptSaidTools)
 	}
@@ -274,14 +271,14 @@ func (c *MacVMConfig) undoKeptNew(spec runner.SandboxSpec) {
 	if rec, err := macvm.ReadKept(dir, k.ID.String()); err != nil || rec.OwnerHash != k.OwnerHash || rec.RunnerID != c.RunnerID {
 		return
 	}
-	if _, err := macvm.RemoveKept(dir); err != nil {
+	if _, err := removeKept(dir); err != nil {
 		slog.Warn("docker: delete a kept machine whose create failed", slog.String("machine_id", k.ID.String()), slog.String("err", err.Error()))
 	}
 }
 
 // removeExpiredKept deletes a machine past its expiry; a machine a boot holds is left to the next sweep.
 func (c *MacVMConfig) removeExpiredKept(dir string, id uuid.UUID) {
-	if _, err := macvm.RemoveKept(dir); err != nil {
+	if _, err := removeKept(dir); err != nil {
 		slog.Warn("docker: delete an expired kept machine", slog.String("machine_id", id.String()), slog.String("err", err.Error()))
 		return
 	}
@@ -372,7 +369,7 @@ func (d *Driver) DeleteKeptMachine(_ context.Context, id uuid.UUID, by string) (
 	case err != nil:
 		return "", fmt.Errorf("docker: kept machine %s: %w", id, err)
 	}
-	gone, err := macvm.RemoveKept(dir)
+	gone, err := removeKept(dir)
 	switch {
 	case errors.Is(err, macvm.ErrKeptLocked):
 		return "", fmt.Errorf("docker: kept machine %s is running on this Mac", id)
@@ -403,7 +400,7 @@ func (c *MacVMConfig) keptFolders() ([]keptFolder, error) {
 	}
 	var out []keptFolder
 	for _, de := range des {
-		if !de.IsDir() {
+		if !de.IsDir() || !isKeptKey(de.Name()) {
 			continue
 		}
 		dir := filepath.Join(c.Layout.KeptDir(), de.Name())
@@ -418,6 +415,85 @@ func (c *MacVMConfig) keptFolders() ([]keptFolder, error) {
 		out = append(out, keptFolder{dir: dir, rec: rec})
 	}
 	return out, nil
+}
+
+// isKeptKey reports whether name is a kept machine's folder: its key, 12 hex digits (macvm.RunKey). The
+// kept folder also holds each machine's lock and a tools update's staging, <key>.update and its lock, which
+// are never machines.
+func isKeptKey(name string) bool {
+	if len(name) != macvm.RunKeyLen {
+		return false
+	}
+	for _, r := range name {
+		if !('0' <= r && r <= '9' || 'a' <= r && r <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// keptUpdateSuffix names a tools update's staging beside a kept machine's folder (<key>.update), and with
+// ".lock" its lock.
+const keptUpdateSuffix = ".update"
+
+// removeKept deletes a kept machine, holding its lock throughout as macvm.RemoveKept does, and with it a
+// tools update's staging the update left (no update runs while the lock is held): the staging and its
+// lock, the folder, then the folder's lock file. ErrKeptLocked while a boot or an update holds it; false
+// with no error when there was no folder.
+func removeKept(dir string) (bool, error) {
+	unlock, err := macvm.LockKept(dir)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	if err := removeKeptUpdate(dir); err != nil {
+		return false, err
+	}
+	_, serr := os.Lstat(dir)
+	if err := os.RemoveAll(dir); err != nil {
+		return false, err
+	}
+	if err := os.Remove(dir + ".lock"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return true, err
+	}
+	return serr == nil, nil
+}
+
+// removeKeptUpdate deletes dir's tools update staging and its lock, holding that lock too; the caller holds
+// dir's lock, so the staging is one a finished or crashed update left. ErrKeptLocked while an update has it.
+func removeKeptUpdate(dir string) error {
+	staging := dir + keptUpdateSuffix
+	unlock, err := macvm.LockKept(staging)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := os.RemoveAll(staging); err != nil {
+		return err
+	}
+	if err := os.Remove(staging + ".lock"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// sweepKeptUpdate deletes a tools update's staging a kept machine's update left, only while it can hold the
+// machine's lock: a machine a boot or an update holds keeps it.
+func sweepKeptUpdate(dir string) error {
+	if _, err := os.Lstat(dir + keptUpdateSuffix); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	unlock, err := macvm.LockKept(dir)
+	if errors.Is(err, macvm.ErrKeptLocked) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := removeKeptUpdate(dir); err != nil && !errors.Is(err, macvm.ErrKeptLocked) {
+		return err
+	}
+	return nil
 }
 
 // keptWorst is a kept machine's worst case on the disk: its disk's logical size plus what a run reserves
@@ -499,9 +575,12 @@ func (d *Driver) SweepKeptMachines() error {
 	for _, f := range folders {
 		expired := !f.rec.ExpiresAt.IsZero() && now.After(f.rec.ExpiresAt)
 		if !expired && f.rec.RunnerID == c.RunnerID {
+			if err := sweepKeptUpdate(f.dir); err != nil {
+				errs = append(errs, fmt.Errorf("docker: delete kept machine %s's update staging: %w", f.rec.ID, err))
+			}
 			continue
 		}
-		gone, err := macvm.RemoveKept(f.dir)
+		gone, err := removeKept(f.dir)
 		switch {
 		case errors.Is(err, macvm.ErrKeptLocked):
 			continue
@@ -516,7 +595,8 @@ func (d *Driver) SweepKeptMachines() error {
 }
 
 // EraseKeptMachines deletes every kept machine on this Mac, for a revoked runner: a VM booted from one is
-// torn down first, then every folder in the kept folder goes, recorded or not, each under its lock.
+// torn down first, then every machine folder goes, recorded or not, under its lock and with its update
+// staging. Any other folder left in the kept folder goes too.
 func (d *Driver) EraseKeptMachines(ctx context.Context) error {
 	c := d.macVMConfig()
 	if c == nil {
@@ -536,17 +616,25 @@ func (d *Driver) EraseKeptMachines(ctx context.Context) error {
 		return fmt.Errorf("docker: read the kept machines: %w", err)
 	}
 	var errs []error
+	keys := map[string]bool{}
 	for _, de := range kept {
-		if !de.IsDir() {
-			continue
+		switch key := strings.TrimSuffix(strings.TrimSuffix(de.Name(), ".lock"), keptUpdateSuffix); {
+		case isKeptKey(key):
+			keys[key] = true // the machine, its lock, its update staging or that staging's lock
+		case de.IsDir():
+			if err := os.RemoveAll(filepath.Join(c.Layout.KeptDir(), de.Name())); err != nil {
+				errs = append(errs, fmt.Errorf("docker: erase %s in the kept folder: %w", de.Name(), err))
+			}
 		}
-		if _, err := macvm.RemoveKept(filepath.Join(c.Layout.KeptDir(), de.Name())); err != nil {
-			errs = append(errs, fmt.Errorf("docker: erase kept machine folder %s: %w", de.Name(), err))
+	}
+	for key := range keys {
+		if _, err := removeKept(filepath.Join(c.Layout.KeptDir(), key)); err != nil {
+			errs = append(errs, fmt.Errorf("docker: erase kept machine folder %s: %w", key, err))
 		}
 	}
 	c.changed()
 	if len(errs) == 0 {
-		slog.Info("docker: erased this Mac's kept machines", slog.Int("folders", len(kept)))
+		slog.Info("docker: erased this Mac's kept machines", slog.Int("machines", len(keys)))
 	}
 	return errors.Join(errs...)
 }
