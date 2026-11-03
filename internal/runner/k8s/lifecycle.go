@@ -62,7 +62,7 @@ func (d *Driver) replacedPodStatus(ctx context.Context, ns string, pod *corev1.P
 	if !d.cfg.AgentSandbox {
 		return runner.Status{}, false, nil
 	}
-	if replaced, err = d.agentPodReplaced(ctx, ns, pod); err != nil || !replaced {
+	if replaced, _, err = d.agentPodReplaced(ctx, ns, pod); err != nil || !replaced {
 		return runner.Status{}, false, err
 	}
 	return runner.Status{State: types.RunFailed, Message: agentPodReplacedMessage, FailureHint: agentPodReplacedMessage}, true, nil
@@ -73,29 +73,38 @@ func (d *Driver) replacedPodStatus(ctx context.Context, ns string, pod *corev1.P
 // pod is one the controller made again from the template), a label the run's NetworkPolicies select
 // is missing or changed (an unselected pod is default-allow), or a container or init container runs
 // an image other than the one the run's Sandbox template asked for, or the Sandbox's spec changed after
-// create (sandboxSpecChanged). The selected labels come from the run id, never from the Sandbox, whose
-// template labels the controller copies onto the live pod. A Sandbox already gone gives no images to
-// compare: its pod is being collected with it.
-func (d *Driver) agentPodReplaced(ctx context.Context, ns string, pod *corev1.Pod) (bool, error) {
+// create (sandboxSpecChanged), or the Sandbox is being deleted (deleting is then true too). The
+// selected labels come from the run id, never from the Sandbox, whose template labels the controller
+// copies onto the live pod. A Sandbox already gone gives no images to compare: its pod is being
+// collected with it.
+//
+// A Sandbox being deleted is not trusted: a finalizer can hold it, with its pod running, for as long
+// as it likes, and setting its deletion time adds one to its generation, so the generation can no
+// longer tell. Wardyn's own teardown ends the run before it deletes the Sandbox, so only a run
+// something else is deleting reads ended by it.
+func (d *Driver) agentPodReplaced(ctx context.Context, ns string, pod *corev1.Pod) (replaced, deleting bool, err error) {
 	runID, err := runIDFromAgentPodName(pod.Name)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if agentPodGated(pod) || !hasAgentLabels(pod.Labels, runID) {
-		return true, nil
+		return true, false, nil
 	}
 	sb, err := d.dynamic.Resource(sandboxesGVR).Namespace(ns).Get(ctx, pod.Name, metav1.GetOptions{})
 	if isNotFound(err) {
-		return false, nil
+		return false, false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("read agent sandbox: %w", err)
+		return false, false, fmt.Errorf("read agent sandbox: %w", err)
+	}
+	if sb.GetDeletionTimestamp() != nil {
+		return true, true, nil
 	}
 	if sandboxSpecChanged(sb) {
-		return true, nil
+		return true, false, nil
 	}
 	return !slices.Equal(containerImages(pod.Spec.Containers), templateImages(sb, "containers")) ||
-		!slices.Equal(containerImages(pod.Spec.InitContainers), templateImages(sb, "initContainers")), nil
+		!slices.Equal(containerImages(pod.Spec.InitContainers), templateImages(sb, "initContainers")), false, nil
 }
 
 func agentPodGated(pod *corev1.Pod) bool { return len(pod.Spec.SchedulingGates) > 0 }
@@ -104,12 +113,9 @@ func agentPodGated(pod *corev1.Pod) bool { return len(pod.Spec.SchedulingGates) 
 // Sandbox's generation to 1 on create and adds one for each spec change; Wardyn never changes a Sandbox
 // it created, and the controller writes only its status subresource, which leaves the generation alone.
 // So a generation past 1 is a change from outside, such as an image swapped in the template, which
-// changes the pod and the template alike and so passes the image comparison. A Sandbox already being
-// deleted is not asked: setting its deletion time can add one too, and its pod goes with it. A fake
-// client sets no generation, so 0 reads as unchanged; the API server never returns 0.
-func sandboxSpecChanged(sb *unstructured.Unstructured) bool {
-	return sb.GetDeletionTimestamp() == nil && sb.GetGeneration() > 1
-}
+// changes the pod and the template alike and so passes the image comparison. A fake client sets no
+// generation, so 0 reads as unchanged; the API server never returns 0.
+func sandboxSpecChanged(sb *unstructured.Unstructured) bool { return sb.GetGeneration() > 1 }
 
 // hasAgentLabels reports whether labels carry every label runID's NetworkPolicies select its agent by.
 func hasAgentLabels(labels map[string]string, runID uuid.UUID) bool {

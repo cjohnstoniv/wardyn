@@ -209,16 +209,21 @@ func TestAgentSandboxLifecycle_PodWithoutItsSandboxReadsByPhase(t *testing.T) {
 // An image swapped in the Sandbox template changes the pod and the template alike, so only the
 // Sandbox's generation shows it: the API server sets 1 on create, and Wardyn never changes a Sandbox.
 // The fake client sets none, which reads as unchanged; generation 1 is the real API's created Sandbox.
+// A Sandbox being deleted reads ended whatever its images: a finalizer can hold it with its pod
+// running, setting its deletion time adds one to its generation, and its pod is going with it. Wait
+// reads it as a gone pod, so a run Wardyn's own teardown already ended is not ended twice.
 func TestAgentSandboxLifecycle_ChangedSandboxSpecReadsFailed(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		gen      int64
 		deleting bool
+		swap     bool
 		want     types.RunState
 	}{
-		{"created, as the API server leaves it", 1, false, types.RunRunning},
-		{"spec changed after create", 2, false, types.RunFailed},
-		{"being deleted", 2, true, types.RunRunning},
+		{"created, as the API server leaves it", 1, false, true, types.RunRunning},
+		{"spec changed after create", 2, false, true, types.RunFailed},
+		{"being deleted, images swapped", 2, true, true, types.RunFailed},
+		{"being deleted, images unchanged", 2, true, false, types.RunFailed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d, cs, dyn, ref := asAdmitted(t)
@@ -233,15 +238,19 @@ func TestAgentSandboxLifecycle_ChangedSandboxSpecReadsFailed(t *testing.T) {
 				sb.SetDeletionTimestamp(&now)
 			}
 			const swapped = "registry.example/other:1"
-			containers, _, _ := unstructured.NestedSlice(sb.Object, "spec", "podTemplate", "spec", "containers")
-			containers[0].(map[string]any)["image"] = swapped
-			if err := unstructured.SetNestedSlice(sb.Object, containers, "spec", "podTemplate", "spec", "containers"); err != nil {
-				t.Fatalf("set template containers: %v", err)
+			if tc.swap {
+				containers, _, _ := unstructured.NestedSlice(sb.Object, "spec", "podTemplate", "spec", "containers")
+				containers[0].(map[string]any)["image"] = swapped
+				if err := unstructured.SetNestedSlice(sb.Object, containers, "spec", "podTemplate", "spec", "containers"); err != nil {
+					t.Fatalf("set template containers: %v", err)
+				}
 			}
 			if err := dyn.Tracker().Update(sandboxesGVR, sb, testNamespace); err != nil {
 				t.Fatalf("update Sandbox: %v", err)
 			}
-			changeAgentPod(t, cs, ref, func(p *corev1.Pod) { p.Spec.Containers[0].Image = swapped })
+			if tc.swap {
+				changeAgentPod(t, cs, ref, func(p *corev1.Pod) { p.Spec.Containers[0].Image = swapped })
+			}
 			ctx := context.Background()
 			for name, read := range map[string]func() (runner.Status, error){
 				"Status":      func() (runner.Status, error) { return d.Status(ctx, ref) },
@@ -256,6 +265,13 @@ func TestAgentSandboxLifecycle_ChangedSandboxSpecReadsFailed(t *testing.T) {
 				}
 				if replaced := st.FailureHint == agentPodReplacedMessage; replaced != (tc.want == types.RunFailed) {
 					t.Errorf("%s = %+v; want the replaced-pod sentence only for a changed spec", name, st)
+				}
+			}
+			if tc.deleting {
+				wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+				if code, err := d.Wait(wctx, ref); err != nil || code != notFoundExitCode {
+					t.Errorf("Wait = %d, %v; want %d, nil, as for a gone pod", code, err, notFoundExitCode)
 				}
 			}
 		})
