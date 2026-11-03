@@ -21,8 +21,8 @@ import (
 const myMachinesPath = "/api/v1/me/machines"
 
 var (
-	machinesUsed    = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
-	machinesExpires = time.Date(2026, 12, 1, 12, 0, 0, 0, time.UTC)
+	machinesUsed    = time.Now().UTC().Truncate(time.Hour).Add(-48 * time.Hour)
+	machinesExpires = time.Now().UTC().Truncate(time.Hour).Add(30 * 24 * time.Hour)
 )
 
 func keptMachine(name string, state types.KeptMachineState) sdk.KeptMachine {
