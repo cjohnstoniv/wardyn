@@ -179,6 +179,9 @@ type CreateRunRequest struct {
 	// member drives and storage.user_drive.member_create.keep_main_drive is on.
 	// Whatever the agent leaves in the folder comes back in that later run.
 	KeepWorkFolder bool `json:"keep_work_folder,omitempty"`
+	// Machine keeps this macOS VM run's machine for next time, or starts the run from one kept earlier.
+	// Only a macOS VM run on the person's own Mac sends it.
+	Machine *RunMachine `json:"machine,omitempty"`
 	// Components attaches custom components to this run: each entry names a
 	// stored component by id or carries a run-only definition inline. Nil and
 	// empty are the same and attach nothing, byte for byte today.

@@ -86,6 +86,32 @@ const (
 	// the window: the org ends the window by resetting or closing it, and the runner ends the stream when
 	// the window ends first.
 	MethodMacWindow = "mac_window"
+	// MethodKeptMachine acts on one kept machine's folder on the Mac (KeptMachineArgs), answered with
+	// KeptMachineResult. It is sent only to a runner whose caps carry MacVMCaps.KeptMachines.
+	MethodKeptMachine = "kept_machine"
+)
+
+// KeptMachineOpDelete is kept_machine's one op.
+const KeptMachineOpDelete = "delete"
+
+// KeptMachineArgs is kept_machine's input. By says who asked, for the runner's log: the owner, an admin,
+// erasure, expiry or a revoked runner.
+type KeptMachineArgs struct {
+	Op string `json:"op"`
+	ID string `json:"id"`
+	By string `json:"by,omitempty"`
+}
+
+// KeptMachineResult is kept_machine's answer. Outcome is KeptMachineDeleted, or KeptMachineAlreadyAbsent
+// when the Mac holds no such folder; both end the delete.
+type KeptMachineResult struct {
+	Outcome string `json:"outcome"`
+}
+
+// KeptMachineResult.Outcome values.
+const (
+	KeptMachineDeleted       = "deleted"
+	KeptMachineAlreadyAbsent = "already_absent"
 )
 
 // MacWindowArgs is mac_window's input. GrantID names the org's grant for this one open (the helper logs
