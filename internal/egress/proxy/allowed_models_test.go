@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -752,5 +753,44 @@ func TestAllowedModels_TunnelRefusalNamesNoWireTerms(t *testing.T) {
 		if strings.Contains(opaqueModelTunnelRefusal, term) {
 			t.Errorf("the tunnel refusal %q says %q", opaqueModelTunnelRefusal, term)
 		}
+	}
+}
+
+// A plain absolute-URI request to a model host that a via_org grant serves is judged before it is
+// forwarded to the organisation, as its terminated twin is: an unlisted model is refused with a deny
+// row under the gate's rule source and never reaches the organisation; a listed one is forwarded.
+func TestAllowedModels_PlainViaOrgRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+	}{
+		{"refused", `{"model":"claude-opus-9","messages":[]}`, http.StatusForbidden},
+		{"allowed", `{"model":"claude-sonnet-5","messages":[]}`, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLaptopFixture(t)
+			f.p.viaOrgRoutes = append(f.p.viaOrgRoutes, ViaOrgRoute{GrantID: f.header, Host: anthropicHost})
+			f.p.allowedModels = modelSet([]string{"claude-sonnet-5"})
+			req, _ := http.NewRequest(http.MethodPost, "http://"+anthropicHost+"/v1/messages", strings.NewReader(tc.body))
+			resp := proxyDoHandler(t, f.p, req)
+			_ = readAll(t, resp)
+			if resp.StatusCode != tc.status {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, tc.status)
+			}
+			_ = f.p.sink.close(context.Background())
+			if tc.status == http.StatusOK {
+				if f.cpSeen != 1 {
+					t.Fatalf("the organisation saw %d requests, want the listed model forwarded", f.cpSeen)
+				}
+				return
+			}
+			if f.cpSeen != 0 || f.lHits != 0 {
+				t.Fatalf("a refused request reached the organisation (%d) or the laptop (%d)", f.cpSeen, f.lHits)
+			}
+			rows := f.sink.String()
+			if !strings.Contains(rows, `"decision":"deny"`) || !strings.Contains(rows, ruleSourceAllowedModels) {
+				t.Fatalf("no deny row under %s: %s", ruleSourceAllowedModels, rows)
+			}
+		})
 	}
 }
