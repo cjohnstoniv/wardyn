@@ -866,6 +866,39 @@ func TestRunReadSaysAKeptMachineWasDeleted(t *testing.T) {
 	}
 }
 
+// TestRunReadNamesWhichRunHoldsTheMachine: the machine on a run's read is the machine's row as it is now, shared by
+// every run that used it, so the read names the run that holds it (or held it last) and the console says what a stop
+// did to the machine only on that run's page. The row's base, size and expiry ride with it; last_used_at does not.
+func TestRunReadNamesWhichRunHoldsTheMachine(t *testing.T) {
+	r := newKeptRig(t, keepingCaps())
+	runA, runB := types.AgentRun{ID: uuid.New()}, types.AgentRun{ID: uuid.New()}
+	m := r.kept("dev", func(m *types.KeptMachine) { m.RunID = &runB.ID; m.Base = "Xcode 26"; m.DiskBytes = 12 << 30 })
+	r.st.runMachine[runA.ID] = keptRunRecord{id: &m.ID, mode: "new"}
+	r.st.runMachine[runB.ID] = keptRunRecord{id: &m.ID, mode: keptModeResume}
+	for _, run := range []types.AgentRun{runA, runB} {
+		v := r.srv.runMachineOf(context.Background(), run)
+		if v == nil || v.HolderRunID == nil || *v.HolderRunID != runB.ID {
+			t.Fatalf("run %s: holder = %+v, want run B", run.ID, v)
+		}
+		if v.Base != "Xcode 26" || v.DiskBytes != 12<<30 || v.ExpiresAt == nil || !v.ExpiresAt.Equal(m.ExpiresAt) {
+			t.Fatalf("run %s: row facts = %+v", run.ID, v)
+		}
+	}
+	if v := r.srv.runMachineOf(context.Background(), runA); v.Mode != "new" {
+		t.Fatalf("run A's mode = %q, want its own", v.Mode)
+	}
+	body, err := json.Marshal(r.srv.runMachineOf(context.Background(), runB))
+	if err != nil || strings.Contains(string(body), "last_used_at") {
+		t.Fatalf("view JSON = %s, %v; last_used_at is overwritten by a claim and is not sent", body, err)
+	}
+	cleared := r.st.machines[m.ID]
+	cleared.RunID, cleared.ExpiresAt = nil, time.Time{}
+	r.st.machines[m.ID] = cleared
+	if v := r.srv.runMachineOf(context.Background(), runA); v.HolderRunID != nil || v.ExpiresAt != nil {
+		t.Fatalf("no holder and no expiry are left out: %+v", v)
+	}
+}
+
 func TestNextKeptMachineNameSkipsTakenNamesWithoutCase(t *testing.T) {
 	got := nextKeptMachineName([]types.KeptMachine{{Name: "Machine-1"}, {Name: "machine-3"}})
 	if got != "machine-2" {

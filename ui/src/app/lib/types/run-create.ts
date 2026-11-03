@@ -8,6 +8,7 @@
 import type { Agent, AgentRun, ConfinementClass, RunService } from "./runs";
 import type { AppliedResources } from "./new-run-contract";
 import type { MachineKind } from "./machine-kind";
+import type { RunMachineRequest } from "./kept-machine";
 
 // The fields the New Run wizard composes into a POST /api/v1/runs body. policy_id
 // and inline_policy are MUTUALLY EXCLUSIVE (XOR); neither set => default policy.
@@ -36,6 +37,8 @@ export interface CreateRunInput {
   macos_base?: string;
   // pkg/client.CreateRunRequest.DesktopWindow: "at_start" opens a window onto a macos_vm run on the creator's own Mac when it starts.
   desktop_window?: "at_start";
+  // pkg/client.CreateRunRequest.Machine: keep this macos_vm run's machine for next time, or start from a kept one (an interactive run on the creator's own Mac).
+  machine?: RunMachineRequest;
   interactive?: boolean;
   // Bring Your Own Image: a user-supplied base image the backend WRAPS with the
   // runner tools (FROM <image> + COPY tools + cleared ENTRYPOINT) before use.

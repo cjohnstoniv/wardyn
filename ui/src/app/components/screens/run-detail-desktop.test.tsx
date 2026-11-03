@@ -29,6 +29,7 @@ import { DesktopCard } from "./run-detail-desktop";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { RUN_SSH, UI_APPS_LANE } from "../wardyn/copy";
 import { DESKTOP } from "../wardyn/copy/desktop";
+import { KEEP_RUN } from "../wardyn/copy/keep-machine";
 import { aheadByHours } from "../../lib/test-clock";
 
 const OWNER = "alice@example.com";
@@ -192,6 +193,23 @@ describe("DesktopCard — Desktop sign-ins", () => {
     await within(desk).findByText("Your admin doesn't allow sign-ins in this desktop while Claude Code runs, so this desktop keeps none.");
     expect(within(desk).queryByRole("button", { name: DESKTOP.pauseToSignIn })).toBeNull();
     expect(within(desk).queryByText(DESKTOP.signInsNote)).toBeNull();
+  });
+
+  it("km3-desktop-signins-after: a run that keeps its machine says K-45 in place of the run disk's note", async () => {
+    healthMock.mockResolvedValue(gatewayOn);
+    signInsGet.mockResolvedValue({ ...allowed, store: "run_disk" });
+    renderCard({ machine: { id: "m-dev", name: "dev", keep_at_end: true, scrubbed: false, runner_name: "Maya's MacBook", deleted: false } });
+    const desk = await screen.findByRole("region", { name: DESKTOP.title });
+    expect(await within(desk).findByText(KEEP_RUN.SIGN_INS_NOTE("Maya's MacBook"))).toBeInTheDocument();
+    expect(within(desk).queryByText(DESKTOP.signInsNoteRunDisk)).toBeNull();
+  });
+
+  it("km3-desktop-signins-before: a run that keeps nothing says the run disk's note", async () => {
+    healthMock.mockResolvedValue(gatewayOn);
+    signInsGet.mockResolvedValue({ ...allowed, store: "run_disk" });
+    renderCard();
+    const desk = await screen.findByRole("region", { name: DESKTOP.title });
+    expect(await within(desk).findByText(DESKTOP.signInsNoteRunDisk)).toBeInTheDocument();
   });
 
   it("says nothing about sign-ins for a run whose guest reported no store", async () => {

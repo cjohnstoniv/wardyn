@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { KEEP_NEW_RUN } from "../../../wardyn/copy/keep-machine";
 import { NR_FILES } from "../../../wardyn/copy/new-run/files";
 import { NR_REVIEW } from "../../../wardyn/copy/new-run/review";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
@@ -21,6 +22,17 @@ const EVERYTHING: BlockerInput = {
   setupItems: [ITEM],
   stale: true,
 };
+
+describe("Review blockers: a failed read of the kept machines", () => {
+  it("holds Launch with the plain sentence, pointing at the Run step, and marks the Where group", () => {
+    const [b] = buildBlockers({ ...NOTHING, keptReadFailed: true });
+    expect(b).toMatchObject({ id: "kept:read", text: KEEP_NEW_RUN.READ_FAILED, to: { screen: "step", step: "run" }, field: "machine" });
+    expect([...groupsBlockedBy([b])]).toEqual(["where"]);
+  });
+  it("says nothing when the read did not fail", () => {
+    expect(buildBlockers(NOTHING)).toEqual([]);
+  });
+});
 
 describe("Review blockers", () => {
   it("lists local issues, unsupported fields, template setup, the refusal, then missing setup, in that order", () => {

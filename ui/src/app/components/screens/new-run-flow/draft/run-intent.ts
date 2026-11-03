@@ -68,6 +68,8 @@ export interface GuidedFacts {
   wallPresetGone?: { id: string; name: string };
   /** The server's sentence for a window on the Mac it refused, which cleared the choice; until the person chooses again. */
   windowCleared?: string;
+  /** The sentence for a keep or resume a server answer proved invalid, which cleared the choice; until the person chooses again. */
+  machineCleared?: string;
 }
 
 export interface DocDiagnostic {
