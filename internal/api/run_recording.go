@@ -337,6 +337,8 @@ func macOSVMRecordingRefusal(choice types.RecordingChoice) string {
 		return "Recording is required" + tail
 	case types.RecordingFloorOrgLocked:
 		return fmt.Sprintf("Your organisation's recording level, %s, is locked%s", recordingLevelLabel(choice.Org.OrgLevel()), tail)
+	case types.RecordingFloorWalls:
+		return fmt.Sprintf("Your walls set recording to at least %s%s", recordingLevelLabel(choice.WallsFloor), tail)
 	}
 	if choice.CeilingBy == "" {
 		return fmt.Sprintf("Your organisation's default policy sets recording to %s%s", recordingLevelLabel(choice.Ceiling), tail)

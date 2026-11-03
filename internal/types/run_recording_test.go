@@ -78,6 +78,9 @@ func TestRecordingChoiceFloor(t *testing.T) {
 		{"required over ceiling off", RecordingChoice{Ceiling: RecordingOff, Required: true}, RecordingTerminal, RecordingFloorRequired},
 		{"highest layer wins the level", RecordingChoice{Ceiling: RecordingScreenActions, Org: org(RecordingTerminal, true)}, RecordingScreenActions, RecordingFloorOrgLocked},
 		{"ceiling under a locked off org", RecordingChoice{Ceiling: RecordingTerminal, Org: org(RecordingOff, true)}, RecordingTerminal, RecordingFloorCeiling},
+		{"walls floor alone", RecordingChoice{WallsFloor: RecordingTerminal}, RecordingTerminal, RecordingFloorWalls},
+		{"walls floor raises the ceiling's level", RecordingChoice{Ceiling: RecordingTerminal, WallsFloor: RecordingScreenActions}, RecordingScreenActions, RecordingFloorCeiling},
+		{"walls floor off", RecordingChoice{WallsFloor: RecordingOff}, RecordingOff, ""},
 	} {
 		if got := tc.c.Floor(); got != tc.want {
 			t.Errorf("%s: Floor() = %q, want %q", tc.name, got, tc.want)
