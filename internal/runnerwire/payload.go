@@ -311,16 +311,19 @@ type MacVMCaps struct {
 // MacVMKept is a Mac's kept machines. LimitBytes is the operator's limit for them all, WorstBytes what
 // they could grow to, AllocatedBytes what they take now.
 type MacVMKept struct {
-	LimitBytes, WorstBytes, AllocatedBytes int64
-	Machines                               []MacVMKeptMachine
+	LimitBytes     int64              `json:"limit_bytes"`
+	WorstBytes     int64              `json:"worst_bytes"`
+	AllocatedBytes int64              `json:"allocated_bytes"`
+	Machines       []MacVMKeptMachine `json:"machines,omitempty"`
 }
 
 // MacVMKeptMachine is one kept machine on the Mac, by the id the org gave it.
 type MacVMKeptMachine struct {
-	ID              string
-	Bytes           int64
-	InUse, Scrubbed bool
-	ExpiresAt       time.Time
+	ID        string    `json:"id"`
+	Bytes     int64     `json:"bytes"`
+	InUse     bool      `json:"in_use,omitempty"`
+	Scrubbed  bool      `json:"scrubbed,omitempty"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // MacVMCaps.Reason values, in priority order. An unknown value is a newer runner's, and decodes as itself.

@@ -20,11 +20,11 @@ func TestKeptMachineWireNames(t *testing.T) {
 	if strings.Contains(string(b), "kept") {
 		t.Fatalf("a zero MacVMCaps names kept machines: %s", b)
 	}
-	b, err = json.Marshal(MacVMCaps{KeptMachines: true, Kept: &MacVMKept{Machines: []MacVMKeptMachine{{ID: "m", ExpiresAt: time.Unix(0, 0).UTC()}}}})
+	b, err = json.Marshal(MacVMCaps{KeptMachines: true, Kept: &MacVMKept{Machines: []MacVMKeptMachine{{ID: "m", InUse: true, Scrubbed: true, ExpiresAt: time.Unix(0, 0).UTC()}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{`"kept_machines":true`, `"kept":{`, `"LimitBytes"`, `"WorstBytes"`, `"AllocatedBytes"`, `"Machines"`, `"InUse"`, `"Scrubbed"`, `"ExpiresAt"`} {
+	for _, key := range []string{`"kept_machines":true`, `"kept":{`, `"limit_bytes"`, `"worst_bytes"`, `"allocated_bytes"`, `"machines":[`, `"in_use":true`, `"scrubbed":true`, `"expires_at"`} {
 		if !strings.Contains(string(b), key) {
 			t.Errorf("caps JSON lacks %s: %s", key, b)
 		}
