@@ -6,7 +6,7 @@
 // A profile's limits as chips, in GOVERNANCE's own labels — the Governance
 // list's Limits cell and the User types editor's read-only "Ceiling and run
 // limits" section render the same words for the same field.
-import type { GovernanceLimits } from "../../../lib/api/governance";
+import type { GovernanceLimits, GovernanceUnit } from "../../../lib/api/governance";
 import { ALLOWED_MODELS, BACKGROUND_WATCH_DOOR, foldAutonomyRubric, GOVERNANCE as GOV, LIMITS_CHIP, MEMBER_DRIVE_DOOR, runLimitsChip, setsRunLimits } from "../../../lib/governance-copy";
 import { MAC_BASES } from "../../wardyn/copy/mac-bases";
 import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
@@ -55,3 +55,12 @@ export function limitChips(limits: GovernanceLimits) {
 // "None" is a claim that the profile bounds nothing, so it is read from the
 // chips and the run-limit fields together, never from one list alone.
 export const limitsBoundNothing = (limits: GovernanceLimits) => limitChips(limits).length === 0 && !setsRunLimits(limits);
+
+// What a profile's Limits cell shows: its effective limits (a profile with a base stores `{}` and states
+// what binds in `effective`), or the reason they could not be worked out, never a "None" it did not earn.
+export function profileLimitsContent(p: Pick<GovernanceUnit, "limits" | "effective">) {
+  if (p.effective?.error) return <span className="text-xs text-warning">{p.effective.error}</span>;
+  const limits = p.effective?.limits ?? p.limits;
+  const chips = limitChips(limits);
+  return chips.length > 0 ? chips : limitsBoundNothing(limits) && GOV.LIMITS_NONE;
+}

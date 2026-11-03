@@ -153,19 +153,18 @@ func TestStepPlacementCapability_MacOSVMRecording(t *testing.T) {
 			s.cfg.ExecOutputTailOff = tc.tailOff
 			req := macReq(id)
 			req.Interactive = tc.interactive
-			w := httptest.NewRecorder()
-			f := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(capsCtx), req: &req, ceiling: profile}
+			f := &runFold{w: httptest.NewRecorder(), r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(capsCtx), req: &req, ceiling: profile}
 			if !s.stepPlacementCapability(f, nil) {
-				t.Fatalf("%s: refused: %d %s", tc.name, w.Code, w.Body.String())
+				t.Fatalf("%s: refused: %s", tc.name, f.w.(*httptest.ResponseRecorder).Body.String())
 			}
-			var notice string
+			var notices []string
 			for _, warn := range f.policyWarns {
 				if warn == macOSVMScreenNotice || warn == macOSVMTerminalNotice || warn == macOSVMTerminalNoticeNoAgentOutput {
-					notice = warn
+					notices = append(notices, warn)
 				}
 			}
-			if notice != tc.want {
-				t.Errorf("%s: notice %q, want %q", tc.name, notice, tc.want)
+			if len(notices) != 1 || notices[0] != tc.want {
+				t.Errorf("%s: notices %q, want only %q", tc.name, notices, tc.want)
 			}
 		}
 	})

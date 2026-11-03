@@ -65,7 +65,7 @@ import { AssignmentsBlock } from "./assignments";
 import { ChangesTab } from "./changes";
 import { EgressBaselineTab } from "./egress-baseline";
 import { Note, noteClass, question, withMono } from "./display";
-import { limitChips, limitsBoundNothing } from "./limit-chips";
+import { profileLimitsContent } from "./limit-chips";
 import { BaseChip, childrenOf } from "./profile-overlay";
 import { ProfileEditor } from "./profile-editor";
 import { RunnerCredentials } from "./runner-credentials";
@@ -368,7 +368,6 @@ export function GovernanceScreen() {
                   <TableBody>
                     {snap.profiles.map((p) => {
                       const n = assignedCount(p);
-                      const chips = limitChips(p.limits);
                       return (
                         <TableRow key={p.id}>
                           {/* A profile name is a human-chosen label, never mono. */}
@@ -379,8 +378,8 @@ export function GovernanceScreen() {
                           <TableCell>{n === 0 ? GOV.ASSIGNED_NONE : GOV.ASSIGNED_COUNT(n)}</TableCell>
                           <TableCell>
                             <span className="flex flex-wrap items-center gap-1.5">
-                              {/* "None" is limitsBoundNothing's call: every limit, not one list. */}
-                              {chips.length > 0 ? chips : limitsBoundNothing(p.limits) && GOV.LIMITS_NONE}
+                              {/* "None" is limitsBoundNothing's call on the effective limits: every limit, not one list. */}
+                              {profileLimitsContent(p)}
                             </span>
                           </TableCell>
                           <TableCell>

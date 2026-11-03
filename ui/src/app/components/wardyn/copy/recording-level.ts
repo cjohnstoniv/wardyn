@@ -26,6 +26,9 @@ export const RECORDING_LEVEL = {
   KEYSTROKES_VALUE: "Never recorded",
   KEYSTROKES_NOTE: "Not a setting. No wall, team or run can turn it on.",
   BELOW: "Profiles and policies below may record more, never less.",
+  // A profile ceiling only: what a level does to a macOS VM run (no level refuses one at create; a required recording that can't be made stops it at start).
+  MACOS_VM_CEILING:
+    "Choosing a recording level doesn't by itself rule out macOS VMs. At Terminal a macOS VM's desktop isn't recorded; at Screen and actions it is, unmasked, while someone watches. A task run's agent output is recorded when output capture is on; if recording is required and that can't be done, the run doesn't start.",
   LOCKED: "Locked",
   // M7-States 3, with the organisation in the walls' place (the walls are not on this release).
   MINIMUM_ABOVE: (who: string, level: string, lower: string[]) =>
