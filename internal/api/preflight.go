@@ -304,9 +304,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Create's no-task coercion, then its interactive/hold conflict, before the derivation below.
-	if !req.Interactive && strings.TrimSpace(req.Task) == "" {
-		req.Interactive = true
-	}
+	req.Interactive = req.Interactive || strings.TrimSpace(req.Task) == ""
 	if msg := interactiveToolApprovalsError(req); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonToolApprovalsHoldInteractiveConflict, msg)
 		return
@@ -324,6 +322,10 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// launch's order.
 	f, ok := s.foldRunRequest(w, r, foldPreflight, &req, ceiling, "")
 	if !ok {
+		return
+	}
+	// The create's window grant, after the fold as at create: refused as the create would be, stored by none.
+	if s.macWindowRecordPending(w, r, uuid.Nil, req.DesktopWindow, "", "", false) {
 		return
 	}
 	spec, enforced, mpChoice, modelCred, autonomy := f.spec, f.enforced, f.mpChoice, f.modelCred, f.autonomy

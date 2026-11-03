@@ -224,7 +224,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// The run's one target is chosen from its own id, before an identity exists to leak on a refusal.
 	placed := types.AgentRun{ID: runID}
 	// A window at start is opened under the grant this create leaves (macWindowRecordPending), judged again at the open.
-	if f.place.apply(&placed, enforced).write(s, w, r) || s.macWindowRecordPending(w, r, runID, req.DesktopWindow, createdByType, createdBy) {
+	if f.place.apply(&placed, enforced).write(s, w, r) || s.macWindowRecordPending(w, r, runID, req.DesktopWindow, createdByType, createdBy, true) {
 		return
 	}
 	intent := launchIntentFor(asked)
@@ -362,7 +362,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	stampHarnessSet(createData, f.harnesses, f.image)
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created, s.runnerNameOf(ctx, created)))
-	s.markRunCreateExempt(ctx, createDigestInput(req, f), createData)
+	s.markRunCreateExempt(ctx, createDigestInput(req, f.carriedImage), createData)
 	s.stampBreakGlass(ctx, runID, createdByType, createdBy, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))
@@ -461,8 +461,8 @@ type runRowInput struct {
 func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 	req, f, placed := in.req, in.f, in.placed
 	operatorOwned := operatorOwnedRequest(ctx)
-	service, _ := frozenRunService(req.Service) // serviceRefusal has already held it valid
-	imageInput := createDigestInput(req, f)     // what the digest rule was asked about, for a revive to ask again
+	service, _ := frozenRunService(req.Service)          // serviceRefusal has already held it valid
+	imageInput := createDigestInput(req, f.carriedImage) // what the digest rule was asked about, for a revive to ask again
 	return types.AgentRun{
 		ID:               in.runID,
 		CreatedAt:        in.now,

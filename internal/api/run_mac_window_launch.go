@@ -38,12 +38,16 @@ type macWindowPending struct {
 	Via          bool            `json:"via,omitempty"`
 }
 
+// errNoPersonRecords is the refusal of a window at start on a store that keeps no per-person records: the grant
+// the launch opens under has nowhere to be kept.
+var errNoPersonRecords = errors.New("the store keeps no per-person records")
+
 // macWindowStorePending records a's grant for run id. An error means the create must not go on: it asked for a
 // window the launch could not open.
 func (s *Server) macWindowStorePending(ctx context.Context, runID uuid.UUID, a macWindowAuthority) error {
 	st, ok := s.cfg.Store.(store.PrincipalPrefStore)
 	if !ok {
-		return errors.New("the store keeps no per-person records")
+		return errNoPersonRecords
 	}
 	raw, err := json.Marshal(macWindowPending{ActorType: a.ActorType, Principal: a.Principal, Email: a.Email,
 		AuthorizedAt: a.Issue.At, RevSeq: a.Issue.Seq, Token: a.Token, Via: a.Via})
@@ -89,10 +93,19 @@ func (s *Server) macWindowForgetPending(ctx context.Context, run types.AgentRun)
 }
 
 // macWindowRecordPending stores the grant of a create that asks for desktop_window, and says true after writing the
-// refusal when it cannot: a create must not go on to ask for a window the launch could not open.
-func (s *Server) macWindowRecordPending(w http.ResponseWriter, r *http.Request, runID uuid.UUID, window string, actorType types.ActorType, actor string) bool {
+// refusal when it cannot: a create must not go on to ask for a window the launch could not open. Every door calls
+// it: Review and the policy preview pass record false and store nothing, but refuse as the create would when the
+// store keeps no per-person records; only a failed write itself is the create's alone.
+func (s *Server) macWindowRecordPending(w http.ResponseWriter, r *http.Request, runID uuid.UUID, window string, actorType types.ActorType, actor string, record bool) bool {
 	if window == "" {
 		return false
+	}
+	if !record {
+		if _, ok := s.cfg.Store.(store.PrincipalPrefStore); ok {
+			return false
+		}
+		writeServerError(w, r, "record the window's grant", errNoPersonRecords)
+		return true
 	}
 	if err := s.macWindowStorePending(r.Context(), runID, macWindowAuthorityFrom(r.Context(), actorType, actor, s.cfg.Now().UTC())); err != nil {
 		writeServerError(w, r, "record the window's grant", err)
