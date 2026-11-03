@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -388,5 +389,141 @@ func TestAllowedModels_ConfigLoadsAndOffByDefault(t *testing.T) {
 	out, _ := json.Marshal(c)
 	if strings.Contains(string(out), "allowed_models") {
 		t.Fatalf("an unset list must not be written back (an older proxy refuses the key): %s", out)
+	}
+}
+
+// A batch request names its models inside the body or in an uploaded file, so it is refused with
+// the list set and never forwarded; reading a batch back is not a batch request.
+func TestAllowedModels_BatchRoutesRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, route string
+		refused             bool
+	}{
+		{"anthropic batch create", http.MethodPost, llmAnthropicPrefix + "messages/batches", true},
+		{"openai batch create", http.MethodPost, llmOpenAIPrefix + "batches", true},
+		{"openai file upload", http.MethodPost, llmOpenAIPrefix + "files", true},
+		{"openai upload create", http.MethodPost, llmOpenAIPrefix + "uploads", true},
+		{"openai upload part", http.MethodPost, llmOpenAIPrefix + "uploads/upload_abc/parts", true},
+		{"openai upload complete", http.MethodPost, llmOpenAIPrefix + "uploads/upload_abc/complete", true},
+		{"anthropic batch read", http.MethodGet, llmAnthropicPrefix + "messages/batches/msgbatch_1", false},
+		{"openai batch read", http.MethodGet, llmOpenAIPrefix + "batches/batch_1", false},
+		{"anthropic files untouched", http.MethodPost, llmAnthropicPrefix + "files", false},
+		{"openai batch cancel untouched", http.MethodPost, llmOpenAIPrefix + "batches/batch_1/cancel", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, list := range [][]string{{"gpt-5"}, nil} {
+				p, up, buf := modelGateProxy(t, list)
+				rec := httptest.NewRecorder()
+				p.ServeHTTP(rec, mustLocalReq(t, tc.method, tc.route, strings.NewReader(`{"requests":[{"params":{"model":"claude-opus-9"}}]}`)))
+				if tc.refused && list != nil {
+					if rec.Code != http.StatusForbidden || up.reached || !strings.Contains(rec.Body.String(), batchRefusal) {
+						t.Fatalf("status = %d reached = %v body = %q, want the batch refused", rec.Code, up.reached, rec.Body.String())
+					}
+					if d := lastDecision(t, buf); d.Decision != egress.Deny || d.RuleSource != ruleSourceAllowedModels || d.Cause != batchRefusal {
+						t.Fatalf("decision = %+v", d)
+					}
+					continue
+				}
+				if rec.Code != http.StatusOK || !up.reached {
+					t.Fatalf("list %v: status = %d reached = %v, want it forwarded", list, rec.Code, up.reached)
+				}
+			}
+		})
+	}
+}
+
+func TestAllowedModels_BedrockBatchPathsRefused(t *testing.T) {
+	p := newProxy(Options{})
+	p.allowedModels = compileAllowedModels([]string{"m"})
+	for _, tc := range []struct {
+		host, method, path string
+		refused            bool
+	}{
+		{"bedrock-runtime.us-east-1.amazonaws.com", http.MethodPost, "/async-invoke", true},
+		{"bedrock.us-east-1.amazonaws.com", http.MethodPost, "/model-invocation-job", true},
+		{"bedrock.us-east-1.amazonaws.com", http.MethodGet, "/model-invocation-job/abc", false},
+	} {
+		rec := httptest.NewRecorder()
+		_, refused := p.allowedModelRefused(rec, httptest.NewRequest(tc.method, tc.path, nil), tc.host, 443, "")
+		if refused != tc.refused || (refused && !strings.Contains(rec.Body.String(), batchRefusal)) {
+			t.Errorf("%s %s %s: refused = %v body = %q", tc.host, tc.method, tc.path, refused, rec.Body.String())
+		}
+	}
+}
+
+// A CONNECT to a model host the proxy would pass as an opaque tunnel is refused with the list set;
+// unset it reaches the tunnel code as ever (a recorder cannot be hijacked, which is how it shows).
+func TestAllowedModels_OpaqueModelTunnelRefused(t *testing.T) {
+	hosts := []string{anthropicHost, openaiHost, "bedrock-runtime.us-east-1.amazonaws.com", "foundry.corp.internal", "llm-gateway.corp.internal"}
+	for _, host := range hosts {
+		for _, list := range [][]string{{"claude-sonnet-5"}, nil} {
+			buf := &bytes.Buffer{}
+			p := newProxy(Options{
+				RunID:           uuid.New(),
+				Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: append(hosts, "registry.npmjs.org")}),
+				Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+				Resolver:        publicResolver{},
+				LLMChannelHosts: map[string]string{"foundry.corp.internal": anthropicHost},
+				LLMUpstreams:    map[string]string{openaiHost: "https://llm-gateway.corp.internal/v1"},
+			})
+			p.allowedModels = compileAllowedModels(list)
+			rec := httptest.NewRecorder()
+			p.handleConnect(rec, httptest.NewRequest(http.MethodConnect, host+":443", nil))
+			if list != nil {
+				if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), opaqueModelTunnelRefusal) ||
+					rec.Header().Get(egressHeaderReason) != ruleSourceAllowedModels {
+					t.Fatalf("%s: status = %d reason = %q body = %q, want the tunnel refused", host, rec.Code, rec.Header().Get(egressHeaderReason), rec.Body.String())
+				}
+				if d := lastDecision(t, buf); d.Decision != egress.Deny || d.RuleSource != ruleSourceAllowedModels || d.Request.Host != host {
+					t.Fatalf("%s: decision = %+v", host, d)
+				}
+			} else if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "hijacking unsupported") {
+				t.Fatalf("%s: unset list: status = %d body = %q, want the tunnel code reached", host, rec.Code, rec.Body.String())
+			}
+		}
+	}
+	// A host that is no model host is never refused by the gate.
+	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"registry.npmjs.org"}}), Resolver: publicResolver{}})
+	p.allowedModels = compileAllowedModels([]string{"claude-sonnet-5"})
+	rec := httptest.NewRecorder()
+	p.handleConnect(rec, httptest.NewRequest(http.MethodConnect, "registry.npmjs.org:443", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("a non-model tunnel: status = %d body = %q, want it left alone", rec.Code, rec.Body.String())
+	}
+}
+
+// The plain-HTTP forward lane is gated like the others: an unlisted model, an unreadable body and a
+// batch are refused and never forwarded; a listed model is forwarded byte for byte.
+func TestAllowedModels_PlainLane(t *testing.T) {
+	spec := types.RunPolicySpec{AllowedDomains: []string{anthropicHost}}
+	for _, tc := range []struct {
+		name, path, body string
+		status           int
+	}{
+		{"allowed", "/v1/messages", `{"model":"claude-sonnet-5",  "messages":[]}`, 200},
+		{"refused", "/v1/messages", `{"model":"claude-opus-9"}`, 403},
+		{"unreadable", "/v1/messages", `{"model":`, 400},
+		{"batch", "/v1/messages/batches", `{"requests":[]}`, 403},
+		{"other route", "/v1/models", ``, 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			up := captureUpstream(t, false, `{"ok":true}`)
+			p, _ := newTestProxy(t, spec, upstreamAddr(up.srv), nil, nil)
+			p.allowedModels = compileAllowedModels([]string{"claude-sonnet-5"})
+			req := mustProxyReq(t, http.MethodPost, "http://"+anthropicHost+tc.path)
+			req.Body = io.NopCloser(strings.NewReader(tc.body))
+			req.ContentLength = int64(len(tc.body))
+			rec := httptest.NewRecorder()
+			p.servePlain(rec, req)
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d (%q)", rec.Code, tc.status, rec.Body.String())
+			}
+			if tc.status == 200 && (!up.reached || up.body != tc.body) {
+				t.Fatalf("reached = %v body = %q, want the body forwarded byte for byte", up.reached, up.body)
+			}
+			if tc.status != 200 && up.reached {
+				t.Fatal("a refused request must never reach the upstream")
+			}
+		})
 	}
 }

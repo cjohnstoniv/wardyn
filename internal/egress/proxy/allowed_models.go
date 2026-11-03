@@ -30,10 +30,30 @@ const maxModelNameShown = 100
 // anthropicModelRoutes and openaiModelRoutes are the request paths, trimmed of slashes, that carry
 // a model in their JSON body. A path matches on whole segments from its end, so a gateway's path
 // prefix and the OpenAI "v1/" or Codex "backend-api/codex/" lead-in do not matter.
+//
+// Embeddings, image and audio routes also carry a model but are deliberately out of scope: they
+// are not the chat models the limit governs, and are left ungated.
 var (
 	anthropicModelRoutes = []string{"messages", "messages/count_tokens"}
 	openaiModelRoutes    = []string{"completions", "responses"} // "completions" is also chat/completions
 )
+
+// The batch routes carry a model per request inside the body, or a file of requests uploaded
+// beforehand, so they cannot be checked against the list and are refused while it is set. They
+// are not parsed. Only the POSTs that create or fill a batch are refused: reading one back is not.
+// Bedrock's async invoke and batch inference job are the same kind of request.
+var (
+	anthropicBatchRoutes = []string{"messages/batches"}
+	openaiBatchRoutes    = []string{"batches", "files", "uploads"} // a batch is created from an uploaded file
+	bedrockBatchPaths    = map[string]bool{"/async-invoke": true, "/model-invocation-job": true}
+)
+
+// batchRefusal is the sentence a refused batch request carries.
+const batchRefusal = "batch requests cannot be checked against this run's allowed models"
+
+// opaqueModelTunnelRefusal is the sentence a refused opaque tunnel to a model host carries.
+const opaqueModelTunnelRefusal = "this run limits the models it may use, and a tunnel to a model host cannot be checked against them; " +
+	"the run needs TLS interception (mitm_llm and a CA, plus a mitm_hosts entry for a Bedrock or gateway host) to reach it"
 
 // bedrockModelOps are the Bedrock runtime operations whose path is /model/<id>/<op>.
 var bedrockModelOps = map[string]bool{
@@ -168,12 +188,68 @@ func (p *Proxy) requestModel(r *http.Request, host, rest string) (model string, 
 	return "", true, false, noopRelease, nil
 }
 
+// isBatchRequest reports whether r is a POST to one of the host's batch routes (see above).
+func (p *Proxy) isBatchRequest(r *http.Request, host, rest string) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	if isBedrockHost(hostKey(host)) {
+		return bedrockBatchPaths[r.URL.Path]
+	}
+	path := strings.Trim(rest, "/")
+	switch p.shapeOf(r, host) {
+	case shapeAnthropic:
+		return routeCarriesModel(path, anthropicBatchRoutes)
+	case shapeOpenAI:
+		return openaiBatchRequest(path)
+	}
+	return routeCarriesModel(path, anthropicBatchRoutes) || openaiBatchRequest(path)
+}
+
+// openaiBatchRequest matches the OpenAI batch create and its file uploads. An upload part is
+// /uploads/<id>/parts and its completion /uploads/<id>/complete, so those end in a fixed word
+// after an upload id.
+func openaiBatchRequest(path string) bool {
+	if routeCarriesModel(path, openaiBatchRoutes) {
+		return true
+	}
+	segs := strings.Split(path, "/")
+	n := len(segs)
+	return n >= 3 && segs[n-3] == "uploads" && (segs[n-1] == "parts" || segs[n-1] == "complete")
+}
+
+// refuseOpaqueModelTunnel refuses a CONNECT to a model host that the proxy would pass as an opaque
+// tunnel, which the gate could not see into, while the allowed_models list is set. The caller
+// asks only after every terminating branch has declined the host. Unset, it does nothing.
+func (p *Proxy) refuseOpaqueModelTunnel(w http.ResponseWriter, r *http.Request, host string, port int) bool {
+	if len(p.allowedModels) == 0 {
+		return false
+	}
+	if p.sink != nil {
+		log := decisionLog(p.reqOf(r, host, port), egress.Deny, ruleSourceAllowedModels)
+		log.Cause = opaqueModelTunnelRefusal
+		p.sink.emit(log)
+	}
+	setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, ruleSourceAllowedModels)
+	w.Header().Set(egressHeaderDetail, opaqueModelTunnelRefusal)
+	w.Header().Set(egressHeaderWardynReason, reasonEgressDenied)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	out, _ := json.Marshal(map[string]any{"wardyn": map[string]string{
+		"reason": reasonEgressDenied, "host": host, "rule_source": ruleSourceAllowedModels, "detail": opaqueModelTunnelRefusal}})
+	_, _ = w.Write(out)
+	return true
+}
+
 // allowedModelRefused is the gate: true when it refused (and answered) the request. A request it
 // lets through keeps its body, charged to the retained budget until the caller's deferred
 // release. rest is the request path after the host, as proxyLLMRequest has it.
 func (p *Proxy) allowedModelRefused(w http.ResponseWriter, r *http.Request, host string, port int, rest string) (func(), bool) {
 	if len(p.allowedModels) == 0 || !p.isLLMHost(host) {
 		return noopRelease, false
+	}
+	if p.isBatchRequest(r, host, rest) {
+		return noopRelease, p.refuseAllowedModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied, batchRefusal)
 	}
 	model, gated, ok, release, err := p.requestModel(r, host, rest)
 	switch {

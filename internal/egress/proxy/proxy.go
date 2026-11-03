@@ -883,6 +883,10 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			p.mitmConnect(w, r, host, port)
 			return
 		}
+		// With allowed_models set, a model host is never an opaque tunnel: the gate cannot see into it.
+		if p.refuseOpaqueModelTunnel(w, r, host, port) {
+			return
+		}
 		// Opaque tunnel (no CA, or Bedrock/SigV4). Record a one-time llm.scan.bypass
 		// ONLY when inspection was expected, so audit never implies coverage we
 		// don't have (an injection-only run with no scanner is not "blind").
