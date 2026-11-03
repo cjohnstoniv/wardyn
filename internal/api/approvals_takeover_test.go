@@ -286,6 +286,34 @@ func TestTakeover_MacOSVMKeepsTheTerminalGapButHoldsNoDesktop(t *testing.T) {
 	}
 }
 
+// TestTakeover_SurfaceForAVMRun pins where a take over puts the person (UXR-16): a VM run with the gateway on
+// drives the gateway's built-in desktop, a macOS VM run whose desktop is view only in the browser (no runner
+// caps say control) keeps the terminal, and so does a run with the gateway off or no VM at all.
+func TestTakeover_SurfaceForAVMRun(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		kind    types.MachineKind
+		gateway bool
+		want    string
+	}{
+		{"linux vm, gateway on", types.MachineLinuxVM, true, "desktop"},
+		{"linux vm, gateway off", types.MachineLinuxVM, false, "terminal"},
+		{"macos vm, view only", types.MachineMacOSVM, true, "terminal"},
+		{"no vm", "", true, "terminal"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newTakeoverFixture(t, false)
+			if tc.gateway {
+				f.srv.cfg.UIListenAddr, f.srv.cfg.UISessionKey = ":8081", make([]byte, 32)
+			}
+			run := types.AgentRun{ID: f.run, CreatedBy: takeoverOwnerSub, State: types.RunRunning, MachineKind: tc.kind}
+			if got := f.srv.takeoverSurface(context.Background(), run); got != tc.want {
+				t.Fatalf("takeoverSurface = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestTakeover_Refusals: a takeover request is never approved or denied (every tier), the verbs
 // refuse another kind and a stranger, only the holder hands back, and decline is a recorded DENIED.
 func TestTakeover_Refusals(t *testing.T) {

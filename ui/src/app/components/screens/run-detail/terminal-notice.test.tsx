@@ -216,6 +216,15 @@ describe("TerminalPane — Watch desktop", () => {
     expect(await screen.findByRole("button", { name: DESKTOP.watch })).toBeInTheDocument();
   });
 
+  it("says when the gateway check failed, and Try again asks again", async () => {
+    vi.mocked(health.health).mockResolvedValueOnce({} as never);
+    paneFor({});
+    expect(await screen.findByText("Couldn't check whether the desktop gateway is on.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("button", { name: DESKTOP.watch })).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't check whether the desktop gateway is on.")).toBeNull();
+  });
+
   it("stays away while the gateway is off", async () => {
     vi.mocked(health.health).mockResolvedValue({ status: "ok", ui_sandbox: { enabled: false } } as never);
     paneFor({});

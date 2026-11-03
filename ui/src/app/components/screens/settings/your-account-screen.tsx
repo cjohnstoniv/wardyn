@@ -40,6 +40,7 @@ import { ServiceIdentitiesCard } from "./service-identities-card";
 import { SignedInClisCard } from "./signed-in-clis-card";
 import { SshKeysPane } from "../ssh-keys";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
+import { HOST_CARD } from "../../wardyn/copy/host-card";
 
 export function YourAccountScreen() {
   const adminView = useConsoleMode() === "admin";
@@ -51,6 +52,11 @@ export function YourAccountScreen() {
     setupApi
       .getSetupStatus()
       .then((s) => {
+        // getSetupStatus never rejects; an unreachable answer is a made-up payload, so say so rather than render it.
+        if (s.unreachable) {
+          setState("error");
+          return;
+        }
         setStatus(s);
         setState("ready");
       })
@@ -62,7 +68,9 @@ export function YourAccountScreen() {
     <PageContainer width="form" className="pb-8">
       <PageHeader title={YOUR_ACCOUNT.TITLE} description={YOUR_ACCOUNT.LEDE} />
       {state === "loading" && <TableSkeleton />}
-      {state === "error" && <ErrorState onRetry={load} />}
+      {state === "error" && (
+        <ErrorState title={HOST_CARD.UNREACHABLE_TITLE} message={HOST_CARD.UNREACHABLE_BODY} onRetry={load} />
+      )}
       {state === "ready" && status && (
         <div className="space-y-2">
           {/* #1508: an admin's invitation to create an API token. Renders nothing while none is waiting. */}

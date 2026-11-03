@@ -10,13 +10,14 @@
 import * as React from "react";
 import { ChevronDown } from "lucide-react";
 import type { ApprovalRequest, RunDetail } from "../../lib/types";
+import { isMacOSVM, isVMKind } from "../../lib/types/machine-kind";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import { health as healthApi } from "../../lib/api/health";
 import { getErrorMessage, shortTime } from "../../lib/format";
 import { isBackgroundRun, mayEnterRunOrUnknown } from "../../lib/run-entry";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
-import { enterUIApp } from "../screens/run-detail-ssh";
+import { DESKTOP_APP, enterUIApp } from "../screens/run-detail-ssh";
 import { HARNESS_LOGIN_TASK } from "../screens/run-detail/sign-in-run";
 import { useOperator, useOperatorResolved, usePrincipal } from "./operator-context";
 import { NEEDS_YOU, askedAgo, heldClock, type TakeoverSurface } from "./copy/needs-you";
@@ -29,9 +30,18 @@ export function activeTakeover(approvals: ApprovalRequest[]): ApprovalRequest | 
     .sort((a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at))[0];
 }
 
-/** Where a takeover of run puts the person, as the run page can tell: its declared desktop, else its terminal. */
+/** A macOS VM run whose desktop the browser can only watch (the server's macOSDesktopViewOnly, off the runner's caps). */
+function macDesktopViewOnly(run: RunDetail): boolean {
+  return isMacOSVM(run) && run.macos?.desktop !== "control";
+}
+
+/**
+ * Where a takeover of run puts the person, as the run page can tell (the server's takeoverSurface is the
+ * decider): its declared desktop, or a VM run's built-in desktop unless that is view only, else its terminal.
+ */
 export function surfaceOf(run: RunDetail): TakeoverSurface {
-  return (run.ui_apps ?? []).some((a) => a.name === "novnc") ? "desktop" : "terminal";
+  if ((run.ui_apps ?? []).some((a) => a.name === "novnc")) return "desktop";
+  return isVMKind(run.machine_kind) && !macDesktopViewOnly(run) ? "desktop" : "terminal";
 }
 
 const snoozeKey = (id: string) => `wardyn.needs-you.snooze.${id}`;
@@ -116,7 +126,8 @@ export function NeedsYouBanner({
       const got = await approvalsApi.takeOver(ap.id);
       if (got.surface === "desktop") {
         const h = await healthApi.health();
-        await enterUIApp(run.id, "novnc", h.ui_sandbox ?? null);
+        const declared = (run.ui_apps ?? []).some((a) => a.name === "novnc");
+        await enterUIApp(run.id, declared ? "novnc" : DESKTOP_APP.name, h.ui_sandbox ?? null);
       } else {
         onOpenTerminal();
       }
@@ -219,10 +230,19 @@ export function NeedsYouBanner({
   if (snoozedUntil > now) {
     return (
       <section data-testid="needs-you-snoozed" className="mx-4 mt-3 flex items-center gap-3 rounded-lg border border-warning/30 px-4 py-1.5 text-sm">
-        <span className="text-muted-foreground">{NEEDS_YOU.banner.snoozedUntil(shortTime(new Date(snoozedUntil).toISOString()))}</span>
+        <span className="shrink-0 text-muted-foreground">{NEEDS_YOU.banner.snoozedUntil(shortTime(new Date(snoozedUntil).toISOString()))}</span>
+        {/* The agent's reason stays in view, on one line. */}
+        <span data-testid="needs-you-snoozed-reason" title={reason} className="min-w-0 flex-1 truncate text-foreground">
+          {reason}
+        </span>
         {mayTake && (
-          <Button size="sm" variant="outline" className="ml-auto" disabled={busy !== null} onClick={() => void takeOver()}>
+          <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void takeOver()}>
             {NEEDS_YOU.banner.takeOver}
+          </Button>
+        )}
+        {mayEnter && (
+          <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => void decline()}>
+            {NEEDS_YOU.banner.decline}
           </Button>
         )}
       </section>
@@ -242,6 +262,11 @@ export function NeedsYouBanner({
         <p className="mt-1 text-muted-foreground">
           {mayEnter ? NEEDS_YOU.banner.asked(askedAgo(now - Date.parse(ap.requested_at)), surface) : NEEDS_YOU.readOnly(run.created_by)}
         </p>
+        {mayTake && macDesktopViewOnly(run) && (
+          <p data-testid="needs-you-mac-view-only" className="mt-1 text-muted-foreground">
+            {NEEDS_YOU.banner.macViewOnly}
+          </p>
+        )}
       </div>
       {actions}
     </section>

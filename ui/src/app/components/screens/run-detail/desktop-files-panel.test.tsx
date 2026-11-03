@@ -49,6 +49,15 @@ describe("DesktopFilesPanel", () => {
     expect(within(panel).queryByText("secret.txt")).toBeNull();
   });
 
+  it("on a VM desktop says copy and paste are not available instead of the Allowed strip", async () => {
+    listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
+    render(<DesktopFilesPanel runId="r1" vm />);
+    const panel = await screen.findByRole("region", { name: C.title });
+    expect(within(panel).getByText("Copy and paste: not available on VM desktops yet")).toBeTruthy();
+    expect(within(panel).queryByText(C.pasteIn)).toBeNull();
+    expect(within(panel).queryByText(C.copyOut)).toBeNull();
+  });
+
   it("reports a delivered upload by hash and a too-large one as not sent", async () => {
     listMock.mockResolvedValue({ folder: "~/Transfers", rules: defaults, files: [] });
     uploadMock

@@ -40,14 +40,14 @@ import (
 
 // The words of a window's refusals.
 const (
-	macWindowSiteOffMsg        = "Windows onto macOS VM runs are turned off for this install. An admin can turn on macos_vm.allow_attended_window in the site config."
+	macWindowSiteOffMsg        = "Opening a window onto a macOS VM run is turned off for this install. An admin can turn on macos_vm.allow_attended_window in the site config."
 	macWindowNotMacOSMsg       = "Only a macOS VM run has a window."
 	macWindowProfileMsg        = "Your organisation's governance profile doesn't allow an interactive desktop on this run."
 	macWindowUnrecordedMsg     = "This run's recording level is Screen and actions, and a macOS VM's screen isn't recorded, so Wardyn won't open a window onto it."
 	macWindowOfflineMsg        = "This Mac's runner is offline, so Wardyn can't open a window on it."
-	macWindowRunnerTooOldMsg   = "This Mac's runner can't open a window. Upgrade it to 0.10.0-rc.12 or later."
+	macWindowRunnerTooOldMsg   = "This Mac's runner can't open a window. Upgrade it to this server's version."
 	macWindowDesktopControlMsg = "A browser desktop that has control of this run didn't close in time, so Wardyn can't open the window. Close it and open the window again."
-	macWindowNotHereMsg        = "This window has to be opened through the server your runner is connected to; try again."
+	macWindowNotHereMsg        = "Wardyn couldn't reach this Mac's runner from here. Try again in a moment."
 	macWindowPausedMsg         = "This run is paused. You can open its window once it is running again."
 	macWindowPreparingMsg      = "This run is still being prepared; the window opens when preparation finishes."
 	macWindowRevokedMsg        = "This session is no longer authorized, so Wardyn won't open a window. Sign in again."
@@ -551,6 +551,10 @@ func (s *Server) openMacWindow(ctx context.Context, run types.AgentRun, a macWin
 	return w, nil
 }
 
+// errMacWindowTookControl is the cause a window that opens ends a browser desktop stream with control by, so
+// the stream tells its viewer (desktopCloseWindowOpen) rather than drop it.
+var errMacWindowTookControl = errors.New("a window opened on the Mac")
+
 // desktopControlSet is the open browser desktop streams of macOS VM runs that carry the viewer's input, by run:
 // the streams a window must wait out. A view-only stream is not in it.
 type desktopControlSet struct {
@@ -597,9 +601,9 @@ func (d *desktopControlSet) end(runID uuid.UUID) int {
 var macWindowYieldWait = 5 * time.Second
 
 // macWindowYieldControl makes the run's browser desktop view only before a window opens: the window is already
-// in the registry, so a stream opened from now on is view only, and every stream that had control is cancelled
-// now rather than at its next re-check (the viewer reconnects, view only). True once none is left; a bounded
-// wait that runs out is false, and the open refuses.
+// in the registry, so a stream opened from now on is view only, and every stream that had control is ended now
+// rather than at its next re-check: its viewer is told a window is open and opens the desktop again from the run
+// page, view only. True once none is left; a bounded wait that runs out is false, and the open refuses.
 func (s *Server) macWindowYieldControl(ctx context.Context, runID uuid.UUID) bool {
 	deadline := time.Now().Add(macWindowYieldWait)
 	for s.desktopControl.end(runID) > 0 {

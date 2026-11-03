@@ -10,4 +10,9 @@ export const HOST_CARD = {
   CANT_LAUNCH: "Can't launch",
   // #3342: the card's own button; the shell's no-barrier notice says "Re-check barrier".
   RECHECK: "Re-check host",
+  RECHECKING: "Re-checking…",
+  CHECKED_JUST_NOW: "Checked just now",
+  // Settings could not read /setup/status at all (a 5xx or a dead network): nothing on the page would be true.
+  UNREACHABLE_TITLE: "Couldn't reach Wardyn",
+  UNREACHABLE_BODY: "Settings didn't get an answer, so nothing here would be accurate. Try again in a moment.",
 } as const;

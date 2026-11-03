@@ -21,9 +21,9 @@ export const MAC_SETTINGS = {
   /** the card's one Save covers every field on it */
   SAVED_TOAST: "macOS settings saved.",
   /** the site switch's label (absent reads allowed) */
-  WATCH_LABEL: "Allow watching background runs",
+  WATCH_LABEL: "Allow watching background desktops",
   WATCH_HINT:
-    "On by default. A person can watch a background macOS run's desktop, view only, unless a governance profile denies it. Turn this off to stop all watching on this install. A watch that is open ends within a minute.",
+    "On by default. The person who started a background macOS run can watch its desktop, view only, unless a governance profile denies it. A Mac that allows desktop control is never watched. Turn this off to stop all watching on this install. A watch that is open ends within a minute.",
   /** NEW, no sheet id: the only values the server accepts that the field can hold are whole days, 1 or more */
   INVALID: "Enter a whole number of days, 1 or more, or leave it empty.",
 } as const;

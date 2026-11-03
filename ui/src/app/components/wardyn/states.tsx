@@ -97,26 +97,33 @@ export function ErrorState({
   message,
   onRetry,
   action,
-  as = "h2",
+  as,
+  title,
+  size = "page",
 }: {
   message?: string;
+  /** Replaces "Something went wrong" — say what could not be reached or loaded. */
+  title?: string;
+  /** "compact" is the quieter in-card look, matching EmptyState's; "page" is for a whole-page failure. */
+  size?: "page" | "compact";
   onRetry?: () => void;
   // A persistent error needs something to read, retry, or act on (rulebook
   // §9). `onRetry` stays the plain-Retry shorthand; `action` is the same
   // open-ended slot EmptyState already takes, for a caller that wants the
   // retry rendered itself (or something other than retry).
   action?: React.ReactNode;
-  /** Heading level for "Something went wrong" — see the module note above. Default h2. */
+  /** Heading level for the title — see the module note above. Default h2, or h4 for a compact one. */
   as?: HeadingTag;
 }) {
-  const Heading = as;
+  const compact = size === "compact";
+  const Heading = as ?? (compact ? "h4" : "h2");
   return (
-    <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
+    <div data-size={size} className={cn("flex flex-col items-center justify-center gap-3 px-6 text-center", compact ? "py-8" : "py-16")}>
       <div className="flex size-12 items-center justify-center rounded-xl border border-danger/30 bg-danger-subtle text-danger">
         <AlertTriangle className="size-5" />
       </div>
       <div className="space-y-1">
-        <Heading className="text-foreground">{STATES.ERROR_TITLE}</Heading>
+        <Heading className="text-foreground">{title ?? STATES.ERROR_TITLE}</Heading>
         <p className="max-w-sm text-sm text-muted-foreground">
           {message ?? STATES.ERROR_DEFAULT}
         </p>

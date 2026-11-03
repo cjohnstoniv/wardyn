@@ -17,6 +17,7 @@ import { Mono } from "../../wardyn/code-block";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { APPROVAL_NOTIFY as COPY } from "../../wardyn/copy/approval-notify";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
+import { CARD_STATUS } from "../../wardyn/copy/card-status";
 
 export function ApprovalNotifyCard() {
   const [data, setData] = React.useState<ApprovalNotifyStatus | null>(null);
@@ -52,6 +53,7 @@ export function ApprovalNotifyCard() {
     <CollapsibleCard
       title={COPY.TITLE}
       summary={summary}
+      status={status === "ready" && failed > 0 ? { tone: "attention", label: CARD_STATUS.NEEDS_ATTENTION } : undefined}
       testId="approval-notify-card"
     >
       {status === "loading" ? (

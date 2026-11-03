@@ -15,6 +15,7 @@ import { Pencil, Plus, Trash2 } from "lucide-react";
 import { components as api } from "../../../lib/api/components";
 import type { Component, MyComponents } from "../../../lib/types";
 import { Button } from "../../ui/button";
+import { ErrorState } from "../../wardyn/states";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { MY_COMPONENTS as T } from "../../wardyn/copy/components";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
@@ -45,12 +46,7 @@ export function MyComponentsCard({ secretsPath = "/secrets" }: { secretsPath?: s
   return (
     <CollapsibleCard title={T.TITLE} summary={data ? T.SUMMARY(data.mine.length) : undefined} testId="my-components-card">
       {failed ? (
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm text-danger">{T.LOAD_FAILED}</p>
-          <Button variant="outline" size="sm" onClick={load}>
-            {T.RETRY}
-          </Button>
-        </div>
+        <ErrorState size="compact" title={T.LOAD_FAILED} onRetry={load} />
       ) : (
         data && (
           <div className="space-y-3">

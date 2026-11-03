@@ -27,6 +27,8 @@ export const DESKTOP_FILES = {
   download: "Download",
   downloaded: (at: string, sha: string) => `Downloaded ${at} · sha256 ${sha.slice(0, 4)}…${sha.slice(-4)}`,
   downloadsAllowed: "Downloads were allowed by your team. Each one is logged by size and hash.",
+  // Row 29: a VM desktop has no clipboard at all, so the Allowed/Blocked strip would claim a relay that is not there.
+  clipboardVM: "Copy and paste: not available on VM desktops yet",
   pasteIn: "Paste in",
   copyOut: "Copy out",
   allowed: "Allowed",

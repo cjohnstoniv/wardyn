@@ -11,6 +11,7 @@ import type { SetupStatus } from "../../../lib/types";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { expandCard } from "../../../lib/test-dom";
+import { CARD_STATUS } from "../../wardyn/copy/card-status";
 
 const adoConnectMock = vi.fn();
 let adoBlockedUrl: string | null = null;
@@ -68,6 +69,15 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386)", () 
     expect(screen.getByText(ADO.ACCESS_SHARED_NOTE)).toBeInTheDocument();
     expect(screen.queryByText(new RegExp(ADO.PANEL_HOW_ORG))).not.toBeInTheDocument();
     expect(screen.queryByText(new RegExp(ADO.PANEL_ENDS_RENEWED))).not.toBeInTheDocument();
+  });
+
+  // UXA-39: the collapsed card carries the Needs attention pill when a (re)connect is what it needs.
+  it("collapsed: not_configured carries the Needs attention pill, live does not", () => {
+    const { unmount } = renderCard(<AdoConnectionCard status={status({ state: "not_configured" })} onChanged={vi.fn()} />);
+    expect(screen.getByText(CARD_STATUS.NEEDS_ATTENTION)).toBeInTheDocument();
+    unmount();
+    renderCard(<AdoConnectionCard status={status({ state: "live", source: "org", org: "https://dev.azure.com/contoso" })} onChanged={vi.fn()} />);
+    expect(screen.queryByText(CARD_STATUS.NEEDS_ATTENTION)).toBeNull();
   });
 
   it("not_configured: the cause and the connect button, which reloads status on a real connection", async () => {

@@ -24,7 +24,7 @@ import { AddComputerBlock } from "../../wardyn/add-computer-block";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { Mono } from "../../wardyn/code-block";
 import { usePrincipal } from "../../wardyn/operator-context";
-import { STATES } from "../../wardyn/states";
+import { ErrorState } from "../../wardyn/states";
 import { Button } from "../../ui/button";
 import { ConfirmDialog } from "../runners/confirm-dialog";
 import { LimitsDialog } from "../runners/limits-dialog";
@@ -324,11 +324,8 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
         <div className="space-y-3">
           <p className="text-body text-muted-foreground">{MY_RUNNER.LEDE}</p>
           {status === "error" ? (
-            <div role="status" className="flex flex-wrap items-center gap-2">
-              <p className="text-body text-muted-foreground">{MY_RUNNER.FETCH_FAILED}</p>
-              <Button size="sm" variant="outline" onClick={() => read(false)}>
-                {STATES.RETRY}
-              </Button>
+            <div role="status">
+              <ErrorState size="compact" title={MY_RUNNER.FETCH_FAILED} onRetry={() => read(false)} />
             </div>
           ) : (
             <>

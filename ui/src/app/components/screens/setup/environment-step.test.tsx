@@ -396,6 +396,14 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     expect(screen.queryByText(/start the Docker daemon/)).not.toBeInTheDocument();
   });
 
+  it("a Kubernetes install with no classes gets the chart fix, not the Docker daemon fix", () => {
+    const status = baseStatus({ runner: { driver: "k8s", confinement_classes: [] } });
+    renderStep({ status });
+    expect(screen.getByText(/No sandbox runner/)).toBeInTheDocument();
+    expect(screen.getByText(/k8s\.runtimeClasses settings/)).toBeInTheDocument();
+    expect(screen.queryByText(/start the Docker daemon/)).not.toBeInTheDocument();
+  });
+
   // X3-F1: the HIGH-4 fold above is right only when the classes list is ALSO
   // empty. A member's redacted body carries Driver:"" WITH the real
   // confinement_classes, so folding "" into no-driver read a hidden runner as
