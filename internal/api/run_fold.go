@@ -56,6 +56,10 @@ type runFold struct {
 	driveMounts []types.DriveMount
 	// keep is the drive keep_work_folder makes at create (stepDrive); nil when not asked.
 	keep *keptWorkFolder
+	// keptPin is the Mac a resumed machine is kept on, which placement holds the run to (stepPlacement);
+	// machine is what dispatch inserts or claims for a request with machine (stepKeptMachine). nil when not asked.
+	keptPin *uuid.UUID
+	machine *keptMachinePlan
 	// seed is what seeding the request's workspaces decided (attached first,
 	// the primary leading); wsRefs adds every other one the spec references.
 	seed   workspaceSeed
@@ -174,6 +178,8 @@ type runFoldStep struct {
 //     policy with the lane's default under it.
 //   - A macOS VM's hold straight after the tool lane: autonomy and the inner walls
 //     have derived the hold by then, and the VM cannot hold a tool call.
+//   - A kept machine after the window at start: its own Mac, its pool, governance,
+//     desktop sign-ins and the run's lasting credentials are all resolved by then.
 //   - Azure DevOps standing and PAT narrowing read autonomy's site snapshot.
 //   - The run's end reads the resolved pool, the governance ceiling and the deployment,
 //     so it sits after placement and refuses before capacity.
@@ -209,6 +215,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepToolPolicy, foldAll},
 	{(*Server).stepMacOSHold, foldAll},
 	{(*Server).stepMacWindow, foldAll},
+	{(*Server).stepKeptMachine, foldAll},
 	{(*Server).stepGitHubCLIRepo, foldCreate | foldPreflight},
 	{(*Server).stepADOStanding, foldAll},
 	{(*Server).stepPATNarrowing, foldPreflight | foldPreview},

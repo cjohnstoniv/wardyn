@@ -656,6 +656,7 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	layerActed := len(layers) > 0 && (len(droppedInjection) > 0 || len(droppedLane) > 0 || len(droppedGrant) > 0)
 	boundaryLayer := slices.ContainsFunc(layers, func(l sealLayer) bool { return l.rec.Layer == policyref.LayerBoundary })
 	wallsLayer := slices.ContainsFunc(layers, func(l sealLayer) bool { return l.rec.Layer == policyref.LayerPersonal })
+	presetLayer := slices.ContainsFunc(layers, func(l sealLayer) bool { return l.rec.Layer == policyref.LayerWallPreset })
 	// No assigned profile — an operator (effectiveCeiling short-circuits at step
 	// 1) or an unassigned member: no run.ceiling.reassert row, which is what
 	// makes the row's ABSENCE mean "no profile applies" rather than "this door
@@ -691,12 +692,15 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		if wallsLayer {
 			data["personal_walls"] = true
 		}
+		if presetLayer {
+			data["wall_preset"] = true
+		}
 		data["withheld_grants"] = nonNilStrings(droppedGrant)
 	}
 	if c.profile == "" && boundaryLayer {
 		data["note"] = "the Wardyn boundary denies these hosts or does not allow them, so every credential lane that reaches one is withheld"
 	} else if c.profile == "" {
-		data["note"] = "a restriction or the run owner's walls deny these hosts or keep these credentials out, so every credential lane that reaches one is withheld"
+		data["note"] = "a restriction, the run owner's walls or the run's wall preset deny these hosts or keep these credentials out, so every credential lane that reaches one is withheld"
 	} else if len(added) > 0 || len(droppedInjection) > 0 || len(droppedLane) > 0 {
 		data["note"] = "the acting principal's governance profile denies these hosts; the denies are unioned into the run policy " +
 			"(deny beats allow and allow_all_egress at the proxy) and every credential lane that reaches a denied host is withheld — " +

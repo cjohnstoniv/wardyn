@@ -712,6 +712,27 @@ start.
 | `runners_enabled_required` | `PUT /runners/settings` needs `enabled`: true or false. |
 | `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
 | `site_config_runners_via_own_route` | Change `runners.enabled` with `PUT /runners/settings`. |
+| `kept_machine_site_off` | `macos_vm.allow_kept_machines` is not true: this install keeps no machines. |
+| `kept_machine_not_your_mac` | `403`: the caller is not a person, or has no Mac of their own outside other people's pools. |
+| `kept_machine_person_limit` | The caller already keeps `macos_vm.max_kept_machines_per_person` machines. |
+| `kept_machine_not_found` | `404`: no kept machine of the caller's has that id. |
+| `kept_machine_in_use` | `409`: a run holds the machine, so it can't be deleted. |
+| `kept_machine_deleting` | `409`: a delete of the machine has already started. |
+| `kept_machine_delete_failed` | `503`: the Mac refused the delete before removing anything; the machine is kept. |
+| `kept_machine_delete_unconfirmed` | `503`: the Mac's answer was lost or was not a refusal, so the machine may already be gone; the delete stays pending and is retried until the Mac confirms it, and the machine can't be resumed meanwhile. |
+| `kept_machine_invalid` | `400`: the run's `machine` is malformed: both `keep` and `resume`, `fresh` without `resume`, or a name that is not a valid machine name. |
+| `kept_machine_interactive_only` | `422`: a machine is kept or resumed only by an interactive macOS VM run. |
+| `kept_machine_resident_secrets` | `422`: the run would put a lasting credential (an environment or file secret) inside the kept machine. |
+| `kept_machine_with_work_folder` | `422`: `keep_work_folder` was asked beside a kept machine. |
+| `kept_machine_expired` | `410`: the machine passed its idle limit; it is deleted, or its delete has started. |
+| `kept_machine_base_too_old` | `409`: the machine's base is older than `macos_vm.max_base_age_days`; start it fresh. |
+| `kept_machine_offline` | `409`: the Mac is offline, or is not the Mac the machine is kept on. |
+| `kept_machine_runner_too_old` | `409`: the Mac's runner does not keep machines; update `wardyn-runnerd`. |
+| `kept_machine_mac_limit` | `422`: another machine would pass the Mac's kept-disk limit, or the Mac keeps no machines. |
+| `kept_machine_name_taken` | `409`: the caller already keeps a machine of that name. |
+| `kept_machine_unavailable` | The run was not launched: its dispatch could not make or claim the machine. |
+| `kept_machine_fresh_base` | `422`: a fresh start names a base other than its machine's own; start a new kept machine to use a different base. |
+| `kept_machine_reset_unconfirmed` | `409`: a fresh start of the machine was asked of its Mac and never confirmed, so only another fresh start may use it. |
 | `runner_token_invalid` | Registration token is unknown, expired, consumed, or bound to another org. |
 | `runner_claim_mismatch` | The personal owner, fingerprint, org binding, claim state, or expiry does not match. |
 | `runner_not_found` | No such runner to revoke: absent, already revoked, an unclaimed one past its wait, or (on `/me`) another person's. |

@@ -25,6 +25,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // A person's own walls (#2948): one private, narrow-only document (types.PersonalWalls) kept in
@@ -412,21 +413,35 @@ func wallsGrantKeys(gs []types.GrantSpec) []string {
 	return out
 }
 
-// personalWallsRunStep narrows spec by the walls of the person launching the run: composer.MeetWalls,
-// then the grants they keep out are removed. It is the step just inside the Wardyn boundary's on every
-// arm (boundaryThenNoRepositories), so a super admin's own run is bound by their walls too. Each knob it
-// changes is recorded as the person's, and named in a warning and on the run's policy source. Walls
-// that cannot be read refuse the run: it is never resolved without them.
+// personalWallsRunStep narrows spec by the walls of the person launching the run (wallsRunStep). It is
+// the step just inside the Wardyn boundary's on every arm (boundaryThenNoRepositories), so a super
+// admin's own run is bound by their walls too. Each knob it changes is recorded as the person's, and
+// named in a warning and on the run's policy source. Walls that cannot be read refuse the run: it is
+// never resolved without them.
 func (s *Server) personalWallsRunStep(ctx context.Context, spec *types.RunPolicySpec, source *policySourceRecord) ([]string, *runRefusal) {
 	walls, err := s.personalWalls(ctx, wallsPerson(ctx))
 	if err != nil {
 		return nil, runServerError("read your walls", err)
 	}
+	rec, err := s.wallsRunStep(spec, source, walls, personalProvenance)
+	if err != nil {
+		return nil, wallsMeetRefusal(err, "your walls", "Your walls", "Change your walls with `wardyn walls`, or in Settings.")
+	}
+	source.PersonalWalls = rec
+	return wallsWarnings("your walls", rec), nil
+}
+
+// wallsRunStep narrows spec by one walls document, a person's own or a wall preset's: composer.MeetWalls
+// over walls.Overlay(), so every knob the overlay carries is met and none is copied by hand, then the
+// grants the walls keep out are removed, then wallsBeyondMeet. Each knob it changes is recorded as rec's.
+// It returns what it changed, nil when nothing; an error is the meet's.
+func (s *Server) wallsRunStep(spec *types.RunPolicySpec, source *policySourceRecord, walls types.PersonalWallsSpec, rec policyref.Provenance) (*wallsSourceRecord, error) {
 	if walls.Empty() {
 		return nil, nil
 	}
 	before := spec.Clone()
-	source.knobs.step(personalProvenance, spec, func() {
+	var err error
+	source.knobs.step(rec, spec, func() {
 		var met types.RunPolicySpec
 		if met, err = composer.MeetWalls(*spec, walls.Overlay()); err != nil {
 			return
@@ -441,23 +456,139 @@ func (s *Server) personalWallsRunStep(ctx context.Context, spec *types.RunPolicy
 		s.wallsBeyondMeet(&met, *spec, walls)
 		*spec = met
 	})
+	if err != nil {
+		return nil, err
+	}
+	return newWallsSource(before, *spec), nil
+}
+
+// wallsMeetRefusal answers a walls meet that failed: 403 when the walls and the policy have nothing in
+// common for a knob, named as who (mid-sentence) and Who (at its start), with the remedy; else a server
+// error.
+func wallsMeetRefusal(err error, who, whoStart, remedy string) *runRefusal {
 	var unmet *composer.OverlayError
 	if errors.As(err, &unmet) && unmet.Reason == composer.ReasonOverlayUnsatisfiable {
-		return nil, runError(http.StatusForbidden, reasonGovernanceOverlayUnsatisfiable,
-			"Your walls and this run's policy leave "+unmet.Field+" nothing in common: "+unmet.Detail+". Change your walls with `wardyn walls`, or in Settings.")
+		return runError(http.StatusForbidden, reasonGovernanceOverlayUnsatisfiable,
+			whoStart+" and this run's policy leave "+unmet.Field+" nothing in common: "+unmet.Detail+". "+remedy)
 	}
-	if err != nil {
-		return nil, runServerError("meet your walls", err)
+	return runServerError("meet "+who, err)
+}
+
+// wallsWarnings names each knob rec narrowed, as who's.
+func wallsWarnings(who string, rec *wallsSourceRecord) []string {
+	if rec == nil {
+		return nil
 	}
-	var warns []string
-	if rec := newWallsSource(before, *spec); rec != nil {
-		source.PersonalWalls = rec
-		for _, knob := range rec.Narrowed {
-			warns = append(warns, "your walls narrowed "+knob)
+	warns := make([]string, 0, len(rec.Narrowed))
+	for _, knob := range rec.Narrowed {
+		warns = append(warns, who+" narrowed "+knob)
+	}
+	return warns
+}
+
+// launchWallPreset is the frozen copy of the wall preset a launch names, nil when it names none. A
+// built-in is open to every caller; a stored preset is the caller's to apply when the templates'
+// authority lets them read it, judged on the one owner subject (wallPresetCaller). One that does not
+// exist, that the caller cannot read, or that names a stored preset on a store that keeps none is
+// refused 422 wall_preset_unknown, the same for each: a launch is no existence oracle, and it is never
+// run without the preset it named.
+func (s *Server) launchWallPreset(ctx context.Context, r *http.Request, id string) (*types.WallPresetOnRun, *runRefusal) {
+	if id == "" {
+		return nil, nil
+	}
+	p, ok := types.BuiltinWallPreset(id)
+	if !ok {
+		unknown := runError(http.StatusUnprocessableEntity, reasonWallPresetUnknown,
+			fmt.Sprintf("wall preset %q does not exist or is not open to you", id))
+		ps, has := s.cfg.Store.(store.WallPresetStore)
+		if !has {
+			return nil, unknown
+		}
+		c, err := s.wallPresetCaller(ctx, r, ps)
+		if err != nil {
+			return nil, runServerError("read template grants", err)
+		}
+		var d types.TemplateDenial
+		p, d, err = findWallPreset(ctx, ps, c.actor, id)
+		switch {
+		case errors.Is(err, store.ErrNotFound), err == nil && d != types.TemplateAllowed:
+			return nil, unknown
+		case err != nil:
+			return nil, runServerError("read the wall preset", err)
 		}
 	}
-	return warns, nil
+	return &types.WallPresetOnRun{ID: p.ID, Name: p.Name, Scope: p.Scope, GroupID: p.GroupID, Version: p.Version, Spec: p.Spec}, nil
 }
+
+// wallPresetSourceRecord is policy_source.wall_preset on the run.create row: the preset the run was
+// launched with and, as for a person's walls, what it narrowed, removed and added.
+type wallPresetSourceRecord struct {
+	ID      string                `json:"id"`
+	Name    string                `json:"name"`
+	Scope   types.WallPresetScope `json:"scope"`
+	GroupID string                `json:"group_id,omitempty"`
+	Version int                   `json:"version"`
+	*wallsSourceRecord
+}
+
+// wallPresetProvenance is the record of a value a run's wall preset decided. A personal preset's name
+// is its owner's to see, so its record names none.
+func wallPresetProvenance(p *types.WallPresetOnRun) policyref.Provenance {
+	rec := policyref.Provenance{Layer: policyref.LayerWallPreset}
+	if p.Scope != types.WallPresetScopePerson {
+		rec.Name = p.Name
+	}
+	return rec
+}
+
+// wallPresetLabel names the run's preset in a sentence read by the run's owner (owner) or someone
+// else, who is told only that a personal preset applied.
+func wallPresetLabel(p *types.WallPresetOnRun, owner bool) string {
+	if p.Scope == types.WallPresetScopePerson && !owner {
+		return "a personal wall preset"
+	}
+	return "the " + p.Name + " wall preset"
+}
+
+// wallPresetRunStep narrows spec by the wall preset the launch chose, after the person's own walls and
+// by the same step (wallsRunStep), so it only narrows and every knob a preset can name is met. The
+// frozen copy is validated again first: a preset a later, stricter rule refuses stops the launch (422
+// wall_preset_invalid), never launches without it. Open names nothing and is only recorded.
+func (s *Server) wallPresetRunStep(spec *types.RunPolicySpec, source *policySourceRecord, p *types.WallPresetOnRun) ([]string, *runRefusal) {
+	if p == nil {
+		return nil, nil
+	}
+	label := wallPresetLabel(p, true)
+	if err := validatePersonalWalls(p.Spec); err != nil {
+		return nil, wallPresetInvalid(label + " no longer passes the rules for walls (" + err.Error() + "); edit the preset, or pick another")
+	}
+	rec, err := s.wallsRunStep(spec, source, p.Spec, wallPresetProvenance(p))
+	if err != nil {
+		return nil, wallsMeetRefusal(err, label, "The "+p.Name+" wall preset", "Pick another preset, or launch with Open.")
+	}
+	source.WallPreset = &wallPresetSourceRecord{ID: p.ID, Name: p.Name, Scope: p.Scope, GroupID: p.GroupID, Version: p.Version, wallsSourceRecord: rec}
+	source.wallPreset = p
+	return wallsWarnings(label, rec), nil
+}
+
+// runWallPresetView is the run read's wall_preset: never the spec, and for a personal preset read by
+// anyone but the run's owner, its scope alone.
+func runWallPresetView(r *http.Request, run types.AgentRun) *client.RunWallPreset {
+	p := run.WallPreset
+	if p == nil {
+		return nil
+	}
+	if p.Scope == types.WallPresetScopePerson && principalFromRequest(r) != run.CreatedBy {
+		return &client.RunWallPreset{Scope: string(p.Scope)}
+	}
+	return &client.RunWallPreset{ID: p.ID, Name: p.Name, Scope: string(p.Scope), GroupID: p.GroupID, Version: p.Version}
+}
+
+// unstoppablePushWarning is the run warning for a run whose effective capability list leaves out
+// code_write on an install whose git token broker is off: the token goes into the sandbox, where
+// nothing holds it to the list, so its pushes cannot be stopped.
+const unstoppablePushWarning = "Pushes can't be stopped on this install: this run's capabilities leave out code_write, " +
+	"but the git token broker is off, so a git token in the sandbox can still push"
 
 // wallsCapabilityRefusal is why a run's provider capabilities are not narrowed to its owner's walls:
 // the walls could not be read, or they share no capability with what the run would hold.
@@ -466,34 +597,49 @@ type wallsCapabilityRefusal struct {
 	reason, detail string
 }
 
-// wallsCapabilityMeet is the run owner's capability wall over the capabilities a provider would give
-// the run, where the run's policy left them to the provider's default. The meet runs where that
-// default is known: dispatch for Azure DevOps (wallsADOCapabilities), create for the GitHub CLI
-// (wallsGitHubCLICapabilities). It keeps the capabilities in both, in caps' order, so it never adds one
-// the default does not give. kept is nil when the walls name no list for field. Walls that cannot be
-// read, or a wall that shares nothing with caps, refuse the run.
-func wallsCapabilityMeet[C ~string](ctx context.Context, s *Server, owner, field string, caps []C,
+// wallsCapabilityMeet is the run owner's capability wall, then the run's wall preset's, over the
+// capabilities a provider would give the run, where the run's policy left them to the provider's
+// default. The meet runs where that default is known: dispatch for Azure DevOps (wallsADOCapabilities),
+// create for the GitHub CLI (wallsGitHubCLICapabilities). It keeps the capabilities in every list, in
+// caps' order, so it never adds one the default does not give. kept is nil when neither names a list
+// for field. Walls that cannot be read, or a wall that leaves nothing of caps, refuse the run.
+func wallsCapabilityMeet[C ~string](ctx context.Context, s *Server, run types.AgentRun, field string, caps []C,
 	wallOf func(types.PersonalWallsSpec) *[]C,
 ) (kept []C, refused *wallsCapabilityRefusal) {
-	walls, err := s.personalWalls(ctx, owner)
+	walls, err := s.personalWalls(ctx, run.CreatedBy)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: read the run owner's walls for "+field+"; the run is refused", slog.Any("err", err))
 		return nil, &wallsCapabilityRefusal{status: http.StatusServiceUnavailable, reason: reasonGrantWithheldUnread,
 			detail: "Your walls could not be read, so this run's " + field + " cannot be narrowed to them. Walls that cannot be read refuse the run; try again."}
 	}
-	wall := wallOf(walls)
-	if wall == nil {
-		return nil, nil
+	type capWall struct {
+		list                  *[]C
+		whoStart, who, remedy string
 	}
-	for _, c := range caps {
-		if slices.Contains(*wall, c) {
-			kept = append(kept, c)
+	lists := []capWall{{wallOf(walls), "Your walls", "your walls", "Change your walls with `wardyn walls`, or in Settings."}}
+	if p := run.WallPreset; p != nil {
+		lists = append(lists, capWall{wallOf(p.Spec), "The " + p.Name + " wall preset", "the " + p.Name + " wall preset", "Pick another preset, or launch with Open."})
+	}
+	named := false
+	for _, l := range lists {
+		if l.list == nil {
+			continue
 		}
-	}
-	if len(kept) == 0 {
-		return nil, &wallsCapabilityRefusal{status: http.StatusForbidden, reason: reasonGovernanceOverlayUnsatisfiable,
-			detail: "Your walls and this run's provider default leave " + field + " nothing in common: no capability is in both the default (" +
-				wallsCapList(caps) + ") and your walls (" + wallsCapList(*wall) + "). Change your walls with `wardyn walls`, or in Settings."}
+		from := caps
+		if named {
+			from = kept
+		}
+		named, kept = true, nil
+		for _, c := range from {
+			if slices.Contains(*l.list, c) {
+				kept = append(kept, c)
+			}
+		}
+		if len(kept) == 0 {
+			return nil, &wallsCapabilityRefusal{status: http.StatusForbidden, reason: reasonGovernanceOverlayUnsatisfiable,
+				detail: l.whoStart + " and this run's provider default leave " + field + " nothing in common: no capability is in both the default (" +
+					wallsCapList(from) + ") and " + l.who + " (" + wallsCapList(*l.list) + "). " + l.remedy}
+		}
 	}
 	return kept, nil
 }
@@ -510,7 +656,7 @@ func wallsCapList[C ~string](caps []C) string {
 // azure_devops_capabilities) to the run owner's walls, at dispatch where that profile is known. A
 // policy that names a list met the walls at create (personalWallsRunStep).
 func (s *Server) wallsADOCapabilities(ctx context.Context, run types.AgentRun, caps []adoscope.Capability) ([]adoscope.Capability, *wallsCapabilityRefusal) {
-	return wallsCapabilityMeet(ctx, s, run.CreatedBy, "azure_devops_capabilities", caps,
+	return wallsCapabilityMeet(ctx, s, run, "azure_devops_capabilities", caps,
 		func(w types.PersonalWallsSpec) *[]adoscope.Capability { return w.AzureDevOpsCapabilities })
 }
 
@@ -518,7 +664,7 @@ func (s *Server) wallsADOCapabilities(ctx context.Context, run types.AgentRun, c
 // run owner's walls. No GitHub lane reads a policy's github_capabilities, so the walls meet the
 // default on every run.
 func (s *Server) wallsGitHubCLICapabilities(ctx context.Context, run types.AgentRun, caps []ghscope.Capability) ([]ghscope.Capability, *wallsCapabilityRefusal) {
-	return wallsCapabilityMeet(ctx, s, run.CreatedBy, "github_capabilities", caps,
+	return wallsCapabilityMeet(ctx, s, run, "github_capabilities", caps,
 		func(w types.PersonalWallsSpec) *[]ghscope.Capability { return w.GitHubCapabilities })
 }
 
@@ -544,22 +690,35 @@ func (s *Server) wallsBeyondMeet(met *types.RunPolicySpec, before types.RunPolic
 	}
 }
 
-// wallsRecordingFloor is the recording level the run owner's walls ask for, read at dispatch; empty when
-// they name none or the run has no owner. An error means the walls cannot be read: the caller refuses the
-// run, as the create does.
+// wallsRecordingFloor is the recording level the run owner's walls and the run's wall preset ask for,
+// the higher of the two, read at dispatch; empty when neither names one. An error means the walls cannot
+// be read: the caller refuses the run, as the create does.
 func (s *Server) wallsRecordingFloor(ctx context.Context, run types.AgentRun) (types.RecordingLevel, error) {
 	walls, err := s.personalWalls(ctx, run.CreatedBy)
-	if err != nil || walls.Recording == nil {
+	if err != nil {
 		return "", err
 	}
-	return *walls.Recording, nil
+	var floor types.RecordingLevel
+	for _, r := range []*types.RecordingLevel{walls.Recording, wallPresetRecording(run.WallPreset)} {
+		if r != nil && r.Rank() > floor.Rank() {
+			floor = *r
+		}
+	}
+	return floor, nil
+}
+
+func wallPresetRecording(p *types.WallPresetOnRun) *types.RecordingLevel {
+	if p == nil {
+		return nil
+	}
+	return p.Spec.Recording
 }
 
 // personalWallsSealLayer is the run owner's walls as a seal layer: their denies, the desktop
-// directions they block and the credentials they keep out. Never their allowlist, so the hosts the
-// run's own setup adds (model, repositories, components) stay reachable. A run with no owner, an owner
-// with no walls, or walls that name none of the three, has none. Walls that cannot be read seal the
-// run to no egress and no credential, as an unread restriction does.
+// directions they block, the credentials they keep out and their refusal of every push. Never their
+// allowlist, so the hosts the run's own setup adds (model, repositories, components) stay reachable. A
+// run with no owner, an owner with no walls, or walls that name none of these, has none. Walls that
+// cannot be read seal the run to no egress and no credential, as an unread restriction does.
 func (s *Server) personalWallsSealLayer(ctx context.Context, run types.AgentRun) []sealLayer {
 	if run.CreatedBy == "" {
 		return nil
@@ -572,24 +731,40 @@ func (s *Server) personalWallsSealLayer(ctx context.Context, run types.AgentRun)
 		return []sealLayer{{rec: personalProvenance, egress: types.CeilingOverlay{AllowedDomains: &[]string{}, AllowAllEgress: &off},
 			grants: &[]types.GrantSpec{}}}
 	}
-	l := sealLayer{rec: personalProvenance, desktop: walls.Overlay().Desktop, withheldGrants: walls.WithheldGrants}
+	return wallsSealLayer(personalProvenance, walls)
+}
+
+// wallPresetSealLayer is the run's wall preset as a seal layer, built as the owner's walls' is
+// (wallsSealLayer) from the frozen copy on the run: no store read, so it cannot fail open or seal the
+// run to nothing, and a later edit or delete of the preset changes nothing.
+func wallPresetSealLayer(run types.AgentRun) []sealLayer {
+	if run.WallPreset == nil {
+		return nil
+	}
+	return wallsSealLayer(wallPresetProvenance(run.WallPreset), run.WallPreset.Spec)
+}
+
+// wallsSealLayer is one walls document's seal layer, none when it names nothing the seal re-asserts.
+func wallsSealLayer(rec policyref.Provenance, walls types.PersonalWallsSpec) []sealLayer {
+	l := sealLayer{rec: rec, desktop: walls.Overlay().Desktop, withheldGrants: walls.WithheldGrants, denyAllPushes: walls.DeniesAllPushes()}
 	if d := walls.DeniedDomains; d != nil && len(*d) > 0 {
 		deny := slices.Clone(*d)
 		l.egress.DeniedDomains = &deny
 	}
-	if l.egress.DeniedDomains == nil && l.desktop == nil && len(l.withheldGrants) == 0 {
+	if l.egress.DeniedDomains == nil && l.desktop == nil && len(l.withheldGrants) == 0 && !l.denyAllPushes {
 		return nil
 	}
 	return []sealLayer{l}
 }
 
-// wallsAdmitApproval is the run owner's walls' bound on an egress approval, beside the boundary's and
-// the restrictions': a host their walls deny is not admitted, whoever decides. A host outside their
-// allowlist follows their own choice for a site that is not listed, so it is not refused here. Walls
-// that cannot be read refuse the approve (500). ok=false: the answer is written and the approval stays
-// pending. It returns the run, read here when the gates before it had not.
+// wallsAdmitApproval is the run owner's walls' bound on an egress approval, and the run's wall
+// preset's, beside the boundary's and the restrictions': a host either denies is not admitted, whoever
+// decides. A host outside their allowlist follows their own choice for a site that is not listed, so it
+// is not refused here. Walls that cannot be read refuse the approve (500). ok=false: the answer is
+// written and the approval stays pending. It returns the run, read here when the gates before it had
+// not. A store that keeps neither walls nor stored presets has no host to deny: a built-in denies none.
 func (s *Server) wallsAdmitApproval(w http.ResponseWriter, r *http.Request, ap types.ApprovalRequest, run types.AgentRun, haveRun bool) (types.AgentRun, bool, bool) {
-	if _, ok := s.cfg.Store.(store.PrincipalPrefStore); !ok {
+	if !s.wallsDenyHosts() {
 		return run, haveRun, true
 	}
 	if !haveRun {
@@ -606,41 +781,59 @@ func (s *Server) wallsAdmitApproval(w http.ResponseWriter, r *http.Request, ap t
 		return run, haveRun, false
 	}
 	host := approvalHost(ap)
-	if d := walls.DeniedDomains; d == nil || !ceilingDenies(*d, host) {
-		return run, haveRun, true
+	owner := principalFromRequest(r) == run.CreatedBy
+	if d := walls.DeniedDomains; d != nil && ceilingDenies(*d, host) {
+		msg := run.CreatedBy + "'s walls block " + host + " for this run."
+		if owner {
+			msg = "Your walls block " + host + ". Change them in Settings."
+		}
+		writeErrorReasonPolicy(w, http.StatusForbidden, reasonPersonalWallsHost, msg, policyref.Personal(run.CreatedBy), personalProvenance)
+		return run, haveRun, false
 	}
-	msg := run.CreatedBy + "'s walls block " + host + " for this run."
-	if principalFromRequest(r) == run.CreatedBy {
-		msg = "Your walls block " + host + ". Change them in Settings."
+	if p := run.WallPreset; p != nil && p.Spec.DeniedDomains != nil && ceilingDenies(*p.Spec.DeniedDomains, host) {
+		msg := "This run was launched with " + wallPresetLabel(p, owner) + ", which blocks " + host + ". Launch a new run without it."
+		prov := wallPresetProvenance(p)
+		writeErrorReasonPolicy(w, http.StatusForbidden, reasonWallPresetHost, msg, policyref.WallPreset(prov.Name, run.CreatedBy), prov)
+		return run, haveRun, false
 	}
-	ref := policyref.Personal(run.CreatedBy)
-	writeErrorReasonPolicy(w, http.StatusForbidden, reasonPersonalWallsHost, msg, ref, personalProvenance)
-	return run, haveRun, false
+	return run, haveRun, true
+}
+
+// wallsDenyHosts reports whether the store keeps anything that can deny a run a host on an approval:
+// a person's walls, or a stored wall preset.
+func (s *Server) wallsDenyHosts() bool {
+	_, prefs := s.cfg.Store.(store.PrincipalPrefStore)
+	_, presets := s.cfg.Store.(store.WallPresetStore)
+	return prefs || presets
 }
 
 // projectWallsBlock sets WallsBlock on every PENDING egress_domain row whose host the run owner's walls
-// deny, the verdict wallsAdmitApproval gives on an approve. The run and the walls are read once each per run;
-// a run or walls that cannot be read leave the row unmarked, and the approve still refuses on its own.
+// or the run's wall preset deny, the verdict wallsAdmitApproval gives on an approve. The run and the
+// walls are read once each per run; a run or walls that cannot be read leave the row unmarked, and the
+// approve still refuses on its own.
 func (s *Server) projectWallsBlock(ctx context.Context, rows []types.ApprovalRequest) {
-	if _, ok := s.cfg.Store.(store.PrincipalPrefStore); !ok {
+	if !s.wallsDenyHosts() {
 		return
 	}
-	blocks := map[uuid.UUID]*types.PersonalWallsSpec{}
+	denies := map[uuid.UUID][][]string{}
 	for i := range rows {
 		ap := rows[i]
 		if ap.State != types.ApprovalPending || ap.Kind != types.ApprovalEgressDomain {
 			continue
 		}
-		walls, seen := blocks[ap.RunID]
+		lists, seen := denies[ap.RunID]
 		if !seen {
 			if run, err := s.cfg.Store.GetRun(ctx, ap.RunID); err == nil {
-				if spec, err := s.personalWalls(ctx, run.CreatedBy); err == nil {
-					walls = &spec
+				if spec, err := s.personalWalls(ctx, run.CreatedBy); err == nil && spec.DeniedDomains != nil {
+					lists = append(lists, *spec.DeniedDomains)
+				}
+				if p := run.WallPreset; p != nil && p.Spec.DeniedDomains != nil {
+					lists = append(lists, *p.Spec.DeniedDomains)
 				}
 			}
-			blocks[ap.RunID] = walls
+			denies[ap.RunID] = lists
 		}
-		if walls != nil && walls.DeniedDomains != nil && ceilingDenies(*walls.DeniedDomains, approvalHost(ap)) {
+		if slices.ContainsFunc(lists, func(d []string) bool { return ceilingDenies(d, approvalHost(ap)) }) {
 			rows[i].WallsBlock = true
 		}
 	}

@@ -68,8 +68,10 @@ func TestKeptMachineDeleteReachesTheSubstrate(t *testing.T) {
 		t.Fatalf("a booted machine: %v", err)
 	}
 	sub.outcome, sub.err = "gone", nil
-	if _, err := call(args); err == nil {
-		t.Fatal("an unknown outcome was passed on")
+	_, err := call(args)
+	var we *runnerwire.Error
+	if err == nil || errors.As(err, &we) && we.Code == runnerwire.CodeRefused {
+		t.Fatalf("an unknown outcome after a delete ran must be an internal error, not a refusal: %v", err)
 	}
 	if len(sub.asked) != 4 || sub.asked[0] != id || sub.by[0] != "owner" {
 		t.Fatalf("the substrate was asked %v by %v", sub.asked, sub.by)

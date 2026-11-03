@@ -368,10 +368,11 @@ func (s *Server) placementCapabilityRefusalFor(ctx context.Context, req createRu
 		if baseLimit, err = s.macOSBaseLimitOf(ctx); err != nil {
 			return runServerError("read macOS VM capability", err)
 		}
-		if f := s.macOSBaseDeniedRefusal(ctx, req.MacOSBase, ceiling); f != nil {
+		// A resume names no base: its machine's own is checked by stepKeptMachine, never the Mac's current one.
+		if f := s.macOSBaseDeniedRefusal(ctx, req.MacOSBase, ceiling); f != nil && !keptResume(req) {
 			return f
 		}
-		baseLimit.Base = req.MacOSBase
+		baseLimit.Base, baseLimit.Kept = req.MacOSBase, keptResume(req)
 	}
 	for _, id := range runners {
 		pc, err := s.placementCapabilities(ctx, types.PlacementLocal, id)
@@ -494,6 +495,9 @@ type macOSBaseLimit struct {
 	Now     time.Time
 	// Base is the base the run picked (CreateRunRequest.MacOSBase), whose age is the one read; "" is Standard.
 	Base string
+	// Kept: the run resumes a kept machine, which boots its own disk, so the Mac's current base (its state,
+	// name, age, harnesses and minimum size) is not what it runs; the runner checks the machine's own.
+	Kept bool
 }
 
 // macOSBaseLimitOf is the organisation's maximum base age now, none when the site config sets none.
@@ -574,18 +578,19 @@ func macOSVMOffer(rn types.Runner, caps runnerwire.Caps, haveCaps bool, live int
 	base, harnesses, known := macOSChosenBase(mc, limit)
 	out.Harnesses = harnesses
 	ageRefusal, days := macOSBaseRefusal(name, base, limit)
+	kept := len(limit) > 0 && limit[0].Kept // a resumed machine boots its own disk, whatever the Mac's base is now
 	switch {
-	case mc.Base.State == runnerwire.MacVMBasePreparing:
+	case !kept && mc.Base.State == runnerwire.MacVMBasePreparing:
 		out.Refusal, out.Why = macOSRefusal("machine_kind", fmt.Sprintf("%s is still preparing macOS (%d%%).", name, mc.Base.Progress)), client.MacOSVMWhyPreparing
-	case mc.Base.State != runnerwire.MacVMBaseReady:
+	case !kept && mc.Base.State != runnerwire.MacVMBaseReady:
 		detail := name + " has no macOS base image ready yet."
 		if mc.Base.Error != "" {
 			detail = fmt.Sprintf("%s has no macOS base image ready yet: %s.", name, mc.Base.Error)
 		}
 		out.Refusal, out.Why = macOSRefusal("machine_kind", detail), client.MacOSVMWhyNoBase
-	case !known:
+	case !kept && !known:
 		out.Refusal, out.Why = macOSBaseNotFound(limit[0].Base), client.MacOSVMWhyNoBase
-	case ageRefusal != nil:
+	case !kept && ageRefusal != nil:
 		out.Refusal, out.Why, out.Have, out.Need = ageRefusal, client.MacOSVMWhyBaseTooOld, days, limit[0].MaxDays
 	case live >= mc.Max && mc.Max >= 2:
 		out.Refusal, out.Why = macOSRefusal("machine_kind", name+" already runs 2 macOS VMs, the most Apple's licence allows."), client.MacOSVMWhyAtLimit
@@ -690,6 +695,10 @@ func (s *Server) macOSVMRefusal(ctx context.Context, id uuid.UUID, pc placementC
 	}
 	fit := *caps.MacOSVM
 	fit.Harnesses = offer.Harnesses // the picked base's
+	// The runner checks a resumed machine's harnesses and size against its own disk.
+	if limit.Kept {
+		ask.Harnesses, ask.CPUMillis, ask.MemoryMiB = nil, 0, 0
+	}
 	return macOSVMFit(&fit, rn, ask, pool), nil
 }
 

@@ -44,11 +44,54 @@ type KeptMachine struct {
 	ExpiresAt      time.Time              `json:"expires_at"`
 	// DeleteStartedAt is set once a delete has started and is still finishing.
 	DeleteStartedAt *time.Time `json:"delete_started_at,omitempty"`
+	// DeleteReason says why a machine being deleted is: KeptMachineDeletedBy*. Empty while it is not.
+	DeleteReason string `json:"delete_reason,omitempty"`
+	// RunnerName is the name of the Mac the machine is kept on, filled by the server.
+	RunnerName string `json:"runner_name,omitempty"`
+}
+
+// KeptMachine.DeleteReason values.
+const (
+	KeptMachineDeletedByPerson  = "person"
+	KeptMachineDeletedByExpired = "expired"
+	KeptMachineDeletedByAdmin   = "admin"
+	KeptMachineDeletedByErasure = "erasure"
+)
+
+// MyMachines is GET /api/v1/me/machines: the caller's own kept machines, and whether they may keep another.
+// Reason is the refusal code when Allowed is false: the site switch (kept_machine_site_off), their
+// governance profile (governance_unit), no Mac of their own outside other people's pools
+// (kept_machine_not_your_mac), or Count at Limit (kept_machine_person_limit, when resuming one still
+// works). WorstBytes is the most disk one new kept machine can take.
+type MyMachines struct {
+	Machines   []KeptMachine `json:"machines"`
+	Allowed    bool          `json:"allowed"`
+	Reason     string        `json:"reason,omitempty"`
+	Count      int           `json:"count"`
+	Limit      int           `json:"limit"`
+	WorstBytes int64         `json:"worst_bytes"`
+}
+
+// KeptMachineList is GET /api/v1/machines/kept: one page of every person's kept machines, for an admin.
+type KeptMachineList struct {
+	Machines []KeptMachine `json:"machines"`
+	Total    int           `json:"total"`
+}
+
+// KeptMachineDeleteResult is DELETE /api/v1/machines/kept/{id}'s answer: the machine and what its Mac
+// did (deleted, already_absent, deferred while the Mac is offline, or record_only when the Mac is no
+// longer registered).
+type KeptMachineDeleteResult struct {
+	ID       uuid.UUID `json:"id"`
+	Name     string    `json:"name"`
+	Owner    string    `json:"owner"`
+	RunnerID uuid.UUID `json:"runner_id"`
+	Outcome  string    `json:"outcome"`
 }
 
 // ListMyMachines lists the caller's own kept machines (GET /api/v1/me/machines).
-func (c *Client) ListMyMachines(ctx context.Context) ([]KeptMachine, error) {
-	var out []KeptMachine
+func (c *Client) ListMyMachines(ctx context.Context) (MyMachines, error) {
+	var out MyMachines
 	err := c.do(ctx, http.MethodGet, "/api/v1/me/machines", nil, &out)
 	return out, err
 }

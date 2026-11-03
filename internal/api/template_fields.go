@@ -196,6 +196,8 @@ var templateRequestRules = []TemplateFieldRule{
 		"The contract marker belongs to the request a client sends, not to the setup a template holds."),
 	excludedField("preset_version", templateExcludeOrigin,
 		"A preset's version only means something beside its preset."),
+	excludedField("wall_preset", templateExcludeLaunch,
+		"A wall preset is chosen at each launch."),
 	carriedField("runner_pool_id", partRunner, templateOmitBaseline, templateEmptySame,
 		"The pool resolves from the person's own default, then the organisation's, when the template is used. A default that is unavailable or refused never falls through to another pool: the person chooses. A named pool narrows where the run may go and grants nothing, and the launcher's pool-use policy is checked at use."),
 	carriedField("ends_after_sec", partRunner, templateOmitBaseline, templateEmptyNever,

@@ -494,3 +494,67 @@ func TestKeptMachineListsAndRunnerClose(t *testing.T) {
 		t.Errorf("left: %+v, %d, %v", left, total, err)
 	}
 }
+
+// TestKillRunMarkingKeptMachine: a kill's claim and its delete intent land together. A won claim marks
+// the machine the run holds, which no resume then takes; a lost claim marks nothing and leaves the run;
+// the killer's own machine gets no intent; a queued run is never claimed here.
+func TestKillRunMarkingKeptMachine(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	ctx := context.Background()
+	mac := claimedRunnerOf(t, pg, "sub-a")
+	running := func(m types.KeptMachine) uuid.UUID {
+		t.Helper()
+		run := erasureRun(t, pg, "sub-a", "resume")
+		if _, err := pg.BeginKeptMachineUse(ctx, m.ID, "sub-a", run); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE agent_runs SET state = 'RUNNING', ended_at = NULL WHERE id = $1`, run); err != nil {
+			t.Fatal(err)
+		}
+		return run
+	}
+	m := keptMachineOf(t, pg, "sub-a", mac, "dev")
+	run := running(m)
+	stateOf := func(id uuid.UUID) types.RunState {
+		t.Helper()
+		r, err := pg.GetRun(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.State
+	}
+
+	if applied, d, err := pg.KillRunMarkingKeptMachine(ctx, run, types.RunStarting, "non_owner_kill", "admin", "admin"); err != nil || applied || !d.At.IsZero() {
+		t.Fatalf("lost claim: %v %+v %v", applied, d, err)
+	}
+	if in, err := pg.ListKeptMachineDeleteIntents(ctx); err != nil || len(in) != 0 || stateOf(run) != types.RunRunning {
+		t.Fatalf("after a lost claim: intents %+v, %v, run %s", in, err, stateOf(run))
+	}
+	if _, _, err := pg.KillRunMarkingKeptMachine(ctx, run, types.RunQueued, "non_owner_kill", "admin", "admin"); err == nil {
+		t.Fatal("a queued run was claimed past its queue")
+	}
+
+	applied, d, err := pg.KillRunMarkingKeptMachine(ctx, run, types.RunRunning, "non_owner_kill", "admin", "admin")
+	if err != nil || !applied || d.Machine.ID != m.ID || d.By != "non_owner_kill" || d.Killer != "admin" || d.At.IsZero() {
+		t.Fatalf("won claim: %v %+v %v", applied, d, err)
+	}
+	if stateOf(run) != types.RunKilled {
+		t.Fatalf("run %s, want KILLED", stateOf(run))
+	}
+	if _, err := pg.BeginKeptMachineUse(ctx, m.ID, "sub-a", erasureRun(t, pg, "sub-a", "again")); !errors.Is(err, store.ErrKeptMachineDeleting) {
+		t.Fatalf("resume of a machine a kill marked = %v, want ErrKeptMachineDeleting", err)
+	}
+	if in, err := pg.ListKeptMachineDeleteIntents(ctx); err != nil || len(in) != 1 || in[0].Machine.ID != m.ID {
+		t.Fatalf("intents %+v, %v; want the marked machine", in, err)
+	}
+
+	own := keptMachineOf(t, pg, "sub-a", mac, "own")
+	ownRun := running(own)
+	if applied, d, err := pg.KillRunMarkingKeptMachine(ctx, ownRun, types.RunRunning, "non_owner_kill", "sub-a", "sub-a"); err != nil || !applied || !d.At.IsZero() {
+		t.Fatalf("the owner's own kill: %v %+v %v; want claimed, no intent", applied, d, err)
+	}
+	if got, err := pg.GetKeptMachine(ctx, own.ID); err != nil || got.State != types.KeptMachineInUse {
+		t.Fatalf("own machine: %+v, %v", got, err)
+	}
+}

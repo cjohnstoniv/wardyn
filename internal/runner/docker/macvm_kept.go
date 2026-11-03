@@ -530,7 +530,7 @@ func (d *Driver) DeleteKeptMachine(_ context.Context, id uuid.UUID, by string) (
 	gone, err := removeKept(dir, c.lockWaitOr())
 	switch {
 	case errors.Is(err, macvm.ErrKeptLocked):
-		return "", fmt.Errorf("docker: kept machine %s is running on this Mac", id)
+		return "", runnerwire.Refuse("docker: kept machine %s is running on this Mac", id) // nothing was removed
 	case err != nil:
 		return "", fmt.Errorf("docker: delete kept machine %s: %w", id, err)
 	case !gone:
@@ -879,4 +879,18 @@ func keptBootScrub(spec runner.SandboxSpec, res guestagent.InitResult) *runner.K
 	}
 	s := runner.KeptScrub(*res.Scrub)
 	return &s
+}
+
+// keptBootBase is the base spec's kept machine's record names after this run's boot (for a fresh start,
+// the clone resetKept made). Nil for a run with no kept machine, or a record this boot did not write.
+func (c *MacVMConfig) keptBootBase(spec runner.SandboxSpec) *runner.KeptBase {
+	k := spec.KeptMachine
+	if k == nil {
+		return nil
+	}
+	rec, err := macvm.ReadKept(c.keptDir(k.ID), k.ID.String())
+	if err != nil || rec.ActiveRun != spec.RunID.String() || rec.BasePreparedAt.IsZero() {
+		return nil
+	}
+	return &runner.KeptBase{Name: rec.Base, PreparedAt: rec.BasePreparedAt}
 }

@@ -138,8 +138,9 @@ func queueWaitSec(req createRunRequest, interactive bool) (sec int, warning stri
 
 // queuePolicyRef is run_queue.policy_ref: what the run's policy was when it was reviewed, so a start can
 // tell it changed (Q7-A). A stored policy is its id and the SHA-256 of its spec; a launch preset is its
-// name, version and the SHA-256 of its request. An inline or default policy is the request's own, so
-// nothing can change under it. A policy or preset that has gone is recorded as gone.
+// name, version and the SHA-256 of its request; a wall preset is its id and version. An inline or
+// default policy is the request's own, so nothing can change under it. A policy or preset that has gone
+// is recorded as gone.
 func (s *Server) queuePolicyRef(ctx context.Context, req createRunRequest) (json.RawMessage, error) {
 	ref := map[string]any{}
 	if req.PolicyID != nil {
@@ -166,7 +167,38 @@ func (s *Server) queuePolicyRef(ctx context.Context, req createRunRequest) (json
 			ref["request_sha256"] = queueSHA256(p.Request)
 		}
 	}
+	if req.WallPreset != "" {
+		version, gone, err := s.wallPresetVersion(ctx, req.WallPreset)
+		if err != nil {
+			return nil, fmt.Errorf("read the wall preset: %w", err)
+		}
+		ref["wall_preset"] = req.WallPreset
+		if gone {
+			ref["wall_preset_gone"] = true
+		} else {
+			ref["wall_preset_version"] = version
+		}
+	}
 	return json.Marshal(ref)
+}
+
+// wallPresetVersion is the version of the wall preset id names as it is now: a built-in's, or a
+// stored preset's. gone is true when it no longer exists; whether the run's owner may still read it is
+// the start's fold's to answer (launchWallPreset), which refuses the run when they may not.
+func (s *Server) wallPresetVersion(ctx context.Context, id string) (version int, gone bool, err error) {
+	if p, ok := types.BuiltinWallPreset(id); ok {
+		return p.Version, false, nil
+	}
+	ps, ok := s.cfg.Store.(store.WallPresetStore)
+	uid, perr := uuid.Parse(id)
+	if !ok || perr != nil {
+		return 0, true, nil
+	}
+	p, err := ps.GetWallPreset(ctx, uid)
+	if errors.Is(err, store.ErrNotFound) {
+		return 0, true, nil
+	}
+	return p.Version, false, err
 }
 
 func queueSHA256JSON(v any) string {
@@ -427,9 +459,10 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		Request: q.original, ProviderID: q.f.mpChoice.provider.ID, MaxWaitSec: waitSec, ConfinementDefault: q.f.confinementDefault,
 		Repos: runRepos(types.AgentRun{Repo: q.req.Repo}, nil), LifetimeCapSec: q.f.end.capSec,
 		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources, Unbound: q.f.place.unbound,
-		Barrier: q.f.enforced, Drives: mountsDrives(q.f.drives, q.f.keep), DriveRunner: drivesBoundRunner(q.f.drives, q.f.keep),
-		NoLocal: q.f.place.noLocal, MountRunner: q.f.place.mountRunner,
+		Barrier: q.f.enforced, NoLocal: q.f.place.noLocal, MountRunner: q.f.place.mountRunner,
 	}
+	// The promotion holds a resume to its machine's Mac as the fold's placement did (keptPlacementPin).
+	launch.Drives, launch.DriveRunner = keptPlacementPin(mountsDrives(q.f.drives, q.f.keep), drivesBoundRunner(q.f.drives, q.f.keep), q.f.keptPin)
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
 	if q.f.ceiling.Unit != nil {
 		id := q.f.ceiling.Unit.ID

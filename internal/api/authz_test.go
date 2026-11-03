@@ -655,6 +655,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// delete, SUPER like reclaim because the delete destroys a person's bytes.
 	"GET /api/v1/drives/member":         {class: classAdmin},
 	"DELETE /api/v1/drives/member/{id}": {class: classAdmin},
+	// People's kept machines (kept_machines.go): the super admin's list and delete, SUPER like the
+	// member drives' because the delete destroys a person's files on their Mac.
+	"GET /api/v1/machines/kept":         {class: classAdmin},
+	"DELETE /api/v1/machines/kept/{id}": {class: classAdmin},
 	// Directory autocomplete (§I) — classSecurity, and the contrast with the
 	// four classAdmin /access routes above is the whole tier argument in one
 	// pair: those decide who DERIVES admin, this one only READS the directory
@@ -684,6 +688,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// owner predicate answers another person's id with the uniform 404.
 	"POST /api/v1/me/drives":        {class: classMember},
 	"DELETE /api/v1/me/drives/{id}": {class: classMember},
+	// A person lists and deletes their own kept machines (kept_machines.go). The handler refuses every
+	// caller that is not a person, and the owner predicate answers another person's id with the uniform 404.
+	"GET /api/v1/me/machines":         {class: classMember},
+	"DELETE /api/v1/me/machines/{id}": {class: classMember},
 	// The Support link the header shows every signed-in person (#1125).
 	"GET /api/v1/branding/settings": {class: classMember},
 	// /me/ssh-keys (SSH lane, C2): classMember, NOT classOwner — this is a

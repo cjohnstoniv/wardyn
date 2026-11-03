@@ -23,6 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // Pagination defaults for the public list endpoints. defaultListLimit is what an
@@ -304,6 +305,11 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// MacOSDisk is where a macOS VM run's disk stands on its Mac at the run's end (run_macos_disk.go);
 		// absent on every other run.
 		MacOSDisk *runMacOSDiskView `json:"macos_disk,omitempty"`
+		// WallPreset is the wall preset the run was launched with, never its spec (runWallPresetView).
+		WallPreset *client.RunWallPreset `json:"wall_preset,omitempty"`
+		// Machine is the kept machine the run kept or resumed, read now (run_kept_machine.go); absent on
+		// every other run.
+		Machine *runMachineView `json:"machine,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
@@ -320,6 +326,8 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		MacWindow:       s.macWindowViewFor(r.Context(), stored, s.macWindowAuthorityOf(r)),
 		MacOSPreparing:  macOSPrepRunning(stored),
 		MacOSDisk:       s.runMacOSDiskView(r.Context(), run),
+		WallPreset:      runWallPresetView(r, run),
+		Machine:         s.runMachineOf(r.Context(), run),
 	})
 }
 

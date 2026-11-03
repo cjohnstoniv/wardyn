@@ -538,6 +538,8 @@ type KeptMachineStore interface {
 	ListKeptMachineDeletes(ctx context.Context) ([]KeptMachineDeletion, error)
 	// ListExpiredKeptMachines returns the kept machines past expiry with no delete started or intended.
 	ListExpiredKeptMachines(ctx context.Context) ([]types.KeptMachine, error)
+	// KillRunMarkingKeptMachine claims a kill and, in the same transaction, writes its delete intent.
+	KillRunMarkingKeptMachine(ctx context.Context, runID uuid.UUID, fromState types.RunState, by, killer, exempt string) (bool, KeptMachineDeletion, error)
 	// SetKeptMachineDeleteIntent records, before a kill's claim, that the kill deletes runID's machine.
 	SetKeptMachineDeleteIntent(ctx context.Context, runID uuid.UUID, by, killer string) (KeptMachineDeletion, error)
 	// ClearKeptMachineDeleteIntent drops the intent set at at when its kill did not happen.

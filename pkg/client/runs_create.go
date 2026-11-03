@@ -304,12 +304,30 @@ type CreateRunRequest struct {
 	// Preset launches the named launch preset (see Preset): the server
 	// expands it into the equivalent explicit request and runs the unchanged
 	// create path under the caller's own ceiling. Alongside it only Title,
-	// Task and PresetVersion may be set; any other field is refused.
+	// Task, PresetVersion and WallPreset may be set; any other field is refused.
 	Preset string `json:"preset,omitempty"`
 	// PresetVersion, with Preset, pins the version the caller expects: a
 	// preset changed since is refused (409) rather than launched. 0 launches
 	// the current version. The created run records the version it used.
 	PresetVersion int `json:"preset_version,omitempty"`
+	// WallPreset narrows the run by a wall preset: a built-in's id (open,
+	// read-only, sealed) or a stored preset's id. It only narrows, beside the
+	// person's own walls, and the run keeps a frozen copy, so a later edit or
+	// delete of the preset changes nothing on it. A preset that does not exist
+	// or is not open to the caller is refused (422 wall_preset_unknown); the
+	// run is never launched without it.
+	WallPreset string `json:"wall_preset,omitempty"`
+}
+
+// RunWallPreset is the wall preset a run was launched with, as the run read
+// sends it: never its spec. A personal preset on a run read by anyone but the
+// run's owner carries its scope alone.
+type RunWallPreset struct {
+	ID      string `json:"id,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Scope   string `json:"scope"`
+	GroupID string `json:"group_id,omitempty"`
+	Version int    `json:"version,omitempty"`
 }
 
 // DriveSelection is the per-run user-drive option set. See

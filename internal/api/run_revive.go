@@ -228,6 +228,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	// The final seal, as dispatch's (run_policy_seal.go), then the ceiling's re-assertion over the
 	// layers it read, so a credential the boundary withholds goes as one the profile denies does.
 	layers := s.sealRunPolicy(ctx, run, &cfg.Policy, nil)
+	reassertDenyAllPushes(cfg, layers) // before revivePATNarrowing reads it
 	re, rerr := reassertProxyCeiling(run, cfg, c, layers)
 	if rerr != nil {
 		if rerr.reason == reasonReviveCeilingDeniesGitBroker || rerr.reason == reasonReviveCeilingDeniesAzureCLI {

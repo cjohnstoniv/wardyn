@@ -617,6 +617,14 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	defer s.dropUncreatedMacKeptDrive(ctx, run, &created) // after the lease release below: defers run last-in first-out
 	defer s.releaseUncreatedRunLease(ctx, run.ID, &created)
 	defer stopCreateLease()
+	// The run's kept machine: inserted or claimed here, before any runner work, and given back if no
+	// sandbox is created (run_kept_machine.go).
+	kept, ok := s.keptMachineAtDispatch(ctx, run, p.Machine)
+	if !ok {
+		return
+	}
+	defer s.releaseUnstartedKeptMachine(ctx, run, kept, &created)
+	spec.KeptMachine = kept.spec()
 
 	// What the substrate says it is waiting on, while it is still waiting; the
 	// closer ends the last stretch wardyn_run_start_wait_seconds is timing, so
@@ -651,25 +659,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordRunnerOutputWatermark(ctx, run, spec.ExecOutput != nil)
 	// The lease, the runner_resident values, then the create, in that order: a runner
 	// refuses a create no lease authorizes, and the create names the values.
-	execution, sb, refused, err := s.leaseDeliverCreate(ctx, createCtx, run, spec, resident)
-	endStartWait()
-	stopCreateLease()
-	if refused {
-		s.unoweAgentCast(ctx, run)
-		return // deliverResident failed the run and recorded why; no create was asked for
-	}
-	if err != nil {
-		// Conditional: only mark FAILED if still STARTING. A kill landing between the
-		// entry claim and this failure moved the run to KILLED — don't clobber that
-		// terminal state (mirrors the STARTING->RUNNING guard below).
-		hint, reason := sandboxCreateFailure(err)
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, hint)
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": reason})))
-		s.unoweAgentCast(ctx, run)
+	execution, sb, ok := s.createRunSandbox(ctx, createCtx, run, spec, resident, kept, func() { endStartWait(); stopCreateLease() })
+	if !ok {
 		return
 	}
 	created = true
+	s.keptMachineUp(ctx, run, kept, sb)
 
 	// Drives attached — a no-op for the runs (most of them) that carry none.
 	// See auditDriveMount.
@@ -803,4 +798,35 @@ func redirectPlanScope(sc types.SiteConfig, preDomains []string, probe *types.Eg
 	}
 	sc.EgressRedirects = []types.EgressRedirect{*probe}
 	return sc, redirectPublicHosts(*probe)
+}
+
+// createRunSandbox is dispatch's create: a fresh start's reset mark (keptMachineResetting), then
+// leaseDeliverCreate, with done (the start wait's and the create lease's ends) called once either is
+// over. false when the run was failed and no sandbox was created: the mark could not be written, the
+// delivery refused the run (the mark is taken back: its Mac was never asked), or the create failed.
+func (s *Server) createRunSandbox(ctx, createCtx context.Context, run types.AgentRun, spec runner.SandboxSpec,
+	resident []residentValue, kept keptDispatch, done func()) (runnerExecution, runner.Sandbox, bool) {
+	if !s.keptMachineResetting(ctx, run, kept) {
+		done()
+		return runnerExecution{}, runner.Sandbox{}, false
+	}
+	execution, sb, refused, err := s.leaseDeliverCreate(ctx, createCtx, run, spec, resident)
+	done()
+	if refused {
+		s.keptResetNotAsked(ctx, run, kept)
+		s.unoweAgentCast(ctx, run)
+		return execution, sb, false // deliverResident failed the run and recorded why; no create was asked for
+	}
+	if err != nil {
+		// Conditional: only mark FAILED if still STARTING. A kill landing between the
+		// entry claim and this failure moved the run to KILLED — don't clobber that
+		// terminal state (mirrors the STARTING->RUNNING guard in dispatchRun).
+		hint, reason := sandboxCreateFailure(err)
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, hint)
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": err.Error(), "reason": reason})))
+		s.unoweAgentCast(ctx, run)
+		return execution, sb, false
+	}
+	return execution, sb, true
 }
