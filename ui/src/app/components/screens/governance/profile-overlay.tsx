@@ -23,6 +23,7 @@ import { Input } from "../../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { CC_META } from "../../wardyn/cc-meta";
 import { MAC_BASES } from "../../wardyn/copy/mac-bases";
+import { KEEP_POLICY } from "../../wardyn/copy/keep-machine";
 import { Chip } from "../../wardyn/primitives";
 import { Switch } from "../../wardyn/form-primitives";
 import { Segmented } from "../../wardyn/segmented";
@@ -164,6 +165,7 @@ export const LIMIT_FIELDS: Field[] = [
   // as the ceiling rows do. The autonomy rubric has its own section.
   { key: "deny_ui_apps", kind: "true", label: LIMITS_CHIP.UI_APPS, mono: false },
   { key: "deny_background_desktop_watch", kind: "true", label: BACKGROUND_WATCH_DOOR.LABEL, mono: false, hint: BACKGROUND_WATCH_DOOR.HINT },
+  { key: "deny_kept_machines", kind: "true", label: KEEP_POLICY.LABEL, mono: false, hint: KEEP_POLICY.HINT },
   ceilingField("deny_placements", "list"),
   { key: "allowed_macos_bases", kind: "list", label: MAC_BASES.B14, mono: false, hint: MAC_BASES.B15 },
   // The hint under this row is chosen by what the base lists (modelsHint), so it carries none here.

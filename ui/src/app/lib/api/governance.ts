@@ -54,6 +54,9 @@ export interface GovernanceLimits extends RunLimits {
   // yet and saves the stored value back unchanged; composing a profile moves it
   // into the overlay through LIMIT_FIELDS (profile-overlay.tsx).
   deny_member_drives?: boolean;
+  // types.GovernanceLimits.DenyKeptMachines — refuses keeping or resuming a macOS VM machine under this profile, on top of
+  // the site switch macos_vm.allow_kept_machines. False/absent inherits the switch.
+  deny_kept_machines?: boolean;
   // types.GovernanceLimits.DenyPlacements (0.9, #114) — the placements a run
   // under this profile may not take. A deny list: absent means every placement
   // is permitted. The server refuses a profile denying both.
