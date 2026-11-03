@@ -55,7 +55,7 @@ func (c *castStore) SetRunAgentCastOwed(context.Context, uuid.UUID) error {
 func (c *castStore) DeclineRunAgentCast(context.Context, uuid.UUID) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.owed || c.mark == types.NotRecordedRunnerDeclined {
+	if !c.owed {
 		return false, nil
 	}
 	c.mark = types.NotRecordedRunnerDeclined
@@ -563,26 +563,80 @@ func TestAgentCast_ACreateFailureOwesNothing(t *testing.T) {
 	}
 }
 
-// A decline whose clear fails is retried by the next sweep, which finds the run already marked and only
-// clears: one failure row, not two.
-func TestAgentCast_ADeclineRetriedAfterAFailedClearWritesOneRow(t *testing.T) {
-	f, cs, _ := agentCastFixture(t, types.MachineMacOSVM) // its runner keeps no copy: the sweep declines, no_tail
-	cs.owed, cs.clearFails = true, 1
+// rejectingAudit is an audit recorder that accepts nothing, durably or into its spool.
+type rejectingAudit struct{}
+
+func (rejectingAudit) Record(context.Context, types.AuditEvent) error {
+	return errors.New("audit store down and spool full")
+}
+
+// agentCastDeclineFixture is a macOS VM task run that has ended and still owes its agent cast, on a
+// runner that keeps no copy of it: the sweep can only decline it, no_tail.
+func agentCastDeclineFixture(t *testing.T) (*outputFixture, *castStore) {
+	t.Helper()
+	f, cs, _ := agentCastFixture(t, types.MachineMacOSVM)
+	cs.owed = true
 	ended := time.Now()
 	f.st.mu.Lock()
 	f.st.state, f.st.run.EndedAt = types.RunCompleted, &ended
 	f.st.mu.Unlock()
+	return f, cs
+}
+
+// A decline whose clear fails is retried by the next sweep, which writes the row again before it clears:
+// a second row is the price of never losing one.
+func TestAgentCast_ADeclineRetriedAfterAFailedClearIsSettled(t *testing.T) {
+	f, cs := agentCastDeclineFixture(t)
+	cs.clearFails = 1
 	if err := f.srv.SweepRunOutputs(t.Context()); err == nil {
 		t.Fatal("the first sweep hid the failed clear")
 	}
-	if !cs.owing() || cs.marked() != types.NotRecordedRunnerDeclined {
-		t.Fatalf("owed %v mark %q, want the run marked and the obligation kept", cs.owing(), cs.marked())
+	if rows := castRows(t, f, agentCastSession); len(rows) != 1 || !cs.owing() || cs.marked() != types.NotRecordedRunnerDeclined {
+		t.Fatalf("rows %v owed %v mark %q, want one row, the run marked and the obligation kept", rows, cs.owing(), cs.marked())
 	}
 	if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	rows := castRows(t, f, agentCastSession)
-	if len(rows) != 1 || rows[0]["reason"] != "no_tail" || cs.owing() || cs.marked() != types.NotRecordedRunnerDeclined {
-		t.Fatalf("rows %v owed %v mark %q, want one no_tail row, the run marked and nothing owed", rows, cs.owing(), cs.marked())
+	if len(rows) != 2 || rows[1]["reason"] != "no_tail" || cs.owing() || cs.marked() != types.NotRecordedRunnerDeclined {
+		t.Fatalf("rows %v owed %v mark %q, want the row again, the run marked and nothing owed", rows, cs.owing(), cs.marked())
+	}
+}
+
+// A process that died between the runner_declined mark and its failure row: after the restart the run is
+// marked and still owes its cast, with no row. The sweep writes the row from that state, then clears the
+// obligation.
+func TestAgentCast_AMarkWithNoRowGetsItsRowBeforeTheClear(t *testing.T) {
+	f, cs := agentCastDeclineFixture(t)
+	cs.mark = types.NotRecordedRunnerDeclined // committed before the crash; the row never was
+	if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rows := castRows(t, f, agentCastSession)
+	if len(rows) != 1 || rows[0]["outcome"] != "failure" || rows[0]["reason"] != "no_tail" {
+		t.Fatalf("rows %v, want the failure row written by the sweep", rows)
+	}
+	if cs.owing() || cs.marked() != types.NotRecordedRunnerDeclined {
+		t.Fatalf("owed %v mark %q, want the obligation cleared after the row and the run marked", cs.owing(), cs.marked())
+	}
+}
+
+// A failure row the audit recorder rejects keeps the obligation: the run is marked, nothing is cleared,
+// and the sweep says so. Once the recorder accepts again, the next sweep writes the row and clears it.
+func TestAgentCast_ARejectedRowKeepsTheObligation(t *testing.T) {
+	f, cs := agentCastDeclineFixture(t)
+	f.srv.cfg.Audit = rejectingAudit{}
+	if err := f.srv.SweepRunOutputs(t.Context()); !errors.Is(err, errAgentCastRowRejected) {
+		t.Fatalf("sweep: %v, want the rejected row", err)
+	}
+	if !cs.owing() || cs.marked() != types.NotRecordedRunnerDeclined {
+		t.Fatalf("owed %v mark %q, want the run marked and the obligation kept", cs.owing(), cs.marked())
+	}
+	f.srv.cfg.Audit = f.audit
+	if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if rows := castRows(t, f, agentCastSession); len(rows) != 1 || rows[0]["reason"] != "no_tail" || cs.owing() {
+		t.Fatalf("rows %v owed %v, want the row written, then the obligation cleared", rows, cs.owing())
 	}
 }

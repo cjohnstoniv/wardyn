@@ -20,8 +20,8 @@ type RunAgentCastStore interface {
 	// SetRunAgentCastOwed records that the run owes its agent output cast.
 	SetRunAgentCastOwed(ctx context.Context, id uuid.UUID) error
 	// DeclineRunAgentCast marks a run that still owes its cast not_recorded runner_declined, and
-	// reports whether this call marked it: false when the run owes nothing or is already marked (a
-	// retry after a failed clear). The obligation stays until ClearRunAgentCastOwed.
+	// reports whether the run owes it (a run already marked, by a decline whose row or clear failed,
+	// does); the obligation stays until ClearRunAgentCastOwed.
 	DeclineRunAgentCast(ctx context.Context, id uuid.UUID) (bool, error)
 	// ClearRunAgentCastOwed clears the obligation; recorded (a cast was stored) also clears
 	// runner_declined.
@@ -38,8 +38,7 @@ func (s PG) SetRunAgentCastOwed(ctx context.Context, id uuid.UUID) error {
 
 // DeclineRunAgentCast — see RunAgentCastStore.
 func (s PG) DeclineRunAgentCast(ctx context.Context, id uuid.UUID) (bool, error) {
-	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET not_recorded = $2
-		WHERE id = $1 AND agent_cast_owed_at IS NOT NULL AND not_recorded IS DISTINCT FROM $2`,
+	tag, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET not_recorded = $2 WHERE id = $1 AND agent_cast_owed_at IS NOT NULL`,
 		id, string(types.NotRecordedRunnerDeclined))
 	if err != nil {
 		return false, fmt.Errorf("store: decline run agent cast: %w", err)
