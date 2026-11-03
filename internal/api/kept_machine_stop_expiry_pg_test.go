@@ -115,3 +115,43 @@ func TestKeptStopThatWroteNoRecordWaitsForTheMacsInventory(t *testing.T) {
 		t.Fatalf("after the sweep: %s expires %s, want kept and the Mac's %s", got.State, got.ExpiresAt, macExpiry)
 	}
 }
+
+// TestKeptReconcileExpiryIsCappedAtTheLongestAllowance: the stop report never came, and the Mac lists the
+// machine idle with an expiry past the longest allowance; the sweep keeps it no later than now + 90 days.
+func TestKeptReconcileExpiryIsCappedAtTheLongestAllowance(t *testing.T) {
+	k := newKeptFixture(t)
+	m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineInUse)
+	k.exec(t, `UPDATE agent_runs SET state = 'KILLED', ended_at = now() WHERE id = $1`, k.run.ID)
+	before := time.Now().UTC()
+	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 1 << 30, ExpiresAt: before.AddDate(0, 0, 400)})
+	k.sweep(t)
+	got, _ := k.row(t, m.ID)
+	lo, hi := before.AddDate(0, 0, types.KeptMachineIdleDaysMax), time.Now().UTC().AddDate(0, 0, types.KeptMachineIdleDaysMax)
+	if got.State != types.KeptMachineKept || got.ExpiresAt.Before(lo.Add(-time.Second)) || got.ExpiresAt.After(hi.Add(time.Second)) {
+		t.Fatalf("after the sweep: %s expires %s, want kept and capped at %s to %s", got.State, got.ExpiresAt, lo, hi)
+	}
+}
+
+// TestKeptReconcileLeavesAnUnrecoveredRecordInUse: the run is over, but the Mac lists the machine in use
+// because its record still names the session (the recovery has not run). The sweep keeps nothing and
+// writes no deadline from the boot's old expiry; once the Mac lists it idle, it is kept with the Mac's.
+func TestKeptReconcileLeavesAnUnrecoveredRecordInUse(t *testing.T) {
+	k := newKeptFixture(t)
+	m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineInUse)
+	k.exec(t, `UPDATE agent_runs SET state = 'KILLED', ended_at = now() WHERE id = $1`, k.run.ID)
+	old := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 1 << 30, InUse: true, RunID: k.run.ID.String(), ExpiresAt: old})
+	k.sweep(t)
+	if got, _ := k.row(t, m.ID); got.State != types.KeptMachineInUse {
+		t.Fatalf("an unrecovered record: %s, want in_use", got.State)
+	}
+	if keeps := k.rows(t, "machine.keep", m.ID); len(keeps) != 0 {
+		t.Fatalf("machine.keep = %v, want none while the Mac lists it in use", keeps)
+	}
+	macExpiry := time.Now().UTC().AddDate(0, 0, 3).Truncate(time.Second)
+	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 1 << 30, ExpiresAt: macExpiry})
+	k.sweep(t)
+	if got, _ := k.row(t, m.ID); got.State != types.KeptMachineKept || !got.ExpiresAt.Equal(macExpiry) {
+		t.Fatalf("after the recovery: %s expires %s, want kept and the Mac's %s", got.State, got.ExpiresAt, macExpiry)
+	}
+}
