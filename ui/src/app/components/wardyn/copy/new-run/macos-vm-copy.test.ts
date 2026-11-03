@@ -30,7 +30,7 @@ const CANON: [id: string, actual: string, canon: string][] = [
   ["MAC-V01", DESKTOP.viewOnlyChip, "View only"],
   ["MAC-V02", DESKTOP.watch, "Watch desktop"],
   ["MAC-V05", DESKTOP.viewOnlyTitle, "View only"],
-  ["MAC-V06", DESKTOP.viewOnlyBody, "macOS 26 doesn't keep control here. Typing and clicking don't reach this desktop."],
+  ["MAC-V06", DESKTOP.viewOnlyBody, "The browser can only watch this desktop on macOS 26. Typing and clicking don't reach it."],
   ["MV-D10", DESKTOP.diskRemoving, "Removing the macOS VM's disk from this Mac…"],
   ["MV-D11", DESKTOP.diskRemoved("14:32"), "The macOS VM and its disk were removed from this Mac at 14:32."],
   ["MV-D12", DESKTOP.diskRemoveFailed("the VM's files are still in use"), "The macOS VM's disk could not be removed from this Mac: the VM's files are still in use."],
