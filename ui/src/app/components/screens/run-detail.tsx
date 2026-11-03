@@ -32,7 +32,7 @@ import {
   type RunDetail,
 } from "../../lib/types";
 import { ERASED_VALUE } from "../../lib/types";
-import { isMacOSVM } from "../../lib/types/machine-kind";
+import { isMacOSVM, isVMKind } from "../../lib/types/machine-kind";
 import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import { canonicalAuditAction, exitCodeFromAudit, gatewayCallId } from "../../lib/api/audit";
@@ -40,11 +40,11 @@ import { LIST_LIMIT } from "../../lib/api/core";
 import { appURL } from "../../lib/base-path";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { absoluteTime, clockTime, getErrorMessage } from "../../lib/format";
-import { awsSigningLine, describeAction, describeEvent, describeObject, hasNoCaller, inboundDetail, isInbound } from "../../lib/audit-copy";
+import { awsSigningLine, describeAction, describeEvent, describeObject, hasNoCaller, inboundDetail, isFailedRecordingWrite, isInbound } from "../../lib/audit-copy";
 import { Button } from "../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { InboundOutcome, NoCaller } from "../wardyn/audit-inbound";
-import { ActorTypeChip } from "../wardyn/primitives";
+import { ActorTypeChip, OutcomeBadge } from "../wardyn/primitives";
 import {
   AuditDecision,
   ErasedFields,
@@ -79,6 +79,8 @@ import { RunLifetimeWithContainment } from "./run-detail/containment-pending";
 import { PolicyTab } from "./run-detail/policy-tab";
 import { POLICY_TAB } from "./run-detail/policy-tab-copy";
 import { RecordingTab } from "./run-detail/recording-tab";
+import { defaultSessionKey } from "./run-detail/recording-tab-copy";
+import { desktopSessions } from "./run-detail/desktop-replay";
 import { OutputTab } from "./run-detail/output-tab";
 import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run-flow/draft/clone-prefill";
 import { launchIntentSource } from "./new-run-flow/steps/shape/shape-sources";
@@ -245,6 +247,17 @@ function RunDetailPage({ id }: { id: string }) {
       toast.error(NEEDS_YOU.failed.decline, { description: getErrorMessage(err) });
     }
   };
+
+  // A macOS VM run stores nothing under its own key, so its Recording tab opens on its newest agent output cast
+  // (else its newest session) as soon as the run's recording rows are indexed; every other run opens on its own.
+  const macOSRun = !!run && isMacOSVM(run);
+  const defaultKey = defaultSessionKey(id, macOSRun, attachSessions(recordingAudit), desktopSessions(recordingAudit).map((e) => e.target!));
+  React.useEffect(() => {
+    if (macOSRun && recKey === id && defaultKey !== id) {
+      setRecKey(defaultKey);
+      setRecState("idle");
+    }
+  }, [macOSRun, recKey, id, defaultKey, setRecKey, setRecState]);
 
   // The page does not scroll. `h-full min-h-0 flex flex-col` fills
   // app-shell's <main> exactly — main is flex-1 inside a h-screen column, so
@@ -424,6 +437,9 @@ function RunDetailPage({ id }: { id: string }) {
               level={run.recording_level}
               notRecorded={run.not_recorded}
               macOS={isMacOSVM(run)}
+              screen={isVMKind(run.machine_kind)}
+              interactive={!!run.interactive}
+              ended={terminal}
               selected={recKey || id}
               onSelect={(key) => {
                 setRecKey(key);
@@ -577,6 +593,11 @@ function AuditTab({
                   {isInbound(e) && (
                     <span data-testid="run-audit-outcome" className="ml-auto shrink-0">
                       <InboundOutcome allowed={e.action === "inbound.allow"} />
+                    </span>
+                  )}
+                  {isFailedRecordingWrite(e) && (
+                    <span data-testid="run-audit-outcome" className="ml-auto shrink-0">
+                      <OutcomeBadge outcome="failure" />
                     </span>
                   )}
                   {inbound && (

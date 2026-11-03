@@ -54,6 +54,10 @@ const (
 // required and its agent output cast did not open.
 const macOSAgentOutputRequiredMsg = "Recording is required, and this macOS VM run's agent output can't be recorded on this deployment, so the run didn't start."
 
+// macOSAgentDeclineUnrecordedMsg is the sentence a macOS VM task run fails at start with when its agent output
+// cast was declined and the audit recorder would not take the row that says so.
+const macOSAgentDeclineUnrecordedMsg = "Wardyn could not record why this run's agent output isn't recorded, so the run didn't start. Try again."
+
 // startRunRecording is dispatch's recording step: the run's level and mark (applyDispatchRecording), its
 // output tail (openExecOutput), then a macOS VM task run's agent output cast and the decision it settles
 // (recordMacOSAgent), in that order. false: the run failed, with its audit row.
@@ -78,14 +82,18 @@ func (s *Server) recordMacOSAgent(ctx context.Context, run *types.AgentRun, spec
 	if !run.MachineKind.IsMacOSVM() || interactive || run.NotRecorded != "" {
 		return true
 	}
+	// The reason a declined run's failure row gives (keepRunNotRecorded): no cast opened on its tail, or its
+	// obligation could not be stored.
+	declined := "no_tail"
 	if tw, ok := spec.ExecOutput.(*tailWriter); ok && s.attachAgentCast(*run, tw, agentCastSession) {
 		if s.oweAgentCast(ctx, run.ID) {
 			return true
 		}
 		tw.cast = nil
+		declined = "save_failed"
 	}
 	run.NotRecorded = types.NotRecordedRunnerDeclined
-	return s.keepOrHoldNotRecorded(ctx, run, macOSAgentOutputRequiredMsg)
+	return s.keepOrHoldNotRecorded(ctx, run, macOSAgentOutputRequiredMsg, declined)
 }
 
 // agentOutputRecorded is whether the organisation records run's agent output: a macOS VM task run above

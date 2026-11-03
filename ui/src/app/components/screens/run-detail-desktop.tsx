@@ -22,6 +22,7 @@ import { RUN_MODE_REFUSAL } from "../../lib/run-mode-refusals";
 import { Mono } from "../wardyn/code-block";
 import { UI_APPS_LANE } from "../wardyn/copy";
 import { DESKTOP } from "../wardyn/copy/desktop";
+import { RECORDING_DESKTOP, desktopRecordedAt } from "../wardyn/copy/recording-level";
 import { RUN_VM_PAGE } from "../wardyn/copy/run-cockpit";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { Chip, WidgetCard } from "../wardyn/primitives";
@@ -134,6 +135,12 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
             {!background && <DesktopSignInButton s={signIns} />}
           </div>
         )}
+        {/* What the screen recording keeps, once, where the desktop opens. No frames are kept while the agent is paused for a sign-in. */}
+        {desktopOn && !noDoor && (!background || watchable) && desktopRecordedAt(run) && (
+          <p className="mt-2 text-meta text-muted-foreground" data-testid="desktop-recorded-line">
+            {!background && signIns.view?.paused ? RECORDING_DESKTOP.PAUSED : RECORDING_DESKTOP.WATCHED}
+          </p>
+        )}
         {desktopOn && !background && <DesktopSignInsError s={signIns} />}
         {healthFailed && !macOff && !noDoor && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -160,9 +167,13 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
             {run.mac_window?.state === "open" ? (
               <>{RUN_VM_PAGE.macOS26OpenWindow} <Mono className="text-foreground">{`wardyn window ${run.id}`}</Mono>.</>
             ) : (
-              run.mac_window?.message ?? DESKTOP.observeOnlyMacOS
+              run.mac_window?.state === "unrecorded" ? DESKTOP.observeOnlyMacOS : run.mac_window?.message ?? DESKTOP.observeOnlyMacOS
             )}
           </p>
+        )}
+        {/* The window refusal for a recorded level sits under the watch-only line: both are true. */}
+        {!background && viewOnly && run.mac_window?.state === "unrecorded" && run.mac_window.message && (
+          <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{run.mac_window.message}</p>
         )}
         {healthAnswered && !uiSandbox?.enabled && !macOff && !noDoor && (
           <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{offCopy(DESKTOP.off, "WARDYN_UI_SANDBOX_LISTEN")}</p>
