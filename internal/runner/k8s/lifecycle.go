@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -17,13 +18,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// Status reports the sandbox (agent pod) lifecycle state.
+// Status reports the sandbox (agent pod) lifecycle state. With the agent-sandbox backend on, every
+// Status read first checks that the pod is still the one Wardyn admitted (agentPodReplaced). That
+// check is not a time bound: a pod replaced or changed between reads fails the run at the next read,
+// which for a run being watched is its watcher's next probe (reconcileWatch's interval, or each poll
+// of Wait while the completion watcher waits on the agent).
 func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) {
 	ns, err := d.refNamespace(ctx, ref)
 	if err != nil {
@@ -36,7 +42,91 @@ func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) 
 		}
 		return runner.Status{}, fmt.Errorf("k8s: status: get pod: %w", err)
 	}
+	st, replaced, err := d.replacedPodStatus(ctx, ns, pod)
+	if err != nil {
+		return runner.Status{}, fmt.Errorf("k8s: status: %w", err)
+	}
+	if replaced {
+		return st, nil
+	}
 	return statusFromPod(pod), nil
+}
+
+// agentPodReplacedMessage is what the run's person reads when the agent-sandbox backend finds the
+// run's pod is no longer the one Wardyn admitted.
+const agentPodReplacedMessage = "This run ended: its pod was replaced outside Wardyn, and Wardyn does not start a replacement. Files on your drives are kept. Start a new run."
+
+// replacedPodStatus is the failed status of a pod agentPodReplaced finds replaced; replaced is false
+// otherwise, and always with the backend off, which reads nothing more.
+func (d *Driver) replacedPodStatus(ctx context.Context, ns string, pod *corev1.Pod) (st runner.Status, replaced bool, err error) {
+	if !d.cfg.AgentSandbox {
+		return runner.Status{}, false, nil
+	}
+	if replaced, err = d.agentPodReplaced(ctx, ns, pod); err != nil || !replaced {
+		return runner.Status{}, false, err
+	}
+	return runner.Status{State: types.RunFailed, Message: agentPodReplacedMessage}, true, nil
+}
+
+// agentPodReplaced reports whether pod is no longer the one the agent-sandbox backend admitted: it
+// carries a scheduling gate (gates can only be removed, and CreateSandbox removed them all, so a gated
+// pod is one the controller made again from the template), a label the run's NetworkPolicies select
+// is missing or changed (an unselected pod is default-allow), or a container or init container runs
+// an image other than the one the run's Sandbox template asked for. The selected labels come from the
+// run id, never from the Sandbox, whose template labels the controller copies onto the live pod. A
+// Sandbox already gone gives no images to compare: its pod is being collected with it.
+func (d *Driver) agentPodReplaced(ctx context.Context, ns string, pod *corev1.Pod) (bool, error) {
+	runID, err := runIDFromAgentPodName(pod.Name)
+	if err != nil {
+		return false, err
+	}
+	if agentPodGated(pod) || !hasAgentLabels(pod.Labels, runID) {
+		return true, nil
+	}
+	sb, err := d.dynamic.Resource(sandboxesGVR).Namespace(ns).Get(ctx, pod.Name, metav1.GetOptions{})
+	if isNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read agent sandbox: %w", err)
+	}
+	return !slices.Equal(containerImages(pod.Spec.Containers), templateImages(sb, "containers")) ||
+		!slices.Equal(containerImages(pod.Spec.InitContainers), templateImages(sb, "initContainers")), nil
+}
+
+func agentPodGated(pod *corev1.Pod) bool { return len(pod.Spec.SchedulingGates) > 0 }
+
+// hasAgentLabels reports whether labels carry every label runID's NetworkPolicies select its agent by.
+func hasAgentLabels(labels map[string]string, runID uuid.UUID) bool {
+	for k, v := range wardynLabels(runID, componentAgent, nil) {
+		if labels[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// containerImages lists each container as "name=image", in order.
+func containerImages(containers []corev1.Container) []string {
+	out := make([]string, 0, len(containers))
+	for _, c := range containers {
+		out = append(out, c.Name+"="+c.Image)
+	}
+	return out
+}
+
+// templateImages is containerImages for one container list of sb's pod template. An item that is
+// not a container reads with an empty name and image, so it compares unequal.
+func templateImages(sb *unstructured.Unstructured, field string) []string {
+	items, _, _ := unstructured.NestedSlice(sb.Object, "spec", "podTemplate", "spec", field)
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		c, _ := item.(map[string]any)
+		name, _ := c["name"].(string)
+		image, _ := c["image"].(string)
+		out = append(out, name+"="+image)
+	}
+	return out
 }
 
 // statusFromPod maps a pod's phase to a Wardyn RunState, surfacing a stuck
@@ -225,6 +315,14 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 	waitBound := teardownWaitBound(gracePeriodSeconds)
 	gracePeriodSeconds = runnerGrace(gracePeriodSeconds)
 
+	// The agent-sandbox backend's Sandbox goes first: its controller makes a deleted pod again. A
+	// failure returns before any delete, so the NetworkPolicies still select the pod.
+	if d.cfg.AgentSandbox {
+		if err := d.deleteRunSandbox(ctx, ns, runID); err != nil {
+			return fmt.Errorf("k8s: teardown: %w", err)
+		}
+	}
+
 	if err := d.clientset.CoreV1().Pods(ns).DeleteCollection(ctx, metav1.DeleteOptions{GracePeriodSeconds: gracePeriodSeconds}, listOpts); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: teardown: delete pods: %w", err)
 	}
@@ -248,6 +346,39 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 		return fmt.Errorf("k8s: teardown: delete network policies: %w", err)
 	}
 	d.runNamespaces.Delete(runID)
+	return nil
+}
+
+// deleteRunSandbox deletes runID's Sandbox, found by its derived name, and waits until it is gone.
+// Only a Sandbox carrying the run's agent labels is deleted, as teardown reaches every other object by
+// the run's label, and the delete carries the UID just read, so a Sandbox of that name the run did not
+// make is left alone.
+func (d *Driver) deleteRunSandbox(ctx context.Context, ns string, runID uuid.UUID) error {
+	name := agentPodName(runID)
+	sandboxes := d.dynamic.Resource(sandboxesGVR).Namespace(ns)
+	sb, err := sandboxes.Get(ctx, name, metav1.GetOptions{})
+	switch {
+	case isNotFound(err):
+		return nil
+	case err != nil:
+		return fmt.Errorf("read agent sandbox: %w", err)
+	case !hasAgentLabels(sb.GetLabels(), runID):
+		return nil
+	}
+	uid := sb.GetUID()
+	if err := sandboxes.Delete(ctx, name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil && !isNotFound(err) {
+		return fmt.Errorf("delete agent sandbox: %w", err)
+	}
+	err = wait.PollUntilContextTimeout(ctx, k8sPollInterval, agentSandboxDeleteTimeout, true, func(pollCtx context.Context) (bool, error) {
+		got, gerr := sandboxes.Get(pollCtx, name, metav1.GetOptions{})
+		if isNotFound(gerr) {
+			return true, nil
+		}
+		return gerr == nil && got.GetUID() != uid, gerr
+	})
+	if err != nil {
+		return fmt.Errorf("waiting for agent sandbox to be deleted: %w", err)
+	}
 	return nil
 }
 
@@ -380,6 +511,11 @@ type sweepCandidate struct {
 // is what excludes a boot canary (labelManaged, not labelComponent) and a drive
 // PVC (never carries labelRun at all). An image check pod's labelRun is its check
 // attempt's ID, which the control plane's isOrphan spares while that attempt is live.
+//
+// With the agent-sandbox backend on, the run's Sandboxes (labelManaged) are listed
+// too, before the pods: a Sandbox left with no NetworkPolicy or pod still names its
+// run, and its controller would otherwise keep making the pod. Not best-effort:
+// boot refuses the backend without `list` on sandboxes.
 func (d *Driver) sweepCandidates(ctx context.Context) ([]sweepCandidate, map[uuid.UUID]bool, error) {
 	listOpts := metav1.ListOptions{
 		LabelSelector: labelComponent + " in (" + componentAgent + "," + componentProxy + "," + componentImageCheck + ")",
@@ -396,6 +532,14 @@ func (d *Driver) sweepCandidates(ctx context.Context) ([]sweepCandidate, map[uui
 		netpols, netpolsErr := d.clientset.NetworkingV1().NetworkPolicies(ns).List(ctx, listOpts)
 		if netpolsErr != nil && !apierrors.IsForbidden(netpolsErr) {
 			return nil, nil, fmt.Errorf("k8s: list sandbox network policies for orphan sweep: %w", d.inNamespace(ns, netpolsErr))
+		}
+		var sandboxes []unstructured.Unstructured
+		if d.cfg.AgentSandbox {
+			list, err := d.dynamic.Resource(sandboxesGVR).Namespace(ns).List(ctx, metav1.ListOptions{LabelSelector: labelManaged + "=true"})
+			if err != nil {
+				return nil, nil, fmt.Errorf("k8s: list agent sandboxes for orphan sweep: %w", d.inNamespace(ns, err))
+			}
+			sandboxes = list.Items
 		}
 		// Pods LAST (see above), and never best-effort: this verb has been granted
 		// since the substrate shipped, and without it there is no sweep at all.
@@ -422,6 +566,9 @@ func (d *Driver) sweepCandidates(ctx context.Context) ([]sweepCandidate, map[uui
 			for i := range netpols.Items {
 				add(netpols.Items[i].ObjectMeta, false)
 			}
+		}
+		for i := range sandboxes {
+			add(metav1.ObjectMeta{Labels: sandboxes[i].GetLabels(), CreationTimestamp: sandboxes[i].GetCreationTimestamp()}, false)
 		}
 		for i := range pods.Items {
 			add(pods.Items[i].ObjectMeta, true)
