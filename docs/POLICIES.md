@@ -154,7 +154,7 @@
 - The GitHub twin of `azure_devops_capabilities`: this run's GitHub capabilities in place of a GitHub provider row's `default_profile`, chosen only within the row's `capability_ceiling`.
 - Entries come from the GitHub catalogue: `code_read`, `code_write`, `workflows_write`, `pr`, `issues_read`, `issues_write`, `actions_read`, `actions_execute`, `actions_admin`, `packages_read`, `packages_write`, `repo_admin`, `org_read`, `org_admin`, `identity`.
 - A composed profile narrows it as it narrows `azure_devops_capabilities` (intersection; an empty overlay list is refused), and a ceiling's list is never handed to a member as their choice.
-- **Not enforced yet:** the field is stored, composed and explained, but no GitHub lane reads it, and entries are not yet checked against the catalogue on write.
+- **Not enforced yet:** the field is stored, composed and explained, but no GitHub lane reads it, and entries are not yet checked against the catalogue on write. A person's `github_capabilities` wall does narrow the GitHub CLI's capabilities ([Your walls](#your-walls)).
 
 ### Brokered GitHub: the denies you did not write
 
@@ -551,8 +551,8 @@ What the check does and does not settle:
 | `min_confinement_class` | **Barrier at least** | The run's floor is raised to at least `CC1` (Fence), `CC2` (Wall) or `CC3` (Vault) |
 | `desktop` | **Clipboard and files** | `paste_in`, `copy_out`, `upload` and `download` each take `blocked`. A direction you leave out stays as the run has it |
 | `withheld_grants` | **Credentials kept out** | The run is not given a grant of that `kind`, or of that `kind` and `scope` |
-| `azure_devops_capabilities` | | A subset of the capabilities the run's policy names: the run keeps only those in both lists. A list with nothing in common refuses the run (`403` `governance_overlay_unsatisfiable`) |
-| `github_capabilities` | | The same for GitHub |
+| `azure_devops_capabilities` | | The run keeps only capabilities in both your list and its policy's list, or the provider's default profile where the policy names none. Nothing in common refuses the run (`403` `governance_overlay_unsatisfiable`) |
+| `github_capabilities` | | The same for GitHub: the GitHub CLI's capabilities keep only those in your list |
 | `tool_rules` | | Rules added to the run's: `hold` or `deny` a tool, or `*` for every tool that neither you nor the run's policy names. A rule never loosens one the run already has, and `allow` is refused |
 | `push_rules.deny_paths` | | Paths added to the run's push deny list. Only more is refused; a path the run already denies stays denied |
 | `recording` | | A floor: the run is recorded at least at `terminal` or `screen_actions`. It never lowers the run's level or your organisation's default; `off` is no floor and is refused |
@@ -560,9 +560,10 @@ What the check does and does not settle:
 
 - A knob you leave out is no limit. Every value only narrows: `allow_all_egress: true` and a direction set to anything but `blocked` are refused as `400` `walls_invalid`, naming the path.
 - A site is a DNS name or a `*.` wildcard, never an IP address, a port or a URL. A list holds at most 64 entries and `withheld_grants` at most 16.
-- A capability list names at least one grantable capability (an empty `[]` is refused). It narrows only a run whose policy names a list: where the policy leaves it to the provider row's default profile, the list cannot be proven within it and changes nothing.
+- A capability list names at least one grantable capability (an empty `[]` is refused), and never adds one.
+- Where the run's policy names no list, your list narrows the provider's default: Azure DevOps at dispatch, the GitHub CLI's capabilities at create. Walls that cannot be read then refuse the run `credential_withheld_unread`.
 - `tool_rules` holds at most 32 rules, one per tool, and `push_rules.deny_paths` at most 64 paths in the policy's own pattern language.
-- These six apply when the run is created and are recorded in the run's policy like any other knob; they are not applied again at dispatch.
+- These six apply when the run is created and are recorded in the run's policy like any other knob; they are not applied again at dispatch. The one exception is an Azure DevOps list over the default profile, met at dispatch and recorded there.
 - In the console, choosing **Only these sites** also selects **Block it** for unlisted sites.
 
 ### How your walls apply

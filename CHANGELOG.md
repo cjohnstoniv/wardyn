@@ -19,6 +19,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- A person's Azure DevOps or GitHub capability walls now narrow the provider's default when the run's policy names no capability list. Before, the default applied in full (for example code writes under a read-only wall) and create only warned. A wall with nothing in common with the default refuses the run.
 - A macOS VM run's screen no longer locks while it sits idle: the guest turns the screen lock off at the start of each run. Not yet run on a real Mac.
 - Review now refuses a macOS VM run that starts its terminal in the agent CLI, or whose profile pauses idle runs, instead of failing at start or showing a pause that never happened. A macOS VM is never paused when idle.
 - A macOS VM run whose disk drive is still held by a run that just ended now waits for it, up to 90 seconds, instead of failing at once. 0.10.0-rc.11 refused at once while the earlier run's VM was still shutting down. A run whose drive a live run still holds now also waits up to 90 seconds before it fails, where 0.10.0-rc.11 failed at once.

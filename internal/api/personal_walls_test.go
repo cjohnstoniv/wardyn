@@ -505,8 +505,9 @@ func TestPersonalWallsNeverWiden(t *testing.T) {
 		if got := run(narrower, nil, types.RunPolicySpec{AzureDevOpsCapabilities: []adoscope.Capability{read, write}}); !slices.Equal(got.AzureDevOpsCapabilities, []adoscope.Capability{read}) {
 			t.Errorf("a narrower list: %v, want the wall's [code_read]", got.AzureDevOpsCapabilities)
 		}
-		// A policy that names no list falls back to the provider row's default profile, which a list
-		// cannot be proven within: the walls leave it as it is.
+		// A policy that names no list falls back to the provider row's default profile, which create
+		// does not know: the walls add no list here, and say nothing. Dispatch meets the default with
+		// them (personal_walls_capabilities_test.go).
 		if got := run(wider, nil, types.RunPolicySpec{}); len(got.AzureDevOpsCapabilities) != 0 {
 			t.Errorf("no list in the policy: %v, want none added", got.AzureDevOpsCapabilities)
 		}
@@ -514,8 +515,8 @@ func TestPersonalWallsNeverWiden(t *testing.T) {
 		noop := policySourceRecord{knobs: startProvenance(memberProvenance)}
 		bare := types.RunPolicySpec{}
 		warns, _ := srv.personalWallsRunStep(memberCtxFor("sub-walls-widen"), &bare, &noop)
-		if !slices.Contains(warns, "your walls' azure_devops_capabilities did not apply: this run's policy names no list") {
-			t.Errorf("no list in the policy: warnings %v, want the capability list named as not applied", warns)
+		if slices.ContainsFunc(warns, func(w string) bool { return strings.Contains(w, "azure_devops_capabilities") }) {
+			t.Errorf("no list in the policy: warnings %v, want none naming the list: dispatch applies it", warns)
 		}
 		// A list with nothing in common is refused with the person's own words, never a server error.
 		_, refusal := wallsMeetStep(t, srv, st, types.PersonalWallsSpec{AzureDevOpsCapabilities: &[]adoscope.Capability{write}}, nil, ceiling)
@@ -539,8 +540,8 @@ func TestPersonalWallsNeverWiden(t *testing.T) {
 		noop := policySourceRecord{knobs: startProvenance(memberProvenance)}
 		bare := types.RunPolicySpec{}
 		warns, _ := srv.personalWallsRunStep(memberCtxFor("sub-walls-widen"), &bare, &noop)
-		if !slices.Contains(warns, "your walls' github_capabilities did not apply: this run's policy names no list") {
-			t.Errorf("no list in the policy: warnings %v, want the capability list named as not applied", warns)
+		if slices.ContainsFunc(warns, func(w string) bool { return strings.Contains(w, "github_capabilities") }) || len(bare.GitHubCapabilities) != 0 {
+			t.Errorf("no list in the policy: warnings %v list %v, want neither: the GitHub CLI's grants apply it", warns, bare.GitHubCapabilities)
 		}
 	})
 
