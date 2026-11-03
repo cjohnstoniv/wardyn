@@ -366,6 +366,7 @@ func rootCmd() *cobra.Command {
 		logoutCmd(func() string { return serverURL }),
 		runCmd(client),
 		attachCmd(client),
+		windowCmd(client),
 		approvalCmd(client),
 		auditCmd(client),
 		policyCmd(client),
