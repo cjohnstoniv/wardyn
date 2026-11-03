@@ -24,7 +24,7 @@ describe("CancelRunDialog", () => {
     killRun.mockResolvedValue(undefined);
     const onClose = vi.fn();
     render(<CancelRunDialog runId={ID} title="Nightly dependency bump" onClose={onClose} />);
-    await userEvent.click(screen.getByRole("button", { name: "Kill run" }));
+    await userEvent.click(screen.getByRole("button", { name: "End run" }));
     await waitFor(() => expect(toastApi.success).toHaveBeenCalledWith("Ending Nightly dependency bump"));
     expect(killRun).toHaveBeenCalledWith(ID);
     expect(onClose).toHaveBeenCalled();
@@ -33,14 +33,14 @@ describe("CancelRunDialog", () => {
   it("toasts Couldn't end <title>, with the reason, when the kill fails", async () => {
     killRun.mockRejectedValue(new Error("run already ended"));
     render(<CancelRunDialog runId={ID} title="Nightly dependency bump" onClose={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: "Kill run" }));
+    await userEvent.click(screen.getByRole("button", { name: "End run" }));
     await waitFor(() => expect(toastApi.error).toHaveBeenCalledWith("Couldn't end Nightly dependency bump", { description: "run already ended" }));
   });
 
   it("says this run, never the id, when the run has no title", async () => {
     killRun.mockResolvedValue(undefined);
     render(<CancelRunDialog runId={ID} onClose={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: "Kill run" }));
+    await userEvent.click(screen.getByRole("button", { name: "End run" }));
     await waitFor(() => expect(toastApi.success).toHaveBeenCalledWith("Ending this run"));
   });
 });
