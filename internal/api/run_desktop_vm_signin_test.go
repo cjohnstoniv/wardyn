@@ -593,13 +593,13 @@ func TestDesktopSignIns_PauseHoldsTheDesktopRecordingUntilTheResume(t *testing.T
 	}
 }
 
-// A macOS VM's desktop is not recorded at Screen and actions, so its sign-in pause and resume hold no
-// desktop recording and write no desktop.recording rows; a Linux VM at the same level holds one.
-func TestDesktopSignIns_MacOSVMPauseHoldsNoDesktopRecording(t *testing.T) {
+// A macOS VM's desktop is recorded at Screen and actions as a Linux VM's is, so its sign-in pause holds the
+// desktop recording and its pause and resume each write a desktop.recording row.
+func TestDesktopSignIns_MacOSVMPauseHoldsTheDesktopRecording(t *testing.T) {
 	for _, tc := range []struct {
 		kind types.MachineKind
 		held bool
-	}{{types.MachineMacOSVM, false}, {types.MachineLinuxVM, true}} {
+	}{{types.MachineMacOSVM, true}, {types.MachineLinuxVM, true}} {
 		t.Run(string(tc.kind), func(t *testing.T) {
 			f := newVMSignInFixture(t, "memory")
 			f.run.MachineKind = tc.kind
