@@ -595,6 +595,22 @@ func modeSelector(n ast.Node) *ast.SelectorExpr {
 
 // parseHandler returns the named top-level method's body from an internal/api
 // source file.
+// parseFunc is file's plain function name, the same way parseHandler reads a method.
+func parseFunc(t *testing.T, fset *token.FileSet, file, name string) *ast.FuncDecl {
+	t.Helper()
+	f, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", file, err)
+	}
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == name {
+			return fn
+		}
+	}
+	t.Fatalf("%s: no function %s", file, name)
+	return nil
+}
+
 func parseHandler(t *testing.T, fset *token.FileSet, file, name string) *ast.FuncDecl {
 	t.Helper()
 	f, err := parser.ParseFile(fset, file, nil, parser.SkipObjectResolution)
@@ -661,6 +677,12 @@ func TestPreflightCallsLaunchsPlainFunctionGates(t *testing.T) {
 	launch := calls(parseHandler(t, fset, "runs_create_validate.go", "decodeAndValidateCreateRun"))
 	preflight := calls(parseHandler(t, fset, "preflight.go", "handlePreflightRun"))
 	preview := calls(parseHandler(t, fset, "policy_preview.go", "handlePolicyPreview"))
+	// Preflight asks desktop_window's 400 through writeRequestFieldRefusal.
+	if preflight["writeRequestFieldRefusal"] {
+		for name := range calls(parseFunc(t, fset, "preflight.go", "writeRequestFieldRefusal")) {
+			preflight[name] = true
+		}
+	}
 	for _, gate := range []string{"runRequestEnums", "interactiveToolApprovalsError", "agentRequirementError", "desktopWindowRequestRefusal"} {
 		if !launch[gate] {
 			t.Errorf("launch no longer calls %s: re-point this guard", gate)

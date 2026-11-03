@@ -162,6 +162,21 @@ func (s *Server) advertisedConfinement(ctx context.Context, req createRunRequest
 	return pc.ConfinementClasses
 }
 
+// writeRequestFieldRefusal writes the 400 launch's validation gives a request field the server owns or
+// cannot carry: a reserved task, or a desktop_window the run cannot take (desktopWindowRequestRefusal). It
+// reports whether it wrote one.
+func writeRequestFieldRefusal(w http.ResponseWriter, req createRunRequest) bool {
+	if reservedRunTasks[req.Task] {
+		writeErrorReason(w, http.StatusBadRequest, reasonRunTaskReserved, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
+		return true
+	}
+	if msg := desktopWindowRequestRefusal(req); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonDesktopWindowInvalid, msg)
+		return true
+	}
+	return false
+}
+
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
 // resolves the run policy through the EXACT same resolveRunPolicy chokepoint (so
 // an XOR violation, an unknown-secret 422, or an invalid inline spec surface as
@@ -256,13 +271,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		runError(http.StatusUnprocessableEntity, reasonAgentNotEnabled, msg).forTool(harnessRefusalTool(req)).write(s, w, r)
 		return
 	}
-	if reservedRunTasks[req.Task] {
-		writeErrorReason(w, http.StatusBadRequest, reasonRunTaskReserved, fmt.Sprintf("task %q is set by the server and cannot be requested directly", req.Task))
-		return
-	}
-	// The same 400 launch gives a desktop_window it cannot carry, before any step reads the field.
-	if msg := desktopWindowRequestRefusal(req); msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonDesktopWindowInvalid, msg)
+	if writeRequestFieldRefusal(w, req) {
 		return
 	}
 	// Same member request-field denial launch runs (runs_create.go's
