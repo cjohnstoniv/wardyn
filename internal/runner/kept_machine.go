@@ -12,6 +12,9 @@ type KeptMachineSpec struct {
 	Mode      string // "new" | "resume" | "fresh"
 	OwnerHash string // types.DriveSubjectHash(owner)
 	IdleDays  int
+	// Name is the machine's name as the organisation knows it; the Mac records it in kept.json (and a
+	// later boot's different name replaces it) so the machine can be listed by name with no network.
+	Name string `json:"name,omitempty"`
 }
 
 // KeptScrub is the outcome of one scrub of a kept machine's disk: counts and certificate digests,
