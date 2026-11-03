@@ -476,8 +476,7 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	createData["queue"] = queue
 	q.f.comps.stampRunCreate(createData)
 	maps.Copy(createData, q.f.place.auditFields(created, s.runnerNameOf(ctx, created)))
-	s.markGovernanceExempt(ctx, createData)
-	s.markImageDigestExempt(ctx, q.req.Image, createData)
+	s.markRunCreateExempt(ctx, q.req.Image, createData)
 	s.stampBreakGlass(ctx, created.ID, q.createdByType, created.CreatedBy, createData)
 	s.recordAudit(ctx, s.auditEvent(&created.ID, q.createdByType, created.CreatedBy, "run.create",
 		created.ID.String(), "success", mustJSON(withRunUserType(ctx, created.UserType, createData))))

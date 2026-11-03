@@ -284,8 +284,8 @@ func TestMarkImageDigestExempt(t *testing.T) {
 	// Both run.create writers stamp it.
 	for _, file := range []string{"runs.go", "run_queue.go"} {
 		src, err := os.ReadFile(file)
-		if err != nil || !strings.Contains(string(src), "s.markImageDigestExempt(ctx, ") {
-			t.Errorf("%s does not stamp image_digest_exempt on run.create", file)
+		if err != nil || !strings.Contains(string(src), "s.markRunCreateExempt(ctx, ") {
+			t.Errorf("%s does not call markRunCreateExempt (governance_exempt and image_digest_exempt) on run.create", file)
 		}
 	}
 }
