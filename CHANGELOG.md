@@ -23,6 +23,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- Finish setup now sticks: the console re-reads its setup status right after the install records completion, so the logo or the Admin home no longer sends the admin back into Getting started for up to five minutes.
+- Getting started no longer says the wrong thing in several places: an SSO install whose SSO side does not answer shows "SSO · not answering" instead of "isn't configured", a failed workspace list says so with a Retry instead of "No workspaces onboarded yet", Review no longer shows two verdicts when the barrier is ready and only a model provider is missing, a Kubernetes cluster with no barrier is pointed at the chart settings instead of the Docker daemon, and the welcome screen says "Couldn't reach Wardyn" instead of "Checking…" forever.
 - Docs no longer say a gateway run identity token always lives 10 minutes. It lives 60 to 600 seconds, and 600 by default.
 - A window onto a macOS VM run no longer opens when the Mac can't tell whether its screen is locked: it refuses with `mac_window_lock_unknown`, and an open window closes as soon as the Mac locks or its lock can no longer be told. Reopening after a lock needs a new `wardyn window`. Not yet run on a real Mac.
 - New run: choosing a virtual machine no longer leaves "Start the run in this harness" on. The switch is off and disabled for a Linux or macOS VM, whose terminal opens a shell, and the refusal now names that switch, links to Harnesses and gives the `interactive_start` field. The macOS choice also says the browser desktop is view only on macOS 26.
