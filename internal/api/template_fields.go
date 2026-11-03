@@ -135,6 +135,8 @@ var templateRequestRules = []TemplateFieldRule{
 		"A run is named when it is launched: the Name this run dialog opens empty in this release, so a template carries no title."),
 	excludedField("description", templateExcludeLaunch,
 		"A run is described when it is launched: the Name this run dialog opens empty in this release, so a template carries no description."),
+	excludedField("correlation_id", templateExcludeLaunch,
+		"A correlation ID names one launch to the caller's other systems, so it is given at each launch and a template carries none."),
 	carriedField("policy_id", partPolicyRef, templateOmitBaseline, templateEmptySame,
 		"The organisation's default policy applies when the template is used, and that default can change. It is a whole reference and never appears beside inline_policy."),
 	carriedField("confinement_class", partRunner, templateOmitBaseline, templateEmptySame,

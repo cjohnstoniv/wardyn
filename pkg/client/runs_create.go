@@ -37,6 +37,11 @@ type CreateRunRequest struct {
 	// interpreted, only stored and displayed.
 	Description string     `json:"description,omitempty"`
 	PolicyID    *uuid.UUID `json:"policy_id,omitempty"`
+	// CorrelationID is the caller's own reference for this run, to join Wardyn's audit trail to another
+	// system's. Optional; trimmed, at most 128 characters of ASCII letters, digits and . _ : / -, anything else
+	// is 422 correlation_id_invalid. The run keeps it (AgentRun.CorrelationID), and the audit sinks carry it as
+	// data.correlation_id on the run's rows; the stored audit trail is unchanged.
+	CorrelationID string `json:"correlation_id,omitempty"`
 	// ConfinementClass, when set, requests a specific confinement class
 	// ("CC1"/"CC2"/"CC3"). Empty inherits the policy minimum; an unknown
 	// non-empty value is rejected by the server with 400.
@@ -303,7 +308,7 @@ type CreateRunRequest struct {
 	Service *types.RunService `json:"service,omitempty"`
 	// Preset launches the named launch preset (see Preset): the server
 	// expands it into the equivalent explicit request and runs the unchanged
-	// create path under the caller's own ceiling. Alongside it only Title,
+	// create path under the caller's own ceiling. Alongside it only Title, CorrelationID,
 	// Task, PresetVersion and WallPreset may be set; any other field is refused.
 	Preset string `json:"preset,omitempty"`
 	// PresetVersion, with Preset, pins the version the caller expects: a

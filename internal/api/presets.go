@@ -40,9 +40,9 @@ var presetNameRE = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 const maxPresetNameLen = 63
 
 // presetLaunchFields are the create-run fields a caller may set alongside
-// `preset` — the per-launch half (title, task, the wall preset) and the preset
-// reference itself. A stored preset may carry none of them.
-var presetLaunchFields = map[string]bool{"title": true, "task": true, "preset": true, "preset_version": true, "wall_preset": true}
+// `preset` — the per-launch half (title, task, correlation_id, the wall preset)
+// and the preset reference itself. A stored preset may carry none of them.
+var presetLaunchFields = map[string]bool{"title": true, "task": true, "correlation_id": true, "preset": true, "preset_version": true, "wall_preset": true}
 
 // mountPresetRoutes registers /presets. Reads are open to any signed-in
 // person, narrowed to the presets their user type may launch; writes are
@@ -404,9 +404,9 @@ func (s *Server) expandRunPreset(w http.ResponseWriter, r *http.Request, req *cr
 	if presetRunModeRefusal(v.Request).write(s, w, r) {
 		return false
 	}
-	title, task, wall := req.Title, req.Task, req.WallPreset
+	title, task, correlation, wall := req.Title, req.Task, req.CorrelationID, req.WallPreset
 	*req = v.Request
-	req.Title, req.Task, req.WallPreset = title, task, wall
+	req.Title, req.Task, req.CorrelationID, req.WallPreset = title, task, correlation, wall
 	req.Preset, req.PresetVersion = p.Name, p.Version
 	return true
 }

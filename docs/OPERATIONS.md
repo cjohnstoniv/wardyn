@@ -1256,7 +1256,7 @@ erases one person's retained records by explicit scope, in one audited act
 | `mask_copies` | the masking manifests of the runs the person created, after their live attaches, SSH shells and relays are fenced |
 | `run_outputs` | the stored output of those runs (404 `run_output_erased` afterwards, on every replica and after a restart) |
 | `recordings` | their session recordings and `source: "recording"` output rows, with durable per-run fences against later writes; direct stdout and pane snapshots retain their independent `run_outputs` scope |
-| `run_tasks` | the task text, title and description of the runs the person created, and the launch intents of those runs |
+| `run_tasks` | the task text, title, description and correlation ID of the runs the person created, and the launch intents of those runs |
 | `components` | the components the person saved, the launch intents of their runs, and what each run's snapshot of one they defined says about it; the run keeps a content-free row, which is what a revived run is checked against. A finished run's resolved policy and grants keep the hosts and secret names the run used, as for any other policy, and so do its `run.env_secret.resolve`, `run.file_secret.resolve`, `secret.read` and `run.policy.resolve` rows |
 | `run_setups` | the person's own run templates and every revision of them, the launch intents of their runs, their group template-manager grants, and their name as the author of shared templates, revisions, grants and launch presets, which stay without it |
 | `runner_pools` | the person's own user pools, deleted as their own delete would, their name on every pool row of theirs, and their stored preferences (the pool they default to, their last view); their runners stay |
@@ -1294,6 +1294,8 @@ erases one person's retained records by explicit scope, in one audited act
   - Migration `0171_run_launch_intents` adds the table; a split-role install grants the app role `SELECT, INSERT, DELETE` on it.
 
 - An erasure that names more than one of `run_tasks`, `components` and `run_setups` deletes the launch intents in the first of those steps; the others report `launch_intents: 0`.
+
+- `run_tasks` clears a run's correlation ID. The audit sinks on this replica stop adding it at once, the others within 30 seconds, and copies a sink already exported follow that sink's own retention.
 
 - **A credential write that began before the erase never lands behind it.**
   - The `credentials` scope advances the person's erase generation before it lists anything and again after the deletes, so a write that began between the two is refused as well.
@@ -4114,6 +4116,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0251` (`0251_agent_runs_agent_cast_owed`) adds `agent_runs.agent_cast_owed_at` (`0001`'s table) and a partial index on it: a macOS VM task run's agent output recording still owed, NULL on every existing row; no grant changes.
 - `0252` (`0252_provider_change_clears_on_oidc`) is a later `CREATE OR REPLACE` of `0143`'s `clear_provider_connection_change` trigger function, so an endpoint sign-in's `-oidc` part clears the owner's provider change history too; no table, row or grant changes.
 - `0253` (`0253_agent_runs_kept_machine_id`) adds `agent_runs.kept_machine_id` and `agent_runs.kept_machine_mode` (`0001`'s table): the kept machine a macOS VM run kept or resumed and how, with no foreign key so the run's page can say the machine was deleted. It also adds `kept_machines.reset_run_id` and `kept_machines.reset_unconfirmed` (`0250`'s table): a fresh start its Mac has not confirmed, and an earlier one a later attempt replaced. NULL or false on every existing row; no grant changes.
+- `0254` (`0254_agent_runs_correlation_id`) adds `agent_runs.correlation_id` (`0001`'s table): the caller's own reference for a run, empty on every existing row; no grant changes.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
