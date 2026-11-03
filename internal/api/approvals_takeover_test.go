@@ -248,14 +248,14 @@ func TestTakeover_UnrecordedRunHasNothingToPause(t *testing.T) {
 	}
 }
 
-// TestTakeover_MacOSVMKeepsTheTerminalGapButHoldsNoDesktop: a macOS VM run's desktop is not recorded at
-// Screen and actions, so a take over holds no desktop recording, while the terminal's gap rows stay
-// (its console and SSH sessions are recorded). A Linux VM at the same level holds its desktop.
-func TestTakeover_MacOSVMKeepsTheTerminalGapButHoldsNoDesktop(t *testing.T) {
+// TestTakeover_MacOSVMHoldsTheDesktopAndKeepsTheTerminalGap: a macOS VM run's desktop is recorded at
+// Screen and actions as a Linux VM's is, so a take over holds its desktop recording, and the terminal's
+// gap rows stay (its console and SSH sessions are recorded).
+func TestTakeover_MacOSVMHoldsTheDesktopAndKeepsTheTerminalGap(t *testing.T) {
 	for _, tc := range []struct {
 		kind               types.MachineKind
 		desktopPauses, res int
-	}{{types.MachineMacOSVM, 0, 0}, {types.MachineLinuxVM, 1, 1}} {
+	}{{types.MachineMacOSVM, 1, 1}, {types.MachineLinuxVM, 1, 1}} {
 		t.Run(string(tc.kind), func(t *testing.T) {
 			f := newTakeoverFixture(t, true)
 			ast := f.srv.cfg.Store.(*authzStore)

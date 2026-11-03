@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import type { AuditEvent } from "../../../lib/types";
 import { clockTime } from "../../../lib/format";
-import { sessionOptionLabel } from "./recording-tab-copy";
+import { RECORDING_MISSING_SESSION_BODY, sessionOptionLabel } from "./recording-tab-copy";
 
 const time = new Date().toISOString();
 const row = (data?: Record<string, unknown>): AuditEvent => ({
@@ -29,5 +29,12 @@ describe("sessionOptionLabel", () => {
     for (const data of [{ incomplete: true, mask_gap: true }, { incomplete: true, completeness: "unknown" }]) {
       expect(sessionOptionLabel(row(data))).toBe(`Session ended ${clockTime(time)} · wardynd · incomplete`);
     }
+  });
+});
+
+describe("recording tab copy (UXR-47)", () => {
+  it("says terminal session and recording, never the file-format word cast", () => {
+    expect(RECORDING_MISSING_SESSION_BODY).toBe("This terminal session's recording is missing. It may still be saving, or it failed to save.");
+    expect(RECORDING_MISSING_SESSION_BODY).not.toMatch(/\bcast\b|attach session/i);
   });
 });
