@@ -141,6 +141,8 @@ type SiteConfig struct {
 	// MacOSVM is the organisation's macOS VM sandbox settings. A POINTER for the same byte-identical-GET
 	// reason as the provider blocks; nil, or a zero max, sets no maximum.
 	MacOSVM *SiteMacOSVM `json:"macos_vm,omitempty"`
+	// Images is the org's image rules. Absent reads as every rule off.
+	Images *SiteImages `json:"images,omitempty"`
 	// EffectiveScmHosts is READ-ONLY, SERVER-OWNED: ScmHosts minus hosts a
 	// provider row claims, union enabled providers' hosts. A real field
 	// (not a wrapper key) so a get|set round trip still decodes under
@@ -212,6 +214,15 @@ type SiteEgress struct {
 // it out of the document (and applying) removes the logo it delivered.
 type SiteBranding struct {
 	LogoPath string `json:"logo_path,omitempty"`
+}
+
+// SiteImages is SiteConfig.Images.
+type SiteImages struct {
+	// RequireDigest refuses a member's run whose image is not pinned by digest
+	// (image@sha256:<digest>), whatever the image grants say: a grant names what an
+	// admin approved, and only a digest makes that what runs. Off by default.
+	// Operators are not bound by it (their runs are marked in the audit row).
+	RequireDigest bool `json:"require_digest,omitempty"`
 }
 
 // ComponentSettings is SiteConfig.Components. Every field's zero value is the

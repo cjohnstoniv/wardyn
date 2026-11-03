@@ -49,6 +49,10 @@ func (s *Server) seededImageRefusal(r *http.Request, seededOwner, image string) 
 	if seededOwner == "" {
 		return nil
 	}
+	// The digest rule first: a grant, exact or prefix, still needs a pinned ref while it is on.
+	if refusal := s.imageDigestRefusal(r.Context(), image, true); refusal != nil {
+		return refusal
+	}
 	granted, err := s.capGranted(r.Context(), capImage, image)
 	if err != nil {
 		return runServerError("resolve capability", err)
@@ -79,6 +83,10 @@ func (s *Server) runRequestGovernance(r *http.Request, req createRunRequest) (go
 			"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image"))
 	}
 	if req.Image != "" {
+		// The digest rule first: a grant, exact or prefix, still needs a pinned ref while it is on.
+		if refusal := s.imageDigestRefusal(r.Context(), req.Image, false); refusal != nil {
+			return governanceCeiling{}, refusal
+		}
 		granted, err := s.capGranted(r.Context(), capImage, req.Image)
 		if err != nil {
 			return governanceCeiling{}, runServerError("resolve capability", err)
