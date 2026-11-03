@@ -262,6 +262,38 @@ func TestAgentSandboxLifecycle_ChangedSandboxSpecReadsFailed(t *testing.T) {
 	}
 }
 
+// With the backend on too, stopping a run whose agent pod's label names another live run removes the
+// ref's run, its Sandbox first, and leaves the other run and its Sandbox whole.
+func TestAgentSandboxLifecycle_TeardownKeysOnTheRefNotTheLabel(t *testing.T) {
+	d, cs, dyn, refA := asAdmitted(t)
+	ctx := context.Background()
+	specB := asSpec()
+	specB.RunID = uuid.New()
+	sbB, err := d.CreateSandbox(ctx, specB)
+	if err != nil {
+		t.Fatalf("CreateSandbox B: %v", err)
+	}
+	before := runObjectCounts(t, cs, specB.RunID)
+	changeAgentPod(t, cs, refA, func(p *corev1.Pod) { p.Labels[labelRun] = specB.RunID.String() })
+
+	if err := d.StopSandbox(ctx, refA); err != nil {
+		t.Fatalf("StopSandbox A: %v", err)
+	}
+	assertRunObjectsGone(t, cs, asRunID)
+	if _, err := cs.Tracker().Get(podsGVR, testNamespace, refA); !isNotFound(err) {
+		t.Errorf("A's relabelled agent pod is still there (get err %v)", err)
+	}
+	if _, err := dyn.Tracker().Get(sandboxesGVR, testNamespace, refA); !isNotFound(err) {
+		t.Errorf("A's Sandbox is still there (get err %v)", err)
+	}
+	if after := runObjectCounts(t, cs, specB.RunID); after != before {
+		t.Errorf("stopping run A changed run B's objects: %+v, want %+v", after, before)
+	}
+	if _, err := dyn.Tracker().Get(sandboxesGVR, testNamespace, sbB.Ref); err != nil {
+		t.Errorf("run B's Sandbox: %v, want it kept", err)
+	}
+}
+
 // The orphan sweep finds a run by its Sandbox alone, with no NetworkPolicy or pod left to name it.
 func TestAgentSandboxLifecycle_SweepFindsALoneSandbox(t *testing.T) {
 	d, _, dyn := newSandboxRig(t, Config{}, controllerMaking(t, nil))

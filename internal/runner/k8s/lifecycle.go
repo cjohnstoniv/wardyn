@@ -271,40 +271,37 @@ func (d *Driver) KillSandbox(ctx context.Context, ref string) error {
 	return d.teardown(ctx, ref, &zero)
 }
 
-// teardown resolves ref's run id — from the agent pod's wardyn.run-id label,
-// or, when that pod is already gone, from the REF ITSELF (a sandbox ref is the
-// deterministic agent pod name) — then sweeps every Wardyn-owned object
-// carrying that label via three DeleteCollection calls (pods, NetworkPolicies,
-// Secrets); one label selector reaches all of them in three calls total.
+// teardown resolves ref's run id from the REF ITSELF (a sandbox ref is the deterministic agent pod
+// name, the only shape CreateSandbox has handed out), never from the agent pod's wardyn.run-id label,
+// which anyone who can patch the pod can change: a label naming another run would tear that run down,
+// and a missing one would leave this run's objects behind. It then sweeps every Wardyn-owned object
+// carrying the run's label via three DeleteCollection calls (pods, NetworkPolicies, Secrets).
+//
+// An agent pod whose label no longer names the ref's run is deleted by its name and UID besides
+// (teardownRun), since the run's label selector no longer reaches it.
 //
 // A 404 on the agent pod does not mean the run is gone: the kubelet routinely
 // EVICTS it alone (disk_mib is its ephemeral-storage limit) while a
-// credential-bearing proxy pod, Secret, and NetworkPolicies survive. Only a
-// ref that is not a wardyn agent pod name at all falls through to a no-op.
+// credential-bearing proxy pod, Secret, and NetworkPolicies survive. A ref
+// that is not a wardyn agent pod name names no run: with no pod of that name
+// it is a no-op, and a pod of that name is refused, not torn down.
 func (d *Driver) teardown(ctx context.Context, ref string, gracePeriodSeconds *int64) error {
 	d.execOutputs.Delete(ref)
 	ns, err := d.refNamespace(ctx, ref)
 	if err != nil {
 		return fmt.Errorf("k8s: teardown: %w", err)
 	}
+	runID, perr := runIDFromAgentPodName(ref)
 	pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, ref, metav1.GetOptions{})
-	if err != nil {
-		if isNotFound(err) {
-			runID, perr := runIDFromAgentPodName(ref)
-			if perr != nil {
-				return nil // ghost ref we cannot key on: idempotent success
-			}
-			return d.teardownByRunID(ctx, runID, gracePeriodSeconds)
-		}
+	switch {
+	case err != nil && !isNotFound(err):
 		return fmt.Errorf("k8s: teardown: get pod %q: %w", ref, err)
-	}
-	runIDStr := pod.Labels[labelRun]
-	if runIDStr == "" {
+	case perr != nil && err != nil:
+		return nil // ghost ref we cannot key on: idempotent success
+	case perr != nil:
 		return fmt.Errorf("k8s: teardown of %q: %w", ref, errTeardownUnresolved)
-	}
-	runID, perr := uuid.Parse(runIDStr)
-	if perr != nil {
-		return fmt.Errorf("k8s: teardown of %q (run-id label %q unparseable): %w", ref, runIDStr, errTeardownUnresolved)
+	case err == nil && pod.Labels[labelRun] != runID.String():
+		return d.teardownRun(ctx, runID, pod, gracePeriodSeconds)
 	}
 	return d.teardownByRunID(ctx, runID, gracePeriodSeconds)
 }
@@ -315,6 +312,14 @@ func (d *Driver) teardown(ctx context.Context, ref string, gracePeriodSeconds *i
 // below). Split out so CreateSandbox's rollback can share this exact ordering
 // even when no live pod exists yet to resolve a label from.
 func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeriodSeconds *int64) error {
+	return d.teardownRun(ctx, runID, nil, gracePeriodSeconds)
+}
+
+// teardownRun is teardownByRunID that also deletes drifted, when set: the run's own agent pod, read
+// by its name, whose label no longer names the run. It is deleted by name with its UID as a
+// precondition, so no other pod is touched, and the NetworkPolicies stay until it is gone as well.
+// Runner mode reaches each pod by its name already, and refuses one without the run's labels.
+func (d *Driver) teardownRun(ctx context.Context, runID uuid.UUID, drifted *corev1.Pod, gracePeriodSeconds *int64) error {
 	if d.runnerMode() {
 		// Runner mode: completion evidence per pod in the one order, NetworkPolicies held until
 		// both pods are proven stopped (design K1 §3.1, stop_proxy.go).
@@ -341,6 +346,13 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 	if err := d.clientset.CoreV1().Pods(ns).DeleteCollection(ctx, metav1.DeleteOptions{GracePeriodSeconds: gracePeriodSeconds}, listOpts); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: teardown: delete pods: %w", err)
 	}
+	if drifted != nil {
+		uid := drifted.UID
+		err := d.clientset.CoreV1().Pods(ns).Delete(ctx, drifted.Name, metav1.DeleteOptions{GracePeriodSeconds: gracePeriodSeconds, Preconditions: &metav1.Preconditions{UID: &uid}})
+		if err != nil && !isNotFound(err) && !apierrors.IsConflict(err) { // a conflict: that pod is already gone
+			return fmt.Errorf("k8s: teardown: delete relabelled agent pod: %w", err)
+		}
+	}
 
 	// H3: an unselected pod is default-allow, so dropping the NetworkPolicies
 	// while the pod is still Terminating would hand it open egress for that
@@ -348,6 +360,11 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 	// deletion) first. Bounded at grace+slack (teardownWaitBound).
 	if err := d.waitPodsGone(ctx, ns, listOpts, waitBound); err != nil {
 		return fmt.Errorf("k8s: teardown: waiting for pods to terminate before dropping NetworkPolicies: %w", err)
+	}
+	if drifted != nil {
+		if err := d.waitPodGone(ctx, ns, drifted, waitBound); err != nil {
+			return fmt.Errorf("k8s: teardown: waiting for the relabelled agent pod to terminate before dropping NetworkPolicies: %w", err)
+		}
 	}
 
 	// Secret FIRST, NetworkPolicies after (mirrors CreateSandbox's order): the
@@ -436,6 +453,17 @@ func (d *Driver) waitPodsGone(ctx context.Context, ns string, listOpts metav1.Li
 			return false, err
 		}
 		return len(pods.Items) == 0, nil
+	})
+}
+
+// waitPodGone blocks until pod no longer exists; another pod of its name is not it.
+func (d *Driver) waitPodGone(ctx context.Context, ns string, pod *corev1.Pod, timeout time.Duration) error {
+	return wait.PollUntilContextTimeout(ctx, k8sPollInterval, timeout, true, func(pollCtx context.Context) (bool, error) {
+		got, err := d.clientset.CoreV1().Pods(ns).Get(pollCtx, pod.Name, metav1.GetOptions{})
+		if isNotFound(err) {
+			return true, nil
+		}
+		return err == nil && got.UID != pod.UID, err
 	})
 }
 
