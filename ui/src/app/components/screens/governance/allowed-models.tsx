@@ -167,6 +167,12 @@ export function AllowedModelsRow({ value, disabled, onChange }: { value: string[
   );
 }
 
+/** The helper strip under the composed row's box, for those who can read the model providers. */
+export function ProviderModelStrip({ listed, disabled, onAdd }: { listed: string[]; disabled: boolean; onAdd: (m: string) => void }) {
+  const providers = useProviderModels();
+  return providers && providers.length > 0 ? <ModelStrip providers={providers} listed={listed} disabled={disabled} onAdd={onAdd} /> : null;
+}
+
 /** The composed row's error under the box: Narrow is on and nothing is listed. */
 export function NarrowEmptyError({ id }: { id: string }) {
   return (

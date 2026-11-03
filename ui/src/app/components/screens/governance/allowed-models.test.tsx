@@ -257,6 +257,25 @@ describe("Allowed models: the composed row", { timeout: 20_000 }, () => {
     expect(createProfileMock.mock.calls[0][0].overlay_limits).toBeNull();
   });
 
+  it("offers the providers' models under the box while Narrow is on, and adds one on click", async () => {
+    await composed("Open base");
+    expect(screen.queryByTestId("governance-allowed-models-strip")).toBeNull();
+    await userEvent.click(narrow());
+    const strip = await screen.findByTestId("governance-allowed-models-strip");
+    expect(screen.getAllByTestId("governance-allowed-models-strip")).toHaveLength(1);
+    expect(within(strip).queryByRole("button", { name: AM.ADD("local-model-a") })).toBeNull();
+    await userEvent.click(within(strip).getByRole("button", { name: AM.ADD("model-b") }));
+    expect(box()).toHaveValue("model-b");
+    expect(within(strip).getByRole("button", { name: AM.ADD("model-b") })).toBeDisabled();
+    typeValue(AM.LABEL, "model-b\nmodel-a");
+    await userEvent.click(within(strip).getByRole("button", { name: AM.ADD("small-model-a") }));
+    expect(box()).toHaveValue("model-b\nmodel-a\nsmall-model-a");
+    await userEvent.click(save());
+    expect(createProfileMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ overlay_limits: { allowed_models: ["model-b", "model-a", "small-model-a"] } }),
+    );
+  });
+
   it("shows a refused composition's sentence raw", async () => {
     const sentence = "allowed_models: no model is in both the base (model-a, small-model-a) and the overlay (model-c)";
     createProfileMock.mockRejectedValue(new HttpError(409, sentence, "governance_overlay_unsatisfiable"));

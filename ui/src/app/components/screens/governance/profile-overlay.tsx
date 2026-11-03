@@ -26,7 +26,7 @@ import { MAC_BASES } from "../../wardyn/copy/mac-bases";
 import { Chip } from "../../wardyn/primitives";
 import { Switch } from "../../wardyn/form-primitives";
 import { Segmented } from "../../wardyn/segmented";
-import { ALLOWED_MODELS_KEY, ModelHintText, ModelReadsNote, NarrowEmptyError } from "./allowed-models";
+import { ALLOWED_MODELS_KEY, ModelHintText, ModelReadsNote, NarrowEmptyError, ProviderModelStrip } from "./allowed-models";
 import { limitChips, limitsBoundNothing } from "./limit-chips";
 
 // ---- the base graph -------------------------------------------------------
@@ -351,6 +351,7 @@ function OverlayValue({
         describedBy={models && list.length === 0 ? emptyId : undefined}
       />
       {models && list.length === 0 && <NarrowEmptyError id={emptyId} />}
+      {models && <ProviderModelStrip listed={list} disabled={disabled} onAdd={(m) => onChange([...list, m])} />}
     </>
   );
 }
@@ -377,6 +378,14 @@ function ListValue({
   describedBy?: string;
 }) {
   const [text, setText] = React.useState(value.join("\n"));
+  // A name added from outside the box (the models row's helper strip) arrives as a new value; what was typed
+  // already parses to the value it sent, so only an outside change rewrites the text.
+  const lines = (t: string) =>
+    t
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+  if (lines(text).join("\n") !== value.join("\n")) setText(value.join("\n"));
   return (
     <textarea
       id={`${id}-value`}
@@ -390,12 +399,7 @@ function ListValue({
       value={text}
       onChange={(e) => {
         setText(e.target.value);
-        onChange(
-          e.target.value
-            .split("\n")
-            .map((l) => l.trim())
-            .filter(Boolean),
-        );
+        onChange(lines(e.target.value));
       }}
     />
   );
