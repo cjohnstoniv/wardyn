@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.0-rc.12] — 2026-11-03
+
 ### Before you upgrade
 
 - Endpoint sign-ins made before this release must be made again once; runs ask for it.
