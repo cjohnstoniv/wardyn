@@ -12,6 +12,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -28,14 +29,24 @@ import (
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// keptMacTransport is a Mac that keeps machines: kept_machine deletes the one it names, or fails while
-// refuse is set (a VM still has it).
+// keptMacTransport is a Mac that keeps machines: kept_machine deletes the one it names (already_absent
+// the second time), unless fail says otherwise.
 type keptMacTransport struct {
 	capsTransport
 	mu      sync.Mutex
-	refuse  bool
+	fail    keptMacFailure
 	deleted []string
 }
+
+// keptMacFailure is how the Mac's kept_machine call goes wrong.
+type keptMacFailure int
+
+const (
+	keptMacOK         keptMacFailure = iota
+	keptMacRefuses                   // a typed refusal before anything is removed
+	keptMacLosesReply                // it deletes the folder, and the answer never arrives
+	keptMacLockFails                 // it deletes the folder, then fails to remove the lock file
+)
 
 func (t *keptMacTransport) Call(_ context.Context, method string, args, out any, _ ...runnerwire.CallOption) error {
 	a, ok := args.(runnerwire.KeptMachineArgs)
@@ -44,11 +55,21 @@ func (t *keptMacTransport) Call(_ context.Context, method string, args, out any,
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.refuse {
-		return errors.New("docker: kept machine is running on this Mac")
+	if t.fail == keptMacRefuses {
+		return runnerwire.Refuse("kept machine %s is running on this Mac", a.ID)
+	}
+	outcome := runnerwire.KeptMachineDeleted
+	if slices.Contains(t.deleted, a.ID) {
+		outcome = runnerwire.KeptMachineAlreadyAbsent
 	}
 	t.deleted = append(t.deleted, a.ID)
-	*out.(*runnerwire.KeptMachineResult) = runnerwire.KeptMachineResult{Outcome: runnerwire.KeptMachineDeleted}
+	switch t.fail {
+	case keptMacLosesReply:
+		return context.DeadlineExceeded
+	case keptMacLockFails:
+		return (&runnerwire.Error{Code: runnerwire.CodeInternal, Message: "docker: delete kept machine " + a.ID + ": remove lock: permission denied"}).Err()
+	}
+	*out.(*runnerwire.KeptMachineResult) = runnerwire.KeptMachineResult{Outcome: outcome}
 	return nil
 }
 
@@ -618,14 +639,47 @@ func TestKeptMachineOwnerDeleteDeletesOnTheMac(t *testing.T) {
 	k.requireDeletedBy(t, m, keptMachineByOwner, runnerwire.KeptMachineDeleted)
 }
 
-// TestKeptMachineFailedDeleteKeepsTheMachine: a Mac that does not delete leaves the machine kept, 503.
+// TestKeptMachineFailedDeleteKeepsTheMachine: a Mac that refuses the delete before removing anything
+// leaves the machine kept and resumable, 503 kept_machine_delete_failed.
 func TestKeptMachineFailedDeleteKeepsTheMachine(t *testing.T) {
 	k := newKeptFixture(t)
 	m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineKept)
-	k.mac.refuse = true
+	k.mac.fail = keptMacRefuses
 	wantReason(t, k.deleteMine(k.owner, m.ID), http.StatusServiceUnavailable, reasonKeptMachineDeleteFailed)
 	if got, ok := k.row(t, m.ID); !ok || got.State != types.KeptMachineKept {
-		t.Fatalf("after a failed delete: recorded %v, state %s; want kept", ok, got.State)
+		t.Fatalf("after a refused delete: recorded %v, state %s; want kept", ok, got.State)
+	}
+	if _, err := k.st.BeginKeptMachineUse(k.ctx, m.ID, k.owner, k.newRun(t, k.owner, k.rn.ID).ID); err != nil {
+		t.Fatalf("resume after a refused delete: %v", err)
+	}
+}
+
+// TestKeptMachineUnconfirmedDeleteStaysPending: a Mac that deleted the folder but whose answer was lost,
+// or that deleted it and then failed on the lock file, may have removed the machine: the delete stays
+// pending (503 kept_machine_delete_unconfirmed, the list says deleting), no resume takes it, and the
+// sweep retries until the Mac confirms, already_absent.
+func TestKeptMachineUnconfirmedDeleteStaysPending(t *testing.T) {
+	for name, fail := range map[string]keptMacFailure{"reply lost": keptMacLosesReply, "lock cleanup fails": keptMacLockFails} {
+		t.Run(name, func(t *testing.T) {
+			k := newKeptFixture(t)
+			m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineKept)
+			k.mac.fail = fail
+			body := wantReason(t, k.deleteMine(k.owner, m.ID), http.StatusServiceUnavailable, reasonKeptMachineDeleteUnconfirmed)
+			if body.Error != "Wardyn couldn't confirm the delete. It will keep trying; the machine can't be resumed meanwhile." {
+				t.Errorf("sentence %q", body.Error)
+			}
+			if list := k.listMine(t, k.owner); len(list.Machines) != 1 || list.Machines[0].State != types.KeptMachineDeleting {
+				t.Fatalf("list: %+v, want the machine deleting", list.Machines)
+			}
+			k.requireNoResume(t, m)
+			if rows := k.rows(t, "machine.delete", m.ID); len(rows) != 1 || rows[0]["outcome"] != keptMachineOutcomeUnconfirmed || rows[0]["_outcome"] != "failure" {
+				t.Fatalf("machine.delete = %v, want one unconfirmed failure", rows)
+			}
+			k.mac.fail = keptMacOK
+			k.exec(t, `UPDATE kept_machines SET delete_started_at = delete_started_at - interval '2 minutes' WHERE id = $1`, m.ID)
+			k.sweep(t)
+			k.requireDeletedBy(t, m, keptMachineByOwner, runnerwire.KeptMachineAlreadyAbsent)
+		})
 	}
 }
 
@@ -752,7 +806,7 @@ func TestKeptMachineErasureKeepsAMachineARunHolds(t *testing.T) {
 func TestKeptMachineErasureFailsWhenTheMacDoesNotDelete(t *testing.T) {
 	k := newKeptFixture(t)
 	m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineKept)
-	k.mac.refuse = true
+	k.mac.fail = keptMacRefuses
 	res, err := k.srv.eraseMemberDrivesOf(k.ctx, k.owner)
 	if err == nil || !strings.Contains(err.Error(), `kept machine "dev" was kept: its Mac did not delete it`) {
 		t.Fatalf("erasure error %v; want the machine named", err)
@@ -762,5 +816,23 @@ func TestKeptMachineErasureFailsWhenTheMacDoesNotDelete(t *testing.T) {
 	}
 	if _, ok := k.row(t, m.ID); !ok {
 		t.Fatal("the machine's record went although its Mac did not delete it")
+	}
+}
+
+// TestKeptMachineErasureFailsWhileTheDeleteIsUnconfirmed: a Mac whose answer was lost leaves the delete
+// pending, and erasure fails by the machine's name rather than report it erased.
+func TestKeptMachineErasureFailsWhileTheDeleteIsUnconfirmed(t *testing.T) {
+	k := newKeptFixture(t)
+	m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineKept)
+	k.mac.fail = keptMacLosesReply
+	res, err := k.srv.eraseMemberDrivesOf(k.ctx, k.owner)
+	if err == nil || !strings.Contains(err.Error(), `kept machine "dev" is being deleted: its Mac did not confirm the delete`) {
+		t.Fatalf("erasure error %v; want the machine named", err)
+	}
+	if n := res.(map[string]any)["kept_machines"]; n != 0 {
+		t.Errorf("kept_machines = %v, want 0", n)
+	}
+	if got, ok := k.row(t, m.ID); !ok || got.State != types.KeptMachineDeleting {
+		t.Fatalf("machine: recorded %v, state %s; want deleting", ok, got.State)
 	}
 }

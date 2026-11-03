@@ -46,6 +46,10 @@ func keptMachineDeletingMsg(name string) string {
 	return fmt.Sprintf("Your machine %s is being deleted.", name)
 }
 
+func keptMachineDeleteUnconfirmedMsg() string {
+	return "Wardyn couldn't confirm the delete. It will keep trying; the machine can't be resumed meanwhile."
+}
+
 func keptMachineDeleteFailedMsg(mac string) string {
 	return fmt.Sprintf("The machine couldn't be deleted from %s. Nothing was removed; try again.", mac)
 }
@@ -235,7 +239,9 @@ func (s *Server) keptMachineMacName(ctx context.Context, runnerID uuid.UUID) str
 
 // handleDeleteMyMachine is DELETE /me/machines/{id}: 204 once the Mac has deleted the machine (or is no
 // longer registered, and erases it on its side), 202 with the machine while the delete waits for its Mac
-// to come back online. A machine a run holds is refused, 409. Another person's machine and an id that
+// to come back online, 503 kept_machine_delete_unconfirmed while the Mac's answer is unknown (the delete
+// is retried) and 503 kept_machine_delete_failed when the Mac refused it. A machine a run holds is
+// refused, 409. Another person's machine and an id that
 // names nothing answer the same 404.
 func (s *Server) handleDeleteMyMachine(w http.ResponseWriter, r *http.Request) {
 	owner, ok := keptMachineOwner(w, r)
@@ -268,6 +274,8 @@ func (s *Server) handleDeleteMyMachine(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusAccepted, views[0])
+	case res.outcome == keptMachineOutcomeUnconfirmed:
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonKeptMachineDeleteUnconfirmed, keptMachineDeleteUnconfirmedMsg())
 	default:
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonKeptMachineDeleteFailed,
 			keptMachineDeleteFailedMsg(cmp.Or(s.keptMachineMacName(r.Context(), d.Machine.RunnerID), macDiskNoName)))
@@ -369,6 +377,8 @@ func (s *Server) handleDeleteKeptMachineAdmin(w http.ResponseWriter, r *http.Req
 			status = http.StatusAccepted
 		}
 		writeJSON(w, status, client.KeptMachineDeleteResult{ID: m.ID, Name: m.Name, Owner: m.OwnerSubject, RunnerID: m.RunnerID, Outcome: res.outcome})
+	case res.outcome == keptMachineOutcomeUnconfirmed:
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonKeptMachineDeleteUnconfirmed, keptMachineDeleteUnconfirmedMsg())
 	default:
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonKeptMachineDeleteFailed,
 			keptMachineDeleteFailedMsg(cmp.Or(s.keptMachineMacName(r.Context(), m.RunnerID), macDiskNoName)))

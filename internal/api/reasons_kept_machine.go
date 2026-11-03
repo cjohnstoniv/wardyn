@@ -12,5 +12,8 @@ const (
 	reasonKeptMachineNotFound     = "kept_machine_not_found"     // no kept machine of the caller's with that id
 	reasonKeptMachineInUse        = "kept_machine_in_use"        // a run holds the machine, so it can't be deleted
 	reasonKeptMachineDeleting     = "kept_machine_deleting"      // a delete of the machine has started
-	reasonKeptMachineDeleteFailed = "kept_machine_delete_failed" // the Mac did not delete the machine; it is kept
+	reasonKeptMachineDeleteFailed = "kept_machine_delete_failed" // the Mac refused the delete before removing anything; it is kept
+	// The Mac's answer was lost or was not a refusal, so the machine may be gone already: the delete
+	// stays pending, is retried until the Mac confirms it, and the machine can't be resumed meanwhile.
+	reasonKeptMachineDeleteUnconfirmed = "kept_machine_delete_unconfirmed"
 )

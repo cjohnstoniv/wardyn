@@ -49,12 +49,24 @@ const (
 	keptScrubNotRun = "not_run"
 )
 
+// keptMachineOutcomeUnconfirmed is machine.delete's outcome when the Mac's answer was lost or was an error
+// other than a refusal: the folder may be gone already, so the tombstone stays and the sweep retries the
+// delete, which is idempotent, until the Mac confirms it.
+const keptMachineOutcomeUnconfirmed = "unconfirmed"
+
+// keptMachineDeleteRefused reports whether err is the Mac's definite refusal, given before it removed
+// anything: a typed refused reply (or this side's own, for a runner that keeps no machines).
+func keptMachineDeleteRefused(err error) bool {
+	var we *runnerwire.Error
+	return errors.As(err, &we) && we.Code == runnerwire.CodeRefused
+}
+
 // keptMachineUnstartedAfter is how long after its keep run ended a machine still being created, which its
 // Mac does not list, is dropped as never made: long enough for the Mac's next caps to list a clone.
 const keptMachineUnstartedAfter = 10 * time.Minute
 
 // keptMachineDeletion is what deleteKeptMachine did: outcome is machine.delete's (deleted,
-// already_absent, record_only, deferred or failed); err is a row that could not be finished.
+// already_absent, record_only, deferred, unconfirmed or failed); err is a row that could not be finished.
 type keptMachineDeletion struct {
 	outcome string
 	err     error
@@ -113,8 +125,10 @@ func (s *Server) keptMachineDeleteReady(ctx context.Context, m types.KeptMachine
 // deleteKeptMachine finishes the delete of a tombstoned machine: its Mac deletes the folder, then the row
 // goes. Past the tombstone the delete finishes even if the caller goes away. A Mac no longer registered
 // keeps nothing of Wardyn's to ask (its runner erased its kept machines when revoked), so only the row
-// goes; an away Mac keeps the tombstone for its return. A failure puts the machine back to kept, except
-// a kill's tombstone, which stays until the delete succeeds. Every attempt is audited.
+// goes; an away Mac keeps the tombstone for its return. The Mac's definite refusal, given before it
+// removed anything, puts the machine back to kept, except a kill's tombstone, which stays until the delete
+// succeeds. Any other error keeps the tombstone (the Mac may have deleted the folder before its answer was
+// lost, or failed after), and the sweep retries until deleted or already_absent. Every attempt is audited.
 func (s *Server) deleteKeptMachine(ctx context.Context, ks store.KeptMachineStore, d store.KeptMachineDeletion) keptMachineDeletion {
 	ctx = context.WithoutCancel(ctx)
 	sctx, cancel := context.WithTimeout(ctx, driveReclaimTimeout)
@@ -133,10 +147,16 @@ func (s *Server) deleteKeptMachine(ctx context.Context, ks store.KeptMachineStor
 		out, kerr := s.runnerEndpoint(m.RunnerID).sub.KeptMachine(sctx,
 			runnerwire.KeptMachineArgs{Op: runnerwire.KeptMachineOpDelete, ID: m.ID.String(), By: d.By})
 		res.outcome = out.Outcome
+		if kerr == nil && !keptMachineDeleteConfirmed(res.outcome) {
+			res.outcome = keptMachineOutcomeUnconfirmed // an answer this side does not know is no confirmation
+		}
 		if kerr != nil {
 			slog.WarnContext(ctx, "api: a kept machine's delete failed on its Mac", slog.String("machine_id", m.ID.String()),
 				slog.String("runner_id", m.RunnerID.String()), slog.String("error", kerr.Error()))
-			res.outcome = driveReclaimOutcomeFailed
+			res.outcome = keptMachineOutcomeUnconfirmed
+			if keptMachineDeleteRefused(kerr) {
+				res.outcome = driveReclaimOutcomeFailed
+			}
 		}
 	}
 	switch {
@@ -144,8 +164,8 @@ func (s *Server) deleteKeptMachine(ctx context.Context, ks store.KeptMachineStor
 		if ferr := ks.FinishKeptMachineDelete(ctx, m.ID, d.At); ferr != nil && !errors.Is(ferr, store.ErrNotFound) {
 			res.err = ferr
 		}
-	case res.outcome == driveReclaimOutcomeDeferred:
-		// The tombstone stays: no run takes the machine, and the Mac's return finishes the delete.
+	case res.outcome == driveReclaimOutcomeDeferred, res.outcome == keptMachineOutcomeUnconfirmed:
+		// The tombstone stays: no run takes the machine, and the sweep finishes the delete.
 	default:
 		if aerr := ks.AbortKeptMachineDelete(ctx, m.ID, d.At); aerr != nil && !errors.Is(aerr, store.ErrNotFound) {
 			slog.ErrorContext(ctx, "api: clear a kept machine's delete tombstone",
@@ -157,7 +177,7 @@ func (s *Server) deleteKeptMachine(ctx context.Context, ks store.KeptMachineStor
 }
 
 // auditKeptMachineDelete writes machine.delete for one attempt: a confirmed or deferred delete is a
-// success; refused (a run holds the machine) and failed are failures.
+// success; refused (a run holds the machine), unconfirmed and failed are failures.
 func (s *Server) auditKeptMachineDelete(ctx context.Context, d store.KeptMachineDeletion, outcome string) {
 	result := "failure"
 	if keptMachineDeleteConfirmed(outcome) || outcome == driveReclaimOutcomeDeferred {
@@ -486,6 +506,8 @@ func (s *Server) eraseKeptMachinesOf(ctx context.Context, person string) (int, e
 			deleted++
 		case res.outcome == driveReclaimOutcomeDeferred:
 			errs = append(errs, fmt.Errorf("kept machine %q is being deleted: its Mac is offline, and it is removed when the Mac reconnects", m.Name))
+		case res.outcome == keptMachineOutcomeUnconfirmed:
+			errs = append(errs, fmt.Errorf("kept machine %q is being deleted: its Mac did not confirm the delete, which is retried", m.Name))
 		default:
 			errs = append(errs, fmt.Errorf("kept machine %q was kept: its Mac did not delete it", m.Name))
 		}
