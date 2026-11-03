@@ -134,6 +134,16 @@ export function nonGitHubPushRuleHosts(grants: readonly GrantSpec[] | undefined)
   return [...hosts].sort();
 }
 
+// The card's own copy: its header counts, and the read-only status a policy
+// with deny_all gets. The card has no deny_all toggle; it is set in the
+// policy document.
+export const PUSH_RULES_CARD = {
+  COUNTS: (denied: number, review: number) =>
+    `${denied} denied ${denied === 1 ? "path" : "paths"} · ${review} ${review === 1 ? "path" : "paths"} held for review`,
+  DENY_ALL_STATUS: "Every push is refused by this policy.",
+  DENY_ALL_WHERE: "This is push_rules.deny_all, changed in the policy document.",
+} as const;
+
 // The exact risk.go sentence (composer/risk.go), reused verbatim per the
 // packet's Strings table (PUSH_RULES.WARN_SSH_ONLY) rather than re-authored.
 export const PUSH_RULES_WARN_SSH_ONLY =
@@ -413,9 +423,7 @@ export function PushRulesSection({
         <SectionLabel>Push rules</SectionLabel>
         {/* The mock's own header (packet script, "Try it") carries this exact
             count next to the title in every one of its five scenarios. */}
-        <span className="text-xs text-muted-foreground">
-          {deny.length} deny · {review.length} held for review
-        </span>
+        <span className="text-xs text-muted-foreground">{PUSH_RULES_CARD.COUNTS(deny.length, review.length)}</span>
         <Chip tone="neutral" mono className="ml-auto">
           push_rules
         </Chip>
@@ -425,6 +433,12 @@ export function PushRulesSection({
         <span className="font-mono">git_push_any_branch</span>&apos;s WHERE.
       </p>
 
+      {spec.push_rules?.deny_all === true && (
+        <p role="status" className="mb-3 text-xs">
+          <span className="font-medium">{PUSH_RULES_CARD.DENY_ALL_STATUS}</span>{" "}
+          <span className="text-muted-foreground">{PUSH_RULES_CARD.DENY_ALL_WHERE}</span>
+        </p>
+      )}
       {sshWarn && (
         <p role="alert" className="mb-3 text-xs text-warning">
           {PUSH_RULES_WARN_SSH_ONLY}
