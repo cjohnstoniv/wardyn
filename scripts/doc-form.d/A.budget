@@ -383,7 +383,8 @@
 # docs/AUDIT-ACTIONS.md 55974 adds 22 over 55952, measured (joined logs): the gateway_call_id sentence names the protocol-mismatch and not-relayed denies and the mint refusal.
 # docs/AUDIT-ACTIONS.md 56013 = ours 55885 + theirs 55974 - base 55846 at the 0.10 W7 merge of rc11-w4.
 # docs/AUDIT-ACTIONS.md 56132 = ours 56013 + theirs 55931 - base 55812 at the 0.10 W7 merge of rc11-w4.
-docs/AUDIT-ACTIONS.md=56132 share=8
+# docs/AUDIT-ACTIONS.md 56296 = 56132 + the provider.oidc.signin.capture row and the model_provider.write oidc_unbound datum.
+docs/AUDIT-ACTIONS.md=56296 share=8
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
