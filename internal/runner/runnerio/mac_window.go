@@ -79,6 +79,15 @@ func (s *Server) macWindow(ctx context.Context, peer *runnerwire.Peer, id uint32
 	}
 	m := &macWindowSession{s: s, ref: ref, peer: peer, grant: args.GrantID}
 	s.mu.Lock()
+	old := s.windows[ref]
+	s.mu.Unlock()
+	if old != nil && old.orgEnded() {
+		// The org ended that window's stream before it asked again (a peer handles its frames in order),
+		// and the window's own goroutine may not have torn it down yet: finish the end here, so the slot
+		// is free before this open looks at it. end runs once; a concurrent end returns only when done.
+		old.end("", false)
+	}
+	s.mu.Lock()
 	if s.windows == nil {
 		s.windows = map[string]*macWindowSession{}
 	}
@@ -114,6 +123,22 @@ func (s *Server) macWindow(ctx context.Context, peer *runnerwire.Peer, id uint32
 	}
 	go m.run()
 	return runnerwire.StreamResult{Stream: st.ID()}, nil
+}
+
+// orgEnded reports whether the org's end of the window's stream is gone (reset, or both halves closed).
+func (m *macWindowSession) orgEnded() bool {
+	m.mu.Lock()
+	st := m.st
+	m.mu.Unlock()
+	if st == nil {
+		return false
+	}
+	select {
+	case <-st.Done():
+		return true
+	default:
+		return false
+	}
 }
 
 // release gives up the run's slot, if it is still this window's.
