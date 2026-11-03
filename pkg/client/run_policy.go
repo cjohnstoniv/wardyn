@@ -44,6 +44,10 @@ type RunPolicyView struct {
 	// HostMarks is which allowed hosts the run's proxy opened at launch. Absent
 	// for a run recorded before it existed and for one restarted since.
 	HostMarks *RunPolicyHostMarks `json:"host_marks,omitempty"`
+	// InspectionLeftTo names each model provider whose gateway checks the run's
+	// prompts itself; Wardyn still checks them for the run's own secret values
+	// when the policy has that check. Absent when no provider does.
+	InspectionLeftTo []string `json:"inspection_left_to,omitempty"`
 }
 
 // RunPolicyHostMarks lists the allowed_domains entries the proxy terminates TLS

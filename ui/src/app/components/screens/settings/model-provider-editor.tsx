@@ -61,6 +61,7 @@ import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { ModelChips } from "./model-chips";
 import { LaptopRunnersSwitch } from "./model-provider-laptop";
+import { GatewayInspection } from "./model-provider-gateway-inspection";
 import {
   EDITOR_KINDS,
   addressChanged,
@@ -182,7 +183,7 @@ export function ModelProviderEditor({
         const kept: ProviderDraft = {
           ...draft!,
           gatewaySaved: provider.gateway_identity
-            ? { baseUrl: provider.base_url ?? "", audience: provider.gateway_identity.audience }
+            ? { baseUrl: provider.base_url ?? "", audience: provider.gateway_identity.audience, inspect: provider.gateway_identity.inspection === "gateway" }
             : null,
         };
         setDraft(kept);
@@ -778,6 +779,7 @@ function GatewayIdentity({
                   <CopyValue text={keyAddress} label={g.COPY_KEY_ADDRESS} />
                 </Field>
               )}
+              <GatewayInspection draft={draft} set={set} disabled={!operator} />
               <p className="text-xs leading-snug text-muted-foreground">{g.MAY_CHANGE}</p>
             </div>
           )}

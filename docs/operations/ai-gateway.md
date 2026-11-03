@@ -191,6 +191,25 @@ Wardyn makes a fresh call id for every attempt to a model gateway route and send
 - The id is Wardyn's own. It is not a request id the gateway made.
 - An MCP server has a call id. It also gets an identity token when it is an organisation's remote server with `mcp.gateway_audience`, and no token otherwise.
 
+## Who inspects
+
+With content inspection on (`llm_inspection` in the run's policy), Wardyn checks each prompt before it leaves. A gateway that checks prompts too runs the same checks twice. A provider with run identity on can leave them to its gateway: `gateway_identity.inspection: gateway`, the console's "Let this gateway check prompts".
+
+| Check | `inspection` unset | `inspection: gateway` |
+|---|---|---|
+| The run's own secret values, exact match (`detect_secrets`) | Wardyn | Wardyn |
+| Secret formats, entropy, personal data, classified markers, the detector sidecar, attachments | Wardyn | The gateway |
+
+- Only a call on the provider's route is left to the gateway: its host, port and path prefix, the match that carries the token. Another host, a path outside the prefix, a path with a dot segment and the plain HTTP lane keep the whole policy.
+- The run's own secret values exist only in Wardyn's memory, so no gateway can look for them. That check stays on whenever the policy has it, and in block mode it still refuses the call.
+- With no `detect_secrets` on the policy, Wardyn checks nothing on that route.
+- Each prompt left to the gateway has an `llm.scan.skip` row with `data.skip_reason: deferred_to_gateway` and `data.deferred_to` set to the provider id. A secret found there is an alert or block row with the same `deferred_to`. The console's audit reads "Left prompt checks to" the provider, and the run's Policy tab reads "On, except prompts to" its name.
+- In block mode the gateway's rules then decide what the other checks would have refused. A policy author who relies on Wardyn's blocks loses them on that route.
+- A prompt-bearing path the proxy cannot parse is still refused when the policy blocks on scanner errors.
+- A Bedrock provider cannot take the setting, and saving it is refused. Its calls are scanned only by `inspect_forward_egress`, which no gateway takes over.
+- The setting is part of the route a run starts with. Changing it refuses the run's next token, so its gateway calls stop within 10 minutes. Create a new run to pick it up.
+- Any value other than `gateway` is refused when saved.
+
 ## Defaults on a route that carries the token
 
 | Default | Effect |

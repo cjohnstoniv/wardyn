@@ -92,7 +92,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.WithheldScmHost]():    strings.Fields("Host ProviderID ProviderKind"),
 	reflect.TypeFor[types.WorkspaceProviders](): strings.Fields("Git Storage GitPatBrokerEnabled"),
 
-	reflect.TypeFor[types.ModelProviderGatewayIdentity](): strings.Fields("Audience TokenLifetimeSeconds"),
+	reflect.TypeFor[types.ModelProviderGatewayIdentity](): strings.Fields("Audience TokenLifetimeSeconds Inspection"),
 }
 
 // localDispatchOpaque names the non-data interface values of the private

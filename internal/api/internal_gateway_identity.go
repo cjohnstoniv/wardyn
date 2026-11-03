@@ -403,6 +403,32 @@ func (s *Server) sealedGatewayRoutes(ctx context.Context, runID uuid.UUID) ([]pr
 	return sealed.GatewayIdentity, nil
 }
 
+// inspectionLeftTo names each provider whose sealed route leaves prompt inspection
+// to its gateway: the run's coverage line. The name is the provider's now, or its id
+// once it is gone. A run with no sealed config, or one this deployment does not keep,
+// names none; the line then reads as the policy says.
+func (s *Server) inspectionLeftTo(ctx context.Context, runID uuid.UUID, sc types.SiteConfig) []string {
+	routes, err := s.sealedGatewayRoutes(ctx, runID)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, errRunProxyConfigNotKept) {
+			slog.WarnContext(ctx, "api: run policy view without the sealed gateway routes", "run_id", runID, "err", err)
+		}
+		return nil
+	}
+	var out []string
+	for _, rt := range routes {
+		if !rt.InspectionDeferred || rt.ProviderID == "" {
+			continue
+		}
+		name := rt.ProviderID
+		if p, ok := modelProviderByID(sc.ModelProviders, rt.ProviderID); ok && p.Name != "" {
+			name = p.Name
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
 // gatewayDestination is where a provider's calls go, in the form two spellings of
 // one address compare equal in.
 type gatewayDestination struct {
@@ -464,6 +490,9 @@ func gatewayRouteOf(p types.ModelProvider) (_ proxy.GatewayIdentityRoute, ok boo
 	return proxy.GatewayIdentityRoute{
 		Host: d.host, Port: d.port, PathPrefix: d.path,
 		ProviderID: p.ID, ProviderUID: p.UID, Audience: p.GatewayIdentity.Audience,
+		// Only the exact value defers; anything else leaves Wardyn inspecting. A Bedrock
+		// call is scanned by the generic forward check, which a route never defers.
+		InspectionDeferred: p.GatewayIdentity.Inspection == types.GatewayInspectionGateway && !p.Kind.IsBedrock(),
 	}, true
 }
 
@@ -595,6 +624,12 @@ func validateProviderGatewayIdentity(mp types.ModelProvider) error {
 	if n := gi.TokenLifetimeSeconds; n != 0 && (n < types.GatewayTokenLifetimeMin || n > types.GatewayTokenLifetimeMax) {
 		return atField("gateway_identity.token_lifetime_seconds",
 			fmt.Errorf(mp400GatewayLifetime, mp.ID, types.GatewayTokenLifetimeMin, types.GatewayTokenLifetimeMax))
+	}
+	switch {
+	case gi.Inspection != "" && gi.Inspection != types.GatewayInspectionGateway:
+		return atField("gateway_identity.inspection", fmt.Errorf(mp400GatewayInspection, mp.ID, types.GatewayInspectionGateway))
+	case gi.Inspection != "" && mp.Kind.IsBedrock():
+		return atField("gateway_identity.inspection", fmt.Errorf(mp400GatewayInspectionBR, mp.ID))
 	}
 	return nil
 }

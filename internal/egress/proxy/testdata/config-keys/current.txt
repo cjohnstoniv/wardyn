@@ -47,6 +47,7 @@ forge_hosts
 gateway_identity
 gateway_identity.audience
 gateway_identity.host
+gateway_identity.inspection_deferred
 gateway_identity.mcp_key
 gateway_identity.path_prefix
 gateway_identity.port

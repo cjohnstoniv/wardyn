@@ -292,6 +292,9 @@ export interface ModelProviderGatewayIdentity {
   audience: string;
   // A token's life in seconds, 60 to 600; absent is 600.
   token_lifetime_seconds?: number;
+  // "gateway": this gateway checks prompts itself, and Wardyn checks them only for
+  // the run's own secret values. Absent: Wardyn checks them as the policy says.
+  inspection?: "gateway";
 }
 
 // One provider. No credential lives here — each person supplies their own.

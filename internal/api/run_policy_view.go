@@ -117,6 +117,9 @@ type runPolicyResponse struct {
 	// that predates it and for a run restarted since: a restart rebuilds the proxy from a
 	// config that can drop hosts, and writes no envelope of its own.
 	HostMarks *hostMarks `json:"host_marks,omitempty"`
+	// InspectionLeftTo names each model provider whose gateway checks the run's prompts
+	// itself (its sealed route defers inspection). Absent when none does.
+	InspectionLeftTo []string `json:"inspection_left_to,omitempty"`
 }
 
 type runPolicySource struct {
@@ -246,6 +249,7 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	if !restarted && slices.Equal(out.AllowedDomains, served.AllowedDomains) {
 		resp.HostMarks = envelope.HostMarks
 	}
+	resp.InspectionLeftTo = s.inspectionLeftTo(ctx, run.ID, sc)
 	writeJSON(w, http.StatusOK, resp)
 }
 
