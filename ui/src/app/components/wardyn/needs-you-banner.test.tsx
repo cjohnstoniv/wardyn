@@ -14,6 +14,7 @@ import { NEEDS_YOU } from "./copy/needs-you";
 
 const api = vi.hoisted(() => ({ takeOver: vi.fn(), handBack: vi.fn(), decline: vi.fn() }));
 vi.mock("../../lib/api/approvals", () => ({ approvals: api }));
+vi.mock("../../lib/api/health", () => ({ health: { health: vi.fn().mockResolvedValue({}) } }));
 vi.mock("./operator-context", () => ({
   usePrincipal: () => "dev-sub",
   useOperator: () => false,
@@ -49,6 +50,42 @@ beforeEach(() => {
 });
 
 describe("NeedsYouBanner", () => {
+  it("a Linux VM run's takeover is the desktop, not the terminal (UXR-16)", () => {
+    mount([request()], { ...run, machine_kind: "linux_vm" } as unknown as RunDetail);
+    const b = screen.getByTestId("needs-you-banner");
+    expect(within(b).getByText("Asked 2 min ago. The agent waits until you take over or decline.")).toBeInTheDocument();
+    expect(within(b).queryByTestId("needs-you-mac-view-only")).toBeNull();
+  });
+
+  it("a macOS VM run whose desktop is view only keeps the terminal and says why (UXR-16)", () => {
+    mount([request()], { ...run, machine_kind: "macos_vm", macos: { desktop: "observe" } } as unknown as RunDetail);
+    const b = screen.getByTestId("needs-you-banner");
+    expect(within(b).getByText(/Taking over opens the terminal/)).toBeInTheDocument();
+    expect(within(b).getByTestId("needs-you-mac-view-only").textContent).toBe(
+      "This Mac's desktop is view only in the browser. Take over in the terminal, or open a window on your Mac.",
+    );
+  });
+
+  it("a macOS VM run whose Mac allows control takes over on the desktop (UXR-16)", () => {
+    mount([request()], { ...run, machine_kind: "macos_vm", macos: { desktop: "control" } } as unknown as RunDetail);
+    const b = screen.getByTestId("needs-you-banner");
+    expect(within(b).queryByTestId("needs-you-mac-view-only")).toBeNull();
+    expect(within(b).queryByText(/opens the terminal/)).toBeNull();
+  });
+
+  it("a snoozed request keeps the agent's reason on one line and Decline (UXR-51)", async () => {
+    window.localStorage.setItem("wardyn.needs-you.snooze.ap-1", String(Date.now() + 600_000));
+    api.decline.mockResolvedValue(request({ state: "DENIED" }));
+    const cb = mount([request()]);
+    const bar = screen.getByTestId("needs-you-snoozed");
+    const line = within(bar).getByTestId("needs-you-snoozed-reason");
+    expect(line.textContent).toBe(REASON);
+    expect(line.className).toContain("truncate");
+    await userEvent.click(within(bar).getByRole("button", { name: NEEDS_YOU.banner.decline }));
+    expect(api.decline).toHaveBeenCalledWith("ap-1");
+    expect(cb.onChanged).toHaveBeenCalled();
+  });
+
   it("quotes the agent and offers Take over, Snooze and Decline", () => {
     mount([request()]);
     const b = screen.getByTestId("needs-you-banner");
