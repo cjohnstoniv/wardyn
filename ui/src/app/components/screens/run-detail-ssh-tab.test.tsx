@@ -43,6 +43,8 @@ describe("enterUIApp — a tab the caller opened inside its click", () => {
     await enterUIApp("run-1", "__desktop", gateway, { tab });
     expect(openSpy).not.toHaveBeenCalled();
     expect((submitSpy.mock.instances[0] as HTMLFormElement).target).toBe(tab.name);
+    // A noopener form could make the browser open a second tab instead of reusing the named one.
+    expect((submitSpy.mock.instances[0] as HTMLFormElement & { rel?: string }).rel).toBeUndefined();
     expect(tab.name).toMatch(/^wardyn-enter-/);
     submitSpy.mockRestore();
   });

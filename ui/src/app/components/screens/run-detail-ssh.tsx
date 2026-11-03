@@ -577,14 +577,13 @@ async function bindTicket(url: string, ticket: string) {
 // submitEnterForm drives the #1220 POST hand-off: a hidden form, submitted
 // into the named tab enterUIApp opened inside the click (or "_self"), as a real POST
 // whose fields never touch the URL, browser history, or a reverse-proxy access log.
-// rel="noopener" is form.submit()'s equivalent of window.open's "noopener" flag —
-// no window.opener back to the console from the new tab.
+// The named tab already has its opener cleared (openEnterTab), so the form carries no rel="noopener": under it a
+// browser may refuse to reuse the named tab and open a second one, outside the click.
 function submitEnterForm(action: string, fields: Record<string, string>, target: string) {
   const form = document.createElement("form");
   form.method = "POST";
   form.action = action;
   form.target = target;
-  form.rel = "noopener";
   for (const [name, value] of Object.entries(fields)) {
     const input = document.createElement("input");
     input.type = "hidden";
