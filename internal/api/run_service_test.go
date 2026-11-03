@@ -75,6 +75,28 @@ func TestServiceRefusal(t *testing.T) {
 	}
 }
 
+// TestServiceRefusal_Probe: the probe is a closed enum. Anything but control_plane is 400 run_mode_invalid naming
+// the field service.health.probe in the server's own sentence; off and control_plane pass; the other service
+// refusals name no field, as before.
+func TestServiceRefusal_Probe(t *testing.T) {
+	probe := func(p string) createRunRequest {
+		return serviceCommandRequest(&types.RunService{Port: 8080, Health: &types.ServiceHealth{Path: "/healthz", Probe: p}})
+	}
+	for _, ok := range []string{"", types.ServiceProbeControlPlane} {
+		if refusal := runContractShapeRefusal(probe(ok)); refusal != nil {
+			t.Fatalf("probe %q refused: %+v", ok, refusal.body)
+		}
+	}
+	refusal := runContractShapeRefusal(probe("tcp"))
+	if refusal == nil || refusal.status != http.StatusBadRequest || refusal.body.Reason != reasonRunModeInvalid ||
+		refusal.body.Field != "service.health.probe" || refusal.body.Error != `service.health.probe: invalid "tcp"` {
+		t.Fatalf("refusal = %+v", refusal)
+	}
+	if refusal := serviceRefusal(serviceCommandRequest(&types.RunService{Restart: "always"})); refusal == nil || refusal.body.Field != "" {
+		t.Fatalf("another field's refusal = %+v, want no field", refusal)
+	}
+}
+
 // TestServiceRefusalNeverWritesTheRequest: validation fills defaults on a copy, so the request is never
 // written through.
 func TestServiceRefusalNeverWritesTheRequest(t *testing.T) {

@@ -304,7 +304,9 @@ type CreateRunRequest struct {
 	// checked. Only with experience background and workload kind command on a container sandbox;
 	// anything else is 422 run_service_shape, and a VM machine_kind is 422 request_field_unavailable.
 	// The server fills the defaults (restart on_failure, a health check's interval 15 and
-	// failure_threshold 3) and stores the spec frozen on the run.
+	// failure_threshold 3) and stores the spec frozen on the run. health.probe "control_plane" has
+	// wardynd check the port itself too, through the sandbox's exec path; any other value is 400
+	// run_mode_invalid with field service.health.probe.
 	Service *types.RunService `json:"service,omitempty"`
 	// Preset launches the named launch preset (see Preset): the server
 	// expands it into the equivalent explicit request and runs the unchanged

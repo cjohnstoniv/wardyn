@@ -322,6 +322,16 @@ describe("RunRow: a live service's health chip", () => {
     expect(screen.getByText(RUNS_ROW_WORD.RUNNING)).toBeInTheDocument();
   });
 
+  it("with Wardyn's check opted in, a missing check reading past the grace reads Health unknown; the same run without it Healthy", () => {
+    const long = { created_at: aheadByHours(-2), admitted_at: aheadByHours(-2) };
+    const probe = { restart: "on_failure" as const, port: 8080, health: { interval_sec: 15, failure_threshold: 3, probe: "control_plane" as const } };
+    const opted = renderRow(service(seen("healthy"), { ...long, service: probe }));
+    expect(pillOf("Health unknown").className).toMatch(/muted/);
+    opted.unmount();
+    renderRow(service(seen("healthy"), long));
+    expect(pillOf("Healthy").className).toMatch(/success/);
+  });
+
   it("keeps an attention row's amber chip and a finished service's own state", () => {
     const attention = renderRow(service(seen("healthy"), { attention: { kind: "approval", by: "you", pending: 1 } }));
     expect(screen.queryByText("Healthy")).not.toBeInTheDocument();

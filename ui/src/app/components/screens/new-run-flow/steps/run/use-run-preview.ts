@@ -34,6 +34,13 @@ export interface RunPreview {
   windowChecking: boolean;
   /** The preview's refusal, for the window's field-keyed clear. */
   refusal: { field: string; text: string } | null;
+  /** The server's sentence refusing a field of the service (a 400 naming a service.* field), as it said it. */
+  serviceRefusal?: string;
+}
+
+/** The server's own words for a refused service field: a run_mode_invalid whose field is under service. */
+export function serviceRefusalOf(service: boolean, error: unknown): string | undefined {
+  return service && error instanceof HttpError && error.reason === "run_mode_invalid" && error.field.startsWith("service.") ? error.message : undefined;
 }
 
 /**
@@ -59,5 +66,6 @@ export function useRunPreview(intent: RunIntent): RunPreview {
     // Asked, or waiting out the debounce: neither an answer nor a refusal for this draft yet.
     windowChecking: !!intent.desktop_window && body !== null && (checks.preview.busy || (!checks.preview.current && error === null)),
     refusal: previewRefusal(error),
+    serviceRefusal: serviceRefusalOf(!!intent.service, error),
   };
 }

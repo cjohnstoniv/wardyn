@@ -7,7 +7,7 @@
 // reason capability_feature is shared by the feature doors, and a copy change must not silently turn the alert off.
 import { describe, expect, it } from "vitest";
 import { HttpError } from "../../../../../lib/api/core";
-import { isInboundRefusal, previewRefusal } from "./use-run-preview";
+import { isInboundRefusal, previewRefusal, serviceRefusalOf } from "./use-run-preview";
 
 const refusal = (message: string, feature?: string) => new HttpError(403, message, "capability_feature", "", "", "", undefined, "", "", "", feature);
 
@@ -35,5 +35,21 @@ describe("previewRefusal", () => {
     expect(previewRefusal(new HttpError(403, "x", "governance_unit"))).toEqual({ field: "", text: "x" });
     expect(previewRefusal(new Error("x"))).toBeNull();
     expect(previewRefusal(null)).toBeNull();
+  });
+});
+
+describe("serviceRefusalOf", () => {
+  const invalid = (message: string, field: string) => new HttpError(400, message, "run_mode_invalid", "", "", "", undefined, "", "", field);
+
+  it("is the server's sentence, raw, for a refused service field", () => {
+    expect(serviceRefusalOf(true, invalid('service.health.probe: invalid "tcp"', "service.health.probe"))).toBe('service.health.probe: invalid "tcp"');
+  });
+
+  it("is nothing for another field, another reason, or a draft with no service", () => {
+    expect(serviceRefusalOf(true, invalid("x", "machine_kind"))).toBeUndefined();
+    expect(serviceRefusalOf(true, invalid("x", ""))).toBeUndefined();
+    expect(serviceRefusalOf(false, invalid("x", "service.health.probe"))).toBeUndefined();
+    expect(serviceRefusalOf(true, new HttpError(422, "x", "run_service_shape", "", "", "", undefined, "", "", "service.health.probe"))).toBeUndefined();
+    expect(serviceRefusalOf(true, new Error("x"))).toBeUndefined();
   });
 });

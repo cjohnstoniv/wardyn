@@ -342,7 +342,7 @@ var templateNestedCarried = map[string]string{
 	"RunStartup":         "kind tool command prompt",
 	"RunWorkload":        "kind agent task command",
 	"RepoSelection":      "repo ref",
-	"ServiceHealth":      "path interval_sec failure_threshold",
+	"ServiceHealth":      "path interval_sec failure_threshold probe",
 	"StartFolder":        "kind attachment repo drive_id subpath",
 	"SecretOverride":     "secret_name host header format",
 	"ToolRule":           "tool effect",

@@ -14,7 +14,7 @@ import { useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../..
 import type { RunIntent } from "../../draft/run-intent";
 import { harnessIds } from "../../lenses/lens-keys";
 import { stepIssues } from "../../lenses/local-issues";
-import { keepRunning, mayKeepRunning, setHealth, setPort, setRestart } from "../../lenses/service-lens";
+import { keepRunning, mayKeepRunning, setHealth, setPort, setProbe, setRestart } from "../../lenses/service-lens";
 import { addApp, appsOf, chooseAppKind, commandOf, editApp, isServer, removeApp, setCommand } from "../../lenses/apps-lens";
 import type { MachineKind } from "../../../../../lib/types/machine-kind";
 import { dropMinimum, minimumFill, startAtMinimum } from "../../lenses/limits-lens";
@@ -55,7 +55,7 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
     if (unnamed) dispatch({ type: "edit", apply: (i) => chooseMode(i, fallback) });
   }, [unnamed, fallback, dispatch]);
   const runType = runTypeOf(intent);
-  const { pauses, inboundRefused, windowChecking, refusal } = useRunPreview(intent);
+  const { pauses, inboundRefused, windowChecking, refusal, serviceRefusal } = useRunPreview(intent);
   useClearRefusedWindow(refusal);
 
   const pools = usePools(deps?.load ?? loadPools, runType);
@@ -110,6 +110,8 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
               onRestart={(restart) => edit((i) => setRestart(i, restart))}
               onPort={(port) => edit((i) => setPort(i, port))}
               onHealth={(patch) => edit((i) => setHealth(i, patch))}
+              onProbe={(on) => edit((i) => setProbe(i, on))}
+              refusal={serviceRefusal}
               pauses={pauses}
             />
           )}

@@ -258,7 +258,8 @@ type Workload struct {
 	Generation        int64      `json:"generation"`
 	CurrentGeneration int64      `json:"current_generation"`
 	RunID             *uuid.UUID `json:"run_id,omitempty"`
-	// State is the current run's state, with its service health when it has one.
+	// State is the current run's state, with its service health when it has one: the worse of the sandbox's reading and
+	// Wardyn's own check, for a service that opted in to it.
 	State       string           `json:"state,omitempty"`
 	LastRefusal *WorkloadRefusal `json:"last_refusal,omitempty"`
 	// CanRestart is whether the caller who read this may restart it: the owner, the current sponsor of a

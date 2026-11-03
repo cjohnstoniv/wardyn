@@ -16,7 +16,7 @@
 | Intent | What to run: exactly the `intent` of a `kind: Run` document ([Run documents](../sdk.md#run-documents)) |
 | Generation | Counts spec changes. `current_generation` is the one the current run was launched from |
 | Digest | The hex SHA-256 over the intent, `run_in` and `restart_key`. An apply with the same digest changes nothing. The security tier reading another owner's workload does not get it |
-| Run | The current run. `state` is its state, with its service health when it has a [service](../SERVICES.md) block |
+| Run | The current run. `state` is its state, with its service health when it has a [service](../SERVICES.md) block, the worse of two with [Wardyn's own check](../SERVICES.md#wardyns-own-check) |
 
 - An owner holds at most 100 workloads (`422` `workload_cap_reached`).
 - The store must be Postgres. Any other backend answers `501` `workloads_unavailable`.
@@ -191,7 +191,7 @@ The runner writes `status` and nothing else, only to the resource named by the a
 | `Pending` | The current spec has no run yet, or its run is starting |
 | `Queued` | The run is waiting in the queue |
 | `Running` | The run is live and its service, if any, is not unhealthy. A paused run or a stale check reads "service health unknown" in `message`, with the last check |
-| `Unhealthy` | The run's service health is unhealthy |
+| `Unhealthy` | The run's service health, or Wardyn's own check, is unhealthy |
 | `Completed` | The run completed |
 | `Ended` | The run ended another way: failed, killed or stopped |
 | `Refused` | The launch of this spec was refused. The previous run keeps running |
