@@ -247,7 +247,7 @@ func TestARegistryDropUnholdsBeforeTheValueGoes(t *testing.T) {
 	var heldWhenGone bool
 	reg.SetDropGuard(func(id uuid.UUID) { // wraps the manifests' guard to see the state at the moment the drop begins
 		heldWhenGone = m.Held(run)
-		m.ForgetCache(id)
+		m.invalidate(id)
 	})
 	reg.DropRunValue(run, secretValue)
 	if !heldWhenGone {
