@@ -55,7 +55,11 @@ var agentSandboxPodAppearWithin = 30 * time.Second
 // newDynamicClient is the test seam for the one dynamic client the backend uses.
 var newDynamicClient = func(c *rest.Config) (dynamic.Interface, error) { return dynamic.NewForConfig(c) }
 
-var errAgentSandboxRunner = errors.New("k8s: the agent-sandbox backend does not run under wardyn-runnerd; unset WARDYN_K8S_AGENT_SANDBOX")
+var (
+	errAgentSandboxRunner = errors.New("k8s: the agent-sandbox backend does not run under wardyn-runnerd; unset WARDYN_K8S_AGENT_SANDBOX")
+	// errAgentSandboxNetPol: the gate releases a pod only into NetworkPolicies the canary proved hold.
+	errAgentSandboxNetPol = errors.New("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX runs only where the egress canary proved NetworkPolicy enforced in every runs namespace")
+)
 
 // agentSandboxAccess is every verb the backend needs in a runs namespace: the Sandbox's create, read
 // and delete, the orphan sweep's list, and the pod patch that removes the gate.
@@ -67,13 +71,19 @@ var agentSandboxAccess = []authzv1.ResourceAttributes{
 	{Resource: "pods", Verb: "patch"},
 }
 
-// bootAgentSandbox refuses to boot the backend under runnerd, on a cluster that does not serve
-// Sandboxes at the one API version Wardyn was tested with, or for a service account missing any verb
-// in agentSandboxAccess in a runs namespace. A failed check refuses too. Otherwise it builds the
-// dynamic client.
+// bootAgentSandbox refuses to boot the backend under runnerd, beside either NetworkPolicy override
+// (before any API call), on a cluster that does not serve Sandboxes at the one API version Wardyn was
+// tested with, or for a service account missing any verb in agentSandboxAccess in a runs namespace. A
+// failed check refuses too. Otherwise it builds the dynamic client. New also requires the canary's
+// verdict to be enforced (errAgentSandboxNetPol).
 func bootAgentSandbox(ctx context.Context, cs kubernetes.Interface, restCfg *rest.Config, cfg Config) (dynamic.Interface, error) {
-	if cfg.RunnerID != "" {
+	switch {
+	case cfg.RunnerID != "":
 		return nil, errAgentSandboxRunner
+	case cfg.AllowUnenforcedNetPol:
+		return nil, errors.New("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX runs only where NetworkPolicy is proven enforced; unset WARDYN_K8S_ALLOW_UNENFORCED_NETPOL")
+	case cfg.AckAmbientDefaultDeny:
+		return nil, errors.New("k8s: refusing to boot: WARDYN_K8S_AGENT_SANDBOX runs only where NetworkPolicy is proven enforced; unset WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY")
 	}
 	served, err := cs.Discovery().ServerResourcesForGroupVersion(agentSandboxAPIVersion)
 	if err != nil {
@@ -108,6 +118,10 @@ func bootAgentSandbox(ctx context.Context, cs kubernetes.Interface, restCfg *res
 // deletes the Sandbox at once, before the caller's teardown, so a controller retrying a pod the API
 // server refused stops (one was seen retrying thousands of times in five minutes).
 func (d *Driver) createAgentSandbox(ctx context.Context, clock *startClock, pod *corev1.Pod) error {
+	want, err := d.runtimeClassAdmitted(ctx, pod)
+	if err != nil {
+		return err
+	}
 	sb, err := agentSandboxObject(pod)
 	if err != nil {
 		return err
@@ -117,7 +131,7 @@ func (d *Driver) createAgentSandbox(ctx context.Context, clock *startClock, pod 
 		// AlreadyExists is a Sandbox this run did not make: it is left alone and the run fails.
 		return fmt.Errorf("k8s: create agent sandbox: %w", err)
 	}
-	if err := d.admitAgentSandboxPod(ctx, clock, pod, created.GetUID()); err != nil {
+	if err := d.admitAgentSandboxPod(ctx, clock, want, created.GetUID()); err != nil {
 		d.deleteAgentSandbox(pod.Namespace, pod.Name, created.GetUID())
 		return err
 	}
@@ -158,6 +172,40 @@ func agentSandboxObject(pod *corev1.Pod) (*unstructured.Unstructured, error) {
 	sb.SetLabels(pod.Labels)
 	sb.SetOwnerReferences(pod.OwnerReferences)
 	return sb, nil
+}
+
+// runtimeClassAdmitted is pod as RuntimeClass admission admits it, which is what the read-back
+// expects: the class's fixed overhead set, its node selector merged in, its tolerations added. Read
+// before the Sandbox exists; the Sandbox's template never carries these.
+func (d *Driver) runtimeClassAdmitted(ctx context.Context, pod *corev1.Pod) (*corev1.Pod, error) {
+	want := pod.DeepCopy()
+	if pod.Spec.RuntimeClassName == nil || *pod.Spec.RuntimeClassName == "" {
+		return want, nil
+	}
+	rc, err := d.clientset.NodeV1().RuntimeClasses().Get(ctx, *pod.Spec.RuntimeClassName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("k8s: agent sandbox: read RuntimeClass %q: %w", *pod.Spec.RuntimeClassName, err)
+	}
+	if rc.Overhead != nil && len(rc.Overhead.PodFixed) > 0 {
+		want.Spec.Overhead = rc.Overhead.PodFixed.DeepCopy()
+	}
+	if rc.Scheduling == nil {
+		return want, nil
+	}
+	if len(rc.Scheduling.NodeSelector) > 0 && want.Spec.NodeSelector == nil {
+		want.Spec.NodeSelector = map[string]string{}
+	}
+	for k, v := range rc.Scheduling.NodeSelector {
+		if _, set := want.Spec.NodeSelector[k]; !set {
+			want.Spec.NodeSelector[k] = v
+		}
+	}
+	for _, tol := range rc.Scheduling.Tolerations {
+		if !slices.ContainsFunc(want.Spec.Tolerations, func(t corev1.Toleration) bool { return reflect.DeepEqual(t, tol) }) {
+			want.Spec.Tolerations = append(want.Spec.Tolerations, tol)
+		}
+	}
+	return want, nil
 }
 
 func gatedSpec(pod *corev1.Pod) *corev1.PodSpec {
@@ -353,8 +401,8 @@ func readBackAllowedAt(key string) (readBackAllowance, bool) {
 }
 
 // readBackDiff names the first field where got, the admitted pod, is not want, the pod Wardyn asked
-// for: want's spec with the gate, its labels and annotations, and one controlling owner reference to
-// this run's Sandbox. Every value Wardyn set must be there and equal; an empty object or list equals
+// for as RuntimeClass admission admits it: want's spec with the gate, its labels and annotations, and
+// one controlling owner reference to this run's Sandbox. Every value Wardyn set must be there and equal; an empty object or list equals
 // an absent one; a list takes no extra item and a field Wardyn left empty no value, except as
 // readBackAllowed names. "" when they agree.
 func readBackDiff(want, got *corev1.Pod, sandboxUID k8stypes.UID) string {
@@ -405,6 +453,9 @@ func diffValue(key, field string, want, got any) string {
 		if !ok || len(g) < len(w) {
 			return field
 		}
+		if key == "spec.tolerations" {
+			return diffUnordered(key, field, w, g)
+		}
 		for i := range w {
 			if f := diffValue(key+"[]", field+itemLabel(w[i], i), w[i], g[i]); f != "" {
 				return f
@@ -422,6 +473,32 @@ func diffValue(key, field string, want, got any) string {
 		}
 		return field
 	}
+}
+
+// diffUnordered compares a list whose order admission does not keep (tolerations: Wardyn's, the
+// RuntimeClass's and DefaultTolerationSeconds' land in plugin order): each wanted item exactly once,
+// and every other item allowlisted.
+func diffUnordered(key, field string, want, got []any) string {
+	used := make([]bool, len(got))
+	for i, w := range want {
+		j := -1
+		for k := range got {
+			if !used[k] && reflect.DeepEqual(w, got[k]) {
+				j = k
+				break
+			}
+		}
+		if j < 0 {
+			return field + itemLabel(w, i)
+		}
+		used[j] = true
+	}
+	for j, g := range got {
+		if !used[j] && !allowedItem(key+"[]", g) {
+			return field + itemLabel(g, j)
+		}
+	}
+	return ""
 }
 
 // extraValue checks a value where Wardyn set none: empty, allowlisted, or made only of allowlisted
@@ -472,9 +549,10 @@ func isEmptyValue(v any) bool {
 	return false
 }
 
-// quantityEqual compares two resource quantities by value, so "1000m" and "1" agree.
+// quantityEqual compares two resource quantities by value (Quantity.Cmp), so "1000m" and "1" agree.
 func quantityEqual(key string, want, got any) bool {
-	if !strings.Contains(key, ".resources.limits.") && !strings.Contains(key, ".resources.requests.") && !strings.HasSuffix(key, ".sizeLimit") {
+	if !strings.Contains(key, ".resources.limits.") && !strings.Contains(key, ".resources.requests.") &&
+		!strings.HasSuffix(key, ".sizeLimit") && !strings.HasPrefix(key, "spec.overhead.") {
 		return false
 	}
 	ws, wok := want.(string)

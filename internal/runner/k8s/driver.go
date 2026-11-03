@@ -357,6 +357,9 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 		}
 	}
 	d.netPolEnforced = enforced
+	if cfg.AgentSandbox && !d.netPolEnforced {
+		return nil, errAgentSandboxNetPol
+	}
 	if d.runnerMode() {
 		if !d.netPolEnforced {
 			return nil, errRunnerNetPolOverride
