@@ -348,7 +348,7 @@ var governSiteElsewhere = map[string]string{
 	"revivePATNarrowing":       "test: run_revive_test.go",
 	"unionDirectGitHubEgress":  "none: direct GitHub egress union, no switch-on test",
 	"imageDigestVerdict":       "test: run_image_digest_test.go",
-	"reviveImageDigestRefusal": "test: run_image_digest_test.go (TestImageDigestRule_Revive)",
+	"reviveImageDigestRefusal": "test: run_image_digest_test.go",
 	"macOSBaseAllowedFor":      "none: a macOS base's allowance, shared by create and the pool list, no switch-on test",
 }
 
