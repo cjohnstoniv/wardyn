@@ -170,7 +170,7 @@ func (s *Server) resolveEndpointOIDCInjection(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return false
 	}
-	ctx := secretstore.WithPurpose(r.Context(), secretstore.PurposeADORefresh)
+	ctx := secretstore.WithPurpose(r.Context(), secretstore.PurposeProviderSignIn)
 	fail := func(status int, reason, body string, extra map[string]any) bool {
 		data := map[string]any{"reason": reason, "grant_id": grantID, "source": "provider"}
 		for k, v := range extra {

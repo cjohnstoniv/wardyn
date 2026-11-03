@@ -729,7 +729,7 @@ func (s *Server) handleEndpointOIDCCallback(w http.ResponseWriter, r *http.Reque
 		writeErrorReason(w, http.StatusBadRequest, reasonEndpointOIDCMissingCode, "missing code parameter")
 		return
 	}
-	ta, disc, err := s.endpointOIDCAuthority(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), row.OIDC)
+	ta, disc, err := s.endpointOIDCAuthority(secretstore.WithPurpose(ctx, secretstore.PurposeProviderSignIn), row.OIDC)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: resolving an endpoint sign-in authority failed", slog.String("row", row.UID), slog.Any("err", err))
 		fail(adoCaptureExchangeFailed)
@@ -863,7 +863,7 @@ func (s *Server) RedeemEndpointOIDCAccess(ctx context.Context, owner string, row
 // revocation endpoint. Best effort: a person's disconnect deletes the stored sign-in whether or not this
 // worked, and nothing it logs carries a token.
 func (s *Server) revokeEndpointOIDC(ctx context.Context, owner string, row types.ModelProvider) {
-	ctx, cancel := context.WithTimeout(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), 5*time.Second)
+	ctx, cancel := context.WithTimeout(secretstore.WithPurpose(ctx, secretstore.PurposeProviderSignIn), 5*time.Second)
 	defer cancel()
 	blob, found, err := s.endpointOIDCBlob(ctx, owner, row)
 	if err != nil || !found {
