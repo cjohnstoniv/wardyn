@@ -166,6 +166,8 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 		return d.selftest(ctx, args)
 	case runnerwire.MethodReclaimDrive:
 		return d.reclaimDrive(ctx, args)
+	case runnerwire.MethodKeptMachine:
+		return d.keptMachine(ctx, args)
 	}
 	return d.refCall(ctx, method, args)
 }
@@ -189,6 +191,41 @@ func (d *Dispatcher) reclaimDrive(ctx context.Context, args json.RawMessage) (an
 		return nil, err
 	}
 	return runnerwire.ReclaimDriveResult{Outcome: outcome}, nil
+}
+
+// KeptMachineDeleter is a substrate that keeps people's kept machines on its Mac (the Docker driver with
+// macOS VMs). DeleteKeptMachine answers runnerwire.KeptMachineDeleted, or KeptMachineAlreadyAbsent when
+// the Mac holds no such machine; it refuses a machine a VM has booted. by is who asked, for its log.
+type KeptMachineDeleter interface {
+	DeleteKeptMachine(ctx context.Context, id uuid.UUID, by string) (string, error)
+}
+
+// keptMachine acts on one kept machine's folder on this Mac. Its one op is delete, of a machine named
+// by its full id.
+func (d *Dispatcher) keptMachine(ctx context.Context, args json.RawMessage) (any, error) {
+	var a runnerwire.KeptMachineArgs
+	if err := runnerwire.Unmarshal(args, &a); err != nil {
+		return nil, err
+	}
+	id, err := uuid.Parse(a.ID)
+	switch {
+	case a.Op != runnerwire.KeptMachineOpDelete:
+		return nil, runnerwire.Refuse("kept_machine op %q is unknown", a.Op)
+	case err != nil || id == uuid.Nil || id.String() != a.ID:
+		return nil, runnerwire.Refuse("kept_machine needs a machine's full id")
+	}
+	km, ok := d.cfg.Substrate.(KeptMachineDeleter)
+	if !ok {
+		return nil, runnerwire.Refuse("this runner keeps no machines")
+	}
+	outcome, err := km.DeleteKeptMachine(ctx, id, a.By)
+	switch {
+	case err != nil:
+		return nil, err
+	case outcome != runnerwire.KeptMachineDeleted && outcome != runnerwire.KeptMachineAlreadyAbsent:
+		return nil, runnerwire.Refuse("kept_machine outcome %q is unknown", outcome)
+	}
+	return runnerwire.KeptMachineResult{Outcome: outcome}, nil
 }
 
 func (d *Dispatcher) local(ref string) (string, error) {

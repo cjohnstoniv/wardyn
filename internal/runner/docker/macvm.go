@@ -263,7 +263,7 @@ func (d *Driver) refuseMacVMSpec(spec runner.SandboxSpec) (macvm.Manifest, error
 		//lint:ignore ST1005 the sentence the person reads, as written in the approved copy
 		return macvm.Manifest{}, errors.New(runner.MacVMAgentStart)
 	}
-	if err := d.preflightSpec(spec); err != nil {
+	if err := cmp.Or(refuseKeptSecrets(spec), d.preflightSpec(spec)); err != nil {
 		return macvm.Manifest{}, err
 	}
 	// The base the run names: Standard, or one of the Mac's others (macvm.NamedBaseDir).
