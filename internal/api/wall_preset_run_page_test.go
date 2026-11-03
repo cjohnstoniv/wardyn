@@ -89,6 +89,8 @@ func TestRunPolicyViewPushesUnstoppable(t *testing.T) {
 		{"broker on, the same list", false, types.RunPolicySpec{GitHubCapabilities: []ghscope.Capability{ghscope.CapCodeRead}}, false},
 		{"broker off, the list names code_write", true, types.RunPolicySpec{GitHubCapabilities: []ghscope.Capability{ghscope.CapCodeRead, ghscope.CapCodeWrite}}, false},
 		{"broker off, no list", true, types.RunPolicySpec{}, false},
+		// Every push refused outranks it: deny_all refuses a push to a known forge host even with the brokers off.
+		{"broker off, the list lacks code_write but deny_all is on", true, types.RunPolicySpec{GitHubCapabilities: []ghscope.Capability{ghscope.CapCodeRead}, PushRules: &types.PushRulesSpec{DenyAll: true}}, false},
 	} {
 		srv, st := pvFixture(t, &capStore{})
 		srv.cfg.DisableGitPATBroker = tc.brokerOff

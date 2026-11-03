@@ -796,7 +796,7 @@ describe("PolicyTab: P-63 chips, P-62b and the group label", () => {
   });
 
   it("reads Pushes can't be stopped on this install from the policy view's pushes_unstoppable", async () => {
-    show(policy({ pushes_unstoppable: true }), { run: withPreset(sealed) });
+    show(policy({ pushes_unstoppable: true, spec: { allowed_domains: ["a.example.com"], git_push_any_branch: false, github_capabilities: ["code_read"] } as never }), { run: withPreset(sealed) });
     await ready();
     expect(within(screen.getByTestId("policy-summary")).getByText("Pushes can't be stopped on this install.")).toBeInTheDocument();
   });
@@ -809,5 +809,14 @@ describe("PolicyTab: P-63 chips, P-62b and the group label", () => {
     show(view(), { run: withPreset({ id: "g1", name: "Release freeze", scope: "group", group_id: "grp-77", version: 2 }) });
     await ready();
     expect(screen.getByTestId("wall-preset-run-line")).toHaveTextContent("(grp-77 group, version 2)");
+  });
+
+  it("under deny_all the run page never says Pushes can't be stopped, and shows the secrets note the view carries", async () => {
+    show(policy({ pushes_unstoppable: true, ...({ push_deny_all_secrets: true } as object) }), { run: withPreset(sealed) });
+    await ready();
+    const summary = within(screen.getByTestId("policy-summary"));
+    expect(summary.queryByText("Pushes can't be stopped on this install.")).toBeNull();
+    expect(summary.getByText("Every push refused")).toBeInTheDocument();
+    expect(summary.getByText(/A push token you add as a secret could still push/)).toBeInTheDocument();
   });
 });

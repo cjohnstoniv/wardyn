@@ -21,17 +21,23 @@ func TestPolicyPreviewPushesUnstoppable(t *testing.T) {
 		name       string
 		brokerOff  bool
 		wallPreset string
+		inline     string
 		want       bool
 	}{
-		{"broker off, Read-only drops code_write", true, "read-only", true},
-		{"broker on, Read-only drops code_write", false, "read-only", false},
-		{"broker off, Open names no list", true, "open", false},
-		{"broker off, no preset", true, "", false},
+		{"broker off, an inline list without code_write", true, "", `{"github_capabilities":["code_read"]}`, true},
+		{"broker on, the same list", false, "", `{"github_capabilities":["code_read"]}`, false},
+		// Every push refused outranks it: deny_all refuses a push to a known forge host even with the brokers off.
+		{"broker off, Read-only refuses every push", true, "read-only", "", false},
+		{"broker off, Open names no list", true, "open", "", false},
+		{"broker off, no preset", true, "", "", false},
 	} {
 		srv.cfg.DisableGitPATBroker = tc.brokerOff
 		body := `{"agent":"claude-code","task":"t"`
 		if tc.wallPreset != "" {
 			body += `,"wall_preset":"` + tc.wallPreset + `"`
+		}
+		if tc.inline != "" {
+			body += `,"inline_policy":` + tc.inline
 		}
 		w := doSSO(t, srv, http.MethodPost, previewDoor, member, body+`}`)
 		var pv policyPreviewResponse

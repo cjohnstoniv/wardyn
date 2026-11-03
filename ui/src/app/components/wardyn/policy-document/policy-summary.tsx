@@ -64,6 +64,8 @@ type Group = { heading: string; intro?: string; rows: Row[]; items?: string[]; a
 export interface PolicyPresetNotes {
   chip?: { label: string; fields: ReadonlySet<string> };
   pushesUnstoppable?: boolean;
+  /** The policy refuses every push and the run carries a secret that could still push to a code host Wardyn does not know. */
+  pushDenyAllSecrets?: boolean;
 }
 
 type Bag = Record<string, unknown>;
@@ -303,7 +305,10 @@ function summarize(
   const anyBranch = take("git_push_any_branch", asBool);
   // Every push refused, or no write access, outranks where a push could go.
   // The server says when pushes cannot be stopped on this install (broker off, no code_write): that outranks both.
-  const pushLines = notes?.pushesUnstoppable ? [WALL_PRESETS.PUSHES_UNSTOPPABLE] : pushesLines({ ...spec, git_push_any_branch: anyBranch });
+  // Every push refused outranks it: deny_all also refuses an unbrokered push to a known forge host, so the line never shows then.
+  const denyAll = spec.push_rules?.deny_all === true;
+  const pushLines = notes?.pushesUnstoppable && !denyAll ? [WALL_PRESETS.PUSHES_UNSTOPPABLE] : pushesLines({ ...spec, git_push_any_branch: anyBranch });
+  if (denyAll && notes?.pushDenyAllSecrets) pushLines.push(WALL_PRESETS.PUSH_DENY_ALL_SECRETS);
   if (pushLines.length > 0) tools.push(row(SUMMARY.pushes, pushLines.map((l) => text(l)), "push_rules", "git_push_any_branch", "github_capabilities", "azure_devops_capabilities"));
   add(SUMMARY.tools, tools);
 

@@ -276,7 +276,9 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	// Redacted: this tier was shown less than a super admin is (a mount's host path, a secret name).
 	resp.Redacted = !reflect.DeepEqual(specJSON(redactSpecForRead(served, specReadFull)), specJSON(redactSpecForRead(served, tier)))
 	resp.Spec = &out
-	if w := gitPushWithheldBy(served, types.PersonalWallsSpec{}, nil); s.cfg.DisableGitPATBroker && (w.github || w.ado) {
+	// Every push refused outranks it: deny_all refuses an unbrokered push to a known forge host even with the brokers off.
+	denyAll := served.PushRules != nil && served.PushRules.DenyAll
+	if w := gitPushWithheldBy(served, types.PersonalWallsSpec{}, nil); s.cfg.DisableGitPATBroker && (w.github || w.ado) && !denyAll {
 		resp.PushesUnstoppable = true
 	}
 	// Shown with the host list it marks, so a tier that sees fewer hosts sees no marks.

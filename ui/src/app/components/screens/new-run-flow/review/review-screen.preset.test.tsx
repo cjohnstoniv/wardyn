@@ -139,12 +139,32 @@ describe("Review: the wall preset", () => {
   });
 
   it("Pushes reads Pushes can't be stopped on this install when the preview says so, not from the warning text", async () => {
-    preview({ git_push_any_branch: false, push_rules: { deny_all: true }, github_capabilities: ["code_read"] });
+    preview({ git_push_any_branch: false, github_capabilities: ["code_read"] });
     (checks.current.preview as { result: Record<string, unknown> }).result.pushes_unstoppable = true;
     open({ ...AGENT, wall_preset: "sealed" });
     await screen.findByLabelText(NR_REVIEW.POLICY_TITLE);
     await waitFor(() => expect(document.querySelector("[data-policy-row=pushes]")).toHaveTextContent(W.PUSHES_UNSTOPPABLE));
-    expect(document.querySelector("[data-policy-row=pushes]")).not.toHaveTextContent(W.PUSH_EVERY_REFUSED);
+    expect(document.querySelector("[data-policy-row=pushes]")).not.toHaveTextContent(/no write access/);
+  });
+
+  // deny_all refuses an unbrokered push to a known forge host even with the brokers off, so it outranks the unstoppable line.
+  it("never says Pushes can't be stopped under deny_all, and shows the secrets note when the preview carries it", async () => {
+    preview({ git_push_any_branch: false, push_rules: { deny_all: true } });
+    Object.assign((checks.current.preview as { result: Record<string, unknown> }).result, { pushes_unstoppable: true, push_deny_all_secrets: true });
+    open({ ...AGENT, wall_preset: "sealed" });
+    await screen.findByLabelText(NR_REVIEW.POLICY_TITLE);
+    await waitFor(() => expect(document.querySelector("[data-policy-row=pushes]")).toHaveTextContent(W.PUSH_EVERY_REFUSED));
+    const row = document.querySelector("[data-policy-row=pushes]");
+    expect(row).not.toHaveTextContent(W.PUSHES_UNSTOPPABLE);
+    expect(row).toHaveTextContent(W.PUSH_DENY_ALL_SECRETS);
+  });
+
+  it("shows no secrets note under deny_all when the preview does not carry the fact", async () => {
+    preview({ git_push_any_branch: false, push_rules: { deny_all: true } });
+    open({ ...AGENT, wall_preset: "sealed" });
+    await screen.findByLabelText(NR_REVIEW.POLICY_TITLE);
+    await waitFor(() => expect(document.querySelector("[data-policy-row=pushes]")).toHaveTextContent(W.PUSH_EVERY_REFUSED));
+    expect(document.querySelector("[data-policy-row=pushes]")).not.toHaveTextContent(W.PUSH_DENY_ALL_SECRETS);
   });
 
   it("Change goes back to the Tools step", async () => {

@@ -123,7 +123,9 @@ function presetNotes(view: RunPolicyView): PolicyPresetNotes | undefined {
   const name = view.wall_preset?.name;
   const fields = new Set(Object.entries(view.provenance ?? {}).filter(([, p]) => p.layer === "wall_preset").map(([field]) => field));
   const chip = name && fields.size > 0 ? { label: WALL_PRESETS.CHIP(name), fields } : undefined;
-  return chip || view.pushes_unstoppable ? { chip, pushesUnstoppable: view.pushes_unstoppable } : undefined;
+  // push_deny_all_secrets is the forge guard's fact; it is read when the view carries it and never declared here.
+  const pushDenyAllSecrets = (view as { push_deny_all_secrets?: boolean }).push_deny_all_secrets;
+  return chip || view.pushes_unstoppable || pushDenyAllSecrets ? { chip, pushesUnstoppable: view.pushes_unstoppable, pushDenyAllSecrets } : undefined;
 }
 
 function sourceText(s: RunPolicySource): string {
