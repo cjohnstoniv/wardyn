@@ -415,7 +415,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   - Adds `patch` on `pods` and `create`, `get`, `list`, `delete` on `sandboxes.agents.x-k8s.io` to the runner Role, nothing to the ClusterRole.
   - Also renders two `ValidatingAdmissionPolicy` objects with bindings (`<release>-wardyn-sandbox-pod-gate` and `-ungate`) for the runs namespace.
     - The first selects pod creates by the controller's identity (`k8s.agentSandbox.controller`, default the upstream ServiceAccount). It refuses one without the `wardyn.dev/verify` scheduling gate or a `Sandbox` owner, or one that names a node.
-    - The second selects an update of a pod that held the gate. Only wardynd's own ServiceAccount may remove the gate, and the same write may not change labels, owners, images, tolerations, the deadline or the node, or add an ephemeral container.
+    - The second selects an update of a pod that held the gate. Only wardynd's own ServiceAccount may remove the gate, and the same write may not change labels, annotations, owners, images, tolerations, node selector, affinity, the deadline or the node, or add an ephemeral container.
     - They need Kubernetes 1.30+ and fail closed. Other identities, Wardyn's own pods included, are not selected.
     - The guarantee covers create and gate-removal hooks, and only while those two identities are configured right. A kind run has not yet proven it.
     - A refused create is retried by the controller and shows as `SandboxPodCreateFailed` events on the `Sandbox`.

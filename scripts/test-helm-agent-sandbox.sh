@@ -137,6 +137,7 @@ ok "on: policy selects on the controller identity alone; gate, Sandbox owner and
 #   admitted: wardynd's identity removes the gate, nothing else in the write changed
 #   denied:   wardynd's identity removes the gate and the same write changes a label (wardyn.component)
 #   denied:   wardynd's identity removes the gate and the same write changes a container or init container image
+#   denied:   wardynd's identity removes the gate and the same write changes spec.nodeSelector, spec.affinity or an annotation
 #   denied:   wardynd's identity removes the gate and the same write sets spec.nodeName, changes tolerations,
 #             activeDeadlineSeconds or owner references, or adds an ephemeral container
 #   denied:   any other identity (the controller's included) removes the gate
@@ -162,7 +163,8 @@ unchanged="$(y "$un | .spec.variables[1].expression" "$TMP/on.out")"
 for tok in 'oldObject.metadata.labels == object.metadata.labels' 'oldObject.metadata.ownerReferences == object.metadata.ownerReferences' \
   'oldObject.spec.containers.map(c, c.image) == object.spec.containers.map(c, c.image)' \
   'oldObject.spec.initContainers.map(c, c.image) == object.spec.initContainers.map(c, c.image)' \
-  'oldObject.spec.tolerations == object.spec.tolerations' 'oldObject.spec.activeDeadlineSeconds == object.spec.activeDeadlineSeconds' \
+  'oldObject.spec.tolerations == object.spec.tolerations' 'oldObject.spec.nodeSelector == object.spec.nodeSelector' \
+  'oldObject.spec.affinity == object.spec.affinity' 'oldObject.metadata.annotations == object.metadata.annotations' 'oldObject.spec.activeDeadlineSeconds == object.spec.activeDeadlineSeconds' \
   "object.spec.nodeName == ''" 'size(object.spec.ephemeralContainers) == 0'; do
   [[ "$unchanged" == *"$tok"* ]] || die "on: variables.unchanged does not compare: $tok"
 done
@@ -170,7 +172,7 @@ done
 [[ "$(y 'select(.kind == "ValidatingAdmissionPolicyBinding" and .spec.policyName == "r-wardyn-sandbox-pod-ungate") | .spec.validationActions[0] + " " + .spec.matchResources.namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "$TMP/on.out")" == "Deny wardyn-runs" ]] \
   || die "on: the ungate binding is not Deny on the runs namespace"
 [[ "$(grep -c '^kind: ValidatingAdmissionPolic' "$TMP/on.out")" == 4 ]] || die "on: not exactly two policies and two bindings"
-ok "on: ungate policy selects on the stored gate; only wardynd removes it; labels, owners, images, tolerations, deadline, node, ephemeral containers unchanged"
+ok "on: ungate policy selects on the stored gate; only wardynd removes it; labels, annotations, owners, images, tolerations, nodeSelector, affinity, deadline, node, ephemeral containers unchanged"
 
 # The controller identity is a value, and may not be wardynd's own ServiceAccount.
 render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.controller.namespace=as-sys --set k8s.agentSandbox.controller.serviceAccount=ctl >"$TMP/ctl.out"
