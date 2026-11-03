@@ -35,6 +35,7 @@
    - Only an organisation's remote server may set it: a host a person names could otherwise be sent a token good at a real gateway.
    - One audience belongs to one address, across model providers and MCP servers.
    - An MCP component edited after a run started is refused a new token for that run, as a changed provider is.
+   - An MCP server whose address falls under another destination's identity route is refused (`502`) rather than sent that destination's token.
 
 ## The gateway's config
 
