@@ -25,7 +25,7 @@ export const RECORDING_LEVEL = {
   KEYSTROKES: "Keystrokes",
   KEYSTROKES_VALUE: "Never recorded",
   KEYSTROKES_NOTE: "Not a setting. No wall, team or run can turn it on.",
-  BELOW: "Teams below may record more, never less.",
+  BELOW: "Profiles and policies below may record more, never less.",
   LOCKED: "Locked",
   // M7-States 3, with the organisation in the walls' place (the walls are not on this release).
   MINIMUM_ABOVE: (who: string, level: string, lower: string[]) =>
