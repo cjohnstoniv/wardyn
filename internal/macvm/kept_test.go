@@ -597,3 +597,62 @@ func TestKeptBaseChangedWritesItsCode(t *testing.T) {
 		t.Fatalf("kept_refusal = %q, %v", got, err)
 	}
 }
+
+func TestKeptIdleDaysAreStoredAtBootAndStopAndDerivedWithoutThem(t *testing.T) {
+	l := macvm.Layout{Root: t.TempDir()}
+	base := makeBase(t, l)
+	id := uuid.New()
+	dir := l.KeptMachineDir(id.String())
+	now := time.Now().UTC().Truncate(time.Second)
+	for i, days := range []int{1, 90, 0} {
+		mode := macvm.KeptResume
+		if i == 0 {
+			mode = macvm.KeptNew
+		}
+		cfg := keptCfg(base, mode, id)
+		cfg.Kept.IdleDays = days
+		if err := openKept(t, cfg, dir, now); err != nil {
+			t.Fatal(err)
+		}
+		rec, _ := macvm.ReadKept(dir, id.String())
+		want := days
+		if days == 0 {
+			want = macvm.KeptDefaultIdleDays
+		}
+		if rec.IdleDays != want || macvm.KeptRecordIdleDays(rec) != want || !rec.ExpiresAt.Equal(now.AddDate(0, 0, want)) {
+			t.Fatalf("boot with %d idle days: %+v", days, rec)
+		}
+		for _, stopDays := range []int{1, 90, -5} {
+			s := rec
+			if !macvm.KeptStopUpdate(&s, rec.ActiveRun, now, stopDays) {
+				t.Fatal("stop refused")
+			}
+			wantStop := stopDays
+			if stopDays <= 0 {
+				wantStop = macvm.KeptDefaultIdleDays
+			}
+			if s.IdleDays != wantStop || !s.ExpiresAt.Equal(now.AddDate(0, 0, wantStop)) {
+				t.Fatalf("stop with %d idle days: %+v", stopDays, s)
+			}
+		}
+	}
+	// A record from before the field: the span from last use to expiry, whole days, clamped to 1-90.
+	for _, tc := range []struct {
+		name string
+		rec  macvm.KeptRecord
+		want int
+	}{
+		{"span", macvm.KeptRecord{LastUsed: now, ExpiresAt: now.AddDate(0, 0, 14)}, 14},
+		{"rounds", macvm.KeptRecord{LastUsed: now, ExpiresAt: now.Add(36 * time.Hour)}, 2},
+		{"floor", macvm.KeptRecord{LastUsed: now, ExpiresAt: now.Add(time.Hour)}, 1},
+		{"ceiling", macvm.KeptRecord{LastUsed: now, ExpiresAt: now.AddDate(0, 0, 400)}, 90},
+		{"backwards", macvm.KeptRecord{LastUsed: now, ExpiresAt: now.Add(-time.Hour)}, 1},
+		{"no last use", macvm.KeptRecord{ExpiresAt: now.AddDate(0, 0, 9)}, macvm.KeptDefaultIdleDays},
+		{"no expiry", macvm.KeptRecord{LastUsed: now}, macvm.KeptDefaultIdleDays},
+		{"stored wins", macvm.KeptRecord{IdleDays: 7, LastUsed: now, ExpiresAt: now.AddDate(0, 0, 14)}, 7},
+	} {
+		if got := macvm.KeptRecordIdleDays(tc.rec); got != tc.want {
+			t.Errorf("%s: KeptRecordIdleDays = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
