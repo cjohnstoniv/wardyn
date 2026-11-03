@@ -72,7 +72,15 @@ function Launched({ runId, startAnother }: { runId: string; startAnother: () => 
   if (run === null || (failed && !loaded)) {
     return <ErrorState as="h1" onRetry={failed ? reload : undefined} />;
   }
-  if (!loaded) return null;
+  // UXR-48: the badge and the title, drawn as placeholders while the launched run loads, not a blank page.
+  if (!loaded) {
+    return (
+      <section data-testid="launched-loading" aria-busy="true" className="flex flex-col items-center gap-4 text-center">
+        <span className="h-5 w-16 animate-pulse rounded-full bg-muted motion-reduce:animate-none" />
+        <span className="h-8 w-72 max-w-full animate-pulse rounded bg-muted motion-reduce:animate-none" />
+      </section>
+    );
+  }
 
   const queue = run.queue;
   // A scheduled run waits for its time, not for a place in line: it says when it starts and what is checked then.

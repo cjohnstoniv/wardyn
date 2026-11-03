@@ -54,6 +54,19 @@ const runningInteractive: AgentRun = {
   interactive: true,
 };
 
+describe("SummaryHeader — a paused run (UXR-24)", () => {
+  it("reads Paused in the state pill, in a neutral tone, whenever paused_at is set", () => {
+    renderHeader(
+      <OperatorProvider operator={true} principal="me">
+        <SummaryHeader run={{ ...runningInteractive, paused_at: aheadByHours(-1), paused_reason: "idle" }} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    const pill = screen.getByText("Paused").closest("span[class*='rounded']") as HTMLElement;
+    expect(pill.className).not.toMatch(/info|success|warning|danger/);
+    expect(screen.queryByText("Running")).toBeNull();
+  });
+});
+
 describe("SummaryHeader — attachable chip predicate", () => {
   // ticket: W25-1
   it("shows the plain 'Interactive' chip (no attachable claim) for a member", () => {

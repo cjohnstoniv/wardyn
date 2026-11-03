@@ -5,6 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import type { AgentRun, RunState } from "../../../lib/types";
+import { aheadByHours } from "../../../lib/test-clock";
 import { rowPresentation, sectionRuns, isTopQuiet, nonAttentionRuns, isLiveRunState } from "./runs-model";
 import { glyphKindFor } from "./row-glyph";
 
@@ -172,6 +173,21 @@ describe("rowPresentation — plain state words with no attention", () => {
     expect(p.word).toBe(word);
     expect(p.action).toBeNull();
     expect(p.needsYou).toBe(false);
+  });
+});
+
+describe("rowPresentation — a paused run (UXR-24)", () => {
+  it("reads Paused, in a neutral hue, for RUNNING with paused_at set", () => {
+    const p = rowPresentation(run({ state: "RUNNING", paused_at: aheadByHours(-1), paused_reason: "idle" }));
+    expect(p.hue).toBe("grey");
+    expect(p.word).toBe("Paused");
+    expect(p.action).toBeNull();
+    expect(p.needsYou).toBe(false);
+  });
+
+  it("an unpaused RUNNING run still reads Running, and a lease-ended one still reads its end", () => {
+    expect(rowPresentation(run({ state: "RUNNING" })).word).toBe("Running");
+    expect(rowPresentation(run({ state: "RUNNING", paused_at: aheadByHours(-1), lost_reason: "ended" })).word).toBe("Ended at its end time");
   });
 });
 
