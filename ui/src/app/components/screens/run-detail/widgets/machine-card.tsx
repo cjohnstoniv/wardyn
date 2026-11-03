@@ -43,19 +43,15 @@ export function machineCardOf(run: Facts): MachineCardView | undefined {
   if (m.deleted) return { ...common, chip: { label: T.CHIP_DELETED, tone: "neutral" }, notes: [T.DELETED] };
   if (m.state === "deleting") return { ...common, chip: { label: T.CHIP_DELETING, tone: "warning" }, notes: [KEEP_LIST.DELETE_UNCONFIRMED] };
   const failed = run.state === "FAILED" ? FAILED_START.find(([code]) => run.failure_hint?.includes(code)) : undefined;
-  if (failed) return { ...common, chip: { label: T.CHIP_KEPT, tone: "warning" }, notes: [typeof failed[1] === "function" ? failed[1](where) : failed[1]] };
+  if (failed) return { ...common, chip: m.state === "kept" ? { label: T.CHIP_KEPT, tone: "warning" } : { label: KEEP_LIST.CHIP_IN_USE, tone: "info" }, notes: [typeof failed[1] === "function" ? failed[1](where) : failed[1]] };
+  // The run read carries the machine as it is now, for every run that ever used it, and not which run holds it. While
+  // this run is live it is the holder, so the machine's stop result is its own (K-36, K-37, K-38). Once it has ended a
+  // later run may have used the machine, so only the machine's own state is said, never a stop result.
   if (m.state === "kept") {
-    // Kept while the run is still going: its sandbox stopped at its end time and the machine was released (K-38).
-    const scrub = m.scrubbed ? T.SCRUBBED : T.NOT_SCRUBBED;
-    return {
-      ...common,
-      chip: { label: T.CHIP_KEPT, tone: "success" },
-      headline: live ? T.HELD(where, m.name ?? "") : T.KEPT(where),
-      notes: [scrub],
-    };
+    if (!live) return { ...common, chip: { label: T.CHIP_KEPT, tone: "success" }, headline: T.KEPT(where), notes: [T.AS_NOW] };
+    return { ...common, chip: { label: T.CHIP_KEPT, tone: "success" }, headline: T.HELD(where, m.name ?? ""), notes: [m.scrubbed ? T.SCRUBBED : T.NOT_SCRUBBED] };
   }
-  // The run is over but the Mac has not reported the stop yet: the machine is still held (K-44).
-  if (!live) return { ...common, chip: { label: T.CHIP_KEEPS, tone: "info" }, headline: T.WHILE_RUNNING, notes: [T.STOPPING] };
+  if (!live) return { ...common, chip: { label: KEEP_LIST.CHIP_IN_USE, tone: "info" }, notes: [T.BUSY] };
   const how = m.mode === "new" ? T.NEW(where) : m.mode === "fresh" ? T.FRESH(where) : undefined;
   return { ...common, chip: { label: T.CHIP_KEEPS, tone: "info" }, headline: T.WHILE_RUNNING, notes: how ? [how] : [] };
 }
@@ -66,7 +62,7 @@ export function MachineCard({ run }: { run: Facts }) {
   return (
     <section aria-labelledby="run-machine-title" data-testid="run-machine-card" className="mb-3 rounded-md border border-border p-3">
       <div className="flex items-center justify-between gap-2">
-        <h3 id="run-machine-title" className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <h3 id="run-machine-title" className="label-eyebrow flex items-center gap-1.5">
           <HardDrive aria-hidden="true" className="size-3.5" />
           {T.TITLE}
         </h3>

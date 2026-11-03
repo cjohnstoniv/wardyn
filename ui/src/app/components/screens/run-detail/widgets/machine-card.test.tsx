@@ -60,30 +60,40 @@ describe("Run page: the Machine card", () => {
     expect(within(card).getByText(T.FRESH(MAC))).toBeInTheDocument();
   });
 
-  it("km3-stopping: the run is over and the Mac has not said how the stop went: K-44", () => {
-    const card = show({ state: "STOPPED", machine: machine() })!;
-    expect(within(card).getByText(T.STOPPING)).toBeInTheDocument();
-    expect(within(card).getByText(T.CHIP_KEEPS)).toBeInTheDocument();
-  });
-
-  it("km3-kept: Kept, K-35 and K-36 after a graceful stop", () => {
+  it("km3-kept: an ended run's card says Kept and K-35, and as the machine is now, with no stop result", () => {
     const card = show({ state: "STOPPED", machine: machine({ state: "kept", scrubbed: true }) })!;
     expect(within(card).getByText(T.CHIP_KEPT)).toBeInTheDocument();
     expect(within(card).getByText(T.KEPT(MAC))).toBeInTheDocument();
-    expect(within(card).getByText(T.SCRUBBED)).toBeInTheDocument();
+    expect(within(card).getByText(T.AS_NOW)).toBeInTheDocument();
+    expect(within(card).queryByText(T.SCRUBBED)).toBeNull();
+    expect(within(card).queryByText(T.NOT_SCRUBBED)).toBeNull();
   });
 
-  it("km3-kept-hard: K-37 after a hard stop", () => {
+  it("km3-kept-hard: an unscrubbed machine says nothing of this run's stop once the run has ended", () => {
     const card = show({ state: "KILLED", machine: machine({ state: "kept", scrubbed: false }) })!;
     expect(within(card).getByText(T.KEPT(MAC))).toBeInTheDocument();
-    expect(within(card).getByText(T.NOT_SCRUBBED)).toBeInTheDocument();
-    expect(within(card).queryByText(T.SCRUBBED)).toBeNull();
+    expect(text(card)).not.toMatch(/didn't stop normally/);
   });
 
-  it("km3-grace: the run still RUNNING with its machine already kept: K-38 names the machine", () => {
+  it("run A then run B on the same machine: A's page never says Stopping, nor that A stopped badly", () => {
+    // B resumed the machine A had kept: its row is B's now, in use.
+    const whileB = show({ state: "STOPPED", machine: machine({ state: "in_use", scrubbed: true }) })!;
+    expect(within(whileB).getByText(T.BUSY)).toBeInTheDocument();
+    expect(text(whileB)).not.toMatch(/Stopping|stop normally|settings/);
+    cleanup();
+    // B stopped abruptly: the machine is kept and not scrubbed, and that is B's stop, not A's.
+    const afterB = show({ state: "STOPPED", machine: machine({ state: "kept", scrubbed: false }) })!;
+    expect(text(afterB)).not.toMatch(/stop normally|removes its settings/);
+    expect(within(afterB).getByText(T.AS_NOW)).toBeInTheDocument();
+  });
+
+  it("km3-grace: the run still RUNNING with its machine already kept: K-38 names the machine, and K-36 or K-37 is this run's own stop", () => {
     const card = show({ state: "RUNNING", machine: machine({ state: "kept", scrubbed: true }) })!;
     expect(within(card).getByText(T.HELD(MAC, "dev"))).toBeInTheDocument();
     expect(within(card).getByText(T.CHIP_KEPT)).toBeInTheDocument();
+    expect(within(card).getByText(T.SCRUBBED)).toBeInTheDocument();
+    cleanup();
+    expect(within(show({ state: "RUNNING", machine: machine({ state: "kept", scrubbed: false }) })!).getByText(T.NOT_SCRUBBED)).toBeInTheDocument();
   });
 
   it("km3-deleted-admin: Deleted and K-39, claiming only the deletion", () => {
