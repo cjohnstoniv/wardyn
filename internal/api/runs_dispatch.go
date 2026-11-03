@@ -18,6 +18,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// runUnattended reports whether nobody drives the run and its policy has review paths: the one case a
+// push held for review is refused instead. It is a function to keep dispatchRun under its complexity limit.
+func runUnattended(p dispatchParams, policy types.RunPolicySpec) bool {
+	return !p.Interactive && pushReviewRules(policy, p.PushRuleSets)
+}
+
 // dispatchRun launches the sandbox via the runner and advances run state. On any
 // failure it marks the run FAILED and audits — but never returns the failure to
 // the create caller (the run row exists and is queryable). p.RunToken is passed
@@ -531,7 +537,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// for review is refused instead (push_hold.go). Set only when the
 			// policy has review paths, the one thing it changes: an older
 			// proxy refuses the key, and must not refuse every task run.
-			Unattended:         !p.Interactive && pushReviewRules(policy, p.PushRuleSets),
+			Unattended:         runUnattended(p, policy),
 			ScrubResponses:     s.cfg.ScrubProxyResponses,
 			CanonicalPushRepos: s.cfg.CanonicalPushRepos,
 			PushRuleSets:       p.PushRuleSets,
