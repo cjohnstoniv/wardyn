@@ -523,7 +523,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
 	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help", "components",
-	"recording", "governance_max_depth", "macos_vm",
+	"recording", "governance_max_depth", "macos_vm", "images",
 }
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
@@ -589,6 +589,7 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	carryForwardComponentSettings(cfg, existing, present)
 	carryForwardSiteRecording(cfg, existing, present)
 	carryForwardSiteMacOSVM(cfg, existing, present)
+	carryForwardSiteImages(cfg, existing, present)
 	// branding (#1215), on the same terms: a file written before the key existed
 	// must not drop the logo_path the org named (an absent key also leaves the
 	// stored logo untouched — only a body that names the block acts on it).
@@ -861,6 +862,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	auditPolicyHelp(datum, saved.PolicyHelp, present["policy_help"])
 	auditComponentSettings(datum, saved.Components, present["components"])
 	auditSiteRecording(datum, saved.Recording, present["recording"])
+	auditSiteImages(datum, saved.Images, present["images"])
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
 	}

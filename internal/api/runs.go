@@ -362,7 +362,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	stampHarnessSet(createData, f.harnesses, f.image)
 	comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(created, s.runnerNameOf(ctx, created)))
-	s.markGovernanceExempt(ctx, createData)
+	s.markRunCreateExempt(ctx, req.Image, createData)
 	s.stampBreakGlass(ctx, runID, createdByType, createdBy, createData)
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createData))))

@@ -146,6 +146,7 @@ const (
 	reasonWorkspaceTargetOverlap  = "workspace_target_overlap"   // two different workspaces' targets are equal or nested (a drive's included), or two repositories clone into one directory
 	reasonWorkspacePinConflict    = "workspace_pin_conflict"     // the attached workspaces pin two different model providers
 	reasonImageConflict           = "image_conflict"             // the attached workspaces use two different base images: a refusal about the run's image, not a workspace field
+	reasonImageDigestRequired     = "image_digest_required"      // images.require_digest is on and a member's image is not pinned by digest (image@sha256:<digest>)
 	reasonAllowedImageInvalid     = "allowed_image_invalid"      // allowed_image is malformed, or is combined with image or devcontainer_repo
 	reasonWorkspaceADOOrgConflict = "workspace_ado_org_conflict" // the attached workspaces use two Azure DevOps organisations
 	reasonResourcesInvalid        = "resources_invalid"          // resources carries a negative or absurd CPU or memory value

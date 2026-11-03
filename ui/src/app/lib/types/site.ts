@@ -146,6 +146,8 @@ export interface SiteConfig {
   recording?: SiteRecording;
   // types.SiteConfig.MacOSVM: the organisation's macOS VM sandbox settings.
   macos_vm?: SiteMacOSVM;
+  // types.SiteConfig.Images: the organisation's image rules.
+  images?: SiteImages;
   // RESPONSE-ONLY, never-PUT: the git hosts this deployment actually admits —
   // scm_hosts MINUS every host a provider row claims, UNION every enabled row's
   // hosts (internal/api/workspace_providers.go's effectiveScmHosts). ONE
@@ -537,6 +539,12 @@ export interface EgressBaseline {
 export interface SiteRecording {
   level?: RecordingLevel;
   locked?: boolean;
+}
+
+/** Go: types.SiteImages (SiteConfig.images). */
+export interface SiteImages {
+  /** Refuse a member's run whose image is not pinned by digest (image@sha256:<digest>). Absent reads off. Operators are not bound. */
+  require_digest?: boolean;
 }
 
 /** Go: types.SiteMacOSVM (SiteConfig.macos_vm). */

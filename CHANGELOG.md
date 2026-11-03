@@ -17,6 +17,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Existing `image` capability grants whose value ends in `/*` (for example `registry.example.com/team/*`, which matched nothing until now) now match every image under that path. Review them before upgrading. A stored image value with any other `*`, or a prefix without a registry host, still matches nothing.
 - After a downgrade to an older server, a person whose walls use the new settings (tool rules, push rules, recording, auto-stop, or Azure DevOps or GitHub capabilities) gets errors when they create a run, until they run `wardyn walls delete` or save their walls without those settings.
 
+### Added
+
+- An organisation setting, `images.require_digest` (off by default), refuses a member's run whose image, or whose own workspace's base image, is not pinned by digest (`image@sha256:<digest>`), even where an exact or prefix image grant covers it. The refusal is `403` `image_digest_required`. Operators are not bound; their unpinned runs are marked `image_digest_exempt` on the run.create audit row. Not run in CI against a real registry.
+
 ### Fixed
 
 - Docs no longer say a gateway run identity token always lives 10 minutes. It lives 60 to 600 seconds, and 600 by default.

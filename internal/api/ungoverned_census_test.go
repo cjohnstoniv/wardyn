@@ -125,6 +125,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"secrets.go:handleListSecrets":                             {1, "authz-only: the credential namespace"},
 	"secrets.go:handlePutSecret":                               {1, "authz-only: the credential namespace"},
 	"secrets.go:secretOwnerParam":                              {1, "authz-only: the credential namespace"},
+	"site_config_images.go:imageDigestVerdict":                 {1, "authz-only: the image digest rule skips an operator, and admits no run policy"},
 	"setup.go:handleSetupStatus":                               {3, "authz-only: setup rows"},
 	"setup_checks_kek.go:kekLocalRows":                         {1, "authz-only: setup rows"},
 	"setup_checks_keys.go:keyCustodyRows":                      {1, "authz-only: setup rows"},
