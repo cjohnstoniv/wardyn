@@ -1224,7 +1224,7 @@ func TestCarryForwardAttendedWindow(t *testing.T) {
 // The refusal sentences are the design's words, pinned here so a drive-by edit shows in a diff.
 func TestMacWindowSentences(t *testing.T) {
 	for got, want := range map[string]string{
-		macWindowSiteOffMsg:                  "Windows onto macOS VM runs are turned off for this install. An admin can turn on `macos_vm.allow_attended_window`.",
+		macWindowSiteOffMsg:                  "Windows onto macOS VM runs are turned off for this install. An admin can turn on macos_vm.allow_attended_window in the site config.",
 		macWindowNotYourMacMsg("Studio"):     "Wardyn opens a window only on a Mac whose runner you registered. This run is on Studio, so Wardyn can't tell who is at its keyboard. Watch its desktop from the run page instead.",
 		macWindowProfileMsg:                  "Your organisation's governance profile doesn't allow an interactive desktop on this run.",
 		macWindowUnrecordedMsg:               "This run's recording level is Screen and actions, and a macOS VM's screen isn't recorded, so Wardyn won't open a window onto it.",
