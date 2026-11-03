@@ -92,10 +92,17 @@ func TestRunGetCmd_PrintsTheADOLaneDecline(t *testing.T) {
 	}
 }
 
-// `run get` prints a service's health on one line, and nothing of the kind for a run that is not a service.
+// `run get` prints a service's health on one line, Wardyn's own check on a second for a service that opted in, and
+// nothing of the kind for a run that is not a service.
 func TestServiceLine(t *testing.T) {
 	now := time.Now()
 	svc := &types.RunService{Restart: types.ServiceRestartOnFailure}
+	probed := &types.RunService{Restart: types.ServiceRestartOnFailure, Port: 8080,
+		Health: &types.ServiceHealth{IntervalSec: 15, FailureThreshold: 3, Probe: types.ServiceProbeControlPlane}}
+	withProbe := func(st *types.RunServiceStatus, p *types.RunServiceProbe) *types.RunServiceStatus {
+		st.Probe = p
+		return st
+	}
 	status := func(h types.ServiceHealthState, reason string, restarts int, ago time.Duration) *types.RunServiceStatus {
 		return &types.RunServiceStatus{Health: h, Reason: reason, Restarts: restarts, ObservedAt: now.Add(-ago)}
 	}
@@ -109,6 +116,15 @@ func TestServiceLine(t *testing.T) {
 		{"unhealthy carries its reason", types.AgentRun{Service: svc, ServiceStatus: status(types.ServiceHealthUnhealthy, "probe_failing", 0, 3*time.Hour)}, "service: unhealthy (probe_failing) \u00b7 0 restarts \u00b7 checked 3h ago"},
 		{"not observed yet", types.AgentRun{Service: svc}, "service: not checked yet"},
 		{"not a service", types.AgentRun{ServiceStatus: status(types.ServiceHealthHealthy, "", 0, 0)}, ""},
+		{"Wardyn's check under the sandbox's", types.AgentRun{Service: probed, ServiceStatus: withProbe(status(types.ServiceHealthHealthy, "", 0, 40*time.Second),
+			&types.RunServiceProbe{Health: types.ServiceHealthUnhealthy, Reason: "bad_status", HTTPStatus: 503, Failures: 3, ObservedAt: now.Add(-40 * time.Second)})},
+			"service: healthy \u00b7 0 restarts \u00b7 checked 40s ago\nwardyn's check: unhealthy (bad_status, HTTP 503) \u00b7 3 failed in a row \u00b7 checked 40s ago"},
+		{"Wardyn's check passing", types.AgentRun{Service: probed, ServiceStatus: withProbe(status(types.ServiceHealthHealthy, "", 0, 40*time.Second),
+			&types.RunServiceProbe{Health: types.ServiceHealthHealthy, HTTPStatus: 200, ObservedAt: now.Add(-40 * time.Second)})},
+			"service: healthy \u00b7 0 restarts \u00b7 checked 40s ago\nwardyn's check: healthy \u00b7 checked 40s ago"},
+		{"Wardyn's check not run yet", types.AgentRun{Service: probed, ServiceStatus: status(types.ServiceHealthStarting, "", 0, 0)},
+			"service: starting \u00b7 0 restarts \u00b7 checked 0s ago\nwardyn's check: not checked yet"},
+		{"neither checked yet", types.AgentRun{Service: probed}, "service: not checked yet\nwardyn's check: not checked yet"},
 	} {
 		if got := serviceLine(tc.run, now); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)

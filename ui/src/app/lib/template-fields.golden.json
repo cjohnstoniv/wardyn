@@ -215,7 +215,8 @@
     "ServiceHealth": [
       "path",
       "interval_sec",
-      "failure_threshold"
+      "failure_threshold",
+      "probe"
     ],
     "StartFolder": [
       "kind",
