@@ -273,15 +273,6 @@ func findEnv(c *corev1.Container, name string) *corev1.EnvVar {
 	return nil
 }
 
-func findVolume(p *corev1.Pod, name string) *corev1.Volume {
-	for i := range p.Spec.Volumes {
-		if p.Spec.Volumes[i].Name == name {
-			return &p.Spec.Volumes[i]
-		}
-	}
-	return nil
-}
-
 func TestAgentSandbox_CreatesTheSandboxAndUngatesTheAdmittedPod(t *testing.T) {
 	d, cs, dyn := newSandboxRig(t, Config{SandboxPlacement: asPlacement}, controllerMaking(t, nil))
 	cs.ClearActions()
@@ -432,8 +423,12 @@ func TestAgentSandbox_ReadBackRefusesEveryChangedField(t *testing.T) {
 		{"init container added", func(p *corev1.Pod) {
 			p.Spec.InitContainers = append(p.Spec.InitContainers, corev1.Container{Name: "injected", Image: "x"})
 		}, "spec.initContainers[injected]"},
-		{"volume source", func(p *corev1.Pod) { findVolume(p, managed).Secret.SecretName = "other" }, "spec.volumes[" + managed + "].secret.secretName"},
-		{"volume mode", func(p *corev1.Pod) { mode := int32(0o777); findVolume(p, managed).Secret.DefaultMode = &mode }, "spec.volumes[" + managed + "].secret.defaultMode"},
+		{"volume source", func(p *corev1.Pod) { v, _ := findVolume(p.Spec.Volumes, managed); v.Secret.SecretName = "other" }, "spec.volumes[" + managed + "].secret.secretName"},
+		{"volume mode", func(p *corev1.Pod) {
+			mode := int32(0o777)
+			v, _ := findVolume(p.Spec.Volumes, managed)
+			v.Secret.DefaultMode = &mode
+		}, "spec.volumes[" + managed + "].secret.defaultMode"},
 		{"volume added", func(p *corev1.Pod) {
 			p.Spec.Volumes = append(p.Spec.Volumes, corev1.Volume{Name: "host", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/"}}})
 		}, "spec.volumes[host]"},
