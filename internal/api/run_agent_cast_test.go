@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -639,4 +640,68 @@ func TestAgentCast_ARejectedRowKeepsTheObligation(t *testing.T) {
 	if rows := castRows(t, f, agentCastSession); len(rows) != 1 || rows[0]["reason"] != "no_tail" || cs.owing() {
 		t.Fatalf("rows %v owed %v, want the row written, then the obligation cleared", rows, cs.owing())
 	}
+}
+
+// castGuard swaps the agent cast's masking guard, as a manifest check that starts failing after the cast
+// opened does.
+func castGuard(c *agentCast, guard func() bool) {
+	c.mw.mu.Lock()
+	c.mw.guard = guard
+	c.mw.mu.Unlock()
+}
+
+// The masker drops every byte of a copy that ends cleanly (its guard failed after the cast opened): that
+// is not silence. The run is declined, mask_gap, with its failure row, and no cast is stored.
+func TestAgentCast_AllBytesDroppedByTheMaskerIsAMaskGap(t *testing.T) {
+	f, cs, casts := agentCastFixture(t, types.MachineMacOSVM)
+	_, spec, ok := startDispatch(f, types.SiteConfig{}, false)
+	tw, _ := spec.ExecOutput.(*tailWriter)
+	if !ok || tw == nil || tw.cast == nil {
+		t.Fatalf("started=%v, want started with a cast", ok)
+	}
+	castGuard(tw.cast, func() bool { return false })
+	tw.BeginDrain()
+	_, _ = tw.Write([]byte("output the masker cannot vouch for\n"))
+	tw.EndDrain(nil)
+	row := waitCastRow(t, f, agentCastSession)
+	if row["outcome"] != "failure" || row["reason"] != "mask_gap" {
+		t.Fatalf("row %v, want a failure row with reason mask_gap", row)
+	}
+	waitFor(t, "the run to be declined", func() bool { return cs.marked() == types.NotRecordedRunnerDeclined && !cs.owing() })
+	if _, err := casts.OpenCast(context.Background(), recording.CastKey(f.run.ID.String(), agentCastSession)); err == nil {
+		t.Fatal("a cast was stored for a copy the masker dropped whole")
+	}
+}
+
+// The masker drops only a middle chunk of a copy that ends cleanly: the cast is saved with what was
+// kept, and its row says incomplete and mask_gap. The run stays recorded.
+func TestAgentCast_AMiddleChunkDroppedByTheMaskerIsSavedIncomplete(t *testing.T) {
+	f, cs, casts := agentCastFixture(t, types.MachineMacOSVM)
+	_, spec, ok := startDispatch(f, types.SiteConfig{}, false)
+	tw, _ := spec.ExecOutput.(*tailWriter)
+	if !ok || tw == nil || tw.cast == nil {
+		t.Fatalf("started=%v, want started with a cast", ok)
+	}
+	var failing atomic.Bool
+	castGuard(tw.cast, func() bool { return !failing.Load() })
+	tw.BeginDrain()
+	for _, chunk := range []struct {
+		text string
+		fail bool
+	}{{"the first chunk\n", false}, {"the middle chunk\n", true}, {"the last chunk\n", false}} {
+		failing.Store(chunk.fail)
+		_, _ = tw.Write([]byte(chunk.text))
+		tw.t.in.flush()
+		tw.cast.pipe.flush()
+	}
+	tw.EndDrain(nil)
+	row := waitCastRow(t, f, agentCastSession)
+	if row["outcome"] != "success" || row["incomplete"] != true || row["mask_gap"] != true {
+		t.Fatalf("row %v, want a saved cast marked incomplete and mask_gap", row)
+	}
+	out := readCast(t, casts, f.run.ID, agentCastSession)
+	if !strings.Contains(out, "the first chunk") || !strings.Contains(out, "the last chunk") || strings.Contains(out, "the middle chunk") {
+		t.Fatalf("cast %q, want the first and last chunks without the middle one", out)
+	}
+	waitFor(t, "the obligation to settle", func() bool { return !cs.owing() && cs.marked() == "" })
 }

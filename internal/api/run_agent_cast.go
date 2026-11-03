@@ -203,16 +203,20 @@ func (c *agentCast) seal() func() error {
 // take flushes and copies what the cast holds, and returns what settles it. A copy with no output that
 // ended cleanly settles the obligation (nothing to record); one whose read failed keeps it
 // (errAgentCastUnread). A copy cut short by a failed read is saved with agentCastCutMarker at its end and
-// incomplete on its row.
+// incomplete on its row. Bytes the masker dropped or replaced because it could not vouch for them (its
+// guard failed, or the registry was stale: capture.dropped) are never silence and never complete: with
+// nothing kept the run is declined, mask_gap; with some kept the cast is saved incomplete, mask_gap.
 func (c *agentCast) take() func() error {
 	ctx := context.Background()
 	c.mu.Lock()
 	declined, readErr := c.declined, c.readErr
 	c.mu.Unlock()
-	had := c.flush()
+	had, maskGap := c.flush()
 	switch {
 	case declined != "":
 		return func() error { return c.s.declineAgentOutput(ctx, c.run, declined) }
+	case !had && maskGap:
+		return func() error { return c.s.declineAgentOutput(ctx, c.run, "mask_gap") }
 	case !had && readErr != nil:
 		return func() error {
 			return agentCastStoreErr(ctx, c.run.ID, "re-read a run's agent output", fmt.Errorf("%w: %w", errAgentCastUnread, readErr))
@@ -227,22 +231,24 @@ func (c *agentCast) take() func() error {
 	snap := append([]byte(nil), c.buf.buf.Bytes()...)
 	truncated := c.buf.truncated
 	c.mw.mu.Unlock()
-	return func() error { return c.save(ctx, snap, truncated, readErr) }
+	return func() error { return c.save(ctx, snap, truncated, readErr, maskGap) }
 }
 
-// flush waits for every byte written to reach the cast, and reports whether any did.
-func (c *agentCast) flush() bool {
+// flush waits for every byte written to reach the cast, and reports whether any did and whether the
+// masker dropped or replaced any it could not vouch for.
+func (c *agentCast) flush() (had, maskGap bool) {
 	c.pipe.flush()
 	c.mw.mu.Lock()
 	defer c.mw.mu.Unlock()
 	c.mw.flushLocked()
-	return c.cast.HadOutput()
+	return c.cast.HadOutput(), c.mw.capture.dropped
 }
 
 // save stores the cast with its session.recording.write row: a success clears the run's obligation and
 // any runner_declined mark; a failure leaves the run unrecorded (declineAgentOutput, save_failed). A copy
-// cut short by readErr says so on its row: incomplete, with the read's error.
-func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readErr error) error {
+// cut short by readErr says so on its row: incomplete, with the read's error; one with bytes the masker
+// dropped says incomplete and mask_gap.
+func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readErr error, maskGap bool) error {
 	s, runID := c.s, c.run.ID
 	key := recording.CastKey(runID.String(), c.session)
 	saveCtx, cancel := context.WithTimeout(ctx, sessionRecordingSaveWait)
@@ -260,6 +266,9 @@ func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readE
 	}
 	if readErr != nil {
 		data["incomplete"], data["read_error"] = true, readErr.Error()
+	}
+	if maskGap {
+		data["incomplete"], data["mask_gap"] = true, true
 	}
 	outcome := "success"
 	if err != nil {
