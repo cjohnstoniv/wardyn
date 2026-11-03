@@ -282,6 +282,15 @@ func (r *Registry) DropRunValue(runID uuid.UUID, value []byte) {
 		return
 	}
 	r.guardDrop(runID)
+	r.RemoveLocal(runID, value)
+}
+
+// RemoveLocal takes one value out of runID's per-run corpus in this process, as DropRunValue does but
+// without the drop guard: for a caller undoing its own AddLocal, which ended no coverage.
+func (r *Registry) RemoveLocal(runID uuid.UUID, value []byte) {
+	if r == nil {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	vs := r.perRun[runID]

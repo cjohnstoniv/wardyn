@@ -5,5 +5,6 @@ package maskmanifest
 
 import "github.com/google/uuid"
 
-// SetBeforePublish has a load run f as its last step before it installs its entry.
-func (m *Manifests) SetBeforePublish(f func(runID uuid.UUID)) { m.beforePublish = f }
+// SetLoadPause has a load call f with "before-register" and again with "after-register" (the latter holding
+// the load's registration step, so f must not start another load).
+func (m *Manifests) SetLoadPause(f func(stage string, runID uuid.UUID)) { m.loadPause = f }

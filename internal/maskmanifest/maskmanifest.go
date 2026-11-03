@@ -85,9 +85,10 @@ type Manifests struct {
 	// the latest process-wide one. A load keeps its result only if neither passed seq's value from before
 	// it began, so a load that was in flight when the corpus was dropped cannot vouch for it again.
 	// ponytail: last grows by one entry per run ever invalidated; prune it if that count ever shows.
-	seq, lastAll  uint64
-	last          map[uuid.UUID]uint64
-	beforePublish func(runID uuid.UUID) // test seam: a load's last step before it installs its entry
+	seq, lastAll uint64
+	last         map[uuid.UUID]uint64
+	publishMu    sync.Mutex                          // serialises the register-check-publish step of loads
+	loadPause    func(stage string, runID uuid.UUID) // test seam: stops a load before and after it registers
 }
 
 // entry is this process's copy of one run's manifest: the revision it was read
@@ -341,24 +342,55 @@ func (m *Manifests) load(ctx context.Context, runID uuid.UUID, owner string) boo
 		}
 		plain = append(plain, v)
 	}
+	defer func() {
+		for _, v := range plain {
+			clear(v)
+		}
+	}()
 	e := &entry{rev: rev, complete: true, have: make(map[[sha256.Size]byte]struct{}, len(plain))}
 	for _, v := range plain {
-		m.reg.AddLocal(runID, v)
 		e.have[sha256.Sum256(v)] = struct{}{}
-		clear(v)
 	}
-	if m.beforePublish != nil {
-		m.beforePublish(runID)
+	m.pause("before-register", runID)
+	// One load registers, checks and publishes at a time, so a load taking back what it added cannot
+	// remove a value a concurrent load found already there and is vouching for.
+	m.publishMu.Lock()
+	defer m.publishMu.Unlock()
+	if m.voided(runID, began) {
+		return false
 	}
+	var added [][]byte
+	for _, v := range plain {
+		if m.reg.AddLocal(runID, v) {
+			added = append(added, v)
+		}
+	}
+	m.pause("after-register", runID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.lastAll > began || m.last[runID] > began {
-		return false // the corpus was dropped or the run forgotten while this load ran: what it read is stale
+		for _, v := range added { // the corpus was dropped or the run forgotten while this load ran: undo what it put in
+			m.reg.RemoveLocal(runID, v)
+		}
+		return false
 	}
 	if cur := m.cache[runID]; cur == nil || cur.rev <= rev {
 		m.cache[runID] = e
 	}
 	return true
+}
+
+// voided reports whether an invalidation of runID, or of every run, came after seq began.
+func (m *Manifests) voided(runID uuid.UUID, began uint64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastAll > began || m.last[runID] > began
+}
+
+func (m *Manifests) pause(stage string, runID uuid.UUID) {
+	if m.loadPause != nil {
+		m.loadPause(stage, runID)
+	}
 }
 
 // invalidate ends this process's vouching for runID, or for every run when it is uuid.Nil, and voids any

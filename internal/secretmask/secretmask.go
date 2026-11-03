@@ -176,18 +176,20 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) error {
 
 // AddLocal is Add into this process's cache only, for a value that is already
 // committed elsewhere (a masking manifest's renderings, a row another replica
-// wrote). It never fails.
-func (r *Registry) AddLocal(runID uuid.UUID, value []byte) {
+// wrote). It never fails. It reports whether it added the value: false when the run already held it
+// (or the value is too short to mask), so a caller can take back exactly what it added with RemoveLocal.
+func (r *Registry) AddLocal(runID uuid.UUID, value []byte) bool {
 	if r == nil || len(value) < MinLen {
-		return
+		return false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if containsSlice(r.perRun[runID], value) {
-		return
+		return false
 	}
 	r.perRun[runID] = append(r.perRun[runID], bytes.Clone(value))
 	r.gen++
+	return true
 }
 
 // AddGlobal registers values as the CURRENT values of one credential (owner,

@@ -75,7 +75,12 @@ func TestPG_ALoadInFlightWhenTheCorpusIsDroppedCannotVouchForItAgain(t *testing.
 				regB.ApplyGlobal(rowID, "alice", "sso", []byte(secret), time.Time{}, time.Time{})
 			}
 			paused, resume := make(chan struct{}), make(chan struct{})
-			mB.SetBeforePublish(func(uuid.UUID) { close(paused); <-resume })
+			mB.SetLoadPause(func(stage string, _ uuid.UUID) {
+				if stage == "after-register" { // the value is registered here, and the drop below removes it
+					close(paused)
+					<-resume
+				}
+			})
 			covered := make(chan bool, 1)
 			go func() { covered <- mB.Covered(ctx, run) }()
 			<-paused // the value is registered, the entry is not installed
@@ -107,6 +112,63 @@ func TestPG_ALoadInFlightWhenTheCorpusIsDroppedCannotVouchForItAgain(t *testing.
 			defer sink.mu.Unlock()
 			if strings.Contains(string(sink.ev.Data), secret) || strings.Contains(string(sink.ev.Data), sinks.CorrelationKey) {
 				t.Errorf("the sink got %s", sink.ev.Data)
+			}
+		})
+	}
+}
+
+// TestPG_ALoadVoidedByAForgetTakesBackWhatItRegistered: a load that finds the run forgotten before it
+// registers, or after, leaves the registry without the values it read; values someone else registered stay.
+func TestPG_ALoadVoidedByAForgetTakesBackWhatItRegistered(t *testing.T) {
+	const secret, injected = "zq-throwaway-rollback-11", "zq-throwaway-injected-12"
+	for _, stage := range []string{"before-register", "after-register"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx := t.Context()
+			migrated := subjectkeytest.ThrowawayDB(t)
+			id, err := age.GenerateX25519Identity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			k, err := kek.NewLocalPurpose(id, kek.PurposeCred)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keys := subjectkeytest.Manager(migrated, k)
+			run := uuid.New()
+			mA := maskmanifest.New(migrated, keys, secretmask.NewRegistry())
+			if err := mA.Start(ctx, run, "alice"); err != nil {
+				t.Fatal(err)
+			}
+			if err := mA.Append(ctx, run, []byte(secret)); err != nil {
+				t.Fatal(err)
+			}
+			if err := mA.Complete(ctx, run); err != nil {
+				t.Fatal(err)
+			}
+
+			regB := secretmask.NewRegistry()
+			mB := maskmanifest.New(migrated, keys, regB)
+			if err := regB.Add(run, []byte(injected)); err != nil { // not this load's to take back
+				t.Fatal(err)
+			}
+			paused, resume := make(chan struct{}), make(chan struct{})
+			mB.SetLoadPause(func(s string, _ uuid.UUID) {
+				if s == stage {
+					close(paused)
+					<-resume
+				}
+			})
+			covered := make(chan bool, 1)
+			go func() { covered <- mB.Covered(ctx, run) }()
+			<-paused
+			mB.ForgetCache(run) // an erase's local step, short of the eviction
+			close(resume)
+			if <-covered || mB.Held(run) {
+				t.Fatal("the voided load vouched for the run")
+			}
+			got := regB.Snapshot(run)
+			if len(got) != 1 || string(got[0]) != injected {
+				t.Errorf("the registry holds %d values after the load, want only the one registered elsewhere", len(got))
 			}
 		})
 	}
