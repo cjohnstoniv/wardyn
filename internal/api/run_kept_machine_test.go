@@ -39,7 +39,8 @@ type keptStore struct {
 	dropped    []uuid.UUID
 	failed     []uuid.UUID
 	stopped    []uuid.UUID
-	resetBases []string
+	// resetting is each machine's unconfirmed fresh start: the run that asked for it.
+	resetting map[uuid.UUID]uuid.UUID
 	// claimErr, when set, is what BeginKeptMachineUse answers: a race dispatch could not see.
 	claimErr error
 }
@@ -54,7 +55,7 @@ func newKeptStore() *keptStore {
 	return &keptStore{
 		site:    types.SiteConfig{MacOSVM: &types.SiteMacOSVM{AllowKeptMachines: &on, MaxKeptMachinesPerPerson: 2, KeptMachineIdleDays: 14}},
 		runners: map[uuid.UUID]types.Runner{}, runs: map[uuid.UUID]types.AgentRun{}, pools: map[uuid.UUID][]types.RunnerPool{},
-		machines: map[uuid.UUID]types.KeptMachine{}, runMachine: map[uuid.UUID]keptRunRecord{},
+		machines: map[uuid.UUID]types.KeptMachine{}, runMachine: map[uuid.UUID]keptRunRecord{}, resetting: map[uuid.UUID]uuid.UUID{},
 	}
 }
 
@@ -92,9 +93,39 @@ func (s *keptStore) ListRunnerPoolsWithMember(_ context.Context, id uuid.UUID) (
 	return s.pools[id], nil
 }
 
-func (s *keptStore) CreateKeptMachine(_ context.Context, m types.KeptMachine, limit int) (types.KeptMachine, error) {
+// starting is the store's run lock: an insert or claim for a run no longer STARTING changes nothing.
+func (s *keptStore) starting(runID uuid.UUID) bool {
+	r, ok := s.runs[runID]
+	return ok && r.State == types.RunStarting
+}
+
+func (s *keptStore) CreateKeptMachineForRun(_ context.Context, m types.KeptMachine, limit int) (types.KeptMachine, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.starting(*m.RunID) {
+		return types.KeptMachine{}, store.ErrRunNotDispatching
+	}
+	m, err := s.createLocked(m, limit)
+	if err == nil {
+		s.runMachine[*m.RunID] = keptRunRecord{id: &m.ID, mode: keptModeNew}
+	}
+	return m, err
+}
+
+func (s *keptStore) ClaimKeptMachineForRun(_ context.Context, id uuid.UUID, owner string, runID uuid.UUID, mode string) (types.KeptMachine, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.starting(runID) {
+		return types.KeptMachine{}, store.ErrRunNotDispatching
+	}
+	m, err := s.beginLocked(id, owner, runID)
+	if err == nil {
+		s.runMachine[runID] = keptRunRecord{id: &m.ID, mode: mode}
+	}
+	return m, err
+}
+
+func (s *keptStore) createLocked(m types.KeptMachine, limit int) (types.KeptMachine, error) {
 	n := 0
 	for _, o := range s.machines {
 		if o.OwnerSubject != m.OwnerSubject {
@@ -145,10 +176,14 @@ func (s *keptStore) ListKeptMachinesOf(_ context.Context, owner string) ([]types
 	return out, nil
 }
 
-// BeginKeptMachineUse is the store's condition: the owner's, not being deleted, and kept or already this run's.
 func (s *keptStore) BeginKeptMachineUse(_ context.Context, id uuid.UUID, owner string, runID uuid.UUID) (types.KeptMachine, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.beginLocked(id, owner, runID)
+}
+
+// beginLocked is the store's condition: the owner's, not being deleted, and kept or already this run's.
+func (s *keptStore) beginLocked(id uuid.UUID, owner string, runID uuid.UUID) (types.KeptMachine, error) {
 	if s.claimErr != nil {
 		return types.KeptMachine{}, s.claimErr
 	}
@@ -198,11 +233,45 @@ func (s *keptStore) RunKeptMachine(_ context.Context, runID uuid.UUID) (*uuid.UU
 	return r.id, r.mode, nil
 }
 
-func (s *keptStore) ResetKeptMachineBase(_ context.Context, _, _ uuid.UUID, base string, _ time.Time) error {
+func (s *keptStore) MarkKeptMachineResetting(_ context.Context, id, runID uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.resetBases = append(s.resetBases, base)
+	if m, ok := s.machines[id]; !ok || m.RunID == nil || *m.RunID != runID || m.State != types.KeptMachineInUse {
+		return store.ErrNotFound
+	}
+	s.resetting[id] = runID
 	return nil
+}
+
+func (s *keptStore) ClearKeptMachineResetting(_ context.Context, id, runID uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.resetting[id] != runID {
+		return store.ErrNotFound
+	}
+	delete(s.resetting, id)
+	return nil
+}
+
+// ResetKeptMachineBase writes the base and its age, as the store does, only for the run that marked it.
+func (s *keptStore) ResetKeptMachineBase(_ context.Context, id, runID uuid.UUID, base string, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.machines[id]
+	if !ok || s.resetting[id] != runID || m.RunID == nil || *m.RunID != runID {
+		return store.ErrNotFound
+	}
+	m.Base, m.BasePreparedAt = base, at
+	s.machines[id] = m
+	delete(s.resetting, id)
+	return nil
+}
+
+func (s *keptStore) KeptMachineResetPending(_ context.Context, id uuid.UUID) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.resetting[id]
+	return ok, nil
 }
 
 // The run leaser: StopKeptRunIf records the end a resume asks for and answers that it lost, so the test
@@ -289,6 +358,13 @@ func (r *keptRig) ask(m client.RunMachine) keptMachineAsk {
 		req:   createRunRequest{Agent: "claude-code", MachineKind: string(types.MachineMacOSVM), Interactive: true, Machine: &m},
 		place: runPlacement{pooled: true, placement: types.PlacementLocal, eligible: []poolTarget{{runnerID: &mac}}},
 	}
+}
+
+// startingRun is a run being dispatched.
+func (r *keptRig) startingRun() types.AgentRun {
+	run := types.AgentRun{ID: uuid.New(), State: types.RunStarting, MachineKind: types.MachineMacOSVM}
+	r.st.runs[run.ID] = run
+	return run
 }
 
 func (r *keptRig) decide(in keptMachineAsk) (*keptMachinePlan, *runRefusal) {
@@ -385,7 +461,7 @@ func TestKeptMachineOnlyOnTheCallersOwnMacInTheirOwnPool(t *testing.T) {
 	in := r.ask(client.RunMachine{Keep: true})
 	in.place.pooled = false
 	_, rf := r.decide(in)
-	wantKeptRefusal(t, rf, http.StatusForbidden, reasonKeptMachineNotYourMac, keptMachineNotYourMacMsg(""))
+	wantKeptRefusal(t, rf, http.StatusForbidden, reasonKeptMachineNotYourMac, keptRunNotYourMacMsg(""))
 
 	other := uuid.New()
 	in = r.ask(client.RunMachine{Keep: true})
@@ -397,7 +473,7 @@ func TestKeptMachineOnlyOnTheCallersOwnMacInTheirOwnPool(t *testing.T) {
 	rn.Owner = bobSub
 	r.st.runners[r.mac] = rn
 	_, rf = r.decide(r.ask(client.RunMachine{Keep: true}))
-	wantKeptRefusal(t, rf, http.StatusForbidden, reasonKeptMachineNotYourMac, keptMachineNotYourMacMsg(keptMacName))
+	wantKeptRefusal(t, rf, http.StatusForbidden, reasonKeptMachineNotYourMac, keptRunNotYourMacMsg(keptMacName))
 	rn.Owner = aliceSub
 	r.st.runners[r.mac] = rn
 
@@ -558,7 +634,7 @@ func TestKeptMachineRefusesResidentSecretsAtDispatch(t *testing.T) {
 	}
 
 	r := newKeptRig(t, keepingCaps())
-	run := types.AgentRun{ID: uuid.New(), State: types.RunStarting}
+	run := r.startingRun()
 	spec.SecretEnv["DB_PASSWORD"] = "stored"
 	if !r.srv.keptSecretRefusal(context.Background(), run, spec, origins) {
 		t.Fatal("dispatch did not refuse a stored secret")
@@ -609,7 +685,7 @@ func TestKeptMachineDispatchInsertsAndDropsAnUnstartedNewMachine(t *testing.T) {
 		t.Fatal(rf.body.Error)
 	}
 	r.kept("machine-1", nil)
-	run := types.AgentRun{ID: uuid.New(), State: types.RunStarting}
+	run := r.startingRun()
 	kd, ok := r.srv.keptMachineAtDispatch(context.Background(), run, plan)
 	if !ok || kd.machine.Name != "machine-2" || kd.machine.State != types.KeptMachineCreating || *kd.machine.RunID != run.ID {
 		t.Fatalf("insert: %+v, %v", kd.machine, ok)
@@ -648,7 +724,7 @@ func TestKeptMachineUnstartedResumeIsNeverMarkedCleaned(t *testing.T) {
 	if rf != nil {
 		t.Fatal(rf.body.Error)
 	}
-	run := types.AgentRun{ID: uuid.New(), State: types.RunStarting}
+	run := r.startingRun()
 	kd, ok := r.srv.keptMachineAtDispatch(context.Background(), run, plan)
 	if !ok || kd.machine.State != types.KeptMachineInUse {
 		t.Fatalf("claim: %+v, %v", kd.machine, ok)
@@ -681,7 +757,7 @@ func TestKeptMachineDispatchRaceFailsTheRunWithTheCreateSentence(t *testing.T) {
 	other := r.st.machines[m.ID]
 	other.State, other.RunID = types.KeptMachineInUse, &holder
 	r.st.machines[m.ID] = other
-	run := types.AgentRun{ID: uuid.New(), State: types.RunStarting}
+	run := r.startingRun()
 	if _, ok := r.srv.keptMachineAtDispatch(context.Background(), run, plan); ok {
 		t.Fatal("a claimed machine was claimed again")
 	}
@@ -700,6 +776,7 @@ func TestKeptMachineDispatchRaceFailsTheRunWithTheCreateSentence(t *testing.T) {
 		t.Fatal(rf.body.Error)
 	}
 	r.kept("b", nil) // made by another create between the fold and dispatch
+	run = r.startingRun()
 	if _, ok := r.srv.keptMachineAtDispatch(context.Background(), run, plan); ok {
 		t.Fatal("dispatch passed the per-person limit")
 	}
@@ -716,15 +793,12 @@ func TestKeptMachineResumeEndsTheRunHeldInItsGrace(t *testing.T) {
 	if rf != nil {
 		t.Fatal(rf.body.Error)
 	}
-	run := types.AgentRun{ID: uuid.New(), State: types.RunStarting}
+	run := r.startingRun()
 	if _, ok := r.srv.keptMachineAtDispatch(context.Background(), run, plan); !ok {
 		t.Fatal("claim failed")
 	}
 	if len(r.st.stopped) != 1 || r.st.stopped[0] != old.ID {
 		t.Fatalf("stopped = %v, want the run in its grace", r.st.stopped)
-	}
-	if len(r.st.resetBases) != 1 || r.st.resetBases[0] != types.MacOSStandardBase {
-		t.Fatalf("a fresh start recorded bases %v", r.st.resetBases)
 	}
 	if got := r.st.runMachine[run.ID]; got.mode != keptModeFresh {
 		t.Fatalf("mode = %q", got.mode)
@@ -781,5 +855,139 @@ func TestNextKeptMachineNameSkipsTakenNamesWithoutCase(t *testing.T) {
 	got := nextKeptMachineName([]types.KeptMachine{{Name: "Machine-1"}, {Name: "machine-3"}})
 	if got != "machine-2" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// keptFreshClaim is a fresh start of Alice's machine name, claimed at dispatch.
+func (r *keptRig) keptFreshClaim(t *testing.T, name string) (types.AgentRun, keptDispatch) {
+	t.Helper()
+	plan, rf := r.decide(r.ask(client.RunMachine{Resume: name, Fresh: true}))
+	if rf != nil {
+		t.Fatal(rf.body.Error)
+	}
+	run := r.startingRun()
+	kd, ok := r.srv.keptMachineAtDispatch(context.Background(), run, plan)
+	if !ok {
+		t.Fatal("claim failed")
+	}
+	return run, kd
+}
+
+func TestKeptMachineFreshStartFailedBeforeTheMacKeepsTheOldAge(t *testing.T) {
+	r := newKeptRig(t, keepingCaps())
+	r.st.site.MacOSVM.MaxBaseAgeDays = 30
+	aged := time.Now().AddDate(0, 0, -40)
+	m := r.kept("web", func(m *types.KeptMachine) { m.BasePreparedAt = aged })
+	run, kd := r.keptFreshClaim(t, "web")
+	// The proxy config, the masking manifest or the placement check fails: the Mac is never asked.
+	created := false
+	r.srv.releaseUnstartedKeptMachine(context.Background(), run, kd, &created)
+	if got := r.st.machines[m.ID]; !got.BasePreparedAt.Equal(aged) || got.Base != m.Base {
+		t.Fatalf("a fresh start that never reached the Mac moved the base: %+v", got)
+	}
+	_, rf := r.decide(r.ask(client.RunMachine{Resume: "web"}))
+	wantKeptRefusal(t, rf, http.StatusConflict, reasonKeptMachineBaseTooOld, "")
+}
+
+func TestKeptMachineUnconfirmedFreshStartBlocksANormalResume(t *testing.T) {
+	r := newKeptRig(t, keepingCaps())
+	m := r.kept("web", nil)
+	run, kd := r.keptFreshClaim(t, "web")
+	if !r.srv.keptMachineResetting(context.Background(), run, kd) {
+		t.Fatal("mark failed")
+	}
+	// The create was asked and failed: the Mac may or may not have reset the disk.
+	created := false
+	r.srv.releaseUnstartedKeptMachine(context.Background(), run, kd, &created)
+	if !r.st.machines[m.ID].BasePreparedAt.Equal(m.BasePreparedAt) {
+		t.Fatal("an unconfirmed fresh start moved the base's age")
+	}
+	_, rf := r.decide(r.ask(client.RunMachine{Resume: "web"}))
+	wantKeptRefusal(t, rf, http.StatusConflict, reasonKeptMachineResetUnconfirmed, keptMachineResetUnconfirmedMsg("web"))
+	if _, rf := r.decide(r.ask(client.RunMachine{Resume: "web", Fresh: true})); rf != nil {
+		t.Fatalf("another fresh start was refused: %s", rf.body.Error)
+	}
+
+	// The Mac was never asked (the resident values were refused): the mark is taken back.
+	run, kd = r.keptFreshClaim(t, "web")
+	if !r.srv.keptMachineResetting(context.Background(), run, kd) {
+		t.Fatal("mark failed")
+	}
+	r.srv.keptResetNotAsked(context.Background(), run, kd)
+	r.srv.releaseUnstartedKeptMachine(context.Background(), run, kd, &created)
+	if _, rf := r.decide(r.ask(client.RunMachine{Resume: "web"})); rf != nil {
+		t.Fatalf("a fresh start the Mac never saw still blocks: %s", rf.body.Error)
+	}
+}
+
+func TestKeptMachineConfirmedFreshStartRecordsTheMacsBase(t *testing.T) {
+	caps := keepingCaps()
+	r := newKeptRig(t, caps)
+	r.st.site.MacOSVM.MaxBaseAgeDays = 30
+	m := r.kept("web", func(m *types.KeptMachine) { m.BasePreparedAt = time.Now().AddDate(0, 0, -40) })
+	run, kd := r.keptFreshClaim(t, "web")
+	if !r.srv.keptMachineResetting(context.Background(), run, kd) {
+		t.Fatal("mark failed")
+	}
+	r.srv.keptMachineUp(context.Background(), run, kd)
+	want, _ := time.Parse(time.RFC3339, caps.Base.CreatedAt)
+	if got := r.st.machines[m.ID]; !got.BasePreparedAt.Equal(want) || got.Base != types.MacOSStandardBase {
+		t.Fatalf("after a confirmed fresh start: %+v, want prepared %v", got, want)
+	}
+	if pending, _ := r.st.KeptMachineResetPending(context.Background(), m.ID); pending {
+		t.Fatal("a confirmed fresh start left its mark")
+	}
+}
+
+func TestKeptMachineFreshStartKeepsTheMachinesOwnBase(t *testing.T) {
+	r := newKeptRig(t, keepingCaps())
+	km := r.kept("ios", func(m *types.KeptMachine) { m.Base = "xcode-17" })
+	req := r.ask(client.RunMachine{Resume: "ios", Fresh: true}).req
+	if rf := r.srv.keptFreshBase(&req, &km); rf != nil {
+		t.Fatal(rf.body.Error)
+	}
+	// What dispatch puts in the sandbox spec (runs_dispatch.go: SandboxSpec.MacOSBase = macOSBaseOf(run)),
+	// from the run the create records (runs.go: VMMachine = macOSBaseMachine(req)).
+	run := types.AgentRun{MachineKind: types.MachineMacOSVM, VMMachine: macOSBaseMachine(req)}
+	if got := macOSBaseOf(run); got != "xcode-17" {
+		t.Fatalf("an omitted base dispatches %q, want the machine's xcode-17", got)
+	}
+	same := r.ask(client.RunMachine{Resume: "ios", Fresh: true}).req
+	same.MacOSBase = "xcode-17"
+	if rf := r.srv.keptFreshBase(&same, &km); rf != nil || same.MacOSBase != "xcode-17" {
+		t.Fatalf("the machine's own base: %v, %q", rf, same.MacOSBase)
+	}
+	other := r.ask(client.RunMachine{Resume: "ios", Fresh: true}).req
+	other.MacOSBase = types.MacOSStandardBase
+	wantKeptRefusal(t, r.srv.keptFreshBase(&other, &km), http.StatusUnprocessableEntity, reasonKeptMachineFreshBase,
+		"A fresh start keeps your kept machine's base, xcode-17. Start a new kept machine to use a different base.")
+	plain := r.ask(client.RunMachine{Resume: "ios"}).req
+	if rf := r.srv.keptFreshBase(&plain, &km); rf != nil || plain.MacOSBase != "" {
+		t.Fatal("a normal resume's base was changed")
+	}
+}
+
+func TestKeptMachineDispatchForAKilledRunMakesNoMachine(t *testing.T) {
+	r := newKeptRig(t, keepingCaps())
+	plan, rf := r.decide(r.ask(client.RunMachine{Keep: true}))
+	if rf != nil {
+		t.Fatal(rf.body.Error)
+	}
+	run := r.startingRun()
+	run.State = types.RunKilled
+	r.st.runs[run.ID] = run
+	if _, ok := r.srv.keptMachineAtDispatch(context.Background(), run, plan); ok {
+		t.Fatal("a killed run got a machine")
+	}
+	if len(r.st.machines) != 0 || len(r.st.failed) != 0 || len(r.audit.snapshot()) != 0 {
+		t.Fatalf("machines %v, failed %v, audit %v", r.st.machines, r.st.failed, r.audit.snapshot())
+	}
+	m := r.kept("web", nil)
+	plan, _ = r.decide(r.ask(client.RunMachine{Resume: "web"}))
+	if _, ok := r.srv.keptMachineAtDispatch(context.Background(), run, plan); ok {
+		t.Fatal("a killed run claimed a machine")
+	}
+	if got := r.st.machines[m.ID]; got.State != types.KeptMachineKept || got.RunID != nil {
+		t.Fatalf("a killed run's claim changed the machine: %+v", got)
 	}
 }

@@ -659,10 +659,16 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordRunnerOutputWatermark(ctx, run, spec.ExecOutput != nil)
 	// The lease, the runner_resident values, then the create, in that order: a runner
 	// refuses a create no lease authorizes, and the create names the values.
+	if !s.keptMachineResetting(ctx, run, kept) {
+		endStartWait()
+		stopCreateLease()
+		return
+	}
 	execution, sb, refused, err := s.leaseDeliverCreate(ctx, createCtx, run, spec, resident)
 	endStartWait()
 	stopCreateLease()
 	if refused {
+		s.keptResetNotAsked(ctx, run, kept)
 		s.unoweAgentCast(ctx, run)
 		return // deliverResident failed the run and recorded why; no create was asked for
 	}

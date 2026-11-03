@@ -51,13 +51,13 @@ var keptMachineWorstBytes = admission.RunDiskReservation(50 << 30)
 // keptMachineStore is what this file reads and writes of the kept machines (store.KeptMachineStore's).
 type keptMachineStore interface {
 	ListRunnerPoolsWithMember(ctx context.Context, runnerID uuid.UUID) ([]types.RunnerPool, error)
-	CreateKeptMachine(ctx context.Context, m types.KeptMachine, limit int) (types.KeptMachine, error)
 	GetKeptMachine(ctx context.Context, id uuid.UUID) (types.KeptMachine, error)
 	FindKeptMachineOf(ctx context.Context, owner, ref string) (types.KeptMachine, error)
 	ListKeptMachinesOf(ctx context.Context, owner string) ([]types.KeptMachine, error)
 	BeginKeptMachineUse(ctx context.Context, id uuid.UUID, owner string, runID uuid.UUID) (types.KeptMachine, error)
 	RecordKeptMachineStop(ctx context.Context, st store.KeptMachineStop) (types.KeptMachine, error)
 	DropUnstartedKeptMachine(ctx context.Context, id, runID uuid.UUID) error
+	KeptMachineResetPending(ctx context.Context, id uuid.UUID) (bool, error)
 }
 
 // keptMachinePlan is what stepKeptMachine decided: what dispatch inserts (new) or claims (resume, fresh).
@@ -194,7 +194,7 @@ func (s *Server) keptMachineDecision(r *http.Request, in keptMachineAsk) (*keptM
 
 // keptNotYourMac is the not-your-Mac refusal (also for another person's Mac), naming the Mac when it is known.
 func keptNotYourMac(mac string) *runRefusal {
-	return runError(http.StatusForbidden, reasonKeptMachineNotYourMac, keptMachineNotYourMacMsg(mac))
+	return runError(http.StatusForbidden, reasonKeptMachineNotYourMac, keptRunNotYourMacMsg(mac))
 }
 
 // keptMachineGovernanceRefusal is the governance refusal: the caller's profile denies kept machines.
@@ -397,6 +397,15 @@ func (s *Server) keptResumeRefusal(ctx context.Context, st keptMachineStore, in 
 	if age := int(now.Sub(km.BasePreparedAt).Hours() / 24); !in.req.Machine.Fresh && limit.MaxDays > 0 && age > limit.MaxDays {
 		return runError(http.StatusConflict, reasonKeptMachineBaseTooOld, keptMachineBaseTooOldMsg(km.Name, age, limit.MaxDays))
 	}
+	if !in.req.Machine.Fresh {
+		pending, err := st.KeptMachineResetPending(ctx, km.ID)
+		if err != nil {
+			return runServerError("read kept machines", err)
+		}
+		if pending {
+			return runError(http.StatusConflict, reasonKeptMachineResetUnconfirmed, keptMachineResetUnconfirmedMsg(km.Name))
+		}
+	}
 	if km.Base != types.MacOSStandardBase {
 		if rf := s.macOSBaseDeniedRefusal(ctx, km.Base, in.ceiling); rf != nil {
 			return rf
@@ -448,10 +457,10 @@ func (s *Server) keptRunnerName(ctx context.Context, id uuid.UUID) string {
 	return "its Mac"
 }
 
-// keptResumeRunner is the Mac a resume's machine is kept on, which placement holds the run to
-// (keptPlacementPin); nil for any other request, or a machine that cannot be found, which
-// stepKeptMachine then refuses with its own sentence.
-func (s *Server) keptResumeRunner(r *http.Request, req createRunRequest) *uuid.UUID {
+// keptResumeOf is the caller's machine a resume names, which placement holds the run to (keptPlacementPin)
+// and a fresh start takes its base from (keptFreshBase); nil for any other request, or a machine that
+// cannot be found, which stepKeptMachine then refuses with its own sentence.
+func (s *Server) keptResumeOf(r *http.Request, req createRunRequest) *types.KeptMachine {
 	if req.Machine == nil || strings.TrimSpace(req.Machine.Resume) == "" || !types.MachineKind(req.MachineKind).IsMacOSVM() {
 		return nil
 	}
@@ -464,7 +473,31 @@ func (s *Server) keptResumeRunner(r *http.Request, req createRunRequest) *uuid.U
 	if err != nil {
 		return nil
 	}
+	return &km
+}
+
+// keptPinOf is the Mac machine km is kept on; nil without one.
+func keptPinOf(km *types.KeptMachine) *uuid.UUID {
+	if km == nil {
+		return nil
+	}
 	return &km.RunnerID
+}
+
+// keptFreshBase makes a fresh start's base its machine's own, before placement and its checks read it, so
+// the run records it and its sandbox spec asks the Mac for it. A request that names another base is
+// refused: a fresh start keeps the machine's base.
+func (s *Server) keptFreshBase(req *createRunRequest, km *types.KeptMachine) *runRefusal {
+	if km == nil || req.Machine == nil || !req.Machine.Fresh {
+		return nil
+	}
+	if req.MacOSBase != "" && req.MacOSBase != km.Base {
+		return runError(http.StatusUnprocessableEntity, reasonKeptMachineFreshBase, keptMachineFreshBaseMsg(km.Base))
+	}
+	if km.Base != types.MacOSStandardBase {
+		req.MacOSBase = km.Base
+	}
+	return nil
 }
 
 // keptPlacementPin is placement's drive pin with a resumed machine's Mac joined: the resume goes to the
@@ -521,17 +554,27 @@ func (k keptDispatch) spec() *runner.KeptMachineSpec {
 
 // runKeptMachineStore is the run's record of its machine (store.RunKeptMachineStore).
 type runKeptMachineStore interface {
+	CreateKeptMachineForRun(ctx context.Context, m types.KeptMachine, limit int) (types.KeptMachine, error)
+	ClaimKeptMachineForRun(ctx context.Context, id uuid.UUID, owner string, runID uuid.UUID, mode string) (types.KeptMachine, error)
 	SetRunKeptMachine(ctx context.Context, runID uuid.UUID, id *uuid.UUID, mode string) error
 	RunKeptMachine(ctx context.Context, runID uuid.UUID) (*uuid.UUID, string, error)
+	MarkKeptMachineResetting(ctx context.Context, id, runID uuid.UUID) error
+	ClearKeptMachineResetting(ctx context.Context, id, runID uuid.UUID) error
 	ResetKeptMachineBase(ctx context.Context, id, runID uuid.UUID, base string, preparedAt time.Time) error
 }
+
+// keptRunGone is the reason of an insert or claim for a run a kill or stop already ended: nothing was
+// made or changed, and the run is not failed again.
+const keptRunGone = "run_not_starting"
 
 // keptMachineAtDispatch inserts (keep) or claims (resume, fresh) the plan's machine for run, before any
 // runner work, and records it on the run. The insert counts the caller's machines and checks the name
 // under one lock; the claim is one owner-bound compare-and-swap, so two resumes never both get a machine.
-// A race the fold could not see fails the run with the sentence the create would have answered. A
-// resume of a machine whose last run still holds it in its grace ends that run now. ok false means the
-// run has been failed.
+// The insert or claim holds the run's row and needs it still starting: a kill that lands first leaves no
+// machine, one that lands after finds it on the run. A race the fold could not see fails the run with
+// the sentence the create would have answered. A resume of a machine whose last run still holds it in
+// its grace ends that run now. ok false means the run has ended or been failed. A fresh start's base is
+// not written here: keptMachineUp records it once the Mac has made it.
 func (s *Server) keptMachineAtDispatch(ctx context.Context, run types.AgentRun, plan *keptMachinePlan) (keptDispatch, bool) {
 	if plan == nil {
 		return keptDispatch{}, true
@@ -545,28 +588,23 @@ func (s *Server) keptMachineAtDispatch(ctx context.Context, run types.AgentRun, 
 	var km types.KeptMachine
 	var reason, msg string
 	if plan.mode == keptModeNew {
-		km, reason, msg = s.insertKeptMachine(ctx, st, run, plan)
+		km, reason, msg = s.insertKeptMachine(ctx, st, rs, run, plan)
 	} else {
-		km, reason, msg = s.claimKeptMachine(ctx, st, run, plan)
+		km, reason, msg = s.claimKeptMachine(ctx, st, rs, run, plan)
+	}
+	if reason == keptRunGone {
+		return keptDispatch{}, false
 	}
 	if msg != "" {
 		s.failKeptDispatch(ctx, run, plan, reason, msg)
 		return keptDispatch{}, false
-	}
-	if err := rs.SetRunKeptMachine(ctx, run.ID, &km.ID, plan.mode); err != nil {
-		slog.WarnContext(ctx, "wardynd: record a run's kept machine", slog.String("run_id", run.ID.String()), slog.Any("err", err))
-	}
-	if plan.mode == keptModeFresh {
-		if err := rs.ResetKeptMachineBase(ctx, km.ID, run.ID, plan.base, plan.prepared); err != nil {
-			slog.WarnContext(ctx, "wardynd: record a fresh kept machine's base", slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		}
 	}
 	return keptDispatch{plan: plan, machine: km}, true
 }
 
 // insertKeptMachine makes a new machine for run in state creating. A name the server picked that a race
 // took is picked again; a name the person asked for is refused.
-func (s *Server) insertKeptMachine(ctx context.Context, st keptMachineStore, run types.AgentRun, plan *keptMachinePlan) (types.KeptMachine, string, string) {
+func (s *Server) insertKeptMachine(ctx context.Context, st keptMachineStore, rs runKeptMachineStore, run types.AgentRun, plan *keptMachinePlan) (types.KeptMachine, string, string) {
 	runID := run.ID
 	for range 3 {
 		name := plan.name
@@ -576,7 +614,7 @@ func (s *Server) insertKeptMachine(ctx context.Context, st keptMachineStore, run
 				return types.KeptMachine{}, reasonKeptMachineUnavailable, "This run was not launched: its kept machine could not be made."
 			}
 		}
-		km, err := st.CreateKeptMachine(ctx, types.KeptMachine{ID: uuid.New(), Name: name, OwnerSubject: plan.owner, RunnerID: plan.runner,
+		km, err := rs.CreateKeptMachineForRun(ctx, types.KeptMachine{ID: uuid.New(), Name: name, OwnerSubject: plan.owner, RunnerID: plan.runner,
 			Base: plan.base, BasePreparedAt: plan.prepared, RunID: &runID,
 			ExpiresAt: s.cfg.Now().UTC().AddDate(0, 0, plan.idleDays)}, plan.limit)
 		switch {
@@ -584,6 +622,8 @@ func (s *Server) insertKeptMachine(ctx context.Context, st keptMachineStore, run
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "machine.create", km.ID.String(), "success",
 				mustJSON(keptAuditData(km, run.ID))))
 			return km, "", ""
+		case errors.Is(err, store.ErrRunNotDispatching):
+			return types.KeptMachine{}, keptRunGone, ""
 		case errors.Is(err, store.ErrKeptMachineLimit):
 			return types.KeptMachine{}, reasonKeptMachinePersonLimit, keptMachinePersonLimitMsg(plan.limit, plan.limit)
 		case errors.Is(err, store.ErrKeptMachineNameTaken) && plan.name == "":
@@ -623,7 +663,7 @@ func nextKeptMachineName(mine []types.KeptMachine) string {
 
 // claimKeptMachine gives the plan's machine to run in one owner-bound compare-and-swap, then ends the run
 // that kept it in its grace, if one still does.
-func (s *Server) claimKeptMachine(ctx context.Context, st keptMachineStore, run types.AgentRun, plan *keptMachinePlan) (types.KeptMachine, string, string) {
+func (s *Server) claimKeptMachine(ctx context.Context, st keptMachineStore, rs runKeptMachineStore, run types.AgentRun, plan *keptMachinePlan) (types.KeptMachine, string, string) {
 	before, err := st.GetKeptMachine(ctx, plan.id)
 	if err != nil || before.OwnerSubject != plan.owner {
 		return types.KeptMachine{}, reasonKeptMachineNotFound, keptMachineNotFoundMsg(plan.name)
@@ -631,8 +671,10 @@ func (s *Server) claimKeptMachine(ctx context.Context, st keptMachineStore, run 
 	if !s.cfg.Now().UTC().Before(before.ExpiresAt) {
 		return types.KeptMachine{}, reasonKeptMachineExpired, keptMachineExpiredMsg
 	}
-	km, err := st.BeginKeptMachineUse(ctx, plan.id, plan.owner, run.ID)
+	km, err := rs.ClaimKeptMachineForRun(ctx, plan.id, plan.owner, run.ID, plan.mode)
 	switch {
+	case errors.Is(err, store.ErrRunNotDispatching):
+		return types.KeptMachine{}, keptRunGone, ""
 	case errors.Is(err, store.ErrKeptMachineInUse):
 		return types.KeptMachine{}, reasonKeptMachineInUse, keptMachineInUseMsg(before.Name, s.keptHolderLabel(ctx, before.RunID))
 	case errors.Is(err, store.ErrKeptMachineDeleting):
@@ -683,15 +725,76 @@ func (s *Server) failKeptDispatch(ctx context.Context, run types.AgentRun, plan 
 	s.failAndRevoke(ctx, run.ID, types.RunStarting, msg)
 }
 
-// keptMachineUp moves a new machine from creating to in use once its run's sandbox is up.
-func (s *Server) keptMachineUp(ctx context.Context, run types.AgentRun, k keptDispatch) {
-	st, ok := s.cfg.Store.(keptMachineStore)
-	if k.plan == nil || k.plan.mode != keptModeNew || !ok {
+// keptMachineResetting marks a fresh start's machine as being reset just before its Mac is asked to, so a
+// reset that may or may not have happened blocks a normal resume (keptResumeRefusal) until a fresh start
+// confirms one. A mark that cannot be written fails the run before the Mac is asked; false then.
+func (s *Server) keptMachineResetting(ctx context.Context, run types.AgentRun, k keptDispatch) bool {
+	rs, ok := s.cfg.Store.(runKeptMachineStore)
+	if k.plan == nil || k.plan.mode != keptModeFresh || !ok {
+		return true
+	}
+	if err := rs.MarkKeptMachineResetting(ctx, k.machine.ID, run.ID); err != nil {
+		slog.WarnContext(ctx, "wardynd: mark a kept machine's fresh start", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		s.failKeptDispatch(ctx, run, k.plan, reasonKeptMachineUnavailable, "This run was not launched: its kept machine's fresh start could not be recorded.")
+		return false
+	}
+	return true
+}
+
+// keptResetNotAsked takes back the mark of a fresh start whose Mac was never asked to create the sandbox.
+func (s *Server) keptResetNotAsked(ctx context.Context, run types.AgentRun, k keptDispatch) {
+	rs, ok := s.cfg.Store.(runKeptMachineStore)
+	if k.plan == nil || k.plan.mode != keptModeFresh || !ok {
 		return
 	}
-	if _, err := st.BeginKeptMachineUse(ctx, k.machine.ID, k.plan.owner, run.ID); err != nil {
-		slog.WarnContext(ctx, "wardynd: mark a kept machine in use", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+	if err := rs.ClearKeptMachineResetting(context.WithoutCancel(ctx), k.machine.ID, run.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		slog.WarnContext(ctx, "wardynd: clear a kept machine's fresh start", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 	}
+}
+
+// keptMachineUp runs once the sandbox is up: a new machine moves from creating to in use, and a fresh
+// start, which the Mac has now made, records the base it was made from (as the Mac reports that base now)
+// and clears its mark. A base whose preparation time the Mac does not report keeps the mark: a normal
+// resume stays refused rather than read an age nobody knows.
+func (s *Server) keptMachineUp(ctx context.Context, run types.AgentRun, k keptDispatch) {
+	if k.plan == nil {
+		return
+	}
+	switch k.plan.mode {
+	case keptModeNew:
+		if st, ok := s.cfg.Store.(keptMachineStore); ok {
+			if _, err := st.BeginKeptMachineUse(ctx, k.machine.ID, k.plan.owner, run.ID); err != nil {
+				slog.WarnContext(ctx, "wardynd: mark a kept machine in use", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+			}
+		}
+	case keptModeFresh:
+		rs, ok := s.cfg.Store.(runKeptMachineStore)
+		base, prepared := s.keptMacBaseNow(ctx, k.plan.runner, k.plan.base)
+		if !ok || prepared.IsZero() {
+			return
+		}
+		if err := rs.ResetKeptMachineBase(ctx, k.machine.ID, run.ID, base, prepared); err != nil {
+			slog.WarnContext(ctx, "wardynd: record a fresh kept machine's base", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		}
+	}
+}
+
+// keptMacBaseNow is base as Mac runnerID reports it now: its name, and when it was prepared (zero when
+// the Mac is offline or does not say).
+func (s *Server) keptMacBaseNow(ctx context.Context, runnerID uuid.UUID, base string) (string, time.Time) {
+	pc, err := s.runnerStreamCapabilities(ctx, runnerID)
+	if err != nil {
+		return base, time.Time{}
+	}
+	rc, ok := pc.impl.(runnerCaps)
+	if !ok {
+		return base, time.Time{}
+	}
+	caps, have := rc.Caps()
+	if !have || caps.MacOSVM == nil {
+		return base, time.Time{}
+	}
+	return keptCurrentBase(caps.MacOSVM, base)
 }
 
 // releaseUnstartedKeptMachine, deferred by dispatch, gives back the machine of a run whose sandbox was never

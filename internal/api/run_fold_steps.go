@@ -847,8 +847,14 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 		}
 		f.schedule = sch
 	}
-	// A resume goes to the Mac its machine is kept on, as a disk drive's run goes to its Mac.
-	f.keptPin = s.keptResumeRunner(f.r, *f.req)
+	// A resume goes to the Mac its machine is kept on, as a disk drive's run goes to its Mac; a fresh start
+	// keeps its machine's base, which placement and its checks then read.
+	resumed := s.keptResumeOf(f.r, *f.req)
+	if rf := s.keptFreshBase(f.req, resumed); rf != nil {
+		s.auditKeptMachineDenied(f.r, *f.req, rf, f.mode == foldCreate)
+		return !rf.write(s, f.w, f.r)
+	}
+	f.keptPin = keptPinOf(resumed)
 	drives, driveRunner := keptPlacementPin(mountsDrives(f.drives, f.keep), drivesBoundRunner(f.drives, f.keep), f.keptPin)
 	in := placementInput{req: f.req, floor: confinementFloorSpec(f.spec, f.comps), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),

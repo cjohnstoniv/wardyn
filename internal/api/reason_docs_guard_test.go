@@ -320,12 +320,12 @@ var reasonWireValueShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // comment explains the split: #656 slice 3 pushed reasons.go past
 // scripts/check-file-size.sh's 1000-line gate; reasons_revive.go holds the
 // revive block moved out of reasons_routes.go for the same reason;
-// reasons_governance.go the run-context reasons; reasons_kept_machine.go the
-// kept-machine refusals). Every
+// reasons_governance.go the run-context reasons; reasons_kept_machine_run.go
+// and reasons_kept_machine_shared.go the kept-machine refusals). Every
 // reader of the set — this guard, driveRefusalConstants
 // (user_drives_run_test.go) — must read all of them, or a value declared in
 // another file is invisible to it.
-var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go", "reasons_revive.go", "reasons_governance.go", "reasons_kept_machine.go"}
+var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go", "reasons_revive.go", "reasons_governance.go", "reasons_kept_machine_run.go", "reasons_kept_machine_shared.go"}
 
 // reasonsGoConstValues parses every top-level const's string-literal value in
 // reasonsGoFiles via go/parser rather than a line-anchored regex, so a

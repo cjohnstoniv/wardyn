@@ -5,8 +5,9 @@ package api
 
 import "fmt"
 
-// The sentences of the kept-machine refusals (reasons_kept_machine.go holds their reasons; every string
-// constant there is read as a reason, so the sentences live here). No sentence carries a backtick.
+// The sentences of the kept-machine refusals. Their reasons are in reasons_kept_machine_run.go and
+// reasons_kept_machine_shared.go, where every string constant is read as a reason, so the sentences live
+// here. No sentence carries a backtick.
 
 // Request shape (400).
 const (
@@ -23,8 +24,8 @@ const (
 	keptMachineExpiredMsg     = "This machine expired and will be deleted."
 )
 
-// keptMachineNotYourMacMsg is the not-your-Mac refusal, naming the Mac; "This Mac" when it is not known.
-func keptMachineNotYourMacMsg(mac string) string {
+// keptRunNotYourMacMsg is the not-your-Mac refusal, naming the Mac; "This Mac" when it is not known.
+func keptRunNotYourMacMsg(mac string) string {
 	if mac == "" {
 		mac = "This Mac"
 	}
@@ -47,16 +48,8 @@ var (
 	keptKindGit  = "git tokens"
 )
 
-func keptMachineNotFoundMsg(ref string) string {
-	return fmt.Sprintf("You have no kept machine %s.", ref)
-}
-
 func keptMachineInUseMsg(name, run string) string {
 	return fmt.Sprintf("Your machine %s is in use by run %s. Stop that run first.", name, run)
-}
-
-func keptMachineDeletingMsg(name string) string {
-	return fmt.Sprintf("Your machine %s is being deleted.", name)
 }
 
 func keptMachineBaseTooOldMsg(name string, age, maxDays int) string {
@@ -95,4 +88,14 @@ func keptMachineMacOffMsg(mac string) string {
 
 func keptMachineNameTakenMsg(name string) string {
 	return fmt.Sprintf("You already have a kept machine named %s.", name)
+}
+
+// keptMachineFreshBaseMsg refuses a fresh start that names a base other than its machine's own.
+func keptMachineFreshBaseMsg(base string) string {
+	return fmt.Sprintf("A fresh start keeps your kept machine's base, %s. Start a new kept machine to use a different base.", base)
+}
+
+// keptMachineResetUnconfirmedMsg refuses a normal resume of a machine whose fresh start never confirmed.
+func keptMachineResetUnconfirmedMsg(name string) string {
+	return fmt.Sprintf("Your machine %s was being started fresh when its run ended, and Wardyn can't tell whether that finished. Start it fresh to use it.", name)
 }
