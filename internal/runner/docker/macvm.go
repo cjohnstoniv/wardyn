@@ -298,7 +298,9 @@ func macVMLowDisk(freeGB string) string {
 
 // refuseMacVMSpec refuses, before anything is created, what a macOS VM cannot honour, and a run that a
 // stale cap let through: the base must be ready, serve every harness the run starts, and fit the run's
-// size, checked again here against the base's own manifest.
+// size, checked again here against the base's own manifest. A kept machine's resume boots the machine's
+// own disk, not the base: the Mac's base may since be replaced, or gone, and the resume is checked against
+// the machine's own manifest instead (keptStart). Its answer is then the zero manifest.
 func (d *Driver) refuseMacVMSpec(spec runner.SandboxSpec) (macvm.Manifest, error) {
 	c := d.macVMConfig()
 	switch {
@@ -322,6 +324,9 @@ func (d *Driver) refuseMacVMSpec(spec runner.SandboxSpec) (macvm.Manifest, error
 	base, err := c.Layout.NamedBaseDir(spec.MacOSBase)
 	if err != nil {
 		return macvm.Manifest{}, fmt.Errorf("docker: %w", err)
+	}
+	if spec.KeptMachine != nil && spec.KeptMachine.Mode == macvm.KeptResume {
+		return macvm.Manifest{}, nil
 	}
 	man, err := macvm.ReadyBase(base)
 	if err != nil {

@@ -969,17 +969,28 @@ func TestKeptExpiryIsSaidDeletedOnlyWhenGone(t *testing.T) {
 // keptBase sets the size of the disk the rig's base clones.
 func keptBase(t *testing.T, r *macRig, diskBytes int64) {
 	t.Helper()
+	keptManifest(t, keptBaseDir(t, r), func(m *macvm.Manifest) { m.DiskBytes = diskBytes })
+}
+
+func keptBaseDir(t *testing.T, r *macRig) string {
+	t.Helper()
 	base, err := r.c.Layout.NamedBaseDir("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	man, err := macvm.ReadManifest(base)
+	return base
+}
+
+// keptManifest changes the manifest in dir, a base's or a kept machine's copy.
+func keptManifest(t *testing.T, dir string, change func(*macvm.Manifest)) {
+	t.Helper()
+	man, err := macvm.ReadManifest(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	man.DiskBytes = diskBytes
+	change(&man)
 	b, _ := json.Marshal(man)
-	if err := os.WriteFile(filepath.Join(base, macvm.ManifestFile), b, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, macvm.ManifestFile), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1067,5 +1078,44 @@ func TestKeptSweepDropsAStaleReservation(t *testing.T) {
 	}
 	if err := r.d.SweepKeptMachines(); err != nil || keptExists(res) {
 		t.Fatalf("the stale reservation after the sweep: %v, there %v", err, keptExists(res))
+	}
+}
+
+// A resume is checked against the machine's own manifest, not the Mac's current base: it starts when the
+// base now needs more than the run has, and when there is no base; a machine that itself needs more is
+// still refused. A reset still needs the base.
+func TestKeptResumeIsCheckedAgainstItsOwnDisk(t *testing.T) {
+	r, _ := newKeptRig(t)
+	ctx := context.Background()
+	id := uuid.New()
+	dir := keptMachine(t, r, id)
+	base := keptBaseDir(t, r)
+	keptManifest(t, base, func(m *macvm.Manifest) { m.MinCPUs = 8 })
+	sb, err := r.d.CreateSandbox(ctx, keptSpec(id, macvm.KeptResume))
+	if err != nil {
+		t.Fatalf("a resume after the base needs more CPUs: %v", err)
+	}
+	if err := r.d.StopSandbox(ctx, sb.Ref); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(base, macvm.ManifestFile)); err != nil {
+		t.Fatal(err)
+	}
+	sb, err = r.d.CreateSandbox(ctx, keptSpec(id, macvm.KeptResume))
+	if err != nil {
+		t.Fatalf("a resume with no base on the Mac: %v", err)
+	}
+	if err := r.d.StopSandbox(ctx, sb.Ref); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.d.CreateSandbox(ctx, keptSpec(id, macvm.KeptFresh)); err == nil {
+		t.Fatal("a reset with no base started")
+	}
+	if !keptExists(filepath.Join(dir, macvm.DiskFile)) {
+		t.Fatal("a refused reset changed the machine")
+	}
+	keptManifest(t, dir, func(m *macvm.Manifest) { m.MinCPUs = 8 })
+	if _, err := r.d.CreateSandbox(ctx, keptSpec(id, macvm.KeptResume)); err == nil || err.Error() != "Per-run CPUs on this runner are 4; a macOS VM needs at least 8." {
+		t.Fatalf("a machine that needs more CPUs than the run has: %v", err)
 	}
 }
