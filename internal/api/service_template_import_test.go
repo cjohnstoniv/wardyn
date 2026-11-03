@@ -45,14 +45,15 @@ func TestServiceIdentity_TemplateImportReadsNothingOfItsOwn(t *testing.T) {
 	const storedName = "admin-only-policy-name"
 	policyID := e.storePolicy(t, storedName, "admin-only-secret", true)
 	const workload = `"experience":"background","workload":{"kind":"agent_task","agent":"claude-code","task":"fix the build"},"no_repositories_or_drives":true`
-	docs := map[string]string{
-		"names a stored policy": docIntent(`"policy_id":"` + policyID + `",` + workload),
-		"carries a secret grant": docIntent(`"inline_policy":{"allowed_domains":["dev.azure.com"],"eligible_grants":[` +
-			`{"kind":"git_pat","requires_approval":false,"scope":{"host":"dev.azure.com","secret_name":"admin-only-secret"}}]},` + workload),
+	docs := []struct{ name, src string }{
+		{"names a stored policy", docIntent(`"policy_id":"` + policyID + `",` + workload)},
+		{"carries a secret grant", docIntent(`"inline_policy":{"allowed_domains":["dev.azure.com"],"eligible_grants":[` +
+			`{"kind":"git_pat","requires_approval":false,"scope":{"host":"dev.azure.com","secret_name":"admin-only-secret"}}]},` + workload)},
 	}
 
 	before := e.countRows(t)
-	for name, src := range docs {
+	for _, d := range docs {
+		name, src := d.name, d.src
 		body := docJSON(t, client.TemplateImportRequest{Format: client.TemplateFormatJSON, Kind: client.RunDocumentKind, Source: src})
 		svc := e.as(t, tok, http.MethodPost, "/api/v1/templates/import", body)
 		adm := do(t, e.h.srv, http.MethodPost, "/api/v1/templates/import", adminToken, body)
