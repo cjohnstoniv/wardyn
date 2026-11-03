@@ -100,6 +100,7 @@
   - a label the NetworkPolicies select is missing or changed;
   - a container or init container runs a different image than the Sandbox template asked for;
   - the Sandbox's spec was edited after create (its generation is above 1);
+  - the Sandbox was replaced by one with a different identity (the pod's controlling owner UID is not the Sandbox's), such as one deleted with the orphan policy and made again under the same name;
   - the Sandbox is being deleted, or is missing while the pod lives.
 - Nothing watches between reads, so this is not a time bound.
 - The run ends as failed, and the replaced-pod sentence below is recorded as the run's failure hint.

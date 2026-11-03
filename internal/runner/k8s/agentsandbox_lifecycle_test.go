@@ -18,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
@@ -292,6 +293,70 @@ func TestAgentSandboxLifecycle_ChangedSandboxSpecReadsFailed(t *testing.T) {
 				defer cancel()
 				if code, err := d.Wait(wctx, ref); err != nil || code != notFoundExitCode {
 					t.Errorf("Wait = %d, %v; want %d, nil, as for a gone pod", code, err, notFoundExitCode)
+				}
+			}
+		})
+	}
+}
+
+// A Sandbox deleted with the orphan policy and made again under the same name starts again at
+// generation 1, so a new template and the surviving pod naming the same changed image would pass the
+// image and generation checks: only the pod's controlling owner UID tells it is not the run's Sandbox.
+// The rig's create reactor gives every Sandbox asSandboxUID and controllerMaking copies it into the
+// pod's owner reference, so an admitted run's owner matches unless a case changes it.
+func TestAgentSandboxLifecycle_RecreatedSandboxReadsFailed(t *testing.T) {
+	const swapped = "registry.example/other:1"
+	for _, tc := range []struct {
+		name  string
+		uid   k8stypes.UID
+		owner func(*corev1.Pod)
+		want  types.RunState
+	}{
+		{"same Sandbox, owner UID matches", asSandboxUID, nil, types.RunRunning},
+		{"made again with a new UID", "sandbox-uid-2", nil, types.RunFailed},
+		{"pod has no controlling Sandbox owner", asSandboxUID, func(p *corev1.Pod) { p.OwnerReferences = nil }, types.RunFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, cs, dyn, ref := asAdmitted(t)
+			obj, err := dyn.Tracker().Get(sandboxesGVR, testNamespace, ref)
+			if err != nil {
+				t.Fatalf("get Sandbox: %v", err)
+			}
+			sb := obj.(*unstructured.Unstructured).DeepCopy()
+			if err := dyn.Tracker().Delete(sandboxesGVR, testNamespace, ref); err != nil {
+				t.Fatalf("orphan-delete Sandbox: %v", err)
+			}
+			sb.SetUID(tc.uid)
+			sb.SetGeneration(1)
+			sb.SetResourceVersion("")
+			containers, _, _ := unstructured.NestedSlice(sb.Object, "spec", "podTemplate", "spec", "containers")
+			containers[0].(map[string]any)["image"] = swapped
+			if err := unstructured.SetNestedSlice(sb.Object, containers, "spec", "podTemplate", "spec", "containers"); err != nil {
+				t.Fatalf("set template containers: %v", err)
+			}
+			if err := dyn.Tracker().Create(sandboxesGVR, sb, testNamespace); err != nil {
+				t.Fatalf("make the Sandbox again: %v", err)
+			}
+			changeAgentPod(t, cs, ref, func(p *corev1.Pod) {
+				p.Spec.Containers[0].Image = swapped
+				if tc.owner != nil {
+					tc.owner(p)
+				}
+			})
+			ctx := context.Background()
+			for name, read := range map[string]func() (runner.Status, error){
+				"Status":      func() (runner.Status, error) { return d.Status(ctx, ref) },
+				"AgentStatus": func() (runner.Status, error) { return d.AgentStatus(ctx, ref, execContainerName) },
+			} {
+				st, err := read()
+				if err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				if name == "Status" && st.State != tc.want {
+					t.Errorf("Status = %+v; want %s", st, tc.want)
+				}
+				if replaced := st.FailureHint == agentPodReplacedMessage; replaced != (tc.want == types.RunFailed) {
+					t.Errorf("%s = %+v; want the replaced-pod sentence only for another Sandbox", name, st)
 				}
 			}
 		})

@@ -73,7 +73,9 @@ func (d *Driver) replacedPodStatus(ctx context.Context, ns string, pod *corev1.P
 // pod is one the controller made again from the template), a label the run's NetworkPolicies select
 // is missing or changed (an unselected pod is default-allow), or a container or init container runs
 // an image other than the one the run's Sandbox template asked for, or the Sandbox's spec changed after
-// create (sandboxSpecChanged), or the Sandbox is being deleted or gone (deleting is then true too).
+// create (sandboxSpecChanged), or the pod's controlling owner is not the Sandbox of that name now there
+// (by UID: a Sandbox deleted with the orphan policy and made again under the same name starts again at
+// generation 1), or the Sandbox is being deleted or gone (deleting is then true too).
 // The selected labels come from the run id, never from the Sandbox, whose template labels the
 // controller copies onto the live pod.
 //
@@ -96,6 +98,9 @@ func (d *Driver) agentPodReplaced(ctx context.Context, ns string, pod *corev1.Po
 	}
 	if err != nil || sb.GetDeletionTimestamp() != nil {
 		return true, true, nil
+	}
+	if owner := metav1.GetControllerOf(pod); owner == nil || owner.Kind != "Sandbox" || owner.UID != sb.GetUID() {
+		return true, false, nil
 	}
 	if sandboxSpecChanged(sb) {
 		return true, false, nil
