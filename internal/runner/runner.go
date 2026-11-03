@@ -248,8 +248,7 @@ type ProxyConfig struct {
 	// PortRule is a container run's port rule, "" (off), "dry_run" or "on"
 	// (WARDYN_EGRESS_PORT_RULE; proxy.Config.PortRule).
 	PortRule string
-	// DesktopSignins opens the proxy's sign-in listener (SigninListenPort) for
-	// the person's sign-in browser; see SandboxSpec.DesktopSignins.
+	// DesktopSignins opens the proxy's sign-in listener (SigninListenPort) for the person's sign-in browser; see SandboxSpec.DesktopSignins.
 	DesktopSignins  bool                                `json:"desktop_signins,omitempty"`
 	ForgeHosts      []string                            `json:"forge_hosts,omitempty"` // code hosts the deny_all guard refuses (proxy.Config.ForgeHosts)
 	LocalModels     map[string]types.LocalModelSettings // local_model upstream -> its allowlist and bounds (proxy.Config.LocalModels)
