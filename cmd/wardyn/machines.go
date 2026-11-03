@@ -201,6 +201,13 @@ func confirmMachineDelete(cmd *cobra.Command, m sdk.KeptMachine) error {
 	return nil
 }
 
+// printMachineCreatedLine prints machineCreatedLine under a created run, and nothing for a run that keeps none.
+func printMachineCreatedLine(cmd *cobra.Command, c *sdk.Client, m *sdk.RunMachine) {
+	if line := machineCreatedLine(cmd.Context(), c, m); line != "" {
+		fmt.Fprintln(cmd.OutOrStdout(), line)
+	}
+}
+
 // machineCreatedLine is what `wardyn run` prints under its created line for a run that keeps or resumes a
 // machine, "" for any other. A start is "will" until the Mac confirms it, so nothing here says it happened.
 // A new machine's Mac is chosen when the run starts, and an unnamed one is named then; a resumed machine's name,
