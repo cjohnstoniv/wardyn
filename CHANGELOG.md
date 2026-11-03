@@ -23,6 +23,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- Needs you: taking over a Linux VM run, or a macOS VM run whose Mac allows control, now opens its desktop, and a view-only macOS desktop says so. A hold on your own run raises a toast naming the site, both toasts say "Open run" or "Review", and a snoozed request keeps the agent's reason and Decline.
 - Docs no longer say a gateway run identity token always lives 10 minutes. It lives 60 to 600 seconds, and 600 by default.
 - A window onto a macOS VM run no longer opens when the Mac can't tell whether its screen is locked: it refuses with `mac_window_lock_unknown`, and an open window closes as soon as the Mac locks or its lock can no longer be told. Reopening after a lock needs a new `wardyn window`. Not yet run on a real Mac.
 - New run: choosing a virtual machine no longer leaves "Start the run in this harness" on. The switch is off and disabled for a Linux or macOS VM, whose terminal opens a shell, and the refusal now names that switch, links to Harnesses and gives the `interactive_start` field. The macOS choice also says the browser desktop is view only on macOS 26.
