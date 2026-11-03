@@ -225,6 +225,12 @@ func probeRenewalHealth(run types.AgentRun, now time.Time) types.ServiceHealthSt
 	if run.AdmittedAt != nil {
 		since = *run.AdmittedAt
 	}
+	return missingServiceReading(since, now)
+}
+
+// missingServiceReading is a check reading not yet made, for a run started (admitted, else created) at since: starting
+// inside serviceSupervisorGrace, unknown after it.
+func missingServiceReading(since, now time.Time) types.ServiceHealthState {
 	if now.Sub(since) < serviceSupervisorGrace {
 		return types.ServiceHealthStarting
 	}

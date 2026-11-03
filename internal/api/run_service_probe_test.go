@@ -533,6 +533,27 @@ func TestWorkloadViewCarriesWardynsCheck(t *testing.T) {
 	if got := workloadOut(v, workspaceReadFull, now).State; got != "RUNNING/healthy" {
 		t.Errorf("state with no check reading = %q, want the sandbox's", got)
 	}
+	// Opted in with no reading yet: Starting inside the supervisor's grace from admission, Health unknown after it,
+	// as renewal reads it; the same view with the check off reads the sandbox's word alone.
+	v.ServiceProbeOn = true
+	for _, tc := range []struct {
+		age  time.Duration
+		want string
+	}{{time.Minute, "RUNNING/starting"}, {serviceSupervisorGrace + time.Second, "RUNNING/unknown"}} {
+		started := now.Add(-tc.age)
+		v.RunStartedAt = &started
+		if got := workloadOut(v, workspaceReadFull, now).State; got != tc.want {
+			t.Errorf("opted in, no reading, started %s ago: state %q, want %q", tc.age, got, tc.want)
+		}
+	}
+	if got := workloadStatusOf(v, now).Phase; got != runnerwire.WorkloadPhaseRunning {
+		t.Errorf("phase with the check unknown = %q, want running (only unhealthy is Unhealthy)", got)
+	}
+	v.ServiceProbeOn = false
+	if got := workloadOut(v, workspaceReadFull, now).State; got != "RUNNING/healthy" {
+		t.Errorf("not opted in, started long ago: state %q, want the sandbox's", got)
+	}
+	v.ServiceProbeOn = true
 	stale := now.Add(-serviceStatusStale - time.Minute)
 	v.ServiceProbe = &types.RunServiceProbe{Health: types.ServiceHealthHealthy, ObservedAt: stale}
 	if st := viewServiceStatus(v, now); st.Probe.Health != types.ServiceHealthUnknown || st.Probe.Reason != "unreachable" {

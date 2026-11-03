@@ -428,7 +428,7 @@ func workloadStatusOf(v store.WorkloadView, now time.Time) runnerwire.WorkloadSt
 	health := types.ServiceHealthState(v.ServiceHealth)
 	st := viewServiceStatus(v, now)
 	if st != nil {
-		health = st.CombinedHealth()
+		health = viewServiceHealth(v, st, now)
 	}
 	switch {
 	case v.CurrentGeneration < v.Generation || v.RunState == "":
