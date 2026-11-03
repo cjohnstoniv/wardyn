@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -34,7 +36,57 @@ type castStore struct {
 	mu       sync.Mutex
 	required bool
 	mark     types.RunNotRecorded
-	declines int // SetRunNotRecorded calls with runner_declined
+	declines int   // runner_declined marks written
+	owed     bool  // agent_cast_owed_at is set
+	oweErr   error // SetRunAgentCastOwed fails with it
+}
+
+func (c *castStore) SetRunAgentCastOwed(context.Context, uuid.UUID) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.oweErr != nil {
+		return c.oweErr
+	}
+	c.owed = true
+	return nil
+}
+
+func (c *castStore) DeclineRunAgentCast(context.Context, uuid.UUID) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.owed {
+		return false, nil
+	}
+	c.mark = types.NotRecordedRunnerDeclined
+	c.declines++
+	return true, nil
+}
+
+func (c *castStore) ClearRunAgentCastOwed(_ context.Context, _ uuid.UUID, recorded bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.owed = false
+	if recorded && c.mark == types.NotRecordedRunnerDeclined {
+		c.mark = ""
+	}
+	return nil
+}
+
+// ListRunsAgentCastOwed lists the fixture's run while it owes its cast and is terminal; age is not kept.
+func (c *castStore) ListRunsAgentCastOwed(context.Context, time.Duration, int) ([]uuid.UUID, error) {
+	state := c.st.State()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.owed || slices.Contains(types.NonTerminalRunStates, state) {
+		return nil, nil
+	}
+	return []uuid.UUID{c.st.run.ID}, nil
+}
+
+func (c *castStore) owing() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.owed
 }
 
 func (c *castStore) GetRunnerPoolOrgDefaults(context.Context) (types.RunnerPoolDefaults, error) {
@@ -170,8 +222,8 @@ func TestAgentCast_MacOSVMTaskRunIsRecorded(t *testing.T) {
 			f, cs, casts := agentCastFixture(t, types.MachineMacOSVM)
 			cs.required = required
 			run, spec, ok := startDispatch(f, types.SiteConfig{}, false)
-			if !ok || run.NotRecorded != "" || cs.declineCount() != 0 || f.st.FailureHint() != "" {
-				t.Fatalf("started=%v not_recorded=%q declines=%d hint=%q, want started recorded", ok, run.NotRecorded, cs.declineCount(), f.st.FailureHint())
+			if !ok || run.NotRecorded != "" || !cs.owing() || f.st.FailureHint() != "" {
+				t.Fatalf("started=%v not_recorded=%q owed=%v hint=%q, want started recorded, its cast owed", ok, run.NotRecorded, cs.owing(), f.st.FailureHint())
 			}
 			tw, _ := spec.ExecOutput.(*tailWriter)
 			if tw == nil || tw.cast == nil || tw.cast.session != agentCastSession {
@@ -187,65 +239,102 @@ func TestAgentCast_MacOSVMTaskRunIsRecorded(t *testing.T) {
 			if out := readCast(t, casts, run.ID, agentCastSession); !strings.Contains(out, "<secret-hidden>") {
 				t.Fatalf("the cast is not masked: %q", out)
 			}
-			// The pessimistic mark went down before the drain was released, and the save cleared it.
-			if cs.marked() != "" || cs.declineCount() != 1 {
-				t.Fatalf("not_recorded = %q after %d marks, want marked once and cleared", cs.marked(), cs.declineCount())
+			// The save settled the obligation; the run was never marked.
+			waitFor(t, "the obligation to clear", func() bool { return !cs.owing() })
+			if cs.marked() != "" || cs.declineCount() != 0 {
+				t.Fatalf("not_recorded = %q after %d marks, want the run recorded", cs.marked(), cs.declineCount())
 			}
 		})
 	}
 }
 
-// blockingCasts is a recording store whose saves wait until release closes, then fail: a process that
-// never finishes its save.
+// blockingCasts is a recording store whose dispatch cast saves wait until release closes, then fail: a
+// process that never finishes its save. Other saves go through.
 type blockingCasts struct {
 	recording.Store
 	release chan struct{}
 }
 
-func (b blockingCasts) SaveCastNamed(context.Context, string, string, io.Reader) error {
+func (b blockingCasts) SaveCastNamed(ctx context.Context, runID, suffix string, r io.Reader) error {
+	if suffix != agentCastSession {
+		return b.Store.SaveCastNamed(ctx, runID, suffix, r)
+	}
 	<-b.release
 	return errors.New("the process went before its save")
 }
 
-// A process that commits the run's output row while the agent cast's save is still pending, then dies:
-// no recovery runs for a run with a final row, so the run is left marked runner_declined (written before
-// the drain was released), never marked recorded with no cast.
-func TestAgentCast_ADeathMidSaveLeavesTheRunMarked(t *testing.T) {
-	f, cs, casts := agentCastFixture(t, types.MachineMacOSVM)
-	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
-	f.srv.cfg.RecordingStore = blockingCasts{Store: casts, release: release}
-	_, spec, ok := startDispatch(f, types.SiteConfig{}, false)
-	tw, _ := spec.ExecOutput.(*tailWriter)
-	if !ok || tw == nil || tw.cast == nil {
-		t.Fatalf("started=%v, want started with a cast", ok)
-	}
-	tw.BeginDrain()
-	_, _ = tw.Write([]byte("agent output\n"))
-	tw.EndDrain(nil)
-	waitFor(t, "the pessimistic mark", func() bool { return cs.marked() == types.NotRecordedRunnerDeclined })
-	f.st.mu.Lock()
-	f.st.state = types.RunRunning
-	f.st.mu.Unlock()
-	f.srv.FinishRunOutput(t.Context(), f.run.ID) // the drain is released while the save waits
-	f.mem.mu.Lock()
-	final := f.mem.rows[f.run.ID].CapturedAt != nil
-	f.mem.mu.Unlock()
-	if !final {
-		t.Fatal("the output row was not committed while the save was pending")
-	}
+// A process commits the run's output row while the dispatch cast's save is still pending, then dies (its
+// tail and cast are dropped, the save never lands). No recovery runs for a run with a final row; the
+// sweep settles the obligation: with a runner that keeps the copy, a recovered cast that leaves the run
+// recorded; without one, a durable runner_declined and the failure row.
+func TestAgentCast_ADeathMidSaveIsSettledByTheSweep(t *testing.T) {
+	for _, recoverable := range []bool{true, false} {
+		t.Run(map[bool]string{true: "the runner keeps the copy", false: "nothing to re-read"}[recoverable], func(t *testing.T) {
+			var shape []func(*Config)
+			rr := newRecoveringRunner()
+			rr.log = "agent output, re-read\n"
+			if recoverable {
+				shape = append(shape, func(c *Config) { c.Runner = rr })
+			}
+			f, cs, casts := agentCastFixture(t, types.MachineMacOSVM, shape...)
+			release := make(chan struct{})
+			t.Cleanup(func() { close(release) })
+			f.srv.cfg.RecordingStore = blockingCasts{Store: casts, release: release}
+			_, spec, ok := startDispatch(f, types.SiteConfig{}, false)
+			tw, _ := spec.ExecOutput.(*tailWriter)
+			if !ok || tw == nil || tw.cast == nil || !cs.owing() {
+				t.Fatalf("started=%v owed=%v, want started with a cast owed", ok, cs.owing())
+			}
+			tw.BeginDrain()
+			_, _ = tw.Write([]byte("agent output\n"))
+			tw.EndDrain(nil)
+			f.st.mu.Lock()
+			f.st.state = types.RunCompleted
+			f.st.mu.Unlock()
+			f.srv.FinishRunOutput(t.Context(), f.run.ID) // the drain is released while the save waits
+			f.mem.mu.Lock()
+			final := f.mem.rows[f.run.ID].CapturedAt != nil
+			f.mem.mu.Unlock()
+			if !final || cs.marked() != "" || !cs.owing() {
+				t.Fatalf("final row %v, mark %q, owed %v: want the row committed with the cast still owed", final, cs.marked(), cs.owing())
+			}
 
-	dropTail(f) // the process goes; its cast and save with it
-	run, _ := f.srv.cfg.Store.GetRun(t.Context(), f.run.ID)
-	f.srv.recoverRunOutput(t.Context(), f.srv.runOutputStore(), run, "stale_pending")
-	if cs.marked() != types.NotRecordedRunnerDeclined || len(castRows(t, f, agentCastSession)) != 0 || len(castRows(t, f, agentCastRecoveredSession)) != 0 {
-		t.Fatalf("mark %q, agent rows %v, recovered rows %v: want the run left marked with no cast",
-			cs.marked(), castRows(t, f, agentCastSession), castRows(t, f, agentCastRecoveredSession))
+			dropTail(f) // the process goes; its cast and save with it
+			if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if cs.owing() {
+				t.Fatal("the sweep left the obligation")
+			}
+			if recoverable {
+				row := waitCastRow(t, f, agentCastRecoveredSession)
+				if row["outcome"] != "success" || row["recovered"] != true || cs.marked() != "" {
+					t.Fatalf("row %v mark %q, want a recovered cast and the run recorded", row, cs.marked())
+				}
+				if out := readCast(t, casts, f.run.ID, agentCastRecoveredSession); !strings.Contains(out, "re-read") {
+					t.Fatalf("recovered cast %q", out)
+				}
+				return
+			}
+			row := waitCastRow(t, f, agentCastSession)
+			if cs.marked() != types.NotRecordedRunnerDeclined || row["outcome"] != "failure" || row["reason"] != "no_tail" {
+				t.Fatalf("mark %q row %v, want runner_declined with a no_tail failure row", cs.marked(), row)
+			}
+		})
 	}
-	for _, key := range []string{agentCastSession, agentCastRecoveredSession} {
-		if _, err := casts.OpenCast(context.Background(), recording.CastKey(f.run.ID.String(), key)); err == nil {
-			t.Fatalf("a %s cast was stored", key)
+}
+
+// The obligation cannot be stored at dispatch: the run cannot promise its recording, so it follows the
+// required rule as a cast that would not open does.
+func TestAgentCast_AnObligationThatCannotBeStoredIsNoCast(t *testing.T) {
+	for _, required := range []bool{true, false} {
+		f, cs, _ := agentCastFixture(t, types.MachineMacOSVM)
+		cs.required, cs.oweErr = required, errors.New("connection reset")
+		run, spec, ok := startDispatch(f, types.SiteConfig{}, false)
+		if tw, _ := spec.ExecOutput.(*tailWriter); tw == nil || tw.cast != nil {
+			t.Fatalf("required=%v: the tail kept a cast with no obligation behind it", required)
 		}
+		assertNoCastDecision(t, f, cs, run, ok, required)
 	}
 }
 
@@ -380,11 +469,16 @@ func TestAgentCast_SaveFailureMarksTheRunAndSilenceKeepsItRecorded(t *testing.T)
 		tw.BeginDrain()
 		_, _ = tw.Write([]byte("some output\n"))
 		tw.EndDrain(nil)
-		row := waitCastRow(t, f, agentCastSession)
-		if row["outcome"] != "failure" || !strings.Contains(row["error"].(string), "recording store full") {
-			t.Fatalf("row %v, want the save's failure", row)
+		waitFor(t, "the run to be marked", func() bool { return cs.marked() == types.NotRecordedRunnerDeclined && !cs.owing() })
+		var saveErr, declined bool
+		for _, row := range castRows(t, f, agentCastSession) {
+			e, _ := row["error"].(string)
+			saveErr = saveErr || (row["outcome"] == "failure" && strings.Contains(e, "recording store full"))
+			declined = declined || (row["outcome"] == "failure" && row["reason"] == "save_failed")
 		}
-		waitFor(t, "the run to be marked", func() bool { return cs.marked() == types.NotRecordedRunnerDeclined })
+		if !saveErr || !declined {
+			t.Fatalf("rows %v, want the save's failure and the save_failed row", castRows(t, f, agentCastSession))
+		}
 	})
 	t.Run("the agent printed nothing", func(t *testing.T) {
 		f, cs, _ := agentCastFixture(t, types.MachineMacOSVM)
@@ -392,9 +486,7 @@ func TestAgentCast_SaveFailureMarksTheRunAndSilenceKeepsItRecorded(t *testing.T)
 		tw := spec.ExecOutput.(*tailWriter)
 		tw.BeginDrain()
 		tw.EndDrain(nil)
-		if save := tw.cast.seal(); save != nil { // seals once, or waits for the drain's own seal
-			t.Fatal("a cast with no output has a save")
-		}
+		waitFor(t, "the obligation to clear", func() bool { return !cs.owing() })
 		if rows := castRows(t, f, agentCastSession); len(rows) != 0 || cs.marked() != "" || cs.declineCount() != 0 {
 			t.Fatalf("rows %v mark %q, want no row and the run recorded", rows, cs.marked())
 		}

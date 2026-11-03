@@ -17,12 +17,13 @@ import (
 )
 
 // agentCastRecoveryFixture is agentCastFixture over a substrate that can read the run's output back, with
-// the run's capture owed (its pending row written by the process that dispatched it), under a requirement.
+// the run's capture owed (its pending row written by the process that dispatched it) and its agent cast
+// owed (the obligation that dispatch stored), under a requirement.
 func agentCastRecoveryFixture(t *testing.T, kind types.MachineKind, rr *recoveringRunner, shape ...func(*Config)) (*outputFixture, *castStore, recording.Store) {
 	t.Helper()
 	f, cs, casts := agentCastFixture(t, kind, append([]func(*Config){func(c *Config) { c.Runner, c.Broker = rr, &raceBroker{} }}, shape...)...)
 	f.mem.rows[f.run.ID] = store.RunOutput{RunID: f.run.ID, Source: "stdout", ClaimedAt: time.Now().Add(-time.Hour)}
-	cs.required = true
+	cs.required, cs.owed = true, true
 	return f, cs, casts
 }
 
@@ -70,6 +71,7 @@ func TestAgentCastRecover_RestartMidRunRecordsTheReRead(t *testing.T) {
 	if out := readCast(t, casts, run.ID, agentCastRecoveredSession); !strings.Contains(out, "after the restart") || !strings.Contains(out, "<secret-hidden>") {
 		t.Fatalf("the recovered cast %q, want the whole re-read, masked", out)
 	}
+	waitFor(t, "the obligation to clear", func() bool { return !cs.owing() })
 	if rows := castRows(t, f, agentCastSession); len(rows) != 0 || cs.marked() != "" {
 		t.Fatalf("agent rows %v, mark %q: want no dispatch cast and the run recorded", rows, cs.marked())
 	}
@@ -155,8 +157,8 @@ func TestAgentCastRecover_NothingToReadMarksTheRunAndKeepsItRunning(t *testing.T
 			if row["outcome"] != "failure" || row["reason"] != tc.reason {
 				t.Fatalf("row %v, want a failure row with reason %q", row, tc.reason)
 			}
-			if cs.marked() != types.NotRecordedRunnerDeclined {
-				t.Fatalf("not_recorded = %q, want runner_declined", cs.marked())
+			if cs.marked() != types.NotRecordedRunnerDeclined || cs.owing() {
+				t.Fatalf("not_recorded = %q, owed %v, want runner_declined and the obligation settled", cs.marked(), cs.owing())
 			}
 			if _, err := casts.OpenCast(context.Background(), recording.CastKey(f.run.ID.String(), agentCastRecoveredSession)); err == nil {
 				t.Fatal("a cast was stored for a re-read that gave nothing")
@@ -186,7 +188,7 @@ func TestAgentCastRecover_ALaterSaveClearsTheMark(t *testing.T) {
 	if row := waitCastRow(t, f, agentCastRecoveredSession); row["outcome"] != "success" {
 		t.Fatalf("row %v, want B's save", row)
 	}
-	waitFor(t, "B's save to clear the mark", func() bool { return cs.marked() == "" })
+	waitFor(t, "B's save to clear the mark", func() bool { return cs.marked() == "" && !cs.owing() })
 	if out := readCast(t, casts, f.run.ID, agentCastRecoveredSession); !strings.Contains(out, "read on B") {
 		t.Fatalf("cast %q, want B's re-read", out)
 	}

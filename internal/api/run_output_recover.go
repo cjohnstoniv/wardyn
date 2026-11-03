@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"time"
 
@@ -137,7 +138,7 @@ func (s *Server) openRecoveryTail(run types.AgentRun) *tailWriter {
 // runs the call on its own goroutine so a runner that ignores ctx cannot hold
 // the finaliser past the bound: whatever it writes afterwards reaches a sealed
 // tail and is dropped.
-func (s *Server) readSubstrateOutput(ctx context.Context, rec runner.OutputRecoverer, ref string, w *tailWriter) error {
+func (s *Server) readSubstrateOutput(ctx context.Context, rec runner.OutputRecoverer, ref string, w io.Writer) error {
 	ctx, cancel := context.WithTimeout(ctx, s.outputRecoverWait())
 	defer cancel()
 	done := make(chan error, 1)
@@ -155,17 +156,8 @@ func (s *Server) readSubstrateOutput(ctx context.Context, rec runner.OutputRecov
 // other error leaves the tail, and its drain ends in that error, so the row is
 // incomplete; the reason is then "".
 func (s *Server) noteRecoveryEnd(runID uuid.UUID, e *execOutputTail, err error) string {
-	reason := ""
-	switch {
-	case errors.Is(err, runner.ErrOutputUnrecoverable):
-		reason = "unrecoverable"
-	case errors.Is(err, runner.ErrSandboxGone):
-		reason = "sandbox_gone"
-	case errors.Is(err, runner.ErrRunnerOffline):
-		// A runner that cannot be reached read nothing: a gap, which a later
-		// recovery (a recording's, on the replica that holds the runner) replaces.
-		reason = "runner_offline"
-	case err != nil:
+	reason := recoveryGapReason(err)
+	if reason == "" && err != nil {
 		slog.Warn("wardynd: could not recover a run's output from the substrate; the row will be incomplete",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
@@ -176,6 +168,22 @@ func (s *Server) noteRecoveryEnd(runID uuid.UUID, e *execOutputTail, err error) 
 	e.gapReason = reason
 	e.fmu.Unlock()
 	return reason
+}
+
+// recoveryGapReason is a recovery read's error as the gap it leaves: "" for none (a read that ended, or
+// one cut short, whose bytes stand).
+func recoveryGapReason(err error) string {
+	switch {
+	case errors.Is(err, runner.ErrOutputUnrecoverable):
+		return "unrecoverable"
+	case errors.Is(err, runner.ErrSandboxGone):
+		return "sandbox_gone"
+	case errors.Is(err, runner.ErrRunnerOffline):
+		// A runner that cannot be reached read nothing: a gap, which a later
+		// recovery (a recording's, on the replica that holds the runner) replaces.
+		return "runner_offline"
+	}
+	return ""
 }
 
 // recoveryDrainErr is the error a recovery's drain ends with: none for a gap

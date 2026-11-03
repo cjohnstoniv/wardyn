@@ -125,18 +125,19 @@ func outputGapMarker(skipped int64) string {
 // EndDrain must not block (runner.OutputDrainer), and the drain may end only
 // once the copy's bytes are through the masker, or the finisher would seal ahead
 // of them: the end waits for that on its own goroutine. The agent output cast is
-// sealed before the drain ends (its pessimistic mark is written then) and saved
-// after, so its store wait never holds the finisher.
+// sealed before the drain ends and settled after, so its store wait never holds
+// the finisher; its obligation, stored at dispatch, outlives a process that dies
+// in between (sweepAgentCasts).
 func (w *tailWriter) EndDrain(err error) {
 	go func() {
 		w.t.in.flush()
-		var save func()
+		var end func() error
 		if w.cast != nil {
-			save = w.cast.seal()
+			end = w.cast.seal()
 		}
 		w.t.endDrain(err)
-		if save != nil {
-			save()
+		if end != nil {
+			_ = end() // logged where it failed; the obligation stays for the sweep
 		}
 	}()
 }
@@ -642,6 +643,9 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 			s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardyn/run-output-sweeper", "run.output.retention.sweep",
 				"run_outputs", "success", mustJSON(map[string]any{"deleted": n, "retention_days": int(retention.Hours() / 24)})))
 		}
+	}
+	if err := s.sweepAgentCasts(ctx); err != nil && firstErr == nil {
+		firstErr = err
 	}
 	if s.cfg.RunOutputPersistOff {
 		return firstErr

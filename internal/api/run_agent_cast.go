@@ -6,6 +6,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -24,16 +26,18 @@ import (
 // session's is, and masked against the run's registry the same way (liveMaskWriter).
 //
 // Whether such a run counts as recorded is decided once, at dispatch, from the tail it actually got
-// (recordMacOSAgent): with its cast it is recorded; with none it is marked runner_declined and follows
-// the organisation's required rule, as any target that cannot record does.
+// (recordMacOSAgent): with its cast, and the cast's obligation stored on the run
+// (agent_runs.agent_cast_owed_at), it is recorded; otherwise it is marked runner_declined and follows the
+// organisation's required rule, as any target that cannot record does.
 //
-// The cast lives in this process's memory until the copy ends. A process that then finalises or adopts
-// the run re-reads the runner's copy into a fresh tail (openRecoveryTail) and records that too, as
-// <run>~agent-recovered, so the two never replace each other. Where a re-read gives nothing, or a cast's
-// save fails, the run is marked runner_declined with a session.recording.write failure row saying why
-// (declineAgentOutput); a running run is never stopped for it. A cast about to be saved marks the run so
-// first (agentCast.seal), so a process that dies mid-save leaves the mark. A cast of either session saved
-// later clears it.
+// The obligation, not the run's output row, is what ends honestly. A stored cast of the run clears it
+// (and any runner_declined mark). Where none can be stored, the run is marked runner_declined with a
+// session.recording.write failure row saying why, then the obligation is cleared (declineAgentOutput); a
+// running run is never stopped for it. A process that finalises or adopts the run re-reads the runner's
+// copy and records that as <run>~agent-recovered, so the two never replace each other; and the output
+// sweeper settles every terminal run still owing a cast (sweepAgentCasts), so a process that dies before
+// its save never leaves a run marked recorded with no cast. A store error leaves the obligation for the
+// next sweep.
 
 const (
 	agentCastSession          = "agent"
@@ -58,9 +62,10 @@ func (s *Server) startRunRecording(ctx context.Context, run *types.AgentRun, spe
 }
 
 // recordMacOSAgent settles whether a macOS VM task run marked recorded is: it is when its output tail is
-// open and its agent output cast attached to it. Otherwise (no tail, by any of openExecOutput's exits, or
-// no cast) it is marked runner_declined, which fails it under a requirement with
-// macOSAgentOutputRequiredMsg and is stored otherwise (keepOrHoldNotRecorded). Any other run, an
+// open, its agent output cast attached to it and the cast's obligation stored. Otherwise (no tail, by any
+// of openExecOutput's exits, no cast, or an obligation that could not be stored) it is marked
+// runner_declined, which fails it under a requirement with macOSAgentOutputRequiredMsg and is stored
+// otherwise (keepOrHoldNotRecorded). Any other run, an
 // interactive one (it has no agent exec, and every terminal byte passes an organisation-recorded
 // session), and a run already marked are left as they are.
 func (s *Server) recordMacOSAgent(ctx context.Context, run *types.AgentRun, spec *runner.SandboxSpec, interactive bool) bool {
@@ -68,30 +73,52 @@ func (s *Server) recordMacOSAgent(ctx context.Context, run *types.AgentRun, spec
 		return true
 	}
 	if tw, ok := spec.ExecOutput.(*tailWriter); ok && s.attachAgentCast(*run, tw, agentCastSession) {
-		return true
+		if s.oweAgentCast(ctx, run.ID) {
+			return true
+		}
+		tw.cast = nil
 	}
 	run.NotRecorded = types.NotRecordedRunnerDeclined
 	return s.keepOrHoldNotRecorded(ctx, run, macOSAgentOutputRequiredMsg)
 }
 
-// agentCastOwed is whether the organisation records run's agent output: a macOS VM task run above off,
-// marked recorded or runner_declined (which a cast saved later clears), that does not exist to print a
-// credential (runIsUnrecordable), on a deployment that keeps recordings.
-func (s *Server) agentCastOwed(run types.AgentRun) bool {
+// agentOutputRecorded is whether the organisation records run's agent output: a macOS VM task run above
+// off, marked recorded or runner_declined (which a cast saved later clears), that does not exist to print
+// a credential (runIsUnrecordable), on a deployment that keeps recordings.
+func (s *Server) agentOutputRecorded(run types.AgentRun) bool {
 	return s.cfg.RecordingStore != nil && run.MachineKind.IsMacOSVM() && !run.Interactive && !runIsUnrecordable(run) &&
 		run.RecordingLevel != types.RecordingOff && (run.NotRecorded == "" || run.NotRecorded == types.NotRecordedRunnerDeclined)
 }
 
 // attachAgentCast attaches run's agent output cast, named session, to tw, and reports whether it did
-// (agentCastOwed). It is called before tw is handed to a runner.
+// (agentOutputRecorded). It is called before tw is handed to a runner.
 func (s *Server) attachAgentCast(run types.AgentRun, tw *tailWriter, session string) bool {
-	if tw == nil || !s.agentCastOwed(run) {
+	if tw == nil || !s.agentOutputRecorded(run) {
 		return false
 	}
+	tw.cast = s.newAgentCast(run, session)
+	return true
+}
+
+func (s *Server) newAgentCast(run types.AgentRun, session string) *agentCast {
 	buf := &capBuffer{}
 	cast := recording.NewCastWriter(buf, 0, 0, s.cfg.Now().UTC())
 	mw := &liveMaskWriter{reg: s.cfg.MaskRegistry, runID: run.ID, dst: cast, guard: s.maskGuard(run.ID)}
-	tw.cast = &agentCast{s: s, run: run, session: session, mw: mw, pipe: newMaskPipe(mw), cast: cast, buf: buf}
+	return &agentCast{s: s, run: run, session: session, mw: mw, pipe: newMaskPipe(mw), cast: cast, buf: buf}
+}
+
+// oweAgentCast stores run's agent cast obligation, and reports whether it did: a run whose obligation
+// cannot be stored cannot promise its recording.
+func (s *Server) oweAgentCast(ctx context.Context, runID uuid.UUID) bool {
+	st, ok := s.cfg.Store.(store.RunAgentCastStore)
+	if !ok {
+		return false
+	}
+	if err := st.SetRunAgentCastOwed(ctx, runID); err != nil {
+		slog.ErrorContext(ctx, "wardynd: store a run's agent output recording obligation; the run is not recorded",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+		return false
+	}
 	return true
 }
 
@@ -124,21 +151,18 @@ func (c *agentCast) decline(reason string) {
 	c.mu.Unlock()
 }
 
-// seal ends the cast once, after its copy ended (tailWriter.EndDrain), and returns its save for the caller
-// to run once the tail's drain is released; nil when there is nothing to save. A cast with no output is
-// not saved and the run stays recorded: an agent that printed nothing left nothing to record. A cast to
-// save first marks the run runner_declined, durably, before the drain is released: the finisher may then
-// commit the run's output row, after which no recovery runs, so a process that dies before the save leaves
-// that mark rather than a run marked recorded with no cast. The save clears it, or keeps it on its
-// failure row.
-func (c *agentCast) seal() func() {
-	var save func()
-	c.once.Do(func() { save = c.take() })
-	return save
+// seal ends the cast once, after its copy ended (tailWriter.EndDrain), and returns what settles it, for
+// the caller to run once the tail's drain is released; nil when another call sealed it. A cast with no
+// output is not saved and its obligation is cleared with the run recorded: an agent that printed nothing
+// left nothing to record. The obligation is durable, so nothing need be written before the release.
+func (c *agentCast) seal() func() error {
+	var end func() error
+	c.once.Do(func() { end = c.take() })
+	return end
 }
 
-// take flushes and copies what the cast holds, and settles what seal does with it.
-func (c *agentCast) take() func() {
+// take flushes and copies what the cast holds, and returns what settles it.
+func (c *agentCast) take() func() error {
 	ctx := context.Background()
 	c.pipe.flush()
 	c.mw.mu.Lock()
@@ -152,20 +176,16 @@ func (c *agentCast) take() func() {
 	c.mu.Unlock()
 	switch {
 	case declined != "":
-		c.s.declineAgentOutput(ctx, c.run, declined)
-		return nil
+		return func() error { return c.s.declineAgentOutput(ctx, c.run, declined) }
 	case !had:
-		return nil
+		return func() error { return c.s.settleAgentCast(ctx, c.run.ID) }
 	}
-	run := c.run
-	run.NotRecorded = types.NotRecordedRunnerDeclined
-	c.s.keepRunNotRecorded(ctx, run)
-	return func() { c.save(ctx, snap, truncated) }
+	return func() error { return c.save(ctx, snap, truncated) }
 }
 
-// save stores the cast with its session.recording.write row: a success clears the run's runner_declined
-// mark, a failure keeps it.
-func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool) {
+// save stores the cast with its session.recording.write row: a success clears the run's obligation and
+// any runner_declined mark; a failure leaves the run unrecorded (declineAgentOutput, save_failed).
+func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool) error {
 	s, runID := c.s, c.run.ID
 	key := recording.CastKey(runID.String(), c.session)
 	saveCtx, cancel := context.WithTimeout(ctx, sessionRecordingSaveWait)
@@ -184,38 +204,134 @@ func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool) {
 	outcome := "success"
 	if err != nil {
 		outcome, data["error"] = "failure", err.Error()
-	} else {
-		s.clearAgentOutputDeclined(ctx, runID)
 	}
 	s.recordStreamAudit(ctx, c.run.SandboxRef, s.auditEvent(&runID, types.ActorSystem, "wardynd", "session.recording.write",
 		key, outcome, mustJSON(data)))
+	if err != nil {
+		return s.declineAgentOutput(ctx, c.run, "save_failed")
+	}
+	return s.settleAgentCast(ctx, runID)
 }
 
-// declineAgentOutput is a macOS VM task run marked recorded whose agent output a re-read could not
-// record, reason saying what it found: the run is marked runner_declined, and a session.recording.write
-// failure row for the agent session says why. The run is not stopped, under a requirement too: it was
-// admitted recorded, and a recording lost to a restart is a gap on every kind, not a kill.
-func (s *Server) declineAgentOutput(ctx context.Context, run types.AgentRun, reason string) {
-	if run.NotRecorded != "" || !s.agentCastOwed(run) {
-		return
+// declineAgentOutput is a macOS VM task run that still owes its agent output cast and will get none,
+// reason saying why: the run is marked runner_declined, a session.recording.write failure row for the
+// agent session says why, then the obligation is cleared, in that order, so an error at any step leaves
+// the obligation for the next sweep. A run that owes no cast (it has one, or was settled) is left as it
+// is. The run is not stopped, under a requirement too: it was admitted recorded, and a recording lost to
+// a restart is a gap on every kind, not a kill.
+func (s *Server) declineAgentOutput(ctx context.Context, run types.AgentRun, reason string) error {
+	st, ok := s.cfg.Store.(store.RunAgentCastStore)
+	if !ok || !s.agentOutputRecorded(run) {
+		return nil
 	}
-	run.NotRecorded = types.NotRecordedRunnerDeclined
-	s.keepRunNotRecorded(ctx, run)
+	declined, err := st.DeclineRunAgentCast(ctx, run.ID)
+	if err != nil || !declined {
+		return agentCastStoreErr(ctx, run.ID, "mark a run not recorded for want of its agent output", err)
+	}
 	key := recording.CastKey(run.ID.String(), agentCastSession)
 	s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "session.recording.write",
 		key, "failure", mustJSON(map[string]any{"session": agentCastSession, "key": key, "reason": reason})))
+	return agentCastStoreErr(ctx, run.ID, "clear a run's agent output obligation", st.ClearRunAgentCastOwed(ctx, run.ID, false))
 }
 
-// clearAgentOutputDeclined clears not_recorded: runner_declined once an agent output cast for the run is
-// stored: the run now has the recording the mark said it lacked. Best-effort, like the mark.
-func (s *Server) clearAgentOutputDeclined(ctx context.Context, runID uuid.UUID) {
-	st, ok := s.cfg.Store.(interface {
-		ClearRunDeclined(context.Context, uuid.UUID) (bool, error)
-	})
+// settleAgentCast clears a run's agent output obligation with the run recorded: a cast of it is stored,
+// or there was nothing to record. Any runner_declined mark goes with it.
+func (s *Server) settleAgentCast(ctx context.Context, runID uuid.UUID) error {
+	st, ok := s.cfg.Store.(store.RunAgentCastStore)
 	if !ok {
-		return
+		return nil
 	}
-	if _, err := st.ClearRunDeclined(ctx, runID); err != nil {
-		slog.WarnContext(ctx, "wardynd: clear a run's runner_declined after its agent output was recorded", slog.String("run_id", runID.String()), slog.Any("err", err))
+	return agentCastStoreErr(ctx, runID, "clear a run's agent output obligation after its cast", st.ClearRunAgentCastOwed(ctx, runID, true))
+}
+
+// agentCastStoreErr logs a failed obligation write, which the next sweep retries, and returns it.
+func agentCastStoreErr(ctx context.Context, runID uuid.UUID, what string, err error) error {
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: "+what+"; the next sweep retries", slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
+	return err
+}
+
+// agentCastSweepAge is how long a terminal run's state must have stood before the sweep settles its
+// obligation: longer than a cast's save may take (sessionRecordingSaveWait), so a save in flight is
+// never raced.
+const agentCastSweepAge = runOutputPendingStale
+
+// sweepAgentCasts settles every terminal run that still owes its agent output cast, whatever its output
+// row says: a cast already stored settles it; else the runner's copy is re-read into an agent-recovered
+// cast; else the run is marked runner_declined with the failure row. A run this process still holds a
+// tail for is left to that tail. The first error is returned; the obligation stays for the next sweep.
+func (s *Server) sweepAgentCasts(ctx context.Context) error {
+	st, ok := s.cfg.Store.(store.RunAgentCastStore)
+	if !ok || s.cfg.RecordingStore == nil {
+		return nil
+	}
+	ids, err := st.ListRunsAgentCastOwed(ctx, agentCastSweepAge, 200)
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	for _, id := range ids {
+		if s.tailFor(id) != nil {
+			continue
+		}
+		if err := s.sweepAgentCast(ctx, st, id); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (s *Server) sweepAgentCast(ctx context.Context, st store.RunAgentCastStore, id uuid.UUID) error {
+	run, err := s.cfg.Store.GetRun(ctx, id)
+	if err != nil {
+		return err
+	}
+	stored, err := s.agentCastStored(ctx, id)
+	switch {
+	case err != nil:
+		return err
+	case stored || !s.agentOutputRecorded(run):
+		return st.ClearRunAgentCastOwed(ctx, id, stored)
+	}
+	rec, ok := s.cfg.Runner.(runner.OutputRecoverer)
+	switch {
+	case !s.maskCovered(ctx, id):
+		return s.declineAgentOutput(ctx, run, "mask_uncovered")
+	case !ok || run.SandboxRef == "":
+		return s.declineAgentOutput(ctx, run, "no_tail")
+	}
+	c := s.newAgentCast(run, agentCastRecoveredSession)
+	if reason := recoveryGapReason(s.readSubstrateOutput(ctx, rec, run.SandboxRef, castCopy{c})); reason != "" {
+		c.decline(reason)
+	}
+	return c.seal()()
+}
+
+// agentCastStored is whether either agent output cast of the run is in the recording store.
+func (s *Server) agentCastStored(ctx context.Context, runID uuid.UUID) (bool, error) {
+	for _, session := range []string{agentCastSession, agentCastRecoveredSession} {
+		_, _, err := s.cfg.RecordingStore.StatAndTail(ctx, recording.CastKey(runID.String(), session), 0)
+		switch {
+		case err == nil:
+			return true, nil
+		case !errors.Is(err, recording.ErrNotFound):
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+// castCopy is a sweep's re-read of the runner's copy straight into an agent cast, with no output tail:
+// the run's output row is already settled. A gapped copy carries the marker, as a tail's does.
+type castCopy struct{ c *agentCast }
+
+func (w castCopy) Write(p []byte) (int, error) {
+	w.c.write(p)
+	return len(p), nil
+}
+
+func (w castCopy) OutputGap(skipped int64) {
+	w.c.gapBytes.Store(skipped)
+	w.c.write([]byte(outputGapMarker(skipped)))
 }
