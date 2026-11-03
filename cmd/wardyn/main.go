@@ -367,6 +367,7 @@ func rootCmd() *cobra.Command {
 		runCmd(client),
 		attachCmd(client),
 		windowCmd(client),
+		machinesCmd(client),
 		approvalCmd(client),
 		auditCmd(client),
 		policyCmd(client),
