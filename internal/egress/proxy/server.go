@@ -229,37 +229,10 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		return nil, fmt.Errorf("build injector: %w", err)
 	}
 
-	// Build the OPTIONAL outbound content-inspection engine, off unless the
-	// policy carries an llm_inspection block. Register operator-declared
-	// workspace secret values in the proxy-global mask registry FIRST so they
-	// (a) form the scan corpus and (b) are masked from decision-log output
-	// defense-in-depth — then snapshot (buildInjector already registered any
-	// injected credentials above). A global kill-switch
-	// (WARDYN_LLM_SCAN=off) is applied upstream by clearing cfg.Policy.LLMInspection.
-	var scanner *contentscan.Engine
-	var deferred *deferredScan
-	if spec := cfg.Policy.LLMInspection; spec != nil {
-		for _, v := range spec.WorkspaceSecretValues {
-			procMaskFor(hooks.maskKey, []byte(v))
-		}
-		corpus := procRegistry.Snapshot(hooks.maskKey)
-		eng, eerr := contentscan.NewEngine(*spec, corpus)
-		if eerr != nil {
-			_ = sink.close(context.Background())
-			return nil, fmt.Errorf("build content scanner: %w", eerr)
-		}
-		scanner = eng
-		// A gateway route that inspects prompts itself still gets the run's own
-		// secret values checked, from the same corpus (gateway_identity.go).
-		if deferred, eerr = deferredScanFor(eng, *spec, corpus, cfg.GatewayIdentity); eerr != nil {
-			_ = sink.close(context.Background())
-			return nil, fmt.Errorf("build the secret-value scanner for gateway routes: %w", eerr)
-		}
-		if eng == nil && spec.Mode != "" && spec.Mode != "off" {
-			// Configured to inspect but the effective secret corpus is empty —
-			// scanning is a no-op. Surface it so the operator is not misled.
-			slog.WarnContext(ctx, "wardyn-proxy: llm_inspection configured but no effective secret corpus — scanning disabled", slog.String("mode", spec.Mode))
-		}
+	scanner, deferred, err := buildScanners(ctx, cfg, hooks.maskKey)
+	if err != nil {
+		_ = sink.close(context.Background())
+		return nil, err
 	}
 
 	// TLS-MITM CA: build whenever the per-run PEMs are provided. MITM serves
@@ -604,4 +577,37 @@ func resolveControlPlaneIPs(rawURL string) ([]net.IP, bool) {
 		return nil, false
 	}
 	return ips, true
+}
+
+// buildScanners builds the OPTIONAL outbound content-inspection engine, off unless
+// the policy carries an llm_inspection block, and the cut engine a gateway route
+// that inspects prompts itself still runs (gateway_identity.go). It registers
+// operator-declared workspace secret values in the proxy-global mask registry
+// FIRST so they (a) form the scan corpus and (b) are masked from decision-log
+// output defense-in-depth — then snapshots (buildInjector already registered any
+// injected credentials). A global kill-switch (WARDYN_LLM_SCAN=off) is applied
+// upstream by clearing cfg.Policy.LLMInspection.
+func buildScanners(ctx context.Context, cfg *Config, maskKey uuid.UUID) (*contentscan.Engine, *deferredScan, error) {
+	spec := cfg.Policy.LLMInspection
+	if spec == nil {
+		return nil, nil, nil
+	}
+	for _, v := range spec.WorkspaceSecretValues {
+		procMaskFor(maskKey, []byte(v))
+	}
+	corpus := procRegistry.Snapshot(maskKey)
+	eng, err := contentscan.NewEngine(*spec, corpus)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build content scanner: %w", err)
+	}
+	deferred, err := deferredScanFor(eng, *spec, corpus, cfg.GatewayIdentity)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build the secret-value scanner for gateway routes: %w", err)
+	}
+	if eng == nil && spec.Mode != "" && spec.Mode != "off" {
+		// Configured to inspect but the effective secret corpus is empty —
+		// scanning is a no-op. Surface it so the operator is not misled.
+		slog.WarnContext(ctx, "wardyn-proxy: llm_inspection configured but no effective secret corpus — scanning disabled", slog.String("mode", spec.Mode))
+	}
+	return eng, deferred, nil
 }
