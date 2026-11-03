@@ -475,6 +475,28 @@ func TestLinuxVMSandbox(t *testing.T) {
 		}
 	})
 
+	// The -L and UI-relay door: the guest has no socat, so a forward execs the agent's own forward mode,
+	// which dials 127.0.0.1:<port> in the guest and takes nothing else.
+	t.Run("ForwardDialsGuestLoopbackOnly", func(t *testing.T) {
+		const agent = guestagent.LinuxAgentPath
+		for _, arg := range []string{"127.0.0.1:7777", "::1", "127.0.0.2", "0.0.0.0", "localhost", "0", "65536", "http"} {
+			if code, o := run(t, d, sb.Ref, agent+" forward "+arg+" </dev/null"); code != 2 {
+				t.Errorf("forward %q = %d %q, want 2 (refused before any dial)", arg, code, o)
+			}
+		}
+		if code, o := run(t, d, sb.Ref, agent+" forward 7778 </dev/null"); code != 1 {
+			t.Errorf("forward to a port with no listener = %d %q, want 1", code, o)
+		}
+		// One-shot listener on the guest's loopback, as the agent user: reads a line, answers, closes.
+		const listener = `perl -e 'use Socket; socket(S,PF_INET,SOCK_STREAM,0); setsockopt(S,SOL_SOCKET,SO_REUSEADDR,1); ` +
+			`bind(S,sockaddr_in(7777,inet_aton("127.0.0.1"))) or die; listen(S,5); accept(C,S); select(C); $|=1; ` +
+			`my $l=<C>; print C "echo:$l"; close C'`
+		script := "(" + listener + " >/dev/null 2>&1 &); sleep 1; printf 'ping\\n' | " + agent + " forward 7777"
+		if code, o := run(t, d, sb.Ref, script); code != 0 || !strings.Contains(o, "echo:ping") {
+			t.Errorf("forward to the guest's loopback listener = %d %q, want 0 and echo:ping", code, o)
+		}
+	})
+
 	// Stop, then nothing of the run is left.
 	if err := d.StopSandbox(ctx, sb.Ref); err != nil {
 		t.Fatal(err)

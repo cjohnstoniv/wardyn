@@ -30,6 +30,13 @@ func main() {
 	if filepath.Base(os.Args[0]) == filepath.Base(guestagent.MacAgentRunPath) {
 		os.Exit(guestagent.AgentRunMain(os.Args[1:]))
 	}
+	// The SSH gateway's `-L` forward and the UI-app relay exec this mode: a VM has no socat.
+	if len(os.Args) > 1 && os.Args[1] == guestagent.ForwardVerb {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		code := guestagent.ForwardMain(ctx, os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
 	out := flag.String("out", "/var/run/wardyn-guest", "directory for detached execs' output (cleared at boot)")
 	plist := flag.String("plist", guestagent.MacAgentPlistPath, "this agent's LaunchDaemon plist, which tools mode may replace")
 	flag.Parse()

@@ -23,6 +23,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
 
 // sshDisplaceGrace is how long a displaced SSH client gets to accept the
@@ -99,6 +100,19 @@ func sshIsSandboxLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// sshRelayArgv is the in-sandbox command that copies its stdio to the sandbox's own
+// 127.0.0.1:<port>: socat in a container, the guest agent's own forward mode in a VM, which has no
+// socat. Callers have already validated the destination and the port.
+func sshRelayArgv(kind types.MachineKind, port int) []string {
+	switch kind {
+	case types.MachineLinuxVM:
+		return guestagent.ForwardArgv(guestagent.LinuxAgentPath, port)
+	case types.MachineMacOSVM:
+		return guestagent.ForwardArgv(guestagent.MacAgentBinaryPath, port)
+	}
+	return []string{"socat", "-", fmt.Sprintf("TCP:127.0.0.1:%d", port)}
 }
 
 // sshExecStreamErrorMessage maps an ExecStream launch failure to the message
@@ -916,7 +930,7 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 }
 
 // handleSSHDirectTCPIP implements `-L` local forwarding: ExecStream of `socat
-// - TCP:127.0.0.1:<port>` inside the sandbox's OWN network namespace (the
+// - TCP:127.0.0.1:<port>` (a VM: the guest agent's forward mode) inside the sandbox's OWN network namespace (the
 // sandbox cannot create egress — L0 structural confinement, invariant 3, is
 // unaffected by this), so the only reachable destination is EVER the
 // sandbox's own loopback regardless of what host the client asked to
@@ -945,7 +959,7 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 	}
 
 	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
-		Argv: []string{"socat", "-", fmt.Sprintf("TCP:127.0.0.1:%d", m.DestPort)},
+		Argv: sshRelayArgv(run.MachineKind, int(m.DestPort)),
 	})
 	if err != nil {
 		s.recordStreamAudit(ctx, run.SandboxRef, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.forward",

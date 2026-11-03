@@ -416,8 +416,7 @@ scp ./local-file <run-id>@<advertise-host>:/home/agent/  -P <port>
 ```
 
 - The gateway runs the sandbox's **own** `/usr/lib/openssh/sftp-server -e` as
-  the subsystem's backing process — no SFTP protocol reimplementation on
-  Wardyn's side.
+  the subsystem's backing process.
 - See [Image contract](#image-contract-byoi) if this 404s.
 - **`wardyn-sync`** runs the same `sftp-server` with `-d <dir>`, after `env` requests `WARDYN_SYNC_DIR` (absolute, under `/home/agent/`, no `..`; default `/home/agent/work`) and `WARDYN_SYNC_DIRECTION` (`push` or `pull`), read on this subsystem only.
 - After each pass the client sends a `wardyn-sync-pass` request, its own account of the pass. Its laptop deletes join the audit row; a complete pass [releases a held agent](#hold-the-agent-for-a-local-folder).
@@ -470,8 +469,7 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
 ```
 
 - reaches port 3000 **inside the sandbox's own network namespace** via
-  `socat`, run the same way sftp is — the sandbox's own binary, no protocol
-  reimplementation.
+  `socat` (a VM: its guest agent's `forward`), the sandbox's own binary.
 - The destination is **restricted to the sandbox's own loopback** (`127.0.0.1` / `::1` / `localhost`).
 - Anything else is refused before any command runs, with a reason, because the sandbox has no other egress to forward to regardless (L0 structural confinement).
 - Invariant 3 is unaffected by this feature: no new network path is opened, forwarding rides inside the existing sandbox network namespace.
@@ -629,13 +627,14 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 
 ## Image contract (BYOI)
 
-- The gateway execs two binaries **inside the sandbox**, by convention, never
-  by reimplementing their protocols:
+- The gateway execs these **inside the sandbox**, never reimplementing their protocols:
 
 | Feature | Binary | Invocation |
 |---|---|---|
 | sftp subsystem | `/usr/lib/openssh/sftp-server` | `sftp-server -e` |
+| sftp, macOS VM | `/usr/libexec/sftp-server` | `sftp-server -e` |
 | `-L` forwarding | `socat` | `socat - TCP:127.0.0.1:<port>` |
+| `-L`, VM | the guest agent | `forward <port>` (`127.0.0.1` only) |
 
 - Wardyn's own build images (`deploy/images/`) carry both.
 - A **Bring-Your-Own-Image**
