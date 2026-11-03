@@ -1305,3 +1305,30 @@ func TestKeptEraseWaitsForAToolsUpdate(t *testing.T) {
 		t.Fatalf("an erase after the update ended: %v, present %v", err, keptExists(dir))
 	}
 }
+
+// The name a kept machine is made with reaches its record, survives its stop, and a resume that names it
+// otherwise renames it.
+func TestKeptMachineNameRoundTrips(t *testing.T) {
+	r, _ := newKeptRig(t)
+	ctx := context.Background()
+	id := uuid.New()
+	dir := r.c.Layout.KeptMachineDir(id.String())
+	for _, name := range []string{"build box", "release box"} {
+		mode := macvm.KeptResume
+		if !keptExists(dir) {
+			mode = macvm.KeptNew
+		}
+		spec := keptSpec(id, mode)
+		spec.KeptMachine.Name = name
+		sb, err := r.d.CreateSandbox(ctx, spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.d.StopSandbox(ctx, sb.Ref); err != nil {
+			t.Fatal(err)
+		}
+		if rec := readKept(t, dir, id); rec.Name != name || rec.ActiveRun != "" {
+			t.Fatalf("%s %q: the stopped machine's record %+v", mode, name, rec)
+		}
+	}
+}
