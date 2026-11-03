@@ -33,6 +33,12 @@ func SetWindowReleaseHook(f func()) (restore func()) {
 	return func() { windowReleaseHook.Store(old) }
 }
 
+// SetWindowWaitHook runs f each time an open starts waiting for an ending window's slot. restore undoes it.
+func SetWindowWaitHook(f func()) (restore func()) {
+	old := windowWaitHook.Swap(&f)
+	return func() { windowWaitHook.Store(old) }
+}
+
 // ErrConsoleUnreadable is errConsoleUnreadable.
 var ErrConsoleUnreadable = errConsoleUnreadable
 

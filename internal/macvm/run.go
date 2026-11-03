@@ -498,6 +498,9 @@ func (r *runner) openWindow(grant, title string, going func() bool) (*windowSess
 				defer t.Stop()
 				expired = t.C
 			}
+			if h := windowWaitHook.Load(); h != nil {
+				(*h)()
+			}
 			select {
 			case <-freed:
 				continue
@@ -520,6 +523,11 @@ func (r *runner) openWindow(grant, title string, going func() bool) (*windowSess
 			close(r.winFreed)
 			r.mu.Unlock()
 		})
+	}
+	if expired != nil && going != nil && going() {
+		// This opener left while it waited: give the slot back and open nothing. Nobody reads the reply.
+		release()
+		return nil, &WindowRefusal{WindowCodeOpen, WindowAlreadyOpenSentence}
 	}
 	scr := r.o.Window
 	if scr == nil {

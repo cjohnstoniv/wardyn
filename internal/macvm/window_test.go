@@ -419,15 +419,17 @@ func TestWindowReopenWaitsForAnEndingWindow(t *testing.T) {
 	if _, err := first.Window(context.Background(), "grant-1", ""); err != nil {
 		t.Fatal(err)
 	}
+	waiting := watchWait(t)
 	_ = first.Close()
 	recvClosed(t, reached, "the first window's hold to end")
 	second := w.client(t)
 	got := make(chan error, 1)
 	go func() { _, err := second.Window(context.Background(), "grant-2", ""); got <- err }()
+	recvClosed(t, waiting, "the reopen to wait for the slot")
 	select {
 	case err := <-got:
 		t.Fatalf("the reopen answered %v while the first window still held its slot", err)
-	case <-time.After(200 * time.Millisecond):
+	default:
 	}
 	let()
 	select {
@@ -440,6 +442,50 @@ func TestWindowReopenWaitsForAnEndingWindow(t *testing.T) {
 	}
 	if w.scr.opens() != 2 || w.scr.mostOpen() != 1 {
 		t.Fatalf("%d windows opened, at most %d at once", w.scr.opens(), w.scr.mostOpen())
+	}
+}
+
+// watchWait signals each time an open starts waiting for an ending window's slot.
+func watchWait(t *testing.T) <-chan struct{} {
+	t.Helper()
+	ch := make(chan struct{}, 8)
+	t.Cleanup(macvm.SetWindowWaitHook(func() {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}))
+	return ch
+}
+
+// An opener that leaves while it waits gets no window: the slot is given back and the next open takes it.
+func TestWindowReopenThatLeavesWhileWaitingOpensNothing(t *testing.T) {
+	w := startWindowRun(t, true, nil)
+	t.Cleanup(macvm.SetWindowReleaseWait(time.Minute))
+	reached, let := holdRelease(t)
+	waiting := watchWait(t)
+	first := w.client(t)
+	if _, err := first.Window(context.Background(), "grant-1", "first"); err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+	recvClosed(t, reached, "the first window's hold to end")
+	second := w.client(t)
+	got := make(chan error, 1)
+	go func() { _, err := second.Window(context.Background(), "grant-2", "second"); got <- err }()
+	recvClosed(t, waiting, "the reopen to wait for the slot")
+	_ = second.Close()
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the closed opener's call never returned")
+	}
+	let()
+	if _, err := w.client(t).Window(context.Background(), "grant-3", "third"); err != nil {
+		t.Fatalf("an open after the leaver = %v", err)
+	}
+	if n := w.scr.opens(); n != 2 || w.scr.texts[1].Title != "third" || w.scr.mostOpen() != 1 {
+		t.Fatalf("%d windows opened (%+v), at most %d at once", n, w.scr.texts, w.scr.mostOpen())
 	}
 }
 

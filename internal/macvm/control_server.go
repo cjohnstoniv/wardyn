@@ -213,6 +213,9 @@ var windowReleaseWait = func() *atomic.Int64 {
 // windowReleaseHook runs once a window's hold has ended, before it is closed and its slot freed; tests hold it.
 var windowReleaseHook atomic.Pointer[func()]
 
+// windowWaitHook runs each time an open starts waiting for an ending window's slot; tests watch it.
+var windowWaitHook atomic.Pointer[func()]
+
 var windowGrantRE = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
 // windowTitleMax bounds the title a caller can set.
