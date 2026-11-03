@@ -684,7 +684,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 	created = true
-	s.keptMachineUp(ctx, run, kept, sb.KeptScrub)
+	s.keptMachineUp(ctx, run, kept, sb)
 
 	// Drives attached — a no-op for the runs (most of them) that carry none.
 	// See auditDriveMount.

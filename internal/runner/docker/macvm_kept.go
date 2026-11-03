@@ -880,3 +880,17 @@ func keptBootScrub(spec runner.SandboxSpec, res guestagent.InitResult) *runner.K
 	s := runner.KeptScrub(*res.Scrub)
 	return &s
 }
+
+// keptBootBase is the base spec's kept machine's record names after this run's boot (for a fresh start,
+// the clone resetKept made). Nil for a run with no kept machine, or a record this boot did not write.
+func (c *MacVMConfig) keptBootBase(spec runner.SandboxSpec) *runner.KeptBase {
+	k := spec.KeptMachine
+	if k == nil {
+		return nil
+	}
+	rec, err := macvm.ReadKept(c.keptDir(k.ID), k.ID.String())
+	if err != nil || rec.ActiveRun != spec.RunID.String() || rec.BasePreparedAt.IsZero() {
+		return nil
+	}
+	return &runner.KeptBase{Name: rec.Base, PreparedAt: rec.BasePreparedAt}
+}

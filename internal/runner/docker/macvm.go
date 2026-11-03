@@ -571,7 +571,8 @@ func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runn
 	d.vms.Store(ref, v)
 	d.keepExecOutput(ref, spec.ExecOutput)
 	return runner.Sandbox{Ref: ref, Driver: driverName, EnforcedClass: types.CC3, Machine: machine, SignIns: signIns,
-		KeychainTrust: macKeychainTrust(res), DesktopForcedViewOnly: st.DesktopForcedViewOnly, KeptScrub: keptBootScrub(spec, res)}, nil
+		KeychainTrust: macKeychainTrust(res), DesktopForcedViewOnly: st.DesktopForcedViewOnly, KeptScrub: keptBootScrub(spec, res),
+		KeptBase: c.keptBootBase(spec)}, nil
 }
 
 // makeRunDir creates a run's directory, new: a directory already there (another run's whose id shares

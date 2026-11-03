@@ -314,6 +314,28 @@ func TestKeptMachineResumeBootsTheKeptDisk(t *testing.T) {
 	}
 }
 
+// A fresh start reports the base its reset cloned, as the machine's record says after this boot; a record
+// this boot did not write reports nothing.
+func TestKeptFreshStartReportsTheClonesOwnBase(t *testing.T) {
+	r, _ := newKeptRig(t)
+	id := uuid.New()
+	dir := keptMachine(t, r, id)
+	spec := keptSpec(id, macvm.KeptFresh)
+	sb, err := r.d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.d.StopSandbox(context.Background(), sb.Ref) }()
+	rec := readKept(t, dir, id)
+	if sb.KeptBase == nil || sb.KeptBase.Name != rec.Base || !sb.KeptBase.PreparedAt.Equal(rec.BasePreparedAt) || rec.BasePreparedAt.IsZero() {
+		t.Fatalf("reported %+v, record %+v", sb.KeptBase, rec)
+	}
+	other := keptSpec(id, macvm.KeptResume)
+	if got := r.c.keptBootBase(other); got != nil {
+		t.Fatalf("a record another boot wrote was reported: %+v", got)
+	}
+}
+
 // A resume by another person, or of a machine another registration of this Mac made, is refused as no
 // such machine before any helper starts, and the machine's record is left byte for byte.
 func TestKeptResumeRefusesAnotherOwnersMachine(t *testing.T) {

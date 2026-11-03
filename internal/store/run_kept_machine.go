@@ -22,15 +22,22 @@ import (
 // first): it makes and changes no machine.
 var ErrRunNotDispatching = errors.New("store: the run is no longer starting")
 
+// ErrKeptMachineResetUnconfirmed is a resume, not a fresh start, of a machine whose fresh start was asked
+// of its Mac and never confirmed: its disk may or may not have been reset.
+var ErrKeptMachineResetUnconfirmed = fmt.Errorf("%w: this kept machine's fresh start is unconfirmed", ErrConflict)
+
 // RunKeptMachineStore keeps which kept machine a macOS VM run kept or resumed (agent_runs.kept_machine_id
-// and kept_machine_mode), and a fresh start's reset until its Mac confirms it (kept_machines.reset_run_id).
+// and kept_machine_mode), and a fresh start's reset until its Mac confirms it (kept_machines.reset_run_id,
+// and reset_unconfirmed for an earlier attempt).
 type RunKeptMachineStore interface {
 	// CreateKeptMachineForRun is CreateKeptMachine for run m.RunID, and records it on the run with mode
 	// "new", in one transaction that first locks the run's row: ErrRunNotDispatching unless the run is
 	// still STARTING, so a kill that commits first leaves no machine, and one that commits after finds it.
 	CreateKeptMachineForRun(ctx context.Context, m types.KeptMachine, limit int) (types.KeptMachine, error)
 	// ClaimKeptMachineForRun is BeginKeptMachineUse for run runID, and records it on the run with mode
-	// ("resume" or "fresh"), under the same run lock and errors, plus ErrRunNotDispatching.
+	// ("resume" or "fresh"), under the same run lock and errors, plus ErrRunNotDispatching. A resume of a
+	// machine with an unconfirmed fresh start is refused in the same compare-and-swap, with
+	// ErrKeptMachineResetUnconfirmed; only another fresh start may claim it.
 	ClaimKeptMachineForRun(ctx context.Context, id uuid.UUID, owner string, runID uuid.UUID, mode string) (types.KeptMachine, error)
 	// SetRunKeptMachine records machine id and mode on run runID; a nil id clears both. ErrNotFound when
 	// the run is gone.
@@ -38,11 +45,13 @@ type RunKeptMachineStore interface {
 	// RunKeptMachine returns the machine id and mode run runID records, a nil id for none, or ErrNotFound.
 	RunKeptMachine(ctx context.Context, runID uuid.UUID) (*uuid.UUID, string, error)
 	// MarkKeptMachineResetting records that run runID, which holds machine id, is about to ask its Mac for
-	// a fresh start. ClearKeptMachineResetting takes it back when the Mac was never asked.
+	// a fresh start; an earlier run's mark still there becomes reset_unconfirmed. ClearKeptMachineResetting
+	// takes back run runID's mark when the Mac was never asked, and leaves an earlier attempt's uncertainty.
 	MarkKeptMachineResetting(ctx context.Context, id, runID uuid.UUID) error
 	ClearKeptMachineResetting(ctx context.Context, id, runID uuid.UUID) error
 	// ResetKeptMachineBase records the base run runID's confirmed fresh start of machine id produced, and
-	// clears its reset mark. ErrNotFound unless that run holds the machine with its mark.
+	// clears its reset mark and any earlier uncertainty. ErrNotFound unless that run holds the machine with
+	// its mark.
 	ResetKeptMachineBase(ctx context.Context, id, runID uuid.UUID, base string, preparedAt time.Time) error
 	// KeptMachineResetPending reports whether a fresh start of machine id was asked and never confirmed.
 	KeptMachineResetPending(ctx context.Context, id uuid.UUID) (bool, error)
@@ -137,7 +146,8 @@ func (s PG) ClaimKeptMachineForRun(ctx context.Context, id uuid.UUID, owner stri
 		m, err := scanKeptMachine(q.QueryRow(ctx, `UPDATE kept_machines SET state = 'in_use', run_id = $3, last_used_at = now()
 			WHERE id = $1 AND owner_subject = $2 AND delete_intent_at IS NULL
 			  AND (state = 'kept' OR (state IN ('creating', 'in_use') AND run_id = $3))
-			RETURNING `+keptMachineCols, id, owner, runID))
+			  AND ($4::text = 'fresh' OR (reset_run_id IS NULL AND NOT reset_unconfirmed))
+			RETURNING `+keptMachineCols, id, owner, runID, mode))
 		var pgErr *pgconn.PgError
 		switch {
 		case errors.As(err, &pgErr) && pgErr.Code == "23505":
@@ -150,6 +160,13 @@ func (s PG) ClaimKeptMachineForRun(ctx context.Context, id uuid.UUID, owner stri
 			}
 			if d.Machine.State == types.KeptMachineDeleting || d.By != "" {
 				return ErrKeptMachineDeleting
+			}
+			var pending bool
+			if err := q.QueryRow(ctx, `SELECT `+keptResetPendingExpr+` FROM kept_machines WHERE id = $1`, id).Scan(&pending); err != nil {
+				return fmt.Errorf("store: read kept machine reset: %w", err)
+			}
+			if pending && mode != "fresh" {
+				return ErrKeptMachineResetUnconfirmed
 			}
 			return ErrKeptMachineInUse
 		case err != nil:
@@ -192,7 +209,8 @@ func (s PG) RunKeptMachine(ctx context.Context, runID uuid.UUID) (*uuid.UUID, st
 
 // MarkKeptMachineResetting — see RunKeptMachineStore.
 func (s PG) MarkKeptMachineResetting(ctx context.Context, id, runID uuid.UUID) error {
-	return keptMachineExec(ctx, s, "mark reset", `UPDATE kept_machines SET reset_run_id = $2
+	return keptMachineExec(ctx, s, "mark reset", `UPDATE kept_machines
+		SET reset_unconfirmed = reset_unconfirmed OR reset_run_id IS NOT NULL, reset_run_id = $2
 		WHERE id = $1 AND run_id = $2 AND state = 'in_use'`, id, runID)
 }
 
@@ -204,14 +222,19 @@ func (s PG) ClearKeptMachineResetting(ctx context.Context, id, runID uuid.UUID) 
 
 // ResetKeptMachineBase — see RunKeptMachineStore.
 func (s PG) ResetKeptMachineBase(ctx context.Context, id, runID uuid.UUID, base string, preparedAt time.Time) error {
-	return keptMachineExec(ctx, s, "reset base", `UPDATE kept_machines SET base = $3, base_prepared_at = $4, reset_run_id = NULL
+	return keptMachineExec(ctx, s, "reset base", `UPDATE kept_machines SET base = $3, base_prepared_at = $4, reset_run_id = NULL,
+		reset_unconfirmed = false
 		WHERE id = $1 AND run_id = $2 AND reset_run_id = $2`, id, runID, base, preparedAt)
 }
+
+// keptResetPendingExpr is a fresh start asked of the machine's Mac and never confirmed: this attempt's or
+// an earlier one's.
+const keptResetPendingExpr = `(reset_run_id IS NOT NULL OR reset_unconfirmed)`
 
 // KeptMachineResetPending — see RunKeptMachineStore.
 func (s PG) KeptMachineResetPending(ctx context.Context, id uuid.UUID) (bool, error) {
 	var pending bool
-	err := s.Pool.QueryRow(ctx, `SELECT reset_run_id IS NOT NULL FROM kept_machines WHERE id = $1`, id).Scan(&pending)
+	err := s.Pool.QueryRow(ctx, `SELECT `+keptResetPendingExpr+` FROM kept_machines WHERE id = $1`, id).Scan(&pending)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, ErrNotFound
 	}

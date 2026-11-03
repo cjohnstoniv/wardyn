@@ -12,3 +12,7 @@ ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS kept_machine_mode TEXT;
 -- machine's disk may or may not have been reset, so only another fresh start may use it. Both tables
 -- already have their grants.
 ALTER TABLE kept_machines ADD COLUMN IF NOT EXISTS reset_run_id UUID;
+
+-- An earlier fresh start that was asked of the Mac and never confirmed, kept when a later attempt is
+-- marked and then taken back because its Mac was never asked. Cleared only by a confirmed fresh start.
+ALTER TABLE kept_machines ADD COLUMN IF NOT EXISTS reset_unconfirmed BOOLEAN NOT NULL DEFAULT false;

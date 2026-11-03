@@ -693,6 +693,8 @@ func (s *Server) claimKeptMachine(ctx context.Context, st keptMachineStore, rs r
 	switch {
 	case errors.Is(err, store.ErrRunNotDispatching):
 		return types.KeptMachine{}, keptRunGone, ""
+	case errors.Is(err, store.ErrKeptMachineResetUnconfirmed):
+		return types.KeptMachine{}, reasonKeptMachineResetUnconfirmed, keptMachineResetUnconfirmedMsg(before.Name)
 	case errors.Is(err, store.ErrKeptMachineInUse):
 		return types.KeptMachine{}, reasonKeptMachineInUse, keptMachineInUseMsg(before.Name, s.keptHolderLabel(ctx, before.RunID))
 	case errors.Is(err, store.ErrKeptMachineDeleting):
@@ -771,14 +773,14 @@ func (s *Server) keptResetNotAsked(ctx context.Context, run types.AgentRun, k ke
 }
 
 // keptMachineUp runs once the sandbox is up: a new machine moves from creating to in use, and a fresh
-// start, which the Mac has now made, records the base it was made from (as the Mac reports that base now)
-// and clears its mark. A base whose preparation time the Mac does not report keeps the mark: a normal
+// start, which the Mac has now made, records the base its disk was cloned from (sb.KeptBase, the Mac's
+// record after the boot) and clears its mark. A Mac that does not report it keeps the mark: a normal
 // resume stays refused rather than read an age nobody knows.
-func (s *Server) keptMachineUp(ctx context.Context, run types.AgentRun, k keptDispatch, boot *runner.KeptScrub) {
+func (s *Server) keptMachineUp(ctx context.Context, run types.AgentRun, k keptDispatch, sb runner.Sandbox) {
 	if k.plan == nil {
 		return
 	}
-	s.auditKeptBootScrub(ctx, run.ID, k.machine.ID, boot)
+	s.auditKeptBootScrub(ctx, run.ID, k.machine.ID, sb.KeptScrub)
 	switch k.plan.mode {
 	case keptModeNew:
 		if st, ok := s.cfg.Store.(keptMachineStore); ok {
@@ -788,11 +790,11 @@ func (s *Server) keptMachineUp(ctx context.Context, run types.AgentRun, k keptDi
 		}
 	case keptModeFresh:
 		rs, ok := s.cfg.Store.(runKeptMachineStore)
-		base, prepared := s.keptMacBaseNow(ctx, k.plan.runner, k.plan.base)
-		if !ok || prepared.IsZero() {
+		if !ok || sb.KeptBase == nil || sb.KeptBase.PreparedAt.IsZero() {
 			return
 		}
-		if err := rs.ResetKeptMachineBase(ctx, k.machine.ID, run.ID, base, prepared); err != nil {
+		base := cmp.Or(sb.KeptBase.Name, k.plan.base)
+		if err := rs.ResetKeptMachineBase(ctx, k.machine.ID, run.ID, base, sb.KeptBase.PreparedAt.UTC()); err != nil {
 			slog.WarnContext(ctx, "wardynd: record a fresh kept machine's base", slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
 	}
@@ -812,24 +814,6 @@ func (s *Server) auditKeptBootScrub(ctx context.Context, runID, machineID uuid.U
 		"machine_id": machineID, "run_id": runID, "when": cmp.Or(scrub.When, "boot"), "outcome": scrub.Outcome, "removed": scrub.Removed,
 		"ca_sha256": scrub.CAs,
 	})))
-}
-
-// keptMacBaseNow is base as Mac runnerID reports it now: its name, and when it was prepared (zero when
-// the Mac is offline or does not say).
-func (s *Server) keptMacBaseNow(ctx context.Context, runnerID uuid.UUID, base string) (string, time.Time) {
-	pc, err := s.runnerStreamCapabilities(ctx, runnerID)
-	if err != nil {
-		return base, time.Time{}
-	}
-	rc, ok := pc.impl.(runnerCaps)
-	if !ok {
-		return base, time.Time{}
-	}
-	caps, have := rc.Caps()
-	if !have || caps.MacOSVM == nil {
-		return base, time.Time{}
-	}
-	return keptCurrentBase(caps.MacOSVM, base)
 }
 
 // releaseUnstartedKeptMachine, deferred by dispatch, gives back the machine of a run whose sandbox was never

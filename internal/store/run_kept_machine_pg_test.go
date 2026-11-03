@@ -6,6 +6,8 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -168,5 +170,121 @@ func TestKeptMachineResetMarkAndConfirmation(t *testing.T) {
 	}
 	if pending, _ := pg.KeptMachineResetPending(ctx, m.ID); pending {
 		t.Fatal("a fresh start never asked of the Mac left its mark")
+	}
+}
+
+// uncertainReset leaves machine m kept after a fresh start that was asked of its Mac and never confirmed:
+// the run marked it, and its stop came with no confirmation.
+func uncertainReset(t *testing.T, pool *pgxpool.Pool, pg store.PG, m types.KeptMachine, runner uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	run := startingRun(t, pool, pg, m.OwnerSubject)
+	if _, err := pg.ClaimKeptMachineForRun(ctx, m.ID, m.OwnerSubject, run, "fresh"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.MarkKeptMachineResetting(ctx, m.ID, run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.RecordKeptMachineStop(ctx, store.KeptMachineStop{ID: m.ID, RunnerID: runner, RunID: run, DiskBytes: 1 << 30,
+		ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Two runs claim a machine whose fresh start is unconfirmed at once: the fresh start wins, and the resume
+// is refused by the claim itself, whichever goes first.
+func TestConcurrentClaimsAfterAnUncertainResetOnlyTheFreshStartWins(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	ctx := context.Background()
+	runner := claimedRunnerOf(t, pg, "sub-a")
+	for i := range 5 {
+		m := keptMachineOf(t, pg, "sub-a", runner, fmt.Sprintf("web-%d", i))
+		uncertainReset(t, pool, pg, m, runner)
+		resume, fresh := startingRun(t, pool, pg, "sub-a"), startingRun(t, pool, pg, "sub-a")
+		start := make(chan struct{})
+		errs := make(chan error, 2)
+		var wg sync.WaitGroup
+		for run, mode := range map[uuid.UUID]string{resume: "resume", fresh: "fresh"} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				_, err := pg.ClaimKeptMachineForRun(ctx, m.ID, "sub-a", run, mode)
+				if err != nil {
+					err = fmt.Errorf("%s: %w", mode, err)
+				}
+				errs <- err
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(errs)
+		var won, refused int
+		for err := range errs {
+			switch {
+			case err == nil:
+				won++
+			case errors.Is(err, store.ErrKeptMachineResetUnconfirmed):
+				refused++
+			default:
+				t.Fatalf("round %d: %v", i, err)
+			}
+		}
+		if won != 1 || refused != 1 {
+			t.Fatalf("round %d: won %d, refused %d; want one each", i, won, refused)
+		}
+		got, err := pg.GetKeptMachine(ctx, m.ID)
+		if err != nil || got.RunID == nil || *got.RunID != fresh {
+			t.Fatalf("round %d: the machine is held by %v, want the fresh start's run (%v)", i, got.RunID, err)
+		}
+		if id, _, _ := pg.RunKeptMachine(ctx, resume); id != nil {
+			t.Fatalf("round %d: the refused resume records a machine", i)
+		}
+	}
+}
+
+// A later fresh start that is taken back (its Mac was never asked) keeps an earlier one's uncertainty, and
+// only a confirmed fresh start clears it.
+func TestTakenBackFreshStartKeepsAnEarlierUncertainty(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	ctx := context.Background()
+	runner := claimedRunnerOf(t, pg, "sub-a")
+	m := keptMachineOf(t, pg, "sub-a", runner, "web")
+	uncertainReset(t, pool, pg, m, runner)
+	run := startingRun(t, pool, pg, "sub-a")
+	if _, err := pg.ClaimKeptMachineForRun(ctx, m.ID, "sub-a", run, "fresh"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.MarkKeptMachineResetting(ctx, m.ID, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.ClearKeptMachineResetting(ctx, m.ID, run); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := pg.KeptMachineResetPending(ctx, m.ID); err != nil || !pending {
+		t.Fatalf("pending after the take-back = %v, %v; want the earlier attempt's", pending, err)
+	}
+	if _, err := pg.RecordKeptMachineStop(ctx, store.KeptMachineStop{ID: m.ID, RunnerID: runner, RunID: run, DiskBytes: 1 << 30,
+		ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	resume := startingRun(t, pool, pg, "sub-a")
+	if _, err := pg.ClaimKeptMachineForRun(ctx, m.ID, "sub-a", resume, "resume"); !errors.Is(err, store.ErrKeptMachineResetUnconfirmed) {
+		t.Fatalf("a resume after the take-back: %v", err)
+	}
+	fresh := startingRun(t, pool, pg, "sub-a")
+	if _, err := pg.ClaimKeptMachineForRun(ctx, m.ID, "sub-a", fresh, "fresh"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.MarkKeptMachineResetting(ctx, m.ID, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.ResetKeptMachineBase(ctx, m.ID, fresh, "Standard", time.Now().UTC().Truncate(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if pending, _ := pg.KeptMachineResetPending(ctx, m.ID); pending {
+		t.Fatal("a confirmed fresh start left the earlier uncertainty")
 	}
 }
