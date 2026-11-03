@@ -151,13 +151,15 @@ func (macWindowScreen) Ready() error {
 // Open puts the run window up on vm and returns once it is. The window ends when the person closes it or Close
 // runs; neither touches the VM.
 func (macWindowScreen) Open(vm unsafe.Pointer, text WindowText) (Window, error) {
+	// since is read before the console check: a lock that lands after the check moves the count past it and ends
+	// the window at once, and one before it is refused by the check itself.
+	since := int64(C.wardynScreenLockNotices())
 	if err := screenReady(); err != nil {
 		return nil, err
 	}
 	if C.wardynScreenUp() != 0 {
 		return nil, errors.New("macvm: a window is already open in this process")
 	}
-	since := int64(C.wardynScreenLockNotices()) // a lock from here on ends the window
 	title, steps := C.CString(text.Title), C.CString(text.Strip)
 	defer C.free(unsafe.Pointer(title))
 	defer C.free(unsafe.Pointer(steps))
