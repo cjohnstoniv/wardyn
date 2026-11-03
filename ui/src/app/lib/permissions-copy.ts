@@ -317,6 +317,9 @@ export const PERM_EXTRA = {
   // choice first. Its value is "*", the grant that names every one.
   PICKER_EVERY: "Every one (*)",
   PICKER_PLACEHOLDER: "Choose one",
+  // Last choice of the picker: a list holds only its first page, so an id outside it is typed.
+  PICKER_ENTER_ID: "Enter an ID",
+  PICKER_BACK_TO_LIST: "Choose from the list instead",
   PICKER_HINT: "Choose one by name, or Every one (*).",
   // A stored grant whose value predates the per-kind canonicalization rule
   // (grantView.Inert, permissions.go's markInertGrants) can never match

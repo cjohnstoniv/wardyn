@@ -728,10 +728,13 @@ export function AddGrantForm({
   const copy = KIND[kind];
   // A picker only where the kind's list loaded; otherwise the free text stays.
   const pickItems = useGrantItems([kind])[kind] ?? null;
-  const picking = PICKABLE_KINDS.includes(kind) && pickItems !== null;
+  // "Enter an ID" turns the picker into the free-text field: a list holds only its first page.
+  const [enterId, setEnterId] = React.useState(false);
+  React.useEffect(() => setEnterId(false), [kind]);
+  const picking = PICKABLE_KINDS.includes(kind) && pickItems !== null && !enterId;
   const valueHint = picking && kind !== "component" ? PERM_EXTRA.PICKER_HINT : copy.valueHint;
   const whoHint = SUBJECTS.find((s) => s.value === subjectType)?.hint ?? "";
-  const valueChosen = picking ? value === "*" || pickItems.some((i) => i.value === value) : !!value.trim();
+  const valueChosen = picking ? value === "*" || !!pickItems?.some((i) => i.value === value) : !!value.trim();
   const ready = valueChosen && (subjectType === "all" || !!subject.trim());
 
   const submit = async () => {
@@ -828,17 +831,27 @@ export function AddGrantForm({
 
         <Field label={copy.valueLabel} htmlFor="grant-value" hint={valueHint} required>
           {picking ? (
-            <Select value={valueChosen ? value : ""} onValueChange={setValue} disabled={disabled}>
+            <Select
+              value={valueChosen ? value : ""}
+              onValueChange={(v) => {
+                if (v === ENTER_ID) {
+                  setValue("");
+                  setEnterId(true);
+                } else setValue(v);
+              }}
+              disabled={disabled}
+            >
               <SelectTrigger id="grant-value">
                 <SelectValue placeholder={PERM_EXTRA.PICKER_PLACEHOLDER} />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="*">{PERM_EXTRA.PICKER_EVERY}</SelectItem>
-                {pickItems.map((i) => (
+                {pickItems?.map((i) => (
                   <SelectItem key={i.value} value={i.value}>
                     {i.label}
                   </SelectItem>
                 ))}
+                <SelectItem value={ENTER_ID}>{PERM_EXTRA.PICKER_ENTER_ID}</SelectItem>
               </SelectContent>
             </Select>
           ) : (
@@ -852,6 +865,11 @@ export function AddGrantForm({
               spellCheck={false}
               required
             />
+          )}
+          {enterId && pickItems !== null && (
+            <Button type="button" variant="ghost" size="sm" onClick={() => { setValue(""); setEnterId(false); }}>
+              {PERM_EXTRA.PICKER_BACK_TO_LIST}
+            </Button>
           )}
         </Field>
 
@@ -918,6 +936,9 @@ export function AddGrantForm({
     </section>
   );
 }
+
+// The picker's last choice; no id, name or "*" can equal it.
+const ENTER_ID = "__enter_id__";
 
 // A grant's Value cell: the item's name with its id on hover when the kind's list knows it,
 // else the raw value (a wildcard, an id since deleted, a kind with no list).

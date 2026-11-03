@@ -36,6 +36,7 @@ vi.mock("../../lib/api/setup", () => ({ setup: { getSetupStatus: () => Promise.r
 
 import { KIND, PERM, PERM_EXTRA } from "../../lib/permissions-copy";
 import { aheadByHours } from "../../lib/test-clock";
+import { setField } from "../../../test/set-field";
 import { PermissionsScreen } from "./permissions";
 
 const WS_ID = "3f6c1a52-1111-4a7e-9a5e-0d7f3a9b2c10";
@@ -75,7 +76,7 @@ describe("Add grant Value picker", () => {
     const picker = await screen.findByRole("combobox", { name: KIND.workspace.valueLabel });
     await user.click(picker);
     const options = await screen.findAllByRole("option");
-    expect(options.map((o) => o.textContent)).toEqual([PERM_EXTRA.PICKER_EVERY, "web-app", "data-jobs"]);
+    expect(options.map((o) => o.textContent)).toEqual([PERM_EXTRA.PICKER_EVERY, "web-app", "data-jobs", PERM_EXTRA.PICKER_ENTER_ID]);
     await user.click(screen.getByRole("option", { name: "web-app" }));
     expect(screen.getByText(PERM_EXTRA.PICKER_HINT)).toBeInTheDocument();
   });
@@ -92,6 +93,29 @@ describe("Add grant Value picker", () => {
     await waitFor(() =>
       expect(upsertGrantMock).toHaveBeenCalledWith({ subject_type: "all", subject: "", capability: "workspace", value: WS_ID, effect: "allow" }),
     );
+  });
+
+  it("lets an id outside the fetched page be entered, and submits exactly that id", async () => {
+    const outside = "7d1e5c90-3333-4b2a-9c4d-1e2f3a4b5c6d";
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await screen.findAllByText(PERM.ADD_TITLE);
+    await user.click(screen.getByRole("button", { name: PERM.SUBJECT_ALL }));
+    await chooseKind(user, KIND.workspace.label);
+    await user.click(await screen.findByRole("combobox", { name: KIND.workspace.valueLabel }));
+    const options = await screen.findAllByRole("option");
+    expect(options[options.length - 1]).toHaveTextContent(PERM_EXTRA.PICKER_ENTER_ID);
+    await user.click(options[options.length - 1]);
+
+    const box = await screen.findByRole("textbox", { name: KIND.workspace.valueLabel });
+    setField(box, outside);
+    await user.click(screen.getByRole("button", { name: PERM.ADD_CTA }));
+    await waitFor(() =>
+      expect(upsertGrantMock).toHaveBeenCalledWith({ subject_type: "all", subject: "", capability: "workspace", value: outside, effect: "allow" }),
+    );
+
+    await user.click(screen.getByRole("button", { name: PERM_EXTRA.PICKER_BACK_TO_LIST }));
+    expect(await screen.findByRole("combobox", { name: KIND.workspace.valueLabel })).toBeInTheDocument();
   });
 
   it("keeps free text for a kind with no list, and for a list that is empty", async () => {
@@ -119,7 +143,7 @@ describe("Add grant Value picker", () => {
     renderScreen();
     await chooseKind(user, KIND.model_provider.label);
     await user.click(await screen.findByRole("combobox", { name: KIND.model_provider.valueLabel }));
-    expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual([PERM_EXTRA.PICKER_EVERY, "Corp gateway"]);
+    expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual([PERM_EXTRA.PICKER_EVERY, "Corp gateway", PERM_EXTRA.PICKER_ENTER_ID]);
   });
 });
 
