@@ -572,6 +572,36 @@ describe("AdminSettingsScreen — the Host card's status tiles", () => {
     expect(screen.getByTestId("host-tile-internet-pill")).toHaveTextContent(/^Through the corporate proxy$/);
   });
 
+  // The same race on the error side: a first load that fails late (a dead network comes back as an `unreachable`
+  // payload; a throw lands in the catch) must not replace the screen the newer load already drew with the error block.
+  it.each([
+    ["an unreachable answer", (answer: (s: unknown) => void, _fail: (e: Error) => void) => answer({ ...baseStatus(), unreachable: true })],
+    ["a rejected read", (_answer: (s: unknown) => void, fail: (e: Error) => void) => fail(new Error("HTTP 500"))],
+  ])("a slow first load that ends in %s cannot replace the resolved screen with the error", async (_name, land) => {
+    let answerFirst!: (s: unknown) => void;
+    let failFirst!: (e: Error) => void;
+    getSetupStatusMock
+      .mockReset()
+      .mockReturnValueOnce(new Promise((resolve, reject) => ((answerFirst = resolve), (failFirst = reject))))
+      .mockResolvedValue(baseStatus());
+    getSiteConfigMock.mockResolvedValue({ upstream_proxy_url: "http://proxy.corp.example:3128" });
+    const tree = (resolved: boolean) => (
+      <MemoryRouter initialEntries={["/admin/settings"]}>
+        <OperatorProvider operator operatorResolved={resolved} securityOperator>
+          <AdminSettingsScreen />
+        </OperatorProvider>
+      </MemoryRouter>
+    );
+    const { rerender } = render(tree(false));
+    rerender(tree(true));
+    await openHost();
+    expect(screen.getByTestId("host-tile-internet-pill")).toHaveTextContent(/^Through the corporate proxy$/);
+
+    await act(async () => land(answerFirst, failFirst));
+    expect(screen.queryByText(HOST_CARD.UNREACHABLE_TITLE)).toBeNull();
+    expect(screen.getByTestId("host-tile-internet-pill")).toHaveTextContent(/^Through the corporate proxy$/);
+  });
+
   it("keeps its gating: no builder tile on a redacted body, no Internet tile when the read failed", async () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ checks_redacted: true }));
     getSiteConfigMock.mockRejectedValue(new Error("HTTP 500"));
