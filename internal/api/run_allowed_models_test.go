@@ -22,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -382,5 +383,27 @@ func TestAllowedModels_ReviveReplaysTheStoredList(t *testing.T) {
 	}
 	if pc := localStoredSpec(*cfg).ProxyConfig; pc.AllowedModels == nil || !slices.Equal(*pc.AllowedModels, list) {
 		t.Errorf("the local revive's copy dropped the list: %v", pc.AllowedModels)
+	}
+}
+
+// A revive of a run held to a list is refused before its claim on a connected runner whose
+// wardyn-runnerd does not carry the list; a runner that carries it, a run with no list and a run on no
+// runner are left alone.
+func TestAllowedModels_ReviveNeedsARunnerThatCarriesThem(t *testing.T) {
+	without := runnerwire.Caps{ProxySettings: []string{runnerwire.ProxySettingAWSSigV4}}
+	with := runnerwire.Caps{ProxySettings: runnerwire.ProxySettings}
+	rerr := modelListRunnerRefusal(without, true)
+	if rerr == nil || rerr.reason != reasonRunnerProxySetting || !strings.Contains(rerr.msg, "too old for allowed_models") {
+		t.Fatalf("refusal = %+v, want %s naming allowed_models", rerr, reasonRunnerProxySetting)
+	}
+	if modelListRunnerRefusal(with, true) != nil || modelListRunnerRefusal(without, false) != nil {
+		t.Error("a runner carrying the list, or one not connected, was refused here")
+	}
+	s := New(Config{})
+	list := []string{"model-a"}
+	runnerID := uuid.New()
+	if s.reviveModelListRunnerRefusal(types.AgentRun{RunnerID: &runnerID}, &proxy.Config{}) != nil ||
+		s.reviveModelListRunnerRefusal(types.AgentRun{}, &proxy.Config{AllowedModels: &list}) != nil {
+		t.Error("a run with no list, or on no runner, was refused")
 	}
 }

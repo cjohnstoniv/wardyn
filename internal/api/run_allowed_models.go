@@ -17,6 +17,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -213,4 +216,25 @@ func (s *Server) runAllowedModels(ctx context.Context, id uuid.UUID) *client.Run
 		return nil
 	}
 	return &rec
+}
+
+// reviveModelListRunnerRefusal refuses, before the revive's claim, a revive whose stored config limits
+// the run's models on a runner whose wardyn-runnerd does not carry the list: it would start the run's
+// new proxy without it. A runner not connected is left to the replace call, which refuses it again
+// (remote.Substrate.ReplaceProxy).
+func (s *Server) reviveModelListRunnerRefusal(run types.AgentRun, cfg *proxy.Config) *reviveError {
+	if cfg.AllowedModels == nil || run.RunnerID == nil {
+		return nil
+	}
+	caps, connected := s.runnerLastCaps(*run.RunnerID)
+	return modelListRunnerRefusal(caps, connected)
+}
+
+// modelListRunnerRefusal is that refusal for a runner's last caps.
+func modelListRunnerRefusal(caps runnerwire.Caps, connected bool) *reviveError {
+	if !connected || slices.Contains(caps.ProxySettings, runnerwire.ProxySettingAllowedModels) {
+		return nil
+	}
+	return reviveRefused(http.StatusConflict, reasonRunnerProxySetting,
+		(&remote.ProxySettingError{Setting: runnerwire.ProxySettingAllowedModels}).Error())
 }

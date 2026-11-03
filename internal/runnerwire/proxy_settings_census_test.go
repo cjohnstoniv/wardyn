@@ -53,6 +53,9 @@ var proxySettingOfField = map[string]string{
 	// push meets only its read-only token's forge 403, and an Azure DevOps git_pat
 	// push nothing at all.
 	"GitPushWithheld": ProxySettingGitPushWithheld,
+	// Dropped, the run's proxy holds no model list and admits every model the
+	// governance profile limits.
+	"AllowedModels": ProxySettingAllowedModels,
 }
 
 // proxyFieldExemptions maps each post-v0.9.8 field left ungated to why a runner
