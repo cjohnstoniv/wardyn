@@ -76,7 +76,8 @@
 # docs/POLICIES.md 21781 adds 173 over 21608, measured (rc.12): push_rules.deny_all (field, refusal, walls knob and SSH-exception rows), its two start refusals, and github_capabilities no longer called unenforced.
 # docs/POLICIES.md 21954 adds 173 over 21781, measured (rc.12): the deny_all code-host refusal row, where deny_all is enforced, the known code hosts, and the Review line on secrets a person adds.
 # docs/POLICIES.md 21981 adds 27 over 21954, measured (rc.12): the extension gallery left out of hosted Azure DevOps, and desktop sign-in to a code host refused under deny_all.
-docs/POLICIES.md=21981 share=12
+# docs/POLICIES.md 22042 adds 261 over 21781, measured: the Wall presets section (the walls presets commands and --wall-preset).
+docs/POLICIES.md=22042 share=12
 # docs/POLICIES.md 19597 = ours 19378 + theirs 19511 - base 19292 at the 0.10 W4b merge of the CTL-B fix onto the train.
 # docs/POLICIES.md 19511 adds 219 (0.10 CTL-B): the recording knob (#2968).
 # 0.9.4 W1 merge +3: L8 and an earlier W1 lane both edited the README; the merged text measures 3 over the sum.

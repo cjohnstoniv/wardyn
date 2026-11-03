@@ -27,6 +27,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A member policy with no desktop setting now gets the ceiling's desktop controls (for example, copy out opens where the ceiling allows it). Set `desktop` on the policy to keep the narrower defaults.
 - Existing `image` capability grants whose value ends in `/*` (for example `registry.example.com/team/*`, which matched nothing until now) now match every image under that path. Review them before upgrading. A stored image value with any other `*`, or a prefix without a registry host, still matches nothing.
 - After a downgrade to an older server, a person whose walls use the new settings (tool rules, push rules, recording, auto-stop, or Azure DevOps or GitHub capabilities) gets errors when they create a run, until they run `wardyn walls delete` or save their walls without those settings.
+- After a downgrade to an older server, a run that was started with a wall preset keeps running but is no longer held to the preset when it restarts or when an approval is decided, because the older server ignores the preset it was started with.
+- An older server does not know `push_rules.deny_all`, so its strict reader refuses walls or presets that name it. Before a downgrade, save your walls without it.
 - A run policy whose github_capabilities leave out code_write now stops git pushes; add code_write where runs should push.
 
 ### Added

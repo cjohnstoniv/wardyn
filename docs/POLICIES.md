@@ -584,6 +584,22 @@ What the check does and does not settle:
 - Unit and boundary locks do not apply to your walls, and your walls do not change unit limits or door switches. They have no GPU knob.
 - To narrow one run only, set `overrides.egress.allow_all_egress: false` beside `overrides.hosts.add_allowed` ([NEW-RUN.md](NEW-RUN.md#step-5-tools-and-access), [sdk.md](sdk.md#narrowing-one-run)).
 
+## Wall presets
+
+- A wall preset is a named set of walls, in the same knobs as [Your walls](#your-walls), that you pick for one run. It only narrows, like your walls.
+- Three are built in: `open` (narrows nothing), `read-only` (keeps the read capabilities and refuses every push) and `sealed` (read-only, plus only the sites the run's setup needs and no desktop transfers). You can keep your own, a group's template managers can keep one for the group, and an organisation administrator can keep one for everyone.
+- Start a run with one using `wardyn run --wall-preset <name|id>`, which also goes with `--file`. A name is looked up across the audiences open to you. A name in more than one is refused with the audiences listed: use its id.
+- Manage them with `wardyn walls presets`:
+
+| Command | Does |
+|---|---|
+| `wardyn walls presets` | Lists the presets open to you: name, audience, version and the knobs each narrows |
+| `wardyn walls presets show <name\|id>` | Prints the walls as the YAML `set` reads |
+| `wardyn walls presets set <name> -f FILE [--group G \| --org] [--description D]` | Creates the preset, or replaces the one of that name in that audience. A replace sends the version it read, so a save made since is refused and you run it again |
+| `wardyn walls presets delete <name\|id> [--mine \| --group G \| --org]` | Deletes a preset you may change. Runs already launched with it keep it |
+
+- The file is the one `wardyn walls set` reads, and `push_rules.deny_all: true` is read like any other knob. A preset that names no limit is refused (`422` `wall_preset_invalid`).
+
 ## Approval decision scopes
 
 - An approve/deny decision on an `egress_domain` approval carries a **scope** — how far that one decision reaches.
