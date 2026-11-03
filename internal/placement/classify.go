@@ -118,6 +118,7 @@ var Table = []Entry{
 	{Struct: StructSandboxSpec, Field: "Record", Class: ClassExempt, Rule: RuleExempt, Variant: "organisation's per-run recording choice"},
 	{Struct: StructSandboxSpec, Field: "MachineKind", Class: ClassExempt, Rule: RuleExempt, Variant: "the sandbox kind; a runner that cannot start it refuses the create"},
 	{Struct: StructSandboxSpec, Field: "MacOSBase", Class: ClassExempt, Rule: RuleExempt, Variant: "a macOS VM's base, a name; a Mac without it ready refuses the create"},
+	{Struct: StructSandboxSpec, Field: "KeptMachine", Class: ClassExempt, Rule: RuleExempt, Variant: "a kept machine's id, mode, owner hash and idle days: no credential. Only a macOS VM on the person's own Mac reads it; a runner without MacVMCaps.KeptMachines is never sent one"},
 	{Struct: StructSandboxSpec, Field: "ImageArches", Class: ClassExempt, Rule: RuleExempt, Variant: "a prewrapped image's checked architectures; only narrows where the agent pod lands"},
 	{Struct: StructSandboxSpec, Field: "OnWaiting", Class: ClassExempt, Rule: RuleNotSent, Variant: "a callback; waiting events replace it"},
 	{Struct: StructSandboxSpec, Field: "ExecOutput", Class: ClassExempt, Rule: RuleNotSent, Variant: "a writer; the output stream replaces it"},
