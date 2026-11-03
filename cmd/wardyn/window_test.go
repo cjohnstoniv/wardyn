@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -43,7 +44,7 @@ func TestWindowRefusalIsTheServersSentence(t *testing.T) {
 func TestWindowStatusShowsStateAndLastClose(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, map[string]any{"mac_window": map[string]any{
 		"state": "paused", "message": "This run is paused. You can open its window once it is running again.",
-		"last_close": map[string]any{"reason": "host_locked", "at": "2026-11-02T10:00:00Z"}}})
+		"last_close": map[string]any{"reason": "host_locked", "at": time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)}}})
 	out, err := execCmdCapture(t, "window", uuid.NewString(), "--status", "--url", srv.URL, "--token", "t")
 	if err != nil {
 		t.Fatal(err)

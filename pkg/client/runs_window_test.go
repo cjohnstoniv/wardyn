@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -49,7 +50,8 @@ func TestOpenMacWindowRefusalIsAnAPIError(t *testing.T) {
 
 func TestGetMacWindowReadsTheRunsView(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"mac_window":{"state":"open","last_close":{"reason":"closed_by_person","at":"2026-11-02T10:00:00Z"}}}`))
+		at := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
+		_, _ = w.Write([]byte(`{"mac_window":{"state":"open","last_close":{"reason":"closed_by_person","at":"` + at + `"}}}`))
 	}))
 	defer srv.Close()
 	c := &Client{BaseURL: srv.URL, Token: "t", HTTPClient: srv.Client()}
