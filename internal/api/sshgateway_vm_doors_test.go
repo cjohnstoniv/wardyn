@@ -82,6 +82,12 @@ func (l *argvLog) add(a []string) {
 	l.argv = append(l.argv, slices.Clone(a))
 }
 
+func (l *argvLog) reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.argv = nil
+}
+
 func (l *argvLog) all() [][]string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -126,6 +132,23 @@ func TestSSHGateway_VMRunDoors(t *testing.T) {
 			if got := log.all(); len(got) != 0 {
 				t.Fatalf("a refused forward ran %v, want no exec", got)
 			}
+
+			// Screen Sharing's ports are the macOS window's door: refused there, forwardable elsewhere.
+			for _, port := range []string{"5900", "5905", "5909"} {
+				_, err := client.Dial("tcp", "127.0.0.1:"+port)
+				if c.kind.IsMacOSVM() && err == nil {
+					t.Errorf("forward to %s succeeded for a macOS VM run, want refused", port)
+				}
+				if !c.kind.IsMacOSVM() && err != nil {
+					t.Errorf("forward to %s for a %s run: %v, want it allowed", port, c.kind, err)
+				}
+			}
+			if c.kind.IsMacOSVM() {
+				if got := log.all(); len(got) != 0 {
+					t.Fatalf("a refused Screen Sharing forward ran %v, want no exec", got)
+				}
+			}
+			log.reset()
 
 			conn, err := client.Dial("tcp", "127.0.0.1:9999")
 			if err != nil {

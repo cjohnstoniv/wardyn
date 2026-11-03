@@ -957,6 +957,12 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 		_ = newCh.Reject(ssh.ConnectionFailed, msg)
 		return
 	}
+	// A macOS VM's loopback also holds Screen Sharing: the desktop door, which the window's session and
+	// recording accounting covers. It needs the run's machine kind, so it follows the fresh read.
+	if run.MachineKind.IsMacOSVM() && guestagent.MacScreenSharingPort(int(m.DestPort)) {
+		_ = newCh.Reject(ssh.Prohibited, "forwarding to a macOS VM's Screen Sharing ports (5900-5909) is not allowed — open the run's window instead")
+		return
+	}
 
 	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{
 		Argv: sshRelayArgv(run.MachineKind, int(m.DestPort)),

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"strconv"
 	"time"
 )
@@ -32,6 +33,11 @@ const (
 	forwardDialTimeout = 10 * time.Second
 )
 
+// MacScreenSharingPort reports whether port is one of the macOS guest's Screen Sharing ports,
+// 5900-5909 on its loopback. They are the desktop door, which the window's session and recording
+// accounting covers, so a forward never reaches them.
+func MacScreenSharingPort(port int) bool { return port >= 5900 && port <= 5909 }
+
 // ForwardArgv is the argv that runs the forward mode of the agent binary at agentPath.
 func ForwardArgv(agentPath string, port int) []string {
 	return []string{agentPath, ForwardVerb, strconv.Itoa(port)}
@@ -43,8 +49,13 @@ func ForwardProbeArgv(agentPath string, port int) []string {
 }
 
 // ParseForwardPort reads the one argument the mode takes: decimal digits only, 1 to 65535. A host, a
-// "host:port", a sign, a hex or empty string, and any further argument are refused.
+// "host:port", a sign, a hex or empty string, and any further argument are refused. On macOS the
+// Screen Sharing ports are refused too.
 func ParseForwardPort(arg string) (int, error) {
+	return parseForwardPort(runtime.GOOS, arg)
+}
+
+func parseForwardPort(goos, arg string) (int, error) {
 	if arg == "" {
 		return 0, errors.New("forward needs a port")
 	}
@@ -56,6 +67,9 @@ func ParseForwardPort(arg string) (int, error) {
 	n, err := strconv.Atoi(arg)
 	if err != nil || n < 1 || n > 65535 {
 		return 0, fmt.Errorf("forward port %q is outside 1-65535", arg)
+	}
+	if goos == "darwin" && MacScreenSharingPort(n) {
+		return 0, fmt.Errorf("forward port %d is the guest's Screen Sharing; open the run's window instead", n)
 	}
 	return n, nil
 }

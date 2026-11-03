@@ -238,3 +238,25 @@ func TestForwardProbeAndRefusedDial(t *testing.T) {
 		t.Errorf("forward to a closed port = %d, want 1", code)
 	}
 }
+
+// The macOS guest's Screen Sharing ports (5900-5909) are refused on darwin and only there.
+func TestForwardRefusesMacScreenSharingPorts(t *testing.T) {
+	for _, c := range []struct {
+		goos string
+		arg  string
+		ok   bool
+	}{
+		{"darwin", "5899", true},
+		{"darwin", "5900", false},
+		{"darwin", "5905", false},
+		{"darwin", "5909", false},
+		{"darwin", "5910", true},
+		{"darwin", "8080", true},
+		{"linux", "5900", true},
+		{"linux", "5909", true},
+	} {
+		if _, err := parseForwardPort(c.goos, c.arg); (err == nil) != c.ok {
+			t.Errorf("parseForwardPort(%s, %s) = %v, want ok=%v", c.goos, c.arg, err, c.ok)
+		}
+	}
+}

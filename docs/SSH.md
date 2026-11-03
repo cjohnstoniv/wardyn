@@ -471,8 +471,9 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
 - reaches port 3000 **inside the sandbox's own network namespace** via
   `socat` (a VM: its guest agent's `forward`), the sandbox's own binary.
 - The destination is **restricted to the sandbox's own loopback** (`127.0.0.1` / `::1` / `localhost`).
-- Anything else is refused before any command runs, with a reason, because the sandbox has no other egress to forward to regardless (L0 structural confinement).
-- Invariant 3 is unaffected by this feature: no new network path is opened, forwarding rides inside the existing sandbox network namespace.
+- A macOS VM's Screen Sharing ports (5900-5909) can't be forwarded; open the run's window.
+- Anything else is refused before any command runs, with a reason: the sandbox has no other egress.
+- Invariant 3 is unaffected: forwarding rides inside the existing sandbox network namespace.
 - `-R` (remote/reverse
   forwarding) and agent/X11 forwarding are refused outright — see
   [Bounds](#bounds).

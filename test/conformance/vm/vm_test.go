@@ -491,6 +491,13 @@ func TestLinuxVMSandbox(t *testing.T) {
 		const listener = `perl -e 'use Socket; socket(S,PF_INET,SOCK_STREAM,0); setsockopt(S,SOL_SOCKET,SO_REUSEADDR,1); ` +
 			`bind(S,sockaddr_in(7777,inet_aton("127.0.0.1"))) or die; listen(S,5); accept(C,S); select(C); $|=1; ` +
 			`my $l=<C>; print C "echo:$l"; close C'`
+		// A listener on 127.0.0.2 alone is not reached by the same port: forward dials 127.0.0.1 only.
+		const otherLoopback = `perl -e 'use Socket; alarm 20; socket(S,PF_INET,SOCK_STREAM,0); setsockopt(S,SOL_SOCKET,SO_REUSEADDR,1); ` +
+			`bind(S,sockaddr_in(7779,inet_aton("127.0.0.2"))) or die; listen(S,5); accept(C,S); print C "reached"; close C'`
+		other := "(" + otherLoopback + " >/dev/null 2>&1 &); sleep 1; " + agent + " forward 7779 </dev/null"
+		if code, o := run(t, d, sb.Ref, other); code != 1 || strings.Contains(o, "reached") {
+			t.Errorf("forward with a listener on 127.0.0.2 only = %d %q, want 1 and no reached", code, o)
+		}
 		script := "(" + listener + " >/dev/null 2>&1 &); sleep 1; printf 'ping\\n' | " + agent + " forward 7777"
 		if code, o := run(t, d, sb.Ref, script); code != 0 || !strings.Contains(o, "echo:ping") {
 			t.Errorf("forward to the guest's loopback listener = %d %q, want 0 and echo:ping", code, o)
