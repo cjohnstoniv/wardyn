@@ -36,7 +36,7 @@ import {
   hostLines,
   newUuid,
   requestOf,
-  withMCP,
+  withStored,
   type ComponentDraft,
   type SecretDraft,
 } from "./component-editor-model";
@@ -299,7 +299,7 @@ export function ComponentEditor({
     setError(null);
     const id = component?.id ?? newUuid();
     try {
-      await api.put(id, withMCP(requestOf(draft), component, audience));
+      await api.put(id, withStored(requestOf(draft), component, audience));
       onSaved(id, component === null);
     } catch (e) {
       setError(getErrorMessage(e));

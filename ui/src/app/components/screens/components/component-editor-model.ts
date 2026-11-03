@@ -131,14 +131,18 @@ export function requestOf(d: ComponentDraft): ComponentRequest {
 // refuses it on a person's server and on one that runs in the sandbox (types.validateGatewayAudience).
 export const audienceEditable = (c: Component | null): boolean => !!c && !c.owner && c.definition.mcp?.transport === "http";
 
-// The org editor edits no MCP field but the audience, so the stored server goes back as it was, with
-// the audience as edited: an empty one sends none.
-export function withMCP(req: ComponentRequest, c: Component | null, audience: string): ComponentRequest {
-  const stored = c?.definition.mcp;
-  if (!stored) return req;
-  const { gateway_audience: _a, ...mcp }: ComponentMCP = stored;
-  const a = audience.trim();
-  return { ...req, definition: { ...req.definition, mcp: audienceEditable(c) && a ? { ...mcp, gateway_audience: a } : mcp } };
+// The org editor edits no CLI card and no MCP field but the audience, and a save replaces the whole
+// definition, so the stored CLI card and MCP server go back as they were, the server with the audience
+// as edited: an empty one sends none.
+export function withStored(req: ComponentRequest, c: Component | null, audience: string): ComponentRequest {
+  const { cli, mcp: stored } = c?.definition ?? {};
+  const definition = { ...req.definition, ...(cli && { cli }) };
+  if (stored) {
+    const { gateway_audience: _a, ...mcp }: ComponentMCP = stored;
+    const a = audience.trim();
+    definition.mcp = audienceEditable(c) && a ? { ...mcp, gateway_audience: a } : mcp;
+  }
+  return { ...req, definition };
 }
 
 // crypto.randomUUID exists only in secure contexts (HTTPS or localhost), and the console

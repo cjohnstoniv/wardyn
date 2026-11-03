@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -218,6 +219,49 @@ func (s *Server) gatewayMCPAudienceRefusal(ctx context.Context, c types.Componen
 		return reasonComponentDefinitionInvalid, "invalid component: definition." + err.Error()
 	}
 	return "", ""
+}
+
+// Every writer of an audience holds one organisation-wide lock (db.GatewayAudienceLockClass) across its
+// audience check and its write, taken before the writer's other locks: a provider save before the site-config
+// document lock, a component save before the MCP server key and row locks. The audiences live in two tables,
+// so no row lock spans them, and two saves that each checked before the other wrote could both keep one audience.
+
+// lockProviderDocument is a provider save's site-config document lock, taken after the audience lock when the
+// block sends identity, so its audience check (refuseGatewayIdentityWrite) sees every component save's. A block
+// without identity writes no audience and takes the document lock alone. ok=false: the 503 is written.
+func (s *Server) lockProviderDocument(w http.ResponseWriter, r *http.Request, block *types.ModelProviders) (*http.Request, func(), bool) {
+	if block == nil || !slices.ContainsFunc(block.Providers, func(p types.ModelProvider) bool { return p.GatewayIdentity != nil }) {
+		return s.lockDoor(w, r, db.SiteConfigLockClass)
+	}
+	r, unlockAudience, ok := s.lockDoor(w, r, db.GatewayAudienceLockClass)
+	if !ok {
+		return r, nil, false
+	}
+	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	if !ok {
+		unlockAudience()
+		return r, nil, false
+	}
+	return r, func() { unlock(); unlockAudience() }, true
+}
+
+// lockGatewayAudienceComponent takes the audience lock for an organisation component save that sets an
+// audience, and makes the save's audience check again under it, against a fresh read: the check
+// componentSaveRefusal made ran before any lock. ok=false: the refusal or the 503 is written.
+func (s *Server) lockGatewayAudienceComponent(w http.ResponseWriter, r *http.Request, c types.Component) (*http.Request, func(), bool) {
+	if m := c.Definition.MCP; c.Owner != "" || m == nil || m.GatewayAudience == "" {
+		return r, func() {}, true
+	}
+	r, unlock, ok := s.lockDoor(w, r, db.GatewayAudienceLockClass)
+	if !ok {
+		return r, nil, false
+	}
+	if reason, msg := s.gatewayMCPAudienceRefusal(r.Context(), c); reason != "" {
+		unlock()
+		saveRefusal(w, reason, msg)
+		return r, nil, false
+	}
+	return r, unlock, true
 }
 
 // refuseGatewayAudienceWrite is a provider save's half: no audience the block gives a provider may be

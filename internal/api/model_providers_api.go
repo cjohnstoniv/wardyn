@@ -17,7 +17,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -117,7 +116,7 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	}
 	imageOK := s.claudeSignInImageOK(ctx, block)
 	// SEAM-1, handlePutAgentProviders's reason: the same singleton document.
-	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	r, unlock, ok := s.lockProviderDocument(w, r, block)
 	if !ok {
 		return
 	}

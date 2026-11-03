@@ -18,7 +18,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -721,7 +720,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// integration-write handlers' own RMWs on the same document
 	// (setup_integrations.go) — see handlePutIntegration's SEAM-1 comment.
 	defer s.revokeWithdrawnLocalPATs(r.Context()) // before the unlock below, so it runs after it
-	r, unlock, ok := s.lockDoor(w, r, db.SiteConfigLockClass)
+	r, unlock, ok := s.lockProviderDocument(w, r, cfg.ModelProviders)
 	if !ok {
 		return
 	}
