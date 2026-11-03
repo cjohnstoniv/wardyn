@@ -84,6 +84,10 @@ type GovernanceLimits struct {
 	// also blocks creation (a person who may mount no drive may not make one); this door
 	// narrows only the creating. Operators are exempt from both doors.
 	DenyMemberDrives bool `json:"deny_member_drives,omitempty"`
+	// DenyKeptMachines refuses keeping a machine under this profile, on top of the site switch
+	// for kept machines. A DOOR with no zero-value opinion: false inherits the switch, so an
+	// unset profile changes nothing. Deny wins in composition.
+	DenyKeptMachines bool `json:"deny_kept_machines,omitempty"`
 	// DenyPlacements refuses a run whose resolved placement is listed (403 placement_denied +
 	// authz.denied). A DENY LIST: absent means every placement is permitted, including for a
 	// member with no assigned profile. Values are `remote` and `local`; a profile denying both is
