@@ -79,7 +79,7 @@ func TestKeptToolsUpdateRunsTheHelperOnTheKeptFolderOnly(t *testing.T) {
 		t.Fatalf("%d jobs, want 1", len(k.jobs))
 	}
 	j := k.jobs[0]
-	i := slices.Index(j.extra, "--"+keptToolsFlag)
+	i := slices.Index(j.extra, "--"+macvm.FlagKept)
 	if j.kind != admission.KindToolsUpdate || j.sub != macvm.UpdateToolsCommand || i < 0 || j.extra[i+1] != k.dir || j.out == nil ||
 		j.cpus != 4 || j.memMiB < 8192 || j.log != filepath.Join(k.m.layout.Root, keptToolsUpdateLog) || j.runner != "runner-a" {
 		t.Fatalf("job = %+v", j)

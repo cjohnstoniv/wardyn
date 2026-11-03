@@ -19,10 +19,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/macvm/admission"
 )
 
-// keptToolsFlag is the helper's update-tools flag that names a kept machine's folder instead of the base
-// (macvm.UpdateOptions.KeptDir).
-const keptToolsFlag = "kept"
-
 // keptToolsUpdateLog, in the VM directory, is the last kept machine tools update's output.
 const keptToolsUpdateLog = "kept-tools-update.log"
 
@@ -80,7 +76,7 @@ func (u *keptToolsUpdater) update(ctx context.Context, keptDir string, force boo
 	} else if locked {
 		return macvm.ErrKeptLocked
 	}
-	extra, err := m.baseFileArgs([]string{"--" + keptToolsFlag, dir})
+	extra, err := m.baseFileArgs([]string{"--" + macvm.FlagKept, dir})
 	if err != nil {
 		return err
 	}

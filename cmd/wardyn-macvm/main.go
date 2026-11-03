@@ -503,9 +503,14 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 	fs.SetOutput(d.stderr)
 	j := newJobFlags(fs)
 	force := fs.Bool(macvm.FlagForce, false, "update even when the base looks current, and retry every withheld harness")
+	kept := fs.String(macvm.FlagKept, "", "update the kept machine in this folder instead of the base")
 	variant := fs.String(macvm.FlagVariant, "", "derive this macOS base from Standard instead, with --"+macvm.FlagBaseFile+" its own install list")
 	if code := j.parse(fs, args, d); code != 0 {
 		return code
+	}
+	if *kept != "" && *variant != "" {
+		fmt.Fprintf(d.stderr, "wardyn-macvm %s: --%s and --%s cannot be used together\n", fs.Name(), macvm.FlagKept, macvm.FlagVariant)
+		return 2
 	}
 	if *variant != "" && !macvm.ValidBaseName(*variant) {
 		fmt.Fprintf(d.stderr, "wardyn-macvm %s: --%s %q is not a macOS base name\n", fs.Name(), macvm.FlagVariant, *variant)
@@ -541,7 +546,7 @@ func cmdUpdateTools(ctx context.Context, args []string, d deps) int {
 	}
 	enc := json.NewEncoder(d.stdout)
 	o := macvm.UpdateOptions{
-		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, Power: d.power(), Admit: j.admit(macvm.UpdateToolsCommand, d),
+		Engine: eng, Layout: macvm.Layout{Root: *j.root}, Slot: *j.slot, KeptDir: *kept, Power: d.power(), Admit: j.admit(macvm.UpdateToolsCommand, d),
 		Stage: st, Tooling: st.Tooling, AgentVersion: version.String(), ItemsDigest: st.Items.Digest(), Force: *force, CPUs: *j.cpus, MemoryMiB: *j.memMiB, HelperVersion: version.String(),
 		Progress: func(ev macvm.PrepareEvent) { _ = enc.Encode(ev) },
 		// The staging-cleanup warning goes to the job's log (runnerd's tools-update.log), not nowhere.
