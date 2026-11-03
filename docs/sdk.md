@@ -607,8 +607,8 @@ A kept machine is a person's macOS VM, kept on their own Mac between runs ([macO
 | `CreateRun` with `Machine` | `POST /api/v1/runs` | a signed-in person, for an interactive macOS VM run on their own Mac |
 | `ListMyMachines` | `GET /api/v1/me/machines` | a signed-in person: their own machines |
 | `DeleteMyMachine` | `DELETE /api/v1/me/machines/{id}` | the machine's owner |
-| none | `GET /api/v1/machines/kept` | the super admin: every person's machines, narrowed by `?owner=` and `?runner=`; answers `machines` and `total` |
-| none | `DELETE /api/v1/machines/kept/{id}` | the super admin |
+| `ListKeptMachines` | `GET /api/v1/machines/kept` | the super admin: every person's machines, narrowed by `?owner=` and `?runner=`; answers `machines` and `total` |
+| `DeleteKeptMachine` | `DELETE /api/v1/machines/kept/{id}` | the super admin |
 
 The run's `machine` request field is `RunMachine`:
 
@@ -633,7 +633,7 @@ The run's `machine` request field is `RunMachine`:
 | `reason` | When `allowed` is false, the refusal code: `kept_machine_site_off`, `governance_unit`, `kept_machine_not_your_mac` or `kept_machine_person_limit` (a resume still works) |
 | `worst_bytes` | The most disk one new kept machine can take |
 
-`GET /api/v1/runs/{id}` adds `machine` for a run that kept or resumed one. The Go client's `AgentRun` has no typed field for it, so read it as JSON:
+`GET /api/v1/runs/{id}` adds `machine` for a run that kept or resumed one. The Go client's `GetRunMachine` reads it as `RunMachineView`:
 
 | Field | Meaning |
 |---|---|

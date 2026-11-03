@@ -26,6 +26,25 @@ type RunMachine struct {
 	Fresh bool `json:"fresh,omitempty"`
 }
 
+// RunMachineView is GET /api/v1/runs/{id}'s machine: the kept machine the run kept or resumed, read now.
+// Every field but Mode is the machine's row as it is now, shared by every run that used it; HolderRunID
+// names the run that holds it now or held it last (a stop does not clear it). A machine whose row is gone
+// is {ID, Mode, Deleted}.
+type RunMachineView struct {
+	ID          uuid.UUID              `json:"id"`
+	Name        string                 `json:"name,omitempty"`
+	Mode        string                 `json:"mode,omitempty"` // new, resumed or fresh
+	KeepAtEnd   bool                   `json:"keep_at_end,omitempty"`
+	State       types.KeptMachineState `json:"state,omitempty"`
+	Scrubbed    bool                   `json:"scrubbed"`
+	RunnerName  string                 `json:"runner_name,omitempty"`
+	HolderRunID *uuid.UUID             `json:"holder_run_id,omitempty"`
+	Base        string                 `json:"base,omitempty"`
+	DiskBytes   int64                  `json:"disk_bytes,omitempty"`
+	ExpiresAt   *time.Time             `json:"expires_at,omitempty"`
+	Deleted     bool                   `json:"deleted"`
+}
+
 // KeptMachine is one kept machine as GET /api/v1/me/machines answers it: the organisation's record, never
 // the machine's content.
 type KeptMachine struct {
@@ -103,4 +122,30 @@ func (c *Client) ListMyMachines(ctx context.Context) (MyMachines, error) {
 // (DELETE /api/v1/me/machines/{id}).
 func (c *Client) DeleteMyMachine(ctx context.Context, id uuid.UUID) error {
 	return c.do(ctx, http.MethodDelete, "/api/v1/me/machines/"+id.String(), nil, nil)
+}
+
+// GetRunMachine reads the kept machine a run kept or resumed from GET /api/v1/runs/{id}: nil for a run
+// that keeps none.
+func (c *Client) GetRunMachine(ctx context.Context, runID uuid.UUID) (*RunMachineView, error) {
+	var out struct {
+		Machine *RunMachineView `json:"machine"`
+	}
+	err := c.do(ctx, http.MethodGet, "/api/v1/runs/"+runID.String(), nil, &out)
+	return out.Machine, err
+}
+
+// ListKeptMachines returns one page of every person's kept machines
+// (GET /api/v1/machines/kept, super admin).
+func (c *Client) ListKeptMachines(ctx context.Context, opts ListOpts) (KeptMachineList, error) {
+	var out KeptMachineList
+	err := c.do(ctx, http.MethodGet, appendListOpts("/api/v1/machines/kept", []ListOpts{opts}), nil, &out)
+	return out, err
+}
+
+// DeleteKeptMachine deletes one person's kept machine and its files (DELETE /api/v1/machines/kept/{id},
+// super admin). Outcome is deferred while the Mac is offline (a 202).
+func (c *Client) DeleteKeptMachine(ctx context.Context, id uuid.UUID) (KeptMachineDeleteResult, error) {
+	var out KeptMachineDeleteResult
+	err := c.do(ctx, http.MethodDelete, "/api/v1/machines/kept/"+id.String(), nil, &out)
+	return out, err
 }
