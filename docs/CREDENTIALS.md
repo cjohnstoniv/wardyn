@@ -189,6 +189,7 @@ One mode places a Git credential inside the sandbox:
 - Not masked: SSH exec, SFTP and direct-tcpip channels ([`internal/api/sshgateway_channels.go`](../internal/api/sshgateway_channels.go)); see [SSH.md](SSH.md#recording).
 - Not masked: casts written through the optional recording mount set by `WARDYN_RECORDING_MOUNT` ([ENV.md](ENV.md)).
 - Masking covers output Wardyn relays or stores. It does not cover what the workload sends to a destination its policy allows.
+- Deleting a secret from Wardyn stops masking it; revoke it at its provider first.
 
 > [!WARNING]
 > **A credential delivered inside can be read by anything running in that sandbox.** That includes code the workload downloads and runs.
