@@ -40,6 +40,32 @@ int wardynScreenSession(void) {
 	return 1;
 }
 
+// wardynScreenConsole answers the run window's console check: 1 when this process's session is the Mac's console
+// and its screen is not locked, 0 when it is not (no session, not on the console, or locked), -1 when the session
+// cannot be read, and the caller refuses. The lock key (CGSSessionScreenIsLocked) is undocumented: when it is
+// absent, the on-console key alone decides.
+int wardynScreenConsole(void) {
+	CFDictionaryRef d = CGSessionCopyCurrentDictionary();
+	if (d == NULL) {
+		return 0;
+	}
+	int answer = -1;
+	CFTypeRef onConsole = CFDictionaryGetValue(d, kCGSessionOnConsoleKey);
+	if (onConsole != NULL && CFGetTypeID(onConsole) == CFBooleanGetTypeID()) {
+		answer = CFBooleanGetValue((CFBooleanRef)onConsole) ? 1 : 0;
+		CFTypeRef locked = CFDictionaryGetValue(d, CFSTR("CGSSessionScreenIsLocked"));
+		if (answer == 1 && locked != NULL) {
+			if (CFGetTypeID(locked) != CFBooleanGetTypeID()) {
+				answer = -1;
+			} else if (CFBooleanGetValue((CFBooleanRef)locked)) {
+				answer = 0;
+			}
+		}
+	}
+	CFRelease(d);
+	return answer;
+}
+
 // wardynScreenRun starts AppKit on the main thread. It does not return.
 void wardynScreenRun(void) {
 	@autoreleasepool {
@@ -313,19 +339,89 @@ void wardynScreenShow(void *vm, void *stop, const char *title, const char *steps
 	});
 }
 
+static BOOL wardynScreenViewOnly; // main thread only: the window is a run window (see wardynScreenShowWindow)
+
+// wardynScreenTeardown closes the window and lets go of its VM; main thread only. A run window first detaches its
+// view from the VM, which goes on running.
+static void wardynScreenTeardown(void) {
+	[wardynScreenStrip hide]; // no code is left in the label
+	wardynScreenStrip = nil;
+	if (wardynScreenViewOnly && [wardynScreenWindow.contentView isKindOfClass:[VZVirtualMachineView class]]) {
+		((VZVirtualMachineView *)wardynScreenWindow.contentView).virtualMachine = nil;
+	}
+	wardynScreenViewOnly = NO;
+	[wardynScreenWindow orderOut:nil];
+	wardynScreenWindow.contentView = nil;
+	wardynScreenWindow.delegate = nil;
+	wardynScreenWindow = nil;
+	wardynScreenCloser = nil;
+	atomic_store(&wardynScreenState, 0);
+}
+
+// WardynScreenCloseOnly is a run window's delegate: the close button closes the window and nothing else. It never
+// asks the guest to stop and never ends the process (Code-Hex/vz's own window does both).
+@interface WardynScreenCloseOnly : NSObject <NSWindowDelegate>
+@end
+
+@implementation WardynScreenCloseOnly
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+	return YES;
+}
+- (void)windowWillClose:(NSNotification *)notification {
+	// After this call returns, so the window is not torn down inside its own delegate callback.
+	dispatch_async(dispatch_get_main_queue(), ^{
+		if (wardynScreenWindow == notification.object) {
+			wardynScreenTeardown(); // the state goes to 0, which the Go side polls
+		}
+	});
+}
+@end
+
+static WardynScreenCloseOnly *wardynScreenCloseOnly; // main thread only; the window's delegate is weak
+
+// wardynScreenShowWindow opens a run window on vm, a VZVirtualMachine the block keeps until the window closes:
+// close-only (see WardynScreenCloseOnly), not floating, with title and steps (never NULL) and no Show code
+// control. At most one window: with one open it does nothing and the state stays as it was.
+void wardynScreenShowWindow(void *vm, const char *title, const char *steps) {
+	VZVirtualMachine *machine = (__bridge VZVirtualMachine *)vm;
+	NSString *t = [[NSString alloc] initWithUTF8String:title];
+	NSString *s = [[NSString alloc] initWithUTF8String:steps];
+	dispatch_async(dispatch_get_main_queue(), ^{
+		if (wardynScreenWindow != nil) {
+			return;
+		}
+		NSSize size = wardynScreenSize();
+		NSWindowStyleMask mask = NSWindowStyleMaskTitled | NSWindowStyleMaskResizable | NSWindowStyleMaskClosable;
+		NSWindow *w = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, size.width, size.height)
+		                                          styleMask:mask
+		                                            backing:NSBackingStoreBuffered
+		                                              defer:NO];
+		w.releasedWhenClosed = NO;
+		w.title = t;
+		wardynScreenCloseOnly = [[WardynScreenCloseOnly alloc] init];
+		w.delegate = wardynScreenCloseOnly;
+		[w addTitlebarAccessoryViewController:wardynScreenAccessory(size.width, s, nil)];
+		w.contentAspectRatio = NSMakeSize(16, 9);
+		VZVirtualMachineView *view = [[VZVirtualMachineView alloc] init];
+		view.virtualMachine = machine;
+		w.contentView = view;
+		[w center];
+		wardynScreenWindow = w;
+		wardynScreenViewOnly = YES;
+		// An accessory app's window opens behind the active app, so it orders itself front regardless.
+		[w makeKeyAndOrderFront:nil];
+		[w orderFrontRegardless];
+		[NSApp activate];
+		atomic_store(&wardynScreenState, w.contentView != nil ? 1 : -1);
+	});
+}
+
 // wardynScreenUp is wardynScreenState, for the Go side's wait.
 int wardynScreenUp(void) { return atomic_load(&wardynScreenState); }
 
 // wardynScreenClose closes the window and lets go of its VM.
 void wardynScreenClose(void) {
 	dispatch_async(dispatch_get_main_queue(), ^{
-		[wardynScreenStrip hide]; // no code is left in the label
-		wardynScreenStrip = nil;
-		[wardynScreenWindow orderOut:nil];
-		wardynScreenWindow.contentView = nil;
-		wardynScreenWindow.delegate = nil;
-		wardynScreenWindow = nil;
-		wardynScreenCloser = nil;
-		atomic_store(&wardynScreenState, 0);
+		wardynScreenTeardown();
 	});
 }

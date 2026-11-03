@@ -1,0 +1,404 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package macvm_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+	"unsafe"
+
+	"github.com/cjohnstoniv/wardyn/internal/macvm"
+	"github.com/cjohnstoniv/wardyn/internal/macvm/macvmtest"
+)
+
+// fakeScreen is a WindowScreen that draws nothing.
+type fakeScreen struct {
+	mu       sync.Mutex
+	readyErr error
+	openErr  error
+	wins     []*fakeWindow
+	texts    []macvm.WindowText
+	vms      []unsafe.Pointer
+}
+
+func (s *fakeScreen) Ready() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readyErr
+}
+
+func (s *fakeScreen) setReady(err error) { s.mu.Lock(); s.readyErr = err; s.mu.Unlock() }
+
+func (s *fakeScreen) Open(vm unsafe.Pointer, text macvm.WindowText) (macvm.Window, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.openErr != nil {
+		return nil, s.openErr
+	}
+	w := &fakeWindow{closed: make(chan struct{})}
+	s.wins = append(s.wins, w)
+	s.texts = append(s.texts, text)
+	s.vms = append(s.vms, vm)
+	return w, nil
+}
+
+func (s *fakeScreen) opens() int { s.mu.Lock(); defer s.mu.Unlock(); return len(s.wins) }
+
+func (s *fakeScreen) win(i int) *fakeWindow {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.wins[i]
+}
+
+type fakeWindow struct {
+	mu       sync.Mutex
+	closed   chan struct{}
+	once     sync.Once
+	detached int // Close calls
+}
+
+func (w *fakeWindow) Closed() <-chan struct{} { return w.closed }
+
+func (w *fakeWindow) Close() {
+	w.mu.Lock()
+	w.detached++
+	w.mu.Unlock()
+	w.once.Do(func() { close(w.closed) })
+}
+
+// byPerson is the person clicking the window's close button.
+func (w *fakeWindow) byPerson() { w.once.Do(func() { close(w.closed) }) }
+
+func (w *fakeWindow) closes() int { w.mu.Lock(); defer w.mu.Unlock(); return w.detached }
+
+// windowEngine builds machines that can give a view pointer; vmErr makes the pointer unreadable.
+type windowEngine struct {
+	*macvmtest.Engine
+	vmErr error
+	built int
+}
+
+func (e *windowEngine) NewMachine(p macvm.Plan) (macvm.Machine, error) {
+	m, err := e.Engine.NewMachine(p)
+	if err != nil {
+		return nil, err
+	}
+	e.built++
+	return &windowMachine{Machine: m.(*macvmtest.Machine), err: e.vmErr}, nil
+}
+
+type windowMachine struct {
+	*macvmtest.Machine
+	err error
+}
+
+var vmByte byte
+
+func (m *windowMachine) ViewHandle() (unsafe.Pointer, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return unsafe.Pointer(&vmByte), nil
+}
+
+type windowRig struct {
+	*runRig
+	scr *fakeScreen
+	eng *windowEngine
+}
+
+// startWindowRun starts a helper on the fake engine with the fake screen; running says whether to bring the VM up.
+func startWindowRun(t *testing.T, running bool, mod func(*windowEngine, *fakeScreen)) *windowRig {
+	t.Helper()
+	w := &windowRig{scr: &fakeScreen{}, eng: &windowEngine{Engine: &macvmtest.Engine{}}}
+	if mod != nil {
+		mod(w.eng, w.scr)
+	}
+	t.Cleanup(macvm.SetWindowRecheck(20 * time.Millisecond))
+	w.runRig = startRun(t, w.eng.Engine, func(_ *macvm.RunConfig, o *macvm.RunOptions) {
+		o.Engine = w.eng
+		o.Window = w.scr
+	})
+	if running {
+		w.attach(t)
+		waitState(t, w.cc, macvm.StateRunning)
+	}
+	return w
+}
+
+// client dials a fresh ctl.sock connection, closed with the test.
+func (w *windowRig) client(t *testing.T) *macvm.ControlClient {
+	t.Helper()
+	cc, err := macvm.DialControl(context.Background(), filepath.Join(w.sock, macvm.ControlSock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cc.Close() })
+	return cc
+}
+
+// wantRefusal asserts a window refused with the code and sentence.
+func wantRefusal(t *testing.T, err error, code, sentence string) {
+	t.Helper()
+	var rf *macvm.WindowRefusal
+	if !errors.As(err, &rf) || rf.Code != code || rf.Sentence != sentence {
+		t.Fatalf("window error %v, want refusal %s %q", err, code, sentence)
+	}
+}
+
+func recv(t *testing.T, ch <-chan string) string {
+	t.Helper()
+	select {
+	case r, ok := <-ch:
+		if !ok {
+			t.Fatal("the window's channel closed with no reason")
+		}
+		return r
+	case <-time.After(5 * time.Second):
+		t.Fatal("the window never ended")
+	}
+	return ""
+}
+
+func waitWindow(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); !ok(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+}
+
+func TestWindowRefusedBeforeTheVMIsRunning(t *testing.T) {
+	w := startWindowRun(t, false, nil)
+	_, err := w.client(t).Window(context.Background(), "grant-1", "")
+	wantRefusal(t, err, macvm.WindowCodeNotRunning, macvm.WindowNotRunningSentence)
+	if w.scr.opens() != 0 {
+		t.Fatal("a window opened on a VM that was not running")
+	}
+	// The refusal freed nothing it did not take: the window opens once the VM runs.
+	w.attach(t)
+	waitState(t, w.cc, macvm.StateRunning)
+	if _, err := w.client(t).Window(context.Background(), "grant-1", ""); err != nil {
+		t.Fatalf("after the VM runs: %v", err)
+	}
+}
+
+func TestWindowRefusedToAStranger(t *testing.T) {
+	w := startWindowRun(t, true, nil)
+	t.Cleanup(macvm.SetControlOwnerUID(int64(os.Getuid() + 1)))
+	cc := w.client(t)
+	_, err := cc.Window(context.Background(), "grant-1", "")
+	wantRefusal(t, err, macvm.WindowCodeNotOwner, macvm.WindowNotOwnerSentence)
+	if w.scr.opens() != 0 {
+		t.Fatal("a window opened for a stranger")
+	}
+	// The refusal ends the connection.
+	if _, err := cc.Status(context.Background()); err == nil {
+		t.Fatal("the connection outlived the refusal")
+	}
+}
+
+func TestWindowEndsWhenTheConnectionCloses(t *testing.T) {
+	w := startWindowRun(t, true, nil)
+	cc := w.client(t)
+	ended, err := cc.Window(context.Background(), "grant-1", "Run 7 for Sam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.scr.opens() != 1 || w.scr.texts[0].Title != "Run 7 for Sam" || w.scr.texts[0].Strip != macvm.WindowStrip || w.scr.vms[0] != unsafe.Pointer(&vmByte) {
+		t.Fatalf("the window opened as %+v on %v", w.scr.texts, w.scr.vms)
+	}
+	_ = cc.Close()
+	waitWindow(t, "the window to close", func() bool { return w.scr.win(0).closes() > 0 })
+	if got := recv(t, ended); got != macvm.WindowClosedConnection {
+		t.Fatalf("reason %q", got)
+	}
+	// Closing a window never stops the VM or the helper.
+	if st := waitState(t, w.cc, macvm.StateRunning); st.HelperPID == 0 {
+		t.Fatalf("status %+v", st)
+	}
+	// The slot is free: a new window opens.
+	waitWindow(t, "the slot to free", func() bool {
+		cc2 := w.client(t)
+		_, err := cc2.Window(context.Background(), "grant-2", "")
+		return err == nil
+	})
+}
+
+func TestWindowCloseEndsTheConnectionWithItsReason(t *testing.T) {
+	w := startWindowRun(t, true, nil)
+	ended, err := w.client(t).Window(context.Background(), "grant-1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.scr.win(0).byPerson()
+	if got := recv(t, ended); got != macvm.WindowClosedPerson {
+		t.Fatalf("reason %q, want %q", got, macvm.WindowClosedPerson)
+	}
+	if _, ok := <-ended; ok {
+		t.Fatal("the connection went on after the window closed")
+	}
+	// The person's close only detached the view: the VM runs and the helper answers.
+	waitState(t, w.cc, macvm.StateRunning)
+	if w.scr.win(0).closes() != 1 {
+		t.Fatalf("the window was detached %d times", w.scr.win(0).closes())
+	}
+}
+
+func TestWindowSecondOpenIsRefused(t *testing.T) {
+	w := startWindowRun(t, true, nil)
+	first := w.client(t)
+	if _, err := first.Window(context.Background(), "grant-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err := w.client(t).Window(context.Background(), "grant-2", "")
+	wantRefusal(t, err, macvm.WindowCodeOpen, macvm.WindowAlreadyOpenSentence)
+	if w.scr.opens() != 1 {
+		t.Fatalf("%d windows opened", w.scr.opens())
+	}
+	// The first window is untouched by the refusal.
+	if w.scr.win(0).closes() != 0 {
+		t.Fatal("the refused open closed the first window")
+	}
+}
+
+func TestWindowRefusedWhenTheConsoleCheckFails(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err      error
+		sentence string
+	}{
+		"locked or not the console": {fmt.Errorf("locked: %w", macvm.ErrNotAtMac), macvm.WindowNotAtMacSentence},
+		"unreadable":                {errors.New("no answer"), macvm.WindowUnreadableSentence},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := startWindowRun(t, true, func(_ *windowEngine, s *fakeScreen) { s.readyErr = tc.err })
+			_, err := w.client(t).Window(context.Background(), "grant-1", "")
+			wantRefusal(t, err, macvm.WindowCodeNotAtMac, tc.sentence)
+			if w.scr.opens() != 0 {
+				t.Fatal("a window opened with the console check failing")
+			}
+			// The refusal freed the slot: with the check passing, the window opens.
+			w.scr.setReady(nil)
+			if _, err := w.client(t).Window(context.Background(), "grant-2", ""); err != nil {
+				t.Fatalf("after the check passes: %v", err)
+			}
+		})
+	}
+}
+
+func TestWindowClosesWhenTheScreenLocks(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err    error
+		reason string
+	}{
+		"locked":     {macvm.ErrNotAtMac, macvm.WindowClosedHostLocked},
+		"unreadable": {errors.New("no answer"), macvm.WindowClosedFailed},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := startWindowRun(t, true, nil)
+			ended, err := w.client(t).Window(context.Background(), "grant-1", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			w.scr.setReady(tc.err)
+			if got := recv(t, ended); got != tc.reason {
+				t.Fatalf("reason %q, want %q", got, tc.reason)
+			}
+			if w.scr.win(0).closes() == 0 {
+				t.Fatal("the window stayed up")
+			}
+			waitState(t, w.cc, macvm.StateRunning)
+		})
+	}
+}
+
+func TestWindowEndsWhenTheRunEnds(t *testing.T) {
+	w := startWindowRun(t, true, nil)
+	ended, err := w.client(t).Window(context.Background(), "grant-1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = w.client(t).Stop(context.Background(), false, time.Second) }()
+	if got := recv(t, ended); got != macvm.WindowClosedRunEnded && got != macvm.WindowClosedConnection {
+		t.Fatalf("reason %q", got)
+	}
+	waitWindow(t, "the window to close", func() bool { return w.scr.win(0).closes() > 0 })
+}
+
+func TestWindowRefusedWhenTheVMPointerIsUnreadable(t *testing.T) {
+	w := startWindowRun(t, true, func(e *windowEngine, _ *fakeScreen) { e.vmErr = errors.New("layout changed") })
+	_, err := w.client(t).Window(context.Background(), "grant-1", "")
+	wantRefusal(t, err, macvm.WindowCodeUnavailable, macvm.WindowUnavailableSentence)
+	if w.scr.opens() != 0 {
+		t.Fatal("a window opened without the VM's pointer")
+	}
+	waitState(t, w.cc, macvm.StateRunning)
+}
+
+func TestWindowRefusedWhenItCannotBeMade(t *testing.T) {
+	w := startWindowRun(t, true, func(_ *windowEngine, s *fakeScreen) { s.openErr = errors.New("no display") })
+	_, err := w.client(t).Window(context.Background(), "grant-1", "")
+	wantRefusal(t, err, macvm.WindowCodeFailed, macvm.WindowFailedSentence+"no display")
+}
+
+func TestWindowNeedsAGrant(t *testing.T) {
+	w := startWindowRun(t, true, nil)
+	for _, grant := range []string{"", "has space", "semi;colon", string(make([]byte, 129))} {
+		_, err := w.client(t).Window(context.Background(), grant, "")
+		wantRefusal(t, err, macvm.WindowCodeBadRequest, macvm.WindowBadRequestSentence)
+	}
+	if w.scr.opens() != 0 {
+		t.Fatal("a window opened with no usable grant")
+	}
+}
+
+func TestWindowRefusedOnAMachineWithoutAView(t *testing.T) {
+	if macvm.HasNativeWindowScreen() {
+		t.Skip("the Mac's own screen is built in")
+	}
+	eng := &macvmtest.Engine{}
+	r := startRun(t, eng, nil) // no Window, and the fake machine has no ViewHandle
+	r.attach(t)
+	waitState(t, r.cc, macvm.StateRunning)
+	cc, err := macvm.DialControl(context.Background(), filepath.Join(r.sock, macvm.ControlSock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cc.Close()
+	_, err = cc.Window(context.Background(), "grant-1", "")
+	wantRefusal(t, err, macvm.WindowCodeUnavailable, macvm.WindowUnavailableSentence)
+}
+
+// A window adds no device: the VM's plan is built once, before it starts, and a window neither rebuilds nor
+// changes it. This is the whole of the check without a Mac; the NIC and proxy stay plan.go's.
+func TestWindowLeavesTheVMConfigurationAlone(t *testing.T) {
+	w := startWindowRun(t, true, nil)
+	m := w.eng.Machines()[0]
+	before := fmt.Sprintf("%+v", m.Plan)
+	if err := macvm.CheckPlan(m.Plan); err != nil {
+		t.Fatal(err)
+	}
+	ended, err := w.client(t).Window(context.Background(), "grant-1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.scr.win(0).byPerson()
+	recv(t, ended)
+	if after := fmt.Sprintf("%+v", m.Plan); after != before {
+		t.Fatalf("the plan changed across a window:\nbefore %s\nafter  %s", before, after)
+	}
+	if err := macvm.CheckPlan(m.Plan); err != nil {
+		t.Fatalf("the plan no longer checks after a window: %v", err)
+	}
+	if w.eng.built != 1 || len(w.eng.Machines()) != 1 {
+		t.Fatalf("a window built %d machines (%d recorded); want the run's one", w.eng.built, len(w.eng.Machines()))
+	}
+}

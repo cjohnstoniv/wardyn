@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -48,6 +49,9 @@ type RunOptions struct {
 	// extraPorts are vsock ports this boot registers beyond a run's (tests
 	// of the listener check).
 	extraPorts []uint32
+	// Window draws OpWindow's window; nil is the Mac's own (nativeWindowScreen), and a build without one
+	// refuses every window.
+	Window WindowScreen
 	// drive is DriveOpen's; nil on every run.
 	drive *driveBoot
 }
@@ -73,6 +77,9 @@ type runner struct {
 	machine Machine
 	hostNet *os.File
 	netCh   chan *os.File
+
+	// winOpen is true while a window is up (or being made): one window at a time. Guarded by mu.
+	winOpen bool
 
 	stopReq  chan stopRequest
 	stopOnce sync.Once
@@ -455,6 +462,75 @@ func (r *runner) desktopPassword() (string, error) {
 		return "", ErrNoDesktopPassword
 	}
 	return r.o.DesktopPassword.Credential(context.Background())
+}
+
+var _ windowHandler = (*runner)(nil)
+
+// openWindow puts a close-only window on the running VM for the caller, who holds it until it ends. It
+// refuses unless the VM is running, no window is open, the person is at the Mac's screen, the engine can
+// give the VM's pointer and the window opens. The VM's configuration is never touched: no device is added.
+func (r *runner) openWindow(grant, title string) (*windowSession, *WindowRefusal) {
+	r.mu.Lock()
+	m, state, taken := r.machine, r.st.State, r.winOpen
+	if state == StateRunning && m != nil && !taken {
+		r.winOpen = true
+	}
+	r.mu.Unlock()
+	switch {
+	case state != StateRunning || m == nil:
+		return nil, &WindowRefusal{WindowCodeNotRunning, WindowNotRunningSentence}
+	case taken:
+		return nil, &WindowRefusal{WindowCodeOpen, WindowAlreadyOpenSentence}
+	}
+	release := func() {
+		r.mu.Lock()
+		r.winOpen = false
+		r.mu.Unlock()
+	}
+	scr := r.o.Window
+	if scr == nil {
+		scr = nativeWindowScreen
+	}
+	vm, ok := m.(ViewMachine)
+	if scr == nil || !ok {
+		release()
+		return nil, &WindowRefusal{WindowCodeUnavailable, WindowUnavailableSentence}
+	}
+	if err := scr.Ready(); err != nil {
+		release()
+		if errors.Is(err, ErrNotAtMac) {
+			return nil, &WindowRefusal{WindowCodeNotAtMac, WindowNotAtMacSentence}
+		}
+		r.o.Log.Warn("macvm: window: console check unreadable", "run_id", r.cfg.RunID, "grant", grant, "err", err.Error())
+		return nil, &WindowRefusal{WindowCodeNotAtMac, WindowUnreadableSentence}
+	}
+	ptr, err := vm.ViewHandle()
+	if err != nil || ptr == nil {
+		release()
+		r.o.Log.Error("macvm: window: the VM's pointer is unreadable", "run_id", r.cfg.RunID, "grant", grant, "err", fmt.Sprint(err))
+		return nil, &WindowRefusal{WindowCodeUnavailable, WindowUnavailableSentence}
+	}
+	if title == "" {
+		title = "Wardyn: macOS VM run"
+	}
+	w, err := scr.Open(ptr, WindowText{Title: title, Strip: WindowStrip})
+	runtime.KeepAlive(m)
+	if err != nil {
+		release()
+		r.o.Log.Error("macvm: window: could not open", "run_id", r.cfg.RunID, "grant", grant, "err", err.Error())
+		return nil, &WindowRefusal{WindowCodeFailed, WindowFailedSentence + err.Error()}
+	}
+	r.o.Log.Info("macvm: window open", "run_id", r.cfg.RunID, "grant", grant)
+	return &windowSession{
+		win: w, ready: scr.Ready, vmDone: m.Done(), at: time.Now(),
+		end: func(reason string, held time.Duration) {
+			if reason == "" {
+				reason = WindowClosedConnection
+			}
+			release()
+			r.o.Log.Info("macvm: window closed", "run_id", r.cfg.RunID, "grant", grant, "reason", reason, "held_ms", held.Milliseconds())
+		},
+	}, nil
 }
 
 func (r *runner) netFD(f *os.File) error {
