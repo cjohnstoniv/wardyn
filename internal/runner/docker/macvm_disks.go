@@ -52,9 +52,8 @@ func (d *Driver) macDrives(ctx context.Context, spec runner.SandboxSpec) ([]macv
 }
 
 // macDiskDrives is each disk drive of a macOS VM run as the helper attaches it and the guest agent mounts it.
-// A disk a live run of this runner holds refuses the run here at once, before anything exists; one held by
-// anything else (a run that has just ended and is still releasing it, or another login's VM) is waited for
-// (lockMacDiskDrive). The helper takes the lock for the VM's life (macvm.LockDisk), so this check is the
+// A disk anything holds (a live run, a run that has just ended and is still releasing it, another login's
+// VM, or a drive open) is waited for (lockMacDiskDrive). The helper takes the lock for the VM's life (macvm.LockDisk), so this check is the
 // early answer, not the guard. The wait is one budget for the run's drives, not one per drive: it starts
 // when the first drive has to wait and ends ninety seconds later whichever drive is then being waited for.
 func (d *Driver) macDiskDrives(ctx context.Context, drives []types.DriveMount) ([]macvm.Disk, []guestagent.Disk, error) {
