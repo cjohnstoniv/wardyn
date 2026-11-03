@@ -474,16 +474,10 @@ func (r *runner) desktopPassword() (string, error) {
 
 var _ windowHandler = (*runner)(nil)
 
-// openWindow puts a close-only window on the running VM for the caller, who holds it until it ends. It
-// refuses unless the VM is running, no window is open, the person is at the Mac's screen, the engine can
-// give the VM's pointer and the window opens. The VM's configuration is never touched: no device is added.
-// going reports whether the caller's connection is ending; a window whose holder is ending is waited for
-// (at most windowReleaseWait) rather than refused, since its client has already let it go.
-func (r *runner) openWindow(grant, title string, going func() bool) (*windowSession, *WindowRefusal) {
-	var (
-		m       Machine
-		expired <-chan time.Time
-	)
+// takeWindowSlot takes the run's one window slot for an opener whose connection is going(), or refuses. A
+// slot whose holder is going is waited for, at most windowReleaseWait. release gives the slot back, once.
+func (r *runner) takeWindowSlot(going func() bool) (m Machine, release func(), rf *WindowRefusal) {
+	var expired <-chan time.Time
 	for {
 		r.mu.Lock()
 		m = r.machine
@@ -492,31 +486,31 @@ func (r *runner) openWindow(grant, title string, going func() bool) (*windowSess
 			r.winOpen, r.winFreed, r.winGoing = true, make(chan struct{}), going
 		}
 		r.mu.Unlock()
-		if state == StateRunning && m != nil && taken && holderGoing != nil && holderGoing() {
-			if expired == nil {
-				t := time.NewTimer(time.Duration(windowReleaseWait.Load()))
-				defer t.Stop()
-				expired = t.C
-			}
-			if h := windowWaitHook.Load(); h != nil {
-				(*h)()
-			}
-			select {
-			case <-freed:
-				continue
-			case <-expired:
-			}
+		if state != StateRunning || m == nil {
+			return nil, nil, &WindowRefusal{WindowCodeNotRunning, WindowNotRunningSentence}
 		}
-		switch {
-		case state != StateRunning || m == nil:
-			return nil, &WindowRefusal{WindowCodeNotRunning, WindowNotRunningSentence}
-		case taken:
-			return nil, &WindowRefusal{WindowCodeOpen, WindowAlreadyOpenSentence}
+		if !taken {
+			break
 		}
-		break
+		if holderGoing == nil || !holderGoing() {
+			return nil, nil, &WindowRefusal{WindowCodeOpen, WindowAlreadyOpenSentence}
+		}
+		if expired == nil {
+			t := time.NewTimer(time.Duration(windowReleaseWait.Load()))
+			defer t.Stop()
+			expired = t.C
+		}
+		if h := windowWaitHook.Load(); h != nil {
+			(*h)()
+		}
+		select {
+		case <-freed:
+		case <-expired:
+			return nil, nil, &WindowRefusal{WindowCodeOpen, WindowAlreadyOpenSentence}
+		}
 	}
 	var releaseOnce sync.Once
-	release := func() {
+	release = func() {
 		releaseOnce.Do(func() {
 			r.mu.Lock()
 			r.winOpen, r.winGoing = false, nil
@@ -534,8 +528,21 @@ func (r *runner) openWindow(grant, title string, going func() bool) (*windowSess
 			(*h)()
 		}
 		if left {
-			return nil, &WindowRefusal{WindowCodeOpen, WindowAlreadyOpenSentence}
+			return nil, nil, &WindowRefusal{WindowCodeOpen, WindowAlreadyOpenSentence}
 		}
+	}
+	return m, release, nil
+}
+
+// openWindow puts a close-only window on the running VM for the caller, who holds it until it ends. It
+// refuses unless the VM is running, no window is open, the person is at the Mac's screen, the engine can
+// give the VM's pointer and the window opens. The VM's configuration is never touched: no device is added.
+// going reports whether the caller's connection is ending; a window whose holder is ending is waited for
+// (at most windowReleaseWait) rather than refused, since its client has already let it go.
+func (r *runner) openWindow(grant, title string, going func() bool) (*windowSession, *WindowRefusal) {
+	m, release, rf := r.takeWindowSlot(going)
+	if rf != nil {
+		return nil, rf
 	}
 	scr := r.o.Window
 	if scr == nil {
