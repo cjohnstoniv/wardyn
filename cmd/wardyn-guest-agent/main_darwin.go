@@ -73,6 +73,7 @@ func run(out, plist string) error {
 		Mount:      guestagent.MacShares{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID), Probe: guestagent.ShareProbe{Cred: cred}.Read}.Mount,
 		Disk:       guestagent.MacDisks{Run: runner, Home: guestagent.MacAgentHome, UID: int(ids.UID), GID: int(ids.GID)}.Attach,
 	}
+	srv.ScreenLockOff = guestagent.ScreenLock{Run: runner, Stdin: runner, Console: guestagent.ConsoleOwner{}}.Off
 	h, err := srv.Handler()
 	if err != nil {
 		return err

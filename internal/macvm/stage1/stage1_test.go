@@ -66,6 +66,7 @@ var wantArgv = [][]string{
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.RemoteManagement", "VNCLegacyConnectionsEnabled", "-bool", "true"),
 	root("/usr/bin/pmset", "-a", "sleep", "0", "displaysleep", "0", "disksleep", "0"),
 	root("/usr/bin/sudo", "-H", "-u", "agent", "--", "/usr/bin/defaults", "-currentHost", "write", "com.apple.screensaver", "idleTime", "-int", "0"),
+	root("/usr/bin/sudo", "-H", "-u", "agent", "--", "/usr/sbin/sysadminctl", "-screenLock", "off", "-password", "-"),
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticCheckEnabled", "-bool", "false"),
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticDownload", "-bool", "false"),
 	root("/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticallyInstallMacOSUpdates", "-bool", "false"),

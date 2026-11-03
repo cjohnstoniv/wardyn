@@ -55,6 +55,9 @@ type Server struct {
 	Mount func(context.Context, Mount) error
 	// Disk attaches one disk drive (MacDisks.Attach); nil refuses an Init that names one.
 	Disk func(context.Context, Disk) error
+	// ScreenLockOff turns the agent account's screen lock off (ScreenLock.Off), once at Init; nil does
+	// nothing (tests only). It never fails the Init.
+	ScreenLockOff func(context.Context) bool
 
 	// signal signals a process group; nil is kill(2) (tests hold or fail it).
 	signal func(pgid int, sig unix.Signal) error
@@ -221,6 +224,9 @@ func (s *Server) handleInit(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.Desktop != nil {
 		*res.DesktopPasswordSet = s.initDesktop(r.Context(), ca, in.DesktopPassword, !in.SignInsOff)
+	}
+	if s.ScreenLockOff != nil {
+		s.ScreenLockOff(r.Context())
 	}
 	s.inited = true
 	writeJSON(w, res)

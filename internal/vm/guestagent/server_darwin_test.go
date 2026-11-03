@@ -434,3 +434,20 @@ func TestDarwinExecTTYResizeReachesTheShell(t *testing.T) {
 		t.Fatalf("after a resize to 120x40, the shell printed %q", out.String())
 	}
 }
+
+func TestDarwinInitTurnsTheScreenLockOffBeforeItAnswersAndNeverFailsInit(t *testing.T) {
+	for _, off := range []bool{true, false} {
+		s, _, h := newDarwinServer(t)
+		calls := 0
+		s.ScreenLockOff = func(context.Context) bool {
+			if s.inited {
+				t.Error("the screen lock was handled after Init answered")
+			}
+			calls++
+			return off
+		}
+		if w := postInit(h, Init{}); w.Code != 200 || calls != 1 {
+			t.Errorf("off=%v: Init = %d after %d screen lock calls", off, w.Code, calls)
+		}
+	}
+}

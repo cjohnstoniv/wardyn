@@ -110,6 +110,8 @@ var commands = []command{
 	{ID: "power-never-sleep", Step: "7d", Event: "setting power, screen lock and updates", Root: true, Argv: []string{"/usr/bin/pmset", "-a", "sleep", "0", "displaysleep", "0", "disksleep", "0"}},
 	// The agent's own screen saver idle time: macOS reads it per user and ignores the system domain.
 	{ID: "screensaver-off", Step: "7d", Root: true, Argv: asAgent("/usr/bin/defaults", "-currentHost", "write", "com.apple.screensaver", "idleTime", "-int", "0")},
+	// The screen lock itself, which the idle time above does not turn off: sysadminctl takes the agent's password on stdin.
+	{ID: "screenlock-off", Step: "7d", Root: true, Argv: asAgent("/usr/sbin/sysadminctl", "-screenLock", "off", "-password", "-"), In: stdinAgentPassword},
 	{ID: "updates-check-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticCheckEnabled", "-bool", "false"}},
 	{ID: "updates-download-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticDownload", "-bool", "false"}},
 	{ID: "updates-macos-off", Step: "7d", Root: true, Argv: []string{"/usr/bin/defaults", "write", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticallyInstallMacOSUpdates", "-bool", "false"}},
@@ -174,11 +176,8 @@ func kcpasswordLen(n int) int { return (n + 1 + 11) / 12 * 12 }
 // with NULs to a multiple of 12 bytes, XORed with the fixed key.
 // UNVERIFIED (external): the format on macOS 27.
 func kcpassword(pw []byte) []byte {
-	key := []byte{0x7D, 0x89, 0x52, 0x23, 0xD2, 0xBC, 0xDD, 0xEA, 0xA3, 0xB9, 0x1F}
 	out := make([]byte, kcpasswordLen(len(pw)))
 	copy(out, pw)
-	for i := range out {
-		out[i] ^= key[i%len(key)]
-	}
+	guestagent.XORKCPassword(out)
 	return out
 }
