@@ -25,7 +25,7 @@ export function AllowedModelsCard({ run }: { run: RunDetail }) {
       <WidgetCard
         title={T.CARD_TITLE}
         Icon={ShieldCheck}
-        right={<span className="min-w-0 break-words text-xs text-muted-foreground">{MEMBER.GS_CHIP(allowed.profile.name)}</span>}
+        right={<span className="min-w-0 break-words text-xs text-muted-foreground">{MEMBER.GS_CHIP(allowed.unit.name)}</span>}
         bodyClassName="space-y-3 px-3 py-2.5 text-body"
       >
         <ul className="scroll-thin max-h-44 space-y-1.5 overflow-y-auto" data-testid="run-allowed-models-list">
@@ -38,7 +38,7 @@ export function AllowedModelsCard({ run }: { run: RunDetail }) {
         <p className="text-muted-foreground">{T.CARD_REFUSED}</p>
         <p className="text-muted-foreground">{T.CARD_FIXED}</p>
         {security && resolved && (
-          <Link to={`/admin/governance?profile=${encodeURIComponent(allowed.profile.id)}`} className="inline-block text-info hover:underline">
+          <Link to={`/admin/governance?profile=${encodeURIComponent(allowed.unit.id)}`} className="inline-block text-info hover:underline">
             {T.OPEN_PROFILE}
           </Link>
         )}

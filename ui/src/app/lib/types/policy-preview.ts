@@ -57,12 +57,12 @@ export interface ProvenanceEntry {
 
 /**
  * What a member of the caller's type would be held to, for a caller whose own runs stand
- * outside governance (pkg/client's UngovernedNotice). At most one of no_person, no_profile and
+ * outside governance (pkg/client's UngovernedNotice). At most one of no_person, no_unit and
  * unavailable is set; with none set, unit names the unit and limits its headline limits.
  */
 export interface UngovernedNotice {
   no_person?: boolean;
-  no_profile?: boolean;
+  no_unit?: boolean;
   unavailable?: boolean;
   unit?: string;
   /** At most three short phrases, in a fixed order. */
@@ -109,9 +109,9 @@ export interface PolicyPreviewResult {
   allowed_images?: AllowedImage[];
   // The preflight's harness_set fact, with the same meaning.
   harness_set?: HarnessSetFact;
-  // The preflight's allowed_models and allowed_models_profile, with the same meaning.
+  // The preflight's allowed_models and allowed_models_unit, with the same meaning.
   allowed_models?: string[];
-  allowed_models_profile?: string;
+  allowed_models_unit?: string;
   // The preflight's pool facts, with the same meaning.
   runner_pool?: ResolvedRunnerPool;
   runner_pools?: RunnerPoolChoice[];

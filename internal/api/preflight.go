@@ -110,7 +110,7 @@ type preflightResponse struct {
 	// (run_allowed_models.go); absent when no limit binds it. AllowedModelsProfile names the profile
 	// that sets it, the caller's own (the name the run page's card shows).
 	AllowedModels        []string `json:"allowed_models,omitempty"`
-	AllowedModelsProfile string   `json:"allowed_models_profile,omitempty"`
+	AllowedModelsProfile string   `json:"allowed_models_unit,omitempty"`
 	// RunnerPool is the pool the request resolves to, absent until the pool lane
 	// resolves one; RunnerPools are the permitted choices, an array that is
 	// empty until that lane fills it.

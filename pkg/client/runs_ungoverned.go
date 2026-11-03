@@ -13,7 +13,7 @@ type UngovernedNotice struct {
 	NoPerson bool `json:"no_person,omitempty"`
 	// NoProfile says a person is signed in but their type resolves to no governance
 	// unit (the install's default has none to name), so there is nothing to compare with.
-	NoProfile bool `json:"no_profile,omitempty"`
+	NoProfile bool `json:"no_unit,omitempty"`
 	// Unavailable says the comparison could not be read; it is never an empty limits list.
 	Unavailable bool `json:"unavailable,omitempty"`
 	// Unit is the governance unit the caller's type resolves to.

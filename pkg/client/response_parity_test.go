@@ -154,7 +154,7 @@ func TestPreflightResult_TagsAreTheServers(t *testing.T) {
 		}
 	}
 	preview := serverJSONTags(t, "internal/api/policy_preview_facts.go", "policyPreviewResponse")
-	for _, tag := range []string{"allowed_models,omitempty", "allowed_models_profile,omitempty"} {
+	for _, tag := range []string{"allowed_models,omitempty", "allowed_models_unit,omitempty"} {
 		if !slices.Contains(server, tag) || !slices.Contains(preview, tag) || !slices.Contains(clientJSONTags(t, client.PreflightResult{}), tag) {
 			t.Errorf("%q is not on the client's PreflightResult and both server replies", tag)
 		}

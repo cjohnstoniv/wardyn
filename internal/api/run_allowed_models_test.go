@@ -455,7 +455,7 @@ func TestAllowedModels_PreflightNamesTheProfile(t *testing.T) {
 			}
 			var got struct {
 				Models  []string `json:"allowed_models"`
-				Profile *string  `json:"allowed_models_profile"`
+				Profile *string  `json:"allowed_models_unit"`
 			}
 			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 				t.Fatal(err)

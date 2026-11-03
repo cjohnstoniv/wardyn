@@ -55,7 +55,7 @@ func TestUngovernedNoticeStates(t *testing.T) {
 	t.Run("a person whose type resolves to no unit has no profile to compare with", func(t *testing.T) {
 		got := govServer(&capStore{}).ungovernedNotice(governAdminSessionCtx(), operator)
 		if got == nil || !got.NoProfile || got.Unavailable || got.Unit != "" || len(got.Limits) != 0 {
-			t.Fatalf("got %+v, want only no_profile", got)
+			t.Fatalf("got %+v, want only no_unit", got)
 		}
 	})
 	t.Run("a failed comparison read is unavailable, never an empty limits list", func(t *testing.T) {

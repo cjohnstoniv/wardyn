@@ -30,7 +30,7 @@ func TestGetRunSyncRules_ReadsTheRunsSyncDeny(t *testing.T) {
 
 func TestGetRunAllowedModels_ReadsTheRunsList(t *testing.T) {
 	id := uuid.New()
-	body := map[string]any{"id": id, "allowed_models": map[string]any{"models": []string{"model-a"}, "profile": map[string]any{"id": "p1", "name": "Contractors"}}}
+	body := map[string]any{"id": id, "allowed_models": map[string]any{"models": []string{"model-a"}, "unit": map[string]any{"id": "p1", "name": "Contractors"}}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method+" "+r.URL.Path != "GET /api/v1/runs/"+id.String() {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)

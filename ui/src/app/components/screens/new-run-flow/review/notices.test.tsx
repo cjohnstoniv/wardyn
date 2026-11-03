@@ -210,7 +210,7 @@ describe("the policy under a drop warning", () => {
     });
     it.each([
       ["no person", { no_person: true }, NR_REVIEW.ADMIN_BYPASS_NO_PERSON],
-      ["no member profile", { no_profile: true }, NR_REVIEW.ADMIN_BYPASS_NO_PROFILE],
+      ["no member profile", { no_unit: true }, NR_REVIEW.ADMIN_BYPASS_NO_PROFILE],
       ["the comparison failed", { unavailable: true }, NR_REVIEW.ADMIN_BYPASS_UNAVAILABLE],
       ["a block with no unit", {}, NR_REVIEW.ADMIN_BYPASS_UNAVAILABLE],
       ["a unit with no headline limit", { unit: "U" }, NR_REVIEW.ADMIN_BYPASS_NO_LIMITS],
