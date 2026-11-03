@@ -3415,6 +3415,7 @@ has four-eyes.**
 - With the switch on, each such launch carries `governance_exempt: true` on `run.create`, so a SIEM rule can alert on one.
   - That is disclosure, not prevention, exactly as for the four-eyes bypass above, and the gate is only as strong as the handling of the token (SSO configured, token held out of band).
 - With no sign-in configured the switch binds nobody, and boot says so.
+- With the switch off, the default, an SSO admin's own runs are ungoverned too and get the deployment default, not a member's profile. That is the documented posture, and the docs recommend the switch wherever admins sign in with SSO.
 - `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` set to `recording` is the one deliberate exemption: Record Mode then runs for a governed admin with open egress and the operator's credential injections, and each recording is marked `governance_exempt` on `run.record.start`.
 
 ### Four-eyes on governance writes: what it guarantees, and nine residuals

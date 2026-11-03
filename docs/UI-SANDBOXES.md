@@ -314,6 +314,7 @@ export WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 ## 3. Open an app
 
 - A background task's UI apps cannot be opened (`409 run_background_only`), except an [inbound](#inbound-let-named-callers-reach-a-port) app. One more door opens: the built-in desktop of a background macOS VM run opens as a view-only watch for the person who started the run ([Watching a background run's desktop](operations/macos-vms.md#watching-a-background-runs-desktop)). A declared noVNC app, a terminal and the desktop's files stay refused.
+- A script that asks `POST /runs/{id}/attach/ticket?purpose=ui` for a background run gets `409 run_background_only`. For the desktop of a background macOS VM run, call `POST /runs/{id}/desktop/watch-ticket` instead; the steps below are for a run that is not a background task.
 - A screen can show what a background run keeps out of its logs, such as a secret in a GUI app or a document. The site switch `macos_vm.allow_background_watch` and the profile limit `deny_background_desktop_watch` turn watching off.
 - Three calls:
   1. Mint a single-use attach ticket (the **same** ticket the browser terminal uses — there is no second ticket type); `?purpose=ui` skips the terminal session cap at the mint, since a UI session holds no terminal slot,
