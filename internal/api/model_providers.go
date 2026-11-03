@@ -77,6 +77,7 @@ const (
 	mp400GatewayAudience      = "model_providers: %q: gateway_identity: audience is required"
 	mp400GatewayAudienceForm  = "model_providers: %q: gateway_identity: audience must be at most %d bytes, with no control characters"
 	mp400GatewayLifetime      = "model_providers: %q: gateway_identity: token_lifetime_seconds must be between %d and %d"
+	mp400GatewayInspection    = "model_providers: %q: gateway_identity: inspection must be empty (Wardyn checks prompts) or %q (this gateway checks them)"
 	mp400GatewayAudienceDup   = "model_providers: %q: gateway_identity.audience %q is already used by provider %q for a different address; use a different one for each"
 	mp400GatewayAudienceMoved = "model_providers: %q: moved to a new address, so gateway_identity.audience can't stay the same: use a different one, or save with identity off first"
 )
