@@ -51,6 +51,12 @@ describe("wall presets wire", () => {
     expect(new Set(tsKeys(ts, tsName))).toEqual(new Set(tags));
   });
 
+  it("RunWallPreset (the run read) and the create field wall_preset are the client's", () => {
+    expect(new Set(tsKeys(ts, "RunWallPreset"))).toEqual(new Set(goJSONTags(read("pkg/client/runs_create.go"), "RunWallPreset")));
+    expect(goJSONTags(read("pkg/client/runs_create.go"), "CreateRunRequest")).toContain("wall_preset");
+    expect(tsKeys(read("ui/src/app/lib/types/run-create.ts"), "CreateRunInput")).toContain("wall_preset");
+  });
+
   it("WallPresetScope is the Go constants", () => {
     const go = [...read("internal/types/wall_preset.go").matchAll(/WallPresetScope[A-Za-z]+\s+WallPresetScope = "([a-z]+)"/g)].map((m) => m[1]);
     const m = /export type WallPresetScope =([^;]+);/.exec(stripComments(ts));

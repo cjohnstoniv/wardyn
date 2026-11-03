@@ -42,3 +42,15 @@ export interface WallPresetSaveRequest {
   spec: PersonalWallsSpec;
   expected_version?: number;
 }
+
+/**
+ * Mirrors Go's client.RunWallPreset: the run read's wall_preset (GET /runs/{id}), never the spec. A personal preset
+ * read by anyone but the run's owner carries its scope alone: no id, name or version.
+ */
+export interface RunWallPreset {
+  id?: string;
+  name?: string;
+  scope: WallPresetScope;
+  group_id?: string;
+  version?: number;
+}

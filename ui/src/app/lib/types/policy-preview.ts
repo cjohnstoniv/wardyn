@@ -67,6 +67,10 @@ export interface PolicyPreviewResult {
   // The run-level reason the per-person Azure DevOps credential would not be
   // given to this run's sandbox; absent when no structural decline was reported.
   ado_lane_declined?: string;
+  // The install's git token broker is off and the run's capability list leaves out code_write, so a git token in
+  // the sandbox can still push. Set from the decision behind the run's unstoppable-push warning, which the preview
+  // does not send as a warning.
+  pushes_unstoppable?: boolean;
   // Absent for a draft with no component and no GitHub or Azure DevOps repository.
   components?: ComponentFact[];
   // Why each entry is in `spec`, from the same fold as the launch. The server always

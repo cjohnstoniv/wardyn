@@ -36,6 +36,8 @@ import {
 import { Chip } from "../../wardyn/primitives";
 import { ErrorState } from "../../wardyn/states";
 import { cn } from "../../ui/utils";
+import { audienceOf } from "../../../lib/wall-preset-words";
+import { WallPresetRunLine } from "./wall-preset-run-lines";
 import { CHANGE_HEADING, FIELD_LABEL, POLICY_TAB, SUMMARY, type PlainCause } from "./policy-tab-copy";
 
 type Load = { status: "loading" } | { status: "error" } | { status: "ready"; view: RunPolicyView };
@@ -89,6 +91,13 @@ export function PolicyTab({ run }: { run: RunDetail }) {
         <p className="mt-0.5 text-xs text-muted-foreground">
           {POLICY_TAB.preset(view.source.preset, view.source.preset_version ?? 0)}
         </p>
+      )}
+      {run.wall_preset && (
+        <WallPresetRunLine
+          name={run.wall_preset.name}
+          audience={run.wall_preset.name ? audienceOf({ scope: run.wall_preset.scope, group_id: run.wall_preset.group_id }) : undefined}
+          version={run.wall_preset.version}
+        />
       )}
       {view.state === "not_yet" && <p className="mt-2 text-body text-muted-foreground">{POLICY_TAB.notYet}</p>}
       {view.state === "never" && <p className="mt-2 text-body text-muted-foreground">{POLICY_TAB.never}</p>}

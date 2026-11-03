@@ -131,7 +131,8 @@ export function policyRows(
   rows.push({ id: "tools", label: WALL_PRESETS.ROW_TOOLS, value, detail: joined(toolsDetail, wallsDetail), ...(harnessRules.length > 0 && { notes: harnessRules }) });
   // Pushes are their own row (board WP-2): every push refused and no write access outrank where a push could go.
   const spec = preview?.spec;
-  const pushes = spec ? pushesLines(spec).join("; ") : "";
+  // The server says when pushes cannot be stopped here (broker off, no code_write): that outranks any refusal below.
+  const pushes = preview?.pushes_unstoppable ? WALL_PRESETS.PUSHES_UNSTOPPABLE : spec ? pushesLines(spec).join("; ") : "";
   if (pushes) rows.push({ id: "pushes", label: WALL_PRESETS.ROW_PUSHES, value: pushes });
   return rows;
 }

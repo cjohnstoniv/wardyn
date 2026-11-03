@@ -716,3 +716,27 @@ describe("PolicyTab — Summary / YAML switch and Copy YAML", () => {
     expect(screen.getByText(POLICY_TAB.scope)).toBeInTheDocument();
   });
 });
+
+describe("PolicyTab: the run's wall preset line", () => {
+  const withPreset = (wall_preset: RunDetail["wall_preset"]) => ({ ...RUN, wall_preset }) as RunDetail;
+
+  it("names the preset, its audience and version under the source line", async () => {
+    show(view(), { run: withPreset({ id: "sealed", name: "Sealed", scope: "builtin", version: 1 }) });
+    await ready();
+    expect(screen.getByTestId("wall-preset-run-line")).toHaveTextContent("Wall preset: Sealed (built in, version 1).");
+  });
+
+  it("says a personal wall preset, naming nothing, when the run read carries its scope alone", async () => {
+    show(view(), { run: withPreset({ scope: "person" }) });
+    await ready();
+    const line = screen.getByTestId("wall-preset-run-line");
+    expect(line).toHaveTextContent("Wall preset: a personal wall preset.");
+    expect(line).not.toHaveTextContent("version");
+  });
+
+  it("draws no line for a run launched without a wall preset", async () => {
+    show(view());
+    await ready();
+    expect(screen.queryByTestId("wall-preset-run-line")).toBeNull();
+  });
+});

@@ -10,6 +10,7 @@
 import type { AutonomyLevel, RunLimits } from "../api/governance";
 import type { PolicyRef } from "../api/health";
 import type { PolicyContact } from "./site";
+import type { RunWallPreset } from "./wall-presets";
 import type { Experience, RunOverrides } from "./new-run-contract";
 import type { HarnessInnerWalls, RecordingLevel, RunPolicySpec } from "./policy";
 import type { VMKind } from "./machine-kind";
@@ -587,6 +588,8 @@ export interface RunDetail extends AgentRun {
   mac_window?: RunMacWindow;
   // Where a macOS VM run's disk stands on its Mac at the run's end (GET /runs/{id} only); see RunMacOSDisk.
   macos_disk?: RunMacOSDisk;
+  // The wall preset the run was launched with, never its spec (GET /runs/{id} only).
+  wall_preset?: RunWallPreset;
 }
 
 // GET /runs/{id}'s macos (runMacOSView, internal/api/run_macos_view.go): whether the Mac's Screen Sharing

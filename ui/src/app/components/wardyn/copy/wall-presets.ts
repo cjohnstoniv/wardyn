@@ -84,14 +84,11 @@ export const WALL_PRESETS = {
   NAME: "Name",
   AUDIENCE: "Available to",
   ONLY_ME: "Only me",
-  // A form section a server sentence names, in the section's own words: the sentence follows it.
-  SECTION_NAME: "Name",
   // New Run, Tools step.
   CONTROL: "Wall preset",
   CONTROL_HELP: "Narrows this run only, on top of your walls. Open keeps your policy as it stands.",
   MORE: "More presets",
   PRESET_LINE: (name: string, clauses: string) => `The ${name} wall preset applies: ${clauses}.`,
-  PRESET_LINE_NONE: (name: string) => `The ${name} wall preset applies.`,
   CLAUSE_EVERY_PUSH: "every push refused",
   CLAUSE_READ_ONLY: "read capabilities only",
   CLAUSE_FORGE_READ: (forge: string) => `${forge} read only`,
@@ -118,9 +115,6 @@ export const WALL_PRESETS = {
   // Run page.
   RUN_LINE: (name: string, audience: string, version: string | number) => `Wall preset: ${name} (${audience}, version ${version}).`,
   RUN_LINE_PERSONAL: "Wall preset: a personal wall preset.",
-  CHANGE_HEADING: (name: string) => `Wall preset: ${name}`,
-  CHANGE_HEADING_PERSONAL: "A personal wall preset",
-  CHIP: (name: string) => `Wall preset: ${name}`,
   // The Why card's wall_preset arm.
   WHY_SET_BY: (name: string) => `Wall preset: ${name}`,
   WHY_SET_BY_PERSONAL: "A personal wall preset",
@@ -131,10 +125,6 @@ export const WALL_PRESETS = {
   APPROVAL_OWN_AFTER: ". Launch a new run without it.",
   APPROVAL_OTHER: (owner: string, name: string) => `${owner}'s run uses the ${name} wall preset, which blocks `,
   APPROVAL_OTHER_AFTER: ".",
-  PUSH_REFUSED_LABEL: "Refused: every push",
-  PUSH_REFUSED_BY: (name: string) => `Refused by this run's ${name} wall preset.`,
-  QUEUED_CHANGED: (name: string, queued: string | number, now: string | number) =>
-    `The run was queued with the ${name} wall preset, version ${queued}. It was at version ${now} when the run would have started.`,
 } as const;
 
 const isRead = (c: string) => c.endsWith("_read") || c === "identity";

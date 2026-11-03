@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -60,6 +61,7 @@ func (s *Server) handlePolicyPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response := policyPreviewFacts(req, f.spec, f.source, f.policyWarns, f.scmSite, f.mpChoice)
+	response.PushesUnstoppable = slices.Contains(f.policyWarns, unstoppablePushWarning)
 	response.Provenance = f.prov
 	response.Attachments = f.attachments
 	response.RunnerPool, response.RunnerPools = f.place.facts()
