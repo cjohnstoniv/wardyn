@@ -835,3 +835,38 @@ func TestAgentCast_ASweptRowWithAnUnreadableHeaderIsUnknown(t *testing.T) {
 		t.Fatalf("rows %v owed %v, want one row saying incomplete, completeness unknown, and nothing owed", rows, cs.owing())
 	}
 }
+
+// A copy whose masker dropped every byte and that ended in an error goes to the sweep's re-read, not to
+// mask_gap: the obligation stays, and the re-read, masked afresh, stores the cast with the run recorded.
+func TestAgentCast_AFailedCopyTheMaskerDroppedIsReRead(t *testing.T) {
+	rr := newRecoveringRunner()
+	rr.log = "agent output, re-read\n"
+	f, cs, casts := agentCastFixture(t, types.MachineMacOSVM, func(c *Config) { c.Runner = rr })
+	_, spec, ok := startDispatch(f, types.SiteConfig{}, false)
+	tw, _ := spec.ExecOutput.(*tailWriter)
+	if !ok || tw == nil || tw.cast == nil {
+		t.Fatalf("started=%v, want started with a cast", ok)
+	}
+	castGuard(tw.cast, func() bool { return false })
+	tw.BeginDrain()
+	_, _ = tw.Write([]byte("output the masker cannot vouch for\n"))
+	tw.EndDrain(errors.New("output ack lost"))
+	ended := time.Now()
+	f.st.mu.Lock()
+	f.st.state, f.st.run.EndedAt = types.RunCompleted, &ended
+	f.st.mu.Unlock()
+	f.srv.FinishRunOutput(t.Context(), f.run.ID)
+	if rows := castRows(t, f, agentCastSession); len(rows) != 0 || !cs.owing() || cs.marked() != "" {
+		t.Fatalf("rows %v owed %v mark %q, want no mask_gap decline and the obligation kept", rows, cs.owing(), cs.marked())
+	}
+	dropTail(f)
+	if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if row := waitCastRow(t, f, agentCastRecoveredSession); row["outcome"] != "success" || row["mask_gap"] != nil || cs.owing() || cs.marked() != "" {
+		t.Fatalf("row %v owed %v mark %q, want the re-read stored and the run recorded", row, cs.owing(), cs.marked())
+	}
+	if out := readCast(t, casts, f.run.ID, agentCastRecoveredSession); !strings.Contains(out, "re-read") {
+		t.Fatalf("recovered cast %q", out)
+	}
+}

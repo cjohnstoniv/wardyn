@@ -219,12 +219,14 @@ func (c *agentCast) take() func() error {
 	switch {
 	case declined != "":
 		return func() error { return c.s.declineAgentOutput(ctx, c.run, declined) }
-	case !had && maskGap:
-		return func() error { return c.s.declineAgentOutput(ctx, c.run, "mask_gap") }
 	case !had && readErr != nil:
+		// Before mask_gap: the sweep's re-read masks afresh and may keep what this copy dropped, and its
+		// give-up (agentCastReadGiveUp) still bounds it.
 		return func() error {
 			return agentCastStoreErr(ctx, c.run.ID, "re-read a run's agent output", fmt.Errorf("%w: %w", errAgentCastUnread, readErr))
 		}
+	case !had && maskGap:
+		return func() error { return c.s.declineAgentOutput(ctx, c.run, "mask_gap") }
 	case !had:
 		return func() error { return c.s.settleAgentCast(ctx, c.run.ID) }
 	case readErr != nil:
