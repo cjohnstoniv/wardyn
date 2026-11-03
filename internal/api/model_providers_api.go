@@ -329,6 +329,12 @@ type SetupModelProvider struct {
 	// DefaultFor are the harnesses whose roster default this provider is.
 	DefaultFor []string `json:"default_for,omitempty"`
 	Host       string   `json:"host"`
+	// SignIn is "oidc" for a custom endpoint that signs people in at its own authority, so the console offers
+	// a sign-in door where it would offer a paste-a-token one; absent otherwise. IdentityBinding rides with
+	// it ("console" or "none"; "none" is the "not bound to your sign-in" line). Whether THIS person has a live
+	// sign-in is their access state (SetupProviderAccess), not a property of the row.
+	SignIn          string `json:"sign_in,omitempty"`
+	IdentityBinding string `json:"identity_binding,omitempty"`
 }
 
 // setupModelProviders is SetupStatus.ModelProviders: nil (absent) with no block,
@@ -348,6 +354,9 @@ func (s *Server) setupModelProviders(ctx context.Context, sc types.SiteConfig) [
 	for _, p := range sc.ModelProviders.Providers {
 		row := SetupModelProvider{ID: p.ID, Name: p.Name, Kind: string(p.Kind), Disabled: p.Disabled,
 			Harnesses: []string{}, Host: providerHost(p)}
+		if p.OIDC != nil && p.Kind == types.ModelProviderCustomEndpoint {
+			row.SignIn, row.IdentityBinding = "oidc", p.OIDC.Binding()
+		}
 		for _, h := range p.Harnesses {
 			if !launchable(h.Harness) {
 				continue
