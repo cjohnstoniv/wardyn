@@ -138,6 +138,17 @@ func refuseKeptSecrets(spec runner.SandboxSpec) error {
 	return fmt.Errorf("docker: a kept machine takes no secret that lives inside it, and this run carries %s", strings.Join(held, ", "))
 }
 
+// refuseMacVMStart is refuseMacVMSpec, then a kept machine's own start (keptStart): its checks, a
+// resume's tools update, and the machine's own manifest in place of the base's.
+func (d *Driver) refuseMacVMStart(ctx context.Context, spec runner.SandboxSpec) (macvm.Manifest, *macvm.KeptRun, error) {
+	man, err := d.refuseMacVMSpec(spec)
+	if err != nil {
+		return man, nil, err
+	}
+	kept, err := d.keptStart(ctx, spec, &man)
+	return man, kept, err
+}
+
 // keptStart is a kept machine session's part of a create, before the helper starts: the Mac's own checks
 // of the machine, and for a resume the machine's tools update and its own manifest in man (what the
 // run's size and harnesses are checked against, and what its disk reservation counts). It answers what

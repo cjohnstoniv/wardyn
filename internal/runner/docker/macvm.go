@@ -359,17 +359,12 @@ func (c *MacVMConfig) admitMacVM(req admission.Request) (admission.Entry, error)
 //
 //nolint:funlen // One linear assembly sequence whose rollback must stay in one scope, as createVM's.
 func (d *Driver) createMacVM(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
-	man, err := d.refuseMacVMSpec(spec)
+	man, kept, err := d.refuseMacVMStart(ctx, spec)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
 	// Folders are checked before anything exists, as createVM checks its mounts, and disk drives with them.
 	shares, guestMounts, disks, guestDisks, err := d.macDrives(ctx, spec)
-	if err != nil {
-		return runner.Sandbox{}, err
-	}
-	// A kept machine's own checks; a resume's tools update, and its own manifest in man.
-	kept, err := d.keptStart(ctx, spec, &man)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
