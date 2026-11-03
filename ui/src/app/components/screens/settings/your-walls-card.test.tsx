@@ -231,6 +231,19 @@ describe("Your walls card", () => {
     expect(screen.getByRole("checkbox", { name: YOUR_WALLS.UPLOAD })).not.toBeChecked();
   });
 
+  it("Remove all walls stays open and shows the error when the clear fails", async () => {
+    getMock.mockResolvedValue({ spec: { denied_domains: ["a.example.com"] } });
+    clearMock.mockRejectedValue(new HttpError(500, "could not clear", "walls_unavailable"));
+    render(<YourWallsCard />);
+    await open();
+    await user.click(screen.getByRole("button", { name: YOUR_WALLS.REMOVE_ALL }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: YOUR_WALLS.REMOVE_ALL }));
+    await waitFor(() => expect(clearMock).toHaveBeenCalledTimes(1));
+    expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent("could not clear");
+    expect(screen.getByText("a.example.com")).toBeInTheDocument();
+  });
+
   it("says what the server refused with its code in small print, and offers no Saved", async () => {
     putMock.mockRejectedValue(new HttpError(400, "invalid walls: denied_domains[0]: \"x y\" must be a DNS name", "walls_invalid"));
     render(<YourWallsCard />);
