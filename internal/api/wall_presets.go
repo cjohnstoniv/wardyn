@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -138,9 +139,28 @@ func (s *Server) handleListWallPresets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := client.WallPresetList{Presets: types.BuiltinWallPresets(), Publish: c.publish()}
+	labelled := slices.Clone(out.Publish.Groups)
 	for _, p := range rows {
 		if types.TemplateAuthorize(c.actor, p.Owner(), types.TemplateRead) == types.TemplateAllowed {
 			out.Presets = append(out.Presets, wallPresetView(p))
+			if p.GroupID != "" && !slices.Contains(labelled, p.GroupID) {
+				labelled = append(labelled, p.GroupID)
+			}
+		}
+	}
+	// publish.group_labels labels the groups the caller may save to and those of the group presets
+	// they can read, as the templates' list does; never a group outside both.
+	labels, err := ps.TemplateGroupLabels(r.Context(), labelled)
+	if err != nil {
+		writeServerError(w, r, "read wall preset group labels", err)
+		return
+	}
+	for _, g := range labelled {
+		if l := labels[g]; l != "" {
+			if out.Publish.GroupLabels == nil {
+				out.Publish.GroupLabels = map[string]string{}
+			}
+			out.Publish.GroupLabels[g] = l
 		}
 	}
 	writeJSON(w, http.StatusOK, out)

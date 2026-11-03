@@ -135,7 +135,7 @@ func (p *Proxy) governADOContent(w http.ResponseWriter, r *http.Request, host st
 }
 
 // adoPushDenyAllRefusal is the REST door's sentence for a write deny_all refused.
-const adoPushDenyAllRefusal = "Wardyn refused this Azure DevOps request: this run may not push: its policy refuses every push."
+const adoPushDenyAllRefusal = "Wardyn refused this Azure DevOps request: every push is refused for this run."
 
 // adoWritesRepository reports whether an Azure DevOps REST request writes a
 // repository: what it holds (Git Pushes - Create, a route that writes content

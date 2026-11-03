@@ -801,7 +801,7 @@ const ruleSourceGitPushEntry = "brokered:git:push-entry-underivable"
 const ruleSourceGitPushDenyAll = "brokered:git:push-deny-all"
 
 // pushDenyAllRefusal is what git shows for a push deny_all refused.
-const pushDenyAllRefusal = "wardyn: this run may not push: its policy refuses every push"
+const pushDenyAllRefusal = "wardyn: every push is refused for this run"
 
 // rulesForRemote is the content rules of the SCM entry that owns the remote at
 // host and path. With no PushRuleSets the run is on the older run-wide regime

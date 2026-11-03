@@ -594,12 +594,14 @@ func (s *Server) finishCreateRunLaunchTwin() { s.dispatchRun(nil, nil, nil, nil)
 
 // sealLayerCensus is every function that builds an outer layer of the seal (a sealLayer literal), as
 // "file function" and how many it builds: the Wardyn boundary, a restriction and the run owner's own
-// walls, each with its fail-closed layer for a read that failed. A new layer is listed only once the
+// walls, each with its fail-closed layer for a read that failed, and the walls' own layer, which the
+// owner's walls and the run's wall preset (read from the run, so it has no failed read) both build. A new layer is listed only once the
 // withholding, the mint door's pre-read and the run.ceiling.reassert row read it as they read these.
 var sealLayerCensus = map[string]int{
 	"run_policy_seal.go outerLayers":                   2,
 	"governance_restrictions.go restrictionSealLayers": 2,
-	"personal_walls.go personalWallsSealLayer":         2,
+	"personal_walls.go personalWallsSealLayer":         1,
+	"personal_walls.go wallsSealLayer":                 1,
 }
 
 // sealLayersIn is each sealLayer literal in f's functions, as "file function": a typed one, or an
