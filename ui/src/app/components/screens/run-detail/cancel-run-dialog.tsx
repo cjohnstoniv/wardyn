@@ -16,9 +16,9 @@ export default function CancelRunDialog({ runId, title, onClose }: { runId: stri
     onClose();
     try {
       await runsApi.killRun(id);
-      toast.success(`Kill requested for ${id}`);
+      toast.success(`End requested for ${id}`);
     } catch (err) {
-      toast.error(`Failed to kill ${id}`, { description: getErrorMessage(err) });
+      toast.error(`Couldn't end ${id}`, { description: getErrorMessage(err) });
     }
   };
   return <KillRunDialog runId={runId} title={title} onOpenChange={(open) => !open && onClose()} onConfirm={(id) => void cancel(id)} />;

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { END_RUN } from "../src/app/components/wardyn/copy/run-lifetime";
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { test, expect, MEMBER_PRINCIPAL, asRealMember, asRealSecurityAdmin, consoleAPI, gotoConsole, sql } from "./fixtures";
@@ -736,7 +737,7 @@ test.describe("killing a run cancels its still-PENDING approvals", () => {
       await page.goto(`/runs/${runId}`);
       await expect(page.getByText("Running", { exact: true }).first()).toBeVisible();
 
-      const killBtn = page.getByRole("button", { name: "Kill", exact: true });
+      const killBtn = page.getByRole("button", { name: END_RUN, exact: true });
       await expect(killBtn).toBeEnabled();
       await killBtn.click();
       const confirm = page.getByRole("alertdialog");
@@ -798,7 +799,7 @@ test.describe("T-68 — a seeded PENDING credential_reauth row on /approvals", (
 
       await page.goto(`/runs/${runId}`);
       await expect(page.getByText("Running", { exact: true }).first()).toBeVisible();
-      const killBtn = page.getByRole("button", { name: "Kill", exact: true });
+      const killBtn = page.getByRole("button", { name: END_RUN, exact: true });
       await expect(killBtn).toBeEnabled();
       await killBtn.click();
       const confirm = page.getByRole("alertdialog");

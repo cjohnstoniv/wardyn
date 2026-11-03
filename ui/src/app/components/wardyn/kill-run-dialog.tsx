@@ -54,7 +54,7 @@ export function KillRunDialog({
               </>
             )}
             This terminates the agent run, tears down the sandbox, and revokes any brokered
-            credentials. The kill is recorded in the audit trail. This cannot be undone.
+            credentials. Ending the run is recorded in the audit trail. This cannot be undone.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

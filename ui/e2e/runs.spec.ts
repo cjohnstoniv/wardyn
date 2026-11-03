@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { END_RUN } from "../src/app/components/wardyn/copy/run-lifetime";
 import { randomUUID } from "node:crypto";
 import { test, expect, ADMIN_TOKEN, asRealMember, gotoConsole, navTo, sidebarLink, sql } from "./fixtures";
 import { RUN_WAIT } from "../src/app/components/wardyn/copy/run-wait";
@@ -161,7 +162,7 @@ test.describe("Killing an active run", () => {
   // especially, so pinning one fixture is racy. On the `none` runner the run
   // has no live process, so the backend 409s the kill yet reconciles the row
   // to a terminal state. The UI's error-handling fix turns that rejection into
-  // a "Failed to kill" toast (instead of an unhandled rejection that blanks
+  // a "Couldn't end" toast (instead of an unhandled rejection that blanks
   // the console) and always re-syncs the run — we assert EITHER toast variant:
   // the point is the failure is surfaced, not swallowed.
   const ACTIVE_BADGE: Record<string, string> = {
@@ -192,7 +193,7 @@ test.describe("Killing an active run", () => {
     await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/);
     await expect(page.getByText(badge, { exact: true })).toBeVisible();
 
-    const killBtn = page.getByRole("button", { name: "Kill", exact: true });
+    const killBtn = page.getByRole("button", { name: END_RUN, exact: true });
     await expect(killBtn).toBeEnabled();
     await killBtn.click();
 
@@ -204,9 +205,9 @@ test.describe("Killing an active run", () => {
     await expect(confirm.getByTestId("run-ref").getByRole("button")).toHaveText(/^[0-9a-f]{8}$/);
     await confirm.getByRole("button", { name: "End run" }).click();
 
-    // Success on a graceful kill, or "Failed to kill" on a 409 from the `none`
+    // Success on a graceful kill, or "Couldn't end" on a 409 from the `none`
     // runner. Either proves the rejection was handled, not swallowed.
-    await expect(page.getByText(/Kill requested for|Failed to kill/).first()).toBeVisible({
+    await expect(page.getByText(/End requested for|Couldn't end/).first()).toBeVisible({
       timeout: 10000,
     });
 

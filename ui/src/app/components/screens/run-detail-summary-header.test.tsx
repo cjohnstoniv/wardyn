@@ -30,6 +30,7 @@ import type { SetupStatus } from "../../lib/types";
 import { AUTONOMY_META } from "../wardyn/autonomy-meta";
 import { PENDING_NO_DETAIL, STARTING_CONTAINER_CREATING, STARTING_UNSCHEDULABLE } from "./run-status-detail";
 import { setField } from "../../../test/set-field";
+import { END_RUN } from "../wardyn/copy/run-lifetime";
 
 // SummaryHeader now renders a "Runs" breadcrumb <Link> (react-router-dom),
 // which throws outside a Router context — wrap every render the same way
@@ -450,7 +451,7 @@ describe("SummaryHeader — state once, with a visible status sentence", () => {
         <SummaryHeader run={runningInteractive} terminal={false} onCopyLink={() => {}} onRename={() => {}} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByRole("button", { name: "Kill" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: END_RUN })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: RUN_HEADER.MORE }));
     expect(await screen.findByRole("menuitem", { name: "Copy link to this run" })).toBeInTheDocument();
   });

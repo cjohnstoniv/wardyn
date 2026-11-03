@@ -187,7 +187,7 @@ describe("ConnectSSHCard — external-tool notice", () => {
     renderCard({ description: "external:my-tool" });
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
     expect(
-      screen.getByText("Managed by an external tool — killing this run tears down that tool's workspace."),
+      screen.getByText("Managed by an external tool — ending this run tears down that tool's workspace."),
     ).toBeInTheDocument();
   });
 
