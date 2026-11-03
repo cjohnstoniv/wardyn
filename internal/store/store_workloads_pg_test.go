@@ -734,8 +734,9 @@ func TestPG_Workload_ViewReadsTheProbe(t *testing.T) {
 	probedRun := persistRun(t, ctx, pool, newRun(types.RunRunning))
 	plainRun := persistRun(t, ctx, pool, newRun(types.RunRunning))
 	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET service = '{"health":{"probe":"control_plane"}}',
-		service_status = '{"health":"healthy","probe":{"health":"unhealthy","reason":"timeout","failures":2,"observed_at":"2026-11-03T00:00:00Z"}}'
-		WHERE id = $1`, probedRun.ID); err != nil {
+		service_status = jsonb_build_object('health', 'healthy', 'probe',
+			jsonb_build_object('health', 'unhealthy', 'reason', 'timeout', 'failures', 2, 'observed_at', $2::timestamptz))
+		WHERE id = $1`, probedRun.ID, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET service_status = '{"health":"healthy"}' WHERE id = $1`, plainRun.ID); err != nil {
