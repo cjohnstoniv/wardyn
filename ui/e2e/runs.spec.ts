@@ -200,7 +200,7 @@ test.describe("Killing an active run", () => {
     await expect(confirm).toBeVisible();
     await expect(confirm.getByText(/Kill .+\?/)).toBeVisible();
     // #3036: the question names the run by its title, and the short id beside it is the copyable reference.
-    await expect(confirm.getByText(`Kill "${victim!.task}"?`)).toBeVisible();
+    await expect(confirm.getByText(`End ${victim!.task}?`)).toBeVisible();
     await expect(confirm.getByTestId("run-ref").getByRole("button")).toHaveText(/^[0-9a-f]{8}$/);
     await confirm.getByRole("button", { name: "End run" }).click();
 

@@ -293,7 +293,7 @@ describe("RunLifetimeBanner — End run asks first (UXR-15)", () => {
     renderBanner(ended(), [], onChanged);
     await user.click(screen.getByRole("button", { name: "End run" }));
     const dialog = await screen.findByRole("alertdialog");
-    expect(dialog).toHaveAccessibleName('Kill "nightly build"?');
+    expect(dialog).toHaveAccessibleName("End nightly build?");
     expect(dialog).toHaveTextContent("This cannot be undone.");
     expect(killRunMock).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
