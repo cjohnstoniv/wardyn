@@ -95,12 +95,13 @@ func TestRemoteMacWindowCloseEndsTheHelperConnection(t *testing.T) {
 // The runner's refusals the organisation words itself are told apart; anything else stays an error.
 func TestRemoteMacWindowRefusals(t *testing.T) {
 	for name, tc := range map[string]struct {
-		err          error
-		notAtMac, op bool
+		err                   error
+		notAtMac, op, unknown bool
 	}{
 		"already open":    {err: runner.ErrMacWindowOpen, op: true},
 		"not at the Mac":  {err: &runner.MacWindowRefusal{Code: macvm.WindowCodeNotAtMac, Sentence: macvm.WindowNotAtMacSentence}, notAtMac: true},
 		"screen unread":   {err: &runner.MacWindowRefusal{Code: macvm.WindowCodeNotAtMac, Sentence: macvm.WindowUnreadableSentence}, notAtMac: true},
+		"lock unknown":    {err: &runner.MacWindowRefusal{Code: macvm.WindowCodeLockUnknown, Sentence: macvm.WindowLockUnknownSentence}, unknown: true},
 		"helper too old":  {err: runner.ErrMacWindowHelperOld},
 		"not running":     {err: &runner.MacWindowRefusal{Code: macvm.WindowCodeNotRunning, Sentence: macvm.WindowNotRunningSentence}},
 		"runner's own":    {err: errors.New("disk on fire")},
@@ -117,6 +118,9 @@ func TestRemoteMacWindowRefusals(t *testing.T) {
 		}
 		if got := errors.Is(err, remote.ErrMacWindowAlreadyOpen); got != tc.op {
 			t.Errorf("%s: already-open = %v for %v", name, got, err)
+		}
+		if got := errors.Is(err, remote.ErrMacWindowLockUnknown); got != tc.unknown {
+			t.Errorf("%s: lock-unknown = %v for %v", name, got, err)
 		}
 	}
 }

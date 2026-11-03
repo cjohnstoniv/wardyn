@@ -261,6 +261,7 @@ const (
 	reasonMacWindowNotHere        = "mac_window_not_here"        // the runner is connected through another server, and nothing routes the call there
 	reasonMacWindowOpen           = "mac_window_open"            // the run already has a window open
 	reasonMacWindowNotAtMac       = "mac_window_not_at_mac"      // the person isn't signed in at the Mac's screen, or it is locked
+	reasonMacWindowLockUnknown    = "mac_window_lock_unknown"    // the Mac can't tell whether its screen is locked, so the window fails closed
 	reasonMacWindowRevoked        = "mac_window_revoked"         // the caller's session was cut off
 	reasonMacWindowFailed         = "mac_window_failed"          // the runner could not open the window
 	reasonDesktopWindowInvalid    = "desktop_window_invalid"     // desktop_window is not "at_start", or is on a run that is not a macOS VM

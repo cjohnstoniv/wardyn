@@ -52,6 +52,7 @@ const (
 	macWindowPreparingMsg      = "This run is still being prepared; the window opens when preparation finishes."
 	macWindowRevokedMsg        = "This session is no longer authorized, so Wardyn won't open a window. Sign in again."
 	macWindowFailedMsg         = "Wardyn couldn't open the window on the run's Mac. The run goes on; try again."
+	macWindowLockUnknownMsg    = "Wardyn can't tell whether this Mac's screen is locked, so the window stays closed."
 )
 
 // macWindowNotYourMacMsg is the refusal of a window on a run that is not on a Mac whose runner the caller
@@ -98,12 +99,13 @@ const (
 	macWindowHelperFailed   = "helper_failed"
 )
 
-// errMacWindowNotAtMac and errMacWindowAlreadyOpen are the two refusals the runner makes that the control plane
-// words itself; any other error from macWindowSub.MacWindow is macWindowFailedMsg. The runner's adapter maps its
-// codes onto them.
+// errMacWindowNotAtMac, errMacWindowAlreadyOpen and errMacWindowLockUnknown are the refusals the runner makes that
+// the control plane words itself; any other error from macWindowSub.MacWindow is macWindowFailedMsg. The runner's
+// adapter maps its codes onto them.
 var (
 	errMacWindowNotAtMac    = errors.New("mac window: the person is not at the Mac's unlocked screen")
 	errMacWindowAlreadyOpen = errors.New("mac window: the runner already holds a window for this run")
+	errMacWindowLockUnknown = errors.New("mac window: the Mac can't tell whether its screen is locked")
 )
 
 // macWindowSub is a runner's end of the grant. The runner's adapter implements it; the zero state of a runner
@@ -114,7 +116,8 @@ type macWindowSub interface {
 	MacWindowSupported() (supported, reported bool)
 	// MacWindow asks the runner to put a window on the live VM of the sandbox ref. ctx bounds the open only;
 	// the returned session outlives it. It returns errMacWindowNotAtMac when the person's session is not the
-	// Mac's unlocked console, and errMacWindowAlreadyOpen when it already holds a window for the run.
+	// Mac's unlocked console, errMacWindowLockUnknown when the Mac can't tell whether its screen is locked, and
+	// errMacWindowAlreadyOpen when it already holds a window for the run.
 	MacWindow(ctx context.Context, ref string, req macWindowRequest) (macWindowSession, error)
 }
 
@@ -532,6 +535,8 @@ func (s *Server) openMacWindow(ctx context.Context, run types.AgentRun, a macWin
 	switch {
 	case errors.Is(err, errMacWindowNotAtMac):
 		return fail(runError(http.StatusConflict, reasonMacWindowNotAtMac, types.MacWindowNotAtMacMsg(rn.Name)))
+	case errors.Is(err, errMacWindowLockUnknown):
+		return fail(runError(http.StatusConflict, reasonMacWindowLockUnknown, macWindowLockUnknownMsg))
 	case errors.Is(err, errMacWindowAlreadyOpen):
 		return fail(runError(http.StatusConflict, reasonMacWindowOpen, types.MacWindowOpenMsg(rn.Name)))
 	case err != nil || sess == nil:

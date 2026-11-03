@@ -50,7 +50,7 @@ const (
 // connection first gets no event: it knows why.
 const (
 	WindowClosedPerson     = "person"      // the person closed the window
-	WindowClosedHostLocked = "host_locked" // the Mac's screen locked or its console session changed
+	WindowClosedHostLocked = "host_locked" // the Mac's screen locked, its lock can no longer be told, or its console session changed
 	WindowClosedRunEnded   = "run_ended"   // the VM stopped
 	WindowClosedFailed     = "failed"      // the console check could not be read, so the window closed
 )
@@ -66,6 +66,7 @@ const (
 	WindowCodeNotOwner    = "window_not_owner"
 	WindowCodeOpen        = "window_open"
 	WindowCodeNotAtMac    = "window_not_at_mac"
+	WindowCodeLockUnknown = "window_lock_unknown"
 	WindowCodeUnavailable = "window_unavailable"
 	WindowCodeBadRequest  = "window_bad_request"
 	WindowCodeFailed      = "window_failed"
@@ -83,6 +84,8 @@ const (
 	WindowNotAtMacSentence = "The window didn't open: you aren't signed in at this Mac's screen, or it is locked. Unlock it and open the window again."
 	// WindowUnreadableSentence answers a console check that could not be read; the window refuses.
 	WindowUnreadableSentence = "The window didn't open: Wardyn couldn't tell whether you are at this Mac's screen. Unlock it and open the window again."
+	// WindowLockUnknownSentence answers a screen whose lock state can't be told; the window fails closed.
+	WindowLockUnknownSentence = "Wardyn can't tell whether this Mac's screen is locked, so the window stays closed."
 	// WindowUnavailableSentence answers a helper or VM that cannot draw a window.
 	WindowUnavailableSentence = "This Mac's Wardyn helper can't open a window onto this run's VM. Update Wardyn on this Mac."
 	// WindowBadRequestSentence answers a window request with no usable grant id.

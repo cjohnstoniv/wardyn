@@ -17,6 +17,7 @@ func TestMacWindowSentencesAreTheHelpers(t *testing.T) {
 		"already open": {runnerwire.MacWindowOpenSentence, macvm.WindowAlreadyOpenSentence},
 		"not at mac":   {runnerwire.MacWindowNotAtMacSentence, macvm.WindowNotAtMacSentence},
 		"unreadable":   {runnerwire.MacWindowUnreadableSentence, macvm.WindowUnreadableSentence},
+		"lock unknown": {runnerwire.MacWindowLockUnknownSentence, macvm.WindowLockUnknownSentence},
 	} {
 		if pair[0] != pair[1] {
 			t.Errorf("%s: runnerwire says %q, the helper says %q", name, pair[0], pair[1])

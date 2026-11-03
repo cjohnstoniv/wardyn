@@ -14,7 +14,9 @@ int wardynScreenSession(void);
 void wardynScreenRun(void);
 void wardynScreenShow(void *vm, void *stop, const char *title, const char *steps, const char *codeFile);
 void wardynScreenShowWindow(void *vm, const char *title, const char *steps);
-int wardynScreenConsole(void);
+int wardynScreenConsoleKeys(int *onConsole, int *locked);
+long wardynScreenLockNotices(void);
+int wardynScreenLockNoticed(void);
 int wardynScreenUp(void);
 void wardynScreenClose(void);
 */
@@ -129,9 +131,8 @@ func showScreen(vm, stop unsafe.Pointer, text ScreenText, unlock func()) (func()
 // macWindowScreen is the Mac's WindowScreen: a close-only window on the helper's main thread.
 type macWindowScreen struct{}
 
-// Ready is nil when the helper can draw a window and its session is the Mac's unlocked console. A locked
-// screen, another console user or no window-server session wraps ErrNotAtMac; a session that cannot be read
-// is an error of its own, and both refuse.
+// Ready is nil when the helper can draw a window and its session is the Mac's console, known unlocked. The cgo
+// reader gives the session dictionary's keys and the latest lock notification; consoleCheck decides (screen.go).
 func (macWindowScreen) Ready() error {
 	if !screensServed.Load() {
 		return errNoScreen
@@ -139,13 +140,12 @@ func (macWindowScreen) Ready() error {
 	if geteuid() == 0 {
 		return fmt.Errorf("the helper runs as root: %w", ErrNotAtMac)
 	}
-	switch C.wardynScreenConsole() {
-	case 1:
-		return nil
-	case 0:
-		return ErrNotAtMac
+	r := consoleReading{LockNoticed: C.wardynScreenLockNoticed() != 0}
+	var onConsole, locked C.int
+	if C.wardynScreenConsoleKeys(&onConsole, &locked) != 0 {
+		r.Dict, r.OnConsole, r.Locked = true, consoleKeyOf(int(onConsole)), consoleKeyOf(int(locked))
 	}
-	return errors.New("macvm: the Mac's console session could not be read")
+	return consoleCheck(r)
 }
 
 // Open puts the run window up on vm and returns once it is. The window ends when the person closes it or Close
@@ -157,12 +157,13 @@ func (macWindowScreen) Open(vm unsafe.Pointer, text WindowText) (Window, error) 
 	if C.wardynScreenUp() != 0 {
 		return nil, errors.New("macvm: a window is already open in this process")
 	}
+	since := int64(C.wardynScreenLockNotices()) // a lock from here on ends the window
 	title, steps := C.CString(text.Title), C.CString(text.Strip)
 	defer C.free(unsafe.Pointer(title))
 	defer C.free(unsafe.Pointer(steps))
 	C.wardynScreenShowWindow(vm, title, steps)
 	screenStartOnce.Do(func() { close(screenStart) })
-	w := &macWindow{closed: make(chan struct{})}
+	w := &macWindow{closed: make(chan struct{}), locked: make(chan struct{})}
 	for deadline := time.Now().Add(screenWait); C.wardynScreenUp() == 0; time.Sleep(50 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			w.Close()
@@ -173,17 +174,20 @@ func (macWindowScreen) Open(vm unsafe.Pointer, text WindowText) (Window, error) 
 		w.Close()
 		return nil, errors.New("macvm: the run's window could not be made")
 	}
-	// ponytail: polled, as showScreen's is; the close-only delegate sets the state to 0 on the main queue.
-	watchWindowClosed(func() int { return int(C.wardynScreenUp()) }, 50*time.Millisecond, w.closed)
+	// ponytail: polled, as showScreen's is; the close-only delegate and the lock observer set the state to 0 on
+	// the main queue, and the lock observer counts its notification first.
+	watchWindow(func() int { return int(C.wardynScreenUp()) }, func() int64 { return int64(C.wardynScreenLockNotices()) },
+		since, 50*time.Millisecond, w.closed, w.locked)
 	return w, nil
 }
 
 type macWindow struct {
-	closed chan struct{}
-	once   sync.Once
+	closed, locked chan struct{}
+	once           sync.Once
 }
 
 func (w *macWindow) Closed() <-chan struct{} { return w.closed }
+func (w *macWindow) Locked() <-chan struct{} { return w.locked }
 
 // Close detaches the view and closes the window, and returns once AppKit has (or after screenWait), so the
 // next window finds the slot empty.

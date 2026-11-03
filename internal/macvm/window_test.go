@@ -43,7 +43,7 @@ func (s *fakeScreen) Open(vm unsafe.Pointer, text macvm.WindowText) (macvm.Windo
 	if s.openErr != nil {
 		return nil, s.openErr
 	}
-	w := &fakeWindow{closed: make(chan struct{})}
+	w := &fakeWindow{closed: make(chan struct{}), locked: make(chan struct{})}
 	s.wins = append(s.wins, w)
 	s.texts = append(s.texts, text)
 	s.vms = append(s.vms, vm)
@@ -61,11 +61,20 @@ func (s *fakeScreen) win(i int) *fakeWindow {
 type fakeWindow struct {
 	mu       sync.Mutex
 	closed   chan struct{}
+	locked   chan struct{}
 	once     sync.Once
 	detached int // Close calls
 }
 
 func (w *fakeWindow) Closed() <-chan struct{} { return w.closed }
+func (w *fakeWindow) Locked() <-chan struct{} { return w.locked }
+
+// lockNotice is the Mac's lock notification: as the native window does, it marks the window locked, then tears
+// it down.
+func (w *fakeWindow) lockNotice() {
+	close(w.locked)
+	w.once.Do(func() { close(w.closed) })
+}
 
 func (w *fakeWindow) Close() {
 	w.mu.Lock()
@@ -222,13 +231,13 @@ func TestWindowPublishesEvents(t *testing.T) {
 	}
 }
 
-// The native window's close is seen by polling its state: watchWindowClosed ends the window's channel when the
-// state leaves "up", whoever closed it.
+// The native window's close is seen by polling its state: watchWindow ends the window's channel when the
+// state leaves "up", whoever closed it. With no lock notification, locked stays open.
 func TestWindowWatcherSeesThePersonsClose(t *testing.T) {
 	var state atomic.Int32
 	state.Store(1)
-	closed := make(chan struct{})
-	macvm.WatchWindowClosed(func() int { return int(state.Load()) }, time.Millisecond, closed)
+	closed, locked := make(chan struct{}), make(chan struct{})
+	macvm.WatchWindow(func() int { return int(state.Load()) }, func() int64 { return 4 }, 4, time.Millisecond, closed, locked)
 	select {
 	case <-closed:
 		t.Fatal("closed while the window was up")
@@ -239,6 +248,40 @@ func TestWindowWatcherSeesThePersonsClose(t *testing.T) {
 	case <-closed:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the person's close was never seen")
+	}
+	select {
+	case <-locked:
+		t.Fatal("a person's close read as a lock")
+	default:
+	}
+}
+
+// A lock notification counted after the open marks the native window locked, before (or without) its teardown;
+// one counted before the open does not.
+func TestWindowWatcherSeesALock(t *testing.T) {
+	var state atomic.Int32
+	var notices atomic.Int64
+	state.Store(1)
+	notices.Store(2)
+	closed, locked := make(chan struct{}), make(chan struct{})
+	macvm.WatchWindow(func() int { return int(state.Load()) }, notices.Load, 2, time.Millisecond, closed, locked)
+	select {
+	case <-locked:
+		t.Fatal("locked with no lock since the open")
+	case <-time.After(20 * time.Millisecond):
+	}
+	// The lock observer counts first, then tears down: the watcher must show locked by the time closed closes.
+	notices.Add(1)
+	state.Store(0)
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the lock's teardown was never seen")
+	}
+	select {
+	case <-locked:
+	default:
+		t.Fatal("a window a lock tore down closed without reading as locked")
 	}
 }
 
@@ -343,11 +386,16 @@ func TestWindowRefusedWhenTheConsoleCheckFails(t *testing.T) {
 	}{
 		"locked or not the console": {fmt.Errorf("locked: %w", macvm.ErrNotAtMac), macvm.WindowNotAtMacSentence},
 		"unreadable":                {errors.New("no answer"), macvm.WindowUnreadableSentence},
+		"lock unknown":              {fmt.Errorf("no lock key: %w", macvm.ErrLockUnknown), macvm.WindowLockUnknownSentence},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := startWindowRun(t, true, func(_ *windowEngine, s *fakeScreen) { s.readyErr = tc.err })
 			_, err := w.client(t).Window(context.Background(), "grant-1", "")
-			wantRefusal(t, err, macvm.WindowCodeNotAtMac, tc.sentence)
+			code := macvm.WindowCodeNotAtMac
+			if errors.Is(tc.err, macvm.ErrLockUnknown) {
+				code = macvm.WindowCodeLockUnknown
+			}
+			wantRefusal(t, err, code, tc.sentence)
 			if w.scr.opens() != 0 {
 				t.Fatal("a window opened with the console check failing")
 			}
@@ -365,8 +413,9 @@ func TestWindowClosesWhenTheScreenLocks(t *testing.T) {
 		err    error
 		reason string
 	}{
-		"locked":     {macvm.ErrNotAtMac, macvm.WindowClosedHostLocked},
-		"unreadable": {errors.New("no answer"), macvm.WindowClosedFailed},
+		"locked":             {macvm.ErrNotAtMac, macvm.WindowClosedHostLocked},
+		"lock turns unknown": {fmt.Errorf("no lock key: %w", macvm.ErrLockUnknown), macvm.WindowClosedHostLocked},
+		"unreadable":         {errors.New("no answer"), macvm.WindowClosedFailed},
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := startWindowRun(t, true, nil)
@@ -383,6 +432,54 @@ func TestWindowClosesWhenTheScreenLocks(t *testing.T) {
 			}
 			waitState(t, w.cc, macvm.StateRunning)
 		})
+	}
+}
+
+// A lock notification closes an open window at once as the Mac locking, though the console check still passes.
+// The window does not come back when the screen unlocks: a reopen is a new request, with its own grant, that the
+// console check answers again.
+func TestWindowLockNoticeClosesAndReopenNeedsANewGrant(t *testing.T) {
+	w := startWindowRun(t, true, nil)
+	evs, err := w.client(t).Events(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended, err := w.client(t).Window(context.Background(), "grant-1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.scr.win(0).lockNotice()
+	if got := recv(t, ended); got != macvm.WindowClosedHostLocked {
+		t.Fatalf("reason %q, want %q", got, macvm.WindowClosedHostLocked)
+	}
+	waitWindow(t, "the window to close", func() bool { return w.scr.win(0).closes() > 0 })
+	waitState(t, w.cc, macvm.StateRunning)
+	// The console check passes again, and still nothing opens by itself.
+	time.Sleep(100 * time.Millisecond)
+	if w.scr.opens() != 1 {
+		t.Fatalf("%d windows opened after the lock, want none", w.scr.opens()-1)
+	}
+	// A reopen while the screen's lock can't be told is refused; once it can, the new grant opens.
+	w.scr.setReady(macvm.ErrLockUnknown)
+	_, err = w.client(t).Window(context.Background(), "grant-2", "")
+	wantRefusal(t, err, macvm.WindowCodeLockUnknown, macvm.WindowLockUnknownSentence)
+	w.scr.setReady(nil)
+	if _, err := w.client(t).Window(context.Background(), "grant-3", ""); err != nil {
+		t.Fatal(err)
+	}
+	var opened []string
+	for len(opened) < 2 {
+		select {
+		case ev := <-evs:
+			if ev.Type == macvm.EventWindow && ev.Detail == macvm.EventWindowOpen {
+				opened = append(opened, ev.Grant)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("window opens seen: %v", opened)
+		}
+	}
+	if opened[0] != "grant-1" || opened[1] != "grant-3" {
+		t.Fatalf("window opens %v, want grant-1 then grant-3", opened)
 	}
 }
 

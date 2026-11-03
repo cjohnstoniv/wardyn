@@ -452,6 +452,11 @@ func TestMacWindowRefusalRows(t *testing.T) {
 			r.sub.err = errMacWindowNotAtMac
 			r.sub.mu.Unlock()
 		}, http.StatusConflict, reasonMacWindowNotAtMac, types.MacWindowNotAtMacMsg(macWindowRunnerName)},
+		{"runner side: the Mac can't tell whether its screen is locked", func(r *macWindowRig, _ *macWindowAuthority) {
+			r.sub.mu.Lock()
+			r.sub.err = errMacWindowLockUnknown
+			r.sub.mu.Unlock()
+		}, http.StatusConflict, reasonMacWindowLockUnknown, macWindowLockUnknownMsg},
 		{"runner side: the runner already holds a window for the run", func(r *macWindowRig, _ *macWindowAuthority) {
 			r.sub.mu.Lock()
 			r.sub.err = errMacWindowAlreadyOpen
@@ -667,6 +672,30 @@ func TestMacWindowOneWindowPerRun(t *testing.T) {
 		second := r.mustOpen()
 		if first.grantID == second.grantID {
 			t.Error("the reopen reused the grant id")
+		}
+	})
+	// A window the Mac's lock closed stays closed: nothing reopens it on unlock, and a reopen is a new grant that
+	// the runner is asked for again.
+	t.Run("a reopen after a lock close is a new grant", func(t *testing.T) {
+		r := newMacWindowRig(t)
+		first := r.mustOpen()
+		r.sub.session(0).end(macWindowHostLocked)
+		if c := r.closeRow(); c["reason"] != macWindowHostLocked {
+			t.Fatalf("close reason = %v, want %s", c["reason"], macWindowHostLocked)
+		}
+		macWindowEventually(t, "the registry to empty", func() bool { return r.h.srv.macWindows.open(r.h.run.ID) == nil })
+		if r.sub.openCount() != 1 {
+			t.Fatalf("the runner was asked %d times before any reopen, want once", r.sub.openCount())
+		}
+		second := r.mustOpen()
+		if first.grantID == second.grantID || r.sub.openCount() != 2 {
+			t.Fatalf("reopen: grant reused = %v, runner asked %d times", first.grantID == second.grantID, r.sub.openCount())
+		}
+		r.sub.mu.Lock()
+		g0, g1 := r.sub.opens[0].GrantID, r.sub.opens[1].GrantID
+		r.sub.mu.Unlock()
+		if g0 != first.grantID || g1 != second.grantID {
+			t.Errorf("the runner got grants %v then %v, want %v then %v", g0, g1, first.grantID, second.grantID)
 		}
 	})
 }
@@ -1205,6 +1234,7 @@ func TestMacWindowSentences(t *testing.T) {
 		macWindowPreparingMsg:                "This run is still being prepared; the window opens when preparation finishes.",
 		types.MacWindowOpenMsg("Studio"):     "This run's window is already open on Studio.",
 		types.MacWindowNotAtMacMsg("Studio"): "The window didn't open: you aren't signed in at Studio's screen, or it is locked. Unlock it and open the window again.",
+		macWindowLockUnknownMsg:              "Wardyn can't tell whether this Mac's screen is locked, so the window stays closed.",
 	} {
 		if got != want {
 			t.Errorf("sentence = %q, want %q", got, want)
@@ -1212,7 +1242,8 @@ func TestMacWindowSentences(t *testing.T) {
 	}
 	for _, msg := range []string{macWindowSiteOffMsg, macWindowNotYourMacMsg("Studio"), macWindowProfileMsg, macWindowUnrecordedMsg,
 		macWindowOfflineMsg, macWindowRunnerTooOldMsg, macWindowDesktopControlMsg, macWindowNotHereMsg, macWindowPausedMsg,
-		macWindowPreparingMsg, macWindowRevokedMsg, macWindowFailedMsg, types.MacWindowOpenMsg("Studio"), types.MacWindowNotAtMacMsg("Studio")} {
+		macWindowPreparingMsg, macWindowRevokedMsg, macWindowFailedMsg, types.MacWindowOpenMsg("Studio"), types.MacWindowNotAtMacMsg("Studio"),
+		macWindowLockUnknownMsg} {
 		if strings.Contains(msg, "`") {
 			t.Errorf("sentence %q has a backtick: the console prints it literally", msg)
 		}

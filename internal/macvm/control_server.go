@@ -268,7 +268,14 @@ func (cc *controlConn) holdWindow(s *windowSession) string {
 	defer tick.Stop()
 	for {
 		select {
+		case <-s.win.Locked():
+			return WindowClosedHostLocked
 		case <-s.win.Closed():
+			select {
+			case <-s.win.Locked(): // a lock tore the window down: it is the lock's close, not the person's
+				return WindowClosedHostLocked
+			default:
+			}
 			return WindowClosedPerson
 		case <-gone:
 			return ""
@@ -276,7 +283,8 @@ func (cc *controlConn) holdWindow(s *windowSession) string {
 			return WindowClosedRunEnded
 		case <-tick.C:
 			if err := s.ready(); err != nil {
-				if errors.Is(err, ErrNotAtMac) {
+				// A lock that can no longer be told is a lock: the window fails closed.
+				if errors.Is(err, ErrNotAtMac) || errors.Is(err, ErrLockUnknown) {
 					return WindowClosedHostLocked
 				}
 				return WindowClosedFailed

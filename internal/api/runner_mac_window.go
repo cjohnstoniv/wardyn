@@ -16,7 +16,7 @@ import (
 )
 
 // remoteMacWindowSub is a runner's remote substrate as the grant's macWindowSub: it carries the grant to the
-// runner's mac_window call and words the runner's two refusals as this package's.
+// runner's mac_window call and words the runner's three refusals as this package's.
 type remoteMacWindowSub struct{ sub *remote.Substrate }
 
 func (r remoteMacWindowSub) MacWindowSupported() (supported, reported bool) {
@@ -30,6 +30,8 @@ func (r remoteMacWindowSub) MacWindow(ctx context.Context, ref string, req macWi
 		return nil, errMacWindowNotAtMac
 	case errors.Is(err, remote.ErrMacWindowAlreadyOpen):
 		return nil, errMacWindowAlreadyOpen
+	case errors.Is(err, remote.ErrMacWindowLockUnknown):
+		return nil, errMacWindowLockUnknown
 	case err != nil:
 		return nil, err
 	}
