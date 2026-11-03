@@ -19,7 +19,7 @@
 | Signing | Keyless Sigstore. There is no public key to distribute |
 | Certificate identity | `https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v<version>`, an exact match |
 | Certificate issuer | `https://token.actions.githubusercontent.com` |
-| Images | `wardynd`, `wardynd-fips`, `wardyn-proxy`, `wardyn-runnerd`, `agent-base`, `agent-codex-cli`, `agent-aws-sso`, `agent-vscode` and `agent-novnc` ([CI](../CI.md)) |
+| Images | `wardynd`, `wardynd-fips`, `wardyn-proxy`, `wardyn-runnerd`, `agent-base`, `agent-codex-cli`, `agent-aws-sso`, `agent-vscode`, `agent-novnc` and `agent-novnc-signin` ([CI](../CI.md)) |
 
 - Pin the exact tag in the identity. A pattern would also accept a signature made for another release.
 - Check one image by hand first with the `cosign verify` command in [Verify](../VERIFY.md). Write the policy only once that passes.

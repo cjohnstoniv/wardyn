@@ -19,7 +19,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- An organisation setting, `images.require_digest` (off by default), refuses a member's run whose image, or whose own workspace's base image, is not pinned by digest (`image@sha256:<digest>`), even where an exact or prefix image grant covers it. The refusal is `403` `image_digest_required`. Operators are not bound; their unpinned runs are marked `image_digest_exempt` on the run.create audit row. Not run in CI against a real registry.
+- An organisation setting, `images.require_digest` (off by default), refuses a member's run whose image, or whose attached workspace's base image (whoever owns the workspace), is not pinned by digest (`image@sha256:<digest>`), even where an exact or prefix image grant covers it. The refusal is `403` `image_digest_required`. Operators are not bound; their unpinned runs are marked `image_digest_exempt` on the run.create audit row. Not run in CI against a real registry.
 
 ### Fixed
 

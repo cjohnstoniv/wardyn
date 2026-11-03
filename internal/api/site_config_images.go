@@ -14,14 +14,14 @@ import (
 )
 
 // imageDigestRequiredMsg and imageDigestSeededMsg are the digest rule's two refusal sentences: the
-// first for an image the member named, the second for the base image of their own workspace.
+// first for an image the member named, the second for an attached workspace's base image, whoever owns it.
 const (
 	imageDigestRequiredMsg = "image %s is not pinned by digest — this organisation requires images pinned by digest " +
 		"(image@sha256:<digest>), because an image grant names what an admin approved and only a digest makes that what runs " +
 		"(site setting images.require_digest). Use the digest form of the image, or launch with the agent's convention image"
-	imageDigestSeededMsg = "image %s comes from your own workspace's base image and is not pinned by digest — this organisation requires " +
+	imageDigestSeededMsg = "image %s comes from the workspace's base image and is not pinned by digest — this organisation requires " +
 		"images pinned by digest (image@sha256:<digest>) (site setting images.require_digest). " +
-		"Set the workspace's base image to its digest form, or launch with the agent's convention image"
+		"Set the workspace's base image to its digest form (or ask its owner to), or launch with the agent's convention image"
 )
 
 // imagePinnedByDigest reports whether ref ends in @sha256:<64 hex digits>, the only form that names one
@@ -71,7 +71,7 @@ func imageRequireDigest(sc types.SiteConfig) bool {
 }
 
 // imageDigestRefusal is the digest rule as a run refusal: nil when the image may start. seeded says the
-// image came from the member's own workspace, which has its own sentence.
+// image came from an attached workspace's base image, which has its own sentence.
 func (s *Server) imageDigestRefusal(ctx context.Context, image string, seeded bool) *runRefusal {
 	v, err := s.imageDigestVerdict(ctx, image)
 	if err != nil {
