@@ -5,7 +5,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -242,9 +244,10 @@ func TestImageDigestRule_WorkspaceSeedImage(t *testing.T) {
 
 // TestImageDigestRule_PolicyCarriedWorkspaceImage: a workspace the run's policy carries sets the image dispatch
 // uses when neither the request nor an attached workspace chose one (resolveCreateRunImage), whether or not any
-// workspace is attached, so stepWorkspaces holds its base image to the rule at every door. A governed caller (an
-// SSO admin under WARDYN_GOVERN_ADMIN_RUNS, bound as a member is) is refused a tag ref and passes a digest ref;
-// the admin token is not bound, and its run.create row carries image_digest_exempt.
+// workspace is attached, so stepWorkspaces holds its base image to the rule at every door. A member launching
+// from their own workspaces is refused a tag ref with the workspace base image's sentence and passes a digest ref;
+// the admin token is not bound, and its run.create row carries image_digest_exempt. (An SSO admin's browser
+// session in the admin view is refused every launch first, as admin_view: runs start in the user view.)
 func TestImageDigestRule_PolicyCarriedWorkspaceImage(t *testing.T) {
 	for _, attach := range []bool{true, false} {
 		for _, tc := range []struct {
@@ -260,21 +263,25 @@ func TestImageDigestRule_PolicyCarriedWorkspaceImage(t *testing.T) {
 				name = tc.name + ", another workspace attached"
 			}
 			t.Run(name, func(t *testing.T) {
+				const member = "sub-digest-member"
 				plain, carried := repoWS("plain", helloRepo), repoWS("carried", spoonRepo)
+				plain.OwnedBy, carried.OwnedBy = member, member
 				carried.BaseImage = &types.WorkspaceBaseImage{Kind: "custom", Image: tc.image}
 				srv := attachFixture(t, digestRuleSite(tc.ruleOn), plain, carried)
-				srv.cfg.GovernAdminRuns = true
 				policy := `"inline_policy":{"min_confinement_class":"CC2","workspace_repos":[{"repo":"` + spoonRepo + `"}]}}`
 				body := `{"agent":"claude-code","task":"t",` + policy
 				if attach {
 					body = `{"agent":"claude-code","task":"t","workspace_id":"` + plain.ID.String() + `",` + policy
 				}
-				governed := ssoSession(t, "sub-governed-admin", "admin@corp.example", oidc.RoleAdmin)
+				session := ssoSession(t, member, "member@corp.example", oidc.RoleUser)
 				for _, door := range runDoors {
-					w := doSSO(t, srv, http.MethodPost, door.path, governed, body)
+					w := doSSO(t, srv, http.MethodPost, door.path, session, body)
 					got := strings.Contains(w.Body.String(), reasonImageDigestRequired)
-					if tc.refused && (w.Code != http.StatusForbidden || !got || !strings.Contains(w.Body.String(), tc.image)) {
-						t.Fatalf("%s: %d %s; want 403 %s naming %s", door.name, w.Code, w.Body.String(), reasonImageDigestRequired, tc.image)
+					var eb errorBody
+					if tc.refused && (w.Code != http.StatusForbidden || json.Unmarshal(w.Body.Bytes(), &eb) != nil ||
+						eb.Reason != reasonImageDigestRequired || eb.Error != fmt.Sprintf(imageDigestSeededMsg, tc.image)) {
+						t.Fatalf("%s: %d %s; want 403 %s with the workspace base image's sentence naming %s",
+							door.name, w.Code, w.Body.String(), reasonImageDigestRequired, tc.image)
 					}
 					if !tc.refused && got {
 						t.Fatalf("%s: refused by the digest rule: %d %s", door.name, w.Code, w.Body.String())
