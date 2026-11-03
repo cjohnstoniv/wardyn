@@ -1136,3 +1136,21 @@ func TestKeptResumeIsCheckedAgainstItsOwnDisk(t *testing.T) {
 		t.Fatalf("a machine that needs more CPUs than the run has: %v", err)
 	}
 }
+
+// An interrupted session's machine gets back the idle allowance it was given, not the default.
+func TestKeptRecoveryKeepsTheMachinesIdleDays(t *testing.T) {
+	r, _ := newKeptRig(t)
+	now := time.Now().UTC()
+	keptAt(r, now)
+	for _, days := range []int{1, 90} {
+		id := uuid.New()
+		dir := writeKeptFolder(t, r, macvm.KeptRecord{ID: id.String(), OwnerHash: keptOwnerHash, RunnerID: "runner-a",
+			ActiveRun: uuid.NewString(), IdleDays: days, ExpiresAt: now.Add(-time.Hour)})
+		if err := r.d.SweepKeptMachines(); err != nil {
+			t.Fatal(err)
+		}
+		if rec := readKept(t, dir, id); rec.ActiveRun != "" || !rec.ExpiresAt.Equal(now.AddDate(0, 0, days)) {
+			t.Fatalf("idle days %d: the recovered machine %+v", days, rec)
+		}
+	}
+}

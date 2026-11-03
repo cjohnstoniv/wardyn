@@ -259,13 +259,13 @@ func (c *MacVMConfig) keptCheckResume(spec runner.SandboxSpec, dir string) error
 	case c.keptHeldBy(rec) != "":
 		return keptRefusal(keptSaidLocked)
 	case rec.ActiveRun != "":
-		if err := c.recoverKept(dir, &rec, now, keptIdleDays(k.IdleDays)); err != nil {
+		if err := c.recoverKept(dir, &rec, now); err != nil {
 			return fmt.Errorf("docker: kept machine %s: %w", k.ID, err)
 		}
 	case keptExpired(rec, now):
 		_, err := removeKeptHeld(dir)
 		c.logExpiredRemoval(k.ID.String(), err)
-		return keptSaidExpired(keptIdleDays(k.IdleDays), err == nil)
+		return keptSaidExpired(macvm.KeptRecordIdleDays(rec), err == nil)
 	}
 	return nil
 }
@@ -290,12 +290,12 @@ func (c *MacVMConfig) keptHeldBy(rec macvm.KeptRecord) string {
 }
 
 // recoverKept ends an interrupted session's hold on a record whose run folder is gone with no stop
-// recorded: the machine is unheld, with a fresh idle allowance from now (idleDays; the record keeps none,
-// so a sweep gives the default), and never deleted for it. The caller holds dir's lock.
-func (c *MacVMConfig) recoverKept(dir string, rec *macvm.KeptRecord, now time.Time, idleDays int) error {
+// recorded: the machine is unheld, with a fresh idle allowance from now (the one the record was last given,
+// macvm.KeptRecordIdleDays), and never deleted for it. The caller holds dir's lock.
+func (c *MacVMConfig) recoverKept(dir string, rec *macvm.KeptRecord, now time.Time) error {
 	slog.Info("docker: a kept machine's session ended without recording its stop; the machine is kept",
 		slog.String("machine_id", rec.ID), slog.String("run_id", rec.ActiveRun))
-	macvm.KeptStopUpdate(rec, rec.ActiveRun, now, idleDays)
+	macvm.KeptStopUpdate(rec, rec.ActiveRun, now, macvm.KeptRecordIdleDays(*rec))
 	return macvm.WriteKept(dir, *rec)
 }
 
@@ -723,7 +723,7 @@ func (c *MacVMConfig) sweepKept(dir, id string, now time.Time) error {
 		slog.Info("docker: deleted a kept machine another registration of this Mac made", slog.String("machine_id", id))
 		return nil
 	case rec.ActiveRun != "":
-		return c.recoverKept(dir, &rec, now, macvm.KeptDefaultIdleDays)
+		return c.recoverKept(dir, &rec, now)
 	case keptExpired(rec, now):
 		_, err := removeKeptHeld(dir)
 		c.logExpiredRemoval(id, err)
