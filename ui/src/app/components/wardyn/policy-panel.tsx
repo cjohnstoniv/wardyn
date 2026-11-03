@@ -435,7 +435,6 @@ export function PolicyPanel({
               <div className="rounded-lg border border-border">
                 <div className="flex items-center gap-2 border-b border-border px-3 py-2">
                   <SectionLabel>Fields</SectionLabel>
-                  <span className="ml-auto text-meta text-muted-foreground">Full reference: docs/POLICIES.md</span>
                 </div>
                 <ul className="scroll-thin max-h-72 divide-y divide-border overflow-y-auto">
                   {fields.map((key) => {

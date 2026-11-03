@@ -152,7 +152,7 @@ export const FIELD_HELP = {
   desktop: {
     what: "What may cross the desktop's edge, one rule per direction: the clipboard at the desktop relay, files at the run's Files panel.",
     values:
-      "paste_in, copy_out, upload, download: each allowed | blocked. Omitted keeps the default: paste in and upload allowed, copy out and download blocked. A member's run can only block more than its ceiling.",
+      "paste_in, copy_out, upload, download: each allowed | blocked. On a ceiling, an omitted field keeps the default: paste in and upload allowed, copy out and download blocked. A policy under a ceiling that leaves desktop out gets the ceiling's rules. One that sets them can only block more than its ceiling.",
     doc: "desktop--desktopcontrols",
     snippet: { copy_out: "allowed" },
   },
@@ -208,7 +208,7 @@ export const FIELD_HELP = {
   recording: {
     what: "How much of a run is recorded. A ceiling's level is a minimum: a policy under it may record more, never less. Keystrokes are never recorded.",
     values:
-      "off | terminal | screen_actions (a desktop's screen and an action log). Omitted: the organisation's level, terminal unless it sets one.",
+      "off | terminal | screen_actions (a desktop's screen and an action log). Omitted: the organisation's level, Terminal unless it sets one. The run owner's walls can raise it.",
     doc: "recording",
     snippet: "terminal",
   },

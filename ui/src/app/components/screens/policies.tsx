@@ -210,8 +210,8 @@ export function PoliciesScreen() {
               query
                 ? "Try a different search term."
                 : operator
-                  ? "A policy overrides the default for specific runs — tighter or looser, referenced by its ID when you create a run."
-                  : `A policy overrides the default for specific runs — tighter or looser. ${OPERATOR_ONLY_REASON}`
+                  ? "A stored policy is a starting point people can pick when they create a run. For anyone under a governance profile it is clamped to that profile's ceiling, so it can narrow it but never widen it."
+                  : `A stored policy is a starting point people can pick when they create a run. For anyone under a governance profile it is clamped to that profile's ceiling, so it can narrow it but never widen it. ${OPERATOR_ONLY_REASON}`
             }
             action={
               query ? (
