@@ -47,6 +47,7 @@ import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { PeopleScreen } from "./people-screen";
+import { PEOPLE_PAGE as P } from "../../wardyn/copy/people";
 import { setField } from "../../../../test/set-field";
 
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
@@ -234,7 +235,7 @@ describe("the person drawer", () => {
   });
 
   it.each([
-    ["Sign out everywhere", "Sign ana@example.com out of every browser? Their API tokens, including the CLI's, and SSH keys keep working; revoke those from Tokens or Remove all. They can sign in again unless their access is removed.", () => signOutMock],
+    ["Sign out everywhere", "Sign ana@example.com out of every browser and CLI session? Their personal API tokens and SSH keys keep working; revoke those from Tokens or Remove all. They can sign in again unless their access is removed.", () => signOutMock],
     ["Remove all", "Remove every SSH key ana@example.com has added? Their open SSH sessions end.", () => removeKeysMock],
   ])("%s asks first, naming the person, and only then acts", async (button, sentence, mock) => {
     const { user, drawer } = await openAna();
@@ -246,8 +247,14 @@ describe("the person drawer", () => {
     await waitFor(() => expect(mock()).toHaveBeenCalledWith("sub-ana"));
   });
 
+  it("the sign-out copy names browser and CLI sessions and does not say CLI tokens keep working", () => {
+    expect(P.SIGN_OUT_CONFIRM("ana")).toMatch(/^Sign ana out of every browser and CLI session\? Their personal API tokens and SSH keys keep working;/);
+    expect(P.SIGN_OUT_CONFIRM("ana")).not.toContain("CLI's");
+    expect(P.SIGN_OUT_DONE("ana")).toBe("Signed ana out of every browser and CLI session.");
+  });
+
   it.each([
-    ["Sign out everywhere", "Sign out everywhere?", "Signed ana@example.com out of every browser."],
+    ["Sign out everywhere", "Sign out everywhere?", "Signed ana@example.com out of every browser and CLI session."],
     ["Remove all", "Remove all SSH keys?", "Removed 1 SSH key for ana@example.com."],
   ])("%s confirm is titled for its object and its toast says what happened", async (button, title, toastText) => {
     const { user, drawer } = await openAna();
