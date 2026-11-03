@@ -540,6 +540,25 @@ func (d *providerDispatch) addGatewayRoute(p types.ModelProvider) (ok bool) {
 	return true
 }
 
+// takeProviderGatewayRoute records the gateway route of a lane's provider on prov, for the kinds that may
+// carry one: the key and endpoint kinds and a Bedrock key row, whose call reaches forwardInspectedLLM through
+// the bearer's MITM host. ok is false when the run was refused and is already FAILED: the route clashes with
+// one already on the run, or its stored address can hold none, so the call would otherwise go unsigned.
+func (s *Server) takeProviderGatewayRoute(ctx context.Context, run types.AgentRun, prov *providerDispatch, p types.ModelProvider) (ok bool) {
+	if !providerKeyKind(p.Kind) && p.Kind != types.ModelProviderBedrockBearer {
+		return true
+	}
+	if other := prov.gatewayRouteClash(p); other != "" {
+		s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf(mpRunGatewayClash, p.ID, other)}, nil)
+		return false
+	}
+	if !prov.addGatewayRoute(p) {
+		s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf(mpRunGatewayAddress, p.ID)}, nil)
+		return false
+	}
+	return true
+}
+
 // validateProviderGatewayIdentity holds one row's opt-in to the kinds that may carry
 // a token: a key row with a base_url, a Bedrock key row with a bedrock.base_url, or
 // an endpoint row. Every other kind, a subscription row included, is refused: it has

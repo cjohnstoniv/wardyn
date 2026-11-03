@@ -1127,24 +1127,31 @@ func TestGatewayBedrockBearerRoute(t *testing.T) {
 	}
 }
 
-// Dispatch records a Bedrock key row's route once, and a Bedrock row with identity off writes none.
+// Dispatch records a Bedrock key row's route once, and writes none for a row with identity off or a kind that cannot carry it.
 func TestGatewayDispatchBedrockBearerRoute(t *testing.T) {
 	var d providerDispatch
 	srv := &Server{}
 	off := testGatewayBedrockBearer()
 	off.GatewayIdentity = nil
-	if !srv.takeBedrockGatewayRoute(context.Background(), types.AgentRun{}, &d, off) || d.gatewayRoutes != nil {
+	if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &d, off) || d.gatewayRoutes != nil {
 		t.Fatalf("off: %+v", d.gatewayRoutes)
 	}
 	on := testGatewayBedrockBearer()
 	for range 2 {
-		if !srv.takeBedrockGatewayRoute(context.Background(), types.AgentRun{}, &d, on) {
+		if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &d, on) {
 			t.Fatal("on: refused")
 		}
 	}
 	want := proxy.GatewayIdentityRoute{Host: "gw.corp.example", Port: 8443, PathPrefix: "/bedrock", ProviderID: "corp-gw", ProviderUID: "uid-1", Audience: "gw-aud"}
 	if len(d.gatewayRoutes) != 1 || d.gatewayRoutes[0] != want {
 		t.Errorf("routes %+v", d.gatewayRoutes)
+	}
+	// A kind that cannot carry identity writes no route, even with the field stored.
+	sso := testGatewayBedrockBearer()
+	sso.Kind = types.ModelProviderBedrockSSO
+	var none providerDispatch
+	if !srv.takeProviderGatewayRoute(context.Background(), types.AgentRun{}, &none, sso) || none.gatewayRoutes != nil {
+		t.Errorf("a sign-in row wrote a route: %+v", none.gatewayRoutes)
 	}
 }
 
