@@ -23,7 +23,13 @@ Your sensor reports a container or a pod. Follow it to a run and its creating pr
 3. **Run to creating principal.** Call `GET /api/v1/runs/{id}`. The run JSON has `created_by`, the principal that created the run (the token `sub`), and `sandbox_ref`, the agent pod's name ([`internal/types/types.go`](../../internal/types/types.go) `AgentRun`).
 4. **Optional: the audit trail.** `GET /api/v1/audit?run_id={id}` lists the run's audit rows. Each row has `actor`, `action` and `time` ([`internal/types/types.go`](../../internal/types/types.go) `AuditEvent`).
 
-Two checks use the same pod name. `sandbox_ref` for a Kubernetes run is the agent pod name ([`internal/runner/k8s/sandbox.go`](../../internal/runner/k8s/sandbox.go) `agentPodName`). So you can also start from the pod name: list runs and match `sandbox_ref`.
+Keep `wardyn.run-id` with the event when your sensor captures it, before the pod is deleted. That is the reliable join.
+
+A late alert may have only a pod name:
+
+- The agent pod name is `wardyn-agent-<run UUID>` ([`internal/runner/k8s/naming.go`](../../internal/runner/k8s/naming.go) `agentPodName`, `runIDFromAgentPodName`).
+- Check the name matches that exact format. Take the UUID, then `GET /api/v1/runs/{id}`.
+- Do not search runs by `sandbox_ref`. Wardyn clears it when a run ends ([`internal/api/run_terminal_effects.go`](../../internal/api/run_terminal_effects.go)), so the match works only for a run that is still live.
 
 ## Person or service
 
@@ -97,6 +103,6 @@ An empty run means the pod is not a Wardyn pod.
 ## Limits
 
 - Pod labels disappear with the pod. Resolve the run at alert time, or copy it into the alert.
-- A run's pods are removed when the run ends. The run row and audit rows stay.
+- Wardyn removes a run's pods during teardown. A cleanup failure can leave them until a retry removes them. The run row and audit rows stay.
 - Wardyn does not ingest your sensor's events and does not raise a bypass event when the sensor is blind.
 - Nothing here puts a sensor DaemonSet or an in-cluster correlator in the chart. Those are not built.
