@@ -2152,6 +2152,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 - Defaults for the fields not shown: `file` rotates at `max_bytes` 100 MiB keeping `keep` 5.
 - `webhook` also takes `flush_interval` (`5s`), `buffer_size` (`4096`), `max_retries` (`3`), `retry_base_delay` (`200ms`) and `timeout` (`15s`, per HTTP request, must be positive and at most `15s`, the flush the shutdown grace is sized on).
+- A `webhook` `url` may carry credentials (`https://user:pass@host/...`). Credentials in the URL are sent in clear over http; use https.
 - See [`internal/audit/sinks/webhook.go`](../internal/audit/sinks/webhook.go).
 - The compose stack ships the `file` sink pointed at `/data/audit/audit.log`.
 - Every event is one JSON object (NDJSON on the webhook sink — one line per event per POST batch).
@@ -2166,7 +2167,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 | Field | Default | Notes |
 |---|---|---|
-| `endpoint` | (required) | collector base URL, `http://` or `https://` |
+| `endpoint` | (required) | collector base URL, `http://` or `https://`. Credentials in the URL are sent in clear over http; use https |
 | `bearer_token` | (unset) | sent as `Authorization: Bearer`; requires an `https://` endpoint, boot fails otherwise |
 | `headers` | (unset) | extra request headers, for example a tenant id; sent as written, so a secret in one travels in cleartext over `http://`. `Authorization`, `Content-Type`, `Content-Length` and `Host` are refused |
 | `batch_size` | `100` | records per POST |
