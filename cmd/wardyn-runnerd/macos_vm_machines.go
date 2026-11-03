@@ -258,11 +258,29 @@ func (k macOSVMKeptStatus) writeText(out io.Writer) {
 	fmt.Fprintf(out, "kept machines: %d, up to %d GB of %d GB (%d GB written)\n", k.Machines, gbUp(k.WorstBytes), k.LimitBytes>>30, gbNear(k.AllocatedBytes))
 }
 
-// resolveKept is the one machine arg names: its name, else its id, its key, or the start of its id (at
+// resolveKept is the one machine arg names: its key; else its name, which two machines may share (another
+// owner's, or a stale one), and then the person must use the key; else its id, or the start of its id (at
 // least 4 digits, dashes left out) that no other machine's id starts with.
 func resolveKept(rows []keptRow, arg string) (keptRow, error) {
-	if i := slices.IndexFunc(rows, func(r keptRow) bool { return r.name != "" && r.name == arg }); i >= 0 {
+	if i := slices.IndexFunc(rows, func(r keptRow) bool { return r.key == arg }); i >= 0 {
 		return rows[i], nil
+	}
+	var named []keptRow
+	for _, r := range rows {
+		if r.name != "" && r.name == arg {
+			named = append(named, r)
+		}
+	}
+	switch len(named) {
+	case 1:
+		return named[0], nil
+	case 0:
+	default:
+		keys := make([]string, len(named))
+		for i, r := range named {
+			keys[i] = r.key
+		}
+		return keptRow{}, fmt.Errorf("More than one kept machine is named %s (%s). Use the key.", arg, strings.Join(keys, ", "))
 	}
 	want := strings.ReplaceAll(strings.ToLower(arg), "-", "")
 	var found []keptRow

@@ -259,6 +259,32 @@ func TestMachinesResolveEveryWayToNameOne(t *testing.T) {
 	}
 }
 
+// A name two machines share is refused, listing their keys; a key names one of them, and wins over a name
+// that is the same text.
+func TestMachinesResolveRefusesASharedName(t *testing.T) {
+	m := keptRig(t)
+	a, b, c := uuid.New(), uuid.New(), uuid.New()
+	keptMachine(t, m, a, "dev", nil)
+	keptMachine(t, m, b, "dev", nil)
+	keptMachine(t, m, c, macvm.RunKey(a.String()), nil) // named like a's key
+	rows, _ := m.keptRows()
+	_, err := resolveKept(rows, "dev")
+	ka, kb := macvm.RunKey(a.String()), macvm.RunKey(b.String())
+	if err == nil || !strings.HasPrefix(err.Error(), "More than one kept machine is named dev (") || !strings.HasSuffix(err.Error(), "). Use the key.") ||
+		!strings.Contains(err.Error(), ka) || !strings.Contains(err.Error(), kb) || strings.Contains(err.Error(), macvm.RunKey(c.String())) {
+		t.Fatalf("a shared name: %v", err)
+	}
+	for _, id := range []uuid.UUID{a, b} {
+		if r, err := resolveKept(rows, macvm.RunKey(id.String())); err != nil || r.rec.ID != id.String() {
+			t.Errorf("key %s -> %v, %v", macvm.RunKey(id.String()), r.rec.ID, err)
+		}
+	}
+	// c's name is a's key: the key is the exact match first.
+	if r, err := resolveKept(rows, ka); err != nil || r.rec.ID != a.String() {
+		t.Errorf("a name that is another machine's key took %v, %v", r.rec.ID, err)
+	}
+}
+
 // A delete removes the machine's folder and its lock file, through macvm.RemoveKept.
 func TestMachinesDeleteRemovesFolderAndLock(t *testing.T) {
 	m := keptRig(t)
