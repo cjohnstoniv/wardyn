@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"slices"
 	"strconv"
 	"time"
 
@@ -53,9 +52,8 @@ func (d *Driver) macDrives(ctx context.Context, spec runner.SandboxSpec) ([]macv
 }
 
 // macDiskDrives is each disk drive of a macOS VM run as the helper attaches it and the guest agent mounts it.
-// A disk a live run of this runner holds refuses the run here at once, before anything exists; one held by
-// anything else (a run that has just ended and is still releasing it, or another login's VM) is waited for
-// (lockMacDiskDrive). The helper takes the lock for the VM's life (macvm.LockDisk), so this check is the
+// A disk anything holds (a live run, a run that has just ended and is still releasing it, another login's
+// VM, or a drive open) is waited for (lockMacDiskDrive). The helper takes the lock for the VM's life (macvm.LockDisk), so this check is the
 // early answer, not the guard. The wait is one budget for the run's drives, not one per drive: it starts
 // when the first drive has to wait and ends ninety seconds later whichever drive is then being waited for.
 func (d *Driver) macDiskDrives(ctx context.Context, drives []types.DriveMount) ([]macvm.Disk, []guestagent.Disk, error) {
@@ -116,12 +114,13 @@ func (d *Driver) macDiskDrives(ctx context.Context, drives []types.DriveMount) (
 }
 
 // lockMacDiskDrive takes a disk drive's lock for the size check. A disk held when it asks is waited for,
-// polling every three seconds for at most ninety (the VM of a run that has just ended holds it for up to
-// about eighty after the run shows as ended), unless a live run of this runner has it: that one stays, so
-// it is refused at once. The ninety seconds are the run's, shared by its drives through deadline: the first
-// wait sets it, and a later drive waits only for what is left. The wait ends with the caller's ctx. Past the
-// deadline the refusal is the same sentence (runner.MacVMDiskLocked) with the wait said before it. The lock is a flock the kernel frees
-// when its holder dies, so waiting can never be on a stale lock.
+// polling every three seconds for at most ninety, whoever holds it: the VM of a run that has just ended
+// (it holds the disk for up to about eighty after the run shows as ended, while its entry still reads as
+// live), another login's VM, or a `drive open`. The ninety seconds are the run's, shared by its drives
+// through deadline: the first wait sets it, and a later drive waits only for what is left. The wait ends
+// with the caller's ctx. Past the deadline the refusal is the same sentence (runner.MacVMDiskLocked) with
+// the wait said before it. The lock is a flock the kernel frees when its holder dies, so waiting can never
+// be on a stale lock.
 func (d *Driver) lockMacDiskDrive(ctx context.Context, img string, drive *types.DriveMount, deadline *time.Time) (func(), error) {
 	const (
 		poll = 3 * time.Second
@@ -131,9 +130,6 @@ func (d *Driver) lockMacDiskDrive(ctx context.Context, img string, drive *types.
 	unlock, err := macvm.LockDisk(img)
 	if !errors.Is(err, macvm.ErrDiskInUse) {
 		return lockedMacDisk(unlock, err, drive)
-	}
-	if d.liveMacRunHoldsDisk(img) {
-		return nil, errors.New(refusal)
 	}
 	log := slog.With(slog.String("drive", runner.DriveSubject(drive)))
 	if deadline.IsZero() {
@@ -155,13 +151,9 @@ func (d *Driver) lockMacDiskDrive(ctx context.Context, img string, drive *types.
 		case <-tick.C:
 		}
 		unlock, err = macvm.LockDisk(img)
-		switch {
-		case !errors.Is(err, macvm.ErrDiskInUse):
+		if !errors.Is(err, macvm.ErrDiskInUse) {
 			log.Info("docker: the macOS VM disk drive was released; the run goes on")
 			return lockedMacDisk(unlock, err, drive)
-		case d.liveMacRunHoldsDisk(img):
-			log.Info("docker: a live run took the macOS VM disk drive while this one waited")
-			return nil, errors.New(refusal)
 		}
 	}
 }
@@ -172,26 +164,6 @@ func lockedMacDisk(unlock func(), err error, drive *types.DriveMount) (func(), e
 		return nil, fmt.Errorf("docker: user drive (%s): %w", runner.DriveSubject(drive), err)
 	}
 	return unlock, nil
-}
-
-// liveMacRunHoldsDisk reports whether a macOS VM run this runner keeps has the disk image img in its run
-// config. A run's entry leaves the driver's VMs as its teardown begins (teardownVM), before its helper lets
-// the disk go, so the run that has just ended is not live here, and that is the one the wait is for.
-func (d *Driver) liveMacRunHoldsDisk(img string) bool {
-	held := false
-	d.vms.Range(func(_, value any) bool {
-		v, ok := value.(*vmRun)
-		if !ok || !v.mac {
-			return true
-		}
-		cfg, err := readMacRun(v.dir, v.runID)
-		if err != nil {
-			return true
-		}
-		held = slices.ContainsFunc(cfg.Disks, func(disk macvm.Disk) bool { return disk.Path == img })
-		return !held
-	})
-	return held
 }
 
 // macDiskSize is the size the VM and the guest take for a disk drive: the image's own length when it
