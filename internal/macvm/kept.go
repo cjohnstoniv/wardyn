@@ -243,6 +243,7 @@ var keptFiles = []string{DiskFile, AuxFile, MachineIDFile, PairKeyFile, Manifest
 // openMachine makes the disk this boot runs: the run's own clone of the base, or a kept machine's folder
 // under its lock. release drops the lock and is safe to call once; the VM must have ended first.
 func (r *runner) openMachine() (man Manifest, id Identity, dir string, release func(), err error) {
+	defer func() { r.recordKeptRefusal(err) }()
 	if r.cfg.Kept == nil {
 		man, id, err = cloneReadyBase(r.o.Engine, r.cfg.BaseDir, r.o.RunDir, r.cfg.Identity)
 		return man, id, r.o.RunDir, func() {}, err
@@ -428,4 +429,15 @@ func readKeptDisk(dir string, s IdentityStrategy) (Manifest, Identity, error) {
 		return man, Identity{}, fmt.Errorf("%w: machine-id", ErrKeptIncomplete)
 	}
 	return man, Identity{Strategy: s, MachineIdentifier: b}, nil
+}
+
+// recordKeptRefusal leaves the kept_refusal code of a refused boot in the run folder; any other error leaves none.
+func (r *runner) recordKeptRefusal(err error) {
+	code := KeptRefusalCode(err)
+	if code == "" {
+		return
+	}
+	if werr := writeJSONAtomic(filepath.Join(r.o.RunDir, KeptRefusalFile), keptRefusal{code}, 0o600); werr != nil {
+		r.o.Log.Error("macvm: recording a kept machine refusal failed", "run_id", r.cfg.RunID, "err", werr.Error())
+	}
 }
