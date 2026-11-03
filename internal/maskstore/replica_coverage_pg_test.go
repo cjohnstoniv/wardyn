@@ -74,7 +74,7 @@ func TestPG_AReplicaAppliesAnErasureBeforeItsManifestsHearOfIt(t *testing.T) {
 		close(inside)
 		<-release
 		return secret, true, nil
-	}, func(id uuid.UUID, b []byte) []byte { return regB.JSONVariantMasker(id).Mask(b) }, mB.Held)
+	}, sinks.Witnessed(func(id uuid.UUID, b []byte) []byte { return regB.JSONVariantMasker(id).Mask(b) }, mB.Held, regB.Generation), mB.Held)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

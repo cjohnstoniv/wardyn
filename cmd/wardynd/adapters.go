@@ -418,7 +418,22 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 	return m.inner.Record(ctx, m.prepare(ev))
 }
 
+// prepare labels and masks ev (maskOnce) and vouches for the result: the registry's values must not have
+// changed while it ran, or an eviction, a drop or a reload could have left the masker short of values the
+// label had already counted as covered. It tries again, then labels the row globals_only, which says less.
 func (m maskingRecorder) prepare(ev types.AuditEvent) types.AuditEvent {
+	var out types.AuditEvent
+	for range 3 {
+		g := m.reg.Generation()
+		if out = m.maskOnce(ev); ev.RunID == nil || m.reg.Generation() == g {
+			return out
+		}
+	}
+	out.Data = withMaskScope(out.Data)
+	return out
+}
+
+func (m maskingRecorder) maskOnce(ev types.AuditEvent) types.AuditEvent {
 	// Capped at the top of the chain as well as at the INSERT (B6-F1): this
 	// recorder is outermost, so capping here is what bounds the SPOOL and the
 	// SIEM SINKS too — store.InsertAuditEvent's own cap only protects the
@@ -476,11 +491,11 @@ func (m maskingRecorder) prepare(ev types.AuditEvent) types.AuditEvent {
 // runValueMasker is the masking recorder's own mask for one run-scoped value the sink fan-out adds after
 // the recorder has run: the same registry and the same JSON-aware corpus, read on every call so a secret
 // registered later still covers it. A nil registry masks nothing.
-func runValueMasker(reg *secretmask.Registry) sinks.RunValueMasker {
+func runValueMasker(reg *secretmask.Registry, covers sinks.RunCoverage) sinks.RunValueMasker {
 	if reg == nil {
 		return nil
 	}
-	return func(runID uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(runID).Mask(b) }
+	return sinks.Witnessed(func(runID uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(runID).Mask(b) }, covers, reg.Generation)
 }
 
 // enrichCoverage is the gate on the correlation id the sinks add: the serving boot's maskScope, the same

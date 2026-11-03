@@ -53,7 +53,7 @@ func TestCorrelationIDIsMaskedOnItsWayToTheSinks(t *testing.T) {
 	}
 	capture := &captureSink{}
 	fan := sinks.NewFanout(capture)
-	fan.EnrichRuns(func(_ context.Context, id uuid.UUID) (string, bool, error) { return ids[id], true, nil }, runValueMasker(reg), func(uuid.UUID) bool { return true })
+	fan.EnrichRuns(func(_ context.Context, id uuid.UUID) (string, bool, error) { return ids[id], true, nil }, runValueMasker(reg, func(uuid.UUID) bool { return true }), func(uuid.UUID) bool { return true })
 	held := &fanOnly{fan: fan}
 	rec := maskingRecorder{inner: held, reg: reg}
 
@@ -121,7 +121,7 @@ func TestCorrelationIDIsOmittedOnceTheRunsMaskingIsFenced(t *testing.T) {
 	}
 	capture := &captureSink{}
 	fan := sinks.NewFanout(capture)
-	fan.EnrichRuns(func(_ context.Context, id uuid.UUID) (string, bool, error) { return ids[id], true, nil }, runValueMasker(reg), scope.covers)
+	fan.EnrichRuns(func(_ context.Context, id uuid.UUID) (string, bool, error) { return ids[id], true, nil }, runValueMasker(reg, scope.covers), scope.covers)
 	rec := maskingRecorder{inner: &fanOnly{fan: fan}, reg: reg, scope: scope}
 
 	emit := func(run uuid.UUID, action string) map[string]any {

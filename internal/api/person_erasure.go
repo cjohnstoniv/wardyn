@@ -19,8 +19,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/erasure"
@@ -229,15 +227,15 @@ func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) 
 	if err != nil {
 		return nil, err
 	}
-	var runIDs []uuid.UUID
-	if s.cfg.ForgetRunCorrelation != nil {
-		if runIDs, err = pe.RunIDsCreatedBy(ctx, person); err != nil {
-			return nil, err
-		}
-	}
 	n, err := pe.BlankRunTasks(ctx, person)
 	if s.cfg.ForgetRunCorrelation != nil {
-		s.cfg.ForgetRunCorrelation(runIDs) // after the rows are cleared, even on a partial failure: a read begun earlier is discarded
+		// Listed after the clear, so a run created while it ran (blanked too) is forgotten as well, even on a
+		// partial failure: a sink read begun earlier is discarded.
+		runIDs, listErr := pe.RunIDsCreatedBy(ctx, person)
+		s.cfg.ForgetRunCorrelation(runIDs)
+		if err == nil {
+			err = listErr
+		}
 	}
 	out := map[string]any{"runs": n}
 	if cancelled > 0 {

@@ -240,12 +240,12 @@ func TestEnrichRuns_AFenceDuringTheReadOrTheMaskingExportsNothing(t *testing.T) 
 					wait()
 				}
 				return v, ok, err
-			}, func(id uuid.UUID, b []byte) []byte {
+			}, Witnessed(func(id uuid.UUID, b []byte) []byte {
 				if tc.blockIn == "mask" {
 					wait()
 				}
 				return reg.JSONVariantMasker(id).Mask(b) // read after the eviction below
-			}, func(uuid.UUID) bool { return covered.Load() })
+			}, func(uuid.UUID) bool { return covered.Load() }, reg.Generation), func(uuid.UUID) bool { return covered.Load() })
 
 			if tc.warm {
 				emitFor(t, f, run)
@@ -300,7 +300,8 @@ func TestEnrichRuns_ADropAppliedFromAnotherReplicaUnholdsBeforeTheValueGoes(t *t
 				close(inside)
 				<-release
 				return v, ok, err
-			}, func(id uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(id).Mask(b) },
+			}, Witnessed(func(id uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(id).Mask(b) },
+				func(uuid.UUID) bool { return covered.Load() }, reg.Generation),
 				func(uuid.UUID) bool { return covered.Load() })
 
 			done := make(chan struct{})
@@ -320,5 +321,56 @@ func TestEnrichRuns_ADropAppliedFromAnotherReplicaUnholdsBeforeTheValueGoes(t *t
 				t.Errorf("the sink got %s after the drop", sink.ev.Data)
 			}
 		})
+	}
+}
+
+// A run is evicted after the coverage check and before the id is masked (the masker reads an empty corpus),
+// then reloaded and held again while the masking finishes. Each answer taken alone says covered; the
+// registry's generation moved between them, so the id is left off.
+func TestEnrichRuns_AnEvictionAndAReloadAroundTheMaskingExportNothing(t *testing.T) {
+	const secret = "zq-throwaway-evict-reload-15"
+	run := uuid.New()
+	reg := secretmask.NewRegistry()
+	if err := reg.Add(run, []byte(secret)); err != nil {
+		t.Fatal(err)
+	}
+	var covered atomic.Bool
+	covered.Store(true)
+	reg.SetDropGuard(func(uuid.UUID) func() { covered.Store(false); return func() {} })
+	rows := &erasableRows{ids: map[uuid.UUID]string{run: secret}}
+	inLookup, releaseLookup := make(chan struct{}), make(chan struct{})
+	inMask, releaseMask := make(chan struct{}), make(chan struct{})
+	sink := &lastEventSink{}
+	f := NewFanout(sink)
+	f.EnrichRuns(func(ctx context.Context, id uuid.UUID) (string, bool, error) {
+		v, ok, err := rows.lookup(ctx, id)
+		close(inLookup)
+		<-releaseLookup
+		return v, ok, err
+	}, Witnessed(func(id uuid.UUID, b []byte) []byte {
+		out := reg.JSONVariantMasker(id).Mask(b) // the corpus is empty here
+		close(inMask)
+		<-releaseMask
+		return out
+	}, func(uuid.UUID) bool { return covered.Load() }, reg.Generation),
+		func(uuid.UUID) bool { return covered.Load() })
+
+	done := make(chan struct{})
+	go func() { defer close(done); emitFor(t, f, run) }()
+	<-inLookup // the first coverage answer, true, is behind us
+	reg.Evict(run)
+	close(releaseLookup)
+	<-inMask                                             // masked with nothing registered
+	if err := reg.Add(run, []byte(secret)); err != nil { // the reload
+		t.Fatal(err)
+	}
+	covered.Store(true) // and publishes the run held again
+	close(releaseMask)
+	<-done
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if strings.Contains(string(sink.ev.Data), secret) || strings.Contains(string(sink.ev.Data), CorrelationKey) {
+		t.Errorf("the sink got %s", sink.ev.Data)
 	}
 }

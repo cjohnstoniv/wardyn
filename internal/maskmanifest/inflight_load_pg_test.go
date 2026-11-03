@@ -104,7 +104,7 @@ func TestPG_ALoadInFlightWhenTheCorpusIsDroppedCannotVouchForItAgain(t *testing.
 			sink := &lastSink{}
 			fan := sinks.NewFanout(sink)
 			fan.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return secret, true, nil },
-				func(rid uuid.UUID, b []byte) []byte { return regB.JSONVariantMasker(rid).Mask(b) }, mB.Held)
+				sinks.Witnessed(func(rid uuid.UUID, b []byte) []byte { return regB.JSONVariantMasker(rid).Mask(b) }, mB.Held, regB.Generation), mB.Held)
 			if err := fan.Emit(ctx, types.AuditEvent{ID: uuid.New(), RunID: &run, Action: "run.kill", Outcome: "success", Data: json.RawMessage(`{"k":1}`)}); err != nil {
 				t.Fatal(err)
 			}
@@ -220,7 +220,7 @@ func TestPG_ALoadDuringARemovalCannotVouchForTheRun(t *testing.T) {
 			sink := &lastSink{}
 			fan := sinks.NewFanout(sink)
 			fan.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return secret, true, nil },
-				func(rid uuid.UUID, b []byte) []byte { return regB.JSONVariantMasker(rid).Mask(b) }, mB.Held)
+				sinks.Witnessed(func(rid uuid.UUID, b []byte) []byte { return regB.JSONVariantMasker(rid).Mask(b) }, mB.Held, regB.Generation), mB.Held)
 			emit := func() string {
 				if err := fan.Emit(ctx, types.AuditEvent{ID: uuid.New(), RunID: &run, Action: "run.kill", Outcome: "success", Data: json.RawMessage(`{"k":1}`)}); err != nil {
 					t.Fatal(err)
@@ -248,11 +248,17 @@ func TestPG_ALoadDuringARemovalCannotVouchForTheRun(t *testing.T) {
 			}
 			close(resume)
 			<-done
-			if mB.Held(run) {
-				t.Error("the run is held after the removal")
-			}
-			if got := emit(); strings.Contains(got, secret) || strings.Contains(got, sinks.CorrelationKey) {
+			got := emit()
+			if strings.Contains(got, secret) {
 				t.Errorf("after the removal the sink got %s", got)
+			}
+			if name == "DropGlobalValue" {
+				// A process-wide value is no run's manifest value: the run stays held, and its per-run copy still masks the id.
+				if !mB.Held(run) || !strings.Contains(got, sinks.CorrelationKey) {
+					t.Errorf("a dropped process-wide value ended a run's coverage: held %v, sink got %s", mB.Held(run), got)
+				}
+			} else if mB.Held(run) || strings.Contains(got, sinks.CorrelationKey) {
+				t.Errorf("the run is held after its values were removed: %v, sink got %s", mB.Held(run), got)
 			}
 		})
 	}

@@ -25,9 +25,21 @@ const CorrelationKey = "correlation_id"
 type RunCorrelationLookup func(ctx context.Context, runID uuid.UUID) (id string, found bool, err error)
 
 // RunValueMasker masks the secrets registered for runID out of b, the way the audit recorder masks an
-// event's data. The id the enricher adds comes from the run row, after that masking has run, so it
-// passes through here on every emit.
-type RunValueMasker func(runID uuid.UUID, b []byte) []byte
+// event's data, and reports whether that masking was provably whole: the run was covered when it ended
+// and its corpus did not change meanwhile (Witnessed). The id the enricher adds comes from the run row,
+// after the recorder's masking has run, so it passes through here on every emit; false leaves it off.
+type RunValueMasker func(runID uuid.UUID, b []byte) ([]byte, bool)
+
+// Witnessed is the RunValueMasker over mask: it reads generation before masking and reports ok only if
+// covers still holds afterwards and generation has not moved, so a corpus that was emptied, evicted or
+// reloaded while mask ran is never vouched for by a coverage answer given before or after it.
+func Witnessed(mask func(runID uuid.UUID, b []byte) []byte, covers RunCoverage, generation func() uint64) RunValueMasker {
+	return func(runID uuid.UUID, b []byte) ([]byte, bool) {
+		g := generation()
+		out := mask(runID, b)
+		return out, covers(runID) && generation() == g
+	}
+}
 
 // RunCoverage reports whether the run's masking is provably whole here. Only then is its correlation id
 // added: a fenced or erased corpus, or an answer that cannot be confirmed, is false.
@@ -82,17 +94,13 @@ func (c *correlationEnricher) apply(ctx context.Context, ev types.AuditEvent) ty
 		return ev
 	}
 	if c.mask != nil {
-		id = c.masked(*ev.RunID, id)
-		if id == "" {
+		// The masker also vouches that the run stayed covered with its corpus unchanged while it masked: an
+		// erasure or eviction that emptied the corpus during the read or the masking, and a reload that
+		// refilled it and held the run again, both move the registry's generation.
+		var whole bool
+		if id, whole = c.masked(*ev.RunID, id); !whole || id == "" {
 			return ev
 		}
-	}
-	// Again, now that the id is masked: an erasure that fenced the run and evicted its corpus while the read
-	// or the masking ran left the masker empty. The fence is durable and set before the eviction (maskmanifest
-	// FenceSubject and Forget drop the held manifest, then the registry's values), and a fenced run is never
-	// held again, so a run still held here was masked by its whole corpus.
-	if c.covers != nil && !c.covers(*ev.RunID) {
-		return ev
 	}
 	if data, ok := stampCorrelation(ev.Data, id); ok {
 		ev.Data = data // a new slice: the caller's event, which the store already took, is untouched
@@ -102,17 +110,17 @@ func (c *correlationEnricher) apply(ctx context.Context, ev types.AuditEvent) ty
 
 // masked is id with the run's registered secrets replaced, "" when what comes back is not a JSON string
 // (the key is then left off rather than sent unmasked).
-func (c *correlationEnricher) masked(runID uuid.UUID, id string) string {
+func (c *correlationEnricher) masked(runID uuid.UUID, id string) (string, bool) {
 	quoted, err := json.Marshal(id)
 	if err != nil {
-		return ""
+		return "", false
 	}
-	quoted = c.mask(runID, quoted)
+	quoted, whole := c.mask(runID, quoted)
 	var out string
-	if json.Unmarshal(quoted, &out) != nil {
-		return ""
+	if !whole || json.Unmarshal(quoted, &out) != nil {
+		return "", false
 	}
-	return out
+	return out, true
 }
 
 func (c *correlationEnricher) idOf(ctx context.Context, runID uuid.UUID) (string, bool) {
@@ -169,7 +177,8 @@ func stampCorrelation(data json.RawMessage, id string) (json.RawMessage, bool) {
 
 // EnrichRuns has Emit stamp each run-scoped event's data with that run's correlation ID, so every child
 // sink sees data.correlation_id and no emit site changes. mask, when set, is applied to the id on every
-// emit, and covers, when set, gates it: a run it does not vouch for gets no id. Call it once at boot,
+// emit and must vouch for it (Witnessed), and covers, when set, gates it first, before the cache: a run
+// it does not vouch for gets no id. Call it once at boot,
 // before the first Emit.
 func (f *Fanout) EnrichRuns(lookup RunCorrelationLookup, mask RunValueMasker, covers RunCoverage) {
 	f.enrich = &correlationEnricher{lookup: lookup, mask: mask, covers: covers, now: time.Now, ids: map[uuid.UUID]cachedCorrelation{}}

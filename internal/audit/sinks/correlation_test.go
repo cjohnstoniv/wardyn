@@ -184,7 +184,8 @@ func TestFanoutWithoutEnrichRuns_PassesTheEventThrough(t *testing.T) {
 
 // registryMasker is the mask the daemon hands EnrichRuns (cmd/wardynd runValueMasker).
 func registryMasker(reg *secretmask.Registry) sinks.RunValueMasker {
-	return func(runID uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(runID).Mask(b) }
+	return sinks.Witnessed(func(runID uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(runID).Mask(b) },
+		func(uuid.UUID) bool { return true }, reg.Generation)
 }
 
 // TestFanoutEnrichRuns_MasksTheIDWithTheRunsRegistryOnEveryEmit: the id comes from the run row after the
