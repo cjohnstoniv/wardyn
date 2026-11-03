@@ -28,7 +28,6 @@ import { createPortal } from "react-dom";
 import GridLayout, { noCompactor, type Layout } from "react-grid-layout";
 import "react-grid-layout/css/styles.css";
 import { Check, Expand, GripVertical, LayoutGrid, Pencil, Plus, RotateCcw, X } from "lucide-react";
-import { toast } from "sonner";
 import type { RunLayoutPreset } from "../../../lib/api/run-layout";
 import { isVMKind } from "../../../lib/types/machine-kind";
 import { Dialog, DialogContent, DialogTitle } from "../../ui/dialog";
@@ -37,7 +36,7 @@ import { cn } from "../../ui/utils";
 import { RUN_COCKPIT } from "../../wardyn/copy";
 import { useFocusMode } from "../app-shell";
 import { FocusMode } from "./focus-mode";
-import { useRunLayout } from "./use-run-layout";
+import { useRunLayout, type SaveStatus } from "./use-run-layout";
 import { fitRows, measureTile, settleItems } from "./fit-layout";
 import { WidgetSlot } from "./widget-slot";
 import { ErrorBoundary } from "../../wardyn/error-boundary";
@@ -206,7 +205,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   const [active, setActive] = React.useState<{ i: string; w: number; h: number } | null>(null);
 
   const vm = isVMKind(ctx.run.machine_kind);
-  const { layout, persistable, apply, save, reset } = useRunLayout(preset, !!ctx.run.service, vm);
+  const { layout, persistable, status, failedPreset, retry, apply, reset } = useRunLayout(preset, !!ctx.run.service, vm);
   const { ref, node, width, height } = useCanvasSize();
 
   // Focus mode (design board 2c). The shell learns about it through
@@ -385,18 +384,6 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
     apply(layout.some((w) => w.widget === id) ? removeWidget(layout, id) : addWidget(layout, id));
   };
 
-  const saveDefault = () => {
-    // Three outcomes, three sentences. "unsupported" is a permanent property of
-    // the deployment and matches the toolbar's inline note; "failed" is THIS
-    // attempt and is worth retrying. Collapsing the last two told the operator
-    // their server cannot store layouts because one save hit a 500.
-    void save().then((result) => {
-      if (result === "ok") toast.success(RUN_COCKPIT.layoutSaved);
-      else if (result === "unsupported") toast.message(RUN_COCKPIT.layoutNotPersisted);
-      else toast.error(RUN_COCKPIT.layoutSaveFailed);
-    });
-  };
-
   // The large view never shrinks while it is open, so a poll that shortens the widget cannot move Close or the content
   // under the pointer. It remembers the tallest it has been, and still gives way to a window smaller than that.
   React.useEffect(() => {
@@ -537,7 +524,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
               <ToolbarButton onClick={reset} Icon={RotateCcw}>
                 {RUN_COCKPIT.resetLayout}
               </ToolbarButton>
-              <ToolbarButton onClick={saveDefault}>{RUN_COCKPIT.saveLayoutDefault}</ToolbarButton>
+              <LayoutStatus status={status} failedPreset={failedPreset} onRetry={retry} />
               <button
                 type="button"
                 onClick={() => setEditing(false)}
@@ -557,6 +544,8 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
             // run-detail-command-bar.tsx, which this file does not own — so the
             // canvas carries its own entry points.
             <div className="flex items-center gap-1.5">
+              {/* A write that failed outlives Done: leaving the editor must not read as "saved". */}
+              {status === "failed" && <LayoutStatus status={status} failedPreset={failedPreset} onRetry={retry} />}
               <button
                 type="button"
                 onClick={() => setFocus(true)}
@@ -684,6 +673,26 @@ function ToolbarButton({
       {Icon && <Icon className="size-3.5" />}
       {children}
     </button>
+  );
+}
+
+// Where the automatic save stands. Silent before the first gesture; a failure names itself and offers the retry.
+function LayoutStatus({ status, failedPreset, onRetry }: { status: SaveStatus; failedPreset: RunLayoutPreset | null; onRetry: () => void }) {
+  if (status === "idle") return null;
+  if (status === "failed") {
+    return (
+      <span role="status" className="inline-flex items-center gap-1 px-1.5 text-xs text-destructive">
+        {RUN_COCKPIT.layoutSaveFailed(failedPreset === "finished" ? "Finished" : "Live")}
+        <button type="button" onClick={onRetry} className="rounded px-1 font-medium underline underline-offset-2">
+          {RUN_COCKPIT.layoutRetry}
+        </button>
+      </span>
+    );
+  }
+  return (
+    <span role="status" className="px-1.5 text-xs text-muted-foreground">
+      {status === "saving" ? RUN_COCKPIT.layoutSaving : RUN_COCKPIT.layoutSaved}
+    </span>
   );
 }
 

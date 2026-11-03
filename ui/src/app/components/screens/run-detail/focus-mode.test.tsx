@@ -268,6 +268,56 @@ describe("Focus mode — the edge dock", () => {
     expect(screen.getByRole("heading", { name: "Egress" })).toBeInTheDocument();
   });
 
+  // C012-010: with the terminal focused, Escape and Ctrl+\\ are the program's keys (vim insert mode, SIGQUIT).
+  describe("keys while the terminal has focus", () => {
+    const withTerminal = (onExit: () => void) =>
+      render(<FocusMode ctx={ctx({ terminalPane: <textarea aria-label="terminal input" /> })} onExit={onExit} />);
+
+    it("passes Escape to the terminal and does not exit", async () => {
+      const user = userEvent.setup();
+      const onExit = vi.fn();
+      withTerminal(onExit);
+      screen.getByLabelText("terminal input").focus();
+      await user.keyboard("{Escape}");
+      expect(onExit).not.toHaveBeenCalled();
+    });
+
+    it("passes Ctrl+\\ to the terminal and leaves the dock alone", async () => {
+      const user = userEvent.setup();
+      withTerminal(() => {});
+      screen.getByLabelText("terminal input").focus();
+      await user.keyboard("{Control>}\\{/Control}");
+      expect(screen.getByRole("heading", { name: "Egress" })).toBeInTheDocument();
+    });
+
+    it("exits on Ctrl+Shift+Backspace from inside the terminal", async () => {
+      const user = userEvent.setup();
+      const onExit = vi.fn();
+      withTerminal(onExit);
+      screen.getByLabelText("terminal input").focus();
+      await user.keyboard("{Control>}{Shift>}{Backspace}{/Shift}{/Control}");
+      expect(onExit).toHaveBeenCalledTimes(1);
+    });
+
+    it("exits on Ctrl+Shift+Backspace from the console chrome too", async () => {
+      const user = userEvent.setup();
+      const onExit = vi.fn();
+      withTerminal(onExit);
+      screen.getByRole("button", { name: RUN_COCKPIT.exitFocus }).focus();
+      await user.keyboard("{Control>}{Shift>}{Backspace}{/Shift}{/Control}");
+      expect(onExit).toHaveBeenCalledTimes(1);
+    });
+
+    it("still exits on Escape from the console chrome", async () => {
+      const user = userEvent.setup();
+      const onExit = vi.fn();
+      withTerminal(onExit);
+      screen.getByRole("button", { name: RUN_COCKPIT.exitFocus }).focus();
+      await user.keyboard("{Escape}");
+      expect(onExit).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // F1-F6: the dock used to store the raw selection with no clamp — when the
   // open widget stops being dockable (ssh, once the run it belongs to
   // finishes), its rail button vanished but the panel kept the glass panel
@@ -435,7 +485,7 @@ describe("Focus mode — the bottom strip states the facts", () => {
     render(<FocusMode ctx={ctx()} onExit={() => {}} />);
     // Two chords, each a key cap beside the word for what it does.
     const caps = document.querySelectorAll("kbd");
-    expect([...caps].map((k) => k.textContent)).toEqual([chordLabel([MOD, "\\"]), "Esc"]);
+    expect([...caps].map((k) => k.textContent)).toEqual([chordLabel([MOD, "\\"]), "Ctrl+Shift+Backspace"]);
     expect(screen.getByText(RUN_COCKPIT.shortcutDock)).toBeInTheDocument();
     expect(screen.getByText(RUN_COCKPIT.shortcutExitFocus)).toBeInTheDocument();
     // ⌘K / ⌘1..4 / ⇧⌘F are on the board's strip and are NOT wired here.
