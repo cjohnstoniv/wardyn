@@ -26,50 +26,13 @@ import (
 // An attended window onto a macOS VM run is one connection to the run's helper on its ctl.sock: the
 // helper opens the window on the live VM when it answers the window request, keeps it up while the
 // connection stays open, and closes the connection when the window is over. Closing the connection from
-// here closes the window. The request is a line of its own shape, not a macvm.ControlRequest, because
-// the control client's Window is not on every base this package builds against.
-
-// macWindowOp is the ctl.sock op that opens the window.
-const macWindowOp = "window"
+// here closes the window. The connection is dialled here (dialUnix, which checks the socket directory)
+// and held as a net.Conn, so the control client's Window, which dials its own and keeps its connection
+// to itself, is not used.
 
 // macWindowAsk is the open request's wait: the hello and the helper's answer, which comes once the
 // window is up.
 const macWindowAsk = 15 * time.Second
-
-// macWindowRequest is the window op's request line (the helper's macvm.ControlRequest with Grant and Title).
-type macWindowRequest struct {
-	Op    string `json:"op"`
-	Grant string `json:"grant"`
-	Title string `json:"title,omitempty"`
-}
-
-// macWindowReply is a line from the helper (macvm.ControlReply): the hello's answer, the window's answer
-// ({"ok":true}, or {"ok":false} with the sentence in error and a window_* code), then at most one final
-// line {"ok":true,"event":{"type":"window_closed","detail":<reason>}}. On the events stream a window
-// event carries the grant id the helper saw.
-type macWindowReply struct {
-	OK    bool            `json:"ok"`
-	Error string          `json:"error,omitempty"`
-	Code  string          `json:"code,omitempty"`
-	Proto int             `json:"proto,omitempty"`
-	Event *macWindowEvent `json:"event,omitempty"`
-}
-
-type macWindowEvent struct {
-	Type   string `json:"type"`
-	Detail string `json:"detail,omitempty"`
-	Grant  string `json:"grant,omitempty"`
-}
-
-// The helper's window codes, event types and close reasons the runner reads (macvm.WindowCode*,
-// EventWindowClosed, WindowClosed*).
-const (
-	macWindowCodeOpen     = "window_open"
-	macWindowEventClosed  = "window_closed"
-	macWindowClosedPerson = "person"
-	macWindowClosedLocked = "host_locked"
-	macWindowClosedEnded  = "run_ended"
-)
 
 // OpenWindow implements runner.MacWindower: it asks the run's helper, on the ctl.sock of its checked
 // socket directory, to open a window, and holds the connection as the window. A sandbox that is no macOS
@@ -147,17 +110,17 @@ func askMacWindow(conn net.Conn, rd *bufio.Reader, req runner.MacWindowRequest) 
 	if err := writeLine(conn, macvm.ControlRequest{Op: macvm.OpHello, Proto: macvm.ControlProto}); err != nil {
 		return nil, err
 	}
-	var hello macWindowReply
+	var hello macvm.ControlReply
 	if err := readLine(rd, &hello); err != nil {
 		return nil, err
 	}
 	if !hello.OK || hello.Proto != macvm.ControlProto {
 		return nil, fmt.Errorf("%w: %w", runner.ErrMacWindowHelperOld, &macvm.ErrProto{Helper: hello.Proto})
 	}
-	if err := writeLine(conn, macWindowRequest{Op: macWindowOp, Grant: req.GrantID, Title: req.Title}); err != nil {
+	if err := writeLine(conn, macvm.ControlRequest{Op: macvm.OpWindow, Grant: req.GrantID, Title: req.Title}); err != nil {
 		return nil, err
 	}
-	var r macWindowReply
+	var r macvm.ControlReply
 	if err := readLine(rd, &r); err != nil {
 		return nil, err
 	}
@@ -167,7 +130,7 @@ func askMacWindow(conn net.Conn, rd *bufio.Reader, req runner.MacWindowRequest) 
 	switch {
 	case strings.HasPrefix(r.Error, "unknown op"): // a helper older than the window op
 		return nil, runner.ErrMacWindowHelperOld
-	case r.Code == macWindowCodeOpen:
+	case r.Code == macvm.WindowCodeOpen:
 		return nil, runner.ErrMacWindowOpen
 	case r.Code != "":
 		return nil, &runner.MacWindowRefusal{Code: r.Code, Sentence: r.Error}
@@ -207,14 +170,14 @@ type macWindow struct {
 // watch reads the helper's connection until it ends and records why. A close of our own records nothing.
 func (w *macWindow) watch(rd *bufio.Reader) {
 	reason := runner.MacWindowEndHelperLost
-	var r macWindowReply
-	if err := readLine(rd, &r); err == nil && r.Event != nil && r.Event.Type == macWindowEventClosed {
+	var r macvm.ControlReply
+	if err := readLine(rd, &r); err == nil && r.Event != nil && r.Event.Type == macvm.EventWindowClosed {
 		switch r.Event.Detail {
-		case macWindowClosedPerson:
+		case macvm.WindowClosedPerson:
 			reason = runner.MacWindowEndPerson
-		case macWindowClosedLocked:
+		case macvm.WindowClosedHostLocked:
 			reason = runner.MacWindowEndHostLocked
-		case macWindowClosedEnded:
+		case macvm.WindowClosedRunEnded:
 			reason = runner.MacWindowEndRunEnded
 		default: // "failed", or a reason a newer helper has
 			reason = runner.MacWindowEndHelperFailed

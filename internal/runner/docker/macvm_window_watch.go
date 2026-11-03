@@ -37,13 +37,8 @@ func issuedMacWindow(runID uuid.UUID, grant string) bool {
 	return ok
 }
 
-// The helper's window events on the events stream (macvm.Event with Type window).
-const (
-	macWindowEventType    = "window"
-	macWindowEventOpen    = "open"
-	macWindowEventShut    = "closed"
-	macWindowWatchBackoff = 30 * time.Second
-)
+// macWindowWatchBackoff is the longest wait before the events connection is tried again after a failure.
+const macWindowWatchBackoff = 30 * time.Second
 
 // watchWindows keeps one events connection to runID's helper until ctx ends. A helper that is not up yet
 // (the dial fails) or whose stream ended cleanly is tried again every second; one that fails the
@@ -79,7 +74,7 @@ func watchWindowEvents(ctx context.Context, conn net.Conn, runID uuid.UUID, repo
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	rd := bufio.NewReaderSize(conn, 4096)
-	var r macWindowReply
+	var r macvm.ControlReply
 	if err := writeLine(conn, macvm.ControlRequest{Op: macvm.OpHello, Proto: macvm.ControlProto}); err != nil {
 		return err
 	}
@@ -96,20 +91,20 @@ func watchWindowEvents(ctx context.Context, conn net.Conn, runID uuid.UUID, repo
 		return fmt.Errorf("docker: the macOS VM helper did not start its events: %v", err)
 	}
 	for {
-		r = macWindowReply{}
+		r = macvm.ControlReply{}
 		if err := readLine(rd, &r); err != nil {
 			return nil
 		}
 		e := r.Event
-		if e == nil || e.Type != macWindowEventType {
+		if e == nil || e.Type != macvm.EventWindow {
 			continue
 		}
 		switch e.Detail {
-		case macWindowEventOpen:
+		case macvm.EventWindowOpen:
 			if report != nil && !issuedMacWindow(runID, e.Grant) {
 				go report(runID, e.Grant, time.Now())
 			}
-		case macWindowEventShut:
+		case macvm.EventWindowClosedDetail:
 			forgetMacWindow(runID, e.Grant)
 		}
 	}

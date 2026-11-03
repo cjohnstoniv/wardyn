@@ -136,15 +136,14 @@ type macWindowSession interface {
 	Close() error
 }
 
-// macWindowSubFor is runner id's window end (the test seam macWindowSubs replaces it). A runner whose
-// substrate does not implement macWindowSub has none.
+// macWindowSubFor is runner id's window end (the test seam macWindowSubs replaces it). A runner that has not
+// reported the window cap reads as unreported (MacWindowSupported).
 func (s *Server) macWindowSubFor(id uuid.UUID) (macWindowSub, bool) {
 	if s.macWindowSubs != nil {
 		sub := s.macWindowSubs(id)
 		return sub, sub != nil
 	}
-	sub, ok := s.runnerEndpoint(id).sub.(macWindowSub)
-	return sub, ok
+	return remoteMacWindow{sub: s.runnerEndpoint(id).sub}, true
 }
 
 // macWindowTicks is the re-check clock: a channel that ticks every d, and its stop. The test seam macWindowTick
@@ -311,14 +310,6 @@ func macWindowNotYourMac(runner string) *runRefusal {
 	}
 	return runError(http.StatusForbidden, reasonMacWindowNotYourMac, macWindowNotYourMacMsg(runner))
 }
-
-// statusDetailMacPrepDone and macPrepDone are the interactive macOS VM prep's done marker, read off the STORED
-// run row (the serving projection blanks status_detail for a RUNNING run).
-// joined with vm-interactive-prep's macPrepDone at train merge
-const statusDetailMacPrepDone = "prep: done"
-
-// joined with vm-interactive-prep's macPrepDone at train merge
-func macPrepDone(run types.AgentRun) bool { return run.StatusDetail == statusDetailMacPrepDone }
 
 // macRunPreparing says the run is still being prepared: its sandbox is not up (STARTING), or it is an
 // interactive macOS VM run whose prep (repo clone, harness setup) has not recorded done.

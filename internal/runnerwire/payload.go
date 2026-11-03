@@ -630,6 +630,14 @@ const (
 	MacWindowHelperOldSentence = "This run's macOS VM helper is too old to open a window. End the run and start it again on this runner."
 )
 
+// The helper's two refusals (window_not_at_mac) of a screen that is locked or not the person's, and of one
+// that could not be read. The runner's reply carries the sentence and not the code, so the organisation
+// tells them by these words (macvm.WindowNotAtMacSentence, macvm.WindowUnreadableSentence).
+const (
+	MacWindowNotAtMacSentence   = "The window didn't open: you aren't signed in at this Mac's screen, or it is locked. Unlock it and open the window again."
+	MacWindowUnreadableSentence = "The window didn't open: Wardyn couldn't tell whether you are at this Mac's screen. Unlock it and open the window again."
+)
+
 // Open is the OPEN payload.
 type Open struct {
 	Kind   string `json:"kind"`

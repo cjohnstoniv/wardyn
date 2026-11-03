@@ -27,10 +27,10 @@ import (
 // fakeWindowHelper serves the helper's side of one ctl.sock connection: it answers hello, then reads the
 // window request and answers it with answer. It returns the request it read and the connection's reader,
 // for a test that goes on to end the window.
-func fakeWindowHelper(t *testing.T, c net.Conn, proto int, answer string) (<-chan macWindowRequest, *bufio.Reader) {
+func fakeWindowHelper(t *testing.T, c net.Conn, proto int, answer string) (<-chan macvm.ControlRequest, *bufio.Reader) {
 	t.Helper()
 	rd := bufio.NewReader(c)
-	got := make(chan macWindowRequest, 1)
+	got := make(chan macvm.ControlRequest, 1)
 	line := func(v any) {
 		b, _ := json.Marshal(v)
 		_, _ = c.Write(append(b, '\n'))
@@ -52,7 +52,7 @@ func fakeWindowHelper(t *testing.T, c net.Conn, proto int, answer string) (<-cha
 		if err != nil {
 			return
 		}
-		var r macWindowRequest
+		var r macvm.ControlRequest
 		if json.Unmarshal(req, &r) != nil {
 			t.Errorf("request %q", req)
 			return
@@ -64,7 +64,7 @@ func fakeWindowHelper(t *testing.T, c net.Conn, proto int, answer string) (<-cha
 	return got, rd
 }
 
-func openFake(t *testing.T, proto int, answer string) (runner.MacWindow, net.Conn, <-chan macWindowRequest, error) {
+func openFake(t *testing.T, proto int, answer string) (runner.MacWindow, net.Conn, <-chan macvm.ControlRequest, error) {
 	t.Helper()
 	a, b := net.Pipe()
 	t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
@@ -86,17 +86,17 @@ func waitEnded(t *testing.T, w runner.MacWindow) {
 // one line saying why. Each reason the helper gives reaches the runner as its own.
 func TestMacWindowHelperEndReasons(t *testing.T) {
 	for helper, want := range map[string]string{
-		macWindowClosedPerson: runner.MacWindowEndPerson,
-		macWindowClosedLocked: runner.MacWindowEndHostLocked,
-		macWindowClosedEnded:  runner.MacWindowEndRunEnded,
-		"failed":              runner.MacWindowEndHelperFailed,
-		"a newer reason":      runner.MacWindowEndHelperFailed,
+		macvm.WindowClosedPerson:     runner.MacWindowEndPerson,
+		macvm.WindowClosedHostLocked: runner.MacWindowEndHostLocked,
+		macvm.WindowClosedRunEnded:   runner.MacWindowEndRunEnded,
+		"failed":                     runner.MacWindowEndHelperFailed,
+		"a newer reason":             runner.MacWindowEndHelperFailed,
 	} {
 		w, helperConn, got, err := openFake(t, macvm.ControlProto, `{"ok":true}`)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r := <-got; r.Op != "window" || r.Grant != "g1" || r.Title != "Run, for Pat" {
+		if r := <-got; r.Op != macvm.OpWindow || r.Grant != "g1" || r.Title != "Run, for Pat" {
 			t.Fatalf("the helper was asked %+v", r)
 		}
 		select {
