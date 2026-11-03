@@ -46,7 +46,7 @@ func (p *ModelProviders) Empty() bool {
 	return p == nil || len(p.Providers) == 0
 }
 
-// ModelProviderSecretPrefix starts every per-person credential name: wardyn-provider-<uid>-{key,oauth,sso,entra}.
+// ModelProviderSecretPrefix starts every per-person credential name: wardyn-provider-<uid>-{key,oauth,sso,entra,oidc}.
 const ModelProviderSecretPrefix = "wardyn-provider-"
 
 // ModelProviderKind is what kind of credential each person brings to a provider, and so which dispatch
@@ -122,6 +122,9 @@ type ModelProvider struct {
 	Bedrock *BedrockSettings    `json:"bedrock,omitempty"` // region, address and sign-in setup for a Bedrock kind
 	Azure   *AzureSettings      `json:"azure,omitempty"`   // endpoint and route for azure_foundry
 	Local   *LocalModelSettings `json:"local,omitempty"`   // model allowlist and request bounds for local_model
+	// OIDC makes each person sign in to the endpoint's own authority instead of pasting a token;
+	// custom_endpoint only. Absent keeps the pasted token.
+	OIDC *ProviderOIDC `json:"oidc,omitempty"`
 	// GatewayIdentity turns on a signed token, naming the person, the run and the runner, on each model call
 	// to this provider's gateway. Absent is off, and off changes nothing a run sends.
 	GatewayIdentity *ModelProviderGatewayIdentity `json:"gateway_identity,omitempty"`
@@ -139,6 +142,45 @@ func (p ModelProvider) Serves(harness string) bool {
 type ModelProviderGatewayIdentity struct {
 	Audience string `json:"audience"`
 }
+
+// The two ways a sign-in to a custom endpoint's authority is tied to the person who made it.
+const (
+	// OIDCBindingConsole requires the identity token's issuer to be the one the console signs people in
+	// with, and the person it names to be the signed-in one. The default.
+	OIDCBindingConsole = "console"
+	// OIDCBindingNone compares nothing: the capture records the authority's issuer and subject and
+	// stores the sign-in under whoever made it. An admin's choice, audited when set.
+	OIDCBindingNone = "none"
+)
+
+// ProviderOIDC is a custom_endpoint's sign-in: where each person signs in and as which client. PKCE
+// (S256), openid and offline_access are always on and are not settings.
+type ProviderOIDC struct {
+	// Issuer is required: discovery and the identity token's verification both come from it.
+	Issuer string `json:"issuer"`
+	// AuthorizeURL and TokenURL override what discovery names.
+	AuthorizeURL string `json:"authorize_url,omitempty"`
+	TokenURL     string `json:"token_url,omitempty"`
+	ClientID     string `json:"client_id"`
+	// ClientSecretRef names an operator secret holding the client's secret; empty is a public client.
+	ClientSecretRef string `json:"client_secret_ref,omitempty"`
+	// Scopes are asked for beside openid and offline_access.
+	Scopes []string `json:"scopes"`
+	// IdentityBinding is OIDCBindingConsole (also "") or OIDCBindingNone.
+	IdentityBinding string `json:"identity_binding,omitempty"`
+}
+
+// Binding is IdentityBinding with the default filled in.
+func (o *ProviderOIDC) Binding() string {
+	if o == nil || o.IdentityBinding == "" {
+		return OIDCBindingConsole
+	}
+	return o.IdentityBinding
+}
+
+// Unbound reports whether a person's sign-in on this row is stored without being tied to their console
+// sign-in, which a Review line says as "not bound to your sign-in".
+func (o *ProviderOIDC) Unbound() bool { return o != nil && o.Binding() == OIDCBindingNone }
 
 // ProviderAuth is how a custom endpoint expects each person's token: header and value format ("Bearer %s").
 type ProviderAuth struct {

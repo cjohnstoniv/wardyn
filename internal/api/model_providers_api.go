@@ -202,7 +202,7 @@ func stillDefaultRefusal(roster *types.AgentProviders, block *types.ModelProvide
 // more people than the providers page is.
 func modelProviderAuditData(before, after types.ModelProviders) map[string]any {
 	ids, kinds, pairs, disabled, pins, changed := []string{}, []string{}, []string{}, []string{}, []string{}, []string{}
-	rekinded, identity := []string{}, []string{}
+	rekinded, identity, unbound := []string{}, []string{}, []string{}
 	prior, priorByID := map[string]types.ModelProvider{}, map[string]types.ModelProvider{}
 	for _, p := range before.Providers {
 		prior[p.UID], priorByID[p.ID] = p, p
@@ -227,11 +227,14 @@ func modelProviderAuditData(before, after types.ModelProviders) map[string]any {
 		if old, ok := prior[p.UID]; ok && providerAddressChanged(old, p) {
 			changed = append(changed, p.ID)
 		}
+		if p.OIDC.Unbound() { // named on every write that carries it, so setting it is on the record
+			unbound = append(unbound, p.ID)
+		}
 		if old, ok := priorByID[p.ID]; ok && old.Kind != p.Kind {
 			rekinded = append(rekinded, p.ID)
 		}
 	}
-	for _, l := range [][]string{ids, kinds, pairs, disabled, pins, changed, rekinded, identity} {
+	for _, l := range [][]string{ids, kinds, pairs, disabled, pins, changed, rekinded, identity, unbound} {
 		slices.Sort(l)
 	}
 	data := map[string]any{
@@ -241,6 +244,9 @@ func modelProviderAuditData(before, after types.ModelProviders) map[string]any {
 	if len(identity) > 0 { // absent with identity off, so this row reads as it always has
 		data["gateway_identity"] = identity
 	}
+	if len(unbound) > 0 { // absent unless a row signs people in without tying it to their console sign-in
+		data["oidc_unbound"] = unbound
+	}
 	return data
 }
 
@@ -248,7 +254,7 @@ func modelProviderAuditData(before, after types.ModelProviders) map[string]any {
 // person's credential is sent, differs between two versions of one provider.
 func providerAddressChanged(a, b types.ModelProvider) bool {
 	if a.BaseURL != b.BaseURL || bedrockAddress(a) != bedrockAddress(b) || authHeader(a.Auth) != authHeader(b.Auth) ||
-		azureAddress(a) != azureAddress(b) {
+		azureAddress(a) != azureAddress(b) || oidcAddress(a) != oidcAddress(b) {
 		return true
 	}
 	for _, ha := range a.Harnesses {
@@ -275,6 +281,9 @@ func providerAddressDigest(p types.ModelProvider) string {
 	parts := []any{p.BaseURL, bedrockAddress(p), authHeader(p.Auth), harnesses}
 	if p.Azure != nil { // appended only for the kind that has it, so no other row's digest moves
 		parts = append(parts, azureAddress(p))
+	}
+	if p.OIDC != nil { // likewise: an OIDC row alone appends, so no other row's digest moves
+		parts = append(parts, oidcAddress(p))
 	}
 	sum := sha256.Sum256(mustJSON(parts))
 	return hex.EncodeToString(sum[:])

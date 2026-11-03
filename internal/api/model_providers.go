@@ -189,6 +189,7 @@ func normalizeModelProviders(p *types.ModelProviders) *types.ModelProviders {
 		if mp.Azure != nil {
 			mp.Azure.Endpoint, mp.Azure.Route = normalizeAzureEndpoint(mp.Azure.Endpoint), strings.TrimSpace(mp.Azure.Route)
 		}
+		normalizeProviderOIDC(mp.OIDC)
 		if mp.Kind == types.ModelProviderCustomEndpoint {
 			if mp.Auth == nil {
 				mp.Auth = &types.ProviderAuth{}
@@ -288,6 +289,9 @@ func validateModelProviders(p *types.ModelProviders, env providerWriteEnv) ([]st
 			}
 		}
 		if err := validateProviderBedrock(mp, env.AllowTestEndpoints); err != nil {
+			return nil, err
+		}
+		if err := validateProviderOIDC(mp, env.AllowTestEndpoints); err != nil {
 			return nil, err
 		}
 	}
