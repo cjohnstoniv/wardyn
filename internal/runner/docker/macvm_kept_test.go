@@ -936,6 +936,33 @@ func TestKeptSweepWaitsForTheSessionsStop(t *testing.T) {
 	}
 }
 
+// A stop reports the expiry it wrote to the record, from the idle days the run was launched with, so the
+// organisation records the same deadline whatever its setting is by then; a stop that is not the session's
+// own writes and reports none.
+func TestKeptStopReportsTheExpiryItWrote(t *testing.T) {
+	r, _ := newKeptRig(t)
+	now := time.Now().UTC()
+	keptAt(r, now)
+	for _, days := range []int{1, 30, 90} {
+		run := uuid.New()
+		dir, id := keptRunning(t, r, run, true, now.Add(time.Hour))
+		k := &macvm.KeptRun{ID: id.String(), OwnerHash: keptOwnerHash, RunnerID: "runner-a", IdleDays: days}
+		if _, got := r.c.keptStopped(k, uuid.New(), nil); !got.IsZero() {
+			t.Fatalf("%d days: a stop of another run reported %s", days, got)
+		}
+		_, got := r.c.keptStopped(k, run, nil)
+		if rec := readKept(t, dir, id); !got.Equal(rec.ExpiresAt) || !got.Equal(now.AddDate(0, 0, days)) {
+			t.Fatalf("%d days: reported %s, record %s, want %s", days, got, rec.ExpiresAt, now.AddDate(0, 0, days))
+		}
+	}
+	d := r.d
+	run := uuid.New()
+	d.keptMachineDisk(run, nil, now.AddDate(0, 0, 3))
+	if rep, ok := d.macDisks.Load(run); !ok || !rep.(runner.MacOSVMDisk).KeptExpiresAt.Equal(now.AddDate(0, 0, 3)) {
+		t.Fatalf("the disk report lost the expiry: %v", rep)
+	}
+}
+
 // A session cut short (its run folder gone, its stop never recorded) is ended by the sweep and its machine
 // kept, expired or not; an expired machine no session holds is still deleted.
 func TestKeptSweepRecoversAnInterruptedSession(t *testing.T) {

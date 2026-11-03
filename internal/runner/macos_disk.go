@@ -29,6 +29,11 @@ type MacOSVMDisk struct {
 	At     time.Time `json:"at"`
 	// Scrub is the stop scrub's outcome for a kept machine's session; nil for any other run.
 	Scrub *KeptScrub `json:"scrub,omitempty"`
+	// KeptExpiresAt is the expiry the runner wrote to the machine's record at this stop, the one deadline
+	// the Mac deletes by; the organisation records it as the machine's expires_at. Zero for any other
+	// report, a stop whose record did not change, or a runner that predates it (the organisation then counts
+	// the site's idle days from the stop).
+	KeptExpiresAt time.Time `json:"kept_expires_at,omitzero"`
 }
 
 // MacOSVMDiskReporter is a substrate that keeps macOS VM disk reports (the Docker driver with macOS VMs).
