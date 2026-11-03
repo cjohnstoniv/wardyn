@@ -35,10 +35,6 @@ import (
 // governance (runUngoverned) resolves no profile, so no list, and an admin governed under
 // GovernAdminRuns resolves theirs like a member. The admin role is never read here.
 
-// reasonAllowedModelsUnchecked refuses a run whose model calls the run's proxy could not hold to the
-// allowed-models list, before it starts.
-const reasonAllowedModelsUnchecked = "allowed_models_unchecked"
-
 // allowedModelsUncheckedMsg is that refusal's sentence; %s is the provider's name.
 const allowedModelsUncheckedMsg = "Your organisation limits the models runs may use, and Wardyn can't check the models %s is asked for. Choose another model provider."
 
