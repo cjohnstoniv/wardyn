@@ -139,6 +139,7 @@ A kept machine's disk is a folder in the `kept` folder of `macos-vm.noindex`, in
 | Idle expiry | A machine unused past its date is deleted. A resume of one past it is refused `410` and starts its delete. The Mac enforces the date too, offline included. A machine a run holds does not expire |
 
 - **Each machine has its own date.** The date is counted from each stop, using the idle days the run was admitted with. Changing `macos_vm.kept_machine_idle_days` does not move the date of a machine already kept. `wardyn machines` shows each machine's date.
+- **Older runners.** This needs the Mac's runner from 0.10.0-rc.12. A Mac still on an older runner dates the machine from the site's setting at the stop, as before. Update the Mac's runner.
 - **Resume ends the old run.** A macOS run cannot be revived. If you resume a machine while its last run is still in its ended-run grace, that run ends at once. While the machine is still marked in use, the resume is refused (`kept_machine_in_use`). Stop the last run first.
 
 #### Deleting a kept machine
