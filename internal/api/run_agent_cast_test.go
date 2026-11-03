@@ -774,3 +774,64 @@ func TestAgentCast_ASavedCastWhoseRowIsRejectedKeepsTheObligation(t *testing.T) 
 		t.Fatalf("rows %v owed %v mark %q, want the sweep's success row and the obligation cleared", rows, cs.owing(), cs.marked())
 	}
 }
+
+// A cast saved with a middle chunk the masker dropped, whose row the audit recorder refuses: the sweep
+// that writes the row from the stored cast still says incomplete and mask_gap, from the completeness the
+// save stamped in the cast's header. The swept row never reads as a clean recording.
+func TestAgentCast_ASweptRowKeepsTheSavedCastsWarning(t *testing.T) {
+	f, cs, casts := agentCastFixture(t, types.MachineMacOSVM)
+	_, spec, ok := startDispatch(f, types.SiteConfig{}, false)
+	tw, _ := spec.ExecOutput.(*tailWriter)
+	if !ok || tw == nil || tw.cast == nil {
+		t.Fatalf("started=%v, want started with a cast", ok)
+	}
+	var failing atomic.Bool
+	castGuard(tw.cast, func() bool { return !failing.Load() })
+	rej := &rejectingAudit{}
+	f.srv.cfg.Audit = rej
+	tw.BeginDrain()
+	for _, fail := range []bool{false, true, false} {
+		failing.Store(fail)
+		_, _ = tw.Write([]byte("a chunk\n"))
+		tw.cast.pipe.flush()
+	}
+	tw.EndDrain(nil)
+	key := recording.CastKey(f.run.ID.String(), agentCastSession)
+	waitFor(t, "the save and its refused row", func() bool {
+		_, _, err := casts.StatAndTail(context.Background(), key, 0)
+		return err == nil && rej.refused.Load() > 0
+	})
+
+	f.srv.cfg.Audit = f.audit
+	ended := time.Now()
+	f.st.mu.Lock()
+	f.st.state, f.st.run.EndedAt = types.RunCompleted, &ended
+	f.st.mu.Unlock()
+	dropTail(f)
+	if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rows := castRows(t, f, agentCastSession)
+	if len(rows) != 1 || rows[0]["outcome"] != "success" || rows[0]["swept"] != true || rows[0]["incomplete"] != true || rows[0]["mask_gap"] != true {
+		t.Fatalf("rows %v, want the swept row still incomplete with mask_gap", rows)
+	}
+	if cs.owing() {
+		t.Fatal("the obligation was not cleared after the swept row")
+	}
+}
+
+// A stored cast whose header cannot be read gets a swept row that says incomplete, completeness
+// unknown: completeness is never taken as known on no evidence.
+func TestAgentCast_ASweptRowWithAnUnreadableHeaderIsUnknown(t *testing.T) {
+	f, cs := agentCastDeclineFixture(t)
+	if err := f.srv.cfg.RecordingStore.SaveCastNamed(t.Context(), f.run.ID.String(), agentCastSession, strings.NewReader("not a header\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.srv.SweepRunOutputs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rows := castRows(t, f, agentCastSession)
+	if len(rows) != 1 || rows[0]["outcome"] != "success" || rows[0]["incomplete"] != true || rows[0]["completeness"] != "unknown" || cs.owing() {
+		t.Fatalf("rows %v owed %v, want one row saying incomplete, completeness unknown, and nothing owed", rows, cs.owing())
+	}
+}
