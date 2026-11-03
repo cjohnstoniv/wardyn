@@ -29,16 +29,17 @@ export const choosePool = (intent: RunIntent, poolId: string): RunIntent => with
 
 /**
  * The machine kind. A container is the default, so it is the absent key; a VM is its own barrier, so a
- * barrier chosen for a container is dropped with the switch. A macOS base belongs to a macOS VM and goes with it.
+ * barrier chosen for a container is dropped with the switch. A macOS base and a window on the Mac belong to a macOS VM
+ * and go with it.
  * A VM's terminal opens a shell, not the agent, so a harness that starts the run is cleared with the switch (UXR-1).
  */
 export const chooseMachineKind = (intent: RunIntent, kind: MachineKind): RunIntent =>
   kind === "container"
-    ? withKeys(intent, { machine_kind: undefined, macos_base: undefined })
+    ? withKeys(intent, { machine_kind: undefined, macos_base: undefined, desktop_window: undefined })
     : withKeys(intent, {
         machine_kind: kind,
         confinement_class: undefined,
-        ...(kind !== "macos_vm" && { macos_base: undefined }),
+        ...(kind !== "macos_vm" && { macos_base: undefined, desktop_window: undefined }),
         ...(intent.startup?.kind === "harness" && { startup: undefined }),
       });
 

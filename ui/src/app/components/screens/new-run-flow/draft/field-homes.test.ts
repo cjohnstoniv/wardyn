@@ -29,6 +29,9 @@ describe("field homes (U7)", () => {
     expect(homeOfRefusal("placement_capability", "resources")).toBe("review");
     expect(homeOfRefusal("placement_capability", "interactive_start")).toBe("harnesses");
     expect(homeOfRefusal("runner_posture_unmet", "machine_kind")).toBe("run");
+    // Every window refusal names desktop_window, whatever its reason; the Run step sets it.
+    expect(homeOfRefusal("governance_unit", "desktop_window")).toBe("run");
+    expect(homeOfRefusal("mac_window_site_off", "desktop_window")).toBe("run");
     expect(homeOfRefusal("placement_capability")).toBe(homeOfReason("placement_capability"));
     expect(homeOfRefusal("placement_capability", "pause_idle_after_sec")).toBe(homeOfReason("placement_capability"));
   });
@@ -46,6 +49,9 @@ describe("field homes (U7)", () => {
 
   it("keep the launch-only and origin fields out of every step", () => {
     for (const name of ["title", "description", "mode_contract"]) expect(FIELD_HOME[name], name).toBe("excluded");
+    // A window on the Mac is chosen at each launch, so Save as never keeps it; Review shows it under Where it runs.
+    expect(FIELD_HOME.desktop_window).toBe("excluded");
+    expect(REVIEW_GROUP_OF_FIELD.desktop_window).toBe("where");
   });
 
   it("name subpath homes only under registry fields", () => {

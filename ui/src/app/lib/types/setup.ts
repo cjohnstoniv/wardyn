@@ -346,6 +346,8 @@ export interface SetupStatus {
     mcp_local_servers?: boolean;
     /** WARDYN_MACOS_VMS: a run may ask for a macOS virtual machine. Absent when off. */
     macos_vms?: boolean;
+    /** The site config's macos_vm.allow_attended_window: a macOS VM run's owner may open a window on their Mac. Absent when off. */
+    mac_window?: boolean;
   };
   checks: SetupCheck[];
   auth: {

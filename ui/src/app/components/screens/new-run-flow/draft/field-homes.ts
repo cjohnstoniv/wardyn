@@ -126,9 +126,15 @@ export function groupOfPath(path: string): ReviewGroupId | undefined {
 export const homeOfReason = (reason: string): FieldHome =>
   (HOME_OF_REASON as Record<string, FieldHome>)[reason] ?? "review";
 
+/** The request field every refusal of a window on the Mac names: the console clears that choice, never blocks on it. */
+export const DESKTOP_WINDOW_FIELD = "desktop_window";
+
 /** The step that changes the request field a refusal names (the envelope's `field`), where it differs by field
- *  within one reason: a macOS VM's placement refusal names the machine kind, a harness or the run's size. */
-export const HOME_OF_REFUSAL_FIELD: Record<string, FieldHome> = { machine_kind: "run", macos_base: "run", interactive_start: "harnesses", harness: "harnesses", resources: "review" };
+ *  within one reason: a macOS VM's placement refusal names the machine kind, a harness or the run's size, and every
+ *  refusal of a window on the Mac names desktop_window, which the Run step sets. */
+export const HOME_OF_REFUSAL_FIELD: Record<string, FieldHome> = {
+  machine_kind: "run", macos_base: "run", desktop_window: "run", interactive_start: "harnesses", harness: "harnesses", resources: "review",
+};
 
 /** A refusal's step: its field's, when the console knows that field, else its reason's. */
 export const homeOfRefusal = (reason: string, field = ""): FieldHome => HOME_OF_REFUSAL_FIELD[field] ?? homeOfReason(reason);

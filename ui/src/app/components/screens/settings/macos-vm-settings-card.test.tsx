@@ -4,7 +4,7 @@
  */
 
 // The Settings fields of the macOS virtual machines card: the site config's `macos_vm.max_base_age_days` and
-// `macos_vm.allow_background_watch`.
+// `macos_vm.allow_background_watch` and `macos_vm.allow_attended_window`.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -55,13 +55,16 @@ describe("parseMaxBaseAge / macosVMBody", () => {
     for (const bad of ["0", "-5", "1.5", "30d", "1e3", "007x", "99999999999999999999"]) expect(parseMaxBaseAge(bad)).toBeNull();
   });
   it("sets the days, or drops them, and always names the watch switch", () => {
-    expect(macosVMBody(undefined, 30)).toEqual({ max_base_age_days: 30, allow_background_watch: true });
-    expect(macosVMBody({ max_base_age_days: 30 }, "")).toEqual({ allow_background_watch: true });
+    expect(macosVMBody(undefined, 30)).toEqual({ max_base_age_days: 30, allow_background_watch: true, allow_attended_window: false });
+    expect(macosVMBody({ max_base_age_days: 30 }, "")).toEqual({ allow_background_watch: true, allow_attended_window: false });
   });
   it("writes the switch true or false, whatever is stored, and keeps each field when the other changes", () => {
-    expect(macosVMBody(undefined, 30, false)).toEqual({ max_base_age_days: 30, allow_background_watch: false });
-    expect(macosVMBody({ allow_background_watch: false }, 30)).toEqual({ max_base_age_days: 30, allow_background_watch: true });
-    expect(macosVMBody({ max_base_age_days: 30, allow_background_watch: false }, "", false)).toEqual({ allow_background_watch: false });
+    expect(macosVMBody(undefined, 30, false)).toEqual({ max_base_age_days: 30, allow_background_watch: false, allow_attended_window: false });
+    expect(macosVMBody({ allow_background_watch: false }, 30)).toEqual({ max_base_age_days: 30, allow_background_watch: true, allow_attended_window: false });
+    expect(macosVMBody({ max_base_age_days: 30, allow_background_watch: false }, "", false)).toEqual({ allow_background_watch: false, allow_attended_window: false });
+    // The window switch is written as given, whatever is stored, and the others are kept.
+    expect(macosVMBody({ allow_attended_window: true }, 30, true, false)).toEqual({ max_base_age_days: 30, allow_background_watch: true, allow_attended_window: false });
+    expect(macosVMBody({ allow_attended_window: false, max_base_age_days: 7 }, 7, false, true)).toEqual({ max_base_age_days: 7, allow_background_watch: false, allow_attended_window: true });
   });
 });
 
@@ -83,7 +86,7 @@ describe("MacOSVMSettingsCard", () => {
     expect(saveBtn(card)).toBeDisabled();
     await userEvent.click(watch);
     await userEvent.click(saveBtn(card));
-    expect(putSiteConfigMock).toHaveBeenCalledWith({ upstream_proxy_url: "http://p", macos_vm: { allow_background_watch: false } }, '"v1"');
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ upstream_proxy_url: "http://p", macos_vm: { allow_background_watch: false, allow_attended_window: false } }, '"v1"');
     expect(toastSuccess).toHaveBeenCalledWith("macOS settings saved.");
     expect(saveBtn(card)).toBeDisabled();
   });
@@ -96,7 +99,7 @@ describe("MacOSVMSettingsCard", () => {
     await userEvent.click(watch);
     await userEvent.type(field(card), "0");
     await userEvent.click(saveBtn(card));
-    expect(putSiteConfigMock).toHaveBeenCalledWith({ macos_vm: { max_base_age_days: 300, allow_background_watch: true } }, '"v1"');
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ macos_vm: { max_base_age_days: 300, allow_background_watch: true, allow_attended_window: false } }, '"v1"');
   });
 
   it("loads the stored maximum", async () => {
@@ -110,7 +113,7 @@ describe("MacOSVMSettingsCard", () => {
     const card = await open();
     await userEvent.type(field(card), "30");
     await userEvent.click(saveBtn(card));
-    expect(putSiteConfigMock).toHaveBeenCalledWith({ upstream_proxy_url: "http://p", macos_vm: { max_base_age_days: 30, allow_background_watch: true } }, '"v1"');
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ upstream_proxy_url: "http://p", macos_vm: { max_base_age_days: 30, allow_background_watch: true, allow_attended_window: false } }, '"v1"');
     expect(toastSuccess).toHaveBeenCalledWith(T.SAVED_TOAST);
     expect(saveBtn(card)).toBeDisabled();
   });
@@ -120,7 +123,7 @@ describe("MacOSVMSettingsCard", () => {
     const card = await open();
     await userEvent.clear(field(card));
     await userEvent.click(saveBtn(card));
-    expect(putSiteConfigMock).toHaveBeenCalledWith({ macos_vm: { allow_background_watch: true } }, '"v1"');
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ macos_vm: { allow_background_watch: true, allow_attended_window: false } }, '"v1"');
     expect(field(card)).toHaveValue("");
   });
 
@@ -172,6 +175,63 @@ describe("MacOSVMSettingsCard", () => {
     );
   });
 
+  it("shows the window switch off when nothing is stored (w2-set-off), with its label and hint", async () => {
+    const card = await open();
+    const sw = within(card).getByRole("switch", { name: T.WINDOW_LABEL });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(within(card).getByText(T.WINDOW_HINT)).toBeInTheDocument();
+    expect(saveBtn(card)).toBeDisabled();
+  });
+
+  it("turned on is unsaved until Save (w2-set-dirty), which sends allow_attended_window true and toasts (w2-set-saved)", async () => {
+    const card = await open();
+    const sw = within(card).getByRole("switch", { name: T.WINDOW_LABEL });
+    await userEvent.click(sw);
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(saveBtn(card)).toBeEnabled();
+    await userEvent.click(saveBtn(card));
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ upstream_proxy_url: "http://p", macos_vm: { allow_background_watch: true, allow_attended_window: true } }, '"v1"');
+    expect(toastSuccess).toHaveBeenCalledWith(T.SAVED_TOAST);
+    expect(saveBtn(card)).toBeDisabled();
+    expect(within(card).getByRole("switch", { name: T.WINDOW_LABEL })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("reads a stored true as on, and turning it off writes false, never an absent key", async () => {
+    snapshotMock.mockResolvedValue({ siteConfig: { macos_vm: { allow_attended_window: true } }, etag: '"v1"' });
+    const card = await open();
+    const sw = within(card).getByRole("switch", { name: T.WINDOW_LABEL });
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(sw);
+    await userEvent.click(saveBtn(card));
+    expect(putSiteConfigMock).toHaveBeenCalledWith({ macos_vm: { allow_background_watch: true, allow_attended_window: false } }, '"v1"');
+  });
+
+  it("another admin turned the window on first (w2-set-elsewhere): a 412 shows theirs", async () => {
+    putSiteConfigMock.mockRejectedValue(new HttpError(412, "stale"));
+    snapshotMock.mockResolvedValueOnce({ siteConfig: {}, etag: '"v1"' }).mockResolvedValueOnce({ siteConfig: { macos_vm: { allow_attended_window: true } }, etag: '"v3"' });
+    const card = await open();
+    await userEvent.click(within(card).getByRole("switch", { name: T.WATCH_LABEL }));
+    await userEvent.click(saveBtn(card));
+    expect(await within(card).findByRole("status")).toHaveTextContent(C.SETTINGS_SAVED_ELSEWHERE);
+    expect(within(card).getByRole("switch", { name: T.WINDOW_LABEL })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("keyboard focus reaches the window switch (w2-set-focus), and Space turns it on", async () => {
+    const card = await open();
+    const sw = within(card).getByRole("switch", { name: T.WINDOW_LABEL });
+    sw.focus();
+    expect(sw).toHaveFocus();
+    await userEvent.keyboard(" ");
+    expect(sw).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("the window switch's words are the board's (W2-09, W2-10)", () => {
+    expect(T.WINDOW_LABEL).toBe("Allow a window on the Mac for macOS VM runs");
+    expect(T.WINDOW_HINT).toBe(
+      "Off by default. When on, the person who started a macOS VM run on a Mac they registered can open a window on that Mac and type in it, unless a governance profile or the Screen and actions recording level forbids it. A window is not recorded. A Mac that isn't theirs never gets one. Turn this off to stop new windows; a window that is open ends within a minute.",
+    );
+  });
+
   it("a failed load offers a retry", async () => {
     snapshotMock.mockRejectedValueOnce(new Error("down"));
     render(<MacOSVMSettingsCard />);
@@ -187,9 +247,9 @@ describe("MacOSVMSettingsCard", () => {
     await userEvent.type(field(card), "5");
     await userEvent.click(saveBtn(card));
     expect(field(card)).toBeDisabled();
-    expect(within(card).getByRole("switch")).toBeDisabled();
+    for (const sw of within(card).getAllByRole("switch")) expect(sw).toBeDisabled();
     resolve({ siteConfig: { macos_vm: { max_base_age_days: 5 } }, etag: '"v2"', danglingSecretRefs: [], onboardingCompletedAtIgnored: false, appliesFrom: "", sourcesNoLongerAdmitted: null });
     await waitFor(() => expect(field(card)).toBeEnabled());
-    expect(within(card).getByRole("switch")).toBeEnabled();
+    for (const sw of within(card).getAllByRole("switch")) expect(sw).toBeEnabled();
   });
 });

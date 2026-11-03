@@ -17,6 +17,7 @@ import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { SERVICE_FORM, SERVICE_FORM_ERRORS, SERVICE_PAUSE_WARNING } from "../../../../wardyn/copy/run-service";
 import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
+import { NR_WINDOW } from "../../../../wardyn/copy/new-run/window";
 import { ModelAccessProvider } from "../../../../wardyn/model-access-context";
 import { browserZone, scheduleDaysAhead, todayDate, type StartChoice } from "../../../../../lib/schedule";
 import type { SetupStatus } from "../../../../../lib/types/setup";
@@ -622,7 +623,8 @@ describe("Run step: machine kind (M5-Revised)", () => {
     expect(intentNow().confinement_class).toBeUndefined();
     expect(screen.getByText(NR_MACHINE.VM_HELP)).toBeInTheDocument();
     expect(within(screen.getByRole("group", { name: NR_MACHINE.OS_LABEL })).getByRole("button", { name: NR_MACHINE.OS_LINUX })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText(NR_MACHINE.OS_LATER)).toBeInTheDocument();
+    // No setup status yet: the OS row says nothing about macOS being off until it has loaded.
+    expect(screen.queryByText(NR_WINDOW.OS_LATER)).toBeNull();
     const fact = screen.getByTestId("nr-vm-barrier");
     expect(within(fact).getByText(NR_MACHINE.BARRIER_VM)).toBeInTheDocument();
     expect(within(fact).getByText(NR_MACHINE.BARRIER_VM_WHY)).toBeInTheDocument();

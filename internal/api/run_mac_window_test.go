@@ -1093,6 +1093,63 @@ func TestMacWindowLastCloseOnTheRunRead(t *testing.T) {
 	}
 }
 
+// A window a create asked for that is refused as the run starts is the grant principal's last close, not_opened
+// with the refusal's sentence, so the run page says why; with no grant, or no run to read, nothing is kept.
+func TestMacWindowAtStartRefusalOnTheRunRead(t *testing.T) {
+	atStart := func(t *testing.T, mutate func(r *macWindowRig), grant bool) *macWindowRig {
+		t.Helper()
+		r := newMacWindowRig(t)
+		if grant {
+			if err := r.h.srv.macWindowStorePending(context.Background(), r.h.run.ID, r.auth()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		mutate(r)
+		r.h.srv.macWindowAtStart(context.Background(), r.h.run.ID)
+		return r
+	}
+	t.Run("a refusal under the grant keeps not_opened with its sentence", func(t *testing.T) {
+		r := atStart(t, func(r *macWindowRig) { r.st.sc = types.SiteConfig{} }, true)
+		v := r.h.srv.macWindowViewFor(context.Background(), r.h.run, r.auth())
+		if v == nil || v.LastClose == nil || v.LastClose.Reason != macWindowEndedNotOpened || v.LastClose.Message != macWindowSiteOffMsg || v.LastClose.At.IsZero() {
+			t.Fatalf("view = %+v, want last_close not_opened with the site-off sentence", v)
+		}
+		if b := r.rows("takeover.begin"); len(b) != 1 || b[0].Outcome != "denied" || rowData(t, b[0])["reason"] != reasonMacWindowSiteOff {
+			t.Errorf("begin rows = %+v, want the one denied row as before", b)
+		}
+		bob := r.auth()
+		bob.Principal = "bob"
+		if v := r.h.srv.macWindowViewFor(context.Background(), r.h.run, bob); v == nil || v.LastClose != nil {
+			t.Errorf("another person's view = %+v, want no last_close", v)
+		}
+	})
+	t.Run("the Mac's screen locked at start keeps the Mac's sentence", func(t *testing.T) {
+		r := atStart(t, func(r *macWindowRig) { r.sub.err = errMacWindowNotAtMac }, true)
+		v := r.h.srv.macWindowViewFor(context.Background(), r.h.run, r.auth())
+		if v == nil || v.LastClose == nil || v.LastClose.Reason != macWindowEndedNotOpened || !strings.Contains(v.LastClose.Message, "didn't open") {
+			t.Fatalf("view = %+v, want last_close not_opened with the not-at-the-Mac sentence", v)
+		}
+	})
+	t.Run("an open at start keeps nothing", func(t *testing.T) {
+		r := atStart(t, func(*macWindowRig) {}, true)
+		if v := r.h.srv.macWindowViewFor(context.Background(), r.h.run, r.auth()); v == nil || v.LastClose != nil {
+			t.Fatalf("view = %+v, want no last_close", v)
+		}
+	})
+	t.Run("no grant keeps nothing", func(t *testing.T) {
+		r := atStart(t, func(r *macWindowRig) { r.st.sc = types.SiteConfig{} }, false)
+		if v := r.h.srv.macWindowViewFor(context.Background(), r.h.run, r.auth()); v == nil || v.LastClose != nil {
+			t.Fatalf("view = %+v, want no last_close", v)
+		}
+	})
+	t.Run("a run that can't be read keeps nothing", func(t *testing.T) {
+		r := atStart(t, func(r *macWindowRig) { r.st.failRunRead(errors.New("down")) }, true)
+		if len(r.st.prefs) != 1 {
+			t.Fatalf("prefs = %v, want only the pending grant", r.st.prefs)
+		}
+	})
+}
+
 // desktop_window on a create: only "at_start", and only on a macOS VM run.
 func TestDesktopWindowRequestRefusal(t *testing.T) {
 	for _, tc := range []struct {
@@ -1172,6 +1229,39 @@ func TestMacWindowCreateRefusesAtStart(t *testing.T) {
 			t.Fatalf("ok=%v %d %s rows=%d", ok, rec.Code, rec.Body.String(), len(r.rows("takeover.begin")))
 		}
 	})
+	t.Run("every refusal names the desktop_window field, the governance decision too", func(t *testing.T) {
+		on := true
+		for name, mutate := range map[string]func(r *macWindowRig, f *runFold){
+			"site off": func(r *macWindowRig, _ *runFold) { r.st.sc = types.SiteConfig{} },
+			"governance": func(_ *macWindowRig, f *runFold) {
+				f.ceiling = governanceCeiling{Limits: types.GovernanceLimits{DenyUIApps: true}}
+			},
+			"operator":   func(_ *macWindowRig, f *runFold) { f.ceiling = governanceCeiling{Operator: true} },
+			"unrecorded": func(_ *macWindowRig, f *runFold) { f.spec.Recording = types.RecordingScreenActions },
+			"sign-ins off": func(r *macWindowRig, _ *runFold) {
+				r.st.sc = types.SiteConfig{MacOSVM: &types.SiteMacOSVM{AllowAttendedWindow: &on},
+					AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{{ID: "claude-code", DesktopSignInsOff: true}}}}
+			},
+		} {
+			for _, mode := range []foldMode{foldCreate, foldPreview} {
+				rec, ok, _ := step(t, mutate, mode)
+				var body errorBody
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || ok || body.Field != fieldDesktopWindow || body.Error == "" {
+					t.Errorf("%s (mode %v): ok=%v %d %s, want a refusal naming field %s", name, mode, ok, rec.Code, rec.Body.String(), fieldDesktopWindow)
+				}
+			}
+		}
+	})
+	t.Run("the field rides the wire only: the governance audit row is unchanged", func(t *testing.T) {
+		_, _, r := step(t, func(_ *macWindowRig, f *runFold) {
+			f.ceiling = governanceCeiling{Limits: types.GovernanceLimits{DenyInteractive: true}}
+		}, foldCreate)
+		for _, ev := range r.rows("authz.denied") {
+			if _, has := rowData(t, ev)["field"]; has {
+				t.Errorf("authz.denied row carries field: %v", rowData(t, ev))
+			}
+		}
+	})
 	t.Run("rows 1, 4, 5 and 6 passing, the create goes on", func(t *testing.T) {
 		rec, ok, _ := step(t, func(*macWindowRig, *runFold) {}, foldCreate)
 		if !ok || rec.Body.Len() != 0 {
@@ -1227,7 +1317,7 @@ func TestCarryForwardAttendedWindow(t *testing.T) {
 // The refusal sentences are the design's words, pinned here so a drive-by edit shows in a diff.
 func TestMacWindowSentences(t *testing.T) {
 	for got, want := range map[string]string{
-		macWindowSiteOffMsg:                  "Opening a window onto a macOS VM run is turned off for this install. An admin can turn on macos_vm.allow_attended_window in the site config.",
+		macWindowSiteOffMsg:                  "Opening a window onto a macOS VM run is turned off for this install. An admin can turn it on in Settings, under macOS virtual machines, or set macos_vm.allow_attended_window in the site config.",
 		macWindowNotYourMacMsg("Studio"):     "Wardyn opens a window only on a Mac whose runner you registered. This run is on Studio, so Wardyn can't tell who is at its keyboard. Watch its desktop from the run page instead.",
 		macWindowProfileMsg:                  "Your organisation's governance profile doesn't allow an interactive desktop on this run.",
 		macWindowUnrecordedMsg:               "This run's recording level is Screen and actions, and a window on your Mac isn't recorded, so Wardyn won't open one. Watch its desktop from the run page instead.",
