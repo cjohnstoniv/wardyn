@@ -80,6 +80,7 @@ type LimitsOverlay struct {
 	MaxConcurrentRuns          *int            `json:"max_concurrent_runs,omitempty"`
 	DenyUserDrive              *bool           `json:"deny_user_drive,omitempty"`
 	DenyMemberDrives           *bool           `json:"deny_member_drives,omitempty"`
+	DenyKeptMachines           *bool           `json:"deny_kept_machines,omitempty"`
 	DenyPlacements             *[]Placement    `json:"deny_placements,omitempty"`
 	AllowedMacOSBases          *[]string       `json:"allowed_macos_bases,omitempty"`
 	MaxCPUMillis               *int            `json:"max_cpu_millis,omitempty"`

@@ -382,6 +382,7 @@ func TestLeqIsFalseForEveryWidening(t *testing.T) {
 		{name: "a lifted interactive denial", wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyInteractive = false }},
 		{name: "a lifted exec denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyTaskModeExec = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyTaskModeExec = false }},
 		{name: "a lifted member-drive denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyMemberDrives = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyMemberDrives = false }},
+		{name: "a lifted kept-machine denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyKeptMachines = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyKeptMachines = false }},
 		{name: "a lifted background watch denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyBackgroundDesktopWatch = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyBackgroundDesktopWatch = false }},
 		{name: "a lifted drive denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUserDrive = true }, wide: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUserDrive = false }},
 		{name: "a lifted placement denial", base: func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
@@ -493,6 +494,7 @@ func TestLeqIsTrueForNarrowings(t *testing.T) {
 		{"a new denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyUserDrive = true }},
 		{"a new background watch denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyBackgroundDesktopWatch = true }},
 		{"a new member-drive denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyMemberDrives = true }},
+		{"a new kept-machine denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) { l.DenyKeptMachines = true }},
 		{"a new placement denial", func(_ *types.RunPolicySpec, l *types.GovernanceLimits) {
 			l.DenyPlacements = []types.Placement{types.PlacementLocal}
 		}},
