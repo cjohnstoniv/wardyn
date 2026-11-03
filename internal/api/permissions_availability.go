@@ -29,6 +29,23 @@ type availabilityView struct {
 	Value      string                  `json:"value"`
 	Restricted bool                    `json:"restricted"`
 	AllowedBy  []types.CapabilityGrant `json:"allowed_by"`
+	// CoveredBy is read-only and image-only: the registry-prefix allow rows
+	// ("registry.example.com/team/*") that cover the value. A launch check
+	// honours them with no catalog row, so a person reading "Admins only" here
+	// needs to see them; they are changed on Permissions, not from this control.
+	CoveredBy []availabilityCover `json:"covered_by"`
+}
+
+// availabilityCover is one prefix allow row that covers an availability value.
+type availabilityCover struct {
+	Prefix string             `json:"prefix"`
+	Who    availabilityWhoRef `json:"who"`
+}
+
+// availabilityWhoRef names the grant's subject the way an AllowedBy row does.
+type availabilityWhoRef struct {
+	SubjectType types.CapabilitySubjectType `json:"subject_type"`
+	Subject     string                      `json:"subject"`
 }
 
 // availabilityWriteRequest is PUT's body.
@@ -74,7 +91,7 @@ func availabilityTarget(w http.ResponseWriter, r *http.Request) (kind, value str
 
 // availabilityOf reads the value's restricted bit and its named allow rows.
 func (s *Server) availabilityOf(r *http.Request, kind, value string) (availabilityView, error) {
-	v := availabilityView{Kind: kind, Value: value, AllowedBy: []types.CapabilityGrant{}}
+	v := availabilityView{Kind: kind, Value: value, AllowedBy: []types.CapabilityGrant{}, CoveredBy: []availabilityCover{}}
 	restricted, err := s.cfg.Store.ListCapabilityRestrictions(r.Context())
 	if err != nil {
 		return v, err
@@ -87,6 +104,16 @@ func (s *Server) availabilityOf(r *http.Request, kind, value string) (availabili
 	for _, g := range grants {
 		if g.Capability == kind && g.Effect == types.CapabilityAllow && strings.TrimSpace(g.Value) == value {
 			v.AllowedBy = append(v.AllowedBy, g)
+			continue
+		}
+		// The launch check's own matcher (capValueMatches), so this list can never
+		// disagree with what a launch lets through.
+		if kind == capImage && g.Capability == kind && g.Effect == types.CapabilityAllow &&
+			isImagePrefixGrant(g.Value) && capValueMatches(kind, g.Value, value) {
+			v.CoveredBy = append(v.CoveredBy, availabilityCover{
+				Prefix: strings.TrimSpace(g.Value),
+				Who:    availabilityWhoRef{SubjectType: g.SubjectType, Subject: g.Subject},
+			})
 		}
 	}
 	return v, nil

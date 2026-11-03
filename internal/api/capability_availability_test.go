@@ -299,3 +299,41 @@ func TestAvailabilityRoutes(t *testing.T) {
 		}
 	})
 }
+
+// TestAvailabilityRoutes_CoveredByPrefix: GET lists, read-only, the registry-prefix
+// allow rows that cover the image, matched by the launch check's own matcher; a prefix
+// that does not cover it, a deny, a wildcard and an exact row are not in it.
+func TestAvailabilityRoutes_CoveredByPrefix(t *testing.T) {
+	const img = "registry.example.com/team/app:1"
+	path := "/api/v1/permissions/availability/image/" + img
+	srv, st := permServer(t)
+	cover := grant(types.CapabilitySubjectUserType, utDev, capImage, "registry.example.com/team/*", types.CapabilityAllow)
+	st.grants = []types.CapabilityGrant{
+		cover,
+		grant(types.CapabilitySubjectAll, "", capImage, "registry.example.com/other/*", types.CapabilityAllow),
+		grant(types.CapabilitySubjectAll, "", capImage, "registry.example.com/tea/*", types.CapabilityAllow),
+		grant(types.CapabilitySubjectUser, capSub, capImage, "registry.example.com/team/*", types.CapabilityDeny),
+		grant(types.CapabilitySubjectAll, "", capImage, capWildcard, types.CapabilityAllow),
+		grant(types.CapabilitySubjectUser, "x", capImage, img, types.CapabilityAllow),
+	}
+	w := doSSO(t, srv, http.MethodGet, path, permAdmin(t), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET status = %d %s", w.Code, w.Body.String())
+	}
+	var v availabilityView
+	if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil {
+		t.Fatalf("decode %s: %v", w.Body.String(), err)
+	}
+	if len(v.CoveredBy) != 1 || v.CoveredBy[0].Prefix != "registry.example.com/team/*" ||
+		v.CoveredBy[0].Who.SubjectType != types.CapabilitySubjectUserType || v.CoveredBy[0].Who.Subject != utDev {
+		t.Fatalf("covered_by = %+v, want only the team/* row for the Developers type", v.CoveredBy)
+	}
+	if len(v.AllowedBy) != 1 || v.AllowedBy[0].Value != img {
+		t.Fatalf("allowed_by = %+v, want only the exact row", v.AllowedBy)
+	}
+	// An image no prefix covers still answers with an empty list, never null.
+	w = doSSO(t, srv, http.MethodGet, "/api/v1/permissions/availability/image/ghcr.io/acme/agent:1", permAdmin(t), "")
+	if !strings.Contains(w.Body.String(), `"covered_by":[]`) {
+		t.Fatalf("body = %s, want an empty covered_by list", w.Body.String())
+	}
+}

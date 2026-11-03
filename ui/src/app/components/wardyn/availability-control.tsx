@@ -120,6 +120,7 @@ function useUserTypeNames(): TypeName {
 function chipText(a: Audience, typeName: (id: string) => string): string {
   if (a.subject_type === "user_type") return AVAILABILITY.CHIP_TYPE(typeName(a.subject));
   if (a.subject_type === "group") return AVAILABILITY.CHIP_GROUP(a.subject);
+  if (a.subject_type === "all") return AVAILABILITY.CHIP_ALL;
   return AVAILABILITY.CHIP_USER(a.subject);
 }
 
@@ -187,6 +188,7 @@ function Control({ kind, value, ...family }: AvailabilityControlProps) {
         restricted={view.restricted}
         pendingOnly={pendingOnly && !view.restricted}
         audiences={grants}
+        coveredBy={view.covered_by}
         typeName={typeName}
         busy={busy}
         choiceError={choiceError}
@@ -287,6 +289,7 @@ function AvailabilityFields({
   restricted,
   pendingOnly,
   audiences,
+  coveredBy,
   typeName,
   busy,
   choiceError,
@@ -303,6 +306,7 @@ function AvailabilityFields({
   restricted: boolean;
   pendingOnly?: boolean;
   audiences: Audience[];
+  coveredBy?: AvailabilityView["covered_by"];
   typeName: (id: string) => string;
   busy: "choice" | "add" | "remove" | null;
   choiceError?: string | null;
@@ -364,6 +368,11 @@ function AvailabilityFields({
         </div>
       </RadioGroup>
       {adminsOnly && <p className="text-meta text-muted-foreground">{AVAILABILITY.IMAGE_HINT}</p>}
+      {coveredBy?.map((c) => (
+        <p key={`${c.prefix}:${c.who.subject_type}:${c.who.subject}`} className="text-meta text-muted-foreground" data-testid="availability-covered-by">
+          {AVAILABILITY.COVERED_BY_PREFIX(c.prefix, chipText(c.who, typeName))}
+        </p>
+      ))}
       {choiceError && <p className="text-xs leading-snug text-danger">{choiceError}</p>}
       {onlyChosen && (
         <div className="ml-6 space-y-2" data-testid="availability-audience">
