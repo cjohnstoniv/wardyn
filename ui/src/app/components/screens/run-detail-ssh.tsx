@@ -28,7 +28,7 @@
 // see the amendment in docs/design/ui-sandboxes-prompt.md §9.)
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { BookOpen, KeyRound } from "lucide-react";
+import { BookOpen, ChevronDown, KeyRound } from "lucide-react";
 import type { RunDetail, SSHPublicKey, UIApp } from "../../lib/types";
 import { health as healthApi } from "../../lib/api/health";
 import { runs as runsApi } from "../../lib/api/runs";
@@ -111,6 +111,8 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   });
   const [cliLoaded, setCLILoaded] = React.useState(false);
   const [attempt, setAttempt] = React.useState(0);
+  // undefined = the person has not toggled the SSH lane, so it opens by default once SSH is on and a key is registered.
+  const [sshOpen, setSSHOpen] = React.useState<boolean | undefined>(undefined);
   // Which declared app's ticket-mint/open is in flight, and the last failure
   // (scoped to one app — the other rows stay untouched per the mock's S5). The
   // built-in desktop is not a declared app: its Open and errors live in the
@@ -252,11 +254,14 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
       />
 
       {!sponsorOnly && (
-      <details className="group mt-4 border-t border-border pt-3">
+      <details
+        className="group mt-4 border-t border-border pt-3"
+        open={sshOpen ?? (sshOn && keys !== null && keys.length > 0)}
+        onToggle={(e) => setSSHOpen(e.currentTarget.open)}
+      >
         <summary className="flex cursor-pointer items-center gap-2">
           <span className="flex-1 text-xs font-medium text-foreground">{RUN_CLI.SSH_TITLE}</span>
-          <span className="text-xs text-muted-foreground group-open:hidden">{RUN_CLI.SHOW}</span>
-          <span className="hidden text-xs text-muted-foreground group-open:inline">{RUN_CLI.HIDE}</span>
+          <ChevronDown aria-hidden className="size-3.5 text-muted-foreground transition-transform group-open:rotate-180" />
         </summary>
         {healthAnswered && !sshOn && (
           <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
@@ -342,8 +347,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
             </p>
             <CodeBlock text={'"remote.SSH.localServerDownload": "always"'} />
             <p>
-              Why: the sandbox has no internet; VS Code must upload its server through SSH instead of the remote
-              host fetching it.
+              {RUN_SSH.VSCODE_WHY}
             </p>
           </div>
         </details>
@@ -490,28 +494,47 @@ export async function enterUIApp(
   uiSandbox: UISandboxEnter,
   opts: { ticket?: string; target?: "_blank" | "_self" } = {},
 ) {
-  const ticket = opts.ticket ?? (await runsApi.attachTicket(runId, "ui"));
   const target = opts.target ?? "_blank";
-  // #1241: the gateway refuses a ticket this browser did not bind first,
-  // so a ticket minted elsewhere cannot be pushed into this browser.
-  if (uiSandbox?.bind_url) {
-    await bindTicket(uiSandbox.bind_url.split("{run}").join(encodeURIComponent(runId)), ticket);
+  // A browser only lets the click open a tab, and the awaits below (ticket, bind) can outlive that
+  // permission. So a new tab is opened here, before the first await, as a named blank window, and the
+  // form (or URL) is sent into it later. A null return means the browser blocked it.
+  let tab: Window | null = null;
+  let formTarget: string = target;
+  if (target === "_blank") {
+    formTarget = `wardyn-enter-${Date.now().toString(36)}`;
+    tab = window.open("", formTarget);
+    if (!tab) throw new Error(RUN_SSH.POPUP_BLOCKED);
+    // The new tab must not reach back to the console (the "noopener" a plain window.open would carry).
+    tab.opener = null;
   }
-  // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) still puts {run} in the
-  // HOST half of enter_post_url ("https://run-{run}.ui.example.com/
-  // __wardyn/enter", no query) — split/join replaces every occurrence
-  // (replaceAll is ES2021; this tsconfig's lib is ES2020).
-  if (uiSandbox?.enter_post_url) {
-    const action = uiSandbox.enter_post_url.split("{run}").join(encodeURIComponent(runId));
-    submitEnterForm(action, { run: runId, app, ticket }, target);
-  } else if (uiSandbox?.enter_url_template) {
-    const url = Object.entries({ run: runId, app, ticket }).reduce(
-      (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
-      uiSandbox.enter_url_template,
-    );
-    window.open(url, target, "noopener");
-  } else {
-    throw new Error("This deployment's UI-sandbox gateway published no enter URL for the console to use.");
+  try {
+    const ticket = opts.ticket ?? (await runsApi.attachTicket(runId, "ui"));
+    // #1241: the gateway refuses a ticket this browser did not bind first,
+    // so a ticket minted elsewhere cannot be pushed into this browser.
+    if (uiSandbox?.bind_url) {
+      await bindTicket(uiSandbox.bind_url.split("{run}").join(encodeURIComponent(runId)), ticket);
+    }
+    // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) still puts {run} in the
+    // HOST half of enter_post_url ("https://run-{run}.ui.example.com/
+    // __wardyn/enter", no query) — split/join replaces every occurrence
+    // (replaceAll is ES2021; this tsconfig's lib is ES2020).
+    if (uiSandbox?.enter_post_url) {
+      const action = uiSandbox.enter_post_url.split("{run}").join(encodeURIComponent(runId));
+      submitEnterForm(action, { run: runId, app, ticket }, formTarget);
+    } else if (uiSandbox?.enter_url_template) {
+      const url = Object.entries({ run: runId, app, ticket }).reduce(
+        (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
+        uiSandbox.enter_url_template,
+      );
+      if (tab) tab.location.replace(url);
+      else window.open(url, target, "noopener");
+    } else {
+      throw new Error("This deployment's UI-sandbox gateway published no enter URL for the console to use.");
+    }
+  } catch (err) {
+    // Nothing was sent into the blank tab, so do not leave it behind.
+    tab?.close();
+    throw err;
   }
 }
 
@@ -540,12 +563,11 @@ async function bindTicket(url: string, ticket: string) {
 }
 
 // submitEnterForm drives the #1220 POST hand-off: a hidden form, submitted
-// with target="_blank" so it opens the same new tab window.open(url, "_blank")
-// used to, but as a real POST whose fields never touch the URL, browser
-// history, or a reverse-proxy access log. rel="noopener" is form.submit()'s
-// equivalent of window.open's "noopener" flag above — no window.opener back
-// to the console from the new tab.
-function submitEnterForm(action: string, fields: Record<string, string>, target: "_blank" | "_self") {
+// into the named tab enterUIApp opened inside the click (or "_self"), as a real POST
+// whose fields never touch the URL, browser history, or a reverse-proxy access log.
+// rel="noopener" is form.submit()'s equivalent of window.open's "noopener" flag —
+// no window.opener back to the console from the new tab.
+function submitEnterForm(action: string, fields: Record<string, string>, target: string) {
   const form = document.createElement("form");
   form.method = "POST";
   form.action = action;
