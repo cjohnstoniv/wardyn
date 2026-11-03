@@ -160,3 +160,6 @@ af08ab4eaccf9f4262452dc525e18792430725a7:internal/doctor/network_test.go:generic
 
 # The gateway key parser's refusal test: PEM armour around "AAAA", which is no key. Never real.
 337837140cba8a6dcd9dccd76b5667049188ad90:internal/gatewayidentity/signer_test.go:private-key:385
+# Synthetic access token in the endpoint sign-in token-request test: a fake IdP's
+# reply ("a-0123456789") so the test can assert the token request's shape. Not a real token.
+c28f27ccc8088866e689b84819c52323a84559d9:internal/api/endpoint_oidc_test.go:generic-api-key:263
