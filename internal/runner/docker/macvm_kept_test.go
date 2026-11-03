@@ -654,8 +654,6 @@ func keptStaging(t *testing.T, dir string) {
 	}
 }
 
-func keptExists(p string) bool { _, err := os.Lstat(p); return err == nil }
-
 // A tools update's staging, <key>.update and its lock, is never a machine: the inventory does not list it,
 // the sweep never deletes it while its machine's lock is held, even for a machine it deletes otherwise, and
 // removes it, stale, only holding that lock. A deleted machine takes its staging with it.
@@ -1217,5 +1215,91 @@ func TestKeptConfirmRefusesACloneOverTheMacTotal(t *testing.T) {
 	held, err := r.c.keptMacBytes("")
 	if err != nil || held < keptWorstOf(dir) || !keptExists(filepath.Join(dir, macvm.DiskFile)) {
 		t.Fatalf("the reset disk is not counted: %d, %v", held, err)
+	}
+}
+
+// A stop's record waits for a lock held only for a moment rather than dropping the write; one never
+// recorded is ended by the sweep as a hard stop once the run folder is gone.
+func TestKeptStopWaitsForABriefHolder(t *testing.T) {
+	r, _ := newKeptRig(t)
+	run := uuid.New()
+	dir, id := keptRunning(t, r, run, true, time.Now().Add(time.Hour))
+	unlock, err := macvm.LockKept(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { time.Sleep(200 * time.Millisecond); unlock() }()
+	r.c.keptStopped(&macvm.KeptRun{ID: id.String(), OwnerHash: keptOwnerHash, RunnerID: "runner-a"}, run, nil)
+	if rec := readKept(t, dir, id); rec.ActiveRun != "" || rec.StopKind != macvm.KeptStopHard {
+		t.Fatalf("the stop behind a brief holder: %+v", rec)
+	}
+	cut, cutID := keptRunning(t, r, uuid.New(), false, time.Now().Add(time.Hour))
+	if err := r.d.SweepKeptMachines(); err != nil {
+		t.Fatal(err)
+	}
+	if rec := readKept(t, cut, cutID); rec.ActiveRun != "" || rec.StopKind != macvm.KeptStopHard || rec.LastStop.IsZero() || rec.Scrubbed {
+		t.Fatalf("a stop never recorded, after the sweep: %+v", rec)
+	}
+}
+
+// A folder a create left with no record (its helper stopped between the clone and the record) is removed
+// by the sweep once it is old, unless a create still reserves it or holds its lock.
+func TestKeptSweepRemovesAFolderWithNoRecord(t *testing.T) {
+	r, _ := newKeptRig(t)
+	old := time.Now().Add(-time.Hour)
+	folder := func() string {
+		dir := r.c.Layout.KeptMachineDir(uuid.NewString())
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, macvm.DiskFile), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(dir, old, old); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	debris, reserved, held := folder(), folder(), folder()
+	if err := os.WriteFile(reserved+keptReserveSuffix, []byte(`{"bytes":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := macvm.LockKept(held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	fresh := r.c.Layout.KeptMachineDir(uuid.NewString())
+	if err := os.MkdirAll(fresh, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.d.SweepKeptMachines(); err != nil {
+		t.Fatal(err)
+	}
+	for dir, want := range map[string]bool{debris: false, reserved: true, held: true, fresh: true} {
+		if keptExists(dir) != want {
+			t.Errorf("%s present=%v after the sweep, want %v", dir, keptExists(dir), want)
+		}
+	}
+}
+
+// Erasure waits for a tools update holding a machine's lock, and reports a machine whose lock is still
+// held as not erased.
+func TestKeptEraseWaitsForAToolsUpdate(t *testing.T) {
+	r, _ := newKeptRig(t)
+	ctx := context.Background()
+	dir := keptMachine(t, r, uuid.New())
+	unlock, err := macvm.LockKept(dir) // a tools update in it
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.c.eraseWait = 300 * time.Millisecond
+	if err := r.d.EraseKeptMachines(ctx); err == nil || !strings.Contains(err.Error(), "was not erased") || !keptExists(dir) {
+		t.Fatalf("an erase beside a held machine: %v, present %v", err, keptExists(dir))
+	}
+	r.c.eraseWait = 10 * time.Second
+	go func() { time.Sleep(200 * time.Millisecond); unlock() }()
+	if err := r.d.EraseKeptMachines(ctx); err != nil || keptExists(dir) {
+		t.Fatalf("an erase after the update ended: %v, present %v", err, keptExists(dir))
 	}
 }

@@ -48,7 +48,19 @@ type KeptConfig struct {
 	keptNow func() time.Time
 	// keptListed, if set, runs between keptMacBytes's listing of the kept folder and its reads (tests set it).
 	keptListed func()
+	// eraseWait bounds an erasure's wait for each machine's lock; 0 is keptEraseWait (tests set it).
+	eraseWait time.Duration
 }
+
+// The bounds on the runner's takes of a machine's lock, which a boot, a tools update, a stop's record or a
+// sweep may hold for a moment: a record write or a person's action waits keptLockWait before it says the
+// machine is busy, a sweep keptSweepLockWait (the next sweep retries), and an erasure keptEraseWait, long
+// enough for a tools update to finish.
+const (
+	keptLockWait      = 15 * time.Second
+	keptSweepLockWait = time.Second
+	keptEraseWait     = 2 * time.Minute
+)
 
 // keptClock is now, by keptNow.
 func (k *KeptConfig) keptClock() time.Time {
@@ -245,7 +257,7 @@ func (c *MacVMConfig) keptCheckResume(spec runner.SandboxSpec, dir string) error
 	if _, err := c.keptOwned(dir, k); err != nil { // read unlocked first: no lock file for a machine not here
 		return err
 	}
-	unlock, err := macvm.LockKept(dir)
+	unlock, err := macvm.LockKeptWait(dir, keptLockWait)
 	if errors.Is(err, macvm.ErrKeptLocked) {
 		return keptRefusal(keptSaidLocked)
 	} else if err != nil {
@@ -298,6 +310,7 @@ func (c *MacVMConfig) recoverKept(dir string, rec *macvm.KeptRecord, now time.Ti
 	slog.Info("docker: a kept machine's session ended without recording its stop; the machine is kept",
 		slog.String("machine_id", rec.ID), slog.String("run_id", rec.ActiveRun))
 	macvm.KeptStopUpdate(rec, rec.ActiveRun, now, macvm.KeptRecordIdleDays(*rec))
+	rec.LastStop, rec.StopKind, rec.Scrubbed = now, macvm.KeptStopHard, false
 	return macvm.WriteKept(dir, *rec)
 }
 
@@ -320,13 +333,20 @@ func (c *MacVMConfig) keptRun(spec runner.SandboxSpec) *macvm.KeptRun {
 
 // updateKeptTools runs the tools update on a resumed machine's folder before its boot. The runner holds no
 // lock around it: the update takes the machine's lock itself, so no boot runs beside it, and the boot that
-// follows takes it again. A machine whose update fails does not start; one another boot holds is locked.
+// follows takes it again. An update that finds the lock held is tried again for up to keptLockWait, since
+// the holder may be only a stop's record. A machine whose update fails does not start; one still held is
+// locked.
 func (c *MacVMConfig) updateKeptTools(ctx context.Context, spec runner.SandboxSpec, dir string) error {
 	if c.Tools == nil {
 		return nil
 	}
 	spec.NotifyWaiting(runner.MacOSStartDetail(runner.MacOSCloning))
-	if err := c.Tools.UpdateKeptTools(ctx, dir); errors.Is(err, macvm.ErrKeptLocked) {
+	err := c.Tools.UpdateKeptTools(ctx, dir)
+	for deadline := time.Now().Add(keptLockWait); errors.Is(err, macvm.ErrKeptLocked) && time.Now().Before(deadline) && ctx.Err() == nil; {
+		time.Sleep(100 * time.Millisecond)
+		err = c.Tools.UpdateKeptTools(ctx, dir)
+	}
+	if errors.Is(err, macvm.ErrKeptLocked) {
 		return keptRefusal(keptSaidLocked)
 	} else if err != nil {
 		slog.Warn("docker: update a kept machine's tools", slog.String("machine_id", spec.KeptMachine.ID.String()), slog.String("err", err.Error()))
@@ -387,7 +407,7 @@ func (c *MacVMConfig) undoKeptNew(spec runner.SandboxSpec) {
 	if rec, err := macvm.ReadKept(dir, k.ID.String()); err != nil || rec.OwnerHash != k.OwnerHash || rec.RunnerID != c.RunnerID {
 		return
 	}
-	if _, err := removeKept(dir); err != nil {
+	if _, err := removeKept(dir, keptLockWait); err != nil {
 		slog.Warn("docker: delete a kept machine whose create failed", slog.String("machine_id", k.ID.String()), slog.String("err", err.Error()))
 	}
 }
@@ -396,7 +416,7 @@ func (c *MacVMConfig) undoKeptNew(spec runner.SandboxSpec) {
 // it: a machine a boot or a session holds, or no longer expired, stays. It reports whether the machine is
 // gone (deleted, or not on the Mac at all).
 func (c *MacVMConfig) removeExpiredKept(dir string, id uuid.UUID) bool {
-	unlock, err := macvm.LockKept(dir)
+	unlock, err := macvm.LockKeptWait(dir, keptLockWait)
 	if err != nil {
 		c.logExpiredRemoval(id.String(), err)
 		return false
@@ -448,9 +468,11 @@ func (c *MacVMConfig) keptStopped(k *macvm.KeptRun, runID uuid.UUID, scrub *runn
 	}
 	dir := c.Layout.KeptMachineDir(k.ID)
 	log := slog.With(slog.String("machine_id", k.ID), slog.String("run_id", runID.String()))
-	unlock, err := macvm.LockKept(dir)
+	unlock, err := macvm.LockKeptWait(dir, keptLockWait)
 	if err != nil {
-		log.Warn("docker: record a kept machine's stop", slog.String("err", err.Error()))
+		// The record keeps this run as its session; once the run folder is gone, the sweep ends the session
+		// as a hard stop (recoverKept), and the next boot scrubs again.
+		log.Warn("docker: record a kept machine's stop (the sweep records it)", slog.String("err", err.Error()))
 		return scrub
 	}
 	defer unlock()
@@ -499,7 +521,7 @@ func (d *Driver) DeleteKeptMachine(_ context.Context, id uuid.UUID, by string) (
 	case err != nil:
 		return "", fmt.Errorf("docker: kept machine %s: %w", id, err)
 	}
-	gone, err := removeKept(dir)
+	gone, err := removeKept(dir, keptLockWait)
 	switch {
 	case errors.Is(err, macvm.ErrKeptLocked):
 		return "", fmt.Errorf("docker: kept machine %s is running on this Mac", id)
@@ -572,10 +594,11 @@ func isKeptKey(name string) bool {
 // ".lock" its lock.
 const keptUpdateSuffix = ".update"
 
-// removeKept deletes a kept machine, holding its lock throughout as macvm.RemoveKept does (removeKeptHeld).
-// ErrKeptLocked while a boot or an update holds it; false with no error when there was no folder.
-func removeKept(dir string) (bool, error) {
-	unlock, err := macvm.LockKept(dir)
+// removeKept deletes a kept machine, holding its lock throughout as macvm.RemoveKept does (removeKeptHeld),
+// waiting up to wait for it. ErrKeptLocked while a boot or an update still holds it; false with no error
+// when there was no folder.
+func removeKept(dir string, wait time.Duration) (bool, error) {
+	unlock, err := macvm.LockKeptWait(dir, wait)
 	if err != nil {
 		return false, err
 	}
@@ -671,11 +694,10 @@ func (d *Driver) KeptMachines() (*runnerwire.MacVMKept, error) {
 	out := &runnerwire.MacVMKept{LimitBytes: c.LimitBytes}
 	for _, f := range folders {
 		n, _ := macvm.KeptAllocatedBytes(f.dir)
-		inUse, _ := macvm.KeptLocked(f.dir)
-		m := runnerwire.MacVMKeptMachine{ID: f.rec.ID, Bytes: n, InUse: inUse, Scrubbed: f.rec.Scrubbed, ExpiresAt: f.rec.ExpiresAt}
-		if inUse {
-			m.RunID = runs[f.rec.ID]
-		}
+		// In use is read from the live runs and the record's session, never by probing the machine's lock,
+		// which a boot taking it at that instant would find held.
+		run := cmp.Or(runs[f.rec.ID], c.keptHeldBy(f.rec))
+		m := runnerwire.MacVMKeptMachine{ID: f.rec.ID, Bytes: n, InUse: run != "", RunID: run, Scrubbed: f.rec.Scrubbed, ExpiresAt: f.rec.ExpiresAt}
 		out.WorstBytes += keptWorstOf(f.dir)
 		out.AllocatedBytes += n
 		out.Machines = append(out.Machines, m)
@@ -695,7 +717,7 @@ func (d *Driver) SweepKeptMachines() error {
 		return nil
 	}
 	folders, err := c.keptFolders()
-	errs := []error{err, c.sweepKeptReservations()}
+	errs := []error{err, c.sweepKeptReservations(), c.sweepKeptDebris()}
 	now := c.keptClock()
 	for _, f := range folders {
 		if err := c.sweepKept(f.dir, f.rec.ID, now); err != nil {
@@ -708,7 +730,7 @@ func (d *Driver) SweepKeptMachines() error {
 
 // sweepKept is SweepKeptMachines for one machine.
 func (c *MacVMConfig) sweepKept(dir, id string, now time.Time) error {
-	unlock, err := macvm.LockKept(dir)
+	unlock, err := macvm.LockKeptWait(dir, keptSweepLockWait)
 	if errors.Is(err, macvm.ErrKeptLocked) {
 		return nil
 	} else if err != nil {
@@ -743,9 +765,45 @@ func (c *MacVMConfig) sweepKept(dir, id string, now time.Time) error {
 	return nil
 }
 
+// sweepKeptDebris removes a machine folder a create left with no record: its helper stopped between the
+// clone and the record. Only a folder with no kept.json, no reservation, no holder of its lock and older
+// than a create's wait for its helper goes; nothing of it can be named, so nothing else would remove it.
+func (c *MacVMConfig) sweepKeptDebris() error {
+	des, err := os.ReadDir(c.Layout.KeptDir())
+	if err != nil {
+		return nil
+	}
+	var errs []error
+	for _, de := range des {
+		dir := filepath.Join(c.Layout.KeptDir(), de.Name())
+		fi, ierr := de.Info()
+		if !de.IsDir() || !isKeptKey(de.Name()) || ierr != nil || time.Since(fi.ModTime()) <= macHelperStartWait ||
+			keptExists(filepath.Join(dir, macvm.KeptFile)) || keptExists(dir+keptReserveSuffix) {
+			continue
+		}
+		unlock, err := macvm.LockKept(dir)
+		if err != nil {
+			continue // held: a create or an update is in it
+		}
+		if !keptExists(filepath.Join(dir, macvm.KeptFile)) {
+			if _, err := removeKeptHeld(dir); err != nil {
+				errs = append(errs, fmt.Errorf("docker: remove a kept folder with no record %s: %w", de.Name(), err))
+			} else {
+				slog.Info("docker: removed a kept folder a create left with no record", slog.String("key", de.Name()))
+			}
+		}
+		unlock()
+	}
+	return errors.Join(errs...)
+}
+
+// keptExists reports whether p is there.
+func keptExists(p string) bool { _, err := os.Lstat(p); return err == nil }
+
 // EraseKeptMachines deletes every kept machine on this Mac, for a revoked runner: a VM booted from one is
 // torn down first, then every machine folder goes, recorded or not, under its lock and with its update
-// staging. Any other folder left in the kept folder goes too.
+// staging; a tools update holding the lock is waited for (keptEraseWait), and a machine whose lock is still
+// held is reported not erased. Any other folder left in the kept folder goes too.
 func (d *Driver) EraseKeptMachines(ctx context.Context) error {
 	c := d.macVMConfig()
 	if c == nil {
@@ -779,8 +837,8 @@ func (d *Driver) EraseKeptMachines(ctx context.Context) error {
 		}
 	}
 	for key := range keys {
-		if _, err := removeKept(filepath.Join(c.Layout.KeptDir(), key)); err != nil {
-			errs = append(errs, fmt.Errorf("docker: erase kept machine folder %s: %w", key, err))
+		if _, err := removeKept(filepath.Join(c.Layout.KeptDir(), key), cmp.Or(c.eraseWait, keptEraseWait)); err != nil {
+			errs = append(errs, fmt.Errorf("docker: kept machine folder %s was not erased: %w", key, err))
 		}
 	}
 	c.changed()
