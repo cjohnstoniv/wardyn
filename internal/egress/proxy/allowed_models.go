@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -27,16 +28,22 @@ const ruleSourceAllowedModels = "brokered:allowed-models"
 // maxModelNameShown bounds how much of a client-chosen model string a refusal repeats.
 const maxModelNameShown = 100
 
-// anthropicModelRoutes and openaiModelRoutes are the request paths, trimmed of slashes, that carry
-// a model in their JSON body. A path matches on whole segments from its end, so a gateway's path
-// prefix and the OpenAI "v1/" or Codex "backend-api/codex/" lead-in do not matter.
+// anthropicModelRoutes and openaiModelRoutes are the request paths that carry a model in their JSON
+// body. A path matches on whole segments from its end, so a gateway's path prefix and the OpenAI
+// "v1/" or Codex "backend-api/codex/" lead-in do not matter.
 //
-// Embeddings, image and audio routes also carry a model but are deliberately out of scope: they
-// are not the chat models the limit governs, and are left ungated.
+// Every other non-GET, non-HEAD request on a model host is refused while the list is set
+// (uncheckedRouteRefusal), unless it is a named model-free route. That includes the routes that
+// also carry a model but are not chat models: embeddings, images, audio, moderations, assistants
+// and thread runs, fine-tuning, realtime sessions, the legacy completion route, and on Bedrock
+// rerank, the agent runtime and model customisation jobs.
 var (
 	anthropicModelRoutes = []string{"messages", "messages/count_tokens"}
 	openaiModelRoutes    = []string{"completions", "responses"} // "completions" is also chat/completions
 )
+
+// anthropicModelFree are the Anthropic routes that take a file or a skill and name no model.
+var anthropicModelFree = []string{"files", "skills"}
 
 // The batch routes carry a model per request inside the body, or a file of requests uploaded
 // beforehand, so they cannot be checked against the list and are refused while it is set. They
@@ -48,8 +55,16 @@ var (
 	bedrockBatchPaths    = map[string]bool{"/async-invoke": true, "/model-invocation-job": true}
 )
 
-// batchRefusal is the sentence a refused batch request carries.
-const batchRefusal = "batch requests cannot be checked against this run's allowed models"
+const (
+	// batchRefusal is the sentence a refused batch request carries.
+	batchRefusal = "batch requests cannot be checked against this run's allowed models"
+	// uncheckedRouteRefusal is the sentence a refused route with no model to check carries.
+	uncheckedRouteRefusal = "this request to a model host cannot be checked against this run's allowed models"
+	// unsafePathRefusal is the sentence a refused path with a dot, empty or unreadable segment carries.
+	unsafePathRefusal = "the request path has a dot, empty or unreadable segment, so it cannot be checked against this run's allowed models"
+	// modelUnreadable is the sentence a refused request whose model cannot be found carries.
+	modelUnreadable = "the request's model could not be read"
+)
 
 // opaqueModelTunnelRefusal is the sentence a refused opaque tunnel to a model host carries.
 const opaqueModelTunnelRefusal = "this run limits the models it may use, and a tunnel to a model host cannot be checked against them; " +
@@ -57,18 +72,20 @@ const opaqueModelTunnelRefusal = "this run limits the models it may use, and a t
 
 // bedrockModelOps are the Bedrock runtime operations whose path is /model/<id>/<op>.
 var bedrockModelOps = map[string]bool{
-	"invoke": true, "invoke-with-response-stream": true, "converse": true, "converse-stream": true,
+	"invoke": true, "invoke-with-response-stream": true, "invoke-with-bidirectional-stream": true,
+	"converse": true, "converse-stream": true,
 }
 
 func noopRelease() {}
 
-// compileAllowedModels is the set the gate tests against; nil (off) for an empty list.
-func compileAllowedModels(list []string) map[string]bool {
-	if len(list) == 0 {
+// compileAllowedModels is the set the gate tests against: nil (the limit is off) for an unset
+// list, and a non-nil set, empty for `[]`, which refuses every model.
+func compileAllowedModels(list *[]string) map[string]bool {
+	if list == nil {
 		return nil
 	}
-	out := make(map[string]bool, len(list))
-	for _, m := range list {
+	out := make(map[string]bool, len(*list))
+	for _, m := range *list {
 		out[m] = true
 	}
 	return out
@@ -76,15 +93,14 @@ func compileAllowedModels(list []string) map[string]bool {
 
 // validateAllowedModels refuses a list with an empty entry, an entry with leading or trailing
 // space, or a repeated entry, rather than quietly repairing it: the control plane authors the
-// list and a malformed one is a bug to see at load. Unset (nil) is off; a list that is set but
-// empty is refused, since it would have to mean either deny-all or no gate and neither is safe
-// to guess.
+// list and a malformed one is a bug to see at load. Unset (nil) is off; `[]` is set and empty,
+// which refuses every model.
 func (c *Config) validateAllowedModels() error {
-	if c.AllowedModels != nil && len(c.AllowedModels) == 0 {
-		return fmt.Errorf("config: allowed_models: set but empty; omit it to turn the limit off")
+	if c.AllowedModels == nil {
+		return nil
 	}
 	seen := map[string]bool{}
-	for i, m := range c.AllowedModels {
+	for i, m := range *c.AllowedModels {
 		switch {
 		case m == "":
 			return fmt.Errorf("config: allowed_models[%d]: must not be empty", i)
@@ -98,7 +114,7 @@ func (c *Config) validateAllowedModels() error {
 	return nil
 }
 
-// routeCarriesModel reports whether the trimmed path ends, on whole segments, in one of routes.
+// routeCarriesModel reports whether the cleaned path ends, on whole segments, in one of routes.
 func routeCarriesModel(path string, routes []string) bool {
 	for _, route := range routes {
 		if path == route || strings.HasSuffix(path, "/"+route) {
@@ -108,50 +124,92 @@ func routeCarriesModel(path string, routes []string) bool {
 	return false
 }
 
-// bedrockModelPath reads the model id out of a Bedrock runtime path /model/<id>/<op>, from the
-// escaped path so an id carrying an escaped "/" (an inference-profile ARN) stays one segment.
-// gated is false for any other path, which names no model. ok is false for a model path whose id
-// cannot be read.
-func bedrockModelPath(escapedPath string) (model string, gated, ok bool) {
-	segs := strings.Split(escapedPath, "/")
-	if len(segs) != 4 || segs[0] != "" || segs[1] != "model" || !bedrockModelOps[segs[3]] {
-		return "", false, true
+// cleanModelPath returns path.Clean of p with its leading slash, or false when p holds a segment
+// the route match must not be left to guess at: a dot segment, an empty one (a doubled or
+// trailing slash; the root path alone is fine), or one that does not unescape or holds a control
+// character or backslash. A server may resolve any of these differently than a suffix match reads
+// them. p is the decoded path, or with escaped set the escaped one, where an escaped "/" must stay
+// inside one segment and each segment is unescaped here to look for a dot behind an escape.
+func cleanModelPath(p string, escaped bool) (string, bool) {
+	trimmed := strings.TrimPrefix(p, "/")
+	segs := strings.Split(trimmed, "/")
+	for _, seg := range segs {
+		dec, err := seg, error(nil)
+		if escaped {
+			dec, err = url.PathUnescape(seg)
+		}
+		if err != nil || isDotSegment(seg) || isDotSegment(dec) ||
+			strings.ContainsFunc(dec, func(c rune) bool { return c == '\\' || c < 0x20 || c == 0x7f }) ||
+			(seg == "" && len(segs) > 1) {
+			return "", false
+		}
 	}
-	id, err := url.PathUnescape(segs[2])
-	if err != nil || id == "" {
-		return "", true, false
-	}
-	return id, true, true
+	return path.Clean("/" + trimmed), true
 }
 
-// requestModel reads the model the request names: from the path on a Bedrock host, from the JSON
-// body on an Anthropic or OpenAI route. gated is false for a request that names none by design
-// (another route, another method). It restores the body it read, so what is forwarded is the
-// bytes the caller sent, and returns the release of the body's retained-budget charge.
-// ok is false when the request is gated and its model could not be read.
-func (p *Proxy) requestModel(r *http.Request, host, rest string) (model string, gated, ok bool, release func(), err error) {
-	if isBedrockHost(hostKey(host)) {
-		model, gated, ok = bedrockModelPath(r.URL.EscapedPath())
-		return model, gated, ok, noopRelease, nil
+// modelCheck is what the gate does with a request on a model host.
+type modelCheck int
+
+const (
+	checkPass       modelCheck = iota // not a request the limit governs
+	checkBatch                        // a batch route: refused
+	checkUnchecked                    // a request with no model to check: refused
+	checkUnreadable                   // a model route whose model cannot be found: refused
+	checkPathModel                    // a model named in the path
+	checkBodyModel                    // a model named in the JSON body
+)
+
+func bodiless(method string) bool { return method == http.MethodGet || method == http.MethodHead }
+
+// bedrockCheck classifies a request on a Bedrock host by its cleaned escaped path. Every path whose
+// first segment is "model" is gated: it must be /model/<id>/<op> with a known op, and the id is
+// returned unescaped. Anything else is refused unless it is a read.
+func bedrockCheck(r *http.Request, cleaned string) (modelCheck, string) {
+	segs := strings.Split(strings.TrimPrefix(cleaned, "/"), "/")
+	switch {
+	case segs[0] == "model":
+		if len(segs) != 3 || !bedrockModelOps[segs[2]] {
+			return checkUnreadable, ""
+		}
+		id, err := url.PathUnescape(segs[1])
+		if err != nil || id == "" {
+			return checkUnreadable, ""
+		}
+		return checkPathModel, id
+	case r.Method == http.MethodPost && bedrockBatchPaths[cleaned]:
+		return checkBatch, ""
+	case bodiless(r.Method):
+		return checkPass, ""
 	}
-	if r.Method != http.MethodPost {
-		return "", false, true, noopRelease, nil
+	return checkUnchecked, ""
+}
+
+// hostedCheck classifies a request on an Anthropic- or OpenAI-style host by its cleaned path. A
+// gateway both vendors share has no shape of its own, so it takes both vendors' routes.
+func (p *Proxy) hostedCheck(r *http.Request, host, cleaned string) modelCheck {
+	path := strings.TrimPrefix(cleaned, "/")
+	shape := p.shapeOf(r, host)
+	anthropic, openai := shape != shapeOpenAI, shape != shapeAnthropic
+	post := r.Method == http.MethodPost
+	switch {
+	case post && ((anthropic && routeCarriesModel(path, anthropicBatchRoutes)) || (openai && openaiBatchRequest(path))):
+		return checkBatch
+	case post && ((anthropic && routeCarriesModel(path, anthropicModelRoutes)) || (openai && routeCarriesModel(path, openaiModelRoutes))):
+		return checkBodyModel
+	case bodiless(r.Method):
+		return checkPass
+	case post && shape == shapeAnthropic && routeCarriesModel(path, anthropicModelFree):
+		return checkPass
 	}
-	path := strings.Trim(rest, "/")
-	var routes []string
-	switch p.shapeOf(r, host) {
-	case shapeAnthropic:
-		routes = anthropicModelRoutes
-	case shapeOpenAI:
-		routes = openaiModelRoutes
-	default: // a gateway both vendors share has no shape of its own
-		routes = append(append([]string{}, anthropicModelRoutes...), openaiModelRoutes...)
-	}
-	if !routeCarriesModel(path, routes) {
-		return "", false, true, noopRelease, nil
-	}
+	return checkUnchecked
+}
+
+// bodyModel reads the model the JSON body names. It restores the body it read, so what is forwarded
+// is the bytes the caller sent, and returns the release of the body's retained-budget charge. ok is
+// false when the model could not be read; err is set only when the retained budget had no room.
+func (p *Proxy) bodyModel(r *http.Request) (model string, ok bool, release func(), err error) {
 	if ce := r.Header.Get("Content-Encoding"); ce != "" && !strings.EqualFold(ce, "identity") {
-		return "", true, false, noopRelease, nil
+		return "", false, noopRelease, nil
 	}
 	// A body a door already holds charged is judged as it is: a second charge would wait on this
 	// request's own bytes.
@@ -160,50 +218,25 @@ func (p *Proxy) requestModel(r *http.Request, host, rest string) (model string, 
 	if !held {
 		body, release, err = p.scan.readBody(r.Context(), r.Body, r.ContentLength, int64(maxLLMScanBody))
 		if errors.Is(err, errScanBusy) {
-			return "", true, false, noopRelease, err
+			return "", false, noopRelease, err
 		}
 		if err != nil || len(body) > maxLLMScanBody {
 			release()
-			return "", true, false, noopRelease, nil
+			return "", false, noopRelease, nil
 		}
 		holdChargedBody(r, body)
 	}
 	fields, ferr := objectFields(body, 0)
-	if ferr != nil {
-		release()
-		return "", true, false, noopRelease, nil
-	}
-	for _, f := range fields {
-		if f.key != "model" {
-			continue
+	if ferr == nil {
+		for _, f := range fields {
+			raw := body[f.start:f.end]
+			if f.key == "model" && len(raw) > 0 && raw[0] == '"' && json.Unmarshal(raw, &model) == nil { // null decodes to "" without error
+				return model, true, release, nil
+			}
 		}
-		raw := body[f.start:f.end]
-		if jerr := json.Unmarshal(raw, &model); jerr != nil || len(raw) == 0 || raw[0] != '"' { // null decodes to "" without error
-			release()
-			return "", true, false, noopRelease, nil
-		}
-		return model, true, true, release, nil
 	}
 	release()
-	return "", true, false, noopRelease, nil
-}
-
-// isBatchRequest reports whether r is a POST to one of the host's batch routes (see above).
-func (p *Proxy) isBatchRequest(r *http.Request, host, rest string) bool {
-	if r.Method != http.MethodPost {
-		return false
-	}
-	if isBedrockHost(hostKey(host)) {
-		return bedrockBatchPaths[r.URL.Path]
-	}
-	path := strings.Trim(rest, "/")
-	switch p.shapeOf(r, host) {
-	case shapeAnthropic:
-		return routeCarriesModel(path, anthropicBatchRoutes)
-	case shapeOpenAI:
-		return openaiBatchRequest(path)
-	}
-	return routeCarriesModel(path, anthropicBatchRoutes) || openaiBatchRequest(path)
+	return "", false, noopRelease, nil
 }
 
 // openaiBatchRequest matches the OpenAI batch create and its file uploads. An upload part is
@@ -222,7 +255,7 @@ func openaiBatchRequest(path string) bool {
 // tunnel, which the gate could not see into, while the allowed_models list is set. The caller
 // asks only after every terminating branch has declined the host. Unset, it does nothing.
 func (p *Proxy) refuseOpaqueModelTunnel(w http.ResponseWriter, r *http.Request, host string, port int) bool {
-	if len(p.allowedModels) == 0 {
+	if p.allowedModels == nil {
 		return false
 	}
 	if p.sink != nil {
@@ -243,25 +276,51 @@ func (p *Proxy) refuseOpaqueModelTunnel(w http.ResponseWriter, r *http.Request, 
 
 // allowedModelRefused is the gate: true when it refused (and answered) the request. A request it
 // lets through keeps its body, charged to the retained budget until the caller's deferred
-// release. rest is the request path after the host, as proxyLLMRequest has it.
+// release. rest is the request path after the host, as proxyLLMRequest has it. With the list set,
+// a non-read request on a model host is refused unless its model is read and listed, or it is a
+// named model-free route; with the list unset (nil) it returns before touching the request.
 func (p *Proxy) allowedModelRefused(w http.ResponseWriter, r *http.Request, host string, port int, rest string) (func(), bool) {
-	if len(p.allowedModels) == 0 || !p.isLLMHost(host) {
+	if p.allowedModels == nil || !p.isLLMHost(host) {
 		return noopRelease, false
 	}
-	if p.isBatchRequest(r, host, rest) {
-		return noopRelease, p.refuseAllowedModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied, batchRefusal)
+	bedrock := isBedrockHost(hostKey(host))
+	raw := rest
+	if bedrock {
+		raw = r.URL.EscapedPath() // an escaped "/" in a model id stays inside its segment
 	}
-	model, gated, ok, release, err := p.requestModel(r, host, rest)
+	cleaned, ok := cleanModelPath(raw, bedrock)
+	if !ok {
+		return noopRelease, p.refuseAllowedModel(w, r, host, port, http.StatusBadRequest, reasonUnsupportedPath, unsafePathRefusal)
+	}
+	check, model := checkPass, ""
+	if bedrock {
+		check, model = bedrockCheck(r, cleaned)
+	} else {
+		check = p.hostedCheck(r, host, cleaned)
+	}
+	release := noopRelease
+	switch check {
+	case checkPass:
+		return noopRelease, false
+	case checkBatch:
+		return noopRelease, p.refuseAllowedModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied, batchRefusal)
+	case checkUnchecked:
+		return noopRelease, p.refuseAllowedModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied, uncheckedRouteRefusal)
+	case checkBodyModel:
+		var err error
+		model, ok, release, err = p.bodyModel(r)
+		if err != nil { // the retained budget had no room: the same 502 the local gate answers
+			p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
+			p.scanFault(w, p.shapeOf(r, host), "read llm body", err, http.StatusBadGateway)
+			return noopRelease, true
+		}
+		if !ok {
+			check = checkUnreadable
+		}
+	}
 	switch {
-	case err != nil: // the retained budget had no room: the same 502 the local gate answers
-		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
-		p.scanFault(w, p.shapeOf(r, host), "read llm body", err, http.StatusBadGateway)
-		return noopRelease, true
-	case !gated:
-		return release, false
-	case !ok:
-		return noopRelease, p.refuseAllowedModel(w, r, host, port, http.StatusBadRequest, reasonNotInspected,
-			"the request's model could not be read")
+	case check == checkUnreadable:
+		return noopRelease, p.refuseAllowedModel(w, r, host, port, http.StatusBadRequest, reasonNotInspected, modelUnreadable)
 	case !p.allowedModels[model]:
 		release()
 		return noopRelease, p.refuseAllowedModel(w, r, host, port, http.StatusForbidden, reasonEgressDenied,

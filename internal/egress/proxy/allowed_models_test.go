@@ -41,8 +41,17 @@ func modelGateProxy(t *testing.T, allowed []string) (*Proxy, *capturedUpstream, 
 		},
 		TLSClientConfig: testInsecureTLSConfig,
 	})
-	p.allowedModels = compileAllowedModels(allowed)
+	p.allowedModels = modelSet(allowed)
 	return p, up, buf
+}
+
+// modelSet compiles a test's list the way a loaded config does: nil is unset (off), and an empty
+// non-nil list is `[]` (every model refused).
+func modelSet(list []string) map[string]bool {
+	if list == nil {
+		return nil
+	}
+	return compileAllowedModels(&list)
 }
 
 func TestAllowedModels_BrokeredRoutes(t *testing.T) {
@@ -145,14 +154,15 @@ func TestAllowedModels_EncodedBodyRefused(t *testing.T) {
 	}
 }
 
-// A route that names no model is left alone with the list set: the body is not read and the
-// request is forwarded as ever.
+// A read, and a named model-free route, are left alone with the list set: the body is not read and
+// the request is forwarded as ever.
 func TestAllowedModels_OtherRoutesUntouched(t *testing.T) {
 	for _, tc := range []struct{ method, route, body string }{
 		{http.MethodGet, llmAnthropicPrefix + "models", ""},
 		{http.MethodGet, llmOpenAIPrefix + "models", ""},
-		{http.MethodPost, llmOpenAIPrefix + "embeddings", `{"model":"text-embedding-3"}`},
+		{http.MethodHead, llmOpenAIPrefix + "models", ""},
 		{http.MethodPost, llmAnthropicPrefix + "files", `not json at all`},
+		{http.MethodPost, llmAnthropicPrefix + "skills", `not json at all`},
 		{http.MethodGet, llmAnthropicPrefix + "messages", ""},
 	} {
 		t.Run(tc.method+" "+tc.route, func(t *testing.T) {
@@ -178,13 +188,15 @@ func (failReader) Close() error { return nil }
 
 // With the list unset the gate returns before it touches the request, whatever the route.
 func TestAllowedModels_OffReadsNothing(t *testing.T) {
-	for _, list := range [][]string{nil, {}} {
+	{
 		p := newProxy(Options{})
-		p.allowedModels = compileAllowedModels(list)
 		for _, tc := range []struct{ host, path string }{
 			{anthropicHost, "/wardyn/llm/anthropic/v1/messages"},
 			{openaiHost, "/wardyn/llm/openai/v1/responses"},
+			{openaiHost, "/v1/embeddings"},
+			{openaiHost, "/v1/../v1/messages"},
 			{"bedrock-runtime.us-east-1.amazonaws.com", "/model/x/invoke"},
+			{"bedrock-runtime.us-east-1.amazonaws.com", "/model/../model/x/rerank/"},
 		} {
 			req := httptest.NewRequest(http.MethodPost, tc.path, failReader{t})
 			req.Header.Set("Content-Encoding", "gzip")
@@ -197,23 +209,26 @@ func TestAllowedModels_OffReadsNothing(t *testing.T) {
 	}
 }
 
-// With the list set, a host that is no model provider and a route that carries no model are not
-// read either.
+// With the list set, a host that is no model provider and a read are not read either.
 func TestAllowedModels_NonModelRequestsReadNothing(t *testing.T) {
 	p := newProxy(Options{})
-	p.allowedModels = compileAllowedModels([]string{"gpt-5"})
+	p.allowedModels = modelSet([]string{"gpt-5"})
 	for _, tc := range []struct{ host, method, path string }{
 		{"registry.npmjs.org", http.MethodPost, "/v1/messages"},
 		{"s3.us-east-1.amazonaws.com", http.MethodPost, "/model/x/invoke"},
 		{anthropicHost, http.MethodGet, "/v1/messages"},
 		{anthropicHost, http.MethodPost, "/v1/files"},
-		{openaiHost, http.MethodPost, "/v1/embeddings"},
 	} {
 		req := httptest.NewRequest(tc.method, tc.path, failReader{t})
 		rec := httptest.NewRecorder()
 		if release, refused := p.allowedModelRefused(rec, req, tc.host, 443, strings.TrimPrefix(tc.path, "/")); refused || release == nil {
 			t.Fatalf("%s %s %s: refused = %v, want a pass", tc.host, tc.method, tc.path, refused)
 		}
+	}
+	// A route the gate refuses without a model to check is refused unread too.
+	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", failReader{t})
+	if _, refused := p.allowedModelRefused(httptest.NewRecorder(), req, openaiHost, 443, "v1/embeddings"); !refused {
+		t.Fatal("embeddings must be refused")
 	}
 }
 
@@ -255,7 +270,7 @@ func TestAllowedModels_Bedrock(t *testing.T) {
 	const host = "bedrock-runtime.us-east-1.amazonaws.com"
 	const arn = "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5"
 	p := newProxy(Options{})
-	p.allowedModels = compileAllowedModels([]string{"anthropic.claude-sonnet-5-v1:0", arn})
+	p.allowedModels = modelSet([]string{"anthropic.claude-sonnet-5-v1:0", arn})
 	for _, tc := range []struct {
 		name, method, path string
 		status             int // 0 == passes
@@ -272,11 +287,28 @@ func TestAllowedModels_Bedrock(t *testing.T) {
 		{"converse refused", http.MethodPost, "/model/amazon.titan-text/converse", http.StatusForbidden, "is not on"},
 		{"other arn refused", http.MethodPost, "/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Ainference-profile%2Fother/converse", http.StatusForbidden, "is not on"},
 		{"case sensitive", http.MethodPost, "/model/Anthropic.claude-sonnet-5-v1:0/invoke", http.StatusForbidden, "is not on"},
-		{"empty id", http.MethodPost, "/model//invoke", http.StatusBadRequest, "the request's model could not be read"},
+		{"empty id", http.MethodPost, "/model//invoke", http.StatusBadRequest, "dot, empty or unreadable"},
 		{"other method judged too", http.MethodGet, "/model/amazon.titan-text/invoke", http.StatusForbidden, "is not on"},
 		{"list models untouched", http.MethodGet, "/foundation-models", 0, ""},
-		{"other op untouched", http.MethodPost, "/model/amazon.titan-text/count-tokens", 0, ""},
-		{"extra segment untouched", http.MethodPost, "/model/a/b/invoke", 0, ""},
+		{"bidirectional allowed", http.MethodPost, "/model/anthropic.claude-sonnet-5-v1:0/invoke-with-bidirectional-stream", 0, ""},
+		{"bidirectional refused", http.MethodPost, "/model/amazon.titan-text/invoke-with-bidirectional-stream", http.StatusForbidden, "is not on"},
+		{"unknown op", http.MethodPost, "/model/anthropic.claude-sonnet-5-v1:0/count-tokens", http.StatusBadRequest, modelUnreadable},
+		{"model path alone", http.MethodGet, "/model", http.StatusBadRequest, modelUnreadable},
+		{"trailing slash", http.MethodPost, "/model/anthropic.claude-sonnet-5-v1:0/invoke/", http.StatusBadRequest, "dot, empty or unreadable"},
+		{"doubled slash", http.MethodPost, "//model/anthropic.claude-sonnet-5-v1:0/invoke", http.StatusBadRequest, "dot, empty or unreadable"},
+		{"five segments", http.MethodPost, "/model/anthropic.claude-sonnet-5-v1:0/x/y/invoke", http.StatusBadRequest, modelUnreadable},
+		{"raw slash in an arn", http.MethodPost, "/model/arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5/converse", http.StatusBadRequest, modelUnreadable},
+		{"dot segment", http.MethodPost, "/model/./amazon.titan-text/invoke", http.StatusBadRequest, "dot, empty or unreadable"},
+		{"dotdot to a listed id", http.MethodPost, "/model/amazon.titan-text/../anthropic.claude-sonnet-5-v1:0/invoke", http.StatusBadRequest, "dot, empty or unreadable"},
+		{"dotdot out of model", http.MethodPost, "/foundation-models/../model/amazon.titan-text/invoke", http.StatusBadRequest, "dot, empty or unreadable"},
+		{"escaped dotdot", http.MethodPost, "/model/amazon.titan-text/%2e%2e/anthropic.claude-sonnet-5-v1:0/invoke", http.StatusBadRequest, "dot, empty or unreadable"},
+		{"parameter dotdot", http.MethodPost, "/model/..;x/invoke", http.StatusBadRequest, "dot, empty or unreadable"},
+		{"rerank refused", http.MethodPost, "/rerank", http.StatusForbidden, uncheckedRouteRefusal},
+		{"agent runtime refused", http.MethodPost, "/agents/A/agentAliases/B/sessions/S/text", http.StatusForbidden, uncheckedRouteRefusal},
+		{"customisation job refused", http.MethodPost, "/model-customization-jobs", http.StatusForbidden, uncheckedRouteRefusal},
+		{"guardrail apply refused", http.MethodPost, "/guardrail/g/version/1/apply", http.StatusForbidden, uncheckedRouteRefusal},
+		{"delete refused", http.MethodDelete, "/model-invocation-job/abc", http.StatusForbidden, uncheckedRouteRefusal},
+		{"head passes", http.MethodHead, "/foundation-models", 0, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(tc.method, tc.path, failReader{t}) // a Bedrock model rides the path: no body read
@@ -298,23 +330,34 @@ func TestAllowedModels_Bedrock(t *testing.T) {
 	}
 }
 
-// A model id that does not unescape cannot be read. (A server never hands the proxy such a
-// path, so this is the helper's own fail-closed arm.)
-func TestAllowedModels_BedrockPathParse(t *testing.T) {
+// The cleaned-path rules, directly: what a path may hold, and what a Bedrock model path reads as.
+func TestAllowedModels_PathRules(t *testing.T) {
 	for _, tc := range []struct {
-		path, model     string
-		gated, readable bool
+		path string
+		ok   bool
 	}{
-		{"/model/a%3Ab/invoke", "a:b", true, true},
-		{"/model/a%2Fb/converse-stream", "a/b", true, true},
-		{"/model/anthropic%zz/invoke", "", true, false},
-		{"/model//invoke", "", true, false},
-		{"/model/a/b/invoke", "", false, true},
-		{"/model/a/count-tokens", "", false, true},
-		{"/other/a/invoke", "", false, true},
+		{"", true}, {"/", true}, {"v1/messages", true}, {"/v1/messages", true}, {"model/a%2Fb/invoke", true},
+		{"v1/./messages", false}, {"v1/../messages", false}, {"v1//messages", false}, {"v1/messages/", false},
+		{"v1/%2e%2E/messages", false}, {"v1/..;x/messages", false}, {"v1/mes%zzages", false},
+		{`v1\messages`, false}, {"v1/mes%00sages", false},
 	} {
-		if m, g, ok := bedrockModelPath(tc.path); m != tc.model || g != tc.gated || ok != tc.readable {
-			t.Errorf("bedrockModelPath(%q) = %q %v %v, want %q %v %v", tc.path, m, g, ok, tc.model, tc.gated, tc.readable)
+		if _, ok := cleanModelPath(tc.path, true); ok != tc.ok {
+			t.Errorf("cleanModelPath(%q) ok = %v, want %v", tc.path, ok, tc.ok)
+		}
+	}
+	for _, tc := range []struct {
+		path  string
+		check modelCheck
+		model string
+	}{
+		{"/model/a%3Ab/invoke", checkPathModel, "a:b"},
+		{"/model/a%2Fb/converse-stream", checkPathModel, "a/b"},
+		{"/model/anthropic%zz/invoke", checkUnreadable, ""},
+		{"/model//invoke", checkUnreadable, ""},
+		{"/model/a/b/invoke", checkUnreadable, ""},
+	} {
+		if c, m := bedrockCheck(httptest.NewRequest(http.MethodPost, "/", nil), tc.path); c != tc.check || m != tc.model {
+			t.Errorf("bedrockCheck(%q) = %v %q, want %v %q", tc.path, c, m, tc.check, tc.model)
 		}
 	}
 }
@@ -322,7 +365,7 @@ func TestAllowedModels_BedrockPathParse(t *testing.T) {
 // The terminated-tunnel lane (a model host the proxy MITMs) is gated before the body is forwarded.
 func TestAllowedModels_TerminatedTunnelGated(t *testing.T) {
 	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{}), Resolver: publicResolver{}})
-	p.allowedModels = compileAllowedModels([]string{"claude-sonnet-5"})
+	p.allowedModels = modelSet([]string{"claude-sonnet-5"})
 	req := httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/messages", strings.NewReader(`{"model":"claude-opus-9"}`))
 	rec := httptest.NewRecorder()
 	p.serveMITMRequest(rec, req, anthropicHost, 443)
@@ -338,7 +381,7 @@ func TestAllowedModels_ConfigValidation(t *testing.T) {
 		want string // "" == valid
 	}{
 		{"unset", nil, ""},
-		{"set but empty", []string{}, "set but empty"},
+		{"set but empty", []string{}, ""},
 		{"ok", []string{"a", "b:1"}, ""},
 		{"empty entry", []string{"a", ""}, "must not be empty"},
 		{"padded entry", []string{" a"}, "leading or trailing space"},
@@ -347,7 +390,11 @@ func TestAllowedModels_ConfigValidation(t *testing.T) {
 		{"case differs is not a duplicate", []string{"a", "A"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := (&Config{AllowedModels: tc.list}).validateAllowedModels()
+			c := &Config{}
+			if tc.list != nil {
+				c.AllowedModels = &tc.list
+			}
+			err := c.validateAllowedModels()
 			if (tc.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tc.want)) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
@@ -373,22 +420,170 @@ func TestAllowedModels_ConfigLoadsAndOffByDefault(t *testing.T) {
 		raw, _ := json.Marshal(m)
 		return LoadConfigBytes(raw)
 	}
-	c, err := load(map[string]any{"allowed_models": []string{"claude-sonnet-5"}})
-	if err != nil || len(c.AllowedModels) != 1 || !compileAllowedModels(c.AllowedModels)["claude-sonnet-5"] {
+	// Unset is off, and is not written back (an older proxy refuses a key it does not know).
+	c, err := load(nil)
+	if err != nil || c.AllowedModels != nil || compileAllowedModels(c.AllowedModels) != nil {
+		t.Fatalf("unset must stay off: %+v %v", c, err)
+	}
+	if out, _ := json.Marshal(c); strings.Contains(string(out), "allowed_models") {
+		t.Fatalf("an unset list must not be written back: %s", out)
+	}
+	// A list loads and compiles to its set.
+	if c, err = load(map[string]any{"allowed_models": []string{"claude-sonnet-5"}}); err != nil || c.AllowedModels == nil ||
+		!compileAllowedModels(c.AllowedModels)["claude-sonnet-5"] {
 		t.Fatalf("allowed_models did not load: %+v %v", c, err)
 	}
-	if _, err := load(map[string]any{"allowed_models": []string{}}); err == nil || !strings.Contains(err.Error(), "set but empty") {
-		t.Fatalf("a set but empty list must fail the load, got %v", err)
+	// `[]` loads, survives the wire, and compiles to a set that is not nil: on, and empty.
+	if c, err = load(map[string]any{"allowed_models": []string{}}); err != nil || c.AllowedModels == nil {
+		t.Fatalf("an empty list must load as set: %+v %v", c, err)
+	}
+	if set := compileAllowedModels(c.AllowedModels); set == nil || len(set) != 0 {
+		t.Fatalf("an empty list must compile to a non-nil empty set, got %#v", set)
+	}
+	if out, _ := json.Marshal(c); !strings.Contains(string(out), `"allowed_models":[]`) {
+		t.Fatalf("an empty list must survive the wire: %s", out)
 	}
 	if _, err := load(map[string]any{"allowed_models": []string{"a", "a"}}); err == nil {
 		t.Fatal("a duplicate entry must fail the load")
 	}
-	if c, err = load(nil); err != nil || c.AllowedModels != nil || compileAllowedModels(c.AllowedModels) != nil {
-		t.Fatalf("unset must stay off: %+v %v", c, err)
+}
+
+// `[]` is deny-all: the gate is on and no model is listed, so every checked request is refused and
+// nothing is forwarded; a read still passes.
+func TestAllowedModels_EmptyListRefusesEveryModel(t *testing.T) {
+	for _, route := range []string{llmAnthropicPrefix + "messages", llmOpenAIPrefix + "responses"} {
+		p, up, _ := modelGateProxy(t, []string{})
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost, route, strings.NewReader(`{"model":"claude-sonnet-5"}`)))
+		if rec.Code != http.StatusForbidden || up.reached {
+			t.Fatalf("%s: status = %d reached = %v, want every model refused", route, rec.Code, up.reached)
+		}
 	}
-	out, _ := json.Marshal(c)
-	if strings.Contains(string(out), "allowed_models") {
-		t.Fatalf("an unset list must not be written back (an older proxy refuses the key): %s", out)
+	p, up, _ := modelGateProxy(t, []string{})
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet, llmAnthropicPrefix+"models", nil))
+	if rec.Code != http.StatusOK || !up.reached {
+		t.Fatalf("a read: status = %d reached = %v, want it forwarded", rec.Code, up.reached)
+	}
+	bedrock := newProxy(Options{})
+	bedrock.allowedModels = modelSet([]string{})
+	if _, refused := bedrock.allowedModelRefused(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/model/x/invoke", nil),
+		"bedrock-runtime.us-east-1.amazonaws.com", 443, ""); !refused {
+		t.Fatal("an empty list must refuse a Bedrock model too")
+	}
+}
+
+// With the list set, a request on a model host that carries no checked model is refused unless it is
+// a read or a named model-free route; with the list unset every one of them is forwarded as ever.
+func TestAllowedModels_UncheckedRoutes(t *testing.T) {
+	const body = `{"model":"gpt-5"}`
+	for _, tc := range []struct {
+		name, method, route string
+		refused             bool
+	}{
+		{"embeddings", http.MethodPost, llmOpenAIPrefix + "embeddings", true},
+		{"images", http.MethodPost, llmOpenAIPrefix + "images/generations", true},
+		{"audio speech", http.MethodPost, llmOpenAIPrefix + "audio/speech", true},
+		{"audio transcription", http.MethodPost, llmOpenAIPrefix + "audio/transcriptions", true},
+		{"moderations", http.MethodPost, llmOpenAIPrefix + "moderations", true},
+		{"assistants", http.MethodPost, llmOpenAIPrefix + "assistants", true},
+		{"thread run", http.MethodPost, llmOpenAIPrefix + "threads/thread_1/runs", true},
+		{"thread message", http.MethodPost, llmOpenAIPrefix + "threads/thread_1/messages", true},
+		{"fine tuning", http.MethodPost, llmOpenAIPrefix + "fine_tuning/jobs", true},
+		{"realtime sessions", http.MethodPost, llmOpenAIPrefix + "realtime/sessions", true},
+		{"legacy complete", http.MethodPost, llmAnthropicPrefix + "complete", true},
+		{"delete a response", http.MethodDelete, llmOpenAIPrefix + "responses/resp_1", true},
+		{"put", http.MethodPut, llmAnthropicPrefix + "messages", true},
+		{"get models", http.MethodGet, llmOpenAIPrefix + "models", false},
+		{"get a batch", http.MethodGet, llmOpenAIPrefix + "batches/batch_1", false},
+		{"head", http.MethodHead, llmOpenAIPrefix + "models", false},
+		{"anthropic files", http.MethodPost, llmAnthropicPrefix + "files", false},
+		{"anthropic skills", http.MethodPost, llmAnthropicPrefix + "skills", false},
+		{"openai files stay batch input", http.MethodPost, llmOpenAIPrefix + "files", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, list := range [][]string{{"gpt-5"}, nil} {
+				p, up, _ := modelGateProxy(t, list)
+				rec := httptest.NewRecorder()
+				p.ServeHTTP(rec, mustLocalReq(t, tc.method, tc.route, strings.NewReader(body)))
+				if tc.refused && list != nil {
+					if rec.Code != http.StatusForbidden || up.reached {
+						t.Fatalf("status = %d reached = %v body = %q, want it refused", rec.Code, up.reached, rec.Body.String())
+					}
+					continue
+				}
+				if rec.Code != http.StatusOK || !up.reached {
+					t.Fatalf("list %v: status = %d reached = %v (%q), want it forwarded", list, rec.Code, up.reached, rec.Body.String())
+				}
+			}
+		})
+	}
+}
+
+// A path holding a dot or empty segment on a model host is refused outright while the list is set,
+// so no suffix match is fooled by one; matching is on the cleaned path.
+func TestAllowedModels_DotAndEmptySegments(t *testing.T) {
+	p := newProxy(Options{})
+	p.allowedModels = modelSet([]string{"gpt-5"})
+	for _, tc := range []struct {
+		host, method, target string // target is the request target as the sandbox sent it
+	}{
+		{anthropicHost, http.MethodPost, "/v1/./messages"},
+		{anthropicHost, http.MethodPost, "/v1/files/../messages"},
+		{openaiHost, http.MethodPost, "/v1/embeddings/../responses"},
+		{openaiHost, http.MethodPost, "/v1/../v1/batches"},
+		{openaiHost, http.MethodPost, "/v1//responses"},
+		{openaiHost, http.MethodPost, "/v1/responses/"},
+		{openaiHost, http.MethodGet, "/v1/models/../models"},
+		{openaiHost, http.MethodPost, "/v1/%2e%2e/responses"},
+		{openaiHost, http.MethodPost, "/v1/files%2F..%2Fresponses"},
+		{anthropicHost, http.MethodPost, "/v1/..;x/messages"},
+	} {
+		req := httptest.NewRequest(tc.method, tc.target, failReader{t})
+		rec := httptest.NewRecorder()
+		if _, refused := p.allowedModelRefused(rec, req, tc.host, 443, strings.TrimPrefix(req.URL.Path, "/")); !refused ||
+			rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "dot, empty or unreadable") {
+			t.Errorf("%s %s: refused = %v status = %d body = %q, want a 400 refusal", tc.method, tc.target, refused, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// A via_org route to a model host is gated before the organisation forwards it.
+func TestAllowedModels_ViaOrgGated(t *testing.T) {
+	newViaOrg := func(list []string) *Proxy {
+		p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{}),
+			ViaOrgRoutes: []ViaOrgRoute{{GrantID: uuid.New(), Host: anthropicHost}}})
+		p.allowedModels = modelSet(list)
+		return p
+	}
+	post := func(p *Proxy, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/messages", strings.NewReader(body)), anthropicHost, 443)
+		return rec
+	}
+	if rec := post(newViaOrg([]string{"claude-sonnet-5"}), `{"model":"claude-opus-9"}`); rec.Code != http.StatusForbidden ||
+		!strings.Contains(rec.Body.String(), "is not on this run's allowed models list") {
+		t.Fatalf("an unlisted model: status = %d body = %q, want it refused", rec.Code, rec.Body.String())
+	}
+	// Listed, and list unset: the request reaches forwardViaOrg, which has no control plane here.
+	for _, list := range [][]string{{"claude-sonnet-5"}, nil} {
+		if rec := post(newViaOrg(list), `{"model":"claude-sonnet-5"}`); rec.Code != http.StatusBadGateway ||
+			!strings.Contains(rec.Body.String(), "control plane url not configured") {
+			t.Fatalf("list %v: status = %d body = %q, want it handed to the organisation", list, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// A method the policy refuses keeps its policy:method row: the gate does not answer first.
+func TestAllowedModels_PolicyMethodKeepsItsRow(t *testing.T) {
+	buf := &bytes.Buffer{}
+	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{AllowedMethods: []string{http.MethodGet}}),
+		Sink: &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}, Resolver: publicResolver{}})
+	p.allowedModels = modelSet([]string{"claude-sonnet-5"})
+	rec := httptest.NewRecorder()
+	p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/messages", strings.NewReader(`{"model":"claude-opus-9"}`)), anthropicHost, 443)
+	if d := lastDecision(t, buf); rec.Code != http.StatusForbidden || d.RuleSource != "policy:method" {
+		t.Fatalf("status = %d decision = %+v, want the policy:method refusal", rec.Code, d)
 	}
 }
 
@@ -408,7 +603,6 @@ func TestAllowedModels_BatchRoutesRefused(t *testing.T) {
 		{"anthropic batch read", http.MethodGet, llmAnthropicPrefix + "messages/batches/msgbatch_1", false},
 		{"openai batch read", http.MethodGet, llmOpenAIPrefix + "batches/batch_1", false},
 		{"anthropic files untouched", http.MethodPost, llmAnthropicPrefix + "files", false},
-		{"openai batch cancel untouched", http.MethodPost, llmOpenAIPrefix + "batches/batch_1/cancel", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, list := range [][]string{{"gpt-5"}, nil} {
@@ -434,7 +628,7 @@ func TestAllowedModels_BatchRoutesRefused(t *testing.T) {
 
 func TestAllowedModels_BedrockBatchPathsRefused(t *testing.T) {
 	p := newProxy(Options{})
-	p.allowedModels = compileAllowedModels([]string{"m"})
+	p.allowedModels = modelSet([]string{"m"})
 	for _, tc := range []struct {
 		host, method, path string
 		refused            bool
@@ -466,7 +660,7 @@ func TestAllowedModels_OpaqueModelTunnelRefused(t *testing.T) {
 				LLMChannelHosts: map[string]string{"foundry.corp.internal": anthropicHost},
 				LLMUpstreams:    map[string]string{openaiHost: "https://llm-gateway.corp.internal/v1"},
 			})
-			p.allowedModels = compileAllowedModels(list)
+			p.allowedModels = modelSet(list)
 			rec := httptest.NewRecorder()
 			p.handleConnect(rec, httptest.NewRequest(http.MethodConnect, host+":443", nil))
 			if list != nil {
@@ -484,7 +678,7 @@ func TestAllowedModels_OpaqueModelTunnelRefused(t *testing.T) {
 	}
 	// A host that is no model host is never refused by the gate.
 	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"registry.npmjs.org"}}), Resolver: publicResolver{}})
-	p.allowedModels = compileAllowedModels([]string{"claude-sonnet-5"})
+	p.allowedModels = modelSet([]string{"claude-sonnet-5"})
 	rec := httptest.NewRecorder()
 	p.handleConnect(rec, httptest.NewRequest(http.MethodConnect, "registry.npmjs.org:443", nil))
 	if rec.Code != http.StatusInternalServerError {
@@ -504,12 +698,12 @@ func TestAllowedModels_PlainLane(t *testing.T) {
 		{"refused", "/v1/messages", `{"model":"claude-opus-9"}`, 403},
 		{"unreadable", "/v1/messages", `{"model":`, 400},
 		{"batch", "/v1/messages/batches", `{"requests":[]}`, 403},
-		{"other route", "/v1/models", ``, 200},
+		{"unchecked route", "/v1/embeddings", `{"model":"claude-sonnet-5"}`, 403},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			up := captureUpstream(t, false, `{"ok":true}`)
 			p, _ := newTestProxy(t, spec, upstreamAddr(up.srv), nil, nil)
-			p.allowedModels = compileAllowedModels([]string{"claude-sonnet-5"})
+			p.allowedModels = modelSet([]string{"claude-sonnet-5"})
 			req := mustProxyReq(t, http.MethodPost, "http://"+anthropicHost+tc.path)
 			req.Body = io.NopCloser(strings.NewReader(tc.body))
 			req.ContentLength = int64(len(tc.body))

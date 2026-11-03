@@ -266,9 +266,9 @@ type Config struct {
 	// models exactly or is refused (allowed_models.go). It applies to the whole run, not a
 	// route: the limit is one governance value for the run, and a per-route map would let a
 	// provider the map missed through. Control-plane-authored; omitempty because an older proxy
-	// refuses a key it does not know. Unset (the default) => off, byte-identical to today; set but
-	// empty is refused at load.
-	AllowedModels []string `json:"allowed_models,omitempty"`
+	// refuses a key it does not know, and a pointer so `[]` survives the wire. Unset (the default) =>
+	// off, byte-identical to today; `[]` => set and empty, every model refused.
+	AllowedModels *[]string `json:"allowed_models,omitempty"`
 	// GatewayIdentity lists the routes that carry the run's signed identity
 	// (gateway_identity.go). Control-plane-authored, same trust boundary as
 	// LLMUpstreams; it holds no token and no key. Empty (the default) => off,
