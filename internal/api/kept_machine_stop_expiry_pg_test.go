@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -85,5 +86,32 @@ func TestKeptStopWithoutAnExpiryCountsTheSitesDays(t *testing.T) {
 	got, _ := k.row(t, m.ID)
 	if lo, hi := before.AddDate(0, 0, 7), time.Now().UTC().AddDate(0, 0, 7); got.ExpiresAt.Before(lo.Add(-time.Second)) || got.ExpiresAt.After(hi.Add(time.Second)) {
 		t.Fatalf("expires %s, want 7 days from the stop (%s to %s)", got.ExpiresAt, lo, hi)
+	}
+}
+
+// TestKeptStopThatWroteNoRecordWaitsForTheMacsInventory: the runner could not write the record at the
+// stop (a lock or write failure) and says the expiry is pending, while the setting went 1 to 30. No stop
+// is recorded and no deadline invented; once the Mac recovers the session and lists the machine, the
+// sweep keeps it with the Mac's own expiry.
+func TestKeptStopThatWroteNoRecordWaitsForTheMacsInventory(t *testing.T) {
+	k := newKeptFixture(t)
+	k.setKeptIdleDays(t, 1)
+	m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineInUse)
+	k.setKeptIdleDays(t, 30)
+	pending := stopReport(k, time.Now().UTC(), time.Time{})
+	pending.KeptExpiryPending = true
+	k.srv.runnerMacOSVMDisks(k.ctx, k.rn.ID, []runner.MacOSVMDisk{pending})
+	if got, _ := k.row(t, m.ID); got.State != types.KeptMachineInUse {
+		t.Fatalf("after the pending report: %s, want in_use with no deadline invented", got.State)
+	}
+	if keeps := k.rows(t, "machine.keep", m.ID); len(keeps) != 0 {
+		t.Fatalf("machine.keep = %v, want none", keeps)
+	}
+	k.exec(t, `UPDATE agent_runs SET state = 'KILLED', ended_at = now() WHERE id = $1`, k.run.ID)
+	macExpiry := time.Now().UTC().AddDate(0, 0, 1).Truncate(time.Second) // the recovery's: the record's own 1 day
+	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 1 << 30, ExpiresAt: macExpiry})
+	k.sweep(t)
+	if got, _ := k.row(t, m.ID); got.State != types.KeptMachineKept || !got.ExpiresAt.Equal(macExpiry) {
+		t.Fatalf("after the sweep: %s expires %s, want kept and the Mac's %s", got.State, got.ExpiresAt, macExpiry)
 	}
 }

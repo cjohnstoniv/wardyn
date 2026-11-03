@@ -508,10 +508,11 @@ func (c *MacVMConfig) keptStopped(k *macvm.KeptRun, runID uuid.UUID, scrub *runn
 }
 
 // keptMachineDisk is a kept machine session's disk report once its run folder is deleted: kept, with the
-// stop scrub's outcome and the expiry the stop wrote to the record.
+// stop scrub's outcome and the expiry the stop wrote to the record; a zero expiry (the record was not
+// written) is reported as pending, not as no word.
 func (d *Driver) keptMachineDisk(runID uuid.UUID, scrub *runner.KeptScrub, expiresAt time.Time) {
 	d.macDisks.Store(runID, runner.MacOSVMDisk{RunID: runID, State: runner.MacOSVMDiskKept, Reason: runner.MacOSVMDiskKeptMachine,
-		At: time.Now().UTC(), Scrub: scrub, KeptExpiresAt: expiresAt})
+		At: time.Now().UTC(), Scrub: scrub, KeptExpiresAt: expiresAt, KeptExpiryPending: expiresAt.IsZero()})
 }
 
 // DeleteKeptMachine deletes one kept machine from this Mac, holding its lock throughout (the

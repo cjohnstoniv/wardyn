@@ -196,7 +196,8 @@ func (s *Server) auditKeptMachineDelete(ctx context.Context, d store.KeptMachine
 // machine is kept, with whether the stop scrubbed it (machine.keep), and the scrub's own report
 // (machine.scrub). It means the sandbox stopped, whatever the run's state. A report for a run that no
 // longer holds the machine, or one already recorded, changes nothing. The machine expires when the runner's
-// record says (r.KeptExpiresAt, clamped), never by the site setting at this later moment.
+// record says (r.KeptExpiresAt, clamped), never by the site setting at this later moment; a stop that
+// wrote no record (r.KeptExpiryPending) records nothing here.
 func (s *Server) recordKeptMachineStop(ctx context.Context, runnerID uuid.UUID, r runner.MacOSVMDisk) {
 	ks, ok := s.cfg.Store.(store.KeptMachineStore)
 	if !ok {
@@ -207,6 +208,12 @@ func (s *Server) recordKeptMachineStop(ctx context.Context, runnerID uuid.UUID, 
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			slog.WarnContext(ctx, "wardynd: read the kept machine of a stop report", slog.String("run_id", r.RunID.String()), slog.Any("err", err))
 		}
+		return
+	}
+	if r.KeptExpiryPending && r.KeptExpiresAt.IsZero() {
+		// The Mac wrote no record at this stop, so no deadline exists yet; recording one from the site's
+		// days would differ from the one its recovery gives. The sweep keeps the machine from its inventory
+		// (reconcileKeptMachine) once the run is over and the Mac lists it.
 		return
 	}
 	st := store.KeptMachineStop{ID: m.ID, RunnerID: runnerID, RunID: r.RunID, DiskBytes: m.DiskBytes, ExpiresAt: s.keptStopExpiry(ctx, r),
