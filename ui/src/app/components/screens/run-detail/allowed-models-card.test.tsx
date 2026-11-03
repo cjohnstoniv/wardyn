@@ -15,7 +15,7 @@ import { AllowedModelsCard } from "./allowed-models-card";
 const run = (patch: Partial<RunDetail> = {}) =>
   ({
     id: "r1",
-    allowed_models: { models: ["model-a", "small-model-a"], profile: { id: "p1", name: "Contractors" } },
+    allowed_models: { models: ["model-a", "small-model-a"], unit: { id: "p1", name: "Contractors" } },
     ...patch,
   }) as RunDetail;
 
@@ -69,7 +69,7 @@ describe("AllowedModelsCard", () => {
 
   it("scrolls a long list inside the card, keeping the sentences below it in view", () => {
     const models = Array.from({ length: 14 }, (_, i) => `model-${i + 1}`);
-    renderCard(run({ allowed_models: { models, profile: { id: "p1", name: "Contractors" } } }));
+    renderCard(run({ allowed_models: { models, unit: { id: "p1", name: "Contractors" } } }));
     const list = screen.getByTestId("run-allowed-models-list");
     expect(list.className).toContain("overflow-y-auto");
     expect(list.className).toContain("max-h-");

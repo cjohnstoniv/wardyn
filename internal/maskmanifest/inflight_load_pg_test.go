@@ -13,6 +13,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
@@ -21,6 +22,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey/subjectkeytest"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// pgRun inserts run's agent_runs row, which run_mask_manifest references.
+func pgRun(t *testing.T, pool *pgxpool.Pool, run uuid.UUID) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `INSERT INTO agent_runs (id, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
+		VALUES ($1, 'sub', 'claude-code', 'a/b', 'CC2', 'RUNNING', 'spiffe://x/' || $2, 'docker')`, run, run.String()); err != nil {
+		t.Fatal(err)
+	}
+}
 
 type lastSink struct {
 	mu sync.Mutex
@@ -56,6 +66,7 @@ func TestPG_ALoadInFlightWhenTheCorpusIsDroppedCannotVouchForItAgain(t *testing.
 			}
 			keys := subjectkeytest.Manager(migrated, k)
 			run := uuid.New()
+			pgRun(t, migrated, run)
 
 			mA := maskmanifest.New(migrated, keys, secretmask.NewRegistry())
 			if err := mA.Start(ctx, run, "alice"); err != nil {
@@ -135,6 +146,7 @@ func TestPG_ALoadVoidedByAForgetTakesBackWhatItRegistered(t *testing.T) {
 			}
 			keys := subjectkeytest.Manager(migrated, k)
 			run := uuid.New()
+			pgRun(t, migrated, run)
 			mA := maskmanifest.New(migrated, keys, secretmask.NewRegistry())
 			if err := mA.Start(ctx, run, "alice"); err != nil {
 				t.Fatal(err)
@@ -199,6 +211,7 @@ func TestPG_ALoadDuringARemovalCannotVouchForTheRun(t *testing.T) {
 			}
 			keys := subjectkeytest.Manager(migrated, k)
 			run, rowID := uuid.New(), uuid.New()
+			pgRun(t, migrated, run)
 			mA := maskmanifest.New(migrated, keys, secretmask.NewRegistry())
 			if err := mA.Start(ctx, run, "alice"); err != nil {
 				t.Fatal(err)

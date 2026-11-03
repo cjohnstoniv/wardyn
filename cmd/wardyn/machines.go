@@ -145,7 +145,8 @@ func runMachinesDelete(cmd *cobra.Command, c *sdk.Client, ref string, yes bool) 
 	// names none is refused here, never sent to the server to see what it says.
 	m, found := findMachine(mine.Machines, ref)
 	if !found {
-		return fmt.Errorf("You have no kept machine %s.", ref) //nolint:staticcheck // the server's sentence for it (kept_machine_not_found)
+		//lint:ignore ST1005 the server's sentence for it (kept_machine_not_found), as the person reads it
+		return fmt.Errorf("You have no kept machine %s.", ref)
 	}
 	if !yes {
 		if err := confirmMachineDelete(cmd, m); err != nil {

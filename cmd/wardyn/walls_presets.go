@@ -71,8 +71,6 @@ func (a *wallPresetAudience) register(cmd *cobra.Command, withMine bool) {
 	}
 }
 
-func (a wallPresetAudience) any() bool { return a.mine || a.org || a.group != "" }
-
 // matches reports whether p is in the chosen audience; with none chosen, every audience matches.
 func (a wallPresetAudience) matches(p sdk.WallPreset, groupID string) bool {
 	switch {

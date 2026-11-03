@@ -815,7 +815,8 @@ func keptExists(p string) bool { _, err := os.Lstat(p); return err == nil }
 // EraseKeptMachines deletes every kept machine on this Mac, for a revoked runner: a VM booted from one is
 // torn down first, then every machine folder goes, recorded or not, under its lock and with its update
 // staging; a tools update holding the lock is waited for (keptEraseWait), and a machine whose lock is still
-// held is reported not erased. Any other folder left in the kept folder goes too.
+// held is reported not erased. Any other folder left in the kept folder goes too, and so do the starts'
+// reservations and the Mac's reservation lock, so the folder is left as the erase without the driver leaves it.
 func (d *Driver) EraseKeptMachines(ctx context.Context) error {
 	c := d.macVMConfig()
 	if c == nil {
@@ -852,6 +853,12 @@ func (d *Driver) EraseKeptMachines(ctx context.Context) error {
 		if _, err := removeKept(filepath.Join(c.Layout.KeptDir(), key), cmp.Or(c.eraseWait, keptEraseWait)); err != nil {
 			errs = append(errs, fmt.Errorf("docker: kept machine folder %s was not erased: %w", key, err))
 		}
+	}
+	// Removed while held, as RemoveKept removes a machine's lock, so a start waiting on it takes a new one. It
+	// holds no machine, so one still held after keptReserveWait is left.
+	if unlock, err := c.lockKeptReserve(); err == nil {
+		_ = os.Remove(filepath.Join(c.Layout.KeptDir(), keptReserveLock+".lock"))
+		unlock()
 	}
 	c.changed()
 	if len(errs) == 0 {

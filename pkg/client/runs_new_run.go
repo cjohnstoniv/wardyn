@@ -550,7 +550,7 @@ type HarnessModelCredential struct {
 // to the profile does not reach it.
 type RunAllowedModels struct {
 	Models  []string                `json:"models"`
-	Profile RunAllowedModelsProfile `json:"profile"`
+	Profile RunAllowedModelsProfile `json:"unit"`
 }
 
 // RunAllowedModelsProfile names the governance profile a RunAllowedModels came from.

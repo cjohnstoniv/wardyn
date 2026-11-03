@@ -19,8 +19,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
-	"github.com/cjohnstoniv/wardyn/internal/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -455,7 +455,7 @@ func TestAllowedModels_PreflightNamesTheProfile(t *testing.T) {
 			}
 			var got struct {
 				Models  []string `json:"allowed_models"`
-				Profile *string  `json:"allowed_models_profile"`
+				Profile *string  `json:"allowed_models_unit"`
 			}
 			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 				t.Fatal(err)

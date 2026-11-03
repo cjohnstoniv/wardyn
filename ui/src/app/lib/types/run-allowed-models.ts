@@ -8,5 +8,5 @@
 // it as `allowed_models`, absent when no limit binds the run.
 export interface RunAllowedModels {
   models: string[];
-  profile: { id: string; name: string };
+  unit: { id: string; name: string };
 }

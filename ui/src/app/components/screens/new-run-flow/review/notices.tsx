@@ -62,7 +62,7 @@ function joinLimits(limits: readonly string[], more: boolean): string {
 export function ungovernedText(u: UngovernedNotice | undefined): string | undefined {
   if (!u) return undefined;
   if (u.no_person) return NR_REVIEW.ADMIN_BYPASS_NO_PERSON;
-  if (u.no_profile) return NR_REVIEW.ADMIN_BYPASS_NO_PROFILE;
+  if (u.no_unit) return NR_REVIEW.ADMIN_BYPASS_NO_PROFILE;
   if (u.unavailable) return NR_REVIEW.ADMIN_BYPASS_UNAVAILABLE;
   if (!u.unit) return NR_REVIEW.ADMIN_BYPASS_UNAVAILABLE;
   if (!u.limits?.length) return NR_REVIEW.ADMIN_BYPASS_NO_LIMITS;

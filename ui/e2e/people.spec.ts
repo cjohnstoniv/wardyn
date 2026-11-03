@@ -110,7 +110,7 @@ test.describe("People (Admin view)", () => {
     await page.goto("/admin/people");
     await expect(page.getByRole("heading", { name: "People", level: 1 })).toBeVisible();
     await expect(sidebarPeople(page)).toBeVisible();
-    await expect(page.getByText("Only the super admin can see and change who can sign in.")).toBeVisible();
+    await expect(page.getByText("Only people with the Admin role can see and change who can sign in.")).toBeVisible();
     await page.getByRole("textbox", { name: "Search people" }).fill(person.email.slice(0, 14));
     await page.getByRole("button", { name: person.email }).click();
     await expect(page.getByRole("dialog").getByRole("button", { name: "Remove all" })).toBeEnabled();

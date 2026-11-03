@@ -65,7 +65,7 @@ export function ToolsGroup({ draft, pre, preview, docRows, go, dispatch }: Group
   // the list is said so before launch; the run is not blocked, since a subscription's model is chosen in the session.
   const allowed = pre?.allowed_models ?? preview?.allowed_models;
   const limited = allowed && allowed.length > 0 ? allowed : undefined;
-  const limitedBy = pre?.allowed_models ? pre.allowed_models_profile : preview?.allowed_models_profile;
+  const limitedBy = pre?.allowed_models ? pre.allowed_models_unit : preview?.allowed_models_unit;
   const offList = limited
     ? harnesses.flatMap((h) => {
         const cred = pre?.harness_set?.harnesses.find((x) => x.id === h.id)?.model_credential;

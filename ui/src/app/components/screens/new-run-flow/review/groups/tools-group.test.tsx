@@ -107,7 +107,7 @@ describe("Review: the allowed models line", () => {
       <ToolsGroup
         draft={draft}
         pre={null}
-        preview={{ allowed_models: ["model-a"], allowed_models_profile: "Interns" } as never}
+        preview={{ allowed_models: ["model-a"], allowed_models_unit: "Interns" } as never}
         docRows={[]}
         go={vi.fn()}
         dispatch={vi.fn()}
@@ -118,7 +118,7 @@ describe("Review: the allowed models line", () => {
   });
 
   it("names the profile that sets the list on the Governance chip, and shows no chip without a name", () => {
-    const { unmount } = show({ allowed_models: ["model-a"], allowed_models_profile: "Contractors" });
+    const { unmount } = show({ allowed_models: ["model-a"], allowed_models_unit: "Contractors" });
     expect(screen.getByTestId("review-allowed-models")).toHaveTextContent("Governance · Contractors");
     unmount();
     show({ allowed_models: ["model-a"] });
