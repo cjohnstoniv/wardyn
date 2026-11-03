@@ -27,6 +27,8 @@
 
 - Not in this release: session recording, reviving a stopped VM, replacing its proxy, and recovering its output after the VM is gone. Each is refused with a reason.
 - Linux VMs need a pool where every runner offers them; a mixed pool refuses them.
+- Windows VMs are not available yet. `machine_kind` takes `container`, `linux_vm` and `macos_vm` only.
+- **A Linux desktop VM is your own image for now.** The reference guest image has no desktop ([`deploy/images/vm-linux/Dockerfile`](../../deploy/images/vm-linux/Dockerfile)). To get a desktop, build an image that meets the [guest image contract](#the-guest-image-contract) and adds one, and name it with `--image`. Wardyn does not ship an official Linux desktop VM image yet.
 - A VM's terminal is a plain shell. Opening it in the agent CLI (`interactive_start: agent`) and watching or taking over the agent's terminal are refused too.
 
 ## Drives

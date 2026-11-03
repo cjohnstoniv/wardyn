@@ -19,6 +19,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
+- Docs no longer say a gateway run identity token always lives 10 minutes. It lives 60 to 600 seconds, and 600 by default.
 - A macOS VM run's screen no longer locks while it sits idle: the guest turns the screen lock off at the start of each run. Not yet run on a real Mac.
 - Review now refuses a macOS VM run that starts its terminal in the agent CLI, or whose profile pauses idle runs, instead of failing at start or showing a pause that never happened. A macOS VM is never paused when idle.
 - A macOS VM run whose disk drive is still held by a run that just ended now waits for it, up to 90 seconds, instead of failing at once. 0.10.0-rc.11 refused at once while the earlier run's VM was still shutting down. A run whose drive a live run still holds now also waits up to 90 seconds before it fails, where 0.10.0-rc.11 failed at once.
@@ -28,6 +29,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - An `image` capability grant may be a registry or path prefix ending in `/*` (for example `registry.example.com/team/*`), so one grant covers every image under it. A deny on an image also covers its other spellings, such as capitals in the host, `:443` and Docker Hub short names.
 - An admin can set a model provider's run identity token to live 60 to 600 seconds (`gateway_identity.token_lifetime_seconds`; the default stays 10 minutes), so a killed run's tokens stop working sooner
 - `wardyn window <run>` opens a window onto your macOS VM run on your own Mac, `wardyn window <run> --status` shows whether one can open and why your last one closed, and `wardyn run --machine-kind macos_vm --window` asks for it as the VM comes up. A refusal prints the server's sentence and exits non-zero. Built and unit-tested; not yet run on a real Mac.
+- Docs: the macOS VM page now covers the attended window (how to open it, the site switch, every refusal, closing, audit rows) and an interactive developer sandbox quickstart.
+- Docs: a new page on signing people in to a custom model endpoint, and a new page on checking image signatures in your cluster with Sigstore policy-controller or Kyverno. The second recipe is not run in CI.
+- Docs: Windows VMs are listed as not available yet. A Linux desktop VM uses your own image for now.
 - Your walls can now also narrow tool rules, push rules, recording, auto-stop and Azure DevOps and GitHub capabilities, and the Settings card keeps them across a save.
 
 ## [0.10.0-rc.11] — 2026-11-02

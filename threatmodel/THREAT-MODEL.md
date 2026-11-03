@@ -3849,14 +3849,14 @@ The labelled series, every label, and where its values come from:
 - **It is off by default and experimental.** The token format and the key set's address may change before 0.11.
 - The disclosure, word for word: "When on, each model call to this gateway carries a signed token naming the person, the run and the runner."
 - A `custom_endpoint` row may opt in, and so may an `anthropic_api_key` or `openai_api_key` row with a `base_url`. Every other kind is refused at save, `anthropic_subscription` included.
-- `wardynd` signs an ES256 token per run and provider, valid for 10 minutes and minted again at half-life (`gatewayidentity.Signer`).
+- `wardynd` signs an ES256 token per run and provider, valid for 60 to 600 seconds (600 unless the provider sets `token_lifetime_seconds`) and minted again at half-life (`gatewayidentity.Signer`).
 - `wardyn-proxy` asks for it, holds it in memory and sends it as `X-Wardyn-Identity`, only on a request matching the provider's route: host, exact port and path prefix (`Proxy.gatewayRouteFor`).
 - The gateway verifies it against an anonymous key set, `GET /.well-known/wardyn-experimental/gateway-jwks.json`. [The AI gateway identity key](../docs/operations/secrets-and-keys.md#the-ai-gateway-identity-key) covers the key's storage and rotation.
 
 **Off changes nothing.**
 
 - On an install that never turned identity on, no key row exists. A run started with it off holds no route, so nothing is requested, signed or stripped.
-- Turning it off later keeps the key row and the routes of runs already started, and refuses new mints (`gatewayProviderOn`). A run already holding a token keeps stripping the gateway headers and signing with it until it expires, within 10 minutes; its calls on that route are then refused. Runs started afterwards hold no route for it.
+- Turning it off later keeps the key row and the routes of runs already started, and refuses new mints (`gatewayProviderOn`). A run already holding a token keeps stripping the gateway headers and signing with it until it expires, within 600 seconds; its calls on that route are then refused. Runs started afterwards hold no route for it.
 - With no provider on, the mint and the key set answer as paths no route holds, and on a run with no route a sandbox's own `X-Wardyn-Identity` passes as any other header does.
 - A gateway verifying that header still refuses a forged value by its signature.
 
@@ -3900,7 +3900,7 @@ The labelled series, every label, and where its values come from:
 **A run that ends.**
 
 - Killed, kept, revoked or still queued: the mint runs `internalAuth` (`refuseTerminalRun`, `refuseRelayBinding`) after its off-check, so no new token is issued. The run id is the token's `claims.RunID`, never the request body.
-- **Residual: revocation latency is the token's life, capped at 10 minutes.** A gateway cannot learn of a kill, so a token already issued is valid to `exp`.
+- **Residual: revocation latency is the token's life, 60 to 600 seconds (600 by default).** A gateway cannot learn of a kill, so a token already issued is valid to `exp`.
 - **Residual: pause does not stop mints; kill does.** A paused run (`pauseRun`) is not terminal, so its proxy keeps minting while the agent cannot act.
 
 **The signing key stolen.**
