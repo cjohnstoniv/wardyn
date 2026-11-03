@@ -118,7 +118,8 @@ vap='select(.kind == "ValidatingAdmissionPolicy")'
 [[ "$(y "$vap | .spec.matchConditions | length" "$TMP/on.out")" == 1 ]] || die "on: not exactly one match condition"
 [[ "$(y "$vap | .spec.matchConditions[0].expression" "$TMP/on.out")" == "request.userInfo.username == 'system:serviceaccount:agent-sandbox-system:agent-sandbox-controller'" ]] \
   || die "on: the match condition is not the controller's authenticated identity alone"
-y "$vap | .spec.matchConditions[].expression" "$TMP/on.out" | grep -qE 'object\.' && die "on: a match condition reads the pod, which an admission hook can rewrite"
+conds="$(y "$vap | .spec.matchConditions[].expression" "$TMP/on.out")"
+[[ "$conds" != *object.* ]] || die "on: a match condition reads the pod, which an admission hook can rewrite"
 # Validation: each field a hook could remove, checked after mutation.
 [[ "$(y "$vap | .spec.validations | length" "$TMP/on.out")" == 3 ]] || die "on: not exactly three validations"
 [[ "$(y "$vap | .spec.validations[0].expression" "$TMP/on.out")" == "has(object.spec.schedulingGates) && object.spec.schedulingGates.exists(g, g.name == 'wardyn.dev/verify')" ]] \
