@@ -160,7 +160,26 @@ func (s *Server) stepWorkspaces(f *runFold, rec *foldRecorder) bool {
 	var refusal *runRefusal
 	f.attachments, f.startFolder, refusal = s.runAttachments(*f.req, f.spec, f.wsRefs, carriers, f.seed,
 		driveTargets(f.drives))
+	if refusal == nil && f.req.Image == "" {
+		// After the seed, no image means neither the request nor an attached workspace set one, and dispatch
+		// takes it from a workspace the policy carries (resolveCreateRunImage), attached or not: the digest
+		// rule binds that base image as it binds an attached one's (seededImageRefusal).
+		if i := slices.IndexFunc(f.wsRefs, func(ws types.Workspace) bool { return workspaceBaseImage(ws) != "" }); i >= 0 {
+			f.carriedImage = workspaceBaseImage(f.wsRefs[i])
+		}
+		refusal = s.imageDigestRefusal(f.r.Context(), f.carriedImage, true)
+	}
 	return !refusal.write(s, f.w, f.r)
+}
+
+// createDigestInput is the image create held to the digest rule: the request's (named, or set by an attached
+// workspace's base image), else a policy-carried workspace's (runFold.carriedImage), "" for the convention
+// image. The run row records it (AgentRun.ImageInput) and the run.create row's exempt mark reads it.
+func createDigestInput(req createRunRequest, f runFold) string {
+	if req.Image != "" {
+		return req.Image
+	}
+	return f.carriedImage
 }
 
 // stepHarnessSet holds every harness a run-mode request includes to the agent

@@ -236,6 +236,10 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		}
 		return reviveResult{}, rerr
 	}
+	imageMark, rerr := s.reviveImageDigestRefusal(ctx, run, actorType, actor)
+	if rerr != nil {
+		return reviveResult{}, rerr
+	}
 	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
@@ -312,6 +316,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		"dropped_broker_lanes":    re.droppedLane,
 		"proxy_release":           version.Version,
 	}
+	maps.Copy(data, imageMark)
 	s.stampLiveRevive(run)
 	// The old proxy's renewed token ids are read before the new proxy starts, in the same statement
 	// that makes the fresh token the only one a renewal may present: a renewal by the old proxy after
