@@ -751,10 +751,10 @@ func (j driveOpenJob) copyOut(ctx context.Context) (*driveOpenCopy, error) {
 // the guest's tar cannot read some of them.
 var driveOpenTarExcluded = []string{".Trashes", ".Spotlight-V100", ".fseventsd", ".TemporaryItems"}
 
-// driveOpenTarArgv is the guest's tar (macOS bsdtar) that lists the drive: no extended attributes, and none of
-// driveOpenTarExcluded.
+// driveOpenTarArgv is the guest's tar (macOS bsdtar) that lists the drive: no extended attributes, no Mac metadata
+// (--no-xattrs alone still runs the copyfile path), and none of driveOpenTarExcluded.
 func driveOpenTarArgv() []string {
-	argv := []string{"/usr/bin/tar", "-C", macvm.DriveOpenTarget, "-cf", "-", "--no-xattrs"}
+	argv := []string{"/usr/bin/tar", "-C", macvm.DriveOpenTarget, "-cf", "-", "--no-xattrs", "--no-mac-metadata"}
 	for _, name := range driveOpenTarExcluded {
 		argv = append(argv, "--exclude", "./"+name)
 	}
@@ -764,11 +764,11 @@ func driveOpenTarArgv() []string {
 // driveOpenTarNoise matches a tar complaint that names only one of driveOpenTarExcluded at the drive's root.
 var driveOpenTarNoise = regexp.MustCompile(`(^|[\s:])\./(` + strings.Join(driveOpenTarExcluded, "|") + `)(/\S*)?(:|$)`)
 
-// driveOpenTarXattr matches a complaint that a verb on extended attributes failed ("Couldn't read xattr",
-// "Failed to get extended attributes"), whatever follows: bsdtar appends ": <strerror>", so the tail cannot be
-// anchored. Requiring the verb phrase keeps a path that holds the words ("./xattr-notes.txt: Cannot open")
-// from matching.
-var driveOpenTarXattr = regexp.MustCompile(`(?i)(couldn't|could not|cannot|can't|failed to|unable to) (read|list|query|get|set|restore|save|copy) (the )?(extended attributes?|xattrs?)`)
+// driveOpenTarXattr matches a complaint whose message segment says an operation on extended attributes failed
+// ("Couldn't list extended attributes", "Could not pack extended attributes"), with at most bsdtar's ": <strerror>"
+// after it. Anchoring on the segment after ": " keeps a path that holds the words ("./xattr-notes.txt: Cannot open",
+// "./Couldn't read xattr.txt: Cannot open") from matching.
+var driveOpenTarXattr = regexp.MustCompile(`(?i): (couldn't|could not|cannot|can't|failed to|unable to) [^:]*\b(extended attributes?|xattrs?)\b[^:]*(: [^:]*)?$`)
 
 // driveOpenUnreadLines is lines without the ones that are not unread items of the drive: a complaint about
 // one of driveOpenTarExcluded, and one about extended attributes.

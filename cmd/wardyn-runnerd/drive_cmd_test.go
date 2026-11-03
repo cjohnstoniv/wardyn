@@ -893,7 +893,7 @@ func TestDriveOpenListsWithoutVolumeFoldersOrXattrs(t *testing.T) {
 	if call == nil {
 		t.Fatalf("no listing: %v", g.calls)
 	}
-	want := "/usr/bin/tar -C " + macvm.DriveOpenTarget + " -cf - --no-xattrs --exclude ./.Trashes --exclude ./.Spotlight-V100 --exclude ./.fseventsd --exclude ./.TemporaryItems ."
+	want := "/usr/bin/tar -C " + macvm.DriveOpenTarget + " -cf - --no-xattrs --no-mac-metadata --exclude ./.Trashes --exclude ./.Spotlight-V100 --exclude ./.fseventsd --exclude ./.TemporaryItems ."
 	if got := strings.Join(call.argv, " "); got != want {
 		t.Fatalf("argv %q, want %q", got, want)
 	}
@@ -904,7 +904,7 @@ func TestDriveOpenListsWithoutVolumeFoldersOrXattrs(t *testing.T) {
 // a real complaint among the others is counted alone.
 func TestDriveOpenUnreadItemsLeaveOutVolumeNoise(t *testing.T) {
 	noise := "tar: ./.Spotlight-V100: Cannot open: Operation not permitted\ntar: ./.Trashes/501: Cannot stat: Permission denied\n" +
-		"tar: ./.fseventsd: Failed to get extended attributes\ntar: ./a.txt: Couldn't read xattr\ntar: ./a.txt: Couldn't read xattr: Operation not permitted\ntar: ./x: Couldn't list extended attributes: Permission denied\ntar: Error exit delayed from previous errors\n"
+		"tar: ./.fseventsd: Failed to get extended attributes\ntar: ./a.txt: Couldn't read xattr\ntar: ./a.txt: Couldn't read xattr: Operation not permitted\ntar: ./x: Couldn't list extended attributes: Permission denied\ntar: ./y: Could not pack extended attributes: Operation not permitted\ntar: ./z: Couldn't retrieve extended attributes: Permission denied\ntar: Error exit delayed from previous errors\n"
 	for _, tc := range []struct {
 		name, stderr string
 		unread       string // "" for no warning
@@ -915,6 +915,7 @@ func TestDriveOpenUnreadItemsLeaveOutVolumeNoise(t *testing.T) {
 		{"one real among the noise", noise + "tar: ./secret: Cannot open: Permission denied\n", "1 item could not be read", "tar: ./secret: Cannot open: Permission denied"},
 		{"a nested folder of the same name is a real item", "tar: ./docs/.Trashes: Cannot open: Permission denied\n", "1 item could not be read", "tar: ./docs/.Trashes: Cannot open: Permission denied"},
 		{"only noise, but more than was kept", strings.Repeat(noise, 300), "1 item could not be read", "tar said more than was kept"},
+		{"a file named like an xattr complaint is a real item", noise + "tar: ./Couldn't read xattr.txt: Cannot open: Operation not permitted\n", "1 item could not be read", "tar: ./Couldn't read xattr.txt: Cannot open: Operation not permitted"},
 		{"a file named for extended attributes is a real item", noise + "tar: ./reports/xattr-notes.txt: Cannot open: Permission denied\n", "1 item could not be read", "tar: ./reports/xattr-notes.txt: Cannot open: Permission denied"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -930,7 +931,7 @@ func TestDriveOpenUnreadItemsLeaveOutVolumeNoise(t *testing.T) {
 			if tc.unread != "" && (!strings.Contains(out.String(), tc.unread) || !strings.Contains(out.String(), tc.line)) {
 				t.Fatalf("output lacks %q and %q:\n%s", tc.unread, tc.line, out)
 			}
-			if strings.Contains(out.String(), "Spotlight") || strings.Contains(out.String(), "Couldn't read xattr") {
+			if strings.Contains(out.String(), "Spotlight") || strings.Contains(out.String(), "./a.txt: Couldn't read xattr") {
 				t.Fatalf("noise shown:\n%s", out)
 			}
 		})
