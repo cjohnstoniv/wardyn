@@ -34,9 +34,10 @@ type PersonalWallsSpec struct {
 	// WithheldGrants names credentials the run is not given, in the restriction's shape: a grant of the
 	// same kind (a scope-less entry) or the same pairing. It never reaches Overlay().
 	WithheldGrants []GrantSpec `json:"withheld_grants,omitempty"`
-	// AzureDevOpsCapabilities and GitHubCapabilities are a subset of what the run's own policy names
-	// (meet = intersection). They cannot be proven within a provider row's default profile, which a
-	// policy that names no list falls back to, so they narrow only a run whose policy names a list.
+	// AzureDevOpsCapabilities and GitHubCapabilities are a subset of what the run would hold (meet =
+	// intersection, never a capability the run would not have). A policy's list meets them at create.
+	// Where the policy names none, the provider's default meets them where it is known: Azure DevOps
+	// at dispatch, the GitHub CLI's rows at create. A meet with nothing in common refuses the run.
 	AzureDevOpsCapabilities *[]adoscope.Capability `json:"azure_devops_capabilities,omitempty"`
 	GitHubCapabilities      *[]ghscope.Capability  `json:"github_capabilities,omitempty"`
 	// ToolRules are rules ADDED to the run's: each holds or denies a tool, never allows one, and never

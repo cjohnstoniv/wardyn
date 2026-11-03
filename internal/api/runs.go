@@ -423,7 +423,7 @@ func (s *Server) wireRunGrants(ctx context.Context, w http.ResponseWriter, r *ht
 ) (grantWiring, []string, bool) {
 	gw, ok := s.persistRunGrants(ctx, w, r, run.ID, now, spec, run.Placement, delivery)
 	// The git broker's repositories, then the GitHub CLI's grants over them.
-	if !ok || !s.persistGitHubCLIGrants(ctx, w, r, run.ID, now, req.Repo, spec.WorkspaceRepos, comps, &gw) {
+	if !ok || !s.persistGitHubCLIGrants(ctx, w, r, run, now, req.Repo, spec.WorkspaceRepos, comps, &gw) {
 		return grantWiring{}, nil, false
 	}
 	warnings := append([]string(nil), gw.warnings...)

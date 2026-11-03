@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/ghscope"
@@ -451,21 +452,70 @@ func (s *Server) personalWallsRunStep(ctx context.Context, spec *types.RunPolicy
 			warns = append(warns, "your walls narrowed "+knob)
 		}
 	}
-	return append(warns, wallsCapabilityNoOps(before, walls)...), nil
+	return warns, nil
 }
 
-// wallsCapabilityNoOps names a capability list in the walls that did nothing because the run's policy
-// names no list to narrow (the provider row's default profile applies, which a list cannot be proven
-// within). before is the policy the meet started from.
-func wallsCapabilityNoOps(before types.RunPolicySpec, walls types.PersonalWallsSpec) []string {
-	var warns []string
-	if walls.AzureDevOpsCapabilities != nil && len(before.AzureDevOpsCapabilities) == 0 {
-		warns = append(warns, "your walls' azure_devops_capabilities did not apply: this run's policy names no list")
+// wallsCapabilityRefusal is why a run's provider capabilities are not narrowed to its owner's walls:
+// the walls could not be read, or they share no capability with what the run would hold.
+type wallsCapabilityRefusal struct {
+	status         int
+	reason, detail string
+}
+
+// wallsCapabilityMeet is the run owner's capability wall over the capabilities a provider would give
+// the run, where the run's policy left them to the provider's default. The meet runs where that
+// default is known: dispatch for Azure DevOps (wallsADOCapabilities), create for the GitHub CLI
+// (wallsGitHubCLICapabilities). It keeps the capabilities in both, in caps' order, so it never adds one
+// the default does not give. kept is nil when the walls name no list for field. Walls that cannot be
+// read, or a wall that shares nothing with caps, refuse the run.
+func wallsCapabilityMeet[C ~string](ctx context.Context, s *Server, owner, field string, caps []C,
+	wallOf func(types.PersonalWallsSpec) *[]C,
+) (kept []C, refused *wallsCapabilityRefusal) {
+	walls, err := s.personalWalls(ctx, owner)
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: read the run owner's walls for "+field+"; the run is refused", slog.Any("err", err))
+		return nil, &wallsCapabilityRefusal{status: http.StatusServiceUnavailable, reason: reasonGrantWithheldUnread,
+			detail: "Your walls could not be read, so this run's " + field + " cannot be narrowed to them. Walls that cannot be read refuse the run; try again."}
 	}
-	if walls.GitHubCapabilities != nil && len(before.GitHubCapabilities) == 0 {
-		warns = append(warns, "your walls' github_capabilities did not apply: this run's policy names no list")
+	wall := wallOf(walls)
+	if wall == nil {
+		return nil, nil
 	}
-	return warns
+	for _, c := range caps {
+		if slices.Contains(*wall, c) {
+			kept = append(kept, c)
+		}
+	}
+	if len(kept) == 0 {
+		return nil, &wallsCapabilityRefusal{status: http.StatusForbidden, reason: reasonGovernanceOverlayUnsatisfiable,
+			detail: "Your walls and this run's provider default leave " + field + " nothing in common: no capability is in both the default (" +
+				wallsCapList(caps) + ") and your walls (" + wallsCapList(*wall) + "). Change your walls with `wardyn walls`, or in Settings."}
+	}
+	return kept, nil
+}
+
+func wallsCapList[C ~string](caps []C) string {
+	names := make([]string, len(caps))
+	for i, c := range caps {
+		names[i] = string(c)
+	}
+	return strings.Join(names, ", ")
+}
+
+// wallsADOCapabilities narrows a run on the provider row's default profile (the policy named no
+// azure_devops_capabilities) to the run owner's walls, at dispatch where that profile is known. A
+// policy that names a list met the walls at create (personalWallsRunStep).
+func (s *Server) wallsADOCapabilities(ctx context.Context, run types.AgentRun, caps []adoscope.Capability) ([]adoscope.Capability, *wallsCapabilityRefusal) {
+	return wallsCapabilityMeet(ctx, s, run.CreatedBy, "azure_devops_capabilities", caps,
+		func(w types.PersonalWallsSpec) *[]adoscope.Capability { return w.AzureDevOpsCapabilities })
+}
+
+// wallsGitHubCLICapabilities narrows the GitHub CLI's capabilities, the attached rows' default, to the
+// run owner's walls. No GitHub lane reads a policy's github_capabilities, so the walls meet the
+// default on every run.
+func (s *Server) wallsGitHubCLICapabilities(ctx context.Context, run types.AgentRun, caps []ghscope.Capability) ([]ghscope.Capability, *wallsCapabilityRefusal) {
+	return wallsCapabilityMeet(ctx, s, run.CreatedBy, "github_capabilities", caps,
+		func(w types.PersonalWallsSpec) *[]ghscope.Capability { return w.GitHubCapabilities })
 }
 
 // wallsBeyondMeet applies to met what the meet alone would place wrongly; before is the policy the meet
