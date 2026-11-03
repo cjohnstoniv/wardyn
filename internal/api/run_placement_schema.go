@@ -32,7 +32,9 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[bedrockTransportAudit](): strings.Fields("region model endpoint mode detail hosts signing"),
 	reflect.TypeFor[chosenProvider]():        strings.Fields("provider owner"),
 	reflect.TypeFor[componentConfig]():       strings.Fields("ordinal source selfDefined env"),
-	reflect.TypeFor[componentMCP]():          strings.Fields("Ordinal Key URL Host Harnesses Credentialed Launch EnvNames GatewayAudience GatewayUID"), // Launch/EnvNames: a self-defined row's command is the person's own; an org row's MCP server that runs in the sandbox is refused on a local runner (localMCPOrgServerMsg); values are judged as componentConfig env
+	// componentMCP Launch/EnvNames: a self-defined row's command is the person's own; an org row's MCP server that runs in the sandbox is refused on a local runner (localMCPOrgServerMsg); values are judged as componentConfig env
+	// GatewayAudience/GatewayUID name the org MCP server's gateway destination, never a token.
+	reflect.TypeFor[componentMCP]():          strings.Fields("Ordinal Key URL Host Harnesses Credentialed Launch EnvNames GatewayAudience GatewayUID"),
 	reflect.TypeFor[componentDispatch]():     strings.Fields("HeaderHosts MITMHosts Config GitHubAPI AWSCLI AzureCLI KubectlCLI MCP"),
 	reflect.TypeFor[awsCLIDispatch]():        strings.Fields("ComponentID AWS Hosts"),
 	reflect.TypeFor[awsSigV4Why]():           strings.Fields("Code Host"),
