@@ -103,11 +103,12 @@ describe("DesktopCard: a background macOS run", () => {
     expect(watchTicketMock).not.toHaveBeenCalled();
   });
 
-  it("open: Watch desktop first, then the kind line and the three sentences, View only in the header, no sign-ins and no Files", async () => {
+  it("open: the kind line as the tile's subtitle, Watch desktop next, then the three sentences, View only in the header, no sign-ins and no Files", async () => {
     renderCard({ ...bg("open"), ui_apps: [{ name: "novnc", port: 6080 }] });
     const d = await desk();
     const button = within(d).getByRole("button", { name: DESKTOP.watch });
-    expect(d.firstElementChild).toContainElement(button);
+    expect(d.firstElementChild).toHaveTextContent(DESKTOP.kindMacOS);
+    expect(d.children[1]).toContainElement(button);
     expect(within(d).getAllByRole("button")).toHaveLength(1);
     expect(within(tile(d)).getByText(DESKTOP.viewOnlyChip)).toBeInTheDocument();
     expect(within(d).getByText(DESKTOP.kindMacOS)).toBeInTheDocument();

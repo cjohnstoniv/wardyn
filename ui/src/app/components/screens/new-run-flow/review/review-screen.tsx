@@ -31,6 +31,7 @@ import { isServer } from "../lenses/apps-lens";
 import { useLocalIssues, useNewRunDispatch, useNewRunDraft, type NewRunScreenProps } from "../new-run-route";
 import { combinationReason, loadRoster } from "../steps/harnesses/roster";
 import { macOSMinimumSentence, useMacOSOffer } from "../steps/run/macos-offer";
+import { useClearRefusedWindow } from "../steps/run/window-choice";
 import { useDriveCatalogue } from "../steps/files/file-sources";
 import { templateSource } from "../steps/shape/shape-sources";
 import { useLoaded } from "../steps/shape/use-loaded";
@@ -119,6 +120,8 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
     recheckOnExpiry: true,
   });
   const pre = checks.preflightResult as PreflightResult | null as ReviewPreflight | null;
+  // A refused window on the Mac is cleared here too (a level raised on Access refuses it), and the draft is checked again.
+  useClearRefusedWindow({ field: checks.preflightField, text: checks.preflightError });
   const template = useTemplateNeeds(draft.origin, draft.intent);
   const harnessNames = useHarnessNames();
   const gateway = useUIGateway();

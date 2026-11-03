@@ -68,6 +68,13 @@ describe("Review blockers", () => {
     expect(buildBlockers({ ...NOTHING, keepLimit, refusal: { text: "x", reason: "runner_offline" } }).map((x) => x.kind)).toEqual(["local", "refusal"]);
   });
 
+  it("never makes a refusal naming desktop_window a blocker (the choice is cleared instead), and keeps one that only shares its reason", () => {
+    const profile = "Your organisation's governance profile doesn't allow an interactive desktop on this run.";
+    expect(buildBlockers({ ...NOTHING, refusal: { text: profile, reason: "governance_unit", field: "desktop_window" } })).toEqual([]);
+    expect(buildBlockers({ ...NOTHING, refusal: { text: "x", reason: "mac_window_unrecorded", field: "desktop_window" } })).toEqual([]);
+    expect(buildBlockers({ ...NOTHING, refusal: { text: profile, reason: "governance_unit" } }).map((x) => x.kind)).toEqual(["refusal"]);
+  });
+
   it("says a missing pool in the canon's words (FR-0099)", () => {
     expect(buildBlockers({ ...NOTHING, issues: [{ home: "run", code: "pool_required", focus: "nr-pool" }] })[0].text).toBe(NR_RUN.POOL_HELP);
   });

@@ -62,6 +62,12 @@ describe("intentToWire (U1)", () => {
     expect(sent[0].body.devcontainer_repo).toBe("org/app");
   });
 
+  it("sends desktop_window: excluded from templates, but each launch names it, as machine_kind and macos_base", () => {
+    const { body, unsupported } = intentToWire({ ...INTENT, machine_kind: "macos_vm", desktop_window: "at_start" });
+    expect(body).toMatchObject({ machine_kind: "macos_vm", desktop_window: "at_start" });
+    expect(unsupported).toEqual([]);
+  });
+
   it("sends keep_work_folder: a launch-time choice the registry excludes from templates, carried and never reported", () => {
     const { body, unsupported } = intentToWire({ ...INTENT, keep_work_folder: true });
     expect(body.keep_work_folder).toBe(true);

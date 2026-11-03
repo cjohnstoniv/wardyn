@@ -41,7 +41,7 @@ export const FIELD_HOME: Record<string, FieldHome> = {
   ...homes("document", "ends_after_sec no_end image allowed_image devcontainer_repo devcontainer_ref placement runner_id " +
     "policy_id preset preset_version agent task repo workspace_id interactive task_mode interactive_start seed_auto_tools " +
     "tool_approvals integration_id model_provider"),
-  ...homes("excluded", "title description mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder keep_work_folder machine_kind macos_base desktop_window run_in"),
+  ...homes("excluded", "title description mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder keep_work_folder machine machine_kind macos_base desktop_window run_in"),
   ...homes("review", policy(POLICY_REVIEW)),
   ...homes("document", policy(POLICY_DOCUMENT)),
 };
@@ -59,7 +59,7 @@ export const FIELD_HOME_OVERRIDES: Record<string, FieldHome> = {
 
 export const REVIEW_GROUP_OF_FIELD: Record<string, ReviewGroupId> = {
   ...groups("run", policy("ui_apps") + " shape experience workload service interactive task_mode interactive_start agent task preset preset_version title description mode_contract max_wait_sec start_at start_time_zone policy_overlay local_folder"),
-  ...groups("where", "machine_kind macos_base desktop_window run_in runner_pool_id confinement_class placement runner_id image allowed_image devcontainer_repo devcontainer_ref " +
+  ...groups("where", "machine machine_kind macos_base desktop_window run_in runner_pool_id confinement_class placement runner_id image allowed_image devcontainer_repo devcontainer_ref " +
     policy("min_confinement_class")),
   ...groups("work", "workspaces drive drives start_folder no_repositories_or_drives keep_work_folder repo workspace_id " + policy("workspace_mounts workspace_repos")),
   ...groups("tools", "tools startup components model_provider integration_id seed_auto_tools tool_approvals " + policy("desktop")),
@@ -126,9 +126,15 @@ export function groupOfPath(path: string): ReviewGroupId | undefined {
 export const homeOfReason = (reason: string): FieldHome =>
   (HOME_OF_REASON as Record<string, FieldHome>)[reason] ?? "review";
 
+/** The request field every refusal of a window on the Mac names: the console clears that choice, never blocks on it. */
+export const DESKTOP_WINDOW_FIELD = "desktop_window";
+
 /** The step that changes the request field a refusal names (the envelope's `field`), where it differs by field
- *  within one reason: a macOS VM's placement refusal names the machine kind, a harness or the run's size. */
-export const HOME_OF_REFUSAL_FIELD: Record<string, FieldHome> = { machine_kind: "run", macos_base: "run", interactive_start: "harnesses", harness: "harnesses", resources: "review" };
+ *  within one reason: a macOS VM's placement refusal names the machine kind, a harness or the run's size, and every
+ *  refusal of a window on the Mac names desktop_window, which the Run step sets. */
+export const HOME_OF_REFUSAL_FIELD: Record<string, FieldHome> = {
+  machine_kind: "run", macos_base: "run", desktop_window: "run", interactive_start: "harnesses", harness: "harnesses", resources: "review",
+};
 
 /** A refusal's step: its field's, when the console knows that field, else its reason's. */
 export const homeOfRefusal = (reason: string, field = ""): FieldHome => HOME_OF_REFUSAL_FIELD[field] ?? homeOfReason(reason);

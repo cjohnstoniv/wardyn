@@ -367,6 +367,14 @@ var templateNestedExcluded = map[string]TemplateFieldRule{
 		"Part of local_folder, which is named at each launch."),
 	"RunLocalFolder.direction": excludedField("direction", templateExcludeLaunch,
 		"Part of local_folder, which is named at each launch."),
+	"RunMachine.keep": excludedField("keep", templateExcludeLaunch,
+		"Part of machine, which is chosen at each launch."),
+	"RunMachine.name": excludedField("name", templateExcludeLaunch,
+		"Part of machine, which is chosen at each launch."),
+	"RunMachine.resume": excludedField("resume", templateExcludeLaunch,
+		"Part of machine, which is chosen at each launch."),
+	"RunMachine.fresh": excludedField("fresh", templateExcludeLaunch,
+		"Part of machine, which is chosen at each launch."),
 }
 
 // templateRule finds a top-level rule by name.

@@ -4,9 +4,10 @@
  */
 
 // Settings card: the macOS VM settings of the site config, `macos_vm` (types.SiteMacOSVM). The oldest base a run may
-// use (`max_base_age_days`, empty is no maximum; the server stores 0 as the same) and the switch for watching
-// background runs (`allow_background_watch`, absent reads on, sent explicitly on every save). One Save covers every field; to add a field, add
-// its state beside `watch`, its input below, its key in macosVMBody and its term in `dirty`.
+// use (`max_base_age_days`, empty is no maximum; the server stores 0 as the same), the switch for watching
+// background runs (`allow_background_watch`, absent reads on) and the switch for a window on the Mac
+// (`allow_attended_window`, absent reads off), both sent explicitly on every save. One Save covers every field; to add a
+// field, add its state beside `watch`, its input below, its key in macosVMBody and its term in `dirty`.
 //
 // Saved through PUT /site-config with the GET's ETag as If-Match, the way the Custom components card does, so a
 // save can't spread a stale document over a newer one. Super-admin only, by being mounted from AdminSettingsScreen.
@@ -35,17 +36,18 @@ export const parseMaxBaseAge = (text: string): number | "" | null => {
   return Number.isSafeInteger(n) ? n : null;
 };
 
-// The block to send: the stored block with the days set (removed when the field is empty) and the watch switch
+// The block to send: the stored block with the days set (removed when the field is empty) and both switches
 // written explicitly, true or false, every time. The server keeps a stored switch when a body names the block
 // without it, so only an explicit value can change it. A block with no days still goes out (it names `macos_vm`),
 // because an absent block is carried forward by the server.
-export function macosVMBody(stored: SiteMacOSVM | undefined, days: number | "", watch = true): SiteMacOSVM {
-  const { max_base_age_days: _days, allow_background_watch: _watch, ...rest } = stored ?? {};
-  return { ...rest, ...(days !== "" && { max_base_age_days: days }), allow_background_watch: watch };
+export function macosVMBody(stored: SiteMacOSVM | undefined, days: number | "", watch = true, attended = false): SiteMacOSVM {
+  const { max_base_age_days: _days, allow_background_watch: _watch, allow_attended_window: _window, ...rest } = stored ?? {};
+  return { ...rest, ...(days !== "" && { max_base_age_days: days }), allow_background_watch: watch, allow_attended_window: attended };
 }
 
 const textOf = (m?: SiteMacOSVM) => (m?.max_base_age_days ? String(m.max_base_age_days) : "");
 const watchOf = (m?: SiteMacOSVM) => m?.allow_background_watch !== false;
+const windowOf = (m?: SiteMacOSVM) => m?.allow_attended_window === true;
 
 export function MacOSVMSettingsCard() {
   const [base, setBase] = React.useState<SiteConfig | null>(null);
@@ -54,6 +56,8 @@ export function MacOSVMSettingsCard() {
   const [draft, setDraft] = React.useState("");
   const [savedWatch, setSavedWatch] = React.useState(true);
   const [watch, setWatch] = React.useState(true);
+  const [savedAttended, setSavedAttended] = React.useState(false);
+  const [attended, setAttended] = React.useState(false);
   const [state, setState] = React.useState<"loading" | "ready" | "failed">("loading");
   const [saving, setSaving] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
@@ -61,7 +65,7 @@ export function MacOSVMSettingsCard() {
   const [staleKept, setStaleKept] = React.useState(false);
 
   // The 412 path reloads too. It resolves to the card's settings just read, or null if the read failed.
-  const load = React.useCallback((): Promise<{ text: string; watch: boolean } | null> => {
+  const load = React.useCallback((): Promise<{ text: string; watch: boolean; window: boolean } | null> => {
     return health
       .getSiteConfigSnapshot()
       .then(({ siteConfig, etag: tag }) => {
@@ -72,8 +76,10 @@ export function MacOSVMSettingsCard() {
         setDraft(next);
         setSavedWatch(watchOf(siteConfig.macos_vm));
         setWatch(watchOf(siteConfig.macos_vm));
+        setSavedAttended(windowOf(siteConfig.macos_vm));
+        setAttended(windowOf(siteConfig.macos_vm));
         setState("ready");
-        return { text: next, watch: watchOf(siteConfig.macos_vm) };
+        return { text: next, watch: watchOf(siteConfig.macos_vm), window: windowOf(siteConfig.macos_vm) };
       })
       .catch(() => {
         setState("failed");
@@ -86,7 +92,7 @@ export function MacOSVMSettingsCard() {
 
   const parsed = parseMaxBaseAge(draft);
   const invalid = parsed === null;
-  const dirty = draft.trim() !== saved || watch !== savedWatch;
+  const dirty = draft.trim() !== saved || watch !== savedWatch || attended !== savedAttended;
 
   const save = async () => {
     if (!base || parsed === null) return;
@@ -95,7 +101,7 @@ export function MacOSVMSettingsCard() {
     setSavedElsewhere(false);
     setStaleKept(false);
     try {
-      const result = await health.putSiteConfig({ ...base, macos_vm: macosVMBody(base.macos_vm, parsed, watch) }, etag);
+      const result = await health.putSiteConfig({ ...base, macos_vm: macosVMBody(base.macos_vm, parsed, watch, attended) }, etag);
       const next = textOf(result.siteConfig.macos_vm);
       setBase(result.siteConfig);
       setEtag(result.etag);
@@ -103,15 +109,18 @@ export function MacOSVMSettingsCard() {
       setDraft(next);
       setSavedWatch(watchOf(result.siteConfig.macos_vm));
       setWatch(watchOf(result.siteConfig.macos_vm));
+      setSavedAttended(windowOf(result.siteConfig.macos_vm));
+      setAttended(windowOf(result.siteConfig.macos_vm));
       toast.success(T.SAVED_TOAST);
     } catch (e) {
       if (e instanceof HttpError && e.status === 412) {
         // The ETag covers the whole site-config document, so another card's save also lands here. Only a change to
         // THIS card's block is "someone else"; otherwise the person's edit goes back on the fresh document.
         const fresh = await load();
-        if (fresh && fresh.text === saved && fresh.watch === savedWatch) {
+        if (fresh && fresh.text === saved && fresh.watch === savedWatch && fresh.window === savedAttended) {
           setDraft(draft);
           setWatch(watch);
+          setAttended(attended);
           setStaleKept(true);
         } else {
           setSavedElsewhere(true);
@@ -171,6 +180,11 @@ export function MacOSVMSettingsCard() {
             <span className="text-body font-medium text-foreground">{T.WATCH_LABEL}</span>
           </div>
           <p className="mt-1.5 text-xs text-muted-foreground">{T.WATCH_HINT}</p>
+          <div className="mt-5 flex items-center gap-2.5">
+            <Switch disabled={saving} checked={attended} onChange={setAttended} label={T.WINDOW_LABEL} />
+            <span className="text-body font-medium text-foreground">{T.WINDOW_LABEL}</span>
+          </div>
+          <p className="mt-1.5 text-xs text-muted-foreground">{T.WINDOW_HINT}</p>
           {savedElsewhere && (
             <p role="status" className="my-3 rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
               {C.SETTINGS_SAVED_ELSEWHERE}

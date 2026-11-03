@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -40,7 +41,7 @@ import (
 
 // The words of a window's refusals.
 const (
-	macWindowSiteOffMsg        = "Opening a window onto a macOS VM run is turned off for this install. An admin can turn on macos_vm.allow_attended_window in the site config."
+	macWindowSiteOffMsg        = "Opening a window onto a macOS VM run is turned off for this install. An admin can turn it on in Settings, under macOS virtual machines, or set macos_vm.allow_attended_window in the site config."
 	macWindowNotMacOSMsg       = "Only a macOS VM run has a window."
 	macWindowProfileMsg        = "Your organisation's governance profile doesn't allow an interactive desktop on this run."
 	macWindowUnrecordedMsg     = "This run's recording level is Screen and actions, and a window on your Mac isn't recorded, so Wardyn won't open one. Watch its desktop from the run page instead."
@@ -448,6 +449,18 @@ func macWindowRefusalReason(rf *runRefusal) string {
 	return rf.body.Reason
 }
 
+// macWindowRefusalSentence is the sentence a refusal answers with; "" for a read that failed.
+func macWindowRefusalSentence(rf *runRefusal) string {
+	switch {
+	case rf.err != nil:
+		return ""
+	case rf.decision != nil:
+		ref, _ := authz.Lookup(rf.decision.Reason)
+		return cmp.Or(rf.decision.Sentence, ref.Sentence)
+	}
+	return rf.body.Error
+}
+
 // macWindowData is the fields every takeover row of a window carries.
 func macWindowData(background bool, trigger string, runnerID *uuid.UUID) map[string]any {
 	data := map[string]any{"surface": macWindowSurface, "trigger": trigger, "background": background, "recorded": false}
@@ -625,7 +638,7 @@ func (s *Server) closeMacWindow(ctx context.Context, w *macWindow, reason, by st
 		s.macWindows.release(w)
 		w.cancel()
 		s.auditMacWindowClose(context.WithoutCancel(ctx), w, reason, by)
-		s.macWindowStoreLastClose(context.WithoutCancel(ctx), w, reason)
+		s.macWindowStoreLastClose(context.WithoutCancel(ctx), w.auth.Principal, w.runID, macWindowLastClose{Reason: macWindowLastCloseReason(reason)})
 	})
 }
 
@@ -635,14 +648,17 @@ const (
 	macWindowEndedHostLocked = "host_locked"
 	macWindowEndedRunEnded   = "run_ended"
 	macWindowEndedFailed     = "failed"
+	// macWindowEndedNotOpened is the window a create asked for that was refused as the run started.
+	macWindowEndedNotOpened = "not_opened"
 )
 
 // macWindowLastClose is why a run's last window closed and when, kept per person and run so any replica can
-// answer it. The reason is the console's four words, not the audit row's: every close that is not the person's
-// own, the Mac locking or the run ending reads as failed.
+// answer it. The reason is the console's words, not the audit row's: every close that is not the person's
+// own, the Mac locking or the run ending reads as failed. Message is the refusal's sentence of a not_opened.
 type macWindowLastClose struct {
-	Reason string    `json:"reason"`
-	At     time.Time `json:"at"`
+	Reason  string    `json:"reason"`
+	Message string    `json:"message,omitempty"`
+	At      time.Time `json:"at"`
 }
 
 const macWindowLastCloseKey = "mac_window_last:"
@@ -660,19 +676,20 @@ func macWindowLastCloseReason(reason string) string {
 	return macWindowEndedFailed
 }
 
-// macWindowStoreLastClose records the close for the run read. A failed write loses only the console's line; the
-// audit row is already written.
-func (s *Server) macWindowStoreLastClose(ctx context.Context, w *macWindow, reason string) {
+// macWindowStoreLastClose records c, stamped now, as principal's last close on run for the run read. A failed
+// write loses only the console's line; the audit row is already written.
+func (s *Server) macWindowStoreLastClose(ctx context.Context, principal string, runID uuid.UUID, c macWindowLastClose) {
 	st, ok := s.cfg.Store.(store.PrincipalPrefStore)
 	if !ok {
 		return
 	}
-	raw, err := json.Marshal(macWindowLastClose{Reason: macWindowLastCloseReason(reason), At: s.cfg.Now()})
+	c.At = s.cfg.Now()
+	raw, err := json.Marshal(c)
 	if err == nil {
-		err = st.PutPrincipalPref(ctx, w.auth.Principal, macWindowLastCloseKey+w.runID.String(), raw)
+		err = st.PutPrincipalPref(ctx, principal, macWindowLastCloseKey+runID.String(), raw)
 	}
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: recording a window's close failed", "run_id", w.runID, "err", err)
+		slog.WarnContext(ctx, "wardynd: recording a window's close failed", "run_id", runID, "err", err)
 	}
 }
 

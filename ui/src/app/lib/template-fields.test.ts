@@ -80,6 +80,7 @@ describe("template field registry", () => {
       "integration_id",
       "keep_work_folder",
       "local_folder",
+      "machine",
       "machine_kind",
       "macos_base",
       "max_wait_sec",
@@ -104,6 +105,10 @@ describe("template field registry", () => {
       "RunLocalFolder.path",
       "RunLocalFolder.remote_dir",
       "RunLocalFolder.runner_id",
+      "RunMachine.fresh",
+      "RunMachine.keep",
+      "RunMachine.name",
+      "RunMachine.resume",
     ]);
     expect(TEMPLATE_NESTED_CARRIED.LLMInspectionSpec).not.toContain("workspace_secret_values");
   });

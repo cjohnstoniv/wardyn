@@ -493,7 +493,7 @@ func TestSetupFeatures_MacOSVMs(t *testing.T) {
 	}
 	for env, want := range map[string]bool{"": false, "0": false, "1": true} {
 		t.Setenv(envMacOSVMs, env)
-		f := setupFeatures(false)
+		f := setupFeatures(false, false)
 		raw, err := json.Marshal(f)
 		if err != nil || f.MacOSVMs != want || strings.Contains(string(raw), "macos_vms") != want {
 			t.Errorf("%q: MacOSVMs %v, json %s (%v), want %v and the key only when on", env, f.MacOSVMs, raw, err, want)
