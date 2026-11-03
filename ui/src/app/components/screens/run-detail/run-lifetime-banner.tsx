@@ -21,6 +21,7 @@ import { runs as runsApi } from "../../../lib/api/runs";
 import { absoluteTime, getErrorMessage } from "../../../lib/format";
 import { useOperator, usePrincipal } from "../../wardyn/operator-context";
 import { Button } from "../../ui/button";
+import { KillRunDialog } from "../../wardyn/kill-run-dialog";
 import * as RL from "../../wardyn/copy/run-lifetime";
 import { LOCAL_RUN, runnerLabel } from "../../wardyn/copy/runners";
 import { keptUntilText, weekdayClock } from "./run-ends-row";
@@ -97,6 +98,8 @@ export function RunLifetimeBanner({
   // The stage and end it was dismissed at: a later stage or an extended end warns again.
   const [dismissed, setDismissed] = React.useState<string | null>(null);
   const [changeOpen, setChangeOpen] = React.useState(false);
+  // UXR-15: End run asks first, through the same confirm as the header's Kill.
+  const [confirmEnd, setConfirmEnd] = React.useState(false);
   const operator = useOperator();
   const principal = usePrincipal();
   // F16 (PR #1317 review): every action here is owner-or-super-admin on the
@@ -161,9 +164,10 @@ export function RunLifetimeBanner({
     setAction("endRun");
     try {
       await runsApi.killRun(run.id);
+      toast.success(RL.ENDING(RL.toastRunName(run)));
       onChanged();
     } catch (err) {
-      toast.error(`Failed to end ${run.id}`, { description: getErrorMessage(err) });
+      toast.error(RL.COULDNT_END(RL.toastRunName(run)), { description: getErrorMessage(err) });
     } finally {
       setAction(null);
     }
@@ -235,7 +239,7 @@ export function RunLifetimeBanner({
                   </Button>
                 </>
               )}
-              <Button size="sm" variant="outline" onClick={() => void endRun()} disabled={busy}>
+              <Button size="sm" variant="outline" onClick={() => setConfirmEnd(true)} disabled={busy}>
                 {RL.END_RUN}
               </Button>
             </div>
@@ -280,7 +284,7 @@ export function RunLifetimeBanner({
                   </Button>
                 </>
               )}
-              <Button size="sm" variant="outline" onClick={() => void endRun()} disabled={busy}>
+              <Button size="sm" variant="outline" onClick={() => setConfirmEnd(true)} disabled={busy}>
                 {RL.END_RUN}
               </Button>
             </div>
@@ -313,7 +317,7 @@ export function RunLifetimeBanner({
                   {RL.ENDED_EXTEND_AND_REVIVE}
                 </Button>
               )}
-              <Button size="sm" variant="outline" onClick={() => void endRun()} disabled={busy}>
+              <Button size="sm" variant="outline" onClick={() => setConfirmEnd(true)} disabled={busy}>
                 {RL.END_RUN}
               </Button>
             </div>
@@ -417,6 +421,12 @@ export function RunLifetimeBanner({
   return (
     <>
       {renderPrimary()}
+      <KillRunDialog
+        runId={confirmEnd ? run.id : null}
+        title={run.title?.trim() || run.task}
+        onOpenChange={(o) => !o && setConfirmEnd(false)}
+        onConfirm={() => void endRun()}
+      />
       {run.end_tightened_at && run.ends_at && (
         <p data-testid="run-lifetime-tightened" className="mx-4 mt-2 shrink-0 rounded-md border border-warning/30 bg-warning-subtle px-2.5 py-2 text-xs text-warning">
           {RL.endsTightened(weekdayClock(run.ends_at))}

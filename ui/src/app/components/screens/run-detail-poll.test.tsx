@@ -49,6 +49,7 @@ vi.mock("../../lib/api/recordings", () => ({
 vi.mock("../../lib/api/health", () => ({
   health: { health: vi.fn().mockResolvedValue({}) },
 }));
+import { toast } from "sonner";
 vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn(), success: vi.fn() } }));
 
 import { RunDetailScreen } from "./run-detail";
@@ -288,6 +289,8 @@ describe("RunDetailScreen — a route change drops everything run A was doing", 
       await user.click(within(dialog).getByRole("button", { name: "Kill run" }));
       expect(killRunMock).toHaveBeenCalledTimes(1);
       expect(killRunMock).toHaveBeenCalledWith("run-b");
+      // UXR-15: the toast names the run, never its id.
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Ending Distinct task B"));
     });
   }
 

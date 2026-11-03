@@ -81,6 +81,20 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("Launched: while the run loads (UXR-48)", () => {
+  it("draws a placeholder for the badge and the title, then the run", async () => {
+    let settle!: (r: unknown) => void;
+    getRun.mockReturnValue(new Promise((r) => (settle = r)));
+    open();
+    const loading = await screen.findByTestId("launched-loading");
+    expect(loading).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+    await act(async () => settle(run()));
+    expect(await screen.findByRole("heading", { level: 1, name: "nightly build" })).toBeInTheDocument();
+    expect(screen.queryByTestId("launched-loading")).toBeNull();
+  });
+});
+
 describe("Launched: Waiting (U13)", () => {
   it.each([
     [0, "1st in line"],

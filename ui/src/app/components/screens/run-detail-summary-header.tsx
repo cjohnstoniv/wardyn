@@ -15,6 +15,8 @@ import { formatDuration, shortTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { scheduledBadgeWord } from "./runs/scheduled-state";
+import { isPausedRun } from "./runs/runs-model";
+import { RUNS_ROW_WORD } from "../wardyn/copy/runs-landing";
 import { AutonomyChip, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { RUN, RUN_COCKPIT } from "../wardyn/copy";
 import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy";
@@ -168,6 +170,7 @@ export function SummaryHeader({
   const elapsed = useElapsed(run.created_at, run.ended_at ?? run.updated_at, terminal);
   const sentence = statusSentence(run, terminal, pendingApprovalCount, viewerBlocked);
   // The list's chip, so a row and its page say the same thing: a live service's health in place of "Running".
+  const paused = isPausedRun(run);
   const health = run.lost_reason === "ended" ? undefined : serviceBadge(run);
   const startRename = () => {
     // F3 (review round 2): never seed from the WHOLE task —
@@ -268,7 +271,11 @@ export function SummaryHeader({
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
-        <RunStateBadge state={run.state} word={health?.word ?? scheduledBadgeWord(run)} tone={health?.tone} pulse={health?.pulse} />
+        {paused ? (
+          <RunStateBadge state={run.state} word={RUNS_ROW_WORD.PAUSED} tone="neutral" pulse={false} />
+        ) : (
+          <RunStateBadge state={run.state} word={health?.word ?? scheduledBadgeWord(run)} tone={health?.tone} pulse={health?.pulse} />
+        )}
         {sentence && (
           <span data-testid="run-status-sentence" className="min-w-0 text-foreground [overflow-wrap:anywhere]">
             {sentence}

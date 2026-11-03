@@ -742,7 +742,7 @@ test.describe("killing a run cancels its still-PENDING approvals", () => {
       const confirm = page.getByRole("alertdialog");
       await expect(confirm).toBeVisible();
       await confirm.getByRole("button", { name: "Kill run" }).click();
-      await expect(page.getByText(/Kill requested for|Failed to kill/).first()).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByText(/Ending |Couldn't end /).first()).toBeVisible({ timeout: 10_000 });
 
       // The run's own Approvals tab: CANCELLED, no Approve/Deny — `pending &&`
       // gates those buttons on a.state === "PENDING", so a CANCELLED row
@@ -804,7 +804,7 @@ test.describe("T-68 — a seeded PENDING credential_reauth row on /approvals", (
       const confirm = page.getByRole("alertdialog");
       await expect(confirm).toBeVisible();
       await confirm.getByRole("button", { name: "Kill run" }).click();
-      await expect(page.getByText(/Kill requested for|Failed to kill/).first()).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByText(/Ending |Couldn't end /).first()).toBeVisible({ timeout: 10_000 });
 
       // Killing the run cancels the still-open sign-in request — the same
       // fact the live walk proves (a PENDING reauth on a dead run repairs
