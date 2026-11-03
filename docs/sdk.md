@@ -712,6 +712,14 @@ start.
 | `runners_enabled_required` | `PUT /runners/settings` needs `enabled`: true or false. |
 | `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
 | `site_config_runners_via_own_route` | Change `runners.enabled` with `PUT /runners/settings`. |
+| `kept_machine_site_off` | `macos_vm.allow_kept_machines` is not true: this install keeps no machines. |
+| `kept_machine_not_your_mac` | `403`: the caller is not a person, or has no Mac of their own outside other people's pools. |
+| `kept_machine_person_limit` | The caller already keeps `macos_vm.max_kept_machines_per_person` machines. |
+| `kept_machine_not_found` | `404`: no kept machine of the caller's has that id. |
+| `kept_machine_in_use` | `409`: a run holds the machine, so it can't be deleted. |
+| `kept_machine_deleting` | `409`: a delete of the machine has already started. |
+| `kept_machine_delete_failed` | `503`: the Mac refused the delete before removing anything; the machine is kept. |
+| `kept_machine_delete_unconfirmed` | `503`: the Mac's answer was lost or was not a refusal, so the machine may already be gone; the delete stays pending and is retried until the Mac confirms it, and the machine can't be resumed meanwhile. |
 | `runner_token_invalid` | Registration token is unknown, expired, consumed, or bound to another org. |
 | `runner_claim_mismatch` | The personal owner, fingerprint, org binding, claim state, or expiry does not match. |
 | `runner_not_found` | No such runner to revoke: absent, already revoked, an unclaimed one past its wait, or (on `/me`) another person's. |
