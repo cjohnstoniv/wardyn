@@ -53,6 +53,7 @@
 
 - The chart refuses `k8s.allowUnenforcedNetPol`, `k8s.ackAmbientDefaultDeny`, and a controller identity equal to wardynd's own ServiceAccount.
 - Needs Kubernetes 1.30 or later. Scheduling readiness and ValidatingAdmissionPolicy are both stable since v1.30 ([pod scheduling readiness](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-scheduling-readiness/), [ValidatingAdmissionPolicy](https://kubernetes.io/docs/reference/access-authn-authz/validating-admission-policy/), read 2026-11-03).
+- Tested on Kubernetes v1.30.0 only. Wardyn's start check knows the pod fields a v1.30 API server fills in. A later minor that fills in another pod field makes every run refuse at start, naming that field; nothing runs.
 - Off renders what the chart rendered before the key existed: no extra RBAC, policy, CRD or env.
 - On adds `patch` on `pods` and `create`, `get`, `list`, `delete` on `sandboxes` to wardynd's Role in the runs namespace, and two admission policies. Nothing goes in a ClusterRole.
 - At boot wardynd also asks the API server whether it holds each of those verbs, and refuses to boot if one is missing.

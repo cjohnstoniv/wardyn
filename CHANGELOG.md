@@ -72,6 +72,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The policy editor and the Wardyn boundary page now say what is true: the `desktop` field help says an omitted `desktop` under a ceiling takes the ceiling's rules, the `recording` help says the run owner's walls can raise the level, the Policies empty state says a stored policy is clamped to a governance profile's ceiling (it can narrow but never widen), and the boundary and recording words match Governance ("profiles below"). The Fields list no longer points at `docs/POLICIES.md`, a file a packaged install does not have.
 - People and tokens copy is truer. A service identity's inbound-token help names the identity (not "you"), a person's own API token can run to 1 year or the server's limit, the token reveal and the People page call the `admin` role "Admin", the People confirms are titled for what they do ("Sign out everywhere?", "Remove all SSH keys?") with toasts that say what happened ("Removed 2 SSH keys for …", "… was already listed."), the Holds cell says "SSH key", the drawer says how to invite someone to create a token, and a lifetime hint is read with its control. Erase below the security tier is titled "Erase someone's credentials".
 - Kubernetes teardown now identifies a run by its pod's fixed name, never by a label.
+- Setup's Corporate network step no longer loses a proxy URL or secret name you typed while the saved settings were still loading: the proxy editor waits for them, says so when they cannot be read (with Try again), and can no longer save over settings it has not read.
+- Opening a window onto a macOS VM run right after the org ended the last one no longer refuses with "This run's window is already open".
 
 ### Changed
 
