@@ -212,10 +212,11 @@ func TestMacGuestInitTurnsTheAutoUpdaterOff(t *testing.T) {
 // this test, so tools mode can reach a run boot only by a reviewed change here. disks is the run's disk
 // drives (macvm.Disk: id, path, read_only, size_bytes), which a prepare or tools-update boot refuses.
 // desktop_view_only is the one key written for one kind of run: present and true on a background run's
-// boot, whose desktop the helper forces to view only, and absent on an interactive one's.
+// boot, whose desktop the helper forces to view only, and absent on an interactive one's. kept is a kept
+// machine's session (macvm.KeptRun, whose fields are pinned here the same way), absent on any other run.
 func TestMacVMRunBootCarriesNoToolsMode(t *testing.T) {
 	const viewOnly = "desktop_view_only"
-	want := []string{"base_dir", "cpus", viewOnly, "disks", "identity", "ledger_dir", "ledger_entry", "memory_mib", "run_id", "runner_id", "shares", "sock_root"}
+	want := []string{"base_dir", "cpus", viewOnly, "disks", "identity", "kept", "ledger_dir", "ledger_entry", "memory_mib", "run_id", "runner_id", "shares", "sock_root"}
 	var got []string
 	rt := reflect.TypeFor[macvm.RunConfig]()
 	for i := range rt.NumField() {
@@ -224,6 +225,15 @@ func TestMacVMRunBootCarriesNoToolsMode(t *testing.T) {
 	slices.Sort(got)
 	if !slices.Equal(got, want) {
 		t.Fatalf("run.json fields %v, want exactly %v", got, want)
+	}
+	got = got[:0]
+	kt := reflect.TypeFor[macvm.KeptRun]()
+	for i := range kt.NumField() {
+		got = append(got, strings.Split(kt.Field(i).Tag.Get("json"), ",")[0])
+	}
+	slices.Sort(got)
+	if kept := []string{"base", "base_digest", "id", "idle_days", "mode", "name", "owner_hash", "runner_id"}; !slices.Equal(got, kept) {
+		t.Fatalf("run.json's kept fields %v, want exactly %v", got, kept)
 	}
 	for name, background := range map[string]bool{"an interactive boot": false, "a background boot": true} {
 		t.Run(name, func(t *testing.T) {
@@ -243,7 +253,7 @@ func TestMacVMRunBootCarriesNoToolsMode(t *testing.T) {
 				t.Fatal(err)
 			}
 			for k := range written {
-				if !slices.Contains(want, k) || strings.Contains(strings.ToLower(k), "tool") {
+				if !slices.Contains(want, k) || k == "kept" || strings.Contains(strings.ToLower(k), "tool") {
 					t.Fatalf("run.json carries %q", k)
 				}
 			}

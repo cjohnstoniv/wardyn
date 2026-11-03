@@ -52,13 +52,19 @@ func newKeptRig(t *testing.T) (*macRig, *keptGuest) {
 	r.c.lockWait = 100 * time.Millisecond // a held lock is refused at once; TestKeptStopWaitsForABriefHolder waits
 	g := &keptGuest{}
 	r.c.spawn = func(dir string) error {
+		// wardyn-macvm makes each run's desktop password and wipes it when the run ends, so every helper
+		// here gets its own: a machine's second session must not be handed the first one's wiped secret.
+		secret, err := macvm.NewDesktopSecret()
+		if err != nil {
+			return err
+		}
 		ctx, cancel := context.WithCancel(context.Background())
 		g.mu.Lock()
 		g.spawns++
 		g.cancel = cancel
 		g.mu.Unlock()
 		t.Cleanup(cancel) // after newMacRig's: it runs first, so the rig's wait finds these helpers ended
-		keptHelper(ctx, r, g, dir)
+		keptHelper(ctx, r, g, dir, secret)
 		return nil
 	}
 	r.c.signal = func(int, unix.Signal) error {
@@ -72,14 +78,15 @@ func newKeptRig(t *testing.T) (*macRig, *keptGuest) {
 	return r, g
 }
 
-// keptHelper is macRig.helper with the guest's scrub: POST /v1/scrub, and the boot scrub in Init's answer.
-func keptHelper(ctx context.Context, r *macRig, g *keptGuest, dir string) {
+// keptHelper is macRig.helper with the guest's scrub (POST /v1/scrub, and the boot scrub in Init's answer),
+// serving secret as this run's desktop password.
+func keptHelper(ctx context.Context, r *macRig, g *keptGuest, dir string, secret *macvm.DesktopSecret) {
 	r.runs.Add(2)
 	r.host.set(admission.Proc{PID: macHelperPID, UID: 501, Start: 7, Name: admission.HelperProcess})
 	go func() {
 		defer r.runs.Done()
 		defer r.host.gone(macHelperPID)
-		_ = macvm.Run(ctx, macvm.RunOptions{Engine: r.eng, RunDir: dir, NetWait: 10 * time.Second, Desktop: r.desktop, DesktopPassword: r.secret, SockFstat: macvmtest.SockFstat, Claim: func(cfg macvm.RunConfig) error {
+		_ = macvm.Run(ctx, macvm.RunOptions{Engine: r.eng, RunDir: dir, NetWait: 10 * time.Second, Desktop: r.desktop, DesktopPassword: secret, SockFstat: macvmtest.SockFstat, Claim: func(cfg macvm.RunConfig) error {
 			_, err := r.c.Ledger.ClaimHelper(cfg.LedgerEntry, macHelperPID, 7)
 			return err
 		}})
