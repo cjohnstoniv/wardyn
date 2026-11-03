@@ -22,11 +22,12 @@ import { RUN_MODE_REFUSAL } from "../../lib/run-mode-refusals";
 import { Mono } from "../wardyn/code-block";
 import { UI_APPS_LANE } from "../wardyn/copy";
 import { DESKTOP } from "../wardyn/copy/desktop";
+import { RUN_VM_PAGE } from "../wardyn/copy/run-cockpit";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
 import { Chip, WidgetCard } from "../wardyn/primitives";
 import { MacOSDiskNote, macOSRunFactsOf, type MacOSRunFacts } from "./run-detail/macos-run-facts";
 import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
-import { DesktopPausedNote, DesktopSignInButton, DesktopSignInsNote, useDesktopSignIns } from "./run-detail/desktop-sign-ins";
+import { DesktopPausedNote, DesktopSignInButton, DesktopSignInsError, DesktopSignInsNote, useDesktopSignIns } from "./run-detail/desktop-sign-ins";
 import { DESKTOP_APP, enterUIApp } from "./run-detail-ssh";
 
 // Exported for the tests: standalone-testable without mounting the whole screen's fetch graph.
@@ -52,6 +53,9 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
     bind_url?: string;
   } | null>(null);
   const [healthAnswered, setHealthAnswered] = React.useState(false);
+  // health() resolves {} on any failure; "checked, and it did not say ok" is a failed check, not a gateway that is off.
+  const [healthFailed, setHealthFailed] = React.useState(false);
+  const [healthAttempt, setHealthAttempt] = React.useState(0);
   const [openingApp, setOpeningApp] = React.useState(false);
   const [appError, setAppError] = React.useState<string | null>(null);
   // #2972: a VM desktop's sign-ins, once the gateway can open it. A background run has none: nobody types in it.
@@ -67,11 +71,12 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
       if (!alive) return;
       setUISandbox(h.ui_sandbox ?? null);
       setHealthAnswered(h.status === "ok");
+      setHealthFailed(h.status !== "ok");
     });
     return () => {
       alive = false;
     };
-  }, [mayAttach, running]);
+  }, [mayAttach, running, healthAttempt]);
 
   // A finished macOS VM run keeps this tile while the Mac reports its disk.
   if (!isVMKind(run.machine_kind) || !mayAttach || (!running && !macOS?.disk)) return null;
@@ -108,7 +113,7 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
   const bgMac = background && mac && running;
   const noWatchChip = bgMac && (!watch || watch.state === "control" || watch.state === "not_run_owner");
   const chip =
-    (!healthAnswered && !macOff) || noDoor || noWatchChip ? null : (desktopOn && viewOnly) || bgMac ? (
+    (!healthAnswered && !macOff) || noDoor || noWatchChip ? null : desktopOn && (viewOnly || bgMac) ? (
       <Chip tone="neutral">{DESKTOP.viewOnlyChip}</Chip>
     ) : desktopOn && signIns.view?.paused ? (
       <Chip tone="warning">{DESKTOP.agentPaused}</Chip>
@@ -129,6 +134,15 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
             {!background && <DesktopSignInButton s={signIns} />}
           </div>
         )}
+        {desktopOn && !background && <DesktopSignInsError s={signIns} />}
+        {healthFailed && !macOff && !noDoor && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <p role="alert" className="text-meta leading-relaxed text-muted-foreground">{RUN_VM_PAGE.gatewayUnknown}</p>
+            <Button size="sm" variant="outline" onClick={() => { setHealthFailed(false); setHealthAttempt((n) => n + 1); }}>
+              {RUN_VM_PAGE.tryAgain}
+            </Button>
+          </div>
+        )}
         {appError && <p role="alert" className="mt-2 font-mono text-meta leading-relaxed text-muted-foreground">{appError}</p>}
         <p className="mt-2 text-meta text-muted-foreground">{mac ? DESKTOP.kindMacOS : DESKTOP.kind}</p>
         {noDoor && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{RUN_MODE_REFUSAL.BACKGROUND_ONLY("desktop")}</p>}
@@ -141,7 +155,15 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{DESKTOP.loginWindowNote}</p>
           </>
         )}
-        {!background && viewOnly && <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{DESKTOP.observeOnlyMacOS}</p>}
+        {!background && viewOnly && (
+          <p className="mt-2 text-meta leading-relaxed text-muted-foreground">
+            {run.mac_window?.state === "open" ? (
+              <>{RUN_VM_PAGE.macOS26OpenWindow} <Mono className="text-foreground">{`wardyn window ${run.id}`}</Mono>.</>
+            ) : (
+              run.mac_window?.message ?? DESKTOP.observeOnlyMacOS
+            )}
+          </p>
+        )}
         {healthAnswered && !uiSandbox?.enabled && !macOff && !noDoor && (
           <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{offCopy(DESKTOP.off, "WARDYN_UI_SANDBOX_LISTEN")}</p>
         )}
@@ -156,7 +178,7 @@ export function DesktopCard({ run, macOS: given }: { run: RunDetail; macOS?: Mac
         {/* Files moves with the desktop, under the buttons: the same gate it had in the Attach tile
             (the run's person, not a sponsor, while it runs, with a declared UI app), plus never on a background run,
             which has no files door. */}
-        {desktopOn && !background && uiApps.length > 0 && mayAttach && !sponsorOnly && running && <DesktopFilesPanel runId={run.id} />}
+        {desktopOn && !background && uiApps.length > 0 && mayAttach && !sponsorOnly && running && <DesktopFilesPanel runId={run.id} vm />}
         {desktopOn && !background && <DesktopSignInsNote s={signIns} />}
       </section>
     </WidgetCard>

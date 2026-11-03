@@ -10,6 +10,7 @@ import { Check } from "lucide-react";
 import { shortTime } from "../../../lib/format";
 import type { RunDetail } from "../../../lib/types";
 import { DESKTOP } from "../../wardyn/copy/desktop";
+import { RUN_VM_PAGE } from "../../wardyn/copy/run-cockpit";
 
 export interface MacOSRunFacts {
   /** The Mac's Screen Sharing is view only: the desktop is watched, with no Open desktop and no sign-ins. */
@@ -41,7 +42,7 @@ export const macOSDiskPending = (run: Pick<RunDetail, "macos_disk"> | null | und
 export function MacOSDiskNote({ disk }: { disk: MacOSRunFacts["disk"] }) {
   if (!disk) return null;
   if (disk.state === "removing") return <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{DESKTOP.diskRemoving}</p>;
-  if (disk.state === "failed") return <p role="alert" className="mt-2 text-meta leading-relaxed text-danger">{DESKTOP.diskRemoveFailed(disk.reason)}</p>;
+  if (disk.state === "failed") return <p role="alert" className="mt-2 text-meta leading-relaxed text-danger">{DESKTOP.diskRemoveFailed(disk.reason)} {RUN_VM_PAGE.diskKeptNextStep}</p>;
   return (
     <p className="mt-2 flex items-start gap-1.5 text-meta leading-relaxed text-muted-foreground">
       <Check aria-hidden="true" className="mt-0.5 size-3 shrink-0 text-success" />
