@@ -89,7 +89,10 @@ kubectl get pods -A -o json | jq -r --arg cid "containerd://$CID" '
   | "\(.metadata.namespace)/\(.metadata.name) run=\(.metadata.labels["wardyn.run-id"])"'
 ```
 
-An empty run means the pod is not a Wardyn pod.
+An empty `run` means the label lookup could not establish a run. It does not prove the pod is not a Wardyn pod: an outside edit can remove the label while the agent pod keeps its fixed name. With the agent-sandbox backend on, Wardyn detects that state and ends the run ([`internal/runner/k8s/lifecycle.go`](../../internal/runner/k8s/lifecycle.go) `agentPodReplaced`).
+
+- If the pod name has the exact `wardyn-agent-<run UUID>` form, use the pod name fallback in [The join](#the-join): take the UUID, then `GET /api/v1/runs/{id}` with a Wardyn token.
+- Labels are lookup hints, not proof of origin. Anyone who can patch a pod can change them.
 
 ## What you run yourself
 
