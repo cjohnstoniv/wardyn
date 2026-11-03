@@ -290,7 +290,7 @@ func TestEnrichRuns_ADropAppliedFromAnotherReplicaUnholdsBeforeTheValueGoes(t *t
 			}
 			var covered atomic.Bool
 			covered.Store(true)
-			reg.SetDropGuard(func(uuid.UUID) { covered.Store(false) }) // what maskmanifest registers
+			reg.SetDropGuard(func(uuid.UUID) func() { covered.Store(false); return func() {} }) // what maskmanifest registers
 			rows := &erasableRows{ids: map[uuid.UUID]string{run: secret}}
 			inside, release := make(chan struct{}), make(chan struct{})
 			sink := &lastEventSink{}

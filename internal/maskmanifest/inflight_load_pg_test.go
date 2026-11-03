@@ -173,3 +173,87 @@ func TestPG_ALoadVoidedByAForgetTakesBackWhatItRegistered(t *testing.T) {
 		})
 	}
 }
+
+// TestPG_ALoadDuringARemovalCannotVouchForTheRun: a removal of a held run's values (the sweeper's Evict, a
+// replica's run-value drop, a process-wide drop) has begun and is stopped before it touches the registry; a
+// new Covered runs to its end against the manifest, which is still complete in Postgres. It must not leave
+// the run held, and neither during the removal nor after it may the sink get the id unmasked.
+func TestPG_ALoadDuringARemovalCannotVouchForTheRun(t *testing.T) {
+	const secret = "zq-throwaway-bracket-14"
+	removals := map[string]func(reg *secretmask.Registry, run, rowID uuid.UUID){
+		"Evict":           func(reg *secretmask.Registry, run, _ uuid.UUID) { reg.Evict(run) },
+		"DropRunValue":    func(reg *secretmask.Registry, run, _ uuid.UUID) { reg.DropRunValue(run, []byte(secret)) },
+		"DropGlobalValue": func(reg *secretmask.Registry, _, rowID uuid.UUID) { reg.DropGlobalValue(rowID) },
+	}
+	for name, remove := range removals {
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			migrated := subjectkeytest.ThrowawayDB(t)
+			id, err := age.GenerateX25519Identity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			k, err := kek.NewLocalPurpose(id, kek.PurposeCred)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keys := subjectkeytest.Manager(migrated, k)
+			run, rowID := uuid.New(), uuid.New()
+			mA := maskmanifest.New(migrated, keys, secretmask.NewRegistry())
+			if err := mA.Start(ctx, run, "alice"); err != nil {
+				t.Fatal(err)
+			}
+			if err := mA.Append(ctx, run, []byte(secret)); err != nil {
+				t.Fatal(err)
+			}
+			if err := mA.Complete(ctx, run); err != nil {
+				t.Fatal(err)
+			}
+
+			regB := secretmask.NewRegistry()
+			regB.ApplyGlobal(rowID, "alice", "sso", []byte(secret), time.Time{}, time.Time{})
+			mB := maskmanifest.New(migrated, keys, regB)
+			if !mB.Covered(ctx, run) || !mB.Held(run) {
+				t.Fatal("replica B does not hold the run before the removal")
+			}
+
+			sink := &lastSink{}
+			fan := sinks.NewFanout(sink)
+			fan.EnrichRuns(func(context.Context, uuid.UUID) (string, bool, error) { return secret, true, nil },
+				func(rid uuid.UUID, b []byte) []byte { return regB.JSONVariantMasker(rid).Mask(b) }, mB.Held)
+			emit := func() string {
+				if err := fan.Emit(ctx, types.AuditEvent{ID: uuid.New(), RunID: &run, Action: "run.kill", Outcome: "success", Data: json.RawMessage(`{"k":1}`)}); err != nil {
+					t.Fatal(err)
+				}
+				sink.mu.Lock()
+				defer sink.mu.Unlock()
+				return string(sink.ev.Data)
+			}
+
+			begun, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			regB.SetDropGuard(func(rid uuid.UUID) func() {
+				end := mB.BeginDrop(rid)
+				close(begun)
+				<-resume // the registry has not been touched yet
+				return end
+			})
+			go func() { defer close(done); remove(regB, run, rowID) }()
+			<-begun
+
+			if mB.Covered(ctx, run) || mB.Held(run) {
+				t.Error("a load that ran during the removal left the run held")
+			}
+			if got := emit(); strings.Contains(got, secret) || strings.Contains(got, sinks.CorrelationKey) {
+				t.Errorf("during the removal the sink got %s", got)
+			}
+			close(resume)
+			<-done
+			if mB.Held(run) {
+				t.Error("the run is held after the removal")
+			}
+			if got := emit(); strings.Contains(got, secret) || strings.Contains(got, sinks.CorrelationKey) {
+				t.Errorf("after the removal the sink got %s", got)
+			}
+		})
+	}
+}

@@ -87,9 +87,13 @@ type Manifests struct {
 	// last is kept only while a load is in flight (loads), so evictions do not leave an entry each.
 	seq, lastAll uint64
 	loads        int
-	last         map[uuid.UUID]uint64
-	publishMu    sync.Mutex                          // serialises the register-check-publish step of loads
-	loadPause    func(stage string, runID uuid.UUID) // test seam: stops a load before and after it registers
+	// dropping counts the removals in progress (beginDrop to its end) per run, droppingAll those of a
+	// process-wide value: nothing is held, and no load publishes, while either is non-zero.
+	dropping    map[uuid.UUID]int
+	droppingAll int
+	last        map[uuid.UUID]uint64
+	publishMu   sync.Mutex                          // serialises the register-check-publish step of loads
+	loadPause   func(stage string, runID uuid.UUID) // test seam: stops a load before and after it registers
 }
 
 // entry is this process's copy of one run's manifest: the revision it was read
@@ -104,10 +108,10 @@ type entry struct {
 // New returns Manifests over pool whose values are sealed with keys and, once
 // opened, registered with reg.
 func New(pool *pgxpool.Pool, keys Keys, reg *secretmask.Registry) *Manifests {
-	m := &Manifests{pool: pool, keys: keys, reg: reg, cache: map[uuid.UUID]*entry{}, last: map[uuid.UUID]uint64{}}
+	m := &Manifests{pool: pool, keys: keys, reg: reg, cache: map[uuid.UUID]*entry{}, last: map[uuid.UUID]uint64{}, dropping: map[uuid.UUID]int{}}
 	// Another replica's erasure reaches reg as a dropped value before DropFenced runs: Held must be false
 	// first, for that run, or for every run when a process-wide value goes.
-	reg.SetDropGuard(m.invalidate)
+	reg.SetDropGuard(m.beginDrop)
 	return m
 }
 
@@ -377,7 +381,7 @@ func (m *Manifests) load(ctx context.Context, runID uuid.UUID, owner string) boo
 	m.pause("after-register", runID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.lastAll > began || m.last[runID] > began {
+	if m.lastAll > began || m.last[runID] > began || m.droppingLocked(runID) {
 		for _, v := range added { // the corpus was dropped or the run forgotten while this load ran: undo what it put in
 			m.reg.RemoveLocal(runID, v)
 		}
@@ -393,7 +397,11 @@ func (m *Manifests) load(ctx context.Context, runID uuid.UUID, owner string) boo
 func (m *Manifests) voided(runID uuid.UUID, began uint64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.lastAll > began || m.last[runID] > began
+	return m.lastAll > began || m.last[runID] > began || m.droppingLocked(runID)
+}
+
+func (m *Manifests) droppingLocked(runID uuid.UUID) bool {
+	return m.droppingAll > 0 || m.dropping[runID] > 0
 }
 
 func (m *Manifests) pause(stage string, runID uuid.UUID) {
@@ -407,6 +415,34 @@ func (m *Manifests) pause(stage string, runID uuid.UUID) {
 func (m *Manifests) invalidate(runID uuid.UUID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.invalidateLocked(runID)
+}
+
+// beginDrop is the registry's drop guard: it invalidates runID (every run for uuid.Nil) and refuses
+// coverage, and any load's publication, until the returned end runs after the removal, which invalidates
+// again so a load that began meanwhile cannot publish what it read before the values were gone.
+func (m *Manifests) beginDrop(runID uuid.UUID) (end func()) {
+	m.mu.Lock()
+	m.invalidateLocked(runID)
+	if runID == uuid.Nil {
+		m.droppingAll++
+	} else {
+		m.dropping[runID]++
+	}
+	m.mu.Unlock()
+	return func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if runID == uuid.Nil {
+			m.droppingAll--
+		} else if m.dropping[runID]--; m.dropping[runID] == 0 {
+			delete(m.dropping, runID)
+		}
+		m.invalidateLocked(runID)
+	}
+}
+
+func (m *Manifests) invalidateLocked(runID uuid.UUID) {
 	m.seq++
 	if runID == uuid.Nil {
 		m.lastAll = m.seq
@@ -466,7 +502,7 @@ func (m *Manifests) Held(runID uuid.UUID) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e := m.cache[runID]
-	return e != nil && e.complete
+	return e != nil && e.complete && !m.droppingLocked(runID)
 }
 
 // gone drops what this process loaded from a manifest that no longer exists. A

@@ -51,8 +51,8 @@ var placeholder = []byte("<secret-hidden>")
 // A nil *Registry is safe: all methods on a nil pointer are no-ops.
 type Registry struct {
 	mu        sync.RWMutex
-	perRun    map[uuid.UUID][][]byte                // run id -> set of secret values
-	dropGuard atomic.Pointer[func(runID uuid.UUID)] // runs before a Drop*Value removes a value (backend.go)
+	perRun    map[uuid.UUID][][]byte                       // run id -> set of secret values
+	dropGuard atomic.Pointer[func(runID uuid.UUID) func()] // brackets a Drop*Value or Evict (backend.go)
 	// globals is every process-wide value masked right now, on every run: the
 	// union of current, retired and rows, rebuilt by reflatten whenever one changes.
 	globals [][]byte
@@ -599,7 +599,7 @@ func (r *Registry) Evict(runID uuid.UUID) {
 	if r == nil {
 		return
 	}
-	r.guardDrop(runID) // first: nothing vouches for the run once its values go
+	defer r.guardDrop(runID)() // brackets the removal: nothing vouches for the run until it is done
 	r.mu.Lock()
 	_, hadSecrets := r.perRun[runID]
 	delete(r.perRun, runID)
